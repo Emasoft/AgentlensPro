@@ -1411,11 +1411,16 @@ interface ClaudeAccum {
   // tool_result (which only carries the tool_use_id), which often arrives in a LATER entry —
   // or even a later scan — so this map persists in the accumulator to bridge that gap.
   pendingReads: Map<string, string>
+  // Anthropic message.ids whose `usage` has already been counted. Claude Code splits one
+  // assistant message across multiple JSONL rows (one per content block) and repeats the full
+  // `usage` in each — so usage must be counted ONCE per message.id, not per row. Persists across
+  // scans (incremental parsing) so a message split across a scan boundary is still deduped.
+  seenMessageIds: Set<string>
   card: CardAccum
 }
 
 function _newClaudeAccum(): ClaudeAccum {
-  return { workspace: '', model: '', firstTimestamp: '', lastTimestamp: '', hasFastMode: false, idx: 0, pendingReads: new Map<string, string>(), card: _emptyCardAccum('user') }
+  return { workspace: '', model: '', firstTimestamp: '', lastTimestamp: '', hasFastMode: false, idx: 0, pendingReads: new Map<string, string>(), seenMessageIds: new Set<string>(), card: _emptyCardAccum('user') }
 }
 
 // UTF-8 byte length of a value that may or may not be a string (0 for non-strings).
@@ -1494,10 +1499,20 @@ function _claudeOnEntry(a: ClaudeAccum, entry: Record<string, unknown>): void {
   if (entry['type'] === 'assistant') {
     const msg = entry['message'] as Record<string, unknown> | undefined
     if (msg?.['model']) a.model = msg['model'] as string
+    // Claude Code writes ONE assistant message as MULTIPLE JSONL rows — one per content block
+    // (thinking / text / each tool_use) — and repeats the FULL `usage` in every row. Counting
+    // usage per row over-counts tokens (and `turns`) 2–5×, worst for tool-heavy orchestrator /
+    // sub-agent / workflow / fork sessions that emit many tool_use blocks per message. So count
+    // `usage` exactly ONCE per Anthropic message.id. The content blocks below stay per-row (each
+    // row carries a DISTINCT block), so tool counts / file-ops remain correct. (Verified on a real
+    // 1018-row session that held only 407 real messages → 2.4–4.5× over-count before this fix.)
+    const messageId = msg?.['id'] as string | undefined
+    const isFirstRowOfMessage = !messageId || !a.seenMessageIds.has(messageId)
+    if (messageId) a.seenMessageIds.add(messageId)
     const rawUsage = msg?.['usage'] as Record<string, unknown> | undefined
     if (rawUsage?.['speed'] === 'fast') a.hasFastMode = true
     const usage = rawUsage as Record<string, number> | undefined
-    if (usage) {
+    if (usage && isFirstRowOfMessage) {
       const inp = usage['input_tokens']                ?? 0
       const cr  = usage['cache_read_input_tokens']     ?? 0
       const cc  = usage['cache_creation_input_tokens'] ?? 0
@@ -1536,7 +1551,7 @@ function _claudeOnEntry(a: ClaudeAccum, entry: Record<string, unknown>): void {
       }
     }
     const responseText = (content.find(b => b['type'] === 'text') as Record<string, string> | undefined)?.['text']
-    a.card.timeline.push({ type: hasToolCall ? 'tool' : 'llm', spanId: `log-a-${a.idx}`, label: hasToolCall ? 'Tool calls' : 'Response', model: a.model || undefined, inputTokens: usage?.['input_tokens'], outputTokens: usage?.['output_tokens'], durationMs: 0, isError: false, timestamp: ts ?? '', responseText })
+    a.card.timeline.push({ type: hasToolCall ? 'tool' : 'llm', spanId: `log-a-${a.idx}`, label: hasToolCall ? 'Tool calls' : 'Response', model: a.model || undefined, inputTokens: isFirstRowOfMessage ? usage?.['input_tokens'] : undefined, outputTokens: isFirstRowOfMessage ? usage?.['output_tokens'] : undefined, durationMs: 0, isError: false, timestamp: ts ?? '', responseText })
     a.idx++
   }
 }

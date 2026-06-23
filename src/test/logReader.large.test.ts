@@ -105,6 +105,22 @@ const claudeToolResult = (ts: string, cwd: string, results: Array<{ toolUseId: s
     message: { content: results.map(r => ({ type: 'tool_result', tool_use_id: r.toolUseId, content: r.content })) },
   }) + '\n'
 
+// One JSONL row of an assistant message that Claude Code split across several rows: every row
+// carries the SAME message.id and REPEATS the full `usage`, but a DISTINCT content block. Used to
+// prove usage is counted once per message.id while each block's tool_use still counts.
+const claudeMsgRow = (ts: string, cwd: string, u: ClaudeUsage, messageId: string, block: Record<string, unknown>): string =>
+  JSON.stringify({
+    type: 'assistant', timestamp: ts, cwd,
+    message: {
+      id: messageId, model: 'claude-opus-4-8',
+      usage: {
+        input_tokens: u.input, output_tokens: u.output,
+        cache_read_input_tokens: u.cacheRead, cache_creation_input_tokens: u.cacheCreate,
+      },
+      content: [block],
+    },
+  }) + '\n'
+
 interface CodexTotal { input_tokens: number; cached_input_tokens: number; output_tokens: number; reasoning_output_tokens: number }
 
 const codexMeta = (ts: string, cwd: string): string =>
@@ -144,6 +160,37 @@ suite('LogReader — large / streaming JSONL', () => {
       assert.strictEqual(card!.outputTokens, 5 * U.output)       // 100
       assert.strictEqual(card!.cacheReadTokens, 5 * U.cacheRead) // 250
       assert.strictEqual(card!.cacheCreateTokens, 5 * U.cacheCreate) // 50
+    } finally {
+      fx.cleanup()
+    }
+  })
+
+  test('counts a multi-row Claude message (same message.id) ONCE, not per content-block row', () => {
+    const fx = claudeFixture()
+    try {
+      // Claude Code writes ONE assistant message as N rows (one per content block) with the SAME
+      // message.id, repeating the full usage in each. Message 1 = thinking+text+2 tool_use = 4 rows;
+      // message 2 = 1 text row. Usage must be counted twice (2 messages), NOT 5 times (5 rows).
+      const mid1 = 'msg_aaaaaaaaaaaaaaaaaaaaaa', mid2 = 'msg_bbbbbbbbbbbbbbbbbbbbbb'
+      let content = claudeUser('2026-06-23T10:00:00.000Z', fx.cwd, 'Do work')
+      content += claudeMsgRow('2026-06-23T10:01:00.000Z', fx.cwd, U, mid1, { type: 'thinking', thinking: 'hmm' })
+      content += claudeMsgRow('2026-06-23T10:01:00.000Z', fx.cwd, U, mid1, { type: 'text', text: 'ok' })
+      content += claudeMsgRow('2026-06-23T10:01:00.000Z', fx.cwd, U, mid1, { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } })
+      content += claudeMsgRow('2026-06-23T10:01:00.000Z', fx.cwd, U, mid1, { type: 'tool_use', id: 't2', name: 'Read', input: { file_path: '/x' } })
+      content += claudeMsgRow('2026-06-23T10:02:00.000Z', fx.cwd, U, mid2, { type: 'text', text: 'done' })
+      fs.writeFileSync(fx.file, content)
+
+      const reader = new LogReader({ streamChunkBytes: 16 })
+      const card = findCard(scanClaude(reader), fx.id)?.card
+      assert.ok(card, 'session should be parsed')
+      // usage counted ONCE per message.id → 2 messages, not 5 rows.
+      assert.strictEqual(card!.turns, 2, 'turns = distinct messages, not content-block rows')
+      assert.strictEqual(card!.inputTokens, 2 * PER_TURN_INPUT, 'context counted once per message')
+      assert.strictEqual(card!.outputTokens, 2 * U.output, 'output counted once per message')
+      assert.strictEqual(card!.cacheReadTokens, 2 * U.cacheRead, 'cache-read counted once per message')
+      assert.strictEqual(card!.cacheCreateTokens, 2 * U.cacheCreate)
+      // tool counts ARE per-row (each tool_use is a distinct block) → both still counted.
+      assert.strictEqual(card!.totalToolCalls, 2, 'both tool_use blocks counted despite usage dedup')
     } finally {
       fx.cleanup()
     }
