@@ -23,3 +23,6 @@ agent-lens-export-*.json
 # Claude Code per-developer settings (permissions, hooks — not project config)
 .claude/settings.json
 .claude/settings.local.json
+# ai-maestro-janitor runtime state (per-session, regeneratable — never commit)
+.claude/janitor/
+.janitor/
