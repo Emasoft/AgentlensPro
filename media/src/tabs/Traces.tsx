@@ -44,6 +44,47 @@ function stepMetricValue(entry: TimelineEntry, metric: TimelineMetric, sessionMo
   }
 }
 
+// Bar colour per metric — so flipping the metric visibly recolours the chart. 'time' keeps the
+// per-step-type colour (set in StepRow); the rest match their token-composition colours elsewhere.
+const METRIC_COLOR: Record<TimelineMetric, string> = {
+  time:       'var(--accent)',
+  input:      'var(--vscode-charts-blue,#4fc3f7)',
+  output:     'var(--vscode-charts-green,#81c784)',
+  cacheRead:  'var(--vscode-charts-purple,#b392f0)',
+  cacheWrite: 'var(--vscode-charts-orange,#e2a03f)',
+  cost:       'var(--vscode-charts-yellow,#e2c08d)',
+}
+
+// The wf-info label for a non-time metric: tokens compacted (1.2k), cost as ~$, '—' when zero
+// (e.g. tool/user steps carry no token attribution — those belong to the LLM calls).
+function formatMetricValue(metric: TimelineMetric, v: number): string {
+  if (v <= 0) return '—'
+  return metric === 'cost' ? '~' + fmtUsd(v) : formatCompact(v)
+}
+
+// Searchable text for a step — the tool/command-bearing fields (label, action verb, raw tool
+// input incl. bash command / file path, result summary, edited file paths). Lets the timeline
+// filter match e.g. a bash `gh repo` call or a Read under `server/scripts`.
+function stepHaystack(entry: TimelineEntry): string {
+  const parts: string[] = [entry.label || '', entry.action || '', entry.toolInput || '', entry.resultSummary || '']
+  if (entry.editDetails) for (const d of entry.editDetails) if (d.filePath) parts.push(d.filePath)
+  return parts.join('\n').toLowerCase()
+}
+
+// Compile the timeline filter into a predicate. '*' is a glob wildcard (any run of chars), every
+// other char is literal — so `server/script_*.ts` matches that path while `gh repo` is a plain
+// substring. All regex metachars except '*' are escaped, so user input can never throw. Empty → all.
+function compileStepFilter(raw: string): (haystack: string) => boolean {
+  const q = raw.trim().toLowerCase()
+  if (!q) return () => true
+  if (q.includes('*')) {
+    const pattern = q.split('*').map(seg => seg.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')
+    const re = new RegExp(pattern)
+    return h => re.test(h)
+  }
+  return h => h.includes(q)
+}
+
 
 
 function BgSummaryBlock({ bgSpans }: { bgSpans: BackgroundSpanSummary[] }) {
@@ -256,6 +297,11 @@ export function StepRow({ step, idx, sessIdx, sessionDur, sessionModel, metric, 
   else { badgeLabel = 'BG'; barColor = 'var(--muted)' }
   if (entry.isError) barColor = 'var(--error)'
 
+  // The chosen metric's magnitude drives bar WIDTH, bar COLOUR and the info label. Time keeps the
+  // per-type colour; a token/cost metric recolours to that metric so switching is visually obvious.
+  const metricVal = metric === 'time' ? 0 : stepMetricValue(entry, metric, sessionModel)
+  const barFill = metric === 'time' ? barColor : (entry.isError ? 'var(--error)' : METRIC_COLOR[metric])
+
   const rowLabel = entry.type === 'llm' ? formatLlmLabel(entry)
     : entry.type === 'tool' ? formatToolLabel(entry) + (formatToolResult(entry) ? ' → ' + formatToolResult(entry) : '')
     : entry.type === 'user_input' ? (entry.decision && entry.decision !== 'unknown' ? `${entry.label} (${entry.decision})` : entry.label)
@@ -292,9 +338,8 @@ export function StepRow({ step, idx, sessIdx, sessionDur, sessionModel, metric, 
     left = sessionDur > 0 ? (step.offsetMs / sessionDur * 100) : 0
     width = sessionDur > 0 ? Math.max(step.durationMs / sessionDur * 100, 0.5) : 100
   } else {
-    const v = stepMetricValue(entry, metric, sessionModel)
     left = 0
-    width = maxMetric > 0 && v > 0 ? Math.max(v / maxMetric * 100, 0.5) : 0
+    width = maxMetric > 0 && metricVal > 0 ? Math.max(metricVal / maxMetric * 100, 0.5) : 0
   }
 
   return (
@@ -311,21 +356,32 @@ export function StepRow({ step, idx, sessIdx, sessionDur, sessionModel, metric, 
         </div>
         <div class="wf-bar-area">
           <div class="wf-bar" style={`left:${left.toFixed(2)}%;width:${width.toFixed(2)}%`}>
-            <div class="wf-bar-inner" style={'background:' + barColor + ';opacity:' + (entry.isError ? '1' : '0.7')} />
+            <div class="wf-bar-inner" style={'background:' + barFill + ';opacity:' + (entry.isError ? '1' : '0.7')} />
           </div>
         </div>
         <div class="wf-info">
-          {formatMs(step.durationMs)}
-          {entry.type === 'llm' && ((entry.inputTokens ?? 0) > 0 || (entry.outputTokens ?? 0) > 0) && (
-            <div style="font-size:9px;color:var(--muted);margin-top:2px">
-              <div style="white-space:nowrap">↑{formatCompact(entry.inputTokens ?? 0)} ↓{formatCompact(entry.outputTokens ?? 0)}</div>
-              {(entry.cacheReadTokens ?? 0) > 0 && (
-                <div style="white-space:nowrap">{formatCompact(entry.cacheReadTokens ?? 0)} cached</div>
+          {metric === 'time' ? (
+            <>
+              {formatMs(step.durationMs)}
+              {entry.type === 'llm' && ((entry.inputTokens ?? 0) > 0 || (entry.outputTokens ?? 0) > 0) && (
+                <div style="font-size:9px;color:var(--muted);margin-top:2px">
+                  <div style="white-space:nowrap">↑{formatCompact(entry.inputTokens ?? 0)} ↓{formatCompact(entry.outputTokens ?? 0)}</div>
+                  {(entry.cacheReadTokens ?? 0) > 0 && (
+                    <div style="white-space:nowrap">{formatCompact(entry.cacheReadTokens ?? 0)} cached</div>
+                  )}
+                </div>
               )}
-            </div>
-          )}
-          {entryCost > 0 && (
-            <div style="font-size:9px;color:var(--muted);white-space:nowrap">~{fmtUsd(entryCost)}</div>
+              {entryCost > 0 && (
+                <div style="font-size:9px;color:var(--muted);white-space:nowrap">~{fmtUsd(entryCost)}</div>
+              )}
+            </>
+          ) : (
+            // Token/cost metric: show THAT value as the primary figure (the bug was showing ms
+            // here regardless of metric); ms drops to a muted secondary line. '—' = no value.
+            <>
+              <span style={metricVal > 0 ? 'font-weight:600' : 'color:var(--muted)'}>{formatMetricValue(metric, metricVal)}</span>
+              <div style="font-size:9px;color:var(--muted);margin-top:2px;white-space:nowrap">{formatMs(step.durationMs)}</div>
+            </>
           )}
         </div>
       </div>
@@ -347,11 +403,17 @@ export function TimelineWaterfall({ steps, sessionDur, sessionModel, sessIdx = 0
 }) {
   const [metric, setMetric] = useState<TimelineMetric>('time')
   const [sortByValue, setSortByValue] = useState(false)
+  const [filterDraft, setFilterDraft] = useState('')     // live input value
+  const [filterApplied, setFilterApplied] = useState('') // committed on Enter (not realtime)
 
-  const valued = steps.map((step, i) => ({
-    step, i,
-    v: metric === 'time' ? step.durationMs : stepMetricValue(step.entry, metric, sessionModel),
-  }))
+  const match = compileStepFilter(filterApplied)
+  const valued = steps
+    .map((step, i) => ({
+      step, i,
+      v: metric === 'time' ? step.durationMs : stepMetricValue(step.entry, metric, sessionModel),
+    }))
+    .filter(x => !filterApplied || match(stepHaystack(x.step.entry)))
+  // maxMetric/sort are over the FILTERED set, so bars scale to what's visible.
   const maxMetric = Math.max(0, ...valued.map(x => x.v))
   const ordered = metric !== 'time' && sortByValue ? [...valued].sort((a, b) => b.v - a.v) : valued
 
@@ -377,15 +439,39 @@ export function TimelineWaterfall({ steps, sessionDur, sessionModel, sessIdx = 0
           >{sortByValue ? '↓ Sorted by value' : '⏱ Chronological'}</button>
         )}
       </div>
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+        <input
+          value={filterDraft}
+          onInput={e => setFilterDraft((e.target as HTMLInputElement).value)}
+          onKeyDown={e => {
+            if (e.key === 'Enter') setFilterApplied(filterDraft)
+            else if (e.key === 'Escape') { setFilterDraft(''); setFilterApplied('') }
+          }}
+          placeholder="Filter steps by content — e.g. gh repo · server/scripts · server/script_*.ts  (Enter; * = wildcard)"
+          style="flex:1;min-width:160px;padding:3px 8px;font-size:11px;border-radius:3px;border:1px solid var(--border);background:var(--vscode-input-background,var(--bg));color:var(--vscode-input-foreground,var(--fg))"
+        />
+        {filterApplied && (
+          <>
+            <span style="font-size:10px;color:var(--muted);white-space:nowrap">{valued.length} / {steps.length}</span>
+            <button
+              onClick={() => { setFilterDraft(''); setFilterApplied('') }}
+              style="padding:2px 8px;font-size:10px;cursor:pointer;border-radius:3px;border:1px solid var(--border);background:transparent;color:var(--muted)"
+            >Clear</button>
+          </>
+        )}
+      </div>
       {metric === 'time' && (
         <div class="wf-time-ruler">
           {Array.from({ length: 6 }, (_, t) => <span key={t}>{formatMs(sessionDur * t / 5)}</span>)}
         </div>
       )}
-      {ordered.map(({ step, i }) => (
-        <StepRow key={step.entry.spanId + i} step={step} idx={i} sessIdx={sessIdx}
-          sessionDur={sessionDur} sessionModel={sessionModel} metric={metric} maxMetric={maxMetric} />
-      ))}
+      {filterApplied && ordered.length === 0
+        ? <div class="empty-state" style="padding:10px 0;font-size:11px">No steps match “{filterApplied}”</div>
+        : ordered.map(({ step, i }) => (
+            <StepRow key={step.entry.spanId + i} step={step} idx={i} sessIdx={sessIdx}
+              sessionDur={sessionDur} sessionModel={sessionModel} metric={metric} maxMetric={maxMetric} />
+          ))
+      }
     </div>
   )
 }
