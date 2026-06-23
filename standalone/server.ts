@@ -555,14 +555,17 @@ function buildSessionSummary(): ReturnType<typeof summarizeSpans> | null {
   return summary
 }
 
-function stripTimelines(summary: ReturnType<typeof summarizeSpans> | null): ReturnType<typeof summarizeSpans> | null {
+// Drop the heavy per-session detail (full timeline + per-file ops) from the inlined/broadcast
+// payload — across thousands of sessions these add up to tens of MB and freeze the browser on
+// first paint. Both are fetched lazily per session via /api/timeline/:id (loadSessionDetail).
+function stripSessionDetail(summary: ReturnType<typeof summarizeSpans> | null): ReturnType<typeof summarizeSpans> | null {
   if (!summary) return null
-  return { ...summary, sessions: summary.sessions.map(s => ({ ...s, timeline: [] })) }
+  return { ...summary, sessions: summary.sessions.map(s => ({ ...s, timeline: [], fileOps: undefined })) }
 }
 
 function buildUpdatePayload(): string {
   const sessionSummary = buildSessionSummary()
-  const stripped = stripTimelines(sessionSummary)
+  const stripped = stripSessionDetail(sessionSummary)
   const sidebar = sessionSummary ? computeSidebarData(sessionSummary, spans) : null
   const sidebarLive = sessionSummary ? computeSidebarPayload(sessionSummary, spans) : null
   const analyticsData = sessionSummary ? computeAnalyticsData(sessionSummary.sessions) : null
@@ -583,9 +586,9 @@ function pushUpdate() {
 
 function getHtml(): string {
   const sessionSummary = buildSessionSummary()
-  // Strip full timeline arrays before inlining — they can be many MB across sessions.
-  // Timelines are loaded lazily via /api/timeline/:sessionId after first paint.
-  const sessionSummaryJson = safeJson(stripTimelines(sessionSummary))
+  // Strip full timeline + per-file ops before inlining — they can be many MB across sessions.
+  // Both are loaded lazily via /api/timeline/:sessionId after first paint.
+  const sessionSummaryJson = safeJson(stripSessionDetail(sessionSummary))
   const sidebarLive = sessionSummary ? computeSidebarPayload(sessionSummary, spans) : {
     isActive: false, lastActivityMs: 0, sessionCount: 0, agentSources: [], currentSession: null, burnRate: null,
   }
@@ -905,7 +908,7 @@ function getHtml(): string {
               .then(function(r) { return r.json(); })
               .then(function(data) {
                 window.dispatchEvent(new MessageEvent('message', {
-                  data: { type: 'sessionDetail', sessionId: msg.sessionId, timeline: data.timeline || [] }
+                  data: { type: 'sessionDetail', sessionId: msg.sessionId, timeline: data.timeline || [], fileOps: data.fileOps || [] }
                 }));
               })
               .catch(function(e) { console.warn('[AgentLens] timeline fetch failed', e); });
@@ -1248,7 +1251,7 @@ const uiServer = http.createServer((req, res) => {
   if (req.method === 'GET' && url === '/api/summary') {
     const summary = buildSessionSummary()
     res.writeHead(200, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify(stripTimelines(summary)))
+    res.end(JSON.stringify(stripSessionDetail(summary)))
     return
   }
 
@@ -1257,7 +1260,7 @@ const uiServer = http.createServer((req, res) => {
     const summary = buildSessionSummary()
     const session = summary?.sessions.find(s => s.sessionId === sessionId) ?? null
     res.writeHead(200, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ timeline: session?.timeline ?? [] }))
+    res.end(JSON.stringify({ timeline: session?.timeline ?? [], fileOps: session?.fileOps ?? [] }))
     return
   }
 

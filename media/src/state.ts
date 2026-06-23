@@ -1,7 +1,7 @@
 import { signal, computed } from '@preact/signals'
 import { calcSessionCost } from './sessionMetrics'
 import type {
-  FullSummary, SessionSummaryCard, TimelineEntry,
+  FullSummary, SessionSummaryCard, TimelineEntry, FileOpSummary,
   AgentFilter, InitiatorFilter, DataSourceFilter, InsightFilter, WorkspaceFilter, VsCodeApi,
   DailyStatRow, LifetimeStats, BurnRate, Projection,
 } from './types'
@@ -95,7 +95,36 @@ export const toolCalls = signal<Record<string, number>>(window.__INITIAL_TOOL_CA
 // blobCache: `${spanId}:${field}` → content string
 
 export const sessionTimelines = signal<Record<string, TimelineEntry[]>>({})
+// Per-file read/write/edit byte volumes, fetched lazily alongside the timeline (heavy, so kept
+// out of the bulk card payload — same lifecycle as sessionTimelines).
+export const sessionFileOps = signal<Record<string, FileOpSummary[]>>({})
 export const blobCache = signal<Record<string, string>>({})
+
+// LRU bound on cached session detail. A session's detail (timeline entries + per-file ops) is
+// the heavy part: the bulk payload ships only lightweight cards, and detail is fetched on demand
+// (loadSessionDetail). To keep memory bounded when many sessions are opened over a long browse,
+// evict the least-recently cached sessions once more than DETAIL_CACHE_MAX are held — revisiting
+// an evicted session re-triggers the fetch (and its loading spinner). The cap is generous so
+// normal use never evicts an actively-viewed set ("discard only if memory consumption is huge").
+const DETAIL_CACHE_MAX = 40
+const detailLRU: string[] = []
+
+export function cacheSessionDetail(sessionId: string, timeline: TimelineEntry[], fileOps: FileOpSummary[]): void {
+  const existing = detailLRU.indexOf(sessionId)
+  if (existing !== -1) detailLRU.splice(existing, 1)
+  detailLRU.push(sessionId)
+
+  const tl: Record<string, TimelineEntry[]> = { ...sessionTimelines.value, [sessionId]: timeline }
+  const fo: Record<string, FileOpSummary[]> = { ...sessionFileOps.value, [sessionId]: fileOps }
+  while (detailLRU.length > DETAIL_CACHE_MAX) {
+    const evicted = detailLRU.shift()
+    if (evicted === undefined) break
+    delete tl[evicted]
+    delete fo[evicted]
+  }
+  sessionTimelines.value = tl
+  sessionFileOps.value = fo
+}
 
 // ── UI control signals ────────────────────────────────────────────────────────
 

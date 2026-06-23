@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import {
   sessionSummary, toolCalls,
   selectedAgentFilter, initiatorFilter, dataSourceFilter, sessionLimit, activeTab,
-  sessionTimelines, blobCache,
+  cacheSessionDetail, blobCache,
   dailyStats, lifetimeStats, burnRateData, searchResults, rangedSearchResults,
   timeRange, makeTimeRange, TIME_PRESETS, CHART_MAX,
   vscode, displaySessions, rangedSessions,
@@ -12,7 +12,7 @@ import {
   workspaceFilter, availableWorkspaces, shortWorkspaceName,
   enableOtelIngestion, enableLogIngestion, otlpPort,
 } from './state'
-import type { TimelineEntry, AgentFilter, InitiatorFilter, DataSourceFilter, WorkspaceFilter, DailyStatRow, LifetimeStats, BurnRate, Projection, SessionSummaryCard } from './types'
+import type { TimelineEntry, FileOpSummary, AgentFilter, InitiatorFilter, DataSourceFilter, WorkspaceFilter, DailyStatRow, LifetimeStats, BurnRate, Projection, SessionSummaryCard } from './types'
 
 // Tab components
 import { Sessions } from './tabs/Sessions'
@@ -290,6 +290,7 @@ export function App() {
         sessionLimit?: number
         sessionId?: string
         timeline?: TimelineEntry[]
+        fileOps?: FileOpSummary[]
         spanId?: string
         field?: string
         content?: string | null
@@ -334,7 +335,9 @@ export function App() {
           }, 0)
         }
       } else if (msg.type === 'sessionDetail' && msg.sessionId) {
-        sessionTimelines.value = { ...sessionTimelines.value, [msg.sessionId]: msg.timeline ?? [] }
+        // Cache timeline + per-file ops together under an LRU bound (state.cacheSessionDetail),
+        // so a long browse over many sessions can't grow detail memory without limit.
+        cacheSessionDetail(msg.sessionId, msg.timeline ?? [], msg.fileOps ?? [])
       } else if (msg.type === 'blobContent' && msg.spanId && msg.field) {
         const key = `${msg.spanId}:${msg.field}`
         if (msg.content != null) {

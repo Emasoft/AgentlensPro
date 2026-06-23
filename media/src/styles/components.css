@@ -94,3 +94,14 @@
 .bar-value { font-size: 9px; color: var(--fg); margin-bottom: 2px; }
 .bar-chart-container { padding: 8px 0 20px; }
 .axis-label { font-size: 11px; color: var(--muted); text-align: center; margin-top: 8px; }
+
+/* Loading spinner — shown while a session's detail (timeline / file ops) is fetched on demand. */
+.al-spinner-wrap { display: flex; align-items: center; gap: 8px; padding: 14px 4px; color: var(--muted); font-size: 11px; }
+.al-spinner {
+  width: 14px; height: 14px; flex-shrink: 0;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: al-spin 0.7s linear infinite;
+}
+@keyframes al-spin { to { transform: rotate(360deg); } }

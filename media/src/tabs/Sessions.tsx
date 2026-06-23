@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'preact/hooks'
 import {
-  filteredSessions, sessionSummary, sessionTimelines, burnRateData,
+  filteredSessions, sessionSummary, sessionTimelines, sessionFileOps, burnRateData,
   focusedSessionId, vscode, ignoredInsightKeys,
   sessionSortKey, sessionSortDir, type SortKey,
   workspaceFilter, shortWorkspaceName,
@@ -57,10 +57,18 @@ function fmtKB(bytes: number): string {
   return kb < 10 ? kb.toFixed(1) : Math.round(kb).toLocaleString()
 }
 
+// Small inline loading spinner (CSS in styles/components.css). Shown while a session's detail
+// is fetched on demand — detail (timeline + per-file ops) is no longer inlined in the bulk
+// payload, so it arrives a moment after the row is expanded.
+function Spinner({ label = 'Loading…' }: { label?: string }) {
+  return <div class="al-spinner-wrap"><span class="al-spinner" />{label}</div>
+}
+
 function FilesView({ sess }: { sess: SessionSummaryCard }) {
   const [sortKey, setSortKey] = useState<FileSortKey>('total')
   const [filter, setFilter] = useState('')
-  const ops = sess.fileOps ?? []
+  // Prefer lazily-fetched per-file ops; fall back to any inlined ops (VS Code/DB path).
+  const ops = sessionFileOps.value[sess.sessionId] ?? sess.fileOps ?? []
 
   if (ops.length === 0) {
     // No per-file capture for this source — show the legacy modified-files list.
@@ -181,6 +189,11 @@ function SessionDetail({ sess }: { sess: SessionSummaryCard }) {
   const [section, setSection] = useState<Section>('overview')
   const timelines = sessionTimelines.value
   const timeline = timelines[sess.sessionId] ?? sess.timeline ?? []
+  // Detail (timeline + file ops) is fetched on demand; `undefined` means the fetch is still in
+  // flight (only meaningful when a host exists to answer it). Drives the per-section spinner.
+  const detailLoading = timelines[sess.sessionId] === undefined && !!vscode
+  const loadedFileOps = sessionFileOps.value[sess.sessionId]
+  const fileCount = (loadedFileOps?.length ?? sess.fileOps?.length ?? 0) || sess.filesChanged.length
   const cost = calcSessionCost(sess, 'token')
   const cacheRate = sess.inputTokens > 0 ? Math.round(sess.cacheReadTokens / sess.inputTokens * 100) : 0
   const burnRate = burnRateData.value
@@ -227,7 +240,7 @@ function SessionDetail({ sess }: { sess: SessionSummaryCard }) {
         {navBtn('trace', `Trace${visibleEntries.length > 0 ? ' (' + visibleEntries.length + ')' : ''}`)}
         {navBtn('flow', `Flow${sess.totalLlmCalls > 0 ? ' (' + sess.totalLlmCalls + ')' : ''}`)}
         {navBtn('tools', `Tools${sess.totalToolCalls > 0 ? ' (' + sess.totalToolCalls + ')' : ''}`)}
-        {navBtn('files', `Files${(sess.fileOps?.length || sess.filesChanged.length) > 0 ? ' (' + (sess.fileOps?.length || sess.filesChanged.length) + ')' : ''}`)}
+        {navBtn('files', `Files${fileCount > 0 ? ' (' + fileCount + ')' : ''}`)}
       </div>
 
       <div style="padding:12px 14px">
@@ -318,9 +331,9 @@ function SessionDetail({ sess }: { sess: SessionSummaryCard }) {
         {section === 'trace' && (
           <div>
             {steps.length === 0
-              ? (timelines[sess.sessionId] !== undefined
-                  ? <div class="empty-state" style="padding:12px 0">No trace data for this session</div>
-                  : <div class="empty-state" style="padding:12px 0">Loading…</div>)
+              ? (detailLoading
+                  ? <Spinner label="Loading trace…" />
+                  : <div class="empty-state" style="padding:12px 0">No trace data for this session</div>)
               : (
                 <div class="waterfall">
                   <TimelineWaterfall steps={steps} sessionDur={sessionDur} sessionModel={sess.model ?? ''} />
@@ -338,7 +351,9 @@ function SessionDetail({ sess }: { sess: SessionSummaryCard }) {
           <ToolsChart sessions={[sess]} />
         )}
 
-        {section === 'files' && <FilesView sess={sess} />}
+        {section === 'files' && (detailLoading
+          ? <Spinner label="Loading file activity…" />
+          : <FilesView sess={sess} />)}
 
       </div>
     </div>
@@ -473,14 +488,38 @@ function SessionRow({ sess, showWorkspace, maxTokens }: { sess: SessionSummaryCa
 
 // ── Main Sessions component ───────────────────────────────────────────────────
 
+const INITIAL_RENDER = 60   // rows mounted on first paint
+const RENDER_BATCH = 60     // rows added per sentinel hit / Show-more click
+
 export function Sessions() {
   const sessions = filteredSessions.value
+  // Render incrementally (window-scroll infinite scroll): the list can be tens of thousands of
+  // rows and mounting them all at once freezes the browser. Show INITIAL_RENDER, then RENDER_BATCH
+  // more each time the sentinel nears the viewport (or Show-more is clicked). Nothing is capped —
+  // every session stays reachable by scrolling; detail is fetched lazily only when a row is opened.
+  const isEmpty = sessions.length === 0
+  const [renderCount, setRenderCount] = useState(INITIAL_RENDER)
+  const sentinelRef = useRef<HTMLDivElement>(null)
+  const totalRef = useRef(0)
+  totalRef.current = sessions.length
+
+  useEffect(() => {
+    const el = sentinelRef.current
+    if (!el) return   // empty list → no sentinel; effect re-runs (dep isEmpty) when rows appear
+    const io = new IntersectionObserver(
+      entries => { if (entries.some(e => e.isIntersecting)) setRenderCount(c => (c < totalRef.current ? c + RENDER_BATCH : c)) },
+      { root: null, rootMargin: '800px 0px' },
+    )
+    io.observe(el)
+    return () => io.disconnect()
+  }, [isEmpty])
+
   const hasAny = (sessionSummary.value?.sessions?.length ?? 0) > 0
   const wsFilter = workspaceFilter.value
   const uniqueWorkspaces = new Set(sessions.map(s => s.workspace ?? ''))
   const showWorkspace = wsFilter === 'all' && uniqueWorkspaces.size > 1
 
-  if (sessions.length === 0) {
+  if (isEmpty) {
     return (
       <div id="sessions-content">
         <div class="empty-state">{hasAny ? 'No sessions match the active filters.' : 'No sessions recorded yet.'}</div>
@@ -508,8 +547,9 @@ export function Sessions() {
   const thBase = 'padding:3px 6px;font-size:10px;font-weight:600;white-space:nowrap;user-select:none'
   const thSort = thBase + ';cursor:pointer;color:var(--fg)'
   const thMuted = thBase + ';color:var(--muted);font-weight:500'
-  // Largest input+output across the visible list, so each row's TokenBar length compares.
-  const maxTokens = Math.max(1, ...sessions.map(s => s.inputTokens + s.outputTokens))
+  // Largest input+output across the whole list, so each row's TokenBar length compares.
+  // reduce, NOT Math.max(...spread) — spreading tens of thousands of args overflows the call stack.
+  const maxTokens = sessions.reduce((m, s) => Math.max(m, s.inputTokens + s.outputTokens), 1)
 
   return (
     <div id="sessions-content" style="padding-top:8px">
@@ -528,14 +568,26 @@ export function Sessions() {
           </tr>
         </thead>
         <tbody>
-          {sessions.map(sess => (
+          {sessions.slice(0, renderCount).map(sess => (
             <SessionRow key={sess.sessionId} sess={sess} showWorkspace={showWorkspace} maxTokens={maxTokens} />
           ))}
         </tbody>
       </table>
       </div>
-      <div style="padding:6px 8px;font-size:11px;color:var(--muted);border-top:1px solid var(--vscode-panel-border)">
-        <span>{(sessionSummary.value?.sessions?.length ?? 0)} sessions stored — managed by retention policy</span>
+      {/* Infinite-scroll sentinel — observed (rootMargin 800px) to load the next batch early. */}
+      <div ref={sentinelRef} style="height:1px" />
+      <div style="padding:6px 8px;font-size:11px;color:var(--muted);border-top:1px solid var(--vscode-panel-border);display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        {renderCount < sessions.length && (
+          <button
+            onClick={() => setRenderCount(c => Math.min(c + RENDER_BATCH, sessions.length))}
+            style="padding:2px 10px;font-size:11px;cursor:pointer;border-radius:3px;border:1px solid var(--border);background:transparent;color:var(--vscode-textLink-foreground,#4fc3f7)"
+          >Show more</button>
+        )}
+        <span>
+          Showing {Math.min(renderCount, sessions.length).toLocaleString()} of {sessions.length.toLocaleString()}
+          {sessions.length !== (sessionSummary.value?.sessions?.length ?? 0) ? ' (filtered)' : ''}
+          {' · '}{(sessionSummary.value?.sessions?.length ?? 0).toLocaleString()} stored
+        </span>
       </div>
     </div>
   )

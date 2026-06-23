@@ -544,6 +544,28 @@ body {
   text-align: center;
   margin-top: 8px;
 }
+.al-spinner-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.al-spinner {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: al-spin 0.7s linear infinite;
+}
+@keyframes al-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
 
 /* media/src/styles/waterfall.css */
 .waterfall {
