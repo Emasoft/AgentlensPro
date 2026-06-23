@@ -197,6 +197,9 @@ export class LogReader {
   // multi-GB file, large enough to amortise syscalls. Overridable for tests so a
   // chunk-boundary (and split-UTF-8) can be exercised without a huge fixture.
   private readonly streamChunkBytes: number
+  // One-shot guard: a drifted OpenCode DB schema (newer OpenCode moved model/tokens off
+  // the session table into message `data` JSON) is logged once, not on every 30s scan.
+  private openCodeSchemaWarned = false
 
   constructor(options: LogReaderOptions = {}) {
     this.log = options.log ?? (() => { /* silent */ })
@@ -868,6 +871,21 @@ export class LogReader {
     } catch { /* no WAL file — main DB is fully checkpointed */ }
     const db = new this.sqlFactory!.Database(buf)
     try {
+      // Schema-drift guard: newer OpenCode moved model + token columns off the `session`
+      // table (into message `data` JSON), so the legacy query below throws `no such column:
+      // s.model` on every scan. Detect the unsupported schema, log ONCE, and skip cleanly —
+      // no per-scan error spam, and don't fall through to the JSON fallback (which targets an
+      // even-older on-disk format and would find nothing here). Updating the parser to the new
+      // schema is deferred until there's real data to validate against.
+      const info = db.exec('PRAGMA table_info(session)')
+      const sessionCols = new Set((info[0]?.values ?? []).map(r => String(r[1])))
+      if (!sessionCols.has('model') || !sessionCols.has('tokens_input')) {
+        if (!this.openCodeSchemaWarned) {
+          this.openCodeSchemaWarned = true
+          this.log('[LogReader] OpenCode DB schema unsupported (session table lacks model/tokens columns — newer OpenCode stores them in message data); skipping OpenCode sessions until the parser is updated.')
+        }
+        return []
+      }
       // ── Session rows ───────────────────────────────────────────────────────
       const sessRows = db.exec(`
         SELECT s.id, s.directory, s.title, s.time_created,
@@ -1349,9 +1367,19 @@ interface CardAccum {
   filesChanged: Set<string>
   filesWritten: Set<string>
   filesSearched: Set<string>
+  fileOps?: Map<string, FileOpAccum>
   userRequest: string
   timeline: TimelineEntry[]
   initiator: 'user' | 'agent' | 'api'
+}
+
+// Per-path byte/operation accumulator for file tool I/O (Claude logs). Converted to the
+// card's FileOpSummary[] in _buildCard. Read bytes come from the matching tool_result
+// content; write/edit bytes from the tool_use input. Kept as a Map so incremental scans
+// accumulate in place. Optional on CardAccum — only the Claude path populates it.
+interface FileOpAccum {
+  readBytes: number; writeBytes: number; editBytes: number
+  readCount: number; writeCount: number; editCount: number
 }
 
 // ── Incremental parse accumulators (Claude / Codex large-JSONL streaming) ──────
@@ -1367,6 +1395,7 @@ function _emptyCardAccum(initiator: 'user' | 'agent' | 'api' = 'user'): CardAccu
     peakContextPerTurn: 0, turns: 0, totalToolCalls: 0, toolCounts: {},
     filesRead: new Set<string>(), filesChanged: new Set<string>(),
     filesWritten: new Set<string>(), filesSearched: new Set<string>(),
+    fileOps: new Map<string, FileOpAccum>(),
     userRequest: '', timeline: [], initiator,
   }
 }
@@ -1378,11 +1407,50 @@ interface ClaudeAccum {
   lastTimestamp: string
   hasFastMode: boolean
   idx: number               // monotonic timeline index; persists across scans → stable spanIds
+  // In-flight Read tool_use id → its file path. A Read's byte volume lives in the matching
+  // tool_result (which only carries the tool_use_id), which often arrives in a LATER entry —
+  // or even a later scan — so this map persists in the accumulator to bridge that gap.
+  pendingReads: Map<string, string>
   card: CardAccum
 }
 
 function _newClaudeAccum(): ClaudeAccum {
-  return { workspace: '', model: '', firstTimestamp: '', lastTimestamp: '', hasFastMode: false, idx: 0, card: _emptyCardAccum('user') }
+  return { workspace: '', model: '', firstTimestamp: '', lastTimestamp: '', hasFastMode: false, idx: 0, pendingReads: new Map<string, string>(), card: _emptyCardAccum('user') }
+}
+
+// UTF-8 byte length of a value that may or may not be a string (0 for non-strings).
+function _utf8Bytes(v: unknown): number {
+  return typeof v === 'string' ? Buffer.byteLength(v, 'utf8') : 0
+}
+
+// Bytes an Edit-family tool produced: Edit / replace_string_in_file → new_string; MultiEdit →
+// sum of edits[].new_string; else fall back to content. Approximates the change volume.
+function _editInputBytes(inp: Record<string, unknown>): number {
+  if (Array.isArray(inp['edits'])) {
+    return (inp['edits'] as Array<Record<string, unknown>>)
+      .reduce((n, e) => n + _utf8Bytes(e['new_string'] ?? e['newString']), 0)
+  }
+  return _utf8Bytes(inp['new_string'] ?? inp['newString'] ?? inp['content'])
+}
+
+// Bytes a Read returned: tool_result content is either a string or an array of {text} blocks.
+function _toolResultBytes(content: unknown): number {
+  if (typeof content === 'string') return Buffer.byteLength(content, 'utf8')
+  if (Array.isArray(content)) {
+    return (content as Array<Record<string, unknown>>)
+      .reduce((n, b) => n + (typeof b['text'] === 'string' ? Buffer.byteLength(b['text'] as string, 'utf8') : 0), 0)
+  }
+  return 0
+}
+
+// Accumulate one file operation's byte volume into the per-path map (lazily created).
+function _addFileOp(card: CardAccum, filePath: string, op: 'read' | 'write' | 'edit', bytes: number): void {
+  const ops = card.fileOps ?? (card.fileOps = new Map<string, FileOpAccum>())
+  let fo = ops.get(filePath)
+  if (!fo) { fo = { readBytes: 0, writeBytes: 0, editBytes: 0, readCount: 0, writeCount: 0, editCount: 0 }; ops.set(filePath, fo) }
+  if (op === 'read')       { fo.readBytes  += bytes; fo.readCount++  }
+  else if (op === 'write') { fo.writeBytes += bytes; fo.writeCount++ }
+  else                     { fo.editBytes  += bytes; fo.editCount++  }
 }
 
 function _claudeOnEntry(a: ClaudeAccum, entry: Record<string, unknown>): void {
@@ -1405,6 +1473,18 @@ function _claudeOnEntry(a: ClaudeAccum, entry: Record<string, unknown>): void {
         a.card.userRequest = afterCaveat || '[api session]'
       } else {
         a.card.userRequest = text
+      }
+    }
+    // Resolve Read tool_results → per-file read bytes (tool_use.id ↔ tool_result.tool_use_id).
+    if (Array.isArray(content)) {
+      for (const block of content as Array<Record<string, unknown>>) {
+        if (block['type'] !== 'tool_result') continue
+        const id = block['tool_use_id'] as string | undefined
+        if (!id) continue
+        const fp = a.pendingReads.get(id)
+        if (!fp) continue
+        a.pendingReads.delete(id)
+        _addFileOp(a.card, fp, 'read', _toolResultBytes(block['content']))
       }
     }
     a.card.timeline.push({ type: 'user_input', spanId: `log-u-${a.idx}`, label: 'User', durationMs: 0, isError: false, timestamp: ts ?? '', responseText: text })
@@ -1439,9 +1519,19 @@ function _claudeOnEntry(a: ClaudeAccum, entry: Record<string, unknown>): void {
         const inp = (block['input'] ?? {}) as Record<string, unknown>
         const fp  = String(inp['file_path'] ?? inp['filePath'] ?? inp['path'] ?? '')
         if (fp) {
-          if (name === 'Read' || name === 'read_file') a.card.filesRead.add(fp)
-          else if (['Edit', 'MultiEdit', 'replace_string_in_file', 'NotebookEdit'].includes(name)) a.card.filesChanged.add(fp)
-          else if (name === 'Write' || name === 'create_file') { a.card.filesChanged.add(fp); a.card.filesWritten.add(fp) }
+          if (name === 'Read' || name === 'read_file') {
+            a.card.filesRead.add(fp)
+            // A Read's byte volume is in the matching tool_result; record the tool_use id
+            // now and resolve it to read-bytes when that result arrives (see the user branch).
+            const id = block['id'] as string | undefined
+            if (id) a.pendingReads.set(id, fp)
+          } else if (['Edit', 'MultiEdit', 'replace_string_in_file', 'NotebookEdit'].includes(name)) {
+            a.card.filesChanged.add(fp)
+            _addFileOp(a.card, fp, 'edit', _editInputBytes(inp))
+          } else if (name === 'Write' || name === 'create_file') {
+            a.card.filesChanged.add(fp); a.card.filesWritten.add(fp)
+            _addFileOp(a.card, fp, 'write', _utf8Bytes(inp['content']))
+          }
         }
       }
     }
@@ -1540,6 +1630,9 @@ function _buildCard(
     filesSearched: Array.from(acc.filesSearched),
     filesChanged:  Array.from(acc.filesChanged),
     filesWritten:  Array.from(acc.filesWritten),
+    fileOps: acc.fileOps && acc.fileOps.size > 0
+      ? Array.from(acc.fileOps.entries()).map(([path, f]) => ({ path, ...f }))
+      : undefined,
     toolCounts: acc.toolCounts,
     totalToolCalls: acc.totalToolCalls,
     totalLlmCalls: acc.turns,

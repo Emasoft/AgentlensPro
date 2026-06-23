@@ -33,6 +33,23 @@ export interface SessionSummaryCard {
   loopSignals: LoopSignal[]
   peakContextPerTurn?: number   // max single-turn (input + cacheRead + cacheCreate); undefined for single-turn sessions
   filesWritten: string[]        // files fully written (Write / create_file tools); subset of filesChanged
+  fileOps?: FileOpSummary[]     // per-file read/write/edit byte volumes (Claude log sessions); see FileOpSummary
+}
+
+/** Per-file I/O volume for one session: how many bytes were read / written / edited for
+ *  a path, and how many operations of each. Read bytes = the tool_result content length
+ *  (the file text the agent pulled into context); write/edit bytes = the content the agent
+ *  produced. Lets the dashboard show real per-file size + read-vs-write split and sort by
+ *  it. Populated for Claude log sessions (the only source that records file tool I/O);
+ *  an approximate token count is bytes / 4. */
+export interface FileOpSummary {
+  path: string
+  readBytes: number
+  writeBytes: number
+  editBytes: number
+  readCount: number
+  writeCount: number
+  editCount: number
 }
 
 export interface TimelineEntry {

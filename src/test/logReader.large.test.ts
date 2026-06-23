@@ -87,6 +87,24 @@ const claudeAssistant = (ts: string, cwd: string, u: ClaudeUsage): string =>
     },
   }) + '\n'
 
+// assistant turn carrying tool_use blocks (Read/Write/Edit) — drives per-file capture.
+const claudeToolUse = (ts: string, cwd: string, blocks: Array<{ name: string; id: string; input: Record<string, unknown> }>): string =>
+  JSON.stringify({
+    type: 'assistant', timestamp: ts, cwd,
+    message: {
+      model: 'claude-opus-4-8',
+      usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+      content: blocks.map(b => ({ type: 'tool_use', id: b.id, name: b.name, input: b.input })),
+    },
+  }) + '\n'
+
+// user turn carrying tool_result blocks — the Read's returned bytes (resolved by tool_use_id).
+const claudeToolResult = (ts: string, cwd: string, results: Array<{ toolUseId: string; content: string }>): string =>
+  JSON.stringify({
+    type: 'user', timestamp: ts, cwd,
+    message: { content: results.map(r => ({ type: 'tool_result', tool_use_id: r.toolUseId, content: r.content })) },
+  }) + '\n'
+
 interface CodexTotal { input_tokens: number; cached_input_tokens: number; output_tokens: number; reasoning_output_tokens: number }
 
 const codexMeta = (ts: string, cwd: string): string =>
@@ -242,6 +260,61 @@ suite('LogReader — large / streaming JSONL', () => {
       assert.strictEqual(second!.cacheReadTokens, 300)
       assert.strictEqual(second!.outputTokens, 250)  // output 200 + reasoning 50
       assert.strictEqual(accumOf(reader, fx.file), accum1, 'append must extend the cached accumulator')
+    } finally {
+      fx.cleanup()
+    }
+  })
+
+  test('captures per-file read/write/edit byte volumes (fileOps)', () => {
+    const fx = claudeFixture()
+    try {
+      const READ = 'X'.repeat(500)   // bytes the Read returns
+      const WRITE = 'Y'.repeat(300)  // bytes the Write produces
+      const EDIT = 'Z'.repeat(120)   // bytes the Edit's new_string produces
+      let c = claudeUser('2026-06-23T10:00:00.000Z', fx.cwd, 'Do file work')
+      c += claudeToolUse('2026-06-23T10:00:01.000Z', fx.cwd, [{ name: 'Read', id: 'tu_r1', input: { file_path: '/a.txt' } }])
+      c += claudeToolResult('2026-06-23T10:00:02.000Z', fx.cwd, [{ toolUseId: 'tu_r1', content: READ }])
+      c += claudeToolUse('2026-06-23T10:00:03.000Z', fx.cwd, [{ name: 'Write', id: 'tu_w1', input: { file_path: '/b.txt', content: WRITE } }])
+      c += claudeToolUse('2026-06-23T10:00:04.000Z', fx.cwd, [{ name: 'Edit', id: 'tu_e1', input: { file_path: '/a.txt', new_string: EDIT } }])
+      fs.writeFileSync(fx.file, c)
+
+      const reader = new LogReader({ streamChunkBytes: 64 })
+      const card = findCard(scanClaude(reader), fx.id)?.card
+      assert.ok(card?.fileOps, 'fileOps should be populated for a Claude file session')
+      const ops = new Map(card!.fileOps!.map(o => [o.path, o]))
+      const a = ops.get('/a.txt'); const b = ops.get('/b.txt')
+      assert.ok(a && b, 'both touched files should appear in fileOps')
+      assert.strictEqual(a!.readBytes, 500); assert.strictEqual(a!.readCount, 1)
+      assert.strictEqual(a!.editBytes, 120); assert.strictEqual(a!.editCount, 1)
+      assert.strictEqual(a!.writeBytes, 0, 'a.txt was never written')
+      assert.strictEqual(b!.writeBytes, 300); assert.strictEqual(b!.writeCount, 1)
+      assert.strictEqual(b!.readBytes, 0, 'b.txt was never read')
+    } finally {
+      fx.cleanup()
+    }
+  })
+
+  test('resolves a Read tool_result that arrives in a LATER scan (persisted pendingReads)', () => {
+    const fx = claudeFixture()
+    try {
+      // The Read tool_use lands first; its tool_result (carrying the bytes) only arrives on
+      // the next append. The read-bytes must still attribute correctly, which requires the
+      // tool_use-id→path map to survive across scans inside the cached accumulator.
+      let c = claudeUser('2026-06-23T10:00:00.000Z', fx.cwd, 'Read a big file')
+      c += claudeToolUse('2026-06-23T10:00:01.000Z', fx.cwd, [{ name: 'Read', id: 'tu_x', input: { file_path: '/big.ts' } }])
+      fs.writeFileSync(fx.file, c)
+
+      const reader = new LogReader({ streamChunkBytes: 64 })
+      const first = findCard(scanClaude(reader), fx.id)?.card
+      const firstBig = first?.fileOps?.find(o => o.path === '/big.ts')
+      assert.ok(!firstBig || firstBig.readBytes === 0, 'no read bytes before the tool_result is seen')
+
+      fs.appendFileSync(fx.file, claudeToolResult('2026-06-23T10:00:05.000Z', fx.cwd, [{ toolUseId: 'tu_x', content: 'Q'.repeat(2048) }]))
+      const second = findCard(scanClaude(reader), fx.id)?.card
+      const secondBig = second!.fileOps!.find(o => o.path === '/big.ts')
+      assert.ok(secondBig, '/big.ts should appear after its read resolves')
+      assert.strictEqual(secondBig!.readBytes, 2048, 'read bytes resolved across scans via persisted pendingReads')
+      assert.strictEqual(secondBig!.readCount, 1)
     } finally {
       fx.cleanup()
     }

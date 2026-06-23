@@ -80,6 +80,19 @@ export interface SessionSummaryCard {
   loopSignals: LoopSignal[]
   peakContextPerTurn?: number
   filesWritten: string[]
+  fileOps?: FileOpSummary[]     // per-file read/write/edit byte volumes (Claude log sessions)
+}
+
+// Mirror of src/summarizers/summarizerTypes.ts FileOpSummary. Read bytes = file text pulled
+// into context; write/edit bytes = content produced. ~tokens ≈ bytes / 4.
+export interface FileOpSummary {
+  path: string
+  readBytes: number
+  writeBytes: number
+  editBytes: number
+  readCount: number
+  writeCount: number
+  editCount: number
 }
 
 export interface TimelineEntry {
