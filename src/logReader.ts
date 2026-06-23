@@ -162,6 +162,8 @@ export interface LogReaderOptions {
   log?: (msg: string) => void
   /** When provided, enables reading OpenCode sessions from its SQLite DB. */
   sqlFactory?: OpenCodeSqlFactory
+  /** Read-chunk size for the streaming line reader (bytes). Test-only; defaults to 1 MiB. */
+  streamChunkBytes?: number
 }
 
 export interface LogSessionResult {
@@ -175,14 +177,39 @@ export class LogReader {
   private readonly sqlFactory: OpenCodeSqlFactory | undefined
   private readonly fileState = new Map<string, FileState>()
 
+  // Per-file parse accumulators for INCREMENTAL parsing of large JSONL logs. Holding
+  // the running accumulator across scans is what lets a growing multi-GB session be
+  // re-parsed by reading only the bytes appended since the last scan (instead of the
+  // whole file every time). The cache is LRU-bounded so the thousands of static
+  // historical files don't pin their accumulators in memory: a static file is parsed
+  // once, then its (now useless) accumulator is evicted while only the tiny
+  // `fileState` skip-record is kept. A cold file that later changes is safely rebuilt
+  // from offset 0 (see `_incrementalParse`).
+  private readonly accumCache = new Map<string, unknown>()
+  private static readonly ACCUM_CACHE_MAX = 24
+  // Defensive caps for the NON-streaming read paths (Copilot line-array reads and the
+  // single-object JSON snapshot reads). The large Claude/Codex logs do not use these —
+  // they stream incrementally. A file beyond the cap is skipped with one log line
+  // rather than risking a multi-GB heap allocation. 256 MiB array / 64 MiB JSON.
+  private static readonly MAX_ARRAY_READ_BYTES = 256 * 1024 * 1024
+  private static readonly MAX_JSON_BYTES = 64 * 1024 * 1024
+  // Read chunk for the streaming line reader. Small enough to keep memory flat on a
+  // multi-GB file, large enough to amortise syscalls. Overridable for tests so a
+  // chunk-boundary (and split-UTF-8) can be exercised without a huge fixture.
+  private readonly streamChunkBytes: number
+
   constructor(options: LogReaderOptions = {}) {
     this.log = options.log ?? (() => { /* silent */ })
     this.sqlFactory = options.sqlFactory
+    this.streamChunkBytes = options.streamChunkBytes && options.streamChunkBytes > 0
+      ? options.streamChunkBytes
+      : 1 << 20  // 1 MiB
   }
 
   /** Clears cached file state so the next scan re-reads all files from scratch. */
   clearFileState(): void {
     this.fileState.clear()
+    this.accumCache.clear()
   }
 
   /**
@@ -312,100 +339,15 @@ export class LogReader {
   }
 
   private _parseClaudeFile(filePath: string): LogSessionResult | null {
-    const lines = this._readNewLines(filePath)
-    if (!lines) return null
-
-    const sessionId = path.basename(filePath, '.jsonl')
-
-    let workspace = ''
-    let model = ''
-    let firstTimestamp = ''
-    let lastTimestamp = ''
-    let userRequest = ''
-    let totalInput = 0, totalOutput = 0, totalCacheRead = 0, totalCacheCreate = 0
-    let peakContextPerTurn = 0
-    let turns = 0, totalToolCalls = 0
-    let hasFastMode = false
-    const filesChanged = new Set<string>()
-    const filesWritten = new Set<string>()
-    const filesRead    = new Set<string>()
-    const toolCounts: Record<string, number> = {}
-    const timeline: TimelineEntry[] = []
-    let idx = 0
-    let initiator: 'user' | 'agent' | 'api' = 'user'
-
-    for (const line of lines) {
-      let entry: Record<string, unknown>
-      try { entry = JSON.parse(line) as Record<string, unknown> } catch { continue }
-
-      const ts = entry['timestamp'] as string | undefined
-      if (ts) { if (!firstTimestamp) firstTimestamp = ts; lastTimestamp = ts }
-      if (entry['cwd'] && !workspace) workspace = entry['cwd'] as string
-
-      if (entry['type'] === 'user') {
-        // isSidechain: true → session was spawned by the Agent tool, not typed by a human.
-        // <local-command-caveat> prefix → session started via `claude -p` (non-interactive API).
-        if (!userRequest) {
-          if (entry['isSidechain'] === true) initiator = 'agent'
-        }
-        const content = (entry['message'] as Record<string, unknown>)?.['content']
-        const text = _extractTextContent(content)
-        if (!userRequest && text) {
-          if (initiator === 'user' && text.startsWith('<local-command-caveat>')) {
-            initiator = 'api'
-            const afterCaveat = text.replace(/^<local-command-caveat>[\s\S]*?<\/local-command-caveat>\s*/i, '').trim()
-            userRequest = afterCaveat || '[api session]'
-          } else {
-            userRequest = text
-          }
-        }
-        timeline.push({ type: 'user_input', spanId: `log-u-${idx}`, label: 'User', durationMs: 0, isError: false, timestamp: ts ?? '', responseText: text })
-        idx++
-      }
-
-      if (entry['type'] === 'assistant') {
-        const msg = entry['message'] as Record<string, unknown> | undefined
-        if (msg?.['model']) model = msg['model'] as string
-        const rawUsage = msg?.['usage'] as Record<string, unknown> | undefined
-        if (rawUsage?.['speed'] === 'fast') hasFastMode = true
-        const usage = rawUsage as Record<string, number> | undefined
-        if (usage) {
-          const inp  = usage['input_tokens']                ?? 0
-          const cr   = usage['cache_read_input_tokens']     ?? 0
-          const cc   = usage['cache_creation_input_tokens'] ?? 0
-          totalInput       += inp
-          totalOutput      += usage['output_tokens'] ?? 0
-          totalCacheRead   += cr
-          totalCacheCreate += cc
-          const turnContext = inp + cr + cc
-          if (turnContext > peakContextPerTurn) peakContextPerTurn = turnContext
-          turns++
-        }
-        const content = (msg?.['content'] as Array<Record<string, unknown>>) ?? []
-        let hasToolCall = false
-        for (const block of content) {
-          if (block['type'] === 'tool_use' && block['name']) {
-            hasToolCall = true; totalToolCalls++
-            const name = block['name'] as string
-            toolCounts[name] = (toolCounts[name] ?? 0) + 1
-            const inp = (block['input'] ?? {}) as Record<string, unknown>
-            const fp  = String(inp['file_path'] ?? inp['filePath'] ?? inp['path'] ?? '')
-            if (fp) {
-              if (name === 'Read' || name === 'read_file') filesRead.add(fp)
-              else if (['Edit','MultiEdit','replace_string_in_file','NotebookEdit'].includes(name)) filesChanged.add(fp)
-              else if (name === 'Write' || name === 'create_file') { filesChanged.add(fp); filesWritten.add(fp) }
-            }
-          }
-        }
-        const responseText = (content.find(b => b['type'] === 'text') as Record<string,string> | undefined)?.['text']
-        timeline.push({ type: hasToolCall ? 'tool' : 'llm', spanId: `log-a-${idx}`, label: hasToolCall ? 'Tool calls' : 'Response', model: model || undefined, inputTokens: usage?.['input_tokens'], outputTokens: usage?.['output_tokens'], durationMs: 0, isError: false, timestamp: ts ?? '', responseText })
-        idx++
-      }
+    // Incremental + streaming: a multi-GB Claude session is parsed in flat memory and
+    // only its newly-appended bytes are processed on each scan (see _incrementalParse).
+    const a = this._incrementalParse<ClaudeAccum>(filePath, _newClaudeAccum, _claudeOnEntry)
+    if (!a || !a.firstTimestamp) return null
+    const effectiveModel = (a.model && a.hasFastMode) ? `${a.model}-fast` : a.model
+    return {
+      workspace: a.workspace,
+      card: _buildCard(path.basename(filePath, '.jsonl'), 'claude_code', effectiveModel || 'claude', a.firstTimestamp, a.lastTimestamp, a.card, a.workspace),
     }
-
-    if (!firstTimestamp) return null
-    const effectiveModel = (model && hasFastMode) ? `${model}-fast` : model
-    return { workspace, card: _buildCard(sessionId, 'claude_code', effectiveModel || 'claude', firstTimestamp, lastTimestamp, { totalInput, totalOutput, totalCacheRead, totalCacheCreate, peakContextPerTurn, turns, totalToolCalls, toolCounts, filesRead, filesChanged, filesWritten, filesSearched: new Set(), userRequest, timeline, initiator }, workspace) }
   }
 
   // ── Codex ───────────────────────────────────────────────────────────────────
@@ -422,77 +364,28 @@ export class LogReader {
   }
 
   private _parseCodexFile(filePath: string, _sessionsDir: string): LogSessionResult | null {
-    const lines = this._readNewLines(filePath)
-    if (!lines) return null
-
-    const sessionId = path.basename(filePath, '.jsonl')
-    let workspace = ''
-
-    let model = ''
-    let firstTimestamp = ''
-    let lastTimestamp = ''
-    let userRequest = ''
-    let turns = 0
-    // Codex token_count events carry both per-turn (last_token_usage) and cumulative
-    // (total_token_usage) counts. We use the final total_token_usage because:
-    //   1. The sum of per-turn last_token_usage drifts from the authoritative total
-    //      (background tasks, retries, etc. can cause minor discrepancies).
-    //   2. OpenAI input_tokens includes cached_input_tokens, so we must subtract to
-    //      get the non-cached portion that _buildCard expects for correct billing.
-    let lastTotalUsage: Record<string, number> | undefined
-
-    for (const line of lines) {
-      let entry: Record<string, unknown>
-      try { entry = JSON.parse(line) as Record<string, unknown> } catch { continue }
-
-      const ts = entry['timestamp'] as string | undefined
-      if (ts) {
-        if (!firstTimestamp) firstTimestamp = ts
-        if (entry['type'] === 'event_msg') lastTimestamp = ts
-      }
-
-      // session_meta carries the actual project working directory
-      if (entry['type'] === 'session_meta' && !workspace) {
-        const payload = entry['payload'] as Record<string, unknown> | undefined
-        if (payload?.['cwd']) workspace = String(payload['cwd'])
-      }
-
-      // turn_context carries the model name
-      if (entry['type'] === 'turn_context') {
-        const payload = entry['payload'] as Record<string, unknown> | undefined
-        if (payload?.['model']) model = String(payload['model'])
-      }
-
-      if (entry['type'] === 'event_msg') {
-        const payload = entry['payload'] as Record<string, unknown> | undefined
-        if (payload?.['type'] === 'user_message' && !userRequest) {
-          const msg = String(payload['message'] ?? '').trim()
-          if (msg) userRequest = _extractCodexUserText(msg)
-        }
-        if (payload?.['type'] === 'token_count') {
-          const info = payload['info'] as Record<string, unknown> | undefined
-          if (info?.['model']) model = String(info['model'])
-          const total = info?.['total_token_usage'] as Record<string, number> | undefined
-          const last  = info?.['last_token_usage']  as Record<string, number> | undefined
-          if (total) lastTotalUsage = total
-          if (last) turns++
-        }
-      }
-    }
-
-    if (!firstTimestamp) return null
+    // Incremental + streaming (see _incrementalParse). Codex tracks the LATEST
+    // cumulative total_token_usage, so processing only newly-appended lines keeps the
+    // totals correct without re-reading the whole (potentially multi-GB) file.
+    const a = this._incrementalParse<CodexAccum>(filePath, _newCodexAccum, _codexOnEntry)
+    if (!a || !a.firstTimestamp) return null
 
     // Use final total_token_usage; input_tokens includes cached, so subtract to get
     // the raw (non-cached) portion that _buildCard will re-add alongside cacheRead.
-    const totalCacheRead  = lastTotalUsage?.['cached_input_tokens']    ?? 0
-    const totalInput      = Math.max(0, (lastTotalUsage?.['input_tokens'] ?? 0) - totalCacheRead)
+    const totalCacheRead = a.lastTotalUsage?.['cached_input_tokens'] ?? 0
+    const totalInput     = Math.max(0, (a.lastTotalUsage?.['input_tokens'] ?? 0) - totalCacheRead)
     // Include reasoning tokens in output — they're billed at the output rate for o-series.
-    const totalOutput     = (lastTotalUsage?.['output_tokens'] ?? 0)
-                          + (lastTotalUsage?.['reasoning_output_tokens'] ?? 0)
+    const totalOutput    = (a.lastTotalUsage?.['output_tokens'] ?? 0)
+                         + (a.lastTotalUsage?.['reasoning_output_tokens'] ?? 0)
 
     return {
-      workspace,
-      card: _buildCard(sessionId, 'codex', model || 'codex', firstTimestamp, lastTimestamp, { totalInput, totalOutput, totalCacheRead, totalCacheCreate: 0, peakContextPerTurn: 0, turns, totalToolCalls: 0, toolCounts: {}, filesRead: new Set(), filesChanged: new Set(), filesWritten: new Set(), filesSearched: new Set(), userRequest: userRequest.slice(0, 500), timeline: [], initiator: 'user' }, workspace),
+      workspace: a.workspace,
+      card: _buildCard(path.basename(filePath, '.jsonl'), 'codex', a.model || 'codex', a.firstTimestamp, a.lastTimestamp, {
+        totalInput, totalOutput, totalCacheRead, totalCacheCreate: 0,
+        peakContextPerTurn: 0, turns: a.turns, totalToolCalls: 0, toolCounts: {},
+        filesRead: new Set(), filesChanged: new Set(), filesWritten: new Set(), filesSearched: new Set(),
+        userRequest: a.userRequest, timeline: [], initiator: 'user',
+      }, a.workspace),
     }
   }
 
@@ -1278,6 +1171,15 @@ export class LogReader {
       const stat = fs.statSync(filePath)
       const prev = this.fileState.get(filePath)
       if (prev && stat.mtimeMs === prev.mtimeMs && stat.size === prev.bytesRead) return null
+      if (stat.size > LogReader.MAX_JSON_BYTES) {
+        // A single JSON object cannot be parsed incrementally without a streaming JSON
+        // parser; these snapshot files are small in practice. Skip oversized ones with
+        // one log line (and record state so the next poll doesn't re-log) instead of
+        // throwing on readFileSync / JSON.parse.
+        this.fileState.set(filePath, { bytesRead: stat.size, mtimeMs: stat.mtimeMs })
+        this.log(`[LogReader] skipping oversized JSON snapshot ${filePath} (${(stat.size / 1048576) | 0}MB)`)
+        return null
+      }
       const content = fs.readFileSync(filePath, 'utf-8')
       this.fileState.set(filePath, { bytesRead: stat.size, mtimeMs: stat.mtimeMs })
       return JSON.parse(content) as Record<string, unknown>
@@ -1287,23 +1189,132 @@ export class LogReader {
     }
   }
 
-  /** Returns only the new bytes since last read, split into lines. Returns null if unchanged. */
-  private _readNewLines(filePath: string): string[] | null {
+  /**
+   * Streams COMPLETE (newline-terminated) lines from `filePath` starting at byte
+   * `fromOffset`, invoking `onLine` for each. Reads in bounded `streamChunkBytes`
+   * chunks via fs.readSync so a multi-GB file never materialises as one string
+   * (V8 caps a single string at ~512 MiB) and heap stays flat regardless of file size.
+   *
+   * A trailing PARTIAL line (no terminating '\n' — e.g. a file mid-append) is NOT
+   * delivered; the returned offset points just past the last complete line so the
+   * caller resumes there next time. Splitting is on the raw 0x0A byte and each line's
+   * bytes are concatenated before utf-8 decoding, so a multi-byte character straddling
+   * a chunk boundary is preserved (0x0A never appears inside a multi-byte sequence).
+   * Returns the byte offset just past the last complete line consumed.
+   */
+  private _streamLinesFrom(filePath: string, fromOffset: number, onLine: (line: string) => void): number {
+    const fd = fs.openSync(filePath, 'r')
     try {
-      const stat = fs.statSync(filePath)
-      const prev = this.fileState.get(filePath)
-      if (prev && stat.mtimeMs === prev.mtimeMs && stat.size === prev.bytesRead) return null
+      const buf = Buffer.allocUnsafe(this.streamChunkBytes)
+      let readPos = fromOffset
+      let consumed = fromOffset            // byte offset just past the last '\n' delivered
+      let pending: Buffer[] = []           // bytes of the current incomplete line (may span chunks)
+      for (;;) {
+        const bytes = fs.readSync(fd, buf, 0, buf.length, readPos)
+        if (bytes <= 0) break
+        const chunkStart = readPos         // file offset of buf[0]
+        readPos += bytes
+        let lineStart = 0
+        for (let i = 0; i < bytes; i++) {
+          if (buf[i] !== 0x0A) continue    // not '\n'
+          const tail = buf.subarray(lineStart, i)
+          let line: string
+          if (pending.length === 0) {
+            line = tail.toString('utf8')
+          } else {
+            pending.push(Buffer.from(tail))            // copy: buf is reused on the next read
+            line = Buffer.concat(pending).toString('utf8')
+            pending = []
+          }
+          onLine(line)
+          consumed = chunkStart + i + 1    // exact file offset just past this '\n'
+          lineStart = i + 1
+        }
+        if (lineStart < bytes) pending.push(Buffer.from(buf.subarray(lineStart, bytes)))  // copy
+      }
+      return consumed
+    } finally {
+      fs.closeSync(fd)
+    }
+  }
 
-      // Always re-read the whole file so each scan produces a complete card.
-      // Incremental reads (seeking to prev.bytesRead) produced partial cards that
-      // then replaced the full card in logSessions, losing prior-turn data.
-      const content = fs.readFileSync(filePath, 'utf-8')
+  /**
+   * Reads a whole JSONL file's non-blank lines via the streaming reader (so it never
+   * builds one >512 MiB string). Returns null if unchanged since the last scan, or if
+   * the file exceeds MAX_ARRAY_READ_BYTES — a defensive cap for the small Copilot logs
+   * that use this path. The large Claude/Codex logs use `_incrementalParse`, which
+   * holds no full line array and so handles multi-GB files in flat memory.
+   */
+  private _readNewLines(filePath: string): string[] | null {
+    let stat: fs.Stats
+    try { stat = fs.statSync(filePath) } catch (err) { this.log(`[LogReader] read error ${filePath}: ${err}`); return null }
+    const prev = this.fileState.get(filePath)
+    if (prev && stat.mtimeMs === prev.mtimeMs && stat.size === prev.bytesRead) return null
+    if (stat.size > LogReader.MAX_ARRAY_READ_BYTES) {
+      // Record state so the next poll skips it (rather than re-stat-and-log every 30s).
       this.fileState.set(filePath, { bytesRead: stat.size, mtimeMs: stat.mtimeMs })
-      return content.split('\n').filter(l => l.trim())
-    } catch (err) {
-      this.log(`[LogReader] read error ${filePath}: ${err}`)
+      this.log(`[LogReader] skipping oversized non-incremental log ${filePath} (${(stat.size / 1048576) | 0}MB)`)
       return null
     }
+    const lines: string[] = []
+    try {
+      this._streamLinesFrom(filePath, 0, line => { if (line.trim()) lines.push(line) })
+    } catch (err) { this.log(`[LogReader] read error ${filePath}: ${err}`); return null }
+    this.fileState.set(filePath, { bytesRead: stat.size, mtimeMs: stat.mtimeMs })
+    return lines
+  }
+
+  /** LRU insert into accumCache; evicts the oldest entry when over ACCUM_CACHE_MAX. */
+  private _lruPut(filePath: string, accum: unknown): void {
+    this.accumCache.delete(filePath)
+    this.accumCache.set(filePath, accum)
+    while (this.accumCache.size > LogReader.ACCUM_CACHE_MAX) {
+      const oldest = this.accumCache.keys().next().value as string | undefined
+      if (oldest === undefined) break
+      this.accumCache.delete(oldest)
+    }
+  }
+
+  /**
+   * INCREMENTAL streaming parse for large JSONL logs (Claude, Codex). Streams only
+   * the bytes appended since the last scan into a PERSISTED accumulator, so a growing
+   * multi-GB session is never re-read from the start and heap stays flat. Returns the
+   * (updated) accumulator, or null if the file is unchanged.
+   *
+   * Resumes from the prior byte offset only when the accumulator is still cached AND
+   * the file did not shrink; otherwise it rebuilds from offset 0 with a fresh
+   * accumulator. This correctly handles rotation/truncation and an evicted
+   * accumulator — it never emits a partial card (the bug that previously forced a
+   * full re-read every scan).
+   */
+  private _incrementalParse<T>(
+    filePath: string,
+    factory: () => T,
+    onEntry: (accum: T, entry: Record<string, unknown>) => void,
+  ): T | null {
+    let stat: fs.Stats
+    try { stat = fs.statSync(filePath) } catch (err) { this.log(`[LogReader] read error ${filePath}: ${err}`); return null }
+    const prev = this.fileState.get(filePath)
+    if (prev && stat.mtimeMs === prev.mtimeMs && stat.size === prev.bytesRead) return null
+
+    const prevOffset = prev?.bytesRead ?? 0
+    const cached = this.accumCache.get(filePath) as T | undefined
+    const canResume = cached !== undefined && prevOffset > 0 && stat.size >= prevOffset
+    const accum = canResume ? cached : factory()
+
+    let newOffset = canResume ? prevOffset : 0
+    try {
+      newOffset = this._streamLinesFrom(filePath, canResume ? prevOffset : 0, line => {
+        if (!line.trim()) return
+        let entry: Record<string, unknown>
+        try { entry = JSON.parse(line) as Record<string, unknown> } catch { return }
+        onEntry(accum, entry)
+      })
+    } catch (err) { this.log(`[LogReader] read error ${filePath}: ${err}`); return null }
+
+    this.fileState.set(filePath, { bytesRead: newOffset, mtimeMs: stat.mtimeMs })
+    this._lruPut(filePath, accum)
+    return accum
   }
 
   /** Checks if a file has changed since last scan; if so, delegates to parseFn. */
@@ -1341,6 +1352,153 @@ interface CardAccum {
   userRequest: string
   timeline: TimelineEntry[]
   initiator: 'user' | 'agent' | 'api'
+}
+
+// ── Incremental parse accumulators (Claude / Codex large-JSONL streaming) ──────
+// Each holds the running per-session state ACROSS scans so _incrementalParse can
+// process only newly-appended bytes. The per-entry updaters are faithful to the
+// original single-pass parsers — they accumulate into these objects instead of
+// local variables, which is exactly what makes incremental re-parsing correct
+// (the previous code re-read the whole file every scan to avoid partial cards).
+
+function _emptyCardAccum(initiator: 'user' | 'agent' | 'api' = 'user'): CardAccum {
+  return {
+    totalInput: 0, totalOutput: 0, totalCacheRead: 0, totalCacheCreate: 0,
+    peakContextPerTurn: 0, turns: 0, totalToolCalls: 0, toolCounts: {},
+    filesRead: new Set<string>(), filesChanged: new Set<string>(),
+    filesWritten: new Set<string>(), filesSearched: new Set<string>(),
+    userRequest: '', timeline: [], initiator,
+  }
+}
+
+interface ClaudeAccum {
+  workspace: string
+  model: string
+  firstTimestamp: string
+  lastTimestamp: string
+  hasFastMode: boolean
+  idx: number               // monotonic timeline index; persists across scans → stable spanIds
+  card: CardAccum
+}
+
+function _newClaudeAccum(): ClaudeAccum {
+  return { workspace: '', model: '', firstTimestamp: '', lastTimestamp: '', hasFastMode: false, idx: 0, card: _emptyCardAccum('user') }
+}
+
+function _claudeOnEntry(a: ClaudeAccum, entry: Record<string, unknown>): void {
+  const ts = entry['timestamp'] as string | undefined
+  if (ts) { if (!a.firstTimestamp) a.firstTimestamp = ts; a.lastTimestamp = ts }
+  if (entry['cwd'] && !a.workspace) a.workspace = entry['cwd'] as string
+
+  if (entry['type'] === 'user') {
+    // isSidechain: true → session was spawned by the Agent tool, not typed by a human.
+    // <local-command-caveat> prefix → session started via `claude -p` (non-interactive API).
+    if (!a.card.userRequest) {
+      if (entry['isSidechain'] === true) a.card.initiator = 'agent'
+    }
+    const content = (entry['message'] as Record<string, unknown>)?.['content']
+    const text = _extractTextContent(content)
+    if (!a.card.userRequest && text) {
+      if (a.card.initiator === 'user' && text.startsWith('<local-command-caveat>')) {
+        a.card.initiator = 'api'
+        const afterCaveat = text.replace(/^<local-command-caveat>[\s\S]*?<\/local-command-caveat>\s*/i, '').trim()
+        a.card.userRequest = afterCaveat || '[api session]'
+      } else {
+        a.card.userRequest = text
+      }
+    }
+    a.card.timeline.push({ type: 'user_input', spanId: `log-u-${a.idx}`, label: 'User', durationMs: 0, isError: false, timestamp: ts ?? '', responseText: text })
+    a.idx++
+  }
+
+  if (entry['type'] === 'assistant') {
+    const msg = entry['message'] as Record<string, unknown> | undefined
+    if (msg?.['model']) a.model = msg['model'] as string
+    const rawUsage = msg?.['usage'] as Record<string, unknown> | undefined
+    if (rawUsage?.['speed'] === 'fast') a.hasFastMode = true
+    const usage = rawUsage as Record<string, number> | undefined
+    if (usage) {
+      const inp = usage['input_tokens']                ?? 0
+      const cr  = usage['cache_read_input_tokens']     ?? 0
+      const cc  = usage['cache_creation_input_tokens'] ?? 0
+      a.card.totalInput       += inp
+      a.card.totalOutput      += usage['output_tokens'] ?? 0
+      a.card.totalCacheRead   += cr
+      a.card.totalCacheCreate += cc
+      const turnContext = inp + cr + cc
+      if (turnContext > a.card.peakContextPerTurn) a.card.peakContextPerTurn = turnContext
+      a.card.turns++
+    }
+    const content = (msg?.['content'] as Array<Record<string, unknown>>) ?? []
+    let hasToolCall = false
+    for (const block of content) {
+      if (block['type'] === 'tool_use' && block['name']) {
+        hasToolCall = true; a.card.totalToolCalls++
+        const name = block['name'] as string
+        a.card.toolCounts[name] = (a.card.toolCounts[name] ?? 0) + 1
+        const inp = (block['input'] ?? {}) as Record<string, unknown>
+        const fp  = String(inp['file_path'] ?? inp['filePath'] ?? inp['path'] ?? '')
+        if (fp) {
+          if (name === 'Read' || name === 'read_file') a.card.filesRead.add(fp)
+          else if (['Edit', 'MultiEdit', 'replace_string_in_file', 'NotebookEdit'].includes(name)) a.card.filesChanged.add(fp)
+          else if (name === 'Write' || name === 'create_file') { a.card.filesChanged.add(fp); a.card.filesWritten.add(fp) }
+        }
+      }
+    }
+    const responseText = (content.find(b => b['type'] === 'text') as Record<string, string> | undefined)?.['text']
+    a.card.timeline.push({ type: hasToolCall ? 'tool' : 'llm', spanId: `log-a-${a.idx}`, label: hasToolCall ? 'Tool calls' : 'Response', model: a.model || undefined, inputTokens: usage?.['input_tokens'], outputTokens: usage?.['output_tokens'], durationMs: 0, isError: false, timestamp: ts ?? '', responseText })
+    a.idx++
+  }
+}
+
+interface CodexAccum {
+  workspace: string
+  model: string
+  firstTimestamp: string
+  lastTimestamp: string
+  userRequest: string
+  turns: number
+  // Final cumulative total_token_usage (we keep the LAST one: the per-turn sums drift
+  // from the authoritative total, and input_tokens includes cached_input_tokens which
+  // the parser subtracts back out for correct billing).
+  lastTotalUsage?: Record<string, number>
+}
+
+function _newCodexAccum(): CodexAccum {
+  return { workspace: '', model: '', firstTimestamp: '', lastTimestamp: '', userRequest: '', turns: 0 }
+}
+
+function _codexOnEntry(a: CodexAccum, entry: Record<string, unknown>): void {
+  const ts = entry['timestamp'] as string | undefined
+  if (ts) {
+    if (!a.firstTimestamp) a.firstTimestamp = ts
+    if (entry['type'] === 'event_msg') a.lastTimestamp = ts
+  }
+  // session_meta carries the actual project working directory
+  if (entry['type'] === 'session_meta' && !a.workspace) {
+    const payload = entry['payload'] as Record<string, unknown> | undefined
+    if (payload?.['cwd']) a.workspace = String(payload['cwd'])
+  }
+  // turn_context carries the model name
+  if (entry['type'] === 'turn_context') {
+    const payload = entry['payload'] as Record<string, unknown> | undefined
+    if (payload?.['model']) a.model = String(payload['model'])
+  }
+  if (entry['type'] === 'event_msg') {
+    const payload = entry['payload'] as Record<string, unknown> | undefined
+    if (payload?.['type'] === 'user_message' && !a.userRequest) {
+      const msg = String(payload['message'] ?? '').trim()
+      if (msg) a.userRequest = _extractCodexUserText(msg)
+    }
+    if (payload?.['type'] === 'token_count') {
+      const info = payload['info'] as Record<string, unknown> | undefined
+      if (info?.['model']) a.model = String(info['model'])
+      const total = info?.['total_token_usage'] as Record<string, number> | undefined
+      const last  = info?.['last_token_usage']  as Record<string, number> | undefined
+      if (total) a.lastTotalUsage = total
+      if (last) a.turns++
+    }
+  }
 }
 
 function _buildCard(
