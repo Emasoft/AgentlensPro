@@ -16,6 +16,34 @@ export interface Step {
   durationMs: number
 }
 
+// ── Timeline bar metric ───────────────────────────────────────────────────────
+// The Trace waterfall can size each step's bar by elapsed Time (the chronological
+// default) OR by a token/cost magnitude, so the same timeline doubles as a per-step
+// token/cost bar chart.
+export type TimelineMetric = 'time' | 'input' | 'output' | 'cacheRead' | 'cacheWrite' | 'cost'
+
+const TIMELINE_METRICS: Array<{ k: TimelineMetric; label: string }> = [
+  { k: 'time',       label: 'Time' },
+  { k: 'input',      label: 'Input' },
+  { k: 'output',     label: 'Output' },
+  { k: 'cacheRead',  label: 'Cache rd' },
+  { k: 'cacheWrite', label: 'Cache wr' },
+  { k: 'cost',       label: 'Cost' },
+]
+
+// Magnitude a step contributes for the chosen metric (bar width + sort key). 'time' is
+// handled separately — it uses the chronological offset + duration, not this value.
+function stepMetricValue(entry: TimelineEntry, metric: TimelineMetric, sessionModel: string): number {
+  switch (metric) {
+    case 'input':      return entry.inputTokens ?? 0
+    case 'output':     return entry.outputTokens ?? 0
+    case 'cacheRead':  return entry.cacheReadTokens ?? 0
+    case 'cacheWrite': return entry.cacheCreateTokens ?? 0
+    case 'cost':       return entry.type === 'llm' ? calcEntryCost(entry, sessionModel) : 0
+    default:           return 0
+  }
+}
+
 
 
 function BgSummaryBlock({ bgSpans }: { bgSpans: BackgroundSpanSummary[] }) {
@@ -216,7 +244,7 @@ function LongTextSection({ heading, text, id: _id, isJson }: { heading: string; 
   )
 }
 
-export function StepRow({ step, idx, sessIdx, sessionDur, sessionModel }: { step: Step; idx: number; sessIdx: number; sessionDur: number; sessionModel: string }) {
+export function StepRow({ step, idx, sessIdx, sessionDur, sessionModel, metric, maxMetric }: { step: Step; idx: number; sessIdx: number; sessionDur: number; sessionModel: string; metric: TimelineMetric; maxMetric: number }) {
   const [open, setOpen] = useState(false)
   const entry = step.entry
   const entryCost = entry.type === 'llm' ? calcEntryCost(entry, sessionModel) : 0
@@ -256,8 +284,18 @@ export function StepRow({ step, idx, sessIdx, sessionDur, sessionModel }: { step
 
   const subtitle = toolSubtitle
 
-  const left = sessionDur > 0 ? (step.offsetMs / sessionDur * 100) : 0
-  const width = sessionDur > 0 ? Math.max(step.durationMs / sessionDur * 100, 0.5) : 100
+  // Bar geometry depends on the selected metric: 'time' keeps the chronological waterfall
+  // (offset + duration); a token/cost metric becomes a left-aligned bar whose width is the
+  // step's share of the largest step's value.
+  let left: number, width: number
+  if (metric === 'time') {
+    left = sessionDur > 0 ? (step.offsetMs / sessionDur * 100) : 0
+    width = sessionDur > 0 ? Math.max(step.durationMs / sessionDur * 100, 0.5) : 100
+  } else {
+    const v = stepMetricValue(entry, metric, sessionModel)
+    left = 0
+    width = maxMetric > 0 && v > 0 ? Math.max(v / maxMetric * 100, 0.5) : 0
+  }
 
   return (
     <>
@@ -297,6 +335,58 @@ export function StepRow({ step, idx, sessIdx, sessionDur, sessionModel }: { step
         </div>
       )}
     </>
+  )
+}
+
+// Shared Trace waterfall: a metric toolbar (Time | token/cost) above the step rows. With a
+// token/cost metric the rows become a bar chart that can be sorted by that value; Time keeps
+// the chronological waterfall and its ruler. Used by the Traces tab AND the Sessions-detail
+// Trace sub-tab so the toggle lives in one place.
+export function TimelineWaterfall({ steps, sessionDur, sessionModel, sessIdx = 0 }: {
+  steps: Step[]; sessionDur: number; sessionModel: string; sessIdx?: number
+}) {
+  const [metric, setMetric] = useState<TimelineMetric>('time')
+  const [sortByValue, setSortByValue] = useState(false)
+
+  const valued = steps.map((step, i) => ({
+    step, i,
+    v: metric === 'time' ? step.durationMs : stepMetricValue(step.entry, metric, sessionModel),
+  }))
+  const maxMetric = Math.max(0, ...valued.map(x => x.v))
+  const ordered = metric !== 'time' && sortByValue ? [...valued].sort((a, b) => b.v - a.v) : valued
+
+  const mBtn = (m: { k: TimelineMetric; label: string }) => (
+    <button
+      onClick={() => setMetric(m.k)}
+      style={[
+        'padding:2px 8px;font-size:10px;cursor:pointer;border-radius:3px;border:1px solid var(--border);',
+        metric === m.k ? 'background:var(--accent);color:var(--vscode-button-foreground,#fff);font-weight:600' : 'background:transparent;color:var(--muted)',
+      ].join('')}
+    >{m.label}</button>
+  )
+
+  return (
+    <div>
+      <div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;margin-bottom:6px">
+        <span style="font-size:10px;color:var(--muted);margin-right:2px">Bars:</span>
+        {TIMELINE_METRICS.map(mBtn)}
+        {metric !== 'time' && (
+          <button
+            onClick={() => setSortByValue(v => !v)}
+            style="padding:2px 8px;font-size:10px;cursor:pointer;border-radius:3px;border:1px solid var(--border);background:transparent;color:var(--vscode-textLink-foreground,#4fc3f7);margin-left:4px"
+          >{sortByValue ? '↓ Sorted by value' : '⏱ Chronological'}</button>
+        )}
+      </div>
+      {metric === 'time' && (
+        <div class="wf-time-ruler">
+          {Array.from({ length: 6 }, (_, t) => <span key={t}>{formatMs(sessionDur * t / 5)}</span>)}
+        </div>
+      )}
+      {ordered.map(({ step, i }) => (
+        <StepRow key={step.entry.spanId + i} step={step} idx={i} sessIdx={sessIdx}
+          sessionDur={sessionDur} sessionModel={sessionModel} metric={metric} maxMetric={maxMetric} />
+      ))}
+    </div>
   )
 }
 
@@ -381,12 +471,7 @@ function SessionBlock({ sess, sessIdx, sessNum, totalCount, isFirst }: {
           {isLoading ? (
             <div style="padding:12px 16px;font-size:11px;color:var(--muted)">Loading timeline…</div>
           ) : (
-            <>
-              <div class="wf-time-ruler">
-                {Array.from({ length: 6 }, (_, t) => <span key={t}>{formatMs(sessionDur * t / 5)}</span>)}
-              </div>
-              {steps.map((step, si) => <StepRow key={step.entry.spanId + si} step={step} idx={si} sessIdx={sessIdx} sessionDur={sessionDur} sessionModel={sess.model ?? ''} />)}
-            </>
+            <TimelineWaterfall steps={steps} sessionDur={sessionDur} sessionModel={sess.model ?? ''} sessIdx={sessIdx} />
           )}
         </div>
       )}

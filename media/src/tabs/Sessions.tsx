@@ -13,7 +13,7 @@ import { calcSessionCost } from '../sessionMetrics'
 import { fmtUsd } from './Cost'
 import { generateInsights, InsightCard } from './Insights'
 import { buildDisplaySummary } from '../utils'
-import { Step, StepRow } from './Traces'
+import { Step, TimelineWaterfall } from './Traces'
 import { FlowCanvas } from './Flow'
 import { ToolsChart } from './Tools'
 import type { SessionSummaryCard, FileOpSummary } from '../types'
@@ -323,19 +323,7 @@ function SessionDetail({ sess }: { sess: SessionSummaryCard }) {
                   : <div class="empty-state" style="padding:12px 0">Loading…</div>)
               : (
                 <div class="waterfall">
-                  <div class="wf-time-ruler">
-                    {Array.from({ length: 6 }, (_, t) => <span key={t}>{formatMs(sessionDur * t / 5)}</span>)}
-                  </div>
-                  {steps.map((step, si) => (
-                    <StepRow
-                      key={step.entry.spanId + si}
-                      step={step}
-                      idx={si}
-                      sessIdx={0}
-                      sessionDur={sessionDur}
-                      sessionModel={sess.model ?? ''}
-                    />
-                  ))}
+                  <TimelineWaterfall steps={steps} sessionDur={sessionDur} sessionModel={sess.model ?? ''} />
                 </div>
               )
             }
