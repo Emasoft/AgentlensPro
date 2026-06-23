@@ -347,7 +347,28 @@ function SessionDetail({ sess }: { sess: SessionSummaryCard }) {
 
 // ── Table row ─────────────────────────────────────────────────────────────────
 
-function SessionRow({ sess, showWorkspace }: { sess: SessionSummaryCard; showWorkspace: boolean }) {
+// Compact per-row token-composition bar: new-input / cache-read / cache-write / output,
+// scaled to the largest session in the list so bar LENGTH compares token magnitude across
+// rows while the segments show the breakdown. Normalised on input+output (the Tokens column).
+function TokenBar({ sess, maxTokens }: { sess: SessionSummaryCard; maxTokens: number }) {
+  const newInput = Math.max(0, sess.inputTokens - sess.cacheReadTokens - sess.cacheCreateTokens)
+  const total = sess.inputTokens + sess.outputTokens
+  if (total <= 0 || maxTokens <= 0) return null
+  const w = (n: number) => (n / maxTokens * 100).toFixed(2)
+  return (
+    <div
+      title={`new input ${newInput.toLocaleString()} · cache read ${sess.cacheReadTokens.toLocaleString()} · cache write ${sess.cacheCreateTokens.toLocaleString()} · output ${sess.outputTokens.toLocaleString()}`}
+      style="height:4px;border-radius:2px;background:var(--border);display:flex;overflow:hidden;margin-top:2px;width:100%;min-width:48px"
+    >
+      <div style={`width:${w(newInput)}%;background:var(--vscode-charts-blue,#4fc3f7)`} />
+      <div style={`width:${w(sess.cacheReadTokens)}%;background:var(--vscode-charts-purple,#b392f0)`} />
+      <div style={`width:${w(sess.cacheCreateTokens)}%;background:var(--vscode-charts-orange,#e2a03f)`} />
+      <div style={`width:${w(sess.outputTokens)}%;background:var(--vscode-charts-green,#81c784)`} />
+    </div>
+  )
+}
+
+function SessionRow({ sess, showWorkspace, maxTokens }: { sess: SessionSummaryCard; showWorkspace: boolean; maxTokens: number }) {
   const [expanded, setExpanded] = useState(false)
   const isFocused = focusedSessionId.value === sess.sessionId
   const rowRef = useRef<HTMLTableRowElement>(null)
@@ -417,9 +438,10 @@ function SessionRow({ sess, showWorkspace }: { sess: SessionSummaryCard; showWor
           {sess.model || '—'}
         </td>
 
-        {/* Tokens */}
-        <td style="padding:4px 6px;text-align:right;white-space:nowrap;font-size:10px;color:var(--muted)" title={sess.turns > 1 ? 'Input is accumulated across all turns (cache reads counted each turn). See Peak ctx/turn in session detail for actual context window size.' : undefined}>
+        {/* Tokens + composition bar */}
+        <td style="padding:4px 6px;text-align:right;white-space:nowrap;font-size:10px;color:var(--muted);min-width:60px" title={sess.turns > 1 ? 'Input is accumulated across all turns (cache reads counted each turn). See Peak ctx/turn in session detail for actual context window size.' : undefined}>
           {formatCompact(sess.inputTokens + sess.outputTokens)}
+          <TokenBar sess={sess} maxTokens={maxTokens} />
         </td>
 
         {/* Duration */}
@@ -470,7 +492,7 @@ export function Sessions() {
   const sortDir = sessionSortDir.value
 
   function sortArrow(key: SortKey) {
-    if (sortKey !== key) return <span style="opacity:0.3;margin-left:3px">↕</span>
+    if (sortKey !== key) return <span style="opacity:0.5;margin-left:3px" title="Click to sort">↕</span>
     return <span style="margin-left:3px;color:var(--accent)">{sortDir === 'desc' ? '▼' : '▲'}</span>
   }
 
@@ -486,6 +508,8 @@ export function Sessions() {
   const thBase = 'padding:3px 6px;font-size:10px;font-weight:600;white-space:nowrap;user-select:none'
   const thSort = thBase + ';cursor:pointer;color:var(--fg)'
   const thMuted = thBase + ';color:var(--muted);font-weight:500'
+  // Largest input+output across the visible list, so each row's TokenBar length compares.
+  const maxTokens = Math.max(1, ...sessions.map(s => s.inputTokens + s.outputTokens))
 
   return (
     <div id="sessions-content" style="padding-top:8px">
@@ -505,7 +529,7 @@ export function Sessions() {
         </thead>
         <tbody>
           {sessions.map(sess => (
-            <SessionRow key={sess.sessionId} sess={sess} showWorkspace={showWorkspace} />
+            <SessionRow key={sess.sessionId} sess={sess} showWorkspace={showWorkspace} maxTokens={maxTokens} />
           ))}
         </tbody>
       </table>
