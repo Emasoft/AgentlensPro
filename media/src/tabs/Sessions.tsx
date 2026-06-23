@@ -16,7 +16,7 @@ import { buildDisplaySummary } from '../utils'
 import { Step, StepRow } from './Traces'
 import { FlowCanvas } from './Flow'
 import { ToolsChart } from './Tools'
-import type { SessionSummaryCard } from '../types'
+import type { SessionSummaryCard, FileOpSummary } from '../types'
 
 // ── Session detail panel (shown in expanded row) ──────────────────────────────
 
@@ -41,6 +41,138 @@ function PromptBlock({ text }: { text: string }) {
           {expanded ? 'Show less' : 'Show full prompt'}
         </button>
       )}
+    </div>
+  )
+}
+
+// ── Per-file I/O view (Files sub-tab) ─────────────────────────────────────────
+// Renders sess.fileOps (per-file read/write/edit byte volumes) as sortable, filterable
+// rows with a stacked size bar. Falls back to the flat filesChanged list for sessions
+// with no per-file capture (non-Claude sources, which record only paths).
+type FileSortKey = 'total' | 'name' | 'reads' | 'writes'
+
+function fmtKB(bytes: number): string {
+  if (bytes <= 0) return '0'
+  const kb = bytes / 1024
+  return kb < 10 ? kb.toFixed(1) : Math.round(kb).toLocaleString()
+}
+
+function FilesView({ sess }: { sess: SessionSummaryCard }) {
+  const [sortKey, setSortKey] = useState<FileSortKey>('total')
+  const [filter, setFilter] = useState('')
+  const ops = sess.fileOps ?? []
+
+  if (ops.length === 0) {
+    // No per-file capture for this source — show the legacy modified-files list.
+    if (sess.filesChanged.length === 0) {
+      return <div class="empty-state" style="padding:12px 0">No file activity recorded</div>
+    }
+    return (
+      <div style="display:flex;flex-direction:column;gap:3px">
+        {sess.filesChanged.map(f => (
+          <div
+            key={f}
+            style={`display:flex;align-items:center;gap:8px;padding:4px 8px;background:var(--hover);border-radius:4px;font-size:11px${vscode ? ';cursor:pointer' : ''}`}
+            onClick={() => vscode?.postMessage({ type: 'openFile', filePath: f })}
+            title={vscode ? 'Click to open in editor' : f}
+          >
+            <span style="color:var(--vscode-charts-green,#81c784);font-size:10px;flex-shrink:0">M</span>
+            <span style={`font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap${vscode ? ';color:var(--vscode-textLink-foreground,#4fc3f7)' : ''}`}>{f}</span>
+          </div>
+        ))}
+        {sess.filesChangedNote && (
+          <div style="font-size:10px;color:var(--muted);margin-top:3px">{sess.filesChangedNote}</div>
+        )}
+      </div>
+    )
+  }
+
+  const READ_C = 'var(--vscode-charts-blue,#4fc3f7)'
+  const WRITE_C = 'var(--vscode-charts-green,#81c784)'
+  const EDIT_C = 'var(--vscode-charts-orange,#e2a03f)'
+
+  const total = (o: FileOpSummary) => o.readBytes + o.writeBytes + o.editBytes
+  const q = filter.trim().toLowerCase()
+  const rows = ops
+    .filter(o => !q || o.path.toLowerCase().includes(q))
+    .sort((a, b) => {
+      switch (sortKey) {
+        case 'name':   return a.path.localeCompare(b.path)
+        case 'reads':  return b.readBytes - a.readBytes
+        case 'writes': return (b.writeBytes + b.editBytes) - (a.writeBytes + a.editBytes)
+        default:       return total(b) - total(a)
+      }
+    })
+  const maxTotal = Math.max(1, ...rows.map(total))
+  const agg = rows.reduce((s, o) => ({ r: s.r + o.readBytes, w: s.w + o.writeBytes, e: s.e + o.editBytes }), { r: 0, w: 0, e: 0 })
+
+  const sortBtn = (k: FileSortKey, label: string) => (
+    <button
+      onClick={() => setSortKey(k)}
+      style={[
+        'padding:2px 8px;font-size:10px;cursor:pointer;border-radius:3px;border:1px solid var(--border);',
+        sortKey === k ? 'background:var(--accent);color:var(--vscode-button-foreground,#fff);font-weight:600' : 'background:transparent;color:var(--muted)',
+      ].join('')}
+    >{label}</button>
+  )
+
+  return (
+    <div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:8px">
+        <input
+          value={filter}
+          onInput={e => setFilter((e.target as HTMLInputElement).value)}
+          placeholder="Filter by filename…"
+          style="flex:1;min-width:120px;padding:3px 8px;font-size:11px;border-radius:3px;border:1px solid var(--border);background:var(--card-bg);color:var(--foreground)"
+        />
+        <span style="font-size:10px;color:var(--muted)">Sort:</span>
+        {sortBtn('total', 'Size')}
+        {sortBtn('reads', 'Reads')}
+        {sortBtn('writes', 'Writes')}
+        {sortBtn('name', 'Name')}
+      </div>
+
+      <div style="font-size:10px;color:var(--muted);margin-bottom:8px">
+        <span style={`color:${READ_C}`}>● read {fmtKB(agg.r)} KB</span>
+        <span style={`color:${WRITE_C};margin-left:10px`}>● write {fmtKB(agg.w)} KB</span>
+        <span style={`color:${EDIT_C};margin-left:10px`}>● edit {fmtKB(agg.e)} KB</span>
+        <span style="margin-left:10px;opacity:.75">~tokens ≈ bytes / 4</span>
+      </div>
+
+      {rows.length === 0
+        ? <div class="empty-state" style="padding:12px 0">No files match “{filter}”</div>
+        : (
+          <div style="display:flex;flex-direction:column;gap:6px">
+            {rows.map(o => {
+              const pct = (n: number) => (n / maxTotal * 100).toFixed(2)
+              const tokens = Math.round(total(o) / 4)
+              return (
+                <div
+                  key={o.path}
+                  style={`padding:5px 8px;background:var(--hover);border-radius:4px${vscode ? ';cursor:pointer' : ''}`}
+                  onClick={() => vscode?.postMessage({ type: 'openFile', filePath: o.path })}
+                  title={vscode ? `${o.path}\nClick to open in editor` : o.path}
+                >
+                  <div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline;margin-bottom:3px">
+                    <span style={`font-family:monospace;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap${vscode ? ';color:var(--vscode-textLink-foreground,#4fc3f7)' : ''}`}>{o.path}</span>
+                    <span style="font-size:10px;color:var(--muted);flex-shrink:0;white-space:nowrap">{fmtKB(total(o))} KB · ~{formatCompact(tokens)} tok</span>
+                  </div>
+                  <div style="height:6px;border-radius:3px;background:var(--border);display:flex;overflow:hidden">
+                    <div style={`width:${pct(o.readBytes)}%;background:${READ_C}`} />
+                    <div style={`width:${pct(o.writeBytes)}%;background:${WRITE_C}`} />
+                    <div style={`width:${pct(o.editBytes)}%;background:${EDIT_C}`} />
+                  </div>
+                  <div style="font-size:9px;color:var(--muted);margin-top:2px">
+                    {o.readCount > 0 && <span style={`color:${READ_C}`}>R {o.readCount}× {fmtKB(o.readBytes)}KB</span>}
+                    {o.writeCount > 0 && <span style={`color:${WRITE_C};margin-left:8px`}>W {o.writeCount}× {fmtKB(o.writeBytes)}KB</span>}
+                    {o.editCount > 0 && <span style={`color:${EDIT_C};margin-left:8px`}>E {o.editCount}× {fmtKB(o.editBytes)}KB</span>}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )
+      }
     </div>
   )
 }
@@ -95,7 +227,7 @@ function SessionDetail({ sess }: { sess: SessionSummaryCard }) {
         {navBtn('trace', `Trace${visibleEntries.length > 0 ? ' (' + visibleEntries.length + ')' : ''}`)}
         {navBtn('flow', `Flow${sess.totalLlmCalls > 0 ? ' (' + sess.totalLlmCalls + ')' : ''}`)}
         {navBtn('tools', `Tools${sess.totalToolCalls > 0 ? ' (' + sess.totalToolCalls + ')' : ''}`)}
-        {navBtn('files', `Files${sess.filesChanged.length > 0 ? ' (' + sess.filesChanged.length + ')' : ''}`)}
+        {navBtn('files', `Files${(sess.fileOps?.length || sess.filesChanged.length) > 0 ? ' (' + (sess.fileOps?.length || sess.filesChanged.length) + ')' : ''}`)}
       </div>
 
       <div style="padding:12px 14px">
@@ -218,31 +350,7 @@ function SessionDetail({ sess }: { sess: SessionSummaryCard }) {
           <ToolsChart sessions={[sess]} />
         )}
 
-        {section === 'files' && (
-          <div>
-            {sess.filesChanged.length === 0
-              ? <div class="empty-state" style="padding:12px 0">No files modified</div>
-              : (
-                <div style="display:flex;flex-direction:column;gap:3px">
-                  {sess.filesChanged.map(f => (
-                    <div
-                      key={f}
-                      style={`display:flex;align-items:center;gap:8px;padding:4px 8px;background:var(--hover);border-radius:4px;font-size:11px${vscode ? ';cursor:pointer' : ''}`}
-                      onClick={() => vscode?.postMessage({ type: 'openFile', filePath: f })}
-                      title={vscode ? 'Click to open in editor' : f}
-                    >
-                      <span style="color:var(--vscode-charts-green,#81c784);font-size:10px;flex-shrink:0">M</span>
-                      <span style={`font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap${vscode ? ';color:var(--vscode-textLink-foreground,#4fc3f7)' : ''}`}>{f}</span>
-                    </div>
-                  ))}
-                  {sess.filesChangedNote && (
-                    <div style="font-size:10px;color:var(--muted);margin-top:3px">{sess.filesChangedNote}</div>
-                  )}
-                </div>
-              )
-            }
-          </div>
-        )}
+        {section === 'files' && <FilesView sess={sess} />}
 
       </div>
     </div>
