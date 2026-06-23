@@ -1,3 +1,4 @@
+import { useState } from 'preact/hooks'
 import { rangedSessions, COLORS } from '../state'
 import { getAgentColor, getAgentSourceLabel } from '../utils'
 import type { SessionSummaryCard } from '../types'
@@ -5,6 +6,7 @@ import type { SessionSummaryCard } from '../types'
 // ── Shared donut chart (used by Tools tab and Sessions detail) ─────────────────
 
 export function ToolsChart({ sessions }: { sessions: SessionSummaryCard[] }) {
+  const [sortKey, setSortKey] = useState<'calls' | 'name'>('calls')
   const counts: Record<string, number> = {}
   const toolAgents: Record<string, Record<string, boolean>> = {}
 
@@ -16,7 +18,11 @@ export function ToolsChart({ sessions }: { sessions: SessionSummaryCard[] }) {
     })
   })
 
-  const entries = Object.entries(counts).sort((a, b) => b[1] - a[1])
+  // Donut slices stay count-ordered (largest arc first reads best); the table follows sortKey.
+  const slicesOrder = Object.entries(counts).sort((a, b) => b[1] - a[1])
+  const entries = sortKey === 'name'
+    ? Object.entries(counts).sort((a, b) => a[0].localeCompare(b[0]))
+    : slicesOrder
 
   if (entries.length === 0) {
     return <div class="empty-state">No tool calls recorded for this session</div>
@@ -35,7 +41,7 @@ export function ToolsChart({ sessions }: { sessions: SessionSummaryCard[] }) {
     return `M ${x1} ${y1} A ${r} ${r} 0 ${largeArc} 1 ${x2} ${y2}`
   }
 
-  const slices = entries.map((e, i) => {
+  const slices = slicesOrder.map((e, i) => {
     const pct = e[1] / total
     const sliceAngle = pct * 2 * Math.PI
     const color = COLORS[i % COLORS.length]
@@ -66,7 +72,20 @@ export function ToolsChart({ sessions }: { sessions: SessionSummaryCard[] }) {
         </div>
       </div>
 
-      <table class="tool-insights-table" style="margin-top:16px">
+      <div style="display:flex;gap:6px;align-items:center;margin-top:16px">
+        <span style="font-size:10px;color:var(--muted)">Sort:</span>
+        {(['calls', 'name'] as const).map(k => (
+          <button
+            key={k}
+            onClick={() => setSortKey(k)}
+            style={[
+              'padding:2px 8px;font-size:10px;cursor:pointer;border-radius:3px;border:1px solid var(--border);',
+              sortKey === k ? 'background:var(--accent);color:var(--vscode-button-foreground,#fff);font-weight:600' : 'background:transparent;color:var(--muted)',
+            ].join('')}
+          >{k === 'calls' ? 'Calls' : 'Name'}</button>
+        ))}
+      </div>
+      <table class="tool-insights-table" style="margin-top:8px">
         <thead>
           <tr><th>Tool</th><th>Calls</th><th>%</th><th>Agents</th></tr>
         </thead>
