@@ -132,6 +132,13 @@ export function cacheSessionDetail(sessionId: string, timeline: TimelineEntry[],
 // Traces and Flow auto-open to it; a context bar shows it across all tabs.
 export const focusedSessionId = signal<string | null>(null)
 
+// Focused turn — set by clicking a single point on the Context Growth chart (or a
+// token bar). Carries the exact timeline step's spanId so the session detail opens
+// straight to the trace tab and scrolls/highlights THAT event with its token count
+// (answers "clicking the graph should open the exact event"). Cleared when the
+// session is deselected.
+export const focusedTurn = signal<{ sessionId: string; spanId: string } | null>(null)
+
 export const sessionLimit = signal(25)
 export const selectedAgentFilter = signal<AgentFilter>('all')
 export const initiatorFilter = signal<InitiatorFilter>('all')

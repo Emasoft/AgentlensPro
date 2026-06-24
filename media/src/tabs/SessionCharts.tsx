@@ -1,6 +1,6 @@
 import * as preact from 'preact'
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { sessionSummary, displaySessions, rangedSessions, agentFilteredSessions, filteredSessions, sessionTimelines, burnRateData, focusedSessionId, activeTab, CHART_MAX, COLORS, vscode, goToHelp, timeRange } from '../state'
+import { sessionSummary, displaySessions, rangedSessions, agentFilteredSessions, filteredSessions, sessionTimelines, burnRateData, focusedSessionId, focusedTurn, activeTab, CHART_MAX, COLORS, vscode, goToHelp, timeRange } from '../state'
 import {
   getSessionGlobalNumber,
   formatMs, formatCompact, getAgentColor, getAgentSourceLabel, formatSessionTime, formatSessionTimeShort,
@@ -48,7 +48,7 @@ export function TurnsLink() {
 
 type GrowthSeries = {
   sessionId: string; label: string; color: string
-  points: Array<{ turn: number; tokens: number }>
+  points: Array<{ turn: number; tokens: number; spanId: string }>
 }
 
 // Shared drawing state for click-detection
@@ -123,7 +123,7 @@ export function ContextGrowthChart({ sessions, timelines }: { sessions: SessionS
         sessionId: sess.sessionId,
         label: proj ? `${proj} · ${formatGrowthLabel(sess)}` : formatGrowthLabel(sess),
         color: getAgentColor(sess.source) || COLORS[seriesData.length % COLORS.length],
-        points: llmEntries.map((e, i) => ({ turn: i + 1, tokens: e.inputTokens ?? 0 })),
+        points: llmEntries.map((e, i) => ({ turn: i + 1, tokens: e.inputTokens ?? 0, spanId: e.spanId ?? '' })),
       })
     })
 
@@ -294,16 +294,20 @@ export function ContextGrowthChart({ sessions, timelines }: { sessions: SessionS
     const state = growthStateRef.current; if (!state || !state.series.length) return
     const rect = canvas.getBoundingClientRect()
     const mx = e.clientX - rect.left, my = e.clientY - rect.top
-    let bestDist = 20, bestId = ''
+    let bestDist = 20, bestId = '', bestSpanId = ''
     state.series.forEach(s => {
-      s.points.forEach(({ turn, tokens }) => {
+      s.points.forEach(({ turn, tokens, spanId }) => {
         const dx = mx - state.xPos(turn), dy = my - state.yPos(tokens)
         const dist = Math.sqrt(dx * dx + dy * dy)
-        if (dist < bestDist) { bestDist = dist; bestId = s.sessionId }
+        if (dist < bestDist) { bestDist = dist; bestId = s.sessionId; bestSpanId = spanId }
       })
     })
     if (bestId) {
-      focusedSessionId.value = focusedSessionId.peek() === bestId ? null : bestId
+      const turnOn = focusedSessionId.peek() !== bestId
+      focusedSessionId.value = turnOn ? bestId : null
+      // Carry the exact clicked event so the session detail opens to its trace tab
+      // and scrolls/highlights THAT turn with its token count. Clear on deselect.
+      focusedTurn.value = turnOn && bestSpanId ? { sessionId: bestId, spanId: bestSpanId } : null
       if (focusedSessionId.value) activeTab.value = 'sessions'
     }
   }

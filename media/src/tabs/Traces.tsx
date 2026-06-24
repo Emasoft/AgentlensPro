@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'preact/hooks'
+import { useState, useEffect, useRef } from 'preact/hooks'
 import {
   filteredSessions, sessionSummary, sessionTimelines, focusedSessionId, vscode,
 } from '../state'
@@ -285,9 +285,21 @@ function LongTextSection({ heading, text, id: _id, isJson }: { heading: string; 
   )
 }
 
-export function StepRow({ step, idx, sessIdx, sessionDur, sessionModel, metric, maxMetric }: { step: Step; idx: number; sessIdx: number; sessionDur: number; sessionModel: string; metric: TimelineMetric; maxMetric: number }) {
-  const [open, setOpen] = useState(false)
+export function StepRow({ step, idx, sessIdx, sessionDur, sessionModel, metric, maxMetric, highlightSpanId }: { step: Step; idx: number; sessIdx: number; sessionDur: number; sessionModel: string; metric: TimelineMetric; maxMetric: number; highlightSpanId?: string }) {
   const entry = step.entry
+  // When the user clicks a point in the Growth chart we focus that exact turn (by spanId). The
+  // matching row auto-expands so its token breakdown is immediately visible, and scrolls into view.
+  // useState(initial) covers a fresh mount already-focused; the effect covers a focus change while
+  // the row is already mounted (e.g. clicking a different point with the detail panel open).
+  const isHighlighted = !!highlightSpanId && entry.spanId === highlightSpanId
+  const [open, setOpen] = useState(isHighlighted)
+  const rowRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (isHighlighted) {
+      setOpen(true)
+      rowRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }
+  }, [isHighlighted])
   const entryCost = entry.type === 'llm' ? calcEntryCost(entry, sessionModel) : 0
 
   let badgeLabel: string, barColor: string
@@ -344,7 +356,8 @@ export function StepRow({ step, idx, sessIdx, sessionDur, sessionModel, metric, 
 
   return (
     <>
-      <div class="wf-row" onClick={() => setOpen(v => !v)}>
+      <div ref={rowRef} class="wf-row" onClick={() => setOpen(v => !v)}
+        style={isHighlighted ? 'outline:2px solid var(--accent);outline-offset:-2px;border-radius:3px' : undefined}>
         <div class="wf-label" title={subtitle ? rowLabel + ' — ' + subtitle : rowLabel}>
           <span class="wf-indent" />
           <span class="sw-chevron">{open ? '▼' : '▶'}</span>
@@ -398,8 +411,8 @@ export function StepRow({ step, idx, sessIdx, sessionDur, sessionModel, metric, 
 // token/cost metric the rows become a bar chart that can be sorted by that value; Time keeps
 // the chronological waterfall and its ruler. Used by the Traces tab AND the Sessions-detail
 // Trace sub-tab so the toggle lives in one place.
-export function TimelineWaterfall({ steps, sessionDur, sessionModel, sessIdx = 0 }: {
-  steps: Step[]; sessionDur: number; sessionModel: string; sessIdx?: number
+export function TimelineWaterfall({ steps, sessionDur, sessionModel, sessIdx = 0, highlightSpanId }: {
+  steps: Step[]; sessionDur: number; sessionModel: string; sessIdx?: number; highlightSpanId?: string
 }) {
   const [metric, setMetric] = useState<TimelineMetric>('time')
   const [sortByValue, setSortByValue] = useState(false)
@@ -469,7 +482,8 @@ export function TimelineWaterfall({ steps, sessionDur, sessionModel, sessIdx = 0
         ? <div class="empty-state" style="padding:10px 0;font-size:11px">No steps match “{filterApplied}”</div>
         : ordered.map(({ step, i }) => (
             <StepRow key={step.entry.spanId + i} step={step} idx={i} sessIdx={sessIdx}
-              sessionDur={sessionDur} sessionModel={sessionModel} metric={metric} maxMetric={maxMetric} />
+              sessionDur={sessionDur} sessionModel={sessionModel} metric={metric} maxMetric={maxMetric}
+              highlightSpanId={highlightSpanId} />
           ))
       }
     </div>

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'preact/hooks'
 import {
   filteredSessions, sessionSummary, sessionTimelines, sessionFileOps, burnRateData,
-  focusedSessionId, vscode, ignoredInsightKeys,
+  focusedSessionId, focusedTurn, vscode, ignoredInsightKeys,
   sessionSortKey, sessionSortDir, type SortKey,
   workspaceFilter, shortWorkspaceName,
 } from '../state'
@@ -187,6 +187,13 @@ function FilesView({ sess }: { sess: SessionSummaryCard }) {
 
 function SessionDetail({ sess }: { sess: SessionSummaryCard }) {
   const [section, setSection] = useState<Section>('overview')
+  // When a Context Growth point was clicked for THIS session, jump straight to the
+  // trace tab so the clicked event (and its token count) is what the user lands on.
+  const ft = focusedTurn.value
+  const highlightSpanId = ft && ft.sessionId === sess.sessionId ? ft.spanId : undefined
+  useEffect(() => {
+    if (ft && ft.sessionId === sess.sessionId) setSection('trace')
+  }, [ft?.sessionId, ft?.spanId])
   const timelines = sessionTimelines.value
   const timeline = timelines[sess.sessionId] ?? sess.timeline ?? []
   // Detail (timeline + file ops) is fetched on demand; `undefined` means the fetch is still in
@@ -344,7 +351,7 @@ function SessionDetail({ sess }: { sess: SessionSummaryCard }) {
                   : <div class="empty-state" style="padding:12px 0">No trace data for this session</div>)
               : (
                 <div class="waterfall">
-                  <TimelineWaterfall steps={steps} sessionDur={sessionDur} sessionModel={sess.model ?? ''} />
+                  <TimelineWaterfall steps={steps} sessionDur={sessionDur} sessionModel={sess.model ?? ''} highlightSpanId={highlightSpanId} />
                 </div>
               )
             }
