@@ -1498,7 +1498,13 @@ function _claudeOnEntry(a: ClaudeAccum, entry: Record<string, unknown>): void {
 
   if (entry['type'] === 'assistant') {
     const msg = entry['message'] as Record<string, unknown> | undefined
-    if (msg?.['model']) a.model = msg['model'] as string
+    // Claude writes model:"<synthetic>" on injected/auto rows (tool-result
+    // continuations, interrupts, isApiErrorMessage entries). Letting that
+    // placeholder overwrite a.model makes the card's headline model read
+    // "<synthetic>" whenever the last assistant row happens to be synthetic —
+    // so ignore it and keep the real model the session actually ran on.
+    const rowModel = msg?.['model'] as string | undefined
+    if (rowModel && rowModel !== '<synthetic>') a.model = rowModel
     // Claude Code writes ONE assistant message as MULTIPLE JSONL rows — one per content block
     // (thinking / text / each tool_use) — and repeats the FULL `usage` in every row. Counting
     // usage per row over-counts tokens (and `turns`) 2–5×, worst for tool-heavy orchestrator /

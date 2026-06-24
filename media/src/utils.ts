@@ -51,6 +51,38 @@ export function formatCompact(n: number): string {
   return new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(n)
 }
 
+// ── Token breakdown — the single source of truth for "what does input mean" ────
+// card.inputTokens is the TOTAL context (fresh input + every per-turn cache read +
+// cache writes). On marathon sessions the per-turn cache reads sum to billions, so
+// showing inputTokens raw makes one session dwarf all others ("impossible spike").
+// FRESH input — what the model actually had to read anew — is the bounded, useful
+// headline number; cache read/write are their own (legitimately large) dimensions.
+// Cost is already computed from `fresh` everywhere (calcTokenCostUsd), so this only
+// affects display — it never changes billing.
+export interface TokenBreakdown { fresh: number; cacheRead: number; cacheWrite: number; output: number; totalContext: number }
+export function tokenBreakdown(sess: Pick<SessionSummaryCard, 'inputTokens' | 'cacheReadTokens' | 'cacheCreateTokens' | 'outputTokens'>): TokenBreakdown {
+  const cacheRead = sess.cacheReadTokens ?? 0
+  const cacheWrite = sess.cacheCreateTokens ?? 0
+  const totalContext = sess.inputTokens ?? 0
+  return {
+    fresh: Math.max(0, totalContext - cacheRead - cacheWrite),
+    cacheRead,
+    cacheWrite,
+    output: sess.outputTokens ?? 0,
+    totalContext,
+  }
+}
+
+// One-line "150K fresh · 9.8B cache rd · 12K out" summary for tooltips/titles.
+export function formatTokenBreakdown(sess: Pick<SessionSummaryCard, 'inputTokens' | 'cacheReadTokens' | 'cacheCreateTokens' | 'outputTokens'>): string {
+  const b = tokenBreakdown(sess)
+  const parts = [formatCompact(b.fresh) + ' fresh in']
+  if (b.cacheRead > 0) parts.push(formatCompact(b.cacheRead) + ' cache rd')
+  if (b.cacheWrite > 0) parts.push(formatCompact(b.cacheWrite) + ' cache wr')
+  parts.push(formatCompact(b.output) + ' out')
+  return parts.join(' · ')
+}
+
 // ── Span attribute helpers ────────────────────────────────────────────────────
 
 export function getAttr(span: Span, key: string): string | number | boolean | null {

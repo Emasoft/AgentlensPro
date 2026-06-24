@@ -271,14 +271,20 @@ function SessionDetail({ sess }: { sess: SessionSummaryCard }) {
                 )
               }
               const missingTokens = isCopilot && sess.inputTokens === 0
-              const parts: string[] = ['traces & TTFT']
-              if (missingTokens) parts.push('input tokens & cache stats')
-              if (isCopilot) parts.push('tool details')
+              // For Claude Code / Codex log sessions, token, cost, tool and file data
+              // ARE fully captured from the local logs — the ONLY thing OTEL adds is
+              // live per-span trace timing (TTFT, waterfall). So this is an INFO note,
+              // not a warning: don't paint it amber or tell the user something is
+              // "not available" when their tokens/cost are right there. (Copilot logs
+              // can genuinely lack token counts — call that out separately.)
               return (
-                <div style="margin-bottom:10px;padding:7px 10px;border-radius:4px;border-left:3px solid var(--vscode-editorWarning-foreground,#cca700);background:var(--hover);font-size:11px;color:var(--muted);line-height:1.5">
-                  <span style="color:var(--vscode-editorWarning-foreground,#cca700);font-weight:600">Log-only session</span>
+                <div style="margin-bottom:10px;padding:7px 10px;border-radius:4px;border-left:3px solid var(--vscode-editorInfo-foreground,#4fc3f7);background:var(--hover);font-size:11px;color:var(--muted);line-height:1.5">
+                  <span style="color:var(--vscode-editorInfo-foreground,#4fc3f7);font-weight:600">Sourced from local logs</span>
                   {' — '}
-                  {parts.join(', ')} not available from local logs. Enable OTEL ingestion via the Help tab for full telemetry.
+                  {missingTokens
+                    ? 'this Copilot log did not record token counts. '
+                    : 'token, cost, tool and file data are fully captured. '}
+                  Per-span trace timing (TTFT &amp; waterfall) is the one extra that needs OTEL — optional, and it can&apos;t be turned on automatically because the agent itself must be configured to send traces (see the Help tab).
                 </div>
               )
             })()}

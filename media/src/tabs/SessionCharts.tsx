@@ -4,10 +4,33 @@ import { sessionSummary, displaySessions, rangedSessions, agentFilteredSessions,
 import {
   getSessionGlobalNumber,
   formatMs, formatCompact, getAgentColor, getAgentSourceLabel, formatSessionTime, formatSessionTimeShort,
+  tokenBreakdown, formatTokenBreakdown,
 } from '../utils'
+import { shortWorkspaceName } from '../state'
 import type { SessionSummaryCard } from '../types'
 
 type HeatReason = { text: string; linkPhrase?: string; helpId?: string }
+
+// Floating tooltip for the canvas charts (canvas can't carry per-element title=).
+// Positioned relative to the chart's wrapping position:relative container; flips
+// to the left of the cursor when near the right edge so it never clips offscreen.
+function ChartTooltip({ x, y, lines }: { x: number; y: number; lines: string[] }) {
+  const flipX = x > 240
+  return (
+    <div style={
+      'position:absolute;pointer-events:none;z-index:20;' +
+      'background:var(--vscode-editorHoverWidget-background,#252526);' +
+      'border:1px solid var(--vscode-editorHoverWidget-border,var(--border));' +
+      'border-radius:4px;padding:5px 8px;font-size:10px;line-height:1.5;color:var(--fg);' +
+      'box-shadow:0 2px 8px rgba(0,0,0,0.35);white-space:nowrap;' +
+      `top:${y + 12}px;` + (flipX ? `right:${0}px;left:auto;transform:translateX(0)` : `left:${x + 12}px`)
+    }>
+      {lines.map((l, i) => (
+        <div key={i} style={i === 0 ? 'font-weight:600' : 'color:var(--muted)'}>{l}</div>
+      ))}
+    </div>
+  )
+}
 
 export function TurnsLink() {
   return (
@@ -52,6 +75,7 @@ export function ContextGrowthChart({ sessions, timelines }: { sessions: SessionS
   const [hasData, setHasData] = useState(false)
   const [seriesCount, setSeriesCount] = useState(0)
   const [speed, setSpeed] = useState(1)
+  const [tip, setTip] = useState<{ x: number; y: number; lines: string[] } | null>(null)
   const pausedRef = useRef(false)
   const speedRef = useRef(1)
   const activeIdxRef = useRef(0)
@@ -92,9 +116,12 @@ export function ContextGrowthChart({ sessions, timelines }: { sessions: SessionS
       const llmEntries = (timelines[sess.sessionId] ?? sess.timeline ?? [])
         .filter(e => (e.type === 'llm' || e.type === 'tool') && (e.inputTokens ?? 0) > 0)
       if (llmEntries.length < 1) return
+      // Label with the project name (not just a bare timestamp) so the highlighted
+      // line and the hover tooltip say WHICH project/session you're looking at.
+      const proj = shortWorkspaceName(sess.workspace)
       seriesData.push({
         sessionId: sess.sessionId,
-        label: formatGrowthLabel(sess),
+        label: proj ? `${proj} · ${formatGrowthLabel(sess)}` : formatGrowthLabel(sess),
         color: getAgentColor(sess.source) || COLORS[seriesData.length % COLORS.length],
         points: llmEntries.map((e, i) => ({ turn: i + 1, tokens: e.inputTokens ?? 0 })),
       })
@@ -281,17 +308,40 @@ export function ContextGrowthChart({ sessions, timelines }: { sessions: SessionS
     }
   }
 
+  function handleCanvasMove(e: MouseEvent) {
+    const canvas = canvasRef.current; if (!canvas) return
+    const state = growthStateRef.current; if (!state || !state.series.length) { setTip(null); return }
+    const rect = canvas.getBoundingClientRect()
+    const mx = e.clientX - rect.left, my = e.clientY - rect.top
+    let bestDist = 18, best: { label: string; turn: number; tokens: number } | null = null
+    state.series.forEach(s => {
+      s.points.forEach(({ turn, tokens }) => {
+        const dx = mx - state.xPos(turn), dy = my - state.yPos(tokens)
+        const dist = Math.sqrt(dx * dx + dy * dy)
+        if (dist < bestDist) { bestDist = dist; best = { label: s.label, turn, tokens } }
+      })
+    })
+    if (!best) { setTip(null); return }
+    const b = best as { label: string; turn: number; tokens: number }
+    setTip({ x: mx, y: my, lines: [b.label, `Turn ${b.turn}`, `${b.tokens.toLocaleString()} input tokens`] })
+  }
+
   const btnStyle = 'padding:2px 8px;font-size:11px;cursor:pointer;background:transparent;border:1px solid var(--border);border-radius:3px;color:var(--muted);line-height:1.4'
 
   return (
     <>
-      <canvas
-        ref={canvasRef}
-        id="context-growth-chart"
-        style="width:100%;height:200px;cursor:pointer"
-        onClick={handleCanvasClick}
-        title="Click a line to select that session"
-      />
+      <div style="position:relative">
+        <canvas
+          ref={canvasRef}
+          id="context-growth-chart"
+          style="width:100%;height:200px;cursor:pointer"
+          onClick={handleCanvasClick}
+          onMouseMove={handleCanvasMove}
+          onMouseLeave={() => setTip(null)}
+          title="Hover a point for its turn & token count · click a line to select that session"
+        />
+        {tip && <ChartTooltip x={tip.x} y={tip.y} lines={tip.lines} />}
+      </div>
       {!hasData && <div class="empty-state" style="font-size:11px">No per-turn token data for these sessions. Context Growth requires sessions with per-turn input token counts — available for OTel-sourced sessions and Claude Code log sessions.</div>}
       {hasData && (
         <div style="display:flex;align-items:center;justify-content:space-between;margin-top:5px">
@@ -366,6 +416,8 @@ function SessionRow({ sess, idx, heat, expanded, onToggle }: {
 }) {
   const timeLabel = formatSessionTime(sess)
   const cacheRate = sess.inputTokens > 0 ? ((sess.cacheReadTokens / sess.inputTokens) * 100).toFixed(0) : '—'
+  const tok = tokenBreakdown(sess)
+  const tokTitle = formatTokenBreakdown(sess) + ` (${tok.totalContext.toLocaleString()} total context)`
   const agentDotColor = getAgentColor(sess.source)
   const isFocused = focusedSessionId.value === sess.sessionId
 
@@ -411,9 +463,9 @@ function SessionRow({ sess, idx, heat, expanded, onToggle }: {
         </td>
         <td class="right">{sess.totalLlmCalls}</td>
         <td class="right">{sess.totalToolCalls}</td>
-        <td class="right">{sess.inputTokens.toLocaleString()}</td>
-        <td class="right">{sess.outputTokens.toLocaleString()}</td>
-        <td class="right">{cacheRate}%</td>
+        <td class="right" title={tokTitle}>{tok.fresh.toLocaleString()}</td>
+        <td class="right" title={tokTitle}>{tok.output.toLocaleString()}</td>
+        <td class="right" title={'Cache read ' + tok.cacheRead.toLocaleString() + ' of ' + tok.totalContext.toLocaleString() + ' total context'}>{cacheRate}%</td>
         <td class="right">{formatMs(sess.durationMs)}</td>
         <td style={'text-align:right' + (sess.errors > 0 ? ';color:var(--error)' : '')}>{sess.errors}</td>
       </tr>
@@ -426,7 +478,8 @@ function SessionRow({ sess, idx, heat, expanded, onToggle }: {
 
 export function SessionTokenChart({ sessions }: { sessions: SessionSummaryCard[] }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const sessionDataRef = useRef<Array<{ sessionId: string; startTime: string; input: number; output: number; source: string; slotX: number; slotW: number }>>([])
+  const sessionDataRef = useRef<Array<{ sessionId: string; startTime: string; input: number; output: number; source: string; label: string; breakdown: string; slotX: number; slotW: number }>>([])
+  const [tip, setTip] = useState<{ x: number; y: number; lines: string[] } | null>(null)
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -434,15 +487,22 @@ export function SessionTokenChart({ sessions }: { sessions: SessionSummaryCard[]
     const rect = canvas.getBoundingClientRect()
     if (rect.width === 0 || rect.height === 0) return
 
-    // Oldest → newest left → right
+    // Oldest → newest left → right.
+    // Use FRESH input (totalContext − cache read − cache write), not the raw
+    // totalContext: a marathon session re-reads its cached prefix every turn, so
+    // its cache-read total reaches billions and would crush every other bar to a
+    // zero-height sliver (the "impossible spike"). Fresh input is the bounded,
+    // comparable number; the full breakdown is in the hover tooltip below.
     const sessionData = [...sessions].reverse()
       .map(sess => {
-        const input = sess.inputTokens ?? 0, output = sess.outputTokens ?? 0
-        return input + output > 0
-          ? { sessionId: sess.sessionId, startTime: sess.startTime, input, output, source: sess.source }
+        const b = tokenBreakdown(sess)
+        return b.fresh + b.output > 0
+          ? { sessionId: sess.sessionId, startTime: sess.startTime, input: b.fresh, output: b.output, source: sess.source,
+              label: shortWorkspaceName(sess.workspace) || getAgentSourceLabel(sess.source),
+              breakdown: formatTokenBreakdown(sess) }
           : null
       })
-      .filter(Boolean) as Array<{ sessionId: string; startTime: string; input: number; output: number; source: string }>
+      .filter(Boolean) as Array<{ sessionId: string; startTime: string; input: number; output: number; source: string; label: string; breakdown: string }>
 
     if (sessionData.length === 0) { canvas.style.display = 'none'; return }
     canvas.style.display = 'block'
@@ -458,8 +518,18 @@ export function SessionTokenChart({ sessions }: { sessions: SessionSummaryCard[]
     const pad = { top: 8, right: 44, bottom: 14, left: 44 }
     const chartW = w - pad.left - pad.right, chartH = h - pad.top - pad.bottom
 
-    const maxIn  = Math.max(...sessionData.map(s => s.input))  || 1
-    const maxOut = Math.max(...sessionData.map(s => s.output)) || 1
+    // Robust y-scale: even fresh-input volume spans ~5 orders of magnitude (a
+    // 2-turn session vs a 24k-turn marathon), so a plain max() lets one giant bar
+    // crush every other to an invisible sliver. Cap the axis at the 95th percentile
+    // so the bulk is readable; bars above the cap clip to full height and get a ▲
+    // overflow marker (their true value is in the hover tooltip).
+    const p95 = (vals: number[]): number => {
+      const a = vals.filter(v => v > 0).sort((x, y) => x - y)
+      if (a.length === 0) return 1
+      return a[Math.min(a.length - 1, Math.floor(a.length * 0.95))] || a[a.length - 1] || 1
+    }
+    const maxIn  = p95(sessionData.map(s => s.input))
+    const maxOut = p95(sessionData.map(s => s.output))
 
     const cs = getComputedStyle(document.body)
     const gridColor = cs.getPropertyValue('--vscode-panel-border').trim() || '#333'
@@ -495,12 +565,20 @@ export function SessionTokenChart({ sessions }: { sessions: SessionSummaryCard[]
 
     sessionDataRef.current = sessionData.map((s, i) => ({ ...s, slotX: pad.left + i * slotW, slotW }))
 
+    // Small ▲ at a bar's top when its true value exceeds the p95 cap (it's clipped).
+    const overflowMark = (color: string, cxm: number) => {
+      ctx.fillStyle = color; ctx.beginPath()
+      ctx.moveTo(cxm, pad.top - 2); ctx.lineTo(cxm - 3, pad.top + 3); ctx.lineTo(cxm + 3, pad.top + 3)
+      ctx.closePath(); ctx.fill()
+    }
     sessionData.forEach((s, i) => {
       const slotX = pad.left + i * slotW
-      const inH = (s.input / maxIn) * chartH
+      const inH = Math.min(1, s.input / maxIn) * chartH
       ctx.fillStyle = '#FFB74D'; ctx.fillRect(slotX + barPad, pad.top + chartH - inH, halfBar, inH)
-      const outH = (s.output / maxOut) * chartH
+      if (s.input > maxIn) overflowMark('#FFB74D', slotX + barPad + halfBar / 2)
+      const outH = Math.min(1, s.output / maxOut) * chartH
       ctx.fillStyle = '#81C784'; ctx.fillRect(slotX + halfSlot, pad.top + chartH - outH, halfBar, outH)
+      if (s.output > maxOut) overflowMark('#81C784', slotX + halfSlot + halfBar / 2)
       // Agent color dot below bar
       ctx.beginPath()
       ctx.arc(slotX + slotW / 2, pad.top + chartH + 7, 1.5, 0, Math.PI * 2)
@@ -521,12 +599,29 @@ export function SessionTokenChart({ sessions }: { sessions: SessionSummaryCard[]
     })
   })
 
-  function handleTokenChartClick(e: MouseEvent) {
-    const canvas = canvasRef.current; if (!canvas) return
+  function hitAt(e: MouseEvent): typeof sessionDataRef.current[number] | undefined {
+    const canvas = canvasRef.current; if (!canvas) return undefined
     const rect = canvas.getBoundingClientRect()
     const mx = e.clientX - rect.left
-    const hit = sessionDataRef.current.find(s => mx >= s.slotX && mx < s.slotX + s.slotW)
+    return sessionDataRef.current.find(s => mx >= s.slotX && mx < s.slotX + s.slotW)
+  }
+
+  function handleTokenChartClick(e: MouseEvent) {
+    const hit = hitAt(e)
     if (hit) { focusedSessionId.value = hit.sessionId; activeTab.value = 'sessions' }
+  }
+
+  function handleTokenChartMove(e: MouseEvent) {
+    const canvas = canvasRef.current; if (!canvas) return
+    const rect = canvas.getBoundingClientRect()
+    const hit = hitAt(e)
+    if (!hit) { setTip(null); return }
+    const when = hit.startTime ? new Date(hit.startTime).toLocaleString() : ''
+    setTip({
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+      lines: [hit.label || hit.sessionId.slice(0, 8), when, hit.breakdown].filter(Boolean),
+    })
   }
 
   const presentSources = new Set(sessions.map(s => s.source).filter(Boolean))
@@ -534,8 +629,12 @@ export function SessionTokenChart({ sessions }: { sessions: SessionSummaryCard[]
 
   return (
     <>
-      <canvas ref={canvasRef} style="width:100%;height:160px;display:block;cursor:pointer"
-        onClick={handleTokenChartClick} title="Click a bar to open that session" />
+      <div style="position:relative">
+        <canvas ref={canvasRef} style="width:100%;height:160px;display:block;cursor:pointer"
+          onClick={handleTokenChartClick} onMouseMove={handleTokenChartMove} onMouseLeave={() => setTip(null)}
+          title="Hover a bar for its token breakdown · click to open the session" />
+        {tip && <ChartTooltip x={tip.x} y={tip.y} lines={tip.lines} />}
+      </div>
       {agentSources.length > 0 && (
         <div style="display:flex;gap:10px;justify-content:center;margin-top:4px;flex-wrap:wrap">
           {agentSources.map(src => (
