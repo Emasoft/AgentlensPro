@@ -12,7 +12,7 @@ import {
 import { calcSessionCost } from '../sessionMetrics'
 import { fmtUsd } from './Cost'
 import { generateInsights, InsightCard } from './Insights'
-import { buildDisplaySummary } from '../utils'
+import { buildDisplaySummary, tokenBreakdown, formatTokenBreakdown } from '../utils'
 import { Step, TimelineWaterfall } from './Traces'
 import { FlowCanvas } from './Flow'
 import { ToolsChart } from './Tools'
@@ -299,9 +299,11 @@ function SessionDetail({ sess }: { sess: SessionSummaryCard }) {
               {[
                 { k: 'LLM calls',  v: String(sess.totalLlmCalls) },
                 { k: 'Tool calls', v: String(sess.totalToolCalls) },
-                { k: 'Input tokens', v: formatCompact(sess.inputTokens) },
+                { k: 'Fresh input', v: formatCompact(tokenBreakdown(sess).fresh) },
                 { k: 'Output tokens', v: formatCompact(sess.outputTokens) },
+                { k: 'Cache read', v: formatCompact(sess.cacheReadTokens) },
                 { k: 'Cache hit',  v: cacheRate + '%' },
+                { k: 'Total context', v: formatCompact(sess.inputTokens) },
                 ...(sess.peakContextPerTurn ? [{ k: 'Peak ctx/turn', v: formatCompact(sess.peakContextPerTurn) }] : []),
                 { k: 'Duration',   v: formatMs(sess.durationMs) },
                 ...(sess.errors > 0 ? [{ k: 'Errors', v: String(sess.errors) }] : []),
@@ -368,28 +370,31 @@ function SessionDetail({ sess }: { sess: SessionSummaryCard }) {
 
 // ── Table row ─────────────────────────────────────────────────────────────────
 
-// Compact per-row token-composition bar: new-input / cache-read / cache-write / output,
-// scaled to the largest session in the list so bar LENGTH compares token magnitude across
-// rows while the segments show the breakdown. Normalised on input+output (the Tokens column).
-function TokenBar({ sess, maxTokens }: { sess: SessionSummaryCard; maxTokens: number }) {
-  const newInput = Math.max(0, sess.inputTokens - sess.cacheReadTokens - sess.cacheCreateTokens)
-  const total = sess.inputTokens + sess.outputTokens
-  if (total <= 0 || maxTokens <= 0) return null
-  const w = (n: number) => (n / maxTokens * 100).toFixed(2)
+// Per-row token-composition bar: fresh-input / cache-read / cache-write / output as
+// a share of THIS row's own total. Cross-session magnitude lives in the Tokens
+// number and the Session Charts tab — normalising bar LENGTH across rows broke the
+// moment one marathon session's per-turn cache reads summed to billions (it crushed
+// every other row's bar to an invisible sliver). A within-row composition is always
+// readable regardless of how large any single session got.
+function TokenBar({ sess }: { sess: SessionSummaryCard }) {
+  const b = tokenBreakdown(sess)
+  const total = b.fresh + b.cacheRead + b.cacheWrite + b.output
+  if (total <= 0) return null
+  const w = (n: number) => (n / total * 100).toFixed(2)
   return (
     <div
-      title={`new input ${newInput.toLocaleString()} · cache read ${sess.cacheReadTokens.toLocaleString()} · cache write ${sess.cacheCreateTokens.toLocaleString()} · output ${sess.outputTokens.toLocaleString()}`}
+      title={formatTokenBreakdown(sess)}
       style="height:4px;border-radius:2px;background:var(--border);display:flex;overflow:hidden;margin-top:2px;width:100%;min-width:48px"
     >
-      <div style={`width:${w(newInput)}%;background:var(--vscode-charts-blue,#4fc3f7)`} />
-      <div style={`width:${w(sess.cacheReadTokens)}%;background:var(--vscode-charts-purple,#b392f0)`} />
-      <div style={`width:${w(sess.cacheCreateTokens)}%;background:var(--vscode-charts-orange,#e2a03f)`} />
-      <div style={`width:${w(sess.outputTokens)}%;background:var(--vscode-charts-green,#81c784)`} />
+      <div style={`width:${w(b.fresh)}%;background:var(--vscode-charts-blue,#4fc3f7)`} />
+      <div style={`width:${w(b.cacheRead)}%;background:var(--vscode-charts-purple,#b392f0)`} />
+      <div style={`width:${w(b.cacheWrite)}%;background:var(--vscode-charts-orange,#e2a03f)`} />
+      <div style={`width:${w(b.output)}%;background:var(--vscode-charts-green,#81c784)`} />
     </div>
   )
 }
 
-function SessionRow({ sess, showWorkspace, maxTokens }: { sess: SessionSummaryCard; showWorkspace: boolean; maxTokens: number }) {
+function SessionRow({ sess, showWorkspace }: { sess: SessionSummaryCard; showWorkspace: boolean }) {
   const [expanded, setExpanded] = useState(false)
   const isFocused = focusedSessionId.value === sess.sessionId
   const rowRef = useRef<HTMLTableRowElement>(null)
@@ -436,8 +441,8 @@ function SessionRow({ sess, showWorkspace, maxTokens }: { sess: SessionSummaryCa
           {formatSessionTime(sess)}
           {showWorkspace && sess.workspace && (
             <span
-              title={sess.workspace}
-              style="margin-left:5px;color:var(--muted);opacity:0.55;font-size:9px;overflow:hidden;text-overflow:ellipsis;max-width:110px;display:inline-block;vertical-align:middle"
+              title={'Project: ' + sess.workspace}
+              style="margin-left:6px;padding:0 5px;border-radius:3px;background:var(--vscode-badge-background,var(--border));color:var(--vscode-badge-foreground,var(--fg));font-size:9px;font-weight:600;overflow:hidden;text-overflow:ellipsis;max-width:150px;display:inline-block;vertical-align:middle"
             >
               {shortWorkspaceName(sess.workspace)}
             </span>
@@ -460,9 +465,9 @@ function SessionRow({ sess, showWorkspace, maxTokens }: { sess: SessionSummaryCa
         </td>
 
         {/* Tokens + composition bar */}
-        <td style="padding:4px 6px;text-align:right;white-space:nowrap;font-size:10px;color:var(--muted);min-width:60px" title={sess.turns > 1 ? 'Input is accumulated across all turns (cache reads counted each turn). See Peak ctx/turn in session detail for actual context window size.' : undefined}>
-          {formatCompact(sess.inputTokens + sess.outputTokens)}
-          <TokenBar sess={sess} maxTokens={maxTokens} />
+        <td style="padding:4px 6px;text-align:right;white-space:nowrap;font-size:10px;color:var(--muted);min-width:60px" title={formatTokenBreakdown(sess) + ` · ${tokenBreakdown(sess).totalContext.toLocaleString()} total context (cache re-read every turn)`}>
+          {formatCompact(tokenBreakdown(sess).fresh + sess.outputTokens)}
+          <TokenBar sess={sess} />
         </td>
 
         {/* Duration */}
@@ -553,9 +558,6 @@ export function Sessions() {
   const thBase = 'padding:3px 6px;font-size:10px;font-weight:600;white-space:nowrap;user-select:none'
   const thSort = thBase + ';cursor:pointer;color:var(--fg)'
   const thMuted = thBase + ';color:var(--muted);font-weight:500'
-  // Largest input+output across the whole list, so each row's TokenBar length compares.
-  // reduce, NOT Math.max(...spread) — spreading tens of thousands of args overflows the call stack.
-  const maxTokens = sessions.reduce((m, s) => Math.max(m, s.inputTokens + s.outputTokens), 1)
 
   return (
     <div id="sessions-content" style="padding-top:8px">
@@ -568,14 +570,14 @@ export function Sessions() {
             <th style={'text-align:left;' + thSort} onClick={() => onSortClick('start_time')}>Time{sortArrow('start_time')}</th>
             <th style={'text-align:left;' + thSort} onClick={() => onSortClick('prompt')}>Prompt{sortArrow('prompt')}</th>
             <th style={'text-align:left;' + thSort} onClick={() => onSortClick('model')}>Model{sortArrow('model')}</th>
-            <th style={'text-align:right;' + thSort} onClick={() => onSortClick('total_tokens')} title="Total tokens across all turns (fresh input + cache reads + output). For multi-turn sessions this accumulates across every turn and can far exceed a single context window.">Tokens{sortArrow('total_tokens')}</th>
+            <th style={'text-align:right;' + thSort} onClick={() => onSortClick('total_tokens')} title="Fresh input + output tokens (the comparable headline number). The bar below each value shows the full composition including cache reads; hover a value for exact fresh / cache-read / cache-write / output counts.">Tokens{sortArrow('total_tokens')}</th>
             <th style={'text-align:right;' + thSort} onClick={() => onSortClick('duration_ms')}>Duration{sortArrow('duration_ms')}</th>
             <th style={'text-align:right;padding:3px 8px 3px 6px;' + thSort} onClick={() => onSortClick('cost')}>Cost{sortArrow('cost')}</th>
           </tr>
         </thead>
         <tbody>
           {sessions.slice(0, renderCount).map(sess => (
-            <SessionRow key={sess.sessionId} sess={sess} showWorkspace={showWorkspace} maxTokens={maxTokens} />
+            <SessionRow key={sess.sessionId} sess={sess} showWorkspace={showWorkspace} />
           ))}
         </tbody>
       </table>
