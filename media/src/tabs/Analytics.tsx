@@ -4,7 +4,7 @@ import {
   sessionTimelines,
   CHART_MAX, vscode, goToHelp,
 } from '../state'
-import { getAgentColor, getAgentSourceLabel, formatMs, formatCompact } from '../utils'
+import { getAgentColor, getAgentSourceLabel, formatMs, formatCompact, tokenBreakdown } from '../utils'
 import { calcSessionCost } from '../sessionMetrics'
 import type { SessionSummaryCard } from '../types'
 import type { PricingMode } from '../sessionMetrics'
@@ -56,7 +56,7 @@ function AgentCard({ source, sessions }: { source: string; sessions: SessionSumm
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:11px">
         <div><span style="color:var(--muted)">LLM calls</span> <strong>{s.totalLlm}</strong></div>
         <div><span style="color:var(--muted)">Tool calls</span> <strong>{s.totalTools}</strong></div>
-        <div><span style="color:var(--muted)">Input tokens</span> <strong>{formatCompact(s.totalInput)}</strong></div>
+        <div title="New context sent to the model (excludes cache reads)"><span style="color:var(--muted)">Fresh input</span> <strong>{formatCompact(s.totalFresh)}</strong></div>
         <div><span style="color:var(--muted)">Output tokens</span> <strong>{formatCompact(s.totalOutput)}</strong></div>
         <div><span style="color:var(--muted)">Cache hit</span> <strong>{(s.cacheHitRate * 100).toFixed(0)}%</strong></div>
         <div><span style="color:var(--muted)">Avg dur</span> <strong>{formatMs(s.avgDuration)}</strong></div>
@@ -134,11 +134,15 @@ export function Analytics() {
     const cost = calcSessionCost(sess, effMode).totalUsd
     if (!dayMap.has(day)) dayMap.set(day, { input: 0, output: 0, cacheCreate: 0, cacheRead: 0, cost: 0, agents: new Map() })
     const de = dayMap.get(day)!
-    de.input += sess.inputTokens; de.output += sess.outputTokens
+    // Accumulate FRESH input (sess.inputTokens is total context = fresh + cacheRead + cacheCreate).
+    // The table also has separate Cache Create / Cache Read columns and a Total = input+output+cacheCreate
+    // +cacheRead, so accumulating total-context here would count cache TWICE in Total. Fresh input fixes it.
+    const fresh = tokenBreakdown(sess).fresh
+    de.input += fresh; de.output += sess.outputTokens
     de.cacheCreate += sess.cacheCreateTokens ?? 0; de.cacheRead += sess.cacheReadTokens; de.cost += cost
     if (!de.agents.has(sess.source)) de.agents.set(sess.source, { source: sess.source, input: 0, output: 0, cacheCreate: 0, cacheRead: 0, cost: 0, models: new Set() })
     const ae = de.agents.get(sess.source)!
-    ae.input += sess.inputTokens; ae.output += sess.outputTokens
+    ae.input += fresh; ae.output += sess.outputTokens
     ae.cacheCreate += sess.cacheCreateTokens ?? 0; ae.cacheRead += sess.cacheReadTokens; ae.cost += cost
     if (sess.model) ae.models.add(sess.model)
   })
@@ -224,7 +228,7 @@ export function Analytics() {
               >{abbrevTokens ? '1.2M' : '1,234'}</button>
               <button
                 onClick={() => {
-                  const headers = ['Date','Agent','Model','Input Tokens','Output Tokens','Cache Create Tokens','Cache Read Tokens','Total Tokens','Cost (USD)']
+                  const headers = ['Date','Agent','Model','Fresh Input Tokens','Output Tokens','Cache Create Tokens','Cache Read Tokens','Total Tokens','Cost (USD)']
                   const rows: string[][] = []
                   for (const [day, d] of dayRows) {
                     for (const [, ae] of d.agents) {
@@ -261,8 +265,8 @@ export function Analytics() {
               <table style="border-collapse:collapse;font-size:10px;min-width:100%;white-space:nowrap">
                 <thead>
                   <tr style="border-bottom:1px solid var(--border)">
-                    {(['Date','Agent','Model','Input','Output','Cache Create','Cache Read','Total Tokens','Cost (USD)'] as const).map(h => (
-                      <th key={h} style={`padding:3px 8px 3px ${h==='Date'?'0':'6px'};color:var(--muted);font-weight:500;text-align:${['Input','Output','Cache Create','Cache Read','Total Tokens','Cost (USD)'].includes(h)?'right':'left'}`}>{h}</th>
+                    {(['Date','Agent','Model','Fresh In','Output','Cache Create','Cache Read','Total Tokens','Cost (USD)'] as const).map(h => (
+                      <th key={h} title={h === 'Fresh In' ? 'Fresh input — new context sent to the model, excluding cache reads (so Fresh In + Cache + Output = Total with no double-count)' : undefined} style={`padding:3px 8px 3px ${h==='Date'?'0':'6px'};color:var(--muted);font-weight:500;text-align:${['Fresh In','Output','Cache Create','Cache Read','Total Tokens','Cost (USD)'].includes(h)?'right':'left'}`}>{h}</th>
                     ))}
                   </tr>
                 </thead>

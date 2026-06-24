@@ -4,6 +4,7 @@ import { Instructions } from './Instructions'
 import { getAgentSourceLabel, formatSessionTime } from '../utils'
 import { calcSessionCost } from '../sessionMetrics'
 import { fmtUsd } from './Cost'
+import { TokenTotalsBar } from '../TokenTotals'
 import type { SessionSummaryCard } from '../types'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -436,6 +437,7 @@ export function Patterns() {
 
   return (
     <div id="patterns-content" style="padding-top:8px">
+      <TokenTotalsBar sessions={sessions} note="Totals across the filtered sessions below." />
       <section>
         <h3 style={sectionHead}>Instructions File</h3>
         <Instructions />

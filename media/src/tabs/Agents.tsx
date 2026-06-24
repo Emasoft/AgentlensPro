@@ -22,7 +22,11 @@ export function computeStats(sessions: SessionSummaryCard[]) {
   })
   return {
     sessions: sessions.length,
-    totalInput, totalOutput, totalCache, totalLlm, totalTools,
+    // totalInput is the raw total-context sum (fresh + cache read + cache create); keep it for the
+    // cacheHitRate denominator. totalFresh subtracts cache so the displayed "Fresh Input" matches the
+    // headline used everywhere else and never re-introduces the per-turn cache-read inflation (#7).
+    totalInput, totalFresh: Math.max(0, totalInput - totalCache),
+    totalOutput, totalCache, totalLlm, totalTools,
     avgTtft: ttftCount > 0 ? Math.round(ttftSum / ttftCount) : 0,
     avgDuration: sessions.length > 0 ? Math.round(durSum / sessions.length) : 0,
     cacheHitRate: totalInput > 0 ? totalCache / totalInput : 0,
@@ -59,7 +63,7 @@ function AgentCol({ label, accent, stats }: { label: string; accent: string; sta
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px">
             <KV k="Sessions" v={stats.sessions} accent={accent} />
             <KV k="LLM Calls" v={stats.totalLlm} accent={accent} />
-            <KV k="Input Tokens" v={formatCompact(stats.totalInput)} accent={accent} />
+            <KV k="Fresh Input" v={formatCompact(stats.totalFresh)} accent={accent} />
             <KV k="Output Tokens" v={formatCompact(stats.totalOutput)} accent={accent} />
             {stats.totalCache > 0 && <KV k="Cache Tokens" v={formatCompact(stats.totalCache)} accent={accent} />}
             {stats.totalCache > 0 && <KV k="Cache Hit Rate" v={(stats.cacheHitRate * 100).toFixed(0) + '%'} accent={accent} />}
