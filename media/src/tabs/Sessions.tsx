@@ -363,7 +363,7 @@ function SessionDetail({ sess }: { sess: SessionSummaryCard }) {
         )}
 
         {section === 'tools' && (
-          <ToolsChart sessions={[sess]} />
+          <ToolsChart sessions={[sess]} fileOps={loadedFileOps ?? sess.fileOps} />
         )}
 
         {section === 'files' && (detailLoading

@@ -1,11 +1,11 @@
 import { useState } from 'preact/hooks'
 import { rangedSessions, COLORS } from '../state'
-import { getAgentColor, getAgentSourceLabel } from '../utils'
-import type { SessionSummaryCard } from '../types'
+import { getAgentColor, getAgentSourceLabel, formatCompact } from '../utils'
+import type { SessionSummaryCard, FileOpSummary } from '../types'
 
 // ── Shared donut chart (used by Tools tab and Sessions detail) ─────────────────
 
-export function ToolsChart({ sessions }: { sessions: SessionSummaryCard[] }) {
+export function ToolsChart({ sessions, fileOps }: { sessions: SessionSummaryCard[]; fileOps?: FileOpSummary[] }) {
   const [sortKey, setSortKey] = useState<'calls' | 'name'>('calls')
   const counts: Record<string, number> = {}
   const toolAgents: Record<string, Record<string, boolean>> = {}
@@ -71,6 +71,31 @@ export function ToolsChart({ sessions }: { sessions: SessionSummaryCard[] }) {
           ))}
         </div>
       </div>
+
+      {(() => {
+        // Honest per-tool token attribution: per-CALL token usage is never recorded by agents
+        // (they log usage per LLM turn). The file tools are the exception — their result byte
+        // volumes ARE captured (fileOps), and file reads are the dominant context cost. Show those
+        // as ~tokens (bytes/4, same estimate as the Files view) so the Tools view answers "tokens
+        // per tool" with real data, and state plainly where the rest of the tokens are counted.
+        if (!fileOps || fileOps.length === 0) return null
+        const io = fileOps.reduce((s, o) => ({ r: s.r + o.readBytes, w: s.w + o.writeBytes, e: s.e + o.editBytes }), { r: 0, w: 0, e: 0 })
+        const tok = (b: number) => Math.round(b / 4)
+        const totalTok = tok(io.r + io.w + io.e)
+        if (totalTok <= 0) return null
+        return (
+          <div style="margin-top:16px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--vscode-editorWidget-background,rgba(127,127,127,0.06))">
+            <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px">File-tool token weight</div>
+            <div style="font-size:11px;display:flex;flex-wrap:wrap;gap:14px;align-items:baseline">
+              <span title="Bytes the Read tool pulled into context across this session (≈ tokens)"><span style="color:var(--vscode-charts-blue,#4fc3f7)">●</span> Read ~{formatCompact(tok(io.r))} tok</span>
+              {io.w > 0 && <span title="Bytes produced by the Write tool"><span style="color:var(--vscode-charts-green,#81c784)">●</span> Write ~{formatCompact(tok(io.w))} tok</span>}
+              {io.e > 0 && <span title="Bytes changed by Edit-family tools"><span style="color:var(--vscode-charts-orange,#e2a03f)">●</span> Edit ~{formatCompact(tok(io.e))} tok</span>}
+              <span style="color:var(--muted)">total ~{formatCompact(totalTok)} tok</span>
+            </div>
+            <div style="font-size:9px;color:var(--muted);margin-top:5px;opacity:.85">Agents log token usage per LLM turn, not per tool call. These are the file tools' real byte volumes (≈ bytes / 4); other tools' results are billed into the next LLM call's input.</div>
+          </div>
+        )
+      })()}
 
       <div style="display:flex;gap:6px;align-items:center;margin-top:16px">
         <span style="font-size:10px;color:var(--muted)">Sort:</span>
