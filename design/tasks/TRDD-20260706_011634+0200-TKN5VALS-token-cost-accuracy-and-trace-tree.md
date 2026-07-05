@@ -180,6 +180,53 @@ headers don't scroll; expand session→event→turn→tool shows 5 values each; 
 bar above updates on toggle; Context tab renders with turn numbers and expandable
 sub-branches. Commit `feat(dashboard): …`.
 
+## P3 — Context-composition tracer (EXPANDED SCOPE, user 2026-07-06)
+
+Goal: see, per step, EXACTLY what occupies the context window and what it costs —
+every event, message, tool call, inherited context file (CLAUDE.md, each rule,
+each memory), hook injection, and sub-agent sub-session — across ALL sessions,
+with exact tokens + cost + timestamp. The user wants to diagnose token burn to
+the single injected file.
+
+### Feasibility (✓ VERIFIED against a real `.jsonl` 2026-07-06 — this session's log)
+The Claude Code `~/.claude/projects/<proj>/<session>.jsonl` is rich enough:
+- Entry `type`s seen: `assistant`, `user`, `system`, `attachment`,
+  `file-history-snapshot`, `last-prompt`, `mode`, `permission-mode`,
+  `queue-operation`, `ai-title`.
+- **`attachment` (10,419 in one session)** = the injected context blobs — every
+  CLAUDE.md / rule / memory / file-read that enters context. TOKENIZE each to get
+  per-source context weight per step. THIS is the enabler for "which file eats
+  the context".
+- **`system` entries carry `hookAdditionalContext`** = hook injections
+  (janitor-memory, pss-skills, token-guard) — attributable too.
+- **`assistant.message.usage`** = the 5 token buckets per turn (input/output/
+  cache_read/cache_creation) → per-turn cost.
+- **`parentUuid`** threads the full event→turn→tool tree; `toolUseID` /
+  `sourceToolAssistantUUID` / `toolUseResult` link tool calls ↔ results.
+- Sub-agents are SEPARATE session files (`isSidechain==true` was 0 in the main
+  session — Agent-tool spawns wrote their own `.jsonl`) → needs CROSS-FILE
+  linkage (P1.3's `parentSessionId`), matched via spawn time / cwd / Task tool_use.
+
+### P3 build (after P1+P2)
+- Extend the log parser to emit, per step: a context-composition breakdown =
+  list of {source (file path / rule / memory / hook / tool-result / message),
+  tokens, cost, added-at timestamp, still-resident?}. Tokenize attachments
+  (approx tokenizer OK — label as estimate).
+- Running context-size series already seeded by P2.3's Context tab; enrich each
+  point with its composition breakdown (drill-down: click a step → see the N
+  sources occupying context there, sorted by weight).
+- Cross-session: ingest ALL project sessions (not just the open one) so ANIME2SVG
+  + sub-agent sub-sessions are all visible; render sub-agent sessions as
+  expandable branches under the spawning turn.
+- The harness floor (CLAUDE.md + rules + tool catalog) becomes an explicit,
+  sized line item per turn — the thing currently invisible in the turn breakdown.
+- DERIVED: this is heavy data; lazy-load per session, stream, and cap the
+  attachment tokenization (don't load 10k attachments into the webview at once).
+
+### P3 verification
+Reconcile against claude.ai account dashboard for a window; the per-step
+composition sizes should sum (± tokenizer error) to that turn's cache_read+input.
+
 ## Notes / gotchas
 - `src/types.ts` ↔ `media/src/types.ts` MIRROR — change BOTH on any shape change.
 - Two pricing tables hand-synced (`src/pricing.ts` write-time, `media/src/pricing.ts`
