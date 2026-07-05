@@ -7,6 +7,9 @@ export interface SessionSummaryCard {
   dataSource: 'otel' | 'log'
   initiator?: 'user' | 'agent' | 'api'
   conversationId?: string
+  // Session that spawned this one (sub-agent / Task / fork). Set on child sessions so the
+  // dashboard can roll their tokens into the parent's total and render them as sub-branches.
+  parentSessionId?: string
   workspace: string
   projectPath?: string
   userRequest: string
@@ -56,6 +59,7 @@ export interface TimelineEntry {
   type: 'llm' | 'tool' | 'user_input' | 'background'
   spanId: string
   label: string
+  turn?: number   // 1-based turn (assistant message) index this entry belongs to; backbone for the trace tree
   thinking?: string
   model?: string
   inputTokens?: number

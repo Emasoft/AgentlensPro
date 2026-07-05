@@ -1640,7 +1640,12 @@ function _buildCard(
     userRequest: acc.userRequest.slice(0, 500),
     model,
     turns: acc.turns,
-    inputTokens: totalContext,
+    // inputTokens is the RAW uncached input only (NEW tokens billed at the input rate).
+    // It used to be totalContext (raw + cacheRead + cacheCreate summed per turn), which
+    // inflated the headline to millions because cacheRead re-reads the whole transcript
+    // every turn. cacheRead/cacheCreate are carried in their own fields below; cost reads
+    // all four buckets separately (writer.ts), so billing is unchanged.
+    inputTokens: acc.totalInput,
     outputTokens: acc.totalOutput,
     cacheReadTokens: acc.totalCacheRead,
     cacheCreateTokens: acc.totalCacheCreate,

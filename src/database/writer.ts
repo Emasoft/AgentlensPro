@@ -149,8 +149,10 @@ export class DatabaseWriter {
   }
 
   private _writeSessionRow(card: SessionSummaryCard, workspace: string): void {
+    // card.inputTokens is now the RAW uncached input (was totalContext); the four buckets
+    // are already disjoint, so bill each at its own rate with no reconstruction subtraction.
     const costUsd = calcTokenCostUsd(
-      Math.max(0, card.inputTokens - card.cacheReadTokens - card.cacheCreateTokens),
+      card.inputTokens,
       card.cacheReadTokens,
       card.cacheCreateTokens,
       card.outputTokens,

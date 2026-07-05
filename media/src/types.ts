@@ -54,6 +54,8 @@ export interface SessionSummaryCard {
   dataSource: 'otel' | 'log'
   initiator?: 'user' | 'agent' | 'api'
   conversationId?: string
+  // Mirror of src/summarizers/summarizerTypes.ts — session that spawned this one (sub-agent/fork).
+  parentSessionId?: string
   workspace: string
   projectPath?: string
   userRequest: string
@@ -99,6 +101,7 @@ export interface TimelineEntry {
   type: 'llm' | 'tool' | 'user_input' | 'background'
   spanId: string
   label: string
+  turn?: number   // 1-based turn index this entry belongs to (mirror of summarizerTypes.ts)
   thinking?: string
   model?: string
   inputTokens?: number
