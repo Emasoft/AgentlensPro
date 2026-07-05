@@ -62,8 +62,29 @@ sub-agent/fork sessions as expandable sub-branches.
   session link webview-side. Growth chart already has `{turn, tokens, spanId}`
   per-turn series (`media/src/tabs/SessionCharts.tsx:302`).
 
-**NEXT ACTION:** Execute P1 (see plan). First trace the webview headline field
-(which media/src field renders the "9.2k" and which the "10M") — do NOT guess.
+**PROGRESS (2026-07-06 ~01:20, blocked by weekly rate limit → resets Jul 7 10am):**
+- ✓ Committed `4d28f24` (partial P1, check-types clean, cost VALUE unchanged):
+  - P1.1 done: `logReader.ts:1640` inputTokens = `acc.totalInput` (was totalContext);
+    `writer.ts:152` cost now bills 4 disjoint buckets directly (dropped the
+    `input−cacheRead−cacheCreate` reconstruction) — identical cost, de-inflated total.
+  - Type backbone done: optional `turn?:number` + `parentSessionId?:string` added to
+    BOTH `src/summarizers/summarizerTypes.ts` and `media/src/types.ts` (still need same
+    on `src/types.ts` — VERIFY it wasn't missed).
+- ✗ STILL TODO in P1:
+  - P1.2 webview headline: make displayed headline = input+output+cacheCreate (NEW
+    tokens); render cacheRead as its own labeled value. TRACE the media/src headline
+    field first (which field shows the current numbers) — not yet traced.
+  - P1.3 rollup LOGIC: populate `parentSessionId` (link sidechain/Task/fork child
+    sessions via sessionId/parentUuid at `logReader.ts:824`), roll child token buckets
+    into parent total, keep child distinct. Populate `turn` on TimelineEntry + payload.
+  - Schema/migration audit for the `input_tokens` column meaning change; audit all
+    readers (reader.ts, sessionRepository.ts, OTLP spanSummarizer/sessionStore).
+  - VERIFY: pnpm lint; the €36.27 two-session-window reconciliation (this session +
+    ANIME2SVG local logs, 00:39→01:17) as the real-world acceptance check.
+
+**NEXT ACTION:** On resume, finish P1.2 + P1.3 + audits above, then run the €36.27
+reconciliation, then commit as the completing P1 commit. Then start P2 (default the
+P2 UI agent to SONNET per user, add the per-session-vs-account cost note).
 
 **SUPERSEDED — do NOT carry forward:** none yet.
 
