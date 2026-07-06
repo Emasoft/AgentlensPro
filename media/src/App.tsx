@@ -22,6 +22,7 @@ import { Export } from './tabs/Export'
 import { Import } from './tabs/Import'
 import { Help } from './tabs/Help'
 import { Patterns } from './tabs/Patterns'
+import { Context } from './tabs/ContextTab'
 import { Automation, checkAutomations } from './tabs/Automation'
 import { instructionFiles, appliedSuggestions, dismissedIds } from './tabs/Instructions'
 import { IngestionToggles, McpToggle } from './tabs/Settings'
@@ -33,6 +34,7 @@ const bellOpen = signal(false)
 
 const TABS = [
   { id: 'sessions',   label: 'Sessions',   title: 'Session list with expand-in-place detail — trace, files, cost, and flagged issues for each session.' },
+  { id: 'context',    label: 'Context',    title: 'Context-window growth per turn: how large the prompt gets each turn (new input + cache-read + cache-created), expandable to the composition of each turn and sub-agent sub-sessions.' },
   { id: 'analytics',  label: 'Analytics',  title: 'Aggregate charts and metrics: token/cost trends, agent comparison, tool distribution, and active insights.' },
   { id: 'patterns',   label: 'Advisor',    title: 'Cross-session behavioral patterns, efficiency map, hot files, and instruction file recommendations.' },
   { id: 'export',     label: 'Export',     title: 'Export raw or redacted session data as JSON files.' },
@@ -43,6 +45,7 @@ function ActivePanel() {
   const tab = normalizeTabId(activeTab.value)
   switch (tab) {
     case 'sessions':  return <Sessions />
+    case 'context':   return <Context />
     case 'analytics': return <Analytics />
     case 'patterns':  return <Patterns />
     case 'export':    return <Export />
