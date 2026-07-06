@@ -1,0 +1,36 @@
+# Supply-chain hardening — pnpm install-time safety belts (TRDD-Y645B1ER).
+# Single source of truth for pnpm's supply-chain policy (kept here rather than
+# duplicated across .npmrc / package.json#pnpm so the settings can never drift).
+# Requires pnpm >= 11 (pinned via package.json "packageManager").
+
+# Refuse package versions published less than 7200 minutes (5 days) ago — closes
+# the fresh-published-malware window. pnpm's default is 1440 (1 day). Existing
+# locked versions are unaffected; this only gates NEW resolutions.
+minimumReleaseAge: 7200
+
+# Fail install if a package's publisher trust level decreased vs a previous
+# release (a package-takeover signal).
+trustPolicy: no-downgrade
+# Reviewed false positives: these are ubiquitous, long-lived transitive deps that
+# pnpm's trust heuristic flags as "downgrades". Verified legitimate on 2026-07-06;
+# excluded at their exact locked versions so the gate stays strict for everything
+# else. Re-review if a version here ever changes.
+trustPolicyExclude:
+  - 'chokidar@4.0.3'
+  - 'semver@5.7.2'
+  - 'undici-types@6.21.0'
+
+# Only direct dependencies may use exotic (non-registry) sources; every
+# transitive dependency must resolve from a trusted registry.
+blockExoticSubdeps: true
+
+# Fail the install if any dependency has an UNREVIEWED build (install) script,
+# instead of silently skipping it. New build scripts must be consciously added to
+# allowBuilds below.
+strictDepBuilds: true
+
+# The only dependencies permitted to run install/build scripts. esbuild's
+# postinstall links the platform-native binary the whole build pipeline depends
+# on — reviewed and required.
+allowBuilds:
+  esbuild: true

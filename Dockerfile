@@ -2,9 +2,13 @@
 FROM --platform=$BUILDPLATFORM node:20-alpine AS builder
 WORKDIR /app
 
-RUN npm install -g pnpm@10
+# Keep pnpm in lockstep with package.json "packageManager"; pnpm 11 is required
+# by the supply-chain policy in pnpm-workspace.yaml.
+RUN npm install -g pnpm@11.9.0
 
-COPY package.json pnpm-lock.yaml ./
+# pnpm-workspace.yaml carries the supply-chain policy + build-script allowlist, so
+# the image build enforces the same install-time guards as local/CI.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
 COPY esbuild.js tsconfig.json ./
