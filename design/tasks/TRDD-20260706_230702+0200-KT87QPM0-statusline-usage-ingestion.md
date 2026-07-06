@@ -1,9 +1,9 @@
 ---
 trdd-id: KT87QPM0
 title: Statusline usage ingestion — exact live per-turn buckets + context size + cost, no server queries
-column: dev
+column: complete
 created: 2026-07-06T23:07:02+0200
-updated: 2026-07-06T23:12:00+0200
+updated: 2026-07-06T23:20:00+0200
 current-owner: claude-opus-4-8
 assignee: claude-opus-4-8
 priority: 2
@@ -18,7 +18,7 @@ target-branch: fix/logreader-large-jsonl
 test-requirements: [typecheck, lint]
 impacts: [config-schema]
 attempts: 0
-implementation-commits: []
+implementation-commits: [3ab4973]
 external-refs: [https://code.claude.com/docs/en/statusline.md]
 ---
 
@@ -62,9 +62,20 @@ AgentLens is the SINGLE reader — tail by byte-offset, owns any size-cap rotati
 Webview (media/**) change, if any, is DEFERRED to orchestrator (the 5 buckets
 already exist in TimelineEntry, so likely none).
 
-**NEXT ACTION:** background Opus agent (running, id abd8bf0c72cb823e1) implementing
-under HARD constraints: no git ops, no media/** edits, src-only verify
-(`npx tsc -p tsconfig.json --noEmit` + lint EXIT 0), prove statusline.py still
-renders + JSONL appends via sample-stdin test. Orchestrator serializes the commit
-after P6, then find_context_hogs (TRDD-9804PKIM) serializes after THIS (shared
-src/mcpServer.ts + standalone/server.ts).
+**DONE (2026-07-06, commit `3ab4973`).** Files: src/statuslineUsage.ts (NEW
+StatuslineUsageReader), src/summarizers/summarizerTypes.ts (StatuslineUsageAgg +
+optional `statusline?` on card), src/database/writer.ts (cost precedence:
+statusline.totalCostUsd > 0 overrides estimate), src/extension.ts +
+standalone/server.ts (overlay at the 2 Claude enqueue sites each), and
+~/.claude/statusline.py (write_usage_jsonl, single-log O_APPEND). Log path resolver
+mirrored byte-for-byte Py↔TS: $AGENTLENS_STATUSLINE_LOG → <CLAUDE_CONFIG_DIR>/agentlens/
+statusline-usage.jsonl → ~/.claude/agentlens/statusline-usage.jsonl. 13-field records.
+VERIFIED LIVE: this session (777b8f52) feeds valid lines (cache_read 235718,
+used% 24.0, cost $338.08, 1M window); check-types(src+media)+lint+esbuild EXIT 0;
+statusline renders + dedups. Report: reports/mcp/P7-statusline-ingestion-REPORT-20260706_231546+0200.md.
+
+**Deferred (optional, media-owning agent):** mirror StatuslineUsageAgg into
+media/src/types.ts + read session.statusline to show exact live used%/window/5-buckets
+as first-class UI. Not needed for P7 to work (overlay uses only fields webview already has).
+**Persistence limit (acceptable):** cost_usd + peak_context_per_turn ARE persisted;
+the transient `statusline` object (used%/window/last-turn buckets) is live-only (no DB cols).
