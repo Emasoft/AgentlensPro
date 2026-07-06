@@ -209,17 +209,18 @@ export class DatabaseWriter {
 
     this.db.run(
       `INSERT INTO timeline_entries (
-        session_id, span_id, position, type, label, model,
+        session_id, span_id, position, type, label, turn, model,
         input_tokens, output_tokens, cache_read_tokens, cache_create_tokens,
         ttft, duration_ms, action, decision,
         is_error, error_message, timestamp, has_blob
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
         sessionId,
         entry.spanId,
         position,
         entry.type,
         entry.label,
+        entry.turn ?? null,
         entry.model ?? null,
         entry.inputTokens ?? null,
         entry.outputTokens ?? null,

@@ -1503,7 +1503,10 @@ function _claudeOnEntry(a: ClaudeAccum, entry: Record<string, unknown>): void {
         _addFileOp(a.card, fp, 'read', _toolResultBytes(block['content']))
       }
     }
-    a.card.timeline.push({ type: 'user_input', spanId: `log-u-${a.idx}`, label: 'User', durationMs: 0, isError: false, timestamp: ts ?? '', responseText: text })
+    // A user message precedes the assistant turn it triggers, so it belongs to the NEXT turn
+    // (turns is incremented only when the assistant message arrives). turns is still the count
+    // of assistant turns seen so far, so +1 is the turn this user input opens.
+    a.card.timeline.push({ type: 'user_input', spanId: `log-u-${a.idx}`, label: 'User', turn: a.card.turns + 1, durationMs: 0, isError: false, timestamp: ts ?? '', responseText: text })
     a.idx++
   }
 
@@ -1568,7 +1571,22 @@ function _claudeOnEntry(a: ClaudeAccum, entry: Record<string, unknown>): void {
       }
     }
     const responseText = (content.find(b => b['type'] === 'text') as Record<string, string> | undefined)?.['text']
-    a.card.timeline.push({ type: hasToolCall ? 'tool' : 'llm', spanId: `log-a-${a.idx}`, label: hasToolCall ? 'Tool calls' : 'Response', model: a.model || undefined, inputTokens: isFirstRowOfMessage ? usage?.['input_tokens'] : undefined, outputTokens: isFirstRowOfMessage ? usage?.['output_tokens'] : undefined, durationMs: 0, isError: false, timestamp: ts ?? '', responseText })
+    // turns was incremented above only on the first row of this message, so a.card.turns is the
+    // 1-based index of the turn this assistant row belongs to. All rows of a multi-block message
+    // share the same turn number (turns unchanged for isFirstRowOfMessage=false rows) — this is the
+    // backbone the trace tree groups on. The 5 token buckets (input/output/cacheRead/cacheCreate)
+    // are attached ONCE (first row) so the per-turn diff and its cache-read/cache-created split are
+    // renderable without double counting.
+    a.card.timeline.push({
+      type: hasToolCall ? 'tool' : 'llm', spanId: `log-a-${a.idx}`,
+      label: hasToolCall ? 'Tool calls' : 'Response', turn: a.card.turns,
+      model: a.model || undefined,
+      inputTokens: isFirstRowOfMessage ? usage?.['input_tokens'] : undefined,
+      outputTokens: isFirstRowOfMessage ? usage?.['output_tokens'] : undefined,
+      cacheReadTokens: isFirstRowOfMessage ? usage?.['cache_read_input_tokens'] : undefined,
+      cacheCreateTokens: isFirstRowOfMessage ? usage?.['cache_creation_input_tokens'] : undefined,
+      durationMs: 0, isError: false, timestamp: ts ?? '', responseText,
+    })
     a.idx++
   }
 }

@@ -101,6 +101,10 @@ function applyMigrations(db: SqlDatabase): void {
   if (!teColNames.includes('cache_create_tokens')) {
     db.run('ALTER TABLE timeline_entries ADD COLUMN cache_create_tokens INTEGER')
   }
+  // turn: 1-based assistant-turn index this entry belongs to (backbone for the trace tree).
+  if (!teColNames.includes('turn')) {
+    db.run('ALTER TABLE timeline_entries ADD COLUMN turn INTEGER')
+  }
 
   // instruction_applied table (feat-instruction-advisor)
   const appliedCols = db.exec('PRAGMA table_info(instruction_applied)')

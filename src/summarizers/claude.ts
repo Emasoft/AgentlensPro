@@ -43,6 +43,10 @@ export function buildClaudeSessions(
     const allAbsFilePaths = new Set<string>()
     let missingChangedFilePathCalls = 0
 
+    // 1-based turn index for the trace tree: each llm_request span opens a turn; the tool spans
+    // that follow it belong to that same turn (Claude requests tools, then they run). Tools before
+    // the first llm_request fall into turn 1.
+    let turnCounter = 0
     const timeline: TimelineEntry[] = topSpans.flatMap(child => {
       const childStart = nanoToMs(child.startTime)
       const childEnd = nanoToMs(child.endTime)
@@ -53,6 +57,7 @@ export function buildClaudeSessions(
 
       if (child.name === 'claude_code.llm_request') {
         totalLlmCalls++
+        turnCounter++
         const { input: inTok, output: outTok, cacheRead, cacheCreate } = extractTokenCounts(child)
         const ttft = getAttrInt(child, 'ttft_ms')
         const childModel = getGenAiModel(child)
@@ -133,6 +138,7 @@ export function buildClaudeSessions(
           type: 'llm' as const,
           spanId: child.spanId,
           label: childModel || 'LLM',
+          turn: turnCounter,
           model: childModel,
           inputTokens: inTok + cacheRead + cacheCreate,
           outputTokens: outTok,
@@ -227,6 +233,7 @@ export function buildClaudeSessions(
           type: 'tool' as const,
           spanId: child.spanId,
           label: toolName,
+          turn: Math.max(1, turnCounter),
           durationMs: childDur || getAttrInt(child, 'duration_ms'),
           toolInput: argsStr || undefined,
           isError,
@@ -244,6 +251,7 @@ export function buildClaudeSessions(
           type: 'user_input' as const,
           spanId: blockedSpan.spanId,
           label: 'Permission prompt',
+          turn: Math.max(1, turnCounter),
           durationMs: getAttrInt(blockedSpan, 'duration_ms') || (nanoToMs(blockedSpan.endTime) - blockedStart) || 0,
           decision: getAttrStr(blockedSpan, 'decision') || undefined,
           isError: false,

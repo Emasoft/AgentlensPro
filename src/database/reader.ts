@@ -138,6 +138,7 @@ export class DatabaseReader {
         type:         ecol(row, 'type') as TimelineEntry['type'],
         spanId:       ecol(row, 'span_id') as string,
         label:        (ecol(row, 'label') as string) ?? '',
+        turn:         (ecol(row, 'turn') as number | null) ?? undefined,
         model:        (ecol(row, 'model') as string | null) ?? undefined,
         inputTokens:       (ecol(row, 'input_tokens') as number | null) ?? undefined,
         outputTokens:      (ecol(row, 'output_tokens') as number | null) ?? undefined,

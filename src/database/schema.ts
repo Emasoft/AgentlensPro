@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS timeline_entries (
   position      INTEGER NOT NULL,
   type          TEXT    NOT NULL,
   label         TEXT    NOT NULL DEFAULT '',
+  turn          INTEGER,
   model         TEXT,
   input_tokens        INTEGER,
   output_tokens       INTEGER,
