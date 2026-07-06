@@ -53,8 +53,9 @@ export function calcSessionCost(session: SessionSummaryCard, mode: PricingMode):
   }
 
   // Token-based mode.
-  // session.inputTokens includes cacheRead + cacheCreate for all agents, so subtract them back out.
-  const rawInput = Math.max(0, session.inputTokens - session.cacheReadTokens - session.cacheCreateTokens)
+  // session.inputTokens is now the RAW uncached input (P1.1 / TRDD-TKN5VALS); it no longer
+  // includes cacheRead/cacheCreate, so bill it directly — the old subtraction would clamp to 0.
+  const rawInput = session.inputTokens
   const totalUsd = rates
     ? calcTokenCost(rawInput, session.cacheReadTokens, session.cacheCreateTokens, session.outputTokens, rates)
     : 0
