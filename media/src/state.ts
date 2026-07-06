@@ -169,6 +169,12 @@ export const timelineSortByValue = signal(false)
 // the user fall back to the flat chronological waterfall.
 export const timelineGroupByTurn = signal(true)
 
+// Cache-hit-rate SLI: sessions whose hit rate (cache_read / (cache_read + cache_create)) falls
+// below this fraction are flagged (Cache tab worst-sessions, Alerts, and a trace card badge). The
+// Anthropic "prompt caching is everything" post treats the hit rate like an uptime SLI — a few
+// points of miss rate move cost/latency a lot — so 0.7 is a deliberately conservative default.
+export const cacheHitSliThreshold = signal(0.7)
+
 export const sessionLimit = signal(25)
 export const selectedAgentFilter = signal<AgentFilter>('all')
 export const initiatorFilter = signal<InitiatorFilter>('all')

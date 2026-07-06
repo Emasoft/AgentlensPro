@@ -157,6 +157,9 @@ export class DatabaseReader {
         isError:      ((ecol(row, 'is_error') as number) ?? 0) === 1,
         errorMessage: (ecol(row, 'error_message') as string | null) ?? undefined,
         timestamp:    (ecol(row, 'timestamp') as string) ?? '',
+        // The blob body (full tool result / response / thinking / input) is NOT selected here to
+        // keep the timeline payload light; surface only the flag so the webview can lazy-fetch it.
+        hasBlob:      ((ecol(row, 'has_blob') as number) ?? 0) === 1 || undefined,
       } satisfies TimelineEntry
     })
 

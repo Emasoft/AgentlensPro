@@ -71,7 +71,7 @@ function buildSources(p: TurnPoint, blobs: Record<string, string>, hostSources: 
 
   for (const e of p.entries) {
     if (e.type === 'tool') {
-      const result = e.fullResult ?? blobs[`${e.spanId}:fullResult`] ?? e.resultSummary ?? ''
+      const result = e.fullResult ?? blobs[`${e.spanId}:full-result`] ?? e.resultSummary ?? ''
       if (result) out.push({ label: `${formatToolLabel(e)} → output`, tokens: approxTokens(result.length), exact: false, kind: 'tool' })
       if (e.toolInput) out.push({ label: `${formatToolLabel(e)} → input`, tokens: approxTokens(e.toolInput.length), exact: false, kind: 'tool' })
     } else if (e.type === 'llm' && e.responseText) {

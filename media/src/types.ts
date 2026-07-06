@@ -127,6 +127,10 @@ export interface TimelineEntry {
   errorMessage?: string
   timestamp: string
   editDetails?: EditDetail[]
+  // Mirror of src/summarizers/summarizerTypes.ts — set on DB-loaded entries whose blob fields were
+  // stripped from the row; tells the trace UI it can lazy-fetch the FULL tool output via
+  // loadBlob('full-result'). Absent on live sessions (fullResult already inline).
+  hasBlob?: boolean
 }
 
 export interface EditDetail {

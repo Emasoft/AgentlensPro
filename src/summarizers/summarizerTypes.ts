@@ -88,6 +88,11 @@ export interface TimelineEntry {
   errorMessage?: string
   timestamp: string
   editDetails?: EditDetail[]
+  // True when a blob (full tool result / response / thinking / tool input) was persisted for this
+  // entry but stripped from the DB row to keep the payload light. Set by the reader on DB-loaded
+  // sessions so the webview knows it can lazy-fetch the FULL tool output via loadBlob('full-result').
+  // Absent on live/in-memory sessions (their entries carry fullResult inline already).
+  hasBlob?: boolean
 }
 
 export interface EditDetail {

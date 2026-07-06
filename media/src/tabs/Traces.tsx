@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef } from 'preact/hooks'
+import { useState, useEffect, useRef, useMemo } from 'preact/hooks'
 import {
-  filteredSessions, sessionSummary, sessionTimelines, focusedSessionId, vscode,
+  filteredSessions, sessionSummary, sessionTimelines, sessionCompositions, blobCache,
+  focusedSessionId, vscode, cacheHitSliThreshold,
   timelineMetric, timelineSortByValue, timelineGroupByTurn,
 } from '../state'
 import type { TimelineMetric } from '../state'
@@ -10,7 +11,9 @@ import {
   sessionDateKey, formatDayLabel, formatSessionTime,
 } from '../utils'
 import { calcEntryCost, calcSessionCost, fmtUsd } from '../sessionMetrics'
-import type { SessionSummaryCard, TimelineEntry, BackgroundSpanSummary } from '../types'
+import { buildCacheBreakReport, cacheBreaksByTurn, CAUSE_LABEL } from '../cacheBreak'
+import { spawnKindBadge, hitRateColor, formatPct } from './cacheShared'
+import type { SessionSummaryCard, TimelineEntry, BackgroundSpanSummary, CacheBreakTurn } from '../types'
 
 export interface Step {
   entry: TimelineEntry
@@ -97,14 +100,25 @@ function turnMetricValue(t: TurnTotals, metric: TimelineMetric): number {
 }
 
 // The compact 5-value strip shown on every tree level (turn header AND the session summary).
-// input ↑ · output ↓ · cache-read · cache-write (the diff split) · cost.
+// input ↑ · output ↓ · cache-read · cache-write (the diff split) · hit-rate · cost. cache-READ and
+// cache-CREATED are kept as DISTINCT values so the prefix-cache reuse vs re-write split is legible.
 function FiveValues({ t }: { t: TurnTotals }) {
+  const cacheTotal = t.cacheRead + t.cacheWrite
+  const hitRate = cacheTotal > 0 ? t.cacheRead / cacheTotal : null
+  const hitColor = hitRate === null ? 'var(--muted)'
+    : hitRate >= 0.9 ? 'var(--vscode-charts-green,#81c784)'
+    : hitRate >= 0.5 ? 'var(--vscode-charts-orange,#e2a03f)' : 'var(--error,#f44747)'
   return (
     <span style="display:inline-flex;gap:8px;align-items:center;font-size:9px;white-space:nowrap;font-variant-numeric:tabular-nums">
       <span title="new input tokens" style={'color:' + METRIC_COLOR.input}>↑{formatCompact(t.input)}</span>
       <span title="output tokens" style={'color:' + METRIC_COLOR.output}>↓{formatCompact(t.output)}</span>
-      <span title="cache-read tokens (re-read from cache)" style={'color:' + METRIC_COLOR.cacheRead}>⟳{formatCompact(t.cacheRead)}</span>
-      <span title="cache-created tokens (newly written to cache)" style={'color:' + METRIC_COLOR.cacheWrite}>✦{formatCompact(t.cacheWrite)}</span>
+      <span title="cache-read tokens (re-read from cache — cheap)" style={'color:' + METRIC_COLOR.cacheRead}>⟳{formatCompact(t.cacheRead)}</span>
+      <span title="cache-created tokens (newly written to cache — full write rate)" style={'color:' + METRIC_COLOR.cacheWrite}>✦{formatCompact(t.cacheWrite)}</span>
+      {hitRate !== null && (
+        <span title="cache hit rate this turn = cache-read / (cache-read + cache-created)" style={'color:' + hitColor}>
+          {(hitRate * 100).toFixed(0)}% hit
+        </span>
+      )}
       {t.cost > 0 && <span title="cost" style={'color:' + METRIC_COLOR.cost}>~{fmtUsd(t.cost)}</span>}
     </span>
   )
@@ -260,7 +274,17 @@ function StepDetail({ step, idx, sessIdx, sessionModel }: { step: Step; idx: num
     const isFilePath = isRaw && (entry.toolInput!.startsWith('/') || entry.toolInput!.startsWith('~') || /^[A-Za-z]:[/\\]/.test(entry.toolInput!))
     const inputHeading = !isRaw ? 'Arguments' : isFilePath ? 'File' : 'Command'
     const inputText = isRaw ? entry.toolInput : (tArgs || entry.toolInput || '')
-    const resultText = entry.fullResult || entry.resultSummary || ''
+    // FULL tool output for the composition drill-down. Live sessions carry it inline (fullResult);
+    // DB-loaded sessions strip the blob (hasBlob) — lazy-fetch it via loadBlob('full-result') on
+    // open and read the cached content. Falls back to the short resultSummary until it lands.
+    const blobKey = `${entry.spanId}:full-result`
+    const blobbed = blobCache.value[blobKey]
+    useEffect(() => {
+      if (!entry.fullResult && entry.hasBlob && blobbed === undefined && vscode) {
+        vscode.postMessage({ type: 'loadBlob', spanId: entry.spanId, field: 'full-result' })
+      }
+    }, [entry.spanId])
+    const resultText = entry.fullResult || blobbed || entry.resultSummary || ''
     return (
       <>
         <div class="sw-detail-section"><div class="sw-detail-heading">Tool</div><div class="sw-detail-value"><code>{tName}</code></div></div>
@@ -458,23 +482,47 @@ export function StepRow({ step, idx, sessIdx, sessionDur, sessionModel, metric, 
 // One turn = a collapsible parent row whose value is the SUM of its child steps. Shows all 5
 // values (input/output/cache-read/cache-write/cost) and a bar of the selected metric; expands to
 // the child StepRows. This is the session → turn → step tree the spec (P2.2) asks for.
-function TurnGroup({ turn, tSteps, sessIdx, sessionDur, sessionModel, metric, maxStepMetric, maxTurnMetric, highlightSpanId, subAgents }: {
+// The expandable detail beneath a turn flagged as an avoidable cache break: the cause, the exact
+// offending block, the wasted cache-created tokens/cost, and the one-line remediation hint.
+function CacheBreakDetail({ cb }: { cb: CacheBreakTurn }) {
+  return (
+    <div style="margin:2px 0 4px 24px;padding:8px 10px;border-left:3px solid var(--error,#f44747);background:rgba(244,71,71,0.08);border-radius:0 4px 4px 0;font-size:10px;line-height:1.5">
+      <div style="font-weight:600;color:var(--error,#f44747);margin-bottom:3px">Cache break — {CAUSE_LABEL[cb.cause]}</div>
+      {cb.breakSourceLabel && (
+        <div>Offending block: <code style="color:var(--vscode-charts-orange,#e2a03f)">{cb.breakSourceLabel}</code>{cb.breakSourceKind ? ` (${cb.breakSourceKind})` : ''}</div>
+      )}
+      <div>
+        Wasted re-write: <strong>{formatCompact(cb.wastedTokens)}</strong> cache-created tokens
+        {cb.wastedCostUsd > 0 && <> · <strong>~{fmtUsd(cb.wastedCostUsd)}</strong></>}
+      </div>
+      {cb.idleGapMs !== undefined && cb.cause === 'IDLE_TTL_EXPIRY' && (
+        <div>Idle gap: {formatMs(cb.idleGapMs)} (&gt; 5-min TTL)</div>
+      )}
+      {cb.remediation && <div style="margin-top:3px;color:var(--muted)">→ {cb.remediation}</div>}
+    </div>
+  )
+}
+
+function TurnGroup({ turn, tSteps, sessIdx, sessionDur, sessionModel, metric, maxStepMetric, maxTurnMetric, highlightSpanId, subAgents, cacheBreak }: {
   turn: number
   tSteps: Array<{ step: Step; i: number }>
   sessIdx: number; sessionDur: number; sessionModel: string
   metric: TimelineMetric; maxStepMetric: number; maxTurnMetric: number
   highlightSpanId?: string
   subAgents?: SessionSummaryCard[]
+  cacheBreak?: CacheBreakTurn
 }) {
   const totals = sumSteps(tSteps.map(x => x.step), sessionModel)
   const hasHighlight = !!highlightSpanId && tSteps.some(x => x.step.entry.spanId === highlightSpanId)
   const [open, setOpen] = useState(true)
+  const [breakOpen, setBreakOpen] = useState(false)
   // A focused turn (clicked from the growth chart) force-expands its group so the step is visible.
   useEffect(() => { if (hasHighlight) setOpen(true) }, [hasHighlight])
 
   const tv = turnMetricValue(totals, metric)
   const width = maxTurnMetric > 0 && tv > 0 ? Math.max(tv / maxTurnMetric * 100, 0.5) : 0
   const barColor = metric === 'time' ? 'var(--accent)' : METRIC_COLOR[metric]
+  const broke = cacheBreak?.broke === true
 
   return (
     <div class="wf-turn-group">
@@ -483,7 +531,17 @@ function TurnGroup({ turn, tSteps, sessIdx, sessionDur, sessionModel, metric, ma
           <span class="sw-chevron">{open ? '▼' : '▶'}</span>
           <span class="wf-type-badge" style="background:var(--accent);color:#000">T{turn}</span>
           <span style="display:inline-flex;flex-direction:column;min-width:0">
-            <span class="wf-name">Turn {turn} · {tSteps.length} step{tSteps.length !== 1 ? 's' : ''}</span>
+            <span class="wf-name">
+              Turn {turn} · {tSteps.length} step{tSteps.length !== 1 ? 's' : ''}
+              {broke && (
+                <span
+                  onClick={e => { e.stopPropagation(); setBreakOpen(v => !v) }}
+                  title="Prompt cache broke this turn — click for the cause + wasted cost"
+                  style="margin-left:8px;font-size:9px;padding:1px 6px;border-radius:8px;font-weight:700;cursor:pointer;background:var(--error,#f44747);color:#fff;white-space:nowrap">
+                  ⚡ cache break: {CAUSE_LABEL[cacheBreak!.cause]}
+                </span>
+              )}
+            </span>
             <FiveValues t={totals} />
           </span>
         </div>
@@ -496,6 +554,7 @@ function TurnGroup({ turn, tSteps, sessIdx, sessionDur, sessionModel, metric, ma
           <span style={tv > 0 ? 'font-weight:600' : 'color:var(--muted)'}>{formatMetricValue(metric, tv)}</span>
         </div>
       </div>
+      {broke && breakOpen && <CacheBreakDetail cb={cacheBreak!} />}
       {open && (
         <div class="wf-turn-children">
           {tSteps.map(({ step, i }) => (
@@ -543,9 +602,12 @@ function SubAgentBranch({ child, sessIdx }: { child: SessionSummaryCard; sessIdx
       <div class="wf-row wf-turn-row" onClick={() => setOpen(v => !v)}>
         <div class="wf-label">
           <span class="sw-chevron">{open ? '▼' : '▶'}</span>
-          <span class="wf-type-badge" style="background:var(--vscode-charts-orange,#e2a03f);color:#000" title="spawned sub-agent">↳ sub-agent</span>
+          <span class="wf-type-badge" style="background:var(--vscode-charts-orange,#e2a03f);color:#000" title="spawned sub-agent">↳</span>
           <span style="display:inline-flex;flex-direction:column;min-width:0">
-            <span class="wf-name" title={label}>{label}</span>
+            <span class="wf-name" title={label} style="display:inline-flex;align-items:center;gap:6px">
+              {label}
+              {spawnKindBadge(child)}
+            </span>
             <FiveValues t={totals} />
           </span>
         </div>
@@ -561,7 +623,7 @@ function SubAgentBranch({ child, sessIdx }: { child: SessionSummaryCard; sessIdx
       {open && (
         <div class="wf-turn-children">
           {steps.length > 0
-            ? <TimelineWaterfall steps={steps} sessionDur={child.durationMs || 1} sessionModel={child.model ?? ''} sessIdx={sessIdx} />
+            ? <TimelineWaterfall steps={steps} sessionDur={child.durationMs || 1} sessionModel={child.model ?? ''} sessIdx={sessIdx} sessionId={child.sessionId} />
             : <div style="padding:8px 10px;font-size:10px;color:var(--muted)">Sub-agent has no separate transcript — Claude Code records only its final footprint ({formatCompact(totals.input + totals.output + totals.cacheRead + totals.cacheWrite)} tokens across {child.totalToolCalls} tool calls) in the parent.</div>}
         </div>
       )}
@@ -574,15 +636,30 @@ function SubAgentBranch({ child, sessIdx }: { child: SessionSummaryCard; sessIdx
 // keeps the chronological waterfall and its ruler. Grouped by turn it is a session → turn → step
 // tree. Metric/sort/group are shared signals (P2.1) so every open trace agrees and the toggle
 // lives in one sticky place. Used by the Sessions-detail Trace sub-tab.
-export function TimelineWaterfall({ steps, sessionDur, sessionModel, sessIdx = 0, highlightSpanId, subAgents }: {
+export function TimelineWaterfall({ steps, sessionDur, sessionModel, sessIdx = 0, highlightSpanId, subAgents, sessionId }: {
   steps: Step[]; sessionDur: number; sessionModel: string; sessIdx?: number; highlightSpanId?: string
   subAgents?: SessionSummaryCard[]
+  sessionId?: string
 }) {
   const metric = timelineMetric.value
   const sortByValue = timelineSortByValue.value
   const groupByTurn = timelineGroupByTurn.value
   const [filterDraft, setFilterDraft] = useState('')     // live input value
   const [filterApplied, setFilterApplied] = useState('') // committed on Enter (not realtime)
+
+  // Cache-break diagnosis for this session: reconstruct per-turn blocks from the host composition
+  // (lazily requested on mount) + the resident timeline, diff turn-to-turn, and mark the turns whose
+  // prefix cache broke. Recomputed only when the composition or the step set changes.
+  const composition = sessionId ? sessionCompositions.value[sessionId] : undefined
+  useEffect(() => {
+    if (sessionId && composition === undefined && vscode) {
+      vscode.postMessage({ type: 'loadContextComposition', sessionId })
+    }
+  }, [sessionId, composition === undefined])
+  const breaksByTurn = useMemo(
+    () => cacheBreaksByTurn(sessionId ? buildCacheBreakReport(sessionId, steps.map(s => s.entry), composition, sessionModel) : null),
+    [sessionId, composition, steps.length, sessionModel],
+  )
 
   const match = compileStepFilter(filterApplied)
   const valued = steps
@@ -694,7 +771,7 @@ export function TimelineWaterfall({ steps, sessionDur, sessionModel, sessIdx = 0
               <TurnGroup key={g.turn} turn={g.turn} tSteps={g.tSteps} sessIdx={sessIdx}
                 sessionDur={sessionDur} sessionModel={sessionModel} metric={metric}
                 maxStepMetric={maxMetric} maxTurnMetric={maxTurnMetric} highlightSpanId={highlightSpanId}
-                subAgents={subsByTurn.get(g.turn)} />
+                subAgents={subsByTurn.get(g.turn)} cacheBreak={breaksByTurn.get(g.turn)} />
             ))
           : ordered.map(({ step, i }) => (
               <StepRow key={step.entry.spanId + i} step={step} idx={i} sessIdx={sessIdx}
@@ -784,6 +861,13 @@ function SessionBlock({ sess, sessIdx, sessNum, totalCount, isFirst }: {
         </span>
         <span class="wf-trace-stats">
           {steps.length} steps · {formatMs(sessionDur)} · {sess.model}
+          {(sess.cacheReadTokens + sess.cacheCreateTokens) > 0 && sess.cacheHitRate < cacheHitSliThreshold.value && (
+            <span
+              title={`Low cache hit rate — ${formatPct(sess.cacheHitRate)} vs ${formatPct(cacheHitSliThreshold.value)} SLI. Cache breaks are re-writing the prefix; expand turns for the cause.`}
+              style={`margin-left:6px;font-size:9px;padding:1px 6px;border-radius:8px;font-weight:600;border:1px solid ${hitRateColor(sess.cacheHitRate, cacheHitSliThreshold.value)};color:${hitRateColor(sess.cacheHitRate, cacheHitSliThreshold.value)}`}>
+              ⚡ {formatPct(sess.cacheHitRate)} cache hit
+            </span>
+          )}
           {children.length > 0 && (
             <span style="color:var(--vscode-charts-orange,#e2a03f)" title="sub-agent tokens rolled up (spawned Task/Agent sessions)">
               {' · '}↳{children.length} sub-agent{children.length !== 1 ? 's' : ''} +{formatCompact(childTok)} tok{childCost > 0 ? ` +${fmtUsd(childCost)}` : ''}
@@ -804,7 +888,7 @@ function SessionBlock({ sess, sessIdx, sessNum, totalCount, isFirst }: {
           {isLoading ? (
             <div style="padding:12px 16px;font-size:11px;color:var(--muted)">Loading timeline…</div>
           ) : (
-            <TimelineWaterfall steps={steps} sessionDur={sessionDur} sessionModel={sess.model ?? ''} sessIdx={sessIdx} subAgents={children} />
+            <TimelineWaterfall steps={steps} sessionDur={sessionDur} sessionModel={sess.model ?? ''} sessIdx={sessIdx} subAgents={children} sessionId={sess.sessionId} />
           )}
         </div>
       )}
