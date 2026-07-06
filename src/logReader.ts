@@ -41,7 +41,7 @@ function homeDir(): string {
   return os.homedir()
 }
 
-function claudeProjectsDirs(): string[] {
+export function claudeProjectsDirs(): string[] {
   // Env override: comma-separated list of Claude config dirs (each must have a projects/ sub-dir).
   const envVal = process.env['CLAUDE_CONFIG_DIR']
   if (envVal) {

@@ -132,6 +132,27 @@ export interface EditDetail {
   toolName?: string
 }
 
+// Mirror of src/summarizers/summarizerTypes.ts — per-turn context-composition breakdown (P3).
+// Token figures are ESTIMATES (bytes/4); loaded on demand per session via a loadContextComposition
+// message so thousands of attachments are never shipped at once.
+export interface ContextSource {
+  label: string
+  kind: string
+  tokens: number
+  bytes: number
+  count: number
+}
+export interface ContextCompositionTurn {
+  turn: number
+  sources: ContextSource[]
+}
+export interface ContextComposition {
+  sessionId: string
+  turns: ContextCompositionTurn[]
+  estimated: true
+  truncated: boolean
+}
+
 export interface EfficiencyReport {
   totalInputTokens: number
   totalOutputTokens: number

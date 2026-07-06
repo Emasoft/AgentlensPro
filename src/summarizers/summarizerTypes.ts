@@ -91,6 +91,33 @@ export interface EditDetail {
   toolName?: string
 }
 
+// ── Context-composition tracer (P3, TRDD-TKN5VALS) ────────────────────────────
+// Per-turn breakdown of WHAT was injected into the context window and its approximate weight,
+// reconstructed on demand from the raw session .jsonl (attachments = hook injections, the skill
+// catalog, tool/agent/mcp catalog deltas, file reads, task reminders). Token counts are ESTIMATES
+// (bytes/4) and always surfaced as such — the exact per-turn totals come from usage. Built lazily
+// per session (buildContextComposition) so thousands of attachments are never shipped to the
+// webview; only the aggregated, capped per-source summary is.
+export interface ContextSource {
+  label: string   // e.g. "hook: janitor-memory", "skill catalog", "file: CLAUDE.md"
+  kind: string    // hook | skill | toolCatalog | agentCatalog | mcp | file | reminder | other
+  tokens: number  // approximate (bytes / 4)
+  bytes: number
+  count: number   // entries aggregated into this source
+}
+
+export interface ContextCompositionTurn {
+  turn: number
+  sources: ContextSource[]   // heaviest-first, capped (remainder folded into an "other" source)
+}
+
+export interface ContextComposition {
+  sessionId: string
+  turns: ContextCompositionTurn[]
+  estimated: true            // marker: token figures here are approximate
+  truncated: boolean         // true if the session was larger than the parse cap
+}
+
 export interface EfficiencyReport {
   totalInputTokens: number
   totalOutputTokens: number
