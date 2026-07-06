@@ -26,3 +26,6 @@ agent-lens-export-*.json
 # ai-maestro-janitor runtime state (per-session, regeneratable — never commit)
 .claude/janitor/
 .janitor/
+# Agent reports — may contain private paths/tokens; never commit
+/reports/
+/reports_dev/
