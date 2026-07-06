@@ -176,6 +176,33 @@ headers don't scroll; expand session→event→turn→tool shows 5 values each; 
 bar above updates on toggle; Context tab renders with turn numbers and expandable
 sub-branches. Commit `feat(dashboard): …`.
 
+## P3 — Context-composition tracer — REFINED SPEC (user verbatim, 2026-07-06 post-restart)
+
+**User's sharpened requirements (authoritative; supersedes vaguer P3 prose below):**
+1. The **Trace tab itself** shows context size and how it GROWS turn by turn.
+2. Each growth point is **expandable to its EXACT source** — including the FULL
+   output of the tool that caused it (not truncated).
+3. Source data: Claude's per-project/per-session `.jsonl` folders. ALL outputs
+   are written either in the session file OR its subfolders — parse both.
+4. Show **full detail of everything added to context**: from the SYSTEM PROMPT
+   through to the latest messages — every injected piece.
+5. **Every turn shows the DIFF**, split into the **cache-READ** part and the
+   **cache-CREATED** part (the two must be distinct, per D1).
+6. **Sortable by time OR by value**, consistent with the rest of the UI.
+7. **Sub-agents:** each spawned sub-agent row carries (a) a LINK to the
+   sub-agent's OWN session — expandable inline AND navigable to that session —
+   AND (b) the TOTAL tokens of the whole sub-agent session surfaced in the
+   PARENT session's numbers.
+8. **Every single event measured and reported** — no event omitted.
+
+DERIVED (mandatory): full tool-output capture can be huge → lazy-load/stream per
+turn, cap eager tokenization, don't load all attachments into the webview at once
+(reuse P2.3's lazy pattern). The cache-read/cache-created diff comes from
+`assistant.message.usage` (cache_read_input_tokens vs cache_creation_input_tokens)
+per turn — attribute each to its source events.
+
+---
+
 ## P3 — Context-composition tracer (EXPANDED SCOPE, user 2026-07-06)
 
 Goal: see, per step, EXACTLY what occupies the context window and what it costs —
