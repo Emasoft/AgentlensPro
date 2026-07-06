@@ -56,6 +56,8 @@ export interface SessionSummaryCard {
   conversationId?: string
   // Mirror of src/summarizers/summarizerTypes.ts — session that spawned this one (sub-agent/fork).
   parentSessionId?: string
+  // 1-based turn of the parent at which this child was spawned (the Task/Agent tool_use turn).
+  spawnedByTurn?: number
   workspace: string
   projectPath?: string
   userRequest: string

@@ -22,6 +22,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   errors              INTEGER NOT NULL DEFAULT 0,
   outcome             TEXT    NOT NULL DEFAULT 'unknown',
   is_sidechain        INTEGER NOT NULL DEFAULT 0,
+  parent_session_id   TEXT,
+  spawned_by_turn     INTEGER,
   speed               TEXT,
   user_request        TEXT    NOT NULL DEFAULT '',
   tool_counts         TEXT    NOT NULL DEFAULT '{}',

@@ -115,6 +115,8 @@ export class DatabaseReader {
         errors:           (col(row, 'errors') as number) ?? 0,
         outcome:          (col(row, 'outcome') as 'text_response' | 'tool_calls' | 'unknown') ?? 'unknown',
         loopSignals:      this._parseJson(col(row, 'loop_signals') as string, []),
+        parentSessionId:  (col(row, 'parent_session_id') as string | null) ?? undefined,
+        spawnedByTurn:    (col(row, 'spawned_by_turn') as number | null) ?? undefined,
         timeline:         [],
         backgroundSpans:  [],
       } satisfies SessionSummaryCard
@@ -351,6 +353,8 @@ export class DatabaseReader {
         errors:           (col(row, 'errors') as number) ?? 0,
         outcome:          (col(row, 'outcome') as 'text_response' | 'tool_calls' | 'unknown') ?? 'unknown',
         loopSignals:      this._parseJson(col(row, 'loop_signals') as string, []),
+        parentSessionId:  (col(row, 'parent_session_id') as string | null) ?? undefined,
+        spawnedByTurn:    (col(row, 'spawned_by_turn') as number | null) ?? undefined,
         timeline:         [],
         backgroundSpans:  [],
       } satisfies SessionSummaryCard

@@ -10,6 +10,9 @@ export interface SessionSummaryCard {
   // Session that spawned this one (sub-agent / Task / fork). Set on child sessions so the
   // dashboard can roll their tokens into the parent's total and render them as sub-branches.
   parentSessionId?: string
+  // 1-based turn of the PARENT at which this child was spawned (the Task/Agent tool_use turn).
+  // Lets the trace tree render the sub-agent as a sub-branch beneath the exact spawning turn.
+  spawnedByTurn?: number
   workspace: string
   projectPath?: string
   userRequest: string

@@ -223,9 +223,12 @@ export async function activate(context: vscode.ExtensionContext) {
       const results = lr.scan()
       if (results.length === 0) return
       const ws = fallbackWorkspace()
-      for (const { card, workspace } of results) {
+      for (const { card, workspace, childCards } of results) {
         card.loopSignals = detectLoopSignals(card)
         writer!.enqueue(card, workspace || ws)
+        // Sub-agent child sessions (Claude Task/Agent) are distinct navigable rows linked to the
+        // parent via parentSessionId; persist them alongside the parent (TRDD-TKN5VALS item 1).
+        for (const child of childCards ?? []) writer!.enqueue(child, workspace || ws)
       }
       void writer!.drain().then(() => {
         agentLensDb?.save()
@@ -281,6 +284,7 @@ export async function activate(context: vscode.ExtensionContext) {
               if (result) {
                 result.card.loopSignals = detectLoopSignals(result.card)
                 writer!.enqueue(result.card, result.workspace || ws)
+                for (const child of result.childCards ?? []) writer!.enqueue(child, result.workspace || ws)
                 const dk = files[i].agentKey === 'copilot_vscode_json' ? 'copilot_vscode' : files[i].agentKey
                 countByKey.set(dk, (countByKey.get(dk) ?? 0) + 1)
                 written++

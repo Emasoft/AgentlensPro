@@ -166,8 +166,8 @@ export class DatabaseWriter {
         total_tool_calls, total_llm_calls, errors, outcome,
         is_sidechain, speed, user_request, tool_counts, loop_signals,
         files_read, files_changed, files_written, files_searched, files_changed_note, cost_usd,
-        data_source
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        data_source, parent_session_id, spawned_by_turn
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
         card.sessionId,
         card.traceId,
@@ -199,6 +199,8 @@ export class DatabaseWriter {
         card.filesChangedNote ?? null,
         costUsd,
         card.dataSource,
+        card.parentSessionId ?? null,
+        card.spawnedByTurn ?? null,
       ]
     )
   }

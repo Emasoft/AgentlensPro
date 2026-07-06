@@ -170,6 +170,9 @@ export interface LogSessionResult {
   card: SessionSummaryCard
   /** Workspace path extracted from the log file (cwd). May be empty for Copilot. */
   workspace: string
+  /** Distinct sub-agent sessions this file spawned (Claude Task/Agent tool calls). Each carries
+   *  parentSessionId=card.sessionId so the dashboard nests it as a sub-branch. */
+  childCards?: SessionSummaryCard[]
 }
 
 export class LogReader {
@@ -361,7 +364,11 @@ export class LogReader {
       card.parentSessionId = proj.slice(0, wtIdx).replace(/-+$/, '')
       card.initiator = 'agent'
     }
-    return { workspace: a.workspace, card }
+    // Sub-agents (Task/Agent tool calls) have no separate .jsonl — their whole footprint is
+    // embedded in this parent transcript's toolUseResult. Synthesize a distinct child session
+    // per completed sub-agent so the dashboard can nest + roll them up (TRDD-TKN5VALS item 1).
+    const childCards = _buildSubAgentCards(card.sessionId, a)
+    return { workspace: a.workspace, card, childCards: childCards.length > 0 ? childCards : undefined }
   }
 
   // ── Codex ───────────────────────────────────────────────────────────────────
@@ -1427,11 +1434,41 @@ interface ClaudeAccum {
   // `usage` in each — so usage must be counted ONCE per message.id, not per row. Persists across
   // scans (incremental parsing) so a message split across a scan boundary is still deduped.
   seenMessageIds: Set<string>
+  // Sub-agents this session spawned, keyed by the Task/Agent tool_use id. A record is created when
+  // the tool_use is seen and completed when its tool_result carries a `toolUseResult.usage`
+  // (Claude Code embeds the whole sub-agent footprint in the PARENT transcript — sub-agents have
+  // NO separate .jsonl, so this is the only linkage source). Persists across scans so a spawn and
+  // its completion split over a scan boundary still correlate. See _buildSubAgentCards.
+  subAgents: Map<string, SubAgentRec>
   card: CardAccum
 }
 
+// One spawned sub-agent, reconstructed from the parent transcript. `done` flips true once the
+// Task tool_result delivered a `toolUseResult.usage` (a real completion); async launch-only
+// results (status=async_launched, no usage) stay incomplete and are not synthesized.
+interface SubAgentRec {
+  toolUseId: string
+  spawnTurn: number
+  spawnTs: string
+  requestedType?: string
+  prompt?: string
+  agentId?: string
+  model?: string
+  agentType?: string
+  input: number
+  output: number
+  cacheRead: number
+  cacheCreate: number
+  totalTokens: number
+  toolUseCount: number
+  durationMs: number
+  toolStats?: Record<string, number>
+  finalText?: string
+  done: boolean
+}
+
 function _newClaudeAccum(): ClaudeAccum {
-  return { workspace: '', model: '', firstTimestamp: '', lastTimestamp: '', hasFastMode: false, idx: 0, pendingReads: new Map<string, string>(), seenMessageIds: new Set<string>(), card: _emptyCardAccum('user') }
+  return { workspace: '', model: '', firstTimestamp: '', lastTimestamp: '', hasFastMode: false, idx: 0, pendingReads: new Map<string, string>(), seenMessageIds: new Set<string>(), subAgents: new Map<string, SubAgentRec>(), card: _emptyCardAccum('user') }
 }
 
 // UTF-8 byte length of a value that may or may not be a string (0 for non-strings).
@@ -1469,6 +1506,97 @@ function _addFileOp(card: CardAccum, filePath: string, op: 'read' | 'write' | 'e
   else                     { fo.editBytes  += bytes; fo.editCount++  }
 }
 
+// Register a Task/Agent tool_use as a pending sub-agent, keyed by its tool_use id.
+function _recordSubAgentSpawn(a: ClaudeAccum, block: Record<string, unknown>, inp: Record<string, unknown>, ts: string | undefined): void {
+  const tid = block['id'] as string | undefined
+  if (!tid || a.subAgents.has(tid)) return
+  a.subAgents.set(tid, {
+    toolUseId: tid, spawnTurn: a.card.turns, spawnTs: ts ?? '',
+    requestedType: (inp['subagent_type'] ?? inp['description']) as string | undefined,
+    prompt: typeof inp['prompt'] === 'string' ? inp['prompt'] : undefined,
+    input: 0, output: 0, cacheRead: 0, cacheCreate: 0,
+    totalTokens: 0, toolUseCount: 0, durationMs: 0, done: false,
+  })
+}
+
+// Fill a sub-agent record from a Task/Agent `toolUseResult`. Only completions carry `usage`
+// (async launch records carry status=async_launched with no tokens) — those stay `done:false`
+// and are skipped by _buildSubAgentCards. `usage` is the sub-agent's FINAL-turn buckets and
+// `totalTokens` its reported footprint (Claude Code does not expose per-turn sub-agent history
+// in the parent transcript, so this final-context snapshot is the only available token figure).
+function _completeSubAgent(sub: SubAgentRec, tur: Record<string, unknown>, resultContent: unknown): void {
+  const usage = tur['usage'] as Record<string, number> | undefined
+  if (!usage || typeof tur['totalTokens'] !== 'number') return
+  sub.input       = usage['input_tokens'] ?? 0
+  sub.output      = usage['output_tokens'] ?? 0
+  sub.cacheRead   = usage['cache_read_input_tokens'] ?? 0
+  sub.cacheCreate = usage['cache_creation_input_tokens'] ?? 0
+  sub.totalTokens = tur['totalTokens'] as number
+  sub.toolUseCount = (tur['totalToolUseCount'] as number) ?? 0
+  sub.durationMs   = (tur['totalDurationMs'] as number) ?? 0
+  sub.agentId      = tur['agentId'] as string | undefined
+  sub.agentType    = (tur['agentType'] ?? sub.requestedType) as string | undefined
+  sub.model        = tur['resolvedModel'] as string | undefined
+  sub.toolStats    = tur['toolStats'] as Record<string, number> | undefined
+  sub.finalText    = _extractTextContent(resultContent)?.slice(0, 4000)
+  sub.done = true
+}
+
+// Synthesize one child SessionSummaryCard per completed sub-agent. Each is a distinct, navigable
+// session (sessionId = Claude's agentId) linked to the parent via parentSessionId + spawnedByTurn,
+// so the dashboard nests it under the spawning turn and rolls its tokens into the parent's display.
+// toolStats → toolCounts gives a real per-kind tool breakdown; finalText becomes a one-row timeline
+// so "open" on the child shows its reported output.
+function _buildSubAgentCards(parentSessionId: string, a: ClaudeAccum): SessionSummaryCard[] {
+  const cards: SessionSummaryCard[] = []
+  for (const sub of a.subAgents.values()) {
+    if (!sub.done) continue
+    const sid = sub.agentId || `${parentSessionId}-sub-${sub.toolUseId}`
+    const toolCounts: Record<string, number> = {}
+    if (sub.toolStats) {
+      const map: Record<string, string> = { readCount: 'Read', searchCount: 'Search', bashCount: 'Bash', editFileCount: 'Edit', otherToolCount: 'Other' }
+      for (const [k, label] of Object.entries(map)) {
+        const n = sub.toolStats[k] ?? 0
+        if (n > 0) toolCounts[label] = n
+      }
+    }
+    const startMs = _parseTs(sub.spawnTs)
+    const timeline: TimelineEntry[] = sub.finalText
+      ? [{ type: 'llm', spanId: `${sid}-out`, label: 'Sub-agent output', turn: 1, durationMs: sub.durationMs, isError: false, timestamp: sub.spawnTs, responseText: sub.finalText }]
+      : []
+    cards.push({
+      sessionId: sid,
+      traceId: sid,
+      source: 'claude_code',
+      dataSource: 'log',
+      initiator: 'agent',
+      parentSessionId,
+      spawnedByTurn: sub.spawnTurn,
+      workspace: a.workspace,
+      userRequest: (sub.prompt ?? sub.agentType ?? 'sub-agent').slice(0, 500),
+      model: sub.model || a.model || 'claude',
+      turns: 1,
+      inputTokens: sub.input,
+      outputTokens: sub.output,
+      cacheReadTokens: sub.cacheRead,
+      cacheCreateTokens: sub.cacheCreate,
+      cacheHitRate: sub.totalTokens > 0 ? sub.cacheRead / sub.totalTokens : 0,
+      durationMs: sub.durationMs,
+      startTime: startMs > 0 ? new Date(startMs).toISOString() : '',
+      filesRead: [], filesSearched: [], filesChanged: [], filesWritten: [],
+      toolCounts,
+      totalToolCalls: sub.toolUseCount,
+      totalLlmCalls: 1,
+      errors: 0,
+      outcome: sub.toolUseCount > 0 ? 'tool_calls' : 'text_response',
+      timeline,
+      backgroundSpans: [],
+      loopSignals: [],
+    })
+  }
+  return cards
+}
+
 function _claudeOnEntry(a: ClaudeAccum, entry: Record<string, unknown>): void {
   const ts = entry['timestamp'] as string | undefined
   if (ts) { if (!a.firstTimestamp) a.firstTimestamp = ts; a.lastTimestamp = ts }
@@ -1491,16 +1619,22 @@ function _claudeOnEntry(a: ClaudeAccum, entry: Record<string, unknown>): void {
         a.card.userRequest = text
       }
     }
-    // Resolve Read tool_results → per-file read bytes (tool_use.id ↔ tool_result.tool_use_id).
+    // Resolve tool_results: Read → per-file read bytes; Task/Agent → sub-agent footprint.
+    // A tool_result lives in a user entry and carries a sibling `toolUseResult` object that, for a
+    // Task/Agent completion, embeds the sub-agent's usage/agentId/model/toolStats.
     if (Array.isArray(content)) {
+      const toolUseResult = entry['toolUseResult'] as Record<string, unknown> | undefined
       for (const block of content as Array<Record<string, unknown>>) {
         if (block['type'] !== 'tool_result') continue
         const id = block['tool_use_id'] as string | undefined
         if (!id) continue
         const fp = a.pendingReads.get(id)
-        if (!fp) continue
-        a.pendingReads.delete(id)
-        _addFileOp(a.card, fp, 'read', _toolResultBytes(block['content']))
+        if (fp) {
+          a.pendingReads.delete(id)
+          _addFileOp(a.card, fp, 'read', _toolResultBytes(block['content']))
+        }
+        const sub = a.subAgents.get(id)
+        if (sub && toolUseResult) _completeSubAgent(sub, toolUseResult, block['content'])
       }
     }
     // A user message precedes the assistant turn it triggers, so it belongs to the NEXT turn
@@ -1552,6 +1686,7 @@ function _claudeOnEntry(a: ClaudeAccum, entry: Record<string, unknown>): void {
         const name = block['name'] as string
         a.card.toolCounts[name] = (a.card.toolCounts[name] ?? 0) + 1
         const inp = (block['input'] ?? {}) as Record<string, unknown>
+        if (name === 'Task' || name === 'Agent') _recordSubAgentSpawn(a, block, inp, ts)
         const fp  = String(inp['file_path'] ?? inp['filePath'] ?? inp['path'] ?? '')
         if (fp) {
           if (name === 'Read' || name === 'read_file') {

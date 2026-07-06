@@ -9,7 +9,7 @@ import {
   getAgentDotHtml, formatLlmLabel, formatToolLabel, formatToolResult,
   sessionDateKey, formatDayLabel, formatSessionTime,
 } from '../utils'
-import { calcEntryCost, fmtUsd } from '../sessionMetrics'
+import { calcEntryCost, calcSessionCost, fmtUsd } from '../sessionMetrics'
 import type { SessionSummaryCard, TimelineEntry, BackgroundSpanSummary } from '../types'
 
 export interface Step {
@@ -458,12 +458,13 @@ export function StepRow({ step, idx, sessIdx, sessionDur, sessionModel, metric, 
 // One turn = a collapsible parent row whose value is the SUM of its child steps. Shows all 5
 // values (input/output/cache-read/cache-write/cost) and a bar of the selected metric; expands to
 // the child StepRows. This is the session → turn → step tree the spec (P2.2) asks for.
-function TurnGroup({ turn, tSteps, sessIdx, sessionDur, sessionModel, metric, maxStepMetric, maxTurnMetric, highlightSpanId }: {
+function TurnGroup({ turn, tSteps, sessIdx, sessionDur, sessionModel, metric, maxStepMetric, maxTurnMetric, highlightSpanId, subAgents }: {
   turn: number
   tSteps: Array<{ step: Step; i: number }>
   sessIdx: number; sessionDur: number; sessionModel: string
   metric: TimelineMetric; maxStepMetric: number; maxTurnMetric: number
   highlightSpanId?: string
+  subAgents?: SessionSummaryCard[]
 }) {
   const totals = sumSteps(tSteps.map(x => x.step), sessionModel)
   const hasHighlight = !!highlightSpanId && tSteps.some(x => x.step.entry.spanId === highlightSpanId)
@@ -502,6 +503,66 @@ function TurnGroup({ turn, tSteps, sessIdx, sessionDur, sessionModel, metric, ma
               sessionDur={sessionDur} sessionModel={sessionModel} metric={metric} maxMetric={maxStepMetric}
               highlightSpanId={highlightSpanId} />
           ))}
+          {(subAgents ?? []).map(c => <SubAgentBranch key={c.sessionId} child={c} sessIdx={sessIdx} />)}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// A sub-agent's reported footprint as a TurnTotals so it renders with the same FiveValues strip.
+// Tokens come from the child card's buckets; cost is the token-mode session cost of the child.
+function subAgentTotals(child: SessionSummaryCard): TurnTotals {
+  return {
+    input: child.inputTokens, output: child.outputTokens,
+    cacheRead: child.cacheReadTokens, cacheWrite: child.cacheCreateTokens,
+    cost: calcSessionCost(child, 'token').totalUsd, durationMs: child.durationMs,
+  }
+}
+
+// One spawned sub-agent, rendered as an expandable sub-branch beneath the turn that spawned it.
+// Collapsed: its type + 5-value footprint + a jump-to-session button. Expanded inline: its own
+// trace (loaded on demand via loadSessionDetail), so the sub-agent is BOTH inline-expandable AND
+// navigable to its own session (TRDD-TKN5VALS item 1).
+function SubAgentBranch({ child, sessIdx }: { child: SessionSummaryCard; sessIdx: number }) {
+  const [open, setOpen] = useState(false)
+  const timelines = sessionTimelines.value
+  const loaded = timelines[child.sessionId]
+  const totals = subAgentTotals(child)
+
+  useEffect(() => {
+    if (open && loaded === undefined && vscode) vscode.postMessage({ type: 'loadSessionDetail', sessionId: child.sessionId })
+  }, [child.sessionId, open])
+
+  const timeline = loaded ?? child.timeline ?? []
+  const steps: Step[] = timeline.map(entry => ({ entry, offsetMs: 0, durationMs: entry.durationMs || 0 }))
+  const label = child.userRequest?.slice(0, 80) || (child.initiator === 'agent' ? 'sub-agent' : 'session')
+
+  return (
+    <div class="wf-turn-group" style="border-left:2px solid var(--vscode-charts-orange,#e2a03f);margin-left:6px">
+      <div class="wf-row wf-turn-row" onClick={() => setOpen(v => !v)}>
+        <div class="wf-label">
+          <span class="sw-chevron">{open ? '▼' : '▶'}</span>
+          <span class="wf-type-badge" style="background:var(--vscode-charts-orange,#e2a03f);color:#000" title="spawned sub-agent">↳ sub-agent</span>
+          <span style="display:inline-flex;flex-direction:column;min-width:0">
+            <span class="wf-name" title={label}>{label}</span>
+            <FiveValues t={totals} />
+          </span>
+        </div>
+        <div class="wf-bar-area" />
+        <div class="wf-info" style="display:flex;gap:6px;align-items:center;justify-content:flex-end">
+          <span style="color:var(--muted);font-size:9px">{child.model}</span>
+          <button
+            onClick={e => { e.stopPropagation(); focusedSessionId.value = child.sessionId; setOpen(true) }}
+            style="padding:1px 6px;font-size:9px;cursor:pointer;border-radius:3px;border:1px solid var(--border);background:transparent;color:var(--vscode-textLink-foreground,#4fc3f7)"
+            title="focus this sub-agent session">open →</button>
+        </div>
+      </div>
+      {open && (
+        <div class="wf-turn-children">
+          {steps.length > 0
+            ? <TimelineWaterfall steps={steps} sessionDur={child.durationMs || 1} sessionModel={child.model ?? ''} sessIdx={sessIdx} />
+            : <div style="padding:8px 10px;font-size:10px;color:var(--muted)">Sub-agent has no separate transcript — Claude Code records only its final footprint ({formatCompact(totals.input + totals.output + totals.cacheRead + totals.cacheWrite)} tokens across {child.totalToolCalls} tool calls) in the parent.</div>}
         </div>
       )}
     </div>
@@ -513,8 +574,9 @@ function TurnGroup({ turn, tSteps, sessIdx, sessionDur, sessionModel, metric, ma
 // keeps the chronological waterfall and its ruler. Grouped by turn it is a session → turn → step
 // tree. Metric/sort/group are shared signals (P2.1) so every open trace agrees and the toggle
 // lives in one sticky place. Used by the Sessions-detail Trace sub-tab.
-export function TimelineWaterfall({ steps, sessionDur, sessionModel, sessIdx = 0, highlightSpanId }: {
+export function TimelineWaterfall({ steps, sessionDur, sessionModel, sessIdx = 0, highlightSpanId, subAgents }: {
   steps: Step[]; sessionDur: number; sessionModel: string; sessIdx?: number; highlightSpanId?: string
+  subAgents?: SessionSummaryCard[]
 }) {
   const metric = timelineMetric.value
   const sortByValue = timelineSortByValue.value
@@ -552,6 +614,19 @@ export function TimelineWaterfall({ steps, sessionDur, sessionModel, sessIdx = 0
     turnGroups.sort((a, b) => (metric !== 'time' && sortByValue) ? b.agg - a.agg : a.turn - b.turn)
   }
   const maxTurnMetric = Math.max(0, ...turnGroups.map(g => g.agg))
+
+  // Sub-agents spawned by this session nest under the turn that spawned them (spawnedByTurn). Any
+  // whose spawn turn isn't among the rendered turns (or in flat mode) are shown after the list so
+  // none are lost.
+  const subsByTurn = new Map<number, SessionSummaryCard[]>()
+  for (const c of subAgents ?? []) {
+    const t = c.spawnedByTurn ?? -1
+    const arr = subsByTurn.get(t) ?? []
+    arr.push(c)
+    subsByTurn.set(t, arr)
+  }
+  const renderedTurns = new Set(turnGroups.map(g => g.turn))
+  const orphanSubs = (subAgents ?? []).filter(c => !(groupByTurn && hasTurns) || !renderedTurns.has(c.spawnedByTurn ?? -1))
 
   const mBtn = (m: { k: TimelineMetric; label: string }) => (
     <button
@@ -618,7 +693,8 @@ export function TimelineWaterfall({ steps, sessionDur, sessionModel, sessIdx = 0
           ? turnGroups.map(g => (
               <TurnGroup key={g.turn} turn={g.turn} tSteps={g.tSteps} sessIdx={sessIdx}
                 sessionDur={sessionDur} sessionModel={sessionModel} metric={metric}
-                maxStepMetric={maxMetric} maxTurnMetric={maxTurnMetric} highlightSpanId={highlightSpanId} />
+                maxStepMetric={maxMetric} maxTurnMetric={maxTurnMetric} highlightSpanId={highlightSpanId}
+                subAgents={subsByTurn.get(g.turn)} />
             ))
           : ordered.map(({ step, i }) => (
               <StepRow key={step.entry.spanId + i} step={step} idx={i} sessIdx={sessIdx}
@@ -626,6 +702,12 @@ export function TimelineWaterfall({ steps, sessionDur, sessionModel, sessIdx = 0
                 highlightSpanId={highlightSpanId} />
             ))
       }
+      {orphanSubs.length > 0 && (
+        <div class="wf-turn-children">
+          <div style="font-size:9px;color:var(--muted);padding:2px 0 2px 6px">Sub-agents</div>
+          {orphanSubs.map(c => <SubAgentBranch key={c.sessionId} child={c} sessIdx={sessIdx} />)}
+        </div>
+      )}
     </div>
   )
 }
@@ -676,6 +758,12 @@ function SessionBlock({ sess, sessIdx, sessNum, totalCount, isFirst }: {
   const errorCount = sess.errors || 0
   const outcomeLabel = sess.outcome === 'text_response' ? 'Responded' : sess.outcome === 'tool_calls' ? 'Tool calls' : null
 
+  // Sub-agent sessions this one spawned (Claude Task/Agent). Rolled up on the header and nested
+  // under their spawning turn inside the waterfall (TRDD-TKN5VALS item 1).
+  const children = (sessionSummary.value?.sessions ?? []).filter(s => s.parentSessionId === sess.sessionId && s.sessionId !== sess.sessionId)
+  const childTok = children.reduce((n, c) => n + c.inputTokens + c.outputTokens + c.cacheReadTokens + c.cacheCreateTokens, 0)
+  const childCost = children.reduce((n, c) => n + calcSessionCost(c, 'token').totalUsd, 0)
+
   return (
     <div id={`trace-session-${sess.sessionId}`} class="wf-trace-group" style={isFocused ? 'outline:2px solid var(--vscode-focusBorder,#007fd4);border-radius:4px;outline-offset:1px' : ''}>
       <div class="wf-trace-header" onClick={toggle}>
@@ -696,6 +784,11 @@ function SessionBlock({ sess, sessIdx, sessNum, totalCount, isFirst }: {
         </span>
         <span class="wf-trace-stats">
           {steps.length} steps · {formatMs(sessionDur)} · {sess.model}
+          {children.length > 0 && (
+            <span style="color:var(--vscode-charts-orange,#e2a03f)" title="sub-agent tokens rolled up (spawned Task/Agent sessions)">
+              {' · '}↳{children.length} sub-agent{children.length !== 1 ? 's' : ''} +{formatCompact(childTok)} tok{childCost > 0 ? ` +${fmtUsd(childCost)}` : ''}
+            </span>
+          )}
           {errorCount > 0 && <span class="err"> · {errorCount} errors</span>}
           {outcomeLabel && <>{' · '}{outcomeLabel}</>}
         </span>
@@ -711,7 +804,7 @@ function SessionBlock({ sess, sessIdx, sessNum, totalCount, isFirst }: {
           {isLoading ? (
             <div style="padding:12px 16px;font-size:11px;color:var(--muted)">Loading timeline…</div>
           ) : (
-            <TimelineWaterfall steps={steps} sessionDur={sessionDur} sessionModel={sess.model ?? ''} sessIdx={sessIdx} />
+            <TimelineWaterfall steps={steps} sessionDur={sessionDur} sessionModel={sess.model ?? ''} sessIdx={sessIdx} subAgents={children} />
           )}
         </div>
       )}
@@ -767,7 +860,12 @@ export function Traces() {
     return <div id="summary-traces-content"><div class="empty-state">{hasAny ? 'No sessions match the active filters.' : 'No sessions recorded yet.'}</div></div>
   }
 
-  const sessionsToShow = [...base].reverse()
+  // Sub-agent child sessions render nested under their spawning turn, so drop them from the
+  // top-level list when their parent is also shown (avoids listing them twice). A child whose
+  // parent is filtered out stays at top level so it is never lost (TRDD-TKN5VALS item 1).
+  const shownIds = new Set(base.map(s => s.sessionId))
+  const roots = base.filter(s => !s.parentSessionId || !shownIds.has(s.parentSessionId))
+  const sessionsToShow = [...roots].reverse()
   const totalLlmCalls = sessionsToShow.reduce((s, sess) => s + sess.totalLlmCalls, 0)
   const totalToolCalls = sessionsToShow.reduce((s, sess) => s + sess.totalToolCalls, 0)
   const totalTokens = sessionsToShow.reduce((s, sess) => s + sess.inputTokens + sess.outputTokens, 0)

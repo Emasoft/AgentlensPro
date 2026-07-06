@@ -100,6 +100,13 @@ function applyMigrations(db: SqlDatabase): void {
   if (!colNames.includes('files_written')) {
     db.run("ALTER TABLE sessions ADD COLUMN files_written TEXT NOT NULL DEFAULT '[]'")
   }
+  // Sub-agent linkage (TRDD-TKN5VALS): child→parent SESSION id + the parent turn that spawned it.
+  if (!colNames.includes('parent_session_id')) {
+    db.run('ALTER TABLE sessions ADD COLUMN parent_session_id TEXT')
+  }
+  if (!colNames.includes('spawned_by_turn')) {
+    db.run('ALTER TABLE sessions ADD COLUMN spawned_by_turn INTEGER')
+  }
 
   // timeline_entries cache token columns
   const teCols = db.exec('PRAGMA table_info(timeline_entries)')

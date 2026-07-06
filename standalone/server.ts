@@ -121,8 +121,9 @@ const mcpHttpServer = startMcpHttpServer({
 function runLogScan() {
   const results = logReader.scan()
   let changed = false
-  for (const { card } of results) {
+  for (const { card, childCards } of results) {
     logSessions.set(card.sessionId, card)
+    for (const child of childCards ?? []) logSessions.set(child.sessionId, child)
     changed = true
   }
   if (changed) pushUpdate()
@@ -198,6 +199,7 @@ async function startLogIngestion() {
       const result = logReader.parseFile(file.filePath, file.agentKey)
       if (result) {
         logSessions.set(result.card.sessionId, result.card)
+        for (const child of result.childCards ?? []) logSessions.set(child.sessionId, child)
         countByKey.set(file.agentKey, (countByKey.get(file.agentKey) ?? 0) + 1)
       }
     } catch { /* skip bad file */ }
