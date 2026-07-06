@@ -47,6 +47,35 @@ export interface SessionSummaryCard {
   peakContextPerTurn?: number   // max single-turn (input + cacheRead + cacheCreate); undefined for single-turn sessions
   filesWritten: string[]        // files fully written (Write / create_file tools); subset of filesChanged
   fileOps?: FileOpSummary[]     // per-file read/write/edit byte volumes (Claude log sessions); see FileOpSummary
+  // AUTHORITATIVE live usage from the Claude Code statusline (P7). Populated by StatuslineUsageReader
+  // when this session wrote to the shared statusline-usage.jsonl. Carries the exact context-window
+  // occupancy + used% + cumulative cost straight from the API response CC embeds (no server query, no
+  // pricing-table estimate). The transcript .jsonl parser stays the source for cumulative token buckets
+  // and per-source composition drill-down; these numbers OVERRIDE context size + cost only.
+  statusline?: StatuslineUsageAgg
+}
+
+/** Per-session aggregate of the statusline usage log — the authoritative, rate-limit-free live view
+ *  of one Claude Code session's context window + cost. `last*` fields are the most recent turn's exact
+ *  buckets (current_usage from the API); `peakContextTokens` is the max context occupancy observed
+ *  (each sample exact); `totalCostUsd` is Claude Code's own cumulative session cost. Built by
+ *  StatuslineUsageReader.overlay() from the shared statusline-usage.jsonl. */
+export interface StatuslineUsageAgg {
+  sessionId: string
+  projectDir: string
+  model: string
+  lastInputTokens: number        // current_usage.input_tokens of the latest logged turn
+  lastOutputTokens: number       // current_usage.output_tokens
+  lastCacheCreateTokens: number  // current_usage.cache_creation_input_tokens
+  lastCacheReadTokens: number    // current_usage.cache_read_input_tokens
+  lastTotalInputTokens: number   // context_window.total_input_tokens (current context occupancy)
+  lastTotalOutputTokens: number  // context_window.total_output_tokens
+  contextWindowSize: number      // context_window.context_window_size (the window cap)
+  usedPercentage: number         // context_window.used_percentage (exact fill %, not an estimate)
+  totalCostUsd: number           // cost.total_cost_usd (cumulative session cost — authoritative)
+  peakContextTokens: number      // max total_input_tokens across all sampled turns
+  samples: number                // how many statusline lines were aggregated for this session
+  lastTs: number                 // epoch seconds of the most recent line
 }
 
 /** Per-file I/O volume for one session: how many bytes were read / written / edited for

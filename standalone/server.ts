@@ -18,6 +18,7 @@ import { autoConfigureClaudeCode, autoConfigureCodex, autoConfigureCopilotStanda
 import { classifyOtlpPayload } from '../src/otlpParser'
 import { startMcpHttpServer } from '../src/mcpServer'
 import { LogReader, type OpenCodeSqlFactory } from '../src/logReader'
+import { StatuslineUsageReader } from '../src/statuslineUsage'
 import { buildContextComposition } from '../src/contextComposition'
 import { generateSuggestions } from '../src/instructionAdvisor'
 import { detectInstructionFiles, appendSuggestion } from '../src/instructionFiles'
@@ -123,6 +124,9 @@ function buildImportCardStandalone(raw: Record<string, unknown>): SessionSummary
 }
 
 let logReader = new LogReader()
+// P7: overlays authoritative context size + cost from the Claude Code statusline usage log onto each
+// card before it is served. No-op for sessions/agents that wrote no statusline line.
+const statuslineReader = new StatuslineUsageReader()
 
 // ── MCP server ────────────────────────────────────────────────────────────────
 
@@ -143,6 +147,7 @@ function runLogScan() {
   const results = logReader.scan()
   let changed = false
   for (const { card, childCards } of results) {
+    statuslineReader.overlay(card)
     logSessions.set(card.sessionId, card)
     for (const child of childCards ?? []) logSessions.set(child.sessionId, child)
     changed = true
@@ -219,6 +224,7 @@ async function startLogIngestion() {
     try {
       const result = logReader.parseFile(file.filePath, file.agentKey)
       if (result) {
+        statuslineReader.overlay(result.card)
         logSessions.set(result.card.sessionId, result.card)
         for (const child of result.childCards ?? []) logSessions.set(child.sessionId, child)
         countByKey.set(file.agentKey, (countByKey.get(file.agentKey) ?? 0) + 1)

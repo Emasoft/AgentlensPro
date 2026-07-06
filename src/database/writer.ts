@@ -149,15 +149,21 @@ export class DatabaseWriter {
   }
 
   private _writeSessionRow(card: SessionSummaryCard, workspace: string): void {
-    // card.inputTokens is now the RAW uncached input (was totalContext); the four buckets
-    // are already disjoint, so bill each at its own rate with no reconstruction subtraction.
-    const costUsd = calcTokenCostUsd(
-      card.inputTokens,
-      card.cacheReadTokens,
-      card.cacheCreateTokens,
-      card.outputTokens,
-      card.model,
-    )
+    // Cost precedence (P7): Claude Code's own cumulative session cost from the statusline is
+    // authoritative (it comes straight from the API, no pricing-table estimate) — use it when the
+    // statusline reported a positive total for this session. Otherwise fall back to computing cost
+    // from the disjoint token buckets. card.inputTokens is the RAW uncached input (was totalContext);
+    // the four buckets are already disjoint, so bill each at its own rate with no subtraction.
+    const authoritativeCost = card.statusline?.totalCostUsd
+    const costUsd = (typeof authoritativeCost === 'number' && authoritativeCost > 0)
+      ? authoritativeCost
+      : calcTokenCostUsd(
+          card.inputTokens,
+          card.cacheReadTokens,
+          card.cacheCreateTokens,
+          card.outputTokens,
+          card.model,
+        )
     this.db.run(
       `INSERT OR REPLACE INTO sessions (
         session_id, trace_id, source, workspace, project_path, model,

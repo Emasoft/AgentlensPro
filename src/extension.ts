@@ -16,6 +16,7 @@ import { runRetention } from './database/retention'
 import { SessionRepository } from './sessionRepository'
 import { summarizeSpans } from './spanSummarizer'
 import { LogReader } from './logReader'
+import { StatuslineUsageReader } from './statuslineUsage'
 import { detectLoopSignals } from './loopDetector'
 import { startMcpHttpServer } from './mcpServer'
 import { buildContextComposition } from './contextComposition'
@@ -217,6 +218,9 @@ export async function activate(context: vscode.ExtensionContext) {
   if (enableLogIngestion && writer) {
     logReader = new LogReader({ log: (msg) => outputChannel!.appendLine(msg), sqlFactory: agentLensDb?.sqlFactory })
     const lr = logReader  // non-null alias for use inside closures
+    // P7: overlays authoritative context size + cost from the Claude Code statusline usage log onto
+    // each card before it is persisted. No-op for sessions (or agents) that wrote no statusline line.
+    const statuslineReader = new StatuslineUsageReader()
     const fallbackWorkspace = () => vscode.workspace.workspaceFolders?.[0]?.uri.toString() ?? ''
 
     // Periodic incremental scan: only picks up files that have changed since last run.
@@ -226,6 +230,7 @@ export async function activate(context: vscode.ExtensionContext) {
       const ws = fallbackWorkspace()
       for (const { card, workspace, childCards } of results) {
         card.loopSignals = detectLoopSignals(card)
+        statuslineReader.overlay(card)
         writer!.enqueue(card, workspace || ws)
         // Sub-agent child sessions (Claude Task/Agent) are distinct navigable rows linked to the
         // parent via parentSessionId; persist them alongside the parent (TRDD-TKN5VALS item 1).
@@ -284,6 +289,7 @@ export async function activate(context: vscode.ExtensionContext) {
               const result = lr.parseFile(files[i].filePath, files[i].agentKey)
               if (result) {
                 result.card.loopSignals = detectLoopSignals(result.card)
+                statuslineReader.overlay(result.card)
                 writer!.enqueue(result.card, result.workspace || ws)
                 for (const child of result.childCards ?? []) writer!.enqueue(child, result.workspace || ws)
                 const dk = files[i].agentKey === 'copilot_vscode_json' ? 'copilot_vscode' : files[i].agentKey
