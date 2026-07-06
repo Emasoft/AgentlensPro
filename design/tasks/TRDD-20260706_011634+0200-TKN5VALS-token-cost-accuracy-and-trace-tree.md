@@ -62,31 +62,27 @@ sub-agent/fork sessions as expandable sub-branches.
   session link webview-side. Growth chart already has `{turn, tokens, spanId}`
   per-turn series (`media/src/tabs/SessionCharts.tsx:302`).
 
-**PROGRESS (2026-07-06 ~01:20, blocked by weekly rate limit → resets Jul 7 10am):**
-- ✓ Committed `4d28f24` (partial P1, check-types clean, cost VALUE unchanged):
-  - P1.1 done: `logReader.ts:1640` inputTokens = `acc.totalInput` (was totalContext);
-    `writer.ts:152` cost now bills 4 disjoint buckets directly (dropped the
-    `input−cacheRead−cacheCreate` reconstruction) — identical cost, de-inflated total.
-  - Type backbone done: optional `turn?:number` + `parentSessionId?:string` added to
-    BOTH `src/summarizers/summarizerTypes.ts` and `media/src/types.ts` (still need same
-    on `src/types.ts` — VERIFY it wasn't missed).
-- ✗ STILL TODO in P1:
-  - P1.2 webview headline: make displayed headline = input+output+cacheCreate (NEW
-    tokens); render cacheRead as its own labeled value. TRACE the media/src headline
-    field first (which field shows the current numbers) — not yet traced.
-  - P1.3 rollup LOGIC: populate `parentSessionId` (link sidechain/Task/fork child
-    sessions via sessionId/parentUuid at `logReader.ts:824`), roll child token buckets
-    into parent total, keep child distinct. Populate `turn` on TimelineEntry + payload.
-  - Schema/migration audit for the `input_tokens` column meaning change; audit all
-    readers (reader.ts, sessionRepository.ts, OTLP spanSummarizer/sessionStore).
-  - VERIFY: pnpm lint; the €36.27 two-session-window reconciliation (this session +
-    ANIME2SVG local logs, 00:39→01:17) as the real-world acceptance check.
+**PROGRESS (2026-07-06, UPDATED post-resume ~ current session):**
+- ✓ **P1 COMPLETE** — committed across `4d28f24`, `a98f480`, `9a672fa`. `pnpm run
+  check-types` (src + media) is CLEAN on the current tree. Specifically:
+  - P1.1: de-inflate stored `input_tokens` (raw uncached input only); `writer.ts`
+    cost bills 4 disjoint buckets directly. Cost value unchanged, total de-inflated.
+  - P1.2: `media/src/sessionMetrics.ts` bills raw input directly (a98f480).
+  - P1.3: sub-agent/worktree/fleet child transcripts linked to parent project
+    (9a672fa) — `parentSessionId` backbone wired extension-side.
+  - Type backbone (`turn?`, `parentSessionId?`) present in summarizerTypes + types.
+- ✗ **P2 NOT STARTED** (verified: no `media/src/tabs/ContextTab.tsx`; no `turn`/
+  `parentSessionId` usage in `media/src/tabs/Traces.tsx`). All of P2.1 (sticky
+  headers), P2.2 (4-level 5-value tree), P2.3 (Context tab + sub-branches) remain.
+- ✗ **P3 NOT STARTED** (context-composition tracer; heavy, explicitly after P2).
 
-**NEXT ACTION:** On resume, finish P1.2 + P1.3 + audits above, then run the €36.27
-reconciliation, then commit as the completing P1 commit. Then start P2 (default the
-P2 UI agent to SONNET per user, add the per-session-vs-account cost note).
+**NEXT ACTION:** Implement P2 in the webview (P2.1→P2.2→P2.3), verify
+check-types+lint clean + drive dashboard headless, commit `feat(dashboard): …`.
+Then P3. Delegated to a fresh-context agent to keep the orchestrator thin.
 
-**SUPERSEDED — do NOT carry forward:** none yet.
+**SUPERSEDED — do NOT carry forward:** the older "STILL TODO in P1" list (P1.2/P1.3
+were open at 01:20) — P1 is now fully committed and typecheck-clean. Line-number
+refs in ROOT CAUSES (e.g. `logReader.ts:1634`) are pre-P1-fix and have shifted.
 
 **Durable artifacts to read before acting:**
 - reports/token-accounting/20260706_011126+0200-investigation.md
