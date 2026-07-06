@@ -351,7 +351,7 @@ function SessionDetail({ sess }: { sess: SessionSummaryCard }) {
                   : <div class="empty-state" style="padding:12px 0">No trace data for this session</div>)
               : (
                 <div class="waterfall">
-                  <TimelineWaterfall steps={steps} sessionDur={sessionDur} sessionModel={sess.model ?? ''} highlightSpanId={highlightSpanId} />
+                  <TimelineWaterfall steps={steps} sessionDur={sessionDur} sessionModel={sess.model ?? ''} highlightSpanId={highlightSpanId} sessionId={sess.sessionId} />
                 </div>
               )
             }
