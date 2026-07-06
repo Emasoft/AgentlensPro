@@ -719,6 +719,32 @@ body {
 .wf-detail-val {
   word-break: break-all;
 }
+.wf-sticky-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--vscode-editor-background, var(--bg));
+  padding-top: 4px;
+  margin-bottom: 2px;
+  border-bottom: 1px solid var(--border);
+}
+.wf-turn-group {
+  border-bottom: 1px solid var(--border);
+}
+.wf-turn-group:last-child {
+  border-bottom: none;
+}
+.wf-turn-row {
+  background: var(--hover);
+  min-height: 32px;
+}
+.wf-turn-row:hover {
+  opacity: 0.92;
+}
+.wf-turn-children {
+  border-left: 2px solid var(--border);
+  margin-left: 8px;
+}
 
 /* media/src/styles/summaries.css */
 .sw-detail {
