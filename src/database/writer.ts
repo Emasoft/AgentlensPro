@@ -166,8 +166,9 @@ export class DatabaseWriter {
         total_tool_calls, total_llm_calls, errors, outcome,
         is_sidechain, speed, user_request, tool_counts, loop_signals,
         files_read, files_changed, files_written, files_searched, files_changed_note, cost_usd,
-        data_source, parent_session_id, spawned_by_turn
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        data_source, parent_session_id, spawned_by_turn, peak_context_per_turn,
+        spawn_kind, spawn_model_override, spawn_isolation
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
         card.sessionId,
         card.traceId,
@@ -201,6 +202,10 @@ export class DatabaseWriter {
         card.dataSource,
         card.parentSessionId ?? null,
         card.spawnedByTurn ?? null,
+        card.peakContextPerTurn ?? null,
+        card.spawnKind ?? null,
+        card.spawnModelOverride ?? null,
+        card.spawnIsolation ?? null,
       ]
     )
   }

@@ -1440,6 +1440,12 @@ interface ClaudeAccum {
   // NO separate .jsonl, so this is the only linkage source). Persists across scans so a spawn and
   // its completion split over a scan boundary still correlate. See _buildSubAgentCards.
   subAgents: Map<string, SubAgentRec>
+  // In-flight tool_use id → the timeline entry created for that tool call. A tool's FULL output
+  // arrives in a later tool_result (matched by tool_use_id), so this bridges the gap: when the
+  // result lands we attach its full text to the entry as `fullResult` (persisted as a blob →
+  // loadBlob('full-result')). Persists across scans so a call/result split over a scan boundary
+  // still correlates. Only tool_use ids that DON'T yet carry a resolved result stay here.
+  pendingToolResults: Map<string, TimelineEntry>
   card: CardAccum
 }
 
@@ -1455,6 +1461,12 @@ interface SubAgentRec {
   agentId?: string
   model?: string
   agentType?: string
+  // Spawn taxonomy — derived from the Task/Agent/Workflow tool_use INPUT (not the result), so the
+  // trace can show the cache economics of HOW the child was spawned (fork reads the parent cache;
+  // fresh/worktree are cache-cold). See _recordSubAgentSpawn.
+  spawnKind?: 'fresh' | 'fork' | 'worktree' | 'fleet'
+  spawnModelOverride?: string   // `model` set in the tool_use input = a separate model cache
+  spawnIsolation?: string       // `isolation` set in the tool_use input (e.g. "worktree")
   input: number
   output: number
   cacheRead: number
@@ -1468,7 +1480,7 @@ interface SubAgentRec {
 }
 
 function _newClaudeAccum(): ClaudeAccum {
-  return { workspace: '', model: '', firstTimestamp: '', lastTimestamp: '', hasFastMode: false, idx: 0, pendingReads: new Map<string, string>(), seenMessageIds: new Set<string>(), subAgents: new Map<string, SubAgentRec>(), card: _emptyCardAccum('user') }
+  return { workspace: '', model: '', firstTimestamp: '', lastTimestamp: '', hasFastMode: false, idx: 0, pendingReads: new Map<string, string>(), seenMessageIds: new Set<string>(), subAgents: new Map<string, SubAgentRec>(), pendingToolResults: new Map<string, TimelineEntry>(), card: _emptyCardAccum('user') }
 }
 
 // UTF-8 byte length of a value that may or may not be a string (0 for non-strings).
@@ -1496,6 +1508,24 @@ function _toolResultBytes(content: unknown): number {
   return 0
 }
 
+// Cap on the full tool_result text we retain per entry. The whole result already sits in memory as
+// one streamed JSONL line during parse; capping the RETAINED copy keeps a pathological multi-MB tool
+// output (e.g. an unbounded Read) from bloating the in-memory card and its blob. The writer persists
+// this as `${spanId}-full-result.txt` (loadBlob('full-result')); the composition drill-down reads it.
+const MAX_TOOL_RESULT_CHARS = 500_000
+
+// The FULL text of a tool_result: content is either a string or an array of {text} blocks.
+function _toolResultText(content: unknown): string {
+  if (typeof content === 'string') return content.slice(0, MAX_TOOL_RESULT_CHARS)
+  if (Array.isArray(content)) {
+    const joined = (content as Array<Record<string, unknown>>)
+      .map(b => (typeof b['text'] === 'string' ? (b['text'] as string) : ''))
+      .join('')
+    return joined.slice(0, MAX_TOOL_RESULT_CHARS)
+  }
+  return ''
+}
+
 // Accumulate one file operation's byte volume into the per-path map (lazily created).
 function _addFileOp(card: CardAccum, filePath: string, op: 'read' | 'write' | 'edit', bytes: number): void {
   const ops = card.fileOps ?? (card.fileOps = new Map<string, FileOpAccum>())
@@ -1506,14 +1536,27 @@ function _addFileOp(card: CardAccum, filePath: string, op: 'read' | 'write' | 'e
   else                     { fo.editBytes  += bytes; fo.editCount++  }
 }
 
-// Register a Task/Agent tool_use as a pending sub-agent, keyed by its tool_use id.
+// Register a Task/Agent/Workflow tool_use as a pending sub-agent, keyed by its tool_use id. The
+// SPAWN KIND is derived here from the tool_use INPUT: Workflow → fleet (many cold children);
+// subagent_type "fork" → fork (inherits + reads the parent cache, warm); isolation "worktree" →
+// worktree (separate cwd → isolated cache scope, cold); otherwise fresh (own prompt+tools, cold).
 function _recordSubAgentSpawn(a: ClaudeAccum, block: Record<string, unknown>, inp: Record<string, unknown>, ts: string | undefined): void {
   const tid = block['id'] as string | undefined
   if (!tid || a.subAgents.has(tid)) return
+  const toolName = block['name'] as string | undefined
+  const subagentType = inp['subagent_type'] as string | undefined
+  const isolation = typeof inp['isolation'] === 'string' ? (inp['isolation'] as string) : undefined
+  const modelOverride = typeof inp['model'] === 'string' ? (inp['model'] as string) : undefined
+  let spawnKind: SubAgentRec['spawnKind']
+  if (toolName === 'Workflow') spawnKind = 'fleet'
+  else if (subagentType === 'fork') spawnKind = 'fork'
+  else if (isolation === 'worktree') spawnKind = 'worktree'
+  else spawnKind = 'fresh'
   a.subAgents.set(tid, {
     toolUseId: tid, spawnTurn: a.card.turns, spawnTs: ts ?? '',
-    requestedType: (inp['subagent_type'] ?? inp['description']) as string | undefined,
+    requestedType: (subagentType ?? inp['description']) as string | undefined,
     prompt: typeof inp['prompt'] === 'string' ? inp['prompt'] : undefined,
+    spawnKind, spawnModelOverride: modelOverride, spawnIsolation: isolation,
     input: 0, output: 0, cacheRead: 0, cacheCreate: 0,
     totalTokens: 0, toolUseCount: 0, durationMs: 0, done: false,
   })
@@ -1540,6 +1583,29 @@ function _completeSubAgent(sub: SubAgentRec, tur: Record<string, unknown>, resul
   sub.toolStats    = tur['toolStats'] as Record<string, number> | undefined
   sub.finalText    = _extractTextContent(resultContent)?.slice(0, 4000)
   sub.done = true
+}
+
+// Resolve one tool_result block against the pending maps: Read → per-file read bytes; Task/Agent →
+// sub-agent footprint; any tool → attach its FULL output to the tool's timeline entry (persisted as
+// a blob so the composition drill-down can loadBlob('full-result')). Each pending entry is consumed
+// (deleted) so the maps stay bounded to only unresolved calls across a long incremental parse.
+function _resolveToolResult(a: ClaudeAccum, id: string, block: Record<string, unknown>, toolUseResult: Record<string, unknown> | undefined): void {
+  const fp = a.pendingReads.get(id)
+  if (fp) {
+    a.pendingReads.delete(id)
+    _addFileOp(a.card, fp, 'read', _toolResultBytes(block['content']))
+  }
+  const sub = a.subAgents.get(id)
+  if (sub && toolUseResult) _completeSubAgent(sub, toolUseResult, block['content'])
+  const toolEntry = a.pendingToolResults.get(id)
+  if (toolEntry) {
+    a.pendingToolResults.delete(id)
+    const full = _toolResultText(block['content'])
+    if (full) {
+      toolEntry.fullResult = full
+      if (!toolEntry.resultSummary) toolEntry.resultSummary = full.slice(0, 200)
+    }
+  }
 }
 
 // Synthesize one child SessionSummaryCard per completed sub-agent. Each is a distinct, navigable
@@ -1572,6 +1638,9 @@ function _buildSubAgentCards(parentSessionId: string, a: ClaudeAccum): SessionSu
       initiator: 'agent',
       parentSessionId,
       spawnedByTurn: sub.spawnTurn,
+      spawnKind: sub.spawnKind,
+      spawnModelOverride: sub.spawnModelOverride,
+      spawnIsolation: sub.spawnIsolation,
       workspace: a.workspace,
       userRequest: (sub.prompt ?? sub.agentType ?? 'sub-agent').slice(0, 500),
       model: sub.model || a.model || 'claude',
@@ -1628,13 +1697,7 @@ function _claudeOnEntry(a: ClaudeAccum, entry: Record<string, unknown>): void {
         if (block['type'] !== 'tool_result') continue
         const id = block['tool_use_id'] as string | undefined
         if (!id) continue
-        const fp = a.pendingReads.get(id)
-        if (fp) {
-          a.pendingReads.delete(id)
-          _addFileOp(a.card, fp, 'read', _toolResultBytes(block['content']))
-        }
-        const sub = a.subAgents.get(id)
-        if (sub && toolUseResult) _completeSubAgent(sub, toolUseResult, block['content'])
+        _resolveToolResult(a, id, block, toolUseResult)
       }
     }
     // A user message precedes the assistant turn it triggers, so it belongs to the NEXT turn
@@ -1680,13 +1743,18 @@ function _claudeOnEntry(a: ClaudeAccum, entry: Record<string, unknown>): void {
     }
     const content = (msg?.['content'] as Array<Record<string, unknown>>) ?? []
     let hasToolCall = false
+    // tool_use ids emitted in THIS row → mapped to the row's timeline entry (pushed below) so the
+    // matching tool_result can attach its full output. Cleared per row.
+    const rowToolUseIds: string[] = []
     for (const block of content) {
       if (block['type'] === 'tool_use' && block['name']) {
         hasToolCall = true; a.card.totalToolCalls++
         const name = block['name'] as string
         a.card.toolCounts[name] = (a.card.toolCounts[name] ?? 0) + 1
+        const blockId = block['id'] as string | undefined
+        if (blockId) rowToolUseIds.push(blockId)
         const inp = (block['input'] ?? {}) as Record<string, unknown>
-        if (name === 'Task' || name === 'Agent') _recordSubAgentSpawn(a, block, inp, ts)
+        if (name === 'Task' || name === 'Agent' || name === 'Workflow') _recordSubAgentSpawn(a, block, inp, ts)
         const fp  = String(inp['file_path'] ?? inp['filePath'] ?? inp['path'] ?? '')
         if (fp) {
           if (name === 'Read' || name === 'read_file') {
@@ -1722,6 +1790,14 @@ function _claudeOnEntry(a: ClaudeAccum, entry: Record<string, unknown>): void {
       cacheCreateTokens: isFirstRowOfMessage ? usage?.['cache_creation_input_tokens'] : undefined,
       durationMs: 0, isError: false, timestamp: ts ?? '', responseText,
     })
+    // Map this row's tool_use ids to the entry just pushed so the matching tool_result (in a later
+    // user row) can attach its full output. Claude writes one tool_use per row, so ids share this
+    // entry only in the rare multi-tool_use row — then the last result wins on fullResult, which is
+    // acceptable for the composition view.
+    if (rowToolUseIds.length > 0) {
+      const toolEntry = a.card.timeline[a.card.timeline.length - 1]
+      for (const tid of rowToolUseIds) a.pendingToolResults.set(tid, toolEntry)
+    }
     a.idx++
   }
 }

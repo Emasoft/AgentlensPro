@@ -13,6 +13,13 @@ export interface SessionSummaryCard {
   // 1-based turn of the PARENT at which this child was spawned (the Task/Agent tool_use turn).
   // Lets the trace tree render the sub-agent as a sub-branch beneath the exact spawning turn.
   spawnedByTurn?: number
+  // Spawn taxonomy for a sub-agent child (derived from the parent's Task/Agent/Workflow tool_use
+  // input) — drives the spawn-kind badge + cache-warmth hint in the trace. fork = warm (reads the
+  // parent cache); fresh/worktree/fleet = cold. spawnModelOverride/spawnIsolation carry the raw
+  // `model`/`isolation` the spawn requested. Set only on child (sub-agent) cards.
+  spawnKind?: 'fresh' | 'fork' | 'worktree' | 'fleet'
+  spawnModelOverride?: string
+  spawnIsolation?: string
   workspace: string
   projectPath?: string
   userRequest: string
@@ -116,6 +123,59 @@ export interface ContextComposition {
   turns: ContextCompositionTurn[]
   estimated: true            // marker: token figures here are approximate
   truncated: boolean         // true if the session was larger than the parse cap
+}
+
+// ── Cache-break diagnosis (P4, TRDD-TKN5VALS) ─────────────────────────────────
+// The prompt cache is a PREFIX cache: turn N reuses turn N-1 only up to the first byte that differs;
+// everything after is re-billed as cache_creation (write rate) instead of cache_read (~10% of input).
+// The classifier reconstructs each turn's ordered context blocks (ContextSource[]), diffs vs N-1,
+// finds the FIRST divergent block = the break point, and labels the cause. Sizing is an ESTIMATE
+// (the turn's cache_creation attributed to the break); the taxonomy pinpoints the CAUSE.
+export type CacheBreakCause =
+  | 'TOOLS_CHANGED'            // a tool added/removed/param-changed (the #1 cause)
+  | 'TOOLS_REORDERED'         // same tool set, different order
+  | 'SYSTEM_PROMPT_TIMESTAMP' // a moving clock/timestamp in the otherwise-static system prompt
+  | 'MODEL_SWITCHED'          // model changed mid-session (caches are model-specific)
+  | 'EFFORT_CHANGED'          // reasoning-effort level changed
+  | 'FAST_MODE'               // fast mode toggled on
+  | 'MCP_SERVER_TOGGLE'       // an MCP server whose tools load into the prefix connected/disconnected
+  | 'PLUGIN_TOGGLE'           // a plugin providing non-deferred MCP tools toggled
+  | 'TOOL_DENY'               // an entire tool denied
+  | 'INJECTED_BLOCK_CHANGED'  // a supposedly-stable injected file/rule/memory or per-turn hook mutated
+  | 'COMPACTION'              // conversation compaction rebuilt the message layer
+  | 'UPGRADE'                 // Claude Code upgraded
+  | 'RESUME_AFTER_UPGRADE'    // a session resumed after an upgrade (full re-read)
+  | 'IDLE_TTL_EXPIRY'         // a >5-min gap let the cache entry expire (one-time, not structural)
+  | 'UNKNOWN'                 // a break whose cause the diff couldn't localise
+
+export interface CacheBreakTurn {
+  turn: number
+  broke: boolean              // did an AVOIDABLE break occur this turn (vs expected conversation growth)
+  cause: CacheBreakCause
+  breakSourceLabel?: string   // the first divergent block's label (e.g. "hook: janitor-memory")
+  breakSourceKind?: string    // its kind (hook | toolCatalog | file | …)
+  wastedTokens: number        // cache_creation tokens attributed to the avoidable break (estimate)
+  wastedCostUsd: number       // 0 unless rates were supplied to the analyzer
+  idleGapMs?: number          // inter-turn wall-clock gap (set when cause = IDLE_TTL_EXPIRY)
+  remediation?: string        // one-line fix hint for this cause
+}
+
+export interface CacheBreakOffender {
+  label: string
+  kind: string
+  cause: CacheBreakCause
+  occurrences: number         // how many turns this source broke the cache
+  wastedTokens: number        // cumulative across those turns
+  wastedCostUsd: number
+}
+
+export interface CacheBreakReport {
+  sessionId: string
+  turns: CacheBreakTurn[]         // per-turn break verdicts (turn 1 never "breaks" — nothing precedes it)
+  offenders: CacheBreakOffender[] // ranked heaviest-wasted-cost first
+  totalWastedTokens: number
+  totalWastedCostUsd: number
+  cacheHitRate: number            // cache_read / (cache_read + cache_create) across the session (0..1)
 }
 
 export interface EfficiencyReport {

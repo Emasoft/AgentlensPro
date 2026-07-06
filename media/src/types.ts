@@ -58,6 +58,11 @@ export interface SessionSummaryCard {
   parentSessionId?: string
   // 1-based turn of the parent at which this child was spawned (the Task/Agent tool_use turn).
   spawnedByTurn?: number
+  // Mirror of src/summarizers/summarizerTypes.ts — sub-agent spawn taxonomy (fork = cache-warm;
+  // fresh/worktree/fleet = cold) + the requested model/isolation. Set only on child cards.
+  spawnKind?: 'fresh' | 'fork' | 'worktree' | 'fleet'
+  spawnModelOverride?: string
+  spawnIsolation?: string
   workspace: string
   projectPath?: string
   userRequest: string
@@ -151,6 +156,56 @@ export interface ContextComposition {
   turns: ContextCompositionTurn[]
   estimated: true
   truncated: boolean
+}
+
+// Mirror of src/summarizers/summarizerTypes.ts — cache-break diagnosis (P4). A prefix cache breaks
+// at the first divergent block turn-to-turn; these carry the per-turn verdict + ranked offenders the
+// Cache tab / trace markers render. Sizing is an estimate; the cause taxonomy pinpoints WHY.
+export type CacheBreakCause =
+  | 'TOOLS_CHANGED'
+  | 'TOOLS_REORDERED'
+  | 'SYSTEM_PROMPT_TIMESTAMP'
+  | 'MODEL_SWITCHED'
+  | 'EFFORT_CHANGED'
+  | 'FAST_MODE'
+  | 'MCP_SERVER_TOGGLE'
+  | 'PLUGIN_TOGGLE'
+  | 'TOOL_DENY'
+  | 'INJECTED_BLOCK_CHANGED'
+  | 'COMPACTION'
+  | 'UPGRADE'
+  | 'RESUME_AFTER_UPGRADE'
+  | 'IDLE_TTL_EXPIRY'
+  | 'UNKNOWN'
+
+export interface CacheBreakTurn {
+  turn: number
+  broke: boolean
+  cause: CacheBreakCause
+  breakSourceLabel?: string
+  breakSourceKind?: string
+  wastedTokens: number
+  wastedCostUsd: number
+  idleGapMs?: number
+  remediation?: string
+}
+
+export interface CacheBreakOffender {
+  label: string
+  kind: string
+  cause: CacheBreakCause
+  occurrences: number
+  wastedTokens: number
+  wastedCostUsd: number
+}
+
+export interface CacheBreakReport {
+  sessionId: string
+  turns: CacheBreakTurn[]
+  offenders: CacheBreakOffender[]
+  totalWastedTokens: number
+  totalWastedCostUsd: number
+  cacheHitRate: number
 }
 
 export interface EfficiencyReport {

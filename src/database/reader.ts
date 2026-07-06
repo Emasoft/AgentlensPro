@@ -117,6 +117,10 @@ export class DatabaseReader {
         loopSignals:      this._parseJson(col(row, 'loop_signals') as string, []),
         parentSessionId:  (col(row, 'parent_session_id') as string | null) ?? undefined,
         spawnedByTurn:    (col(row, 'spawned_by_turn') as number | null) ?? undefined,
+        peakContextPerTurn: (col(row, 'peak_context_per_turn') as number | null) ?? undefined,
+        spawnKind:        (col(row, 'spawn_kind') as SessionSummaryCard['spawnKind'] | null) ?? undefined,
+        spawnModelOverride: (col(row, 'spawn_model_override') as string | null) ?? undefined,
+        spawnIsolation:   (col(row, 'spawn_isolation') as string | null) ?? undefined,
         timeline:         [],
         backgroundSpans:  [],
       } satisfies SessionSummaryCard
@@ -355,6 +359,10 @@ export class DatabaseReader {
         loopSignals:      this._parseJson(col(row, 'loop_signals') as string, []),
         parentSessionId:  (col(row, 'parent_session_id') as string | null) ?? undefined,
         spawnedByTurn:    (col(row, 'spawned_by_turn') as number | null) ?? undefined,
+        peakContextPerTurn: (col(row, 'peak_context_per_turn') as number | null) ?? undefined,
+        spawnKind:        (col(row, 'spawn_kind') as SessionSummaryCard['spawnKind'] | null) ?? undefined,
+        spawnModelOverride: (col(row, 'spawn_model_override') as string | null) ?? undefined,
+        spawnIsolation:   (col(row, 'spawn_isolation') as string | null) ?? undefined,
         timeline:         [],
         backgroundSpans:  [],
       } satisfies SessionSummaryCard

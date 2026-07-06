@@ -107,6 +107,22 @@ function applyMigrations(db: SqlDatabase): void {
   if (!colNames.includes('spawned_by_turn')) {
     db.run('ALTER TABLE sessions ADD COLUMN spawned_by_turn INTEGER')
   }
+  // Peak single-turn context occupancy (input + cacheRead + cacheCreate) — computed in ingestion but
+  // was lost on DB round-trip; persist it so the Context tab's growth ceiling survives re-open.
+  if (!colNames.includes('peak_context_per_turn')) {
+    db.run('ALTER TABLE sessions ADD COLUMN peak_context_per_turn INTEGER')
+  }
+  // Sub-agent spawn taxonomy (TRDD-TKN5VALS P4): how the child was spawned (fork/fresh/worktree/
+  // fleet) + the requested model/isolation, so the spawn-kind badge survives a DB round-trip.
+  if (!colNames.includes('spawn_kind')) {
+    db.run('ALTER TABLE sessions ADD COLUMN spawn_kind TEXT')
+  }
+  if (!colNames.includes('spawn_model_override')) {
+    db.run('ALTER TABLE sessions ADD COLUMN spawn_model_override TEXT')
+  }
+  if (!colNames.includes('spawn_isolation')) {
+    db.run('ALTER TABLE sessions ADD COLUMN spawn_isolation TEXT')
+  }
 
   // timeline_entries cache token columns
   const teCols = db.exec('PRAGMA table_info(timeline_entries)')
