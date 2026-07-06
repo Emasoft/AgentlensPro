@@ -1,9 +1,9 @@
 ---
 trdd-id: TKN5VALS
 title: Fix Claude token/cost accounting + 5-value expandable trace tree, sticky headers, Context tab
-column: dev
+column: testing
 created: 2026-07-06T01:16:34+0200
-updated: 2026-07-06T01:16:34+0200
+updated: 2026-07-06T08:52:00+0200
 current-owner: claude-opus-4-8
 assignee: claude-opus-4-8
 priority: 2
@@ -75,6 +75,29 @@ sub-agent/fork sessions as expandable sub-branches.
   `parentSessionId` usage in `media/src/tabs/Traces.tsx`). All of P2.1 (sticky
   headers), P2.2 (4-level 5-value tree), P2.3 (Context tab + sub-branches) remain.
 - ✗ **P3 NOT STARTED** (context-composition tracer; heavy, explicitly after P2).
+
+**PROGRESS (2026-07-06 08:52 — P2 done + P3 partial; column→testing):**
+- ✓ **Stage A backbone** (commit `1c5fef8`): `turn` (1-based, grouped by assistant
+  message.id) + per-turn cache-read/cache-created buckets on timeline entries in BOTH
+  `src/logReader.ts` (Claude log) and `src/summarizers/claude.ts` (OTEL); persisted via new
+  `timeline_entries.turn` column (schema + idempotent ALTER migration + writer + reader).
+- ✓ **P2.1 sticky headers** (commit `b9bf5f0`): metric/sort/group toggles hoisted to shared
+  signals in `state.ts`; toolbar `position:sticky` over the `.waterfall` scroll container.
+- ✓ **P2.2 turn tree** (commit `b9bf5f0`): `TimelineWaterfall` renders session→turn→step; each
+  turn sums children, shows all 5 values (cache-read vs cache-created distinct) + a metric bar;
+  sortable by time/value; graceful flat fallback when entries lack `turn`.
+- ✓ **P2.3 Context tab** (commit `1f62aa1`): new top-level tab — per-turn context-window growth
+  with turn numbers + composition drill-down (exact buckets + estimated content-level sources);
+  sub-agent nested sub-branches via `parentSessionId` (inert until linkage lands).
+- ✓ VERIFY: check-types (src+media), lint (0 err), esbuild (5 targets) all clean; driven
+  headless on 16457 real sessions — Context tab + sticky trace toolbar + 5-values-per-step
+  confirmed. Screenshots in `reports/screenshots/20260706_085101+0200-{context-tab,trace-5values}.png`.
+- ✗ **DEFERRED (checkpoint)**: (a) real sub-agent session→session linkage + token rollup +
+  navigable sub-branches — `parentSessionId` is a project slug, not a child→parent session id,
+  and is not persisted/shipped yet; (b) P3 full composition tracer (attachment tokenization,
+  system-prompt/CLAUDE.md/rule/memory/hook per-source breakdown, full tool output from `.jsonl`
+  sibling subfolders). Turn tree only groups for sessions ingested AFTER Stage A (old DB rows
+  have turn=NULL until a re-ingest). See `reports/trace-ui/20260706_085101+0200-P2P3-implementation.md`.
 
 **NEXT ACTION:** Implement P2 in the webview (P2.1→P2.2→P2.3), verify
 check-types+lint clean + drive dashboard headless, commit `feat(dashboard): …`.
