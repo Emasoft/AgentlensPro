@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "agentlens": {
+      "url": "http://localhost:4316/mcp"
+    }
+  }
+}
