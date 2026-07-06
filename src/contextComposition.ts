@@ -24,11 +24,27 @@ function sumFields(obj: Record<string, unknown>, keys: string[]): number {
   return n
 }
 
-// Classify one `attachment` entry into a (label, kind, bytes). Returns null for attachment shapes
-// that carry no meaningful injected content (pure deltas with counts only, etc.). The taxonomy is
-// derived from real logs: hook injections (by hookName), the skill catalog, tool/agent/mcp catalog
-// deltas, file reads, task reminders.
-function classifyAttachment(att: Record<string, unknown>): { label: string; kind: string; bytes: number } | null {
+// Hard cap on the excerpt text stored per source. P5 renders the ACTUAL injected bytes at a drill
+// leaf, but a huge session (thousands of turns × sources) must never ship an unbounded payload —
+// so only the first occurrence's leading EXCERPT_CAP chars are kept per source.
+const EXCERPT_CAP = 1200
+
+// The first string of `keys` on `obj` that is a non-empty string (for the content excerpt).
+function firstText(obj: Record<string, unknown>, keys: string[]): string {
+  for (const k of keys) { const v = obj[k]; if (typeof v === 'string' && v.length > 0) return v }
+  return ''
+}
+function joinedText(v: unknown): string {
+  if (Array.isArray(v)) return v.filter(s => typeof s === 'string').join('\n')
+  return typeof v === 'string' ? v : ''
+}
+
+// Classify one `attachment` entry into a (label, kind, bytes, text). `text` is the primary injected
+// content string used for the P5 drill-leaf excerpt. Returns null for attachment shapes that carry no
+// meaningful injected content (pure deltas with counts only, etc.). The taxonomy is derived from real
+// logs: hook injections (by hookName), the skill catalog, tool/agent/mcp catalog deltas, file reads,
+// task reminders.
+function classifyAttachment(att: Record<string, unknown>): { label: string; kind: string; bytes: number; text: string } | null {
   const t = String(att['type'] ?? '')
   const hookName = att['hookName'] ? String(att['hookName']) : undefined
   switch (t) {
@@ -38,29 +54,29 @@ function classifyAttachment(att: Record<string, unknown>): { label: string; kind
     case 'async_hook_response': {
       const bytes = sumFields(att, ['content', 'stdout', 'stderr', 'response'])
       if (bytes === 0) return null
-      return { label: `hook: ${hookName ?? 'unknown'}`, kind: 'hook', bytes }
+      return { label: `hook: ${hookName ?? 'unknown'}`, kind: 'hook', bytes, text: firstText(att, ['content', 'stdout', 'stderr', 'response']) }
     }
     case 'skill_listing':
-      return { label: 'skill catalog', kind: 'skill', bytes: utf8Len(att['content']) }
+      return { label: 'skill catalog', kind: 'skill', bytes: utf8Len(att['content']), text: firstText(att, ['content']) }
     case 'deferred_tools_delta':
-      return { label: 'tool catalog', kind: 'toolCatalog', bytes: joinedLen(att['addedLines']) }
+      return { label: 'tool catalog', kind: 'toolCatalog', bytes: joinedLen(att['addedLines']), text: joinedText(att['addedLines']) }
     case 'agent_listing_delta':
-      return { label: 'agent catalog', kind: 'agentCatalog', bytes: joinedLen(att['addedLines']) }
+      return { label: 'agent catalog', kind: 'agentCatalog', bytes: joinedLen(att['addedLines']), text: joinedText(att['addedLines']) }
     case 'mcp_instructions_delta':
-      return { label: 'mcp instructions', kind: 'mcp', bytes: joinedLen(att['addedBlocks']) + joinedLen(att['addedNames']) }
+      return { label: 'mcp instructions', kind: 'mcp', bytes: joinedLen(att['addedBlocks']) + joinedLen(att['addedNames']), text: joinedText(att['addedBlocks']) || joinedText(att['addedNames']) }
     case 'file':
     case 'edited_text_file':
     case 'compact_file_reference': {
       const name = (att['displayPath'] ?? att['filename'] ?? att['path'] ?? 'file') as string
       const bytes = sumFields(att, ['content', 'text'])
       if (bytes === 0) return null
-      return { label: `file: ${path.basename(name)}`, kind: 'file', bytes }
+      return { label: `file: ${path.basename(name)}`, kind: 'file', bytes, text: firstText(att, ['content', 'text']) }
     }
     case 'task_reminder':
-      return { label: 'task reminder', kind: 'reminder', bytes: utf8Len(att['content']) }
+      return { label: 'task reminder', kind: 'reminder', bytes: utf8Len(att['content']), text: firstText(att, ['content']) }
     case 'invoked_skills':
     case 'skill':
-      return { label: 'invoked skills', kind: 'skill', bytes: utf8Len(att['content']) }
+      return { label: 'invoked skills', kind: 'skill', bytes: utf8Len(att['content']), text: firstText(att, ['content']) }
     default:
       return null
   }
@@ -95,8 +111,8 @@ export async function buildContextComposition(sessionId: string): Promise<Contex
   const file = findSessionFile(sessionId)
   if (!file) return null
 
-  // turn → (source label → {kind, bytes, count})
-  const byTurn = new Map<number, Map<string, { kind: string; bytes: number; count: number }>>()
+  // turn → (source label → {kind, bytes, count, excerpt})
+  const byTurn = new Map<number, Map<string, { kind: string; bytes: number; count: number; excerpt: string }>>()
   const seenMessageIds = new Set<string>()
   let assistantTurns = 0
   let lines = 0
@@ -128,9 +144,12 @@ export async function buildContextComposition(sessionId: string): Promise<Contex
     const turn = assistantTurns + 1
     let sources = byTurn.get(turn)
     if (!sources) { sources = new Map(); byTurn.set(turn, sources) }
-    const cur = sources.get(c.label) ?? { kind: c.kind, bytes: 0, count: 0 }
+    const cur = sources.get(c.label) ?? { kind: c.kind, bytes: 0, count: 0, excerpt: '' }
     cur.bytes += c.bytes
     cur.count += 1
+    // Keep the FIRST occurrence's leading text as the drill-leaf excerpt (capped). Later occurrences
+    // only add to the byte/token total — one representative excerpt is enough to show the real content.
+    if (!cur.excerpt && c.text) cur.excerpt = c.text.slice(0, EXCERPT_CAP)
     sources.set(c.label, cur)
   }
   rl.close()
@@ -145,9 +164,10 @@ export async function buildContextComposition(sessionId: string): Promise<Contex
 
 // Heaviest-first, keep the top TOP_SOURCES, fold the remainder into one "other" source so the total
 // stays honest without shipping an unbounded list.
-function capSources(sources: Map<string, { kind: string; bytes: number; count: number }>): ContextSource[] {
+function capSources(sources: Map<string, { kind: string; bytes: number; count: number; excerpt: string }>): ContextSource[] {
   const all: ContextSource[] = [...sources.entries()].map(([label, s]) => ({
     label, kind: s.kind, bytes: s.bytes, tokens: approxTokens(s.bytes), count: s.count,
+    excerpt: s.excerpt || undefined,
   }))
   all.sort((a, b) => b.tokens - a.tokens)
   if (all.length <= TOP_SOURCES) return all

@@ -150,6 +150,10 @@ export interface ContextSource {
   tokens: number
   bytes: number
   count: number
+  // Mirror of src/summarizers/summarizerTypes.ts — a capped excerpt of the ACTUAL injected text so
+  // the recursive drill-down tree (P5) renders the real content of this block at a leaf. Undefined
+  // when the attachment shape carried no extractable content text.
+  excerpt?: string
 }
 export interface ContextCompositionTurn {
   turn: number

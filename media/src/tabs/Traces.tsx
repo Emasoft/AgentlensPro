@@ -23,6 +23,7 @@ const SOURCE_KIND_COLOR: Record<string, string> = {
   cacheWrite: 'var(--vscode-charts-orange,#e2a03f)', output: 'var(--vscode-charts-green,#81c784)',
   hook: '#e57373', skill: '#ba68c8', toolCatalog: '#4dd0e1', agentCatalog: '#7986cb',
   mcp: '#4db6ac', file: '#a1887f', reminder: '#fff176', tool: '#B8E986', other: 'var(--muted)',
+  cost: 'var(--vscode-charts-yellow,#e2c08d)', user: '#F5A623', llm: 'var(--accent)',
 }
 
 export interface Step {
@@ -560,9 +561,232 @@ export function StepRow({ step, idx, sessIdx, sessionDur, sessionModel, metric, 
   )
 }
 
+// ── P5: recursive bar-tree drill-down to raw content ──────────────────────────────────────────
+// Every node is an expandable BAR carrying its own token weight; expanding a branch reveals its
+// component bars (which make it up), and every drill path bottoms out at a LEAF that renders the
+// ACTUAL content bytes — the real model response / reasoning / tool output / user message / injected
+// file·rule·memory·hook text that occupied those tokens — never a dead stat card. Depth is shown by
+// INDENTATION (the page scrolls; no nested scrollbars, per the project rule).
+type LeafContent =
+  | { kind: 'text'; text: string }
+  | { kind: 'json'; text: string }
+  | { kind: 'blob'; spanId: string; field: 'full-result' | 'response' | 'thinking'; inline: string }
+
+interface BarNode {
+  key: string
+  label: string
+  colorKind: string       // key into SOURCE_KIND_COLOR — the bar colour
+  weight: number          // token magnitude — drives bar width (relative to siblings) + value-sort
+  value: string           // formatted right-hand figure (e.g. "1.2k tok", "~$0.03")
+  children?: BarNode[]     // a BRANCH — its component bars
+  leaf?: LeafContent       // a LEAF — the actual content bytes
+  hint?: string            // optional dim sub-label under the bar
+}
+
+function approxTok(len: number): number { return Math.ceil(len / 4) }
+function tokValue(tokens: number, estimate: boolean): string {
+  return tokens > 0 ? formatCompact(tokens) + (estimate ? '~' : '') + ' tok' : '—'
+}
+
+// Render the ACTUAL content at a leaf. Blob-backed leaves (response / reasoning / full tool output)
+// prefer the inline field (live + standalone sessions carry it) and lazy-fetch from the DB via
+// loadBlob only when it is missing — the same contract StepDetail uses, so a leaf shows real bytes in
+// both the extension (DB) and the standalone (in-memory) paths. Fetch happens on EXPAND (this mounts
+// only when the parent node is open), so nothing is fetched eagerly.
+function LeafBody({ leaf }: { leaf: LeafContent }) {
+  const blobs = blobCache.value
+  const isBlob = leaf.kind === 'blob'
+  const spanId = isBlob ? leaf.spanId : ''
+  const field = isBlob ? leaf.field : ''
+  const inline = isBlob ? leaf.inline : ''
+  useEffect(() => {
+    if (!isBlob || inline || !vscode) return
+    if (blobCache.value[`${spanId}:${field}`] === undefined) {
+      vscode.postMessage({ type: 'loadBlob', spanId, field })
+    }
+  }, [spanId, field])
+
+  const text = isBlob ? (inline || blobs[`${spanId}:${field}`] || '') : leaf.text
+  if (isBlob && !text) return <pre class="sw-full-result-pre" style="margin:2px 0 4px"><span style="color:var(--muted)">Loading…</span></pre>
+  if (!text) return <pre class="sw-full-result-pre" style="margin:2px 0 4px"><span style="color:var(--muted)">(empty)</span></pre>
+
+  const isJson = leaf.kind === 'json'
+  let shown = text.length > 6000 ? text.slice(0, 6000) + '\n… [truncated ' + (text.length - 6000).toLocaleString() + ' chars]' : text
+  if (isJson && shown.length <= 2000) { try { shown = JSON.stringify(JSON.parse(shown), null, 2) } catch { /* keep as-is */ } }
+  return (
+    <pre class="sw-full-result-pre" style="margin:2px 0 4px;white-space:pre-wrap;word-break:break-word">
+      {isJson && shown.length <= 2000
+        ? <span dangerouslySetInnerHTML={{ __html: syntaxHighlightJson(shown) }} />
+        : shown}
+    </pre>
+  )
+}
+
+// One node in the recursive tree: a bar sized by its token weight (relative to its siblings), an
+// expand chevron, and — on expand — either its child bars (a branch) or the actual content (a leaf).
+// Children are re-sorted heaviest-first when the value-sort toggle is on (same signal the flat view
+// uses), so the drill-down obeys the same sort as the rest of the trace.
+function TreeBar({ node, depth, siblingMax }: { node: BarNode; depth: number; siblingMax: number }) {
+  const [open, setOpen] = useState(false)
+  const sortByValue = timelineSortByValue.value
+  const metric = timelineMetric.value
+  const color = SOURCE_KIND_COLOR[node.colorKind] ?? 'var(--muted)'
+  const width = siblingMax > 0 && node.weight > 0 ? Math.max(node.weight / siblingMax * 100, 0.5) : 0
+  const expandable = !!node.children || !!node.leaf
+  const kids = node.children ?? []
+  const childMax = Math.max(0, ...kids.map(k => k.weight))
+  const ordered = sortByValue && metric !== 'time' ? [...kids].sort((a, b) => b.weight - a.weight) : kids
+  return (
+    <div>
+      <div style={`display:flex;align-items:center;min-height:20px;font-size:10px;${expandable ? 'cursor:pointer' : ''};padding-left:${depth * 14 + 6}px`}
+        onClick={expandable ? () => setOpen(v => !v) : undefined}>
+        <span style="width:12px;font-size:8px;color:var(--muted);text-align:center;flex:none">{expandable ? (open ? '▼' : '▶') : ''}</span>
+        <span style="flex:1;min-width:0;display:inline-flex;flex-direction:column">
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title={node.label}>{node.label}</span>
+          {node.hint && <span style="font-size:8px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{node.hint}</span>}
+        </span>
+        <div style="width:110px;position:relative;height:9px;margin:0 6px;flex:none">
+          {width > 0 && <div style={`position:absolute;left:0;height:7px;top:1px;border-radius:2px;width:${width.toFixed(1)}%;background:${color};opacity:0.7`} />}
+        </div>
+        <span style="width:78px;text-align:right;font-variant-numeric:tabular-nums;color:var(--muted);flex:none">{node.value}</span>
+      </div>
+      {open && node.leaf && <div style={`padding-left:${depth * 14 + 24}px`}><LeafBody leaf={node.leaf} /></div>}
+      {open && node.children && ordered.map(c => <TreeBar key={c.key} node={c} depth={depth + 1} siblingMax={childMax} />)}
+    </div>
+  )
+}
+
+const KIND_GROUP_LABEL: Record<string, string> = {
+  file: 'Files (CLAUDE.md · rules · memories · reads)',
+  hook: 'Hook injections',
+  skill: 'Skill catalog',
+  toolCatalog: 'Tool catalog',
+  agentCatalog: 'Agent catalog',
+  mcp: 'MCP instructions',
+  reminder: 'Task reminders',
+  other: 'Other sources',
+}
+
+// The host-parsed injected blocks as bar nodes: grouped by kind (Files, Hooks, catalogs…), each group
+// drilling to its individual sources, each source a LEAF that renders the ACTUAL injected text
+// (excerpt). This is where "system prompt / CLAUDE.md / each rule / each memory / each hook injection"
+// bottom out at real content.
+function compositionNodes(hostSources: ContextSource[]): BarNode[] {
+  if (!hostSources.length) return []
+  const byKind = new Map<string, ContextSource[]>()
+  for (const s of hostSources) {
+    const arr = byKind.get(s.kind) ?? []
+    arr.push(s)
+    byKind.set(s.kind, arr)
+  }
+  const groups: BarNode[] = []
+  for (const [kind, arr] of byKind) {
+    const sum = arr.reduce((n, s) => n + s.tokens, 0)
+    const kids: BarNode[] = arr.map((s, i) => ({
+      key: `src:${kind}:${i}:${s.label}`, label: s.label, colorKind: s.kind, weight: s.tokens,
+      value: tokValue(s.tokens, true),
+      hint: s.count > 1 ? `${s.count} occurrences` : undefined,
+      leaf: {
+        kind: 'text' as const,
+        text: s.excerpt
+          ? s.excerpt + (s.excerpt.length >= 1200 ? '\n… [excerpt truncated]' : '')
+          : `(${s.label} — ~${formatCompact(s.tokens)} tokens across ${s.count} occurrence${s.count !== 1 ? 's' : ''}; no content text was captured for this block type.)`,
+      },
+    }))
+    groups.push({ key: `grp:${kind}`, label: KIND_GROUP_LABEL[kind] ?? kind, colorKind: kind, weight: sum, value: tokValue(sum, true), children: kids })
+  }
+  return groups
+}
+
+// Build the COMPONENT bars of one turn: the 5 usage values (each drilling to the real content that
+// produced it) plus the injected-context blocks. Every branch ends at a LEAF that renders actual
+// bytes — the user's ask: "each bar expandable into its component bars, and so on, until the actual
+// content (input, output, etc.) is shown as a final leaf".
+function buildTurnNodes(tSteps: Step[], totals: TurnTotals, hostSources: ContextSource[], sessionModel: string): BarNode[] {
+  const nodes: BarNode[] = []
+  const llmSteps = tSteps.filter(s => s.entry.type === 'llm')
+  const toolSteps = tSteps.filter(s => s.entry.type === 'tool')
+  const userSteps = tSteps.filter(s => s.entry.type === 'user_input')
+  const newInput = Math.max(0, totals.input - totals.cacheRead - totals.cacheWrite)
+  const turnTotalTok = totals.input + totals.output + totals.cacheRead + totals.cacheWrite
+
+  // 1. OUTPUT → each LLM call's real response + reasoning text.
+  const outKids: BarNode[] = []
+  for (const s of llmSteps) {
+    const e = s.entry
+    const lbl = formatLlmLabel(e)
+    const resp = e.responseText || ''
+    const rTok = e.outputTokens ?? approxTok(resp.length)
+    outKids.push({ key: e.spanId + ':resp', label: `Response — ${lbl}`, colorKind: 'output', weight: rTok, value: tokValue(rTok, e.outputTokens === undefined),
+      leaf: { kind: 'blob', spanId: e.spanId, field: 'response', inline: resp } })
+    if (e.thinking) outKids.push({ key: e.spanId + ':think', label: `Reasoning — ${lbl}`, colorKind: 'output', weight: approxTok(e.thinking.length), value: tokValue(approxTok(e.thinking.length), true),
+      leaf: { kind: 'blob', spanId: e.spanId, field: 'thinking', inline: e.thinking } })
+  }
+  nodes.push({ key: 'output', label: 'Output (model response)', colorKind: 'output', weight: totals.output, value: tokValue(totals.output, false),
+    children: outKids.length ? outKids : [{ key: 'output-none', label: 'No assistant output text this turn', colorKind: 'output', weight: 0, value: '—', leaf: { kind: 'text', text: 'This turn produced no model output text.' } }] })
+
+  // 2. NEW INPUT → the fresh bytes that entered context this turn: user messages + tool results/inputs.
+  const inKids: BarNode[] = []
+  for (const s of userSteps) {
+    const e = s.entry
+    const txt = e.responseText || e.label || ''
+    inKids.push({ key: e.spanId + ':msg', label: 'User message', colorKind: 'user', weight: approxTok(txt.length), value: tokValue(approxTok(txt.length), true),
+      leaf: { kind: 'blob', spanId: e.spanId, field: 'response', inline: txt } })
+  }
+  for (const s of toolSteps) {
+    const e = s.entry
+    const lbl = formatToolLabel(e)
+    const out = e.fullResult || e.resultSummary || ''
+    inKids.push({ key: e.spanId + ':toolres', label: `${lbl} → result`, colorKind: 'tool', weight: approxTok(out.length), value: tokValue(approxTok(out.length), true),
+      leaf: { kind: 'blob', spanId: e.spanId, field: 'full-result', inline: e.fullResult || '' } })
+    if (e.toolInput) inKids.push({ key: e.spanId + ':toolin', label: `${lbl} → input`, colorKind: 'tool', weight: approxTok(e.toolInput.length), value: tokValue(approxTok(e.toolInput.length), true),
+      leaf: { kind: 'json', text: e.toolInput } })
+  }
+  if (inKids.length) nodes.push({ key: 'newinput', label: 'New input (fresh bytes this turn)', colorKind: 'input', weight: newInput, value: tokValue(newInput, false), children: inKids })
+  else if (newInput > 0) nodes.push({ key: 'newinput', label: 'New input (fresh bytes this turn)', colorKind: 'input', weight: newInput, value: tokValue(newInput, false),
+    leaf: { kind: 'text', text: `${newInput.toLocaleString()} new input tokens entered the context this turn. The individual message / tool-result content is not separately recorded for this session.` } })
+
+  // 3. CACHE-READ → the resident prefix reused from cache. Its bytes are the prior turns' content —
+  //    an explanatory leaf points there (drilling all of it would duplicate every earlier turn).
+  if (totals.cacheRead > 0) nodes.push({ key: 'cacheread', label: 'Cache-read (resident prefix reused)', colorKind: 'cacheRead', weight: totals.cacheRead, value: tokValue(totals.cacheRead, false),
+    leaf: { kind: 'text', text: `${totals.cacheRead.toLocaleString()} tokens were re-read from the prompt cache this turn — the resident transcript accumulated over the prior turns (billed ≈10% of the input rate). Its bytes are the earlier turns' content; open the preceding turns to inspect them. The bytes NEWLY added this turn are under "New input"; the blocks (re)written to the cache are under "Cache-created".` } })
+
+  // 4. CACHE-CREATED → newly written to cache. Drill the injected blocks that (re)entered the prefix.
+  if (totals.cacheWrite > 0) {
+    const compKids = compositionNodes(hostSources)
+    nodes.push({ key: 'cachewrite', label: 'Cache-created (newly written to cache)', colorKind: 'cacheWrite', weight: totals.cacheWrite, value: tokValue(totals.cacheWrite, false),
+      children: compKids.length ? compKids : undefined,
+      leaf: compKids.length ? undefined : { kind: 'text', text: `${totals.cacheWrite.toLocaleString()} tokens were newly written to the prompt cache this turn (full write rate) — the prefix content that changed or first appeared. The identifiable injected blocks are listed under "Injected context" when the local log is available.` } })
+  }
+
+  // 5. COST → what the turn cost, drilled per LLM call (each → its response content).
+  if (totals.cost > 0) {
+    const costKids: BarNode[] = llmSteps.map(s => {
+      const e = s.entry
+      const c = calcEntryCost(e, sessionModel)
+      return { key: e.spanId + ':cost', label: `${formatLlmLabel(e)} — ~${fmtUsd(c)}`, colorKind: 'cost',
+        weight: (e.inputTokens ?? 0) + (e.outputTokens ?? 0) + (e.cacheReadTokens ?? 0) + (e.cacheCreateTokens ?? 0), value: '~' + fmtUsd(c),
+        leaf: { kind: 'blob' as const, spanId: e.spanId, field: 'response' as const, inline: e.responseText || '' } }
+    })
+    nodes.push({ key: 'cost', label: 'Cost (this turn)', colorKind: 'cost', weight: turnTotalTok, value: '~' + fmtUsd(totals.cost),
+      children: costKids.length ? costKids : undefined,
+      leaf: costKids.length ? undefined : { kind: 'text', text: `Estimated cost this turn: ~${fmtUsd(totals.cost)}.` } })
+  }
+
+  // 6. INJECTED CONTEXT → the parsed injected blocks (system-prompt attachments, CLAUDE.md, each
+  //    rule, each memory, each hook injection, catalogs) as their own component bars → real text.
+  const injected = compositionNodes(hostSources)
+  if (injected.length) {
+    const sum = hostSources.reduce((n, s) => n + s.tokens, 0)
+    nodes.push({ key: 'injected', label: 'Injected context (parsed blocks)', colorKind: 'file', weight: sum, value: tokValue(sum, true), children: injected })
+  }
+
+  return nodes
+}
+
 // One turn = a collapsible parent row whose value is the SUM of its child steps. Shows all 5
-// values (input/output/cache-read/cache-write/cost) and a bar of the selected metric; expands to
-// the child StepRows. This is the session → turn → step tree the spec (P2.2) asks for.
+// values (input/output/cache-read/cache-write/cost) and a bar of the selected metric; expands to a
+// RECURSIVE bar-tree that drills each component down to the actual content (P5).
 // The expandable detail beneath a turn flagged as an avoidable cache break: the cause, the exact
 // offending block, the wasted cache-created tokens/cost, and the one-line remediation hint.
 function CacheBreakDetail({ cb }: { cb: CacheBreakTurn }) {
@@ -584,11 +808,11 @@ function CacheBreakDetail({ cb }: { cb: CacheBreakTurn }) {
   )
 }
 
-function TurnGroup({ turn, tSteps, sessIdx, sessionDur, sessionModel, metric, maxStepMetric, maxTurnMetric, highlightSpanId, subAgents, cacheBreak, hostSources }: {
+function TurnGroup({ turn, tSteps, sessIdx, sessionModel, metric, maxTurnMetric, highlightSpanId, subAgents, cacheBreak, hostSources }: {
   turn: number
   tSteps: Array<{ step: Step; i: number }>
-  sessIdx: number; sessionDur: number; sessionModel: string
-  metric: TimelineMetric; maxStepMetric: number; maxTurnMetric: number
+  sessIdx: number; sessionModel: string
+  metric: TimelineMetric; maxTurnMetric: number
   highlightSpanId?: string
   subAgents?: SessionSummaryCard[]
   cacheBreak?: CacheBreakTurn
@@ -639,11 +863,14 @@ function TurnGroup({ turn, tSteps, sessIdx, sessionDur, sessionModel, metric, ma
       {broke && breakOpen && <CacheBreakDetail cb={cacheBreak!} />}
       {open && (
         <div class="wf-turn-children">
-          {tSteps.map(({ step, i }) => (
-            <StepRow key={step.entry.spanId + i} step={step} idx={i} sessIdx={sessIdx}
-              sessionDur={sessionDur} sessionModel={sessionModel} metric={metric} maxMetric={maxStepMetric}
-              highlightSpanId={highlightSpanId} hostSources={hostSources} />
-          ))}
+          {(() => {
+            // The recursive P5 drill-tree: this turn's component bars (5 usage values + injected
+            // blocks), each expanding down to the actual content bytes at a leaf.
+            const nodes = buildTurnNodes(tSteps.map(x => x.step), totals, hostSources ?? [], sessionModel)
+            const max = Math.max(0, ...nodes.map(n => n.weight))
+            const ordered = timelineSortByValue.value && metric !== 'time' ? [...nodes].sort((a, b) => b.weight - a.weight) : nodes
+            return ordered.map(n => <TreeBar key={n.key} node={n} depth={0} siblingMax={max} />)
+          })()}
           {(subAgents ?? []).map(c => <SubAgentBranch key={c.sessionId} child={c} sessIdx={sessIdx} />)}
         </div>
       )}
@@ -855,8 +1082,8 @@ export function TimelineWaterfall({ steps, sessionDur, sessionModel, sessIdx = 0
         : groupByTurn && hasTurns
           ? turnGroups.map(g => (
               <TurnGroup key={g.turn} turn={g.turn} tSteps={g.tSteps} sessIdx={sessIdx}
-                sessionDur={sessionDur} sessionModel={sessionModel} metric={metric}
-                maxStepMetric={maxMetric} maxTurnMetric={maxTurnMetric} highlightSpanId={highlightSpanId}
+                sessionModel={sessionModel} metric={metric}
+                maxTurnMetric={maxTurnMetric} highlightSpanId={highlightSpanId}
                 subAgents={subsByTurn.get(g.turn)} cacheBreak={breaksByTurn.get(g.turn)}
                 hostSources={hostSourcesByTurn.get(g.turn)} />
             ))

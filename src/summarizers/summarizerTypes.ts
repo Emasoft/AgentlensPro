@@ -116,6 +116,11 @@ export interface ContextSource {
   tokens: number  // approximate (bytes / 4)
   bytes: number
   count: number   // entries aggregated into this source
+  // A capped excerpt of the ACTUAL injected text (first occurrence) so the recursive drill-down
+  // tree (P5) can render the real content of this block at a leaf — the actual CLAUDE.md / rule /
+  // memory / hook-output bytes that occupied those tokens, not just a label + count. Capped so an
+  // on-demand parse of a huge session never ships an unbounded payload.
+  excerpt?: string
 }
 
 export interface ContextCompositionTurn {
