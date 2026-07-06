@@ -13,7 +13,17 @@ import {
 import { calcEntryCost, calcSessionCost, fmtUsd } from '../sessionMetrics'
 import { buildCacheBreakReport, cacheBreaksByTurn, CAUSE_LABEL } from '../cacheBreak'
 import { spawnKindBadge, hitRateColor, formatPct } from './cacheShared'
-import type { SessionSummaryCard, TimelineEntry, BackgroundSpanSummary, CacheBreakTurn } from '../types'
+import type { SessionSummaryCard, TimelineEntry, BackgroundSpanSummary, CacheBreakTurn, ContextSource } from '../types'
+
+// Colour per composition source-kind — shared with the ContextTab legend so the LLM-call context
+// breakdown reads the same as the Context tab. Injected-block kinds (hook/skill/catalog/…) plus the
+// exact usage buckets (cacheRead/input/cacheWrite/output).
+const SOURCE_KIND_COLOR: Record<string, string> = {
+  cacheRead: 'var(--vscode-charts-purple,#b392f0)', input: 'var(--vscode-charts-blue,#4fc3f7)',
+  cacheWrite: 'var(--vscode-charts-orange,#e2a03f)', output: 'var(--vscode-charts-green,#81c784)',
+  hook: '#e57373', skill: '#ba68c8', toolCatalog: '#4dd0e1', agentCatalog: '#7986cb',
+  mcp: '#4db6ac', file: '#a1887f', reminder: '#fff176', tool: '#B8E986', other: 'var(--muted)',
+}
 
 export interface Step {
   entry: TimelineEntry
@@ -197,72 +207,134 @@ function BgSummaryBlock({ bgSpans }: { bgSpans: BackgroundSpanSummary[] }) {
   )
 }
 
-function StepDetail({ step, idx, sessIdx, sessionModel }: { step: Step; idx: number; sessIdx: number; sessionModel: string }) {
+// The per-turn context-composition breakdown shown when an LLM call is expanded — answers "why is
+// this N cache-write / cache-read?". Combines the EXACT usage buckets for the call (resident
+// cache-read transcript, new input, cache-created) with the HOST-parsed injected blocks for that
+// turn (hooks, skill/tool/agent/mcp catalogs, files, reminders), sorted heaviest-first. Host
+// figures are estimates (bytes/4, marked ~); the buckets are exact. No inner scrollbar — the list
+// grows the page.
+function LlmContextBreakdown({ entry, hostSources }: { entry: TimelineEntry; hostSources?: ContextSource[] }) {
+  const newInput = Math.max(0, (entry.inputTokens ?? 0) - (entry.cacheReadTokens ?? 0) - (entry.cacheCreateTokens ?? 0))
+  const rows: Array<{ label: string; tokens: number; kind: string; exact: boolean }> = []
+  if ((entry.cacheReadTokens ?? 0) > 0) rows.push({ label: 'Cache-read (resident transcript)', tokens: entry.cacheReadTokens!, kind: 'cacheRead', exact: true })
+  if (newInput > 0) rows.push({ label: 'New input tokens', tokens: newInput, kind: 'input', exact: true })
+  if ((entry.cacheCreateTokens ?? 0) > 0) rows.push({ label: 'Cache-created (newly written)', tokens: entry.cacheCreateTokens!, kind: 'cacheWrite', exact: true })
+  for (const s of hostSources ?? []) rows.push({ label: s.label, tokens: s.tokens, kind: s.kind, exact: false })
+  rows.sort((a, b) => b.tokens - a.tokens)
+  if (rows.length === 0) return null
+  const max = rows[0].tokens || 1
+  return (
+    <div class="sw-detail-section">
+      <div class="sw-detail-heading">Context composition (this turn)</div>
+      <div style="font-size:9px;color:var(--muted);margin-bottom:4px">
+        What the {formatCompact((entry.inputTokens ?? 0))}-token prompt was made of — <span style={'color:' + SOURCE_KIND_COLOR.cacheRead}>cache-read</span> reused vs{' '}
+        <span style={'color:' + SOURCE_KIND_COLOR.cacheWrite}>cache-created</span> re-written, plus the injected blocks the host parsed from the raw log.
+        {(hostSources?.length ?? 0) === 0 && <span> Injected-block detail loads with the session composition.</span>}
+      </div>
+      {rows.map((r, i) => {
+        const w = Math.max(r.tokens / max * 100, 0.5)
+        return (
+          <div key={r.label + i} style="display:flex;align-items:center;font-size:10px;min-height:16px">
+            <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:280px" title={r.label}>{r.label}</span>
+            <div style="width:120px;position:relative;height:9px;margin:0 6px">
+              <div style={`position:absolute;left:0;height:7px;top:1px;border-radius:2px;width:${w.toFixed(1)}%;background:${SOURCE_KIND_COLOR[r.kind] ?? 'var(--muted)'};opacity:0.7`} />
+            </div>
+            <span style="width:78px;text-align:right;font-variant-numeric:tabular-nums;color:var(--muted)">{formatCompact(r.tokens)}{r.exact ? '' : '~'} tok</span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// The expanded body of an LLM call: model, exact token usage, the per-turn context-composition
+// breakdown (why the prompt is this size), cost, the full response + reasoning. response/thinking
+// are resolved by the parent (inline or blob) and passed in.
+function LlmDetail({ entry, step, sessIdx, idx, sessionModel, hostSources, responseText, thinking }: {
+  entry: TimelineEntry; step: Step; sessIdx: number; idx: number; sessionModel: string
+  hostSources?: ContextSource[]; responseText: string; thinking: string
+}) {
   const [showOutput, setShowOutput] = useState(false)
+  const PREVIEW_LEN = 400
+  const isLongResponse = responseText.length > PREVIEW_LEN
+  const entryCost = calcEntryCost(entry, sessionModel)
+  const newInput = Math.max(0, (entry.inputTokens ?? 0) - (entry.cacheReadTokens ?? 0) - (entry.cacheCreateTokens ?? 0))
+  const hasCache = (entry.cacheReadTokens ?? 0) > 0 || (entry.cacheCreateTokens ?? 0) > 0
+  return (
+    <>
+      <div class="sw-detail-section"><div class="sw-detail-heading">Model</div><div class="sw-detail-value">{entry.model || 'unknown'}</div></div>
+      {((entry.inputTokens ?? 0) > 0 || (entry.outputTokens ?? 0) > 0) && (
+        <div class="sw-detail-section">
+          <div class="sw-detail-heading">Token Usage</div>
+          <div class="sw-detail-value">
+            <span class="sw-token-in">
+              {hasCache ? `${newInput.toLocaleString()} new` : `${(entry.inputTokens ?? 0).toLocaleString()} input`}
+              {(entry.cacheReadTokens ?? 0) > 0 && <span style="color:var(--muted)"> + {(entry.cacheReadTokens ?? 0).toLocaleString()} cached</span>}
+              {(entry.cacheCreateTokens ?? 0) > 0 && <span style="color:var(--muted)"> + {(entry.cacheCreateTokens ?? 0).toLocaleString()} cache write</span>}
+            </span>
+            <span class="sw-token-arrow"> → </span>
+            <span class="sw-token-out">{(entry.outputTokens ?? 0).toLocaleString()} output</span>
+          </div>
+        </div>
+      )}
+      <LlmContextBreakdown entry={entry} hostSources={hostSources} />
+      {entryCost > 0 && (
+        <div class="sw-detail-section"><div class="sw-detail-heading">Cost</div><div class="sw-detail-value">{fmtUsd(entryCost)}</div></div>
+      )}
+      {responseText && (
+        <div class="sw-detail-section">
+          <div class="sw-detail-heading">
+            Response
+            {isLongResponse && (
+              <button class="sw-show-full-btn" style="margin-left:8px" onClick={() => setShowOutput(v => !v)}>
+                {showOutput ? 'Collapse' : 'Show full response'}
+              </button>
+            )}
+          </div>
+          <div class="sw-detail-value" style="white-space:pre-wrap;word-break:break-word;font-size:11px;line-height:1.5">
+            {showOutput ? responseText : responseText.slice(0, PREVIEW_LEN)}
+            {isLongResponse && !showOutput && <span style="color:var(--muted)">…</span>}
+          </div>
+        </div>
+      )}
+      {thinking && <LongTextSection heading="Reasoning" text={thinking} id={'sw-thinking-' + sessIdx + '-' + idx} />}
+      {(entry.ttft ?? 0) > 0 && (
+        <div class="sw-detail-section"><div class="sw-detail-heading">Time to First Token</div><div class="sw-detail-value">{formatMs(entry.ttft!)}</div></div>
+      )}
+      <div class="sw-detail-section"><div class="sw-detail-heading">Duration</div><div class="sw-detail-value">{formatMs(step.durationMs)}</div></div>
+      {entry.action && <div class="sw-detail-section"><div class="sw-detail-heading">Stop reason</div><div class="sw-detail-value">{entry.action}</div></div>}
+      {entry.timestamp && <div class="sw-detail-section"><div class="sw-detail-heading">Timestamp</div><div class="sw-detail-value sw-detail-muted">{entry.timestamp}</div></div>}
+    </>
+  )
+}
+
+// Detail body for ONE expanded step. EVERY step type expands to its exact content + context
+// structure — nothing is a dead stat card: LLM calls show the per-turn composition breakdown +
+// full response/reasoning, tool calls show the FULL output, user/message steps show their full
+// text. Blob fields absent from DB rows are lazy-fetched via loadBlob (live sessions carry them
+// inline). All hooks run unconditionally at the top so hook order is stable across renders.
+function StepDetail({ step, idx, sessIdx, sessionModel, hostSources }: { step: Step; idx: number; sessIdx: number; sessionModel: string; hostSources?: ContextSource[] }) {
   const entry = step.entry
+  const blobs = blobCache.value
+  // Lazy-fetch any blob fields this entry needs but didn't ship inline (DB-loaded sessions strip
+  // them; live sessions carry them inline). One effect for all types → stable hook order.
+  useEffect(() => {
+    if (!entry.hasBlob || !vscode) return
+    const want: Array<'full-result' | 'response' | 'thinking'> = []
+    if (entry.type === 'tool' && !entry.fullResult) want.push('full-result')
+    if ((entry.type === 'llm' || entry.type === 'user_input') && !entry.responseText) want.push('response')
+    if (entry.type === 'llm' && !entry.thinking) want.push('thinking')
+    for (const f of want) {
+      if (blobCache.value[`${entry.spanId}:${f}`] === undefined) {
+        vscode.postMessage({ type: 'loadBlob', spanId: entry.spanId, field: f })
+      }
+    }
+  }, [entry.spanId])
 
   if (entry.type === 'llm') {
-    const PREVIEW_LEN = 400
-    const isLongResponse = (entry.responseText?.length ?? 0) > PREVIEW_LEN
-    const entryCost = calcEntryCost(entry, sessionModel)
-    return (
-      <>
-        <div class="sw-detail-section"><div class="sw-detail-heading">Model</div><div class="sw-detail-value">{entry.model || 'unknown'}</div></div>
-        {((entry.inputTokens ?? 0) > 0 || (entry.outputTokens ?? 0) > 0) && (
-          <div class="sw-detail-section">
-            <div class="sw-detail-heading">Token Usage</div>
-            <div class="sw-detail-value">
-              {(entry.cacheReadTokens ?? 0) > 0 || (entry.cacheCreateTokens ?? 0) > 0 ? (
-                <>
-                  <span class="sw-token-in">
-                    {Math.max(0, (entry.inputTokens ?? 0) - (entry.cacheReadTokens ?? 0) - (entry.cacheCreateTokens ?? 0)).toLocaleString()} new
-                    {(entry.cacheReadTokens ?? 0) > 0 && <span style="color:var(--muted)"> + {(entry.cacheReadTokens ?? 0).toLocaleString()} cached</span>}
-                    {(entry.cacheCreateTokens ?? 0) > 0 && <span style="color:var(--muted)"> + {(entry.cacheCreateTokens ?? 0).toLocaleString()} cache write</span>}
-                  </span>
-                  <span class="sw-token-arrow"> → </span>
-                  <span class="sw-token-out">{(entry.outputTokens ?? 0).toLocaleString()} output</span>
-                </>
-              ) : (
-                <>
-                  <span class="sw-token-in">{(entry.inputTokens ?? 0).toLocaleString()} input</span>
-                  <span class="sw-token-arrow"> → </span>
-                  <span class="sw-token-out">{(entry.outputTokens ?? 0).toLocaleString()} output</span>
-                </>
-              )}
-            </div>
-          </div>
-        )}
-        {entryCost > 0 && (
-          <div class="sw-detail-section">
-            <div class="sw-detail-heading">Cost</div>
-            <div class="sw-detail-value">{fmtUsd(entryCost)}</div>
-          </div>
-        )}
-        {entry.responseText && (
-          <div class="sw-detail-section">
-            <div class="sw-detail-heading">
-              Response
-              {isLongResponse && (
-                <button class="sw-show-full-btn" style="margin-left:8px" onClick={() => setShowOutput(v => !v)}>
-                  {showOutput ? 'Collapse' : 'Show full response'}
-                </button>
-              )}
-            </div>
-            <div class="sw-detail-value" style="white-space:pre-wrap;word-break:break-word;font-size:11px;line-height:1.5">
-              {showOutput ? entry.responseText : entry.responseText.slice(0, PREVIEW_LEN)}
-              {isLongResponse && !showOutput && <span style="color:var(--muted)">…</span>}
-            </div>
-          </div>
-        )}
-        {entry.thinking && <LongTextSection heading="Reasoning" text={entry.thinking} id={'sw-thinking-' + sessIdx + '-' + idx} />}
-        {(entry.ttft ?? 0) > 0 && (
-          <div class="sw-detail-section"><div class="sw-detail-heading">Time to First Token</div><div class="sw-detail-value">{formatMs(entry.ttft!)}</div></div>
-        )}
-        <div class="sw-detail-section"><div class="sw-detail-heading">Duration</div><div class="sw-detail-value">{formatMs(step.durationMs)}</div></div>
-        {entry.action && <div class="sw-detail-section"><div class="sw-detail-heading">Stop reason</div><div class="sw-detail-value">{entry.action}</div></div>}
-        {entry.timestamp && <div class="sw-detail-section"><div class="sw-detail-heading">Timestamp</div><div class="sw-detail-value sw-detail-muted">{entry.timestamp}</div></div>}
-      </>
-    )
+    return <LlmDetail entry={entry} step={step} sessIdx={sessIdx} idx={idx} sessionModel={sessionModel}
+      hostSources={hostSources} responseText={entry.responseText || blobs[`${entry.spanId}:response`] || ''}
+      thinking={entry.thinking || blobs[`${entry.spanId}:thinking`] || ''} />
   }
 
   if (entry.type === 'tool') {
@@ -274,17 +346,8 @@ function StepDetail({ step, idx, sessIdx, sessionModel }: { step: Step; idx: num
     const isFilePath = isRaw && (entry.toolInput!.startsWith('/') || entry.toolInput!.startsWith('~') || /^[A-Za-z]:[/\\]/.test(entry.toolInput!))
     const inputHeading = !isRaw ? 'Arguments' : isFilePath ? 'File' : 'Command'
     const inputText = isRaw ? entry.toolInput : (tArgs || entry.toolInput || '')
-    // FULL tool output for the composition drill-down. Live sessions carry it inline (fullResult);
-    // DB-loaded sessions strip the blob (hasBlob) — lazy-fetch it via loadBlob('full-result') on
-    // open and read the cached content. Falls back to the short resultSummary until it lands.
-    const blobKey = `${entry.spanId}:full-result`
-    const blobbed = blobCache.value[blobKey]
-    useEffect(() => {
-      if (!entry.fullResult && entry.hasBlob && blobbed === undefined && vscode) {
-        vscode.postMessage({ type: 'loadBlob', spanId: entry.spanId, field: 'full-result' })
-      }
-    }, [entry.spanId])
-    const resultText = entry.fullResult || blobbed || entry.resultSummary || ''
+    // FULL tool output (lazy-fetched above for DB sessions; inline on live sessions).
+    const resultText = entry.fullResult || blobs[`${entry.spanId}:full-result`] || entry.resultSummary || ''
     return (
       <>
         <div class="sw-detail-section"><div class="sw-detail-heading">Tool</div><div class="sw-detail-value"><code>{tName}</code></div></div>
@@ -301,16 +364,34 @@ function StepDetail({ step, idx, sessIdx, sessionModel }: { step: Step; idx: num
             <div class="sw-detail-value" style={entry.decision === 'rejected' ? 'color:var(--error)' : 'color:#8ec96b'}>{entry.decision}</div>
           </div>
         )}
-        {resultText && <LongTextSection heading="Result" text={resultText} id={'sw-result-' + sessIdx + '-' + idx} isJson />}
+        {resultText
+          ? <LongTextSection heading="Full output" text={resultText} id={'sw-result-' + sessIdx + '-' + idx} isJson />
+          : entry.hasBlob
+            ? <div class="sw-detail-section"><div class="sw-detail-heading">Full output</div><div class="sw-detail-value sw-detail-muted">Loading…</div></div>
+            : null}
         {entry.isError && <div class="sw-detail-section"><div class="sw-detail-heading err">Error</div><div class="sw-detail-value err">This step failed</div></div>}
         {entry.timestamp && <div class="sw-detail-section"><div class="sw-detail-heading">Timestamp</div><div class="sw-detail-value sw-detail-muted">{entry.timestamp}</div></div>}
       </>
     )
   }
 
+  if (entry.type === 'user_input') {
+    const msgText = entry.responseText || blobs[`${entry.spanId}:response`] || entry.label || ''
+    return (
+      <>
+        <div class="sw-detail-section"><div class="sw-detail-heading">Message</div><div class="sw-detail-value">{entry.decision && entry.decision !== 'unknown' ? entry.decision : 'user input'}</div></div>
+        {msgText && <LongTextSection heading="Full text" text={msgText} id={'sw-msg-' + sessIdx + '-' + idx} />}
+        <div class="sw-detail-section"><div class="sw-detail-heading">Duration</div><div class="sw-detail-value">{formatMs(step.durationMs)}</div></div>
+        {entry.timestamp && <div class="sw-detail-section"><div class="sw-detail-heading">Timestamp</div><div class="sw-detail-value sw-detail-muted">{entry.timestamp}</div></div>}
+      </>
+    )
+  }
+
+  // Background task (or any other type): show its label + full text if any.
   return (
     <>
       <div class="sw-detail-section"><div class="sw-detail-heading">Background Task</div><div class="sw-detail-value">{entry.label || ''}</div></div>
+      {entry.responseText && <LongTextSection heading="Full text" text={entry.responseText} id={'sw-bg-' + sessIdx + '-' + idx} />}
       <div class="sw-detail-section"><div class="sw-detail-heading">Duration</div><div class="sw-detail-value">{formatMs(step.durationMs)}</div></div>
     </>
   )
@@ -357,7 +438,7 @@ function LongTextSection({ heading, text, id: _id, isJson }: { heading: string; 
   )
 }
 
-export function StepRow({ step, idx, sessIdx, sessionDur, sessionModel, metric, maxMetric, highlightSpanId }: { step: Step; idx: number; sessIdx: number; sessionDur: number; sessionModel: string; metric: TimelineMetric; maxMetric: number; highlightSpanId?: string }) {
+export function StepRow({ step, idx, sessIdx, sessionDur, sessionModel, metric, maxMetric, highlightSpanId, hostSources }: { step: Step; idx: number; sessIdx: number; sessionDur: number; sessionModel: string; metric: TimelineMetric; maxMetric: number; highlightSpanId?: string; hostSources?: ContextSource[] }) {
   const entry = step.entry
   // When the user clicks a point in the Growth chart we focus that exact turn (by spanId). The
   // matching row auto-expands so its token breakdown is immediately visible, and scrolls into view.
@@ -472,7 +553,7 @@ export function StepRow({ step, idx, sessIdx, sessionDur, sessionModel, metric, 
       </div>
       {open && (
         <div class="sw-detail open">
-          <StepDetail step={step} idx={idx} sessIdx={sessIdx} sessionModel={sessionModel} />
+          <StepDetail step={step} idx={idx} sessIdx={sessIdx} sessionModel={sessionModel} hostSources={hostSources} />
         </div>
       )}
     </>
@@ -503,7 +584,7 @@ function CacheBreakDetail({ cb }: { cb: CacheBreakTurn }) {
   )
 }
 
-function TurnGroup({ turn, tSteps, sessIdx, sessionDur, sessionModel, metric, maxStepMetric, maxTurnMetric, highlightSpanId, subAgents, cacheBreak }: {
+function TurnGroup({ turn, tSteps, sessIdx, sessionDur, sessionModel, metric, maxStepMetric, maxTurnMetric, highlightSpanId, subAgents, cacheBreak, hostSources }: {
   turn: number
   tSteps: Array<{ step: Step; i: number }>
   sessIdx: number; sessionDur: number; sessionModel: string
@@ -511,6 +592,7 @@ function TurnGroup({ turn, tSteps, sessIdx, sessionDur, sessionModel, metric, ma
   highlightSpanId?: string
   subAgents?: SessionSummaryCard[]
   cacheBreak?: CacheBreakTurn
+  hostSources?: ContextSource[]
 }) {
   const totals = sumSteps(tSteps.map(x => x.step), sessionModel)
   const hasHighlight = !!highlightSpanId && tSteps.some(x => x.step.entry.spanId === highlightSpanId)
@@ -560,7 +642,7 @@ function TurnGroup({ turn, tSteps, sessIdx, sessionDur, sessionModel, metric, ma
           {tSteps.map(({ step, i }) => (
             <StepRow key={step.entry.spanId + i} step={step} idx={i} sessIdx={sessIdx}
               sessionDur={sessionDur} sessionModel={sessionModel} metric={metric} maxMetric={maxStepMetric}
-              highlightSpanId={highlightSpanId} />
+              highlightSpanId={highlightSpanId} hostSources={hostSources} />
           ))}
           {(subAgents ?? []).map(c => <SubAgentBranch key={c.sessionId} child={c} sessIdx={sessIdx} />)}
         </div>
@@ -660,6 +742,10 @@ export function TimelineWaterfall({ steps, sessionDur, sessionModel, sessIdx = 0
     () => cacheBreaksByTurn(sessionId ? buildCacheBreakReport(sessionId, steps.map(s => s.entry), composition, sessionModel) : null),
     [sessionId, composition, steps.length, sessionModel],
   )
+  // turn → the host-parsed injected blocks for that turn — passed into each LLM-call expansion so
+  // clicking a call shows what its context was made of (the composition breakdown).
+  const hostSourcesByTurn = new Map<number, ContextSource[]>()
+  for (const t of composition?.turns ?? []) hostSourcesByTurn.set(t.turn, t.sources)
 
   const match = compileStepFilter(filterApplied)
   const valued = steps
@@ -771,12 +857,13 @@ export function TimelineWaterfall({ steps, sessionDur, sessionModel, sessIdx = 0
               <TurnGroup key={g.turn} turn={g.turn} tSteps={g.tSteps} sessIdx={sessIdx}
                 sessionDur={sessionDur} sessionModel={sessionModel} metric={metric}
                 maxStepMetric={maxMetric} maxTurnMetric={maxTurnMetric} highlightSpanId={highlightSpanId}
-                subAgents={subsByTurn.get(g.turn)} cacheBreak={breaksByTurn.get(g.turn)} />
+                subAgents={subsByTurn.get(g.turn)} cacheBreak={breaksByTurn.get(g.turn)}
+                hostSources={hostSourcesByTurn.get(g.turn)} />
             ))
           : ordered.map(({ step, i }) => (
               <StepRow key={step.entry.spanId + i} step={step} idx={i} sessIdx={sessIdx}
                 sessionDur={sessionDur} sessionModel={sessionModel} metric={metric} maxMetric={maxMetric}
-                highlightSpanId={highlightSpanId} />
+                highlightSpanId={highlightSpanId} hostSources={hostSourcesByTurn.get(step.entry.turn ?? -1)} />
             ))
       }
       {orphanSubs.length > 0 && (
