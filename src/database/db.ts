@@ -18,6 +18,14 @@ type InitSqlJs = (config?: { locateFile?: (file: string) => string }) => Promise
 const DB_FILENAME = 'agentlens.db'
 const BLOBS_DIR = 'blobs'
 
+// Bump when the log-ingest semantics change in a way that makes previously-stored
+// log-sourced rows stale (new columns the incremental parser can't back-fill in place,
+// or a corrected accounting formula). On a bump, all data_source='log' rows are wiped so
+// the next scan re-ingests every local session file with the current semantics. OTEL rows
+// are left untouched (they can't be re-derived from logs — see reIngestLogRowsIfStale).
+//   v2 (TRDD-TKN5VALS): per-turn `turn` index + de-inflated input_tokens + sub-agent rollup.
+const INGEST_VERSION = 2
+
 /**
  * Opens (or creates) the AgentLens SQLite database at storagePath/agentlens.db
  * and applies the schema. The extensionPath is needed to locate the sql.js
@@ -43,6 +51,7 @@ export async function openDatabase(storagePath: string, extensionPath: string): 
 
   db.run(SCHEMA_SQL)
   applyMigrations(db)
+  reIngestLogRowsIfStale(db)
 
   ensureBlobsDir(storagePath)
 
@@ -138,6 +147,36 @@ function applyMigrations(db: SqlDatabase): void {
     )`)
     db.run('CREATE INDEX IF NOT EXISTS idx_instruction_dismissed_workspace ON instruction_dismissed (workspace)')
   }
+}
+
+/**
+ * Back-fill / re-ingest guard. When the stored PRAGMA user_version is behind INGEST_VERSION,
+ * every log-sourced session (and its timeline_entries + edit_details) is deleted so the next
+ * LogReader scan — which starts each process with an empty in-memory fileState and therefore
+ * re-reads every session file from scratch — rewrites those rows with the current ingest
+ * semantics (per-turn `turn` index, de-inflated input_tokens, sub-agent rollup).
+ *
+ * Only data_source='log' rows are wiped: they are losslessly reproducible from the local
+ * session files. OTEL rows live only in the (ephemeral) span window and cannot be re-derived,
+ * so they are preserved and carry the documented accounting discontinuity for pre-v2 history.
+ * Idempotent: the version stamp is advanced after the wipe, so it runs exactly once per bump.
+ */
+function reIngestLogRowsIfStale(db: SqlDatabase): void {
+  const rows = db.exec('PRAGMA user_version')
+  const current = (rows[0]?.values[0]?.[0] as number) ?? 0
+  if (current >= INGEST_VERSION) return
+
+  // Explicit child-first deletes: sql.js does not reliably honor ON DELETE CASCADE, so we
+  // cannot rely on the FK to clean timeline_entries / edit_details for the wiped sessions.
+  db.run(`DELETE FROM edit_details WHERE timeline_entry_id IN (
+            SELECT te.id FROM timeline_entries te
+            JOIN sessions s ON s.session_id = te.session_id
+            WHERE s.data_source = 'log')`)
+  db.run(`DELETE FROM timeline_entries WHERE session_id IN (
+            SELECT session_id FROM sessions WHERE data_source = 'log')`)
+  db.run(`DELETE FROM sessions WHERE data_source = 'log'`)
+  // PRAGMA user_version takes a literal, not a bound param.
+  db.run(`PRAGMA user_version = ${INGEST_VERSION}`)
 }
 
 function ensureBlobsDir(storagePath: string): void {
