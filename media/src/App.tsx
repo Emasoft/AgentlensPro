@@ -23,6 +23,7 @@ import { Import } from './tabs/Import'
 import { Help } from './tabs/Help'
 import { Patterns } from './tabs/Patterns'
 import { Context } from './tabs/ContextTab'
+import { Cache } from './tabs/CacheTab'
 import { Automation, checkAutomations } from './tabs/Automation'
 import { instructionFiles, appliedSuggestions, dismissedIds } from './tabs/Instructions'
 import { IngestionToggles, McpToggle } from './tabs/Settings'
@@ -35,6 +36,7 @@ const bellOpen = signal(false)
 const TABS = [
   { id: 'sessions',   label: 'Sessions',   title: 'Session list with expand-in-place detail — trace, files, cost, and flagged issues for each session.' },
   { id: 'context',    label: 'Context',    title: 'Context-window growth per turn: how large the prompt gets each turn (new input + cache-read + cache-created), expandable to the composition of each turn and sub-agent sub-sessions.' },
+  { id: 'cache',      label: 'Cache',      title: 'Prompt-cache health: hit-rate SLI trend, worst sessions, top cache-break causes, the wasted-$ leaderboard of offending blocks, and the sub-agent fleet tree with per-child cache-warmth.' },
   { id: 'analytics',  label: 'Analytics',  title: 'Aggregate charts and metrics: token/cost trends, agent comparison, tool distribution, and active insights.' },
   { id: 'patterns',   label: 'Advisor',    title: 'Cross-session behavioral patterns, efficiency map, hot files, and instruction file recommendations.' },
   { id: 'export',     label: 'Export',     title: 'Export raw or redacted session data as JSON files.' },
@@ -46,6 +48,7 @@ function ActivePanel() {
   switch (tab) {
     case 'sessions':  return <Sessions />
     case 'context':   return <Context />
+    case 'cache':     return <Cache />
     case 'analytics': return <Analytics />
     case 'patterns':  return <Patterns />
     case 'export':    return <Export />

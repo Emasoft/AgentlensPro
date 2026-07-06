@@ -1,5 +1,6 @@
 import { useState } from 'preact/hooks'
-import { displaySessions } from '../state'
+import { displaySessions, sessionTimelines, sessionCompositions } from '../state'
+import { buildCacheBreakReport } from '../cacheBreak'
 import { buildDisplaySummary, formatMs } from '../utils'
 import {
   getActiveComputeMs,
@@ -31,6 +32,7 @@ const ALERT_TOOLTIPS: Record<string, string> = {
   long_session:   'Uses active LLM/tool compute time, not wall-clock waiting time.',
   no_cache:       'Only checks sessions above the input-token gate. Cache can be low for small sessions without being a problem.',
   tool_loop:      'Counts identical tool plus argument repeats, not just the same tool name.',
+  low_cache_hit:  'Cache hit rate = cache-read / (cache-read + cache-created). A low rate means the prompt cache is breaking and re-writing the prefix at full write rate. Treat it like an uptime SLI — a few points of miss rate move cost and latency a lot. Open the Cache tab for the offending block.',
 }
 
 type AgentThresholdMap = Record<AgentSource, number>
@@ -62,7 +64,12 @@ const DEFAULT_CONFIGS: AlertConfig[] = [
   { id: 'long_session', label: 'Long Active Session', severity: 'info', description: 'Fires when active LLM/tool compute time exceeds the agent-specific threshold. Wall-clock idle time does not count.', enabled: true, threshold: 60, unit: 'agent profile', min: 10, max: 240, step: 10 },
   { id: 'no_cache', label: 'Zero Cache Utilization', severity: 'info', description: 'Fires when any session above that agent\'s input-token gate has 0% cache hit rate.', enabled: true, threshold: 30000, unit: 'tokens', min: 5000, max: 200000, step: 5000, agentThresholds: { claude_code: 30000, copilot: 30000, codex: 30000, opencode: 30000 } },
   { id: 'tool_loop', label: 'Identical Tool Repeat', severity: 'warning', description: 'Fires when the same tool with identical arguments repeats beyond the agent-specific threshold without a file change between repeats.', enabled: true, threshold: 5, unit: 'agent profile', min: 3, max: 20, step: 1 },
+  { id: 'low_cache_hit', label: 'Low Cache Hit Rate (SLI)', severity: 'warning', description: 'Fires when a session with meaningful cache activity falls below the cache-hit-rate SLI. Names the worst session and, when its composition is loaded, the top offending block breaking the prefix cache.', enabled: true, threshold: 70, unit: 'percent', min: 0, max: 100, step: 5 },
 ]
+
+// Minimum cache tokens (read + created) before the low-cache-hit SLI considers a session — tiny
+// sessions legitimately have a low/zero hit rate without it being a problem.
+const CACHE_SLI_MIN_TOKENS = 20000
 
 type EffSummary = ReturnType<typeof buildDisplaySummary>['efficiency']
 type SavedAlertConfig = {
@@ -288,7 +295,30 @@ function evaluateAlert(
           + worst.profile.label + ' alert ' + worst.profile.identicalRepeatAlert + ' — "' + sessionDisplayName(worst.session) + '"',
       }
     }
+    case 'low_cache_hit': return evalLowCacheHit(cfg, sessions)
     default: return { triggered: false }
+  }
+}
+
+// The cache-hit-rate SLI: flag the worst session with meaningful cache activity below the threshold,
+// naming the top offending block when its composition is resident (else point at the Cache tab).
+function evalLowCacheHit(cfg: AlertConfig, sessions: SessionSummaryCard[]): AlertResult {
+  const rows = sessions.filter(s =>
+    (s.cacheReadTokens + s.cacheCreateTokens) >= CACHE_SLI_MIN_TOKENS && s.cacheHitRate * 100 < cfg.threshold)
+  if (!rows.length) return { triggered: false }
+  const worst = rows.reduce((a, b) => b.cacheHitRate < a.cacheHitRate ? b : a, rows[0])
+  const tl = sessionTimelines.value[worst.sessionId]
+  const comp = sessionCompositions.value[worst.sessionId]
+  let offender = ''
+  if (tl && comp !== undefined) {
+    const report = buildCacheBreakReport(worst.sessionId, tl, comp, worst.model ?? '')
+    if (report && report.offenders.length > 0) offender = ' — top offender: "' + report.offenders[0].label + '"'
+  }
+  return {
+    triggered: true,
+    key: worst.traceId || worst.sessionId,
+    detail: (worst.cacheHitRate * 100).toFixed(0) + '% cache hit vs ' + cfg.threshold + '% SLI on '
+      + sessionDisplayName(worst) + offender + (offender ? '' : ' — open the Cache tab for the offending block'),
   }
 }
 
