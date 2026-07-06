@@ -1,9 +1,9 @@
 ---
 trdd-id: TKN5VALS
 title: Fix Claude token/cost accounting + 5-value expandable trace tree, sticky headers, Context tab
-column: testing
+column: complete
 created: 2026-07-06T01:16:34+0200
-updated: 2026-07-06T08:52:00+0200
+updated: 2026-07-06T15:18:06+0200
 current-owner: claude-opus-4-8
 assignee: claude-opus-4-8
 priority: 2
@@ -19,13 +19,48 @@ test-requirements: [typecheck, lint, unit]
 impacts: [config-schema]
 migration-direction: forward
 attempts: 0
-implementation-commits: []
+implementation-commits: [4d28f24, a98f480, 9a672fa, 9a70df0, 027dd68, 3c0899c, c48908e, 38714bf, 1f3a8d1, c86bfc9, b89dc95, 1729b67, d6582be, 7f5c681, 2e14a23, ae9160e]
 external-refs: []
 ---
 
 # TRDD-TKN5VALS — Token/cost accuracy + expandable 5-value trace tree
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-06
+
+### ✅ ALL PHASES COMPLETE (P1 accounting · P2 trace UI · P3 backbone · P4 diagnosis + MCP + dev). column=complete.
+
+**P4 DONE (2026-07-06) — steps 1-7 all landed, LOCAL commits only (branch fix/logreader-large-jsonl, NOT pushed):**
+- Steps 1-2 (`38714bf`, `1f3a8d1`, `c86bfc9`): composition tracer wired end-to-end
+  (`loadContextComposition` msg → host/standalone route → webview signal → ContextTab);
+  full tool-output blobs; `peakContextPerTurn` persisted; spawn-kind capture; pure
+  `src/cacheBreak.ts` classifier.
+- Steps 3-4 (`b89dc95`, `1729b67`, `d6582be`, `7f5c681`): Traces cache-split values +
+  cache-break markers + spawn-kind badges + every-row composition drill-down; NEW Cache tab
+  (hit-rate SLI, ranked break causes, wasted-$ leaderboard, fleet tree); low-cache-hit alert.
+- Step 5 (`2e14a23`): MCP — EXTENDED `get_session_detail` (per-turn cache split +
+  compositionSummary + subAgents rollup), `get_efficiency_report` (cacheHealth SLI),
+  `get_instruction_suggestions` (cache-efficiency suggestion); ADDED 6 tools
+  `get_context_composition`, `get_context_growth`, `get_cache_break_report`,
+  `get_context_inflation_report`, `find_context_hogs`, `get_subagent_tree`; wired a
+  `getComposition` accessor into `McpServerOptions` and BOTH call sites (extension.ts +
+  standalone/server.ts). Host `buildCacheBreakReport` added to `src/cacheBreak.ts` (mirrors the
+  webview port) so the turn-bucketing lives in one place.
+- Step 6 (`ae9160e`): browser live-reload — standalone computes a bundle-mtime BUILD_ID, pushes
+  it over the existing dashboard SSE, injects a guarded client snippet that `location.reload()`s
+  when the id it loaded with differs (rebuild→restart→auto-refresh; no loop).
+- Step 7 VERIFY (this commit): check-types (src+media) clean, lint 0 errors (47 pre-existing
+  warnings), esbuild all 5 targets. Drove a headless standalone server on isolated ports over
+  the real 18k-session store: all 12 MCP tools listed + called successfully; `get_cache_break_report`
+  on session 777b8f52 → 137 breaks, 1.9M wasted tokens, $10.97, offenders ranked with $ cost
+  (skill catalog $4.80, hooks $2.50/$1.56); `get_context_growth` real buckets (peak 17k, 98% hit);
+  live-reload snippet + SSE buildId confirmed in served HTML. Report:
+  reports/trace-ui/20260706_*-P4-step567.md.
+
+**SUPERSEDED — do NOT carry forward:** every "P2 NOT STARTED", "DEFERRED to P4", "TODO (P4 agent)",
+and "Blocked until #5 lands" note lower in this body / in reports/mcp/P4-mcp-surface-spec.md is
+now DONE. There is no remaining deferred P4 work.
+
+---
 
 **User's verbatim work order (7 items):** costs wrong (9.2k tokens → $6.67);
 10M+ tokens reported vs ~15-20k manual sum; trace expansion missing cache
