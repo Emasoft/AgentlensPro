@@ -117,6 +117,11 @@ const mcpHttpServer = startMcpHttpServer({
     const summary = buildSessionSummary()
     return summary?.sessions ?? []
   },
+  // The standalone cards already carry their inline timeline (log-parsed), so the MCP diagnostics
+  // read per-turn tokens off the card; composition is reconstructed on demand from the raw .jsonl —
+  // the same route /api/composition/:id serves the browser. This makes the P4 inflation / cache-break
+  // tools return real data over the in-session MCP (http://localhost:4316/mcp).
+  getComposition: (id) => buildContextComposition(id),
 }, MCP_PORT, BIND_HOST)
 
 function runLogScan() {

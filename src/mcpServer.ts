@@ -21,7 +21,11 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
 import { calcTokenCostUsd } from './pricing'
-import type { SessionSummaryCard } from './summarizers/summarizerTypes'
+import type {
+  SessionSummaryCard, TimelineEntry, ContextComposition,
+  CacheBreakReport, CacheBreakOffender,
+} from './summarizers/summarizerTypes'
+import { buildCacheBreakReport } from './cacheBreak'
 import { generateSuggestions } from './instructionAdvisor'
 import { readAllInstructionContent } from './instructionFiles'
 
@@ -131,6 +135,101 @@ const TOOLS = [
       required: ['workspace'],
       properties: {
         workspace: { type: 'string', description: 'Absolute path of the workspace root (required)' },
+      },
+    },
+  },
+  // ── P4 context-inflation / cache-break diagnostics (TRDD-TKN5VALS) ─────────────
+  {
+    name: 'get_context_composition',
+    description:
+      'Returns WHAT occupies the context window per turn for one session — the injected blocks ' +
+      '(hook injections, skill/tool/agent/mcp catalogs, file reads, task reminders) ranked by ' +
+      'approximate token weight. Reconstructed on demand from the local Claude .jsonl; token ' +
+      'figures are estimates (bytes/4). Pass a turn to drill into a single turn. Use this to answer ' +
+      '"why is this turn\'s prompt so big / what is inflating my context".',
+    inputSchema: {
+      type: 'object' as const,
+      required: ['sessionId'],
+      properties: {
+        sessionId: { type: 'string', description: 'Session ID from get_recent_sessions' },
+        turn:      { type: 'number', description: 'Optional 1-based turn to isolate; omit for all turns' },
+      },
+    },
+  },
+  {
+    name: 'get_context_growth',
+    description:
+      'Returns the cumulative context-size trajectory per turn for one session: prompt size, the ' +
+      'cache-READ vs cache-CREATED split, new (uncached) input, and the per-turn cache-hit rate. ' +
+      'This is the "why did this turn balloon" view — a turn with a large cache-CREATED figure ' +
+      're-wrote the prefix instead of reading it. Use get_cache_break_report to name the cause.',
+    inputSchema: {
+      type: 'object' as const,
+      required: ['sessionId'],
+      properties: {
+        sessionId: { type: 'string', description: 'Session ID from get_recent_sessions' },
+      },
+    },
+  },
+  {
+    name: 'get_cache_break_report',
+    description:
+      'Diagnoses prompt-cache breaks. The prompt cache is a PREFIX cache: turn N reuses turn N-1 ' +
+      'only up to the first byte that differs; everything after is re-billed as cache_creation at ' +
+      'full write rate. For one session (sessionId): per-turn break points, the classified CAUSE ' +
+      '(TOOLS_CHANGED, MODEL_SWITCHED, INJECTED_BLOCK_CHANGED, IDLE_TTL_EXPIRY, …), the offending ' +
+      'block, wasted tokens/cost, and a remediation hint. For a workspace: the top avoidable-break ' +
+      'offenders aggregated across a bounded set of recent sessions.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        sessionId: { type: 'string', description: 'One session to diagnose' },
+        workspace: { type: 'string', description: 'Aggregate offenders across sessions under this workspace prefix instead' },
+      },
+    },
+  },
+  {
+    name: 'get_context_inflation_report',
+    description:
+      'Ranks the biggest cumulative context contributors (turns × per-turn weight) for a session or ' +
+      'workspace, and flags RUNAWAY sources — a block re-injected across many turns (a tool output ' +
+      're-read every turn, a huge injected file, a per-turn hook) that, if it sits in the cached ' +
+      'prefix, forces repeated cache-creation. Use this to find the structural token sinks.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        sessionId: { type: 'string', description: 'One session to analyze' },
+        workspace: { type: 'string', description: 'Aggregate across sessions under this workspace prefix instead' },
+      },
+    },
+  },
+  {
+    name: 'find_context_hogs',
+    description:
+      'Returns the top context-consuming sources (files, tool outputs, rules, memories, hook ' +
+      'injections, catalogs) ranked by cumulative token cost across a bounded window of sessions. ' +
+      'Optional scope filters by workspace path prefix. The cross-session "what is costing me the ' +
+      'most context everywhere" leaderboard.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        scope: { type: 'string', description: 'Optional workspace path prefix to scope the scan' },
+        topN:  { type: 'number', description: 'How many hogs to return (default 15, max 50)' },
+      },
+    },
+  },
+  {
+    name: 'get_subagent_tree',
+    description:
+      'Returns the sub-agent spawn tree for a session: the parent plus every sub-agent child with ' +
+      'its spawn-KIND (fork = cache-warm; fresh / worktree / fleet = cache-cold), model (inherited ' +
+      'vs override), the spawning turn, rolled-up total tokens, and cost. Pass any node in the ' +
+      'tree — the root is resolved automatically. Use this to see fleet cost and cold-start waste.',
+    inputSchema: {
+      type: 'object' as const,
+      required: ['sessionId'],
+      properties: {
+        sessionId: { type: 'string', description: 'Any session in the tree (parent or child)' },
       },
     },
   },
@@ -244,12 +343,15 @@ function handleGetWorkspacePatterns(
 function handleGetSessionDetail(
   sessions: SessionSummaryCard[],
   getTimeline: ((id: string) => unknown[]) | null,
+  composition: ContextComposition | null,
   args: { sessionId: string },
 ) {
   const s = sessions.find(x => x.sessionId === args.sessionId)
   if (!s) return { error: `Session ${args.sessionId} not found.` }
 
-  const timeline = getTimeline ? getTimeline(s.sessionId) : s.timeline ?? []
+  const timeline = asTimeline(getTimeline, s.sessionId, s)
+  const growth = computeTurnGrowth(timeline)
+  const children = subAgentChildren(sessions, s.sessionId)
   return {
     sessionId:    s.sessionId,
     date:         s.startTime.slice(0, 19).replace('T', ' '),
@@ -260,11 +362,29 @@ function handleGetSessionDetail(
     turns:        s.totalLlmCalls,
     errors:       s.errors,
     outcome:      s.outcome,
+    // P4: cache accounting so a consumer can see cache health without a second call.
+    cacheReadTokens:   s.cacheReadTokens,
+    cacheCreateTokens: s.cacheCreateTokens,
+    cacheHitRatePct:   Math.round(s.cacheHitRate * 100),
+    peakContextPerTurn: s.peakContextPerTurn ?? null,
+    // P4: per-turn cache-READ vs cache-CREATED split (capped) — the "what ballooned" view inline.
+    perTurnCacheSplit: growth.slice(0, 60).map(g => ({
+      turn: g.turn, prompt: g.promptTokens, cacheRead: g.cacheReadTokens,
+      cacheCreated: g.cacheCreateTokens, newInput: g.newInputTokens, hitPct: g.hitRatePct,
+    })),
+    // P4: what occupied the context, aggregated heaviest-first (null when no local composition).
+    compositionSummary: composition
+      ? aggregateComposition(composition).slice(0, 12).map(a => ({
+          label: a.label, kind: a.kind, cumulativeTokens: a.cumulativeTokens, turnsPresent: a.turnsPresent,
+        }))
+      : null,
+    // P4: sub-agent children rolled up (spawn-kind, warmth, tokens) — null when none.
+    subAgents: children.length > 0 ? children : null,
     loopSignals:  s.loopSignals ?? [],
     filesRead:    s.filesRead ?? [],
     filesChanged: s.filesChanged ?? [],
     toolCounts:   s.toolCounts,
-    timeline:     (timeline as { type: string; label: string; durationMs: number; isError?: boolean }[])
+    timeline:     timeline
       .slice(0, 80)
       .map(e => ({ type: e.type, label: e.label, ms: e.durationMs, error: e.isError || false })),
   }
@@ -381,6 +501,15 @@ function handleGetEfficiencyReport(
     }))
     .sort((a, b) => a.avgCostUsd - b.avgCostUsd)
 
+  // P4: cache-health SLI. A low hit rate means the prompt cache is being re-written (cache_creation
+  // billed at full rate instead of ~10% cache_read) — the dominant, invisible token sink.
+  const avgHit = recent.reduce((s, x) => s + x.cacheHitRate, 0) / recent.length
+  const below70 = recent.filter(s => s.cacheHitRate < 0.7)
+  const worstCache = [...recent]
+    .sort((a, b) => a.cacheHitRate - b.cacheHitRate)
+    .slice(0, 5)
+    .map(s => ({ sessionId: s.sessionId, model: s.model, cacheHitRatePct: Math.round(s.cacheHitRate * 100), cacheCreateTokens: s.cacheCreateTokens }))
+
   return {
     period:       `last ${cutoffDays} days`,
     sessionCount: recent.length,
@@ -388,6 +517,11 @@ function handleGetEfficiencyReport(
     avgCostUsd:   +(recent.reduce((s, x) => s + sessionCost(x), 0) / recent.length).toFixed(4),
     avgTurns:     +(recent.reduce((s, x) => s + x.totalLlmCalls, 0) / recent.length).toFixed(1),
     errorRate:    Math.round(recent.filter(s => s.errors > 0).length / recent.length * 100) + '%',
+    cacheHealth: {
+      avgCacheHitRatePct: Math.round(avgHit * 100),
+      sessionsBelow70pct: below70.length,
+      worstSessions:      worstCache,
+    },
     topLoopSignals: topSignals,
     agentRanking,
   }
@@ -407,15 +541,307 @@ function handleGetInstructionSuggestions(
   }
   const existingText = readAllInstructionContent(workspace)
   const suggestions = generateSuggestions(filtered, existingText)
-  return suggestions.map(s => ({
+  const out = suggestions.map(s => ({
     id:            s.id,
-    category:      s.category,
+    category:      s.category as string,
     title:         s.title,
     evidence:      s.evidence,
     suggestedText: s.suggestedText,
-    targetAgents:  s.targetAgents,
-    priority:      s.priority,
+    targetAgents:  s.targetAgents as string[],
+    priority:      s.priority as string,
   }))
+
+  // P4: a data-driven cache-efficiency suggestion when the workspace's prompt cache is under-used.
+  // Low hit rate → the cache is re-written every turn at full write rate; the fix is instruction-level
+  // (avoid mid-session tool/model churn + volatile per-turn injections).
+  const avgHit = filtered.reduce((a, s) => a + s.cacheHitRate, 0) / filtered.length
+  if (avgHit < 0.8) {
+    out.push({
+      id:            'cache-efficiency',
+      category:      'behavior',
+      title:         'Improve prompt-cache hit rate',
+      evidence:      `Average cache-hit rate across ${filtered.length} sessions is ${Math.round(avgHit * 100)}% (target ≥ 80%). A low hit rate re-bills the prompt prefix as cache_creation at full write rate.`,
+      suggestedText: 'Avoid mid-session tool-set changes, model switches, and volatile per-turn injections (they break the prefix cache). Run get_cache_break_report for the specific offending blocks and remediations.',
+      targetAgents:  [],
+      priority:      'medium',
+    })
+  }
+  return out
+}
+
+// ── P4 diagnostics: shared helpers (TRDD-TKN5VALS) ────────────────────────────
+
+// getTimeline returns unknown[]; narrow it to TimelineEntry[] (falling back to the card's inline
+// timeline when no accessor is wired). The shapes match — the accessor IS a TimelineEntry source.
+function asTimeline(getTimeline: ((id: string) => unknown[]) | null, id: string, card?: SessionSummaryCard): TimelineEntry[] {
+  const raw = getTimeline ? getTimeline(id) : (card?.timeline ?? [])
+  return raw as TimelineEntry[]
+}
+
+// Per-turn context size + cache split from a session timeline. promptTokens is the FULL prompt that
+// turn — inputTokens already includes cacheRead + cacheCreate (P1 accounting) — so newInput is the
+// non-cached remainder. Turn 1 warms cold; later turns should be almost entirely cache-read.
+interface TurnGrowth {
+  turn: number
+  promptTokens: number
+  cacheReadTokens: number
+  cacheCreateTokens: number
+  newInputTokens: number
+  outputTokens: number
+  hitRatePct: number
+}
+
+function computeTurnGrowth(timeline: TimelineEntry[]): TurnGrowth[] {
+  const byTurn = new Map<number, { input: number; read: number; create: number; output: number }>()
+  for (const e of timeline) {
+    if (e.turn === undefined || e.type === 'background') continue
+    let a = byTurn.get(e.turn)
+    if (!a) { a = { input: 0, read: 0, create: 0, output: 0 }; byTurn.set(e.turn, a) }
+    a.input  += e.inputTokens ?? 0
+    a.read   += e.cacheReadTokens ?? 0
+    a.create += e.cacheCreateTokens ?? 0
+    a.output += e.outputTokens ?? 0
+  }
+  return [...byTurn.entries()].sort((x, y) => x[0] - y[0]).map(([turn, a]) => {
+    const denom = a.read + a.create
+    return {
+      turn,
+      promptTokens:      a.input,
+      cacheReadTokens:   a.read,
+      cacheCreateTokens: a.create,
+      newInputTokens:    Math.max(0, a.input - a.read - a.create),
+      outputTokens:      a.output,
+      hitRatePct:        denom > 0 ? Math.round(a.read / denom * 100) : 0,
+    }
+  })
+}
+
+// One injected source aggregated across a composition's turns: the "turns × per-turn weight"
+// inflation view. cumulativeTokens = Σ tokens over every turn the source appears in.
+interface SourceAggregate {
+  label: string
+  kind: string
+  cumulativeTokens: number
+  turnsPresent: number
+  peakTokens: number
+}
+
+function aggregateComposition(composition: ContextComposition): SourceAggregate[] {
+  const byKey = new Map<string, SourceAggregate>()
+  for (const t of composition.turns) {
+    for (const s of t.sources) {
+      const key = `${s.kind}::${s.label}`
+      const a = byKey.get(key) ?? { label: s.label, kind: s.kind, cumulativeTokens: 0, turnsPresent: 0, peakTokens: 0 }
+      a.cumulativeTokens += s.tokens
+      a.turnsPresent += 1
+      a.peakTokens = Math.max(a.peakTokens, s.tokens)
+      byKey.set(key, a)
+    }
+  }
+  return [...byKey.values()].sort((a, b) => b.cumulativeTokens - a.cumulativeTokens)
+}
+
+// Direct sub-agent children of a session, rolled up for the tree view. fork = cache-warm (reads the
+// parent's cache); fresh / worktree / fleet = cache-cold.
+function subAgentChildren(sessions: SessionSummaryCard[], parentId: string) {
+  return sessions
+    .filter(s => s.parentSessionId === parentId)
+    .map(c => ({
+      sessionId:     c.sessionId,
+      spawnedByTurn: c.spawnedByTurn ?? null,
+      spawnKind:     c.spawnKind ?? 'fresh',
+      warm:          c.spawnKind === 'fork',
+      model:         c.spawnModelOverride || c.model,
+      modelOverride: c.spawnModelOverride ?? null,
+      isolation:     c.spawnIsolation ?? null,
+      totalTokens:   c.inputTokens + c.outputTokens,
+      cost_usd:      +sessionCost(c).toFixed(4),
+    }))
+}
+
+type CompositionAccessor = (sessionId: string) => Promise<ContextComposition | null>
+
+// ── P4 diagnostic tool handlers ───────────────────────────────────────────────
+
+function handleGetContextComposition(composition: ContextComposition | null, args: { sessionId: string; turn?: number }) {
+  if (!composition) return { sessionId: args.sessionId, message: 'No local Claude log composition available for this session (OTEL-only or not a Claude session).' }
+  let turns = composition.turns
+  if (args.turn !== undefined) turns = turns.filter(t => t.turn === args.turn)
+  return {
+    sessionId:  composition.sessionId,
+    estimated:  composition.estimated,
+    truncated:  composition.truncated,
+    turnCount:  composition.turns.length,
+    turns: turns.slice(0, 200).map(t => ({
+      turn:        t.turn,
+      totalTokens: t.sources.reduce((n, s) => n + s.tokens, 0),
+      sources:     t.sources.map(s => ({ label: s.label, kind: s.kind, tokens: s.tokens, count: s.count })),
+    })),
+  }
+}
+
+function handleGetContextGrowth(s: SessionSummaryCard, timeline: TimelineEntry[]) {
+  const growth = computeTurnGrowth(timeline)
+  if (growth.length === 0) return { sessionId: s.sessionId, message: 'No per-turn token data (OTEL session without turn indices, or empty timeline).' }
+  const peak = growth.reduce((m, g) => Math.max(m, g.promptTokens), 0)
+  const totalCreate = growth.reduce((n, g) => n + g.cacheCreateTokens, 0)
+  const totalRead = growth.reduce((n, g) => n + g.cacheReadTokens, 0)
+  const denom = totalRead + totalCreate
+  return {
+    sessionId:                  s.sessionId,
+    model:                      s.model,
+    turns:                      growth.length,
+    peakPromptTokens:           peak,
+    persistedPeakContextPerTurn: s.peakContextPerTurn ?? null,
+    overallCacheHitRatePct:     denom > 0 ? Math.round(totalRead / denom * 100) : 0,
+    totalCacheCreatedTokens:    totalCreate,
+    perTurn:                    growth.slice(0, 300),
+  }
+}
+
+async function handleGetCacheBreakReport(
+  sessions: SessionSummaryCard[],
+  getTimeline: ((id: string) => unknown[]) | null,
+  getComposition: CompositionAccessor | null,
+  args: { sessionId?: string; workspace?: string },
+) {
+  if (!getComposition) return { error: 'Composition accessor unavailable — cache-break analysis needs local Claude logs.' }
+  const reportFor = async (s: SessionSummaryCard): Promise<CacheBreakReport | null> =>
+    buildCacheBreakReport(s.sessionId, asTimeline(getTimeline, s.sessionId, s), await getComposition(s.sessionId), s.model)
+
+  if (args.sessionId) {
+    const s = sessions.find(x => x.sessionId === args.sessionId)
+    if (!s) return { error: `Session ${args.sessionId} not found.` }
+    const report = await reportFor(s)
+    if (!report) return { sessionId: s.sessionId, message: 'Not enough data to diff (no local composition, or a single-turn session).' }
+    const broken = report.turns.filter(t => t.broke)
+    return {
+      sessionId:          report.sessionId,
+      model:              s.model,
+      cacheHitRatePct:    Math.round(report.cacheHitRate * 100),
+      totalWastedTokens:  report.totalWastedTokens,
+      totalWastedCostUsd: +report.totalWastedCostUsd.toFixed(4),
+      breakCount:         broken.length,
+      breaks: broken.slice(0, 40).map(t => ({
+        turn: t.turn, cause: t.cause, block: t.breakSourceLabel ?? null,
+        wastedTokens: t.wastedTokens, wastedCostUsd: +t.wastedCostUsd.toFixed(4), remediation: t.remediation,
+      })),
+      topOffenders: report.offenders.slice(0, 10).map(o => ({ ...o, wastedCostUsd: +o.wastedCostUsd.toFixed(4) })),
+    }
+  }
+
+  const scope = args.workspace?.trim()
+  const pool = (scope ? sessions.filter(s => (s.workspace ?? '').startsWith(scope)) : sessions).slice(0, 20)
+  const merged = new Map<string, CacheBreakOffender>()
+  let analyzed = 0
+  for (const s of pool) {
+    const report = await reportFor(s)
+    if (!report) continue
+    analyzed++
+    for (const o of report.offenders) {
+      const key = `${o.cause}::${o.kind}::${o.label}`
+      const cur = merged.get(key) ?? { label: o.label, kind: o.kind, cause: o.cause, occurrences: 0, wastedTokens: 0, wastedCostUsd: 0 }
+      cur.occurrences += o.occurrences
+      cur.wastedTokens += o.wastedTokens
+      cur.wastedCostUsd += o.wastedCostUsd
+      merged.set(key, cur)
+    }
+  }
+  const ranked = [...merged.values()].sort((a, b) => (b.wastedCostUsd - a.wastedCostUsd) || (b.wastedTokens - a.wastedTokens))
+  return {
+    scope:            scope ?? 'all',
+    sessionsAnalyzed: analyzed,
+    topOffenders:     ranked.slice(0, 15).map(o => ({ ...o, wastedCostUsd: +o.wastedCostUsd.toFixed(4) })),
+  }
+}
+
+async function handleGetContextInflationReport(
+  sessions: SessionSummaryCard[],
+  getComposition: CompositionAccessor | null,
+  args: { sessionId?: string; workspace?: string },
+) {
+  if (!getComposition) return { error: 'Composition accessor unavailable — inflation analysis needs local Claude logs.' }
+  const agg = new Map<string, SourceAggregate & { sessions: number }>()
+  const fold = (aggs: SourceAggregate[]) => {
+    for (const a of aggs) {
+      const key = `${a.kind}::${a.label}`
+      const cur = agg.get(key) ?? { label: a.label, kind: a.kind, cumulativeTokens: 0, turnsPresent: 0, peakTokens: 0, sessions: 0 }
+      cur.cumulativeTokens += a.cumulativeTokens
+      cur.turnsPresent += a.turnsPresent
+      cur.peakTokens = Math.max(cur.peakTokens, a.peakTokens)
+      cur.sessions += 1
+      agg.set(key, cur)
+    }
+  }
+
+  let scanned = 0
+  if (args.sessionId) {
+    const c = await getComposition(args.sessionId)
+    if (!c) return { sessionId: args.sessionId, message: 'No local composition available for this session.' }
+    fold(aggregateComposition(c)); scanned = 1
+  } else {
+    const scope = args.workspace?.trim()
+    const pool = (scope ? sessions.filter(s => (s.workspace ?? '').startsWith(scope)) : sessions).slice(0, 20)
+    for (const s of pool) { const c = await getComposition(s.sessionId); if (c) { fold(aggregateComposition(c)); scanned++ } }
+  }
+  const ranked = [...agg.values()].sort((a, b) => b.cumulativeTokens - a.cumulativeTokens)
+  // Runaway = re-injected across many turns AND heavy per turn — if it lives in the cached prefix it
+  // forces repeated cache-creation. This is the fixable structural sink.
+  const runaway = ranked.filter(a => a.turnsPresent >= 5 && a.peakTokens >= 1000)
+  return {
+    scope:           args.sessionId ? `session ${args.sessionId}` : (args.workspace ?? 'all'),
+    sessionsScanned: scanned,
+    topContributors: ranked.slice(0, 15).map(a => ({ label: a.label, kind: a.kind, cumulativeTokens: a.cumulativeTokens, turnsPresent: a.turnsPresent, peakTokens: a.peakTokens, sessions: a.sessions })),
+    runawaySources:  runaway.slice(0, 10).map(a => ({
+      label: a.label, kind: a.kind, turnsPresent: a.turnsPresent, peakTokens: a.peakTokens, cumulativeTokens: a.cumulativeTokens,
+      hint: 'Re-injected across many turns — if it sits in the cached prefix it forces repeated cache-creation; move it into the message suffix after the last breakpoint.',
+    })),
+  }
+}
+
+async function handleFindContextHogs(
+  sessions: SessionSummaryCard[],
+  getComposition: CompositionAccessor | null,
+  args: { scope?: string; topN?: number },
+) {
+  if (!getComposition) return { error: 'Composition accessor unavailable — context-hog analysis needs local Claude logs.' }
+  const scope = args.scope?.trim()
+  const topN = Math.min(args.topN ?? 15, 50)
+  const pool = (scope ? sessions.filter(s => (s.workspace ?? '').startsWith(scope) || s.sessionId.includes(scope)) : sessions).slice(0, 25)
+  const byKey = new Map<string, { label: string; kind: string; cumulativeTokens: number; sessions: number; occurrences: number }>()
+  let scanned = 0
+  for (const s of pool) {
+    const c = await getComposition(s.sessionId)
+    if (!c) continue
+    scanned++
+    for (const a of aggregateComposition(c)) {
+      const key = `${a.kind}::${a.label}`
+      const cur = byKey.get(key) ?? { label: a.label, kind: a.kind, cumulativeTokens: 0, sessions: 0, occurrences: 0 }
+      cur.cumulativeTokens += a.cumulativeTokens
+      cur.sessions += 1
+      cur.occurrences += a.turnsPresent
+      byKey.set(key, cur)
+    }
+  }
+  const hogs = [...byKey.values()].sort((a, b) => b.cumulativeTokens - a.cumulativeTokens).slice(0, topN)
+  return { scope: scope ?? 'all', sessionsScanned: scanned, hogs }
+}
+
+function handleGetSubagentTree(sessions: SessionSummaryCard[], args: { sessionId: string }) {
+  const s = sessions.find(x => x.sessionId === args.sessionId)
+  if (!s) return { error: `Session ${args.sessionId} not found.` }
+  const root = s.parentSessionId ? (sessions.find(x => x.sessionId === s.parentSessionId) ?? s) : s
+  const children = subAgentChildren(sessions, root.sessionId)
+  const rolledUpTokens = (root.inputTokens + root.outputTokens) + children.reduce((n, c) => n + c.totalTokens, 0)
+  const rolledUpCost = +(sessionCost(root) + children.reduce((n, c) => n + c.cost_usd, 0)).toFixed(4)
+  return {
+    root: { sessionId: root.sessionId, model: root.model, ownTokens: root.inputTokens + root.outputTokens, ownCost_usd: +sessionCost(root).toFixed(4) },
+    childCount:       children.length,
+    children:         children.length > 0 ? children : [],
+    rolledUpTokens,
+    rolledUpCost_usd: rolledUpCost,
+    note: children.length === 0 ? 'No sub-agent children recorded for this session.' : undefined,
+  }
 }
 
 // ── MCP Server factory ────────────────────────────────────────────────────────
@@ -425,6 +851,10 @@ export interface McpServerOptions {
   getSessions: SessionAccessor
   /** Optionally load full timeline for a session (VS Code has this; standalone uses session.timeline). */
   getTimeline?: (sessionId: string) => unknown[]
+  /** Optionally reconstruct the per-turn context composition from the raw Claude .jsonl (on demand).
+   *  Wired in both the extension and the standalone server so the P4 inflation / cache-break tools
+   *  return real data. Async because it streams a (possibly multi-GB) log file. */
+  getComposition?: (sessionId: string) => Promise<ContextComposition | null>
 }
 
 export function createMcpServer(opts: McpServerOptions): Server {
@@ -438,6 +868,8 @@ export function createMcpServer(opts: McpServerOptions): Server {
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     const sessions = opts.getSessions()
     const args = (req.params.arguments ?? {}) as Record<string, unknown>
+    const getTimeline = opts.getTimeline ?? null
+    const getComposition = opts.getComposition ?? null
 
     let result: unknown
     switch (req.params.name) {
@@ -447,9 +879,13 @@ export function createMcpServer(opts: McpServerOptions): Server {
       case 'get_workspace_patterns':
         result = handleGetWorkspacePatterns(sessions, args as { workspace?: string; days?: number })
         break
-      case 'get_session_detail':
-        result = handleGetSessionDetail(sessions, opts.getTimeline ?? null, args as { sessionId: string })
+      case 'get_session_detail': {
+        const id = (args as { sessionId: string }).sessionId
+        // Composition is optional context — a null accessor or non-Claude session just omits it.
+        const composition = getComposition ? await getComposition(id).catch(() => null) : null
+        result = handleGetSessionDetail(sessions, getTimeline, composition, args as { sessionId: string })
         break
+      }
       case 'find_relevant_context':
         result = handleFindRelevantContext(sessions, args as { task: string; workspace?: string })
         break
@@ -458,6 +894,30 @@ export function createMcpServer(opts: McpServerOptions): Server {
         break
       case 'get_instruction_suggestions':
         result = handleGetInstructionSuggestions(sessions, args as { workspace?: string })
+        break
+      case 'get_context_composition': {
+        const id = (args as { sessionId: string }).sessionId
+        const composition = getComposition ? await getComposition(id).catch(() => null) : null
+        result = handleGetContextComposition(composition, args as { sessionId: string; turn?: number })
+        break
+      }
+      case 'get_context_growth': {
+        const id = (args as { sessionId: string }).sessionId
+        const s = sessions.find(x => x.sessionId === id)
+        result = s ? handleGetContextGrowth(s, asTimeline(getTimeline, id, s)) : { error: `Session ${id} not found.` }
+        break
+      }
+      case 'get_cache_break_report':
+        result = await handleGetCacheBreakReport(sessions, getTimeline, getComposition, args as { sessionId?: string; workspace?: string })
+        break
+      case 'get_context_inflation_report':
+        result = await handleGetContextInflationReport(sessions, getComposition, args as { sessionId?: string; workspace?: string })
+        break
+      case 'find_context_hogs':
+        result = await handleFindContextHogs(sessions, getComposition, args as { scope?: string; topN?: number })
+        break
+      case 'get_subagent_tree':
+        result = handleGetSubagentTree(sessions, args as { sessionId: string })
         break
       default:
         return { content: [{ type: 'text', text: `Unknown tool: ${req.params.name}` }], isError: true }

@@ -1,7 +1,8 @@
 import type {
-  ContextSource,
+  ContextSource, ContextComposition, TimelineEntry,
   CacheBreakCause, CacheBreakTurn, CacheBreakOffender, CacheBreakReport,
 } from './summarizers/summarizerTypes'
+import { lookupRates } from './pricing'
 
 // ── Cache-break classifier (P4, TRDD-TKN5VALS) ────────────────────────────────
 //
@@ -185,4 +186,54 @@ export function analyzeCacheBreaks(
   const cacheHitRate = denom > 0 ? totalRead / denom : 0
 
   return { sessionId, turns: results, offenders, totalWastedTokens, totalWastedCostUsd, cacheHitRate }
+}
+
+// ── Convenience: assemble the report from a session's timeline + composition ───────────────────
+// Host mirror of media/src/cacheBreak.ts's buildCacheBreakReport (kept in sync BY HAND, like
+// pricing.ts). Folds the timeline into per-turn token buckets, overlays the composition's injected
+// blocks, prices the waste from the session model's rates. Returns null when there isn't enough to
+// diff (no composition, or a single turn — turn 1 can never break). The MCP diagnostic tools reuse
+// this so the turn-bucketing logic lives in ONE place, not re-implemented per caller.
+export function buildCacheBreakReport(
+  sessionId: string,
+  timeline: TimelineEntry[],
+  composition: ContextComposition | null | undefined,
+  sessionModel: string,
+): CacheBreakReport | null {
+  if (!composition) return null
+  const sourcesByTurn = new Map<number, ContextSource[]>()
+  for (const t of composition.turns) sourcesByTurn.set(t.turn, t.sources)
+
+  interface Acc { cacheRead: number; cacheCreate: number; input: number; model?: string; ts?: number }
+  const byTurn = new Map<number, Acc>()
+  for (const e of timeline) {
+    if (e.type === 'background' || e.turn === undefined) continue
+    let a = byTurn.get(e.turn)
+    if (!a) { a = { cacheRead: 0, cacheCreate: 0, input: 0 }; byTurn.set(e.turn, a) }
+    a.cacheRead += e.cacheReadTokens ?? 0
+    a.cacheCreate += e.cacheCreateTokens ?? 0
+    a.input += e.inputTokens ?? 0
+    if (!a.model && e.type === 'llm' && e.model) a.model = e.model
+    if (a.ts === undefined && e.timestamp) { const ms = Date.parse(e.timestamp); if (!Number.isNaN(ms)) a.ts = ms }
+  }
+  if (byTurn.size < 2) return null
+
+  const rates = lookupRates(sessionModel)
+  const opts: AnalyzeCacheBreaksOpts = rates
+    ? { writeRateUsdPerMTok: rates.cacheWritePerMTok, inputRateUsdPerMTok: rates.inputPerMTok }
+    : {}
+
+  const inputs: CacheTurnInput[] = [...byTurn.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([turn, a]) => ({
+      turn,
+      sources: sourcesByTurn.get(turn) ?? [],
+      cacheReadTokens: a.cacheRead,
+      cacheCreateTokens: a.cacheCreate,
+      inputTokens: a.input,
+      model: a.model ?? sessionModel,
+      timestampMs: a.ts,
+    }))
+
+  return analyzeCacheBreaks(sessionId, inputs, opts)
 }

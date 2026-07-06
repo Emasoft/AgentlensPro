@@ -18,6 +18,7 @@ import { summarizeSpans } from './spanSummarizer'
 import { LogReader } from './logReader'
 import { detectLoopSignals } from './loopDetector'
 import { startMcpHttpServer } from './mcpServer'
+import { buildContextComposition } from './contextComposition'
 import { InstructionRepository } from './database/instructionRepository'
 
 let collector: OtlpCollector | undefined
@@ -534,7 +535,9 @@ export async function activate(context: vscode.ExtensionContext) {
     const mcpPort = vscode.workspace.getConfiguration('agentLens').get<number>('mcpPort', 4316)
     const mcpServer = startMcpHttpServer(
       { getSessions: () => repository?.listSessions() ?? [],
-        getTimeline: (id) => repository?.loadSessionTimeline(id) ?? [] },
+        getTimeline: (id) => repository?.loadSessionTimeline(id) ?? [],
+        // Reconstruct the per-turn context composition on demand (P4 inflation / cache-break tools).
+        getComposition: (id) => buildContextComposition(id) },
       mcpPort,
     )
     context.subscriptions.push({ dispose: () => mcpServer.close() })
