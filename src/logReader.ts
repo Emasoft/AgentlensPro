@@ -347,10 +347,21 @@ export class LogReader {
     const a = this._incrementalParse<ClaudeAccum>(filePath, _newClaudeAccum, _claudeOnEntry)
     if (!a || !a.firstTimestamp) return null
     const effectiveModel = (a.model && a.hasFastMode) ? `${a.model}-fast` : a.model
-    return {
-      workspace: a.workspace,
-      card: _buildCard(path.basename(filePath, '.jsonl'), 'claude_code', effectiveModel || 'claude', a.firstTimestamp, a.lastTimestamp, a.card, a.workspace),
+    const card = _buildCard(path.basename(filePath, '.jsonl'), 'claude_code', effectiveModel || 'claude', a.firstTimestamp, a.lastTimestamp, a.card, a.workspace)
+    // Sub-agent fleet linkage (TRDD-TKN5VALS P1.3). Worktree/Task sub-agents write their
+    // transcripts under a child project dir whose mangled name embeds ".claude/worktrees/
+    // agent-<id>" (each "/" and "." becomes "-"). These fleet transcripts were being ingested
+    // as standalone sessions, so a launching session's token cost (often on a pricey model
+    // like fable-5) was invisible in its own total. Deriving the parent project from the path
+    // (no guessing) lets the dashboard group the fleet under its launcher and roll their
+    // tokens up. Marked agent-initiated so the UI can render them as an expandable sub-branch.
+    const proj = path.basename(path.dirname(filePath))
+    const wtIdx = proj.indexOf('-claude-worktrees')
+    if (wtIdx > 0) {
+      card.parentSessionId = proj.slice(0, wtIdx).replace(/-+$/, '')
+      card.initiator = 'agent'
     }
+    return { workspace: a.workspace, card }
   }
 
   // ── Codex ───────────────────────────────────────────────────────────────────
