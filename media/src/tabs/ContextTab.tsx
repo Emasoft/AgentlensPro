@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'preact/hooks'
 import {
-  filteredSessions, sessionSummary, sessionTimelines, blobCache,
+  filteredSessions, sessionSummary, sessionTimelines, sessionCompositions, blobCache,
   focusedSessionId, focusedTurn, activeTab, vscode,
 } from '../state'
 import { formatCompact, formatSessionTime, getAgentDotHtml, formatToolLabel } from '../utils'
 import { fmtUsd, calcEntryCost } from '../sessionMetrics'
-import type { SessionSummaryCard, TimelineEntry } from '../types'
+import type { SessionSummaryCard, TimelineEntry, ContextSource } from '../types'
 
 // Approximate token count for a text blob. Marked as an estimate everywhere it surfaces — the
 // exact per-turn token buckets come from usage; this is only for the content-level breakdown of
@@ -49,16 +49,25 @@ function buildTurnPoints(timeline: TimelineEntry[], sessionModel: string): TurnP
 
 interface Source { label: string; tokens: number; exact: boolean; kind: string }
 
-// The composition of one turn, sorted heaviest-first. Two layers:
+// The composition of one turn, sorted heaviest-first. Three layers:
 //  1) EXACT token buckets from usage (cache-read = resident transcript, new input, cache-created, output).
-//  2) ESTIMATED content-level sources (each tool's full output, the assistant response, user text)
+//  2) HOST-parsed injected blocks (hook / skill / tool-agent-mcp catalog / file / reminder) from the
+//     raw .jsonl — the exact WHICH-block-was-injected data the cache-break diagnosis rests on. These
+//     are approximate (bytes/4) but authoritative about identity; absent until the composition loads.
+//  3) ESTIMATED content-level sources (each tool's full output, the assistant response, user text)
 //     so you can see WHICH event added the weight — approximated from blob/char length.
-function buildSources(p: TurnPoint, blobs: Record<string, string>): Source[] {
+function buildSources(p: TurnPoint, blobs: Record<string, string>, hostSources: ContextSource[]): Source[] {
   const out: Source[] = []
   if (p.cacheRead > 0)  out.push({ label: 'Cache-read (resident transcript)', tokens: p.cacheRead, exact: true, kind: 'cacheRead' })
   if (p.input > 0)      out.push({ label: 'New input tokens', tokens: p.input, exact: true, kind: 'input' })
   if (p.cacheWrite > 0) out.push({ label: 'Cache-created (newly cached)', tokens: p.cacheWrite, exact: true, kind: 'cacheWrite' })
   if (p.output > 0)     out.push({ label: 'Model output', tokens: p.output, exact: true, kind: 'output' })
+
+  // Host composition sources for this turn (hooks, catalogs, files, reminders) — the injected blocks
+  // the client-side timeline can't see. Their `kind` drives the color legend below.
+  for (const s of hostSources) {
+    out.push({ label: s.label, tokens: s.tokens, exact: false, kind: s.kind })
+  }
 
   for (const e of p.entries) {
     if (e.type === 'tool') {
@@ -82,9 +91,18 @@ const KIND_COLOR: Record<string, string> = {
   tool:       '#B8E986',
   llm:        'var(--accent)',
   user:       '#F5A623',
+  // Host-composition kinds (injected blocks parsed from the raw .jsonl).
+  hook:         '#e57373',
+  skill:        '#ba68c8',
+  toolCatalog:  '#4dd0e1',
+  agentCatalog: '#7986cb',
+  mcp:          '#4db6ac',
+  file:         '#a1887f',
+  reminder:     '#fff176',
+  other:        'var(--muted)',
 }
 
-function TurnRow({ p, maxContext, sessionId }: { p: TurnPoint; maxContext: number; sessionId: string }) {
+function TurnRow({ p, maxContext, sessionId, hostSources }: { p: TurnPoint; maxContext: number; sessionId: string; hostSources: ContextSource[] }) {
   const [open, setOpen] = useState(false)
   const blobs = blobCache.value
   const width = maxContext > 0 ? Math.max(p.context / maxContext * 100, 0.5) : 0
@@ -120,8 +138,8 @@ function TurnRow({ p, maxContext, sessionId }: { p: TurnPoint; maxContext: numbe
             <button onClick={e => { e.stopPropagation(); jumpToTrace() }}
               style="margin-left:8px;padding:1px 6px;font-size:9px;cursor:pointer;border-radius:3px;border:1px solid var(--border);background:transparent;color:var(--vscode-textLink-foreground,#4fc3f7)">Open in trace →</button>
           </div>
-          {buildSources(p, blobs).map((s, i) => {
-            const maxTok = buildSources(p, blobs)[0]?.tokens || 1
+          {buildSources(p, blobs, hostSources).map((s, i) => {
+            const maxTok = buildSources(p, blobs, hostSources)[0]?.tokens || 1
             const sw = Math.max(s.tokens / maxTok * 100, 0.5)
             return (
               <div key={s.label + i} style="display:flex;align-items:center;font-size:10px;min-height:18px">
@@ -147,15 +165,26 @@ function ContextSessionBlock({ sess, depth }: { sess: SessionSummaryCard; depth:
   const loaded = timelines[sess.sessionId]
   const loading = !collapsed && loaded === undefined && !!vscode
 
+  // Host-parsed per-turn composition (injected blocks). Lazily requested on open, same lifecycle
+  // as the timeline; a plain undefined means "not yet fetched", null means "no local Claude log".
+  const composition = sessionCompositions.value[sess.sessionId]
+
   useEffect(() => {
     if (!collapsed && loaded === undefined && vscode) {
       vscode.postMessage({ type: 'loadSessionDetail', sessionId: sess.sessionId })
+    }
+    if (!collapsed && composition === undefined && vscode) {
+      vscode.postMessage({ type: 'loadContextComposition', sessionId: sess.sessionId })
     }
   }, [sess.sessionId, collapsed])
 
   const timeline = loaded ?? sess.timeline ?? []
   const points = buildTurnPoints(timeline.filter(e => e.type !== 'background'), sess.model ?? '')
   const maxContext = Math.max(sess.peakContextPerTurn ?? 0, ...points.map(p => p.context), 1)
+
+  // turn number → the host composition sources for that turn (empty when composition absent).
+  const hostByTurn = new Map<number, ContextSource[]>()
+  for (const t of composition?.turns ?? []) hostByTurn.set(t.turn, t.sources)
 
   // Sub-agent / fork sessions spawned by this one render as nested sub-branches (P2.3). Uses the
   // parentSessionId backbone; inert until the extension-side session-to-session linkage populates it.
@@ -182,7 +211,7 @@ function ContextSessionBlock({ sess, depth }: { sess: SessionSummaryCard; depth:
             ? <div style="padding:10px;font-size:11px;color:var(--muted)">Loading context trace…</div>
             : points.length === 0
               ? <div style="padding:10px;font-size:11px;color:var(--muted)">No per-turn token data for this session.</div>
-              : points.map(p => <TurnRow key={p.turn} p={p} maxContext={maxContext} sessionId={sess.sessionId} />)}
+              : points.map(p => <TurnRow key={p.turn} p={p} maxContext={maxContext} sessionId={sess.sessionId} hostSources={hostByTurn.get(p.turn) ?? []} />)}
           {children.map(c => <ContextSessionBlock key={c.sessionId} sess={c} depth={depth + 1} />)}
         </div>
       )}

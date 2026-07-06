@@ -3,7 +3,7 @@ import { calcSessionCost } from './sessionMetrics'
 import type {
   FullSummary, SessionSummaryCard, TimelineEntry, FileOpSummary,
   AgentFilter, InitiatorFilter, DataSourceFilter, InsightFilter, WorkspaceFilter, VsCodeApi,
-  DailyStatRow, LifetimeStats, BurnRate, Projection,
+  DailyStatRow, LifetimeStats, BurnRate, Projection, ContextComposition,
 } from './types'
 
 // Maximum sessions rendered in any single chart or table
@@ -124,6 +124,27 @@ export function cacheSessionDetail(sessionId: string, timeline: TimelineEntry[],
   }
   sessionTimelines.value = tl
   sessionFileOps.value = fo
+}
+
+// Per-session context composition (host-parsed from the raw .jsonl on demand — the exact injected
+// blocks: hooks, skill/tool/agent/mcp catalogs, file reads, reminders). Fetched lazily via a
+// loadContextComposition message; null means the session has no local Claude log to parse. Bounded
+// by the same LRU discipline as the timeline cache so a long browse can't grow it without limit.
+export const sessionCompositions = signal<Record<string, ContextComposition | null>>({})
+const compositionLRU: string[] = []
+
+export function cacheSessionComposition(sessionId: string, composition: ContextComposition | null): void {
+  const existing = compositionLRU.indexOf(sessionId)
+  if (existing !== -1) compositionLRU.splice(existing, 1)
+  compositionLRU.push(sessionId)
+
+  const next: Record<string, ContextComposition | null> = { ...sessionCompositions.value, [sessionId]: composition }
+  while (compositionLRU.length > DETAIL_CACHE_MAX) {
+    const evicted = compositionLRU.shift()
+    if (evicted === undefined) break
+    delete next[evicted]
+  }
+  sessionCompositions.value = next
 }
 
 // ── UI control signals ────────────────────────────────────────────────────────

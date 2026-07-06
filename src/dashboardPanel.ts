@@ -4,6 +4,7 @@ import { SessionRepository } from './sessionRepository'
 import { InstructionRepository } from './database/instructionRepository'
 import { detectInstructionFiles, appendSuggestion, removeSuggestion } from './instructionFiles'
 import { computeBaseline } from './instructionEffectiveness'
+import { buildContextComposition } from './contextComposition'
 
 export class DashboardPanel {
   public static currentPanel: DashboardPanel | undefined
@@ -71,6 +72,11 @@ export class DashboardPanel {
           msg.editIndex as number | undefined,
         )
         this.panel.webview.postMessage({ type: 'blobContent', spanId: msg.spanId, field: msg.field, content })
+      } else if (msg.type === 'loadContextComposition' && msg.sessionId) {
+        // Parse the raw session .jsonl on demand (heavy work stays in the host; only the capped,
+        // aggregated per-turn summary crosses to the webview). null = no local Claude log to read.
+        const composition = await buildContextComposition(msg.sessionId as string)
+        this.panel.webview.postMessage({ type: 'contextComposition', sessionId: msg.sessionId, composition })
       } else if (msg.type === 'askAI' && msg.prompt) {
         const prompt = `The following efficiency issue was detected in my AI coding session. Help me fix it:\n\n${msg.prompt}`
         openAIChat(prompt, msg.agent)

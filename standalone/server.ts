@@ -18,6 +18,7 @@ import { autoConfigureClaudeCode, autoConfigureCodex, autoConfigureCopilotStanda
 import { classifyOtlpPayload } from '../src/otlpParser'
 import { startMcpHttpServer } from '../src/mcpServer'
 import { LogReader, type OpenCodeSqlFactory } from '../src/logReader'
+import { buildContextComposition } from '../src/contextComposition'
 import { generateSuggestions } from '../src/instructionAdvisor'
 import { detectInstructionFiles, appendSuggestion } from '../src/instructionFiles'
 import type { Span } from '../src/types'
@@ -914,6 +915,15 @@ function getHtml(): string {
                 }));
               })
               .catch(function(e) { console.warn('[AgentLens] timeline fetch failed', e); });
+          } else if (msg.type === 'loadContextComposition' && msg.sessionId) {
+            fetch('/api/composition/' + encodeURIComponent(msg.sessionId))
+              .then(function(r) { return r.json(); })
+              .then(function(data) {
+                window.dispatchEvent(new MessageEvent('message', {
+                  data: { type: 'contextComposition', sessionId: msg.sessionId, composition: data.composition || null }
+                }));
+              })
+              .catch(function(e) { console.warn('[AgentLens] composition fetch failed', e); });
           }
         }
       };
@@ -1263,6 +1273,23 @@ const uiServer = http.createServer((req, res) => {
     const session = summary?.sessions.find(s => s.sessionId === sessionId) ?? null
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ timeline: session?.timeline ?? [], fileOps: session?.fileOps ?? [] }))
+    return
+  }
+
+  if (req.method === 'GET' && url?.startsWith('/api/composition/')) {
+    const sessionId = decodeURIComponent(url.slice('/api/composition/'.length))
+    // Parse the raw .jsonl on demand — heavy work stays server-side, only the capped per-turn
+    // summary crosses to the browser. null = no local Claude log for this session.
+    buildContextComposition(sessionId)
+      .then(composition => {
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ composition }))
+      })
+      .catch(e => {
+        console.warn('[AgentLens] composition parse failed', e)
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ composition: null }))
+      })
     return
   }
 
