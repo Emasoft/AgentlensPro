@@ -208,42 +208,74 @@ function BgSummaryBlock({ bgSpans }: { bgSpans: BackgroundSpanSummary[] }) {
   )
 }
 
-// The per-turn context-composition breakdown shown when an LLM call is expanded — answers "why is
-// this N cache-write / cache-read?". Combines the EXACT usage buckets for the call (resident
-// cache-read transcript, new input, cache-created) with the HOST-parsed injected blocks for that
-// turn (hooks, skill/tool/agent/mcp catalogs, files, reminders), sorted heaviest-first. Host
-// figures are estimates (bytes/4, marked ~); the buckets are exact. No inner scrollbar — the list
-// grows the page.
+// The per-call context-composition breakdown shown when an LLM call is expanded — answers "why is
+// this N cache-write / cache-read?" and lets the user DRILL each bucket down to the ACTUAL injected
+// blocks and their content (P6). It renders the same recursive bar-tree the turn-level view uses
+// (TreeBar + compositionNodes): the EXACT usage buckets (cache-read / new-input / cache-created) are
+// the top bars, and the HOST-parsed injected blocks (CLAUDE.md, each rule, each memory, hooks,
+// skill/tool/agent/mcp catalogs, file reads, reminders) nest under whichever bucket actually wrote
+// them, each block drilling to its real excerpt text at a leaf. The un-itemized base system prompt +
+// prior transcript is shown as an explicit remainder so the children reconcile to the exact bucket
+// value — never fabricated. No inner scrollbar — the tree grows the page.
 function LlmContextBreakdown({ entry, hostSources }: { entry: TimelineEntry; hostSources?: ContextSource[] }) {
-  const newInput = Math.max(0, (entry.inputTokens ?? 0) - (entry.cacheReadTokens ?? 0) - (entry.cacheCreateTokens ?? 0))
-  const rows: Array<{ label: string; tokens: number; kind: string; exact: boolean }> = []
-  if ((entry.cacheReadTokens ?? 0) > 0) rows.push({ label: 'Cache-read (resident transcript)', tokens: entry.cacheReadTokens!, kind: 'cacheRead', exact: true })
-  if (newInput > 0) rows.push({ label: 'New input tokens', tokens: newInput, kind: 'input', exact: true })
-  if ((entry.cacheCreateTokens ?? 0) > 0) rows.push({ label: 'Cache-created (newly written)', tokens: entry.cacheCreateTokens!, kind: 'cacheWrite', exact: true })
-  for (const s of hostSources ?? []) rows.push({ label: s.label, tokens: s.tokens, kind: s.kind, exact: false })
-  rows.sort((a, b) => b.tokens - a.tokens)
-  if (rows.length === 0) return null
-  const max = rows[0].tokens || 1
+  const cacheRead = entry.cacheReadTokens ?? 0
+  const cacheCreate = entry.cacheCreateTokens ?? 0
+  const newInput = Math.max(0, (entry.inputTokens ?? 0) - cacheRead - cacheCreate)
+  const injectedNodes = compositionNodes(hostSources ?? [])
+  const itemizedSum = (hostSources ?? []).reduce((n, s) => n + s.tokens, 0)
+  // The identifiable injected blocks belong under cache-CREATED when this call newly wrote a prefix
+  // big enough to contain them (the classic first-turn 100k+ write); on later turns cache_creation is
+  // just the small changed delta and those same blocks are being RE-READ, so they nest under cache-read
+  // instead. This keeps each block under the bucket that actually accounts for its tokens.
+  const blocksAreNewWrites = injectedNodes.length > 0 && cacheCreate >= itemizedSum
+
+  const nodes: BarNode[] = []
+
+  if (cacheRead > 0) {
+    if (injectedNodes.length > 0 && !blocksAreNewWrites) {
+      const kids = [...injectedNodes]
+      const rem = cacheRead - itemizedSum
+      if (rem > 0) kids.push(remainderNode('cr-rem', rem))
+      nodes.push({ key: 'cacheread', label: 'Cache-read (resident prefix reused)', colorKind: 'cacheRead', weight: cacheRead, value: tokValue(cacheRead, false), children: kids })
+    } else {
+      nodes.push({ key: 'cacheread', label: 'Cache-read (resident prefix reused)', colorKind: 'cacheRead', weight: cacheRead, value: tokValue(cacheRead, false),
+        leaf: { kind: 'text', text: `${cacheRead.toLocaleString()} tokens were re-read from the prompt cache this call — the resident transcript accumulated over the prior turns (billed ≈10% of the input rate). Its bytes are the earlier turns' content; open the preceding turns to inspect them.` } })
+    }
+  }
+
+  if (newInput > 0) {
+    nodes.push({ key: 'newinput', label: 'New input tokens', colorKind: 'input', weight: newInput, value: tokValue(newInput, false),
+      leaf: { kind: 'text', text: `${newInput.toLocaleString()} fresh input tokens entered the context this call — the new user message and/or the tool results appended since the previous call, none of it served from cache.` } })
+  }
+
+  if (cacheCreate > 0) {
+    if (blocksAreNewWrites) {
+      const kids = [...injectedNodes]
+      const rem = cacheCreate - itemizedSum
+      if (rem > 0) kids.push(remainderNode('cc-rem', rem))
+      nodes.push({ key: 'cachewrite', label: 'Cache-created (newly written to cache)', colorKind: 'cacheWrite', weight: cacheCreate, value: tokValue(cacheCreate, false), children: kids })
+    } else {
+      nodes.push({ key: 'cachewrite', label: 'Cache-created (newly written to cache)', colorKind: 'cacheWrite', weight: cacheCreate, value: tokValue(cacheCreate, false),
+        leaf: { kind: 'text', text: injectedNodes.length > 0
+          ? `${cacheCreate.toLocaleString()} tokens were newly written to the cache this call — the changed or first-seen prefix delta. The stable injected blocks it reuses are itemized under "Cache-read" above.`
+          : `${cacheCreate.toLocaleString()} tokens were newly written to the prompt cache this call (full write rate). The identifiable injected blocks are listed here once the local log's session composition is available.` } })
+    }
+  }
+
+  if (nodes.length === 0) return null
+  const max = Math.max(0, ...nodes.map(n => n.weight))
+  const sortByValue = timelineSortByValue.value
+  const metric = timelineMetric.value
+  const ordered = sortByValue && metric !== 'time' ? [...nodes].sort((a, b) => b.weight - a.weight) : nodes
   return (
     <div class="sw-detail-section">
-      <div class="sw-detail-heading">Context composition (this turn)</div>
+      <div class="sw-detail-heading">Context composition (this call)</div>
       <div style="font-size:9px;color:var(--muted);margin-bottom:4px">
         What the {formatCompact((entry.inputTokens ?? 0))}-token prompt was made of — <span style={'color:' + SOURCE_KIND_COLOR.cacheRead}>cache-read</span> reused vs{' '}
-        <span style={'color:' + SOURCE_KIND_COLOR.cacheWrite}>cache-created</span> re-written, plus the injected blocks the host parsed from the raw log.
-        {(hostSources?.length ?? 0) === 0 && <span> Injected-block detail loads with the session composition.</span>}
+        <span style={'color:' + SOURCE_KIND_COLOR.cacheWrite}>cache-created</span> re-written. Expand a bar to drill into the injected blocks (CLAUDE.md, rules, memories, catalogs, hooks…) down to their real content.
+        {(hostSources?.length ?? 0) === 0 && <span> Injected-block detail appears once the session composition finishes loading.</span>}
       </div>
-      {rows.map((r, i) => {
-        const w = Math.max(r.tokens / max * 100, 0.5)
-        return (
-          <div key={r.label + i} style="display:flex;align-items:center;font-size:10px;min-height:16px">
-            <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:280px" title={r.label}>{r.label}</span>
-            <div style="width:120px;position:relative;height:9px;margin:0 6px">
-              <div style={`position:absolute;left:0;height:7px;top:1px;border-radius:2px;width:${w.toFixed(1)}%;background:${SOURCE_KIND_COLOR[r.kind] ?? 'var(--muted)'};opacity:0.7`} />
-            </div>
-            <span style="width:78px;text-align:right;font-variant-numeric:tabular-nums;color:var(--muted)">{formatCompact(r.tokens)}{r.exact ? '' : '~'} tok</span>
-          </div>
-        )
-      })}
+      {ordered.map(n => <TreeBar key={n.key} node={n} depth={0} siblingMax={max} />)}
     </div>
   )
 }
@@ -696,6 +728,18 @@ function compositionNodes(hostSources: ContextSource[]): BarNode[] {
     groups.push({ key: `grp:${kind}`, label: KIND_GROUP_LABEL[kind] ?? kind, colorKind: kind, weight: sum, value: tokValue(sum, true), children: kids })
   }
   return groups
+}
+
+// The un-itemized remainder of a cache bucket: the base system prompt + accumulated conversation
+// transcript that the local-log parser does NOT break into individual blocks. Shown as an explicit
+// bar so a bucket's itemized children + this remainder reconcile to the exact bucket token count —
+// the honest alternative to silently omitting the difference or fabricating fake blocks for it.
+function remainderNode(key: string, tokens: number): BarNode {
+  return {
+    key, label: 'System prompt + prior transcript (not individually itemized)', colorKind: 'other',
+    weight: tokens, value: tokValue(tokens, true),
+    leaf: { kind: 'text', text: `~${tokens.toLocaleString()} tokens are the base system prompt plus the accumulated conversation transcript, which the local-log parser does not itemize into individual blocks. The identifiable injected blocks (CLAUDE.md, rules, memories, catalogs, hooks, file reads, reminders) are listed above; this remainder is everything else in this cache bucket, shown so the parts add up to the exact bucket total rather than fabricating detail that was not captured.` },
+  }
 }
 
 // Build the COMPONENT bars of one turn: the 5 usage values (each drilling to the real content that
