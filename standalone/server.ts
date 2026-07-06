@@ -131,7 +131,9 @@ const statuslineReader = new StatuslineUsageReader()
 // ── MCP server ────────────────────────────────────────────────────────────────
 
 // Dedicated server on MCP_PORT (default 4316) — same port as the VS Code extension.
-const mcpHttpServer = startMcpHttpServer({
+// Fire-and-forget: the HTTP MCP server keeps itself alive via its own listeners; we don't hold the
+// handle (nothing shuts it down before process exit), so we don't bind it (avoids an unused-local).
+startMcpHttpServer({
   getSessions: () => {
     const summary = buildSessionSummary()
     return summary?.sessions ?? []

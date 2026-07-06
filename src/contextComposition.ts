@@ -100,6 +100,31 @@ function findSessionFile(sessionId: string): string | null {
   return null
 }
 
+// One-pass index of every Claude session that actually has a .jsonl on disk (filename stem ==
+// sessionId). The cross-session MCP aggregators (find_context_hogs, get_context_inflation_report,
+// get_cache_break_report --workspace) filter their session pool through this BEFORE slicing.
+//
+// WHY this is load-bearing: getSessions() returns a recency-ordered mix that, during active work,
+// is dominated by cards with NO reconstructable log — OTEL-only merged sessions (`synth-*`),
+// sub-agent children whose id is an agentId not a file (`agent-*`), and Claude sessions whose log
+// was deleted. buildContextComposition() returns null for all of those, so a plain
+// `sessions.slice(0, 25)` spent its whole budget on dead cards and reported sessionsScanned:0 even
+// though real logs existed lower in the list. Filtering by disk presence first guarantees the pool
+// holds only reconstructable sessions. One readdir pass per call (on-demand diagnostic, not hot).
+export function listSessionFileIds(): Set<string> {
+  const ids = new Set<string>()
+  for (const dir of claudeProjectsDirs()) {
+    let projects: string[]
+    try { projects = fs.readdirSync(dir) } catch { continue }
+    for (const proj of projects) {
+      let files: string[]
+      try { files = fs.readdirSync(path.join(dir, proj)) } catch { continue }
+      for (const f of files) if (f.endsWith('.jsonl')) ids.add(f.slice(0, -'.jsonl'.length))
+    }
+  }
+  return ids
+}
+
 /**
  * Reconstruct the per-turn context composition of a Claude session from its raw .jsonl, on demand.
  * Streams the file (never loads it whole — sessions can be multi-GB), attributes every injected

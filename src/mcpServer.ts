@@ -26,6 +26,7 @@ import type {
   CacheBreakReport, CacheBreakOffender,
 } from './summarizers/summarizerTypes'
 import { buildCacheBreakReport } from './cacheBreak'
+import { listSessionFileIds } from './contextComposition'
 import { generateSuggestions } from './instructionAdvisor'
 import { readAllInstructionContent } from './instructionFiles'
 
@@ -699,6 +700,21 @@ function handleGetContextGrowth(s: SessionSummaryCard, timeline: TimelineEntry[]
   }
 }
 
+// Restrict a cross-session pool to sessions that have a reconstructable .jsonl on disk, THEN slice.
+// Without the disk filter a recency-ordered pool is dominated by no-log cards (synth-*/agent-*/OTEL)
+// and the scan reports 0 (see listSessionFileIds). Returns the honest before/after counts so a 0
+// result is diagnosable ("considered N cards, M had a local log, scanned K").
+function fileBackedPool(
+  sessions: SessionSummaryCard[],
+  scopeMatch: ((s: SessionSummaryCard) => boolean) | null,
+  limit: number,
+): { pool: SessionSummaryCard[]; considered: number; withLog: number } {
+  const fileIds = listSessionFileIds()
+  const scoped = scopeMatch ? sessions.filter(scopeMatch) : sessions
+  const backed = scoped.filter(s => fileIds.has(s.sessionId))
+  return { pool: backed.slice(0, limit), considered: scoped.length, withLog: backed.length }
+}
+
 async function handleGetCacheBreakReport(
   sessions: SessionSummaryCard[],
   getTimeline: ((id: string) => unknown[]) | null,
@@ -731,7 +747,7 @@ async function handleGetCacheBreakReport(
   }
 
   const scope = args.workspace?.trim()
-  const pool = (scope ? sessions.filter(s => (s.workspace ?? '').startsWith(scope)) : sessions).slice(0, 20)
+  const { pool, considered, withLog } = fileBackedPool(sessions, scope ? (s => (s.workspace ?? '').startsWith(scope)) : null, 20)
   const merged = new Map<string, CacheBreakOffender>()
   let analyzed = 0
   for (const s of pool) {
@@ -749,9 +765,11 @@ async function handleGetCacheBreakReport(
   }
   const ranked = [...merged.values()].sort((a, b) => (b.wastedCostUsd - a.wastedCostUsd) || (b.wastedTokens - a.wastedTokens))
   return {
-    scope:            scope ?? 'all',
-    sessionsAnalyzed: analyzed,
-    topOffenders:     ranked.slice(0, 15).map(o => ({ ...o, wastedCostUsd: +o.wastedCostUsd.toFixed(4) })),
+    scope:              scope ?? 'all',
+    sessionsConsidered: considered,
+    sessionsWithLog:    withLog,
+    sessionsAnalyzed:   analyzed,
+    topOffenders:       ranked.slice(0, 15).map(o => ({ ...o, wastedCostUsd: +o.wastedCostUsd.toFixed(4) })),
   }
 }
 
@@ -775,22 +793,27 @@ async function handleGetContextInflationReport(
   }
 
   let scanned = 0
+  let considered = 1
+  let withLog = 1
   if (args.sessionId) {
     const c = await getComposition(args.sessionId)
     if (!c) return { sessionId: args.sessionId, message: 'No local composition available for this session.' }
     fold(aggregateComposition(c)); scanned = 1
   } else {
     const scope = args.workspace?.trim()
-    const pool = (scope ? sessions.filter(s => (s.workspace ?? '').startsWith(scope)) : sessions).slice(0, 20)
-    for (const s of pool) { const c = await getComposition(s.sessionId); if (c) { fold(aggregateComposition(c)); scanned++ } }
+    const fb = fileBackedPool(sessions, scope ? (s => (s.workspace ?? '').startsWith(scope)) : null, 20)
+    considered = fb.considered; withLog = fb.withLog
+    for (const s of fb.pool) { const c = await getComposition(s.sessionId); if (c) { fold(aggregateComposition(c)); scanned++ } }
   }
   const ranked = [...agg.values()].sort((a, b) => b.cumulativeTokens - a.cumulativeTokens)
   // Runaway = re-injected across many turns AND heavy per turn — if it lives in the cached prefix it
   // forces repeated cache-creation. This is the fixable structural sink.
   const runaway = ranked.filter(a => a.turnsPresent >= 5 && a.peakTokens >= 1000)
   return {
-    scope:           args.sessionId ? `session ${args.sessionId}` : (args.workspace ?? 'all'),
-    sessionsScanned: scanned,
+    scope:              args.sessionId ? `session ${args.sessionId}` : (args.workspace ?? 'all'),
+    sessionsConsidered: considered,
+    sessionsWithLog:    withLog,
+    sessionsScanned:    scanned,
     topContributors: ranked.slice(0, 15).map(a => ({ label: a.label, kind: a.kind, cumulativeTokens: a.cumulativeTokens, turnsPresent: a.turnsPresent, peakTokens: a.peakTokens, sessions: a.sessions })),
     runawaySources:  runaway.slice(0, 10).map(a => ({
       label: a.label, kind: a.kind, turnsPresent: a.turnsPresent, peakTokens: a.peakTokens, cumulativeTokens: a.cumulativeTokens,
@@ -807,7 +830,7 @@ async function handleFindContextHogs(
   if (!getComposition) return { error: 'Composition accessor unavailable — context-hog analysis needs local Claude logs.' }
   const scope = args.scope?.trim()
   const topN = Math.min(args.topN ?? 15, 50)
-  const pool = (scope ? sessions.filter(s => (s.workspace ?? '').startsWith(scope) || s.sessionId.includes(scope)) : sessions).slice(0, 25)
+  const { pool, considered, withLog } = fileBackedPool(sessions, scope ? (s => (s.workspace ?? '').startsWith(scope) || s.sessionId.includes(scope)) : null, 25)
   const byKey = new Map<string, { label: string; kind: string; cumulativeTokens: number; sessions: number; occurrences: number }>()
   let scanned = 0
   for (const s of pool) {
@@ -824,7 +847,7 @@ async function handleFindContextHogs(
     }
   }
   const hogs = [...byKey.values()].sort((a, b) => b.cumulativeTokens - a.cumulativeTokens).slice(0, topN)
-  return { scope: scope ?? 'all', sessionsScanned: scanned, hogs }
+  return { scope: scope ?? 'all', sessionsConsidered: considered, sessionsWithLog: withLog, sessionsScanned: scanned, hogs }
 }
 
 function handleGetSubagentTree(sessions: SessionSummaryCard[], args: { sessionId: string }) {
