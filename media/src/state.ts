@@ -139,6 +139,15 @@ export const focusedSessionId = signal<string | null>(null)
 // session is deselected.
 export const focusedTurn = signal<{ sessionId: string; spanId: string } | null>(null)
 
+// ── Trace timeline metric (P2.1: hoisted out of per-session TimelineWaterfall so the
+// metric toggle lives in ONE sticky place and every open trace shares the selection) ──
+export type TimelineMetric = 'time' | 'input' | 'output' | 'cacheRead' | 'cacheWrite' | 'cost'
+export const timelineMetric = signal<TimelineMetric>('time')
+export const timelineSortByValue = signal(false)
+// Group the trace into a session → turn → step tree (P2.2). On by default; the toggle lets
+// the user fall back to the flat chronological waterfall.
+export const timelineGroupByTurn = signal(true)
+
 export const sessionLimit = signal(25)
 export const selectedAgentFilter = signal<AgentFilter>('all')
 export const initiatorFilter = signal<InitiatorFilter>('all')

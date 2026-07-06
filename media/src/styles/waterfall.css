@@ -41,3 +41,20 @@
 .wf-detail-row { display: flex; gap: 8px; }
 .wf-detail-key { color: var(--muted); min-width: 160px; font-family: monospace; }
 .wf-detail-val { word-break: break-all; }
+
+/* P2.1 sticky trace toolbar: the metric/sort/group toggles + filter stay pinned to the top of
+   the .waterfall scroll container so ONLY the step list scrolls beneath them (the user's
+   "fixed headers like the tabs" ask). Opaque background + z-index so rows scroll under it. */
+.wf-sticky-toolbar {
+  position: sticky; top: 0; z-index: 5;
+  background: var(--vscode-editor-background, var(--bg));
+  padding-top: 4px; margin-bottom: 2px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* P2.2 session → turn → step tree */
+.wf-turn-group { border-bottom: 1px solid var(--border); }
+.wf-turn-group:last-child { border-bottom: none; }
+.wf-turn-row { background: var(--hover); min-height: 32px; }
+.wf-turn-row:hover { opacity: 0.92; }
+.wf-turn-children { border-left: 2px solid var(--border); margin-left: 8px; }

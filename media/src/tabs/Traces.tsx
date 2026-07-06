@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef } from 'preact/hooks'
 import {
   filteredSessions, sessionSummary, sessionTimelines, focusedSessionId, vscode,
+  timelineMetric, timelineSortByValue, timelineGroupByTurn,
 } from '../state'
+import type { TimelineMetric } from '../state'
 import {
   formatMs, formatCompact, syntaxHighlightJson,
   getAgentDotHtml, formatLlmLabel, formatToolLabel, formatToolResult,
@@ -19,8 +21,9 @@ export interface Step {
 // ── Timeline bar metric ───────────────────────────────────────────────────────
 // The Trace waterfall can size each step's bar by elapsed Time (the chronological
 // default) OR by a token/cost magnitude, so the same timeline doubles as a per-step
-// token/cost bar chart.
-export type TimelineMetric = 'time' | 'input' | 'output' | 'cacheRead' | 'cacheWrite' | 'cost'
+// token/cost bar chart. TimelineMetric now lives in state.ts (hoisted so the toggle is a
+// single shared signal — P2.1) and is re-exported here for the components below.
+export type { TimelineMetric } from '../state'
 
 const TIMELINE_METRICS: Array<{ k: TimelineMetric; label: string }> = [
   { k: 'time',       label: 'Time' },
@@ -60,6 +63,51 @@ const METRIC_COLOR: Record<TimelineMetric, string> = {
 function formatMetricValue(metric: TimelineMetric, v: number): string {
   if (v <= 0) return '—'
   return metric === 'cost' ? '~' + fmtUsd(v) : formatCompact(v)
+}
+
+// Aggregate the 5 values across a set of steps (a turn = sum of its children). Tokens live on
+// the first row of the assistant message, so a plain sum over the turn's steps is correct and
+// never double-counts. cacheRead vs cacheWrite are kept DISTINCT — that split IS the per-turn
+// cache-read vs cache-created diff the spec asks for.
+interface TurnTotals { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number; durationMs: number }
+function sumSteps(steps: Step[], sessionModel: string): TurnTotals {
+  const t: TurnTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, durationMs: 0 }
+  for (const s of steps) {
+    const e = s.entry
+    t.input      += e.inputTokens ?? 0
+    t.output     += e.outputTokens ?? 0
+    t.cacheRead  += e.cacheReadTokens ?? 0
+    t.cacheWrite += e.cacheCreateTokens ?? 0
+    t.cost       += e.type === 'llm' ? calcEntryCost(e, sessionModel) : 0
+    t.durationMs += s.durationMs
+  }
+  return t
+}
+// The value a turn contributes for the selected metric (drives the turn-header bar width + sort).
+function turnMetricValue(t: TurnTotals, metric: TimelineMetric): number {
+  switch (metric) {
+    case 'time':       return t.durationMs
+    case 'input':      return t.input
+    case 'output':     return t.output
+    case 'cacheRead':  return t.cacheRead
+    case 'cacheWrite': return t.cacheWrite
+    case 'cost':       return t.cost
+    default:           return 0
+  }
+}
+
+// The compact 5-value strip shown on every tree level (turn header AND the session summary).
+// input ↑ · output ↓ · cache-read · cache-write (the diff split) · cost.
+function FiveValues({ t }: { t: TurnTotals }) {
+  return (
+    <span style="display:inline-flex;gap:8px;align-items:center;font-size:9px;white-space:nowrap;font-variant-numeric:tabular-nums">
+      <span title="new input tokens" style={'color:' + METRIC_COLOR.input}>↑{formatCompact(t.input)}</span>
+      <span title="output tokens" style={'color:' + METRIC_COLOR.output}>↓{formatCompact(t.output)}</span>
+      <span title="cache-read tokens (re-read from cache)" style={'color:' + METRIC_COLOR.cacheRead}>⟳{formatCompact(t.cacheRead)}</span>
+      <span title="cache-created tokens (newly written to cache)" style={'color:' + METRIC_COLOR.cacheWrite}>✦{formatCompact(t.cacheWrite)}</span>
+      {t.cost > 0 && <span title="cost" style={'color:' + METRIC_COLOR.cost}>~{fmtUsd(t.cost)}</span>}
+    </span>
+  )
 }
 
 // Searchable text for a step — the tool/command-bearing fields (label, action verb, raw tool
@@ -407,15 +455,70 @@ export function StepRow({ step, idx, sessIdx, sessionDur, sessionModel, metric, 
   )
 }
 
-// Shared Trace waterfall: a metric toolbar (Time | token/cost) above the step rows. With a
-// token/cost metric the rows become a bar chart that can be sorted by that value; Time keeps
-// the chronological waterfall and its ruler. Used by the Traces tab AND the Sessions-detail
-// Trace sub-tab so the toggle lives in one place.
+// One turn = a collapsible parent row whose value is the SUM of its child steps. Shows all 5
+// values (input/output/cache-read/cache-write/cost) and a bar of the selected metric; expands to
+// the child StepRows. This is the session → turn → step tree the spec (P2.2) asks for.
+function TurnGroup({ turn, tSteps, sessIdx, sessionDur, sessionModel, metric, maxStepMetric, maxTurnMetric, highlightSpanId }: {
+  turn: number
+  tSteps: Array<{ step: Step; i: number }>
+  sessIdx: number; sessionDur: number; sessionModel: string
+  metric: TimelineMetric; maxStepMetric: number; maxTurnMetric: number
+  highlightSpanId?: string
+}) {
+  const totals = sumSteps(tSteps.map(x => x.step), sessionModel)
+  const hasHighlight = !!highlightSpanId && tSteps.some(x => x.step.entry.spanId === highlightSpanId)
+  const [open, setOpen] = useState(true)
+  // A focused turn (clicked from the growth chart) force-expands its group so the step is visible.
+  useEffect(() => { if (hasHighlight) setOpen(true) }, [hasHighlight])
+
+  const tv = turnMetricValue(totals, metric)
+  const width = maxTurnMetric > 0 && tv > 0 ? Math.max(tv / maxTurnMetric * 100, 0.5) : 0
+  const barColor = metric === 'time' ? 'var(--accent)' : METRIC_COLOR[metric]
+
+  return (
+    <div class="wf-turn-group">
+      <div class="wf-row wf-turn-row" onClick={() => setOpen(v => !v)} style="font-weight:600">
+        <div class="wf-label">
+          <span class="sw-chevron">{open ? '▼' : '▶'}</span>
+          <span class="wf-type-badge" style="background:var(--accent);color:#000">T{turn}</span>
+          <span style="display:inline-flex;flex-direction:column;min-width:0">
+            <span class="wf-name">Turn {turn} · {tSteps.length} step{tSteps.length !== 1 ? 's' : ''}</span>
+            <FiveValues t={totals} />
+          </span>
+        </div>
+        <div class="wf-bar-area">
+          <div class="wf-bar" style={`left:0;width:${width.toFixed(2)}%`}>
+            <div class="wf-bar-inner" style={'background:' + barColor + ';opacity:0.55'} />
+          </div>
+        </div>
+        <div class="wf-info">
+          <span style={tv > 0 ? 'font-weight:600' : 'color:var(--muted)'}>{formatMetricValue(metric, tv)}</span>
+        </div>
+      </div>
+      {open && (
+        <div class="wf-turn-children">
+          {tSteps.map(({ step, i }) => (
+            <StepRow key={step.entry.spanId + i} step={step} idx={i} sessIdx={sessIdx}
+              sessionDur={sessionDur} sessionModel={sessionModel} metric={metric} maxMetric={maxStepMetric}
+              highlightSpanId={highlightSpanId} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Shared Trace waterfall: a STICKY metric toolbar (Time | token/cost | group-by-turn) above the
+// step rows. With a token/cost metric the rows become a bar chart sortable by that value; Time
+// keeps the chronological waterfall and its ruler. Grouped by turn it is a session → turn → step
+// tree. Metric/sort/group are shared signals (P2.1) so every open trace agrees and the toggle
+// lives in one sticky place. Used by the Sessions-detail Trace sub-tab.
 export function TimelineWaterfall({ steps, sessionDur, sessionModel, sessIdx = 0, highlightSpanId }: {
   steps: Step[]; sessionDur: number; sessionModel: string; sessIdx?: number; highlightSpanId?: string
 }) {
-  const [metric, setMetric] = useState<TimelineMetric>('time')
-  const [sortByValue, setSortByValue] = useState(false)
+  const metric = timelineMetric.value
+  const sortByValue = timelineSortByValue.value
+  const groupByTurn = timelineGroupByTurn.value
   const [filterDraft, setFilterDraft] = useState('')     // live input value
   const [filterApplied, setFilterApplied] = useState('') // committed on Enter (not realtime)
 
@@ -430,9 +533,29 @@ export function TimelineWaterfall({ steps, sessionDur, sessionModel, sessIdx = 0
   const maxMetric = Math.max(0, ...valued.map(x => x.v))
   const ordered = metric !== 'time' && sortByValue ? [...valued].sort((a, b) => b.v - a.v) : valued
 
+  // Group into turns only when the data actually carries turn indices (log + OTEL Claude do).
+  const hasTurns = valued.some(x => x.step.entry.turn !== undefined)
+  const turnGroups: Array<{ turn: number; tSteps: Array<{ step: Step; i: number }>; agg: number }> = []
+  if (groupByTurn && hasTurns) {
+    const byTurn = new Map<number, Array<{ step: Step; i: number }>>()
+    for (const x of valued) {
+      const t = x.step.entry.turn ?? 0
+      const arr = byTurn.get(t) ?? []
+      arr.push({ step: x.step, i: x.i })
+      byTurn.set(t, arr)
+    }
+    for (const [turn, tSteps] of byTurn) {
+      const agg = turnMetricValue(sumSteps(tSteps.map(s => s.step), sessionModel), metric)
+      turnGroups.push({ turn, tSteps, agg })
+    }
+    // Turns ordered chronologically (by turn number) unless the user asked to sort by value.
+    turnGroups.sort((a, b) => (metric !== 'time' && sortByValue) ? b.agg - a.agg : a.turn - b.turn)
+  }
+  const maxTurnMetric = Math.max(0, ...turnGroups.map(g => g.agg))
+
   const mBtn = (m: { k: TimelineMetric; label: string }) => (
     <button
-      onClick={() => setMetric(m.k)}
+      onClick={() => { timelineMetric.value = m.k }}
       style={[
         'padding:2px 8px;font-size:10px;cursor:pointer;border-radius:3px;border:1px solid var(--border);',
         metric === m.k ? 'background:var(--accent);color:var(--vscode-button-foreground,#fff);font-weight:600' : 'background:transparent;color:var(--muted)',
@@ -442,49 +565,66 @@ export function TimelineWaterfall({ steps, sessionDur, sessionModel, sessIdx = 0
 
   return (
     <div>
-      <div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;margin-bottom:6px">
-        <span style="font-size:10px;color:var(--muted);margin-right:2px">Bars:</span>
-        {TIMELINE_METRICS.map(mBtn)}
-        {metric !== 'time' && (
-          <button
-            onClick={() => setSortByValue(v => !v)}
-            style="padding:2px 8px;font-size:10px;cursor:pointer;border-radius:3px;border:1px solid var(--border);background:transparent;color:var(--vscode-textLink-foreground,#4fc3f7);margin-left:4px"
-          >{sortByValue ? '↓ Sorted by value' : '⏱ Chronological'}</button>
-        )}
-      </div>
-      <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
-        <input
-          value={filterDraft}
-          onInput={e => setFilterDraft((e.target as HTMLInputElement).value)}
-          onKeyDown={e => {
-            if (e.key === 'Enter') setFilterApplied(filterDraft)
-            else if (e.key === 'Escape') { setFilterDraft(''); setFilterApplied('') }
-          }}
-          placeholder="Filter steps by content — e.g. gh repo · server/scripts · server/script_*.ts  (Enter; * = wildcard)"
-          style="flex:1;min-width:160px;padding:3px 8px;font-size:11px;border-radius:3px;border:1px solid var(--border);background:var(--vscode-input-background,var(--bg));color:var(--vscode-input-foreground,var(--fg))"
-        />
-        {filterApplied && (
-          <>
-            <span style="font-size:10px;color:var(--muted);white-space:nowrap">{valued.length} / {steps.length}</span>
+      <div class="wf-sticky-toolbar">
+        <div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;margin-bottom:6px">
+          <span style="font-size:10px;color:var(--muted);margin-right:2px">Bars:</span>
+          {TIMELINE_METRICS.map(mBtn)}
+          {metric !== 'time' && (
             <button
-              onClick={() => { setFilterDraft(''); setFilterApplied('') }}
-              style="padding:2px 8px;font-size:10px;cursor:pointer;border-radius:3px;border:1px solid var(--border);background:transparent;color:var(--muted)"
-            >Clear</button>
-          </>
-        )}
+              onClick={() => { timelineSortByValue.value = !sortByValue }}
+              style="padding:2px 8px;font-size:10px;cursor:pointer;border-radius:3px;border:1px solid var(--border);background:transparent;color:var(--vscode-textLink-foreground,#4fc3f7);margin-left:4px"
+            >{sortByValue ? '↓ Sorted by value' : '⏱ Chronological'}</button>
+          )}
+          {hasTurns && (
+            <button
+              onClick={() => { timelineGroupByTurn.value = !groupByTurn }}
+              style={[
+                'padding:2px 8px;font-size:10px;cursor:pointer;border-radius:3px;border:1px solid var(--border);margin-left:4px;',
+                groupByTurn ? 'background:var(--accent);color:var(--vscode-button-foreground,#fff);font-weight:600' : 'background:transparent;color:var(--muted)',
+              ].join('')}
+            >⤷ {groupByTurn ? 'Grouped by turn' : 'Flat'}</button>
+          )}
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+          <input
+            value={filterDraft}
+            onInput={e => setFilterDraft((e.target as HTMLInputElement).value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') setFilterApplied(filterDraft)
+              else if (e.key === 'Escape') { setFilterDraft(''); setFilterApplied('') }
+            }}
+            placeholder="Filter steps by content — e.g. gh repo · server/scripts · server/script_*.ts  (Enter; * = wildcard)"
+            style="flex:1;min-width:160px;padding:3px 8px;font-size:11px;border-radius:3px;border:1px solid var(--border);background:var(--vscode-input-background,var(--bg));color:var(--vscode-input-foreground,var(--fg))"
+          />
+          {filterApplied && (
+            <>
+              <span style="font-size:10px;color:var(--muted);white-space:nowrap">{valued.length} / {steps.length}</span>
+              <button
+                onClick={() => { setFilterDraft(''); setFilterApplied('') }}
+                style="padding:2px 8px;font-size:10px;cursor:pointer;border-radius:3px;border:1px solid var(--border);background:transparent;color:var(--muted)"
+              >Clear</button>
+            </>
+          )}
+        </div>
       </div>
-      {metric === 'time' && (
+      {metric === 'time' && !groupByTurn && (
         <div class="wf-time-ruler">
           {Array.from({ length: 6 }, (_, t) => <span key={t}>{formatMs(sessionDur * t / 5)}</span>)}
         </div>
       )}
       {filterApplied && ordered.length === 0
         ? <div class="empty-state" style="padding:10px 0;font-size:11px">No steps match “{filterApplied}”</div>
-        : ordered.map(({ step, i }) => (
-            <StepRow key={step.entry.spanId + i} step={step} idx={i} sessIdx={sessIdx}
-              sessionDur={sessionDur} sessionModel={sessionModel} metric={metric} maxMetric={maxMetric}
-              highlightSpanId={highlightSpanId} />
-          ))
+        : groupByTurn && hasTurns
+          ? turnGroups.map(g => (
+              <TurnGroup key={g.turn} turn={g.turn} tSteps={g.tSteps} sessIdx={sessIdx}
+                sessionDur={sessionDur} sessionModel={sessionModel} metric={metric}
+                maxStepMetric={maxMetric} maxTurnMetric={maxTurnMetric} highlightSpanId={highlightSpanId} />
+            ))
+          : ordered.map(({ step, i }) => (
+              <StepRow key={step.entry.spanId + i} step={step} idx={i} sessIdx={sessIdx}
+                sessionDur={sessionDur} sessionModel={sessionModel} metric={metric} maxMetric={maxMetric}
+                highlightSpanId={highlightSpanId} />
+            ))
       }
     </div>
   )
