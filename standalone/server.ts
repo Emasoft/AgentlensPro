@@ -33,6 +33,21 @@ const mediaDir  = path.join(__dirname, '..', 'media')
 const DATA_DIR  = process.env.DATA_DIR ?? path.join(os.homedir(), '.agentlens')
 const DATA_FILE = path.join(DATA_DIR, 'spans.json')
 
+// ── Build id for browser live-reload ──────────────────────────────────────────
+// A cheap fingerprint of the served bundles' mtimes, computed ONCE at startup. Pushed over the
+// existing dashboard SSE in every update payload; the injected client snippet reloads the page when
+// the id it loaded with no longer matches. So: edit code → esbuild rebuild → dev-server restarts the
+// server → the reconnecting browser sees a new id and refreshes itself. Guarded (reloads only on a
+// real change vs the id embedded at load) so it can never loop.
+function computeBuildId(): string {
+  let sig = ''
+  for (const f of ['dashboard.js', 'sidebar.js', 'dashboard.css']) {
+    try { sig += `${f}:${fs.statSync(path.join(mediaDir, f)).mtimeMs}|` } catch { /* missing bundle — skip */ }
+  }
+  return sig || String(Date.now())
+}
+const BUILD_ID = computeBuildId()
+
 // ── Span store with file persistence ─────────────────────────────────────────
 
 let spans: Span[] = []
@@ -578,7 +593,7 @@ function buildUpdatePayload(): string {
   const sidebarLive = sessionSummary ? computeSidebarPayload(sessionSummary, spans) : null
   const analyticsData = sessionSummary ? computeAnalyticsData(sessionSummary.sessions) : null
   return JSON.stringify({
-    type: 'update', summary: { toolCalls: {} }, sessionSummary: stripped, sidebar, analyticsData,
+    type: 'update', buildId: BUILD_ID, summary: { toolCalls: {} }, sessionSummary: stripped, sidebar, analyticsData,
     ...(sidebarLive ?? {}),
   })
 }
@@ -684,6 +699,7 @@ function getHtml(): string {
     window.__INITIAL_SESSION_SUMMARY__ = ${sessionSummaryJson};
     window.__MASCOT_URI__ = '/help-mascot.png';
     window.__STANDALONE__ = true;
+    window.__BUILD_ID__ = ${JSON.stringify(BUILD_ID)};
 
     // ── Client-side search support ────────────────────────────────────────────
     var __latestSessions__ = (window.__INITIAL_SESSION_SUMMARY__ && window.__INITIAL_SESSION_SUMMARY__.sessions) || [];
@@ -959,7 +975,15 @@ function getHtml(): string {
       if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
     };
     _es.onmessage = function(e) {
-      window.dispatchEvent(new MessageEvent('message', { data: JSON.parse(e.data) }));
+      var data = JSON.parse(e.data);
+      // Live-reload: after a rebuild+restart the reconnecting SSE carries a new build id → refresh
+      // once. Guarded on __BUILD_ID__ being set and actually differing so it can never loop.
+      if (data && data.buildId && window.__BUILD_ID__ && data.buildId !== window.__BUILD_ID__) {
+        console.log('[AgentLens] New build detected — reloading', data.buildId);
+        location.reload();
+        return;
+      }
+      window.dispatchEvent(new MessageEvent('message', { data: data }));
     };
     _es.onerror = function() {
       if (!_sseOk) {
