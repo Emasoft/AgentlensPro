@@ -39,13 +39,18 @@ export type SessionAccessor = () => SessionSummaryCard[]
 // ── Cost helper ───────────────────────────────────────────────────────────────
 
 function sessionCost(s: SessionSummaryCard): number {
-  return calcTokenCostUsd(
-    s.inputTokens - s.cacheReadTokens - (s.cacheCreateTokens ?? 0),
-    s.cacheReadTokens,
-    s.cacheCreateTokens ?? 0,
-    s.outputTokens,
-    s.model,
-  )
+  const cache = s.cacheReadTokens + (s.cacheCreateTokens ?? 0)
+  // Two ingestion paths store inputTokens under DIFFERENT conventions (verified empirically against
+  // live cards): OTEL cards store it INCLUDING cache (e.g. synth-ae58: in=10.23M, cache=10.20M,
+  // uncached=32K), while LOG-derived fork/sub-agent cards store it RAW/cache-EXCLUDED (e.g. agent-aeb:
+  // in=274, cache=3.52M). The old `inputTokens − cache` was right for OTEL but went hugely NEGATIVE for
+  // forks (274−3.52M) — producing the −$83 / −$47 fork costs that HID the fleet-of-forks burn (each
+  // fork re-bills the inherited multi-M-token parent transcript). Detection is EXACT, not a guess:
+  // under includes-cache, inputTokens = cache + uncached ≥ cache ALWAYS, so `inputTokens < cache` can
+  // ONLY be the raw convention, where the true uncached IS inputTokens. Normalizing here (cost is a
+  // DERIVED value) fixes every MCP tool + the dashboard at one source, tolerant of both conventions.
+  const uncached = s.inputTokens >= cache ? s.inputTokens - cache : s.inputTokens
+  return calcTokenCostUsd(uncached, s.cacheReadTokens, s.cacheCreateTokens ?? 0, s.outputTokens, s.model)
 }
 
 // ── Tool definitions ──────────────────────────────────────────────────────────
