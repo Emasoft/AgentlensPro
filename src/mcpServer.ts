@@ -54,6 +54,39 @@ function sessionCost(s: SessionSummaryCard): number {
   return calcTokenCostUsd(uncached, s.cacheReadTokens, s.cacheCreateTokens ?? 0, s.outputTokens, s.model)
 }
 
+// A session counts toward cache-health SLIs only when it actually exercised the prompt cache:
+// at least one LLM call AND non-zero token traffic. Junk rows (synthetic empties, model:''
+// zero-token cards) all carry cacheHitRate 0, so averaging them in drags the SLI toward 0 with
+// no billing behind it — diluting the one signal that flags real cache regressions
+// (TRDD-ZK37VG4X spec 3). Exported for unit tests.
+export function isCacheMeasured(s: SessionSummaryCard): boolean {
+  const traffic = s.inputTokens + s.outputTokens + s.cacheReadTokens + (s.cacheCreateTokens ?? 0)
+  return s.totalLlmCalls > 0 && traffic > 0
+}
+
+// Sampling honesty (TRDD-ZK37VG4X spec 4): every bounded cross-session scan must SAY what it
+// covered. `complete` is true only when every log-backed session was actually scanned; otherwise
+// the note states the sample explicitly so a consumer can never mistake a bounded scan for full
+// history. sessionsSkipped counts both cap-cutoff and composition-unavailable sessions.
+export function buildScanCoverage(considered: number, withLog: number, scanned: number, scanCap: number) {
+  const skipped = withLog - scanned
+  const complete = skipped === 0
+  return {
+    sessionsConsidered: considered,
+    sessionsWithLog: withLog,
+    sessionsScanned: scanned,
+    sessionsSkipped: skipped,
+    scanCap,
+    complete,
+    note: complete
+      ? (withLog === 0
+          ? `No log-backed sessions to scan (${considered} considered, none with a local transcript on disk).`
+          : `Complete coverage: all ${withLog} log-backed sessions (of ${considered} considered) were scanned.`)
+      : `SAMPLE, not full coverage: ${scanned} most-recent log-backed sessions scanned (cap ${scanCap}); ` +
+        `${skipped} of ${withLog} log-backed sessions were NOT scanned. Totals reflect the scanned sample only.`,
+  }
+}
+
 // ── Tool definitions ──────────────────────────────────────────────────────────
 
 const TOOLS = [
@@ -237,9 +270,11 @@ const TOOLS = [
     name: 'find_context_hogs',
     description:
       'Returns the top context-consuming sources (files, tool outputs, rules, memories, hook ' +
-      'injections, catalogs) ranked by cumulative token cost across a bounded window of sessions. ' +
+      'injections, catalogs) ranked by cumulative token cost across a BOUNDED window of sessions. ' +
       'Optional scope filters by workspace path prefix. The cross-session "what is costing me the ' +
-      'most context everywhere" leaderboard.',
+      'most context everywhere" leaderboard. The scan is a SAMPLE (most-recent log-backed sessions, ' +
+      'capped) — read the `coverage` block in the response for exactly what was scanned vs skipped; ' +
+      'never treat the totals as full-history figures unless coverage.complete is true.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -345,7 +380,8 @@ function handleGetRecentSessions(
   }))
 }
 
-function handleGetWorkspacePatterns(
+// Exported for unit tests (TRDD-ZK37VG4X spec 3 — junk rows must not dilute the cache SLI).
+export function handleGetWorkspacePatterns(
   sessions: SessionSummaryCard[],
   args: { workspace?: string; days?: number },
 ) {
@@ -391,10 +427,12 @@ function handleGetWorkspacePatterns(
     .sort((a, b) => b[1] - a[1])
     .map(([type, count]) => ({ type, count }))
 
-  // Averages
+  // Averages. The cache-hit SLI averages ONLY cache-measured sessions — junk rows (0 tokens /
+  // no LLM calls) all read 0% and would dilute it toward 0 without any billing behind them.
   const totalCost  = filtered.reduce((s, sess) => s + sessionCost(sess), 0)
   const totalTurns = filtered.reduce((s, sess) => s + sess.totalLlmCalls, 0)
-  const totalCache = filtered.reduce((s, sess) => s + sess.cacheHitRate, 0)
+  const cacheMeasured = filtered.filter(isCacheMeasured)
+  const totalCache = cacheMeasured.reduce((s, sess) => s + sess.cacheHitRate, 0)
   const errorSess  = filtered.filter(s => s.errors > 0).length
 
   // Agent/model breakdown
@@ -414,7 +452,10 @@ function handleGetWorkspacePatterns(
     sessionCount:    filtered.length,
     avgCostUsd:      +(totalCost / filtered.length).toFixed(4),
     avgTurns:        +(totalTurns / filtered.length).toFixed(1),
-    avgCacheHitRate: +(totalCache / filtered.length * 100).toFixed(0) + '%',
+    avgCacheHitRate: cacheMeasured.length > 0 ? +(totalCache / cacheMeasured.length * 100).toFixed(0) + '%' : 'n/a',
+    // Exclusion is labeled, never silent: how many sessions actually back the cache SLI.
+    cacheMeasuredSessions: cacheMeasured.length,
+    cacheExcludedJunkSessions: filtered.length - cacheMeasured.length,
     errorRate:       Math.round(errorSess / filtered.length * 100) + '%',
     hotFiles,
     topTools,
@@ -556,7 +597,8 @@ function handleFindRelevantContext(
   }
 }
 
-function handleGetEfficiencyReport(
+// Exported for unit tests (TRDD-ZK37VG4X spec 3 — junk rows must not dilute the cache SLI).
+export function handleGetEfficiencyReport(
   sessions: SessionSummaryCard[],
   args: { workspace?: string; days?: number },
 ) {
@@ -607,9 +649,12 @@ function handleGetEfficiencyReport(
 
   // P4: cache-health SLI. A low hit rate means the prompt cache is being re-written (cache_creation
   // billed at full rate instead of ~10% cache_read) — the dominant, invisible token sink.
-  const avgHit = recent.reduce((s, x) => s + x.cacheHitRate, 0) / recent.length
-  const below70 = recent.filter(s => s.cacheHitRate < 0.7)
-  const worstCache = [...recent]
+  // Junk rows (0 tokens / no LLM calls) are excluded-but-counted: they all read 0% and would both
+  // dilute the average AND monopolize worstSessions with rows that never billed anything.
+  const measured = recent.filter(isCacheMeasured)
+  const avgHit = measured.length > 0 ? measured.reduce((s, x) => s + x.cacheHitRate, 0) / measured.length : 0
+  const below70 = measured.filter(s => s.cacheHitRate < 0.7)
+  const worstCache = [...measured]
     .sort((a, b) => a.cacheHitRate - b.cacheHitRate)
     .slice(0, 5)
     .map(s => ({ sessionId: s.sessionId, model: s.model, cacheHitRatePct: Math.round(s.cacheHitRate * 100), cacheCreateTokens: s.cacheCreateTokens }))
@@ -622,7 +667,9 @@ function handleGetEfficiencyReport(
     avgTurns:     +(recent.reduce((s, x) => s + x.totalLlmCalls, 0) / recent.length).toFixed(1),
     errorRate:    Math.round(recent.filter(s => s.errors > 0).length / recent.length * 100) + '%',
     cacheHealth: {
-      avgCacheHitRatePct: Math.round(avgHit * 100),
+      avgCacheHitRatePct: measured.length > 0 ? Math.round(avgHit * 100) : null,
+      measuredSessions:   measured.length,
+      excludedJunkSessions: recent.length - measured.length,  // 0-token / no-LLM-call rows — excluded, labeled
       sessionsBelow70pct: below70.length,
       worstSessions:      worstCache,
     },
@@ -658,13 +705,17 @@ function handleGetInstructionSuggestions(
   // P4: a data-driven cache-efficiency suggestion when the workspace's prompt cache is under-used.
   // Low hit rate → the cache is re-written every turn at full write rate; the fix is instruction-level
   // (avoid mid-session tool/model churn + volatile per-turn injections).
-  const avgHit = filtered.reduce((a, s) => a + s.cacheHitRate, 0) / filtered.length
-  if (avgHit < 0.8) {
+  // Same junk-row exclusion as the efficiency-report SLI (spec 3): only cache-measured sessions
+  // back the average, and the suggestion needs ≥5 of them so a handful of real sessions among a
+  // pile of synthetic empties can't trigger (or suppress) it.
+  const cacheMeasured = filtered.filter(isCacheMeasured)
+  const avgHit = cacheMeasured.length > 0 ? cacheMeasured.reduce((a, s) => a + s.cacheHitRate, 0) / cacheMeasured.length : 1
+  if (cacheMeasured.length >= 5 && avgHit < 0.8) {
     out.push({
       id:            'cache-efficiency',
       category:      'behavior',
       title:         'Improve prompt-cache hit rate',
-      evidence:      `Average cache-hit rate across ${filtered.length} sessions is ${Math.round(avgHit * 100)}% (target ≥ 80%). A low hit rate re-bills the prompt prefix as cache_creation at full write rate.`,
+      evidence:      `Average cache-hit rate across ${cacheMeasured.length} cache-measured sessions is ${Math.round(avgHit * 100)}% (target ≥ 80%). A low hit rate re-bills the prompt prefix as cache_creation at full write rate.`,
       suggestedText: 'Avoid mid-session tool-set changes, model switches, and volatile per-turn injections (they break the prefix cache). Run get_cache_break_report for the specific offending blocks and remediations.',
       targetAgents:  [],
       priority:      'medium',
@@ -1009,7 +1060,10 @@ async function handleGetContextInflationReport(
   }
 }
 
-async function handleFindContextHogs(
+// Exported for unit tests (TRDD-ZK37VG4X spec 4 — sampling honesty).
+export const HOG_SCAN_CAP = 25
+
+export async function handleFindContextHogs(
   sessions: SessionSummaryCard[],
   getComposition: CompositionAccessor | null,
   args: { scope?: string; topN?: number },
@@ -1017,7 +1071,7 @@ async function handleFindContextHogs(
   if (!getComposition) return { error: 'Composition accessor unavailable — context-hog analysis needs local Claude logs.' }
   const scope = args.scope?.trim()
   const topN = Math.min(args.topN ?? 15, 50)
-  const { pool, considered, withLog } = fileBackedPool(sessions, scope ? (s => (s.workspace ?? '').startsWith(scope) || s.sessionId.includes(scope)) : null, 25)
+  const { pool, considered, withLog } = fileBackedPool(sessions, scope ? (s => (s.workspace ?? '').startsWith(scope) || s.sessionId.includes(scope)) : null, HOG_SCAN_CAP)
   const byKey = new Map<string, { label: string; kind: string; cumulativeTokens: number; sessions: number; occurrences: number }>()
   let scanned = 0
   for (const s of pool) {
@@ -1034,7 +1088,21 @@ async function handleFindContextHogs(
     }
   }
   const hogs = [...byKey.values()].sort((a, b) => b.cumulativeTokens - a.cumulativeTokens).slice(0, topN)
-  return { scope: scope ?? 'all', sessionsConsidered: considered, sessionsWithLog: withLog, sessionsScanned: scanned, hogs }
+  return {
+    scope: scope ?? 'all',
+    // Legacy flat counters kept for existing consumers; `coverage` is the honest-sampling contract
+    // (spec 4): it states explicitly what was scanned vs skipped so bounded totals are never
+    // mistaken for full history.
+    sessionsConsidered: considered,
+    sessionsWithLog: withLog,
+    sessionsScanned: scanned,
+    coverage: buildScanCoverage(considered, withLog, scanned, HOG_SCAN_CAP),
+    // Top-N truncation is labeled too: how many distinct sources existed vs how many are returned.
+    distinctSources: byKey.size,
+    returnedHogs: hogs.length,
+    hogsTruncated: byKey.size > topN,
+    hogs,
+  }
 }
 
 function handleGetSubagentTree(sessions: SessionSummaryCard[], args: { sessionId: string }) {
