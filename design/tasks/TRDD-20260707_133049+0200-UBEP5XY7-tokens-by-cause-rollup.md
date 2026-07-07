@@ -1,9 +1,9 @@
 ---
 trdd-id: UBEP5XY7
 title: Tokens-by-cause attribution rollup — who (agent/skill/plugin/mcp/hook/user) spent the tokens
-column: planned
+column: dev
 created: 2026-07-07T13:30:49+0200
-updated: 2026-07-07T15:25:00+0200
+updated: 2026-07-08T00:20:00+0200
 current-owner: null
 assignee: null
 priority: 3
