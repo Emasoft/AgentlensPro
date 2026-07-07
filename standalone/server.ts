@@ -181,14 +181,20 @@ startMcpHttpServer({
 
 function runLogScan() {
   const results = logReader.scan()
-  let changed = false
+  // logReader.scan() returns ONLY sessions whose byte offset advanced (incremental tail — unchanged
+  // files return null), so `changedCards` is exactly the set that grew this scan. That set drives
+  // the immediate targeted push below; the heavier full-summary rebuild stays coalesced.
+  const changedCards: SessionSummaryCard[] = []
   for (const { card, childCards } of results) {
     statuslineReader.overlay(card)
     logSessions.set(card.sessionId, card)
-    for (const child of childCards ?? []) logSessions.set(child.sessionId, child)
-    changed = true
+    changedCards.push(card)
+    for (const child of childCards ?? []) { logSessions.set(child.sessionId, child); changedCards.push(child) }
   }
-  if (changed) schedulePushUpdate()
+  if (changedCards.length > 0) {
+    pushSessionChanged(changedCards)   // TRDD-U0UYC38A: targeted, immediate — sub-second drill refresh
+    schedulePushUpdate()               // authoritative full refresh (sidebar/analytics, OTEL-wins) — coalesced
+  }
 }
 
 // Debounced scan triggered by fs.watch events — fires 300 ms after the last event.
@@ -663,6 +669,23 @@ function buildUpdatePayload(): string {
 
 function pushUpdate() {
   const data = buildUpdatePayload()
+  sseClients = sseClients.filter(client => {
+    try { client.write(`data: ${data}\n\n`); return true } catch { return false }
+  })
+}
+
+// TRDD-U0UYC38A — targeted live-tail push. Emitted the instant a session's .jsonl grows (the scan
+// only returns sessions whose byte offset advanced), carrying just the changed cards + their ids —
+// NOT a full summarizeSpans rebuild. This is what makes a jsonl-derived session feel as live as an
+// OTEL one: the browser merges the card into the list and, for the FOCUSED session, invalidates its
+// History/composition caches so the drill views re-fetch the newest turns sub-second. The heavier
+// full-summary push stays coalesced (schedulePushUpdate) so this immediate path can't reopen the
+// OOM budget the coalesce protects. Cards are stripped of their heavy timeline/fileOps (fetched
+// lazily per session), exactly like the full push does.
+function pushSessionChanged(cards: SessionSummaryCard[]): void {
+  if (cards.length === 0 || sseClients.length === 0) return
+  const stripped = cards.map(s => ({ ...s, timeline: [], fileOps: undefined }))
+  const data = JSON.stringify({ type: 'sessionChanged', sessionIds: stripped.map(s => s.sessionId), cards: stripped })
   sseClients = sseClients.filter(client => {
     try { client.write(`data: ${data}\n\n`); return true } catch { return false }
   })
@@ -1372,6 +1395,16 @@ const uiServer = http.createServer((req, res) => {
     const summary = buildSessionSummary()
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify(stripSessionDetail(summary)))
+    return
+  }
+
+  // TRDD-U0UYC38A: live-tail proof. `incrementalReads` counts changed logs re-parsed by tailing
+  // only their appended bytes; `fullReads` counts from-0 (cold-start/fallback) parses. Appending to
+  // a live session must bump incrementalReads while fullReads stays put — the "no full-file rescans
+  // on each append" acceptance check.
+  if (req.method === 'GET' && url === '/api/debug/log-scan-stats') {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify(logReader.getLogScanStats()))
     return
   }
 

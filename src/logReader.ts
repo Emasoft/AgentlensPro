@@ -203,6 +203,14 @@ export class LogReader {
   // One-shot guard: a drifted OpenCode DB schema (newer OpenCode moved model/tokens off
   // the session table into message `data` JSON) is logged once, not on every 30s scan.
   private openCodeSchemaWarned = false
+  // Live-tail proof counters (TRDD-U0UYC38A). `incrementalReads` = a changed file re-parsed by
+  // tailing only its appended bytes (resumed from the prior offset); `fullReads` = a file parsed
+  // from offset 0 (cold start, or a rebuild after truncation/eviction). These make the acceptance
+  // criterion ("no full-file rescans on each append") programmatically verifiable: appending N
+  // times to a live session must bump `incrementalReads` by N while `fullReads` stays at its
+  // cold-start value. Exposed via getLogScanStats() and the server's /api/debug/log-scan-stats.
+  private _incrementalReads = 0
+  private _fullReads = 0
 
   constructor(options: LogReaderOptions = {}) {
     this.log = options.log ?? (() => { /* silent */ })
@@ -216,6 +224,14 @@ export class LogReader {
   clearFileState(): void {
     this.fileState.clear()
     this.accumCache.clear()
+  }
+
+  /**
+   * Live-tail proof counters (TRDD-U0UYC38A): incremental (tail-from-offset) vs full (from-0)
+   * parses of the large streaming logs. See the field comments for the invariant they prove.
+   */
+  getLogScanStats(): { incrementalReads: number; fullReads: number } {
+    return { incrementalReads: this._incrementalReads, fullReads: this._fullReads }
   }
 
   /**
@@ -1300,6 +1316,16 @@ export class LogReader {
     return lines
   }
 
+  /** Records whether a changed file was tailed (incremental) or parsed from 0 (full). */
+  private _recordReadKind(filePath: string, canResume: boolean, prevOffset: number, size: number): void {
+    if (canResume) this._incrementalReads++; else this._fullReads++
+    if (process.env['AGENTLENS_DEBUG_TAIL']) {
+      this.log(canResume
+        ? `[LogReader] tail ${filePath} resume@${prevOffset} → ${size} (+${size - prevOffset}B)`
+        : `[LogReader] full-parse ${filePath} (0 → ${size}B)`)
+    }
+  }
+
   /** LRU insert into accumCache; evicts the oldest entry when over ACCUM_CACHE_MAX. */
   private _lruPut(filePath: string, accum: unknown): void {
     this.accumCache.delete(filePath)
@@ -1337,6 +1363,10 @@ export class LogReader {
     const cached = this.accumCache.get(filePath) as T | undefined
     const canResume = cached !== undefined && prevOffset > 0 && stat.size >= prevOffset
     const accum = canResume ? cached : factory()
+
+    // TRDD-U0UYC38A: count the read kind so the live-tail behaviour is verifiable. A resumed read
+    // touches only the appended bytes; a from-0 read is the cold-start/fallback path.
+    this._recordReadKind(filePath, canResume, prevOffset, stat.size)
 
     let newOffset = canResume ? prevOffset : 0
     try {

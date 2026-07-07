@@ -4,6 +4,7 @@ import {
   sessionSummary, toolCalls,
   selectedAgentFilter, initiatorFilter, dataSourceFilter, sessionLimit, activeTab,
   cacheSessionDetail, cacheSessionComposition, blobCache,
+  focusedSessionId, invalidateSessionDrill, mergeChangedSessionCards,
   dailyStats, lifetimeStats, burnRateData, searchResults, rangedSearchResults,
   timeRange, makeTimeRange, TIME_PRESETS, CHART_MAX,
   vscode, displaySessions, rangedSessions,
@@ -307,6 +308,8 @@ export function App() {
         analyticsData?: { dailyStats: DailyStatRow[]; lifetimeStats: LifetimeStats }
         burnRate?: { sessionId: string; burnRate: BurnRate; projection: Projection | null } | null
         sessions?: SessionSummaryCard[]
+        sessionIds?: string[]
+        cards?: SessionSummaryCard[]
         totalCount?: number
         offset?: number
         enableOtelIngestion?: boolean
@@ -344,6 +347,18 @@ export function App() {
             }
           }, 0)
         }
+      } else if (msg.type === 'sessionChanged' && Array.isArray(msg.sessionIds)) {
+        // Live-tail (TRDD-U0UYC38A): the standalone server pushes this the instant a session's raw
+        // .jsonl grows — ahead of the ~1s coalesced full summary — so a jsonl-derived session feels
+        // as live as an OTEL one. Merge the changed cards into the list right away, and ONLY for the
+        // session the user is currently viewing drop its drill caches so the History tab + Traces
+        // composition re-fetch the newest turns. The server only emits a session here when its byte
+        // offset advanced, and gating on focusedSessionId scopes the (heavier) refetch to the one
+        // open session — together that satisfies "invalidate only when the offset advanced AND the
+        // tab is showing that session" without refetch storms across background sessions.
+        if (Array.isArray(msg.cards)) mergeChangedSessionCards(msg.cards)
+        const viewed = focusedSessionId.value
+        if (viewed && msg.sessionIds.includes(viewed)) invalidateSessionDrill(viewed)
       } else if (msg.type === 'sessionDetail' && msg.sessionId) {
         // Cache timeline + per-file ops together under an LRU bound (state.cacheSessionDetail),
         // so a long browse over many sessions can't grow detail memory without limit.

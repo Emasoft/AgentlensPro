@@ -159,6 +159,50 @@ export function cacheSessionComposition(sessionId: string, composition: ContextC
   sessionCompositions.value = next
 }
 
+// ── Live-tail refresh (TRDD-U0UYC38A) ──────────────────────────────────────────
+// The standalone server pushes a `sessionChanged` SSE event the instant a session's raw .jsonl
+// grows (see App.tsx handler). These two helpers turn that signal into a live view.
+
+// Drop the focused session's on-demand drill caches so the History tab + Traces composition
+// re-fetch the newest turns. Called ONLY for the session the user is currently viewing (App.tsx
+// gates on focusedSessionId), which is what keeps this from causing refetch storms when many
+// background sessions grow at once. Deleting a key from sessionCompositions leaves a now-stale
+// compositionLRU entry, which is harmless: the LRU eviction just skips missing keys, and a later
+// re-fetch re-registers the key via cacheSessionComposition.
+export function invalidateSessionDrill(sessionId: string): void {
+  if (sessionId in sessionHistories.value) {
+    const next = { ...sessionHistories.value }
+    delete next[sessionId]
+    sessionHistories.value = next
+  }
+  if (sessionId in sessionCompositions.value) {
+    const next = { ...sessionCompositions.value }
+    delete next[sessionId]
+    sessionCompositions.value = next
+  }
+}
+
+// Merge server-pushed changed cards into the session list immediately (sub-second) instead of
+// waiting for the ~1s coalesced full-summary push. OTEL precedence is preserved — a 'log'-sourced
+// card never overwrites an existing 'otel' card (the authoritative full push reconciles fully); it
+// only inserts new sessions or refreshes other log-sourced cards. Re-sorted newest-first to match
+// the server's own ordering so the list order stays stable across the later full push.
+export function mergeChangedSessionCards(cards: SessionSummaryCard[]): void {
+  const cur = sessionSummary.value
+  if (!cur || cards.length === 0) return
+  const byId = new Map(cur.sessions.map(s => [s.sessionId, s]))
+  let mutated = false
+  for (const c of cards) {
+    const existing = byId.get(c.sessionId)
+    if (existing && (existing.dataSource ?? 'otel') === 'otel') continue  // OTEL always wins
+    byId.set(c.sessionId, c)
+    mutated = true
+  }
+  if (!mutated) return
+  const merged = [...byId.values()].sort((a, b) => Date.parse(b.startTime || '0') - Date.parse(a.startTime || '0'))
+  sessionSummary.value = { ...cur, sessions: merged }
+}
+
 // ── UI control signals ────────────────────────────────────────────────────────
 
 // Focused session — set by clicking any session in any view.
