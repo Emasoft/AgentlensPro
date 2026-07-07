@@ -60,6 +60,8 @@ When both capture the same session, **OTEL always wins**. `SessionRepository` is
 
 ## Gotchas
 
+- **NEVER write a user config file with `fs.writeFile`/`JSON.parse`-fallback.** Every mutation of `~/.claude/settings.json`, `~/.codex/config.toml`, or VS Code `settings.json` MUST go through `safeConfigEdit` (`src/safeConfigEdit.ts` → `scripts/safe_config_edit.py`): a verified transaction (refuse-unparseable, verify-diff, atomic backup+rename, cross-process lock, bounded retries). A direct writer with a "start fresh on parse failure" path wiped a user's entire 57.8KB settings.json on 2026-07-07 (commit 1a661a9 removed it — do not reintroduce the pattern).
+
 - **Two pricing tables, synced by hand.** `src/pricing.ts` (extension host, write-time, stored as `cost_usd`) and `media/src/pricing.ts` (browser, display-time) carry duplicate rate tables on purpose. Change rates in **both**. `PRICING_SOURCES.md` has the authoritative per-provider rate URLs.
 - **`sql.js` is not bundled.** It's `external` in the extension build and loaded dynamically at runtime; esbuild copies its WASM to `dist/sql-wasm.wasm`, located via `extensionUri` at activation.
 - **Unit tests mock the `vscode` module** via `src/test/setup.js` → `src/test/__mocks__/vscode.js` (so mocha runs without VS Code). Tests needing the real VS Code API belong in `pnpm test` (vscode-test) instead.
