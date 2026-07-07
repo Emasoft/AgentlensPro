@@ -14,8 +14,8 @@ import * as os from 'os'
 import { exec } from 'child_process'
 import { summarizeSpans } from '../src/spanSummarizer'
 import { calcTokenCostUsd } from '../src/pricing'
-import { autoConfigureClaudeCode, autoConfigureCodex, autoConfigureCopilotStandalone } from '../src/autoConfigNode'
-import { ensureTelemetryConfig } from '../src/telemetryConfig'
+import { autoConfigureCodex, autoConfigureCopilotStandalone } from '../src/autoConfigNode'
+import { ensureTelemetryConfig, ensureAgentLensStopHook } from '../src/telemetryConfig'
 import { classifyOtlpPayload } from '../src/otlpParser'
 import { startMcpHttpServer } from '../src/mcpServer'
 import { resolveCallContext, callBodyRegistry } from '../src/rawBodyContext'
@@ -1884,10 +1884,9 @@ otlpServer.on('error', (err: NodeJS.ErrnoException) => {
 // Auto-configure Claude Code (full telemetry), Codex, and Copilot to point at this collector.
 async function applyAutoConfig(): Promise<void> {
   // 1) FULL reversible telemetry env FIRST — it must record the TRUE prior state of
-  //    ~/.claude/settings.json before any other writer touches the file. It also runs BEFORE
-  //    autoConfigureClaudeCode (which writes a subset of the same env keys) so the two never
-  //    race on the same file (read-modify-write) and the marker's prior values are truthful.
-  //    Opt out with AGENTLENS_NO_TELEMETRY_CONFIG=1.
+  //    ~/.claude/settings.json before anything else runs. Every settings.json write below
+  //    goes through the transactional editor (scripts/safe_config_edit.py), sequentially,
+  //    under its cross-process lock. Opt out with AGENTLENS_NO_TELEMETRY_CONFIG=1.
   //
   //    CANONICAL-INSTANCE GATE: only an instance listening on the DEFAULT OTLP port (4318) may
   //    write the GLOBAL ~/.claude/settings.json. Without this gate, any isolated-port instance
@@ -1918,31 +1917,32 @@ async function applyAutoConfig(): Promise<void> {
     } else {
       console.log('[AgentLens] Full telemetry config already in place.')
     }
+    // The automation Stop hook shares the same owning module + transactional editor as the
+    // env keys, so ~/.claude/settings.json has exactly ONE write path — sequential, locked.
+    const hook = await ensureAgentLensStopHook({ otlpPort: OTLP_PORT })
+    if (hook.changed) {
+      console.log('[AgentLens] Claude Code Stop hook installed — restart Claude Code to activate automation.')
+    }
   } catch (e) {
-    // Fail-safe at the server boundary: a bad settings.json shouldn't stop the dashboard.
+    // Fail-safe at the server boundary: a bad settings.json shouldn't stop the dashboard —
+    // the editor REFUSED and left the file untouched; we report and move on.
     console.warn(`[AgentLens] Could not apply telemetry config: ${e instanceof Error ? e.message : String(e)}`)
   }
 
-  // 2) Then the per-agent auto-config (Stop-hook automation + Codex + Copilot). Runs AFTER
-  //    ensureTelemetryConfig so the two Claude Code writers are strictly sequential — and only
-  //    ever on the canonical (default-port / explicitly opted-in) instance, per the gates above.
-  await applyLegacyAgentConfig()
+  // 2) Then the OTHER agents' auto-config (Codex + Copilot) — also through the transactional
+  //    editor (see autoConfigNode.ts), and only ever on the canonical instance per the gates.
+  await applyOtherAgentsConfig()
 }
 
-// Legacy per-agent auto-config: Claude Code Stop-hook + Codex + Copilot. Split out of
-// applyAutoConfig so each concern stays readable (and keeps cognitive complexity low).
-async function applyLegacyAgentConfig(): Promise<void> {
+// Codex + Copilot auto-config. Split out of applyAutoConfig so each concern stays readable.
+// (The Claude Code writer that used to live here was DELETED after it wiped a user's
+// settings.json on 2026-07-07 — Claude Code config is owned by src/telemetryConfig.ts.)
+async function applyOtherAgentsConfig(): Promise<void> {
   try {
-    const [claudeResult, codexResult, copilotResults] = await Promise.all([
-      autoConfigureClaudeCode(OTLP_PORT),
+    const [codexResult, copilotResults] = await Promise.all([
       autoConfigureCodex(OTLP_PORT),
       autoConfigureCopilotStandalone(OTLP_PORT),
     ])
-    if (claudeResult.error) {
-      console.warn(`[AgentLens] Could not auto-configure Claude Code: ${claudeResult.error}`)
-    } else if (claudeResult.changed) {
-      console.log(`[AgentLens] Claude Code configured — restart Claude Code in your terminal to activate tracing`)
-    }
     if (codexResult.error) {
       console.warn(`[AgentLens] Could not auto-configure Codex: ${codexResult.error}`)
     } else if (codexResult.changed) {

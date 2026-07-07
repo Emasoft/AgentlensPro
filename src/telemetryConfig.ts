@@ -22,6 +22,7 @@
 import * as path from 'path'
 import * as os from 'os'
 import * as fs from 'fs/promises'
+import { safeConfigEdit, SafeEditOp } from './safeConfigEdit'
 
 export interface TelemetryConfigOptions {
   /** settings.json to manage. Default: ~/.claude/settings.json */
@@ -121,15 +122,11 @@ function ownedKeys(bodiesDir: string, otlpPort: number): Record<string, string> 
   }
 }
 
-function compactTimestamp(d = new Date()): string {
-  const p = (n: number, w = 2): string => String(n).padStart(w, '0')
-  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_` +
-         `${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}${p(d.getMilliseconds(), 3)}`
-}
-
 /**
  * Atomic JSON write: write a temp sibling then rename over the target. rename(2) is atomic on
- * the same filesystem, so a crash mid-write can never leave a half-written settings.json.
+ * the same filesystem, so a crash mid-write can never leave a half-written file.
+ * ONLY used for the AgentLens-owned marker file — every USER config file (settings.json,
+ * config.toml, VS Code settings) must go through safeConfigEdit (the transactional editor).
  */
 async function atomicWriteJson(filePath: string, data: unknown): Promise<void> {
   const dir = path.dirname(filePath)
@@ -207,7 +204,7 @@ export async function ensureTelemetryConfig(options: TelemetryConfigOptions = {}
   const { settingsPath, markerPath, bodiesDir, otlpPort } = resolveOptions(options)
   const owned = ownedKeys(bodiesDir, otlpPort)
 
-  const { settings, raw } = await readSettingsOrThrow(settingsPath)
+  const { settings } = await readSettingsOrThrow(settingsPath)
   const { env, envPreexisting } = extractEnv(settings, settingsPath)
   const existingMarker = await readMarker(markerPath)
 
@@ -219,6 +216,7 @@ export async function ensureTelemetryConfig(options: TelemetryConfigOptions = {}
   const overrode: string[] = []
   let changed = false
 
+  const ops: SafeEditOp[] = []
   for (const [key, value] of Object.entries(owned)) {
     if (!(key in markerKeys)) {
       const hadKey = Object.prototype.hasOwnProperty.call(env, key)
@@ -226,7 +224,7 @@ export async function ensureTelemetryConfig(options: TelemetryConfigOptions = {}
       if (!hadKey) added.push(key)
       else if (String(env[key]) !== value) overrode.push(key)
     }
-    if (env[key] !== value) { env[key] = value; changed = true }
+    if (env[key] !== value) { ops.push({ op: 'set', path: ['env', key], value }); changed = true }
   }
 
   const marker: TelemetryMarker = {
@@ -242,19 +240,14 @@ export async function ensureTelemetryConfig(options: TelemetryConfigOptions = {}
 
   let backupPath: string | undefined
   if (changed) {
-    if (raw !== null) {
-      // The backup itself must be ATOMIC (tmp + rename), exactly like the settings write:
-      // a plain writeFile creates the file first and fills it after, so a process killed in
-      // that window leaves a 0-BYTE "backup" — observed 2026-07-07 (settings.json.agentlens-
-      // bak-…143807405, 0 bytes). Restoring from such a backup would WIPE the settings file,
-      // which is worse than having no backup at all.
-      backupPath = `${settingsPath}.agentlens-bak-${compactTimestamp()}`
-      const bakTmp = `${backupPath}.${process.pid}.tmp`
-      await fs.writeFile(bakTmp, raw, 'utf-8')
-      await fs.rename(bakTmp, backupPath)
-    }
-    settings.env = env
-    await atomicWriteJson(settingsPath, settings)
+    // ALL settings.json mutations go through the transactional editor
+    // (scripts/safe_config_edit.py): its verify-diff proves only the declared
+    // ["env", <key>] paths change, its backup is atomic + timestamped, a cross-process
+    // lock serializes concurrent instances, and an existing-but-unparseable file is
+    // REFUSED (never rebuilt) — the 2026-07-07 settings.json wipe class is
+    // structurally impossible on this path.
+    const result = await safeConfigEdit(settingsPath, 'json', ops, { createIfMissing: true })
+    backupPath = result.backupPath ?? undefined
   }
   // Write the marker whenever it changed — even if env values didn't (e.g. the user already
   // had every key at our value): uninstall still needs the prior-state record to leave them.
@@ -295,27 +288,36 @@ export async function removeTelemetryConfig(options: TelemetryConfigOptions = {}
 
   const restored: string[] = []
   const deleted: string[] = []
+  const finalEnv: Record<string, string> = { ...env }
+  const ops: SafeEditOp[] = []
   for (const [key, rec] of Object.entries(marker.keys)) {
     if (rec.hadKey && rec.priorValue !== null) {
-      env[key] = rec.priorValue      // re-set exactly what the user had
+      if (finalEnv[key] !== rec.priorValue) ops.push({ op: 'set', path: ['env', key], value: rec.priorValue })
+      finalEnv[key] = rec.priorValue // re-set exactly what the user had
       restored.push(key)
     } else {
-      if (key in env) delete env[key] // we added this key — remove it
+      if (key in finalEnv) { ops.push({ op: 'delete', path: ['env', key] }); delete finalEnv[key] }
       deleted.push(key)
     }
   }
 
-  // If AgentLens created the env object and restoring emptied it, drop it so the file returns
-  // to its prior shape (no stray empty "env": {}).
-  if (!marker.envPreexisting && Object.keys(env).length === 0) delete settings.env
-  else settings.env = env
+  // If AgentLens created the env object and restoring emptied it, drop the whole env key so
+  // the file returns to its prior shape (no stray empty "env": {}). Safe as ONE delete op:
+  // finalEnv being empty proves every remaining env key was marker-managed and outbound anyway.
+  const dropEnv = !marker.envPreexisting && Object.keys(finalEnv).length === 0
+  const effectiveOps: SafeEditOp[] = dropEnv ? [{ op: 'delete', path: ['env'] }] : ops
 
-  const backupPath = `${settingsPath}.agentlens-bak-${compactTimestamp()}`
-  await fs.writeFile(backupPath, settingsRaw, 'utf-8')
-  await atomicWriteJson(settingsPath, settings)
+  // The uninstall write goes through the same transactional editor as the install —
+  // verify-diff proves only the marker-recorded keys are touched, so a corrupt marker or a
+  // restore bug can never take user keys with it.
+  let backupPath: string | undefined
+  if (effectiveOps.length > 0) {
+    const result = await safeConfigEdit(settingsPath, 'json', effectiveOps)
+    backupPath = result.backupPath ?? undefined
+  }
   await fs.rm(markerPath, { force: true })
 
-  return { changed: restored.length > 0 || deleted.length > 0, restored, deleted, settingsPath, backupPath }
+  return { changed: effectiveOps.length > 0, restored, deleted, settingsPath, backupPath }
 }
 
 /** Per-key install status for `agentlens telemetry status`. Tolerates a corrupt marker. */
@@ -387,4 +389,28 @@ export async function runTelemetryCli(args: string[]): Promise<number> {
     console.error(`[AgentLens] telemetry ${sub ?? ''} failed: ${e instanceof Error ? e.message : String(e)}`)
     return 1
   }
+}
+
+const AGENTLENS_HOOK_MARKER = '.agentlens/pending-prompt.txt'
+const AGENTLENS_HOOK_COMMAND =
+  'f=$HOME/.agentlens/pending-prompt.txt; [ -f "$f" ] && cat "$f" && rm "$f"'
+
+/**
+ * Idempotently install the AgentLens automation Stop hook (standalone prompt injection).
+ * Lives here — next to the telemetry env manager — so ~/.claude/settings.json has exactly
+ * ONE owning module, and writes through the transactional editor: append_unique keys on the
+ * hook's marker substring (re-runs never duplicate the entry), verify-diff proves no other
+ * hook or setting is touched, and a corrupt settings.json is refused, never rebuilt.
+ * (Replaces the deleted autoConfigureClaudeCode, whose parse-failure "start fresh" path
+ * wiped a user's whole settings.json on 2026-07-07.)
+ */
+export async function ensureAgentLensStopHook(options: TelemetryConfigOptions = {}): Promise<{ changed: boolean }> {
+  const { settingsPath } = resolveOptions(options)
+  const result = await safeConfigEdit(settingsPath, 'json', [{
+    op: 'append_unique',
+    path: ['hooks', 'Stop'],
+    value: { matcher: '', hooks: [{ type: 'command', command: AGENTLENS_HOOK_COMMAND }] },
+    unique_by_substring: AGENTLENS_HOOK_MARKER,
+  }], { createIfMissing: true })
+  return { changed: result.changed }
 }

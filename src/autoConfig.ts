@@ -1,6 +1,6 @@
 import * as vscode from 'vscode'
 export type { ConfigResult } from './autoConfigNode'
-export { autoConfigureClaudeCode, autoConfigureCodex } from './autoConfigNode'
+export { autoConfigureCodex } from './autoConfigNode'
 
 export async function autoConfigureCopilot(port: number): Promise<{ changed: boolean; error?: string }> {
   try {

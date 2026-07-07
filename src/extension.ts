@@ -6,7 +6,8 @@ import { OtlpCollector } from './otlpCollector'
 import { SessionStore } from './sessionStore'
 import { SidebarPanel } from './sidebarPanel'
 import { DashboardPanel } from './dashboardPanel'
-import { autoConfigureCopilot, autoConfigureClaudeCode, autoConfigureCodex } from './autoConfig'
+import { autoConfigureCopilot, autoConfigureCodex } from './autoConfig'
+import { ensureTelemetryConfig, ensureAgentLensStopHook } from './telemetryConfig'
 import { exportSpans, exportSpansRedacted } from './exportData'
 import { openDatabase, AgentLensDb } from './database/db'
 import { DatabaseReader, openReadonlySnapshot } from './database/reader'
@@ -190,9 +191,20 @@ export async function activate(context: vscode.ExtensionContext) {
   }
 
   // ── Auto-configure agents ────────────────────────────────────────────────────
-  const [copilotResult, claudeResult, codexResult] = await Promise.all([
+  // Claude Code config goes through src/telemetryConfig.ts (transactional editor —
+  // the direct-fs writer that used to be called here wiped a user's settings.json
+  // on 2026-07-07 and was deleted). Sequential with nothing else touching the file.
+  const claudeResult: { changed: boolean; error?: string } = await (async () => {
+    try {
+      const env = await ensureTelemetryConfig({ otlpPort: port })
+      const hook = await ensureAgentLensStopHook({ otlpPort: port })
+      return { changed: env.changed || hook.changed }
+    } catch (e) {
+      return { changed: false, error: e instanceof Error ? e.message : String(e) }
+    }
+  })()
+  const [copilotResult, codexResult] = await Promise.all([
     autoConfigureCopilot(port),
-    autoConfigureClaudeCode(port),
     autoConfigureCodex(port),
   ])
 
