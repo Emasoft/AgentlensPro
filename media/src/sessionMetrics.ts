@@ -20,6 +20,20 @@ export function calcEntryCost(entry: TimelineEntry, sessionModel: string): numbe
 
 export type { PricingMode }
 
+/**
+ * True when the session moved real tokens but its model has no pricing-table entry — its cost is
+ * UNKNOWN, not $0 (TRDD-ZK37VG4X fail-loud). The UI must badge these instead of hiding the cost
+ * cell, and cost aggregates must exclude-but-count them; a silent $0 deflates averages and hides
+ * a stale rate table (claude-sonnet-5 sessions billed $0 for weeks this way). `session.unpriced`
+ * is the host-side flag from SessionRepository; the lookup fallback covers cards that reach the
+ * webview through paths that don't pass through the repository.
+ */
+export function isUnpriced(session: SessionSummaryCard): boolean {
+  if (session.unpriced === true) { return true }
+  const traffic = session.inputTokens + session.outputTokens + session.cacheReadTokens + session.cacheCreateTokens
+  return traffic > 0 && lookupRates(session.model || '') === null
+}
+
 export interface SessionCost {
   totalUsd: number
   aiCredits: number     // totalUsd / 0.01 — Copilot's billing unit

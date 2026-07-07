@@ -4,6 +4,7 @@ import { SessionStore } from './sessionStore'
 import { DatabaseReader, type DailyStatRow, type LifetimeStats, type SearchQuery, type BurnRate, type Projection } from './database/reader'
 import { DatabaseWriter } from './database/writer'
 import { summarizeSpans } from './spanSummarizer'
+import { lookupRates } from './pricing'
 import type { SessionSummaryCard, TimelineEntry, GeneratedFileRef } from './summarizers/summarizerTypes'
 
 export type { DailyStatRow, LifetimeStats, SearchQuery, BurnRate, Projection }
@@ -43,6 +44,81 @@ export function resolveWorkspacesFromLogs(sessions: SessionSummaryCard[]): void 
 }
 
 /**
+ * Session-identity dedup (TRDD-ZK37VG4X spec 2). The id-level merge above/below only collapses
+ * cards with the SAME sessionId, but the fleet audit found the same underlying session appearing
+ * under TWO ids: a `synth-*` OTEL placeholder next to its real transcript id, and id-drifted
+ * twins with byte-identical usage. Those double-count every token in the list views.
+ *
+ * A card's identity fingerprint is (source, model, all four token buckets). Two cards with the
+ * same fingerprint, non-zero traffic, and start times within 10 minutes are the same session —
+ * four exact token-bucket collisions across genuinely different sessions are not plausible
+ * (all-zero cards are excluded precisely because THEY collide all the time).
+ *
+ * Winner selection: OTEL beats log (project rule: OTEL always wins), then the richer timeline,
+ * then the longer duration. The REAL id always beats a `synth-*` placeholder regardless of which
+ * card wins on data (re-keying the synth card onto its correlated real id), and the loser's id is
+ * recorded in `mergedFrom` so the merge is auditable rather than silent. Fields the winner is
+ * missing (workspace, prompt, model) are borrowed from the loser.
+ */
+export function dedupeSessionIdentities(sessions: SessionSummaryCard[]): SessionSummaryCard[] {
+  const IDENTITY_WINDOW_MS = 10 * 60_000
+  const fingerprint = (s: SessionSummaryCard): string | null => {
+    const traffic = s.inputTokens + s.outputTokens + s.cacheReadTokens + s.cacheCreateTokens
+    if (!(traffic > 0)) { return null }  // zero/NaN traffic → no reliable identity signal
+    return `${s.source}|${s.model}|${s.inputTokens}|${s.outputTokens}|${s.cacheReadTokens}|${s.cacheCreateTokens}`
+  }
+  const isSynth = (id: string) => id.startsWith('synth-')
+  const richness = (s: SessionSummaryCard) => (s.timeline?.length ?? 0)
+
+  const out: SessionSummaryCard[] = []
+  const slotByFp = new Map<string, number>()  // fingerprint → index in `out` of the canonical card
+  for (const s of sessions) {
+    const fp = fingerprint(s)
+    if (fp === null) { out.push(s); continue }
+    const slot = slotByFp.get(fp)
+    if (slot === undefined) { slotByFp.set(fp, out.length); out.push(s); continue }
+    const prior = out[slot]
+    const dt = Math.abs(Date.parse(prior.startTime) - Date.parse(s.startTime))
+    // NaN-safe: an unparseable startTime fails the <= check and the cards stay separate.
+    if (!(dt <= IDENTITY_WINDOW_MS)) { out.push(s); continue }
+
+    let winner = prior
+    let loser = s
+    const priorScore = (prior.dataSource === 'otel' ? 2 : 0) + (richness(prior) >= richness(loser) ? 1 : 0)
+    const sScore = (s.dataSource === 'otel' ? 2 : 0) + (richness(s) > richness(prior) ? 1 : 0)
+    if (sScore > priorScore || (sScore === priorScore && s.durationMs > prior.durationMs)) {
+      winner = s
+      loser = prior
+    }
+    // Re-key: the real transcript id is the durable identity — a synth-* placeholder id must
+    // never survive a merge with its real twin, or drill-down lookups by id would 404.
+    if (isSynth(winner.sessionId) && !isSynth(loser.sessionId)) {
+      winner.mergedFrom = [...(winner.mergedFrom ?? []), winner.sessionId]
+      winner.sessionId = loser.sessionId
+    }
+    winner.mergedFrom = [...(winner.mergedFrom ?? []), loser.sessionId].filter(id => id !== winner.sessionId)
+    if (!winner.workspace) { winner.workspace = loser.workspace }
+    if (!winner.userRequest) { winner.userRequest = loser.userRequest }
+    if (!winner.model) { winner.model = loser.model }
+    out[slot] = winner
+  }
+  return out
+}
+
+/**
+ * Marks sessions whose model has no pricing-table entry (TRDD-ZK37VG4X spec 1 fail-loud).
+ * cost_usd for these is 0 in the DB, but 0 here means UNKNOWN, not free — the flag lets the UI
+ * badge them and aggregates exclude-but-label them. Derived at read time on purpose: once the
+ * missing rate is added to pricing.ts, old sessions price correctly with no backfill.
+ */
+export function flagUnpricedSessions(sessions: SessionSummaryCard[]): void {
+  for (const s of sessions) {
+    const traffic = s.inputTokens + s.outputTokens + s.cacheReadTokens + s.cacheCreateTokens
+    if (traffic > 0 && lookupRates(s.model) === null) { s.unpriced = true }
+  }
+}
+
+/**
  * Merges historical sessions from SQLite with live sessions from the in-memory
  * span window. Live sessions always win on conflict (same sessionId) — they are
  * fresher. Result is sorted by startTime DESC.
@@ -78,8 +154,9 @@ export class SessionRepository {
     const dbSessions = this.reader.listSessions(filter)
     const liveSpans = this.store.getSpans()
     const liveSessions = liveSpans.length > 0 ? summarizeSpans(liveSpans).sessions : []
-    const merged = mergeSessions(dbSessions, liveSessions)
+    const merged = dedupeSessionIdentities(mergeSessions(dbSessions, liveSessions))
     resolveWorkspacesFromLogs(merged)
+    flagUnpricedSessions(merged)
     if (filter?.limit !== null && filter?.limit !== undefined && merged.length > filter.limit) {
       return merged.slice(0, filter.limit)
     }
@@ -123,7 +200,9 @@ export class SessionRepository {
 
   /** Full-text + filter session search with pagination. */
   searchSessions(query: SearchQuery): { sessions: SessionSummaryCard[]; totalCount: number } {
-    return this.reader.searchSessions(query)
+    const result = this.reader.searchSessions(query)
+    flagUnpricedSessions(result.sessions)
+    return result
   }
 
   /** Burn rate for an active session. Returns null if < 2 LLM entries with timestamps. */

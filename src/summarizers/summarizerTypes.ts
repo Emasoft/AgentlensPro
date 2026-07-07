@@ -58,6 +58,16 @@ export interface SessionSummaryCard {
   // pricing-table estimate). The transcript .jsonl parser stays the source for cumulative token buckets
   // and per-source composition drill-down; these numbers OVERRIDE context size + cost only.
   statusline?: StatuslineUsageAgg
+  // Cost-integrity flags (TRDD-ZK37VG4X), mirrored in media/src/types.ts.
+  // unpriced: the session has real token traffic but its model has no pricing-table entry, so its
+  // true cost is UNKNOWN — NOT $0. Derived by SessionRepository at read time (never persisted;
+  // adding the missing rate retroactively prices old sessions). Consumers must badge it and
+  // exclude it (labeled) from cost aggregates instead of letting silent $0s deflate them —
+  // exactly how 14 claude-sonnet-5 sessions billed $0 before 2026-07-07.
+  unpriced?: boolean
+  // Session ids this card absorbed during identity dedup (a synth-* OTEL placeholder and its log
+  // twin, or an id-drifted duplicate with identical usage). Derived at read time.
+  mergedFrom?: string[]
 }
 
 /** Per-session aggregate of the statusline usage log — the authoritative, rate-limit-free live view

@@ -77,7 +77,13 @@ Claude Code CLI uses Anthropic API token-based pricing only — no request-multi
 
 **Who it applies to:** All Claude Code CLI users billed through the Anthropic API.
 
-**Source:** <https://platform.claude.com/docs/en/about-claude/pricing> (verified 2026-06-08)
+**Source:** <https://platform.claude.com/docs/en/about-claude/pricing> (verified 2026-06-08; sonnet-5/mythos-5 added 2026-07-07)
+
+> **claude-sonnet-5 introductory pricing:** $2/$10 per MTok (cache read $0.20, cache write $2.50)
+> bills through **2026-08-31**; sticker is $3/$15 ($0.30/$3.75). The rate tables carry the intro
+> rates until then — flip both `pricing.ts` files to sticker after that date.
+> **Unknown models fail loud:** a model with no table entry renders an UNPRICED badge (cost is
+> unknown, not $0) instead of silently pricing at zero.
 
 **Formula:**
 

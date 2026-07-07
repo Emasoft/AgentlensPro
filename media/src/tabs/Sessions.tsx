@@ -9,7 +9,7 @@ import {
   getAgentColor, getAgentSourceLabel, formatMs, formatCompact, formatSessionTime,
   getDataSourceBadgeHtml, getInitiatorBadgeHtml,
 } from '../utils'
-import { calcSessionCost } from '../sessionMetrics'
+import { calcSessionCost, isUnpriced } from '../sessionMetrics'
 import { estimateTokensFromBytes } from '../tokenEstimator'
 import { fmtUsd } from './Cost'
 import { generateInsights, InsightCard } from './Insights'
@@ -315,7 +315,12 @@ function SessionDetail({ sess }: { sess: SessionSummaryCard }) {
                 ...(sess.peakContextPerTurn ? [{ k: 'Peak ctx/turn', v: formatCompact(sess.peakContextPerTurn) }] : []),
                 { k: 'Duration',   v: formatMs(sess.durationMs) },
                 ...(sess.errors > 0 ? [{ k: 'Errors', v: String(sess.errors) }] : []),
-                ...(!cost.modelUnknown && cost.totalUsd > 0 ? [{ k: 'Est. cost', v: fmtUsd(cost.totalUsd) }] : []),
+                // Fail-loud (TRDD-ZK37VG4X): a model missing from the pricing table must show
+                // UNPRICED, not silently drop the cost cell — hiding it is how stale rates go
+                // unnoticed while sessions bill $0.
+                ...(isUnpriced(sess)
+                  ? [{ k: 'Est. cost', v: 'UNPRICED' }]
+                  : (!cost.modelUnknown && cost.totalUsd > 0 ? [{ k: 'Est. cost', v: fmtUsd(cost.totalUsd) }] : [])),
               ].map(({ k, v }) => (
                 <div key={k} style="background:var(--card-bg);border:1px solid var(--border);border-radius:4px;padding:5px 8px">
                   <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px">{k}</div>
@@ -485,11 +490,14 @@ function SessionRow({ sess, showWorkspace }: { sess: SessionSummaryCard; showWor
 
         {/* Cost */}
         <td style="padding:4px 8px 4px 6px;text-align:right;white-space:nowrap;font-size:10px">
-          {!cost.modelUnknown && cost.totalUsd > 0
-            ? <span style="color:var(--vscode-charts-green,#81c784)">{fmtUsd(cost.totalUsd)}</span>
-            : sess.errors > 0
-              ? <span style="color:var(--error)">{sess.errors} err</span>
-              : <span style="color:var(--muted)">—</span>
+          {/* UNPRICED beats the silent em-dash: cost unknown ≠ cost zero (TRDD-ZK37VG4X). */}
+          {isUnpriced(sess)
+            ? <span title={`No pricing-table entry for model "${sess.model || '(none)'}" — cost unknown, excluded from totals`} style="color:var(--vscode-charts-yellow,#e5c07b);font-weight:600">UNPRICED</span>
+            : !cost.modelUnknown && cost.totalUsd > 0
+              ? <span style="color:var(--vscode-charts-green,#81c784)">{fmtUsd(cost.totalUsd)}</span>
+              : sess.errors > 0
+                ? <span style="color:var(--error)">{sess.errors} err</span>
+                : <span style="color:var(--muted)">—</span>
           }
         </td>
       </tr>

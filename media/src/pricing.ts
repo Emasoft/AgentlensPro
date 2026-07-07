@@ -2,7 +2,7 @@
 // Token rates (post Jun 1, 2026):        https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing
 // Request multipliers (pre Jun 1, 2026): https://docs.github.com/en/copilot/concepts/billing/copilot-requests
 // Annual-plan multipliers (post Jun 1):  https://docs.github.com/en/copilot/reference/copilot-billing/model-multipliers-for-annual-plans
-export const PRICING_LAST_UPDATED = '2026-06-10'
+export const PRICING_LAST_UPDATED = '2026-07-07'
 
 // Three billing modes:
 //   'token'          — new token-based AI Credits billing, effective Jun 1, 2026
@@ -64,6 +64,11 @@ const RATES: Record<string, ModelRates> = {
                              inputAbove200kPerMTok: 6.00, outputAbove200kPerMTok: 22.50, cacheReadAbove200kPerMTok: 0.60, cacheWriteAbove200kPerMTok: 7.50 },
   'claude-sonnet-4-5':     { inputPerMTok:  3.00, cacheReadPerMTok: 0.30, cacheWritePerMTok:  3.75, outputPerMTok: 15.00, multiplier: 1,    multiplierAnnualPostJun1: 6 },
   'claude-sonnet-4-6':     { inputPerMTok:  3.00, cacheReadPerMTok: 0.30, cacheWritePerMTok:  3.75, outputPerMTok: 15.00, multiplier: 1,    multiplierAnnualPostJun1: 9 },
+  // Sonnet 5 INTRODUCTORY pricing ($2/$10 per MTok) bills through 2026-08-31; sticker $3/$15 —
+  // flip to 3.00/0.30/3.75/15.00 after. Was missing → sessions silently billed $0 (fixed 2026-07-07).
+  'claude-sonnet-5':       { inputPerMTok:  2.00, cacheReadPerMTok: 0.20, cacheWritePerMTok:  2.50, outputPerMTok: 10.00, multiplier: 0,    multiplierAnnualPostJun1: 0 },  // not yet listed in Copilot billing docs
+  // Mythos 5 (Project Glasswing) — same pricing as Fable 5
+  'claude-mythos-5':       { inputPerMTok: 10.00, cacheReadPerMTok: 1.00, cacheWritePerMTok: 12.50, outputPerMTok:  50.00, multiplier: 0,   multiplierAnnualPostJun1: 0 },  // not yet listed in Copilot billing docs
   'claude-opus-4-5':       { inputPerMTok:  5.00, cacheReadPerMTok: 0.50, cacheWritePerMTok:  6.25, outputPerMTok: 25.00, multiplier: 3,    multiplierAnnualPostJun1: 15 },
   'claude-opus-4-6':       { inputPerMTok:  5.00, cacheReadPerMTok: 0.50, cacheWritePerMTok:  6.25, outputPerMTok: 25.00, multiplier: 3,    multiplierAnnualPostJun1: 27 },
   'claude-opus-4-7':       { inputPerMTok:  5.00, cacheReadPerMTok: 0.50, cacheWritePerMTok:  6.25, outputPerMTok: 25.00, multiplier: 15,   multiplierAnnualPostJun1: 27 },
