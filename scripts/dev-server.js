@@ -23,6 +23,10 @@ let debounce = null;
 
 function openBrowser() {
   if (opened) return;
+  // Opt-in ONLY: never auto-open a browser (Safari) unless the user explicitly asks via
+  // AGENTLENS_OPEN_BROWSER=1 or `--open`. Tests, agents, and headless dev drive the dashboard
+  // with the headless dev-browser instead; a surprise Safari window on every dev/restart is noise.
+  if (process.env.AGENTLENS_OPEN_BROWSER !== '1' && !process.argv.includes('--open')) return;
   opened = true;
   const url = `http://localhost:${UI_PORT}`;
   const cmd = process.platform === 'darwin' ? 'open'
