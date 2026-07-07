@@ -293,11 +293,35 @@ export async function buildContextHistory(sessionId: string, parentSessionId?: s
       // Input-side content feeds the UPCOMING assistant turn (assistantTurns + 1), matching the
       // context-composition attribution and the timeline's user_input turn.
       const turn = assistantTurns + 1
-      // A compaction summary carried on a meta/compact record → one postCompact block.
-      if (e['isCompactSummary'] === true || e['isMeta'] === true) {
+      // A REAL compaction summary (isCompactSummary) → one postCompact block. isMeta records are NOT
+      // compaction summaries — they are harness-injected meta messages (the `<local-command-caveat>`
+      // that accompanies every scheduled-task fire / local command, command outputs, …). The old
+      // `isCompactSummary || isMeta` branch mislabeled 300+ per-turn cron caveats as "compact summary"
+      // on session 28e3a88d, which (a) fabricated a ~268k-token postCompact aggregate that was really
+      // 314 separate ~855-token cron pings and (b) would make every turn look like a compaction
+      // boundary to the resident-cost residency model (TRDD-W0RRL2FZ). Keep the kinds separate:
+      // postCompact marks the eviction boundary; cron/harness metas are repeating injected content.
+      if (e['isCompactSummary'] === true) {
         const msg = e['message'] as Record<string, unknown> | undefined
         const summary = typeof e['summary'] === 'string' ? (e['summary'] as string) : fullText(msg?.['content'])
         if (summary) { addBlock(turn, 'postCompact', 'compact summary', summary, 'input'); continue }
+      }
+      if (e['isMeta'] === true) {
+        const msg = e['message'] as Record<string, unknown> | undefined
+        const text = fullText(msg?.['content'])
+        if (text) {
+          // Three meta shapes, each named honestly so per-turn accumulation is visible per entity:
+          //  • a scheduled-task fire — the harness prepends the task name in brackets ("[name]\n…";
+          //    on 28e3a88d the 312 such metas match the 312 scheduled_task_fire system records 1:1)
+          //    → kind 'cron', labeled with the task name so each recurring task is its own block;
+          //  • the <local-command-caveat> wrapper of local/scheduled commands → kind 'cron';
+          //  • anything else → 'harness: meta' (loud generic label, never silently dropped).
+          const fire = /^\[([^\]\n]{1,80})\]\n/.exec(text)
+          if (fire) addBlock(turn, 'cron', `scheduled task: ${fire[1]}`, text, 'input')
+          else if (text.includes('<local-command-caveat>')) addBlock(turn, 'cron', 'local-command caveat', text, 'input')
+          else addBlock(turn, 'harness', 'meta', text, 'input')
+        }
+        continue
       }
       const msg = e['message'] as Record<string, unknown> | undefined
       const content = msg?.['content']

@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import {
   sessionSummary, toolCalls,
   selectedAgentFilter, initiatorFilter, dataSourceFilter, sessionLimit, activeTab,
-  cacheSessionDetail, cacheSessionComposition, cacheGeneratedFileContent, blobCache,
+  cacheSessionDetail, cacheSessionComposition, cacheSessionHistory, cacheGeneratedFileContent, blobCache,
   focusedSessionId, invalidateSessionDrill, mergeChangedSessionCards,
   dailyStats, lifetimeStats, burnRateData, serverBurnStatus, searchResults, rangedSearchResults,
   timeRange, makeTimeRange, TIME_PRESETS, CHART_MAX,
@@ -326,6 +326,7 @@ export function App() {
         generatedFiles?: GeneratedFileRef[]
         generatedFilesTruncated?: boolean
         composition?: ContextComposition | null
+        history?: import('./types').ContextHistory | null
         spanId?: string
         field?: string
         content?: string | null
@@ -412,6 +413,10 @@ export function App() {
         // Host-parsed per-turn composition (null = no local Claude log). Cached under the same LRU
         // bound as the timeline so ContextTab can overlay the exact injected blocks on each turn.
         cacheSessionComposition(msg.sessionId, msg.composition ?? null)
+      } else if (msg.type === 'contextHistory' && msg.sessionId) {
+        // TRDD-W0RRL2FZ: reply to a requestContextHistory postMessage (VS Code dashboardPanel or
+        // the standalone shim). null = no local transcript — an honest terminal state, not pending.
+        cacheSessionHistory(msg.sessionId, msg.history ?? null)
       } else if (msg.type === 'blobContent' && msg.spanId && msg.field) {
         const key = `${msg.spanId}:${msg.field}`
         if (msg.content != null) {

@@ -5,6 +5,7 @@ import { InstructionRepository } from './database/instructionRepository'
 import { detectInstructionFiles, appendSuggestion, removeSuggestion } from './instructionFiles'
 import { computeBaseline } from './instructionEffectiveness'
 import { buildContextComposition } from './contextComposition'
+import { buildContextHistory } from './contextHistory'
 import { readScratchFile } from './generatedFiles'
 
 export class DashboardPanel {
@@ -88,6 +89,13 @@ export class DashboardPanel {
         // parent's .jsonl — a fork has no own log, its transcript lives in the parent's.
         const composition = await buildContextComposition(msg.sessionId as string, msg.parentSessionId as string | undefined)
         this.panel.webview.postMessage({ type: 'contextComposition', sessionId: msg.sessionId, composition })
+      } else if (msg.type === 'loadContextHistory' && msg.sessionId) {
+        // TRDD-W0RRL2FZ: per-step context history on demand for the History tab + the Context tab's
+        // resident-cost panel. Same heavy-work-stays-in-the-host contract as the composition above;
+        // a fork/sub-agent with no own .jsonl reconstructs from its parent's transcript. null = no
+        // local transcript (the webview renders its honest terminal message).
+        const history = await buildContextHistory(msg.sessionId as string, msg.parentSessionId as string | undefined)
+        this.panel.webview.postMessage({ type: 'contextHistory', sessionId: msg.sessionId, history })
       } else if (msg.type === 'askAI' && msg.prompt) {
         const prompt = `The following efficiency issue was detected in my AI coding session. Help me fix it:\n\n${msg.prompt}`
         openAIChat(prompt, msg.agent)

@@ -26,6 +26,7 @@ import type {
   CacheBreakReport, CacheBreakOffender, ContextHistory, CallContext, CollectorGap,
 } from './summarizers/summarizerTypes'
 import { buildCacheBreakReport } from './cacheBreak'
+import { buildResidentCostReport } from './residentCost'
 import type { BurnStatus, SessionStatus } from './burnMonitor'
 import { listSessionFileIds } from './contextComposition'
 import { generateSuggestions } from './instructionAdvisor'
@@ -258,7 +259,13 @@ const TOOLS = [
       'Ranks the biggest cumulative context contributors (turns × per-turn weight) for a session or ' +
       'workspace, and flags RUNAWAY sources — a block re-injected across many turns (a tool output ' +
       're-read every turn, a huge injected file, a per-turn hook) that, if it sits in the cached ' +
-      'prefix, forces repeated cache-creation. Use this to find the structural token sinks.',
+      'prefix, forces repeated cache-creation. With a sessionId it ALSO itemizes the whole ' +
+      'transcript by RESIDENT COST (tokens × turns-resident, compaction-aware): every block — ' +
+      'post-compaction summaries, tool outputs riding forward, pasted files, repeated hook/cron ' +
+      'injections, messages — ranked with first/last turn, occurrences, a per-kind remediation ' +
+      'hint, and a drill pointer into get_context_history; reconciled against the exact per-step ' +
+      'usage totals so the unattributed remainder is explicit. Use this to find the structural ' +
+      'token sinks.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -1015,6 +1022,7 @@ async function handleGetCacheBreakReport(
 async function handleGetContextInflationReport(
   sessions: SessionSummaryCard[],
   getComposition: CompositionAccessor | null,
+  getHistory: HistoryAccessor | null,
   args: { sessionId?: string; workspace?: string },
 ) {
   if (!getComposition) return { error: 'Composition accessor unavailable — inflation analysis needs local Claude logs.' }
@@ -1048,6 +1056,43 @@ async function handleGetContextInflationReport(
   // Runaway = re-injected across many turns AND heavy per turn — if it lives in the cached prefix it
   // forces repeated cache-creation. This is the fixable structural sink.
   const runaway = ranked.filter(a => a.turnsPresent >= 5 && a.peakTokens >= 1000)
+
+  // TRDD-W0RRL2FZ: itemize the "conversation remainder" for a single session — every context block
+  // ranked by residentCost = tokens × turns-resident, reconciled against the exact per-step usage
+  // totals so no token stays unattributed silently. Single-session only: the workspace path already
+  // streams every pooled transcript once for the composition; a second full-history pass per pooled
+  // session would double the scan cost of one MCP call for an aggregate the per-session drill answers
+  // better.
+  let residentCost: unknown = null
+  if (args.sessionId) {
+    const history = getHistory ? await getHistory(args.sessionId).catch(() => null) : null
+    if (history && history.steps.length > 0) {
+      const rc = buildResidentCostReport(history)
+      residentCost = {
+        estimated: rc.estimated,
+        truncated: rc.truncated,
+        stepCount: rc.stepCount,
+        stepsWithUsage: rc.stepsWithUsage,
+        compactionTurns: rc.compactionTurns,
+        totalContextTokens: rc.totalContextTokens,
+        itemizedResidentTokens: rc.itemizedResidentTokens,
+        unattributedTokens: rc.unattributedTokens,
+        itemizedPct: rc.totalContextTokens > 0 ? +(rc.itemizedResidentTokens / rc.totalContextTokens * 100).toFixed(1) : null,
+        note: rc.note,
+        topBlocks: rc.blocks.slice(0, 10).map(b => ({
+          ...b,
+          // The drill pointer: get_context_history(sessionId, turn, blockId) returns this block's
+          // full text at its first occurrence.
+          drill: { tool: 'get_context_history', sessionId: args.sessionId, turn: b.firstSeenTurn, blockId: b.id },
+        })),
+      }
+    } else {
+      // Honest absence — an OTEL-only session (or missing accessor) cannot be itemized; say so
+      // instead of returning a silent null field.
+      residentCost = { message: 'No local transcript to itemize (history accessor unavailable, or OTEL-only session with no .jsonl on disk).' }
+    }
+  }
+
   return {
     scope:              args.sessionId ? `session ${args.sessionId}` : (args.workspace ?? 'all'),
     sessionsConsidered: considered,
@@ -1058,6 +1103,8 @@ async function handleGetContextInflationReport(
       label: a.label, kind: a.kind, turnsPresent: a.turnsPresent, peakTokens: a.peakTokens, cumulativeTokens: a.cumulativeTokens,
       hint: 'Re-injected across many turns — if it sits in the cached prefix it forces repeated cache-creation; move it into the message suffix after the last breakpoint.',
     })),
+    // Session-scoped resident-cost itemization (null only on workspace scope, where it is not computed).
+    residentCost,
   }
 }
 
@@ -1222,7 +1269,7 @@ export function createMcpServer(opts: McpServerOptions): Server {
         result = await handleGetCacheBreakReport(sessions, getTimeline, getComposition, args as { sessionId?: string; workspace?: string })
         break
       case 'get_context_inflation_report':
-        result = await handleGetContextInflationReport(sessions, getComposition, args as { sessionId?: string; workspace?: string })
+        result = await handleGetContextInflationReport(sessions, getComposition, getHistory, args as { sessionId?: string; workspace?: string })
         break
       case 'find_context_hogs':
         result = await handleFindContextHogs(sessions, getComposition, args as { scope?: string; topN?: number })

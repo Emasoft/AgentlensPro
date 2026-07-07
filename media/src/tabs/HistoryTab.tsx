@@ -1,10 +1,11 @@
-import { useState, useEffect } from 'preact/hooks'
-import { sessionSummary, sessionHistories, focusedSessionId, sessionGeneratedFiles } from '../state'
+import { useState, useEffect, useMemo } from 'preact/hooks'
+import { sessionSummary, sessionHistories, focusedSessionId, sessionGeneratedFiles, requestContextHistory } from '../state'
 import { GeneratedFilesList } from '../GeneratedFilesView'
 import { formatCompact, formatSessionTime, getAgentDotHtml } from '../utils'
 import { fmtUsd } from '../sessionMetrics'
 import { lookupRates, calcTokenCost } from '../pricing'
-import type { ContextHistory, ContextHistoryStep, ContextBlock, ContextBlockKind, GeneratedFileRef, TokenSource } from '../types'
+import { buildResidentCostReport } from '../residentCost'
+import type { ContextHistory, ContextHistoryStep, ContextBlock, ContextBlockKind, GeneratedFileRef, TokenSource, ResidentCostBlock } from '../types'
 
 // Exact/calibrated/estimated marker for a token figure (TRDD-IQENK7JM). Exact = no marker; calibrated
 // (estimate scaled to a usage total) = ≈; estimated (raw estimate) = ~. The tooltip spells it out.
@@ -118,6 +119,85 @@ export function BlockRow({ block, added, changed, isBreak }: { block: ContextBlo
   )
 }
 
+// ── Resident-cost itemization panel (TRDD-W0RRL2FZ) ─────────────────────────────
+// Ranks every context block by residentCost = tokens × turns-resident (compaction-aware) — the
+// blocks that cost the most not because they are big but because they RODE the transcript for many
+// turns. Derived in the webview from the already-loaded history (media/src/residentCost.ts mirror).
+// Exported so the Context tab renders the same panel per session — one rendering, one source of truth.
+
+function ResidentCostRow({ b, history, rank }: { b: ResidentCostBlock; history: ContextHistory; rank: number }) {
+  const [open, setOpen] = useState(false)
+  // The block drill: the full (capped) text of the block's FIRST occurrence, already in memory —
+  // no extra fetch. Empty text still renders an explicit placeholder, never a silent blank.
+  const drillText = open
+    ? (history.steps.find(s => s.turn === b.firstSeenTurn)?.blocks.find(x => x.id === b.id)?.text ?? '')
+    : ''
+  return (
+    <div style="border-top:1px solid var(--border)">
+      <div style="display:flex;align-items:center;gap:8px;min-height:22px;font-size:10px;cursor:pointer;padding:0 4px" onClick={() => setOpen(v => !v)}>
+        <span style="width:10px;font-size:7px;color:var(--muted);text-align:center">{open ? '▼' : '▶'}</span>
+        <span style="width:18px;text-align:right;color:var(--muted);font-variant-numeric:tabular-nums">{rank}</span>
+        <KindBadge kind={b.kind} />
+        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title={b.label}>{b.label}</span>
+        <span style="color:var(--muted);font-variant-numeric:tabular-nums" title="occurrences × span: how many steps (re-)injected this block, over which turn range">
+          {b.occurrences}× · T{b.firstSeenTurn}–T{b.lastResidentTurn} ({b.turnsResident} turns)
+        </span>
+        <span style="width:80px;text-align:right;font-variant-numeric:tabular-nums;color:var(--muted)" title="Σ tokens injected across all occurrences">{formatCompact(b.tokens)} tok</span>
+        <span style="width:96px;text-align:right;font-variant-numeric:tabular-nums;font-weight:700" title="resident cost = Σ tokens × turns-resident (token·turns) — the cumulative context weight while riding the transcript">
+          {formatCompact(b.residentCost)} tok·turns
+        </span>
+      </div>
+      {open && (
+        <div style="margin:2px 4px 8px 38px">
+          <div style="font-size:9px;color:var(--vscode-charts-orange,#e2a03f);padding:2px 0">↳ {b.remediation}</div>
+          <pre style="margin:2px 0 0;padding:6px 8px;font-size:10px;line-height:1.4;white-space:pre-wrap;overflow:visible;background:var(--vscode-editorWidget-background,var(--bg));border:1px solid var(--border);border-radius:3px;color:var(--fg)">
+            {drillText.trim() ? drillText : '(no text captured for this block — token/byte weight is still accurate)'}
+          </pre>
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function ResidentCostList({ history, defaultOpen }: { history: ContextHistory; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen ?? false)
+  // useMemo: the derivation walks every step×block; recompute only when the history object changes
+  // (live-tail invalidation replaces the object), not on every unrelated signal render.
+  const report = useMemo(() => buildResidentCostReport(history), [history])
+  const top = report.blocks.slice(0, 10)
+  const pct = report.totalContextTokens > 0 ? Math.round(report.itemizedResidentTokens / report.totalContextTokens * 100) : null
+  return (
+    <div style="border-bottom:1px solid var(--border)">
+      <div style="display:flex;align-items:center;gap:10px;min-height:24px;font-size:11px;cursor:pointer;padding:0 6px" onClick={() => setOpen(v => !v)}>
+        <span style="width:12px;font-size:8px;color:var(--muted);text-align:center">{open ? '▼' : '▶'}</span>
+        <span style="font-weight:700">Top resident-cost blocks</span>
+        <span style="font-size:9px;color:var(--muted)">tokens × turns-resident — what actually accumulated the context bill</span>
+        {pct !== null && (
+          <span style="margin-left:auto;font-size:10px;color:var(--muted);font-variant-numeric:tabular-nums" title={report.note}>
+            itemized {pct}% of {formatCompact(report.totalContextTokens)} tok cumulative context · {report.compactionTurns.length} compaction{report.compactionTurns.length === 1 ? '' : 's'}
+          </span>
+        )}
+        {pct === null && (
+          // FAIL-FAST honesty: with no usage buckets there is no exact base to reconcile against.
+          <span style="margin-left:auto;font-size:10px;color:var(--vscode-charts-orange,#e2a03f)" title={report.note}>no usage buckets — unreconciled estimates</span>
+        )}
+      </div>
+      {open && (
+        <div style="padding:0 6px 6px 20px">
+          {top.length === 0
+            ? <div style="font-size:10px;color:var(--muted);padding:4px 0">No blocks reconstructed for this session.</div>
+            : top.map((b, i) => <ResidentCostRow key={b.id} b={b} history={history} rank={i + 1} />)}
+          {report.blocks.length > 10 && (
+            <div style="font-size:9px;color:var(--muted);padding:4px 0 0;font-style:italic">
+              +{report.blocks.length - 10} more blocks itemized ({formatCompact(report.blocks.slice(10).reduce((n, b) => n + b.residentCost, 0))} tok·turns) — full list via the get_context_inflation_report MCP tool
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function StepRow({ step, prev, sessionModel }: { step: ContextHistoryStep; prev: ContextHistoryStep | undefined; sessionModel: string }) {
   const [open, setOpen] = useState(false)
   const events = detectBurnEvents(step, prev)
@@ -181,7 +261,6 @@ export function History() {
   const sessions = summary?.sessions ?? []
   const histories = sessionHistories.value
   const [picked, setPicked] = useState('')
-  const [pending, setPending] = useState(false)
 
   // Default to the focused session (if any) else the first session that actually recorded turns —
   // an OTEL-only card with 0 turns has no transcript to reconstruct.
@@ -193,28 +272,18 @@ export function History() {
   const card = sessions.find(s => s.sessionId === selectedId)
   const cached = selectedId in histories
   const history = cached ? histories[selectedId] : undefined
+  // pending is DERIVED (no local state): an absent key means the request is in flight (the state
+  // helper dedupes) — the reply always lands as a cached key, null being the honest terminal state.
+  const pending = !!selectedId && !cached
 
+  // TRDD-W0RRL2FZ: history loading goes through the runtime-agnostic state helper (VS Code:
+  // postMessage → dashboardPanel; standalone: shim/fetch → /api/history) instead of a direct fetch,
+  // which the VS Code webview CSP (connect-src unset) silently blocked before.
   useEffect(() => {
-    if (!selectedId || selectedId in sessionHistories.value) { setPending(false); return }
-    let cancelled = false
-    setPending(true)
+    if (!selectedId) return
     const c = sessions.find(s => s.sessionId === selectedId)
-    const parent = c?.parentSessionId
-    const url = `/api/history/${encodeURIComponent(selectedId)}${parent ? '?parent=' + encodeURIComponent(parent) : ''}`
-    fetch(url)
-      .then(r => r.json())
-      .then((data: { history: ContextHistory | null }) => {
-        if (cancelled) return
-        sessionHistories.value = { ...sessionHistories.value, [selectedId]: data.history ?? null }
-        setPending(false)
-      })
-      .catch(() => {
-        if (cancelled) return
-        sessionHistories.value = { ...sessionHistories.value, [selectedId]: null }
-        setPending(false)
-      })
-    return () => { cancelled = true }
-  }, [selectedId])
+    requestContextHistory(selectedId, c?.parentSessionId)
+  }, [selectedId, cached])
 
   // TRDD-ZS1GDXVY: fetch the session-level "generated files" group (rides the /api/timeline payload)
   // so the History tab lists a session's output/scratch files alongside its per-step blocks. Shares
@@ -279,6 +348,8 @@ export function History() {
           <GeneratedFilesList files={genFiles.files} truncated={genFiles.truncated} heading="Generated files" />
         </div>
       )}
+      {/* TRDD-W0RRL2FZ: the resident-cost summary — which blocks cost the most as tokens × turns-resident. */}
+      {history && steps.length > 0 && <ResidentCostList history={history} defaultOpen={true} />}
       <div class="waterfall">
         {pending && !cached
           ? <div style="padding:14px;font-size:11px;color:var(--muted)">Reconstructing context history…</div>

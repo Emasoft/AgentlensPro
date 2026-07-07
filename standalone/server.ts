@@ -1194,6 +1194,27 @@ function getHtml(): string {
                 }));
               })
               .catch(function(e) { console.warn('[AgentLens] composition fetch failed', e); });
+          } else if (msg.type === 'loadContextHistory' && msg.sessionId) {
+            // TRDD-W0RRL2FZ: uniform history loading — the webview always posts loadContextHistory
+            // (VS Code: dashboardPanel handles it; standalone: this shim proxies the existing
+            // /api/history route, which resolves the logged ancestor server-side). A failed fetch
+            // dispatches history:null so the UI shows its honest "no transcript" message, never a
+            // perpetual spinner.
+            var _histUrl = '/api/history/' + encodeURIComponent(msg.sessionId);
+            if (msg.parentSessionId) _histUrl += '?parent=' + encodeURIComponent(msg.parentSessionId);
+            fetch(_histUrl)
+              .then(function(r) { return r.json(); })
+              .then(function(data) {
+                window.dispatchEvent(new MessageEvent('message', {
+                  data: { type: 'contextHistory', sessionId: msg.sessionId, history: data.history || null }
+                }));
+              })
+              .catch(function(e) {
+                console.warn('[AgentLens] history fetch failed', e);
+                window.dispatchEvent(new MessageEvent('message', {
+                  data: { type: 'contextHistory', sessionId: msg.sessionId, history: null }
+                }));
+              });
           }
         }
       };

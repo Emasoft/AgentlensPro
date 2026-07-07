@@ -173,10 +173,37 @@ export function cacheGeneratedFileContent(content: GeneratedFileContent): void {
 export const sessionCompositions = signal<Record<string, ContextComposition | null>>({})
 const compositionLRU: string[] = []
 
-// Per-session full per-step context history (host-reconstructed from the raw .jsonl, fetched lazily
-// over HTTP by the History tab). Keyed by sessionId. A present `null` means the host had no local
-// transcript to reconstruct (OTEL-only session); an absent key means "not yet fetched".
+// Per-session full per-step context history (host-reconstructed from the raw .jsonl, loaded lazily
+// by the History tab + the Context tab's resident-cost panel). Keyed by sessionId. A present `null`
+// means the host had no local transcript to reconstruct (OTEL-only session); an absent key means
+// "not yet fetched".
 export const sessionHistories = signal<Record<string, import('./types').ContextHistory | null>>({})
+
+// Request one session's context history on demand (TRDD-W0RRL2FZ). Deduped: an in-flight/loaded
+// session is not re-requested. Routes through vscode.postMessage — in VS Code the dashboardPanel
+// reconstructs the history; in standalone the inline shim proxies /api/history. Falls back to a
+// direct fetch when no vscode API is present so the standalone page still works if the shim is
+// absent. The reply lands as a contextHistory message → cacheSessionHistory.
+const historyInFlight = new Set<string>()
+export function requestContextHistory(sessionId: string, parentSessionId?: string): void {
+  if (!sessionId || historyInFlight.has(sessionId) || sessionId in sessionHistories.value) return
+  historyInFlight.add(sessionId)
+  if (vscode) {
+    vscode.postMessage({ type: 'loadContextHistory', sessionId, parentSessionId })
+    return
+  }
+  const url = `/api/history/${encodeURIComponent(sessionId)}${parentSessionId ? '?parent=' + encodeURIComponent(parentSessionId) : ''}`
+  fetch(url)
+    .then(r => r.json())
+    .then((data: { history: import('./types').ContextHistory | null }) => cacheSessionHistory(sessionId, data.history ?? null))
+    // null is the honest terminal state ("no transcript"), never a perpetual pending key.
+    .catch(() => cacheSessionHistory(sessionId, null))
+}
+
+export function cacheSessionHistory(sessionId: string, history: import('./types').ContextHistory | null): void {
+  historyInFlight.delete(sessionId)
+  sessionHistories.value = { ...sessionHistories.value, [sessionId]: history }
+}
 
 // Per-CALL full literal context tree (TRDD-ICHAVFCS), reconstructed by the host from Claude Code's
 // raw OTEL request body and fetched lazily over HTTP when an LLM call is expanded. Keyed by

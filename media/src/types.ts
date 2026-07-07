@@ -267,6 +267,39 @@ export interface ContextHistory {
   reconstructedFrom?: string
 }
 
+// Mirror of src/summarizers/summarizerTypes.ts — resident-cost itemization (TRDD-W0RRL2FZ).
+// residentCost = Σ over a block's occurrences of tokens × turns-resident (compaction-aware): the
+// true cumulative context weight of a block, comparable to Σ per-turn usage. Derived in the webview
+// by media/src/residentCost.ts (mirror of src/residentCost.ts) from an already-loaded ContextHistory.
+export interface ResidentCostBlock {
+  id: string
+  kind: ContextBlockKind
+  label: string
+  tokens: number              // Σ tokens injected across all occurrences
+  peakTokens: number
+  occurrences: number
+  firstSeenTurn: number
+  lastResidentTurn: number
+  turnsResident: number
+  residentCost: number        // token·turns
+  remediation: string
+}
+
+export interface ResidentCostReport {
+  sessionId: string
+  stepCount: number
+  stepsWithUsage: number
+  lastTurn: number
+  compactionTurns: number[]
+  totalContextTokens: number  // Σ per-step usage (input + cacheRead + cacheCreate) — exact
+  itemizedResidentTokens: number
+  unattributedTokens: number  // signed — negative = estimator overshoot (never clamped)
+  note: string
+  blocks: ResidentCostBlock[] // ranked heaviest first
+  estimated: true
+  truncated: boolean
+}
+
 // Mirror of src/summarizers/summarizerTypes.ts — the full literal context of ONE llm call
 // (TRDD-ICHAVFCS), reconstructed from Claude Code's raw OTEL request body. Every element is an
 // ordered ContextBlock drillable to its actual text; token figures are tokenizer estimates (see tokenSource).

@@ -276,6 +276,46 @@ export interface ContextHistory {
   reconstructedFrom?: string
 }
 
+// ── Resident-cost itemization (TRDD-W0RRL2FZ) ─────────────────────────────────
+// The cost model is `cost ≈ turns × per-turn-context`: a block is expensive not for its size but
+// for its size × HOW LONG it rides forward in the transcript. Every occurrence of a block (one
+// step's copy) stays resident from the step it was added until the next compaction evicts it (or
+// the session ends), and is re-read (cache-read billed) on every turn in between. residentCost is
+// the Σ over occurrences of tokens × turns-resident — the true cumulative context weight of the
+// block, directly comparable to the session's Σ per-turn usage (input + cacheRead + cacheCreate).
+// Derived purely from ContextHistory by buildResidentCostReport — no new ingestion.
+// MIRRORED in media/src/types.ts — change both.
+export interface ResidentCostBlock {
+  id: string                  // ContextBlock id `${kind}:${label}` — the drill key for get_context_history
+  kind: ContextBlockKind
+  label: string
+  tokens: number              // Σ tokens injected across all occurrences (per-step calibrated counts)
+  peakTokens: number          // largest single-occurrence token count
+  occurrences: number         // how many steps (re-)injected this block id
+  firstSeenTurn: number
+  lastResidentTurn: number    // last turn any copy was still resident (next compaction − 1, or lastTurn)
+  turnsResident: number       // lastResidentTurn − firstSeenTurn + 1 (the residency span)
+  residentCost: number        // Σ over occurrences of tokens × turns-resident (token·turns)
+  remediation: string         // per-kind one-line fix hint
+}
+
+export interface ResidentCostReport {
+  sessionId: string
+  stepCount: number
+  stepsWithUsage: number      // steps that carried exact usage buckets (the reconciliation base)
+  lastTurn: number
+  compactionTurns: number[]   // turns whose step carries a postCompact block (eviction boundaries)
+  totalContextTokens: number  // Σ per-step usage (input + cacheRead + cacheCreate) — EXACT ground truth
+  itemizedResidentTokens: number // Σ residentCost over every block — what the itemization attributes
+  unattributedTokens: number  // totalContextTokens − itemizedResidentTokens; SIGNED (negative =
+                              // estimator overshoot), never silently clamped — see note
+  note: string                // what the unattributed remainder contains (invisible system prompt /
+                              // tool definitions, estimator drift, preserved-message approximation)
+  blocks: ResidentCostBlock[] // ranked by residentCost, heaviest first
+  estimated: true             // marker: per-block figures are estimates calibrated to usage
+  truncated: boolean          // the underlying history hit a parse cap
+}
+
 // ── Per-call full context (TRDD-ICHAVFCS) ─────────────────────────────────────
 // The literal, untruncated context of ONE llm API call, reconstructed from Claude Code's raw OTEL
 // request body ({system, messages[], tools[]}) captured via OTEL_LOG_RAW_API_BODIES. Reuses the

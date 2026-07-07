@@ -2,10 +2,12 @@ import { useState, useEffect } from 'preact/hooks'
 import {
   filteredSessions, sessionSummary, sessionTimelines, sessionCompositions, blobCache,
   focusedSessionId, focusedTurn, activeTab, vscode,
+  sessionHistories, requestContextHistory,
 } from '../state'
 import { formatCompact, formatSessionTime, getAgentDotHtml, formatToolLabel } from '../utils'
 import { fmtUsd, calcEntryCost } from '../sessionMetrics'
 import { countTokens } from '../tokenEstimator'
+import { ResidentCostList } from './HistoryTab'
 import type { SessionSummaryCard, TimelineEntry, ContextSource } from '../types'
 
 interface TurnPoint {
@@ -155,6 +157,45 @@ function TurnRow({ p, maxContext, sessionId, hostSources }: { p: TurnPoint; maxC
   )
 }
 
+// TRDD-W0RRL2FZ: lazy per-session resident-cost panel. The full per-step history is a heavy parse
+// (a whole-transcript stream on the host), so it is requested ONLY when the user opens the panel —
+// never eagerly for every session block on the tab. Shares the sessionHistories cache with the
+// History tab, so a session already drilled there renders instantly here (and vice versa).
+function SessionResidentCost({ sess }: { sess: SessionSummaryCard }) {
+  const [open, setOpen] = useState(false)
+  const cached = sess.sessionId in sessionHistories.value
+  const history = cached ? sessionHistories.value[sess.sessionId] : undefined
+
+  useEffect(() => {
+    if (open) requestContextHistory(sess.sessionId, sess.parentSessionId)
+  }, [open, sess.sessionId, cached])
+
+  if (!open) {
+    return (
+      <div style="display:flex;align-items:center;gap:10px;min-height:24px;font-size:11px;cursor:pointer;padding:0 6px;border-top:1px solid var(--border)" onClick={() => setOpen(true)}>
+        <span style="width:12px;font-size:8px;color:var(--muted);text-align:center">▶</span>
+        <span style="font-weight:700">Top resident-cost blocks</span>
+        <span style="font-size:9px;color:var(--muted)">tokens × turns-resident — click to reconstruct from the transcript</span>
+      </div>
+    )
+  }
+  if (!cached) {
+    return <div style="padding:6px 26px;font-size:10px;color:var(--muted);border-top:1px solid var(--border)">Reconstructing context history…</div>
+  }
+  if (!history || history.steps.length === 0) {
+    // Honest terminal states — an OTEL-only session (null) or a fork whose transcript lives in the
+    // parent (empty steps) cannot be itemized; say so instead of spinning.
+    return (
+      <div style="padding:6px 26px;font-size:10px;color:var(--muted);border-top:1px solid var(--border)">
+        {history?.reconstructedFrom
+          ? `transcript lives in parent ${history.reconstructedFrom}`
+          : 'No local Claude transcript to reconstruct — OTEL-only session.'}
+      </div>
+    )
+  }
+  return <ResidentCostList history={history} defaultOpen={true} />
+}
+
 function ContextSessionBlock({ sess, depth }: { sess: SessionSummaryCard; depth: number }) {
   const [collapsed, setCollapsed] = useState(depth > 0)
   const timelines = sessionTimelines.value
@@ -203,6 +244,8 @@ function ContextSessionBlock({ sess, depth }: { sess: SessionSummaryCard; depth:
       </div>
       {!collapsed && (
         <div style="border:1px solid var(--border);border-top:none;border-radius:0 0 4px 4px;margin-bottom:10px">
+          {/* TRDD-W0RRL2FZ: which blocks actually accumulated this session's context bill. */}
+          <SessionResidentCost sess={sess} />
           {loading
             ? <div style="padding:10px;font-size:11px;color:var(--muted)">Loading context trace…</div>
             : points.length === 0
