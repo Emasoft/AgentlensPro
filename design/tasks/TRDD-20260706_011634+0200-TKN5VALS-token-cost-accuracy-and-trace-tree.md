@@ -27,6 +27,8 @@ external-refs: []
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-07
 
+### 🔄 RESUME 2026-07-07 (post-restart, "implement everything"): ICHAVFCS ✅ DONE (94bef67 backend + 0ade84d UI — click any LLM call → FULL literal context as a vertical taxonomy tree from raw OTEL bodies, works for OTEL-only sessions, screenshot-verified 128 blocks). 0KNGDFQI ✅ ADDRESSED (span cap 9d4caad + SSE debounce + 6GB launch heap a54abae — working set PLATEAUS ~3.3GB, survived 24min; not an unbounded leak). Rich OTEL events ingested (7612ff5). Full telemetry config live. **NEXT: remaining child TRDDs (read each STATE first): U0UYC38A realtime jsonl tail · ZS1GDXVY output-file leaves · M36W16L0 telemetry install/uninstall · IQENK7JM tokenizer · 6E6416B8 vscode-removal.** Server: `pnpm run local` (now 6GB heap). Spawn ONE opus agent per TRDD, verify (check-types+esbuild+headless) before commit-by-name, no push.
+
 ### 🔴 REOPENED as P8 — "complete context-history browser" (column=dev). P1-P4 shipped; P8 is the user's crystallized demand and is NOT done.
 
 **WHY reopened:** P4 verified the cache-bar drill ONLY on a `.jsonl`-backed session; forks/OTEL dead-ended,
