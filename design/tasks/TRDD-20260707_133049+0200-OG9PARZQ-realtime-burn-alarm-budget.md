@@ -1,9 +1,9 @@
 ---
 trdd-id: OG9PARZQ
 title: Realtime burn-rate alarm + rate-limit window budget — smoke detector, not just microscope
-column: proposal
+column: dev
 created: 2026-07-07T13:30:49+0200
-updated: 2026-07-07T13:30:49+0200
+updated: 2026-07-07T15:10:00+0200
 current-owner: null
 assignee: null
 priority: 1
@@ -44,6 +44,22 @@ the subscription rate-limit window, so "how close am I to exhaustion?" is unansw
    api_request: agent/skill/fleet-spawn/compaction).
 4. **MCP tool** `get_burn_status()`: current burn rate, window %, projection, active alerts —
    so agents can self-throttle.
+5. **Agent-facing self-serve tool** `get_session_status(sessionId? , workspace?)` (added on
+   approval 2026-07-07 — the fleet's Claudes asked for exactly this): one call returning, for
+   the caller's session (resolve by sessionId, else newest live session under workspace):
+   current context usage + peak, the 4 usage buckets + avg 5 values, cache hit rate, last LLM
+   call cost, session-total cost, tokens/min rate, remaining 5h + 7d window %, and a compact
+   comparison to the caller's previous sessions (same workspace): cost/turns/cache-hit deltas.
+   Context diff/composition stay in the existing get_context_history/get_context_composition
+   tools — reference them in the tool description so agents discover the drill path.
+
+## Approval log
+- 2026-07-07T15:10:00+0200 — APPROVED (USER demand relayed 2026-07-07: "the other projects
+  claudes are asking if they can use the mcp of agentlens to get detailed info on the token
+  usage of their sessions … remaining 5h and 7d window percentage, token usage rate per
+  minute, cache hit rate, average 5 values, last peak tokens usage, costs of last llm call,
+  cost since the beginning of the session, comparison to previous sessions, context diff,
+  context composition"). Moved to design/tasks, column dev, dispatched.
 
 ## Acceptance
 - A synthetic firehose session (replayed fixture) triggers the banner + alert within ≤10s,
