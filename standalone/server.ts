@@ -17,6 +17,7 @@ import { calcTokenCostUsd } from '../src/pricing'
 import { autoConfigureClaudeCode, autoConfigureCodex, autoConfigureCopilotStandalone } from '../src/autoConfigNode'
 import { classifyOtlpPayload } from '../src/otlpParser'
 import { startMcpHttpServer } from '../src/mcpServer'
+import { resolveCallContext, callBodyRegistry } from '../src/rawBodyContext'
 import { LogReader, type OpenCodeSqlFactory } from '../src/logReader'
 import { StatuslineUsageReader } from '../src/statuslineUsage'
 import { buildContextComposition, resolveLoggedAncestor } from '../src/contextComposition'
@@ -157,6 +158,9 @@ startMcpHttpServer({
     const parentOf = (sid: string): string | undefined => sess.find(s => s.sessionId === sid)?.parentSessionId
     return buildContextHistory(id, resolveLoggedAncestor(id, parentOf) ?? parentOf(id))
   },
+  // TRDD-ICHAVFCS: resolve a call (sessionId + requestId/spanId) to its full literal context tree,
+  // reconstructed from the raw OTEL request body indexed by the collector. Works for OTEL-only sessions.
+  getCallContext: (sessionId, sel) => resolveCallContext(sessionId, sel),
 }, MCP_PORT, BIND_HOST)
 
 function runLogScan() {
@@ -385,6 +389,27 @@ function processLogs(payload: unknown, collectorPath = '/v1/logs'): number {
         const r = rec as Record<string, unknown>
         const attrs = mergeAttrs(toAttrs(r.attributes), attrsFromBodyKv(r.body), scopeAttrs, resourceAttrs)
         const name = attrStr(attrs, 'event.name', 'event_name', 'name', 'event')
+        // TRDD-ICHAVFCS: index pointers to the raw API request/response bodies (OTEL_LOG_RAW_API_BODIES)
+        // so a call can be resolved to its body file and its full context tree reconstructed on demand.
+        // Store only the lightweight pointer — never the multi-MB body — then skip (no timeline value).
+        if (name === 'claude_code.api_request_body' || name === 'claude_code.api_response_body') {
+          const sid = attrStr(attrs, 'session.id', 'session_id')
+          const bodyRef = attrStr(attrs, 'body_ref', 'body.ref', 'bodyRef')
+          const inlineBody = attrStr(attrs, 'body')
+          if (sid && (bodyRef || inlineBody)) {
+            callBodyRegistry.record(sid, {
+              kind: name === 'claude_code.api_request_body' ? 'request' : 'response',
+              bodyRef: bodyRef || undefined,
+              inlineBody: bodyRef ? undefined : (inlineBody || undefined),
+              requestId: attrStr(attrs, 'request_id', 'request.id', 'requestId') || undefined,
+              spanId: (typeof r.spanId === 'string' && r.spanId ? r.spanId : attrStr(attrs, 'span_id', 'spanId')) || undefined,
+              model: attrStr(attrs, 'model') || undefined,
+              querySource: attrStr(attrs, 'query_source', 'query.source') || undefined,
+              ts: Date.now(),
+            })
+          }
+          continue
+        }
         const logToolName = attrStr(attrs, 'tool.name')
         const isCodexEvent = name.startsWith('codex.')
         const isClaudeToolResult = name === 'tool_result' && logToolName !== ''
@@ -1385,6 +1410,32 @@ const uiServer = http.createServer((req, res) => {
         console.warn('[AgentLens] history parse failed', e)
         res.writeHead(200, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ history: null }))
+      })
+    return
+  }
+
+  if (req.method === 'GET' && url?.startsWith('/api/callcontext/')) {
+    // TRDD-ICHAVFCS: the full literal context of ONE llm call, reconstructed from the raw OTEL request
+    // body captured via OTEL_LOG_RAW_API_BODIES. Path: /api/callcontext/:sessionId/:requestId or
+    // /api/callcontext/:sessionId?span=:spanId. callContext=null → no raw body captured for that call
+    // (the client renders an honest "not captured" note, never a spinner). `url` is the query-stripped
+    // pathname; the ?span= hint is read from the raw req.url.
+    const rest = url.slice('/api/callcontext/'.length)
+    const parts = rest.split('/')
+    const sessionId = decodeURIComponent(parts[0] ?? '')
+    const requestId = parts[1] ? decodeURIComponent(parts[1]) : undefined
+    const rawUrl = req.url ?? ''
+    const qIdx = rawUrl.indexOf('?')
+    const spanId = qIdx >= 0 ? new URLSearchParams(rawUrl.slice(qIdx + 1)).get('span') ?? undefined : undefined
+    resolveCallContext(sessionId, { requestId, spanId })
+      .then(callContext => {
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ callContext }))
+      })
+      .catch(e => {
+        console.warn('[AgentLens] callcontext build failed', e)
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ callContext: null }))
       })
     return
   }

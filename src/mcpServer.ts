@@ -23,7 +23,7 @@ import {
 import { calcTokenCostUsd } from './pricing'
 import type {
   SessionSummaryCard, TimelineEntry, ContextComposition,
-  CacheBreakReport, CacheBreakOffender, ContextHistory,
+  CacheBreakReport, CacheBreakOffender, ContextHistory, CallContext,
 } from './summarizers/summarizerTypes'
 import { buildCacheBreakReport } from './cacheBreak'
 import { listSessionFileIds } from './contextComposition'
@@ -259,6 +259,28 @@ const TOOLS = [
       required: ['sessionId'],
       properties: {
         sessionId: { type: 'string', description: 'Any session in the tree (parent or child)' },
+      },
+    },
+  },
+  {
+    name: 'get_call_context',
+    description:
+      'Returns the FULL literal context of ONE llm API call, reconstructed from Claude Code\'s raw ' +
+      'OTEL request body ({system, messages[], tools[]}) captured via OTEL_LOG_RAW_API_BODIES. Every ' +
+      'element — system prompt (CLAUDE.md/rules tagged), each user/assistant message, tool inputs AND ' +
+      'outputs, bash in/out, MCP calls, thinking, the tool catalog — is an ORDERED block drillable to ' +
+      'its ACTUAL text with per-block token estimate (bytes/4) + taxonomy (kind) + role. Identify the ' +
+      'call by sessionId + requestId (from the api_request event / an llm_request span) or by spanId. ' +
+      'Works for OTEL-only sessions with no local .jsonl. This is THE tool to answer "show me the ' +
+      'exact whole context at THIS specific call". Returns a clear message (never a spinner) when the ' +
+      'raw body was not captured for that call.',
+    inputSchema: {
+      type: 'object' as const,
+      required: ['sessionId'],
+      properties: {
+        sessionId: { type: 'string', description: 'Session ID from get_recent_sessions' },
+        requestId: { type: 'string', description: 'request_id of the call (from the api_request event / llm_request span); omit to use spanId or the latest call' },
+        spanId:    { type: 'string', description: 'spanId of the call\'s llm_request span (alternative to requestId)' },
       },
     },
   },
@@ -690,6 +712,7 @@ function subAgentChildren(sessions: SessionSummaryCard[], parentId: string) {
 
 type CompositionAccessor = (sessionId: string) => Promise<ContextComposition | null>
 type HistoryAccessor = (sessionId: string) => Promise<ContextHistory | null>
+type CallContextAccessor = (sessionId: string, sel: { requestId?: string; spanId?: string }) => Promise<CallContext | null>
 
 // ── P4 diagnostic tool handlers ───────────────────────────────────────────────
 
@@ -702,6 +725,27 @@ type HistoryAccessor = (sessionId: string) => Promise<ContextHistory | null>
 //                       plus the diff's added/changed/removed counts + firstChangeBlockId).
 //   • turn=N         → that step's blocks WITH full text (bounded by the reconstruction's 20k/block cap).
 //   • turn=N,blockId → just that one block's full text (the deepest drill).
+function handleGetCallContext(ctx: CallContext | null, args: { sessionId: string; requestId?: string; spanId?: string }) {
+  // Honest fallback — a call with no raw body on disk (legacy OTEL-only, pre-config) returns a clear
+  // message, never a perpetual spinner and never "check the previous turn" (TRDD-ICHAVFCS §6).
+  if (!ctx) {
+    return {
+      sessionId: args.sessionId, requestId: args.requestId, spanId: args.spanId,
+      message: 'Raw API body not captured for this call (recorded before raw-body logging was enabled, or not a Claude Code session with OTEL_LOG_RAW_API_BODIES set).',
+    }
+  }
+  return {
+    sessionId: ctx.sessionId,
+    requestId: ctx.requestId,
+    model: ctx.model,
+    truncated: ctx.truncated,
+    estimated: true,
+    blockCount: ctx.blocks.length,
+    totalTokens: ctx.blocks.reduce((n, b) => n + b.tokens, 0),
+    blocks: ctx.blocks.map(b => ({ id: b.id, kind: b.kind, label: b.label, tokens: b.tokens, bytes: b.bytes, role: b.role, toolName: b.toolName, text: b.text })),
+  }
+}
+
 function handleGetContextHistory(
   history: ContextHistory | null,
   card: SessionSummaryCard | undefined,
@@ -968,6 +1012,10 @@ export interface McpServerOptions {
    *  Powers get_context_history — every block drillable to its actual text with per-block tokens +
    *  per-step usage/cost + a diff. Async because it streams a (possibly multi-GB) log file. */
   getHistory?: HistoryAccessor
+  /** Optionally reconstruct the full literal context of ONE llm call from its raw OTEL request body
+   *  (TRDD-ICHAVFCS). Powers get_call_context — the per-call drill target that works for OTEL-only
+   *  sessions with no local .jsonl. Async because it reads the (possibly multi-MB) raw body file. */
+  getCallContext?: CallContextAccessor
 }
 
 export function createMcpServer(opts: McpServerOptions): Server {
@@ -984,6 +1032,7 @@ export function createMcpServer(opts: McpServerOptions): Server {
     const getTimeline = opts.getTimeline ?? null
     const getComposition = opts.getComposition ?? null
     const getHistory = opts.getHistory ?? null
+    const getCallContext = opts.getCallContext ?? null
 
     let result: unknown
     switch (req.params.name) {
@@ -1040,6 +1089,14 @@ export function createMcpServer(opts: McpServerOptions): Server {
       case 'get_subagent_tree':
         result = handleGetSubagentTree(sessions, args as { sessionId: string })
         break
+      case 'get_call_context': {
+        const a = args as { sessionId: string; requestId?: string; spanId?: string }
+        const ctx = getCallContext
+          ? await getCallContext(a.sessionId, { requestId: a.requestId, spanId: a.spanId }).catch(() => null)
+          : null
+        result = handleGetCallContext(ctx, a)
+        break
+      }
       default:
         return { content: [{ type: 'text', text: `Unknown tool: ${req.params.name}` }], isError: true }
     }

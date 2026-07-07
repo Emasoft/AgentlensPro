@@ -234,6 +234,21 @@ export interface ContextHistory {
   reconstructedFrom?: string
 }
 
+// ── Per-call full context (TRDD-ICHAVFCS) ─────────────────────────────────────
+// The literal, untruncated context of ONE llm API call, reconstructed from Claude Code's raw OTEL
+// request body ({system, messages[], tools[]}) captured via OTEL_LOG_RAW_API_BODIES. Reuses the
+// ContextBlock taxonomy above: every element of the call (system prompt, each message, tool_use,
+// tool_result, thinking, the tool catalog) becomes one ordered block drillable to its actual text.
+// Token figures are ESTIMATES (bytes/4) until the tokenizer TRDD (IQENK7JM) lands. Works for
+// OTEL-only sessions with no local .jsonl — the raw body IS the whole context at that call.
+export interface CallContext {
+  requestId?: string
+  sessionId: string
+  model?: string
+  blocks: ContextBlock[]
+  truncated: boolean          // true if the file was oversized or any block text was capped
+}
+
 // ── Cache-break diagnosis (P4, TRDD-TKN5VALS) ─────────────────────────────────
 // The prompt cache is a PREFIX cache: turn N reuses turn N-1 only up to the first byte that differs;
 // everything after is re-billed as cache_creation (write rate) instead of cache_read (~10% of input).

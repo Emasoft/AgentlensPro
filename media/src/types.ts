@@ -208,6 +208,17 @@ export interface ContextHistory {
   reconstructedFrom?: string
 }
 
+// Mirror of src/summarizers/summarizerTypes.ts — the full literal context of ONE llm call
+// (TRDD-ICHAVFCS), reconstructed from Claude Code's raw OTEL request body. Every element is an
+// ordered ContextBlock drillable to its actual text; token figures are estimates (bytes/4).
+export interface CallContext {
+  requestId?: string
+  sessionId: string
+  model?: string
+  blocks: ContextBlock[]
+  truncated: boolean
+}
+
 // Mirror of src/summarizers/summarizerTypes.ts — cache-break diagnosis (P4). A prefix cache breaks
 // at the first divergent block turn-to-turn; these carry the per-turn verdict + ranked offenders the
 // Cache tab / trace markers render. Sizing is an estimate; the cause taxonomy pinpoints WHY.

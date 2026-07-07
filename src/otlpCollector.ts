@@ -2,6 +2,7 @@ import * as http from 'http'
 import * as vscode from 'vscode'
 import { SessionStore } from './sessionStore'
 import { SpanAttribute } from './types'
+import { callBodyRegistry } from './rawBodyContext'
 
 const MAX_BODY_BYTES = 50 * 1024 * 1024 // 50 MB
 
@@ -421,6 +422,34 @@ export class OtlpCollector {
                 const injected = this.store.injectSpanAttribute(logTraceId, logSpanId, 'gen_ai.output.messages', formatted)
                 if (injected) { this.genAiResponseBuffer.delete(bufKey) }
               }
+            }
+            continue
+          }
+
+          // TRDD-ICHAVFCS: capture pointers to the raw API request/response bodies Claude Code logs
+          // when OTEL_LOG_RAW_API_BODIES is set. Store ONLY the lightweight pointer (file path / ids),
+          // never the multi-MB body itself, so a call can later be resolved to its body file and its
+          // full context tree reconstructed on demand (buildCallContext). These carry no timeline
+          // value, so record + continue (they must be handled BEFORE the rich-event gate below, which
+          // would otherwise drop them). Works for OTEL-only sessions that have no local .jsonl.
+          if (eventName === 'claude_code.api_request_body' || eventName === 'claude_code.api_response_body') {
+            const bodySessionId = this.getAttrFrom(attrs, ['session.id', 'session_id'])
+            const bodyRef = this.getAttrFrom(attrs, ['body_ref', 'body.ref', 'bodyRef'])
+            const inlineBody = this.getAttrFrom(attrs, ['body'])
+            if (bodySessionId && (bodyRef || inlineBody)) {
+              const bodySpanId = (typeof rec.spanId === 'string' && rec.spanId)
+                ? rec.spanId
+                : this.getAttrFrom(attrs, ['span_id', 'spanId'])
+              callBodyRegistry.record(bodySessionId, {
+                kind: eventName === 'claude_code.api_request_body' ? 'request' : 'response',
+                bodyRef: bodyRef || undefined,
+                inlineBody: bodyRef ? undefined : (inlineBody || undefined),
+                requestId: this.getAttrFrom(attrs, ['request_id', 'request.id', 'requestId']) || undefined,
+                spanId: bodySpanId || undefined,
+                model: this.getAttrFrom(attrs, ['model']) || undefined,
+                querySource: this.getAttrFrom(attrs, ['query_source', 'query.source']) || undefined,
+                ts: now,
+              })
             }
             continue
           }
