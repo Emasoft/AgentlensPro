@@ -122,8 +122,10 @@ suite('LogReader — OpenCode', () => {
       assert.strictEqual(sess!.card.userRequest, 'Fix the bug')
       assert.strictEqual(sess!.workspace, '/my/project')
       assert.strictEqual(sess!.card.turns, 2)  // 2 assistant messages
-      // inputTokens = tokIn + tokCacheRead + tokCacheWrite = 1800 + 800 + 100 = 2700
-      assert.strictEqual(sess!.card.inputTokens, 2700)
+      // Since the P1 accounting de-inflation (commit 4d28f24), inputTokens stores the
+      // RAW input only (tokens_input); cache_read / cache_write are carried in their own
+      // card fields (logReader.ts:1131-1132,1923-1926), never folded into inputTokens.
+      assert.strictEqual(sess!.card.inputTokens, 1800)  // raw tokens_input, de-inflated
       // outputTokens = tokOut + tokReasoning = 350 + 50 = 400
       assert.strictEqual(sess!.card.outputTokens, 400)
       assert.strictEqual(sess!.card.cacheReadTokens, 800)

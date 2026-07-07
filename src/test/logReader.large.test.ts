@@ -135,10 +135,12 @@ const codexTokenCount = (ts: string, total: CodexTotal): string =>
     payload: { type: 'token_count', info: { model: 'gpt-5-codex', total_token_usage: total, last_token_usage: { input_tokens: 1 } } },
   }) + '\n'
 
-// Each Claude assistant line below uses these per-turn tokens; the card's
-// inputTokens is total context = input + cacheRead + cacheCreate = 160.
+// Each Claude assistant line below uses these per-turn tokens. Since the P1
+// accounting de-inflation (commit 4d28f24), the card's inputTokens stores the
+// RAW input only (input_tokens); cacheRead and cacheCreate live in their OWN
+// card fields and are NEVER folded into inputTokens (logReader.ts:1923-1926).
 const U: ClaudeUsage = { input: 100, output: 20, cacheRead: 50, cacheCreate: 10 }
-const PER_TURN_INPUT = U.input + U.cacheRead + U.cacheCreate  // 160
+const PER_TURN_INPUT = U.input  // 100 — raw input the card records per message
 
 suite('LogReader — large / streaming JSONL', () => {
   test('streams a Claude JSONL across tiny read chunks with correct token totals', () => {
@@ -156,7 +158,7 @@ suite('LogReader — large / streaming JSONL', () => {
       assert.strictEqual(card!.model, 'claude-opus-4-8')
       assert.strictEqual(card!.userRequest, 'Fix the bug')
       assert.strictEqual(card!.turns, 5)
-      assert.strictEqual(card!.inputTokens, 5 * PER_TURN_INPUT)  // 800
+      assert.strictEqual(card!.inputTokens, 5 * PER_TURN_INPUT)  // 500 = 5 × raw input (de-inflated)
       assert.strictEqual(card!.outputTokens, 5 * U.output)       // 100
       assert.strictEqual(card!.cacheReadTokens, 5 * U.cacheRead) // 250
       assert.strictEqual(card!.cacheCreateTokens, 5 * U.cacheCreate) // 50
@@ -185,7 +187,7 @@ suite('LogReader — large / streaming JSONL', () => {
       assert.ok(card, 'session should be parsed')
       // usage counted ONCE per message.id → 2 messages, not 5 rows.
       assert.strictEqual(card!.turns, 2, 'turns = distinct messages, not content-block rows')
-      assert.strictEqual(card!.inputTokens, 2 * PER_TURN_INPUT, 'context counted once per message')
+      assert.strictEqual(card!.inputTokens, 2 * PER_TURN_INPUT, 'raw input counted once per message')
       assert.strictEqual(card!.outputTokens, 2 * U.output, 'output counted once per message')
       assert.strictEqual(card!.cacheReadTokens, 2 * U.cacheRead, 'cache-read counted once per message')
       assert.strictEqual(card!.cacheCreateTokens, 2 * U.cacheCreate)
@@ -292,7 +294,8 @@ suite('LogReader — large / streaming JSONL', () => {
       assert.strictEqual(first!.model, 'gpt-5-codex')
       assert.strictEqual(first!.userRequest, 'Refactor the parser')
       assert.strictEqual(first!.turns, 1)
-      assert.strictEqual(first!.inputTokens, 500)
+      // de-inflated: inputTokens = input_tokens(500) − cached_input_tokens(100) = 400 raw input.
+      assert.strictEqual(first!.inputTokens, 400)
       const accum1 = accumOf(reader, fx.file)
 
       // total_token_usage is CUMULATIVE, so a later record supersedes (never sums)
@@ -303,7 +306,8 @@ suite('LogReader — large / streaming JSONL', () => {
 
       const second = findCard(scanCodex(reader), fx.id)?.card
       assert.strictEqual(second!.turns, 2)
-      assert.strictEqual(second!.inputTokens, 1200, 'cumulative total must take the last record, not sum')
+      // last-wins AND de-inflated: 1200 input − 300 cached = 900 (not a sum of the two records).
+      assert.strictEqual(second!.inputTokens, 900, 'cumulative total takes the LAST record (de-inflated), never a sum')
       assert.strictEqual(second!.cacheReadTokens, 300)
       assert.strictEqual(second!.outputTokens, 250)  // output 200 + reasoning 50
       assert.strictEqual(accumOf(reader, fx.file), accum1, 'append must extend the cached accumulator')
