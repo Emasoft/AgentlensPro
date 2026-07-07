@@ -133,6 +133,11 @@ export function cacheSessionDetail(sessionId: string, timeline: TimelineEntry[],
 export const sessionCompositions = signal<Record<string, ContextComposition | null>>({})
 const compositionLRU: string[] = []
 
+// Per-session full per-step context history (host-reconstructed from the raw .jsonl, fetched lazily
+// over HTTP by the History tab). Keyed by sessionId. A present `null` means the host had no local
+// transcript to reconstruct (OTEL-only session); an absent key means "not yet fetched".
+export const sessionHistories = signal<Record<string, import('./types').ContextHistory | null>>({})
+
 export function cacheSessionComposition(sessionId: string, composition: ContextComposition | null): void {
   const existing = compositionLRU.indexOf(sessionId)
   if (existing !== -1) compositionLRU.splice(existing, 1)
