@@ -1,9 +1,9 @@
 ---
 trdd-id: M36W16L0
 title: Safe reversible install/uninstall of Claude Code full-telemetry config (settings.json manager)
-column: todo
+column: complete
 created: 2026-07-07T11:00:01+0200
-updated: 2026-07-07T11:00:01+0200
+updated: 2026-07-07T13:28:40+0200
 current-owner: null
 assignee: null
 priority: 1
@@ -59,3 +59,28 @@ OTEL_LOG_TOOL_CONTENT/DETAILS, OTEL_LOG_USER_PROMPTS, OTEL_TRACES_EXPORTER). Bac
   a fixture). Server auto-ensures on start (opt-out honored). Never writes invalid JSON. Unit tests pass.
 - Also handles the hooks the user mentioned IF any are genuinely needed (evaluate: AgentLens ingests via
   OTLP + jsonl tail, so likely NO CC hook is required — document that finding rather than adding a no-op hook).
+
+## Findings (implementation — 2026-07-07)
+
+- **Hooks: NONE required (no no-op hook added).** AgentLens ingests Claude Code activity by exactly two
+  paths, neither of which needs a CC hook: (1) the OTLP collector on port 4318 receives traces + logs +
+  metrics + raw API bodies, all switched on purely by the `env` vars this manager writes; (2) `LogReader`
+  tails the local `~/.claude/projects/**.jsonl` session files directly. A hook would add nothing an env var
+  + a file-tail don't already deliver. The single AgentLens-related Stop hook that exists
+  (`pending-prompt.txt` cat-and-rm) is an automation prompt-injection convenience owned by
+  `autoConfigureClaudeCode` — unrelated to telemetry ingestion — so `telemetryConfig` deliberately touches
+  no hooks.
+- **Owned key set = 20 keys.** The prompt's 18-key list, cross-checked read-only against the live
+  `~/.claude/settings.json` env (the session's manual full-telemetry reference), plus the two extra keys
+  that reference config carries to reach *full* telemetry: `OTEL_LOG_TOOL_CONTENT=1` and
+  `OTEL_METRICS_INCLUDE_ACCOUNT_UUID=true`. All key spellings verified against that live file.
+- **Race avoidance.** `ensureTelemetryConfig()` runs BEFORE the legacy `autoConfigureClaudeCode()` at server
+  start (both write the same `settings.json`) so the two writers are strictly sequential and the marker
+  records the user's TRUE prior values, not values a concurrent writer just wrote.
+- **Fail-fast.** An existing-but-unparseable `settings.json` throws (never clobbered); a corrupt marker
+  throws (never guess-and-delete on uninstall). Missing settings.json → created as `{}`.
+- **Verification.** `check-types`, `lint` (0 errors), `node esbuild.js` all green. Unit: 9/9 telemetry tests
+  pass. NOTE — the repo's Node (v26) crashes the mocha runner via a `yargs@16` ESM incompatibility
+  (pre-existing, affects every test); ran the suite under node@22. The 6 failing tests are all in
+  `logReader.large.test.js` / `logReader.opencode.test.js` — pre-existing WIP on this branch, untouched by
+  this change.

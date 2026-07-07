@@ -15,6 +15,7 @@ import { exec } from 'child_process'
 import { summarizeSpans } from '../src/spanSummarizer'
 import { calcTokenCostUsd } from '../src/pricing'
 import { autoConfigureClaudeCode, autoConfigureCodex, autoConfigureCopilotStandalone } from '../src/autoConfigNode'
+import { ensureTelemetryConfig } from '../src/telemetryConfig'
 import { classifyOtlpPayload } from '../src/otlpParser'
 import { startMcpHttpServer } from '../src/mcpServer'
 import { resolveCallContext, callBodyRegistry } from '../src/rawBodyContext'
@@ -1566,31 +1567,67 @@ otlpServer.on('error', (err: NodeJS.ErrnoException) => {
   console.error('[AgentLens] OTLP server error:', err)
 })
 
-// Auto-configure Claude Code, Codex, and Copilot to point at this collector
-Promise.all([
-  autoConfigureClaudeCode(OTLP_PORT),
-  autoConfigureCodex(OTLP_PORT),
-  autoConfigureCopilotStandalone(OTLP_PORT),
-]).then(([claudeResult, codexResult, copilotResults]) => {
-  if (claudeResult.error) {
-    console.warn(`[AgentLens] Could not auto-configure Claude Code: ${claudeResult.error}`)
-  } else if (claudeResult.changed) {
-    console.log(`[AgentLens] Claude Code configured — restart Claude Code in your terminal to activate tracing`)
+// Auto-configure Claude Code (full telemetry), Codex, and Copilot to point at this collector.
+async function applyAutoConfig(): Promise<void> {
+  // 1) FULL reversible telemetry env FIRST — it must record the TRUE prior state of
+  //    ~/.claude/settings.json before any other writer touches the file. It also runs BEFORE
+  //    autoConfigureClaudeCode (which writes a subset of the same env keys) so the two never
+  //    race on the same file (read-modify-write) and the marker's prior values are truthful.
+  //    Opt out with AGENTLENS_NO_TELEMETRY_CONFIG=1.
+  if (process.env.AGENTLENS_NO_TELEMETRY_CONFIG !== '1') {
+    try {
+      const r = await ensureTelemetryConfig({ otlpPort: OTLP_PORT })
+      if (r.changed) {
+        console.log(`[AgentLens] Full telemetry config applied → ${r.settingsPath} (${r.added.length} added, ${r.overrode.length} overridden${r.backupPath ? `; backup ${r.backupPath}` : ''})`)
+        console.log('[AgentLens] ⚠ Restart your Claude Code sessions for telemetry to take effect.')
+      } else {
+        console.log('[AgentLens] Full telemetry config already in place.')
+      }
+    } catch (e) {
+      // Fail-safe at the server boundary: a bad settings.json shouldn't stop the dashboard.
+      console.warn(`[AgentLens] Could not apply telemetry config: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  } else {
+    console.log('[AgentLens] AGENTLENS_NO_TELEMETRY_CONFIG=1 — skipping automatic telemetry config.')
   }
-  if (codexResult.error) {
-    console.warn(`[AgentLens] Could not auto-configure Codex: ${codexResult.error}`)
-  } else if (codexResult.changed) {
-    console.log(`[AgentLens] Codex configured — restart Codex in your terminal to activate tracing`)
+
+  // 2) Then the per-agent auto-config (Stop-hook automation + Codex + Copilot). Runs AFTER
+  //    ensureTelemetryConfig so the two Claude Code writers are strictly sequential.
+  await applyLegacyAgentConfig()
+}
+
+// Legacy per-agent auto-config: Claude Code Stop-hook + Codex + Copilot. Split out of
+// applyAutoConfig so each concern stays readable (and keeps cognitive complexity low).
+async function applyLegacyAgentConfig(): Promise<void> {
+  try {
+    const [claudeResult, codexResult, copilotResults] = await Promise.all([
+      autoConfigureClaudeCode(OTLP_PORT),
+      autoConfigureCodex(OTLP_PORT),
+      autoConfigureCopilotStandalone(OTLP_PORT),
+    ])
+    if (claudeResult.error) {
+      console.warn(`[AgentLens] Could not auto-configure Claude Code: ${claudeResult.error}`)
+    } else if (claudeResult.changed) {
+      console.log(`[AgentLens] Claude Code configured — restart Claude Code in your terminal to activate tracing`)
+    }
+    if (codexResult.error) {
+      console.warn(`[AgentLens] Could not auto-configure Codex: ${codexResult.error}`)
+    } else if (codexResult.changed) {
+      console.log(`[AgentLens] Codex configured — restart Codex in your terminal to activate tracing`)
+    }
+    const copilotChanged = copilotResults.filter(r => r.changed)
+    const copilotErrors  = copilotResults.filter(r => r.error)
+    if (copilotChanged.length > 0) {
+      console.log(`[AgentLens] Copilot configured — reload VS Code window to activate tracing (Ctrl+Shift+P → "Reload Window")`)
+    }
+    for (const r of copilotErrors) {
+      console.warn(`[AgentLens] Could not auto-configure Copilot: ${r.error}`)
+    }
+  } catch (e) {
+    console.warn('[AgentLens] Auto-configure error:', e)
   }
-  const copilotChanged = copilotResults.filter(r => r.changed)
-  const copilotErrors  = copilotResults.filter(r => r.error)
-  if (copilotChanged.length > 0) {
-    console.log(`[AgentLens] Copilot configured — reload VS Code window to activate tracing (Ctrl+Shift+P → "Reload Window")`)
-  }
-  for (const r of copilotErrors) {
-    console.warn(`[AgentLens] Could not auto-configure Copilot: ${r.error}`)
-  }
-}).catch(e => console.warn('[AgentLens] Auto-configure error:', e))
+}
+applyAutoConfig()
 
 otlpServer.listen(OTLP_PORT, BIND_HOST, () => {
   console.log(`[AgentLens] OTLP receiver → http://localhost:${OTLP_PORT}`)
