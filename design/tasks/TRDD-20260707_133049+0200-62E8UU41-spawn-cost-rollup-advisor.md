@@ -1,9 +1,9 @@
 ---
 trdd-id: 62E8UU41
 title: Spawn-cost rollup + cache-friendly-spawn advisor — auto-detect the fleet-of-cold-forks burn
-column: proposal
+column: planned
 created: 2026-07-07T13:30:49+0200
-updated: 2026-07-07T13:30:49+0200
+updated: 2026-07-07T15:25:00+0200
 current-owner: null
 assignee: null
 priority: 2
@@ -22,7 +22,8 @@ external-refs: []
 
 # TRDD-62E8UU41 — Spawn-cost rollup + spawn advisor
 
-## ⏵ STATE — PROPOSAL (awaiting USER evaluation)
+## ⏵ STATE — APPROVED 2026-07-07 (USER: "go" after the P1-P6 evaluation) — queued for dispatch
+Approval log: 2026-07-07T15:25:00+0200 — APPROVED by USER ("go"). Moved to design/tasks, column planned.
 
 ## Why
 The founding burn (fable-5 parent spawning a FLEET of children, each re-billing a multi-M-token

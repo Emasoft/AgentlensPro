@@ -1,9 +1,9 @@
 ---
 trdd-id: ZK37VG4X
 title: Cost + identity integrity — no silent $0, no duplicate sessions, honest sampling
-column: proposal
+column: planned
 created: 2026-07-07T13:30:49+0200
-updated: 2026-07-07T13:30:49+0200
+updated: 2026-07-07T15:25:00+0200
 current-owner: null
 assignee: null
 priority: 1
@@ -22,7 +22,8 @@ external-refs: [PRICING_SOURCES.md]
 
 # TRDD-ZK37VG4X — Cost + identity integrity
 
-## ⏵ STATE — PROPOSAL (awaiting USER evaluation)
+## ⏵ STATE — APPROVED 2026-07-07 (USER: "go" after the P1-P6 evaluation) — queued for dispatch
+Approval log: 2026-07-07T15:25:00+0200 — APPROVED by USER ("go"). Moved to design/tasks, column planned.
 
 ## Why (all four defects verified live, 2026-07-07)
 1. **Silent $0 pricing**: `claude-sonnet-5` is ABSENT from `src/pricing.ts` (sonnet-4/4-5/4-6

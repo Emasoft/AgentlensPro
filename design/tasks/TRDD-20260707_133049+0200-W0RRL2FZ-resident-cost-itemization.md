@@ -1,9 +1,9 @@
 ---
 trdd-id: W0RRL2FZ
 title: Resident-cost itemization — rank every context block by tokens × turns-resident, itemize the transcript remainder
-column: proposal
+column: planned
 created: 2026-07-07T13:30:49+0200
-updated: 2026-07-07T13:30:49+0200
+updated: 2026-07-07T15:25:00+0200
 current-owner: null
 assignee: null
 priority: 2
@@ -22,7 +22,8 @@ external-refs: []
 
 # TRDD-W0RRL2FZ — Resident-cost itemization of the transcript
 
-## ⏵ STATE — PROPOSAL (awaiting USER evaluation)
+## ⏵ STATE — APPROVED 2026-07-07 (USER: "go" after the P1-P6 evaluation) — queued for dispatch
+Approval log: 2026-07-07T15:25:00+0200 — APPROVED by USER ("go"). Moved to design/tasks, column planned.
 
 ## Why
 The cost model is `cost ≈ turns × per-turn-context`: a block is expensive not for its size but

@@ -1,9 +1,9 @@
 ---
 trdd-id: UBEP5XY7
 title: Tokens-by-cause attribution rollup — who (agent/skill/plugin/mcp/hook/user) spent the tokens
-column: proposal
+column: planned
 created: 2026-07-07T13:30:49+0200
-updated: 2026-07-07T13:30:49+0200
+updated: 2026-07-07T15:25:00+0200
 current-owner: null
 assignee: null
 priority: 3
@@ -22,7 +22,8 @@ external-refs: [https://code.claude.com/docs/en/monitoring-usage]
 
 # TRDD-UBEP5XY7 — Tokens-by-cause attribution rollup
 
-## ⏵ STATE — PROPOSAL (awaiting USER evaluation)
+## ⏵ STATE — APPROVED 2026-07-07 (USER: "go" after the P1-P6 evaluation) — queued for dispatch
+Approval log: 2026-07-07T15:25:00+0200 — APPROVED by USER ("go"). Moved to design/tasks, column planned.
 
 ## Why
 Since 7612ff5 every `claude_code.api_request` event carries its CAUSE (query_source, agent.name,

@@ -1,9 +1,9 @@
 ---
 trdd-id: PJC8N1HO
 title: Collector resilience — supervision, downtime gap markers, durable tail offsets, zero-loss restart
-column: proposal
+column: planned
 created: 2026-07-07T13:30:49+0200
-updated: 2026-07-07T13:30:49+0200
+updated: 2026-07-07T15:25:00+0200
 current-owner: null
 assignee: null
 priority: 1
@@ -22,7 +22,8 @@ external-refs: []
 
 # TRDD-PJC8N1HO — Collector resilience + zero-loss ingestion
 
-## ⏵ STATE — PROPOSAL (awaiting USER evaluation)
+## ⏵ STATE — APPROVED 2026-07-07 (USER: "go" after the P1-P6 evaluation) — queued for dispatch
+Approval log: 2026-07-07T15:25:00+0200 — APPROVED by USER ("go"). Moved to design/tasks, column planned.
 
 ## Why (incident observed live, 2026-07-07)
 The standalone collector DIED silently ~13:10 (last spans.json write) and nobody — human or
