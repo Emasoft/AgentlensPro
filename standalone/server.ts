@@ -1897,27 +1897,35 @@ async function applyAutoConfig(): Promise<void> {
   //    telemetry at a dead port. Override for a deliberately non-default deployment with
   //    AGENTLENS_TELEMETRY_CONFIG=1 (explicit opt-IN beats an implicit hijack).
   const canonicalInstance = OTLP_PORT === 4318 || process.env.AGENTLENS_TELEMETRY_CONFIG === '1'
+  // BOTH gates must cover BOTH writers (early return, not else-if). The legacy per-agent config
+  // below ALSO mutates the global ~/.claude/settings.json, ~/.codex/config.toml and the VS Code
+  // user settings with the CURRENT OTLP_PORT — when only step 1 was gated (observed 2026-07-07,
+  // TRDD-W0RRL2FZ verification), an isolated test server on port 14319 sailed past the gate via
+  // step 2 and silently repointed all three agents' telemetry endpoints at its ephemeral port.
   if (process.env.AGENTLENS_NO_TELEMETRY_CONFIG === '1') {
     console.log('[AgentLens] AGENTLENS_NO_TELEMETRY_CONFIG=1 — skipping automatic telemetry config.')
-  } else if (!canonicalInstance) {
+    return
+  }
+  if (!canonicalInstance) {
     console.log(`[AgentLens] Non-default OTLP port ${OTLP_PORT} — NOT touching the global telemetry config (set AGENTLENS_TELEMETRY_CONFIG=1 to force).`)
-  } else {
-    try {
-      const r = await ensureTelemetryConfig({ otlpPort: OTLP_PORT })
-      if (r.changed) {
-        console.log(`[AgentLens] Full telemetry config applied → ${r.settingsPath} (${r.added.length} added, ${r.overrode.length} overridden${r.backupPath ? `; backup ${r.backupPath}` : ''})`)
-        console.log('[AgentLens] ⚠ Restart your Claude Code sessions for telemetry to take effect.')
-      } else {
-        console.log('[AgentLens] Full telemetry config already in place.')
-      }
-    } catch (e) {
-      // Fail-safe at the server boundary: a bad settings.json shouldn't stop the dashboard.
-      console.warn(`[AgentLens] Could not apply telemetry config: ${e instanceof Error ? e.message : String(e)}`)
+    return
+  }
+  try {
+    const r = await ensureTelemetryConfig({ otlpPort: OTLP_PORT })
+    if (r.changed) {
+      console.log(`[AgentLens] Full telemetry config applied → ${r.settingsPath} (${r.added.length} added, ${r.overrode.length} overridden${r.backupPath ? `; backup ${r.backupPath}` : ''})`)
+      console.log('[AgentLens] ⚠ Restart your Claude Code sessions for telemetry to take effect.')
+    } else {
+      console.log('[AgentLens] Full telemetry config already in place.')
     }
+  } catch (e) {
+    // Fail-safe at the server boundary: a bad settings.json shouldn't stop the dashboard.
+    console.warn(`[AgentLens] Could not apply telemetry config: ${e instanceof Error ? e.message : String(e)}`)
   }
 
   // 2) Then the per-agent auto-config (Stop-hook automation + Codex + Copilot). Runs AFTER
-  //    ensureTelemetryConfig so the two Claude Code writers are strictly sequential.
+  //    ensureTelemetryConfig so the two Claude Code writers are strictly sequential — and only
+  //    ever on the canonical (default-port / explicitly opted-in) instance, per the gates above.
   await applyLegacyAgentConfig()
 }
 
