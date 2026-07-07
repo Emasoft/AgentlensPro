@@ -278,6 +278,16 @@ export interface CallContext {
   truncated: boolean
 }
 
+// Mirror of src/summarizers/summarizerTypes.ts — an explicit collector-downtime window (TRDD-PJC8N1HO).
+// The interval during which the collector was dead and every OTEL export was dropped/lost. Rendered as
+// an "offline — telemetry lost" band so the gap is explicit instead of a silent hole in the timeline.
+export interface CollectorGap {
+  startedAt: string
+  endedAt: string
+  durationMs: number
+  reason: 'crash' | 'shutdown'
+}
+
 // Mirror of src/summarizers/summarizerTypes.ts — cache-break diagnosis (P4). A prefix cache breaks
 // at the first divergent block turn-to-turn; these carry the per-turn verdict + ranked offenders the
 // Cache tab / trace markers render. Sizing is an estimate; the cause taxonomy pinpoints WHY.

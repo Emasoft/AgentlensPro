@@ -11,6 +11,11 @@ import type { ContextComposition, ContextCompositionTurn, ContextSource } from '
 const MAX_LINES = 3_000_000
 const TOP_SOURCES = 24
 const MAX_TURNS = 2000
+// TRDD-PJC8N1HO (OOM P0): whole-reconstruction excerpt budget — bounds the SUM of drill-excerpt bytes
+// across every source/turn so a huge session can never materialize an unbounded excerpt buffer. Once
+// spent, later sources ship no excerpt (byte/token metadata stays accurate) and the composition is
+// marked truncated. Env-overridable; a normal session stores well under the default.
+const EXCERPT_BUDGET_BYTES = Math.max(1, Number(process.env.AGENTLENS_COMPOSITION_TEXT_BUDGET_MB) || 16) * 1024 * 1024
 
 // Per-source token figures use the real tokenEstimator segmenter (TRDD-IQENK7JM) on the injected text,
 // not bytes/4. They stay ESTIMATES (tokenSource:'estimated') and are surfaced as such — composition
@@ -181,6 +186,8 @@ export async function buildContextComposition(sessionId: string, parentSessionId
   let assistantTurns = 0
   let lines = 0
   let truncated = false
+  // TRDD-PJC8N1HO: running total of stored excerpt bytes, capped by EXCERPT_BUDGET_BYTES.
+  let excerptBytesStored = 0
 
   const rl = readline.createInterface({ input: fs.createReadStream(file, { encoding: 'utf8' }), crlfDelay: Infinity })
   for await (const line of rl) {
@@ -217,7 +224,16 @@ export async function buildContextComposition(sessionId: string, parentSessionId
     cur.count += 1
     // Keep the FIRST occurrence's leading text as the drill-leaf excerpt (capped). Later occurrences
     // only add to the byte/token total — one representative excerpt is enough to show the real content.
-    if (!cur.excerpt && c.text) cur.excerpt = c.text.slice(0, EXCERPT_CAP)
+    // The excerpt is stored only while the whole-reconstruction budget has room (TRDD-PJC8N1HO); past
+    // it, excerpts are dropped (byte/token totals stay accurate) and the composition is truncated.
+    if (!cur.excerpt && c.text) {
+      if (excerptBytesStored < EXCERPT_BUDGET_BYTES) {
+        cur.excerpt = c.text.slice(0, EXCERPT_CAP)
+        excerptBytesStored += Buffer.byteLength(cur.excerpt, 'utf8')
+      } else {
+        truncated = true
+      }
+    }
     sources.set(c.label, cur)
   }
   rl.close()

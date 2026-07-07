@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AgentLens collector — macOS launchd template (TRDD-PJC8N1HO spec 1).
+
+  Runs the supervisor (scripts/agentlens-supervise.js), which keeps standalone/server.js alive with
+  exponential-backoff restart + crash.log. launchd's own KeepAlive is the outer safety net (it restarts
+  the supervisor itself if THAT ever dies); the supervisor is the inner net (restarts the collector on
+  every crash and records why).
+
+  Install:
+    1. Replace @NODE@ with `command -v node`, @REPO@ with this repo's absolute path, @USER@ with your
+       username (or edit by hand).
+    2. cp scripts/agentlens.plist.template ~/Library/LaunchAgents/com.agentlens.collector.plist
+    3. launchctl load  ~/Library/LaunchAgents/com.agentlens.collector.plist
+    Stop / remove:
+       launchctl unload ~/Library/LaunchAgents/com.agentlens.collector.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.agentlens.collector</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>@NODE@</string>
+    <string>@REPO@/scripts/agentlens-supervise.js</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>@REPO@</string>
+
+  <!-- KeepAlive restarts the SUPERVISOR if it ever exits; the supervisor restarts the collector. -->
+  <key>KeepAlive</key>
+  <true/>
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Throttle launchd's own restart of the supervisor (the supervisor should ~never exit). -->
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>StandardOutPath</key>
+  <string>/Users/@USER@/.agentlens/launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/@USER@/.agentlens/launchd.err.log</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>AGENTLENS_MAX_OLD_SPACE_MB</key>
+    <string>6144</string>
+  </dict>
+</dict>
+</plist>

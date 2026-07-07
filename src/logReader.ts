@@ -150,6 +150,13 @@ function vscodeFamilyWorkspaceStorageRoots(): string[] {
 interface FileState {
   bytesRead: number
   mtimeMs: number
+  // TRDD-PJC8N1HO: file identity, persisted alongside the offset so a restart can validate that the
+  // file behind a path is the SAME file (inode) and hasn't been truncated (size) before resuming its
+  // tail offset. A rotated/replaced file (new inode) or a shrunk file is re-read from 0 — never resumed
+  // from a stale byte position. Optional so pre-existing in-memory state (set before a stat carried
+  // these) stays valid.
+  ino?: number
+  size?: number
 }
 
 // ── Public interface ──────────────────────────────────────────────────────────
@@ -239,6 +246,41 @@ export class LogReader {
   }
 
   /**
+   * TRDD-PJC8N1HO — export the per-file tail offsets so the standalone server can persist them across
+   * a restart. A shallow copy so the caller can serialize it without racing a concurrent scan.
+   */
+  exportFileState(): Record<string, FileState> {
+    const out: Record<string, FileState> = {}
+    for (const [k, v] of this.fileState) out[k] = { ...v }
+    return out
+  }
+
+  /**
+   * TRDD-PJC8N1HO — seed the offset map from persisted state on startup so the first post-restart scan
+   * SKIPS every unchanged file (offset+mtime+size already match) instead of re-parsing ~12k files from
+   * byte 0. Each record is identity-checked against the file currently on disk (FAIL-FAST): a
+   * missing/rotated (different inode) or truncated (smaller than the offset) file is dropped, so it
+   * cold-reads rather than resuming from a stale byte position. The accumulator is NOT restored — a
+   * file that actually GREW across the restart is re-read from 0 (correct, produces a complete card);
+   * the win is that the thousands of UNCHANGED historical files are never touched. Returns counts for
+   * the startup log. Safe to call once, before the first scan.
+   */
+  importFileState(rec: Record<string, { bytesRead: number; mtimeMs: number; ino?: number; size?: number }>): { imported: number; skipped: number } {
+    let imported = 0
+    let skipped = 0
+    for (const [filePath, st] of Object.entries(rec ?? {})) {
+      if (!st || typeof st.bytesRead !== 'number' || typeof st.mtimeMs !== 'number') { skipped++; continue }
+      let stat: fs.Stats
+      try { stat = fs.statSync(filePath) } catch { skipped++; continue }  // file gone → nothing to resume
+      if (st.ino !== undefined && stat.ino !== st.ino) { skipped++; continue }   // replaced/rotated → cold read
+      if (stat.size < st.bytesRead) { skipped++; continue }                       // truncated → cold read
+      this.fileState.set(filePath, { bytesRead: st.bytesRead, mtimeMs: st.mtimeMs, ino: st.ino, size: st.size })
+      imported++
+    }
+    return { imported, skipped }
+  }
+
+  /**
    * Collects all session files across all agents, sorted newest-first by mtime.
    * Does NOT read file contents. Used by the startup batch-loader to process
    * files in priority order without one big synchronous block.
@@ -309,11 +351,7 @@ export class LogReader {
    * the file is new or has grown since the last scan. Returns null if unchanged.
    */
   parseFile(filePath: string, agentKey: string): LogSessionResult | null {
-    const sessionId = agentKey === 'copilot'
-      ? path.basename(path.dirname(filePath))  // directory name is session UUID
-      : agentKey === 'copilot_vscode_json'
-        ? path.basename(filePath, '.json')
-        : path.basename(filePath, '.jsonl')
+    const sessionId = this._sessionIdForFile(filePath, agentKey)
 
     switch (agentKey) {
       case 'claude':              return this._processFile(filePath, () => this._parseClaudeFile(filePath))
@@ -324,6 +362,35 @@ export class LogReader {
       case 'opencode':            return null  // OpenCode DB returns multiple sessions; use _scanOpenCode
       default:                    return null
     }
+  }
+
+  /** Derive a session id from a file path + agent (the filename/dirname stem convention per agent). */
+  private _sessionIdForFile(filePath: string, agentKey: string): string {
+    return agentKey === 'copilot'
+      ? path.basename(path.dirname(filePath))  // directory name is session UUID
+      : agentKey === 'copilot_vscode_json'
+        ? path.basename(filePath, '.json')
+        : path.basename(filePath, '.jsonl')
+  }
+
+  /**
+   * TRDD-PJC8N1HO — force a fresh FULL parse of the single file backing `sessionId`, ignoring any
+   * cached offset. Used to lazily rebuild the timeline of a card that was RESTORED (stripped) from the
+   * persisted-card file on startup: the offset-skip means its file was never re-read, so its heavy
+   * timeline isn't in memory until the user drills it. Locates the file across all agents by matching
+   * the derived session id, clears its cached state, and parses it whole. Returns null if no file
+   * backs the id (e.g. an OTEL-only session, or a deleted log). Bounded: one file, on demand.
+   */
+  reparseSession(sessionId: string): LogSessionResult | null {
+    for (const f of this.collectFileMeta()) {
+      if (f.agentKey === 'opencode') continue  // OpenCode is a multi-session DB, not one card per file
+      if (this._sessionIdForFile(f.filePath, f.agentKey) !== sessionId) continue
+      // Force a from-0 parse: drop any cached offset/accumulator for this one file.
+      this.fileState.delete(f.filePath)
+      this.accumCache.delete(f.filePath)
+      return this.parseFile(f.filePath, f.agentKey)
+    }
+    return null
   }
 
   /** Returns all directories that should be watched for file changes. */
@@ -1321,7 +1388,7 @@ export class LogReader {
     try {
       this._streamLinesFrom(filePath, 0, line => { if (line.trim()) lines.push(line) })
     } catch (err) { this.log(`[LogReader] read error ${filePath}: ${err}`); return null }
-    this.fileState.set(filePath, { bytesRead: stat.size, mtimeMs: stat.mtimeMs })
+    this.fileState.set(filePath, { bytesRead: stat.size, mtimeMs: stat.mtimeMs, ino: stat.ino, size: stat.size })
     return lines
   }
 
@@ -1387,7 +1454,7 @@ export class LogReader {
       })
     } catch (err) { this.log(`[LogReader] read error ${filePath}: ${err}`); return null }
 
-    this.fileState.set(filePath, { bytesRead: newOffset, mtimeMs: stat.mtimeMs })
+    this.fileState.set(filePath, { bytesRead: newOffset, mtimeMs: stat.mtimeMs, ino: stat.ino, size: stat.size })
     this._lruPut(filePath, accum)
     return accum
   }

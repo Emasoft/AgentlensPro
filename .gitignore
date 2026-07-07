@@ -29,3 +29,5 @@ agent-lens-export-*.json
 # Agent reports (may contain private paths/tokens — never commit)
 /reports/
 /reports_dev/
+# Dev-only scratch (measurement harnesses, e2e runners) — never published
+/scripts_dev/

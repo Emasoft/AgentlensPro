@@ -30,8 +30,14 @@ import { buildContextComposition, resolveLoggedAncestor } from '../src/contextCo
 import { buildContextHistory } from '../src/contextHistory'
 import { generateSuggestions } from '../src/instructionAdvisor'
 import { detectInstructionFiles, appendSuggestion } from '../src/instructionFiles'
+import { atomicWriteFileSync, heapPressure, RequestLog } from '../src/serverRuntime'
+import {
+  loadLogOffsets, saveLogOffsets, loadPersistedCards, savePersistedCards,
+  recordCollectorStart, recordCollectorHeartbeat, recordCollectorStop, computeCollectorGaps,
+  type LifecycleStore,
+} from '../src/collectorState'
 import type { Span } from '../src/types'
-import type { SessionSummaryCard } from '../src/summarizers/summarizerTypes'
+import type { SessionSummaryCard, CollectorGap } from '../src/summarizers/summarizerTypes'
 
 const OTLP_PORT  = parseInt(process.env.OTLP_PORT  ?? '4318')
 const UI_PORT    = parseInt(process.env.UI_PORT    ?? '3000')
@@ -41,6 +47,26 @@ const BIND_HOST  = process.env.BIND_HOST ?? '127.0.0.1'
 const mediaDir  = path.join(__dirname, '..', 'media')
 const DATA_DIR  = process.env.DATA_DIR ?? path.join(os.homedir(), '.agentlens')
 const DATA_FILE = path.join(DATA_DIR, 'spans.json')
+// TRDD-PJC8N1HO — durable-state sidecars (all under DATA_DIR, all written atomically):
+const OFFSETS_FILE   = path.join(DATA_DIR, 'log-offsets.json')     // spec 3: logReader tail offsets
+const CARDS_FILE     = path.join(DATA_DIR, 'log-sessions.json')    // spec 3: stripped log cards (fast restart)
+const LIFECYCLE_FILE = path.join(DATA_DIR, 'collector-lifecycle.json') // spec 2: start/stop/heartbeat log
+const REQUEST_LOG    = path.join(DATA_DIR, 'requests.log')         // spec 6: one line per HTTP request
+
+// Ensure DATA_DIR exists before any sidecar is written (lifecycle/offsets/crash all live here). The
+// spans loader below also mkdir's it, but the lifecycle start marker fires first, so do it up front.
+try { if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true }) } catch { /* best effort */ }
+
+// spec 6: request log (ring buffer + rotating file) so any future crash is attributable to a request.
+const requestLog = new RequestLog(REQUEST_LOG)
+
+// spec 2: collector lifecycle store — a start marker is appended on boot; heartbeats keep the current
+// run's last-known-alive time fresh so a crash leaves a truthful gap boundary; a graceful stop records
+// stoppedAt. computeCollectorGaps() turns this into the dashboard's "telemetry lost" bands.
+let lifecycle: LifecycleStore = recordCollectorStart(LIFECYCLE_FILE)
+function getCollectorGaps(): CollectorGap[] {
+  try { return computeCollectorGaps(lifecycle) } catch { return [] }
+}
 
 // ── Build id for browser live-reload ──────────────────────────────────────────
 // A cheap fingerprint of the served bundles' mtimes, computed ONCE at startup. Pushed over the
@@ -86,12 +112,14 @@ try {
   console.warn('[AgentLens] Could not load persisted data:', e)
 }
 
-// Debounced save — writes at most once per second under continuous ingestion
+// Debounced save — writes at most once per second under continuous ingestion.
+// TRDD-PJC8N1HO spec 4: atomic (temp+rename) so a crash mid-write can't truncate spans.json — a crash
+// then loses at most the last debounce interval, never the whole persisted session store.
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 function scheduleSave() {
   if (saveTimer) clearTimeout(saveTimer)
   saveTimer = setTimeout(() => {
-    try { fs.writeFileSync(DATA_FILE, JSON.stringify(spans)) } catch (e) {
+    try { atomicWriteFileSync(DATA_FILE, JSON.stringify(spans)) } catch (e) {
       console.warn('[AgentLens] Could not save data:', e)
     }
   }, 1000)
@@ -198,6 +226,8 @@ startMcpHttpServer({
   // TRDD-OG9PARZQ: realtime burn status + one-call session self-diagnostic for the fleet's Claudes.
   getBurnStatus: () => { const { sessions, events, now } = gatherBurn(); return computeBurnStatus(events, sessions, burnConfig, now) },
   getSessionStatus: (sel) => { const { sessions, events, now } = gatherBurn(); return computeSessionStatus(sessions, events, burnConfig, sel, now) },
+  // TRDD-PJC8N1HO spec 2: an orienting agent sees where telemetry was lost, not just the sessions.
+  getCollectorGaps,
 }, MCP_PORT, BIND_HOST)
 
 // ── Burn SSE tick + alerts (TRDD-OG9PARZQ) ─────────────────────────────────────
@@ -264,8 +294,17 @@ function runLogScan() {
   if (changedCards.length > 0) {
     pushSessionChanged(changedCards)   // TRDD-U0UYC38A: targeted, immediate — sub-second drill refresh
     schedulePushUpdate()               // authoritative full refresh (sidebar/analytics, OTEL-wins) — coalesced
+    scheduleDurableSave()              // TRDD-PJC8N1HO spec 3: persist offsets + cards so a restart resumes
   }
 }
+
+// TRDD-PJC8N1HO spec 2: keep the current run's last-known-alive time fresh so a crash leaves a truthful
+// gap boundary. 30s cadence keeps the lifecycle file write-light. Also persists durable state on a slow
+// beat so offsets survive even a long idle-then-crash with no scan activity.
+setInterval(() => {
+  recordCollectorHeartbeat(LIFECYCLE_FILE, lifecycle)
+  scheduleDurableSave()
+}, 30_000)
 
 // Debounced scan triggered by fs.watch events — fires 300 ms after the last event.
 let watchScanTimer: ReturnType<typeof setTimeout> | null = null
@@ -291,6 +330,22 @@ async function startLogIngestion() {
     const sqlFactory = await initSqlJs({ locateFile: (f: string) => path.join(sqlJsDir, f) })
     logReader = new LogReader({ log: (msg) => console.log(msg), sqlFactory })
   } catch { /* no sql.js — OpenCode falls back to JSON */ }
+
+  // TRDD-PJC8N1HO spec 3: FAST RESTART. Import persisted tail offsets so the first scan SKIPS every
+  // unchanged file (0 cold-start full reads) instead of re-parsing ~12k files from byte 0, and restore
+  // the stripped log cards so the dashboard list + MCP are fresh in <5s. The heavy per-step timeline is
+  // re-parsed on demand (see /api/timeline). A missing/corrupt sidecar → the normal cold scan below.
+  let restoredFromDisk = false
+  const persistedCards = loadPersistedCards(CARDS_FILE)
+  if (persistedCards && persistedCards.length > 0) {
+    for (const card of persistedCards) logSessions.set(card.sessionId, card)
+    restoredFromDisk = true
+  }
+  const persistedOffsets = loadLogOffsets(OFFSETS_FILE)
+  if (persistedOffsets) {
+    const { imported, skipped } = logReader.importFileState(persistedOffsets)
+    console.log(`[AgentLens] Resumed ${imported} log tail offset${imported !== 1 ? 's' : ''} (${skipped} invalid/rotated → cold read)${restoredFromDisk ? `; restored ${persistedCards!.length} session cards` : ''}`)
+  }
 
   // Register the poll first so it always runs, even if no files exist yet at startup.
   setInterval(runLogScan, 5_000)
@@ -323,6 +378,16 @@ async function startLogIngestion() {
   for (const { card } of ocResults) {
     logSessions.set(card.sessionId, card)
     countByKey.set('opencode', (countByKey.get('opencode') ?? 0) + 1)
+  }
+
+  // spec 3: when cards were restored from disk, the cold full-file batch below is UNNECESSARY (and is
+  // exactly the minutes-long rescan we are eliminating) — the 5s poll + fs.watch already registered
+  // above will incrementally pick up any file that changed while the collector was down. Push the
+  // restored list to any connected browser and return.
+  if (restoredFromDisk) {
+    console.log(`[AgentLens] Fast restart — ${logSessions.size} sessions restored from disk; skipping cold rescan`)
+    schedulePushUpdate()
+    return
   }
 
   // Run the initial batch synchronously so logSessions is populated before the
@@ -733,6 +798,9 @@ function buildUpdatePayload(): string {
   const analyticsData = sessionSummary ? computeAnalyticsData(sessionSummary.sessions) : null
   return JSON.stringify({
     type: 'update', buildId: BUILD_ID, summary: { toolCalls: {} }, sessionSummary: stripped, sidebar, analyticsData,
+    // TRDD-PJC8N1HO spec 2: collector downtime windows ride every update so the dashboard renders the
+    // "offline — telemetry lost" band without a separate fetch.
+    collectorGaps: getCollectorGaps(),
     ...(sidebarLive ?? {}),
   })
 }
@@ -1317,10 +1385,80 @@ const MIME: Record<string, string> = {
   '.svg': 'image/svg+xml',
 }
 
+// ── Request instrumentation + heap-pressure guard (TRDD-PJC8N1HO specs 6, 7) ────
+
+// spec 6: wrap res so we can record method/path/status/duration/bytes/heap for EVERY request. Before
+// this, the crash logs showed only span-ingestion lines and the endpoint that OOM'd the process could
+// not be identified. Byte counting wraps write/end (covers JSON responses, static files, and the SSE
+// stream). Logging happens on 'finish' (or 'close' for a client that hangs up mid-response).
+function instrumentResponse(req: http.IncomingMessage, res: http.ServerResponse, urlPath: string): void {
+  const t0 = Date.now()
+  let bytes = 0
+  const origWrite = res.write.bind(res)
+  const origEnd = res.end.bind(res)
+  const add = (chunk: unknown): void => {
+    if (chunk && typeof chunk !== 'function') {
+      try { bytes += Buffer.byteLength(chunk as string | Buffer) } catch { /* non-buffer arg — ignore */ }
+    }
+  }
+  res.write = ((chunk: unknown, ...rest: unknown[]) => { add(chunk); return (origWrite as (...a: unknown[]) => boolean)(chunk, ...rest) }) as typeof res.write
+  res.end = ((chunk?: unknown, ...rest: unknown[]) => { add(chunk); return (origEnd as (...a: unknown[]) => http.ServerResponse)(chunk, ...rest) }) as typeof res.end
+  let logged = false
+  const finish = (): void => {
+    if (logged) return
+    logged = true
+    requestLog.record({
+      ts: new Date().toISOString(), method: req.method ?? 'GET', path: urlPath,
+      status: res.statusCode, durationMs: Date.now() - t0, bytes,
+      heapUsedMb: process.memoryUsage().heapUsed / 1048576,
+    })
+  }
+  res.on('finish', finish)
+  res.on('close', finish)
+}
+
+// spec 7: shed a heavy request with a LOUD 503 when the heap is already over the high-water mark,
+// instead of letting its allocation tip an already-near-full heap into a fatal OOM that kills the whole
+// collector. Fail loud PER REQUEST, not fail dead PER PROCESS (the FAIL-FAST project rule). Returns
+// true when the request was shed (caller must return immediately). The offending request is attributed
+// via the request log + a stderr line, so heap-pressure sheds are visible in the crash.log-adjacent record.
+function heavyGuard(res: http.ServerResponse, urlPath: string, label: string): boolean {
+  const p = heapPressure()
+  if (!p.over) return false
+  console.warn(`[AgentLens] heap-pressure shed: ${label} ${urlPath} — heap ${p.heapUsedMb.toFixed(0)}MB ≥ hwm ${p.hwmMb.toFixed(0)}MB (limit ${p.limitMb.toFixed(0)}MB)`)
+  res.writeHead(503, { 'Content-Type': 'application/json', 'Retry-After': '2' })
+  res.end(JSON.stringify({
+    error: 'collector under heap pressure — request shed to stay alive',
+    heapUsedMb: Math.round(p.heapUsedMb), hwmMb: Math.round(p.hwmMb), limitMb: Math.round(p.limitMb),
+  }))
+  return true
+}
+
+// ── Durable state persistence (TRDD-PJC8N1HO spec 3) ────────────────────────────
+
+// Strip the heavy per-session detail before persisting a log card — the timeline/fileOps are the bulk
+// (full cards don't even fit in one V8 string). The stripped card powers the restored dashboard list;
+// the timeline is re-parsed on demand (LogReader.reparseSession) when a session is actually drilled.
+function stripCardForPersist(c: SessionSummaryCard): SessionSummaryCard {
+  return { ...c, timeline: [], fileOps: undefined, backgroundSpans: [], generatedFiles: undefined, generatedFilesTruncated: undefined }
+}
+
+// Debounced persistence of the tail offsets + stripped log cards so a restart resumes instantly.
+let durableSaveTimer: ReturnType<typeof setTimeout> | null = null
+function scheduleDurableSave(): void {
+  if (durableSaveTimer) return
+  durableSaveTimer = setTimeout(() => {
+    durableSaveTimer = null
+    try { saveLogOffsets(OFFSETS_FILE, logReader.exportFileState()) } catch (e) { console.warn('[AgentLens] Could not save log offsets:', e) }
+    try { savePersistedCards(CARDS_FILE, [...logSessions.values()].map(stripCardForPersist)) } catch (e) { console.warn('[AgentLens] Could not save log cards:', e) }
+  }, 5000)
+}
+
 // ── UI server ─────────────────────────────────────────────────────────────────
 
 const uiServer = http.createServer((req, res) => {
   const url = (req.url ?? '/').split('?')[0]
+  instrumentResponse(req, res, url)
   res.setHeader('Access-Control-Allow-Origin', '*')
 
   if (url === '/events') {
@@ -1375,7 +1513,7 @@ const uiServer = http.createServer((req, res) => {
     spans = []
     logSessions.clear()
     logReader.clearFileState()
-    try { fs.writeFileSync(DATA_FILE, '[]') } catch (e) { console.warn('[AgentLens] Could not clear data file:', e) }
+    try { atomicWriteFileSync(DATA_FILE, '[]') } catch (e) { console.warn('[AgentLens] Could not clear data file:', e) }
     pushUpdate()          // send cleared state to clients immediately
     res.writeHead(200); res.end()
     // Re-ingest after the response is sent so the client sees the cleared state first.
@@ -1474,7 +1612,7 @@ const uiServer = http.createServer((req, res) => {
         const body = JSON.parse(Buffer.concat(chunks).toString('utf-8')) as { type?: string }
         if (body.type === 'clearAll') {
           spans = []
-          try { fs.writeFileSync(DATA_FILE, '[]') } catch (e) { console.warn('[AgentLens] Could not clear data file:', e) }
+          try { atomicWriteFileSync(DATA_FILE, '[]') } catch (e) { console.warn('[AgentLens] Could not clear data file:', e) }
           pushUpdate()
         }
       } catch (e) { console.warn('[AgentLens] Malformed /action body:', e) }
@@ -1513,10 +1651,37 @@ const uiServer = http.createServer((req, res) => {
     return
   }
 
+  // spec 6: recent request log (ring buffer) — post-mortem attribution of a crash/pressure event.
+  if (req.method === 'GET' && url === '/api/debug/requests') {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ heap: heapPressure(), requests: requestLog.recent(200) }))
+    return
+  }
+
+  // spec 2: collector downtime windows (also carried on the SSE update payload + get_recent_sessions).
+  if (req.method === 'GET' && url === '/api/collector-gaps') {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ collectorGaps: getCollectorGaps() }))
+    return
+  }
+
   if (req.method === 'GET' && url?.startsWith('/api/timeline/')) {
     const sessionId = decodeURIComponent(url.slice('/api/timeline/'.length))
     const summary = buildSessionSummary()
-    const session = summary?.sessions.find(s => s.sessionId === sessionId) ?? null
+    let session = summary?.sessions.find(s => s.sessionId === sessionId) ?? null
+    // TRDD-PJC8N1HO spec 3: a card RESTORED (stripped) from disk on startup has an empty timeline (its
+    // file was skipped by the offset resume). When such a card is actually drilled, re-parse its ONE
+    // file on demand to rebuild the timeline, then cache the full card in logSessions for next time.
+    if (session && (session.timeline?.length ?? 0) === 0 && logSessions.has(sessionId)) {
+      try {
+        const reparsed = logReader.reparseSession(sessionId)
+        if (reparsed) {
+          statuslineReader.overlay(reparsed.card)
+          logSessions.set(reparsed.card.sessionId, reparsed.card)
+          session = reparsed.card
+        }
+      } catch { /* on-demand rebuild is best-effort — fall back to the stripped card's empty timeline */ }
+    }
     res.writeHead(200, { 'Content-Type': 'application/json' })
     // TRDD-ZS1GDXVY: generatedFiles (session-level group + truncation flag) rides the lazy timeline
     // payload, not the bulk summary — stripSessionDetail drops it from /api/summary to keep it light.
@@ -1543,6 +1708,8 @@ const uiServer = http.createServer((req, res) => {
   }
 
   if (req.method === 'GET' && url?.startsWith('/api/composition/')) {
+    // spec 7: shed under heap pressure rather than let a big reconstruction tip the heap into an OOM.
+    if (heavyGuard(res, url, 'composition')) return
     // `url` has the query stripped (L1144); read the raw req.url for the ?parent= param.
     const sessionId = decodeURIComponent(url.slice('/api/composition/'.length))
     // A fork/sub-agent card carries parentSessionId (?parent=) — the parser falls back to the
@@ -1582,6 +1749,7 @@ const uiServer = http.createServer((req, res) => {
     // reconstructs from its parent transcript. The reconstruction carries the FULL block text, so a
     // huge session can be large — the browser drills progressively; this route returns the whole
     // reconstruction and the client renders lazily. null = no local Claude log and no parent.
+    if (heavyGuard(res, url, 'history')) return
     const sessionId = decodeURIComponent(url.slice('/api/history/'.length))
     const rawUrl = req.url ?? ''
     const qIdx = rawUrl.indexOf('?')
@@ -1608,6 +1776,7 @@ const uiServer = http.createServer((req, res) => {
     // /api/callcontext/:sessionId?span=:spanId. callContext=null → no raw body captured for that call
     // (the client renders an honest "not captured" note, never a spinner). `url` is the query-stripped
     // pathname; the ?span= hint is read from the raw req.url.
+    if (heavyGuard(res, url, 'callcontext')) return
     const rest = url.slice('/api/callcontext/'.length)
     const parts = rest.split('/')
     const sessionId = decodeURIComponent(parts[0] ?? '')
@@ -1800,10 +1969,14 @@ uiServer.listen(UI_PORT, BIND_HOST, () => {
 
 function shutdown() {
   if (saveTimer) clearTimeout(saveTimer)
-  try {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(spans))
-    console.log(`\n[AgentLens] Saved ${spans.length} spans to ${DATA_FILE}`)
-  } catch { /* ignore */ }
+  if (durableSaveTimer) clearTimeout(durableSaveTimer)
+  // TRDD-PJC8N1HO spec 4: atomic spans write. spec 3: flush offsets + stripped cards so the next start
+  // resumes instantly. spec 2: record the graceful stop so the gap after it reads as a clean shutdown,
+  // not a crash. All best-effort — a shutdown must never hang on a failed write.
+  try { atomicWriteFileSync(DATA_FILE, JSON.stringify(spans)); console.log(`\n[AgentLens] Saved ${spans.length} spans to ${DATA_FILE}`) } catch { /* ignore */ }
+  try { saveLogOffsets(OFFSETS_FILE, logReader.exportFileState()) } catch { /* ignore */ }
+  try { savePersistedCards(CARDS_FILE, [...logSessions.values()].map(stripCardForPersist)) } catch { /* ignore */ }
+  try { recordCollectorStop(LIFECYCLE_FILE, lifecycle) } catch { /* ignore */ }
   process.exit(0)
 }
 process.on('SIGINT', shutdown)

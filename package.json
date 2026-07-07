@@ -186,6 +186,8 @@
     "compile": "pnpm run check-types && pnpm run lint && node esbuild.js",
     "local": "node esbuild.js && node --max-old-space-size=6144 standalone/server.js",
     "up": "bash scripts/agentlens-up.sh",
+    "up:supervised": "bash scripts/agentlens-up.sh --supervise",
+    "supervise": "node scripts/agentlens-supervise.js",
     "mcp:ensure": "bash scripts/agentlens-up.sh --ensure",
     "dev": "node esbuild.js && npm-run-all -p watch:esbuild dev:server",
     "dev:server": "node scripts/dev-server.js",

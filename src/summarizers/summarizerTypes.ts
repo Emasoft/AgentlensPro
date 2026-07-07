@@ -370,3 +370,15 @@ export interface FullSummary {
   backgroundSpans: BackgroundSpanSummary[]
   efficiency: EfficiencyReport
 }
+
+// TRDD-PJC8N1HO — an explicit collector-downtime window. The interval between one collector run's
+// last-known-alive time and the next run's start, during which every OTEL export from the agents was
+// dropped (exporters retry briefly then discard) and is lost forever. Surfaced so the dashboard shows
+// a "telemetry lost" band instead of a silent hole, and get_recent_sessions returns it. MIRRORED in
+// media/src/types.ts — change both.
+export interface CollectorGap {
+  startedAt: string   // ISO — downtime began (prior run's stop, or last heartbeat if it crashed)
+  endedAt: string     // ISO — downtime ended (next run's start)
+  durationMs: number
+  reason: 'crash' | 'shutdown'
+}

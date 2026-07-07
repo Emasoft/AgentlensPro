@@ -16,6 +16,13 @@ const MAX_LINES = 3_000_000
 const MAX_STEPS = 2000
 const MAX_BLOCKS_PER_STEP = 200
 const BLOCK_TEXT_CAP = 20_000
+// TRDD-PJC8N1HO (OOM P0): a WHOLE-RECONSTRUCTION text budget. The per-block cap alone is not enough —
+// MAX_STEPS × MAX_BLOCKS_PER_STEP × BLOCK_TEXT_CAP is an ~8 GB upper bound, and a pathological session
+// (many blocks/step, each near the cap) materialized enough drill-text to exhaust the heap and abort
+// the whole collector. This bounds the SUM of drill-text bytes across every block; once spent, further
+// blocks keep their (accurate) token/byte metadata but ship empty text and the history is marked
+// truncated. Normal sessions store a few MB of text and never approach the budget. Env-overridable.
+const TEXT_BUDGET_BYTES = Math.max(1, Number(process.env.AGENTLENS_HISTORY_TEXT_BUDGET_MB) || 24) * 1024 * 1024
 
 // Per-block token counts use the real tokenEstimator segmenter (TRDD-IQENK7JM) accumulated on the FULL
 // block text as it streams in (see addBlock), then CALIBRATED per step against the exact usage totals
@@ -182,6 +189,21 @@ export async function buildContextHistory(sessionId: string, parentSessionId?: s
   let assistantTurns = 0
   let lines = 0
   let truncated = false
+  // TRDD-PJC8N1HO: running total of drill-text bytes actually stored. Once it crosses TEXT_BUDGET_BYTES,
+  // chargeText() stops storing text (returns '') and marks the reconstruction truncated — the heap can
+  // no longer be exhausted by the sum of per-block drill text no matter how pathological the session.
+  let textBytesStored = 0
+
+  // Charge a candidate drill-text against the whole-reconstruction budget. Returns the text to store
+  // ('' once the budget is spent). Token/byte metadata is charged separately (it's tiny + must stay
+  // accurate), so a budget-truncated block still reports its true weight — it just can't be drilled.
+  function chargeText(candidate: string): string {
+    if (!candidate) return ''
+    if (textBytesStored >= TEXT_BUDGET_BYTES) { truncated = true; return '' }
+    const b = Buffer.byteLength(candidate, 'utf8')
+    textBytesStored += b
+    return candidate
+  }
 
   function getStep(turn: number): StepAcc {
     let s = steps.get(turn)
@@ -203,10 +225,13 @@ export async function buildContextHistory(sessionId: string, parentSessionId?: s
       existing.bytes += bytes
       existing.tokensRaw += tokensRaw
       if (existing.text.length < BLOCK_TEXT_CAP && rawText) {
-        existing.text = (existing.text ? existing.text + '\n' + rawText : rawText).slice(0, BLOCK_TEXT_CAP)
+        // Only the appended delta is charged (existing.text was already charged on first store).
+        const merged = (existing.text ? existing.text + '\n' + rawText : rawText).slice(0, BLOCK_TEXT_CAP)
+        const delta = merged.slice(existing.text.length)
+        existing.text = existing.text + chargeText(delta)
       }
     } else {
-      step.blocks.set(id, { id, kind, label, text: rawText.slice(0, BLOCK_TEXT_CAP), bytes, tokensRaw, role, toolName })
+      step.blocks.set(id, { id, kind, label, text: chargeText(rawText.slice(0, BLOCK_TEXT_CAP)), bytes, tokensRaw, role, toolName })
     }
   }
 

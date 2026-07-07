@@ -11,7 +11,7 @@ import {
   sessionTextFilter, filteredSessions, evidenceSessionIds,
   sessionSortKey, sessionSortDir,
   workspaceFilter, availableWorkspaces, shortWorkspaceName,
-  enableOtelIngestion, enableLogIngestion, otlpPort,
+  enableOtelIngestion, enableLogIngestion, otlpPort, collectorGaps,
 } from './state'
 import type { TimelineEntry, FileOpSummary, AgentFilter, InitiatorFilter, DataSourceFilter, WorkspaceFilter, DailyStatRow, LifetimeStats, BurnRate, Projection, SessionSummaryCard, ContextComposition, GeneratedFileRef, GeneratedFileContent } from './types'
 
@@ -249,6 +249,28 @@ function HelpButton() {
   )
 }
 
+// TRDD-PJC8N1HO spec 2: the "collector offline — telemetry lost" band. Renders the explicit downtime
+// windows (pushed on every SSE update) so a gap in coverage is visible instead of a silent hole. Null
+// when the collector has no recorded downtime.
+function CollectorGapBanner() {
+  const gaps = collectorGaps.value
+  if (!gaps || gaps.length === 0) return null
+  const recent = [...gaps].reverse().slice(0, 3)  // newest first
+  const fmt = (iso: string): string => { const d = new Date(iso); return isNaN(d.getTime()) ? iso : d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) }
+  const dur = (ms: number): string => ms >= 3_600_000 ? `${(ms / 3_600_000).toFixed(1)}h` : ms >= 60_000 ? `${Math.round(ms / 60_000)}m` : `${Math.round(ms / 1000)}s`
+  return (
+    <div style="margin:4px 8px;padding:6px 10px;border-radius:4px;background:rgba(244,71,71,0.12);border:1px solid var(--error,#f44747);color:var(--error,#f44747);font-size:11px">
+      <strong>⚠ Collector offline — telemetry lost</strong>
+      {recent.map((g, i) => (
+        <div key={i} style="opacity:.9;font-variant-numeric:tabular-nums">
+          {fmt(g.startedAt)} → {fmt(g.endedAt)} · {dur(g.durationMs)} · {g.reason === 'crash' ? 'crash' : 'clean shutdown'}
+        </div>
+      ))}
+      {gaps.length > recent.length && <div style="opacity:.7">+{gaps.length - recent.length} earlier gap{gaps.length - recent.length !== 1 ? 's' : ''}</div>}
+    </div>
+  )
+}
+
 export function App() {
   // Global smart tooltip for [data-tip] elements
   useEffect(() => {
@@ -324,8 +346,10 @@ export function App() {
         enableOtelIngestion?: boolean
         enableLogIngestion?: boolean
         otlpPort?: number
+        collectorGaps?: import('./types').CollectorGap[]
       }
       if (msg.type === 'update') {
+        if (Array.isArray(msg.collectorGaps)) collectorGaps.value = msg.collectorGaps
         if (msg.enableOtelIngestion !== undefined) enableOtelIngestion.value = msg.enableOtelIngestion
         if (msg.enableLogIngestion !== undefined) enableLogIngestion.value = msg.enableLogIngestion
         if (msg.otlpPort !== undefined) otlpPort.value = msg.otlpPort
@@ -466,6 +490,7 @@ export function App() {
         </div>
       </div>
 
+      <CollectorGapBanner />
       {showFilterBars && <TimeRangePicker />}
       {showFilterBars && <SearchFilterBar />}
       <div class="panel active">

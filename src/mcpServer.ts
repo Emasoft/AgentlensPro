@@ -23,7 +23,7 @@ import {
 import { calcTokenCostUsd } from './pricing'
 import type {
   SessionSummaryCard, TimelineEntry, ContextComposition,
-  CacheBreakReport, CacheBreakOffender, ContextHistory, CallContext,
+  CacheBreakReport, CacheBreakOffender, ContextHistory, CallContext, CollectorGap,
 } from './summarizers/summarizerTypes'
 import { buildCacheBreakReport } from './cacheBreak'
 import type { BurnStatus, SessionStatus } from './burnMonitor'
@@ -93,9 +93,10 @@ const TOOLS = [
   {
     name: 'get_recent_sessions',
     description:
-      'Returns recent AgentLens session summaries — cost, turns, model, prompt excerpt, ' +
-      'top tools used, loop signals. Use this to orient yourself to what has been worked ' +
-      'on recently before starting a new task.',
+      'Returns { sessions, collectorGaps }: recent AgentLens session summaries — cost, turns, model, ' +
+      'prompt excerpt, top tools used, loop signals — plus collectorGaps, any windows where the ' +
+      'collector was offline and telemetry was lost. Use this to orient yourself to recent work ' +
+      '(and to know if coverage has gaps) before starting a new task.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -1146,6 +1147,10 @@ export interface McpServerOptions {
   getBurnStatus?: BurnStatusAccessor
   /** One-call self-diagnostic for the caller's resolved session; powers get_session_status. */
   getSessionStatus?: SessionStatusAccessor
+  /** TRDD-PJC8N1HO — collector downtime windows during which OTEL exports were dropped/lost. Returned
+   *  by get_recent_sessions so an agent orienting itself sees explicit "telemetry lost HH:MM–HH:MM"
+   *  gaps instead of assuming continuous coverage. */
+  getCollectorGaps?: () => CollectorGap[]
 }
 
 export function createMcpServer(opts: McpServerOptions): Server {
@@ -1168,9 +1173,13 @@ export function createMcpServer(opts: McpServerOptions): Server {
 
     let result: unknown
     switch (req.params.name) {
-      case 'get_recent_sessions':
-        result = handleGetRecentSessions(sessions, args as { limit?: number; agent?: string; workspace?: string })
+      case 'get_recent_sessions': {
+        // TRDD-PJC8N1HO: wrap the session list with the collector's downtime gaps so a caller sees
+        // where telemetry was lost. Shape is now { sessions, collectorGaps } (was a bare array).
+        const recent = handleGetRecentSessions(sessions, args as { limit?: number; agent?: string; workspace?: string })
+        result = { sessions: recent, collectorGaps: opts.getCollectorGaps?.() ?? [] }
         break
+      }
       case 'get_workspace_patterns':
         result = handleGetWorkspacePatterns(sessions, args as { workspace?: string; days?: number })
         break

@@ -4,7 +4,7 @@ import type {
   FullSummary, SessionSummaryCard, TimelineEntry, FileOpSummary,
   AgentFilter, InitiatorFilter, DataSourceFilter, InsightFilter, WorkspaceFilter, VsCodeApi,
   DailyStatRow, LifetimeStats, BurnRate, Projection, ContextComposition,
-  GeneratedFileRef, GeneratedFileContent, BurnStatus,
+  GeneratedFileRef, GeneratedFileContent, BurnStatus, CollectorGap,
 } from './types'
 
 // Maximum sessions rendered in any single chart or table
@@ -56,6 +56,10 @@ export const burnRateData = signal<BurnRateData | null>(null)
 // Realtime server-computed burn status (TRDD-OG9PARZQ) — pushed over SSE as { type: 'burnStatus' }.
 // Drives the Alerts-tab server-alerts section + window-budget readout. null until the first tick.
 export const serverBurnStatus = signal<BurnStatus | null>(null)
+
+// TRDD-PJC8N1HO spec 2: collector downtime windows, pushed on every SSE `update`. Renders the
+// "collector offline — telemetry lost" band so a gap in coverage is explicit, not a silent hole.
+export const collectorGaps = signal<CollectorGap[]>([])
 
 export interface SearchResultData {
   sessions: SessionSummaryCard[]

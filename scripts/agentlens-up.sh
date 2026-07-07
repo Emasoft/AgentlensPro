@@ -4,6 +4,9 @@
 #   scripts/agentlens-up.sh            build, start the standalone server
 #                                      (web :3000 + MCP :4316 + OTLP :4318),
 #                                      wait for the UI, open the browser.
+#   scripts/agentlens-up.sh --supervise  build, then start the collector under the
+#                                      supervisor (TRDD-PJC8N1HO spec 1): restarts
+#                                      on crash with exponential backoff + crash.log.
 #   scripts/agentlens-up.sh --ensure   idempotent keep-alive for the SessionStart
 #                                      hook: if nothing is serving the MCP port,
 #                                      start the server in the background. No
@@ -32,7 +35,23 @@ start_server_bg() {
 }
 
 ENSURE=0
+SUPERVISE=0
 [ "${1:-}" = "--ensure" ] && ENSURE=1
+[ "${1:-}" = "--supervise" ] && SUPERVISE=1
+
+# Supervised launch (TRDD-PJC8N1HO spec 1): build once, then hand off to the supervisor which owns the
+# restart-on-crash loop + crash.log. Runs in the foreground so a process manager (launchd / a terminal)
+# supervises the supervisor; the supervisor supervises the collector.
+if [ "$SUPERVISE" = "1" ]; then
+  if port_listening "$MCP_PORT"; then
+    echo "agentlens: MCP port :$MCP_PORT already served — refusing to start a second collector."
+    exit 0
+  fi
+  echo "agentlens: building (node esbuild.js)…"
+  node esbuild.js
+  echo "agentlens: starting collector under supervisor (crash-restart + crash.log)…"
+  exec node scripts/agentlens-supervise.js
+fi
 
 if [ "$ENSURE" = "1" ]; then
   # Keep-alive path (SessionStart hook): start only if the MCP port is dead.
