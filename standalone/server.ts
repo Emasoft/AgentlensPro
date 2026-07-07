@@ -188,7 +188,7 @@ function runLogScan() {
     for (const child of childCards ?? []) logSessions.set(child.sessionId, child)
     changed = true
   }
-  if (changed) pushUpdate()
+  if (changed) schedulePushUpdate()
 }
 
 // Debounced scan triggered by fs.watch events — fires 300 ms after the last event.
@@ -286,7 +286,7 @@ async function startLogIngestion() {
     .join('\n')
   console.log(`[AgentLens] Loaded ${total} sessions from local logs:\n${lines}`)
   // Push loaded sessions to any SSE clients that connected before the scan finished.
-  pushUpdate()
+  schedulePushUpdate()
 }
 
 // ── OTLP parsing ──────────────────────────────────────────────────────────────
@@ -666,6 +666,20 @@ function pushUpdate() {
   sseClients = sseClients.filter(client => {
     try { client.write(`data: ${data}\n\n`); return true } catch { return false }
   })
+}
+
+// COALESCED update — this is the OOM fix (TRDD-0KNGDFQI). pushUpdate() runs a FULL
+// summarizeSpans(up to MAX_SPANS) + sidebar + analytics + JSON.stringify; calling it on EVERY
+// incoming OTLP POST (firehose rate = many/sec once logs+metrics+traces+raw-bodies are all enabled)
+// produced allocation churn faster than GC could reclaim → the heap filled and the process was
+// OOM-killed (FATAL mark-compact) in ~40s. Debouncing to at most once per PUSH_COALESCE_MS turns N
+// firehose POSTs into ONE rebuild, so the working set stays bounded and RSS plateaus. Trailing-edge
+// (not leading) so a burst emits exactly one update after it settles.
+const PUSH_COALESCE_MS = 1000
+let pushTimer: ReturnType<typeof setTimeout> | null = null
+function schedulePushUpdate() {
+  if (pushTimer) return
+  pushTimer = setTimeout(() => { pushTimer = null; pushUpdate() }, PUSH_COALESCE_MS)
 }
 
 // ── Dashboard HTML ────────────────────────────────────────────────────────────
@@ -1500,7 +1514,7 @@ const otlpServer = http.createServer((req, res) => {
       } else {
         console.warn(`[AgentLens] ignored POST ${req.url ?? '/'}: unrecognized OTLP JSON payload`)
       }
-      pushUpdate()
+      schedulePushUpdate()
       scheduleSave()
     } catch (e) {
       console.error('[AgentLens] Parse error:', e)
