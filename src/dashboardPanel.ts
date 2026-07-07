@@ -75,7 +75,9 @@ export class DashboardPanel {
       } else if (msg.type === 'loadContextComposition' && msg.sessionId) {
         // Parse the raw session .jsonl on demand (heavy work stays in the host; only the capped,
         // aggregated per-turn summary crosses to the webview). null = no local Claude log to read.
-        const composition = await buildContextComposition(msg.sessionId as string)
+        // parentSessionId (when the card is a fork/sub-agent) lets the parser fall back to the
+        // parent's .jsonl — a fork has no own log, its transcript lives in the parent's.
+        const composition = await buildContextComposition(msg.sessionId as string, msg.parentSessionId as string | undefined)
         this.panel.webview.postMessage({ type: 'contextComposition', sessionId: msg.sessionId, composition })
       } else if (msg.type === 'askAI' && msg.prompt) {
         const prompt = `The following efficiency issue was detected in my AI coding session. Help me fix it:\n\n${msg.prompt}`

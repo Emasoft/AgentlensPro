@@ -162,6 +162,10 @@ export interface ContextComposition {
   turns: ContextCompositionTurn[]
   estimated: true            // marker: token figures here are approximate
   truncated: boolean         // true if the session was larger than the parse cap
+  // Set when this composition was reconstructed from a DIFFERENT session's transcript — i.e. this is
+  // a fork / sub-agent with no own .jsonl, so its inherited context was read from the parent's log.
+  // The webview surfaces this as "reconstructed from parent <id>" and never dead-ends on loading.
+  reconstructedFrom?: string
 }
 
 // ── Cache-break diagnosis (P4, TRDD-TKN5VALS) ─────────────────────────────────

@@ -87,6 +87,22 @@ function joinedLen(v: unknown): number {
   return utf8Len(v)
 }
 
+// Walk the parent chain from `sessionId` upward and return the FIRST ancestor that actually has a
+// .jsonl on disk. A fork's immediate parent is often itself a logless sub-agent (agent-… → agent-… →
+// real session), so a single-level parent lookup can still dead-end; this follows the chain until it
+// hits the nearest ancestor whose transcript exists. `parentOf` maps a sessionId to its parent (from
+// the session graph). Cycle-safe via the seen-set. Returns undefined when no ancestor has a log.
+export function resolveLoggedAncestor(sessionId: string, parentOf: (id: string) => string | undefined): string | undefined {
+  const seen = new Set<string>([sessionId])
+  let cur = parentOf(sessionId)
+  while (cur && !seen.has(cur)) {
+    seen.add(cur)
+    if (findSessionFile(cur)) return cur
+    cur = parentOf(cur)
+  }
+  return undefined
+}
+
 // Locate the .jsonl for a sessionId across all Claude project dirs (filename == sessionId).
 function findSessionFile(sessionId: string): string | null {
   for (const dir of claudeProjectsDirs()) {
@@ -128,13 +144,35 @@ export function listSessionFileIds(): Set<string> {
 /**
  * Reconstruct the per-turn context composition of a Claude session from its raw .jsonl, on demand.
  * Streams the file (never loads it whole — sessions can be multi-GB), attributes every injected
- * `attachment` to the turn it feeds (the upcoming assistant turn), and aggregates by source. Returns
- * null when the session file is not a Claude log (no local .jsonl to read). The heavy work stays
- * here in the host; only the capped, aggregated summary crosses to the webview (P3 DERIVED mandate).
+ * `attachment` to the turn it feeds (the upcoming assistant turn), and aggregates by source. The
+ * heavy work stays here in the host; only the capped, aggregated summary crosses to the webview
+ * (P3 DERIVED mandate).
+ *
+ * NO-OWN-LOG FALLBACK (this fix): a fork / sub-agent session has NO `<sessionId>.jsonl` of its own —
+ * its transcript lives in its PARENT's log (a fork inherits the parent's context verbatim). So when
+ * findSessionFile(sessionId) is null we reconstruct from the PARENT's .jsonl and mark the result with
+ * `reconstructedFrom: parentSessionId`, so the per-call cache bars can still drill into the REAL
+ * injected blocks the fork inherited instead of dead-ending on a perpetual "loading". When neither a
+ * own-log nor a parent-log exists on disk we return an HONEST empty composition (turns: []) that STILL
+ * carries `reconstructedFrom` when a parent id is known — the UI turns that into a terminal
+ * parent-link message rather than spinning forever. Only the pure OTEL/synth case (no file, no
+ * parent) returns null, exactly as before.
  */
-export async function buildContextComposition(sessionId: string): Promise<ContextComposition | null> {
-  const file = findSessionFile(sessionId)
-  if (!file) return null
+export async function buildContextComposition(sessionId: string, parentSessionId?: string): Promise<ContextComposition | null> {
+  let file = findSessionFile(sessionId)
+  let reconstructedFrom: string | undefined
+  if (!file && parentSessionId) {
+    const parentFile = findSessionFile(parentSessionId)
+    if (parentFile) { file = parentFile; reconstructedFrom = parentSessionId }
+  }
+  if (!file) {
+    // No transcript on disk anywhere. If we at least KNOW the parent, hand back an honest empty
+    // composition tagged with it so the webview shows "transcript lives in parent <id>" (a terminal
+    // truth) instead of a perpetual loading spinner. With no parent id at all there is nothing to
+    // reconstruct from → null (pure OTEL-only / deleted-log card), unchanged behaviour.
+    if (parentSessionId) return { sessionId, turns: [], estimated: true, truncated: false, reconstructedFrom: parentSessionId }
+    return null
+  }
 
   // turn → (source label → {kind, bytes, count, excerpt})
   const byTurn = new Map<number, Map<string, { kind: string; bytes: number; count: number; excerpt: string }>>()
@@ -184,7 +222,7 @@ export async function buildContextComposition(sessionId: string): Promise<Contex
     .slice(0, MAX_TURNS)
     .map(([turn, sources]) => ({ turn, sources: capSources(sources) }))
 
-  return { sessionId, turns, estimated: true, truncated }
+  return { sessionId, turns, estimated: true, truncated, reconstructedFrom }
 }
 
 // Heaviest-first, keep the top TOP_SOURCES, fold the remainder into one "other" source so the total

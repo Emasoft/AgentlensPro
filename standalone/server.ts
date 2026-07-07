@@ -19,7 +19,7 @@ import { classifyOtlpPayload } from '../src/otlpParser'
 import { startMcpHttpServer } from '../src/mcpServer'
 import { LogReader, type OpenCodeSqlFactory } from '../src/logReader'
 import { StatuslineUsageReader } from '../src/statuslineUsage'
-import { buildContextComposition } from '../src/contextComposition'
+import { buildContextComposition, resolveLoggedAncestor } from '../src/contextComposition'
 import { generateSuggestions } from '../src/instructionAdvisor'
 import { detectInstructionFiles, appendSuggestion } from '../src/instructionFiles'
 import type { Span } from '../src/types'
@@ -142,7 +142,13 @@ startMcpHttpServer({
   // read per-turn tokens off the card; composition is reconstructed on demand from the raw .jsonl —
   // the same route /api/composition/:id serves the browser. This makes the P4 inflation / cache-break
   // tools return real data over the in-session MCP (http://localhost:4316/mcp).
-  getComposition: (id) => buildContextComposition(id),
+  getComposition: (id) => {
+    // Reconstruct a fork/sub-agent (no own .jsonl) from the nearest LOGGED ancestor so the MCP
+    // context-composition / cache-break tools drill too — walking the chain, not just one hop.
+    const sess = buildSessionSummary()?.sessions ?? []
+    const parentOf = (sid: string): string | undefined => sess.find(s => s.sessionId === sid)?.parentSessionId
+    return buildContextComposition(id, resolveLoggedAncestor(id, parentOf) ?? parentOf(id))
+  },
 }, MCP_PORT, BIND_HOST)
 
 function runLogScan() {
@@ -945,7 +951,9 @@ function getHtml(): string {
               })
               .catch(function(e) { console.warn('[AgentLens] timeline fetch failed', e); });
           } else if (msg.type === 'loadContextComposition' && msg.sessionId) {
-            fetch('/api/composition/' + encodeURIComponent(msg.sessionId))
+            var _compUrl = '/api/composition/' + encodeURIComponent(msg.sessionId);
+            if (msg.parentSessionId) _compUrl += '?parent=' + encodeURIComponent(msg.parentSessionId);
+            fetch(_compUrl)
               .then(function(r) { return r.json(); })
               .then(function(data) {
                 window.dispatchEvent(new MessageEvent('message', {
@@ -1314,10 +1322,27 @@ const uiServer = http.createServer((req, res) => {
   }
 
   if (req.method === 'GET' && url?.startsWith('/api/composition/')) {
+    // `url` has the query stripped (L1144); read the raw req.url for the ?parent= param.
     const sessionId = decodeURIComponent(url.slice('/api/composition/'.length))
+    // A fork/sub-agent card carries parentSessionId (?parent=) — the parser falls back to the
+    // parent's .jsonl when the fork has no own log, so its inherited context still drills.
+    const rawUrl = req.url ?? ''
+    const qIdx = rawUrl.indexOf('?')
+    const parentHint = qIdx >= 0
+      ? new URLSearchParams(rawUrl.slice(qIdx + 1)).get('parent') ?? undefined
+      : undefined
+    // Resolve the nearest ANCESTOR that actually has a log: the immediate parent hint may itself be a
+    // logless sub-agent (agent-… → agent-… → real session), so walk the whole chain rather than
+    // dead-ending after one hop. The graph comes from the session summary.
+    const compSessions = buildSessionSummary()?.sessions ?? []
+    const parentOf = (id: string): string | undefined => compSessions.find(s => s.sessionId === id)?.parentSessionId
+    // Prefer the nearest LOGGED ancestor (drillable). If none has a log, still pass the immediate
+    // parent so the parser returns an honest empty-with-reconstructedFrom composition — the UI then
+    // shows "transcript lives in parent <id>" instead of a perpetual loading spinner.
+    const parentSessionId = resolveLoggedAncestor(sessionId, parentOf) ?? parentOf(sessionId) ?? parentHint
     // Parse the raw .jsonl on demand — heavy work stays server-side, only the capped per-turn
-    // summary crosses to the browser. null = no local Claude log for this session.
-    buildContextComposition(sessionId)
+    // summary crosses to the browser. null = no local Claude log for this session and no parent.
+    buildContextComposition(sessionId, parentSessionId)
       .then(composition => {
         res.writeHead(200, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ composition }))

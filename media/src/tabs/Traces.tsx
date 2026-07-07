@@ -217,7 +217,7 @@ function BgSummaryBlock({ bgSpans }: { bgSpans: BackgroundSpanSummary[] }) {
 // them, each block drilling to its real excerpt text at a leaf. The un-itemized base system prompt +
 // prior transcript is shown as an explicit remainder so the children reconcile to the exact bucket
 // value — never fabricated. No inner scrollbar — the tree grows the page.
-function LlmContextBreakdown({ entry, hostSources }: { entry: TimelineEntry; hostSources?: ContextSource[] }) {
+function LlmContextBreakdown({ entry, hostSources, compNote }: { entry: TimelineEntry; hostSources?: ContextSource[]; compNote?: string }) {
   const cacheRead = entry.cacheReadTokens ?? 0
   const cacheCreate = entry.cacheCreateTokens ?? 0
   const newInput = Math.max(0, (entry.inputTokens ?? 0) - cacheRead - cacheCreate)
@@ -233,9 +233,7 @@ function LlmContextBreakdown({ entry, hostSources }: { entry: TimelineEntry; hos
 
   if (cacheRead > 0) {
     if (injectedNodes.length > 0 && !blocksAreNewWrites) {
-      const kids = [...injectedNodes]
-      const rem = cacheRead - itemizedSum
-      if (rem > 0) kids.push(remainderNode('cr-rem', rem))
+      const kids = budgetedKids(injectedNodes, cacheRead, 'cr-rem')
       nodes.push({ key: 'cacheread', label: 'Cache-read (resident prefix reused)', colorKind: 'cacheRead', weight: cacheRead, value: tokValue(cacheRead, false), children: kids })
     } else {
       nodes.push({ key: 'cacheread', label: 'Cache-read (resident prefix reused)', colorKind: 'cacheRead', weight: cacheRead, value: tokValue(cacheRead, false),
@@ -250,9 +248,7 @@ function LlmContextBreakdown({ entry, hostSources }: { entry: TimelineEntry; hos
 
   if (cacheCreate > 0) {
     if (blocksAreNewWrites) {
-      const kids = [...injectedNodes]
-      const rem = cacheCreate - itemizedSum
-      if (rem > 0) kids.push(remainderNode('cc-rem', rem))
+      const kids = budgetedKids(injectedNodes, cacheCreate, 'cc-rem')
       nodes.push({ key: 'cachewrite', label: 'Cache-created (newly written to cache)', colorKind: 'cacheWrite', weight: cacheCreate, value: tokValue(cacheCreate, false), children: kids })
     } else {
       nodes.push({ key: 'cachewrite', label: 'Cache-created (newly written to cache)', colorKind: 'cacheWrite', weight: cacheCreate, value: tokValue(cacheCreate, false),
@@ -273,7 +269,7 @@ function LlmContextBreakdown({ entry, hostSources }: { entry: TimelineEntry; hos
       <div style="font-size:9px;color:var(--muted);margin-bottom:4px">
         What the {formatCompact((entry.inputTokens ?? 0))}-token prompt was made of — <span style={'color:' + SOURCE_KIND_COLOR.cacheRead}>cache-read</span> reused vs{' '}
         <span style={'color:' + SOURCE_KIND_COLOR.cacheWrite}>cache-created</span> re-written. Expand a bar to drill into the injected blocks (CLAUDE.md, rules, memories, catalogs, hooks…) down to their real content.
-        {(hostSources?.length ?? 0) === 0 && <span> Injected-block detail appears once the session composition finishes loading.</span>}
+        {(hostSources?.length ?? 0) === 0 && <span>{compNote ?? ' Injected-block detail appears once the session composition finishes loading.'}</span>}
       </div>
       {ordered.map(n => <TreeBar key={n.key} node={n} depth={0} siblingMax={max} />)}
     </div>
@@ -283,9 +279,9 @@ function LlmContextBreakdown({ entry, hostSources }: { entry: TimelineEntry; hos
 // The expanded body of an LLM call: model, exact token usage, the per-turn context-composition
 // breakdown (why the prompt is this size), cost, the full response + reasoning. response/thinking
 // are resolved by the parent (inline or blob) and passed in.
-function LlmDetail({ entry, step, sessIdx, idx, sessionModel, hostSources, responseText, thinking }: {
+function LlmDetail({ entry, step, sessIdx, idx, sessionModel, hostSources, compNote, responseText, thinking }: {
   entry: TimelineEntry; step: Step; sessIdx: number; idx: number; sessionModel: string
-  hostSources?: ContextSource[]; responseText: string; thinking: string
+  hostSources?: ContextSource[]; compNote?: string; responseText: string; thinking: string
 }) {
   const [showOutput, setShowOutput] = useState(false)
   const PREVIEW_LEN = 400
@@ -310,7 +306,7 @@ function LlmDetail({ entry, step, sessIdx, idx, sessionModel, hostSources, respo
           </div>
         </div>
       )}
-      <LlmContextBreakdown entry={entry} hostSources={hostSources} />
+      <LlmContextBreakdown entry={entry} hostSources={hostSources} compNote={compNote} />
       {entryCost > 0 && (
         <div class="sw-detail-section"><div class="sw-detail-heading">Cost</div><div class="sw-detail-value">{fmtUsd(entryCost)}</div></div>
       )}
@@ -346,7 +342,7 @@ function LlmDetail({ entry, step, sessIdx, idx, sessionModel, hostSources, respo
 // full response/reasoning, tool calls show the FULL output, user/message steps show their full
 // text. Blob fields absent from DB rows are lazy-fetched via loadBlob (live sessions carry them
 // inline). All hooks run unconditionally at the top so hook order is stable across renders.
-function StepDetail({ step, idx, sessIdx, sessionModel, hostSources }: { step: Step; idx: number; sessIdx: number; sessionModel: string; hostSources?: ContextSource[] }) {
+function StepDetail({ step, idx, sessIdx, sessionModel, hostSources, compNote }: { step: Step; idx: number; sessIdx: number; sessionModel: string; hostSources?: ContextSource[]; compNote?: string }) {
   const entry = step.entry
   const blobs = blobCache.value
   // Lazy-fetch any blob fields this entry needs but didn't ship inline (DB-loaded sessions strip
@@ -366,7 +362,7 @@ function StepDetail({ step, idx, sessIdx, sessionModel, hostSources }: { step: S
 
   if (entry.type === 'llm') {
     return <LlmDetail entry={entry} step={step} sessIdx={sessIdx} idx={idx} sessionModel={sessionModel}
-      hostSources={hostSources} responseText={entry.responseText || blobs[`${entry.spanId}:response`] || ''}
+      hostSources={hostSources} compNote={compNote} responseText={entry.responseText || blobs[`${entry.spanId}:response`] || ''}
       thinking={entry.thinking || blobs[`${entry.spanId}:thinking`] || ''} />
   }
 
@@ -471,7 +467,7 @@ function LongTextSection({ heading, text, id: _id, isJson }: { heading: string; 
   )
 }
 
-export function StepRow({ step, idx, sessIdx, sessionDur, sessionModel, metric, maxMetric, highlightSpanId, hostSources }: { step: Step; idx: number; sessIdx: number; sessionDur: number; sessionModel: string; metric: TimelineMetric; maxMetric: number; highlightSpanId?: string; hostSources?: ContextSource[] }) {
+export function StepRow({ step, idx, sessIdx, sessionDur, sessionModel, metric, maxMetric, highlightSpanId, hostSources, compNote }: { step: Step; idx: number; sessIdx: number; sessionDur: number; sessionModel: string; metric: TimelineMetric; maxMetric: number; highlightSpanId?: string; hostSources?: ContextSource[]; compNote?: string }) {
   const entry = step.entry
   // When the user clicks a point in the Growth chart we focus that exact turn (by spanId). The
   // matching row auto-expands so its token breakdown is immediately visible, and scrolls into view.
@@ -586,7 +582,7 @@ export function StepRow({ step, idx, sessIdx, sessionDur, sessionModel, metric, 
       </div>
       {open && (
         <div class="sw-detail open">
-          <StepDetail step={step} idx={idx} sessIdx={sessIdx} sessionModel={sessionModel} hostSources={hostSources} />
+          <StepDetail step={step} idx={idx} sessIdx={sessIdx} sessionModel={sessionModel} hostSources={hostSources} compNote={compNote} />
         </div>
       )}
     </>
@@ -699,6 +695,24 @@ const KIND_GROUP_LABEL: Record<string, string> = {
   other: 'Other sources',
 }
 
+// Merge injected blocks that share a (kind, label) identity, summing their tokens/bytes/occurrences
+// and keeping the first non-empty excerpt. Used to fold a fork's inherited PARENT transcript (whose
+// blocks are spread across the parent's turns) into one deduplicated inherited-context set — so the
+// fork's per-call drill shows each distinct block once rather than N copies from N parent turns.
+function mergeSources(sources: ContextSource[]): ContextSource[] {
+  const byKey = new Map<string, ContextSource>()
+  for (const s of sources) {
+    const key = `${s.kind}::${s.label}`
+    const cur = byKey.get(key)
+    if (!cur) { byKey.set(key, { ...s }); continue }
+    cur.bytes += s.bytes
+    cur.tokens += s.tokens
+    cur.count += s.count
+    if (!cur.excerpt && s.excerpt) cur.excerpt = s.excerpt
+  }
+  return [...byKey.values()].sort((a, b) => b.tokens - a.tokens)
+}
+
 // The host-parsed injected blocks as bar nodes: grouped by kind (Files, Hooks, catalogs…), each group
 // drilling to its individual sources, each source a LEAF that renders the ACTUAL injected text
 // (excerpt). This is where "system prompt / CLAUDE.md / each rule / each memory / each hook injection"
@@ -728,6 +742,27 @@ function compositionNodes(hostSources: ContextSource[]): BarNode[] {
     groups.push({ key: `grp:${kind}`, label: KIND_GROUP_LABEL[kind] ?? kind, colorKind: kind, weight: sum, value: tokValue(sum, true), children: kids })
   }
   return groups
+}
+
+// Fit the itemized injected-block groups under a cache BUCKET so the children reconcile EXACTLY to
+// the bucket value and never over-count it. Groups are taken heaviest-first until the next would
+// exceed the budget; whatever is left of the bucket becomes the honest "system prompt + prior
+// transcript (not itemized)" remainder. When the blocks all fit (own-log sessions) every block is
+// shown plus the remainder; when they exceed it (a fork's inherited-context superset nested under one
+// call's smaller bucket) the biggest real blocks are shown and the rest fold into the remainder —
+// real content either way, exact sum always, nothing fabricated.
+function budgetedKids(injectedNodes: BarNode[], budget: number, remKey: string): BarNode[] {
+  const sorted = [...injectedNodes].sort((a, b) => b.weight - a.weight)
+  const kept: BarNode[] = []
+  let used = 0
+  for (const n of sorted) {
+    if (used + n.weight > budget) break
+    kept.push(n)
+    used += n.weight
+  }
+  const rem = budget - used
+  if (rem > 0) kept.push(remainderNode(remKey, rem))
+  return kept
 }
 
 // The un-itemized remainder of a cache bucket: the base system prompt + accumulated conversation
@@ -1004,11 +1039,15 @@ export function TimelineWaterfall({ steps, sessionDur, sessionModel, sessIdx = 0
   // (lazily requested on mount) + the resident timeline, diff turn-to-turn, and mark the turns whose
   // prefix cache broke. Recomputed only when the composition or the step set changes.
   const composition = sessionId ? sessionCompositions.value[sessionId] : undefined
+  // A fork/sub-agent card has no own .jsonl — its transcript lives in the parent's log. Pass its
+  // parentSessionId so the host parser can fall back to the parent's transcript (else the cache bars
+  // would dead-end forever on "loading" for exactly these sessions — the bug this fixes).
+  const parentSessionId = sessionSummary.value?.sessions.find(s => s.sessionId === sessionId)?.parentSessionId
   useEffect(() => {
     if (sessionId && composition === undefined && vscode) {
-      vscode.postMessage({ type: 'loadContextComposition', sessionId })
+      vscode.postMessage({ type: 'loadContextComposition', sessionId, parentSessionId })
     }
-  }, [sessionId, composition === undefined])
+  }, [sessionId, composition === undefined, parentSessionId])
   const breaksByTurn = useMemo(
     () => cacheBreaksByTurn(sessionId ? buildCacheBreakReport(sessionId, steps.map(s => s.entry), composition, sessionModel) : null),
     [sessionId, composition, steps.length, sessionModel],
@@ -1017,6 +1056,28 @@ export function TimelineWaterfall({ steps, sessionDur, sessionModel, sessIdx = 0
   // clicking a call shows what its context was made of (the composition breakdown).
   const hostSourcesByTurn = new Map<number, ContextSource[]>()
   for (const t of composition?.turns ?? []) hostSourcesByTurn.set(t.turn, t.sources)
+  // When the composition was reconstructed from a PARENT transcript (fork/sub-agent with no own log),
+  // the parent's turn numbering doesn't line up with this session's own timeline turns, so a per-turn
+  // lookup usually misses. Fall back to the UNION of all inherited injected blocks so the fork's calls
+  // still drill into the REAL content it inherited; the per-call remainder node reconciles the exact
+  // cache buckets so nothing is fabricated.
+  const inheritedSources: ContextSource[] | undefined = composition?.reconstructedFrom
+    ? mergeSources(composition.turns.flatMap(t => t.sources))
+    : undefined
+  const resolveHostSources = (turn: number | undefined): ContextSource[] | undefined => {
+    const own = turn !== undefined ? hostSourcesByTurn.get(turn) : undefined
+    return own && own.length ? own : inheritedSources
+  }
+  // Honest terminal note for a call whose injected blocks could NOT be itemized — never a perpetual
+  // "loading". undefined composition = still loading; reconstructedFrom = fork/sub-agent whose blocks
+  // come from the parent's transcript; null = OTEL-only/no local log at all.
+  const compNote = composition === undefined
+    ? ' Injected-block detail appears once the session composition finishes loading.'
+    : composition && composition.reconstructedFrom
+      ? ` This spawned session has no transcript of its own — its context was reconstructed from its parent ${composition.reconstructedFrom}. The inherited injected blocks are shown above; if none appear, the parent's transcript is not on disk.`
+      : composition === null
+        ? ' This session has no local transcript to itemize (OTEL-only, or its log was pruned) — the exact cache buckets are shown, but their injected blocks cannot be reconstructed.'
+        : ' No injected blocks were itemized for this call.'
 
   const match = compileStepFilter(filterApplied)
   const valued = steps
@@ -1129,12 +1190,12 @@ export function TimelineWaterfall({ steps, sessionDur, sessionModel, sessIdx = 0
                 sessionModel={sessionModel} metric={metric}
                 maxTurnMetric={maxTurnMetric} highlightSpanId={highlightSpanId}
                 subAgents={subsByTurn.get(g.turn)} cacheBreak={breaksByTurn.get(g.turn)}
-                hostSources={hostSourcesByTurn.get(g.turn)} />
+                hostSources={resolveHostSources(g.turn)} />
             ))
           : ordered.map(({ step, i }) => (
               <StepRow key={step.entry.spanId + i} step={step} idx={i} sessIdx={sessIdx}
                 sessionDur={sessionDur} sessionModel={sessionModel} metric={metric} maxMetric={maxMetric}
-                highlightSpanId={highlightSpanId} hostSources={hostSourcesByTurn.get(step.entry.turn ?? -1)} />
+                highlightSpanId={highlightSpanId} hostSources={resolveHostSources(step.entry.turn)} compNote={compNote} />
             ))
       }
       {orphanSubs.length > 0 && (

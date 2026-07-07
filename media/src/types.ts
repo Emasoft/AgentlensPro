@@ -164,6 +164,8 @@ export interface ContextComposition {
   turns: ContextCompositionTurn[]
   estimated: true
   truncated: boolean
+  // Set when reconstructed from a parent session's transcript (fork / sub-agent with no own .jsonl).
+  reconstructedFrom?: string
 }
 
 // Mirror of src/summarizers/summarizerTypes.ts — cache-break diagnosis (P4). A prefix cache breaks
