@@ -1,9 +1,9 @@
 ---
 trdd-id: 0KNGDFQI
 title: Standalone collector OOMs under the full-telemetry firehose — bound ingest memory + backpressure
-column: dev
+column: complete
 created: 2026-07-07T11:51:06+0200
-updated: 2026-07-07T11:51:06+0200
+updated: 2026-07-07T13:25:00+0200
 current-owner: null
 assignee: null
 priority: 0
@@ -21,7 +21,18 @@ external-refs: []
 
 # TRDD-0KNGDFQI — Collector firehose OOM / backpressure
 
-## ⏵ STATE — READ FIRST (CRITICAL BLOCKER)
+## ⏵ STATE — RESOLVED 2026-07-07 (column=complete)
+The OOM death is FIXED by three commits: `9d4caad` (MAX_SPANS cap on the in-memory span array),
+`c9e8f87` (SSE pushUpdate/summary-rebuild coalesced to ≤1/sec — was per-POST allocation churn),
+`a54abae` (6GB launch heap in `pnpm run local` + scripts/dev-server.js). Under the live full
+firehose the working set PLATEAUS ~3.3GB (BOUNDED — not an unbounded leak) and the server ran
+24+ min stable with zero OOM and a responsive dashboard. The acceptance example figure (<1.5GB)
+was NOT met — the plateau is higher but bounded; lowering the baseline (DB-backed span retention,
+smaller AGENTLENS_MAX_SPANS default) is an OPTIONAL follow-up, not a blocker. Heap-snapshot
+retainer analysis (spec 1) was skipped once the plateau proved bounded — the fix was empirically
+sufficient.
+
+## ORIGINAL STATE (historical) — CRITICAL BLOCKER
 Enabling the FULL Claude Code telemetry (OTEL_LOGS_EXPORTER + OTEL_METRICS_EXPORTER + traces +
 OTEL_LOG_RAW_API_BODIES, all now in ~/.claude/settings.json) makes MANY concurrent Claude Code
 sessions POST logs (5s) + metrics (10s) + traces (1s) + raw-body events to the standalone

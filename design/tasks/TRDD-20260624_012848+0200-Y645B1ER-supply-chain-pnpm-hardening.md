@@ -1,9 +1,10 @@
 ---
 trdd-id: Y645B1ER
 title: Supply-chain hardening — pnpm/.npmrc install-time safety belts
-column: planned
+column: complete
 created: 2026-06-24T01:28:48+0200
-updated: 2026-07-06T08:39:27+0200
+updated: 2026-07-07T13:28:00+0200
+implementation-commits: [86d1b4d]
 current-owner: emanuele
 task-type: security
 approval-tier: 2
@@ -16,9 +17,10 @@ external-refs: []
 
 # Supply-chain hardening — pnpm/.npmrc install-time safety belts
 
-Parked for later evaluation (user: "leave it as a TRDD proposal, we will
-evaluate it in the future"). Surfaced by the ai-maestro-janitor heartbeat
-supply-chain detectors. NOT yet approved or applied.
+DONE — approved by USER 2026-07-06 and implemented in commit `86d1b4d` (see
+"Approval log" + "Execution notes" below; column set to complete 2026-07-07 —
+the frontmatter had lagged the execution). Originally surfaced by the
+ai-maestro-janitor heartbeat supply-chain detectors.
 
 ## Proposed changes
 

@@ -1,9 +1,10 @@
 ---
 trdd-id: U0UYC38A
 title: Realtime incremental jsonl streaming — tail every session log, live-refresh the dashboard
-column: todo
+column: complete
 created: 2026-07-07T11:00:01+0200
-updated: 2026-07-07T11:00:01+0200
+updated: 2026-07-07T13:26:00+0200
+implementation-commits: [b2fbb2f]
 current-owner: null
 assignee: null
 priority: 1
@@ -21,7 +22,19 @@ external-refs: []
 
 # TRDD-U0UYC38A — Realtime incremental jsonl streaming
 
-## ⏵ STATE — READ FIRST
+## ⏵ STATE — DONE 2026-07-07 (column=complete, commit b2fbb2f)
+Implemented + verified (check-types/lint/esbuild clean; headless fixture proof): the incremental
+byte-offset tail already existed in logReader (finding — spec 1 was pre-satisfied); added
+incrementalReads/fullReads counters (getLogScanStats, /api/debug/log-scan-stats,
+AGENTLENS_DEBUG_TAIL) to make "no rescan per append" verifiable; server pushes a targeted
+`sessionChanged` SSE event (changed cards + ids) the instant a jsonl grows, ahead of the ~1s
+coalesced full push; webview merges changed cards (OTEL still wins) and invalidates the FOCUSED
+session's sessionHistories/sessionCompositions so History/Traces re-fetch live (gated on
+focusedSessionId — no refetch storms). Headless proof: append 2 turns → /api/history 1→3 steps in
+~1.2s, incrementalReads 0→1, fullReads unchanged. Report:
+reports/realtime-jsonl/20260707_131500+0200-U0UYC38A.md
+
+## ORIGINAL STATE (historical)
 User: "the jsonl is not read as streaming and updated with the latest content, instead only the otel
 data is shown … every single change to the jsonl sessions must be tracked in realtime."
 
