@@ -56,13 +56,25 @@ const BUILD_ID = computeBuildId()
 let spans: Span[] = []
 let sseClients: http.ServerResponse[] = []
 
-// Load persisted spans on startup
+// Hard cap on the in-memory span buffer. Unlike SessionStore's time-window trim, the standalone
+// keeps a flat span array to rebuild the whole session list on demand — so with the FULL telemetry
+// firehose now enabled (logs + metrics + traces + raw-body events from every active Claude Code
+// session) it grew UNBOUNDED and OOM-killed the process (JS heap exhausted at ~4GB after ~19 min:
+// FATAL "Ineffective mark-compacts near heap limit"). Capping to the most-recent MAX_SPANS keeps
+// recent sessions (what diagnosis needs) while the process stays bounded (~200k × ~1.6KB ≈ 320MB).
+// Older OTEL-only sessions age out of memory; the proper DB-backed retention is a follow-up TRDD.
+// Env override so a big machine can raise it: AGENTLENS_MAX_SPANS.
+const MAX_SPANS = Math.max(10_000, Number(process.env.AGENTLENS_MAX_SPANS) || 200_000)
+
+// Load persisted spans on startup — cap to the most-recent MAX_SPANS so a large historical
+// spans.json (seen at 98MB) can't blow the heap on load either.
 try {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true })
   if (fs.existsSync(DATA_FILE)) {
     const raw = fs.readFileSync(DATA_FILE, 'utf-8')
-    spans = JSON.parse(raw) as Span[]
-    console.log(`[AgentLens] Loaded ${spans.length} spans from ${DATA_FILE}`)
+    const loaded = JSON.parse(raw) as Span[]
+    spans = loaded.length > MAX_SPANS ? loaded.slice(-MAX_SPANS) : loaded
+    console.log(`[AgentLens] Loaded ${spans.length} spans from ${DATA_FILE}${loaded.length > spans.length ? ` (capped from ${loaded.length})` : ''}`)
   }
 } catch (e) {
   console.warn('[AgentLens] Could not load persisted data:', e)
@@ -82,6 +94,10 @@ function scheduleSave() {
 function addSpan(span: Span) {
   if (span.receivedAt === undefined) span.receivedAt = Date.now()
   spans.push(span)
+  // Bound the buffer so the firehose can't grow it without limit (the OOM fix above). Evict the
+  // oldest overflow in one batch (amortized O(1)) rather than shift() per push. A ~5% slack above
+  // MAX_SPANS avoids re-slicing on every single add once at the cap.
+  if (spans.length > MAX_SPANS * 1.05) spans = spans.slice(-MAX_SPANS)
 }
 
 // ── Log file sessions ─────────────────────────────────────────────────────────
