@@ -37,7 +37,11 @@ function openBrowser() {
 }
 
 function start() {
-  child = spawn('node', [BUILT], { stdio: 'inherit', cwd: ROOT });
+  // --max-old-space-size headroom: under the full Claude Code telemetry firehose (logs+metrics+
+  // traces+raw-bodies) the collector's working set plateaus ~3.3GB (bounded by the 5-min span window
+  // + MAX_SPANS), which exceeds Node's default heap and OOM-killed the process. 6GB gives headroom
+  // above the plateau. Tune the plateau down with AGENTLENS_MAX_SPANS. (TRDD-0KNGDFQI)
+  child = spawn('node', ['--max-old-space-size=6144', BUILT], { stdio: 'inherit', cwd: ROOT });
   openBrowser();
   child.on('exit', (code) => {
     // Only propagate an exit we didn't cause; a restart-triggered exit is expected.

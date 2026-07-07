@@ -184,7 +184,7 @@
     "vscode:prepublish": "pnpm run package",
     "prepublishOnly": "pnpm run package",
     "compile": "pnpm run check-types && pnpm run lint && node esbuild.js",
-    "local": "node esbuild.js && node standalone/server.js",
+    "local": "node esbuild.js && node --max-old-space-size=6144 standalone/server.js",
     "up": "bash scripts/agentlens-up.sh",
     "mcp:ensure": "bash scripts/agentlens-up.sh --ensure",
     "dev": "node esbuild.js && npm-run-all -p watch:esbuild dev:server",
