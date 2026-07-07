@@ -22,6 +22,10 @@ import { resolveCallContext, callBodyRegistry } from '../src/rawBodyContext'
 import { LogReader, type OpenCodeSqlFactory } from '../src/logReader'
 import { readScratchFile } from '../src/generatedFiles'
 import { StatuslineUsageReader } from '../src/statuslineUsage'
+import {
+  loadBurnConfig, gatherConsumptionEvents, computeBurnStatus, computeSessionStatus,
+  type BurnAlert,
+} from '../src/burnMonitor'
 import { buildContextComposition, resolveLoggedAncestor } from '../src/contextComposition'
 import { buildContextHistory } from '../src/contextHistory'
 import { generateSuggestions } from '../src/instructionAdvisor'
@@ -148,6 +152,18 @@ let logReader = new LogReader()
 // card before it is served. No-op for sessions/agents that wrote no statusline line.
 const statuslineReader = new StatuslineUsageReader()
 
+// ── Burn monitor (TRDD-OG9PARZQ) ───────────────────────────────────────────────
+// Realtime "smoke detector": rolling burn rate + rate-limit window budget + threshold alerts, computed
+// over the already-ingested live data (OTEL api_request timeline events + statusline billing deltas).
+const burnConfig = loadBurnConfig(process.env, os.homedir())
+
+// Gathers the current machine-wide consumption event stream once, reused by the MCP accessors + the tick.
+function gatherBurn(now = Date.now()) {
+  const sessions = buildSessionSummary()?.sessions ?? []
+  const events = gatherConsumptionEvents(sessions, statuslineReader.getBillingEvents(now), now)
+  return { sessions, events, now }
+}
+
 // ── MCP server ────────────────────────────────────────────────────────────────
 
 // Dedicated server on MCP_PORT (default 4316) — same port as the VS Code extension.
@@ -179,7 +195,59 @@ startMcpHttpServer({
   // TRDD-ICHAVFCS: resolve a call (sessionId + requestId/spanId) to its full literal context tree,
   // reconstructed from the raw OTEL request body indexed by the collector. Works for OTEL-only sessions.
   getCallContext: (sessionId, sel) => resolveCallContext(sessionId, sel),
+  // TRDD-OG9PARZQ: realtime burn status + one-call session self-diagnostic for the fleet's Claudes.
+  getBurnStatus: () => { const { sessions, events, now } = gatherBurn(); return computeBurnStatus(events, sessions, burnConfig, now) },
+  getSessionStatus: (sel) => { const { sessions, events, now } = gatherBurn(); return computeSessionStatus(sessions, events, burnConfig, sel, now) },
 }, MCP_PORT, BIND_HOST)
+
+// ── Burn SSE tick + alerts (TRDD-OG9PARZQ) ─────────────────────────────────────
+// Every few seconds compute the burn status, push it to the dashboard over the existing SSE channel,
+// and for each NEW alert push an `alert` SSE (rendered as a banner + Alerts-tab entry) and — opt-in —
+// fire a macOS notification. `firedBurnAlerts` dedupes so a standing condition notifies once until it
+// clears (so a persistent firehose doesn't spam every tick).
+const firedBurnAlerts = new Set<string>()
+
+function pushBurnSse(payload: unknown): void {
+  if (sseClients.length === 0) return
+  const data = JSON.stringify(payload)
+  sseClients = sseClients.filter(client => {
+    try { client.write(`data: ${data}\n\n`); return true } catch { return false }
+  })
+}
+
+// macOS notification, strictly opt-in (AGENTLENS_NOTIFY=1). osascript is escaped so an alert detail
+// can never break out of the AppleScript string. No-op off macOS or when notify is disabled.
+function macNotify(alert: BurnAlert): void {
+  if (!burnConfig.notify || process.platform !== 'darwin') return
+  const esc = (s: string) => s.replace(/["\\]/g, '\\$&').slice(0, 240)
+  exec(`osascript -e 'display notification "${esc(alert.detail)}" with title "AgentLens: ${esc(alert.label)}"'`, () => {})
+}
+
+function tickBurn(): void {
+  let status
+  try {
+    const { sessions, events, now } = gatherBurn()
+    status = computeBurnStatus(events, sessions, burnConfig, now)
+  } catch (e) {
+    console.warn('[AgentLens] burn tick error:', e)
+    return
+  }
+  pushBurnSse({ type: 'burnStatus', burnStatus: status })
+
+  const active = new Set<string>()
+  for (const alert of status.alerts) {
+    active.add(alert.id)
+    if (firedBurnAlerts.has(alert.id)) continue
+    firedBurnAlerts.add(alert.id)
+    // Reuse the existing SSE `alert` channel — the dashboard renders it as a banner (spec 3).
+    pushBurnSse({ type: 'alert', label: alert.label, detail: alert.detail, severity: alert.severity })
+    macNotify(alert)
+  }
+  // Clear fired keys whose condition cleared so the alert can re-fire if it returns.
+  for (const id of Array.from(firedBurnAlerts)) if (!active.has(id)) firedBurnAlerts.delete(id)
+}
+// 4s cadence gives ≤10s alert latency with margin (acceptance) without a heavy per-second rebuild.
+setInterval(tickBurn, 4000)
 
 function runLogScan() {
   const results = logReader.scan()
@@ -1096,6 +1164,19 @@ function getHtml(): string {
         location.reload();
         return;
       }
+      // Server-pushed burn alert (TRDD-OG9PARZQ) → render as a dashboard banner. Only SERVER alerts
+      // arrive over SSE; the Preact app SENDS client-alert messages, it doesn't receive them, so
+      // rendering here (not dispatching to the app) avoids a double banner.
+      if (data && data.type === 'alert' && data.label) {
+        var burnColor = data.severity === 'error' ? '#f44747' : data.severity === 'info' ? '#4fc3f7' : '#f6a623';
+        var burnPrompt = 'AgentLens burn alert: ' + data.label + (data.detail ? '\\n' + data.detail : '');
+        showActionNotification('Alert: ' + data.label, burnPrompt, burnColor, data.detail || null, {
+          label: 'View Alerts',
+          onClick: function() { window.dispatchEvent(new MessageEvent('message', { data: { type: 'switchTab', tab: 'alerts' } })); }
+        }, 30000);
+        window.dispatchEvent(new MessageEvent('message', { data: data }));
+        return;
+      }
       window.dispatchEvent(new MessageEvent('message', { data: data }));
     };
     _es.onerror = function() {
@@ -1406,6 +1487,19 @@ const uiServer = http.createServer((req, res) => {
     const summary = buildSessionSummary()
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify(stripSessionDetail(summary)))
+    return
+  }
+
+  // TRDD-OG9PARZQ: realtime burn status (burn rate + window budget + alerts) for the dashboard and any
+  // headless consumer. Same object get_burn_status returns over MCP.
+  if (req.method === 'GET' && url === '/api/burn-status') {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    try {
+      const { sessions, events, now } = gatherBurn()
+      res.end(JSON.stringify(computeBurnStatus(events, sessions, burnConfig, now)))
+    } catch (e) {
+      res.end(JSON.stringify({ error: String(e) }))
+    }
     return
   }
 

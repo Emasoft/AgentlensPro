@@ -4,7 +4,7 @@ import type {
   FullSummary, SessionSummaryCard, TimelineEntry, FileOpSummary,
   AgentFilter, InitiatorFilter, DataSourceFilter, InsightFilter, WorkspaceFilter, VsCodeApi,
   DailyStatRow, LifetimeStats, BurnRate, Projection, ContextComposition,
-  GeneratedFileRef, GeneratedFileContent,
+  GeneratedFileRef, GeneratedFileContent, BurnStatus,
 } from './types'
 
 // Maximum sessions rendered in any single chart or table
@@ -52,6 +52,10 @@ export interface BurnRateData {
   projection: Projection | null
 }
 export const burnRateData = signal<BurnRateData | null>(null)
+
+// Realtime server-computed burn status (TRDD-OG9PARZQ) — pushed over SSE as { type: 'burnStatus' }.
+// Drives the Alerts-tab server-alerts section + window-budget readout. null until the first tick.
+export const serverBurnStatus = signal<BurnStatus | null>(null)
 
 export interface SearchResultData {
   sessions: SessionSummaryCard[]

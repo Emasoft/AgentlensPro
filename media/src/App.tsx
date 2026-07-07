@@ -5,7 +5,7 @@ import {
   selectedAgentFilter, initiatorFilter, dataSourceFilter, sessionLimit, activeTab,
   cacheSessionDetail, cacheSessionComposition, cacheGeneratedFileContent, blobCache,
   focusedSessionId, invalidateSessionDrill, mergeChangedSessionCards,
-  dailyStats, lifetimeStats, burnRateData, searchResults, rangedSearchResults,
+  dailyStats, lifetimeStats, burnRateData, serverBurnStatus, searchResults, rangedSearchResults,
   timeRange, makeTimeRange, TIME_PRESETS, CHART_MAX,
   vscode, displaySessions, rangedSessions,
   sessionTextFilter, filteredSessions, evidenceSessionIds,
@@ -315,6 +315,7 @@ export function App() {
         error?: string
         analyticsData?: { dailyStats: DailyStatRow[]; lifetimeStats: LifetimeStats }
         burnRate?: { sessionId: string; burnRate: BurnRate; projection: Projection | null } | null
+        burnStatus?: import('./types').BurnStatus
         sessions?: SessionSummaryCard[]
         sessionIds?: string[]
         cards?: SessionSummaryCard[]
@@ -355,6 +356,11 @@ export function App() {
             }
           }, 0)
         }
+      } else if (msg.type === 'burnStatus' && msg.burnStatus) {
+        // Realtime server-computed burn status (TRDD-OG9PARZQ) — drives the Alerts-tab server-alerts
+        // section + window-budget readout. The banner for a NEW alert is rendered by the standalone's
+        // SSE intercept (a separate {type:'alert'} message), so here we only store the status.
+        serverBurnStatus.value = msg.burnStatus
       } else if (msg.type === 'sessionChanged' && Array.isArray(msg.sessionIds)) {
         // Live-tail (TRDD-U0UYC38A): the standalone server pushes this the instant a session's raw
         // .jsonl grows — ahead of the ~1s coalesced full summary — so a jsonl-derived session feels

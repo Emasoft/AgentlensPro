@@ -1,11 +1,12 @@
 ---
 trdd-id: OG9PARZQ
 title: Realtime burn-rate alarm + rate-limit window budget — smoke detector, not just microscope
-column: dev
+column: complete
 created: 2026-07-07T13:30:49+0200
-updated: 2026-07-07T15:10:00+0200
+updated: 2026-07-07T18:02:04+0200
 current-owner: null
 assignee: null
+implementation-commits: [319858c34fe91329fa89a2311568bdfca6f42a49]
 priority: 1
 severity: HIGH
 effort: L
@@ -21,6 +22,24 @@ external-refs: []
 ---
 
 # TRDD-OG9PARZQ — Realtime burn-rate alarm + window budget
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-07-07 DONE
+All 5 spec points implemented + verified. Core is the pure module `src/burnMonitor.ts` (rolling
+1-min/5-min tokens/min + $/min per session + global; rolling 5h/7d window budget with nullable
+user-configurable capacity + time-to-exhaustion projection; threshold alerts naming session +
+dominant cause; robust session resolution + full session self-diagnostic). Fed by OTEL `api_request`
+timeline events (attribution) + statusline billing deltas (`src/statuslineUsage.ts` now emits per-turn
+consumption deltas). Wired: standalone SSE burn tick (4s) → `burnStatus` + `alert` push + `/api/burn-status`
++ opt-in macOS notify (AGENTLENS_NOTIFY=1); MCP tools `get_burn_status` + `get_session_status` in both
+call sites (`standalone/server.ts` + `src/extension.ts`); dashboard banner (SSE intercept) + Alerts-tab
+server-burn section (media). Config: env AGENTLENS_WINDOW_5H_TOKENS/_7D_TOKENS + ~/.agentlens/burn-config.json;
+capacity NEVER invented (null → pct/projection null, labeled).
+- Gates GREEN: check-types 0, lint 0 errors, esbuild ok, mocha 260 passing / 1 pending / 0 failing (+18 burn tests).
+- Headless proof (isolated ports, AGENTLENS_NO_TELEMETRY_CONFIG=1, temp DATA_DIR): firehose burst → SSE
+  alert in **2.87s** ("Token burn rate high :: 2,862,000 tok/min … Hottest: synth-fh-sse · cause:
+  agent:fleet-worker-3"); /api/burn-status 5h 85.86% · ETA 1.2min · 4 alert rules fired; get_session_status
+  returned the full field set. Report: reports/burn-monitor/.
+- NEXT ACTION: none — ship. Follow-up (optional): richer dashboard sidebar burn widget.
 
 ## ⏵ STATE — PROPOSAL (awaiting USER evaluation)
 

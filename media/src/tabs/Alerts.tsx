@@ -1,5 +1,5 @@
 import { useState } from 'preact/hooks'
-import { displaySessions, sessionTimelines, sessionCompositions } from '../state'
+import { displaySessions, sessionTimelines, sessionCompositions, serverBurnStatus } from '../state'
 import { buildCacheBreakReport } from '../cacheBreak'
 import { buildDisplaySummary, formatMs } from '../utils'
 import {
@@ -387,6 +387,41 @@ export function checkAlerts(): AlertNotification[] {
   return notifications
 }
 
+// Realtime server-computed burn monitor section (TRDD-OG9PARZQ): live burn rate + rate-limit window
+// budget + any active server-side burn alerts, pushed over SSE (standalone only; null in VS Code where
+// the burn tools are MCP-only). Rendered at the top of the Alerts tab so the smoke-detector signal
+// sits above the post-hoc client alert config.
+function ServerBurnSection() {
+  const burn = serverBurnStatus.value
+  if (!burn) return null
+  const w = burn.window
+  const fmtPct = (p: number | null) => (p === null ? 'n/a (capacity unset)' : p.toFixed(1) + '%')
+  const fmtEta = (m: number | null) => (m === null ? '—' : m <= 0 ? 'exhausted' : m >= 60 ? (m / 60).toFixed(1) + 'h' : Math.round(m) + 'min')
+  return (
+    <div style="border:1px solid var(--border);border-radius:6px;padding:12px 14px;margin-bottom:14px;background:var(--panel-bg)">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <strong style="font-size:13px">Realtime burn monitor</strong>
+        <span style="font-size:11px;color:var(--muted)">{burn.activeSessions} active · {burn.global.oneMin.tokensPerMin.toLocaleString()} tok/min · ${burn.global.costPerHour.toFixed(2)}/hr</span>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:8px;line-height:1.5">
+        5h window: {w.fiveHour.consumedTokens.toLocaleString()} tok · {fmtPct(w.fiveHour.pctConsumed)}{w.fiveHour.minutesToExhaustion !== null ? ' · ~' + fmtEta(w.fiveHour.minutesToExhaustion) + ' to exhaustion' : ''}
+        {' | '}7d window: {w.sevenDay.consumedTokens.toLocaleString()} tok · {fmtPct(w.sevenDay.pctConsumed)}
+        {!w.capacityConfigured && <span style="color:#f6a623"> — set AGENTLENS_WINDOW_5H_TOKENS / AGENTLENS_WINDOW_7D_TOKENS to enable % + projection</span>}
+      </div>
+      {burn.alerts.length > 0 ? burn.alerts.map(a => {
+        const c = a.severity === 'error' ? 'var(--error)' : a.severity === 'info' ? '#4fc3f7' : '#f6a623'
+        return (
+          <div key={a.id} style={`font-size:12px;padding:7px 10px;background:var(--panel-bg);border-radius:4px;border-left:3px solid ${c};margin-bottom:6px;line-height:1.4`}>
+            <strong style={`color:${c}`}>{a.label}</strong> — {a.detail}
+          </div>
+        )
+      }) : (
+        <div style="font-size:12px;color:#81c784">No burn alerts — rate within thresholds.</div>
+      )}
+    </div>
+  )
+}
+
 export function Alerts() {
   const sessions = displaySessions.value
   const [configs, setConfigs] = useState(getAlertConfigs)
@@ -431,6 +466,7 @@ export function Alerts() {
 
   return (
     <div id="alerts-content">
+      <ServerBurnSection />
       <div style="font-size:11px;color:var(--muted);padding:6px 10px;margin-bottom:12px;border-left:2px solid var(--border)">
         <strong>Settings below are adjustable per agent. Reminder: your choice of LLM model significantly affects efficiency and may require threshold adjustments.</strong>
       </div>

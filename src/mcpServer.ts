@@ -26,6 +26,7 @@ import type {
   CacheBreakReport, CacheBreakOffender, ContextHistory, CallContext,
 } from './summarizers/summarizerTypes'
 import { buildCacheBreakReport } from './cacheBreak'
+import type { BurnStatus, SessionStatus } from './burnMonitor'
 import { listSessionFileIds } from './contextComposition'
 import { generateSuggestions } from './instructionAdvisor'
 import { readAllInstructionContent } from './instructionFiles'
@@ -281,6 +282,37 @@ const TOOLS = [
         sessionId: { type: 'string', description: 'Session ID from get_recent_sessions' },
         requestId: { type: 'string', description: 'request_id of the call (from the api_request event / llm_request span); omit to use spanId or the latest call' },
         spanId:    { type: 'string', description: 'spanId of the call\'s llm_request span (alternative to requestId)' },
+      },
+    },
+  },
+  // ── Realtime burn / rate-limit-window monitor (TRDD-OG9PARZQ) ──────────────────
+  {
+    name: 'get_burn_status',
+    description:
+      'Realtime token-burn "smoke detector" across ALL live sessions on this machine: rolling ' +
+      'tokens/min and $/min (1-min + 5-min windows, global + per hottest session), the rate-limit ' +
+      'WINDOW BUDGET (rolling 5h + 7d consumption vs a user-configured capacity, % consumed, and a ' +
+      'time-to-exhaustion PROJECTION at the current rate — capacity/pct/projection are null when the ' +
+      'capacity is unconfigured, never invented), and any active threshold ALERTS (each naming the ' +
+      'session + dominant cause: agent/skill/plugin/mcp/compaction). Use this to self-throttle before ' +
+      'you hit the provider rate-limit wall.',
+    inputSchema: { type: 'object' as const, properties: {} },
+  },
+  {
+    name: 'get_session_status',
+    description:
+      'One-call self-diagnostic for YOUR session (agents rarely know their own sessionId — pass your ' +
+      'workspace path and it resolves the newest LIVE session under that prefix, else the newest ' +
+      'overall labeled live:false). Returns current + peak context usage, the 4 usage buckets (last ' +
+      'turn), the avg-per-call 5 values, cache-hit rate, last-LLM-call cost, session-total cost, ' +
+      'tokens/min rate, remaining 5h + 7d rate-limit-window %, and a compact comparison to your ' +
+      'previous sessions in the same workspace (cost/turns/cache-hit deltas). For the per-turn context ' +
+      'DIFF and composition drill-down, follow up with get_context_history / get_context_composition.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        sessionId: { type: 'string', description: 'Your session id if known (exact match)' },
+        workspace: { type: 'string', description: 'Your workspace path prefix — resolves the newest live session under it' },
       },
     },
   },
@@ -734,6 +766,10 @@ function subAgentChildren(sessions: SessionSummaryCard[], parentId: string) {
 type CompositionAccessor = (sessionId: string) => Promise<ContextComposition | null>
 type HistoryAccessor = (sessionId: string) => Promise<ContextHistory | null>
 type CallContextAccessor = (sessionId: string, sel: { requestId?: string; spanId?: string }) => Promise<CallContext | null>
+// Burn/session status are computed at the accessor site (server/extension) where the live sessions +
+// statusline billing events live; the MCP layer just serializes the ready object (TRDD-OG9PARZQ).
+type BurnStatusAccessor = () => BurnStatus
+type SessionStatusAccessor = (sel: { sessionId?: string; workspace?: string }) => SessionStatus | { message: string; matchedBy: 'none' }
 
 // ── P4 diagnostic tool handlers ───────────────────────────────────────────────
 
@@ -1037,6 +1073,11 @@ export interface McpServerOptions {
    *  (TRDD-ICHAVFCS). Powers get_call_context — the per-call drill target that works for OTEL-only
    *  sessions with no local .jsonl. Async because it reads the (possibly multi-MB) raw body file. */
   getCallContext?: CallContextAccessor
+  /** Realtime burn status across all live sessions (TRDD-OG9PARZQ). Computed in the server/extension
+   *  from the live sessions + statusline billing events; powers get_burn_status. */
+  getBurnStatus?: BurnStatusAccessor
+  /** One-call self-diagnostic for the caller's resolved session; powers get_session_status. */
+  getSessionStatus?: SessionStatusAccessor
 }
 
 export function createMcpServer(opts: McpServerOptions): Server {
@@ -1054,6 +1095,8 @@ export function createMcpServer(opts: McpServerOptions): Server {
     const getComposition = opts.getComposition ?? null
     const getHistory = opts.getHistory ?? null
     const getCallContext = opts.getCallContext ?? null
+    const getBurnStatus = opts.getBurnStatus ?? null
+    const getSessionStatus = opts.getSessionStatus ?? null
 
     let result: unknown
     switch (req.params.name) {
@@ -1118,6 +1161,16 @@ export function createMcpServer(opts: McpServerOptions): Server {
         result = handleGetCallContext(ctx, a)
         break
       }
+      case 'get_burn_status':
+        result = getBurnStatus
+          ? getBurnStatus()
+          : { message: 'Burn monitor unavailable in this runtime (no live session/statusline source wired).' }
+        break
+      case 'get_session_status':
+        result = getSessionStatus
+          ? getSessionStatus(args as { sessionId?: string; workspace?: string })
+          : { message: 'Session status unavailable in this runtime (no live session/statusline source wired).' }
+        break
       default:
         return { content: [{ type: 'text', text: `Unknown tool: ${req.params.name}` }], isError: true }
     }

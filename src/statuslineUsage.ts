@@ -18,6 +18,7 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import type { SessionSummaryCard, StatuslineUsageAgg } from './summarizers/summarizerTypes'
+import type { StatuslineBillingEvent } from './burnMonitor'
 
 /** One raw line of the shared statusline-usage.jsonl (mirrors statusline.py's write_usage_jsonl). */
 interface StatuslineUsageRecord {
@@ -75,6 +76,13 @@ export class StatuslineUsageReader {
   private carry = ''                                   // partial trailing line held across reads
   private readonly agg = new Map<string, StatuslineUsageAgg>()
   private lastRefreshMs = 0
+  // Per-turn billing deltas for the burn monitor (TRDD-OG9PARZQ). Each ingested line yields one event:
+  // deltaCostUsd = the increment of the session's cumulative authoritative cost; deltaTokens = that
+  // turn's 4 usage buckets summed. Bounded to the last 7 days + a hard cap so the firehose can't grow
+  // it without limit. This is the machine-wide, rate-limit-free window-budget source.
+  private billingEvents: StatuslineBillingEvent[] = []
+  private static readonly BILLING_MAX = 100_000
+  private static readonly BILLING_MAX_AGE_MS = 8 * 24 * 60 * 60 * 1000
 
   constructor(filePath?: string) {
     this.filePath = filePath ?? statuslineUsageLogPath()
@@ -101,6 +109,7 @@ export class StatuslineUsageReader {
       this.offset = 0
       this.carry = ''
       this.agg.clear()
+      this.billingEvents = []
     }
     if (size === this.offset) return
 
@@ -147,6 +156,23 @@ export class StatuslineUsageReader {
       contextWindowSize: 0, usedPercentage: 0, totalCostUsd: 0,
       peakContextTokens: 0, samples: 0, lastTs: 0,
     }
+    // Billing delta for the burn monitor (before mutating the aggregate): the increment of the
+    // cumulative authoritative cost, and this turn's 4 usage buckets summed. total_cost_usd is
+    // cumulative, so the delta is real incremental spend; a rotated/shrunk file resets prevCost to 0
+    // (agg was cleared in refresh()), so the first line after a reset counts from 0 (over-counts at
+    // most one turn — acceptable, and never negative).
+    const prevCost = a.totalCostUsd
+    const newCost = num(rec.total_cost_usd)
+    const deltaTokens = num(rec.input_tokens) + num(rec.output_tokens)
+      + num(rec.cache_creation_input_tokens) + num(rec.cache_read_input_tokens)
+    const deltaCost = Math.max(0, newCost - prevCost)
+    if (deltaTokens > 0 || deltaCost > 0) {
+      this.billingEvents.push({
+        ts: num(rec.ts), sessionId: sid, workspace: rec.project_dir || undefined,
+        deltaCostUsd: deltaCost, deltaTokens,
+      })
+    }
+
     // Latest-wins for the snapshot fields (lines are appended in time order; the ts guard keeps a
     // late/out-of-order line from clobbering a newer snapshot).
     if (num(rec.ts) >= a.lastTs) {
@@ -171,6 +197,19 @@ export class StatuslineUsageReader {
   /** Returns the aggregate for a session, or undefined if it never wrote a statusline line. */
   get(sessionId: string): StatuslineUsageAgg | undefined {
     return this.agg.get(sessionId)
+  }
+
+  /** Per-turn billing deltas for the burn monitor, pruned to the last ~8 days + a hard cap. Refreshes
+   *  the tail first so the caller always gets current data (cheap — throttled). */
+  getBillingEvents(now = Date.now()): StatuslineBillingEvent[] {
+    this.refreshIfStale()
+    const cutoffSec = (now - StatuslineUsageReader.BILLING_MAX_AGE_MS) / 1000
+    if (this.billingEvents.length > StatuslineUsageReader.BILLING_MAX || this.billingEvents.some(e => e.ts < cutoffSec)) {
+      this.billingEvents = this.billingEvents
+        .filter(e => e.ts >= cutoffSec)
+        .slice(-StatuslineUsageReader.BILLING_MAX)
+    }
+    return this.billingEvents
   }
 
   /**

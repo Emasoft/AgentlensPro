@@ -95,6 +95,10 @@ export interface SessionSummaryCard {
   // scratch index hit its cap.
   generatedFiles?: GeneratedFileRef[]
   generatedFilesTruncated?: boolean
+  // Mirror of summarizerTypes.ts cost-integrity flags (TRDD-ZK37VG4X). unpriced = token traffic
+  // with no pricing-table entry for the model: cost is UNKNOWN, not $0 — badge it, never hide it.
+  unpriced?: boolean
+  mergedFrom?: string[]
 }
 
 // Mirror of src/summarizers/summarizerTypes.ts GeneratedFileRef (TRDD-ZS1GDXVY). One output file
@@ -380,6 +384,34 @@ export interface Projection {
   totalCostUsd: number
   remainingMinutes: number
   contextFillPct: number
+}
+
+// ── Realtime burn monitor (TRDD-OG9PARZQ) — mirrors the subset of src/burnMonitor.ts the UI reads.
+export interface BurnAlert {
+  id: string
+  rule: string
+  severity: 'error' | 'warning' | 'info'
+  label: string
+  detail: string
+  sessionId: string | null
+  cause: string | null
+}
+
+export interface BurnWindowConsumption {
+  window: string
+  consumedTokens: number
+  consumedCostUsd: number
+  capacityTokens: number | null
+  pctConsumed: number | null
+  minutesToExhaustion: number | null
+}
+
+export interface BurnStatus {
+  now: number
+  global: { oneMin: { tokensPerMin: number; costPerMin: number }; fiveMin: { tokensPerMin: number; costPerMin: number }; costPerHour: number }
+  window: { fiveHour: BurnWindowConsumption; sevenDay: BurnWindowConsumption; capacityConfigured: boolean; note?: string }
+  alerts: BurnAlert[]
+  activeSessions: number
 }
 
 export interface SearchQuery {

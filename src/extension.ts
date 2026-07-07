@@ -16,7 +16,11 @@ import { runRetention } from './database/retention'
 import { SessionRepository } from './sessionRepository'
 import { summarizeSpans } from './spanSummarizer'
 import { LogReader } from './logReader'
+import * as os from 'os'
 import { StatuslineUsageReader } from './statuslineUsage'
+import {
+  loadBurnConfig, gatherConsumptionEvents, computeBurnStatus, computeSessionStatus,
+} from './burnMonitor'
 import { detectLoopSignals } from './loopDetector'
 import { startMcpHttpServer } from './mcpServer'
 import { buildContextComposition } from './contextComposition'
@@ -28,6 +32,10 @@ let outputChannel: vscode.OutputChannel | undefined
 let agentLensDb: AgentLensDb | undefined
 let writer: DatabaseWriter | undefined
 let repository: SessionRepository | undefined
+// Hoisted so the MCP burn tools (TRDD-OG9PARZQ) can reach the statusline billing events; assigned when
+// log ingestion is enabled, undefined otherwise (the burn tools then have no statusline source but still
+// work off api_request timeline events).
+let statuslineReaderRef: StatuslineUsageReader | undefined
 let logReaderTimer: ReturnType<typeof setInterval> | undefined
 let runLogScanFn: (() => void) | undefined
 
@@ -221,6 +229,7 @@ export async function activate(context: vscode.ExtensionContext) {
     // P7: overlays authoritative context size + cost from the Claude Code statusline usage log onto
     // each card before it is persisted. No-op for sessions (or agents) that wrote no statusline line.
     const statuslineReader = new StatuslineUsageReader()
+    statuslineReaderRef = statuslineReader
     const fallbackWorkspace = () => vscode.workspace.workspaceFolders?.[0]?.uri.toString() ?? ''
 
     // Periodic incremental scan: only picks up files that have changed since last run.
@@ -539,11 +548,23 @@ export async function activate(context: vscode.ExtensionContext) {
   const enableMcp = vscode.workspace.getConfiguration('agentLens').get<boolean>('enableMcpServer', true)
   if (enableMcp) {
     const mcpPort = vscode.workspace.getConfiguration('agentLens').get<number>('mcpPort', 4316)
+    const burnConfig = loadBurnConfig(process.env, os.homedir())
+    // Gather the live consumption event stream once per burn-tool call (TRDD-OG9PARZQ).
+    const gatherExtBurn = () => {
+      const now = Date.now()
+      const sessions = repository?.listSessions() ?? []
+      const events = gatherConsumptionEvents(sessions, statuslineReaderRef?.getBillingEvents(now) ?? [], now)
+      return { sessions, events, now }
+    }
     const mcpServer = startMcpHttpServer(
       { getSessions: () => repository?.listSessions() ?? [],
         getTimeline: (id) => repository?.loadSessionTimeline(id) ?? [],
         // Reconstruct the per-turn context composition on demand (P4 inflation / cache-break tools).
-        getComposition: (id) => buildContextComposition(id) },
+        getComposition: (id) => buildContextComposition(id),
+        // Realtime burn status + one-call session self-diagnostic (TRDD-OG9PARZQ).
+        getBurnStatus: () => { const { sessions, events, now } = gatherExtBurn(); return computeBurnStatus(events, sessions, burnConfig, now) },
+        getSessionStatus: (sel) => { const { sessions, events, now } = gatherExtBurn(); return computeSessionStatus(sessions, events, burnConfig, sel, now) },
+      },
       mcpPort,
     )
     context.subscriptions.push({ dispose: () => mcpServer.close() })
