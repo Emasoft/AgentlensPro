@@ -1687,11 +1687,16 @@ uiServer.listen(UI_PORT, BIND_HOST, () => {
   console.log(`[AgentLens] Dashboard      → ${url}`)
   console.log(`[AgentLens] MCP server     → http://localhost:${MCP_PORT}/mcp`)
 
-  // Auto-open browser
-  const cmd = process.platform === 'darwin' ? `open "${url}"`
-            : process.platform === 'win32'  ? `start "" "${url}"`
-            : `xdg-open "${url}"`
-  exec(cmd, err => { if (err) console.log(`\nOpen ${url} in your browser\n`) })
+  // Browser opening is OPT-IN ONLY (AGENTLENS_OPEN_BROWSER=1 or --open), matching
+  // scripts/dev-server.js. It used to fire unconditionally, which threw a Safari window in the
+  // user's face on EVERY server restart — dev/agent restarts are frequent and headless
+  // (dev-browser) is the debugging path, so a surprise foreground browser is pure noise.
+  if (process.env.AGENTLENS_OPEN_BROWSER === '1' || process.argv.includes('--open')) {
+    const cmd = process.platform === 'darwin' ? `open "${url}"`
+              : process.platform === 'win32'  ? `start "" "${url}"`
+              : `xdg-open "${url}"`
+    exec(cmd, err => { if (err) console.log(`\nOpen ${url} in your browser\n`) })
+  }
 
   // Start log ingestion after the server is ready
   startLogIngestion()
