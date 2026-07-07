@@ -16,7 +16,7 @@ release-via: none
 target-branch: fix/logreader-large-jsonl
 test-requirements: [typecheck, lint]
 impacts: []
-implementation-commits: []
+implementation-commits: [a92d0af]
 external-refs: []
 ---
 
