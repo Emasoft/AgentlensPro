@@ -1,9 +1,9 @@
 ---
 trdd-id: 62E8UU41
 title: Spawn-cost rollup + cache-friendly-spawn advisor — auto-detect the fleet-of-cold-forks burn
-column: planned
+column: dev
 created: 2026-07-07T13:30:49+0200
-updated: 2026-07-07T15:25:00+0200
+updated: 2026-07-07T23:45:00+0200
 current-owner: null
 assignee: null
 priority: 2
