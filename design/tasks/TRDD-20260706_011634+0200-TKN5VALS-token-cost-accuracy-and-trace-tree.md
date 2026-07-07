@@ -43,6 +43,7 @@ Plus:
 - **R-B** the `.jsonl` must be **tailed in REALTIME** (today only OTEL data is live; jsonl-derived content lags a rescan). Every jsonl change reflected live.
 - **R-C** every **output file** written into a project-slug subfolder tracked + shown as an **expandable leaf** with its content.
 - **R-G** a token count on **everything** — from jsonl usage, OTEL, debug hooks, or a **local tiktoken-like tokenizer** when no usage bucket applies (today it is bytes/4).
+- **R-H** AgentLens must IDENTIFY + DIAGNOSE the exact burn-event points (cache break, massive cache-create, model switch, fleet/fork spawn) and make them VISUALLY OBVIOUS in the trace — red-tinted row + 🔴/⚡ emoji label + the one-line CAUSE — so similar events are instantly pinpointable.
 
 **DONE THIS SESSION (P8 groundwork, LOCAL commits on branch fix/logreader-large-jsonl, NOT pushed):**
 - `497f019` fork/sub-agent composition fallback — reconstruct from nearest LOGGED ancestor (`resolveLoggedAncestor`), `reconstructedFrom` tag, `budgetedKids`/`mergeSources`, honest `compNote` (no more perpetual "loading"). tsc+esbuild clean; headless drill verify still pending.
@@ -50,14 +51,13 @@ Plus:
 
 **BURN DIAGNOSIS (proof the instrument works, 2026-07-07):** parent `28e3a88d-…` = 5MB jsonl (~1.25M-tok transcript); OTEL mains `synth-ae58`=10.23M input (9.96M cache-read), `8cd52574`=16.98M input (16.67M cache-read) per ~2-min window; a fable-5 parent spawned a FLEET of forks each re-billing the inherited multi-M-token transcript ⇒ millions of tokens/minute. get_context_inflation_report on 28e3a88d works (agent catalog / hooks / skill catalog itemized) BUT the DOMINANT sink — the accumulated transcript — is only the un-itemized remainder → P8 must itemize it.
 
-**NEXT ACTION (P8 build order):**
-1. `src/contextHistory.ts` (NEW): stream the jsonl and emit, per STEP, an ORDERED list of content blocks covering ALL record types (system/CLAUDE.md/rule/catalog/mcp/file/toolInput/toolOutput/bashIn/bashOut/hook/skillPrompt/agentPrompt/userMsg/assistantMsg/postCompact/subagentOutput/harness/cron), each block = {kind, label, FULL text (blob-backed), tokens, usage buckets where applicable, cost}. Compute per-step DIFF (added/changed/removed by stable block identity + content hash; first change = break point). Reuse fork/ancestor fallback.
-2. MCP `get_context_history(sessionId, turn?, blockId?)` + HTTP route `/api/history/:id`; blob-backed full-content lazy fetch.
-3. Webview: extend the Traces drill-tree so EVERY node bottoms out in actual content + per-node token/usage/cost + the step DIFF badges. No inner scrollbars (page grows).
-4. **R-B** realtime: `fs.watch` the active jsonl, incremental tail, push over the existing SSE; dashboard live-updates the tree.
-5. **R-C** output-file tracker: index files under each project-slug subfolder (scratchpad/reports/etc.), attach as leaves on the step that wrote them.
-6. **R-G** local tokenizer for per-block counts (evaluate a pure-JS tiktoken — supply-chain gated; else a better-than-bytes/4 heuristic, labeled).
-7. Rebuild → HEADLESS verify on 28e3a88d + a fork → reconstruct the million-token diff; TRDD.
+**NEXT ACTION (P8 build order) — updated 2026-07-07:**
+1. ✅ DONE `bd15106` — `src/contextHistory.ts` (all record kinds, FULL text 20k/block cap, per-block tokens+taxonomy+role, per-step usage buckets + DIFF added/changed/removed + firstChangeBlockId; fork/ancestor fallback). MCP `get_context_history(sessionId, turn?, blockId?)` (progressive summaries→step→block) + `/api/history/:id` route + getHistory accessor. VERIFIED on 28e3a88d: 357 steps; dominant sink postCompact 267,921 tok x314; turn 315 = input 2 / cacheRead 18347 / **cacheCreate 242,363** with diff.firstChange=toolOutput:ToolSearch + whole prior prefix in `removed` (the exact /compact prefix-rewrite call).
+2. 🔄 IN FLIGHT — Webview `media/src/tabs/HistoryTab.tsx` (new `History` tab): per-step rows w/ usage buckets + cost, expand→blocks (kind-colored badges + token + role + diff badges), expand block→FULL text (no inner scroll), + **R-H burn-event RED highlights** (massive cache-create / cache break / model switch / fleet spawn + one-line cause). Delegated to opus agent; headless-verify on 28e3a88d turn 315.
+3. **R-B** realtime: `fs.watch` the active jsonl, incremental tail, push over the existing SSE build-id channel; dashboard live-updates.
+4. **R-C** output-file tracker: index files under each project-slug subfolder (scratchpad/reports/etc.), attach as leaves on the step that wrote them.
+5. **R-G** local tokenizer for per-block counts (pure-JS tiktoken — supply-chain gated; else better-than-bytes/4 heuristic, labeled).
+6. Then resume the DEFERRED VS-code-extension removal (R-E).
 
 **SUPERSEDED — do NOT carry forward:** "column=complete", "ALL PHASES COMPLETE", and any claim the drill/composition is finished — P8 supersedes. The excerpt cap (1200 char) and attachment-only parse are the specific things P8 replaces.
 
