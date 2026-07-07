@@ -24,7 +24,11 @@ const BLOBS_DIR = 'blobs'
 // the next scan re-ingests every local session file with the current semantics. OTEL rows
 // are left untouched (they can't be re-derived from logs — see reIngestLogRowsIfStale).
 //   v2 (TRDD-TKN5VALS): per-turn `turn` index + de-inflated input_tokens + sub-agent rollup.
-const INGEST_VERSION = 2
+// v3: sub-agent child cards stored inputTokens as the RAW (cache-excluded) input, breaking the
+// parent/OTEL convention that inputTokens is total-incl-cache — so cost's `input - cacheRead -
+// cacheCreate` went hugely negative (negative sub-agent cost). Fixed in _buildSubAgentCards; bump
+// forces a re-ingest so historical log-sourced child rows are rewritten with the correct accounting.
+const INGEST_VERSION = 3
 
 /**
  * Opens (or creates) the AgentLens SQLite database at storagePath/agentlens.db

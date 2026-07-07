@@ -1645,7 +1645,12 @@ function _buildSubAgentCards(parentSessionId: string, a: ClaudeAccum): SessionSu
       userRequest: (sub.prompt ?? sub.agentType ?? 'sub-agent').slice(0, 500),
       model: sub.model || a.model || 'claude',
       turns: 1,
-      inputTokens: sub.input,
+      // inputTokens is stored TOTAL-incl-cache to match the parent/OTEL convention (claude.ts:143,340;
+      // logReader.ts:1888). sessionCost() and the cost writer recover the uncached input by subtracting
+      // cacheRead+cacheCreate, so a raw `sub.input` (which EXCLUDES cache) made that subtraction go
+      // hugely negative → negative sub-agent cost. Adding the cache buckets back keeps the invariant
+      // inputTokens - cacheRead - cacheCreate == uncached input (== sub.input, always >= 0).
+      inputTokens: sub.input + sub.cacheRead + sub.cacheCreate,
       outputTokens: sub.output,
       cacheReadTokens: sub.cacheRead,
       cacheCreateTokens: sub.cacheCreate,
