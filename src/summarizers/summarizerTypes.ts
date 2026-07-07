@@ -95,7 +95,10 @@ export interface FileOpSummary {
 }
 
 export interface TimelineEntry {
-  type: 'llm' | 'tool' | 'user_input' | 'background'
+  // 'api_request' / 'compaction' / 'api_error' are log-derived Claude Code events (from the OTEL
+  // LOG records claude_code.api_request / .compaction / .api_error|.api_retries_exhausted). They
+  // carry per-call ground truth (exact cost + attribution) the llm_request SPANS lack.
+  type: 'llm' | 'tool' | 'user_input' | 'background' | 'api_request' | 'compaction' | 'api_error'
   spanId: string
   label: string
   turn?: number   // 1-based turn (assistant message) index this entry belongs to; backbone for the trace tree
@@ -122,6 +125,21 @@ export interface TimelineEntry {
   // sessions so the webview knows it can lazy-fetch the FULL tool output via loadBlob('full-result').
   // Absent on live/in-memory sessions (their entries carry fullResult inline already).
   hasBlob?: boolean
+  // ── Attribution + burn fields for the log-derived Claude Code events ──────────
+  // (type === 'api_request' | 'compaction' | 'api_error'). All optional; only set on those entries.
+  costUsd?: number           // api_request: exact per-call cost (cost_usd) — ground truth, not estimated
+  querySource?: string       // api_request: repl_main_thread | compact | <subagent name>
+  agentName?: string         // api_request: agent.name (which sub-agent issued the call)
+  skillName?: string         // api_request: skill.name
+  pluginName?: string        // api_request: plugin.name
+  mcpServerName?: string     // api_request: mcp_server.name
+  mcpToolName?: string       // api_request: mcp_tool.name
+  requestId?: string         // api_request / api_error: request_id (correlates with an llm_request span)
+  compactionTrigger?: string // compaction: auto | manual
+  preTokens?: number         // compaction: context tokens before compaction
+  postTokens?: number        // compaction: context tokens after compaction
+  statusCode?: number        // api_error / api_retries_exhausted: HTTP status
+  attempts?: number          // api_error: attempt # · api_retries_exhausted: total_attempts
 }
 
 export interface EditDetail {

@@ -303,6 +303,86 @@ export function buildClaudeSessions(
       }
     }
 
+    // ── Log-derived rich Claude Code events (api_request / compaction / api_error) ────────────────
+    // These arrive as OTEL LOG records (ingested by OtlpCollector.processLogs keyed by session.id)
+    // and carry the per-call ground truth the llm_request SPANS lack: exact cost + WHO caused the
+    // call (query_source / agent / skill / plugin / mcp). Each becomes its own timeline entry.
+    // IMPORTANT: api_request tokens are deliberately NOT added to the session aggregate totals — the
+    // llm_request spans already count them; adding them here would double-count the session.
+    const richEventSpans = traceSpans.filter(s =>
+      s.name === 'claude_code.api_request' ||
+      s.name === 'claude_code.compaction' ||
+      s.name === 'claude_code.api_error' ||
+      s.name === 'claude_code.api_retries_exhausted'
+    )
+    for (const rs of richEventSpans) {
+      const rsStart = nanoToMs(rs.startTime)
+      const rsTs = rsStart > 0 ? new Date(rsStart).toISOString() : ''
+      const rsDur = getAttrInt(rs, 'duration_ms') || (nanoToMs(rs.endTime) - rsStart) || 0
+      const rsModel = getGenAiModel(rs)
+      if (rs.name === 'claude_code.api_request') {
+        const { input, output, cacheRead, cacheCreate } = extractTokenCounts(rs)
+        const costStr = getAttrStr(rs, 'cost_usd')
+        timeline.push({
+          type: 'api_request' as const,
+          spanId: rs.spanId,
+          label: 'api_request',
+          model: rsModel || undefined,
+          inputTokens: input || undefined,
+          outputTokens: output || undefined,
+          cacheReadTokens: cacheRead || undefined,
+          cacheCreateTokens: cacheCreate || undefined,
+          costUsd: costStr ? Number(costStr) : undefined,
+          querySource: getAttrStr(rs, 'query_source') || undefined,
+          agentName: getAttrStr(rs, 'agent.name') || undefined,
+          skillName: getAttrStr(rs, 'skill.name') || undefined,
+          pluginName: getAttrStr(rs, 'plugin.name') || undefined,
+          mcpServerName: getAttrStr(rs, 'mcp_server.name') || undefined,
+          mcpToolName: getAttrStr(rs, 'mcp_tool.name') || undefined,
+          requestId: getAttrStr(rs, 'request_id') || undefined,
+          durationMs: rsDur,
+          isError: false,
+          timestamp: rsTs,
+        })
+      } else if (rs.name === 'claude_code.compaction') {
+        timeline.push({
+          type: 'compaction' as const,
+          spanId: rs.spanId,
+          label: 'compaction',
+          compactionTrigger: getAttrStr(rs, 'trigger') || undefined,
+          preTokens: getAttrInt(rs, 'pre_tokens') || undefined,
+          postTokens: getAttrInt(rs, 'post_tokens') || undefined,
+          durationMs: rsDur,
+          isError: getAttrStr(rs, 'success') === 'false',
+          timestamp: rsTs,
+        })
+      } else {
+        // claude_code.api_error / claude_code.api_retries_exhausted
+        errors++
+        const statusStr = getAttrStr(rs, 'status_code')
+        const attemptsStr = getAttrStr(rs, 'attempt') || getAttrStr(rs, 'total_attempts')
+        timeline.push({
+          type: 'api_error' as const,
+          spanId: rs.spanId,
+          label: rs.name === 'claude_code.api_retries_exhausted' ? 'api_retries_exhausted' : 'api_error',
+          model: rsModel || undefined,
+          statusCode: statusStr ? Number(statusStr) : undefined,
+          attempts: attemptsStr ? Number(attemptsStr) : undefined,
+          durationMs: rsDur,
+          isError: true,
+          errorMessage: getAttrStr(rs, 'error') || undefined,
+          timestamp: rsTs,
+        })
+      }
+    }
+    // Re-order chronologically after appending the log-derived entries. Entries with no timestamp
+    // (rare) sort last so a missing ISO string can't scramble the well-timed entries.
+    const tsKey = (e: TimelineEntry) => {
+      const t = Date.parse(e.timestamp || '')
+      return Number.isNaN(t) ? Number.MAX_SAFE_INTEGER : t
+    }
+    timeline.sort((a, b) => tsKey(a) - tsKey(b))
+
     const workspace = findProjectRoot(commonPathPrefix([...allAbsFilePaths]))
 
     const startMs = nanoToMs(interaction.startTime)

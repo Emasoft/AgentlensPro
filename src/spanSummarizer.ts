@@ -74,7 +74,12 @@ export function summarizeSpans(spans: Span[]) {
   const existingInteractionTraceIds = new Set(claudeInteractionSpans.map(s => s.traceId).filter(Boolean))
   for (const [traceId, traceSpans] of Object.entries(spansByTraceId)) {
     if (existingInteractionTraceIds.has(traceId)) { continue }
-    const hasClaudeSpans = traceSpans.some(s => s.name === 'claude_code.llm_request' || s.name === 'claude_code.tool')
+    const hasClaudeSpans = traceSpans.some(s =>
+      s.name === 'claude_code.llm_request' || s.name === 'claude_code.tool' ||
+      // Log-only sessions may carry ONLY the rich log-derived events (no llm_request/tool spans);
+      // still surface them so their per-call cost/attribution + compaction markers are visible.
+      s.name === 'claude_code.api_request' || s.name === 'claude_code.compaction' ||
+      s.name === 'claude_code.api_error' || s.name === 'claude_code.api_retries_exhausted')
     if (!hasClaudeSpans) { continue }
     const sorted = traceSpans.slice().sort((a, b) => (a.startTime ?? '0') < (b.startTime ?? '0') ? -1 : 1)
     claudeInteractionSpans.push({
