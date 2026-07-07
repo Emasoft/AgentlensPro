@@ -1,9 +1,9 @@
 ---
 trdd-id: TKN5VALS
 title: Fix Claude token/cost accounting + 5-value expandable trace tree, sticky headers, Context tab
-column: complete
+column: dev
 created: 2026-07-06T01:16:34+0200
-updated: 2026-07-06T15:18:06+0200
+updated: 2026-07-07T10:16:39+0200
 current-owner: claude-opus-4-8
 assignee: claude-opus-4-8
 priority: 2
@@ -25,9 +25,45 @@ external-refs: []
 
 # TRDD-TKN5VALS — Token/cost accuracy + expandable 5-value trace tree
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-06
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-07
 
-### ✅ ALL PHASES COMPLETE (P1 accounting · P2 trace UI · P3 backbone · P4 diagnosis + MCP + dev). column=complete.
+### 🔴 REOPENED as P8 — "complete context-history browser" (column=dev). P1-P4 shipped; P8 is the user's crystallized demand and is NOT done.
+
+**WHY reopened:** P4 verified the cache-bar drill ONLY on a `.jsonl`-backed session; forks/OTEL dead-ended,
+and the drill showed 1200-char EXCERPTS + only `attachment` records — not the full content of every block.
+The user (2026-07-07, multiple messages) demands a COMPLETE, LIVE, per-token context-history browser.
+
+**P8 REQUIREMENT (verbatim intent, consolidated from the 2026-07-07 messages):**
+The trace tree of each session must be expandable **until it shows the ACTUAL content**:
+file content, text output, bash input AND output, tool inputs AND outputs, hook injections,
+skill prompts, agent prompts, messages, cron injections — **everything** — each node carrying
+**its own token count + taxonomy (kind) + the 4 usage buckets (input/output/cache-read/cache-creation) + cost**.
+Plus:
+- **R-A** per-STEP expandable content with a step-by-step **DIFF** (what block was added/changed/removed vs prev step → the cache-break point).
+- **R-B** the `.jsonl` must be **tailed in REALTIME** (today only OTEL data is live; jsonl-derived content lags a rescan). Every jsonl change reflected live.
+- **R-C** every **output file** written into a project-slug subfolder tracked + shown as an **expandable leaf** with its content.
+- **R-G** a token count on **everything** — from jsonl usage, OTEL, debug hooks, or a **local tiktoken-like tokenizer** when no usage bucket applies (today it is bytes/4).
+
+**DONE THIS SESSION (P8 groundwork, LOCAL commits on branch fix/logreader-large-jsonl, NOT pushed):**
+- `497f019` fork/sub-agent composition fallback — reconstruct from nearest LOGGED ancestor (`resolveLoggedAncestor`), `reconstructedFrom` tag, `budgetedKids`/`mergeSources`, honest `compNote` (no more perpetual "loading"). tsc+esbuild clean; headless drill verify still pending.
+- `0e00ad3` NEGATIVE-COST fix (central `sessionCost`): two conventions coexist by dataSource (OTEL=incl-cache, LOG-fork=raw); the −$83/−$47 fork costs HID the fleet-of-forks burn. Verified exact vs live cards (agent-aeb in=274 vs cache=3.52M; synth-ae58 in=10.23M≈cache). Burn now VISIBLE.
+
+**BURN DIAGNOSIS (proof the instrument works, 2026-07-07):** parent `28e3a88d-…` = 5MB jsonl (~1.25M-tok transcript); OTEL mains `synth-ae58`=10.23M input (9.96M cache-read), `8cd52574`=16.98M input (16.67M cache-read) per ~2-min window; a fable-5 parent spawned a FLEET of forks each re-billing the inherited multi-M-token transcript ⇒ millions of tokens/minute. get_context_inflation_report on 28e3a88d works (agent catalog / hooks / skill catalog itemized) BUT the DOMINANT sink — the accumulated transcript — is only the un-itemized remainder → P8 must itemize it.
+
+**NEXT ACTION (P8 build order):**
+1. `src/contextHistory.ts` (NEW): stream the jsonl and emit, per STEP, an ORDERED list of content blocks covering ALL record types (system/CLAUDE.md/rule/catalog/mcp/file/toolInput/toolOutput/bashIn/bashOut/hook/skillPrompt/agentPrompt/userMsg/assistantMsg/postCompact/subagentOutput/harness/cron), each block = {kind, label, FULL text (blob-backed), tokens, usage buckets where applicable, cost}. Compute per-step DIFF (added/changed/removed by stable block identity + content hash; first change = break point). Reuse fork/ancestor fallback.
+2. MCP `get_context_history(sessionId, turn?, blockId?)` + HTTP route `/api/history/:id`; blob-backed full-content lazy fetch.
+3. Webview: extend the Traces drill-tree so EVERY node bottoms out in actual content + per-node token/usage/cost + the step DIFF badges. No inner scrollbars (page grows).
+4. **R-B** realtime: `fs.watch` the active jsonl, incremental tail, push over the existing SSE; dashboard live-updates the tree.
+5. **R-C** output-file tracker: index files under each project-slug subfolder (scratchpad/reports/etc.), attach as leaves on the step that wrote them.
+6. **R-G** local tokenizer for per-block counts (evaluate a pure-JS tiktoken — supply-chain gated; else a better-than-bytes/4 heuristic, labeled).
+7. Rebuild → HEADLESS verify on 28e3a88d + a fork → reconstruct the million-token diff; TRDD.
+
+**SUPERSEDED — do NOT carry forward:** "column=complete", "ALL PHASES COMPLETE", and any claim the drill/composition is finished — P8 supersedes. The excerpt cap (1200 char) and attachment-only parse are the specific things P8 replaces.
+
+---
+
+### ✅ P1-P4 SHIPPED (history; superseded by P8 where they conflict)
 
 **P4 DONE (2026-07-06) — steps 1-7 all landed, LOCAL commits only (branch fix/logreader-large-jsonl, NOT pushed):**
 - Steps 1-2 (`38714bf`, `1f3a8d1`, `c86bfc9`): composition tracer wired end-to-end
