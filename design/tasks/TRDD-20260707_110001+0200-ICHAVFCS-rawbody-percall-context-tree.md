@@ -1,11 +1,12 @@
 ---
 trdd-id: ICHAVFCS
 title: Per-call full context tree from OTEL raw API bodies — click any call, see the whole context
-column: todo
+column: complete
 created: 2026-07-07T11:00:01+0200
-updated: 2026-07-07T11:00:01+0200
-current-owner: null
-assignee: null
+updated: 2026-07-07T12:05:00+0200
+current-owner: claude-opus-4-8
+assignee: claude-opus-4-8
+implementation-commits: [94bef67, 0ade84d]
 priority: 0
 severity: HIGH
 effort: XL
