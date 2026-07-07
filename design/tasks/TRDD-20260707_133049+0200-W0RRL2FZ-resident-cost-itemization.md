@@ -1,9 +1,9 @@
 ---
 trdd-id: W0RRL2FZ
 title: Resident-cost itemization — rank every context block by tokens × turns-resident, itemize the transcript remainder
-column: planned
+column: dev
 created: 2026-07-07T13:30:49+0200
-updated: 2026-07-07T15:25:00+0200
+updated: 2026-07-07T19:17:00+0200
 current-owner: null
 assignee: null
 priority: 2
