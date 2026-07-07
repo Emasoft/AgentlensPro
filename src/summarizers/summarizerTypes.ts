@@ -168,6 +168,54 @@ export interface ContextComposition {
   reconstructedFrom?: string
 }
 
+// ── Context-history reconstruction (per-STEP, TRDD-TKN5VALS) ───────────────────
+// A step-by-step reconstruction of the ACTUAL context blocks present at each assistant turn of a
+// Claude session, with per-block token estimate (bytes/4) + taxonomy, and a turn-to-turn diff
+// (what blocks were added / removed / changed). Built lazily from the raw .jsonl by
+// buildContextHistory so the trace tree can drill from a turn down to the real injected content of
+// every block. Token figures are ESTIMATES and surfaced as such (estimated: true).
+export type ContextBlockKind =
+  | 'system' | 'claudemd' | 'rule' | 'toolCatalog' | 'skillCatalog' | 'agentCatalog' | 'mcp'
+  | 'file' | 'toolInput' | 'toolOutput' | 'bashInput' | 'bashOutput' | 'hook' | 'skillPrompt'
+  | 'agentPrompt' | 'userMsg' | 'assistantMsg' | 'reasoning' | 'postCompact' | 'subagentOutput'
+  | 'harness' | 'cron' | 'reminder' | 'other'
+
+export interface ContextBlock {
+  id: string                  // stable identity `${kind}:${label}` (diffed turn-to-turn)
+  kind: ContextBlockKind
+  label: string
+  tokens: number              // approximate (bytes / 4)
+  bytes: number
+  text: string                // the ACTUAL injected content (capped per block)
+  role: 'input' | 'output'
+  toolName?: string
+}
+
+export interface StepDiff {
+  added: string[]             // block ids present this step but not the previous
+  removed: string[]           // block ids present the previous step but not this
+  changed: string[]           // block ids in both whose text-hash differs
+  firstChangeBlockId?: string // first (in block order) id that is in added ∪ changed
+}
+
+export interface ContextHistoryStep {
+  turn: number
+  timestamp?: string
+  model?: string
+  usage?: { input: number; output: number; cacheRead: number; cacheCreate: number }
+  blocks: ContextBlock[]
+  diff: StepDiff
+}
+
+export interface ContextHistory {
+  sessionId: string
+  steps: ContextHistoryStep[]
+  estimated: true             // marker: token figures here are approximate
+  truncated: boolean          // true if the session was larger than the parse cap
+  // Set when reconstructed from a DIFFERENT session's transcript (fork / sub-agent with no own log).
+  reconstructedFrom?: string
+}
+
 // ── Cache-break diagnosis (P4, TRDD-TKN5VALS) ─────────────────────────────────
 // The prompt cache is a PREFIX cache: turn N reuses turn N-1 only up to the first byte that differs;
 // everything after is re-billed as cache_creation (write rate) instead of cache_read (~10% of input).

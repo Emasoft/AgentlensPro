@@ -168,6 +168,46 @@ export interface ContextComposition {
   reconstructedFrom?: string
 }
 
+// Mirror of src/summarizers/summarizerTypes.ts — per-STEP context-history reconstruction. Each step
+// carries the ACTUAL context blocks at that assistant turn (per-block token estimate + taxonomy) and
+// a turn-to-turn diff. Loaded on demand so the trace tree can drill to real block content.
+export type ContextBlockKind =
+  | 'system' | 'claudemd' | 'rule' | 'toolCatalog' | 'skillCatalog' | 'agentCatalog' | 'mcp'
+  | 'file' | 'toolInput' | 'toolOutput' | 'bashInput' | 'bashOutput' | 'hook' | 'skillPrompt'
+  | 'agentPrompt' | 'userMsg' | 'assistantMsg' | 'reasoning' | 'postCompact' | 'subagentOutput'
+  | 'harness' | 'cron' | 'reminder' | 'other'
+export interface ContextBlock {
+  id: string
+  kind: ContextBlockKind
+  label: string
+  tokens: number
+  bytes: number
+  text: string
+  role: 'input' | 'output'
+  toolName?: string
+}
+export interface StepDiff {
+  added: string[]
+  removed: string[]
+  changed: string[]
+  firstChangeBlockId?: string
+}
+export interface ContextHistoryStep {
+  turn: number
+  timestamp?: string
+  model?: string
+  usage?: { input: number; output: number; cacheRead: number; cacheCreate: number }
+  blocks: ContextBlock[]
+  diff: StepDiff
+}
+export interface ContextHistory {
+  sessionId: string
+  steps: ContextHistoryStep[]
+  estimated: true
+  truncated: boolean
+  reconstructedFrom?: string
+}
+
 // Mirror of src/summarizers/summarizerTypes.ts — cache-break diagnosis (P4). A prefix cache breaks
 // at the first divergent block turn-to-turn; these carry the per-turn verdict + ranked offenders the
 // Cache tab / trace markers render. Sizing is an estimate; the cause taxonomy pinpoints WHY.

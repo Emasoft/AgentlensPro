@@ -20,6 +20,7 @@ import { startMcpHttpServer } from '../src/mcpServer'
 import { LogReader, type OpenCodeSqlFactory } from '../src/logReader'
 import { StatuslineUsageReader } from '../src/statuslineUsage'
 import { buildContextComposition, resolveLoggedAncestor } from '../src/contextComposition'
+import { buildContextHistory } from '../src/contextHistory'
 import { generateSuggestions } from '../src/instructionAdvisor'
 import { detectInstructionFiles, appendSuggestion } from '../src/instructionFiles'
 import type { Span } from '../src/types'
@@ -148,6 +149,13 @@ startMcpHttpServer({
     const sess = buildSessionSummary()?.sessions ?? []
     const parentOf = (sid: string): string | undefined => sess.find(s => s.sessionId === sid)?.parentSessionId
     return buildContextComposition(id, resolveLoggedAncestor(id, parentOf) ?? parentOf(id))
+  },
+  // P8: full per-step context history (every block drillable to actual text + diff). Same fork/ancestor
+  // fallback as getComposition so a fork/sub-agent reconstructs from its parent transcript.
+  getHistory: (id) => {
+    const sess = buildSessionSummary()?.sessions ?? []
+    const parentOf = (sid: string): string | undefined => sess.find(s => s.sessionId === sid)?.parentSessionId
+    return buildContextHistory(id, resolveLoggedAncestor(id, parentOf) ?? parentOf(id))
   },
 }, MCP_PORT, BIND_HOST)
 
@@ -1351,6 +1359,32 @@ const uiServer = http.createServer((req, res) => {
         console.warn('[AgentLens] composition parse failed', e)
         res.writeHead(200, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ composition: null }))
+      })
+    return
+  }
+
+  if (req.method === 'GET' && url?.startsWith('/api/history/')) {
+    // P8: full per-step context history (every block drillable to actual text + per-step diff).
+    // Same ?parent= + nearest-logged-ancestor fallback as /api/composition so a fork/sub-agent
+    // reconstructs from its parent transcript. The reconstruction carries the FULL block text, so a
+    // huge session can be large — the browser drills progressively; this route returns the whole
+    // reconstruction and the client renders lazily. null = no local Claude log and no parent.
+    const sessionId = decodeURIComponent(url.slice('/api/history/'.length))
+    const rawUrl = req.url ?? ''
+    const qIdx = rawUrl.indexOf('?')
+    const parentHint = qIdx >= 0 ? new URLSearchParams(rawUrl.slice(qIdx + 1)).get('parent') ?? undefined : undefined
+    const histSessions = buildSessionSummary()?.sessions ?? []
+    const parentOf = (id: string): string | undefined => histSessions.find(s => s.sessionId === id)?.parentSessionId
+    const parentSessionId = resolveLoggedAncestor(sessionId, parentOf) ?? parentOf(sessionId) ?? parentHint
+    buildContextHistory(sessionId, parentSessionId)
+      .then(history => {
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ history }))
+      })
+      .catch(e => {
+        console.warn('[AgentLens] history parse failed', e)
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ history: null }))
       })
     return
   }

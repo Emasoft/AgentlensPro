@@ -23,7 +23,7 @@ import {
 import { calcTokenCostUsd } from './pricing'
 import type {
   SessionSummaryCard, TimelineEntry, ContextComposition,
-  CacheBreakReport, CacheBreakOffender,
+  CacheBreakReport, CacheBreakOffender, ContextHistory,
 } from './summarizers/summarizerTypes'
 import { buildCacheBreakReport } from './cacheBreak'
 import { listSessionFileIds } from './contextComposition'
@@ -159,6 +159,29 @@ const TOOLS = [
       properties: {
         sessionId: { type: 'string', description: 'Session ID from get_recent_sessions' },
         turn:      { type: 'number', description: 'Optional 1-based turn to isolate; omit for all turns' },
+      },
+    },
+  },
+  {
+    name: 'get_context_history',
+    description:
+      'Reconstructs the FULL per-step context history of a session from the raw Claude .jsonl — every ' +
+      'content block drillable to its ACTUAL text: system prompt, CLAUDE.md, rules, tool/skill/agent/mcp ' +
+      'catalogs, loaded files, tool inputs AND outputs, bash in/out, hook injections, skill/agent prompts, ' +
+      'user & assistant messages, reasoning, post-compact summaries, sub-agent outputs, harness/cron ' +
+      'injections. Each block carries its own token count + taxonomy (kind) + role; each step carries the ' +
+      'usage buckets (input/output/cache-read/cache-creation) + cost + a DIFF vs the previous step (added/' +
+      'changed/removed blocks; firstChangeBlockId = the cache-break point). Progressive: omit turn for ' +
+      'per-step summaries; pass turn=N for that step\'s blocks WITH full text; pass turn=N + blockId for one ' +
+      'block\'s full text. Reconstructs a fork/sub-agent from its parent transcript. This is THE tool to ' +
+      'answer "reconstruct exactly what content consumed the tokens at each call".',
+    inputSchema: {
+      type: 'object' as const,
+      required: ['sessionId'],
+      properties: {
+        sessionId: { type: 'string', description: 'Session ID from get_recent_sessions' },
+        turn:      { type: 'number', description: 'Optional 1-based step/turn to drill into (returns its blocks WITH full text)' },
+        blockId:   { type: 'string', description: 'Optional block id (with turn) to return just that one block\'s full text' },
       },
     },
   },
@@ -666,8 +689,66 @@ function subAgentChildren(sessions: SessionSummaryCard[], parentId: string) {
 }
 
 type CompositionAccessor = (sessionId: string) => Promise<ContextComposition | null>
+type HistoryAccessor = (sessionId: string) => Promise<ContextHistory | null>
 
 // ── P4 diagnostic tool handlers ───────────────────────────────────────────────
+
+// P8 (TRDD-TKN5VALS): the full per-STEP context history — every content block (system prompt,
+// CLAUDE.md, rules, catalogs, files, tool in/out, bash in/out, hooks, skill/agent prompts, messages,
+// sub-agent output, harness/cron injections) with its token count + taxonomy + the step's usage
+// buckets + a diff vs the previous step. The raw reconstruction carries the FULL text of every block,
+// which for a large session is far too big to return whole — so this MCP view is progressive:
+//   • no turn        → per-step SUMMARIES (turn, usage, cost, and each block's kind/label/tokens/role,
+//                       plus the diff's added/changed/removed counts + firstChangeBlockId).
+//   • turn=N         → that step's blocks WITH full text (bounded by the reconstruction's 20k/block cap).
+//   • turn=N,blockId → just that one block's full text (the deepest drill).
+function handleGetContextHistory(
+  history: ContextHistory | null,
+  card: SessionSummaryCard | undefined,
+  args: { sessionId: string; turn?: number; blockId?: string },
+) {
+  if (!history) return { sessionId: args.sessionId, message: 'No local Claude log to reconstruct (OTEL-only session, or its transcript is not on disk).' }
+  if (history.steps.length === 0 && history.reconstructedFrom) {
+    return { sessionId: args.sessionId, reconstructedFrom: history.reconstructedFrom, message: `This spawned session has no transcript of its own — its context lives in parent ${history.reconstructedFrom}, whose log is not on disk to reconstruct.` }
+  }
+  const model = card?.model
+  const cost = (u: { input: number; output: number; cacheRead: number; cacheCreate: number } | undefined): number | undefined =>
+    u && model ? +calcTokenCostUsd(Math.max(0, u.input - u.cacheRead - u.cacheCreate), u.cacheRead, u.cacheCreate, u.output, model).toFixed(4) : undefined
+
+  // Deepest drill: one block's full text.
+  if (args.turn !== undefined && args.blockId) {
+    const step = history.steps.find(s => s.turn === args.turn)
+    const block = step?.blocks.find(b => b.id === args.blockId)
+    if (!block) return { sessionId: args.sessionId, turn: args.turn, message: `No block ${args.blockId} at turn ${args.turn}.` }
+    return { sessionId: args.sessionId, turn: args.turn, block: { ...block } }
+  }
+  // One step's blocks WITH full text.
+  if (args.turn !== undefined) {
+    const step = history.steps.find(s => s.turn === args.turn)
+    if (!step) return { sessionId: args.sessionId, turn: args.turn, message: `No step at turn ${args.turn}.` }
+    return {
+      sessionId: args.sessionId, turn: step.turn, timestamp: step.timestamp, model: step.model ?? model,
+      usage: step.usage, costUsd: cost(step.usage), diff: step.diff,
+      blocks: step.blocks.map(b => ({ id: b.id, kind: b.kind, label: b.label, tokens: b.tokens, bytes: b.bytes, role: b.role, toolName: b.toolName, text: b.text })),
+    }
+  }
+  // Whole session: per-step summaries (no full text — drill with turn=N).
+  return {
+    sessionId:  history.sessionId,
+    reconstructedFrom: history.reconstructedFrom,
+    estimated:  history.estimated,
+    truncated:  history.truncated,
+    stepCount:  history.steps.length,
+    steps: history.steps.slice(0, 500).map(s => ({
+      turn: s.turn, timestamp: s.timestamp, model: s.model ?? model,
+      usage: s.usage, costUsd: cost(s.usage),
+      blockCount: s.blocks.length,
+      totalTokens: s.blocks.reduce((n, b) => n + b.tokens, 0),
+      diff: { added: s.diff.added.length, changed: s.diff.changed.length, removed: s.diff.removed.length, firstChangeBlockId: s.diff.firstChangeBlockId },
+      blocks: s.blocks.map(b => ({ id: b.id, kind: b.kind, label: b.label, tokens: b.tokens, role: b.role })),
+    })),
+  }
+}
 
 function handleGetContextComposition(composition: ContextComposition | null, args: { sessionId: string; turn?: number }) {
   if (!composition) return { sessionId: args.sessionId, message: 'No local Claude log composition available for this session (OTEL-only or not a Claude session).' }
@@ -883,6 +964,10 @@ export interface McpServerOptions {
    *  Wired in both the extension and the standalone server so the P4 inflation / cache-break tools
    *  return real data. Async because it streams a (possibly multi-GB) log file. */
   getComposition?: (sessionId: string) => Promise<ContextComposition | null>
+  /** Optionally reconstruct the FULL per-step context history from the raw Claude .jsonl (on demand).
+   *  Powers get_context_history — every block drillable to its actual text with per-block tokens +
+   *  per-step usage/cost + a diff. Async because it streams a (possibly multi-GB) log file. */
+  getHistory?: HistoryAccessor
 }
 
 export function createMcpServer(opts: McpServerOptions): Server {
@@ -898,6 +983,7 @@ export function createMcpServer(opts: McpServerOptions): Server {
     const args = (req.params.arguments ?? {}) as Record<string, unknown>
     const getTimeline = opts.getTimeline ?? null
     const getComposition = opts.getComposition ?? null
+    const getHistory = opts.getHistory ?? null
 
     let result: unknown
     switch (req.params.name) {
@@ -927,6 +1013,13 @@ export function createMcpServer(opts: McpServerOptions): Server {
         const id = (args as { sessionId: string }).sessionId
         const composition = getComposition ? await getComposition(id).catch(() => null) : null
         result = handleGetContextComposition(composition, args as { sessionId: string; turn?: number })
+        break
+      }
+      case 'get_context_history': {
+        const id = (args as { sessionId: string }).sessionId
+        const history = getHistory ? await getHistory(id).catch(() => null) : null
+        const card = sessions.find(x => x.sessionId === id)
+        result = handleGetContextHistory(history, card, args as { sessionId: string; turn?: number; blockId?: string })
         break
       }
       case 'get_context_growth': {
