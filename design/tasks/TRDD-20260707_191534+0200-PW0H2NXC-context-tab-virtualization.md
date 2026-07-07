@@ -1,9 +1,9 @@
 ---
 trdd-id: PW0H2NXC
 title: Context tab DOM virtualization — stop rendering 150k+ elements at once
-column: planned
+column: dev
 created: 2026-07-07T19:15:34+0200
-updated: 2026-07-07T19:15:34+0200
+updated: 2026-07-07T23:55:00+0200
 current-owner: null
 assignee: null
 priority: 3
