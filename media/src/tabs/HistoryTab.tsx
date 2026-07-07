@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'preact/hooks'
-import { sessionSummary, sessionHistories, focusedSessionId } from '../state'
+import { sessionSummary, sessionHistories, focusedSessionId, sessionGeneratedFiles } from '../state'
+import { GeneratedFilesList } from '../GeneratedFilesView'
 import { formatCompact, formatSessionTime, getAgentDotHtml } from '../utils'
 import { fmtUsd } from '../sessionMetrics'
 import { lookupRates, calcTokenCost } from '../pricing'
-import type { ContextHistory, ContextHistoryStep, ContextBlock, ContextBlockKind } from '../types'
+import type { ContextHistory, ContextHistoryStep, ContextBlock, ContextBlockKind, GeneratedFileRef } from '../types'
 
 // One colour per block-kind, grouped by family so a step's blocks read at a glance. All colours are
 // picked to stay legible on both the light and dark VS Code themes (they're saturated mid-tones, not
@@ -207,6 +208,27 @@ export function History() {
     return () => { cancelled = true }
   }, [selectedId])
 
+  // TRDD-ZS1GDXVY: fetch the session-level "generated files" group (rides the /api/timeline payload)
+  // so the History tab lists a session's output/scratch files alongside its per-step blocks. Shares
+  // the sessionGeneratedFiles cache with the Traces tab, so an already-opened session is instant.
+  useEffect(() => {
+    if (!selectedId || selectedId in sessionGeneratedFiles.value) return
+    let cancelled = false
+    fetch(`/api/timeline/${encodeURIComponent(selectedId)}`)
+      .then(r => r.json())
+      .then((data: { generatedFiles?: GeneratedFileRef[]; generatedFilesTruncated?: boolean }) => {
+        if (cancelled) return
+        sessionGeneratedFiles.value = {
+          ...sessionGeneratedFiles.value,
+          [selectedId]: { files: data.generatedFiles ?? [], truncated: !!data.generatedFilesTruncated },
+        }
+      })
+      .catch(() => { /* non-fatal — group just stays empty */ })
+    return () => { cancelled = true }
+  }, [selectedId])
+
+  const genFiles = sessionGeneratedFiles.value[selectedId]
+
   if (!sessions.length) {
     return <div id="summary-history-content"><div class="empty-state">No sessions recorded yet.</div></div>
   }
@@ -243,6 +265,11 @@ export function History() {
           {card && <span dangerouslySetInnerHTML={{ __html: getAgentDotHtml(card.source) }} />} per-step context history · expand a step for its blocks · red = burn event
         </div>
       </div>
+      {genFiles && genFiles.files.length > 0 && (
+        <div style="padding:6px 12px;border-bottom:1px solid var(--vscode-panel-border)">
+          <GeneratedFilesList files={genFiles.files} truncated={genFiles.truncated} heading="Generated files" />
+        </div>
+      )}
       <div class="waterfall">
         {pending && !cached
           ? <div style="padding:14px;font-size:11px;color:var(--muted)">Reconstructing context history…</div>

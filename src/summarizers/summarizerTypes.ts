@@ -47,6 +47,11 @@ export interface SessionSummaryCard {
   peakContextPerTurn?: number   // max single-turn (input + cacheRead + cacheCreate); undefined for single-turn sessions
   filesWritten: string[]        // files fully written (Write / create_file tools); subset of filesChanged
   fileOps?: FileOpSummary[]     // per-file read/write/edit byte volumes (Claude log sessions); see FileOpSummary
+  // Session-level "generated files" group (TRDD-ZS1GDXVY): scratch-tree files not correlated to a
+  // specific tool call + any uncorrelated referenced outputs. generatedFilesTruncated is set live
+  // when the bounded index hit its cap (500/session) — surfaced so the cap is never silent.
+  generatedFiles?: GeneratedFileRef[]
+  generatedFilesTruncated?: boolean
   // AUTHORITATIVE live usage from the Claude Code statusline (P7). Populated by StatuslineUsageReader
   // when this session wrote to the shared statusline-usage.jsonl. Carries the exact context-window
   // occupancy + used% + cumulative cost straight from the API response CC embeds (no server query, no
@@ -94,6 +99,21 @@ export interface FileOpSummary {
   editCount: number
 }
 
+// One output file produced/referenced by a session (TRDD-ZS1GDXVY). `origin` distinguishes a path
+// NAMED in the transcript (a tool_use input / toolUseResult output-file — correlated to its
+// producing tool call) from one DISCOVERED by the bounded scratch-tree index. Size/mtime are a
+// snapshot at index time; tokenEstimate is bytes/4 (helper — real tokenizer lands in TRDD-IQENK7JM).
+// `missing:true` marks a referenced path whose file is absent (never written or already deleted).
+// Paths are LOCAL absolute paths — never exported off-machine without the standard redaction.
+export interface GeneratedFileRef {
+  path: string
+  sizeBytes: number
+  mtimeMs: number
+  tokenEstimate: number
+  origin: 'referenced' | 'scratch'
+  missing?: boolean
+}
+
 export interface TimelineEntry {
   // 'api_request' / 'compaction' / 'api_error' are log-derived Claude Code events (from the OTEL
   // LOG records claude_code.api_request / .compaction / .api_error|.api_retries_exhausted). They
@@ -120,6 +140,10 @@ export interface TimelineEntry {
   errorMessage?: string
   timestamp: string
   editDetails?: EditDetail[]
+  // Output files this tool call produced/referenced under the session scratch tree (TRDD-ZS1GDXVY).
+  // Correlated by tool_use id → attached to this exact step as expandable leaves; content is
+  // lazy-fetched on expand (blob-style), never shipped inline.
+  generatedFiles?: GeneratedFileRef[]
   // True when a blob (full tool result / response / thinking / tool input) was persisted for this
   // entry but stripped from the DB row to keep the payload light. Set by the reader on DB-loaded
   // sessions so the webview knows it can lazy-fetch the FULL tool output via loadBlob('full-result').

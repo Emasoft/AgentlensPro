@@ -4,6 +4,7 @@ import type {
   FullSummary, SessionSummaryCard, TimelineEntry, FileOpSummary,
   AgentFilter, InitiatorFilter, DataSourceFilter, InsightFilter, WorkspaceFilter, VsCodeApi,
   DailyStatRow, LifetimeStats, BurnRate, Projection, ContextComposition,
+  GeneratedFileRef, GeneratedFileContent,
 } from './types'
 
 // Maximum sessions rendered in any single chart or table
@@ -99,6 +100,12 @@ export const sessionTimelines = signal<Record<string, TimelineEntry[]>>({})
 // out of the bulk card payload — same lifecycle as sessionTimelines).
 export const sessionFileOps = signal<Record<string, FileOpSummary[]>>({})
 export const blobCache = signal<Record<string, string>>({})
+// Output-file / subfolder tracking (TRDD-ZS1GDXVY). Session-level "generated files" group per
+// session (scratch discoveries + uncorrelated referenced outputs), fetched lazily alongside the
+// timeline; and a path→content cache for the on-demand "expand" leaf. Same lazy lifecycle as the
+// timeline/blob caches so a long browse can't grow memory without bound.
+export const sessionGeneratedFiles = signal<Record<string, { files: GeneratedFileRef[]; truncated: boolean }>>({})
+export const generatedFileCache = signal<Record<string, GeneratedFileContent>>({})
 
 // LRU bound on cached session detail. A session's detail (timeline entries + per-file ops) is
 // the heavy part: the bulk payload ships only lightweight cards, and detail is fetched on demand
@@ -109,21 +116,46 @@ export const blobCache = signal<Record<string, string>>({})
 const DETAIL_CACHE_MAX = 40
 const detailLRU: string[] = []
 
-export function cacheSessionDetail(sessionId: string, timeline: TimelineEntry[], fileOps: FileOpSummary[]): void {
+export function cacheSessionDetail(
+  sessionId: string,
+  timeline: TimelineEntry[],
+  fileOps: FileOpSummary[],
+  generatedFiles?: { files: GeneratedFileRef[]; truncated: boolean },
+): void {
   const existing = detailLRU.indexOf(sessionId)
   if (existing !== -1) detailLRU.splice(existing, 1)
   detailLRU.push(sessionId)
 
   const tl: Record<string, TimelineEntry[]> = { ...sessionTimelines.value, [sessionId]: timeline }
   const fo: Record<string, FileOpSummary[]> = { ...sessionFileOps.value, [sessionId]: fileOps }
+  const gf: Record<string, { files: GeneratedFileRef[]; truncated: boolean }> = { ...sessionGeneratedFiles.value }
+  if (generatedFiles) gf[sessionId] = generatedFiles
   while (detailLRU.length > DETAIL_CACHE_MAX) {
     const evicted = detailLRU.shift()
     if (evicted === undefined) break
     delete tl[evicted]
     delete fo[evicted]
+    delete gf[evicted]
   }
   sessionTimelines.value = tl
   sessionFileOps.value = fo
+  sessionGeneratedFiles.value = gf
+}
+
+// Request one generated file's content on expand (TRDD-ZS1GDXVY). Deduped: an in-flight/loaded path
+// is not re-requested. Routes through vscode.postMessage — in VS Code the dashboardPanel reads the
+// file; in standalone the inline shim fetches /api/generated-file. The reply lands as a
+// generatedFileContent message → cacheGeneratedFileContent.
+const generatedFileInFlight = new Set<string>()
+export function loadGeneratedFile(path: string): void {
+  if (!path || generatedFileInFlight.has(path) || generatedFileCache.value[path] !== undefined) return
+  generatedFileInFlight.add(path)
+  vscode?.postMessage({ type: 'loadGeneratedFile', path })
+}
+
+export function cacheGeneratedFileContent(content: GeneratedFileContent): void {
+  generatedFileInFlight.delete(content.path)
+  generatedFileCache.value = { ...generatedFileCache.value, [content.path]: content }
 }
 
 // Per-session context composition (host-parsed from the raw .jsonl on demand — the exact injected

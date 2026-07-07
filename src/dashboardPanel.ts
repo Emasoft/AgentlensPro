@@ -5,6 +5,7 @@ import { InstructionRepository } from './database/instructionRepository'
 import { detectInstructionFiles, appendSuggestion, removeSuggestion } from './instructionFiles'
 import { computeBaseline } from './instructionEffectiveness'
 import { buildContextComposition } from './contextComposition'
+import { readScratchFile } from './generatedFiles'
 
 export class DashboardPanel {
   public static currentPanel: DashboardPanel | undefined
@@ -64,7 +65,15 @@ export class DashboardPanel {
     this.panel.webview.onDidReceiveMessage(async msg => {
       if (msg.type === 'loadSessionDetail' && msg.sessionId) {
         const timeline = this.repo.loadSessionTimeline(msg.sessionId as string)
-        this.panel.webview.postMessage({ type: 'sessionDetail', sessionId: msg.sessionId, timeline })
+        // TRDD-ZS1GDXVY: ship the session-level "generated files" group alongside the timeline (the
+        // correlated leaves already ride on timeline entries).
+        const generatedFiles = this.repo.loadSessionGeneratedFiles(msg.sessionId as string)
+        this.panel.webview.postMessage({ type: 'sessionDetail', sessionId: msg.sessionId, timeline, generatedFiles })
+      } else if (msg.type === 'loadGeneratedFile' && typeof msg.path === 'string') {
+        // TRDD-ZS1GDXVY: lazy content fetch for one output file. Guarded to Claude scratch paths so it
+        // can never read an arbitrary file; capped at 200KB with an explicit truncation flag; a
+        // deleted file returns exists:false (never a silent null).
+        this.panel.webview.postMessage({ type: 'generatedFileContent', path: msg.path, ...readScratchFile(msg.path as string) })
       } else if (msg.type === 'loadBlob' && msg.spanId && msg.field) {
         const content = await this.repo.loadBlob(
           msg.spanId as string,

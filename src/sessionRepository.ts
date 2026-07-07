@@ -4,7 +4,7 @@ import { SessionStore } from './sessionStore'
 import { DatabaseReader, type DailyStatRow, type LifetimeStats, type SearchQuery, type BurnRate, type Projection } from './database/reader'
 import { DatabaseWriter } from './database/writer'
 import { summarizeSpans } from './spanSummarizer'
-import type { SessionSummaryCard, TimelineEntry } from './summarizers/summarizerTypes'
+import type { SessionSummaryCard, TimelineEntry, GeneratedFileRef } from './summarizers/summarizerTypes'
 
 export type { DailyStatRow, LifetimeStats, SearchQuery, BurnRate, Projection }
 
@@ -89,6 +89,12 @@ export class SessionRepository {
   /** Returns full timeline entries for one session (no blob content). */
   loadSessionTimeline(sessionId: string): TimelineEntry[] {
     return this.reader.loadSessionTimeline(sessionId)
+  }
+
+  /** Session-level "generated files" group (TRDD-ZS1GDXVY) — scratch discoveries + uncorrelated
+   *  referenced outputs; the correlated ones ride on the timeline entries. */
+  loadSessionGeneratedFiles(sessionId: string): GeneratedFileRef[] {
+    return this.reader.loadSessionGeneratedFiles(sessionId)
   }
 
   /** Reads one blob file. Returns null if not found. */

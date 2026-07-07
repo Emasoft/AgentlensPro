@@ -82,6 +82,27 @@ CREATE TABLE IF NOT EXISTS edit_details (
 
 CREATE INDEX IF NOT EXISTS idx_edit_details_entry ON edit_details (timeline_entry_id);
 
+-- Output-file / subfolder tracking (TRDD-ZS1GDXVY). One row per output file a session
+-- produced/referenced under its scratch tree. span_id links a row to the producing tool-call
+-- timeline entry (Phase A, referenced-and-correlated); span_id NULL is the session-level "generated
+-- files" group (Phase B scratch discoveries + uncorrelated referenced outputs). Content is NEVER
+-- stored here — only path/size/mtime/token-estimate; the file on disk is read lazily on expand.
+-- UNIQUE(session_id, path) makes the writer's delete-then-reinsert idempotent per session.
+CREATE TABLE IF NOT EXISTS generated_files (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id     TEXT    NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+  path           TEXT    NOT NULL,
+  size_bytes     INTEGER NOT NULL DEFAULT 0,
+  mtime_ms       INTEGER NOT NULL DEFAULT 0,
+  token_estimate INTEGER NOT NULL DEFAULT 0,
+  origin         TEXT    NOT NULL DEFAULT 'scratch',
+  span_id        TEXT,
+  missing        INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(session_id, path)
+);
+
+CREATE INDEX IF NOT EXISTS idx_generated_files_session ON generated_files (session_id);
+
 CREATE TABLE IF NOT EXISTS instruction_applied (
   id                     TEXT PRIMARY KEY,
   workspace              TEXT NOT NULL,

@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import {
   sessionSummary, toolCalls,
   selectedAgentFilter, initiatorFilter, dataSourceFilter, sessionLimit, activeTab,
-  cacheSessionDetail, cacheSessionComposition, blobCache,
+  cacheSessionDetail, cacheSessionComposition, cacheGeneratedFileContent, blobCache,
   focusedSessionId, invalidateSessionDrill, mergeChangedSessionCards,
   dailyStats, lifetimeStats, burnRateData, searchResults, rangedSearchResults,
   timeRange, makeTimeRange, TIME_PRESETS, CHART_MAX,
@@ -13,7 +13,7 @@ import {
   workspaceFilter, availableWorkspaces, shortWorkspaceName,
   enableOtelIngestion, enableLogIngestion, otlpPort,
 } from './state'
-import type { TimelineEntry, FileOpSummary, AgentFilter, InitiatorFilter, DataSourceFilter, WorkspaceFilter, DailyStatRow, LifetimeStats, BurnRate, Projection, SessionSummaryCard, ContextComposition } from './types'
+import type { TimelineEntry, FileOpSummary, AgentFilter, InitiatorFilter, DataSourceFilter, WorkspaceFilter, DailyStatRow, LifetimeStats, BurnRate, Projection, SessionSummaryCard, ContextComposition, GeneratedFileRef, GeneratedFileContent } from './types'
 
 // Tab components
 import { Sessions } from './tabs/Sessions'
@@ -301,10 +301,18 @@ export function App() {
         sessionId?: string
         timeline?: TimelineEntry[]
         fileOps?: FileOpSummary[]
+        generatedFiles?: GeneratedFileRef[]
+        generatedFilesTruncated?: boolean
         composition?: ContextComposition | null
         spanId?: string
         field?: string
         content?: string | null
+        path?: string
+        exists?: boolean
+        truncated?: boolean
+        sizeBytes?: number
+        mtimeMs?: number
+        error?: string
         analyticsData?: { dailyStats: DailyStatRow[]; lifetimeStats: LifetimeStats }
         burnRate?: { sessionId: string; burnRate: BurnRate; projection: Projection | null } | null
         sessions?: SessionSummaryCard[]
@@ -362,7 +370,14 @@ export function App() {
       } else if (msg.type === 'sessionDetail' && msg.sessionId) {
         // Cache timeline + per-file ops together under an LRU bound (state.cacheSessionDetail),
         // so a long browse over many sessions can't grow detail memory without limit.
-        cacheSessionDetail(msg.sessionId, msg.timeline ?? [], msg.fileOps ?? [])
+        cacheSessionDetail(msg.sessionId, msg.timeline ?? [], msg.fileOps ?? [], {
+          files: msg.generatedFiles ?? [],
+          truncated: msg.generatedFilesTruncated ?? false,
+        })
+      } else if (msg.type === 'generatedFileContent' && typeof msg.path === 'string') {
+        // TRDD-ZS1GDXVY: lazy content of one expanded generated/output file (from the host reader or
+        // the standalone /api/generated-file shim). Cached by path so re-expanding is instant.
+        cacheGeneratedFileContent(msg as unknown as GeneratedFileContent)
       } else if (msg.type === 'contextComposition' && msg.sessionId) {
         // Host-parsed per-turn composition (null = no local Claude log). Cached under the same LRU
         // bound as the timeline so ContextTab can overlay the exact injected blocks on each turn.

@@ -3,8 +3,9 @@ import type { ComponentChildren } from 'preact'
 import {
   filteredSessions, sessionSummary, sessionTimelines, sessionCompositions, blobCache,
   focusedSessionId, vscode, cacheHitSliThreshold, callContexts,
-  timelineMetric, timelineSortByValue, timelineGroupByTurn,
+  timelineMetric, timelineSortByValue, timelineGroupByTurn, sessionGeneratedFiles,
 } from '../state'
+import { GeneratedFilesList } from '../GeneratedFilesView'
 import type { TimelineMetric } from '../state'
 import {
   formatMs, formatCompact, syntaxHighlightJson,
@@ -485,6 +486,10 @@ function StepDetail({ step, idx, sessIdx, sessionModel, hostSources, compNote, s
             ? <div class="sw-detail-section"><div class="sw-detail-heading">Full output</div><div class="sw-detail-value sw-detail-muted">Loading…</div></div>
             : null}
         {entry.isError && <div class="sw-detail-section"><div class="sw-detail-heading err">Error</div><div class="sw-detail-value err">This step failed</div></div>}
+        {/* Output files this tool call produced/referenced under the session scratch tree
+            (TRDD-ZS1GDXVY): expandable leaves, content lazy-fetched on expand. */}
+        {entry.generatedFiles && entry.generatedFiles.length > 0 &&
+          <GeneratedFilesList files={entry.generatedFiles} heading="Output files" />}
         {entry.timestamp && <div class="sw-detail-section"><div class="sw-detail-heading">Timestamp</div><div class="sw-detail-value sw-detail-muted">{entry.timestamp}</div></div>}
       </>
     )
@@ -1309,6 +1314,8 @@ function SessionBlock({ sess, sessIdx, sessNum, totalCount, isFirst }: {
   const timelines = sessionTimelines.value
   const loadedTimeline = timelines[sess.sessionId]
   const isLoading = !collapsed && loadedTimeline === undefined
+  // TRDD-ZS1GDXVY: session-level "generated files" group (loaded lazily alongside the timeline).
+  const sessionGenFiles = sessionGeneratedFiles.value[sess.sessionId]
 
   useEffect(() => {
     if (!collapsed && loadedTimeline === undefined) {
@@ -1394,6 +1401,13 @@ function SessionBlock({ sess, sessIdx, sessNum, totalCount, isFirst }: {
             <div style="padding:12px 16px;font-size:11px;color:var(--muted)">Loading timeline…</div>
           ) : (
             <TimelineWaterfall steps={steps} sessionDur={sessionDur} sessionModel={sess.model ?? ''} sessIdx={sessIdx} subAgents={children} sessionId={sess.sessionId} />
+          )}
+          {/* Output-file / subfolder tracking (TRDD-ZS1GDXVY): the session-level "generated files"
+              group — scratch-tree files + uncorrelated referenced outputs, lazy-loaded with the timeline. */}
+          {!isLoading && sessionGenFiles && sessionGenFiles.files.length > 0 && (
+            <div style="padding:6px 16px 10px">
+              <GeneratedFilesList files={sessionGenFiles.files} truncated={sessionGenFiles.truncated} heading="Generated files" />
+            </div>
           )}
         </div>
       )}

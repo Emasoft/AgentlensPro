@@ -51,6 +51,13 @@ export function formatCompact(n: number): string {
   return new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(n)
 }
 
+// Human byte size for the generated-files leaves (TRDD-ZS1GDXVY): 512 B, 4.2 KB, 1.3 MB.
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return bytes + ' B'
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
+}
+
 // ── Token breakdown — the single source of truth for "what does input mean" ────
 // card.inputTokens is the TOTAL context (fresh input + every per-turn cache read +
 // cache writes). On marathon sessions the per-turn cache reads sum to billions, so

@@ -1,7 +1,7 @@
 import * as path from 'path'
 import * as fs from 'fs'
 import * as vscode from 'vscode'
-import type { SessionSummaryCard, TimelineEntry, EditDetail } from '../summarizers/summarizerTypes'
+import type { SessionSummaryCard, TimelineEntry, EditDetail, GeneratedFileRef } from '../summarizers/summarizerTypes'
 import { lookupRates, calcTokenCostUsd } from '../pricing'
 
 export interface DailyStatRow {
@@ -192,7 +192,50 @@ export class DatabaseReader {
       }
     }
 
+    // Output-file / subfolder tracking (TRDD-ZS1GDXVY): re-attach each entry's correlated generated
+    // files (rows with a span_id). The session-level group (span_id NULL) is loaded separately via
+    // loadGeneratedFilesGroup so the card carries it, not the timeline.
+    const gfResults = this.db.exec(
+      `SELECT * FROM generated_files WHERE session_id = '${this._esc(sessionId)}' AND span_id IS NOT NULL ORDER BY id ASC`
+    )
+    if (gfResults[0]) {
+      const bySpan = new Map<string, GeneratedFileRef[]>()
+      for (const row of gfResults[0].values) {
+        const gf = this._parseGeneratedFileRow(gfResults[0].columns, row)
+        const spanId = row[gfResults[0].columns.indexOf('span_id')] as string
+        const arr = bySpan.get(spanId) ?? []
+        arr.push(gf)
+        bySpan.set(spanId, arr)
+      }
+      for (const entry of entries) {
+        const gfs = bySpan.get(entry.spanId)
+        if (gfs && gfs.length > 0) entry.generatedFiles = gfs
+      }
+    }
+
     return entries
+  }
+
+  /** Session-level "generated files" group (TRDD-ZS1GDXVY): scratch discoveries + uncorrelated
+   *  referenced outputs (rows with span_id NULL). The correlated ones ride on the timeline entries. */
+  loadSessionGeneratedFiles(sessionId: string): GeneratedFileRef[] {
+    const results = this.db.exec(
+      `SELECT * FROM generated_files WHERE session_id = '${this._esc(sessionId)}' AND span_id IS NULL ORDER BY size_bytes DESC`
+    )
+    if (!results[0]) return []
+    return results[0].values.map(row => this._parseGeneratedFileRow(results[0].columns, row))
+  }
+
+  private _parseGeneratedFileRow(columns: string[], row: unknown[]): GeneratedFileRef {
+    const col = (name: string) => row[columns.indexOf(name)]
+    return {
+      path:          (col('path') as string) ?? '',
+      sizeBytes:     (col('size_bytes') as number) ?? 0,
+      mtimeMs:       (col('mtime_ms') as number) ?? 0,
+      tokenEstimate: (col('token_estimate') as number) ?? 0,
+      origin:        ((col('origin') as string) === 'referenced' ? 'referenced' : 'scratch'),
+      missing:       ((col('missing') as number) ?? 0) === 1 || undefined,
+    }
   }
 
   async loadBlob(

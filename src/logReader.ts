@@ -34,6 +34,10 @@ import * as path from 'path'
 import * as os from 'os'
 import type { SessionSummaryCard, TimelineEntry } from './summarizers/summarizerTypes'
 import { VSCODE_FAMILY_IDE_NAMES } from './vscodeFamilyIdes'
+import {
+  attachGeneratedFiles, scratchPathsInToolInput, scratchPathsInToolUseResult,
+  type HarvestedGeneratedFile,
+} from './generatedFiles'
 
 // ── Cross-platform home resolution ────────────────────────────────────────────
 
@@ -384,6 +388,11 @@ export class LogReader {
     // embedded in this parent transcript's toolUseResult. Synthesize a distinct child session
     // per completed sub-agent so the dashboard can nest + roll them up (TRDD-TKN5VALS item 1).
     const childCards = _buildSubAgentCards(card.sessionId, a)
+    // Output-file / subfolder tracking (TRDD-ZS1GDXVY): resolve the harvested referenced paths
+    // (Phase A → correlated leaves on their tool call) + a BOUNDED index of the session's scratch
+    // tree (Phase B → the "generated files" group). Runs only when the jsonl grew (_processFile skips
+    // unchanged files), so it naturally scopes to active sessions and reuses the existing scan cadence.
+    attachGeneratedFiles(card, a.genFiles)
     return { workspace: a.workspace, card, childCards: childCards.length > 0 ? childCards : undefined }
   }
 
@@ -1476,6 +1485,11 @@ interface ClaudeAccum {
   // loadBlob('full-result')). Persists across scans so a call/result split over a scan boundary
   // still correlates. Only tool_use ids that DON'T yet carry a resolved result stay here.
   pendingToolResults: Map<string, TimelineEntry>
+  // Output-file harvest (TRDD-ZS1GDXVY): scratch-tree paths referenced by this session's tool calls,
+  // keyed by absolute path (dedup), each optionally carrying the producing tool-call spanId for
+  // correlation. Persists across incremental scans so a spawn/result split over a scan boundary is
+  // still linked; resolved to sizes + attached to the card by attachGeneratedFiles in _parseClaudeFile.
+  genFiles: Map<string, HarvestedGeneratedFile>
   card: CardAccum
 }
 
@@ -1510,7 +1524,7 @@ interface SubAgentRec {
 }
 
 function _newClaudeAccum(): ClaudeAccum {
-  return { workspace: '', model: '', firstTimestamp: '', lastTimestamp: '', hasFastMode: false, idx: 0, pendingReads: new Map<string, string>(), seenMessageIds: new Set<string>(), subAgents: new Map<string, SubAgentRec>(), pendingToolResults: new Map<string, TimelineEntry>(), card: _emptyCardAccum('user') }
+  return { workspace: '', model: '', firstTimestamp: '', lastTimestamp: '', hasFastMode: false, idx: 0, pendingReads: new Map<string, string>(), seenMessageIds: new Set<string>(), subAgents: new Map<string, SubAgentRec>(), pendingToolResults: new Map<string, TimelineEntry>(), genFiles: new Map<string, HarvestedGeneratedFile>(), card: _emptyCardAccum('user') }
 }
 
 // UTF-8 byte length of a value that may or may not be a string (0 for non-strings).
@@ -1636,6 +1650,20 @@ function _resolveToolResult(a: ClaudeAccum, id: string, block: Record<string, un
       if (!toolEntry.resultSummary) toolEntry.resultSummary = full.slice(0, 200)
     }
   }
+  // Output-file harvest (TRDD-ZS1GDXVY): a Task/Agent completion or background-task notification
+  // embeds the artifact path in `toolUseResult` (output-file / filePath). Correlate it to the
+  // producing tool call's timeline entry when we still have it (toolEntry), else record uncorrelated.
+  for (const p of scratchPathsInToolUseResult(toolUseResult)) {
+    _harvestGeneratedFile(a, p, toolEntry?.spanId)
+  }
+}
+
+// Record a referenced scratch path, keeping the strongest correlation seen: once a spanId is known
+// for a path it is never downgraded to uncorrelated (a later mention without a spanId won't clobber).
+function _harvestGeneratedFile(a: ClaudeAccum, p: string, spanId: string | undefined): void {
+  const prev = a.genFiles.get(p)
+  if (prev?.spanId) return
+  a.genFiles.set(p, { spanId: spanId ?? prev?.spanId })
 }
 
 // Synthesize one child SessionSummaryCard per completed sub-agent. Each is a distinct, navigable
@@ -1781,6 +1809,9 @@ function _claudeOnEntry(a: ClaudeAccum, entry: Record<string, unknown>): void {
     // tool_use ids emitted in THIS row → mapped to the row's timeline entry (pushed below) so the
     // matching tool_result can attach its full output. Cleared per row.
     const rowToolUseIds: string[] = []
+    // Scratch output-file paths referenced by THIS row's tool inputs (TRDD-ZS1GDXVY) → correlated to
+    // the row's timeline entry (spanId) after it is pushed below, so each shows as a leaf on its call.
+    const rowGenPaths: string[] = []
     for (const block of content) {
       if (block['type'] === 'tool_use' && block['name']) {
         hasToolCall = true; a.card.totalToolCalls++
@@ -1789,6 +1820,7 @@ function _claudeOnEntry(a: ClaudeAccum, entry: Record<string, unknown>): void {
         const blockId = block['id'] as string | undefined
         if (blockId) rowToolUseIds.push(blockId)
         const inp = (block['input'] ?? {}) as Record<string, unknown>
+        for (const p of scratchPathsInToolInput(inp)) rowGenPaths.push(p)
         if (name === 'Task' || name === 'Agent' || name === 'Workflow') _recordSubAgentSpawn(a, block, inp, ts)
         const fp  = String(inp['file_path'] ?? inp['filePath'] ?? inp['path'] ?? '')
         if (fp) {
@@ -1832,6 +1864,10 @@ function _claudeOnEntry(a: ClaudeAccum, entry: Record<string, unknown>): void {
     if (rowToolUseIds.length > 0) {
       const toolEntry = a.card.timeline[a.card.timeline.length - 1]
       for (const tid of rowToolUseIds) a.pendingToolResults.set(tid, toolEntry)
+    }
+    if (rowGenPaths.length > 0) {
+      const spanId = a.card.timeline[a.card.timeline.length - 1]?.spanId
+      for (const p of rowGenPaths) _harvestGeneratedFile(a, p, spanId)
     }
     a.idx++
   }

@@ -20,6 +20,7 @@ import { classifyOtlpPayload } from '../src/otlpParser'
 import { startMcpHttpServer } from '../src/mcpServer'
 import { resolveCallContext, callBodyRegistry } from '../src/rawBodyContext'
 import { LogReader, type OpenCodeSqlFactory } from '../src/logReader'
+import { readScratchFile } from '../src/generatedFiles'
 import { StatuslineUsageReader } from '../src/statuslineUsage'
 import { buildContextComposition, resolveLoggedAncestor } from '../src/contextComposition'
 import { buildContextHistory } from '../src/contextHistory'
@@ -653,7 +654,7 @@ function buildSessionSummary(): ReturnType<typeof summarizeSpans> | null {
 // first paint. Both are fetched lazily per session via /api/timeline/:id (loadSessionDetail).
 function stripSessionDetail(summary: ReturnType<typeof summarizeSpans> | null): ReturnType<typeof summarizeSpans> | null {
   if (!summary) return null
-  return { ...summary, sessions: summary.sessions.map(s => ({ ...s, timeline: [], fileOps: undefined })) }
+  return { ...summary, sessions: summary.sessions.map(s => ({ ...s, timeline: [], fileOps: undefined, generatedFiles: undefined, generatedFilesTruncated: undefined })) }
 }
 
 function buildUpdatePayload(): string {
@@ -1033,10 +1034,19 @@ function getHtml(): string {
               .then(function(r) { return r.json(); })
               .then(function(data) {
                 window.dispatchEvent(new MessageEvent('message', {
-                  data: { type: 'sessionDetail', sessionId: msg.sessionId, timeline: data.timeline || [], fileOps: data.fileOps || [] }
+                  data: { type: 'sessionDetail', sessionId: msg.sessionId, timeline: data.timeline || [], fileOps: data.fileOps || [], generatedFiles: data.generatedFiles || [], generatedFilesTruncated: !!data.generatedFilesTruncated }
                 }));
               })
               .catch(function(e) { console.warn('[AgentLens] timeline fetch failed', e); });
+          } else if (msg.type === 'loadGeneratedFile' && msg.path) {
+            fetch('/api/generated-file?path=' + encodeURIComponent(msg.path))
+              .then(function(r) { return r.json(); })
+              .then(function(data) {
+                window.dispatchEvent(new MessageEvent('message', {
+                  data: Object.assign({ type: 'generatedFileContent', path: msg.path }, data)
+                }));
+              })
+              .catch(function(e) { console.warn('[AgentLens] generated-file fetch failed', e); });
           } else if (msg.type === 'loadContextComposition' && msg.sessionId) {
             var _compUrl = '/api/composition/' + encodeURIComponent(msg.sessionId);
             if (msg.parentSessionId) _compUrl += '?parent=' + encodeURIComponent(msg.parentSessionId);
@@ -1414,7 +1424,27 @@ const uiServer = http.createServer((req, res) => {
     const summary = buildSessionSummary()
     const session = summary?.sessions.find(s => s.sessionId === sessionId) ?? null
     res.writeHead(200, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ timeline: session?.timeline ?? [], fileOps: session?.fileOps ?? [] }))
+    // TRDD-ZS1GDXVY: generatedFiles (session-level group + truncation flag) rides the lazy timeline
+    // payload, not the bulk summary — stripSessionDetail drops it from /api/summary to keep it light.
+    res.end(JSON.stringify({
+      timeline: session?.timeline ?? [],
+      fileOps: session?.fileOps ?? [],
+      generatedFiles: session?.generatedFiles ?? [],
+      generatedFilesTruncated: session?.generatedFilesTruncated ?? false,
+    }))
+    return
+  }
+
+  // TRDD-ZS1GDXVY: lazy content fetch for one generated/output file. Serves ONLY files under a Claude
+  // scratch tree (isClaudeScratchPath) so this can never be turned into an arbitrary-file reader.
+  // Capped at 200KB with an explicit truncation flag; a deleted file returns exists:false (never a
+  // silent null). Localhost-only server, so returning local absolute-path content is in-scope.
+  if (req.method === 'GET' && url === '/api/generated-file') {
+    const rawUrl = req.url ?? ''
+    const qIdx = rawUrl.indexOf('?')
+    const filePath = qIdx >= 0 ? new URLSearchParams(rawUrl.slice(qIdx + 1)).get('path') ?? '' : ''
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify(readScratchFile(filePath)))
     return
   }
 

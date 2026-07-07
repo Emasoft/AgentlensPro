@@ -201,6 +201,10 @@ function reIngestLogRowsIfStale(db: SqlDatabase): void {
             WHERE s.data_source = 'log')`)
   db.run(`DELETE FROM timeline_entries WHERE session_id IN (
             SELECT session_id FROM sessions WHERE data_source = 'log')`)
+  // generated_files (TRDD-ZS1GDXVY) is a child of the wiped log sessions; delete it explicitly too
+  // (sql.js does not reliably cascade) so no orphan output-file rows survive the re-ingest.
+  db.run(`DELETE FROM generated_files WHERE session_id IN (
+            SELECT session_id FROM sessions WHERE data_source = 'log')`)
   db.run(`DELETE FROM sessions WHERE data_source = 'log'`)
   // PRAGMA user_version takes a literal, not a bound param.
   db.run(`PRAGMA user_version = ${INGEST_VERSION}`)

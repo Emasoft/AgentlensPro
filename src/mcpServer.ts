@@ -435,9 +435,30 @@ function handleGetSessionDetail(
     filesRead:    s.filesRead ?? [],
     filesChanged: s.filesChanged ?? [],
     toolCounts:   s.toolCounts,
+    // Output-file / subfolder tracking (TRDD-ZS1GDXVY): a compact summary of the files this session
+    // wrote under its scratch tree — total count + top-5 by size — so an MCP consumer sees the
+    // generated artifacts without fetching each. Combines the session-level group with per-tool leaves.
+    generatedFiles: summarizeGeneratedFiles(s, timeline),
     timeline:     timeline
       .slice(0, 80)
       .map(e => ({ type: e.type, label: e.label, ms: e.durationMs, error: e.isError || false })),
+  }
+}
+
+// Compact generatedFiles summary for get_session_detail: count + top-5 by size (path/size/tokens).
+// null when the session produced none. Dedupes across the session-level group + per-tool-call leaves.
+function summarizeGeneratedFiles(s: SessionSummaryCard, timeline: TimelineEntry[]) {
+  const byPath = new Map<string, { path: string; sizeBytes: number; tokenEstimate: number }>()
+  const add = (gf: { path: string; sizeBytes: number; tokenEstimate: number }) => {
+    if (!byPath.has(gf.path)) byPath.set(gf.path, gf)
+  }
+  for (const gf of s.generatedFiles ?? []) add(gf)
+  for (const e of timeline) for (const gf of e.generatedFiles ?? []) add(gf)
+  if (byPath.size === 0) return null
+  const all = [...byPath.values()].sort((a, b) => b.sizeBytes - a.sizeBytes)
+  return {
+    count: all.length,
+    top: all.slice(0, 5).map(gf => ({ path: gf.path, sizeBytes: gf.sizeBytes, tokenEstimate: gf.tokenEstimate })),
   }
 }
 

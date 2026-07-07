@@ -1,5 +1,5 @@
 import * as vscode from 'vscode'
-import type { SessionSummaryCard, TimelineEntry, EditDetail } from '../summarizers/summarizerTypes'
+import type { SessionSummaryCard, TimelineEntry, EditDetail, GeneratedFileRef } from '../summarizers/summarizerTypes'
 import { calcTokenCostUsd } from '../pricing'
 
 // Strings below this length are kept inline in the DB row rather than written to a blob file.
@@ -86,8 +86,10 @@ export class DatabaseWriter {
     this.pending.clear()
     try {
       // Delete order respects FK constraints (child tables first).
-      // CASCADE would handle it, but explicit order is clearer.
+      // CASCADE would handle it, but sql.js does not reliably honor ON DELETE CASCADE, so children
+      // (edit_details, timeline_entries, generated_files) are deleted explicitly.
       this.db.run('DELETE FROM edit_details')
+      this.db.run('DELETE FROM generated_files')
       this.db.run('DELETE FROM timeline_entries')
       this.db.run('DELETE FROM sessions')
     } catch (err) {
@@ -136,6 +138,7 @@ export class DatabaseWriter {
           }
         }
       }
+      this._writeGeneratedFiles(card)
       this.db.run('COMMIT')
     } catch (err) {
       try { this.db.run('ROLLBACK') } catch { /* ignore rollback errors */ }
@@ -249,6 +252,25 @@ export class DatabaseWriter {
         hasBlob ? 1 : 0,
       ]
     )
+  }
+
+  // Output-file / subfolder tracking (TRDD-ZS1GDXVY). Delete-then-reinsert the session's generated
+  // files: correlated leaves carry their tool call's span_id; the session-level group carries NULL.
+  // Only path/size/mtime/token-estimate are stored — never the file content (read lazily on expand).
+  private _writeGeneratedFiles(card: SessionSummaryCard): void {
+    this.db.run('DELETE FROM generated_files WHERE session_id = ?', [card.sessionId])
+    const insert = (gf: GeneratedFileRef, spanId: string | null): void => {
+      this.db.run(
+        `INSERT OR IGNORE INTO generated_files (
+          session_id, path, size_bytes, mtime_ms, token_estimate, origin, span_id, missing
+        ) VALUES (?,?,?,?,?,?,?,?)`,
+        [card.sessionId, gf.path, gf.sizeBytes, gf.mtimeMs, gf.tokenEstimate, gf.origin, spanId, gf.missing ? 1 : 0],
+      )
+    }
+    for (const entry of card.timeline) {
+      if (entry.generatedFiles) for (const gf of entry.generatedFiles) insert(gf, entry.spanId)
+    }
+    if (card.generatedFiles) for (const gf of card.generatedFiles) insert(gf, null)
   }
 
   private _writeEditDetail(timelineEntryId: number, ed: EditDetail): void {

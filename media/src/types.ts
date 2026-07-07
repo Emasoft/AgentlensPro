@@ -90,6 +90,35 @@ export interface SessionSummaryCard {
   peakContextPerTurn?: number
   filesWritten: string[]
   fileOps?: FileOpSummary[]     // per-file read/write/edit byte volumes (Claude log sessions)
+  // Session-level "generated files" group (TRDD-ZS1GDXVY) — mirror of summarizerTypes.ts. Served
+  // lazily via /api/timeline (stripped from the bulk summary); truncated flag set when the bounded
+  // scratch index hit its cap.
+  generatedFiles?: GeneratedFileRef[]
+  generatedFilesTruncated?: boolean
+}
+
+// Mirror of src/summarizers/summarizerTypes.ts GeneratedFileRef (TRDD-ZS1GDXVY). One output file
+// produced/referenced by a session; content lazy-fetched on expand. Paths are local-only.
+export interface GeneratedFileRef {
+  path: string
+  sizeBytes: number
+  mtimeMs: number
+  tokenEstimate: number
+  origin: 'referenced' | 'scratch'
+  missing?: boolean
+}
+
+// Lazy-fetched content of one generated/output file (TRDD-ZS1GDXVY) — the payload of a
+// generatedFileContent message / /api/generated-file response. exists:false = deleted or blocked
+// (the leaf renders a "file gone" state); truncated:true = capped at the 200KB display limit.
+export interface GeneratedFileContent {
+  path: string
+  exists: boolean
+  sizeBytes?: number
+  mtimeMs?: number
+  truncated?: boolean
+  content?: string
+  error?: string
 }
 
 // Mirror of src/summarizers/summarizerTypes.ts FileOpSummary. Read bytes = file text pulled
@@ -130,6 +159,9 @@ export interface TimelineEntry {
   errorMessage?: string
   timestamp: string
   editDetails?: EditDetail[]
+  // Output files this tool call produced/referenced under the session scratch tree (TRDD-ZS1GDXVY,
+  // mirror of summarizerTypes.ts) — expandable leaves whose content is lazy-fetched on expand.
+  generatedFiles?: GeneratedFileRef[]
   // Mirror of src/summarizers/summarizerTypes.ts — set on DB-loaded entries whose blob fields were
   // stripped from the row; tells the trace UI it can lazy-fetch the FULL tool output via
   // loadBlob('full-result'). Absent on live sessions (fullResult already inline).
