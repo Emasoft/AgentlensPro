@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useMemo } from 'preact/hooks'
+import type { ComponentChildren } from 'preact'
 import {
   filteredSessions, sessionSummary, sessionTimelines, sessionCompositions, blobCache,
-  focusedSessionId, vscode, cacheHitSliThreshold,
+  focusedSessionId, vscode, cacheHitSliThreshold, callContexts,
   timelineMetric, timelineSortByValue, timelineGroupByTurn,
 } from '../state'
 import type { TimelineMetric } from '../state'
@@ -13,7 +14,8 @@ import {
 import { calcEntryCost, calcSessionCost, fmtUsd } from '../sessionMetrics'
 import { buildCacheBreakReport, cacheBreaksByTurn, CAUSE_LABEL } from '../cacheBreak'
 import { spawnKindBadge, hitRateColor, formatPct } from './cacheShared'
-import type { SessionSummaryCard, TimelineEntry, BackgroundSpanSummary, CacheBreakTurn, ContextSource } from '../types'
+import { BlockRow } from './HistoryTab'
+import type { SessionSummaryCard, TimelineEntry, BackgroundSpanSummary, CacheBreakTurn, ContextSource, CallContext } from '../types'
 
 // Colour per composition source-kind — shared with the ContextTab legend so the LLM-call context
 // breakdown reads the same as the Context tab. Injected-block kinds (hook/skill/catalog/…) plus the
@@ -208,6 +210,82 @@ function BgSummaryBlock({ bgSpans }: { bgSpans: BackgroundSpanSummary[] }) {
   )
 }
 
+// One VERTICAL field in the expanded LLM-call detail: heading ON TOP, value FULL-WIDTH BELOW. This
+// replaces the old `.sw-detail-section` flex-ROW (label 130px | value) that laid the call-detail
+// fields out as side-by-side columns — the user asked for a single vertical stack so the context
+// tree can grow full-width beneath the usage line (TRDD-ICHAVFCS layout fix). heading is a node so a
+// field can carry an inline "Show full" button.
+function LlmField({ heading, children }: { heading: ComponentChildren; children: ComponentChildren }) {
+  return (
+    <div style="padding:4px 0">
+      <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.3px;margin-bottom:3px">{heading}</div>
+      <div style="color:var(--fg);word-break:break-word;font-size:12px">{children}</div>
+    </div>
+  )
+}
+
+// The per-call attribution line — WHO caused this call. Built from the rich api_request fields
+// (mirror of summarizerTypes) when present; empty string when the call carries no attribution (a
+// plain llm span). Rendered as "issued by: <query_source> · agent X · skill Y · plugin Z · mcp S/T".
+function formatAttribution(entry: TimelineEntry): string {
+  const parts: string[] = []
+  if (entry.querySource) parts.push(entry.querySource)
+  if (entry.agentName) parts.push(`agent ${entry.agentName}`)
+  if (entry.skillName) parts.push(`skill ${entry.skillName}`)
+  if (entry.pluginName) parts.push(`plugin ${entry.pluginName}`)
+  if (entry.mcpServerName) parts.push(`mcp ${entry.mcpServerName}${entry.mcpToolName ? '/' + entry.mcpToolName : ''}`)
+  return parts.join(' · ')
+}
+
+// Cache key for a call's reconstructed literal context. Prefer the request_id (the stable id that
+// correlates the api_request event, the llm_request span, and the raw body file); fall back to the
+// span id for plain llm spans that carry no request_id.
+function ctxKey(sessionId: string, entry: TimelineEntry): string {
+  return `${sessionId}::${entry.requestId ? 'req:' + entry.requestId : 'span:' + entry.spanId}`
+}
+
+// The WHOLE literal context of ONE llm call, reconstructed by the host from Claude Code's raw OTEL
+// request body and served at /api/callcontext (TRDD-ICHAVFCS). LAZY: this component only mounts when
+// the call row is expanded, and it fetches once per (session, call), caching in the `callContexts`
+// module signal. Every block renders with the History-tab BlockRow (kind badge + tokens + role +
+// expand → full text in a wrapping <pre>, no inner scrollbar). This is the fix for OTEL-only
+// sessions that have no local .jsonl — the content comes from the raw body, not a transcript on disk.
+function CallContextTree({ sessionId, entry }: { sessionId: string; entry: TimelineEntry }) {
+  const key = ctxKey(sessionId, entry)
+  const cc = callContexts.value[key]   // undefined = not fetched · null = fetched, none captured · CallContext = data
+  useEffect(() => {
+    if (callContexts.value[key] !== undefined) return
+    let cancelled = false
+    // requestId → path segment; otherwise the spanId goes on the ?span= query the host resolves.
+    const url = entry.requestId
+      ? `/api/callcontext/${encodeURIComponent(sessionId)}/${encodeURIComponent(entry.requestId)}`
+      : `/api/callcontext/${encodeURIComponent(sessionId)}?span=${encodeURIComponent(entry.spanId)}`
+    fetch(url)
+      .then(r => r.json())
+      .then((data: { callContext: CallContext | null }) => {
+        if (cancelled) return
+        callContexts.value = { ...callContexts.value, [key]: data.callContext ?? null }
+      })
+      .catch(() => { if (!cancelled) callContexts.value = { ...callContexts.value, [key]: null } })
+    return () => { cancelled = true }
+  }, [key])
+
+  if (cc === undefined) return <div style="font-size:10px;color:var(--muted);padding:4px 0">Reconstructing the full context of this call from its raw request body…</div>
+  // Honest terminal note — never a perpetual spinner, never "check the previous turn".
+  if (cc === null) return <div style="font-size:10px;color:var(--muted);padding:4px 0">Raw body not captured for this call (recorded before raw-body logging was enabled, or OTEL-only pre-restart).</div>
+  if (cc.blocks.length === 0) return <div style="font-size:10px;color:var(--muted);padding:4px 0">The raw request body was captured but held no context blocks.</div>
+  const totalTok = cc.blocks.reduce((n, b) => n + b.tokens, 0)
+  return (
+    <div>
+      <div style="font-size:9px;color:var(--muted);margin-bottom:4px">
+        {cc.blocks.length} blocks · {formatCompact(totalTok)} tok — the whole literal context sent to {cc.model || 'the model'} on this call (system, every message, tool inputs/outputs, reasoning). Expand any block for its full text.
+      </div>
+      {cc.blocks.map(b => <BlockRow key={b.id} block={b} added={false} changed={false} isBreak={false} />)}
+      {cc.truncated && <div style="font-size:9px;color:var(--muted);padding:4px 0;font-style:italic">… context truncated (very large body).</div>}
+    </div>
+  )
+}
+
 // The per-call context-composition breakdown shown when an LLM call is expanded — answers "why is
 // this N cache-write / cache-read?" and lets the user DRILL each bucket down to the ACTUAL injected
 // blocks and their content (P6). It renders the same recursive bar-tree the turn-level view uses
@@ -217,7 +295,7 @@ function BgSummaryBlock({ bgSpans }: { bgSpans: BackgroundSpanSummary[] }) {
 // them, each block drilling to its real excerpt text at a leaf. The un-itemized base system prompt +
 // prior transcript is shown as an explicit remainder so the children reconcile to the exact bucket
 // value — never fabricated. No inner scrollbar — the tree grows the page.
-function LlmContextBreakdown({ entry, hostSources, compNote }: { entry: TimelineEntry; hostSources?: ContextSource[]; compNote?: string }) {
+function LlmContextBreakdown({ entry, hostSources, compNote, hasCallContext }: { entry: TimelineEntry; hostSources?: ContextSource[]; compNote?: string; hasCallContext?: boolean }) {
   const cacheRead = entry.cacheReadTokens ?? 0
   const cacheCreate = entry.cacheCreateTokens ?? 0
   const newInput = Math.max(0, (entry.inputTokens ?? 0) - cacheRead - cacheCreate)
@@ -237,7 +315,7 @@ function LlmContextBreakdown({ entry, hostSources, compNote }: { entry: Timeline
       nodes.push({ key: 'cacheread', label: 'Cache-read (resident prefix reused)', colorKind: 'cacheRead', weight: cacheRead, value: tokValue(cacheRead, false), children: kids })
     } else {
       nodes.push({ key: 'cacheread', label: 'Cache-read (resident prefix reused)', colorKind: 'cacheRead', weight: cacheRead, value: tokValue(cacheRead, false),
-        leaf: { kind: 'text', text: `${cacheRead.toLocaleString()} tokens were re-read from the prompt cache this call — the resident transcript accumulated over the prior turns (billed ≈10% of the input rate). Its bytes are the earlier turns' content; open the preceding turns to inspect them.` } })
+        leaf: { kind: 'text', text: `${cacheRead.toLocaleString()} tokens were re-read from the prompt cache this call — the resident transcript accumulated over the prior turns (billed ≈10% of the input rate).${hasCallContext ? ' Its actual bytes are itemized block-by-block in the full context tree below.' : " Its bytes are the earlier turns' content; open the preceding turns to inspect them."}` } })
     }
   }
 
@@ -254,7 +332,7 @@ function LlmContextBreakdown({ entry, hostSources, compNote }: { entry: Timeline
       nodes.push({ key: 'cachewrite', label: 'Cache-created (newly written to cache)', colorKind: 'cacheWrite', weight: cacheCreate, value: tokValue(cacheCreate, false),
         leaf: { kind: 'text', text: injectedNodes.length > 0
           ? `${cacheCreate.toLocaleString()} tokens were newly written to the cache this call — the changed or first-seen prefix delta. The stable injected blocks it reuses are itemized under "Cache-read" above.`
-          : `${cacheCreate.toLocaleString()} tokens were newly written to the prompt cache this call (full write rate). The identifiable injected blocks are listed here once the local log's session composition is available.` } })
+          : `${cacheCreate.toLocaleString()} tokens were newly written to the prompt cache this call (full write rate).${hasCallContext ? ' The exact prefix content is itemized block-by-block in the full context tree below.' : " The identifiable injected blocks are listed here once the local log's session composition is available."}` } })
     }
   }
 
@@ -263,25 +341,29 @@ function LlmContextBreakdown({ entry, hostSources, compNote }: { entry: Timeline
   const sortByValue = timelineSortByValue.value
   const metric = timelineMetric.value
   const ordered = sortByValue && metric !== 'time' ? [...nodes].sort((a, b) => b.weight - a.weight) : nodes
+  // Vertical block (heading via the parent LlmField) — the cache-bucket summary bars stack above the
+  // full context tree, never squeezed into a side column. When the raw-body tree is present the
+  // OTEL-only "no local transcript" dead-end note is suppressed (the tree itemizes it for real).
   return (
-    <div class="sw-detail-section">
-      <div class="sw-detail-heading">Context composition (this call)</div>
+    <div>
       <div style="font-size:9px;color:var(--muted);margin-bottom:4px">
         What the {formatCompact((entry.inputTokens ?? 0))}-token prompt was made of — <span style={'color:' + SOURCE_KIND_COLOR.cacheRead}>cache-read</span> reused vs{' '}
         <span style={'color:' + SOURCE_KIND_COLOR.cacheWrite}>cache-created</span> re-written. Expand a bar to drill into the injected blocks (CLAUDE.md, rules, memories, catalogs, hooks…) down to their real content.
-        {(hostSources?.length ?? 0) === 0 && <span>{compNote ?? ' Injected-block detail appears once the session composition finishes loading.'}</span>}
+        {!hasCallContext && (hostSources?.length ?? 0) === 0 && <span>{compNote ?? ' Injected-block detail appears once the session composition finishes loading.'}</span>}
       </div>
       {ordered.map(n => <TreeBar key={n.key} node={n} depth={0} siblingMax={max} />)}
     </div>
   )
 }
 
-// The expanded body of an LLM call: model, exact token usage, the per-turn context-composition
-// breakdown (why the prompt is this size), cost, the full response + reasoning. response/thinking
-// are resolved by the parent (inline or blob) and passed in.
-function LlmDetail({ entry, step, sessIdx, idx, sessionModel, hostSources, compNote, responseText, thinking }: {
+// The expanded body of an LLM call, laid out as a single VERTICAL stack (TRDD-ICHAVFCS layout fix —
+// was side-by-side label|value columns): model → attribution (who caused the call) → exact usage →
+// the cache-bucket summary → the FULL literal context tree of this call (reconstructed from the raw
+// OTEL body, so it works even for OTEL-only sessions with no .jsonl) → cost → response + reasoning →
+// timing. response/thinking are resolved by the parent (inline or blob) and passed in.
+function LlmDetail({ entry, step, sessIdx, idx, sessionModel, hostSources, compNote, responseText, thinking, sessionId }: {
   entry: TimelineEntry; step: Step; sessIdx: number; idx: number; sessionModel: string
-  hostSources?: ContextSource[]; compNote?: string; responseText: string; thinking: string
+  hostSources?: ContextSource[]; compNote?: string; responseText: string; thinking: string; sessionId?: string
 }) {
   const [showOutput, setShowOutput] = useState(false)
   const PREVIEW_LEN = 400
@@ -289,50 +371,54 @@ function LlmDetail({ entry, step, sessIdx, idx, sessionModel, hostSources, compN
   const entryCost = calcEntryCost(entry, sessionModel)
   const newInput = Math.max(0, (entry.inputTokens ?? 0) - (entry.cacheReadTokens ?? 0) - (entry.cacheCreateTokens ?? 0))
   const hasCache = (entry.cacheReadTokens ?? 0) > 0 || (entry.cacheCreateTokens ?? 0) > 0
+  const attribution = formatAttribution(entry)
+  // The reconstructed literal context is fetchable only when we know the session; when its blocks are
+  // present they REPLACE the "open the preceding turns" dead-end (the cache-bucket note softens too).
+  const ctx = sessionId ? callContexts.value[ctxKey(sessionId, entry)] : undefined
+  const hasCallContext = !!ctx && ctx.blocks.length > 0
   return (
     <>
-      <div class="sw-detail-section"><div class="sw-detail-heading">Model</div><div class="sw-detail-value">{entry.model || 'unknown'}</div></div>
+      <LlmField heading="Model">{entry.model || 'unknown'}</LlmField>
+      {attribution && <LlmField heading="Issued by">{attribution}</LlmField>}
       {((entry.inputTokens ?? 0) > 0 || (entry.outputTokens ?? 0) > 0) && (
-        <div class="sw-detail-section">
-          <div class="sw-detail-heading">Token Usage</div>
-          <div class="sw-detail-value">
-            <span class="sw-token-in">
-              {hasCache ? `${newInput.toLocaleString()} new` : `${(entry.inputTokens ?? 0).toLocaleString()} input`}
-              {(entry.cacheReadTokens ?? 0) > 0 && <span style="color:var(--muted)"> + {(entry.cacheReadTokens ?? 0).toLocaleString()} cached</span>}
-              {(entry.cacheCreateTokens ?? 0) > 0 && <span style="color:var(--muted)"> + {(entry.cacheCreateTokens ?? 0).toLocaleString()} cache write</span>}
-            </span>
-            <span class="sw-token-arrow"> → </span>
-            <span class="sw-token-out">{(entry.outputTokens ?? 0).toLocaleString()} output</span>
-          </div>
-        </div>
+        <LlmField heading="Token usage">
+          <span class="sw-token-in">
+            {hasCache ? `${newInput.toLocaleString()} new` : `${(entry.inputTokens ?? 0).toLocaleString()} input`}
+            {(entry.cacheReadTokens ?? 0) > 0 && <span style="color:var(--muted)"> + {(entry.cacheReadTokens ?? 0).toLocaleString()} cached</span>}
+            {(entry.cacheCreateTokens ?? 0) > 0 && <span style="color:var(--muted)"> + {(entry.cacheCreateTokens ?? 0).toLocaleString()} cache write</span>}
+          </span>
+          <span class="sw-token-arrow"> → </span>
+          <span class="sw-token-out">{(entry.outputTokens ?? 0).toLocaleString()} output</span>
+        </LlmField>
       )}
-      <LlmContextBreakdown entry={entry} hostSources={hostSources} compNote={compNote} />
+      <LlmField heading="Context composition (this call)">
+        <LlmContextBreakdown entry={entry} hostSources={hostSources} compNote={compNote} hasCallContext={hasCallContext} />
+      </LlmField>
+      {sessionId && (
+        <LlmField heading="Full context of this call">
+          <CallContextTree sessionId={sessionId} entry={entry} />
+        </LlmField>
+      )}
       {entryCost > 0 && (
-        <div class="sw-detail-section"><div class="sw-detail-heading">Cost</div><div class="sw-detail-value">{fmtUsd(entryCost)}</div></div>
+        <LlmField heading="Cost">{entry.costUsd !== undefined ? `${fmtUsd(entry.costUsd)} (exact)` : fmtUsd(entryCost)}</LlmField>
       )}
       {responseText && (
-        <div class="sw-detail-section">
-          <div class="sw-detail-heading">
-            Response
-            {isLongResponse && (
-              <button class="sw-show-full-btn" style="margin-left:8px" onClick={() => setShowOutput(v => !v)}>
-                {showOutput ? 'Collapse' : 'Show full response'}
-              </button>
-            )}
-          </div>
-          <div class="sw-detail-value" style="white-space:pre-wrap;word-break:break-word;font-size:11px;line-height:1.5">
+        <LlmField heading={<>Response{isLongResponse && (
+          <button class="sw-show-full-btn" style="margin-left:8px" onClick={() => setShowOutput(v => !v)}>
+            {showOutput ? 'Collapse' : 'Show full response'}
+          </button>
+        )}</>}>
+          <div style="white-space:pre-wrap;word-break:break-word;font-size:11px;line-height:1.5">
             {showOutput ? responseText : responseText.slice(0, PREVIEW_LEN)}
             {isLongResponse && !showOutput && <span style="color:var(--muted)">…</span>}
           </div>
-        </div>
+        </LlmField>
       )}
       {thinking && <LongTextSection heading="Reasoning" text={thinking} id={'sw-thinking-' + sessIdx + '-' + idx} />}
-      {(entry.ttft ?? 0) > 0 && (
-        <div class="sw-detail-section"><div class="sw-detail-heading">Time to First Token</div><div class="sw-detail-value">{formatMs(entry.ttft!)}</div></div>
-      )}
-      <div class="sw-detail-section"><div class="sw-detail-heading">Duration</div><div class="sw-detail-value">{formatMs(step.durationMs)}</div></div>
-      {entry.action && <div class="sw-detail-section"><div class="sw-detail-heading">Stop reason</div><div class="sw-detail-value">{entry.action}</div></div>}
-      {entry.timestamp && <div class="sw-detail-section"><div class="sw-detail-heading">Timestamp</div><div class="sw-detail-value sw-detail-muted">{entry.timestamp}</div></div>}
+      {(entry.ttft ?? 0) > 0 && <LlmField heading="Time to first token">{formatMs(entry.ttft!)}</LlmField>}
+      <LlmField heading="Duration">{formatMs(step.durationMs)}</LlmField>
+      {entry.action && <LlmField heading="Stop reason">{entry.action}</LlmField>}
+      {entry.timestamp && <LlmField heading="Timestamp"><span class="sw-detail-muted">{entry.timestamp}</span></LlmField>}
     </>
   )
 }
@@ -342,7 +428,7 @@ function LlmDetail({ entry, step, sessIdx, idx, sessionModel, hostSources, compN
 // full response/reasoning, tool calls show the FULL output, user/message steps show their full
 // text. Blob fields absent from DB rows are lazy-fetched via loadBlob (live sessions carry them
 // inline). All hooks run unconditionally at the top so hook order is stable across renders.
-function StepDetail({ step, idx, sessIdx, sessionModel, hostSources, compNote }: { step: Step; idx: number; sessIdx: number; sessionModel: string; hostSources?: ContextSource[]; compNote?: string }) {
+function StepDetail({ step, idx, sessIdx, sessionModel, hostSources, compNote, sessionId }: { step: Step; idx: number; sessIdx: number; sessionModel: string; hostSources?: ContextSource[]; compNote?: string; sessionId?: string }) {
   const entry = step.entry
   const blobs = blobCache.value
   // Lazy-fetch any blob fields this entry needs but didn't ship inline (DB-loaded sessions strip
@@ -362,7 +448,7 @@ function StepDetail({ step, idx, sessIdx, sessionModel, hostSources, compNote }:
 
   if (entry.type === 'llm') {
     return <LlmDetail entry={entry} step={step} sessIdx={sessIdx} idx={idx} sessionModel={sessionModel}
-      hostSources={hostSources} compNote={compNote} responseText={entry.responseText || blobs[`${entry.spanId}:response`] || ''}
+      hostSources={hostSources} compNote={compNote} sessionId={sessionId} responseText={entry.responseText || blobs[`${entry.spanId}:response`] || ''}
       thinking={entry.thinking || blobs[`${entry.spanId}:thinking`] || ''} />
   }
 
@@ -467,7 +553,7 @@ function LongTextSection({ heading, text, id: _id, isJson }: { heading: string; 
   )
 }
 
-export function StepRow({ step, idx, sessIdx, sessionDur, sessionModel, metric, maxMetric, highlightSpanId, hostSources, compNote }: { step: Step; idx: number; sessIdx: number; sessionDur: number; sessionModel: string; metric: TimelineMetric; maxMetric: number; highlightSpanId?: string; hostSources?: ContextSource[]; compNote?: string }) {
+export function StepRow({ step, idx, sessIdx, sessionDur, sessionModel, metric, maxMetric, highlightSpanId, hostSources, compNote, sessionId }: { step: Step; idx: number; sessIdx: number; sessionDur: number; sessionModel: string; metric: TimelineMetric; maxMetric: number; highlightSpanId?: string; hostSources?: ContextSource[]; compNote?: string; sessionId?: string }) {
   const entry = step.entry
   // When the user clicks a point in the Growth chart we focus that exact turn (by spanId). The
   // matching row auto-expands so its token breakdown is immediately visible, and scrolls into view.
@@ -582,7 +668,7 @@ export function StepRow({ step, idx, sessIdx, sessionDur, sessionModel, metric, 
       </div>
       {open && (
         <div class="sw-detail open">
-          <StepDetail step={step} idx={idx} sessIdx={sessIdx} sessionModel={sessionModel} hostSources={hostSources} compNote={compNote} />
+          <StepDetail step={step} idx={idx} sessIdx={sessIdx} sessionModel={sessionModel} hostSources={hostSources} compNote={compNote} sessionId={sessionId} />
         </div>
       )}
     </>
@@ -1195,7 +1281,7 @@ export function TimelineWaterfall({ steps, sessionDur, sessionModel, sessIdx = 0
           : ordered.map(({ step, i }) => (
               <StepRow key={step.entry.spanId + i} step={step} idx={i} sessIdx={sessIdx}
                 sessionDur={sessionDur} sessionModel={sessionModel} metric={metric} maxMetric={maxMetric}
-                highlightSpanId={highlightSpanId} hostSources={resolveHostSources(step.entry.turn)} compNote={compNote} />
+                highlightSpanId={highlightSpanId} hostSources={resolveHostSources(step.entry.turn)} compNote={compNote} sessionId={sessionId} />
             ))
       }
       {orphanSubs.length > 0 && (

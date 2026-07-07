@@ -138,6 +138,13 @@ const compositionLRU: string[] = []
 // transcript to reconstruct (OTEL-only session); an absent key means "not yet fetched".
 export const sessionHistories = signal<Record<string, import('./types').ContextHistory | null>>({})
 
+// Per-CALL full literal context tree (TRDD-ICHAVFCS), reconstructed by the host from Claude Code's
+// raw OTEL request body and fetched lazily over HTTP when an LLM call is expanded. Keyed by
+// `${sessionId}::${req:requestId | span:spanId}`. A present `null` means the raw body was NOT
+// captured for that call (legacy / OTEL-only before raw-body logging was on); an absent key means
+// "not yet fetched". This is what lets an OTEL-only call show its whole context with no local .jsonl.
+export const callContexts = signal<Record<string, import('./types').CallContext | null>>({})
+
 export function cacheSessionComposition(sessionId: string, composition: ContextComposition | null): void {
   const existing = compositionLRU.indexOf(sessionId)
   if (existing !== -1) compositionLRU.splice(existing, 1)

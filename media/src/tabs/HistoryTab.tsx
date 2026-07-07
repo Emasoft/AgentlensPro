@@ -82,7 +82,10 @@ function KindBadge({ kind }: { kind: ContextBlockKind }) {
   )
 }
 
-function BlockRow({ block, added, changed, isBreak }: { block: ContextBlock; added: boolean; changed: boolean; isBreak: boolean }) {
+// Exported so the Sessions-tab per-call context tree (Traces.tsx) renders reconstructed raw-body
+// blocks with the exact same kind-badge + token + role + full-text drill as the History tab —
+// one rendering, one source of truth. Call it with added/changed/isBreak=false (no turn-diff there).
+export function BlockRow({ block, added, changed, isBreak }: { block: ContextBlock; added: boolean; changed: boolean; isBreak: boolean }) {
   const [open, setOpen] = useState(false)
   const text = block.text ?? ''
   return (
