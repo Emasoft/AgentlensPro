@@ -1604,7 +1604,20 @@ async function applyAutoConfig(): Promise<void> {
   //    autoConfigureClaudeCode (which writes a subset of the same env keys) so the two never
   //    race on the same file (read-modify-write) and the marker's prior values are truthful.
   //    Opt out with AGENTLENS_NO_TELEMETRY_CONFIG=1.
-  if (process.env.AGENTLENS_NO_TELEMETRY_CONFIG !== '1') {
+  //
+  //    CANONICAL-INSTANCE GATE: only an instance listening on the DEFAULT OTLP port (4318) may
+  //    write the GLOBAL ~/.claude/settings.json. Without this gate, any isolated-port instance
+  //    (test runs, headless proofs, a second dev server) would "repair" the global
+  //    OTEL_EXPORTER_OTLP_ENDPOINT to point at ITS OWN ephemeral port — observed 2026-07-07:
+  //    a headless test on port 4387 silently repointed every new Claude Code session's
+  //    telemetry at a dead port. Override for a deliberately non-default deployment with
+  //    AGENTLENS_TELEMETRY_CONFIG=1 (explicit opt-IN beats an implicit hijack).
+  const canonicalInstance = OTLP_PORT === 4318 || process.env.AGENTLENS_TELEMETRY_CONFIG === '1'
+  if (process.env.AGENTLENS_NO_TELEMETRY_CONFIG === '1') {
+    console.log('[AgentLens] AGENTLENS_NO_TELEMETRY_CONFIG=1 — skipping automatic telemetry config.')
+  } else if (!canonicalInstance) {
+    console.log(`[AgentLens] Non-default OTLP port ${OTLP_PORT} — NOT touching the global telemetry config (set AGENTLENS_TELEMETRY_CONFIG=1 to force).`)
+  } else {
     try {
       const r = await ensureTelemetryConfig({ otlpPort: OTLP_PORT })
       if (r.changed) {
@@ -1617,8 +1630,6 @@ async function applyAutoConfig(): Promise<void> {
       // Fail-safe at the server boundary: a bad settings.json shouldn't stop the dashboard.
       console.warn(`[AgentLens] Could not apply telemetry config: ${e instanceof Error ? e.message : String(e)}`)
     }
-  } else {
-    console.log('[AgentLens] AGENTLENS_NO_TELEMETRY_CONFIG=1 — skipping automatic telemetry config.')
   }
 
   // 2) Then the per-agent auto-config (Stop-hook automation + Codex + Copilot). Runs AFTER

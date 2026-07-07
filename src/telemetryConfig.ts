@@ -243,8 +243,15 @@ export async function ensureTelemetryConfig(options: TelemetryConfigOptions = {}
   let backupPath: string | undefined
   if (changed) {
     if (raw !== null) {
+      // The backup itself must be ATOMIC (tmp + rename), exactly like the settings write:
+      // a plain writeFile creates the file first and fills it after, so a process killed in
+      // that window leaves a 0-BYTE "backup" — observed 2026-07-07 (settings.json.agentlens-
+      // bak-…143807405, 0 bytes). Restoring from such a backup would WIPE the settings file,
+      // which is worse than having no backup at all.
       backupPath = `${settingsPath}.agentlens-bak-${compactTimestamp()}`
-      await fs.writeFile(backupPath, raw, 'utf-8')   // back up CURRENT content before overwriting
+      const bakTmp = `${backupPath}.${process.pid}.tmp`
+      await fs.writeFile(bakTmp, raw, 'utf-8')
+      await fs.rename(bakTmp, backupPath)
     }
     settings.env = env
     await atomicWriteJson(settingsPath, settings)
