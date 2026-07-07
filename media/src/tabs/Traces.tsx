@@ -15,7 +15,7 @@ import {
 import { calcEntryCost, calcSessionCost, fmtUsd } from '../sessionMetrics'
 import { countTokens } from '../tokenEstimator'
 import { buildCacheBreakReport, cacheBreaksByTurn, CAUSE_LABEL } from '../cacheBreak'
-import { spawnKindBadge, hitRateColor, formatPct } from './cacheShared'
+import { spawnKindBadge, hitRateColor, formatPct, SpawnCostPanel } from './cacheShared'
 import { BlockRow } from './HistoryTab'
 import type { SessionSummaryCard, TimelineEntry, BackgroundSpanSummary, CacheBreakTurn, ContextSource, CallContext } from '../types'
 
@@ -1049,6 +1049,12 @@ function TurnGroup({ turn, tSteps, sessIdx, sessionModel, metric, maxTurnMetric,
             const ordered = timelineSortByValue.value && metric !== 'time' ? [...nodes].sort((a, b) => b.weight - a.weight) : nodes
             return ordered.map(n => <TreeBar key={n.key} node={n} depth={0} siblingMax={max} />)
           })()}
+          {/* TRDD-62E8UU41: the spawn-cost rollup + antipattern detections for the children spawned by
+              THIS turn — surfaced right above the sub-branch rows so the fan-out's aggregate cost and
+              the cheaper-spawn advice sit on the spawning step. */}
+          {(subAgents ?? []).length > 0 && (
+            <SpawnCostPanel children={subAgents!} parentModel={sessionModel} heading="Spawn cost (this turn)" />
+          )}
           {(subAgents ?? []).map(c => <SubAgentBranch key={c.sessionId} child={c} sessIdx={sessIdx} />)}
         </div>
       )}
@@ -1408,7 +1414,17 @@ function SessionBlock({ sess, sessIdx, sessNum, totalCount, isFirst }: {
           {isLoading ? (
             <div style="padding:12px 16px;font-size:11px;color:var(--muted)">Loading timeline…</div>
           ) : (
-            <TimelineWaterfall steps={steps} sessionDur={sessionDur} sessionModel={sess.model ?? ''} sessIdx={sessIdx} subAgents={children} sessionId={sess.sessionId} />
+            <>
+              {/* TRDD-62E8UU41: session-level spawn-cost panel — the whole session's fan-out aggregate
+                  + antipattern detections (FLEET-COLD / WORKTREE-SCATTER / MODEL-MIX). Sits at the top
+                  of the trace body so the fleet burn is visible without expanding every turn. */}
+              {children.length > 0 && (
+                <div style="padding:2px 16px 0">
+                  <SpawnCostPanel children={children} parentModel={sess.model ?? ''} />
+                </div>
+              )}
+              <TimelineWaterfall steps={steps} sessionDur={sessionDur} sessionModel={sess.model ?? ''} sessIdx={sessIdx} subAgents={children} sessionId={sess.sessionId} />
+            </>
           )}
           {/* Output-file / subfolder tracking (TRDD-ZS1GDXVY): the session-level "generated files"
               group — scratch-tree files + uncorrelated referenced outputs, lazy-loaded with the timeline. */}

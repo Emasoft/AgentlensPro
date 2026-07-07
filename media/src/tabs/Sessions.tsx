@@ -15,6 +15,7 @@ import { fmtUsd } from './Cost'
 import { generateInsights, InsightCard } from './Insights'
 import { buildDisplaySummary, tokenBreakdown, formatTokenBreakdown } from '../utils'
 import { Step, TimelineWaterfall } from './Traces'
+import { SpawnCostPanel } from './cacheShared'
 import { FlowCanvas } from './Flow'
 import { ToolsChart } from './Tools'
 import type { SessionSummaryCard, FileOpSummary } from '../types'
@@ -205,6 +206,10 @@ function SessionDetail({ sess }: { sess: SessionSummaryCard }) {
   const cost = calcSessionCost(sess, 'token')
   const cacheRate = sess.inputTokens > 0 ? Math.round(sess.cacheReadTokens / sess.inputTokens * 100) : 0
   const burnRate = burnRateData.value
+  // TRDD-62E8UU41: sub-agent children this session spawned. Passed into the trace waterfall so the
+  // fan-out nests under its spawning turn (SubAgentBranch) with the per-turn spawn-cost rollup, and
+  // rendered as the session-level "spawn cost" panel above the trace (aggregate + antipattern advice).
+  const children = (sessionSummary.value?.sessions ?? []).filter(s => s.parentSessionId === sess.sessionId && s.sessionId !== sess.sessionId)
 
   useEffect(() => {
     if (!timelines[sess.sessionId] && vscode) {
@@ -351,13 +356,18 @@ function SessionDetail({ sess }: { sess: SessionSummaryCard }) {
 
         {section === 'trace' && (
           <div>
+            {children.length > 0 && (
+              <SpawnCostPanel children={children} parentModel={sess.model ?? ''} />
+            )}
             {steps.length === 0
               ? (detailLoading
                   ? <Spinner label="Loading trace…" />
-                  : <div class="empty-state" style="padding:12px 0">No trace data for this session</div>)
+                  : children.length > 0
+                    ? <div class="empty-state" style="padding:12px 0">No parent trace steps recorded — the spawn-cost panel above summarizes this session's sub-agent fan-out.</div>
+                    : <div class="empty-state" style="padding:12px 0">No trace data for this session</div>)
               : (
                 <div class="waterfall">
-                  <TimelineWaterfall steps={steps} sessionDur={sessionDur} sessionModel={sess.model ?? ''} highlightSpanId={highlightSpanId} sessionId={sess.sessionId} />
+                  <TimelineWaterfall steps={steps} sessionDur={sessionDur} sessionModel={sess.model ?? ''} highlightSpanId={highlightSpanId} subAgents={children} sessionId={sess.sessionId} />
                 </div>
               )
             }

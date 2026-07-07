@@ -321,6 +321,44 @@ export interface CollectorGap {
   reason: 'crash' | 'shutdown'
 }
 
+// Mirror of src/summarizers/summarizerTypes.ts — spawn-cost rollup + cache-friendly-spawn advisor
+// (TRDD-62E8UU41). Aggregate of a parent's sub-agent fan-out (per session, or per spawning turn):
+// tokens/cost, the spawn-KIND mix, and antipattern detections (FLEET-COLD / WORKTREE-SCATTER /
+// MODEL-MIX). Computed by media/src/spawnRollup.ts (mirror of src/spawnRollup.ts). Rendered as the
+// per-turn spawn panel + the session-level "spawn cost" panel in Traces.
+export type SpawnDetectionCode = 'FLEET-COLD' | 'WORKTREE-SCATTER' | 'MODEL-MIX'
+
+export interface SpawnDetection {
+  code: SpawnDetectionCode
+  severity: 'HIGH' | 'MEDIUM'
+  childCount: number
+  wastedTokens: number
+  wastedCostUsd: number
+  message: string
+  remediation: string
+}
+
+// `unknown` is FAIL-FAST: an absent/unrecognized spawnKind is counted here, never folded into fresh.
+export interface SpawnKindMix {
+  fresh: number
+  fork: number
+  worktree: number
+  fleet: number
+  modelOverride: number
+  unknown: number
+}
+
+export interface SpawnRollup {
+  childCount: number
+  totalInputTokens: number
+  totalOutputTokens: number
+  totalCacheReadTokens: number
+  totalCacheCreateTokens: number
+  totalCostUsd: number
+  kindMix: SpawnKindMix
+  detections: SpawnDetection[]
+}
+
 // Mirror of src/summarizers/summarizerTypes.ts — cache-break diagnosis (P4). A prefix cache breaks
 // at the first divergent block turn-to-turn; these carry the per-turn verdict + ranked offenders the
 // Cache tab / trace markers render. Sizing is an estimate; the cause taxonomy pinpoints WHY.

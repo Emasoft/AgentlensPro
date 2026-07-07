@@ -422,3 +422,46 @@ export interface CollectorGap {
   durationMs: number
   reason: 'crash' | 'shutdown'
 }
+
+// ── Spawn-cost rollup + cache-friendly-spawn advisor (TRDD-62E8UU41) ──────────
+// Aggregate of ONE parent's sub-agent fan-out (all children spawned by a session, or by a single
+// turn): total tokens/cost, the spawn-KIND mix, and any antipattern detections. The founding burn
+// was a fable-5 parent spawning a FLEET of children, each re-billing a multi-M-token inherited prefix
+// as cache_creation (write rate ~1.25×) instead of reading the parent cache (~0.1×) — millions of
+// tokens/minute. This is the automatic aggregate that names that shape and the cheaper alternative.
+// MIRRORED in media/src/types.ts — change both. Computed by buildSpawnRollup (src/spawnRollup.ts,
+// mirrored in media/src/spawnRollup.ts).
+export type SpawnDetectionCode = 'FLEET-COLD' | 'WORKTREE-SCATTER' | 'MODEL-MIX'
+
+export interface SpawnDetection {
+  code: SpawnDetectionCode
+  severity: 'HIGH' | 'MEDIUM'
+  childCount: number          // children implicated in THIS detection (subset of the rollup's children)
+  wastedTokens: number        // Σ cache-create the implicated children re-billed — the avoidable prefix write
+  wastedCostUsd: number       // aggregate cost of the implicated children (0 when unpriced) — order-of-magnitude
+  message: string             // one-line human summary carrying the aggregate waste
+  remediation: string         // one-line cheaper-spawn hint
+}
+
+// Counts of children by spawn method. `unknown` is FAIL-FAST: a child whose spawnKind is absent or
+// unrecognized is counted here, NEVER silently folded into `fresh` (a mislabeled cold fork must not
+// hide). `modelOverride` counts children that requested a different model (a separate model cache).
+export interface SpawnKindMix {
+  fresh: number
+  fork: number
+  worktree: number
+  fleet: number
+  modelOverride: number
+  unknown: number
+}
+
+export interface SpawnRollup {
+  childCount: number
+  totalInputTokens: number
+  totalOutputTokens: number
+  totalCacheReadTokens: number
+  totalCacheCreateTokens: number
+  totalCostUsd: number
+  kindMix: SpawnKindMix
+  detections: SpawnDetection[]
+}

@@ -3,12 +3,14 @@ import { displaySessions, sessionTimelines, sessionCompositions, serverBurnStatu
 import { buildCacheBreakReport } from '../cacheBreak'
 import { buildDisplaySummary, formatMs } from '../utils'
 import {
+  calcSessionCost,
   getActiveComputeMs,
   getErrorHealth,
   getIdenticalToolRepeat,
   getPeakContextUsage,
   sessionDisplayName,
 } from '../sessionMetrics'
+import { buildSpawnRollup } from '../spawnRollup'
 import {
   AgentThresholdInputs,
   AgentThresholdNumberInputs,
@@ -328,6 +330,36 @@ export interface TriggeredAlert {
   detail: string
 }
 
+// TRDD-62E8UU41 — spawn-antipattern alerts (FLEET-COLD / WORKTREE-SCATTER / MODEL-MIX). Group the
+// displayed sessions by parent, roll up each parent's sub-agent fan-out, and emit one alert per
+// detection so the fleet-of-cold-forks burn is a first-class alert (not just a Traces-panel row).
+// Cost uses the webview's calcSessionCost token mode so the $ matches the Traces spawn panels.
+export function getSpawnAntipatternAlerts(sessions: SessionSummaryCard[]): TriggeredAlert[] {
+  const byParent = new Map<string, SessionSummaryCard[]>()
+  for (const s of sessions) {
+    if (!s.parentSessionId || s.parentSessionId === s.sessionId) continue
+    const arr = byParent.get(s.parentSessionId) ?? []
+    arr.push(s)
+    byParent.set(s.parentSessionId, arr)
+  }
+  const out: TriggeredAlert[] = []
+  for (const [parentId, children] of byParent) {
+    const parent = sessions.find(s => s.sessionId === parentId)
+    const rollup = buildSpawnRollup(children, {
+      parentModel: parent?.model ?? '',
+      costOf: c => calcSessionCost(c, 'token').totalUsd,
+    })
+    for (const d of rollup.detections) {
+      out.push({
+        label: `Spawn antipattern: ${d.code}`,
+        severity: d.severity === 'HIGH' ? 'error' : 'warning',
+        detail: (parent ? `"${sessionDisplayName(parent)}" — ` : '') + d.message + ' → ' + d.remediation,
+      })
+    }
+  }
+  return out
+}
+
 export function getTriggeredAlerts(): TriggeredAlert[] {
   const configs = getAlertConfigs()
   const profiles = getAgentProfiles()
@@ -338,6 +370,7 @@ export function getTriggeredAlerts(): TriggeredAlert[] {
     const result = evaluateAlert(cfg, sessions, efficiency, profiles)
     if (result.triggered) out.push({ label: cfg.label, severity: cfg.severity, detail: result.detail ?? '' })
   }
+  out.push(...getSpawnAntipatternAlerts(sessions))
   return out
 }
 
@@ -434,6 +467,10 @@ export function Alerts() {
     ...(cfg.enabled ? evaluateAlert(cfg, displayed, efficiency, profiles) : { triggered: false } as AlertResult),
   }))
   const triggeredCount = results.filter(r => r.triggered).length
+  // TRDD-62E8UU41: spawn-antipattern advisor — cache-cold sub-agent fan-out detections across the
+  // displayed sessions. Rendered as its own section (like the burn monitor) so the fleet burn is
+  // visible in the Alerts tab; the Traces spawning turn carries the per-fan-out rollup breakdown.
+  const spawnAlerts = getSpawnAntipatternAlerts(displayed)
 
   function updateAgentThreshold(source: AgentSource, metric: AgentProfileMetric, value: number) {
     const next = {
@@ -467,6 +504,25 @@ export function Alerts() {
   return (
     <div id="alerts-content">
       <ServerBurnSection />
+      {spawnAlerts.length > 0 && (
+        <div style="border:1px solid var(--error);border-radius:6px;padding:12px 14px;margin-bottom:14px;background:var(--panel-bg)">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+            <strong style="font-size:13px">Spawn advisor</strong>
+            <span style="font-size:11px;color:var(--muted)">{spawnAlerts.length} antipattern{spawnAlerts.length > 1 ? 's' : ''} detected across displayed sessions</span>
+          </div>
+          <div style="font-size:11px;color:var(--muted);margin-bottom:8px;line-height:1.5">
+            A cache-cold sub-agent fan-out re-bills the inherited prefix (cache_creation at write rate) instead of reading the parent cache. Open the Traces tab and expand the spawning turn for the per-fan-out rollup.
+          </div>
+          {spawnAlerts.map((a, i) => {
+            const c = a.severity === 'error' ? 'var(--error)' : '#f6a623'
+            return (
+              <div key={i} style={`font-size:12px;padding:7px 10px;background:var(--panel-bg);border-radius:4px;border-left:3px solid ${c};margin-bottom:6px;line-height:1.4`}>
+                <strong style={`color:${c}`}>{a.label}</strong> — {a.detail}
+              </div>
+            )
+          })}
+        </div>
+      )}
       <div style="font-size:11px;color:var(--muted);padding:6px 10px;margin-bottom:12px;border-left:2px solid var(--border)">
         <strong>Settings below are adjustable per agent. Reminder: your choice of LLM model significantly affects efficiency and may require threshold adjustments.</strong>
       </div>

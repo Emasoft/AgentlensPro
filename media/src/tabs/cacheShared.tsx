@@ -1,4 +1,6 @@
-import type { SessionSummaryCard } from '../types'
+import type { SessionSummaryCard, SpawnDetection } from '../types'
+import { buildSpawnRollup } from '../spawnRollup'
+import { calcSessionCost } from '../sessionMetrics'
 
 // ── Sub-agent spawn-kind badge (shared by the Traces sub-branch rows + the Cache-tab fleet tree) ─
 // The spawn METHOD decides the cache economics (Anthropic sub-agents / prompt-caching docs):
@@ -75,4 +77,80 @@ export function hitRateColor(rate: number, threshold: number): string {
 
 export function formatPct(rate: number): string {
   return (rate * 100).toFixed(rate >= 0.995 || rate === 0 ? 0 : 1) + '%'
+}
+
+// ── Spawn-cost rollup + advisor panel (TRDD-62E8UU41) ─────────────────────────
+// Renders the fan-out aggregate for a set of sub-agent children (all of a session, or the children
+// spawned by one turn) + any antipattern detections (FLEET-COLD / WORKTREE-SCATTER / MODEL-MIX). The
+// cost callback is the webview's calcSessionCost token mode, so the panel's $ matches the trace header
+// childCost. Shared by the Traces session-level panel and the per-turn spawn panel.
+
+function fmtSpawnTokens(n: number): string {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M'
+  if (n >= 1_000) return Math.round(n / 1_000) + 'k'
+  return String(n)
+}
+
+// One spawn-kind mix pill (e.g. "3 fresh", "1 fork") — orange for cold kinds, green for warm forks,
+// red for worktree isolation, and a distinct tone for the FAIL-FAST `unknown` bucket so it is visible.
+function MixPill({ label, count, tone }: { label: string; count: number; tone: 'warm' | 'cold' | 'isolated' | 'override' | 'unknown' }) {
+  if (count <= 0) return null
+  const color = tone === 'warm' ? SPAWN_WARM
+    : tone === 'isolated' ? SPAWN_ISOLATED
+    : tone === 'override' ? 'var(--vscode-charts-purple,#b392f0)'
+    : tone === 'unknown' ? 'var(--muted)'
+    : SPAWN_COLD
+  return (
+    <span style={`font-size:9px;padding:1px 6px;border-radius:8px;border:1px solid ${color};color:${color};background:${color}1a;white-space:nowrap`}>
+      {count} {label}
+    </span>
+  )
+}
+
+function DetectionRow({ d }: { d: SpawnDetection }) {
+  // HIGH = red (the fleet-of-cold-forks burn); MEDIUM = orange (scatter / model-mix).
+  const color = d.severity === 'HIGH' ? SPAWN_ISOLATED : SPAWN_COLD
+  return (
+    <div style={`font-size:11px;padding:6px 9px;border-radius:4px;border-left:3px solid ${color};background:var(--panel-bg);margin-top:6px;line-height:1.45`}>
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px">
+        <span style={`font-size:9px;font-weight:700;letter-spacing:.3px;padding:1px 6px;border-radius:3px;background:${color};color:#000`}>{d.code}</span>
+        <span style="color:var(--muted);font-size:9px">
+          {d.childCount} child{d.childCount !== 1 ? 'ren' : ''} · Σ {fmtSpawnTokens(d.wastedTokens)} cache-create{d.wastedCostUsd > 0 ? ` · $${d.wastedCostUsd.toFixed(2)}` : ''}
+        </span>
+      </div>
+      <div>{d.message}</div>
+      <div style="color:var(--muted);margin-top:2px">→ {d.remediation}</div>
+    </div>
+  )
+}
+
+export function SpawnCostPanel({ children, parentModel, heading }: {
+  children: SessionSummaryCard[]; parentModel: string; heading?: string
+}): preact.JSX.Element | null {
+  if (!children.length) return null
+  const rollup = buildSpawnRollup(children, { parentModel, costOf: c => calcSessionCost(c, 'token').totalUsd })
+  const mix = rollup.kindMix
+  const hasDetections = rollup.detections.length > 0
+  // Red border when an antipattern fired (the burn is present), else the neutral orange spawn tint.
+  const borderColor = hasDetections ? SPAWN_ISOLATED : 'var(--vscode-charts-orange,#e2a03f)'
+  return (
+    <div style={`border:1px solid ${borderColor};border-radius:5px;padding:8px 10px;margin:4px 0 8px`}>
+      <div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-bottom:4px">
+        <strong style="font-size:11px">{heading ?? 'Spawn cost'}</strong>
+        <span style="font-size:10px;color:var(--muted)">
+          {rollup.childCount} child{rollup.childCount !== 1 ? 'ren' : ''} · Σ {fmtSpawnTokens(rollup.totalCacheCreateTokens)} cache-create · {fmtSpawnTokens(rollup.totalCacheReadTokens)} cache-read · {fmtSpawnTokens(rollup.totalOutputTokens)} out
+          {rollup.totalCostUsd > 0 ? ` · $${rollup.totalCostUsd.toFixed(2)}` : ''}
+        </span>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center">
+        <MixPill label="fork" count={mix.fork} tone="warm" />
+        <MixPill label="fresh" count={mix.fresh} tone="cold" />
+        <MixPill label="fleet" count={mix.fleet} tone="cold" />
+        <MixPill label="worktree" count={mix.worktree} tone="isolated" />
+        <MixPill label="model-override" count={mix.modelOverride} tone="override" />
+        <MixPill label="unknown" count={mix.unknown} tone="unknown" />
+      </div>
+      {hasDetections && rollup.detections.map(d => <DetectionRow key={d.code} d={d} />)}
+    </div>
+  )
 }

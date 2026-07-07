@@ -27,6 +27,7 @@ import type {
 } from './summarizers/summarizerTypes'
 import { buildCacheBreakReport } from './cacheBreak'
 import { buildResidentCostReport } from './residentCost'
+import { buildSpawnRollup } from './spawnRollup'
 import type { BurnStatus, SessionStatus } from './burnMonitor'
 import { listSessionFileIds } from './contextComposition'
 import { generateSuggestions } from './instructionAdvisor'
@@ -296,8 +297,13 @@ const TOOLS = [
     description:
       'Returns the sub-agent spawn tree for a session: the parent plus every sub-agent child with ' +
       'its spawn-KIND (fork = cache-warm; fresh / worktree / fleet = cache-cold), model (inherited ' +
-      'vs override), the spawning turn, rolled-up total tokens, and cost. Pass any node in the ' +
-      'tree — the root is resolved automatically. Use this to see fleet cost and cold-start waste.',
+      'vs override), the spawning turn, rolled-up total tokens, and cost. Also returns spawnRollup: ' +
+      'the fan-out aggregate (child count, total cache-create/cache-read/output, cost, spawn-kind mix) ' +
+      'PLUS antipattern detections — FLEET-COLD (≥3 cold children re-billing the inherited prefix), ' +
+      'WORKTREE-SCATTER (worktree-isolated cache-heavy children), MODEL-MIX (children on a different ' +
+      'model than the parent) — each with its aggregate waste (tokens + $) and a one-line remediation. ' +
+      'Pass any node in the tree — the root is resolved automatically. Call this BEFORE fanning out to ' +
+      'self-audit the cheaper spawn shape, or after to see fleet cost and cold-start waste.',
     inputSchema: {
       type: 'object' as const,
       required: ['sessionId'],
@@ -1153,19 +1159,28 @@ export async function handleFindContextHogs(
   }
 }
 
-function handleGetSubagentTree(sessions: SessionSummaryCard[], args: { sessionId: string }) {
+// Exported for unit tests (TRDD-62E8UU41 — spawn rollup + detections surface in the MCP output).
+export function handleGetSubagentTree(sessions: SessionSummaryCard[], args: { sessionId: string }) {
   const s = sessions.find(x => x.sessionId === args.sessionId)
   if (!s) return { error: `Session ${args.sessionId} not found.` }
   const root = s.parentSessionId ? (sessions.find(x => x.sessionId === s.parentSessionId) ?? s) : s
   const children = subAgentChildren(sessions, root.sessionId)
   const rolledUpTokens = (root.inputTokens + root.outputTokens) + children.reduce((n, c) => n + c.totalTokens, 0)
   const rolledUpCost = +(sessionCost(root) + children.reduce((n, c) => n + c.cost_usd, 0)).toFixed(4)
+  // TRDD-62E8UU41: the spawn-cost rollup + antipattern detections over the FULL child cards (the
+  // reduced `children` shape above lacks the cache buckets the detectors read). sessionCost is the
+  // normalizing pricer (recovers uncached input from either token convention), so the rollup + waste
+  // figures are consistent with rolledUpCost. Agents call this before fanning out to self-audit the
+  // cheaper spawn shape.
+  const childCards = sessions.filter(c => c.parentSessionId === root.sessionId && c.sessionId !== root.sessionId)
+  const spawnRollup = buildSpawnRollup(childCards, { parentModel: root.model, costOf: sessionCost })
   return {
     root: { sessionId: root.sessionId, model: root.model, ownTokens: root.inputTokens + root.outputTokens, ownCost_usd: +sessionCost(root).toFixed(4) },
     childCount:       children.length,
     children:         children.length > 0 ? children : [],
     rolledUpTokens,
     rolledUpCost_usd: rolledUpCost,
+    spawnRollup,
     note: children.length === 0 ? 'No sub-agent children recorded for this session.' : undefined,
   }
 }
