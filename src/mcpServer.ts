@@ -151,7 +151,7 @@ const TOOLS = [
       'Returns WHAT occupies the context window per turn for one session — the injected blocks ' +
       '(hook injections, skill/tool/agent/mcp catalogs, file reads, task reminders) ranked by ' +
       'approximate token weight. Reconstructed on demand from the local Claude .jsonl; token ' +
-      'figures are estimates (bytes/4). Pass a turn to drill into a single turn. Use this to answer ' +
+      'figures are tokenizer estimates (labeled estimated). Pass a turn to drill into a single turn. Use this to answer ' +
       '"why is this turn\'s prompt so big / what is inflating my context".',
     inputSchema: {
       type: 'object' as const,
@@ -269,7 +269,7 @@ const TOOLS = [
       'OTEL request body ({system, messages[], tools[]}) captured via OTEL_LOG_RAW_API_BODIES. Every ' +
       'element — system prompt (CLAUDE.md/rules tagged), each user/assistant message, tool inputs AND ' +
       'outputs, bash in/out, MCP calls, thinking, the tool catalog — is an ORDERED block drillable to ' +
-      'its ACTUAL text with per-block token estimate (bytes/4) + taxonomy (kind) + role. Identify the ' +
+      'its ACTUAL text with per-block token count (tokenizer estimate, calibrated to usage when possible; see tokenSource) + taxonomy (kind) + role. Identify the ' +
       'call by sessionId + requestId (from the api_request event / an llm_request span) or by spanId. ' +
       'Works for OTEL-only sessions with no local .jsonl. This is THE tool to answer "show me the ' +
       'exact whole context at THIS specific call". Returns a clear message (never a spinner) when the ' +

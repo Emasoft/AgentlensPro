@@ -102,7 +102,7 @@ export interface FileOpSummary {
 // One output file produced/referenced by a session (TRDD-ZS1GDXVY). `origin` distinguishes a path
 // NAMED in the transcript (a tool_use input / toolUseResult output-file — correlated to its
 // producing tool call) from one DISCOVERED by the bounded scratch-tree index. Size/mtime are a
-// snapshot at index time; tokenEstimate is bytes/4 (helper — real tokenizer lands in TRDD-IQENK7JM).
+// snapshot at index time; tokenEstimate is bytes/4 (byte-only — the file is stat'd, not tokenized).
 // `missing:true` marks a referenced path whose file is absent (never written or already deleted).
 // Paths are LOCAL absolute paths — never exported off-machine without the standard redaction.
 export interface GeneratedFileRef {
@@ -177,14 +177,19 @@ export interface EditDetail {
 // ── Context-composition tracer (P3, TRDD-TKN5VALS) ────────────────────────────
 // Per-turn breakdown of WHAT was injected into the context window and its approximate weight,
 // reconstructed on demand from the raw session .jsonl (attachments = hook injections, the skill
-// catalog, tool/agent/mcp catalog deltas, file reads, task reminders). Token counts are ESTIMATES
-// (bytes/4) and always surfaced as such — the exact per-turn totals come from usage. Built lazily
-// per session (buildContextComposition) so thousands of attachments are never shipped to the
+// catalog, tool/agent/mcp catalog deltas, file reads, task reminders). Token counts are tokenEstimator
+// ESTIMATES (TRDD-IQENK7JM), always surfaced as such — the exact per-turn totals come from usage. Built
+// lazily per session (buildContextComposition) so thousands of attachments are never shipped to the
 // webview; only the aggregated, capped per-source summary is.
+// How a token figure was derived (TRDD-IQENK7JM): 'exact' from a usage bucket, 'calibrated' = an
+// estimate scaled so its group sums to a known exact total, 'estimated' = a raw estimate.
+export type TokenSource = 'exact' | 'calibrated' | 'estimated'
+
 export interface ContextSource {
   label: string   // e.g. "hook: janitor-memory", "skill catalog", "file: CLAUDE.md"
   kind: string    // hook | skill | toolCatalog | agentCatalog | mcp | file | reminder | other
-  tokens: number  // approximate (bytes / 4)
+  tokens: number  // tokenEstimator estimate (composition aggregates a subset → always 'estimated')
+  tokenSource?: TokenSource  // how `tokens` was derived (TRDD-IQENK7JM)
   bytes: number
   count: number   // entries aggregated into this source
   // A capped excerpt of the ACTUAL injected text (first occurrence) so the recursive drill-down
@@ -212,10 +217,11 @@ export interface ContextComposition {
 
 // ── Context-history reconstruction (per-STEP, TRDD-TKN5VALS) ───────────────────
 // A step-by-step reconstruction of the ACTUAL context blocks present at each assistant turn of a
-// Claude session, with per-block token estimate (bytes/4) + taxonomy, and a turn-to-turn diff
+// Claude session, with a per-block token count (tokenEstimator, CALIBRATED to the step's usage totals
+// where possible — see ContextBlock.tokenSource) + taxonomy, and a turn-to-turn diff
 // (what blocks were added / removed / changed). Built lazily from the raw .jsonl by
 // buildContextHistory so the trace tree can drill from a turn down to the real injected content of
-// every block. Token figures are ESTIMATES and surfaced as such (estimated: true).
+// every block. The container's `estimated: true` marker remains (per-block sources are exact via usage).
 export type ContextBlockKind =
   | 'system' | 'claudemd' | 'rule' | 'toolCatalog' | 'skillCatalog' | 'agentCatalog' | 'mcp'
   | 'file' | 'toolInput' | 'toolOutput' | 'bashInput' | 'bashOutput' | 'hook' | 'skillPrompt'
@@ -226,7 +232,9 @@ export interface ContextBlock {
   id: string                  // stable identity `${kind}:${label}` (diffed turn-to-turn)
   kind: ContextBlockKind
   label: string
-  tokens: number              // approximate (bytes / 4)
+  tokens: number              // final per-block count: tokenEstimator estimate, CALIBRATED to the
+                              // step's exact usage total when possible (TRDD-IQENK7JM) — see tokenSource
+  tokenSource?: TokenSource   // 'calibrated' when scaled to a usage total, else 'estimated'
   bytes: number
   text: string                // the ACTUAL injected content (capped per block)
   role: 'input' | 'output'
@@ -263,7 +271,8 @@ export interface ContextHistory {
 // request body ({system, messages[], tools[]}) captured via OTEL_LOG_RAW_API_BODIES. Reuses the
 // ContextBlock taxonomy above: every element of the call (system prompt, each message, tool_use,
 // tool_result, thinking, the tool catalog) becomes one ordered block drillable to its actual text.
-// Token figures are ESTIMATES (bytes/4) until the tokenizer TRDD (IQENK7JM) lands. Works for
+// Per-block token figures are tokenEstimator estimates (TRDD-IQENK7JM), labeled estimated — the exact
+// per-call total is not plumbed into the raw-body registry, so these are not calibrated. Works for
 // OTEL-only sessions with no local .jsonl — the raw body IS the whole context at that call.
 export interface CallContext {
   requestId?: string

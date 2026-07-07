@@ -2,6 +2,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import * as readline from 'readline'
 import { claudeProjectsDirs } from './logReader'
+import { countTokens, calibrateTokens } from './tokenEstimator'
 import type {
   ContextHistory, ContextHistoryStep, ContextBlock, ContextBlockKind, StepDiff,
 } from './summarizers/summarizerTypes'
@@ -16,10 +17,9 @@ const MAX_STEPS = 2000
 const MAX_BLOCKS_PER_STEP = 200
 const BLOCK_TEXT_CAP = 20_000
 
-// TODO(R-G): replace with a real tokenizer — this is the same bytes/4 estimate the rest of the
-// context tracer uses. Every figure built here is surfaced as an estimate (estimated: true).
-function approxTokens(bytes: number): number { return Math.ceil(bytes / 4) }
-
+// Per-block token counts use the real tokenEstimator segmenter (TRDD-IQENK7JM) accumulated on the FULL
+// block text as it streams in (see addBlock), then CALIBRATED per step against the exact usage totals
+// (see calibrateStepBlocks) so a step's block counts sum to its usage-bucket truth.
 function utf8Len(v: unknown): number { return typeof v === 'string' ? Buffer.byteLength(v, 'utf8') : 0 }
 
 function sumFields(obj: Record<string, unknown>, keys: string[]): number {
@@ -139,7 +139,10 @@ function hashText(s: string): string {
   return h.toString(16)
 }
 
-interface BlockAcc { id: string; kind: ContextBlockKind; label: string; text: string; bytes: number; role: 'input' | 'output'; toolName?: string }
+// tokensRaw accumulates the tokenEstimator count of the FULL block text (before the display cap),
+// summed across same-id occurrences — so the raw estimate reflects all injected content even when the
+// stored `text` is truncated to BLOCK_TEXT_CAP for the drill leaf.
+interface BlockAcc { id: string; kind: ContextBlockKind; label: string; text: string; bytes: number; tokensRaw: number; role: 'input' | 'output'; toolName?: string }
 interface StepAcc {
   turn: number
   timestamp?: string
@@ -191,15 +194,19 @@ export async function buildContextHistory(sessionId: string, parentSessionId?: s
   function addBlock(turn: number, kind: ContextBlockKind, label: string, rawText: string, role: 'input' | 'output', toolName?: string): void {
     const id = `${kind}:${label}`
     const bytes = utf8Len(rawText)
+    // Tokenize the FULL rawText (not the display-capped text) so a >CAP block's token estimate reflects
+    // all its content. Per-occurrence sums approximate whole-text tokenization within estimator noise.
+    const tokensRaw = countTokens(rawText)
     const step = getStep(turn)
     const existing = step.blocks.get(id)
     if (existing) {
       existing.bytes += bytes
+      existing.tokensRaw += tokensRaw
       if (existing.text.length < BLOCK_TEXT_CAP && rawText) {
         existing.text = (existing.text ? existing.text + '\n' + rawText : rawText).slice(0, BLOCK_TEXT_CAP)
       }
     } else {
-      step.blocks.set(id, { id, kind, label, text: rawText.slice(0, BLOCK_TEXT_CAP), bytes, role, toolName })
+      step.blocks.set(id, { id, kind, label, text: rawText.slice(0, BLOCK_TEXT_CAP), bytes, tokensRaw, role, toolName })
     }
   }
 
@@ -321,6 +328,7 @@ export async function buildContextHistory(sessionId: string, parentSessionId?: s
   let prev: Map<string, string> | null = null  // previous step's block-id → text-hash
   for (const s of ordered) {
     const blocks = finalizeBlocks(s.blocks)
+    calibrateStepBlocks(blocks, s.usage)
     const curHashes = new Map<string, string>()
     for (const b of blocks) curHashes.set(b.id, hashText(b.text))
     const diff = diffSteps(blocks, prev, curHashes)
@@ -335,19 +343,46 @@ export async function buildContextHistory(sessionId: string, parentSessionId?: s
 // MAX_BLOCKS_PER_STEP into one summary "other" block so the payload stays bounded.
 function finalizeBlocks(map: Map<string, BlockAcc>): ContextBlock[] {
   const accs = [...map.values()]
+  // tokens starts as the raw estimate + 'estimated'; calibrateStepBlocks upgrades it to 'calibrated'
+  // once the step's usage total is known.
   const toBlock = (a: BlockAcc): ContextBlock => ({
-    id: a.id, kind: a.kind, label: a.label, tokens: approxTokens(a.bytes), bytes: a.bytes,
+    id: a.id, kind: a.kind, label: a.label, tokens: a.tokensRaw, tokenSource: 'estimated', bytes: a.bytes,
     text: a.text, role: a.role, toolName: a.toolName,
   })
   if (accs.length <= MAX_BLOCKS_PER_STEP) return accs.map(toBlock)
   const kept = accs.slice(0, MAX_BLOCKS_PER_STEP - 1).map(toBlock)
   const rest = accs.slice(MAX_BLOCKS_PER_STEP - 1)
   const bytes = rest.reduce((n, a) => n + a.bytes, 0)
+  const tokens = rest.reduce((n, a) => n + a.tokensRaw, 0)
   kept.push({
     id: `other:+${rest.length} more blocks`, kind: 'other', label: `+${rest.length} more blocks`,
-    tokens: approxTokens(bytes), bytes, text: '', role: 'input',
+    tokens, tokenSource: 'estimated', bytes, text: '', role: 'input',
   })
   return kept
+}
+
+// Calibrate a step's per-block estimates against the exact usage totals (TRDD-IQENK7JM §2). Blocks are
+// grouped by role and each group is scaled so its counts sum to the group's exact target:
+//  - OUTPUT blocks (assistant text/thinking/tool_use) FULLY account for the turn's output → calibrate
+//    unconditionally to usage.output (any scale).
+//  - INPUT blocks are the NEW input this turn (user msg, tool results, attachments) — they legitimately
+//    exclude the cached prefix and the implicit system prompt, so their target is the newly-introduced
+//    input = usage.input + usage.cacheCreate (NOT cache_read, which is the reused prefix). Calibrate
+//    only inside a [0.5, 2] scale band: inside it the gap is estimator drift (honest to scale); outside
+//    it the blocks are structurally incomplete vs the total (e.g. turn 1's system prompt), so scaling
+//    would misattribute invisible tokens onto visible blocks — we keep the raw estimate ('estimated').
+// With no usage, every block stays 'estimated'.
+function calibrateStepBlocks(blocks: ContextBlock[], usage?: { input: number; output: number; cacheRead: number; cacheCreate: number }): void {
+  if (!usage) return // blocks already carry tokenSource:'estimated' from finalizeBlocks
+  applyCalibration(blocks.filter(b => b.role === 'input'), usage.input + usage.cacheCreate, { minScale: 0.5, maxScale: 2 })
+  applyCalibration(blocks.filter(b => b.role === 'output'), usage.output)
+}
+
+// Scale one role-group in place: mutate each block's tokens + tokenSource per calibrateTokens' verdict.
+function applyCalibration(group: ContextBlock[], target: number, opts: { minScale?: number; maxScale?: number } = {}): void {
+  if (group.length === 0) return
+  const { tokens, source } = calibrateTokens(group.map(b => b.tokens), target, opts)
+  for (let i = 0; i < group.length; i++) { group[i].tokens = tokens[i]; group[i].tokenSource = source }
 }
 
 // Diff a step's blocks against the previous step's id→hash map. First step (prev === null) → every

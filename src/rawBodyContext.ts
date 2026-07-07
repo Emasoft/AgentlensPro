@@ -10,14 +10,15 @@
 //     (file path + ids), never the multi-MB body itself. A call is later resolved to its body file.
 //  2. buildCallContext(bodyFilePath) — parse the (capped) request JSON into ContextBlock[].
 import * as fs from 'fs'
+import { countTokens } from './tokenEstimator'
 import type { ContextBlock, ContextBlockKind, CallContext } from './summarizers/summarizerTypes'
 
 // A request body can be a few MB; cap the file we are willing to read so a corrupt/huge file can
 // never load unbounded into memory. JSON needs the whole document to parse, so the guard is a size
 // gate (skip oversized files) rather than incremental streaming.
 const MAX_RAW_BODY_BYTES = 64 * 1024 * 1024 // 64 MB
-// Full text per block, capped so a single drill never ships an unbounded payload (a tokenizer TRDD
-// replaces bytes/4 later — for now this is an estimate).
+// Full text per block, capped so a single drill never ships an unbounded payload. The token count is
+// still computed on the FULL text (TRDD-IQENK7JM) so a capped block's estimate reflects all its content.
 const BLOCK_TEXT_CAP = 20000
 
 /** A lightweight pointer to one raw request/response body — stored by the OTLP ingestors so a call
@@ -92,8 +93,6 @@ export class CallBodyRegistry {
 /** The shared registry both OTLP ingestors write to and the MCP/HTTP accessors read from. */
 export const callBodyRegistry = new CallBodyRegistry()
 
-const estTokens = (bytes: number): number => Math.round(bytes / 4)
-
 interface RawTextBlock { type: 'text'; text?: string }
 interface RawToolUse { type: 'tool_use'; id?: string; name?: string; input?: unknown }
 interface RawToolResult { type: 'tool_result'; tool_use_id?: string; content?: unknown; is_error?: boolean }
@@ -141,10 +140,15 @@ export function buildCallContextFromJson(body: RawRequestBody | null): CallConte
   let truncated = false
 
   const push = (kind: ContextBlockKind, label: string, rawText: string, role: 'input' | 'output', toolName?: string): void => {
-    let text = rawText ?? ''
+    const full = rawText ?? ''
+    // Count tokens on the FULL text (before the display cap), then cap the stored text for the payload.
+    // The raw body IS the whole literal context of one call, but the exact per-call usage total is not
+    // plumbed into the registry, so these stay 'estimated' (no calibration anchor available here yet).
+    const tokens = countTokens(full)
+    let text = full
     if (text.length > BLOCK_TEXT_CAP) { text = text.slice(0, BLOCK_TEXT_CAP); truncated = true }
     const bytes = Buffer.byteLength(text)
-    blocks.push({ id: `${kind}:${blocks.length}`, kind, label, tokens: estTokens(bytes), bytes, text, role, toolName })
+    blocks.push({ id: `${kind}:${blocks.length}`, kind, label, tokens, tokenSource: 'estimated', bytes, text, role, toolName })
   }
 
   // 1. system

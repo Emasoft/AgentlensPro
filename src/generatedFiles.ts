@@ -2,6 +2,7 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import type { GeneratedFileRef, SessionSummaryCard } from './summarizers/summarizerTypes'
+import { estimateTokensFromBytes } from './tokenEstimator'
 
 // ── Output-file / scratch-subfolder tracking (TRDD-ZS1GDXVY) ──────────────────
 // Claude Code writes per-session artifacts under an OS-temp "claude-<uid>" tree:
@@ -11,11 +12,11 @@ import type { GeneratedFileRef, SessionSummaryCard } from './summarizers/summari
 // estimator, an fs.stat resolver, and a BOUNDED scratch-tree indexer. logReader harvests referenced
 // paths + runs the indexer; the DB persists the result; the dashboard renders each as a leaf.
 
-// bytes/4 token estimate. Single chokepoint so the real tokenizer (TRDD-IQENK7JM) can replace it in
-// exactly one place instead of scattered `/ 4` arithmetic across the codebase.
-export function estimateTokensFromBytes(bytes: number): number {
-  return bytes > 0 ? Math.ceil(bytes / 4) : 0
-}
+// Generated/scratch-file leaves are byte-only (we stat the file, never read+tokenize its content), so
+// they use the coarse bytes/4 estimator from the shared tokenEstimator module (TRDD-IQENK7JM). Re-
+// exported here so existing callers/tests that import it from this module keep working — the ONE
+// definition now lives in ./tokenEstimator (single source of truth).
+export { estimateTokensFromBytes }
 
 // Matches a path that lives under a temp "claude-<uid>" session tree. Requires the `claude-` prefix
 // to sit directly under a recognised temp root (/tmp, /private/tmp, or a macOS /var/folders/.../T),

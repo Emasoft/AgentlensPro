@@ -10,6 +10,7 @@ import {
   getDataSourceBadgeHtml, getInitiatorBadgeHtml,
 } from '../utils'
 import { calcSessionCost } from '../sessionMetrics'
+import { estimateTokensFromBytes } from '../tokenEstimator'
 import { fmtUsd } from './Cost'
 import { generateInsights, InsightCard } from './Insights'
 import { buildDisplaySummary, tokenBreakdown, formatTokenBreakdown } from '../utils'
@@ -153,7 +154,7 @@ function FilesView({ sess }: { sess: SessionSummaryCard }) {
           <div style="display:flex;flex-direction:column;gap:6px">
             {rows.map(o => {
               const pct = (n: number) => (n / maxTotal * 100).toFixed(2)
-              const tokens = Math.round(total(o) / 4)
+              const tokens = estimateTokensFromBytes(total(o))
               return (
                 <div
                   key={o.path}

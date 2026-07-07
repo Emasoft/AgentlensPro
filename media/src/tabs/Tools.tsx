@@ -1,6 +1,7 @@
 import { useState } from 'preact/hooks'
 import { rangedSessions, COLORS } from '../state'
 import { getAgentColor, getAgentSourceLabel, formatCompact } from '../utils'
+import { estimateTokensFromBytes } from '../tokenEstimator'
 import type { SessionSummaryCard, FileOpSummary } from '../types'
 
 // ── Shared donut chart (used by Tools tab and Sessions detail) ─────────────────
@@ -80,7 +81,7 @@ export function ToolsChart({ sessions, fileOps }: { sessions: SessionSummaryCard
         // per tool" with real data, and state plainly where the rest of the tokens are counted.
         if (!fileOps || fileOps.length === 0) return null
         const io = fileOps.reduce((s, o) => ({ r: s.r + o.readBytes, w: s.w + o.writeBytes, e: s.e + o.editBytes }), { r: 0, w: 0, e: 0 })
-        const tok = (b: number) => Math.round(b / 4)
+        const tok = (b: number) => estimateTokensFromBytes(b)
         const totalTok = tok(io.r + io.w + io.e)
         if (totalTok <= 0) return null
         return (

@@ -193,12 +193,15 @@ export interface EditDetail {
 }
 
 // Mirror of src/summarizers/summarizerTypes.ts — per-turn context-composition breakdown (P3).
-// Token figures are ESTIMATES (bytes/4); loaded on demand per session via a loadContextComposition
+// Token figures are tokenEstimator ESTIMATES (TRDD-IQENK7JM); loaded on demand per session via a loadContextComposition
 // message so thousands of attachments are never shipped at once.
+// Mirror of src/summarizers/summarizerTypes.ts — how a token figure was derived (TRDD-IQENK7JM).
+export type TokenSource = 'exact' | 'calibrated' | 'estimated'
 export interface ContextSource {
   label: string
   kind: string
   tokens: number
+  tokenSource?: TokenSource
   bytes: number
   count: number
   // Mirror of src/summarizers/summarizerTypes.ts — a capped excerpt of the ACTUAL injected text so
@@ -231,7 +234,8 @@ export interface ContextBlock {
   id: string
   kind: ContextBlockKind
   label: string
-  tokens: number
+  tokens: number              // CALIBRATED to the step's exact usage total when possible (TRDD-IQENK7JM)
+  tokenSource?: TokenSource   // 'calibrated' | 'estimated' — drives the ≈/~ marker in BlockRow
   bytes: number
   text: string
   role: 'input' | 'output'
@@ -261,7 +265,7 @@ export interface ContextHistory {
 
 // Mirror of src/summarizers/summarizerTypes.ts — the full literal context of ONE llm call
 // (TRDD-ICHAVFCS), reconstructed from Claude Code's raw OTEL request body. Every element is an
-// ordered ContextBlock drillable to its actual text; token figures are estimates (bytes/4).
+// ordered ContextBlock drillable to its actual text; token figures are tokenizer estimates (see tokenSource).
 export interface CallContext {
   requestId?: string
   sessionId: string

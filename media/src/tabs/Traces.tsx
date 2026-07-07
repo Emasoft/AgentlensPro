@@ -13,6 +13,7 @@ import {
   sessionDateKey, formatDayLabel, formatSessionTime,
 } from '../utils'
 import { calcEntryCost, calcSessionCost, fmtUsd } from '../sessionMetrics'
+import { countTokens } from '../tokenEstimator'
 import { buildCacheBreakReport, cacheBreaksByTurn, CAUSE_LABEL } from '../cacheBreak'
 import { spawnKindBadge, hitRateColor, formatPct } from './cacheShared'
 import { BlockRow } from './HistoryTab'
@@ -702,7 +703,6 @@ interface BarNode {
   hint?: string            // optional dim sub-label under the bar
 }
 
-function approxTok(len: number): number { return Math.ceil(len / 4) }
 function tokValue(tokens: number, estimate: boolean): string {
   return tokens > 0 ? formatCompact(tokens) + (estimate ? '~' : '') + ' tok' : '—'
 }
@@ -886,11 +886,14 @@ function buildTurnNodes(tSteps: Step[], totals: TurnTotals, hostSources: Context
     const e = s.entry
     const lbl = formatLlmLabel(e)
     const resp = e.responseText || ''
-    const rTok = e.outputTokens ?? approxTok(resp.length)
+    const rTok = e.outputTokens ?? countTokens(resp)
     outKids.push({ key: e.spanId + ':resp', label: `Response — ${lbl}`, colorKind: 'output', weight: rTok, value: tokValue(rTok, e.outputTokens === undefined),
       leaf: { kind: 'blob', spanId: e.spanId, field: 'response', inline: resp } })
-    if (e.thinking) outKids.push({ key: e.spanId + ':think', label: `Reasoning — ${lbl}`, colorKind: 'output', weight: approxTok(e.thinking.length), value: tokValue(approxTok(e.thinking.length), true),
-      leaf: { kind: 'blob', spanId: e.spanId, field: 'thinking', inline: e.thinking } })
+    if (e.thinking) {
+      const tTok = countTokens(e.thinking)
+      outKids.push({ key: e.spanId + ':think', label: `Reasoning — ${lbl}`, colorKind: 'output', weight: tTok, value: tokValue(tTok, true),
+        leaf: { kind: 'blob', spanId: e.spanId, field: 'thinking', inline: e.thinking } })
+    }
   }
   nodes.push({ key: 'output', label: 'Output (model response)', colorKind: 'output', weight: totals.output, value: tokValue(totals.output, false),
     children: outKids.length ? outKids : [{ key: 'output-none', label: 'No assistant output text this turn', colorKind: 'output', weight: 0, value: '—', leaf: { kind: 'text', text: 'This turn produced no model output text.' } }] })
@@ -900,17 +903,22 @@ function buildTurnNodes(tSteps: Step[], totals: TurnTotals, hostSources: Context
   for (const s of userSteps) {
     const e = s.entry
     const txt = e.responseText || e.label || ''
-    inKids.push({ key: e.spanId + ':msg', label: 'User message', colorKind: 'user', weight: approxTok(txt.length), value: tokValue(approxTok(txt.length), true),
+    const mTok = countTokens(txt)
+    inKids.push({ key: e.spanId + ':msg', label: 'User message', colorKind: 'user', weight: mTok, value: tokValue(mTok, true),
       leaf: { kind: 'blob', spanId: e.spanId, field: 'response', inline: txt } })
   }
   for (const s of toolSteps) {
     const e = s.entry
     const lbl = formatToolLabel(e)
     const out = e.fullResult || e.resultSummary || ''
-    inKids.push({ key: e.spanId + ':toolres', label: `${lbl} → result`, colorKind: 'tool', weight: approxTok(out.length), value: tokValue(approxTok(out.length), true),
+    const oTok = countTokens(out)
+    inKids.push({ key: e.spanId + ':toolres', label: `${lbl} → result`, colorKind: 'tool', weight: oTok, value: tokValue(oTok, true),
       leaf: { kind: 'blob', spanId: e.spanId, field: 'full-result', inline: e.fullResult || '' } })
-    if (e.toolInput) inKids.push({ key: e.spanId + ':toolin', label: `${lbl} → input`, colorKind: 'tool', weight: approxTok(e.toolInput.length), value: tokValue(approxTok(e.toolInput.length), true),
-      leaf: { kind: 'json', text: e.toolInput } })
+    if (e.toolInput) {
+      const iTok = countTokens(e.toolInput)
+      inKids.push({ key: e.spanId + ':toolin', label: `${lbl} → input`, colorKind: 'tool', weight: iTok, value: tokValue(iTok, true),
+        leaf: { kind: 'json', text: e.toolInput } })
+    }
   }
   if (inKids.length) nodes.push({ key: 'newinput', label: 'New input (fresh bytes this turn)', colorKind: 'input', weight: newInput, value: tokValue(newInput, false), children: inKids })
   else if (newInput > 0) nodes.push({ key: 'newinput', label: 'New input (fresh bytes this turn)', colorKind: 'input', weight: newInput, value: tokValue(newInput, false),

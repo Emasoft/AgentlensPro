@@ -4,7 +4,15 @@ import { GeneratedFilesList } from '../GeneratedFilesView'
 import { formatCompact, formatSessionTime, getAgentDotHtml } from '../utils'
 import { fmtUsd } from '../sessionMetrics'
 import { lookupRates, calcTokenCost } from '../pricing'
-import type { ContextHistory, ContextHistoryStep, ContextBlock, ContextBlockKind, GeneratedFileRef } from '../types'
+import type { ContextHistory, ContextHistoryStep, ContextBlock, ContextBlockKind, GeneratedFileRef, TokenSource } from '../types'
+
+// Exact/calibrated/estimated marker for a token figure (TRDD-IQENK7JM). Exact = no marker; calibrated
+// (estimate scaled to a usage total) = ≈; estimated (raw estimate) = ~. The tooltip spells it out.
+function tokenMark(src: TokenSource | undefined): { mark: string; title: string } {
+  if (src === 'exact') return { mark: '', title: 'exact — from the usage bucket' }
+  if (src === 'calibrated') return { mark: '≈', title: 'calibrated — estimate scaled to the step’s exact usage total' }
+  return { mark: '~', title: 'estimated — tokenizer estimate (no exact total to anchor it)' }
+}
 
 // One colour per block-kind, grouped by family so a step's blocks read at a glance. All colours are
 // picked to stay legible on both the light and dark VS Code themes (they're saturated mid-tones, not
@@ -99,7 +107,7 @@ export function BlockRow({ block, added, changed, isBreak }: { block: ContextBlo
         {changed && <span style="font-size:8px;font-weight:700;color:var(--vscode-charts-orange,#e2a03f)">⚡changed</span>}
         {isBreak && <span style="font-size:8px;font-weight:700;color:var(--error,#f44747)">break point</span>}
         <span style="font-size:8px;color:var(--muted);text-transform:uppercase">{block.role}</span>
-        <span style="width:64px;text-align:right;font-variant-numeric:tabular-nums;color:var(--muted)">{formatCompact(block.tokens)} tok</span>
+        <span style="width:64px;text-align:right;font-variant-numeric:tabular-nums;color:var(--muted)" title={tokenMark(block.tokenSource).title}>{tokenMark(block.tokenSource).mark}{formatCompact(block.tokens)} tok</span>
       </div>
       {open && (
         <pre style="margin:2px 4px 8px 28px;padding:6px 8px;font-size:10px;line-height:1.4;white-space:pre-wrap;overflow:visible;background:var(--vscode-editorWidget-background,var(--bg));border:1px solid var(--border);border-radius:3px;color:var(--fg)">
@@ -263,6 +271,7 @@ export function History() {
         </>}
         <div style="font-size:10px;color:var(--muted)">
           {card && <span dangerouslySetInnerHTML={{ __html: getAgentDotHtml(card.source) }} />} per-step context history · expand a step for its blocks · red = burn event
+          <span title="per-block token counts: exact from usage, ≈ calibrated to the step’s usage total, ~ raw estimate" style="margin-left:8px;opacity:.85">· tokens: exact · <span style="font-variant-numeric:tabular-nums">≈</span> calibrated · ~ estimated</span>
         </div>
       </div>
       {genFiles && genFiles.files.length > 0 && (

@@ -2,6 +2,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import * as readline from 'readline'
 import { claudeProjectsDirs } from './logReader'
+import { countTokens, estimateTokensFromBytes } from './tokenEstimator'
 import type { ContextComposition, ContextCompositionTurn, ContextSource } from './summarizers/summarizerTypes'
 
 // Hard caps so an on-demand parse of a huge session never blocks the host unbounded. A session
@@ -11,10 +12,9 @@ const MAX_LINES = 3_000_000
 const TOP_SOURCES = 24
 const MAX_TURNS = 2000
 
-// Approximate tokens for a byte count (~4 bytes/token). Every figure built here is an estimate and
-// is surfaced as such in the UI — exact per-turn totals come from the usage buckets.
-function approxTokens(bytes: number): number { return Math.ceil(bytes / 4) }
-
+// Per-source token figures use the real tokenEstimator segmenter (TRDD-IQENK7JM) on the injected text,
+// not bytes/4. They stay ESTIMATES (tokenSource:'estimated') and are surfaced as such — composition
+// aggregates attachments only (a subset of a turn's input), so it can't be calibrated to a usage total.
 function utf8Len(v: unknown): number { return typeof v === 'string' ? Buffer.byteLength(v, 'utf8') : 0 }
 
 // Sum the byte length of several string-valued fields on an object (0 for missing/non-string).
@@ -174,8 +174,9 @@ export async function buildContextComposition(sessionId: string, parentSessionId
     return null
   }
 
-  // turn → (source label → {kind, bytes, count, excerpt})
-  const byTurn = new Map<number, Map<string, { kind: string; bytes: number; count: number; excerpt: string }>>()
+  // turn → (source label → {kind, bytes, tokens, count, excerpt}). `tokens` accumulates the real
+  // tokenEstimator count of the injected text (TRDD-IQENK7JM), summed across occurrences.
+  const byTurn = new Map<number, Map<string, { kind: string; bytes: number; tokens: number; count: number; excerpt: string }>>()
   const seenMessageIds = new Set<string>()
   let assistantTurns = 0
   let lines = 0
@@ -207,8 +208,12 @@ export async function buildContextComposition(sessionId: string, parentSessionId
     const turn = assistantTurns + 1
     let sources = byTurn.get(turn)
     if (!sources) { sources = new Map(); byTurn.set(turn, sources) }
-    const cur = sources.get(c.label) ?? { kind: c.kind, bytes: 0, count: 0, excerpt: '' }
+    const cur = sources.get(c.label) ?? { kind: c.kind, bytes: 0, tokens: 0, count: 0, excerpt: '' }
     cur.bytes += c.bytes
+    // Real tokenizer on the injected text. c.text is the primary content field; when the attachment
+    // spans multiple byte-bearing fields (c.bytes > the text's bytes) extrapolate by the byte ratio so
+    // the estimate still reflects the full injected weight rather than just the first field.
+    cur.tokens += c.text ? Math.round(countTokens(c.text) * (c.bytes / Math.max(1, utf8Len(c.text)))) : estimateTokensFromBytes(c.bytes)
     cur.count += 1
     // Keep the FIRST occurrence's leading text as the drill-leaf excerpt (capped). Later occurrences
     // only add to the byte/token total — one representative excerpt is enough to show the real content.
@@ -227,10 +232,11 @@ export async function buildContextComposition(sessionId: string, parentSessionId
 
 // Heaviest-first, keep the top TOP_SOURCES, fold the remainder into one "other" source so the total
 // stays honest without shipping an unbounded list.
-function capSources(sources: Map<string, { kind: string; bytes: number; count: number; excerpt: string }>): ContextSource[] {
+function capSources(sources: Map<string, { kind: string; bytes: number; tokens: number; count: number; excerpt: string }>): ContextSource[] {
   const all: ContextSource[] = [...sources.entries()].map(([label, s]) => ({
-    label, kind: s.kind, bytes: s.bytes, tokens: approxTokens(s.bytes), count: s.count,
-    excerpt: s.excerpt || undefined,
+    // Fall back to the byte estimator only if the tokenizer produced nothing (empty/untokenizable text).
+    label, kind: s.kind, bytes: s.bytes, tokens: s.tokens > 0 ? s.tokens : estimateTokensFromBytes(s.bytes),
+    tokenSource: 'estimated' as const, count: s.count, excerpt: s.excerpt || undefined,
   }))
   all.sort((a, b) => b.tokens - a.tokens)
   if (all.length <= TOP_SOURCES) return all
@@ -240,6 +246,7 @@ function capSources(sources: Map<string, { kind: string; bytes: number; count: n
     label: `+${rest.length} more sources`, kind: 'other',
     bytes: rest.reduce((n, s) => n + s.bytes, 0),
     tokens: rest.reduce((n, s) => n + s.tokens, 0),
+    tokenSource: 'estimated',
     count: rest.reduce((n, s) => n + s.count, 0),
   }
   kept.push(other)

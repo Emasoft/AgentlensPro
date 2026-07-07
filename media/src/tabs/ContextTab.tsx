@@ -5,12 +5,8 @@ import {
 } from '../state'
 import { formatCompact, formatSessionTime, getAgentDotHtml, formatToolLabel } from '../utils'
 import { fmtUsd, calcEntryCost } from '../sessionMetrics'
+import { countTokens } from '../tokenEstimator'
 import type { SessionSummaryCard, TimelineEntry, ContextSource } from '../types'
-
-// Approximate token count for a text blob. Marked as an estimate everywhere it surfaces — the
-// exact per-turn token buckets come from usage; this is only for the content-level breakdown of
-// WHICH source (tool output, response, message) contributed the growth.
-function approxTokens(chars: number): number { return Math.ceil(chars / 4) }
 
 interface TurnPoint {
   turn: number
@@ -53,7 +49,7 @@ interface Source { label: string; tokens: number; exact: boolean; kind: string }
 //  1) EXACT token buckets from usage (cache-read = resident transcript, new input, cache-created, output).
 //  2) HOST-parsed injected blocks (hook / skill / tool-agent-mcp catalog / file / reminder) from the
 //     raw .jsonl — the exact WHICH-block-was-injected data the cache-break diagnosis rests on. These
-//     are approximate (bytes/4) but authoritative about identity; absent until the composition loads.
+//     are tokenizer estimates but authoritative about identity; absent until the composition loads.
 //  3) ESTIMATED content-level sources (each tool's full output, the assistant response, user text)
 //     so you can see WHICH event added the weight — approximated from blob/char length.
 function buildSources(p: TurnPoint, blobs: Record<string, string>, hostSources: ContextSource[]): Source[] {
@@ -72,12 +68,12 @@ function buildSources(p: TurnPoint, blobs: Record<string, string>, hostSources: 
   for (const e of p.entries) {
     if (e.type === 'tool') {
       const result = e.fullResult ?? blobs[`${e.spanId}:full-result`] ?? e.resultSummary ?? ''
-      if (result) out.push({ label: `${formatToolLabel(e)} → output`, tokens: approxTokens(result.length), exact: false, kind: 'tool' })
-      if (e.toolInput) out.push({ label: `${formatToolLabel(e)} → input`, tokens: approxTokens(e.toolInput.length), exact: false, kind: 'tool' })
+      if (result) out.push({ label: `${formatToolLabel(e)} → output`, tokens: countTokens(result), exact: false, kind: 'tool' })
+      if (e.toolInput) out.push({ label: `${formatToolLabel(e)} → input`, tokens: countTokens(e.toolInput), exact: false, kind: 'tool' })
     } else if (e.type === 'llm' && e.responseText) {
-      out.push({ label: 'Assistant response', tokens: approxTokens(e.responseText.length), exact: false, kind: 'llm' })
+      out.push({ label: 'Assistant response', tokens: countTokens(e.responseText), exact: false, kind: 'llm' })
     } else if (e.type === 'user_input' && e.responseText) {
-      out.push({ label: 'User message', tokens: approxTokens(e.responseText.length), exact: false, kind: 'user' })
+      out.push({ label: 'User message', tokens: countTokens(e.responseText), exact: false, kind: 'user' })
     }
   }
   return out.sort((a, b) => b.tokens - a.tokens)
