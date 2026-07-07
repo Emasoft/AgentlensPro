@@ -1,9 +1,10 @@
 ---
 trdd-id: ZK37VG4X
 title: Cost + identity integrity — no silent $0, no duplicate sessions, honest sampling
-column: planned
+column: complete
 created: 2026-07-07T13:30:49+0200
-updated: 2026-07-07T15:25:00+0200
+updated: 2026-07-07T18:15:00+0200
+implementation-commits: [d26a4d9, 91f52d5]
 current-owner: null
 assignee: null
 priority: 1
@@ -22,7 +23,11 @@ external-refs: [PRICING_SOURCES.md]
 
 # TRDD-ZK37VG4X — Cost + identity integrity
 
-## ⏵ STATE — APPROVED 2026-07-07 (USER: "go" after the P1-P6 evaluation) — queued for dispatch
+## ⏵ STATE — ✅ COMPLETE 2026-07-07 (all 4 specs shipped; orchestrator-verified 274/1/0)
+Specs 1-2 (pricing sonnet-5/mythos-5 both tables + UNPRICED badge; session dedup/mergedFrom) → d26a4d9.
+Specs 3-4 (SLI junk-row filter via isCacheMeasured; find_context_hogs coverage block + SAMPLE disclosure) → 91f52d5.
+30 new tests (sessionIdentity.test.ts + mcpSliHonesty.test.ts). Gates: check-types 0, lint 0 err, esbuild ok, suite 274 passing/1 pending/0 failing.
+Report: reports/integrity/20260707_154515+0200-ZK37VG4X.md (fork agent, two passes).
 Approval log: 2026-07-07T15:25:00+0200 — APPROVED by USER ("go"). Moved to design/tasks, column planned.
 
 ## Why (all four defects verified live, 2026-07-07)
