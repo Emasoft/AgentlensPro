@@ -1,17 +1,7 @@
 const esbuild = require("esbuild");
-const fs = require("fs");
-const path = require("path");
 
 const production = process.argv.includes('--production');
 const watch = process.argv.includes('--watch');
-
-function copySqlWasm() {
-  const sqlJsDir = path.join(__dirname, 'node_modules', 'sql.js', 'dist');
-  const distDir  = path.join(__dirname, 'dist');
-  fs.mkdirSync(distDir, { recursive: true });
-  fs.copyFileSync(path.join(sqlJsDir, 'sql-wasm.wasm'), path.join(distDir, 'sql-wasm.wasm'));
-  fs.copyFileSync(path.join(sqlJsDir, 'sql-wasm.js'),   path.join(distDir, 'sql-wasm.js'));
-}
 
 /**
  * @type {import('esbuild').Plugin}
@@ -34,25 +24,6 @@ const esbuildProblemMatcherPlugin = {
 };
 
 async function main() {
-	const ctx = await esbuild.context({
-		entryPoints: [
-			'src/extension.ts'
-		],
-		bundle: true,
-		format: 'cjs',
-		minify: production,
-		sourcemap: !production,
-		sourcesContent: false,
-		platform: 'node',
-		outfile: 'dist/extension.js',
-		external: ['vscode', 'sql.js'],
-		logLevel: 'silent',
-		plugins: [
-			/* add to the end of plugins array */
-			esbuildProblemMatcherPlugin,
-		],
-	});
-
 	const mediaCtx = await esbuild.context({
 		entryPoints: ['media/src/dashboard.tsx'],
 		bundle: true,
@@ -107,17 +78,12 @@ async function main() {
 		plugins: [esbuildProblemMatcherPlugin],
 	});
 
-	copySqlWasm();
-
 	if (watch) {
-		await ctx.watch();
 		await mediaCtx.watch();
 		await sidebarCtx.watch();
 		await standaloneCtx.watch();
 		await cliCtx.watch();
 	} else {
-		await ctx.rebuild();
-		await ctx.dispose();
 		await mediaCtx.rebuild();
 		await mediaCtx.dispose();
 		await sidebarCtx.rebuild();

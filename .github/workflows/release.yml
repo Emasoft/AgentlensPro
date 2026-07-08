@@ -41,67 +41,10 @@ jobs:
       - name: Unit tests
         run: pnpm run test:unit
 
-      - name: Install vsce
-        run: pnpm add -g @vscode/vsce
-
-      - name: Package VSIX
-        run: vsce package --no-dependencies
-
-      - name: Upload VSIX artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: vsix-package
-          path: '*.vsix'
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
         with:
-          files: '*.vsix'
           generate_release_notes: true
-
-  publish-vsce:
-    needs: package
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    env:
-      VSCE_PAT: ${{ secrets.VSCE_PAT }}
-      OVSX_PAT: ${{ secrets.OVSX_PAT }}
-
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: vsix-package
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Install vsce
-        run: npm install -g @vscode/vsce
-
-      - name: Publish to VS Code Marketplace
-        if: env.VSCE_PAT != ''
-        run: |
-          set +e
-          vsce publish --packagePath *.vsix > /tmp/vsce_out.txt 2>&1
-          EXIT=$?
-          set -e
-          cat /tmp/vsce_out.txt
-          if [ $EXIT -ne 0 ] && grep -q "already exists" /tmp/vsce_out.txt; then
-            echo "Version already published to VS Code Marketplace — skipping"
-            exit 0
-          fi
-          exit $EXIT
-
-      - name: Publish to Open VSX
-        if: env.OVSX_PAT != ''
-        run: |
-          npm install -g ovsx
-          ovsx publish *.vsix
 
   publish-npm:
     needs: package
