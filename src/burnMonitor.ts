@@ -28,6 +28,9 @@ export interface ConsumptionEvent {
   ts: number
   sessionId: string
   workspace?: string
+  accountUuid?: string       // TRDD-BURNWDGT — the OAuth account that issued the call (card.accountId).
+                             // Rate limits are per-account; the window budget groups by this so a rotated
+                             // account never pools with the first. undefined ⇒ the "unknown" bucket.
   costUsd: number
   tokens: number
   source: 'api_request' | 'statusline'
@@ -83,6 +86,11 @@ export interface BurnThresholds {
 export interface BurnConfig {
   window5hTokens: number | null
   window7dTokens: number | null
+  // TRDD-BURNWDGT — OPTIONAL cost ($) capacities. When set, the window budget also reports a COST-based
+  // pctConsumed (consumedCostUsd / cap) — the right metric when a plan's rate-limit window is billed by
+  // cost, because cache-read (0.1×) barely counts there even though it dominates the raw token count.
+  window5hCostUsd: number | null
+  window7dCostUsd: number | null
   capacitySource: 'env' | 'config' | 'none'
   notify: boolean               // opt-in macOS notification (AGENTLENS_NOTIFY=1)
   thresholds: BurnThresholds
@@ -109,7 +117,7 @@ function numEnv(v: string | undefined): number | null {
  *      AGENTLENS_BURN_CACHE_CREATE.
  */
 export function loadBurnConfig(env: NodeJS.ProcessEnv, homeDir: string): BurnConfig {
-  let file: Partial<{ window5hTokens: number; window7dTokens: number; notify: boolean; thresholds: Partial<BurnThresholds> }> = {}
+  let file: Partial<{ window5hTokens: number; window7dTokens: number; window5hCostUsd: number; window7dCostUsd: number; notify: boolean; thresholds: Partial<BurnThresholds> }> = {}
   try {
     const p = env['AGENTLENS_BURN_CONFIG'] || path.join(homeDir, '.agentlens', 'burn-config.json')
     if (fs.existsSync(p)) file = JSON.parse(fs.readFileSync(p, 'utf8'))
@@ -121,8 +129,17 @@ export function loadBurnConfig(env: NodeJS.ProcessEnv, homeDir: string): BurnCon
   const file7d = typeof file.window7dTokens === 'number' && file.window7dTokens > 0 ? file.window7dTokens : null
   const window5hTokens = env5h ?? file5h
   const window7dTokens = env7d ?? file7d
-  const capacitySource: BurnConfig['capacitySource'] =
-    (env5h ?? env7d) !== null ? 'env' : (file5h ?? file7d) !== null ? 'config' : 'none'
+
+  const env5hCost = numEnv(env['AGENTLENS_WINDOW_5H_COST_USD'])
+  const env7dCost = numEnv(env['AGENTLENS_WINDOW_7D_COST_USD'])
+  const file5hCost = typeof file.window5hCostUsd === 'number' && file.window5hCostUsd > 0 ? file.window5hCostUsd : null
+  const file7dCost = typeof file.window7dCostUsd === 'number' && file.window7dCostUsd > 0 ? file.window7dCostUsd : null
+  const window5hCostUsd = env5hCost ?? file5hCost
+  const window7dCostUsd = env7dCost ?? file7dCost
+
+  const anyEnv = (env5h ?? env7d ?? env5hCost ?? env7dCost) !== null
+  const anyFile = (file5h ?? file7d ?? file5hCost ?? file7dCost) !== null
+  const capacitySource: BurnConfig['capacitySource'] = anyEnv ? 'env' : anyFile ? 'config' : 'none'
 
   const ft = file.thresholds ?? {}
   const thresholds: BurnThresholds = {
@@ -133,7 +150,7 @@ export function loadBurnConfig(env: NodeJS.ProcessEnv, homeDir: string): BurnCon
   }
 
   return {
-    window5hTokens, window7dTokens, capacitySource,
+    window5hTokens, window7dTokens, window5hCostUsd, window7dCostUsd, capacitySource,
     notify: env['AGENTLENS_NOTIFY'] === '1' || file.notify === true,
     thresholds,
   }
@@ -174,7 +191,7 @@ function apiRequestEvents(card: SessionSummaryCard): ConsumptionEvent[] {
     const cacheReadTokens = e.cacheReadTokens ?? 0, cacheCreateTokens = e.cacheCreateTokens ?? 0
     const tokens = inputTokens + outputTokens + cacheReadTokens + cacheCreateTokens
     out.push({
-      ts, sessionId: card.sessionId, workspace: card.workspace,
+      ts, sessionId: card.sessionId, workspace: card.workspace, accountUuid: card.accountId,
       costUsd: e.costUsd ?? 0, tokens, source: 'api_request',
       attribution: attributionOf(e),
       inputTokens, outputTokens, cacheReadTokens, cacheCreateTokens,
@@ -196,6 +213,7 @@ export function gatherConsumptionEvents(
 ): ConsumptionEvent[] {
   const events: ConsumptionEvent[] = []
   const apiSessions = new Set<string>()
+  const cardBy = new Map(sessions.map(c => [c.sessionId, c]))
   for (const card of sessions) {
     const evs = apiRequestEvents(card)
     if (evs.length > 0) { apiSessions.add(card.sessionId); events.push(...evs) }
@@ -203,15 +221,36 @@ export function gatherConsumptionEvents(
   for (const be of statuslineEvents) {
     if (apiSessions.has(be.sessionId)) continue
     if (be.deltaTokens <= 0 && be.deltaCostUsd <= 0) continue
+    const card = cardBy.get(be.sessionId)
     events.push({
-      ts: toMs(be.ts), sessionId: be.sessionId, workspace: be.workspace,
-      costUsd: be.deltaCostUsd, tokens: be.deltaTokens, source: 'statusline',
+      ts: toMs(be.ts), sessionId: be.sessionId, workspace: be.workspace, accountUuid: card?.accountId,
+      // TRDD-BURNWDGT burn-rate fix: derive this turn's cost from ITS OWN per-turn buckets ×
+      // calcTokenCostUsd, NOT the cumulative `deltaCostUsd`. The statusline samples sparsely, so a
+      // single cumulative delta lumps several turns' spend onto one timestamp — spiking the rolling
+      // $/hr ~4× (the "pricing bug" that turned out to be a sparse-cumulative-delta artifact). A
+      // per-turn priced cost is consistent with that turn's own tokens. Fall back to deltaCostUsd only
+      // when buckets are absent or the model is unpriced (derived 0) so cost is never lost.
+      costUsd: statuslineCostUsd(be, card?.model),
+      tokens: be.deltaTokens, source: 'statusline',
       // Per-bucket split from the statusline (when present) so the breakdown is accurate here too.
       inputTokens: be.deltaInput, outputTokens: be.deltaOutput,
       cacheReadTokens: be.deltaCacheRead, cacheCreateTokens: be.deltaCacheCreate,
     })
   }
   return events.sort((a, b) => a.ts - b.ts)
+}
+
+/** Cost of ONE statusline turn from its own uncached buckets × the model rate. The statusline reports
+ *  input/output as FRESH (uncached) per-turn tokens (separate from cache_read), so they map directly onto
+ *  calcTokenCostUsd's (uncachedInput, cacheRead, cacheWrite, output). Falls back to the cumulative delta
+ *  when no split is present or the model has no pricing entry (derived === 0) — never loses cost. */
+function statuslineCostUsd(be: StatuslineBillingEvent, model: string | undefined): number {
+  const hasSplit = be.deltaInput !== undefined || be.deltaOutput !== undefined ||
+    be.deltaCacheRead !== undefined || be.deltaCacheCreate !== undefined
+  if (!hasSplit || !model) { return be.deltaCostUsd }
+  const derived = calcTokenCostUsd(
+    be.deltaInput ?? 0, be.deltaCacheRead ?? 0, be.deltaCacheCreate ?? 0, be.deltaOutput ?? 0, model)
+  return derived > 0 ? derived : be.deltaCostUsd
 }
 
 // ── Rolling-window math ──────────────────────────────────────────────────────────
@@ -356,6 +395,11 @@ export interface WindowConsumption {
   breakdown: BurnBreakdown              // what the consumed tokens are made of (cache-read usually ~96%)
   capacityTokens: number | null
   pctConsumed: number | null            // null when capacity unset — NEVER invented
+  // TRDD-BURNWDGT — COST-based capacity + %: consumedCostUsd / capacityCostUsd. Set only when a cost cap
+  // is configured. This is the truthful fill metric when the plan's window is billed by cost (cache-read
+  // barely counts), unlike the raw-token pctConsumed which the ~96% cache-read volume inflates.
+  capacityCostUsd: number | null
+  pctConsumedCost: number | null        // null when no cost cap — NEVER invented
   tokensPerMin: number                  // the current burn rate used for the projection
   minutesToExhaustion: number | null    // null when capacity unset or burn rate 0
 }
@@ -374,10 +418,11 @@ export interface WindowBudget {
 
 function windowConsumption(
   events: ConsumptionEvent[], now: number, windowMs: number, label: '5h' | '7d',
-  capacity: number | null, projectionTokensPerMin: number,
+  capacity: number | null, projectionTokensPerMin: number, capacityCost: number | null = null,
 ): WindowConsumption {
   const { tokens, cost, breakdown } = windowSum(events, now, windowMs)
   const pct = capacity !== null && capacity > 0 ? +(tokens / capacity * 100).toFixed(2) : null
+  const pctCost = capacityCost !== null && capacityCost > 0 ? +(cost / capacityCost * 100).toFixed(2) : null
   const remaining = capacity !== null ? capacity - tokens : null
   const minutesToExhaustion =
     remaining !== null && remaining > 0 && projectionTokensPerMin > 0
@@ -389,6 +434,7 @@ function windowConsumption(
     consumedBillableWeighted: Math.round(billableWeightedTokens(breakdown)),
     breakdown,
     capacityTokens: capacity, pctConsumed: pct,
+    capacityCostUsd: capacityCost, pctConsumedCost: pctCost,
     tokensPerMin: projectionTokensPerMin, minutesToExhaustion,
   }
 }
@@ -398,14 +444,106 @@ function windowConsumption(
 export function computeWindowBudget(
   events: ConsumptionEvent[], config: BurnConfig, projectionTokensPerMin: number, now: number,
 ): WindowBudget {
-  const configured = config.window5hTokens !== null || config.window7dTokens !== null
+  const configured = config.window5hTokens !== null || config.window7dTokens !== null ||
+    config.window5hCostUsd !== null || config.window7dCostUsd !== null
   return {
-    fiveHour: windowConsumption(events, now, FIVE_HOURS_MS, '5h', config.window5hTokens, projectionTokensPerMin),
-    sevenDay: windowConsumption(events, now, SEVEN_DAYS_MS, '7d', config.window7dTokens, projectionTokensPerMin),
+    fiveHour: windowConsumption(events, now, FIVE_HOURS_MS, '5h', config.window5hTokens, projectionTokensPerMin, config.window5hCostUsd),
+    sevenDay: windowConsumption(events, now, SEVEN_DAYS_MS, '7d', config.window7dTokens, projectionTokensPerMin, config.window7dCostUsd),
     capacitySource: config.capacitySource,
     capacityConfigured: configured,
     note: configured ? undefined
-      : 'Window capacity not configured — set AGENTLENS_WINDOW_5H_TOKENS / AGENTLENS_WINDOW_7D_TOKENS (or ~/.agentlens/burn-config.json) so % consumed and time-to-exhaustion can be computed.',
+      : 'Window capacity not configured — set AGENTLENS_WINDOW_5H_TOKENS / AGENTLENS_WINDOW_7D_TOKENS (raw-token caps) or AGENTLENS_WINDOW_5H_COST_USD / AGENTLENS_WINDOW_7D_COST_USD (cost caps), or ~/.agentlens/burn-config.json, so % consumed and time-to-exhaustion can be computed.',
+  }
+}
+
+// ── Per-account window budget (TRDD-BURNWDGT) ──────────────────────────────────
+// Rate limits are per OAuth account, so the machine-wide budget above is misleading once the user
+// rotates accounts mid-window (a firehose on account B must not eat account A's remaining %). These
+// group the SAME event stream by accountUuid and compute each account's own 5h/7d budget + burn rate.
+
+export interface AccountWindowBudget {
+  accountUuid: string | null    // null = the "unknown" bucket (events whose account wasn't attributed)
+  budget: WindowBudget
+  fiveMinTokensPerMin: number   // this account's own recent burn rate (drives its projection)
+  events: number                // events attributed to this account across the 7d window
+}
+
+/** Split the consumption stream by account and compute each account's own window budget + burn rate.
+ *  Sorted heaviest-5h-consumption first; the unknown bucket (if any) is pinned last. Pure — the caller
+ *  supplies the events + config; labels are resolved separately (accountInfo) to keep this I/O-free. */
+export function computeAccountWindowBudgets(
+  events: ConsumptionEvent[], config: BurnConfig, now: number,
+): AccountWindowBudget[] {
+  const byAccount = new Map<string | null, ConsumptionEvent[]>()
+  for (const e of events) {
+    const key = e.accountUuid ?? null
+    const arr = byAccount.get(key)
+    if (arr) { arr.push(e) } else { byAccount.set(key, [e]) }
+  }
+  const out: AccountWindowBudget[] = []
+  for (const [accountUuid, evs] of byAccount) {
+    const fiveMin = rateWindow(evs, now, FIVE_MIN_MS).tokensPerMin
+    out.push({
+      accountUuid,
+      budget: computeWindowBudget(evs, config, fiveMin, now),
+      fiveMinTokensPerMin: fiveMin,
+      events: windowSum(evs, now, SEVEN_DAYS_MS).count,
+    })
+  }
+  out.sort((a, b) => {
+    // Unknown bucket pinned last; otherwise heaviest 7d consumption first.
+    if (a.accountUuid === null) { return 1 }
+    if (b.accountUuid === null) { return -1 }
+    return b.budget.sevenDay.consumedTokens - a.budget.sevenDay.consumedTokens
+  })
+  return out
+}
+
+// ── Empirical capacity calibration (TRDD-BURNWDGT next-action 3) ───────────────
+// The real window cap is Anthropic's undisclosed rate-limit ceiling — observable ONLY at the moment a
+// window ends PREMATURELY (a rate-limit / usage-limit hit; the user waits for exhaustion), NOT at a
+// time-based 5h rollover (that measures elapsed time, not the cap). Given the account's window START and
+// the premature-END timestamp, the consumption accumulated in between IS the observed cap for that
+// account/plan — removing the need to hardcode a cap.
+
+export interface ObservedCapacity {
+  accountUuid: string | null
+  windowStartMs: number
+  windowEndMs: number
+  tokens: number                // raw tokens consumed in [start, end] — the raw-token cap
+  costUsd: number               // cost consumed — the cost cap
+  billableWeighted: number      // cost in fresh-input-token equivalents
+  breakdown: BurnBreakdown
+  events: number
+}
+
+/** Snapshot the consumption an account accrued between its window start and a PREMATURE end (rate-limit
+ *  hit). The result is the empirically-observed capacity to feed back into the config caps. Pure. */
+export function observeCapacityFromPrematureEnd(
+  events: ConsumptionEvent[], accountUuid: string | null, windowStartMs: number, windowEndMs: number,
+): ObservedCapacity {
+  const breakdown = emptyBreakdown()
+  let tokens = 0, costUsd = 0, count = 0
+  for (const e of events) {
+    if ((e.accountUuid ?? null) !== accountUuid) { continue }
+    if (e.ts < windowStartMs || e.ts > windowEndMs) { continue }
+    tokens += e.tokens; costUsd += e.costUsd; count++
+    const hasSplit = e.inputTokens !== undefined || e.outputTokens !== undefined ||
+      e.cacheReadTokens !== undefined || e.cacheCreateTokens !== undefined
+    if (hasSplit) {
+      breakdown.input += e.inputTokens ?? 0
+      breakdown.output += e.outputTokens ?? 0
+      breakdown.cacheRead += e.cacheReadTokens ?? 0
+      breakdown.cacheCreate += e.cacheCreateTokens ?? 0
+    } else {
+      breakdown.unknown += e.tokens
+    }
+  }
+  return {
+    accountUuid, windowStartMs, windowEndMs,
+    tokens, costUsd: +costUsd.toFixed(4),
+    billableWeighted: Math.round(billableWeightedTokens(breakdown)),
+    breakdown, events: count,
   }
 }
 
@@ -519,7 +657,8 @@ export function evaluateBurnAlerts(
 export interface BurnStatus {
   now: number
   global: { oneMin: BurnRateWindow; fiveMin: BurnRateWindow; costPerHour: number }
-  window: WindowBudget
+  window: WindowBudget                    // machine-wide (all accounts pooled) — kept for back-compat
+  accountWindows: AccountWindowBudget[]   // TRDD-BURNWDGT — the same budget split PER OAuth account
   topSessions: SessionBurn[]
   alerts: BurnAlert[]
   activeSessions: number
@@ -539,6 +678,7 @@ export function computeBurnStatus(
       costPerHour: +(series.global.fiveMin.costPerMin * 60).toFixed(4),
     },
     window: budget,
+    accountWindows: computeAccountWindowBudgets(events, config, now),
     topSessions: series.sessions.slice(0, 5),
     alerts,
     activeSessions: series.sessions.length,

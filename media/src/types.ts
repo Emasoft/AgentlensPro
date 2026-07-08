@@ -556,7 +556,20 @@ export interface BurnWindowConsumption {
   breakdown: BurnBreakdown
   capacityTokens: number | null
   pctConsumed: number | null
+  // TRDD-BURNWDGT — cost-based capacity + % (present only when a cost cap is configured).
+  capacityCostUsd?: number | null
+  pctConsumedCost?: number | null
   minutesToExhaustion: number | null
+}
+
+// Mirror of src/burnMonitor.ts AccountWindowBudget (TRDD-BURNWDGT) — one OAuth account's own window
+// budget. accountLabel is resolved live (email/org) at the server; null accountUuid = the unknown bucket.
+export interface AccountWindowBudget {
+  accountUuid: string | null
+  accountLabel?: string
+  budget: { fiveHour: BurnWindowConsumption; sevenDay: BurnWindowConsumption; capacityConfigured: boolean; note?: string }
+  fiveMinTokensPerMin: number
+  events: number
 }
 
 // Mirror of src/burnMonitor.ts BurnRateWindow (the fields the webview reads). `breakdown` holds window
@@ -573,6 +586,8 @@ export interface BurnStatus {
   now: number
   global: { oneMin: BurnRateWindowLite; fiveMin: BurnRateWindowLite; costPerHour: number }
   window: { fiveHour: BurnWindowConsumption; sevenDay: BurnWindowConsumption; capacityConfigured: boolean; note?: string }
+  // TRDD-BURNWDGT — the machine-wide window split PER OAuth account (rate limits are per-account).
+  accountWindows?: AccountWindowBudget[]
   alerts: BurnAlert[]
   activeSessions: number
 }
