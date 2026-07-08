@@ -140,11 +140,27 @@ function LeaderboardSection({ reports }: { reports: CacheBreakReport[] }) {
 }
 
 // ── Section: fleet / sub-agent tree — parent + spawned children with cache-warmth badges ──────
-function FleetSection({ sessions, allSessions }: { sessions: SessionSummaryCard[]; allSessions: SessionSummaryCard[] }) {
-  const childrenOf = (id: string) => allSessions.filter(s => s.parentSessionId === id && s.sessionId !== id)
-  const parents = sessions.filter(s => childrenOf(s.sessionId).length > 0)
+// Bounded to the top FLEET_LIMIT fleets by total cost. Children come from a parent→children map
+// built ONCE in Cache() — never rescanned per parent. The earlier version filtered allSessions per
+// parent (O(roots × allSessions) ≈ 146M ops on a 12k-session dataset, pinning the main thread) AND
+// rendered one card per fleet-parent unbounded (~15,900 DOM nodes). Both are fixed here.
+const FLEET_LIMIT = 25
+const KID_LIMIT = 12 // per-fleet child rows rendered; a giant workflow fleet can spawn hundreds
 
-  if (parents.length === 0) {
+const kidTok = (c: SessionSummaryCard) => c.inputTokens + c.outputTokens + c.cacheReadTokens + c.cacheCreateTokens
+
+function FleetSection({ roots, childrenByParent }: { roots: SessionSummaryCard[]; childrenByParent: Map<string, SessionSummaryCard[]> }) {
+  const fleets: { p: SessionSummaryCard; kids: SessionSummaryCard[]; total: number }[] = []
+  for (const p of roots) {
+    const kids = childrenByParent.get(p.sessionId)
+    if (!kids || kids.length === 0) continue
+    kids.sort((a, b) => kidTok(b) - kidTok(a)) // biggest children first so the bounded render shows them
+    const total = calcSessionCost(p, 'token').totalUsd + kids.reduce((n, c) => n + calcSessionCost(c, 'token').totalUsd, 0)
+    fleets.push({ p, kids, total })
+  }
+  fleets.sort((a, b) => b.total - a.total)
+
+  if (fleets.length === 0) {
     return (
       <div style="margin-bottom:18px">
         <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px">Fleet / sub-agent tree</div>
@@ -153,33 +169,32 @@ function FleetSection({ sessions, allSessions }: { sessions: SessionSummaryCard[
     )
   }
 
+  const shown = fleets.slice(0, FLEET_LIMIT)
   return (
     <div style="margin-bottom:18px">
-      <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px">Fleet / sub-agent tree — aggregate cost + per-child cache-warmth</div>
-      {parents.map(p => {
-        const kids = childrenOf(p.sessionId)
-        const parentCost = calcSessionCost(p, 'token').totalUsd
-        const kidCost = kids.reduce((n, c) => n + calcSessionCost(c, 'token').totalUsd, 0)
-        return (
-          <div key={p.sessionId} style="border:1px solid var(--border);border-radius:4px;margin-bottom:6px;padding:6px 8px">
-            <div style="display:flex;align-items:center;gap:8px;font-size:11px;margin-bottom:4px">
-              <span dangerouslySetInnerHTML={{ __html: getAgentDotHtml(p.source) }} />
-              <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title={p.userRequest}>{p.userRequest?.slice(0, 80) || formatSessionTime(p)}</span>
-              <span style="color:var(--vscode-charts-orange,#e2a03f)" title="parent + fleet total">
-                ↳{kids.length} · Σ ~{fmtUsd(parentCost + kidCost)}
-              </span>
-            </div>
-            {kids.map(c => (
-              <div key={c.sessionId} style="display:flex;align-items:center;gap:8px;font-size:10px;padding:2px 0 2px 18px;border-left:2px solid var(--vscode-charts-orange,#e2a03f);margin-left:6px">
-                {spawnKindBadge(c)}
-                <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)" title={c.userRequest}>{c.userRequest?.slice(0, 60) || c.model}</span>
-                <span style="color:var(--muted)">{formatCompact(c.inputTokens + c.outputTokens + c.cacheReadTokens + c.cacheCreateTokens)} tok</span>
-                <span style="width:50px;text-align:right">~{fmtUsd(calcSessionCost(c, 'token').totalUsd)}</span>
-              </div>
-            ))}
+      <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px">Fleet / sub-agent tree — aggregate cost + per-child cache-warmth{fleets.length > FLEET_LIMIT ? ` · top ${FLEET_LIMIT} of ${fleets.length}` : ''}</div>
+      {shown.map(({ p, kids, total }) => (
+        <div key={p.sessionId} style="border:1px solid var(--border);border-radius:4px;margin-bottom:6px;padding:6px 8px">
+          <div style="display:flex;align-items:center;gap:8px;font-size:11px;margin-bottom:4px">
+            <span dangerouslySetInnerHTML={{ __html: getAgentDotHtml(p.source) }} />
+            <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title={p.userRequest}>{p.userRequest?.slice(0, 80) || formatSessionTime(p)}</span>
+            <span style="color:var(--vscode-charts-orange,#e2a03f)" title="parent + fleet total">
+              ↳{kids.length} · Σ ~{fmtUsd(total)}
+            </span>
           </div>
-        )
-      })}
+          {kids.slice(0, KID_LIMIT).map(c => (
+            <div key={c.sessionId} style="display:flex;align-items:center;gap:8px;font-size:10px;padding:2px 0 2px 18px;border-left:2px solid var(--vscode-charts-orange,#e2a03f);margin-left:6px">
+              {spawnKindBadge(c)}
+              <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)" title={c.userRequest}>{c.userRequest?.slice(0, 60) || c.model}</span>
+              <span style="color:var(--muted)">{formatCompact(kidTok(c))} tok</span>
+              <span style="width:50px;text-align:right">~{fmtUsd(calcSessionCost(c, 'token').totalUsd)}</span>
+            </div>
+          ))}
+          {kids.length > KID_LIMIT && (
+            <div style="font-size:10px;color:var(--muted);padding:2px 0 2px 18px;margin-left:6px;border-left:2px solid var(--border)">+{kids.length - KID_LIMIT} more sub-agents…</div>
+          )}
+        </div>
+      ))}
     </div>
   )
 }
@@ -193,6 +208,16 @@ export function Cache() {
   // Top-level = sessions that are NOT a shown session's sub-agent (children fold into the fleet tree).
   const shownIds = new Set(base.map(s => s.sessionId))
   const roots = base.filter(s => !s.parentSessionId || !shownIds.has(s.parentSessionId))
+
+  // Precompute parent→children ONCE (single O(allSessions) pass) so FleetSection does O(1) lookups
+  // instead of an O(roots × allSessions) rescan per parent (see FleetSection note).
+  const childrenByParent = new Map<string, SessionSummaryCard[]>()
+  for (const s of allSessions) {
+    if (!s.parentSessionId || s.parentSessionId === s.sessionId) continue
+    const arr = childrenByParent.get(s.parentSessionId)
+    if (arr) arr.push(s)
+    else childrenByParent.set(s.parentSessionId, [s])
+  }
 
   // Hydrate a bounded set (timeline + composition) so the cache-break aggregation has data. The
   // hit-rate trend + worst-sessions use the card-level cacheHitRate and don't need this.
@@ -235,7 +260,7 @@ export function Cache() {
         <HitRateSection sessions={roots} threshold={threshold} />
         <CausesSection reports={reports} />
         <LeaderboardSection reports={reports} />
-        <FleetSection sessions={roots} allSessions={allSessions} />
+        <FleetSection roots={roots} childrenByParent={childrenByParent} />
       </div>
     </div>
   )
