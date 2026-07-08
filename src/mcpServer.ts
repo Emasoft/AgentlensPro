@@ -33,6 +33,19 @@ import type { BurnStatus, SessionStatus } from './burnMonitor'
 import { listSessionFileIds } from './contextComposition'
 import { generateSuggestions } from './instructionAdvisor'
 import { readAllInstructionContent } from './instructionFiles'
+import { ContextCompositionIndex, type CompositionBlockKind, type GroupBy } from './contextCompositionIndex'
+
+// TRDD-CTXQUERY — one process-lifetime, LRU-cached composition index shared by all composition tools.
+// It reads the shared callBodyRegistry singleton (fed by both OTLP ingestors) directly, so the tools
+// work in BOTH the extension host and the standalone server with no per-runtime accessor wiring.
+const compositionIndex = new ContextCompositionIndex()
+
+// Map a session id to its project path for scope/group-by. Built per-call from the live session cards.
+function projectResolver(sessions: SessionSummaryCard[]): (id: string) => string | undefined {
+  const map = new Map<string, string>()
+  for (const s of sessions) { map.set(s.sessionId, s.projectPath ?? s.workspace ?? 'unknown') }
+  return (id: string) => map.get(id)
+}
 
 // ── Session accessor ──────────────────────────────────────────────────────────
 
@@ -383,6 +396,88 @@ const TOOLS = [
       properties: {
         sessionId: { type: 'string', description: 'Your session id if known (exact match)' },
         workspace: { type: 'string', description: 'Your workspace path prefix — resolves the newest live session under it' },
+      },
+    },
+  },
+  // ── OTEL-raw-body context composition query surface (TRDD-CTXQUERY) ────────────
+  {
+    name: 'get_image_report',
+    description:
+      'How many IMAGES a session (or project/all) sent into the context, and what re-reading them cost. ' +
+      'Reconstructed LAZILY from Claude Code\'s raw OTEL request bodies (the exact per-call context). Per ' +
+      'session: image count, per-call image token weight, the first turn they appeared, how many turns ' +
+      'they stayed resident (the Anthropic API is stateless → the whole transcript incl. images is re-sent ' +
+      'every call), and the CUMULATIVE cache-read cost of those re-reads. This is the tool that surfaces ' +
+      'the "8 screenshots stuck for 400 turns = 525k tokens re-read every turn = ~$425" pattern. Scope by ' +
+      'sessionId or a project path prefix; omit for a bounded most-recent scan (read `coverage`). Only ' +
+      'sessions with raw bodies in the live registry are scanned (lazy — no full-disk sweep).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        scope: { type: 'string', description: 'A sessionId, a project path prefix, or omit for a bounded most-recent scan' },
+      },
+    },
+  },
+  {
+    name: 'find_resident_blobs',
+    description:
+      'THE eviction-candidate finder: context blocks (images, tool_results, pasted files, bash output, ' +
+      'text) that stay RESIDENT across many turns, ranked by wasted CUMULATIVE cache-read cost — because ' +
+      'a block riding forward is re-read (cache-read billed) on every turn until compaction evicts it. ' +
+      'Use this to decide what to compact, move to a sub-agent (isolated context), or stop retaining. ' +
+      'Filter by block kind (image | toolOutput | bashOutput | file | userMsg | …), a minimum per-block ' +
+      'token size, and a minimum resident-turn count. Scope by sessionId / project prefix / omit (bounded ' +
+      'lazy scan — read `coverage`).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        scope:            { type: 'string', description: 'A sessionId, a project path prefix, or omit for a bounded most-recent scan' },
+        kind:             { type: 'string', description: 'Optional block-kind filter (image, toolOutput, bashOutput, file, userMsg, assistantMsg, reasoning, mcp, …)' },
+        minTokens:        { type: 'number', description: 'Only blocks whose peak single-occurrence tokens ≥ this (default 0)' },
+        minResidentTurns: { type: 'number', description: 'Only blocks resident across ≥ this many turns (default 2)' },
+      },
+    },
+  },
+  {
+    name: 'query_context_blocks',
+    description:
+      'The GENERIC composition query engine — "all possible queries" over the raw-body context blocks in ' +
+      'one tool. FILTER by any of {project, sessionId, kind, model, minTokens, turnFrom, turnTo} and ' +
+      'GROUP-BY any of {kind, session, project, model, turn}; returns each group\'s Σ tokens, block count, ' +
+      'and estimated cache-read cost, heaviest-first. Reconstructed lazily from the OTEL request bodies ' +
+      '(token figures calibrated to the paired response body\'s exact usage when available, else ' +
+      'estimated). Read `coverage` for what was scanned. Examples: kind=image groupBy=session → biggest ' +
+      'image sessions; groupBy=kind for one session → its block-type breakdown.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        project:   { type: 'string', description: 'Filter by project path prefix' },
+        sessionId: { type: 'string', description: 'Filter to one session' },
+        kind:      { type: 'string', description: 'Filter by block kind (image, toolOutput, file, system, claudemd, rule, toolCatalog, mcp, reasoning, …)' },
+        model:     { type: 'string', description: 'Filter by model (substring match)' },
+        minTokens: { type: 'number', description: 'Only blocks with ≥ this many tokens' },
+        turnFrom:  { type: 'number', description: 'Only calls at turn ≥ this' },
+        turnTo:    { type: 'number', description: 'Only calls at turn ≤ this' },
+        groupBy:   { type: 'string', description: 'Group-by dimension: kind | session | project | model | turn (default kind)' },
+      },
+    },
+  },
+  {
+    name: 'get_block_content',
+    description:
+      'Drill into ONE context block of a specific call and return its ACTUAL text — the on-demand content ' +
+      'fetch for the composition tools. Identify it by sessionId + turn (1-based call index) + blockIndex ' +
+      '(from query_context_blocks / a composition record). An IMAGE block returns metadata + a body-file ' +
+      'ref, never the base64 bytes (pointer-only). Pass full=true to lift the per-block text cap for a ' +
+      'single deep read.',
+    inputSchema: {
+      type: 'object' as const,
+      required: ['sessionId', 'turn', 'blockIndex'],
+      properties: {
+        sessionId:  { type: 'string', description: 'Session ID' },
+        turn:       { type: 'number', description: '1-based call index within the session' },
+        blockIndex: { type: 'number', description: 'Block position within that call' },
+        full:       { type: 'boolean', description: 'Lift the per-block text cap for this single block (default false)' },
       },
     },
   },
@@ -1401,6 +1496,30 @@ export function createMcpServer(opts: McpServerOptions): Server {
           ? getSessionStatus(args as { sessionId?: string; workspace?: string })
           : { message: 'Session status unavailable in this runtime (no live session/statusline source wired).' }
         break
+      case 'get_image_report': {
+        const a = args as { scope?: string }
+        result = await compositionIndex.imageReport(a.scope, projectResolver(sessions))
+        break
+      }
+      case 'find_resident_blobs': {
+        const a = args as { scope?: string; kind?: CompositionBlockKind; minTokens?: number; minResidentTurns?: number }
+        result = await compositionIndex.findResidentBlobs(a.scope, { kind: a.kind, minTokens: a.minTokens, minResidentTurns: a.minResidentTurns }, projectResolver(sessions))
+        break
+      }
+      case 'query_context_blocks': {
+        const a = args as { project?: string; sessionId?: string; kind?: CompositionBlockKind; model?: string; minTokens?: number; turnFrom?: number; turnTo?: number; groupBy?: GroupBy }
+        result = await compositionIndex.queryBlocks(
+          { project: a.project, sessionId: a.sessionId, kind: a.kind, model: a.model, minTokens: a.minTokens, turnFrom: a.turnFrom, turnTo: a.turnTo },
+          a.groupBy ?? 'kind',
+          projectResolver(sessions),
+        )
+        break
+      }
+      case 'get_block_content': {
+        const a = args as { sessionId: string; turn: number; blockIndex: number; full?: boolean }
+        result = await compositionIndex.getBlockContent(a.sessionId, a.turn, a.blockIndex, { full: a.full })
+        break
+      }
       default:
         return { content: [{ type: 'text', text: `Unknown tool: ${req.params.name}` }], isError: true }
     }

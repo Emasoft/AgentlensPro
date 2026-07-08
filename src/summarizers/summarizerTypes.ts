@@ -327,6 +327,7 @@ export interface ResidentCostReport {
 export interface CallContext {
   requestId?: string
   sessionId: string
+  accountUuid?: string        // parsed from metadata.user_id blob (identifier, not a secret; pointer-only)
   model?: string
   blocks: ContextBlock[]
   truncated: boolean          // true if the file was oversized or any block text was capped

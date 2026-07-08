@@ -10,8 +10,14 @@
 //     (file path + ids), never the multi-MB body itself. A call is later resolved to its body file.
 //  2. buildCallContext(bodyFilePath) — parse the (capped) request JSON into ContextBlock[].
 import * as fs from 'fs'
-import { countTokens } from './tokenEstimator'
+import { countTokens, estimateTokensFromBytes } from './tokenEstimator'
 import type { ContextBlock, ContextBlockKind, CallContext } from './summarizers/summarizerTypes'
+
+// Image content blocks stay in the shared ContextBlockKind 'other' bucket (adding a dedicated 'image'
+// kind would ripple into the residentCost Record + the webview mirror — out of scope here), but their
+// label is given this stable prefix so a consumer (contextCompositionIndex) can re-classify them as
+// images without re-parsing the body. Load-bearing: the composition index keys image detection on it.
+export const IMAGE_BLOCK_LABEL_PREFIX = 'image'
 
 // A request body can be a few MB; cap the file we are willing to read so a corrupt/huge file can
 // never load unbounded into memory. JSON needs the whole document to parse, so the guard is a size
@@ -88,6 +94,58 @@ export class CallBodyRegistry {
     }
     return requests[requests.length - 1]
   }
+
+  /** Session ids currently held, most-recently-used first (the Map's insertion order is MRU because
+   *  record() re-inserts). The composition index enumerates a bounded, most-recent slice of these for
+   *  a broad-scope query — the LAZY contract (never a full-disk sweep of the 20k+ body files). */
+  sessionIds(): string[] {
+    return [...this.map.keys()].reverse()
+  }
+
+  /** Request-body pointers for one session, oldest→newest by arrival ts. The index maps these to
+   *  1-based turns (each request body is one llm call). */
+  requestPointers(sessionId: string): CallBodyPointer[] {
+    const list = this.map.get(sessionId)
+    if (!list) { return [] }
+    return list.filter(p => p.kind === 'request').sort((a, b) => a.ts - b.ts)
+  }
+
+  /** The RESPONSE-body pointer paired with a request, joined on the shared spanId (the request-body
+   *  event lacks the API-assigned request_id; the response-body event carries both). Used to read the
+   *  authoritative per-call `usage` totals. Falls back to requestId match when spanId is absent. */
+  responseFor(sessionId: string, sel: { spanId?: string; requestId?: string }): CallBodyPointer | undefined {
+    const list = this.map.get(sessionId)
+    if (!list) { return undefined }
+    const responses = list.filter(p => p.kind === 'response')
+    if (sel.spanId) {
+      const bySpan = responses.find(p => p.spanId === sel.spanId)
+      if (bySpan) { return bySpan }
+    }
+    if (sel.requestId) {
+      const byReq = responses.find(p => p.requestId === sel.requestId)
+      if (byReq) { return byReq }
+    }
+    return undefined
+  }
+}
+
+/** Parse Claude Code's `metadata.user_id` — a JSON STRING blob `{device_id, account_uuid, session_id}`
+ *  (NOT a bare id). The pre-fix code assigned this whole blob to `sessionId`; this returns the real
+ *  fields. account_uuid/device_id are identifiers, not secrets, but are pointer-only data — never
+ *  persisted to disk by the composition index. Returns empty fields on any malformed input (fail-soft:
+ *  a body with a non-JSON user_id must not throw the whole parse). */
+export function parseUserId(raw: unknown): { sessionId?: string; accountUuid?: string; deviceId?: string } {
+  if (typeof raw !== 'string' || raw.length === 0) { return {} }
+  try {
+    const o = JSON.parse(raw) as Record<string, unknown>
+    return {
+      sessionId: typeof o.session_id === 'string' ? o.session_id : undefined,
+      accountUuid: typeof o.account_uuid === 'string' ? o.account_uuid : undefined,
+      deviceId: typeof o.device_id === 'string' ? o.device_id : undefined,
+    }
+  } catch {
+    return {}
+  }
 }
 
 /** The shared registry both OTLP ingestors write to and the MCP/HTTP accessors read from. */
@@ -134,10 +192,13 @@ function flattenResultContent(content: unknown): string {
 
 // Turn a parsed request body into an ordered ContextBlock[]: system → tool catalog → messages, which
 // mirrors the actual prompt-cache prefix order (stable prefix first, conversation after).
-export function buildCallContextFromJson(body: RawRequestBody | null): CallContext | null {
+export function buildCallContextFromJson(body: RawRequestBody | null, opts?: { uncap?: boolean }): CallContext | null {
   if (!body || typeof body !== 'object') { return null }
   const blocks: ContextBlock[] = []
   let truncated = false
+  // Text cap is lifted only for an explicit single-block drill (get_block_content full:true); every
+  // ordinary parse stays capped so a call never ships an unbounded payload.
+  const cap = opts?.uncap ? Infinity : BLOCK_TEXT_CAP
 
   const push = (kind: ContextBlockKind, label: string, rawText: string, role: 'input' | 'output', toolName?: string): void => {
     const full = rawText ?? ''
@@ -146,7 +207,7 @@ export function buildCallContextFromJson(body: RawRequestBody | null): CallConte
     // plumbed into the registry, so these stay 'estimated' (no calibration anchor available here yet).
     const tokens = countTokens(full)
     let text = full
-    if (text.length > BLOCK_TEXT_CAP) { text = text.slice(0, BLOCK_TEXT_CAP); truncated = true }
+    if (text.length > cap) { text = text.slice(0, cap); truncated = true }
     const bytes = Buffer.byteLength(text)
     blocks.push({ id: `${kind}:${blocks.length}`, kind, label, tokens, tokenSource: 'estimated', bytes, text, role, toolName })
   }
@@ -201,15 +262,35 @@ export function buildCallContextFromJson(body: RawRequestBody | null): CallConte
         const kind: ContextBlockKind = isMcp ? 'mcp' : name === 'Bash' ? 'bashOutput' : 'toolOutput'
         push(kind, name || 'tool_result', flattenResultContent(tr.content), 'output', name || undefined)
       } else if (type === 'image') {
-        push('other', 'image', '[image]', 'input')
+        // Account the image's real token weight from its base64 LENGTH (≈ bytes/4, which matches the
+        // observed 46–77k tokens/image ground truth) — the pre-fix '[image]' placeholder counted ~2
+        // tokens and hid the ANIME2SVG 525k-token stuck-image burn. NEVER store the base64 bytes: the
+        // stored text is a metadata stub, so this stays pointer-only (no PII/image bytes persisted).
+        const src = (b as { source?: { data?: string; media_type?: string } }).source
+        const b64len = typeof src?.data === 'string' ? src.data.length : 0
+        const media = src?.media_type ?? 'unknown'
+        blocks.push({
+          id: `other:${blocks.length}`,
+          kind: 'other',
+          label: `${IMAGE_BLOCK_LABEL_PREFIX} ${media}`,
+          tokens: estimateTokensFromBytes(b64len),
+          tokenSource: 'estimated',
+          bytes: b64len,
+          text: b64len > 0 ? `[image ${media} — ${b64len} base64 bytes, not stored]` : '[image]',
+          role: 'input',
+        })
       } else {
         push('other', type ?? 'block', JSON.stringify(b), 'input')
       }
     }
   }
 
+  // metadata.user_id is a JSON blob {device_id, account_uuid, session_id} — parse out the real ids
+  // (the pre-fix code assigned the whole blob string to sessionId).
+  const uid = parseUserId(body.metadata?.user_id)
   return {
-    sessionId: body.metadata?.user_id ?? '',
+    sessionId: uid.sessionId ?? '',
+    accountUuid: uid.accountUuid,
     model: typeof body.model === 'string' ? body.model : undefined,
     blocks,
     truncated,
@@ -218,7 +299,7 @@ export function buildCallContextFromJson(body: RawRequestBody | null): CallConte
 
 /** Parse the raw request-body file (size-guarded) into a CallContext. Returns null when the file is
  *  missing, oversized, or not valid JSON. */
-export async function buildCallContext(bodyFilePath: string): Promise<CallContext | null> {
+export async function buildCallContext(bodyFilePath: string, opts?: { uncap?: boolean }): Promise<CallContext | null> {
   let stat: fs.Stats
   try {
     stat = await fs.promises.stat(bodyFilePath)
@@ -238,7 +319,7 @@ export async function buildCallContext(bodyFilePath: string): Promise<CallContex
   } catch {
     return null
   }
-  return buildCallContextFromJson(parsed)
+  return buildCallContextFromJson(parsed, opts)
 }
 
 /** Resolve a call (sessionId + requestId/spanId) to its full CallContext via the shared registry.
