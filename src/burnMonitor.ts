@@ -59,6 +59,13 @@ export interface StatuslineBillingEvent {
   workspace?: string
   deltaCostUsd: number
   deltaTokens: number
+  // Per-turn buckets (the statusline reports all four). Carried so the burn BREAKDOWN is accurate for
+  // statusline-sourced sessions — the common case when OTEL enhanced-telemetry is off, and exactly the
+  // sessions the live burn monitor watches. When present they sum to `deltaTokens`.
+  deltaInput?: number
+  deltaOutput?: number
+  deltaCacheRead?: number
+  deltaCacheCreate?: number
 }
 
 // ── Config ─────────────────────────────────────────────────────────────────────
@@ -199,6 +206,9 @@ export function gatherConsumptionEvents(
     events.push({
       ts: toMs(be.ts), sessionId: be.sessionId, workspace: be.workspace,
       costUsd: be.deltaCostUsd, tokens: be.deltaTokens, source: 'statusline',
+      // Per-bucket split from the statusline (when present) so the breakdown is accurate here too.
+      inputTokens: be.deltaInput, outputTokens: be.deltaOutput,
+      cacheReadTokens: be.deltaCacheRead, cacheCreateTokens: be.deltaCacheCreate,
     })
   }
   return events.sort((a, b) => a.ts - b.ts)
@@ -241,15 +251,17 @@ function windowSum(
   for (const e of events) {
     if (e.ts < from || e.ts > now) continue
     tokens += e.tokens; cost += e.costUsd; count++
-    if (e.source === 'api_request') {
-      // api_request events carry the per-bucket split (they sum to e.tokens by construction).
+    // Split on PRESENCE of the per-bucket fields, not the source: both api_request AND statusline events
+    // now carry them (they sum to e.tokens by construction). Only a truly split-less event (a future
+    // source) falls into `unknown`, so breakdown.(input+output+cacheRead+cacheCreate+unknown) === tokens.
+    const hasSplit = e.inputTokens !== undefined || e.outputTokens !== undefined ||
+      e.cacheReadTokens !== undefined || e.cacheCreateTokens !== undefined
+    if (hasSplit) {
       breakdown.input += e.inputTokens ?? 0
       breakdown.output += e.outputTokens ?? 0
       breakdown.cacheRead += e.cacheReadTokens ?? 0
       breakdown.cacheCreate += e.cacheCreateTokens ?? 0
     } else {
-      // statusline events give only a total — attribute it honestly to `unknown` rather than guessing a
-      // split, so breakdown.(input+output+cacheRead+cacheCreate+unknown) === tokens exactly.
       breakdown.unknown += e.tokens
     }
   }

@@ -533,18 +533,40 @@ export interface BurnAlert {
   cause: string | null
 }
 
+// Mirror of src/burnMonitor.ts BurnBreakdown — the 4 token buckets (+ statusline `unknown`) summing to
+// the window total. cache-read is ~96% of real workloads (resident context re-read every turn).
+export interface BurnBreakdown {
+  input: number
+  output: number
+  cacheRead: number
+  cacheCreate: number
+  unknown: number
+}
+
 export interface BurnWindowConsumption {
   window: string
   consumedTokens: number
   consumedCostUsd: number
+  consumedBillableWeighted: number   // cost-weighted tokens (cache-read 0.1×) — matters if the window is cost-based
+  breakdown: BurnBreakdown
   capacityTokens: number | null
   pctConsumed: number | null
   minutesToExhaustion: number | null
 }
 
+// Mirror of src/burnMonitor.ts BurnRateWindow (the fields the webview reads). `breakdown` holds window
+// TOTALS; divide by windowMs/60000 to get per-minute.
+export interface BurnRateWindowLite {
+  windowMs: number
+  tokensPerMin: number
+  costPerMin: number
+  breakdown: BurnBreakdown
+  billableWeightedPerMin: number
+}
+
 export interface BurnStatus {
   now: number
-  global: { oneMin: { tokensPerMin: number; costPerMin: number }; fiveMin: { tokensPerMin: number; costPerMin: number }; costPerHour: number }
+  global: { oneMin: BurnRateWindowLite; fiveMin: BurnRateWindowLite; costPerHour: number }
   window: { fiveHour: BurnWindowConsumption; sevenDay: BurnWindowConsumption; capacityConfigured: boolean; note?: string }
   alerts: BurnAlert[]
   activeSessions: number

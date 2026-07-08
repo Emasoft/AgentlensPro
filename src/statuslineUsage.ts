@@ -163,13 +163,20 @@ export class StatuslineUsageReader {
     // most one turn — acceptable, and never negative).
     const prevCost = a.totalCostUsd
     const newCost = num(rec.total_cost_usd)
-    const deltaTokens = num(rec.input_tokens) + num(rec.output_tokens)
-      + num(rec.cache_creation_input_tokens) + num(rec.cache_read_input_tokens)
+    // This turn's 4 usage buckets — carried individually so the burn breakdown can attribute the split
+    // (cache-read is ~96% of the count on real workloads). deltaTokens is their sum, matching the
+    // api_request event convention.
+    const dInput = num(rec.input_tokens)
+    const dOutput = num(rec.output_tokens)
+    const dCacheCreate = num(rec.cache_creation_input_tokens)
+    const dCacheRead = num(rec.cache_read_input_tokens)
+    const deltaTokens = dInput + dOutput + dCacheCreate + dCacheRead
     const deltaCost = Math.max(0, newCost - prevCost)
     if (deltaTokens > 0 || deltaCost > 0) {
       this.billingEvents.push({
         ts: num(rec.ts), sessionId: sid, workspace: rec.project_dir || undefined,
         deltaCostUsd: deltaCost, deltaTokens,
+        deltaInput: dInput, deltaOutput: dOutput, deltaCacheRead: dCacheRead, deltaCacheCreate: dCacheCreate,
       })
     }
 

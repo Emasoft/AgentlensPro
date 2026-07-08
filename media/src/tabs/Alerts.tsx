@@ -420,6 +420,53 @@ export function checkAlerts(): AlertNotification[] {
   return notifications
 }
 
+// Compact token formatter (k/M/B) for the burn breakdown.
+function fmtTok(n: number): string {
+  if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B'
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M'
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k'
+  return String(Math.round(n))
+}
+
+// Per-bucket split of the current burn rate: a stacked bar + a legend that names each bucket's tok/min
+// and share, plus the cost-weighted rate. This is what answers "what is consuming the tokens": on real
+// workloads cache-read (the resident context re-read every turn) is ~96% of the count but, at 0.1× price,
+// far less of the cost — hence the billable-weighted number sitting beside it.
+function BurnBreakdownBar({ window, costPerHour }: { window: import('../types').BurnRateWindowLite; costPerHour: number }) {
+  const b = window.breakdown
+  const total = b.input + b.output + b.cacheRead + b.cacheCreate + b.unknown
+  const min = Math.max(window.windowMs / 60000, 1 / 60)   // breakdown holds window totals → per-min
+  const perMin = (n: number) => n / min
+  const seg = [
+    { k: 'fresh-in', v: b.input, c: 'var(--vscode-charts-blue,#4fc3f7)' },
+    { k: 'output', v: b.output, c: 'var(--vscode-charts-green,#81c784)' },
+    { k: 'cache-read', v: b.cacheRead, c: 'var(--vscode-charts-purple,#b392f0)' },
+    { k: 'cache-create', v: b.cacheCreate, c: 'var(--vscode-charts-orange,#e2a03f)' },
+    ...(b.unknown > 0 ? [{ k: 'unattributed', v: b.unknown, c: 'var(--muted)' }] : []),
+  ].filter(s => s.v > 0)
+  const pct = (v: number) => (total > 0 ? (v / total * 100) : 0)
+  if (total <= 0) return null
+  return (
+    <div style="margin-bottom:8px">
+      <div style="font-size:11px;color:var(--muted);margin-bottom:4px">
+        burn {window.tokensPerMin.toLocaleString()} tok/min · ${costPerHour.toFixed(2)}/hr
+        {' · '}<span title="Cost expressed as fresh-input-token-equivalents (output 5×, cache-read 0.1×, cache-write 1.25×). This is the number that matters if the plan's rate-limit window is cost-based rather than raw-token.">billable-weighted ≈{window.billableWeightedPerMin.toLocaleString()} tok/min</span>
+      </div>
+      <div style="height:8px;border-radius:4px;background:var(--border);display:flex;overflow:hidden;margin-bottom:5px" title="Per-bucket share of the last minute's token throughput">
+        {seg.map(s => <div key={s.k} style={`width:${pct(s.v).toFixed(2)}%;background:${s.c}`} />)}
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:10px;font-size:10px;color:var(--muted)">
+        {seg.map(s => (
+          <span key={s.k}>
+            <span style={`display:inline-block;width:8px;height:8px;border-radius:2px;background:${s.c};margin-right:4px;vertical-align:middle`} />
+            {s.k} {fmtTok(perMin(s.v))}/min ({pct(s.v).toFixed(1)}%)
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // Realtime server-computed burn monitor section (TRDD-OG9PARZQ): live burn rate + rate-limit window
 // budget + any active server-side burn alerts, pushed over SSE (standalone only; null in VS Code where
 // the burn tools are MCP-only). Rendered at the top of the Alerts tab so the smoke-detector signal
@@ -436,9 +483,16 @@ function ServerBurnSection() {
         <strong style="font-size:13px">Realtime burn monitor</strong>
         <span style="font-size:11px;color:var(--muted)">{burn.activeSessions} active · {burn.global.oneMin.tokensPerMin.toLocaleString()} tok/min · ${burn.global.costPerHour.toFixed(2)}/hr</span>
       </div>
-      <div style="font-size:12px;color:var(--muted);margin-bottom:8px;line-height:1.5">
-        5h window: {w.fiveHour.consumedTokens.toLocaleString()} tok · {fmtPct(w.fiveHour.pctConsumed)}{w.fiveHour.minutesToExhaustion !== null ? ' · ~' + fmtEta(w.fiveHour.minutesToExhaustion) + ' to exhaustion' : ''}
-        {' | '}7d window: {w.sevenDay.consumedTokens.toLocaleString()} tok · {fmtPct(w.sevenDay.pctConsumed)}
+      {/* Per-bucket split of the burn (TRDD burn-breakdown): a bare tokens/min hides that ~96% is
+          cache-read — the resident context re-read every turn. billable-weighted expresses it as
+          fresh-input-token-equivalents (cache-read 0.1×), the cost-denominated view that matters if
+          the plan's rate-limit window is cost-based rather than raw-token. */}
+      <BurnBreakdownBar window={burn.global.oneMin} costPerHour={burn.global.costPerHour} />
+      <div style="font-size:12px;color:var(--muted);margin:8px 0;line-height:1.5">
+        5h window: {w.fiveHour.consumedTokens.toLocaleString()} tok
+        {' '}(${w.fiveHour.consumedCostUsd.toFixed(2)} · ≈{w.fiveHour.consumedBillableWeighted.toLocaleString()} billable-weighted)
+        {' · '}{fmtPct(w.fiveHour.pctConsumed)}{w.fiveHour.minutesToExhaustion !== null ? ' · ~' + fmtEta(w.fiveHour.minutesToExhaustion) + ' to exhaustion' : ''}
+        {' | '}7d: {w.sevenDay.consumedTokens.toLocaleString()} tok (${w.sevenDay.consumedCostUsd.toFixed(2)}) · {fmtPct(w.sevenDay.pctConsumed)}
         {!w.capacityConfigured && <span style="color:#f6a623"> — set AGENTLENS_WINDOW_5H_TOKENS / AGENTLENS_WINDOW_7D_TOKENS to enable % + projection</span>}
       </div>
       {burn.alerts.length > 0 ? burn.alerts.map(a => {
