@@ -75,6 +75,15 @@ queries on these data must be possible, so we can investigate."
    - `query_context_blocks(filter, groupBy)` — the GENERIC engine the USER asked for: filter by any of
      {project, session, agent, kind, model, minTokens, turnRange, timeRange, contextPctRange}, group-by
      any dimension, aggregate tokens/count/cost. "All possible queries" = one flexible tool + docs.
+   - `get_block_content(sessionId, turn, blockIndex, full?)` — DRILL-TO-CONTENT (USER 2026-07-08): the
+     index is pointer-only (counts + refs, no stored bytes), but this resolver reads the body file via
+     `buildCallContext` and returns the ACTUAL text of one block — used "when requested, or when the
+     trace tree is expanded deeply enough". Reuse the `loadBlob`/`BLOCK_TEXT_CAP` pattern; `full:true`
+     opt-in returns the uncapped single block. Image blocks return metadata + ref, never the base64 bytes.
+   - **COMPLETENESS (USER 2026-07-08): cover the FULL taxonomy, not just images.** Every block `kind`
+     (text/tool_use/tool_result/image/thinking/system/tool-schema/cache_control) and every request-level
+     field (model/system/tools[]/messages[]/usage buckets) is represented uniformly — images are just one
+     `kind`. The query engine filters/groups by ANY kind or field so arbitrary investigation is possible.
 3. **Dashboard surface** (webview): a "Composition" view (per session: block-type breakdown bar + a
    flagged list of resident blobs — "525k images resident 400+ turns, $425" — click to the turn). Cache
    tab already exists; add the composition/blob panel there or a new tab.
