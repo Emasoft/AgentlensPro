@@ -32,8 +32,23 @@ export interface ConsumptionEvent {
   tokens: number
   source: 'api_request' | 'statusline'
   attribution?: string       // agent:… | skill:… | plugin:… | mcp:… | compaction | main (api_request only)
-  cacheCreateTokens?: number  // per-call cache-creation tokens (drives the cache-create-spike alert)
+  // Per-bucket split (api_request only — statusline gives just the total). When present they sum to
+  // `tokens`; when absent (statusline) the whole `tokens` is counted as `unknown` in a window breakdown.
+  // This is THE data that answers "what consumes the tokens" — cache-read (resident context re-read every
+  // turn) dominates real workloads, so a bare tokens/min hides the fact that ~96% is cheap cache reads.
+  inputTokens?: number
+  outputTokens?: number
+  cacheReadTokens?: number
+  cacheCreateTokens?: number  // per-call cache-creation tokens (also drives the cache-create-spike alert)
 }
+
+/** Per-input-token-equivalent weights from Anthropic's PUBLIC price ratios (model-independent: output is
+ *  5× input for both Sonnet 3/15 and Opus 15/75; cache-read is 0.1× input; 5-min cache-write is 1.25×).
+ *  `billableWeightedPerMin` expresses burn as effective fresh-input tokens — i.e. cost, denominated in
+ *  tokens. It is NOT the rate-limit-window weighting (Anthropic does not publish that); it exists so a
+ *  reader can see past the cache-read count inflation to the real spend. `unknown` (statusline totals with
+ *  no split) is weighted 1× — conservative (treats it as fresh input). */
+export const BILLABLE_WEIGHTS = { input: 1, output: 5, cacheRead: 0.1, cacheCreate: 1.25, unknown: 1 } as const
 
 /** Per-turn billing delta emitted by StatuslineUsageReader. `ts` is epoch MILLISECONDS (normalized from
  *  the statusline's epoch-seconds). `deltaCostUsd` is the increment of the session's cumulative
@@ -148,11 +163,14 @@ function apiRequestEvents(card: SessionSummaryCard): ConsumptionEvent[] {
     if (e.type !== 'api_request') continue
     const ts = Date.parse(e.timestamp || '')
     if (!Number.isFinite(ts)) continue
-    const tokens = (e.inputTokens ?? 0) + (e.outputTokens ?? 0) + (e.cacheReadTokens ?? 0) + (e.cacheCreateTokens ?? 0)
+    const inputTokens = e.inputTokens ?? 0, outputTokens = e.outputTokens ?? 0
+    const cacheReadTokens = e.cacheReadTokens ?? 0, cacheCreateTokens = e.cacheCreateTokens ?? 0
+    const tokens = inputTokens + outputTokens + cacheReadTokens + cacheCreateTokens
     out.push({
       ts, sessionId: card.sessionId, workspace: card.workspace,
       costUsd: e.costUsd ?? 0, tokens, source: 'api_request',
-      attribution: attributionOf(e), cacheCreateTokens: e.cacheCreateTokens ?? 0,
+      attribution: attributionOf(e),
+      inputTokens, outputTokens, cacheReadTokens, cacheCreateTokens,
     })
   }
   return out
@@ -188,6 +206,17 @@ export function gatherConsumptionEvents(
 
 // ── Rolling-window math ──────────────────────────────────────────────────────────
 
+/** The 4 token buckets in a window (+ `unknown` = statusline totals with no split), summing to `tokens`.
+ *  This is what the burn number is MADE OF — cache-read is ~96% of real workloads (resident context
+ *  re-read every turn), so exposing the split is the whole point: a bare tokens/min hides that. */
+export interface BurnBreakdown {
+  input: number
+  output: number
+  cacheRead: number
+  cacheCreate: number
+  unknown: number
+}
+
 export interface BurnRateWindow {
   windowMs: number
   tokens: number
@@ -195,26 +224,58 @@ export interface BurnRateWindow {
   events: number
   tokensPerMin: number
   costPerMin: number
+  breakdown: BurnBreakdown          // window totals per bucket (sum === tokens)
+  billableWeightedPerMin: number    // burn in fresh-input-token-equivalents/min (cost, denominated in tokens)
 }
 
-function windowSum(events: ConsumptionEvent[], now: number, windowMs: number): { tokens: number; cost: number; count: number } {
+function emptyBreakdown(): BurnBreakdown {
+  return { input: 0, output: 0, cacheRead: 0, cacheCreate: 0, unknown: 0 }
+}
+
+function windowSum(
+  events: ConsumptionEvent[], now: number, windowMs: number,
+): { tokens: number; cost: number; count: number; breakdown: BurnBreakdown } {
   const from = now - windowMs
   let tokens = 0, cost = 0, count = 0
+  const breakdown = emptyBreakdown()
   for (const e of events) {
-    if (e.ts >= from && e.ts <= now) { tokens += e.tokens; cost += e.costUsd; count++ }
+    if (e.ts < from || e.ts > now) continue
+    tokens += e.tokens; cost += e.costUsd; count++
+    if (e.source === 'api_request') {
+      // api_request events carry the per-bucket split (they sum to e.tokens by construction).
+      breakdown.input += e.inputTokens ?? 0
+      breakdown.output += e.outputTokens ?? 0
+      breakdown.cacheRead += e.cacheReadTokens ?? 0
+      breakdown.cacheCreate += e.cacheCreateTokens ?? 0
+    } else {
+      // statusline events give only a total — attribute it honestly to `unknown` rather than guessing a
+      // split, so breakdown.(input+output+cacheRead+cacheCreate+unknown) === tokens exactly.
+      breakdown.unknown += e.tokens
+    }
   }
-  return { tokens, cost, count }
+  return { tokens, cost, count, breakdown }
+}
+
+/** Burn in fresh-input-token-equivalents (cost, denominated in tokens) — see BILLABLE_WEIGHTS. */
+function billableWeightedTokens(b: BurnBreakdown): number {
+  return b.input * BILLABLE_WEIGHTS.input + b.output * BILLABLE_WEIGHTS.output +
+    b.cacheRead * BILLABLE_WEIGHTS.cacheRead + b.cacheCreate * BILLABLE_WEIGHTS.cacheCreate +
+    b.unknown * BILLABLE_WEIGHTS.unknown
 }
 
 /** Rolling-window burn rate. tokensPerMin/costPerMin normalize the window's total to a per-minute rate
- *  (a 1-min window's rate IS its sum; a 5-min window's rate is its sum / 5). */
+ *  (a 1-min window's rate IS its sum; a 5-min window's rate is its sum / 5). `breakdown` holds the raw
+ *  window totals per bucket; `billableWeightedPerMin` is the cost-weighted burn (cache-read at 0.1×) —
+ *  the number that matters if the plan's rate-limit window is cost-based, not raw-token-based. */
 export function rateWindow(events: ConsumptionEvent[], now: number, windowMs: number): BurnRateWindow {
-  const { tokens, cost, count } = windowSum(events, now, windowMs)
+  const { tokens, cost, count, breakdown } = windowSum(events, now, windowMs)
   const minutes = windowMs / ONE_MIN_MS
   return {
     windowMs, tokens, costUsd: +cost.toFixed(6), events: count,
     tokensPerMin: Math.round(tokens / minutes),
     costPerMin: +(cost / minutes).toFixed(6),
+    breakdown,
+    billableWeightedPerMin: Math.round(billableWeightedTokens(breakdown) / minutes),
   }
 }
 
@@ -279,11 +340,17 @@ export interface WindowConsumption {
   windowMs: number
   consumedTokens: number
   consumedCostUsd: number
+  consumedBillableWeighted: number      // cost-weighted tokens (cache-read 0.1×) — see note below
+  breakdown: BurnBreakdown              // what the consumed tokens are made of (cache-read usually ~96%)
   capacityTokens: number | null
   pctConsumed: number | null            // null when capacity unset — NEVER invented
   tokensPerMin: number                  // the current burn rate used for the projection
   minutesToExhaustion: number | null    // null when capacity unset or burn rate 0
 }
+// pctConsumed is RAW-TOKEN based (consumedTokens / capacityTokens). If a plan's rate-limit window is
+// COST-based (Anthropic weights cache-read at 0.1× / 0.2×), raw tokens over-state consumption — read
+// consumedCostUsd / consumedBillableWeighted instead. A cost-capacity + cost-pct is the next step
+// (needs the plan's cost cap; tracked as account+window-awareness work).
 
 export interface WindowBudget {
   fiveHour: WindowConsumption
@@ -297,7 +364,7 @@ function windowConsumption(
   events: ConsumptionEvent[], now: number, windowMs: number, label: '5h' | '7d',
   capacity: number | null, projectionTokensPerMin: number,
 ): WindowConsumption {
-  const { tokens, cost } = windowSum(events, now, windowMs)
+  const { tokens, cost, breakdown } = windowSum(events, now, windowMs)
   const pct = capacity !== null && capacity > 0 ? +(tokens / capacity * 100).toFixed(2) : null
   const remaining = capacity !== null ? capacity - tokens : null
   const minutesToExhaustion =
@@ -307,6 +374,8 @@ function windowConsumption(
   return {
     window: label, windowMs,
     consumedTokens: tokens, consumedCostUsd: +cost.toFixed(4),
+    consumedBillableWeighted: Math.round(billableWeightedTokens(breakdown)),
+    breakdown,
     capacityTokens: capacity, pctConsumed: pct,
     tokensPerMin: projectionTokensPerMin, minutesToExhaustion,
   }
