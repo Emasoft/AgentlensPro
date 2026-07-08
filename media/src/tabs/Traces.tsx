@@ -15,9 +15,10 @@ import {
 import { calcEntryCost, calcSessionCost, fmtUsd } from '../sessionMetrics'
 import { countTokens } from '../tokenEstimator'
 import { buildCacheBreakReport, cacheBreaksByTurn, CAUSE_LABEL } from '../cacheBreak'
+import { buildTokensByCause, CAUSE_DIMENSION_LABEL } from '../tokensByCause'
 import { spawnKindBadge, hitRateColor, formatPct, SpawnCostPanel } from './cacheShared'
 import { BlockRow } from './HistoryTab'
-import type { SessionSummaryCard, TimelineEntry, BackgroundSpanSummary, CacheBreakTurn, ContextSource, CallContext } from '../types'
+import type { SessionSummaryCard, TimelineEntry, BackgroundSpanSummary, CacheBreakTurn, ContextSource, CallContext, CauseDimension } from '../types'
 
 // Colour per composition source-kind — shared with the ContextTab legend so the LLM-call context
 // breakdown reads the same as the Context tab. Injected-block kinds (hook/skill/catalog/…) plus the
@@ -145,7 +146,21 @@ function FiveValues({ t }: { t: TurnTotals }) {
 function stepHaystack(entry: TimelineEntry): string {
   const parts: string[] = [entry.label || '', entry.action || '', entry.toolInput || '', entry.resultSummary || '']
   if (entry.editDetails) for (const d of entry.editDetails) if (d.filePath) parts.push(d.filePath)
+  // TRDD-UBEP5XY7: structured cause tokens so a "Tokens by cause" row click filters the trace to
+  // exactly its calls via the existing filter box (`cause:agent=foo` never collides with free text).
+  if (entry.querySource)   parts.push(`cause:querysource=${entry.querySource}`)
+  if (entry.agentName)     parts.push(`cause:agent=${entry.agentName}`)
+  if (entry.skillName)     parts.push(`cause:skill=${entry.skillName}`)
+  if (entry.pluginName)    parts.push(`cause:plugin=${entry.pluginName}`)
+  if (entry.mcpServerName) parts.push(`cause:mcpserver=${entry.mcpServerName}`)
+  if (entry.mcpToolName)   parts.push(`cause:mcptool=${entry.mcpServerName ?? '?'}/${entry.mcpToolName}`)
   return parts.join('\n').toLowerCase()
+}
+
+// The filter token a by-cause row click applies — must produce the same string stepHaystack embeds.
+// mcpTool keys as "server/tool" (mirrors tokensByCause causeKey) so same-named tools never merge.
+function causeFilterToken(dim: CauseDimension, key: string): string {
+  return `cause:${dim.toLowerCase()}=${key}`
 }
 
 // Compile the timeline filter into a predicate. '*' is a glob wildcard (any run of chars), every
@@ -1127,6 +1142,99 @@ function SubAgentBranch({ child, sessIdx }: { child: SessionSummaryCard; sessIdx
 // Shared Trace waterfall: a STICKY metric toolbar (Time | token/cost | group-by-turn) above the
 // step rows. With a token/cost metric the rows become a bar chart sortable by that value; Time
 // keeps the chronological waterfall and its ruler. Grouped by turn it is a session → turn → step
+// ── Tokens by cause (TRDD-UBEP5XY7) ───────────────────────────────────────────
+// Session-view rollup of WHO spent the tokens, grouped from the per-call api_request ground truth
+// (exact usage buckets + cost_usd) by media/src/tokensByCause.ts (mirror of src/tokensByCause.ts —
+// the get_cost_by_cause MCP tool returns the same numbers). Per-dimension toggle; clicking a named
+// row filters the trace to exactly its calls via the structured `cause:<dim>=<key>` haystack token.
+// The unattributed bucket is rendered explicitly (muted, pinned last) — counted, never dropped.
+function TokensByCausePanel({ steps, card, activeFilter, onFilter }: {
+  steps: Step[]; card?: SessionSummaryCard
+  activeFilter: string; onFilter: (token: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [dim, setDim] = useState<CauseDimension | null>(null)
+  // Session usage ground truth for the reconciliation footer — same dual-convention normalization
+  // as the host's sessionCost (OTEL cards store inputTokens cache-INCLUDED, log fork cards not).
+  const sessionTotal = useMemo(() => {
+    if (!card) return null
+    const cache = card.cacheReadTokens + (card.cacheCreateTokens ?? 0)
+    const uncached = card.inputTokens >= cache ? card.inputTokens - cache : card.inputTokens
+    return uncached + cache + card.outputTokens
+  }, [card])
+  const report = useMemo(
+    () => buildTokensByCause(steps.map(s => s.entry), { sessionId: card?.sessionId, sessionTotalTokens: sessionTotal }),
+    [steps, card?.sessionId, sessionTotal],
+  )
+  if (!report.hasAttribution) return null   // no api_request events → nothing to rank (not an error)
+
+  // Dimensions worth a toggle: any named cause exists. Default = the first with named rows.
+  const usable = report.dimensions.filter(d => d.attributedCalls > 0)
+  const active = report.dimensions.find(d => d.dimension === dim && d.attributedCalls > 0)
+    ?? usable[0] ?? report.dimensions[0]
+  const maxTok = Math.max(1, ...active.rows.map(r => r.totalTokens))
+  const rec = report.reconciliation
+
+  return (
+    <div style="border:1px solid var(--border);border-radius:4px;padding:6px 8px;margin-bottom:8px">
+      <div style="display:flex;align-items:center;gap:6px;cursor:pointer" onClick={() => setOpen(!open)}>
+        <span style="font-size:10px;color:var(--muted)">{open ? '▾' : '▸'}</span>
+        <span style="font-size:11px;font-weight:600">Tokens by cause</span>
+        <span style="font-size:10px;color:var(--muted)">
+          who spent the tokens — {report.apiRequestCalls} attributed call{report.apiRequestCalls !== 1 ? 's' : ''} · {formatCompact(rec.attributedTotalTokens)} tok · {fmtUsd(rec.attributedCostUsd)}{rec.costComplete ? '' : '+'}
+        </span>
+      </div>
+      {open && (
+        <div style="margin-top:6px">
+          <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px">
+            {usable.map(d => (
+              <button key={d.dimension} onClick={() => setDim(d.dimension)}
+                style={[
+                  'padding:2px 8px;font-size:10px;cursor:pointer;border-radius:3px;border:1px solid var(--border);',
+                  d.dimension === active.dimension ? 'background:var(--accent);color:var(--vscode-button-foreground,#fff);font-weight:600' : 'background:transparent;color:var(--muted)',
+                ].join('')}
+              >{CAUSE_DIMENSION_LABEL[d.dimension]} ({d.rows.filter(r => !r.unattributed).length})</button>
+            ))}
+          </div>
+          {active.rows.map(r => {
+            const token = causeFilterToken(r.dimension, r.key)
+            const isActive = !r.unattributed && activeFilter === token
+            return (
+              <div key={r.key}
+                title={r.unattributed
+                  ? 'Calls carrying no value for this dimension — counted here explicitly, never dropped. Not filterable (no cause token to match).'
+                  : (isActive ? 'Click to clear the trace filter' : 'Click to filter the trace to exactly these calls')}
+                onClick={r.unattributed ? undefined : () => onFilter(isActive ? '' : token)}
+                style={[
+                  'display:flex;align-items:center;gap:8px;padding:2px 4px;border-radius:3px;font-size:10px;',
+                  r.unattributed ? 'color:var(--muted);font-style:italic' : 'cursor:pointer',
+                  isActive ? ';background:var(--vscode-list-activeSelectionBackground,rgba(79,195,247,.15))' : '',
+                ].join('')}
+              >
+                <span style="flex:0 0 180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{r.key}</span>
+                <span style="flex:1;height:8px;background:var(--vscode-editorWidget-background,rgba(128,128,128,.15));border-radius:2px;overflow:hidden">
+                  <span style={`display:block;height:100%;width:${Math.max(1, Math.round(r.totalTokens / maxTok * 100))}%;background:${r.unattributed ? 'var(--muted)' : 'var(--accent)'}`} />
+                </span>
+                <span style="flex:0 0 60px;text-align:right">{formatCompact(r.totalTokens)} tok</span>
+                <span style="flex:0 0 52px;text-align:right">{fmtUsd(r.costUsd)}{r.costKnown ? '' : '+'}</span>
+                <span style="flex:0 0 48px;text-align:right;color:var(--muted)">{r.calls} call{r.calls !== 1 ? 's' : ''}</span>
+              </div>
+            )
+          })}
+          {/* Reconciliation honesty: how much of the session's usage totals the api_request events cover.
+              The remainder is SIGNED and explicit — never clamped, never hidden (FAIL-FAST). */}
+          <div style="font-size:9px;color:var(--muted);margin-top:6px">
+            {rec.sessionTotalTokens !== null && rec.unattributedTotalTokens !== null
+              ? `Reconciliation: ${formatCompact(rec.attributedTotalTokens)} of ${formatCompact(rec.sessionTotalTokens)} session tokens attributed via api_request events; remainder ${rec.unattributedTotalTokens < 0 ? '−' : ''}${formatCompact(Math.abs(rec.unattributedTotalTokens))} tok not covered by any rich event.`
+              : rec.note}
+            {!rec.costComplete && ` Cost figures marked + are floors — ${rec.apiRequestCalls - rec.costCalls} call(s) carried no cost_usd.`}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // tree. Metric/sort/group are shared signals (P2.1) so every open trace agrees and the toggle
 // lives in one sticky place. Used by the Sessions-detail Trace sub-tab.
 export function TimelineWaterfall({ steps, sessionDur, sessionModel, sessIdx = 0, highlightSpanId, subAgents, sessionId }: {
@@ -1282,6 +1390,11 @@ export function TimelineWaterfall({ steps, sessionDur, sessionModel, sessIdx = 0
           )}
         </div>
       </div>
+      {/* TRDD-UBEP5XY7 — who spent the tokens; rows drive the same filter the input box commits. */}
+      <TokensByCausePanel steps={steps}
+        card={sessionId ? sessionSummary.value?.sessions.find(s => s.sessionId === sessionId) : undefined}
+        activeFilter={filterApplied}
+        onFilter={token => { setFilterDraft(token); setFilterApplied(token) }} />
       {metric === 'time' && !groupByTurn && (
         <div class="wf-time-ruler">
           {Array.from({ length: 6 }, (_, t) => <span key={t}>{formatMs(sessionDur * t / 5)}</span>)}

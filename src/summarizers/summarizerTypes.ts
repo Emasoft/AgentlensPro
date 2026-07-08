@@ -465,3 +465,69 @@ export interface SpawnRollup {
   kindMix: SpawnKindMix
   detections: SpawnDetection[]
 }
+
+// ── Tokens-by-CAUSE attribution rollup (TRDD-UBEP5XY7) ────────────────────────
+// Every claude_code.api_request event (ingested by the R-I rich-event pass, 7612ff5) carries its
+// CAUSE — WHO issued the call: querySource (repl_main_thread | compact | <subagent>), agent.name,
+// skill.name, plugin.name, mcp_server.name, mcp_tool.name — plus the per-call usage buckets and the
+// EXACT per-call cost_usd. Per-row attribution already shows this; this rollup GROUPS the calls by
+// cause dimension and sums the 4 buckets + cost so "which skill/plugin/subagent costs me the most?"
+// is one ranked table instead of a row-by-row read. Figures are EXACT ground truth (per-call usage +
+// cost_usd), not estimates — hence `estimated: false`, unlike ResidentCostReport. Pure OTEL data (no
+// .jsonl required); OTEL-only sessions are fully supported. Computed by buildTokensByCause
+// (src/tokensByCause.ts, MIRRORED in media/src/tokensByCause.ts — change both). MIRRORED in
+// media/src/types.ts — change both.
+export type CauseDimension = 'querySource' | 'agent' | 'skill' | 'plugin' | 'mcpServer' | 'mcpTool'
+
+// One cause value's rolled-up totals within a dimension. `unattributed:true` marks the explicit
+// bucket that absorbs api_request calls carrying NO value for this dimension — FAIL-FAST: those
+// tokens are counted and labeled, NEVER silently dropped and NEVER fabricated into a named cause.
+export interface CauseRollupRow {
+  dimension: CauseDimension
+  key: string                 // the cause value (e.g. agent name, "server/tool"); the bucket label when unattributed
+  unattributed: boolean
+  calls: number               // api_request events folded into this row
+  inputTokens: number         // Σ per-call input_tokens (uncached — CC emits it cache-excluded)
+  outputTokens: number
+  cacheReadTokens: number
+  cacheCreateTokens: number
+  totalTokens: number         // input + output + cacheRead + cacheCreate
+  costUsd: number             // Σ per-call cost_usd (0 when none of the folded calls carried a cost)
+  costKnown: boolean          // true iff EVERY folded call carried a cost_usd — else costUsd is a floor
+}
+
+export interface CauseDimensionRollup {
+  dimension: CauseDimension
+  rows: CauseRollupRow[]       // named causes ranked by totalTokens (heaviest first), the unattributed row pinned LAST
+  attributedCalls: number      // api_request calls that carried a value for this dimension
+  unattributedCalls: number    // api_request calls with no value for this dimension (the pinned bucket)
+}
+
+// Session/window ground-truth usage totals vs the Σ over api_request events (the attributable subset).
+// The remainder is api_request coverage honesty: token traffic the rich events did NOT attribute (an
+// llm call with no matching api_request log event). SIGNED, never clamped — see note.
+export interface CauseReconciliation {
+  apiRequestCalls: number
+  attributedInputTokens: number
+  attributedOutputTokens: number
+  attributedCacheReadTokens: number
+  attributedCacheCreateTokens: number
+  attributedTotalTokens: number
+  attributedCostUsd: number
+  costComplete: boolean          // every api_request event carried a cost_usd (else attributedCostUsd is a floor)
+  costCalls: number              // api_request events that carried a cost_usd
+  sessionTotalTokens: number | null   // usage-bucket ground truth (normalized: uncached input + read + create + output); null when not supplied
+  unattributedTotalTokens: number | null // sessionTotalTokens − attributedTotalTokens (SIGNED); null when sessionTotalTokens null
+  note: string
+}
+
+export interface TokensByCauseReport {
+  sessionId?: string           // set for a single session; absent for the global leaderboard
+  sessionsScanned?: number     // set for the global leaderboard (# sessions folded)
+  apiRequestCalls: number      // total api_request events aggregated
+  hasAttribution: boolean      // apiRequestCalls > 0 — false ⇒ no rich api_request events (OTEL rich logging off / not a CC session)
+  dimensions: CauseDimensionRollup[]  // one per CauseDimension, in CAUSE_DIMENSIONS order
+  reconciliation: CauseReconciliation
+  estimated: false             // tokens + per-call cost are EXACT ground truth (not estimates)
+  note: string
+}

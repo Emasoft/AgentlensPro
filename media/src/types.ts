@@ -359,6 +359,61 @@ export interface SpawnRollup {
   detections: SpawnDetection[]
 }
 
+// Mirror of src/summarizers/summarizerTypes.ts — tokens-by-CAUSE attribution rollup (TRDD-UBEP5XY7).
+// Groups every claude_code.api_request event by cause dimension (querySource → agent → skill → plugin
+// → mcpServer → mcpTool) and sums the 4 usage buckets + the EXACT per-call cost_usd, so the session
+// view can rank "who spent the tokens". Figures are exact ground truth (estimated:false). Computed by
+// media/src/tokensByCause.ts (mirror of src/tokensByCause.ts). The unattributed bucket is explicit +
+// labeled (FAIL-FAST — never silently dropped).
+export type CauseDimension = 'querySource' | 'agent' | 'skill' | 'plugin' | 'mcpServer' | 'mcpTool'
+
+export interface CauseRollupRow {
+  dimension: CauseDimension
+  key: string
+  unattributed: boolean
+  calls: number
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheCreateTokens: number
+  totalTokens: number
+  costUsd: number
+  costKnown: boolean          // true iff every folded call carried a cost_usd (else costUsd is a floor)
+}
+
+export interface CauseDimensionRollup {
+  dimension: CauseDimension
+  rows: CauseRollupRow[]       // named causes heaviest-first; the unattributed row pinned LAST
+  attributedCalls: number
+  unattributedCalls: number
+}
+
+export interface CauseReconciliation {
+  apiRequestCalls: number
+  attributedInputTokens: number
+  attributedOutputTokens: number
+  attributedCacheReadTokens: number
+  attributedCacheCreateTokens: number
+  attributedTotalTokens: number
+  attributedCostUsd: number
+  costComplete: boolean
+  costCalls: number
+  sessionTotalTokens: number | null
+  unattributedTotalTokens: number | null   // signed api_request coverage remainder, never clamped
+  note: string
+}
+
+export interface TokensByCauseReport {
+  sessionId?: string
+  sessionsScanned?: number
+  apiRequestCalls: number
+  hasAttribution: boolean
+  dimensions: CauseDimensionRollup[]
+  reconciliation: CauseReconciliation
+  estimated: false
+  note: string
+}
+
 // Mirror of src/summarizers/summarizerTypes.ts — cache-break diagnosis (P4). A prefix cache breaks
 // at the first divergent block turn-to-turn; these carry the per-turn verdict + ranked offenders the
 // Cache tab / trace markers render. Sizing is an estimate; the cause taxonomy pinpoints WHY.

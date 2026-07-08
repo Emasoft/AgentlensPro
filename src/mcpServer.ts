@@ -28,6 +28,7 @@ import type {
 import { buildCacheBreakReport } from './cacheBreak'
 import { buildResidentCostReport } from './residentCost'
 import { buildSpawnRollup } from './spawnRollup'
+import { buildTokensByCause } from './tokensByCause'
 import type { BurnStatus, SessionStatus } from './burnMonitor'
 import { listSessionFileIds } from './contextComposition'
 import { generateSuggestions } from './instructionAdvisor'
@@ -331,6 +332,26 @@ const TOOLS = [
         sessionId: { type: 'string', description: 'Session ID from get_recent_sessions' },
         requestId: { type: 'string', description: 'request_id of the call (from the api_request event / llm_request span); omit to use spanId or the latest call' },
         spanId:    { type: 'string', description: 'spanId of the call\'s llm_request span (alternative to requestId)' },
+      },
+    },
+  },
+  {
+    name: 'get_cost_by_cause',
+    description:
+      'Tokens-by-CAUSE attribution rollup — WHO spent the tokens. Groups every claude_code.api_request ' +
+      'event by cause dimension (query source → agent → skill → plugin → MCP server → MCP tool) and sums ' +
+      'the 4 usage buckets + the EXACT per-call cost_usd, ranked heaviest-first per dimension. Figures are ' +
+      'ground truth (per-call usage + cost), not estimates; works for OTEL-only sessions (no .jsonl needed). ' +
+      'Complements find_context_hogs (which ranks CONTEXT sources; this ranks per-call CAUSES). Pass ' +
+      'sessionId for one session (reconciled against the session usage totals — the unattributed remainder ' +
+      'is explicit, never dropped), or omit it for the cross-session leaderboard over the last `days` ' +
+      '(default 7) — read the `coverage` block for exactly what was scanned; calls carrying no value for a ' +
+      'dimension land in that dimension\'s pinned "(no <dim>)" bucket.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        sessionId: { type: 'string', description: 'One session to roll up; omit for the cross-session leaderboard' },
+        days:      { type: 'number', description: 'Leaderboard window in days (default 7, max 90); ignored when sessionId is set' },
       },
     },
   },
@@ -1185,6 +1206,73 @@ export function handleGetSubagentTree(sessions: SessionSummaryCard[], args: { se
   }
 }
 
+// Session usage ground truth for the by-cause reconciliation: uncached input + cacheRead +
+// cacheCreate + output. Uses the SAME dual-convention normalization as sessionCost (OTEL cards
+// store inputTokens cache-INCLUDED, log-derived fork cards cache-EXCLUDED) so the remainder is a
+// real coverage figure, not a convention artifact.
+function normalizedSessionTotalTokens(s: SessionSummaryCard): number {
+  const cache = s.cacheReadTokens + (s.cacheCreateTokens ?? 0)
+  const uncached = s.inputTokens >= cache ? s.inputTokens - cache : s.inputTokens
+  return uncached + cache + s.outputTokens
+}
+
+// Exported for unit tests (TRDD-UBEP5XY7). Leaderboard scan cap: cross-session mode must load
+// every candidate timeline (DB reads in the extension), so the window is bounded and the coverage
+// block states the bound explicitly — the find_context_hogs honesty pattern.
+export const CAUSE_SCAN_CAP = 50
+
+export function handleGetCostByCause(
+  sessions: SessionSummaryCard[],
+  getTimeline: ((id: string) => unknown[]) | null,
+  args: { sessionId?: string; days?: number },
+) {
+  if (args.sessionId) {
+    const s = sessions.find(x => x.sessionId === args.sessionId)
+    if (!s) return { error: `Session ${args.sessionId} not found.` }
+    return buildTokensByCause(asTimeline(getTimeline, s.sessionId, s), {
+      sessionId: s.sessionId,
+      sessionTotalTokens: normalizedSessionTotalTokens(s),
+    })
+  }
+
+  // Cross-session leaderboard over a bounded recent window. Only claude_code sessions can carry
+  // api_request events (the rich events are CC-specific), so other agents are excluded from the
+  // scan but still counted in `considered` for honest coverage.
+  const days = Math.min(Math.max(args.days ?? 7, 1), 90)
+  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000
+  const inWindow = sessions.filter(s => Date.parse(s.startTime) >= cutoff)
+  const candidates = inWindow.filter(s => s.source === 'claude_code')
+    // Newest-first before capping — the raw session list order is not guaranteed, and "the cap keeps
+    // the MOST RECENT" is what the coverage note promises.
+    .sort((a, b) => Date.parse(b.startTime) - Date.parse(a.startTime))
+  const scanPool = candidates.slice(0, CAUSE_SCAN_CAP)
+  const merged = scanPool.flatMap(s => asTimeline(getTimeline, s.sessionId, s))
+  // Window ground truth = Σ normalized per-session totals over the SCANNED pool only, so the
+  // reconciliation remainder compares like with like (scanned traffic vs scanned api_requests).
+  const windowTotal = scanPool.reduce((n, s) => n + normalizedSessionTotalTokens(s), 0)
+  const report = buildTokensByCause(merged, {
+    sessionsScanned: scanPool.length,
+    sessionTotalTokens: windowTotal,
+  })
+  const skipped = candidates.length - scanPool.length
+  return {
+    ...report,
+    days,
+    coverage: {
+      sessionsConsidered: inWindow.length,
+      claudeCodeSessions: candidates.length,
+      sessionsScanned: scanPool.length,
+      sessionsSkipped: skipped,
+      scanCap: CAUSE_SCAN_CAP,
+      complete: skipped === 0,
+      note: skipped === 0
+        ? `Complete coverage: all ${candidates.length} Claude Code sessions in the last ${days}d were scanned (${inWindow.length} total sessions considered).`
+        : `SAMPLE, not full coverage: ${scanPool.length} most-recent Claude Code sessions scanned (cap ${CAUSE_SCAN_CAP}); ` +
+          `${skipped} of ${candidates.length} in the ${days}d window were NOT scanned. Totals reflect the scanned sample only.`,
+    },
+  }
+}
+
 // ── MCP Server factory ────────────────────────────────────────────────────────
 
 export interface McpServerOptions {
@@ -1291,6 +1379,9 @@ export function createMcpServer(opts: McpServerOptions): Server {
         break
       case 'get_subagent_tree':
         result = handleGetSubagentTree(sessions, args as { sessionId: string })
+        break
+      case 'get_cost_by_cause':
+        result = handleGetCostByCause(sessions, getTimeline, args as { sessionId?: string; days?: number })
         break
       case 'get_call_context': {
         const a = args as { sessionId: string; requestId?: string; spanId?: string }
