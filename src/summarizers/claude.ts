@@ -5,6 +5,7 @@ import {
   extractResponseText, extractTokenCounts, normalizeUserRequest, getGenAiModel,
   commonPathPrefix, findProjectRoot,
 } from './helpers'
+import { callBodyRegistry } from '../rawBodyContext'
 
 function strOrUndef(v: unknown): string | undefined {
   if (v === null || v === undefined || v === '') { return undefined }
@@ -413,6 +414,12 @@ export function buildClaudeSessions(
       source: 'claude_code' as const,
       dataSource: 'otel' as const,
       initiator: (interaction.parentSpanId || getAttrStr(interaction, 'is_sidechain') === 'true') ? 'agent' as const : 'user' as const,
+      // TRDD-BURNWDGT — the OAuth account for this OTEL session: prefer the span's user.account_uuid
+      // attribute, else the shared registry keyed by the Claude Code session.id. account_uuid is an
+      // identifier, not a secret; undefined when unknown (fail-soft).
+      accountId: getAttrStr(interaction, 'user.account_uuid')
+        || callBodyRegistry.accountFor(getAttrStr(interaction, 'session.id'))
+        || undefined,
       workspace,
       userRequest,
       model,

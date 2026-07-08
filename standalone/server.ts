@@ -553,6 +553,10 @@ function processLogs(payload: unknown, collectorPath = '/v1/logs'): number {
           const sid = attrStr(attrs, 'session.id', 'session_id')
           const bodyRef = attrStr(attrs, 'body_ref', 'body.ref', 'bodyRef')
           const inlineBody = attrStr(attrs, 'body')
+          // TRDD-BURNWDGT — capture the account_uuid from the body event's (resource) attributes so a
+          // session's OAuth account is known at ingest in the standalone path too (identifier, not a secret).
+          const acct = attrStr(attrs, 'user.account_uuid', 'user_account_uuid')
+          if (sid && acct) { callBodyRegistry.recordAccount(sid, acct) }
           if (sid && (bodyRef || inlineBody)) {
             callBodyRegistry.record(sid, {
               kind: name === 'claude_code.api_request_body' ? 'request' : 'response',
