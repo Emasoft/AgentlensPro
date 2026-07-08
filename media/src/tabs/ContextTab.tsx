@@ -239,6 +239,20 @@ function buildContextRows(
   const rows: ContextRow[] = []
   const isExpanded = (id: string, depth: number) => (toggled.has(id) ? depth > 0 : depth === 0)
 
+  // Precompute parent → children ONCE (O(n)). Each expanded node used to run
+  // allSessions.filter(...) = O(n); with ~n root sessions expanded by default that was O(n²)
+  // (≈146M ops on a 12k-session dataset — the same pathology fixed for the Cache-tab fleet tree).
+  // Skips self-parented sessions (pid === own id) to match the old `s.sessionId !== sess.sessionId`
+  // guard, and preserves allSessions order so nested branches render in the same sequence as before.
+  const childrenByParent = new Map<string, SessionSummaryCard[]>()
+  for (const s of allSessions) {
+    const pid = s.parentSessionId
+    if (!pid || pid === s.sessionId) continue
+    const arr = childrenByParent.get(pid)
+    if (arr) arr.push(s)
+    else childrenByParent.set(pid, [s])
+  }
+
   const walk = (sess: SessionSummaryCard, depth: number) => {
     const loaded = timelines[sess.sessionId]
     const timeline = loaded ?? sess.timeline ?? []
@@ -268,7 +282,7 @@ function buildContextRows(
     // Sub-agent / fork sessions spawned by this one render as nested sub-branches AFTER the parent's
     // turns (order unchanged). Uses the parentSessionId backbone against the FULL session list, not
     // the filtered view, so a child hidden by a filter still nests under its shown parent.
-    const children = allSessions.filter(s => s.parentSessionId === sess.sessionId && s.sessionId !== sess.sessionId)
+    const children = childrenByParent.get(sess.sessionId) ?? []
     for (const c of children) walk(c, depth + 1)
   }
 
