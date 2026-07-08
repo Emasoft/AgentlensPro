@@ -1,9 +1,10 @@
 ---
 trdd-id: PW0H2NXC
 title: Context tab DOM virtualization — stop rendering 150k+ elements at once
-column: dev
+column: complete
 created: 2026-07-07T19:15:34+0200
-updated: 2026-07-07T23:55:00+0200
+updated: 2026-07-08T08:35:00+0200
+implementation-commits: [0db7f37]
 current-owner: null
 assignee: null
 priority: 3
@@ -22,7 +23,11 @@ external-refs: []
 
 # TRDD-PW0H2NXC — Context tab DOM virtualization
 
-## ⏵ STATE — filed 2026-07-07 from headless UI test evidence; not yet dispatched
+## ⏵ STATE — ✅ COMPLETE 2026-07-08 (0db7f37) — 141k-156k DOM elements → 1,381 at rest (~110x)
+Flat-row incremental mount (60-row batches, IntersectionObserver sentinel) on the page's own
+scroller; collapsed-by-default deep branches; totals data-derived. Live-verified on the
+production dashboard (12,049 sessions): probe 8.6s < 30s budget, 0 inner scrollers, no data
+loss. Report: reports/context-virtualization/20260708_082741+0200-PW0H2NXC.md.
 
 ## Why (measured live, 2026-07-07, dev-browser headless)
 Opening the Context tab on a real dataset put **141,361–156,110 elements** in the DOM
