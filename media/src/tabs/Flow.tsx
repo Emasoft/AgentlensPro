@@ -135,10 +135,14 @@ export function FlowCanvas({ sess, height = 520 }: { sess: SessionSummaryCard; h
     playbackTimer: null as ReturnType<typeof setInterval> | null,
   })
 
-  // Request timeline load if needed
-  if (!sessionTimelines.value[sess.sessionId] && vscode) {
-    vscode.postMessage({ type: 'loadSessionDetail', sessionId: sess.sessionId })
-  }
+  // Request this session's timeline lazily — in an EFFECT, not the render body: a render-body post
+  // re-fires on every re-render until the timeline lands. peek() reads the cache without subscribing,
+  // so its arrival doesn't re-run this effect and re-post.
+  useEffect(() => {
+    if (vscode && sessionTimelines.peek()[sess.sessionId] === undefined) {
+      vscode.postMessage({ type: 'loadSessionDetail', sessionId: sess.sessionId })
+    }
+  }, [sess.sessionId])
 
   useEffect(() => {
     const canvas = canvasRef.current

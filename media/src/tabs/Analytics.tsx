@@ -1,4 +1,4 @@
-import { useState } from 'preact/hooks'
+import { useState, useEffect } from 'preact/hooks'
 import {
   filteredSessions, sessionSummary,
   sessionTimelines,
@@ -87,6 +87,33 @@ export function Analytics() {
   const timelines = sessionTimelines.value
   const hasAny = (sessionSummary.value?.sessions?.length ?? 0) > 0
 
+  // Charts need time-ordered sessions and must respect all active filters (text, initiator, source).
+  // filteredSessions applies all filters but may be sorted by cost/model for the Sessions table,
+  // so re-sort by time here. rangedSessions skips text + initiator — don't use it for charts.
+  // Computed BEFORE the empty-list early return so the timeline-load effect below is an
+  // unconditional hook (rules-of-hooks); on an empty list these are empty arrays and the effect no-ops.
+  const timeOrdered = [...sessions].sort((a, b) =>
+    Date.parse(b.startTime || '0') - Date.parse(a.startTime || '0')
+  )
+  const pricedChartSess = timeOrdered.filter(s => s.source === 'copilot' || s.source === 'codex' || s.source === 'claude_code' || s.source === 'opencode')
+
+  // Most recent CHART_MAX sessions (newest-first slice, then reversed to oldest-first for charts)
+  const chartSessions = timeOrdered.slice(0, CHART_MAX).reverse()
+
+  // Load their timelines for the context-growth chart — in an EFFECT, never the render body, and
+  // reading the cache via peek() so a timeline ARRIVAL doesn't re-render → re-post. The old render-
+  // body forEach re-fired the same CHART_MAX loadSessionDetail messages on every SSE-driven re-render
+  // (a postMessage thundering-herd, seen as ERR_ABORTED bursts). Keyed on the chart id list.
+  const chartIds = chartSessions.map(s => s.sessionId).join(',')
+  useEffect(() => {
+    if (!vscode) return
+    for (const sess of chartSessions) {
+      if (sessionTimelines.peek()[sess.sessionId] === undefined) {
+        vscode.postMessage({ type: 'loadSessionDetail', sessionId: sess.sessionId })
+      }
+    }
+  }, [chartIds])
+
   if (sessions.length === 0) {
     return (
       <div id="analytics-content">
@@ -99,24 +126,6 @@ export function Analytics() {
   const copilotSess = sessions.filter(s => s.source === 'copilot')
   const claudeSess  = sessions.filter(s => s.source === 'claude_code')
   const codexSess   = sessions.filter(s => s.source === 'codex')
-
-  // Charts need time-ordered sessions and must respect all active filters (text, initiator, source).
-  // filteredSessions applies all filters but may be sorted by cost/model for the Sessions table,
-  // so re-sort by time here. rangedSessions skips text + initiator — don't use it for charts.
-  const timeOrdered = [...filteredSessions.value].sort((a, b) =>
-    Date.parse(b.startTime || '0') - Date.parse(a.startTime || '0')
-  )
-  const pricedChartSess = timeOrdered.filter(s => s.source === 'copilot' || s.source === 'codex' || s.source === 'claude_code' || s.source === 'opencode')
-
-  // Most recent CHART_MAX sessions (newest-first slice, then reversed to oldest-first for charts)
-  const chartSessions = timeOrdered.slice(0, CHART_MAX).reverse()
-
-  // Load timelines for context growth chart
-  chartSessions.forEach(sess => {
-    if (!sessionTimelines.value[sess.sessionId] && vscode) {
-      vscode.postMessage({ type: 'loadSessionDetail', sessionId: sess.sessionId })
-    }
-  })
 
   const disclaimer = (
     <div style="font-size:11px;background:var(--hover);border:1px solid var(--border);border-radius:4px;padding:6px 10px;margin-bottom:8px;color:var(--muted)">
