@@ -154,7 +154,7 @@ export class OtlpCollector {
   }
 
   private processMetrics(payload: unknown): { metrics: number; points: number } {
-    type MetricPoint = Record<string, unknown>
+    type MetricPoint = { attributes?: unknown }
     type Metric = {
       sum?: { dataPoints?: MetricPoint[] }
       gauge?: { dataPoints?: MetricPoint[] }
@@ -162,7 +162,7 @@ export class OtlpCollector {
       exponentialHistogram?: { dataPoints?: MetricPoint[] }
     }
     type ScopeMetrics = { metrics?: Metric[] }
-    type ResourceMetrics = { scopeMetrics?: ScopeMetrics[] }
+    type ResourceMetrics = { scopeMetrics?: ScopeMetrics[]; resource?: { attributes?: unknown } }
 
     const p = payload as { resourceMetrics?: ResourceMetrics[] }
     const rms = p.resourceMetrics ?? []
@@ -170,19 +170,38 @@ export class OtlpCollector {
     let metricCount = 0
     let pointCount = 0
     for (const rm of rms) {
+      // TRDD-BURNWDGT — Claude Code emits user.account_uuid + session.id on its metric attributes
+      // (resource-level, occasionally point-level). Harvest them into the shared registry so a session's
+      // OAuth account is attributable at ingest, WITHOUT re-reading the body. Was previously discarded.
+      const resAccount = this.getAttrFrom(this.toSpanAttributes(rm.resource?.attributes), ['user.account_uuid', 'user_account_uuid'])
+      const resSession = this.getAttrFrom(this.toSpanAttributes(rm.resource?.attributes), ['session.id', 'session_id'])
+      if (resAccount && resSession) { callBodyRegistry.recordAccount(resSession, resAccount) }
       for (const sm of rm.scopeMetrics ?? []) {
         const metrics = sm.metrics ?? []
         metricCount += metrics.length
         for (const m of metrics) {
-          pointCount += m.sum?.dataPoints?.length ?? 0
-          pointCount += m.gauge?.dataPoints?.length ?? 0
-          pointCount += m.histogram?.dataPoints?.length ?? 0
-          pointCount += m.exponentialHistogram?.dataPoints?.length ?? 0
+          for (const dps of [m.sum?.dataPoints, m.gauge?.dataPoints, m.histogram?.dataPoints, m.exponentialHistogram?.dataPoints]) {
+            pointCount += this.harvestPointAccounts(dps, resAccount, resSession)
+          }
         }
       }
     }
 
     return { metrics: metricCount, points: pointCount }
+  }
+
+  /** Record any user.account_uuid ↦ session.id pairs carried on metric data-point attributes (falling
+   *  back to the resource-level values), and return the number of points seen. Extracted so processMetrics
+   *  stays readable (TRDD-BURNWDGT). */
+  private harvestPointAccounts(dps: { attributes?: unknown }[] | undefined, resAccount: string, resSession: string): number {
+    if (!dps) { return 0 }
+    for (const dp of dps) {
+      const pointAttrs = this.toSpanAttributes(dp.attributes)
+      const account = this.getAttrFrom(pointAttrs, ['user.account_uuid', 'user_account_uuid']) || resAccount
+      const session = this.getAttrFrom(pointAttrs, ['session.id', 'session_id']) || resSession
+      if (account && session) { callBodyRegistry.recordAccount(session, account) }
+    }
+    return dps.length
   }
 
   private findAttr(attrs: SpanAttribute[], key: string): SpanAttribute | undefined {
@@ -436,6 +455,10 @@ export class OtlpCollector {
             const bodySessionId = this.getAttrFrom(attrs, ['session.id', 'session_id'])
             const bodyRef = this.getAttrFrom(attrs, ['body_ref', 'body.ref', 'bodyRef'])
             const inlineBody = this.getAttrFrom(attrs, ['body'])
+            // TRDD-BURNWDGT — capture the account_uuid carried on the body event's (resource) attributes
+            // so a session's OAuth account is known at ingest, not just after a body is later read.
+            const bodyAccount = this.getAttrFrom(attrs, ['user.account_uuid', 'user_account_uuid'])
+            if (bodySessionId && bodyAccount) { callBodyRegistry.recordAccount(bodySessionId, bodyAccount) }
             if (bodySessionId && (bodyRef || inlineBody)) {
               const bodySpanId = (typeof rec.spanId === 'string' && rec.spanId)
                 ? rec.spanId

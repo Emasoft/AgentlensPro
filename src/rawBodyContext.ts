@@ -45,6 +45,12 @@ export interface CallBodyPointer {
  *  (the module singleton `callBodyRegistry`), so there is one source of truth regardless of runtime. */
 export class CallBodyRegistry {
   private map = new Map<string, CallBodyPointer[]>()
+  // TRDD-BURNWDGT — session_id → account_uuid. Populated at ingest from the raw body's metadata.user_id
+  // (parseUserId) and the OTEL user.account_uuid attribute, so a session's account is attributable
+  // WITHOUT re-reading the multi-MB body. account_uuid is an IDENTIFIER, not a secret (no token). Bounded
+  // by the same maxSessions cap; oldest entries evict FIFO. Kept separate from `map` because account is
+  // available even for sessions whose body pointers were LRU-evicted.
+  private sessionAccounts = new Map<string, string>()
   constructor(
     private readonly maxSessions = 200,
     private readonly maxPerSession = 400,
@@ -100,6 +106,25 @@ export class CallBodyRegistry {
    *  a broad-scope query — the LAZY contract (never a full-disk sweep of the 20k+ body files). */
   sessionIds(): string[] {
     return [...this.map.keys()].reverse()
+  }
+
+  /** TRDD-BURNWDGT — remember a session's OAuth account (account_uuid identifier). Fail-soft: ignores
+   *  empty ids. Re-inserts to keep FIFO eviction MRU-ish; bounded by maxSessions so it can't grow
+   *  unbounded across a long-lived server. NEVER carries the OAuth token — only the account_uuid. */
+  recordAccount(sessionId: string, accountUuid: string | undefined): void {
+    if (!sessionId || !accountUuid) { return }
+    if (this.sessionAccounts.has(sessionId)) { this.sessionAccounts.delete(sessionId) }
+    this.sessionAccounts.set(sessionId, accountUuid)
+    while (this.sessionAccounts.size > this.maxSessions) {
+      const oldest = this.sessionAccounts.keys().next().value
+      if (oldest === undefined) { break }
+      this.sessionAccounts.delete(oldest)
+    }
+  }
+
+  /** The account_uuid recorded for a session, or undefined when unknown (fail-soft — never fabricated). */
+  accountFor(sessionId: string): string | undefined {
+    return this.sessionAccounts.get(sessionId)
   }
 
   /** Request-body pointers for one session, oldest→newest by arrival ts. The index maps these to
@@ -340,5 +365,9 @@ export async function resolveCallContext(
   ctx.sessionId = sessionId
   ctx.requestId = sel.requestId ?? ptr.requestId ?? ctx.requestId
   if (!ctx.model) { ctx.model = ptr.model }
+  // TRDD-BURNWDGT — backfill the session→account map from the body we just parsed. This makes account
+  // attribution work even for LOG/statusline sessions whose OTEL body events never carried the account
+  // attribute: any call-context / composition read populates it. account_uuid is an identifier, not a secret.
+  if (ctx.accountUuid) { callBodyRegistry.recordAccount(sessionId, ctx.accountUuid) }
   return ctx
 }

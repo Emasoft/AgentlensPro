@@ -7,6 +7,16 @@ export interface SessionSummaryCard {
   dataSource: 'otel' | 'log'
   initiator?: 'user' | 'agent' | 'api'
   conversationId?: string
+  // ── Per-account attribution (TRDD-BURNWDGT) ───────────────────────────────────
+  // The OAuth account that issued this session's API calls. `accountId` is the raw `account_uuid`
+  // (a stable IDENTIFIER, not a secret — safe to persist; the OAuth TOKEN is NEVER stored). Sourced
+  // at ingest from the raw request body's metadata.user_id (via the shared CallBodyRegistry, keyed by
+  // session_id) and, for OTEL cards, the span's user.account_uuid attribute. Rate limits are
+  // per-account, so per-account window budgeting groups events by this — a session rotated to a
+  // second account must NOT pool with the first. `accountLabel` is a LIVE-ONLY, display-only resolution
+  // (email/org from ~/.claude.json) attached at read time — never persisted (it can drift + is PII).
+  accountId?: string
+  accountLabel?: string
   // Session that spawned this one (sub-agent / Task / fork). Set on child sessions so the
   // dashboard can roll their tokens into the parent's total and render them as sub-branches.
   parentSessionId?: string

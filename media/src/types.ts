@@ -54,6 +54,11 @@ export interface SessionSummaryCard {
   dataSource: 'otel' | 'log'
   initiator?: 'user' | 'agent' | 'api'
   conversationId?: string
+  // Mirror of src/summarizers/summarizerTypes.ts (TRDD-BURNWDGT) — the OAuth account that issued this
+  // session's calls. accountId = raw account_uuid (identifier, not a secret); accountLabel = live-only
+  // display resolution (email/org). Rate limits are per-account; per-account window budgets group by this.
+  accountId?: string
+  accountLabel?: string
   // Mirror of src/summarizers/summarizerTypes.ts — session that spawned this one (sub-agent/fork).
   parentSessionId?: string
   // 1-based turn of the parent at which this child was spawned (the Task/Agent tool_use turn).

@@ -33,6 +33,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
 import type { SessionSummaryCard, TimelineEntry } from './summarizers/summarizerTypes'
+import { callBodyRegistry } from './rawBodyContext'
 import { VSCODE_FAMILY_IDE_NAMES } from './vscodeFamilyIdes'
 import {
   attachGeneratedFiles, scratchPathsInToolInput, scratchPathsInToolUseResult,
@@ -2014,6 +2015,10 @@ function _buildCard(
     source,
     dataSource: 'log',
     initiator: acc.initiator,
+    // TRDD-BURNWDGT — the OAuth account for this session, resolved from the shared registry (fed by OTEL
+    // metric/body attributes + any body read). A log session's id IS the Claude Code session_id, which is
+    // exactly the registry's key, so this attributes correctly. undefined when unknown (fail-soft).
+    accountId: callBodyRegistry.accountFor(sessionId),
     workspace,
     userRequest: acc.userRequest.slice(0, 500),
     model,
