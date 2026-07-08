@@ -1,9 +1,9 @@
 ---
 trdd-id: 6E6416B8
 title: Remove all VS Code extension code — keep standalone server + webview + MCP
-column: todo
+column: dev
 created: 2026-07-07T11:00:01+0200
-updated: 2026-07-07T11:00:01+0200
+updated: 2026-07-08T08:50:00+0200
 current-owner: null
 assignee: null
 priority: 4
