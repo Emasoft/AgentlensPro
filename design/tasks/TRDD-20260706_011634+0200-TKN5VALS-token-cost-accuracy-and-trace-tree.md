@@ -1,9 +1,9 @@
 ---
 trdd-id: TKN5VALS
 title: Fix Claude token/cost accounting + 5-value expandable trace tree, sticky headers, Context tab
-column: dev
+column: complete
 created: 2026-07-06T01:16:34+0200
-updated: 2026-07-07T10:16:39+0200
+updated: 2026-07-08T09:35:00+0200
 current-owner: claude-opus-4-8
 assignee: claude-opus-4-8
 priority: 2
@@ -25,7 +25,20 @@ external-refs: []
 
 # TRDD-TKN5VALS — Token/cost accuracy + expandable 5-value trace tree
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-07
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-08
+
+### ✅ CLOSED 2026-07-08 — P8 board EMPTY: all 18 child/sibling TRDDs complete
+Every named P8 requirement (R-A..R-J, ICHAVFCS) and every gap-analysis TRDD (OG9PARZQ,
+ZK37VG4X, PJC8N1HO, W0RRL2FZ, 62E8UU41, UBEP5XY7, PW0H2NXC) shipped, orchestrator-verified,
+and live. Final additions beyond the paragraph below: 6E6416B8 done (VS Code extension fully
+removed — standalone+webview+MCP only; 74886f1/1ca6bce/bda1cd7/aed834f); config-safety
+hardening after the 2026-07-07 settings.json wipe incident (transactional editor
+scripts/safe_config_edit.py + safeConfigEdit bridge; the wiping writer DELETED —
+4916088/1a661a9/bceb2a4; see CLAUDE.md Gotcha). Final gates: check-types 0 / lint 0 errors /
+esbuild ok / suite 351 passing / 1 pending / 0 failing (node@22 runner) / zero `vscode`
+imports. Production: `pnpm run supervise` on 3000/4316/4318, telemetry ACTIVE, fleet MCP
+serves get_burn_status / get_session_status / get_cost_by_cause / get_context_history et al.
+All commits LOCAL on fix/logreader-large-jsonl, NOT pushed.
 
 ### 🔄 RESUME 2026-07-07 EOD (P8 execution): ALL named P8 requirements shipped — R-A/R-H (History tab, cd04e7a), R-B (U0UYC38A ✅), R-C (ZS1GDXVY ✅), R-G (IQENK7JM ✅), R-I (7612ff5; attribution mirror in media/src/types.ts VERIFIED present), R-J (M36W16L0 ✅), ICHAVFCS ✅. Gap-analysis children (163281a) executed same day: OG9PARZQ ✅ 99cab41 (burn alarm + 5h/7d window budget + get_burn_status/get_session_status MCP — fleet-facing), ZK37VG4X ✅ d26a4d9+91f52d5 (sonnet-5/mythos-5 pricing both tables, UNPRICED fail-loud badge, session dedup/mergedFrom, SLI junk filter + hogs coverage honesty), PJC8N1HO ✅ acde47b (`pnpm run supervise` supervisor + crash.log, durable tail offsets — prod fast-restart "13996 sessions restored, skipping cold rescan", downtime gap markers, History/Context endpoint OOM FIXED (2× repro dead, verified full-tab headless click-through), request logging, heap-guard 503), W0RRL2FZ ✅ 98dcdab+298dca6 (resident-cost tokens×turns-resident itemization — 94.3% of 119.7M tok reconciled on 28e3a88d, top sink identified = janitor-heartbeat cron 42.0M tok·turns; SECOND auto-config hijack path applyLegacyAgentConfig gated). Suite 314/1/0. **IN FLIGHT: 62E8UU41 (spawn-cost rollup + FLEET-COLD/WORKTREE-SCATTER/MODEL-MIX advisor) · PW0H2NXC (Context tab DOM virtualization, 156k→<10k elements). REMAINING: UBEP5XY7 tokens-by-cause (dispatch after 62E8UU41 frees mcpServer.ts) → 6E6416B8 vscode-removal (LAST).** Prod: `pnpm run supervise` on 3000/4316/4318, telemetry ACTIVE. Per-TRDD opus agents, orchestrator verifies gates (node@22 mocha path) before/after commit-by-name, no push.
 
