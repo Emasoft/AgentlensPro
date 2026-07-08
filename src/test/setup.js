@@ -1,11 +1,6 @@
-// Register mock for 'vscode' module before any tests run
-const Module = require('module')
-const path = require('path')
-
-const originalResolveFilename = Module._resolveFilename
-Module._resolveFilename = function (request, parent, isMain, options) {
-  if (request === 'vscode') {
-    return path.join(__dirname, '__mocks__', 'vscode.js')
-  }
-  return originalResolveFilename.call(this, request, parent, isMain, options)
-}
+// Mocha bootstrap (referenced by .mocharc.cjs `require`).
+// The VS Code extension was removed (TRDD-6E6416B8), and with it the runtime
+// `require('vscode')` mock that used to be installed here — no test resolves
+// 'vscode' at runtime any more (the retained persistence/collector modules are
+// exercised with plain structural fakes). Kept as a no-op so the .mocharc
+// `require` entry still resolves; new global test setup would go here.
