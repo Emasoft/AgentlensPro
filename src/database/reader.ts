@@ -1,6 +1,6 @@
 import * as path from 'path'
 import * as fs from 'fs'
-import * as vscode from 'vscode'
+import { joinUri, type UriLike, type ReadBlobFs } from '../vscodeCompat'
 import type { SessionSummaryCard, TimelineEntry, EditDetail, GeneratedFileRef } from '../summarizers/summarizerTypes'
 import { lookupRates, calcTokenCostUsd } from '../pricing'
 
@@ -54,7 +54,11 @@ interface ReadableDb {
 export class DatabaseReader {
   constructor(
     private readonly db: ReadableDb,
-    private readonly storageUri: vscode.Uri,
+    private readonly storageUri: UriLike,
+    // Injected only when blob sidecars must be read. The extension host that
+    // supplied vscode.workspace.fs was removed (TRDD-6E6416B8); with no fs,
+    // loadBlob returns null exactly as a missing file would.
+    private readonly blobFs?: ReadBlobFs,
   ) {}
 
   listSessions(filter?: {
@@ -243,10 +247,13 @@ export class DatabaseReader {
     field: 'response' | 'thinking' | 'tool-input' | 'full-result' | 'edit-old' | 'edit-new',
     editIndex?: number,
   ): Promise<string | null> {
+    // No injected fs (extension host removed, TRDD-6E6416B8) → the blob sidecar
+    // is unreadable here; return null exactly as a missing file would.
+    if (!this.blobFs) return null
     const filename = this._blobFilename(spanId, field, editIndex)
-    const fileUri = vscode.Uri.joinPath(this.storageUri, 'blobs', filename)
+    const fileUri = joinUri(this.storageUri, 'blobs', filename)
     try {
-      const data = await vscode.workspace.fs.readFile(fileUri)
+      const data = await this.blobFs.readFile(fileUri)
       return Buffer.from(data).toString('utf8')
     } catch {
       return null
@@ -513,7 +520,7 @@ export class DatabaseReader {
  */
 export function openReadonlySnapshot(
   storagePath: string,
-  storageUri: vscode.Uri,
+  storageUri: UriLike,
   extensionPath: string,
 ): DatabaseReader | null {
   const dbPath = path.join(storagePath, 'agentlens.db')

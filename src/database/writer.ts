@@ -1,4 +1,4 @@
-import * as vscode from 'vscode'
+import { joinUri, type UriLike, type WriteBlobFs } from '../vscodeCompat'
 import type { SessionSummaryCard, TimelineEntry, EditDetail, GeneratedFileRef } from '../summarizers/summarizerTypes'
 import { calcTokenCostUsd } from '../pricing'
 
@@ -16,15 +16,19 @@ export class DatabaseWriter {
   private drainPromise: Promise<void> = Promise.resolve()
   private writing = false
   private _generation = 0  // incremented by clearAll() to abort in-flight drains
-  private readonly vscodeFs: typeof vscode.workspace.fs
+  // Injected blob file system. The VS Code extension host that supplied
+  // vscode.workspace.fs was removed (TRDD-6E6416B8), so there is no default any
+  // more — when none is injected, blob writes are a graceful no-op (see
+  // _writeBlob). Callers that need blob persistence inject a WriteBlobFs.
+  private readonly vscodeFs?: WriteBlobFs
 
   constructor(
     private readonly db: WriteableDb,
-    private readonly storageUri: vscode.Uri,
+    private readonly storageUri: UriLike,
     private readonly log: (msg: string) => void,
-    vscodeFs?: typeof vscode.workspace.fs,
+    vscodeFs?: WriteBlobFs,
   ) {
-    this.vscodeFs = vscodeFs ?? vscode.workspace.fs
+    this.vscodeFs = vscodeFs
   }
 
   enqueue(card: SessionSummaryCard, workspace: string): void {
@@ -315,7 +319,11 @@ export class DatabaseWriter {
   }
 
   private async _writeBlob(filename: string, content: string): Promise<void> {
-    const fileUri = vscode.Uri.joinPath(this.storageUri, 'blobs', filename)
+    // No injected fs (extension host removed, TRDD-6E6416B8) → blob persistence
+    // is a graceful no-op. The blob's presence flag is already recorded in the
+    // DB row; only the sidecar file is skipped.
+    if (!this.vscodeFs) return
+    const fileUri = joinUri(this.storageUri, 'blobs', filename)
     try {
       await this.vscodeFs.stat(fileUri)
       return  // already exists; span content is immutable

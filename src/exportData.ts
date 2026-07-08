@@ -1,8 +1,10 @@
-import * as vscode from 'vscode'
+import { joinUri, type UriLike, type WriteBlobFs } from './vscodeCompat'
 import { Span, SpanAttribute } from './types'
 import { summarizeSpans } from './spanSummarizer'
 
-export async function exportSpans(spans: Span[], baseUri: vscode.Uri, prefix = 'export'): Promise<string[]> {
+// baseUri + fs are injected: the VS Code extension host that supplied
+// vscode.Uri / vscode.workspace.fs was removed (TRDD-6E6416B8).
+export async function exportSpans(spans: Span[], baseUri: UriLike, fs: Pick<WriteBlobFs, 'writeFile'>, prefix = 'export'): Promise<string[]> {
   const sessions = summarizeSpans(spans).sessions
   const traceAgent: Record<string, string> = {}
   for (const session of sessions) {
@@ -32,8 +34,8 @@ export async function exportSpans(spans: Span[], baseUri: vscode.Uri, prefix = '
     const endpoint = parts[0] || 'main'
     const agent = parts[1] || 'unknown'
     const filename = `${prefix}_${agent}_${endpoint}_${timestamp}.json`
-    const uri = vscode.Uri.joinPath(baseUri, filename)
-    await vscode.workspace.fs.writeFile(uri, Buffer.from(JSON.stringify(groupSpans, null, 2)))
+    const uri = joinUri(baseUri, filename)
+    await fs.writeFile(uri, Buffer.from(JSON.stringify(groupSpans, null, 2)))
     writtenFiles.push(filename)
   }
 
@@ -78,6 +80,6 @@ function redactSpan(span: Span): Span {
   }
 }
 
-export async function exportSpansRedacted(spans: Span[], baseUri: vscode.Uri): Promise<string[]> {
-  return exportSpans(spans.map(redactSpan), baseUri, 'export_redacted')
+export async function exportSpansRedacted(spans: Span[], baseUri: UriLike, fs: Pick<WriteBlobFs, 'writeFile'>): Promise<string[]> {
+  return exportSpans(spans.map(redactSpan), baseUri, fs, 'export_redacted')
 }

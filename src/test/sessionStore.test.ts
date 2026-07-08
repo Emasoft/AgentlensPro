@@ -1,35 +1,13 @@
 import * as assert from 'assert'
-import type * as vscode from 'vscode'
 import { SessionStore } from '../sessionStore'
 import { summarizeSpans } from '../spanSummarizer'
 import { Span } from '../types'
 
-// ── Mock VS Code Extension Context ──
-
-function mockContext(): vscode.ExtensionContext {
-  const state: Record<string, unknown> = {}
-  return {
-    globalState: {
-      get: (key: string, defaultVal?: unknown) => state[key] ?? defaultVal,
-      update: (key: string, val: unknown) => { state[key] = val; return Promise.resolve() },
-      keys: () => Object.keys(state),
-      setKeysForSync: () => {},
-    },
-    subscriptions: [],
-    extensionPath: '/mock',
-    extensionUri: {} as unknown as vscode.Uri,
-    globalStorageUri: {} as unknown as vscode.Uri,
-    logUri: {} as unknown as vscode.Uri,
-    storageUri: {} as unknown as vscode.Uri,
-    storagePath: '/mock/storage',
-    globalStoragePath: '/mock/global-storage',
-    logPath: '/mock/log',
-    extensionMode: 1,
-    extension: {} as unknown as vscode.Extension<unknown>,
-    environmentVariableCollection: {} as unknown as vscode.GlobalEnvironmentVariableCollection,
-    secrets: {} as unknown as vscode.SecretStorage,
-    languageModelAccessInformation: {} as unknown as vscode.LanguageModelAccessInformation,
-  } as unknown as vscode.ExtensionContext
+// The SessionStore constructor no longer needs a VS Code ExtensionContext: the
+// extension host was removed (TRDD-6E6416B8) and the param is now an unused
+// optional. A trivial stand-in keeps the existing call sites unchanged.
+function mockContext(): unknown {
+  return {}
 }
 
 

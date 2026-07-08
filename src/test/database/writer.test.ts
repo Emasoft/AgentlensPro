@@ -1,6 +1,6 @@
 import * as assert from 'assert'
 import * as path from 'path'
-import type * as vscode from 'vscode'
+import type { UriLike } from '../../vscodeCompat'
 import { SCHEMA_SQL } from '../../database/schema'
 import { DatabaseWriter } from '../../database/writer'
 import type { SessionSummaryCard } from '../../summarizers/summarizerTypes'
@@ -58,9 +58,8 @@ function makeCard(overrides: Partial<SessionSummaryCard> = {}): SessionSummaryCa
   }
 }
 
-function makeStorageUri(tag = 'test'): vscode.Uri {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  return require('vscode').Uri.file(`/tmp/agentlens-${tag}`)
+function makeStorageUri(tag = 'test'): UriLike {
+  return { scheme: 'file', path: `/tmp/agentlens-${tag}` }
 }
 
 function queryInt(db: SqlDb, sql: string): number {
@@ -154,7 +153,7 @@ suite('DatabaseWriter', () => {
     const written: string[] = []
     const fakeFs = {
       stat:      () => Promise.reject(new Error('not found')),
-      writeFile: (_uri: vscode.Uri) => { written.push(_uri.path); return Promise.resolve() },
+      writeFile: (_uri: UriLike) => { written.push(_uri.path); return Promise.resolve() },
     }
     const db = await openInMemoryDb()
     const longText = 'x'.repeat(600)
@@ -164,7 +163,7 @@ suite('DatabaseWriter', () => {
         isError: false, timestamp: '', responseText: longText,
       }],
     })
-    const w = new DatabaseWriter(db, makeStorageUri('blob'), () => {}, fakeFs as unknown as typeof import('vscode').workspace.fs)
+    const w = new DatabaseWriter(db, makeStorageUri('blob'), () => {}, fakeFs)
     w.enqueue(card, 'ws')
     await w.drain()
     assert.ok(written.some(p => p.includes('sp-blob-response.txt')), 'response blob not written')
@@ -185,7 +184,7 @@ suite('DatabaseWriter', () => {
         isError: false, timestamp: '', responseText: longText,
       }],
     })
-    const w = new DatabaseWriter(db, makeStorageUri('exists'), () => {}, fakeFs as unknown as typeof import('vscode').workspace.fs)
+    const w = new DatabaseWriter(db, makeStorageUri('exists'), () => {}, fakeFs)
     w.enqueue(card, 'ws')
     await w.drain()
     assert.strictEqual(writeCount.n, 0, 'should not write when file already exists')

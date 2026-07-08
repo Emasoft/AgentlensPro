@@ -1,9 +1,9 @@
 import * as assert from 'assert'
 import * as path from 'path'
-import type * as vscode from 'vscode'
+import type { UriLike } from '../../vscodeCompat'
 import { SCHEMA_SQL } from '../../database/schema'
 import { DatabaseWriter } from '../../database/writer'
-import { migrateGlobalStateToSqlite } from '../../database/migration'
+import { migrateGlobalStateToSqlite, type MigrationContext } from '../../database/migration'
 import type { Span } from '../../types'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -24,11 +24,11 @@ async function openDb(): Promise<SqlDb> {
   return db
 }
 
-function makeStorageUri(): vscode.Uri {
-  return { scheme: 'file', path: '/tmp/agentlens-migration-test', fsPath: '/tmp/agentlens-migration-test' } as unknown as vscode.Uri
+function makeStorageUri(): UriLike {
+  return { scheme: 'file', path: '/tmp/agentlens-migration-test', fsPath: '/tmp/agentlens-migration-test' }
 }
 
-function makeMockContext(spans: Span[] = [], migrationVersion = 0): vscode.ExtensionContext {
+function makeMockContext(spans: Span[] = [], migrationVersion = 0): MigrationContext {
   const state: Record<string, unknown> = {
     'agentLens.spans': spans,
     'agentLens.dbMigrationVersion': migrationVersion,
@@ -40,7 +40,7 @@ function makeMockContext(spans: Span[] = [], migrationVersion = 0): vscode.Exten
       keys: () => Object.keys(state),
       setKeysForSync: () => {},
     },
-  } as unknown as vscode.ExtensionContext
+  } as unknown as MigrationContext
 }
 
 function makeSpan(traceId: string): Span {

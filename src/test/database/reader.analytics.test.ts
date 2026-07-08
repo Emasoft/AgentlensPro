@@ -1,6 +1,6 @@
 import * as assert from 'assert'
 import * as path from 'path'
-import type * as vscode from 'vscode'
+import type { UriLike } from '../../vscodeCompat'
 import { SCHEMA_SQL } from '../../database/schema'
 import { DatabaseWriter } from '../../database/writer'
 import { DatabaseReader } from '../../database/reader'
@@ -24,8 +24,8 @@ async function openDb(): Promise<SqlDb> {
   return db
 }
 
-function makeStorageUri(): vscode.Uri {
-  return { scheme: 'file', path: '/tmp/agentlens-analytics-test', fsPath: '/tmp/agentlens-analytics-test' } as unknown as vscode.Uri
+function makeStorageUri(): UriLike {
+  return { scheme: 'file', path: '/tmp/agentlens-analytics-test', fsPath: '/tmp/agentlens-analytics-test' }
 }
 
 function makeCard(overrides: Partial<SessionSummaryCard> = {}): SessionSummaryCard {

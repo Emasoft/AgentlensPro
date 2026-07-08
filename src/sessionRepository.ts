@@ -1,5 +1,5 @@
 import * as fs from 'fs'
-import * as vscode from 'vscode'
+import { joinUri, FileType, type UriLike, type DirBlobFs } from './vscodeCompat'
 import { SessionStore } from './sessionStore'
 import { DatabaseReader, type DailyStatRow, type LifetimeStats, type SearchQuery, type BurnRate, type Projection } from './database/reader'
 import { DatabaseWriter } from './database/writer'
@@ -268,18 +268,23 @@ export class SessionRepository {
     save()
   }
 
-  /** Deletes all blob files under storageUri/blobs/. Returns count deleted. */
-  async clearBlobs(storageUri: vscode.Uri): Promise<number> {
-    const blobsUri = vscode.Uri.joinPath(storageUri, 'blobs')
+  /**
+   * Deletes all blob files under storageUri/blobs/. Returns count deleted.
+   * `blobFs` is injected (named to avoid shadowing the node `fs` import above):
+   * the VS Code extension host that supplied vscode.workspace.fs was removed
+   * (TRDD-6E6416B8).
+   */
+  async clearBlobs(storageUri: UriLike, blobFs: DirBlobFs): Promise<number> {
+    const blobsUri = joinUri(storageUri, 'blobs')
     let count = 0
     try {
-      const entries = await vscode.workspace.fs.readDirectory(blobsUri)
+      const entries = await blobFs.readDirectory(blobsUri)
       await Promise.all(
         entries
-          .filter(([, type]) => type === vscode.FileType.File)
+          .filter(([, type]) => type === FileType.File)
           .map(async ([name]) => {
             try {
-              await vscode.workspace.fs.delete(vscode.Uri.joinPath(blobsUri, name))
+              await blobFs.delete(joinUri(blobsUri, name))
               count++
             } catch { /* ignore individual delete failures */ }
           })

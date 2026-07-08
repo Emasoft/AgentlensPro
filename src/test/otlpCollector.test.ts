@@ -1,23 +1,13 @@
 import * as assert from 'assert'
 import * as http from 'http'
+import type { OutputChannelLike } from '../vscodeCompat'
 import { OtlpCollector } from '../otlpCollector'
 import { SessionStore } from '../sessionStore'
 
-// ── Mock VS Code OutputChannel ──
-
-function mockOutputChannel(): import('vscode').OutputChannel {
-  const lines: string[] = []
-  return {
-    name: 'test',
-    append: (s: string) => { lines.push(s) },
-    appendLine: (s: string) => { lines.push(s) },
-    replace: () => {},
-    clear: () => { lines.length = 0 },
-    show: () => {},
-    hide: () => {},
-    dispose: () => {},
-    _lines: lines,
-  } as unknown as import('vscode').OutputChannel
+// The collector only calls appendLine; the extension host's real OutputChannel
+// was removed (TRDD-6E6416B8), so a no-op OutputChannelLike is all it needs.
+function mockOutputChannel(): OutputChannelLike {
+  return { appendLine: () => {} }
 }
 
 // ── Mock SessionStore ──

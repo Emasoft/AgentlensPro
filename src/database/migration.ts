@@ -1,7 +1,18 @@
-import * as vscode from 'vscode'
 import { summarizeSpans } from '../spanSummarizer'
 import { DatabaseWriter } from './writer'
 import type { Span } from '../types'
+
+// The globalState surface this one-time migration reads/writes. The VS Code
+// extension host (which supplied vscode.ExtensionContext) was removed
+// (TRDD-6E6416B8); this structural type keeps the migration compiling without a
+// `vscode` dependency. It is now exercised only by unit tests.
+export interface MigrationContext {
+  globalState: {
+    get<T>(key: string): T | undefined
+    get<T>(key: string, defaultValue: T): T
+    update(key: string, value: unknown): PromiseLike<void>
+  }
+}
 
 const MIGRATION_VERSION_KEY = 'agentLens.dbMigrationVersion'
 const SPANS_KEY = 'agentLens.spans'
@@ -14,7 +25,7 @@ const CURRENT_VERSION = 1
  * activation can retry.
  */
 export async function migrateGlobalStateToSqlite(
-  context: vscode.ExtensionContext,
+  context: MigrationContext,
   writer: DatabaseWriter,
   log: (msg: string) => void,
 ): Promise<void> {
@@ -32,7 +43,11 @@ export async function migrateGlobalStateToSqlite(
   log(`AgentLens migration: migrating ${spans.length} spans from globalState to SQLite…`)
 
   const { sessions } = summarizeSpans(spans)
-  const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.toString() ?? ''
+  // The workspace URI used to come from vscode.workspace.workspaceFolders; with
+  // the extension host removed (TRDD-6E6416B8) there is no workspace API here,
+  // so migrated rows carry an empty workspace (matches the prior empty-folders
+  // path, which already resolved to '').
+  const workspace = ''
 
   for (const card of sessions) {
     writer.enqueue(card, workspace)

@@ -1,4 +1,3 @@
-import * as vscode from 'vscode'
 import { Span, SpanAttribute, SessionSummary } from './types'
 import { nanoToMs } from './summarizers/helpers'
 
@@ -24,8 +23,11 @@ export class SessionStore {
     for (const fn of this.onUpdateCallbacks) { fn(traceId) }
   }
 
+  // The VS Code extension host (which passed its ExtensionContext) was removed
+  // (TRDD-6E6416B8). The context was already unused here; the optional param is
+  // kept so existing construction sites need no change.
   constructor(
-    _context: vscode.ExtensionContext,
+    _context?: unknown,
   ) {}
 
   addSpan(span: Span) {

@@ -6,7 +6,7 @@ import { SCHEMA_SQL } from '../../database/schema'
 import { DatabaseWriter } from '../../database/writer'
 import { runRetention } from '../../database/retention'
 import type { SessionSummaryCard } from '../../summarizers/summarizerTypes'
-import type * as vscode from 'vscode'
+import type { UriLike } from '../../vscodeCompat'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -26,8 +26,8 @@ async function openDb(): Promise<SqlDb> {
   return db
 }
 
-function makeStorageUri(dir: string): vscode.Uri {
-  return { scheme: 'file', path: dir, fsPath: dir } as unknown as vscode.Uri
+function makeStorageUri(dir: string): UriLike {
+  return { scheme: 'file', path: dir, fsPath: dir }
 }
 
 function makeCard(id: string, startIso: string): SessionSummaryCard {

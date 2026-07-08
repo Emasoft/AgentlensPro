@@ -1,5 +1,5 @@
 import * as http from 'http'
-import * as vscode from 'vscode'
+import type { OutputChannelLike } from './vscodeCompat'
 import { SessionStore } from './sessionStore'
 import { SpanAttribute } from './types'
 import { callBodyRegistry } from './rawBodyContext'
@@ -29,7 +29,7 @@ export class OtlpCollector {
   constructor(
     private port: number,
     private store: SessionStore,
-    private output: vscode.OutputChannel
+    private output: OutputChannelLike
   ) {}
 
   setIngestionEnabled(on: boolean) {
