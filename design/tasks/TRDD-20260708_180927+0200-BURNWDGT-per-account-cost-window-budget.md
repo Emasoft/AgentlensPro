@@ -1,9 +1,9 @@
 ---
 trdd-id: BURNWDGT
 title: Per-account, cost-aware, self-calibrating token-window budget + account/plan awareness
-column: dev
+column: complete
 created: 2026-07-08T18:09:27+0200
-updated: 2026-07-08T18:09:27+0200
+updated: 2026-07-08T22:36:25+0200
 current-owner: 777b8f52
 assignee: 777b8f52
 priority: 1
@@ -22,11 +22,13 @@ runtime-targets: [macos, linux]
 impacts: [config-schema]
 attempts: 0
 last-test-result: pass
-implementation-commits: [2ea7fa1, d3c04b1]
+implementation-commits: [2ea7fa1, d3c04b1, b8abda2, 9a6f1ec, 5a62cfb, 777f6af, 4578e14, dfb97c7]
 external-refs: []
 ---
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-08
+
+**DONE (2026-07-08):** per-account cost-aware 5h/7d window budget + account/plan awareness + statusline $/hr artifact fix + per-account dashboard display all shipped & gate-green.
 
 **WHY THIS EXISTS:** User burned a full 5h account window "in a breath" (had to rotate to a second
 email/account). Asked: *what is actually consuming all those tokens?* — and demanded AgentLens surface,

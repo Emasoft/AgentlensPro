@@ -1,9 +1,9 @@
 ---
 trdd-id: CTXQUERY
 title: OTEL-raw-body context-composition query surface — images, resident blobs, per-block, fully queryable
-column: dispatch
+column: complete
 created: 2026-07-08T19:01:58+0200
-updated: 2026-07-08T20:12:00+0200
+updated: 2026-07-08T22:36:25+0200
 current-owner: 777b8f52
 assignee: null
 priority: 1
@@ -24,11 +24,13 @@ runtime-targets: [macos, linux]
 impacts: [public-api]
 attempts: 1
 last-test-result: pass
-implementation-commits: [66b1b36]
+implementation-commits: [66b1b36, 04918c7, dfb97c7, 0b4dd70]
 external-refs: []
 ---
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-08
+
+**DONE (2026-07-08):** lazy composition index + 4 MCP tools (get_image_report/find_resident_blobs/query_context_blocks/get_block_content) + dashboard composition panel (lazy trace-tree expand) + resident-blob card badge all shipped & gate-green.
 
 **WHY:** During the burn investigation we discovered — by hand-parsing OTEL raw request bodies — that
 **ANIME2SVG (claude-fable-5) carries 8 stuck screenshots = 525.1k tokens = ~half its 1M context window,

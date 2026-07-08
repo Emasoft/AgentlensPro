@@ -55,6 +55,15 @@ stuck screenshots = 525.1k tokens = ~half its 1M window, re-read every turn (~$4
 compact aggressively. AgentLens ALREADY parses these bodies (`src/rawBodyContext.ts buildCallContext`);
 the missing piece is a queryable index + MCP tools + a resident-blob alert — tracked in TRDD-CTXQUERY.
 
+**SHIPPED (2026-07-08) — the query surface answers this now, ask instead of hand-parsing bodies:**
+TRDD-CTXQUERY landed the lazy OTEL-body composition index + MCP tools that answer "how many images /
+who read them / per-account 5h+7d window % / resident-blob cost" directly: `get_image_report`,
+`find_resident_blobs`, `query_context_blocks`, `get_block_content` (drill to one block's actual text),
+plus the account/window tools from TRDD-BURNWDGT — `get_account_status`, `get_window_budget`, and a
+per-account `get_burn_status`. The dashboard also grew a Composition panel (per-session block-type
+breakdown + resident-blob list, lazy on trace-tree expand) and a resident-blob alert badge on session
+cards. Both TRDDs are `column: complete`, gate-green.
+
 ## Notes and lessons learned
 [^1]: [ocd:2026-07-08 lmd:2026-07-08] The statusline event path originally carried only a total
   (`deltaTokens`), so the per-bucket breakdown landed 100% in `unknown` for exactly the no-OTEL sessions
