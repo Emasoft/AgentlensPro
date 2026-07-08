@@ -1,9 +1,10 @@
 import { useState } from 'preact/hooks'
 import { displaySessions, sessionTimelines, sessionCompositions, serverBurnStatus } from '../state'
 import { buildCacheBreakReport } from '../cacheBreak'
-import { buildDisplaySummary, formatMs } from '../utils'
+import { buildDisplaySummary, formatMs, formatCompact } from '../utils'
 import {
   calcSessionCost,
+  fmtUsd,
   getActiveComputeMs,
   getErrorHealth,
   getIdenticalToolRepeat,
@@ -25,7 +26,7 @@ import {
   type AgentSource,
   type AgentThresholdProfiles,
 } from '../agentProfiles'
-import type { SessionSummaryCard } from '../types'
+import type { SessionSummaryCard, BurnWindowConsumption } from '../types'
 
 const ALERT_TOOLTIPS: Record<string, string> = {
   context_window: 'Peak context use is the largest single LLM input in a session, not the average. Cache hits can make high input cheap, but they still occupy the context window.',
@@ -481,8 +482,16 @@ function ServerBurnSection() {
     <div style="border:1px solid var(--border);border-radius:6px;padding:12px 14px;margin-bottom:14px;background:var(--panel-bg)">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
         <strong style="font-size:13px">Realtime burn monitor</strong>
-        <span style="font-size:11px;color:var(--muted)">{burn.activeSessions} active · {burn.global.oneMin.tokensPerMin.toLocaleString()} tok/min · ${burn.global.costPerHour.toFixed(2)}/hr</span>
+        <span style="font-size:11px;color:var(--muted)" title="Artifact-free $/hr: derived from each event's per-turn buckets × the per-model rate (not the sparse cumulative statusline delta that over-reported ~4×).">{burn.activeSessions} active · {burn.global.oneMin.tokensPerMin.toLocaleString()} tok/min · ${burn.global.costPerHour.toFixed(2)}/hr</span>
       </div>
+      {burn.currentAccount && (
+        <div style="font-size:11px;color:var(--muted);margin-bottom:8px">
+          account <strong style="color:var(--fg)">{burn.currentAccount.label}</strong>
+          {burn.currentAccount.planType && <span style="margin-left:6px;padding:0 6px;border-radius:3px;background:var(--vscode-badge-background,var(--border));color:var(--vscode-badge-foreground,var(--fg));font-size:9px;font-weight:600">{burn.currentAccount.planType}</span>}
+          {burn.currentAccount.billingType && <span style="margin-left:5px">· {burn.currentAccount.billingType}{burn.currentAccount.hasExtraUsageEnabled ? ' (extra-usage on)' : ''}</span>}
+          {burn.currentAccount.organizationName && <span style="margin-left:5px">· {burn.currentAccount.organizationName}</span>}
+        </div>
+      )}
       {/* Per-bucket split of the burn (TRDD burn-breakdown): a bare tokens/min hides that ~96% is
           cache-read — the resident context re-read every turn. billable-weighted expresses it as
           fresh-input-token-equivalents (cache-read 0.1×), the cost-denominated view that matters if
@@ -495,6 +504,43 @@ function ServerBurnSection() {
         {' | '}7d: {w.sevenDay.consumedTokens.toLocaleString()} tok (${w.sevenDay.consumedCostUsd.toFixed(2)}) · {fmtPct(w.sevenDay.pctConsumed)}
         {!w.capacityConfigured && <span style="color:#f6a623"> — set AGENTLENS_WINDOW_5H_TOKENS / AGENTLENS_WINDOW_7D_TOKENS to enable % + projection</span>}
       </div>
+      {/* Per-account windows (TRDD-BURNWDGT): rate limits are per OAuth account, so a rotated-away
+          account must NOT pool with the current one. Each row is that account's OWN 5h/7d window. */}
+      {burn.accountWindows && burn.accountWindows.length > 1 && (
+        <div style="margin:8px 0;border-top:1px solid var(--border);padding-top:8px">
+          <div style="font-size:11px;font-weight:600;margin-bottom:4px">Per-account windows <span style="font-weight:400;color:var(--muted)">— rate limits are per account; rotated accounts do not pool</span></div>
+          {burn.accountWindows.map(aw => {
+            const b5 = aw.budget.fiveHour, b7 = aw.budget.sevenDay
+            const cell = (c: BurnWindowConsumption) => c.pctConsumed !== null ? c.pctConsumed.toFixed(1) + '%' : c.consumedTokens.toLocaleString() + ' tok'
+            return (
+              <div key={aw.accountUuid ?? 'unknown'} style="font-size:11px;color:var(--muted);line-height:1.5;display:flex;flex-wrap:wrap;gap:8px">
+                <span style="min-width:120px;color:var(--fg)">{aw.accountLabel ?? (aw.accountUuid ? aw.accountUuid.slice(0, 8) : 'unattributed')}</span>
+                <span title="this account's own 5h window">5h {cell(b5)} <span style="color:var(--muted)">(${b5.consumedCostUsd.toFixed(2)})</span></span>
+                <span title="this account's own 7d window">· 7d {cell(b7)} <span style="color:var(--muted)">(${b7.consumedCostUsd.toFixed(2)})</span></span>
+                <span style="color:var(--muted)">· {aw.events.toLocaleString()} events</span>
+              </div>
+            )
+          })}
+        </div>
+      )}
+      {/* Resident-blob proactive flag (TRDD-CTXQUERY piece 3): a big block re-read across many turns
+          (the "525k images resident, ~$425" case). Server-scanned on a slow cadence; the Context tab
+          drills to the block. */}
+      {burn.residentBlobs && burn.residentBlobs.length > 0 && (
+        <div style="margin:8px 0;border-top:1px solid var(--border);padding-top:8px">
+          <div style="font-size:11px;font-weight:600;margin-bottom:4px;color:#f6a623">⚠ Resident blobs (eviction candidates)</div>
+          {burn.residentBlobs.map((rb, i) => (
+            <div key={rb.sessionId + ':' + rb.label + i} style="font-size:11px;color:var(--muted);line-height:1.5;display:flex;flex-wrap:wrap;gap:8px">
+              <span style="color:var(--fg)">{rb.isImage ? '🖼 ' : ''}{rb.label}</span>
+              <span>· {formatCompact(rb.peakTokens)} tok</span>
+              <span style="color:var(--vscode-charts-orange,#e2a03f)">· {rb.residentTurns}× resident</span>
+              <span style="color:var(--error)">· ~{fmtUsd(rb.cumulativeReadCostUsd)} re-read</span>
+              <span style="color:var(--muted)">· {rb.sessionId.slice(0, 12)}</span>
+            </div>
+          ))}
+          <div style="font-size:9px;color:var(--muted);margin-top:3px">Fix: do image work in a sub-agent (isolated context), compact aggressively, drop full-res blobs. Drill in the Context tab → OTEL context composition.</div>
+        </div>
+      )}
       {burn.alerts.length > 0 ? burn.alerts.map(a => {
         const c = a.severity === 'error' ? 'var(--error)' : a.severity === 'info' ? '#4fc3f7' : '#f6a623'
         return (
