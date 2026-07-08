@@ -3,7 +3,7 @@ trdd-id: CTXQUERY
 title: OTEL-raw-body context-composition query surface — images, resident blobs, per-block, fully queryable
 column: dispatch
 created: 2026-07-08T19:01:58+0200
-updated: 2026-07-08T19:01:58+0200
+updated: 2026-07-08T20:12:00+0200
 current-owner: 777b8f52
 assignee: null
 priority: 1
@@ -22,9 +22,9 @@ feature-branch: fix/logreader-large-jsonl
 test-requirements: [unit, typecheck, lint]
 runtime-targets: [macos, linux]
 impacts: [public-api]
-attempts: 0
-last-test-result: not-run
-implementation-commits: []
+attempts: 1
+last-test-result: pass
+implementation-commits: [66b1b36]
 external-refs: []
 ---
 
