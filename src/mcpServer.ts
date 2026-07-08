@@ -29,7 +29,8 @@ import { buildCacheBreakReport } from './cacheBreak'
 import { buildResidentCostReport } from './residentCost'
 import { buildSpawnRollup } from './spawnRollup'
 import { buildTokensByCause } from './tokensByCause'
-import type { BurnStatus, SessionStatus } from './burnMonitor'
+import type { BurnStatus, SessionStatus, AccountWindowBudget } from './burnMonitor'
+import { type AccountInfo, accountLabelFor } from './accountInfo'
 import { listSessionFileIds } from './contextComposition'
 import { generateSuggestions } from './instructionAdvisor'
 import { readAllInstructionContent } from './instructionFiles'
@@ -396,6 +397,36 @@ const TOOLS = [
       properties: {
         sessionId: { type: 'string', description: 'Your session id if known (exact match)' },
         workspace: { type: 'string', description: 'Your workspace path prefix — resolves the newest live session under it' },
+      },
+    },
+  },
+  // ── Per-account awareness + window budget (TRDD-BURNWDGT) ──────────────────────
+  {
+    name: 'get_account_status',
+    description:
+      'WHICH OAuth account you are on right now + its PLAN and how much of ITS rate-limit window is left. ' +
+      'Rate limits are PER ACCOUNT — rotating to a second email does NOT reset the first. Returns the ' +
+      'current account (email/org label, account id), plan TYPE (max/pro/team/enterprise/free from the ' +
+      'keychain, plus billingType subscription-vs-api and whether extra token-usage billing is enabled), ' +
+      'and, for that account, the % of the rolling 5h + 7d window consumed with the time-to-exhaustion ' +
+      'projection (null when no window capacity is configured — never invented). The OAuth token is NEVER ' +
+      'read or returned — only the plan string. Use this after a rotation, or before a long run, to know ' +
+      'the ACCOUNT you will actually burn.',
+    inputSchema: { type: 'object' as const, properties: {} },
+  },
+  {
+    name: 'get_window_budget',
+    description:
+      'The rate-limit WINDOW budget split PER OAuth account (5h + 7d consumed tokens/cost + % of a ' +
+      'configured capacity + a time-to-exhaustion projection), so a rotated account never pools with the ' +
+      'first. Pass an accountId to get just that account; omit for every account (heaviest first, the ' +
+      'unattributed bucket last) plus the machine-wide pooled total. When a COST capacity is configured, a ' +
+      'cost-based % is returned too (the truthful fill metric when the plan bills by cost — cache-read at ' +
+      '0.1× barely counts there even though it dominates the raw token count).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        accountId: { type: 'string', description: 'An account_uuid to filter to; omit for all accounts + the pooled total' },
       },
     },
   },
@@ -951,6 +982,9 @@ type CallContextAccessor = (sessionId: string, sel: { requestId?: string; spanId
 // statusline billing events live; the MCP layer just serializes the ready object (TRDD-OG9PARZQ).
 type BurnStatusAccessor = () => BurnStatus
 type SessionStatusAccessor = (sel: { sessionId?: string; workspace?: string }) => SessionStatus | { message: string; matchedBy: 'none' }
+// TRDD-BURNWDGT — the CURRENT live OAuth account (identity + plan). Powers get_account_status and labels
+// the per-account window budgets. Live-only (never persisted); returns nulls when unresolved.
+type AccountAccessor = () => AccountInfo
 
 // ── P4 diagnostic tool handlers ───────────────────────────────────────────────
 
@@ -1368,6 +1402,77 @@ export function handleGetCostByCause(
   }
 }
 
+// ── Per-account awareness handlers (TRDD-BURNWDGT) ─────────────────────────────
+
+/** Attach a human label to one account's window budget: the current account's email/org, else a short
+ *  account id (a rotated-away account is not resolvable to an email — only its id is known). */
+function labelAccountWindow(w: AccountWindowBudget, account: AccountInfo | null): AccountWindowBudget {
+  const label = account
+    ? accountLabelFor(account, w.accountUuid)
+    : (w.accountUuid ? w.accountUuid.slice(0, 8) : 'unknown')
+  return { ...w, accountLabel: label }
+}
+
+// Exported for unit tests. Labels every per-account window on a burn status in place (immutably).
+export function labelBurnStatusAccounts(status: BurnStatus, account: AccountInfo | null): BurnStatus {
+  return { ...status, accountWindows: status.accountWindows.map(w => labelAccountWindow(w, account)) }
+}
+
+// Exported for unit tests. get_account_status: the current account (identity + plan) + how much of ITS
+// rate-limit window is left. The OAuth token is never touched — only the plan string from accountInfo.
+export function handleGetAccountStatus(account: AccountInfo | null, burn: BurnStatus | null) {
+  const uuid = account?.accountUuid ?? null
+  const win = burn?.accountWindows.find(w => (w.accountUuid ?? null) === uuid) ?? null
+  return {
+    account: account && account.source !== 'none'
+      ? {
+          accountId: account.accountUuid,
+          label: account.label,
+          email: account.email,
+          organizationName: account.organizationName,
+          planType: account.planType,                 // max | pro | team | enterprise | free (keychain)
+          billingType: account.billingType,           // subscription (window-limited) | api (pay-per-token)
+          hasExtraUsageEnabled: account.hasExtraUsageEnabled,  // opted into token billing past the window
+          rateLimitTier: account.rateLimitTier,
+        }
+      : { planType: account?.planType ?? null, note: 'No ~/.claude.json oauthAccount found — identity unresolved.' },
+    window: win
+      ? {
+          fiveHourPctConsumed: win.budget.fiveHour.pctConsumed,
+          fiveHourPctConsumedCost: win.budget.fiveHour.pctConsumedCost,
+          sevenDayPctConsumed: win.budget.sevenDay.pctConsumed,
+          sevenDayPctConsumedCost: win.budget.sevenDay.pctConsumedCost,
+          fiveHourMinutesToExhaustion: win.budget.fiveHour.minutesToExhaustion,
+          sevenDayMinutesToExhaustion: win.budget.sevenDay.minutesToExhaustion,
+          consumedTokens5h: win.budget.fiveHour.consumedTokens,
+          consumedCostUsd5h: win.budget.fiveHour.consumedCostUsd,
+          capacityConfigured: win.budget.capacityConfigured,
+        }
+      : null,
+    note: uuid == null
+      ? 'Current account id is unresolved, so no per-account window could be matched. Enable OTEL raw bodies / metrics so sessions attribute to an account.'
+      : win == null
+        ? 'No consumption recorded yet for the current account in the rolling windows.'
+        : (win.budget.capacityConfigured ? undefined
+          : 'Window % is null until a capacity is configured (AGENTLENS_WINDOW_5H_TOKENS / _COST_USD or ~/.agentlens/burn-config.json).'),
+  }
+}
+
+// Exported for unit tests. get_window_budget(accountId?): per-account budgets (labeled) + the pooled total.
+export function handleGetWindowBudget(burn: BurnStatus | null, account: AccountInfo | null, args: { accountId?: string }) {
+  if (!burn) { return { message: 'Burn monitor unavailable in this runtime (no live session/statusline source wired).' } }
+  const labeled = burn.accountWindows.map(w => labelAccountWindow(w, account))
+  const accounts = args.accountId ? labeled.filter(w => w.accountUuid === args.accountId) : labeled
+  return {
+    accounts,
+    machineWide: burn.window,          // all accounts pooled — the pre-per-account view, kept for reference
+    capacitySource: burn.window.capacitySource,
+    ...(args.accountId && accounts.length === 0
+      ? { message: `No consumption recorded for account ${args.accountId} in the rolling windows.` }
+      : {}),
+  }
+}
+
 // ── MCP Server factory ────────────────────────────────────────────────────────
 
 export interface McpServerOptions {
@@ -1392,6 +1497,9 @@ export interface McpServerOptions {
   getBurnStatus?: BurnStatusAccessor
   /** One-call self-diagnostic for the caller's resolved session; powers get_session_status. */
   getSessionStatus?: SessionStatusAccessor
+  /** TRDD-BURNWDGT — the current live OAuth account (identity + plan type). Powers get_account_status and
+   *  labels the per-account window budgets in get_window_budget / get_burn_status. */
+  getAccount?: AccountAccessor
   /** TRDD-PJC8N1HO — collector downtime windows during which OTEL exports were dropped/lost. Returned
    *  by get_recent_sessions so an agent orienting itself sees explicit "telemetry lost HH:MM–HH:MM"
    *  gaps instead of assuming continuous coverage. */
@@ -1415,6 +1523,7 @@ export function createMcpServer(opts: McpServerOptions): Server {
     const getCallContext = opts.getCallContext ?? null
     const getBurnStatus = opts.getBurnStatus ?? null
     const getSessionStatus = opts.getSessionStatus ?? null
+    const getAccount = opts.getAccount ?? null
 
     let result: unknown
     switch (req.params.name) {
@@ -1487,14 +1596,22 @@ export function createMcpServer(opts: McpServerOptions): Server {
         break
       }
       case 'get_burn_status':
+        // TRDD-BURNWDGT — label the per-account windows (email/org for the current account, short id
+        // for rotated-away ones) so the caller sees WHICH account each budget belongs to.
         result = getBurnStatus
-          ? getBurnStatus()
+          ? labelBurnStatusAccounts(getBurnStatus(), getAccount?.() ?? null)
           : { message: 'Burn monitor unavailable in this runtime (no live session/statusline source wired).' }
         break
       case 'get_session_status':
         result = getSessionStatus
           ? getSessionStatus(args as { sessionId?: string; workspace?: string })
           : { message: 'Session status unavailable in this runtime (no live session/statusline source wired).' }
+        break
+      case 'get_account_status':
+        result = handleGetAccountStatus(getAccount?.() ?? null, getBurnStatus?.() ?? null)
+        break
+      case 'get_window_budget':
+        result = handleGetWindowBudget(getBurnStatus?.() ?? null, getAccount?.() ?? null, args as { accountId?: string })
         break
       case 'get_image_report': {
         const a = args as { scope?: string }

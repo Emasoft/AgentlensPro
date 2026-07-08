@@ -26,6 +26,7 @@ import {
   loadBurnConfig, gatherConsumptionEvents, computeBurnStatus, computeSessionStatus,
   type BurnAlert,
 } from '../src/burnMonitor'
+import { getCurrentAccount } from '../src/accountInfo'
 import { buildContextComposition, resolveLoggedAncestor } from '../src/contextComposition'
 import { buildContextHistory } from '../src/contextHistory'
 import { generateSuggestions } from '../src/instructionAdvisor'
@@ -226,6 +227,8 @@ startMcpHttpServer({
   // TRDD-OG9PARZQ: realtime burn status + one-call session self-diagnostic for the fleet's Claudes.
   getBurnStatus: () => { const { sessions, events, now } = gatherBurn(); return computeBurnStatus(events, sessions, burnConfig, now) },
   getSessionStatus: (sel) => { const { sessions, events, now } = gatherBurn(); return computeSessionStatus(sessions, events, burnConfig, sel, now) },
+  // TRDD-BURNWDGT: the current live OAuth account (identity + plan) for get_account_status + window labels.
+  getAccount: () => getCurrentAccount(),
   // TRDD-PJC8N1HO spec 2: an orienting agent sees where telemetry was lost, not just the sessions.
   getCollectorGaps,
 }, MCP_PORT, BIND_HOST)

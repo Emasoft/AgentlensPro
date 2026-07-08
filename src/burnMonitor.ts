@@ -463,6 +463,8 @@ export function computeWindowBudget(
 
 export interface AccountWindowBudget {
   accountUuid: string | null    // null = the "unknown" bucket (events whose account wasn't attributed)
+  accountLabel?: string         // live-only display label (email/org for the current account, else short id);
+                                // resolved by the MCP layer (accountInfo), not here — this module stays I/O-free
   budget: WindowBudget
   fiveMinTokensPerMin: number   // this account's own recent burn rate (drives its projection)
   events: number                // events attributed to this account across the 7d window
