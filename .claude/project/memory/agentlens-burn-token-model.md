@@ -45,9 +45,35 @@ accounts mid-window must not pool. Also missing: cost-based capacity, empirical 
 (measure consumed at a PREMATURE window end = a rate-limit hit, NOT a time rollover), and account/plan
 awareness (current account, plan type, % 5h + % 7d remaining). See [[agentlens-account-window-budget]].
 
+**What actually fills a turn's context (measured from the OTEL raw request bodies, not the jsonl):** the
+context is ~98% **MESSAGES** (the append-only transcript), ~2% tool schemas, ~0.2% system prompt (CLAUDE.md
++ rules are TINY in the prefix, NOT the bloat). The Anthropic API is STATELESS, so the WHOLE transcript is
+re-sent every call and a block only leaves on COMPACTION — so anything pasted early rides forward, re-read
+(cache_read) every turn, for the session's life. The acute case: **ANIME2SVG (claude-fable-5) carries 8
+stuck screenshots = 525.1k tokens = ~half its 1M window, re-read every turn (~$425 of its ~$1,342 cost)**
+[^3]. Fix: do image work in a SUBAGENT (isolated context → image never enters the parent transcript);
+compact aggressively. AgentLens ALREADY parses these bodies (`src/rawBodyContext.ts buildCallContext`);
+the missing piece is a queryable index + MCP tools + a resident-blob alert — tracked in TRDD-CTXQUERY.
+
 ## Notes and lessons learned
 [^1]: [ocd:2026-07-08 lmd:2026-07-08] The statusline event path originally carried only a total
   (`deltaTokens`), so the per-bucket breakdown landed 100% in `unknown` for exactly the no-OTEL sessions
   the burn monitor watches — the breakdown looked broken until the split was threaded through
   `StatuslineBillingEvent` (commit d3c04b1). Lesson: when adding a per-bucket view, verify it against the
   LIVE event source (statusline), not just the rich OTEL path — most live sessions have no OTEL.
+[^2]: [ocd:2026-07-08 lmd:2026-07-08] Two wrong claims made during the investigation, corrected by
+  measurement: (a) I reported a "$1008/M / $317-per-turn pricing bug" — FALSE, it was a
+  measurement artifact: the statusline writes sparsely, so a per-turn cost `delta` (cumulative − prev)
+  lumped MANY turns. Recomputing cost from each line's own buckets vs Claude Code's reported cumulative
+  agreed (0.8×) — no pricing bug. Lesson: never derive a per-turn RATE from a cumulative field sampled at
+  sparse intervals; compute from per-turn buckets. (b) I hypothesized the "fat floor = CLAUDE.md + rules +
+  MCP schemas" and that plugins "break the cache each turn" — BOTH wrong: the OTEL body shows context is
+  ~98% transcript / ~0.2% system-prompt, and cache-BREAK turns are only ~4% (of which ~47% are 5-min TTL
+  idle-expiry). The cache is EFFICIENT (96% read); the cost is the SIZE re-read, not breakage. AgentLens
+  also over-reports $/hr ~4× from the same sparse-delta artifact (TRDD-BURNWDGT fix).
+[^3]: [ocd:2026-07-08 lmd:2026-07-08] The concrete acute case: scanning the OTEL raw bodies, the 120
+  LARGEST request bodies on the machine were ALL `/Users/emanuelesabetta/Code/ANIME2SVG` (claude-fable-5),
+  each carrying the IDENTICAL 8 images = 525.1k tokens, with the total growing turn-over-turn — proving 8
+  screenshots pasted once and re-sent every turn thereafter. Lesson: a visual agent must analyze images in
+  a SUBAGENT (isolated context) or compact immediately; an un-evicted image blob is the single most
+  expensive resident-context mistake (~$425 from one paste). This is the evidence behind TRDD-CTXQUERY.
