@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'preact/hooks'
 import {
   filteredSessions, sessionSummary, sessionTimelines, sessionFileOps, burnRateData,
+  serverBurnStatus,
   focusedSessionId, focusedTurn, vscode, ignoredInsightKeys,
   sessionSortKey, sessionSortDir, type SortKey,
   workspaceFilter, shortWorkspaceName,
@@ -424,6 +425,10 @@ function SessionRow({ sess, showWorkspace }: { sess: SessionSummaryCard; showWor
   const cost = calcSessionCost(sess, 'token')
   const color = getAgentColor(sess.source)
   const prompt = sess.userRequest ?? ''
+  // TRDD-CTXQUERY (dashboard piece 3): the proactive resident-blob flag for THIS session, if the
+  // server's slow scan found a big block re-read across many turns. Cross-referenced from the burn
+  // status (no per-card field) so a card can badge without the composition parse firing eagerly.
+  const residentBlob = serverBurnStatus.value?.residentBlobs?.find(rb => rb.sessionId === sess.sessionId)
 
   useEffect(() => {
     if (focusedSessionId.value === sess.sessionId) {
@@ -457,6 +462,12 @@ function SessionRow({ sess, showWorkspace }: { sess: SessionSummaryCard; showWor
           <span style={`display:inline-block;width:6px;height:6px;border-radius:50%;background:${color};flex-shrink:0;vertical-align:middle`} />
           <span style="margin-left:4px" dangerouslySetInnerHTML={{ __html: getDataSourceBadgeHtml(sess.dataSource ?? 'otel') }} />
           <span dangerouslySetInnerHTML={{ __html: getInitiatorBadgeHtml(sess.initiator) }} />
+          {residentBlob && (
+            <span
+              title={`Resident blob re-read every turn: ${residentBlob.label} — ${formatCompact(residentBlob.peakTokens)} tok, ${residentBlob.residentTurns}× resident, ~${fmtUsd(residentBlob.cumulativeReadCostUsd)} wasted re-read. Open the Context tab → OTEL context composition to drill/evict.`}
+              style="margin-left:4px;padding:0 5px;border-radius:3px;background:rgba(246,166,35,0.18);color:#f6a623;font-size:9px;font-weight:600;vertical-align:middle"
+            >⚠ {residentBlob.isImage ? '🖼' : 'resident'} {formatCompact(residentBlob.peakTokens)}</span>
+          )}
         </td>
 
         {/* Timestamp + optional workspace label */}
