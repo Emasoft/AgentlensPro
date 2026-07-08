@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'preact/hooks'
+import { useState, useEffect, useMemo, useRef, useCallback } from 'preact/hooks'
+import type { ComponentChildren } from 'preact'
 import {
   filteredSessions, sessionSummary, sessionTimelines, sessionCompositions, blobCache,
   focusedSessionId, focusedTurn, activeTab, vscode,
@@ -8,7 +9,7 @@ import { formatCompact, formatSessionTime, getAgentDotHtml, formatToolLabel } fr
 import { fmtUsd, calcEntryCost } from '../sessionMetrics'
 import { countTokens } from '../tokenEstimator'
 import { ResidentCostList } from './HistoryTab'
-import type { SessionSummaryCard, TimelineEntry, ContextSource } from '../types'
+import type { SessionSummaryCard, TimelineEntry, ContextSource, ContextComposition } from '../types'
 
 interface TurnPoint {
   turn: number
@@ -196,89 +197,210 @@ function SessionResidentCost({ sess }: { sess: SessionSummaryCard }) {
   return <ResidentCostList history={history} defaultOpen={true} />
 }
 
-function ContextSessionBlock({ sess, depth }: { sess: SessionSummaryCard; depth: number }) {
-  const [collapsed, setCollapsed] = useState(depth > 0)
-  const timelines = sessionTimelines.value
-  const loaded = timelines[sess.sessionId]
-  const loading = !collapsed && loaded === undefined && !!vscode
+// ── Virtualized flat-row rendering (TRDD-PW0H2NXC) ─────────────────────────────
+// Before this, the Context tab mounted the FULL session → turn → sub-agent tree at once: on real
+// data that was 141k–156k DOM nodes (~2.1 MB innerText), which hung interaction scripting, froze
+// screenshots, and degraded scrolling/theming for everyone. The fix flattens the whole *visible*
+// tree into ONE ordered row array and renders it INCREMENTALLY against the PAGE's own scroll — the
+// exact append-on-sentinel pattern the Sessions tab uses (INITIAL_RENDER rows on first paint, then
+// RENDER_BATCH more each time a viewport-anchored sentinel nears the screen). At rest only
+// INITIAL_RENDER rows mount, so the DOM stays tiny no matter how large or deep the tree is. No inner
+// overflow box is introduced (no-nested-scrollbars rule): the document's own scrollbar is the only
+// one. Nothing is capped — every session/turn stays reachable by scrolling, and heavy block bodies
+// (timeline, host composition, resident-cost, per-turn composition) are still fetched lazily, now
+// only when a session's header row is actually on screen instead of eagerly for every root at once.
 
-  // Host-parsed per-turn composition (injected blocks). Lazily requested on open, same lifecycle
-  // as the timeline; a plain undefined means "not yet fetched", null means "no local Claude log".
-  const composition = sessionCompositions.value[sess.sessionId]
+const INITIAL_RENDER = 60   // rows mounted on first paint
+const RENDER_BATCH = 60     // rows appended per sentinel hit / Show-more click
 
+// One row of the flattened Context list. A collapsed session is a single `session` row; expanding it
+// contributes its `resident` row, its `turn` rows (or one `info` placeholder), then its sub-agent
+// children (recursively) — which is why the at-rest row count tracks the number of VISIBLE nodes,
+// not the total tree size.
+type ContextRow =
+  | { kind: 'session'; key: string; depth: number; sess: SessionSummaryCard; expanded: boolean; turnsCount: number; maxContext: number }
+  | { kind: 'resident'; key: string; depth: number; sess: SessionSummaryCard }
+  | { kind: 'turn'; key: string; depth: number; sess: SessionSummaryCard; point: TurnPoint; maxContext: number; hostSources: ContextSource[] }
+  | { kind: 'info'; key: string; depth: number; text: string }
+
+// Flatten the session → turn → sub-agent tree into the ordered rows the user would SEE if every
+// expanded branch were fully drawn. The default expand state is IDENTICAL to the pre-virtualization
+// behaviour: root sessions (depth 0) open, sub-agent branches (depth > 0) collapsed. The `toggled`
+// set simply FLIPS that per-session default, so "expand any block on demand" is a one-line toggle and
+// no data is ever lost — a collapsed session still shows its turns/peak in the header, and expanding
+// it reveals the full content. Only EXPANDED sessions emit resident/turn/child rows.
+function buildContextRows(
+  sessionsToShow: SessionSummaryCard[],
+  allSessions: SessionSummaryCard[],
+  toggled: ReadonlySet<string>,
+  timelines: Record<string, TimelineEntry[]>,
+  compositions: Record<string, ContextComposition | null>,
+): ContextRow[] {
+  const rows: ContextRow[] = []
+  const isExpanded = (id: string, depth: number) => (toggled.has(id) ? depth > 0 : depth === 0)
+
+  const walk = (sess: SessionSummaryCard, depth: number) => {
+    const loaded = timelines[sess.sessionId]
+    const timeline = loaded ?? sess.timeline ?? []
+    // Header turns/peak are shown for collapsed sessions too, so points are derived for every node.
+    // This is cheap for a collapsed session: it only has its lightweight card timeline until opened.
+    const points = buildTurnPoints(timeline.filter(e => e.type !== 'background'), sess.model ?? '')
+    const maxContext = Math.max(sess.peakContextPerTurn ?? 0, ...points.map(p => p.context), 1)
+    const expanded = isExpanded(sess.sessionId, depth)
+    rows.push({ kind: 'session', key: 's:' + sess.sessionId, depth, sess, expanded, turnsCount: points.length, maxContext })
+    if (!expanded) return
+
+    // TRDD-W0RRL2FZ: which blocks actually accumulated this session's context bill.
+    rows.push({ kind: 'resident', key: 'r:' + sess.sessionId, depth, sess })
+    if (loaded === undefined && vscode) {
+      rows.push({ kind: 'info', key: 'load:' + sess.sessionId, depth, text: 'Loading context trace…' })
+    } else if (points.length === 0) {
+      rows.push({ kind: 'info', key: 'empty:' + sess.sessionId, depth, text: 'No per-turn token data for this session.' })
+    } else {
+      // turn number → host-parsed composition sources for that turn (empty when composition absent).
+      const composition = compositions[sess.sessionId]
+      const hostByTurn = new Map<number, ContextSource[]>()
+      for (const t of composition?.turns ?? []) hostByTurn.set(t.turn, t.sources)
+      for (const p of points) {
+        rows.push({ kind: 'turn', key: `t:${sess.sessionId}:${p.turn}`, depth, sess, point: p, maxContext, hostSources: hostByTurn.get(p.turn) ?? [] })
+      }
+    }
+    // Sub-agent / fork sessions spawned by this one render as nested sub-branches AFTER the parent's
+    // turns (order unchanged). Uses the parentSessionId backbone against the FULL session list, not
+    // the filtered view, so a child hidden by a filter still nests under its shown parent.
+    const children = allSessions.filter(s => s.parentSessionId === sess.sessionId && s.sessionId !== sess.sessionId)
+    for (const c of children) walk(c, depth + 1)
+  }
+
+  for (const s of sessionsToShow) walk(s, 0)
+  return rows
+}
+
+function SessionHeaderRow({ row, onToggle }: { row: Extract<ContextRow, { kind: 'session' }>; onToggle: (id: string) => void }) {
+  const { sess, depth, expanded, turnsCount, maxContext } = row
+
+  // Fetch this session's heavy block bodies (timeline + host composition) lazily — only once its
+  // header row is mounted (i.e. within the rendered window) AND it is expanded. This replaces the
+  // pre-virtualization behaviour that fired a load for EVERY root session the instant the tab opened
+  // (a postMessage thundering-herd on large datasets). `peek()` reads the cache without subscribing,
+  // so a later cache update doesn't re-run this effect and re-post; the [sessionId, expanded] deps do.
   useEffect(() => {
-    if (!collapsed && loaded === undefined && vscode) {
+    if (!expanded || !vscode) return
+    if (sessionTimelines.peek()[sess.sessionId] === undefined) {
       vscode.postMessage({ type: 'loadSessionDetail', sessionId: sess.sessionId })
     }
-    if (!collapsed && composition === undefined && vscode) {
+    if (sessionCompositions.peek()[sess.sessionId] === undefined) {
       vscode.postMessage({ type: 'loadContextComposition', sessionId: sess.sessionId })
     }
-  }, [sess.sessionId, collapsed])
-
-  const timeline = loaded ?? sess.timeline ?? []
-  const points = buildTurnPoints(timeline.filter(e => e.type !== 'background'), sess.model ?? '')
-  const maxContext = Math.max(sess.peakContextPerTurn ?? 0, ...points.map(p => p.context), 1)
-
-  // turn number → the host composition sources for that turn (empty when composition absent).
-  const hostByTurn = new Map<number, ContextSource[]>()
-  for (const t of composition?.turns ?? []) hostByTurn.set(t.turn, t.sources)
-
-  // Sub-agent / fork sessions spawned by this one render as nested sub-branches (P2.3). Uses the
-  // parentSessionId backbone; inert until the extension-side session-to-session linkage populates it.
-  const children = (sessionSummary.value?.sessions ?? []).filter(s => s.parentSessionId === sess.sessionId && s.sessionId !== sess.sessionId)
+  }, [sess.sessionId, expanded])
 
   return (
-    <div style={depth > 0 ? 'border-left:2px solid var(--border);margin-left:10px' : ''}>
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;background:var(--hover);border:1px solid var(--border);border-radius:4px 4px 0 0;cursor:pointer;font-size:11px"
-        onClick={() => setCollapsed(v => !v)}>
-        <span>
-          <span style="font-size:10px;margin-right:6px">{collapsed ? '▶' : '▼'}</span>
-          <span dangerouslySetInnerHTML={{ __html: getAgentDotHtml(sess.source) }} />{' '}
-          <span style="color:var(--muted)">{formatSessionTime(sess)}</span>{' '}
-          {depth > 0 && <span style="color:var(--vscode-charts-orange,#e2a03f);font-size:9px;margin-right:4px">sub-agent</span>}
-          {sess.userRequest ? <>"{sess.userRequest.slice(0, 80)}"</> : <span style="color:var(--muted)">[no prompt]</span>}
-        </span>
-        <span style="color:var(--muted)">
-          {points.length} turns · peak {formatCompact(maxContext)} ctx
-        </span>
-      </div>
-      {!collapsed && (
-        <div style="border:1px solid var(--border);border-top:none;border-radius:0 0 4px 4px;margin-bottom:10px">
-          {/* TRDD-W0RRL2FZ: which blocks actually accumulated this session's context bill. */}
-          <SessionResidentCost sess={sess} />
-          {loading
-            ? <div style="padding:10px;font-size:11px;color:var(--muted)">Loading context trace…</div>
-            : points.length === 0
-              ? <div style="padding:10px;font-size:11px;color:var(--muted)">No per-turn token data for this session.</div>
-              : points.map(p => <TurnRow key={p.turn} p={p} maxContext={maxContext} sessionId={sess.sessionId} hostSources={hostByTurn.get(p.turn) ?? []} />)}
-          {children.map(c => <ContextSessionBlock key={c.sessionId} sess={c} depth={depth + 1} />)}
-        </div>
-      )}
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;background:var(--hover);border:1px solid var(--border);border-radius:4px;cursor:pointer;font-size:11px"
+      onClick={() => onToggle(sess.sessionId)}>
+      <span>
+        <span style="font-size:10px;margin-right:6px">{expanded ? '▼' : '▶'}</span>
+        <span dangerouslySetInnerHTML={{ __html: getAgentDotHtml(sess.source) }} />{' '}
+        <span style="color:var(--muted)">{formatSessionTime(sess)}</span>{' '}
+        {depth > 0 && <span style="color:var(--vscode-charts-orange,#e2a03f);font-size:9px;margin-right:4px">sub-agent</span>}
+        {sess.userRequest ? <>"{sess.userRequest.slice(0, 80)}"</> : <span style="color:var(--muted)">[no prompt]</span>}
+      </span>
+      <span style="color:var(--muted)">
+        {turnsCount} turns · peak {formatCompact(maxContext)} ctx
+      </span>
     </div>
   )
+}
+
+// Render one flattened row. Depth indent + a left rule reproduce the old nested border-left staircase
+// (a flat list can't wrap a whole branch in one box, but a per-row left rule reads the same).
+function ContextRowView({ row, onToggle }: { row: ContextRow; onToggle: (id: string) => void }) {
+  const indent = row.depth > 0 ? `margin-left:${row.depth * 10}px;border-left:2px solid var(--border);padding-left:2px` : ''
+  let inner: ComponentChildren = null
+  switch (row.kind) {
+    case 'session':  inner = <SessionHeaderRow row={row} onToggle={onToggle} />; break
+    case 'resident': inner = <SessionResidentCost sess={row.sess} />; break
+    case 'turn':     inner = <TurnRow p={row.point} maxContext={row.maxContext} sessionId={row.sess.sessionId} hostSources={row.hostSources} />; break
+    case 'info':     inner = <div style="padding:10px;font-size:11px;color:var(--muted)">{row.text}</div>; break
+  }
+  return <div style={indent}>{inner}</div>
 }
 
 export function Context() {
   const summary = sessionSummary.value
   const base = filteredSessions.value
+  const timelines = sessionTimelines.value
+  const compositions = sessionCompositions.value
+  const allSessions = summary?.sessions ?? []
+
+  // `toggled` flips the depth-based default expand state per session (see buildContextRows). A Set in
+  // component state keeps expand/collapse local to this tab and rebuilds the row list on every toggle.
+  const [toggled, setToggled] = useState<ReadonlySet<string>>(() => new Set())
+  const [renderCount, setRenderCount] = useState(INITIAL_RENDER)
+  const sentinelRef = useRef<HTMLDivElement>(null)
+
+  // Rebuild the flat rows only when an input reference actually changes (signals hand back a new
+  // reference on update), so a huge tree isn't re-flattened on every unrelated render.
+  const { rows, rootCount } = useMemo(() => {
+    // Top-level = sessions that are NOT a sub-agent of another shown session (children render nested).
+    const shownIds = new Set(base.map(s => s.sessionId))
+    const roots = base.filter(s => !s.parentSessionId || !shownIds.has(s.parentSessionId))
+    const sessionsToShow = [...roots].reverse()
+    return { rows: buildContextRows(sessionsToShow, allSessions, toggled, timelines, compositions), rootCount: sessionsToShow.length }
+  }, [base, allSessions, toggled, timelines, compositions])
+
+  const totalRef = useRef(0)
+  totalRef.current = rows.length
+
+  // Window-scroll incremental mount (no inner scroll box): grow the mounted slice when the sentinel
+  // nears the viewport. Mirrors the Sessions tab so both large lists behave identically. rootMargin
+  // 800px pre-loads the next batch just before it scrolls into view.
+  useEffect(() => {
+    const el = sentinelRef.current
+    if (!el) return
+    const io = new IntersectionObserver(
+      entries => { if (entries.some(e => e.isIntersecting)) setRenderCount(c => (c < totalRef.current ? c + RENDER_BATCH : c)) },
+      { root: null, rootMargin: '800px 0px' },
+    )
+    io.observe(el)
+    return () => io.disconnect()
+  }, [rows.length === 0])
+
+  const toggle = useCallback((id: string) => {
+    setToggled(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
+  }, [])
+
   if (!summary?.sessions?.length) {
     return <div id="summary-context-content"><div class="empty-state">No sessions recorded yet.</div></div>
   }
-  // Top-level = sessions that are NOT a sub-agent of another shown session (children render nested).
-  const shownIds = new Set(base.map(s => s.sessionId))
-  const roots = base.filter(s => !s.parentSessionId || !shownIds.has(s.parentSessionId))
-  const sessionsToShow = [...roots].reverse()
+
+  // Totals are derived from the session data, never from the mounted DOM (spec 3).
+  const peakContext = Math.max(0, ...base.map(s => s.peakContextPerTurn ?? s.inputTokens + s.cacheReadTokens))
 
   return (
     <div id="summary-context-content">
       <div class="tab-stats" style="position:sticky;top:0;z-index:5;background:var(--vscode-editor-background,var(--bg))">
-        <div><strong class="tab-stat-val">{sessionsToShow.length}</strong> sessions</div>
-        <div><strong class="tab-stat-val">{formatCompact(Math.max(0, ...base.map(s => s.peakContextPerTurn ?? s.inputTokens + s.cacheReadTokens)))}</strong> peak context</div>
+        <div><strong class="tab-stat-val">{rootCount}</strong> sessions</div>
+        <div><strong class="tab-stat-val">{formatCompact(peakContext)}</strong> peak context</div>
         <div style="font-size:10px;color:var(--muted)">context size per turn · expand a turn for its composition</div>
       </div>
-      <div class="waterfall">
-        {sessionsToShow.map(sess => <ContextSessionBlock key={sess.sessionId} sess={sess} depth={0} />)}
+      {/* Plain block (no `.waterfall` inner-scroll box): the flat list uses the PAGE scroll so only
+          one scrollbar exists and the incremental sentinel keys off the real viewport. */}
+      <div>
+        {rows.slice(0, renderCount).map(row => (
+          <ContextRowView key={row.key} row={row} onToggle={toggle} />
+        ))}
       </div>
+      {/* Infinite-scroll sentinel — observed (rootMargin 800px) to append the next batch early. */}
+      <div ref={sentinelRef} style="height:1px" />
+      {renderCount < rows.length && (
+        <div style="padding:6px 8px;font-size:11px;color:var(--muted);display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <button
+            onClick={() => setRenderCount(c => Math.min(c + RENDER_BATCH, rows.length))}
+            style="padding:2px 10px;font-size:11px;cursor:pointer;border-radius:3px;border:1px solid var(--border);background:transparent;color:var(--vscode-textLink-foreground,#4fc3f7)"
+          >Show more</button>
+          <span>Showing {Math.min(renderCount, rows.length).toLocaleString()} of {rows.length.toLocaleString()} rows</span>
+        </div>
+      )}
     </div>
   )
 }
