@@ -4,12 +4,16 @@ import {
   filteredSessions, sessionSummary, sessionTimelines, sessionCompositions, blobCache,
   focusedSessionId, focusedTurn, activeTab, vscode,
   sessionHistories, requestContextHistory,
+  sessionCompositionSummaries, requestCompositionSummary,
 } from '../state'
 import { formatCompact, formatSessionTime, getAgentDotHtml, formatToolLabel } from '../utils'
 import { fmtUsd, calcEntryCost } from '../sessionMetrics'
 import { countTokens } from '../tokenEstimator'
 import { ResidentCostList } from './HistoryTab'
-import type { SessionSummaryCard, TimelineEntry, ContextSource, ContextComposition } from '../types'
+import type {
+  SessionSummaryCard, TimelineEntry, ContextSource, ContextComposition,
+  CompositionSummary, CompositionResidentBlob, CompositionBlockContent,
+} from '../types'
 
 interface TurnPoint {
   turn: number
@@ -197,6 +201,158 @@ function SessionResidentCost({ sess }: { sess: SessionSummaryCard }) {
   return <ResidentCostList history={history} defaultOpen={true} />
 }
 
+// ── OTEL raw-body composition panel (TRDD-CTXQUERY, dashboard piece 1) ─────────
+// The exact per-call context composition parsed from Claude Code's raw OTEL request bodies (what the
+// resident-cost panel above ESTIMATES from the .jsonl, this reads AUTHORITATIVELY from the wire body
+// when OTEL_LOG_RAW_API_BODIES captured it). Collapsed by default and fetched ONLY on expand — the
+// lazy fire-on-expand contract (never a parse for every session on tab open). Two views: the peak
+// call's block-type breakdown bar, and the flagged resident-blob eviction list (the "525k images
+// resident 400+ turns" story), each row drilling to the real block content. Image blocks show
+// metadata + ref only — never base64 bytes.
+
+const COMP_KIND_COLOR: Record<string, string> = {
+  image:       '#f06292',
+  toolResult:  '#B8E986',
+  text:        'var(--vscode-charts-blue,#4fc3f7)',
+  thinking:    'var(--accent)',
+  system:      '#e57373',
+  toolCatalog: '#4dd0e1',
+  other:       'var(--muted)',
+}
+
+function fmtTokShort(n: number): string { return formatCompact(n) }
+
+// One resident-blob row: label + kind + peak size + turns-resident + cumulative wasted re-read $,
+// expandable to the real block content (image → metadata + ref only). Drill is a direct fetch to
+// /api/block-content (localhost only); a failed/absent drill shows an honest message, never a spinner.
+function BlobRow({ blob, sessionId }: { blob: CompositionResidentBlob; sessionId: string }) {
+  const [open, setOpen] = useState(false)
+  const [content, setContent] = useState<CompositionBlockContent | null | undefined>(undefined)
+  const drillable = blob.sampleTurn >= 1 && blob.sampleBlockIndex >= 0
+
+  useEffect(() => {
+    if (!open || !drillable || content !== undefined) return
+    let alive = true
+    fetch(`/api/block-content/${encodeURIComponent(sessionId)}/${blob.sampleTurn}/${blob.sampleBlockIndex}`)
+      .then(r => r.json())
+      .then((d: { block: CompositionBlockContent | null }) => { if (alive) setContent(d.block ?? null) })
+      .catch(() => { if (alive) setContent(null) })
+    return () => { alive = false }
+  }, [open, drillable, sessionId, blob.sampleTurn, blob.sampleBlockIndex])
+
+  const c = COMP_KIND_COLOR[blob.isImage ? 'image' : blob.kind] ?? 'var(--muted)'
+  return (
+    <div style="border-top:1px solid var(--border)">
+      <div style="display:flex;align-items:center;gap:8px;min-height:22px;font-size:10px;cursor:pointer;padding:0 4px"
+        onClick={() => setOpen(v => !v)}>
+        <span style="width:10px;font-size:7px;color:var(--muted);text-align:center">{open ? '▼' : '▶'}</span>
+        <span style={`display:inline-block;width:8px;height:8px;border-radius:2px;background:${c};flex-shrink:0`} />
+        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:280px" title={blob.label}>
+          {blob.isImage ? '🖼 ' : ''}{blob.label}
+        </span>
+        <span style="color:var(--muted);white-space:nowrap" title="peak single-occurrence size">{fmtTokShort(blob.peakTokens)} tok</span>
+        <span style="color:var(--vscode-charts-orange,#e2a03f);white-space:nowrap" title="distinct calls this block rode forward on (re-read each time)">{blob.residentTurns}× resident</span>
+        <span style="color:var(--error);white-space:nowrap;min-width:56px;text-align:right" title="cumulative cache-read cost of re-reading this block every turn it was present">~{fmtUsd(blob.cumulativeReadCostUsd)}</span>
+      </div>
+      {open && (
+        <div style="padding:4px 8px 8px 32px;font-size:10px;color:var(--muted)">
+          {!drillable
+            ? <span>No drillable occurrence recorded for this block.</span>
+            : content === undefined
+              ? <span>Reading block content…</span>
+              : content === null || content.message
+                ? <span>{content?.message ?? 'Block content unavailable.'}</span>
+                : content.isImage
+                  ? <span>Image block — {content.mediaType ?? 'image'} · {fmtTokShort(content.tokens ?? 0)} tok · ref <code style="color:var(--fg)">{content.bodyRef ? content.bodyRef.split('/').pop() : '—'}</code> (base64 bytes never stored)</span>
+                  : <pre style="margin:0;white-space:pre-wrap;word-break:break-word;font-size:10px;color:var(--fg);max-width:100%">{(content.text ?? '').slice(0, 4000)}{(content.text ?? '').length > 4000 ? ' …[truncated]' : ''}</pre>
+          }
+        </div>
+      )}
+    </div>
+  )
+}
+
+function CompositionBreakdownBar({ peak }: { peak: NonNullable<CompositionSummary['peakCall']> }) {
+  const seg = [
+    { k: 'image', label: `images (${peak.imageCount})`, v: peak.imageTokens, c: COMP_KIND_COLOR.image },
+    { k: 'toolResult', label: 'tool results', v: peak.toolResultTokens, c: COMP_KIND_COLOR.toolResult },
+    { k: 'text', label: 'text', v: peak.textTokens, c: COMP_KIND_COLOR.text },
+    { k: 'thinking', label: 'thinking', v: peak.thinkingTokens, c: COMP_KIND_COLOR.thinking },
+    { k: 'system', label: 'system/rules', v: peak.systemTokens, c: COMP_KIND_COLOR.system },
+    { k: 'toolCatalog', label: 'tool schemas', v: peak.toolCatalogTokens, c: COMP_KIND_COLOR.toolCatalog },
+    { k: 'other', label: 'other', v: peak.otherTokens, c: COMP_KIND_COLOR.other },
+  ].filter(s => s.v > 0)
+  const total = seg.reduce((n, s) => n + s.v, 0)
+  const pct = (v: number) => (total > 0 ? v / total * 100 : 0)
+  if (total <= 0) return <div style="font-size:10px;color:var(--muted)">No block-level tokens in the peak call.</div>
+  return (
+    <div style="margin:4px 0 8px">
+      <div style="font-size:10px;color:var(--muted);margin-bottom:4px">
+        peak turn {peak.turn}: {fmtTokShort(peak.contextTokens)} tok context ({peak.contextPct.toFixed(1)}% of {fmtTokShort(peak.windowSize)} window)
+        {peak.tokenSource === 'exact' ? ' · exact usage' : ' · estimated'}
+      </div>
+      <div style="height:10px;border-radius:4px;background:var(--border);display:flex;overflow:hidden;margin-bottom:5px" title="peak-call context composition by block type">
+        {seg.map(s => <div key={s.k} style={`width:${pct(s.v).toFixed(2)}%;background:${s.c}`} />)}
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:10px;font-size:9px;color:var(--muted)">
+        {seg.map(s => (
+          <span key={s.k}>
+            <span style={`display:inline-block;width:8px;height:8px;border-radius:2px;background:${s.c};margin-right:4px;vertical-align:middle`} />
+            {s.label} {fmtTokShort(s.v)} ({pct(s.v).toFixed(1)}%)
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function OtelCompositionPanel({ sess }: { sess: SessionSummaryCard }) {
+  const [open, setOpen] = useState(false)
+  const cached = sess.sessionId in sessionCompositionSummaries.value
+  const summary = cached ? sessionCompositionSummaries.value[sess.sessionId] : undefined
+
+  useEffect(() => {
+    if (open) requestCompositionSummary(sess.sessionId)
+  }, [open, sess.sessionId, cached])
+
+  if (!open) {
+    return (
+      <div style="display:flex;align-items:center;gap:10px;min-height:24px;font-size:11px;cursor:pointer;padding:0 6px;border-top:1px solid var(--border)" onClick={() => setOpen(true)}>
+        <span style="width:12px;font-size:8px;color:var(--muted);text-align:center">▶</span>
+        <span style="font-weight:700">OTEL context composition</span>
+        <span style="font-size:9px;color:var(--muted)">images / resident blobs from the raw request body — click to parse</span>
+      </div>
+    )
+  }
+  if (!cached) {
+    return <div style="padding:6px 26px;font-size:10px;color:var(--muted);border-top:1px solid var(--border)">Parsing raw OTEL request bodies…</div>
+  }
+  if (!summary || summary.callsTotal === 0) {
+    return (
+      <div style="padding:6px 26px;font-size:10px;color:var(--muted);border-top:1px solid var(--border)">
+        {summary?.coverageNote ?? 'No raw OTEL request bodies captured for this session.'}
+      </div>
+    )
+  }
+  return (
+    <div style="padding:6px 26px 10px;border-top:1px solid var(--border)">
+      <div style="font-size:9px;color:var(--muted);margin-bottom:2px">
+        {summary.callsTotal} call(s) parsed · {summary.callsWithExactUsage} with exact usage
+        {summary.images.count > 0 && <span style="color:#f06292"> · {summary.images.count} image(s), {fmtTokShort(summary.images.tokens)} tok/call, ~{fmtUsd(summary.images.cumulativeReadCostUsd)} re-read over {summary.images.residentTurns} turns</span>}
+      </div>
+      {summary.peakCall && <CompositionBreakdownBar peak={summary.peakCall} />}
+      {summary.residentBlobs.length > 0 ? (
+        <div>
+          <div style="font-size:9px;color:var(--muted);margin:4px 0 2px">Resident blobs (eviction candidates, ranked by wasted re-read cost)</div>
+          {summary.residentBlobs.map(b => <BlobRow key={b.signature} blob={b} sessionId={sess.sessionId} />)}
+        </div>
+      ) : (
+        <div style="font-size:10px;color:var(--muted)">No resident blobs (no block rides forward across multiple parsed calls).</div>
+      )}
+    </div>
+  )
+}
+
 // ── Virtualized flat-row rendering (TRDD-PW0H2NXC) ─────────────────────────────
 // Before this, the Context tab mounted the FULL session → turn → sub-agent tree at once: on real
 // data that was 141k–156k DOM nodes (~2.1 MB innerText), which hung interaction scripting, froze
@@ -220,6 +376,7 @@ const RENDER_BATCH = 60     // rows appended per sentinel hit / Show-more click
 type ContextRow =
   | { kind: 'session'; key: string; depth: number; sess: SessionSummaryCard; expanded: boolean; turnsCount: number; maxContext: number }
   | { kind: 'resident'; key: string; depth: number; sess: SessionSummaryCard }
+  | { kind: 'otelComposition'; key: string; depth: number; sess: SessionSummaryCard }
   | { kind: 'turn'; key: string; depth: number; sess: SessionSummaryCard; point: TurnPoint; maxContext: number; hostSources: ContextSource[] }
   | { kind: 'info'; key: string; depth: number; text: string }
 
@@ -266,6 +423,8 @@ function buildContextRows(
 
     // TRDD-W0RRL2FZ: which blocks actually accumulated this session's context bill.
     rows.push({ kind: 'resident', key: 'r:' + sess.sessionId, depth, sess })
+    // TRDD-CTXQUERY: the authoritative OTEL-raw-body composition (images / resident blobs), lazy on expand.
+    rows.push({ kind: 'otelComposition', key: 'oc:' + sess.sessionId, depth, sess })
     if (loaded === undefined && vscode) {
       rows.push({ kind: 'info', key: 'load:' + sess.sessionId, depth, text: 'Loading context trace…' })
     } else if (points.length === 0) {
@@ -333,6 +492,7 @@ function ContextRowView({ row, onToggle }: { row: ContextRow; onToggle: (id: str
   switch (row.kind) {
     case 'session':  inner = <SessionHeaderRow row={row} onToggle={onToggle} />; break
     case 'resident': inner = <SessionResidentCost sess={row.sess} />; break
+    case 'otelComposition': inner = <OtelCompositionPanel sess={row.sess} />; break
     case 'turn':     inner = <TurnRow p={row.point} maxContext={row.maxContext} sessionId={row.sess.sessionId} hostSources={row.hostSources} />; break
     case 'info':     inner = <div style="padding:10px;font-size:11px;color:var(--muted)">{row.text}</div>; break
   }

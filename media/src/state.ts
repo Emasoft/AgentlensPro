@@ -4,7 +4,7 @@ import type {
   FullSummary, SessionSummaryCard, TimelineEntry, FileOpSummary,
   AgentFilter, InitiatorFilter, DataSourceFilter, InsightFilter, WorkspaceFilter, VsCodeApi,
   DailyStatRow, LifetimeStats, BurnRate, Projection, ContextComposition,
-  GeneratedFileRef, GeneratedFileContent, BurnStatus, CollectorGap,
+  GeneratedFileRef, GeneratedFileContent, BurnStatus, CollectorGap, CompositionSummary,
 } from './types'
 
 // Maximum sessions rendered in any single chart or table
@@ -212,6 +212,42 @@ export function cacheSessionHistory(sessionId: string, history: import('./types'
 // "not yet fetched". This is what lets an OTEL-only call show its whole context with no local .jsonl.
 export const callContexts = signal<Record<string, import('./types').CallContext | null>>({})
 
+// Per-session OTEL-raw-body composition summary (TRDD-CTXQUERY, dashboard piece 1). Fetched LAZILY —
+// only when the user expands a session's "OTEL context composition" panel — from /api/composition-index/:id
+// (which parses the raw bodies on demand and LRU-caches server-side). A present value with callsTotal:0
+// is the honest "no raw bodies captured" state; null means the fetch failed. Bounded by the same LRU
+// discipline as the timeline/composition caches so a long browse can't grow it without bound.
+export const sessionCompositionSummaries = signal<Record<string, CompositionSummary | null>>({})
+const compositionSummaryLRU: string[] = []
+const compositionSummaryInFlight = new Set<string>()
+
+// Request one session's OTEL-raw-body composition summary on expand. Deduped: an in-flight/loaded
+// session is not re-requested. Direct fetch (no vscode round-trip): the only runtime is the standalone
+// server, so a relative fetch to /api/composition-index is always correct. A failed fetch caches null
+// (the honest terminal state), never a perpetual pending key.
+export function requestCompositionSummary(sessionId: string): void {
+  if (!sessionId || compositionSummaryInFlight.has(sessionId) || sessionId in sessionCompositionSummaries.value) return
+  compositionSummaryInFlight.add(sessionId)
+  fetch('/api/composition-index/' + encodeURIComponent(sessionId))
+    .then(r => r.json())
+    .then((data: { summary: CompositionSummary | null }) => cacheCompositionSummary(sessionId, data.summary ?? null))
+    .catch(() => cacheCompositionSummary(sessionId, null))
+}
+
+export function cacheCompositionSummary(sessionId: string, summary: CompositionSummary | null): void {
+  compositionSummaryInFlight.delete(sessionId)
+  const existing = compositionSummaryLRU.indexOf(sessionId)
+  if (existing !== -1) compositionSummaryLRU.splice(existing, 1)
+  compositionSummaryLRU.push(sessionId)
+  const next: Record<string, CompositionSummary | null> = { ...sessionCompositionSummaries.value, [sessionId]: summary }
+  while (compositionSummaryLRU.length > DETAIL_CACHE_MAX) {
+    const evicted = compositionSummaryLRU.shift()
+    if (evicted === undefined) break
+    delete next[evicted]
+  }
+  sessionCompositionSummaries.value = next
+}
+
 export function cacheSessionComposition(sessionId: string, composition: ContextComposition | null): void {
   const existing = compositionLRU.indexOf(sessionId)
   if (existing !== -1) compositionLRU.splice(existing, 1)
@@ -246,6 +282,13 @@ export function invalidateSessionDrill(sessionId: string): void {
     const next = { ...sessionCompositions.value }
     delete next[sessionId]
     sessionCompositions.value = next
+  }
+  // Also drop the OTEL-raw-body composition summary so a live-growing session re-parses its newest
+  // bodies on the next expand (the panel re-fires requestCompositionSummary when its key is absent).
+  if (sessionId in sessionCompositionSummaries.value) {
+    const next = { ...sessionCompositionSummaries.value }
+    delete next[sessionId]
+    sessionCompositionSummaries.value = next
   }
 }
 

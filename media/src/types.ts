@@ -272,6 +272,81 @@ export interface ContextHistory {
   reconstructedFrom?: string
 }
 
+// Mirror of src/contextCompositionIndex.ts (TRDD-CTXQUERY, dashboard piece 1) — the compact per-session
+// OTEL-raw-body composition summary served by /api/composition-index/:id. Pointer-only: token counts +
+// refs, never bytes. `imageKind` composition taxonomy adds 'image' on top of ContextBlockKind.
+export type CompositionBlockKind = ContextBlockKind | 'image'
+
+export interface CompositionPeakCall {
+  turn: number
+  contextTokens: number
+  contextPct: number          // percent (0..100+)
+  windowSize: number
+  tokenSource: TokenSource
+  imageTokens: number
+  imageCount: number
+  toolResultTokens: number
+  textTokens: number
+  thinkingTokens: number
+  systemTokens: number
+  toolCatalogTokens: number
+  otherTokens: number
+}
+
+export interface CompositionResidentBlob {
+  signature: string
+  kind: CompositionBlockKind
+  label: string
+  isImage: boolean
+  peakTokens: number
+  occurrences: number
+  residentTurns: number
+  firstSeenTurn: number
+  lastSeenTurn: number
+  cumulativeReadTokens: number
+  cumulativeReadCostUsd: number
+  sampleTurn: number          // drill key for /api/block-content (0 when none)
+  sampleBlockIndex: number    // drill key (−1 when none)
+}
+
+export interface CompositionSummary {
+  sessionId: string
+  accountUuid?: string
+  project: string
+  model?: string
+  callsTotal: number
+  callsWithExactUsage: number
+  peakCall: CompositionPeakCall | null
+  images: {
+    count: number
+    tokens: number
+    firstSeenTurn: number
+    residentTurns: number
+    cumulativeReadTokens: number
+    cumulativeReadCostUsd: number
+  }
+  residentBlobs: CompositionResidentBlob[]
+  coverageNote?: string
+}
+
+// One drilled block (get_block_content / /api/block-content). An IMAGE block carries metadata + ref
+// only — never `text` (the base64 bytes are never stored or transported).
+export interface CompositionBlockContent {
+  sessionId: string
+  turn: number
+  index?: number
+  kind?: CompositionBlockKind
+  label?: string
+  tokens?: number
+  bytes?: number
+  role?: string
+  isImage?: boolean
+  mediaType?: string
+  bodyRef?: string
+  text?: string
+  message?: string            // present instead of block fields when the turn/block wasn't resolvable
+}
+
 // Mirror of src/summarizers/summarizerTypes.ts — resident-cost itemization (TRDD-W0RRL2FZ).
 // residentCost = Σ over a block's occurrences of tokens × turns-resident (compaction-aware): the
 // true cumulative context weight of a block, comparable to Σ per-turn usage. Derived in the webview
@@ -588,6 +663,23 @@ export interface BurnStatus {
   window: { fiveHour: BurnWindowConsumption; sevenDay: BurnWindowConsumption; capacityConfigured: boolean; note?: string }
   // TRDD-BURNWDGT — the machine-wide window split PER OAuth account (rate limits are per-account).
   accountWindows?: AccountWindowBudget[]
+  // TRDD-BURNWDGT — the current live OAuth account (identity + plan), enriched at the server for the
+  // dashboard. Null when ~/.claude.json has no oauthAccount. No secret — only public identity + plan.
+  currentAccount?: {
+    accountId: string | null
+    label: string
+    email: string | null
+    organizationName: string | null
+    planType: string | null
+    billingType: string | null
+    hasExtraUsageEnabled: boolean
+  } | null
+  // TRDD-CTXQUERY (dashboard piece 3) — proactive eviction-candidate flag: blocks resident across many
+  // turns (the "525k images re-read every turn" case), server-scanned on a slow cadence. Empty when none.
+  residentBlobs?: Array<{
+    sessionId: string; project: string; kind: string; label: string; isImage: boolean
+    peakTokens: number; residentTurns: number; cumulativeReadTokens: number; cumulativeReadCostUsd: number
+  }>
   alerts: BurnAlert[]
   activeSessions: number
 }

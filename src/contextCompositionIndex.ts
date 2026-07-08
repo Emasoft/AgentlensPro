@@ -115,6 +115,43 @@ export interface SessionComposition {
   callsWithExactUsage: number   // how many calls had a response body for exact usage (coverage honesty)
 }
 
+// A compact, transport-friendly per-session composition summary for the dashboard panel (piece 1 of the
+// composition surface). It carries only rollups + the top eviction-candidate blobs — never the per-call
+// block arrays or any bytes — so the payload stays small even for a many-thousand-turn session.
+export interface ResidentBlobRow extends ResidentBlob {
+  sampleTurn: number          // one occurrence's turn (get_block_content drill key), 0 when none found
+  sampleBlockIndex: number    // that occurrence's block index; -1 when none found
+}
+
+export interface PeakCallBreakdown {
+  turn: number
+  contextTokens: number
+  contextPct: number          // percent (0..100+), already ×100 from the fraction
+  windowSize: number
+  tokenSource: TokenSource
+  imageTokens: number
+  imageCount: number
+  toolResultTokens: number
+  textTokens: number
+  thinkingTokens: number
+  systemTokens: number
+  toolCatalogTokens: number
+  otherTokens: number         // contextTokens minus the six classified sums (tool_use, attachments, …), ≥0
+}
+
+export interface SessionCompositionSummary {
+  sessionId: string
+  accountUuid?: string
+  project: string
+  model?: string
+  callsTotal: number
+  callsWithExactUsage: number
+  peakCall: PeakCallBreakdown | null   // the worst-case call, the breakdown-bar's representative
+  images: SessionImageSummary
+  residentBlobs: ResidentBlobRow[]     // top eviction candidates, ranked by wasted re-read cost
+  coverageNote?: string
+}
+
 // A pointer to one request body + the correlation keys needed to find its response usage. The registry
 // path fills these from CallBodyPointer; the test path passes explicit file paths.
 export interface RequestRef {
@@ -548,5 +585,67 @@ export class ContextCompositionIndex {
     const block = await readBlockContent(p.bodyRef, blockIndex, opts)
     if (!block) { return { sessionId, turn, blockIndex, message: `No block ${blockIndex} at turn ${turn}.` } }
     return { sessionId, turn, ...block }
+  }
+
+  /** A compact per-session composition summary for the dashboard composition panel (piece 1 of the
+   *  surface). Reuses the LRU-cached getSession, then rolls the whole session down to: the peak-context
+   *  call's block-type split (the breakdown bar's representative — the worst case that tells the "half
+   *  the window is images" story), the image rollup, and the top resident (eviction-candidate) blobs —
+   *  each with a sample (turn, blockIndex) so a UI row can drill to real content via getBlockContent.
+   *  Pointer-only: no per-block arrays and no bytes cross to the browser. */
+  async sessionCompositionSummary(sessionId: string, projectFor?: ProjectResolver): Promise<SessionCompositionSummary> {
+    const comp = await this.getSession(sessionId, projectFor)
+
+    // Representative call for the breakdown bar = the peak-context call. null when the session has no
+    // parsed calls (no raw bodies in the live registry — the honest lazy empty state).
+    let peak: CallComposition | null = null
+    for (const c of comp.calls) { if (!peak || c.contextTokens > peak.contextTokens) { peak = c } }
+    let peakCall: PeakCallBreakdown | null = null
+    if (peak) {
+      // otherTokens is the remainder the six named categories don't name (tool_use blocks, attachments,
+      // cache_control, mcp input …) — clamped ≥0 so a small estimate drift can't make it negative.
+      const classified = peak.images.tokens + peak.toolResultTokens + peak.textTokens +
+        peak.thinkingTokens + peak.systemTokens + peak.toolCatalogTokens
+      peakCall = {
+        turn: peak.turn,
+        contextTokens: peak.contextTokens,
+        contextPct: +(peak.contextPct * 100).toFixed(1),
+        windowSize: peak.windowSize,
+        tokenSource: peak.tokenSource,
+        imageTokens: peak.images.tokens,
+        imageCount: peak.images.count,
+        toolResultTokens: peak.toolResultTokens,
+        textTokens: peak.textTokens,
+        thinkingTokens: peak.thinkingTokens,
+        systemTokens: peak.systemTokens,
+        toolCatalogTokens: peak.toolCatalogTokens,
+        otherTokens: Math.max(0, peak.contextTokens - classified),
+      }
+    }
+
+    // For each top resident blob find one occurrence (turn + block index) so a UI row can drill to it.
+    const findSample = (signature: string): { sampleTurn: number; sampleBlockIndex: number } => {
+      for (const c of comp.calls) {
+        const idx = c.blocks.findIndex(b => `${b.kind}|${b.label}` === signature)
+        if (idx >= 0) { return { sampleTurn: c.turn, sampleBlockIndex: idx } }
+      }
+      return { sampleTurn: 0, sampleBlockIndex: -1 }
+    }
+    const residentBlobs: ResidentBlobRow[] = comp.residentBlobs.slice(0, 15).map(b => ({ ...b, ...findSample(b.signature) }))
+
+    return {
+      sessionId: comp.sessionId,
+      accountUuid: comp.accountUuid,
+      project: comp.project,
+      model: comp.model,
+      callsTotal: comp.callsTotal,
+      callsWithExactUsage: comp.callsWithExactUsage,
+      peakCall,
+      images: comp.images,
+      residentBlobs,
+      coverageNote: comp.callsTotal === 0
+        ? 'No raw OTEL request bodies for this session in the live registry (lazy — historical bodies are not indexed). Set OTEL_LOG_RAW_API_BODIES to capture them.'
+        : undefined,
+    }
   }
 }

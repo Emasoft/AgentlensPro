@@ -156,4 +156,40 @@ suite('contextCompositionIndex — query engine via the registry (lazy path)', (
     const txtBlock = await index.getBlockContent(s, 1, 1)
     assert.ok('text' in txtBlock && typeof txtBlock.text === 'string' && txtBlock.text.includes('first turn text'))
   })
+
+  test('sessionCompositionSummary rolls a session down to a peak-call breakdown + drillable resident blobs', async () => {
+    const s = 'sess-summary-' + Math.random().toString(36).slice(2, 8)
+    const r1 = writeBody('m1.request.json', makeBody(s, [textBlock('first turn text'), imageBlock(8000)]))
+    const r2 = writeBody('m2.request.json', makeBody(s, [textBlock('second turn text has a bit more content here'), imageBlock(8000)]))
+    callBodyRegistry.record(s, { kind: 'request', bodyRef: r1, spanId: 'sspan1', ts: 1 })
+    callBodyRegistry.record(s, { kind: 'request', bodyRef: r2, spanId: 'sspan2', ts: 2 })
+    const index = new ContextCompositionIndex()
+    const summary = await index.sessionCompositionSummary(s, () => '/proj/anime')
+
+    assert.strictEqual(summary.sessionId, s)
+    assert.strictEqual(summary.callsTotal, 2)
+    assert.ok(summary.peakCall, 'expected a peak call')
+    // The peak call's image weight is the single-call image tokens (not the cumulative re-read).
+    assert.strictEqual(summary.peakCall!.imageCount, 1)
+    assert.strictEqual(summary.peakCall!.imageTokens, estimateTokensFromBytes(8000))
+    assert.ok(summary.peakCall!.otherTokens >= 0, 'otherTokens must be clamped non-negative')
+    // The resident image blob carries a sample (turn, blockIndex) so a UI row can drill to it.
+    const imgRow = summary.residentBlobs.find(b => b.isImage)
+    assert.ok(imgRow, 'expected an image resident blob row')
+    assert.strictEqual(imgRow!.residentTurns, 2)
+    assert.ok(imgRow!.sampleTurn >= 1 && imgRow!.sampleBlockIndex >= 0, 'expected a drillable sample ref')
+    // The sample ref resolves to an image block returning metadata + ref, never base64 bytes.
+    const drilled = await index.getBlockContent(s, imgRow!.sampleTurn, imgRow!.sampleBlockIndex)
+    assert.ok('isImage' in drilled && drilled.isImage === true)
+    assert.ok(!('text' in drilled) || drilled.text === undefined, 'image drill must not return bytes')
+  })
+
+  test('sessionCompositionSummary returns an honest empty state for an unknown session', async () => {
+    const index = new ContextCompositionIndex()
+    const summary = await index.sessionCompositionSummary('no-such-session-xyz', () => '/proj/x')
+    assert.strictEqual(summary.callsTotal, 0)
+    assert.strictEqual(summary.peakCall, null)
+    assert.strictEqual(summary.residentBlobs.length, 0)
+    assert.ok(summary.coverageNote && summary.coverageNote.includes('No raw OTEL request bodies'))
+  })
 })

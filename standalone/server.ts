@@ -17,14 +17,15 @@ import { calcTokenCostUsd } from '../src/pricing'
 import { autoConfigureCodex, autoConfigureCopilotStandalone } from '../src/autoConfigNode'
 import { ensureTelemetryConfig, ensureAgentLensStopHook } from '../src/telemetryConfig'
 import { classifyOtlpPayload } from '../src/otlpParser'
-import { startMcpHttpServer } from '../src/mcpServer'
+import { startMcpHttpServer, labelBurnStatusAccounts } from '../src/mcpServer'
 import { resolveCallContext, callBodyRegistry } from '../src/rawBodyContext'
+import { ContextCompositionIndex } from '../src/contextCompositionIndex'
 import { LogReader, type OpenCodeSqlFactory } from '../src/logReader'
 import { readScratchFile } from '../src/generatedFiles'
 import { StatuslineUsageReader } from '../src/statuslineUsage'
 import {
   loadBurnConfig, gatherConsumptionEvents, computeBurnStatus, computeSessionStatus,
-  type BurnAlert,
+  type BurnAlert, type BurnStatus,
 } from '../src/burnMonitor'
 import { getCurrentAccount } from '../src/accountInfo'
 import { buildContextComposition, resolveLoggedAncestor } from '../src/contextComposition'
@@ -193,6 +194,70 @@ function gatherBurn(now = Date.now()) {
   return { sessions, events, now }
 }
 
+// ── Context-composition index (TRDD-CTXQUERY, dashboard piece 1) ────────────────
+// The LAZY, LRU-cached OTEL-raw-body composition layer the dashboard composition panel + the
+// resident-blob flag read. It parses a session's request bodies ON DEMAND (never a background sweep)
+// from the shared callBodyRegistry — the exact instance the MCP tools use, but a server-local one so
+// the routes and the resident-blob tick share ONE cache. Pointer-only (token counts + refs, no bytes).
+const compositionIndex = new ContextCompositionIndex()
+
+// sessionId → project path, rebuilt per request from the live cards (same mapping the MCP tools use).
+function compositionProjectResolver(): (id: string) => string | undefined {
+  const map = new Map<string, string>()
+  for (const s of buildSessionSummary()?.sessions ?? []) { map.set(s.sessionId, s.projectPath ?? s.workspace ?? 'unknown') }
+  return (id: string) => map.get(id)
+}
+
+// ── Resident-blob proactive flag (TRDD-CTXQUERY, dashboard piece 3) ─────────────
+// The eviction-candidate blobs (a big block re-read across many turns — the "525k images resident"
+// case) surfaced as a proactive alert on the burn status. Computed on a SLOW cadence (not the 4s
+// burn tick) over the BOUNDED live-registry scope (findResidentBlobs caps + LRU-caches), so a warm
+// pass is cheap; the result rides every burn tick + /api/burn-status. Thresholds are deliberately
+// high so only genuinely wasteful blobs flag (not every small block that rides two turns).
+interface ResidentBlobAlert {
+  sessionId: string; project: string; kind: string; label: string; isImage: boolean
+  peakTokens: number; residentTurns: number; cumulativeReadTokens: number; cumulativeReadCostUsd: number
+}
+let latestResidentBlobs: ResidentBlobAlert[] = []
+let residentScanRunning = false
+async function scanResidentBlobs(): Promise<void> {
+  if (residentScanRunning) return
+  residentScanRunning = true
+  try {
+    const r = await compositionIndex.findResidentBlobs(undefined, { minResidentTurns: 3, minTokens: 20_000 }, compositionProjectResolver())
+    latestResidentBlobs = r.blobs.slice(0, 10).map(b => ({
+      sessionId: b.sessionId, project: b.project, kind: b.kind, label: b.label, isImage: b.isImage,
+      peakTokens: b.peakTokens, residentTurns: b.residentTurns,
+      cumulativeReadTokens: b.cumulativeReadTokens, cumulativeReadCostUsd: b.cumulativeReadCostUsd,
+    }))
+  } catch (e) {
+    console.warn('[AgentLens] resident-blob scan error:', e)
+  } finally {
+    residentScanRunning = false
+  }
+}
+// 30s cadence: bodies parse once then hit the LRU cache; a 4s recompute would waste work for no gain.
+setInterval(() => { void scanResidentBlobs() }, 30_000)
+void scanResidentBlobs()
+
+// ── Burn-status enrichment for the dashboard (TRDD-BURNWDGT + CTXQUERY) ──────────
+// computeBurnStatus is I/O-free (no account labels). The dashboard/SSE path enriches it with: the
+// per-account window LABELS (email/org, resolved live from the current account), the CURRENT account
+// identity + plan (so the burn monitor shows "who am I / what plan / how much of MY window is left"),
+// and the proactive resident-blob flag. Pointer-only: no OAuth token ever touched — only the plan
+// string + public identity fields from accountInfo.
+function summarizeCurrentAccount() {
+  const a = getCurrentAccount()
+  if (!a || a.source === 'none') return null
+  return {
+    accountId: a.accountUuid, label: a.label, email: a.email, organizationName: a.organizationName,
+    planType: a.planType, billingType: a.billingType, hasExtraUsageEnabled: a.hasExtraUsageEnabled,
+  }
+}
+function enrichBurnStatus(status: BurnStatus) {
+  return { ...labelBurnStatusAccounts(status, getCurrentAccount()), currentAccount: summarizeCurrentAccount(), residentBlobs: latestResidentBlobs }
+}
+
 // ── MCP server ────────────────────────────────────────────────────────────────
 
 // Dedicated server on MCP_PORT (default 4316) — same port as the VS Code extension.
@@ -265,7 +330,7 @@ function tickBurn(): void {
     console.warn('[AgentLens] burn tick error:', e)
     return
   }
-  pushBurnSse({ type: 'burnStatus', burnStatus: status })
+  pushBurnSse({ type: 'burnStatus', burnStatus: enrichBurnStatus(status) })
 
   const active = new Set<string>()
   for (const alert of status.alerts) {
@@ -1662,7 +1727,7 @@ const uiServer = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' })
     try {
       const { sessions, events, now } = gatherBurn()
-      res.end(JSON.stringify(computeBurnStatus(events, sessions, burnConfig, now)))
+      res.end(JSON.stringify(enrichBurnStatus(computeBurnStatus(events, sessions, burnConfig, now))))
     } catch (e) {
       res.end(JSON.stringify({ error: String(e) }))
     }
@@ -1821,6 +1886,57 @@ const uiServer = http.createServer((req, res) => {
         console.warn('[AgentLens] callcontext build failed', e)
         res.writeHead(200, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ callContext: null }))
+      })
+    return
+  }
+
+  // TRDD-CTXQUERY (dashboard piece 1): the LAZY OTEL-raw-body composition summary for ONE session —
+  // the peak-call block-type split (the breakdown bar) + the top resident (eviction-candidate) blobs,
+  // each with a sample (turn, blockIndex) so the UI can drill to real content. Parses on demand from
+  // the live callBodyRegistry (never a background sweep) and LRU-caches; a session with no captured
+  // raw bodies returns an honest empty summary with a coverageNote, never a spinner.
+  if (req.method === 'GET' && url?.startsWith('/api/composition-index/')) {
+    if (heavyGuard(res, url, 'composition-index')) return
+    const sessionId = decodeURIComponent(url.slice('/api/composition-index/'.length))
+    compositionIndex.sessionCompositionSummary(sessionId, compositionProjectResolver())
+      .then(summary => {
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ summary }))
+      })
+      .catch(e => {
+        console.warn('[AgentLens] composition-index build failed', e)
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ summary: null }))
+      })
+    return
+  }
+
+  // TRDD-CTXQUERY (dashboard piece 1): drill ONE block to its real content. Path:
+  // /api/block-content/:sessionId/:turn/:blockIndex(?full=1). An IMAGE block returns metadata + a
+  // body-file ref ONLY — never the base64 bytes (pointer-only, mirrors get_block_content).
+  if (req.method === 'GET' && url?.startsWith('/api/block-content/')) {
+    if (heavyGuard(res, url, 'block-content')) return
+    const parts = url.slice('/api/block-content/'.length).split('/')
+    const sessionId = decodeURIComponent(parts[0] ?? '')
+    const turn = Number(parts[1])
+    const blockIndex = Number(parts[2])
+    const rawUrl = req.url ?? ''
+    const qIdx = rawUrl.indexOf('?')
+    const full = qIdx >= 0 && new URLSearchParams(rawUrl.slice(qIdx + 1)).get('full') === '1'
+    if (!sessionId || !Number.isFinite(turn) || !Number.isFinite(blockIndex)) {
+      res.writeHead(400, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ block: null, error: 'bad sessionId/turn/blockIndex' }))
+      return
+    }
+    compositionIndex.getBlockContent(sessionId, turn, blockIndex, { full })
+      .then(block => {
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ block }))
+      })
+      .catch(e => {
+        console.warn('[AgentLens] block-content read failed', e)
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ block: null }))
       })
     return
   }
