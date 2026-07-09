@@ -4,7 +4,7 @@ import * as os from 'os'
 import * as path from 'path'
 import {
   scanCacheCreationEvents, buildCacheCreationReport, buildExpensiveWritesTrace, buildCacheBreakGapReport,
-  DEFAULT_BODIES_DIR,
+  formatExpensiveWrites, DEFAULT_BODIES_DIR,
 } from '../cacheCreationForensics'
 
 // TRDD-CCFORNSC — REAL tests for the cache_creation forensic diagnostics: no mocked bodies, no mocked
@@ -389,6 +389,82 @@ suite('cacheCreationForensics — buildCacheBreakGapReport (TTL expiry vs cache 
       assert.strictEqual(report.bigEventCount, 2)
       const total = report.gapBuckets.reduce((n, b) => n + b.events, 0)
       assert.strictEqual(total, 2)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+suite('cacheCreationForensics — buildExpensiveWritesTrace (D1 filters + backward chain + formats)', () => {
+  test('filters by sessionId and surfaces OUTPUT-token spikes via minOutputTokens', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccforensics-d1filter-'))
+    try {
+      // Session A: a big OUTPUT-token write (output is billed ~5x — sometimes the culprit, not cache_create).
+      fs.writeFileSync(path.join(dir, 'a.response.json'), JSON.stringify(responseBody('msg_dA', { cacheCreate: 8000, output: 50000, model: 'claude-opus-4-8' })))
+      fs.writeFileSync(path.join(dir, 'a.request.json'), JSON.stringify(requestBody({ previousMessageId: 'msg_dA', sessionId: 'sessA', model: 'claude-opus-4-8' })))
+      // Session B: a modest write, tiny output.
+      fs.writeFileSync(path.join(dir, 'b.response.json'), JSON.stringify(responseBody('msg_dB', { cacheCreate: 9000, output: 100, model: 'claude-haiku-4-5' })))
+      fs.writeFileSync(path.join(dir, 'b.request.json'), JSON.stringify(requestBody({ previousMessageId: 'msg_dB', sessionId: 'sessB', model: 'claude-haiku-4-5' })))
+
+      const onlyA = await buildExpensiveWritesTrace({ bodiesDir: dir, sessionId: 'sessA' })
+      assert.strictEqual(onlyA.events.length, 1)
+      assert.strictEqual(onlyA.events[0].sessionId, 'sessA')
+      assert.strictEqual(onlyA.events[0].outputTokens, 50000)
+
+      const spikes = await buildExpensiveWritesTrace({ bodiesDir: dir, minOutputTokens: 40000 })
+      assert.strictEqual(spikes.events.length, 1)
+      assert.strictEqual(spikes.events[0].sessionId, 'sessA')
+
+      const byModel = await buildExpensiveWritesTrace({ bodiesDir: dir, model: 'haiku' })
+      assert.ok(byModel.events.every(e => (e.model ?? '').includes('haiku')))
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('chainDepth attaches the ordered backward CONTEXT CHAIN of preceding turns', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccforensics-d1chain-'))
+    try {
+      const sid = 'sess-chain'
+      const base = Date.now() - 3_600_000
+      // 3 requests + 3 responses; the middle write is the biggest. Attribution of M2 comes from R3.prev.
+      const mk = (i: number, cc: number, prev: string) => {
+        const rp = path.join(dir, `r${i}.response.json`)
+        fs.writeFileSync(rp, JSON.stringify(responseBody(`msg_c${i}`, { cacheCreate: cc, model: 'claude-opus-4-8' })))
+        fs.utimesSync(rp, new Date(base + i * 60_000 + 30_000), new Date(base + i * 60_000 + 30_000))
+        const qp = path.join(dir, `r${i}.request.json`)
+        fs.writeFileSync(qp, JSON.stringify(requestBody({ previousMessageId: prev, sessionId: sid, model: 'claude-opus-4-8' })))
+        fs.utimesSync(qp, new Date(base + i * 60_000), new Date(base + i * 60_000))
+      }
+      mk(1, 5000, 'msg_root')
+      mk(2, 100000, 'msg_c1')  // biggest; attributed via R3.prev = msg_c2
+      mk(3, 6000, 'msg_c2')
+
+      const trace = await buildExpensiveWritesTrace({ bodiesDir: dir, chainDepth: 5, minCacheCreate: 50000 })
+      const big = trace.events.find(e => e.cacheCreateTokens === 100000)
+      assert.ok(big, 'the biggest write must be traced')
+      assert.strictEqual(big!.sessionId, sid)
+      assert.ok(big!.backwardChain && big!.backwardChain.length >= 1, 'a backward chain of preceding turns must be attached')
+      // The chain turns are ordered oldest→newest and carry pointer-only composition summaries.
+      for (const t of big!.backwardChain!) assert.ok(typeof t.bodyRef === 'string' && t.ts.length > 0)
+      assert.strictEqual(trace.filters.chainDepth, 5)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('formatExpensiveWrites renders table/markdown/timeline; json returns the object', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccforensics-d1fmt-'))
+    try {
+      fs.writeFileSync(path.join(dir, 'f.response.json'), JSON.stringify(responseBody('msg_fmt', { cacheCreate: 12000, output: 300, model: 'claude-opus-4-8' })))
+      fs.writeFileSync(path.join(dir, 'f.request.json'), JSON.stringify(requestBody({ previousMessageId: 'msg_fmt', sessionId: 'sess-fmt', model: 'claude-opus-4-8' })))
+      const trace = await buildExpensiveWritesTrace({ bodiesDir: dir })
+      assert.strictEqual(formatExpensiveWrites(trace, 'json'), trace)
+      for (const fmt of ['table', 'markdown', 'timeline'] as const) {
+        const out = formatExpensiveWrites(trace, fmt) as { format: string; text: string }
+        assert.strictEqual(out.format, fmt)
+        assert.ok(out.text.length > 0)
+      }
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
     }

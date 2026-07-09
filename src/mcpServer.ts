@@ -37,7 +37,7 @@ import { readAllInstructionContent } from './instructionFiles'
 import { ContextCompositionIndex, type CompositionBlockKind, type GroupBy } from './contextCompositionIndex'
 import {
   buildCacheCreationReport, buildExpensiveWritesTrace, buildCacheBreakGapReport,
-  type CacheCreationGroupBy,
+  formatExpensiveWrites, type CacheCreationGroupBy, type ForensicsFormat,
 } from './cacheCreationForensics'
 import {
   buildCacheBreakTimeline, formatTimeline, type TimelineFormat,
@@ -550,13 +550,26 @@ const TOOLS = [
       'metadata.user_id token; only derived identifiers (session_id, account_uuid) and token counts. ' +
       'Complements get_cache_creation_report\'s "who" with the "what\'s inside the huge writes" view — ' +
       'the composition field is null when the owning request body could not be resolved (e.g. the write ' +
-      'was unattributed). Read `coverage` for the bounded scan scope.',
+      'was unattributed). Rich filters {sessionId, accountUuid, model, minCacheCreate, minOutputTokens, ' +
+      'turnRange, timeRange} narrow the events; chainDepth attaches each event\'s backward CONTEXT CHAIN ' +
+      '(the ordered turns leading up to it) so you see HOW the context ramped to the write. Read ' +
+      '`coverage` for the bounded scan scope.',
     inputSchema: {
       type: 'object' as const,
       properties: {
-        minCacheCreate: { type: 'number', description: 'Only events with at least this many cache_creation tokens (default 0 — no floor)' },
-        topN:           { type: 'number', description: 'How many top events to trace (default 6, max 25)' },
-        window:         { type: 'number', description: 'Only include writes from the last N hours; omit for the bounded most-recent scan across all history' },
+        sessionId:       { type: 'string', description: 'Only writes from this session' },
+        accountUuid:     { type: 'string', description: 'Only writes from this OAuth account' },
+        model:           { type: 'string', description: 'Only writes on a model matching this substring' },
+        minCacheCreate:  { type: 'number', description: 'Only events with at least this many cache_creation tokens (default 0 — no floor)' },
+        minOutputTokens: { type: 'number', description: 'Only events with at least this many OUTPUT tokens (find output-token spikes, billed ~5x)' },
+        turnFrom:        { type: 'number', description: 'Only writes at/after this per-session cache_creation-event turn index (1-based)' },
+        turnTo:          { type: 'number', description: 'Only writes at/before this per-session cache_creation-event turn index' },
+        timeFrom:        { type: 'string', description: 'Only writes at/after this ISO timestamp' },
+        timeTo:          { type: 'string', description: 'Only writes at/before this ISO timestamp' },
+        topN:            { type: 'number', description: 'How many top events to trace (default 6, max 25)' },
+        chainDepth:      { type: 'number', description: 'Attach each event\'s N preceding turns as its backward context chain (default 0 = off, max 20)' },
+        window:          { type: 'number', description: 'Only include writes from the last N hours; omit for the bounded most-recent scan across all history' },
+        format:          { type: 'string', description: 'Output format: json (default) | table | markdown | timeline' },
       },
     },
   },
@@ -1740,8 +1753,17 @@ export function createMcpServer(opts: McpServerOptions): Server {
         break
       }
       case 'trace_expensive_writes': {
-        const a = args as { minCacheCreate?: number; topN?: number; window?: number }
-        result = await buildExpensiveWritesTrace({ minCacheCreate: a.minCacheCreate, topN: a.topN, windowHours: a.window })
+        const a = args as {
+          sessionId?: string; accountUuid?: string; model?: string; minCacheCreate?: number
+          minOutputTokens?: number; turnFrom?: number; turnTo?: number; timeFrom?: string; timeTo?: string
+          topN?: number; chainDepth?: number; window?: number; format?: ForensicsFormat
+        }
+        const trace = await buildExpensiveWritesTrace({
+          sessionId: a.sessionId, accountUuid: a.accountUuid, model: a.model, minCacheCreate: a.minCacheCreate,
+          minOutputTokens: a.minOutputTokens, turnFrom: a.turnFrom, turnTo: a.turnTo,
+          timeFromIso: a.timeFrom, timeToIso: a.timeTo, topN: a.topN, chainDepth: a.chainDepth, windowHours: a.window,
+        })
+        result = formatExpensiveWrites(trace, a.format ?? 'json')
         break
       }
       case 'get_cache_break_gap_report': {

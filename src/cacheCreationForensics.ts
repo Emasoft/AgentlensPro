@@ -335,8 +335,18 @@ export interface ExpensiveWriteComposition {
   toolCatalogCount: number
 }
 
+// One turn in the backward CONTEXT CHAIN leading up to an expensive write — how the context ramped
+// to the write. Pointer-only: a composition summary + token totals, never raw text/base64.
+export interface BackwardChainTurn {
+  ts: string             // ISO — the request-body mtime (call time proxy)
+  bodyRef: string        // pointer to the raw request body file — never its content
+  composition: ExpensiveWriteComposition | null
+}
+
 export interface ExpensiveWriteEvent {
+  turn?: number          // 1-based chronological index of this write AMONG its session's scanned cache_creation events
   cacheCreateTokens: number
+  outputTokens: number
   costUsd: number
   ts: string             // ISO
   model?: string
@@ -346,16 +356,33 @@ export interface ExpensiveWriteEvent {
   requestRef?: string    // pointer to the raw request body file — never its content
   responseRef: string    // pointer to the raw response body file — never its content
   composition: ExpensiveWriteComposition | null   // null when no request body could be resolved/parsed
+  backwardChain?: BackwardChainTurn[]              // the ordered turns leading up to this write (chainDepth)
+}
+
+export interface ExpensiveWritesTraceFilters {
+  sessionId?: string
+  accountUuid?: string
+  model?: string          // substring match
+  minCacheCreate?: number
+  minOutputTokens?: number
+  turnFrom?: number       // filter on the per-session cache_creation-event turn index
+  turnTo?: number
+  timeFromIso?: string    // absolute time-range filter on the event ts
+  timeToIso?: string
+  topN?: number
+  chainDepth?: number     // how many preceding turns of context to attach per event (0 = off; default 0)
 }
 
 export interface ExpensiveWritesTrace {
   minCacheCreate: number
   windowHours?: number
+  filters: ExpensiveWritesTraceFilters
   events: ExpensiveWriteEvent[]
   coverage: CacheCreationScanCoverage
 }
 
 const TOOL_CATALOG_COUNT_RE = /\((\d+) tools\)/
+const MAX_CHAIN_DEPTH = 20
 
 // Reduce a full CallComposition (which carries raw block text) down to POINTER-ONLY summary numbers
 // — never forwards a block's text, bytes, or the request's base64 image data.
@@ -374,36 +401,104 @@ function compositionSummaryFrom(cc: CallComposition): ExpensiveWriteComposition 
   }
 }
 
+interface RawRequestSession { metadata?: { user_id?: unknown } }
+
+// One bounded request scan grouping every request body by its session_id → ordered (ts, bodyRef) turns.
+// The backward-context-chain builder reuses this to find the turns preceding an expensive write WITHOUT
+// re-parsing per event. Only run when chainDepth > 0 (it fully parses the bounded request slice).
+function scanSessionRequestTurns(bodiesDir: string, opts: CacheCreationScanOptions): Map<string, { ts: number; bodyRef: string }[]> {
+  const cap = opts.scanCap ?? REQUEST_INDEX_CAP
+  const { slice } = boundedRecent(listBySuffix(bodiesDir, '.request.json'), { windowHours: opts.windowHours, cap })
+  const bySession = new Map<string, { ts: number; bodyRef: string }[]>()
+  for (const e of slice) {
+    const q = readJsonBounded<RawRequestSession>(e.path, MAX_REQUEST_BYTES)
+    if (!q) continue
+    const sid = parseUserId(q.metadata?.user_id).sessionId
+    if (!sid) continue
+    const list = bySession.get(sid)
+    const entry = { ts: e.mtimeMs, bodyRef: e.path }
+    if (list) list.push(entry); else bySession.set(sid, [entry])
+  }
+  for (const list of bySession.values()) list.sort((a, b) => a.ts - b.ts)
+  return bySession
+}
+
 /** For the biggest single cache_creation write events, resolves session/account via the
  *  previous_message_id chain and summarizes the CONTENT that made the write so expensive (image /
  *  tool_result / text / system token shares + tool-catalog size) — pointer-only, never raw text or
- *  base64. Answers "what is IN the huge writes", complementing buildCacheCreationReport's "who". */
+ *  base64. Rich filters {sessionId, accountUuid, model, minCacheCreate, minOutputTokens, turnRange,
+ *  timeRange, topN} narrow the events; chainDepth attaches each event's backward CONTEXT CHAIN (the
+ *  ordered turns leading up to it). Answers "what is IN the huge writes and how did the context ramp
+ *  to them", complementing buildCacheCreationReport's "who". */
 export async function buildExpensiveWritesTrace(
-  opts: CacheCreationScanOptions & { minCacheCreate?: number; topN?: number } = {},
+  opts: CacheCreationScanOptions & ExpensiveWritesTraceFilters = {},
 ): Promise<ExpensiveWritesTrace> {
   const minCacheCreate = Math.max(0, opts.minCacheCreate ?? 0)
+  const minOutputTokens = Math.max(0, opts.minOutputTokens ?? 0)
   const topN = Math.min(opts.topN ?? 6, 25)
+  const chainDepth = Math.min(Math.max(0, opts.chainDepth ?? 0), MAX_CHAIN_DEPTH)
+  const bodiesDir = opts.bodiesDir ?? DEFAULT_BODIES_DIR
+  const timeFrom = opts.timeFromIso ? Date.parse(opts.timeFromIso) : undefined
+  const timeTo = opts.timeToIso ? Date.parse(opts.timeToIso) : undefined
   const { events, coverage } = await scanCacheCreationEvents(opts)
-  const top = events
-    .filter(e => e.cacheCreateTokens >= minCacheCreate)
-    .sort((a, b) => b.cacheCreateTokens - a.cacheCreateTokens)
-    .slice(0, topN)
+
+  // Apply the identity / size / time filters.
+  let filtered = events.filter(e =>
+    e.cacheCreateTokens >= minCacheCreate &&
+    e.outputTokens >= minOutputTokens &&
+    (!opts.sessionId || e.sessionId === opts.sessionId) &&
+    (!opts.accountUuid || e.accountUuid === opts.accountUuid) &&
+    (!opts.model || (e.model ?? '').includes(opts.model)) &&
+    (timeFrom === undefined || e.ts >= timeFrom) &&
+    (timeTo === undefined || e.ts <= timeTo))
+
+  // Assign a per-session chronological turn index (1-based, among that session's cache_creation events)
+  // so a turnRange filter has a stable meaning.
+  const perSessionSeq = new Map<string, number>()
+  const turnOf = new Map<CacheCreationEvent, number>()
+  for (const e of [...filtered].sort((a, b) => a.ts - b.ts)) {
+    const sid = e.sessionId ?? '(unattributed)'
+    const n = (perSessionSeq.get(sid) ?? 0) + 1
+    perSessionSeq.set(sid, n)
+    turnOf.set(e, n)
+  }
+  if (opts.turnFrom !== undefined) filtered = filtered.filter(e => (turnOf.get(e) ?? 0) >= opts.turnFrom!)
+  if (opts.turnTo !== undefined) filtered = filtered.filter(e => (turnOf.get(e) ?? 0) <= opts.turnTo!)
+
+  const top = filtered.sort((a, b) => b.cacheCreateTokens - a.cacheCreateTokens).slice(0, topN)
+
+  // The backward-chain session index + a per-body composition cache (a turn shared by two events is
+  // parsed once). Built only when chains are requested.
+  const sessionTurns = chainDepth > 0 ? scanSessionRequestTurns(bodiesDir, opts) : null
+  const compCache = new Map<string, ExpensiveWriteComposition | null>()
+  const summarize = async (bodyRef: string, ts: number, exact?: { input: number; output: number; cacheRead: number; cacheCreate: number; responseId?: string }): Promise<ExpensiveWriteComposition | null> => {
+    if (compCache.has(bodyRef)) return compCache.get(bodyRef) ?? null
+    const cc = await buildCallComposition(bodyRef, 1, ts, exact ? { exact: { inputTokens: exact.input, outputTokens: exact.output, cacheReadTokens: exact.cacheRead, cacheCreateTokens: exact.cacheCreate, responseId: exact.responseId } } : {})
+    const summary = cc ? compositionSummaryFrom(cc) : null
+    compCache.set(bodyRef, summary)
+    return summary
+  }
 
   const out: ExpensiveWriteEvent[] = []
   for (const e of top) {
-    let composition: ExpensiveWriteComposition | null = null
-    if (e.requestRef) {
-      const cc = await buildCallComposition(e.requestRef, 1, e.ts, {
-        exact: {
-          inputTokens: e.inputTokens, outputTokens: e.outputTokens,
-          cacheReadTokens: e.cacheReadTokens, cacheCreateTokens: e.cacheCreateTokens,
-          responseId: e.responseId,
-        },
-      })
-      if (cc) composition = compositionSummaryFrom(cc)
+    const composition = e.requestRef
+      ? await summarize(e.requestRef, e.ts, { input: e.inputTokens, output: e.outputTokens, cacheRead: e.cacheReadTokens, cacheCreate: e.cacheCreateTokens, responseId: e.responseId })
+      : null
+
+    let backwardChain: BackwardChainTurn[] | undefined
+    if (chainDepth > 0 && sessionTurns && e.sessionId) {
+      const turns = sessionTurns.get(e.sessionId) ?? []
+      const preceding = turns.filter(t => t.ts <= e.ts).slice(-chainDepth)
+      backwardChain = []
+      for (const t of preceding) {
+        backwardChain.push({ ts: new Date(t.ts).toISOString(), bodyRef: t.bodyRef, composition: await summarize(t.bodyRef, t.ts) })
+      }
     }
+
     out.push({
+      turn: turnOf.get(e),
       cacheCreateTokens: e.cacheCreateTokens,
+      outputTokens: e.outputTokens,
       costUsd: +e.costUsd.toFixed(4),
       ts: new Date(e.ts).toISOString(),
       model: e.model,
@@ -413,9 +508,52 @@ export async function buildExpensiveWritesTrace(
       requestRef: e.requestRef,
       responseRef: e.responseRef,
       composition,
+      backwardChain,
     })
   }
-  return { minCacheCreate, windowHours: opts.windowHours, events: out, coverage }
+  return {
+    minCacheCreate, windowHours: opts.windowHours,
+    filters: { sessionId: opts.sessionId, accountUuid: opts.accountUuid, model: opts.model, minCacheCreate, minOutputTokens, turnFrom: opts.turnFrom, turnTo: opts.turnTo, timeFromIso: opts.timeFromIso, timeToIso: opts.timeToIso, topN, chainDepth },
+    events: out, coverage,
+  }
+}
+
+// ── Output formats for trace_expensive_writes ────────────────────────────────────
+export type ForensicsFormat = 'json' | 'table' | 'markdown' | 'timeline'
+
+function dominantComponent(c: ExpensiveWriteComposition | null): string {
+  if (!c) return '(no body)'
+  const parts: [string, number][] = [['image', c.imageTokens], ['tool_result', c.toolResultTokens], ['text', c.textTokens], ['thinking', c.thinkingTokens], ['system', c.systemTokens], ['toolCatalog', c.toolCatalogTokens]]
+  const top = parts.sort((a, b) => b[1] - a[1])[0]
+  return top[1] > 0 ? `${top[0]}~${top[1].toLocaleString()}` : '(mixed)'
+}
+
+/** Render an expensive-writes trace in the requested format. json → the object; the others → a compact
+ *  string wrapped as { format, text, coverage } so the MCP result stays JSON-serializable. */
+export function formatExpensiveWrites(trace: ExpensiveWritesTrace, format: ForensicsFormat): unknown {
+  if (format === 'json') return trace
+  const lines: string[] = []
+  const hdr = `expensive cache_creation writes — top ${trace.events.length}${trace.filters.sessionId ? ` [session ${trace.filters.sessionId}]` : ''}`
+  if (format === 'markdown') {
+    lines.push(`# ${hdr}`, '')
+    lines.push('| # | tokens | out | cost | model | session | dominant |', '|---|---|---|---|---|---|---|')
+    trace.events.forEach((e, i) => lines.push(`| ${i + 1} | ${e.cacheCreateTokens.toLocaleString()} | ${e.outputTokens.toLocaleString()} | $${e.costUsd} | ${e.model ?? '?'} | ${(e.sessionId ?? '(unattr)').slice(0, 12)} | ${dominantComponent(e.composition)} |`))
+    for (const e of trace.events) {
+      if (!e.backwardChain?.length) continue
+      lines.push('', `## Context ramp → write @ ${e.ts} (${e.cacheCreateTokens.toLocaleString()} tok)`)
+      e.backwardChain.forEach((t, i) => lines.push(`- t-${e.backwardChain!.length - i}: \`${t.ts}\` ${dominantComponent(t.composition)}`))
+    }
+  } else if (format === 'timeline') {
+    lines.push(hdr)
+    for (const e of [...trace.events].sort((a, b) => a.ts.localeCompare(b.ts))) {
+      lines.push(`${e.ts}  💥 ${e.cacheCreateTokens.toLocaleString()} tok  out=${e.outputTokens.toLocaleString()}  ${e.model ?? '?'}  ${(e.sessionId ?? '(unattr)').slice(0, 12)}  ← ${dominantComponent(e.composition)}`)
+    }
+  } else { // table
+    lines.push(hdr)
+    lines.push('  #      tokens       out    cost   dominant            session')
+    trace.events.forEach((e, i) => lines.push(`${String(i + 1).padStart(3)}  ${String(e.cacheCreateTokens).padStart(11)}  ${String(e.outputTokens).padStart(8)}  $${String(e.costUsd).padStart(6)}  ${dominantComponent(e.composition).padEnd(18)}  ${(e.sessionId ?? '(unattr)').slice(0, 12)}`))
+  }
+  return { format, text: lines.join('\n'), coverage: trace.coverage }
 }
 
 // ── get_cache_break_gap_report ──────────────────────────────────────────────────
