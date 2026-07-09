@@ -1,9 +1,9 @@
 ---
 trdd-id: FB5RG4P1
 title: Forensics Analytics Layer — comparative config stats + SQL engine over cache-cost facts
-column: backburner
+column: complete
 created: 2026-07-09T08:42:38+0200
-updated: 2026-07-09T08:42:38+0200
+updated: 2026-07-09T12:05:00+0200
 current-owner: 777b8f52
 assignee: null
 priority: 3
@@ -33,9 +33,9 @@ impacts: [public-api, config-schema, migration]
 migration-direction: forward
 attempts: 0
 test-failures: 0
-last-test-result: not-run
-last-test-at: null
-implementation-commits: []
+last-test-result: pass
+last-test-at: 2026-07-09T12:00:00+0200
+implementation-commits: [5d381e3, 271b593, 3e83684, 68ae0af]
 pr-url: null
 external-refs: []
 ---
@@ -43,6 +43,54 @@ external-refs: []
 # Forensics Analytics Layer (FAL) — comparative + SQL analytics over cache/cost forensics
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-09
+
+**Column: `complete` — BUILT + GATE-GREEN.** All phases landed in 4 LOCAL commits (frozen 6TQ2FBUR
+files were already released, commits 77148e8/817763c, so no concurrency conflict). Gates green each
+commit: `check-types` 0, `lint` 0 errors, `esbuild` 0, mocha (full suite 481 passing / 0 failing).
+
+**Shipped:**
+- `src/forensicsDb.ts` — `~/.agentlens/forensics.db` (sql.js, self-loaded via `require('sql.js')` +
+  `require.resolve` — the standalone pattern; NO `McpServerOptions` change), full DDL (api_calls +
+  call_content + call_injections + index_state), custom fns `billable_weight/tier_classify/cost_usd/
+  spike` via `db.create_function` (confirmed present in sql.js 1.14.1). Commit **5d381e3**.
+- `src/forensicsIndex.ts` — generalized bounded scan (ALL usage), previous_message_id join, spawn
+  resolver ladder (direct/root/unresolved — never fabricated), effort from thinking budget,
+  frontmatter_fp, cost/billable_weight, high-water + `ensureFreshIndex` (5-min freshness), content
+  taxonomy (via `buildCallComposition`) + injection extraction (rule/claudemd/mcp exact, skill
+  heuristic). Commits **5d381e3** (facts) + **271b593** (content/injections).
+- `src/forensicsCompare.ts` + `src/forensicsSql.ts` — `compare_configs` (13 groupBy dims × 7 metrics ×
+  7 aggs, min/max/avg/median/p95/count/sum always, verdicts, coverage) + `run_diagnostics_sql` (16
+  presets + raw read-only SQL, fail-closed statement gate, bound params, in-memory snapshot, row cap,
+  json/table/markdown). Registered in `src/mcpServer.ts` (TOOLS + switch). Commit **3e83684**.
+- `spawn_subagent_type` EHT — schema/db-migration/writer/card-type/logReader/index. Commit **68ae0af**.
+
+**EMPIRICAL FINDING (design §3.3 — RESOLVED, the unverified assumption):** on this machine's real
+`~/.agentlens/otel-bodies` (1500-response sample), **sub-agent API calls carry the PARENT/root
+`session_id`, NOT the child's `agentId`** — 0/6 distinct call-sessions matched a child agentId; all 6
+matched a root session (of 2125 child agentIds / 11971 root sessions in `log-sessions.json`). So the
+SECOND design branch is reality: a sub-agent's specific spawn context is invisible at the call level;
+the resolver correctly attributes such calls to `root` (via the parent row) and NEVER fabricates a
+child spawn_kind. Consequence: on real Claude Code telemetry, `compare_configs groupBy:spawn_kind`
+buckets sub-agent calls under `root`/`unresolved`, not fork/fresh/worktree. True per-child attribution
+needs the child-window flagging (design §3.3, a documented FUTURE enhancement — not built). The
+synthetic tests prove the mechanism works WHEN child session_ids are carried; the empirical check
+documents that they typically are not. Script: `scratchpad/empirical.js`.
+
+**OPERATIONAL NOTE:** there is currently **no `~/.agentlens/agentlens.db`** on this machine (the
+standalone server persists cards to `log-sessions.json`, not a file DB at FAL's expected path). When
+the main DB is absent, `loadSpawnMap` returns empty and every call resolves `unresolved` — honest
+degradation. FAL's spawn dimension becomes meaningful once a main DB exists at `~/.agentlens/
+agentlens.db` (or the caller points `mainDbPath` at wherever the DB lives).
+
+**FUTURE (not built, non-blocking):** (1) child-window spawn attribution (§3.3); (2) break_cause/
+culprit_fingerprint/gap population via the optional `cacheBreakTimeline` import (§3.7 — columns stay
+NULL and break-related presets degrade gracefully until wired); (3) high-water SKIP optimization (the
+indexer currently re-processes the capped slice idempotently each run rather than skipping
+`ts<=high_water`).
+
+---
+
+### (original design-phase STATE, superseded by the above)
 
 **Column: `backburner` — DESIGN ONLY, not started.** This TRDD + the design doc are the
 deliverables of the current session; NO code was written. Build is phased and **sequenced
