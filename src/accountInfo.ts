@@ -89,19 +89,42 @@ export function parseSubscriptionType(credentialJsonText: string): string | null
   }
 }
 
-/** Read the keychain credential blob on macOS (non-shell execFile, short timeout) and return ONLY the
- *  subscriptionType. Returns null off-macOS, on a denied/absent keychain item, or any error. The raw
- *  blob (which contains tokens) is confined to this function's local scope and never surfaced. */
+/** One-shot latch for the keychain plan read. WHY THIS EXISTS (bug autopsy, 2026-07-09): reading the
+ *  `Claude Code-credentials` item triggers a macOS "Security wants to use the login keychain" password
+ *  dialog whenever the item's ACL does NOT include our binary — which happens after EVERY account
+ *  rotation, because Claude Code re-creates the item with a Claude-Code-only ACL that excludes node.
+ *  A per-tick reader (burn tick / per-request / per-respawn) then FLOODS the user with hundreds of
+ *  un-dismissable prompts (macOS offers no "Always Allow" because the reader isn't in the ACL). The
+ *  60s getCurrentAccount cache did not prevent it (opts-callers bypass it, and each supervisor respawn
+ *  starts a cold process that prompts on its first tick). So the plan-from-keychain read is now
+ *  STRICTLY OPT-IN and attempted AT MOST ONCE per process: any outcome (success, denial, timeout,
+ *  off-macOS, not-opted-in) latches permanently so it can NEVER re-prompt. The plan label is
+ *  display-only; identity + billingType + rate-limit tiers already come from ~/.claude.json with no
+ *  prompt, so losing the keychain plan degrades to null, never to a flood. */
+let keychainPlanLatch: { done: boolean; value: string | null } = { done: false, value: null }
+
+/** Read the keychain credential blob on macOS and return ONLY the subscriptionType — but ONLY when the
+ *  user explicitly opts in via AGENTLENS_READ_KEYCHAIN_PLAN=1, and AT MOST ONCE per process (latched).
+ *  Off-macOS, not-opted-in, denied, or any error → null, latched, never retried. The raw blob (which
+ *  holds the OAuth tokens) is confined to this function's local scope and never surfaced. */
 function readKeychainSubscriptionType(): string | null {
-  if (process.platform !== 'darwin') { return null }
+  if (keychainPlanLatch.done) { return keychainPlanLatch.value }
+  // Default OFF: never touch the keychain unless explicitly opted in — a single un-ACL'd read prompts.
+  if (process.platform !== 'darwin' || process.env.AGENTLENS_READ_KEYCHAIN_PLAN !== '1') {
+    keychainPlanLatch = { done: true, value: null }
+    return null
+  }
+  let value: string | null = null
   try {
     const raw = execFileSync('security',
       ['find-generic-password', '-s', 'Claude Code-credentials', '-w'],
       { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] })
-    return parseSubscriptionType(raw)
+    value = parseSubscriptionType(raw)
   } catch {
-    return null
+    value = null   // denial / timeout / errSecAuthFailed — latch OFF, never re-prompt this process
   }
+  keychainPlanLatch = { done: true, value }
+  return value
 }
 
 /** A human label for the account: email, else org display name, else a short account_uuid, else 'unknown'. */
