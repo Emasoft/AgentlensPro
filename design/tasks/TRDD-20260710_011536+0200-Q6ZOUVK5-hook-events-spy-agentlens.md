@@ -1,9 +1,12 @@
 ---
 trdd-id: Q6ZOUVK5
 title: Hook-events pipeline — spy-agentlens.sh replaces spyglass, lifecycle signals into AgentLens
-column: dev
+column: complete
 created: 2026-07-10T01:15:36+0200
-updated: 2026-07-10T01:15:36+0200
+updated: 2026-07-10T01:26:00+0200
+implementation-commits: [c923f85]
+last-test-result: pass
+last-test-at: 2026-07-10T01:24:00+0200
 current-owner: agentlens-session
 task-type: feature
 release-via: none
@@ -18,7 +21,16 @@ relevant-rules: []
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-10
 
-**Current state:** starting implementation (nothing landed yet).
+**COMPLETE — shipped + verified live 2026-07-10 (commit c923f85, local-only).**
+All 5 plan phases done. Verified: POST/GET endpoints (valid 200 / missing hook_event_name 400),
+spy-agentlens.sh delivers + exits 0 silently when server down, --install-hooks on a scratch
+settings copy THEN for real (28 spyglass entries + env.SPYGLASS_DIR removed, 10 lifecycle
+entries added, 10 foreign hooks + all top-level keys preserved, idempotent, uninstall removes
+exactly ours), gates green (tsc 0, lint 0 err, esbuild), server restarted healthy, `--status`
+shows the hooks line, and a REAL Notification event from a live genny-bot session already
+landed through the full pipeline. Fake test events were purged from the store.
+FOLLOW-UP (new TRDD once data accumulates): burnMonitor consumes StopFailure for empirical
+window-budget calibration; cache-break classifier consumes PreCompact/PostCompact.
 
 **Plan (phased, commit per phase, local-only, stage by name, NEVER push):**
 1. `src/hookEventStore.ts` (NEW) + `standalone/server.ts`: POST `/api/hook-events` (validate,
