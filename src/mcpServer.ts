@@ -42,6 +42,7 @@ import {
 import {
   buildCacheBreakTimeline, buildCauseCostPeakReport, buildCacheBreakCauses, formatTimeline, type TimelineFormat,
 } from './cacheBreakTimeline'
+import { leanify } from './leanResponse'
 // TRDD-FB5RG4P1 — FAL comparative + SQL analytics over the forensics fact DB. Like the cache-forensic
 // tools above, these read ~/.agentlens/{otel-bodies,forensics.db} directly off disk (self-loading
 // sql.js), so they need no McpServerOptions accessor and work identically in both runtimes.
@@ -1912,8 +1913,16 @@ export function createMcpServer(opts: McpServerOptions): Server {
         return { content: [{ type: 'text', text: `Unknown tool: ${req.params.name}` }], isError: true }
     }
 
+    // TOKEN ECONOMY (single choke point — see leanResponse.ts): a tool result is re-read on EVERY later
+    // turn of the caller's conversation, so a verbose payload is a permanent tax, not a one-time cost.
+    // Every tool is therefore LEAN BY DEFAULT: verdict + the head of each ranked array + a one-line
+    // coverage note, under a hard token ceiling, with truncation always disclosed. Pass verbosity:"full"
+    // on any tool to get the untouched payload for a genuine deep drill.
+    const verbosity = args.verbosity === 'full' ? 'full' : 'summary'
+    const lean = leanify(result, { verbosity, maxTokens: typeof args.maxTokens === 'number' ? args.maxTokens : undefined })
+
     return {
-      content: [{ type: 'text', text: JSON.stringify(result) }],
+      content: [{ type: 'text', text: JSON.stringify(lean) }],
     }
   })
 
