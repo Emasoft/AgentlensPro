@@ -180,8 +180,8 @@ export class DatabaseWriter {
         is_sidechain, speed, user_request, tool_counts, loop_signals,
         files_read, files_changed, files_written, files_searched, files_changed_note, cost_usd,
         data_source, parent_session_id, spawned_by_turn, peak_context_per_turn,
-        spawn_kind, spawn_model_override, spawn_isolation
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        spawn_kind, spawn_model_override, spawn_isolation, spawn_subagent_type
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
         card.sessionId,
         card.traceId,
@@ -219,6 +219,9 @@ export class DatabaseWriter {
         card.spawnKind ?? null,
         card.spawnModelOverride ?? null,
         card.spawnIsolation ?? null,
+        // TRDD-FB5RG4P1 EHT — the requested sub-agent type (e.g. spark, general-purpose), so FAL's
+        // compare_configs groupBy:subagent_type is a real dimension, not a single (unknown) bucket.
+        card.spawnSubagentType ?? null,
       ]
     )
   }

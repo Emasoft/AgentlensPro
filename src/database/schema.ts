@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   spawn_kind          TEXT,
   spawn_model_override TEXT,
   spawn_isolation     TEXT,
+  spawn_subagent_type TEXT,
   speed               TEXT,
   user_request        TEXT    NOT NULL DEFAULT '',
   tool_counts         TEXT    NOT NULL DEFAULT '{}',

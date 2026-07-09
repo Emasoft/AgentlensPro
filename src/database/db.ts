@@ -127,6 +127,11 @@ function applyMigrations(db: SqlDatabase): void {
   if (!colNames.includes('spawn_isolation')) {
     db.run('ALTER TABLE sessions ADD COLUMN spawn_isolation TEXT')
   }
+  // TRDD-FB5RG4P1 EHT: the requested sub-agent type (e.g. spark), so it survives a DB round-trip and
+  // feeds FAL's compare_configs groupBy:subagent_type. Nullable + guarded → safe forward migration.
+  if (!colNames.includes('spawn_subagent_type')) {
+    db.run('ALTER TABLE sessions ADD COLUMN spawn_subagent_type TEXT')
+  }
 
   // timeline_entries cache token columns
   const teCols = db.exec('PRAGMA table_info(timeline_entries)')

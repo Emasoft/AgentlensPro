@@ -259,6 +259,42 @@ suite('FAL Phase 1 — end-to-end index over real bodies + real main DB', () => 
   })
 })
 
+suite('FAL Phase 2 — spawn_subagent_type EHT', () => {
+  test('subagent_type flows from the main DB column into api_calls.subagent_type', async () => {
+    const sub = fs.mkdtempSync(path.join(os.tmpdir(), 'fal-sat-'))
+    const bd = path.join(sub, 'otel-bodies'); fs.mkdirSync(bd)
+    const mdb = path.join(sub, 'agentlens.db'); const fdbp = path.join(sub, 'forensics.db')
+    try {
+      fs.writeFileSync(path.join(bd, 'r.response.json'), JSON.stringify({ id: 'msg_S1', model: 'claude-opus-4-8', usage: { input_tokens: 10, output_tokens: 5 } }))
+      fs.writeFileSync(path.join(bd, 'q.request.json'), JSON.stringify({
+        model: 'claude-opus-4-8', metadata: { user_id: JSON.stringify({ account_uuid: 'a', session_id: 'sess-spark' }) },
+        diagnostics: { previous_message_id: 'msg_S1' }, system: [{ type: 'text', text: 's' }], tools: [{ name: 'Bash' }], messages: [],
+      }))
+      const SQL = await loadSqlJs()
+      const db = new SQL!.Database()
+      db.run(`CREATE TABLE sessions (session_id TEXT PRIMARY KEY, spawn_kind TEXT, spawn_model_override TEXT,
+              spawn_isolation TEXT, is_sidechain INTEGER, parent_session_id TEXT, model TEXT, spawn_subagent_type TEXT)`)
+      db.run(`INSERT INTO sessions VALUES ('sess-spark','fresh',NULL,NULL,1,'sess-root','claude-opus-4-8','spark')`)
+      fs.writeFileSync(mdb, Buffer.from(db.export())); db.close()
+
+      await indexApiCalls({ bodiesDir: bd, forensicsDbPath: fdbp, mainDbPath: mdb })
+      const fdb = await openForensicsDb(fdbp)
+      try {
+        const row = queryOne(fdb!.raw, "SELECT subagent_type FROM api_calls WHERE call_id='msg_S1'")!
+        assert.equal(row.subagent_type, 'spark')
+      } finally { fdb!.close() }
+    } finally { fs.rmSync(sub, { recursive: true, force: true }) }
+  })
+
+  test('loadSpawnMap degrades when the main DB predates the spawn_subagent_type column (no throw)', async () => {
+    // The Phase-1 main DB (mainDbPath) was built WITHOUT spawn_subagent_type — loadSpawnMap must still
+    // resolve spawn_kind and simply return subagentType undefined (defensive column check).
+    const map = await loadSpawnMap(mainDbPath)
+    assert.equal(map.get('sess-fork')?.spawnKind, 'fork')
+    assert.equal(map.get('sess-fork')?.subagentType, undefined)
+  })
+})
+
 suite('FAL Phase 4/5 — content taxonomy + injection attribution', () => {
   test('extractInjections pulls rules + claudemd (exact) + mcp servers + invoked skills', () => {
     const rows = extractInjections({

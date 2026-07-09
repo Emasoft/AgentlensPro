@@ -1767,6 +1767,7 @@ function _buildSubAgentCards(parentSessionId: string, a: ClaudeAccum): SessionSu
       spawnKind: sub.spawnKind,
       spawnModelOverride: sub.spawnModelOverride,
       spawnIsolation: sub.spawnIsolation,
+      spawnSubagentType: sub.requestedType,
       workspace: a.workspace,
       userRequest: (sub.prompt ?? sub.agentType ?? 'sub-agent').slice(0, 500),
       model: sub.model || a.model || 'claude',

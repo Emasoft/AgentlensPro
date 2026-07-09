@@ -30,6 +30,9 @@ export interface SessionSummaryCard {
   spawnKind?: 'fresh' | 'fork' | 'worktree' | 'fleet'
   spawnModelOverride?: string
   spawnIsolation?: string
+  // TRDD-FB5RG4P1 EHT: the requested sub-agent type (e.g. spark, general-purpose) from the spawning
+  // tool_use — persisted so FAL's compare_configs groupBy:subagent_type is a real dimension.
+  spawnSubagentType?: string
   workspace: string
   projectPath?: string
   userRequest: string
