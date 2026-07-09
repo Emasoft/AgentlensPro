@@ -60,7 +60,19 @@ export type CacheBreakTimelineCause =
   | 'TTL_EXPIRY'                // no prefix change; a TTL gap let the cache entry expire (5m or 1h tier)
   | 'COLD_START'                // first turn / no prior cache_read to break / >1h resume
   | 'COMPACTION'                // conversation compaction rebuilt the message layer
+  | 'SUBAGENT_INTERLEAVE'       // A→B→A: this request matches turn-2's stream, not turn-1's — a sub-agent's calls share the parent session id
+  | 'NORMAL_GROWTH'             // append-only growth: the NEW tail cached for the first time (expected incremental write, NOT a break)
+  | 'MESSAGE_TRIMMED'           // a cached message block was REMOVED (harness context-editing / tool-result clearing)
+  | 'ATTACHMENT_CHANGED'        // a non-text block (image / tool_use input) inside the cached prefix changed
   | 'UNCLASSIFIED'              // a break with no localizable structural cause (raw diff summary attached)
+
+// Causes that are EXPECTED cache behavior (unavoidable / not a misconfiguration): a cold warm, a
+// compaction rebuild, incremental first-write of new content, and the interleave ARTIFACT (each stream
+// keeps its own cache — the diff crossed streams, nothing actually broke). The verdict/ranking uses
+// this to point the user at the top AVOIDABLE perpetrator instead of crowning the noise floor.
+export const EXPECTED_CAUSES: ReadonlySet<CacheBreakTimelineCause> = new Set<CacheBreakTimelineCause>([
+  'COLD_START', 'COMPACTION', 'NORMAL_GROWTH', 'SUBAGENT_INTERLEAVE',
+])
 
 // TTL tier a timing-driven break landed in (mirrors buildCacheBreakGapReport's gap buckets).
 export type TtlTier = '5m' | '1h' | 'none'
@@ -84,6 +96,10 @@ const REMEDIATION: Record<CacheBreakTimelineCause, string> = {
   TTL_EXPIRY:                 'No prefix change — the cache entry simply expired between turns. A heartbeat within the TTL (5m/1h) would convert these writes back to cache_read.',
   COLD_START:                 'A cold cache warm (first turn / resume / no prior cached prefix). Expected once per session; not an avoidable per-turn break.',
   COMPACTION:                 'Conversation compaction rebuilt the message layer. Expected once per compaction; avoid compacting more than necessary.',
+  SUBAGENT_INTERLEAVE:        'A sub-agent stream interleaves with the parent under the SAME session id (A→B→A pattern) — each stream keeps its OWN cache, so nothing actually broke; the child bills its own (smaller) prefix. Pin the sub-agent\'s tools + model in its frontmatter to shrink that footprint.',
+  NORMAL_GROWTH:              'Not a break — append-only growth: this turn\'s NEW content was cached for the first time (expected incremental write). Reduce it only by producing/ingesting less content per turn.',
+  MESSAGE_TRIMMED:            'A block was REMOVED from the cached message prefix (harness context-editing / tool-result clearing / message deletion) — everything after the removal point re-writes. Prefer compaction or a fresh session over mid-session trimming of a huge transcript.',
+  ATTACHMENT_CHANGED:         'A non-text block (image / tool_use input) inside the cached prefix changed or moved. Past attachments should be immutable; an image riding in the prefix re-bills the tail on any change.',
   UNCLASSIFIED:               'A break whose cause could not be localised from the prefix diff. Inspect the attached raw diff summary and the raw bodies around this turn.',
 }
 
@@ -115,7 +131,7 @@ function normalizeVolatile(text: string): string {
 // ── Content classification of an injected text block ──────────────────────────────
 export type BlockContentKind =
   | 'claudemd' | 'rule' | 'agentmeta' | 'skillcatalog' | 'agentcatalog'
-  | 'hook' | 'date' | 'execresult' | 'postcompact' | 'system' | 'usertext' | 'history'
+  | 'hook' | 'date' | 'execresult' | 'postcompact' | 'system' | 'usertext' | 'history' | 'attachment'
 
 function classifyContentKind(text: string): BlockContentKind {
   if (/x-anthropic-billing-header|cc_version=|cc_entrypoint=/.test(text)) return 'agentmeta'
@@ -125,6 +141,11 @@ function classifyContentKind(text: string): BlockContentKind {
   if (/<local-command-stdout>|<command-output>|command-stdout|<function_results>/.test(text)) return 'execresult'
   if (/skills are available for use with the Skill tool|The following skills are available|Available skills:/.test(text)) return 'skillcatalog'
   if (/Available agent types|available agent types for the Agent tool|subagent_type/.test(text)) return 'agentcatalog'
+  // Per-turn injections that land INSIDE user messages (not <system-reminder>-wrapped): the
+  // UserPromptSubmit / PostToolUse hook context (<pss-skills>, [janitor-memory], …) and the harness
+  // task-list nudge. These previously fell to 'usertext', hiding chronic per-turn mutators in
+  // UNCLASSIFIED — naming them is the whole point of the perpetrator backtrace.
+  if (/<pss-skills>|\[janitor-memory\]|UserPromptSubmit hook additional context|PostToolUse:\S* hook additional context|task tools haven't been used recently/i.test(text)) return 'hook'
   if (/<system-reminder>/.test(text) && /hook|inbox|heartbeat|reminder/i.test(text)) return 'hook'
   if (/Today'?s date is|# *currentDate|Current date:/.test(text)) return 'date'
   if (/<system-reminder>/.test(text)) return 'system'
@@ -140,6 +161,7 @@ function causeForContentKind(kind: BlockContentKind): CacheBreakTimelineCause {
     case 'date': return 'SYSTEM_TIMESTAMP'
     case 'execresult': return 'INLINE_EXEC_RESULT_CHANGED'
     case 'postcompact': return 'COMPACTION'
+    case 'attachment': return 'ATTACHMENT_CHANGED'
     default: return 'UNCLASSIFIED'
   }
 }
@@ -196,6 +218,9 @@ function hookSignature(text: string): string | null {
   if (/<pss-skills>/.test(text)) return 'pss-skills (perfect-skill-suggester)'
   if (/\[janitor-memory\]/.test(text)) return 'janitor-memory recall'
   if (/\[janitor-heartbeat\]/.test(text)) return 'janitor-heartbeat'
+  if (/task tools haven't been used recently/i.test(text)) return 'harness task-list reminder'
+  if (/UserPromptSubmit hook additional context/.test(text)) return 'UserPromptSubmit injection'
+  if (/PostToolUse:\S* hook additional context/.test(text)) return 'PostToolUse injection'
   if (/token-guard|hard budget|token budget still exceeded/i.test(text)) return 'token-guard'
   if (/Context window:\s*\d|pre-tool-context-usage|context watchdog/i.test(text)) return 'context-usage watchdog'
   if (/post-mcp-sanitizer|prompt-injection shape/i.test(text)) return 'mcp-sanitizer'
@@ -294,6 +319,22 @@ function toPrefixBlock(layer: 'system' | 'message', kind: BlockContentKind, labe
   }
 }
 
+// Non-text blocks (images, tool_use inputs) were previously SKIPPED from the prefix, so a change there
+// was an invisible prefix mutation landing in UNCLASSIFIED. Fingerprint them by type+name+SIZE only —
+// pointer-only (never the input JSON or base64 bytes) — so the diff can name ATTACHMENT_CHANGED.
+function attachmentPrefixBlock(b: RawBlockLike & { name?: string; input?: unknown }, msgIndex: number): PrefixBlock | null {
+  if (b.type !== 'tool_use' && b.type !== 'image') return null
+  const name = typeof b.name === 'string' ? b.name : '?'
+  const imgLen = typeof (b.source as { data?: string } | undefined)?.data === 'string'
+    ? (b.source as { data: string }).data.length : 0
+  const sig = b.type === 'tool_use' ? `tool_use:${name}:${JSON.stringify(b.input ?? {}).length}` : `image:${imgLen}`
+  return {
+    layer: 'message', kind: 'attachment',
+    label: `msg[${msgIndex}] ${b.type}${b.type === 'tool_use' ? ' ' + name : ''}`,
+    fp: fnv1a(sig), norm: fnv1a(sig), len: sig.length, tokensApprox: 0,
+  }
+}
+
 // Flatten the injected TEXT of a message content block (string, {type:text}, tool_result text). We
 // deliberately ignore tool_use inputs and base64 image data — the former is stable history, the latter
 // is never touched (pointer-only). Returns '' for a non-text block (skipped from the diff).
@@ -364,7 +405,11 @@ export function extractTurnPrefix(body: RawRequestForBreak | null): TurnPrefix |
     for (const b of content) {
       if (!b || typeof b !== 'object') continue
       const text = messageBlockText(b as RawBlockLike)
-      if (!text) continue
+      if (!text) {
+        const att = attachmentPrefixBlock(b as RawBlockLike, i)
+        if (att) messageBlocks.push(att)
+        continue
+      }
       for (const seg of segmentInjected(text, `msg[${i}] ${mm?.role ?? ''}`)) {
         messageBlocks.push(toPrefixBlock('message', seg.kind, seg.label, seg.text))
       }
@@ -493,8 +538,14 @@ function diffBlocks(prevBlocksRaw: PrefixBlock[], curBlocksRaw: PrefixBlock[], l
     // The cached prefix SHRANK — a block that was cached got dropped (compaction or removal).
     const dropped = prevBlocks[curBlocks.length]
     if (dropped.kind === 'postcompact') return mkBlock('COMPACTION', layer, dropped, `compaction dropped ${layer} blocks from ${dropped.label}`)
-    const cause = dropped.kind === 'skillcatalog' ? 'SKILL_CHANGED' : causeForContentKind(dropped.kind)
-    return mkBlock(cause, layer, dropped, `${dropped.kind} block removed from the ${layer} prefix: ${dropped.label}`)
+    if (dropped.kind === 'skillcatalog') return mkBlock('SKILL_CHANGED', layer, dropped, `skill catalog removed from the ${layer} prefix: ${dropped.label}`)
+    // A plain conversation/tool block dropped from the MESSAGE prefix = harness context-editing /
+    // tool-result clearing / message deletion — a named cause, not UNCLASSIFIED: the removal point
+    // invalidates everything after it, which is exactly the "trim a huge transcript mid-session" cost.
+    if (layer === 'message' && (dropped.kind === 'usertext' || dropped.kind === 'history' || dropped.kind === 'attachment' || dropped.kind === 'execresult')) {
+      return mkBlock('MESSAGE_TRIMMED', layer, dropped, `${dropped.kind} block removed from the message prefix (context-editing/trim): ${dropped.label}`)
+    }
+    return mkBlock(causeForContentKind(dropped.kind), layer, dropped, `${dropped.kind} block removed from the ${layer} prefix: ${dropped.label}`)
   }
   // cur is longer (pure append growth) or identical — NOT an avoidable break.
   return null
@@ -508,9 +559,24 @@ function mkBlock(cause: CacheBreakTimelineCause, layer: 'system' | 'message', b:
  *  turn's, in the docs hierarchy order (model → tools → effort → system → message-prefix). A structural
  *  prefix change ALWAYS beats a timing gap — the change is the real culprit. When the prefix is
  *  byte-identical, the break is timing (TTL expiry / cold start). */
-export function classifyCacheBreak(prev: TurnPrefix | null, cur: TurnPrefix, timing: BreakTiming): CacheBreakVerdict {
+export function classifyCacheBreak(prev: TurnPrefix | null, cur: TurnPrefix, timing: BreakTiming, prev2?: TurnPrefix | null): CacheBreakVerdict {
   if (!prev) {
     return { cause: 'COLD_START', culpritLayer: 'timing', culpritId: 'timing:COLD_START', culpritSummary: 'first observed turn for this session (cold cache warm)', ttlTier: 'none' }
+  }
+  // 0. Sub-agent INTERLEAVE artifact — checked BEFORE model/tools, because it explains both. Sub-agent
+  //    API calls carry the PARENT's session_id, so the mtime-ordered "turn" sequence can alternate
+  //    between two independent streams (parent A, child B): the diff then sees A→B→A "model switches"
+  //    and 15-tools-removed-then-re-added-in-3ms "toolset churn" that never happened — each stream keeps
+  //    its OWN cache. Signature: this turn matches turn-2's stream (model + tool catalog byte-identical)
+  //    while differing from turn-1. Without this check those artifacts pollute MODEL_SWITCH and
+  //    TOOLSET_CHANGED and make the avoidable-cause ranking dishonest.
+  if (prev2) {
+    const streamFp = (p: TurnPrefix) => `${p.model}|${p.tools.map(t => `${t.name}:${t.fp}`).join(' ')}`
+    const differsFromPrev = prev.model !== cur.model || streamFp(prev) !== streamFp(cur)
+    if (differsFromPrev && streamFp(cur) === streamFp(prev2)) {
+      const pair = [prev.model || '?', cur.model || '?'].sort().join(' <-> ')
+      return { cause: 'SUBAGENT_INTERLEAVE', culpritLayer: 'timing', culpritId: `interleave:${pair}`, culpritSummary: `A→B→A interleave (${pair}): this request matches turn-2's stream, not turn-1's — a sub-agent's calls share the parent session id`, ttlTier: 'none' }
+    }
   }
   // 1. Model — model-specific cache, invalidates everything.
   if (prev.model !== cur.model) {
@@ -546,9 +612,18 @@ export function classifyCacheBreak(prev: TurnPrefix | null, cur: TurnPrefix, tim
   if (timing.cacheReadTokens === 0) {
     return { cause: 'COLD_START', culpritLayer: 'timing', culpritId: 'timing:COLD_START', culpritSummary: 'no cache_read this turn — nothing cached to break (cold warm)', ttlTier: 'none' }
   }
+  // 6.5. Pure APPEND growth: the previously-cached prefix is byte-identical AND this turn's message
+  //      prefix is LONGER — the cache_creation is the NEW tail (this turn's fresh content) being cached
+  //      for the first time. That is the incremental cache WORKING, not a break. This was the single
+  //      biggest population previously dumped into UNCLASSIFIED ("unlocalised re-write"), hiding the
+  //      fact that most of it was expected cost.
+  if (cur.messageBlocks.length > prev.messageBlocks.length) {
+    const added = cur.messageBlocks.length - prev.messageBlocks.length
+    return { cause: 'NORMAL_GROWTH', culpritLayer: 'message', culpritId: 'growth:new-tail', culpritSummary: `append-only growth: +${added} new message block(s) cached for the first time (expected incremental write, not a break)`, ttlTier: 'none' }
+  }
   // 7. Every layer's fingerprints matched yet a real re-write happened — an effect we cannot localise
-  //    (e.g. an image add/remove after the cached prefix, or an estimator blind spot). Attach a diff
-  //    summary rather than guess.
+  //    (e.g. a cache_control breakpoint moved, or an estimator blind spot). Attach a diff summary
+  //    rather than guess.
   const raw = `prefix byte-identical by fingerprint but cache_creation=${timing.cacheCreateTokens}; tools=${cur.tools.length} sys=${cur.systemBlocks.length} msg=${cur.messageBlocks.length}`
   return { cause: 'UNCLASSIFIED', culpritLayer: 'timing', culpritId: 'timing:UNCLASSIFIED', culpritSummary: 'unlocalised re-write', rawDiffSummary: raw }
 }
@@ -807,13 +882,14 @@ function classifyTurns(turns: ScannedTurn[], respById: Map<string, ResponseUsage
     const usage = ccOfTurn(turns, i, respById)
     if (!usage || usage.cacheCreate < minTokens) continue
     const prevPrefix = i > 0 ? turns[i - 1].prefix : null
+    const prev2Prefix = i > 1 ? turns[i - 2].prefix : null   // for the A→B→A interleave signature
     const curPrefix = turns[i].prefix
     if (!curPrefix) continue
     const gapMs = i > 0 ? turns[i].mtimeMs - turns[i - 1].mtimeMs : undefined
     const verdict = classifyCacheBreak(prevPrefix, curPrefix, {
       gapMs, cacheReadTokens: usage.cacheRead, cacheCreateTokens: usage.cacheCreate,
       ephemeral5mTokens: usage.ephemeral5m, ephemeral1hTokens: usage.ephemeral1h,
-    })
+    }, prev2Prefix)
     const evModel = usage.model ?? curPrefix.model
     events.push({
       turn: i + 1,
@@ -1042,6 +1118,7 @@ export async function buildCauseCostPeakReport(opts: CauseCostPeakOptions = {}):
 // victim; this report names who keeps breaking it, ranked, across the whole bounded scan.
 export interface CacheBreakCauseRow {
   cause: CacheBreakTimelineCause
+  expected: boolean           // true = expected cache behavior (cold warm / compaction / growth / interleave artifact), not a misconfiguration
   events: number
   sessionsAffected: number
   cacheCreateTokens: number
@@ -1051,6 +1128,7 @@ export interface CacheBreakCauseRow {
 export interface CacheBreakActorRow {
   actorId: string             // the enriched culpritId = the stable perpetrator identity
   cause: CacheBreakTimelineCause
+  expected: boolean           // mirrors EXPECTED_CAUSES — the verdict ranks only the avoidable actors
   actor: string               // human-readable "who" (pointer-only)
   occurrences: number         // break turns caused by this actor
   sessionsAffected: number
@@ -1120,17 +1198,28 @@ export async function buildCacheBreakCauses(opts: CacheBreakCausesOptions = {}):
 
   const pct = (n: number) => total > 0 ? +(100 * n / total).toFixed(1) : 0
   const causeRanking: CacheBreakCauseRow[] = [...causeMap.entries()]
-    .map(([cause, v]) => ({ cause, events: v.events, sessionsAffected: v.sessions.size, cacheCreateTokens: v.cc, pct: pct(v.cc), remediation: REMEDIATION[cause] }))
+    .map(([cause, v]) => ({ cause, expected: EXPECTED_CAUSES.has(cause), events: v.events, sessionsAffected: v.sessions.size, cacheCreateTokens: v.cc, pct: pct(v.cc), remediation: REMEDIATION[cause] }))
     .sort((a, b) => b.cacheCreateTokens - a.cacheCreateTokens)
   const actorLeaderboard: CacheBreakActorRow[] = [...actorMap.entries()]
-    .map(([actorId, v]) => ({ actorId, cause: v.cause, actor: v.actor, occurrences: v.occ, sessionsAffected: v.sessions.size, totalCacheCreateTokens: v.cc, totalCostUsd: +v.cost.toFixed(4), pct: pct(v.cc), remediation: REMEDIATION[v.cause] }))
+    .map(([actorId, v]) => ({ actorId, cause: v.cause, expected: EXPECTED_CAUSES.has(v.cause), actor: v.actor, occurrences: v.occ, sessionsAffected: v.sessions.size, totalCacheCreateTokens: v.cc, totalCostUsd: +v.cost.toFixed(4), pct: pct(v.cc), remediation: REMEDIATION[v.cause] }))
     .sort((a, b) => b.totalCacheCreateTokens - a.totalCacheCreateTokens)
     .slice(0, topN)
 
+  // The verdict names the top AVOIDABLE perpetrator — ranking by raw tokens alone crowns COLD_START /
+  // NORMAL_GROWTH (expected behavior, unactionable) and buries the actual misconfiguration.
   const top = actorLeaderboard[0]
-  const verdict = top
-    ? `Dominant perpetrator: ${top.actor} (${top.cause}) — ${top.totalCacheCreateTokens.toLocaleString()} cache_creation tokens across ${top.sessionsAffected} session(s), ${top.pct}% of all classified breaks. ${top.remediation}`
-    : 'No significant cache_creation breaks classified in the scanned window.'
+  const topAvoidable = actorLeaderboard.find(a => !a.expected)
+  let verdict: string
+  if (!top) {
+    verdict = 'No significant cache_creation breaks classified in the scanned window.'
+  } else if (!topAvoidable) {
+    verdict = `All classified break cost is EXPECTED cache behavior (cold warms / compaction / incremental growth / interleave) — no avoidable perpetrator found. Largest: ${top.actor} (${top.cause}) at ${top.pct}%.`
+  } else {
+    const overallNote = topAvoidable.actorId !== top.actorId
+      ? ` (Largest overall is ${top.actor} (${top.cause}) at ${top.pct}%, but that cause is expected/unavoidable.)`
+      : ''
+    verdict = `Dominant AVOIDABLE perpetrator: ${topAvoidable.actor} (${topAvoidable.cause}) — ${topAvoidable.totalCacheCreateTokens.toLocaleString()} cache_creation tokens across ${topAvoidable.sessionsAffected} session(s), ${topAvoidable.pct}% of all classified breaks. ${topAvoidable.remediation}${overallNote}`
+  }
 
   return { minTokens, totalClassifiedEvents: totalEvents, totalCacheCreateTokens: total, causeRanking, actorLeaderboard, verdict, coverage }
 }

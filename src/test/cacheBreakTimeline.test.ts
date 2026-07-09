@@ -108,9 +108,21 @@ suite('cacheBreakTimeline — classifyCacheBreak (one synthetic before/after per
     assert.strictEqual(v.cause, 'CLAUDE_MD_CHANGED')
   })
 
-  test('AGENT_METADATA_CHANGED — billing header cc_version changed (upgrade)', () => {
+  test('billing header change is NOT blamed — agentmeta is cache-excluded (falls through to timing)', () => {
+    // The billing header (cc_prev_req/cc_version) mutates on EVERY turn yet long sessions measure >95%
+    // cache_read — proof Anthropic excludes it from the cache key. Blaming it produced a false
+    // SYSTEMATIC verdict masking the true cause (TTL / message-prefix), so diffBlocks filters agentmeta
+    // before the positional diff; with nothing else differing the verdict must land in the timing layer.
     const prev = reqBody({ system: [{ text: 'x-anthropic-billing-header: cc_version=2.1.204.d03; cc_entrypoint=cli;', cache_control: CC }] })
     const cur = reqBody({ system: [{ text: 'x-anthropic-billing-header: cc_version=2.1.205.a01; cc_entrypoint=cli;', cache_control: CC }] })
+    const v = classify(prev, cur)
+    assert.notStrictEqual(v.cause, 'AGENT_METADATA_CHANGED')
+    assert.strictEqual(v.culpritLayer, 'timing')
+  })
+
+  test('AGENT_METADATA_CHANGED — the agent-types catalog changed (still cache-relevant)', () => {
+    const prev = reqBody({ system: [{ text: 'Available agent types for the Agent tool:\n- scout\n- judge', cache_control: CC }] })
+    const cur = reqBody({ system: [{ text: 'Available agent types for the Agent tool:\n- scout\n- judge\n- kraken', cache_control: CC }] })
     const v = classify(prev, cur)
     assert.strictEqual(v.cause, 'AGENT_METADATA_CHANGED')
   })

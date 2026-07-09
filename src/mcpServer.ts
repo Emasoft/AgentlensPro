@@ -621,7 +621,10 @@ const TOOLS = [
       'TOOL_SEARCH_DEFERRED, MCP_TOOLS_CHANGED, MODEL_SWITCH, EFFORT_SWITCH, HOOK_INJECTION, ' +
       'SKILL_INJECTION, SKILL_DESCRIPTION_TRUNCATION, SKILL_CHANGED, INLINE_EXEC_RESULT_CHANGED, ' +
       'CLAUDE_MD_CHANGED, AGENT_METADATA_CHANGED, SYSTEM_TIMESTAMP, CONTEXT_ORDER_CHANGED, TTL_EXPIRY, ' +
-      'COLD_START, COMPACTION, UNCLASSIFIED. Emits a TIMELINE of break events (each naming the culprit ' +
+      'COLD_START, COMPACTION, SUBAGENT_INTERLEAVE (A→B→A stream artifact — sub-agent calls share the ' +
+      'parent session id), NORMAL_GROWTH (append-only new-tail first-write — expected, not a break), ' +
+      'MESSAGE_TRIMMED (harness context-editing removed a cached block), ATTACHMENT_CHANGED (image / ' +
+      'tool_use fingerprint changed), UNCLASSIFIED. Emits a TIMELINE of break events (each naming the culprit ' +
       'element + tokens re-written) PLUS a REPEAT-OFFENDER rollup: break events grouped by (cause, the ' +
       'specific offending element) so the SAME element breaking the cache across many turns collapses ' +
       'into ONE chronic offender — flagged SYSTEMATIC at ≥3 turns with a plain-language verdict naming ' +
@@ -650,14 +653,17 @@ const TOOLS = [
       'is only ever the VICTIM: it re-writes as cache_creation whenever something ABOVE it in the prefix ' +
       '(tools/system/model) changes or a TTL expires. This tool runs the root-cause classifier across every ' +
       'session in the bounded scan and returns TWO ranked views: (1) `causeRanking` — the break causes ' +
-      '(TOOL_SEARCH_DEFERRED, MCP_TOOLS_CHANGED, MODEL_SWITCH, HOOK_INJECTION, TTL_EXPIRY, COMPACTION, …) ' +
-      'ranked by wasted cache_creation, so you see the most common/expensive category; and (2) ' +
+      '(TOOL_SEARCH_DEFERRED, MCP_TOOLS_CHANGED, MODEL_SWITCH, HOOK_INJECTION, TTL_EXPIRY, COMPACTION, ' +
+      'MESSAGE_TRIMMED, ATTACHMENT_CHANGED, plus the EXPECTED ones — COLD_START, NORMAL_GROWTH, ' +
+      'SUBAGENT_INTERLEAVE — each row carrying an `expected` flag) ranked by wasted cache_creation, so ' +
+      'you see the most common/expensive category; and (2) ' +
       '`actorLeaderboard` — the actual PERPETRATORS, backtraced from the enriched culprit id: the specific ' +
       'MCP server that toggled (chrome-devtools/lean-ctx/…), the specific hook that injected (pss-skills / ' +
       'janitor-memory / token-guard / …), the sub-agent MODEL that interleaved, or the harness ToolSearch ' +
       'churning its deferred built-ins — each with occurrences, sessionsAffected, cache_creation, cost, and ' +
-      'a remediation. A one-line `verdict` names the dominant perpetrator. POINTER-ONLY. Read `coverage` for ' +
-      'the bounded scan scope.',
+      'a remediation. A one-line `verdict` names the dominant AVOIDABLE perpetrator (expected causes — ' +
+      'cold warms, compaction, incremental growth, the interleave artifact — never win the verdict). ' +
+      'POINTER-ONLY. Read `coverage` for the bounded scan scope.',
     inputSchema: {
       type: 'object' as const,
       properties: {
