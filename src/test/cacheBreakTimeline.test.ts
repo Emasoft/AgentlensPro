@@ -3,7 +3,7 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import {
-  extractTurnPrefix, classifyCacheBreak, buildCacheBreakTimeline, formatTimeline,
+  extractTurnPrefix, classifyCacheBreak, buildCacheBreakTimeline, buildCauseCostPeakReport, formatTimeline,
   DEFAULT_BODIES_DIR, type RawRequestForBreak, type BreakTiming,
 } from '../cacheBreakTimeline'
 
@@ -216,8 +216,8 @@ function writeAt(dir: string, name: string, body: unknown, mtimeMs: number): voi
   const t = new Date(mtimeMs)
   fs.utimesSync(p, t, t)
 }
-function respBody(id: string, cacheCreate: number, cacheRead = 50_000, model = 'claude-opus-4-8') {
-  return { id, model, usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: cacheRead, cache_creation_input_tokens: cacheCreate, cache_creation: { ephemeral_5m_input_tokens: cacheCreate, ephemeral_1h_input_tokens: 0 } } }
+function respBody(id: string, cacheCreate: number, cacheRead = 50_000, model = 'claude-opus-4-8', output = 5) {
+  return { id, model, usage: { input_tokens: 10, output_tokens: output, cache_read_input_tokens: cacheRead, cache_creation_input_tokens: cacheCreate, cache_creation: { ephemeral_5m_input_tokens: cacheCreate, ephemeral_1h_input_tokens: 0 } } }
 }
 
 suite('cacheBreakTimeline — buildCacheBreakTimeline (disk scan + previous_message_id chain)', () => {
@@ -322,6 +322,106 @@ suite('cacheBreakTimeline — buildCacheBreakTimeline (disk scan + previous_mess
       assert.strictEqual(out.format, fmt)
       assert.ok(typeof out.text === 'string' && out.text.length > 0)
     }
+  })
+})
+
+// ── D2: buildCauseCostPeakReport (get_cache_creation_report's groupBy=cause dimension) ──────────────
+suite('cacheBreakTimeline — buildCauseCostPeakReport (cross-session cause cost-peak)', () => {
+  test('aggregates break events by CAUSE across ALL sessions in the scan, not just one target', async () => {
+    const dir = freshDir()
+    const base = Date.now() - 3_600_000
+
+    // Session "sess-hook": 5 turns, same shape as the single-session repeat-offender fixture — turn0 is
+    // COLD_START (no prior turn to diff against), turns 1-3 mutate the hook block each time -> 3
+    // HOOK_INJECTION break events, turn4 has no following request so its own cc is unmeasured. The turn
+    // i cache_creation is billed on the response REFERENCED BY turn i+1's previousMessageId (the proven
+    // previous_message_id chain — see the module doc), so N+1 requests are needed to measure N turns.
+    const hookRespIds = ['msg_hk0', 'msg_hk1', 'msg_hk2', 'msg_hk3', 'msg_hk4']
+    for (let i = 0; i < 5; i++) {
+      const prevId = i === 0 ? 'msg_hkroot' : hookRespIds[i - 1]
+      writeAt(dir, `hk${i}.request.json`, reqBody({ sessionId: 'sess-hook', previousMessageId: prevId, messages: injectedMsg(`<system-reminder>heartbeat hook fired; inbox has ${i} messages pending</system-reminder>`) }), base + i * 60_000)
+      writeAt(dir, `hkresp${i}.response.json`, respBody(hookRespIds[i], 40_000), base + i * 60_000 + 30_000)
+    }
+
+    // Session "sess-tool": turn0 baseline tools (COLD_START, its cc measured via turn1); turn1 adds ONE
+    // tool -> ONE TOOLSET_CHANGED event (measured via turn2's previousMessageId); turn2 is just the
+    // closing request that makes turn1's write measurable — its own cc is unmeasured (no turn3).
+    const toolsA = [{ name: 'Bash' }, { name: 'Read' }]
+    const toolsB = [{ name: 'Bash' }, { name: 'Read' }, { name: 'Write' }]
+    writeAt(dir, 'tl0.request.json', reqBody({ sessionId: 'sess-tool', previousMessageId: 'msg_tlroot', tools: toolsA }), base)
+    writeAt(dir, 'tlresp0.response.json', respBody('msg_tl0', 100), base + 30_000) // turn0's own cc (COLD_START) — below minTokens, excluded
+    writeAt(dir, 'tl1.request.json', reqBody({ sessionId: 'sess-tool', previousMessageId: 'msg_tl0', tools: toolsB }), base + 60_000)
+    writeAt(dir, 'tlresp1.response.json', respBody('msg_tl1', 20_000), base + 90_000) // bills turn1's TOOLSET_CHANGED write
+    writeAt(dir, 'tl2.request.json', reqBody({ sessionId: 'sess-tool', previousMessageId: 'msg_tl1', tools: toolsB }), base + 120_000)
+
+    const report = await buildCauseCostPeakReport({ bodiesDir: dir, minTokens: 5000 })
+    assert.strictEqual(report.groupBy, 'cause')
+    assert.strictEqual(report.bucket, 'cache_creation')
+
+    const hookGroup = report.groups.find(g => g.key === 'HOOK_INJECTION')
+    const toolGroup = report.groups.find(g => g.key === 'TOOLSET_CHANGED')
+    assert.ok(hookGroup, 'expected a HOOK_INJECTION cause group aggregated across sess-hook')
+    assert.ok(toolGroup, 'expected a TOOLSET_CHANGED cause group from sess-tool')
+    assert.strictEqual(hookGroup!.events, 3)
+    assert.strictEqual(hookGroup!.cacheCreateTokens, 120_000)
+    assert.strictEqual(toolGroup!.events, 1)
+    assert.strictEqual(toolGroup!.cacheCreateTokens, 20_000)
+    // Heaviest cause (by cache_creation) ranks first.
+    assert.strictEqual(report.groups[0].key, 'HOOK_INJECTION')
+  })
+
+  test('bucket=output surfaces an OUTPUT-token-spike cause even when cache_creation ranks a different cause first', async () => {
+    const dir = freshDir()
+    const base = Date.now() - 3_600_000
+
+    // Session "sess-modelswitch": turn0 baseline (COLD_START); turn1 MODEL_SWITCH with a modest
+    // cache_creation write (just above the minTokens=5000 floor — the classifier's floor is always on
+    // cache_creation, regardless of the ranking bucket) but a HUGE output-token spike (billed ~5x);
+    // turn2 is the closing request that makes turn1's write measurable (see the note in the test above).
+    writeAt(dir, 'ms0.request.json', reqBody({ sessionId: 'sess-modelswitch', previousMessageId: 'msg_msroot', model: 'claude-opus-4-8' }), base)
+    writeAt(dir, 'msresp0.response.json', respBody('msg_ms0', 100, 50_000, 'claude-opus-4-8'), base + 30_000)
+    writeAt(dir, 'ms1.request.json', reqBody({ sessionId: 'sess-modelswitch', previousMessageId: 'msg_ms0', model: 'claude-haiku-4-5' }), base + 60_000)
+    writeAt(dir, 'msresp1.response.json', respBody('msg_ms1', 6000, 50_000, 'claude-haiku-4-5', 90_000), base + 90_000)
+    writeAt(dir, 'ms2.request.json', reqBody({ sessionId: 'sess-modelswitch', previousMessageId: 'msg_ms1', model: 'claude-haiku-4-5' }), base + 120_000)
+
+    // Session "sess-hook2": turn0 baseline hook value (COLD_START); turn1 HOOK_INJECTION with a big
+    // cache_creation write but a tiny output; turn2 closes turn1's measurement.
+    writeAt(dir, 'hk0.request.json', reqBody({ sessionId: 'sess-hook2', previousMessageId: 'msg_hkroot2', messages: injectedMsg('<system-reminder>heartbeat hook: inbox 0</system-reminder>') }), base)
+    writeAt(dir, 'hkresp0.response.json', respBody('msg_hk20', 100), base + 30_000)
+    writeAt(dir, 'hk1.request.json', reqBody({ sessionId: 'sess-hook2', previousMessageId: 'msg_hk20', messages: injectedMsg('<system-reminder>heartbeat hook: inbox 2</system-reminder>') }), base + 60_000)
+    writeAt(dir, 'hkresp1.response.json', respBody('msg_hk21', 50_000, 50_000, 'claude-opus-4-8', 5), base + 90_000)
+    writeAt(dir, 'hk2.request.json', reqBody({ sessionId: 'sess-hook2', previousMessageId: 'msg_hk21', messages: injectedMsg('<system-reminder>heartbeat hook: inbox 2</system-reminder>') }), base + 120_000)
+
+    const byCache = await buildCauseCostPeakReport({ bodiesDir: dir, minTokens: 5000 })
+    assert.strictEqual(byCache.groups[0].key, 'HOOK_INJECTION', '50000 cache_creation beats 1000 on the default bucket')
+
+    const byOutput = await buildCauseCostPeakReport({ bodiesDir: dir, minTokens: 5000, bucket: 'output' })
+    assert.strictEqual(byOutput.bucket, 'output')
+    assert.strictEqual(byOutput.groups[0].key, 'MODEL_SWITCH', '90000 output beats 5 on bucket=output')
+    assert.strictEqual(byOutput.groups[0].bucketValue, 90_000)
+
+    // The output-spike list surfaces the MODEL_SWITCH turn regardless of which bucket ranked the groups.
+    assert.ok(byCache.outputSpikes.top.some(s => s.outputTokens === 90_000 && s.sessionId === 'sess-modelswitch'))
+  })
+
+  test('an absent bodies directory returns an empty report, never throwing', async () => {
+    const missing = path.join(tmpBase, 'nope-causepeak-' + Math.random().toString(36).slice(2))
+    const report = await buildCauseCostPeakReport({ bodiesDir: missing })
+    assert.strictEqual(report.groupBy, 'cause')
+    assert.strictEqual(report.groups.length, 0)
+    assert.strictEqual(report.coverage.dirExists, false)
+    assert.ok(report.coverage.note.includes('OTEL_LOG_RAW_API_BODIES'))
+  })
+
+  // 🐌 slow — scans the real ~/.agentlens/otel-bodies directory (thousands of files). Skips when the
+  // directory is absent (CI / a machine that never enabled OTEL_LOG_RAW_API_BODIES).
+  test('builds a cause cost-peak report from the REAL OTEL bodies without crashing', async function () {
+    if (!fs.existsSync(DEFAULT_BODIES_DIR)) { this.skip(); return }
+    this.timeout(120_000)
+    const report = await buildCauseCostPeakReport({ windowHours: 5, minTokens: 50_000 })
+    assert.ok(report.coverage.note.length > 0)
+    assert.strictEqual(report.groupBy, 'cause')
+    for (const g of report.groups) assert.ok(g.key.length > 0)
   })
 })
 

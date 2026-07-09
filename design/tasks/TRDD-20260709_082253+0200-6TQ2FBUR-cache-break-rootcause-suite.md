@@ -1,9 +1,9 @@
 ---
 trdd-id: 6TQ2FBUR
 title: Cache-break ROOT-CAUSE diagnostic suite — timeline classifier + cost-peak + repeat-offender
-column: dev
+column: complete
 created: 2026-07-09T08:22:53+0200
-updated: 2026-07-09T08:22:53+0200
+updated: 2026-07-09T10:30:31+0200
 current-owner: claude-code
 assignee: claude-code
 priority: 3
@@ -23,13 +23,13 @@ test-requirements: [unit, typecheck, lint]
 impacts: [public-api]
 runtime-targets: [macos, linux]
 attempts: 0
-last-test-result: not-run
-implementation-commits: []
+last-test-result: pass
+implementation-commits: [356f175, 817763c]
 ---
 
 # Cache-break ROOT-CAUSE diagnostic suite
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-09
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-09T10:30+0200
 
 **Goal:** turn AgentLens' cache_creation forensics (TRDD-CCFORNSC, commit 09d2d9c) into a
 first-class ROOT-CAUSE suite that NAMES the definitive culprit that broke the prompt-cache prefix,
@@ -55,11 +55,20 @@ extended-thinking (effort), tool_choice, images, speed/fast all key the cache. c
 - D1 enhance `trace_expensive_writes` (rich filters {sessionId, accountUuid, model, minCacheCreate,
   minOutputTokens, turnRange, timeRange, topN} + backward context chain + formats) — [x] DONE
   (3 new tests). Gates green.
-- D2 generalize `get_cache_creation_report` → cost-peak finder (buckets + groupBy cause) — [ ] pending
-- Tests + MCP registration + report — [ ] pending (per-deliverable)
+- D2 generalize `get_cache_creation_report` → cost-peak finder (buckets + groupBy {session|account|
+  model|time|cause}) — [x] DONE. `buildCacheCreationReport` (cacheCreationForensics.ts) keeps
+  session/account/model/time on the lightweight response-only scan; the NEW `buildCauseCostPeakReport`
+  (cacheBreakTimeline.ts) serves groupBy=cause by scanning EVERY session (not just one target) and
+  reusing `classifyTurns`. Both return the identical `CacheCreationReport` shape; `mcpServer.ts`'s
+  `get_cache_creation_report` handler dispatches on `groupBy` and renders either with the shared
+  `formatCostPeaks`. `buildCacheCreationReport` fails fast (throws) if called directly with
+  groupBy='cause' — that dimension is cacheBreakTimeline.ts's job. 10 new unit tests (bucket selection
+  {output|total|billable_weighted}, cross-session cause aggregation, output-spike surfacing under
+  groupBy=cause, absent-dir/fail-fast edge cases, format rendering). Gates green (check-types, lint,
+  esbuild, mocha 448/448 passing).
+- Tests + MCP registration + report — [x] DONE (per-deliverable, folded into each D1/D2/D3 entry above).
 
-**NEXT ACTION:** implement D2 (generalize buildCacheCreationReport into a cost-peak finder: bucket
-{cache_creation|output|input|total|billable_weighted}, groupBy {session|account|model|cause}), gate-green, commit.
+**NEXT ACTION:** none — all three deliverables (D1, D2, D3) are DONE and gate-green. This TRDD is complete.
 
 **Cause taxonomy (D3), each mapped to a code:** TOOLSET_CHANGED, TOOLS_REORDERED,
 TOOL_SEARCH_DEFERRED, MCP_TOOLS_CHANGED, MODEL_SWITCH, EFFORT_SWITCH, HOOK_INJECTION,

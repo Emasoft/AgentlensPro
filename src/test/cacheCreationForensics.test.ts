@@ -4,7 +4,7 @@ import * as os from 'os'
 import * as path from 'path'
 import {
   scanCacheCreationEvents, buildCacheCreationReport, buildExpensiveWritesTrace, buildCacheBreakGapReport,
-  formatExpensiveWrites, DEFAULT_BODIES_DIR,
+  formatExpensiveWrites, formatCostPeaks, DEFAULT_BODIES_DIR,
 } from '../cacheCreationForensics'
 
 // TRDD-CCFORNSC — REAL tests for the cache_creation forensic diagnostics: no mocked bodies, no mocked
@@ -224,6 +224,111 @@ suite('cacheCreationForensics — buildCacheCreationReport (WHO is burning cache
       // Heaviest-first: sess-t4 (104 tokens) then sess-t3 (103 tokens).
       assert.strictEqual(report.groups[0].key, 'sess-t4')
       assert.strictEqual(report.groups[1].key, 'sess-t3')
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+suite('cacheCreationForensics — buildCacheCreationReport D2 cost-peak bucket selection', () => {
+  test('bucket=output ranks groups by OUTPUT tokens (billed ~5x), not cache_creation', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccforensics-bucket-out-'))
+    try {
+      // Session A: a huge cache_creation write, tiny output.
+      fs.writeFileSync(path.join(dir, 'a.response.json'), JSON.stringify(responseBody('msg_bA', { cacheCreate: 90000, output: 50, model: 'claude-opus-4-8' })))
+      fs.writeFileSync(path.join(dir, 'a.request.json'), JSON.stringify(requestBody({ previousMessageId: 'msg_bA', sessionId: 'sessA-cc', model: 'claude-opus-4-8' })))
+      // Session B: a tiny cache_creation write, but a huge OUTPUT-token spike — the real cost peak here.
+      fs.writeFileSync(path.join(dir, 'b.response.json'), JSON.stringify(responseBody('msg_bB', { cacheCreate: 1000, output: 80000, model: 'claude-haiku-4-5' })))
+      fs.writeFileSync(path.join(dir, 'b.request.json'), JSON.stringify(requestBody({ previousMessageId: 'msg_bB', sessionId: 'sessB-out', model: 'claude-haiku-4-5' })))
+
+      const byCache = await buildCacheCreationReport({ bodiesDir: dir })
+      assert.strictEqual(byCache.bucket, 'cache_creation')
+      assert.strictEqual(byCache.groups[0].key, 'sessA-cc')
+
+      const byOutput = await buildCacheCreationReport({ bodiesDir: dir, bucket: 'output' })
+      assert.strictEqual(byOutput.bucket, 'output')
+      assert.strictEqual(byOutput.groups[0].key, 'sessB-out')
+      assert.strictEqual(byOutput.groups[0].bucketValue, 80000)
+      // The output-spike list surfaces session B's write explicitly, regardless of the active bucket.
+      assert.ok(byCache.outputSpikes.top.some(s => s.sessionId === 'sessB-out' && s.outputTokens === 80000))
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('bucket=total ranks by input+cacheRead+cacheCreate+output combined', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccforensics-bucket-total-'))
+    try {
+      // Session A: cache_creation 5000, everything else tiny.
+      fs.writeFileSync(path.join(dir, 'a.response.json'), JSON.stringify(responseBody('msg_tA', { cacheCreate: 5000, cacheRead: 0, input: 5, output: 5, model: 'claude-haiku-4-5' })))
+      fs.writeFileSync(path.join(dir, 'a.request.json'), JSON.stringify(requestBody({ previousMessageId: 'msg_tA', sessionId: 'sessA-total', model: 'claude-haiku-4-5' })))
+      // Session B: a smaller cache_creation (4000) but a much bigger cache_read — its TOTAL beats A's.
+      fs.writeFileSync(path.join(dir, 'b.response.json'), JSON.stringify(responseBody('msg_tB', { cacheCreate: 4000, cacheRead: 20000, input: 5, output: 5, model: 'claude-haiku-4-5' })))
+      fs.writeFileSync(path.join(dir, 'b.request.json'), JSON.stringify(requestBody({ previousMessageId: 'msg_tB', sessionId: 'sessB-total', model: 'claude-haiku-4-5' })))
+
+      const byCache = await buildCacheCreationReport({ bodiesDir: dir })
+      assert.strictEqual(byCache.groups[0].key, 'sessA-total') // 5000 > 4000 on cache_creation alone
+
+      const byTotal = await buildCacheCreationReport({ bodiesDir: dir, bucket: 'total' })
+      assert.strictEqual(byTotal.bucket, 'total')
+      assert.strictEqual(byTotal.groups[0].key, 'sessB-total') // 4000+20000+10 > 5000+10 on total tokens
+      assert.strictEqual(byTotal.groups[0].bucketValue, byTotal.groups[0].totalTokens)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('bucket=billable_weighted prices via the real per-model rate; an unknown model contributes 0, never throws', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccforensics-bucket-bw-'))
+    try {
+      fs.writeFileSync(path.join(dir, 'u.response.json'), JSON.stringify(responseBody('msg_bw', { cacheCreate: 5000, output: 100, model: 'totally-unknown-model-xyz' })))
+      fs.writeFileSync(path.join(dir, 'u.request.json'), JSON.stringify(requestBody({ previousMessageId: 'msg_bw', sessionId: 'sess-unknown', model: 'totally-unknown-model-xyz' })))
+      fs.writeFileSync(path.join(dir, 'k.response.json'), JSON.stringify(responseBody('msg_bw2', { cacheCreate: 5000, output: 100, model: 'claude-opus-4-8' })))
+      fs.writeFileSync(path.join(dir, 'k.request.json'), JSON.stringify(requestBody({ previousMessageId: 'msg_bw2', sessionId: 'sess-known', model: 'claude-opus-4-8' })))
+
+      const report = await buildCacheCreationReport({ bodiesDir: dir, bucket: 'billable_weighted' })
+      const unknownGroup = report.groups.find(g => g.key === 'sess-unknown')
+      const knownGroup = report.groups.find(g => g.key === 'sess-known')
+      assert.ok(unknownGroup && knownGroup)
+      assert.strictEqual(unknownGroup!.bucketValue, 0)
+      assert.ok(knownGroup!.bucketValue > 0, 'a known model with real usage must price above 0')
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('the report totals include input/output tokens alongside cache_creation/cache_read', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccforensics-bucket-totals-'))
+    try {
+      fs.writeFileSync(path.join(dir, 'x.response.json'), JSON.stringify(responseBody('msg_tot', { cacheCreate: 2000, cacheRead: 300, input: 40, output: 60, model: 'claude-haiku-4-5' })))
+      fs.writeFileSync(path.join(dir, 'x.request.json'), JSON.stringify(requestBody({ previousMessageId: 'msg_tot', sessionId: 'sess-totals', model: 'claude-haiku-4-5' })))
+      const report = await buildCacheCreationReport({ bodiesDir: dir })
+      assert.strictEqual(report.totalInputTokens, 40)
+      assert.strictEqual(report.totalOutputTokens, 60)
+      assert.strictEqual(report.totalCacheCreateTokens, 2000)
+      assert.strictEqual(report.totalCacheReadTokens, 300)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("groupBy='cause' is rejected — that dimension is served by buildCauseCostPeakReport, not this function", async () => {
+    const badOpts = { groupBy: 'cause' } as unknown as Parameters<typeof buildCacheCreationReport>[0]
+    await assert.rejects(() => buildCacheCreationReport(badOpts), /buildCauseCostPeakReport/)
+  })
+
+  test('formatCostPeaks renders table/markdown/timeline; json returns the object identity', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccforensics-bucket-fmt-'))
+    try {
+      fs.writeFileSync(path.join(dir, 'f.response.json'), JSON.stringify(responseBody('msg_fmt2', { cacheCreate: 4000, output: 200, model: 'claude-opus-4-8' })))
+      fs.writeFileSync(path.join(dir, 'f.request.json'), JSON.stringify(requestBody({ previousMessageId: 'msg_fmt2', sessionId: 'sess-fmt2', model: 'claude-opus-4-8' })))
+      const report = await buildCacheCreationReport({ bodiesDir: dir, bucket: 'output' })
+      assert.strictEqual(formatCostPeaks(report, 'json'), report)
+      for (const fmt of ['table', 'markdown', 'timeline'] as const) {
+        const out = formatCostPeaks(report, fmt) as { format: string; text: string }
+        assert.strictEqual(out.format, fmt)
+        assert.ok(out.text.length > 0)
+      }
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
     }

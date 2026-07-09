@@ -243,25 +243,54 @@ export async function scanCacheCreationEvents(
   }
 }
 
-// ── get_cache_creation_report ───────────────────────────────────────────────────
+// ── get_cache_creation_report → the generalized COST-PEAK finder ─────────────────
 export type CacheCreationGroupBy = 'session' | 'account' | 'model' | 'time'
+// The MCP-facing groupBy dimension additionally offers 'cause' (buildCauseCostPeakReport, in
+// cacheBreakTimeline.ts — it needs the full prefix-diff classifier, which lives there, not here). Kept
+// as a separate wider type rather than folding 'cause' into CacheCreationGroupBy itself so
+// buildCacheCreationReport's own groupKeyOf stays exhaustive and compile-time safe (it structurally
+// cannot be called with a dimension it does not implement).
+export type CostPeakGroupBy = CacheCreationGroupBy | 'cause'
+// The cost BUCKET a peak is ranked by. cache_creation is the 1.25x/2x prefix WRITE; output is billed
+// at ~5x the input rate (sometimes the real culprit, NOT the cache write); input is the uncached input;
+// total is every token; billable_weighted is the real USD cost (weights cache_read at 0.1x, output at
+// ~5x, cache_creation at 1.25x — the truthful "what did this actually cost" ranking).
+export type CostBucket = 'cache_creation' | 'output' | 'input' | 'total' | 'billable_weighted'
 
 export interface CacheCreationGroupRow {
   key: string
   cacheCreateTokens: number
   cacheReadTokens: number
+  inputTokens: number
+  outputTokens: number
+  totalTokens: number
+  costUsd: number                     // full per-group USD cost (input + cacheRead + cacheCreate + output)
   events: number
-  costUsd: number
   maxSingleCacheCreateTokens: number
+  maxSingleOutputTokens: number
+  bucketValue: number                 // the ranked-bucket aggregate (what groups are sorted by)
+}
+
+export interface OutputSpike {
+  sessionId?: string
+  accountUuid?: string
+  model?: string
+  outputTokens: number
+  cacheCreateTokens: number
+  ts: string
 }
 
 export interface CacheCreationReport {
-  groupBy: CacheCreationGroupBy
+  bucket: CostBucket
+  groupBy: CostPeakGroupBy
   windowHours?: number
   totalCacheCreateTokens: number
   totalCacheReadTokens: number
+  totalInputTokens: number
+  totalOutputTokens: number
   totalCostUsd: number
   unattributed: { events: number; cacheCreateTokens: number; costUsd: number; note: string }
+  outputSpikes: { note: string; top: OutputSpike[] }   // explicit: OUTPUT tokens (billed ~5x) can be the real peak
   groups: CacheCreationGroupRow[]
   coverage: CacheCreationScanCoverage
 }
@@ -282,45 +311,123 @@ function groupKeyOf(e: CacheCreationEvent, groupBy: CacheCreationGroupBy): strin
   }
 }
 
-/** Ranks WHO is burning the expensive cache_creation write bucket — aggregated by session, account,
- *  model, or hourly time-window. Always reports an explicit unattributed bucket (last-turn / in-flight
- *  responses that could not be joined to a session) rather than folding it silently into the totals. */
+// Generic token-cost primitives — exported so buildCauseCostPeakReport (cacheBreakTimeline.ts) ranks
+// its cause groups by the SAME bucket formulas as buildCacheCreationReport, without cacheBreakTimeline
+// needing to import CacheCreationEvent itself (it has its own per-turn shape). Any object with these
+// four counts + an optional model satisfies TokenCounts structurally.
+export interface TokenCounts {
+  inputTokens: number
+  cacheReadTokens: number
+  cacheCreateTokens: number
+  outputTokens: number
+  model?: string
+}
+export function tokenCountsTotal(t: TokenCounts): number {
+  return t.inputTokens + t.cacheReadTokens + t.cacheCreateTokens + t.outputTokens
+}
+export function tokenCountsFullCost(t: TokenCounts): number {
+  return t.model ? calcTokenCostUsd(t.inputTokens, t.cacheReadTokens, t.cacheCreateTokens, t.outputTokens, t.model) : 0
+}
+export function bucketValueOf(t: TokenCounts, bucket: CostBucket): number {
+  switch (bucket) {
+    case 'output':            return t.outputTokens
+    case 'input':             return t.inputTokens
+    case 'total':             return tokenCountsTotal(t)
+    case 'billable_weighted': return tokenCountsFullCost(t)
+    case 'cache_creation':
+    default:                  return t.cacheCreateTokens
+  }
+}
+
+/** The COST-PEAK finder: ranks WHO/WHAT is burning the most of a chosen cost bucket
+ *  {cache_creation | output | input | total | billable_weighted} — because the peak is sometimes an
+ *  OUTPUT-token spike (billed ~5x), not a cache write. Aggregates by session, account, model, or hourly
+ *  time-window. Always reports an explicit unattributed bucket AND surfaces the biggest single output
+ *  spikes, so the output-token culprit is never hidden behind the cache_creation totals. */
 export async function buildCacheCreationReport(
-  opts: CacheCreationScanOptions & { groupBy?: CacheCreationGroupBy; topN?: number } = {},
+  opts: CacheCreationScanOptions & { groupBy?: CacheCreationGroupBy; bucket?: CostBucket; topN?: number } = {},
 ): Promise<CacheCreationReport> {
+  // Fail-fast (never silently mis-group): groupBy='cause' needs the full prefix-diff classifier, which
+  // lives in cacheBreakTimeline.ts's buildCauseCostPeakReport, not here. CacheCreationGroupBy already
+  // excludes 'cause' at the type level for in-repo callers; this guard catches an untyped/JSON caller
+  // (e.g. the raw MCP args boundary) that slips 'cause' through as a plain string.
+  if ((opts.groupBy as string | undefined) === 'cause') {
+    throw new Error("groupBy='cause' is served by buildCauseCostPeakReport (./cacheBreakTimeline), not buildCacheCreationReport.")
+  }
   const groupBy = opts.groupBy ?? 'session'
+  const bucket = opts.bucket ?? 'cache_creation'
   const topN = Math.min(opts.topN ?? 15, 50)
   const { events, coverage } = await scanCacheCreationEvents(opts)
 
   const groups = new Map<string, CacheCreationGroupRow>()
-  let totalCC = 0, totalCR = 0, totalCost = 0
+  let totalCC = 0, totalCR = 0, totalIn = 0, totalOut = 0, totalCost = 0
   let unattrEvents = 0, unattrCC = 0, unattrCost = 0
   for (const e of events) {
-    totalCC += e.cacheCreateTokens; totalCR += e.cacheReadTokens; totalCost += e.costUsd
-    if (!e.attributed) { unattrEvents += 1; unattrCC += e.cacheCreateTokens; unattrCost += e.costUsd }
+    const fullCost = tokenCountsFullCost(e)
+    totalCC += e.cacheCreateTokens; totalCR += e.cacheReadTokens; totalIn += e.inputTokens; totalOut += e.outputTokens; totalCost += fullCost
+    if (!e.attributed) { unattrEvents += 1; unattrCC += e.cacheCreateTokens; unattrCost += fullCost }
     const key = groupKeyOf(e, groupBy)
-    const g = groups.get(key) ?? { key, cacheCreateTokens: 0, cacheReadTokens: 0, events: 0, costUsd: 0, maxSingleCacheCreateTokens: 0 }
+    const g = groups.get(key) ?? { key, cacheCreateTokens: 0, cacheReadTokens: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, costUsd: 0, events: 0, maxSingleCacheCreateTokens: 0, maxSingleOutputTokens: 0, bucketValue: 0 }
     g.cacheCreateTokens += e.cacheCreateTokens
     g.cacheReadTokens += e.cacheReadTokens
+    g.inputTokens += e.inputTokens
+    g.outputTokens += e.outputTokens
+    g.totalTokens += tokenCountsTotal(e)
+    g.costUsd += fullCost
     g.events += 1
-    g.costUsd += e.costUsd
     g.maxSingleCacheCreateTokens = Math.max(g.maxSingleCacheCreateTokens, e.cacheCreateTokens)
+    g.maxSingleOutputTokens = Math.max(g.maxSingleOutputTokens, e.outputTokens)
+    g.bucketValue += bucketValueOf(e, bucket)
     groups.set(key, g)
   }
   const ranked = [...groups.values()]
-    .map(g => ({ ...g, costUsd: +g.costUsd.toFixed(4) }))
-    .sort((a, b) => b.cacheCreateTokens - a.cacheCreateTokens)
+    .map(g => ({ ...g, costUsd: +g.costUsd.toFixed(4), bucketValue: +g.bucketValue.toFixed(4) }))
+    .sort((a, b) => b.bucketValue - a.bucketValue)
+
+  const outputTop = [...events]
+    .filter(e => e.outputTokens > 0)
+    .sort((a, b) => b.outputTokens - a.outputTokens)
+    .slice(0, 5)
+    .map(e => ({ sessionId: e.sessionId, accountUuid: e.accountUuid, model: e.model, outputTokens: e.outputTokens, cacheCreateTokens: e.cacheCreateTokens, ts: new Date(e.ts).toISOString() }))
 
   return {
-    groupBy, windowHours: opts.windowHours,
-    totalCacheCreateTokens: totalCC, totalCacheReadTokens: totalCR, totalCostUsd: +totalCost.toFixed(4),
+    bucket, groupBy, windowHours: opts.windowHours,
+    totalCacheCreateTokens: totalCC, totalCacheReadTokens: totalCR, totalInputTokens: totalIn, totalOutputTokens: totalOut, totalCostUsd: +totalCost.toFixed(4),
     unattributed: {
       events: unattrEvents, cacheCreateTokens: unattrCC, costUsd: +unattrCost.toFixed(4),
       note: 'Responses with no following request in the scanned window (last-turn / still-in-flight calls) — cannot be joined to a session.',
     },
+    outputSpikes: {
+      note: 'The biggest single OUTPUT-token events (output is billed at ~5x the input rate — sometimes the real cost peak, not the cache write). Rank by bucket=output or bucket=billable_weighted to surface these in the groups.',
+      top: outputTop,
+    },
     groups: ranked.slice(0, topN),
     coverage,
   }
+}
+
+/** Render a cost-peak report. json → the object; the others → a compact string wrapped as
+ *  { format, text, coverage }. Reuses the ForensicsFormat contract from the trace tool. */
+export function formatCostPeaks(report: CacheCreationReport, format: ForensicsFormat): unknown {
+  if (format === 'json') return report
+  const lines: string[] = []
+  const hdr = `cost peaks by ${report.bucket} — grouped by ${report.groupBy} (top ${report.groups.length})`
+  const bucketOf = (g: CacheCreationGroupRow): string => g.bucketValue.toLocaleString()
+  if (format === 'markdown') {
+    lines.push(`# ${hdr}`, '')
+    lines.push('| group | ' + report.bucket + ' | cache_create | output | cost | events |', '|---|---|---|---|---|---|')
+    for (const g of report.groups) lines.push(`| ${g.key.slice(0, 20)} | ${bucketOf(g)} | ${g.cacheCreateTokens.toLocaleString()} | ${g.outputTokens.toLocaleString()} | $${g.costUsd} | ${g.events} |`)
+    lines.push('', '## Output spikes (billed ~5x)', '')
+    for (const s of report.outputSpikes.top) lines.push(`- ${s.outputTokens.toLocaleString()} out tok \`${s.ts}\` ${s.model ?? '?'} ${(s.sessionId ?? '(unattr)').slice(0, 12)}`)
+  } else if (format === 'timeline') {
+    lines.push(hdr)
+    for (const s of report.outputSpikes.top) lines.push(`${s.ts}  🔊 output=${s.outputTokens.toLocaleString()}  cc=${s.cacheCreateTokens.toLocaleString()}  ${s.model ?? '?'}  ${(s.sessionId ?? '(unattr)').slice(0, 12)}`)
+  } else { // table
+    lines.push(hdr)
+    lines.push('  ' + report.bucket.padEnd(14) + ' cache_create      output   cost     group')
+    for (const g of report.groups) lines.push(`  ${bucketOf(g).padStart(14)} ${String(g.cacheCreateTokens).padStart(12)} ${String(g.outputTokens).padStart(11)}  $${String(g.costUsd).padStart(7)}  ${g.key.slice(0, 24)}`)
+  }
+  return { format, text: lines.join('\n'), coverage: report.coverage }
 }
 
 // ── trace_expensive_writes ──────────────────────────────────────────────────────

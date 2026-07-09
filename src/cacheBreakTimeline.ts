@@ -32,6 +32,9 @@ import { calcTokenCostUsd } from './pricing'
 import {
   DEFAULT_BODIES_DIR, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, RESPONSE_SCAN_CAP,
   listBySuffix, boundedRecent, readJsonBounded,
+  bucketValueOf, tokenCountsFullCost, tokenCountsTotal,
+  type TokenCounts, type CacheCreationReport, type CacheCreationGroupRow,
+  type CostBucket, type OutputSpike, type CacheCreationScanCoverage,
 } from './cacheCreationForensics'
 import * as fs from 'fs'
 
@@ -487,7 +490,10 @@ interface ScannedTurn {
   accountUuid?: string
   prefix: TurnPrefix | null
 }
-interface ResponseUsage { cacheCreate: number; cacheRead: number; ephemeral5m: number; ephemeral1h: number; model?: string; ts: number }
+// inputTokens/outputTokens are additive to TRDD-6TQ2FBUR's original shape — carried so
+// buildCauseCostPeakReport (TRDD-6TQ2FBUR D2) can rank cause groups by ANY cost bucket, not just
+// cache_creation; the single-session timeline itself still only uses cacheCreate/cacheRead/tiers.
+interface ResponseUsage { cacheCreate: number; cacheRead: number; ephemeral5m: number; ephemeral1h: number; inputTokens: number; outputTokens: number; model?: string; ts: number }
 
 export interface CacheBreakTimelineOptions {
   bodiesDir?: string
@@ -521,6 +527,8 @@ export interface CacheBreakEvent {
   culprit: string            // pointer-only human summary
   cacheCreateTokens: number
   cacheReadTokens: number
+  inputTokens: number        // TRDD-6TQ2FBUR D2 — carried for buildCauseCostPeakReport's bucket ranking
+  outputTokens: number       // (billed ~5x; can be the real cost peak even when cacheCreate is modest)
   costUsd: number
   gapMinutes?: number
   ttlTier?: TtlTier
@@ -581,27 +589,21 @@ function median(xs: number[]): number {
   return s.length % 2 ? s[mid] : Math.round((s[mid - 1] + s[mid]) / 2)
 }
 
-/** Build a session's cache-break ROOT-CAUSE timeline + repeat-offender rollup. Reconstructs the
- *  session's ordered turns from the raw OTEL bodies, classifies each significant cache_creation turn's
- *  break, and rolls repeated (cause, culprit-element) pairs into chronic offenders (flagged SYSTEMATIC
- *  at ≥ threshold turns). LAZY + BOUNDED: one recency-first capped scan; honest coverage. */
-export async function buildCacheBreakTimeline(opts: CacheBreakTimelineOptions = {}): Promise<CacheBreakTimelineReport> {
-  const bodiesDir = opts.bodiesDir ?? DEFAULT_BODIES_DIR
-  const minTokens = opts.minTokens ?? DEFAULT_MIN_TOKENS
-  const scanCap = opts.scanCap ?? RESPONSE_SCAN_CAP
-  const dirExists = fs.existsSync(bodiesDir)
-  const emptyCoverage = (note: string) => ({
-    bodiesDir, dirExists, requestFilesTotal: 0, requestFilesScanned: 0, responseFilesTotal: 0,
-    responseFilesScanned: 0, sessionsFound: 0, scanCap, windowHours: opts.windowHours, complete: true, note,
-  })
-  if (!dirExists) {
-    return baseReport(minTokens, emptyCoverage(`No OTEL raw-body directory at ${bodiesDir} — set OTEL_LOG_RAW_API_BODIES to capture bodies.`))
-  }
+interface SessionScanResult {
+  bySession: Map<string, ScannedTurn[]>
+  respById: Map<string, ResponseUsage>
+  coverage: CacheBreakTimelineReport['coverage']
+}
 
+// Shared bounded scan: index every response by message id -> usage, and every request into ordered
+// per-session turns. Both buildCacheBreakTimeline (ONE target session) and buildCauseCostPeakReport
+// (EVERY session, for the cost-peak finder's groupBy=cause) build on this ONE scan so the disk-read
+// contract lives in exactly one place — caller must already have checked dirExists.
+function scanSessionsAndResponses(bodiesDir: string, windowHours: number | undefined, scanCap: number): SessionScanResult {
   const allRequests = listBySuffix(bodiesDir, '.request.json')
   const allResponses = listBySuffix(bodiesDir, '.response.json')
-  const { slice: reqSlice, matched: reqMatched } = boundedRecent(allRequests, { windowHours: opts.windowHours, cap: scanCap })
-  const { slice: respSlice } = boundedRecent(allResponses, { windowHours: opts.windowHours, cap: scanCap })
+  const { slice: reqSlice, matched: reqMatched } = boundedRecent(allRequests, { windowHours, cap: scanCap })
+  const { slice: respSlice } = boundedRecent(allResponses, { windowHours, cap: scanCap })
 
   // Index responses by message id → usage.
   const respById = new Map<string, ResponseUsage>()
@@ -615,6 +617,8 @@ export async function buildCacheBreakTimeline(opts: CacheBreakTimelineOptions = 
       cacheRead: numOr0(body.usage.cache_read_input_tokens),
       ephemeral5m: numOr0(tier?.ephemeral_5m_input_tokens),
       ephemeral1h: numOr0(tier?.ephemeral_1h_input_tokens),
+      inputTokens: numOr0(body.usage.input_tokens),
+      outputTokens: numOr0(body.usage.output_tokens),
       model: strOrUndef(body.model),
       ts: e.mtimeMs,
     })
@@ -637,19 +641,40 @@ export async function buildCacheBreakTimeline(opts: CacheBreakTimelineOptions = 
     if (list) list.push(turn); else bySession.set(sid, [turn])
   }
 
-  // Resolve the target session: exact sessionId > scope-prefix heaviest > overall heaviest by cache_creation.
-  const target = resolveTarget(bySession, respById, opts)
   const complete = reqSlice.length === reqMatched
-  const coverage = {
+  const coverage: CacheBreakTimelineReport['coverage'] = {
     bodiesDir, dirExists: true,
     requestFilesTotal: allRequests.length, requestFilesScanned: reqSlice.length,
     responseFilesTotal: allResponses.length, responseFilesScanned: respSlice.length,
-    sessionsFound: bySession.size, scanCap, windowHours: opts.windowHours, complete,
+    sessionsFound: bySession.size, scanCap, windowHours, complete,
     note: complete
-      ? `Scanned all ${reqMatched} request body file(s)${opts.windowHours ? ` in the last ${opts.windowHours}h` : ''} across ${bySession.size} session(s).`
+      ? `Scanned all ${reqMatched} request body file(s)${windowHours ? ` in the last ${windowHours}h` : ''} across ${bySession.size} session(s).`
       : `SAMPLE: ${reqSlice.length} most-recent of ${reqMatched} matching request body file(s) across ${bySession.size} session(s) (cap ${scanCap}). Not full history.`,
   }
+  return { bySession, respById, coverage }
+}
 
+/** Build a session's cache-break ROOT-CAUSE timeline + repeat-offender rollup. Reconstructs the
+ *  session's ordered turns from the raw OTEL bodies, classifies each significant cache_creation turn's
+ *  break, and rolls repeated (cause, culprit-element) pairs into chronic offenders (flagged SYSTEMATIC
+ *  at ≥ threshold turns). LAZY + BOUNDED: one recency-first capped scan; honest coverage. */
+export async function buildCacheBreakTimeline(opts: CacheBreakTimelineOptions = {}): Promise<CacheBreakTimelineReport> {
+  const bodiesDir = opts.bodiesDir ?? DEFAULT_BODIES_DIR
+  const minTokens = opts.minTokens ?? DEFAULT_MIN_TOKENS
+  const scanCap = opts.scanCap ?? RESPONSE_SCAN_CAP
+  const dirExists = fs.existsSync(bodiesDir)
+  const emptyCoverage = (note: string) => ({
+    bodiesDir, dirExists, requestFilesTotal: 0, requestFilesScanned: 0, responseFilesTotal: 0,
+    responseFilesScanned: 0, sessionsFound: 0, scanCap, windowHours: opts.windowHours, complete: true, note,
+  })
+  if (!dirExists) {
+    return baseReport(minTokens, emptyCoverage(`No OTEL raw-body directory at ${bodiesDir} — set OTEL_LOG_RAW_API_BODIES to capture bodies.`))
+  }
+
+  const { bySession, respById, coverage } = scanSessionsAndResponses(bodiesDir, opts.windowHours, scanCap)
+
+  // Resolve the target session: exact sessionId > scope-prefix heaviest > overall heaviest by cache_creation.
+  const target = resolveTarget(bySession, respById, opts)
   if (!target) {
     return baseReport(minTokens, coverage)
   }
@@ -698,22 +723,13 @@ function resolveTarget(
   return best ? { sid: best.sid, turns: best.turns } : null
 }
 
-function buildReportForSession(
-  sid: string,
-  turns: ScannedTurn[],
-  respById: Map<string, ResponseUsage>,
-  minTokens: number,
-  coverage: CacheBreakTimelineReport['coverage'],
-): CacheBreakTimelineReport {
-  const sessionCC = sessionCacheCreate(turns, respById)
+// Classify every significant cache_creation turn of ONE session into a break event. Shared by the
+// single-session timeline AND the cross-session cause aggregator so the classification lives in one place.
+function classifyTurns(turns: ScannedTurn[], respById: Map<string, ResponseUsage>, minTokens: number): CacheBreakEvent[] {
   const events: CacheBreakEvent[] = []
-  const accountUuid = turns.find(t => t.accountUuid)?.accountUuid
-  let model: string | undefined
-
   for (let i = 0; i < turns.length; i++) {
     const usage = ccOfTurn(turns, i, respById)
     if (!usage || usage.cacheCreate < minTokens) continue
-    model = model ?? usage.model ?? turns[i].prefix?.model
     const prevPrefix = i > 0 ? turns[i - 1].prefix : null
     const curPrefix = turns[i].prefix
     if (!curPrefix) continue
@@ -732,6 +748,8 @@ function buildReportForSession(
       culprit: verdict.culpritSummary,
       cacheCreateTokens: usage.cacheCreate,
       cacheReadTokens: usage.cacheRead,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
       costUsd: evModel ? +calcTokenCostUsd(0, 0, usage.cacheCreate, 0, evModel).toFixed(4) : 0,
       gapMinutes: gapMs !== undefined ? +(gapMs / 60000).toFixed(1) : undefined,
       ttlTier: verdict.ttlTier,
@@ -740,6 +758,20 @@ function buildReportForSession(
       rawDiffSummary: verdict.rawDiffSummary,
     })
   }
+  return events
+}
+
+function buildReportForSession(
+  sid: string,
+  turns: ScannedTurn[],
+  respById: Map<string, ResponseUsage>,
+  minTokens: number,
+  coverage: CacheBreakTimelineReport['coverage'],
+): CacheBreakTimelineReport {
+  const sessionCC = sessionCacheCreate(turns, respById)
+  const events = classifyTurns(turns, respById, minTokens)
+  const accountUuid = turns.find(t => t.accountUuid)?.accountUuid
+  const model = events.find(e => e.model)?.model
 
   return {
     sessionId: sid, accountUuid, model,
@@ -796,6 +828,124 @@ function buildRepeatOffenders(events: CacheBreakEvent[], sessionCacheCreate: num
   return rows.sort((a, b) =>
     (b.occurrences * b.totalCacheCreateTokens) - (a.occurrences * a.totalCacheCreateTokens)
     || b.totalCacheCreateTokens - a.totalCacheCreateTokens)
+}
+
+// ── buildCauseCostPeakReport — the 'cause' dimension of the cost-peak finder ──────
+// TRDD-6TQ2FBUR D2: get_cache_creation_report generalizes into a COST-PEAK finder with
+// groupBy {session|account|model|cause}. The first three stay in buildCacheCreationReport
+// (cacheCreationForensics.ts, a lightweight response-only scan); 'cause' needs the full prefix-diff
+// classifier this module owns, so it lives here as a SEPARATE builder returning the identical
+// CacheCreationReport shape — the MCP tool dispatches on groupBy and formats either result with the
+// SAME formatCostPeaks, so callers see one uniform contract regardless of which builder ran.
+export interface CauseCostPeakOptions {
+  bodiesDir?: string
+  windowHours?: number
+  scanCap?: number
+  minTokens?: number         // floor: only classify turns whose cache_creation >= this (default DEFAULT_MIN_TOKENS)
+  bucket?: CostBucket
+  topN?: number
+}
+
+function emptyCauseCostPeakReport(bucket: CostBucket, bodiesDir: string, scanCap: number, windowHours?: number): CacheCreationReport {
+  return {
+    bucket, groupBy: 'cause', windowHours,
+    totalCacheCreateTokens: 0, totalCacheReadTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, totalCostUsd: 0,
+    unattributed: { events: 0, cacheCreateTokens: 0, costUsd: 0, note: 'groupBy=cause has no unattributed bucket — every classified turn already belongs to a known session.' },
+    outputSpikes: { note: 'The biggest single OUTPUT-token break events (output is billed ~5x — sometimes the real cost peak, not the cache write).', top: [] },
+    groups: [],
+    coverage: {
+      bodiesDir, dirExists: false, responseFilesTotal: 0, responseFilesScanned: 0,
+      requestFilesTotal: 0, requestFilesIndexed: 0, scanCap, windowHours, complete: true,
+      note: `No OTEL raw-body directory at ${bodiesDir} — set OTEL_LOG_RAW_API_BODIES to capture bodies.`,
+    },
+  }
+}
+
+/** The 'cause' dimension of the cost-peak finder: scans EVERY session in the bounded window (not just
+ *  one target, unlike buildCacheBreakTimeline), classifies each session's significant cache_creation
+ *  turns via the SAME root-cause classifier the timeline uses, and ranks CAUSES by the chosen cost
+ *  bucket {cache_creation|output|input|total|billable_weighted} — answering "which BREAK CAUSE is
+ *  burning the most money", not just "which session/account/model". LAZY + BOUNDED: one shared scan
+ *  (scanSessionsAndResponses); classification cost is O(turns already read), not an extra disk pass. */
+export async function buildCauseCostPeakReport(opts: CauseCostPeakOptions = {}): Promise<CacheCreationReport> {
+  const bodiesDir = opts.bodiesDir ?? DEFAULT_BODIES_DIR
+  const minTokens = opts.minTokens ?? DEFAULT_MIN_TOKENS
+  const scanCap = opts.scanCap ?? RESPONSE_SCAN_CAP
+  const bucket = opts.bucket ?? 'cache_creation'
+  const topN = Math.min(opts.topN ?? 15, 50)
+  if (!fs.existsSync(bodiesDir)) {
+    return emptyCauseCostPeakReport(bucket, bodiesDir, scanCap, opts.windowHours)
+  }
+
+  const { bySession, respById, coverage: timelineCoverage } = scanSessionsAndResponses(bodiesDir, opts.windowHours, scanCap)
+  // Adapt the timeline scan's coverage shape (sessionsFound/requestFilesScanned) into the cost-peak
+  // finder's CacheCreationScanCoverage shape (responseFilesScanned/requestFilesIndexed) — same numbers,
+  // different field names — so get_cache_creation_report's coverage contract is identical regardless
+  // of which builder produced the report.
+  const coverage: CacheCreationScanCoverage = {
+    bodiesDir: timelineCoverage.bodiesDir, dirExists: timelineCoverage.dirExists,
+    responseFilesTotal: timelineCoverage.responseFilesTotal, responseFilesScanned: timelineCoverage.responseFilesScanned,
+    requestFilesTotal: timelineCoverage.requestFilesTotal, requestFilesIndexed: timelineCoverage.requestFilesScanned,
+    scanCap: timelineCoverage.scanCap, windowHours: timelineCoverage.windowHours,
+    complete: timelineCoverage.complete, note: timelineCoverage.note,
+  }
+
+  const groups = new Map<CacheBreakTimelineCause, CacheCreationGroupRow>()
+  let totalCC = 0, totalCR = 0, totalIn = 0, totalOut = 0, totalCost = 0
+  const outputEvents: OutputSpike[] = []
+
+  for (const [sid, turnsRaw] of bySession) {
+    if (sid === '(no-session)') continue
+    const turns = [...turnsRaw].sort((a, b) => a.mtimeMs - b.mtimeMs)
+    const accountUuid = turns.find(t => t.accountUuid)?.accountUuid
+    for (const e of classifyTurns(turns, respById, minTokens)) {
+      const t: TokenCounts = { inputTokens: e.inputTokens, cacheReadTokens: e.cacheReadTokens, cacheCreateTokens: e.cacheCreateTokens, outputTokens: e.outputTokens, model: e.model }
+      const fullCost = tokenCountsFullCost(t)
+      totalCC += e.cacheCreateTokens; totalCR += e.cacheReadTokens; totalIn += e.inputTokens; totalOut += e.outputTokens; totalCost += fullCost
+
+      const g = groups.get(e.cause) ?? {
+        key: e.cause, cacheCreateTokens: 0, cacheReadTokens: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0,
+        costUsd: 0, events: 0, maxSingleCacheCreateTokens: 0, maxSingleOutputTokens: 0, bucketValue: 0,
+      }
+      g.cacheCreateTokens += e.cacheCreateTokens
+      g.cacheReadTokens += e.cacheReadTokens
+      g.inputTokens += e.inputTokens
+      g.outputTokens += e.outputTokens
+      g.totalTokens += tokenCountsTotal(t)
+      g.costUsd += fullCost
+      g.events += 1
+      g.maxSingleCacheCreateTokens = Math.max(g.maxSingleCacheCreateTokens, e.cacheCreateTokens)
+      g.maxSingleOutputTokens = Math.max(g.maxSingleOutputTokens, e.outputTokens)
+      g.bucketValue += bucketValueOf(t, bucket)
+      groups.set(e.cause, g)
+
+      if (e.outputTokens > 0) {
+        outputEvents.push({ sessionId: sid, accountUuid, model: e.model, outputTokens: e.outputTokens, cacheCreateTokens: e.cacheCreateTokens, ts: e.ts })
+      }
+    }
+  }
+
+  const ranked = [...groups.values()]
+    .map(g => ({ ...g, costUsd: +g.costUsd.toFixed(4), bucketValue: +g.bucketValue.toFixed(4) }))
+    .sort((a, b) => b.bucketValue - a.bucketValue)
+
+  const outputTop = [...outputEvents].sort((a, b) => b.outputTokens - a.outputTokens).slice(0, 5)
+
+  return {
+    bucket, groupBy: 'cause', windowHours: opts.windowHours,
+    totalCacheCreateTokens: totalCC, totalCacheReadTokens: totalCR, totalInputTokens: totalIn, totalOutputTokens: totalOut,
+    totalCostUsd: +totalCost.toFixed(4),
+    unattributed: {
+      events: 0, cacheCreateTokens: 0, costUsd: 0,
+      note: 'groupBy=cause has no unattributed bucket — every classified turn already belongs to a known session (an un-joinable response is simply not part of any session\'s turn sequence, so it is never classified).',
+    },
+    outputSpikes: {
+      note: 'The biggest single OUTPUT-token break events (output is billed ~5x the input rate — sometimes the real cost peak, not the cache write). Rank by bucket=output or bucket=billable_weighted to surface these in the groups.',
+      top: outputTop,
+    },
+    groups: ranked.slice(0, topN),
+    coverage,
+  }
 }
 
 // ── Output formatting ────────────────────────────────────────────────────────────

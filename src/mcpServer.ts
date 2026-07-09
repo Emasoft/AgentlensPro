@@ -37,10 +37,10 @@ import { readAllInstructionContent } from './instructionFiles'
 import { ContextCompositionIndex, type CompositionBlockKind, type GroupBy } from './contextCompositionIndex'
 import {
   buildCacheCreationReport, buildExpensiveWritesTrace, buildCacheBreakGapReport,
-  formatExpensiveWrites, type CacheCreationGroupBy, type ForensicsFormat,
+  formatExpensiveWrites, formatCostPeaks, type CostPeakGroupBy, type CostBucket, type ForensicsFormat,
 } from './cacheCreationForensics'
 import {
-  buildCacheBreakTimeline, formatTimeline, type TimelineFormat,
+  buildCacheBreakTimeline, buildCauseCostPeakReport, formatTimeline, type TimelineFormat,
 } from './cacheBreakTimeline'
 
 // TRDD-CTXQUERY — one process-lifetime, LRU-cached composition index shared by all composition tools.
@@ -523,20 +523,26 @@ const TOOLS = [
   {
     name: 'get_cache_creation_report',
     description:
-      'Ranks WHO is burning the EXPENSIVE cache_creation write bucket (~1.25x the base input rate — a ' +
-      'cold prefix re-write, not a cache hit). Scans the raw OTEL response bodies on disk for ' +
-      'cache_creation_input_tokens, joins each write to its owning session via the previous_message_id ' +
-      'chain, and aggregates heaviest-first by session, account, model, or hourly time-window. Always ' +
-      'includes an explicit `unattributed` bucket (last-turn / still-in-flight responses that had no ' +
-      'following request to join against) — never folded silently into the totals. The scan is a bounded, ' +
-      'most-recent-first SAMPLE (never a full 15k+-file sweep) — read `coverage` for exactly what was ' +
-      'scanned. Use this to answer "who/what is re-writing the prompt cache and how much is it costing".',
+      'The COST-PEAK finder: ranks WHO/WHAT is burning the most of a chosen cost BUCKET — cache_creation ' +
+      '(the ~1.25x/2x prefix WRITE, default), output (billed ~5x — sometimes the real culprit, NOT the ' +
+      'cache write), input, total tokens, or billable_weighted (the real USD cost across all buckets). ' +
+      'Scans the raw OTEL bodies on disk, joins each write to its owning session via the ' +
+      'previous_message_id chain, and aggregates heaviest-first by session, account, model, hourly ' +
+      'time-window, or cause (the cache-break ROOT-CAUSE code from get_cache_break_timeline\'s ' +
+      'classifier — "which misconfiguration is burning the most money", not just "which session"). ' +
+      'Always includes an explicit `unattributed` bucket (last-turn / still-in-flight responses with no ' +
+      'following request to join against — groupBy=cause has none, since only classified turns are ' +
+      'counted) and a top-5 `outputSpikes` list surfacing the biggest single OUTPUT-token events even ' +
+      'when ranking by a different bucket. The scan is a bounded, most-recent-first SAMPLE (never a full ' +
+      '15k+-file sweep) — read `coverage` for exactly what was scanned.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         window:  { type: 'number', description: 'Only include writes from the last N hours (e.g. 5 for the live rate-limit window); omit for the bounded most-recent scan across all history' },
-        groupBy: { type: 'string', description: 'Aggregation dimension: session | account | model | time (default session)' },
+        groupBy: { type: 'string', description: 'Aggregation dimension: session | account | model | time | cause (default session)' },
+        bucket:  { type: 'string', description: 'Cost bucket to rank by: cache_creation | output | input | total | billable_weighted (default cache_creation)' },
         topN:    { type: 'number', description: 'How many ranked groups to return (default 15, max 50)' },
+        format:  { type: 'string', description: 'Output format: json (default) | table | markdown | timeline' },
       },
     },
   },
@@ -1748,8 +1754,15 @@ export function createMcpServer(opts: McpServerOptions): Server {
         break
       }
       case 'get_cache_creation_report': {
-        const a = args as { window?: number; groupBy?: CacheCreationGroupBy; topN?: number }
-        result = await buildCacheCreationReport({ windowHours: a.window, groupBy: a.groupBy, topN: a.topN })
+        const a = args as { window?: number; groupBy?: CostPeakGroupBy; bucket?: CostBucket; topN?: number; format?: ForensicsFormat }
+        // groupBy='cause' needs the full prefix-diff classifier (cacheBreakTimeline.ts's
+        // buildCauseCostPeakReport, scanning EVERY session); every other dimension stays on the
+        // lightweight response-only scan (buildCacheCreationReport). Both return the identical
+        // CacheCreationReport shape, so formatCostPeaks renders either uniformly.
+        const report = a.groupBy === 'cause'
+          ? await buildCauseCostPeakReport({ windowHours: a.window, bucket: a.bucket, topN: a.topN })
+          : await buildCacheCreationReport({ windowHours: a.window, groupBy: a.groupBy, bucket: a.bucket, topN: a.topN })
+        result = formatCostPeaks(report, a.format ?? 'json')
         break
       }
       case 'trace_expensive_writes': {
