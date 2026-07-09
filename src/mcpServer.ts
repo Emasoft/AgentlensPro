@@ -42,6 +42,14 @@ import {
 import {
   buildCacheBreakTimeline, buildCauseCostPeakReport, formatTimeline, type TimelineFormat,
 } from './cacheBreakTimeline'
+// TRDD-FB5RG4P1 — FAL comparative + SQL analytics over the forensics fact DB. Like the cache-forensic
+// tools above, these read ~/.agentlens/{otel-bodies,forensics.db} directly off disk (self-loading
+// sql.js), so they need no McpServerOptions accessor and work identically in both runtimes.
+import { ensureFreshIndex } from './forensicsIndex'
+import {
+  buildCompareConfigs, type GroupByDim, type MetricKey, type AggKey, type CompareFilter,
+} from './forensicsCompare'
+import { runDiagnosticsSql, type SqlFormat } from './forensicsSql'
 
 // TRDD-CTXQUERY — one process-lifetime, LRU-cached composition index shared by all composition tools.
 // It reads the shared callBodyRegistry singleton (fed by both OTLP ingestors) directly, so the tools
@@ -625,6 +633,55 @@ const TOOLS = [
         minTokens: { type: 'number', description: 'Only classify turns whose cache_creation ≥ this (default 5000)' },
         window:    { type: 'number', description: 'Only scan bodies from the last N hours; omit for the bounded most-recent scan across all history' },
         format:    { type: 'string', description: 'Output format: json (default, full object) | table | markdown | timeline' },
+      },
+    },
+  },
+  {
+    name: 'compare_configs',
+    description:
+      'Comparative cost/cache analytics across CONFIGURATIONS. Groups every API call (from the ' +
+      'forensics fact DB, one row/call) by a config dimension and ranks the groups worst→best on a ' +
+      'chosen metric, with per-group min/max/avg/median/p95/count/sum and a share of the total. Answers ' +
+      "questions the per-session timeline can't: do FORKED agents consume less cache_creation than " +
+      'FRESH subagents? do WORKTREE agents cost more? which model/effort/isolation/subagent_type breaks ' +
+      'the cache least on average? which injected skill/mcp/rule co-occurs with the biggest writes? ' +
+      'Reads a bounded, incrementally-indexed fact table — read `coverage` for scope and note the ' +
+      'explicit `unresolved` spawn group (calls whose spawn config could not be resolved — never hidden). ' +
+      'Correlation ≠ causation; drill a finding via trace_expensive_writes / get_cache_break_timeline / ' +
+      'get_call_context on the shared session_id + request/response refs.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        groupBy:   { type: 'string', description: 'Config dimension: spawn_kind | model | effort | isolation | subagent_type | frontmatter | skill | mcp | rule | content_tag | break_cause | account | session (default spawn_kind)' },
+        metric:    { type: 'string', description: 'cache_creation | cache_read | output_tokens | input_tokens | breaks | total | billable_weighted (default cache_creation)' },
+        agg:       { type: 'string', description: 'Primary SORT aggregate: sum | avg | median | min | max | p95 | count (default avg). All of min/max/avg/median/p95/count/sum are ALWAYS returned per group; this only picks the sort key.' },
+        filter:    { type: 'object', description: 'Optional narrowing: { window (hours), model, spawnKind, subagentType, effort, isolation, accountUuid, sessionId, minCacheCreate, minOutputTokens, breakCause, spawnResolution, hasContentTag:[…], hasSkill:[…], hasMcp:[…], hasRule:[…] }' },
+        rankOrder: { type: 'string', description: 'worst-first (highest metric first, default) | best-first' },
+        topN:      { type: 'number', description: 'How many ranked groups to return (default 20, max 100)' },
+      },
+    },
+  },
+  {
+    name: 'run_diagnostics_sql',
+    description:
+      'Runs analytics over the forensics fact DB (one row/API call, plus content-tag and injection ' +
+      'junction tables). Two modes: (1) `preset` — a curated, parameterized read-only query from the ' +
+      'built-in library (worst configs, fork-vs-fresh, worktree cost delta, chronic offenders, output ' +
+      'peaks by skill, cache lift by skill/mcp/rule, content-tag ranking, image burn, model×effort ' +
+      'matrix, break-cause ranking, root-cause leaderboard, unresolved audit, session hotlist, tier ' +
+      'split by config); (2) `sql` — RAW read-only SELECT/WITH with cost-aware custom functions ' +
+      'billable_weight(), tier_classify(), cost_usd(), spike(). READ-ONLY & SANDBOXED: single SELECT/WITH ' +
+      'only; INSERT/UPDATE/DELETE/DDL/ATTACH/PRAGMA rejected; runs on a fresh in-memory snapshot (source ' +
+      'data untouchable); row-capped. Use it to pivot from an aggregate finding to the exact culprit ' +
+      'calls (whose response_ref/request_ref feed trace_expensive_writes / get_call_context).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        preset: { type: 'string', description: 'Name of a built-in preset (mutually exclusive with sql). Omit both to list the preset library.' },
+        sql:    { type: 'string', description: 'Raw read-only SQL (single SELECT or WITH…SELECT). Custom fns: billable_weight(cc5m,cc1h,cread,out,input,model), tier_classify(gap_minutes), cost_usd(input,cread,cwrite,out,model), spike(value,median,mult).' },
+        params: { type: 'object', description: 'Named params bound safely into a preset or sql (e.g. window, sessionId, model, k). Never string-concatenated.' },
+        format: { type: 'string', description: 'json (default) | table (unicode-bordered) | markdown' },
+        limit:  { type: 'number', description: 'Row cap (default 200, hard max 2000)' },
       },
     },
   },
@@ -1788,6 +1845,24 @@ export function createMcpServer(opts: McpServerOptions): Server {
         const a = args as { sessionId?: string; scope?: string; minTokens?: number; window?: number; format?: TimelineFormat }
         const report = await buildCacheBreakTimeline({ sessionId: a.sessionId, scope: a.scope, minTokens: a.minTokens, windowHours: a.window })
         result = formatTimeline(report, a.format ?? 'json')
+        break
+      }
+      case 'compare_configs': {
+        // TRDD-FB5RG4P1 — lazily (re)index the bounded fact slice, then rank configs. ensureFreshIndex
+        // reuses cached facts inside a 5-min freshness window so only the first call pays the scan cost.
+        const a = args as { groupBy?: GroupByDim; metric?: MetricKey; agg?: AggKey; filter?: CompareFilter; rankOrder?: 'worst-first' | 'best-first'; topN?: number }
+        await ensureFreshIndex({ windowHours: (a.filter?.window) })
+        result = await buildCompareConfigs(a)
+        break
+      }
+      case 'run_diagnostics_sql': {
+        const a = args as { preset?: string; sql?: string; params?: Record<string, unknown>; format?: SqlFormat; limit?: number }
+        // Index only when actually querying (no args = list presets, which needs no fresh index).
+        if (a.preset || a.sql) {
+          const win = typeof a.params?.window === 'number' ? a.params.window : undefined
+          await ensureFreshIndex({ windowHours: win })
+        }
+        result = await runDiagnosticsSql(a)
         break
       }
       default:
