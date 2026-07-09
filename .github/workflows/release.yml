@@ -51,6 +51,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    # `environment:` gates the OIDC token mint behind the environment's deployment
+    # protection rules — without it, ANY step in this job (e.g. a compromised dep's
+    # lifecycle script) could mint an id-token. GitHub auto-creates the environment
+    # on first use; add protection rules (required reviewers) in repo settings.
+    environment: npm-publish
     permissions:
       id-token: write  # Required for npm Trusted Publishing (OIDC — no stored secret needed)
       contents: read   # actions/checkout + npm --provenance need repo read
