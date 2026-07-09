@@ -14,12 +14,20 @@ function userId(sessionId: string): string {
   return JSON.stringify({ device_id: 'dev-1', account_uuid: 'acct-1', session_id: sessionId })
 }
 
-/** A request body whose LAST message is the given user text (a fire start when it begins with MARKER). */
-function reqBody(o: { lastUserText?: string; lastIsToolResult?: boolean; prev?: string; history?: string; tools?: number }): string {
+/** A request body modelled on what Claude Code ACTUALLY emits.
+ *
+ *  Critically: the harness appends the UserPromptSubmit hook's output as a TRAILING `role:"system"`
+ *  message, so the real user prompt is NOT the last message. An earlier fixture omitted this and the
+ *  detector passed every test while failing on every real fire. `hookTail` reproduces it.
+ */
+function reqBody(o: { lastUserText?: string; lastIsToolResult?: boolean; prev?: string; history?: string; tools?: number; hookTail?: boolean }): string {
   const messages: unknown[] = [{ role: 'user', content: [{ type: 'text', text: o.history ?? 'earlier conversation' }] }]
   messages.push(o.lastIsToolResult
     ? { role: 'user', content: [{ type: 'tool_result', content: 'ok' }] }
     : { role: 'user', content: [{ type: 'text', text: o.lastUserText ?? 'hello' }] })
+  if (o.hookTail !== false) {
+    messages.push({ role: 'system', content: [{ type: 'text', text: 'UserPromptSubmit hook additional context: <pss-skills> foo (HIGH)' }] })
+  }
   return JSON.stringify({
     model: 'claude-opus-4-8',
     tools: Array.from({ length: o.tools ?? 5 }, (_, i) => ({ name: `T${i}` })),
@@ -89,6 +97,15 @@ suite('heartbeatCost — exact per-fire accounting', () => {
     const r = await buildHeartbeatCost({ bodiesDir: dir, marker: MARKER, windowHours: 1 })
     assert.strictEqual(r.apiCalls, 3)
     assert.strictEqual(r.fireStartedAt, new Date(fs.statSync(path.join(dir, 'c0.request.json')).mtimeMs).toISOString())
+  })
+
+  test('REGRESSION: a trailing hook/system message must not hide the fire start', async () => {
+    // Claude Code appends the UserPromptSubmit hook output as a trailing role:"system" message, so the
+    // real user prompt is second-to-last. A detector that only inspects messages[last] finds ZERO fires
+    // on real data while passing a fixture that omits the tail. Every fixture body here carries the tail.
+    const r = await buildHeartbeatCost({ bodiesDir: dir, marker: MARKER, windowHours: 1 })
+    assert.strictEqual(r.fireDetected, true, 'fire must be detected despite the trailing system message')
+    assert.strictEqual(r.apiCalls, 3)
   })
 
   test('a differing tool count surfaces the sub-agent stream', async () => {

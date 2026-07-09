@@ -92,20 +92,49 @@ function emptyReport(marker: string, bodiesDir: string, windowHours: number, not
   }
 }
 
-/** Is this request the FIRST call of a fire? True iff its LAST message is a user message whose text
- *  starts with the marker. Checking `raw.includes(marker)` is WRONG — the marker persists in the
- *  transcript history of every later call of the session, so it would flag every call as a fire start. */
+function flattenText(c: unknown): string {
+  if (typeof c === 'string') return c
+  if (!Array.isArray(c)) return ''
+  // tool_result / tool_use / image blocks carry no `.text`, so they flatten to '' — which is what makes
+  // a follow-up call (whose last user block is a tool_result) correctly NOT look like a fire start.
+  return c.map(b => (b && typeof b === 'object' && typeof (b as { text?: string }).text === 'string' ? (b as { text: string }).text : '')).join('\n')
+}
+
+/** Injected context the harness appends AFTER the real user message (UserPromptSubmit / PostToolUse hook
+ *  output, system-reminders). It must be skipped when looking for "what the user actually said". */
+function isInjectedContext(text: string): boolean {
+  const t = text.trimStart()
+  return t.startsWith('UserPromptSubmit hook additional context')
+    || t.startsWith('PostToolUse')
+    || t.startsWith('<system-reminder>')
+}
+
+/** Is this request the FIRST call of a fire? True iff the CURRENT TURN's real user message starts with
+ *  the marker.
+ *
+ *  Two traps, both hit for real:
+ *  1. `raw.includes(marker)` is WRONG — the marker persists in the transcript history of every later
+ *     call, and appears in any conversation that merely discusses the janitor. (Measured: 1412 request
+ *     bodies contain the literal marker; zero are fires.)
+ *  2. The LAST message is NOT the user's. Claude Code appends the UserPromptSubmit hook's output as a
+ *     trailing `role:"system"` message, so a naive last-message check never matches a real fire. We walk
+ *     backwards past injected context to the real user message, stopping at the first assistant message
+ *     (which means we have left the current turn's user block).
+ */
 function isFireStart(p: string, marker: string): boolean {
   let body: { messages?: { role?: string; content?: unknown }[] }
   try { body = JSON.parse(fs.readFileSync(p, 'utf8')) } catch { return false }
   const msgs = Array.isArray(body.messages) ? body.messages : []
-  const last = msgs[msgs.length - 1]
-  if (!last || last.role !== 'user') return false
-  const c = last.content
-  const text = typeof c === 'string' ? c
-    : Array.isArray(c) ? c.map(b => (b && typeof b === 'object' && typeof (b as { text?: string }).text === 'string' ? (b as { text: string }).text : '')).join('\n')
-      : ''
-  return text.trimStart().startsWith(marker)
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i]
+    if (!m) continue
+    if (m.role === 'assistant') return false       // left the current turn's user block
+    if (m.role !== 'user') continue                // trailing hook/system context
+    const text = flattenText(m.content)
+    if (isInjectedContext(text)) continue          // hook context delivered as a user message
+    return text.trimStart().startsWith(marker)     // the real current user message
+  }
+  return false
 }
 
 /** Count Agent/Task spawns + the tool-surface of a call. A sub-agent's calls carry the parent session id
