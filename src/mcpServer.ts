@@ -44,6 +44,7 @@ import {
 } from './cacheBreakTimeline'
 import { leanify } from './leanResponse'
 import { buildSessionBurnProfile } from './sessionBurnProfile'
+import { buildHeartbeatCost } from './heartbeatCost'
 // TRDD-FB5RG4P1 — FAL comparative + SQL analytics over the forensics fact DB. Like the cache-forensic
 // tools above, these read ~/.agentlens/{otel-bodies,forensics.db} directly off disk (self-loading
 // sql.js), so they need no McpServerOptions accessor and work identically in both runtimes.
@@ -644,6 +645,34 @@ const TOOLS = [
         window:    { type: 'number', description: 'Only scan bodies from the last N hours; omit for the bounded most-recent scan across all history' },
         topN:      { type: 'number', description: 'Cap on the returned per-turn events log, most-recent-first (default 25, max 100). repeatOffenders/causeHistogram are always computed over ALL classified turns regardless.' },
         format:    { type: 'string', description: 'Output format: json (default, full object) | table | markdown | timeline' },
+      },
+    },
+  },
+  {
+    name: 'get_heartbeat_cost',
+    description:
+      'The EXACT token + dollar cost of ONE janitor heartbeat fire, end to end — built for the janitor to ' +
+      'call after each fire. "The fire" = every API call in the heartbeat\'s session from the moment the ' +
+      'cron injected its prompt until the next fire, so it INCLUDES everything the heartbeat causes: the ' +
+      'dispatcher-stub turn, hook/security injections, skills it loads, logs it reads, and the SUB-AGENTS ' +
+      'it spawns (sub-agent calls carry the parent session_id, so they are captured automatically; they ' +
+      'also show up as a distinct tool-count in callsByToolSurface, and Agent/Task spawns are counted). ' +
+      'Returns the four buckets separately — input, output, cache_read, cache_write (+ ephemeral 5m/1h) — ' +
+      'with per-bucket dollars that sum to the total, plus per-model rows. ' +
+      'IMPORTANT — the default `fire: "last-complete"` is a hard constraint, not a preference: a request ' +
+      'body carries NO request_id, so a call\'s usage is only knowable once the NEXT call is written ' +
+      '(chain: response(i).id == request(i+1).previous_message_id). A command running INSIDE the ' +
+      'heartbeat\'s own turn therefore cannot see that turn\'s final response. So it reports the last fire ' +
+      'whose calls have all settled (at a 5-min cadence: fire N reports exactly what fire N-1 cost) and ' +
+      'discloses any unsettled calls under `inFlight` rather than silently under-counting. Calls from ' +
+      'OTHER sessions overlapping the fire are reported under `concurrent`, never folded in. POINTER-ONLY.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        marker:    { type: 'string', description: 'Prompt prefix that identifies a fire (default "[janitor-heartbeat]") — the first call of a fire is the one whose LAST user message starts with it' },
+        sessionId: { type: 'string', description: 'Restrict to one session (full id or prefix); omit to use whichever session most recently fired the marker' },
+        window:    { type: 'number', description: 'Only scan bodies from the last N hours (default 3)' },
+        fire:      { type: 'string', description: '"last-complete" (default, exact) | "current" (newest fire; its tail may be unsettled and excluded — see inFlight)' },
       },
     },
   },
@@ -1911,6 +1940,11 @@ export function createMcpServer(opts: McpServerOptions): Server {
         const a = args as { sessionId?: string; scope?: string; minTokens?: number; window?: number; topN?: number; format?: TimelineFormat }
         const report = await buildCacheBreakTimeline({ sessionId: a.sessionId, scope: a.scope, minTokens: a.minTokens, windowHours: a.window, topN: a.topN })
         result = formatTimeline(report, a.format ?? 'json')
+        break
+      }
+      case 'get_heartbeat_cost': {
+        const a = args as { marker?: string; sessionId?: string; window?: number; fire?: 'last-complete' | 'current' }
+        result = await buildHeartbeatCost({ marker: a.marker, sessionId: a.sessionId, windowHours: a.window, fire: a.fire })
         break
       }
       case 'get_session_burn_profile': {
