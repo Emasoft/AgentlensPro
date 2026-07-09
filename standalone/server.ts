@@ -19,6 +19,7 @@ import { ensureTelemetryConfig, ensureAgentLensStopHook } from '../src/telemetry
 import { classifyOtlpPayload } from '../src/otlpParser'
 import { startMcpHttpServer, labelBurnStatusAccounts } from '../src/mcpServer'
 import { resolveCallContext, callBodyRegistry } from '../src/rawBodyContext'
+import { appendHookEvent, readHookEvents, purgeHookEventBuckets, hookEventsDiskUsage } from '../src/hookEventStore'
 import { ContextCompositionIndex } from '../src/contextCompositionIndex'
 import { LogReader, type OpenCodeSqlFactory } from '../src/logReader'
 import { readScratchFile } from '../src/generatedFiles'
@@ -124,6 +125,7 @@ const persistStats = {
   spanCompactions: 0, spanCompactBytes: 0,
   offsetsWrites: 0, offsetsBytes: 0,
   cardsWrites: 0, cardsBytes: 0,
+  hookEventWrites: 0, hookEventBytes: 0,
   bodiesLastPurge: { at: 0, removedFiles: 0, freedBytes: 0, keptFiles: 0, keptBytes: 0 },
 }
 
@@ -298,8 +300,23 @@ async function archiveOtelBodies(): Promise<void> {
     bodiesPassRunning = false
   }
 }
+// Lifecycle hook events (spy-agentlens.sh → POST /api/hook-events): append-only NDJSON daily
+// buckets. Signals JSONL/OTEL lack: StopFailure (rate-limit turn deaths), PreCompact trigger,
+// exact session lifecycle. TRDD-Q6ZOUVK5.
+const HOOK_EVENTS_DIR = path.join(DATA_DIR, 'hook-events')
+const HOOK_EVENTS_RETENTION_DAYS = Math.max(1, Number(process.env.AGENTLENS_HOOK_EVENTS_RETENTION_DAYS) || 31)
+const HOOK_EVENT_MAX_BYTES = 512 * 1024 // lifecycle payloads are small; a bigger body is a bug
+
+function purgeHookEvents(): void {
+  const r = purgeHookEventBuckets(HOOK_EVENTS_DIR, HOOK_EVENTS_RETENTION_DAYS)
+  if (r.removed.length > 0) {
+    console.log(`[AgentLens] hook-events retention: purged ${r.removed.length} bucket(s), ${(r.freedBytes / 1048576).toFixed(1)}MB`)
+  }
+}
+
 void archiveOtelBodies() // enforce on boot — a long-dead server must not leave the corpus unbounded
-const bodiesPurgeTimer = setInterval(() => { void archiveOtelBodies() }, 3600e3)
+purgeHookEvents()
+const bodiesPurgeTimer = setInterval(() => { void archiveOtelBodies(); purgeHookEvents() }, 3600e3)
 bodiesPurgeTimer.unref()
 
 // ── Single-instance guard (canonical instance only) ──────────────────────────
@@ -1842,11 +1859,65 @@ const uiServer = http.createServer((req, res) => {
       logSessions: logSessions.size,
       persistence: {
         ...p,
-        totalBytesWritten: p.spanAppendBytes + p.spanCompactBytes + p.offsetsBytes + p.cardsBytes,
+        totalBytesWritten: p.spanAppendBytes + p.spanCompactBytes + p.offsetsBytes + p.cardsBytes + p.hookEventBytes,
         files: { spans: sizeOf(DATA_FILE), offsets: sizeOf(OFFSETS_FILE), cards: sizeOf(CARDS_FILE) },
       },
       bodies: { archive: archiveDiskUsage(BODIES_ARCHIVE_DIR), lastPass: p.bodiesLastPurge },
+      hookEvents: { ...hookEventsDiskUsage(HOOK_EVENTS_DIR), receivedSinceBoot: p.hookEventWrites },
     }))
+    return
+  }
+
+  // Lifecycle hook-event ingestion (scripts/spy-agentlens.sh fire-and-forget POST). Raw payload
+  // is stored verbatim; classification happens at read time so the hook script stays a dumb pipe.
+  if (req.method === 'POST' && url === '/api/hook-events') {
+    const chunks: Buffer[] = []
+    let received = 0
+    let overflowed = false
+    req.on('data', (c: Buffer) => {
+      received += c.length
+      if (received > HOOK_EVENT_MAX_BYTES) { overflowed = true; req.destroy() }
+      else chunks.push(c)
+    })
+    req.on('end', () => {
+      if (overflowed) return // destroyed mid-stream — no response possible
+      try {
+        const payload = JSON.parse(Buffer.concat(chunks).toString('utf-8')) as Record<string, unknown>
+        if (!payload || typeof payload !== 'object' || typeof payload.hook_event_name !== 'string' || payload.hook_event_name === '') {
+          res.writeHead(400, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ error: 'payload must be a JSON object with hook_event_name' }))
+          return
+        }
+        const bytes = appendHookEvent(HOOK_EVENTS_DIR, payload)
+        persistStats.hookEventWrites++
+        persistStats.hookEventBytes += bytes
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ ok: true }))
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: String(e instanceof Error ? e.message : e) }))
+      }
+    })
+    return
+  }
+
+  if (req.method === 'GET' && url === '/api/hook-events') {
+    const rawUrl = req.url ?? ''
+    const qIdx = rawUrl.indexOf('?')
+    const q = new URLSearchParams(qIdx >= 0 ? rawUrl.slice(qIdx + 1) : '')
+    const num = (k: string): number | undefined => {
+      const v = q.get(k)
+      return v !== null && v !== '' && Number.isFinite(Number(v)) ? Number(v) : undefined
+    }
+    const events = readHookEvents(HOOK_EVENTS_DIR, {
+      session: q.get('session') ?? undefined,
+      ev: q.get('ev') ?? undefined,
+      sinceMs: num('since'),
+      untilMs: num('until'),
+      limit: num('limit'),
+    })
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ count: events.length, events }))
     return
   }
 

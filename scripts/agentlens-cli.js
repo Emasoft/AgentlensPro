@@ -66,6 +66,12 @@ operations:
   --purge-bodies        delete ALL archived body volumes (the live 72h window is untouched)
   --install-skill       (re)install the agentlens-diagnostics skill into ~/.claude/skills/
                         from the repo copy — idempotent (installed / updated / already current)
+  --install-hooks       register scripts/spy-agentlens.sh on the 10 LIFECYCLE hook events
+                        (SessionStart/End, Stop, StopFailure, Pre/PostCompact, Permission,
+                        Notification, SubagentStart/Stop) via the same verified transaction;
+                        also removes any dead claude-spyglass hook entries + env.SPYGLASS_DIR.
+                        Other tools' hooks on the same events are never touched. Idempotent.
+  --uninstall-hooks     remove exactly those spy-agentlens hook entries (nothing else)
   --install-otel        add the Claude Code telemetry env vars to ~/.claude/settings.json via a
                         verified transaction (atomic write, backup, post-verify, refuses an
                         unparseable file, pre-existing content untouched)
@@ -272,6 +278,8 @@ async function showStatus() {
     `spans:  ${s.spans.inMemory}/${s.spans.cap} in memory, ${s.spans.pendingAppends} pending, store ${fmtMb(s.spans.fileBytes)} (${s.spans.fileLines} lines) | log sessions: ${s.logSessions}`,
     `disk writes since boot: ${fmtMb(per.totalBytesWritten)} total — spans ${fmtMb(per.spanAppendBytes)} in ${per.spanAppendWrites} appends + ${per.spanCompactions} compaction(s) ${fmtMb(per.spanCompactBytes)}; offsets ${fmtMb(per.offsetsBytes)}×${per.offsetsWrites}; cards ${fmtMb(per.cardsBytes)}×${per.cardsWrites}`,
     `bodies: archive ${s.bodies.archive.volumes} volume(s), ${s.bodies.archive.entries} lumps, ${fmtGb(s.bodies.archive.bytes)}; last pass archived ${s.bodies.lastPass.removedFiles} (live kept ${fmtGb(s.bodies.lastPass.keptBytes)})`,
+    // hookEvents is absent when --status hits a server built before TRDD-Q6ZOUVK5 — skip, don't crash.
+    ...(s.hookEvents ? [`hooks:  ${s.hookEvents.receivedSinceBoot} event(s) since boot, ${s.hookEvents.files} bucket(s) ${fmtMb(s.hookEvents.bytes)} on disk`] : []),
     `data:   ${s.dataDir} (spans ${fmtMb(per.files.spans)}, cards ${fmtMb(per.files.cards)}, offsets ${fmtMb(per.files.offsets)})`,
   ].join('\n'))
 }
@@ -361,6 +369,94 @@ async function installOtel(uninstall) {
   console.log(`${keys.length} telemetry env var(s) ${verb} ${CLAUDE_SETTINGS}`)
   console.log(`changed=${result.changed}${result.backupPath ? ` backup=${result.backupPath}` : ''} attempts=${result.attempts}`)
   if (!uninstall) console.log('restart Claude Code sessions to pick up the env change')
+}
+
+// Lifecycle events worth hooking — they carry signals the JSONL transcripts and OTEL bodies
+// LACK (exact rate-limit turn deaths, compaction boundaries + trigger, session lifecycle).
+// Deliberately NO PreToolUse/PostToolUse/UserPromptSubmit: those are fully redundant with the
+// existing ingestion and are the only high-frequency hooks — all of the per-turn overhead that
+// made claude-spyglass expensive lived there (2+ process spawns per tool call).
+const HOOK_EVENTS = [
+  'SessionStart', 'SessionEnd', 'Stop', 'StopFailure', 'PreCompact', 'PostCompact',
+  'PermissionRequest', 'Notification', 'SubagentStart', 'SubagentStop',
+]
+
+// Install (or remove) the spy-agentlens.sh forwarder on the lifecycle events, via the same
+// verified transaction as --install-otel. Install ALSO removes every claude-spyglass hook entry
+// and its env.SPYGLASS_DIR (the "replace spyglass" migration) — spyglass's server is gone, so
+// its 28 registrations were dead process spawns on every event. Merge-preserving: hooks from
+// other tools (janitor etc.) on the same events are never touched.
+// Rebuild one event's matcher list: strip spy-agentlens entries (and, when installing,
+// spyglass entries too), drop matchers left empty, append our entry on lifecycle events.
+// Pure — returns the new list + what was stripped; the caller decides whether anything changed.
+function rebuildEventMatchers(matchers, ev, uninstall, cmd) {
+  const isOurs = h => typeof (h && h.command) === 'string' && h.command.includes('spy-agentlens.sh')
+  const isSpyglass = h => typeof (h && h.command) === 'string' && h.command.includes('spyglass-collect.sh')
+  const out = { rebuilt: [], removedOurs: 0, removedSpyglass: 0, installed: false }
+  for (const m of matchers) {
+    const kept = (Array.isArray(m.hooks) ? m.hooks : []).filter(h => {
+      if (isOurs(h)) { out.removedOurs++; return false }
+      if (!uninstall && isSpyglass(h)) { out.removedSpyglass++; return false }
+      return true
+    })
+    if (kept.length > 0) out.rebuilt.push({ ...m, hooks: kept }) // a matcher left empty is dropped
+  }
+  if (!uninstall && HOOK_EVENTS.includes(ev)) {
+    out.rebuilt.push({ hooks: [{ type: 'command', command: cmd, timeout: 2, async: true }] })
+    out.installed = true
+  }
+  return out
+}
+
+async function installHooks(uninstall) {
+  const script = path.resolve(__dirname, 'spy-agentlens.sh')
+  if (!uninstall && !fs.existsSync(script)) throw new Error(`hook script missing at ${script} — is the repo checkout intact?`)
+  const cmd = `bash ${script}`
+
+  let settings = {}
+  if (fs.existsSync(CLAUDE_SETTINGS)) {
+    // Refuse-unparseable, same stance as safe_config_edit: never "start fresh" over user config.
+    try { settings = JSON.parse(fs.readFileSync(CLAUDE_SETTINGS, 'utf8')) }
+    catch { throw new Error(`refusing: ${CLAUDE_SETTINGS} is not parseable JSON — fix it before editing hooks`) }
+  }
+  const hooks = (settings && typeof settings === 'object' && settings.hooks) || {}
+
+  const ops = []
+  let removedSpyglass = 0
+  let removedOurs = 0
+  let added = 0
+  const events = new Set([...Object.keys(hooks), ...(uninstall ? [] : HOOK_EVENTS)])
+  for (const ev of events) {
+    const matchers = Array.isArray(hooks[ev]) ? hooks[ev] : []
+    const r = rebuildEventMatchers(matchers, ev, uninstall, cmd)
+    // Counters reflect only events that actually change — an already-current event (ours
+    // present, nothing stripped) must not inflate "installed on N events" to a lie.
+    if (JSON.stringify(r.rebuilt) === JSON.stringify(matchers)) continue
+    removedOurs += r.removedOurs
+    removedSpyglass += r.removedSpyglass
+    if (r.installed) added++
+    if (r.rebuilt.length === 0) ops.push({ op: 'delete', path: ['hooks', ev] })
+    else ops.push({ op: 'set', path: ['hooks', ev], value: r.rebuilt })
+  }
+  // env.SPYGLASS_DIR only feeds the spyglass hook commands — dead once those are removed.
+  if (!uninstall && settings.env && settings.env.SPYGLASS_DIR !== undefined) {
+    ops.push({ op: 'delete', path: ['env', 'SPYGLASS_DIR'] })
+  }
+
+  if (ops.length === 0) {
+    console.log(uninstall ? 'no agentlens hooks present — nothing to remove' : 'hooks already installed — nothing to change')
+    return
+  }
+  const result = await runSafeConfigEdit(ops, !uninstall)
+  if (uninstall) {
+    console.log(`removed ${removedOurs} agentlens hook entr${removedOurs === 1 ? 'y' : 'ies'} from ${CLAUDE_SETTINGS}`)
+  } else {
+    console.log(`installed spy-agentlens hooks on ${added} lifecycle event(s) in ${CLAUDE_SETTINGS}`)
+    if (removedSpyglass > 0) console.log(`removed ${removedSpyglass} dead claude-spyglass hook entr${removedSpyglass === 1 ? 'y' : 'ies'} (+ env.SPYGLASS_DIR)`)
+    if (removedOurs > 0) console.log(`refreshed ${removedOurs} pre-existing agentlens entr${removedOurs === 1 ? 'y' : 'ies'}`)
+  }
+  console.log(`changed=${result.changed}${result.backupPath ? ` backup=${result.backupPath}` : ''} attempts=${result.attempts}`)
+  console.log('restart Claude Code sessions to pick up the hook change')
 }
 
 // (Re)install the agentlens-diagnostics skill into the user scope. The repo copy is the
@@ -482,6 +578,7 @@ async function main() {
   const globals = { full: false, out: null, startServer: false, dashboard: false }
   const ops = { status: false, stop: false, purgeDb: false, purgeBodies: false, exportBodies: null, since: undefined, until: undefined, installSkill: false }
   let otelOp = null
+  let hooksOp = null
   const rest = []
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--full') globals.full = true
@@ -497,6 +594,8 @@ async function main() {
     } else if (argv[i] === '--since') ops.since = argv[++i]
     else if (argv[i] === '--until') ops.until = argv[++i]
     else if (argv[i] === '--install-skill') ops.installSkill = true
+    else if (argv[i] === '--install-hooks') hooksOp = 'install'
+    else if (argv[i] === '--uninstall-hooks') hooksOp = 'uninstall'
     else if (argv[i] === '--install-otel') otelOp = 'install'
     else if (argv[i] === '--uninstall-otel') otelOp = 'uninstall'
     else if (argv[i] === '--out') {
@@ -513,6 +612,12 @@ async function main() {
 
   // Skill install is standalone too — pure file copy, no server, no settings mutation.
   if (ops.installSkill) { installSkill(); return }
+
+  // Hook install/uninstall is another settings transaction — no server needed.
+  if (hooksOp) {
+    await installHooks(hooksOp === 'uninstall')
+    return
+  }
 
   if (ops.status) { await showStatus(); return }
   if (ops.stop) { await stopServer(); return }

@@ -46,8 +46,15 @@ agentlens-cli batch '<json-array>'           # N tools in ONE invocation: [{"too
 | `--export-bodies DIR` | re-inflate archived OTEL bodies into DIR as plain files; `--since <hours\|ISO>` / `--until <ISO>` filter by time |
 | `--purge-bodies` | delete ALL archived body volumes (the live 72h window is untouched) |
 | `--install-skill` | (re)install THIS skill into `~/.claude/skills/` — idempotent, reports installed/updated/current |
+| `--install-hooks` | register `spy-agentlens.sh` on the 10 LIFECYCLE hook events (SessionStart/End, Stop, StopFailure, Pre/PostCompact, Permission, Notification, SubagentStart/Stop) via the same verified transaction; also removes dead claude-spyglass entries. Never touches other tools' hooks. Idempotent; needs a session restart |
+| `--uninstall-hooks` | remove exactly those spy-agentlens hook entries (nothing else) |
 | `--install-otel` | add the 19 Claude Code telemetry env vars to `~/.claude/settings.json` via a verified transaction: atomic backup+rename, cross-process lock, post-verify, refuses an unparseable file, all other content untouched, idempotent (`changed=false` when already installed) |
 | `--uninstall-otel` | remove exactly those 19 vars, same guarantees |
+
+Hook events: `--install-hooks` feeds lifecycle signals the transcripts/OTEL lack — exact
+rate-limit turn deaths (StopFailure), compaction boundaries + trigger (PreCompact), true
+session lifecycle — into `~/.agentlens/hook-events/` (NDJSON daily buckets, 31d retention).
+Query: `GET /api/hook-events?session=&ev=&since=&until=&limit=` on the UI port.
 
 Bodies lifecycle: live plain files for 72h → auto-archived hourly into monthly WAD volumes
 (`~/.agentlens/otel-bodies-archive/bodies-YYYY-MM.wad` — gzip lumps + NDJSON index, random
