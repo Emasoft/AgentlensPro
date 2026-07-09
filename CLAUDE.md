@@ -2,11 +2,22 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## AgentLens MCP (this project dogfoods its own MCP server)
+## AgentLens diagnostics (CLI — the MCP server is deliberately NOT registered)
 
-Before any task: call `get_recent_sessions` (recent work + cost) and `get_workspace_patterns` (hot files, recurring issues).
-Only use `find_relevant_context` if your task closely matches past prompts by keyword — skip it for novel tasks.
-Other tools: `get_session_detail`, `get_efficiency_report`, `get_instruction_suggestions` (all defined in `src/mcpServer.ts`).
+All 32 diagnostic tools are called via the CLI, not MCP: resident MCP schemas cost ~8k tokens
+per turn and any toolset change breaks the prompt-cache prefix, so `.mcp.json` intentionally
+does not register the server. Load the **`agentlens-diagnostics`** skill, or directly:
+
+```bash
+pnpm run mcp:ensure                              # server up (idempotent)
+node scripts/agentlens-cli.js list --desc        # discover tools
+node scripts/agentlens-cli.js help <tool>        # flags from the live schema
+node scripts/agentlens-cli.js <tool> --param value --out /tmp/x.json   # digest to stdout
+```
+
+Before any task: `get_recent_sessions` (recent work + cost) and `get_workspace_patterns`
+(hot files, recurring issues) — batch them in one invocation. Do not re-register the MCP
+server without asking the user.
 
 ## What this is
 
