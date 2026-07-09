@@ -35,6 +35,10 @@ import { listSessionFileIds } from './contextComposition'
 import { generateSuggestions } from './instructionAdvisor'
 import { readAllInstructionContent } from './instructionFiles'
 import { ContextCompositionIndex, type CompositionBlockKind, type GroupBy } from './contextCompositionIndex'
+import {
+  buildCacheCreationReport, buildExpensiveWritesTrace, buildCacheBreakGapReport,
+  type CacheCreationGroupBy,
+} from './cacheCreationForensics'
 
 // TRDD-CTXQUERY — one process-lifetime, LRU-cached composition index shared by all composition tools.
 // It reads the shared callBodyRegistry singleton (fed by both OTLP ingestors) directly, so the tools
@@ -509,6 +513,68 @@ const TOOLS = [
         turn:       { type: 'number', description: '1-based call index within the session' },
         blockIndex: { type: 'number', description: 'Block position within that call' },
         full:       { type: 'boolean', description: 'Lift the per-block text cap for this single block (default false)' },
+      },
+    },
+  },
+  // ── cache_creation forensics (TRDD-CCFORNSC) ────────────────────────────────────
+  {
+    name: 'get_cache_creation_report',
+    description:
+      'Ranks WHO is burning the EXPENSIVE cache_creation write bucket (~1.25x the base input rate — a ' +
+      'cold prefix re-write, not a cache hit). Scans the raw OTEL response bodies on disk for ' +
+      'cache_creation_input_tokens, joins each write to its owning session via the previous_message_id ' +
+      'chain, and aggregates heaviest-first by session, account, model, or hourly time-window. Always ' +
+      'includes an explicit `unattributed` bucket (last-turn / still-in-flight responses that had no ' +
+      'following request to join against) — never folded silently into the totals. The scan is a bounded, ' +
+      'most-recent-first SAMPLE (never a full 15k+-file sweep) — read `coverage` for exactly what was ' +
+      'scanned. Use this to answer "who/what is re-writing the prompt cache and how much is it costing".',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        window:  { type: 'number', description: 'Only include writes from the last N hours (e.g. 5 for the live rate-limit window); omit for the bounded most-recent scan across all history' },
+        groupBy: { type: 'string', description: 'Aggregation dimension: session | account | model | time (default session)' },
+        topN:    { type: 'number', description: 'How many ranked groups to return (default 15, max 50)' },
+      },
+    },
+  },
+  {
+    name: 'trace_expensive_writes',
+    description:
+      'For the biggest single cache_creation write events, resolves session/account via the ' +
+      'previous_message_id chain and summarizes WHAT content made the write so expensive — image / ' +
+      'tool_result / text / system / thinking token shares plus the tool-catalog size — from the request ' +
+      'body that produced it. POINTER-ONLY: never returns base64 image bytes, raw block text, or the ' +
+      'metadata.user_id token; only derived identifiers (session_id, account_uuid) and token counts. ' +
+      'Complements get_cache_creation_report\'s "who" with the "what\'s inside the huge writes" view — ' +
+      'the composition field is null when the owning request body could not be resolved (e.g. the write ' +
+      'was unattributed). Read `coverage` for the bounded scan scope.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        minCacheCreate: { type: 'number', description: 'Only events with at least this many cache_creation tokens (default 0 — no floor)' },
+        topN:           { type: 'number', description: 'How many top events to trace (default 6, max 25)' },
+        window:         { type: 'number', description: 'Only include writes from the last N hours; omit for the bounded most-recent scan across all history' },
+      },
+    },
+  },
+  {
+    name: 'get_cache_break_gap_report',
+    description:
+      'Tells apart 5-min TTL EXPIRY from a genuine cache BREAK as the cause of expensive cache_creation ' +
+      'writes — the two look identical in raw totals but have opposite fixes (a heartbeat prevents TTL ' +
+      'expiry; nothing about a heartbeat stops a prefix from actually changing). Returns: (1) the TIER ' +
+      'SPLIT of all scanned cache_creation into the 5-min vs 1-hour ephemeral-cache buckets (from ' +
+      'usage.cache_creation) — a mostly-1h-tier total means a <5min heartbeat is irrelevant; (2) for every ' +
+      'BIG (>= minCacheCreate, default 100k tokens) single write, the TIME GAP since the previous call in ' +
+      'the SAME session (via the previous_message_id chain), bucketed into first-call / <4.5m / 4.5-6m ' +
+      '(the 5-min TTL window) / 6-15m / 15-65m / >65m (the 1h TTL window). Mass in the 4.5-6m bucket means ' +
+      'a heartbeat would help; mass in <4.5m means something upstream is breaking the cache prefix and no ' +
+      'heartbeat can fix it. Read `coverage` for the bounded scan scope.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        minCacheCreate: { type: 'number', description: 'Only classify writes with at least this many cache_creation tokens (default 100000)' },
+        window:         { type: 'number', description: 'Only include writes from the last N hours; omit for the bounded most-recent scan across all history' },
       },
     },
   },
@@ -1635,6 +1701,21 @@ export function createMcpServer(opts: McpServerOptions): Server {
       case 'get_block_content': {
         const a = args as { sessionId: string; turn: number; blockIndex: number; full?: boolean }
         result = await compositionIndex.getBlockContent(a.sessionId, a.turn, a.blockIndex, { full: a.full })
+        break
+      }
+      case 'get_cache_creation_report': {
+        const a = args as { window?: number; groupBy?: CacheCreationGroupBy; topN?: number }
+        result = await buildCacheCreationReport({ windowHours: a.window, groupBy: a.groupBy, topN: a.topN })
+        break
+      }
+      case 'trace_expensive_writes': {
+        const a = args as { minCacheCreate?: number; topN?: number; window?: number }
+        result = await buildExpensiveWritesTrace({ minCacheCreate: a.minCacheCreate, topN: a.topN, windowHours: a.window })
+        break
+      }
+      case 'get_cache_break_gap_report': {
+        const a = args as { minCacheCreate?: number; window?: number }
+        result = await buildCacheBreakGapReport({ minCacheCreate: a.minCacheCreate, windowHours: a.window })
         break
       }
       default:
