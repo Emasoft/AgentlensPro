@@ -39,6 +39,9 @@ import {
   buildCacheCreationReport, buildExpensiveWritesTrace, buildCacheBreakGapReport,
   type CacheCreationGroupBy,
 } from './cacheCreationForensics'
+import {
+  buildCacheBreakTimeline, formatTimeline, type TimelineFormat,
+} from './cacheBreakTimeline'
 
 // TRDD-CTXQUERY — one process-lifetime, LRU-cached composition index shared by all composition tools.
 // It reads the shared callBodyRegistry singleton (fed by both OTLP ingestors) directly, so the tools
@@ -575,6 +578,34 @@ const TOOLS = [
       properties: {
         minCacheCreate: { type: 'number', description: 'Only classify writes with at least this many cache_creation tokens (default 100000)' },
         window:         { type: 'number', description: 'Only include writes from the last N hours; omit for the bounded most-recent scan across all history' },
+      },
+    },
+  },
+  {
+    name: 'get_cache_break_timeline',
+    description:
+      'The ROOT-CAUSE timeline: for ONE session, reconstructs its ordered turns from the raw OTEL ' +
+      'bodies (via the previous_message_id chain) and, for every turn with a significant cache_creation ' +
+      'write, DIFFS its cached prefix against the previous turn in the docs hierarchy order (model → ' +
+      'tools → effort → system → message-prefix), finds the FIRST divergent element = the break point, ' +
+      'and CLASSIFIES the definitive culprit into a cause code: TOOLSET_CHANGED, TOOLS_REORDERED, ' +
+      'TOOL_SEARCH_DEFERRED, MCP_TOOLS_CHANGED, MODEL_SWITCH, EFFORT_SWITCH, HOOK_INJECTION, ' +
+      'SKILL_INJECTION, SKILL_DESCRIPTION_TRUNCATION, SKILL_CHANGED, INLINE_EXEC_RESULT_CHANGED, ' +
+      'CLAUDE_MD_CHANGED, AGENT_METADATA_CHANGED, SYSTEM_TIMESTAMP, CONTEXT_ORDER_CHANGED, TTL_EXPIRY, ' +
+      'COLD_START, COMPACTION, UNCLASSIFIED. Emits a TIMELINE of break events (each naming the culprit ' +
+      'element + tokens re-written) PLUS a REPEAT-OFFENDER rollup: break events grouped by (cause, the ' +
+      'specific offending element) so the SAME element breaking the cache across many turns collapses ' +
+      'into ONE chronic offender — flagged SYSTEMATIC at ≥3 turns with a plain-language verdict naming ' +
+      'the exact misconfigured hook/skill/tool and its fix. POINTER-ONLY (stable fingerprints, never raw ' +
+      'block text / base64 / the user_id token). Read `coverage` for the bounded scan scope.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        sessionId: { type: 'string', description: 'The session to reconstruct (exact match from get_cache_creation_report / get_recent_sessions)' },
+        scope:     { type: 'string', description: 'A session-id prefix — resolves to the heaviest matching session; omit to pick the heaviest session overall in the scan' },
+        minTokens: { type: 'number', description: 'Only classify turns whose cache_creation ≥ this (default 5000)' },
+        window:    { type: 'number', description: 'Only scan bodies from the last N hours; omit for the bounded most-recent scan across all history' },
+        format:    { type: 'string', description: 'Output format: json (default, full object) | table | markdown | timeline' },
       },
     },
   },
@@ -1716,6 +1747,12 @@ export function createMcpServer(opts: McpServerOptions): Server {
       case 'get_cache_break_gap_report': {
         const a = args as { minCacheCreate?: number; window?: number }
         result = await buildCacheBreakGapReport({ minCacheCreate: a.minCacheCreate, windowHours: a.window })
+        break
+      }
+      case 'get_cache_break_timeline': {
+        const a = args as { sessionId?: string; scope?: string; minTokens?: number; window?: number; format?: TimelineFormat }
+        const report = await buildCacheBreakTimeline({ sessionId: a.sessionId, scope: a.scope, minTokens: a.minTokens, windowHours: a.window })
+        result = formatTimeline(report, a.format ?? 'json')
         break
       }
       default:

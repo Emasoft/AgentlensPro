@@ -1,0 +1,834 @@
+// TRDD-6TQ2FBUR — cache-break ROOT-CAUSE timeline. Answers the last forensic question the
+// cache_creation tools leave open: "WHICH specific element broke the prompt-cache prefix on this
+// turn, and is the SAME element breaking it every turn (a systematic misconfiguration)?"
+//
+// MECHANICS (Anthropic prompt-caching docs, confirmed 2026-07-09): the cache is a PREFIX cache keyed
+// on the EXACT byte sequence of [tools, system, messages], in that hierarchy. A change at any layer
+// invalidates that layer AND everything after it, re-billing the tail as cache_creation (1.25x/2x the
+// input rate) instead of cache_read (0.1x). Request-level parameters also key the cache: the MODEL,
+// the extended-thinking / reasoning-effort setting, tool_choice, and adding/removing images. So a turn
+// can re-write the whole prefix WITHOUT any block bytes changing (a pure model / effort switch), which
+// is why those are classified from the request fields, not the block diff.
+//
+// TURN RECONSTRUCTION (proven on real data, TRDD-CCFORNSC + this TRDD): group REQUEST bodies by
+// session_id (metadata.user_id blob), order by mtime; turn i's response id == turn i+1's
+// diagnostics.previous_message_id (verified byte-exact). cache_creation of turn i is billed on turn i's
+// request context, so the CULPRIT is the first element of prefix(req_i) that diverges from
+// prefix(req_{i-1}). We diff in the docs hierarchy order (model -> tools -> effort -> system ->
+// message-prefix) and STOP at the first divergence — the most-invalidating layer that changed is the
+// root cause; deeper changes are its consequence.
+//
+// POINTER-ONLY: a prefix element carries a stable HASH of its cache-relevant bytes, never the bytes
+// themselves. No raw block text, no base64 image data, no metadata.user_id token blob crosses the
+// boundary — only derived identifiers (session_id, account_uuid), token counts, kinds, and labels.
+//
+// LAZY + BOUNDED: a single recency-first, capped scan (never the 30k+-file directory whole); every
+// report carries a `coverage` block stating exactly what was scanned. Prefixes are extracted during
+// the one scan pass and the multi-MB raw body is dropped immediately, so memory stays bounded.
+
+import { parseUserId } from './rawBodyContext'
+import { estimateTokensFromBytes } from './tokenEstimator'
+import { calcTokenCostUsd } from './pricing'
+import {
+  DEFAULT_BODIES_DIR, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, RESPONSE_SCAN_CAP,
+  listBySuffix, boundedRecent, readJsonBounded,
+} from './cacheCreationForensics'
+import * as fs from 'fs'
+
+export { DEFAULT_BODIES_DIR }
+
+// ── Cause taxonomy ──────────────────────────────────────────────────────────────
+export type CacheBreakTimelineCause =
+  | 'TOOLSET_CHANGED'            // a tool added/removed/definition-changed (the #1 structural cause)
+  | 'TOOLS_REORDERED'           // identical tool set, different order (cache is byte-order sensitive)
+  | 'TOOL_SEARCH_DEFERRED'      // a newly-present deferred (defer_loading) tool — tool-search loaded it mid-session
+  | 'MCP_TOOLS_CHANGED'         // mcp__ tools added/removed (an MCP server / plugin toggled)
+  | 'MODEL_SWITCH'              // model changed mid-session (caches are model-specific)
+  | 'EFFORT_SWITCH'             // extended-thinking / reasoning-effort setting changed
+  | 'HOOK_INJECTION'            // a per-turn injected hook block mutated (writes into the cached prefix)
+  | 'SKILL_INJECTION'           // a skill catalog / skill block newly injected
+  | 'SKILL_DESCRIPTION_TRUNCATION' // a skill description shrank (truncated) turn-to-turn
+  | 'SKILL_CHANGED'             // a skill catalog / skill block changed content
+  | 'INLINE_EXEC_RESULT_CHANGED'// a skill `!`-operator inline shell result differs turn-to-turn
+  | 'CLAUDE_MD_CHANGED'         // an injected CLAUDE.md / rules instruction file changed
+  | 'AGENT_METADATA_CHANGED'    // harness/agent metadata (billing header cc_version, agent-types list) changed
+  | 'SYSTEM_TIMESTAMP'          // the only diff is a moving date/clock inside an otherwise-stable block
+  | 'CONTEXT_ORDER_CHANGED'     // identical block content, different injection order (cache still breaks)
+  | 'TTL_EXPIRY'                // no prefix change; a TTL gap let the cache entry expire (5m or 1h tier)
+  | 'COLD_START'                // first turn / no prior cache_read to break / >1h resume
+  | 'COMPACTION'                // conversation compaction rebuilt the message layer
+  | 'UNCLASSIFIED'              // a break with no localizable structural cause (raw diff summary attached)
+
+// TTL tier a timing-driven break landed in (mirrors buildCacheBreakGapReport's gap buckets).
+export type TtlTier = '5m' | '1h' | 'none'
+
+const REMEDIATION: Record<CacheBreakTimelineCause, string> = {
+  TOOLSET_CHANGED:            'A tool was added/removed/redefined mid-session. Keep the tool catalog byte-identical: use defer-loading stubs + tool-search rather than mutating the live tool set.',
+  TOOLS_REORDERED:            'The tool set is the same but its ORDER shuffled. Emit tools in a stable sorted order so the catalog bytes never move.',
+  TOOL_SEARCH_DEFERRED:       'A deferred tool keeps loading mid-session (tool-search). Pre-load the tools you know you need at session start, or accept the one-time load cost.',
+  MCP_TOOLS_CHANGED:          'An MCP server / plugin toggled its non-deferred tools mid-session. Keep MCP servers connected for the whole session, or make their tools deferred.',
+  MODEL_SWITCH:               'The model changed mid-session — caches are model-specific. Hand off to a sub-agent instead of switching model in place.',
+  EFFORT_SWITCH:              'The extended-thinking / reasoning-effort setting changed. Fix the effort level once at session start; changing it invalidates system + messages.',
+  HOOK_INJECTION:             'A per-turn hook writes a mutating block INTO the cached prefix. Move the hook output after the last cache breakpoint (into the current user message), or make it stable.',
+  SKILL_INJECTION:            'A skill block was injected into the cached prefix. Load skills before the cache breakpoint stabilizes, or keep the skill set fixed.',
+  SKILL_DESCRIPTION_TRUNCATION:'A skill description was truncated turn-to-turn, changing the catalog bytes. Keep skill descriptions stable-length within a session.',
+  SKILL_CHANGED:              'A skill catalog / skill block changed content mid-session. Keep the available-skills set and their text fixed within a session.',
+  INLINE_EXEC_RESULT_CHANGED: 'A skill `!`-operator shell result differs each turn (e.g. a clock/`date`/`git status`), so its injected block re-writes the prefix. Pin or remove the volatile inline command.',
+  CLAUDE_MD_CHANGED:          'An injected instruction file (CLAUDE.md / a rule) changed mid-session. Do not edit instruction files during a live session; a date inside them is SYSTEM_TIMESTAMP, not this.',
+  AGENT_METADATA_CHANGED:     'Harness/agent metadata (the billing header cc_version, the agent-types list) changed — usually a Claude Code upgrade. Unavoidable once; avoid resuming huge sessions right after upgrading.',
+  SYSTEM_TIMESTAMP:           'A moving date/clock inside an otherwise-static block breaks the cache every day/turn. Move the timestamp out of the cached prefix into the current user message.',
+  CONTEXT_ORDER_CHANGED:      'The same blocks are injected in a DIFFERENT order — the cache is byte-order sensitive, so this still breaks it. Fix the injection order to be deterministic.',
+  TTL_EXPIRY:                 'No prefix change — the cache entry simply expired between turns. A heartbeat within the TTL (5m/1h) would convert these writes back to cache_read.',
+  COLD_START:                 'A cold cache warm (first turn / resume / no prior cached prefix). Expected once per session; not an avoidable per-turn break.',
+  COMPACTION:                 'Conversation compaction rebuilt the message layer. Expected once per compaction; avoid compacting more than necessary.',
+  UNCLASSIFIED:               'A break whose cause could not be localised from the prefix diff. Inspect the attached raw diff summary and the raw bodies around this turn.',
+}
+
+// ── Stable fingerprint + volatile normalization ──────────────────────────────────
+// FNV-1a 32-bit — a cheap, dependency-free stable hash. We store this hash of a block's cache-relevant
+// bytes, NEVER the bytes, so the prefix stays pointer-only. Two turns' blocks are "the same" iff their
+// fingerprints match (which is exactly the cache's own byte-identity test, at hash granularity).
+function fnv1a(s: string): string {
+  let h = 0x811c9dc5
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)
+    h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0
+  }
+  return h.toString(16).padStart(8, '0')
+}
+
+// Strip the volatile bits (ISO dates, clock times, "Today's date is X", relative-time phrases) so two
+// blocks that differ ONLY by a moving timestamp normalize to the same string — that is how a
+// SYSTEM_TIMESTAMP break is told apart from a real content change (CLAUDE_MD_CHANGED etc.).
+function normalizeVolatile(text: string): string {
+  return text
+    .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?/g, '<TS>')
+    .replace(/\d{4}-\d{2}-\d{2}/g, '<DATE>')
+    .replace(/\b\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM|am|pm)?\b/g, '<TIME>')
+    .replace(/Today'?s date is[^\n.]*/gi, "Today's date is <DATE>")
+    .replace(/\b\d+\s*(?:second|minute|hour|day|week|month|year)s?\s+ago\b/gi, '<AGO>')
+}
+
+// ── Content classification of an injected text block ──────────────────────────────
+export type BlockContentKind =
+  | 'claudemd' | 'rule' | 'agentmeta' | 'skillcatalog' | 'agentcatalog'
+  | 'hook' | 'date' | 'execresult' | 'postcompact' | 'system' | 'usertext' | 'history'
+
+function classifyContentKind(text: string): BlockContentKind {
+  if (/x-anthropic-billing-header|cc_version=|cc_entrypoint=/.test(text)) return 'agentmeta'
+  if (/This session is being continued from a previous|conversation summary so far|compacted the (?:previous )?conversation|<compaction_summary|Analysis:[\s\S]{0,80}Summary:/i.test(text)) return 'postcompact'
+  if (/Contents of .{0,300}CLAUDE\.md|^#\s*CLAUDE\.md/m.test(text)) return 'claudemd'
+  if (/Contents of .{0,300}[/\\]\.claude[/\\]rules[/\\]/.test(text)) return 'rule'
+  if (/<local-command-stdout>|<command-output>|command-stdout|<function_results>/.test(text)) return 'execresult'
+  if (/skills are available for use with the Skill tool|The following skills are available|Available skills:/.test(text)) return 'skillcatalog'
+  if (/Available agent types|available agent types for the Agent tool|subagent_type/.test(text)) return 'agentcatalog'
+  if (/<system-reminder>/.test(text) && /hook|inbox|heartbeat|reminder/i.test(text)) return 'hook'
+  if (/Today'?s date is|# *currentDate|Current date:/.test(text)) return 'date'
+  if (/<system-reminder>/.test(text)) return 'system'
+  return 'usertext'
+}
+
+function causeForContentKind(kind: BlockContentKind): CacheBreakTimelineCause {
+  switch (kind) {
+    case 'claudemd': case 'rule': return 'CLAUDE_MD_CHANGED'
+    case 'agentmeta': case 'agentcatalog': return 'AGENT_METADATA_CHANGED'
+    case 'skillcatalog': return 'SKILL_CHANGED'
+    case 'hook': return 'HOOK_INJECTION'
+    case 'date': return 'SYSTEM_TIMESTAMP'
+    case 'execresult': return 'INLINE_EXEC_RESULT_CHANGED'
+    case 'postcompact': return 'COMPACTION'
+    default: return 'UNCLASSIFIED'
+  }
+}
+
+// Split one injected text block into classified SEGMENTS at "Contents of <path>" boundaries — Claude
+// Code concatenates CLAUDE.md + every rule + memory + the skills list into ONE giant system-reminder,
+// so segmenting lets the diff pinpoint the CLAUDE.md segment vs a rule vs the skills list vs a date,
+// instead of blaming the whole mega-block. Fail-soft: a block with no boundary markers is one segment.
+interface Segment { kind: BlockContentKind; label: string; text: string }
+function segmentInjected(text: string, blockLabel: string): Segment[] {
+  const boundary = /Contents of ([^\n(]+?\.[A-Za-z0-9_]+)/g
+  const marks: { idx: number; label: string }[] = []
+  let m: RegExpExecArray | null
+  while ((m = boundary.exec(text)) !== null) marks.push({ idx: m.index, label: m[1].trim() })
+  if (marks.length === 0) {
+    const kind = classifyContentKind(text)
+    return [{ kind, label: labelForKind(kind, blockLabel), text }]
+  }
+  const segs: Segment[] = []
+  // The leading region before the first "Contents of" (harness prose / billing header / date).
+  if (marks[0].idx > 0) {
+    const lead = text.slice(0, marks[0].idx)
+    const kind = classifyContentKind(lead)
+    segs.push({ kind, label: labelForKind(kind, blockLabel), text: lead })
+  }
+  for (let i = 0; i < marks.length; i++) {
+    const end = i + 1 < marks.length ? marks[i + 1].idx : text.length
+    const body = text.slice(marks[i].idx, end)
+    const kind = classifyContentKind(body)
+    segs.push({ kind, label: marks[i].label, text: body })
+  }
+  return segs
+}
+
+function labelForKind(kind: BlockContentKind, fallback: string): string {
+  switch (kind) {
+    case 'agentmeta': return 'harness/billing header'
+    case 'skillcatalog': return 'available-skills catalog'
+    case 'agentcatalog': return 'agent-types catalog'
+    case 'hook': return 'hook injection'
+    case 'date': return 'system date/clock'
+    case 'execresult': return 'inline command result'
+    default: return fallback
+  }
+}
+
+// ── Turn prefix (compact, pointer-only) ──────────────────────────────────────────
+export interface PrefixTool { name: string; deferred: boolean; isMcp: boolean; fp: string }
+export interface PrefixBlock {
+  layer: 'system' | 'message'
+  kind: BlockContentKind
+  label: string
+  fp: string        // fingerprint of the raw bytes (byte identity, hashed)
+  norm: string      // fingerprint of the timestamp-normalized bytes (for SYSTEM_TIMESTAMP detection)
+  len: number       // char length (SKILL_DESCRIPTION_TRUNCATION shrink detection)
+  tokensApprox: number
+}
+export interface TurnPrefix {
+  model: string
+  effort: string    // normalized extended-thinking / speed signature
+  tools: PrefixTool[]
+  systemBlocks: PrefixBlock[]
+  messageBlocks: PrefixBlock[]  // cached message-prefix injected blocks (up to the last message cache_control)
+}
+
+interface RawBlockLike { type?: string; text?: string; cache_control?: unknown; content?: unknown; source?: unknown }
+interface RawMessageLike { role?: string; content?: string | RawBlockLike[] }
+interface RawSystemLike { type?: string; text?: string; cache_control?: unknown }
+interface RawToolLike { name?: string; description?: string; input_schema?: unknown; defer_loading?: unknown; cache_control?: unknown }
+export interface RawRequestForBreak {
+  model?: unknown
+  thinking?: unknown
+  speed?: unknown
+  tool_choice?: unknown
+  system?: string | RawSystemLike[]
+  tools?: RawToolLike[]
+  messages?: RawMessageLike[]
+  metadata?: { user_id?: unknown }
+  diagnostics?: { previous_message_id?: unknown }
+}
+
+function effortSignature(body: RawRequestForBreak): string {
+  const t = body.thinking
+  let thinking = 'none'
+  if (t && typeof t === 'object') {
+    const o = t as { type?: unknown; budget_tokens?: unknown }
+    thinking = `${typeof o.type === 'string' ? o.type : '?'}:${typeof o.budget_tokens === 'number' ? o.budget_tokens : ''}`
+  }
+  const speed = typeof body.speed === 'string' ? body.speed : 'std'
+  const toolChoice = body.tool_choice && typeof body.tool_choice === 'object'
+    ? JSON.stringify(body.tool_choice) : String(body.tool_choice ?? 'auto')
+  return `${thinking}|${speed}|${toolChoice}`
+}
+
+function toPrefixBlock(layer: 'system' | 'message', kind: BlockContentKind, label: string, text: string): PrefixBlock {
+  return {
+    layer, kind, label,
+    fp: fnv1a(text),
+    norm: fnv1a(normalizeVolatile(text)),
+    len: text.length,
+    tokensApprox: estimateTokensFromBytes(Buffer.byteLength(text)),
+  }
+}
+
+// Flatten the injected TEXT of a message content block (string, {type:text}, tool_result text). We
+// deliberately ignore tool_use inputs and base64 image data — the former is stable history, the latter
+// is never touched (pointer-only). Returns '' for a non-text block (skipped from the diff).
+function messageBlockText(b: RawBlockLike): string {
+  if (b.type === 'text' && typeof b.text === 'string') return b.text
+  if (b.type === 'tool_result') {
+    const c = b.content
+    if (typeof c === 'string') return c
+    if (Array.isArray(c)) return c.map(x => (x && typeof x === 'object' && (x as { text?: string }).text) || '').join('\n')
+  }
+  return ''
+}
+
+/** Parse a raw request body into a compact, pointer-only TurnPrefix. The cached prefix = the whole
+ *  tools array + the whole system array + the message blocks up to and including the LAST message-level
+ *  cache_control breakpoint (everything after that is the volatile current-turn tail, expected to
+ *  change — excluded from the break diff). Returns null for a body with no model (unparseable). */
+export function extractTurnPrefix(body: RawRequestForBreak | null): TurnPrefix | null {
+  if (!body || typeof body !== 'object') return null
+  const model = typeof body.model === 'string' ? body.model : ''
+
+  const tools: PrefixTool[] = (Array.isArray(body.tools) ? body.tools : []).map(t => {
+    const name = typeof t.name === 'string' ? t.name : '?'
+    const defBytes = `${typeof t.description === 'string' ? t.description : ''} ${JSON.stringify(t.input_schema ?? {})}`
+    return { name, deferred: t.defer_loading === true, isMcp: name.startsWith('mcp__'), fp: fnv1a(defBytes) }
+  })
+
+  const systemBlocks: PrefixBlock[] = []
+  if (typeof body.system === 'string' && body.system) {
+    for (const seg of segmentInjected(body.system, 'system prompt')) {
+      systemBlocks.push(toPrefixBlock('system', seg.kind, seg.label, seg.text))
+    }
+  } else if (Array.isArray(body.system)) {
+    body.system.forEach((s, i) => {
+      const text = typeof s?.text === 'string' ? s.text : ''
+      if (!text) return
+      for (const seg of segmentInjected(text, `system[${i}]`)) {
+        systemBlocks.push(toPrefixBlock('system', seg.kind, seg.label, seg.text))
+      }
+    })
+  }
+
+  // Message cached prefix: find the LAST message index that carries (or whose content carries) a
+  // cache_control marker — the cache breakpoint. Everything up to and including it is cached prefix.
+  const messages = Array.isArray(body.messages) ? body.messages : []
+  let lastBreakpoint = -1
+  messages.forEach((mm, i) => {
+    const c = mm?.content
+    const hasCC = Array.isArray(c) && c.some(b => b && typeof b === 'object' && (b as RawBlockLike).cache_control)
+    if (hasCC) lastBreakpoint = i
+  })
+  const messageBlocks: PrefixBlock[] = []
+  const upTo = lastBreakpoint >= 0 ? lastBreakpoint : -1
+  for (let i = 0; i <= upTo; i++) {
+    const mm = messages[i]
+    const content = mm?.content
+    if (typeof content === 'string') {
+      if (!content) continue
+      for (const seg of segmentInjected(content, `msg[${i}] ${mm?.role ?? ''}`)) {
+        // Plain conversation history rarely carries injected markers → 'usertext' segments are stable
+        // history; keep them so a genuine reorder/compaction is still visible, but they classify as
+        // UNCLASSIFIED (never falsely blamed for a specific cause).
+        messageBlocks.push(toPrefixBlock('message', seg.kind, seg.label, seg.text))
+      }
+      continue
+    }
+    if (!Array.isArray(content)) continue
+    for (const b of content) {
+      if (!b || typeof b !== 'object') continue
+      const text = messageBlockText(b as RawBlockLike)
+      if (!text) continue
+      for (const seg of segmentInjected(text, `msg[${i}] ${mm?.role ?? ''}`)) {
+        messageBlocks.push(toPrefixBlock('message', seg.kind, seg.label, seg.text))
+      }
+    }
+  }
+
+  return { model, effort: effortSignature(body), tools, systemBlocks, messageBlocks }
+}
+
+// ── The classifier ───────────────────────────────────────────────────────────────
+export interface CacheBreakVerdict {
+  cause: CacheBreakTimelineCause
+  culpritLayer: 'model' | 'effort' | 'tools' | 'system' | 'message' | 'timing'
+  culpritId: string          // STABLE identity of the offending element (grouping key for repeat-offenders)
+  culpritSummary: string     // pointer-only, human-readable — never full content
+  ttlTier?: TtlTier
+  rawDiffSummary?: string     // attached only for UNCLASSIFIED
+}
+
+export interface BreakTiming {
+  gapMs?: number
+  cacheReadTokens: number
+  cacheCreateTokens: number
+  ephemeral5mTokens: number
+  ephemeral1hTokens: number
+}
+
+const FIVE_MIN = 5 * 60_000
+const ONE_HOUR = 60 * 60_000
+
+// Diff the tools layer: added/removed by set, then order, then per-tool definition change. Returns the
+// most-specific tools cause, or null when the tool catalog is byte-identical.
+function diffTools(prev: TurnPrefix, cur: TurnPrefix): CacheBreakVerdict | null {
+  const prevNames = prev.tools.map(t => t.name)
+  const curNames = cur.tools.map(t => t.name)
+  const prevSet = new Set(prevNames)
+  const curSet = new Set(curNames)
+  const added = curNames.filter(n => !prevSet.has(n))
+  const removed = prevNames.filter(n => !curSet.has(n))
+  if (added.length || removed.length) {
+    const changed = [...added, ...removed]
+    // A newly-present DEFERRED tool (and no removals) = tool-search deferred loading — the most specific.
+    const addedDeferred = added.filter(n => cur.tools.find(t => t.name === n)?.deferred)
+    if (added.length > 0 && removed.length === 0 && addedDeferred.length === added.length) {
+      return mkTools('TOOL_SEARCH_DEFERRED', added, `deferred tool(s) loaded mid-session: ${fmtList(added)}`)
+    }
+    // All changed tools are MCP — an MCP server / plugin toggled.
+    if (changed.every(n => n.startsWith('mcp__'))) {
+      return mkTools('MCP_TOOLS_CHANGED', changed, `MCP tool(s) ${added.length ? 'added ' + fmtList(added) : ''}${removed.length ? ' removed ' + fmtList(removed) : ''}`.trim())
+    }
+    return mkTools('TOOLSET_CHANGED', changed, `tool(s) ${added.length ? 'added ' + fmtList(added) : ''}${removed.length ? ' removed ' + fmtList(removed) : ''}`.trim())
+  }
+  // Same set: order change?
+  if (curNames.join(' ') !== prevNames.join(' ')) {
+    const firstMoved = curNames.find((n, i) => prevNames[i] !== n) ?? curNames[0]
+    return mkTools('TOOLS_REORDERED', [firstMoved], `same ${curNames.length} tools, order changed (first at "${firstMoved}")`)
+  }
+  // Same set + order: a tool DEFINITION (description/schema) changed?
+  for (const t of cur.tools) {
+    const p = prev.tools.find(x => x.name === t.name)
+    if (p && p.fp !== t.fp) return mkTools('TOOLSET_CHANGED', [t.name], `tool definition changed: ${t.name}`)
+  }
+  return null
+}
+
+function mkTools(cause: CacheBreakTimelineCause, names: string[], summary: string): CacheBreakVerdict {
+  return { cause, culpritLayer: 'tools', culpritId: `tools:${cause}:${names.slice(0, 3).sort().join(',')}`, culpritSummary: summary }
+}
+function fmtList(xs: string[]): string { return xs.length <= 3 ? xs.join(', ') : `${xs.slice(0, 3).join(', ')} +${xs.length - 3} more` }
+
+// Diff a block layer POSITIONALLY — the prompt cache breaks at the first differing BYTE position, so
+// the first differing block POSITION in the cached prefix is the true break point. This is what makes
+// normal conversation GROWTH not a false break: appended blocks beyond the previous prefix's length are
+// ignored (that's the one-time cache_creation of new content, expected); only a change/removal/reorder
+// WITHIN the previously-cached common prefix is an avoidable break. Returns the classified verdict, or
+// null when cur is a byte-identical extension of prev (pure growth).
+function diffBlocks(prevBlocks: PrefixBlock[], curBlocks: PrefixBlock[], layer: 'system' | 'message'): CacheBreakVerdict | null {
+  const prevFps = new Set(prevBlocks.map(b => b.fp))
+  const curFps = new Set(curBlocks.map(b => b.fp))
+  const prevKinds = new Set(prevBlocks.map(b => b.kind))
+  const n = Math.min(prevBlocks.length, curBlocks.length)
+  for (let i = 0; i < n; i++) {
+    const p = prevBlocks[i], c = curBlocks[i]
+    if (p.fp === c.fp) continue
+    // First divergence at position i. Classify most-specific-first.
+    if (c.kind === 'postcompact' || p.kind === 'postcompact') return mkBlock('COMPACTION', layer, c, `conversation compaction rebuilt the ${layer} prefix at ${c.label}`)
+    if (p.norm === c.norm) return mkBlock('SYSTEM_TIMESTAMP', layer, c, `moving date/clock in ${c.label}`)
+    // Same content, different position (this block existed earlier in prev, and prev's block still
+    // exists later in cur) → a pure reorder, not a content change.
+    if (prevFps.has(c.fp) && curFps.has(p.fp)) {
+      return { cause: 'CONTEXT_ORDER_CHANGED', culpritLayer: layer, culpritId: `${layer}:order`, culpritSummary: `${layer} blocks reordered at ${c.label} (identical content, different order)` }
+    }
+    // Skill-catalog specifics: a block whose kind prev never carried = a fresh injection; a shrink =
+    // a truncation; otherwise a content change.
+    if (c.kind === 'skillcatalog') {
+      if (!prevKinds.has('skillcatalog')) return mkBlock('SKILL_INJECTION', layer, c, `skill catalog injected at pos ${i}: ${c.label}`)
+      if (p.kind === 'skillcatalog' && c.len < p.len * 0.9) return mkBlock('SKILL_DESCRIPTION_TRUNCATION', layer, c, `skill catalog shrank ${p.len}→${c.len} chars: ${c.label}`)
+    }
+    const changed = causeForContentKind(c.kind)
+    return mkBlock(changed, layer, c, `${c.kind} block changed at pos ${i}: ${c.label}`)
+  }
+  // No divergence within the common prefix.
+  if (prevBlocks.length > curBlocks.length) {
+    // The cached prefix SHRANK — a block that was cached got dropped (compaction or removal).
+    const dropped = prevBlocks[curBlocks.length]
+    if (dropped.kind === 'postcompact') return mkBlock('COMPACTION', layer, dropped, `compaction dropped ${layer} blocks from ${dropped.label}`)
+    const cause = dropped.kind === 'skillcatalog' ? 'SKILL_CHANGED' : causeForContentKind(dropped.kind)
+    return mkBlock(cause, layer, dropped, `${dropped.kind} block removed from the ${layer} prefix: ${dropped.label}`)
+  }
+  // cur is longer (pure append growth) or identical — NOT an avoidable break.
+  return null
+}
+
+function mkBlock(cause: CacheBreakTimelineCause, layer: 'system' | 'message', b: PrefixBlock, summary: string): CacheBreakVerdict {
+  return { cause, culpritLayer: layer, culpritId: `${layer}:${cause}:${b.kind}:${b.label.slice(0, 48)}`, culpritSummary: summary }
+}
+
+/** Classify ONE turn's cache_creation into a root cause by diffing its prefix against the previous
+ *  turn's, in the docs hierarchy order (model → tools → effort → system → message-prefix). A structural
+ *  prefix change ALWAYS beats a timing gap — the change is the real culprit. When the prefix is
+ *  byte-identical, the break is timing (TTL expiry / cold start). */
+export function classifyCacheBreak(prev: TurnPrefix | null, cur: TurnPrefix, timing: BreakTiming): CacheBreakVerdict {
+  if (!prev) {
+    return { cause: 'COLD_START', culpritLayer: 'timing', culpritId: 'timing:COLD_START', culpritSummary: 'first observed turn for this session (cold cache warm)', ttlTier: 'none' }
+  }
+  // 1. Model — model-specific cache, invalidates everything.
+  if (prev.model !== cur.model) {
+    return { cause: 'MODEL_SWITCH', culpritLayer: 'model', culpritId: 'model', culpritSummary: `model ${prev.model || '?'} → ${cur.model || '?'}` }
+  }
+  // 2. Tools — invalidates tools + system + messages (higher than effort, which keeps tools cached).
+  const toolsV = diffTools(prev, cur)
+  if (toolsV) return toolsV
+  // 3. Effort / thinking / tool_choice — invalidates system + messages (bytes may be unchanged).
+  if (prev.effort !== cur.effort) {
+    return { cause: 'EFFORT_SWITCH', culpritLayer: 'effort', culpritId: 'effort', culpritSummary: `thinking/effort ${prev.effort} → ${cur.effort}` }
+  }
+  // 4. System blocks.
+  const sysV = diffBlocks(prev.systemBlocks, cur.systemBlocks, 'system')
+  if (sysV) return sysV
+  // 5. Message cached-prefix blocks. Any structural change (even an unlocalised one) beats a timing
+  //    gap — a real byte change in the cached prefix is the true culprit, never TTL expiry.
+  const msgV = diffBlocks(prev.messageBlocks, cur.messageBlocks, 'message')
+  if (msgV) {
+    if (msgV.cause === 'UNCLASSIFIED') msgV.rawDiffSummary = `${msgV.culpritSummary}; sys=${cur.systemBlocks.length} msg=${cur.messageBlocks.length} (was ${prev.messageBlocks.length})`
+    return msgV
+  }
+
+  // 6. No localizable structural change → timing. Pure-timing means the whole cached prefix is
+  //    byte-identical to the previous turn, so the only thing that could have re-written it is a TTL
+  //    expiry (the entry aged out) or a cold warm.
+  const gap = timing.gapMs
+  if (gap !== undefined) {
+    if (gap >= ONE_HOUR) return { cause: 'TTL_EXPIRY', culpritLayer: 'timing', culpritId: 'timing:TTL_EXPIRY:1h', culpritSummary: `no prefix change; ${(gap / 60000).toFixed(1)}m gap > 1h TTL`, ttlTier: '1h' }
+    if (gap >= 4.5 * 60_000 && gap < 6 * 60_000) return { cause: 'TTL_EXPIRY', culpritLayer: 'timing', culpritId: 'timing:TTL_EXPIRY:5m', culpritSummary: `no prefix change; ${(gap / 60000).toFixed(1)}m gap ≈ 5m TTL`, ttlTier: '5m' }
+    if (gap >= FIVE_MIN) return { cause: 'TTL_EXPIRY', culpritLayer: 'timing', culpritId: 'timing:TTL_EXPIRY:5m', culpritSummary: `no prefix change; ${(gap / 60000).toFixed(1)}m gap > 5m TTL`, ttlTier: '5m' }
+  }
+  if (timing.cacheReadTokens === 0) {
+    return { cause: 'COLD_START', culpritLayer: 'timing', culpritId: 'timing:COLD_START', culpritSummary: 'no cache_read this turn — nothing cached to break (cold warm)', ttlTier: 'none' }
+  }
+  // 7. Every layer's fingerprints matched yet a real re-write happened — an effect we cannot localise
+  //    (e.g. an image add/remove after the cached prefix, or an estimator blind spot). Attach a diff
+  //    summary rather than guess.
+  const raw = `prefix byte-identical by fingerprint but cache_creation=${timing.cacheCreateTokens}; tools=${cur.tools.length} sys=${cur.systemBlocks.length} msg=${cur.messageBlocks.length}`
+  return { cause: 'UNCLASSIFIED', culpritLayer: 'timing', culpritId: 'timing:UNCLASSIFIED', culpritSummary: 'unlocalised re-write', rawDiffSummary: raw }
+}
+
+// ── Bounded scan: reconstruct sessions' ordered turns ────────────────────────────
+interface ScannedTurn {
+  bodyRef: string
+  mtimeMs: number
+  previousMessageId?: string
+  sessionId?: string
+  accountUuid?: string
+  prefix: TurnPrefix | null
+}
+interface ResponseUsage { cacheCreate: number; cacheRead: number; ephemeral5m: number; ephemeral1h: number; model?: string; ts: number }
+
+export interface CacheBreakTimelineOptions {
+  bodiesDir?: string
+  sessionId?: string
+  scope?: string
+  minTokens?: number
+  windowHours?: number
+  scanCap?: number
+}
+
+function numOr0(v: unknown): number { return typeof v === 'number' && isFinite(v) ? v : 0 }
+function strOrUndef(v: unknown): string | undefined { return typeof v === 'string' && v.length > 0 ? v : undefined }
+
+interface RawResponseForBreak {
+  id?: unknown
+  model?: unknown
+  usage?: {
+    input_tokens?: unknown; output_tokens?: unknown
+    cache_read_input_tokens?: unknown; cache_creation_input_tokens?: unknown
+    cache_creation?: { ephemeral_5m_input_tokens?: unknown; ephemeral_1h_input_tokens?: unknown }
+  }
+}
+
+// ── The timeline report ──────────────────────────────────────────────────────────
+export interface CacheBreakEvent {
+  turn: number
+  ts: string
+  cause: CacheBreakTimelineCause
+  culpritLayer: string
+  culpritId: string
+  culprit: string            // pointer-only human summary
+  cacheCreateTokens: number
+  cacheReadTokens: number
+  costUsd: number
+  gapMinutes?: number
+  ttlTier?: TtlTier
+  model?: string
+  remediation: string
+  rawDiffSummary?: string
+}
+
+export interface RepeatOffender {
+  cause: CacheBreakTimelineCause
+  culpritId: string
+  culprit: string
+  occurrences: number        // turns this exact element broke the cache
+  totalCacheCreateTokens: number
+  medianCacheCreateTokens: number
+  totalCostUsd: number
+  pctOfSessionCacheCreate: number   // % of the session's total cache_creation
+  firstTurn: number
+  lastTurn: number
+  systematic: boolean        // occurrences >= systematicThreshold
+  verdict: string            // plain-language "here is your misconfigured X" line
+}
+
+export interface CacheBreakTimelineReport {
+  sessionId?: string
+  accountUuid?: string
+  model?: string
+  minTokens: number
+  systematicThreshold: number
+  turnsInSession: number
+  turnsClassified: number
+  totalCacheCreateTokens: number       // Σ over the classified break events
+  events: CacheBreakEvent[]
+  causeHistogram: { cause: CacheBreakTimelineCause; events: number; cacheCreateTokens: number }[]
+  repeatOffenders: RepeatOffender[]
+  coverage: {
+    bodiesDir: string
+    dirExists: boolean
+    requestFilesTotal: number
+    requestFilesScanned: number
+    responseFilesTotal: number
+    responseFilesScanned: number
+    sessionsFound: number
+    scanCap: number
+    windowHours?: number
+    complete: boolean
+    note: string
+  }
+}
+
+const DEFAULT_MIN_TOKENS = 5000
+const SYSTEMATIC_THRESHOLD = 3
+
+function median(xs: number[]): number {
+  if (xs.length === 0) return 0
+  const s = [...xs].sort((a, b) => a - b)
+  const mid = Math.floor(s.length / 2)
+  return s.length % 2 ? s[mid] : Math.round((s[mid - 1] + s[mid]) / 2)
+}
+
+/** Build a session's cache-break ROOT-CAUSE timeline + repeat-offender rollup. Reconstructs the
+ *  session's ordered turns from the raw OTEL bodies, classifies each significant cache_creation turn's
+ *  break, and rolls repeated (cause, culprit-element) pairs into chronic offenders (flagged SYSTEMATIC
+ *  at ≥ threshold turns). LAZY + BOUNDED: one recency-first capped scan; honest coverage. */
+export async function buildCacheBreakTimeline(opts: CacheBreakTimelineOptions = {}): Promise<CacheBreakTimelineReport> {
+  const bodiesDir = opts.bodiesDir ?? DEFAULT_BODIES_DIR
+  const minTokens = opts.minTokens ?? DEFAULT_MIN_TOKENS
+  const scanCap = opts.scanCap ?? RESPONSE_SCAN_CAP
+  const dirExists = fs.existsSync(bodiesDir)
+  const emptyCoverage = (note: string) => ({
+    bodiesDir, dirExists, requestFilesTotal: 0, requestFilesScanned: 0, responseFilesTotal: 0,
+    responseFilesScanned: 0, sessionsFound: 0, scanCap, windowHours: opts.windowHours, complete: true, note,
+  })
+  if (!dirExists) {
+    return baseReport(minTokens, emptyCoverage(`No OTEL raw-body directory at ${bodiesDir} — set OTEL_LOG_RAW_API_BODIES to capture bodies.`))
+  }
+
+  const allRequests = listBySuffix(bodiesDir, '.request.json')
+  const allResponses = listBySuffix(bodiesDir, '.response.json')
+  const { slice: reqSlice, matched: reqMatched } = boundedRecent(allRequests, { windowHours: opts.windowHours, cap: scanCap })
+  const { slice: respSlice } = boundedRecent(allResponses, { windowHours: opts.windowHours, cap: scanCap })
+
+  // Index responses by message id → usage.
+  const respById = new Map<string, ResponseUsage>()
+  for (const e of respSlice) {
+    const body = readJsonBounded<RawResponseForBreak>(e.path, MAX_RESPONSE_BYTES)
+    const id = strOrUndef(body?.id)
+    if (!body?.usage || !id) continue
+    const tier = body.usage.cache_creation
+    respById.set(id, {
+      cacheCreate: numOr0(body.usage.cache_creation_input_tokens),
+      cacheRead: numOr0(body.usage.cache_read_input_tokens),
+      ephemeral5m: numOr0(tier?.ephemeral_5m_input_tokens),
+      ephemeral1h: numOr0(tier?.ephemeral_1h_input_tokens),
+      model: strOrUndef(body.model),
+      ts: e.mtimeMs,
+    })
+  }
+
+  // Parse requests → compact turns, grouped by session. Drop each raw body immediately (memory-bounded).
+  const bySession = new Map<string, ScannedTurn[]>()
+  for (const e of reqSlice) {
+    const body = readJsonBounded<RawRequestForBreak>(e.path, MAX_REQUEST_BYTES)
+    if (!body) continue
+    const uid = parseUserId(body.metadata?.user_id)
+    const sid = uid.sessionId ?? '(no-session)'
+    const turn: ScannedTurn = {
+      bodyRef: e.path, mtimeMs: e.mtimeMs,
+      previousMessageId: strOrUndef(body.diagnostics?.previous_message_id),
+      sessionId: uid.sessionId, accountUuid: uid.accountUuid,
+      prefix: extractTurnPrefix(body),
+    }
+    const list = bySession.get(sid)
+    if (list) list.push(turn); else bySession.set(sid, [turn])
+  }
+
+  // Resolve the target session: exact sessionId > scope-prefix heaviest > overall heaviest by cache_creation.
+  const target = resolveTarget(bySession, respById, opts)
+  const complete = reqSlice.length === reqMatched
+  const coverage = {
+    bodiesDir, dirExists: true,
+    requestFilesTotal: allRequests.length, requestFilesScanned: reqSlice.length,
+    responseFilesTotal: allResponses.length, responseFilesScanned: respSlice.length,
+    sessionsFound: bySession.size, scanCap, windowHours: opts.windowHours, complete,
+    note: complete
+      ? `Scanned all ${reqMatched} request body file(s)${opts.windowHours ? ` in the last ${opts.windowHours}h` : ''} across ${bySession.size} session(s).`
+      : `SAMPLE: ${reqSlice.length} most-recent of ${reqMatched} matching request body file(s) across ${bySession.size} session(s) (cap ${scanCap}). Not full history.`,
+  }
+
+  if (!target) {
+    return baseReport(minTokens, coverage)
+  }
+
+  return buildReportForSession(target.sid, target.turns, respById, minTokens, coverage)
+}
+
+function baseReport(minTokens: number, coverage: CacheBreakTimelineReport['coverage']): CacheBreakTimelineReport {
+  return {
+    minTokens, systematicThreshold: SYSTEMATIC_THRESHOLD, turnsInSession: 0, turnsClassified: 0,
+    totalCacheCreateTokens: 0, events: [], causeHistogram: [], repeatOffenders: [], coverage,
+  }
+}
+
+// The cache_creation billed on turn i is read from turn i's RESPONSE, whose id == turn i+1's
+// previous_message_id (the proven chain link). Returns 0 for the last turn (no following request).
+function ccOfTurn(turns: ScannedTurn[], i: number, respById: Map<string, ResponseUsage>): ResponseUsage | undefined {
+  const next = turns[i + 1]
+  const respId = next?.previousMessageId
+  return respId ? respById.get(respId) : undefined
+}
+
+function sessionCacheCreate(turns: ScannedTurn[], respById: Map<string, ResponseUsage>): number {
+  let sum = 0
+  for (let i = 0; i < turns.length; i++) sum += ccOfTurn(turns, i, respById)?.cacheCreate ?? 0
+  return sum
+}
+
+function resolveTarget(
+  bySession: Map<string, ScannedTurn[]>,
+  respById: Map<string, ResponseUsage>,
+  opts: CacheBreakTimelineOptions,
+): { sid: string; turns: ScannedTurn[] } | null {
+  const sort = (turns: ScannedTurn[]) => [...turns].sort((a, b) => a.mtimeMs - b.mtimeMs)
+  if (opts.sessionId) {
+    const t = bySession.get(opts.sessionId)
+    return t ? { sid: opts.sessionId, turns: sort(t) } : null
+  }
+  const candidates = [...bySession.entries()].filter(([sid]) => sid !== '(no-session)' && (!opts.scope || sid.startsWith(opts.scope)))
+  if (candidates.length === 0) return null
+  let best: { sid: string; turns: ScannedTurn[]; cc: number } | null = null
+  for (const [sid, turns] of candidates) {
+    const cc = sessionCacheCreate(turns, respById)
+    if (!best || cc > best.cc) best = { sid, turns: sort(turns), cc }
+  }
+  return best ? { sid: best.sid, turns: best.turns } : null
+}
+
+function buildReportForSession(
+  sid: string,
+  turns: ScannedTurn[],
+  respById: Map<string, ResponseUsage>,
+  minTokens: number,
+  coverage: CacheBreakTimelineReport['coverage'],
+): CacheBreakTimelineReport {
+  const sessionCC = sessionCacheCreate(turns, respById)
+  const events: CacheBreakEvent[] = []
+  const accountUuid = turns.find(t => t.accountUuid)?.accountUuid
+  let model: string | undefined
+
+  for (let i = 0; i < turns.length; i++) {
+    const usage = ccOfTurn(turns, i, respById)
+    if (!usage || usage.cacheCreate < minTokens) continue
+    model = model ?? usage.model ?? turns[i].prefix?.model
+    const prevPrefix = i > 0 ? turns[i - 1].prefix : null
+    const curPrefix = turns[i].prefix
+    if (!curPrefix) continue
+    const gapMs = i > 0 ? turns[i].mtimeMs - turns[i - 1].mtimeMs : undefined
+    const verdict = classifyCacheBreak(prevPrefix, curPrefix, {
+      gapMs, cacheReadTokens: usage.cacheRead, cacheCreateTokens: usage.cacheCreate,
+      ephemeral5mTokens: usage.ephemeral5m, ephemeral1hTokens: usage.ephemeral1h,
+    })
+    const evModel = usage.model ?? curPrefix.model
+    events.push({
+      turn: i + 1,
+      ts: new Date(turns[i].mtimeMs).toISOString(),
+      cause: verdict.cause,
+      culpritLayer: verdict.culpritLayer,
+      culpritId: verdict.culpritId,
+      culprit: verdict.culpritSummary,
+      cacheCreateTokens: usage.cacheCreate,
+      cacheReadTokens: usage.cacheRead,
+      costUsd: evModel ? +calcTokenCostUsd(0, 0, usage.cacheCreate, 0, evModel).toFixed(4) : 0,
+      gapMinutes: gapMs !== undefined ? +(gapMs / 60000).toFixed(1) : undefined,
+      ttlTier: verdict.ttlTier,
+      model: evModel,
+      remediation: REMEDIATION[verdict.cause],
+      rawDiffSummary: verdict.rawDiffSummary,
+    })
+  }
+
+  return {
+    sessionId: sid, accountUuid, model,
+    minTokens, systematicThreshold: SYSTEMATIC_THRESHOLD,
+    turnsInSession: turns.length, turnsClassified: events.length,
+    totalCacheCreateTokens: events.reduce((n, e) => n + e.cacheCreateTokens, 0),
+    events,
+    causeHistogram: buildHistogram(events),
+    repeatOffenders: buildRepeatOffenders(events, sessionCC),
+    coverage,
+  }
+}
+
+function buildHistogram(events: CacheBreakEvent[]): CacheBreakTimelineReport['causeHistogram'] {
+  const m = new Map<CacheBreakTimelineCause, { events: number; cacheCreateTokens: number }>()
+  for (const e of events) {
+    const g = m.get(e.cause) ?? { events: 0, cacheCreateTokens: 0 }
+    g.events += 1; g.cacheCreateTokens += e.cacheCreateTokens
+    m.set(e.cause, g)
+  }
+  return [...m.entries()].map(([cause, v]) => ({ cause, ...v })).sort((a, b) => b.cacheCreateTokens - a.cacheCreateTokens)
+}
+
+// The CHRONIC-OFFENDER rollup (the point of the tool): group break events by (cause, culprit element
+// identity) — NOT just cause — so two breaks from the SAME element are ONE recurring offender. Rank by
+// recurrence × wasted tokens; flag ≥ SYSTEMATIC_THRESHOLD-turn recurrences as SYSTEMATIC with a
+// plain-language verdict naming the exact element + its fix.
+function buildRepeatOffenders(events: CacheBreakEvent[], sessionCacheCreate: number): RepeatOffender[] {
+  interface Acc { cause: CacheBreakTimelineCause; culpritId: string; culprit: string; tokens: number[]; cost: number; first: number; last: number }
+  const byKey = new Map<string, Acc>()
+  for (const e of events) {
+    const key = `${e.cause}::${e.culpritId}`
+    const a = byKey.get(key) ?? { cause: e.cause, culpritId: e.culpritId, culprit: e.culprit, tokens: [], cost: 0, first: e.turn, last: e.turn }
+    a.tokens.push(e.cacheCreateTokens)
+    a.cost += e.costUsd
+    a.first = Math.min(a.first, e.turn)
+    a.last = Math.max(a.last, e.turn)
+    byKey.set(key, a)
+  }
+  const rows: RepeatOffender[] = [...byKey.values()].map(a => {
+    const total = a.tokens.reduce((n, t) => n + t, 0)
+    const occurrences = a.tokens.length
+    const systematic = occurrences >= SYSTEMATIC_THRESHOLD
+    return {
+      cause: a.cause, culpritId: a.culpritId, culprit: a.culprit,
+      occurrences, totalCacheCreateTokens: total, medianCacheCreateTokens: median(a.tokens),
+      totalCostUsd: +a.cost.toFixed(4),
+      pctOfSessionCacheCreate: sessionCacheCreate > 0 ? +(100 * total / sessionCacheCreate).toFixed(1) : 0,
+      firstTurn: a.first, lastTurn: a.last, systematic,
+      verdict: (systematic ? `SYSTEMATIC — ` : '') + `${a.cause}: ${a.culprit} broke the cache on ${occurrences} turn(s) (${total.toLocaleString()} cache_creation tokens). ${REMEDIATION[a.cause]}`,
+    }
+  })
+  // Rank by recurrence × wasted tokens (the chronic + costly first).
+  return rows.sort((a, b) =>
+    (b.occurrences * b.totalCacheCreateTokens) - (a.occurrences * a.totalCacheCreateTokens)
+    || b.totalCacheCreateTokens - a.totalCacheCreateTokens)
+}
+
+// ── Output formatting ────────────────────────────────────────────────────────────
+export type TimelineFormat = 'json' | 'table' | 'markdown' | 'timeline'
+
+/** Render a timeline report in the requested format. json → the object itself; the others → a compact
+ *  string wrapped as { format, text } so the MCP result stays JSON-serializable. */
+export function formatTimeline(report: CacheBreakTimelineReport, format: TimelineFormat): unknown {
+  if (format === 'json') return report
+  const lines: string[] = []
+  const hdr = `cache-break timeline — session ${report.sessionId ?? '(none)'}${report.model ? ` [${report.model}]` : ''}`
+  if (format === 'markdown') {
+    lines.push(`# ${hdr}`)
+    lines.push('', `- turns: ${report.turnsInSession}, classified breaks: ${report.turnsClassified}, total cache_creation: ${report.totalCacheCreateTokens.toLocaleString()}`, '')
+    lines.push('## Repeat offenders (chronic first)', '')
+    lines.push('| cause | culprit | turns | tokens | % | systematic |', '|---|---|---|---|---|---|')
+    for (const o of report.repeatOffenders) lines.push(`| ${o.cause} | ${o.culprit} | ${o.occurrences} | ${o.totalCacheCreateTokens.toLocaleString()} | ${o.pctOfSessionCacheCreate}% | ${o.systematic ? '⚠️ YES' : ''} |`)
+    lines.push('', '## Timeline', '')
+    for (const e of report.events) lines.push(`- turn ${e.turn} \`${e.ts}\` **${e.cause}** — ${e.culprit} (${e.cacheCreateTokens.toLocaleString()} tok${e.gapMinutes !== undefined ? `, +${e.gapMinutes}m` : ''})`)
+  } else if (format === 'table') {
+    lines.push(hdr)
+    lines.push('turn  cause                       tokens      gap    culprit')
+    for (const e of report.events) lines.push(`${String(e.turn).padStart(4)}  ${e.cause.padEnd(26)} ${String(e.cacheCreateTokens).padStart(9)}  ${(e.gapMinutes !== undefined ? e.gapMinutes + 'm' : '-').padStart(6)}  ${e.culprit}`)
+    lines.push('', 'REPEAT OFFENDERS:')
+    for (const o of report.repeatOffenders) lines.push(`  ${o.systematic ? '⚠️ ' : '  '}${o.cause} ×${o.occurrences} (${o.totalCacheCreateTokens} tok, ${o.pctOfSessionCacheCreate}%) — ${o.culprit}`)
+  } else { // timeline
+    lines.push(hdr)
+    for (const e of report.events) {
+      const bar = e.cause.startsWith('TOOL') ? '🔧' : e.cause === 'MODEL_SWITCH' ? '🔀' : e.cause === 'TTL_EXPIRY' ? '⏱️' : e.cause === 'COLD_START' ? '❄️' : e.cause.includes('SKILL') ? '📎' : e.cause === 'HOOK_INJECTION' ? '🪝' : '⚠️'
+      lines.push(`${e.ts}  ${bar} turn ${e.turn}  ${e.cause}  ${e.cacheCreateTokens.toLocaleString()} tok — ${e.culprit}`)
+    }
+    const worst = report.repeatOffenders.find(o => o.systematic)
+    if (worst) lines.push('', `VERDICT: ${worst.verdict}`)
+  }
+  return { format, text: lines.join('\n'), sessionId: report.sessionId, coverage: report.coverage }
+}

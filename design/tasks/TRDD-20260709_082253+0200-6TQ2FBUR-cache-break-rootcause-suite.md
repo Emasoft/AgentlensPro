@@ -50,12 +50,14 @@ extended-thinking (effort), tool_choice, images, speed/fast all key the cache. c
 
 **Deliverables + STATUS:**
 - D3 (CORE) `src/cacheBreakTimeline.ts` + `get_cache_break_timeline` MCP tool + repeat-offender
-  rollup — [ ] pending
+  rollup — [x] DONE (27 unit tests, incl. one synthetic before/after per cause code + systematic
+  repeat-offender proof). Gates green.
 - D1 enhance `trace_expensive_writes` (rich filters + backward chain + formats) — [ ] pending
 - D2 generalize `get_cache_creation_report` → cost-peak finder (buckets + groupBy cause) — [ ] pending
-- Tests + MCP registration + report — [ ] pending
+- Tests + MCP registration + report — [ ] pending (per-deliverable)
 
-**NEXT ACTION:** implement D3 module + test, gate-green, commit; then D1; then D2.
+**NEXT ACTION:** implement D1 (enhance buildExpensiveWritesTrace: filters + backward chain + formats),
+gate-green, commit; then D2 (cost-peak finder).
 
 **Cause taxonomy (D3), each mapped to a code:** TOOLSET_CHANGED, TOOLS_REORDERED,
 TOOL_SEARCH_DEFERRED, MCP_TOOLS_CHANGED, MODEL_SWITCH, EFFORT_SWITCH, HOOK_INJECTION,

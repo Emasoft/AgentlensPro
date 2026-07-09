@@ -39,10 +39,10 @@ export const DEFAULT_BODIES_DIR = path.join(os.homedir(), '.agentlens', 'otel-bo
 // mtime) is read for files beyond these caps; JSON content is parsed for the capped slice only.
 export const RESPONSE_SCAN_CAP = 4000
 export const REQUEST_INDEX_CAP = 4000
-const MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+export const MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 // Matches rawBodyContext's own MAX_RAW_BODY_BYTES guard — request bodies carry embedded images and
 // can be tens of MB; this bounds worst-case per-file memory, not the number of files touched.
-const MAX_REQUEST_BYTES = 64 * 1024 * 1024
+export const MAX_REQUEST_BYTES = 64 * 1024 * 1024
 
 export interface CacheCreationEvent {
   cacheCreateTokens: number
@@ -107,11 +107,13 @@ interface RawRequestMeta {
 function numOr0(v: unknown): number { return typeof v === 'number' && isFinite(v) ? v : 0 }
 function strOrUndef(v: unknown): string | undefined { return typeof v === 'string' && v.length > 0 ? v : undefined }
 
-interface DirEntry { name: string; path: string; mtimeMs: number }
+export interface DirEntry { name: string; path: string; mtimeMs: number }
 
 // List a directory's entries matching a suffix, paired with mtime — WITHOUT reading file content.
 // The cheap first pass every bounded scan starts from (readdir + stat are metadata-only syscalls).
-function listBySuffix(dir: string, suffix: string): DirEntry[] {
+// Exported so the cache-break TIMELINE (cacheBreakTimeline.ts) reuses the identical bounded-scan
+// primitives instead of duplicating them (one source of truth for the disk-scan contract).
+export function listBySuffix(dir: string, suffix: string): DirEntry[] {
   let names: string[]
   try { names = fs.readdirSync(dir) } catch { return [] }
   const out: DirEntry[] = []
@@ -129,7 +131,7 @@ function listBySuffix(dir: string, suffix: string): DirEntry[] {
 // Bounded, recency-first slice: newest mtime first, optionally windowed, capped at `cap` entries.
 // `matched` is the count BEFORE the cap (how many fell in the window) so callers can report honest
 // sample-vs-total coverage.
-function boundedRecent(entries: DirEntry[], opts: { windowHours?: number; cap: number }): { slice: DirEntry[]; matched: number } {
+export function boundedRecent(entries: DirEntry[], opts: { windowHours?: number; cap: number }): { slice: DirEntry[]; matched: number } {
   let matched = entries
   if (opts.windowHours !== undefined && opts.windowHours > 0) {
     const cutoff = Date.now() - opts.windowHours * 3_600_000
@@ -139,7 +141,7 @@ function boundedRecent(entries: DirEntry[], opts: { windowHours?: number; cap: n
   return { slice: sorted.slice(0, opts.cap), matched: matched.length }
 }
 
-function readJsonBounded<T>(filePath: string, maxBytes: number): T | null {
+export function readJsonBounded<T>(filePath: string, maxBytes: number): T | null {
   let st: fs.Stats
   try { st = fs.statSync(filePath) } catch { return null }
   if (!st.isFile() || st.size > maxBytes) return null
