@@ -43,6 +43,7 @@ import {
   buildCacheBreakTimeline, buildCauseCostPeakReport, buildCacheBreakCauses, formatTimeline, type TimelineFormat,
 } from './cacheBreakTimeline'
 import { leanify } from './leanResponse'
+import { buildSessionBurnProfile } from './sessionBurnProfile'
 // TRDD-FB5RG4P1 — FAL comparative + SQL analytics over the forensics fact DB. Like the cache-forensic
 // tools above, these read ~/.agentlens/{otel-bodies,forensics.db} directly off disk (self-loading
 // sql.js), so they need no McpServerOptions accessor and work identically in both runtimes.
@@ -644,6 +645,32 @@ const TOOLS = [
         topN:      { type: 'number', description: 'Cap on the returned per-turn events log, most-recent-first (default 25, max 100). repeatOffenders/causeHistogram are always computed over ALL classified turns regardless.' },
         format:    { type: 'string', description: 'Output format: json (default, full object) | table | markdown | timeline' },
       },
+    },
+  },
+  {
+    name: 'get_session_burn_profile',
+    description:
+      'ONE-CALL diagnosis of "why is THIS session burning my window?" — replaces the four ad-hoc probes ' +
+      '(call sequence, gap histogram, tool-surface breakdown, is-it-still-running) with a single ' +
+      'server-side answer, because each probe would otherwise cost an agent turn (and a turn re-reads ' +
+      'the whole transcript). Measures the cost model cost ≈ turns × context_size and separates the two ' +
+      'independently-fixable sub-terms: (1) the TOOL SURFACE — every tool definition sits at the TOP of ' +
+      'the cached prefix and is re-sent every turn, broken down by SOURCE (built-in vs each MCP server, ' +
+      'with tok/turn and how many are `deferred`) so you know exactly which server to remove; and (2) the ' +
+      'TRANSCRIPT — everything else, shrinkable only by compaction / a fresh session. Returns turns, ' +
+      'turns-per-hour, a gap histogram (a loop shows as mass under 30s), Σ cache_read / Σ cache_create, ' +
+      'avg context re-read per turn, COLD-call % (cacheRead=0 → the cache never warms → a trigger firing ' +
+      'past the TTL), cost, top tool_use frequency (what it is doing), whether it is STILL ACTIVE, plus a ' +
+      'one-line `verdict` and an ordered `remediation` list ranked by what actually dominates the cost ' +
+      '(never by what is merely easy to change). Bounded + memory-safe (mtime window + size cap; exactly ' +
+      'ONE body fully parsed). POINTER-ONLY: tool names, sizes, token counts — never schemas or message text.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        sessionId: { type: 'string', description: 'Full session id or a unique prefix (e.g. "28e3a88d") — from get_burn_status / get_recent_sessions' },
+        window:    { type: 'number', description: 'Only scan bodies from the last N hours (default 6)' },
+      },
+      required: ['sessionId'],
     },
   },
   {
@@ -1884,6 +1911,12 @@ export function createMcpServer(opts: McpServerOptions): Server {
         const a = args as { sessionId?: string; scope?: string; minTokens?: number; window?: number; topN?: number; format?: TimelineFormat }
         const report = await buildCacheBreakTimeline({ sessionId: a.sessionId, scope: a.scope, minTokens: a.minTokens, windowHours: a.window, topN: a.topN })
         result = formatTimeline(report, a.format ?? 'json')
+        break
+      }
+      case 'get_session_burn_profile': {
+        const a = args as { sessionId?: string; window?: number }
+        if (!a.sessionId) throw new Error('get_session_burn_profile requires sessionId')
+        result = await buildSessionBurnProfile({ sessionId: a.sessionId, windowHours: a.window })
         break
       }
       case 'get_cache_break_causes': {
