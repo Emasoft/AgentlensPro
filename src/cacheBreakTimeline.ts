@@ -156,14 +156,14 @@ function segmentInjected(text: string, blockLabel: string): Segment[] {
   while ((m = boundary.exec(text)) !== null) marks.push({ idx: m.index, label: m[1].trim() })
   if (marks.length === 0) {
     const kind = classifyContentKind(text)
-    return [{ kind, label: labelForKind(kind, blockLabel), text }]
+    return [{ kind, label: labelFor(kind, text, blockLabel), text }]
   }
   const segs: Segment[] = []
   // The leading region before the first "Contents of" (harness prose / billing header / date).
   if (marks[0].idx > 0) {
     const lead = text.slice(0, marks[0].idx)
     const kind = classifyContentKind(lead)
-    segs.push({ kind, label: labelForKind(kind, blockLabel), text: lead })
+    segs.push({ kind, label: labelFor(kind, lead, blockLabel), text: lead })
   }
   for (let i = 0; i < marks.length; i++) {
     const end = i + 1 < marks.length ? marks[i + 1].idx : text.length
@@ -184,6 +184,56 @@ function labelForKind(kind: BlockContentKind, fallback: string): string {
     case 'execresult': return 'inline command result'
     default: return fallback
   }
+}
+
+// BACKTRACE TO THE PERPETRATOR (the user's core ask): a HOOK_INJECTION break must name WHICH injector
+// wrote the mutating block, not a generic "hook injection" — because the culprit is the hook/skill/
+// harness process, not the transcript it perturbed. We identify it from a stable content signature and
+// keep ONLY the short name (pointer-only — never the block text). This name flows into the block label →
+// mkBlock's culpritId → the repeat-offender rollup, so two breaks from the SAME injector collapse into
+// ONE chronic perpetrator ("pss-skills broke the cache on 40 turns").
+function hookSignature(text: string): string | null {
+  if (/<pss-skills>/.test(text)) return 'pss-skills (perfect-skill-suggester)'
+  if (/\[janitor-memory\]/.test(text)) return 'janitor-memory recall'
+  if (/\[janitor-heartbeat\]/.test(text)) return 'janitor-heartbeat'
+  if (/token-guard|hard budget|token budget still exceeded/i.test(text)) return 'token-guard'
+  if (/Context window:\s*\d|pre-tool-context-usage|context watchdog/i.test(text)) return 'context-usage watchdog'
+  if (/post-mcp-sanitizer|prompt-injection shape/i.test(text)) return 'mcp-sanitizer'
+  if (/AI Maestro|inbox notification|unread messages/i.test(text)) return 'ai-maestro inbox'
+  if (/spyglass/i.test(text)) return 'spyglass'
+  if (/worktree|task-notification/i.test(text)) return 'worktree/task notifier'
+  return null
+}
+
+// Resolve the label for an injected segment, preferring the specific injector name for hook/system
+// blocks so the backtrace points at the perpetrator, falling back to the generic per-kind label.
+function labelFor(kind: BlockContentKind, text: string, fallback: string): string {
+  if (kind === 'hook' || kind === 'system') {
+    const sig = hookSignature(text)
+    if (sig) return `hook: ${sig}`
+  }
+  return labelForKind(kind, fallback)
+}
+
+// The built-in tools the harness defer-loads and toggles via ToolSearch (AskUserQuestion/Cron*/Task*/
+// Web*/…). When a cache break's changed tool set is entirely within this set, the perpetrator is the
+// harness ToolSearch mechanism churning its deferred built-ins — NOT the user's own MCP/tool config —
+// so we attribute it to a single stable actor instead of the volatile add/remove list.
+const DEFERRED_BUILTINS = new Set<string>([
+  'AskUserQuestion', 'CronCreate', 'CronDelete', 'CronList', 'SendMessage',
+  'TaskCreate', 'TaskGet', 'TaskList', 'TaskOutput', 'TaskStop', 'TaskUpdate',
+  'WebFetch', 'WebSearch', 'NotebookEdit', 'LSP', 'Monitor', 'PushNotification',
+  'RemoteTrigger', 'DesignSync', 'EnterPlanMode', 'ExitPlanMode', 'EnterWorktree',
+  'ExitWorktree', 'ReadMcpResourceTool', 'ReadMcpResourceDirTool', 'ListMcpResourcesTool',
+])
+
+// Extract the distinct MCP server names from tool names of the form mcp__<server>__<tool>, so an
+// MCP_TOOLS_CHANGED break backtraces to the SERVER that connected/disconnected (chrome-devtools,
+// lean-ctx, agentlens, …) rather than to the individual tools it carried.
+function mcpServersOf(names: string[]): string[] {
+  const s = new Set<string>()
+  for (const n of names) { const m = /^mcp__(.+?)__/.exec(n); if (m) s.add(m[1]) }
+  return [...s].sort()
 }
 
 // ── Turn prefix (compact, pointer-only) ──────────────────────────────────────────
@@ -361,9 +411,20 @@ function diffTools(prev: TurnPrefix, cur: TurnPrefix): CacheBreakVerdict | null 
     if (added.length > 0 && removed.length === 0 && addedDeferred.length === added.length) {
       return mkTools('TOOL_SEARCH_DEFERRED', added, `deferred tool(s) loaded mid-session: ${fmtList(added)}`)
     }
-    // All changed tools are MCP — an MCP server / plugin toggled.
+    // All changed tools are MCP — an MCP server / plugin toggled. Backtrace to the SERVER(s) so the
+    // culpritId groups by the connecting/disconnecting server, not the individual tool churn.
     if (changed.every(n => n.startsWith('mcp__'))) {
-      return mkTools('MCP_TOOLS_CHANGED', changed, `MCP tool(s) ${added.length ? 'added ' + fmtList(added) : ''}${removed.length ? ' removed ' + fmtList(removed) : ''}`.trim())
+      const servers = mcpServersOf(changed)
+      const srvTag = servers.length ? ` [server: ${fmtList(servers)}]` : ''
+      return mkTools('MCP_TOOLS_CHANGED', servers.length ? servers : changed,
+        `MCP tool(s) ${added.length ? 'added ' + fmtList(added) : ''}${removed.length ? ' removed ' + fmtList(removed) : ''}${srvTag}`.trim())
+    }
+    // The changed set is entirely harness deferred built-ins (AskUserQuestion/Cron*/Task*/…) → the
+    // perpetrator is the harness ToolSearch mechanism toggling its deferred set, attributed to ONE
+    // stable actor so the repeat-offender rollup names the harness, not the volatile add/remove list.
+    if (changed.every(n => DEFERRED_BUILTINS.has(n))) {
+      return mkTools('TOOL_SEARCH_DEFERRED', ['harness:deferred-builtins'],
+        `harness ToolSearch toggled deferred built-ins (${changed.length}): ${fmtList(changed)}`)
     }
     return mkTools('TOOLSET_CHANGED', changed, `tool(s) ${added.length ? 'added ' + fmtList(added) : ''}${removed.length ? ' removed ' + fmtList(removed) : ''}`.trim())
   }
@@ -971,6 +1032,107 @@ export async function buildCauseCostPeakReport(opts: CauseCostPeakOptions = {}):
     groups: ranked.slice(0, topN),
     coverage,
   }
+}
+
+// ── Cross-session cause + actor backtrace (get_cache_break_causes) ────────────────
+// The user's two-step forensic question, answered across ALL sessions at once: (1) which BREAK CAUSE is
+// the most common / most expensive (the causeRanking) — and then (2) backtrace each break to the actual
+// PERPETRATOR (the actorLeaderboard, keyed on the enriched culpritId = the MCP server / hook / sub-agent
+// model / harness ToolSearch that CAUSED the tools/system/model change). The transcript is only ever the
+// victim; this report names who keeps breaking it, ranked, across the whole bounded scan.
+export interface CacheBreakCauseRow {
+  cause: CacheBreakTimelineCause
+  events: number
+  sessionsAffected: number
+  cacheCreateTokens: number
+  pct: number                 // % of total classified cache_creation
+  remediation: string
+}
+export interface CacheBreakActorRow {
+  actorId: string             // the enriched culpritId = the stable perpetrator identity
+  cause: CacheBreakTimelineCause
+  actor: string               // human-readable "who" (pointer-only)
+  occurrences: number         // break turns caused by this actor
+  sessionsAffected: number
+  totalCacheCreateTokens: number
+  totalCostUsd: number
+  pct: number                 // % of total classified cache_creation
+  remediation: string
+}
+export interface CacheBreakCausesReport {
+  minTokens: number
+  totalClassifiedEvents: number
+  totalCacheCreateTokens: number
+  causeRanking: CacheBreakCauseRow[]
+  actorLeaderboard: CacheBreakActorRow[]
+  verdict: string             // one-line plain-language "the dominant perpetrator is X"
+  coverage: CacheBreakTimelineReport['coverage']
+}
+
+export interface CacheBreakCausesOptions {
+  bodiesDir?: string
+  windowHours?: number
+  scanCap?: number
+  minTokens?: number
+  scope?: string              // optional session-id prefix filter
+  topN?: number               // cap on the actorLeaderboard (default 20, max 100)
+}
+
+/** Cross-session cause ranking + perpetrator backtrace. Scans EVERY session in the bounded window,
+ *  classifies each significant cache_creation turn via the SAME root-cause classifier, and returns both
+ *  (1) the causes ranked by wasted cache_creation and (2) the actor leaderboard — grouped on the
+ *  enriched culpritId, so "MCP server chrome-devtools" / "hook: pss-skills" / "harness ToolSearch" /
+ *  "model claude-sonnet-5" surface as chronic perpetrators. LAZY + BOUNDED: one shared scan. */
+export async function buildCacheBreakCauses(opts: CacheBreakCausesOptions = {}): Promise<CacheBreakCausesReport> {
+  const bodiesDir = opts.bodiesDir ?? DEFAULT_BODIES_DIR
+  const minTokens = opts.minTokens ?? DEFAULT_MIN_TOKENS
+  const scanCap = opts.scanCap ?? RESPONSE_SCAN_CAP
+  const topN = Math.min(Math.max(1, opts.topN ?? 20), 100)
+  const dirExists = fs.existsSync(bodiesDir)
+  const emptyCoverage = (note: string): CacheBreakTimelineReport['coverage'] => ({
+    bodiesDir, dirExists, requestFilesTotal: 0, requestFilesScanned: 0, responseFilesTotal: 0,
+    responseFilesScanned: 0, sessionsFound: 0, scanCap, windowHours: opts.windowHours, complete: true, note,
+  })
+  if (!dirExists) {
+    return { minTokens, totalClassifiedEvents: 0, totalCacheCreateTokens: 0, causeRanking: [], actorLeaderboard: [], verdict: 'no data', coverage: emptyCoverage(`No OTEL raw-body directory at ${bodiesDir} — set OTEL_LOG_RAW_API_BODIES to capture bodies.`) }
+  }
+
+  const { bySession, respById, coverage } = scanSessionsAndResponses(bodiesDir, opts.windowHours, scanCap)
+
+  interface CauseAcc { events: number; cc: number; sessions: Set<string> }
+  interface ActorAcc { cause: CacheBreakTimelineCause; actor: string; occ: number; cc: number; cost: number; sessions: Set<string> }
+  const causeMap = new Map<CacheBreakTimelineCause, CauseAcc>()
+  const actorMap = new Map<string, ActorAcc>()
+  let total = 0, totalEvents = 0
+
+  for (const [sid, turnsRaw] of bySession) {
+    if (sid === '(no-session)') continue
+    if (opts.scope && !sid.startsWith(opts.scope)) continue
+    const turns = [...turnsRaw].sort((a, b) => a.mtimeMs - b.mtimeMs)
+    for (const e of classifyTurns(turns, respById, minTokens)) {
+      total += e.cacheCreateTokens; totalEvents += 1
+      const c = causeMap.get(e.cause) ?? { events: 0, cc: 0, sessions: new Set<string>() }
+      c.events += 1; c.cc += e.cacheCreateTokens; c.sessions.add(sid); causeMap.set(e.cause, c)
+      const a = actorMap.get(e.culpritId) ?? { cause: e.cause, actor: e.culprit, occ: 0, cc: 0, cost: 0, sessions: new Set<string>() }
+      a.occ += 1; a.cc += e.cacheCreateTokens; a.cost += e.costUsd; a.sessions.add(sid); actorMap.set(e.culpritId, a)
+    }
+  }
+
+  const pct = (n: number) => total > 0 ? +(100 * n / total).toFixed(1) : 0
+  const causeRanking: CacheBreakCauseRow[] = [...causeMap.entries()]
+    .map(([cause, v]) => ({ cause, events: v.events, sessionsAffected: v.sessions.size, cacheCreateTokens: v.cc, pct: pct(v.cc), remediation: REMEDIATION[cause] }))
+    .sort((a, b) => b.cacheCreateTokens - a.cacheCreateTokens)
+  const actorLeaderboard: CacheBreakActorRow[] = [...actorMap.entries()]
+    .map(([actorId, v]) => ({ actorId, cause: v.cause, actor: v.actor, occurrences: v.occ, sessionsAffected: v.sessions.size, totalCacheCreateTokens: v.cc, totalCostUsd: +v.cost.toFixed(4), pct: pct(v.cc), remediation: REMEDIATION[v.cause] }))
+    .sort((a, b) => b.totalCacheCreateTokens - a.totalCacheCreateTokens)
+    .slice(0, topN)
+
+  const top = actorLeaderboard[0]
+  const verdict = top
+    ? `Dominant perpetrator: ${top.actor} (${top.cause}) — ${top.totalCacheCreateTokens.toLocaleString()} cache_creation tokens across ${top.sessionsAffected} session(s), ${top.pct}% of all classified breaks. ${top.remediation}`
+    : 'No significant cache_creation breaks classified in the scanned window.'
+
+  return { minTokens, totalClassifiedEvents: totalEvents, totalCacheCreateTokens: total, causeRanking, actorLeaderboard, verdict, coverage }
 }
 
 // ── Output formatting ────────────────────────────────────────────────────────────

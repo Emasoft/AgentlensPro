@@ -40,7 +40,7 @@ import {
   formatExpensiveWrites, formatCostPeaks, type CostPeakGroupBy, type CostBucket, type ForensicsFormat,
 } from './cacheCreationForensics'
 import {
-  buildCacheBreakTimeline, buildCauseCostPeakReport, formatTimeline, type TimelineFormat,
+  buildCacheBreakTimeline, buildCauseCostPeakReport, buildCacheBreakCauses, formatTimeline, type TimelineFormat,
 } from './cacheBreakTimeline'
 // TRDD-FB5RG4P1 — FAL comparative + SQL analytics over the forensics fact DB. Like the cache-forensic
 // tools above, these read ~/.agentlens/{otel-bodies,forensics.db} directly off disk (self-loading
@@ -639,6 +639,32 @@ const TOOLS = [
         window:    { type: 'number', description: 'Only scan bodies from the last N hours; omit for the bounded most-recent scan across all history' },
         topN:      { type: 'number', description: 'Cap on the returned per-turn events log, most-recent-first (default 25, max 100). repeatOffenders/causeHistogram are always computed over ALL classified turns regardless.' },
         format:    { type: 'string', description: 'Output format: json (default, full object) | table | markdown | timeline' },
+      },
+    },
+  },
+  {
+    name: 'get_cache_break_causes',
+    description:
+      'The cross-session PERPETRATOR backtrace — answers "what keeps breaking my cache, and WHO causes ' +
+      'it?" over ALL sessions at once (get_cache_break_timeline is ONE session). The prompt-cache transcript ' +
+      'is only ever the VICTIM: it re-writes as cache_creation whenever something ABOVE it in the prefix ' +
+      '(tools/system/model) changes or a TTL expires. This tool runs the root-cause classifier across every ' +
+      'session in the bounded scan and returns TWO ranked views: (1) `causeRanking` — the break causes ' +
+      '(TOOL_SEARCH_DEFERRED, MCP_TOOLS_CHANGED, MODEL_SWITCH, HOOK_INJECTION, TTL_EXPIRY, COMPACTION, …) ' +
+      'ranked by wasted cache_creation, so you see the most common/expensive category; and (2) ' +
+      '`actorLeaderboard` — the actual PERPETRATORS, backtraced from the enriched culprit id: the specific ' +
+      'MCP server that toggled (chrome-devtools/lean-ctx/…), the specific hook that injected (pss-skills / ' +
+      'janitor-memory / token-guard / …), the sub-agent MODEL that interleaved, or the harness ToolSearch ' +
+      'churning its deferred built-ins — each with occurrences, sessionsAffected, cache_creation, cost, and ' +
+      'a remediation. A one-line `verdict` names the dominant perpetrator. POINTER-ONLY. Read `coverage` for ' +
+      'the bounded scan scope.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        scope:     { type: 'string', description: 'Optional session-id prefix to restrict the scan to one session family; omit for all sessions' },
+        minTokens: { type: 'number', description: 'Only classify turns whose cache_creation ≥ this (default 5000)' },
+        window:    { type: 'number', description: 'Only scan bodies from the last N hours; omit for the bounded most-recent scan across all history' },
+        topN:      { type: 'number', description: 'Cap on the actorLeaderboard (default 20, max 100); causeRanking is never truncated' },
       },
     },
   },
@@ -1851,6 +1877,11 @@ export function createMcpServer(opts: McpServerOptions): Server {
         const a = args as { sessionId?: string; scope?: string; minTokens?: number; window?: number; topN?: number; format?: TimelineFormat }
         const report = await buildCacheBreakTimeline({ sessionId: a.sessionId, scope: a.scope, minTokens: a.minTokens, windowHours: a.window, topN: a.topN })
         result = formatTimeline(report, a.format ?? 'json')
+        break
+      }
+      case 'get_cache_break_causes': {
+        const a = args as { scope?: string; minTokens?: number; window?: number; topN?: number }
+        result = await buildCacheBreakCauses({ scope: a.scope, minTokens: a.minTokens, windowHours: a.window, topN: a.topN })
         break
       }
       case 'compare_configs': {
