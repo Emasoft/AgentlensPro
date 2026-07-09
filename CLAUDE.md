@@ -4,15 +4,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## AgentLens diagnostics (CLI — the MCP server is deliberately NOT registered)
 
-All 32 diagnostic tools are called via the CLI, not MCP: resident MCP schemas cost ~8k tokens
-per turn and any toolset change breaks the prompt-cache prefix, so `.mcp.json` intentionally
-does not register the server. Load the **`agentlens-diagnostics`** skill, or directly:
+All 32 diagnostic tools are called via the globally-linked **`agentlens-cli`** (`npm link` from
+this repo; source `scripts/agentlens-cli.js`), not MCP: resident MCP schemas cost ~8k tokens per
+turn and any toolset change breaks the prompt-cache prefix, so `.mcp.json` intentionally does
+not register the server. The user-scoped **`agentlens-diagnostics`** skill documents the full
+surface; the essentials:
 
 ```bash
-pnpm run mcp:ensure                              # server up (idempotent)
-node scripts/agentlens-cli.js list --desc        # discover tools
-node scripts/agentlens-cli.js help <tool>        # flags from the live schema
-node scripts/agentlens-cli.js <tool> --param value --out /tmp/x.json   # digest to stdout
+agentlens-cli --start-server                     # server up (idempotent); --dashboard opens the UI
+agentlens-cli list --desc                        # discover tools
+agentlens-cli help <tool>                        # flags from the live schema
+agentlens-cli <tool> --param value --out FILE    # full JSON to disk, digest to stdout
+agentlens-cli --install-otel | --uninstall-otel  # wire/unwire Claude Code telemetry (verified transaction)
 ```
 
 Before any task: `get_recent_sessions` (recent work + cost) and `get_workspace_patterns`

@@ -25,12 +25,24 @@
 //   # full (unshaped) payload for a genuine deep drill, straight to a file
 //   node scripts/agentlens-cli.js get_cache_break_causes --full --out /tmp/causes.json
 //
+//   # operations: start the server, open the dashboard, wire Claude Code telemetry
+//   agentlens-cli --start-server
+//   agentlens-cli --dashboard
+//   agentlens-cli --install-otel      # add the OTEL env vars to ~/.claude/settings.json (verified transaction)
+//   agentlens-cli --uninstall-otel    # remove exactly those vars, everything else untouched
+//
 // Exits non-zero on transport/tool error (fail-fast; no silent fallback).
 
 const http = require('http')
 const fs = require('fs')
+const os = require('os')
+const path = require('path')
+const { spawn } = require('child_process')
 
 const ENDPOINT = process.env.AGENTLENS_MCP_URL || 'http://localhost:4316/mcp'
+const DASHBOARD_URL = process.env.AGENTLENS_DASHBOARD_URL || 'http://localhost:3000'
+// Overridable ONLY for tests — production always targets the real global settings.
+const CLAUDE_SETTINGS = process.env.AGENTLENS_CLAUDE_SETTINGS || path.join(os.homedir(), '.claude', 'settings.json')
 
 const USAGE = `agentlens-cli — every AgentLens diagnostic tool as a subcommand (schemas come live from the server)
 
@@ -41,8 +53,40 @@ usage:
   agentlens-cli call <tool> [json-args]    call with a raw JSON args object
   agentlens-cli batch <json-array>         N calls in one invocation: [{"tool":"...","args":{...}}]
 
+operations:
+  --start-server        start the AgentLens standalone server if not already running
+                        (alone, or before any tool call: agentlens-cli --start-server get_burn_status)
+  --dashboard           ensure the server is up, then open ${DASHBOARD_URL}
+  --install-otel        add the Claude Code telemetry env vars to ~/.claude/settings.json via a
+                        verified transaction (atomic write, backup, post-verify, refuses an
+                        unparseable file, pre-existing content untouched)
+  --uninstall-otel      remove exactly those env vars (same transaction guarantees)
+
 globals: --full (unshaped payload)   --out PATH (full JSON to disk, one-line digest to stdout)
 server:  $AGENTLENS_MCP_URL (default http://localhost:4316/mcp)`
+
+// The telemetry wiring AgentLens capture depends on. RAW_API_BODIES is computed per-machine.
+const OTEL_ENV = {
+  CLAUDE_CODE_ENABLE_TELEMETRY: '1',
+  OTEL_METRICS_EXPORTER: 'otlp',
+  OTEL_LOGS_EXPORTER: 'otlp',
+  OTEL_TRACES_EXPORTER: 'otlp',
+  OTEL_EXPORTER_OTLP_PROTOCOL: 'http/json',
+  OTEL_EXPORTER_OTLP_ENDPOINT: 'http://localhost:4318',
+  OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: 'delta',
+  OTEL_METRIC_EXPORT_INTERVAL: '10000',
+  OTEL_LOGS_EXPORT_INTERVAL: '5000',
+  OTEL_TRACES_EXPORT_INTERVAL: '1000',
+  OTEL_METRICS_INCLUDE_SESSION_ID: 'true',
+  OTEL_METRICS_INCLUDE_VERSION: 'true',
+  OTEL_METRICS_INCLUDE_ENTRYPOINT: 'true',
+  OTEL_METRICS_INCLUDE_ACCOUNT_UUID: 'true',
+  OTEL_LOG_USER_PROMPTS: '1',
+  OTEL_LOG_ASSISTANT_RESPONSES: '1',
+  OTEL_LOG_TOOL_CONTENT: '1',
+  OTEL_LOG_TOOL_DETAILS: '1',
+  OTEL_LOG_RAW_API_BODIES: `file:${path.join(os.homedir(), '.agentlens', 'otel-bodies')}`,
+}
 
 function rpc(method, params) {
   const body = JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method, params })
@@ -129,6 +173,72 @@ async function callTool(tool, args, full) {
 function firstSentence(s) {
   const one = String(s || '').trim().split('. ')[0]
   return one.length > 140 ? `${one.slice(0, 140)}…` : one
+}
+
+const sleep = ms => new Promise(r => setTimeout(r, ms))
+
+/** Start the standalone server if the MCP endpoint is unreachable; wait until it answers. */
+async function ensureServer() {
+  try { await init(); return } catch { /* not up — start it */ }
+  const serverJs = path.resolve(__dirname, '..', 'standalone', 'server.js')
+  if (!fs.existsSync(serverJs)) {
+    throw new Error(`server bundle missing at ${serverJs} — run \`node esbuild.js\` in the AgentLens repo first`)
+  }
+  const child = spawn(process.execPath, ['--max-old-space-size=6144', serverJs], {
+    cwd: path.resolve(__dirname, '..'),
+    detached: true,
+    stdio: 'ignore',
+  })
+  child.unref()
+  for (let i = 0; i < 80; i++) { // up to 20s — DB open + first scan can be slow
+    await sleep(250)
+    try { await init(); console.log(`server started (pid ${child.pid})`); return } catch { /* keep polling */ }
+  }
+  throw new Error('server did not become ready within 20s — check the AgentLens repo build')
+}
+
+function openDashboard() {
+  if (process.platform === 'darwin') {
+    spawn('open', [DASHBOARD_URL], { detached: true, stdio: 'ignore' }).unref()
+    console.log(`dashboard -> ${DASHBOARD_URL}`)
+  } else {
+    console.log(`open ${DASHBOARD_URL} in your browser`)
+  }
+}
+
+/** Mutate ~/.claude/settings.json ONLY through the verified transaction engine
+ *  (scripts/safe_config_edit.py: refuse-unparseable, atomic backup+rename, cross-process
+ *  lock, post-apply verify). A direct fs.writeFile of a user config file once wiped a
+ *  user's whole settings.json — never reintroduce that path. */
+function runSafeConfigEdit(ops, createIfMissing) {
+  const script = path.resolve(__dirname, 'safe_config_edit.py')
+  if (!fs.existsSync(script)) throw new Error(`safe_config_edit.py missing at ${script}`)
+  const args = [script, '--file', CLAUDE_SETTINGS, '--format', 'json']
+  if (createIfMissing) args.push('--create-if-missing')
+  return new Promise((resolve, reject) => {
+    const child = spawn('python3', args, { stdio: ['pipe', 'pipe', 'pipe'] })
+    let out = '', err = ''
+    child.stdout.on('data', c => { out += c })
+    child.stderr.on('data', c => { err += c })
+    child.on('close', code => {
+      if (code === 0) resolve(JSON.parse(out))
+      else reject(new Error(`safe_config_edit failed (exit ${code}): ${(err || out).trim().slice(0, 300)}`))
+    })
+    child.stdin.write(JSON.stringify({ ops }))
+    child.stdin.end()
+  })
+}
+
+async function installOtel(uninstall) {
+  const keys = Object.keys(OTEL_ENV)
+  const ops = uninstall
+    ? keys.map(k => ({ op: 'delete', path: ['env', k] }))
+    : keys.map(k => ({ op: 'set', path: ['env', k], value: OTEL_ENV[k] }))
+  const result = await runSafeConfigEdit(ops, !uninstall)
+  const verb = uninstall ? 'removed from' : 'installed into'
+  console.log(`${keys.length} telemetry env var(s) ${verb} ${CLAUDE_SETTINGS}`)
+  console.log(`changed=${result.changed}${result.backupPath ? ` backup=${result.backupPath}` : ''} attempts=${result.attempts}`)
+  if (!uninstall) console.log('restart Claude Code sessions to pick up the env change')
 }
 
 // Dispatch-level globals the server's leanify layer reads on EVERY tool, even when the
@@ -225,15 +335,32 @@ function emit(tool, result, globals) {
 
 async function main() {
   const argv = process.argv.slice(2)
-  // Strip the output globals first so every command sees only its own tokens.
-  const globals = { full: false, out: null }
+  // Strip the output globals and ops flags first so every command sees only its own tokens.
+  const globals = { full: false, out: null, startServer: false, dashboard: false }
+  let otelOp = null
   const rest = []
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--full') globals.full = true
+    else if (argv[i] === '--start-server') globals.startServer = true
+    else if (argv[i] === '--dashboard') globals.dashboard = true
+    else if (argv[i] === '--install-otel') otelOp = 'install'
+    else if (argv[i] === '--uninstall-otel') otelOp = 'uninstall'
     else if (argv[i] === '--out') {
       globals.out = argv[++i]
       if (!globals.out) throw new Error('--out needs a path')
     } else rest.push(argv[i])
+  }
+
+  // Settings mutation is standalone — no server needed, exits after the transaction.
+  if (otelOp) {
+    await installOtel(otelOp === 'uninstall')
+    return
+  }
+
+  if (globals.startServer || globals.dashboard) {
+    await ensureServer()
+    if (globals.dashboard) openDashboard()
+    if (rest.length === 0) return // ops-only invocation
   }
 
   const cmd = rest[0]
