@@ -391,7 +391,18 @@ function fmtList(xs: string[]): string { return xs.length <= 3 ? xs.join(', ') :
 // ignored (that's the one-time cache_creation of new content, expected); only a change/removal/reorder
 // WITHIN the previously-cached common prefix is an avoidable break. Returns the classified verdict, or
 // null when cur is a byte-identical extension of prev (pure growth).
-function diffBlocks(prevBlocks: PrefixBlock[], curBlocks: PrefixBlock[], layer: 'system' | 'message'): CacheBreakVerdict | null {
+function diffBlocks(prevBlocksRaw: PrefixBlock[], curBlocksRaw: PrefixBlock[], layer: 'system' | 'message'): CacheBreakVerdict | null {
+  // Drop cache-transparent blocks BEFORE the positional diff. The harness billing header
+  // (kind 'agentmeta' — the leading `cc_prev_req` block at system pos 0) changes on EVERY turn but is
+  // EXCLUDED from Anthropic's prompt-cache key. Proven empirically: were it in the key, every turn
+  // would rewrite the whole ~context-size prefix as cache_creation (it always changes), yet long
+  // sessions measure >95% cache_read. So a divergence there is NOT a real break — comparing it would
+  // pin every idle-TTL / message-prefix / sub-agent break on a constant ("billing header"), the exact
+  // false-SYSTEMATIC verdict this masks. Skipping it lets the classifier fall through to the true
+  // culprit (or to the TTL-timing check when the cache-relevant prefix is byte-identical).
+  // NOTE: 'agentcatalog' (the agent-types list) is a DIFFERENT kind and IS cache-relevant — not dropped.
+  const prevBlocks = prevBlocksRaw.filter(b => b.kind !== 'agentmeta')
+  const curBlocks = curBlocksRaw.filter(b => b.kind !== 'agentmeta')
   const prevFps = new Set(prevBlocks.map(b => b.fp))
   const curFps = new Set(curBlocks.map(b => b.fp))
   const prevKinds = new Set(prevBlocks.map(b => b.kind))
