@@ -33,6 +33,7 @@ import { buildContextHistory } from '../src/contextHistory'
 import { generateSuggestions } from '../src/instructionAdvisor'
 import { detectInstructionFiles, appendSuggestion } from '../src/instructionFiles'
 import { atomicWriteFileSync, heapPressure, RequestLog } from '../src/serverRuntime'
+import { appendToArchive, purgeArchiveVolumes, archiveDiskUsage, extractArchive } from '../src/bodyArchive'
 import {
   loadLogOffsets, saveLogOffsets, loadPersistedCards, savePersistedCards,
   recordCollectorStart, recordCollectorHeartbeat, recordCollectorStop, computeCollectorGaps,
@@ -114,6 +115,18 @@ let pendingLines: string[] = []  // spans not yet appended to disk
 let fileSpanCount = 0            // lines currently in DATA_FILE (drives compaction)
 const SAVE_INTERVAL_MS = Math.max(1000, Number(process.env.AGENTLENS_SAVE_INTERVAL_MS) || 5000)
 
+// Persistence accounting — the observable that would have caught the 420GB incident on day one.
+// Every byte this process writes to DATA_DIR is counted here and reported by /api/server-stats,
+// so "how much is the collector writing?" is one CLI call instead of a kernel-counter hunt.
+const SERVER_STARTED_AT = Date.now()
+const persistStats = {
+  spanAppendWrites: 0, spanAppendBytes: 0,
+  spanCompactions: 0, spanCompactBytes: 0,
+  offsetsWrites: 0, offsetsBytes: 0,
+  cardsWrites: 0, cardsBytes: 0,
+  bodiesLastPurge: { at: 0, removedFiles: 0, freedBytes: 0, keptFiles: 0, keptBytes: 0 },
+}
+
 function spansToNdjson(list: Span[]): string {
   return list.length ? `${list.map(s => JSON.stringify(s)).join('\n')}\n` : ''
 }
@@ -157,17 +170,26 @@ try {
 function flushSpanAppends(): void {
   if (pendingLines.length > 0) {
     try {
-      fs.appendFileSync(DATA_FILE, `${pendingLines.join('\n')}\n`)
+      const chunk = `${pendingLines.join('\n')}\n`
+      fs.appendFileSync(DATA_FILE, chunk)
+      persistStats.spanAppendWrites++
+      persistStats.spanAppendBytes += chunk.length
       fileSpanCount += pendingLines.length
       pendingLines = []
     } catch (e) {
       console.warn('[AgentLens] Could not append spans:', e)
-      return // keep the buffer; retry next tick
+      // Retry next tick — but a bounded buffer: if appends keep failing (disk full, dir gone),
+      // cap the buffer at one MAX_SPANS worth so the failure can't become its own memory leak.
+      if (pendingLines.length > MAX_SPANS) pendingLines = pendingLines.slice(-MAX_SPANS)
+      return
     }
   }
   if (fileSpanCount > MAX_SPANS * 2) {
     try {
-      atomicWriteFileSync(DATA_FILE, spansToNdjson(spans))
+      const body = spansToNdjson(spans)
+      atomicWriteFileSync(DATA_FILE, body)
+      persistStats.spanCompactions++
+      persistStats.spanCompactBytes += body.length
       fileSpanCount = spans.length
     } catch (e) {
       console.warn('[AgentLens] Could not compact spans store:', e)
@@ -194,60 +216,114 @@ function addSpan(span: Span) {
   if (spans.length > MAX_SPANS * 1.05) spans = spans.slice(-MAX_SPANS)
 }
 
-// ── otel-bodies retention ─────────────────────────────────────────────────────
+// ── otel-bodies retention: ARCHIVE, don't delete ──────────────────────────────
 // Claude Code's OTEL_LOG_RAW_API_BODIES exporter writes one request+response JSON pair per API
-// call into DATA_DIR/otel-bodies and never deletes anything — observed at 23GB / ~45k files on a
-// 98%-full disk. The server is the caretaker of DATA_DIR, so it enforces retention: files older
-// than AGENTLENS_BODIES_MAX_AGE_HOURS (default 72h) go first, then oldest-first until the total
-// is under AGENTLENS_BODIES_MAX_GB (default 8). Only *.request.json / *.response.json inside the
-// bodies dir are ever touched. Every purge is logged — a silent cap would read as data loss.
+// call into DATA_DIR/otel-bodies and never deletes anything (observed 23GB / ~45k files on a
+// 98%-full disk). The user needs a MONTH of bodies for long-term diagnosis, so old bodies are
+// MOVED into the compressed random-access archive (src/bodyArchive.ts — WAD-style monthly
+// volumes, ~8-10× smaller), never destroyed before the retention window ends:
+//   live dir  — the last AGENTLENS_BODIES_MAX_AGE_HOURS (default 72h), plain files
+//   archive   — everything older, until AGENTLENS_BODIES_RETENTION_DAYS (default 31)
+// The live-size cap (AGENTLENS_BODIES_MAX_GB, default 8) is an emergency valve that archives
+// oldest-first — it also never deletes. The only true deletion is whole archive volumes older
+// than the retention window. Every pass is logged; a silent cap would read as data loss.
 const BODIES_DIR = path.join(DATA_DIR, 'otel-bodies')
+const BODIES_ARCHIVE_DIR = path.join(DATA_DIR, 'otel-bodies-archive')
 const BODIES_MAX_AGE_MS = Math.max(1, Number(process.env.AGENTLENS_BODIES_MAX_AGE_HOURS) || 72) * 3600e3
 const BODIES_MAX_BYTES = Math.max(0.5, Number(process.env.AGENTLENS_BODIES_MAX_GB) || 8) * 1024 ** 3
+const BODIES_RETENTION_DAYS = Math.max(1, Number(process.env.AGENTLENS_BODIES_RETENTION_DAYS) || 31)
 
-function purgeOtelBodies(): void {
-  let entries: { p: string; mtime: number; size: number }[] = []
+let bodiesPassRunning = false
+async function archiveOtelBodies(): Promise<void> {
+  if (bodiesPassRunning) return // an hourly tick must never overlap a still-running first pass
+  bodiesPassRunning = true
   try {
-    if (!fs.existsSync(BODIES_DIR)) return
-    for (const f of fs.readdirSync(BODIES_DIR)) {
-      if (!f.endsWith('.request.json') && !f.endsWith('.response.json')) continue
+    let entries: { p: string; name: string; mtime: number; size: number }[] = []
+    try {
+      if (!fs.existsSync(BODIES_DIR)) return
+      for (const f of fs.readdirSync(BODIES_DIR)) {
+        if (!f.endsWith('.request.json') && !f.endsWith('.response.json')) continue
+        try {
+          const st = fs.statSync(path.join(BODIES_DIR, f))
+          entries.push({ p: path.join(BODIES_DIR, f), name: f, mtime: st.mtimeMs, size: st.size })
+        } catch { /* raced with a writer — skip */ }
+      }
+    } catch (e) {
+      console.warn('[AgentLens] otel-bodies retention scan failed:', e)
+      return
+    }
+    const cutoff = Date.now() - BODIES_MAX_AGE_MS
+    let archived = 0
+    let archivedBytes = 0
+    const moveToArchive = async (e: { p: string; name: string; mtime: number; size: number }): Promise<void> => {
       try {
-        const st = fs.statSync(path.join(BODIES_DIR, f))
-        entries.push({ p: path.join(BODIES_DIR, f), mtime: st.mtimeMs, size: st.size })
-      } catch { /* raced with a writer — skip */ }
+        const data = fs.readFileSync(e.p)
+        appendToArchive(BODIES_ARCHIVE_DIR, e.name, data, e.mtime)
+        fs.unlinkSync(e.p) // only after the archive append succeeded — a failure keeps the live file
+        archived++
+        archivedBytes += e.size
+      } catch (err) {
+        console.warn(`[AgentLens] could not archive ${e.name}:`, err)
+      }
+      // Yield between files: the first pass can chew tens of thousands of files, and a sync loop
+      // would starve the OTLP/UI listeners for minutes.
+      await new Promise(r => setImmediate(r))
     }
-  } catch (e) {
-    console.warn('[AgentLens] otel-bodies retention scan failed:', e)
-    return
-  }
-  const cutoff = Date.now() - BODIES_MAX_AGE_MS
-  let removed = 0
-  let removedBytes = 0
-  const drop = (e: { p: string; size: number }) => {
-    try { fs.unlinkSync(e.p); removed++; removedBytes += e.size } catch { /* already gone */ }
-  }
-  const kept: typeof entries = []
-  for (const e of entries) {
-    if (e.mtime < cutoff) drop(e)
-    else kept.push(e)
-  }
-  entries = kept
-  let totalBytes = entries.reduce((a, e) => a + e.size, 0)
-  if (totalBytes > BODIES_MAX_BYTES) {
-    entries.sort((a, b) => a.mtime - b.mtime) // oldest first
+    const kept: typeof entries = []
     for (const e of entries) {
-      if (totalBytes <= BODIES_MAX_BYTES) break
-      drop(e)
-      totalBytes -= e.size
+      if (e.mtime < cutoff) await moveToArchive(e)
+      else kept.push(e)
     }
-  }
-  if (removed > 0) {
-    console.log(`[AgentLens] otel-bodies retention: removed ${removed} file(s), ${(removedBytes / 1024 ** 3).toFixed(2)}GB freed — ${(totalBytes / 1024 ** 3).toFixed(2)}GB kept`)
+    entries = kept
+    let totalBytes = entries.reduce((a, e) => a + e.size, 0)
+    if (totalBytes > BODIES_MAX_BYTES) {
+      entries.sort((a, b) => a.mtime - b.mtime) // oldest first
+      for (const e of entries) {
+        if (totalBytes <= BODIES_MAX_BYTES) break
+        await moveToArchive(e)
+        totalBytes -= e.size
+      }
+    }
+    const purged = purgeArchiveVolumes(BODIES_ARCHIVE_DIR, BODIES_RETENTION_DAYS)
+    persistStats.bodiesLastPurge = {
+      at: Date.now(), removedFiles: archived, freedBytes: archivedBytes,
+      keptFiles: entries.length, keptBytes: totalBytes,
+    }
+    if (archived > 0 || purged.removed.length > 0) {
+      const arch = archiveDiskUsage(BODIES_ARCHIVE_DIR)
+      console.log(`[AgentLens] otel-bodies retention: archived ${archived} file(s) (${(archivedBytes / 1024 ** 3).toFixed(2)}GB → archive now ${(arch.bytes / 1024 ** 3).toFixed(2)}GB/${arch.entries} lumps)` +
+        `${purged.removed.length > 0 ? `; purged volume(s) ${purged.removed.join(', ')} (${(purged.freedBytes / 1024 ** 3).toFixed(2)}GB)` : ''}; live ${(totalBytes / 1024 ** 3).toFixed(2)}GB`)
+    }
+  } finally {
+    bodiesPassRunning = false
   }
 }
-purgeOtelBodies() // enforce on boot — a long-dead server must not leave the corpus unbounded
-const bodiesPurgeTimer = setInterval(purgeOtelBodies, 3600e3)
+void archiveOtelBodies() // enforce on boot — a long-dead server must not leave the corpus unbounded
+const bodiesPurgeTimer = setInterval(() => { void archiveOtelBodies() }, 3600e3)
 bodiesPurgeTimer.unref()
+
+// ── Single-instance guard (canonical instance only) ──────────────────────────
+// EADDRINUSE on any of the three listeners already makes a same-port double start exit(1); the
+// pidfile adds (a) a discoverable PID for `agentlens-cli --status/--stop-server` without a lsof
+// hunt, and (b) a fast, explicit refusal BEFORE boot-time side effects (bodies purge, migration,
+// auto-config) when a canonical server is already alive. Isolated-port instances (tests, headless
+// proofs — see the canonical-instance gate in applyAutoConfig) never write it: they are meant to
+// coexist and must not evict the real server's pidfile.
+const PID_FILE = path.join(DATA_DIR, 'server.pid')
+const IS_CANONICAL = OTLP_PORT === 4318
+if (IS_CANONICAL) {
+  try {
+    const prior = Number(fs.readFileSync(PID_FILE, 'utf-8').trim())
+    if (prior > 0 && prior !== process.pid) {
+      try {
+        process.kill(prior, 0) // throws when the process is gone — then the pidfile is stale
+        console.error(`[AgentLens] Another AgentLens server is already running (pid ${prior}). Use \`agentlens-cli --status\` / \`--stop-server\`, or set OTLP_PORT for an isolated instance.`)
+        process.exit(1)
+      } catch { /* stale pidfile — take over below */ }
+    }
+  } catch { /* no pidfile — first start */ }
+  try { atomicWriteFileSync(PID_FILE, String(process.pid)) } catch (e) { console.warn('[AgentLens] Could not write pidfile:', e) }
+}
 
 // ── Log file sessions ─────────────────────────────────────────────────────────
 
@@ -1649,16 +1725,46 @@ function stripCardForPersist(c: SessionSummaryCard): SessionSummaryCard {
   return { ...c, timeline: [], fileOps: undefined, backgroundSpans: [], generatedFiles: undefined, generatedFilesTruncated: undefined }
 }
 
-// Debounced persistence of the tail offsets + stripped log cards so a restart resumes instantly.
-let durableSaveTimer: ReturnType<typeof setTimeout> | null = null
-function scheduleDurableSave(): void {
-  if (durableSaveTimer) return
-  durableSaveTimer = setTimeout(() => {
-    durableSaveTimer = null
-    try { saveLogOffsets(OFFSETS_FILE, logReader.exportFileState()) } catch (e) { console.warn('[AgentLens] Could not save log offsets:', e) }
-    try { savePersistedCards(CARDS_FILE, [...logSessions.values()].map(stripCardForPersist)) } catch (e) { console.warn('[AgentLens] Could not save log cards:', e) }
-  }, 5000)
+// Persistence of the tail offsets + stripped log cards so a restart resumes instantly.
+// WHY dirty-flag + slow interval and NOT a change-triggered debounce: the previous 5s debounce
+// re-fired after every scan that touched a card, fully rewriting log-sessions.json (27MB) +
+// log-offsets.json (3MB) as often as every 5 seconds under live sessions — tens of GB/day of SSD
+// wear, the same disease as the spans.json incident in miniature. Both files mutate in place
+// (cards update), so append-only doesn't fit; the lever is CADENCE. Offsets (small, drive the
+// fast restart) write every 60s when dirty; cards (large, only refresh the restored dashboard
+// list) every 5 min when dirty. Shutdown flushes both, so a graceful stop loses nothing.
+let offsetsDirty = false
+let cardsDirty = false
+function scheduleDurableSave(): void { offsetsDirty = true; cardsDirty = true }
+const OFFSETS_SAVE_MS = Math.max(10_000, Number(process.env.AGENTLENS_OFFSETS_SAVE_MS) || 60_000)
+const CARDS_SAVE_MS = Math.max(30_000, Number(process.env.AGENTLENS_CARDS_SAVE_MS) || 300_000)
+let lastCardsSave = 0
+
+// Byte accounting via statSync after the write — a second JSON.stringify of a 27MB object just
+// to count bytes would double the serialization cost of every save.
+function sizeOf(file: string): number {
+  try { return fs.statSync(file).size } catch { return 0 }
 }
+function saveOffsetsNow(): void {
+  try {
+    saveLogOffsets(OFFSETS_FILE, logReader.exportFileState())
+    persistStats.offsetsWrites++
+    persistStats.offsetsBytes += sizeOf(OFFSETS_FILE)
+  } catch (e) { console.warn('[AgentLens] Could not save log offsets:', e) }
+}
+function saveCardsNow(): void {
+  try {
+    savePersistedCards(CARDS_FILE, [...logSessions.values()].map(stripCardForPersist))
+    persistStats.cardsWrites++
+    persistStats.cardsBytes += sizeOf(CARDS_FILE)
+    lastCardsSave = Date.now()
+  } catch (e) { console.warn('[AgentLens] Could not save log cards:', e) }
+}
+const durableSaveTimer = setInterval(() => {
+  if (offsetsDirty) { offsetsDirty = false; saveOffsetsNow() }
+  if (cardsDirty && Date.now() - lastCardsSave >= CARDS_SAVE_MS) { cardsDirty = false; saveCardsNow() }
+}, OFFSETS_SAVE_MS)
+durableSaveTimer.unref()
 
 // ── UI server ─────────────────────────────────────────────────────────────────
 
@@ -1712,6 +1818,90 @@ const uiServer = http.createServer((req, res) => {
         res.end(JSON.stringify({ error: String(e) }))
       }
     })
+    return
+  }
+
+  // Everything an operator needs to answer "is it healthy, what is it costing my machine?" in one
+  // call — process identity, memory, span-store state, and EXACT bytes this process has written
+  // (the observable that would have caught the 420GB SSD incident on day one). Consumed by
+  // `agentlens-cli --status` and usable by any watchdog.
+  if (req.method === 'GET' && url === '/api/server-stats') {
+    const mem = process.memoryUsage()
+    const heap = heapPressure()
+    const p = persistStats
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({
+      pid: process.pid,
+      startedAt: new Date(SERVER_STARTED_AT).toISOString(),
+      uptimeSec: Math.round((Date.now() - SERVER_STARTED_AT) / 1000),
+      ports: { ui: UI_PORT, mcp: MCP_PORT, otlp: OTLP_PORT },
+      canonical: IS_CANONICAL,
+      dataDir: DATA_DIR,
+      memory: { rssMb: Math.round(mem.rss / 1048576), heapUsedMb: Math.round(heap.heapUsedMb), heapLimitMb: Math.round(heap.limitMb) },
+      spans: { inMemory: spans.length, cap: MAX_SPANS, pendingAppends: pendingLines.length, fileLines: fileSpanCount, fileBytes: sizeOf(DATA_FILE) },
+      logSessions: logSessions.size,
+      persistence: {
+        ...p,
+        totalBytesWritten: p.spanAppendBytes + p.spanCompactBytes + p.offsetsBytes + p.cardsBytes,
+        files: { spans: sizeOf(DATA_FILE), offsets: sizeOf(OFFSETS_FILE), cards: sizeOf(CARDS_FILE) },
+      },
+      bodies: { archive: archiveDiskUsage(BODIES_ARCHIVE_DIR), lastPass: p.bodiesLastPurge },
+    }))
+    return
+  }
+
+  // Archive operations (agentlens-cli --export-bodies / --purge-bodies). They live on the server
+  // so the WAD format has exactly ONE implementation (src/bodyArchive.ts) — no CLI-side reader
+  // to drift out of sync with the writer.
+  if (req.method === 'POST' && url === '/api/bodies/export') {
+    const chunks: Buffer[] = []
+    req.on('data', (c: Buffer) => chunks.push(c))
+    req.on('end', () => {
+      try {
+        const body = JSON.parse(Buffer.concat(chunks).toString('utf-8')) as { destDir?: string; sinceMs?: number; untilMs?: number }
+        const destDir = body.destDir
+        if (!destDir || !path.isAbsolute(destDir)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ error: 'destDir (absolute path) is required' }))
+          return
+        }
+        if (path.resolve(destDir).startsWith(path.resolve(BODIES_ARCHIVE_DIR))) {
+          res.writeHead(400, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ error: 'destDir must not be inside the archive itself' }))
+          return
+        }
+        const since = typeof body.sinceMs === 'number' ? body.sinceMs : 0
+        const until = typeof body.untilMs === 'number' ? body.untilMs : Infinity
+        const r = extractArchive(BODIES_ARCHIVE_DIR, destDir, e => e.mtimeMs >= since && e.mtimeMs <= until)
+        console.log(`[AgentLens] bodies export: ${r.files} file(s), ${(r.bytes / 1048576).toFixed(1)}MB → ${destDir}`)
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ ...r, destDir }))
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: String(e instanceof Error ? e.message : e) }))
+      }
+    })
+    return
+  }
+
+  if (req.method === 'POST' && url === '/api/bodies/purge') {
+    try {
+      // Explicit destructive op from the CLI: delete EVERY archive volume. The live 72h window is
+      // untouched (it regenerates hourly into the archive anyway); automatic ageing is handled by
+      // the retention pass, so this endpoint is only for a deliberate manual reclaim.
+      const usage = archiveDiskUsage(BODIES_ARCHIVE_DIR)
+      let removed = 0
+      for (const f of fs.existsSync(BODIES_ARCHIVE_DIR) ? fs.readdirSync(BODIES_ARCHIVE_DIR) : []) {
+        if (!/^bodies-\d{4}-\d{2}\.wad(\.idx)?$/.test(f)) continue
+        try { fs.unlinkSync(path.join(BODIES_ARCHIVE_DIR, f)); removed++ } catch { /* ignore */ }
+      }
+      console.log(`[AgentLens] bodies archive purged: ${usage.entries} lump(s), ${(usage.bytes / 1024 ** 3).toFixed(2)}GB freed`)
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ removedFiles: removed, freedBytes: usage.bytes, lumps: usage.entries }))
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: String(e instanceof Error ? e.message : e) }))
+    }
     return
   }
 
@@ -2235,16 +2425,47 @@ uiServer.listen(UI_PORT, BIND_HOST, () => {
 
 function shutdown() {
   clearInterval(spanFlushTimer)
-  if (durableSaveTimer) clearTimeout(durableSaveTimer)
+  clearInterval(durableSaveTimer)
   // TRDD-PJC8N1HO spec 4: atomic spans write. spec 3: flush offsets + stripped cards so the next start
   // resumes instantly. spec 2: record the graceful stop so the gap after it reads as a clean shutdown,
   // not a crash. All best-effort — a shutdown must never hang on a failed write.
   // One full NDJSON rewrite here is the compaction the append-only format defers to shutdown.
   try { atomicWriteFileSync(DATA_FILE, spansToNdjson(spans)); console.log(`\n[AgentLens] Saved ${spans.length} spans to ${DATA_FILE}`) } catch { /* ignore */ }
-  try { saveLogOffsets(OFFSETS_FILE, logReader.exportFileState()) } catch { /* ignore */ }
-  try { savePersistedCards(CARDS_FILE, [...logSessions.values()].map(stripCardForPersist)) } catch { /* ignore */ }
+  try { saveOffsetsNow() } catch { /* ignore */ }
+  try { saveCardsNow() } catch { /* ignore */ }
   try { recordCollectorStop(LIFECYCLE_FILE, lifecycle) } catch { /* ignore */ }
+  if (IS_CANONICAL) { try { fs.unlinkSync(PID_FILE) } catch { /* ignore */ } }
   process.exit(0)
 }
 process.on('SIGINT', shutdown)
 process.on('SIGTERM', shutdown)
+
+// ── Crash accountability ──────────────────────────────────────────────────────
+// A crash must (a) leave a readable record of WHY next to the data it was writing, and (b) try to
+// flush the bounded in-flight buffers — otherwise the last SAVE_INTERVAL of spans evaporates and
+// the lifecycle gap is the only trace. exit(1) after an uncaughtException is mandatory: the
+// process state is unknown and limping on corrupts more than it saves (fail-fast project rule).
+const CRASH_LOG = path.join(DATA_DIR, 'crash.log')
+function recordCrash(kind: string, err: unknown): void {
+  try {
+    // Rotate at 1MB (one backup) — a crash-looping supervisor must not grow this unbounded.
+    if (sizeOf(CRASH_LOG) > 1024 * 1024) { try { fs.renameSync(CRASH_LOG, `${CRASH_LOG}.1`) } catch { /* ignore */ } }
+    const stack = err instanceof Error ? (err.stack ?? err.message) : String(err)
+    const recent = requestLog.recent(5).map(r => `  ${r.ts} ${r.method} ${r.status} ${r.path}`).join('\n')
+    fs.appendFileSync(CRASH_LOG, `${new Date().toISOString()} ${kind}: ${stack}\nlast requests:\n${recent}\n\n`)
+  } catch { /* the crash record itself must never throw */ }
+}
+process.on('uncaughtException', (err) => {
+  recordCrash('uncaughtException', err)
+  try { flushSpanAppends() } catch { /* ignore */ }
+  try { saveOffsetsNow() } catch { /* ignore */ }
+  if (IS_CANONICAL) { try { fs.unlinkSync(PID_FILE) } catch { /* ignore */ } }
+  console.error('[AgentLens] FATAL uncaughtException (recorded in crash.log):', err)
+  process.exit(1)
+})
+process.on('unhandledRejection', (reason) => {
+  // Logged, not fatal: rejected promises from library internals are recoverable noise, and
+  // killing the collector for one would trade a diagnostic gap for a data gap.
+  recordCrash('unhandledRejection', reason)
+  console.warn('[AgentLens] unhandledRejection (recorded in crash.log):', reason)
+})

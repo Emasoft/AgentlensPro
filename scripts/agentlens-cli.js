@@ -54,16 +54,23 @@ usage:
   agentlens-cli batch <json-array>         N calls in one invocation: [{"tool":"...","args":{...}}]
 
 operations:
+  --status              server health: pid, uptime, memory, span store, EXACT bytes written,
+                        bodies archive — or "not running"
   --start-server        start the AgentLens standalone server if not already running
                         (alone, or before any tool call: agentlens-cli --start-server get_burn_status)
+  --stop-server         graceful SIGTERM to the running server (flushes all stores first)
   --dashboard           ensure the server is up, then open ${DASHBOARD_URL}
+  --purge-db            clear the span store + session cards (server re-ingests from logs)
+  --export-bodies DIR   extract the archived OTEL bodies into DIR as plain files
+                        (optionally --since <ISO|hours> / --until <ISO>)
+  --purge-bodies        delete ALL archived body volumes (the live 72h window is untouched)
   --install-otel        add the Claude Code telemetry env vars to ~/.claude/settings.json via a
                         verified transaction (atomic write, backup, post-verify, refuses an
                         unparseable file, pre-existing content untouched)
   --uninstall-otel      remove exactly those env vars (same transaction guarantees)
 
 globals: --full (unshaped payload)   --out PATH (full JSON to disk, one-line digest to stdout)
-server:  $AGENTLENS_MCP_URL (default http://localhost:4316/mcp)`
+server:  $AGENTLENS_MCP_URL (default http://localhost:4316/mcp); logs -> ~/.agentlens/server.log`
 
 // The telemetry wiring AgentLens capture depends on. RAW_API_BODIES is computed per-machine.
 const OTEL_ENV = {
@@ -177,6 +184,36 @@ function firstSentence(s) {
 
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 
+const DATA_DIR = process.env.DATA_DIR || path.join(os.homedir(), '.agentlens')
+const SERVER_LOG = path.join(DATA_DIR, 'server.log')
+
+// Plain HTTP JSON helper for the server's /api/* routes (the MCP transport helpers above are
+// JSON-RPC; these are ordinary REST endpoints on the UI port).
+function apiRequest(method, apiPath, payload) {
+  const base = process.env.AGENTLENS_UI_URL || 'http://localhost:3000'
+  const u = new URL(apiPath, base)
+  const body = payload === undefined ? null : JSON.stringify(payload)
+  return new Promise((resolve, reject) => {
+    const req = http.request({
+      hostname: u.hostname, port: u.port, path: u.pathname, method,
+      headers: body ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } : {},
+    }, res => {
+      let raw = ''
+      res.on('data', c => { raw += c })
+      res.on('end', () => {
+        try {
+          const j = JSON.parse(raw)
+          if (res.statusCode !== 200) return reject(new Error(j.error || `HTTP ${res.statusCode}`))
+          resolve(j)
+        } catch { reject(new Error(`bad response (${res.statusCode}): ${raw.slice(0, 200)}`)) }
+      })
+    })
+    req.on('error', e => reject(new Error(`server unreachable at ${base}: ${e.message}`)))
+    if (body) req.write(body)
+    req.end()
+  })
+}
+
 /** Start the standalone server if the MCP endpoint is unreachable; wait until it answers. */
 async function ensureServer() {
   try { await init(); return } catch { /* not up — start it */ }
@@ -184,17 +221,100 @@ async function ensureServer() {
   if (!fs.existsSync(serverJs)) {
     throw new Error(`server bundle missing at ${serverJs} — run \`node esbuild.js\` in the AgentLens repo first`)
   }
+  // stdout/stderr go to a log file, NOT /dev/null — when the server dies at boot (port conflict,
+  // corrupt store) the reason must be readable, or every failure looks like "did not become ready".
+  let outFd
+  try { outFd = fs.openSync(SERVER_LOG, 'a') } catch { outFd = 'ignore' }
   const child = spawn(process.execPath, ['--max-old-space-size=6144', serverJs], {
     cwd: path.resolve(__dirname, '..'),
     detached: true,
-    stdio: 'ignore',
+    stdio: ['ignore', outFd, outFd],
   })
   child.unref()
+  if (typeof outFd === 'number') fs.closeSync(outFd)
   for (let i = 0; i < 80; i++) { // up to 20s — DB open + first scan can be slow
     await sleep(250)
-    try { await init(); console.log(`server started (pid ${child.pid})`); return } catch { /* keep polling */ }
+    try { await init(); console.log(`server started (pid ${child.pid}) — logs: ${SERVER_LOG}`); return } catch { /* keep polling */ }
   }
-  throw new Error('server did not become ready within 20s — check the AgentLens repo build')
+  throw new Error(`server did not become ready within 20s — check ${SERVER_LOG}`)
+}
+
+const fmtGb = b => `${(b / 1024 ** 3).toFixed(2)}GB`
+const fmtMb = b => `${(b / 1048576).toFixed(1)}MB`
+
+async function showStatus() {
+  let s
+  try { s = await apiRequest('GET', '/api/server-stats') } catch (e) {
+    // A response (however wrong) means SOMETHING is serving the port — an older build without
+    // the stats endpoint, or a foreign process. Only a connection failure means "not running".
+    if (!String(e.message).includes('unreachable')) {
+      const pid = await findServerPid()
+      console.log(`server: RUNNING but does not serve /api/server-stats (older build?)${pid ? ` pid=${pid}` : ''} — restart it: agentlens-cli --stop-server && agentlens-cli --start-server`)
+      return
+    }
+    console.log(`server: NOT RUNNING (${e.message})`)
+    // The pidfile may still name a live process bound to different ports, or be stale.
+    try {
+      const pid = Number(fs.readFileSync(path.join(DATA_DIR, 'server.pid'), 'utf-8').trim())
+      try { process.kill(pid, 0); console.log(`pidfile: ${pid} (process alive — a server may be up on non-default ports)`) }
+      catch { console.log(`pidfile: ${pid} (stale — process gone)`) }
+    } catch { /* no pidfile */ }
+    return
+  }
+  const up = s.uptimeSec
+  const uptime = up >= 3600 ? `${Math.floor(up / 3600)}h${Math.floor((up % 3600) / 60)}m` : `${Math.floor(up / 60)}m${up % 60}s`
+  const per = s.persistence
+  console.log([
+    `server: RUNNING pid=${s.pid} uptime=${uptime} canonical=${s.canonical} (ui:${s.ports.ui} mcp:${s.ports.mcp} otlp:${s.ports.otlp})`,
+    `memory: rss=${s.memory.rssMb}MB heap=${s.memory.heapUsedMb}/${s.memory.heapLimitMb}MB`,
+    `spans:  ${s.spans.inMemory}/${s.spans.cap} in memory, ${s.spans.pendingAppends} pending, store ${fmtMb(s.spans.fileBytes)} (${s.spans.fileLines} lines) | log sessions: ${s.logSessions}`,
+    `disk writes since boot: ${fmtMb(per.totalBytesWritten)} total — spans ${fmtMb(per.spanAppendBytes)} in ${per.spanAppendWrites} appends + ${per.spanCompactions} compaction(s) ${fmtMb(per.spanCompactBytes)}; offsets ${fmtMb(per.offsetsBytes)}×${per.offsetsWrites}; cards ${fmtMb(per.cardsBytes)}×${per.cardsWrites}`,
+    `bodies: archive ${s.bodies.archive.volumes} volume(s), ${s.bodies.archive.entries} lumps, ${fmtGb(s.bodies.archive.bytes)}; last pass archived ${s.bodies.lastPass.removedFiles} (live kept ${fmtGb(s.bodies.lastPass.keptBytes)})`,
+    `data:   ${s.dataDir} (spans ${fmtMb(per.files.spans)}, cards ${fmtMb(per.files.cards)}, offsets ${fmtMb(per.files.offsets)})`,
+  ].join('\n'))
+}
+
+/** The server's PID, through a fallback chain that also covers builds predating /api/server-stats:
+ *  stats endpoint → pidfile → lsof on the MCP port. Returns null when nothing is running. */
+async function findServerPid() {
+  try { return (await apiRequest('GET', '/api/server-stats')).pid } catch { /* older build or down */ }
+  // Is anything answering MCP at all? If not, the server is genuinely down.
+  try { await init() } catch { return null }
+  try {
+    const pid = Number(fs.readFileSync(path.join(DATA_DIR, 'server.pid'), 'utf-8').trim())
+    if (pid > 0) { process.kill(pid, 0); return pid }
+  } catch { /* no/stale pidfile (pre-pidfile build) — fall through to lsof */ }
+  const port = new URL(ENDPOINT).port
+  for (const lsof of ['lsof', '/usr/sbin/lsof']) { // /usr/sbin is often absent from a child PATH
+    try {
+      const out = require('child_process').execFileSync(lsof, ['-ti', `:${port}`], { encoding: 'utf8' })
+      const pid = Number(out.split('\n').find(Boolean))
+      if (pid > 0) return pid
+    } catch { /* try the next candidate */ }
+  }
+  return null
+}
+
+async function stopServer() {
+  const pid = await findServerPid()
+  if (pid === null) {
+    console.log('server already stopped')
+    return
+  }
+  process.kill(pid, 'SIGTERM') // graceful — the server flushes every store on SIGTERM
+  for (let i = 0; i < 40; i++) {
+    await sleep(250)
+    try { await init() } catch { console.log(`server stopped (pid ${pid})`); return }
+  }
+  throw new Error(`server (pid ${pid}) did not stop within 10s — inspect it before escalating to SIGKILL`)
+}
+
+function parseWhen(v, flag) {
+  if (v === undefined) return undefined
+  if (/^\d+(\.\d+)?$/.test(v)) return Date.now() - Number(v) * 3600e3 // bare number = hours ago
+  const t = Date.parse(v)
+  if (Number.isNaN(t)) throw new Error(`--${flag} expects an ISO date or a number of hours, got "${v}"`)
+  return t
 }
 
 function openDashboard() {
@@ -337,12 +457,22 @@ async function main() {
   const argv = process.argv.slice(2)
   // Strip the output globals and ops flags first so every command sees only its own tokens.
   const globals = { full: false, out: null, startServer: false, dashboard: false }
+  const ops = { status: false, stop: false, purgeDb: false, purgeBodies: false, exportBodies: null, since: undefined, until: undefined }
   let otelOp = null
   const rest = []
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--full') globals.full = true
     else if (argv[i] === '--start-server') globals.startServer = true
     else if (argv[i] === '--dashboard') globals.dashboard = true
+    else if (argv[i] === '--status') ops.status = true
+    else if (argv[i] === '--stop-server') ops.stop = true
+    else if (argv[i] === '--purge-db') ops.purgeDb = true
+    else if (argv[i] === '--purge-bodies') ops.purgeBodies = true
+    else if (argv[i] === '--export-bodies') {
+      ops.exportBodies = argv[++i]
+      if (!ops.exportBodies) throw new Error('--export-bodies needs a destination directory')
+    } else if (argv[i] === '--since') ops.since = argv[++i]
+    else if (argv[i] === '--until') ops.until = argv[++i]
     else if (argv[i] === '--install-otel') otelOp = 'install'
     else if (argv[i] === '--uninstall-otel') otelOp = 'uninstall'
     else if (argv[i] === '--out') {
@@ -354,6 +484,33 @@ async function main() {
   // Settings mutation is standalone — no server needed, exits after the transaction.
   if (otelOp) {
     await installOtel(otelOp === 'uninstall')
+    return
+  }
+
+  if (ops.status) { await showStatus(); return }
+  if (ops.stop) { await stopServer(); return }
+
+  if (ops.purgeDb) {
+    const r = await apiRequest('POST', '/api/clear')
+    console.log('span store + session cards cleared — the server re-ingests from the agent logs')
+    void r
+    return
+  }
+
+  if (ops.exportBodies) {
+    const destDir = path.resolve(ops.exportBodies)
+    const r = await apiRequest('POST', '/api/bodies/export', {
+      destDir,
+      sinceMs: parseWhen(ops.since, 'since'),
+      untilMs: parseWhen(ops.until, 'until'),
+    })
+    console.log(`exported ${r.files} body file(s), ${fmtMb(r.bytes)} → ${r.destDir}`)
+    return
+  }
+
+  if (ops.purgeBodies) {
+    const r = await apiRequest('POST', '/api/bodies/purge')
+    console.log(`bodies archive purged: ${r.lumps} lump(s), ${fmtGb(r.freedBytes)} freed (live 72h window untouched)`)
     return
   }
 
@@ -400,10 +557,13 @@ async function main() {
     if (!Array.isArray(spec)) throw new Error('batch requires a JSON array')
     // Sequential on purpose: the endpoint is stateless per request and the server does bounded
     // disk scans; firing them concurrently would multiply the scan cost for no wall-clock win.
-    for (const s of spec) {
+    for (let i = 0; i < spec.length; i++) {
+      const s = spec[i]
       const result = await callTool(s.tool, s.args, globals.full || s.full)
       if (globals.out) {
-        const p = `${globals.out}-${s.tool}.json`
+        // Position-prefixed so the SAME tool called twice (e.g. two run_diagnostics_sql presets)
+        // cannot silently overwrite the earlier result — that exact collision happened in the field.
+        const p = `${globals.out}-${i + 1}-${s.tool}.json`
         fs.writeFileSync(p, JSON.stringify(result, null, 2))
         console.log(`${s.tool}: ${digest(result)}\n  full -> ${p}`)
       } else {
