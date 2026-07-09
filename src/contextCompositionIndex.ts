@@ -526,7 +526,7 @@ export class ContextCompositionIndex {
    *  cost. The "what should I compact / move to a sub-agent" list. */
   async findResidentBlobs(
     scope: string | undefined,
-    filters: { kind?: CompositionBlockKind; minTokens?: number; minResidentTurns?: number },
+    filters: { kind?: CompositionBlockKind; minTokens?: number; minResidentTurns?: number; topN?: number },
     projectFor?: ProjectResolver,
   ) {
     const { comps, coverage } = await this.sessionsInScope(scope, projectFor)
@@ -536,12 +536,18 @@ export class ContextCompositionIndex {
       .filter(b => b.residentTurns >= minResident && b.peakTokens >= minTokens && (!filters.kind || b.kind === filters.kind))
       .map(b => ({ sessionId: c.sessionId, project: c.project, model: c.model, ...b, cumulativeReadCostUsd: +b.cumulativeReadCostUsd.toFixed(4) })))
       .sort((a, b) => b.cumulativeReadCostUsd - a.cumulativeReadCostUsd || b.cumulativeReadTokens - a.cumulativeReadTokens)
-    return { scope: scope ?? 'all', count: rows.length, coverage, blobs: rows.slice(0, 50) }
+    // Token-lean default: 20 rows, not the old hardcoded 50 — raise topN explicitly for a bigger pull.
+    const topN = Math.min(Math.max(1, filters.topN ?? 20), 100)
+    const blobs = rows.slice(0, topN)
+    return {
+      scope: scope ?? 'all', count: rows.length, coverage, blobs,
+      note: rows.length > blobs.length ? `Showing top ${blobs.length} of ${rows.length} by wasted cache-read cost; raise topN to see more (max 100).` : undefined,
+    }
   }
 
   /** The generic engine: filter every call's blocks by any dimension, group by any dimension, and
    *  aggregate tokens/count/est-cost. "All possible queries" in one tool. */
-  async queryBlocks(filter: BlockFilter, groupBy: GroupBy, projectFor?: ProjectResolver) {
+  async queryBlocks(filter: BlockFilter & { topN?: number }, groupBy: GroupBy, projectFor?: ProjectResolver) {
     const scope = filter.sessionId ?? filter.project
     const { comps, coverage } = await this.sessionsInScope(scope, projectFor)
     interface Row { key: string; tokens: number; count: number; estCostUsd: number }
@@ -572,7 +578,13 @@ export class ContextCompositionIndex {
       }
     }
     const rows = [...groups.values()].map(g => ({ ...g, estCostUsd: +g.estCostUsd.toFixed(4) })).sort((a, b) => b.tokens - a.tokens)
-    return { groupBy, filter, matchedBlocks, distinctGroups: rows.length, coverage, groups: rows.slice(0, 100) }
+    // Token-lean default: 20 groups, not the old hardcoded 100 — raise topN explicitly for a bigger pull.
+    const topN = Math.min(Math.max(1, filter.topN ?? 20), 100)
+    const shown = rows.slice(0, topN)
+    return {
+      groupBy, filter, matchedBlocks, distinctGroups: rows.length, coverage, groups: shown,
+      note: rows.length > shown.length ? `Showing top ${shown.length} of ${rows.length} groups by tokens; raise topN to see more (max 100).` : undefined,
+    }
   }
 
   /** Real content of one block (get_block_content). Images return metadata + ref, never base64. */

@@ -481,6 +481,7 @@ const TOOLS = [
         kind:             { type: 'string', description: 'Optional block-kind filter (image, toolOutput, bashOutput, file, userMsg, assistantMsg, reasoning, mcp, …)' },
         minTokens:        { type: 'number', description: 'Only blocks whose peak single-occurrence tokens ≥ this (default 0)' },
         minResidentTurns: { type: 'number', description: 'Only blocks resident across ≥ this many turns (default 2)' },
+        topN:             { type: 'number', description: 'How many ranked blobs to return (default 20, max 100)' },
       },
     },
   },
@@ -505,6 +506,7 @@ const TOOLS = [
         turnFrom:  { type: 'number', description: 'Only calls at turn ≥ this' },
         turnTo:    { type: 'number', description: 'Only calls at turn ≤ this' },
         groupBy:   { type: 'string', description: 'Group-by dimension: kind | session | project | model | turn (default kind)' },
+        topN:      { type: 'number', description: 'How many ranked groups to return (default 20, max 100)' },
       },
     },
   },
@@ -624,7 +626,10 @@ const TOOLS = [
       'specific offending element) so the SAME element breaking the cache across many turns collapses ' +
       'into ONE chronic offender — flagged SYSTEMATIC at ≥3 turns with a plain-language verdict naming ' +
       'the exact misconfigured hook/skill/tool and its fix. POINTER-ONLY (stable fingerprints, never raw ' +
-      'block text / base64 / the user_id token). Read `coverage` for the bounded scan scope.',
+      'block text / base64 / the user_id token). The per-turn `events` log is bounded to the most recent ' +
+      'topN (default 25, max 100) — `repeatOffenders`/`causeHistogram` always summarize the FULL session, ' +
+      'never truncated, so the chronic-offender verdict is exact even when the raw log is capped. Read ' +
+      '`coverage` for the bounded scan scope.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -632,6 +637,7 @@ const TOOLS = [
         scope:     { type: 'string', description: 'A session-id prefix — resolves to the heaviest matching session; omit to pick the heaviest session overall in the scan' },
         minTokens: { type: 'number', description: 'Only classify turns whose cache_creation ≥ this (default 5000)' },
         window:    { type: 'number', description: 'Only scan bodies from the last N hours; omit for the bounded most-recent scan across all history' },
+        topN:      { type: 'number', description: 'Cap on the returned per-turn events log, most-recent-first (default 25, max 100). repeatOffenders/causeHistogram are always computed over ALL classified turns regardless.' },
         format:    { type: 'string', description: 'Output format: json (default, full object) | table | markdown | timeline' },
       },
     },
@@ -680,8 +686,8 @@ const TOOLS = [
         preset: { type: 'string', description: 'Name of a built-in preset (mutually exclusive with sql). Omit both to list the preset library.' },
         sql:    { type: 'string', description: 'Raw read-only SQL (single SELECT or WITH…SELECT). Custom fns: billable_weight(cc5m,cc1h,cread,out,input,model), tier_classify(gap_minutes), cost_usd(input,cread,cwrite,out,model), spike(value,median,mult).' },
         params: { type: 'object', description: 'Named params bound safely into a preset or sql (e.g. window, sessionId, model, k). Never string-concatenated.' },
-        format: { type: 'string', description: 'json (default) | table (unicode-bordered) | markdown' },
-        limit:  { type: 'number', description: 'Row cap (default 200, hard max 2000)' },
+        format: { type: 'string', description: 'json (default, includes raw rows) | table (unicode-bordered, no raw rows) | markdown (no raw rows) — table/markdown carry the same data as one compact rendered string instead of doubling it' },
+        limit:  { type: 'number', description: 'Row cap (default 50, hard max 2000). Wide TEXT/JSON cells are truncated at 500 chars with a marker; raise limit explicitly for a bigger pull.' },
       },
     },
   },
@@ -1792,14 +1798,14 @@ export function createMcpServer(opts: McpServerOptions): Server {
         break
       }
       case 'find_resident_blobs': {
-        const a = args as { scope?: string; kind?: CompositionBlockKind; minTokens?: number; minResidentTurns?: number }
-        result = await compositionIndex.findResidentBlobs(a.scope, { kind: a.kind, minTokens: a.minTokens, minResidentTurns: a.minResidentTurns }, projectResolver(sessions))
+        const a = args as { scope?: string; kind?: CompositionBlockKind; minTokens?: number; minResidentTurns?: number; topN?: number }
+        result = await compositionIndex.findResidentBlobs(a.scope, { kind: a.kind, minTokens: a.minTokens, minResidentTurns: a.minResidentTurns, topN: a.topN }, projectResolver(sessions))
         break
       }
       case 'query_context_blocks': {
-        const a = args as { project?: string; sessionId?: string; kind?: CompositionBlockKind; model?: string; minTokens?: number; turnFrom?: number; turnTo?: number; groupBy?: GroupBy }
+        const a = args as { project?: string; sessionId?: string; kind?: CompositionBlockKind; model?: string; minTokens?: number; turnFrom?: number; turnTo?: number; groupBy?: GroupBy; topN?: number }
         result = await compositionIndex.queryBlocks(
-          { project: a.project, sessionId: a.sessionId, kind: a.kind, model: a.model, minTokens: a.minTokens, turnFrom: a.turnFrom, turnTo: a.turnTo },
+          { project: a.project, sessionId: a.sessionId, kind: a.kind, model: a.model, minTokens: a.minTokens, turnFrom: a.turnFrom, turnTo: a.turnTo, topN: a.topN },
           a.groupBy ?? 'kind',
           projectResolver(sessions),
         )
@@ -1842,8 +1848,8 @@ export function createMcpServer(opts: McpServerOptions): Server {
         break
       }
       case 'get_cache_break_timeline': {
-        const a = args as { sessionId?: string; scope?: string; minTokens?: number; window?: number; format?: TimelineFormat }
-        const report = await buildCacheBreakTimeline({ sessionId: a.sessionId, scope: a.scope, minTokens: a.minTokens, windowHours: a.window })
+        const a = args as { sessionId?: string; scope?: string; minTokens?: number; window?: number; topN?: number; format?: TimelineFormat }
+        const report = await buildCacheBreakTimeline({ sessionId: a.sessionId, scope: a.scope, minTokens: a.minTokens, windowHours: a.window, topN: a.topN })
         result = formatTimeline(report, a.format ?? 'json')
         break
       }

@@ -502,6 +502,7 @@ export interface CacheBreakTimelineOptions {
   minTokens?: number
   windowHours?: number
   scanCap?: number
+  topN?: number   // cap on the returned `events` array (default 25, max 100) — repeatOffenders/causeHistogram are unaffected
 }
 
 function numOr0(v: unknown): number { return typeof v === 'number' && isFinite(v) ? v : 0 }
@@ -559,9 +560,10 @@ export interface CacheBreakTimelineReport {
   minTokens: number
   systematicThreshold: number
   turnsInSession: number
-  turnsClassified: number
+  turnsClassified: number             // TOTAL classified break events, before any topN truncation of `events`
   totalCacheCreateTokens: number       // Σ over the classified break events
-  events: CacheBreakEvent[]
+  events: CacheBreakEvent[]            // most-recent-first-truncated to topN — see eventsNote when capped
+  eventsNote?: string                  // set only when `events` was truncated; causeHistogram/repeatOffenders below are ALWAYS computed over the full set, never truncated
   causeHistogram: { cause: CacheBreakTimelineCause; events: number; cacheCreateTokens: number }[]
   repeatOffenders: RepeatOffender[]
   coverage: {
@@ -581,6 +583,8 @@ export interface CacheBreakTimelineReport {
 
 const DEFAULT_MIN_TOKENS = 5000
 const SYSTEMATIC_THRESHOLD = 3
+const DEFAULT_EVENTS_TOPN = 25
+const MAX_EVENTS_TOPN = 100
 
 function median(xs: number[]): number {
   if (xs.length === 0) return 0
@@ -679,7 +683,7 @@ export async function buildCacheBreakTimeline(opts: CacheBreakTimelineOptions = 
     return baseReport(minTokens, coverage)
   }
 
-  return buildReportForSession(target.sid, target.turns, respById, minTokens, coverage)
+  return buildReportForSession(target.sid, target.turns, respById, minTokens, coverage, opts.topN)
 }
 
 function baseReport(minTokens: number, coverage: CacheBreakTimelineReport['coverage']): CacheBreakTimelineReport {
@@ -767,18 +771,28 @@ function buildReportForSession(
   respById: Map<string, ResponseUsage>,
   minTokens: number,
   coverage: CacheBreakTimelineReport['coverage'],
+  topN?: number,
 ): CacheBreakTimelineReport {
   const sessionCC = sessionCacheCreate(turns, respById)
   const events = classifyTurns(turns, respById, minTokens)
   const accountUuid = turns.find(t => t.accountUuid)?.accountUuid
   const model = events.find(e => e.model)?.model
 
+  // Bound the returned `events` log to the most recent topN — histogram/repeatOffenders below are built
+  // from the FULL `events` first (unaffected by this truncation), so the aggregate picture stays exact
+  // even when the raw per-turn log is capped for a lean default payload.
+  const cap = Math.min(Math.max(1, topN ?? DEFAULT_EVENTS_TOPN), MAX_EVENTS_TOPN)
+  const shownEvents = events.length > cap ? events.slice(-cap) : events
+
   return {
     sessionId: sid, accountUuid, model,
     minTokens, systematicThreshold: SYSTEMATIC_THRESHOLD,
     turnsInSession: turns.length, turnsClassified: events.length,
     totalCacheCreateTokens: events.reduce((n, e) => n + e.cacheCreateTokens, 0),
-    events,
+    events: shownEvents,
+    eventsNote: events.length > cap
+      ? `Showing the most recent ${shownEvents.length} of ${events.length} classified break events (raise topN to see more, max ${MAX_EVENTS_TOPN}). repeatOffenders/causeHistogram below already summarize ALL ${events.length}.`
+      : undefined,
     causeHistogram: buildHistogram(events),
     repeatOffenders: buildRepeatOffenders(events, sessionCC),
     coverage,
@@ -980,5 +994,6 @@ export function formatTimeline(report: CacheBreakTimelineReport, format: Timelin
     const worst = report.repeatOffenders.find(o => o.systematic)
     if (worst) lines.push('', `VERDICT: ${worst.verdict}`)
   }
+  if (report.eventsNote) lines.push('', report.eventsNote)
   return { format, text: lines.join('\n'), sessionId: report.sessionId, coverage: report.coverage }
 }

@@ -31,7 +31,8 @@ export interface RunDiagnosticsSqlResult {
 }
 
 const HARD_MAX_ROWS = 2000
-const DEFAULT_ROWS = 200
+const DEFAULT_ROWS = 50    // token-lean default (was 200) — pass a bigger `limit` explicitly for more
+const MAX_CELL_CHARS = 500 // one wide TEXT/JSON column (e.g. a diff summary) must not blow up the payload
 
 // ── Statement gate (design §6.2) ─────────────────────────────────────────────────
 const FORBIDDEN = /\b(ATTACH|DETACH|PRAGMA|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|REPLACE|VACUUM|REINDEX|TRIGGER)\b/i
@@ -205,6 +206,22 @@ function execRows(db: SqlDatabase, sql: string, params: Record<string, unknown>)
   return { columns: [...columns], rows }
 }
 
+// Cap any single wide cell (a TEXT/JSON column can otherwise dominate the whole payload) — applied to
+// every row BEFORE it reaches the caller, so json/table/markdown all see the same bounded values.
+function truncateCell(v: unknown): unknown {
+  if (typeof v === 'string' && v.length > MAX_CELL_CHARS) {
+    return `${v.slice(0, MAX_CELL_CHARS)}…(+${v.length - MAX_CELL_CHARS} chars, cell truncated)`
+  }
+  return v
+}
+function truncateRows(rows: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  return rows.map(r => {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(r)) { out[k] = truncateCell(v) }
+    return out
+  })
+}
+
 // ── formats ──────────────────────────────────────────────────────────────────────
 function cell(v: unknown): string {
   if (v === null || v === undefined) { return '' }
@@ -268,7 +285,18 @@ export async function runDiagnosticsSql(opts: RunDiagnosticsSqlOptions = {}): Pr
     const bound = collectBoundParams(capped, pool)
     let columns: string[]; let rows: Array<Record<string, unknown>>
     try { ({ columns, rows } = execRows(db, capped, bound)) } catch (e) { return { mode, preset: opts.preset, dbAvailable: true, error: `Query failed: ${(e as Error).message}` } }
-    const rendered = format === 'table' ? renderTable(columns, rows) : format === 'markdown' ? renderMarkdown(columns, rows) : undefined
-    return { mode, preset: opts.preset, columns, rows, rowCount: rows.length, rendered, dbAvailable: true }
+    rows = truncateRows(rows)
+    // Row-cap honesty: hitting the cap exactly doesn't PROVE more rows exist (the true count is never
+    // queried — that would cost a second full scan), but it's the only cheap signal available, so say so.
+    const note = rows.length >= cap
+      ? `Row cap reached (${cap}). There may be more — raise \`limit\` to see them (hard max ${HARD_MAX_ROWS}).`
+      : undefined
+    if (format === 'table' || format === 'markdown') {
+      // Summary-first default: the rendered compact string carries the same data as `rows` — returning
+      // both would double the payload for no benefit, so json is the only mode that ships raw rows.
+      const rendered = format === 'table' ? renderTable(columns, rows) : renderMarkdown(columns, rows)
+      return { mode, preset: opts.preset, rowCount: rows.length, rendered, dbAvailable: true, note }
+    }
+    return { mode, preset: opts.preset, columns, rows, rowCount: rows.length, dbAvailable: true, note }
   } finally { db.close() }
 }
