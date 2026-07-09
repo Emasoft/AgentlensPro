@@ -64,6 +64,8 @@ operations:
   --export-bodies DIR   extract the archived OTEL bodies into DIR as plain files
                         (optionally --since <ISO|hours> / --until <ISO>)
   --purge-bodies        delete ALL archived body volumes (the live 72h window is untouched)
+  --install-skill       (re)install the agentlens-diagnostics skill into ~/.claude/skills/
+                        from the repo copy — idempotent (installed / updated / already current)
   --install-otel        add the Claude Code telemetry env vars to ~/.claude/settings.json via a
                         verified transaction (atomic write, backup, post-verify, refuses an
                         unparseable file, pre-existing content untouched)
@@ -361,6 +363,27 @@ async function installOtel(uninstall) {
   if (!uninstall) console.log('restart Claude Code sessions to pick up the env change')
 }
 
+// (Re)install the agentlens-diagnostics skill into the user scope. The repo copy is the
+// single source of truth (skills/agentlens-diagnostics/SKILL.md); ~/.claude/skills/ is a
+// managed installation target. Idempotent by content comparison — safe to run on every
+// install / update, and the way to recover the skill if it was deleted.
+function installSkill() {
+  // __dirname resolves through the global npm-link symlink to the REAL repo scripts/ dir
+  // (node realpaths the main module), so this works from any cwd.
+  const src = path.resolve(__dirname, '..', 'skills', 'agentlens-diagnostics', 'SKILL.md')
+  if (!fs.existsSync(src)) throw new Error(`skill source missing at ${src} — is the repo checkout intact?`)
+  const dst = path.join(os.homedir(), '.claude', 'skills', 'agentlens-diagnostics', 'SKILL.md')
+  const content = fs.readFileSync(src, 'utf8')
+  const existed = fs.existsSync(dst)
+  if (existed && fs.readFileSync(dst, 'utf8') === content) {
+    console.log(`skill agentlens-diagnostics: already current (${dst})`)
+    return
+  }
+  fs.mkdirSync(path.dirname(dst), { recursive: true })
+  fs.writeFileSync(dst, content)
+  console.log(`skill agentlens-diagnostics: ${existed ? 'updated' : 'installed'} -> ${dst}`)
+}
+
 // Dispatch-level globals the server's leanify layer reads on EVERY tool, even when the
 // tool's own schema doesn't declare them.
 const GLOBAL_PARAMS = { verbosity: 'string', maxTokens: 'number' }
@@ -457,7 +480,7 @@ async function main() {
   const argv = process.argv.slice(2)
   // Strip the output globals and ops flags first so every command sees only its own tokens.
   const globals = { full: false, out: null, startServer: false, dashboard: false }
-  const ops = { status: false, stop: false, purgeDb: false, purgeBodies: false, exportBodies: null, since: undefined, until: undefined }
+  const ops = { status: false, stop: false, purgeDb: false, purgeBodies: false, exportBodies: null, since: undefined, until: undefined, installSkill: false }
   let otelOp = null
   const rest = []
   for (let i = 0; i < argv.length; i++) {
@@ -473,6 +496,7 @@ async function main() {
       if (!ops.exportBodies) throw new Error('--export-bodies needs a destination directory')
     } else if (argv[i] === '--since') ops.since = argv[++i]
     else if (argv[i] === '--until') ops.until = argv[++i]
+    else if (argv[i] === '--install-skill') ops.installSkill = true
     else if (argv[i] === '--install-otel') otelOp = 'install'
     else if (argv[i] === '--uninstall-otel') otelOp = 'uninstall'
     else if (argv[i] === '--out') {
@@ -486,6 +510,9 @@ async function main() {
     await installOtel(otelOp === 'uninstall')
     return
   }
+
+  // Skill install is standalone too — pure file copy, no server, no settings mutation.
+  if (ops.installSkill) { installSkill(); return }
 
   if (ops.status) { await showStatus(); return }
   if (ops.stop) { await stopServer(); return }
