@@ -4,8 +4,9 @@ import * as os from 'os'
 import * as path from 'path'
 import {
   scanApiCallEvents, indexApiCalls, resolveSpawn, loadSpawnMap,
-  classifyEffort, computeFrontmatterFp, type SpawnRow,
+  classifyEffort, computeFrontmatterFp, extractInjections, deriveContentTags, type SpawnRow,
 } from '../forensicsIndex'
+import type { CallComposition } from '../contextCompositionIndex'
 import {
   openForensicsDb, openReadonlyForensicsSnapshot, loadSqlJs,
   billableWeight, tierClassify, DEFAULT_FORENSICS_DB, DEFAULT_MAIN_DB, type SqlDatabase,
@@ -222,6 +223,17 @@ suite('FAL Phase 1 — end-to-end index over real bodies + real main DB', () => 
     } finally { fdb!.close() }
   })
 
+  test('call_injections is populated from the joined request (rules + claudemd for msg_R1)', async () => {
+    await indexApiCalls({ bodiesDir, forensicsDbPath, mainDbPath })
+    const fdb = await openForensicsDb(forensicsDbPath)
+    try {
+      const rules = queryOne(fdb!.raw, "SELECT COUNT(*) AS n FROM call_injections WHERE call_id='msg_R1' AND kind='rule'")!
+      assert.ok((rules.n as number) >= 1, 'msg_R1 request injected at least one .claude/rules file')
+      const cmd = queryOne(fdb!.raw, "SELECT COUNT(*) AS n FROM call_injections WHERE call_id='msg_R1' AND kind='claudemd'")!
+      assert.ok((cmd.n as number) >= 1, 'msg_R1 request carried a CLAUDE.md injection')
+    } finally { fdb!.close() }
+  })
+
   test('custom SQL fns are callable on a read-only snapshot (billable_weight/tier_classify/cost_usd/spike)', async () => {
     const snap = await openReadonlyForensicsSnapshot(forensicsDbPath)
     assert.ok(snap)
@@ -244,6 +256,47 @@ suite('FAL Phase 1 — end-to-end index over real bodies + real main DB', () => 
     assert.equal(map.get('sess-fork')?.spawnKind, 'fork')
     assert.equal(map.get('sess-root')?.spawnKind, undefined)
     assert.equal(map.get('sess-wt')?.spawnIsolation, 'worktree')
+  })
+})
+
+suite('FAL Phase 4/5 — content taxonomy + injection attribution', () => {
+  test('extractInjections pulls rules + claudemd (exact) + mcp servers + invoked skills', () => {
+    const rows = extractInjections({
+      system: [
+        { type: 'text', text: 'Contents of /u/.claude/rules/never-git-add-all.md (x)\nContents of /u/.claude/rules/commit-discipline.md (y)' },
+        { type: 'text', text: 'Contents of /repo/CLAUDE.md (project)\n# CLAUDE.md' },
+      ],
+      tools: [{ name: 'Bash' }, { name: 'mcp__agentlens__get_recent_sessions' }, { name: 'mcp__agentlens__get_burn_status' }, { name: 'mcp__codegraph__codegraph_search' }],
+      messages: [{ role: 'assistant', content: [{ type: 'tool_use', name: 'Skill', input: { skill: 'distill' } }] }],
+    })
+    const byKind = (k: string) => rows.filter(r => r.kind === k).map(r => r.name).sort()
+    assert.deepEqual(byKind('rule'), ['commit-discipline.md', 'never-git-add-all.md'])
+    assert.deepEqual(byKind('claudemd'), ['/repo/CLAUDE.md'])
+    // distinct mcp servers, deduped (two agentlens tools collapse to one server)
+    assert.deepEqual(byKind('mcp'), ['mcp__agentlens', 'mcp__codegraph'])
+    assert.deepEqual(byKind('skill'), ['distill'])
+  })
+
+  test('deriveContentTags tags image / big_file_read / tool_result:<Kind> / thinking_heavy from a composition', () => {
+    const comp = {
+      images: { count: 3, tokens: 90000 },
+      blocks: [
+        { index: 0, kind: 'toolOutput', label: 'Read', tokens: 40000, tokenSource: 'estimated', bytes: 0, role: 'input', toolName: 'Read', isImage: false },
+        { index: 1, kind: 'bashOutput', label: 'Bash', tokens: 500, tokenSource: 'estimated', bytes: 0, role: 'input', toolName: 'Bash', isImage: false },
+      ],
+      toolResultTokens: 40500, textTokens: 0, thinkingTokens: 30000, systemTokens: 0, toolCatalogTokens: 15000,
+    } as unknown as CallComposition
+    const tags = deriveContentTags(comp)
+    const names = tags.map(t => t.tag).sort()
+    assert.ok(names.includes('image'))
+    assert.ok(names.includes('big_file_read'))         // the 40k Read block ≥ 25k
+    assert.ok(names.includes('tool_result:Read'))
+    assert.ok(names.includes('tool_result:Bash'))
+    assert.ok(names.includes('tool_catalog_large'))    // 15k ≥ 10k
+    assert.ok(names.includes('thinking_heavy'))        // 30k ≥ 20k
+    const imgTag = tags.find(t => t.tag === 'image')!
+    assert.equal(imgTag.count, 3)
+    assert.equal(imgTag.tokens, 90000)
   })
 })
 

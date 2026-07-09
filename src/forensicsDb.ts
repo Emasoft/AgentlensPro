@@ -55,9 +55,7 @@ let cachedSqlJs: SqlJsStatic | null | undefined
 export async function loadSqlJs(): Promise<SqlJsStatic | null> {
   if (cachedSqlJs !== undefined) { return cachedSqlJs }
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const initSqlJs = require('sql.js') as InitSqlJs
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const sqlJsDir = path.dirname(require.resolve('sql.js'))
     cachedSqlJs = await initSqlJs({ locateFile: (f: string) => path.join(sqlJsDir, f) })
   } catch {
@@ -181,7 +179,6 @@ function num(v: unknown): number { return typeof v === 'number' && isFinite(v) ?
 export function registerCustomFns(db: SqlDatabase): void {
   // Lazy require avoids a static import cycle risk and matches the "thin wrapper over the same rates"
   // contract — cost_usd is exactly the AgentLens per-call cost formula.
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
   const { calcTokenCostUsd } = require('./pricing') as typeof import('./pricing')
 
   db.create_function('billable_weight', ((cc5m, cc1h, cread, out, input, model) =>
