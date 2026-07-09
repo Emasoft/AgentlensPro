@@ -27,7 +27,8 @@
   ],
   "bin": {
     "agentlens": "./standalone/cli.js",
-    "agentlens-dashboard": "./standalone/cli.js"
+    "agentlens-dashboard": "./standalone/cli.js",
+    "agentlens-cli": "./scripts/agentlens-cli.js"
   },
   "scripts": {
     "prepublishOnly": "pnpm run package",
