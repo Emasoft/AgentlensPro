@@ -95,46 +95,159 @@ let sseClients: http.ServerResponse[] = []
 // firehose now enabled (logs + metrics + traces + raw-body events from every active Claude Code
 // session) it grew UNBOUNDED and OOM-killed the process (JS heap exhausted at ~4GB after ~19 min:
 // FATAL "Ineffective mark-compacts near heap limit"). Capping to the most-recent MAX_SPANS keeps
-// recent sessions (what diagnosis needs) while the process stays bounded (~200k × ~1.6KB ≈ 320MB).
-// Older OTEL-only sessions age out of memory; the proper DB-backed retention is a follow-up TRDD.
+// recent sessions (what diagnosis needs) while the process stays bounded. Default lowered
+// 200k → 50k after the process was observed at 2.4GB RSS: firehose log events carry large
+// payloads, so real spans average far more than the 1.6KB the 200k default assumed.
 // Env override so a big machine can raise it: AGENTLENS_MAX_SPANS.
-const MAX_SPANS = Math.max(10_000, Number(process.env.AGENTLENS_MAX_SPANS) || 200_000)
+const MAX_SPANS = Math.max(10_000, Number(process.env.AGENTLENS_MAX_SPANS) || 50_000)
+
+// ── Persistence: append-only NDJSON (SSD-wear fix) ────────────────────────────
+// WHY THIS SHAPE: the previous implementation serialized the ENTIRE store (~200MB at cap) through
+// a 1-second debounce — under the firehose that meant the whole file rewritten every few seconds,
+// measured at 420GB written to disk in 4.4 hours (~2.3TB/day of SSD wear) while the file itself
+// never grew. Append-only turns steady-state persistence into KB-scale appends; the full file is
+// rewritten ONLY by compaction (when the file holds > 2× MAX_SPANS lines) and on shutdown.
+// Format: one JSON span per line. The loader still accepts the legacy single-JSON-array file and
+// migrates it to NDJSON once, atomically.
+
+let pendingLines: string[] = []  // spans not yet appended to disk
+let fileSpanCount = 0            // lines currently in DATA_FILE (drives compaction)
+const SAVE_INTERVAL_MS = Math.max(1000, Number(process.env.AGENTLENS_SAVE_INTERVAL_MS) || 5000)
+
+function spansToNdjson(list: Span[]): string {
+  return list.length ? `${list.map(s => JSON.stringify(s)).join('\n')}\n` : ''
+}
 
 // Load persisted spans on startup — cap to the most-recent MAX_SPANS so a large historical
-// spans.json (seen at 98MB) can't blow the heap on load either.
+// store can't blow the heap on load either.
 try {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true })
   if (fs.existsSync(DATA_FILE)) {
     const raw = fs.readFileSync(DATA_FILE, 'utf-8')
-    const loaded = JSON.parse(raw) as Span[]
+    let loaded: Span[] = []
+    let migrated = false
+    if (raw.trimStart().startsWith('[')) {
+      loaded = JSON.parse(raw) as Span[] // legacy whole-array format
+      migrated = true
+    } else {
+      // NDJSON. A crash mid-append can leave ONE truncated final line — skip corrupt lines
+      // instead of losing the whole store (that is the crash-tolerance contract of this format).
+      let skipped = 0
+      for (const line of raw.split('\n')) {
+        if (!line) continue
+        try { loaded.push(JSON.parse(line) as Span) } catch { skipped++ }
+      }
+      if (skipped > 0) console.warn(`[AgentLens] spans store: skipped ${skipped} corrupt line(s)`)
+    }
     spans = loaded.length > MAX_SPANS ? loaded.slice(-MAX_SPANS) : loaded
+    fileSpanCount = loaded.length
+    if (migrated) {
+      // One-time migration: rewrite as NDJSON (atomic), dropping anything beyond the cap.
+      atomicWriteFileSync(DATA_FILE, spansToNdjson(spans))
+      fileSpanCount = spans.length
+      console.log(`[AgentLens] Migrated legacy spans.json to NDJSON (${spans.length} spans kept)`)
+    }
     console.log(`[AgentLens] Loaded ${spans.length} spans from ${DATA_FILE}${loaded.length > spans.length ? ` (capped from ${loaded.length})` : ''}`)
   }
 } catch (e) {
   console.warn('[AgentLens] Could not load persisted data:', e)
 }
 
-// Debounced save — writes at most once per second under continuous ingestion.
-// TRDD-PJC8N1HO spec 4: atomic (temp+rename) so a crash mid-write can't truncate spans.json — a crash
-// then loses at most the last debounce interval, never the whole persisted session store.
-let saveTimer: ReturnType<typeof setTimeout> | null = null
-function scheduleSave() {
-  if (saveTimer) clearTimeout(saveTimer)
-  saveTimer = setTimeout(() => {
-    try { atomicWriteFileSync(DATA_FILE, JSON.stringify(spans)) } catch (e) {
-      console.warn('[AgentLens] Could not save data:', e)
+/** Append the buffered spans; compact (full rewrite) only when the file is 2× over the cap. */
+function flushSpanAppends(): void {
+  if (pendingLines.length > 0) {
+    try {
+      fs.appendFileSync(DATA_FILE, `${pendingLines.join('\n')}\n`)
+      fileSpanCount += pendingLines.length
+      pendingLines = []
+    } catch (e) {
+      console.warn('[AgentLens] Could not append spans:', e)
+      return // keep the buffer; retry next tick
     }
-  }, 1000)
+  }
+  if (fileSpanCount > MAX_SPANS * 2) {
+    try {
+      atomicWriteFileSync(DATA_FILE, spansToNdjson(spans))
+      fileSpanCount = spans.length
+    } catch (e) {
+      console.warn('[AgentLens] Could not compact spans store:', e)
+    }
+  }
+}
+const spanFlushTimer = setInterval(flushSpanAppends, SAVE_INTERVAL_MS)
+spanFlushTimer.unref()
+
+/** Reset both the on-disk store and the append pipeline (the /api/clear + clearAll paths). */
+function clearPersistedSpans(): void {
+  pendingLines = []
+  fileSpanCount = 0
+  try { atomicWriteFileSync(DATA_FILE, '') } catch (e) { console.warn('[AgentLens] Could not clear data file:', e) }
 }
 
 function addSpan(span: Span) {
   if (span.receivedAt === undefined) span.receivedAt = Date.now()
   spans.push(span)
+  pendingLines.push(JSON.stringify(span))
   // Bound the buffer so the firehose can't grow it without limit (the OOM fix above). Evict the
   // oldest overflow in one batch (amortized O(1)) rather than shift() per push. A ~5% slack above
   // MAX_SPANS avoids re-slicing on every single add once at the cap.
   if (spans.length > MAX_SPANS * 1.05) spans = spans.slice(-MAX_SPANS)
 }
+
+// ── otel-bodies retention ─────────────────────────────────────────────────────
+// Claude Code's OTEL_LOG_RAW_API_BODIES exporter writes one request+response JSON pair per API
+// call into DATA_DIR/otel-bodies and never deletes anything — observed at 23GB / ~45k files on a
+// 98%-full disk. The server is the caretaker of DATA_DIR, so it enforces retention: files older
+// than AGENTLENS_BODIES_MAX_AGE_HOURS (default 72h) go first, then oldest-first until the total
+// is under AGENTLENS_BODIES_MAX_GB (default 8). Only *.request.json / *.response.json inside the
+// bodies dir are ever touched. Every purge is logged — a silent cap would read as data loss.
+const BODIES_DIR = path.join(DATA_DIR, 'otel-bodies')
+const BODIES_MAX_AGE_MS = Math.max(1, Number(process.env.AGENTLENS_BODIES_MAX_AGE_HOURS) || 72) * 3600e3
+const BODIES_MAX_BYTES = Math.max(0.5, Number(process.env.AGENTLENS_BODIES_MAX_GB) || 8) * 1024 ** 3
+
+function purgeOtelBodies(): void {
+  let entries: { p: string; mtime: number; size: number }[] = []
+  try {
+    if (!fs.existsSync(BODIES_DIR)) return
+    for (const f of fs.readdirSync(BODIES_DIR)) {
+      if (!f.endsWith('.request.json') && !f.endsWith('.response.json')) continue
+      try {
+        const st = fs.statSync(path.join(BODIES_DIR, f))
+        entries.push({ p: path.join(BODIES_DIR, f), mtime: st.mtimeMs, size: st.size })
+      } catch { /* raced with a writer — skip */ }
+    }
+  } catch (e) {
+    console.warn('[AgentLens] otel-bodies retention scan failed:', e)
+    return
+  }
+  const cutoff = Date.now() - BODIES_MAX_AGE_MS
+  let removed = 0
+  let removedBytes = 0
+  const drop = (e: { p: string; size: number }) => {
+    try { fs.unlinkSync(e.p); removed++; removedBytes += e.size } catch { /* already gone */ }
+  }
+  const kept: typeof entries = []
+  for (const e of entries) {
+    if (e.mtime < cutoff) drop(e)
+    else kept.push(e)
+  }
+  entries = kept
+  let totalBytes = entries.reduce((a, e) => a + e.size, 0)
+  if (totalBytes > BODIES_MAX_BYTES) {
+    entries.sort((a, b) => a.mtime - b.mtime) // oldest first
+    for (const e of entries) {
+      if (totalBytes <= BODIES_MAX_BYTES) break
+      drop(e)
+      totalBytes -= e.size
+    }
+  }
+  if (removed > 0) {
+    console.log(`[AgentLens] otel-bodies retention: removed ${removed} file(s), ${(removedBytes / 1024 ** 3).toFixed(2)}GB freed — ${(totalBytes / 1024 ** 3).toFixed(2)}GB kept`)
+  }
+}
+purgeOtelBodies() // enforce on boot — a long-dead server must not leave the corpus unbounded
+const bodiesPurgeTimer = setInterval(purgeOtelBodies, 3600e3)
+bodiesPurgeTimer.unref()
 
 // ── Log file sessions ─────────────────────────────────────────────────────────
 
@@ -1606,7 +1719,7 @@ const uiServer = http.createServer((req, res) => {
     spans = []
     logSessions.clear()
     logReader.clearFileState()
-    try { atomicWriteFileSync(DATA_FILE, '[]') } catch (e) { console.warn('[AgentLens] Could not clear data file:', e) }
+    clearPersistedSpans()
     pushUpdate()          // send cleared state to clients immediately
     res.writeHead(200); res.end()
     // Re-ingest after the response is sent so the client sees the cleared state first.
@@ -1705,7 +1818,7 @@ const uiServer = http.createServer((req, res) => {
         const body = JSON.parse(Buffer.concat(chunks).toString('utf-8')) as { type?: string }
         if (body.type === 'clearAll') {
           spans = []
-          try { atomicWriteFileSync(DATA_FILE, '[]') } catch (e) { console.warn('[AgentLens] Could not clear data file:', e) }
+          clearPersistedSpans()
           pushUpdate()
         }
       } catch (e) { console.warn('[AgentLens] Malformed /action body:', e) }
@@ -1986,7 +2099,8 @@ const otlpServer = http.createServer((req, res) => {
         console.warn(`[AgentLens] ignored POST ${req.url ?? '/'}: unrecognized OTLP JSON payload`)
       }
       schedulePushUpdate()
-      scheduleSave()
+      // Persistence is handled by the interval append-flush — no per-request save. A per-request
+      // full-store rewrite here is what destroyed 420GB of SSD in 4 hours; never reintroduce it.
     } catch (e) {
       console.error('[AgentLens] Parse error:', e)
     }
@@ -2120,12 +2234,13 @@ uiServer.listen(UI_PORT, BIND_HOST, () => {
 // ── Graceful shutdown — flush data before exit ────────────────────────────────
 
 function shutdown() {
-  if (saveTimer) clearTimeout(saveTimer)
+  clearInterval(spanFlushTimer)
   if (durableSaveTimer) clearTimeout(durableSaveTimer)
   // TRDD-PJC8N1HO spec 4: atomic spans write. spec 3: flush offsets + stripped cards so the next start
   // resumes instantly. spec 2: record the graceful stop so the gap after it reads as a clean shutdown,
   // not a crash. All best-effort — a shutdown must never hang on a failed write.
-  try { atomicWriteFileSync(DATA_FILE, JSON.stringify(spans)); console.log(`\n[AgentLens] Saved ${spans.length} spans to ${DATA_FILE}`) } catch { /* ignore */ }
+  // One full NDJSON rewrite here is the compaction the append-only format defers to shutdown.
+  try { atomicWriteFileSync(DATA_FILE, spansToNdjson(spans)); console.log(`\n[AgentLens] Saved ${spans.length} spans to ${DATA_FILE}`) } catch { /* ignore */ }
   try { saveLogOffsets(OFFSETS_FILE, logReader.exportFileState()) } catch { /* ignore */ }
   try { savePersistedCards(CARDS_FILE, [...logSessions.values()].map(stripCardForPersist)) } catch { /* ignore */ }
   try { recordCollectorStop(LIFECYCLE_FILE, lifecycle) } catch { /* ignore */ }
