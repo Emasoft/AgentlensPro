@@ -392,8 +392,12 @@ export async function runTelemetryCli(args: string[]): Promise<number> {
 }
 
 const AGENTLENS_HOOK_MARKER = '.agentlens/pending-prompt.txt'
+// The trailing `exit 0` is load-bearing: without it, `[ -f "$f" ] && …` makes the hook exit 1
+// on every turn where no prompt is pending (i.e. almost always), and Claude Code shows a
+// "Stop hook error" banner each time. A missing pending-prompt file is the normal case, not
+// an error. (Found in the field 2026-07-10 as one of the user's recurring hook errors.)
 const AGENTLENS_HOOK_COMMAND =
-  'f=$HOME/.agentlens/pending-prompt.txt; [ -f "$f" ] && cat "$f" && rm "$f"'
+  'f=$HOME/.agentlens/pending-prompt.txt; [ -f "$f" ] && cat "$f" && rm "$f"; exit 0'
 
 /**
  * Idempotently install the AgentLens automation Stop hook (standalone prompt injection).

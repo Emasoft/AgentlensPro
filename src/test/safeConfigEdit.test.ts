@@ -126,7 +126,7 @@ suite('safe_config_edit.py — transactional config editor', () => {
     const hookOp = {
       op: 'append_unique',
       path: ['hooks', 'Stop'],
-      value: { matcher: '', hooks: [{ type: 'command', command: 'f=$HOME/.agentlens/pending-prompt.txt; [ -f "$f" ] && cat "$f" && rm "$f"' }] },
+      value: { matcher: '', hooks: [{ type: 'command', command: 'f=$HOME/.agentlens/pending-prompt.txt; [ -f "$f" ] && cat "$f" && rm "$f"; exit 0' }] },
       unique_by_substring: '.agentlens/pending-prompt.txt',
     }
     const r1 = runEditor(file, { ops: [hookOp] })
