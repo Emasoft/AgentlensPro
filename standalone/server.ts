@@ -23,6 +23,7 @@ import { appendHookEvent, readHookEvents, purgeHookEventBuckets, hookEventsDiskU
 import { BodiesActivityTracker } from '../src/bodiesActivity'
 import { evaluateAgentGate, buildAdvisory, readTranscriptContext, type AgentGateState, type GateThresholds, type LaunchSpawner } from '../src/agentGate'
 import { checkBurnRisk } from '../src/burnGuard'
+import { loadHookRuntimeConfig, saveHookRuntimeConfig } from '../src/hookRuntimeConfig'
 import { ContextCompositionIndex } from '../src/contextCompositionIndex'
 import { LogReader, type OpenCodeSqlFactory } from '../src/logReader'
 import { readScratchFile } from '../src/generatedFiles'
@@ -351,9 +352,12 @@ function pushRecentHookEvent(rec: HookEventRecord): void {
   if (recentHookEvents.length > RECENT_EVENTS_CAP) recentHookEvents.splice(0, recentHookEvents.length - 500)
 }
 
-// AGENTLENS_GATE_MODE=warn downgrades every deny to a systemMessage warning; the hook script
-// itself honors AGENTLENS_GATE=off before any network. Thresholds: AGENTLENS_GATE_* envs.
-const GATE_MODE: 'enforce' | 'warn' = process.env.AGENTLENS_GATE_MODE === 'warn' ? 'warn' : 'enforce'
+// Realtime hook switches (~/.agentlens/hook-config.json): registrations in settings.json are
+// static per session, but every hook is a dumb curl HERE — so enable/disable + mode changes
+// apply instantly to ALL running sessions machine-wide (GET/POST /api/hook-config, CLI --hooks).
+// AGENTLENS_GATE_MODE=warn is honored as the pre-file default; the file wins once saved.
+const HOOK_CONFIG_FILE = path.join(DATA_DIR, 'hook-config.json')
+let hookRuntime = loadHookRuntimeConfig(HOOK_CONFIG_FILE)
 const gateThresholds: Partial<GateThresholds> = (() => {
   const out: Partial<GateThresholds> = {}
   // Only DEFINED keys may land in the partial: spreading { key: undefined } over the
@@ -407,7 +411,7 @@ function buildGateState(now: number, parent: { contextTokens: number | null; idl
   const act = bodiesActivityReport()
   return {
     now,
-    mode: GATE_MODE,
+    mode: hookRuntime.gateMode,
     parent,
     startsLast60s: starts60,
     startsLast2min: starts120,
@@ -1982,7 +1986,11 @@ const uiServer = http.createServer((req, res) => {
       },
       bodies: { archive: archiveDiskUsage(BODIES_ARCHIVE_DIR), lastPass: p.bodiesLastPurge },
       hookEvents: { ...hookEventsDiskUsage(HOOK_EVENTS_DIR), receivedSinceBoot: p.hookEventWrites },
-      gate: { mode: GATE_MODE, checks: p.gateChecks, denies: p.gateDenies, warns: p.gateWarns, advisories: p.gateAdvisories },
+      gate: {
+        mode: hookRuntime.gateMode, enabled: hookRuntime.gateEnabled,
+        captureEnabled: hookRuntime.captureEnabled, advisorEnabled: hookRuntime.advisorEnabled,
+        checks: p.gateChecks, denies: p.gateDenies, warns: p.gateWarns, advisories: p.gateAdvisories,
+      },
     }))
     return
   }
@@ -2005,6 +2013,13 @@ const uiServer = http.createServer((req, res) => {
         if (!payload || typeof payload !== 'object' || typeof payload.hook_event_name !== 'string' || payload.hook_event_name === '') {
           res.writeHead(400, { 'Content-Type': 'application/json' })
           res.end(JSON.stringify({ error: 'payload must be a JSON object with hook_event_name' }))
+          return
+        }
+        if (!hookRuntime.captureEnabled) {
+          // Switch off = accept and DROP (the hook script must stay a fire-and-forget dumb
+          // pipe; a non-2xx here would make disabled capture look like a server outage).
+          res.writeHead(200, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ ok: true, dropped: 'captureEnabled=false' }))
           return
         }
         const { rec, bytes } = appendHookEvent(HOOK_EVENTS_DIR, payload)
@@ -2038,6 +2053,31 @@ const uiServer = http.createServer((req, res) => {
     })
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ count: events.length, events }))
+    return
+  }
+
+  // Realtime hook switches: read/change the running hooks' behavior for EVERY session at once
+  // (the registrations are static; the server is the decision point — see hookRuntimeConfig).
+  if (req.method === 'GET' && url === '/api/hook-config') {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ config: hookRuntime, file: HOOK_CONFIG_FILE }))
+    return
+  }
+  if (req.method === 'POST' && url === '/api/hook-config') {
+    const chunks: Buffer[] = []
+    req.on('data', (c: Buffer) => { if (chunks.reduce((n, b) => n + b.length, 0) < 8192) chunks.push(c) })
+    req.on('end', () => {
+      try {
+        const patch = JSON.parse(Buffer.concat(chunks).toString('utf-8')) as Record<string, unknown>
+        hookRuntime = saveHookRuntimeConfig(HOOK_CONFIG_FILE, hookRuntime, patch)
+        console.log(`[AgentLens] hook config updated: gate=${hookRuntime.gateEnabled ? hookRuntime.gateMode : 'off'} capture=${hookRuntime.captureEnabled} advisor=${hookRuntime.advisorEnabled}`)
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ config: hookRuntime, applied: true }))
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: String(e instanceof Error ? e.message : e) }))
+      }
+    })
     return
   }
 
@@ -2095,6 +2135,7 @@ const uiServer = http.createServer((req, res) => {
         persistStats.gateChecks++
 
         if (p.hook_event_name === 'PostToolUse') {
+          if (!hookRuntime.advisorEnabled) { res.writeHead(204); res.end(); return }
           // In-band advisory to the MODEL after an agent wave — deduped per session+risk.
           const adv = buildAdvisory(state)
           if (adv) {
@@ -2109,6 +2150,7 @@ const uiServer = http.createServer((req, res) => {
                 }
               }
               persistStats.gateAdvisories++
+              pushBurnSse({ type: 'alert', label: `burn advisory (${adv.code})`, detail: adv.text, severity: 'warning' })
               res.writeHead(200, { 'Content-Type': 'application/json' })
               res.end(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: adv.text } }))
               return
@@ -2120,18 +2162,23 @@ const uiServer = http.createServer((req, res) => {
         }
 
         // PreToolUse (default): decide before the launch happens.
+        if (!hookRuntime.gateEnabled) { res.writeHead(204); res.end(); return }
         const d = evaluateAgentGate((p.tool_input ?? null) as Record<string, unknown> | null, state)
         if (d.decision === 'deny') {
           persistStats.gateDenies++
+          // Mirror onto the dashboard's SSE alert channel — the notification panel shows
+          // gate interventions live, same surface as the burn alerts.
+          pushBurnSse({ type: 'alert', label: `burn-gate DENY (${d.code})`, detail: d.reason ?? '', severity: 'error' })
           res.writeHead(200, { 'Content-Type': 'application/json' })
           res.end(JSON.stringify({
             hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: d.reason },
-            systemMessage: `[agentlens burn-gate] blocked an agent launch (${d.code}). The reason went to the agent so it can adapt; AGENTLENS_GATE_MODE=warn downgrades denies, AGENTLENS_GATE=off disables the gate.`,
+            systemMessage: `[agentlens burn-gate] blocked an agent launch (${d.code}). The reason went to the agent so it can adapt; disable/downgrade in realtime: agentlens-cli --hooks gate=off|warn.`,
           }))
           return
         }
         if (d.decision === 'warn') {
           persistStats.gateWarns++
+          pushBurnSse({ type: 'alert', label: `burn-gate warning (${d.code})`, detail: d.reason ?? '', severity: 'warning' })
           res.writeHead(200, { 'Content-Type': 'application/json' })
           res.end(JSON.stringify({ systemMessage: d.reason }))
           return

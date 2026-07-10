@@ -67,6 +67,10 @@ operations:
   --risk                one-shot realtime culprit check (~50ms, REST fast path): prints ONLY the
                         active burn risks — each names the culprit session/workspace/model and
                         the magnitude — or "no active burn risks"
+  --hooks [k=v ...]     show or flip the hook switches IN REALTIME for every running session
+                        (server-side decision point — no restarts): gate=off|warn|enforce|on,
+                        capture=on|off (lifecycle event storage), advisor=on|off (in-band
+                        PostToolUse warnings). No args = show current config + file path
   --guard [seconds]     realtime burn guard: polls the risk report (default 15s, REST fast path)
                         and prints one [burn-guard] line per risk transition (fan-out burst,
                         cold-resume risk, compaction rewrite, huge-request burst, burn spike,
@@ -530,6 +534,39 @@ async function fetchBurnRisk() {
   return typeof r === 'string' ? JSON.parse(r) : r
 }
 
+// Realtime hook switches: no args = show; k=v args = set. Applies INSTANTLY to every running
+// session machine-wide (the server is the decision point; registrations never change).
+async function runHooksConfig(kvs) {
+  if (kvs.length === 0) {
+    const r = await apiRequest('GET', '/api/hook-config')
+    const c = r.config
+    console.log(`gate:     ${c.gateEnabled ? c.gateMode : 'off'}   (gate=off|warn|enforce)`)
+    console.log(`capture:  ${c.captureEnabled ? 'on' : 'off'}       (capture=on|off — lifecycle event storage)`)
+    console.log(`advisor:  ${c.advisorEnabled ? 'on' : 'off'}       (advisor=on|off — PostToolUse in-band warnings)`)
+    console.log(`config file: ${r.file} (changes apply in realtime to ALL sessions)`)
+    return
+  }
+  const patch = {}
+  for (const kv of kvs) {
+    const [k, v] = kv.split('=')
+    if (k === 'gate') {
+      if (v === 'off') patch.gateEnabled = false
+      else if (v === 'warn' || v === 'enforce') { patch.gateEnabled = true; patch.gateMode = v }
+      else if (v === 'on') patch.gateEnabled = true
+      else throw new Error(`gate expects off|warn|enforce|on, got "${v}"`)
+    } else if (k === 'capture') {
+      if (v !== 'on' && v !== 'off') throw new Error(`capture expects on|off, got "${v}"`)
+      patch.captureEnabled = v === 'on'
+    } else if (k === 'advisor') {
+      if (v !== 'on' && v !== 'off') throw new Error(`advisor expects on|off, got "${v}"`)
+      patch.advisorEnabled = v === 'on'
+    } else throw new Error(`unknown hook switch "${k}" (gate|capture|advisor)`)
+  }
+  const r = await apiRequest('POST', '/api/hook-config', patch)
+  const c = r.config
+  console.log(`applied realtime (all sessions): gate=${c.gateEnabled ? c.gateMode : 'off'} capture=${c.captureEnabled ? 'on' : 'off'} advisor=${c.advisorEnabled ? 'on' : 'off'}`)
+}
+
 // One-shot realtime culprit check: prints ONLY the active risks (each detail names the
 // culprit session/workspace/model + magnitude) — the fastest "who is burning right now".
 async function runRisk() {
@@ -709,6 +746,10 @@ async function main() {
       if (next && /^\d+$/.test(next)) { ops.guardInterval = Number(next); i++ }
     }
     else if (argv[i] === '--risk') ops.risk = true
+    else if (argv[i] === '--hooks') {
+      ops.hooksConfig = []
+      while (argv[i + 1] && /^[a-z]+=/.test(argv[i + 1])) ops.hooksConfig.push(argv[++i])
+    }
     else if (argv[i] === '--install-hooks') hooksOp = 'install'
     else if (argv[i] === '--uninstall-hooks') hooksOp = 'uninstall'
     else if (argv[i] === '--install-otel') otelOp = 'install'
@@ -730,6 +771,9 @@ async function main() {
 
   // One-shot realtime culprit check — REST fast path, ~50ms end-to-end incl. node boot.
   if (ops.risk) { await runRisk(); return }
+
+  // Hook switches — realtime, machine-wide, no session restarts.
+  if (ops.hooksConfig) { await runHooksConfig(ops.hooksConfig); return }
 
   // Guard mode never returns — it is the long-lived watch loop (arm via a background monitor).
   if (ops.guard) { await runGuard(ops.guardInterval); return }
