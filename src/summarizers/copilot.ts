@@ -1,10 +1,17 @@
 import { Span } from '../shared/telemetryTypes'
 import { SessionSummaryCard, TimelineEntry, EditDetail } from '../shared/summarizerTypes'
+import { disjointBuckets, contextTokens, UsageShape } from '../shared/tokenBuckets'
 import {
   getAttrStr, getAttrInt, nanoToMs, extractUserRequest,
   summarizeToolArgs, summarizeToolResult, extractResponseText, detectOutputAction,
   extractTokenCounts, getGenAiModel,
 } from './helpers'
+
+// Copilot serves both provider families: GPT/o-series usage is OpenAI-shaped (cached ⊂ input),
+// Anthropic usage is already disjoint. The shape decides whether disjointBuckets sheds cacheRead.
+function usageShapeFor(model: string | undefined): UsageShape {
+  return /^gpt-|^o\d/i.test(model ?? '') ? 'openai' : 'anthropic'
+}
 
 export function buildCopilotSessions(
   invokeAgentSpans: Span[],
@@ -20,19 +27,12 @@ export function buildCopilotSessions(
     const chatSpan = children.find(s => s.name.startsWith('chat'))
     const conversationId = chatSpan ? getAttrStr(chatSpan, 'gen_ai.conversation.id') : undefined
     const turns = getAttrInt(agent, 'copilot_chat.turn_count')
-    const { input: inputTokens, output: outputTokens, cacheRead, cacheCreate } = extractTokenCounts(agent)
-    // OpenAI convention: input_tokens = total context (cached tokens already included).
-    // Anthropic convention: input_tokens = new non-cached only; add cacheRead + cacheCreate to reconstruct total.
-    const isOpenAIModel = /^gpt-|^o\d/i.test(model ?? '')
-    const totalInput = isOpenAIModel
-      ? inputTokens
-      : inputTokens + cacheRead + cacheCreate
-    const cacheHitRate = totalInput > 0 ? cacheRead / totalInput : 0
-    // Stored convention = FOUR DISJOINT BUCKETS (calcTokenCostUsd bills each at its own rate), so
-    // the OpenAI-shaped input (cached tokens INSIDE input_tokens) must shed its cacheRead here or
-    // every cached token double-bills. The Anthropic shape is already disjoint. totalInput above
-    // remains the context-size figure for cacheHitRate only.
-    const storedInput = isOpenAIModel ? Math.max(inputTokens - cacheRead, 0) : inputTokens
+    // Stored convention = FOUR DISJOINT BUCKETS (calcTokenCostUsd bills each at its own rate);
+    // disjointBuckets sheds the OpenAI cached-⊂-input share at construction, and contextTokens
+    // reconstructs the incl-cache context total the hit rate is measured against.
+    const b = disjointBuckets(extractTokenCounts(agent), usageShapeFor(model))
+    const totalContext = contextTokens(b)
+    const cacheHitRate = totalContext > 0 ? b.cacheReadTokens / totalContext : 0
 
     const startMs = nanoToMs(agent.startTime)
     const endMs = nanoToMs(agent.endTime)
@@ -126,7 +126,9 @@ export function buildCopilotSessions(
       } else if (child.name.startsWith('chat')) {
         totalLlmCalls++
         const childModel = getGenAiModel(child)
-        const { input: inTok, output: outTok } = extractTokenCounts(child)
+        // Same four-disjoint-buckets constructor as the card — the entry's inputTokens is RAW
+        // uncached input, with any cached share carried in its own bucket fields.
+        const eb = disjointBuckets(extractTokenCounts(child), usageShapeFor(childModel || model))
         const ttft = getAttrInt(child, 'copilot_chat.time_to_first_token')
         const thinking = getAttrStr(child, 'copilot_chat.reasoning_content')
         const outputMsgs = getAttrStr(child, 'gen_ai.output.messages')
@@ -145,8 +147,10 @@ export function buildCopilotSessions(
           label: childModel,
           model: childModel,
           thinking: thinking ? thinking.slice(0, 200) : undefined,
-          inputTokens: inTok,
-          outputTokens: outTok,
+          inputTokens: eb.inputTokens,
+          outputTokens: eb.outputTokens,
+          cacheReadTokens: eb.cacheReadTokens || undefined,
+          cacheCreateTokens: eb.cacheCreateTokens || undefined,
           ttft,
           durationMs: childDur,
           action,
@@ -178,10 +182,10 @@ export function buildCopilotSessions(
       userRequest: userReq,
       model,
       turns,
-      inputTokens: storedInput,
-      outputTokens,
-      cacheReadTokens: cacheRead,
-      cacheCreateTokens: cacheCreate,
+      inputTokens: b.inputTokens,
+      outputTokens: b.outputTokens,
+      cacheReadTokens: b.cacheReadTokens,
+      cacheCreateTokens: b.cacheCreateTokens,
       cacheHitRate,
       durationMs,
       startTime: startMs > 0 ? new Date(startMs).toISOString() : '',

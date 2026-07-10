@@ -1,5 +1,6 @@
 import { Span } from '../shared/telemetryTypes'
 import { BackgroundSpanSummary, SessionSummaryCard, TimelineEntry } from '../shared/summarizerTypes'
+import { disjointBuckets, contextTokens } from '../shared/tokenBuckets'
 import {
   getAttrInt, nanoToMs, getFirstAttr,
   isCodexPromptSpanName, isCodexToolExecSpan, isCodexLlmSpanName,
@@ -68,7 +69,12 @@ export function buildCodexSessions(spans: Span[]): SessionSummaryCard[] {
       const childModel = getFirstAttr(child, ['gen_ai.request.model', 'gen_ai.response.model', 'model'])
       if (childModel) { model = childModel }
 
-      const { input: inTok, output: outTok, cacheRead, cacheCreate } = extractCodexTokenCounts(child)
+      const rawUsage = extractCodexTokenCounts(child)
+      const { input: inTok, output: outTok } = rawUsage
+      // Codex reports OpenAI-shaped usage (cached ⊂ input_tokens): the constructor sheds the
+      // cacheRead share so the four buckets stored on card + entries are DISJOINT (else every
+      // cached token double-bills at the full input rate).
+      const b = disjointBuckets(rawUsage, 'openai')
 
       // Real Codex captures can carry the same model usage three ways:
       // terminal codex.sse_event logs, raw handle_responses spans, and a
@@ -87,10 +93,10 @@ export function buildCodexSessions(spans: Span[]): SessionSummaryCard[] {
         if (isCodexToolDecisionSpan(child.name)) {
           if (!hasCodexCompletionEvents && (inTok > 0 || outTok > 0)) {
             totalLlmCalls++
-            inputTokens += inTok
-            outputTokens += outTok
-            cacheReadTokens += cacheRead
-            cacheCreateTokens += cacheCreate
+            inputTokens += b.inputTokens
+            outputTokens += b.outputTokens
+            cacheReadTokens += b.cacheReadTokens
+            cacheCreateTokens += b.cacheCreateTokens
           }
           continue
         }
@@ -174,10 +180,10 @@ export function buildCodexSessions(spans: Span[]): SessionSummaryCard[] {
         })
       } else if (isCodexTimelineLlmSpan(child, inTok, outTok)) {
         totalLlmCalls++
-        inputTokens += inTok
-        outputTokens += outTok
-        cacheReadTokens += cacheRead
-        cacheCreateTokens += cacheCreate
+        inputTokens += b.inputTokens
+        outputTokens += b.outputTokens
+        cacheReadTokens += b.cacheReadTokens
+        cacheCreateTokens += b.cacheCreateTokens
         const ttftMs = getAttrInt(child, 'ttft_ms') || getAttrInt(child, 'codex.ttft_ms') || lastTtftMs || 0
         lastTtftMs = 0
         timeline.push({
@@ -185,8 +191,12 @@ export function buildCodexSessions(spans: Span[]): SessionSummaryCard[] {
           spanId: child.spanId,
           label: childModel || model || 'Codex',
           model: childModel || model,
-          inputTokens: inTok,
-          outputTokens: outTok,
+          // The entry carries the SAME four disjoint buckets as the card (raw uncached input; the
+          // OpenAI cached share lives in cacheReadTokens) — consumers derive context via contextTokens().
+          inputTokens: b.inputTokens,
+          outputTokens: b.outputTokens,
+          cacheReadTokens: b.cacheReadTokens || undefined,
+          cacheCreateTokens: b.cacheCreateTokens || undefined,
           ttft: ttftMs || undefined,
           action: getFirstAttr(child, ['codex.event.type', 'event.kind', 'stop_reason']) || undefined,
           responseText: getFirstAttr(child, ['output_text', 'assistant_response']) || undefined,
@@ -243,13 +253,11 @@ export function buildCodexSessions(spans: Span[]): SessionSummaryCard[] {
       lastLlmEntry ? 'text_response' :
       'unknown'
 
-    const totalInput = inputTokens
-    const cacheHitRate = totalInput > 0 ? cacheReadTokens / totalInput : 0
-    // Codex reports OpenAI-shaped usage: cached tokens are INSIDE input_tokens. The stored
-    // convention is FOUR DISJOINT BUCKETS (calcTokenCostUsd bills each at its own rate), so the
-    // cacheRead share must come out of the stored input or it double-bills at the full input rate.
-    // totalInput above remains the context-size figure for cacheHitRate only.
-    const storedInput = Math.max(inputTokens - cacheReadTokens, 0)
+    // The accumulators are already DISJOINT (disjointBuckets shed the OpenAI cached-⊂-input share
+    // per call above) — no subtraction here, or the cacheRead share would be shed twice.
+    // contextTokens reconstructs the incl-cache total the hit rate is measured against.
+    const totalContext = contextTokens({ inputTokens, cacheReadTokens, cacheCreateTokens })
+    const cacheHitRate = totalContext > 0 ? cacheReadTokens / totalContext : 0
 
     const allEndTimes = traceSpans.map(s => nanoToMs(s.endTime) || s.receivedAt || 0).filter(t => t > 0)
     const endMs = allEndTimes.length > 0 ? Math.max(...allEndTimes) : startMs
@@ -265,7 +273,7 @@ export function buildCodexSessions(spans: Span[]): SessionSummaryCard[] {
       userRequest,
       model,
       turns: totalLlmCalls,
-      inputTokens: storedInput,
+      inputTokens,
       outputTokens,
       cacheReadTokens,
       cacheCreateTokens,
