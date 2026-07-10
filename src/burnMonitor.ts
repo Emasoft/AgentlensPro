@@ -16,6 +16,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { calcTokenCostUsd } from './shared/pricing'
+import { computeKeepWarm, type KeepWarmReport } from './shared/keepWarm'
 import type { SessionSummaryCard, TimelineEntry } from './shared/summarizerTypes'
 
 // ── Consumption events ─────────────────────────────────────────────────────────
@@ -392,6 +393,9 @@ export interface SessionBurn {
   oneMin: BurnRateWindow
   fiveMin: BurnRateWindow
   dominantCause: string | null
+  /** Keep-warm / cache-gap diagnostic (P6) — set by computeBurnStatus from the session's timeline
+   *  (computeBurnSeries has no card access). null = no api_request entries (honest absence). */
+  keepWarm?: KeepWarmReport | null
 }
 
 export interface BurnSeries {
@@ -772,7 +776,13 @@ export function computeBurnStatus(
     },
     window: budget,
     accountWindows: computeAccountWindowBudgets(events, config, now),
-    topSessions: series.sessions.slice(0, 5),
+    // P6 keep-warm: decorate each hot session with its cache-gap diagnostic from the card's
+    // timeline (api_request ground truth). null when the card is unknown here or carries no
+    // api_request entries — honest absence, never zeros presented as measurements.
+    topSessions: series.sessions.slice(0, 5).map(sb => ({
+      ...sb,
+      keepWarm: computeKeepWarm(sessions.find(c => c.sessionId === sb.sessionId)?.timeline ?? []),
+    })),
     alerts,
     activeSessions: series.sessions.length,
   }
@@ -846,6 +856,9 @@ export interface SessionStatus {
   lastCallCostUsd: number
   sessionTotalCostUsd: number
   tokensPerMin: number
+  /** Keep-warm / cache-gap diagnostic (P6): warm vs cold turns against the ~5-min prompt-cache TTL
+   *  + the cache-write tokens the cold turns wasted. null = no api_request entries to measure. */
+  keepWarm: KeepWarmReport | null
   rateLimitWindow: { fiveHourPct: number | null; sevenDayPct: number | null; fiveHourMinutesToExhaustion: number | null; sevenDayMinutesToExhaustion: number | null; capacityConfigured: boolean }
   comparison: { previousSessions: number; avgCostUsd: number | null; avgTurns: number | null; avgCacheHitRatePct: number | null; deltaCostUsd: number | null; deltaTurns: number | null; deltaCacheHitPct: number | null } | null
   drill: { context_history: string; context_composition: string }
@@ -940,6 +953,7 @@ export function computeSessionStatus(
     lastCallCostUsd: +lastCallCostUsd.toFixed(4),
     sessionTotalCostUsd: +cardCostUsd(card).toFixed(4),
     tokensPerMin,
+    keepWarm: computeKeepWarm(card.timeline ?? []),
     rateLimitWindow: {
       fiveHourPct: budget.fiveHour.pctConsumed,
       sevenDayPct: budget.sevenDay.pctConsumed,
