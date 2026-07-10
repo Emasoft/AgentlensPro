@@ -864,4 +864,130 @@ suite('SpanSummarizer', () => {
       assert.strictEqual(codex.timeline.filter(e => e.type === 'llm').length, 1)
     })
   })
+
+  // ── Phase B of the token-feed fix: Claude interaction spans sharing a `session.id` attr
+  //    (the transcript UUID) roll up into ONE session-scoped card keyed by that UUID, so the
+  //    OTEL card finally collides with the log card of the same session instead of serving
+  //    N per-trace fragments next to it. Interactions with NO session.id keep the old
+  //    per-interaction card (fail-soft — no invented identity).
+  suite('Claude session.id grouping (token-feed Phase B)', () => {
+    const SEC = 1_000_000_000 // ns
+    const T0 = 1_700_000_000 * SEC
+
+    function claudeInteraction(opts: {
+      traceId: string; spanId: string; sessionUuid?: string; prompt?: string
+      startNs?: number; endNs?: number
+    }): Span {
+      const attrs = []
+      if (opts.prompt) { attrs.push(makeAttr('user_prompt', opts.prompt)) }
+      if (opts.sessionUuid) { attrs.push(makeAttr('session.id', opts.sessionUuid)) }
+      return {
+        traceId: opts.traceId, spanId: opts.spanId, name: 'claude_code.interaction',
+        startTime: String(opts.startNs ?? T0), endTime: String(opts.endNs ?? T0 + 10 * SEC),
+        attributes: attrs,
+      }
+    }
+
+    function claudeLlm(traceId: string, parentSpanId: string, opts: {
+      input: number; output: number; cacheRead?: number; cacheCreate?: number
+      model?: string; startNs?: number
+    }): Span {
+      const start = opts.startNs ?? T0 + SEC
+      return {
+        traceId, spanId: `llm-${traceId}-${start}`, parentSpanId, name: 'claude_code.llm_request',
+        startTime: String(start), endTime: String(start + SEC),
+        attributes: [
+          makeAttr('gen_ai.request.model', opts.model ?? 'claude-opus-4-8'),
+          makeAttr('gen_ai.usage.input_tokens', opts.input),
+          makeAttr('gen_ai.usage.output_tokens', opts.output),
+          makeAttr('gen_ai.usage.cache_read.input_tokens', opts.cacheRead ?? 0),
+          makeAttr('gen_ai.usage.cache_creation.input_tokens', opts.cacheCreate ?? 0),
+        ],
+      }
+    }
+
+    test('N interaction spans sharing one session.id emit ONE card keyed by the UUID with summed buckets', () => {
+      const uuid = '65c9218c-1111-2222-3333-4af26a6bdfc0'
+      const spans: Span[] = [
+        claudeInteraction({ traceId: 'tA', spanId: 'intA', sessionUuid: uuid, prompt: 'first turn', startNs: T0, endNs: T0 + 10 * SEC }),
+        claudeLlm('tA', 'intA', { input: 100, output: 10, cacheRead: 1000, cacheCreate: 50, startNs: T0 + SEC }),
+        claudeInteraction({ traceId: 'tB', spanId: 'intB', sessionUuid: uuid, prompt: 'second turn', startNs: T0 + 60 * SEC, endNs: T0 + 70 * SEC }),
+        claudeLlm('tB', 'intB', { input: 200, output: 20, cacheRead: 2000, cacheCreate: 100, startNs: T0 + 61 * SEC }),
+      ]
+      const result = summarizeSpans(spans)
+      const claude = result.sessions.filter(s => s.source === 'claude_code')
+      assert.strictEqual(claude.length, 1, 'the two interactions collapse into one session card')
+      const card = claude[0]
+      assert.strictEqual(card.sessionId, uuid, 'card is keyed by the transcript UUID, not an interaction spanId')
+      assert.strictEqual(card.inputTokens, 300)
+      assert.strictEqual(card.outputTokens, 30)
+      assert.strictEqual(card.cacheReadTokens, 3000)
+      assert.strictEqual(card.cacheCreateTokens, 150)
+      assert.strictEqual(card.turns, 2, 'turns = Σ totalLlmCalls across the group')
+      assert.strictEqual(card.totalLlmCalls, 2)
+      // startTime = earliest slice; durationMs spans the whole group (T0 → T0+70s).
+      assert.strictEqual(card.startTime, new Date(T0 / 1_000_000).toISOString())
+      assert.strictEqual(card.durationMs, 70_000)
+      // Timeline concatenates in time order: the tA llm entry precedes the tB one.
+      const llmEntries = card.timeline.filter(t => t.type === 'llm')
+      assert.strictEqual(llmEntries.length, 2)
+      assert.ok(Date.parse(llmEntries[0].timestamp!) < Date.parse(llmEntries[1].timestamp!))
+    })
+
+    test('an interaction WITHOUT session.id keeps the per-interaction card (fail-soft)', () => {
+      const spans: Span[] = [
+        claudeInteraction({ traceId: 'tSolo', spanId: 'intSolo', prompt: 'no uuid here' }),
+        claudeLlm('tSolo', 'intSolo', { input: 42, output: 7 }),
+      ]
+      const result = summarizeSpans(spans)
+      const claude = result.sessions.filter(s => s.source === 'claude_code')
+      assert.strictEqual(claude.length, 1)
+      assert.strictEqual(claude[0].sessionId, 'intSolo', 'still keyed by the interaction spanId')
+      assert.strictEqual(claude[0].inputTokens, 42)
+    })
+
+    test('grouped and ungrouped interactions coexist — no cross-contamination', () => {
+      const uuid = 'accfcea7-4444-5555-6666-4aa0393e7dc7'
+      const spans: Span[] = [
+        claudeInteraction({ traceId: 't1', spanId: 'int1', sessionUuid: uuid, startNs: T0 }),
+        claudeLlm('t1', 'int1', { input: 10, output: 1, startNs: T0 + SEC }),
+        claudeInteraction({ traceId: 't2', spanId: 'int2', sessionUuid: uuid, startNs: T0 + 30 * SEC }),
+        claudeLlm('t2', 'int2', { input: 20, output: 2, startNs: T0 + 31 * SEC }),
+        claudeInteraction({ traceId: 't3', spanId: 'int3', startNs: T0 + 90 * SEC }),
+        claudeLlm('t3', 'int3', { input: 40, output: 4, startNs: T0 + 91 * SEC }),
+      ]
+      const result = summarizeSpans(spans)
+      const claude = result.sessions.filter(s => s.source === 'claude_code')
+      assert.strictEqual(claude.length, 2)
+      const grouped = claude.find(s => s.sessionId === uuid)
+      const solo = claude.find(s => s.sessionId === 'int3')
+      assert.ok(grouped && solo)
+      assert.strictEqual(grouped!.inputTokens, 30, 'group sums only its own slices')
+      assert.strictEqual(solo!.inputTokens, 40, 'ungrouped slice keeps its own buckets')
+    })
+
+    test('a synthesized in-progress trace inherits session.id from its llm_request spans and groups', () => {
+      const uuid = '777b8f52-7777-8888-9999-8969f7face90'
+      // No claude_code.interaction span at all: the summarizer synthesizes the root. The
+      // llm_request spans carry session.id, which must propagate so the trace joins the session.
+      const llmA = claudeLlm('tLiveA', 'missing-rootA', { input: 5, output: 1, startNs: T0 })
+      llmA.attributes.push(makeAttr('session.id', uuid))
+      const llmB = claudeLlm('tLiveB', 'missing-rootB', { input: 6, output: 2, startNs: T0 + 20 * SEC })
+      llmB.attributes.push(makeAttr('session.id', uuid))
+      const result = summarizeSpans([llmA, llmB])
+      const claude = result.sessions.filter(s => s.source === 'claude_code')
+      assert.strictEqual(claude.length, 1, 'both synthesized traces group into one session')
+      assert.strictEqual(claude[0].sessionId, uuid)
+      assert.strictEqual(claude[0].inputTokens, 11)
+      assert.strictEqual(claude[0].totalLlmCalls, 2)
+    })
+
+    test('a synthesized trace with NO session.id anywhere stays keyed synth-<traceId>', () => {
+      const llm = claudeLlm('tAnon', 'missing-root', { input: 3, output: 1 })
+      const result = summarizeSpans([llm])
+      const claude = result.sessions.filter(s => s.source === 'claude_code')
+      assert.strictEqual(claude.length, 1)
+      assert.ok(claude[0].sessionId.startsWith('synth-'), 'no invented identity')
+    })
+  })
 })

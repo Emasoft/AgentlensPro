@@ -82,13 +82,22 @@ export function summarizeSpans(spans: Span[]) {
       s.name === 'claude_code.api_error' || s.name === 'claude_code.api_retries_exhausted')
     if (!hasClaudeSpans) { continue }
     const sorted = traceSpans.slice().sort((a, b) => (a.startTime ?? '0') < (b.startTime ?? '0') ? -1 : 1)
+    // Phase B (token-feed fix): PROPAGATE the transcript UUID onto the synthesized root so the
+    // Claude builder can group this in-progress trace with the rest of its session. llm_request /
+    // tool / api_request spans of the trace all carry the same `session.id` attr — we only copy it;
+    // a trace whose spans carry none stays keyed `synth-<traceId>` (no invented identity).
+    let claudeSessionId = ''
+    for (const s of traceSpans) {
+      claudeSessionId = getAttrStr(s, 'session.id')
+      if (claudeSessionId) { break }
+    }
     claudeInteractionSpans.push({
       traceId,
       spanId: `synth-${traceId.slice(0, 12)}`,
       name: 'claude_code.interaction',
       startTime: sorted[0].startTime,
       endTime: sorted[sorted.length - 1].endTime,
-      attributes: [],
+      attributes: claudeSessionId ? [{ key: 'session.id', value: { stringValue: claudeSessionId } }] : [],
     })
   }
 

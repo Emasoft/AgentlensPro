@@ -16,7 +16,152 @@ export function buildClaudeSessions(
   claudeInteractionSpans: Span[],
   spansByTraceId: Record<string, Span[]>
 ): SessionSummaryCard[] {
-  return claudeInteractionSpans.map(interaction => {
+  // Phase B of the token-feed fix (reports/token-discrepancy/20260710_141134+0200-otel-vs-jsonl.md
+  // §4bis): one Claude session used to fragment into one card PER interaction span, keyed by the
+  // interaction spanId — never the transcript UUID — so a long session served as up to hundreds of
+  // per-trace OTEL cards next to its single log card, and the log/OTEL id merge could never collide.
+  // The `session.id` attribute on interaction spans carries the real transcript UUID: group by it
+  // and emit ONE session-scoped card per UUID (sessionId = the UUID). Interactions with NO
+  // session.id attr keep the per-interaction card — fail-soft, we never invent an identity.
+  const out: SessionSummaryCard[] = []
+  const groups = new Map<string, SessionSummaryCard[]>()
+  for (const interaction of claudeInteractionSpans) {
+    const card = buildInteractionCard(interaction, spansByTraceId)
+    const claudeSessionId = getAttrStr(interaction, 'session.id')
+    if (!claudeSessionId) { out.push(card); continue }
+    const group = groups.get(claudeSessionId)
+    if (group) { group.push(card) } else { groups.set(claudeSessionId, [card]) }
+  }
+  for (const [claudeSessionId, slices] of groups) {
+    out.push(mergeInteractionSlices(claudeSessionId, slices))
+  }
+  return out
+}
+
+// Chronology key shared by the per-card timeline sort and the cross-slice merge: entries with no
+// parseable timestamp sort LAST so a missing ISO string can't scramble the well-timed entries.
+function timelineTsKey(e: TimelineEntry): number {
+  const t = Date.parse(e.timestamp || '')
+  return Number.isNaN(t) ? Number.MAX_SAFE_INTEGER : t
+}
+
+/**
+ * Rolls the per-interaction slice cards of ONE Claude session (same `session.id` transcript UUID)
+ * into a single session-scoped card: buckets/turns/tool counts SUM, file sets UNION, the timeline
+ * concatenates in time order, startTime is the earliest slice and durationMs spans the whole group.
+ * model/workspace/userRequest come from the most-informative slice (longest timeline), falling back
+ * per-field to the first slice in time order that carries a real value. sessionId becomes the
+ * transcript UUID so the card finally collides with — and can be reconciled against — the log card
+ * of the same session (see feedMergePolicy.ts for who wins that collision).
+ */
+function mergeInteractionSlices(claudeSessionId: string, slices: SessionSummaryCard[]): SessionSummaryCard {
+  const startMsOf = (c: SessionSummaryCard): number => {
+    const t = Date.parse(c.startTime || '')
+    return Number.isNaN(t) ? Number.MAX_SAFE_INTEGER : t
+  }
+  const ordered = slices.slice().sort((a, b) => startMsOf(a) - startMsOf(b))
+  if (ordered.length === 1) { return { ...ordered[0], sessionId: claudeSessionId } }
+
+  let inputTokens = 0, outputTokens = 0, cacheReadTokens = 0, cacheCreateTokens = 0
+  let totalLlmCalls = 0, totalToolCalls = 0, errors = 0
+  const toolCounts: Record<string, number> = {}
+  const filesRead = new Set<string>()
+  const filesSearched = new Set<string>()
+  const filesChanged = new Set<string>()
+  const filesWritten = new Set<string>()
+  const timeline: TimelineEntry[] = []
+  const backgroundSpans: SessionSummaryCard['backgroundSpans'] = []
+  let minStartMs = Number.MAX_SAFE_INTEGER
+  let maxEndMs = 0
+  for (const s of ordered) {
+    inputTokens += s.inputTokens
+    outputTokens += s.outputTokens
+    cacheReadTokens += s.cacheReadTokens
+    cacheCreateTokens += s.cacheCreateTokens
+    totalLlmCalls += s.totalLlmCalls
+    totalToolCalls += s.totalToolCalls
+    errors += s.errors
+    for (const [tool, n] of Object.entries(s.toolCounts)) { toolCounts[tool] = (toolCounts[tool] || 0) + n }
+    for (const f of s.filesRead) { filesRead.add(f) }
+    for (const f of s.filesSearched) { filesSearched.add(f) }
+    for (const f of s.filesChanged) { filesChanged.add(f) }
+    for (const f of s.filesWritten) { filesWritten.add(f) }
+    timeline.push(...s.timeline)
+    backgroundSpans.push(...s.backgroundSpans)
+    const st = startMsOf(s)
+    if (st !== Number.MAX_SAFE_INTEGER) {
+      if (st < minStartMs) { minStartMs = st }
+      const end = st + (s.durationMs > 0 ? s.durationMs : 0)
+      if (end > maxEndMs) { maxEndMs = end }
+    }
+  }
+  // Slices are already sorted by start and each slice timeline is internally time-sorted, but
+  // interactions can overlap (background/sidechain turns) — re-sort globally with the same
+  // stable comparator a single card uses.
+  timeline.sort((a, b) => timelineTsKey(a) - timelineTsKey(b))
+
+  // Most-informative slice = the one with the richest timeline; per-field fallback scans the
+  // group in time order so a placeholder never shadows a real value carried by another slice.
+  const informative = ordered.reduce((best, s) => (s.timeline.length > best.timeline.length ? s : best), ordered[0])
+  const isPlaceholderRequest = (r: string): boolean =>
+    !r || r === '[prompt redacted]' || r === '[session in progress]'
+  const userRequest = !isPlaceholderRequest(informative.userRequest)
+    ? informative.userRequest
+    : (ordered.find(s => !isPlaceholderRequest(s.userRequest))?.userRequest ?? informative.userRequest)
+  const model = informative.model || ordered.find(s => s.model)?.model || ''
+  const workspace = informative.workspace || ordered.find(s => s.workspace)?.workspace || ''
+  const base = ordered[0]
+
+  const totalInput = inputTokens + cacheReadTokens + cacheCreateTokens
+  // A grouped card can only be suppressed-note-free if SOME slice found a changed path; when the
+  // union is empty, surface the first slice note (they all carry the same telemetry-config advice).
+  const filesChangedNote = filesChanged.size > 0
+    ? undefined
+    : ordered.find(s => s.filesChangedNote)?.filesChangedNote
+
+  return {
+    // The earliest interaction's trace anchors the card (traceId is single-valued; background-span
+    // association and synth-row cleanup key on it — fail-soft for the later traces of the group).
+    ...base,
+    sessionId: claudeSessionId,
+    // A session with ANY user-initiated interaction is a user session; sidechain-only groups
+    // (every interaction stamped is_sidechain/parented) stay 'agent'.
+    initiator: ordered.some(s => s.initiator === 'user') ? 'user' as const : base.initiator,
+    accountId: ordered.find(s => s.accountId)?.accountId,
+    workspace,
+    userRequest,
+    model,
+    turns: totalLlmCalls,
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheCreateTokens,
+    cacheHitRate: totalInput > 0 ? cacheReadTokens / totalInput : 0,
+    durationMs: (minStartMs !== Number.MAX_SAFE_INTEGER && maxEndMs > minStartMs) ? maxEndMs - minStartMs : base.durationMs,
+    startTime: minStartMs !== Number.MAX_SAFE_INTEGER ? new Date(minStartMs).toISOString() : base.startTime,
+    filesRead: Array.from(filesRead),
+    filesSearched: Array.from(filesSearched),
+    filesChanged: Array.from(filesChanged),
+    filesWritten: Array.from(filesWritten),
+    filesChangedNote,
+    toolCounts,
+    totalToolCalls,
+    totalLlmCalls,
+    errors,
+    outcome: 'unknown' as const,
+    timeline,
+    backgroundSpans,
+    loopSignals: [],
+  }
+}
+
+/** Builds the per-interaction slice card — ONE claude_code.interaction span plus its trace tree.
+ *  This is the pre-Phase-B unit of aggregation; buildClaudeSessions above groups these slices by
+ *  the transcript UUID. (Body kept verbatim from the former map callback, hence its indentation.) */
+function buildInteractionCard(
+  interaction: Span,
+  spansByTraceId: Record<string, Span[]>
+): SessionSummaryCard {
     const traceSpans = (spansByTraceId[interaction.traceId] || [])
       .filter(s => s.spanId !== interaction.spanId)
       .sort((a, b) => nanoToMs(a.startTime) - nanoToMs(b.startTime))
@@ -376,13 +521,9 @@ export function buildClaudeSessions(
         })
       }
     }
-    // Re-order chronologically after appending the log-derived entries. Entries with no timestamp
-    // (rare) sort last so a missing ISO string can't scramble the well-timed entries.
-    const tsKey = (e: TimelineEntry) => {
-      const t = Date.parse(e.timestamp || '')
-      return Number.isNaN(t) ? Number.MAX_SAFE_INTEGER : t
-    }
-    timeline.sort((a, b) => tsKey(a) - tsKey(b))
+    // Re-order chronologically after appending the log-derived entries (timelineTsKey sends
+    // timestamp-less entries last so a missing ISO string can't scramble the well-timed ones).
+    timeline.sort((a, b) => timelineTsKey(a) - timelineTsKey(b))
 
     const workspace = findProjectRoot(commonPathPrefix([...allAbsFilePaths]))
 
@@ -450,5 +591,4 @@ export function buildClaudeSessions(
       backgroundSpans: [],
       loopSignals: [],
     }
-  })
 }
