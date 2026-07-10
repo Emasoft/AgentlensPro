@@ -2,6 +2,22 @@
 
 All notable changes to AgentLens are documented here.
 
+## [0.9.0] — 2026-07-10
+
+### Added
+
+- **Lifecycle hook-event capture** — `agentlens-cli --install-hooks` registers `scripts/spy-agentlens.sh` on ten Claude Code lifecycle events (SessionStart/SessionEnd, Stop, StopFailure, PreCompact/PostCompact, PermissionRequest, Notification, SubagentStart/SubagentStop). These carry signals the JSONL transcripts and OTEL bodies do not: exact rate-limit turn deaths (`StopFailure`), compaction boundaries with their trigger (`PreCompact`), and true session lifecycle. Events land in `~/.agentlens/hook-events/` as append-only NDJSON daily buckets (31-day retention, `AGENTLENS_HOOK_EVENTS_RETENTION_DAYS`) and are queryable at `GET /api/hook-events?session=&ev=&since=&until=&limit=`. Deliberately *not* registered on `PreToolUse`/`PostToolUse`: that data is already fully captured, and those are the only high-frequency hooks. `--uninstall-hooks` removes exactly these entries. Both go through the `safeConfigEdit` verified transaction and leave other tools' hooks untouched
+- **`agentlens-cli --install-skill`** — (re)installs the `agentlens-diagnostics` skill into `~/.claude/skills/` from the in-repo copy, idempotent by content comparison (reports installed / updated / already current), so a deleted user-scope skill is recoverable with one command
+- **`scripts/install.sh`** — one-command installer: Node ≥18 check, dependency install, bundle build, global CLI link, skill install, server start. It never touches `~/.claude/settings.json`; telemetry (`--install-otel`) and hook capture (`--install-hooks`) stay explicit opt-ins that the script recommends at the end
+
+### Changed
+
+- **`--status` reports the hook-event store** — event count since boot, bucket count, and bytes on disk, alongside the existing span/bodies accounting
+
+### Fixed
+
+- **Calendar-invalid hook-event bucket names could never be purged** — the bucket-name regex `\d{4}-\d{2}-\d{2}` also matches names like `2026-13-99` (parses to `NaN`) and `2026-02-31` (overflows to Mar 3). `NaN` defeated both the read fast-path (the bucket got scanned instead of skipped) and the string-comparison purge (the file was never deleted while disk-usage kept counting it). A single `bucketDayMs()` helper now parses the day once and round-trips it through `toISOString` to reject overflow; read, purge, and disk-usage all share it, and purge compares day-milliseconds numerically
+
 ## [0.8.5] — 2026-06-15
 
 ### Fixed

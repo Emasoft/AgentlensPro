@@ -15,8 +15,14 @@ agentlens-cli --start-server                     # server up (idempotent); --das
 agentlens-cli list --desc                        # discover tools
 agentlens-cli help <tool>                        # flags from the live schema
 agentlens-cli <tool> --param value --out FILE    # full JSON to disk, digest to stdout
-agentlens-cli --install-otel | --uninstall-otel  # wire/unwire Claude Code telemetry (verified transaction)
+agentlens-cli --install-otel | --uninstall-otel   # wire/unwire Claude Code telemetry (verified transaction)
+agentlens-cli --install-hooks | --uninstall-hooks # wire/unwire lifecycle hook capture (same transaction)
+agentlens-cli --install-skill                     # (re)install this skill into ~/.claude/skills/
+bash scripts/install.sh                           # one-command install: deps, build, link, skill, server
 ```
+
+Both `--install-*` settings flags go through `safeConfigEdit`; they never clobber other tools'
+hooks, and a hook change needs a session restart to take effect.
 
 Before any task: `get_recent_sessions` (recent work + cost) and `get_workspace_patterns`
 (hot files, recurring issues) — batch them in one invocation. Do not re-register the MCP
