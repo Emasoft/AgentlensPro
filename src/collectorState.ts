@@ -27,7 +27,11 @@ import type { CollectorGap, SessionSummaryCard } from './shared/summarizerTypes'
 //   v4: async-launch child cards synthesized (spawn_async linkage, zero buckets).
 //   v5: inputTokens normalized to RAW disjoint-buckets on every card family (the 2026-07-10
 //       OTEL-vs-JSONL discrepancy fix); sub cards store sub.input as-is.
-export const LOG_INGEST_VERSION = 5
+//   v6 (P3, tokenBuckets): TIMELINE ENTRIES normalized to the same RAW disjoint buckets (OTEL llm
+//       entries stored incl-cache input until now) + opencode entries gained per-message cache
+//       buckets. One convention on disk, ever: persisted OTEL entry rows are normalized in place
+//       by the SQLite v6 migration (db.ts); log-side sidecars/rows cold-rescan via this stamp.
+export const LOG_INGEST_VERSION = 6
 
 // ── Log tail offsets ──────────────────────────────────────────────────────────
 
