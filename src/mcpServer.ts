@@ -1,5 +1,5 @@
 /**
- * AgentLens MCP server — exposes session history to Claude Code and other
+ * AgentlensPro MCP server — exposes session history to Claude Code and other
  * MCP-compatible agents so they can query their own past work.
  *
  * Tools:
@@ -370,7 +370,7 @@ const TOOLS = [
   {
     name: 'get_recent_sessions',
     description:
-      'Returns { sessions, collectorGaps }: recent AgentLens session summaries — cost, turns, model, ' +
+      'Returns { sessions, collectorGaps }: recent AgentlensPro session summaries — cost, turns, model, ' +
       'prompt excerpt, top tools used, loop signals — plus collectorGaps, any windows where the ' +
       'collector was offline and telemetry was lost. Use this to orient yourself to recent work ' +
       '(and to know if coverage has gaps) before starting a new task.',
@@ -903,7 +903,7 @@ const TOOLS = [
       'with big cache_creation and ~zero cache_read — the prefix is being INVALIDATED every turn instead of ' +
       'read from cache; exact Anthropic usage numbers, the measured lean-ctx-class disaster). Hook-event risks need ' +
       '--install-hooks; the sources block says honestly which feeds are absent. Poll every 10-30s, or use ' +
-      '`agentlens-cli --guard [seconds]` which polls for you and prints one line per risk TRANSITION — ' +
+      '`agentlenspro-cli --guard [seconds]` which polls for you and prints one line per risk TRANSITION — ' +
       'designed to be armed via a background monitor so the agent is interrupted the moment a risk fires.',
     inputSchema: {
       type: 'object' as const,
@@ -2476,7 +2476,7 @@ export function startMcpHttpServer(
   })
   httpServer.on('error', (err: NodeJS.ErrnoException) => {
     if (err.code === 'EADDRINUSE') {
-      console.error(`[AgentLens] Port ${port} (MCP) already in use — stop the process using it or set MCP_PORT=<other> to use a different port.`)
+      console.error(`[AgentlensPro] Port ${port} (MCP) already in use — stop the process using it or set MCP_PORT=<other> to use a different port.`)
       process.exit(1)
     }
     throw err

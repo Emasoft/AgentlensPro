@@ -1017,7 +1017,7 @@ agentlens/
 │   └── sidebar.js                # Compiled sidebar script
 ├── standalone/
 │   ├── server.ts                 # Standalone HTTP server (no VS Code)
-│   └── cli.js                    # npx entrypoint: `agentlens` / `agentlens-dashboard` — starts server, auto-opens browser (--no-open to suppress)
+│   └── cli.js                    # npx entrypoint: `agentlenspro` — starts server, auto-opens browser (--no-open to suppress)
 ├── esbuild.js                    # Build configuration (4 targets)
 ├── package.json                  # VS Code manifest + scripts
 └── ARCHITECTURE.md               # This file

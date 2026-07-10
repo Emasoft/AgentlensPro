@@ -1,7 +1,7 @@
 import * as assert from 'assert'
 import * as path from 'path'
 
-// ── agentlens-cli hook-matcher internals (TRDD-GOD0108C install/uninstall) ─────
+// ── agentlenspro-cli hook-matcher internals (TRDD-GOD0108C install/uninstall) ─────
 // Loads the REAL scripts/agentlens-cli.js as a CommonJS module (its main() is guarded by
 // require.main === module, so requiring it runs no CLI). Exercises rebuildEventMatchers —
 // the pure function that (un)installs the spy-agentlens hook entries — with no server.
@@ -22,7 +22,7 @@ const cli = require(path.resolve(__dirname, '..', '..', '..', 'scripts', 'agentl
 const CMD = 'bash /repo/scripts/spy-agentlens.sh'         // lifecycle forwarder (contains "spy-agentlens")
 const GATE_CMD = 'bash /repo/scripts/spy-agentlens-gate.sh' // burn gate (contains "spy-agentlens")
 
-suite('agentlens-cli — rebuildEventMatchers (hook install/uninstall)', () => {
+suite('agentlenspro-cli — rebuildEventMatchers (hook install/uninstall)', () => {
   test('install injects the gate entry on the ^(Task|Agent|Workflow)$ matcher, SYNC (no async)', () => {
     // A fresh PreToolUse event gains exactly the gate matcher with the gate command, timeout 3, sync.
     assert.strictEqual(cli.GATE_MATCHER, '^(Task|Agent|Workflow)$')

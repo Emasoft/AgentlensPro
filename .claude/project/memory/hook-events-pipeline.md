@@ -11,7 +11,7 @@ metadata:
 
 AgentLens captures Claude Code **lifecycle hook events** (TRDD-Q6ZOUVK5, commit c923f85):
 `scripts/spy-agentlens.sh` (one fire-and-forget curl, always exit 0, no stdout) is registered
-by `agentlens-cli --install-hooks` on 10 lifecycle events — SessionStart/End, Stop,
+by `agentlenspro-cli --install-hooks` (bin renamed at the AgentlensPro fork; was `agentlens-cli`) on 10 lifecycle events — SessionStart/End, Stop,
 StopFailure, Pre/PostCompact, PermissionRequest, Notification, SubagentStart/Stop — and POSTs
 the raw payload to `POST /api/hook-events`. `src/hookEventStore.ts` persists them as
 append-only NDJSON daily buckets in `~/.agentlens/hook-events/` (31d retention); query via

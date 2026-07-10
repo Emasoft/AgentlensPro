@@ -261,8 +261,8 @@ export function buildAdvisory(state: AgentGateState): { code: string; text: stri
     const who = fmtSpawners(state.spawners)
     return {
       code: 'FANOUT_HEADSUP',
-      text: `⚠ AgentLens: ${state.startsLast2min} agent launches in the last 2min${who ? ` (${who})` : ''}.${premium} ` +
-        `Check headroom before widening the fan-out: agentlens-cli --risk.`,
+      text: `⚠ AgentlensPro: ${state.startsLast2min} agent launches in the last 2min${who ? ` (${who})` : ''}.${premium} ` +
+        `Check headroom before widening the fan-out: agentlenspro-cli --risk.`,
     }
   }
   return null

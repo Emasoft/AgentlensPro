@@ -234,7 +234,7 @@ export function checkBurnRisk(opts: BurnGuardOptions = {}): BurnRiskReport {
     code: 'BURN_SPIKE',
     active: worst > spikeTpm,
     detail: worst > spikeTpm
-      ? `live burn is ${Math.round(worst / 1000)}k tokens/min on the 5-min window (threshold ${Math.round(spikeTpm / 1000)}k).${windowClause || ' Window time-left unavailable (capacity not configured).'} Identify the source NOW: agentlens-cli --risk names the senders; investigate_burn --windowHours 1 for depth.`
+      ? `live burn is ${Math.round(worst / 1000)}k tokens/min on the 5-min window (threshold ${Math.round(spikeTpm / 1000)}k).${windowClause || ' Window time-left unavailable (capacity not configured).'} Identify the source NOW: agentlenspro-cli --risk names the senders; investigate_burn --windowHours 1 for depth.`
       : `live burn ${Math.round(worst / 1000)}k tokens/min`,
     evidence: { fiveMinTokensPerMin: worst, threshold: spikeTpm },
   })

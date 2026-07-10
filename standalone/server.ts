@@ -435,7 +435,7 @@ const advisoryIssued = new Map<string, number>()
 
 // ── Single-instance guard (canonical instance only) ──────────────────────────
 // EADDRINUSE on any of the three listeners already makes a same-port double start exit(1); the
-// pidfile adds (a) a discoverable PID for `agentlens-cli --status/--stop-server` without a lsof
+// pidfile adds (a) a discoverable PID for `agentlenspro-cli --status/--stop-server` without a lsof
 // hunt, and (b) a fast, explicit refusal BEFORE boot-time side effects (bodies purge, migration,
 // auto-config) when a canonical server is already alive. Isolated-port instances (tests, headless
 // proofs — see the canonical-instance gate in applyAutoConfig) never write it: they are meant to
@@ -448,7 +448,7 @@ if (IS_CANONICAL) {
     if (prior > 0 && prior !== process.pid) {
       try {
         process.kill(prior, 0) // throws when the process is gone — then the pidfile is stale
-        console.error(`[AgentLens] Another AgentLens server is already running (pid ${prior}). Use \`agentlens-cli --status\` / \`--stop-server\`, or set OTLP_PORT for an isolated instance.`)
+        console.error(`[AgentlensPro] Another AgentlensPro server is already running (pid ${prior}). Use \`agentlenspro-cli --status\` / \`--stop-server\`, or set OTLP_PORT for an isolated instance.`)
         process.exit(1)
       } catch { /* stale pidfile — take over below */ }
     }
@@ -2000,7 +2000,7 @@ const uiServer = http.createServer((req, res) => {
   // Everything an operator needs to answer "is it healthy, what is it costing my machine?" in one
   // call — process identity, memory, span-store state, and EXACT bytes this process has written
   // (the observable that would have caught the 420GB SSD incident on day one). Consumed by
-  // `agentlens-cli --status` and usable by any watchdog.
+  // `agentlenspro-cli --status` and usable by any watchdog.
   if (req.method === 'GET' && url === '/api/server-stats') {
     const mem = process.memoryUsage()
     const heap = heapPressure()
@@ -2212,7 +2212,7 @@ const uiServer = http.createServer((req, res) => {
           res.writeHead(200, { 'Content-Type': 'application/json' })
           res.end(JSON.stringify({
             hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: d.reason },
-            systemMessage: `[agentlens burn-gate] blocked an agent launch (${d.code}). The reason went to the agent so it can adapt; disable/downgrade in realtime: agentlens-cli --hooks gate=off|warn.`,
+            systemMessage: `[agentlens burn-gate] blocked an agent launch (${d.code}). The reason went to the agent so it can adapt; disable/downgrade in realtime: agentlenspro-cli --hooks gate=off|warn.`,
           }))
           return
         }
@@ -2232,7 +2232,7 @@ const uiServer = http.createServer((req, res) => {
     return
   }
 
-  // Archive operations (agentlens-cli --export-bodies / --purge-bodies). They live on the server
+  // Archive operations (agentlenspro-cli --export-bodies / --purge-bodies). They live on the server
   // so the WAD format has exactly ONE implementation (src/bodyArchive.ts) — no CLI-side reader
   // to drift out of sync with the writer.
   if (req.method === 'POST' && url === '/api/bodies/export') {
