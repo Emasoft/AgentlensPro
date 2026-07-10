@@ -892,4 +892,12 @@ async function main() {
   emit(t.name, await callTool(t.name, args, globals.full), globals)
 }
 
-main().catch(e => { console.error(`FAIL: ${e.message}`); process.exit(1) })
+// Only auto-run the CLI when this file is the process entry point. When it is `require`d
+// (the cliMatchers integration test imports rebuildEventMatchers), the guard keeps main()
+// from starting the whole CLI — but the global `agentlens-cli` binary still runs normally.
+if (require.main === module) {
+  main().catch(e => { console.error(`FAIL: ${e.message}`); process.exit(1) })
+}
+
+// Pure hook-matcher internals exercised by src/test/cliMatchers.test.ts (no server needed).
+module.exports = { rebuildEventMatchers, GATE_MATCHER, GATE_EVENTS }

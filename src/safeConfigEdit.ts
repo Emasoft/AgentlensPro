@@ -41,7 +41,7 @@ export class SafeEditError extends Error {
 // first name that answers `--version` wins; POSIX keeps hitting `python3` first, so
 // behavior there is unchanged. Cached because this runs per config transaction.
 let cachedPythonBin: string | null = null
-function pythonBin(): string {
+export function pythonBin(): string {
   if (cachedPythonBin) return cachedPythonBin
   const candidates = process.platform === 'win32' ? ['python', 'py', 'python3'] : ['python3', 'python']
   for (const bin of candidates) {
