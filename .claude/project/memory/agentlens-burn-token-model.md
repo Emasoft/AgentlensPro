@@ -1,8 +1,8 @@
 ---
 name: agentlens-burn-token-model
-description: "5h/7d account window drained fast / burning 1M+ tokens per minute / what is consuming all the tokens / impossible that a few Claude sessions burned the window / cost vs token window limit / cache-read dominating burn"
+description: "5h/7d account window drained fast / burning 1M+ tokens per minute / what is consuming all the tokens / impossible that a few Claude sessions burned the window / cost vs token window limit / cache-read dominating burn / OTEL and JSONL report different token numbers for the same session / session cost looks 100x too big or negative"
 ocd: 2026-07-08
-lmd: 2026-07-08
+lmd: 2026-07-10
 metadata:
   node_type: memory
   tier: hub
@@ -64,6 +64,33 @@ per-account `get_burn_status`. The dashboard also grew a Composition panel (per-
 breakdown + resident-blob list, lazy on trace-tree expand) and a resident-blob alert badge on session
 cards. Both TRDDs are `column: complete`, gate-green.
 
+**SHIPPED (2026-07-10) — ONE token convention, and why the feeds disagreed:** every
+`SessionSummaryCard` now stores **FOUR DISJOINT BUCKETS** (`inputTokens` = RAW uncached input;
+`calcTokenCostUsd` bills each bucket at its own rate — this is the schema invariant, enforced at
+every ingestion site: claude/copilot/codex summarizers + logReader sub cards, with OpenAI-shaped
+input shedding its contained cached tokens). Before this, OTEL cards stored input INCL-cache while
+log cards stored it raw — same session read 318×–1,246× apart between feeds, write-time cost
+double-billed cache on OTEL cards, and a read-time `inputTokens < cache` heuristic papered over
+MCP outputs only[^4]. Per-call values were EXACT in all three sources (2,340-call join vs raw
+response bodies, 0 mismatches) — the discrepancy was purely stored semantics + coverage.
+Standing contract: `src/test/tokenConventionParity.test.ts`. Persisted old rows: SQLite OTEL rows
+normalized in place; the standalone's restart sidecars are version-stamped (`LOG_INGEST_VERSION`,
+single constant in `src/collectorState.ts` shared with db.ts) and ignored on mismatch → cold
+rescan rebuilds. Evidence: `reports/token-discrepancy/20260710_141134+0200-otel-vs-jsonl.md`.
+
+**Two ingest paths exist and once drifted (2026-07-10)[^5]:** the extension's `src/otlpCollector.ts`
+AND the standalone's own `processLogs` in `standalone/server.ts`. The rich-event gate (bare vs
+`claude_code.`-prefixed names, the OTLP 1.4 `eventName` proto field, session.id-first keying) now
+lives in ONE shared module `src/otlpLogEvents.ts`; rejected log-event names are counted as
+`otlpDroppedLogEvents` in `/api/server-stats` so a silent drop is visible. Async Agent launches
+now get linkage child cards (`spawnAsync`, zero buckets = "not reported", never "free").
+
+**OPEN (Phase B, the remaining user-visible symptom):** OTEL cards key on `interaction.spanId`,
+log cards on the transcript UUID → the "OTEL wins" merge can never collide and one session serves
+as 1 log card + up to ~336 per-trace OTEL cards. Correlation key (`session.id` attr) exists on
+llm_request + interaction spans. Merge semantics need care: OTEL totals are LOWER BOUNDS beyond
+the MAX_SPANS window and include sub-agent calls the log parent excludes.
+
 ## Notes and lessons learned
 [^1]: [ocd:2026-07-08 lmd:2026-07-08] The statusline event path originally carried only a total
   (`deltaTokens`), so the per-bucket breakdown landed 100% in `unknown` for exactly the no-OTEL sessions
@@ -86,3 +113,19 @@ cards. Both TRDDs are `column: complete`, gate-green.
   screenshots pasted once and re-sent every turn thereafter. Lesson: a visual agent must analyze images in
   a SUBAGENT (isolated context) or compact immediately; an un-evicted image blob is the single most
   expensive resident-context mistake (~$425 from one paste). This is the evidence behind TRDD-CTXQUERY.
+[^4]: [ocd:2026-07-10 lmd:2026-07-10] The dual convention survived so long because THREE mechanisms
+  hid it: (a) a read-time detection heuristic (`inputTokens < cache` in mcpServer sessionCost)
+  repaired MCP outputs but not the persisted cost or the dashboard's raw fields; (b) a code comment
+  in _buildSubAgentCards claimed "parent log cards store incl-cache" citing claude.ts:143/340 +
+  logReader.ts:1888 — every cited line proved the OPPOSITE (the citations were to a model field, a
+  pluginName field, and the RAW accumulator); the -sub- cards were then "fixed" TO the wrong
+  convention on that comment's authority. Lesson: a convention claim in a comment is a HYPOTHESIS —
+  verify the cited lines before building on it, and prefer one measured parity test over any number
+  of compensating readers.
+[^5]: [ocd:2026-07-10 lmd:2026-07-10] The rich-event ingest fix was first applied ONLY to
+  src/otlpCollector.ts (unit-tested, green) while the deployment kept dropping every event — the
+  standalone server has its OWN processLogs that had drifted (never gained the gate). Lesson: the
+  "second router is a second truth" failure mode — before declaring an ingest/parse fix done, grep
+  for OTHER implementations of the same wire format and live-verify on the RUNNING deployment, not
+  just the unit-tested class; and make drops observable (the otlpDroppedLogEvents counter) so the
+  next silent-drop class self-reports.
