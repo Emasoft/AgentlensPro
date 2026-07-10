@@ -35,6 +35,7 @@ import {
   loadBurnConfig, gatherConsumptionEvents, computeBurnStatus, computeSessionStatus,
   type BurnAlert, type BurnStatus,
 } from '../src/burnMonitor'
+import { calibrateFromStopFailure } from '../src/capacityCalibration'
 import { getCurrentAccount } from '../src/accountInfo'
 import { buildContextComposition, resolveLoggedAncestor } from '../src/contextComposition'
 import { buildContextHistory } from '../src/contextHistory'
@@ -490,7 +491,9 @@ const statuslineReader = new StatuslineUsageReader()
 // ── Burn monitor (TRDD-OG9PARZQ) ───────────────────────────────────────────────
 // Realtime "smoke detector": rolling burn rate + rate-limit window budget + threshold alerts, computed
 // over the already-ingested live data (OTEL api_request timeline events + statusline billing deltas).
-const burnConfig = loadBurnConfig(process.env, os.homedir())
+// `let`, not `const`: P5 auto-calibration reloads it after persisting an observed capacity so the very
+// next burn tick projects against the freshly measured cap without a restart.
+let burnConfig = loadBurnConfig(process.env, os.homedir())
 
 // Gathers the current machine-wide consumption event stream once, reused by the MCP accessors + the tick.
 function gatherBurn(now = Date.now()) {
@@ -2063,6 +2066,29 @@ const uiServer = http.createServer((req, res) => {
         pushRecentHookEvent(rec) // the in-memory ring the gate + check_burn_risk read
         persistStats.hookEventWrites++
         persistStats.hookEventBytes += bytes
+        // P5 auto-calibration: a rate-limit StopFailure is the ONE moment the undisclosed window cap
+        // is observable — snapshot the hot account's consumed figures into burn-config.json as
+        // observed capacity. Wrapped so a calibration failure can never break hook ingestion, and
+        // run AFTER the record is persisted/ringed (ingestion is the priority).
+        if (rec.ev === 'StopFailure') {
+          try {
+            const { sessions, events } = gatherBurn(rec.ts)
+            const outcome = calibrateFromStopFailure(rec, {
+              events, sessions,
+              currentAccountUuid: getCurrentAccount()?.accountUuid ?? null,
+              env: process.env, homeDir: os.homedir(),
+            })
+            if (outcome.calibrated) {
+              // Reload so the next 4s burn tick + every budget read projects against the new cap.
+              burnConfig = loadBurnConfig(process.env, os.homedir())
+              console.log(`[AgentLens] window capacity auto-calibrated: ${outcome.reason}`)
+            } else {
+              console.log(`[AgentLens] capacity calibration skipped: ${outcome.reason}`)
+            }
+          } catch (e) {
+            console.warn('[AgentLens] capacity calibration error:', e)
+          }
+        }
         res.writeHead(200, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ ok: true }))
       } catch (e) {
