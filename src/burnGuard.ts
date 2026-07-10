@@ -16,10 +16,11 @@
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { readHookEvents } from './hookEventStore'
+import { readHookEvents, type HookEventRecord } from './hookEventStore'
+import type { BodiesActivityReport } from './bodiesActivity'
 
 export interface BurnRisk {
-  code: 'FANOUT_BURST' | 'COLD_RESUME_RISK' | 'COMPACTION_REWRITE' | 'HUGE_REQUEST_BURST' | 'BURN_SPIKE'
+  code: 'FANOUT_BURST' | 'COLD_RESUME_RISK' | 'COMPACTION_REWRITE' | 'HUGE_REQUEST_BURST' | 'BURN_SPIKE' | 'CACHE_THRASH'
   active: boolean
   detail: string
   evidence?: Record<string, unknown>
@@ -43,6 +44,18 @@ export interface BurnGuardOptions {
   fanoutThreshold?: number
   /** tokens/min on the 5-min window that trips BURN_SPIKE (default 250k). */
   spikeTokensPerMin?: number
+  /**
+   * Server-injected in-memory hook-event ring (newest state, zero disk reads). When present
+   * it REPLACES the NDJSON bucket scan — the standalone server feeds it from the POST handler
+   * so a gate-frequency caller never touches disk. Absent (extension host, tests) → disk scan.
+   */
+  recentEvents?: HookEventRecord[]
+  /**
+   * Server-injected BodiesActivityTracker report. When present it replaces the per-call
+   * readdir+stat-every-file pass for HUGE_REQUEST_BURST and adds the CACHE_THRASH risk
+   * (exact response usage — repeated big prefix writes with ~no cache reads).
+   */
+  bodiesActivity?: BodiesActivityReport | null
 }
 
 export function checkBurnRisk(opts: BurnGuardOptions = {}): BurnRiskReport {
@@ -52,14 +65,25 @@ export function checkBurnRisk(opts: BurnGuardOptions = {}): BurnRiskReport {
   const fanoutThreshold = Math.max(2, opts.fanoutThreshold ?? 5)
   const spikeTpm = Math.max(10_000, opts.spikeTokensPerMin ?? 250_000)
 
-  const hooksAvailable = fs.existsSync(hookDir)
-  const bodiesAvailable = fs.existsSync(bodiesDir)
+  const hooksAvailable = opts.recentEvents !== undefined || fs.existsSync(hookDir)
+  const bodiesAvailable = opts.bodiesActivity ? opts.bodiesActivity.available : fs.existsSync(bodiesDir)
   const risks: BurnRisk[] = []
 
+  // In-memory ring when the server injects it; NDJSON scan otherwise. Same shape either way.
+  // The ring arrives in APPEND (oldest-first) order but readHookEvents returns newest-first,
+  // and COLD_RESUME reads [0] as "most recent" — sort so both paths agree.
+  const events = (ev: string, sinceMs: number, limit: number): HookEventRecord[] =>
+    opts.recentEvents !== undefined
+      ? opts.recentEvents
+          .filter(r => r.ev === ev && r.ts >= sinceMs && r.ts <= now)
+          .sort((a, b) => b.ts - a.ts)
+          .slice(0, limit)
+      : hooksAvailable
+        ? readHookEvents(hookDir, { ev, sinceMs, untilMs: now, limit })
+        : []
+
   // ── hook-event signals (the earliest warnings we have) ──────────────────────
-  const starts = hooksAvailable
-    ? readHookEvents(hookDir, { ev: 'SubagentStart', sinceMs: now - 120_000, untilMs: now, limit: 200 })
-    : []
+  const starts = events('SubagentStart', now - 120_000, 200)
   risks.push({
     code: 'FANOUT_BURST',
     active: starts.length >= fanoutThreshold,
@@ -69,9 +93,7 @@ export function checkBurnRisk(opts: BurnGuardOptions = {}): BurnRiskReport {
     evidence: { subagentStarts2min: starts.length, threshold: fanoutThreshold },
   })
 
-  const stops = hooksAvailable
-    ? readHookEvents(hookDir, { ev: 'StopFailure', sinceMs: now - 600_000, untilMs: now, limit: 20 })
-    : []
+  const stops = events('StopFailure', now - 600_000, 20)
   risks.push({
     code: 'COLD_RESUME_RISK',
     active: stops.length > 0,
@@ -81,9 +103,7 @@ export function checkBurnRisk(opts: BurnGuardOptions = {}): BurnRiskReport {
     evidence: { stopFailures10min: stops.length, lastAtIso: stops[0] ? new Date(stops[0].ts).toISOString() : null },
   })
 
-  const compacts = hooksAvailable
-    ? readHookEvents(hookDir, { ev: 'PreCompact', sinceMs: now - 300_000, untilMs: now, limit: 10 })
-    : []
+  const compacts = events('PreCompact', now - 300_000, 10)
   risks.push({
     code: 'COMPACTION_REWRITE',
     active: compacts.length > 0,
@@ -94,9 +114,15 @@ export function checkBurnRisk(opts: BurnGuardOptions = {}): BurnRiskReport {
   })
 
   // ── bodies-dir signal: fat-context fan-out already in flight ────────────────
+  // Injected tracker ring when available (O(new files) per poll); full readdir+stat
+  // fallback otherwise (extension host / tests) — that pass stats every file and is
+  // exactly what the tracker exists to avoid on the gate-frequency path.
   let huge = 0
   let hugeBytes = 0
-  if (bodiesAvailable) {
+  if (opts.bodiesActivity) {
+    huge = opts.bodiesActivity.hugeRequests90s.count
+    hugeBytes = opts.bodiesActivity.hugeRequests90s.bytes
+  } else if (bodiesAvailable) {
     try {
       for (const f of fs.readdirSync(bodiesDir)) {
         if (!f.endsWith('.request.json')) continue
@@ -114,6 +140,29 @@ export function checkBurnRisk(opts: BurnGuardOptions = {}): BurnRiskReport {
       ? `${huge} requests >1MB (${(hugeBytes / 1e6).toFixed(0)}MB ≈ ${Math.round(hugeBytes / 4 / 1000)}k tokens) sent in the last 90s — a fat-context fan-out is IN FLIGHT. Stop spawning further agents; let this wave settle before adding load.`
       : `${huge} request(s) >1MB in the last 90s`,
     evidence: { hugeRequests90s: huge, bytes: hugeBytes },
+  })
+
+  // ── cache-thrash signal: the prefix is being re-WRITTEN every turn ──────────
+  // Exact response usage (server-injected tracker): repeated big cache_creation with
+  // ~zero cache_read = something mutates the prefix on call after call (the lean-ctx
+  // strip-in-place class, 2026-07-10 incident). Only available with the tracker — the
+  // fallback path cannot afford to parse response bodies per check.
+  const thrash = opts.bodiesActivity?.thrash
+  risks.push({
+    code: 'CACHE_THRASH',
+    active: thrash?.active ?? false,
+    detail: thrash?.active
+      ? `${thrash.count} calls in the last ${Math.round(thrash.windowMs / 60_000)}min re-WROTE ` +
+        `~${Math.round(thrash.rebilledTokens / 1000)}k tokens of prefix instead of reading cache` +
+        `${thrash.model ? ` (model ${thrash.model})` : ''} — the context cache is being invalidated ` +
+        `every turn. STOP launching agents and find the prefix mutator: investigate_burn --windowHours 1, ` +
+        `then get_cache_break_causes.`
+      : thrash
+        ? `${thrash.count} cache-missing call(s) in the window (needs ≥3)`
+        : 'no realtime response-usage feed (tracker not injected)',
+    evidence: thrash
+      ? { misses: thrash.count, rebilledTokens: thrash.rebilledTokens, model: thrash.model, windowMs: thrash.windowMs }
+      : undefined,
   })
 
   // ── live burn-rate signal ────────────────────────────────────────────────────

@@ -121,4 +121,58 @@ suite('burnGuard — check_burn_risk (TRDD-W6UH8LPA)', () => {
     assert.deepStrictEqual(r.sources, { hookEvents: false, bodies: false, burnStatus: false })
     assert.strictEqual(r.activeCount, 0)
   })
+
+  // ── TRDD-GOD0108C: server-injected hot-path feeds ─────────────────────────────
+
+  test('injected event ring replaces the disk scan and is treated newest-first', () => {
+    const ring = [
+      // Append order (oldest first) — the guard must still report the NEWEST StopFailure age.
+      { ts: NOW - 9 * 60_000, ev: 'StopFailure', payload: {} },
+      { ts: NOW - 2 * 60_000, ev: 'StopFailure', payload: {} },
+      ...Array.from({ length: 5 }, (_, i) => ({ ts: NOW - i * 5_000, ev: 'SubagentStart', payload: {} })),
+    ]
+    const r = checkBurnRisk({
+      bodiesDir: '/nonexistent/bodies', hookEventsDir: '/nonexistent/hooks',
+      recentEvents: ring, now: NOW,
+    })
+    assert.strictEqual(r.sources.hookEvents, true, 'ring injection makes the feed available')
+    assert.strictEqual(active(r, 'FANOUT_BURST'), true)
+    const cold = r.risks.find(x => x.code === 'COLD_RESUME_RISK')
+    assert.ok(cold?.detail.includes('2min ago'), cold?.detail ?? '')
+  })
+
+  test('CACHE_THRASH rides the injected tracker report; inactive without one', () => {
+    const { bodies, hooks, cleanup } = stores()
+    try {
+      const noTracker = checkBurnRisk({ bodiesDir: bodies, hookEventsDir: hooks, now: NOW })
+      assert.strictEqual(active(noTracker, 'CACHE_THRASH'), false)
+      const withTracker = checkBurnRisk({
+        bodiesDir: bodies, hookEventsDir: hooks, now: NOW,
+        bodiesActivity: {
+          available: true,
+          hugeRequests90s: { count: 0, bytes: 0 },
+          thrash: { active: true, count: 4, rebilledTokens: 1_800_000, model: 'claude-fable-5', windowMs: 300_000 },
+          premium: { share: 1, sampled: 4, lastModel: 'claude-fable-5' },
+        },
+      })
+      assert.strictEqual(active(withTracker, 'CACHE_THRASH'), true)
+      const detail = withTracker.risks.find(x => x.code === 'CACHE_THRASH')?.detail ?? ''
+      assert.ok(detail.includes('1800k'), detail)
+      assert.ok(detail.includes('claude-fable-5'), detail)
+    } finally { cleanup() }
+  })
+
+  test('injected tracker report also feeds HUGE_REQUEST_BURST without a dir scan', () => {
+    const r = checkBurnRisk({
+      bodiesDir: '/nonexistent/bodies', hookEventsDir: '/nonexistent/hooks', now: NOW,
+      bodiesActivity: {
+        available: true,
+        hugeRequests90s: { count: 4, bytes: 9_000_000 },
+        thrash: { active: false, count: 0, rebilledTokens: 0, model: null, windowMs: 300_000 },
+        premium: { share: 0, sampled: 0, lastModel: null },
+      },
+    })
+    assert.strictEqual(r.sources.bodies, true, 'tracker report speaks for the bodies feed')
+    assert.strictEqual(active(r, 'HUGE_REQUEST_BURST'), true)
+  })
 })

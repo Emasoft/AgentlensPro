@@ -28,6 +28,8 @@ import type {
 import { buildCacheBreakReport } from './cacheBreak'
 import { investigateBurn } from './burnInvestigator'
 import { checkBurnRisk } from './burnGuard'
+import type { HookEventRecord } from './hookEventStore'
+import type { BodiesActivityReport } from './bodiesActivity'
 import { buildResidentCostReport } from './residentCost'
 import { buildSpawnRollup } from './spawnRollup'
 import { buildTokensByCause } from './tokensByCause'
@@ -654,12 +656,14 @@ const TOOLS = [
     name: 'check_burn_risk',
     description:
       'REALTIME early-warning against token explosions — the guard half of investigate_burn (which explains ' +
-      'a drain AFTER the fact; this warns AS it starts). One cheap call (stat scans + in-memory monitor, no ' +
-      'body parsing) returns 5 risk flags: FANOUT_BURST (≥5 SubagentStart hook events in 2min — a fan-out is ' +
+      'a drain AFTER the fact; this warns AS it starts). One cheap in-memory call returns 6 risk flags: ' +
+      'FANOUT_BURST (≥5 SubagentStart hook events in 2min — a fan-out is ' +
       'launching NOW), COLD_RESUME_RISK (a StopFailure ≤10min ago — the stall likely outlived the 5-min cache ' +
       'TTL; resuming a fan-out into it is the measured worst case), COMPACTION_REWRITE (PreCompact ≤5min — ' +
       'full-prefix rewrite in progress), HUGE_REQUEST_BURST (≥3 requests >1MB in 90s — a fat-context fan-out ' +
-      'IN FLIGHT), BURN_SPIKE (live 5-min tokens/min above threshold). Hook-event risks need ' +
+      'IN FLIGHT), BURN_SPIKE (live 5-min tokens/min above threshold), CACHE_THRASH (≥3 responses in 5min ' +
+      'with big cache_creation and ~zero cache_read — the prefix is being INVALIDATED every turn instead of ' +
+      'read from cache; exact Anthropic usage numbers, the measured lean-ctx-class disaster). Hook-event risks need ' +
       '--install-hooks; the sources block says honestly which feeds are absent. Poll every 10-30s, or use ' +
       '`agentlens-cli --guard [seconds]` which polls for you and prints one line per risk TRANSITION — ' +
       'designed to be armed via a background monitor so the agent is interrupted the moment a risk fires.',
@@ -1827,6 +1831,12 @@ export interface McpServerOptions {
    *  by get_recent_sessions so an agent orienting itself sees explicit "telemetry lost HH:MM–HH:MM"
    *  gaps instead of assuming continuous coverage. */
   getCollectorGaps?: () => CollectorGap[]
+  /** TRDD-GOD0108C — the server's in-memory hook-event ring (fed by POST /api/hook-events). When
+   *  present, check_burn_risk reads it instead of the NDJSON buckets: zero disk on the hot path. */
+  getRecentHookEvents?: () => HookEventRecord[]
+  /** TRDD-GOD0108C — the server's BodiesActivityTracker report (incremental bodies scan). Powers
+   *  the CACHE_THRASH risk and replaces the stat-every-file HUGE_REQUEST_BURST pass. */
+  getBodiesActivity?: () => BodiesActivityReport | null
 }
 
 export function createMcpServer(opts: McpServerOptions): Server {
@@ -2003,6 +2013,10 @@ export function createMcpServer(opts: McpServerOptions): Server {
           burnStatus: getBurnStatus?.() ?? null,
           fanoutThreshold: a.fanoutThreshold,
           spikeTokensPerMin: a.spikeTokensPerMin,
+          // Hot-path injections (standalone server only): in-memory event ring + incremental
+          // bodies tracker — the same call is gate-frequency there, so disk scans are out.
+          recentEvents: opts.getRecentHookEvents?.(),
+          bodiesActivity: opts.getBodiesActivity?.() ?? null,
         })
         break
       }
