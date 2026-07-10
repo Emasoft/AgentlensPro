@@ -66,15 +66,21 @@ operations:
   --purge-bodies        delete ALL archived body volumes (the live 72h window is untouched)
   --guard [seconds]     realtime burn guard: polls check_burn_risk (default 15s) and prints one
                         [burn-guard] line per risk transition (fan-out burst, cold-resume risk,
-                        compaction rewrite, huge-request burst, burn spike) — silent while quiet.
-                        Arm it in a background monitor BEFORE spawning agent fan-outs.
+                        compaction rewrite, huge-request burst, burn spike, cache thrash) —
+                        silent while quiet. Arm it in a background monitor BEFORE agent fan-outs.
   --install-skill       (re)install the agentlens-diagnostics skill into ~/.claude/skills/
                         from the repo copy — idempotent (installed / updated / already current)
   --install-hooks       register scripts/spy-agentlens.sh on the 10 LIFECYCLE hook events
                         (SessionStart/End, Stop, StopFailure, Pre/PostCompact, Permission,
-                        Notification, SubagentStart/Stop) via the same verified transaction;
-                        also removes any dead claude-spyglass hook entries + env.SPYGLASS_DIR.
-                        Other tools' hooks on the same events are never touched. Idempotent.
+                        Notification, SubagentStart/Stop) AND the burn-gate
+                        (scripts/spy-agentlens-gate.sh, PreToolUse/PostToolUse matched to
+                        ^(Task|Agent|Workflow)$ only) — it denies the four measured disaster
+                        launches (cache thrash, runaway fan-out, cold-resume fan-out, fork
+                        storm) with the reason fed back to the agent; fail-open when the
+                        server is down; AGENTLENS_GATE=off disables, AGENTLENS_GATE_MODE=warn
+                        downgrades denies to warnings. Verified transaction; also removes any
+                        dead claude-spyglass hook entries + env.SPYGLASS_DIR. Other tools'
+                        hooks on the same events are never touched. Idempotent.
   --uninstall-hooks     remove exactly those spy-agentlens hook entries (nothing else)
   --install-otel        add the Claude Code telemetry env vars to ~/.claude/settings.json via a
                         verified transaction (atomic write, backup, post-verify, refuses an
@@ -377,13 +383,20 @@ async function installOtel(uninstall) {
 
 // Lifecycle events worth hooking — they carry signals the JSONL transcripts and OTEL bodies
 // LACK (exact rate-limit turn deaths, compaction boundaries + trigger, session lifecycle).
-// Deliberately NO PreToolUse/PostToolUse/UserPromptSubmit: those are fully redundant with the
-// existing ingestion and are the only high-frequency hooks — all of the per-turn overhead that
-// made claude-spyglass expensive lived there (2+ process spawns per tool call).
+// Deliberately NO unmatched PreToolUse/PostToolUse/UserPromptSubmit: those are fully redundant
+// with the existing ingestion and are the only high-frequency hooks — all of the per-turn
+// overhead that made claude-spyglass expensive lived there (2+ process spawns per tool call).
 const HOOK_EVENTS = [
   'SessionStart', 'SessionEnd', 'Stop', 'StopFailure', 'PreCompact', 'PostCompact',
   'PermissionRequest', 'Notification', 'SubagentStart', 'SubagentStop',
 ]
+
+// The burn gate (TRDD-GOD0108C) is the ONE narrow exception to the no-PreToolUse rule: it is
+// MATCHED to agent-launch tools only (rare calls, the exact moments token disasters start), it
+// is a single curl to the resident server (no node spawn, no client-side parsing), and it must
+// be SYNC (async hooks cannot deny) with a hard 3s timeout so a dead server never stalls a turn.
+const GATE_MATCHER = '^(Task|Agent|Workflow)$'
+const GATE_EVENTS = ['PreToolUse', 'PostToolUse']
 
 // Install (or remove) the spy-agentlens.sh forwarder on the lifecycle events, via the same
 // verified transaction as --install-otel. Install ALSO removes every claude-spyglass hook entry
@@ -391,10 +404,13 @@ const HOOK_EVENTS = [
 // its 28 registrations were dead process spawns on every event. Merge-preserving: hooks from
 // other tools (janitor etc.) on the same events are never touched.
 // Rebuild one event's matcher list: strip spy-agentlens entries (and, when installing,
-// spyglass entries too), drop matchers left empty, append our entry on lifecycle events.
-// Pure — returns the new list + what was stripped; the caller decides whether anything changed.
-function rebuildEventMatchers(matchers, ev, uninstall, cmd) {
-  const isOurs = h => typeof (h && h.command) === 'string' && h.command.includes('spy-agentlens.sh')
+// spyglass entries too), drop matchers left empty, append our entry on lifecycle events and
+// the gate entry on agent-launch tool events. Pure — returns the new list + what was
+// stripped; the caller decides whether anything changed.
+function rebuildEventMatchers(matchers, ev, uninstall, cmd, gateCmd) {
+  // 'spy-agentlens' (no .sh suffix) covers BOTH scripts — spy-agentlens.sh AND
+  // spy-agentlens-gate.sh — so uninstall can never orphan a gate entry.
+  const isOurs = h => typeof (h && h.command) === 'string' && h.command.includes('spy-agentlens')
   const isSpyglass = h => typeof (h && h.command) === 'string' && h.command.includes('spyglass-collect.sh')
   const out = { rebuilt: [], removedOurs: 0, removedSpyglass: 0, installed: false }
   for (const m of matchers) {
@@ -409,13 +425,21 @@ function rebuildEventMatchers(matchers, ev, uninstall, cmd) {
     out.rebuilt.push({ hooks: [{ type: 'command', command: cmd, timeout: 2, async: true }] })
     out.installed = true
   }
+  if (!uninstall && GATE_EVENTS.includes(ev)) {
+    // SYNC (no async:true — an async hook cannot deny) + matched to agent-launch tools only.
+    out.rebuilt.push({ matcher: GATE_MATCHER, hooks: [{ type: 'command', command: gateCmd, timeout: 3 }] })
+    out.installed = true
+  }
   return out
 }
 
 async function installHooks(uninstall) {
   const script = path.resolve(__dirname, 'spy-agentlens.sh')
+  const gateScript = path.resolve(__dirname, 'spy-agentlens-gate.sh')
   if (!uninstall && !fs.existsSync(script)) throw new Error(`hook script missing at ${script} — is the repo checkout intact?`)
+  if (!uninstall && !fs.existsSync(gateScript)) throw new Error(`gate script missing at ${gateScript} — is the repo checkout intact?`)
   const cmd = `bash ${script}`
+  const gateCmd = `bash ${gateScript}`
 
   let settings = {}
   if (fs.existsSync(CLAUDE_SETTINGS)) {
@@ -429,10 +453,10 @@ async function installHooks(uninstall) {
   let removedSpyglass = 0
   let removedOurs = 0
   let added = 0
-  const events = new Set([...Object.keys(hooks), ...(uninstall ? [] : HOOK_EVENTS)])
+  const events = new Set([...Object.keys(hooks), ...(uninstall ? [] : [...HOOK_EVENTS, ...GATE_EVENTS])])
   for (const ev of events) {
     const matchers = Array.isArray(hooks[ev]) ? hooks[ev] : []
-    const r = rebuildEventMatchers(matchers, ev, uninstall, cmd)
+    const r = rebuildEventMatchers(matchers, ev, uninstall, cmd, gateCmd)
     // Counters reflect only events that actually change — an already-current event (ours
     // present, nothing stripped) must not inflate "installed on N events" to a lie.
     if (JSON.stringify(r.rebuilt) === JSON.stringify(matchers)) continue
@@ -455,7 +479,7 @@ async function installHooks(uninstall) {
   if (uninstall) {
     console.log(`removed ${removedOurs} agentlens hook entr${removedOurs === 1 ? 'y' : 'ies'} from ${CLAUDE_SETTINGS}`)
   } else {
-    console.log(`installed spy-agentlens hooks on ${added} lifecycle event(s) in ${CLAUDE_SETTINGS}`)
+    console.log(`installed spy-agentlens hooks on ${added} event(s) in ${CLAUDE_SETTINGS} (lifecycle forwarder + burn-gate on ${GATE_MATCHER})`)
     if (removedSpyglass > 0) console.log(`removed ${removedSpyglass} dead claude-spyglass hook entr${removedSpyglass === 1 ? 'y' : 'ies'} (+ env.SPYGLASS_DIR)`)
     if (removedOurs > 0) console.log(`refreshed ${removedOurs} pre-existing agentlens entr${removedOurs === 1 ? 'y' : 'ies'}`)
   }
