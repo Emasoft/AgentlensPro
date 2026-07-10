@@ -1,0 +1,3 @@
+# All paths require the owner's review on PRs (require_code_owner_review
+# is on in the baseline-pr-approvals ruleset — this file makes it concrete).
+* @Emasoft
