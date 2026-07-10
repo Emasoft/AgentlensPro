@@ -4,6 +4,18 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [0.12.0] — 2026-07-10
+
+### Added
+
+- **Provenance on every served number** (P7). Session cards carry `tokensSource: 'log' | 'otel' | 'merged'` (+ optional `coverageNote`), stamped at the `feedMergePolicy` decision points — log-wins collisions say what was displaced, OTEL-only sessions say so, identity merges say 'merged'. Surfaced on `get_session_status`, `get_recent_sessions`, `get_cost_rollup` session rows, `get_session_burn_profile`, and a source chip on the dashboard session detail. Cards persisted before this release render as "unknown" — never fabricated.
+- **Async sub-agent token resolution** (P8). Background/async Agent launches used to leave zero-bucket placeholder children flagged `asyncTokensUnknown` (the parent transcript never carries their usage — upstream gap filed as anthropics/claude-code#76484). The children's OWN transcripts (`subagents/*.jsonl`) are now linked to the placeholders at read time: real totals replace the zeros, spawn rollups bill them, `asyncTokensUnknown` clears when resolved, and a missing transcript honestly stays unknown. `LOG_INGEST_VERSION` 6→7 relinks all history.
+- **Headless dashboard smoke suite** (P9). `puppeteer-core` harness (`src/test/browser/`) boots the built standalone server on an ephemeral port with a temp data dir and asserts full-tab render in BOTH themes, one-card-per-fixture-session, hook-config round-trip, zero console errors. Gated behind `AGENTLENSPRO_BROWSER_TESTS=1` (`pnpm run test:browser`) + a dedicated CI job — the default suite is untouched.
+
+### Fixed
+
+- **Installed skill is PATH-portable**. The `agentlenspro-diagnostics` skill referenced the developer checkout (repo `scripts/`, `npm link`, an absolute Homebrew path); end users install via npm/npx/Homebrew where no repo exists. The skill now relies exclusively on PATH binaries, and the janitor-facing heartbeat-cost helper ships as a real package bin: `agentlenspro-heartbeat-cost`.
+
 ## [0.11.0] — 2026-07-10
 
 ### Added
