@@ -16,22 +16,25 @@ description: >-
   analytics). START with investigate_burn — the ONE-command investigation that names the
   window-burn culprits (fork storms, premium-model fan-outs, idle-fleet keep-warm, image
   residency) ranked with evidence. Also the operations surface: start the server (--start-server), open the
-  dashboard (--dashboard), install AgentlensPro itself (scripts/install.sh, --install-skill),
+  dashboard (--dashboard), (re)install this skill (--install-skill),
   and wire/unwire Claude Code capture — telemetry env vars (--install-otel / --uninstall-otel)
   and lifecycle hook events (--install-hooks / --uninstall-hooks).
 ---
 
 # AgentlensPro diagnostics via the global CLI
 
-`agentlenspro-cli` is installed globally (`/opt/homebrew/bin/agentlenspro-cli`, linked from the
-AgentlensPro repo) and works from **any** project directory. The AgentlensPro MCP server is
-deliberately NOT registered anywhere: resident MCP schemas cost ~8k tokens on every turn and
+`agentlenspro-cli` is a PATH binary installed with the **agentlenspro** package (npm global,
+npx, or Homebrew — whichever install method put it on PATH) and works from **any** project
+directory. This skill deliberately relies ONLY on PATH binaries — it ships no scripts and never
+references package-internal or repository paths, because the package layout differs per install
+method and the CLI resolves its own package resources internally. The AgentlensPro MCP server
+is deliberately NOT registered anywhere: resident MCP schemas cost ~8k tokens on every turn and
 toolset changes break the prompt-cache prefix. The CLI costs zero resident tokens; its
 subcommands, flags, and help come from the server's own live schemas, so it is never stale.
 
-If `agentlenspro-cli` is not on PATH, it was unlinked — run `npm link` inside the AgentlensPro repo
-(or `bash scripts/install.sh`) to restore it. This skill never installs the server itself; the
-CLI starts it on demand.
+If `agentlenspro-cli` is not on PATH, (re)install the package — `npm install -g agentlenspro`
+(or the Homebrew formula; developers working from a checkout use `npm link`). This skill never
+installs the server itself; the CLI starts it on demand.
 
 ## Commands
 
@@ -197,5 +200,7 @@ legitimate mass fan-out, `agentlenspro-cli --hooks gate=warn` for that run and r
 | Ad-hoc analytics over the fact DB | `run_diagnostics_sql --preset <name>` / `--sql '<SELECT…>'` |
 | Recent sessions / workspace patterns | `get_recent_sessions`, `get_workspace_patterns` |
 
-Sibling CLI for the janitor heartbeat: `agentlens-heartbeat-cost --oneline` (in the AgentlensPro
-repo `scripts/`) prints the exact settled cost of the previous heartbeat fire.
+Sibling PATH binary for the janitor heartbeat: `agentlenspro-heartbeat-cost --oneline` prints
+the exact settled cost of the previous heartbeat fire. It ships as a bin of the agentlenspro
+package, so any consumer (the janitor plugin included) invokes it by bare name — no package
+paths, no repo checkout required.
