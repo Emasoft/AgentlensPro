@@ -105,6 +105,103 @@ export function isCacheMeasured(s: SessionSummaryCard): boolean {
   return s.totalLlmCalls > 0 && traffic > 0
 }
 
+// ── Session-cost prediction (TRDD-O981ZJKV item 9) ────────────────────────────────────────────
+// "What will a session like THIS cost?" — match past sessions by task keywords + sub-agent
+// type (+ a soft file-size band when both sides know it), then report the DISTRIBUTION
+// (p25/p50/p75) of their 5 values. A distribution over real precedents, never a point guess:
+// the honest answer to "predict the cost of a code review / an ultracode workflow".
+
+export interface PredictSessionCostArgs {
+  /** Description of the planned task — matched against past sessions' first user request. */
+  task: string
+  /** Restrict/prefer precedents of this spawn type (e.g. 'fork', 'general-purpose'). */
+  subagentType?: string
+  /** Approximate bytes of input files the task will read — soft 10× comparability band. */
+  fileBytes?: number
+  /** Max precedents used (default 12). */
+  topK?: number
+}
+
+const pct = (sorted: number[], p: number): number =>
+  sorted.length === 0 ? 0 : sorted[Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length))]
+
+export function predictSessionCost(sessions: SessionSummaryCard[], args: PredictSessionCostArgs): unknown {
+  if (!args.task || args.task.trim().length < 3) return { error: 'task (a description of the planned work) is required' }
+  const keywords = [...new Set(args.task.toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 3))]
+  if (keywords.length === 0) return { error: 'task yielded no matchable keywords — describe the work in a sentence' }
+
+  const readBytesOf = (s: SessionSummaryCard): number | null => {
+    if (!s.fileOps || s.fileOps.length === 0) return null
+    let n = 0
+    for (const f of s.fileOps) n += (f as unknown as { readBytes?: number }).readBytes ?? 0
+    return n > 0 ? n : null
+  }
+
+  const scored = sessions
+    .filter(s => isCacheMeasured(s)) // zero-traffic cards would drag every percentile to 0
+    .map(s => {
+      const text = (s.userRequest || '').toLowerCase()
+      let hits = 0
+      for (const k of keywords) if (text.includes(k)) hits++
+      let score = hits / keywords.length
+      if (args.subagentType && s.spawnSubagentType === args.subagentType) score += 0.5
+      // Soft comparability band: when BOTH sides know the input size, sessions outside a
+      // 10× band are poor precedents for cost extrapolation.
+      const rb = readBytesOf(s)
+      if (args.fileBytes && rb !== null && (rb > args.fileBytes * 10 || rb < args.fileBytes / 10)) score *= 0.3
+      return { s, score, readBytes: rb }
+    })
+    .filter(x => x.score > 0)
+    .sort((a, b) => b.score - a.score)
+
+  const topK = Math.max(3, Math.min(args.topK ?? 12, 50))
+  const picked = scored.slice(0, topK)
+  if (picked.length === 0) {
+    return {
+      matched: 0,
+      note: 'no past session matched the task keywords' + (args.subagentType ? ` (subagentType ${args.subagentType})` : '') +
+        ' — no precedent, no prediction. Broaden the task description or drop the type filter.',
+    }
+  }
+
+  const dist = (get: (s: SessionSummaryCard) => number): { p25: number; p50: number; p75: number } => {
+    const v = picked.map(x => get(x.s)).sort((a, b) => a - b)
+    return { p25: pct(v, 25), p50: pct(v, 50), p75: pct(v, 75) }
+  }
+  const cost = dist(s => Number(sessionCost(s).toFixed(4)))
+  return {
+    matched: picked.length,
+    keywords,
+    // FLAT headline estimates — the lean shaper prunes deep nesting from the default view,
+    // and "what will it cost" must survive it (p50 central, p75 budget-safe).
+    estCostUsdP50: cost.p50,
+    estCostUsdP75: cost.p75,
+    estTurnsP50: dist(s => s.turns).p50,
+    prediction: {
+      input: dist(s => s.inputTokens),
+      output: dist(s => s.outputTokens),
+      cacheRead: dist(s => s.cacheReadTokens),
+      cacheCreation: dist(s => s.cacheCreateTokens ?? 0),
+      costUsd: cost,
+      turns: dist(s => s.turns),
+    },
+    precedents: picked.slice(0, 8).map(x => ({
+      sessionId: x.s.sessionId,
+      workspace: x.s.workspace,
+      model: x.s.model,
+      subagentType: x.s.spawnSubagentType ?? null,
+      similarity: Number(x.score.toFixed(2)),
+      costUsd: Number(sessionCost(x.s).toFixed(4)),
+      turns: x.s.turns,
+      readBytes: x.readBytes,
+      request: (x.s.userRequest || '').slice(0, 100),
+    })),
+    note: 'a DISTRIBUTION over real matched precedents (keyword + type + size-band similarity), not a point ' +
+      'guess. p50 is the central estimate; p75 the budget-safe one. Model changes shift costs — check the ' +
+      'precedents\' models against the model you will run.',
+  }
+}
+
 // ── Cost rollup (TRDD-O981ZJKV): interval cost/rate aggregation over session cards ────────────
 // One tool answers "what did project X / all projects / my subagents cost in interval Y, with
 // the 5-value breakdown and the hourly rate". Cards are SESSION-granular, so the honesty rule
@@ -846,6 +943,25 @@ const TOOLS = [
         liveOnly:        { type: 'boolean', description: 'Only sessions active in the last 3min' },
         sortBy:          { type: 'string', description: 'cost (default) | input | output | cacheRead | cacheCreation | total' },
         topN:            { type: 'number', description: 'Max groups returned (default 20, max 100)' },
+      },
+    },
+  },
+  {
+    name: 'predict_session_cost',
+    description:
+      'PREDICT what a planned session/sub-agent run will cost BEFORE launching it (code reviews, ultracode ' +
+      'workflows, big refactors): matches past sessions by task keywords + sub-agent type + a soft file-size ' +
+      'band, and returns the DISTRIBUTION (p25/p50/p75) of their 5 values (input, output, cache_read, ' +
+      'cache_creation, cost USD) + turns, with the matched precedents listed (similarity, model, cost) so ' +
+      'the estimate is auditable. p50 = central estimate, p75 = budget-safe. Honest by construction: no ' +
+      'matching precedent → no prediction, never a fabricated point guess.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        task:         { type: 'string', description: 'Describe the planned work in a sentence (matched against past first-requests)' },
+        subagentType: { type: 'string', description: 'Prefer precedents of this spawn type (fork, general-purpose, ...)' },
+        fileBytes:    { type: 'number', description: 'Approx bytes of input files the task will read (soft 10x comparability band)' },
+        topK:         { type: 'number', description: 'Max precedents used (default 12, max 50)' },
       },
     },
   },
@@ -2227,6 +2343,10 @@ export function createMcpServer(opts: McpServerOptions): Server {
       }
       case 'get_cost_rollup': {
         result = buildCostRollup(sessions, args as CostRollupArgs)
+        break
+      }
+      case 'predict_session_cost': {
+        result = predictSessionCost(sessions, args as unknown as PredictSessionCostArgs)
         break
       }
       case 'get_runtime_inventory': {
