@@ -21,7 +21,8 @@ import { startMcpHttpServer, labelBurnStatusAccounts } from '../src/mcpServer'
 import { resolveCallContext, callBodyRegistry } from '../src/rawBodyContext'
 import { appendHookEvent, readHookEvents, purgeHookEventBuckets, hookEventsDiskUsage, type HookEventRecord } from '../src/hookEventStore'
 import { BodiesActivityTracker } from '../src/bodiesActivity'
-import { evaluateAgentGate, buildAdvisory, readTranscriptContext, type AgentGateState, type GateThresholds } from '../src/agentGate'
+import { evaluateAgentGate, buildAdvisory, readTranscriptContext, type AgentGateState, type GateThresholds, type LaunchSpawner } from '../src/agentGate'
+import { checkBurnRisk } from '../src/burnGuard'
 import { ContextCompositionIndex } from '../src/contextCompositionIndex'
 import { LogReader, type OpenCodeSqlFactory } from '../src/logReader'
 import { readScratchFile } from '../src/generatedFiles'
@@ -328,20 +329,18 @@ bodiesPurgeTimer.unref()
 //     HUGE_REQUEST_BURST without the stat-every-file pass);
 // (b) an in-memory hook-event ring fed by POST /api/hook-events (zero disk reads).
 const bodiesActivity = new BodiesActivityTracker(BODIES_DIR)
-let bodiesActivityLastPollMs = 0
 function bodiesActivityReport(): ReturnType<BodiesActivityTracker['report']> {
-  // 2s poll throttle: N gate/guard calls in a burst share one readdir.
-  const now = Date.now()
-  if (now - bodiesActivityLastPollMs > 2000) {
-    bodiesActivityLastPollMs = now
-    try { bodiesActivity.poll(now) } catch { /* fail-open — report stays stale, never throws */ }
-  }
-  return bodiesActivity.report(now)
+  // Read-only: polling happens on the background timer below, NEVER on a request path — a
+  // poll that lands on new multi-MB response files costs 100-400ms of JSON.parse, which was
+  // measured as a request-latency outlier when the poll was throttled inline (TRDD-9CNHP8CN).
+  return bodiesActivity.report(Date.now())
 }
-// The FIRST poll stats the whole live dir once (seed). Pay it off the interactive path,
-// shortly after boot, so no gate/guard call ever eats the ~100-300ms seed pass.
-const bodiesSeedTimer = setTimeout(() => { bodiesActivityLastPollMs = Date.now(); try { bodiesActivity.poll() } catch { /* fail-open */ } }, 3000)
+// Seed pass 3s after boot (stats the whole live dir once), then a 5s background cadence —
+// ≤5s staleness is invisible against the 90s/5min risk windows, and request latency stays flat.
+const bodiesSeedTimer = setTimeout(() => { try { bodiesActivity.poll() } catch { /* fail-open */ } }, 3000)
 bodiesSeedTimer.unref()
+const bodiesActivityTimer = setInterval(() => { try { bodiesActivity.poll() } catch { /* fail-open */ } }, 5000)
+bodiesActivityTimer.unref()
 
 const RECENT_EVENTS_CAP = 600
 const recentHookEvents: HookEventRecord[] = []
@@ -374,16 +373,37 @@ const gateThresholds: Partial<GateThresholds> = (() => {
 function buildGateState(now: number, parent: { contextTokens: number | null; idleMs: number | null }): AgentGateState {
   let starts60 = 0
   let starts120 = 0
-  let lastStop: number | null = null
+  let lastStop: HookEventRecord | null = null
+  // Per-session launch attribution: SubagentStart payloads carry cwd + agent_type, so the
+  // deny/warn messages can name WHO is fanning out, from WHERE, with WHAT agent kinds.
+  const bySession = new Map<string, { cwd: string | null; types: Map<string, number>; count: number }>()
   for (const r of recentHookEvents) {
     if (r.ts > now) continue
     if (r.ev === 'SubagentStart') {
       if (now - r.ts <= 60_000) starts60++
-      if (now - r.ts <= 120_000) starts120++
-    } else if (r.ev === 'StopFailure' && (lastStop === null || r.ts > lastStop)) {
-      lastStop = r.ts
+      if (now - r.ts <= 120_000) {
+        starts120++
+        const sid = r.session ?? '?'
+        const e = bySession.get(sid) ?? { cwd: null, types: new Map<string, number>(), count: 0 }
+        e.count++
+        const cwd = r.payload?.cwd
+        if (!e.cwd && typeof cwd === 'string') e.cwd = cwd
+        const t = r.payload?.agent_type
+        if (typeof t === 'string') e.types.set(t, (e.types.get(t) ?? 0) + 1)
+        bySession.set(sid, e)
+      }
+    } else if (r.ev === 'StopFailure' && (lastStop === null || r.ts > lastStop.ts)) {
+      lastStop = r
     }
   }
+  const spawners: LaunchSpawner[] = [...bySession.entries()]
+    .sort((a, b) => b[1].count - a[1].count)
+    .map(([session, e]) => ({
+      session,
+      cwd: e.cwd,
+      count: e.count,
+      agentTypes: [...e.types.entries()].sort((a, b) => b[1] - a[1]).map(([t, n]) => (n > 1 ? `${t}×${n}` : t)),
+    }))
   const act = bodiesActivityReport()
   return {
     now,
@@ -391,7 +411,11 @@ function buildGateState(now: number, parent: { contextTokens: number | null; idl
     parent,
     startsLast60s: starts60,
     startsLast2min: starts120,
-    lastStopFailureMs: lastStop,
+    spawners,
+    lastStopFailureMs: lastStop ? lastStop.ts : null,
+    stall: lastStop
+      ? { session: lastStop.session ?? null, cwd: typeof lastStop.payload?.cwd === 'string' ? lastStop.payload.cwd : null }
+      : null,
     thrash: act.available ? act.thrash : null,
     premiumShare: act.premium.sampled > 0 ? act.premium.share : null,
     premiumModel: act.premium.lastModel,
@@ -615,6 +639,11 @@ function macNotify(alert: BurnAlert): void {
   exec(`osascript -e 'display notification "${esc(alert.detail)}" with title "AgentLens: ${esc(alert.label)}"'`, () => {})
 }
 
+// The tick's latest status, reused by hot request paths (/api/burn-risk): recomputing
+// gatherBurn per request measured ~270ms; the cache is at most 4s stale — invisible against
+// the 5-min burn window it feeds (TRDD-9CNHP8CN).
+let lastBurnStatus: ReturnType<typeof computeBurnStatus> | null = null
+
 function tickBurn(): void {
   let status
   try {
@@ -624,6 +653,7 @@ function tickBurn(): void {
     console.warn('[AgentLens] burn tick error:', e)
     return
   }
+  lastBurnStatus = status
   pushBurnSse({ type: 'burnStatus', burnStatus: enrichBurnStatus(status) })
 
   const active = new Set<string>()
@@ -2008,6 +2038,32 @@ const uiServer = http.createServer((req, res) => {
     })
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ count: events.length, events }))
+    return
+  }
+
+  // REST fast path for realtime risk checks (TRDD-9CNHP8CN): `--risk` / `--guard` hit this
+  // instead of the MCP tool — no MCP session handshake, no lean shaping (the FULL risk list;
+  // a capped list once hid the 6th risk from a naive caller). Same in-memory feeds as the gate.
+  if (req.method === 'GET' && url === '/api/burn-risk') {
+    try {
+      // Before the first 4s tick (freshly booted server only), compute once inline.
+      if (lastBurnStatus === null) {
+        try {
+          const { sessions, events, now } = gatherBurn()
+          lastBurnStatus = computeBurnStatus(events, sessions, burnConfig, now)
+        } catch { /* stays null — checkBurnRisk reports the feed as absent */ }
+      }
+      const report = checkBurnRisk({
+        burnStatus: lastBurnStatus,
+        recentEvents: recentHookEvents,
+        bodiesActivity: bodiesActivityReport(),
+      })
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify(report))
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: String(e instanceof Error ? e.message : e) }))
+    }
     return
   }
 

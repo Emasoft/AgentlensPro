@@ -64,10 +64,14 @@ operations:
   --export-bodies DIR   extract the archived OTEL bodies into DIR as plain files
                         (optionally --since <ISO|hours> / --until <ISO>)
   --purge-bodies        delete ALL archived body volumes (the live 72h window is untouched)
-  --guard [seconds]     realtime burn guard: polls check_burn_risk (default 15s) and prints one
-                        [burn-guard] line per risk transition (fan-out burst, cold-resume risk,
-                        compaction rewrite, huge-request burst, burn spike, cache thrash) —
-                        silent while quiet. Arm it in a background monitor BEFORE agent fan-outs.
+  --risk                one-shot realtime culprit check (~50ms, REST fast path): prints ONLY the
+                        active burn risks — each names the culprit session/workspace/model and
+                        the magnitude — or "no active burn risks"
+  --guard [seconds]     realtime burn guard: polls the risk report (default 15s, REST fast path)
+                        and prints one [burn-guard] line per risk transition (fan-out burst,
+                        cold-resume risk, compaction rewrite, huge-request burst, burn spike,
+                        cache thrash) — silent while quiet, culprits named in each line. Arm it
+                        in a background monitor BEFORE agent fan-outs.
   --install-skill       (re)install the agentlens-diagnostics skill into ~/.claude/skills/
                         from the repo copy — idempotent (installed / updated / already current)
   --install-hooks       register scripts/spy-agentlens.sh on the 10 LIFECYCLE hook events
@@ -509,18 +513,56 @@ function installSkill() {
   console.log(`skill agentlens-diagnostics: ${existed ? 'updated' : 'installed'} -> ${dst}`)
 }
 
-// Realtime burn guard: poll check_burn_risk and print one line per risk TRANSITION —
+// Realtime risk fetch — the REST fast path (TRDD-9CNHP8CN): one plain GET, no MCP session
+// handshake (~10ms vs ~700ms), FULL unshaped risk list. Falls back to the MCP tool once for
+// servers predating /api/burn-risk, then stays on whichever path worked.
+let riskViaRest = true
+async function fetchBurnRisk() {
+  if (riskViaRest) {
+    try {
+      return await apiRequest('GET', '/api/burn-risk')
+    } catch (e) {
+      if (!String(e.message).includes('404')) throw e
+      riskViaRest = false // older server build — use the MCP tool from now on
+    }
+  }
+  const r = await callTool('check_burn_risk', {}, true)
+  return typeof r === 'string' ? JSON.parse(r) : r
+}
+
+// One-shot realtime culprit check: prints ONLY the active risks (each detail names the
+// culprit session/workspace/model + magnitude) — the fastest "who is burning right now".
+async function runRisk() {
+  const t0 = Date.now()
+  let rep
+  try {
+    rep = await fetchBurnRisk()
+  } catch (e) {
+    // The REST path needs no MCP init, so a failure here usually means no server at all.
+    console.error(`FAIL: ${e.message} — start it: agentlens-cli --start-server`)
+    process.exit(1)
+  }
+  const active = (rep.risks || []).filter(r => r.active)
+  if (active.length === 0) {
+    const s = rep.sources || {}
+    console.log(`no active burn risks (${Date.now() - t0}ms; feeds: hooks=${!!s.hookEvents} bodies=${!!s.bodies} monitor=${!!s.burnStatus})`)
+    return
+  }
+  for (const r of active) console.log(`[risk] ${r.code}: ${r.detail}`)
+  if (rep.advice) console.log(`[advice] ${rep.advice}`)
+}
+
+// Realtime burn guard: poll the risk report and print one line per risk TRANSITION —
 // fired→'[burn-guard] CODE: detail', cleared→'[burn-guard] CODE cleared'. Silent while
 // quiet, so the stdout stream is Monitor-friendly (each line = one notification; no noise).
 async function runGuard(intervalSec) {
   const interval = Math.max(5, Math.min(300, intervalSec || 15)) * 1000
   await init()
-  console.log(`[burn-guard] armed — polling check_burn_risk every ${interval / 1000}s (silent while quiet)`)
+  console.log(`[burn-guard] armed — polling burn risk every ${interval / 1000}s (silent while quiet)`)
   const wasActive = new Set()
   for (;;) {
     try {
-      const r = await callTool('check_burn_risk', {}, true)
-      const rep = typeof r === 'string' ? JSON.parse(r) : r
+      const rep = await fetchBurnRisk()
       for (const risk of rep.risks || []) {
         if (risk.active && !wasActive.has(risk.code)) {
           console.log(`[burn-guard] ${risk.code}: ${risk.detail}`)
@@ -666,6 +708,7 @@ async function main() {
       const next = argv[i + 1]
       if (next && /^\d+$/.test(next)) { ops.guardInterval = Number(next); i++ }
     }
+    else if (argv[i] === '--risk') ops.risk = true
     else if (argv[i] === '--install-hooks') hooksOp = 'install'
     else if (argv[i] === '--uninstall-hooks') hooksOp = 'uninstall'
     else if (argv[i] === '--install-otel') otelOp = 'install'
@@ -684,6 +727,9 @@ async function main() {
 
   // Skill install is standalone too — pure file copy, no server, no settings mutation.
   if (ops.installSkill) { installSkill(); return }
+
+  // One-shot realtime culprit check — REST fast path, ~50ms end-to-end incl. node boot.
+  if (ops.risk) { await runRisk(); return }
 
   // Guard mode never returns — it is the long-lived watch loop (arm via a background monitor).
   if (ops.guard) { await runGuard(ops.guardInterval); return }
