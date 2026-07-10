@@ -28,6 +28,7 @@ import type {
 import { buildCacheBreakReport } from './cacheBreak'
 import { investigateBurn } from './burnInvestigator'
 import { checkBurnRisk } from './burnGuard'
+import { buildRateLimitReport } from './rateLimitReport'
 import type { HookEventRecord } from './hookEventStore'
 import type { BodiesActivityReport } from './bodiesActivity'
 import { buildResidentCostReport } from './residentCost'
@@ -101,6 +102,150 @@ function sessionCost(s: SessionSummaryCard): number {
 export function isCacheMeasured(s: SessionSummaryCard): boolean {
   const traffic = s.inputTokens + s.outputTokens + s.cacheReadTokens + (s.cacheCreateTokens ?? 0)
   return s.totalLlmCalls > 0 && traffic > 0
+}
+
+// ── Cost rollup (TRDD-O981ZJKV): interval cost/rate aggregation over session cards ────────────
+// One tool answers "what did project X / all projects / my subagents cost in interval Y, with
+// the 5-value breakdown and the hourly rate". Cards are SESSION-granular, so the honesty rule
+// is: a session counts when it OVERLAPS the window, and its token totals are whole-session —
+// stated in coverage.note, never silently time-sliced (we have no per-turn slicing here).
+
+export interface CostRollupArgs {
+  groupBy?: 'project' | 'session' | 'subagent' | 'model' | 'all'
+  windowHours?: number
+  sinceIso?: string
+  untilIso?: string
+  /** Only sub-agent cards (sessions spawned by a parent). */
+  subagentsOnly?: boolean
+  /** Only sub-agents of this parent session. */
+  parentSessionId?: string
+  /** Only sessions still receiving turns (last activity ≤3min ago). */
+  liveOnly?: boolean
+  sortBy?: 'cost' | 'input' | 'output' | 'cacheRead' | 'cacheCreation' | 'total'
+  topN?: number
+}
+
+interface RollupBuckets {
+  sessions: number
+  turns: number
+  input: number
+  output: number
+  cacheRead: number
+  cacheCreation: number
+  costUsd: number
+  /** Sessions whose model has no pricing entry — EXCLUDED from costUsd, never a silent $0. */
+  unpricedSessions: number
+}
+
+const LIVE_WINDOW_MS = 3 * 60_000
+
+export function buildCostRollup(sessions: SessionSummaryCard[], args: CostRollupArgs, now: number = Date.now()): unknown {
+  const until = args.untilIso ? Date.parse(args.untilIso) : now
+  const hours = Math.max(0.05, Math.min(24 * 45, args.windowHours ?? 24))
+  const since = args.sinceIso ? Date.parse(args.sinceIso) : until - hours * 3600e3
+  if (!Number.isFinite(until) || !Number.isFinite(since)) return { error: 'sinceIso/untilIso must be valid ISO datetimes' }
+  if (since >= until) return { error: 'the window is empty (since >= until)' }
+  const windowH = (until - since) / 3600e3
+  const groupBy = args.groupBy ?? 'project'
+
+  // Cards without a parseable startTime cannot be window-filtered — they are EXCLUDED and
+  // counted, never silently mixed in or silently dropped.
+  let undatedSessions = 0
+  let pool = sessions.filter(s => {
+    const start = Date.parse(s.startTime)
+    if (!Number.isFinite(start)) { undatedSessions++; return false }
+    const end = start + Math.max(0, s.durationMs || 0)
+    return start <= until && end >= since
+  })
+  if (args.subagentsOnly) pool = pool.filter(s => !!s.parentSessionId)
+  if (args.parentSessionId) pool = pool.filter(s => s.parentSessionId === args.parentSessionId)
+  if (args.liveOnly) {
+    pool = pool.filter(s => now - (Date.parse(s.startTime) + Math.max(0, s.durationMs || 0)) <= LIVE_WINDOW_MS)
+  }
+  // groupBy:subagent IS the "rank my subagents" view — restrict to spawned sessions implicitly.
+  if (groupBy === 'subagent') pool = pool.filter(s => !!s.parentSessionId)
+
+  const keyOf = (s: SessionSummaryCard): string =>
+    groupBy === 'all' ? 'all'
+      : groupBy === 'project' ? (s.workspace || '(unknown workspace)')
+        : groupBy === 'model' ? (s.model || '(unknown model)')
+          : s.sessionId // session AND subagent group per card; subagent rows get labels below
+
+  const zero = (): RollupBuckets => ({ sessions: 0, turns: 0, input: 0, output: 0, cacheRead: 0, cacheCreation: 0, costUsd: 0, unpricedSessions: 0 })
+  const add = (b: RollupBuckets, s: SessionSummaryCard): void => {
+    b.sessions++
+    b.turns += s.turns || 0
+    b.input += s.inputTokens || 0
+    b.output += s.outputTokens || 0
+    b.cacheRead += s.cacheReadTokens || 0
+    b.cacheCreation += s.cacheCreateTokens || 0
+    if (s.unpriced) b.unpricedSessions++
+    else b.costUsd += sessionCost(s)
+  }
+
+  const groups = new Map<string, RollupBuckets & Record<string, unknown>>()
+  const totals = zero()
+  for (const s of pool) {
+    add(totals, s)
+    const key = keyOf(s)
+    let g = groups.get(key)
+    if (!g) {
+      g = { key, ...zero() }
+      if (groupBy === 'session' || groupBy === 'subagent') {
+        g.workspace = s.workspace
+        g.model = s.model
+        g.parentSessionId = s.parentSessionId ?? null
+        g.spawnKind = s.spawnKind ?? null
+        g.subagentType = s.spawnSubagentType ?? null
+        g.startedAtIso = s.startTime
+      }
+      groups.set(key, g)
+    }
+    add(g, s)
+  }
+
+  const totalOf = (b: RollupBuckets): number => b.input + b.output + b.cacheRead + b.cacheCreation
+  const sortBy = args.sortBy ?? 'cost'
+  const metric = (b: RollupBuckets): number =>
+    sortBy === 'input' ? b.input
+      : sortBy === 'output' ? b.output
+        : sortBy === 'cacheRead' ? b.cacheRead
+          : sortBy === 'cacheCreation' ? b.cacheCreation
+            : sortBy === 'total' ? totalOf(b)
+              : b.costUsd
+  const topN = Math.max(1, Math.min(args.topN ?? 20, 100))
+  const ranked = [...groups.values()].sort((a, b) => metric(b) - metric(a))
+  // FLAT rate scalars, not a nested object: the lean shaper prunes nested objects from rows,
+  // and the hourly rate is a headline number that must survive the default (shaped) view.
+  const rateFields = (b: RollupBuckets): { tokensPerHour: number; costUsdPerHour: number } => ({
+    tokensPerHour: Math.round(totalOf(b) / windowH),
+    costUsdPerHour: Number((b.costUsd / windowH).toFixed(4)),
+  })
+
+  return {
+    window: { sinceIso: new Date(since).toISOString(), untilIso: new Date(until).toISOString(), hours: Number(windowH.toFixed(2)) },
+    groupBy,
+    filters: {
+      subagentsOnly: !!args.subagentsOnly,
+      parentSessionId: args.parentSessionId ?? null,
+      liveOnly: !!args.liveOnly,
+      sortBy,
+    },
+    totals: { ...totals, totalTokens: totalOf(totals), ...rateFields(totals) },
+    groups: ranked.slice(0, topN).map(g => ({
+      ...g,
+      totalTokens: totalOf(g),
+      ...rateFields(g),
+      costShare: totals.costUsd > 0 ? Number((g.costUsd / totals.costUsd).toFixed(3)) : null,
+    })),
+    coverage: {
+      sessionsInWindow: pool.length,
+      undatedSessions,
+      groupsTotal: groups.size,
+      groupsReturned: Math.min(groups.size, topN),
+      note: 'sessions count when they OVERLAP the window; token totals are whole-session (cards are session-granular). unpricedSessions are excluded from costUsd, never silent $0. tokensPerHour/costUsdPerHour divide by the window length.',
+    },
+  }
 }
 
 // Sampling honesty (TRDD-ZK37VG4X spec 4): every bounded cross-session scan must SAY what it
@@ -672,6 +817,53 @@ const TOOLS = [
       properties: {
         fanoutThreshold:   { type: 'number', description: 'SubagentStarts in 2min that trip FANOUT_BURST (default 5)' },
         spikeTokensPerMin: { type: 'number', description: '5-min tokens/min that trips BURN_SPIKE (default 250000)' },
+      },
+    },
+  },
+  {
+    name: 'get_cost_rollup',
+    description:
+      'Interval cost/usage ROLLUP with the 5-value breakdown (input, output, cache_read, cache_creation, ' +
+      'cost USD) + tokens-and-$ PER HOUR, grouped your way: groupBy project (each workspace), all (one ' +
+      'combined row), session, model, or subagent (every spawned sub-agent ranked — spawn kind/type and ' +
+      'parent included). Filters: windowHours or sinceIso/untilIso (spawn-time interval), subagentsOnly, ' +
+      'parentSessionId (sub-agents of one main session), liveOnly (still receiving turns — the "what are ' +
+      'my currently running subagents burning" view). sortBy any of the 5 values or total. Honest by ' +
+      'construction: sessions count when they OVERLAP the window (token totals are whole-session — cards ' +
+      'are session-granular, disclosed in coverage); unpriced-model sessions are excluded from $ and ' +
+      'counted, never silent $0. Answers: project cost in an interval, all projects combined, subagent ' +
+      'leaderboards, live-fleet burn.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        groupBy:         { type: 'string', description: 'project (default) | all | session | model | subagent' },
+        windowHours:     { type: 'number', description: 'Window ending now (default 24; ignored when sinceIso is set)' },
+        sinceIso:        { type: 'string', description: 'Window start (ISO datetime)' },
+        untilIso:        { type: 'string', description: 'Window end (ISO datetime, default now)' },
+        subagentsOnly:   { type: 'boolean', description: 'Only sessions spawned by a parent (sub-agents)' },
+        parentSessionId: { type: 'string', description: 'Only sub-agents of this parent session' },
+        liveOnly:        { type: 'boolean', description: 'Only sessions active in the last 3min' },
+        sortBy:          { type: 'string', description: 'cost (default) | input | output | cacheRead | cacheCreation | total' },
+        topN:            { type: 'number', description: 'Max groups returned (default 20, max 100)' },
+      },
+    },
+  },
+  {
+    name: 'get_rate_limit_report',
+    description:
+      'RATE-LIMIT forensics: every StopFailure (rate-limit/API turn death) in the window, grouped into ' +
+      'stall EPISODES (events ≤10min apart = one incident) with the affected sessions, workspaces, and the ' +
+      'verbatim error head — plus, for the NEWEST episode, the exact billed usage of the 5h window that ' +
+      'ENDED at the stall (Anthropic\'s own response-body numbers — "the combined requests that triggered ' +
+      'the limit", measured not estimated) with investigate_burn\'s ranked culprit findings and verdict. ' +
+      'Needs lifecycle hook capture (--install-hooks) for the events; says so honestly when absent. For an ' +
+      'older episode, run investigate_burn with untilIso = that episode\'s startIso.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        windowHours: { type: 'number', description: 'Look-back for stall events (default 24, max 336)' },
+        maxEpisodes: { type: 'number', description: 'Episodes returned, newest first (default 5)' },
+        maxFiles:    { type: 'number', description: 'Body-scan cap for the deep attribution (default 400)' },
       },
     },
   },
@@ -2018,6 +2210,15 @@ export function createMcpServer(opts: McpServerOptions): Server {
           recentEvents: opts.getRecentHookEvents?.(),
           bodiesActivity: opts.getBodiesActivity?.() ?? null,
         })
+        break
+      }
+      case 'get_cost_rollup': {
+        result = buildCostRollup(sessions, args as CostRollupArgs)
+        break
+      }
+      case 'get_rate_limit_report': {
+        const a = args as { windowHours?: number; maxEpisodes?: number; maxFiles?: number }
+        result = buildRateLimitReport({ windowHours: a.windowHours, maxEpisodes: a.maxEpisodes, maxFiles: a.maxFiles })
         break
       }
       case 'investigate_burn': {
