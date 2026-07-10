@@ -86,7 +86,16 @@ graph TB
 
 ## 2. Extension Activation
 
-The extension activates in a fixed sequence.
+> **Historical (pre-fork).** The VS Code extension host was removed before the fork
+> (TRDD-6E6416B8): there is no `src/extension.ts` and no `vscode` dependency. The
+> persistence modules this sequence wires up (`src/database/*`, `sessionRepository.ts`)
+> are retained in-tree per the TRDD KEEP inventory but are exercised only by the unit
+> tests, through the structural stand-ins in `src/vscodeCompat.ts`. The shipped runtime
+> boots via `standalone/server.ts` and persists through the segmented span store
+> (section 5) plus `~/.agentlens/forensics.db`. The sequence below is kept as the
+> reference for the retained layer's original activation flow.
+
+The extension activated in a fixed sequence.
 
 ```mermaid
 sequenceDiagram
@@ -285,6 +294,8 @@ flowchart TD
 Sessions produced by `LogReader` carry `dataSource: 'log'` on `SessionSummaryCard`; OTLP sessions carry `dataSource: 'otel'`. The UI shows an OTEL/Log source badge on each session row.
 
 When both feeds capture the same session (same sessionId — for Claude the OTEL summarizer keys cards by the transcript UUID carried in the `session.id` span attribute), the winner is decided by `src/feedMergePolicy.ts`: **for Claude sessions the log transcript wins on collision (OTEL is a lossy lower bound — collector-downtime loss plus the rolling summarization window; before the segmented span store, `MAX_SPANS` eviction was a third, since-removed loss mechanism); OTEL wins only where no transcript exists.** Every other source keeps the original OTEL-wins rule.
+
+**Provenance stamps (P7).** The merge decision is recorded on the card itself: `feedMergePolicy.ts` stamps `tokensSource: 'log' | 'otel' | 'merged'` (which feed backs the served token/cost figures) and, on the outcomes that displaced or absorbed a twin, a human-readable `coverageNote` (e.g. the log-wins note that the colliding OTEL card was displaced). Stamps are applied at the decision points — the standalone merge, the repository merge/dedup, and identity-dedup absorption — so the provenance always matches the doctrine that picked the numbers, and they are re-stamped on every merge pass (self-correcting, never stale). A `null` `tokensSource` means a pre-P7 card: rendered as "unknown", never guessed.
 
 ### Bypasses SessionStore / SpanSummarizer
 
@@ -878,30 +889,33 @@ flowchart TD
 
 Pricing data covers: OpenAI (GPT-4.1 through GPT-5.5), Anthropic (Claude Haiku/Sonnet/Opus 4.x), Google (Gemini 2.5–3.5), Codex, and fine-tuned models. Last updated: 2026-05-28.
 
+### Keep-warm / cache-gap diagnostic (P6)
+
+`src/shared/keepWarm.ts` (runtime-neutral — imported by the host and the webview) measures the cost of letting the Anthropic prompt cache expire between turns. The cache TTL is ~5 minutes (`CACHE_TTL_MS`); a turn that lands past it re-pays the full prefix at the cache-WRITE rate (1.25×) instead of reading it at 0.1× — a 12.5× difference on the dominant bucket, invisible in per-turn totals. `computeKeepWarm` classifies each consecutive `claude_code.api_request` pair: gap < TTL → WARM turn; gap ≥ TTL with a re-write signature (`cacheCreate > cacheRead`) → COLD turn whose `cache_creation` tokens are the measured waste; gap ≥ TTL without the signature → counted in neither bucket (no observed penalty — inventing waste would be a lie). The session's first request is the unavoidable warm-up, excluded by construction; a session with no `api_request` entries returns `null`, never zeros presented as measurements. Consumers: the burn monitor's hot-session decoration and per-session `keepWarm` report (`src/burnMonitor.ts`), the MCP diagnostics tools, and the dashboard badge.
+
 ---
 
 ## 12. Auto-Configuration
 
-When the extension activates it attempts to configure each agent automatically.
+When the standalone server boots as the canonical instance (default OTLP port — a non-default `AGENTLENS_OTLP_PORT` deliberately does NOT touch global agent configs), it attempts to configure each agent automatically (`standalone/server.ts` startup block).
 
 ```mermaid
 flowchart TD
-    ACT[Extension activate] --> PAR[Run in parallel]
+    ACT[Server boot — canonical instance] --> PAR[Run in parallel]
 
-    PAR --> CP_CFG[autoConfigureCopilot<br/>VSCode global settings API]
-    PAR --> CC_CFG[autoConfigureClaudeCode<br/>~/.claude/settings.json]
+    PAR --> CC_CFG[ensureTelemetryConfig + ensureAgentLensStopHook<br/>~/.claude/settings.json — via safeConfigEdit]
     PAR --> CX_CFG[autoConfigureCodex<br/>~/.codex/config.toml]
+    PAR --> CP_CFG[autoConfigureCopilotStandalone<br/>VS Code-family user settings.json files on disk]
 
-    CP_CFG --> CP_KEYS["github.copilot.chat.otel.enabled = true<br/>exporterType = 'otlp-http'<br/>otlpEndpoint = http://localhost:{port}"]
-    CP_KEYS --> CP_OUT{Changed?}
-    CP_OUT -- yes --> RELOAD[Show 'Reload VSCode' prompt]
-
-    CC_CFG --> CC_KEYS["env block:<br/>CLAUDE_CODE_ENABLE_TELEMETRY=1<br/>OTEL_TRACES_EXPORTER=otlp<br/>OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:{port}<br/>OTELlog flags for tool details + user prompts<br/><br/>Stop hook → pending-prompt.txt"]
+    CC_CFG --> CC_KEYS["env block:<br/>CLAUDE_CODE_ENABLE_TELEMETRY=1<br/>OTEL_TRACES_EXPORTER=otlp<br/>OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:{port}<br/>OTEL log flags for tool details + user prompts<br/><br/>Stop hook → pending-prompt.txt"]
 
     CX_CFG --> CX_KEYS["toml otel section:<br/>log_user_prompt = true<br/>exporter otlp-http endpoint=...<br/>trace_exporter otlp-http endpoint=..."]
 
+    CP_CFG --> CP_KEYS["github.copilot.chat.otel.enabled = true<br/>exporterType = 'otlp-http'<br/>otlpEndpoint = http://localhost:{port}<br/>(each installed IDE variant's settings.json)"]
+
     CC_KEYS --> RESTART[Requires Claude Code restart]
     CX_KEYS --> RESTART
+    CP_KEYS --> RELOAD[Requires IDE reload]
 ```
 
 ---
@@ -913,33 +927,33 @@ Four independent esbuild targets produce four output bundles.
 ```mermaid
 graph LR
     subgraph Source
-        SRC_EXT[src/extension.ts<br/>+ src/**/*.ts]
         SRC_DASH[media/src/dashboard.tsx<br/>+ media/src/**]
         SRC_SB[media/src/sidebarWebview.ts]
         SRC_SA[standalone/server.ts]
+        SRC_CLI[standalone/cli.ts]
     end
 
     subgraph esbuild targets
-        B1[Extension bundle<br/>format: cjs · platform: node<br/>external: vscode, sql.js]
         B2[Dashboard bundle<br/>format: iife · platform: browser<br/>jsx: preact/jsx-runtime]
         B3[Sidebar bundle<br/>format: iife · platform: browser]
-        B4[Standalone bundle<br/>format: cjs · platform: node]
+        B4[Server bundle<br/>format: cjs · platform: node]
+        B5[CLI bundle<br/>format: cjs · platform: node]
     end
 
     subgraph Outputs
-        O1[dist/extension.js<br/>dist/sql-wasm.wasm]
         O2[media/dashboard.js]
         O3[media/sidebar.js]
         O4[standalone/server.js]
+        O5[standalone/cli.js]
     end
 
-    SRC_EXT --> B1 --> O1
     SRC_DASH --> B2 --> O2
     SRC_SB --> B3 --> O3
     SRC_SA --> B4 --> O4
+    SRC_CLI --> B5 --> O5
 ```
 
-`sql.js` is loaded dynamically at runtime (not bundled) to keep the extension bundle small. The WASM binary is copied to `dist/sql-wasm.wasm` during the build and located via `extensionUri` at activation.
+`sql.js` is not bundled: the standalone server resolves it from `node_modules` at runtime (`require.resolve('sql.js')` + `locateFile` for its WASM, `standalone/server.ts`) and uses it to read OpenCode's SQLite database — when `sql.js` is unavailable, OpenCode ingestion falls back to the per-message JSON files.
 
 ### Type-check vs bundle
 
@@ -956,9 +970,8 @@ graph LR
 ## File Map
 
 ```text
-agentlens/
+agentlenspro/
 ├── src/
-│   ├── extension.ts              # Activation, commands, panels, status bar, retention
 │   ├── otlpCollector.ts          # HTTP server, Codex session synthesis
 │   ├── otlpParser.ts             # Pure parsing (tests/standalone)
 │   ├── sessionStore.ts           # 5-min rolling span window, onUpdate callbacks
@@ -972,12 +985,12 @@ agentlens/
 │   │   ├── summarizerTypes.ts    # SessionSummaryCard, TimelineEntry, and all card/diagnosis types
 │   │   ├── telemetryTypes.ts     # Span, SpanAttribute, SpanStatus, LoopSignal(Type)
 │   │   ├── cacheBreak.ts         # Cache-break classifier + report builder + CAUSE_LABEL
+│   │   ├── keepWarm.ts           # Keep-warm / cache-gap diagnostic (CACHE_TTL_MS, computeKeepWarm)
+│   │   ├── tokenBuckets.ts       # Disjoint four-bucket normalization (disjointBuckets, contextTokens)
+│   │   ├── fallbackCounters.ts   # Parse-fallback counters (mass-corruption visibility)
 │   │   ├── residentCost.ts       # Resident-cost itemization over a ContextHistory
 │   │   ├── spawnRollup.ts        # Spawn-cost rollup + antipattern detections
 │   │   └── tokensByCause.ts      # Tokens-by-cause attribution rollup
-│   ├── sidebarPanel.ts           # Sidebar webview
-│   ├── dashboardPanel.ts         # Full dashboard webview, message protocol, alert notifications
-│   ├── autoConfig.ts             # Copilot VS Code settings
 │   ├── autoConfigNode.ts         # Claude/Codex file-based config
 │   ├── exportData.ts             # JSON export helpers
 │   ├── logReader.ts              # LogReader — local log ingestion (Claude/Codex/Copilot CLI/Copilot Chat JSONL+JSON)
@@ -1049,8 +1062,13 @@ agentlens/
 │   └── sidebar.js                # Compiled sidebar script
 ├── standalone/
 │   ├── server.ts                 # Standalone HTTP server (no VS Code)
-│   └── cli.js                    # npx entrypoint: `agentlenspro` — starts server, auto-opens browser (--no-open to suppress)
+│   └── cli.ts                    # npx entrypoint: `agentlenspro` — starts server, auto-opens browser (--no-open to suppress)
+├── scripts/
+│   ├── agentlens-cli.js          # `agentlenspro-cli` — 32 diagnostic tools + --install-otel/--install-hooks/--install-skill
+│   ├── agentlenspro-hook.js      # `agentlenspro-hook` PATH bin — wraps spy-agentlens.{sh,mjs} (lifecycle forwarder)
+│   ├── agentlenspro-gate.js      # `agentlenspro-gate` PATH bin — wraps spy-agentlens-gate.{sh,mjs} (burn gate)
+│   └── safe_config_edit.py       # Verified-transaction config editor (backup, verify-diff, lock)
 ├── esbuild.js                    # Build configuration (4 targets)
-├── package.json                  # VS Code manifest + scripts
+├── package.json                  # npm package manifest — bins, scripts, dependencies
 └── ARCHITECTURE.md               # This file
 ```
