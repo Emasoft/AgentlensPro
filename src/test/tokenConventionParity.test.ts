@@ -6,14 +6,18 @@ import { summarizeSpans } from '../spanSummarizer'
 import { LogReader, type LogSessionResult } from '../logReader'
 import { calcTokenCostUsd } from '../shared/pricing'
 import type { Span } from '../shared/telemetryTypes'
+import type { SessionSummaryCard, TimelineEntry } from '../shared/summarizerTypes'
 
 // ── Why this file exists ──────────────────────────────────────────────────────
 // The user-reported OTEL-vs-JSONL discrepancy (2026-07-10): the SAME session read up to ~1000×
 // apart between the two feeds because OTEL cards stored inputTokens INCLUDING the cache buckets
 // while log cards stored it RAW — two conventions inside one schema field, papered over by a
 // read-time detection heuristic. The fix normalized every ingestion site to RAW disjoint buckets
-// and deleted the heuristic. This test is the standing parity contract: one identical API call
-// fed through BOTH feeds must produce byte-identical four-bucket values and identical cost.
+// (src/shared/tokenBuckets.ts disjointBuckets is the one constructor) and deleted the heuristic.
+// This test is the standing parity contract, at BOTH granularities: one identical API call fed
+// through BOTH feeds must produce byte-identical four-bucket values and identical cost on the
+// session CARD and on the per-call TIMELINE ENTRY (entries were the last incl-cache holdout —
+// claude.ts stored entry inputTokens as input+cacheRead+cacheCreate until P3).
 
 const USAGE = { input: 150, output: 50, cacheRead: 800, cacheCreate: 50 }
 const MODEL = 'claude-opus-4-8'
@@ -97,5 +101,35 @@ suite('token-convention parity — the same call through both feeds', () => {
       calcTokenCostUsd(c.inputTokens, c.cacheReadTokens, c.cacheCreateTokens, c.outputTokens, c.model)
     assert.ok(cost(otel) > 0, 'model is priced')
     assert.strictEqual(cost(otel), cost(log))
+  })
+
+  // ── Entry-level parity (P3) ─────────────────────────────────────────────────
+  // The same call's TIMELINE ENTRY must carry the same four disjoint buckets through both feeds:
+  // entry.inputTokens is the RAW uncached share (150 here, never 1000), with the cache buckets in
+  // their own fields — so context size is derivable as input+cacheRead+cacheCreation everywhere.
+
+  function llmEntryOf(card: SessionSummaryCard, feed: string): TimelineEntry {
+    const entry = (card.timeline ?? []).find(e => e.type === 'llm')
+    assert.ok(entry, `${feed} card carries an llm timeline entry`)
+    return entry!
+  }
+  const entryBuckets = (e: TimelineEntry) =>
+    ({ input: e.inputTokens ?? 0, output: e.outputTokens ?? 0, cacheRead: e.cacheReadTokens ?? 0, cacheCreate: e.cacheCreateTokens ?? 0 })
+
+  test('OTEL and JSONL timeline entries carry identical four disjoint buckets for the same call', () => {
+    const otelEntry = llmEntryOf(otelClaudeCard(), 'OTEL')
+    const logEntry = llmEntryOf(logClaudeCard(), 'log')
+    assert.deepStrictEqual(entryBuckets(otelEntry), USAGE, 'OTEL entry stores the raw disjoint buckets')
+    assert.deepStrictEqual(entryBuckets(logEntry), USAGE, 'log entry stores the raw disjoint buckets')
+    assert.deepStrictEqual(entryBuckets(otelEntry), entryBuckets(logEntry), 'both feeds agree bucket-for-bucket at entry level')
+  })
+
+  test('both feeds price the same call entry to the same dollar figure', () => {
+    const entryCost = (e: TimelineEntry) =>
+      calcTokenCostUsd(e.inputTokens ?? 0, e.cacheReadTokens ?? 0, e.cacheCreateTokens ?? 0, e.outputTokens ?? 0, MODEL)
+    const otelCost = entryCost(llmEntryOf(otelClaudeCard(), 'OTEL'))
+    const logCost = entryCost(llmEntryOf(logClaudeCard(), 'log'))
+    assert.ok(otelCost > 0, 'entry is priced')
+    assert.strictEqual(otelCost, logCost)
   })
 })
