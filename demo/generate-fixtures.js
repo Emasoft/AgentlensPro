@@ -315,6 +315,23 @@ function codexDisposeAudit() {
         attr('cmd', 'rg -n "\\.dispose\\(|\\bdispose\\(\\)" .'),
       ],
     }),
+    // Turn 1 terminal event. Real Codex captures emit one response.completed per API turn,
+    // so a tool-calling session carries TWO of them (tool-decision turn + final answer turn).
+    // The summarizer prefers this terminal stream and skips the tool_decision token record
+    // (dedup — see src/summarizers/codex.ts hasCodexCompletionEvents); without this span the
+    // fixture under-counted at 1 LLM call and dropped the tool turn's tokens entirely.
+    span({
+      traceId: sessionId, spanId: id(name + ':complete-turn1', 8), parentSpanId: promptId, name: 'codex.sse_event', at: 25_100, durationMs: 40,
+      attributes: [
+        ...baseAttrs,
+        attr('event.name', 'codex.sse_event'),
+        attr('event.kind', 'response.completed'),
+        attr('input_token_count', 34197),
+        attr('output_token_count', 432),
+        attr('cached_token_count', 7600),
+        attr('model', 'gpt-5.5'),
+      ],
+    }),
     span({
       traceId: sessionId, spanId: id(name + ':complete', 8), parentSpanId: promptId, name: 'codex.sse_event', at: 26_000, durationMs: 1200,
       attributes: [
