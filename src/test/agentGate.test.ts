@@ -28,7 +28,10 @@ function state(over: Partial<AgentGateState> = {}): AgentGateState {
   }
 }
 
-const thrashing: ThrashReport = { active: true, count: 4, rebilledTokens: 1_200_000, model: 'claude-fable-5', windowMs: 300_000 }
+const thrashing: ThrashReport = {
+  active: true, count: 4, rebilledTokens: 1_200_000, model: 'claude-fable-5', windowMs: 300_000,
+  suspects: [{ session: '249c4216-4db4-4b64-9a10-b994b9aa0001', model: 'claude-fable-5', count: 4, bytes: 13_900_000 }],
+}
 
 suite('agentGate — evaluateAgentGate (TRDD-GOD0108C)', () => {
   test('quiet state: silent allow', () => {
@@ -36,29 +39,49 @@ suite('agentGate — evaluateAgentGate (TRDD-GOD0108C)', () => {
     assert.deepStrictEqual(d, { decision: 'allow', code: null, reason: null })
   })
 
-  test('active cache-thrash denies ANY launch, naming the re-billed tokens', () => {
+  test('active cache-thrash denies ANY launch, naming re-billed tokens AND the likely culprit session', () => {
     const d = evaluateAgentGate({}, state({ thrash: thrashing }))
     assert.strictEqual(d.decision, 'deny')
     assert.strictEqual(d.code, 'THRASH_ACTIVE')
     assert.ok(d.reason?.includes('1200k'), d.reason ?? '')
-    assert.ok(d.reason?.includes('investigate_burn'), 'deny reason must carry the next step')
+    assert.ok(d.reason?.includes('session 249c4216…'), `culprit must be named: ${d.reason ?? ''}`)
+    assert.ok(d.reason?.includes('13.9MB'), 'the magnitude must be stated')
   })
 
-  test('runaway fan-out (8 starts in 60s) denies; 7 does not', () => {
+  test('unattributable thrash says so honestly and points at investigate_burn', () => {
+    const noSuspects: ThrashReport = { ...thrashing, suspects: [] }
+    const d = evaluateAgentGate({}, state({ thrash: noSuspects }))
+    assert.strictEqual(d.decision, 'deny')
+    assert.ok(d.reason?.includes('not attributable'), d.reason ?? '')
+    assert.ok(d.reason?.includes('investigate_burn'), d.reason ?? '')
+  })
+
+  test('runaway fan-out (8 starts in 60s) denies naming the spawning session; 7 does not deny', () => {
     assert.strictEqual(evaluateAgentGate({}, state({ startsLast60s: 7, startsLast2min: 7 })).decision, 'warn')
-    const d = evaluateAgentGate({}, state({ startsLast60s: 8, startsLast2min: 8 }))
+    const d = evaluateAgentGate({}, state({
+      startsLast60s: 8, startsLast2min: 8,
+      spawners: [{ session: '777b8f52-aaaa-bbbb-cccc-000000000001', cwd: '/Users/x/Code/agentlens', count: 8, agentTypes: ['workflow-subagent×7', 'fork'] }],
+    }))
     assert.strictEqual(d.decision, 'deny')
     assert.strictEqual(d.code, 'RUNAWAY_FANOUT')
+    assert.ok(d.reason?.includes('session 777b8f52…'), d.reason ?? '')
+    assert.ok(d.reason?.includes('…/agentlens'), 'workspace must be named')
+    assert.ok(d.reason?.includes('workflow-subagent'), 'agent types must be named')
   })
 
-  test('cold resume: the FIRST launch after a stall is allowed (it IS the warm-up), the second is denied', () => {
+  test('cold resume: the FIRST launch after a stall is allowed (it IS the warm-up), the second is denied naming the stalled session', () => {
     const stalled = state({ lastStopFailureMs: NOW - 3 * 60_000 })
     assert.strictEqual(evaluateAgentGate({}, stalled).decision, 'allow', 'no starts yet — warm-up launch passes')
-    const second = state({ lastStopFailureMs: NOW - 3 * 60_000, startsLast2min: 1 })
+    const second = state({
+      lastStopFailureMs: NOW - 3 * 60_000, startsLast2min: 1,
+      stall: { session: 'c8a95d7e-048f-4c47-ae33-1dfacbcab3b1', cwd: '/Users/x/Code/ai-maestro-janitor' },
+    })
     const d = evaluateAgentGate({}, second)
     assert.strictEqual(d.decision, 'deny')
     assert.strictEqual(d.code, 'COLD_RESUME_FANOUT')
     assert.ok(d.reason?.includes('warm-up'), d.reason ?? '')
+    assert.ok(d.reason?.includes('session c8a95d7e…'), `stalled session must be named: ${d.reason ?? ''}`)
+    assert.ok(d.reason?.includes('…/ai-maestro-janitor'), 'stalled workspace must be named')
   })
 
   test('a stall older than 10min disarms the cold-resume rule', () => {
@@ -120,11 +143,13 @@ suite('agentGate — buildAdvisory (PostToolUse in-band warning)', () => {
     assert.strictEqual(buildAdvisory(state()), null)
   })
 
-  test('thrash advisory names tokens and the investigate command', () => {
+  test('thrash advisory names tokens and the likely culprit; unattributed falls back to investigate_burn', () => {
     const a = buildAdvisory(state({ thrash: thrashing }))
     assert.ok(a)
     assert.strictEqual(a?.code, 'THRASH_ACTIVE')
-    assert.ok(a?.text.includes('investigate_burn'), a?.text)
+    assert.ok(a?.text.includes('session 249c4216…'), a?.text)
+    const blind = buildAdvisory(state({ thrash: { ...thrashing, suspects: [] } }))
+    assert.ok(blind?.text.includes('investigate_burn'), blind?.text)
   })
 
   test('fan-out advisory carries the premium share hint', () => {

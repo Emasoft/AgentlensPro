@@ -150,8 +150,11 @@ suite('burnGuard — check_burn_risk (TRDD-W6UH8LPA)', () => {
         bodiesDir: bodies, hookEventsDir: hooks, now: NOW,
         bodiesActivity: {
           available: true,
-          hugeRequests90s: { count: 0, bytes: 0 },
-          thrash: { active: true, count: 4, rebilledTokens: 1_800_000, model: 'claude-fable-5', windowMs: 300_000 },
+          hugeRequests90s: { count: 0, bytes: 0, senders: [] },
+          thrash: {
+            active: true, count: 4, rebilledTokens: 1_800_000, model: 'claude-fable-5', windowMs: 300_000,
+            suspects: [{ session: '249c4216-4db4-4b64-9a10-b994b9aa0001', model: 'claude-fable-5', count: 4, bytes: 12_000_000 }],
+          },
           premium: { share: 1, sampled: 4, lastModel: 'claude-fable-5' },
         },
       })
@@ -159,20 +162,42 @@ suite('burnGuard — check_burn_risk (TRDD-W6UH8LPA)', () => {
       const detail = withTracker.risks.find(x => x.code === 'CACHE_THRASH')?.detail ?? ''
       assert.ok(detail.includes('1800k'), detail)
       assert.ok(detail.includes('claude-fable-5'), detail)
+      assert.ok(detail.includes('session 249c4216…'), `culprit session must be named: ${detail}`)
     } finally { cleanup() }
   })
 
-  test('injected tracker report also feeds HUGE_REQUEST_BURST without a dir scan', () => {
+  test('injected tracker report also feeds HUGE_REQUEST_BURST without a dir scan, naming senders', () => {
     const r = checkBurnRisk({
       bodiesDir: '/nonexistent/bodies', hookEventsDir: '/nonexistent/hooks', now: NOW,
       bodiesActivity: {
         available: true,
-        hugeRequests90s: { count: 4, bytes: 9_000_000 },
-        thrash: { active: false, count: 0, rebilledTokens: 0, model: null, windowMs: 300_000 },
+        hugeRequests90s: {
+          count: 4, bytes: 9_000_000,
+          senders: [{ session: '777b8f52-aaaa-bbbb-cccc-000000000001', model: 'claude-fable-5', count: 4, bytes: 9_000_000 }],
+        },
+        thrash: { active: false, count: 0, rebilledTokens: 0, model: null, windowMs: 300_000, suspects: [] },
         premium: { share: 0, sampled: 0, lastModel: null },
       },
     })
     assert.strictEqual(r.sources.bodies, true, 'tracker report speaks for the bodies feed')
     assert.strictEqual(active(r, 'HUGE_REQUEST_BURST'), true)
+    const detail = r.risks.find(x => x.code === 'HUGE_REQUEST_BURST')?.detail ?? ''
+    assert.ok(detail.includes('session 777b8f52…'), `sender must be named: ${detail}`)
+  })
+
+  test('FANOUT_BURST detail names the spawning sessions, workspaces, and agent types', () => {
+    const ring = Array.from({ length: 6 }, (_, i) => ({
+      ts: NOW - i * 5_000, ev: 'SubagentStart', session: 'c8a95d7e-048f-4c47-ae33-1dfacbcab3b1',
+      payload: { hook_event_name: 'SubagentStart', cwd: '/Users/x/Code/agentlens', agent_type: 'workflow-subagent' },
+    }))
+    const r = checkBurnRisk({
+      bodiesDir: '/nonexistent/bodies', hookEventsDir: '/nonexistent/hooks',
+      recentEvents: ring, now: NOW,
+    })
+    const detail = r.risks.find(x => x.code === 'FANOUT_BURST')?.detail ?? ''
+    assert.strictEqual(active(r, 'FANOUT_BURST'), true)
+    assert.ok(detail.includes('session c8a95d7e…'), detail)
+    assert.ok(detail.includes('…/agentlens'), detail)
+    assert.ok(detail.includes('workflow-subagent×6'), detail)
   })
 })

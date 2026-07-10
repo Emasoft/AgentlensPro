@@ -13,6 +13,30 @@
 import * as fs from 'fs'
 import * as path from 'path'
 
+/** One fat-request SENDER, aggregated by session — the attribution unit for culprit naming.
+ *  session comes from the request tail's metadata.user_id (exact); a null session means the
+ *  bounded read couldn't attribute it, and messages must say so instead of guessing. */
+export interface FatRequestSender {
+  session: string | null
+  model: string | null
+  count: number
+  bytes: number
+}
+
+/** One consistent, concise culprit string for warnings: top-2 senders + "+N more".
+ *  e.g. `session 249c4216… (claude-fable-5, 4 fat requests ~13.9MB)` — the essential
+ *  who/what/how-much without flooding a one-line hook message. */
+export function fmtFatSenders(senders: FatRequestSender[], cap = 2): string {
+  if (senders.length === 0) return 'no fat-request sender attributable'
+  const parts = senders.slice(0, cap).map(s => {
+    const who = s.session ? `session ${s.session.slice(0, 8)}…` : 'unattributed sender(s)'
+    const model = s.model ? `${s.model}, ` : ''
+    return `${who} (${model}${s.count} fat request${s.count === 1 ? '' : 's'} ~${(s.bytes / 1e6).toFixed(1)}MB)`
+  })
+  const more = senders.length > cap ? `; +${senders.length - cap} more` : ''
+  return parts.join('; ') + more
+}
+
 export interface ThrashReport {
   active: boolean
   /** Responses inside the window that re-wrote a big prefix while reading ~no cache. */
@@ -22,11 +46,14 @@ export interface ThrashReport {
   /** The model seen most among thrashing responses, when any. */
   model: string | null
   windowMs: number
+  /** LIKELY sources: fat-request senders inside the window. Responses carry no session id,
+   *  so this is inference from concurrent ≥400KB requests — callers must label it "likely". */
+  suspects: FatRequestSender[]
 }
 
 export interface BodiesActivityReport {
   available: boolean
-  hugeRequests90s: { count: number; bytes: number }
+  hugeRequests90s: { count: number; bytes: number; senders: FatRequestSender[] }
   thrash: ThrashReport
   /** Share of the last-5min responses on premium models (opus/fable/mythos), for fan-out hints. */
   premium: { share: number; sampled: number; lastModel: string | null }
@@ -45,13 +72,42 @@ export interface BodiesActivityOptions {
 
 const RESPONSE_PARSE_CAP = 5 * 1024 * 1024 // a response body bigger than this is pathological — skip, never block
 const HUGE_REQUEST_BYTES = 1_000_000
+// Attribution floor: a 100k-token cache write ≈ a ~400KB request, so fat-but-not-huge
+// requests still get their sender extracted — that's what lets thrash suspects be named.
+const ATTRIB_REQUEST_BYTES = 400_000
 const LARGE_RING_WINDOW_MS = 10 * 60_000
 const RESPONSE_RING_WINDOW_MS = 15 * 60_000
 const SEED_LOOKBACK_MS = 15 * 60_000
 const PREMIUM_RE = /opus|fable|mythos/i
 
-interface LargeRequestEntry { t: number; bytes: number }
+interface LargeRequestEntry { t: number; bytes: number; huge: boolean; sessionId: string | null; model: string | null }
 interface ResponseEntry { t: number; model: string | null; cc: number; cr: number }
+
+/**
+ * Bounded 6KB attribution read on a fat request body — verified layout on real bodies:
+ * `"model"` sits in the first 2KB and `metadata.user_id` (an ESCAPED JSON string carrying
+ * session_id) in the last 4KB. `Primary working directory` sits ~92% in — NOT reachable by a
+ * bounded tail — so workspace resolution is the hook-event ring's job (cwd), never this read.
+ */
+export function extractRequestAttribution(filePath: string, size: number): { sessionId: string | null; model: string | null } {
+  let fd: number | null = null
+  try {
+    fd = fs.openSync(filePath, 'r')
+    const head = Buffer.alloc(Math.min(2048, size))
+    fs.readSync(fd, head, 0, head.length, 0)
+    const tailLen = Math.min(4096, size)
+    const tail = Buffer.alloc(tailLen)
+    fs.readSync(fd, tail, 0, tailLen, size - tailLen)
+    const model = /"model"\s*:\s*"([^"]+)"/.exec(head.toString('utf-8'))?.[1] ?? null
+    // user_id is a STRING of escaped JSON: \"session_id\":\"<uuid>\" — accept both forms.
+    const sessionId = /\\?"session_id\\?":\\?"([0-9a-fA-F-]{8,36})/.exec(tail.toString('utf-8'))?.[1] ?? null
+    return { sessionId, model }
+  } catch {
+    return { sessionId: null, model: null } // unreadable — unattributed, never fatal
+  } finally {
+    if (fd !== null) try { fs.closeSync(fd) } catch { /* already closed */ }
+  }
+}
 
 /** Tolerant usage extraction — the raw response is the API JSON, but stay shape-lenient. */
 export function extractResponseUsage(j: unknown): { model: string | null; cc: number; cr: number } | null {
@@ -111,7 +167,14 @@ export class BodiesActivityTracker {
       }
       if (st.mtimeMs < seedFloor) continue // pre-boot history beyond the seed window
       if (isReq) {
-        if (st.size > HUGE_REQUEST_BYTES) this.largeRequests.push({ t: st.mtimeMs, bytes: st.size })
+        if (st.size >= ATTRIB_REQUEST_BYTES) {
+          this.largeRequests.push({
+            t: st.mtimeMs,
+            bytes: st.size,
+            huge: st.size > HUGE_REQUEST_BYTES,
+            ...extractRequestAttribution(path.join(this.dir, name), st.size),
+          })
+        }
         continue
       }
       if (st.size > RESPONSE_PARSE_CAP) continue
@@ -139,15 +202,28 @@ export class BodiesActivityTracker {
     this.responses = this.responses.filter(e => e.t >= rFloor)
   }
 
+  /** Aggregate fat-request entries by sending session, heaviest first. */
+  private static senders(entries: LargeRequestEntry[]): FatRequestSender[] {
+    const by = new Map<string, FatRequestSender>()
+    for (const e of entries) {
+      const key = e.sessionId ?? '(unattributed)'
+      const s = by.get(key) ?? { session: e.sessionId, model: e.model, count: 0, bytes: 0 }
+      s.count++
+      s.bytes += e.bytes
+      if (!s.model && e.model) s.model = e.model
+      by.set(key, s)
+    }
+    return [...by.values()].sort((a, b) => b.bytes - a.bytes)
+  }
+
   report(now: number = Date.now()): BodiesActivityReport {
     const available = fs.existsSync(this.dir)
     this.prune(now)
 
+    const huge90 = this.largeRequests.filter(e => e.huge && now - e.t <= 90_000)
     let hugeCount = 0
     let hugeBytes = 0
-    for (const e of this.largeRequests) {
-      if (now - e.t <= 90_000) { hugeCount++; hugeBytes += e.bytes }
-    }
+    for (const e of huge90) { hugeCount++; hugeBytes += e.bytes }
 
     const misses = this.responses.filter(e => {
       if (now - e.t > this.opts.thrashWindowMs) return false
@@ -169,13 +245,15 @@ export class BodiesActivityTracker {
 
     return {
       available,
-      hugeRequests90s: { count: hugeCount, bytes: hugeBytes },
+      hugeRequests90s: { count: hugeCount, bytes: hugeBytes, senders: BodiesActivityTracker.senders(huge90) },
       thrash: {
         active: misses.length >= this.opts.thrashMinCount,
         count: misses.length,
         rebilledTokens: rebilled,
         model: topModel,
         windowMs: this.opts.thrashWindowMs,
+        suspects: BodiesActivityTracker.senders(
+          this.largeRequests.filter(e => now - e.t <= this.opts.thrashWindowMs)),
       },
       premium: {
         share: recent.length > 0 ? premiumCount / recent.length : 0,

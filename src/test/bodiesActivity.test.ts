@@ -25,10 +25,16 @@ function responseFile(dir: string, ts: number, usage: { cc: number; cr: number }
   return name
 }
 
-function requestFile(dir: string, ts: number, bytes: number): void {
+function requestFile(dir: string, ts: number, bytes: number, attrib?: { session?: string; model?: string }): void {
   const name = `q${seq}-${Math.random().toString(36).slice(2)}.request.json`
-  // Pad to AT LEAST `bytes` (JSON wrapper adds ~10) so size assertions never sit 2 bytes short.
-  fs.writeFileSync(path.join(dir, name), JSON.stringify({ pad: 'z'.repeat(bytes) }))
+  // Mirrors the real body layout: "model" in the first 2KB, metadata.user_id (an ESCAPED
+  // JSON string carrying session_id) at the very tail — bounded reads must find both.
+  const head = attrib?.model ? `{"model":"${attrib.model}","pad":"` : '{"pad":"'
+  const tail = attrib?.session
+    ? `","metadata":{"user_id":"{\\"device_id\\":\\"d1\\",\\"session_id\\":\\"${attrib.session}\\"}"}}`
+    : '"}'
+  // Pad to AT LEAST `bytes` (the JSON wrapper adds a little) so size assertions never sit short.
+  fs.writeFileSync(path.join(dir, name), head + 'z'.repeat(bytes) + tail)
   fs.utimesSync(path.join(dir, name), ts / 1000, ts / 1000)
 }
 
@@ -145,6 +151,40 @@ suite('bodiesActivity — CACHE_THRASH + incremental scan (TRDD-GOD0108C)', () =
       const r = t.report(NOW)
       assert.strictEqual(r.available, true)
       assert.strictEqual(r.thrash.count, 1, 'only the valid response counted')
+    } finally { cleanup() }
+  })
+
+  test('fat requests (≥400KB) get sender attribution; thrash suspects name session + model', () => {
+    const { dir, cleanup } = tmpBodies()
+    try {
+      requestFile(dir, NOW - 40_000, 600_000, { session: '249c4216-4db4-4b64-9a10-b994b9aa0001', model: 'claude-fable-5' })
+      requestFile(dir, NOW - 30_000, 600_000, { session: '249c4216-4db4-4b64-9a10-b994b9aa0001', model: 'claude-fable-5' })
+      requestFile(dir, NOW - 20_000, 500_000) // unattributed fat request
+      for (let i = 0; i < 3; i++) responseFile(dir, NOW - i * 15_000 - 5_000, { cc: 300_000, cr: 0 })
+      const t = new BodiesActivityTracker(dir)
+      t.poll(NOW)
+      const r = t.report(NOW)
+      assert.strictEqual(r.thrash.active, true)
+      assert.strictEqual(r.thrash.suspects[0].session, '249c4216-4db4-4b64-9a10-b994b9aa0001')
+      assert.strictEqual(r.thrash.suspects[0].model, 'claude-fable-5')
+      assert.strictEqual(r.thrash.suspects[0].count, 2)
+      assert.strictEqual(r.thrash.suspects[1].session, null, 'unattributed sender grouped, never dropped')
+      assert.strictEqual(r.hugeRequests90s.count, 0, '600KB is fat, not huge — burst threshold unchanged')
+    } finally { cleanup() }
+  })
+
+  test('huge-request senders are named in hugeRequests90s.senders', () => {
+    const { dir, cleanup } = tmpBodies()
+    try {
+      for (let i = 0; i < 3; i++) {
+        requestFile(dir, NOW - 10_000 - i * 10_000, 2_000_000, { session: '777b8f52-aaaa-bbbb-cccc-000000000001', model: 'claude-fable-5' })
+      }
+      const t = new BodiesActivityTracker(dir)
+      t.poll(NOW)
+      const r = t.report(NOW)
+      assert.strictEqual(r.hugeRequests90s.count, 3)
+      assert.strictEqual(r.hugeRequests90s.senders[0].session, '777b8f52-aaaa-bbbb-cccc-000000000001')
+      assert.strictEqual(r.hugeRequests90s.senders[0].count, 3)
     } finally { cleanup() }
   })
 

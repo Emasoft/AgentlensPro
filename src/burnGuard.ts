@@ -17,7 +17,33 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { readHookEvents, type HookEventRecord } from './hookEventStore'
-import type { BodiesActivityReport } from './bodiesActivity'
+import { fmtFatSenders, type BodiesActivityReport } from './bodiesActivity'
+
+/** WHO spawned, from SubagentStart events (payloads carry session_id/cwd/agent_type):
+ *  top-2 spawning sessions with dir + agent types — culprit naming for FANOUT_BURST. */
+function fmtStartOrigins(starts: HookEventRecord[], cap = 2): string {
+  const by = new Map<string, { cwd: string | null; types: Map<string, number>; count: number }>()
+  for (const s of starts) {
+    const sid = s.session ?? '?'
+    const e = by.get(sid) ?? { cwd: null, types: new Map<string, number>(), count: 0 }
+    e.count++
+    const cwd = s.payload?.cwd
+    if (!e.cwd && typeof cwd === 'string') e.cwd = cwd
+    const t = s.payload?.agent_type
+    if (typeof t === 'string') e.types.set(t, (e.types.get(t) ?? 0) + 1)
+    by.set(sid, e)
+  }
+  const ranked = [...by.entries()].sort((a, b) => b[1].count - a[1].count)
+  const parts = ranked.slice(0, cap).map(([sid, e]) => {
+    const where = e.cwd ? ` in …/${e.cwd.split('/').filter(Boolean).pop()}` : ''
+    const types = e.types.size > 0
+      ? `: ${[...e.types.entries()].sort((a, b) => b[1] - a[1]).map(([t, n]) => (n > 1 ? `${t}×${n}` : t)).join(', ')}`
+      : ''
+    return `session ${sid.slice(0, 8)}…${where} (${e.count}${types})`
+  })
+  const more = ranked.length > cap ? `; +${ranked.length - cap} more` : ''
+  return parts.length > 0 ? parts.join('; ') + more : ''
+}
 
 export interface BurnRisk {
   code: 'FANOUT_BURST' | 'COLD_RESUME_RISK' | 'COMPACTION_REWRITE' | 'HUGE_REQUEST_BURST' | 'BURN_SPIKE' | 'CACHE_THRASH'
@@ -84,11 +110,13 @@ export function checkBurnRisk(opts: BurnGuardOptions = {}): BurnRiskReport {
 
   // ── hook-event signals (the earliest warnings we have) ──────────────────────
   const starts = events('SubagentStart', now - 120_000, 200)
+  const startOrigins = starts.length >= fanoutThreshold ? fmtStartOrigins(starts) : ''
   risks.push({
     code: 'FANOUT_BURST',
     active: starts.length >= fanoutThreshold,
     detail: starts.length >= fanoutThreshold
-      ? `${starts.length} subagents launched in the last 2min (threshold ${fanoutThreshold}) — a fan-out is starting NOW. If the parent session is large, every fork re-pays its prefix; if the cache is cold (>5min idle or a stall just ended), each pays it at the WRITE rate.`
+      ? `${starts.length} subagents launched in the last 2min (threshold ${fanoutThreshold}) — a fan-out is starting NOW` +
+        `${startOrigins ? `. Spawners: ${startOrigins}` : ''}. If the parent session is large, every fork re-pays its prefix; if the cache is cold (>5min idle or a stall just ended), each pays it at the WRITE rate.`
       : `${starts.length} subagent start(s) in the last 2min`,
     evidence: { subagentStarts2min: starts.length, threshold: fanoutThreshold },
   })
@@ -133,13 +161,15 @@ export function checkBurnRisk(opts: BurnGuardOptions = {}): BurnRiskReport {
       }
     } catch { /* dir vanished mid-scan */ }
   }
+  const hugeSenders = opts.bodiesActivity?.hugeRequests90s.senders ?? []
   risks.push({
     code: 'HUGE_REQUEST_BURST',
     active: huge >= 3,
     detail: huge >= 3
-      ? `${huge} requests >1MB (${(hugeBytes / 1e6).toFixed(0)}MB ≈ ${Math.round(hugeBytes / 4 / 1000)}k tokens) sent in the last 90s — a fat-context fan-out is IN FLIGHT. Stop spawning further agents; let this wave settle before adding load.`
+      ? `${huge} requests >1MB (${(hugeBytes / 1e6).toFixed(0)}MB ≈ ${Math.round(hugeBytes / 4 / 1000)}k tokens) sent in the last 90s — a fat-context fan-out is IN FLIGHT` +
+        `${hugeSenders.length > 0 ? `. Senders: ${fmtFatSenders(hugeSenders)}` : ''}. Stop spawning further agents; let this wave settle before adding load.`
       : `${huge} request(s) >1MB in the last 90s`,
-    evidence: { hugeRequests90s: huge, bytes: hugeBytes },
+    evidence: { hugeRequests90s: huge, bytes: hugeBytes, senders: hugeSenders },
   })
 
   // ── cache-thrash signal: the prefix is being re-WRITTEN every turn ──────────
@@ -154,14 +184,16 @@ export function checkBurnRisk(opts: BurnGuardOptions = {}): BurnRiskReport {
     detail: thrash?.active
       ? `${thrash.count} calls in the last ${Math.round(thrash.windowMs / 60_000)}min re-WROTE ` +
         `~${Math.round(thrash.rebilledTokens / 1000)}k tokens of prefix instead of reading cache` +
-        `${thrash.model ? ` (model ${thrash.model})` : ''} — the context cache is being invalidated ` +
-        `every turn. STOP launching agents and find the prefix mutator: investigate_burn --windowHours 1, ` +
-        `then get_cache_break_causes.`
+        `${thrash.model ? ` (model ${thrash.model})` : ''} — the context cache is being invalidated every turn. ` +
+        `${thrash.suspects.length > 0
+          ? `Likely source: ${fmtFatSenders(thrash.suspects)}.`
+          : 'Source not attributable from the fat requests — investigate_burn --windowHours 1 names it.'} ` +
+        `STOP launching agents and fix the prefix mutator (get_cache_break_causes shows the mechanism).`
       : thrash
         ? `${thrash.count} cache-missing call(s) in the window (needs ≥3)`
         : 'no realtime response-usage feed (tracker not injected)',
     evidence: thrash
-      ? { misses: thrash.count, rebilledTokens: thrash.rebilledTokens, model: thrash.model, windowMs: thrash.windowMs }
+      ? { misses: thrash.count, rebilledTokens: thrash.rebilledTokens, model: thrash.model, windowMs: thrash.windowMs, suspects: thrash.suspects }
       : undefined,
   })
 
