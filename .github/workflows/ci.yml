@@ -52,12 +52,16 @@ jobs:
       - name: Lint
         run: pnpm run lint
 
+      # Bundles MUST be built BEFORE the unit suite: the server integration
+      # tests boot the bundled standalone/server.js, which is an esbuild output
+      # (only the .ts sources are tracked). Running mocha first fails with
+      # "Cannot find module .../standalone/server.js" (run 29104608764).
+      - name: Build bundles
+        run: node esbuild.js
+
       - name: Compile tests
         run: npx tsc -p tsconfig.test.json
 
       # Full unit suite under the matrix node — mocha directly (out/test via .mocharc.cjs).
       - name: Unit tests
         run: npx mocha
-
-      - name: Build bundles
-        run: node esbuild.js
