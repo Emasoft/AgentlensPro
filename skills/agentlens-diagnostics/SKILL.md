@@ -6,7 +6,9 @@ description: >-
   breaking, you need the cost of a session / heartbeat / sub-agent fleet, or any "why is this so
   expensive" question. Covers all 32 diagnostic tools (burn status, session burn profile,
   cache-break causes/timeline, expensive writes, heartbeat cost, config comparison, SQL
-  analytics). Also the operations surface: start the server (--start-server), open the
+  analytics). START with investigate_burn — the ONE-command investigation that names the
+  window-burn culprits (fork storms, premium-model fan-outs, idle-fleet keep-warm, image
+  residency) ranked with evidence. Also the operations surface: start the server (--start-server), open the
   dashboard (--dashboard), install AgentLens itself (scripts/install.sh, --install-skill),
   and wire/unwire Claude Code capture — telemetry env vars (--install-otel / --uninstall-otel)
   and lifecycle hook events (--install-hooks / --uninstall-hooks).

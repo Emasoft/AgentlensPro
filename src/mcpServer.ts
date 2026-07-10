@@ -26,6 +26,7 @@ import type {
   CacheBreakReport, CacheBreakOffender, ContextHistory, CallContext, CollectorGap,
 } from './summarizers/summarizerTypes'
 import { buildCacheBreakReport } from './cacheBreak'
+import { investigateBurn } from './burnInvestigator'
 import { buildResidentCostReport } from './residentCost'
 import { buildSpawnRollup } from './spawnRollup'
 import { buildTokensByCause } from './tokensByCause'
@@ -645,6 +646,38 @@ const TOOLS = [
         window:    { type: 'number', description: 'Only scan bodies from the last N hours; omit for the bounded most-recent scan across all history' },
         topN:      { type: 'number', description: 'Cap on the returned per-turn events log, most-recent-first (default 25, max 100). repeatOffenders/causeHistogram are always computed over ALL classified turns regardless.' },
         format:    { type: 'string', description: 'Output format: json (default, full object) | table | markdown | timeline' },
+      },
+    },
+  },
+  {
+    name: 'investigate_burn',
+    description:
+      'ONE-COMMAND window-burn investigation — "my 5h window drained: what burned it and WHO?" answered in a ' +
+      'single call, culprits named and ranked with evidence, no follow-up commands required (TRDD-TW14MO7A; ' +
+      'born from an incident where root-causing took 15 manual calls and the first attribution was wrong). ' +
+      'Scans the raw OTEL bodies for the window: billed usage comes EXACTLY from the response bodies ' +
+      '(cache_creation/cache_read/output — Anthropic\'s own numbers, never estimated); attribution comes ' +
+      'from the request bodies (workspace via deep Environment-block search — it sits AFTER the messages in ' +
+      'fat transcripts, so shallow scans misattribute; model; first-message fingerprint to group fork ' +
+      'families; base64-image sampling). Detects the measured burn taxonomy: FORK_STORM (fan-out forked a ' +
+      'fat parent into a cold cache — clustered full-prefix writes with cache_read≈0 sharing ONE inherited ' +
+      'transcript), SUBAGENT_BOOT_TAX (fresh agents each re-paying the CLAUDE.md+tools base), ' +
+      'PREMIUM_MODEL_FANOUT (fan-out burst on a top-price model, e.g. after a /model default switch), ' +
+      'FAT_SESSION_REWRITES (compaction/model-switch/TTL-gap full rewrites of one big session), ' +
+      'IDLE_FLEET_KEEPWARM (background sessions kept cache-warm by periodic heartbeats), ' +
+      'IMAGE_BLOB_RESIDENT (images riding forward every turn), RATE_LIMIT_COLD_RESUME (fan-out resumed ' +
+      'into a TTL-expired cache right after a StopFailure — correlated with the lifecycle hook-event store ' +
+      'when installed). Returns { window, coverage (files scanned vs present — cap hits are DISCLOSED), ' +
+      'totals (byHour, byModel, est $), attribution (workspace×model×interactive/subagent), findings ' +
+      '(ranked, each with equivTokens, share, confidence, evidence numbers), verdict (2-4 plain sentences ' +
+      'naming the culprits — including how much of the window the detectors could NOT attribute). ' +
+      'Drill deeper afterwards with get_session_burn_profile / get_cache_break_report / run_diagnostics_sql.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        windowHours: { type: 'number', description: 'Hours to look back (default 5 — one rate-limit window; max 48)' },
+        untilIso:    { type: 'string', description: 'End of the window (ISO); default now. Use to investigate a past drain.' },
+        maxFiles:    { type: 'number', description: 'Scan cap per body kind (default 8000; largest-first so the burn is never the part dropped)' },
       },
     },
   },
@@ -1940,6 +1973,16 @@ export function createMcpServer(opts: McpServerOptions): Server {
         const a = args as { sessionId?: string; scope?: string; minTokens?: number; window?: number; topN?: number; format?: TimelineFormat }
         const report = await buildCacheBreakTimeline({ sessionId: a.sessionId, scope: a.scope, minTokens: a.minTokens, windowHours: a.window, topN: a.topN })
         result = formatTimeline(report, a.format ?? 'json')
+        break
+      }
+      case 'investigate_burn': {
+        const a = args as { windowHours?: number; untilIso?: string; maxFiles?: number }
+        const untilMs = a.untilIso ? Date.parse(a.untilIso) : undefined
+        if (a.untilIso && !Number.isFinite(untilMs)) {
+          result = { error: `untilIso "${a.untilIso}" is not a parseable ISO datetime` }
+          break
+        }
+        result = investigateBurn({ windowHours: a.windowHours, untilMs, maxFiles: a.maxFiles })
         break
       }
       case 'get_heartbeat_cost': {
