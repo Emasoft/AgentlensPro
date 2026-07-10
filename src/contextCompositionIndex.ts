@@ -23,8 +23,8 @@ import {
   buildCallContext, callBodyRegistry, IMAGE_BLOCK_LABEL_PREFIX,
 } from './rawBodyContext'
 import { calibrateTokens } from './tokenEstimator'
-import { calcTokenCostUsd } from './pricing'
-import type { ContextBlock, ContextBlockKind, TokenSource } from './summarizers/summarizerTypes'
+import { calcTokenCostUsd } from './shared/pricing'
+import type { ContextBlock, ContextBlockKind, TokenSource } from './shared/summarizerTypes'
 
 // The composition taxonomy is a SUPERSET of the shared ContextBlockKind: images live in the 'other'
 // bucket on the shared ContextBlock (a dedicated shared kind would ripple into the residentCost Record

@@ -10,7 +10,7 @@ import {
   LOOP_SIGNAL_ACTIONS,
 } from '../loopDetector'
 import { SessionSummaryCard, TimelineEntry } from '../spanSummarizer'
-import { LoopSignal } from '../types'
+import { LoopSignal } from '../shared/telemetryTypes'
 
 // ── Factories ────────────────────────────────────────────────────────────────
 
@@ -621,7 +621,7 @@ suite('detectLoopSignals', () => {
 // ── LOOP_SIGNAL_ACTIONS ──────────────────────────────────────────────────────
 
 suite('LOOP_SIGNAL_ACTIONS', () => {
-  const signalTypes: Array<import('../types').LoopSignalType> = [
+  const signalTypes: Array<import('../shared/telemetryTypes').LoopSignalType> = [
     'exact_tool_repeat',
     'edit_revert_cycle',
     'error_recurrence',

@@ -1,6 +1,6 @@
 import * as fs from 'fs'
 import * as path from 'path'
-import { Span } from '../types'
+import { Span } from '../shared/telemetryTypes'
 
 export const CLAUDE_WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
 export const FULL_WRITE_TOOLS   = new Set(['Write', 'create_file'])  // whole-file replacement

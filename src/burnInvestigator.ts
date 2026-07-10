@@ -15,7 +15,7 @@
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { calcTokenCostUsd } from './pricing'
+import { calcTokenCostUsd } from './shared/pricing'
 import { readHookEvents } from './hookEventStore'
 
 export const BURN_CAUSES = [

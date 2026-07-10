@@ -1,6 +1,6 @@
 import * as assert from 'assert'
 import { classifyOtlpPayload, parseLogPayload, parseTracePayload } from '../otlpParser'
-import { SpanAttribute } from '../types'
+import { SpanAttribute } from '../shared/telemetryTypes'
 
 function attr(key: string, value: string | number): SpanAttribute {
   return typeof value === 'string'

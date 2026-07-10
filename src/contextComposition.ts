@@ -3,7 +3,7 @@ import * as path from 'path'
 import * as readline from 'readline'
 import { claudeProjectsDirs } from './logReader'
 import { countTokens, estimateTokensFromBytes } from './tokenEstimator'
-import type { ContextComposition, ContextCompositionTurn, ContextSource } from './summarizers/summarizerTypes'
+import type { ContextComposition, ContextCompositionTurn, ContextSource } from './shared/summarizerTypes'
 
 // Hard caps so an on-demand parse of a huge session never blocks the host unbounded. A session
 // past MAX_LINES is reported truncated=true (the breakdown covers what was read). Per turn only the

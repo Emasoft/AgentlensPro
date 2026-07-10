@@ -1,4 +1,4 @@
-import type { SessionSummaryCard } from './summarizers/summarizerTypes'
+import type { SessionSummaryCard } from './shared/summarizerTypes'
 
 /**
  * Feed-collision doctrine — which data source wins when a LOG card and an OTEL card

@@ -3,7 +3,7 @@ import * as path from 'path'
 import type { UriLike } from '../../vscodeCompat'
 import { SCHEMA_SQL } from '../../database/schema'
 import { DatabaseWriter } from '../../database/writer'
-import type { SessionSummaryCard } from '../../summarizers/summarizerTypes'
+import type { SessionSummaryCard } from '../../shared/summarizerTypes'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

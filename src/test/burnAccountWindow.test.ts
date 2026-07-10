@@ -4,8 +4,8 @@ import {
   observeCapacityFromPrematureEnd, computeBurnStatus, DEFAULT_THRESHOLDS,
   type ConsumptionEvent, type StatuslineBillingEvent, type BurnConfig,
 } from '../burnMonitor'
-import { calcTokenCostUsd } from '../pricing'
-import type { SessionSummaryCard } from '../summarizers/summarizerTypes'
+import { calcTokenCostUsd } from '../shared/pricing'
+import type { SessionSummaryCard } from '../shared/summarizerTypes'
 
 // TRDD-BURNWDGT — REAL tests for per-account window budgeting + the statusline burn-rate cost fix.
 // No mocks: everything runs the actual burnMonitor functions + the real pricing table.

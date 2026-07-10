@@ -4,7 +4,7 @@ import type { UriLike } from '../../vscodeCompat'
 import { SCHEMA_SQL } from '../../database/schema'
 import { DatabaseWriter } from '../../database/writer'
 import { DatabaseReader } from '../../database/reader'
-import type { SessionSummaryCard } from '../../summarizers/summarizerTypes'
+import type { SessionSummaryCard } from '../../shared/summarizerTypes'
 
 // ── Output-file / subfolder tracking (TRDD-ZS1GDXVY) — DB round-trip ──────────
 // Proves the generated_files index survives a write→reload: correlated leaves re-attach to their

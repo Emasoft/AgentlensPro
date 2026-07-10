@@ -1,7 +1,7 @@
 import * as http from 'http'
 import type { OutputChannelLike } from './vscodeCompat'
 import { SessionStore } from './sessionStore'
-import { SpanAttribute } from './types'
+import { SpanAttribute } from './shared/telemetryTypes'
 import { callBodyRegistry } from './rawBodyContext'
 import { resolveLogEventName, bareLogEventName, CLAUDE_RICH_LOG_EVENTS, BODY_POINTER_LOG_EVENTS } from './otlpLogEvents'
 

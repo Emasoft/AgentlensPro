@@ -1,6 +1,6 @@
 import { joinUri, type UriLike, type WriteBlobFs } from '../vscodeCompat'
-import type { SessionSummaryCard, TimelineEntry, EditDetail, GeneratedFileRef } from '../summarizers/summarizerTypes'
-import { calcTokenCostUsd } from '../pricing'
+import type { SessionSummaryCard, TimelineEntry, EditDetail, GeneratedFileRef } from '../shared/summarizerTypes'
+import { calcTokenCostUsd } from '../shared/pricing'
 import { preferredDataSource } from '../feedMergePolicy'
 
 // Strings below this length are kept inline in the DB row rather than written to a blob file.

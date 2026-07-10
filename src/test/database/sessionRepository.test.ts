@@ -1,6 +1,6 @@
 import * as assert from 'assert'
 import { mergeSessions, resolveWorkspacesFromLogs } from '../../sessionRepository'
-import type { SessionSummaryCard } from '../../summarizers/summarizerTypes'
+import type { SessionSummaryCard } from '../../shared/summarizerTypes'
 
 function makeCard(id: string, startTime: string, overrides: Partial<SessionSummaryCard> = {}): SessionSummaryCard {
   return {

@@ -8,7 +8,7 @@
  *   helpers.ts  — shared attribute accessors and formatting utilities
  */
 
-import { Span } from './types'
+import { Span } from './shared/telemetryTypes'
 import { detectLoopSignals } from './loopDetector'
 import { buildCopilotSessions } from './summarizers/copilot'
 import { buildClaudeSessions } from './summarizers/claude'
@@ -23,7 +23,7 @@ export type {
   EfficiencyReport,
   BackgroundSpanSummary,
   FullSummary,
-} from './summarizers/summarizerTypes'
+} from './shared/summarizerTypes'
 
 export function summarizeSpans(spans: Span[]) {
   if (!Array.isArray(spans) || spans.length === 0) {

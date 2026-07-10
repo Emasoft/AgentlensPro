@@ -1,6 +1,6 @@
 import * as assert from 'assert'
 import { predictSessionCost } from '../mcpServer'
-import type { SessionSummaryCard } from '../summarizers/summarizerTypes'
+import type { SessionSummaryCard } from '../shared/summarizerTypes'
 
 // ── predict_session_cost (TRDD-O981ZJKV item 9) ──────────────────────────────
 

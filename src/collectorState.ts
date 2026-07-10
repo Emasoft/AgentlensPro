@@ -14,7 +14,7 @@
 // All writes go through atomicWriteFileSync so a crash mid-write can never corrupt these files.
 import * as fs from 'fs'
 import { atomicWriteFileSync } from './serverRuntime'
-import type { CollectorGap, SessionSummaryCard } from './summarizers/summarizerTypes'
+import type { CollectorGap, SessionSummaryCard } from './shared/summarizerTypes'
 
 // ── Ingest-semantics version (single source — SQLite db.ts imports this) ─────
 // Bump when log-ingest semantics change in a way that makes previously-persisted cards stale.

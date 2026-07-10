@@ -28,7 +28,7 @@
 
 import { parseUserId } from './rawBodyContext'
 import { estimateTokensFromBytes } from './tokenEstimator'
-import { calcTokenCostUsd } from './pricing'
+import { calcTokenCostUsd } from './shared/pricing'
 import {
   DEFAULT_BODIES_DIR, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, RESPONSE_SCAN_CAP,
   listBySuffix, boundedRecent, readJsonBounded,

@@ -1,7 +1,7 @@
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import type { GeneratedFileRef, SessionSummaryCard } from './summarizers/summarizerTypes'
+import type { GeneratedFileRef, SessionSummaryCard } from './shared/summarizerTypes'
 import { estimateTokensFromBytes } from './tokenEstimator'
 
 // ── Output-file / scratch-subfolder tracking (TRDD-ZS1GDXVY) ──────────────────

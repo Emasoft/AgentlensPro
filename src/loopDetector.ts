@@ -12,7 +12,7 @@
  * Each detector is exported individually so tests can exercise them in isolation.
  */
 
-import { LoopSignal, LoopSignalType } from './types'
+import { LoopSignal, LoopSignalType } from './shared/telemetryTypes'
 import { SessionSummaryCard } from './spanSummarizer'
 
 // ── Pattern taxonomy names ───────────────────────────────────────────────────

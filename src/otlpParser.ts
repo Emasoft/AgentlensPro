@@ -1,4 +1,4 @@
-import { Span, SpanAttribute } from './types'
+import { Span, SpanAttribute } from './shared/telemetryTypes'
 
 export type OtlpPayloadKind = 'traces' | 'logs' | 'metrics' | 'unknown'
 

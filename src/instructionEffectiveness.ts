@@ -3,8 +3,8 @@
  * All functions receive workspace-pre-filtered sessions.
  */
 
-import type { SessionSummaryCard } from './summarizers/summarizerTypes'
-import { calcTokenCostUsd } from './pricing'
+import type { SessionSummaryCard } from './shared/summarizerTypes'
+import { calcTokenCostUsd } from './shared/pricing'
 
 export interface BaselineSnapshot {
   sessionCount: number

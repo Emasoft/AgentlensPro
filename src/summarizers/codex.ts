@@ -1,5 +1,5 @@
-import { Span } from '../types'
-import { BackgroundSpanSummary, SessionSummaryCard, TimelineEntry } from './summarizerTypes'
+import { Span } from '../shared/telemetryTypes'
+import { BackgroundSpanSummary, SessionSummaryCard, TimelineEntry } from '../shared/summarizerTypes'
 import {
   getAttrInt, nanoToMs, getFirstAttr,
   isCodexPromptSpanName, isCodexToolExecSpan, isCodexLlmSpanName,

@@ -32,7 +32,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
-import type { SessionSummaryCard, TimelineEntry } from './summarizers/summarizerTypes'
+import type { SessionSummaryCard, TimelineEntry } from './shared/summarizerTypes'
 import { callBodyRegistry } from './rawBodyContext'
 import { VSCODE_FAMILY_IDE_NAMES } from './vscodeFamilyIdes'
 import {

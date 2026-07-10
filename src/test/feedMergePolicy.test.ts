@@ -1,6 +1,6 @@
 import * as assert from 'assert'
 import { preferredDataSource, mergeOtelAndLogSessions } from '../feedMergePolicy'
-import type { SessionSummaryCard } from '../summarizers/summarizerTypes'
+import type { SessionSummaryCard } from '../shared/summarizerTypes'
 
 // ── Phase B of the token-feed fix (reports/token-discrepancy/20260710_141134+0200-otel-vs-jsonl.md
 // §4bis/§5.6): once OTEL Claude cards are keyed by the transcript UUID they collide with the log

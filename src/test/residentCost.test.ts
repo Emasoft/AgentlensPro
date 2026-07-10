@@ -2,11 +2,11 @@ import * as assert from 'assert'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { buildResidentCostReport, kindRemediation } from '../residentCost'
+import { buildResidentCostReport, kindRemediation } from '../shared/residentCost'
 import { buildContextHistory } from '../contextHistory'
 import type {
   ContextHistory, ContextHistoryStep, ContextBlock, ContextBlockKind,
-} from '../summarizers/summarizerTypes'
+} from '../shared/summarizerTypes'
 
 // ── residentCost (TRDD-W0RRL2FZ) — pure-derivation + real end-to-end tests ─────
 // The derivation is deterministic math over a ContextHistory, so the synthetic fixtures assert the

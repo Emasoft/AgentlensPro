@@ -11,7 +11,7 @@
 //  2. buildCallContext(bodyFilePath) — parse the (capped) request JSON into ContextBlock[].
 import * as fs from 'fs'
 import { countTokens, estimateTokensFromBytes } from './tokenEstimator'
-import type { ContextBlock, ContextBlockKind, CallContext } from './summarizers/summarizerTypes'
+import type { ContextBlock, ContextBlockKind, CallContext } from './shared/summarizerTypes'
 
 // Image content blocks stay in the shared ContextBlockKind 'other' bucket (adding a dedicated 'image'
 // kind would ripple into the residentCost Record + the webview mirror — out of scope here), but their

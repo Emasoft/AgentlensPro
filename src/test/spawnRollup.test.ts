@@ -2,9 +2,9 @@ import * as assert from 'assert'
 import {
   buildSpawnRollup, detectSpawnAntipatterns,
   COLD_CACHE_CREATE_MIN, FLEET_COLD_MIN_CHILDREN,
-} from '../spawnRollup'
+} from '../shared/spawnRollup'
 import { handleGetSubagentTree } from '../mcpServer'
-import type { SessionSummaryCard } from '../summarizers/summarizerTypes'
+import type { SessionSummaryCard } from '../shared/summarizerTypes'
 
 // TRDD-62E8UU41 — spawn-cost rollup + cache-friendly-spawn advisor (FLEET-COLD / WORKTREE-SCATTER /
 // MODEL-MIX). Children are LOG-derived sub-agent cards: inputTokens INCLUDES cache (uncached + read +

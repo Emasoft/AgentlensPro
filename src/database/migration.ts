@@ -1,6 +1,6 @@
 import { summarizeSpans } from '../spanSummarizer'
 import { DatabaseWriter } from './writer'
-import type { Span } from '../types'
+import type { Span } from '../shared/telemetryTypes'
 
 // The globalState surface this one-time migration reads/writes. The VS Code
 // extension host (which supplied vscode.ExtensionContext) was removed

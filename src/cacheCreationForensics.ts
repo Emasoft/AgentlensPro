@@ -30,7 +30,7 @@ import * as path from 'path'
 import * as os from 'os'
 import { parseUserId } from './rawBodyContext'
 import { buildCallComposition, type CallComposition } from './contextCompositionIndex'
-import { calcTokenCostUsd } from './pricing'
+import { calcTokenCostUsd } from './shared/pricing'
 
 export const DEFAULT_BODIES_DIR = path.join(os.homedir(), '.agentlens', 'otel-bodies')
 

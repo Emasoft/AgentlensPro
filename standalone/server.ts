@@ -14,7 +14,7 @@ import * as os from 'os'
 import { exec } from 'child_process'
 import { summarizeSpans } from '../src/spanSummarizer'
 import { mergeOtelAndLogSessions } from '../src/feedMergePolicy'
-import { calcTokenCostUsd } from '../src/pricing'
+import { calcTokenCostUsd } from '../src/shared/pricing'
 import { autoConfigureCodex, autoConfigureCopilotStandalone } from '../src/autoConfigNode'
 import { ensureTelemetryConfig, ensureAgentLensStopHook } from '../src/telemetryConfig'
 import { classifyOtlpPayload } from '../src/otlpParser'
@@ -46,8 +46,8 @@ import {
   recordCollectorStart, recordCollectorHeartbeat, recordCollectorStop, computeCollectorGaps,
   type LifecycleStore,
 } from '../src/collectorState'
-import type { Span } from '../src/types'
-import type { SessionSummaryCard, CollectorGap } from '../src/summarizers/summarizerTypes'
+import type { Span } from '../src/shared/telemetryTypes'
+import type { SessionSummaryCard, CollectorGap } from '../src/shared/summarizerTypes'
 
 const OTLP_PORT  = parseInt(process.env.OTLP_PORT  ?? '4318')
 const UI_PORT    = parseInt(process.env.UI_PORT    ?? '3000')
