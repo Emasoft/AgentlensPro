@@ -1,9 +1,12 @@
 ---
 trdd-id: TW14MO7A
 title: investigate_burn — ONE-command window-burn investigation with a cause taxonomy
-column: dev
+column: complete
 created: 2026-07-10T10:04:00+0200
-updated: 2026-07-10T10:04:00+0200
+updated: 2026-07-10T10:35:00+0200
+implementation-commits: [117bed2]
+last-test-result: pass
+last-test-at: 2026-07-10T10:30:00+0200
 current-owner: agentlens-session
 task-type: feature
 release-via: none
@@ -19,7 +22,16 @@ relevant-rules: []
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-10
 
-**Current state:** starting implementation.
+**COMPLETE — shipped + verified live 2026-07-10 (commit 117bed2, local-only).**
+All 5 plan phases done. Acceptance PASSED: ONE live `agentlens-cli investigate_burn
+--windowHours 6` over today's real corpus reproduced the entire manual investigation —
+PREMIUM_MODEL_FANOUT 73.4M equiv/44% (1479 fable-5 calls, peak 864/30min, est $775),
+FORK_STORM 26.6M/16% (76 full-prefix writes, 65 fully cold, one shared inherited
+transcript), IDLE_FLEET_KEEPWARM 15.2M/9% — culprits named, ranked, evidenced, in one
+digest line. 11 real-fs detector tests (suite 522 passing, Node 20); tsc/lint clean.
+Implementation note: the source briefly contained raw NUL bytes (a \\u0000 escape in a
+Write decoded to real NULs; grep called the file binary) — replaced the NUL-joined
+attribution key with a '\\n' join; paths cannot contain newlines.
 
 **Plan:**
 1. `src/burnInvestigator.ts` (NEW): single-pass bounded scan of the OTEL bodies corpus for a
