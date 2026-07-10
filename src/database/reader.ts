@@ -129,6 +129,9 @@ export class DatabaseReader {
         // spawn_async is 1/NULL in SQLite; surface as true/undefined so a reload never converts
         // "tokens not reported" (async) into a silent measured-$0 child.
         spawnAsync:       (col(row, 'spawn_async') as number | null) ? true : undefined,
+        // P7 token provenance — NULL (legacy rows) surfaces as undefined ("unknown"), never a guess.
+        tokensSource:     (col(row, 'tokens_source') as SessionSummaryCard['tokensSource'] | null) ?? undefined,
+        coverageNote:     (col(row, 'coverage_note') as string | null) ?? undefined,
         timeline:         [],
         backgroundSpans:  [],
       } satisfies SessionSummaryCard
@@ -424,6 +427,9 @@ export class DatabaseReader {
         // spawn_async is 1/NULL in SQLite; surface as true/undefined so a reload never converts
         // "tokens not reported" (async) into a silent measured-$0 child.
         spawnAsync:       (col(row, 'spawn_async') as number | null) ? true : undefined,
+        // P7 token provenance — NULL (legacy rows) surfaces as undefined ("unknown"), never a guess.
+        tokensSource:     (col(row, 'tokens_source') as SessionSummaryCard['tokensSource'] | null) ?? undefined,
+        coverageNote:     (col(row, 'coverage_note') as string | null) ?? undefined,
         timeline:         [],
         backgroundSpans:  [],
       } satisfies SessionSummaryCard

@@ -138,6 +138,15 @@ function applyMigrations(db: SqlDatabase): void {
   if (!colNames.includes('spawn_async')) {
     db.run('ALTER TABLE sessions ADD COLUMN spawn_async INTEGER')
   }
+  // Token-figure provenance (P7): which feed backs the card's served numbers ('log'|'otel'|
+  // 'merged') + the optional displacement note. Nullable ON PURPOSE — rows persisted before the
+  // field stay NULL and serve as "unknown"; the value is never backfilled (honest absence).
+  if (!colNames.includes('tokens_source')) {
+    db.run('ALTER TABLE sessions ADD COLUMN tokens_source TEXT')
+  }
+  if (!colNames.includes('coverage_note')) {
+    db.run('ALTER TABLE sessions ADD COLUMN coverage_note TEXT')
+  }
 
   // timeline_entries cache token columns
   const teCols = db.exec('PRAGMA table_info(timeline_entries)')
