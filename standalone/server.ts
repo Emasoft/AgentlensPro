@@ -41,6 +41,7 @@ import { buildContextHistory } from '../src/contextHistory'
 import { generateSuggestions } from '../src/instructionAdvisor'
 import { detectInstructionFiles, appendSuggestion } from '../src/instructionFiles'
 import { atomicWriteFileSync, heapPressure, RequestLog } from '../src/serverRuntime'
+import { SegmentedSpanStore, migrateLegacySpansFile, spanTimestampMs } from '../src/segmentedSpanStore'
 import { appendToArchive, purgeArchiveVolumes, archiveDiskUsage, extractArchive } from '../src/bodyArchive'
 import {
   loadLogOffsets, saveLogOffsets, loadPersistedCards, savePersistedCards,
@@ -57,7 +58,11 @@ const BIND_HOST  = process.env.BIND_HOST ?? '127.0.0.1'
 
 const mediaDir  = path.join(__dirname, '..', 'media')
 const DATA_DIR  = process.env.DATA_DIR ?? path.join(os.homedir(), '.agentlens')
-const DATA_FILE = path.join(DATA_DIR, 'spans.json')
+// P4 segmented span store: daily NDJSON segments under DATA_DIR/spans/ (src/segmentedSpanStore.ts).
+// The old single-file spans.json exists only as a migration source — split into segments on the
+// first boot and preserved as spans.json.bak, never deleted.
+const SPANS_DIR = path.join(DATA_DIR, 'spans')
+const LEGACY_SPANS_FILE = path.join(DATA_DIR, 'spans.json')
 // TRDD-PJC8N1HO — durable-state sidecars (all under DATA_DIR, all written atomically):
 const OFFSETS_FILE   = path.join(DATA_DIR, 'log-offsets.json')     // spec 3: logReader tail offsets
 const CARDS_FILE     = path.join(DATA_DIR, 'log-sessions.json')    // spec 3: stripped log cards (fast restart)
@@ -94,33 +99,37 @@ function computeBuildId(): string {
 }
 const BUILD_ID = computeBuildId()
 
-// ── Span store with file persistence ─────────────────────────────────────────
+// ── Span store — segmented, append-only, NO eviction (P4) ────────────────────
+// Disk: daily NDJSON segments under DATA_DIR/spans/ + a per-segment index (count/time-range/
+// bytes). Append cost is O(record) — the store NEVER rewrites a file (the whole-store rewrite
+// was the 420GB/4.4h SSD-wear incident; the MAX_SPANS eviction it fed was measured losing
+// 1,700 spans in ONE restart: "Loaded 50000 spans (capped from 51700)"). Both diseases are
+// gone at the root: no span-count cap, no compaction, retention deletes whole EXPIRED
+// segments only — loudly. Full rationale + the no-native-deps decision live at the store:
+// src/segmentedSpanStore.ts.
 
 let spans: Span[] = []
 let sseClients: http.ServerResponse[] = []
 
-// Hard cap on the in-memory span buffer. Unlike SessionStore's time-window trim, the standalone
-// keeps a flat span array to rebuild the whole session list on demand — so with the FULL telemetry
-// firehose now enabled (logs + metrics + traces + raw-body events from every active Claude Code
-// session) it grew UNBOUNDED and OOM-killed the process (JS heap exhausted at ~4GB after ~19 min:
-// FATAL "Ineffective mark-compacts near heap limit"). Capping to the most-recent MAX_SPANS keeps
-// recent sessions (what diagnosis needs) while the process stays bounded. Default lowered
-// 200k → 50k after the process was observed at 2.4GB RSS: firehose log events carry large
-// payloads, so real spans average far more than the 1.6KB the 200k default assumed.
-// Env override so a big machine can raise it: AGENTLENS_MAX_SPANS.
-const MAX_SPANS = Math.max(10_000, Number(process.env.AGENTLENS_MAX_SPANS) || 50_000)
+// In-memory model: `spans` is the rolling SUMMARIZATION WINDOW, bounded by TIME, never by a
+// span count. The old MAX_SPANS=50k cap existed because the flat array grew unbounded under
+// the full firehose and OOM-killed the process (~4GB heap in ~19 min ⇒ ~175 spans/sec, so the
+// 50k cap amounted to ≈5 minutes of firehose anyway — it just ALSO destroyed the on-disk
+// history). Now: memory holds only spans newer than the window (default 24h,
+// AGENTLENS_SUMMARY_WINDOW_HOURS); under heap pressure the window halves down to a 5-minute
+// floor (the live summarization window), logged loudly — while DISK keeps every span, and any
+// range query reloads older segments on demand via spanStore.loadRange().
+const SUMMARY_WINDOW_FLOOR_MS = 5 * 60_000
+const SUMMARY_WINDOW_MS = Math.max(
+  SUMMARY_WINDOW_FLOOR_MS,
+  (Number(process.env.AGENTLENS_SUMMARY_WINDOW_HOURS) || 24) * 3600e3,
+)
+let effectiveWindowMs = SUMMARY_WINDOW_MS
 
-// ── Persistence: append-only NDJSON (SSD-wear fix) ────────────────────────────
-// WHY THIS SHAPE: the previous implementation serialized the ENTIRE store (~200MB at cap) through
-// a 1-second debounce — under the firehose that meant the whole file rewritten every few seconds,
-// measured at 420GB written to disk in 4.4 hours (~2.3TB/day of SSD wear) while the file itself
-// never grew. Append-only turns steady-state persistence into KB-scale appends; the full file is
-// rewritten ONLY by compaction (when the file holds > 2× MAX_SPANS lines) and on shutdown.
-// Format: one JSON span per line. The loader still accepts the legacy single-JSON-array file and
-// migrates it to NDJSON once, atomically.
+// Retention: whole expired segments only, on boot + daily, each deletion logged explicitly
+// ("retention: deleted segment 2026-06-01.ndjson, N spans, age 39d"). Never a silent drop.
+const SPANS_RETENTION_DAYS = Math.max(1, Number(process.env.AGENTLENS_SPANS_RETENTION_DAYS) || 30)
 
-let pendingLines: string[] = []  // spans not yet appended to disk
-let fileSpanCount = 0            // lines currently in DATA_FILE (drives compaction)
 const SAVE_INTERVAL_MS = Math.max(1000, Number(process.env.AGENTLENS_SAVE_INTERVAL_MS) || 5000)
 
 // Persistence accounting — the observable that would have caught the 420GB incident on day one.
@@ -129,7 +138,6 @@ const SAVE_INTERVAL_MS = Math.max(1000, Number(process.env.AGENTLENS_SAVE_INTERV
 const SERVER_STARTED_AT = Date.now()
 const persistStats = {
   spanAppendWrites: 0, spanAppendBytes: 0,
-  spanCompactions: 0, spanCompactBytes: 0,
   offsetsWrites: 0, offsetsBytes: 0,
   cardsWrites: 0, cardsBytes: 0,
   hookEventWrites: 0, hookEventBytes: 0,
@@ -137,93 +145,69 @@ const persistStats = {
   bodiesLastPurge: { at: 0, removedFiles: 0, freedBytes: 0, keptFiles: 0, keptBytes: 0 },
 }
 
-function spansToNdjson(list: Span[]): string {
-  return list.length ? `${list.map(s => JSON.stringify(s)).join('\n')}\n` : ''
+const spanStore = new SegmentedSpanStore(SPANS_DIR)
+
+// One-time migration: split the legacy single-file spans.json into daily segments; the original
+// is preserved as spans.json.bak (never deleted). Logged inside migrateLegacySpansFile.
+try {
+  migrateLegacySpansFile(LEGACY_SPANS_FILE, spanStore)
+} catch (e) {
+  console.warn('[AgentLens] Could not migrate legacy spans.json:', e)
 }
 
-// Load persisted spans on startup — cap to the most-recent MAX_SPANS so a large historical
-// store can't blow the heap on load either.
+// Boot load: ONLY the segments overlapping the summarization window — never the whole store.
+// Nothing is evicted: older spans stay on disk and remain loadable by range.
 try {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true })
-  if (fs.existsSync(DATA_FILE)) {
-    const raw = fs.readFileSync(DATA_FILE, 'utf-8')
-    let loaded: Span[] = []
-    let migrated = false
-    if (raw.trimStart().startsWith('[')) {
-      loaded = JSON.parse(raw) as Span[] // legacy whole-array format
-      migrated = true
-    } else {
-      // NDJSON. A crash mid-append can leave ONE truncated final line — skip corrupt lines
-      // instead of losing the whole store (that is the crash-tolerance contract of this format).
-      let skipped = 0
-      for (const line of raw.split('\n')) {
-        if (!line) continue
-        try { loaded.push(JSON.parse(line) as Span) } catch { skipped++ }
-      }
-      if (skipped > 0) console.warn(`[AgentLens] spans store: skipped ${skipped} corrupt line(s)`)
-    }
-    spans = loaded.length > MAX_SPANS ? loaded.slice(-MAX_SPANS) : loaded
-    fileSpanCount = loaded.length
-    if (migrated) {
-      // One-time migration: rewrite as NDJSON (atomic), dropping anything beyond the cap.
-      atomicWriteFileSync(DATA_FILE, spansToNdjson(spans))
-      fileSpanCount = spans.length
-      console.log(`[AgentLens] Migrated legacy spans.json to NDJSON (${spans.length} spans kept)`)
-    }
-    console.log(`[AgentLens] Loaded ${spans.length} spans from ${DATA_FILE}${loaded.length > spans.length ? ` (capped from ${loaded.length})` : ''}`)
-  }
+  spans = spanStore.loadRange(Date.now() - SUMMARY_WINDOW_MS, Infinity)
+  const st = spanStore.stats()
+  console.log(`[AgentLens] Loaded ${spans.length} span(s) (last ${Math.round(SUMMARY_WINDOW_MS / 3600e3)}h window) from ${SPANS_DIR} — store holds ${st.totalSpans} span(s) across ${st.segments} segment(s), nothing evicted`)
 } catch (e) {
   console.warn('[AgentLens] Could not load persisted data:', e)
 }
 
-/** Append the buffered spans; compact (full rewrite) only when the file is 2× over the cap. */
+// Retention: on boot + daily. Deletes whole EXPIRED segments only; each deletion is logged by
+// the store ("retention: deleted segment <name>, N spans, age Nd").
+function runSpanRetention(): void {
+  try { spanStore.runRetention(SPANS_RETENTION_DAYS) } catch (e) { console.warn('[AgentLens] span retention failed:', e) }
+}
+runSpanRetention()
+const spanRetentionTimer = setInterval(runSpanRetention, 24 * 3600e3)
+spanRetentionTimer.unref()
+
+/** Flush buffered appends to their daily segments (O(pending), never a rewrite), then trim the
+ *  in-memory summarization window by TIME. Trimming memory is not data loss — every trimmed
+ *  span is already on disk and reloadable by range. */
 function flushSpanAppends(): void {
-  if (pendingLines.length > 0) {
-    try {
-      const chunk = `${pendingLines.join('\n')}\n`
-      fs.appendFileSync(DATA_FILE, chunk)
-      persistStats.spanAppendWrites++
-      persistStats.spanAppendBytes += chunk.length
-      fileSpanCount += pendingLines.length
-      pendingLines = []
-    } catch (e) {
-      console.warn('[AgentLens] Could not append spans:', e)
-      // Retry next tick — but a bounded buffer: if appends keep failing (disk full, dir gone),
-      // cap the buffer at one MAX_SPANS worth so the failure can't become its own memory leak.
-      if (pendingLines.length > MAX_SPANS) pendingLines = pendingLines.slice(-MAX_SPANS)
-      return
-    }
+  const r = spanStore.flush()
+  if (r.appendedSpans > 0) {
+    persistStats.spanAppendWrites++
+    persistStats.spanAppendBytes += r.appendedBytes
   }
-  if (fileSpanCount > MAX_SPANS * 2) {
-    try {
-      const body = spansToNdjson(spans)
-      atomicWriteFileSync(DATA_FILE, body)
-      persistStats.spanCompactions++
-      persistStats.spanCompactBytes += body.length
-      fileSpanCount = spans.length
-    } catch (e) {
-      console.warn('[AgentLens] Could not compact spans store:', e)
-    }
+  // Heap-pressure valve: halve the window (never below the 5-minute live floor) instead of the
+  // old cap's silent oldest-span eviction. Loud by design, and disk keeps everything.
+  const hp = heapPressure()
+  if (hp.over && effectiveWindowMs > SUMMARY_WINDOW_FLOOR_MS) {
+    effectiveWindowMs = Math.max(SUMMARY_WINDOW_FLOOR_MS, Math.floor(effectiveWindowMs / 2))
+    console.warn(`[AgentLens] heap pressure (${Math.round(hp.heapUsedMb)}/${Math.round(hp.limitMb)}MB): summary window shrunk to ${Math.round(effectiveWindowMs / 60_000)}m — disk store unaffected, no spans lost`)
+  }
+  const cutoff = Date.now() - effectiveWindowMs
+  // Live appends keep `spans` roughly time-ordered, so only filter when the head has aged out.
+  if (spans.length > 0 && spanTimestampMs(spans[0]) < cutoff) {
+    spans = spans.filter(s => spanTimestampMs(s) >= cutoff)
   }
 }
 const spanFlushTimer = setInterval(flushSpanAppends, SAVE_INTERVAL_MS)
 spanFlushTimer.unref()
 
-/** Reset both the on-disk store and the append pipeline (the /api/clear + clearAll paths). */
+/** Reset the on-disk store + append pipeline (the /api/clear + clearAll paths). */
 function clearPersistedSpans(): void {
-  pendingLines = []
-  fileSpanCount = 0
-  try { atomicWriteFileSync(DATA_FILE, '') } catch (e) { console.warn('[AgentLens] Could not clear data file:', e) }
+  spanStore.clear()
 }
 
 function addSpan(span: Span) {
   if (span.receivedAt === undefined) span.receivedAt = Date.now()
   spans.push(span)
-  pendingLines.push(JSON.stringify(span))
-  // Bound the buffer so the firehose can't grow it without limit (the OOM fix above). Evict the
-  // oldest overflow in one batch (amortized O(1)) rather than shift() per push. A ~5% slack above
-  // MAX_SPANS avoids re-slicing on every single add once at the cap.
-  if (spans.length > MAX_SPANS * 1.05) spans = spans.slice(-MAX_SPANS)
+  spanStore.append(span) // O(record): buffered, appended by the flush tick — never a rewrite
 }
 
 // ── otel-bodies retention: ARCHIVE, don't delete ──────────────────────────────
@@ -1211,8 +1195,9 @@ function buildSessionSummary(): ReturnType<typeof summarizeSpans> | null {
 
   // Merge log-sourced sessions. On ID collision the source's PREFERRED feed wins
   // (src/feedMergePolicy.ts): for Claude the LOG transcript card wins — transcripts are durable
-  // and call-complete while OTEL is a measured lossy lower bound (MAX_SPANS eviction + collector
-  // downtime; reports/token-discrepancy/20260710_141134+0200-otel-vs-jsonl.md §5.6) — and OTEL
+  // and call-complete while OTEL is a measured lossy lower bound (collector downtime + the
+  // in-memory summarization window; the pre-P4 MAX_SPANS eviction was the third cause —
+  // reports/token-discrepancy/20260710_141134+0200-otel-vs-jsonl.md §5.6) — and OTEL
   // wins for every other source. OTEL-only sessions (no transcript) still serve.
   if (logSessions.size > 0) {
     const merged = mergeOtelAndLogSessions(summary?.sessions ?? [], [...logSessions.values()])
@@ -1270,7 +1255,7 @@ function pushSessionChanged(cards: SessionSummaryCard[]): void {
 }
 
 // COALESCED update — this is the OOM fix (TRDD-0KNGDFQI). pushUpdate() runs a FULL
-// summarizeSpans(up to MAX_SPANS) + sidebar + analytics + JSON.stringify; calling it on EVERY
+// summarizeSpans(the whole summarization window) + sidebar + analytics + JSON.stringify; calling it on EVERY
 // incoming OTLP POST (firehose rate = many/sec once logs+metrics+traces+raw-bodies are all enabled)
 // produced allocation churn faster than GC could reclaim → the heap filled and the process was
 // OOM-killed (FATAL mark-compact) in ~40s. Debouncing to at most once per PUSH_COALESCE_MS turns N
@@ -2008,6 +1993,7 @@ const uiServer = http.createServer((req, res) => {
     const mem = process.memoryUsage()
     const heap = heapPressure()
     const p = persistStats
+    const spanStoreStats = spanStore.stats()
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({
       pid: process.pid,
@@ -2017,12 +2003,20 @@ const uiServer = http.createServer((req, res) => {
       canonical: IS_CANONICAL,
       dataDir: DATA_DIR,
       memory: { rssMb: Math.round(mem.rss / 1048576), heapUsedMb: Math.round(heap.heapUsedMb), heapLimitMb: Math.round(heap.limitMb) },
-      spans: { inMemory: spans.length, cap: MAX_SPANS, pendingAppends: pendingLines.length, fileLines: fileSpanCount, fileBytes: sizeOf(DATA_FILE) },
+      // Segmented store (P4): no cap, no eviction — memory is the time window, disk is everything.
+      spans: {
+        inMemory: spans.length,
+        windowMs: effectiveWindowMs,
+        configuredWindowMs: SUMMARY_WINDOW_MS,
+        retentionDays: SPANS_RETENTION_DAYS,
+        pendingAppends: spanStoreStats.pendingAppends,
+        store: { segments: spanStoreStats.segments, totalSpans: spanStoreStats.totalSpans, totalBytes: spanStoreStats.totalBytes },
+      },
       logSessions: logSessions.size,
       persistence: {
         ...p,
-        totalBytesWritten: p.spanAppendBytes + p.spanCompactBytes + p.offsetsBytes + p.cardsBytes + p.hookEventBytes,
-        files: { spans: sizeOf(DATA_FILE), offsets: sizeOf(OFFSETS_FILE), cards: sizeOf(CARDS_FILE) },
+        totalBytesWritten: p.spanAppendBytes + p.offsetsBytes + p.cardsBytes + p.hookEventBytes,
+        files: { spans: spanStoreStats.totalBytes, offsets: sizeOf(OFFSETS_FILE), cards: sizeOf(CARDS_FILE) },
       },
       bodies: { archive: archiveDiskUsage(BODIES_ARCHIVE_DIR), lastPass: p.bodiesLastPurge },
       hookEvents: { ...hookEventsDiskUsage(HOOK_EVENTS_DIR), receivedSinceBoot: p.hookEventWrites },
@@ -2810,12 +2804,18 @@ uiServer.listen(UI_PORT, BIND_HOST, () => {
 
 function shutdown() {
   clearInterval(spanFlushTimer)
+  clearInterval(spanRetentionTimer)
   clearInterval(durableSaveTimer)
-  // TRDD-PJC8N1HO spec 4: atomic spans write. spec 3: flush offsets + stripped cards so the next start
-  // resumes instantly. spec 2: record the graceful stop so the gap after it reads as a clean shutdown,
-  // not a crash. All best-effort — a shutdown must never hang on a failed write.
-  // One full NDJSON rewrite here is the compaction the append-only format defers to shutdown.
-  try { atomicWriteFileSync(DATA_FILE, spansToNdjson(spans)); console.log(`\n[AgentLens] Saved ${spans.length} spans to ${DATA_FILE}`) } catch { /* ignore */ }
+  // Segmented store: shutdown is a final O(pending) append flush — NEVER a whole-store rewrite
+  // (the old shutdown rewrite was the last surviving instance of the 420GB SSD-wear pattern).
+  // spec 3: flush offsets + stripped cards so the next start resumes instantly. spec 2: record
+  // the graceful stop so the gap after it reads as a clean shutdown, not a crash. All
+  // best-effort — a shutdown must never hang on a failed write.
+  try {
+    const r = spanStore.flush()
+    const st = spanStore.stats()
+    console.log(`\n[AgentLens] Flushed ${r.appendedSpans} pending span(s) — store holds ${st.totalSpans} span(s) across ${st.segments} segment(s) in ${SPANS_DIR}`)
+  } catch { /* ignore */ }
   try { saveOffsetsNow() } catch { /* ignore */ }
   try { saveCardsNow() } catch { /* ignore */ }
   try { recordCollectorStop(LIFECYCLE_FILE, lifecycle) } catch { /* ignore */ }
