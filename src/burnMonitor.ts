@@ -17,7 +17,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { calcTokenCostUsd } from './shared/pricing'
 import { computeKeepWarm, type KeepWarmReport } from './shared/keepWarm'
-import type { SessionSummaryCard, TimelineEntry } from './shared/summarizerTypes'
+import type { SessionSummaryCard, TimelineEntry, TokensSource } from './shared/summarizerTypes'
 
 // ── Consumption events ─────────────────────────────────────────────────────────
 
@@ -848,7 +848,9 @@ export function cardCostUsd(card: SessionSummaryCard): number {
 }
 
 export interface SessionStatus {
-  resolved: { sessionId: string; workspace: string; source: string; model: string; live: boolean; matchedBy: SessionMatchKind }
+  // tokensSource (P7): which feed backs the card's token figures — null = pre-P7 card ("unknown",
+  // never a guess); coverageNote rides only when the merge decision recorded a displacement.
+  resolved: { sessionId: string; workspace: string; source: string; model: string; live: boolean; matchedBy: SessionMatchKind; tokensSource: TokensSource | null; coverageNote?: string }
   context: { currentTokens: number; peakTokens: number; windowSize: number | null; usedPct: number | null }
   usageBuckets: { input: number; output: number; cacheRead: number; cacheCreate: number }   // last turn
   avgPerCall: { input: number; output: number; cacheRead: number; cacheCreate: number; total: number } // the "avg 5 values"
@@ -929,6 +931,9 @@ export function computeSessionStatus(
     resolved: {
       sessionId: card.sessionId, workspace: ws, source: card.source, model: card.model,
       live: r.live, matchedBy: r.matchedBy,
+      // P7 provenance of the figures below — null (pre-P7 card) reads as "unknown", never a guess.
+      tokensSource: card.tokensSource ?? null,
+      ...(card.coverageNote ? { coverageNote: card.coverageNote } : {}),
     },
     context: {
       currentTokens: sl?.lastTotalInputTokens ?? card.peakContextPerTurn ?? 0,
