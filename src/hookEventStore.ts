@@ -24,6 +24,20 @@ function bucketPath(dir: string, ts: number): string {
   return path.join(dir, `${new Date(ts).toISOString().slice(0, 10)}.ndjsonl`)
 }
 
+// A bucket filename → the UTC ms of the day it holds, or null when the file is not one of ours.
+// The shape regex alone is NOT enough: `2026-13-99.ndjsonl` matches `\d{2}-\d{2}` yet parses to
+// NaN, and NaN silently defeats BOTH the read fast-path (`NaN > until` is false, so the bucket is
+// scanned) and a string-compare purge (`'2026-13-99' >= cutoff` is always true, so it is never
+// deleted — an unpurgeable file counted in disk usage forever). Parse once, here, for all three.
+function bucketDayMs(filename: string): number | null {
+  if (!/^\d{4}-\d{2}-\d{2}\.ndjsonl$/.test(filename)) return null
+  const day = filename.slice(0, 10)
+  const ms = Date.parse(`${day}T00:00:00Z`)
+  // Date.parse accepts overflow ('2026-02-31'); round-trip to reject anything not calendar-real.
+  if (!Number.isFinite(ms) || new Date(ms).toISOString().slice(0, 10) !== day) return null
+  return ms
+}
+
 /** Append one hook event; returns bytes written (for the server's persistence accounting). */
 export function appendHookEvent(dir: string, payload: Record<string, unknown>): number {
   const ts = Date.now()
@@ -55,13 +69,13 @@ export function readHookEvents(dir: string, filter: HookEventFilter = {}): HookE
   const out: HookEventRecord[] = []
   let buckets: string[]
   try {
-    buckets = fs.readdirSync(dir).filter(f => /^\d{4}-\d{2}-\d{2}\.ndjsonl$/.test(f)).sort().reverse()
+    buckets = fs.readdirSync(dir).filter(f => bucketDayMs(f) !== null).sort().reverse()
   } catch {
     return out // no dir yet — no events
   }
   for (const b of buckets) {
     // Filename dates bound the bucket's contents — skip whole buckets outside the window.
-    const dayStart = Date.parse(`${b.slice(0, 10)}T00:00:00Z`)
+    const dayStart = bucketDayMs(b) as number
     if (dayStart > until || dayStart + 86_400_000 < since) continue
     let lines: string[]
     try {
@@ -88,12 +102,14 @@ export function readHookEvents(dir: string, filter: HookEventFilter = {}): HookE
 export function purgeHookEventBuckets(dir: string, retentionDays: number): { removed: string[]; freedBytes: number } {
   const removed: string[] = []
   let freedBytes = 0
-  const cutoff = new Date(Date.now() - retentionDays * 86_400_000).toISOString().slice(0, 10)
+  const cutoffDay = new Date(Date.now() - retentionDays * 86_400_000).toISOString().slice(0, 10)
+  const cutoffMs = Date.parse(`${cutoffDay}T00:00:00Z`)
   let files: string[]
   try { files = fs.readdirSync(dir) } catch { return { removed, freedBytes } }
   for (const f of files) {
-    if (!/^\d{4}-\d{2}-\d{2}\.ndjsonl$/.test(f)) continue
-    if (f.slice(0, 10) >= cutoff) continue
+    const dayMs = bucketDayMs(f)
+    if (dayMs === null) continue   // not one of our buckets — never delete a foreign file
+    if (dayMs >= cutoffMs) continue
     const p = path.join(dir, f)
     try {
       freedBytes += fs.statSync(p).size
@@ -109,7 +125,7 @@ export function hookEventsDiskUsage(dir: string): { files: number; bytes: number
   let bytes = 0
   try {
     for (const f of fs.readdirSync(dir)) {
-      if (!/^\d{4}-\d{2}-\d{2}\.ndjsonl$/.test(f)) continue
+      if (bucketDayMs(f) === null) continue
       try { bytes += fs.statSync(path.join(dir, f)).size; files++ } catch { /* raced */ }
     }
   } catch { /* no dir yet */ }
