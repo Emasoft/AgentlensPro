@@ -4,7 +4,7 @@ import { SessionStore } from './sessionStore'
 import { DatabaseReader, type DailyStatRow, type LifetimeStats, type SearchQuery, type BurnRate, type Projection } from './database/reader'
 import { DatabaseWriter } from './database/writer'
 import { summarizeSpans } from './spanSummarizer'
-import { preferredDataSource } from './feedMergePolicy'
+import { preferredDataSource, linkSubagentTranscripts } from './feedMergePolicy'
 import { lookupRates } from './shared/pricing'
 import type { SessionSummaryCard, TimelineEntry, GeneratedFileRef } from './shared/summarizerTypes'
 
@@ -171,7 +171,10 @@ export class SessionRepository {
     const dbSessions = this.reader.listSessions(filter)
     const liveSpans = this.store.getSpans()
     const liveSessions = liveSpans.length > 0 ? summarizeSpans(liveSpans).sessions : []
-    const merged = dedupeSessionIdentities(mergeSessions(dbSessions, liveSessions))
+    // P8: linkSubagentTranscripts BEFORE the identity dedupe — a single-turn sync child's placeholder
+    // and its transcript twin can carry identical buckets (final-turn == summed), and the fingerprint
+    // merge would collapse them WITHOUT grafting the spawn taxonomy the placeholder carries.
+    const merged = dedupeSessionIdentities(linkSubagentTranscripts(mergeSessions(dbSessions, liveSessions)))
     resolveWorkspacesFromLogs(merged)
     flagUnpricedSessions(merged)
     if (filter?.limit !== null && filter?.limit !== undefined && merged.length > filter.limit) {

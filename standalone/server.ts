@@ -13,7 +13,7 @@ import * as path from 'path'
 import * as os from 'os'
 import { exec } from 'child_process'
 import { summarizeSpans } from '../src/spanSummarizer'
-import { mergeOtelAndLogSessions } from '../src/feedMergePolicy'
+import { mergeOtelAndLogSessions, linkSubagentTranscripts } from '../src/feedMergePolicy'
 import { calcTokenCostUsd } from '../src/shared/pricing'
 import { contextTokens } from '../src/shared/tokenBuckets'
 import { countFallback, fallbackTotals } from '../src/shared/fallbackCounters'
@@ -1204,7 +1204,11 @@ function buildSessionSummary(): ReturnType<typeof summarizeSpans> | null {
   // reports/token-discrepancy/20260710_141134+0200-otel-vs-jsonl.md §5.6) — and OTEL
   // wins for every other source. OTEL-only sessions (no transcript) still serve.
   if (logSessions.size > 0) {
-    const merged = mergeOtelAndLogSessions(summary?.sessions ?? [], [...logSessions.values()])
+    // P8: collapse each async/sync spawn placeholder with its subagents/*.jsonl transcript twin so a
+    // child serves ONCE, with real parsed totals (spawnAsync clears → the rollup's
+    // asyncUnreportedChildren decrements). Runs on the merged list because the placeholder (parent
+    // transcript) and the twin (child transcript) come from different files/scans.
+    const merged = linkSubagentTranscripts(mergeOtelAndLogSessions(summary?.sessions ?? [], [...logSessions.values()]))
       .sort((a, b) => Date.parse(b.startTime || '0') - Date.parse(a.startTime || '0'))
     summary = { ...(summary ?? { backgroundSpans: [], efficiency: { totalInputTokens: 0, totalOutputTokens: 0, totalLlmCalls: 0, avgInputPerCall: 0, avgTtft: 0, cacheHitRate: 0, toolDefWaste: 0, sysInstructionWaste: 0, topTokenConsumers: [] } }), sessions: merged }
   }
