@@ -15,8 +15,8 @@
 
 import * as fs from 'fs'
 import * as path from 'path'
-import { calcTokenCostUsd } from './pricing'
-import type { SessionSummaryCard, TimelineEntry } from './summarizers/summarizerTypes'
+import { calcTokenCostUsd } from './shared/pricing'
+import type { SessionSummaryCard, TimelineEntry } from './shared/summarizerTypes'
 
 // ── Consumption events ─────────────────────────────────────────────────────────
 

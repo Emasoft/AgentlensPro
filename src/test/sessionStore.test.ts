@@ -1,7 +1,7 @@
 import * as assert from 'assert'
 import { SessionStore } from '../sessionStore'
 import { summarizeSpans } from '../spanSummarizer'
-import { Span } from '../types'
+import { Span } from '../shared/telemetryTypes'
 
 // The SessionStore constructor no longer needs a VS Code ExtensionContext: the
 // extension host was removed (TRDD-6E6416B8) and the param is now an unused

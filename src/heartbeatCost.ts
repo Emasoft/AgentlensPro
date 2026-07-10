@@ -20,7 +20,7 @@
 
 import * as fs from 'fs'
 import * as path from 'path'
-import { calcTokenCostUsd } from './pricing'
+import { calcTokenCostUsd } from './shared/pricing'
 import { DEFAULT_BODIES_DIR } from './cacheCreationForensics'
 import { sessionIdOf } from './sessionBurnProfile'
 

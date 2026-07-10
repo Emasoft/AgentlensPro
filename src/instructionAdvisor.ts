@@ -3,8 +3,8 @@
  * All inputs are workspace-pre-filtered; no I/O here.
  */
 
-import type { SessionSummaryCard } from './summarizers/summarizerTypes'
-import { calcTokenCostUsd } from './pricing'
+import type { SessionSummaryCard } from './shared/summarizerTypes'
+import { calcTokenCostUsd } from './shared/pricing'
 
 export type SuggestionCategory = 'context' | 'behavior' | 'prompting'
 

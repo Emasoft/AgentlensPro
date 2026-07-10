@@ -6,12 +6,12 @@
 // history already knows (per-block tokens × turns-resident) and ranks the result, so the
 // "conversation remainder" of the inflation report becomes an itemized, named list.
 //
-// MIRRORED in media/src/residentCost.ts (webview cannot import Node-side modules — see CLAUDE.md
-// three-runtime split). Change BOTH files together.
+// Shared by the host (MCP tools) and the webview (History tab) — this file replaced the
+// hand-synced media/src/residentCost.ts mirror. Keep it runtime-neutral: no Node, no DOM.
 
 import type {
   ContextHistory, ContextBlockKind, ResidentCostBlock, ResidentCostReport,
-} from './summarizers/summarizerTypes'
+} from './summarizerTypes'
 
 // Per-kind one-line remediation hints (TRDD-W0RRL2FZ spec 4). A Record over the full kind union so
 // the compiler forces a hint when a new ContextBlockKind is added — an unknown kind can never fall

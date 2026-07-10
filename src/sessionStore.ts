@@ -1,7 +1,9 @@
-import { Span, SpanAttribute, SessionSummary } from './types'
+import { Span, SpanAttribute } from './shared/telemetryTypes'
+import { SessionSummary } from './types'
 import { nanoToMs } from './summarizers/helpers'
 
-export type { Span, SessionSummary } from './types'
+export type { Span } from './shared/telemetryTypes'
+export type { SessionSummary } from './types'
 
 export class SessionStore {
   private spans: Span[] = []

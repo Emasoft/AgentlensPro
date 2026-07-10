@@ -7,7 +7,7 @@ import {
   attachGeneratedFiles, readScratchFile, scratchPathsInToolInput, scratchPathsInToolUseResult,
   type HarvestedGeneratedFile,
 } from '../generatedFiles'
-import type { SessionSummaryCard } from '../summarizers/summarizerTypes'
+import type { SessionSummaryCard } from '../shared/summarizerTypes'
 
 // ── Output-file / subfolder tracking (TRDD-ZS1GDXVY) — pure-module tests ──────
 // Covers the matcher, the bytes→tokens estimate, the stat resolver, the bounded scratch-tree

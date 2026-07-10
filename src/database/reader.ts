@@ -1,8 +1,8 @@
 import * as path from 'path'
 import * as fs from 'fs'
 import { joinUri, type UriLike, type ReadBlobFs } from '../vscodeCompat'
-import type { SessionSummaryCard, TimelineEntry, EditDetail, GeneratedFileRef } from '../summarizers/summarizerTypes'
-import { lookupRates, calcTokenCostUsd } from '../pricing'
+import type { SessionSummaryCard, TimelineEntry, EditDetail, GeneratedFileRef } from '../shared/summarizerTypes'
+import { lookupRates, calcTokenCostUsd } from '../shared/pricing'
 
 export interface DailyStatRow {
   day: string              // 'YYYY-MM-DD'

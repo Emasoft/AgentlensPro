@@ -14,8 +14,8 @@ import {
 } from '../utils'
 import { calcEntryCost, calcSessionCost, fmtUsd } from '../sessionMetrics'
 import { countTokens } from '../tokenEstimator'
-import { buildCacheBreakReport, cacheBreaksByTurn, CAUSE_LABEL } from '../cacheBreak'
-import { buildTokensByCause, CAUSE_DIMENSION_LABEL } from '../tokensByCause'
+import { buildCacheBreakReport, cacheBreaksByTurn, CAUSE_LABEL } from '../../../src/shared/cacheBreak'
+import { buildTokensByCause, CAUSE_DIMENSION_LABEL } from '../../../src/shared/tokensByCause'
 import { spawnKindBadge, hitRateColor, formatPct, SpawnCostPanel } from './cacheShared'
 import { BlockRow } from './HistoryTab'
 import type { SessionSummaryCard, TimelineEntry, BackgroundSpanSummary, CacheBreakTurn, ContextSource, CallContext, CauseDimension } from '../types'
@@ -1144,8 +1144,8 @@ function SubAgentBranch({ child, sessIdx }: { child: SessionSummaryCard; sessIdx
 // keeps the chronological waterfall and its ruler. Grouped by turn it is a session → turn → step
 // ── Tokens by cause (TRDD-UBEP5XY7) ───────────────────────────────────────────
 // Session-view rollup of WHO spent the tokens, grouped from the per-call api_request ground truth
-// (exact usage buckets + cost_usd) by media/src/tokensByCause.ts (mirror of src/tokensByCause.ts —
-// the get_cost_by_cause MCP tool returns the same numbers). Per-dimension toggle; clicking a named
+// (exact usage buckets + cost_usd) by src/shared/tokensByCause.ts (the same engine behind the
+// get_cost_by_cause MCP tool, so both surfaces return the same numbers). Per-dimension toggle; clicking a named
 // row filters the trace to exactly its calls via the structured `cause:<dim>=<key>` haystack token.
 // The unattributed bucket is rendered explicitly (muted, pinned last) — counted, never dropped.
 function TokensByCausePanel({ steps, card, activeFilter, onFilter }: {

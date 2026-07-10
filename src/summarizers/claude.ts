@@ -1,5 +1,5 @@
-import { Span } from '../types'
-import { SessionSummaryCard, TimelineEntry, EditDetail } from './summarizerTypes'
+import { Span } from '../shared/telemetryTypes'
+import { SessionSummaryCard, TimelineEntry, EditDetail } from '../shared/summarizerTypes'
 import {
   getAttrStr, getAttrInt, nanoToMs, CLAUDE_WRITE_TOOLS, FULL_WRITE_TOOLS,
   extractResponseText, extractTokenCounts, normalizeUserRequest, getGenAiModel,

@@ -1,6 +1,6 @@
 import type { SessionSummaryCard, TimelineEntry } from './types'
 import { getAgentProfiles, resolveAgentProfile, type AgentThresholdProfiles } from './agentProfiles'
-import { lookupRates, calcTokenCost, type PricingMode } from './pricing'
+import { lookupRates, calcTokenCost, type PricingMode } from '../../src/shared/pricing'
 
 export function fmtUsd(usd: number): string {
   if (usd === 0) return '$0.00'

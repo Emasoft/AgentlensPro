@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'preact/hooks'
 import { displaySessions, sessionTimelines, sessionCompositions, serverBurnStatus } from '../state'
-import { buildCacheBreakReport } from '../cacheBreak'
+import { buildCacheBreakReport } from '../../../src/shared/cacheBreak'
 import { buildDisplaySummary, formatMs, formatCompact } from '../utils'
 import {
   calcSessionCost,
@@ -11,7 +11,7 @@ import {
   getPeakContextUsage,
   sessionDisplayName,
 } from '../sessionMetrics'
-import { buildSpawnRollup } from '../spawnRollup'
+import { buildSpawnRollup } from '../../../src/shared/spawnRollup'
 import {
   AgentThresholdInputs,
   AgentThresholdNumberInputs,

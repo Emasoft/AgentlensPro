@@ -1,6 +1,6 @@
 import * as assert from 'assert'
 import { summarizeSpans } from '../spanSummarizer'
-import { Span } from '../types'
+import { Span } from '../shared/telemetryTypes'
 
 // ── Test helpers ──
 

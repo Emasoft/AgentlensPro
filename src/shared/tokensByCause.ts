@@ -1,7 +1,7 @@
 import type {
   TimelineEntry, CauseDimension, CauseRollupRow, CauseDimensionRollup,
   CauseReconciliation, TokensByCauseReport,
-} from './summarizers/summarizerTypes'
+} from './summarizerTypes'
 
 // ── Tokens-by-CAUSE attribution rollup (TRDD-UBEP5XY7) ────────────────────────
 // Pure, runtime-neutral aggregation over the claude_code.api_request timeline entries the R-I
@@ -10,8 +10,9 @@ import type {
 // This module groups those calls per cause dimension and sums buckets + cost, answering "which
 // skill/plugin/subagent costs me the most?" as one ranked table. Figures are exact ground truth
 // (per-call usage + cost_usd), never estimates. Pure OTEL data — works for OTEL-only sessions
-// with no local .jsonl. MIRRORED verbatim in media/src/tokensByCause.ts — change both (same
-// convention as spawnRollup.ts / residentCost.ts / cacheBreak.ts).
+// with no local .jsonl. Shared by the host (MCP tools) and the webview (Traces per-cause toggle) —
+// this file replaced the hand-synced media/src/tokensByCause.ts mirror. Runtime-neutral: no
+// Node, no DOM.
 
 // Dimension order is the drill order the TRDD names: who issued (querySource) → which sub-agent →
 // which skill → which plugin → which MCP server → which MCP tool. Exported so the MCP tool and the

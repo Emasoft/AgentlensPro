@@ -5,7 +5,7 @@ import { claudeProjectsDirs } from './logReader'
 import { countTokens, calibrateTokens } from './tokenEstimator'
 import type {
   ContextHistory, ContextHistoryStep, ContextBlock, ContextBlockKind, StepDiff,
-} from './summarizers/summarizerTypes'
+} from './shared/summarizerTypes'
 
 // Hard caps so an on-demand parse of a huge session never blocks the host unbounded. A session past
 // MAX_LINES is reported truncated=true (the reconstruction covers what was read). Only the first

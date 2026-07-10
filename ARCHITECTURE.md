@@ -817,15 +817,21 @@ sequenceDiagram
 
 ## 11. Cost Calculation
 
-Cost is computed in two places:
+ONE rate table — `src/shared/pricing.ts` — serves both runtimes (it replaced the two hand-synced
+copies that used to live in `src/pricing.ts` and `media/src/pricing.ts` and had drifted apart):
 
-1. **Extension host** (`src/pricing.ts`) — at write time; `cost_usd` is stored in the `sessions` row and used for all aggregate queries (`SUM(cost_usd)`, `queryDailyStats`, `queryBurnRate`).
-2. **Browser** (`media/src/pricing.ts`) — at display time; per-turn cost shown in the Cost tab and Flow tooltip. The two rate tables are kept in sync manually.
+1. **Host / standalone server** — at write time via `calcTokenCostUsd` (per-call, applies the >200K
+   tiered surcharge); `cost_usd` is stored in the `sessions` row and used for all aggregate queries
+   (`SUM(cost_usd)`, `queryDailyStats`, `queryBurnRate`).
+2. **Browser** — at display time via `calcTokenCost` (flat rates over session totals — per-call sizes
+   cannot be reconstructed there); per-turn cost shown in the Cost tab and Flow tooltip. Request-mode
+   billing (`PricingMode` 'request' / 'request-annual') is computed in `media/src/sessionMetrics.ts`
+   as `turns × multiplier × $0.04`, with the multipliers coming from the same shared `ModelRates`.
 
 ```mermaid
 flowchart TD
-    subgraph exthost["Extension host - write time"]
-        CARD[SessionSummaryCard] --> PRI_EXT[src/pricing.ts<br/>calcTokenCostUsd]
+    subgraph exthost["Host / standalone - write time"]
+        CARD[SessionSummaryCard] --> PRI_EXT[src/shared/pricing.ts<br/>calcTokenCostUsd]
         PRI_EXT --> DB_COST[sessions.cost_usd<br/>stored in SQLite]
     end
 
@@ -834,9 +840,9 @@ flowchart TD
         LR --> RATES{Rates found?}
         RATES -- no  --> ZERO[cost=0, modelUnknown=true]
         RATES -- yes --> MODE{PricingMode}
-        MODE -- token --> TC[calcTokenCost<br/>input/cacheRead/cacheWrite/output<br/>per-MTok rate / 1,000,000]
-        MODE -- request-annual --> RA[calcRequestCost<br/>turns x multiplierAnnualPostJun1 x $0.04<br/>annual-plan holders post-Jun 2026]
-        MODE -- request --> RC[calcRequestCost — DEPRECATED<br/>turns x multiplier x $0.04<br/>pre-Jun 2026 billing only]
+        MODE -- token --> TC[src/shared/pricing.ts calcTokenCost<br/>input/cacheRead/cacheWrite/output<br/>per-MTok rate / 1,000,000]
+        MODE -- request-annual --> RA[sessionMetrics.ts request math<br/>turns x multiplierAnnualPostJun1 x $0.04<br/>annual-plan holders post-Jun 2026]
+        MODE -- request --> RC[sessionMetrics.ts request math — DEPRECATED<br/>turns x multiplier x $0.04<br/>pre-Jun 2026 billing only]
         TC --> ENTRY_COST[calcEntryCost - Flow tooltip]
         TC --> SESS_COST[calcSessionCost - Cost tab table]
         RC --> SESS_COST
@@ -850,7 +856,7 @@ flowchart TD
     end
 ```
 
-`contextWindowTokens` (stored in `src/pricing.ts`) enables the `Projection` calculation: given current session token usage and burn rate, estimate time to context exhaustion and final cost.
+`contextWindowTokens` (stored in `src/shared/pricing.ts`) enables the `Projection` calculation: given current session token usage and burn rate, estimate time to context exhaustion and final cost.
 
 Pricing data covers: OpenAI (GPT-4.1 through GPT-5.5), Anthropic (Claude Haiku/Sonnet/Opus 4.x), Google (Gemini 2.5–3.5), Codex, and fine-tuned models. Last updated: 2026-05-28.
 
@@ -940,7 +946,15 @@ agentlens/
 │   ├── sessionStore.ts           # 5-min rolling span window, onUpdate callbacks
 │   ├── sessionRepository.ts      # Merges DB + live window; single session data access point
 │   ├── spanSummarizer.ts         # Orchestrates per-agent builders
-│   ├── pricing.ts                # Extension-host pricing: lookupRates, calcTokenCostUsd
+│   ├── shared/                   # Runtime-neutral modules imported by BOTH src/** and media/src/**
+│   │   │                         #   (no Node imports, no DOM APIs; guarded by scripts/check-no-mirrors.js)
+│   │   ├── pricing.ts            # THE rate table: lookupRates, calcTokenCostUsd (host), calcTokenCost (webview)
+│   │   ├── summarizerTypes.ts    # SessionSummaryCard, TimelineEntry, and all card/diagnosis types
+│   │   ├── telemetryTypes.ts     # Span, SpanAttribute, SpanStatus, LoopSignal(Type)
+│   │   ├── cacheBreak.ts         # Cache-break classifier + report builder + CAUSE_LABEL
+│   │   ├── residentCost.ts       # Resident-cost itemization over a ContextHistory
+│   │   ├── spawnRollup.ts        # Spawn-cost rollup + antipattern detections
+│   │   └── tokensByCause.ts      # Tokens-by-cause attribution rollup
 │   ├── sidebarPanel.ts           # Sidebar webview
 │   ├── dashboardPanel.ts         # Full dashboard webview, message protocol, alert notifications
 │   ├── autoConfig.ts             # Copilot VS Code settings
@@ -948,7 +962,7 @@ agentlens/
 │   ├── exportData.ts             # JSON export helpers
 │   ├── logReader.ts              # LogReader — local log ingestion (Claude/Codex/Copilot CLI/Copilot Chat JSONL+JSON)
 │   ├── loopDetector.ts           # Loop signal detection
-│   ├── types.ts                  # Shared extension-host types
+│   ├── types.ts                  # Host-only types (SessionSummary)
 │   ├── database/
 │   │   ├── schema.ts             # SCHEMA_SQL — CREATE TABLE statements + indexes
 │   │   ├── db.ts                 # AgentLensDb — open, migrate, save, dispose
@@ -961,8 +975,7 @@ agentlens/
 │   │   ├── claude.ts             # Claude Code session builder
 │   │   ├── copilot.ts            # Copilot session builder
 │   │   ├── codex.ts              # Codex session builder
-│   │   ├── helpers.ts            # Shared attribute/token extraction
-│   │   └── summarizerTypes.ts    # SessionSummaryCard, TimelineEntry, etc.
+│   │   └── helpers.ts            # Shared attribute/token extraction
 │   └── test/
 │       ├── sessionStore.test.ts
 │       ├── database/
@@ -977,8 +990,7 @@ agentlens/
 │   ├── src/
 │   │   ├── App.tsx               # Preact root, message handler, tab router, sticky tab bar
 │   │   ├── state.ts              # Signals: sessions, timelines, blobs, analytics, sort, time range
-│   │   ├── types.ts              # Frontend types mirroring backend + analytics types
-│   │   ├── pricing.ts            # Browser pricing: rate table, lookupRates, calcTokenCost
+│   │   ├── types.ts              # Webview-specific message/UI types + re-exports of src/shared types
 │   │   ├── sessionMetrics.ts     # calcSessionCost, calcEntryCost, fmtUsd
 │   │   ├── utils.ts              # Formatting helpers, agent colors, session labels
 │   │   ├── agentProfiles.ts      # Per-agent alert/automation thresholds (localStorage)

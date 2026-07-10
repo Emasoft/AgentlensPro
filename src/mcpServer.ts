@@ -20,21 +20,21 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
-import { calcTokenCostUsd } from './pricing'
+import { calcTokenCostUsd } from './shared/pricing'
 import type {
   SessionSummaryCard, TimelineEntry, ContextComposition,
   CacheBreakReport, CacheBreakOffender, ContextHistory, CallContext, CollectorGap,
-} from './summarizers/summarizerTypes'
-import { buildCacheBreakReport } from './cacheBreak'
+} from './shared/summarizerTypes'
+import { buildCacheBreakReport } from './shared/cacheBreak'
 import { investigateBurn } from './burnInvestigator'
 import { checkBurnRisk } from './burnGuard'
 import { buildRateLimitReport } from './rateLimitReport'
 import { buildRuntimeInventory } from './runtimeInventory'
 import type { HookEventRecord } from './hookEventStore'
 import type { BodiesActivityReport } from './bodiesActivity'
-import { buildResidentCostReport } from './residentCost'
-import { buildSpawnRollup } from './spawnRollup'
-import { buildTokensByCause } from './tokensByCause'
+import { buildResidentCostReport } from './shared/residentCost'
+import { buildSpawnRollup } from './shared/spawnRollup'
+import { buildTokensByCause } from './shared/tokensByCause'
 import type { BurnStatus, SessionStatus, AccountWindowBudget } from './burnMonitor'
 import { type AccountInfo, accountLabelFor } from './accountInfo'
 import { listSessionFileIds } from './contextComposition'

@@ -5,7 +5,7 @@ import * as os from 'os'
 import { SCHEMA_SQL } from '../../database/schema'
 import { DatabaseWriter } from '../../database/writer'
 import { runRetention } from '../../database/retention'
-import type { SessionSummaryCard } from '../../summarizers/summarizerTypes'
+import type { SessionSummaryCard } from '../../shared/summarizerTypes'
 import type { UriLike } from '../../vscodeCompat'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

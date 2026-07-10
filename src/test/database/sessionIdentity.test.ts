@@ -1,7 +1,7 @@
 import * as assert from 'assert'
 import { dedupeSessionIdentities, flagUnpricedSessions } from '../../sessionRepository'
-import { lookupRates, calcTokenCostUsd } from '../../pricing'
-import type { SessionSummaryCard } from '../../summarizers/summarizerTypes'
+import { lookupRates, calcTokenCostUsd } from '../../shared/pricing'
+import type { SessionSummaryCard } from '../../shared/summarizerTypes'
 
 // TRDD-ZK37VG4X — cost + identity integrity: sonnet-5 pricing, unpriced fail-loud, session dedup.
 

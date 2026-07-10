@@ -1,22 +1,32 @@
-// Webview port of src/cacheBreak.ts (the extension-host pure classifier). The two are kept in
-// sync BY HAND, the same way media/src/pricing.ts mirrors src/pricing.ts — the webview cannot
-// import Node code, and the composition + per-turn buckets it needs are already resident in the
-// browser (sessionCompositions + sessionTimelines), so the diagnosis runs entirely client-side.
-//
-// The prompt cache is a PREFIX cache: turn N reuses turn N-1's cached prefix only up to the FIRST
-// byte that differs; from that break point on everything is re-billed as cache_creation (write
-// rate) instead of cache_read (~10% of input). This module reconstructs each turn's context blocks
-// (ContextSource[]), diffs them vs the previous turn, finds the first divergence, classifies the
-// CAUSE, and sizes the wasted cache_creation. Pure: same input → same output.
-
 import type {
   ContextSource, ContextComposition, TimelineEntry,
   CacheBreakCause, CacheBreakTurn, CacheBreakOffender, CacheBreakReport,
-} from './types'
+} from './summarizerTypes'
 import { lookupRates } from './pricing'
 
-// One turn's cache-relevant footprint. `sources` are the injected context blocks; the token
-// buckets are the EXACT usage figures for the turn.
+// ── Cache-break classifier (P4, TRDD-TKN5VALS) ────────────────────────────────
+//
+// The prompt cache is a PREFIX cache: turn N reuses turn N-1's cached prefix only up to the FIRST
+// byte that differs; from that break point on everything is re-billed as `cache_creation` (full
+// write rate) instead of `cache_read` (~10% of the input rate). A single volatile block early in
+// the context therefore invalidates ALL cached content after it — the dominant, invisible token
+// sink. This module reconstructs each turn's context blocks, diffs them vs the previous turn, finds
+// the first divergence, classifies the CAUSE (taxonomy D of the plan), and sizes the wasted
+// cache_creation. It is a PURE function (no I/O, no globals) so it is trivially unit-testable.
+// Shared by the host (MCP diagnostic tools) and the webview (Cache tab / trace markers / Alerts) —
+// this file replaced the hand-synced media/src/cacheBreak.ts mirror, whose copy had silently
+// drifted (it was missing the FAST_MODE detection below). Keep it runtime-neutral: no Node
+// imports, no DOM APIs.
+//
+// LIMITATION worth stating plainly: the composition parser emits each turn's injected blocks
+// heaviest-first, not in true prompt position. So the diff below is a SET diff (add / remove /
+// size-change by stable identity), and turn order is used only to pick a deterministic "first"
+// offender to name. This localises the CAUSE reliably; the SIZE is the turn's real
+// `cache_creation` from usage attributed to that cause (an estimate, an upper bound for a partial
+// break).
+
+// One turn's cache-relevant footprint. `sources` are the injected context blocks (from
+// buildContextComposition); the token buckets are the EXACT usage figures for the turn.
 export interface CacheTurnInput {
   turn: number
   sources: ContextSource[]
@@ -24,21 +34,25 @@ export interface CacheTurnInput {
   cacheCreateTokens: number
   inputTokens: number
   model?: string
-  timestampMs?: number
+  hasFastMode?: boolean
+  timestampMs?: number   // wall-clock of the turn (for IDLE_TTL_EXPIRY detection); optional
 }
 
 export interface AnalyzeCacheBreaksOpts {
+  // Rates to price the wasted re-write. cost ≈ wastedTokens × (writeRate − 0.1 × inputRate).
+  // When absent, wastedCostUsd stays 0 (the token figure is still populated).
   writeRateUsdPerMTok?: number
   inputRateUsdPerMTok?: number
-  idleTtlMs?: number
+  idleTtlMs?: number     // gap beyond which the cache entry expired; default 5 min
 }
 
 const DEFAULT_IDLE_TTL_MS = 5 * 60_000
 
-// Kinds emitted by the composition parser that live in the STABLE prefix.
+// Kinds the composition parser emits that live in the STABLE prefix (their turn-to-turn mutation is
+// an avoidable break). All of them qualify — the parser never emits the conversation-message layer.
 const CATALOG_KINDS = new Set(['toolCatalog', 'agentCatalog'])
 
-export const REMEDIATION: Record<CacheBreakCause, string> = {
+const REMEDIATION: Record<CacheBreakCause, string> = {
   TOOLS_CHANGED:          'Never remove tools mid-session; use defer-loading stubs + tool-search so the catalog stays byte-identical.',
   TOOLS_REORDERED:        'Emit tools in a stable sorted order so the catalog bytes do not shuffle turn-to-turn.',
   SYSTEM_PROMPT_TIMESTAMP:'Move the moving clock/time out of the system prompt into a <system-reminder> in the next user message.',
@@ -56,16 +70,19 @@ export const REMEDIATION: Record<CacheBreakCause, string> = {
   UNKNOWN:                'Cause could not be localised from the block diff; inspect the raw prefix around this turn.',
 }
 
+// Stable identity of an injected block across turns.
 function sourceKey(s: ContextSource): string { return `${s.kind}::${s.label}` }
 
+// Classify the kind of a divergent block into a break cause.
 function causeForKind(kind: string): CacheBreakCause {
   if (CATALOG_KINDS.has(kind)) return 'TOOLS_CHANGED'
   if (kind === 'mcp') return 'MCP_SERVER_TOGGLE'
   return 'INJECTED_BLOCK_CHANGED'
 }
 
-// First block (in `cur` order) absent from `prev`, or present with a changed token size — the
-// earliest divergence the prefix cache trips on. null when the two turns carry the same blocks.
+// Find the first block (in `cur` order) that is absent from `prev`, or present but with a changed
+// token size — the earliest divergence the prefix cache would trip on. Returns null when the two
+// turns carry the same blocks at the same sizes (order aside).
 function firstDivergentBlock(prev: ContextSource[], cur: ContextSource[]): ContextSource | null {
   const prevByKey = new Map<string, ContextSource>()
   for (const s of prev) prevByKey.set(sourceKey(s), s)
@@ -73,11 +90,14 @@ function firstDivergentBlock(prev: ContextSource[], cur: ContextSource[]): Conte
     const p = prevByKey.get(sourceKey(s))
     if (!p || p.tokens !== s.tokens) return s
   }
+  // A block present in prev but dropped in cur is also a divergence (the prefix shortened/shifted).
   const curKeys = new Set(cur.map(sourceKey))
   for (const s of prev) if (!curKeys.has(sourceKey(s))) return s
   return null
 }
 
+// Price a wasted re-write. Only cache_creation above the cheap cache_read floor is "wasted": the
+// break forces write-rate billing where a cache_read would have cost ~10% of the input rate.
 function priceWaste(tokens: number, opts: AnalyzeCacheBreaksOpts): number {
   const write = opts.writeRateUsdPerMTok
   if (write === undefined) return 0
@@ -86,6 +106,7 @@ function priceWaste(tokens: number, opts: AnalyzeCacheBreaksOpts): number {
   return Math.max(0, tokens * perTok)
 }
 
+// Classify ONE transition (prev → cur) into a per-turn break verdict.
 function classifyTurn(prev: CacheTurnInput, cur: CacheTurnInput, opts: AnalyzeCacheBreaksOpts): CacheBreakTurn {
   const idleTtl = opts.idleTtlMs ?? DEFAULT_IDLE_TTL_MS
   const idleGapMs = (cur.timestampMs !== undefined && prev.timestampMs !== undefined)
@@ -99,18 +120,26 @@ function classifyTurn(prev: CacheTurnInput, cur: CacheTurnInput, opts: AnalyzeCa
     idleGapMs: gap, remediation: REMEDIATION[cause],
   })
 
+  // 1. Model switch — a full, model-specific invalidation, dominates any block diff.
   if (cur.model && prev.model && cur.model !== prev.model) return emit('MODEL_SWITCHED')
+  // 2. Fast mode turned on this turn.
+  if (cur.hasFastMode && !prev.hasFastMode) return emit('FAST_MODE')
+  // 3. A localizable stable-block divergence (the common structural break).
   const diverged = firstDivergentBlock(prev.sources, cur.sources)
   if (diverged) return emit(causeForKind(diverged.kind), diverged.label, diverged.kind)
+  // 4. No block diff but a long idle gap with a real re-write → the entry expired (one-time).
   if (idleGapMs !== undefined && idleGapMs > idleTtl && cur.cacheCreateTokens > 0) {
     return emit('IDLE_TTL_EXPIRY', undefined, undefined, idleGapMs)
   }
+  // 5. No localizable cause — expected conversation growth, NOT flagged as an avoidable break.
   return {
     turn: cur.turn, broke: false, cause: 'UNKNOWN',
     wastedTokens: 0, wastedCostUsd: 0, idleGapMs,
   }
 }
 
+// Rank the avoidable breaks by cumulative wasted cost (tokens as tie-breaker), grouped by the
+// offending source + cause — the "which block cost me the most cache re-writes" leaderboard.
 function rankOffenders(turns: CacheBreakTurn[]): CacheBreakOffender[] {
   const byKey = new Map<string, CacheBreakOffender>()
   for (const t of turns) {
@@ -128,6 +157,10 @@ function rankOffenders(turns: CacheBreakTurn[]): CacheBreakOffender[] {
     (b.wastedCostUsd - a.wastedCostUsd) || (b.wastedTokens - a.wastedTokens))
 }
 
+/**
+ * Analyze a session's per-turn cache breaks. Pure: same input → same output, no side effects.
+ * `turns` must be in chronological order; turn 1 (the first) never "breaks" (nothing precedes it).
+ */
 export function analyzeCacheBreaks(
   sessionId: string,
   turns: CacheTurnInput[],
@@ -136,28 +169,34 @@ export function analyzeCacheBreaks(
   const results: CacheBreakTurn[] = []
   let totalRead = 0
   let totalCreate = 0
+
   for (let i = 0; i < turns.length; i++) {
     const cur = turns[i]
     totalRead += cur.cacheReadTokens
     totalCreate += cur.cacheCreateTokens
     if (i === 0) {
+      // The first turn warms the cache from cold — not an avoidable break.
       results.push({ turn: cur.turn, broke: false, cause: 'UNKNOWN', wastedTokens: 0, wastedCostUsd: 0 })
       continue
     }
     results.push(classifyTurn(turns[i - 1], cur, opts))
   }
+
   const offenders = rankOffenders(results)
   const totalWastedTokens = offenders.reduce((n, o) => n + o.wastedTokens, 0)
   const totalWastedCostUsd = offenders.reduce((n, o) => n + o.wastedCostUsd, 0)
   const denom = totalRead + totalCreate
   const cacheHitRate = denom > 0 ? totalRead / denom : 0
+
   return { sessionId, turns: results, offenders, totalWastedTokens, totalWastedCostUsd, cacheHitRate }
 }
 
-// ── Convenience: assemble CacheTurnInput[] from a session's resident timeline + composition ───
-// Folds the timeline into per-turn token buckets, overlays the composition's injected blocks, and
+// ── Convenience: assemble the report from a session's timeline + composition ───────────────────
+// Folds the timeline into per-turn token buckets, overlays the composition's injected blocks,
 // prices the waste from the session model's rates. Returns null when there isn't enough to diff
-// (no composition, or a single turn — turn 1 can never break).
+// (no composition, or a single turn — turn 1 can never break). The MCP diagnostic tools AND the
+// webview tabs reuse this so the turn-bucketing logic lives in ONE place, not re-implemented per
+// caller.
 export function buildCacheBreakReport(
   sessionId: string,
   timeline: TimelineEntry[],
@@ -202,13 +241,14 @@ export function buildCacheBreakReport(
   return analyzeCacheBreaks(sessionId, inputs, opts)
 }
 
+// Per-turn lookup of a report's verdicts — the shape the trace tree renders break markers from.
 export function cacheBreaksByTurn(report: CacheBreakReport | null): Map<number, CacheBreakTurn> {
   const m = new Map<number, CacheBreakTurn>()
   if (report) for (const t of report.turns) m.set(t.turn, t)
   return m
 }
 
-// Short human label + colour for a break cause, used by the trace marker + the Cache tab.
+// Short human label for a break cause, used by the trace marker + the Cache tab.
 export const CAUSE_LABEL: Record<CacheBreakCause, string> = {
   TOOLS_CHANGED: 'Tools changed', TOOLS_REORDERED: 'Tools reordered',
   SYSTEM_PROMPT_TIMESTAMP: 'System-prompt timestamp', MODEL_SWITCHED: 'Model switched',

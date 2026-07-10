@@ -2,7 +2,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { SCHEMA_SQL } from './schema'
 import { LOG_INGEST_VERSION } from '../collectorState'
-import { calcTokenCostUsd } from '../pricing'
+import { calcTokenCostUsd } from '../shared/pricing'
 
 // Minimal sql.js surface we use — avoids pulling in @types/sql.js
 // which has a transitive @types/emscripten dep that requires browser lib types.

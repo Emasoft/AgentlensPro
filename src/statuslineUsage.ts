@@ -17,7 +17,7 @@
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import type { SessionSummaryCard, StatuslineUsageAgg } from './summarizers/summarizerTypes'
+import type { SessionSummaryCard, StatuslineUsageAgg } from './shared/summarizerTypes'
 import type { StatuslineBillingEvent } from './burnMonitor'
 
 /** One raw line of the shared statusline-usage.jsonl (mirrors statusline.py's write_usage_jsonl). */

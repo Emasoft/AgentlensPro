@@ -4,6 +4,20 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [0.10.1] — 2026-07-10
+
+### Changed
+
+- **One source of truth for the host/webview shared modules** — the runtime-neutral engines and type definitions (`pricing`, `summarizerTypes`, `telemetryTypes`, `cacheBreak`, `residentCost`, `spawnRollup`, `tokensByCause`) moved to `src/shared/`, imported by BOTH the extension-host/standalone code and the webview. The hand-synced `media/src/` mirror copies are deleted; `media/src/types.ts` now re-exports the shared types and keeps only webview-specific message/UI shapes. The two diverged pricing tables merged into one (`ModelRates` now carries `contextWindowTokens` AND the Copilot request multipliers)
+
+### Fixed
+
+- **Webview cache-break analysis detects FAST_MODE again** — the drifted `media/src/cacheBreak.ts` mirror had silently lost the fast-mode-toggle break cause; the Cache tab / trace markers now run the same classifier the MCP tools use. The webview session cards also gain the `spawnSubagentType` and `statusline` fields the old types mirror was missing
+
+### Added
+
+- **Anti-mirror CI guard** — `scripts/check-no-mirrors.js` (`pnpm run check-mirrors`, wired into CI after Lint) fails the build if any file under `media/src/` re-declares a symbol `src/shared/` exports, so this duplication class cannot come back. First real catch: both tokenEstimators re-declared the shared `TokenSource` type (removed)
+
 ## [0.10.0] — 2026-07-10
 
 ### Added

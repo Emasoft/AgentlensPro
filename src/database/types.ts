@@ -1,4 +1,4 @@
-import type { TimelineEntry } from '../summarizers/summarizerTypes'
+import type { TimelineEntry } from '../shared/summarizerTypes'
 
 /** Flat, SQLite-serialisable form of a session — no nested arrays. */
 export interface SessionRow {

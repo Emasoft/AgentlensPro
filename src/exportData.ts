@@ -1,5 +1,5 @@
 import { joinUri, type UriLike, type WriteBlobFs } from './vscodeCompat'
-import { Span, SpanAttribute } from './types'
+import { Span, SpanAttribute } from './shared/telemetryTypes'
 import { summarizeSpans } from './spanSummarizer'
 
 // baseUri + fs are injected: the VS Code extension host that supplied

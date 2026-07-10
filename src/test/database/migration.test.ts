@@ -4,7 +4,7 @@ import type { UriLike } from '../../vscodeCompat'
 import { SCHEMA_SQL } from '../../database/schema'
 import { DatabaseWriter } from '../../database/writer'
 import { migrateGlobalStateToSqlite, type MigrationContext } from '../../database/migration'
-import type { Span } from '../../types'
+import type { Span } from '../../shared/telemetryTypes'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

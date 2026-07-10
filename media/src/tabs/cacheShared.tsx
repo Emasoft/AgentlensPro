@@ -1,5 +1,5 @@
 import type { SessionSummaryCard, SpawnDetection } from '../types'
-import { buildSpawnRollup } from '../spawnRollup'
+import { buildSpawnRollup } from '../../../src/shared/spawnRollup'
 import { calcSessionCost } from '../sessionMetrics'
 
 // ── Sub-agent spawn-kind badge (shared by the Traces sub-branch rows + the Cache-tab fleet tree) ─

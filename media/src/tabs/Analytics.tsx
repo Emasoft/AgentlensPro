@@ -8,7 +8,7 @@ import { getAgentColor, getAgentSourceLabel, formatMs, formatCompact, tokenBreak
 import { calcSessionCost } from '../sessionMetrics'
 import type { SessionSummaryCard } from '../types'
 import type { PricingMode } from '../sessionMetrics'
-import { PRICING_LAST_UPDATED } from '../pricing'
+import { PRICING_LAST_UPDATED } from '../../../src/shared/pricing'
 
 import { ContextGrowthChart, SessionTokenChart } from './SessionCharts'
 import { CostBarChart, fmtUsd } from './Cost'

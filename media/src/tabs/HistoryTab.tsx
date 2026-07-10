@@ -3,8 +3,8 @@ import { sessionSummary, sessionHistories, focusedSessionId, sessionGeneratedFil
 import { GeneratedFilesList } from '../GeneratedFilesView'
 import { formatCompact, formatSessionTime, getAgentDotHtml } from '../utils'
 import { fmtUsd } from '../sessionMetrics'
-import { lookupRates, calcTokenCost } from '../pricing'
-import { buildResidentCostReport } from '../residentCost'
+import { lookupRates, calcTokenCost } from '../../../src/shared/pricing'
+import { buildResidentCostReport } from '../../../src/shared/residentCost'
 import type { ContextHistory, ContextHistoryStep, ContextBlock, ContextBlockKind, GeneratedFileRef, TokenSource, ResidentCostBlock } from '../types'
 
 // Exact/calibrated/estimated marker for a token figure (TRDD-IQENK7JM). Exact = no marker; calibrated
@@ -122,7 +122,8 @@ export function BlockRow({ block, added, changed, isBreak }: { block: ContextBlo
 // ── Resident-cost itemization panel (TRDD-W0RRL2FZ) ─────────────────────────────
 // Ranks every context block by residentCost = tokens × turns-resident (compaction-aware) — the
 // blocks that cost the most not because they are big but because they RODE the transcript for many
-// turns. Derived in the webview from the already-loaded history (media/src/residentCost.ts mirror).
+// turns. Derived in the webview from the already-loaded history (src/shared/residentCost.ts — the
+// same engine the MCP tools run).
 // Exported so the Context tab renders the same panel per session — one rendering, one source of truth.
 
 function ResidentCostRow({ b, history, rank }: { b: ResidentCostBlock; history: ContextHistory; rank: number }) {

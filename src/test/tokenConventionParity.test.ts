@@ -4,8 +4,8 @@ import * as os from 'os'
 import * as path from 'path'
 import { summarizeSpans } from '../spanSummarizer'
 import { LogReader, type LogSessionResult } from '../logReader'
-import { calcTokenCostUsd } from '../pricing'
-import type { Span } from '../types'
+import { calcTokenCostUsd } from '../shared/pricing'
+import type { Span } from '../shared/telemetryTypes'
 
 // ── Why this file exists ──────────────────────────────────────────────────────
 // The user-reported OTEL-vs-JSONL discrepancy (2026-07-10): the SAME session read up to ~1000×

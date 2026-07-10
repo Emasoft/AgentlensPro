@@ -8,7 +8,7 @@ import {
   resolveSession, DEFAULT_THRESHOLDS,
   type ConsumptionEvent, type StatuslineBillingEvent, type BurnConfig,
 } from '../burnMonitor'
-import type { SessionSummaryCard, TimelineEntry } from '../summarizers/summarizerTypes'
+import type { SessionSummaryCard, TimelineEntry } from '../shared/summarizerTypes'
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
 const NOW = 1_700_000_000_000  // fixed epoch ms so window math is deterministic

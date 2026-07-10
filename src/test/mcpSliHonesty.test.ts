@@ -4,7 +4,7 @@ import {
   handleGetWorkspacePatterns, handleGetEfficiencyReport, handleFindContextHogs,
   HOG_SCAN_CAP,
 } from '../mcpServer'
-import type { SessionSummaryCard } from '../summarizers/summarizerTypes'
+import type { SessionSummaryCard } from '../shared/summarizerTypes'
 
 // TRDD-ZK37VG4X specs 3+4 — SLI junk-row exclusion + bounded-scan sampling honesty.
 

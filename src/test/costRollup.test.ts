@@ -1,6 +1,6 @@
 import * as assert from 'assert'
 import { buildCostRollup } from '../mcpServer'
-import type { SessionSummaryCard } from '../summarizers/summarizerTypes'
+import type { SessionSummaryCard } from '../shared/summarizerTypes'
 
 // ── get_cost_rollup (TRDD-O981ZJKV items 4/5/6/7) ────────────────────────────
 // Pure aggregation over synthetic session cards.

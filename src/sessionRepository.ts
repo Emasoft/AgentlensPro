@@ -5,8 +5,8 @@ import { DatabaseReader, type DailyStatRow, type LifetimeStats, type SearchQuery
 import { DatabaseWriter } from './database/writer'
 import { summarizeSpans } from './spanSummarizer'
 import { preferredDataSource } from './feedMergePolicy'
-import { lookupRates } from './pricing'
-import type { SessionSummaryCard, TimelineEntry, GeneratedFileRef } from './summarizers/summarizerTypes'
+import { lookupRates } from './shared/pricing'
+import type { SessionSummaryCard, TimelineEntry, GeneratedFileRef } from './shared/summarizerTypes'
 
 export type { DailyStatRow, LifetimeStats, SearchQuery, BurnRate, Projection }
 

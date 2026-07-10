@@ -9,7 +9,7 @@ import {
   LOG_INGEST_VERSION,
   type LifecycleStore,
 } from '../collectorState'
-import type { SessionSummaryCard } from '../summarizers/summarizerTypes'
+import type { SessionSummaryCard } from '../shared/summarizerTypes'
 
 function tmpFile(name: string): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentlens-state-'))

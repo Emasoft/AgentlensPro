@@ -1,7 +1,7 @@
 import * as assert from 'assert'
-import { buildTokensByCause, CAUSE_DIMENSIONS } from '../tokensByCause'
+import { buildTokensByCause, CAUSE_DIMENSIONS } from '../shared/tokensByCause'
 import { handleGetCostByCause, CAUSE_SCAN_CAP } from '../mcpServer'
-import type { SessionSummaryCard, TimelineEntry, TokensByCauseReport, CauseDimensionRollup } from '../summarizers/summarizerTypes'
+import type { SessionSummaryCard, TimelineEntry, TokensByCauseReport, CauseDimensionRollup } from '../shared/summarizerTypes'
 
 // TRDD-UBEP5XY7 — tokens-by-CAUSE attribution rollup. Fixtures are api_request timeline entries as
 // the R-I rich-event ingestion (7612ff5) produces them: per-call usage buckets + exact cost_usd +

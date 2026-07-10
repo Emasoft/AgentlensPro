@@ -1,5 +1,5 @@
 import * as assert from 'assert'
-import { lookupRates, calcTokenCostUsd } from '../pricing'
+import { lookupRates, calcTokenCostUsd } from '../shared/pricing'
 
 suite('pricing', () => {
   test('lookupRates returns rates for known model', () => {

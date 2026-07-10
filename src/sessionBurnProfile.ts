@@ -22,7 +22,7 @@
 
 import * as fs from 'fs'
 import * as path from 'path'
-import { calcTokenCostUsd } from './pricing'
+import { calcTokenCostUsd } from './shared/pricing'
 import { DEFAULT_BODIES_DIR } from './cacheCreationForensics'
 
 const MAX_BYTES = 8 * 1024 * 1024

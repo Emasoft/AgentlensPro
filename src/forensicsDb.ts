@@ -16,7 +16,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
-import { lookupRates } from './pricing'
+import { lookupRates } from './shared/pricing'
 
 export const DEFAULT_FORENSICS_DB = path.join(os.homedir(), '.agentlens', 'forensics.db')
 export const DEFAULT_MAIN_DB = path.join(os.homedir(), '.agentlens', 'agentlens.db')
@@ -179,7 +179,7 @@ function num(v: unknown): number { return typeof v === 'number' && isFinite(v) ?
 export function registerCustomFns(db: SqlDatabase): void {
   // Lazy require avoids a static import cycle risk and matches the "thin wrapper over the same rates"
   // contract — cost_usd is exactly the AgentLens per-call cost formula.
-  const { calcTokenCostUsd } = require('./pricing') as typeof import('./pricing')
+  const { calcTokenCostUsd } = require('./shared/pricing') as typeof import('./shared/pricing')
 
   db.create_function('billable_weight', ((cc5m, cc1h, cread, out, input, model) =>
     billableWeight(num(cc5m), num(cc1h), num(cread), num(out), num(input),
