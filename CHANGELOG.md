@@ -25,6 +25,12 @@ All notable changes to AgentLens are documented here.
 - **Guard/gate hot path is now fully in-memory** — the server keeps an in-memory hook-event ring (fed by `POST /api/hook-events`, boot-seeded from the last hour on disk) and an incremental `BodiesActivityTracker` (readdir + stat only unseen names — bodies are write-once, so this is exact; the seed pass runs 3s after boot, off the interactive path). `check_burn_risk` served by the standalone server no longer reads NDJSON buckets nor stats every body file per call
 - `appendHookEvent` returns the record alongside the byte count so the disk line and the server's ring share one construction point
 
+### Fixed
+
+- **Every rich Claude Code log event was silently dropped at ingest** — Claude Code 2.1.206 emits BARE log-event names (`api_request`, `compaction`, `api_error`, …) while the collector's gate only matched the documented `claude_code.`-prefixed forms (which don't exist in that binary), so 0 `api_request` spans ever landed in an 81MB store and `get_cost_by_cause` had nothing to attribute. The gate now normalizes the name (both conventions accepted; stored span names stay prefixed for the summarizer), and `tool_result` events also match the snake-case `tool_name` attribute 2.1.206 uses
+- **Async/background Agent launches produced no sub-agent child cards** — an async launch writes only a `status:"async_launched"` acknowledgment to the parent transcript (never `usage`/`totalTokens`; the completion arrives as a task-notification message), so async-heavy sessions reported `childCount: 0` and their fan-out was invisible. Linkage cards are now synthesized from the launch record (agentId + resolved model), with the missing tokens flagged honestly instead of faked: `spawnAsync` on the card (persisted), `outcome: 'unknown'`, `asyncTokensUnknown` on `get_subagent_tree` children, and `asyncUnreportedChildren` on the spawn rollup so its totals never read as complete coverage. A later usage-carrying result upgrades the placeholder in place. Live-verified: an async-heavy session went from 0 to 59 children. `INGEST_VERSION` 3→4 re-ingests history
+- **`spawn_subagent_type` was persisted but never read back** — the DB reader dropped it on every round-trip; now loaded with the other spawn fields
+
 ## [0.9.0] — 2026-07-10
 
 ### Added

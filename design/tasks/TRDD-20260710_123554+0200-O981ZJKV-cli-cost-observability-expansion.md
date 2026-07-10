@@ -3,7 +3,7 @@ trdd-id: O981ZJKV
 title: CLI cost-observability expansion — 14-item work order, coverage map + gaps
 column: dev
 created: 2026-07-10T12:35:54+0200
-updated: 2026-07-10T13:20:00+0200
+updated: 2026-07-10T14:35:00+0200
 implementation-commits: [1093245, 9aa20fa, 674ed43]
 current-owner: agentlens-session
 task-type: feature
@@ -55,10 +55,23 @@ standalone data-feed defect as the child-card linkage. ONE investigation covers 
 fail-fast story preserved. Blockers #2/#3 (bash hook registration + bash installer) affect
 NATIVE Windows only — WSL target satisfied; node-twin hook scripts are the specced fix.
 
-STILL OPEN in this umbrella: the standalone data-feed defects investigation (child-card
-links + api_request events — one session of logReader work), window-capacity
-auto-calibration, native-Windows hook/installer twins, and the dashboard toggle card
-(agent working on it as of 13:20). `updated:` bumped 2026-07-10T14:20.
+**DATA-FEED DEFECTS FIXED (2026-07-10 ~14:20, commits 6f02976 + 124e7ef; root causes in
+reports/data-feed-defects/20260710_133450+0200-root-cause.md):** (A) the collector gated
+rich log events on `claude_code.`-prefixed names but CC 2.1.206 emits BARE names — gate now
+normalizes (both conventions), stored span names stay prefixed, `tool_name` snake-case attr
+accepted on tool_result. Unblocks item 11's feed (get_cost_by_cause). (B) async/background
+Agent launches (status:"async_launched", no usage in the parent transcript — an upstream
+data limitation) now synthesize LINKAGE child cards with zero buckets honestly flagged
+(spawnAsync persisted as spawn_async, outcome unknown, asyncTokensUnknown on tree children,
+asyncUnreportedChildren on the spawn rollup); INGEST_VERSION 3→4 re-ingested history.
+Live-verified: get_subagent_tree on this session 0→59 children. Sync path proven unchanged
+by test (suite 596). Async children's TOKENS remain unknown by data absence — resolving
+them from the child's own transcript/outputFile is a possible later child task.
+
+STILL OPEN in this umbrella: window-capacity auto-calibration, native-Windows installer
+doc note (blocker #3). Dashboard toggle card SHIPPED (5d68206). NEWER user directives now
+running ahead of these: the OTEL-vs-JSONL token discrepancy fix (measurement agent running)
+and the step-0 integration-test surface (test agent running). `updated:` bumped 14:35.
 
 ## Coverage map (verified against the live 34-tool surface, 2026-07-10)
 
