@@ -37,12 +37,16 @@ removed from texts, plus ONE future-looking clause: minutes until the CURRENT 5h
 fills at the current rate (from the per-account budget projection; honest absence without
 capacity config).
 
-STILL OPEN in this umbrella: item 9 (similar-session cost prediction), item 11 (skills cost
-attribution), window-capacity auto-calibration (item 2 extension), the WSL/Windows FIXES
-from the audit report, the standalone child-card linkage DEFECT, and a **dashboard
-toggle-switch UI card** for the hook config (the switches already work via CLI/REST; the
-webview card is presentation) — each has its spec below/in Measured results; author child
-TRDDs when scheduling them. `updated:` bumped 2026-07-10T13:45.
+ALSO SHIPPED: **item 9 `predict_session_cost`** (precedent distribution p25/p50/p75, flat
+headline fields; live: 12 precedents → code review $3.18 p50 / $4.72 p75).
+
+STILL OPEN in this umbrella: item 11 (skills cost attribution — NEW FACT: TimelineEntry
+carries `toolInput`, so skill names ARE extractable at read time without ingestion changes;
+what needs real design is the attribution semantics — which turns' usage a skill invocation
+owns), window-capacity auto-calibration (item 2 extension), the NATIVE-Windows fixes from
+the audit (WSL target is satisfied per the audit verdict), the standalone child-card linkage
+DEFECT, and the **dashboard toggle-switch UI card** (switches fully work via CLI/REST; the
+webview card is presentation). `updated:` bumped 2026-07-10T14:00.
 
 ## Coverage map (verified against the live 34-tool surface, 2026-07-10)
 

@@ -185,6 +185,8 @@ legitimate mass fan-out, `agentlens-cli --hooks gate=warn` for that run and rest
 | How much 5h/7d window is left, per account, and when does it run out? | `get_window_budget` (time-to-exhaustion needs `AGENTLENS_WINDOW_5H_TOKENS`/`_7D_TOKENS` capacity configured — calibrate from a premature window end) |
 | What did project X / ALL projects / my subagents cost in interval Y? (5-value breakdown + $/h) | `get_cost_rollup --groupBy project\|all\|subagent\|session\|model --windowHours N` (or `--sinceIso/--untilIso`); `--subagentsOnly --liveOnly` = the live-fleet view; `--sortBy` any bucket |
 | What rate limits did I hit, what EXACTLY filled the window, and why? | `get_rate_limit_report` — stall episodes (sessions/workspaces/errors) + the newest episode's 5h window attributed with exact billed usage, verdict, and top findings |
+| What will this code review / workflow COST before I launch it? | `predict_session_cost --task "<describe it>"` (+ `--subagentType`, `--fileBytes`) — p25/p50/p75 over matched real precedents; p75 = budget-safe |
+| Which Claude Code instances are running and what memory does EACH one's whole tree use? | `get_runtime_inventory` — instances ranked by total tree RSS (subshells/agents/crons/servers included), project dir, CC version |
 | Why is THIS session expensive? | `get_session_burn_profile --sessionId <id>` |
 | What keeps breaking the cache, machine-wide? | `get_cache_break_causes` |
 | Per-turn break diagnosis of one session | `get_cache_break_timeline --sessionId <id>` |
