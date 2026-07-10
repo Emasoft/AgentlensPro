@@ -81,5 +81,60 @@ jobs:
         run: npx tsc -p tsconfig.test.json
 
       # Full unit suite under the matrix node — mocha directly (out/test via .mocharc.cjs).
+      # The P9 browser smoke suite stays PENDING here (gated on AGENTLENSPRO_BROWSER_TESTS=1)
+      # so this matrix is untouched; the dedicated browser-smoke job below runs it.
       - name: Unit tests
         run: npx mocha
+
+  # ── P9 dashboard browser smoke suite ─────────────────────────────────────────
+  # Dedicated job (separate from the matrix above) so a browser/env flake never
+  # blocks the core build-and-test signal. Boots the real standalone server on
+  # ephemeral ports with a temp data dir, then drives the served dashboard with
+  # puppeteer-core against a system Chrome/Chromium.
+  browser-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Enable corepack (pnpm)
+        run: corepack enable
+
+      # Node 22 for BOTH install and test runtime here: the corepack-pinned pnpm
+      # needs >=22.13, and the unit matrix already proves the suite on Node 20.
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # puppeteer-core ships no browser. ubuntu-latest images preinstall Google
+      # Chrome; fall back to installing chromium when the image ever drops it.
+      - name: Resolve Chrome/Chromium (install chromium if missing)
+        run: |
+          BIN="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium-browser || command -v chromium || true)"
+          if [ -z "$BIN" ]; then
+            sudo apt-get update
+            sudo apt-get install -y chromium-browser
+            BIN="$(command -v chromium-browser)"
+          fi
+          echo "Resolved browser: $BIN"
+          echo "CHROME_PATH=$BIN" >> "$GITHUB_ENV"
+
+      # The suite boots the BUILT standalone/server.js — bundles must exist first.
+      - name: Build bundles
+        run: node esbuild.js
+
+      - name: Compile tests
+        run: npx tsc -p tsconfig.test.json
+
+      # --no-config: .mocharc.cjs would union its spec glob (the whole unit suite)
+      # with the positional file; the isolated invocation needs only this suite.
+      - name: Browser smoke suite
+        env:
+          AGENTLENSPRO_BROWSER_TESTS: '1'
+        run: npx mocha --no-config --ui tdd out/test/test/browser/dashboardSmoke.test.js
