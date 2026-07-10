@@ -19,7 +19,9 @@ import { ensureTelemetryConfig, ensureAgentLensStopHook } from '../src/telemetry
 import { classifyOtlpPayload } from '../src/otlpParser'
 import { startMcpHttpServer, labelBurnStatusAccounts } from '../src/mcpServer'
 import { resolveCallContext, callBodyRegistry } from '../src/rawBodyContext'
-import { appendHookEvent, readHookEvents, purgeHookEventBuckets, hookEventsDiskUsage } from '../src/hookEventStore'
+import { appendHookEvent, readHookEvents, purgeHookEventBuckets, hookEventsDiskUsage, type HookEventRecord } from '../src/hookEventStore'
+import { BodiesActivityTracker } from '../src/bodiesActivity'
+import { evaluateAgentGate, buildAdvisory, readTranscriptContext, type AgentGateState, type GateThresholds } from '../src/agentGate'
 import { ContextCompositionIndex } from '../src/contextCompositionIndex'
 import { LogReader, type OpenCodeSqlFactory } from '../src/logReader'
 import { readScratchFile } from '../src/generatedFiles'
@@ -126,6 +128,7 @@ const persistStats = {
   offsetsWrites: 0, offsetsBytes: 0,
   cardsWrites: 0, cardsBytes: 0,
   hookEventWrites: 0, hookEventBytes: 0,
+  gateChecks: 0, gateDenies: 0, gateWarns: 0, gateAdvisories: 0,
   bodiesLastPurge: { at: 0, removedFiles: 0, freedBytes: 0, keptFiles: 0, keptBytes: 0 },
 }
 
@@ -319,6 +322,87 @@ purgeHookEvents()
 const bodiesPurgeTimer = setInterval(() => { void archiveOtelBodies(); purgeHookEvents() }, 3600e3)
 bodiesPurgeTimer.unref()
 
+// ── Agent-launch burn gate + realtime activity (TRDD-GOD0108C) ────────────────
+// The gate sits behind a PreToolUse hook, so every read here must be in-memory:
+// (a) BodiesActivityTracker — incremental scan of the live bodies dir (CACHE_THRASH +
+//     HUGE_REQUEST_BURST without the stat-every-file pass);
+// (b) an in-memory hook-event ring fed by POST /api/hook-events (zero disk reads).
+const bodiesActivity = new BodiesActivityTracker(BODIES_DIR)
+let bodiesActivityLastPollMs = 0
+function bodiesActivityReport(): ReturnType<BodiesActivityTracker['report']> {
+  // 2s poll throttle: N gate/guard calls in a burst share one readdir.
+  const now = Date.now()
+  if (now - bodiesActivityLastPollMs > 2000) {
+    bodiesActivityLastPollMs = now
+    try { bodiesActivity.poll(now) } catch { /* fail-open — report stays stale, never throws */ }
+  }
+  return bodiesActivity.report(now)
+}
+// The FIRST poll stats the whole live dir once (seed). Pay it off the interactive path,
+// shortly after boot, so no gate/guard call ever eats the ~100-300ms seed pass.
+const bodiesSeedTimer = setTimeout(() => { bodiesActivityLastPollMs = Date.now(); try { bodiesActivity.poll() } catch { /* fail-open */ } }, 3000)
+bodiesSeedTimer.unref()
+
+const RECENT_EVENTS_CAP = 600
+const recentHookEvents: HookEventRecord[] = []
+// Boot-seed from disk so a fresh server isn't blind to a stall/fan-out from 5 minutes ago.
+try { recentHookEvents.push(...readHookEvents(HOOK_EVENTS_DIR, { sinceMs: Date.now() - 3600e3, limit: 500 }).reverse()) } catch { /* none yet */ }
+function pushRecentHookEvent(rec: HookEventRecord): void {
+  recentHookEvents.push(rec)
+  if (recentHookEvents.length > RECENT_EVENTS_CAP) recentHookEvents.splice(0, recentHookEvents.length - 500)
+}
+
+// AGENTLENS_GATE_MODE=warn downgrades every deny to a systemMessage warning; the hook script
+// itself honors AGENTLENS_GATE=off before any network. Thresholds: AGENTLENS_GATE_* envs.
+const GATE_MODE: 'enforce' | 'warn' = process.env.AGENTLENS_GATE_MODE === 'warn' ? 'warn' : 'enforce'
+const gateThresholds: Partial<GateThresholds> = (() => {
+  const out: Partial<GateThresholds> = {}
+  // Only DEFINED keys may land in the partial: spreading { key: undefined } over the
+  // defaults would silently erase them ({...{a:1}, ...{a:undefined}} → a undefined).
+  const set = (key: keyof GateThresholds, env: string): void => {
+    const v = Number(process.env[env])
+    if (Number.isFinite(v) && v > 0) out[key] = v
+  }
+  set('forkFatTokens', 'AGENTLENS_GATE_FORK_FAT_TOKENS')
+  set('coldIdleMs', 'AGENTLENS_GATE_COLD_IDLE_MS')
+  set('runaway60s', 'AGENTLENS_GATE_RUNAWAY_60S')
+  set('fanoutWarn2min', 'AGENTLENS_GATE_FANOUT_WARN_2MIN')
+  set('coldResumeWindowMs', 'AGENTLENS_GATE_COLD_RESUME_WINDOW_MS')
+  return out
+})()
+
+function buildGateState(now: number, parent: { contextTokens: number | null; idleMs: number | null }): AgentGateState {
+  let starts60 = 0
+  let starts120 = 0
+  let lastStop: number | null = null
+  for (const r of recentHookEvents) {
+    if (r.ts > now) continue
+    if (r.ev === 'SubagentStart') {
+      if (now - r.ts <= 60_000) starts60++
+      if (now - r.ts <= 120_000) starts120++
+    } else if (r.ev === 'StopFailure' && (lastStop === null || r.ts > lastStop)) {
+      lastStop = r.ts
+    }
+  }
+  const act = bodiesActivityReport()
+  return {
+    now,
+    mode: GATE_MODE,
+    parent,
+    startsLast60s: starts60,
+    startsLast2min: starts120,
+    lastStopFailureMs: lastStop,
+    thrash: act.available ? act.thrash : null,
+    premiumShare: act.premium.sampled > 0 ? act.premium.share : null,
+    premiumModel: act.premium.lastModel,
+    thresholds: gateThresholds,
+  }
+}
+
+// PostToolUse advisory dedupe: ONE in-band injection per session+risk per 10min — per-call
+// injections that later get stripped in place are themselves a cache-break cause (#778).
+const advisoryIssued = new Map<string, number>()
+
 // ── Single-instance guard (canonical instance only) ──────────────────────────
 // EADDRINUSE on any of the three listeners already makes a same-port double start exit(1); the
 // pidfile adds (a) a discoverable PID for `agentlens-cli --status/--stop-server` without a lsof
@@ -500,6 +584,10 @@ startMcpHttpServer({
   getSessionStatus: (sel) => { const { sessions, events, now } = gatherBurn(); return computeSessionStatus(sessions, events, burnConfig, sel, now) },
   // TRDD-BURNWDGT: the current live OAuth account (identity + plan) for get_account_status + window labels.
   getAccount: () => getCurrentAccount(),
+  // TRDD-GOD0108C: hot-path feeds for check_burn_risk — the in-memory event ring (zero disk)
+  // and the incremental bodies tracker (CACHE_THRASH + huge-request burst without full stats).
+  getRecentHookEvents: () => recentHookEvents,
+  getBodiesActivity: () => bodiesActivityReport(),
   // TRDD-PJC8N1HO spec 2: an orienting agent sees where telemetry was lost, not just the sessions.
   getCollectorGaps,
 }, MCP_PORT, BIND_HOST)
@@ -1864,6 +1952,7 @@ const uiServer = http.createServer((req, res) => {
       },
       bodies: { archive: archiveDiskUsage(BODIES_ARCHIVE_DIR), lastPass: p.bodiesLastPurge },
       hookEvents: { ...hookEventsDiskUsage(HOOK_EVENTS_DIR), receivedSinceBoot: p.hookEventWrites },
+      gate: { mode: GATE_MODE, checks: p.gateChecks, denies: p.gateDenies, warns: p.gateWarns, advisories: p.gateAdvisories },
     }))
     return
   }
@@ -1888,7 +1977,8 @@ const uiServer = http.createServer((req, res) => {
           res.end(JSON.stringify({ error: 'payload must be a JSON object with hook_event_name' }))
           return
         }
-        const bytes = appendHookEvent(HOOK_EVENTS_DIR, payload)
+        const { rec, bytes } = appendHookEvent(HOOK_EVENTS_DIR, payload)
+        pushRecentHookEvent(rec) // the in-memory ring the gate + check_burn_risk read
         persistStats.hookEventWrites++
         persistStats.hookEventBytes += bytes
         res.writeHead(200, { 'Content-Type': 'application/json' })
@@ -1918,6 +2008,84 @@ const uiServer = http.createServer((req, res) => {
     })
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ count: events.length, events }))
+    return
+  }
+
+  // Agent-launch burn gate (TRDD-GOD0108C) — called by scripts/spy-agentlens-gate.sh from
+  // PreToolUse/PostToolUse hooks matched on Agent|Task|Workflow. CONTRACT: the response body
+  // IS the hook's stdout — 204/empty means "print nothing" (allow). Every failure path
+  // returns an empty 204: a gate that can error a launch is worse than no gate (fail-open).
+  if (req.method === 'POST' && url === '/api/agent-gate') {
+    const chunks: Buffer[] = []
+    let received = 0
+    let overflowed = false
+    req.on('data', (c: Buffer) => {
+      received += c.length
+      // 1MB cap: PreToolUse payloads carry the agent prompt, which can be tens of KB — but
+      // a megabyte-scale body is a bug, and the gate must stay cheap.
+      if (received > 1_048_576) { overflowed = true; req.destroy() }
+      else chunks.push(c)
+    })
+    req.on('end', () => {
+      if (overflowed) return
+      try {
+        const p = JSON.parse(Buffer.concat(chunks).toString('utf-8')) as Record<string, unknown>
+        const now = Date.now()
+        const sessionId = typeof p.session_id === 'string' ? p.session_id : 'unknown'
+        const transcriptPath = typeof p.transcript_path === 'string' ? p.transcript_path : null
+        // Real parent context (tokens from the transcript's last usage) + cache warmth (mtime).
+        const parent = transcriptPath ? readTranscriptContext(transcriptPath, now) : { contextTokens: null, idleMs: null }
+        const state = buildGateState(now, parent)
+        persistStats.gateChecks++
+
+        if (p.hook_event_name === 'PostToolUse') {
+          // In-band advisory to the MODEL after an agent wave — deduped per session+risk.
+          const adv = buildAdvisory(state)
+          if (adv) {
+            const key = `${sessionId}:${adv.code}`
+            const last = advisoryIssued.get(key) ?? 0
+            if (now - last > 600_000) {
+              advisoryIssued.set(key, now)
+              if (advisoryIssued.size > 200) {
+                // Prune the oldest half so a long-lived server never grows this unbounded.
+                for (const [k, v] of [...advisoryIssued.entries()].sort((a, b) => a[1] - b[1]).slice(0, 100)) {
+                  if (v <= now) advisoryIssued.delete(k)
+                }
+              }
+              persistStats.gateAdvisories++
+              res.writeHead(200, { 'Content-Type': 'application/json' })
+              res.end(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: adv.text } }))
+              return
+            }
+          }
+          res.writeHead(204)
+          res.end()
+          return
+        }
+
+        // PreToolUse (default): decide before the launch happens.
+        const d = evaluateAgentGate((p.tool_input ?? null) as Record<string, unknown> | null, state)
+        if (d.decision === 'deny') {
+          persistStats.gateDenies++
+          res.writeHead(200, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({
+            hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: d.reason },
+            systemMessage: `[agentlens burn-gate] blocked an agent launch (${d.code}). The reason went to the agent so it can adapt; AGENTLENS_GATE_MODE=warn downgrades denies, AGENTLENS_GATE=off disables the gate.`,
+          }))
+          return
+        }
+        if (d.decision === 'warn') {
+          persistStats.gateWarns++
+          res.writeHead(200, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ systemMessage: d.reason }))
+          return
+        }
+        res.writeHead(204)
+        res.end()
+      } catch {
+        try { res.writeHead(204); res.end() } catch { /* socket already gone */ }
+      }
+    })
     return
   }
 

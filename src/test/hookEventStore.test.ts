@@ -32,10 +32,10 @@ function seedBucket(dir: string, ts: number, recs: Partial<HookEventRecord>[]): 
 const DAY = 86_400_000
 
 suite('hookEventStore — append + read + retention (TRDD-Q6ZOUVK5)', () => {
-  test('appendHookEvent writes one NDJSON line into today\'s bucket and returns its byte length', () => {
+  test('appendHookEvent writes one NDJSON line into today\'s bucket, returning the record + byte length', () => {
     const { dir, cleanup } = tmpDir()
     try {
-      const bytes = appendHookEvent(dir, { hook_event_name: 'StopFailure', session_id: 's1', reason: 'rate_limit' })
+      const { rec: returned, bytes } = appendHookEvent(dir, { hook_event_name: 'StopFailure', session_id: 's1', reason: 'rate_limit' })
       const file = path.join(dir, bucketName(Date.now()))
       const raw = fs.readFileSync(file, 'utf-8')
       assert.strictEqual(bytes, Buffer.byteLength(raw), 'returned bytes must equal what landed on disk')
@@ -44,6 +44,7 @@ suite('hookEventStore — append + read + retention (TRDD-Q6ZOUVK5)', () => {
       assert.strictEqual(rec.ev, 'StopFailure')
       assert.strictEqual(rec.session, 's1')
       assert.deepStrictEqual(rec.payload.reason, 'rate_limit', 'raw payload is stored verbatim')
+      assert.deepStrictEqual(returned, rec, 'the returned record IS the disk record (feeds the server ring)')
     } finally { cleanup() }
   })
 

@@ -38,19 +38,25 @@ function bucketDayMs(filename: string): number | null {
   return ms
 }
 
-/** Append one hook event; returns bytes written (for the server's persistence accounting). */
-export function appendHookEvent(dir: string, payload: Record<string, unknown>): number {
-  const ts = Date.now()
-  const rec: HookEventRecord = {
+/** One construction point for the record shape — the disk line and the server's in-memory
+ *  ring (TRDD-GOD0108C) must never drift apart. */
+export function buildHookEventRecord(payload: Record<string, unknown>, ts: number = Date.now()): HookEventRecord {
+  return {
     ts,
     ev: String(payload.hook_event_name ?? ''),
     session: typeof payload.session_id === 'string' ? payload.session_id : undefined,
     payload,
   }
+}
+
+/** Append one hook event; returns the record (for the server's in-memory ring) + bytes
+ *  written (for its persistence accounting). */
+export function appendHookEvent(dir: string, payload: Record<string, unknown>): { rec: HookEventRecord; bytes: number } {
+  const rec = buildHookEventRecord(payload)
   const line = `${JSON.stringify(rec)}\n`
   fs.mkdirSync(dir, { recursive: true })
-  fs.appendFileSync(bucketPath(dir, ts), line)
-  return Buffer.byteLength(line)
+  fs.appendFileSync(bucketPath(dir, rec.ts), line)
+  return { rec, bytes: Buffer.byteLength(line) }
 }
 
 export interface HookEventFilter {
