@@ -29,12 +29,20 @@ per session — verified fact) — and **gate warnings on the dashboard notifica
 via the existing SSE alert channel (deny=error, warn/advisory=warning), zero webview
 changes needed. See Measured results.
 
+ALSO SHIPPED (655a30a): **item 13 `get_runtime_inventory`** (ps-snapshot process-tree rollup;
+live-verified: 2 instances, 4.0GB/21-proc + 3.4GB/16-proc trees, CC version reported;
+POSIX-only with an honest native-Windows note) and the **now-focus warning directive** —
+warnings speak only about current events (all windows ≤10min), past-incident storytelling
+removed from texts, plus ONE future-looking clause: minutes until the CURRENT 5h/7d window
+fills at the current rate (from the per-account budget projection; honest absence without
+capacity config).
+
 STILL OPEN in this umbrella: item 9 (similar-session cost prediction), item 11 (skills cost
-attribution), item 13 (runtime/memory inventory), window-capacity auto-calibration (item 2
-extension), the WSL/Windows FIXES from the audit report, the standalone child-card linkage
-DEFECT, and a **dashboard toggle-switch UI card** for the hook config (the switches already
-work via CLI/REST; the webview card is presentation) — each has its spec below/in Measured
-results; author child TRDDs when scheduling them. `updated:` bumped 2026-07-10T13:20.
+attribution), window-capacity auto-calibration (item 2 extension), the WSL/Windows FIXES
+from the audit report, the standalone child-card linkage DEFECT, and a **dashboard
+toggle-switch UI card** for the hook config (the switches already work via CLI/REST; the
+webview card is presentation) — each has its spec below/in Measured results; author child
+TRDDs when scheduling them. `updated:` bumped 2026-07-10T13:45.
 
 ## Coverage map (verified against the live 34-tool surface, 2026-07-10)
 
