@@ -2,24 +2,26 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## AgentLens diagnostics (CLI — the MCP server is deliberately NOT registered)
+Doctrine sentences in this file must cite their evidence (a report path under `reports/`).
 
-All 32 diagnostic tools are called via the globally-linked **`agentlens-cli`** (`npm link` from
+## AgentlensPro diagnostics (CLI — the MCP server is deliberately NOT registered)
+
+All 32 diagnostic tools are called via the globally-linked **`agentlenspro-cli`** (`npm link` from
 this repo; source `scripts/agentlens-cli.js`), not MCP: resident MCP schemas cost ~8k tokens per
 turn and any toolset change breaks the prompt-cache prefix, so `.mcp.json` intentionally does
-not register the server. The user-scoped **`agentlens-diagnostics`** skill documents the full
+not register the server. The user-scoped **`agentlenspro-diagnostics`** skill documents the full
 surface; the essentials:
 
 ```bash
-agentlens-cli --start-server                     # server up (idempotent); --dashboard opens the UI
-agentlens-cli list --desc                        # discover tools
-agentlens-cli help <tool>                        # flags from the live schema
-agentlens-cli <tool> --param value --out FILE    # full JSON to disk, digest to stdout
-agentlens-cli --install-otel | --uninstall-otel   # wire/unwire Claude Code telemetry (verified transaction)
-agentlens-cli --install-hooks | --uninstall-hooks # wire/unwire lifecycle hook capture + the burn-gate
-                                                  # (PreToolUse deny on agent-launch disasters; AGENTLENS_GATE=off)
-agentlens-cli --install-skill                     # (re)install this skill into ~/.claude/skills/
-bash scripts/install.sh                           # one-command install: deps, build, link, skill, server
+agentlenspro-cli --start-server                     # server up (idempotent); --dashboard opens the UI
+agentlenspro-cli list --desc                        # discover tools
+agentlenspro-cli help <tool>                        # flags from the live schema
+agentlenspro-cli <tool> --param value --out FILE    # full JSON to disk, digest to stdout
+agentlenspro-cli --install-otel | --uninstall-otel   # wire/unwire Claude Code telemetry (verified transaction)
+agentlenspro-cli --install-hooks | --uninstall-hooks # wire/unwire lifecycle hook capture + the burn-gate
+                                                     # (PreToolUse deny on agent-launch disasters; AGENTLENS_GATE=off)
+agentlenspro-cli --install-skill                     # (re)install this skill into ~/.claude/skills/
+bash scripts/install.sh                              # one-command install: deps, build, link, skill, server
 ```
 
 Both `--install-*` settings flags go through `safeConfigEdit`; they never clobber other tools'
@@ -31,7 +33,7 @@ server without asking the user.
 
 ## What this is
 
-AgentLens is a local AI-agent observability tool, shipped three ways from one codebase: a **VS Code extension**, an **npx/standalone server**, and a **Docker image**. It ingests OpenTelemetry traces and local session log files from Copilot, Claude Code, Codex, and OpenCode, persists them to a local SQLite DB, and renders a dashboard. See `ARCHITECTURE.md` (deep, with mermaid diagrams) and `README.md` (user-facing) for full detail.
+AgentlensPro (repo: <https://github.com/Emasoft/AgentlensPro>, forked from AgentLens) is a local AI-agent observability product — a CLI, an **npx/standalone server** with a served dashboard, a **Docker image**, and Claude Code skills, all from one codebase (the VS Code extension host was removed pre-fork). It ingests OpenTelemetry traces and local session log files from Copilot, Claude Code, Codex, and OpenCode, persists them to a local SQLite DB, and renders a dashboard. See `ARCHITECTURE.md` (deep, with mermaid diagrams) and `README.md` (user-facing) for full detail.
 
 ## Commands
 
@@ -58,15 +60,13 @@ pnpm run compile-tests && npx mocha --grep "drains the queue"               # by
 
 `check-types` runs `tsc --noEmit` twice — once for `src/` (`tsconfig.json`, Node) and once for `media/src/` (`media/tsconfig.json`, DOM/Preact). TypeScript is `strict` plus `noUnusedLocals`/`noUnusedParameters`/`noImplicitReturns`, so unused symbols fail the build.
 
-> `CONTRIBUTING.md` mentions `pnpm run standalone` — that script does not exist; the correct one is `pnpm run local`.
-
 ## Architecture: three runtime contexts, one codebase
 
 This is the single most important thing to internalize. Code is split by **where it executes**, and the three contexts cannot import each other:
 
 1. **`src/**`** — VS Code **extension host** (Node.js, no DOM). Entry `src/extension.ts` → `dist/extension.js` (cjs).
 2. **`media/src/**`** — **webview** dashboard (Preact + `@preact/signals`, browser, no Node). Entry `media/src/dashboard.tsx` → `media/dashboard.js` (iife); plus `media/src/sidebarWebview.ts` → `media/sidebar.js`.
-3. **`standalone/**`** — headless server that reuses `src/**` logic outside VS Code (the `npx agentlens-dashboard` path). `standalone/server.ts` + `standalone/cli.ts` → `standalone/*.js` (cjs).
+3. **`standalone/**`** — headless server that reuses `src/**` logic outside VS Code (the `npx agentlenspro` path). `standalone/server.ts` + `standalone/cli.ts` → `standalone/*.js` (cjs).
 
 `esbuild.js` builds **five** separate targets for these. The extension↔webview boundary is a **postMessage protocol** (`src/dashboardPanel.ts` ↔ `media/src/App.tsx`); the two sides share shapes by **mirroring types** (`src/types.ts` ↔ `media/src/types.ts`), not by importing — the webview cannot import Node code. When you change a message shape or a session field, update **both** sides.
 
@@ -91,4 +91,4 @@ When both capture the same session: **for Claude sessions the log transcript win
 
 ## Contribution conventions
 
-Branch `feat/<slug>` or `fix/<slug>` off `main`; **Conventional Commits** (`type(scope): subject`); PRs are **squash-merged**. For user-facing changes, bump `version` in `package.json` and add a `CHANGELOG.md` entry **in the same PR**; tag `main` `vX.Y.Z` after merge.
+Branch `feat/<slug>` or `fix/<slug>` off `main`; **Conventional Commits** (`type(scope): subject`); merges are **`--no-ff`, NEVER squash — history is the audit trail**. For user-facing changes, bump `version` in `package.json` and add a `CHANGELOG.md` entry **in the same PR**; tag `main` `vX.Y.Z` after merge.

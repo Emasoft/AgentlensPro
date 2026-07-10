@@ -1,27 +1,24 @@
-# Contributing to AgentLens
+# Contributing to AgentlensPro
 
 Thank you for your interest in contributing.
 
 ## Reporting bugs
 
-Open an issue at <https://github.com/rogerreed/agentlens/issues> and use the bug report template. Include:
+Open an issue at <https://github.com/Emasoft/AgentlensPro/issues> and use the bug report template. Include:
 
 - The agent you were using (Copilot, Claude Code, Codex)
-- Whether you're using the VS Code extension or standalone mode
-- The AgentLens version (visible in the sidebar footer)
-- Relevant output from the **AgentLens** output channel (*View → Output → AgentLens*)
+- The AgentlensPro version (visible in the dashboard footer)
+- Relevant server output (`~/.agentlens/server.log`)
 
 ## Development setup
 
 ```bash
-git clone https://github.com/rogerreed/agentlens
-cd agentlens
+git clone https://github.com/Emasoft/AgentlensPro
+cd AgentlensPro
 pnpm install
 ```
 
-**Run in VS Code:** Press `F5` to open a VS Code Extension Development Host with AgentLens loaded.
-
-**Run standalone:** `pnpm run standalone` — starts the OTLP collector on port `4318` and the dashboard UI on port `3000`.
+**Run standalone:** `pnpm run local` — starts the OTLP collector on port `4318` and the dashboard UI on port `3000`.
 
 **Build:**
 
@@ -36,11 +33,11 @@ node esbuild.js        # Bundle — outputs to dist/ and media/
 
 | Path | Purpose |
 | --- | --- |
-| `src/` | VS Code extension host code (Node.js, no DOM) |
+| `src/` | Core logic (Node.js, no DOM) |
 | `media/src/` | Dashboard webview (Preact, browser) |
 | `standalone/server.ts` | Standalone HTTP server |
 | `src/summarizers/` | Per-agent span → session summarizers |
-| `src/otlpCollector.ts` | OTLP/HTTP ingestion for the VS Code extension |
+| `src/otlpCollector.ts` | OTLP/HTTP ingestion |
 
 ## Branching and commit conventions
 
@@ -48,7 +45,7 @@ node esbuild.js        # Bundle — outputs to dist/ and media/
 
 **Commit format:** [Conventional Commits](https://www.conventionalcommits.org/) — `type(scope): imperative subject`. Common types: `feat`, `fix`, `chore`, `docs`, `refactor`, `test`. Keep each commit a single logical unit.
 
-**Merging:** PRs are squash-merged into `main` so the history stays one-line-per-change readable.
+**Merging:** merges into `main` are `--no-ff`, NEVER squash — history is the audit trail.
 
 **Releases:** bump `version` in `package.json` and add a `CHANGELOG.md` entry in the same PR. After merge, tag `main` with `vX.Y.Z`.
 
