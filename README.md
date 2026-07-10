@@ -17,7 +17,7 @@ AgentlensPro keeps the following surfaces byte-compatible with AgentLens so exis
 
 - **`~/.agentlens`** — the data directory (spans, session cards, offsets) is unchanged.
 - **`AGENTLENS_*` environment variables** — all server/gate/retention tuning vars keep their names.
-- **`spy-agentlens*.sh` hook script names** — hooks already installed in `~/.claude/settings.json` keep resolving.
+- **`spy-agentlens*.sh` hook script names** — the scripts keep their names, and legacy hooks already installed in `~/.claude/settings.json` by absolute path keep resolving. Since v1.0.0, `--install-hooks` registers the `agentlenspro-hook` / `agentlenspro-gate` PATH bins instead (see [the PATH-binary contract](#the-path-binary-contract)) and migrates any legacy absolute-path entries when re-run.
 
 ## Getting Started
 
@@ -53,23 +53,39 @@ agentlenspro-cli --install-hooks                   # wire lifecycle hook capture
 agentlenspro-cli --install-skill                   # (re)install the agentlenspro-diagnostics skill
 ```
 
+#### The PATH-binary contract
+
+The package publishes five bins (`package.json → bin`): `agentlenspro` (the server),
+`agentlenspro-cli` (diagnostics), `agentlenspro-heartbeat-cost`, and the two hook entry
+points `agentlenspro-hook` / `agentlenspro-gate`. `--install-hooks` writes those **bare
+bin names** into `~/.claude/settings.json` — never absolute paths into the package tree —
+so hook registrations survive package relocations (an absolute path under Homebrew's
+versioned Cellar would dangle after every `brew upgrade`). The two hook bins are thin
+wrappers that resolve the real forwarder/gate scripts relative to their own installed
+location at every fire, and the installer refuses to register a name that does not
+resolve on `PATH` (a bare-name hook that isn't on `PATH` would silently never fire).
+`--uninstall-hooks` removes both generations: the bare PATH names and any legacy
+absolute-path `spy-agentlens*` entries.
+
 ### Docker (OTEL only)
 
 > **Note:** Docker cannot read local session log files from your host machine without explicit volume mounts for each agent directory. Docker mode receives OTEL traces only — log file ingestion is not available. Use the local option above if you need log file history.
 
+The image is published to GitHub Container Registry (`ghcr.io/emasoft/agentlenspro`) by the tag-triggered [docker workflow](.github/workflows/docker.yml), with SLSA build provenance attached to the manifest.
+
 ```bash
 # Ephemeral — data cleared on container stop (always pulls latest)
-docker run --pull=always -p 127.0.0.1:3000:3000 -p 127.0.0.1:4318:4318 agentlens/agentlens
+docker run --pull=always -p 127.0.0.1:3000:3000 -p 127.0.0.1:4318:4318 ghcr.io/emasoft/agentlenspro
 
 # Persistent — data survives restarts (macOS/Linux)
 docker run --pull=always -p 127.0.0.1:3000:3000 -p 127.0.0.1:4318:4318 \
   -v ~/.agentlens:/data \
-  agentlens/agentlens
+  ghcr.io/emasoft/agentlenspro
 
 # Persistent — data survives restarts (Windows)
 docker run --pull=always -p 127.0.0.1:3000:3000 -p 127.0.0.1:4318:4318 `
   -v "$env:USERPROFILE\.agentlens:/data" `
-  agentlens/agentlens
+  ghcr.io/emasoft/agentlenspro
 ```
 
 Open <http://localhost:3000> after the container starts.

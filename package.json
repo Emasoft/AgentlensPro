@@ -2,7 +2,7 @@
   "name": "agentlenspro",
   "displayName": "AgentlensPro — Professional AI Agent Observability",
   "description": "AgentlensPro — professional observability for AI agent sessions: OTEL traces and local log file ingestion, CLI + server + skills. Standalone (npx) and Docker.",
-  "version": "0.12.0",
+  "version": "1.0.0",
   "publisher": "agentlens",
   "license": "MIT",
   "packageManager": "pnpm@11.9.0",
@@ -33,7 +33,9 @@
   "bin": {
     "agentlenspro": "./standalone/cli.js",
     "agentlenspro-cli": "./scripts/agentlens-cli.js",
-    "agentlenspro-heartbeat-cost": "./scripts/agentlens-heartbeat-cost.js"
+    "agentlenspro-heartbeat-cost": "./scripts/agentlens-heartbeat-cost.js",
+    "agentlenspro-hook": "./scripts/agentlenspro-hook.js",
+    "agentlenspro-gate": "./scripts/agentlenspro-gate.js"
   },
   "scripts": {
     "prepublishOnly": "pnpm run package",

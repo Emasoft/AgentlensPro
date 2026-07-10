@@ -92,6 +92,11 @@ interface Family { name: string; bin: string; forwarder: string; gate: string }
 const families: Family[] = [
   { name: 'bash', bin: 'bash', forwarder: path.join(SCRIPTS_DIR, 'spy-agentlens.sh'), gate: path.join(SCRIPTS_DIR, 'spy-agentlens-gate.sh') },
   { name: 'mjs', bin: process.execPath, forwarder: path.join(SCRIPTS_DIR, 'spy-agentlens.mjs'), gate: path.join(SCRIPTS_DIR, 'spy-agentlens-gate.mjs') },
+  // P10 PATH-bin wrappers (package.json "bin": agentlenspro-hook / agentlenspro-gate).
+  // These are what --install-hooks actually registers since v1.0.0 — running the same
+  // four contracts through them proves the wrapper layer passes stdin/stdout/env through
+  // untouched and stays fail-open (it execs the platform twin above at fire time).
+  { name: 'path-bin', bin: process.execPath, forwarder: path.join(SCRIPTS_DIR, 'agentlenspro-hook.js'), gate: path.join(SCRIPTS_DIR, 'agentlenspro-gate.js') },
 ]
 
 for (const fam of families) {

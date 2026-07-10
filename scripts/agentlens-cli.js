@@ -78,10 +78,10 @@ operations:
                         in a background monitor BEFORE agent fan-outs.
   --install-skill       (re)install the agentlenspro-diagnostics skill into ~/.claude/skills/
                         from the repo copy — idempotent (installed / updated / already current)
-  --install-hooks       register scripts/spy-agentlens.sh on the 10 LIFECYCLE hook events
-                        (SessionStart/End, Stop, StopFailure, Pre/PostCompact, Permission,
-                        Notification, SubagentStart/Stop) AND the burn-gate
-                        (scripts/spy-agentlens-gate.sh, PreToolUse/PostToolUse matched to
+  --install-hooks       register the agentlenspro-hook PATH bin on the 10 LIFECYCLE hook
+                        events (SessionStart/End, Stop, StopFailure, Pre/PostCompact,
+                        Permission, Notification, SubagentStart/Stop) AND the burn-gate
+                        (the agentlenspro-gate PATH bin, PreToolUse/PostToolUse matched to
                         ^(Task|Agent|Workflow|SendMessage)$ only) — it denies the four measured
                         disaster launches (cache thrash, runaway fan-out, cold-resume fan-out,
                         fork storm) with the reason fed back to the agent; SendMessage is gated
@@ -91,7 +91,9 @@ operations:
                         downgrades denies to warnings. Verified transaction; also removes any
                         dead claude-spyglass hook entries + env.SPYGLASS_DIR. Other tools'
                         hooks on the same events are never touched. Idempotent.
-  --uninstall-hooks     remove exactly those spy-agentlens hook entries (nothing else)
+  --uninstall-hooks     remove exactly those agentlens hook entries — both the PATH-bin
+                        names and legacy absolute-path spy-agentlens registrations
+                        (nothing else)
   --install-otel        add the Claude Code telemetry env vars to ~/.claude/settings.json via a
                         verified transaction (atomic write, backup, post-verify, refuses an
                         unparseable file, pre-existing content untouched)
@@ -419,6 +421,36 @@ const HOOK_EVENTS = [
 const GATE_MATCHER = '^(Task|Agent|Workflow|SendMessage)$'
 const GATE_EVENTS = ['PreToolUse', 'PostToolUse']
 
+// P10 PATH-bin contract: hooks are registered by BARE bin name, not by absolute path
+// into the package tree. Absolute paths were stable for `npm i -g` (the prefix never
+// moves) but dangle under Homebrew, whose Cellar path embeds the version and moves on
+// every `brew upgrade`. npm/Homebrew keep these PATH shims pointing at the CURRENT
+// install; the wrappers (scripts/agentlenspro-hook.js / scripts/agentlenspro-gate.js,
+// package.json "bin") resolve the real spy scripts relative to their own
+// symlink-resolved location at every fire.
+const HOOK_BIN = 'agentlenspro-hook'
+const GATE_BIN = 'agentlenspro-gate'
+
+// PATH resolution mirror of what the hook runner's shell will do — used to REFUSE an
+// install that would register a name the shell cannot find (a bare-name hook that is
+// not on PATH would silently never fire, which is worse than a loud failure here).
+function resolveOnPath(name) {
+  const dirs = (process.env.PATH || '').split(path.delimiter).filter(Boolean)
+  const exts = process.platform === 'win32'
+    ? (process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean).concat([''])
+    : ['']
+  for (const dir of dirs) {
+    for (const ext of exts) {
+      const p = path.join(dir, name + ext)
+      try {
+        fs.accessSync(p, fs.constants.X_OK)
+        if (fs.statSync(p).isFile()) return p
+      } catch { /* not here — keep scanning */ }
+    }
+  }
+  return null
+}
+
 // Install (or remove) the spy-agentlens.sh forwarder on the lifecycle events, via the same
 // verified transaction as --install-otel. Install ALSO removes every claude-spyglass hook entry
 // and its env.SPYGLASS_DIR (the "replace spyglass" migration) — spyglass's server is gone, so
@@ -429,9 +461,15 @@ const GATE_EVENTS = ['PreToolUse', 'PostToolUse']
 // the gate entry on agent-launch tool events. Pure — returns the new list + what was
 // stripped; the caller decides whether anything changed.
 function rebuildEventMatchers(matchers, ev, uninstall, cmd, gateCmd) {
-  // 'spy-agentlens' (no .sh suffix) covers BOTH scripts — spy-agentlens.sh AND
-  // spy-agentlens-gate.sh — so uninstall can never orphan a gate entry.
-  const isOurs = h => typeof (h && h.command) === 'string' && h.command.includes('spy-agentlens')
+  // 'spy-agentlens' (no .sh suffix) covers BOTH legacy absolute-path styles —
+  // spy-agentlens.sh AND spy-agentlens-gate.sh (.mjs twins too) — while the two
+  // PATH-bin needles cover the new bare-name registrations. Matching ALL of them
+  // means uninstall/reinstall can never orphan an entry from any past version.
+  const isOurs = h => typeof (h && h.command) === 'string' && (
+    h.command.includes('spy-agentlens')
+    || h.command.includes(HOOK_BIN)
+    || h.command.includes(GATE_BIN)
+  )
   const isSpyglass = h => typeof (h && h.command) === 'string' && h.command.includes('spyglass-collect.sh')
   const out = { rebuilt: [], removedOurs: 0, removedSpyglass: 0, installed: false }
   for (const m of matchers) {
@@ -455,17 +493,23 @@ function rebuildEventMatchers(matchers, ev, uninstall, cmd, gateCmd) {
 }
 
 async function installHooks(uninstall) {
-  // Native Windows has no bash: register the node twins there (audit blocker #2). POSIX
-  // (incl. WSL) keeps bash+curl — no node boot on the hook path. Both name families contain
-  // 'spy-agentlens', so isOurs strips either kind on reinstall/uninstall from any platform.
-  const win = process.platform === 'win32'
-  const script = path.resolve(__dirname, win ? 'spy-agentlens.mjs' : 'spy-agentlens.sh')
-  const gateScript = path.resolve(__dirname, win ? 'spy-agentlens-gate.mjs' : 'spy-agentlens-gate.sh')
-  if (!uninstall && !fs.existsSync(script)) throw new Error(`hook script missing at ${script} — is the repo checkout intact?`)
-  if (!uninstall && !fs.existsSync(gateScript)) throw new Error(`gate script missing at ${gateScript} — is the repo checkout intact?`)
-  const runner = win ? 'node' : 'bash'
-  const cmd = `${runner} ${script}`
-  const gateCmd = `${runner} ${gateScript}`
+  // Register the BARE PATH-bin names (see the HOOK_BIN/GATE_BIN contract above). The
+  // wrappers pick the platform twin (bash .sh on POSIX, node .mjs on native Windows)
+  // at fire time, so the installer no longer branches on platform. Cost accepted:
+  // one node boot per hook fire (the wrapper) — bought back by registrations that
+  // survive Homebrew version bumps and package relocations.
+  const cmd = HOOK_BIN
+  const gateCmd = GATE_BIN
+  if (!uninstall) {
+    for (const bin of [cmd, gateCmd]) {
+      if (!resolveOnPath(bin)) {
+        throw new Error(
+          `refusing: '${bin}' is not on PATH — a hook registered by bare name would silently never fire. `
+          + 'Install the package bins first (npm i -g agentlenspro, or npm link from the repo checkout), then re-run --install-hooks.'
+        )
+      }
+    }
+  }
 
   let settings = {}
   if (fs.existsSync(CLAUDE_SETTINGS)) {
@@ -505,7 +549,7 @@ async function installHooks(uninstall) {
   if (uninstall) {
     console.log(`removed ${removedOurs} agentlens hook entr${removedOurs === 1 ? 'y' : 'ies'} from ${CLAUDE_SETTINGS}`)
   } else {
-    console.log(`installed spy-agentlens hooks on ${added} event(s) in ${CLAUDE_SETTINGS} (lifecycle forwarder + burn-gate on ${GATE_MATCHER})`)
+    console.log(`installed agentlens hooks on ${added} event(s) in ${CLAUDE_SETTINGS} (lifecycle forwarder '${HOOK_BIN}' + burn-gate '${GATE_BIN}' on ${GATE_MATCHER})`)
     if (removedSpyglass > 0) console.log(`removed ${removedSpyglass} dead claude-spyglass hook entr${removedSpyglass === 1 ? 'y' : 'ies'} (+ env.SPYGLASS_DIR)`)
     if (removedOurs > 0) console.log(`refreshed ${removedOurs} pre-existing agentlens entr${removedOurs === 1 ? 'y' : 'ies'}`)
   }
@@ -909,4 +953,4 @@ if (require.main === module) {
 }
 
 // Pure hook-matcher internals exercised by src/test/cliMatchers.test.ts (no server needed).
-module.exports = { rebuildEventMatchers, GATE_MATCHER, GATE_EVENTS }
+module.exports = { rebuildEventMatchers, GATE_MATCHER, GATE_EVENTS, HOOK_BIN, GATE_BIN, resolveOnPath }

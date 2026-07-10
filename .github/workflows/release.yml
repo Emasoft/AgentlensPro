@@ -5,28 +5,38 @@ on:
     tags:
       - 'v*'
 
-# Least privilege: read by default; only the job that creates a Release gets write.
+# Least privilege: read by default; each job asks only for what it needs.
 permissions:
   contents: read
+
+env:
+  # corepack downloads the pnpm version pinned by package.json "packageManager";
+  # without this the download confirmation prompt can hang a non-TTY CI step.
+  COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
 
 jobs:
   package:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
-      contents: write  # softprops/action-gh-release creates the GitHub Release
+      contents: write       # softprops/action-gh-release creates the Release + uploads the tarball
+      id-token: write       # sign the build-provenance attestation (Sigstore keyless)
+      attestations: write   # store the in-toto attestation on the repository
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      # pnpm version comes from package.json "packageManager" (no `version:` input).
-      - name: Setup pnpm
-        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+      # pnpm via corepack — the version comes from package.json "packageManager"
+      # (single source of truth, same pattern as ci.yml; no third-party action).
+      # Node 22 is REQUIRED here: the corepack-pinned pnpm imports node:sqlite,
+      # which needs Node >= 22.13 — the inherited Node 20 pin could never install.
+      - name: Enable corepack (pnpm)
+        run: corepack enable
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
 
       - name: Install dependencies
@@ -38,13 +48,33 @@ jobs:
       - name: Type check
         run: pnpm run check-types
 
+      # Bundles MUST be built BEFORE the unit suite: the server integration tests
+      # boot the bundled standalone/server.js (an esbuild output — only the .ts
+      # sources are tracked). --production so the tests run against exactly the
+      # bytes that ship in the tarball below.
+      - name: Build production bundles
+        run: node esbuild.js --production
+
       - name: Unit tests
         run: pnpm run test:unit
+
+      # The npm tarball IS the release artifact for this npm-first distribution:
+      # attach it to the GitHub Release with a SLSA build-provenance attestation
+      # (janitor audit — release-path provenance). `npm publish --provenance`
+      # below covers the registry copy; this covers the GitHub Release copy.
+      - name: Pack npm tarball
+        run: npm pack
+
+      - name: Attest build provenance (in-toto / SLSA)
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: 'agentlenspro-*.tgz'
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
         with:
           generate_release_notes: true
+          files: 'agentlenspro-*.tgz'
 
   publish-npm:
     needs: package
@@ -61,15 +91,15 @@ jobs:
       contents: read   # actions/checkout + npm --provenance need repo read
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+      - name: Enable corepack (pnpm)
+        run: corepack enable
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
           # registry-url is required so setup-node writes the registry endpoint to
           # .npmrc. Without it, npm throws ENEEDAUTH before attempting OIDC.
@@ -78,7 +108,7 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
 
       - name: Upgrade npm for OIDC Trusted Publishing
-        # Node 20 ships with npm 10.x. OIDC Trusted Publishing requires npm 11.x+.
+        # Node 22 ships with npm 10.x. OIDC Trusted Publishing requires npm 11.x+.
         run: npm install -g npm@latest
 
       - name: Install dependencies
@@ -88,4 +118,6 @@ jobs:
         # Trusted Publishing: npm exchanges the GitHub Actions OIDC token for a
         # short-lived publish credential — no NPM_TOKEN secret required.
         # NODE_AUTH_TOKEN must not be set; npm falls back to OIDC when it is absent.
+        # prepublishOnly runs `pnpm run package` (type-check + lint + production
+        # bundle), so the published tarball always carries freshly built bundles.
         run: npm publish --access public --provenance
