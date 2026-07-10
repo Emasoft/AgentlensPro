@@ -21,6 +21,7 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
 import { calcTokenCostUsd } from './shared/pricing'
+import { contextTokens } from './shared/tokenBuckets'
 import type {
   SessionSummaryCard, TimelineEntry, ContextComposition,
   CacheBreakReport, CacheBreakOffender, ContextHistory, CallContext, CollectorGap,
@@ -1537,9 +1538,11 @@ function asTimeline(getTimeline: ((id: string) => unknown[]) | null, id: string,
   return raw as TimelineEntry[]
 }
 
-// Per-turn context size + cache split from a session timeline. promptTokens is the FULL prompt that
-// turn — inputTokens already includes cacheRead + cacheCreate (P1 accounting) — so newInput is the
-// non-cached remainder. Turn 1 warms cold; later turns should be almost entirely cache-read.
+// Per-turn context size + cache split from a session timeline. Entries carry the FOUR DISJOINT
+// buckets (entry.inputTokens is the raw uncached share since the 2026-07-10 normalization — see
+// src/shared/tokenBuckets.ts), so promptTokens (the FULL prompt that turn) is derived as
+// input + cacheRead + cacheCreation. Turn 1 warms cold; later turns should be almost entirely
+// cache-read.
 interface TurnGrowth {
   turn: number
   promptTokens: number
@@ -1565,10 +1568,10 @@ function computeTurnGrowth(timeline: TimelineEntry[]): TurnGrowth[] {
     const denom = a.read + a.create
     return {
       turn,
-      promptTokens:      a.input,
+      promptTokens:      contextTokens({ inputTokens: a.input, cacheReadTokens: a.read, cacheCreateTokens: a.create }),
       cacheReadTokens:   a.read,
       cacheCreateTokens: a.create,
-      newInputTokens:    Math.max(0, a.input - a.read - a.create),
+      newInputTokens:    a.input,
       outputTokens:      a.output,
       hitRatePct:        denom > 0 ? Math.round(a.read / denom * 100) : 0,
     }

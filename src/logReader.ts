@@ -33,6 +33,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
 import type { SessionSummaryCard, TimelineEntry } from './shared/summarizerTypes'
+import { disjointBuckets, contextTokens, type TokenBuckets } from './shared/tokenBuckets'
 import { callBodyRegistry } from './rawBodyContext'
 import { VSCODE_FAMILY_IDE_NAMES } from './vscodeFamilyIdes'
 import {
@@ -484,18 +485,21 @@ export class LogReader {
     const a = this._incrementalParse<CodexAccum>(filePath, _newCodexAccum, _codexOnEntry)
     if (!a || !a.firstTimestamp) return null
 
-    // Use final total_token_usage; input_tokens includes cached, so subtract to get
-    // the raw (non-cached) portion that _buildCard will re-add alongside cacheRead.
-    const totalCacheRead = a.lastTotalUsage?.['cached_input_tokens'] ?? 0
-    const totalInput     = Math.max(0, (a.lastTotalUsage?.['input_tokens'] ?? 0) - totalCacheRead)
-    // Include reasoning tokens in output — they're billed at the output rate for o-series.
-    const totalOutput    = (a.lastTotalUsage?.['output_tokens'] ?? 0)
-                         + (a.lastTotalUsage?.['reasoning_output_tokens'] ?? 0)
+    // Use final total_token_usage. Codex usage is OpenAI-shaped (cached ⊂ input_tokens) — the
+    // shared constructor sheds the cached share so the stored buckets are disjoint. Reasoning
+    // tokens fold into output — they're billed at the output rate for o-series.
+    const b = disjointBuckets({
+      input: a.lastTotalUsage?.['input_tokens'] ?? 0,
+      output: (a.lastTotalUsage?.['output_tokens'] ?? 0) + (a.lastTotalUsage?.['reasoning_output_tokens'] ?? 0),
+      cacheRead: a.lastTotalUsage?.['cached_input_tokens'] ?? 0,
+      cacheCreate: 0,
+    }, 'openai')
 
     return {
       workspace: a.workspace,
       card: _buildCard(path.basename(filePath, '.jsonl'), 'codex', a.model || 'codex', a.firstTimestamp, a.lastTimestamp, {
-        totalInput, totalOutput, totalCacheRead, totalCacheCreate: 0,
+        totalInput: b.inputTokens, totalOutput: b.outputTokens,
+        totalCacheRead: b.cacheReadTokens, totalCacheCreate: b.cacheCreateTokens,
         peakContextPerTurn: 0, turns: a.turns, totalToolCalls: 0, toolCounts: {},
         filesRead: new Set(), filesChanged: new Set(), filesWritten: new Set(), filesSearched: new Set(),
         userRequest: a.userRequest, timeline: [], initiator: 'user',
@@ -1022,7 +1026,9 @@ export class LogReader {
                 json_extract(data,'$.time.created')   AS t_created,
                 json_extract(data,'$.time.completed') AS t_completed,
                 json_extract(data,'$.tokens.input')   AS tok_in,
-                json_extract(data,'$.tokens.output')  AS tok_out
+                json_extract(data,'$.tokens.output')  AS tok_out,
+                json_extract(data,'$.tokens.cache.read')  AS tok_cr,
+                json_extract(data,'$.tokens.cache.write') AS tok_cw
          FROM message WHERE session_id IN (${inList})
          ORDER BY time_created ASC`,
       )
@@ -1049,7 +1055,7 @@ export class LogReader {
       } catch { /* part table absent in this DB version */ }
 
       // Index by session
-      interface MsgInfo { msgId: string; tCreated: number; tCompleted: number; tokIn: number; tokOut: number }
+      interface MsgInfo { msgId: string; tCreated: number; tCompleted: number; tokIn: number; tokOut: number; tokCR: number; tokCW: number }
       interface PartInfo {
         partTs: number; msgRole: string; type: string
         text: string | null; toolName: string | null; callId: string | null
@@ -1071,6 +1077,8 @@ export class LogReader {
               tCompleted: Number(r[mc('t_completed')] ?? 0),
               tokIn:  Number(r[mc('tok_in')]  ?? 0),
               tokOut: Number(r[mc('tok_out')] ?? 0),
+              tokCR:  Number(r[mc('tok_cr')]  ?? 0),
+              tokCW:  Number(r[mc('tok_cw')]  ?? 0),
             })
           }
         }
@@ -1145,13 +1153,18 @@ export class LogReader {
         let lastCompleted = 0
         for (const m of msgs) {
           const durationMs = m.tCompleted > m.tCreated ? m.tCompleted - m.tCreated : 0
+          // OpenCode reports Anthropic-shaped tokens (input cache-excluded, cache in $.tokens.cache)
+          // — same four disjoint buckets on the entry as on the card.
+          const eb = disjointBuckets({ input: m.tokIn, output: m.tokOut, cacheRead: m.tokCR, cacheCreate: m.tokCW }, 'anthropic')
           llmEvents.push({
             ts: m.tCreated,
             entry: {
               type: 'llm', spanId: `oc-${m.msgId}`,
               label: `Turn ${++llmIdx}`,
               durationMs,
-              inputTokens: m.tokIn, outputTokens: m.tokOut,
+              inputTokens: eb.inputTokens, outputTokens: eb.outputTokens,
+              cacheReadTokens: eb.cacheReadTokens || undefined,
+              cacheCreateTokens: eb.cacheCreateTokens || undefined,
               isError: false,
               timestamp: m.tCreated > 0 ? new Date(m.tCreated).toISOString() : startTs,
               model: modelId || undefined,
@@ -1702,10 +1715,18 @@ function _completeSubAgent(sub: SubAgentRec, tur: Record<string, unknown>, resul
     return
   }
   sub.async = false
-  sub.input       = usage['input_tokens'] ?? 0
-  sub.output      = usage['output_tokens'] ?? 0
-  sub.cacheRead   = usage['cache_read_input_tokens'] ?? 0
-  sub.cacheCreate = usage['cache_creation_input_tokens'] ?? 0
+  // Anthropic-shaped usage (input already cache-excluded) through the shared constructor — the
+  // sub-agent card inherits the same four disjoint buckets as every other card family.
+  const b = disjointBuckets({
+    input: usage['input_tokens'] ?? 0,
+    output: usage['output_tokens'] ?? 0,
+    cacheRead: usage['cache_read_input_tokens'] ?? 0,
+    cacheCreate: usage['cache_creation_input_tokens'] ?? 0,
+  }, 'anthropic')
+  sub.input       = b.inputTokens
+  sub.output      = b.outputTokens
+  sub.cacheRead   = b.cacheReadTokens
+  sub.cacheCreate = b.cacheCreateTokens
   sub.totalTokens = tur['totalTokens'] as number
   sub.toolUseCount = (tur['totalToolUseCount'] as number) ?? 0
   sub.durationMs   = (tur['totalDurationMs'] as number) ?? 0
@@ -1795,10 +1816,10 @@ function _buildSubAgentCards(parentSessionId: string, a: ClaudeAccum): SessionSu
       turns: 1,
       // RAW uncached input — FOUR DISJOINT BUCKETS is the schema invariant on every card (the
       // 2026-07-10 measurement adjudicated the two dueling conventions: the parent log card was
-      // ALWAYS raw at :2055, and the earlier comment here claiming "parent stores incl-cache,
-      // citing claude.ts:143/340 + logReader.ts:1888" cited lines that proved the OPPOSITE).
-      // Matching the parent means storing sub.input as-is; the write-time cost and sessionCost
-      // bill the four buckets independently, no subtraction anywhere.
+      // ALWAYS raw, and the earlier comment here claiming "parent stores incl-cache" cited lines
+      // that proved the OPPOSITE). sub.* is already normalized through disjointBuckets at
+      // _completeSubAgent; the write-time cost and sessionCost bill the four buckets
+      // independently, no subtraction anywhere.
       inputTokens: sub.input,
       outputTokens: sub.output,
       cacheReadTokens: sub.cacheRead,
@@ -1885,15 +1906,21 @@ function _claudeOnEntry(a: ClaudeAccum, entry: Record<string, unknown>): void {
     const rawUsage = msg?.['usage'] as Record<string, unknown> | undefined
     if (rawUsage?.['speed'] === 'fast') a.hasFastMode = true
     const usage = rawUsage as Record<string, number> | undefined
+    // Transcript usage is Anthropic-shaped (input already cache-excluded) — the shared constructor
+    // is the ONE place the four-disjoint-buckets invariant lives for this card AND its entry below.
+    let rowBuckets: TokenBuckets | undefined
     if (usage && isFirstRowOfMessage) {
-      const inp = usage['input_tokens']                ?? 0
-      const cr  = usage['cache_read_input_tokens']     ?? 0
-      const cc  = usage['cache_creation_input_tokens'] ?? 0
-      a.card.totalInput       += inp
-      a.card.totalOutput      += usage['output_tokens'] ?? 0
-      a.card.totalCacheRead   += cr
-      a.card.totalCacheCreate += cc
-      const turnContext = inp + cr + cc
+      rowBuckets = disjointBuckets({
+        input: usage['input_tokens'] ?? 0,
+        output: usage['output_tokens'] ?? 0,
+        cacheRead: usage['cache_read_input_tokens'] ?? 0,
+        cacheCreate: usage['cache_creation_input_tokens'] ?? 0,
+      }, 'anthropic')
+      a.card.totalInput       += rowBuckets.inputTokens
+      a.card.totalOutput      += rowBuckets.outputTokens
+      a.card.totalCacheRead   += rowBuckets.cacheReadTokens
+      a.card.totalCacheCreate += rowBuckets.cacheCreateTokens
+      const turnContext = contextTokens(rowBuckets)
       if (turnContext > a.card.peakContextPerTurn) a.card.peakContextPerTurn = turnContext
       a.card.turns++
     }
@@ -1944,10 +1971,12 @@ function _claudeOnEntry(a: ClaudeAccum, entry: Record<string, unknown>): void {
       type: hasToolCall ? 'tool' : 'llm', spanId: `log-a-${a.idx}`,
       label: hasToolCall ? 'Tool calls' : 'Response', turn: a.card.turns,
       model: a.model || undefined,
-      inputTokens: isFirstRowOfMessage ? usage?.['input_tokens'] : undefined,
-      outputTokens: isFirstRowOfMessage ? usage?.['output_tokens'] : undefined,
-      cacheReadTokens: isFirstRowOfMessage ? usage?.['cache_read_input_tokens'] : undefined,
-      cacheCreateTokens: isFirstRowOfMessage ? usage?.['cache_creation_input_tokens'] : undefined,
+      // rowBuckets is set only on the first row of the message, so multi-row messages still carry
+      // their usage exactly once — and the entry stores the SAME disjoint buckets as the card.
+      inputTokens: rowBuckets?.inputTokens,
+      outputTokens: rowBuckets?.outputTokens,
+      cacheReadTokens: rowBuckets?.cacheReadTokens,
+      cacheCreateTokens: rowBuckets?.cacheCreateTokens,
       durationMs: 0, isError: false, timestamp: ts ?? '', responseText,
     })
     // Map this row's tool_use ids to the entry just pushed so the matching tool_result (in a later
@@ -2028,11 +2057,17 @@ function _buildCard(
   const startMs  = _parseTs(firstTimestamp)
   const endMs    = _parseTs(lastTimestamp)
   const durationMs = (endMs > 0 && startMs > 0) ? Math.max(0, endMs - startMs) : 0
-  // Use total context (raw + cache read + cache create) as the denominator so the
-  // rate stays 0–1. Using raw input_tokens alone produces rates >> 1 in multi-turn
-  // sessions where the cached context dwarfs the new tokens added each turn.
-  const totalContext = acc.totalInput + acc.totalCacheRead + acc.totalCacheCreate
-  const cacheHitRate = totalContext > 0 ? acc.totalCacheRead / totalContext : 0
+  // Every scanner keeps its accumulators disjoint at the parse site (disjointBuckets there);
+  // routing the sums through the constructor again is a pass-through that keeps the card's four
+  // fields compile-shaped to the invariant. Use total context (raw + cache read + cache create)
+  // as the hit-rate denominator so the rate stays 0–1 — raw input alone produces rates >> 1 in
+  // multi-turn sessions where the cached context dwarfs the new tokens added each turn.
+  const buckets = disjointBuckets(
+    { input: acc.totalInput, output: acc.totalOutput, cacheRead: acc.totalCacheRead, cacheCreate: acc.totalCacheCreate },
+    'anthropic',
+  )
+  const totalContext = contextTokens(buckets)
+  const cacheHitRate = totalContext > 0 ? buckets.cacheReadTokens / totalContext : 0
 
   return {
     sessionId,
@@ -2053,10 +2088,10 @@ function _buildCard(
     // inflated the headline to millions because cacheRead re-reads the whole transcript
     // every turn. cacheRead/cacheCreate are carried in their own fields below; cost reads
     // all four buckets separately (writer.ts), so billing is unchanged.
-    inputTokens: acc.totalInput,
-    outputTokens: acc.totalOutput,
-    cacheReadTokens: acc.totalCacheRead,
-    cacheCreateTokens: acc.totalCacheCreate,
+    inputTokens: buckets.inputTokens,
+    outputTokens: buckets.outputTokens,
+    cacheReadTokens: buckets.cacheReadTokens,
+    cacheCreateTokens: buckets.cacheCreateTokens,
     cacheHitRate,
     durationMs,
     startTime: startMs > 0 ? new Date(startMs).toISOString() : '',

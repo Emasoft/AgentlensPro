@@ -15,6 +15,7 @@ import { exec } from 'child_process'
 import { summarizeSpans } from '../src/spanSummarizer'
 import { mergeOtelAndLogSessions } from '../src/feedMergePolicy'
 import { calcTokenCostUsd } from '../src/shared/pricing'
+import { contextTokens } from '../src/shared/tokenBuckets'
 import { autoConfigureCodex, autoConfigureCopilotStandalone } from '../src/autoConfigNode'
 import { ensureTelemetryConfig, ensureAgentLensStopHook } from '../src/telemetryConfig'
 import { classifyOtlpPayload } from '../src/otlpParser'
@@ -1077,11 +1078,13 @@ function computeSidebarPayload(summary: ReturnType<typeof summarizeSpans>, allSp
   }
   const isActive = lastMs > 0 && (Date.now() - lastMs) < 20_000
 
-  // Turn input tokens for sparkline from timeline
+  // Per-turn CONTEXT size for the sidebar sparkline. Entries carry the four disjoint buckets
+  // (inputTokens is only the raw uncached share since the 2026-07-10 entry normalization), so the
+  // turn's prompt size is derived as input + cacheRead + cacheCreation via the shared helper.
   const turnInputTokens = latest
     ? (latest.timeline ?? [])
-        .filter(e => e.type === 'llm' && (e.inputTokens ?? 0) > 0)
-        .map(e => e.inputTokens ?? 0)
+        .filter(e => e.type === 'llm' && contextTokens(e) > 0)
+        .map(e => contextTokens(e))
     : []
 
   // Simple burn rate estimate for active sessions
