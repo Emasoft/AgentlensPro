@@ -4,7 +4,8 @@ title: Hook-events pipeline — spy-agentlens.sh replaces spyglass, lifecycle si
 column: complete
 created: 2026-07-10T01:15:36+0200
 updated: 2026-07-10T01:26:00+0200
-implementation-commits: [c923f85]
+implementation-commits: [c923f85, a5b3519]
+eht: [TRDD-8ENYLEIO]
 last-test-result: pass
 last-test-at: 2026-07-10T01:24:00+0200
 current-owner: agentlens-session
