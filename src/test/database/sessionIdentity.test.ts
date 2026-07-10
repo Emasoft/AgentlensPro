@@ -92,12 +92,21 @@ suite('dedupeSessionIdentities — synth/real twins (TRDD-ZK37VG4X spec 2)', () 
     const real = makeCard('0ca3718286b47699', T0_PLUS_2M, { ...usage, dataSource: 'log', userRequest: 'do the thing' })
     const out = dedupeSessionIdentities([synth, real])
     assert.strictEqual(out.length, 1)
-    // OTEL card wins the data (project rule: OTEL wins) but is re-keyed onto the real id.
+    // Claude cards: the LOG twin wins the data (token-feed Phase B doctrine — transcripts are
+    // durable + call-complete, OTEL is a lossy lower bound) and it already carries the real id.
     assert.strictEqual(out[0].sessionId, '0ca3718286b47699')
-    assert.strictEqual(out[0].dataSource, 'otel')
+    assert.strictEqual(out[0].dataSource, 'log')
     assert.ok(out[0].mergedFrom!.includes('synth-abc123def456'), 'merge must be auditable via mergedFrom')
-    // Missing fields borrowed from the loser.
     assert.strictEqual(out[0].userRequest, 'do the thing')
+  })
+
+  test('non-Claude twins keep the original preference: the OTEL card wins the data', () => {
+    const log = makeCard('copilot-log', T0, { ...usage, source: 'copilot', dataSource: 'log', timeline: [] })
+    const otel = makeCard('copilot-otel', T0_PLUS_2M, { ...usage, source: 'copilot', dataSource: 'otel', timeline: [] })
+    const out = dedupeSessionIdentities([log, otel])
+    assert.strictEqual(out.length, 1)
+    assert.strictEqual(out[0].dataSource, 'otel')
+    assert.ok(out[0].mergedFrom!.includes('copilot-log'))
   })
 
   test('two ids with byte-identical usage within the window collapse to one card', () => {

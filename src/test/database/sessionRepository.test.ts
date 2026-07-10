@@ -58,6 +58,31 @@ suite('mergeSessions', () => {
     assert.strictEqual(result[0].sessionId, 'y')
     assert.strictEqual(result[1].sessionId, 'x')
   })
+
+  // Token-feed Phase B: for claude_code the LOG transcript row is the preferred feed
+  // (OTEL is a measured lossy lower bound), so it beats even a FRESHER live OTEL twin.
+  test('a persisted claude_code LOG row beats the live OTEL card with the same sessionId', () => {
+    const uuid = 'c8a95d7e-1234-5678-9abc-1dfacbcab3b1'
+    const db = [makeCard(uuid, '2026-07-10T10:00:00.000Z', {
+      source: 'claude_code', dataSource: 'log', inputTokens: 953943, model: 'log-model',
+    })]
+    const live = [makeCard(uuid, '2026-07-10T10:00:00.000Z', {
+      source: 'claude_code', dataSource: 'otel', inputTokens: 1810600, model: 'live-model',
+    })]
+    const result = mergeSessions(db, live)
+    assert.strictEqual(result.length, 1)
+    assert.strictEqual(result[0].dataSource, 'log')
+    assert.strictEqual(result[0].inputTokens, 953943, 'served totals are the transcript totals')
+  })
+
+  test('a live OTEL claude_code card with NO persisted log twin still wins over an OTEL db row', () => {
+    const uuid = 'claude-otel-both'
+    const db = [makeCard(uuid, '2026-07-10T10:00:00.000Z', { source: 'claude_code', dataSource: 'otel', model: 'db-model' })]
+    const live = [makeCard(uuid, '2026-07-10T10:00:00.000Z', { source: 'claude_code', dataSource: 'otel', model: 'live-model' })]
+    const result = mergeSessions(db, live)
+    assert.strictEqual(result.length, 1)
+    assert.strictEqual(result[0].model, 'live-model', 'freshness still wins inside the same feed')
+  })
 })
 
 suite('resolveWorkspacesFromLogs', () => {

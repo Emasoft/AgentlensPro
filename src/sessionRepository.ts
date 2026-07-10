@@ -4,6 +4,7 @@ import { SessionStore } from './sessionStore'
 import { DatabaseReader, type DailyStatRow, type LifetimeStats, type SearchQuery, type BurnRate, type Projection } from './database/reader'
 import { DatabaseWriter } from './database/writer'
 import { summarizeSpans } from './spanSummarizer'
+import { preferredDataSource } from './feedMergePolicy'
 import { lookupRates } from './pricing'
 import type { SessionSummaryCard, TimelineEntry, GeneratedFileRef } from './summarizers/summarizerTypes'
 
@@ -54,11 +55,13 @@ export function resolveWorkspacesFromLogs(sessions: SessionSummaryCard[]): void 
  * four exact token-bucket collisions across genuinely different sessions are not plausible
  * (all-zero cards are excluded precisely because THEY collide all the time).
  *
- * Winner selection: OTEL beats log (project rule: OTEL always wins), then the richer timeline,
- * then the longer duration. The REAL id always beats a `synth-*` placeholder regardless of which
- * card wins on data (re-keying the synth card onto its correlated real id), and the loser's id is
- * recorded in `mergedFrom` so the merge is auditable rather than silent. Fields the winner is
- * missing (workspace, prompt, model) are borrowed from the loser.
+ * Winner selection: the source's PREFERRED feed wins (feedMergePolicy.ts — for Claude the log
+ * transcript beats OTEL because OTEL is a measured lossy lower bound; every other source keeps
+ * OTEL-beats-log), then the richer timeline, then the longer duration. The REAL id always beats
+ * a `synth-*` placeholder regardless of which card wins on data (re-keying the synth card onto
+ * its correlated real id), and the loser's id is recorded in `mergedFrom` so the merge is
+ * auditable rather than silent. Fields the winner is missing (workspace, prompt, model) are
+ * borrowed from the loser.
  */
 export function dedupeSessionIdentities(sessions: SessionSummaryCard[]): SessionSummaryCard[] {
   const IDENTITY_WINDOW_MS = 10 * 60_000
@@ -84,8 +87,10 @@ export function dedupeSessionIdentities(sessions: SessionSummaryCard[]): Session
 
     let winner = prior
     let loser = s
-    const priorScore = (prior.dataSource === 'otel' ? 2 : 0) + (richness(prior) >= richness(loser) ? 1 : 0)
-    const sScore = (s.dataSource === 'otel' ? 2 : 0) + (richness(s) > richness(prior) ? 1 : 0)
+    // The fingerprint includes `source`, so prior.source === s.source — one preference applies.
+    const preferredDs = preferredDataSource(s.source)
+    const priorScore = (prior.dataSource === preferredDs ? 2 : 0) + (richness(prior) >= richness(loser) ? 1 : 0)
+    const sScore = (s.dataSource === preferredDs ? 2 : 0) + (richness(s) > richness(prior) ? 1 : 0)
     if (sScore > priorScore || (sScore === priorScore && s.durationMs > prior.durationMs)) {
       winner = s
       loser = prior
@@ -120,17 +125,29 @@ export function flagUnpricedSessions(sessions: SessionSummaryCard[]): void {
 
 /**
  * Merges historical sessions from SQLite with live sessions from the in-memory
- * span window. Live sessions always win on conflict (same sessionId) — they are
- * fresher. Result is sorted by startTime DESC.
+ * span window. Live sessions win on conflict (same sessionId) — they are fresher —
+ * EXCEPT when the persisted row comes from the source's preferred feed and the live
+ * twin does not (feedMergePolicy.ts): a claude_code log transcript row beats the live
+ * OTEL card, because the OTEL feed is a measured lossy lower bound whose totals also
+ * include sub-agent calls the log parent card intentionally excludes. Live sessions
+ * are always OTEL-derived here, so this exception only ever fires for Claude.
+ * Result is sorted by startTime DESC.
  */
 export function mergeSessions(
   dbSessions: SessionSummaryCard[],
   liveSessions: SessionSummaryCard[],
 ): SessionSummaryCard[] {
-  const liveIds = new Set(liveSessions.map(s => s.sessionId))
+  const dbById = new Map(dbSessions.map(s => [s.sessionId, s] as const))
+  const keptLive = liveSessions.filter(live => {
+    const db = dbById.get(live.sessionId)
+    if (!db) { return true }
+    const preferredDs = preferredDataSource(live.source)
+    return !(db.dataSource === preferredDs && live.dataSource !== preferredDs)
+  })
+  const keptLiveIds = new Set(keptLive.map(s => s.sessionId))
   return [
-    ...liveSessions,
-    ...dbSessions.filter(s => !liveIds.has(s.sessionId)),
+    ...keptLive,
+    ...dbSessions.filter(s => !keptLiveIds.has(s.sessionId)),
   ].sort((a, b) => Date.parse(b.startTime) - Date.parse(a.startTime))
 }
 

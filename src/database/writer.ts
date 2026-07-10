@@ -1,6 +1,7 @@
 import { joinUri, type UriLike, type WriteBlobFs } from '../vscodeCompat'
 import type { SessionSummaryCard, TimelineEntry, EditDetail, GeneratedFileRef } from '../summarizers/summarizerTypes'
 import { calcTokenCostUsd } from '../pricing'
+import { preferredDataSource } from '../feedMergePolicy'
 
 // Strings below this length are kept inline in the DB row rather than written to a blob file.
 const BLOB_MIN_LENGTH = 512
@@ -32,14 +33,18 @@ export class DatabaseWriter {
   }
 
   enqueue(card: SessionSummaryCard, workspace: string): void {
-    // OTEL always wins: if this is a log-sourced card and an OTEL record already
-    // exists for the same session, skip it so we never downgrade richer data.
-    if (card.dataSource === 'log') {
+    // Feed-collision doctrine (feedMergePolicy.ts): a card from the source's NON-preferred feed
+    // never overwrites a persisted row from the preferred one. For claude_code the log transcript
+    // wins (durable + call-complete; OTEL is a measured lossy lower bound), so an OTEL card is
+    // skipped when a log row exists; for every other source OTEL wins, so a log card is skipped
+    // when an OTEL row exists — the pre-Phase-B behavior, unchanged.
+    const preferredDs = preferredDataSource(card.source)
+    if (card.dataSource !== preferredDs) {
       try {
         const rows = this.db.exec(
           `SELECT data_source FROM sessions WHERE session_id = '${card.sessionId.replace(/'/g, "''")}'`
         )
-        if (rows[0]?.values[0]?.[0] === 'otel') return
+        if (rows[0]?.values[0]?.[0] === preferredDs) return
       } catch { /* non-fatal — proceed to enqueue */ }
     }
     card.workspace = workspace

@@ -284,6 +284,8 @@ flowchart TD
 
 Sessions produced by `LogReader` carry `dataSource: 'log'` on `SessionSummaryCard`; OTLP sessions carry `dataSource: 'otel'`. The UI shows an OTEL/Log source badge on each session row.
 
+When both feeds capture the same session (same sessionId — for Claude the OTEL summarizer keys cards by the transcript UUID carried in the `session.id` span attribute), the winner is decided by `src/feedMergePolicy.ts`: **for Claude sessions the log transcript wins on collision (OTEL is a lossy lower bound — `MAX_SPANS` store eviction plus collector-downtime loss); OTEL wins only where no transcript exists.** Every other source keeps the original OTEL-wins rule.
+
 ### Bypasses SessionStore / SpanSummarizer
 
 `LogReader` produces `SessionSummaryCard` objects directly (via `_buildCard`) and writes them straight to `DatabaseWriter`. The OTLP path's `SessionStore` and `SpanSummarizer` are not involved.

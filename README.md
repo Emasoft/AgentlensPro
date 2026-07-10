@@ -92,7 +92,7 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 ## Data Sources
 
-AgentLens collects data from two independent sources per agent. Each session row shows a badge — **OTEL** or **Log** — indicating where its data came from. If both capture the same session, OTEL always wins and the badge upgrades automatically.
+AgentLens collects data from two independent sources per agent. Each session row shows a badge — **OTEL** or **Log** — indicating where its data came from. If both capture the same session: for Claude sessions the log transcript wins on collision (OTEL is a lossy lower bound), and OTEL wins only where no transcript exists; for every other agent OTEL wins.
 
 ### OpenTelemetry traces (primary source)
 
@@ -365,7 +365,7 @@ Open the VS Code Command Palette (`Cmd+Shift+P` / `Ctrl+Shift+P`) and search for
 
 ## Agent Data Formats
 
-AgentLens collects data from two sources per agent and normalizes both into a shared session model. The **Log** badge indicates log-file data; **OTEL** indicates telemetry data. When both are present for the same session, OTEL wins.
+AgentLens collects data from two sources per agent and normalizes both into a shared session model. The **Log** badge indicates log-file data; **OTEL** indicates telemetry data. When both are present for the same session: for Claude the log transcript wins (OTEL is a lossy lower bound; it serves only sessions with no transcript), for every other agent OTEL wins.
 
 ### Claude Code
 

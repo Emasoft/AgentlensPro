@@ -13,6 +13,7 @@ import * as path from 'path'
 import * as os from 'os'
 import { exec } from 'child_process'
 import { summarizeSpans } from '../src/spanSummarizer'
+import { mergeOtelAndLogSessions } from '../src/feedMergePolicy'
 import { calcTokenCostUsd } from '../src/pricing'
 import { autoConfigureCodex, autoConfigureCopilotStandalone } from '../src/autoConfigNode'
 import { ensureTelemetryConfig, ensureAgentLensStopHook } from '../src/telemetryConfig'
@@ -1111,8 +1112,10 @@ function computeSidebarPayload(summary: ReturnType<typeof summarizeSpans>, allSp
     outputTokens: latest.outputTokens,
     cacheReadTokens: latest.cacheReadTokens,
     cacheCreateTokens: latest.cacheCreateTokens,
+    // inputTokens IS the raw uncached input since the 2026-07-10 one-convention fix (four
+    // disjoint buckets) — the old subtraction here would zero the input component out.
     costUsd: calcTokenCostUsd(
-      Math.max(0, latest.inputTokens - latest.cacheReadTokens - latest.cacheCreateTokens),
+      latest.inputTokens,
       latest.cacheReadTokens,
       latest.cacheCreateTokens,
       latest.outputTokens,
@@ -1203,15 +1206,15 @@ function buildSessionSummary(): ReturnType<typeof summarizeSpans> | null {
   let summary: ReturnType<typeof summarizeSpans> | null = null
   try { summary = summarizeSpans(spans) } catch (e) { console.warn('[AgentLens] summarizeSpans error:', e) }
 
-  // Merge log-sourced sessions; OTEL wins on ID collision.
+  // Merge log-sourced sessions. On ID collision the source's PREFERRED feed wins
+  // (src/feedMergePolicy.ts): for Claude the LOG transcript card wins — transcripts are durable
+  // and call-complete while OTEL is a measured lossy lower bound (MAX_SPANS eviction + collector
+  // downtime; reports/token-discrepancy/20260710_141134+0200-otel-vs-jsonl.md §5.6) — and OTEL
+  // wins for every other source. OTEL-only sessions (no transcript) still serve.
   if (logSessions.size > 0) {
-    const otelIds = new Set((summary?.sessions ?? []).map(s => s.sessionId))
-    const logOnly = [...logSessions.values()].filter(s => !otelIds.has(s.sessionId))
-    if (logOnly.length > 0) {
-      const merged = [...logOnly, ...(summary?.sessions ?? [])]
-        .sort((a, b) => Date.parse(b.startTime || '0') - Date.parse(a.startTime || '0'))
-      summary = { ...(summary ?? { backgroundSpans: [], efficiency: { totalInputTokens: 0, totalOutputTokens: 0, totalLlmCalls: 0, avgInputPerCall: 0, avgTtft: 0, cacheHitRate: 0, toolDefWaste: 0, sysInstructionWaste: 0, topTokenConsumers: [] } }), sessions: merged }
-    }
+    const merged = mergeOtelAndLogSessions(summary?.sessions ?? [], [...logSessions.values()])
+      .sort((a, b) => Date.parse(b.startTime || '0') - Date.parse(a.startTime || '0'))
+    summary = { ...(summary ?? { backgroundSpans: [], efficiency: { totalInputTokens: 0, totalOutputTokens: 0, totalLlmCalls: 0, avgInputPerCall: 0, avgTtft: 0, cacheHitRate: 0, toolDefWaste: 0, sysInstructionWaste: 0, topTokenConsumers: [] } }), sessions: merged }
   }
   return summary
 }

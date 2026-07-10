@@ -228,4 +228,54 @@ suite('DatabaseWriter', () => {
     assert.strictEqual(countRows(db, 'edit_details'), 0)
     db.close()
   })
+
+  // ── Feed-collision write guard (token-feed Phase B, feedMergePolicy.ts): a card from the
+  //    source's NON-preferred feed never overwrites a persisted row from the preferred one.
+  //    claude_code prefers LOG (transcripts durable + call-complete; OTEL a lossy lower bound);
+  //    every other source keeps the original OTEL-wins behavior.
+  suite('feed-collision write guard', () => {
+    function queryStr(db: SqlDb, sql: string): string {
+      const result = db.exec(sql)
+      return String(result[0]?.values[0]?.[0] ?? '')
+    }
+
+    test('a claude_code LOG card overwrites an existing OTEL row for the same session', async () => {
+      const db = await openInMemoryDb()
+      const w = new DatabaseWriter(db, makeStorageUri('guard-log-wins'), () => {})
+      w.enqueue(makeCard({ dataSource: 'otel', inputTokens: 1810600 }), 'ws')
+      await w.drain()
+      w.enqueue(makeCard({ dataSource: 'log', inputTokens: 953943 }), 'ws')
+      await w.drain()
+      assert.strictEqual(countRows(db, 'sessions'), 1)
+      assert.strictEqual(queryStr(db, `SELECT data_source FROM sessions WHERE session_id = 'sess-1'`), 'log')
+      assert.strictEqual(queryInt(db, `SELECT input_tokens FROM sessions WHERE session_id = 'sess-1'`), 953943)
+      db.close()
+    })
+
+    test('a claude_code OTEL card is skipped when a LOG row already exists', async () => {
+      const db = await openInMemoryDb()
+      const w = new DatabaseWriter(db, makeStorageUri('guard-otel-skip'), () => {})
+      w.enqueue(makeCard({ dataSource: 'log', inputTokens: 953943 }), 'ws')
+      await w.drain()
+      w.enqueue(makeCard({ dataSource: 'otel', inputTokens: 1810600 }), 'ws')
+      await w.drain()
+      assert.strictEqual(countRows(db, 'sessions'), 1)
+      assert.strictEqual(queryStr(db, `SELECT data_source FROM sessions WHERE session_id = 'sess-1'`), 'log')
+      assert.strictEqual(queryInt(db, `SELECT input_tokens FROM sessions WHERE session_id = 'sess-1'`), 953943)
+      db.close()
+    })
+
+    test('a non-Claude LOG card is still skipped when an OTEL row exists (original rule)', async () => {
+      const db = await openInMemoryDb()
+      const w = new DatabaseWriter(db, makeStorageUri('guard-copilot'), () => {})
+      w.enqueue(makeCard({ source: 'copilot', dataSource: 'otel', inputTokens: 60 }), 'ws')
+      await w.drain()
+      w.enqueue(makeCard({ source: 'copilot', dataSource: 'log', inputTokens: 50 }), 'ws')
+      await w.drain()
+      assert.strictEqual(countRows(db, 'sessions'), 1)
+      assert.strictEqual(queryStr(db, `SELECT data_source FROM sessions WHERE session_id = 'sess-1'`), 'otel')
+      assert.strictEqual(queryInt(db, `SELECT input_tokens FROM sessions WHERE session_id = 'sess-1'`), 60)
+      db.close()
+    })
+  })
 })

@@ -3,7 +3,7 @@ trdd-id: O981ZJKV
 title: CLI cost-observability expansion — 14-item work order, coverage map + gaps
 column: dev
 created: 2026-07-10T12:35:54+0200
-updated: 2026-07-10T14:35:00+0200
+updated: 2026-07-10T16:05:00+0200
 implementation-commits: [1093245, 9aa20fa, 674ed43]
 current-owner: agentlens-session
 task-type: feature
@@ -68,10 +68,23 @@ Live-verified: get_subagent_tree on this session 0→59 children. Sync path prov
 by test (suite 596). Async children's TOKENS remain unknown by data absence — resolving
 them from the child's own transcript/outputFile is a possible later child task.
 
+**TOKEN-FEED FIX PHASE B SHIPPED (2026-07-10 ~16:00):** the OTEL-vs-JSONL duplicate-serving
+fix (report §4bis/§5.6). Claude OTEL cards are now grouped by the `session.id` span attr and
+keyed by the transcript UUID (ONE session-scoped card per UUID; synth roots inherit the UUID
+from their trace spans; no-attr interactions keep per-interaction cards fail-soft), so the
+log/OTEL merge finally collides. REVISED MERGE DOCTRINE, centralized in `src/feedMergePolicy.ts`:
+for Claude the LOG transcript wins on collision (OTEL is a measured lossy lower bound —
+MAX_SPANS eviction + collector downtime — and includes sub-agent calls the log parent card
+excludes); OTEL-only sessions still serve; other sources keep OTEL-wins. Applied in the
+standalone merge, SessionRepository merge/dedup, and the DatabaseWriter write guard; docs
+(CLAUDE.md/ARCHITECTURE.md/README.md) updated. Suite 639 passing / 0 failing. Cards per
+Claude session: 1 log + up to 336 OTEL → exactly 1.
+
 STILL OPEN in this umbrella: window-capacity auto-calibration, native-Windows installer
 doc note (blocker #3). Dashboard toggle card SHIPPED (5d68206). NEWER user directives now
-running ahead of these: the OTEL-vs-JSONL token discrepancy fix (measurement agent running)
-and the step-0 integration-test surface (test agent running). `updated:` bumped 14:35.
+running ahead of these: the OTEL-vs-JSONL token discrepancy fix (Phase A shipped 8f834d3,
+Phase B shipped — see above) and the step-0 integration-test surface (test agent running).
+`updated:` bumped 16:05.
 
 ## Coverage map (verified against the live 34-tool surface, 2026-07-10)
 
