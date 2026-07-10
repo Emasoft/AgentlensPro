@@ -10,10 +10,10 @@
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true,
     "noUnusedLocals": false,
-    "rootDir": "src",
+    "rootDir": "..",
     "outDir": "dist-check",
     "baseUrl": "."
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx"],
+  "include": ["src/**/*.ts", "src/**/*.tsx", "../src/shared/**/*.ts"],
   "exclude": ["../node_modules", "../dist", "dist-check"]
 }

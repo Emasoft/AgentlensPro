@@ -5,7 +5,7 @@ import {
 } from '../state'
 import { formatCompact, formatSessionTime, getAgentDotHtml } from '../utils'
 import { fmtUsd, calcSessionCost } from '../sessionMetrics'
-import { buildCacheBreakReport, CAUSE_LABEL } from '../cacheBreak'
+import { buildCacheBreakReport, CAUSE_LABEL } from '../../../src/shared/cacheBreak'
 import { spawnKindBadge, hitRateColor, formatPct } from './cacheShared'
 import type { SessionSummaryCard, CacheBreakReport, CacheBreakCause } from '../types'
 

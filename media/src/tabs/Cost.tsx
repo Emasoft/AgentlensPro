@@ -4,7 +4,7 @@ import { sessionSummary, displaySessions, filteredSessions, dailyStats, lifetime
 import type { TimePreset } from '../state'
 import { getAgentColor, getSessionGlobalNumber, formatCompact, getAgentSourceLabel, formatSessionTime } from '../utils'
 import { calcSessionCost } from '../sessionMetrics'
-import { PRICING_LAST_UPDATED } from '../pricing'
+import { PRICING_LAST_UPDATED } from '../../../src/shared/pricing'
 import type { PricingMode } from '../sessionMetrics'
 import type { SessionSummaryCard, DailyStatRow } from '../types'
 

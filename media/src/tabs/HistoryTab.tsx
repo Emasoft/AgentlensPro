@@ -3,8 +3,8 @@ import { sessionSummary, sessionHistories, focusedSessionId, sessionGeneratedFil
 import { GeneratedFilesList } from '../GeneratedFilesView'
 import { formatCompact, formatSessionTime, getAgentDotHtml } from '../utils'
 import { fmtUsd } from '../sessionMetrics'
-import { lookupRates, calcTokenCost } from '../pricing'
-import { buildResidentCostReport } from '../residentCost'
+import { lookupRates, calcTokenCost } from '../../../src/shared/pricing'
+import { buildResidentCostReport } from '../../../src/shared/residentCost'
 import type { ContextHistory, ContextHistoryStep, ContextBlock, ContextBlockKind, GeneratedFileRef, TokenSource, ResidentCostBlock } from '../types'
 
 // Exact/calibrated/estimated marker for a token figure (TRDD-IQENK7JM). Exact = no marker; calibrated
