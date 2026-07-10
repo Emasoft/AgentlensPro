@@ -1,4 +1,4 @@
-import { useState } from 'preact/hooks'
+import { useEffect, useState } from 'preact/hooks'
 import { displaySessions, sessionTimelines, sessionCompositions, serverBurnStatus } from '../state'
 import { buildCacheBreakReport } from '../cacheBreak'
 import { buildDisplaySummary, formatMs, formatCompact } from '../utils'
@@ -555,6 +555,97 @@ function ServerBurnSection() {
   )
 }
 
+// Mirror of the server's HookRuntimeConfig (src/hookRuntimeConfig.ts) — the webview cannot
+// import Node code, so the shape is mirrored here like src/types.ts ↔ media/src/types.ts.
+interface HookConfig {
+  captureEnabled: boolean
+  gateEnabled: boolean
+  gateMode: 'enforce' | 'warn'
+  advisorEnabled: boolean
+}
+
+// Realtime hook switches card: every registered AgentLens hook is a dumb curl to the standalone
+// server, so the server is the single decision point — flipping a switch here applies instantly
+// to ALL running Claude Code sessions machine-wide, no restarts. Fetch-based (standalone only):
+// in the VS Code webview /api/hook-config does not exist, the mount fetch fails, and the card
+// hides itself instead of rendering a dead control panel.
+function HooksSection() {
+  // Server response is the single source of truth: state only ever updates from a response
+  // body, never optimistically — a failed POST leaves the switch showing the real server state.
+  const [config, setConfig] = useState<HookConfig | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/hook-config')
+      .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json() })
+      .then((data: { config?: HookConfig }) => {
+        if (!cancelled && data && typeof data.config === 'object' && data.config) setConfig(data.config)
+      })
+      .catch(() => { /* not standalone (VS Code webview) or server gone — keep the card hidden */ })
+    return () => { cancelled = true }
+  }, [])
+
+  function patch(key: keyof HookConfig, value: boolean | string) {
+    fetch('/api/hook-config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ [key]: value }),
+    })
+      .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json() })
+      .then((data: { config?: HookConfig }) => {
+        if (data && typeof data.config === 'object' && data.config) { setConfig(data.config); setError(null) }
+      })
+      .catch(() => setError('server unreachable — change not applied'))
+  }
+
+  if (!config) return null
+
+  const toggle = (key: 'gateEnabled' | 'captureEnabled' | 'advisorEnabled', label: string, desc: string) => (
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px">
+      <div style="font-size:12px;line-height:1.4">
+        <strong>{label}</strong>
+        <span style="color:var(--muted);margin-left:6px">{desc}</span>
+      </div>
+      <label class="toggle-switch">
+        <input
+          type="checkbox"
+          checked={config[key]}
+          onChange={e => patch(key, (e.target as HTMLInputElement).checked)}
+        />
+        <span class="toggle-track"><span class="toggle-thumb" /></span>
+        <span class={'toggle-label' + (config[key] ? ' on' : '')}>{config[key] ? 'On' : 'Off'}</span>
+      </label>
+    </div>
+  )
+
+  return (
+    <div style="border:1px solid var(--border);border-radius:6px;padding:12px 14px;margin-bottom:14px;background:var(--panel-bg)">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <strong style="font-size:13px">Hook switches</strong>
+        <span style="font-size:11px;color:var(--muted)">realtime, all sessions — the server is the decision point; changes apply instantly, no restarts</span>
+      </div>
+      {toggle('gateEnabled', 'Burn gate', 'PreToolUse gate — deny disaster spawns before they run')}
+      {config.gateEnabled && (
+        <div style="display:flex;align-items:center;gap:8px;margin:0 0 8px;font-size:12px">
+          <span style="color:var(--muted)">Gate mode</span>
+          <select
+            value={config.gateMode}
+            onChange={e => patch('gateMode', (e.target as HTMLSelectElement).value)}
+            style="padding:2px 5px;font-size:11px;cursor:pointer;border-radius:3px;background:var(--vscode-input-background,#3c3c3c);border:1px solid var(--vscode-input-border,#555);color:var(--vscode-input-foreground,var(--fg))"
+          >
+            <option value="enforce">enforce — deny disasters</option>
+            <option value="warn">warn — downgrade every deny to a warning</option>
+          </select>
+        </div>
+      )}
+      {toggle('captureEnabled', 'Lifecycle capture', 'store hook lifecycle events; off = accept + drop')}
+      {toggle('advisorEnabled', 'In-band advisor', 'PostToolUse advisory messages to the model')}
+      {error && <div style="font-size:11px;color:var(--error);margin-top:4px">⚠ {error}</div>}
+    </div>
+  )
+}
+
 export function Alerts() {
   const sessions = displaySessions.value
   const [configs, setConfigs] = useState(getAlertConfigs)
@@ -603,6 +694,7 @@ export function Alerts() {
 
   return (
     <div id="alerts-content">
+      <HooksSection />
       <ServerBurnSection />
       {spawnAlerts.length > 0 && (
         <div style="border:1px solid var(--error);border-radius:6px;padding:12px 14px;margin-bottom:14px;background:var(--panel-bg)">
