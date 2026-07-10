@@ -1,6 +1,6 @@
 import type {
   SessionSummaryCard, SpawnRollup, SpawnKindMix, SpawnDetection,
-} from './summarizers/summarizerTypes'
+} from './summarizerTypes'
 
 // ── Spawn-cost rollup + cache-friendly-spawn advisor (TRDD-62E8UU41) ──────────
 // Pure, runtime-neutral aggregation over a parent's sub-agent children (all children of a session, or
@@ -8,7 +8,8 @@ import type {
 // "this ONE fan-out caused N children × M cache-create = X tokens / $Y — and here is the cheaper spawn
 // shape." The cost function is injected (`costOf`) so each runtime supplies its own pricing (the MCP's
 // normalizing sessionCost, or the webview's calcSessionCost) without this module depending on either.
-// MIRRORED verbatim in media/src/spawnRollup.ts — change both (like cacheBreak.ts / residentCost.ts).
+// Shared by the host (MCP tools) and the webview (spawn panels) — this file replaced the
+// hand-synced media/src/spawnRollup.ts mirror. Keep it runtime-neutral: no Node, no DOM.
 
 // A child that WROTE a big prefix (cache_creation ≥ this) but did NOT read a comparably big prefix is
 // cache-COLD: it re-billed the inherited context at write rate (~1.25×) instead of reading the parent

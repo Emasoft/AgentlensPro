@@ -1,4 +1,8 @@
-import { LoopSignal } from '../types'
+// Card / timeline / diagnosis types shared by the extension host, the standalone server, and the
+// webview. This directory (src/shared/) is the ONE source of truth — the webview re-exports these
+// from media/src/types.ts instead of hand-mirroring them (the old mirror drifted). Everything here
+// must stay runtime-neutral: no Node imports, no DOM APIs.
+import { LoopSignal } from './telemetryTypes'
 
 export interface SessionSummaryCard {
   sessionId: string
@@ -36,7 +40,7 @@ export interface SessionSummaryCard {
   // True when the child was an ASYNC/background launch: the parent transcript carries only the
   // status:"async_launched" acknowledgment, never the child's usage — so this card's token buckets
   // are zero BY DATA ABSENCE, not because the child ran free. Consumers must not read the zeros
-  // as a measured cost. Set only on log-derived child cards; mirrored in media/src/types.ts.
+  // as a measured cost. Set only on log-derived child cards.
   spawnAsync?: boolean
   workspace: string
   projectPath?: string
@@ -76,7 +80,7 @@ export interface SessionSummaryCard {
   // pricing-table estimate). The transcript .jsonl parser stays the source for cumulative token buckets
   // and per-source composition drill-down; these numbers OVERRIDE context size + cost only.
   statusline?: StatuslineUsageAgg
-  // Cost-integrity flags (TRDD-ZK37VG4X), mirrored in media/src/types.ts.
+  // Cost-integrity flags (TRDD-ZK37VG4X).
   // unpriced: the session has real token traffic but its model has no pricing-table entry, so its
   // true cost is UNKNOWN — NOT $0. Derived by SessionRepository at read time (never persisted;
   // adding the missing rate retroactively prices old sessions). Consumers must badge it and
@@ -302,7 +306,6 @@ export interface ContextHistory {
 // the Σ over occurrences of tokens × turns-resident — the true cumulative context weight of the
 // block, directly comparable to the session's Σ per-turn usage (input + cacheRead + cacheCreate).
 // Derived purely from ContextHistory by buildResidentCostReport — no new ingestion.
-// MIRRORED in media/src/types.ts — change both.
 export interface ResidentCostBlock {
   id: string                  // ContextBlock id `${kind}:${label}` — the drill key for get_context_history
   kind: ContextBlockKind
@@ -433,8 +436,7 @@ export interface FullSummary {
 // TRDD-PJC8N1HO — an explicit collector-downtime window. The interval between one collector run's
 // last-known-alive time and the next run's start, during which every OTEL export from the agents was
 // dropped (exporters retry briefly then discard) and is lost forever. Surfaced so the dashboard shows
-// a "telemetry lost" band instead of a silent hole, and get_recent_sessions returns it. MIRRORED in
-// media/src/types.ts — change both.
+// a "telemetry lost" band instead of a silent hole, and get_recent_sessions returns it.
 export interface CollectorGap {
   startedAt: string   // ISO — downtime began (prior run's stop, or last heartbeat if it crashed)
   endedAt: string     // ISO — downtime ended (next run's start)
@@ -448,8 +450,7 @@ export interface CollectorGap {
 // was a fable-5 parent spawning a FLEET of children, each re-billing a multi-M-token inherited prefix
 // as cache_creation (write rate ~1.25×) instead of reading the parent cache (~0.1×) — millions of
 // tokens/minute. This is the automatic aggregate that names that shape and the cheaper alternative.
-// MIRRORED in media/src/types.ts — change both. Computed by buildSpawnRollup (src/spawnRollup.ts,
-// mirrored in media/src/spawnRollup.ts).
+// Computed by buildSpawnRollup (src/shared/spawnRollup.ts).
 export type SpawnDetectionCode = 'FLEET-COLD' | 'WORKTREE-SCATTER' | 'MODEL-MIX'
 
 export interface SpawnDetection {
@@ -498,8 +499,7 @@ export interface SpawnRollup {
 // is one ranked table instead of a row-by-row read. Figures are EXACT ground truth (per-call usage +
 // cost_usd), not estimates — hence `estimated: false`, unlike ResidentCostReport. Pure OTEL data (no
 // .jsonl required); OTEL-only sessions are fully supported. Computed by buildTokensByCause
-// (src/tokensByCause.ts, MIRRORED in media/src/tokensByCause.ts — change both). MIRRORED in
-// media/src/types.ts — change both.
+// (src/shared/tokensByCause.ts).
 export type CauseDimension = 'querySource' | 'agent' | 'skill' | 'plugin' | 'mcpServer' | 'mcpTool'
 
 // One cause value's rolled-up totals within a dimension. `unattributed:true` marks the explicit

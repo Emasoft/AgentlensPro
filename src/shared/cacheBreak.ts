@@ -1,7 +1,7 @@
 import type {
   ContextSource, ContextComposition, TimelineEntry,
   CacheBreakCause, CacheBreakTurn, CacheBreakOffender, CacheBreakReport,
-} from './summarizers/summarizerTypes'
+} from './summarizerTypes'
 import { lookupRates } from './pricing'
 
 // ── Cache-break classifier (P4, TRDD-TKN5VALS) ────────────────────────────────
@@ -12,8 +12,11 @@ import { lookupRates } from './pricing'
 // the context therefore invalidates ALL cached content after it — the dominant, invisible token
 // sink. This module reconstructs each turn's context blocks, diffs them vs the previous turn, finds
 // the first divergence, classifies the CAUSE (taxonomy D of the plan), and sizes the wasted
-// cache_creation. It is a PURE function (no I/O, no globals) so it is trivially unit-testable; the
-// wiring into the card / UI / MCP tools is a later step.
+// cache_creation. It is a PURE function (no I/O, no globals) so it is trivially unit-testable.
+// Shared by the host (MCP diagnostic tools) and the webview (Cache tab / trace markers / Alerts) —
+// this file replaced the hand-synced media/src/cacheBreak.ts mirror, whose copy had silently
+// drifted (it was missing the FAST_MODE detection below). Keep it runtime-neutral: no Node
+// imports, no DOM APIs.
 //
 // LIMITATION worth stating plainly: the composition parser emits each turn's injected blocks
 // heaviest-first, not in true prompt position. So the diff below is a SET diff (add / remove /
@@ -189,11 +192,11 @@ export function analyzeCacheBreaks(
 }
 
 // ── Convenience: assemble the report from a session's timeline + composition ───────────────────
-// Host mirror of media/src/cacheBreak.ts's buildCacheBreakReport (kept in sync BY HAND, like
-// pricing.ts). Folds the timeline into per-turn token buckets, overlays the composition's injected
-// blocks, prices the waste from the session model's rates. Returns null when there isn't enough to
-// diff (no composition, or a single turn — turn 1 can never break). The MCP diagnostic tools reuse
-// this so the turn-bucketing logic lives in ONE place, not re-implemented per caller.
+// Folds the timeline into per-turn token buckets, overlays the composition's injected blocks,
+// prices the waste from the session model's rates. Returns null when there isn't enough to diff
+// (no composition, or a single turn — turn 1 can never break). The MCP diagnostic tools AND the
+// webview tabs reuse this so the turn-bucketing logic lives in ONE place, not re-implemented per
+// caller.
 export function buildCacheBreakReport(
   sessionId: string,
   timeline: TimelineEntry[],
@@ -236,4 +239,22 @@ export function buildCacheBreakReport(
     }))
 
   return analyzeCacheBreaks(sessionId, inputs, opts)
+}
+
+// Per-turn lookup of a report's verdicts — the shape the trace tree renders break markers from.
+export function cacheBreaksByTurn(report: CacheBreakReport | null): Map<number, CacheBreakTurn> {
+  const m = new Map<number, CacheBreakTurn>()
+  if (report) for (const t of report.turns) m.set(t.turn, t)
+  return m
+}
+
+// Short human label for a break cause, used by the trace marker + the Cache tab.
+export const CAUSE_LABEL: Record<CacheBreakCause, string> = {
+  TOOLS_CHANGED: 'Tools changed', TOOLS_REORDERED: 'Tools reordered',
+  SYSTEM_PROMPT_TIMESTAMP: 'System-prompt timestamp', MODEL_SWITCHED: 'Model switched',
+  EFFORT_CHANGED: 'Effort changed', FAST_MODE: 'Fast mode toggled',
+  MCP_SERVER_TOGGLE: 'MCP server toggled', PLUGIN_TOGGLE: 'Plugin toggled',
+  TOOL_DENY: 'Tool denied', INJECTED_BLOCK_CHANGED: 'Injected block changed',
+  COMPACTION: 'Compaction', UPGRADE: 'Upgrade', RESUME_AFTER_UPGRADE: 'Resume after upgrade',
+  IDLE_TTL_EXPIRY: 'Idle TTL expiry', UNKNOWN: 'Unknown',
 }
