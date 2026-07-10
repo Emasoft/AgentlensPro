@@ -4,7 +4,10 @@ description: >-
   Query AgentLens token/cost forensics from any project via the global agentlens-cli — use when
   a session is burning tokens, a rate-limit window drains too fast, the prompt cache keeps
   breaking, you need the cost of a session / heartbeat / sub-agent fleet, or any "why is this so
-  expensive" question. Covers all 33 diagnostic tools (burn status, session burn profile,
+  expensive" question. GUARD in realtime with check_burn_risk / `--guard` (arm in a background
+  monitor BEFORE agent fan-outs: warns on fan-out bursts, cold-resume risk after a rate-limit
+  stall, compaction rewrites, huge-request bursts, burn spikes). Covers all 34 diagnostic
+  tools (burn status, session burn profile,
   cache-break causes/timeline, expensive writes, heartbeat cost, config comparison, SQL
   analytics). START with investigate_burn — the ONE-command investigation that names the
   window-burn culprits (fork storms, premium-model fan-outs, idle-fleet keep-warm, image
@@ -93,6 +96,38 @@ boot refuses cleanly. `batch --out` files are position-prefixed (`out-1-<tool>.j
    (`./reports/` must be gitignored; add it if missing.) Read back only the fields you need.
 3. **Discover, don't guess** — `list --desc` then `help <tool>`.
 4. Never paste a full JSON result into the conversation.
+
+## Realtime guard — arm it BEFORE anything that can explode
+
+Token explosions have warning signs MINUTES before the window drains, and the server sees
+them in realtime (OTLP metrics tick every 4s; raw request bodies land as files at call time;
+lifecycle hook events — SubagentStart/StopFailure/PreCompact — arrive within ~1s when
+`--install-hooks` is active). `check_burn_risk` fuses them into 5 flags; `--guard` watches:
+
+```bash
+agentlens-cli check_burn_risk          # one cheap poll: 5 risk flags + advice
+agentlens-cli --guard 15               # watch loop: one [burn-guard] line per risk TRANSITION
+```
+
+**Arm the guard in a background monitor BEFORE spawning agent fan-outs, workflows, or long
+batches** — each stdout line then interrupts you the moment a risk fires:
+
+```
+Monitor(command: "agentlens-cli --guard 15", description: "burn guard", persistent: true)
+```
+
+| Risk | Meaning | What to DO when it fires |
+|---|---|---|
+| `FANOUT_BURST` | ≥5 subagents launched in 2min (hook events) | If the parent session is fat or the cache cold, STOP launching; warm with ONE agent first |
+| `COLD_RESUME_RISK` | a StopFailure (rate-limit turn death) ≤10min ago | Do NOT resume a fan-out: the stall outlived the 5-min cache TTL — check `get_account_status` headroom, warm with one agent, then ramp |
+| `COMPACTION_REWRITE` | PreCompact ≤5min ago | The next turn rewrites the full prefix; avoid fan-outs/model switches until warm |
+| `HUGE_REQUEST_BURST` | ≥3 requests >1MB in 90s | A fat-context fan-out is IN FLIGHT — stop adding agents, let the wave settle |
+| `BURN_SPIKE` | live burn > 250k tokens/min (5-min window) | Run `investigate_burn --windowHours 1` NOW to name the source before it drains the window |
+
+Hook-event risks need `--install-hooks` (the `sources` block says which feeds are absent).
+Known burn multipliers to avoid up front: fan-outs forked from a fat session (compact first),
+resuming a fan-out right after a rate-limit stall, a `/model` switch to a premium default
+before spawning fresh agents, and images left resident in context.
 
 ## High-value tools (cheat-sheet)
 

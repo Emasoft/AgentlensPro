@@ -64,6 +64,10 @@ operations:
   --export-bodies DIR   extract the archived OTEL bodies into DIR as plain files
                         (optionally --since <ISO|hours> / --until <ISO>)
   --purge-bodies        delete ALL archived body volumes (the live 72h window is untouched)
+  --guard [seconds]     realtime burn guard: polls check_burn_risk (default 15s) and prints one
+                        [burn-guard] line per risk transition (fan-out burst, cold-resume risk,
+                        compaction rewrite, huge-request burst, burn spike) — silent while quiet.
+                        Arm it in a background monitor BEFORE spawning agent fan-outs.
   --install-skill       (re)install the agentlens-diagnostics skill into ~/.claude/skills/
                         from the repo copy — idempotent (installed / updated / already current)
   --install-hooks       register scripts/spy-agentlens.sh on the 10 LIFECYCLE hook events
@@ -480,6 +484,44 @@ function installSkill() {
   console.log(`skill agentlens-diagnostics: ${existed ? 'updated' : 'installed'} -> ${dst}`)
 }
 
+// Realtime burn guard: poll check_burn_risk and print one line per risk TRANSITION —
+// fired→'[burn-guard] CODE: detail', cleared→'[burn-guard] CODE cleared'. Silent while
+// quiet, so the stdout stream is Monitor-friendly (each line = one notification; no noise).
+async function runGuard(intervalSec) {
+  const interval = Math.max(5, Math.min(300, intervalSec || 15)) * 1000
+  await init()
+  console.log(`[burn-guard] armed — polling check_burn_risk every ${interval / 1000}s (silent while quiet)`)
+  const wasActive = new Set()
+  for (;;) {
+    try {
+      const r = await callTool('check_burn_risk', {}, true)
+      const rep = typeof r === 'string' ? JSON.parse(r) : r
+      for (const risk of rep.risks || []) {
+        if (risk.active && !wasActive.has(risk.code)) {
+          console.log(`[burn-guard] ${risk.code}: ${risk.detail}`)
+          wasActive.add(risk.code)
+        } else if (!risk.active && wasActive.has(risk.code)) {
+          console.log(`[burn-guard] ${risk.code} cleared`)
+          wasActive.delete(risk.code)
+        }
+      }
+      if (wasActive.size > 0 && rep.advice) {
+        // advice rides only on the first line of an episode; suppress repeats
+        if (!wasActive.has('__advised')) { console.log(`[burn-guard] advice: ${rep.advice}`); wasActive.add('__advised') }
+      } else {
+        wasActive.delete('__advised')
+      }
+    } catch (e) {
+      // Server restart mid-watch must not kill the guard — report once per outage.
+      if (!wasActive.has('__down')) { console.log(`[burn-guard] server unreachable: ${e.message}`); wasActive.add('__down') }
+    }
+    if (wasActive.has('__down')) {
+      try { await init(); console.log('[burn-guard] server back — resuming'); wasActive.delete('__down') } catch { /* still down */ }
+    }
+    await new Promise(r => setTimeout(r, interval))
+  }
+}
+
 // Dispatch-level globals the server's leanify layer reads on EVERY tool, even when the
 // tool's own schema doesn't declare them.
 const GLOBAL_PARAMS = { verbosity: 'string', maxTokens: 'number' }
@@ -594,6 +636,11 @@ async function main() {
     } else if (argv[i] === '--since') ops.since = argv[++i]
     else if (argv[i] === '--until') ops.until = argv[++i]
     else if (argv[i] === '--install-skill') ops.installSkill = true
+    else if (argv[i] === '--guard') {
+      ops.guard = true
+      const next = argv[i + 1]
+      if (next && /^\d+$/.test(next)) { ops.guardInterval = Number(next); i++ }
+    }
     else if (argv[i] === '--install-hooks') hooksOp = 'install'
     else if (argv[i] === '--uninstall-hooks') hooksOp = 'uninstall'
     else if (argv[i] === '--install-otel') otelOp = 'install'
@@ -612,6 +659,9 @@ async function main() {
 
   // Skill install is standalone too — pure file copy, no server, no settings mutation.
   if (ops.installSkill) { installSkill(); return }
+
+  // Guard mode never returns — it is the long-lived watch loop (arm via a background monitor).
+  if (ops.guard) { await runGuard(ops.guardInterval); return }
 
   // Hook install/uninstall is another settings transaction — no server needed.
   if (hooksOp) {

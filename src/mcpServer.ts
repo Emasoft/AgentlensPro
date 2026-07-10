@@ -27,6 +27,7 @@ import type {
 } from './summarizers/summarizerTypes'
 import { buildCacheBreakReport } from './cacheBreak'
 import { investigateBurn } from './burnInvestigator'
+import { checkBurnRisk } from './burnGuard'
 import { buildResidentCostReport } from './residentCost'
 import { buildSpawnRollup } from './spawnRollup'
 import { buildTokensByCause } from './tokensByCause'
@@ -646,6 +647,27 @@ const TOOLS = [
         window:    { type: 'number', description: 'Only scan bodies from the last N hours; omit for the bounded most-recent scan across all history' },
         topN:      { type: 'number', description: 'Cap on the returned per-turn events log, most-recent-first (default 25, max 100). repeatOffenders/causeHistogram are always computed over ALL classified turns regardless.' },
         format:    { type: 'string', description: 'Output format: json (default, full object) | table | markdown | timeline' },
+      },
+    },
+  },
+  {
+    name: 'check_burn_risk',
+    description:
+      'REALTIME early-warning against token explosions — the guard half of investigate_burn (which explains ' +
+      'a drain AFTER the fact; this warns AS it starts). One cheap call (stat scans + in-memory monitor, no ' +
+      'body parsing) returns 5 risk flags: FANOUT_BURST (≥5 SubagentStart hook events in 2min — a fan-out is ' +
+      'launching NOW), COLD_RESUME_RISK (a StopFailure ≤10min ago — the stall likely outlived the 5-min cache ' +
+      'TTL; resuming a fan-out into it is the measured worst case), COMPACTION_REWRITE (PreCompact ≤5min — ' +
+      'full-prefix rewrite in progress), HUGE_REQUEST_BURST (≥3 requests >1MB in 90s — a fat-context fan-out ' +
+      'IN FLIGHT), BURN_SPIKE (live 5-min tokens/min above threshold). Hook-event risks need ' +
+      '--install-hooks; the sources block says honestly which feeds are absent. Poll every 10-30s, or use ' +
+      '`agentlens-cli --guard [seconds]` which polls for you and prints one line per risk TRANSITION — ' +
+      'designed to be armed via a background monitor so the agent is interrupted the moment a risk fires.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        fanoutThreshold:   { type: 'number', description: 'SubagentStarts in 2min that trip FANOUT_BURST (default 5)' },
+        spikeTokensPerMin: { type: 'number', description: '5-min tokens/min that trips BURN_SPIKE (default 250000)' },
       },
     },
   },
@@ -1973,6 +1995,15 @@ export function createMcpServer(opts: McpServerOptions): Server {
         const a = args as { sessionId?: string; scope?: string; minTokens?: number; window?: number; topN?: number; format?: TimelineFormat }
         const report = await buildCacheBreakTimeline({ sessionId: a.sessionId, scope: a.scope, minTokens: a.minTokens, windowHours: a.window, topN: a.topN })
         result = formatTimeline(report, a.format ?? 'json')
+        break
+      }
+      case 'check_burn_risk': {
+        const a = args as { fanoutThreshold?: number; spikeTokensPerMin?: number }
+        result = checkBurnRisk({
+          burnStatus: getBurnStatus?.() ?? null,
+          fanoutThreshold: a.fanoutThreshold,
+          spikeTokensPerMin: a.spikeTokensPerMin,
+        })
         break
       }
       case 'investigate_burn': {
