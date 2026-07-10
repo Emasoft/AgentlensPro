@@ -4,6 +4,10 @@ on:
   push:
     tags:
       - 'v*'
+  # Re-run the npm publish WITHOUT re-tagging (e.g. after configuring the
+  # trusted publisher on npmjs for a first release whose tag already fired).
+  # Mirrors the proven Emasoft/SVG-BBOX publish workflow.
+  workflow_dispatch:
 
 # Least privilege: read by default; each job asks only for what it needs.
 permissions:
@@ -65,30 +69,47 @@ jobs:
       - name: Pack npm tarball
         run: npm pack
 
+      # The two Release steps only make sense on a tag push — a workflow_dispatch
+      # run (used to retry the npm publish) has no tag to attach a Release to.
       - name: Attest build provenance (in-toto / SLSA)
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/attest-build-provenance@v4
         with:
           subject-path: 'agentlenspro-*.tgz'
 
       - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
         with:
           generate_release_notes: true
           files: 'agentlenspro-*.tgz'
 
+  # npm Trusted Publishing (OIDC) — this job MIRRORS the PROVEN Emasoft/SVG-BBOX
+  # publish workflow (the user's reference config; npm's own docs are sparse):
+  #   * Node 24 via setup-node — its bundled npm (>= 11.5.1) does the OIDC
+  #     exchange natively; no npm upgrade step needed.
+  #   * NO `registry-url:` on setup-node — that input writes an
+  #     `_authToken=${NODE_AUTH_TOKEN}` line into .npmrc, which pushes npm down
+  #     the classic-token path instead of OIDC. The proven config omits it.
+  #   * NO `environment:` — the npmjs trusted-publisher entry for svg-bbox is
+  #     configured without one; an environment claim mismatch makes the registry
+  #     reject the exchange (surfacing as E404 on PUT).
+  #   * Plain `npm publish --access public` — no token anywhere; provenance is
+  #     attached automatically under trusted publishing.
+  # Registry-side prerequisite (one-time, web UI, owner-only): npmjs trusted
+  # publisher for package `agentlenspro` → GitHub Actions, repo
+  # Emasoft/AgentlensPro, workflow `release.yml`, no environment.
   publish-npm:
     needs: package
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    # `environment:` gates the OIDC token mint behind the environment's deployment
-    # protection rules — without it, ANY step in this job (e.g. a compromised dep's
-    # lifecycle script) could mint an id-token. GitHub auto-creates the environment
-    # on first use; add protection rules (required reviewers) in repo settings.
-    environment: npm-publish
+    # Tag pushes publish; workflow_dispatch re-runs a publish without re-tagging
+    # (first-release bootstrap: the v1.0.0 tag fired before the npmjs trusted
+    # publisher existed).
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
     permissions:
-      id-token: write  # Required for npm Trusted Publishing (OIDC — no stored secret needed)
-      contents: read   # actions/checkout + npm --provenance need repo read
+      id-token: write  # Required for npm Trusted Publishing (OIDC — no stored secret)
+      contents: read
 
     steps:
       - uses: actions/checkout@v7
@@ -96,28 +117,34 @@ jobs:
       - name: Enable corepack (pnpm)
         run: corepack enable
 
-      - name: Setup Node.js
+      - name: Setup Node.js 24 (bundled npm has OIDC support)
         uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
-          # registry-url is required so setup-node writes the registry endpoint to
-          # .npmrc. Without it, npm throws ENEEDAUTH before attempting OIDC.
-          # NODE_AUTH_TOKEN must NOT be set in the publish step so npm falls back
-          # to OIDC Trusted Publishing instead of classic token auth.
-          registry-url: 'https://registry.npmjs.org'
 
-      - name: Upgrade npm for OIDC Trusted Publishing
-        # Node 22 ships with npm 10.x. OIDC Trusted Publishing requires npm 11.x+.
-        run: npm install -g npm@latest
+      - name: Verify toolchain versions
+        # Ported from the proven SVG-BBOX workflow: fail fast if the runner image
+        # ever hands us a toolchain that cannot do OIDC trusted publishing.
+        run: |
+          NODE_VER=$(node --version | sed 's/v//')
+          NPM_VER=$(npm --version)
+          echo "Node.js: $NODE_VER — npm: $NPM_VER"
+          if [[ ! "$NODE_VER" =~ ^24\. ]]; then
+            echo "::error::Expected Node.js 24.x, got $NODE_VER"
+            exit 1
+          fi
+          NPM_MAJOR=$(echo "$NPM_VER" | cut -d. -f1)
+          NPM_MINOR=$(echo "$NPM_VER" | cut -d. -f2)
+          if [ "$NPM_MAJOR" -lt 11 ] || { [ "$NPM_MAJOR" -eq 11 ] && [ "$NPM_MINOR" -lt 5 ]; }; then
+            echo "::error::npm >= 11.5.1 required for OIDC trusted publishing (got $NPM_VER)"
+            exit 1
+          fi
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Publish to npm
-        # Trusted Publishing: npm exchanges the GitHub Actions OIDC token for a
-        # short-lived publish credential — no NPM_TOKEN secret required.
-        # NODE_AUTH_TOKEN must not be set; npm falls back to OIDC when it is absent.
+      - name: Publish to npm (OIDC trusted publishing)
         # prepublishOnly runs `pnpm run package` (type-check + lint + production
         # bundle), so the published tarball always carries freshly built bundles.
-        run: npm publish --access public --provenance
+        run: npm publish --access public
