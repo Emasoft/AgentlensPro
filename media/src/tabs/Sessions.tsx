@@ -8,7 +8,7 @@ import {
 } from '../state'
 import {
   getAgentColor, getAgentSourceLabel, formatMs, formatCompact, formatSessionTime,
-  getDataSourceBadgeHtml, getInitiatorBadgeHtml,
+  getDataSourceBadgeHtml, getInitiatorBadgeHtml, getTokensSourceChipHtml,
 } from '../utils'
 import { calcSessionCost, isUnpriced } from '../sessionMetrics'
 import { estimateTokensFromBytes } from '../tokenEstimator'
@@ -313,6 +313,11 @@ function SessionDetail({ sess }: { sess: SessionSummaryCard }) {
                 ? <div style="margin-bottom:10px;font-size:11px;color:var(--muted);font-style:italic">Waiting for first turn…</div>
                 : <div style="margin-bottom:10px;font-size:11px;color:var(--muted)">Prompt not captured for this session</div>
             }
+            {/* P7 token-provenance chip — which feed backs the numbers below. A card persisted
+                before the field renders "unknown" (honest absence), never a guess. */}
+            <div style="margin-bottom:8px">
+              <span dangerouslySetInnerHTML={{ __html: getTokensSourceChipHtml(sess.tokensSource, sess.coverageNote) }} />
+            </div>
             <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:6px;margin-bottom:10px">
               {[
                 { k: 'LLM calls',  v: String(sess.totalLlmCalls) },

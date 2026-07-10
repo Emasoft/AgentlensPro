@@ -4,6 +4,16 @@
 // must stay runtime-neutral: no Node imports, no DOM APIs.
 import { LoopSignal } from './telemetryTypes'
 
+// ── Token-figure provenance (P7) ───────────────────────────────────────────────
+// Which feed backs a served card's TOKEN NUMBERS. Distinct from `dataSource` (which feed produced
+// the card object) and from `TokenSource` below (how one token FIGURE was derived — exact vs
+// estimated). 'log' = totals from the log transcript; 'otel' = totals from the OTEL span feed;
+// 'merged' = the served card genuinely combines both feeds (identity dedup absorbed the other
+// feed's twin). Stamped at the feedMergePolicy decision point (where a collision winner is chosen)
+// and at the log-card production sites. Cards persisted before this field carry undefined —
+// consumers render that as "unknown", NEVER backfill a guess.
+export type TokensSource = 'log' | 'otel' | 'merged'
+
 export interface SessionSummaryCard {
   sessionId: string
   traceId: string
@@ -90,6 +100,14 @@ export interface SessionSummaryCard {
   // Session ids this card absorbed during identity dedup (a synth-* OTEL placeholder and its log
   // twin, or an id-drifted duplicate with identical usage). Derived at read time.
   mergedFrom?: string[]
+  // ── Token-figure provenance (P7) — see TokensSource above ──────────────────────
+  // Which feed backs THIS card's served token numbers. Stamped where the feed-collision winner is
+  // chosen (src/feedMergePolicy.ts) or, for log-only cards, at the log production site. undefined
+  // on cards persisted before the field existed — rendered "unknown", never fabricated.
+  tokensSource?: TokensSource
+  // Optional one-line honesty note about what the provenance decision displaced/combined (e.g.
+  // "OTEL slices displaced by the log transcript"). Only set when there is something to disclose.
+  coverageNote?: string
 }
 
 /** Per-session aggregate of the statusline usage log — the authoritative, rate-limit-free live view

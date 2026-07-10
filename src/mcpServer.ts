@@ -292,6 +292,10 @@ export function buildCostRollup(sessions: SessionSummaryCard[], args: CostRollup
         g.spawnKind = s.spawnKind ?? null
         g.subagentType = s.spawnSubagentType ?? null
         g.startedAtIso = s.startTime
+        // P7 provenance — session/subagent rows ARE per-session figures, so carry which feed
+        // backs them; null = pre-P7 card ("unknown"). Note only when a decision recorded one.
+        g.tokensSource = s.tokensSource ?? null
+        if (s.coverageNote) { g.coverageNote = s.coverageNote }
       }
       groups.set(key, g)
     }
@@ -1186,6 +1190,10 @@ function handleGetRecentSessions(
     cost_usd:    +sessionCost(s).toFixed(4),
     durationMin: +(s.durationMs / 60000).toFixed(1),
     errors:      s.errors,
+    // P7 provenance — which feed backs this row's token/cost figures; null = pre-P7 card
+    // ("unknown"), never a backfilled guess. coverageNote rides only when a decision set it.
+    tokensSource: s.tokensSource ?? null,
+    ...(s.coverageNote ? { coverageNote: s.coverageNote } : {}),
     topTools:    Object.entries(s.toolCounts ?? {}).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([t, n]) => `${t}×${n}`),
     loopSignals: (s.loopSignals ?? []).map(l => l.type),
     filesChanged: s.filesChanged?.slice(0, 5) ?? [],
@@ -2387,7 +2395,17 @@ export function createMcpServer(opts: McpServerOptions): Server {
       case 'get_session_burn_profile': {
         const a = args as { sessionId?: string; window?: number }
         if (!a.sessionId) throw new Error('get_session_burn_profile requires sessionId')
-        result = await buildSessionBurnProfile({ sessionId: a.sessionId, windowHours: a.window })
+        const profile = await buildSessionBurnProfile({ sessionId: a.sessionId, windowHours: a.window })
+        // P7 provenance — the profile itself is body-scan derived; the served card (exact id, or
+        // the unique-prefix match the tool accepts) carries which feed backs the session's token
+        // figures. null = no card / pre-P7 card ("unknown"), never a guess.
+        const card = sessions.find(s => s.sessionId === a.sessionId)
+          ?? sessions.find(s => s.sessionId.startsWith(a.sessionId!))
+        result = {
+          ...profile,
+          tokensSource: card?.tokensSource ?? null,
+          ...(card?.coverageNote ? { coverageNote: card.coverageNote } : {}),
+        }
         break
       }
       case 'get_cache_break_causes': {

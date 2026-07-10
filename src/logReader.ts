@@ -1829,6 +1829,9 @@ function _buildSubAgentCards(parentSessionId: string, a: ClaudeAccum): SessionSu
       traceId: sid,
       source: 'claude_code',
       dataSource: 'log',
+      // P7 provenance — a child card is synthesized purely from the parent transcript, so its
+      // token numbers are log-backed at birth (there is no OTEL twin for a sub-agent card).
+      tokensSource: 'log',
       initiator: 'agent',
       parentSessionId,
       spawnedByTurn: sub.spawnTurn,
@@ -2101,6 +2104,10 @@ function _buildCard(
     traceId: sessionId,
     source,
     dataSource: 'log',
+    // P7 provenance — production-site stamp: a freshly parsed log card serves the transcript's
+    // numbers. If it later collides with an OTEL twin, the merge decision point re-stamps it
+    // (log-wins adds the displacement note; an OTEL-wins source drops the card entirely).
+    tokensSource: 'log',
     initiator: acc.initiator,
     // TRDD-BURNWDGT — the OAuth account for this session, resolved from the shared registry (fed by OTEL
     // metric/body attributes + any body read). A log session's id IS the Claude Code session_id, which is

@@ -185,8 +185,9 @@ export class DatabaseWriter {
         is_sidechain, speed, user_request, tool_counts, loop_signals,
         files_read, files_changed, files_written, files_searched, files_changed_note, cost_usd,
         data_source, parent_session_id, spawned_by_turn, peak_context_per_turn,
-        spawn_kind, spawn_model_override, spawn_isolation, spawn_subagent_type, spawn_async
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        spawn_kind, spawn_model_override, spawn_isolation, spawn_subagent_type, spawn_async,
+        tokens_source, coverage_note
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
         card.sessionId,
         card.traceId,
@@ -230,6 +231,10 @@ export class DatabaseWriter {
         // 1 = async launch whose tokens were never reported in the parent transcript (zero buckets
         // mean "unknown", not "free"); NULL for sync children and non-child sessions.
         card.spawnAsync ? 1 : null,
+        // P7 token-figure provenance — NULL when the card was never stamped (pre-P7 or no
+        // decision point reached); the reader surfaces NULL as undefined ("unknown"), never a guess.
+        card.tokensSource ?? null,
+        card.coverageNote ?? null,
       ]
     )
   }

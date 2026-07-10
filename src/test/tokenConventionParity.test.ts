@@ -132,4 +132,13 @@ suite('token-convention parity — the same call through both feeds', () => {
     assert.ok(otelCost > 0, 'entry is priced')
     assert.strictEqual(otelCost, logCost)
   })
+
+  // ── Token-figure provenance at the production sites (P7) ────────────────────
+  // A log card is stamped 'log' at birth (its numbers ARE the transcript's); an OTEL summarizer
+  // card is deliberately NOT stamped at production — its provenance is decided at the
+  // feedMergePolicy decision point (OTEL-only vs displaced), never assumed at the parse site.
+  test('the log production site stamps tokensSource log; the OTEL summarizer leaves it undecided', () => {
+    assert.strictEqual(logClaudeCard().tokensSource, 'log')
+    assert.strictEqual(otelClaudeCard().tokensSource, undefined)
+  })
 })
