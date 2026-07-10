@@ -165,12 +165,15 @@ model when a wave just triggered CACHE_THRASH / a fan-out burst (one per session
 10min — per-call injections are themselves a cache-break cause).
 
 Operational facts: fail-open by construction (server down = 13ms silent no-op — the gate can
-never stall or fail a turn); `AGENTLENS_GATE=off` disables it entirely (checked before any
-network); `AGENTLENS_GATE_MODE=warn` downgrades every deny to a warning; thresholds tune via
-`AGENTLENS_GATE_FORK_FAT_TOKENS` / `_RUNAWAY_60S` / `_FANOUT_WARN_2MIN` / `_COLD_IDLE_MS` /
-`_COLD_RESUME_WINDOW_MS`; hook changes need a session restart. Deny/warn counts appear in
-`/api/server-stats` under `gate`. If a deny is wrong for a legitimate mass fan-out, don't
-fight it turn-by-turn — set `AGENTLENS_GATE_MODE=warn` for that run and restore after.
+never stall or fail a turn). **Switches are REALTIME and machine-wide** — `agentlens-cli
+--hooks` shows them, `--hooks gate=off|warn|enforce capture=on|off advisor=on|off` flips them
+instantly for every running session (the server is the decision point; registrations never
+change, so no restarts). Per-session escape hatch: `AGENTLENS_GATE=off` env (checked in the
+hook script before any network). Thresholds tune via `AGENTLENS_GATE_FORK_FAT_TOKENS` /
+`_RUNAWAY_60S` / `_FANOUT_WARN_2MIN` / `_COLD_IDLE_MS` / `_COLD_RESUME_WINDOW_MS`. Deny/warn
+counts appear in `--status` and `/api/server-stats` under `gate`; every gate intervention
+also lands on the dashboard's notification panel (SSE alerts). If a deny is wrong for a
+legitimate mass fan-out, `agentlens-cli --hooks gate=warn` for that run and restore after.
 
 ## High-value tools (cheat-sheet)
 

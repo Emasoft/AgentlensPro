@@ -3,8 +3,8 @@ trdd-id: O981ZJKV
 title: CLI cost-observability expansion — 14-item work order, coverage map + gaps
 column: dev
 created: 2026-07-10T12:35:54+0200
-updated: 2026-07-10T13:05:00+0200
-implementation-commits: [1093245]
+updated: 2026-07-10T13:20:00+0200
+implementation-commits: [1093245, 9aa20fa, 674ed43]
 current-owner: agentlens-session
 task-type: feature
 release-via: none
@@ -21,12 +21,20 @@ test-requirements: [unit, typecheck, lint]
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-07-10
 
-**NEW-NOW SCOPE SHIPPED 2026-07-10** (`get_cost_rollup`, `get_rate_limit_report` — see
-Measured results). STILL OPEN in this umbrella: item 9 (similar-session cost prediction),
-item 11 (skills cost attribution), item 13 (runtime/memory inventory), window-capacity
-auto-calibration (item 2 extension), the WSL/Windows FIXES from the audit report, and the
-standalone child-card linkage DEFECT — each has its spec below/in Measured results; author
-child TRDDs when scheduling them. `updated:` bumped 2026-07-10T13:05.
+**NEW-NOW SCOPE SHIPPED 2026-07-10** (`get_cost_rollup`, `get_rate_limit_report`, and the
+late-added asks: **realtime hook switches** — `hookRuntimeConfig` + `/api/hook-config` +
+`agentlens-cli --hooks gate=off|warn|enforce capture=on|off advisor=on|off`, applied
+instantly machine-wide because the server is the decision point (registrations are static
+per session — verified fact) — and **gate warnings on the dashboard notification panel**
+via the existing SSE alert channel (deny=error, warn/advisory=warning), zero webview
+changes needed. See Measured results.
+
+STILL OPEN in this umbrella: item 9 (similar-session cost prediction), item 11 (skills cost
+attribution), item 13 (runtime/memory inventory), window-capacity auto-calibration (item 2
+extension), the WSL/Windows FIXES from the audit report, the standalone child-card linkage
+DEFECT, and a **dashboard toggle-switch UI card** for the hook config (the switches already
+work via CLI/REST; the webview card is presentation) — each has its spec below/in Measured
+results; author child TRDDs when scheduling them. `updated:` bumped 2026-07-10T13:20.
 
 ## Coverage map (verified against the live 34-tool surface, 2026-07-10)
 
