@@ -4,7 +4,7 @@ import { SessionStore } from './sessionStore'
 import { DatabaseReader, type DailyStatRow, type LifetimeStats, type SearchQuery, type BurnRate, type Projection } from './database/reader'
 import { DatabaseWriter } from './database/writer'
 import { summarizeSpans } from './spanSummarizer'
-import { preferredDataSource } from './feedMergePolicy'
+import { preferredDataSource, stampLogWins, stampIdentityMerge } from './feedMergePolicy'
 import { lookupRates } from './shared/pricing'
 import type { SessionSummaryCard, TimelineEntry, GeneratedFileRef } from './shared/summarizerTypes'
 
@@ -95,6 +95,11 @@ export function dedupeSessionIdentities(sessions: SessionSummaryCard[]): Session
       winner = s
       loser = prior
     }
+    // P7 provenance — a cross-feed absorption is the one genuinely MERGED outcome: the served
+    // card combines both feeds' identity (buckets were byte-identical, which made them twins).
+    // Stamped by the doctrine module so the rule is never re-encoded here; same-feed absorptions
+    // keep the winner's existing stamp.
+    stampIdentityMerge(winner, loser)
     // Re-key: the real transcript id is the durable identity — a synth-* placeholder id must
     // never survive a merge with its real twin, or drill-down lookups by id would 404.
     if (isSynth(winner.sessionId) && !isSynth(loser.sessionId)) {
@@ -142,8 +147,17 @@ export function mergeSessions(
     const db = dbById.get(live.sessionId)
     if (!db) { return true }
     const preferredDs = preferredDataSource(live.source)
-    return !(db.dataSource === preferredDs && live.dataSource !== preferredDs)
+    const dbWins = db.dataSource === preferredDs && live.dataSource !== preferredDs
+    // P7 provenance — a fresh log-wins decision happened HERE (the persisted log row displaced a
+    // live OTEL twin), so the stamp is derived at decision time, even on a pre-P7 legacy row.
+    // Non-colliding persisted rows are never re-stamped: a legacy card serves with tokensSource
+    // undefined ("unknown"), never a retroactive guess.
+    if (dbWins) { stampLogWins(db) }
+    return !dbWins
   })
+  // A kept live card serves on its own feed's numbers (in practice always OTEL — live cards come
+  // from the span window; stamping from dataSource keeps this honest even for a synthetic input).
+  for (const live of keptLive) { live.tokensSource = live.dataSource }
   const keptLiveIds = new Set(keptLive.map(s => s.sessionId))
   return [
     ...keptLive,
