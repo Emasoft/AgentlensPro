@@ -63,8 +63,19 @@ export interface BurnRiskReport {
 export interface BurnGuardOptions {
   bodiesDir?: string
   hookEventsDir?: string
-  /** The live monitor's status (mcpServer injects getBurnStatus()); null when unavailable. */
-  burnStatus?: { accountWindows?: { fiveMinTokensPerMin?: number; accountLabel?: string }[] } | null
+  /** The live monitor's status (mcpServer injects getBurnStatus()); null when unavailable.
+   *  The per-account budget (when capacity is configured) feeds the remaining-window clause —
+   *  the ONE future-looking fact a warning carries. */
+  burnStatus?: {
+    accountWindows?: {
+      fiveMinTokensPerMin?: number
+      accountLabel?: string
+      budget?: {
+        fiveHour?: { minutesToExhaustion?: number | null }
+        sevenDay?: { minutesToExhaustion?: number | null }
+      }
+    }[]
+  } | null
   now?: number
   /** SubagentStart count within fanoutWindowMs that trips FANOUT_BURST (default 5). */
   fanoutThreshold?: number
@@ -200,11 +211,30 @@ export function checkBurnRisk(opts: BurnGuardOptions = {}): BurnRiskReport {
   // ── live burn-rate signal ────────────────────────────────────────────────────
   const windows = opts.burnStatus?.accountWindows ?? []
   const worst = windows.reduce((a, w) => Math.max(a, w.fiveMinTokensPerMin ?? 0), 0)
+
+  // Remaining-window clause — warnings are about NOW (user directive: never about past
+  // sessions/windows); the one future-looking fact they may add is how long until the
+  // CURRENT window fills at the current rate. Needs capacity config; silently absent otherwise.
+  const fmtLeft = (min: number): string => (min >= 90 ? `~${(min / 60).toFixed(1)}h` : `~${Math.round(min)}min`)
+  let windowClause = ''
+  {
+    const hot = windows.reduce<(typeof windows)[number] | null>(
+      (a, w) => ((w.fiveMinTokensPerMin ?? 0) > (a?.fiveMinTokensPerMin ?? -1) ? w : a), null)
+    const parts: string[] = []
+    const m5 = hot?.budget?.fiveHour?.minutesToExhaustion
+    const m7 = hot?.budget?.sevenDay?.minutesToExhaustion
+    if (typeof m5 === 'number') parts.push(`the 5h window fills in ${fmtLeft(m5)}`)
+    if (typeof m7 === 'number') parts.push(`the 7d in ${fmtLeft(m7)}`)
+    if (parts.length > 0) {
+      windowClause = ` At the current rate ${parts.join(', ')}${hot?.accountLabel ? ` (account ${hot.accountLabel})` : ''}.`
+    }
+  }
+
   risks.push({
     code: 'BURN_SPIKE',
     active: worst > spikeTpm,
     detail: worst > spikeTpm
-      ? `live burn is ${Math.round(worst / 1000)}k tokens/min on the 5-min window (threshold ${Math.round(spikeTpm / 1000)}k) — at this rate a 5h window drains fast. Identify the source NOW (investigate_burn --windowHours 1) before it finishes the job.`
+      ? `live burn is ${Math.round(worst / 1000)}k tokens/min on the 5-min window (threshold ${Math.round(spikeTpm / 1000)}k).${windowClause || ' Window time-left unavailable (capacity not configured).'} Identify the source NOW: agentlens-cli --risk names the senders; investigate_burn --windowHours 1 for depth.`
       : `live burn ${Math.round(worst / 1000)}k tokens/min`,
     evidence: { fiveMinTokensPerMin: worst, threshold: spikeTpm },
   })
@@ -216,6 +246,6 @@ export function checkBurnRisk(opts: BurnGuardOptions = {}): BurnRiskReport {
     risks,
     sources: { hookEvents: hooksAvailable, bodies: bodiesAvailable, burnStatus: opts.burnStatus != null },
     advice: active.length === 0 ? null
-      : 'PAUSE before spawning more agents: verify window headroom (get_account_status), let in-flight waves settle, warm a cold cache with ONE agent first, and prefer cheap models for fan-out work. Then investigate_burn to attribute what already burned.',
+      : `PAUSE before spawning more agents: let in-flight waves settle, warm a cold cache with ONE agent first, and prefer cheap models for fan-out work.${windowClause}`,
   }
 }

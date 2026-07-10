@@ -192,9 +192,8 @@ export function evaluateAgentGate(
     return deny('COLD_RESUME_FANOUT',
       `AgentLens burn-gate: a rate-limit stall ended ${Math.round((stallAgeMs as number) / 60_000)}min ago` +
       `${stallWho}, so the prompt cache is past its 5-min TTL, and ${state.startsLast2min} agent(s) already ` +
-      `launched since — that first launch IS the cache warm-up. Wait for it to finish before launching more ` +
-      `(measured incident: 14 forks resumed into a cold cache = 883k tokens in 33s). Retry this launch in ~60s. ` +
-      `Override: AGENTLENS_GATE=off.`)
+      `launched since — that first launch IS the cache warm-up. Every further agent launched before it lands ` +
+      `re-pays the full prefix at the write rate. Retry this launch in ~60s. Override: AGENTLENS_GATE=off.`)
   }
   if (fork && fat && cold && state.startsLast2min >= 2) {
     const who = fmtSpawners(state.spawners)

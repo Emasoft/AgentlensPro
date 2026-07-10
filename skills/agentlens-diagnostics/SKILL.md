@@ -153,8 +153,8 @@ it can adapt instead of just failing:
 1. **THRASH_ACTIVE** — cache-thrash in progress: launching more agents multiplies the re-billing.
 2. **RUNAWAY_FANOUT** — ≥8 launches in 60s: let the wave settle.
 3. **COLD_RESUME_FANOUT** — a rate-limit stall just ended and one agent already launched: that
-   first launch IS the cache warm-up; the gate holds the rest until it lands (the 2026-07-10
-   incident was 14 forks resumed into a cold cache = 883k tokens in 33s).
+   first launch IS the cache warm-up; the gate holds the rest until it lands (every fork
+   resumed into a cold cache re-pays its full prefix at the write rate).
 4. **FORK_STORM_FORMING** — forks of a ≥200k-token parent into a TTL-expired cache while a
    fan-out is starting: each fork re-pays the full prefix at the write rate.
 

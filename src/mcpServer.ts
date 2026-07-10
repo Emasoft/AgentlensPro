@@ -29,6 +29,7 @@ import { buildCacheBreakReport } from './cacheBreak'
 import { investigateBurn } from './burnInvestigator'
 import { checkBurnRisk } from './burnGuard'
 import { buildRateLimitReport } from './rateLimitReport'
+import { buildRuntimeInventory } from './runtimeInventory'
 import type { HookEventRecord } from './hookEventStore'
 import type { BodiesActivityReport } from './bodiesActivity'
 import { buildResidentCostReport } from './residentCost'
@@ -847,6 +848,18 @@ const TOOLS = [
         topN:            { type: 'number', description: 'Max groups returned (default 20, max 100)' },
       },
     },
+  },
+  {
+    name: 'get_runtime_inventory',
+    description:
+      'Every Claude Code INSTANCE running on this machine with its TOTAL memory footprint — the claude ' +
+      'process plus EVERYTHING it spawned (subshells, worktree/subagent processes, forks, plugin crons, ' +
+      'MCP servers, headless browsers, background tasks), computed from one ps snapshot via process-tree ' +
+      'rollup (nested claude processes fold into their root instance). Ranked by total tree RSS; each ' +
+      'instance shows its project dir (lsof cwd), process count, uptime, and its 5 heaviest descendants. ' +
+      'Also reports the Claude Code client version. Join an instance to its live model/burn via workspace ' +
+      'in get_burn_status / get_cost_rollup --liveOnly. POSIX (macOS/Linux/WSL) — says so on native Windows.',
+    inputSchema: { type: 'object' as const, properties: {} },
   },
   {
     name: 'get_rate_limit_report',
@@ -2214,6 +2227,10 @@ export function createMcpServer(opts: McpServerOptions): Server {
       }
       case 'get_cost_rollup': {
         result = buildCostRollup(sessions, args as CostRollupArgs)
+        break
+      }
+      case 'get_runtime_inventory': {
+        result = buildRuntimeInventory()
         break
       }
       case 'get_rate_limit_report': {

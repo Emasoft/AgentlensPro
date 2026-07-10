@@ -103,6 +103,28 @@ suite('burnGuard — check_burn_risk (TRDD-W6UH8LPA)', () => {
     } finally { cleanup() }
   })
 
+  test('BURN_SPIKE carries the remaining-window clause when a budget projection exists', () => {
+    const { bodies, hooks, cleanup } = stores()
+    try {
+      const status = {
+        accountWindows: [{
+          fiveMinTokensPerMin: 400_000,
+          accountLabel: 'user@example.com',
+          budget: { fiveHour: { minutesToExhaustion: 132 }, sevenDay: { minutesToExhaustion: 2000 } },
+        }],
+      }
+      const r = checkBurnRisk({ bodiesDir: bodies, hookEventsDir: hooks, burnStatus: status, now: NOW })
+      const detail = r.risks.find(x => x.code === 'BURN_SPIKE')?.detail ?? ''
+      assert.ok(detail.includes('5h window fills in ~2.2h'), detail)
+      assert.ok(detail.includes('user@example.com'), detail)
+      assert.ok(r.advice?.includes('5h window fills in'), 'advice carries the clause too')
+      // No budget → honest absence, never an invented projection.
+      const bare = checkBurnRisk({ bodiesDir: bodies, hookEventsDir: hooks, burnStatus: { accountWindows: [{ fiveMinTokensPerMin: 400_000 }] }, now: NOW })
+      const bareDetail = bare.risks.find(x => x.code === 'BURN_SPIKE')?.detail ?? ''
+      assert.ok(bareDetail.includes('capacity not configured'), bareDetail)
+    } finally { cleanup() }
+  })
+
   test('BURN_SPIKE trips on the injected live monitor rate, threshold overridable', () => {
     const { bodies, hooks, cleanup } = stores()
     try {
