@@ -164,4 +164,26 @@ suite('DatabaseReader', () => {
     assert.strictEqual(row.outcome, card.outcome)
     db.close()
   })
+
+  // ── P7 token-figure provenance round-trip ──────────────────────────────────────
+  test('tokensSource + coverageNote survive the DB round-trip', async () => {
+    const db = await openDb()
+    const card = makeCard({ tokensSource: 'log', coverageNote: 'OTEL twin displaced' })
+    await seedDb(db, [card])
+    const reader = new DatabaseReader(db, makeStorageUri())
+    const [row] = reader.listSessions()
+    assert.strictEqual(row.tokensSource, 'log')
+    assert.strictEqual(row.coverageNote, 'OTEL twin displaced')
+    db.close()
+  })
+
+  test('a persisted-legacy card (never stamped) serves with tokensSource undefined — never a guess', async () => {
+    const db = await openDb()
+    await seedDb(db, [makeCard()])  // no tokensSource/coverageNote — the pre-P7 shape
+    const reader = new DatabaseReader(db, makeStorageUri())
+    const [row] = reader.listSessions()
+    assert.strictEqual(row.tokensSource, undefined)
+    assert.strictEqual(row.coverageNote, undefined)
+    db.close()
+  })
 })

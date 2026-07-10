@@ -98,6 +98,9 @@ suite('dedupeSessionIdentities — synth/real twins (TRDD-ZK37VG4X spec 2)', () 
     assert.strictEqual(out[0].dataSource, 'log')
     assert.ok(out[0].mergedFrom!.includes('synth-abc123def456'), 'merge must be auditable via mergedFrom')
     assert.strictEqual(out[0].userRequest, 'do the thing')
+    // P7 provenance — absorbing the OTHER feed's twin is the one genuinely MERGED outcome.
+    assert.strictEqual(out[0].tokensSource, 'merged')
+    assert.ok(out[0].coverageNote && out[0].coverageNote.includes('Identity-merged'), 'the cross-feed merge is disclosed')
   })
 
   test('non-Claude twins keep the original preference: the OTEL card wins the data', () => {
@@ -107,6 +110,8 @@ suite('dedupeSessionIdentities — synth/real twins (TRDD-ZK37VG4X spec 2)', () 
     assert.strictEqual(out.length, 1)
     assert.strictEqual(out[0].dataSource, 'otel')
     assert.ok(out[0].mergedFrom!.includes('copilot-log'))
+    // P7 provenance — cross-feed absorption stamps 'merged' regardless of which feed won.
+    assert.strictEqual(out[0].tokensSource, 'merged')
   })
 
   test('two ids with byte-identical usage within the window collapse to one card', () => {
@@ -115,6 +120,9 @@ suite('dedupeSessionIdentities — synth/real twins (TRDD-ZK37VG4X spec 2)', () 
     const out = dedupeSessionIdentities([a, b])
     assert.strictEqual(out.length, 1)
     assert.ok(out[0].mergedFrom!.length === 1)
+    // P7 provenance — a SAME-feed (log+log) absorption is not a cross-feed merge: no fabricated
+    // 'merged' stamp; these fixture cards were never stamped, so they stay undefined ("unknown").
+    assert.strictEqual(out[0].tokensSource, undefined)
   })
 
   test('identical usage but >10 minutes apart stays separate (window guards false merges)', () => {

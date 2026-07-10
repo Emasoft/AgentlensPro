@@ -73,6 +73,9 @@ suite('mergeSessions', () => {
     assert.strictEqual(result.length, 1)
     assert.strictEqual(result[0].dataSource, 'log')
     assert.strictEqual(result[0].inputTokens, 953943, 'served totals are the transcript totals')
+    // P7 provenance — the read-time log-wins decision stamps the served row.
+    assert.strictEqual(result[0].tokensSource, 'log')
+    assert.ok(result[0].coverageNote && result[0].coverageNote.includes('displaced'), 'the displaced OTEL twin is disclosed')
   })
 
   test('a live OTEL claude_code card with NO persisted log twin still wins over an OTEL db row', () => {
@@ -82,6 +85,24 @@ suite('mergeSessions', () => {
     const result = mergeSessions(db, live)
     assert.strictEqual(result.length, 1)
     assert.strictEqual(result[0].model, 'live-model', 'freshness still wins inside the same feed')
+    // P7 provenance — a kept live card serves on its own (OTEL) feed's numbers.
+    assert.strictEqual(result[0].tokensSource, 'otel')
+  })
+
+  test('a kept live OTEL card with no db twin is stamped OTEL-backed', () => {
+    const live = [makeCard('live-only', '2026-07-10T10:00:00.000Z')]
+    const result = mergeSessions([], live)
+    assert.strictEqual(result[0].tokensSource, 'otel')
+  })
+
+  test('a non-colliding persisted card keeps its stamp untouched — a legacy row serves as unknown', () => {
+    // Honest absence (P7): no collision decision happened for these rows, so mergeSessions must
+    // not invent a provenance — the pre-P7 row keeps undefined, the stamped row keeps its value.
+    const legacy = makeCard('db-legacy', '2026-07-10T10:00:00.000Z')       // tokensSource undefined
+    const stamped = makeCard('db-stamped', '2026-07-10T11:00:00.000Z', { dataSource: 'log', tokensSource: 'log' })
+    const result = mergeSessions([legacy, stamped], [])
+    assert.strictEqual(result.find(s => s.sessionId === 'db-legacy')!.tokensSource, undefined)
+    assert.strictEqual(result.find(s => s.sessionId === 'db-stamped')!.tokensSource, 'log')
   })
 })
 
