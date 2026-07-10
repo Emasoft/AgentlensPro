@@ -7,8 +7,10 @@ import type { SessionSummaryCard } from './shared/summarizerTypes'
  *
  * For CLAUDE sessions the LOG transcript card wins: transcripts are durable and
  * call-complete for the conversation, while the OTEL feed is a lossy LOWER BOUND
- * (MAX_SPANS store eviction truncates long-session history; collector downtime drops
- * calls entirely — both mechanisms measured), and its totals include sub-agent calls
+ * (collector downtime drops calls entirely; the standalone summarizes a rolling
+ * time window, so a long session's early calls age out of its live card; and before
+ * the P4 segmented store the MAX_SPANS eviction destroyed history outright — all
+ * mechanisms measured), and its totals include sub-agent calls
  * the log parent card intentionally excludes (those are served as their own child
  * cards). OTEL-only sessions (no transcript, e.g. background utility traffic) still
  * serve. Every other source keeps the original "OTEL wins" rule — their OTEL feed is
