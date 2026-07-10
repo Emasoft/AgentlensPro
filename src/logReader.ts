@@ -453,6 +453,17 @@ export class LogReader {
     if (wtIdx > 0) {
       card.parentSessionId = proj.slice(0, wtIdx).replace(/-+$/, '')
       card.initiator = 'agent'
+    } else if (proj === 'subagents') {
+      // P8 (async child tokens): a background/async Agent launch writes the child's OWN transcript at
+      // <mangled-project>/<parentSessionId>/subagents/agent-<agentId>.jsonl — the parent transcript
+      // only ever gets the status:"async_launched" acknowledgment (zero usage; upstream gap filed as
+      // anthropics/claude-code#76484). The directory that CONTAINS `subagents/` IS the parent session
+      // id (no guessing), so link it here; without this the agent-* card served as an orphan top-level
+      // session while the parent's placeholder child stayed a zero-bucket unknown forever. The
+      // read-time merge (feedMergePolicy.linkSubagentTranscripts) then collapses this card with the
+      // parent's spawn placeholder so the child serves ONCE, with real totals.
+      card.parentSessionId = path.basename(path.dirname(path.dirname(filePath)))
+      card.initiator = 'agent'
     }
     // Sub-agents (Task/Agent tool calls) have no separate .jsonl — their whole footprint is
     // embedded in this parent transcript's toolUseResult. Synthesize a distinct child session
