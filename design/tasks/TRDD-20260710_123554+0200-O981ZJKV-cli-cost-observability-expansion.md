@@ -40,13 +40,25 @@ capacity config).
 ALSO SHIPPED: **item 9 `predict_session_cost`** (precedent distribution p25/p50/p75, flat
 headline fields; live: 12 precedents → code review $3.18 p50 / $4.72 p75).
 
-STILL OPEN in this umbrella: item 11 (skills cost attribution — NEW FACT: TimelineEntry
-carries `toolInput`, so skill names ARE extractable at read time without ingestion changes;
-what needs real design is the attribution semantics — which turns' usage a skill invocation
-owns), window-capacity auto-calibration (item 2 extension), the NATIVE-Windows fixes from
-the audit (WSL target is satisfied per the audit verdict), the standalone child-card linkage
-DEFECT, and the **dashboard toggle-switch UI card** (switches fully work via CLI/REST; the
-webview card is presentation). `updated:` bumped 2026-07-10T14:00.
+**Item 11 CORRECTED DISPOSITION (verified 2026-07-10):** the tool ALREADY EXISTS —
+`get_cost_by_cause` groups exact per-call usage by `skill`/`plugin`/`agent`/`mcpServer`/
+`mcpTool` dimensions (src/tokensByCause.ts; api_request timeline entries carry
+skillName/pluginName/costUsd ground truth). What's broken on THIS machine is the FEED:
+`apiRequestCalls: 0` across 50 scanned sessions — the rich api_request log events aren't
+reaching the session cards. So item 11 = covered-by-design, blocked by the same class of
+standalone data-feed defect as the child-card linkage. ONE investigation covers both:
+"why do standalone cards lack api_request timeline events and parentSessionId links?"
+(Marketplace filter: not attributable — the data model has plugin, not marketplace; disclosed.)
+
+**Windows audit blocker #1 FIXED:** python3 hardcode → platform-aware resolver
+(python/py/python3 on win32; POSIX order unchanged), probed once + cached, ENOENT
+fail-fast story preserved. Blockers #2/#3 (bash hook registration + bash installer) affect
+NATIVE Windows only — WSL target satisfied; node-twin hook scripts are the specced fix.
+
+STILL OPEN in this umbrella: the standalone data-feed defects investigation (child-card
+links + api_request events — one session of logReader work), window-capacity
+auto-calibration, native-Windows hook/installer twins, and the dashboard toggle card
+(agent working on it as of 13:20). `updated:` bumped 2026-07-10T14:20.
 
 ## Coverage map (verified against the live 34-tool surface, 2026-07-10)
 
