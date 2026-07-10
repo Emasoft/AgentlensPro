@@ -13,6 +13,9 @@ interface CliModule {
   rebuildEventMatchers: (matchers: Matcher[], ev: string, uninstall: boolean, cmd: string, gateCmd: string) => RebuildResult
   GATE_MATCHER: string
   GATE_EVENTS: string[]
+  HOOK_BIN: string
+  GATE_BIN: string
+  resolveOnPath: (name: string) => string | null
 }
 
 // out/test/test/ → repo root is three levels up; scripts/ sits beside out/ in the repo layout.
@@ -72,5 +75,74 @@ suite('agentlenspro-cli — rebuildEventMatchers (hook install/uninstall)', () =
     assert.strictEqual(inst.removedOurs, 1)
     assert.ok(inst.rebuilt.some(m => JSON.stringify(m) === JSON.stringify(foreign)), 'foreign hook preserved on install')
     assert.ok(inst.rebuilt.some(m => (m.hooks ?? []).some(h => h.command === CMD)), 'our lifecycle forwarder re-appended')
+  })
+})
+
+// ── P10 PATH-bin contract — the installer output is BARE bin names, never paths ──
+// Homebrew's Cellar path moves on every version bump, so an absolute path registered
+// into ~/.claude/settings.json dangles after `brew upgrade`. The installer therefore
+// registers HOOK_BIN/GATE_BIN and the uninstaller must strip BOTH generations.
+suite('agentlenspro-cli — PATH-bin hook registration (P10)', () => {
+  test('bin names are the published package bins and contain no path separators', () => {
+    // The registered command must be resolvable by the hook runner's shell via PATH alone.
+    assert.strictEqual(cli.HOOK_BIN, 'agentlenspro-hook')
+    assert.strictEqual(cli.GATE_BIN, 'agentlenspro-gate')
+    for (const bin of [cli.HOOK_BIN, cli.GATE_BIN]) {
+      assert.ok(!bin.includes('/') && !bin.includes('\\'), `${bin} must be a bare PATH name`)
+    }
+  })
+
+  test('install registers the bare names verbatim on lifecycle and gate entries', () => {
+    // What the installer writes is exactly the bin name — no runner prefix, no directory.
+    // The forwarder lands on LIFECYCLE events (here: Stop); the gate on PreToolUse only —
+    // the forwarder is deliberately NEVER registered on the tool events.
+    const gateEv = cli.rebuildEventMatchers([], 'PreToolUse', false, cli.HOOK_BIN, cli.GATE_BIN)
+    const gate = gateEv.rebuilt.find(m => m.matcher === cli.GATE_MATCHER)
+    if (!gate) return assert.fail('gate matcher entry must be present after install')
+    assert.strictEqual(gate.hooks[0].command, cli.GATE_BIN)
+    assert.ok(!gateEv.rebuilt.some(m => m.hooks.some(h => h.command === cli.HOOK_BIN)),
+      'the lifecycle forwarder must NOT be registered on PreToolUse')
+
+    const lifecycleEv = cli.rebuildEventMatchers([], 'Stop', false, cli.HOOK_BIN, cli.GATE_BIN)
+    const lifecycle = lifecycleEv.rebuilt.find(m => m.hooks.some(h => h.command === cli.HOOK_BIN))
+    if (!lifecycle) return assert.fail('lifecycle forwarder entry must be present after install on Stop')
+    assert.strictEqual(lifecycle.hooks[0].command, cli.HOOK_BIN)
+  })
+
+  test('migration: install over legacy absolute-path entries strips them and registers bare names', () => {
+    // A settings.json written by an older version carries `bash /abs/spy-agentlens*.sh`
+    // entries; a fresh install must replace them (never duplicate alongside them).
+    const legacyStop: Matcher[] = [
+      { hooks: [{ type: 'command', command: 'bash /usr/local/lib/node_modules/agentlenspro/scripts/spy-agentlens.sh', timeout: 2, async: true }] },
+    ]
+    const rStop = cli.rebuildEventMatchers(legacyStop, 'Stop', false, cli.HOOK_BIN, cli.GATE_BIN)
+    assert.strictEqual(rStop.removedOurs, 1, 'legacy absolute-path forwarder must be stripped')
+    assert.deepStrictEqual(rStop.rebuilt.flatMap(m => m.hooks.map(h => h.command)), [cli.HOOK_BIN])
+
+    const legacyGate: Matcher[] = [
+      { matcher: cli.GATE_MATCHER, hooks: [{ type: 'command', command: 'bash /usr/local/lib/node_modules/agentlenspro/scripts/spy-agentlens-gate.sh', timeout: 3 }] },
+    ]
+    const rGate = cli.rebuildEventMatchers(legacyGate, 'PreToolUse', false, cli.HOOK_BIN, cli.GATE_BIN)
+    assert.strictEqual(rGate.removedOurs, 1, 'legacy absolute-path gate must be stripped')
+    assert.deepStrictEqual(rGate.rebuilt.flatMap(m => m.hooks.map(h => h.command)), [cli.GATE_BIN])
+  })
+
+  test('uninstall strips BOTH generations — legacy absolute paths AND bare PATH names', () => {
+    const mixed: Matcher[] = [
+      { hooks: [{ type: 'command', command: 'bash /old/prefix/spy-agentlens.sh', timeout: 2, async: true }] },
+      { hooks: [{ type: 'command', command: cli.HOOK_BIN, timeout: 2, async: true }] },
+      { matcher: cli.GATE_MATCHER, hooks: [{ type: 'command', command: cli.GATE_BIN, timeout: 3 }] },
+      { matcher: cli.GATE_MATCHER, hooks: [{ type: 'command', command: 'node C:\\old\\spy-agentlens-gate.mjs', timeout: 3 }] },
+    ]
+    const r = cli.rebuildEventMatchers(mixed, 'PreToolUse', true, cli.HOOK_BIN, cli.GATE_BIN)
+    assert.strictEqual(r.removedOurs, 4, 'all four entries across both generations must be recognised as ours')
+    assert.strictEqual(r.rebuilt.length, 0)
+  })
+
+  test('resolveOnPath finds an executable on PATH and returns null for a nonsense name', () => {
+    // node is guaranteed present in the test environment; the negative case guards the
+    // installer refusal path (registering a name the shell cannot find = silent dead hook).
+    assert.ok(cli.resolveOnPath('node'), 'node must resolve on PATH')
+    assert.strictEqual(cli.resolveOnPath('agentlenspro-definitely-not-a-bin-xyz'), null)
   })
 })
