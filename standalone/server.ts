@@ -17,6 +17,7 @@ import { calcTokenCostUsd } from '../src/pricing'
 import { autoConfigureCodex, autoConfigureCopilotStandalone } from '../src/autoConfigNode'
 import { ensureTelemetryConfig, ensureAgentLensStopHook } from '../src/telemetryConfig'
 import { classifyOtlpPayload } from '../src/otlpParser'
+import { resolveLogEventName, bareLogEventName, CLAUDE_RICH_LOG_EVENTS, BODY_POINTER_LOG_EVENTS } from '../src/otlpLogEvents'
 import { startMcpHttpServer, labelBurnStatusAccounts } from '../src/mcpServer'
 import { resolveCallContext, callBodyRegistry } from '../src/rawBodyContext'
 import { appendHookEvent, readHookEvents, purgeHookEventBuckets, hookEventsDiskUsage, type HookEventRecord } from '../src/hookEventStore'
@@ -928,6 +929,20 @@ function processTraces(payload: unknown, collectorPath = '/v1/traces'): { count:
   return { count, agent }
 }
 
+// Dropped log-event names since boot (the final-gate rejects). The rich-event drop lived
+// undetected for weeks BECAUSE drops were silent — this makes "what arrived and was rejected"
+// observable in /api/server-stats. Bounded: past 50 names, new ones fold into '(other)'.
+const droppedLogEvents = new Map<string, number>()
+function noteDroppedLogEvent(name: string): void {
+  const key = name || '(unnamed)'
+  const prev = droppedLogEvents.get(key)
+  if (prev === undefined && droppedLogEvents.size >= 50) {
+    droppedLogEvents.set('(other)', (droppedLogEvents.get('(other)') ?? 0) + 1)
+    return
+  }
+  droppedLogEvents.set(key, (prev ?? 0) + 1)
+}
+
 function processLogs(payload: unknown, collectorPath = '/v1/logs'): number {
   type SL = { logRecords?: unknown[] }
   type RL = { scopeLogs?: SL[]; resource?: { attributes?: unknown } }
@@ -941,11 +956,16 @@ function processLogs(payload: unknown, collectorPath = '/v1/logs'): number {
       for (const rec of sl.logRecords ?? []) {
         const r = rec as Record<string, unknown>
         const attrs = mergeAttrs(toAttrs(r.attributes), attrsFromBodyKv(r.body), scopeAttrs, resourceAttrs)
-        const name = attrStr(attrs, 'event.name', 'event_name', 'name', 'event')
+        // Name resolution + prefix normalization + gate sets shared with src/otlpCollector.ts via
+        // src/otlpLogEvents.ts. This path DRIFTED once: it never gained the rich-event gate, so the
+        // running server dropped every api_request/compaction/api_error event under BOTH naming
+        // conventions while the unit-tested collector class passed (found 2026-07-10).
+        const name = resolveLogEventName(attrStr(attrs, 'event.name', 'event_name', 'name', 'event'), r)
+        const bare = bareLogEventName(name)
         // TRDD-ICHAVFCS: index pointers to the raw API request/response bodies (OTEL_LOG_RAW_API_BODIES)
         // so a call can be resolved to its body file and its full context tree reconstructed on demand.
         // Store only the lightweight pointer — never the multi-MB body — then skip (no timeline value).
-        if (name === 'claude_code.api_request_body' || name === 'claude_code.api_response_body') {
+        if (BODY_POINTER_LOG_EVENTS.has(bare)) {
           const sid = attrStr(attrs, 'session.id', 'session_id')
           const bodyRef = attrStr(attrs, 'body_ref', 'body.ref', 'bodyRef')
           const inlineBody = attrStr(attrs, 'body')
@@ -955,7 +975,7 @@ function processLogs(payload: unknown, collectorPath = '/v1/logs'): number {
           if (sid && acct) { callBodyRegistry.recordAccount(sid, acct) }
           if (sid && (bodyRef || inlineBody)) {
             callBodyRegistry.record(sid, {
-              kind: name === 'claude_code.api_request_body' ? 'request' : 'response',
+              kind: bare === 'api_request_body' ? 'request' : 'response',
               bodyRef: bodyRef || undefined,
               inlineBody: bodyRef ? undefined : (inlineBody || undefined),
               requestId: attrStr(attrs, 'request_id', 'request.id', 'requestId') || undefined,
@@ -967,18 +987,32 @@ function processLogs(payload: unknown, collectorPath = '/v1/logs'): number {
           }
           continue
         }
-        const logToolName = attrStr(attrs, 'tool.name')
+        // 2.1.206 attaches the tool name as snake_case `tool_name` (older builds: `tool.name`).
+        const logToolName = attrStr(attrs, 'tool.name', 'tool_name')
         const isCodexEvent = name.startsWith('codex.')
-        const isClaudeToolResult = name === 'tool_result' && logToolName !== ''
-        if (!isCodexEvent && !isClaudeToolResult) continue
+        const isClaudeToolResult = bare === 'tool_result' && logToolName !== ''
+        // Rich Claude Code LOG events — the per-call ground truth (exact cost + skill/plugin/agent
+        // attribution) that get_cost_by_cause reads. Keyed by session.id like tool_result.
+        const isClaudeRichEvent = CLAUDE_RICH_LOG_EVENTS.has(bare)
+        if (!isCodexEvent && !isClaudeToolResult && !isClaudeRichEvent) {
+          noteDroppedLogEvent(name)
+          continue
+        }
         if (isCodexEvent && isCodexWebsocketSpanName(name)) continue
         let traceId: string
         let spanName: string
-        if (isClaudeToolResult) {
-          traceId = (typeof r.traceId === 'string' && r.traceId)
-            ? r.traceId
-            : attrStr(attrs, 'session.id', 'session_id') || fallback
-          spanName = 'claude_code.tool_result'
+        if (isClaudeToolResult || isClaudeRichEvent) {
+          // PREFER session.id over the record's OTLP traceId: CC 2.1.206 propagates trace context
+          // on log records, but that traceId groups the events only with EACH OTHER — never with
+          // the session's llm_request spans (measured 2026-07-10: a 63-event trace held 35
+          // api_request + 28 tool_result and ZERO llm_request spans). session.id keying keeps all
+          // of a session's rich events in ONE group — the original design intent; the propagated
+          // traceId is only the fallback for records lacking the attribute.
+          traceId = attrStr(attrs, 'session.id', 'session_id')
+            || ((typeof r.traceId === 'string' && r.traceId) ? r.traceId : fallback)
+          // Store the span name PREFIXED regardless of the wire spelling — spanSummarizer keys its
+          // rich-event handling (and token dedup vs llm_request spans) on claude_code.*.
+          spanName = `claude_code.${bare}`
         } else {
           traceId = (typeof r.traceId === 'string' && r.traceId)
             ? r.traceId
@@ -1991,6 +2025,9 @@ const uiServer = http.createServer((req, res) => {
         captureEnabled: hookRuntime.captureEnabled, advisorEnabled: hookRuntime.advisorEnabled,
         checks: p.gateChecks, denies: p.gateDenies, warns: p.gateWarns, advisories: p.gateAdvisories,
       },
+      // Log-event names rejected at the ingest gate since boot — a silent-drop bug (rich events
+      // discarded for weeks) is exactly what this exists to make visible.
+      otlpDroppedLogEvents: Object.fromEntries(droppedLogEvents),
     }))
     return
   }

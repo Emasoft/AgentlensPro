@@ -3,6 +3,7 @@ import type { OutputChannelLike } from './vscodeCompat'
 import { SessionStore } from './sessionStore'
 import { SpanAttribute } from './types'
 import { callBodyRegistry } from './rawBodyContext'
+import { resolveLogEventName, bareLogEventName, CLAUDE_RICH_LOG_EVENTS, BODY_POINTER_LOG_EVENTS } from './otlpLogEvents'
 
 const MAX_BODY_BYTES = 50 * 1024 * 1024 // 50 MB
 
@@ -25,6 +26,12 @@ export class OtlpCollector {
   // Capped at 500 entries to evict orphaned entries when a span is dropped by the agent exporter.
   private genAiResponseBuffer = new Map<string, string>()
   private readonly GEN_AI_BUFFER_MAX = 500
+  // Names of log events that reached the final gate and were DROPPED, with counts. The bare-name
+  // gate bug lived undetected for weeks because drops were silent — this makes "what arrived and
+  // was rejected" a first-class observable (surfaced in /api/server-stats). '(unnamed)' counts
+  // records whose name could not be resolved from attrs, the OTLP eventName field, or the body.
+  private droppedLogEvents = new Map<string, number>()
+  private readonly DROPPED_EVENTS_MAX_NAMES = 50
 
   constructor(
     private port: number,
@@ -34,6 +41,23 @@ export class OtlpCollector {
 
   setIngestionEnabled(on: boolean) {
     this.ingestionEnabled = on
+  }
+
+  /** Dropped log-event name → count since boot (bounded; see droppedLogEvents). */
+  getDroppedLogEvents(): Record<string, number> {
+    return Object.fromEntries(this.droppedLogEvents)
+  }
+
+  private noteDroppedLogEvent(name: string): void {
+    const key = name || '(unnamed)'
+    const prev = this.droppedLogEvents.get(key)
+    // Once the name cap is hit, new names fold into '(other)' — counts keep incrementing so the
+    // stat stays truthful about volume even when cardinality explodes.
+    if (prev === undefined && this.droppedLogEvents.size >= this.DROPPED_EVENTS_MAX_NAMES) {
+      this.droppedLogEvents.set('(other)', (this.droppedLogEvents.get('(other)') ?? 0) + 1)
+      return
+    }
+    this.droppedLogEvents.set(key, (prev ?? 0) + 1)
   }
 
   async start() {
@@ -397,31 +421,22 @@ export class OtlpCollector {
           const bodyAttrs = this.attrsFromBodyKv(rec.body)
           let attrs = this.mergeAttributes(recordAttrs, bodyAttrs, scopeAttrs, resourceAttrs)
 
-          const bodyObj = (typeof rec.body === 'object' && rec.body !== null)
-            ? (rec.body as Record<string, unknown>)
-            : undefined
-
-          const eventName = this.getAttrFrom(attrs, ['event.name', 'event_name', 'name', 'event'])
-            || (typeof bodyObj?.stringValue === 'string' ? bodyObj.stringValue : '')
-
-          // Claude Code changed its log-event naming across versions: the docs (and older builds)
-          // use `claude_code.`-prefixed names, but 2.1.206 emits BARE names — the string
-          // "claude_code.api_request" does not exist in that binary at all (verified 2026-07-10:
-          // with a prefixed-only gate, 0 rich events landed in an 81MB span store while the trace
-          // spans flowed fine). Gate on the prefix-STRIPPED form so both conventions ingest.
-          const bareEvent = eventName.startsWith('claude_code.') ? eventName.slice('claude_code.'.length) : eventName
+          // Name resolution + prefix normalization + gate sets are shared with the standalone's
+          // processLogs via src/otlpLogEvents.ts — the two ingest paths drifted once (the
+          // standalone never gained this gate) and must never disagree again.
+          const eventName = resolveLogEventName(
+            this.getAttrFrom(attrs, ['event.name', 'event_name', 'name', 'event']),
+            rec as Record<string, unknown>,
+          )
+          const bareEvent = bareLogEventName(eventName)
           // 2.1.206 attaches the tool name as snake_case `tool_name` (older builds: `tool.name`).
           const logToolName = this.getAttrFrom(attrs, ['tool.name', 'tool_name'])
           const isCodexEvent = eventName.startsWith('codex.')
           const isClaudeToolResult = bareEvent === 'tool_result' && logToolName !== ''
-          // Rich Claude Code LOG events (verified against code.claude.com/docs monitoring-usage).
-          // These carry the per-call ground truth the llm_request SPANS lack: exact cost + the
-          // attribution of WHO caused the call (query_source / agent / skill / plugin / mcp), the
-          // compaction burn events, and API errors. Ingest them keyed by session.id like tool_result.
-          const isClaudeRichEvent = bareEvent === 'api_request'
-            || bareEvent === 'compaction'
-            || bareEvent === 'api_error'
-            || bareEvent === 'api_retries_exhausted'
+          // Rich Claude Code LOG events: the per-call ground truth the llm_request SPANS lack —
+          // exact cost + who caused the call (query_source / agent / skill / plugin / mcp),
+          // compaction burn, API errors. Ingested keyed by session.id like tool_result.
+          const isClaudeRichEvent = CLAUDE_RICH_LOG_EVENTS.has(bareEvent)
 
           // gen_ai_latest_experimental: response content arrives as log events rather than span attributes.
           // Buffer by traceId:spanId so it can be injected when the matching LLM span arrives,
@@ -458,7 +473,7 @@ export class OtlpCollector {
           // full context tree reconstructed on demand (buildCallContext). These carry no timeline
           // value, so record + continue (they must be handled BEFORE the rich-event gate below, which
           // would otherwise drop them). Works for OTEL-only sessions that have no local .jsonl.
-          if (bareEvent === 'api_request_body' || bareEvent === 'api_response_body') {
+          if (BODY_POINTER_LOG_EVENTS.has(bareEvent)) {
             const bodySessionId = this.getAttrFrom(attrs, ['session.id', 'session_id'])
             const bodyRef = this.getAttrFrom(attrs, ['body_ref', 'body.ref', 'bodyRef'])
             const inlineBody = this.getAttrFrom(attrs, ['body'])
@@ -484,7 +499,10 @@ export class OtlpCollector {
             continue
           }
 
-          if (!isCodexEvent && !isClaudeToolResult && !isClaudeRichEvent) {continue}
+          if (!isCodexEvent && !isClaudeToolResult && !isClaudeRichEvent) {
+            this.noteDroppedLogEvent(eventName)
+            continue
+          }
           if (isCodexEvent && this.isCodexWebsocketSpan(eventName, attrs)) {continue}
 
           let traceId: string
@@ -495,14 +513,17 @@ export class OtlpCollector {
             : this.getAttrFrom(attrs, ['span_id', 'spanId']) || `cl-${Math.random().toString(36).slice(2, 10)}`
 
           if (isClaudeToolResult || isClaudeRichEvent) {
-            // Use the OTLP-level traceId if Claude Code propagated trace context to the log record;
-            // fall back to session.id which Claude Code sets on every tool_result / rich log event.
-            // The rich events keep their own event name as the span name (e.g. claude_code.api_request)
-            // so the summarizer can distinguish them AND so their tokens never merge with the
-            // llm_request SPANS (which would double-count the session totals).
-            traceId = (typeof rec.traceId === 'string' && rec.traceId)
-              ? rec.traceId
-              : this.getAttrFrom(attrs, ['session.id', 'session_id']) || claudeLogFallbackTraceId
+            // PREFER session.id over the record's OTLP traceId: CC 2.1.206 propagates trace context
+            // on log records, but that traceId groups the events only with EACH OTHER — never with
+            // the session's llm_request spans (measured 2026-07-10: a 63-event trace held 35
+            // api_request + 28 tool_result and ZERO llm_request spans), so traceId-first keying
+            // orphaned every rich event into a pseudo-session. session.id keeps a session's rich
+            // events in ONE group; the propagated traceId is only the fallback. The stored span
+            // name stays the event's own (claude_code.api_request etc.) so the summarizer can
+            // distinguish them AND their tokens never merge with the llm_request SPANS (which
+            // would double-count the session totals).
+            traceId = this.getAttrFrom(attrs, ['session.id', 'session_id'])
+              || ((typeof rec.traceId === 'string' && rec.traceId) ? rec.traceId : claudeLogFallbackTraceId)
             // Store the span name PREFIXED regardless of what the emitter sent: spanSummarizer's
             // rich-event match and the token-dedup logic key on `claude_code.api_request` etc.
             spanName = `claude_code.${bareEvent}`

@@ -609,13 +609,16 @@ suite('OtlpCollector', () => {
 
     const res = await postJson(TEST_PORT, '/v1/logs', payload)
     assert.strictEqual(res.status, 200)
-    const names = (store.addedSpans as Array<{ name: string }>).map(s => s.name)
-    assert.deepStrictEqual(names, [
+    const spans = store.addedSpans as Array<{ name: string; traceId: string }>
+    assert.deepStrictEqual(spans.map(s => s.name), [
       'claude_code.api_request',
       'claude_code.api_request',
       'claude_code.compaction',
       'claude_code.api_error',
     ])
+    // Keyed by session.id — CC 2.1.206 propagates an OTLP traceId on log records that would
+    // otherwise orphan rich events into a pseudo-session away from their llm_request spans.
+    assert.deepStrictEqual(spans.map(s => s.traceId), ['sess-bare', 'sess-pre', 'sess-bare', 'sess-bare'])
   })
 
   test('ingests Claude tool_result carrying the snake_case tool_name attribute', async () => {
@@ -623,6 +626,7 @@ suite('OtlpCollector', () => {
     // tool_result gate, which requires a non-empty tool name.
     const rec = (toolAttrKey: string) => ({
       timeUnixNano: '1700000000000000000',
+      traceId: 'deadbeefdeadbeefdeadbeefdeadbeef', // the propagated context that must NOT win
       attributes: [
         { key: 'event.name', value: { stringValue: 'tool_result' } },
         { key: 'session.id', value: { stringValue: 'sess-tools' } },
@@ -635,7 +639,8 @@ suite('OtlpCollector', () => {
 
     const res = await postJson(TEST_PORT, '/v1/logs', payload)
     assert.strictEqual(res.status, 200)
-    const names = (store.addedSpans as Array<{ name: string }>).map(s => s.name)
-    assert.deepStrictEqual(names, ['claude_code.tool_result', 'claude_code.tool_result'])
+    const spans = store.addedSpans as Array<{ name: string; traceId: string }>
+    assert.deepStrictEqual(spans.map(s => s.name), ['claude_code.tool_result', 'claude_code.tool_result'])
+    assert.deepStrictEqual(spans.map(s => s.traceId), ['sess-tools', 'sess-tools'])
   })
 })
