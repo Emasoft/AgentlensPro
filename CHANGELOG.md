@@ -4,6 +4,12 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [0.10.3] — 2026-07-10
+
+### Changed
+
+- **Segmented append-only span store — restarts no longer destroy spans** (P4). The standalone server's single-file `~/.agentlens/spans.json` with its `MAX_SPANS=50,000` eviction was measured losing 1,700 spans in ONE restart (`Loaded 50000 spans (capped from 51700)`) — the root mechanism behind "OTEL is a lossy lower bound". Spans now persist as daily append-only NDJSON segments under `~/.agentlens/spans/` (`2026-07-10.ndjson`, one JSON span per line) with a per-segment index (span count + time range + bytes, atomic, self-healing after a crash): append cost is O(record), a segment is **never rewritten** (the whole-store shutdown rewrite — the last survivor of the 420GB/4.4h SSD-wear pattern — is gone too), and there is **no span-count cap and no eviction**. In-memory the server keeps only the rolling summarization window (`AGENTLENS_SUMMARY_WINDOW_HOURS`, default 24h; halves down to a 5-minute floor under heap pressure, logged loudly) — trimming memory is not data loss, since boot and range queries load only the segments overlapping the requested time range. Retention (`AGENTLENS_SPANS_RETENTION_DAYS`, default 30) runs on boot + daily and deletes whole EXPIRED segments only, one explicit line per deletion (`retention: deleted segment 2026-06-01.ndjson, N spans, age 39d`). First boot migrates the legacy `spans.json` into segments and preserves it as `spans.json.bak` (never deleted). Deliberately no native deps (better-sqlite3) to keep `npx` portability. `AGENTLENS_MAX_SPANS` is retired; `/api/server-stats` `spans` now reports `{windowMs, retentionDays, pendingAppends, store:{segments,totalSpans,totalBytes}}` and `agentlenspro-cli --status` renders both the new and the pre-P4 shape
+
 ## [0.10.2] — 2026-07-10
 
 ### Added

@@ -284,7 +284,7 @@ flowchart TD
 
 Sessions produced by `LogReader` carry `dataSource: 'log'` on `SessionSummaryCard`; OTLP sessions carry `dataSource: 'otel'`. The UI shows an OTEL/Log source badge on each session row.
 
-When both feeds capture the same session (same sessionId — for Claude the OTEL summarizer keys cards by the transcript UUID carried in the `session.id` span attribute), the winner is decided by `src/feedMergePolicy.ts`: **for Claude sessions the log transcript wins on collision (OTEL is a lossy lower bound — `MAX_SPANS` store eviction plus collector-downtime loss); OTEL wins only where no transcript exists.** Every other source keeps the original OTEL-wins rule.
+When both feeds capture the same session (same sessionId — for Claude the OTEL summarizer keys cards by the transcript UUID carried in the `session.id` span attribute), the winner is decided by `src/feedMergePolicy.ts`: **for Claude sessions the log transcript wins on collision (OTEL is a lossy lower bound — collector-downtime loss plus the rolling summarization window; before the segmented span store, `MAX_SPANS` eviction was a third, since-removed loss mechanism); OTEL wins only where no transcript exists.** Every other source keeps the original OTEL-wins rule.
 
 ### Bypasses SessionStore / SpanSummarizer
 
@@ -330,6 +330,24 @@ graph LR
 ```
 
 **Key non-obvious behaviour:** Codex session IDs (`codex:{conversationId}:{turnId}`) are assigned on arrival. Once set, the mapping is immutable even if spans arrive out of order or are retried.
+
+### Standalone span store — segmented, append-only, no eviction
+
+The standalone server persists every received span through `src/segmentedSpanStore.ts`:
+
+```text
+~/.agentlens/spans/
+├── 2026-07-09.ndjson    # one JSON span per line, bucketed by UTC receive day
+├── 2026-07-10.ndjson
+└── index.json           # per-segment {count, minTs, maxTs, bytes} — atomic write, self-healing
+```
+
+- **Append is O(record).** Spans buffer in memory and the 5-second flush tick appends one chunk per touched segment. A segment file is **never rewritten** — the previous single-file store's rewrite pattern destroyed 420GB of SSD in 4.4 hours, and its shutdown rewrite was the last survivor of that pattern.
+- **No span-count cap, no eviction.** The previous store capped at `MAX_SPANS=50,000` and was measured losing 1,700 spans in a single restart (`Loaded 50000 spans (capped from 51700)`). The segmented store keeps everything until retention expires the whole segment.
+- **Memory is a time window, not the store.** The in-memory `spans` array holds only the rolling summarization window (`AGENTLENS_SUMMARY_WINDOW_HOURS`, default 24h; under heap pressure it halves down to a 5-minute floor, logged loudly). Boot and any range query load **only the segments overlapping the requested time range** via `loadRange()` — never the whole store.
+- **Retention deletes whole expired segments only** (`AGENTLENS_SPANS_RETENTION_DAYS`, default 30), on boot + daily, one explicit log line per deletion: `retention: deleted segment 2026-06-01.ndjson, N spans, age 39d`. Nothing is ever dropped silently.
+- **One-time migration.** The first boot splits a legacy `spans.json` (NDJSON or the older whole-array format) into daily segments and renames it to `spans.json.bak` — preserved, never deleted.
+- **No native dependencies** (deliberate): better-sqlite3 would give indexed queries but breaks `npx` portability; plain NDJSON + a JSON index stays pure-Node and greppable.
 
 ---
 
@@ -946,6 +964,8 @@ agentlens/
 │   ├── sessionStore.ts           # 5-min rolling span window, onUpdate callbacks
 │   ├── sessionRepository.ts      # Merges DB + live window; single session data access point
 │   ├── spanSummarizer.ts         # Orchestrates per-agent builders
+│   ├── segmentedSpanStore.ts     # Standalone span persistence — daily append-only NDJSON segments,
+│   │                             #   per-segment index, range loads, retention, spans.json migration
 │   ├── shared/                   # Runtime-neutral modules imported by BOTH src/** and media/src/**
 │   │   │                         #   (no Node imports, no DOM APIs; guarded by scripts/check-no-mirrors.js)
 │   │   ├── pricing.ts            # THE rate table: lookupRates, calcTokenCostUsd (host), calcTokenCost (webview)
