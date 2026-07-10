@@ -33,8 +33,10 @@ export interface EffectivenessResult {
 }
 
 function cost(s: SessionSummaryCard): number {
+  // inputTokens IS the raw uncached input since the 2026-07-10 one-convention fix (four disjoint
+  // buckets on every card) — subtracting the cache buckets here again would under-bill the input.
   return calcTokenCostUsd(
-    s.inputTokens - s.cacheReadTokens - (s.cacheCreateTokens ?? 0),
+    s.inputTokens,
     s.cacheReadTokens,
     s.cacheCreateTokens ?? 0,
     s.outputTokens,

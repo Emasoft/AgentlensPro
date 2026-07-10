@@ -546,7 +546,9 @@ export function Cost() {
           </thead>
           <tbody>
             {sessionRows.map(({ session: s, cost }) => {
-              const rawInput = Math.max(0, s.inputTokens - s.cacheReadTokens - s.cacheCreateTokens)
+              // inputTokens IS the raw uncached input since the 2026-07-10 one-convention fix
+              // (four disjoint buckets) — the old subtraction here clamped it to 0 for cached sessions.
+              const rawInput = s.inputTokens
               const isCopilot = s.source === 'copilot'
               return (
                 <tr key={s.sessionId} style="border-bottom:1px solid var(--vscode-panel-border)">
