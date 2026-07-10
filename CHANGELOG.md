@@ -4,6 +4,22 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [0.10.2] — 2026-07-10
+
+### Added
+
+- **`src/shared/tokenBuckets.ts` — the four-disjoint-buckets invariant, compile-shaped** (P3). Every card AND every timeline entry carries four DISJOINT buckets (raw uncached `inputTokens` / `cacheReadTokens` / `cacheCreateTokens` / `outputTokens`), each billed at its own rate. `disjointBuckets()` is the ONE constructor every producer routes through (OpenAI-shaped usage sheds its `cached ⊂ input` share at construction; Anthropic-shaped passes through); `contextTokens()` is the one derivation of context size (input + cacheRead + cacheCreation). Grounded by the 2026-07-10 OTEL-vs-JSONL measurement (same session read up to ~1,246× apart across feeds)
+- **Entry-level parity contract** — `tokenConventionParity.test.ts` now also proves the SAME call through the OTEL and JSONL feeds yields bucket-identical timeline entries and an identical per-entry cost; real sql.js round-trip tests cover the v6 re-ingest guard
+
+### Changed
+
+- **Timeline entries normalized to RAW** — OTEL-produced `llm` entries stored incl-cache input (`input+cacheRead+cacheCreate`) while log-produced entries were raw; both now store the raw uncached share with the cache buckets in their own fields (codex/copilot/opencode entries gain those fields). All producers (`src/summarizers/*`, `src/logReader.ts`, standalone paths) construct through `disjointBuckets()`
+- **`LOG_INGEST_VERSION` → 6 with an in-place SQLite migration** — persisted OTEL `llm` timeline entries are normalized by subtracting each row's own cache columns (clamped at 0); log-sourced rows and sidecars cold-rescan from the durable transcripts. One convention on disk, ever. Pre-v6 codex/copilot OTEL entry rows without per-entry cache data are left unchanged (their incl-cache share is unknowable — same documented discontinuity stance as the v5 card migration)
+
+### Fixed
+
+- **Webview compensations that assumed incl-cache entries deleted** — `calcEntryCost` no longer subtracts the caches out of `entry.inputTokens` (it silently under-billed raw log entries all along); `getPeakContextUsage`, the per-turn cost curve, the context-growth insight, the oversized-start insight, the growth chart, and Flow's per-turn size now derive context as input + cacheRead + cacheCreation via `contextTokens()`. `tokenBreakdown()` stops undoing incl-cache on cards that have been raw since v5 (it clamped "fresh" to ~0 on every cache-heavy session); `computeTurnGrowth` (MCP) and the standalone sidebar sparkline same fix
+
 ## [0.10.1] — 2026-07-10
 
 ### Changed
