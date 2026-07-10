@@ -1793,12 +1793,13 @@ function _buildSubAgentCards(parentSessionId: string, a: ClaudeAccum): SessionSu
       userRequest: (sub.prompt ?? sub.agentType ?? 'sub-agent').slice(0, 500),
       model: sub.model || a.model || 'claude',
       turns: 1,
-      // inputTokens is stored TOTAL-incl-cache to match the parent/OTEL convention (claude.ts:143,340;
-      // logReader.ts:1888). sessionCost() and the cost writer recover the uncached input by subtracting
-      // cacheRead+cacheCreate, so a raw `sub.input` (which EXCLUDES cache) made that subtraction go
-      // hugely negative → negative sub-agent cost. Adding the cache buckets back keeps the invariant
-      // inputTokens - cacheRead - cacheCreate == uncached input (== sub.input, always >= 0).
-      inputTokens: sub.input + sub.cacheRead + sub.cacheCreate,
+      // RAW uncached input — FOUR DISJOINT BUCKETS is the schema invariant on every card (the
+      // 2026-07-10 measurement adjudicated the two dueling conventions: the parent log card was
+      // ALWAYS raw at :2055, and the earlier comment here claiming "parent stores incl-cache,
+      // citing claude.ts:143/340 + logReader.ts:1888" cited lines that proved the OPPOSITE).
+      // Matching the parent means storing sub.input as-is; the write-time cost and sessionCost
+      // bill the four buckets independently, no subtraction anywhere.
+      inputTokens: sub.input,
       outputTokens: sub.output,
       cacheReadTokens: sub.cacheRead,
       cacheCreateTokens: sub.cacheCreate,

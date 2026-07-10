@@ -16,6 +16,19 @@ import * as fs from 'fs'
 import { atomicWriteFileSync } from './serverRuntime'
 import type { CollectorGap, SessionSummaryCard } from './summarizers/summarizerTypes'
 
+// ── Ingest-semantics version (single source — SQLite db.ts imports this) ─────
+// Bump when log-ingest semantics change in a way that makes previously-persisted cards stale.
+// The SQLite path wipes data_source='log' rows (db.ts reIngestLogRowsIfStale); the standalone's
+// sidecars (offsets + stripped cards) are version-stamped with this and IGNORED on mismatch, so
+// the next boot cold-rescans every transcript and rebuilds all cards with the current semantics.
+//   v2 (TRDD-TKN5VALS): per-turn `turn` index + de-inflated input_tokens + sub-agent rollup.
+//   v3: sub-agent child cards switched to incl-cache inputTokens (later found to be the WRONG
+//       target — the parent card was always raw).
+//   v4: async-launch child cards synthesized (spawn_async linkage, zero buckets).
+//   v5: inputTokens normalized to RAW disjoint-buckets on every card family (the 2026-07-10
+//       OTEL-vs-JSONL discrepancy fix); sub cards store sub.input as-is.
+export const LOG_INGEST_VERSION = 5
+
 // ── Log tail offsets ──────────────────────────────────────────────────────────
 
 /** One persisted per-file tail record. Mirror of LogReader's internal FileState (kept structurally
@@ -29,15 +42,19 @@ export interface PersistedFileState {
 }
 
 /** Read the persisted offset map. Returns null (→ full cold scan, the safe fallback) when the file is
- *  missing or malformed — a corrupt offset file must NEVER silently resume from a bogus byte position. */
+ *  missing, malformed, or from a DIFFERENT ingest version — resuming version-stale offsets would skip
+ *  unchanged files whose cards were built under old semantics, silently freezing the old numbers. A
+ *  legacy unversioned file (plain map) is treated as version-stale for the same reason. */
 export function loadLogOffsets(file: string): Record<string, PersistedFileState> | null {
   let raw: string
   try { raw = fs.readFileSync(file, 'utf8') } catch { return null }
   let parsed: unknown
   try { parsed = JSON.parse(raw) } catch { return null }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+  const wrapper = parsed as { v?: unknown; offsets?: unknown }
+  if (wrapper.v !== LOG_INGEST_VERSION || !wrapper.offsets || typeof wrapper.offsets !== 'object') return null
   const out: Record<string, PersistedFileState> = {}
-  for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+  for (const [k, v] of Object.entries(wrapper.offsets as Record<string, unknown>)) {
     if (!v || typeof v !== 'object') continue
     const r = v as Record<string, unknown>
     // Fail-fast on a record missing the two load-bearing numbers — skip it (→ that file cold-reads),
@@ -53,9 +70,9 @@ export function loadLogOffsets(file: string): Record<string, PersistedFileState>
   return out
 }
 
-/** Persist the offset map atomically. */
+/** Persist the offset map atomically, stamped with the current ingest version. */
 export function saveLogOffsets(file: string, offsets: Record<string, PersistedFileState>): void {
-  atomicWriteFileSync(file, JSON.stringify(offsets))
+  atomicWriteFileSync(file, JSON.stringify({ v: LOG_INGEST_VERSION, offsets }))
 }
 
 // ── Persisted log-session cards (fast restart) ─────────────────────────────────
@@ -68,20 +85,23 @@ export function saveLogOffsets(file: string, offsets: Record<string, PersistedFi
 // drilled. The stripped cards are small (~1-2 KB each), so this file stays a few tens of MB even with
 // ~14k sessions — unlike the full cards, which don't even fit in one V8 string.
 
-/** Read the persisted stripped cards. null when missing/malformed (→ fall back to a cold rescan). */
+/** Read the persisted stripped cards. null when missing, malformed, or from a different ingest
+ *  version (→ fall back to a cold rescan that rebuilds every card with current semantics). A legacy
+ *  unversioned file (bare array) is version-stale by definition. */
 export function loadPersistedCards(file: string): SessionSummaryCard[] | null {
   let raw: string
   try { raw = fs.readFileSync(file, 'utf8') } catch { return null }
   let parsed: unknown
   try { parsed = JSON.parse(raw) } catch { return null }
-  if (!Array.isArray(parsed)) return null
-  return parsed.filter((c): c is SessionSummaryCard =>
+  const wrapper = parsed as { v?: unknown; cards?: unknown }
+  if (!wrapper || typeof wrapper !== 'object' || wrapper.v !== LOG_INGEST_VERSION || !Array.isArray(wrapper.cards)) return null
+  return wrapper.cards.filter((c): c is SessionSummaryCard =>
     !!c && typeof c === 'object' && typeof (c as SessionSummaryCard).sessionId === 'string')
 }
 
-/** Persist the stripped cards atomically. */
+/** Persist the stripped cards atomically, stamped with the current ingest version. */
 export function savePersistedCards(file: string, cards: SessionSummaryCard[]): void {
-  atomicWriteFileSync(file, JSON.stringify(cards))
+  atomicWriteFileSync(file, JSON.stringify({ v: LOG_INGEST_VERSION, cards }))
 }
 
 // ── Collector lifecycle / downtime gaps ────────────────────────────────────────

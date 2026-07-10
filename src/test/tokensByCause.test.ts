@@ -146,8 +146,8 @@ function card(id: string, o: { start?: string; source?: SessionSummaryCard['sour
 suite('handleGetCostByCause — MCP tool (TRDD-UBEP5XY7)', () => {
   test('session mode returns the rollup reconciled against the normalized session totals', () => {
     const tl = [apiReq({ input: 100, output: 50, read: 800, create: 50, cost: 0.02, querySource: 'repl_main_thread' })]
-    // OTEL convention: inputTokens INCLUDES cache → uncached = 1000 − 850 = 150; total = 150+850+50 = 1050.
-    const s = card('s1', { timeline: tl, input: 1000, output: 50, read: 800, create: 50 })
+    // inputTokens is RAW on every card (four disjoint buckets): total = 150+800+50+50 = 1050.
+    const s = card('s1', { timeline: tl, input: 150, output: 50, read: 800, create: 50 })
     const r = handleGetCostByCause([s], null, { sessionId: 's1' }) as TokensByCauseReport
     assert.strictEqual(r.sessionId, 's1')
     assert.strictEqual(r.reconciliation.sessionTotalTokens, 1050)

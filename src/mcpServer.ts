@@ -81,18 +81,13 @@ export type SessionAccessor = () => SessionSummaryCard[]
 // ── Cost helper ───────────────────────────────────────────────────────────────
 
 function sessionCost(s: SessionSummaryCard): number {
-  const cache = s.cacheReadTokens + (s.cacheCreateTokens ?? 0)
-  // Two ingestion paths store inputTokens under DIFFERENT conventions (verified empirically against
-  // live cards): OTEL cards store it INCLUDING cache (e.g. synth-ae58: in=10.23M, cache=10.20M,
-  // uncached=32K), while LOG-derived fork/sub-agent cards store it RAW/cache-EXCLUDED (e.g. agent-aeb:
-  // in=274, cache=3.52M). The old `inputTokens − cache` was right for OTEL but went hugely NEGATIVE for
-  // forks (274−3.52M) — producing the −$83 / −$47 fork costs that HID the fleet-of-forks burn (each
-  // fork re-bills the inherited multi-M-token parent transcript). Detection is EXACT, not a guess:
-  // under includes-cache, inputTokens = cache + uncached ≥ cache ALWAYS, so `inputTokens < cache` can
-  // ONLY be the raw convention, where the true uncached IS inputTokens. Normalizing here (cost is a
-  // DERIVED value) fixes every MCP tool + the dashboard at one source, tolerant of both conventions.
-  const uncached = s.inputTokens >= cache ? s.inputTokens - cache : s.inputTokens
-  return calcTokenCostUsd(uncached, s.cacheReadTokens, s.cacheCreateTokens ?? 0, s.outputTokens, s.model)
+  // inputTokens is RAW uncached input on EVERY card — the 2026-07-10 normalization moved the
+  // convention to the ingestion sites (claude/copilot/codex summarizers + logReader sub cards) and
+  // migrated persisted rows, retiring the read-time `inputTokens < cache` detection heuristic that
+  // lived here. That heuristic was structurally unsound: a raw-convention card whose raw input
+  // happened to exceed its cache total was misclassified as incl-cache and silently under-counted.
+  // The four buckets are disjoint; bill each at its own rate, no subtraction anywhere.
+  return calcTokenCostUsd(s.inputTokens, s.cacheReadTokens, s.cacheCreateTokens ?? 0, s.outputTokens, s.model)
 }
 
 // A session counts toward cache-health SLIs only when it actually exercised the prompt cache:
@@ -1987,13 +1982,10 @@ export function handleGetSubagentTree(sessions: SessionSummaryCard[], args: { se
 }
 
 // Session usage ground truth for the by-cause reconciliation: uncached input + cacheRead +
-// cacheCreate + output. Uses the SAME dual-convention normalization as sessionCost (OTEL cards
-// store inputTokens cache-INCLUDED, log-derived fork cards cache-EXCLUDED) so the remainder is a
-// real coverage figure, not a convention artifact.
+// cacheCreate + output. inputTokens is RAW on every card (2026-07-10 normalization), so the
+// total is a plain sum of the four disjoint buckets.
 function normalizedSessionTotalTokens(s: SessionSummaryCard): number {
-  const cache = s.cacheReadTokens + (s.cacheCreateTokens ?? 0)
-  const uncached = s.inputTokens >= cache ? s.inputTokens - cache : s.inputTokens
-  return uncached + cache + s.outputTokens
+  return s.inputTokens + s.cacheReadTokens + (s.cacheCreateTokens ?? 0) + s.outputTokens
 }
 
 // Exported for unit tests (TRDD-UBEP5XY7). Leaderboard scan cap: cross-session mode must load

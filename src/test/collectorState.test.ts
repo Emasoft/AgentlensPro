@@ -6,6 +6,7 @@ import * as path from 'path'
 import {
   loadLogOffsets, saveLogOffsets, loadPersistedCards, savePersistedCards,
   recordCollectorStart, recordCollectorHeartbeat, recordCollectorStop, computeCollectorGaps,
+  LOG_INGEST_VERSION,
   type LifecycleStore,
 } from '../collectorState'
 import type { SessionSummaryCard } from '../summarizers/summarizerTypes'
@@ -32,8 +33,19 @@ suite('collectorState — log offsets', () => {
 
   test('load skips records missing the load-bearing bytesRead/mtimeMs (fail-fast)', () => {
     const f = tmpFile('partial.json')
-    fs.writeFileSync(f, JSON.stringify({ '/good.jsonl': { bytesRead: 1, mtimeMs: 2 }, '/bad.jsonl': { mtimeMs: 2 } }))
+    fs.writeFileSync(f, JSON.stringify({ v: LOG_INGEST_VERSION, offsets: { '/good.jsonl': { bytesRead: 1, mtimeMs: 2 }, '/bad.jsonl': { mtimeMs: 2 } } }))
     assert.deepStrictEqual(loadLogOffsets(f), { '/good.jsonl': { bytesRead: 1, mtimeMs: 2, ino: undefined, size: undefined } })
+  })
+
+  test('load rejects a version-stale or legacy-unversioned offsets file (→ cold rescan)', () => {
+    // Resuming version-stale offsets would SKIP unchanged files whose cards were built under old
+    // ingest semantics, silently freezing the old numbers — so both shapes must return null.
+    const legacy = tmpFile('legacy.json')
+    fs.writeFileSync(legacy, JSON.stringify({ '/a.jsonl': { bytesRead: 1, mtimeMs: 2 } }))
+    assert.strictEqual(loadLogOffsets(legacy), null)
+    const stale = tmpFile('stale.json')
+    fs.writeFileSync(stale, JSON.stringify({ v: LOG_INGEST_VERSION - 1, offsets: { '/a.jsonl': { bytesRead: 1, mtimeMs: 2 } } }))
+    assert.strictEqual(loadLogOffsets(stale), null)
   })
 })
 
@@ -53,6 +65,15 @@ suite('collectorState — persisted cards', () => {
     fs.writeFileSync(f, '{"not":"an array"}')
     assert.strictEqual(loadPersistedCards(f), null)
     assert.strictEqual(loadPersistedCards('/no/such.json'), null)
+  })
+
+  test('load rejects a legacy bare-array or version-stale cards file (→ cold rescan rebuilds them)', () => {
+    const legacy = tmpFile('legacy-cards.json')
+    fs.writeFileSync(legacy, JSON.stringify([{ sessionId: 'old' }]))
+    assert.strictEqual(loadPersistedCards(legacy), null)
+    const stale = tmpFile('stale-cards.json')
+    fs.writeFileSync(stale, JSON.stringify({ v: LOG_INGEST_VERSION - 1, cards: [{ sessionId: 'old' }] }))
+    assert.strictEqual(loadPersistedCards(stale), null)
   })
 })
 

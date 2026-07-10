@@ -1154,13 +1154,11 @@ function TokensByCausePanel({ steps, card, activeFilter, onFilter }: {
 }) {
   const [open, setOpen] = useState(false)
   const [dim, setDim] = useState<CauseDimension | null>(null)
-  // Session usage ground truth for the reconciliation footer — same dual-convention normalization
-  // as the host's sessionCost (OTEL cards store inputTokens cache-INCLUDED, log fork cards not).
+  // Session usage ground truth for the reconciliation footer. inputTokens is RAW on every card
+  // (2026-07-10 normalization) — the four buckets are disjoint, so the total is a plain sum.
   const sessionTotal = useMemo(() => {
     if (!card) return null
-    const cache = card.cacheReadTokens + (card.cacheCreateTokens ?? 0)
-    const uncached = card.inputTokens >= cache ? card.inputTokens - cache : card.inputTokens
-    return uncached + cache + card.outputTokens
+    return card.inputTokens + card.cacheReadTokens + (card.cacheCreateTokens ?? 0) + card.outputTokens
   }, [card])
   const report = useMemo(
     () => buildTokensByCause(steps.map(s => s.entry), { sessionId: card?.sessionId, sessionTotalTokens: sessionTotal }),

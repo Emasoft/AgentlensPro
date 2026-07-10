@@ -245,6 +245,11 @@ export function buildCodexSessions(spans: Span[]): SessionSummaryCard[] {
 
     const totalInput = inputTokens
     const cacheHitRate = totalInput > 0 ? cacheReadTokens / totalInput : 0
+    // Codex reports OpenAI-shaped usage: cached tokens are INSIDE input_tokens. The stored
+    // convention is FOUR DISJOINT BUCKETS (calcTokenCostUsd bills each at its own rate), so the
+    // cacheRead share must come out of the stored input or it double-bills at the full input rate.
+    // totalInput above remains the context-size figure for cacheHitRate only.
+    const storedInput = Math.max(inputTokens - cacheReadTokens, 0)
 
     const allEndTimes = traceSpans.map(s => nanoToMs(s.endTime) || s.receivedAt || 0).filter(t => t > 0)
     const endMs = allEndTimes.length > 0 ? Math.max(...allEndTimes) : startMs
@@ -260,7 +265,7 @@ export function buildCodexSessions(spans: Span[]): SessionSummaryCard[] {
       userRequest,
       model,
       turns: totalLlmCalls,
-      inputTokens: totalInput,
+      inputTokens: storedInput,
       outputTokens,
       cacheReadTokens,
       cacheCreateTokens,

@@ -28,6 +28,11 @@ export function buildCopilotSessions(
       ? inputTokens
       : inputTokens + cacheRead + cacheCreate
     const cacheHitRate = totalInput > 0 ? cacheRead / totalInput : 0
+    // Stored convention = FOUR DISJOINT BUCKETS (calcTokenCostUsd bills each at its own rate), so
+    // the OpenAI-shaped input (cached tokens INSIDE input_tokens) must shed its cacheRead here or
+    // every cached token double-bills. The Anthropic shape is already disjoint. totalInput above
+    // remains the context-size figure for cacheHitRate only.
+    const storedInput = isOpenAIModel ? Math.max(inputTokens - cacheRead, 0) : inputTokens
 
     const startMs = nanoToMs(agent.startTime)
     const endMs = nanoToMs(agent.endTime)
@@ -173,7 +178,7 @@ export function buildCopilotSessions(
       userRequest: userReq,
       model,
       turns,
-      inputTokens: totalInput,
+      inputTokens: storedInput,
       outputTokens,
       cacheReadTokens: cacheRead,
       cacheCreateTokens: cacheCreate,

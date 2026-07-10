@@ -424,7 +424,12 @@ export function buildClaudeSessions(
       userRequest,
       model,
       turns: totalLlmCalls,
-      inputTokens: totalInput,
+      // RAW uncached input — the schema invariant is FOUR DISJOINT BUCKETS (calcTokenCostUsd bills
+      // each at its own rate). This card stored totalInput (incl-cache) until 2026-07-10, which
+      // (a) double-billed every cache token at the full input rate in the write-time cost, and
+      // (b) made the same session read up to ~1000× apart between the OTEL and log feeds.
+      // totalInput lives on only inside cacheHitRate above.
+      inputTokens,
       outputTokens,
       cacheReadTokens,
       cacheCreateTokens,

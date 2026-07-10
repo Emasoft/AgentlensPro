@@ -738,13 +738,12 @@ export function resolveSession(sessions: SessionSummaryCard[], sel: { sessionId?
   return { card: all[0], live: now - lastActivityMs(all[0]) < LIVE_MS, matchedBy: 'latest' }
 }
 
-/** Authoritative session cost: the statusline cumulative cost when present (no pricing estimate), else
- *  the pricing-table estimate. Mirrors the OTEL-vs-log inputTokens convention (uncached detection). */
+/** Authoritative session cost: the statusline cumulative cost when present (no pricing estimate),
+ *  else the pricing-table estimate. inputTokens is RAW on every card (2026-07-10 normalization at
+ *  the ingestion sites) — the four buckets are disjoint, each billed at its own rate. */
 export function cardCostUsd(card: SessionSummaryCard): number {
   if (card.statusline && card.statusline.totalCostUsd > 0) return card.statusline.totalCostUsd
-  const cache = card.cacheReadTokens + (card.cacheCreateTokens ?? 0)
-  const uncached = card.inputTokens >= cache ? card.inputTokens - cache : card.inputTokens
-  return calcTokenCostUsd(uncached, card.cacheReadTokens, card.cacheCreateTokens ?? 0, card.outputTokens, card.model)
+  return calcTokenCostUsd(card.inputTokens, card.cacheReadTokens, card.cacheCreateTokens ?? 0, card.outputTokens, card.model)
 }
 
 export interface SessionStatus {

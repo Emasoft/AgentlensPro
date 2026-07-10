@@ -120,23 +120,26 @@ suite('SpanSummarizer', () => {
       assert.strictEqual(result.sessions[0].outputTokens, 1000)
     })
 
-    test('Anthropic model: reconstructs totalInput from parts (input + cacheRead + cacheCreate)', () => {
+    test('Anthropic model: stores RAW input; cacheHitRate still over the reconstructed total', () => {
       const agent = makeAgentSpan({ spanId: 'a-anthropic', model: 'claude-sonnet-4-6', inputTokens: 20000 })
       agent.attributes.push(makeAttr('gen_ai.usage.cache_read.input_tokens', 80000))
       const result = summarizeSpans([agent])
       const session = result.sessions[0]
-      // totalInput = 20000 + 80000 = 100000; cacheHitRate = 80000/100000 = 0.8
-      assert.strictEqual(session.inputTokens, 100000)
+      // Anthropic usage is already disjoint → stored as-is; cacheHitRate = 80000/(20000+80000) = 0.8
+      assert.strictEqual(session.inputTokens, 20000)
+      assert.strictEqual(session.cacheReadTokens, 80000)
       assert.ok(Math.abs(session.cacheHitRate - 0.8) < 0.001)
     })
 
-    test('OpenAI model: does not double-count cached tokens in totalInput', () => {
+    test('OpenAI model: sheds cached tokens from the stored input (disjoint buckets)', () => {
       const agent = makeAgentSpan({ spanId: 'a-openai', model: 'gpt-5.5', inputTokens: 100000 })
       agent.attributes.push(makeAttr('gen_ai.usage.cache_read.input_tokens', 80000))
       const result = summarizeSpans([agent])
       const session = result.sessions[0]
-      // totalInput = 100000 (input already includes cached); cacheHitRate = 80000/100000 = 0.8
-      assert.strictEqual(session.inputTokens, 100000)
+      // OpenAI input_tokens INCLUDES cached → stored input = 100000 − 80000 (else the cache tokens
+      // double-bill at the full input rate); cacheHitRate = 80000/100000 over the reconstructed total.
+      assert.strictEqual(session.inputTokens, 20000)
+      assert.strictEqual(session.cacheReadTokens, 80000)
       assert.ok(Math.abs(session.cacheHitRate - 0.8) < 0.001)
     })
 
@@ -852,7 +855,9 @@ suite('SpanSummarizer', () => {
       const result = summarizeSpans(spans)
       const codex = result.sessions.find(s => s.source === 'codex')
       assert.ok(codex)
-      assert.strictEqual(codex.inputTokens, 100)
+      // Codex reports OpenAI-shaped usage (cached ⊂ input) → stored input sheds the cacheRead
+      // share so the four buckets are disjoint: 100 − 80 = 20.
+      assert.strictEqual(codex.inputTokens, 20)
       assert.strictEqual(codex.outputTokens, 15)
       assert.strictEqual(codex.cacheReadTokens, 80)
       assert.strictEqual(codex.totalLlmCalls, 1)

@@ -123,8 +123,8 @@ suite('logReader sub-agent child cards (sync vs async launches)', () => {
       const child = findChild(parent!, 'agent-sync-1')
       assert.ok(child, 'sync child card exists')
       assert.strictEqual(child!.spawnAsync, undefined, 'sync completions are not flagged async')
-      // inputTokens is stored total-incl-cache (parent/OTEL convention): 100 + 400 + 200.
-      assert.strictEqual(child!.inputTokens, 700)
+      // inputTokens is RAW uncached input — four disjoint buckets on every card family.
+      assert.strictEqual(child!.inputTokens, 100)
       assert.strictEqual(child!.outputTokens, 50)
       assert.strictEqual(child!.cacheReadTokens, 400)
       assert.strictEqual(child!.cacheCreateTokens, 200)
@@ -146,7 +146,7 @@ suite('logReader sub-agent child cards (sync vs async launches)', () => {
       const children = (parent!.childCards ?? []).filter(c => c.sessionId === 'agent-both-1')
       assert.strictEqual(children.length, 1, 'one card per tool_use id, not a placeholder + a completion')
       assert.strictEqual(children[0].spawnAsync, undefined, 'real completion clears the async flag')
-      assert.strictEqual(children[0].inputTokens, 700, 'zero-bucket placeholder was overwritten with measured usage')
+      assert.strictEqual(children[0].inputTokens, 100, 'zero-bucket placeholder was overwritten with measured usage')
     } finally { fx.cleanup() }
   })
 })

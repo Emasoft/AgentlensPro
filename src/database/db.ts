@@ -1,6 +1,8 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { SCHEMA_SQL } from './schema'
+import { LOG_INGEST_VERSION } from '../collectorState'
+import { calcTokenCostUsd } from '../pricing'
 
 // Minimal sql.js surface we use — avoids pulling in @types/sql.js
 // which has a transitive @types/emscripten dep that requires browser lib types.
@@ -22,16 +24,10 @@ const BLOBS_DIR = 'blobs'
 // log-sourced rows stale (new columns the incremental parser can't back-fill in place,
 // or a corrected accounting formula). On a bump, all data_source='log' rows are wiped so
 // the next scan re-ingests every local session file with the current semantics. OTEL rows
-// are left untouched (they can't be re-derived from logs — see reIngestLogRowsIfStale).
-//   v2 (TRDD-TKN5VALS): per-turn `turn` index + de-inflated input_tokens + sub-agent rollup.
-// v3: sub-agent child cards stored inputTokens as the RAW (cache-excluded) input, breaking the
-// parent/OTEL convention that inputTokens is total-incl-cache — so cost's `input - cacheRead -
-// cacheCreate` went hugely negative (negative sub-agent cost). Fixed in _buildSubAgentCards; bump
-// forces a re-ingest so historical log-sourced child rows are rewritten with the correct accounting.
-// v4: async/background Agent launches (toolUseResult status:"async_launched" — no usage in the
-// parent transcript) now synthesize linkage child cards (spawn_async=1, zero buckets). Bump so
-// historical async-heavy sessions gain their child cards on the next scan.
-const INGEST_VERSION = 4
+// can't be re-derived from logs, so they are normalized IN PLACE instead (v5) — see
+// reIngestLogRowsIfStale. The version history + the standalone sidecar gate share one
+// constant: LOG_INGEST_VERSION in src/collectorState.ts.
+const INGEST_VERSION = LOG_INGEST_VERSION
 
 /**
  * Opens (or creates) the AgentLens SQLite database at storagePath/agentlens.db
@@ -206,6 +202,27 @@ function reIngestLogRowsIfStale(db: SqlDatabase): void {
   const rows = db.exec('PRAGMA user_version')
   const current = (rows[0]?.values[0]?.[0] as number) ?? 0
   if (current >= INGEST_VERSION) return
+
+  // v5 — normalize persisted OTEL rows to the RAW disjoint-buckets convention IN PLACE (they
+  // cannot be re-derived: the span window is ephemeral). Every OTEL summarizer stored
+  // input_tokens INCLUDING the cache buckets until v5, which also double-billed cache tokens at
+  // the full input rate in the stored cost_usd. Subtract the caches (clamped at 0) and recompute
+  // the cost from the now-disjoint buckets. Log rows are simply wiped below and re-ingested.
+  if (current < 5) {
+    const otel = db.exec(
+      `SELECT session_id, input_tokens, cache_read_tokens, cache_create_tokens, output_tokens, model
+       FROM sessions WHERE data_source = 'otel'`,
+    )
+    for (const row of otel[0]?.values ?? []) {
+      const [sid, input, cr, cc, output, model] = row as [string, number, number, number, number, string]
+      const rawInput = Math.max(input - cr - cc, 0)
+      const cost = calcTokenCostUsd(rawInput, cr, cc, output, model)
+      db.run(
+        'UPDATE sessions SET input_tokens = ?, cost_usd = ? WHERE session_id = ?',
+        [rawInput, cost, sid],
+      )
+    }
+  }
 
   // Explicit child-first deletes: sql.js does not reliably honor ON DELETE CASCADE, so we
   // cannot rely on the FK to clean timeline_entries / edit_details for the wiped sessions.
