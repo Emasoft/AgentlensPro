@@ -238,4 +238,21 @@ suite('standalone server — hook/gate/burn endpoints (real boot)', () => {
     assert.strictEqual(r.status, 200)
     assert.ok(Array.isArray((r.json as { risks?: unknown }).risks), 'report must carry a risks array')
   })
+
+  test('/api/server-stats surfaces degradations: a swallowed OTLP ingest failure is counted (P6)', async () => {
+    // The OTLP ingest catch is fail-open by design (an exporter must never error-loop), so a
+    // garbage payload is ACKed 200 and dropped — the fallback counter is what makes that drop
+    // visible. Feed unparseable bytes to the OTLP port, then read the named counter.
+    const stats = await httpReq(uiPort, 'GET', '/api/server-stats')
+    const ports = (stats.json as { ports?: { otlp?: number } }).ports
+    assert.ok(ports?.otlp, 'server-stats must report the OTLP port')
+    const before = ((stats.json as { degradations?: Record<string, number> }).degradations ?? {})['standalone.otlpIngestError'] ?? 0
+    const bad = await httpReq(ports.otlp as number, 'POST', '/v1/logs')
+    // httpReq sends no body here — an empty body is unparseable JSON, exercising the swallow.
+    assert.strictEqual(bad.status, 200, 'ingest stays fail-open (200) even on garbage')
+    const after = await httpReq(uiPort, 'GET', '/api/server-stats')
+    const deg = (after.json as { degradations?: Record<string, number> }).degradations
+    assert.ok(deg, 'server-stats must carry the degradations object')
+    assert.strictEqual(deg['standalone.otlpIngestError'], before + 1, 'the swallowed ingest failure must be counted by name')
+  })
 })

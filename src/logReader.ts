@@ -34,6 +34,7 @@ import * as path from 'path'
 import * as os from 'os'
 import type { SessionSummaryCard, TimelineEntry } from './shared/summarizerTypes'
 import { disjointBuckets, contextTokens, type TokenBuckets } from './shared/tokenBuckets'
+import { countFallback } from './shared/fallbackCounters'
 import { callBodyRegistry } from './rawBodyContext'
 import { VSCODE_FAMILY_IDE_NAMES } from './vscodeFamilyIdes'
 import {
@@ -525,7 +526,12 @@ export class LogReader {
     let sessionDirs: string[]
     try {
       sessionDirs = fs.readdirSync(stateDir)
-    } catch { return results }
+    } catch {
+      // The state dir exists but can't be listed — every Copilot session silently vanishes
+      // from ingest; count it (P6 fallback counters), then continue exactly as before.
+      countFallback('logReader.copilotScanFailed')
+      return results
+    }
 
     for (const sessionDirName of sessionDirs) {
       const eventsFile = path.join(stateDir, sessionDirName, 'events.jsonl')
@@ -555,7 +561,8 @@ export class LogReader {
 
     for (const line of lines) {
       let event: Record<string, unknown>
-      try { event = JSON.parse(line) as Record<string, unknown> } catch { continue }
+      // Corrupt line → dropped and forgotten; counted (P6) so mass corruption is visible.
+      try { event = JSON.parse(line) as Record<string, unknown> } catch { countFallback('logReader.copilotLineUnparseable'); continue }
 
       const ts = event['timestamp'] as string | undefined
       if (ts) {
@@ -718,7 +725,8 @@ export class LogReader {
 
     for (const line of lines) {
       let entry: Record<string, unknown>
-      try { entry = JSON.parse(line) as Record<string, unknown> } catch { continue }
+      // Corrupt line → dropped and forgotten; counted (P6) so mass corruption is visible.
+      try { entry = JSON.parse(line) as Record<string, unknown> } catch { countFallback('logReader.copilotLineUnparseable'); continue }
 
       const kind = entry['kind'] as number | undefined
       const k = entry['k']
@@ -967,6 +975,9 @@ export class LogReader {
         try {
           results.push(...this._parseOpenCodeDb(dbPath))
         } catch (err) {
+          // Logged AND counted (P6): the JSON fallback targets an older on-disk format, so a
+          // recurring DB error usually means OpenCode sessions are quietly not ingested at all.
+          countFallback('logReader.opencodeDbFallback')
           this.log(`[LogReader] OpenCode DB error ${dbPath}: ${err}`)
           results.push(...this._parseOpenCodeJsonFallback(dataDir))
         }
@@ -1250,7 +1261,8 @@ export class LogReader {
 
     for (const name of names) {
       let msg: Record<string, unknown>
-      try { msg = JSON.parse(fs.readFileSync(path.join(msgDir, name), 'utf-8')) as Record<string, unknown> } catch { continue }
+      // Unreadable/corrupt message file → the turn silently vanishes; counted (P6).
+      try { msg = JSON.parse(fs.readFileSync(path.join(msgDir, name), 'utf-8')) as Record<string, unknown> } catch { countFallback('logReader.opencodeMsgUnparseable'); continue }
       if (msg['role'] !== 'assistant') continue
       const sessionId = String(msg['session_id'] ?? '')
       if (!sessionId) continue
@@ -1389,7 +1401,8 @@ export class LogReader {
    */
   private _readNewLines(filePath: string): string[] | null {
     let stat: fs.Stats
-    try { stat = fs.statSync(filePath) } catch (err) { this.log(`[LogReader] read error ${filePath}: ${err}`); return null }
+    // Read failures are logged but swallowed (the session just goes stale) — counted (P6).
+    try { stat = fs.statSync(filePath) } catch (err) { countFallback('logReader.fileReadError'); this.log(`[LogReader] read error ${filePath}: ${err}`); return null }
     const prev = this.fileState.get(filePath)
     if (prev && stat.mtimeMs === prev.mtimeMs && stat.size === prev.bytesRead) return null
     if (stat.size > LogReader.MAX_ARRAY_READ_BYTES) {
@@ -1401,7 +1414,7 @@ export class LogReader {
     const lines: string[] = []
     try {
       this._streamLinesFrom(filePath, 0, line => { if (line.trim()) lines.push(line) })
-    } catch (err) { this.log(`[LogReader] read error ${filePath}: ${err}`); return null }
+    } catch (err) { countFallback('logReader.fileReadError'); this.log(`[LogReader] read error ${filePath}: ${err}`); return null }
     this.fileState.set(filePath, { bytesRead: stat.size, mtimeMs: stat.mtimeMs, ino: stat.ino, size: stat.size })
     return lines
   }
@@ -1445,7 +1458,8 @@ export class LogReader {
     onEntry: (accum: T, entry: Record<string, unknown>) => void,
   ): T | null {
     let stat: fs.Stats
-    try { stat = fs.statSync(filePath) } catch (err) { this.log(`[LogReader] read error ${filePath}: ${err}`); return null }
+    // Read failures are logged but swallowed (the session just goes stale) — counted (P6).
+    try { stat = fs.statSync(filePath) } catch (err) { countFallback('logReader.fileReadError'); this.log(`[LogReader] read error ${filePath}: ${err}`); return null }
     const prev = this.fileState.get(filePath)
     if (prev && stat.mtimeMs === prev.mtimeMs && stat.size === prev.bytesRead) return null
 
@@ -1463,10 +1477,12 @@ export class LogReader {
       newOffset = this._streamLinesFrom(filePath, canResume ? prevOffset : 0, line => {
         if (!line.trim()) return
         let entry: Record<string, unknown>
-        try { entry = JSON.parse(line) as Record<string, unknown> } catch { return }
+        // The Claude/Codex JSONL hot path: a corrupt line silently drops one transcript event —
+        // counted (P6) so a mass-corruption pattern (truncated writes, encoding bugs) is visible.
+        try { entry = JSON.parse(line) as Record<string, unknown> } catch { countFallback('logReader.jsonlLineUnparseable'); return }
         onEntry(accum, entry)
       })
-    } catch (err) { this.log(`[LogReader] read error ${filePath}: ${err}`); return null }
+    } catch (err) { countFallback('logReader.fileReadError'); this.log(`[LogReader] read error ${filePath}: ${err}`); return null }
 
     this.fileState.set(filePath, { bytesRead: newOffset, mtimeMs: stat.mtimeMs, ino: stat.ino, size: stat.size })
     this._lruPut(filePath, accum)

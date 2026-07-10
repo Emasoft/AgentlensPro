@@ -14,7 +14,14 @@
 // All writes go through atomicWriteFileSync so a crash mid-write can never corrupt these files.
 import * as fs from 'fs'
 import { atomicWriteFileSync } from './serverRuntime'
+import { countFallback } from './shared/fallbackCounters'
 import type { CollectorGap, SessionSummaryCard } from './shared/summarizerTypes'
+
+/** True for a read failure that is a real degradation — a MISSING sidecar (ENOENT) is the normal
+ *  first boot, not a silent failure, so counting it would bury the signal in expected noise. */
+function isDegradedRead(e: unknown): boolean {
+  return (e as NodeJS.ErrnoException)?.code !== 'ENOENT'
+}
 
 // ── Ingest-semantics version (single source — SQLite db.ts imports this) ─────
 // Bump when log-ingest semantics change in a way that makes previously-persisted cards stale.
@@ -51,9 +58,10 @@ export interface PersistedFileState {
  *  legacy unversioned file (plain map) is treated as version-stale for the same reason. */
 export function loadLogOffsets(file: string): Record<string, PersistedFileState> | null {
   let raw: string
-  try { raw = fs.readFileSync(file, 'utf8') } catch { return null }
+  // P6 fallback counters: each swallow here silently costs a full cold rescan — count it.
+  try { raw = fs.readFileSync(file, 'utf8') } catch (e) { if (isDegradedRead(e)) countFallback('collectorState.offsetsUnreadable'); return null }
   let parsed: unknown
-  try { parsed = JSON.parse(raw) } catch { return null }
+  try { parsed = JSON.parse(raw) } catch { countFallback('collectorState.offsetsCorrupt'); return null }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
   const wrapper = parsed as { v?: unknown; offsets?: unknown }
   if (wrapper.v !== LOG_INGEST_VERSION || !wrapper.offsets || typeof wrapper.offsets !== 'object') return null
@@ -94,9 +102,10 @@ export function saveLogOffsets(file: string, offsets: Record<string, PersistedFi
  *  unversioned file (bare array) is version-stale by definition. */
 export function loadPersistedCards(file: string): SessionSummaryCard[] | null {
   let raw: string
-  try { raw = fs.readFileSync(file, 'utf8') } catch { return null }
+  // P6 fallback counters: a swallowed cards-sidecar failure means every card rebuilds cold.
+  try { raw = fs.readFileSync(file, 'utf8') } catch (e) { if (isDegradedRead(e)) countFallback('collectorState.cardsUnreadable'); return null }
   let parsed: unknown
-  try { parsed = JSON.parse(raw) } catch { return null }
+  try { parsed = JSON.parse(raw) } catch { countFallback('collectorState.cardsCorrupt'); return null }
   const wrapper = parsed as { v?: unknown; cards?: unknown }
   if (!wrapper || typeof wrapper !== 'object' || wrapper.v !== LOG_INGEST_VERSION || !Array.isArray(wrapper.cards)) return null
   return wrapper.cards.filter((c): c is SessionSummaryCard =>
@@ -130,7 +139,11 @@ function loadLifecycle(file: string): LifecycleStore {
     if (parsed && typeof parsed === 'object' && Array.isArray((parsed as LifecycleStore).runs)) {
       return { runs: (parsed as LifecycleStore).runs.filter(r => r && typeof r.startedAt === 'string') }
     }
-  } catch { /* missing/corrupt — start fresh */ }
+  } catch (e) {
+    // Missing = first boot (normal); anything else quietly erases the downtime-gap history —
+    // count it (P6 fallback counters) but still start fresh, exactly as before.
+    if (isDegradedRead(e)) countFallback('collectorState.lifecycleCorrupt')
+  }
   return { runs: [] }
 }
 

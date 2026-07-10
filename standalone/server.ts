@@ -16,6 +16,7 @@ import { summarizeSpans } from '../src/spanSummarizer'
 import { mergeOtelAndLogSessions } from '../src/feedMergePolicy'
 import { calcTokenCostUsd } from '../src/shared/pricing'
 import { contextTokens } from '../src/shared/tokenBuckets'
+import { countFallback, fallbackTotals } from '../src/shared/fallbackCounters'
 import { autoConfigureCodex, autoConfigureCopilotStandalone } from '../src/autoConfigNode'
 import { ensureTelemetryConfig, ensureAgentLensStopHook } from '../src/telemetryConfig'
 import { classifyOtlpPayload } from '../src/otlpParser'
@@ -2031,6 +2032,9 @@ const uiServer = http.createServer((req, res) => {
       // Log-event names rejected at the ingest gate since boot — a silent-drop bug (rich events
       // discarded for weeks) is exactly what this exists to make visible.
       otlpDroppedLogEvents: Object.fromEntries(droppedLogEvents),
+      // P6 fallback counters: every silent catch-fallback in the ingest paths, named + counted
+      // (src/shared/fallbackCounters.ts). Counters that never fired are absent, not zero.
+      degradations: fallbackTotals(),
     }))
     return
   }
@@ -2701,6 +2705,10 @@ const otlpServer = http.createServer((req, res) => {
       // Persistence is handled by the interval append-flush — no per-request save. A per-request
       // full-store rewrite here is what destroyed 420GB of SSD in 4 hours; never reintroduce it.
     } catch (e) {
+      // Fail-open by design (an exporter must never error-loop on us), but counted (P6):
+      // every payload swallowed here — protobuf, truncation, an ingest bug — is telemetry
+      // that silently never reached processTraces/processLogs.
+      countFallback('standalone.otlpIngestError')
       console.error('[AgentLens] Parse error:', e)
     }
     res.writeHead(200); res.end()
