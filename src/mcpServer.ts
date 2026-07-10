@@ -683,7 +683,10 @@ const TOOLS = [
       'first. Pass an accountId to get just that account; omit for every account (heaviest first, the ' +
       'unattributed bucket last) plus the machine-wide pooled total. When a COST capacity is configured, a ' +
       'cost-based % is returned too (the truthful fill metric when the plan bills by cost — cache-read at ' +
-      '0.1× barely counts there even though it dominates the raw token count).',
+      '0.1× barely counts there even though it dominates the raw token count). With no manual capacity, ' +
+      'AgentlensPro AUTO-CALIBRATES per account from real rate-limit hits (a premature 5h window end IS a ' +
+      'capacity measurement): capacitySource "observed" + capacityObservedAt carry the calibration date, ' +
+      'and the figure is a proven lower bound that only ever ratchets up.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -2093,6 +2096,10 @@ export function handleGetAccountStatus(account: AccountInfo | null, burn: BurnSt
           consumedTokens5h: win.budget.fiveHour.consumedTokens,
           consumedCostUsd5h: win.budget.fiveHour.consumedCostUsd,
           capacityConfigured: win.budget.capacityConfigured,
+          // P5 — where the capacity came from: env/config (manual) or observed (auto-calibrated
+          // from a real rate-limit hit, dated by capacityObservedAt).
+          capacitySource: win.budget.capacitySource,
+          capacityObservedAt: win.budget.capacityObservedAt,
         }
       : null,
     note: uuid == null
@@ -2100,7 +2107,7 @@ export function handleGetAccountStatus(account: AccountInfo | null, burn: BurnSt
       : win == null
         ? 'No consumption recorded yet for the current account in the rolling windows.'
         : (win.budget.capacityConfigured ? undefined
-          : 'Window % is null until a capacity is configured (AGENTLENS_WINDOW_5H_TOKENS / _COST_USD or ~/.agentlens/burn-config.json).'),
+          : 'Window % is null until a capacity is configured (AGENTLENS_WINDOW_5H_TOKENS / _COST_USD or ~/.agentlens/burn-config.json) — or until AgentlensPro auto-calibrates one from the next rate-limit hit (P5).'),
   }
 }
 
@@ -2113,6 +2120,8 @@ export function handleGetWindowBudget(burn: BurnStatus | null, account: AccountI
     accounts,
     machineWide: burn.window,          // all accounts pooled — the pre-per-account view, kept for reference
     capacitySource: burn.window.capacitySource,
+    // P5 — the calibration date when the capacity is an auto-observed lower bound (null otherwise).
+    capacityObservedAt: burn.window.capacityObservedAt,
     ...(args.accountId && accounts.length === 0
       ? { message: `No consumption recorded for account ${args.accountId} in the rolling windows.` }
       : {}),

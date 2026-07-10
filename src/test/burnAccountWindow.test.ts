@@ -28,7 +28,7 @@ function statusline(over: Partial<StatuslineBillingEvent> = {}): StatuslineBilli
   return { ts: NOW, sessionId: 'sess-1', workspace: '/ws/proj', deltaCostUsd: 0.4, deltaTokens: 106200, ...over }
 }
 function baseConfig(over: Partial<BurnConfig> = {}): BurnConfig {
-  return { window5hTokens: null, window7dTokens: null, window5hCostUsd: null, window7dCostUsd: null, capacitySource: 'none', notify: false, thresholds: { ...DEFAULT_THRESHOLDS }, ...over }
+  return { window5hTokens: null, window7dTokens: null, window5hCostUsd: null, window7dCostUsd: null, capacitySource: 'none', observed: {}, notify: false, thresholds: { ...DEFAULT_THRESHOLDS }, ...over }
 }
 
 suite('burnMonitor — statusline burn-rate cost fix (TRDD-BURNWDGT)', () => {

@@ -13,7 +13,7 @@ import type { AccountInfo } from '../accountInfo'
 
 const NOW = 1_700_000_000_000
 function cfg(over: Partial<BurnConfig> = {}): BurnConfig {
-  return { window5hTokens: null, window7dTokens: null, window5hCostUsd: null, window7dCostUsd: null, capacitySource: 'none', notify: false, thresholds: { ...DEFAULT_THRESHOLDS }, ...over }
+  return { window5hTokens: null, window7dTokens: null, window5hCostUsd: null, window7dCostUsd: null, capacitySource: 'none', observed: {}, notify: false, thresholds: { ...DEFAULT_THRESHOLDS }, ...over }
 }
 function account(over: Partial<AccountInfo> = {}): AccountInfo {
   return {

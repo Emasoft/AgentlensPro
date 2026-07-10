@@ -81,6 +81,20 @@ export interface BurnThresholds {
   cacheCreateSingleCall: number // a single api_request cache-creation ≥ N (one call re-wrote a huge prefix)
 }
 
+/** One account's AUTO-CALIBRATED capacity, measured at a premature rate-limit window end (P5).
+ *  Every figure is a proven LOWER BOUND — the account consumed that much before Anthropic limited it —
+ *  never an invented plan cap. Later, larger observations RAISE these values; they are never lowered
+ *  automatically (a smaller later window proves nothing about the cap). */
+export interface ObservedAccountCapacity {
+  window5hTokens: number | null
+  window7dTokens: number | null
+  window5hCostUsd: number | null
+  window7dCostUsd: number | null
+  /** ISO timestamp of the observation that last RAISED a figure — the calibration date reported
+   *  alongside `capacitySource: 'observed'`. */
+  observedAt: string | null
+}
+
 /** Rate-limit-window capacities are USER-CONFIGURABLE (plans differ) — NEVER invented. When unset,
  *  consumption + rate are still reported but capacity/pct/projection are null (clearly labeled). */
 export interface BurnConfig {
@@ -91,7 +105,11 @@ export interface BurnConfig {
   // cost, because cache-read (0.1×) barely counts there even though it dominates the raw token count.
   window5hCostUsd: number | null
   window7dCostUsd: number | null
-  capacitySource: 'env' | 'config' | 'none'
+  capacitySource: 'env' | 'config' | 'observed' | 'none'
+  // P5 auto-calibration — per-account OBSERVED capacities (keyed by accountUuid), written by
+  // capacityCalibration.ts when a rate-limit StopFailure ends a window prematurely. Consumed by
+  // computeWindowBudget ONLY when no manual (env/file) cap is set — user config always wins.
+  observed: Record<string, ObservedAccountCapacity>
   notify: boolean               // opt-in macOS notification (AGENTLENS_NOTIFY=1)
   thresholds: BurnThresholds
 }
@@ -109,17 +127,48 @@ function numEnv(v: string | undefined): number | null {
   return Number.isFinite(n) && n > 0 ? n : null
 }
 
+/** The one place the burn-config file path is resolved — loadBurnConfig (read) and
+ *  capacityCalibration (write) must never disagree on where the config lives. */
+export function burnConfigPath(env: NodeJS.ProcessEnv, homeDir: string): string {
+  return env['AGENTLENS_BURN_CONFIG'] || path.join(homeDir, '.agentlens', 'burn-config.json')
+}
+
+/** Parse the `observed` per-account map from the raw config file, keeping only entries with at least
+ *  one positive figure (a junk entry must never flip capacitySource to 'observed'). */
+function parseObservedCapacities(raw: unknown): Record<string, ObservedAccountCapacity> {
+  const out: Record<string, ObservedAccountCapacity> = {}
+  if (!raw || typeof raw !== 'object') return out
+  const pos = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null)
+  for (const [uuid, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (!uuid || !v || typeof v !== 'object') continue
+    const o = v as Record<string, unknown>
+    const entry: ObservedAccountCapacity = {
+      window5hTokens: pos(o.window5hTokens),
+      window7dTokens: pos(o.window7dTokens),
+      window5hCostUsd: pos(o.window5hCostUsd),
+      window7dCostUsd: pos(o.window7dCostUsd),
+      observedAt: typeof o.observedAt === 'string' ? o.observedAt : null,
+    }
+    if ((entry.window5hTokens ?? entry.window7dTokens ?? entry.window5hCostUsd ?? entry.window7dCostUsd) !== null) {
+      out[uuid] = entry
+    }
+  }
+  return out
+}
+
 /**
  * Loads the burn config from (in precedence order) env vars, then ~/.agentlens/burn-config.json, then
  * defaults. Capacity is null unless the user set it (env OR file) — we never fabricate a plan cap.
+ * The one exception is the `observed` section: per-account capacities AUTO-CALIBRATED from real
+ * rate-limit hits (P5) — measured lower bounds, not invented caps, and outranked by any manual cap.
  * env: AGENTLENS_WINDOW_5H_TOKENS, AGENTLENS_WINDOW_7D_TOKENS, AGENTLENS_NOTIFY,
  *      AGENTLENS_BURN_TOKENS_PER_MIN, AGENTLENS_BURN_COST_PER_HOUR, AGENTLENS_BURN_WINDOW_PCT,
  *      AGENTLENS_BURN_CACHE_CREATE.
  */
 export function loadBurnConfig(env: NodeJS.ProcessEnv, homeDir: string): BurnConfig {
-  let file: Partial<{ window5hTokens: number; window7dTokens: number; window5hCostUsd: number; window7dCostUsd: number; notify: boolean; thresholds: Partial<BurnThresholds> }> = {}
+  let file: Partial<{ window5hTokens: number; window7dTokens: number; window5hCostUsd: number; window7dCostUsd: number; notify: boolean; thresholds: Partial<BurnThresholds>; observed: unknown }> = {}
   try {
-    const p = env['AGENTLENS_BURN_CONFIG'] || path.join(homeDir, '.agentlens', 'burn-config.json')
+    const p = burnConfigPath(env, homeDir)
     if (fs.existsSync(p)) file = JSON.parse(fs.readFileSync(p, 'utf8'))
   } catch { /* malformed config must never crash the monitor — fall back to env + defaults */ }
 
@@ -137,9 +186,14 @@ export function loadBurnConfig(env: NodeJS.ProcessEnv, homeDir: string): BurnCon
   const window5hCostUsd = env5hCost ?? file5hCost
   const window7dCostUsd = env7dCost ?? file7dCost
 
+  const observed = parseObservedCapacities(file.observed)
+
   const anyEnv = (env5h ?? env7d ?? env5hCost ?? env7dCost) !== null
   const anyFile = (file5h ?? file7d ?? file5hCost ?? file7dCost) !== null
-  const capacitySource: BurnConfig['capacitySource'] = anyEnv ? 'env' : anyFile ? 'config' : 'none'
+  // Manual sources rank above observed: 'observed' is reported only when the SOLE capacity knowledge
+  // on this machine is auto-calibrated (so a user cap always shows as env/config, never masked).
+  const capacitySource: BurnConfig['capacitySource'] =
+    anyEnv ? 'env' : anyFile ? 'config' : Object.keys(observed).length > 0 ? 'observed' : 'none'
 
   const ft = file.thresholds ?? {}
   const thresholds: BurnThresholds = {
@@ -150,7 +204,7 @@ export function loadBurnConfig(env: NodeJS.ProcessEnv, homeDir: string): BurnCon
   }
 
   return {
-    window5hTokens, window7dTokens, window5hCostUsd, window7dCostUsd, capacitySource,
+    window5hTokens, window7dTokens, window5hCostUsd, window7dCostUsd, capacitySource, observed,
     notify: env['AGENTLENS_NOTIFY'] === '1' || file.notify === true,
     thresholds,
   }
@@ -413,6 +467,9 @@ export interface WindowBudget {
   sevenDay: WindowConsumption
   capacitySource: BurnConfig['capacitySource']
   capacityConfigured: boolean
+  /** ISO date of the rate-limit observation the capacity was auto-calibrated from (P5);
+   *  null unless capacitySource === 'observed'. */
+  capacityObservedAt: string | null
   note?: string
 }
 
@@ -439,20 +496,52 @@ function windowConsumption(
   }
 }
 
+/** The observed capacity applicable to a budget, or null. Manual (env/file) caps DISABLE observed
+ *  entirely — an auto-calibrated lower bound must never shadow a user-configured cap. For the
+ *  machine-wide pooled budget (accountUuid === undefined) observed applies only when exactly ONE
+ *  account has been calibrated: pooled consumption on a multi-account machine has no single cap
+ *  (rate limits are per account), so guessing there would over-promise headroom. */
+function observedCapacityFor(config: BurnConfig, accountUuid: string | null | undefined): ObservedAccountCapacity | null {
+  const manual = config.window5hTokens !== null || config.window7dTokens !== null ||
+    config.window5hCostUsd !== null || config.window7dCostUsd !== null
+  if (manual) return null
+  if (accountUuid === undefined) {
+    const keys = Object.keys(config.observed)
+    return keys.length === 1 ? config.observed[keys[0]] : null
+  }
+  return accountUuid !== null ? config.observed[accountUuid] ?? null : null
+}
+
 /** Rolling 5h + 7d consumption across ALL sessions. `projectionTokensPerMin` is the current burn rate
- *  the time-to-exhaustion projects at (pass the global rolling-5-min tokens/min). */
+ *  the time-to-exhaustion projects at (pass the global rolling-5-min tokens/min). `accountUuid` scopes
+ *  the OBSERVED-capacity lookup (P5): pass the account the events belong to so its auto-calibrated
+ *  caps apply; omit for the machine-wide pooled budget (observed then applies only on a
+ *  single-calibrated-account machine — see observedCapacityFor). */
 export function computeWindowBudget(
   events: ConsumptionEvent[], config: BurnConfig, projectionTokensPerMin: number, now: number,
+  accountUuid?: string | null,
 ): WindowBudget {
-  const configured = config.window5hTokens !== null || config.window7dTokens !== null ||
-    config.window5hCostUsd !== null || config.window7dCostUsd !== null
+  const obs = observedCapacityFor(config, accountUuid)
+  const cap5h = config.window5hTokens ?? obs?.window5hTokens ?? null
+  const cap7d = config.window7dTokens ?? obs?.window7dTokens ?? null
+  const cap5hCost = config.window5hCostUsd ?? obs?.window5hCostUsd ?? null
+  const cap7dCost = config.window7dCostUsd ?? obs?.window7dCostUsd ?? null
+  const configured = cap5h !== null || cap7d !== null || cap5hCost !== null || cap7dCost !== null
+  // Per-BUDGET source, not the config's global one: on a multi-account machine only the calibrated
+  // account's budget may claim 'observed' — the others are honestly 'none'.
+  const manual = config.capacitySource === 'env' || config.capacitySource === 'config'
+  const source: BurnConfig['capacitySource'] = manual ? config.capacitySource : obs !== null ? 'observed' : 'none'
   return {
-    fiveHour: windowConsumption(events, now, FIVE_HOURS_MS, '5h', config.window5hTokens, projectionTokensPerMin, config.window5hCostUsd),
-    sevenDay: windowConsumption(events, now, SEVEN_DAYS_MS, '7d', config.window7dTokens, projectionTokensPerMin, config.window7dCostUsd),
-    capacitySource: config.capacitySource,
+    fiveHour: windowConsumption(events, now, FIVE_HOURS_MS, '5h', cap5h, projectionTokensPerMin, cap5hCost),
+    sevenDay: windowConsumption(events, now, SEVEN_DAYS_MS, '7d', cap7d, projectionTokensPerMin, cap7dCost),
+    capacitySource: source,
     capacityConfigured: configured,
-    note: configured ? undefined
-      : 'Window capacity not configured — set AGENTLENS_WINDOW_5H_TOKENS / AGENTLENS_WINDOW_7D_TOKENS (raw-token caps) or AGENTLENS_WINDOW_5H_COST_USD / AGENTLENS_WINDOW_7D_COST_USD (cost caps), or ~/.agentlens/burn-config.json, so % consumed and time-to-exhaustion can be computed.',
+    capacityObservedAt: source === 'observed' ? obs?.observedAt ?? null : null,
+    note: configured
+      ? (source === 'observed'
+        ? `Capacity auto-calibrated from a rate-limit hit observed ${obs?.observedAt ?? 'at an unknown time'} — a PROVEN LOWER BOUND (the real cap may be higher; a later larger observation raises it, never lowers). Set AGENTLENS_WINDOW_5H_TOKENS / _7D_TOKENS (or burn-config.json) to override with the exact plan cap.`
+        : undefined)
+      : 'Window capacity not configured — set AGENTLENS_WINDOW_5H_TOKENS / AGENTLENS_WINDOW_7D_TOKENS (raw-token caps) or AGENTLENS_WINDOW_5H_COST_USD / AGENTLENS_WINDOW_7D_COST_USD (cost caps), or ~/.agentlens/burn-config.json, so % consumed and time-to-exhaustion can be computed. AgentlensPro also auto-calibrates an observed capacity the next time a rate limit ends a window prematurely (P5).',
   }
 }
 
@@ -487,7 +576,9 @@ export function computeAccountWindowBudgets(
     const fiveMin = rateWindow(evs, now, FIVE_MIN_MS).tokensPerMin
     out.push({
       accountUuid,
-      budget: computeWindowBudget(evs, config, fiveMin, now),
+      // Pass the account key so THIS account's auto-calibrated (observed) capacity applies (P5) —
+      // the null bucket and uncalibrated accounts keep capacitySource 'none'.
+      budget: computeWindowBudget(evs, config, fiveMin, now, accountUuid),
       fiveMinTokensPerMin: fiveMin,
       events: windowSum(evs, now, SEVEN_DAYS_MS).count,
     })
