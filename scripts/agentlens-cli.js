@@ -37,7 +37,7 @@ const http = require('http')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
-const { spawn } = require('child_process')
+const { spawn, execFileSync } = require('child_process')
 
 const ENDPOINT = process.env.AGENTLENS_MCP_URL || 'http://localhost:4316/mcp'
 const DASHBOARD_URL = process.env.AGENTLENS_DASHBOARD_URL || 'http://localhost:3000'
@@ -365,7 +365,10 @@ function runSafeConfigEdit(ops, createIfMissing) {
   const args = [script, '--file', CLAUDE_SETTINGS, '--format', 'json']
   if (createIfMissing) args.push('--create-if-missing')
   return new Promise((resolve, reject) => {
-    const child = spawn('python3', args, { stdio: ['pipe', 'pipe', 'pipe'] })
+    // Windows-safe: most Windows Pythons expose `python`/`py`, not `python3` (audit blocker #1).
+    const pyCandidates = process.platform === 'win32' ? ['python', 'py', 'python3'] : ['python3', 'python']
+    const py = pyCandidates.find(b => { try { execFileSync(b, ['--version'], { stdio: 'ignore', timeout: 5000 }); return true } catch { return false } }) || pyCandidates[0]
+    const child = spawn(py, args, { stdio: ['pipe', 'pipe', 'pipe'] })
     let out = '', err = ''
     child.stdout.on('data', c => { out += c })
     child.stderr.on('data', c => { err += c })

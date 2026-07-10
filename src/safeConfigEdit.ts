@@ -1,4 +1,4 @@
-import { execFile } from 'child_process'
+import { execFile, execFileSync } from 'child_process'
 import * as path from 'path'
 
 /**
@@ -36,6 +36,27 @@ export class SafeEditError extends Error {
   }
 }
 
+// Windows-safe interpreter resolution (cross-platform audit blocker #1): most Windows
+// Python installs expose `python`/`py`, not `python3`. Resolved ONCE per process — the
+// first name that answers `--version` wins; POSIX keeps hitting `python3` first, so
+// behavior there is unchanged. Cached because this runs per config transaction.
+let cachedPythonBin: string | null = null
+function pythonBin(): string {
+  if (cachedPythonBin) return cachedPythonBin
+  const candidates = process.platform === 'win32' ? ['python', 'py', 'python3'] : ['python3', 'python']
+  for (const bin of candidates) {
+    try {
+      execFileSync(bin, ['--version'], { timeout: 5_000, stdio: 'ignore' })
+      cachedPythonBin = bin
+      return bin
+    } catch { /* not on PATH — try the next */ }
+  }
+  // Nothing resolved: return the platform default and let the caller's ENOENT path
+  // produce its precise "config management unavailable" failure story.
+  cachedPythonBin = candidates[0]
+  return cachedPythonBin
+}
+
 // Resolved relative to the bundled output (dist/ or standalone/) — esbuild
 // keeps __dirname pointing at the bundle dir, and scripts/ sits beside it in
 // both the repo layout and the published package (scripts/ is in "files").
@@ -69,7 +90,7 @@ export async function safeConfigEdit(
   if (opts.createIfMissing) args.push('--create-if-missing')
 
   return new Promise<SafeEditResult>((resolve, reject) => {
-    const child = execFile('python3', args, { timeout: 60_000 }, (err, stdout, stderr) => {
+    const child = execFile(pythonBin(), args, { timeout: 60_000 }, (err, stdout, stderr) => {
       if (err) {
         // FAIL-FAST, but with a precise story: the editor prints a JSON error
         // line on stderr with the refusal/verify reason. python3 missing
