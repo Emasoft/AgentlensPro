@@ -55,6 +55,7 @@ agentlens-cli batch '<json-array>'           # N tools in ONE invocation: [{"too
 | `--purge-db` | clear the span store + session cards; the server re-ingests from the agent logs |
 | `--export-bodies DIR` | re-inflate archived OTEL bodies into DIR as plain files; `--since <hours\|ISO>` / `--until <ISO>` filter by time |
 | `--purge-bodies` | delete ALL archived body volumes (the live 72h window is untouched) |
+| `--risk` | one-shot realtime culprit check (~40ms REST fast path): prints only the ACTIVE burn risks, each naming the culprit session/workspace/model + magnitude |
 | `--install-skill` | (re)install THIS skill into `~/.claude/skills/` — idempotent, reports installed/updated/current |
 | `--install-hooks` | register `spy-agentlens.sh` on the 10 LIFECYCLE hook events (SessionStart/End, Stop, StopFailure, Pre/PostCompact, Permission, Notification, SubagentStart/Stop) AND the burn-gate (`spy-agentlens-gate.sh` on PreToolUse/PostToolUse matched to `^(Task\|Agent\|Workflow)$` only — see "The burn-gate" below) via the same verified transaction; also removes dead claude-spyglass entries. Never touches other tools' hooks. Idempotent; needs a session restart |
 | `--uninstall-hooks` | remove exactly those spy-agentlens hook entries (nothing else) |
@@ -108,9 +109,16 @@ lifecycle hook events — SubagentStart/StopFailure/PreCompact — arrive within
 `--install-hooks` is active). `check_burn_risk` fuses them into 5 flags; `--guard` watches:
 
 ```bash
-agentlens-cli check_burn_risk          # one cheap poll: 5 risk flags + advice
+agentlens-cli --risk                   # FASTEST culprit check (~40ms, REST): only the ACTIVE
+                                       # risks, each naming WHO (session/workspace/model) + size
 agentlens-cli --guard 15               # watch loop: one [burn-guard] line per risk TRANSITION
+agentlens-cli check_burn_risk          # same report via MCP (full flags incl. inactive ones)
 ```
+
+Every risk detail NAMES THE CULPRIT: launch/stall attribution is exact (SubagentStart /
+StopFailure hook payloads carry session, workspace, agent types); thrash/fat-request
+attribution reads each fat request's sender in a bounded 6KB scan and is labeled "likely" —
+when nothing was attributable the message says so and points at `investigate_burn`.
 
 **Arm the guard in a background monitor BEFORE spawning agent fan-outs, workflows, or long
 batches** — each stdout line then interrupts you the moment a risk fires:

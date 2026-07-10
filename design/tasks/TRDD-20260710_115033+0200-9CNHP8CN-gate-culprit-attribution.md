@@ -1,9 +1,12 @@
 ---
 trdd-id: 9CNHP8CN
 title: Gate warnings name the culprit — attribution in every message + REST fast path
-column: dev
+column: complete
 created: 2026-07-10T11:50:33+0200
-updated: 2026-07-10T11:50:33+0200
+updated: 2026-07-10T12:08:00+0200
+last-test-result: pass
+last-test-at: 2026-07-10T12:05:00+0200
+implementation-commits: [c92e11a, 1b0eb2b, 211aa41]
 current-owner: agentlens-session
 task-type: feature
 release-via: none
@@ -18,9 +21,12 @@ test-requirements: [unit, typecheck, lint]
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-07-10
 
-**IN DEV.** User directive: "don't just say THRASH IS HAPPENING — explain what is causing it,
-the entity of it, the agents affected. Concise but essential. And the CLI must diagnose the
-culprits in realtime, as fast as possible."
+**COMPLETE — shipped + live-verified 2026-07-10.** All 4 phases done; suite 565 passing.
+Live proof: the first real `--risk` call named THIS session as the huge-request sender
+("Senders: session 777b8f52… (claude-fable-5, 7 fat requests ~8.2MB)") — attribution worked
+on real traffic first try. User directive was: "don't just say THRASH IS HAPPENING — explain
+what is causing it, the entity of it, the agents affected. Concise but essential. And the CLI
+must diagnose the culprits in realtime, as fast as possible."
 
 Phases:
 A. `src/bodiesActivity.ts`: bounded 6KB attribution read on fat requests (head 2KB → model;
@@ -48,8 +54,18 @@ NEXT ACTION: phase A.
   "likely source", and when no fat request was attributable the message says so and points at
   investigate_burn instead of guessing.
 
-## Measured results (phase C)
+## Measured results (2026-07-10, live, canonical server)
 
-- (pending)
+- `agentlens-cli --risk` end-to-end: **41ms** steady-state (was ~700ms via the MCP handshake;
+  308ms after the first fast-path draft). `GET /api/burn-risk` p50 **2.1ms**.
+- The two request-path costs removed: gatherBurn recompute per request (~270ms — now reuses
+  the 4s tick's cached status, ≤4s stale vs a 5-min window) and inline tracker polls (100-400ms
+  of JSON.parse when new multi-MB responses land — now a 5s background timer; requests only
+  read the rings, ≤5s staleness vs 90s/5min windows).
+- Known tail: gate/risk worst-case ~0.7s when a request lands while the server's own periodic
+  aggregation (tickBurn ~270ms every 4s) blocks the event loop — inherent single-thread
+  contention, ≪ the hook's 2s curl cap, fail-open beyond it. Follow-up if it ever matters:
+  move tickBurn to a worker thread.
+- Attribution cost: 6KB bounded read per fat (≥400KB) request only.
 
 ## Notes and lessons learned
