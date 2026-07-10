@@ -414,6 +414,30 @@ export function getDataSourceBadgeHtml(dataSource: 'otel' | 'log' | undefined): 
   return `<span style="font-size:9px;font-weight:600;padding:1px 4px;border-radius:2px;border:1px solid ${color};color:${color};letter-spacing:0.03em;vertical-align:middle;cursor:default" title="${tooltip}">${label}</span>`
 }
 
+// ── Token-provenance chip (P7) ────────────────────────────────────────────────
+// Which feed backs the card's SERVED token numbers (tokensSource, stamped at the feedMergePolicy
+// decision point). undefined = the card predates the field → "unknown", NEVER guessed from
+// dataSource here — honest absence is the contract.
+
+const TOKENS_SOURCE_META = {
+  log:    { label: 'tokens: log',     color: '#4fc3f7', tip: 'Token totals come from the log transcript (call-complete for the conversation).' },
+  otel:   { label: 'tokens: otel',    color: '#b392f0', tip: 'Token totals come from the OTEL span feed.' },
+  merged: { label: 'tokens: merged',  color: '#e2a03f', tip: 'Served figures are identity-merged across the log and OTEL feeds.' },
+} as const
+
+export function getTokensSourceChipHtml(tokensSource: SessionSummaryCard['tokensSource'], coverageNote?: string): string {
+  const meta = tokensSource ? TOKENS_SOURCE_META[tokensSource] : undefined
+  const label = meta?.label ?? 'tokens: unknown'
+  const color = meta?.color ?? '#90a4ae'
+  const tip = meta
+    ? meta.tip + (coverageNote ? ' ' + coverageNote : '')
+    : 'Recorded before token-source provenance existed — the backing feed is unknown (never guessed).'
+  // esc() covers & < >; the extra replace covers a double quote INSIDE the title="…" attribute
+  // (a coverageNote is free text — one stray quote must not truncate the tooltip or leak markup).
+  const tipAttr = esc(tip).replace(/"/g, '&quot;')
+  return `<span style="font-size:9px;font-weight:600;padding:1px 5px;border-radius:3px;border:1px solid ${color};color:${color};letter-spacing:0.03em;vertical-align:middle;cursor:default" title="${tipAttr}">${esc(label)}</span>`
+}
+
 const INITIATOR_COLORS = { user: '#4a90d9', agent: '#b0bec5', api: '#90a4ae' } as const
 const INITIATOR_TOOLTIPS = {
   user:  'Typed directly by a human in the chat',
