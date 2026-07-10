@@ -1,7 +1,8 @@
 # Pricing Sources
 
 This file records exactly where each agent's billing data is retrieved from.
-Update `media/src/pricing.ts` whenever rates change and bump `PRICING_LAST_UPDATED`.
+Update `src/shared/pricing.ts` — the ONE rate table both the host and the webview import —
+whenever rates change, and bump `PRICING_LAST_UPDATED`.
 
 ---
 
@@ -139,7 +140,7 @@ On `claude_code.llm_request` spans (per-API-call):
 | Cache write    | $3.75/MTok | $7.50/MTok |
 | Cache read     | $0.30/MTok | $0.60/MTok |
 
-The threshold applies per API call, not cumulatively across a session. `calcTokenCostUsd` in `src/pricing.ts` applies this tiered rate per turn (which corresponds to one API call). The session-level `calcTokenCost` in `media/src/pricing.ts` uses flat rates as an approximation because it operates on session totals rather than per-call counts.
+The threshold applies per API call, not cumulatively across a session. `calcTokenCostUsd` in `src/shared/pricing.ts` applies this tiered rate per turn (which corresponds to one API call). The session-level `calcTokenCost` in the same module uses flat rates as an approximation because it operates on session totals rather than per-call counts.
 
 **Deprecated models (for historical sessions):**
 
@@ -252,7 +253,7 @@ OpenCode uses token-based pricing for third-party models (routed through its pro
 
 ## Notes for maintainers
 
-- The `PRICING_LAST_UPDATED` constant in `media/src/pricing.ts` surfaces in the UI. Update it whenever rates change.
+- The `PRICING_LAST_UPDATED` constant in `src/shared/pricing.ts` surfaces in the UI. Update it whenever rates change.
 - Model IDs in telemetry often include date suffixes (e.g. `claude-sonnet-4-6-20260501`).
   `normalizeModelId()` in `pricing.ts` strips these before table lookup.
 - If a model appears in telemetry but is missing from the rate table, the UI shows `~$?` rather than $0
