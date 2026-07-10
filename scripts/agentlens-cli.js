@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-// agentlens-cli — every AgentLens diagnostic tool as a CLI subcommand, over the running
+// agentlenspro-cli — every AgentlensPro diagnostic tool as a CLI subcommand, over the running
 // server's Streamable-HTTP JSON-RPC endpoint. Subcommands, flags, and help are generated
 // from the SERVER's own live schemas (tools/list), so the CLI can never go stale and needs
 // no local tool registry.
 //
 // WHY THIS EXISTS (token economy): registering the MCP server in an agent harness injects
-// every tool schema into EVERY turn's context (~8k tokens/turn for AgentLens's ~30 tools),
+// every tool schema into EVERY turn's context (~8k tokens/turn for AgentlensPro's ~30 tools),
 // and any change to that toolset breaks the prompt-cache prefix. Calling the same tools
 // through this CLI in a shell command costs zero resident schema tokens, and N calls batch
 // into ONE turn. The server still shapes responses lean by default; full payloads belong
@@ -26,10 +26,10 @@
 //   node scripts/agentlens-cli.js get_cache_break_causes --full --out /tmp/causes.json
 //
 //   # operations: start the server, open the dashboard, wire Claude Code telemetry
-//   agentlens-cli --start-server
-//   agentlens-cli --dashboard
-//   agentlens-cli --install-otel      # add the OTEL env vars to ~/.claude/settings.json (verified transaction)
-//   agentlens-cli --uninstall-otel    # remove exactly those vars, everything else untouched
+//   agentlenspro-cli --start-server
+//   agentlenspro-cli --dashboard
+//   agentlenspro-cli --install-otel      # add the OTEL env vars to ~/.claude/settings.json (verified transaction)
+//   agentlenspro-cli --uninstall-otel    # remove exactly those vars, everything else untouched
 //
 // Exits non-zero on transport/tool error (fail-fast; no silent fallback).
 
@@ -44,20 +44,20 @@ const DASHBOARD_URL = process.env.AGENTLENS_DASHBOARD_URL || 'http://localhost:3
 // Overridable ONLY for tests — production always targets the real global settings.
 const CLAUDE_SETTINGS = process.env.AGENTLENS_CLAUDE_SETTINGS || path.join(os.homedir(), '.claude', 'settings.json')
 
-const USAGE = `agentlens-cli — every AgentLens diagnostic tool as a subcommand (schemas come live from the server)
+const USAGE = `agentlenspro-cli — every AgentlensPro diagnostic tool as a subcommand (schemas come live from the server)
 
 usage:
-  agentlens-cli list [--desc]              all tools (names; --desc adds one-line descriptions)
-  agentlens-cli help <tool>                a tool's description + flags (from the live schema)
-  agentlens-cli <tool> [--param value ...] call a tool (kebab-case or camelCase flags; JSON string for object/array params)
-  agentlens-cli call <tool> [json-args]    call with a raw JSON args object
-  agentlens-cli batch <json-array>         N calls in one invocation: [{"tool":"...","args":{...}}]
+  agentlenspro-cli list [--desc]              all tools (names; --desc adds one-line descriptions)
+  agentlenspro-cli help <tool>                a tool's description + flags (from the live schema)
+  agentlenspro-cli <tool> [--param value ...] call a tool (kebab-case or camelCase flags; JSON string for object/array params)
+  agentlenspro-cli call <tool> [json-args]    call with a raw JSON args object
+  agentlenspro-cli batch <json-array>         N calls in one invocation: [{"tool":"...","args":{...}}]
 
 operations:
   --status              server health: pid, uptime, memory, span store, EXACT bytes written,
                         bodies archive — or "not running"
-  --start-server        start the AgentLens standalone server if not already running
-                        (alone, or before any tool call: agentlens-cli --start-server get_burn_status)
+  --start-server        start the AgentlensPro standalone server if not already running
+                        (alone, or before any tool call: agentlenspro-cli --start-server get_burn_status)
   --stop-server         graceful SIGTERM to the running server (flushes all stores first)
   --dashboard           ensure the server is up, then open ${DASHBOARD_URL}
   --purge-db            clear the span store + session cards (server re-ingests from logs)
@@ -76,7 +76,7 @@ operations:
                         cold-resume risk, compaction rewrite, huge-request burst, burn spike,
                         cache thrash) — silent while quiet, culprits named in each line. Arm it
                         in a background monitor BEFORE agent fan-outs.
-  --install-skill       (re)install the agentlens-diagnostics skill into ~/.claude/skills/
+  --install-skill       (re)install the agentlenspro-diagnostics skill into ~/.claude/skills/
                         from the repo copy — idempotent (installed / updated / already current)
   --install-hooks       register scripts/spy-agentlens.sh on the 10 LIFECYCLE hook events
                         (SessionStart/End, Stop, StopFailure, Pre/PostCompact, Permission,
@@ -98,7 +98,7 @@ operations:
 globals: --full (unshaped payload)   --out PATH (full JSON to disk, one-line digest to stdout)
 server:  $AGENTLENS_MCP_URL (default http://localhost:4316/mcp); logs -> ~/.agentlens/server.log`
 
-// The telemetry wiring AgentLens capture depends on. RAW_API_BODIES is computed per-machine.
+// The telemetry wiring AgentlensPro capture depends on. RAW_API_BODIES is computed per-machine.
 const OTEL_ENV = {
   CLAUDE_CODE_ENABLE_TELEMETRY: '1',
   OTEL_METRICS_EXPORTER: 'otlp',
@@ -164,7 +164,7 @@ async function init() {
   await rpc('initialize', {
     protocolVersion: '2024-11-05',
     capabilities: {},
-    clientInfo: { name: 'agentlens-cli', version: '2.0.0' },
+    clientInfo: { name: 'agentlenspro-cli', version: '2.0.0' },
   })
 }
 
@@ -245,7 +245,7 @@ async function ensureServer() {
   try { await init(); return } catch { /* not up — start it */ }
   const serverJs = path.resolve(__dirname, '..', 'standalone', 'server.js')
   if (!fs.existsSync(serverJs)) {
-    throw new Error(`server bundle missing at ${serverJs} — run \`node esbuild.js\` in the AgentLens repo first`)
+    throw new Error(`server bundle missing at ${serverJs} — run \`node esbuild.js\` in the AgentlensPro repo first`)
   }
   // stdout/stderr go to a log file, NOT /dev/null — when the server dies at boot (port conflict,
   // corrupt store) the reason must be readable, or every failure looks like "did not become ready".
@@ -275,7 +275,7 @@ async function showStatus() {
     // the stats endpoint, or a foreign process. Only a connection failure means "not running".
     if (!String(e.message).includes('unreachable')) {
       const pid = await findServerPid()
-      console.log(`server: RUNNING but does not serve /api/server-stats (older build?)${pid ? ` pid=${pid}` : ''} — restart it: agentlens-cli --stop-server && agentlens-cli --start-server`)
+      console.log(`server: RUNNING but does not serve /api/server-stats (older build?)${pid ? ` pid=${pid}` : ''} — restart it: agentlenspro-cli --stop-server && agentlenspro-cli --start-server`)
       return
     }
     console.log(`server: NOT RUNNING (${e.message})`)
@@ -504,25 +504,25 @@ async function installHooks(uninstall) {
   console.log('restart Claude Code sessions to pick up the hook change')
 }
 
-// (Re)install the agentlens-diagnostics skill into the user scope. The repo copy is the
-// single source of truth (skills/agentlens-diagnostics/SKILL.md); ~/.claude/skills/ is a
+// (Re)install the agentlenspro-diagnostics skill into the user scope. The repo copy is the
+// single source of truth (skills/agentlenspro-diagnostics/SKILL.md); ~/.claude/skills/ is a
 // managed installation target. Idempotent by content comparison — safe to run on every
 // install / update, and the way to recover the skill if it was deleted.
 function installSkill() {
   // __dirname resolves through the global npm-link symlink to the REAL repo scripts/ dir
   // (node realpaths the main module), so this works from any cwd.
-  const src = path.resolve(__dirname, '..', 'skills', 'agentlens-diagnostics', 'SKILL.md')
+  const src = path.resolve(__dirname, '..', 'skills', 'agentlenspro-diagnostics', 'SKILL.md')
   if (!fs.existsSync(src)) throw new Error(`skill source missing at ${src} — is the repo checkout intact?`)
-  const dst = path.join(os.homedir(), '.claude', 'skills', 'agentlens-diagnostics', 'SKILL.md')
+  const dst = path.join(os.homedir(), '.claude', 'skills', 'agentlenspro-diagnostics', 'SKILL.md')
   const content = fs.readFileSync(src, 'utf8')
   const existed = fs.existsSync(dst)
   if (existed && fs.readFileSync(dst, 'utf8') === content) {
-    console.log(`skill agentlens-diagnostics: already current (${dst})`)
+    console.log(`skill agentlenspro-diagnostics: already current (${dst})`)
     return
   }
   fs.mkdirSync(path.dirname(dst), { recursive: true })
   fs.writeFileSync(dst, content)
-  console.log(`skill agentlens-diagnostics: ${existed ? 'updated' : 'installed'} -> ${dst}`)
+  console.log(`skill agentlenspro-diagnostics: ${existed ? 'updated' : 'installed'} -> ${dst}`)
 }
 
 // Realtime risk fetch — the REST fast path (TRDD-9CNHP8CN): one plain GET, no MCP session
@@ -584,7 +584,7 @@ async function runRisk() {
     rep = await fetchBurnRisk()
   } catch (e) {
     // The REST path needs no MCP init, so a failure here usually means no server at all.
-    console.error(`FAIL: ${e.message} — start it: agentlens-cli --start-server`)
+    console.error(`FAIL: ${e.message} — start it: agentlenspro-cli --start-server`)
     process.exit(1)
   }
   const active = (rep.risks || []).filter(r => r.active)
@@ -841,10 +841,10 @@ async function main() {
   }
 
   if (cmd === 'help') {
-    if (!rest[1]) throw new Error('help requires a tool name (agentlens-cli list)')
+    if (!rest[1]) throw new Error('help requires a tool name (agentlenspro-cli list)')
     const tools = await fetchTools()
     const t = resolveTool(tools, rest[1])
-    if (!t) throw new Error(`unknown tool "${rest[1]}" (agentlens-cli list)`)
+    if (!t) throw new Error(`unknown tool "${rest[1]}" (agentlenspro-cli list)`)
     console.log(renderHelp(t))
     return
   }
@@ -894,7 +894,7 @@ async function main() {
 
 // Only auto-run the CLI when this file is the process entry point. When it is `require`d
 // (the cliMatchers integration test imports rebuildEventMatchers), the guard keeps main()
-// from starting the whole CLI — but the global `agentlens-cli` binary still runs normally.
+// from starting the whole CLI — but the global `agentlenspro-cli` binary still runs normally.
 if (require.main === module) {
   main().catch(e => { console.error(`FAIL: ${e.message}`); process.exit(1) })
 }

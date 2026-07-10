@@ -1,7 +1,7 @@
 ---
-name: agentlens-diagnostics
+name: agentlenspro-diagnostics
 description: >-
-  Query AgentLens token/cost forensics from any project via the global agentlens-cli — use when
+  Query AgentlensPro token/cost forensics from any project via the global agentlenspro-cli — use when
   a session is burning tokens, a rate-limit window drains too fast, the prompt cache keeps
   breaking, you need the cost of a session / heartbeat / sub-agent fleet, or any "why is this so
   expensive" question. GUARD in realtime with check_burn_risk / `--guard` (arm in a background
@@ -16,31 +16,31 @@ description: >-
   analytics). START with investigate_burn — the ONE-command investigation that names the
   window-burn culprits (fork storms, premium-model fan-outs, idle-fleet keep-warm, image
   residency) ranked with evidence. Also the operations surface: start the server (--start-server), open the
-  dashboard (--dashboard), install AgentLens itself (scripts/install.sh, --install-skill),
+  dashboard (--dashboard), install AgentlensPro itself (scripts/install.sh, --install-skill),
   and wire/unwire Claude Code capture — telemetry env vars (--install-otel / --uninstall-otel)
   and lifecycle hook events (--install-hooks / --uninstall-hooks).
 ---
 
-# AgentLens diagnostics via the global CLI
+# AgentlensPro diagnostics via the global CLI
 
-`agentlens-cli` is installed globally (`/opt/homebrew/bin/agentlens-cli`, linked from the
-AgentLens repo) and works from **any** project directory. The AgentLens MCP server is
+`agentlenspro-cli` is installed globally (`/opt/homebrew/bin/agentlenspro-cli`, linked from the
+AgentlensPro repo) and works from **any** project directory. The AgentlensPro MCP server is
 deliberately NOT registered anywhere: resident MCP schemas cost ~8k tokens on every turn and
 toolset changes break the prompt-cache prefix. The CLI costs zero resident tokens; its
 subcommands, flags, and help come from the server's own live schemas, so it is never stale.
 
-If `agentlens-cli` is not on PATH, it was unlinked — run `npm link` inside the AgentLens repo
+If `agentlenspro-cli` is not on PATH, it was unlinked — run `npm link` inside the AgentlensPro repo
 (or `bash scripts/install.sh`) to restore it. This skill never installs the server itself; the
 CLI starts it on demand.
 
 ## Commands
 
 ```bash
-agentlens-cli list --desc                    # every tool + one-line description
-agentlens-cli help <tool>                    # a tool's description + typed flags (live schema)
-agentlens-cli <tool> [--param value ...]     # direct call
-agentlens-cli call <tool> '<json-args>'      # raw JSON args object
-agentlens-cli batch '<json-array>'           # N tools in ONE invocation: [{"tool":"…","args":{…}}]
+agentlenspro-cli list --desc                    # every tool + one-line description
+agentlenspro-cli help <tool>                    # a tool's description + typed flags (live schema)
+agentlenspro-cli <tool> [--param value ...]     # direct call
+agentlenspro-cli call <tool> '<json-args>'      # raw JSON args object
+agentlenspro-cli batch '<json-array>'           # N tools in ONE invocation: [{"tool":"…","args":{…}}]
 ```
 
 ## Options (concise)
@@ -95,7 +95,7 @@ boot refuses cleanly. `batch --out` files are position-prefixed (`out-1-<tool>.j
    ```bash
    MAIN_ROOT="$(git worktree list | head -n1 | awk '{print $1}')"
    REPORT_DIR="$MAIN_ROOT/reports/agentlens-diagnostics"; mkdir -p "$REPORT_DIR"
-   agentlens-cli get_cache_break_causes --out "$REPORT_DIR/$(date +%Y%m%d_%H%M%S%z)-break-causes.json"
+   agentlenspro-cli get_cache_break_causes --out "$REPORT_DIR/$(date +%Y%m%d_%H%M%S%z)-break-causes.json"
    ```
 
    (`./reports/` must be gitignored; add it if missing.) Read back only the fields you need.
@@ -110,10 +110,10 @@ lifecycle hook events — SubagentStart/StopFailure/PreCompact — arrive within
 `--install-hooks` is active). `check_burn_risk` fuses them into 5 flags; `--guard` watches:
 
 ```bash
-agentlens-cli --risk                   # FASTEST culprit check (~40ms, REST): only the ACTIVE
+agentlenspro-cli --risk                   # FASTEST culprit check (~40ms, REST): only the ACTIVE
                                        # risks, each naming WHO (session/workspace/model) + size
-agentlens-cli --guard 15               # watch loop: one [burn-guard] line per risk TRANSITION
-agentlens-cli check_burn_risk          # same report via MCP (full flags incl. inactive ones)
+agentlenspro-cli --guard 15               # watch loop: one [burn-guard] line per risk TRANSITION
+agentlenspro-cli check_burn_risk          # same report via MCP (full flags incl. inactive ones)
 ```
 
 Every risk detail NAMES THE CULPRIT: launch/stall attribution is exact (SubagentStart /
@@ -125,7 +125,7 @@ when nothing was attributable the message says so and points at `investigate_bur
 batches** — each stdout line then interrupts you the moment a risk fires:
 
 ```
-Monitor(command: "agentlens-cli --guard 15", description: "burn guard", persistent: true)
+Monitor(command: "agentlenspro-cli --guard 15", description: "burn guard", persistent: true)
 ```
 
 | Risk | Meaning | What to DO when it fires |
@@ -165,7 +165,7 @@ model when a wave just triggered CACHE_THRASH / a fan-out burst (one per session
 10min — per-call injections are themselves a cache-break cause).
 
 Operational facts: fail-open by construction (server down = 13ms silent no-op — the gate can
-never stall or fail a turn). **Switches are REALTIME and machine-wide** — `agentlens-cli
+never stall or fail a turn). **Switches are REALTIME and machine-wide** — `agentlenspro-cli
 --hooks` shows them, `--hooks gate=off|warn|enforce capture=on|off advisor=on|off` flips them
 instantly for every running session (the server is the decision point; registrations never
 change, so no restarts). Per-session escape hatch: `AGENTLENS_GATE=off` env (checked in the
@@ -173,7 +173,7 @@ hook script before any network). Thresholds tune via `AGENTLENS_GATE_FORK_FAT_TO
 `_RUNAWAY_60S` / `_FANOUT_WARN_2MIN` / `_COLD_IDLE_MS` / `_COLD_RESUME_WINDOW_MS`. Deny/warn
 counts appear in `--status` and `/api/server-stats` under `gate`; every gate intervention
 also lands on the dashboard's notification panel (SSE alerts). If a deny is wrong for a
-legitimate mass fan-out, `agentlens-cli --hooks gate=warn` for that run and restore after.
+legitimate mass fan-out, `agentlenspro-cli --hooks gate=warn` for that run and restore after.
 
 ## High-value tools (cheat-sheet)
 
@@ -197,5 +197,5 @@ legitimate mass fan-out, `agentlens-cli --hooks gate=warn` for that run and rest
 | Ad-hoc analytics over the fact DB | `run_diagnostics_sql --preset <name>` / `--sql '<SELECT…>'` |
 | Recent sessions / workspace patterns | `get_recent_sessions`, `get_workspace_patterns` |
 
-Sibling CLI for the janitor heartbeat: `agentlens-heartbeat-cost --oneline` (in the AgentLens
+Sibling CLI for the janitor heartbeat: `agentlens-heartbeat-cost --oneline` (in the AgentlensPro
 repo `scripts/`) prints the exact settled cost of the previous heartbeat fire.
