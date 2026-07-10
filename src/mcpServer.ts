@@ -1620,6 +1620,9 @@ function subAgentChildren(sessions: SessionSummaryCard[], parentId: string) {
       isolation:     c.spawnIsolation ?? null,
       totalTokens:   c.inputTokens + c.outputTokens,
       cost_usd:      +sessionCost(c).toFixed(4),
+      // Async launches never report tokens into the parent transcript — without this flag the
+      // zero totalTokens/cost above would read as "measured free" instead of "unknown".
+      asyncTokensUnknown: c.spawnAsync ? true : undefined,
     }))
 }
 

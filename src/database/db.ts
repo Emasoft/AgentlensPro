@@ -28,7 +28,10 @@ const BLOBS_DIR = 'blobs'
 // parent/OTEL convention that inputTokens is total-incl-cache — so cost's `input - cacheRead -
 // cacheCreate` went hugely negative (negative sub-agent cost). Fixed in _buildSubAgentCards; bump
 // forces a re-ingest so historical log-sourced child rows are rewritten with the correct accounting.
-const INGEST_VERSION = 3
+// v4: async/background Agent launches (toolUseResult status:"async_launched" — no usage in the
+// parent transcript) now synthesize linkage child cards (spawn_async=1, zero buckets). Bump so
+// historical async-heavy sessions gain their child cards on the next scan.
+const INGEST_VERSION = 4
 
 /**
  * Opens (or creates) the AgentLens SQLite database at storagePath/agentlens.db
@@ -131,6 +134,12 @@ function applyMigrations(db: SqlDatabase): void {
   // feeds FAL's compare_configs groupBy:subagent_type. Nullable + guarded → safe forward migration.
   if (!colNames.includes('spawn_subagent_type')) {
     db.run('ALTER TABLE sessions ADD COLUMN spawn_subagent_type TEXT')
+  }
+  // Async-launch marker: a child card whose zero token buckets mean "not reported in the parent
+  // transcript", not "measured zero". Must survive the round-trip or a reload silently converts
+  // honest absence into a fake $0 measurement.
+  if (!colNames.includes('spawn_async')) {
+    db.run('ALTER TABLE sessions ADD COLUMN spawn_async INTEGER')
   }
 
   // timeline_entries cache token columns

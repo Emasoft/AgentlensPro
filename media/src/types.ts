@@ -68,6 +68,9 @@ export interface SessionSummaryCard {
   spawnKind?: 'fresh' | 'fork' | 'worktree' | 'fleet'
   spawnModelOverride?: string
   spawnIsolation?: string
+  // Async/background launch: the parent transcript never carries the child's usage, so its zero
+  // token buckets mean "not reported", not "free". Badge it, don't display the zeros as cost.
+  spawnAsync?: boolean
   workspace: string
   projectPath?: string
   userRequest: string
@@ -435,6 +438,9 @@ export interface SpawnRollup {
   totalCacheReadTokens: number
   totalCacheCreateTokens: number
   totalCostUsd: number
+  // Children whose async launch never reported tokens into the parent transcript — when >0 the
+  // totals above undercount by these children's (unknown) usage.
+  asyncUnreportedChildren?: number
   kindMix: SpawnKindMix
   detections: SpawnDetection[]
 }

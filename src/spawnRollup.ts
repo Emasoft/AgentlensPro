@@ -145,6 +145,9 @@ export function buildSpawnRollup(children: SessionSummaryCard[], opts: SpawnRoll
     }
     if (c.spawnModelOverride) mix.modelOverride++
   }
+  // Async children carry ZERO buckets by data absence (their usage never reaches the parent
+  // transcript) — count them so the totals above never silently read as complete coverage.
+  const asyncUnreported = children.filter(c => c.spawnAsync).length
   return {
     childCount: children.length,
     totalInputTokens: totalInput,
@@ -152,6 +155,7 @@ export function buildSpawnRollup(children: SessionSummaryCard[], opts: SpawnRoll
     totalCacheReadTokens: totalRead,
     totalCacheCreateTokens: totalCreate,
     totalCostUsd: sumCost(children, opts.costOf),
+    asyncUnreportedChildren: asyncUnreported > 0 ? asyncUnreported : undefined,
     kindMix: mix,
     detections: detectSpawnAntipatterns(children, opts),
   }

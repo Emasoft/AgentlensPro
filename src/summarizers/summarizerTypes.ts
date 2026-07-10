@@ -33,6 +33,11 @@ export interface SessionSummaryCard {
   // TRDD-FB5RG4P1 EHT: the requested sub-agent type (e.g. spark, general-purpose) from the spawning
   // tool_use — persisted so FAL's compare_configs groupBy:subagent_type is a real dimension.
   spawnSubagentType?: string
+  // True when the child was an ASYNC/background launch: the parent transcript carries only the
+  // status:"async_launched" acknowledgment, never the child's usage — so this card's token buckets
+  // are zero BY DATA ABSENCE, not because the child ran free. Consumers must not read the zeros
+  // as a measured cost. Set only on log-derived child cards; mirrored in media/src/types.ts.
+  spawnAsync?: boolean
   workspace: string
   projectPath?: string
   userRequest: string
@@ -476,6 +481,10 @@ export interface SpawnRollup {
   totalCacheReadTokens: number
   totalCacheCreateTokens: number
   totalCostUsd: number
+  // Children spawned async whose tokens were never reported into the parent transcript. When >0,
+  // the totals above UNDERCOUNT by these children's (unknown) usage — surfaced so the rollup never
+  // silently reads as complete coverage.
+  asyncUnreportedChildren?: number
   kindMix: SpawnKindMix
   detections: SpawnDetection[]
 }

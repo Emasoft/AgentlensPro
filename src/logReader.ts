@@ -1588,6 +1588,10 @@ interface SubAgentRec {
   durationMs: number
   toolStats?: Record<string, number>
   finalText?: string
+  // True when the ONLY record seen is the async-launch acknowledgment (status:"async_launched"):
+  // the child is linked (agentId is present) but its tokens are NOT reported in the parent
+  // transcript, so its buckets stay zero. Cleared if a usage-carrying completion later arrives.
+  async?: boolean
   done: boolean
 }
 
@@ -1674,14 +1678,30 @@ function _recordSubAgentSpawn(a: ClaudeAccum, block: Record<string, unknown>, in
   })
 }
 
-// Fill a sub-agent record from a Task/Agent `toolUseResult`. Only completions carry `usage`
-// (async launch records carry status=async_launched with no tokens) — those stay `done:false`
-// and are skipped by _buildSubAgentCards. `usage` is the sub-agent's FINAL-turn buckets and
-// `totalTokens` its reported footprint (Claude Code does not expose per-turn sub-agent history
-// in the parent transcript, so this final-context snapshot is the only available token figure).
+// Fill a sub-agent record from a Task/Agent `toolUseResult`. SYNCHRONOUS completions carry
+// `usage` (the sub-agent's FINAL-turn buckets) + `totalTokens` (its reported footprint — Claude
+// Code does not expose per-turn sub-agent history in the parent transcript, so that snapshot is
+// the only available token figure). ASYNC/background launches instead write ONLY a
+// status:"async_launched" acknowledgment — the completion later arrives as a <task-notification>
+// user message, never as a usage-carrying toolUseResult (verified 2026-07-10: 57/57 Agent spawns
+// in a 54MB async-heavy transcript, zero `totalTokens` in the whole file). Skipping those meant
+// async children got NO child card at all (childCount 0), so we synthesize the LINKAGE from the
+// launch record (agentId/resolvedModel are present) with zero token buckets, honestly flagged
+// via sub.async → card.spawnAsync. If a usage-carrying result for the same tool_use id ever
+// appears (sync path re-runs _resolveToolResult), it overwrites the zero-bucket placeholder.
 function _completeSubAgent(sub: SubAgentRec, tur: Record<string, unknown>, resultContent: unknown): void {
   const usage = tur['usage'] as Record<string, number> | undefined
-  if (!usage || typeof tur['totalTokens'] !== 'number') return
+  if (!usage || typeof tur['totalTokens'] !== 'number') {
+    if (tur['status'] === 'async_launched') {
+      sub.agentId   = (tur['agentId'] as string | undefined) ?? sub.agentId
+      sub.model     = (tur['resolvedModel'] as string | undefined) ?? sub.model
+      sub.agentType = sub.agentType ?? sub.requestedType
+      sub.async = true
+      sub.done = true
+    }
+    return
+  }
+  sub.async = false
   sub.input       = usage['input_tokens'] ?? 0
   sub.output      = usage['output_tokens'] ?? 0
   sub.cacheRead   = usage['cache_read_input_tokens'] ?? 0
@@ -1768,6 +1788,7 @@ function _buildSubAgentCards(parentSessionId: string, a: ClaudeAccum): SessionSu
       spawnModelOverride: sub.spawnModelOverride,
       spawnIsolation: sub.spawnIsolation,
       spawnSubagentType: sub.requestedType,
+      spawnAsync: sub.async || undefined,
       workspace: a.workspace,
       userRequest: (sub.prompt ?? sub.agentType ?? 'sub-agent').slice(0, 500),
       model: sub.model || a.model || 'claude',
@@ -1789,7 +1810,9 @@ function _buildSubAgentCards(parentSessionId: string, a: ClaudeAccum): SessionSu
       totalToolCalls: sub.toolUseCount,
       totalLlmCalls: 1,
       errors: 0,
-      outcome: sub.toolUseCount > 0 ? 'tool_calls' : 'text_response',
+      // An async launch never reports its result into the parent transcript, so claiming
+      // 'text_response' (the toolUseCount===0 branch) would be a fabrication — say 'unknown'.
+      outcome: sub.async ? 'unknown' : (sub.toolUseCount > 0 ? 'tool_calls' : 'text_response'),
       timeline,
       backgroundSpans: [],
       loopSignals: [],
