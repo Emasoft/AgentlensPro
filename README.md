@@ -151,6 +151,18 @@ The Estimated Cost section includes a per-session bar chart with a daily aggrega
 
 All figures are estimates — not your actual bill. Rates are sourced from each provider's public pricing docs; see [PRICING_SOURCES.md](PRICING_SOURCES.md) for the authoritative URL for each billing model and notes for maintainers on keeping rates current.
 
+### Rate-limit window budget
+
+The burn monitor tracks each OAuth account's rolling 5h + 7d consumption and, once a window **capacity** is known, reports % consumed and a time-to-exhaustion projection (`get_window_budget` / `get_account_status` / the dashboard burn widget).
+
+Capacity comes from one of three sources, in precedence order:
+
+1. **Manual (env):** `AGENTLENS_WINDOW_5H_TOKENS` / `AGENTLENS_WINDOW_7D_TOKENS` (raw-token caps) or `AGENTLENS_WINDOW_5H_COST_USD` / `AGENTLENS_WINDOW_7D_COST_USD` (cost caps).
+2. **Manual (file):** the same keys in `~/.agentlens/burn-config.json`.
+3. **Auto-calibrated (observed):** Anthropic does not publish the raw caps, so with no manual config AgentlensPro **measures** one — when a rate-limit `StopFailure` kills a turn *before* the account's 5h window rolled, the consumption accumulated since the window started is a proven lower bound on the cap. It is persisted per account into `burn-config.json` (`observed` section) and reported as `capacitySource: "observed"` with the calibration date (`capacityObservedAt`). Observed figures only ever **ratchet up** (a later window that consumed more before limiting raises them; a smaller one proves nothing), a natural 5h rollover never calibrates (it measures elapsed time, not the cap), and any manual cap always wins — auto-calibration never touches a user-configured value.
+
+Lifecycle hook capture (`agentlenspro-cli --install-hooks`) is what delivers the `StopFailure` events auto-calibration listens for.
+
 ## Exporting and Importing Session Data
 
 ### Export

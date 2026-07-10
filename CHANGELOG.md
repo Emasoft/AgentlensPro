@@ -4,6 +4,12 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [0.10.4] — 2026-07-10
+
+### Added
+
+- **Window-capacity auto-calibration from rate-limit hits** (P5). `get_window_budget`'s % consumed and time-to-exhaustion projections needed a manual capacity (`AGENTLENS_WINDOW_5H_TOKENS`/`_7D_TOKENS`) because Anthropic doesn't publish the raw window caps — on unconfigured machines the tool's core promise was dead (`capacitySource: none`). The cap IS observable, once: when a rate-limit-class `StopFailure` kills a turn **before** the account's 5h window rolled, the consumption accumulated since the window started is a proven lower bound on the cap. The standalone hook-event ingest path (`POST /api/hook-events`) now measures exactly that (`src/capacityCalibration.ts`) and persists it per account (`accountUuid`-keyed `observed` section of `~/.agentlens/burn-config.json`, atomic temp+rename); `computeWindowBudget` consumes it so projections, time-to-exhaustion and the `check_burn_risk` remaining-window clause work with **zero manual config**, reported as `capacitySource: "observed"` + `capacityObservedAt` (the calibration date). Guards: only rate-limit-class errors calibrate; a natural 5h rollover never does (consumption straddling the 5h boundary measures elapsed time, not the cap); observed figures only ratchet **up** (a later larger window raises them, a smaller one is ignored); any manual cap (env or file) disables calibration outright — user config is never clobbered, and an existing-but-unparseable `burn-config.json` is refused, never replaced. The running server reloads its burn config after each calibration, so the very next 4s burn tick projects against the measured cap without a restart. Covered by 16 real-fs unit tests + a 5-test real-boot suite that replays synthetic StopFailure fixtures through the actual OTLP + hook-event ingest against a temp data dir
+
 ## [0.10.3] — 2026-07-10
 
 ### Changed
