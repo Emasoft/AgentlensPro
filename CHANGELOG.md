@@ -4,6 +4,54 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [1.0.0] — 2026-07-10
+
+First stable release of **AgentlensPro**, the professional continuation of the
+[AgentLens](https://github.com/RogerReed/agentlens) fork: the VS Code extension host was removed
+pre-fork and the product reshaped around a CLI + npx/standalone server + Docker image + Claude Code
+skills, while keeping `~/.agentlens`, the `AGENTLENS_*` env vars, and the hook script names
+byte-compatible. The road to 1.0.0 (P2–P9, shipped across 0.10.x–0.12.0):
+
+- **P2** — one source of truth for host/webview shared modules in `src/shared/` (mirror drift killed by `scripts/check-no-mirrors.js`)
+- **P3** — the four-disjoint-token-buckets invariant (`tokenBuckets.ts`), one convention on disk and on every card/entry
+- **P4** — segmented append-only span store: restarts no longer destroy spans, no cap, no eviction
+- **P5** — window-capacity auto-calibration from observed rate-limit hits (zero manual config)
+- **P6** — keep-warm/cache-gap diagnostic, burn-gate `SendMessage` coverage, named fallback counters (silence is never invisible)
+- **P7** — provenance on every served number (`tokensSource`/`coverageNote` stamped at the merge decision points)
+- **P8** — async sub-agent token resolution from the children's own transcripts
+- **P9** — headless dashboard browser smoke suite (real server, both themes, dedicated CI job)
+
+### Added
+
+- **PATH-bin hook registration (Homebrew-safe).** Two new package bins — `agentlenspro-hook` and
+  `agentlenspro-gate` — thin wrappers that resolve the real spy scripts relative to their own
+  installed location at every fire. `--install-hooks` now registers those **bare PATH names** in
+  `~/.claude/settings.json` instead of absolute paths into the package tree (which dangle under
+  Homebrew's versioned Cellar after every upgrade), and refuses to install when the bins are not on
+  `PATH`. `--uninstall-hooks` removes both generations (bare names AND legacy absolute
+  `spy-agentlens*` entries); a re-run migrates legacy registrations in place.
+- **SLSA provenance on the release path.** The tag-triggered release workflow packs the npm tarball,
+  attests it with `actions/attest-build-provenance`, and attaches it to the GitHub Release;
+  `npm publish --provenance` covers the registry copy; the Docker workflow builds with
+  `provenance: true` and now publishes to **GHCR only** (`ghcr.io/emasoft/agentlenspro`) — the
+  fork-inherited Docker Hub push targeted the upstream project's repository.
+
+### Fixed
+
+- **Codex fixture under-counted LLM turns.** `demo/generate-fixtures.js` modeled a tool-calling
+  Codex session with a single `response.completed` event; real captures emit one per API turn. The
+  fixture now carries both terminal events, and all 5 fixtures validate clean through
+  `summarizeSpans` (`pnpm run fixtures:check`).
+- **Release workflow could never have passed** (first run is this tag): pnpm 11.9 needs Node ≥ 22.13
+  (was pinned to 20), and the unit suite boots the esbuild server bundle, which was never built.
+  Both fixed; lint/type-check/tests now gate the Release + npm publish on the tag.
+
+### Docs
+
+- README documents the PATH-binary contract and the GHCR image; ARCHITECTURE now covers the P7
+  provenance stamps and the keep-warm diagnostic, and no longer describes the removed VS Code
+  extension host as shipped reality; `pnpm run standalone` → `pnpm run local` stale mentions fixed.
+
 ## [0.12.0] — 2026-07-10
 
 ### Added
