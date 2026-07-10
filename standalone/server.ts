@@ -24,7 +24,7 @@ import { startMcpHttpServer, labelBurnStatusAccounts } from '../src/mcpServer'
 import { resolveCallContext, callBodyRegistry } from '../src/rawBodyContext'
 import { appendHookEvent, readHookEvents, purgeHookEventBuckets, hookEventsDiskUsage, type HookEventRecord } from '../src/hookEventStore'
 import { BodiesActivityTracker } from '../src/bodiesActivity'
-import { evaluateAgentGate, buildAdvisory, readTranscriptContext, type AgentGateState, type GateThresholds, type LaunchSpawner } from '../src/agentGate'
+import { evaluateAgentGate, evaluateSendMessageGate, buildAdvisory, readTranscriptContext, type AgentGateState, type GateThresholds, type LaunchSpawner } from '../src/agentGate'
 import { checkBurnRisk } from '../src/burnGuard'
 import { loadHookRuntimeConfig, saveHookRuntimeConfig } from '../src/hookRuntimeConfig'
 import { ContextCompositionIndex } from '../src/contextCompositionIndex'
@@ -2171,9 +2171,9 @@ const uiServer = http.createServer((req, res) => {
   }
 
   // Agent-launch burn gate (TRDD-GOD0108C) — called by scripts/spy-agentlens-gate.sh from
-  // PreToolUse/PostToolUse hooks matched on Agent|Task|Workflow. CONTRACT: the response body
-  // IS the hook's stdout — 204/empty means "print nothing" (allow). Every failure path
-  // returns an empty 204: a gate that can error a launch is worse than no gate (fail-open).
+  // PreToolUse/PostToolUse hooks matched on Agent|Task|Workflow|SendMessage. CONTRACT: the
+  // response body IS the hook's stdout — 204/empty means "print nothing" (allow). Every failure
+  // path returns an empty 204: a gate that can error a launch is worse than no gate (fail-open).
   if (req.method === 'POST' && url === '/api/agent-gate') {
     const chunks: Buffer[] = []
     let received = 0
@@ -2224,9 +2224,13 @@ const uiServer = http.createServer((req, res) => {
           return
         }
 
-        // PreToolUse (default): decide before the launch happens.
+        // PreToolUse (default): decide before the launch happens. SendMessage (P6) takes the
+        // NARROWER evaluator — resuming a dead agent re-runs the request that killed it, so only
+        // COLD_RESUME / CACHE_THRASH may deny; routine messaging is never gated by fan-out rules.
         if (!hookRuntime.gateEnabled) { res.writeHead(204); res.end(); return }
-        const d = evaluateAgentGate((p.tool_input ?? null) as Record<string, unknown> | null, state)
+        const d = p.tool_name === 'SendMessage'
+          ? evaluateSendMessageGate(state)
+          : evaluateAgentGate((p.tool_input ?? null) as Record<string, unknown> | null, state)
         if (d.decision === 'deny') {
           persistStats.gateDenies++
           // Mirror onto the dashboard's SSE alert channel — the notification panel shows

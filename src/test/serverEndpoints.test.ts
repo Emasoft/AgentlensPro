@@ -197,6 +197,41 @@ suite('standalone server — hook/gate/burn endpoints (real boot)', () => {
     assert.strictEqual(r.text, '')
   })
 
+  test('SendMessage is NEVER denied by fan-out state: 204 where a Task launch denies (P6)', async () => {
+    // Re-arm the gate (the previous test switched it off) and re-feed a fresh runaway burst so
+    // the launch-deny precondition is measured NOW, not inherited from an aging ring.
+    await httpReq(uiPort, 'POST', '/api/hook-config', { gateEnabled: true })
+    for (let i = 0; i < 9; i++) {
+      await httpReq(uiPort, 'POST', '/api/hook-events', {
+        hook_event_name: 'SubagentStart', session_id: 'ep-msg', cwd: '/tmp/ep', agent_type: 'general-purpose',
+      })
+    }
+    const launch = await httpReq(uiPort, 'POST', '/api/agent-gate', {
+      hook_event_name: 'PreToolUse', session_id: 'ep-msg', tool_name: 'Task', tool_input: { subagent_type: 'general-purpose' },
+    })
+    const lj = launch.json as { hookSpecificOutput?: { permissionDecision?: string } }
+    assert.strictEqual(lj.hookSpecificOutput?.permissionDecision, 'deny', 'precondition: a launch denies under runaway fan-out')
+    // The SAME state must not gate routine messaging — a quiet-state SendMessage always passes.
+    const msg = await httpReq(uiPort, 'POST', '/api/agent-gate', {
+      hook_event_name: 'PreToolUse', session_id: 'ep-msg', tool_name: 'SendMessage', tool_input: { to: 'worker', message: 'status?' },
+    })
+    assert.strictEqual(msg.status, 204)
+    assert.strictEqual(msg.text, '', 'allow = empty body')
+  })
+
+  test('SendMessage DENIES inside the cold-resume window after a StopFailure (P6)', async () => {
+    // A rate-limit stall arms the window: messaging a dead agent re-runs the request that
+    // killed it into a cold cache, so the gate blocks it and names the mechanism.
+    await httpReq(uiPort, 'POST', '/api/hook-events', { hook_event_name: 'StopFailure', session_id: 'ep-stall', cwd: '/tmp/ep' })
+    const r = await httpReq(uiPort, 'POST', '/api/agent-gate', {
+      hook_event_name: 'PreToolUse', session_id: 'ep-stall', tool_name: 'SendMessage', tool_input: { to: 'worker', message: 'resume' },
+    })
+    assert.strictEqual(r.status, 200)
+    const j = r.json as { hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string } }
+    assert.strictEqual(j.hookSpecificOutput?.permissionDecision, 'deny')
+    assert.ok((j.hookSpecificOutput?.permissionDecisionReason ?? '').includes('rate-limit stall'), 'reason names the stall mechanism')
+  })
+
   test('GET /api/burn-risk returns 200 with a risks array', async () => {
     // The REST fast path always yields a full BurnRiskReport carrying a risks array.
     const r = await httpReq(uiPort, 'GET', '/api/burn-risk')

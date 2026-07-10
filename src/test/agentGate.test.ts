@@ -3,7 +3,7 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import {
-  evaluateAgentGate, buildAdvisory, readTranscriptContext,
+  evaluateAgentGate, evaluateSendMessageGate, buildAdvisory, readTranscriptContext,
   type AgentGateState, type ParentContext,
 } from '../agentGate'
 import type { ThrashReport } from '../bodiesActivity'
@@ -135,6 +135,52 @@ suite('agentGate — evaluateAgentGate (TRDD-GOD0108C)', () => {
     const s = state({ parent: { contextTokens: null, idleMs: null } as ParentContext, startsLast2min: 3 })
     const d = evaluateAgentGate({ subagent_type: 'fork' }, s)
     assert.notStrictEqual(d.decision, 'deny')
+  })
+})
+
+suite('agentGate — evaluateSendMessageGate (P6 SendMessage coverage)', () => {
+  test('quiet state: routine messaging passes with a silent allow', () => {
+    // THE contract of the P6 gate widening: messaging is never denied outside the two
+    // disaster states — a chatty gate on team coordination would get switched off.
+    const d = evaluateSendMessageGate(state())
+    assert.deepStrictEqual(d, { decision: 'allow', code: null, reason: null })
+  })
+
+  test('fan-out / fork signatures NEVER deny a message (only launches are fan-out-gated)', () => {
+    // Every launch-deny signal at once EXCEPT thrash/cold-resume: runaway starts, a fat cold
+    // parent — a Task would deny here, a SendMessage must still pass.
+    const hot = state({
+      startsLast60s: 20, startsLast2min: 9,
+      parent: { contextTokens: 400_000, idleMs: 20 * 60_000 },
+    })
+    assert.strictEqual(evaluateAgentGate({ subagent_type: 'fork' }, hot).decision, 'deny', 'precondition: a launch denies')
+    assert.deepStrictEqual(evaluateSendMessageGate(hot), { decision: 'allow', code: null, reason: null })
+  })
+
+  test('active cache-thrash denies the message and names the mechanism', () => {
+    const d = evaluateSendMessageGate(state({ thrash: thrashing }))
+    assert.strictEqual(d.decision, 'deny')
+    assert.strictEqual(d.code, 'THRASH_ACTIVE')
+    assert.ok(d.reason?.toLowerCase().includes('re-runs its whole transcript'), d.reason ?? '')
+  })
+
+  test('a rate-limit stall inside the cold-resume window denies: the resume re-runs the killing request', () => {
+    const d = evaluateSendMessageGate(state({ lastStopFailureMs: NOW - 3 * 60_000, stall: { session: 'abcdef1234', cwd: '/w/proj' } }))
+    assert.strictEqual(d.decision, 'deny')
+    assert.strictEqual(d.code, 'COLD_RESUME_MESSAGE')
+    assert.ok(d.reason?.includes('RE-RUNNING the request that killed it'), d.reason ?? '')
+  })
+
+  test('a stall OLDER than the cold-resume window no longer gates messaging', () => {
+    const d = evaluateSendMessageGate(state({ lastStopFailureMs: NOW - 11 * 60_000 }))
+    assert.deepStrictEqual(d, { decision: 'allow', code: null, reason: null })
+  })
+
+  test('mode=warn downgrades a SendMessage deny to a warning, same as launches', () => {
+    const d = evaluateSendMessageGate(state({ mode: 'warn', lastStopFailureMs: NOW - 60_000 }))
+    assert.strictEqual(d.decision, 'warn')
+    assert.strictEqual(d.code, 'COLD_RESUME_MESSAGE')
+    assert.ok(d.reason?.startsWith('[deny downgraded'), d.reason ?? '')
   })
 })
 

@@ -1,7 +1,8 @@
 // Agent-launch burn gate — the PREVENTION half of the guard stack (TRDD-GOD0108C).
 //
 // evaluateAgentGate() is the pure decision core behind POST /api/agent-gate, called by
-// scripts/spy-agentlens-gate.sh from a PreToolUse hook matched on Agent|Task|Workflow ONLY.
+// scripts/spy-agentlens-gate.sh from a PreToolUse hook matched on Agent|Task|Workflow|
+// SendMessage ONLY (SendMessage routes to the narrower evaluateSendMessageGate below).
 // It answers one question in-memory: "will THIS launch, right now, multiply a burn that is
 // already forming?" — and denies only the four high-confidence disaster signatures measured
 // in the 2026-07-10 incident. Everything ambiguous is a warning or a silent allow: a gate
@@ -75,7 +76,7 @@ export interface AgentGateDecision {
   decision: 'allow' | 'warn' | 'deny'
   code:
     | 'THRASH_ACTIVE' | 'RUNAWAY_FANOUT' | 'COLD_RESUME_FANOUT' | 'FORK_STORM_FORMING'
-    | 'FORK_FAT_PARENT' | 'COLD_FORK' | 'FANOUT_HEADSUP'
+    | 'FORK_FAT_PARENT' | 'COLD_FORK' | 'FANOUT_HEADSUP' | 'COLD_RESUME_MESSAGE'
     | null
   reason: string | null
 }
@@ -233,6 +234,49 @@ export function evaluateAgentGate(
     }
   }
 
+  return { decision: 'allow', code: null, reason: null }
+}
+
+/**
+ * SendMessage burn gate (P6) — the narrower sibling of evaluateAgentGate. A SendMessage to a
+ * DEAD agent resumes it from its transcript, i.e. it RE-RUNS the request that killed it: when
+ * the target died in a rate-limit stall the prompt cache is past its TTL, so the resume re-pays
+ * the agent's full prefix at the cache-WRITE rate — the same mechanism the launch gate blocks.
+ *
+ * ONLY the two high-confidence conditions below may deny (both reused from evaluateAgentGate's
+ * state): an ACTIVE cache-thrash, or a rate-limit stall inside the cold-resume window. Routine
+ * messaging must NEVER be denied — no fan-out/fork signature applies to a message, and a chatty
+ * gate on the team-coordination channel would get AGENTLENS_GATE=off'd immediately. No warn
+ * tier either: a message is cheap when the two disaster states are absent.
+ */
+export function evaluateSendMessageGate(state: AgentGateState): AgentGateDecision {
+  const th = { ...DEFAULT_GATE_THRESHOLDS, ...state.thresholds }
+  const stallAgeMs = state.lastStopFailureMs !== null ? state.now - state.lastStopFailureMs : null
+  const coldResume = stallAgeMs !== null && stallAgeMs >= 0 && stallAgeMs <= th.coldResumeWindowMs
+
+  const deny = (code: AgentGateDecision['code'], reason: string): AgentGateDecision =>
+    state.mode === 'enforce'
+      ? { decision: 'deny', code, reason }
+      : { decision: 'warn', code, reason: `[deny downgraded to warning: AGENTLENS_GATE_MODE=warn] ${reason}` }
+
+  if (state.thrash?.active) {
+    return deny('THRASH_ACTIVE',
+      `AgentLens burn-gate: cache-thrash in progress — ${state.thrash.count} calls in the last ` +
+      `${Math.round(state.thrash.windowMs / 60_000)}min re-WROTE ~${k(state.thrash.rebilledTokens)} tokens of prefix ` +
+      `instead of reading cache${state.thrash.model ? ` (model ${state.thrash.model})` : ''}. ${thrashSource(state.thrash)} ` +
+      `Resuming an agent now re-runs its whole transcript into the thrashing prefix. Fix the source first. ` +
+      `Override: AGENTLENS_GATE=off.`)
+  }
+  if (coldResume) {
+    const stallWho = state.stall
+      ? ` (turn died in session ${shortSid(state.stall.session)}${state.stall.cwd ? ` in ${dirName(state.stall.cwd)}` : ''})`
+      : ''
+    return deny('COLD_RESUME_MESSAGE',
+      `AgentLens burn-gate: a rate-limit stall ended ${Math.round((stallAgeMs as number) / 60_000)}min ago` +
+      `${stallWho} — messaging a dead agent resumes it by RE-RUNNING the request that killed it, and with the ` +
+      `prompt cache past its 5-min TTL that resume re-pays the agent's full prefix at the write rate. ` +
+      `Wait ~60s for the wall to clear, then retry this message. Override: AGENTLENS_GATE=off.`)
+  }
   return { decision: 'allow', code: null, reason: null }
 }
 
