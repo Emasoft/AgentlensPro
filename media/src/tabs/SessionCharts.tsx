@@ -6,6 +6,7 @@ import {
   formatMs, formatCompact, getAgentColor, getAgentSourceLabel, formatSessionTime, formatSessionTimeShort,
   tokenBreakdown, formatTokenBreakdown,
 } from '../utils'
+import { contextTokens } from '../../../src/shared/tokenBuckets'
 import { shortWorkspaceName } from '../state'
 import type { SessionSummaryCard } from '../types'
 
@@ -110,11 +111,13 @@ export function ContextGrowthChart({ sessions, timelines }: { sessions: SessionS
 
     const seriesData: GrowthSeries[] = []
     sessions.forEach(sess => {
-      // Accept 'tool' entries with inputTokens too: log-sourced sessions classify
-      // tool-using turns as type:'tool' even though they represent LLM calls with tokens.
-      // OTel 'tool' entries never have inputTokens, so this doesn't double-count.
+      // Accept 'tool' entries with usage too: log-sourced sessions classify tool-using turns as
+      // type:'tool' even though they represent LLM calls with tokens. OTel 'tool' entries never
+      // carry usage, so this doesn't double-count. The growth curve plots CONTEXT size
+      // (input + cacheRead + cacheCreation — the disjoint-buckets derivation); the raw uncached
+      // share alone is roughly flat and would hide the growth this chart exists to show.
       const llmEntries = (timelines[sess.sessionId] ?? sess.timeline ?? [])
-        .filter(e => (e.type === 'llm' || e.type === 'tool') && (e.inputTokens ?? 0) > 0)
+        .filter(e => (e.type === 'llm' || e.type === 'tool') && contextTokens(e) > 0)
       if (llmEntries.length < 1) return
       // Label with the project name (not just a bare timestamp) so the highlighted
       // line and the hover tooltip say WHICH project/session you're looking at.
@@ -123,7 +126,7 @@ export function ContextGrowthChart({ sessions, timelines }: { sessions: SessionS
         sessionId: sess.sessionId,
         label: proj ? `${proj} · ${formatGrowthLabel(sess)}` : formatGrowthLabel(sess),
         color: getAgentColor(sess.source) || COLORS[seriesData.length % COLORS.length],
-        points: llmEntries.map((e, i) => ({ turn: i + 1, tokens: e.inputTokens ?? 0, spanId: e.spanId ?? '' })),
+        points: llmEntries.map((e, i) => ({ turn: i + 1, tokens: contextTokens(e), spanId: e.spanId ?? '' })),
       })
     })
 

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import { rangedSessions, sessionSummary, sessionTimelines, focusedSessionId, vscode } from '../state'
 import { getAgentSourceLabel, getAgentColor, formatMs, formatSessionTime } from '../utils'
 import { calcEntryCost, fmtUsd } from '../sessionMetrics'
+import { contextTokens } from '../../../src/shared/tokenBuckets'
 import type { SessionSummaryCard, TimelineEntry } from '../types'
 
 type FlowCanvasEl = HTMLCanvasElement & { __flowDraw?: () => void; __flowCenter?: () => void }
@@ -19,7 +20,9 @@ interface SemNode {
   subLabel: string
   turnNum?: number
   totalTurns?: number
-  inputTokens?: number
+  // Turn CONTEXT size (input + cacheRead + cacheCreation) — named to prevent a reader from
+  // billing/summing it as if it were the raw uncached input bucket.
+  contextTok?: number
   outputTokens?: number
   costUsd?: number
   model?: string
@@ -185,6 +188,9 @@ export function FlowCanvas({ sess, height = 520 }: { sess: SessionSummaryCard; h
 
     turns.forEach((turn, i) => {
       const inferred = isInferredTurn(turn.entry)
+      // The turn's magnitude is its CONTEXT size (input + cacheRead + cacheCreation); the raw
+      // uncached entry.inputTokens alone is only the fresh share (disjoint-buckets convention).
+      const ctxTok = contextTokens(turn.entry)
       const node: SemNode = {
         id: 'llm-' + i,
         x: TURN_X,
@@ -194,10 +200,10 @@ export function FlowCanvas({ sess, height = 520 }: { sess: SessionSummaryCard; h
         label: 'T' + (i + 1),
         subLabel: inferred
           ? turn.tools.length + '×'
-          : ((turn.entry.inputTokens ?? 0) > 0 ? Math.round((turn.entry.inputTokens ?? 0) / 1000) + 'K' : ''),
+          : (ctxTok > 0 ? Math.round(ctxTok / 1000) + 'K' : ''),
         turnNum: i + 1,
         totalTurns: turns.length,
-        inputTokens: turn.entry.inputTokens ?? 0,
+        contextTok: ctxTok,
         outputTokens: turn.entry.outputTokens ?? 0,
         costUsd: inferred ? undefined : calcEntryCost(turn.entry, sess.model ?? '') || undefined,
         model: turn.entry.model ?? turn.entry.label ?? '',
@@ -448,8 +454,8 @@ export function FlowCanvas({ sess, height = 520 }: { sess: SessionSummaryCard; h
             lines.push({ value: 'Turn ' + hn.turnNum + ' of ' + hn.totalTurns, bold: true, color: hn.color })
             if (hn.model) lines.push({ label: 'Model', value: trunc(hn.model, 42) })
             if (hn.note) lines.push({ label: 'Note', value: hn.note })
-            if ((hn.inputTokens ?? 0) > 0 || (hn.outputTokens ?? 0) > 0)
-              lines.push({ label: 'Tokens', value: (hn.inputTokens ?? 0).toLocaleString() + ' in → ' + (hn.outputTokens ?? 0).toLocaleString() + ' out' })
+            if ((hn.contextTok ?? 0) > 0 || (hn.outputTokens ?? 0) > 0)
+              lines.push({ label: 'Tokens', value: (hn.contextTok ?? 0).toLocaleString() + ' in → ' + (hn.outputTokens ?? 0).toLocaleString() + ' out' })
             if ((hn.costUsd ?? 0) > 0)
               lines.push({ label: 'Cost', value: fmtUsd(hn.costUsd!) })
             if (hn.durationMs) lines.push({ label: 'Duration', value: formatMs(hn.durationMs) })
