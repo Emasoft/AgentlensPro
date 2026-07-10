@@ -6,6 +6,11 @@
   "publisher": "agentlens",
   "license": "MIT",
   "packageManager": "pnpm@11.9.0",
+  "pnpm": {
+    "minimumReleaseAge": 7200,
+    "trustPolicy": "no-downgrade",
+    "blockExoticSubdeps": true
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/RogerReed/agentlens"
