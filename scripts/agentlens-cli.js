@@ -446,12 +446,17 @@ function rebuildEventMatchers(matchers, ev, uninstall, cmd, gateCmd) {
 }
 
 async function installHooks(uninstall) {
-  const script = path.resolve(__dirname, 'spy-agentlens.sh')
-  const gateScript = path.resolve(__dirname, 'spy-agentlens-gate.sh')
+  // Native Windows has no bash: register the node twins there (audit blocker #2). POSIX
+  // (incl. WSL) keeps bash+curl — no node boot on the hook path. Both name families contain
+  // 'spy-agentlens', so isOurs strips either kind on reinstall/uninstall from any platform.
+  const win = process.platform === 'win32'
+  const script = path.resolve(__dirname, win ? 'spy-agentlens.mjs' : 'spy-agentlens.sh')
+  const gateScript = path.resolve(__dirname, win ? 'spy-agentlens-gate.mjs' : 'spy-agentlens-gate.sh')
   if (!uninstall && !fs.existsSync(script)) throw new Error(`hook script missing at ${script} — is the repo checkout intact?`)
   if (!uninstall && !fs.existsSync(gateScript)) throw new Error(`gate script missing at ${gateScript} — is the repo checkout intact?`)
-  const cmd = `bash ${script}`
-  const gateCmd = `bash ${gateScript}`
+  const runner = win ? 'node' : 'bash'
+  const cmd = `${runner} ${script}`
+  const gateCmd = `${runner} ${gateScript}`
 
   let settings = {}
   if (fs.existsSync(CLAUDE_SETTINGS)) {
