@@ -1,5 +1,6 @@
 import type { Span, SpanAttribute, SpanTreeNode, SessionSummaryCard } from './types'
 import { sessionSummary, displaySessions, agentFilteredSessions, sessionLimit } from './state'
+import { contextTokens } from '../../src/shared/tokenBuckets'
 
 // ── HTML escape ───────────────────────────────────────────────────────────────
 
@@ -59,24 +60,22 @@ export function formatBytes(bytes: number): string {
 }
 
 // ── Token breakdown — the single source of truth for "what does input mean" ────
-// card.inputTokens is the TOTAL context (fresh input + every per-turn cache read +
-// cache writes). On marathon sessions the per-turn cache reads sum to billions, so
-// showing inputTokens raw makes one session dwarf all others ("impossible spike").
-// FRESH input — what the model actually had to read anew — is the bounded, useful
-// headline number; cache read/write are their own (legitimately large) dimensions.
-// Cost is already computed from `fresh` everywhere (calcTokenCostUsd), so this only
-// affects display — it never changes billing.
+// card.inputTokens is the RAW uncached (FRESH) input — every card carries FOUR DISJOINT buckets
+// (src/shared/tokenBuckets.ts, the 2026-07-10 one-convention normalization). This helper used to
+// UNDO the old incl-cache convention by subtracting the caches; against raw cards that
+// subtraction clamped `fresh` to 0 on every cache-heavy session. totalContext (fresh + cache
+// read + cache write — what the model actually read) is now DERIVED, in the one shared place.
 export interface TokenBreakdown { fresh: number; cacheRead: number; cacheWrite: number; output: number; totalContext: number }
 export function tokenBreakdown(sess: Pick<SessionSummaryCard, 'inputTokens' | 'cacheReadTokens' | 'cacheCreateTokens' | 'outputTokens'>): TokenBreakdown {
   const cacheRead = sess.cacheReadTokens ?? 0
   const cacheWrite = sess.cacheCreateTokens ?? 0
-  const totalContext = sess.inputTokens ?? 0
+  const fresh = sess.inputTokens ?? 0
   return {
-    fresh: Math.max(0, totalContext - cacheRead - cacheWrite),
+    fresh,
     cacheRead,
     cacheWrite,
     output: sess.outputTokens ?? 0,
-    totalContext,
+    totalContext: contextTokens(sess),
   }
 }
 

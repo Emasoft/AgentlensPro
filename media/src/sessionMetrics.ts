@@ -1,6 +1,7 @@
 import type { SessionSummaryCard, TimelineEntry } from './types'
 import { getAgentProfiles, resolveAgentProfile, type AgentThresholdProfiles } from './agentProfiles'
 import { lookupRates, calcTokenCost, type PricingMode } from '../../src/shared/pricing'
+import { contextTokens } from '../../src/shared/tokenBuckets'
 
 export function fmtUsd(usd: number): string {
   if (usd === 0) return '$0.00'
@@ -12,10 +13,10 @@ export function fmtUsd(usd: number): string {
 export function calcEntryCost(entry: TimelineEntry, sessionModel: string): number {
   const rates = lookupRates(entry.model || sessionModel)
   if (!rates) return 0
-  const cacheRead   = entry.cacheReadTokens   ?? 0
-  const cacheCreate = entry.cacheCreateTokens ?? 0
-  const rawInput    = Math.max(0, (entry.inputTokens ?? 0) - cacheRead - cacheCreate)
-  return calcTokenCost(rawInput, cacheRead, cacheCreate, entry.outputTokens ?? 0, rates)
+  // Timeline entries carry the FOUR DISJOINT buckets (entry.inputTokens is the RAW uncached share
+  // since the 2026-07-10 entry normalization — src/shared/tokenBuckets.ts). The old subtraction
+  // here compensated for incl-cache OTEL entries; keeping it would clamp every entry's input to 0.
+  return calcTokenCost(entry.inputTokens ?? 0, entry.cacheReadTokens ?? 0, entry.cacheCreateTokens ?? 0, entry.outputTokens ?? 0, rates)
 }
 
 export type { PricingMode }
@@ -74,12 +75,13 @@ export function calcSessionCost(session: SessionSummaryCard, mode: PricingMode):
     ? calcTokenCost(rawInput, session.cacheReadTokens, session.cacheCreateTokens, session.outputTokens, rates)
     : 0
 
-  // Per-turn cumulative cost using per-turn token counts (cache not broken out at turn level).
+  // Per-turn cumulative cost from each entry's four disjoint buckets (entries carry their own
+  // cacheRead/cacheCreate since the 2026-07-10 normalization — bill each bucket at its rate).
   let cum = 0
   const byTurn = llmEntries.map(entry => {
     const entryRates = lookupRates(entry.model || modelId) || rates
     if (!entryRates) return cum
-    cum += calcTokenCost(entry.inputTokens ?? 0, 0, 0, entry.outputTokens ?? 0, entryRates)
+    cum += calcTokenCost(entry.inputTokens ?? 0, entry.cacheReadTokens ?? 0, entry.cacheCreateTokens ?? 0, entry.outputTokens ?? 0, entryRates)
     return cum
   })
 
@@ -115,12 +117,14 @@ export function sessionDisplayName(session: SessionSummaryCard): string {
 }
 
 export function getPeakContextUsage(session: SessionSummaryCard, profiles: AgentThresholdProfiles = getAgentProfiles()): PeakContextUsage {
-  const llmInputs = (session.timeline ?? [])
+  // Context size per call = input + cacheRead + cacheCreation (the disjoint-buckets derivation);
+  // entry.inputTokens alone is only the raw uncached share since the 2026-07-10 normalization.
+  const llmContexts = (session.timeline ?? [])
     .filter(e => e.type === 'llm')
-    .map(e => e.inputTokens ?? 0)
+    .map(e => contextTokens(e))
     .filter(n => n > 0)
-  const fallback = session.totalLlmCalls > 0 ? Math.round((session.inputTokens ?? 0) / session.totalLlmCalls) : 0
-  const peakTokens = llmInputs.length > 0 ? Math.max(...llmInputs) : fallback
+  const fallback = session.totalLlmCalls > 0 ? Math.round(contextTokens(session) / session.totalLlmCalls) : 0
+  const peakTokens = llmContexts.length > 0 ? Math.max(...llmContexts) : fallback
   const contextWindowTokens = resolveAgentProfile(session.source, profiles).contextWindowTokens
   return {
     peakTokens,

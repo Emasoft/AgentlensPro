@@ -1,5 +1,6 @@
 import { Span } from '../shared/telemetryTypes'
 import { SessionSummaryCard, TimelineEntry, EditDetail } from '../shared/summarizerTypes'
+import { disjointBuckets, contextTokens } from '../shared/tokenBuckets'
 import {
   getAttrStr, getAttrInt, nanoToMs, CLAUDE_WRITE_TOOLS, FULL_WRITE_TOOLS,
   extractResponseText, extractTokenCounts, normalizeUserRequest, getGenAiModel,
@@ -112,7 +113,7 @@ function mergeInteractionSlices(claudeSessionId: string, slices: SessionSummaryC
   const workspace = informative.workspace || ordered.find(s => s.workspace)?.workspace || ''
   const base = ordered[0]
 
-  const totalInput = inputTokens + cacheReadTokens + cacheCreateTokens
+  const totalContext = contextTokens({ inputTokens, cacheReadTokens, cacheCreateTokens })
   // A grouped card can only be suppressed-note-free if SOME slice found a changed path; when the
   // union is empty, surface the first slice note (they all carry the same telemetry-config advice).
   const filesChangedNote = filesChanged.size > 0
@@ -136,7 +137,7 @@ function mergeInteractionSlices(claudeSessionId: string, slices: SessionSummaryC
     outputTokens,
     cacheReadTokens,
     cacheCreateTokens,
-    cacheHitRate: totalInput > 0 ? cacheReadTokens / totalInput : 0,
+    cacheHitRate: totalContext > 0 ? cacheReadTokens / totalContext : 0,
     durationMs: (minStartMs !== Number.MAX_SAFE_INTEGER && maxEndMs > minStartMs) ? maxEndMs - minStartMs : base.durationMs,
     startTime: minStartMs !== Number.MAX_SAFE_INTEGER ? new Date(minStartMs).toISOString() : base.startTime,
     filesRead: Array.from(filesRead),
@@ -204,14 +205,17 @@ function buildInteractionCard(
       if (child.name === 'claude_code.llm_request') {
         totalLlmCalls++
         turnCounter++
-        const { input: inTok, output: outTok, cacheRead, cacheCreate } = extractTokenCounts(child)
+        // llm_request usage is Anthropic-shaped (input already cache-excluded) — the constructor
+        // is a pass-through here, but it is the ONE place the disjoint invariant is enforced.
+        const { input, output, cacheRead, cacheCreate } = extractTokenCounts(child)
+        const b = disjointBuckets({ input, output, cacheRead, cacheCreate }, 'anthropic')
         const ttft = getAttrInt(child, 'ttft_ms')
         const childModel = getGenAiModel(child)
         if (childModel) { model = childModel }
-        inputTokens += inTok
-        outputTokens += outTok
-        cacheReadTokens += cacheRead
-        cacheCreateTokens += cacheCreate
+        inputTokens += b.inputTokens
+        outputTokens += b.outputTokens
+        cacheReadTokens += b.cacheReadTokens
+        cacheCreateTokens += b.cacheCreateTokens
 
         const stopReason = getAttrStr(child, 'stop_reason')
         const action = stopReason === 'tool_use' ? 'called tools'
@@ -286,10 +290,14 @@ function buildInteractionCard(
           label: childModel || 'LLM',
           turn: turnCounter,
           model: childModel,
-          inputTokens: inTok + cacheRead + cacheCreate,
-          outputTokens: outTok,
-          cacheReadTokens: cacheRead || undefined,
-          cacheCreateTokens: cacheCreate || undefined,
+          // RAW uncached input — timeline entries carry the SAME four disjoint buckets as the card.
+          // This entry stored input+cacheRead+cacheCreate (incl-cache) until 2026-07-10 while the
+          // log-derived entries were raw, so the two feeds' entries disagreed and every consumer
+          // had to guess the convention (webview derives context-size as contextTokens() instead).
+          inputTokens: b.inputTokens,
+          outputTokens: b.outputTokens,
+          cacheReadTokens: b.cacheReadTokens || undefined,
+          cacheCreateTokens: b.cacheCreateTokens || undefined,
           ttft,
           durationMs: childDur,
           action,
@@ -467,17 +475,19 @@ function buildInteractionCard(
       const rsDur = getAttrInt(rs, 'duration_ms') || (nanoToMs(rs.endTime) - rsStart) || 0
       const rsModel = getGenAiModel(rs)
       if (rs.name === 'claude_code.api_request') {
-        const { input, output, cacheRead, cacheCreate } = extractTokenCounts(rs)
+        // api_request events emit Anthropic-shaped usage (input cache-excluded) — same constructor,
+        // same four disjoint buckets as every other entry.
+        const rb = disjointBuckets(extractTokenCounts(rs), 'anthropic')
         const costStr = getAttrStr(rs, 'cost_usd')
         timeline.push({
           type: 'api_request' as const,
           spanId: rs.spanId,
           label: 'api_request',
           model: rsModel || undefined,
-          inputTokens: input || undefined,
-          outputTokens: output || undefined,
-          cacheReadTokens: cacheRead || undefined,
-          cacheCreateTokens: cacheCreate || undefined,
+          inputTokens: rb.inputTokens || undefined,
+          outputTokens: rb.outputTokens || undefined,
+          cacheReadTokens: rb.cacheReadTokens || undefined,
+          cacheCreateTokens: rb.cacheCreateTokens || undefined,
           costUsd: costStr ? Number(costStr) : undefined,
           querySource: getAttrStr(rs, 'query_source') || undefined,
           agentName: getAttrStr(rs, 'agent.name') || undefined,
@@ -528,8 +538,14 @@ function buildInteractionCard(
     const workspace = findProjectRoot(commonPathPrefix([...allAbsFilePaths]))
 
     const startMs = nanoToMs(interaction.startTime)
-    const totalInput = inputTokens + cacheReadTokens + cacheCreateTokens
-    const cacheHitRate = (totalInput > 0) ? cacheReadTokens / totalInput : 0
+    // The card's four disjoint buckets — sums of per-call disjoint buckets, routed through the one
+    // constructor so the invariant is compile-shaped (a future incl-cache accumulator can't slip in).
+    const buckets = disjointBuckets(
+      { input: inputTokens, output: outputTokens, cacheRead: cacheReadTokens, cacheCreate: cacheCreateTokens },
+      'anthropic',
+    )
+    const totalContext = contextTokens(buckets)
+    const cacheHitRate = (totalContext > 0) ? buckets.cacheReadTokens / totalContext : 0
     const durationMs = getAttrInt(interaction, 'interaction.duration_ms')
       || (nanoToMs(interaction.endTime) - startMs)
 
@@ -566,14 +582,14 @@ function buildInteractionCard(
       model,
       turns: totalLlmCalls,
       // RAW uncached input — the schema invariant is FOUR DISJOINT BUCKETS (calcTokenCostUsd bills
-      // each at its own rate). This card stored totalInput (incl-cache) until 2026-07-10, which
-      // (a) double-billed every cache token at the full input rate in the write-time cost, and
-      // (b) made the same session read up to ~1000× apart between the OTEL and log feeds.
-      // totalInput lives on only inside cacheHitRate above.
-      inputTokens,
-      outputTokens,
-      cacheReadTokens,
-      cacheCreateTokens,
+      // each at its own rate), enforced by disjointBuckets() above. This card stored the incl-cache
+      // total until 2026-07-10, which (a) double-billed every cache token at the full input rate in
+      // the write-time cost, and (b) made the same session read up to ~1000× apart between the OTEL
+      // and log feeds. The incl-cache total lives on only inside cacheHitRate above.
+      inputTokens: buckets.inputTokens,
+      outputTokens: buckets.outputTokens,
+      cacheReadTokens: buckets.cacheReadTokens,
+      cacheCreateTokens: buckets.cacheCreateTokens,
       cacheHitRate,
       durationMs,
       startTime: startMs > 0 ? new Date(startMs).toISOString() : '',

@@ -6,7 +6,8 @@ import { calcTokenCostUsd } from '../shared/pricing'
 
 // Minimal sql.js surface we use — avoids pulling in @types/sql.js
 // which has a transitive @types/emscripten dep that requires browser lib types.
-interface SqlDatabase {
+// Exported so the re-ingest guard's tests can pass a structurally-compatible sql.js handle.
+export interface SqlDatabase {
   run(sql: string, params?: unknown[]): void
   exec(sql: string): Array<{ columns: string[]; values: unknown[][] }>
   export(): Uint8Array
@@ -24,9 +25,9 @@ const BLOBS_DIR = 'blobs'
 // log-sourced rows stale (new columns the incremental parser can't back-fill in place,
 // or a corrected accounting formula). On a bump, all data_source='log' rows are wiped so
 // the next scan re-ingests every local session file with the current semantics. OTEL rows
-// can't be re-derived from logs, so they are normalized IN PLACE instead (v5) — see
-// reIngestLogRowsIfStale. The version history + the standalone sidecar gate share one
-// constant: LOG_INGEST_VERSION in src/collectorState.ts.
+// can't be re-derived from logs, so they are normalized IN PLACE instead (v5 session rows,
+// v6 timeline-entry rows) — see reIngestLogRowsIfStale. The version history + the standalone
+// sidecar gate share one constant: LOG_INGEST_VERSION in src/collectorState.ts.
 const INGEST_VERSION = LOG_INGEST_VERSION
 
 /**
@@ -197,8 +198,11 @@ function applyMigrations(db: SqlDatabase): void {
  * session files. OTEL rows live only in the (ephemeral) span window and cannot be re-derived,
  * so they are preserved and carry the documented accounting discontinuity for pre-v2 history.
  * Idempotent: the version stamp is advanced after the wipe, so it runs exactly once per bump.
+ *
+ * Exported for its tests (src/test/database/reingest.test.ts) — openDatabase stays the sole
+ * production caller.
  */
-function reIngestLogRowsIfStale(db: SqlDatabase): void {
+export function reIngestLogRowsIfStale(db: SqlDatabase): void {
   const rows = db.exec('PRAGMA user_version')
   const current = (rows[0]?.values[0]?.[0] as number) ?? 0
   if (current >= INGEST_VERSION) return
@@ -222,6 +226,23 @@ function reIngestLogRowsIfStale(db: SqlDatabase): void {
         [rawInput, cost, sid],
       )
     }
+  }
+
+  // v6 — the v5 story, one level down: persisted OTEL TIMELINE ENTRIES stored incl-cache
+  // input_tokens (claude.ts llm entries) until the P3 entry normalization. Mirror the card
+  // migration in place — subtract the row's OWN cache columns (clamped at 0, NULLs as 0) — so one
+  // convention lives on disk, ever. Rows whose cache columns were never populated (codex/copilot
+  // OTEL entries carried no per-entry cache data pre-v6) are left arithmetically unchanged: their
+  // incl-cache share is unknowable and the span window they came from is gone — the documented
+  // pre-v6 accounting discontinuity, identical to the v5 stance on unrecoverable OTEL history.
+  // Log-side entries need no arithmetic: their sessions are wiped below and cold-rescanned.
+  if (current < 6) {
+    db.run(
+      `UPDATE timeline_entries
+       SET input_tokens = MAX(input_tokens - COALESCE(cache_read_tokens, 0) - COALESCE(cache_create_tokens, 0), 0)
+       WHERE type = 'llm' AND input_tokens IS NOT NULL
+         AND session_id IN (SELECT session_id FROM sessions WHERE data_source = 'otel')`,
+    )
   }
 
   // Explicit child-first deletes: sql.js does not reliably honor ON DELETE CASCADE, so we

@@ -2,6 +2,7 @@ import { useState } from 'preact/hooks'
 import clsx from 'clsx'
 import { filteredSessions, sessionSummary, insightFilter, ignoredInsightKeys } from '../state'
 import { buildDisplaySummary, getAgentColor, getAgentSourceLabel, getSessionGlobalNumber, formatSessionTime } from '../utils'
+import { contextTokens } from '../../../src/shared/tokenBuckets'
 import type { Insight, InsightFilter, SessionSummaryCard } from '../types'
 
 type EffSummary = ReturnType<typeof buildDisplaySummary>['efficiency']
@@ -80,14 +81,16 @@ export function generateInsights(
   // ── Per-session insights ────────────────────────────────────────────────────
 
   sessions.forEach((sess, idx) => {
-    const llmEntries = (sess.timeline ?? []).filter(e => e.type === 'llm' && (e.inputTokens ?? 0) > 0)
+    // Context size per call = input + cacheRead + cacheCreation (disjoint buckets — the raw
+    // entry.inputTokens alone is only the fresh share and does not grow with the transcript).
+    const llmEntries = (sess.timeline ?? []).filter(e => e.type === 'llm' && contextTokens(e) > 0)
     const globalNum = getSessionGlobalNumber(sess) || (idx + 1)
     const reqSnippet = (sess.userRequest ?? '').slice(0, 60)
 
     // Context growth
     if (llmEntries.length >= 3) {
-      const first = llmEntries[0].inputTokens ?? 0
-      const last = llmEntries[llmEntries.length - 1].inputTokens ?? 0
+      const first = contextTokens(llmEntries[0])
+      const last = contextTokens(llmEntries[llmEntries.length - 1])
       const growth = last - first
       const growthPct = first > 0 ? (growth / first) * 100 : 0
       if (growthPct > 20 && growth > 2000) {
@@ -95,7 +98,7 @@ export function generateInsights(
           severity: 'warning', category: 'efficiency', sessionIdx: idx,
           helpId: 'help-context-bloat',
           title: '[Session ' + globalNum + '] Context grew ' + growthPct.toFixed(0) + '%',
-          detail: 'Input tokens grew from ' + first.toLocaleString() + ' to ' + last.toLocaleString()
+          detail: 'Context tokens grew from ' + first.toLocaleString() + ' to ' + last.toLocaleString()
             + ' (+' + growth.toLocaleString() + ' tokens) across ' + llmEntries.length + ' LLM calls'
             + (reqSnippet ? ' for "' + reqSnippet + '"' : '') + '.',
           action: 'The first call used ' + first.toLocaleString() + ' tokens — audit your instruction files '
@@ -145,16 +148,19 @@ export function generateInsights(
       })
     }
 
-    // Oversized starting context
-    const firstLlm = (sess.timeline ?? []).find(e => e.type === 'llm' && (e.inputTokens ?? 0) > 0)
-    if (firstLlm && (firstLlm.inputTokens ?? 0) > 15000) {
+    // Oversized starting context — measured on the first call's CONTEXT (input + both cache
+    // buckets): on turn 1 the instruction overhead usually lands in cacheCreation, so the raw
+    // uncached share alone would miss exactly the bloat this insight exists to flag.
+    const firstLlm = (sess.timeline ?? []).find(e => e.type === 'llm' && contextTokens(e) > 0)
+    const firstContext = firstLlm ? contextTokens(firstLlm) : 0
+    if (firstLlm && firstContext > 15000) {
       insights.push({
         severity: 'warning', category: 'efficiency', sessionIdx: idx,
         helpId: 'help-large-context',
-        title: '[Session ' + globalNum + '] Starts with ' + (firstLlm.inputTokens ?? 0).toLocaleString() + ' input tokens',
-        detail: 'The very first LLM call already has ' + (firstLlm.inputTokens ?? 0).toLocaleString()
+        title: '[Session ' + globalNum + '] Starts with ' + firstContext.toLocaleString() + ' context tokens',
+        detail: 'The very first LLM call already has ' + firstContext.toLocaleString()
           + ' tokens before any tool results are added.',
-        action: 'Audit your instruction files — ' + (firstLlm.inputTokens ?? 0).toLocaleString()
+        action: 'Audit your instruction files — ' + firstContext.toLocaleString()
           + ' tokens before the first tool call is the baseline overhead. Remove verbose examples '
           + 'and information the agent can discover via tools. Target <5,000 tokens for combined instructions.',
       })
