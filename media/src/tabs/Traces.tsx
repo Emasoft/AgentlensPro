@@ -15,6 +15,7 @@ import {
 import { calcEntryCost, calcSessionCost, fmtUsd } from '../sessionMetrics'
 import { countTokens } from '../tokenEstimator'
 import { buildCacheBreakReport, cacheBreaksByTurn, CAUSE_LABEL } from '../../../src/shared/cacheBreak'
+import { contextTokens } from '../../../src/shared/tokenBuckets'
 import { buildTokensByCause, CAUSE_DIMENSION_LABEL } from '../../../src/shared/tokensByCause'
 import { spawnKindBadge, hitRateColor, formatPct, SpawnCostPanel } from './cacheShared'
 import { BlockRow } from './HistoryTab'
@@ -315,7 +316,9 @@ function CallContextTree({ sessionId, entry }: { sessionId: string; entry: Timel
 function LlmContextBreakdown({ entry, hostSources, compNote, hasCallContext }: { entry: TimelineEntry; hostSources?: ContextSource[]; compNote?: string; hasCallContext?: boolean }) {
   const cacheRead = entry.cacheReadTokens ?? 0
   const cacheCreate = entry.cacheCreateTokens ?? 0
-  const newInput = Math.max(0, (entry.inputTokens ?? 0) - cacheRead - cacheCreate)
+  // Entries carry disjoint buckets: inputTokens IS the fresh uncached share (the old subtraction
+  // compensated for incl-cache OTEL entries and would zero this out under the raw convention).
+  const newInput = entry.inputTokens ?? 0
   const injectedNodes = compositionNodes(hostSources ?? [])
   const itemizedSum = (hostSources ?? []).reduce((n, s) => n + s.tokens, 0)
   // The identifiable injected blocks belong under cache-CREATED when this call newly wrote a prefix
@@ -364,7 +367,7 @@ function LlmContextBreakdown({ entry, hostSources, compNote, hasCallContext }: {
   return (
     <div>
       <div style="font-size:9px;color:var(--muted);margin-bottom:4px">
-        What the {formatCompact((entry.inputTokens ?? 0))}-token prompt was made of — <span style={'color:' + SOURCE_KIND_COLOR.cacheRead}>cache-read</span> reused vs{' '}
+        What the {formatCompact(contextTokens(entry))}-token prompt was made of — <span style={'color:' + SOURCE_KIND_COLOR.cacheRead}>cache-read</span> reused vs{' '}
         <span style={'color:' + SOURCE_KIND_COLOR.cacheWrite}>cache-created</span> re-written. Expand a bar to drill into the injected blocks (CLAUDE.md, rules, memories, catalogs, hooks…) down to their real content.
         {!hasCallContext && (hostSources?.length ?? 0) === 0 && <span>{compNote ?? ' Injected-block detail appears once the session composition finishes loading.'}</span>}
       </div>
@@ -386,7 +389,8 @@ function LlmDetail({ entry, step, sessIdx, idx, sessionModel, hostSources, compN
   const PREVIEW_LEN = 400
   const isLongResponse = responseText.length > PREVIEW_LEN
   const entryCost = calcEntryCost(entry, sessionModel)
-  const newInput = Math.max(0, (entry.inputTokens ?? 0) - (entry.cacheReadTokens ?? 0) - (entry.cacheCreateTokens ?? 0))
+  // Disjoint buckets: inputTokens IS the fresh/uncached share — no subtraction (see tokenBuckets.ts).
+  const newInput = entry.inputTokens ?? 0
   const hasCache = (entry.cacheReadTokens ?? 0) > 0 || (entry.cacheCreateTokens ?? 0) > 0
   const attribution = formatAttribution(entry)
   // The reconstructed literal context is fetchable only when we know the session; when its blocks are
@@ -397,7 +401,7 @@ function LlmDetail({ entry, step, sessIdx, idx, sessionModel, hostSources, compN
     <>
       <LlmField heading="Model">{entry.model || 'unknown'}</LlmField>
       {attribution && <LlmField heading="Issued by">{attribution}</LlmField>}
-      {((entry.inputTokens ?? 0) > 0 || (entry.outputTokens ?? 0) > 0) && (
+      {(contextTokens(entry) > 0 || (entry.outputTokens ?? 0) > 0) && (
         <LlmField heading="Token usage">
           <span class="sw-token-in">
             {hasCache ? `${newInput.toLocaleString()} new` : `${(entry.inputTokens ?? 0).toLocaleString()} input`}
