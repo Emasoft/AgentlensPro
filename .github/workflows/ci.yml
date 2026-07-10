@@ -65,6 +65,11 @@ jobs:
       - name: Lint
         run: npx eslint src media/src
 
+      # Anti-mirror guard: fails if media/src re-declares a symbol src/shared exports.
+      # The webview must import the shared source of truth, never keep a hand-synced copy.
+      - name: Check no mirrors
+        run: node scripts/check-no-mirrors.js
+
       # Bundles MUST be built BEFORE the unit suite: the server integration
       # tests boot the bundled standalone/server.js, which is an esbuild output
       # (only the .ts sources are tracked). Running mocha first fails with

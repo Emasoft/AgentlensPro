@@ -8,11 +8,10 @@
 // (see calibrateTokens). The calibrated numbers are then consistent with Claude's real tokenization
 // regardless of the estimator's drift.
 
-// How a count was obtained, surfaced in the UI/MCP so a reader never mistakes an estimate for truth:
-//  - 'exact'      — comes straight from a usage bucket / api_request (no estimation involved)
-//  - 'calibrated' — an estimate proportionally scaled so the group sums to a known exact total
-//  - 'estimated'  — a raw estimate with no exact total to anchor it
-export type TokenSource = 'exact' | 'calibrated' | 'estimated'
+// How a count was obtained ('exact' | 'calibrated' | 'estimated') — the ONE declaration lives in
+// src/shared/summarizerTypes.ts (it used to be re-declared here and in the webview, and the copies
+// are exactly the drift class the shared-modules refactor removed).
+import type { TokenSource } from './shared/summarizerTypes'
 
 // ── The segmenter's tuning constants (justified per category) ─────────────────
 // English prose averages ~4 chars/token INCLUDING the leading space; because we count whitespace

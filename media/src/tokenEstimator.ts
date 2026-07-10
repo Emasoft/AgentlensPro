@@ -4,8 +4,8 @@
 // ships (ContextBlock.tokens/tokenSource) against the exact usage totals, so calibrateTokens lives
 // host-side only. These estimators are for the webview's OWN char/byte-length figures (blob lengths,
 // file-I/O byte totals) that never round-trip to the host.
-
-export type TokenSource = 'exact' | 'calibrated' | 'estimated'
+// (TokenSource is NOT declared here — the one declaration is src/shared/summarizerTypes.ts,
+// re-exported by ./types; scripts/check-no-mirrors.js rejects a local copy.)
 
 const LETTERS_PER_TOKEN = 4.7
 const DIGITS_PER_TOKEN = 3

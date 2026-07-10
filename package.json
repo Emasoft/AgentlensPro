@@ -60,6 +60,7 @@
     "compile-tests": "tsc -p tsconfig.test.json",
     "watch-tests": "tsc -p tsconfig.test.json -w",
     "check-types": "tsc --noEmit && tsc --noEmit -p media/tsconfig.json",
+    "check-mirrors": "node scripts/check-no-mirrors.js",
     "lint": "eslint src media/src",
     "test:unit": "pnpm run compile-tests && mocha"
   },
