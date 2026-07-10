@@ -122,7 +122,8 @@ export function BlockRow({ block, added, changed, isBreak }: { block: ContextBlo
 // ── Resident-cost itemization panel (TRDD-W0RRL2FZ) ─────────────────────────────
 // Ranks every context block by residentCost = tokens × turns-resident (compaction-aware) — the
 // blocks that cost the most not because they are big but because they RODE the transcript for many
-// turns. Derived in the webview from the already-loaded history (media/src/residentCost.ts mirror).
+// turns. Derived in the webview from the already-loaded history (src/shared/residentCost.ts — the
+// same engine the MCP tools run).
 // Exported so the Context tab renders the same panel per session — one rendering, one source of truth.
 
 function ResidentCostRow({ b, history, rank }: { b: ResidentCostBlock; history: ContextHistory; rank: number }) {
