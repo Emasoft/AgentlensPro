@@ -17,6 +17,7 @@ import { generateInsights, InsightCard } from './Insights'
 import { buildDisplaySummary, tokenBreakdown, formatTokenBreakdown } from '../utils'
 import { Step, TimelineWaterfall } from './Traces'
 import { SpawnCostPanel } from './cacheShared'
+import { computeKeepWarm } from '../../../src/shared/keepWarm'
 import { FlowCanvas } from './Flow'
 import { ToolsChart } from './Tools'
 import type { SessionSummaryCard, FileOpSummary } from '../types'
@@ -207,6 +208,9 @@ function SessionDetail({ sess }: { sess: SessionSummaryCard }) {
   const cost = calcSessionCost(sess, 'token')
   const cacheRate = sess.inputTokens > 0 ? Math.round(sess.cacheReadTokens / sess.inputTokens * 100) : 0
   const burnRate = burnRateData.value
+  // P6 keep-warm: measured from the same lazily-fetched timeline the trace uses — the shared
+  // engine (src/shared/keepWarm.ts) is the ONE implementation (never mirrored, per check-no-mirrors).
+  const keepWarm = computeKeepWarm(timeline)
   // TRDD-62E8UU41: sub-agent children this session spawned. Passed into the trace waterfall so the
   // fan-out nests under its spawning turn (SubAgentBranch) with the per-turn spawn-cost rollup, and
   // rendered as the session-level "spawn cost" panel above the trace (aggregate + antipattern advice).
@@ -334,6 +338,24 @@ function SessionDetail({ sess }: { sess: SessionSummaryCard }) {
                 </div>
               ))}
             </div>
+
+            {/* P6 keep-warm / cache-gap badge — same pill pattern as the resident-blob flag. Only
+                rendered when the api_request ground truth measured at least one turn: a session
+                without that data gets NO badge (honest absence), never a zeroed one. */}
+            {keepWarm && keepWarm.warmTurns + keepWarm.coldTurns > 0 && (
+              <div style="margin-bottom:10px">
+                {keepWarm.coldTurns > 0
+                  ? <span
+                      title={`Prompt-cache gaps: ${keepWarm.coldTurns} turn(s) landed after the ~5-min cache TTL expired and re-WROTE ~${formatCompact(keepWarm.wastedWriteTokens)} tokens of prefix at the 1.25× write rate (a kept-warm cadence reads them at 0.1×). Worst gap ${keepWarm.worstGapMin}min. Keep turns inside the TTL — or batch the long pauses — to avoid the re-write.`}
+                      style="padding:1px 6px;border-radius:3px;background:rgba(246,166,35,0.18);color:#f6a623;font-size:9px;font-weight:600;vertical-align:middle"
+                    >❄ {keepWarm.coldTurns} cold turn{keepWarm.coldTurns !== 1 ? 's' : ''} · ~{formatCompact(keepWarm.wastedWriteTokens)} re-written · worst gap {keepWarm.worstGapMin}min</span>
+                  : <span
+                      title={`All ${keepWarm.warmTurns} measured turn(s) landed inside the ~5-min prompt-cache TTL — the prefix was read from cache at 0.1×, no expiry re-writes. Worst gap ${keepWarm.worstGapMin}min.`}
+                      style="padding:1px 6px;border-radius:3px;background:rgba(129,199,132,0.15);color:var(--vscode-charts-green,#81c784);font-size:9px;font-weight:600;vertical-align:middle"
+                    >♨ cache kept warm · {keepWarm.warmTurns} turn{keepWarm.warmTurns !== 1 ? 's' : ''}</span>
+                }
+              </div>
+            )}
 
             {burnRate && burnRate.sessionId === sess.sessionId && (
               <div style="margin-bottom:10px;padding:6px 10px;border-radius:4px;border-left:3px solid #56D364;background:var(--hover);font-size:11px">

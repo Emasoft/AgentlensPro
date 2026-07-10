@@ -3,6 +3,7 @@ import type { OutputChannelLike } from './vscodeCompat'
 import { SessionStore } from './sessionStore'
 import { SpanAttribute } from './shared/telemetryTypes'
 import { callBodyRegistry } from './rawBodyContext'
+import { countFallback } from './shared/fallbackCounters'
 import { resolveLogEventName, bareLogEventName, CLAUDE_RICH_LOG_EVENTS, BODY_POINTER_LOG_EVENTS } from './otlpLogEvents'
 
 const MAX_BODY_BYTES = 50 * 1024 * 1024 // 50 MB
@@ -110,6 +111,9 @@ export class OtlpCollector {
         try {
           payload = JSON.parse(body)
         } catch {
+          // Swallowed by design (a protobuf exporter must not error-loop), but counted (P6):
+          // an agent stuck on protobuf means ALL its telemetry silently drops here.
+          countFallback('otlp.nonJsonPayload')
           this.log('POST', req.url ?? '/', 200, bodyLen, 'non-JSON payload (protobuf?)')
           res.writeHead(200)
           res.end()
@@ -696,7 +700,11 @@ export class OtlpCollector {
         content = [{ type: 'text', text: content }]
       }
       return JSON.stringify([{ role, content }])
-    } catch { return '' }
+    } catch {
+      // Unparseable gen_ai event content → the response text is silently lost; count it (P6).
+      countFallback('otlp.genAiEventUnparseable')
+      return ''
+    }
   }
 
   async stop() {

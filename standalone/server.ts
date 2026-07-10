@@ -16,6 +16,7 @@ import { summarizeSpans } from '../src/spanSummarizer'
 import { mergeOtelAndLogSessions } from '../src/feedMergePolicy'
 import { calcTokenCostUsd } from '../src/shared/pricing'
 import { contextTokens } from '../src/shared/tokenBuckets'
+import { countFallback, fallbackTotals } from '../src/shared/fallbackCounters'
 import { autoConfigureCodex, autoConfigureCopilotStandalone } from '../src/autoConfigNode'
 import { ensureTelemetryConfig, ensureAgentLensStopHook } from '../src/telemetryConfig'
 import { classifyOtlpPayload } from '../src/otlpParser'
@@ -24,7 +25,7 @@ import { startMcpHttpServer, labelBurnStatusAccounts } from '../src/mcpServer'
 import { resolveCallContext, callBodyRegistry } from '../src/rawBodyContext'
 import { appendHookEvent, readHookEvents, purgeHookEventBuckets, hookEventsDiskUsage, type HookEventRecord } from '../src/hookEventStore'
 import { BodiesActivityTracker } from '../src/bodiesActivity'
-import { evaluateAgentGate, buildAdvisory, readTranscriptContext, type AgentGateState, type GateThresholds, type LaunchSpawner } from '../src/agentGate'
+import { evaluateAgentGate, evaluateSendMessageGate, buildAdvisory, readTranscriptContext, type AgentGateState, type GateThresholds, type LaunchSpawner } from '../src/agentGate'
 import { checkBurnRisk } from '../src/burnGuard'
 import { loadHookRuntimeConfig, saveHookRuntimeConfig } from '../src/hookRuntimeConfig'
 import { ContextCompositionIndex } from '../src/contextCompositionIndex'
@@ -2031,6 +2032,9 @@ const uiServer = http.createServer((req, res) => {
       // Log-event names rejected at the ingest gate since boot — a silent-drop bug (rich events
       // discarded for weeks) is exactly what this exists to make visible.
       otlpDroppedLogEvents: Object.fromEntries(droppedLogEvents),
+      // P6 fallback counters: every silent catch-fallback in the ingest paths, named + counted
+      // (src/shared/fallbackCounters.ts). Counters that never fired are absent, not zero.
+      degradations: fallbackTotals(),
     }))
     return
   }
@@ -2171,9 +2175,9 @@ const uiServer = http.createServer((req, res) => {
   }
 
   // Agent-launch burn gate (TRDD-GOD0108C) — called by scripts/spy-agentlens-gate.sh from
-  // PreToolUse/PostToolUse hooks matched on Agent|Task|Workflow. CONTRACT: the response body
-  // IS the hook's stdout — 204/empty means "print nothing" (allow). Every failure path
-  // returns an empty 204: a gate that can error a launch is worse than no gate (fail-open).
+  // PreToolUse/PostToolUse hooks matched on Agent|Task|Workflow|SendMessage. CONTRACT: the
+  // response body IS the hook's stdout — 204/empty means "print nothing" (allow). Every failure
+  // path returns an empty 204: a gate that can error a launch is worse than no gate (fail-open).
   if (req.method === 'POST' && url === '/api/agent-gate') {
     const chunks: Buffer[] = []
     let received = 0
@@ -2224,9 +2228,13 @@ const uiServer = http.createServer((req, res) => {
           return
         }
 
-        // PreToolUse (default): decide before the launch happens.
+        // PreToolUse (default): decide before the launch happens. SendMessage (P6) takes the
+        // NARROWER evaluator — resuming a dead agent re-runs the request that killed it, so only
+        // COLD_RESUME / CACHE_THRASH may deny; routine messaging is never gated by fan-out rules.
         if (!hookRuntime.gateEnabled) { res.writeHead(204); res.end(); return }
-        const d = evaluateAgentGate((p.tool_input ?? null) as Record<string, unknown> | null, state)
+        const d = p.tool_name === 'SendMessage'
+          ? evaluateSendMessageGate(state)
+          : evaluateAgentGate((p.tool_input ?? null) as Record<string, unknown> | null, state)
         if (d.decision === 'deny') {
           persistStats.gateDenies++
           // Mirror onto the dashboard's SSE alert channel — the notification panel shows
@@ -2697,6 +2705,10 @@ const otlpServer = http.createServer((req, res) => {
       // Persistence is handled by the interval append-flush — no per-request save. A per-request
       // full-store rewrite here is what destroyed 420GB of SSD in 4 hours; never reintroduce it.
     } catch (e) {
+      // Fail-open by design (an exporter must never error-loop on us), but counted (P6):
+      // every payload swallowed here — protobuf, truncation, an ingest bug — is telemetry
+      // that silently never reached processTraces/processLogs.
+      countFallback('standalone.otlpIngestError')
       console.error('[AgentLens] Parse error:', e)
     }
     res.writeHead(200); res.end()

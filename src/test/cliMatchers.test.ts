@@ -23,9 +23,11 @@ const CMD = 'bash /repo/scripts/spy-agentlens.sh'         // lifecycle forwarder
 const GATE_CMD = 'bash /repo/scripts/spy-agentlens-gate.sh' // burn gate (contains "spy-agentlens")
 
 suite('agentlenspro-cli — rebuildEventMatchers (hook install/uninstall)', () => {
-  test('install injects the gate entry on the ^(Task|Agent|Workflow)$ matcher, SYNC (no async)', () => {
+  test('install injects the gate entry on the ^(Task|Agent|Workflow|SendMessage)$ matcher, SYNC (no async)', () => {
     // A fresh PreToolUse event gains exactly the gate matcher with the gate command, timeout 3, sync.
-    assert.strictEqual(cli.GATE_MATCHER, '^(Task|Agent|Workflow)$')
+    // SendMessage joined in P6: resuming a dead agent re-runs the request that killed it, so the
+    // server gates messages too (narrower — cache-thrash / cold-resume only, never routine traffic).
+    assert.strictEqual(cli.GATE_MATCHER, '^(Task|Agent|Workflow|SendMessage)$')
     const r = cli.rebuildEventMatchers([], 'PreToolUse', false, CMD, GATE_CMD)
     assert.strictEqual(r.installed, true)
     const gate = r.rebuilt.find(m => m.matcher === cli.GATE_MATCHER)

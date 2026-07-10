@@ -82,9 +82,11 @@ operations:
                         (SessionStart/End, Stop, StopFailure, Pre/PostCompact, Permission,
                         Notification, SubagentStart/Stop) AND the burn-gate
                         (scripts/spy-agentlens-gate.sh, PreToolUse/PostToolUse matched to
-                        ^(Task|Agent|Workflow)$ only) — it denies the four measured disaster
-                        launches (cache thrash, runaway fan-out, cold-resume fan-out, fork
-                        storm) with the reason fed back to the agent; fail-open when the
+                        ^(Task|Agent|Workflow|SendMessage)$ only) — it denies the four measured
+                        disaster launches (cache thrash, runaway fan-out, cold-resume fan-out,
+                        fork storm) with the reason fed back to the agent; SendMessage is gated
+                        narrower (deny only on cache-thrash / cold-resume — resuming a dead
+                        agent re-runs the request that killed it); fail-open when the
                         server is down; AGENTLENS_GATE=off disables, AGENTLENS_GATE_MODE=warn
                         downgrades denies to warnings. Verified transaction; also removes any
                         dead claude-spyglass hook entries + env.SPYGLASS_DIR. Other tools'
@@ -411,7 +413,10 @@ const HOOK_EVENTS = [
 // MATCHED to agent-launch tools only (rare calls, the exact moments token disasters start), it
 // is a single curl to the resident server (no node spawn, no client-side parsing), and it must
 // be SYNC (async hooks cannot deny) with a hard 3s timeout so a dead server never stalls a turn.
-const GATE_MATCHER = '^(Task|Agent|Workflow)$'
+// SendMessage joined the matcher in P6: resuming a DEAD agent re-runs the request that killed
+// it, so the server gates it — but ONLY on cache-thrash / cold-resume (evaluateSendMessageGate);
+// routine messaging is never denied.
+const GATE_MATCHER = '^(Task|Agent|Workflow|SendMessage)$'
 const GATE_EVENTS = ['PreToolUse', 'PostToolUse']
 
 // Install (or remove) the spy-agentlens.sh forwarder on the lifecycle events, via the same

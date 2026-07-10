@@ -227,6 +227,28 @@ suite('burnMonitor — session resolution + status', () => {
     const st = computeSessionStatus([], [], baseConfig(), { workspace: '/nope' }, NOW)
     assert.ok('message' in st)
   })
+
+  test('computeSessionStatus carries the P6 keepWarm diagnostic measured from api_request entries', () => {
+    // Two requests 6 min apart, the second re-writing the prefix (cacheCreate >> cacheRead):
+    // one cold turn, its cache-creation attributed as wasted write tokens.
+    const c = card({ timeline: [
+      apiEvent(6 * 60_000 + 20_000, { cacheCreateTokens: 180_000 }),
+      apiEvent(20_000, { cacheReadTokens: 0, cacheCreateTokens: 180_000 }),
+    ] })
+    const st = computeSessionStatus([c], gatherConsumptionEvents([c], [], NOW), baseConfig(), { sessionId: 'sess-1' }, NOW)
+    assert.ok('keepWarm' in st, 'resolved status carries keepWarm')
+    if (!('keepWarm' in st)) return
+    assert.deepStrictEqual(st.keepWarm, { warmTurns: 0, coldTurns: 1, wastedWriteTokens: 180_000, worstGapMin: 6 })
+  })
+
+  test('computeSessionStatus keepWarm is null (honest absence) without api_request entries', () => {
+    // A session whose timeline has no per-call ground truth must report null, never zeros.
+    const c = card({ timeline: [] })
+    const st = computeSessionStatus([c], [], baseConfig(), { sessionId: 'sess-1' }, NOW)
+    assert.ok('keepWarm' in st)
+    if (!('keepWarm' in st)) return
+    assert.strictEqual(st.keepWarm, null)
+  })
 })
 
 suite('burnMonitor — computeBurnStatus + config', () => {
@@ -237,6 +259,21 @@ suite('burnMonitor — computeBurnStatus + config', () => {
     assert.ok(status.global.oneMin.tokensPerMin >= 3_000_000)
     assert.ok(status.alerts.some(a => a.rule === 'tokens_per_min'))
     assert.strictEqual(status.activeSessions, 1)
+  })
+
+  test('computeBurnStatus decorates topSessions with the P6 keepWarm diagnostic (null when unmeasurable)', () => {
+    // Session A has api_request ground truth (a warm 1-min cadence); session B has none.
+    const a = card({ sessionId: 'A', timeline: [apiEvent(70_000, { cacheReadTokens: 5000 }), apiEvent(10_000, { cacheReadTokens: 5100 })] })
+    const b = card({ sessionId: 'B', timeline: [] })
+    const events: ConsumptionEvent[] = [
+      ev({ sessionId: 'A', ts: NOW - 5_000, tokens: 5000 }),
+      ev({ sessionId: 'B', ts: NOW - 5_000, tokens: 500 }),
+    ]
+    const status = computeBurnStatus(events, [a, b], baseConfig(), NOW)
+    const topA = status.topSessions.find(s => s.sessionId === 'A')
+    const topB = status.topSessions.find(s => s.sessionId === 'B')
+    assert.deepStrictEqual(topA?.keepWarm, { warmTurns: 1, coldTurns: 0, wastedWriteTokens: 0, worstGapMin: 1 })
+    assert.strictEqual(topB?.keepWarm, null, 'no api_request entries → null, not zeros')
   })
 
   test('loadBurnConfig reads env capacity + thresholds; capacity null by default', () => {

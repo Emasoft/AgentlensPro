@@ -197,10 +197,62 @@ suite('standalone server — hook/gate/burn endpoints (real boot)', () => {
     assert.strictEqual(r.text, '')
   })
 
+  test('SendMessage is NEVER denied by fan-out state: 204 where a Task launch denies (P6)', async () => {
+    // Re-arm the gate (the previous test switched it off) and re-feed a fresh runaway burst so
+    // the launch-deny precondition is measured NOW, not inherited from an aging ring.
+    await httpReq(uiPort, 'POST', '/api/hook-config', { gateEnabled: true })
+    for (let i = 0; i < 9; i++) {
+      await httpReq(uiPort, 'POST', '/api/hook-events', {
+        hook_event_name: 'SubagentStart', session_id: 'ep-msg', cwd: '/tmp/ep', agent_type: 'general-purpose',
+      })
+    }
+    const launch = await httpReq(uiPort, 'POST', '/api/agent-gate', {
+      hook_event_name: 'PreToolUse', session_id: 'ep-msg', tool_name: 'Task', tool_input: { subagent_type: 'general-purpose' },
+    })
+    const lj = launch.json as { hookSpecificOutput?: { permissionDecision?: string } }
+    assert.strictEqual(lj.hookSpecificOutput?.permissionDecision, 'deny', 'precondition: a launch denies under runaway fan-out')
+    // The SAME state must not gate routine messaging — a quiet-state SendMessage always passes.
+    const msg = await httpReq(uiPort, 'POST', '/api/agent-gate', {
+      hook_event_name: 'PreToolUse', session_id: 'ep-msg', tool_name: 'SendMessage', tool_input: { to: 'worker', message: 'status?' },
+    })
+    assert.strictEqual(msg.status, 204)
+    assert.strictEqual(msg.text, '', 'allow = empty body')
+  })
+
+  test('SendMessage DENIES inside the cold-resume window after a StopFailure (P6)', async () => {
+    // A rate-limit stall arms the window: messaging a dead agent re-runs the request that
+    // killed it into a cold cache, so the gate blocks it and names the mechanism.
+    await httpReq(uiPort, 'POST', '/api/hook-events', { hook_event_name: 'StopFailure', session_id: 'ep-stall', cwd: '/tmp/ep' })
+    const r = await httpReq(uiPort, 'POST', '/api/agent-gate', {
+      hook_event_name: 'PreToolUse', session_id: 'ep-stall', tool_name: 'SendMessage', tool_input: { to: 'worker', message: 'resume' },
+    })
+    assert.strictEqual(r.status, 200)
+    const j = r.json as { hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string } }
+    assert.strictEqual(j.hookSpecificOutput?.permissionDecision, 'deny')
+    assert.ok((j.hookSpecificOutput?.permissionDecisionReason ?? '').includes('rate-limit stall'), 'reason names the stall mechanism')
+  })
+
   test('GET /api/burn-risk returns 200 with a risks array', async () => {
     // The REST fast path always yields a full BurnRiskReport carrying a risks array.
     const r = await httpReq(uiPort, 'GET', '/api/burn-risk')
     assert.strictEqual(r.status, 200)
     assert.ok(Array.isArray((r.json as { risks?: unknown }).risks), 'report must carry a risks array')
+  })
+
+  test('/api/server-stats surfaces degradations: a swallowed OTLP ingest failure is counted (P6)', async () => {
+    // The OTLP ingest catch is fail-open by design (an exporter must never error-loop), so a
+    // garbage payload is ACKed 200 and dropped — the fallback counter is what makes that drop
+    // visible. Feed unparseable bytes to the OTLP port, then read the named counter.
+    const stats = await httpReq(uiPort, 'GET', '/api/server-stats')
+    const ports = (stats.json as { ports?: { otlp?: number } }).ports
+    assert.ok(ports?.otlp, 'server-stats must report the OTLP port')
+    const before = ((stats.json as { degradations?: Record<string, number> }).degradations ?? {})['standalone.otlpIngestError'] ?? 0
+    const bad = await httpReq(ports.otlp as number, 'POST', '/v1/logs')
+    // httpReq sends no body here — an empty body is unparseable JSON, exercising the swallow.
+    assert.strictEqual(bad.status, 200, 'ingest stays fail-open (200) even on garbage')
+    const after = await httpReq(uiPort, 'GET', '/api/server-stats')
+    const deg = (after.json as { degradations?: Record<string, number> }).degradations
+    assert.ok(deg, 'server-stats must carry the degradations object')
+    assert.strictEqual(deg['standalone.otlpIngestError'], before + 1, 'the swallowed ingest failure must be counted by name')
   })
 })

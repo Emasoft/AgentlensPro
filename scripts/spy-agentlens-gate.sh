@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # spy-agentlens-gate.sh — the agent-launch burn gate (TRDD-GOD0108C). Registered by
-# `agentlens-cli --install-hooks` on PreToolUse AND PostToolUse, matcher ^(Task|Agent|Workflow)$
-# ONLY — agent launches are rare, so this never adds per-tool-call overhead the way
+# `agentlens-cli --install-hooks` on PreToolUse AND PostToolUse, matcher
+# ^(Task|Agent|Workflow|SendMessage)$ ONLY — agent launches (and agent resumes via
+# SendMessage) are rare, so this never adds per-tool-call overhead the way
 # claude-spyglass's every-event collector did.
 #
 # Contract with the server (POST /api/agent-gate):

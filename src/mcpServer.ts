@@ -639,8 +639,10 @@ const TOOLS = [
       'WINDOW BUDGET (rolling 5h + 7d consumption vs a user-configured capacity, % consumed, and a ' +
       'time-to-exhaustion PROJECTION at the current rate — capacity/pct/projection are null when the ' +
       'capacity is unconfigured, never invented), and any active threshold ALERTS (each naming the ' +
-      'session + dominant cause: agent/skill/plugin/mcp/compaction). Use this to self-throttle before ' +
-      'you hit the provider rate-limit wall.',
+      'session + dominant cause: agent/skill/plugin/mcp/compaction). Each top session also carries its ' +
+      'keepWarm cache-gap diagnostic (warm/cold turns vs the ~5-min prompt-cache TTL + wasted write ' +
+      'tokens; null without api_request data). Use this to self-throttle before you hit the provider ' +
+      'rate-limit wall.',
     inputSchema: { type: 'object' as const, properties: {} },
   },
   {
@@ -650,9 +652,11 @@ const TOOLS = [
       'workspace path and it resolves the newest LIVE session under that prefix, else the newest ' +
       'overall labeled live:false). Returns current + peak context usage, the 4 usage buckets (last ' +
       'turn), the avg-per-call 5 values, cache-hit rate, last-LLM-call cost, session-total cost, ' +
-      'tokens/min rate, remaining 5h + 7d rate-limit-window %, and a compact comparison to your ' +
-      'previous sessions in the same workspace (cost/turns/cache-hit deltas). For the per-turn context ' +
-      'DIFF and composition drill-down, follow up with get_context_history / get_context_composition.',
+      'tokens/min rate, the keepWarm cache-gap diagnostic (warm/cold turns vs the ~5-min prompt-cache ' +
+      'TTL + the cache-write tokens cold turns wasted; null without api_request data), remaining 5h + ' +
+      '7d rate-limit-window %, and a compact comparison to your previous sessions in the same ' +
+      'workspace (cost/turns/cache-hit deltas). For the per-turn context DIFF and composition ' +
+      'drill-down, follow up with get_context_history / get_context_composition.',
     inputSchema: {
       type: 'object' as const,
       properties: {
