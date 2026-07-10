@@ -37,20 +37,33 @@ jobs:
       - name: Enable corepack (pnpm)
         run: corepack enable
 
-      - name: Setup Node.js ${{ matrix.node-version }}
+      # Dependencies are ALWAYS installed under Node 22: the corepack-pinned
+      # pnpm requires Node >= 22.13 (it imports node:sqlite — run 29105351614
+      # died at setup on the Node 20 leg). pnpm is dev tooling only; the
+      # matrix node below is what actually builds and runs the tests.
+      - name: Setup Node.js 22 (for pnpm install)
         uses: actions/setup-node@v6
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: 22
           cache: pnpm
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # Switch the active runtime to the matrix node. Every step after this
+      # uses npx (not `pnpm run`) so nothing re-invokes pnpm under a node it
+      # cannot run on — mirroring the local workflow (deps installed under the
+      # default node, mocha executed under Node 20 via PATH).
+      - name: Setup Node.js ${{ matrix.node-version }} (test runtime)
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node-version }}
+
       - name: Type check (both tsconfigs)
-        run: pnpm run check-types
+        run: npx tsc --noEmit && npx tsc --noEmit -p media/tsconfig.json
 
       - name: Lint
-        run: pnpm run lint
+        run: npx eslint src media/src
 
       # Bundles MUST be built BEFORE the unit suite: the server integration
       # tests boot the bundled standalone/server.js, which is an esbuild output
