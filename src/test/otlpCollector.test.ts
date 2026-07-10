@@ -578,4 +578,64 @@ suite('OtlpCollector', () => {
     assert.strictEqual(spans[1].traceId, 'codex:thread-123:turn-abc')
     assert.ok(spans[0].attributes.some(a => a.key === 'codex.session.id' && a.value.stringValue === 'codex:thread-123:turn-abc'))
   })
+
+  // Claude Code 2.1.206 emits BARE log-event names (`api_request` — the `claude_code.`-prefixed
+  // strings do not exist in that binary), while older builds/docs use the prefixed form. A
+  // prefixed-only gate silently dropped EVERY rich event (verified: 0 api_request spans in an
+  // 81MB store). The gate must accept both spellings and always STORE the prefixed span name,
+  // because spanSummarizer keys its rich-event handling on `claude_code.api_request` etc.
+  test('ingests Claude rich log events under both bare and prefixed event names', async () => {
+    /** One api_request log record; `name` is the on-the-wire event name spelling under test. */
+    const rec = (name: string, sid: string) => ({
+      timeUnixNano: '1700000000000000000',
+      attributes: [
+        { key: 'event.name', value: { stringValue: name } },
+        { key: 'session.id', value: { stringValue: sid } },
+        { key: 'model', value: { stringValue: 'claude-sonnet-5' } },
+      ],
+    })
+    const payload = {
+      resourceLogs: [{
+        scopeLogs: [{
+          logRecords: [
+            rec('api_request', 'sess-bare'),            // CC 2.1.206 spelling
+            rec('claude_code.api_request', 'sess-pre'), // documented/older spelling
+            rec('compaction', 'sess-bare'),
+            rec('api_error', 'sess-bare'),
+          ],
+        }],
+      }],
+    }
+
+    const res = await postJson(TEST_PORT, '/v1/logs', payload)
+    assert.strictEqual(res.status, 200)
+    const names = (store.addedSpans as Array<{ name: string }>).map(s => s.name)
+    assert.deepStrictEqual(names, [
+      'claude_code.api_request',
+      'claude_code.api_request',
+      'claude_code.compaction',
+      'claude_code.api_error',
+    ])
+  })
+
+  test('ingests Claude tool_result carrying the snake_case tool_name attribute', async () => {
+    // 2.1.206 attaches `tool_name` (snake_case); older builds `tool.name`. Both must pass the
+    // tool_result gate, which requires a non-empty tool name.
+    const rec = (toolAttrKey: string) => ({
+      timeUnixNano: '1700000000000000000',
+      attributes: [
+        { key: 'event.name', value: { stringValue: 'tool_result' } },
+        { key: 'session.id', value: { stringValue: 'sess-tools' } },
+        { key: toolAttrKey, value: { stringValue: 'Bash' } },
+      ],
+    })
+    const payload = {
+      resourceLogs: [{ scopeLogs: [{ logRecords: [rec('tool_name'), rec('tool.name')] }] }],
+    }
+
+    const res = await postJson(TEST_PORT, '/v1/logs', payload)
+    assert.strictEqual(res.status, 200)
+    const names = (store.addedSpans as Array<{ name: string }>).map(s => s.name)
+    assert.deepStrictEqual(names, ['claude_code.tool_result', 'claude_code.tool_result'])
+  })
 })

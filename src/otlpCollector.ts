@@ -404,17 +404,24 @@ export class OtlpCollector {
           const eventName = this.getAttrFrom(attrs, ['event.name', 'event_name', 'name', 'event'])
             || (typeof bodyObj?.stringValue === 'string' ? bodyObj.stringValue : '')
 
-          const logToolName = this.getAttrFrom(attrs, ['tool.name'])
+          // Claude Code changed its log-event naming across versions: the docs (and older builds)
+          // use `claude_code.`-prefixed names, but 2.1.206 emits BARE names — the string
+          // "claude_code.api_request" does not exist in that binary at all (verified 2026-07-10:
+          // with a prefixed-only gate, 0 rich events landed in an 81MB span store while the trace
+          // spans flowed fine). Gate on the prefix-STRIPPED form so both conventions ingest.
+          const bareEvent = eventName.startsWith('claude_code.') ? eventName.slice('claude_code.'.length) : eventName
+          // 2.1.206 attaches the tool name as snake_case `tool_name` (older builds: `tool.name`).
+          const logToolName = this.getAttrFrom(attrs, ['tool.name', 'tool_name'])
           const isCodexEvent = eventName.startsWith('codex.')
-          const isClaudeToolResult = eventName === 'tool_result' && logToolName !== ''
+          const isClaudeToolResult = bareEvent === 'tool_result' && logToolName !== ''
           // Rich Claude Code LOG events (verified against code.claude.com/docs monitoring-usage).
           // These carry the per-call ground truth the llm_request SPANS lack: exact cost + the
           // attribution of WHO caused the call (query_source / agent / skill / plugin / mcp), the
           // compaction burn events, and API errors. Ingest them keyed by session.id like tool_result.
-          const isClaudeRichEvent = eventName === 'claude_code.api_request'
-            || eventName === 'claude_code.compaction'
-            || eventName === 'claude_code.api_error'
-            || eventName === 'claude_code.api_retries_exhausted'
+          const isClaudeRichEvent = bareEvent === 'api_request'
+            || bareEvent === 'compaction'
+            || bareEvent === 'api_error'
+            || bareEvent === 'api_retries_exhausted'
 
           // gen_ai_latest_experimental: response content arrives as log events rather than span attributes.
           // Buffer by traceId:spanId so it can be injected when the matching LLM span arrives,
@@ -451,7 +458,7 @@ export class OtlpCollector {
           // full context tree reconstructed on demand (buildCallContext). These carry no timeline
           // value, so record + continue (they must be handled BEFORE the rich-event gate below, which
           // would otherwise drop them). Works for OTEL-only sessions that have no local .jsonl.
-          if (eventName === 'claude_code.api_request_body' || eventName === 'claude_code.api_response_body') {
+          if (bareEvent === 'api_request_body' || bareEvent === 'api_response_body') {
             const bodySessionId = this.getAttrFrom(attrs, ['session.id', 'session_id'])
             const bodyRef = this.getAttrFrom(attrs, ['body_ref', 'body.ref', 'bodyRef'])
             const inlineBody = this.getAttrFrom(attrs, ['body'])
@@ -464,7 +471,7 @@ export class OtlpCollector {
                 ? rec.spanId
                 : this.getAttrFrom(attrs, ['span_id', 'spanId'])
               callBodyRegistry.record(bodySessionId, {
-                kind: eventName === 'claude_code.api_request_body' ? 'request' : 'response',
+                kind: bareEvent === 'api_request_body' ? 'request' : 'response',
                 bodyRef: bodyRef || undefined,
                 inlineBody: bodyRef ? undefined : (inlineBody || undefined),
                 requestId: this.getAttrFrom(attrs, ['request_id', 'request.id', 'requestId']) || undefined,
@@ -496,7 +503,9 @@ export class OtlpCollector {
             traceId = (typeof rec.traceId === 'string' && rec.traceId)
               ? rec.traceId
               : this.getAttrFrom(attrs, ['session.id', 'session_id']) || claudeLogFallbackTraceId
-            spanName = isClaudeToolResult ? 'claude_code.tool_result' : eventName
+            // Store the span name PREFIXED regardless of what the emitter sent: spanSummarizer's
+            // rich-event match and the token-dedup logic key on `claude_code.api_request` etc.
+            spanName = `claude_code.${bareEvent}`
           } else {
             const otlpTraceId = typeof rec.traceId === 'string' && rec.traceId ? rec.traceId : ''
             const convId = this.getAttrFrom(attrs, [
