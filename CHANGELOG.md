@@ -2,6 +2,19 @@
 
 All notable changes to AgentLens are documented here.
 
+## [0.10.0] — 2026-07-10
+
+### Added
+
+- **The burn-gate — token disasters PREVENTED at agent-launch time, not just warned about** (TRDD-GOD0108C). `--install-hooks` now also registers `scripts/spy-agentlens-gate.sh` on `PreToolUse`/`PostToolUse` matched to `^(Task|Agent|Workflow)$` only — the rare, high-stakes moments explosions start, never per-tool-call overhead. Before each agent launch the resident server decides in-memory (measured: decision p50 0.9ms, hook end-to-end 14ms) and **denies the four measured disaster signatures**, feeding the reason back to the agent so it adapts: `THRASH_ACTIVE` (cache-thrash in progress — more agents multiply the re-billing), `RUNAWAY_FANOUT` (≥8 launches/60s), `COLD_RESUME_FANOUT` (a rate-limit stall just ended and one agent is already in flight — that first launch is the cache warm-up; the incident this encodes: 14 forks resumed into a cold cache = 883k tokens in 33s), `FORK_STORM_FORMING` (forks of a ≥200k-token parent into a TTL-expired cache during a fan-out). Real parent size comes from the transcript's last `message.usage` via a bounded 256KB tail read — never bytes/4 over the append-only JSONL. Ambiguous situations get a `systemMessage` warning (with the real token numbers and a "pin a cheaper model" hint when recent traffic is premium) or a silent allow. Fail-open by construction: server down = 13ms silent no-op; `AGENTLENS_GATE=off` kill-switch checked before any network; `AGENTLENS_GATE_MODE=warn` downgrades denies; thresholds tunable via `AGENTLENS_GATE_*` envs; deny/warn/advisory counts in `/api/server-stats` under `gate`
+- **`CACHE_THRASH` — the 6th `check_burn_risk` flag**: ≥3 responses in 5min with big `cache_creation` and ~zero `cache_read` (Anthropic's exact usage numbers from the raw response bodies, which land as files the instant calls complete) means the context prefix is being INVALIDATED every turn instead of read — the pattern class behind the lean-ctx incident. Detail names the model and the re-billed tokens; `--guard` picks it up automatically
+- **PostToolUse in-band advisory** — when an agent wave completes while `CACHE_THRASH`/a fan-out burst is active, the gate injects ONE `additionalContext` warning to the model, deduped per session+risk per 10min (per-call injections that later get stripped in place are themselves a cache-break cause — the #778 lesson)
+
+### Changed
+
+- **Guard/gate hot path is now fully in-memory** — the server keeps an in-memory hook-event ring (fed by `POST /api/hook-events`, boot-seeded from the last hour on disk) and an incremental `BodiesActivityTracker` (readdir + stat only unseen names — bodies are write-once, so this is exact; the seed pass runs 3s after boot, off the interactive path). `check_burn_risk` served by the standalone server no longer reads NDJSON buckets nor stats every body file per call
+- `appendHookEvent` returns the record alongside the byte count so the disk line and the server's ring share one construction point
+
 ## [0.9.0] — 2026-07-10
 
 ### Added

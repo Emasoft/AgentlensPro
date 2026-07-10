@@ -6,7 +6,10 @@ description: >-
   breaking, you need the cost of a session / heartbeat / sub-agent fleet, or any "why is this so
   expensive" question. GUARD in realtime with check_burn_risk / `--guard` (arm in a background
   monitor BEFORE agent fan-outs: warns on fan-out bursts, cold-resume risk after a rate-limit
-  stall, compaction rewrites, huge-request bursts, burn spikes). Covers all 34 diagnostic
+  stall, compaction rewrites, huge-request bursts, burn spikes, and CACHE_THRASH — the prefix
+  being re-written every turn instead of read). PREVENT with the burn-gate hooks
+  (--install-hooks): a PreToolUse gate on agent-launch tools DENIES the four measured disaster
+  launches with the reason fed back to the agent. Covers all 34 diagnostic
   tools (burn status, session burn profile,
   cache-break causes/timeline, expensive writes, heartbeat cost, config comparison, SQL
   analytics). START with investigate_burn — the ONE-command investigation that names the
@@ -53,7 +56,7 @@ agentlens-cli batch '<json-array>'           # N tools in ONE invocation: [{"too
 | `--export-bodies DIR` | re-inflate archived OTEL bodies into DIR as plain files; `--since <hours\|ISO>` / `--until <ISO>` filter by time |
 | `--purge-bodies` | delete ALL archived body volumes (the live 72h window is untouched) |
 | `--install-skill` | (re)install THIS skill into `~/.claude/skills/` — idempotent, reports installed/updated/current |
-| `--install-hooks` | register `spy-agentlens.sh` on the 10 LIFECYCLE hook events (SessionStart/End, Stop, StopFailure, Pre/PostCompact, Permission, Notification, SubagentStart/Stop) via the same verified transaction; also removes dead claude-spyglass entries. Never touches other tools' hooks. Idempotent; needs a session restart |
+| `--install-hooks` | register `spy-agentlens.sh` on the 10 LIFECYCLE hook events (SessionStart/End, Stop, StopFailure, Pre/PostCompact, Permission, Notification, SubagentStart/Stop) AND the burn-gate (`spy-agentlens-gate.sh` on PreToolUse/PostToolUse matched to `^(Task\|Agent\|Workflow)$` only — see "The burn-gate" below) via the same verified transaction; also removes dead claude-spyglass entries. Never touches other tools' hooks. Idempotent; needs a session restart |
 | `--uninstall-hooks` | remove exactly those spy-agentlens hook entries (nothing else) |
 | `--install-otel` | add the 19 Claude Code telemetry env vars to `~/.claude/settings.json` via a verified transaction: atomic backup+rename, cross-process lock, post-verify, refuses an unparseable file, all other content untouched, idempotent (`changed=false` when already installed) |
 | `--uninstall-otel` | remove exactly those 19 vars, same guarantees |
@@ -123,11 +126,42 @@ Monitor(command: "agentlens-cli --guard 15", description: "burn guard", persiste
 | `COMPACTION_REWRITE` | PreCompact ≤5min ago | The next turn rewrites the full prefix; avoid fan-outs/model switches until warm |
 | `HUGE_REQUEST_BURST` | ≥3 requests >1MB in 90s | A fat-context fan-out is IN FLIGHT — stop adding agents, let the wave settle |
 | `BURN_SPIKE` | live burn > 250k tokens/min (5-min window) | Run `investigate_burn --windowHours 1` NOW to name the source before it drains the window |
+| `CACHE_THRASH` | ≥3 responses in 5min with big `cache_creation` and ~zero `cache_read` (exact Anthropic usage) | The prefix is being INVALIDATED every turn — a subagent/fork or a prefix-mutating tool is re-billing the whole context per call. STOP launching agents; `investigate_burn --windowHours 1` then `get_cache_break_causes` to name the mutator |
 
 Hook-event risks need `--install-hooks` (the `sources` block says which feeds are absent).
 Known burn multipliers to avoid up front: fan-outs forked from a fat session (compact first),
 resuming a fan-out right after a rate-limit stall, a `/model` switch to a premium default
 before spawning fresh agents, and images left resident in context.
+
+## The burn-gate — PREVENTION, not just warning (installed by `--install-hooks`)
+
+Warnings only work if someone is watching. The gate acts by itself: a PreToolUse hook on
+`^(Task|Agent|Workflow)$` (agent-launch tools ONLY — never per-tool-call overhead) asks the
+resident server before every launch (one curl, measured 14ms end-to-end, decision p50 0.9ms)
+and **DENIES the four measured disaster signatures**, feeding the reason back to the agent so
+it can adapt instead of just failing:
+
+1. **THRASH_ACTIVE** — cache-thrash in progress: launching more agents multiplies the re-billing.
+2. **RUNAWAY_FANOUT** — ≥8 launches in 60s: let the wave settle.
+3. **COLD_RESUME_FANOUT** — a rate-limit stall just ended and one agent already launched: that
+   first launch IS the cache warm-up; the gate holds the rest until it lands (the 2026-07-10
+   incident was 14 forks resumed into a cold cache = 883k tokens in 33s).
+4. **FORK_STORM_FORMING** — forks of a ≥200k-token parent into a TTL-expired cache while a
+   fan-out is starting: each fork re-pays the full prefix at the write rate.
+
+Everything ambiguous is a `systemMessage` warning (cold/fat forks with the real token numbers,
+fan-out heads-up with a "pin a cheaper model" hint when recent traffic is premium) or a silent
+allow. A PostToolUse advisory on the same matcher injects ONE deduped in-band warning to the
+model when a wave just triggered CACHE_THRASH / a fan-out burst (one per session+risk per
+10min — per-call injections are themselves a cache-break cause).
+
+Operational facts: fail-open by construction (server down = 13ms silent no-op — the gate can
+never stall or fail a turn); `AGENTLENS_GATE=off` disables it entirely (checked before any
+network); `AGENTLENS_GATE_MODE=warn` downgrades every deny to a warning; thresholds tune via
+`AGENTLENS_GATE_FORK_FAT_TOKENS` / `_RUNAWAY_60S` / `_FANOUT_WARN_2MIN` / `_COLD_IDLE_MS` /
+`_COLD_RESUME_WINDOW_MS`; hook changes need a session restart. Deny/warn counts appear in
+`/api/server-stats` under `gate`. If a deny is wrong for a legitimate mass fan-out, don't
+fight it turn-by-turn — set `AGENTLENS_GATE_MODE=warn` for that run and restore after.
 
 ## High-value tools (cheat-sheet)
 

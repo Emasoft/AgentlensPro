@@ -16,7 +16,8 @@ agentlens-cli list --desc                        # discover tools
 agentlens-cli help <tool>                        # flags from the live schema
 agentlens-cli <tool> --param value --out FILE    # full JSON to disk, digest to stdout
 agentlens-cli --install-otel | --uninstall-otel   # wire/unwire Claude Code telemetry (verified transaction)
-agentlens-cli --install-hooks | --uninstall-hooks # wire/unwire lifecycle hook capture (same transaction)
+agentlens-cli --install-hooks | --uninstall-hooks # wire/unwire lifecycle hook capture + the burn-gate
+                                                  # (PreToolUse deny on agent-launch disasters; AGENTLENS_GATE=off)
 agentlens-cli --install-skill                     # (re)install this skill into ~/.claude/skills/
 bash scripts/install.sh                           # one-command install: deps, build, link, skill, server
 ```

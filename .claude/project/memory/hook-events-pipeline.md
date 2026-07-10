@@ -22,10 +22,18 @@ rate-limit turn deaths (StopFailure), compaction boundaries + trigger (PreCompac
 session lifecycle. Consumption into burnMonitor (measured window ceiling) and the cache-break
 classifier (COMPACTION with `evidence: hook`) is planned in TRDD-8ENYLEIO.
 
-**Deliberately NOT hooked: PreToolUse/PostToolUse/UserPromptSubmit** — fully redundant with
-existing ingestion, and per-tool-call hooks are where all overhead and all cache-break damage
-lives (additionalContext reminders get stripped in place mid-transcript → prefix re-bill;
-that mechanism measured at ≈44% of cache-break waste, see the CHANGELOG 0.9.0 context).[^1]
+**Deliberately NOT hooked unmatched: PreToolUse/PostToolUse/UserPromptSubmit** — fully
+redundant with existing ingestion, and per-tool-call hooks are where all overhead and all
+cache-break damage lives (additionalContext reminders get stripped in place mid-transcript →
+prefix re-bill; that mechanism measured at ≈44% of cache-break waste, see the CHANGELOG 0.9.0
+context).[^1] **The ONE narrow exception (TRDD-GOD0108C, 0.10.0): the burn-gate** —
+`scripts/spy-agentlens-gate.sh` on PreToolUse/PostToolUse **matched to `^(Task|Agent|Workflow)$`
+only** (agent launches are rare). SYNC (async hooks cannot deny), 3s timeout, one curl to
+`POST /api/agent-gate` (decision p50 0.9ms, end-to-end 14ms), fail-open on any error,
+`AGENTLENS_GATE=off` kill-switch, `AGENTLENS_GATE_MODE=warn` downgrade. It denies the four
+measured disaster launches (THRASH_ACTIVE / RUNAWAY_FANOUT / COLD_RESUME_FANOUT /
+FORK_STORM_FORMING) with the reason fed back to the model; PostToolUse injects ONE deduped
+additionalContext advisory per session+risk per 10min. See [[burn-gate]] docs in the skill.
 
 **Why:** capture is optional — every future consumer must degrade to inference when the store
 is empty and label which evidence it used.
