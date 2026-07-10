@@ -9,25 +9,36 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # corepack downloads the pnpm version pinned by package.json "packageManager";
+  # without this the download confirmation prompt can hang a non-TTY CI step.
+  COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
+      fail-fast: false
       matrix:
-        node-version: [18, 20]
+        node-version: [20, 22]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      # pnpm version is pinned by package.json "packageManager"; action-setup
-      # reads it (do NOT also pass a `version:` input — the two conflict).
-      # Third-party action pinned to a full commit SHA (tag-rewrite protection).
-      - name: Setup pnpm
-        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+      # pnpm via corepack — the version comes from package.json "packageManager"
+      # (single source of truth; no third-party action needed). MUST run before
+      # setup-node: its `cache: pnpm` step invokes `pnpm store path`, so the
+      # corepack shim has to already be on PATH.
+      - name: Enable corepack (pnpm)
+        run: corepack enable
 
       - name: Setup Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ matrix.node-version }}
           cache: pnpm
@@ -35,14 +46,18 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Type check (both tsconfigs)
+        run: pnpm run check-types
+
       - name: Lint
         run: pnpm run lint
 
-      - name: Type check
-        run: pnpm run check-types
+      - name: Compile tests
+        run: npx tsc -p tsconfig.test.json
 
+      # Full unit suite under the matrix node — mocha directly (out/test via .mocharc.cjs).
       - name: Unit tests
-        run: pnpm run test:unit
+        run: npx mocha
 
-      - name: Build production bundle
-        run: pnpm run package
+      - name: Build bundles
+        run: node esbuild.js
