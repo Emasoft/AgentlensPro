@@ -38,7 +38,13 @@ function isDegradedRead(e: unknown): boolean {
 //       entries stored incl-cache input until now) + opencode entries gained per-message cache
 //       buckets. One convention on disk, ever: persisted OTEL entry rows are normalized in place
 //       by the SQLite v6 migration (db.ts); log-side sidecars/rows cold-rescan via this stamp.
-export const LOG_INGEST_VERSION = 6
+//   v7 (P8, async child tokens): subagents/*.jsonl transcripts gain parentSessionId at PARSE time
+//       (logReader path-links <parentSessionId>/subagents/agent-<id>.jsonl). The read-time merge
+//       (feedMergePolicy.linkSubagentTranscripts) needs that link to collapse a spawn placeholder
+//       with its transcript twin — but persisted agent-* cards were built without it AND the offset
+//       resume would skip their unchanged files forever, freezing them as orphans. Bumping forces
+//       the cold rescan that relinks history.
+export const LOG_INGEST_VERSION = 7
 
 // ── Log tail offsets ──────────────────────────────────────────────────────────
 
