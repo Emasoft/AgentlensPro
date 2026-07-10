@@ -1,5 +1,8 @@
 # ── Build stage ────────────────────────────────────────────────────────────────
-FROM --platform=$BUILDPLATFORM node:20-alpine AS builder
+# Node 22 is REQUIRED in the builder: pnpm 11.9 imports node:sqlite (>= 22.13) —
+# under node:20 `pnpm install` dies with ERR_UNKNOWN_BUILTIN_MODULE before
+# resolving a single package (v1.0.0 docker workflow run 29121508405).
+FROM --platform=$BUILDPLATFORM node:22-alpine AS builder
 WORKDIR /app
 
 # Keep pnpm in lockstep with package.json "packageManager"; pnpm 11 is required
@@ -21,7 +24,9 @@ COPY media/dashboard.css media/help-mascot.png media/mascot.png ./media/
 RUN node esbuild.js --production
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────
-FROM node:20-alpine
+# Kept on the same major as the builder so the bundled server runs on the node
+# it was built against (the server itself only needs Node >= 18).
+FROM node:22-alpine
 WORKDIR /app
 
 RUN addgroup -S agentlens && adduser -S agentlens -G agentlens
