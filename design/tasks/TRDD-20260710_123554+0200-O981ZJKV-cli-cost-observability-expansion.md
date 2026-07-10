@@ -3,7 +3,8 @@ trdd-id: O981ZJKV
 title: CLI cost-observability expansion — 14-item work order, coverage map + gaps
 column: dev
 created: 2026-07-10T12:35:54+0200
-updated: 2026-07-10T12:35:54+0200
+updated: 2026-07-10T13:05:00+0200
+implementation-commits: [1093245]
 current-owner: agentlens-session
 task-type: feature
 release-via: none
@@ -20,9 +21,12 @@ test-requirements: [unit, typecheck, lint]
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-07-10
 
-**IN DEV.** The user's full 14-item list is recorded below with dispositions. This session
-ships items marked NEW-NOW; BACKBURNER items get child TRDDs when picked up — their specs
-live in this file so nothing is lost.
+**NEW-NOW SCOPE SHIPPED 2026-07-10** (`get_cost_rollup`, `get_rate_limit_report` — see
+Measured results). STILL OPEN in this umbrella: item 9 (similar-session cost prediction),
+item 11 (skills cost attribution), item 13 (runtime/memory inventory), window-capacity
+auto-calibration (item 2 extension), the WSL/Windows FIXES from the audit report, and the
+standalone child-card linkage DEFECT — each has its spec below/in Measured results; author
+child TRDDs when scheduling them. `updated:` bumped 2026-07-10T13:05.
 
 ## Coverage map (verified against the live 34-tool surface, 2026-07-10)
 
@@ -58,6 +62,23 @@ live in this file so nothing is lost.
 
 - Item 1/2 verification calls recorded 2026-07-10: account_status returns the full identity
   block; window_budget works but capacity unconfigured on this machine (capacitySource:none).
-- (rest pending implementation)
+- **get_cost_rollup + get_rate_limit_report SHIPPED** (suite 577 passing). Live proof of the
+  rate-limit report against the real 2026-07-10 incident: 93 StopFailure turn-deaths grouped
+  into ONE episode starting 09:26 local across 3 sessions (error `rate_limit`), attributed
+  window verdict names FORK_STORM (3 fully cold full-prefix writes, largest 592k; 16 requests
+  sharing one inherited transcript), windowEstCostUsd $167.78.
+- **DEFECT found (pre-existing, blocks item 6/7 fidelity):** the standalone `getSessions()`
+  path currently yields ZERO cards with `parentSessionId` (even `get_subagent_tree` reports
+  childCount 0 on a session that demonstrably spawned agents). The rollup's subagent view
+  honestly returns 0; the per-call fact tools (`get_cost_by_cause` byAgent,
+  `compare_configs --groupBy subagent_type`) still answer subagent cost questions. Root-cause
+  of the missing child-card linkage in the standalone log path = follow-up task.
+- **WSL/Windows audit (item 14) complete** — report:
+  `reports/cross-platform-audit/20260710_124412+0200-windows-wsl-audit.md`. Verdict: works
+  MOSTLY under WSL (blockers are POSIX/bash/python3-only assumptions); native Windows has
+  3 BLOCKERS — hardcoded `python3` in the sole config-editor path (safeConfigEdit), hooks
+  registered as `bash spy-agentlens*.sh`, bash-only installer — plus a SIGTERM-flush
+  data-loss risk (Windows has no SIGTERM graceful path) and backslash-path display bugs.
+  Fixes = child TRDD when scheduled.
 
 ## Notes and lessons learned

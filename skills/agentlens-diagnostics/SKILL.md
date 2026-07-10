@@ -9,8 +9,9 @@ description: >-
   stall, compaction rewrites, huge-request bursts, burn spikes, and CACHE_THRASH — the prefix
   being re-written every turn instead of read). PREVENT with the burn-gate hooks
   (--install-hooks): a PreToolUse gate on agent-launch tools DENIES the four measured disaster
-  launches with the reason fed back to the agent. Covers all 34 diagnostic
-  tools (burn status, session burn profile,
+  launches with the reason fed back to the agent. Covers all 36 diagnostic
+  tools (burn status, session burn profile, interval cost rollups, rate-limit forensics,
+  account/plan + window budget,
   cache-break causes/timeline, expensive writes, heartbeat cost, config comparison, SQL
   analytics). START with investigate_burn — the ONE-command investigation that names the
   window-burn culprits (fork storms, premium-model fan-outs, idle-fleet keep-warm, image
@@ -177,6 +178,10 @@ fight it turn-by-turn — set `AGENTLENS_GATE_MODE=warn` for that run and restor
 |---|---|
 | **"My window drained — what burned it and WHO?"** | **`investigate_burn`** — START HERE. ONE command does the whole investigation: exact billed usage (by hour/model, est $), workspace attribution, and ranked cause findings with evidence (`FORK_STORM`, `SUBAGENT_BOOT_TAX`, `PREMIUM_MODEL_FANOUT`, `FAT_SESSION_REWRITES`, `IDLE_FLEET_KEEPWARM`, `IMAGE_BLOB_RESIDENT`, `RATE_LIMIT_COLD_RESUME`) + a plain verdict naming the culprits. Flags: `--windowHours 5` (default), `--untilIso <ISO>` for a past drain, `--maxFiles`. Drill deeper only if needed with the tools below |
 | Is something burning RIGHT NOW? | `get_burn_status` |
+| Which account am I on — email, plan (pro/max5x/max20x), billing (subscription vs API), extra-usage? | `get_account_status` |
+| How much 5h/7d window is left, per account, and when does it run out? | `get_window_budget` (time-to-exhaustion needs `AGENTLENS_WINDOW_5H_TOKENS`/`_7D_TOKENS` capacity configured — calibrate from a premature window end) |
+| What did project X / ALL projects / my subagents cost in interval Y? (5-value breakdown + $/h) | `get_cost_rollup --groupBy project\|all\|subagent\|session\|model --windowHours N` (or `--sinceIso/--untilIso`); `--subagentsOnly --liveOnly` = the live-fleet view; `--sortBy` any bucket |
+| What rate limits did I hit, what EXACTLY filled the window, and why? | `get_rate_limit_report` — stall episodes (sessions/workspaces/errors) + the newest episode's 5h window attributed with exact billed usage, verdict, and top findings |
 | Why is THIS session expensive? | `get_session_burn_profile --sessionId <id>` |
 | What keeps breaking the cache, machine-wide? | `get_cache_break_causes` |
 | Per-turn break diagnosis of one session | `get_cache_break_timeline --sessionId <id>` |
