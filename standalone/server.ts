@@ -481,6 +481,11 @@ function buildImportCardStandalone(raw: Record<string, unknown>): SessionSummary
     timeline:          [],
     backgroundSpans:   [],
     loopSignals:       Array.isArray(raw['loopSignals']) ? raw['loopSignals'] as SessionSummaryCard['loopSignals'] : [],
+    // P7 provenance — carried through ONLY when the export recorded a valid value; a legacy
+    // export without it imports as undefined ("unknown"), never a fabricated stamp.
+    tokensSource:      raw['tokensSource'] === 'log' || raw['tokensSource'] === 'otel' || raw['tokensSource'] === 'merged'
+      ? raw['tokensSource'] : undefined,
+    coverageNote:      typeof raw['coverageNote'] === 'string' ? raw['coverageNote'] : undefined,
   }
 }
 
