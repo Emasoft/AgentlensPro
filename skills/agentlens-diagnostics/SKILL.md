@@ -4,7 +4,7 @@ description: >-
   Query AgentLens token/cost forensics from any project via the global agentlens-cli — use when
   a session is burning tokens, a rate-limit window drains too fast, the prompt cache keeps
   breaking, you need the cost of a session / heartbeat / sub-agent fleet, or any "why is this so
-  expensive" question. Covers all 32 diagnostic tools (burn status, session burn profile,
+  expensive" question. Covers all 33 diagnostic tools (burn status, session burn profile,
   cache-break causes/timeline, expensive writes, heartbeat cost, config comparison, SQL
   analytics). START with investigate_burn — the ONE-command investigation that names the
   window-burn culprits (fork storms, premium-model fan-outs, idle-fleet keep-warm, image
@@ -98,6 +98,7 @@ boot refuses cleanly. `batch --out` files are position-prefixed (`out-1-<tool>.j
 
 | Question | Tool |
 |---|---|
+| **"My window drained — what burned it and WHO?"** | **`investigate_burn`** — START HERE. ONE command does the whole investigation: exact billed usage (by hour/model, est $), workspace attribution, and ranked cause findings with evidence (`FORK_STORM`, `SUBAGENT_BOOT_TAX`, `PREMIUM_MODEL_FANOUT`, `FAT_SESSION_REWRITES`, `IDLE_FLEET_KEEPWARM`, `IMAGE_BLOB_RESIDENT`, `RATE_LIMIT_COLD_RESUME`) + a plain verdict naming the culprits. Flags: `--windowHours 5` (default), `--untilIso <ISO>` for a past drain, `--maxFiles`. Drill deeper only if needed with the tools below |
 | Is something burning RIGHT NOW? | `get_burn_status` |
 | Why is THIS session expensive? | `get_session_burn_profile --sessionId <id>` |
 | What keeps breaking the cache, machine-wide? | `get_cache_break_causes` |
