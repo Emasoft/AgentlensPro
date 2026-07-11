@@ -1,9 +1,9 @@
 ---
 trdd-id: YQZ9P8IL
 title: Account-state timeline — per-request subscription-mode attribution, SSD-frugal buffered writes
-column: backburner
+column: complete
 created: 2026-07-11T09:55:06+0200
-updated: 2026-07-11T09:55:06+0200
+updated: 2026-07-11T10:49:07+0200
 current-owner: orchestrator-agentlenspro
 priority: 2
 severity: MEDIUM
@@ -13,11 +13,25 @@ task-type: feature
 release-via: publish
 test-requirements: [unit, integration, lint, typecheck]
 npt: [VY1IUVUM]
-blocked-by: [VY1IUVUM]
-implementation-commits: []
+blocked-by: []
+implementation-commits: [7fe8b97]
 ---
 
 # Account-state timeline — attribute every request to the subscription mode active then
+
+## ⏵ STATE — READ THIS FIRST ON RESUME — 2026-07-11 (COMPLETE — awaiting tag → published)
+
+- **Current state**: DONE on `feat/account-state-timeline`, commit `7fe8b97` (VY1IUVUM unblocked
+  it — now published as v2.2.0). `src/accountStateTimeline.ts` = the change-detected buffered writer
+  + `resolveStateAt` binary search + `buildAccountStateRecord`; plan/mode/regime helpers MOVED here
+  from mcpServer (single source of truth). `get_account_state_at` MCP tool added. Sampled on the
+  standalone 4s burn tick; flushed on 60s timer / 32-record / SIGTERM. Gates green (tsc 0, eslint 0,
+  mirrors OK, esbuild OK, **mocha 849/0/4**). **Live-verified**: 7s of ticks produced exactly ONE
+  ndjson record (ipazia / Max 5x / subscription / 60min doc-matrix — change-detection proven), and
+  get_account_state_at resolved it.
+- **NEXT ACTION**: merge feat → main `--no-ff`; deploy; tag `v2.3.0` (push → OIDC publish); flip this
+  TRDD `complete → published`.
+- **SUPERSEDED — do NOT carry forward**: the `blocked-by: [VY1IUVUM]` state (VY1IUVUM shipped).
 
 ## Requirement (USER 2026-07-11)
 
