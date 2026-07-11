@@ -38,6 +38,8 @@ import { buildSpawnRollup } from './shared/spawnRollup'
 import { buildTokensByCause } from './shared/tokensByCause'
 import type { BurnStatus, SessionStatus, AccountWindowBudget } from './burnMonitor'
 import { type AccountInfo, accountLabelFor } from './accountInfo'
+import { classifyTtlRegime, type TtlContext, type AuthRegime } from './shared/cacheTtl'
+import type { RateLimitsSnapshot } from './statuslineUsage'
 import { listSessionFileIds } from './contextComposition'
 import { generateSuggestions } from './instructionAdvisor'
 import { readAllInstructionContent } from './instructionFiles'
@@ -2360,6 +2362,13 @@ export interface McpServerOptions {
   /** TRDD-BURNWDGT — the current live OAuth account (identity + plan type). Powers get_account_status and
    *  labels the per-account window budgets in get_window_budget / get_burn_status. */
   getAccount?: AccountAccessor
+  /** TRDD-VY1IUVUM Part-5 — the machine's resolved TTL context (auth regime + prompt-caching env
+   *  overrides). Feeds get_account_status's cacheTtl summary field (classified for kind='main'). */
+  getTtlContext?: () => TtlContext
+  /** TRDD-VY1IUVUM Part-5 — Claude Code's own rate_limits.{five_hour,seven_day}.utilization, when the
+   *  statusline build persists it into the usage log. null when absent or stale — get_account_status
+   *  then falls back to AgentlensPro's own calibrated window pct (never presents a null as 0). */
+  getRateLimits?: () => RateLimitsSnapshot | null
   /** TRDD-PJC8N1HO — collector downtime windows during which OTEL exports were dropped/lost. Returned
    *  by get_recent_sessions so an agent orienting itself sees explicit "telemetry lost HH:MM–HH:MM"
    *  gaps instead of assuming continuous coverage. */
@@ -2390,6 +2399,8 @@ export function createMcpServer(opts: McpServerOptions): Server {
     const getBurnStatus = opts.getBurnStatus ?? null
     const getSessionStatus = opts.getSessionStatus ?? null
     const getAccount = opts.getAccount ?? null
+    const getTtlContext = opts.getTtlContext ?? null
+    const getRateLimits = opts.getRateLimits ?? null
 
     let result: unknown
     switch (req.params.name) {
@@ -2477,7 +2488,10 @@ export function createMcpServer(opts: McpServerOptions): Server {
           : { message: 'Session status unavailable in this runtime (no live session/statusline source wired).' }
         break
       case 'get_account_status':
-        result = handleGetAccountStatus(getAccount?.() ?? null, getBurnStatus?.() ?? null)
+        result = handleGetAccountStatus(
+          getAccount?.() ?? null, getBurnStatus?.() ?? null,
+          getTtlContext?.() ?? null, getRateLimits?.() ?? null,
+        )
         break
       case 'get_window_budget':
         result = handleGetWindowBudget(getBurnStatus?.() ?? null, getAccount?.() ?? null, args as { accountId?: string })

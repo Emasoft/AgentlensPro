@@ -45,7 +45,16 @@ export function detectTtlEnvOverrides(
 /** Pure auth-regime resolution from the account + the 5h window fill. Exported for tests. */
 export function resolveAuthRegime(account: AccountInfo | null, fiveHourPctConsumed: number | null): AuthRegime {
   const billing = account?.billingType ?? null
-  if (billing === 'subscription') {
+  if (billing === null) return 'unknown'
+  // ROOT-CAUSE BUG (TRDD-VY1IUVUM ADDENDUM, 2026-07-11): this used to compare `billing ===
+  // 'subscription'` exactly, but the REAL ~/.claude.json oauthAccount.billingType value observed
+  // live (via get_account_status on a Max-5x account) is "stripe_subscription" — Anthropic
+  // prefixes the billing shape with the payment processor. The exact-match silently fell through
+  // to the 'api-key' branch below, misclassifying every subscription account and reporting the
+  // wrong 5-min TTL on a session that actually rides the 1-hour tier (false cold-rewrite
+  // warnings). Fix: match any billingType whose lowercased value CONTAINS 'subscription' — this
+  // also covers any other processor prefix Anthropic might add later without another silent miss.
+  if (billing.toLowerCase().includes('subscription')) {
     // Drawing usage credits requires BOTH the opt-in and positive over-plan evidence; either
     // signal absent → the within-plan row. The falsifier corrects a wrong call the honest way.
     if (account?.hasExtraUsageEnabled === true && fiveHourPctConsumed !== null && fiveHourPctConsumed >= 100) {
@@ -53,7 +62,6 @@ export function resolveAuthRegime(account: AccountInfo | null, fiveHourPctConsum
     }
     return 'subscription'
   }
-  if (billing === null) return 'unknown'
   // Any non-subscription billingType (observed value: 'api') means the account bills per token —
   // the API-key matrix row (Bedrock/GCP/Foundry land here too when they surface a billingType).
   return 'api-key'

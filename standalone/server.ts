@@ -668,10 +668,21 @@ startMcpHttpServer({
   // reconstructed from the raw OTEL request body indexed by the collector. Works for OTEL-only sessions.
   getCallContext: (sessionId, sel) => resolveCallContext(sessionId, sel),
   // TRDD-OG9PARZQ: realtime burn status + one-call session self-diagnostic for the fleet's Claudes.
-  getBurnStatus: () => { const { sessions, events, now } = gatherBurn(); return computeBurnStatus(events, sessions, burnConfig, now) },
-  getSessionStatus: (sel) => { const { sessions, events, now } = gatherBurn(); return computeSessionStatus(sessions, events, burnConfig, sel, now) },
+  // TRDD-VY1IUVUM: pass the machine TtlContext so each session's keepWarm classifies against ITS
+  // resolved regime (main/subagent/fork × auth) instead of silently defaulting to ASSUMED_TTL_REGIME
+  // — without this the 5-min floor was applied even to subscription main sessions riding the 1h tier.
+  getBurnStatus: () => { const { sessions, events, now } = gatherBurn(); return computeBurnStatus(events, sessions, burnConfig, now, currentTtlContext()) },
+  getSessionStatus: (sel) => { const { sessions, events, now } = gatherBurn(); return computeSessionStatus(sessions, events, burnConfig, sel, now, currentTtlContext()) },
   // TRDD-BURNWDGT: the current live OAuth account (identity + plan) for get_account_status + window labels.
   getAccount: () => getCurrentAccount(),
+  // TRDD-VY1IUVUM Part-5: the machine's TTL context (auth regime + env overrides) for the
+  // get_account_status human-readable summary's cacheTtl field.
+  getTtlContext: () => currentTtlContext(),
+  // TRDD-VY1IUVUM Part-5: Claude Code's own rate_limits.{five_hour,seven_day}.utilization, when the
+  // statusline build persists it into the usage log — the authoritative window-fill source for
+  // get_account_status. null when absent (a statusline.py build that doesn't emit it yet, or no
+  // recent-enough record) — the handler falls back to AgentlensPro's own calibrated pct.
+  getRateLimits: () => statuslineReader.getLatestRateLimits(),
   // TRDD-GOD0108C: hot-path feeds for check_burn_risk — the in-memory event ring (zero disk)
   // and the incremental bodies tracker (CACHE_THRASH + huge-request burst without full stats).
   getRecentHookEvents: () => recentHookEvents,
@@ -712,7 +723,10 @@ function tickBurn(): void {
   let status
   try {
     const { sessions, events, now } = gatherBurn()
-    status = computeBurnStatus(events, sessions, burnConfig, now)
+    // TRDD-VY1IUVUM: same TTL-aware wiring as the getBurnStatus accessor above — the SSE tick feeds
+    // the dashboard AND seeds currentTtlContext()'s own usage-credit signal (lastBurnStatus), so
+    // omitting it here would leave the ticked keepWarm data on the assumed 5-min floor forever.
+    status = computeBurnStatus(events, sessions, burnConfig, now, currentTtlContext())
   } catch (e) {
     console.warn('[AgentLens] burn tick error:', e)
     return
