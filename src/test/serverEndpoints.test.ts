@@ -219,17 +219,29 @@ suite('standalone server — hook/gate/burn endpoints (real boot)', () => {
     assert.strictEqual(msg.text, '', 'allow = empty body')
   })
 
-  test('SendMessage DENIES inside the cold-resume window after a StopFailure (P6)', async () => {
-    // A rate-limit stall arms the window: messaging a dead agent re-runs the request that
-    // killed it into a cold cache, so the gate blocks it and names the mechanism.
+  test('SendMessage in the cold-resume window: a DEAD target denies, unknown liveness only warns (P6)', async () => {
+    // A rate-limit stall arms the window: resuming a DEAD agent re-runs the request that killed
+    // it into a cold cache. 2026-07-11 fix: the hard deny needs POSITIVE dead evidence from the
+    // SubagentStart/Stop hook events — a NAME target (no hook-event counterpart) downgrades to a
+    // warning, because delivery to a possibly-live agent must never be hard-blocked.
     await httpReq(uiPort, 'POST', '/api/hook-events', { hook_event_name: 'StopFailure', session_id: 'ep-stall', cwd: '/tmp/ep' })
-    const r = await httpReq(uiPort, 'POST', '/api/agent-gate', {
+    await httpReq(uiPort, 'POST', '/api/hook-events', { hook_event_name: 'SubagentStart', session_id: 'ep-stall', agent_id: 'aepdead0000000001' })
+    await httpReq(uiPort, 'POST', '/api/hook-events', { hook_event_name: 'SubagentStop', session_id: 'ep-stall', agent_id: 'aepdead0000000001' })
+    const dead = await httpReq(uiPort, 'POST', '/api/agent-gate', {
+      hook_event_name: 'PreToolUse', session_id: 'ep-stall', tool_name: 'SendMessage', tool_input: { to: 'aepdead0000000001', message: 'resume' },
+    })
+    assert.strictEqual(dead.status, 200)
+    const dj = dead.json as { hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string } }
+    assert.strictEqual(dj.hookSpecificOutput?.permissionDecision, 'deny')
+    assert.ok((dj.hookSpecificOutput?.permissionDecisionReason ?? '').includes('rate-limit stall'), 'reason names the stall mechanism')
+    // Same armed window, but a NAME target → liveness unknown → a systemMessage warning, no deny.
+    const unknown = await httpReq(uiPort, 'POST', '/api/agent-gate', {
       hook_event_name: 'PreToolUse', session_id: 'ep-stall', tool_name: 'SendMessage', tool_input: { to: 'worker', message: 'resume' },
     })
-    assert.strictEqual(r.status, 200)
-    const j = r.json as { hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string } }
-    assert.strictEqual(j.hookSpecificOutput?.permissionDecision, 'deny')
-    assert.ok((j.hookSpecificOutput?.permissionDecisionReason ?? '').includes('rate-limit stall'), 'reason names the stall mechanism')
+    assert.strictEqual(unknown.status, 200)
+    const uj = unknown.json as { hookSpecificOutput?: unknown; systemMessage?: string }
+    assert.strictEqual(uj.hookSpecificOutput, undefined, 'unknown liveness must not produce a permissionDecision')
+    assert.ok((uj.systemMessage ?? '').includes('liveness unknown'), `the warning must say why it is not a deny: ${uj.systemMessage ?? ''}`)
   })
 
   test('GET /api/burn-risk returns 200 with a risks array', async () => {

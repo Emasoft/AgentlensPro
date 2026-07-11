@@ -437,6 +437,76 @@ suite('cacheBreakTimeline — buildCauseCostPeakReport (cross-session cause cost
   })
 })
 
+// ── agent-* child sessions (2026-07-11 field fix) ────────────────────────────────
+// A child card's id is `agent-<agentId>` but its API calls carry the PARENT session_id in
+// metadata.user_id, so the exact-id lookup returned turnsClassified 0 for every child. The fix
+// carves the child's stream out of the parent bucket via the child transcript's message-id chain.
+suite('cacheBreakTimeline — agent-* child sessions resolve via the subagents transcript', () => {
+  const PARENT = 'aaaa1111-2222-3333-4444-555566667777'
+  const CHILD_ID = 'a3c49e3a7b59fd50c'
+
+  function writeChildTranscript(projectsRoot: string, msgIds: string[]): void {
+    const dir = path.join(projectsRoot, '-Users-x-proj', PARENT, 'subagents')
+    fs.mkdirSync(dir, { recursive: true })
+    const lines = [
+      JSON.stringify({ type: 'user', sessionId: PARENT, message: { role: 'user', content: 'child task: analyze X' } }),
+      ...msgIds.map(id => JSON.stringify({ type: 'assistant', sessionId: PARENT, message: { id, role: 'assistant', content: [{ type: 'text', text: 'ok' }] } })),
+    ]
+    fs.writeFileSync(path.join(dir, `agent-${CHILD_ID}.jsonl`), lines.join('\n') + '\n')
+  }
+
+  // The child conversation's own head block — byte-identical across the child's turns (the
+  // stream-head recovery anchor); the parent stream has a different head.
+  const childHead = { role: 'user' as const, content: [{ type: 'text' as const, text: 'child task: analyze X in depth', cache_control: CC }] }
+  const hookBlock = (i: number) => ({ role: 'user' as const, content: [{ type: 'text' as const, text: `<system-reminder>heartbeat hook: inbox ${i}</system-reminder>`, cache_control: CC }] })
+
+  test('a child timeline classifies the CHILD stream carved out of the parent bucket (head recovered by fingerprint)', async () => {
+    const bodies = freshDir()
+    const projects = freshDir()
+    const base = Date.now() - 3_600_000
+    writeChildTranscript(projects, ['msg_c0', 'msg_c1', 'msg_c2'])
+
+    // Parent stream: 3 turns chained on parent msg ids (p0 is the parent's own stream head).
+    const parentMsg = (i: number) => ({ role: 'user' as const, content: [{ type: 'text' as const, text: `parent conversation content ${i > 0 ? 'grows' : 'starts'} here`, cache_control: CC }] })
+    writeAt(bodies, 'p0.request.json', reqBody({ sessionId: PARENT, messages: [parentMsg(0)] }), base)
+    writeAt(bodies, 'presp0.response.json', respBody('msg_p0', 120_000), base + 5_000)
+    writeAt(bodies, 'p1.request.json', reqBody({ sessionId: PARENT, previousMessageId: 'msg_p0', messages: [parentMsg(0), parentMsg(1)] }), base + 120_000)
+    writeAt(bodies, 'presp1.response.json', respBody('msg_p1', 90_000), base + 125_000)
+    writeAt(bodies, 'p2.request.json', reqBody({ sessionId: PARENT, previousMessageId: 'msg_p1', messages: [parentMsg(0), parentMsg(1), parentMsg(2)] }), base + 240_000)
+
+    // Child stream, INTERLEAVED under the SAME session id: c0 (fresh head, no previous id) →
+    // c1 (prev msg_c0) → c2 (prev msg_c1).
+    writeAt(bodies, 'c0.request.json', reqBody({ sessionId: PARENT, messages: [childHead] }), base + 60_000)
+    writeAt(bodies, 'cresp0.response.json', respBody('msg_c0', 180_000, 100), base + 65_000)
+    writeAt(bodies, 'c1.request.json', reqBody({ sessionId: PARENT, previousMessageId: 'msg_c0', messages: [childHead, hookBlock(1)] }), base + 180_000)
+    writeAt(bodies, 'cresp1.response.json', respBody('msg_c1', 150_000), base + 185_000)
+    writeAt(bodies, 'c2.request.json', reqBody({ sessionId: PARENT, previousMessageId: 'msg_c1', messages: [childHead, hookBlock(2)] }), base + 300_000)
+
+    const report = await buildCacheBreakTimeline({ bodiesDir: bodies, sessionId: `agent-${CHILD_ID}`, minTokens: 5000, projectsDirs: [projects] })
+    assert.strictEqual(report.sessionId, `agent-${CHILD_ID}`)
+    assert.strictEqual(report.turnsInSession, 3, 'exactly the child\'s 3 turns — the parent\'s 3 stay out')
+    assert.strictEqual(report.turnsClassified, 2, 'c0 (measured via c1\'s chain link) + c1 (via c2\'s)')
+    assert.strictEqual(report.events[0].cause, 'COLD_START', 'the recovered stream head is the child\'s cold start')
+    assert.strictEqual(report.events[0].cacheCreateTokens, 180_000, 'the head\'s own big first write is attributed, not lost')
+    assert.ok(report.coverage.note.includes('sub-agent CHILD'), report.coverage.note)
+    assert.ok(report.coverage.note.includes(PARENT), 'the parent linkage is disclosed')
+
+    // The bare agentId (a spawn placeholder's id, no agent- prefix) resolves to the same stream.
+    const bare = await buildCacheBreakTimeline({ bodiesDir: bodies, sessionId: CHILD_ID, minTokens: 5000, projectsDirs: [projects] })
+    assert.strictEqual(bare.turnsInSession, 3)
+  })
+
+  test('an agent-* id with no transcript returns an HONEST empty report naming the resolution path', async () => {
+    const bodies = freshDir()
+    const projects = freshDir()
+    writeAt(bodies, 'x0.request.json', reqBody({ sessionId: PARENT }), Date.now() - 60_000)
+    const report = await buildCacheBreakTimeline({ bodiesDir: bodies, sessionId: 'agent-ffffffffffffffff0', minTokens: 5000, projectsDirs: [projects] })
+    assert.strictEqual(report.turnsClassified, 0)
+    assert.ok(report.coverage.note.includes('sub-agent child id'), report.coverage.note)
+    assert.ok(report.coverage.note.includes('subagents'), report.coverage.note)
+  })
+})
+
 suite('cacheBreakTimeline — real machine data', () => {
   // 🐌 slow — scans the real ~/.agentlens/otel-bodies directory (thousands of files). Skips when the
   // directory is absent (CI / a machine that never enabled OTEL_LOG_RAW_API_BODIES).

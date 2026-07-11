@@ -893,7 +893,7 @@ const TOOLS = [
     inputSchema: {
       type: 'object' as const,
       properties: {
-        sessionId: { type: 'string', description: 'The session to reconstruct (exact match from get_cache_creation_report / get_recent_sessions)' },
+        sessionId: { type: 'string', description: 'The session to reconstruct (exact match from get_cache_creation_report / get_recent_sessions). agent-<agentId> child sessions are supported: their turns are carved out of the parent stream via the child transcript\'s message-id chain.' },
         scope:     { type: 'string', description: 'A session-id prefix — resolves to the heaviest matching session; omit to pick the heaviest session overall in the scan' },
         minTokens: { type: 'number', description: 'Only classify turns whose cache_creation ≥ this (default 5000)' },
         window:    { type: 'number', description: 'Only scan bodies from the last N hours; omit for the bounded most-recent scan across all history' },

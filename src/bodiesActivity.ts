@@ -38,17 +38,30 @@ export function fmtFatSenders(senders: FatRequestSender[], cap = 2): string {
 }
 
 export interface ThrashReport {
+  /** True only when ONE source session re-wrote its prefix ≥ thrashMinCount times in the window.
+   *  N DISTINCT sessions' one-time cold-start writes are NOT thrash (see coldStartSessions) —
+   *  the 2026-07-11 false positive classified 4 freshly-spawned agents' first prefix writes
+   *  (~463k total) as thrash while the parent was reading its cache perfectly warm. */
   active: boolean
-  /** Responses inside the window that re-wrote a big prefix while reading ~no cache. */
+  /** Responses inside the window that re-wrote a big prefix while reading ~no cache (ALL sources). */
   count: number
   /** Sum of cache_creation tokens across those responses — what got re-billed at write rate. */
   rebilledTokens: number
   /** The model seen most among thrashing responses, when any. */
   model: string | null
   windowMs: number
-  /** LIKELY sources: fat-request senders inside the window. Responses carry no session id,
-   *  so this is inference from concurrent ≥400KB requests — callers must label it "likely". */
+  /** LIKELY sources: fat-request senders inside the window. When the thrashing session is
+   *  attributed exactly (via the previous_message_id chain) the list is narrowed to it;
+   *  otherwise this is inference from concurrent ≥400KB requests — callers label it "likely". */
   suspects: FatRequestSender[]
+  /** The heaviest single miss source (session attributed via the previous_message_id chain;
+   *  null session = the unattributed group). active keys off THIS group's count, never the total. */
+  topSource: { session: string | null; count: number; rebilledTokens: number } | null
+  /** FAN_OUT_COLD_START: DISTINCT attributed sessions whose in-window big writes stayed BELOW the
+   *  same-session repeat threshold — N fresh agents each paying their one-time cold-start prefix
+   *  write. Expected fan-out cost, advisory-only, never a reason to deny unrelated actions. */
+  coldStartSessions: number
+  coldStartRebilledTokens: number
 }
 
 export interface BodiesActivityReport {
@@ -81,15 +94,17 @@ const SEED_LOOKBACK_MS = 15 * 60_000
 const PREMIUM_RE = /opus|fable|mythos/i
 
 interface LargeRequestEntry { t: number; bytes: number; huge: boolean; sessionId: string | null; model: string | null }
-interface ResponseEntry { t: number; model: string | null; cc: number; cr: number }
+interface ResponseEntry { t: number; model: string | null; cc: number; cr: number; id: string | null }
 
 /**
  * Bounded 6KB attribution read on a fat request body — verified layout on real bodies:
  * `"model"` sits in the first 2KB and `metadata.user_id` (an ESCAPED JSON string carrying
- * session_id) in the last 4KB. `Primary working directory` sits ~92% in — NOT reachable by a
- * bounded tail — so workspace resolution is the hook-event ring's job (cwd), never this read.
+ * session_id) plus `diagnostics.previous_message_id` (plain JSON, the response id of the
+ * SAME session's previous call — the chain link that lets responses be attributed to their
+ * source session) in the last 4KB. `Primary working directory` sits ~92% in — NOT reachable
+ * by a bounded tail — so workspace resolution is the hook-event ring's job (cwd), never this read.
  */
-export function extractRequestAttribution(filePath: string, size: number): { sessionId: string | null; model: string | null } {
+export function extractRequestAttribution(filePath: string, size: number): { sessionId: string | null; model: string | null; previousMessageId: string | null } {
   let fd: number | null = null
   try {
     fd = fs.openSync(filePath, 'r')
@@ -98,19 +113,22 @@ export function extractRequestAttribution(filePath: string, size: number): { ses
     const tailLen = Math.min(4096, size)
     const tail = Buffer.alloc(tailLen)
     fs.readSync(fd, tail, 0, tailLen, size - tailLen)
+    const tailStr = tail.toString('utf-8')
     const model = /"model"\s*:\s*"([^"]+)"/.exec(head.toString('utf-8'))?.[1] ?? null
     // user_id is a STRING of escaped JSON: \"session_id\":\"<uuid>\" — accept both forms.
-    const sessionId = /\\?"session_id\\?":\\?"([0-9a-fA-F-]{8,36})/.exec(tail.toString('utf-8'))?.[1] ?? null
-    return { sessionId, model }
+    const sessionId = /\\?"session_id\\?":\\?"([0-9a-fA-F-]{8,36})/.exec(tailStr)?.[1] ?? null
+    const previousMessageId = /"previous_message_id"\s*:\s*"(msg_[A-Za-z0-9]+)"/.exec(tailStr)?.[1] ?? null
+    return { sessionId, model, previousMessageId }
   } catch {
-    return { sessionId: null, model: null } // unreadable — unattributed, never fatal
+    return { sessionId: null, model: null, previousMessageId: null } // unreadable — unattributed, never fatal
   } finally {
     if (fd !== null) try { fs.closeSync(fd) } catch { /* already closed */ }
   }
 }
 
-/** Tolerant usage extraction — the raw response is the API JSON, but stay shape-lenient. */
-export function extractResponseUsage(j: unknown): { model: string | null; cc: number; cr: number } | null {
+/** Tolerant usage extraction — the raw response is the API JSON, but stay shape-lenient.
+ *  `id` (the msg_… response id) is what the previous_message_id chain attributes to a session. */
+export function extractResponseUsage(j: unknown): { model: string | null; cc: number; cr: number; id: string | null } | null {
   if (!j || typeof j !== 'object') return null
   const o = j as Record<string, unknown>
   const cand = [o, o.response, o.body].find(
@@ -123,6 +141,7 @@ export function extractResponseUsage(j: unknown): { model: string | null; cc: nu
     model: typeof cand?.model === 'string' ? (cand.model as string) : null,
     cc: n(usage.cache_creation_input_tokens),
     cr: n(usage.cache_read_input_tokens),
+    id: typeof cand?.id === 'string' ? (cand.id as string) : null,
   }
 }
 
@@ -133,6 +152,12 @@ export class BodiesActivityTracker {
   private seeded = false
   private largeRequests: LargeRequestEntry[] = []
   private responses: ResponseEntry[] = []
+  // Response→session attribution via the previous_message_id chain: a request from session S
+  // carrying previous_message_id=m proves response m belongs to S (the chain links calls WITHIN
+  // one stream). Fed by the same bounded 6KB read the fat-request attribution already pays, so
+  // attribution lags by exactly one call — fine for thrash (a thrashing session calls every few
+  // seconds) and for the cold-resume warm-evidence check (the recovering session keeps working).
+  private msgSession = new Map<string, { session: string; t: number }>()
 
   constructor(dir: string, opts: BodiesActivityOptions = {}) {
     this.dir = dir
@@ -168,19 +193,27 @@ export class BodiesActivityTracker {
       if (st.mtimeMs < seedFloor) continue // pre-boot history beyond the seed window
       if (isReq) {
         if (st.size >= ATTRIB_REQUEST_BYTES) {
+          const attr = extractRequestAttribution(path.join(this.dir, name), st.size)
           this.largeRequests.push({
             t: st.mtimeMs,
             bytes: st.size,
             huge: st.size > HUGE_REQUEST_BYTES,
-            ...extractRequestAttribution(path.join(this.dir, name), st.size),
+            sessionId: attr.sessionId,
+            model: attr.model,
           })
+          // Chain link: this request's previous_message_id names the SAME session's previous
+          // response — the only realtime response→session attribution the bodies afford
+          // (response bodies carry no metadata; request/response FILES share no basename).
+          if (attr.sessionId && attr.previousMessageId) {
+            this.msgSession.set(attr.previousMessageId, { session: attr.sessionId, t: st.mtimeMs })
+          }
         }
         continue
       }
       if (st.size > RESPONSE_PARSE_CAP) continue
       try {
         const u = extractResponseUsage(JSON.parse(fs.readFileSync(path.join(this.dir, name), 'utf-8')))
-        if (u) this.responses.push({ t: st.mtimeMs, model: u.model, cc: u.cc, cr: u.cr })
+        if (u) this.responses.push({ t: st.mtimeMs, model: u.model, cc: u.cc, cr: u.cr, id: u.id })
       } catch {
         /* truncated mid-write or not JSON — skip */
       }
@@ -200,6 +233,28 @@ export class BodiesActivityTracker {
     const rFloor = now - RESPONSE_RING_WINDOW_MS
     this.largeRequests = this.largeRequests.filter(e => e.t >= lFloor)
     this.responses = this.responses.filter(e => e.t >= rFloor)
+    // The chain map is keyed on request mtimes (always ≥ the response they attribute), so the
+    // response-ring floor keeps every attribution a live response could still need.
+    for (const [id, v] of this.msgSession) { if (v.t < rFloor) this.msgSession.delete(id) }
+  }
+
+  /** Resolve a response's source session via the previous_message_id chain, or null. */
+  private sessionOf(e: ResponseEntry): string | null {
+    return e.id ? this.msgSession.get(e.id)?.session ?? null : null
+  }
+
+  /**
+   * Cold-resume disarm evidence (agentGate COLD_RESUME rules): did `session` complete a WARM
+   * request after `sinceMs`? Warm = big cache_read with a small cache_creation share — proof the
+   * session's prompt cache survived (or was already re-warmed), so holding the cold-resume deny
+   * any longer only blocks legitimate work (measured 2026-07-11: 6 extra minutes of denials after
+   * the stalled session was already reading 215-247k tokens from cache per call).
+   */
+  sessionWarmSince(session: string, sinceMs: number, warmReadFloor = 50_000): boolean {
+    return this.responses.some(e =>
+      e.t > sinceMs &&
+      e.cr >= warmReadFloor && e.cc < e.cr * 0.25 &&
+      this.sessionOf(e) === session)
   }
 
   /** Aggregate fat-request entries by sending session, heaviest first. */
@@ -238,6 +293,39 @@ export class BodiesActivityTracker {
     }
     const topModel = [...byModel.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null
 
+    // Per-SOURCE attribution (2026-07-11 field fix): thrash = the SAME session re-writing its
+    // prefix ≥ thrashMinCount times; N distinct sessions' single cold-start writes are a fan-out
+    // paying its one-time cost, not thrash. Unattributed misses still pool into one pseudo-source
+    // so a thrash whose requests we could not read is caught, never silently ignored — the ONLY
+    // case that re-admits the old cross-session false positive is total attribution failure.
+    const bySource = new Map<string | null, { count: number; cc: number }>()
+    for (const m of misses) {
+      const sid = this.sessionOf(m)
+      const g = bySource.get(sid) ?? { count: 0, cc: 0 }
+      g.count++
+      g.cc += m.cc
+      bySource.set(sid, g)
+    }
+    let topSource: ThrashReport['topSource'] = null
+    let coldStartSessions = 0
+    let coldStartRebilled = 0
+    for (const [sid, g] of bySource) {
+      if (topSource === null || g.count > topSource.count) {
+        topSource = { session: sid, count: g.count, rebilledTokens: g.cc }
+      }
+      if (sid !== null && g.count < this.opts.thrashMinCount) {
+        coldStartSessions++
+        coldStartRebilled += g.cc
+      }
+    }
+    const thrashActive = topSource !== null && topSource.count >= this.opts.thrashMinCount
+    const windowLarge = this.largeRequests.filter(e => now - e.t <= this.opts.thrashWindowMs)
+    // Exact culprit narrowing: when the thrashing source is an attributed session, name ITS fat
+    // requests instead of every concurrent sender (an innocent fat parent must not be blamed).
+    const culpritLarge = thrashActive && topSource?.session
+      ? windowLarge.filter(e => e.sessionId === topSource.session)
+      : windowLarge
+
     const recent = this.responses.filter(e => now - e.t <= 300_000)
     const premiumCount = recent.filter(e => e.model && PREMIUM_RE.test(e.model)).length
     // Newest by mtime, not by array position — entries arrive in readdir order.
@@ -247,13 +335,15 @@ export class BodiesActivityTracker {
       available,
       hugeRequests90s: { count: hugeCount, bytes: hugeBytes, senders: BodiesActivityTracker.senders(huge90) },
       thrash: {
-        active: misses.length >= this.opts.thrashMinCount,
+        active: thrashActive,
         count: misses.length,
         rebilledTokens: rebilled,
         model: topModel,
         windowMs: this.opts.thrashWindowMs,
-        suspects: BodiesActivityTracker.senders(
-          this.largeRequests.filter(e => now - e.t <= this.opts.thrashWindowMs)),
+        suspects: BodiesActivityTracker.senders(culpritLarge.length > 0 ? culpritLarge : windowLarge),
+        topSource,
+        coldStartSessions,
+        coldStartRebilledTokens: coldStartRebilled,
       },
       premium: {
         share: recent.length > 0 ? premiumCount / recent.length : 0,

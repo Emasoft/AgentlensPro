@@ -25,7 +25,7 @@ import { startMcpHttpServer, labelBurnStatusAccounts } from '../src/mcpServer'
 import { resolveCallContext, callBodyRegistry } from '../src/rawBodyContext'
 import { appendHookEvent, readHookEvents, purgeHookEventBuckets, hookEventsDiskUsage, type HookEventRecord } from '../src/hookEventStore'
 import { BodiesActivityTracker } from '../src/bodiesActivity'
-import { evaluateAgentGate, evaluateSendMessageGate, buildAdvisory, readTranscriptContext, type AgentGateState, type GateThresholds, type LaunchSpawner } from '../src/agentGate'
+import { evaluateAgentGate, evaluateSendMessageGate, buildAdvisory, readTranscriptContext, resolveMessageTargetLiveness, type AgentGateState, type GateThresholds, type LaunchSpawner } from '../src/agentGate'
 import { checkBurnRisk } from '../src/burnGuard'
 import { loadHookRuntimeConfig, saveHookRuntimeConfig } from '../src/hookRuntimeConfig'
 import { ContextCompositionIndex } from '../src/contextCompositionIndex'
@@ -398,6 +398,13 @@ function buildGateState(now: number, parent: { contextTokens: number | null; idl
       agentTypes: [...e.types.entries()].sort((a, b) => b[1] - a[1]).map(([t, n]) => (n > 1 ? `${t}×${n}` : t)),
     }))
   const act = bodiesActivityReport()
+  // Evidence-based cold-resume disarm (2026-07-11): a warm post-stall response from the STALLED
+  // session proves the stall is over — the fixed window alone kept denying for 6 measured minutes
+  // after recovery. Fail-closed to `false` (the timer fallback) when the session is unknown.
+  let stallRecovered = false
+  if (lastStop?.session) {
+    try { stallRecovered = bodiesActivity.sessionWarmSince(lastStop.session, lastStop.ts) } catch { /* keep the timer */ }
+  }
   return {
     now,
     mode: hookRuntime.gateMode,
@@ -409,6 +416,7 @@ function buildGateState(now: number, parent: { contextTokens: number | null; idl
     stall: lastStop
       ? { session: lastStop.session ?? null, cwd: typeof lastStop.payload?.cwd === 'string' ? lastStop.payload.cwd : null }
       : null,
+    stallRecovered,
     thrash: act.available ? act.thrash : null,
     premiumShare: act.premium.sampled > 0 ? act.premium.share : null,
     premiumModel: act.premium.lastModel,
@@ -2240,10 +2248,19 @@ const uiServer = http.createServer((req, res) => {
         // PreToolUse (default): decide before the launch happens. SendMessage (P6) takes the
         // NARROWER evaluator — resuming a dead agent re-runs the request that killed it, so only
         // COLD_RESUME / CACHE_THRASH may deny; routine messaging is never gated by fan-out rules.
+        // The deny further requires the TARGET to resolve dead (SubagentStart/Stop hook events):
+        // delivery to a LIVE agent rides its existing run, so a live target always passes and an
+        // unknown one gets a warning, never a hard deny (2026-07-11 field fix).
         if (!hookRuntime.gateEnabled) { res.writeHead(204); res.end(); return }
-        const d = p.tool_name === 'SendMessage'
-          ? evaluateSendMessageGate(state)
-          : evaluateAgentGate((p.tool_input ?? null) as Record<string, unknown> | null, state)
+        let d
+        if (p.tool_name === 'SendMessage') {
+          const to = (p.tool_input as Record<string, unknown> | null | undefined)?.to
+          state.messageTarget = typeof to === 'string' ? to : null
+          state.targetLiveness = resolveMessageTargetLiveness(to, recentHookEvents)
+          d = evaluateSendMessageGate(state)
+        } else {
+          d = evaluateAgentGate((p.tool_input ?? null) as Record<string, unknown> | null, state)
+        }
         if (d.decision === 'deny') {
           persistStats.gateDenies++
           // Mirror onto the dashboard's SSE alert channel — the notification panel shows
