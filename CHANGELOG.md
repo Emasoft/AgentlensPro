@@ -4,6 +4,21 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.4.1] — 2026-07-11
+
+### Fixed
+
+- **Docker image build (broken since 2.3.1).** The Dockerfile's builder stage copied
+  `media/dashboard.css` from the build context, but that file became a gitignored esbuild
+  build artifact in 2.3.1 — so it is absent from a clean checkout and `docker build` failed
+  with `"/media/dashboard.css": not found`. Both the v2.3.1 and v2.4.0 image publishes
+  failed as a result, leaving `ghcr.io/emasoft/agentlenspro:latest` stuck at 2.3.0. The
+  stale `COPY` is removed (esbuild generates the CSS in the builder stage and the runtime
+  stage copies it from there), and `media/dashboard.css` is added to `.dockerignore`
+  alongside its `dashboard.js` sibling so the build context matches the git checkout.
+  Verified with a local `docker build`. The npm package was unaffected — 2.4.0 published
+  normally; 2.4.1 is functionally identical on npm (the Dockerfile is not in the tarball).
+
 ## [2.4.0] — 2026-07-11
 
 Round-2 remediation of the whole-codebase code review (TRDD-4AFOFVFD), plus a security
