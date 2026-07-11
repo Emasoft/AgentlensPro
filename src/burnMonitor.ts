@@ -864,6 +864,10 @@ export function cardCostUsd(card: SessionSummaryCard): number {
   // discarded that authoritative 0 — harmless while the estimate was also ~0, but wrong-in-direction
   // once an unpriced/mis-priced model yields a non-zero estimate for the same session.
   if (card.statusline && card.statusline.samples > 0) return card.statusline.totalCostUsd
+  // A mixed-speed session carries a per-turn-accurate blended cost (each turn priced at its own
+  // model+speed); prefer it over the single-model aggregate, which would price standard turns at the
+  // fast rate (S1-F9). Only set for genuinely mixed sessions, so uniform sessions are unaffected.
+  if (card.speedBlendedCostUsd !== undefined) return card.speedBlendedCostUsd
   return calcTokenCostUsd(card.inputTokens, card.cacheReadTokens, card.cacheCreateTokens ?? 0, card.outputTokens, card.model)
 }
 

@@ -39,10 +39,14 @@ export interface CacheTurnInput {
 }
 
 export interface AnalyzeCacheBreaksOpts {
-  // Rates to price the wasted re-write. cost ≈ wastedTokens × (writeRate − 0.1 × inputRate).
-  // When absent, wastedCostUsd stays 0 (the token figure is still populated).
+  // Rates to price the wasted re-write. cost ≈ wastedTokens × (writeRate − cacheReadRate).
+  // When the rates are absent, wastedCostUsd stays 0 (the token figure is still populated).
   writeRateUsdPerMTok?: number
   inputRateUsdPerMTok?: number
+  // The model's ACTUAL cache-read rate. Most mainstream Claude/OpenAI models read at 0.1× input, but
+  // some do not (e.g. codex-mini at 0.25×), and hardcoding 0.1× overstates the "wasted re-write" for
+  // those. When omitted, falls back to 0.1 × inputRate (the previous behavior, correct for 0.1× models).
+  cacheReadRateUsdPerMTok?: number
   idleTtlMs?: number     // gap beyond which the cache entry expired; default 5 min
 }
 
@@ -102,7 +106,10 @@ function priceWaste(tokens: number, opts: AnalyzeCacheBreaksOpts): number {
   const write = opts.writeRateUsdPerMTok
   if (write === undefined) return 0
   const input = opts.inputRateUsdPerMTok ?? 0
-  const perTok = (write - 0.1 * input) / 1_000_000
+  // Credit back the cache-read the break avoided: the model's real cache-read rate when provided,
+  // else the 0.1×-input default (correct for mainstream models, overstates waste for the rest).
+  const cacheRead = opts.cacheReadRateUsdPerMTok ?? 0.1 * input
+  const perTok = (write - cacheRead) / 1_000_000
   return Math.max(0, tokens * perTok)
 }
 
@@ -223,7 +230,13 @@ export function buildCacheBreakReport(
 
   const rates = lookupRates(sessionModel)
   const opts: AnalyzeCacheBreaksOpts = rates
-    ? { writeRateUsdPerMTok: rates.cacheWritePerMTok, inputRateUsdPerMTok: rates.inputPerMTok }
+    ? {
+        writeRateUsdPerMTok: rates.cacheWritePerMTok,
+        inputRateUsdPerMTok: rates.inputPerMTok,
+        // Use the model's ACTUAL cache-read rate, not a hardcoded 0.1× input (wrong for e.g.
+        // codex-mini at 0.25×), so the priced "wasted re-write" credits back the real avoided read.
+        cacheReadRateUsdPerMTok: rates.cacheReadPerMTok,
+      }
     : {}
 
   const inputs: CacheTurnInput[] = [...byTurn.entries()]

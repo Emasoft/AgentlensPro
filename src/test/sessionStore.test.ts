@@ -237,5 +237,23 @@ suite('SessionStore', () => {
       // Should not crash
       assert.strictEqual(store.getSummary().filesChanged.length, 0)
     })
+
+    test('tokensUsed counts each bucket once when a span carries both native and gen_ai.usage keys (S1-F7)', () => {
+      const store = new SessionStore(mockContext())
+      // A Claude span with BOTH naming conventions present for every bucket. Summing both
+      // double-counted; the fix picks the first present value per bucket.
+      store.addSpan(makeSpan('llm/request', 'trace-dup', { attributes: [
+        makeAttr('input_tokens', 100),
+        makeAttr('gen_ai.usage.input_tokens', 100),
+        makeAttr('cache_read_tokens', 50),
+        makeAttr('gen_ai.usage.cache_read.input_tokens', 50),
+        makeAttr('cache_creation_tokens', 20),
+        makeAttr('gen_ai.usage.cache_creation.input_tokens', 20),
+        makeAttr('output_tokens', 10),
+        makeAttr('gen_ai.usage.output_tokens', 10),
+      ] }))
+      // 100 input + 50 cache-read + 20 cache-create + 10 output = 180 (NOT 360).
+      assert.strictEqual(store.getSummary().tokensUsed, 180)
+    })
   })
 })

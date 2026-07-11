@@ -152,6 +152,33 @@ suite('logReader sub-agent child cards (sync vs async launches)', () => {
       assert.strictEqual(children[0].inputTokens, 100, 'zero-bucket placeholder was overwritten with measured usage')
     } finally { fx.cleanup() }
   })
+
+  test('a multi-tool_result entry does not attribute one shared toolUseResult to several sub-agents (S1-F8)', () => {
+    const fx = claudeFixture()
+    try {
+      // Two Task spawns, then ONE user entry carrying TWO tool_result blocks but only ONE sibling
+      // toolUseResult (the ambiguous shape — the entry-level tur has no tool_use_id to key on). The
+      // pre-fix reader passed that single tur to BOTH blocks, stamping one sub-agent's 100/50/400/200
+      // usage onto both children. The fix attributes it only in the 1:1 case, so the shared usage
+      // must appear on at most one child.
+      const multiResult = JSON.stringify({
+        type: 'user', timestamp: '2026-07-10T10:05:00Z', cwd: fx.cwd,
+        message: { content: [
+          { type: 'tool_result', tool_use_id: 'tu-a', content: 'done a' },
+          { type: 'tool_result', tool_use_id: 'tu-b', content: 'done b' },
+        ] },
+        toolUseResult: syncCompletionTur('agent-a'),
+      }) + '\n'
+      fs.writeFileSync(fx.file,
+        userText('2026-07-10T10:00:00Z', fx.cwd, 'spawn two')
+        + agentSpawn('2026-07-10T10:00:01Z', fx.cwd, 'tu-a', { subagent_type: 'spark', prompt: 'a' })
+        + agentSpawn('2026-07-10T10:00:02Z', fx.cwd, 'tu-b', { subagent_type: 'spark', prompt: 'b' })
+        + multiResult)
+      const parent = scanClaude(new LogReader({})).find(r => r.card.sessionId === fx.id)!
+      const withSharedUsage = (parent.childCards ?? []).filter(c => c.inputTokens === 100)
+      assert.ok(withSharedUsage.length <= 1, `shared usage must not be duplicated across children (got ${withSharedUsage.length})`)
+    } finally { fx.cleanup() }
+  })
 })
 
 // ── P8: async child token resolution (subagents/*.jsonl ↔ spawn placeholder) ──

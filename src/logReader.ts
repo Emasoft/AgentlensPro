@@ -34,6 +34,7 @@ import * as path from 'path'
 import * as os from 'os'
 import type { SessionSummaryCard, TimelineEntry } from './shared/summarizerTypes'
 import { disjointBuckets, contextTokens, type TokenBuckets } from './shared/tokenBuckets'
+import { calcTokenCostUsd } from './shared/pricing'
 import { countFallback } from './shared/fallbackCounters'
 import { callBodyRegistry } from './rawBodyContext'
 import { VSCODE_FAMILY_IDE_NAMES } from './vscodeFamilyIdes'
@@ -439,8 +440,14 @@ export class LogReader {
     // only its newly-appended bytes are processed on each scan (see _incrementalParse).
     const a = this._incrementalParse<ClaudeAccum>(filePath, _newClaudeAccum, _claudeOnEntry)
     if (!a || !a.firstTimestamp) return null
-    const effectiveModel = (a.model && a.hasFastMode) ? `${a.model}-fast` : a.model
+    // Stamp `<model>-fast` on the card model ONLY when the session ran UNIFORMLY in fast mode. A MIXED
+    // session (some fast, some standard turns) keeps the base model — pricing every turn at the ~6×
+    // fast rate would over-cost the standard turns — and instead carries speedBlendedCostUsd, the
+    // per-turn-accurate blend accumulated during parse (S1-F9).
+    const mixedSpeed = a.hasFastMode && a.sawStandardSpeed
+    const effectiveModel = (a.model && a.hasFastMode && !a.sawStandardSpeed) ? `${a.model}-fast` : a.model
     const card = _buildCard(path.basename(filePath, '.jsonl'), 'claude_code', effectiveModel || 'claude', a.firstTimestamp, a.lastTimestamp, a.card, a.workspace)
+    if (mixedSpeed) card.speedBlendedCostUsd = a.speedBlendedCostUsd
     // Sub-agent fleet linkage (TRDD-TKN5VALS P1.3). Worktree/Task sub-agents write their
     // transcripts under a child project dir whose mangled name embeds ".claude/worktrees/
     // agent-<id>" (each "/" and "." becomes "-"). These fleet transcripts were being ingested
@@ -1570,7 +1577,9 @@ interface ClaudeAccum {
   model: string
   firstTimestamp: string
   lastTimestamp: string
-  hasFastMode: boolean
+  hasFastMode: boolean       // any turn ran in fast mode (usage.speed === 'fast')
+  sawStandardSpeed: boolean  // any priced turn ran in NON-fast mode → with hasFastMode = a mixed session
+  speedBlendedCostUsd: number // per-message cost summed at each message's own (model, speed); used only when mixed
   idx: number               // monotonic timeline index; persists across scans → stable spanIds
   // In-flight Read tool_use id → its file path. A Read's byte volume lives in the matching
   // tool_result (which only carries the tool_use_id), which often arrives in a LATER entry —
@@ -1636,7 +1645,7 @@ interface SubAgentRec {
 }
 
 function _newClaudeAccum(): ClaudeAccum {
-  return { workspace: '', model: '', firstTimestamp: '', lastTimestamp: '', hasFastMode: false, idx: 0, pendingReads: new Map<string, string>(), seenMessageIds: new Set<string>(), subAgents: new Map<string, SubAgentRec>(), pendingToolResults: new Map<string, TimelineEntry>(), genFiles: new Map<string, HarvestedGeneratedFile>(), card: _emptyCardAccum('user') }
+  return { workspace: '', model: '', firstTimestamp: '', lastTimestamp: '', hasFastMode: false, sawStandardSpeed: false, speedBlendedCostUsd: 0, idx: 0, pendingReads: new Map<string, string>(), seenMessageIds: new Set<string>(), subAgents: new Map<string, SubAgentRec>(), pendingToolResults: new Map<string, TimelineEntry>(), genFiles: new Map<string, HarvestedGeneratedFile>(), card: _emptyCardAccum('user') }
 }
 
 // UTF-8 byte length of a value that may or may not be a string (0 for non-strings).
@@ -1900,11 +1909,17 @@ function _claudeOnEntry(a: ClaudeAccum, entry: Record<string, unknown>): void {
     // Task/Agent completion, embeds the sub-agent's usage/agentId/model/toolStats.
     if (Array.isArray(content)) {
       const toolUseResult = entry['toolUseResult'] as Record<string, unknown> | undefined
-      for (const block of content as Array<Record<string, unknown>>) {
-        if (block['type'] !== 'tool_result') continue
-        const id = block['tool_use_id'] as string | undefined
-        if (!id) continue
-        _resolveToolResult(a, id, block, toolUseResult)
+      const resultBlocks = (content as Array<Record<string, unknown>>)
+        .filter(b => b['type'] === 'tool_result' && typeof b['tool_use_id'] === 'string')
+      // The entry carries ONE sibling `toolUseResult` (sub-agent usage / output-file paths) with no
+      // tool_use_id to key on, so it can only be safely attributed when the entry has exactly ONE
+      // tool_result block. Passing the SAME toolUseResult to every block in a (rare) multi-result entry
+      // would attribute one sub-agent's usage to all its siblings — so gate it to the unambiguous 1:1
+      // case; the per-block resolution (Read bytes, full-result attachment) still runs for every block
+      // (S1-F8).
+      const attributableTur = resultBlocks.length === 1 ? toolUseResult : undefined
+      for (const block of resultBlocks) {
+        _resolveToolResult(a, block['tool_use_id'] as string, block, attributableTur)
       }
     }
     // A user message precedes the assistant turn it triggers, so it belongs to the NEXT turn
@@ -1953,6 +1968,14 @@ function _claudeOnEntry(a: ClaudeAccum, entry: Record<string, unknown>): void {
       const turnContext = contextTokens(rowBuckets)
       if (turnContext > a.card.peakContextPerTurn) a.card.peakContextPerTurn = turnContext
       a.card.turns++
+      // Per-turn cost at THIS message's own model + speed, summed for the mixed-speed case (S1-F9).
+      // A single `<model>-fast` stamp on the whole card would price the STANDARD turns at the ~6× fast
+      // rate. Fast mode is usually session-wide, so this only diverges from the aggregate when a
+      // session actually mixes speeds — the only case speedBlendedCostUsd is later used for (below).
+      const turnFast = rawUsage?.['speed'] === 'fast'
+      if (!turnFast) a.sawStandardSpeed = true
+      const turnModel = turnFast && a.model ? `${a.model}-fast` : a.model
+      a.speedBlendedCostUsd += calcTokenCostUsd(rowBuckets.inputTokens, rowBuckets.cacheReadTokens, rowBuckets.cacheCreateTokens, rowBuckets.outputTokens, turnModel)
     }
     const content = (msg?.['content'] as Array<Record<string, unknown>>) ?? []
     let hasToolCall = false
