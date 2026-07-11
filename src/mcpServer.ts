@@ -593,6 +593,32 @@ const TOOLS = [
     },
   },
   {
+    name: 'get_agent_tokens',
+    description:
+      'EXACT tokens + cost for ONE agent. Accepts a bare agent id, its agent-<id> transcript form, ' +
+      'or a full sessionId (all case-insensitive); optional parentSessionId scopes the lookup. An ' +
+      'ambiguous id returns an error LISTING the candidates — never a silent guess. Returns the four ' +
+      'disjoint billing buckets (input / output / cacheRead / cacheCreation), totalTokens ' +
+      '(input+output — the same convention as get_subagent_tree children), cost_usd (same pricing ' +
+      'tables), spawn metadata (spawnKind / warm / model / parentSessionId / spawnedByTurn), and ' +
+      'ccDisplayEquivalent to reconcile with Claude Code\'s per-agent ↓ footer display: CC\'s ↓ ≈ ' +
+      'cumulativeInputSideTokens (cumulative input + cacheRead + cacheCreation across ALL the ' +
+      'agent\'s turns, launch turn INCLUDED — a fork\'s turn-1 inherited-prefix cache read dominates ' +
+      'it; output is excluded or below CC\'s 0.1k display rounding). The ↓ figure is VOLUME MOVED, ' +
+      'not billing — use cost_usd for spend. lastTurnContextRead is the live context-size proxy ' +
+      '(the last turn\'s input-side buckets). tokensSource/coverageNote carry the log-vs-otel ' +
+      'provenance; zero buckets on an async child with no transcript are flagged asyncTokensUnknown ' +
+      '(unknown, not measured-free).',
+    inputSchema: {
+      type: 'object' as const,
+      required: ['agentId'],
+      properties: {
+        agentId:         { type: 'string', description: 'Bare agent id (e.g. a1b2c3…), agent-<id>, or a full sessionId — case-insensitive' },
+        parentSessionId: { type: 'string', description: 'Optional spawning session id — scopes the lookup when the same agent id matches multiple cards' },
+      },
+    },
+  },
+  {
     name: 'get_call_context',
     description:
       'Returns the FULL literal context of ONE llm API call, reconstructed from Claude Code\'s raw ' +
@@ -1999,6 +2025,165 @@ export function handleGetSubagentTree(sessions: SessionSummaryCard[], args: { se
   }
 }
 
+// ── get_agent_tokens (TRDD-9YT1UR2F) ──────────────────────────────────────────
+
+// Strip the transcript-card prefix: 'agent-<id>' → '<id>'. A bare agent id and its agent-<id>
+// form name the SAME agent — the subagents/*.jsonl filename convention that
+// feedMergePolicy.linkSubagentTranscripts pairs on. Case handled by the caller (ids lowercased).
+function stripAgentPrefix(sessionId: string): string {
+  return sessionId.startsWith('agent-') ? sessionId.slice('agent-'.length) : sessionId
+}
+
+// Compact candidate line for the ambiguity error — enough to pick one (full sessionId is the
+// unambiguous re-query key), never the whole card.
+function agentCandidateSummary(s: SessionSummaryCard) {
+  return {
+    sessionId:       s.sessionId,
+    parentSessionId: s.parentSessionId ?? null,
+    model:           s.spawnModelOverride || s.model,
+    spawnKind:       s.spawnKind ?? null,
+    totalTokens:     s.inputTokens + s.outputTokens,
+  }
+}
+
+/**
+ * CC-footer ↓ reconciliation numbers (TRDD-9YT1UR2F addendum, empirically decoded 2026-07-11 by
+ * regressing a live fork's transcript against two footer readings):
+ *
+ *   • CC's per-agent ↓ = CUMULATIVE (input + cacheRead + cacheCreation) across ALL the agent's
+ *     turns, INCLUDING the launch turn — a fork's turn 1 is the inherited-prefix cache read,
+ *     ~99.5% of the figure. output is excluded or below CC's 0.1k display rounding
+ *     (indistinguishable: turn-1 input-side 407,449 vs footer 409.3k; 6-turn cumulative
+ *     2,463,246 predicting footer ≈2.46m). That is `cumulativeInputSideTokens`.
+ *   • `lastTurnContextRead` is the context-SIZE proxy: the LAST turn's input-side buckets
+ *     (what the model read on the most recent call).
+ *
+ * Both are VOLUME MOVED, not billing — the four buckets bill at different rates (cost_usd is
+ * the spend figure). Derivation of lastTurnContextRead, most→least authoritative, never a guess:
+ *   1. statusline overlay (CC's own context_window numbers, exact) when present;
+ *   2. the last usage-carrying timeline entry (transcript-parsed per-turn buckets);
+ *   3. a single-turn card's cumulative figure (one turn ⇒ cumulative == last turn — this is the
+ *      sync-placeholder path, whose card buckets ARE the final-turn snapshot);
+ *   4. null — a multi-turn card without per-turn data cannot honestly answer.
+ */
+function ccDisplayEquivalent(c: SessionSummaryCard, timeline: TimelineEntry[]) {
+  const cumulativeInputSideTokens = contextTokens(c)
+  let lastTurnContextRead: number | null = null
+  if (c.statusline) {
+    lastTurnContextRead = c.statusline.lastTotalInputTokens
+  } else {
+    for (let i = timeline.length - 1; i >= 0; i--) {
+      const t = contextTokens(timeline[i])
+      if (t > 0) { lastTurnContextRead = t; break }
+    }
+    if (lastTurnContextRead === null && c.totalLlmCalls <= 1 && cumulativeInputSideTokens > 0) {
+      lastTurnContextRead = cumulativeInputSideTokens
+    }
+  }
+  return {
+    cumulativeInputSideTokens,
+    lastTurnContextRead,
+    note:
+      "CC's footer ↓ ≈ cumulativeInputSideTokens (cumulative input+cacheRead+cacheCreation across " +
+      "ALL turns, launch turn included; output excluded or below CC's 0.1k rounding). It is volume " +
+      'moved, not billing — use cost_usd for spend.',
+  }
+}
+
+// Exported for unit tests (TRDD-9YT1UR2F — exact per-agent buckets, cross-tool consistent with
+// get_subagent_tree). ONE implementation: the CLI reaches it through this same registry (its
+// schemas come live from tools/list), so there is no second dispatch table to keep in sync.
+export function handleGetAgentTokens(
+  sessions: SessionSummaryCard[],
+  getTimeline: ((id: string) => unknown[]) | null,
+  args: { agentId: string; parentSessionId?: string },
+) {
+  const q = (args.agentId ?? '').trim()
+  if (!q) return { error: 'agentId is required — a bare agent id, its agent-<id> transcript form, or a full sessionId.' }
+  const qLower = q.toLowerCase()
+
+  // Exact sessionId match takes PRECEDENCE over the normalized forms: served ids are unique, so a
+  // full sessionId always resolves to exactly one card. This is the escape hatch the ambiguity
+  // error advertises — without the precedence an 'agent-x' query would ALSO normalized-match an
+  // un-merged bare-'x' placeholder twin and the escape hatch could never escape.
+  let matches = sessions.filter(s => s.sessionId.toLowerCase() === qLower)
+  if (matches.length === 0) {
+    const bare = stripAgentPrefix(qLower)
+    matches = sessions.filter(s => stripAgentPrefix(s.sessionId.toLowerCase()) === bare)
+  }
+
+  const parentArg = args.parentSessionId?.trim()
+  if (parentArg && matches.length > 0) {
+    const p = parentArg.toLowerCase()
+    const scoped = matches.filter(s => (s.parentSessionId ?? '').toLowerCase() === p)
+    if (scoped.length === 0) {
+      // The id exists but not under that parent — say so and show where it DOES live, instead of
+      // a bare not-found that would send the caller hunting a typo in the agent id.
+      return {
+        error: `Agent "${q}" matched ${matches.length} card(s), but none under parent ${parentArg}.`,
+        candidates: matches.map(agentCandidateSummary),
+      }
+    }
+    matches = scoped
+  }
+
+  if (matches.length === 0) {
+    return {
+      error: `Agent "${q}" not found. Accepted forms: bare agent id, agent-<id>, or a full sessionId ` +
+        '(case-insensitive). Use get_subagent_tree on the spawning session to list its children.',
+    }
+  }
+  if (matches.length > 1) {
+    // NEVER guess between conflicting cards (e.g. a placeholder + transcript pair the cross-parent
+    // guard left un-merged): list the candidates and let the caller pin one.
+    return {
+      error: `Agent id "${q}" is ambiguous — ${matches.length} cards match. Pass the full sessionId ` +
+        'of one candidate, or parentSessionId to scope the lookup.',
+      candidates: matches.map(agentCandidateSummary),
+    }
+  }
+
+  const c = matches[0]
+  // Same conventions as get_subagent_tree children — the cross-tool consistency contract:
+  // spawnKind defaults 'fresh' on child cards, model prefers the spawn override, totalTokens is
+  // input+output (non-cache), cost_usd is the shared normalizing pricer. A card with no parent
+  // (a full-sessionId query for a top-level session) carries no spawn taxonomy — null, not 'fresh'.
+  const spawnKind = c.spawnKind ?? (c.parentSessionId ? 'fresh' as const : null)
+  const startMs = Date.parse(c.startTime)
+  const timeline = asTimeline(getTimeline, c.sessionId, c)
+  return {
+    agentId:         stripAgentPrefix(c.sessionId),
+    sessionId:       c.sessionId,
+    parentSessionId: c.parentSessionId ?? null,
+    spawnedByTurn:   c.spawnedByTurn ?? null,
+    spawnKind,
+    warm:            spawnKind === 'fork',
+    model:           c.spawnModelOverride || c.model,
+    modelOverride:   c.spawnModelOverride ?? null,
+    isolation:       c.spawnIsolation ?? null,
+    subagentType:    c.spawnSubagentType ?? null,
+    startedAt:       c.startTime || null,
+    // lastSeenAt derives from the card's own span (start + duration) — null when the card has no
+    // parseable start (an async placeholder before its transcript exists), never a fabricated now().
+    lastSeenAt:      Number.isFinite(startMs) ? new Date(startMs + (c.durationMs || 0)).toISOString() : null,
+    turns:           c.totalLlmCalls > 0 ? c.totalLlmCalls : null,
+    inputTokens:       c.inputTokens,
+    outputTokens:      c.outputTokens,
+    cacheReadTokens:   c.cacheReadTokens,
+    cacheCreateTokens: c.cacheCreateTokens ?? 0,
+    totalTokens:       c.inputTokens + c.outputTokens,
+    cost_usd:          +sessionCost(c).toFixed(4),
+    // Async launches never report tokens into the parent transcript — without this flag the zero
+    // buckets above would read as "measured free" instead of "unknown" (same flag as the tree).
+    ...(c.spawnAsync ? { asyncTokensUnknown: true } : {}),
+    ccDisplayEquivalent: ccDisplayEquivalent(c, timeline),
+    // P7 provenance — which feed backs this card's token figures; null = pre-P7 card ("unknown"),
+    // never a backfilled guess. coverageNote rides only when a decision set it.
+    tokensSource: c.tokensSource ?? null,
+    ...(c.coverageNote ? { coverageNote: c.coverageNote } : {}),
+  }
+}
+
 // Session usage ground truth for the by-cause reconciliation: uncached input + cacheRead +
 // cacheCreate + output. inputTokens is RAW on every card (2026-07-10 normalization), so the
 // total is a plain sum of the four disjoint buckets.
@@ -2256,6 +2441,9 @@ export function createMcpServer(opts: McpServerOptions): Server {
         break
       case 'get_subagent_tree':
         result = handleGetSubagentTree(sessions, args as { sessionId: string })
+        break
+      case 'get_agent_tokens':
+        result = handleGetAgentTokens(sessions, getTimeline, args as { agentId: string; parentSessionId?: string })
         break
       case 'get_cost_by_cause':
         result = handleGetCostByCause(sessions, getTimeline, args as { sessionId?: string; days?: number })
