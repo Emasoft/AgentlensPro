@@ -3,7 +3,7 @@ trdd-id: 7284WCW7
 title: agentlenspro setup — idempotent install/repair verb + single-executable consolidation
 column: dev
 created: 2026-07-11T04:22:03+0200
-updated: 2026-07-11T04:22:03+0200
+updated: 2026-07-11T06:58:00+0200
 current-owner: orchestrator-agentlenspro
 assignee: setup-command-agent
 priority: 1
@@ -23,21 +23,40 @@ test-requirements: [unit, integration, lint, typecheck]
 review-requirements: []
 runtime-targets: [macos, linux]
 impacts: [install-script, public-api, config-schema]
-implementation-commits: []
+implementation-commits: [8b0b0d7, 612ceb9, d4b47b8, cc786ff, 5212fce, 74e31d4, 60dc8e3]
 ---
 
 # agentlenspro setup — idempotent install/repair + ONE executable
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-11
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-11 (impl merged)
 
-- **Current state**: spec approved by USER (4 amendments folded in); implementation agent
-  launching on `feat/setup-single-executable`.
-- **NEXT ACTION**: implementation agent delivers; orchestrator verifies gates, deploys,
-  updates this block.
-- **Load-bearing facts**: suite baseline 753/0/5 (Node 20 mocha); resident server must never
-  be touched by tests (temp HOME + ephemeral ports only); all user-config mutations via
-  safeConfigEdit; version bump to 2.0.0 (bins removed = breaking).
-- **SUPERSEDED — do NOT carry forward**: nothing yet.
+- **Current state**: IMPLEMENTED and merged to main (`60dc8e3`, --no-ff; branch
+  `feat/setup-single-executable`, 6 commits — see `implementation-commits:`). ONE bin
+  (`agentlenspro` → standalone/cli.js, thin shim over `src/cli/main.ts`); subcommands
+  setup / server start|stop|restart|status [--supervise] / dashboard / hook / gate /
+  heartbeat-cost / telemetry + full diagnostics surface + legacy `--install-*` flags;
+  `--version`/`--help` are zero-side-effect (post-publish addendum folded in). 19 absorbed
+  script files deleted (grep-verified unreferenced); hook registrations are the command
+  strings `agentlenspro hook`/`agentlenspro gate` with auto-migration of v0 (spy-agentlens
+  absolute paths) and v1 (PATH-bin) generations. `setup` implements detect → converge →
+  verify-per-step (independent re-read paths) → final OTLP→get_recent_sessions round-trip +
+  hook/gate exec self-test; corrupt forensics.db → `.corrupt-<ts>` backup-aside; dry-run
+  mutates nothing; second run = 0 actions (tested). v2.0.0 + CHANGELOG; README/CLAUDE.md/
+  ARCHITECTURE.md/SKILL.md updated.
+- **Gates at merge**: tsc (root+media+test) 0, eslint --quiet 0, check-no-mirrors 0,
+  esbuild 0, mocha (Node 20) **774 passing / 0 failing / 4 pending** (baseline 753/0/5;
+  the 5th pending is an environment-conditional `this.skip()` that RUNS on machines where
+  real otel-bodies exist — not a regression).
+- **NEXT ACTION**: orchestrator deploys (npm publish v2.0.0 via the publish.yml trusted
+  publisher on tag) — column stays `dev` until then.
+- **Load-bearing facts**: tests use temp HOME + ephemeral ports ONLY (resident server
+  untouched, verified post-suite); all user-config mutations via safeConfigEdit;
+  `--install-otel` now delegates to telemetryConfig (the CLI's duplicate OTEL_ENV table had
+  drifted); esbuild marks `./server` + `sql.js` external in the cli bundle (cli.js stays a
+  ~90KB dispatcher requiring the sibling server.js at runtime).
+- **SUPERSEDED — do NOT carry forward**: "five bins / PATH-bin wrapper (P10) contract" —
+  replaced by the single-bin command-string contract; the spy-agentlens*.{sh,mjs} scripts
+  and their wrappers no longer exist.
 
 ## Requirement (USER, 2026-07-11, four messages merged)
 
