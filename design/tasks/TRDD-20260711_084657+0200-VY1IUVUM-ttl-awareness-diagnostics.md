@@ -83,8 +83,42 @@ Also doc-verified and load-bearing for classification:
   left in gate/diagnostic code paths).
 - Suite grows from 783/0, zero regressions; docs + CHANGELOG (v2.2.0).
 
+## ADDENDUM 2026-07-11 (USER: "fix immediately") — ROOT-CAUSE BUG + account command
+
+**THE BUG (found by orchestrator, live-verified):** `src/ttlContext.ts resolveAuthRegime`
+compares `billing === 'subscription'`, but the REAL `~/.claude.json` oauthAccount value is
+`stripe_subscription` (proven: `get_account_status` → `billingType:"stripe_subscription",
+hasExtraUsageEnabled:false, rateLimitTier:"default_claude_max_5x"`). So every subscription
+account falls through to the `api-key` branch → misclassified → wrong 5-min TTL → the gate/
+keepWarm emit false cold-rewrite warnings on a 1h-TTL subscription session. FIX: match any
+billingType CONTAINING 'subscription' (case-insensitive) as the subscription regime.
+
+**Part 5 — the account/plan/window command (USER directive):** `get_account_status` must
+report, as a clean human-readable summary: email; MODE (subscription within-plan / drawing
+usage-credits / api pay-per-token — from billingType + hasExtraUsageEnabled + 5h fill);
+PLAN ("Max 5x"/"Max 20x"/"Pro"/… from planType + rateLimitTier `default_claude_max_5x` →
+5x, `_20x` → 20x); 5h% and 7d% window used; and cacheTtl {minutes, regime, ttlSource}. The
+authoritative 5h/7d % is Claude Code's `rate_limits.{five_hour,seven_day}.utilization`
+(0-100) — the statusline reads it (statusline.py ~724-785) and persists to the ingested
+usage log; capture it (add ingestion if absent), fall back to AgentlensPro's own calibrated
+pct, and stamp `windowSource: 'cc-rate-limits'|'calibrated'|'none'` (never present a null as 0).
+
+## ⏵ STATE UPDATE — 2026-07-11 (resuming to FINISH) — supersedes the incomplete-state block above
+
+Architecture (verified sound): `src/ttlContext.ts` (Node I/O resolver: account+env → regime)
+feeds the pure `src/shared/cacheTtl.ts` classifier; keepWarm + gate already consume it (3
+committed commits d51f1a0/de77d15/11225fd). NOT a duplicate of anything — the earlier
+"duplicate module" worry was wrong. Remaining to finish on `feat/ttl-awareness`: (1) the
+stripe_subscription match fix, (2) finish wiring `getTtlContext` into server/burnMonitor
+(clear the unused imports), (3) the Part-5 account command enrichment + 5h/7d% ingestion,
+(4) tests incl. the stripe_subscription regression + the account-command fixture, (5)
+SKILL.md recipes + CHANGELOG v2.2.0, gates (baseline 783/0), merge --no-ff.
+
 ## Approval log
 
 - 2026-07-11T09:20:00+0200 — USER directive (5 parts) relayed via retired pinger fork;
   TTL facts independently re-verified against the official doc by the orchestrator before
   authoring. Parts 1–3 = this TRDD; part 4 = janitor GitHub issue (orchestrator).
+- 2026-07-11 (later) — USER "fix immediately" after orchestrator wrongly asserted this
+  session was on usage credits (it is subscription/Max-5x, ipazia). Root-cause bug found +
+  Part-5 account command added. Tier 0 correctness fix.
