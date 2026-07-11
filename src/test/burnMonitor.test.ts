@@ -8,10 +8,21 @@ import {
   resolveSession, DEFAULT_THRESHOLDS,
   type ConsumptionEvent, type StatuslineBillingEvent, type BurnConfig,
 } from '../burnMonitor'
+import { ASSUMED_TTL_REGIME, type TtlContext } from '../shared/cacheTtl'
 import type { SessionSummaryCard, TimelineEntry } from '../shared/summarizerTypes'
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
 const NOW = 1_700_000_000_000  // fixed epoch ms so window math is deterministic
+
+// The TTL fields every uncontradicted keepWarm report carries when NO TtlContext was threaded in
+// (the honest 'assumed' 5-min floor — TRDD-VY1IUVUM). One object so a shape change breaks one place.
+const ASSUMED_FIELDS = {
+  ttlAssumedMin: 5,
+  ttlSource: 'assumed' as const,
+  ttlContradicted: false,
+  measuredWarmGapMin: null,
+  ttlBasis: ASSUMED_TTL_REGIME.ttlBasis,
+}
 
 function apiEvent(offsetMs: number, over: Partial<TimelineEntry> = {}): TimelineEntry {
   return {
@@ -238,7 +249,31 @@ suite('burnMonitor — session resolution + status', () => {
     const st = computeSessionStatus([c], gatherConsumptionEvents([c], [], NOW), baseConfig(), { sessionId: 'sess-1' }, NOW)
     assert.ok('keepWarm' in st, 'resolved status carries keepWarm')
     if (!('keepWarm' in st)) return
-    assert.deepStrictEqual(st.keepWarm, { warmTurns: 0, coldTurns: 1, wastedWriteTokens: 180_000, worstGapMin: 6 })
+    assert.deepStrictEqual(st.keepWarm, { warmTurns: 0, coldTurns: 1, wastedWriteTokens: 180_000, worstGapMin: 6, ...ASSUMED_FIELDS })
+  })
+
+  test('computeSessionStatus threads the TtlContext: a main session under subscription rides the 1h tier (TRDD-VY1IUVUM)', () => {
+    // Same 20-min-gap-with-rewrite fixture, resolved by regime: warm on a subscription MAIN card,
+    // cold on a subagent child card (parentSessionId set → 5-min tier ALWAYS).
+    const ctx: TtlContext = { auth: 'subscription', force5m: false, enable1h: false }
+    const gapTimeline = [
+      apiEvent(20 * 60_000 + 20_000, { cacheCreateTokens: 220_000 }),
+      apiEvent(20_000, { cacheReadTokens: 0, cacheCreateTokens: 220_000 }),
+    ]
+    const main = card({ timeline: gapTimeline })
+    const mainSt = computeSessionStatus([main], gatherConsumptionEvents([main], [], NOW), baseConfig(), { sessionId: 'sess-1' }, NOW, ctx)
+    assert.ok('keepWarm' in mainSt)
+    if (!('keepWarm' in mainSt)) return
+    assert.strictEqual(mainSt.keepWarm?.warmTurns, 1, 'main + subscription: 20-min gap is warm (1h tier)')
+    assert.strictEqual(mainSt.keepWarm?.ttlAssumedMin, 60)
+    assert.strictEqual(mainSt.keepWarm?.ttlSource, 'doc-matrix')
+
+    const child = card({ sessionId: 'agent-1', parentSessionId: 'sess-1', timeline: gapTimeline })
+    const childSt = computeSessionStatus([child], gatherConsumptionEvents([child], [], NOW), baseConfig(), { sessionId: 'agent-1' }, NOW, ctx)
+    assert.ok('keepWarm' in childSt)
+    if (!('keepWarm' in childSt)) return
+    assert.strictEqual(childSt.keepWarm?.coldTurns, 1, 'subagent: the SAME gap is cold (5-min tier always)')
+    assert.strictEqual(childSt.keepWarm?.ttlAssumedMin, 5)
   })
 
   test('computeSessionStatus keepWarm is null (honest absence) without api_request entries', () => {
@@ -272,8 +307,21 @@ suite('burnMonitor — computeBurnStatus + config', () => {
     const status = computeBurnStatus(events, [a, b], baseConfig(), NOW)
     const topA = status.topSessions.find(s => s.sessionId === 'A')
     const topB = status.topSessions.find(s => s.sessionId === 'B')
-    assert.deepStrictEqual(topA?.keepWarm, { warmTurns: 1, coldTurns: 0, wastedWriteTokens: 0, worstGapMin: 1 })
+    assert.deepStrictEqual(topA?.keepWarm, { warmTurns: 1, coldTurns: 0, wastedWriteTokens: 0, worstGapMin: 1, ...ASSUMED_FIELDS })
     assert.strictEqual(topB?.keepWarm, null, 'no api_request entries → null, not zeros')
+  })
+
+  test('computeBurnStatus threads the TtlContext into every topSession keepWarm (TRDD-VY1IUVUM)', () => {
+    const ctx: TtlContext = { auth: 'subscription', force5m: false, enable1h: false }
+    const a = card({ sessionId: 'A', timeline: [
+      apiEvent(20 * 60_000 + 10_000, { cacheCreateTokens: 220_000 }),
+      apiEvent(10_000, { cacheReadTokens: 0, cacheCreateTokens: 220_000 }),
+    ] })
+    const events: ConsumptionEvent[] = [ev({ sessionId: 'A', ts: NOW - 5_000, tokens: 5000 })]
+    const status = computeBurnStatus(events, [a], baseConfig(), NOW, ctx)
+    const topA = status.topSessions.find(s => s.sessionId === 'A')
+    assert.strictEqual(topA?.keepWarm?.warmTurns, 1, 'the 20-min gap is warm under the subscription 1h tier')
+    assert.strictEqual(topA?.keepWarm?.ttlSource, 'doc-matrix')
   })
 
   test('loadBurnConfig reads env capacity + thresholds; capacity null by default', () => {
