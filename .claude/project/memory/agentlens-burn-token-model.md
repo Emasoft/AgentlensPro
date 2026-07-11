@@ -108,8 +108,9 @@ the MAX_SPANS window and include sub-agent calls the log parent excludes.
   idle-expiry). The cache is EFFICIENT (96% read); the cost is the SIZE re-read, not breakage. AgentLens
   also over-reports $/hr ~4× from the same sparse-delta artifact (TRDD-BURNWDGT fix).
 [^3]: [ocd:2026-07-08 lmd:2026-07-08] The concrete acute case: scanning the OTEL raw bodies, the 120
-  LARGEST request bodies on the machine were ALL `/Users/emanuelesabetta/Code/ANIME2SVG` (claude-fable-5),
-  each carrying the IDENTICAL 8 images = 525.1k tokens, with the total growing turn-over-turn — proving 8
+  LARGEST request bodies on the machine were ALL from ONE local visual-agent workspace (model
+  claude-fable-5), each carrying the IDENTICAL 8 images = 525.1k tokens, with the total growing
+  turn-over-turn — proving 8
   screenshots pasted once and re-sent every turn thereafter. Lesson: a visual agent must analyze images in
   a SUBAGENT (isolated context) or compact immediately; an un-evicted image blob is the single most
   expensive resident-context mistake (~$425 from one paste). This is the evidence behind TRDD-CTXQUERY.
