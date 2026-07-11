@@ -39,6 +39,9 @@ import {
 import { calibrateFromStopFailure } from '../src/capacityCalibration'
 import { getCurrentAccount } from '../src/accountInfo'
 import { getTtlContext } from '../src/ttlContext'
+// TRDD-YQZ9P8IL — the change-detected account-state timeline. Sampled on the burn tick (cheap: only a
+// discrete-state change enqueues), flushed on its own 60s timer + on graceful shutdown.
+import { AccountStateTimeline, buildAccountStateRecord } from '../src/accountStateTimeline'
 import { classifyTtlRegime, type SessionTtlKind, type TtlContext } from '../src/shared/cacheTtl'
 import { buildContextComposition, resolveLoggedAncestor } from '../src/contextComposition'
 import { buildContextHistory } from '../src/contextHistory'
@@ -557,6 +560,10 @@ let logReader = new LogReader()
 // P7: overlays authoritative context size + cost from the Claude Code statusline usage log onto each
 // card before it is served. No-op for sessions/agents that wrote no statusline line.
 const statuslineReader = new StatuslineUsageReader()
+// TRDD-YQZ9P8IL — the account-state timeline writer (its own 60s flush timer, unref'd; flushed on
+// shutdown below). Sampled by the burn tick; change-detection means writes happen only on a real state
+// change (~a few/hour), never per request.
+const accountStateTimeline = new AccountStateTimeline()
 
 // ── Burn monitor (TRDD-OG9PARZQ) ───────────────────────────────────────────────
 // Realtime "smoke detector": rolling burn rate + rate-limit window budget + threshold alerts, computed
@@ -732,6 +739,10 @@ function tickBurn(): void {
     return
   }
   lastBurnStatus = status
+  // TRDD-YQZ9P8IL: sample the current subscription state onto the change-detected timeline. record()
+  // only enqueues on a discrete change (account/mode/plan/ttl), so this 4s call is a cheap key compare
+  // in the common case and a real write only a few times/hour. currentTtlContext() is 60s-cached.
+  try { accountStateTimeline.record(buildAccountStateRecord(getCurrentAccount(), currentTtlContext(), Date.now())) } catch { /* never let timeline sampling break the burn tick */ }
   pushBurnSse({ type: 'burnStatus', burnStatus: enrichBurnStatus(status) })
 
   const active = new Set<string>()
@@ -2952,6 +2963,9 @@ function shutdown() {
   } catch { /* ignore */ }
   try { saveOffsetsNow() } catch { /* ignore */ }
   try { saveCardsNow() } catch { /* ignore */ }
+  // TRDD-YQZ9P8IL: final flush of the account-state timeline so a graceful stop never loses a buffered
+  // state change (matches the span-store's shutdown-flush discipline).
+  try { accountStateTimeline.stop() } catch { /* ignore */ }
   try { recordCollectorStop(LIFECYCLE_FILE, lifecycle) } catch { /* ignore */ }
   if (IS_CANONICAL) { try { fs.unlinkSync(PID_FILE) } catch { /* ignore */ } }
   process.exit(0)

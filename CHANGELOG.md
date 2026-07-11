@@ -4,6 +4,30 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.3.0] — 2026-07-11
+
+### Added
+
+- **Account-state timeline (TRDD-YQZ9P8IL)** — every past request/span is now attributable to the
+  subscription state (account / billing mode / plan / cache-TTL regime) that was active AT THAT TIME,
+  without hammering the SSD. The state is a slowly-changing dimension, so it is logged as a
+  change-detected append-only timeline (`~/.agentlens/account-state.ndjson`) — one record only when
+  the DISCRETE dims change (account/mode/plan/ttl), never per-request. The continuously-moving 5h/7d %
+  are deliberately excluded from the change key (query them live). Result: ~a few disk writes/hour, not
+  thousands. An in-memory buffer flushes on a 60-second timer (tunable via
+  `AGENTLENS_ACCOUNT_STATE_FLUSH_MS`), at 32 records / ~16 KB, or on graceful shutdown (SIGTERM);
+  fsync is once per batch, never per record. A restart into an unchanged state does not re-log it.
+- **`get_account_state_at` diagnostic tool** — resolves "which account/mode/plan/TTL was I on at
+  instant T" by binary-searching the timeline (last record with `ts <= T`). Accepts a ms-epoch `ts` or
+  an ISO-8601 `iso`; returns the matching state or null (never a fabricated state) when the timeline
+  doesn't reach that far back.
+
+### Changed
+
+- Plan/mode formatting (`describePlan`/`describeAccountMode`) and the auth-regime resolver now live in
+  one module shared by `get_account_status` and the timeline sampler — a single source of truth (no
+  drift between the live status and the recorded state).
+
 ## [2.2.0] — 2026-07-11
 
 ### Fixed
