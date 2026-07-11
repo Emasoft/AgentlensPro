@@ -4,6 +4,27 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.3.1] — 2026-07-11
+
+### Fixed
+
+- **Docs consistency audit (TRDD-1758VB34)** — brought the documentation in line with the shipped
+  TTL-regime model. `ARCHITECTURE.md`'s keepWarm section no longer claims a fixed "~5 minutes
+  (`CACHE_TTL_MS`)" cache TTL (that constant was removed by the TTL work) — it now describes the
+  per-session `TtlRegime` (1h subscription main / 5m subagent+usage-credits+API / fork inherits) and
+  `computeKeepWarm(timeline, regime)`. The diagnostics skill's `COLD_RESUME_RISK` row is regime-aware
+  (subagents always ride the 5-min tier even when the main session is on the 1-hour tier). Verified
+  every doc command reference (`pnpm run local`/`capture`/`demo`/…) still exists.
+
+### Changed
+
+- **`media/dashboard.css` is now a gitignored build artifact (TRDD-1758VB34)** — it is an esbuild
+  output (bundled from `media/src/styles/*.css` via the dashboard entry's CSS imports), so it was
+  dirtying the tree on every build while ALSO being git-tracked — two owners. It now joins its already-
+  ignored siblings (`media/dashboard.js`, `standalone/*.js`, `media/dashboard.css.map`); the single
+  owner is `media/src/styles/*.css`. The publish workflow builds before `npm pack`, so the tarball
+  still ships a freshly-built CSS (it stays in the `files` allowlist).
+
 ## [2.3.0] — 2026-07-11
 
 ### Added
