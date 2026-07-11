@@ -24,6 +24,11 @@ attestation automatic), and creates the GitHub Release. Verified live: v1.0.1 (r
   (bundles npm ≥ 11.5.1, the OIDC floor).
 - **Retry without re-tagging**: `gh workflow run publish.yml` (Release/attestation steps
   are tag-guarded).
+- **The SAME `vX.Y.Z` tag ALSO ships the Docker image** — `.github/workflows/docker.yml`
+  fires on `v*` too and pushes `ghcr.io/emasoft/agentlenspro:{X.Y.Z, X.Y, X, latest}`
+  (multi-stage Dockerfile: pnpm install → `node esbuild.js --production` → runtime stage).
+  It is INDEPENDENT of the npm publish — one can fail while the other succeeds, so verify
+  BOTH runs after a tag push (`gh run list` for tag `vX.Y.Z`), not just Release.[^3]
 - **Verify a release**: registry `_npmUser` contains `trustedPublisher` + 2 attestations at
   `/-/npm/v1/attestations/agentlenspro@<ver>`; fresh 404s minutes after publish are CDN
   propagation, not failure. `npx -y agentlenspro@<ver> --version` from a fresh `HOME` is
@@ -53,3 +58,17 @@ after, and every release since is CI-only. See also [[agentlenspro-identity]],
   `.gitignore`, putting gitignored `reports/` and `design/` into the tarball dry-run.
   Deleted it and moved to the `files` whitelist (ec8be5e). Lesson: two selectors deciding
   one question is the bug class; keep exactly one.
+[^3]: [ocd:2026-07-11 lmd:2026-07-11] the Docker publish (docker.yml) silently FAILED for
+  v2.3.1 AND v2.4.0 while npm published fine — nobody noticed until v2.4.0, so `:latest`
+  sat stuck at 2.3.0 for two releases. Cause: the Dockerfile `COPY media/dashboard.css`
+  from the build context, but 2.3.1 made dashboard.css a gitignored esbuild build artifact
+  (absent from a clean checkout), so `docker build` died `"/media/dashboard.css": not
+  found`. A LOCAL build masked it — the dirty working tree still had the artifact, and
+  `.dockerignore` excluded dashboard.js but not dashboard.css. Fixed in 2.4.1: drop the
+  stale COPY (esbuild builds it in the builder stage; the runtime stage copies it from
+  there) AND add dashboard.css to `.dockerignore` beside its dashboard.js sibling. Lessons:
+  (a) when a tracked file becomes a gitignored build artifact, fix BOTH the Dockerfile COPY
+  and `.dockerignore` in the same change; (b) verify a Docker release from a CLEAN context
+  (git-archive / .dockerignore-excluded), never the dirty working tree — npm's
+  build-before-pack hid the same class on the npm side; (c) a `vX.Y.Z` tag fans out to
+  TWO publish workflows — check both conclusions.
