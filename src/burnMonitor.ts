@@ -180,6 +180,11 @@ export function loadBurnConfig(env: NodeJS.ProcessEnv, homeDir: string): BurnCon
     const p = burnConfigPath(env, homeDir)
     if (fs.existsSync(p)) file = JSON.parse(fs.readFileSync(p, 'utf8'))
   } catch { /* malformed config must never crash the monitor — fall back to env + defaults */ }
+  // JSON.parse succeeds on `null`/a bare number/string/array too — none is the object shape the reads
+  // below assume. Literal `null` is the trap: `file.window5hTokens` (outside the try) throws
+  // "Cannot read properties of null", defeating the "never crash the monitor" contract. Coerce any
+  // non-plain-object to {} so a hand-edited/truncated `null` config degrades to env+defaults.
+  if (!file || typeof file !== 'object' || Array.isArray(file)) file = {}
 
   const env5h = numEnv(env['AGENTLENS_WINDOW_5H_TOKENS'])
   const env7d = numEnv(env['AGENTLENS_WINDOW_7D_TOKENS'])
@@ -853,7 +858,12 @@ export function resolveSession(sessions: SessionSummaryCard[], sel: { sessionId?
  *  else the pricing-table estimate. inputTokens is RAW on every card (2026-07-10 normalization at
  *  the ingestion sites) — the four buckets are disjoint, each billed at its own rate. */
 export function cardCostUsd(card: SessionSummaryCard): number {
-  if (card.statusline && card.statusline.totalCostUsd > 0) return card.statusline.totalCostUsd
+  // Presence-gate on `samples` (how many statusline lines were aggregated), NOT `totalCostUsd > 0`:
+  // a genuine $0 session (free/included model) that HAS statusline data must still use its
+  // authoritative cost, not fall through to the pricing estimate. The old `> 0` falsy-zero check
+  // discarded that authoritative 0 — harmless while the estimate was also ~0, but wrong-in-direction
+  // once an unpriced/mis-priced model yields a non-zero estimate for the same session.
+  if (card.statusline && card.statusline.samples > 0) return card.statusline.totalCostUsd
   return calcTokenCostUsd(card.inputTokens, card.cacheReadTokens, card.cacheCreateTokens ?? 0, card.outputTokens, card.model)
 }
 

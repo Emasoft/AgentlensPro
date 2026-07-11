@@ -32,6 +32,7 @@ RESTART=1
 DRYRUN=0
 for arg in "$@"; do
   case "$arg" in
+    --)           ;;  # `pnpm run deploy:safe -- --dry-run` forwards a literal `--` separator; ignore it
     --dry-run)    DRYRUN=1 ;;
     --no-restart) RESTART=0 ;;
     -h|--help)

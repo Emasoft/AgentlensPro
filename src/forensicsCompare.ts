@@ -169,7 +169,7 @@ function buildVerdicts(groupBy: GroupByDim, metric: MetricKey, groups: CompareGr
   }
   const m = metric.replace(/_/g, ' ')
   cmp('worktree', 'fork', (r, ga, gb) => `worktree averages ${r.toFixed(1)}× the ${m}/call of fork (${Math.round(ga.avg)} vs ${Math.round(gb.avg)}) — worktree spawns are cache-cold and isolated.`)
-  cmp('fork', 'fresh', (r, ga, gb) => `fork averages ${Math.round((1 - r) * 100)}% ${r < 1 ? 'less' : 'more'} ${m} than fresh (${Math.round(ga.avg)} vs ${Math.round(gb.avg)}) — forks read the parent cache.`)
+  cmp('fork', 'fresh', (r, ga, gb) => `fork averages ${Math.round(Math.abs(1 - r) * 100)}% ${r < 1 ? 'less' : 'more'} ${m} than fresh (${Math.round(ga.avg)} vs ${Math.round(gb.avg)}) — forks read the parent cache.`)
   cmp('fresh', 'root', (r, ga, gb) => `fresh subagents average ${r.toFixed(1)}× the ${m}/call of root sessions (${Math.round(ga.avg)} vs ${Math.round(gb.avg)}).`)
   return out
 }

@@ -359,4 +359,21 @@ suite('burnMonitor — computeBurnStatus + config', () => {
       fs.rmSync(home, { recursive: true, force: true })
     }
   })
+
+  test('loadBurnConfig does not throw on a burn-config.json containing literal null', () => {
+    // JSON.parse('null') succeeds and returns null; the field reads that follow are OUTSIDE the parse
+    // try/catch, so `file.window5hTokens` on null threw — defeating the "never crash the monitor"
+    // contract. A null config must degrade to env+defaults, not crash.
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'burncfg-null-'))
+    try {
+      fs.mkdirSync(path.join(home, '.agentlens'))
+      fs.writeFileSync(path.join(home, '.agentlens', 'burn-config.json'), 'null')
+      const cfg = loadBurnConfig({}, home)
+      assert.strictEqual(cfg.window5hTokens, null)
+      assert.strictEqual(cfg.capacitySource, 'none')
+      assert.strictEqual(cfg.thresholds.tokensPerMin, DEFAULT_THRESHOLDS.tokensPerMin)
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
 })

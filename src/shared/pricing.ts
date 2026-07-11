@@ -115,11 +115,18 @@ export function lookupRates(modelId: string): ModelRates | null {
   if (!modelId) return null
   const normalized = normalizeModelId(modelId)
   if (RATES[normalized]) return RATES[normalized]
-  // Prefix match for versioned or aliased model IDs
+  // Prefix match for versioned/aliased IDs that are LONGER than a family key (e.g. an un-stripped alias
+  // of `claude-sonnet-5`). ONLY this direction is valid. The reverse — `key.startsWith(normalized)`,
+  // matching when the query is SHORTER than a key — mapped a bare id onto an arbitrary longer key's
+  // rates in insertion order: `gpt-5` matched the first-inserted `gpt-5-mini` (input $0), silently
+  // pricing a real gpt-5 session at $0; `gemini-3` matched `gemini-3-flash` instead of `-pro`. Among
+  // several family-prefix matches, prefer the LONGEST (most specific) key; no match stays null so the
+  // caller's `unpriced` flag surfaces an unknown model rather than guessing a wrong rate.
+  let best: string | null = null
   for (const key of Object.keys(RATES)) {
-    if (normalized.startsWith(key) || key.startsWith(normalized)) return RATES[key]
+    if (normalized.startsWith(key) && (best === null || key.length > best.length)) best = key
   }
-  return null
+  return best ? RATES[best] : null
 }
 
 // Applies two-tier pricing: tokens up to the threshold at baseRate, remainder at aboveRate.

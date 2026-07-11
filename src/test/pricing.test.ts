@@ -19,6 +19,24 @@ suite('pricing', () => {
     assert.ok(rates !== null, 'Should match after stripping date suffix')
   })
 
+  test('lookupRates does not map a bare id onto a longer key (silent $0 pricing bug)', () => {
+    // `gpt-5` has no exact entry; the old bidirectional prefix match (`key.startsWith(normalized)`)
+    // returned the first-inserted `gpt-5-mini` (input $0), silently pricing a real gpt-5 session at $0.
+    // It must now be unpriced (null) so the `unpriced` flag surfaces an unknown model instead.
+    assert.strictEqual(lookupRates('gpt-5'), null)
+  })
+
+  test('lookupRates prefers the longest (most specific) family prefix', () => {
+    // `gpt-4o-mini-preview` is prefixed by BOTH `gpt-4o` and `gpt-4o-mini`. The old first-match
+    // returned the broader `gpt-4o`; the fix must pick the most specific `gpt-4o-mini`.
+    const broad = lookupRates('gpt-4o')
+    const specific = lookupRates('gpt-4o-mini')
+    const resolved = lookupRates('gpt-4o-mini-preview')
+    assert.ok(broad && specific && resolved, 'all three resolve')
+    assert.strictEqual(resolved!.inputPerMTok, specific!.inputPerMTok, 'resolves to the specific mini rate')
+    assert.notStrictEqual(resolved!.inputPerMTok, broad!.inputPerMTok, 'not the broad gpt-4o rate')
+  })
+
   test('calcTokenCostUsd returns 0 for unknown model', () => {
     const cost = calcTokenCostUsd(10000, 0, 0, 2000, 'nonexistent-model')
     assert.strictEqual(cost, 0)

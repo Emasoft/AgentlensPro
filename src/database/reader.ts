@@ -272,7 +272,7 @@ export class DatabaseReader {
     const sql = `
       SELECT
         date(start_time / 1000, 'unixepoch') AS day,
-        SUM(input_tokens)        AS total_tokens,
+        SUM(input_tokens + output_tokens) AS total_tokens,
         SUM(cache_read_tokens)   AS cache_read_tokens,
         SUM(cache_create_tokens) AS cache_create_tokens,
         SUM(output_tokens)       AS output_tokens,
@@ -306,7 +306,7 @@ export class DatabaseReader {
     const sql = `
       SELECT
         strftime('%Y-%m-%d %H', start_time / 1000, 'unixepoch') AS day,
-        SUM(input_tokens)        AS total_tokens,
+        SUM(input_tokens + output_tokens) AS total_tokens,
         SUM(cache_read_tokens)   AS cache_read_tokens,
         SUM(cache_create_tokens) AS cache_create_tokens,
         SUM(output_tokens)       AS output_tokens,
@@ -481,7 +481,11 @@ export class DatabaseReader {
     const burnRate: BurnRate = { tokensPerMinute, costPerHour }
 
     const rates = lookupRates(model)
-    if (!rates || rates.contextWindowTokens === 0 || tokensPerMinute === 0) {
+    // sessionTotalTokens === 0 must also short-circuit: it is the denominator of `scale` below
+    // (projectedTotal / sessionTotalTokens). A session row with 0 tokens but ≥2 token-bearing timeline
+    // entries (so tokensPerMinute > 0) would otherwise give scale = Infinity → Math.round(x*Infinity) =
+    // NaN → calcTokenCostUsd(NaN,…) = NaN in projection.totalCostUsd.
+    if (!rates || rates.contextWindowTokens === 0 || tokensPerMinute === 0 || sessionTotalTokens === 0) {
       return { burnRate, projection: null }
     }
 

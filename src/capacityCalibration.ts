@@ -142,7 +142,11 @@ export function calibrateFromStopFailure(rec: HookEventRecord, deps: Calibration
   // The window START is the account's first event inside the 5h span: with the straddle guard above,
   // the account was idle for ≥30min before it, which is how a fresh Anthropic 5h window begins
   // (first message after the previous window lapsed).
-  const windowStartMs = Math.min(...in5h.map(e => e.ts))
+  // reduce, not Math.min(...spread): in5h is a slice of the machine-wide consumption stream (up to
+  // ~100k events), and an argument-spread that large can hit V8's max-arguments limit → RangeError —
+  // during exactly the high-volume burst this calibrates from. (observeCapacityFromPrematureEnd already
+  // loops for the same reason.)
+  const windowStartMs = in5h.reduce((m, e) => Math.min(m, e.ts), Infinity)
   const measured5h = observeCapacityFromPrematureEnd(deps.events, accountUuid, windowStartMs, stopTs)
   if (measured5h.tokens <= 0 && measured5h.costUsd <= 0) {
     return { calibrated: false, reason: 'measured window consumption is zero — nothing to persist' }

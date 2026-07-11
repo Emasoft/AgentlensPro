@@ -573,12 +573,13 @@ export function getSessionOffset(): number {
 
 export function buildDisplaySummary(sessionsOverride?: SessionSummaryCard[]) {
   const sessions = sessionsOverride ?? displaySessions.value
-  let totalInputTokens = 0, totalOutputTokens = 0, totalLlmCalls = 0, cacheRead = 0
+  let totalInputTokens = 0, totalOutputTokens = 0, totalLlmCalls = 0, cacheRead = 0, totalContext = 0
   sessions.forEach(s => {
     totalInputTokens += s.inputTokens ?? 0
     totalOutputTokens += s.outputTokens ?? 0
     totalLlmCalls += s.totalLlmCalls ?? 0
     cacheRead += s.cacheReadTokens ?? 0
+    totalContext += contextTokens(s)
   })
   return {
     sessions,
@@ -587,7 +588,10 @@ export function buildDisplaySummary(sessionsOverride?: SessionSummaryCard[]) {
       totalOutputTokens,
       totalLlmCalls,
       avgInputPerCall: totalLlmCalls > 0 ? Math.round(totalInputTokens / totalLlmCalls) : 0,
-      cacheHitRate: totalInputTokens > 0 ? cacheRead / totalInputTokens : 0,
+      // cache-read / context-size (raw + cache-read + cache-create) so this is a real 0–1 fraction and
+      // matches every per-card rate. Dividing by RAW input alone produced >1 ("20000%") — the four
+      // buckets are disjoint and a session reads far more cache than it has raw input.
+      cacheHitRate: totalContext > 0 ? cacheRead / totalContext : 0,
       toolDefWaste: sessionSummary.value?.efficiency?.toolDefWaste ?? 0,
     },
   }

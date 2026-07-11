@@ -11,7 +11,7 @@ import * as http from 'http'
 import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
-import { exec } from 'child_process'
+import { exec, execFile } from 'child_process'
 import { summarizeSpans } from '../src/spanSummarizer'
 import { mergeOtelAndLogSessions, linkSubagentTranscripts } from '../src/feedMergePolicy'
 import { calcTokenCostUsd } from '../src/shared/pricing'
@@ -713,12 +713,18 @@ function pushBurnSse(payload: unknown): void {
   })
 }
 
-// macOS notification, strictly opt-in (AGENTLENS_NOTIFY=1). osascript is escaped so an alert detail
-// can never break out of the AppleScript string. No-op off macOS or when notify is disabled.
+// macOS notification, strictly opt-in (AGENTLENS_NOTIFY=1). No-op off macOS or when notify is disabled.
+// SECURITY: the script is handed to osascript via execFile (argv), NOT a shell string. A shell string
+// (`osascript -e '…'`) wraps the AppleScript in a single-quoted shell arg, so an apostrophe in the
+// alert detail — routine, e.g. a session prompt "fix the user's login" flowing through sessionLabel —
+// closes the shell quote and lets /bin/sh parse the rest (a crafted prompt → arbitrary command
+// execution). execFile runs osascript directly with no shell, so `esc` only needs to protect the
+// AppleScript string literal (its `"`/`\`); a `'` is now inert.
 function macNotify(alert: BurnAlert): void {
   if (!burnConfig.notify || process.platform !== 'darwin') return
   const esc = (s: string) => s.replace(/["\\]/g, '\\$&').slice(0, 240)
-  exec(`osascript -e 'display notification "${esc(alert.detail)}" with title "AgentLens: ${esc(alert.label)}"'`, () => {})
+  const script = `display notification "${esc(alert.detail)}" with title "AgentLens: ${esc(alert.label)}"`
+  execFile('osascript', ['-e', script], () => {})
 }
 
 // The tick's latest status, reused by hot request paths (/api/burn-risk): recomputing
@@ -2034,10 +2040,58 @@ durableSaveTimer.unref()
 
 // ── UI server ─────────────────────────────────────────────────────────────────
 
+// CSRF / cross-origin guard for STATE-CHANGING requests. The UI server binds to 127.0.0.1, but a page
+// the user is browsing (evil.com) can still POST to http://localhost:<port> from the user's OWN browser
+// — a "simple" text/plain POST needs no CORS preflight, and a write side-effect lands before any
+// (blocked) response is read. Several handlers below turn request fields into filesystem writes
+// (/api/instructions/apply → appendFileSync at a caller-supplied path, /api/bodies/export → archive
+// extraction to a caller-supplied dir, /action → clearAll), so an unguarded cross-origin POST is an
+// arbitrary-file-write → code-execution vector. A browser sets `Origin` on every cross-origin request
+// (and on same-origin POSTs, where it equals the page origin); we refuse any request whose Origin is
+// present and neither same-origin (Origin.host === Host — works on any BIND_HOST) nor loopback. The
+// dashboard is same-origin (allowed); CLI/hook Node clients send no Origin (allowed). One gate closes
+// the whole class regardless of the blanket ACAO:* header.
+function isDisallowedCrossOrigin(req: http.IncomingMessage): boolean {
+  const origin = req.headers.origin
+  if (typeof origin !== 'string' || origin === '') return false // non-browser / same-origin-no-Origin → allow
+  let u: URL
+  try { u = new URL(origin) } catch { return true } // unparseable Origin → refuse
+  if (req.headers.host && u.host === req.headers.host) return false // genuine same-origin → allow
+  const hn = u.hostname // no brackets for IPv6 loopback
+  return !(hn === 'localhost' || hn === '127.0.0.1' || hn === '::1')
+}
+
+// Accumulate a request body with a hard byte cap + an error listener, mirroring the guarded
+// /api/hook-events and /api/agent-gate handlers. On overflow the socket is destroyed and onBody is NOT
+// invoked (no response is possible after destroy); a transport error is swallowed so a mid-stream
+// socket failure can never crash the collector. Consolidates the cap+error pattern that several POST
+// handlers were missing — an uncapped body on a localhost server reachable cross-origin is an OOM/DoS
+// surface (the exact class TRDD-PJC8N1HO hardened elsewhere).
+function readBodyCapped(req: http.IncomingMessage, maxBytes: number, onBody: (buf: Buffer) => void): void {
+  const chunks: Buffer[] = []
+  let received = 0
+  let overflowed = false
+  req.on('data', (c: Buffer) => {
+    received += c.length
+    if (received > maxBytes) { overflowed = true; req.destroy() }
+    else chunks.push(c)
+  })
+  req.on('error', () => { /* transport error — never crash the collector */ })
+  req.on('end', () => { if (!overflowed) onBody(Buffer.concat(chunks)) })
+}
+
 const uiServer = http.createServer((req, res) => {
   const url = (req.url ?? '/').split('?')[0]
   instrumentResponse(req, res, url)
   res.setHeader('Access-Control-Allow-Origin', '*')
+
+  // Refuse cross-origin browser mutations (CSRF) before any handler runs. GET/HEAD are non-mutating
+  // (and the read endpoints are non-sensitive), so only guard state-changing methods.
+  if (req.method !== 'GET' && req.method !== 'HEAD' && isDisallowedCrossOrigin(req)) {
+    res.writeHead(403, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ error: 'cross-origin request refused' }))
+    return
+  }
 
   if (url === '/events') {
     res.writeHead(200, {
@@ -2053,11 +2107,9 @@ const uiServer = http.createServer((req, res) => {
   }
 
   if (req.method === 'POST' && url === '/api/import') {
-    const chunks: Buffer[] = []
-    req.on('data', (c: Buffer) => chunks.push(c))
-    req.on('end', () => {
+    readBodyCapped(req, 64 * 1024 * 1024, (bodyBuf) => {
       try {
-        const body = JSON.parse(Buffer.concat(chunks).toString('utf-8')) as { sessions?: unknown[] }
+        const body = JSON.parse(bodyBuf.toString('utf-8')) as { sessions?: unknown[] }
         if (!Array.isArray(body.sessions)) {
           res.writeHead(400, { 'Content-Type': 'application/json' })
           res.end(JSON.stringify({ error: 'sessions array required' }))
@@ -2255,7 +2307,11 @@ const uiServer = http.createServer((req, res) => {
       if (lastBurnStatus === null) {
         try {
           const { sessions, events, now } = gatherBurn()
-          lastBurnStatus = computeBurnStatus(events, sessions, burnConfig, now)
+          // Pass the machine TtlContext so keepWarm classifies against the RESOLVED regime (1h main /
+          // 5m subagent / usage-credit), not the assumed 5-min floor — matching the tick (line ~742)
+          // and the getBurnStatus accessor. Omitting it mis-attributed cache-break cost on the first
+          // /api/burn-risk call after boot (TRDD-VY1IUVUM cache-TTL model).
+          lastBurnStatus = computeBurnStatus(events, sessions, burnConfig, now, currentTtlContext())
         } catch { /* stays null — checkBurnRisk reports the feed as absent */ }
       }
       const report = checkBurnRisk({
@@ -2374,11 +2430,9 @@ const uiServer = http.createServer((req, res) => {
   // so the WAD format has exactly ONE implementation (src/bodyArchive.ts) — no CLI-side reader
   // to drift out of sync with the writer.
   if (req.method === 'POST' && url === '/api/bodies/export') {
-    const chunks: Buffer[] = []
-    req.on('data', (c: Buffer) => chunks.push(c))
-    req.on('end', () => {
+    readBodyCapped(req, 1024 * 1024, (bodyBuf) => {
       try {
-        const body = JSON.parse(Buffer.concat(chunks).toString('utf-8')) as { destDir?: string; sinceMs?: number; untilMs?: number }
+        const body = JSON.parse(bodyBuf.toString('utf-8')) as { destDir?: string; sinceMs?: number; untilMs?: number }
         const destDir = body.destDir
         if (!destDir || !path.isAbsolute(destDir)) {
           res.writeHead(400, { 'Content-Type': 'application/json' })
@@ -2438,11 +2492,9 @@ const uiServer = http.createServer((req, res) => {
   }
 
   if (req.method === 'POST' && url === '/api/write-prompts-file') {
-    const chunks: Buffer[] = []
-    req.on('data', (c: Buffer) => chunks.push(c))
-    req.on('end', () => {
+    readBodyCapped(req, 4 * 1024 * 1024, (bodyBuf) => {
       try {
-        const { agent, label, prompt } = JSON.parse(Buffer.concat(chunks).toString('utf-8')) as { agent: string; label: string; prompt: string }
+        const { agent, label, prompt } = JSON.parse(bodyBuf.toString('utf-8')) as { agent: string; label: string; prompt: string }
         const agentSlug = agent === 'claude_code' ? 'claude' : agent === 'codex' ? 'codex' : 'copilot'
         const agentName = agent === 'claude_code' ? 'Claude' : agent === 'codex' ? 'Codex' : 'Copilot'
         const filename = `agentlens-prompts-${agentSlug}.md`
@@ -2495,11 +2547,9 @@ const uiServer = http.createServer((req, res) => {
   }
 
   if (req.method === 'POST' && url === '/api/instructions/apply') {
-    const chunks: Buffer[] = []
-    req.on('data', (c: Buffer) => chunks.push(c))
-    req.on('end', () => {
+    readBodyCapped(req, 4 * 1024 * 1024, (bodyBuf) => {
       try {
-        const { workspace, targetFile, appliedText, id } = JSON.parse(Buffer.concat(chunks).toString('utf-8')) as {
+        const { workspace, targetFile, appliedText, id } = JSON.parse(bodyBuf.toString('utf-8')) as {
           workspace: string; targetFile: string; appliedText: string; id: string
         }
         if (!workspace || !targetFile || !appliedText || !id) {
@@ -2507,7 +2557,25 @@ const uiServer = http.createServer((req, res) => {
           res.end(JSON.stringify({ error: 'workspace, targetFile, appliedText, and id are required' }))
           return
         }
+        // SECURITY (defense-in-depth behind the cross-origin gate): targetFile becomes a filesystem
+        // append path (appendSuggestion → fs.appendFileSync with no containment of its own), so restrict
+        // it to the exact instruction files the advisor offers. Without this, a request could append
+        // arbitrary text to ~/.zshrc or ~/.ssh/authorized_keys (→ code execution). These mirror
+        // INSTRUCTION_FILE_DEFS in src/instructionFiles.ts (primary paths + the .claude alternate).
+        const ALLOWED_INSTRUCTION_FILES = new Set(['CLAUDE.md', '.claude/CLAUDE.md', '.github/copilot-instructions.md', 'AGENTS.md'])
+        if (!ALLOWED_INSTRUCTION_FILES.has(targetFile)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ error: 'targetFile must be a recognized instruction file' }))
+          return
+        }
         const absPath = path.join(workspace, targetFile)
+        // Belt-and-suspenders: the allowlist has no `..`, but reject anything that still resolves
+        // outside the workspace (e.g. a `workspace` that is itself a traversal string).
+        if (!path.resolve(absPath).startsWith(path.resolve(workspace) + path.sep)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ error: 'resolved path escapes the workspace' }))
+          return
+        }
         appendSuggestion(absPath, appliedText, id)
         res.writeHead(200, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ ok: true }))
@@ -2521,11 +2589,9 @@ const uiServer = http.createServer((req, res) => {
   }
 
   if (req.method === 'POST' && url === '/action') {
-    const chunks: Buffer[] = []
-    req.on('data', (c: Buffer) => chunks.push(c))
-    req.on('end', () => {
+    readBodyCapped(req, 256 * 1024, (bodyBuf) => {
       try {
-        const body = JSON.parse(Buffer.concat(chunks).toString('utf-8')) as { type?: string }
+        const body = JSON.parse(bodyBuf.toString('utf-8')) as { type?: string }
         if (body.type === 'clearAll') {
           spans = []
           clearPersistedSpans()
@@ -2550,7 +2616,9 @@ const uiServer = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' })
     try {
       const { sessions, events, now } = gatherBurn()
-      res.end(JSON.stringify(enrichBurnStatus(computeBurnStatus(events, sessions, burnConfig, now))))
+      // TTL-aware like the tick/accessor: pass currentTtlContext() so this pull path classifies the
+      // same regime the SSE push does (TRDD-VY1IUVUM), instead of the assumed 5-min floor.
+      res.end(JSON.stringify(enrichBurnStatus(computeBurnStatus(events, sessions, burnConfig, now, currentTtlContext()))))
     } catch (e) {
       res.end(JSON.stringify({ error: String(e) }))
     }
@@ -2773,7 +2841,11 @@ const uiServer = http.createServer((req, res) => {
   const filePath = path.join(mediaDir, url)
   const ext = path.extname(filePath)
   const mime = MIME[ext]
-  if (mime && fs.existsSync(filePath) && filePath.startsWith(mediaDir)) {
+  // Containment via a SEPARATOR-terminated prefix: a bare `filePath.startsWith(mediaDir)` also accepts a
+  // sibling like `<mediaDir>-assets/x.js` (reached through `/../media-assets/…`). Requiring `mediaDir +
+  // sep` rejects sibling directories that merely share the prefix. path.join already normalizes `..`, so
+  // a true escape resolves outside mediaDir and fails this check.
+  if (mime && fs.existsSync(filePath) && filePath.startsWith(mediaDir + path.sep)) {
     res.writeHead(200, { 'Content-Type': mime })
     fs.createReadStream(filePath).pipe(res)
     return
@@ -2791,11 +2863,11 @@ const otlpServer = http.createServer((req, res) => {
     return
   }
   if (req.method !== 'POST') { res.writeHead(200); res.end(); return }
-  const chunks: Buffer[] = []
-  req.on('data', (c: Buffer) => chunks.push(c))
-  req.on('end', () => {
+  // 64MB cap: a legitimate OTLP export batch is well under this; a bigger body is a bug or an attack
+  // and must not buffer unbounded into the collector's heap (the OtlpCollector class caps at 50MB).
+  readBodyCapped(req, 64 * 1024 * 1024, (bodyBuf) => {
     try {
-      const payload = JSON.parse(Buffer.concat(chunks).toString('utf-8'))
+      const payload = JSON.parse(bodyBuf.toString('utf-8'))
       const kind = classifyOtlpPayload(payload)
       if (req.url === '/v1/traces' || kind === 'traces') {
         const { count, agent } = processTraces(payload, req.url ?? '/v1/traces')
