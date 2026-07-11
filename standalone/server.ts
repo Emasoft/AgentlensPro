@@ -2114,6 +2114,23 @@ function isDisallowedCrossOrigin(req: http.IncomingMessage): boolean {
   return !(hn === 'localhost' || hn === '127.0.0.1' || hn === '::1')
 }
 
+// Set Access-Control-Allow-Origin ONLY for an allowed origin (same-origin or loopback), never the
+// wildcard. The UI read endpoints (/api/summary, /api/sessions, /api/session/*, /api/debug/*) carry
+// the user's AI-session data — prompt text, costs, model names, project file paths — so a blanket
+// ACAO:* let ANY page the user browses (evil.com) fetch http://localhost:<UI_PORT>/api/* and READ
+// the JSON cross-origin (a drive-by localhost-exfil, the READ counterpart to the write vector the
+// CSRF gate closes). The dashboard is same-origin (needs no ACAO); loopback tooling gets its origin
+// echoed; a cross-origin page gets NO ACAO, so the browser blocks it from reading the body. Reuses
+// isDisallowedCrossOrigin so "which origins are allowed" lives in ONE place. Vary:Origin keeps caches
+// from serving one origin's ACAO to another.
+function setAllowedOriginCors(req: http.IncomingMessage, res: http.ServerResponse): void {
+  const origin = req.headers.origin
+  if (typeof origin === 'string' && origin !== '' && !isDisallowedCrossOrigin(req)) {
+    res.setHeader('Access-Control-Allow-Origin', origin)
+    res.setHeader('Vary', 'Origin')
+  }
+}
+
 // Accumulate a request body with a hard byte cap + an error listener, mirroring the guarded
 // /api/hook-events and /api/agent-gate handlers. On overflow the socket is destroyed and onBody is NOT
 // invoked (no response is possible after destroy); a transport error is swallowed so a mid-stream
@@ -2136,10 +2153,13 @@ function readBodyCapped(req: http.IncomingMessage, maxBytes: number, onBody: (bu
 const uiServer = http.createServer((req, res) => {
   const url = (req.url ?? '/').split('?')[0]
   instrumentResponse(req, res, url)
-  res.setHeader('Access-Control-Allow-Origin', '*')
+  // ACAO only for allowed (same-origin/loopback) origins — never the wildcard (see setAllowedOriginCors:
+  // the read endpoints carry the user's session data, so ACAO:* was a cross-origin read-exfil vector).
+  setAllowedOriginCors(req, res)
 
-  // Refuse cross-origin browser mutations (CSRF) before any handler runs. GET/HEAD are non-mutating
-  // (and the read endpoints are non-sensitive), so only guard state-changing methods.
+  // Refuse cross-origin browser mutations (CSRF) before any handler runs. GET/HEAD are guarded from
+  // READS by the scoped ACAO above (a disallowed origin gets no readable response); we additionally
+  // refuse state-changing methods here because those carry a write side effect the browser cannot undo.
   if (req.method !== 'GET' && req.method !== 'HEAD' && isDisallowedCrossOrigin(req)) {
     res.writeHead(403, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ error: 'cross-origin request refused' }))
