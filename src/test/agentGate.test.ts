@@ -4,6 +4,7 @@ import * as os from 'os'
 import * as path from 'path'
 import {
   evaluateAgentGate, evaluateSendMessageGate, buildAdvisory, readTranscriptContext,
+  resolveMessageTargetLiveness, isKeepWarmPinger,
   type AgentGateState, type ParentContext,
 } from '../agentGate'
 import type { ThrashReport } from '../bodiesActivity'
@@ -31,6 +32,8 @@ function state(over: Partial<AgentGateState> = {}): AgentGateState {
 const thrashing: ThrashReport = {
   active: true, count: 4, rebilledTokens: 1_200_000, model: 'claude-fable-5', windowMs: 300_000,
   suspects: [{ session: '249c4216-4db4-4b64-9a10-b994b9aa0001', model: 'claude-fable-5', count: 4, bytes: 13_900_000 }],
+  topSource: { session: '249c4216-4db4-4b64-9a10-b994b9aa0001', count: 4, rebilledTokens: 1_200_000 },
+  coldStartSessions: 0, coldStartRebilledTokens: 0,
 }
 
 suite('agentGate — evaluateAgentGate (TRDD-GOD0108C)', () => {
@@ -136,6 +139,65 @@ suite('agentGate — evaluateAgentGate (TRDD-GOD0108C)', () => {
     const d = evaluateAgentGate({ subagent_type: 'fork' }, s)
     assert.notStrictEqual(d.decision, 'deny')
   })
+
+  test('EVIDENCE-BASED DISARM: a warm post-stall response from the stalled session ends COLD_RESUME early', () => {
+    // 2026-07-11 field fix: the fixed 10-min window kept denying launches 6min after the stalled
+    // session had already completed a warm request (cacheRead 215-247k, cacheCreate 6-21k).
+    const armed = state({ lastStopFailureMs: NOW - 3 * 60_000, startsLast2min: 1 })
+    assert.strictEqual(evaluateAgentGate({}, armed).code, 'COLD_RESUME_FANOUT', 'precondition: no evidence → still armed')
+    const d = evaluateAgentGate({}, { ...armed, stallRecovered: true })
+    assert.deepStrictEqual(d, { decision: 'allow', code: null, reason: null })
+  })
+})
+
+suite('agentGate — keep-warm pinger allowance (USER ORDER 2026-07-11)', () => {
+  // The pinger prevents the cold cache the gate guards against — denying it CAUSES the waste,
+  // and under COLD_RESUME the pinger IS the warm-up. Every deny state must downgrade to at most
+  // an advisory for a fork/unspecified-type launch whose prompt matches the keep-warm signature.
+  const pinger = { subagent_type: 'fork', prompt: 'Keep-warm ping: reply OK and stop.' }
+
+  test('signature detection: fork or unspecified type + keep-warm/pinger prompt, case-insensitive', () => {
+    assert.strictEqual(isKeepWarmPinger(pinger), true)
+    assert.strictEqual(isKeepWarmPinger({ prompt: 'background PINGER heartbeat' }), true, 'unspecified type qualifies')
+    assert.strictEqual(isKeepWarmPinger({ subagent_type: 'fork', prompt: 'keepwarm cycle' }), true)
+    assert.strictEqual(isKeepWarmPinger({ subagent_type: 'scout', prompt: 'keep-warm ping' }), false, 'a named non-fork type does NOT qualify')
+    assert.strictEqual(isKeepWarmPinger({ subagent_type: 'fork', prompt: 'refactor the parser' }), false)
+  })
+
+  test('THRASH_ACTIVE downgrades to an advisory for the pinger, never a deny', () => {
+    const d = evaluateAgentGate(pinger, state({ thrash: thrashing }))
+    assert.strictEqual(d.decision, 'warn')
+    assert.strictEqual(d.code, 'THRASH_ACTIVE')
+    assert.ok(d.reason?.includes('keep-warm pinger allowed'), d.reason ?? '')
+  })
+
+  test('COLD_RESUME_FANOUT downgrades for the pinger — under a cold resume the pinger IS the warm-up', () => {
+    const s = state({ lastStopFailureMs: NOW - 3 * 60_000, startsLast2min: 1 })
+    assert.strictEqual(evaluateAgentGate({}, s).decision, 'deny', 'precondition: a normal launch denies')
+    const d = evaluateAgentGate(pinger, s)
+    assert.strictEqual(d.decision, 'warn')
+    assert.strictEqual(d.code, 'COLD_RESUME_FANOUT')
+  })
+
+  test('RUNAWAY_FANOUT and FORK_STORM_FORMING also downgrade for the pinger', () => {
+    const runaway = evaluateAgentGate(pinger, state({ startsLast60s: 9, startsLast2min: 9 }))
+    assert.strictEqual(runaway.decision, 'warn')
+    assert.strictEqual(runaway.code, 'RUNAWAY_FANOUT')
+    const storm = evaluateAgentGate(pinger, state({ parent: { contextTokens: 450_000, idleMs: 7 * 60_000 }, startsLast2min: 2 }))
+    assert.strictEqual(storm.decision, 'warn')
+    assert.strictEqual(storm.code, 'FORK_STORM_FORMING')
+  })
+
+  test('the pinger skips the fork warn tier: a cold fat keep-warm fork passes SILENTLY (no per-ping noise)', () => {
+    const s = state({ parent: { contextTokens: 450_000, idleMs: 7 * 60_000 } })
+    assert.strictEqual(evaluateAgentGate({ subagent_type: 'fork' }, s).code, 'COLD_FORK', 'precondition: a normal fork warns')
+    assert.deepStrictEqual(evaluateAgentGate(pinger, s), { decision: 'allow', code: null, reason: null })
+  })
+
+  test('a keep-warm prompt on a NAMED non-fork agent gets no allowance (only fork/unspecified qualifies)', () => {
+    const d = evaluateAgentGate({ subagent_type: 'scout', prompt: 'keep-warm ping' }, state({ thrash: thrashing }))
+    assert.strictEqual(d.decision, 'deny')
+  })
 })
 
 suite('agentGate — evaluateSendMessageGate (P6 SendMessage coverage)', () => {
@@ -157,30 +219,84 @@ suite('agentGate — evaluateSendMessageGate (P6 SendMessage coverage)', () => {
     assert.deepStrictEqual(evaluateSendMessageGate(hot), { decision: 'allow', code: null, reason: null })
   })
 
-  test('active cache-thrash denies the message and names the mechanism', () => {
-    const d = evaluateSendMessageGate(state({ thrash: thrashing }))
+  test('active cache-thrash denies the message to a DEAD target and names the mechanism', () => {
+    const d = evaluateSendMessageGate(state({ thrash: thrashing, targetLiveness: 'dead', messageTarget: 'a1b2c3d4e5f6a7b8c' }))
     assert.strictEqual(d.decision, 'deny')
     assert.strictEqual(d.code, 'THRASH_ACTIVE')
     assert.ok(d.reason?.toLowerCase().includes('re-runs its whole transcript'), d.reason ?? '')
   })
 
-  test('a rate-limit stall inside the cold-resume window denies: the resume re-runs the killing request', () => {
-    const d = evaluateSendMessageGate(state({ lastStopFailureMs: NOW - 3 * 60_000, stall: { session: 'abcdef1234', cwd: '/w/proj' } }))
+  test('LIVE-TARGET RULE: a live target is never gated — delivery rides its existing run (no resume)', () => {
+    // 2026-07-11 field fix: the gate denied messaging LIVE running agents under THRASH_ACTIVE,
+    // but the resume-risk exists only for DEAD targets. Both disaster states must pass a live target.
+    const thrashLive = evaluateSendMessageGate(state({ thrash: thrashing, targetLiveness: 'live' }))
+    assert.deepStrictEqual(thrashLive, { decision: 'allow', code: null, reason: null })
+    const stallLive = evaluateSendMessageGate(state({ lastStopFailureMs: NOW - 60_000, targetLiveness: 'live' }))
+    assert.deepStrictEqual(stallLive, { decision: 'allow', code: null, reason: null })
+  })
+
+  test('UNKNOWN liveness downgrades the deny to a warning — a hard deny needs positive dead evidence', () => {
+    const d = evaluateSendMessageGate(state({ thrash: thrashing, messageTarget: 'researcher' })) // no liveness resolvable for a name
+    assert.strictEqual(d.decision, 'warn')
+    assert.strictEqual(d.code, 'THRASH_ACTIVE')
+    assert.ok(d.reason?.includes('liveness unknown'), d.reason ?? '')
+    assert.ok(d.reason?.includes("'researcher'"), `the target must be named: ${d.reason ?? ''}`)
+  })
+
+  test('a rate-limit stall inside the cold-resume window denies a DEAD target: the resume re-runs the killing request', () => {
+    const d = evaluateSendMessageGate(state({
+      lastStopFailureMs: NOW - 3 * 60_000, stall: { session: 'abcdef1234', cwd: '/w/proj' }, targetLiveness: 'dead',
+    }))
     assert.strictEqual(d.decision, 'deny')
     assert.strictEqual(d.code, 'COLD_RESUME_MESSAGE')
     assert.ok(d.reason?.includes('RE-RUNNING the request that killed it'), d.reason ?? '')
   })
 
   test('a stall OLDER than the cold-resume window no longer gates messaging', () => {
-    const d = evaluateSendMessageGate(state({ lastStopFailureMs: NOW - 11 * 60_000 }))
+    const d = evaluateSendMessageGate(state({ lastStopFailureMs: NOW - 11 * 60_000, targetLiveness: 'dead' }))
     assert.deepStrictEqual(d, { decision: 'allow', code: null, reason: null })
   })
 
+  test('EVIDENCE-BASED DISARM: a warm post-stall response from the stalled session ends the message gate early', () => {
+    // 2026-07-11 field fix: the fixed 10-min window kept denying 6min after the stalled session
+    // was already reading its cache warm. stallRecovered (from sessionWarmSince) must disarm NOW.
+    const armed = state({ lastStopFailureMs: NOW - 3 * 60_000, targetLiveness: 'dead' })
+    assert.strictEqual(evaluateSendMessageGate(armed).decision, 'deny', 'precondition: no evidence → still armed')
+    const recovered = evaluateSendMessageGate({ ...armed, stallRecovered: true })
+    assert.deepStrictEqual(recovered, { decision: 'allow', code: null, reason: null })
+  })
+
   test('mode=warn downgrades a SendMessage deny to a warning, same as launches', () => {
-    const d = evaluateSendMessageGate(state({ mode: 'warn', lastStopFailureMs: NOW - 60_000 }))
+    const d = evaluateSendMessageGate(state({ mode: 'warn', lastStopFailureMs: NOW - 60_000, targetLiveness: 'dead' }))
     assert.strictEqual(d.decision, 'warn')
     assert.strictEqual(d.code, 'COLD_RESUME_MESSAGE')
     assert.ok(d.reason?.startsWith('[deny downgraded'), d.reason ?? '')
+  })
+})
+
+suite('agentGate — resolveMessageTargetLiveness (SubagentStart/Stop hook-event resolution)', () => {
+  const ev = (evName: 'SubagentStart' | 'SubagentStop', agentId: string, ts: number) =>
+    ({ ts, ev: evName, payload: { agent_id: agentId } })
+
+  test('a started, not-yet-stopped agent id resolves live (bare and agent-prefixed forms)', () => {
+    const events = [ev('SubagentStart', 'a080a3c4736fbf5df', NOW - 60_000)]
+    assert.strictEqual(resolveMessageTargetLiveness('a080a3c4736fbf5df', events), 'live')
+    assert.strictEqual(resolveMessageTargetLiveness('agent-a080a3c4736fbf5df', events), 'live')
+  })
+
+  test('a stopped agent id resolves dead; a later restart flips it back to live', () => {
+    const stopped = [ev('SubagentStart', 'a1', NOW - 120_000), ev('SubagentStop', 'a1', NOW - 60_000)]
+    assert.strictEqual(resolveMessageTargetLiveness('a1', stopped), 'dead')
+    const restarted = [...stopped, ev('SubagentStart', 'a1', NOW - 10_000)]
+    assert.strictEqual(resolveMessageTargetLiveness('a1', restarted), 'live')
+  })
+
+  test('a NAME target (no hook-event counterpart) and an empty target resolve unknown; main is live', () => {
+    const events = [ev('SubagentStart', 'a1', NOW - 60_000)]
+    assert.strictEqual(resolveMessageTargetLiveness('researcher', events), 'unknown')
+    assert.strictEqual(resolveMessageTargetLiveness(undefined, events), 'unknown')
+    assert.strictEqual(resolveMessageTargetLiveness('', events), 'unknown')
+    assert.strictEqual(resolveMessageTargetLiveness('main', []), 'live')
   })
 })
 
@@ -202,6 +318,25 @@ suite('agentGate — buildAdvisory (PostToolUse in-band warning)', () => {
     const a = buildAdvisory(state({ startsLast2min: 6, premiumShare: 0.9, premiumModel: 'claude-fable-5' }))
     assert.strictEqual(a?.code, 'FANOUT_HEADSUP')
     assert.ok(a?.text.includes('claude-fable-5'), a?.text)
+  })
+
+  test('FAN_OUT_COLD_START: distinct fresh sessions\' one-time cold writes get an "expected, not thrash" advisory', () => {
+    // The measured 2026-07-11 false positive: 4 freshly-spawned agents' cold-start writes
+    // (~463k total) — must read as expected fan-out cost, never as cache-thrash.
+    const coldStarts: ThrashReport = {
+      active: false, count: 4, rebilledTokens: 463_000, model: 'claude-fable-5', windowMs: 300_000,
+      suspects: [], topSource: { session: 's1', count: 1, rebilledTokens: 120_000 },
+      coldStartSessions: 4, coldStartRebilledTokens: 463_000,
+    }
+    const a = buildAdvisory(state({ thrash: coldStarts }))
+    assert.strictEqual(a?.code, 'FAN_OUT_COLD_START')
+    assert.ok(a?.text.includes('4 freshly-spawned'), a?.text)
+    assert.ok(a?.text.includes('NOT cache-thrash'), a?.text)
+    // Precedence: an ACTIVE thrash always outranks the cold-start explanation.
+    const active = buildAdvisory(state({ thrash: { ...coldStarts, active: true, topSource: { session: 's1', count: 4, rebilledTokens: 463_000 } } }))
+    assert.strictEqual(active?.code, 'THRASH_ACTIVE')
+    // A single fresh session's cold start is unremarkable — no advisory.
+    assert.strictEqual(buildAdvisory(state({ thrash: { ...coldStarts, coldStartSessions: 1 } })), null)
   })
 })
 

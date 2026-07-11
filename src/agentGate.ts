@@ -51,6 +51,10 @@ export interface LaunchSpawner {
   agentTypes: string[]
 }
 
+/** Liveness of a SendMessage target: from SubagentStart/Stop hook events (exact when the target
+ *  is an agent id; a NAME cannot be matched to hook payloads, so name targets stay 'unknown'). */
+export type TargetLiveness = 'live' | 'dead' | 'unknown'
+
 export interface AgentGateState {
   now: number
   /** 'enforce' denies; 'warn' downgrades every deny to a warning (AGENTLENS_GATE_MODE). */
@@ -65,10 +69,19 @@ export interface AgentGateState {
   lastStopFailureMs: number | null
   /** Origin of that StopFailure (session/cwd from its payload) — names the stalled session. */
   stall?: { session: string | null; cwd: string | null } | null
+  /** Evidence-based cold-resume disarm (2026-07-11 field fix): true when the STALLED session has
+   *  already completed a post-stall request with warm cache (big cache_read, small cache_creation
+   *  — BodiesActivityTracker.sessionWarmSince). The stall is over; the fixed 10-min window kept
+   *  denying 6 minutes after recovery. The timer stays as the fallback when evidence is absent. */
+  stallRecovered?: boolean
   thrash: ThrashReport | null
   /** Share (0..1) of the last-5min responses on premium models + the model seen. */
   premiumShare: number | null
   premiumModel: string | null
+  /** SendMessage only: the tool_input `to` target and its resolved liveness. A resume re-runs the
+   *  killing request only on a DEAD target — delivery to a LIVE agent rides its existing run. */
+  messageTarget?: string | null
+  targetLiveness?: TargetLiveness
   thresholds?: Partial<GateThresholds>
 }
 
@@ -151,6 +164,16 @@ export function readTranscriptContext(transcriptPath: string, now: number, tailB
   return { contextTokens, idleMs }
 }
 
+/** USER ORDER (2026-07-11, highest priority): a keep-warm pinger launch is NEVER denied. The
+ *  pinger exists to PREVENT the cold cache every deny state guards against — denying it CAUSES
+ *  the very waste the gate exists to stop, and under COLD_RESUME the pinger IS the warm-up the
+ *  rule is waiting for. Signature: a fork (or type-less Task/Agent) whose prompt says keep-warm. */
+export function isKeepWarmPinger(input: Record<string, unknown>): boolean {
+  const st = input.subagent_type
+  const forkOrUnspecified = st === undefined || st === null || st === '' || st === 'fork'
+  return forkOrUnspecified && typeof input.prompt === 'string' && /keep.?warm|pinger/i.test(input.prompt)
+}
+
 export function evaluateAgentGate(
   toolInput: Record<string, unknown> | null | undefined,
   state: AgentGateState,
@@ -158,17 +181,29 @@ export function evaluateAgentGate(
   const th = { ...DEFAULT_GATE_THRESHOLDS, ...state.thresholds }
   const input = toolInput ?? {}
   const fork = input.subagent_type === 'fork'
+  const keepWarm = isKeepWarmPinger(input)
   const cold = state.parent.idleMs !== null && state.parent.idleMs > th.coldIdleMs
   const idleMin = state.parent.idleMs !== null ? Math.round(state.parent.idleMs / 60_000) : null
   const fat = state.parent.contextTokens !== null && state.parent.contextTokens >= th.forkFatTokens
   const parentK = state.parent.contextTokens !== null ? k(state.parent.contextTokens) : 'an unknown amount of'
   const stallAgeMs = state.lastStopFailureMs !== null ? state.now - state.lastStopFailureMs : null
+  // Evidence beats the timer: a warm post-stall response from the stalled session disarms the
+  // cold-resume rule immediately (see AgentGateState.stallRecovered); the window is the fallback.
   const coldResume = stallAgeMs !== null && stallAgeMs >= 0 && stallAgeMs <= th.coldResumeWindowMs
+    && state.stallRecovered !== true
 
   const deny = (code: AgentGateDecision['code'], reason: string): AgentGateDecision =>
-    state.mode === 'enforce'
-      ? { decision: 'deny', code, reason }
-      : { decision: 'warn', code, reason: `[deny downgraded to warning: AGENTLENS_GATE_MODE=warn] ${reason}` }
+    keepWarm
+      // Keep-warm allowance: every deny downgrades to at most an advisory. The advisory still
+      // names the signal so the transcript shows the gate SAW the state and let the pinger pass.
+      ? {
+          decision: 'warn', code,
+          reason: `[agentlens] keep-warm pinger allowed through ${code}: the pinger is the cache ` +
+            `warm-up this rule is protecting — denying it would cause the cold cache it prevents.`,
+        }
+      : state.mode === 'enforce'
+        ? { decision: 'deny', code, reason }
+        : { decision: 'warn', code, reason: `[deny downgraded to warning: AGENTLENS_GATE_MODE=warn] ${reason}` }
 
   // ── deny tier: the four measured disaster signatures, most specific first ────
   if (state.thrash?.active) {
@@ -206,6 +241,11 @@ export function evaluateAgentGate(
   }
 
   // ── warn tier: real cost, but a single launch is a legitimate choice ─────────
+  // The keep-warm pinger skips the warn tier entirely: COLD_FORK/"warm the cache first" advice is
+  // vacuous for the warm-up itself, and a scheduled pinger would re-trigger it on every ping.
+  if (keepWarm) {
+    return { decision: 'allow', code: null, reason: null }
+  }
   if (fork && fat && cold) {
     return {
       decision: 'warn', code: 'COLD_FORK',
@@ -238,33 +278,76 @@ export function evaluateAgentGate(
 }
 
 /**
+ * Resolve a SendMessage target's liveness from the SubagentStart/Stop hook-event ring. The
+ * resume-risk the message gate blocks exists ONLY for a DEAD target (its resume re-runs the
+ * request that killed it); a LIVE target consumes the message inside its already-running turn.
+ * `to` matches hook payloads only when it is an agent id (bare or `agent-`-prefixed) — a NAME
+ * has no hook-event counterpart, so name targets honestly resolve 'unknown' (→ warn, not deny).
+ * 'main' is the caller's own live conversation by definition.
+ */
+export function resolveMessageTargetLiveness(
+  target: unknown,
+  events: Array<{ ts: number; ev: string; payload?: Record<string, unknown> | null }>,
+): TargetLiveness {
+  if (typeof target !== 'string' || target.length === 0) return 'unknown'
+  if (target === 'main') return 'live'
+  const id = target.startsWith('agent-') ? target.slice('agent-'.length) : target
+  let verdict: TargetLiveness = 'unknown'
+  let lastTs = -1
+  for (const e of events) {
+    if (e.ev !== 'SubagentStart' && e.ev !== 'SubagentStop') continue
+    if (e.payload?.agent_id !== id) continue
+    if (e.ts >= lastTs) {
+      lastTs = e.ts
+      verdict = e.ev === 'SubagentStart' ? 'live' : 'dead'
+    }
+  }
+  return verdict
+}
+
+/**
  * SendMessage burn gate (P6) — the narrower sibling of evaluateAgentGate. A SendMessage to a
  * DEAD agent resumes it from its transcript, i.e. it RE-RUNS the request that killed it: when
  * the target died in a rate-limit stall the prompt cache is past its TTL, so the resume re-pays
  * the agent's full prefix at the cache-WRITE rate — the same mechanism the launch gate blocks.
  *
  * ONLY the two high-confidence conditions below may deny (both reused from evaluateAgentGate's
- * state): an ACTIVE cache-thrash, or a rate-limit stall inside the cold-resume window. Routine
- * messaging must NEVER be denied — no fan-out/fork signature applies to a message, and a chatty
- * gate on the team-coordination channel would get AGENTLENS_GATE=off'd immediately. No warn
- * tier either: a message is cheap when the two disaster states are absent.
+ * state), and ONLY against a target whose liveness resolves DEAD (2026-07-11 field fix: the gate
+ * was denying messages to LIVE running agents under THRASH_ACTIVE — delivery to a live agent
+ * rides its existing run, no resume happens). Liveness 'unknown' downgrades the deny to a
+ * warning: a hard deny needs positive dead evidence. Routine messaging must NEVER be denied —
+ * no fan-out/fork signature applies to a message, and a chatty gate on the team-coordination
+ * channel would get AGENTLENS_GATE=off'd immediately. No warn tier for quiet states either:
+ * a message is cheap when the two disaster states are absent.
  */
 export function evaluateSendMessageGate(state: AgentGateState): AgentGateDecision {
   const th = { ...DEFAULT_GATE_THRESHOLDS, ...state.thresholds }
   const stallAgeMs = state.lastStopFailureMs !== null ? state.now - state.lastStopFailureMs : null
+  // Same evidence-based disarm as the launch gate: a warm post-stall response from the stalled
+  // session ends the cold-resume window early; the 10-min timer is only the no-evidence fallback.
   const coldResume = stallAgeMs !== null && stallAgeMs >= 0 && stallAgeMs <= th.coldResumeWindowMs
+    && state.stallRecovered !== true
+  const liveness = state.targetLiveness ?? 'unknown'
+  const who = state.messageTarget ? ` '${state.messageTarget}'` : ''
+
+  // A LIVE target rides its own already-running request stream — no resume, no re-run, nothing
+  // for either disaster state to multiply. Never gate live messaging.
+  if (liveness === 'live') return { decision: 'allow', code: null, reason: null }
 
   const deny = (code: AgentGateDecision['code'], reason: string): AgentGateDecision =>
-    state.mode === 'enforce'
-      ? { decision: 'deny', code, reason }
-      : { decision: 'warn', code, reason: `[deny downgraded to warning: AGENTLENS_GATE_MODE=warn] ${reason}` }
+    liveness === 'unknown'
+      // No positive dead evidence → never hard-deny; surface the risk as a warning instead.
+      ? { decision: 'warn', code, reason: `[target${who} liveness unknown — deny downgraded to warning] ${reason}` }
+      : state.mode === 'enforce'
+        ? { decision: 'deny', code, reason }
+        : { decision: 'warn', code, reason: `[deny downgraded to warning: AGENTLENS_GATE_MODE=warn] ${reason}` }
 
   if (state.thrash?.active) {
     return deny('THRASH_ACTIVE',
       `AgentLens burn-gate: cache-thrash in progress — ${state.thrash.count} calls in the last ` +
       `${Math.round(state.thrash.windowMs / 60_000)}min re-WROTE ~${k(state.thrash.rebilledTokens)} tokens of prefix ` +
       `instead of reading cache${state.thrash.model ? ` (model ${state.thrash.model})` : ''}. ${thrashSource(state.thrash)} ` +
-      `Resuming an agent now re-runs its whole transcript into the thrashing prefix. Fix the source first. ` +
+      `Resuming a dead agent${who} now re-runs its whole transcript into the thrashing prefix. Fix the source first. ` +
       `Override: AGENTLENS_GATE=off.`)
   }
   if (coldResume) {
@@ -273,7 +356,7 @@ export function evaluateSendMessageGate(state: AgentGateState): AgentGateDecisio
       : ''
     return deny('COLD_RESUME_MESSAGE',
       `AgentLens burn-gate: a rate-limit stall ended ${Math.round((stallAgeMs as number) / 60_000)}min ago` +
-      `${stallWho} — messaging a dead agent resumes it by RE-RUNNING the request that killed it, and with the ` +
+      `${stallWho} — messaging a dead agent${who} resumes it by RE-RUNNING the request that killed it, and with the ` +
       `prompt cache past its 5-min TTL that resume re-pays the agent's full prefix at the write rate. ` +
       `Wait ~60s for the wall to clear, then retry this message. Override: AGENTLENS_GATE=off.`)
   }
@@ -307,6 +390,20 @@ export function buildAdvisory(state: AgentGateState): { code: string; text: stri
       code: 'FANOUT_HEADSUP',
       text: `⚠ AgentlensPro: ${state.startsLast2min} agent launches in the last 2min${who ? ` (${who})` : ''}.${premium} ` +
         `Check headroom before widening the fan-out: agentlenspro-cli --risk.`,
+    }
+  }
+  // FAN_OUT_COLD_START (2026-07-11 field fix): N distinct sessions' one-time cold-start prefix
+  // writes are the EXPECTED cost of a fan-out, not thrash — say so explicitly so nobody (human
+  // or model) mistakes the burst for a cache-thrash and starts killing healthy agents. Advisory
+  // only, and only when real money moved (≥2 fresh sessions, big writes).
+  if (!state.thrash?.active && (state.thrash?.coldStartSessions ?? 0) >= 2) {
+    const t = state.thrash as ThrashReport
+    return {
+      code: 'FAN_OUT_COLD_START',
+      text: `AgentlensPro: ${t.coldStartSessions} freshly-spawned agent session(s) paid their one-time ` +
+        `cold-start prefix writes (~${k(t.coldStartRebilledTokens)} tokens total) in the last ` +
+        `${Math.round(t.windowMs / 60_000)}min — expected fan-out cost, NOT cache-thrash (no session ` +
+        `re-wrote its prefix repeatedly). No action needed unless the same sessions keep re-writing.`,
     }
   }
   return null
