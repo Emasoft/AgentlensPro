@@ -4,6 +4,33 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [1.0.1] — 2026-07-11
+
+Five field defects found dogfooding the P6 burn-gate + cache diagnostics (all live-verified).
+
+### Fixed
+
+- **Burn-gate: keep-warm pinger allowance (user order).** A fork (or type-less) launch whose
+  prompt matches the keep-warm signature is never denied — every deny state (THRASH_ACTIVE,
+  COLD_RESUME, FORK_STORM, fan-out) downgrades to at most an advisory. The pinger prevents the
+  cold cache the gate guards against; under COLD_RESUME it *is* the warm-up.
+- **Burn-gate: cache-thrash is now attributed per SOURCE session.** THRASH_ACTIVE requires the
+  SAME session re-writing its prefix ≥3× in the window; N distinct fresh sessions' one-time
+  cold-start writes are reported as FAN_OUT_COLD_START (advisory only). Fixes the measured
+  false positive that blamed 4 freshly-spawned agents' cold starts (~463k tokens) while the
+  parent read its cache warm.
+- **Burn-gate: SendMessage denies only DEAD targets.** Target liveness resolves from the
+  SubagentStart/Stop hook events: live targets always pass (delivery rides the existing run),
+  unknown liveness downgrades the deny to a warning — never a hard deny of live messaging.
+- **Burn-gate: COLD_RESUME disarms on evidence.** A post-stall response from the stalled session
+  showing warm cache (big cache_read, small cache_creation) ends the cold-resume rule
+  immediately; the 10-min window remains only as the no-evidence fallback (it was measured
+  denying 6 minutes after recovery).
+- **get_cache_break_timeline: `agent-<id>` child sessions now classify.** Child API calls carry
+  the parent's session id in the raw bodies, so exact child-id lookups returned
+  turnsClassified 0; the child's stream is now carved out of the parent bucket via its
+  subagents transcript's message-id chain (stream head recovered by first-block fingerprint).
+
 ## [1.0.0] — 2026-07-10
 
 First stable release of **AgentlensPro**, the professional continuation of the
