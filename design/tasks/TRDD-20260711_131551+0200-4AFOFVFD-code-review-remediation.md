@@ -3,7 +3,7 @@ trdd-id: 4AFOFVFD
 title: Code-review remediation — 16 fixed + merged, 7 deferred to implement
 column: dev
 created: 2026-07-11T13:15:51+0200
-updated: 2026-07-11T15:49:19+0200
+updated: 2026-07-11T16:27:58+0200
 current-owner: claude-code-review
 assignee: claude-code-review
 priority: 2
@@ -34,7 +34,7 @@ impacts: [public-api]
 attempts: 1
 test-failures: 0
 last-test-result: pass
-last-test-at: 2026-07-11T13:00:00+0200
+last-test-at: 2026-07-11T16:27:58+0200
 implementation-commits: [7d89ad3, a03ee4b, 8150494, 36728a6, fb94170]
 pr-url: null
 ---
@@ -56,8 +56,9 @@ and the three per-slice reports alongside it. 4 regression tests added
 until a real `pnpm run deploy:safe` (build + restart) is run — deliberately left
 for the owner to trigger (live to every agent on the machine).
 
-**DEFERRED-FINDINGS PROGRESS — 6 of 7 DONE + tested (on branch
-`fix/code-review-deferred-findings`), 1 remaining:**
+**DEFERRED-FINDINGS PROGRESS — ALL 7 handled + tested (on branch
+`fix/code-review-deferred-findings`): 6 implemented + S3-F3 split into
+S3-F3a (implemented) + S3-F3b (deferred to TRDD-DYG4ZTXW).**
 - ✅ S2-F5, S1-F7, S1-F8, S1-F9 — committed `bcb033c` (accounting).
 - ✅ S1-F6 — committed `5badd13` (OpenCode WAL commit-boundary).
 - ✅ S3-F5 — committed `3208971` (hook install append_unique, race-safe).
@@ -83,14 +84,20 @@ for the owner to trigger (live to every agent on the machine).
   asserted across otlpCollector.test.ts, otlpParser.test.ts, AND spanSummarizer.test.ts
   (the summarizer the shipped path FEEDS already expects prompt-N keying). The
   shipped path is the drifted outlier.
-  - ⬜ **S3-F3a (DO NOW — correctness, clean):** extract otlpParser's Codex
-    `resolveSessionId` into ONE shared STATEFUL class `src/codexSessionNormalizer.ts`.
-    Wire all three: otlpParser (per-call instance — unchanged behavior), otlpCollector
-    (delegate — unchanged behavior), standalone `processLogs` (MODULE-LEVEL singleton →
-    per-prompt grouping, replacing the @1106-1110 conversation-id branch). Single
-    source of truth, no duplication, nothing deleted. TDD: a NEW test drives the
-    SHIPPED `processLogs` with a 2-prompt Codex conversation → assert two distinct
-    `codex:<conv>:prompt-1/2` groups (must fail before). Design spec: §"S3-F3a spec".
+  - ✅ **S3-F3a — DONE + verified (2026-07-11).** Shared `src/codexSessionNormalizer.ts`
+    (verbatim extraction of otlpParser's `resolveSessionId`) now backs all three ingest
+    impls; standalone `processLogs` groups Codex per-prompt + stamps `codex.session.id`.
+    Net −158/+79 LOC (removed two duplicate copies). TDD: `src/test/standaloneCodexIngest.test.ts`
+    boots the REAL built server, POSTs a 2-prompt Codex conversation, asserts
+    `[codex:conv:prompt-1, codex:conv:prompt-2]` via a new read-only localhost
+    `/api/debug/codex-store-groups` endpoint (proven RED pre-fix). Gate GREEN
+    **873 passing / 0 failing**, tsc 0-error, check-mirrors OK — INDEPENDENTLY re-run by
+    the orchestrator (not just self-reported). **REVIEW FINDING:** a FOURTH copy of the
+    ordinal logic exists — `groupCodexSpansBySession` (src/summarizers/codex.ts @355) —
+    which re-derives per-prompt sessions downstream, so S3-F3a has ~zero user-visible
+    effect (its value is store consistency + killing ingest-side duplication). See
+    §S3-F3a follow-up. LSP squiggle `server.ts:479 AgentGateState.ttl` reconfirmed STALE
+    (real tsc = 0 errors).
   - ⬜ **S3-F3b (DERIVED TRDD — enrichment, deferred):** port gen_ai response
     buffering to the shipped path. BLOCKED on store surgery: `SegmentedSpanStore`
     (the shipped store) has NO `injectSpanAttribute` (only the legacy `sessionStore`
@@ -211,6 +218,21 @@ used by all three ingest impls. Nothing deleted; no duplicated logic.
    conversation-id group.
 - **S3-F3b (gen_ai) → separate DERIVED TRDD.** Needs `SegmentedSpanStore.injectSpanAttribute`
   + a `processTraces` buffer drain; higher risk, lower value. Not this turn.
+
+### §S3-F3a follow-up — a FOURTH Codex-grouping copy (found during review, 2026-07-11)
+
+The three-way analysis MISSED a fourth impl: `groupCodexSpansBySession` in
+`src/summarizers/codex.ts` (@355, ordinal logic @398 `codex:<conv>:prompt-${next}`).
+It re-derives per-prompt Codex sessions from the raw span list POST-storage (honoring
+an explicit `codex.session.id` first, else re-deriving) — so it, not the ingest
+storage key, determines the user-visible `/api/summary` grouping. CONSEQUENCE: S3-F3a
+has ~zero user-visible effect (the summarizer already re-splits); its real value is
+killing the ingest-side duplication (−158/+79 LOC) + store-key consistency + stamping
+`codex.session.id` so the summarizer uses the explicit id instead of guessing. For
+TRUE single-source-of-truth, `groupCodexSpansBySession` should ALSO consume
+`CodexSessionNormalizer` (different lifecycle — full span list in, groups out — so a
+small adapter, not a drop-in). Deferred: candidate for the broader /go-on-yourself
+eval; not bundled into S3-F3a (separate change, separate risk).
 
 ### 2. S3-F5 [LOW] — hookInstall TOCTOU
 - **Where:** `src/cli/hookInstall.ts` — reads settings, computes `r.rebuilt`,

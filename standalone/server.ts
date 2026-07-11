@@ -57,6 +57,7 @@ import {
 } from '../src/collectorState'
 import type { Span } from '../src/shared/telemetryTypes'
 import type { SessionSummaryCard, CollectorGap } from '../src/shared/summarizerTypes'
+import { CodexSessionNormalizer } from '../src/codexSessionNormalizer'
 
 const OTLP_PORT  = parseInt(process.env.OTLP_PORT  ?? '4318')
 const UI_PORT    = parseInt(process.env.UI_PORT    ?? '3000')
@@ -983,6 +984,24 @@ function mergeAttrs(...lists: RawAttr[][]): RawAttr[] {
   return out
 }
 
+// S3-F3a: replace/append a string attribute on the standalone's RawAttr shape. Mirrors otlpParser's
+// setStringAttr/withStringAttr semantics (set overwrites an existing key; with only adds when
+// absent) — kept type-local because the standalone carries RawAttr, not SpanAttribute.
+function setCodexStringAttr(attrs: RawAttr[], key: string, value: string): RawAttr[] {
+  if (!value) return attrs
+  let replaced = false
+  const next = attrs.map((a) => {
+    if (a.key !== key) return a
+    replaced = true
+    return { key, value: { stringValue: value } }
+  })
+  return replaced ? next : [...next, { key, value: { stringValue: value } }]
+}
+function withCodexStringAttr(attrs: RawAttr[], key: string, value: string): RawAttr[] {
+  if (!value || attrs.some((a) => a.key === key)) return attrs
+  return [...attrs, { key, value: { stringValue: value } }]
+}
+
 function agentLabelFromSpanName(name: string): string {
   if (name.startsWith('claude_code.')) return 'Claude Code'
   if (name.startsWith('codex.'))       return 'Codex'
@@ -1033,6 +1052,11 @@ function noteDroppedLogEvent(name: string): void {
   droppedLogEvents.set(key, (prev ?? 0) + 1)
 }
 
+// S3-F3a: ONE long-lived Codex session normalizer for the SHIPPED log-ingest path. Module-level so
+// its per-prompt grouping state persists across processLogs calls (each OTLP POST is a separate
+// call) — exactly as the OtlpCollector's instance field does for the extension path.
+const codexNorm = new CodexSessionNormalizer()
+
 function processLogs(payload: unknown, collectorPath = '/v1/logs'): number {
   type SL = { logRecords?: unknown[] }
   type RL = { scopeLogs?: SL[]; resource?: { attributes?: unknown } }
@@ -1045,7 +1069,7 @@ function processLogs(payload: unknown, collectorPath = '/v1/logs'): number {
       const scopeAttrs = toAttrs((sl as { scope?: { attributes?: unknown } }).scope?.attributes)
       for (const rec of sl.logRecords ?? []) {
         const r = rec as Record<string, unknown>
-        const attrs = mergeAttrs(toAttrs(r.attributes), attrsFromBodyKv(r.body), scopeAttrs, resourceAttrs)
+        let attrs = mergeAttrs(toAttrs(r.attributes), attrsFromBodyKv(r.body), scopeAttrs, resourceAttrs)
         // Name resolution + prefix normalization + gate sets shared with src/otlpCollector.ts via
         // src/otlpLogEvents.ts. This path DRIFTED once: it never gained the rich-event gate, so the
         // running server dropped every api_request/compaction/api_error event under BOTH naming
@@ -1104,9 +1128,38 @@ function processLogs(payload: unknown, collectorPath = '/v1/logs'): number {
           // rich-event handling (and token dedup vs llm_request spans) on claude_code.*.
           spanName = `claude_code.${bare}`
         } else {
-          traceId = (typeof r.traceId === 'string' && r.traceId)
-            ? r.traceId
-            : attrStr(attrs, 'conversation.id', 'conversation_id', 'session.id', 'session_id') || fallback
+          // S3-F3a: group Codex per PROMPT (`codex:<conv>:prompt-N`) via the shared normalizer — the
+          // SAME grouping the OtlpCollector/otlpParser paths use. The SHIPPED server previously keyed
+          // the store traceId on the conversation id alone, DRIFTING from those two impls. This did
+          // NOT change /api/summary output: the summarizer's own groupCodexSpansBySession
+          // (src/summarizers/codex.ts) re-derives per-prompt sessions downstream regardless of the
+          // store key. The value here is store-level CONSISTENCY (one grouping across every ingest
+          // impl) AND stamping `codex.session.id` so the summarizer honors the explicit id instead of
+          // re-deriving it — closing the drift so a future raw-store consumer can't be misled.
+          // NB: groupCodexSpansBySession is a FOURTH copy of this ordinal logic (see TRDD-4AFOFVFD
+          // §S3-F3a follow-up) — the true single-source unification should fold it in too.
+          const otlpTraceId = (typeof r.traceId === 'string' && r.traceId) ? r.traceId : ''
+          const convId = attrStr(attrs,
+            'conversation.id', 'conversation_id',
+            'codex.conversation.id',
+            'thread.id', 'thread_id',
+            'session.id', 'session_id',
+            'trace_id', 'traceId',
+          )
+          const turnId = attrStr(attrs, 'turn.id', 'turn_id', 'codex.turn.id')
+          const conversationKey = convId || otlpTraceId || fallback
+          const sessionId = codexNorm.resolveSessionId({ conversationId: conversationKey, otlpTraceId, turnId, spanName: name })
+          traceId = sessionId || otlpTraceId || conversationKey
+          if (sessionId) {
+            attrs = setCodexStringAttr(attrs, 'codex.session.id', sessionId)
+            attrs = setCodexStringAttr(attrs, 'codex.conversation.id', conversationKey)
+            if (turnId) { attrs = setCodexStringAttr(attrs, 'codex.turn.id', turnId) }
+          }
+          // Preserve the raw OTEL trace id when we remap the span onto its prompt session, so the
+          // collector/summarizer trace-fold path can still reach it (mirrors otlpParser).
+          if (otlpTraceId && sessionId && otlpTraceId !== traceId) {
+            attrs = withCodexStringAttr(attrs, 'otel.trace_id', otlpTraceId)
+          }
           spanName = name
         }
         const spanId = (typeof r.spanId === 'string' && r.spanId)
@@ -2639,6 +2692,18 @@ const uiServer = http.createServer((req, res) => {
   if (req.method === 'GET' && url === '/api/debug/requests') {
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ heap: heapPressure(), requests: requestLog.recent(200) }))
+    return
+  }
+
+  // S3-F3a: the DISTINCT stored traceIds of the codex.* spans currently in the in-memory window.
+  // This is the ONLY place the shipped log-ingest's STORE-level Codex grouping is directly
+  // observable — the summarizer re-groups downstream, so /api/summary would mask whether processLogs
+  // grouped per prompt (`codex:<conv>:prompt-N`) or by conversation id alone. Read-only, and the
+  // server is localhost-only (same seam class as the other /api/debug/* endpoints).
+  if (req.method === 'GET' && url === '/api/debug/codex-store-groups') {
+    const codexTraceIds = [...new Set(spans.filter(s => s.name.startsWith('codex.')).map(s => s.traceId))].sort()
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ codexTraceIds }))
     return
   }
 

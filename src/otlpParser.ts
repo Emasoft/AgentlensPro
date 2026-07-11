@@ -1,4 +1,5 @@
 import { Span, SpanAttribute } from './shared/telemetryTypes'
+import { CodexSessionNormalizer, isCodexPromptEventName } from './codexSessionNormalizer'
 
 export type OtlpPayloadKind = 'traces' | 'logs' | 'metrics' | 'unknown'
 
@@ -118,86 +119,17 @@ export function parseTracePayload(payload: unknown): Span[] {
   return result
 }
 
-function isCodexPromptEventName(name: string): boolean {
-  return name === 'codex.user_prompt'
-    || name === 'codex.prompt'
-    || name === 'codex.user_message'
-    || name === 'codex.session_start'
-}
-
 export function parseLogPayload(payload: unknown): Span[] {
   type LogRecord = Record<string, unknown>
   type ScopeLogs = { logRecords?: LogRecord[]; scope?: { attributes?: unknown } }
   type ResourceLogs = { scopeLogs?: ScopeLogs[]; resource?: { attributes?: unknown } }
   const p = payload as { resourceLogs?: ResourceLogs[] }
-  const codexSessionByOtelTraceId = new Map<string, string>()
-  const codexCurrentSessionByConversation = new Map<string, string>()
-  const codexSessionStateById = new Map<string, { hasPrompt: boolean }>()
-  const codexPromptOrdinalByConversation = new Map<string, number>()
+  // Per-payload instance ⇒ Codex grouping state is scoped to THIS payload, exactly as the old
+  // per-call closure maps were (S3-F3a: the grouping now lives in one shared normalizer).
+  const codexNorm = new CodexSessionNormalizer()
+  // Trace→root-span map stays local: it links child Codex spans to their prompt's root span, a
+  // concern separate from session resolution (used only for parentSpanId synthesis below).
   const codexSessionRootByTrace = new Map<string, string>()
-  let codexActivePromptSessionId = ''
-
-  function getSessionState(sessionId: string): { hasPrompt: boolean } {
-    let state = codexSessionStateById.get(sessionId)
-    if (!state) {
-      state = { hasPrompt: false }
-      codexSessionStateById.set(sessionId, state)
-    }
-    return state
-  }
-
-  function nextPromptSessionId(conversationId: string): string {
-    const next = (codexPromptOrdinalByConversation.get(conversationId) ?? 0) + 1
-    codexPromptOrdinalByConversation.set(conversationId, next)
-    return `codex:${conversationId}:prompt-${next}`
-  }
-
-  function resolveSessionId(opts: {
-    conversationId: string
-    otlpTraceId?: string
-    turnId?: string
-    spanName: string
-  }): string | undefined {
-    const isPrompt = isCodexPromptEventName(opts.spanName)
-    let sessionId = opts.otlpTraceId ? codexSessionByOtelTraceId.get(opts.otlpTraceId) : undefined
-
-    if (isPrompt) {
-      const currentSessionId = codexCurrentSessionByConversation.get(opts.conversationId)
-      const currentState = currentSessionId ? getSessionState(currentSessionId) : undefined
-      if (!sessionId && currentSessionId && !currentState?.hasPrompt) {
-        sessionId = currentSessionId
-      }
-      if (!sessionId) {
-        sessionId = opts.turnId
-          ? `codex:${opts.conversationId}:${opts.turnId}`
-          : nextPromptSessionId(opts.conversationId)
-      } else if (getSessionState(sessionId).hasPrompt) {
-        sessionId = opts.turnId
-          ? `codex:${opts.conversationId}:${opts.turnId}`
-          : nextPromptSessionId(opts.conversationId)
-      }
-    } else if (sessionId) {
-      // Existing raw OTEL trace was already mapped to the active prompt cycle.
-    } else if (codexCurrentSessionByConversation.has(opts.conversationId)) {
-      sessionId = codexCurrentSessionByConversation.get(opts.conversationId)
-    } else if (codexActivePromptSessionId) {
-      sessionId = codexActivePromptSessionId
-    } else if (opts.turnId) {
-      sessionId = `codex:${opts.conversationId}:${opts.turnId}`
-    } else {
-      return undefined
-    }
-
-    if (!sessionId) { return undefined }
-    codexCurrentSessionByConversation.set(opts.conversationId, sessionId)
-    if (opts.otlpTraceId) { codexSessionByOtelTraceId.set(opts.otlpTraceId, sessionId) }
-    const state = getSessionState(sessionId)
-    if (isPrompt) {
-      state.hasPrompt = true
-      codexActivePromptSessionId = sessionId
-    }
-    return sessionId
-  }
 
   const result: Span[] = []
   for (const rl of p?.resourceLogs ?? []) {
@@ -238,7 +170,7 @@ export function parseLogPayload(payload: unknown): Span[] {
           : getAttrFrom(attrs, 'span_id', 'spanId') || `cl-${Math.random().toString(36).slice(2, 10)}`
         const turnId = getAttrFrom(attrs, 'turn.id', 'turn_id', 'codex.turn.id')
         const conversationKey = conversationId || otlpTraceId
-        const sessionId = resolveSessionId({
+        const sessionId = codexNorm.resolveSessionId({
           conversationId: conversationKey,
           otlpTraceId,
           turnId,
