@@ -1,9 +1,11 @@
 ---
 trdd-id: YQZ9P8IL
 title: Account-state timeline — per-request subscription-mode attribution, SSD-frugal buffered writes
-column: complete
+column: published
 created: 2026-07-11T09:55:06+0200
-updated: 2026-07-11T10:49:07+0200
+updated: 2026-07-11T10:51:00+0200
+published-version: 2.3.0
+published-at: 2026-07-11T10:50:30+0200
 current-owner: orchestrator-agentlenspro
 priority: 2
 severity: MEDIUM
