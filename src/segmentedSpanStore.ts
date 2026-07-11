@@ -121,6 +121,18 @@ export class SegmentedSpanStore {
   private pending = new Map<string, { lines: string[]; count: number; minTs: number; maxTs: number }>()
   private pendingCount = 0
   private droppedOnFailure = 0
+  // S3-F3b read-time attribute overlay: `traceId:spanId` → { attrKey: stringValue }, merged into a
+  // span WHEN IT IS READ (loadRange) rather than by rewriting its persisted NDJSON line. This is how
+  // gen_ai_latest_experimental response content — which arrives as a SEPARATE log event, before OR
+  // after the LLM span, on a different HTTP request — reaches the span without disk-segment surgery.
+  // Because the merge happens on read, arrival order does not matter (a span appended later still
+  // picks up an overlay recorded earlier, and vice-versa); no buffer/drain is needed. The overlay is
+  // in-memory only, so it is lost on restart — an accepted tradeoff for LOW-severity enrichment (the
+  // dominant ordering is span-first, whose content the legacy store also kept only in memory), and it
+  // never touches the persisted spans (accounting) themselves. Cap-evicted oldest-first so an entry
+  // whose span never arrives cannot leak memory.
+  private overlay = new Map<string, Record<string, string>>()
+  private readonly OVERLAY_MAX = 500
 
   constructor(
     readonly dir: string,
@@ -199,6 +211,41 @@ export class SegmentedSpanStore {
     return { appendedSpans, appendedBytes }
   }
 
+  /** Record an attribute to merge into span `traceId:spanId` when it is next read (loadRange),
+   *  WITHOUT rewriting any persisted segment. Order-independent: the merge is applied on read, so
+   *  the span may arrive before or after this call. Always returns true (the overlay is recorded
+   *  regardless of whether the span is currently in the store) — the boolean exists to mirror the
+   *  legacy sessionStore.injectSpanAttribute signature so callers stay uniform. Cap-evicts the
+   *  oldest entry when OVERLAY_MAX is exceeded, so a never-arriving span cannot leak memory. */
+  injectSpanAttribute(traceId: string, spanId: string, key: string, value: string): boolean {
+    const k = `${traceId}:${spanId}`
+    const rec = this.overlay.get(k)
+    if (rec) {
+      rec[key] = value
+    } else {
+      this.overlay.set(k, { [key]: value })
+      if (this.overlay.size > this.OVERLAY_MAX) {
+        const firstKey = this.overlay.keys().next().value
+        if (firstKey !== undefined) { this.overlay.delete(firstKey) }
+      }
+    }
+    return true
+  }
+
+  /** Merge any recorded overlay attributes into a span read from disk (fresh JSON.parse per call,
+   *  so mutating it here never contaminates the persisted line or another read). Upsert semantics:
+   *  an existing attribute of the same key is overwritten, else appended. */
+  private applyOverlay(span: Span): Span {
+    const rec = this.overlay.get(`${span.traceId}:${span.spanId}`)
+    if (!rec) return span
+    for (const [key, value] of Object.entries(rec)) {
+      const existing = span.attributes.find((a) => a.key === key)
+      if (existing) { existing.value = { stringValue: value } }
+      else { span.attributes.push({ key, value: { stringValue: value } }) }
+    }
+    return span
+  }
+
   /** Load only the spans whose timestamp falls in [sinceMs, untilMs] — reads exclusively the
    *  segment files whose day/index range overlaps the window; every other segment is never
    *  opened. This is how "queries load segments, not the whole store" is enforced. */
@@ -228,7 +275,7 @@ export class SegmentedSpanStore {
         try { span = JSON.parse(line) as Span } catch { skipped++; continue } // truncated tail line
         const ts = spanTimestampMs(span)
         if (ts < sinceMs || ts > untilMs) continue
-        out.push(span)
+        out.push(this.applyOverlay(span))
       }
       if (skipped > 0) this.log(`[AgentLens] span store: skipped ${skipped} corrupt line(s) in ${name}`)
     }
@@ -275,6 +322,7 @@ export class SegmentedSpanStore {
     this.pending.clear()
     this.pendingCount = 0
     this.droppedOnFailure = 0
+    this.overlay.clear()
     let names: string[] = []
     try { names = fs.readdirSync(this.dir) } catch { /* no dir — nothing to clear */ }
     for (const name of names) {

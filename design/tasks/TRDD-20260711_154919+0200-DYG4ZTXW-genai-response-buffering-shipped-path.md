@@ -1,11 +1,11 @@
 ---
 trdd-id: DYG4ZTXW
 title: Port gen_ai response-content buffering to the shipped standalone ingest path
-column: backburner
+column: complete
 created: 2026-07-11T15:49:19+0200
-updated: 2026-07-11T15:49:19+0200
+updated: 2026-07-11T22:40:00+0200
 current-owner: claude-code-review
-assignee: null
+assignee: claude-code-review
 priority: 4
 severity: LOW
 effort: M
@@ -30,19 +30,50 @@ audit-requirements: []
 review-requirements: [code-review]
 runtime-targets: [macos, linux]
 impacts: []
-attempts: 0
+attempts: 1
 test-failures: 0
-last-test-result: not-run
-last-test-at: null
+last-test-result: pass
+last-test-at: 2026-07-11T22:35:00+0200
 implementation-commits: []
 pr-url: null
 ---
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-07-11
 
+**✅ DONE + verified (2026-07-11).** Shipped in Phase 0a of the /go-on-yourself plan.
+The shipped `standalone/server.ts` `processLogs` now formats `gen_ai.choice`/
+`gen_ai.assistant.message` events (shared `src/genAiContent.ts`) and injects
+`gen_ai.output.messages` into the matching LLM span via a NEW
+`SegmentedSpanStore.injectSpanAttribute` **read-time overlay** (merged on `loadRange`,
+no disk-segment rewrite). Gate GREEN **884 passing / 0 failing** (876 baseline + 6 store
+overlay unit tests + 2 real-boot integration tests), tsc 0-error, check-mirrors OK.
+Committed on branch `feat/genai-response-buffering`, merged `--no-ff` to main (see git log).
+Not pushed (npm pkg — the v2.5.0 release is cut at the END of the whole plan, not per phase).
+
+**KEY DESIGN DECISION — overlay, NOT buffer (deviates from the sketch below, deliberately).**
+The design sketch modeled the collector's buffer + drain + `injectSpanAttribute`. Shipped as a
+SIMPLER pure read-time overlay with NO buffer: the collector needed a buffer only because the
+legacy `sessionStore.injectSpanAttribute` mutates an EXISTING in-memory span (nothing to mutate
+if the span hasn't arrived yet). `SegmentedSpanStore` records the attribute in an overlay
+`Map<traceId:spanId, {k:v}>` merged in `loadRange`, so a span appended later still picks it up
+and one flushed earlier still picks it up — order-independent, buffer/drain unnecessary.
+Cap-evicted (500, oldest-first); in-memory only (lost on restart), an accepted tradeoff for
+LOW-severity enrichment whose dominant ordering is span-first anyway. The shared `genAiContent.ts`
+formatter now backs BOTH the collector and the shipped path (no duplicate). Full WHY in the
+wikimem `[[otlp-ingest-topology]]` `[^2]` lesson.
+
+**Verification artifacts:**
+- Unit: `src/test/segmentedSpanStore.test.ts` — 6 overlay cases (after-span, before-span, upsert,
+  cap-evict, orphan-no-crash, clear).
+- Integration (real boot): `src/test/standaloneGenAiInject.test.ts` — boots the built server,
+  POSTs an LLM span + its `gen_ai.choice` log in BOTH orderings, asserts the injected
+  `gen_ai.output.messages` via the new read-only localhost `/api/debug/span-attr` endpoint.
+
+---
+
 **What this is:** the S3-F3b half of the OTLP-ingest-drift finding (parent
 `TRDD-4AFOFVFD`, §"S3-F3a spec"). S3-F3a (the Codex per-prompt normalizer) is the
-correctness half and is being done first; THIS TRDD is the ENRICHMENT half —
+correctness half and was done first; THIS TRDD is the ENRICHMENT half —
 deferred deliberately because it needs span-store surgery, carries higher risk, and
 delivers data enrichment (not accounting correctness).
 

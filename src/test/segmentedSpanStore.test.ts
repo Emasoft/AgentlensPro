@@ -334,3 +334,97 @@ suite('segmentedSpanStore — one-time migration from the single-file spans.json
     } finally { cleanup() }
   })
 })
+
+// ── S3-F3b: read-time attribute overlay (injectSpanAttribute) ────────────────────────────────
+// gen_ai response content arrives as a SEPARATE log event, before OR after its LLM span, and must
+// merge into the span WITHOUT rewriting the persisted NDJSON. Because the merge happens on read
+// (loadRange), arrival order is irrelevant — the four cases the parent TRDD-DYG4ZTXW named:
+// (a) attr recorded AFTER the span, (b) BEFORE the span, (c) cap eviction, (d) span never arrives.
+function attrOf(span: Span, key: string): string | undefined {
+  return span.attributes.find((a) => a.key === key)?.value.stringValue
+}
+
+suite('segmentedSpanStore — read-time attribute overlay (S3-F3b)', () => {
+  test('(a) attribute recorded AFTER the span is stored is merged on the next read', () => {
+    const { dir, cleanup } = tmpDir()
+    try {
+      const store = new SegmentedSpanStore(dir, () => {})
+      store.append(mkSpan(D1, 1))
+      store.flush() // span is on disk before the overlay is recorded
+      assert.strictEqual(store.injectSpanAttribute('trace-1', 'span-1', 'gen_ai.output.messages', 'HELLO'), true)
+      const got = store.loadRange(0, Infinity)
+      assert.strictEqual(got.length, 1)
+      assert.strictEqual(attrOf(got[0], 'gen_ai.output.messages'), 'HELLO', 'flushed disk span picks up the overlay on read')
+    } finally { cleanup() }
+  })
+
+  test('(b) attribute recorded BEFORE the span arrives is merged once the span is stored', () => {
+    const { dir, cleanup } = tmpDir()
+    try {
+      const store = new SegmentedSpanStore(dir, () => {})
+      store.injectSpanAttribute('trace-2', 'span-2', 'gen_ai.output.messages', 'EARLY') // no span yet
+      assert.strictEqual(store.loadRange(0, Infinity).length, 0, 'no phantom span is materialized from an overlay alone')
+      store.append(mkSpan(D1, 2))
+      store.flush()
+      const got = store.loadRange(0, Infinity)
+      assert.strictEqual(got.length, 1)
+      assert.strictEqual(attrOf(got[0], 'gen_ai.output.messages'), 'EARLY', 'the later-arriving span picks up the earlier overlay')
+    } finally { cleanup() }
+  })
+
+  test('overlay upserts: re-recording a key overwrites, a pre-existing same-key attribute is replaced, other keys are preserved', () => {
+    const { dir, cleanup } = tmpDir()
+    try {
+      const store = new SegmentedSpanStore(dir, () => {})
+      const span = mkSpan(D1, 3)
+      span.attributes.push({ key: 'gen_ai.output.messages', value: { stringValue: 'ORIGINAL' } })
+      span.attributes.push({ key: 'model', value: { stringValue: 'gpt-x' } })
+      store.append(span)
+      store.flush()
+      store.injectSpanAttribute('trace-3', 'span-3', 'gen_ai.output.messages', 'FIRST')
+      store.injectSpanAttribute('trace-3', 'span-3', 'gen_ai.output.messages', 'SECOND') // overwrite
+      const got = store.loadRange(0, Infinity)[0]
+      assert.strictEqual(attrOf(got, 'gen_ai.output.messages'), 'SECOND', 'existing attr replaced by the latest overlay value')
+      assert.strictEqual(attrOf(got, 'model'), 'gpt-x', 'unrelated attributes are untouched')
+      assert.strictEqual(got.attributes.filter((a) => a.key === 'gen_ai.output.messages').length, 1, 'no duplicate key is appended')
+    } finally { cleanup() }
+  })
+
+  test('(c) overlay is cap-evicted oldest-first past OVERLAY_MAX (500) so a never-arriving span cannot leak memory', () => {
+    const { dir, cleanup } = tmpDir()
+    try {
+      const store = new SegmentedSpanStore(dir, () => {})
+      // 501 overlay entries → the very first (trace-0:span-0) is evicted; the last survives.
+      for (let i = 0; i <= 500; i++) {
+        store.injectSpanAttribute(`trace-${i}`, `span-${i}`, 'gen_ai.output.messages', `v${i}`)
+      }
+      store.append(mkSpan(D1, 0))   // the evicted key's span
+      store.append(mkSpan(D1, 500)) // the surviving key's span
+      store.flush()
+      const byId = new Map(store.loadRange(0, Infinity).map((s) => [s.spanId, s]))
+      assert.strictEqual(attrOf(byId.get('span-0')!, 'gen_ai.output.messages'), undefined, 'oldest overlay entry was evicted')
+      assert.strictEqual(attrOf(byId.get('span-500')!, 'gen_ai.output.messages'), 'v500', 'newest overlay entry survives')
+    } finally { cleanup() }
+  })
+
+  test('(d) an overlay whose span never arrives materializes nothing and never throws', () => {
+    const { dir, cleanup } = tmpDir()
+    try {
+      const store = new SegmentedSpanStore(dir, () => {})
+      store.injectSpanAttribute('ghost-trace', 'ghost-span', 'gen_ai.output.messages', 'ORPHAN')
+      assert.deepStrictEqual(store.loadRange(0, Infinity), [], 'no span, no phantom, no crash')
+    } finally { cleanup() }
+  })
+
+  test('clear() drops the overlay so a re-used key on a fresh span is not stale-merged', () => {
+    const { dir, cleanup } = tmpDir()
+    try {
+      const store = new SegmentedSpanStore(dir, () => {})
+      store.injectSpanAttribute('trace-1', 'span-1', 'gen_ai.output.messages', 'STALE')
+      store.clear()
+      store.append(mkSpan(D1, 1))
+      store.flush()
+      assert.strictEqual(attrOf(store.loadRange(0, Infinity)[0], 'gen_ai.output.messages'), undefined, 'overlay cleared with the store')
+    } finally { cleanup() }
+  })
+})
