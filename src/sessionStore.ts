@@ -70,13 +70,20 @@ export class SessionStore {
       const a = attrs.find((x: SpanAttribute) => x.key === key)
       return parseInt(String(a?.value?.intValue ?? a?.value?.stringValue ?? 0)) || 0
     }
-    const tokensFound = intAttr('input_tokens') + intAttr('prompt_tokens')
-      + intAttr('cache_read_tokens') + intAttr('cache_creation_tokens')
-      + intAttr('gen_ai.usage.input_tokens')
-      + intAttr('gen_ai.usage.cache_read.input_tokens') + intAttr('gen_ai.usage.cache_creation.input_tokens')
-      + intAttr('output_tokens') + intAttr('completion_tokens')
-      + intAttr('gen_ai.usage.output_tokens')
-    this.summary.tokensUsed += tokensFound
+    // tokensUsed is a coarse "total context" scalar (raw input + cache-read + cache-creation + output)
+    // for the legacy sidebar. A single span uses ONE naming convention per provider (Claude/Copilot
+    // native keys OR the OTLP gen_ai.usage.* keys), so pick the first present value PER BUCKET rather
+    // than summing both — otherwise a Claude span carrying both `input_tokens` and
+    // `gen_ai.usage.input_tokens` (and likewise cache_read / output) double-counts each bucket.
+    const firstOf = (...keys: string[]): number => {
+      for (const k of keys) { const v = intAttr(k); if (v > 0) return v }
+      return 0
+    }
+    const input       = firstOf('input_tokens', 'prompt_tokens', 'gen_ai.usage.input_tokens')
+    const cacheRead   = firstOf('cache_read_tokens', 'gen_ai.usage.cache_read.input_tokens')
+    const cacheCreate = firstOf('cache_creation_tokens', 'gen_ai.usage.cache_creation.input_tokens')
+    const output      = firstOf('output_tokens', 'completion_tokens', 'gen_ai.usage.output_tokens')
+    this.summary.tokensUsed += input + cacheRead + cacheCreate + output
 
     // Track files changed (write operations only)
     const getAttrVal = (key: string) =>

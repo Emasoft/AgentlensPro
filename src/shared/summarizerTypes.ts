@@ -62,6 +62,12 @@ export interface SessionSummaryCard {
   cacheReadTokens: number
   cacheCreateTokens: number
   cacheHitRate: number
+  // Authoritative per-turn-blended cost, set ONLY for a MIXED-SPEED session (some turns fast, some
+  // standard) where the whole-card model rate would be wrong — a single `<model>-fast` stamp prices
+  // every turn (incl. the standard ones) at the ~6× fast rate. Each turn is priced at its OWN
+  // (model, speed) during parse and summed here. Absent for uniform-speed sessions (which the
+  // aggregate model rate prices correctly). cardCostUsd prefers it below the statusline cost.
+  speedBlendedCostUsd?: number
   durationMs: number
   startTime: string
   filesRead: string[]

@@ -5,6 +5,7 @@ import { SpanAttribute } from './shared/telemetryTypes'
 import { callBodyRegistry } from './rawBodyContext'
 import { countFallback } from './shared/fallbackCounters'
 import { resolveLogEventName, bareLogEventName, CLAUDE_RICH_LOG_EVENTS, BODY_POINTER_LOG_EVENTS } from './otlpLogEvents'
+import { CodexSessionNormalizer, isCodexPromptEventName } from './codexSessionNormalizer'
 
 const MAX_BODY_BYTES = 50 * 1024 * 1024 // 50 MB
 
@@ -17,11 +18,10 @@ export class OtlpCollector {
   private codexLastActivityMs = 0
   // Maps traceId → root spanId so child Codex spans get a synthetic parentSpanId.
   private codexSessionRootByTrace = new Map<string, string>()
-  private codexCurrentSessionByConversation = new Map<string, string>()
-  private codexSessionStateById = new Map<string, { hasPrompt: boolean }>()
-  private codexSessionByOtelTraceId = new Map<string, string>()
-  private codexPromptOrdinalByConversation = new Map<string, number>()
-  private codexActivePromptSessionId = ''
+  // S3-F3a: the per-prompt Codex session grouping (`codex:<conv>:prompt-N`) lives in ONE shared
+  // normalizer. Held as a long-lived instance so its maps persist across payloads — exactly as the
+  // private fields it replaces did.
+  private codexNorm = new CodexSessionNormalizer()
   // Buffers gen_ai.choice / gen_ai.assistant.message log event content keyed by traceId:spanId.
   // Spans and their log events arrive on separate HTTP requests; this handles either ordering.
   // Capped at 500 entries to evict orphaned entries when a span is dropped by the agent exporter.
@@ -264,76 +264,6 @@ export class OtlpCollector {
     return replaced ? next : [...next, { key, value: { stringValue: value } }]
   }
 
-  private getCodexSessionState(sessionId: string): { hasPrompt: boolean } {
-    let state = this.codexSessionStateById.get(sessionId)
-    if (!state) {
-      state = { hasPrompt: false }
-      this.codexSessionStateById.set(sessionId, state)
-    }
-    return state
-  }
-
-  private nextCodexPromptSessionId(conversationId: string): string {
-    const next = (this.codexPromptOrdinalByConversation.get(conversationId) ?? 0) + 1
-    this.codexPromptOrdinalByConversation.set(conversationId, next)
-    return `codex:${conversationId}:prompt-${next}`
-  }
-
-  private isCodexPromptSpanName(name: string): boolean {
-    return name === 'codex.user_prompt'
-      || name === 'codex.prompt'
-      || name === 'codex.user_message'
-      || name === 'codex.session_start'
-  }
-
-  private resolveCodexSessionId(opts: {
-    conversationId: string
-    otlpTraceId?: string
-    turnId?: string
-    spanName: string
-  }): string | undefined {
-    const conversationId = opts.conversationId
-    const isPrompt = this.isCodexPromptSpanName(opts.spanName)
-    let sessionId = opts.otlpTraceId ? this.codexSessionByOtelTraceId.get(opts.otlpTraceId) : undefined
-
-    if (isPrompt) {
-      const currentSessionId = this.codexCurrentSessionByConversation.get(conversationId)
-      const currentState = currentSessionId ? this.getCodexSessionState(currentSessionId) : undefined
-      if (!sessionId && currentSessionId && !currentState?.hasPrompt) {
-        sessionId = currentSessionId
-      }
-      if (!sessionId) {
-        sessionId = opts.turnId
-          ? `codex:${conversationId}:${opts.turnId}`
-          : this.nextCodexPromptSessionId(conversationId)
-      } else if (this.getCodexSessionState(sessionId).hasPrompt) {
-        sessionId = opts.turnId
-          ? `codex:${conversationId}:${opts.turnId}`
-          : this.nextCodexPromptSessionId(conversationId)
-      }
-    } else if (sessionId) {
-      // Keep using the already-normalized prompt-to-response session for this OTLP trace.
-    } else if (this.codexCurrentSessionByConversation.has(conversationId)) {
-      sessionId = this.codexCurrentSessionByConversation.get(conversationId)
-    } else if (this.codexActivePromptSessionId) {
-      sessionId = this.codexActivePromptSessionId
-    } else if (opts.turnId) {
-      sessionId = `codex:${conversationId}:${opts.turnId}`
-    } else {
-      return undefined
-    }
-
-    if (!sessionId) { return undefined }
-    this.codexCurrentSessionByConversation.set(conversationId, sessionId)
-    if (opts.otlpTraceId) { this.codexSessionByOtelTraceId.set(opts.otlpTraceId, sessionId) }
-    const state = this.getCodexSessionState(sessionId)
-    if (isPrompt) {
-      state.hasPrompt = true
-      this.codexActivePromptSessionId = sessionId
-    }
-    return sessionId
-  }
-
   private isCodexTraceSpan(spanName: string, attrs: SpanAttribute[]): boolean {
     const threadId = this.getAttrFrom(attrs, ['thread.id', 'thread_id'])
     const turnId = this.getAttrFrom(attrs, ['turn.id', 'turn_id'])
@@ -546,7 +476,7 @@ export class OtlpCollector {
             spanName = eventName
             const turnId = this.getAttrFrom(attrs, ['turn.id', 'turn_id', 'codex.turn.id'])
             const conversationKey = convId || otlpTraceId || this.codexFallbackTraceId
-            const sessionId = this.resolveCodexSessionId({
+            const sessionId = this.codexNorm.resolveSessionId({
               conversationId: conversationKey,
               otlpTraceId,
               turnId,
@@ -569,7 +499,7 @@ export class OtlpCollector {
           // Synthesize parent-child links for Codex spans (they carry no parentSpanId).
           // Session root spans become depth-0 anchors; all other spans become their children.
           if (isCodexEvent) {
-            if (this.isCodexPromptSpanName(spanName)) {
+            if (isCodexPromptEventName(spanName)) {
               this.codexSessionRootByTrace.set(traceId, spanId)
             } else if (traceId && !parentSpanId) {
               parentSpanId = this.codexSessionRootByTrace.get(traceId)
@@ -629,7 +559,7 @@ export class OtlpCollector {
       if (this.isCodexWebsocketSpan(span.name, attrs)) { continue }
       let traceId = span.traceId
       const parentSpanId = (span.parentSpanId as string) || undefined
-      const mappedCodexSessionId = this.codexSessionByOtelTraceId.get(span.traceId)
+      const mappedCodexSessionId = this.codexNorm.sessionByOtelTraceId(span.traceId)
       if (mappedCodexSessionId) {
         traceId = mappedCodexSessionId
         attrs = this.setStringAttr(attrs, 'codex.session.id', mappedCodexSessionId)
@@ -642,7 +572,7 @@ export class OtlpCollector {
         ])
         const turnId = this.getAttrFrom(attrs, ['turn.id', 'turn_id', 'codex.turn.id'])
         if (conversationId && turnId) {
-          const sessionId = this.resolveCodexSessionId({
+          const sessionId = this.codexNorm.resolveSessionId({
             conversationId,
             otlpTraceId: span.traceId,
             turnId,
