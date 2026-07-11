@@ -19,7 +19,12 @@ COPY src/ ./src/
 COPY standalone/ ./standalone/
 COPY media/src/ ./media/src/
 COPY media/tsconfig.json ./media/
-COPY media/dashboard.css media/help-mascot.png media/mascot.png ./media/
+# media/dashboard.css is NOT copied from the context: since v2.3.1 it is a gitignored
+# esbuild build artifact (bundled from media/src/styles/*.css via the dashboard entry),
+# so it is absent from the git build context. It is produced by the RUN below and copied
+# into the runtime stage from the builder. Copying it here broke the Docker build for
+# v2.3.1 and v2.4.0 ("/media/dashboard.css: not found").
+COPY media/help-mascot.png media/mascot.png ./media/
 
 RUN node esbuild.js --production
 
