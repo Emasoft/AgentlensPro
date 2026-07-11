@@ -37,47 +37,37 @@ Background-agent field lessons (they shaped the burn-gate rules):
   lost, end") — verified working: an anchored fork correctly refused an orchestration
   directive and handed it to the parent instead of acting.[^3]
 
-Install topology + data model (code location is independent of data):
+Install topology + data model (machine-AGNOSTIC — a specific machine's install state is LOCAL scope,
+never this git-tracked page[^6]):
 
-- **On a dev machine the CLI is `npm link`ed, NOT registry-installed** — `agentlenspro` on
-  PATH (`/opt/homebrew/bin/agentlenspro`) is a symlink chain to `<repo>/standalone/cli.js`,
-  so the system-wide command runs the repo build and reflects local rebuilds instantly.
-  `npm ls -g agentlenspro` shows `agentlenspro@X -> ./../…/<repo>` (the `->` arrow = a link,
-  not a registry download). Because it's on the global PATH, EVERY agent/session/shell on
-  the machine uses it from ANY cwd (verified: runs from `/tmp`, reaches the server + machine
-  data). The link is purely local dev convenience — it is NOT in package.json/the tarball/on
-  npm, so it has ZERO effect on published users (a clean-room `npm i` of the packed tarball
-  is a self-contained real copy that runs standalone with no repo).[^4]
-- **All DB + settings live in `$HOME`, never in the package/node_modules.** Persistent state
-  is `~/.agentlens/` (`forensics.db`, `log-sessions.json`, `log-offsets.json`,
-  `account-state.ndjson`, `otel-bodies/`, `spans/`, `*.json` configs), resolved everywhere as
+- **DB + settings live in `$HOME`, never in the package/node_modules.** Persistent state is
+  `~/.agentlens/` (`forensics.db`, `log-sessions.json`, `log-offsets.json`, `account-state.ndjson`,
+  `otel-bodies/`, `spans/`, `*.json` configs), resolved everywhere as
   `path.join(os.homedir(), '.agentlens', …)` — absolute, package-independent. Settings are in
-  `~/.claude/settings.json` (hooks + OTEL env), and every hook entry calls the BARE command
+  `~/.claude/settings.json` (hooks + OTEL env); every hook entry calls the BARE command
   (`"agentlenspro hook"`/`"agentlenspro gate"`, PATH-resolved) with absolute `$HOME/.agentlens`
-  paths — NONE hardcode the repo path.
-- **⇒ Switching link ↔ ordinary registry install (`npm i -g agentlenspro@X`) is CODE-ONLY and
-  PRESERVES the DB + settings + hooks** (the hooks still find `agentlenspro` on PATH; the new
-  code reopens the same `~/.agentlens`). `agentlenspro setup` also "NEVER wipes `~/.agentlens`".
-  Only follow-up: `agentlenspro server restart` so the new code reopens the data. Return to the
-  dev link with `cd <repo> && npm link`. Caveat: a JUST-published version can be briefly blocked
-  by the supply-chain min-release-age guard — install the local tarball (`npm pack` →
-  `npm i ./agentlenspro-X.tgz`, byte-identical) to sidestep it.[^4]
-- **DOGFOOD-LINK DEPLOY IS STRICT: green gates BEFORE any bundle write.** Because the link makes
-  every `node esbuild.js` instantly live to ALL Claude Code instances on the machine, a broken
-  build has machine-wide blast radius (the CLI powers hooks + the burn-gate PreToolUse deny on
-  every agent launch — a crashing `agentlenspro gate`/`hook` could stall or break many sessions).
-  So NEVER write the linked bundle from an unverified tree. Required order, abort on the first
-  red: `pnpm run check-types` (tsc root+media, 0 errors) → `pnpm run lint` (0 errors) →
-  `node scripts/check-no-mirrors.js` → `pnpm run compile-tests` (Node ≥22) → full `npx mocha`
-  under Node 20 (baseline 849/0) → ONLY THEN `node esbuild.js` + `agentlenspro server restart`.
-  If any gate is red, do NOT build — the currently-linked bundle stays the last known-good one.
-  The gate is fail-open by construction (server down = silent no-op), so the danger is a bundle
-  that LOADS but misbehaves — which only tests catch, hence tests are mandatory, not optional.[^5]
-  **Mechanically enforced by `pnpm run deploy:safe`** (`scripts/safe-deploy.sh`): it runs the whole
-  sequence, aborts before any bundle write on the first red gate, smoke-checks the built CLI
-  (`cli --version` == package version) before restarting, and has its own stubbed-gate test suite
-  (`src/test/safeDeploy.test.ts`). `--dry-run` = gates only; `--no-restart` = build but don't restart.
-  Prefer it over bare `node esbuild.js` for any deploy to the live link.
+  paths — NONE hardcode a repo path.
+- **⇒ How the CLI is installed is DECOUPLED from the data.** The documented dev-CLI setup is
+  `npm link` (global `agentlenspro` → the repo build, so local rebuilds are instantly the system-wide
+  command); a normal user instead `npm i -g agentlenspro` (a self-contained registry copy — the link
+  is local-only, NOT in the tarball, ZERO effect on published users; clean-room proven). Switching
+  link ↔ registry install is CODE-ONLY and PRESERVES DB + settings + hooks (the hooks still find
+  `agentlenspro` on PATH; the new code reopens the same `~/.agentlens`; `agentlenspro setup` "NEVER
+  wipes `~/.agentlens`"). Follow-up: `agentlenspro server restart`. Caveat: a JUST-published version
+  can be briefly blocked by the supply-chain min-release-age guard — install the local tarball
+  (`npm pack` → `npm i ./agentlenspro-X.tgz`) to sidestep it.[^4]
+- **When dogfooding via the `npm link` setup, deploy STRICT: green gates BEFORE any bundle write.**
+  A linked bundle is live for EVERY Claude Code instance on that machine (the CLI powers each agent's
+  hooks + the burn-gate PreToolUse deny), so a broken build has machine-wide blast radius. The repo
+  ships **`pnpm run deploy:safe`** (`scripts/safe-deploy.sh`) for exactly this: full gate suite in
+  order (check-types → lint → check-no-mirrors → compile-tests → the whole Mocha suite under Node 20,
+  baseline 849/0), aborts before any bundle write on the first red (last known-good stays live),
+  smoke-checks the built CLI (`cli --version` == package version) before restarting, and has its own
+  stubbed-gate test (`src/test/safeDeploy.test.ts`). `--dry-run` = gates only; `--no-restart` = build
+  but don't restart. Prefer it over bare `node esbuild.js` for any linked deploy. WHY tests are a
+  MANDATORY gate (not just tsc/lint): the burn-gate is fail-OPEN, so a bundle that fails to LOAD hurts
+  nobody — the dangerous class is a bundle that loads and MISBEHAVES, which only a real test run
+  catches.[^5]
 
 Governed by [[cache-ttl-model]] (TTL regimes) and [[agentlens-burn-token-model]]
 (accounting); see also [[agentlenspro-publish-pipeline]].
@@ -106,11 +96,22 @@ Governed by [[cache-ttl-model]] (TTL regimes) and [[agentlens-burn-token-model]]
   (self-contained, runs with no repo) and by running the CLI from `/tmp`. Lesson: when a
   "how is this installed?" worry surfaces, separate the two questions — *where's the code?* vs
   *where's the state?* — and answer the state question from `os.homedir()`, not the package path.
-[^5]: [ocd:2026-07-11 lmd:2026-07-11] the user chose to KEEP the npm link for dogfooding (live
-  build reaches all agents) and made testing NON-negotiable: "a broken cli tool could break many
-  Claude Code instances." The subtlety that makes tests (not just tsc/lint) mandatory: the burn-gate
-  is fail-OPEN, so a bundle that fails to load can't hurt anyone (silent no-op) — but a bundle that
-  LOADS and then misbehaves (wrong deny, crash mid-hook, bad exit code) DOES reach every session,
-  and only a real test run catches that class. Lesson: when a build artifact is live-linked to many
-  consumers, "it compiles" is not "it's safe to ship" — the full suite must be green BEFORE the
-  bundle is written, and a red gate means the last known-good bundle stays in place, not a rebuild.
+[^5]: [ocd:2026-07-11 lmd:2026-07-11] this deploy discipline exists because a dogfood (`npm link`)
+  setup makes a build LIVE to many consumers at once, and testing is then non-negotiable. The subtlety
+  that makes tests (not just tsc/lint) mandatory: the burn-gate is fail-OPEN, so a bundle that fails to
+  load can't hurt anyone (silent no-op) — but a bundle that LOADS and then misbehaves (wrong deny,
+  crash mid-hook, bad exit code) DOES reach every session, and only a real test run catches that class.
+  Lesson: when a build artifact is live-linked to many consumers, "it compiles" is not "it's safe to
+  ship" — the full suite must be green BEFORE the bundle is written, and a red gate means the last
+  known-good bundle stays in place, not a rebuild. (A specific machine's CHOICE to run this dogfood
+  setup is LOCAL-scope config, not recorded on this shared page.[^6])
+[^6]: [ocd:2026-07-11 lmd:2026-07-11] this page originally carried this MACHINE's specific install
+  state — that its `agentlenspro` was npm-linked at a concrete Homebrew path to a concrete repo path,
+  and the owner's decision to dogfood the live build to their running agents. WRONG scope: PROJECT
+  memory is git-tracked and pushed, so every future cloner would have inherited one machine's private
+  config. Corrected: the git-tracked page keeps only machine-AGNOSTIC facts (the data lives in
+  `$HOME`; install method is decoupled from data; the repo ships `deploy:safe`), and the concrete
+  per-machine install state moved to a LOCAL-scope note (`~/.claude/projects/<slug>/memory/`,
+  never pushed). Lesson: before writing a fact to PROJECT memory, ask "would this be TRUE and USEFUL
+  for a stranger cloning the repo on a different machine?" — a path like `/opt/homebrew/...`, a
+  hostname, or "on THIS machine / the owner decided…" answers no ⇒ it is LOCAL, not PROJECT.
