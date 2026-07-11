@@ -73,6 +73,11 @@ Install topology + data model (code location is independent of data):
   If any gate is red, do NOT build — the currently-linked bundle stays the last known-good one.
   The gate is fail-open by construction (server down = silent no-op), so the danger is a bundle
   that LOADS but misbehaves — which only tests catch, hence tests are mandatory, not optional.[^5]
+  **Mechanically enforced by `pnpm run deploy:safe`** (`scripts/safe-deploy.sh`): it runs the whole
+  sequence, aborts before any bundle write on the first red gate, smoke-checks the built CLI
+  (`cli --version` == package version) before restarting, and has its own stubbed-gate test suite
+  (`src/test/safeDeploy.test.ts`). `--dry-run` = gates only; `--no-restart` = build but don't restart.
+  Prefer it over bare `node esbuild.js` for any deploy to the live link.
 
 Governed by [[cache-ttl-model]] (TTL regimes) and [[agentlens-burn-token-model]]
 (accounting); see also [[agentlenspro-publish-pipeline]].

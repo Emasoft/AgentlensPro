@@ -26,8 +26,18 @@ pnpm install
 pnpm run check-types   # TypeScript type check
 pnpm run lint          # ESLint
 pnpm run test:unit     # Unit tests (Mocha)
-node esbuild.js        # Bundle — outputs to dist/ and media/
+node esbuild.js        # Bundle — outputs to standalone/ and media/
 ```
+
+**Deploying the dogfood build (`pnpm run deploy:safe`):** on a dev machine the global
+`agentlenspro` command is **npm-linked** to this repo (`npm link`), so `node esbuild.js` makes the
+new bundle **live for every Claude Code instance on the machine** (the CLI powers each agent's hooks
+and the burn-gate). A broken build therefore has machine-wide blast radius. **Never rebuild the
+linked bundle from an unverified tree** — use `pnpm run deploy:safe`, which runs the full gate suite
+(check-types → lint → check-no-mirrors → compile-tests → the whole Mocha suite under Node 20) and
+only writes the bundle + restarts the server when everything is green; a red gate aborts with the
+last known-good bundle untouched (`--dry-run` = gates only; `--no-restart` = build but don't
+restart). See `.claude/project/memory/agentlenspro-ops-lessons.md` for the doctrine.
 
 ## Project structure
 
