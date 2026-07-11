@@ -1,0 +1,789 @@
+// src/cli/setup.ts — `agentlenspro setup` (TRDD-7284WCW7): the idempotent install / repair
+// verb. detect → converge → VERIFY-per-step → final end-to-end self-test.
+//
+// The discipline every step obeys (CHECK → ACT → VERIFY → RECORD):
+//   CHECK  reads the real state and decides whether anything is needed (read-only).
+//   ACT    converges — only when CHECK said so, and never in --dry-run.
+//   VERIFY re-reads the real state through a DIFFERENT path than ACT wrote it
+//          (falsify-the-layer: after safeConfigEdit we re-parse the file ourselves; after a
+//          server start we curl the ports; after a skill install we hash-compare; after a
+//          hook install we EXECUTE the registered command). An actor's exit code is never
+//          trusted as proof.
+//   RECORD one table row per step: found → action → verify (PASS/FAIL/SKIP).
+// Any VERIFY failure → fail-fast: remaining steps do not run, exit non-zero. No fallbacks.
+//
+// Repair mode is not a separate mode: CHECK is written against the full breakage matrix
+// (missing/wrong/truncated env vars, duplicated or stale hook registrations of every past
+// generation, skill content drift, corrupt forensics.db, old-generation bins), so a broken
+// install simply produces more ACTs. Data is NEVER wiped: a corrupt DB is backed up aside
+// as .corrupt-<ts>; span-store preservation is itself a VERIFY assertion (post ≥ pre).
+
+import { spawn, spawnSync, execFileSync } from 'child_process'
+import * as crypto from 'crypto'
+import * as fs from 'fs'
+import * as http from 'http'
+import * as os from 'os'
+import * as path from 'path'
+import { loadSqlJs } from '../forensicsDb'
+import { ensureTelemetryConfig, ownedTelemetryKeys } from '../telemetryConfig'
+import { sleep } from './cliCore'
+import {
+  CLI_BIN, GATE_CMD, GATE_EVENTS, GATE_MATCHER, HOOK_CMD, HOOK_EVENTS, HookMatcher,
+  installHooks, installSkill, isOurHookCommand, rebuildEventMatchers, resolveOnPath,
+  sha256File, SKILL_NAME, findPackageRoot,
+} from './hookInstall'
+import { findServerJs } from './serverControl'
+
+export interface SetupOptions {
+  dryRun?: boolean
+  yes?: boolean
+  /** Injectable roots/ports — tests point ALL of them at temp fixtures + ephemeral ports.
+   *  Defaults are the real machine paths/env (the production behavior). */
+  home?: string
+  dataDir?: string
+  settingsPath?: string
+  skillsDir?: string
+  repoRoot?: string
+  uiPort?: number
+  mcpPort?: number
+  otlpPort?: number
+  pathEnv?: string
+  log?: (line: string) => void
+}
+
+export type Verify = 'PASS' | 'FAIL' | 'SKIP'
+export interface StepResult {
+  step: string
+  found: string
+  action: string
+  verify: Verify
+  detail?: string
+}
+
+export interface SetupOutcome {
+  exitCode: number
+  steps: StepResult[]
+  /** Number of steps whose ACT actually mutated something — the idempotency metric:
+   *  a second run over a converged install MUST report 0. */
+  actions: number
+  serverPid: number | null
+}
+
+interface Ctx {
+  dryRun: boolean
+  yes: boolean
+  home: string
+  dataDir: string
+  settingsPath: string
+  skillsDir: string
+  repoRoot: string
+  uiPort: number
+  mcpPort: number
+  otlpPort: number
+  pathEnv: string
+  log: (line: string) => void
+  serverPid: number | null
+}
+
+function resolveCtx(opts: SetupOptions): Ctx {
+  const home = opts.home ?? os.homedir()
+  const repoRoot = opts.repoRoot ?? findPackageRoot(__dirname)
+  if (!repoRoot) throw new Error(`cannot locate the agentlenspro package root above ${__dirname}`)
+  return {
+    dryRun: !!opts.dryRun,
+    yes: !!opts.yes,
+    home,
+    dataDir: opts.dataDir ?? process.env.DATA_DIR ?? path.join(home, '.agentlens'),
+    settingsPath: opts.settingsPath ?? process.env.AGENTLENS_CLAUDE_SETTINGS ?? path.join(home, '.claude', 'settings.json'),
+    skillsDir: opts.skillsDir ?? path.join(home, '.claude', 'skills'),
+    repoRoot,
+    uiPort: opts.uiPort ?? Number(process.env.UI_PORT ?? 3000),
+    mcpPort: opts.mcpPort ?? Number(process.env.MCP_PORT ?? 4316),
+    otlpPort: opts.otlpPort ?? Number(process.env.OTLP_PORT ?? 4318),
+    pathEnv: opts.pathEnv ?? process.env.PATH ?? '',
+    log: opts.log ?? ((line: string) => console.log(line)),
+    serverPid: null,
+  }
+}
+
+// ── Local transport bound to the ctx ports (cliCore reads env — setup must not) ────────────
+
+function httpJson(port: number, method: string, p: string, payload?: unknown): Promise<{ status: number; json: unknown }> {
+  const body = payload === undefined ? null : JSON.stringify(payload)
+  return new Promise((resolve, reject) => {
+    const req = http.request({
+      hostname: '127.0.0.1', port, path: p, method,
+      headers: body ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } : {},
+    }, res => {
+      let raw = ''
+      res.on('data', (c: Buffer) => { raw += c })
+      res.on('end', () => {
+        let json: unknown = null
+        try { json = JSON.parse(raw) } catch { /* non-JSON body (e.g. the dashboard HTML) */ }
+        resolve({ status: res.statusCode ?? 0, json })
+      })
+    })
+    req.on('error', reject)
+    req.setTimeout(5000, () => req.destroy(new Error('timeout')))
+    if (body) req.write(body)
+    req.end()
+  })
+}
+
+async function mcpCall(port: number, method: string, params: unknown): Promise<unknown> {
+  const body = JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method, params })
+  return new Promise((resolve, reject) => {
+    const req = http.request({
+      hostname: '127.0.0.1', port, path: '/mcp', method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+        'Content-Length': Buffer.byteLength(body),
+      },
+    }, res => {
+      let raw = ''
+      res.on('data', (c: Buffer) => { raw += c })
+      res.on('end', () => {
+        const line = raw.split('\n').find(l => l.startsWith('data:'))
+        const payload = line ? line.slice(5).trim() : raw
+        try {
+          const j = JSON.parse(payload) as { error?: { message?: string }; result?: unknown }
+          if (j.error) return reject(new Error(j.error.message || 'rpc error'))
+          resolve(j.result)
+        } catch { reject(new Error(`bad MCP response (${res.statusCode}): ${raw.slice(0, 200)}`)) }
+      })
+    })
+    req.on('error', reject)
+    req.setTimeout(10_000, () => req.destroy(new Error('timeout')))
+    req.write(body)
+    req.end()
+  })
+}
+
+interface StatsShape {
+  pid: number
+  dataDir: string
+  ports: { ui: number; mcp: number; otlp: number }
+  spans?: { store?: { totalSpans: number }; inMemory?: number }
+  hookEvents?: { receivedSinceBoot: number }
+}
+
+async function serverStats(ctx: Ctx): Promise<StatsShape | null> {
+  try {
+    const r = await httpJson(ctx.uiPort, 'GET', '/api/server-stats')
+    if (r.status === 200 && r.json && typeof r.json === 'object') return r.json as StatsShape
+    return null
+  } catch { return null }
+}
+
+// ── The result table (heavy header rule, light body — same family as heartbeat-cost) ───────
+
+function renderTable(rows: StepResult[]): string {
+  const cols: Array<{ h: string; get: (r: StepResult) => string }> = [
+    { h: 'step', get: r => r.step },
+    { h: 'found', get: r => r.found },
+    { h: 'action', get: r => r.action },
+    { h: 'verify', get: r => r.verify },
+    { h: 'detail', get: r => r.detail ?? '' },
+  ]
+  const clip = (s: string, w: number): string => (s.length > w ? s.slice(0, w - 1) + '…' : s)
+  const CAP = 46
+  const widths = cols.map(c => Math.min(CAP, Math.max(c.h.length, ...rows.map(r => c.get(r).length))))
+  const line = (l: string, mid: string, r: string, fill: string): string =>
+    l + widths.map(w => fill.repeat(w + 2)).join(mid) + r
+  const row = (cells: string[], sep: string): string =>
+    sep + cells.map((c, i) => ` ${clip(c, widths[i]).padEnd(widths[i])} `).join(sep) + sep
+  const out: string[] = []
+  out.push(line('┏', '┳', '┓', '━'))
+  out.push('┃' + cols.map((c, i) => ` ${c.h.padEnd(widths[i])} `).join('┃') + '┃')
+  out.push(line('┡', '╇', '┩', '━'))   // heavy header rule, light body below
+  for (const r of rows) out.push(row(cols.map(c => c.get(r)), '│'))
+  out.push(line('└', '┴', '┘', '─'))
+  return out.join('\n')
+}
+
+// ── Settings helpers (the independent re-read path — NEVER via safeConfigEdit) ─────────────
+
+type Settings = Record<string, unknown>
+
+function readSettingsFresh(file: string): Settings | 'absent' | 'unparseable' {
+  if (!fs.existsSync(file)) return 'absent'
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')) as Settings } catch { return 'unparseable' }
+}
+
+function settingsHooks(s: Settings): Record<string, HookMatcher[]> {
+  return (s.hooks && typeof s.hooks === 'object' ? s.hooks : {}) as Record<string, HookMatcher[]>
+}
+
+/** Would installHooks change anything? Mirrors the installer's change detection without writing. */
+function hooksConverged(s: Settings): boolean {
+  const hooks = settingsHooks(s)
+  const events = new Set([...Object.keys(hooks), ...HOOK_EVENTS, ...GATE_EVENTS])
+  for (const ev of events) {
+    const matchers = Array.isArray(hooks[ev]) ? hooks[ev] : []
+    const r = rebuildEventMatchers(matchers, ev, false, HOOK_CMD, GATE_CMD)
+    if (JSON.stringify(r.rebuilt) !== JSON.stringify(matchers)) return false
+  }
+  const env = s.env as Record<string, unknown> | undefined
+  if (env && env.SPYGLASS_DIR !== undefined) return false
+  return true
+}
+
+/** Independent post-install assertion: exactly one v2 entry per event, zero stale entries. */
+function verifyHooksState(s: Settings): string | null {
+  const hooks = settingsHooks(s)
+  for (const ev of HOOK_EVENTS) {
+    const cmds = (hooks[ev] ?? []).flatMap(m => (m.hooks ?? []).map(h => h.command))
+    const ours = cmds.filter(c => c === HOOK_CMD)
+    if (ours.length !== 1) return `${ev}: expected exactly one '${HOOK_CMD}' entry, found ${ours.length}`
+  }
+  for (const ev of GATE_EVENTS) {
+    const gates = (hooks[ev] ?? []).filter(m => m.matcher === GATE_MATCHER)
+      .flatMap(m => (m.hooks ?? []).map(h => h.command)).filter(c => c === GATE_CMD)
+    if (gates.length !== 1) return `${ev}: expected exactly one '${GATE_CMD}' gate entry, found ${gates.length}`
+  }
+  for (const [ev, matchers] of Object.entries(hooks)) {
+    for (const m of matchers ?? []) {
+      for (const h of m.hooks ?? []) {
+        if (isOurHookCommand(h.command) && h.command !== HOOK_CMD && h.command !== GATE_CMD) {
+          return `${ev}: stale previous-generation registration survived: ${h.command}`
+        }
+      }
+    }
+  }
+  return null
+}
+
+/** Execute a registered hook command string with a synthetic stdin payload — the strongest
+ *  possible verify: the EXACT string the hook runner will exec, resolved through the same
+ *  PATH. Returns null on contract compliance (exit 0), else the violation. */
+function execRegisteredCommand(ctx: Ctx, command: string, payload: string, expectSilent: boolean): string | null {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    PATH: ctx.pathEnv,
+    AGENTLENS_UI_URL: `http://127.0.0.1:${ctx.uiPort}`,
+    AGENTLENS_HOOK_TIMEOUT: '2',
+    AGENTLENS_GATE_TIMEOUT: '2',
+  }
+  delete env.AGENTLENS_GATE // an ambient kill-switch would make the gate exec vacuous
+  const r = spawnSync('/bin/sh', ['-c', command], { input: payload, env, encoding: 'utf8', timeout: 15_000 })
+  if (r.error) return `spawn failed: ${r.error.message}`
+  if (r.status !== 0) return `exit ${r.status} (must always exit 0): ${(r.stderr || '').slice(0, 120)}`
+  if (expectSilent && r.stdout !== '') return `must print nothing, got: ${r.stdout.slice(0, 120)}`
+  return null
+}
+
+// ── Steps ───────────────────────────────────────────────────────────────────────────────────
+
+interface StepDef {
+  name: string
+  run: (ctx: Ctx) => Promise<{ result: StepResult; acted: boolean }>
+}
+
+/** Total spans persisted in the segmented store, read from the per-segment index files —
+ *  a path independent of the server (VERIFY must not trust the process it just started). */
+function storeSpanCount(dataDir: string): number {
+  const spansDir = path.join(dataDir, 'spans')
+  let total = 0
+  try {
+    for (const f of fs.readdirSync(spansDir)) {
+      if (!f.endsWith('.ndjson')) continue
+      const content = fs.readFileSync(path.join(spansDir, f), 'utf8')
+      total += content.split('\n').filter(Boolean).length
+    }
+  } catch { /* no store yet — 0 */ }
+  return total
+}
+
+const stepData: StepDef = {
+  name: 'data-store',
+  async run(ctx) {
+    const dbPath = path.join(ctx.dataDir, 'forensics.db')
+    const legacySpans = fs.existsSync(path.join(ctx.dataDir, 'spans.json'))
+    const preSpans = storeSpanCount(ctx.dataDir)
+    const bits: string[] = []
+    if (!fs.existsSync(ctx.dataDir)) bits.push('no data dir (fresh install)')
+    else bits.push(`${preSpans} stored span(s)${legacySpans ? ', legacy spans.json (server migrates at boot)' : ''}`)
+    const hasDb = fs.existsSync(dbPath)
+    bits.push(hasDb ? `forensics.db ${fs.statSync(dbPath).size}B` : 'no forensics.db')
+    const found = bits.join('; ')
+
+    if (!hasDb) {
+      return { result: { step: this.name, found, action: 'none', verify: 'PASS', detail: 'nothing to probe' }, acted: false }
+    }
+    if (ctx.dryRun) {
+      return { result: { step: this.name, found, action: 'would: sqlite quick_check forensics.db', verify: 'SKIP', detail: 'dry-run' }, acted: false }
+    }
+    const SQL = await loadSqlJs()
+    if (!SQL) {
+      return { result: { step: this.name, found, action: 'none', verify: 'SKIP', detail: 'sql.js unavailable — integrity probe skipped' }, acted: false }
+    }
+    const size = fs.statSync(dbPath).size
+    let healthy = false
+    try {
+      const db = new SQL.Database(fs.readFileSync(dbPath))
+      const res = db.exec('PRAGMA quick_check')
+      healthy = String(res[0]?.values?.[0]?.[0]) === 'ok'
+      db.close()
+    } catch { healthy = false }
+    if (healthy) {
+      return { result: { step: this.name, found, action: 'none', verify: 'PASS', detail: 'quick_check ok' }, acted: false }
+    }
+    // Corrupt: back the bytes ASIDE (never wipe). forensics.db is a DERIVED store (rebuilt
+    // incrementally from otel-bodies), so removing the active file only costs a rescan —
+    // but the corrupt bytes stay recoverable in the .corrupt-<ts> sibling regardless.
+    const ts = new Date().toISOString().replace(/[:.]/g, '-')
+    const backup = `${dbPath}.corrupt-${ts}`
+    fs.renameSync(dbPath, backup)
+    // VERIFY through the filesystem, not the rename's lack-of-throw: bytes preserved, active gone.
+    const ok = fs.existsSync(backup) && fs.statSync(backup).size === size && !fs.existsSync(dbPath)
+    return {
+      result: {
+        step: this.name, found: `${found} (CORRUPT)`,
+        action: `backed up aside → ${path.basename(backup)}`,
+        verify: ok ? 'PASS' : 'FAIL',
+        detail: ok ? 'bytes preserved; server rebuilds the derived DB' : 'backup-aside verification failed',
+      },
+      acted: true,
+    }
+  },
+}
+
+const stepHooks: StepDef = {
+  name: 'hooks',
+  async run(ctx) {
+    const state = readSettingsFresh(ctx.settingsPath)
+    if (state === 'unparseable') {
+      // Refuse-unparseable (safeConfigEdit stance): never "repair" a config we cannot read.
+      return {
+        result: {
+          step: this.name, found: `${ctx.settingsPath} is not parseable JSON`,
+          action: 'refused', verify: 'FAIL',
+          detail: 'fix the file manually, then re-run setup — never start fresh over user config',
+        },
+        acted: false,
+      }
+    }
+    const settings = state === 'absent' ? {} : state
+    const converged = state !== 'absent' && hooksConverged(settings)
+    const staleCount = Object.values(settingsHooks(settings)).flat()
+      .flatMap(m => m.hooks ?? [])
+      .filter(h => isOurHookCommand(h.command) && h.command !== HOOK_CMD && h.command !== GATE_CMD).length
+    const found = state === 'absent'
+      ? 'no settings.json'
+      : converged ? 'registrations current' : `needs converge (${staleCount} stale/legacy entr${staleCount === 1 ? 'y' : 'ies'})`
+
+    if (ctx.dryRun) {
+      return {
+        result: {
+          step: this.name, found,
+          action: converged ? 'none' : `would: register '${HOOK_CMD}' + '${GATE_CMD}' via safeConfigEdit`,
+          verify: 'SKIP', detail: 'dry-run',
+        },
+        acted: false,
+      }
+    }
+
+    let acted = false
+    if (!converged) {
+      await installHooks(false, { settingsPath: ctx.settingsPath, pathEnv: ctx.pathEnv, log: ctx.log })
+      acted = true
+    }
+    // VERIFY 1 — independent re-parse (fresh fs read, our own JSON.parse; not the editor).
+    const after = readSettingsFresh(ctx.settingsPath)
+    if (after === 'absent' || after === 'unparseable') {
+      return { result: { step: this.name, found, action: acted ? 'installed' : 'none', verify: 'FAIL', detail: `post-state ${after}` }, acted }
+    }
+    const bad = verifyHooksState(after)
+    if (bad) {
+      return { result: { step: this.name, found, action: acted ? 'installed' : 'none', verify: 'FAIL', detail: bad }, acted }
+    }
+    // VERIFY 2 — execute the REGISTERED commands with synthetic payloads (contract: exit 0;
+    // the forwarder prints nothing; both fail-open even while the server is still down).
+    const hookErr = execRegisteredCommand(ctx, HOOK_CMD,
+      JSON.stringify({ hook_event_name: 'SessionStart', session_id: 'setup-verify' }), true)
+    if (hookErr) {
+      return { result: { step: this.name, found, action: acted ? 'installed' : 'none', verify: 'FAIL', detail: `'${HOOK_CMD}' ${hookErr}` }, acted }
+    }
+    const gateErr = execRegisteredCommand(ctx, GATE_CMD,
+      JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Task', tool_input: {} }), false)
+    if (gateErr) {
+      return { result: { step: this.name, found, action: acted ? 'installed' : 'none', verify: 'FAIL', detail: `'${GATE_CMD}' ${gateErr}` }, acted }
+    }
+    return {
+      result: {
+        step: this.name, found, action: acted ? 'installed/migrated' : 'none', verify: 'PASS',
+        detail: 'entries exact-once; registered commands executed clean',
+      },
+      acted,
+    }
+  },
+}
+
+const stepSkill: StepDef = {
+  name: 'skill',
+  async run(ctx) {
+    const src = path.join(ctx.repoRoot, 'skills', SKILL_NAME, 'SKILL.md')
+    const dst = path.join(ctx.skillsDir, SKILL_NAME, 'SKILL.md')
+    if (!fs.existsSync(src)) {
+      return { result: { step: this.name, found: `shipped skill missing at ${src}`, action: 'refused', verify: 'FAIL', detail: 'package is incomplete' }, acted: false }
+    }
+    const srcHash = sha256File(src)
+    const dstExists = fs.existsSync(dst)
+    const dstHash = dstExists ? sha256File(dst) : null
+    const supersededDir = path.join(ctx.skillsDir, 'agentlens-diagnostics')
+    const hasSuperseded = fs.existsSync(supersededDir)
+    const found = `${dstExists ? (dstHash === srcHash ? 'current' : 'content drift') : 'not installed'}${hasSuperseded ? ' + superseded agentlens-diagnostics present' : ''}`
+
+    if (ctx.dryRun) {
+      const plan: string[] = []
+      if (dstHash !== srcHash) plan.push('install/refresh SKILL.md')
+      if (hasSuperseded) plan.push('move old agentlens-diagnostics aside')
+      return { result: { step: this.name, found, action: plan.length ? `would: ${plan.join('; ')}` : 'none', verify: 'SKIP', detail: 'dry-run' }, acted: false }
+    }
+
+    let acted = false
+    if (dstHash !== srcHash) {
+      installSkill({ repoRoot: ctx.repoRoot, skillsDir: ctx.skillsDir, log: ctx.log })
+      acted = true
+    }
+    let supersededNote = ''
+    if (hasSuperseded) {
+      // Only claim it when the content identifies as the OLD generation (it talks about the
+      // retired agentlens-cli binary). MOVE aside instead of deleting — never destroy what
+      // we cannot prove is ours.
+      const oldSkillMd = path.join(supersededDir, 'SKILL.md')
+      const looksOurs = fs.existsSync(oldSkillMd) && fs.readFileSync(oldSkillMd, 'utf8').includes('agentlens-cli')
+      if (looksOurs) {
+        const ts = new Date().toISOString().replace(/[:.]/g, '-')
+        fs.renameSync(supersededDir, `${supersededDir}.superseded-${ts}`)
+        supersededNote = '; old skill moved aside'
+        acted = true
+      } else {
+        supersededNote = '; agentlens-diagnostics left untouched (content not recognisably ours)'
+      }
+    }
+    // VERIFY — hash compare on a FRESH read of both files (not the writer's buffer).
+    const ok = fs.existsSync(dst) && sha256File(dst) === sha256File(src)
+    return {
+      result: {
+        step: this.name, found, action: acted ? 'installed/refreshed' : 'none',
+        verify: ok ? 'PASS' : 'FAIL',
+        detail: (ok ? `sha256 match${supersededNote}` : 'installed hash differs from shipped hash'),
+      },
+      acted,
+    }
+  },
+}
+
+const stepOtel: StepDef = {
+  name: 'otel-env',
+  async run(ctx) {
+    const bodiesDir = path.join(ctx.dataDir, 'otel-bodies')
+    const markerPath = path.join(ctx.dataDir, 'telemetry-managed.json')
+    const expected = ownedTelemetryKeys(bodiesDir, ctx.otlpPort)
+    const state = readSettingsFresh(ctx.settingsPath)
+    if (state === 'unparseable') {
+      return { result: { step: this.name, found: 'settings.json unparseable', action: 'refused', verify: 'FAIL', detail: 'fix the file manually, then re-run setup' }, acted: false }
+    }
+    const env = (state !== 'absent' && state.env && typeof state.env === 'object' ? state.env : {}) as Record<string, unknown>
+    const missing = Object.keys(expected).filter(k => env[k] === undefined)
+    const wrong = Object.keys(expected).filter(k => env[k] !== undefined && env[k] !== expected[k])
+    const converged = missing.length === 0 && wrong.length === 0
+    const found = converged ? 'telemetry env current' : `${missing.length} missing, ${wrong.length} wrong key(s)`
+
+    if (ctx.dryRun) {
+      return { result: { step: this.name, found, action: converged ? 'none' : 'would: wire telemetry env (verified transaction)', verify: 'SKIP', detail: 'dry-run' }, acted: false }
+    }
+    let acted = false
+    if (!converged) {
+      await ensureTelemetryConfig({ settingsPath: ctx.settingsPath, markerPath, bodiesDir, otlpPort: ctx.otlpPort })
+      acted = true
+    }
+    // VERIFY — independent re-parse; every owned key must hold exactly the expected value.
+    const after = readSettingsFresh(ctx.settingsPath)
+    if (after === 'absent' || after === 'unparseable') {
+      return { result: { step: this.name, found, action: acted ? 'wired' : 'none', verify: 'FAIL', detail: `post-state ${after}` }, acted }
+    }
+    const envAfter = (after.env && typeof after.env === 'object' ? after.env : {}) as Record<string, unknown>
+    const bad = Object.keys(expected).find(k => envAfter[k] !== expected[k])
+    return {
+      result: {
+        step: this.name, found, action: acted ? 'wired' : 'none',
+        verify: bad ? 'FAIL' : 'PASS',
+        detail: bad ? `${bad} = ${JSON.stringify(envAfter[bad])} (expected ${JSON.stringify(expected[bad])})` : `${Object.keys(expected).length} key(s) exact`,
+      },
+      acted,
+    }
+  },
+}
+
+const stepOldPackage: StepDef = {
+  name: 'old-package',
+  async run(ctx) {
+    // agentlens-dashboard is the pre-fork generation; its resident server would fight this
+    // one for the canonical ports. The retired sibling bins of THIS package (agentlenspro-cli
+    // etc.) disappear on the npm upgrade itself, so only report them.
+    const oldBin = resolveOnPath('agentlens-dashboard', ctx.pathEnv)
+    const staleSiblings = ['agentlens', 'agentlens-cli', 'agentlenspro-cli', 'agentlenspro-hook', 'agentlenspro-gate', 'agentlenspro-heartbeat-cost']
+      .filter(b => resolveOnPath(b, ctx.pathEnv) !== null)
+    const found = `${oldBin ? `agentlens-dashboard at ${oldBin}` : 'no old-generation install'}${staleSiblings.length ? `; stale bins on PATH: ${staleSiblings.join(', ')}` : ''}`
+    if (!oldBin) {
+      return { result: { step: this.name, found, action: 'none', verify: 'PASS', detail: staleSiblings.length ? 'reinstall/upgrade removes stale sibling bins' : undefined }, acted: false }
+    }
+    if (ctx.dryRun) {
+      return { result: { step: this.name, found, action: 'would: npm rm -g agentlens-dashboard', verify: 'SKIP', detail: 'dry-run' }, acted: false }
+    }
+    if (!ctx.yes) {
+      // Mutating the GLOBAL npm tree without explicit consent is out of bounds — report and
+      // let the user opt in with --yes (non-interactive contract).
+      return { result: { step: this.name, found, action: 'skipped (needs --yes)', verify: 'SKIP', detail: 'run `agentlenspro setup --yes` or `npm rm -g agentlens-dashboard`' }, acted: false }
+    }
+    try {
+      execFileSync('npm', ['rm', '-g', 'agentlens-dashboard'], { stdio: 'pipe', timeout: 120_000, env: { ...process.env, PATH: ctx.pathEnv } })
+    } catch (e) {
+      return { result: { step: this.name, found, action: 'npm rm -g agentlens-dashboard', verify: 'FAIL', detail: (e as Error).message.slice(0, 120) }, acted: true }
+    }
+    // VERIFY — the bin must be gone from PATH (fresh probe, not npm's exit code).
+    const still = resolveOnPath('agentlens-dashboard', ctx.pathEnv)
+    return {
+      result: { step: this.name, found, action: 'npm rm -g agentlens-dashboard', verify: still ? 'FAIL' : 'PASS', detail: still ? `still resolves at ${still}` : 'bin gone from PATH' },
+      acted: true,
+    }
+  },
+}
+
+const stepServer: StepDef = {
+  name: 'server',
+  async run(ctx) {
+    const pre = await serverStats(ctx)
+    const preSpanCount = pre?.spans?.store?.totalSpans ?? storeSpanCount(ctx.dataDir)
+    const healthy = pre !== null
+      && path.resolve(pre.dataDir) === path.resolve(ctx.dataDir)
+      && pre.ports.ui === ctx.uiPort && pre.ports.mcp === ctx.mcpPort && pre.ports.otlp === ctx.otlpPort
+    const found = pre
+      ? `running pid=${pre.pid} (dataDir ${pre.dataDir === ctx.dataDir ? 'matches' : 'MISMATCH'})`
+      : 'not running'
+
+    if (ctx.dryRun) {
+      return { result: { step: this.name, found, action: healthy ? 'none' : (pre ? 'would: graceful restart from this install' : 'would: start server'), verify: 'SKIP', detail: 'dry-run' }, acted: false }
+    }
+    if (healthy) {
+      ctx.serverPid = pre.pid
+      return { result: { step: this.name, found, action: 'none', verify: 'PASS', detail: `dashboard+MCP+OTLP already serving ${preSpanCount} span(s)` }, acted: false }
+    }
+
+    // ACT — graceful stop of a mismatched/old server (SIGTERM = span-flush), then start
+    // from THIS install's bundle.
+    if (pre) {
+      try { process.kill(pre.pid, 'SIGTERM') } catch { /* already gone */ }
+      for (let i = 0; i < 40 && (await serverStats(ctx)) !== null; i++) await sleep(250)
+      if ((await serverStats(ctx)) !== null) {
+        return { result: { step: this.name, found, action: 'stop old server', verify: 'FAIL', detail: `pid ${pre.pid} did not stop within 10s` }, acted: true }
+      }
+    }
+    const serverJs = findServerJs()
+    fs.mkdirSync(ctx.dataDir, { recursive: true })
+    const logFile = path.join(ctx.dataDir, 'server.log')
+    let outFd: number | 'ignore'
+    try { outFd = fs.openSync(logFile, 'a') } catch { outFd = 'ignore' }
+    const child = spawn(process.execPath, ['--max-old-space-size=6144', serverJs], {
+      cwd: path.dirname(path.dirname(serverJs)),
+      detached: true,
+      stdio: ['ignore', outFd, outFd],
+      env: {
+        ...process.env,
+        HOME: ctx.home,
+        DATA_DIR: ctx.dataDir,
+        UI_PORT: String(ctx.uiPort),
+        MCP_PORT: String(ctx.mcpPort),
+        OTLP_PORT: String(ctx.otlpPort),
+        AGENTLENS_OPEN_BROWSER: '0', // setup verifies with HTTP probes; a browser popup is noise
+      },
+    })
+    child.unref()
+    if (typeof outFd === 'number') fs.closeSync(outFd)
+
+    // VERIFY — through the network, never the child handle: dashboard 200, OTLP accepts,
+    // pid is NEW, and the loaded span count did not shrink (data preservation assertion).
+    let post: StatsShape | null = null
+    for (let i = 0; i < 120; i++) { // up to 30s — DB open + first log scan can be slow
+      await sleep(250)
+      post = await serverStats(ctx)
+      if (post) break
+    }
+    if (!post) {
+      return { result: { step: this.name, found, action: 'start server', verify: 'FAIL', detail: `not ready within 30s — check ${logFile}` }, acted: true }
+    }
+    ctx.serverPid = post.pid
+    const dash = await httpJson(ctx.uiPort, 'GET', '/').catch(() => ({ status: 0, json: null }))
+    const otlp = await httpJson(ctx.otlpPort, 'POST', '/v1/traces', { resourceSpans: [] }).catch(() => ({ status: 0, json: null }))
+    const postSpanCount = post.spans?.store?.totalSpans ?? 0
+    const problems: string[] = []
+    if (dash.status !== 200) problems.push(`dashboard HTTP ${dash.status}`)
+    if (otlp.status !== 200) problems.push(`OTLP HTTP ${otlp.status}`)
+    if (pre && post.pid === pre.pid) problems.push('pid unchanged — old process survived')
+    if (postSpanCount < preSpanCount) problems.push(`span count shrank ${preSpanCount}→${postSpanCount}`)
+    return {
+      result: {
+        step: this.name, found, action: pre ? 'restarted from this install' : 'started',
+        verify: problems.length ? 'FAIL' : 'PASS',
+        detail: problems.length ? problems.join('; ') : `pid=${post.pid}; dashboard 200; OTLP 200; spans ${postSpanCount} ≥ ${preSpanCount}`,
+      },
+      acted: true,
+    }
+  },
+}
+
+const stepSelfTest: StepDef = {
+  name: 'final-test',
+  async run(ctx) {
+    if (ctx.dryRun) {
+      return { result: { step: this.name, found: 'end-to-end self-test', action: 'would: OTLP span → get_recent_sessions round-trip; hook+gate exec', verify: 'SKIP', detail: 'dry-run' }, acted: false }
+    }
+    // 1. Synthetic OTLP span in one door…
+    const marker = `setup-selftest-${crypto.randomBytes(6).toString('hex')}`
+    const nowNs = `${Date.now()}000000`
+    const post = await httpJson(ctx.otlpPort, 'POST', '/v1/traces', {
+      resourceSpans: [{
+        scopeSpans: [{
+          spans: [{
+            traceId: `${marker}-trace`,
+            spanId: marker, // the Copilot builder keys the session card on the root span id
+            name: 'invoke_agent setup-selftest',
+            startTimeUnixNano: nowNs,
+            endTimeUnixNano: nowNs,
+            attributes: [],
+            status: { code: 0 },
+          }],
+        }],
+      }],
+    }).catch(() => ({ status: 0, json: null }))
+    if (post.status !== 200) {
+      return { result: { step: this.name, found: 'server up', action: 'OTLP POST', verify: 'FAIL', detail: `OTLP ingest HTTP ${post.status}` }, acted: false }
+    }
+    // …2. and back out through the DIAGNOSTICS door (the get_recent_sessions MCP tool):
+    // the round-trip proves collector → span store → summarizer → repository → MCP in one go.
+    let seen = false
+    for (let i = 0; i < 40 && !seen; i++) {
+      try {
+        // The stateless Streamable-HTTP endpoint still wants the MCP handshake once per
+        // client; it is cheap, so re-issue it per attempt rather than track session state.
+        await mcpCall(ctx.mcpPort, 'initialize', {
+          protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'agentlenspro-setup', version: '2.0.0' },
+        })
+        const r = await mcpCall(ctx.mcpPort, 'tools/call', {
+          name: 'get_recent_sessions',
+          arguments: { limit: 50, verbosity: 'full' },
+        })
+        seen = JSON.stringify(r).includes(marker)
+      } catch { /* MCP may need a beat after boot */ }
+      if (!seen) await sleep(250)
+    }
+    if (!seen) {
+      return { result: { step: this.name, found: 'server up', action: 'OTLP→MCP round-trip', verify: 'FAIL', detail: `synthetic span ${marker} not visible via get_recent_sessions within 10s` }, acted: false }
+    }
+    // 3. Hook + gate handlers against synthetic stdin payloads, via the REGISTERED strings.
+    const preStats = await serverStats(ctx)
+    const preHookCount = preStats?.hookEvents?.receivedSinceBoot ?? 0
+    const hookErr = execRegisteredCommand(ctx, HOOK_CMD,
+      JSON.stringify({ hook_event_name: 'SessionStart', session_id: marker }), true)
+    if (hookErr) {
+      return { result: { step: this.name, found: 'round-trip ok', action: 'hook exec', verify: 'FAIL', detail: `'${HOOK_CMD}' ${hookErr}` }, acted: false }
+    }
+    // Verified through a DIFFERENT path: the server's received-events counter must move.
+    let counted = false
+    for (let i = 0; i < 20 && !counted; i++) {
+      const s = await serverStats(ctx)
+      counted = (s?.hookEvents?.receivedSinceBoot ?? 0) > preHookCount
+      if (!counted) await sleep(250)
+    }
+    if (!counted) {
+      return { result: { step: this.name, found: 'round-trip ok', action: 'hook exec', verify: 'FAIL', detail: 'hook ran but the server never counted the event' }, acted: false }
+    }
+    const gateErr = execRegisteredCommand(ctx, GATE_CMD,
+      JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Task', tool_input: { subagent_type: 'general-purpose' } }), false)
+    if (gateErr) {
+      return { result: { step: this.name, found: 'round-trip ok', action: 'gate exec', verify: 'FAIL', detail: `'${GATE_CMD}' ${gateErr}` }, acted: false }
+    }
+    return {
+      result: {
+        step: this.name, found: 'server up', action: 'span round-trip + hook/gate exec',
+        verify: 'PASS', detail: `span ${marker} visible via get_recent_sessions; hook event counted`,
+      },
+      acted: false,
+    }
+  },
+}
+
+// ── Detection banner (read-only first pass) ─────────────────────────────────────────────────
+
+function printDetection(ctx: Ctx): void {
+  const lines: string[] = ['agentlenspro setup — detection (read-only)']
+  const binPath = resolveOnPath(CLI_BIN, ctx.pathEnv)
+  let binDesc = 'NOT on PATH'
+  if (binPath) {
+    let real = binPath
+    try { real = fs.realpathSync(binPath) } catch { /* dangling symlink — report the link */ }
+    const kind = real.includes('node_modules') ? (real === binPath ? 'npm -g' : 'npm link/global') : 'other'
+    binDesc = `${binPath} → ${real} (${kind})`
+  }
+  lines.push(`  bin:      ${binDesc}`)
+  const state = readSettingsFresh(ctx.settingsPath)
+  if (state === 'unparseable') lines.push(`  settings: ${ctx.settingsPath} — NOT PARSEABLE (setup will refuse to write)`)
+  else if (state === 'absent') lines.push(`  settings: ${ctx.settingsPath} — absent (will be created)`)
+  else {
+    const allHooks = Object.values(settingsHooks(state)).flat().flatMap(m => m.hooks ?? [])
+    const ours = allHooks.filter(h => isOurHookCommand(h.command)).length
+    const stale = allHooks.filter(h => isOurHookCommand(h.command) && h.command !== HOOK_CMD && h.command !== GATE_CMD).length
+    lines.push(`  settings: ${ours} agentlens hook entr${ours === 1 ? 'y' : 'ies'} (${stale} stale generation(s))`)
+  }
+  lines.push(`  data:     ${ctx.dataDir} — ${fs.existsSync(ctx.dataDir) ? `${storeSpanCount(ctx.dataDir)} stored span(s)` : 'absent'}`)
+  lines.push(`  ports:    ui:${ctx.uiPort} mcp:${ctx.mcpPort} otlp:${ctx.otlpPort}`)
+  for (const l of lines) ctx.log(l)
+}
+
+// ── Runner ──────────────────────────────────────────────────────────────────────────────────
+
+const STEPS: StepDef[] = [stepData, stepHooks, stepSkill, stepOtel, stepOldPackage, stepServer, stepSelfTest]
+
+export async function runSetup(opts: SetupOptions = {}): Promise<SetupOutcome> {
+  const ctx = resolveCtx(opts)
+  printDetection(ctx)
+
+  const rows: StepResult[] = []
+  let actions = 0
+  let failed = false
+  for (const step of STEPS) {
+    if (failed) {
+      rows.push({ step: step.name, found: '—', action: 'not run', verify: 'SKIP', detail: 'earlier step failed (fail-fast)' })
+      continue
+    }
+    let r: { result: StepResult; acted: boolean }
+    try {
+      r = await step.run(ctx)
+    } catch (e) {
+      // An ACT/VERIFY exception is a step failure, never a silent continue.
+      r = { result: { step: step.name, found: 'error', action: 'aborted', verify: 'FAIL', detail: (e as Error).message.slice(0, 160) }, acted: true }
+    }
+    rows.push(r.result)
+    if (r.acted) actions++
+    if (r.result.verify === 'FAIL') failed = true
+  }
+
+  ctx.log('')
+  ctx.log(renderTable(rows))
+  ctx.log(ctx.dryRun
+    ? `dry-run: ${rows.filter(r => r.action.startsWith('would:')).length} step(s) would act — nothing was changed`
+    : `${actions} step(s) acted, ${rows.filter(r => r.verify === 'PASS').length} verified PASS${failed ? ' — SETUP FAILED' : ''}`)
+  return { exitCode: failed ? 1 : 0, steps: rows, actions, serverPid: ctx.serverPid }
+}
+
+/** argv entry for `agentlenspro setup [--dry-run] [--yes]`. */
+export async function runSetupCli(argv: string[]): Promise<number> {
+  const known = new Set(['--dry-run', '--yes'])
+  const unknown = argv.filter(a => !known.has(a))
+  if (unknown.length) throw new Error(`setup does not understand: ${unknown.join(' ')} (flags: --dry-run --yes)`)
+  const outcome = await runSetup({ dryRun: argv.includes('--dry-run'), yes: argv.includes('--yes') })
+  return outcome.exitCode
+}

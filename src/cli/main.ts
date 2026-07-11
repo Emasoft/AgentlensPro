@@ -21,6 +21,7 @@ import { runDiagnosticsCli, USAGE } from './diagnosticsCli'
 import { runHookCommand } from './hookHandlers'
 import { runHeartbeatCost } from './heartbeatCostCli'
 import { ensureServer, openDashboard, serverCommand } from './serverControl'
+import { runSetupCli } from './setup'
 
 /** The package version, read from the package.json that ships next to the bundle. Walks up
  *  from __dirname because the bundle lives at <pkg>/standalone/cli.js while the test build
@@ -62,6 +63,8 @@ export async function cliMain(argv: string[], startServer: () => Promise<unknown
       return runHookCommand('gate')
     case 'telemetry':
       return runTelemetryCli(argv.slice(1))
+    case 'setup':
+      return runSetupCli(argv.slice(1))
     case 'server':
       await serverCommand(argv.slice(1))
       return 0

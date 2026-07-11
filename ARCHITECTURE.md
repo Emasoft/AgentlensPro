@@ -1070,6 +1070,7 @@ agentlenspro/
 │   ├── hookHandlers.ts           # `agentlenspro hook` / `agentlenspro gate` stdin handlers
 │   ├── hookInstall.ts            # hook/OTEL/skill (un)installers + registration migration
 │   ├── heartbeatCostCli.ts       # `agentlenspro heartbeat-cost`
+│   ├── setup.ts                  # `agentlenspro setup` — detect → converge → verify-per-step → self-test
 │   └── cliCore.ts                # shared JSON-RPC/REST transport + endpoint/env resolution
 ├── scripts/
 │   └── safe_config_edit.py       # Verified-transaction config editor (backup, verify-diff, lock)

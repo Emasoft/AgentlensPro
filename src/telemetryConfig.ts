@@ -122,6 +122,14 @@ function ownedKeys(bodiesDir: string, otlpPort: number): Record<string, string> 
   }
 }
 
+/** The expected key→value telemetry env table for a given bodies dir / OTLP port. Exported
+ *  for `agentlenspro setup`, whose VERIFY step must compare the settings file against the
+ *  expected values through a path independent of the writer (falsify-the-layer discipline) —
+ *  re-exporting the ONE table keeps setup from growing a drift-prone copy. */
+export function ownedTelemetryKeys(bodiesDir: string, otlpPort: number): Record<string, string> {
+  return ownedKeys(bodiesDir, otlpPort)
+}
+
 /**
  * Atomic JSON write: write a temp sibling then rename over the target. rename(2) is atomic on
  * the same filesystem, so a crash mid-write can never leave a half-written file.
