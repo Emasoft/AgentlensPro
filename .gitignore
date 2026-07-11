@@ -32,3 +32,10 @@ agent-lens-export-*.json
 /reports_dev/
 # Dev-only scratch (measurement harnesses, e2e runners) — never published
 /scripts_dev/
+/docs_dev/
+/samples_dev/
+/examples_dev/
+/tests_dev/
+/downloads_dev/
+/libs_dev/
+/builds_dev/
