@@ -2,7 +2,7 @@
 name: agentlenspro-identity
 description: "what is this repo / where did it come from / is this the fork or the original agentlens / where is the old tree / what shipped in v1.0.0 / no-squash merge policy"
 ocd: 2026-07-10
-lmd: 2026-07-10
+lmd: 2026-07-11
 metadata:
   node_type: memory
   type: project
@@ -32,12 +32,25 @@ never squash**.
 - P10 PATH-bin hooks (`agentlenspro-hook`/`agentlenspro-gate` — Homebrew-safe registrations),
   SLSA provenance on release workflows, docs truth-pass
 
-**Deployment contract**: everything user-facing goes through PATH bins (`agentlenspro`,
-`agentlenspro-cli`, `agentlenspro-heartbeat-cost`, `agentlenspro-hook`, `agentlenspro-gate`) —
-the installed skill and any plugin must never reference package-internal or repo paths.
-Compat surfaces KEPT on purpose: `~/.agentlens` data dir, `AGENTLENS_*` env vars.
+**Deployment contract (v2.0.0 superseded the five-bin form[^1])**: exactly ONE user-facing
+executable, `agentlenspro` — subcommands `setup` / `server …` / `hook` / `gate` /
+`heartbeat-cost` / `dashboard` / the full diagnostics surface. The installed skill and any
+plugin must never reference package-internal or repo paths. Compat surfaces KEPT on
+purpose: `~/.agentlens` data dir, `AGENTLENS_*` env vars.
 
-Known follow-ups: npm publish needs the first-time `agentlenspro` package registration on
-npmjs (owner action); native-Windows installer support remains future work.
+**State as of 2026-07-11 (v2.1.0 live)**: published on npm as `agentlenspro` under OIDC
+trusted publishing — 1.0.0 (local bootstrap), 1.0.1 (gate/diagnostics field fixes; first
+CI/OIDC publish), 2.0.0 (single executable + the idempotent `setup` install/repair verb),
+2.1.0 (`get_agent_tokens` per-agent exact query, CC-footer reconcilable). Release = push a
+tag; see [[agentlenspro-publish-pipeline]]. Operations doctrine: [[agentlenspro-ops-lessons]].
+Cache accounting truths: [[cache-ttl-model]] + [[agentlens-burn-token-model]]. In flight:
+TRDD-VY1IUVUM (TTL-regime-aware diagnostics, v2.2.0). Native-Windows installer support
+remains future work.
 
 ## Notes and lessons learned
+
+[^1]: [ocd:2026-07-11 lmd:2026-07-11] v1.x shipped five PATH bins
+  (`agentlenspro-cli/-hook/-gate/-heartbeat-cost` + `agentlenspro`); the USER ordered ONE
+  executable and v2.0.0 removed the other four (hook registrations became the command
+  strings `agentlenspro hook`/`agentlenspro gate`, auto-migrated by `setup`). Any doc or
+  config still naming a five-bin form is stale.
