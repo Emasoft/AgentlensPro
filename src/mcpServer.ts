@@ -40,6 +40,10 @@ import type { BurnStatus, SessionStatus, AccountWindowBudget } from './burnMonit
 import { type AccountInfo, accountLabelFor } from './accountInfo'
 import { classifyTtlRegime, type TtlContext } from './shared/cacheTtl'
 import type { RateLimitsSnapshot } from './statuslineUsage'
+// TRDD-YQZ9P8IL — plan/mode formatting + the auth-regime resolver live in accountStateTimeline (ONE
+// source of truth shared by get_account_status and the account-state timeline sampler); resolveStateAt
+// powers the get_account_state_at tool (reads the ndjson off disk directly, like the forensic tools).
+import { describePlan, describeAccountMode, resolveAuthRegimeLabel, resolveStateAt } from './accountStateTimeline'
 import { listSessionFileIds } from './contextComposition'
 import { generateSuggestions } from './instructionAdvisor'
 import { readAllInstructionContent } from './instructionFiles'
@@ -713,6 +717,24 @@ const TOOLS = [
       '("none") — a null is NEVER presented as 0. The OAuth token is NEVER read or returned. Use this ' +
       'after a rotation, or before a long run, to know the ACCOUNT you will actually burn.',
     inputSchema: { type: 'object' as const, properties: {} },
+  },
+  {
+    name: 'get_account_state_at',
+    description:
+      'The subscription STATE that was active at a PAST instant — which account, billing mode, plan, ' +
+      'and cache-TTL regime you were on when a given request/span happened. Resolved by binary-searching ' +
+      'the change-detected account-state timeline (written only when the discrete state changes, so it ' +
+      'costs a few disk writes/hour, never per-request). Pass `ts` (ms epoch) OR `iso` (ISO-8601). Use it ' +
+      'to attribute a past burn/request to the mode+plan+TTL in force at that time (e.g. "was I on Max 5x ' +
+      'or drawing usage credits when THIS span ran?"). Returns the matching state record + its start ' +
+      'timestamp, or null when the timeline does not reach that far back (never a fabricated state).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        ts: { type: 'number', description: 'Instant to resolve, milliseconds since the Unix epoch' },
+        iso: { type: 'string', description: 'Instant to resolve as an ISO-8601 timestamp (alternative to ts)' },
+      },
+    },
   },
   {
     name: 'get_window_budget',
@@ -2277,36 +2299,6 @@ export function labelBurnStatusAccounts(status: BurnStatus, account: AccountInfo
   return { ...status, accountWindows: status.accountWindows.map(w => labelAccountWindow(w, account)) }
 }
 
-// TRDD-VY1IUVUM Part-5 — the human plan name from the keychain planType + the rate-limit tier. The
-// tier string carries the multiplier Anthropic actually enforces (observed: "default_claude_max_5x" →
-// Max 5x, "..._20x" → Max 20x); planType alone ("max") loses it. Falls back to a capitalized planType
-// when no multiplier is present, and to the raw tier when planType is unknown — never a silent 'max'.
-function describePlan(planType: string | null | undefined, rateLimitTier: string | null | undefined): string {
-  const mult = (rateLimitTier ?? '').toLowerCase().match(/(\d+)x\b/)  // default_claude_max_5x → "5"
-  const suffix = mult ? ` ${mult[1]}x` : ''
-  switch ((planType ?? '').toLowerCase()) {
-    case 'max': return `Max${suffix}`
-    case 'pro': return 'Pro'
-    case 'team': return 'Team'
-    case 'enterprise': return 'Enterprise'
-    case 'free': return 'Free'
-    default: return planType ? `${planType}${suffix}` : (mult ? `Max ${mult[1]}x` : 'unknown')
-  }
-}
-
-// TRDD-VY1IUVUM Part-5 — the account billing MODE in human words, resolved from the same auth regime
-// the cache-TTL classification uses (ttlCtx.auth). When no ttlCtx is supplied (unit callers), it
-// degrades to a coarse read of billingType — a substring match on 'subscription' so the
-// stripe_subscription value the account really carries is not mistaken for API-key billing.
-function describeAccountMode(authRegime: string | null): string {
-  switch (authRegime) {
-    case 'subscription': return 'subscription (within plan)'
-    case 'usage-credits': return 'subscription drawing usage credits (over plan limit)'
-    case 'api-key': return 'API key (pay-per-token)'
-    default: return 'unresolved'
-  }
-}
-
 // Exported for unit tests. get_account_status: the current account (identity + plan) + how much of ITS
 // rate-limit window is left + (TRDD-VY1IUVUM Part-5) its billing MODE, the machine's cache-TTL regime,
 // and the authoritative 5h/7d window fill. The OAuth token is never touched — only the plan string.
@@ -2322,11 +2314,8 @@ export function handleGetAccountStatus(
   const win = burn?.accountWindows.find(w => (w.accountUuid ?? null) === uuid) ?? null
 
   // Auth regime: from the resolved ttlCtx when present; else a coarse fallback off billingType (the
-  // substring match is the stripe_subscription fix — an exact 'subscription' compare would misread it).
-  const authRegime: string | null = ttlCtx?.auth
-    ?? (account?.billingType
-      ? (account.billingType.toLowerCase().includes('subscription') ? 'subscription' : 'api-key')
-      : null)
+  // substring match is the stripe_subscription fix). Shared with the account-state timeline sampler.
+  const authRegime: string | null = resolveAuthRegimeLabel(account, ttlCtx)
 
   // Cache-TTL regime for the current session (always 'main' here — get_account_status is a main-
   // conversation tool). classifyTtlRegime with a null ctx yields the honest 'assumed' 5-min floor.
@@ -2393,6 +2382,22 @@ export function handleGetAccountStatus(
         : (win.budget.capacityConfigured ? undefined
           : 'Window % is null until a capacity is configured (AGENTLENS_WINDOW_5H_TOKENS / _COST_USD or ~/.agentlens/burn-config.json) — or until AgentlensPro auto-calibrates one from the next rate-limit hit (P5).'),
   }
+}
+
+// Exported for unit tests. get_account_state_at (TRDD-YQZ9P8IL): the subscription state (account /
+// mode / plan / cache-TTL regime) that was active at an arbitrary past instant, resolved by binary-
+// searching the change-detected account-state timeline (~/.agentlens/account-state.ndjson). Accepts a
+// ms-epoch `ts` OR an ISO-8601 `iso`. Reads the ndjson off disk directly — no server state needed.
+export function handleGetAccountStateAt(args: { ts?: number; iso?: string }) {
+  const t = typeof args.ts === 'number' ? args.ts : (args.iso ? Date.parse(args.iso) : NaN)
+  if (!Number.isFinite(t)) {
+    return { error: 'Provide `ts` (ms epoch) or `iso` (ISO-8601) — could not resolve a timestamp.' }
+  }
+  const atIso = new Date(t).toISOString()
+  const state = resolveStateAt(t)
+  return state
+    ? { at: atIso, state }
+    : { at: atIso, state: null, note: 'No account-state record precedes this timestamp — the timeline may not extend that far back (it starts when the server first observed a state), or no state has been recorded yet.' }
 }
 
 // Exported for unit tests. get_window_budget(accountId?): per-account budgets (labeled) + the pooled total.
@@ -2569,6 +2574,9 @@ export function createMcpServer(opts: McpServerOptions): Server {
           getAccount?.() ?? null, getBurnStatus?.() ?? null,
           getTtlContext?.() ?? null, getRateLimits?.() ?? null,
         )
+        break
+      case 'get_account_state_at':
+        result = handleGetAccountStateAt(args as { ts?: number; iso?: string })
         break
       case 'get_window_budget':
         result = handleGetWindowBudget(getBurnStatus?.() ?? null, getAccount?.() ?? null, args as { accountId?: string })
