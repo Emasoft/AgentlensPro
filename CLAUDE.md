@@ -92,3 +92,46 @@ When both capture the same session: **for Claude sessions the log transcript win
 ## Contribution conventions
 
 Branch `feat/<slug>` or `fix/<slug>` off `main`; **Conventional Commits** (`type(scope): subject`); merges are **`--no-ff`, NEVER squash — history is the audit trail**. For user-facing changes, bump `version` in `package.json` and add a `CHANGELOG.md` entry **in the same PR**; tag `main` `vX.Y.Z` after merge.
+
+## Releases — OIDC trusted publishing, CI-only (bootstrap is DONE)
+
+Publishing is **tag-driven and tokenless**: push `vX.Y.Z` → `.github/workflows/publish.yml`
+publishes to npm via the registered trusted publisher (OIDC) with automatic SLSA provenance,
+then creates the GitHub Release. NEVER publish locally (the one sanctioned local publish was
+the 1.0.0 bootstrap, already done) and NEVER introduce a token/`registry-url:` into the
+workflow — a present auth token silently masks OIDC. Load-bearing facts:
+
+- **npm authorizes the workflow FILENAME** — the trusted-publisher entry says `publish.yml`;
+  renaming the workflow file (or re-registering under another name) breaks the token
+  exchange (`E404 Not Found - PUT`). Keep both sides in lockstep (commit 899292b).
+- Re-run a failed publish with `gh workflow run publish.yml` (no re-tag needed; the
+  GitHub-Release/attestation steps are tag-guarded).
+- Trusted-publisher admin has a CLI: `npm trust list|github|revoke` (npm ≥ 11.15; needs one
+  interactive 2FA tap by design — tokens cannot administer trust).
+- Post-release verification: registry `_npmUser` must contain `trustedPublisher` and
+  `dist.attestations` must exist; a human `_npmUser` with no attestations = token fallback,
+  investigate. Fresh 404s right after publish are CDN propagation, not failure.
+- The full procedures live in the user-scope skills `npm-oidc-publishing`,
+  `npm-pre-publish-checklist`, `npm-post-publish-checklist`.
+- Tarball law: `package.json` `files` is the ONE allowlist (never add a `.npmignore` — it
+  silently overrides `.gitignore` and once shipped private reports); build outputs must be
+  built before `npm pack` or they are silently skipped.
+
+## Operations — deploy, install, repair
+
+ONE executable (`agentlenspro`) manages everything. The idempotent installer/repairer is
+`agentlenspro setup [--dry-run] [--yes]`: detect → converge → verify-per-step → final
+self-test; it migrates hook registrations across generations, repairs broken/maimed
+installs, and NEVER wipes `~/.agentlens` data. Deploy on this machine = `node esbuild.js`
+(or `pnpm run package`) + `agentlenspro server restart` (graceful: flushes spans, verifies
+dashboard/OTLP). Hook registration changes need a Claude session restart to take effect.
+
+## Cache/TTL model (do not re-derive — doc-verified 2026-07-11)
+
+The prompt-cache TTL is NOT a universal 5 minutes: subscription MAIN conversations get 1h
+automatically (drops to 5m when drawing usage credits); subagents are ALWAYS 5m; forks read
+and renew the PARENT's entry; cron fires are main-conversation turns. Small per-turn
+`cache_creation` is normal suffix writing — only full-prefix-sized spikes are true cold
+rewrites (causes: model/effort/fast-mode switch, MCP connect/disconnect, bare-tool deny,
+compact, CC upgrade). The diagnostics encode this as the TTL-regime matrix (TRDD-VY1IUVUM);
+the full model with measured costs: `.claude/project/memory/cache-ttl-model.md`.
