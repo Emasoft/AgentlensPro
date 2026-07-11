@@ -1,9 +1,11 @@
 ---
 trdd-id: 1758VB34
 title: Docs/help/skill consistency audit — verify every doc claim against shipped code
-column: complete
+column: published
 created: 2026-07-11T10:01:47+0200
-updated: 2026-07-11T10:58:09+0200
+updated: 2026-07-11T11:00:00+0200
+published-version: 2.3.1
+published-at: 2026-07-11T10:59:30+0200
 current-owner: orchestrator-agentlenspro
 priority: 3
 severity: LOW
