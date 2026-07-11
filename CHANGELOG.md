@@ -4,6 +4,27 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.1.0] — 2026-07-11
+
+### Added
+
+- **`get_agent_tokens` diagnostic tool (TRDD-9YT1UR2F)** — exact tokens + cost for ONE agent:
+  `agentlenspro get_agent_tokens --agentId <id>` (also on the MCP surface; the CLI picks it up
+  from the live schema automatically). Accepts a bare agent id, its `agent-<id>` transcript
+  form, or a full sessionId — case-insensitive; optional `--parentSessionId` scopes the lookup;
+  an ambiguous id returns an error LISTING the candidates, never a silent guess. Returns the
+  four disjoint billing buckets + `totalTokens`/`cost_usd` under the exact same conventions as
+  `get_subagent_tree` children (cross-tool consistent by construction, asserted in tests),
+  spawn metadata (`spawnKind`/`warm`/`model`/`parentSessionId`/`spawnedByTurn`), P7
+  `tokensSource`/`coverageNote` provenance, and `ccDisplayEquivalent` — the reconciliation
+  block for Claude Code's per-agent ↓ footer, whose semantics were empirically decoded
+  (2026-07-11): **CC's ↓ ≈ `cumulativeInputSideTokens`** (cumulative
+  input+cacheRead+cacheCreation across ALL the agent's turns, launch turn included — a fork's
+  turn-1 inherited-prefix cache read dominates it; output excluded or below CC's 0.1k display
+  rounding). The ↓ figure is volume moved, not billing — `cost_usd` is the spend figure;
+  `lastTurnContextRead` is the live context-size proxy. Zero buckets on an async child with no
+  transcript stay flagged `asyncTokensUnknown` (unknown, never measured-free).
+
 ## [2.0.0] — 2026-07-11
 
 ONE executable + the `setup` verb (TRDD-7284WCW7).

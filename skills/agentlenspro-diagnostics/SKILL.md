@@ -9,8 +9,8 @@ description: >-
   stall, compaction rewrites, huge-request bursts, burn spikes, and CACHE_THRASH — the prefix
   being re-written every turn instead of read). PREVENT with the burn-gate hooks
   (--install-hooks): a PreToolUse gate on agent-launch tools DENIES the four measured disaster
-  launches with the reason fed back to the agent. Covers all 36 diagnostic
-  tools (burn status, session burn profile, interval cost rollups, rate-limit forensics,
+  launches with the reason fed back to the agent. Covers all 37 diagnostic
+  tools (burn status, session burn profile, per-agent exact tokens, interval cost rollups, rate-limit forensics,
   account/plan + window budget,
   cache-break causes/timeline, expensive writes, heartbeat cost, config comparison, SQL
   analytics). START with investigate_burn — the ONE-command investigation that names the
@@ -193,6 +193,7 @@ legitimate mass fan-out, `agentlenspro --hooks gate=warn` for that run and resto
 | What will this code review / workflow COST before I launch it? | `predict_session_cost --task "<describe it>"` (+ `--subagentType`, `--fileBytes`) — p25/p50/p75 over matched real precedents; p75 = budget-safe |
 | Which Claude Code instances are running and what memory does EACH one's whole tree use? | `get_runtime_inventory` — instances ranked by total tree RSS (subshells/agents/crons/servers included), project dir, CC version |
 | Why is THIS session expensive? | `get_session_burn_profile --sessionId <id>` |
+| Exactly what did agent X consume? (reconcile with CC's per-agent ↓ footer) | `get_agent_tokens --agentId <id>` (bare / `agent-<id>` / full sessionId, case-insensitive; `--parentSessionId` to disambiguate — ambiguity errors listing candidates, never guesses). Exact four buckets + cost_usd. **CC's ↓ display shows live context-read volume (cumulative input+cacheRead+cacheCreation, launch turn included), not billing — reconcile via `ccDisplayEquivalent`** |
 | What keeps breaking the cache, machine-wide? | `get_cache_break_causes` |
 | Per-turn break diagnosis of one session | `get_cache_break_timeline --sessionId <id>` |
 | TTL expiry vs real prefix change? | `get_cache_break_gap_report` |
