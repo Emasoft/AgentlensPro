@@ -51,6 +51,18 @@ suite('ttlContext — resolveAuthRegime (account signals → auth row)', () => {
     assert.strictEqual(resolveAuthRegime(account({ billingType: null }), null), 'unknown')
     assert.strictEqual(resolveAuthRegime(null, null), 'unknown')
   })
+
+  test('REGRESSION (stripe_subscription): the REAL ~/.claude.json value carries a processor prefix — still subscription, never api-key', () => {
+    // Before the TRDD-VY1IUVUM ADDENDUM fix, resolveAuthRegime compared `billing === 'subscription'`
+    // EXACTLY, so the live oauthAccount.billingType value "stripe_subscription" (Anthropic prefixes the
+    // billing shape with the payment processor) fell through to the api-key branch → the wrong 5-min TTL
+    // on an account that actually rides the 1-hour tier → false cold-rewrite warnings. The fix matches
+    // any billingType whose lowercased value CONTAINS 'subscription'. These cases FAIL on the old code.
+    assert.strictEqual(resolveAuthRegime(account({ billingType: 'stripe_subscription' }), null), 'subscription')
+    assert.strictEqual(resolveAuthRegime(account({ billingType: 'STRIPE_SUBSCRIPTION' }), 50), 'subscription', 'case-insensitive')
+    // The overflow row still fires for the prefixed value when opt-in + ≥100% fill are both present.
+    assert.strictEqual(resolveAuthRegime(account({ billingType: 'stripe_subscription', hasExtraUsageEnabled: true }), 100), 'usage-credits')
+  })
 })
 
 suite('ttlContext — getTtlContext (temp-home fs integration)', () => {
