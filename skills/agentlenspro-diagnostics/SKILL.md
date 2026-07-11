@@ -180,13 +180,53 @@ counts appear in `--status` and `/api/server-stats` under `gate`; every gate int
 also lands on the dashboard's notification panel (SSE alerts). If a deny is wrong for a
 legitimate mass fan-out, `agentlenspro --hooks gate=warn` for that run and restore after.
 
+## Cache TTL tracking — a warm gap is NOT a cold rewrite (TRDD-VY1IUVUM)
+
+The prompt-cache TTL is **not a universal 5 minutes** — a subscription MAIN session rides a **1-hour**
+tier, so a 20-min gap on it is still WARM. Hardcoding 5 min made the gate/keepWarm cry "cold rewrite"
+on sessions that never went cold. Every TTL number now carries a `ttlSource` so you can trust or
+question it. The doc-verified matrix (`src/shared/cacheTtl.ts` — the ONE place these numbers live):
+
+| Session kind | Auth | TTL |
+|---|---|---|
+| Main conversation | subscription (within plan) | **1 hour** (automatic) |
+| Main conversation | subscription drawing USAGE CREDITS (over plan) | **5 min** (auto-dropped) |
+| Main conversation | API key / Bedrock / GCP / Foundry | **5 min** (`ENABLE_PROMPT_CACHING_1H=1` → 1h) |
+| Subagent (named/general) | any | **5 min ALWAYS** (own conversation, own cache) |
+| Fork | inherits parent | reads the PARENT's entry; every hit RESETS its timer |
+
+`FORCE_PROMPT_CACHING_5M=1` forces 5 min regardless of auth. Every cache hit resets the timer; cron
+fires are main-conversation turns (they renew it).
+
+**Reading the TTL-aware output.** `get_account_status.cacheTtl` = `{minutes, regime, ttlSource, basis}`
+for your MAIN session; keepWarm/gap classifications carry `ttlAssumedMin` + `ttlSource`:
+- `doc-matrix` — a matrix row applied to positively-resolved signals (trust it).
+- `config` — an env override (`FORCE_PROMPT_CACHING_5M`/`ENABLE_PROMPT_CACHING_1H`) decided it.
+- `measured` — observed cache behaviour CONTRADICTED the assumption (a cache hit after the assumed
+  expiry) and the measured floor was preferred. keepWarm's falsifier flips the source to this.
+- `assumed` — a signal was absent, so the conservative 5-min floor was reported AS an assumption
+  (never a silent guess).
+
+**True cold rewrite vs normal suffix write.** A small per-turn `cache_creation` is NORMAL incremental
+suffix writing. Only a **full-prefix-sized** creation spike is a real cold rewrite. Invalidation causes
+≠ TTL expiry: model/effort/fast-mode switch, MCP connect/disconnect, bare-tool deny, compaction, CC
+upgrade. Use `get_cache_break_gap_report` to separate TTL-expiry from a real prefix change, and
+`trace_expensive_writes` for the biggest single writes + their contents.
+
+**One-liner recipes.**
+```bash
+agentlenspro get_account_status                      # your session's cacheTtl regime + windowSource
+agentlenspro get_cache_break_gap_report              # TTL-expiry vs real prefix change, per gap
+agentlenspro get_cache_break_causes                  # what breaks the cache machine-wide
+```
+
 ## High-value tools (cheat-sheet)
 
 | Question | Tool |
 |---|---|
 | **"My window drained — what burned it and WHO?"** | **`investigate_burn`** — START HERE. ONE command does the whole investigation: exact billed usage (by hour/model, est $), workspace attribution, and ranked cause findings with evidence (`FORK_STORM`, `SUBAGENT_BOOT_TAX`, `PREMIUM_MODEL_FANOUT`, `FAT_SESSION_REWRITES`, `IDLE_FLEET_KEEPWARM`, `IMAGE_BLOB_RESIDENT`, `RATE_LIMIT_COLD_RESUME`) + a plain verdict naming the culprits. Flags: `--windowHours 5` (default), `--untilIso <ISO>` for a past drain, `--maxFiles`. Drill deeper only if needed with the tools below |
 | Is something burning RIGHT NOW? | `get_burn_status` |
-| Which account am I on — email, plan (pro/max5x/max20x), billing (subscription vs API), extra-usage? | `get_account_status` |
+| Which account am I on — email, plan (Pro/Max 5x/Max 20x), billing MODE, cache-TTL regime, 5h/7d fill? | `get_account_status` — one-line `summary` + `plan`/`mode`/`cacheTtl {minutes,regime,ttlSource}`/`usageWindows {fiveHourPct,sevenDayPct,windowSource}` (windowSource `cc-rate-limits` when Claude Code's own rate_limits are ingested, else `calibrated`, else `none` — a null is never shown as 0) |
 | How much 5h/7d window is left, per account, and when does it run out? | `get_window_budget` (time-to-exhaustion needs `AGENTLENS_WINDOW_5H_TOKENS`/`_7D_TOKENS` capacity configured — calibrate from a premature window end) |
 | What did project X / ALL projects / my subagents cost in interval Y? (5-value breakdown + $/h) | `get_cost_rollup --groupBy project\|all\|subagent\|session\|model --windowHours N` (or `--sinceIso/--untilIso`); `--subagentsOnly --liveOnly` = the live-fleet view; `--sortBy` any bucket |
 | What rate limits did I hit, what EXACTLY filled the window, and why? | `get_rate_limit_report` — stall episodes (sessions/workspaces/errors) + the newest episode's 5h window attributed with exact billed usage, verdict, and top findings |

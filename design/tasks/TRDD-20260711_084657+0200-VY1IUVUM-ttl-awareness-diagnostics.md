@@ -1,9 +1,9 @@
 ---
 trdd-id: VY1IUVUM
 title: TTL-awareness — keepWarm and COLD_RESUME must not hardcode the 5-minute cache TTL
-column: dev
+column: complete
 created: 2026-07-11T08:46:57+0200
-updated: 2026-07-11T09:20:00+0200
+updated: 2026-07-11T10:32:04+0200
 current-owner: orchestrator-agentlenspro
 assignee: ttl-awareness-agent
 priority: 1
@@ -18,19 +18,27 @@ merge-strategy: merge
 must-pass-tests-before-merge: true
 test-requirements: [unit, lint, typecheck]
 external-refs: ["code.claude.com/docs/en/prompt-caching.md"]
-implementation-commits: []
+implementation-commits: [d51f1a0, de77d15, 11225fd, 0629859, 5b502da]
 ---
 
 # TTL-awareness in cache diagnostics (USER directive 2026-07-11, doc-verified)
 
-## ⏵ STATE — READ THIS FIRST ON RESUME — 2026-07-11
+## ⏵ STATE — READ THIS FIRST ON RESUME — 2026-07-11 (COMPLETE — awaiting tag → published)
 
-- **Current state**: spec expanded per USER directive (relayed via the retired keep-warm
-  fork, then INDEPENDENTLY VERIFIED against code.claude.com/docs/en/prompt-caching.md by
-  the orchestrator). Implementation agent launching on feat/ttl-awareness.
-- **NEXT ACTION**: agent delivers parts 1–3; orchestrator deploys + releases; the janitor
-  cadence proposal (part 4) is a GitHub issue on Emasoft/ai-maestro-janitor, filed by the
-  orchestrator, NOT this repo's work.
+- **Current state**: DONE. All 5 parts implemented on `feat/ttl-awareness`; completion commit
+  `5b502da`. main was merged INTO feat first (esbuild security bump, no conflicts). Gates all
+  green: tsc(root+media) 0, eslint 0, check-no-mirrors OK, esbuild OK, mocha **834/0/4** under
+  Node 20. **Live runtime-verified** on this machine (Max 5x / stripe_subscription):
+  get_account_status now returns `mode: subscription (within plan)`, `plan: Max 5x`,
+  `cacheTtl {minutes:60, ttlSource:doc-matrix}`, `usageWindows.windowSource: none` (no capacity
+  + no rate_limits in the statusline log → honest n/a, never 0). The stripe_subscription bug is
+  fixed end-to-end (was → api-key → false 5-min cold-rewrite warnings).
+- **NEXT ACTION**: merge feat → main `--no-ff`; deploy (`node esbuild.js` + `agentlenspro server
+  restart`); tag `v2.2.0` (push → publish.yml OIDC-publishes). Then flip this TRDD `complete →
+  published`. Part 4 (janitor cadence) is a SEPARATE GitHub issue on Emasoft/ai-maestro-janitor,
+  NOT this repo's work.
+- **SUPERSEDED — do NOT carry forward**: the earlier "implementation agent launching" /
+  "half-wired" / "agent out of credits" states — the work is finished.
 
 ## THE VERIFIED TTL MATRIX (doc facts — the ground truth this feature encodes)
 

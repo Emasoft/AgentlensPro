@@ -17,7 +17,15 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { calcTokenCostUsd } from './shared/pricing'
 import { computeKeepWarm, type KeepWarmReport } from './shared/keepWarm'
+import { classifyTtlRegime, sessionTtlKindOf, type TtlContext } from './shared/cacheTtl'
 import type { SessionSummaryCard, TimelineEntry, TokensSource } from './shared/summarizerTypes'
+
+/** Per-card TTL regime (TRDD-VY1IUVUM): kind from the card's own lineage fields × the machine
+ *  TtlContext the caller resolved (src/ttlContext). No card / no context degrade to 'assumed'
+ *  inside the classifier — never a silent guess. */
+function cardTtlRegime(card: SessionSummaryCard | undefined, ttlCtx: TtlContext | null | undefined) {
+  return classifyTtlRegime(card ? sessionTtlKindOf(card) : null, ttlCtx)
+}
 
 // ── Consumption events ─────────────────────────────────────────────────────────
 
@@ -763,6 +771,7 @@ export interface BurnStatus {
 
 export function computeBurnStatus(
   events: ConsumptionEvent[], sessions: SessionSummaryCard[], config: BurnConfig, now: number,
+  ttlCtx?: TtlContext | null,
 ): BurnStatus {
   const series = computeBurnSeries(events, now)
   const budget = computeWindowBudget(events, config, series.global.fiveMin.tokensPerMin, now)
@@ -777,12 +786,13 @@ export function computeBurnStatus(
     window: budget,
     accountWindows: computeAccountWindowBudgets(events, config, now),
     // P6 keep-warm: decorate each hot session with its cache-gap diagnostic from the card's
-    // timeline (api_request ground truth). null when the card is unknown here or carries no
-    // api_request entries — honest absence, never zeros presented as measurements.
-    topSessions: series.sessions.slice(0, 5).map(sb => ({
-      ...sb,
-      keepWarm: computeKeepWarm(sessions.find(c => c.sessionId === sb.sessionId)?.timeline ?? []),
-    })),
+    // timeline (api_request ground truth), classified against ITS TTL regime (card lineage ×
+    // the machine TtlContext — TRDD-VY1IUVUM). null when the card is unknown here or carries
+    // no api_request entries — honest absence, never zeros presented as measurements.
+    topSessions: series.sessions.slice(0, 5).map(sb => {
+      const card = sessions.find(c => c.sessionId === sb.sessionId)
+      return { ...sb, keepWarm: computeKeepWarm(card?.timeline ?? [], cardTtlRegime(card, ttlCtx)) }
+    }),
     alerts,
     activeSessions: series.sessions.length,
   }
@@ -858,8 +868,9 @@ export interface SessionStatus {
   lastCallCostUsd: number
   sessionTotalCostUsd: number
   tokensPerMin: number
-  /** Keep-warm / cache-gap diagnostic (P6): warm vs cold turns against the ~5-min prompt-cache TTL
-   *  + the cache-write tokens the cold turns wasted. null = no api_request entries to measure. */
+  /** Keep-warm / cache-gap diagnostic (P6): warm vs cold turns against the SESSION's TTL regime
+   *  (ttlAssumedMin/ttlSource on the report — TRDD-VY1IUVUM) + the cache-write tokens the cold
+   *  turns wasted. null = no api_request entries to measure. */
   keepWarm: KeepWarmReport | null
   rateLimitWindow: { fiveHourPct: number | null; sevenDayPct: number | null; fiveHourMinutesToExhaustion: number | null; sevenDayMinutesToExhaustion: number | null; capacityConfigured: boolean }
   comparison: { previousSessions: number; avgCostUsd: number | null; avgTurns: number | null; avgCacheHitRatePct: number | null; deltaCostUsd: number | null; deltaTurns: number | null; deltaCacheHitPct: number | null } | null
@@ -877,6 +888,7 @@ export interface SessionStatus {
 export function computeSessionStatus(
   sessions: SessionSummaryCard[], events: ConsumptionEvent[], config: BurnConfig,
   sel: { sessionId?: string; workspace?: string }, now: number,
+  ttlCtx?: TtlContext | null,
 ): SessionStatus | { message: string; matchedBy: 'none' } {
   const r = resolveSession(sessions, sel, now)
   if (!r.card) {
@@ -958,7 +970,7 @@ export function computeSessionStatus(
     lastCallCostUsd: +lastCallCostUsd.toFixed(4),
     sessionTotalCostUsd: +cardCostUsd(card).toFixed(4),
     tokensPerMin,
-    keepWarm: computeKeepWarm(card.timeline ?? []),
+    keepWarm: computeKeepWarm(card.timeline ?? [], cardTtlRegime(card, ttlCtx)),
     rateLimitWindow: {
       fiveHourPct: budget.fiveHour.pctConsumed,
       sevenDayPct: budget.sevenDay.pctConsumed,

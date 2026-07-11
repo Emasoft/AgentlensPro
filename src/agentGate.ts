@@ -13,11 +13,23 @@
 
 import * as fs from 'fs'
 import { fmtFatSenders, type ThrashReport } from './bodiesActivity'
+import {
+  ASSUMED_TTL_REGIME, COLD_IDLE_SLACK_MS, DEFAULT_COLD_IDLE_MS,
+  classifyTtlRegime, ttlPhrase, type TtlRegime,
+} from './shared/cacheTtl'
+
+// The conversations a COLD_RESUME rule protects are the SUBAGENT ones (the fanned-out launches /
+// the dead agent a SendMessage resumes) — per the doc matrix those ride the 5-min tier ALWAYS,
+// independent of the machine's auth regime, so this resolves once at module load. The CALLER's
+// regime is per-state (AgentGateState.ttl) because a fork reads the CALLER's cache entry.
+const SUBAGENT_TTL = classifyTtlRegime('subagent', null)
 
 export interface GateThresholds {
   /** Parent context (tokens) above which a fork inherits a "fat" prefix (default 200k). */
   forkFatTokens: number
-  /** Idle ms after which the prompt cache is past its 5-min TTL (default 5.5min). */
+  /** EXPLICIT cold-idle override (AGENTLENS_GATE_COLD_IDLE_MS). When the caller does NOT set it,
+   *  the cutoff is TTL-aware instead: the calling session's regime TTL + COLD_IDLE_SLACK_MS
+   *  (default = the 5-min tier + 30s slack = the historical 5.5min). */
   coldIdleMs: number
   /** SubagentStarts in 60s that mark a runaway fan-out (default 8). */
   runaway60s: number
@@ -29,7 +41,9 @@ export interface GateThresholds {
 
 export const DEFAULT_GATE_THRESHOLDS: GateThresholds = {
   forkFatTokens: 200_000,
-  coldIdleMs: 330_000,
+  // Derived, not hardcoded: the shared 5-min tier + slack (TRDD-VY1IUVUM) — the fallback when no
+  // per-session TTL regime was resolvable. With a resolved regime the cutoff scales with it.
+  coldIdleMs: DEFAULT_COLD_IDLE_MS,
   runaway60s: 8,
   fanoutWarn2min: 5,
   coldResumeWindowMs: 600_000,
@@ -82,6 +96,11 @@ export interface AgentGateState {
    *  killing request only on a DEAD target — delivery to a LIVE agent rides its existing run. */
   messageTarget?: string | null
   targetLiveness?: TargetLiveness
+  /** The CALLING session's TTL regime (TRDD-VY1IUVUM) — kind from lineage signals × machine auth,
+   *  resolved by the server. Drives the fork cold checks (a fork reads the CALLER's cache entry:
+   *  a 7-min idle on a subscription MAIN session is NOT cold — its entry rides the 1h tier).
+   *  Absent → ASSUMED_TTL_REGIME (the 5-min floor, honestly labeled 'assumed'). */
+  ttl?: TtlRegime
   thresholds?: Partial<GateThresholds>
 }
 
@@ -182,7 +201,14 @@ export function evaluateAgentGate(
   const input = toolInput ?? {}
   const fork = input.subagent_type === 'fork'
   const keepWarm = isKeepWarmPinger(input)
-  const cold = state.parent.idleMs !== null && state.parent.idleMs > th.coldIdleMs
+  // TTL-aware cold cutoff (TRDD-VY1IUVUM): the entry a fork re-reads is the CALLER's, so "cold"
+  // means idle past the CALLER's regime TTL (+ slack) — 65min on a subscription main session,
+  // 5.5min on the assumed floor. An EXPLICIT AGENTLENS_GATE_COLD_IDLE_MS still wins: a user who
+  // pinned the cutoff by hand did so deliberately, and silently out-scaling it would make the
+  // env knob a no-op.
+  const ttl = state.ttl ?? ASSUMED_TTL_REGIME
+  const coldCutoffMs = state.thresholds?.coldIdleMs !== undefined ? th.coldIdleMs : ttl.ttlMs + COLD_IDLE_SLACK_MS
+  const cold = state.parent.idleMs !== null && state.parent.idleMs > coldCutoffMs
   const idleMin = state.parent.idleMs !== null ? Math.round(state.parent.idleMs / 60_000) : null
   const fat = state.parent.contextTokens !== null && state.parent.contextTokens >= th.forkFatTokens
   const parentK = state.parent.contextTokens !== null ? k(state.parent.contextTokens) : 'an unknown amount of'
@@ -225,19 +251,23 @@ export function evaluateAgentGate(
     const stallWho = state.stall
       ? ` (turn died in session ${shortSid(state.stall.session)}${state.stall.cwd ? ` in ${dirName(state.stall.cwd)}` : ''})`
       : ''
+    // The TTL here is the SUBAGENT tier (module note above): the launches this rule holds back
+    // are fresh agent conversations whose shared prefix entries ride the 5-min tier regardless
+    // of the caller's regime — a 1h main-session entry does not warm a fan-out's agent prefixes.
     return deny('COLD_RESUME_FANOUT',
       `AgentLens burn-gate: a rate-limit stall ended ${Math.round((stallAgeMs as number) / 60_000)}min ago` +
-      `${stallWho}, so the prompt cache is past its 5-min TTL, and ${state.startsLast2min} agent(s) already ` +
-      `launched since — that first launch IS the cache warm-up. Every further agent launched before it lands ` +
-      `re-pays the full prefix at the write rate. Retry this launch in ~60s. Override: AGENTLENS_GATE=off.`)
+      `${stallWho}, so the fan-out's agent prefix caches are past their ${ttlPhrase(SUBAGENT_TTL)}, and ` +
+      `${state.startsLast2min} agent(s) already launched since — that first launch IS the cache warm-up. ` +
+      `Every further agent launched before it lands re-pays the full prefix at the write rate. ` +
+      `Retry this launch in ~60s. Override: AGENTLENS_GATE=off.`)
   }
   if (fork && fat && cold && state.startsLast2min >= 2) {
     const who = fmtSpawners(state.spawners)
     return deny('FORK_STORM_FORMING',
-      `AgentLens burn-gate: fork of a ~${parentK}-token parent into a COLD cache (idle ${idleMin}min > 5-min TTL) ` +
-      `with ${state.startsLast2min} launches already in 2min${who ? ` (${who})` : ''} — a fork storm is forming; ` +
-      `each fork re-pays the full parent prefix at the cache-WRITE rate. Warm the cache with ONE agent first, or ` +
-      `compact the parent before fanning out. Retry in ~60s. Override: AGENTLENS_GATE=off.`)
+      `AgentLens burn-gate: fork of a ~${parentK}-token parent into a COLD cache (idle ${idleMin}min > its ` +
+      `${ttlPhrase(ttl)}) with ${state.startsLast2min} launches already in 2min${who ? ` (${who})` : ''} — a fork ` +
+      `storm is forming; each fork re-pays the full parent prefix at the cache-WRITE rate. Warm the cache with ` +
+      `ONE agent first, or compact the parent before fanning out. Retry in ~60s. Override: AGENTLENS_GATE=off.`)
   }
 
   // ── warn tier: real cost, but a single launch is a legitimate choice ─────────
@@ -249,8 +279,9 @@ export function evaluateAgentGate(
   if (fork && fat && cold) {
     return {
       decision: 'warn', code: 'COLD_FORK',
-      reason: `[agentlens] cache cold (idle ${idleMin}min): this fork re-pays ~${parentK} tokens of parent prefix at ` +
-        `the write rate once. Let it warm the cache before launching further forks.`,
+      reason: `[agentlens] cache cold (idle ${idleMin}min > the parent's ${ttlPhrase(ttl)}): this fork re-pays ` +
+        `~${parentK} tokens of parent prefix at the write rate once. Let it warm the cache before launching ` +
+        `further forks.`,
     }
   }
   if (fork && fat) {
@@ -354,11 +385,14 @@ export function evaluateSendMessageGate(state: AgentGateState): AgentGateDecisio
     const stallWho = state.stall
       ? ` (turn died in session ${shortSid(state.stall.session)}${state.stall.cwd ? ` in ${dirName(state.stall.cwd)}` : ''})`
       : ''
+    // A dead SendMessage target is a SUBAGENT conversation by construction ('main' resolves live
+    // above), so the resume-cost premise uses the subagent tier — 5 min ALWAYS per the doc
+    // matrix, whatever the caller's own regime is (TRDD-VY1IUVUM).
     return deny('COLD_RESUME_MESSAGE',
       `AgentLens burn-gate: a rate-limit stall ended ${Math.round((stallAgeMs as number) / 60_000)}min ago` +
-      `${stallWho} — messaging a dead agent${who} resumes it by RE-RUNNING the request that killed it, and with the ` +
-      `prompt cache past its 5-min TTL that resume re-pays the agent's full prefix at the write rate. ` +
-      `Wait ~60s for the wall to clear, then retry this message. Override: AGENTLENS_GATE=off.`)
+      `${stallWho} — messaging a dead agent${who} resumes it by RE-RUNNING the request that killed it, and with ` +
+      `the agent's prompt cache past its ${ttlPhrase(SUBAGENT_TTL)} that resume re-pays its full prefix at the ` +
+      `write rate. Wait ~60s for the wall to clear, then retry this message. Override: AGENTLENS_GATE=off.`)
   }
   return { decision: 'allow', code: null, reason: null }
 }

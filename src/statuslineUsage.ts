@@ -20,6 +20,13 @@ import * as path from 'path'
 import type { SessionSummaryCard, StatuslineUsageAgg } from './shared/summarizerTypes'
 import type { StatuslineBillingEvent } from './burnMonitor'
 
+/** One window of Claude Code's own rate_limits block, as statusline.py surfaces it (utilization is a
+ *  0-100 float; resets_at is carried by CC but unused here). Optional throughout — a statusline build
+ *  that predates rate_limits emission simply omits the whole block. */
+interface StatuslineRateLimitWindow {
+  utilization?: number
+}
+
 /** One raw line of the shared statusline-usage.jsonl (mirrors statusline.py's write_usage_jsonl). */
 interface StatuslineUsageRecord {
   ts: number
@@ -35,11 +42,37 @@ interface StatuslineUsageRecord {
   context_window_size: number
   used_percentage: number
   total_cost_usd: number
+  // TRDD-VY1IUVUM Part-5: Claude Code's own authoritative window fill, present ONLY when the
+  // statusline build persists rate_limits into the usage log (it reads it from the CC input JSON but
+  // older builds don't re-emit it). Absent → getLatestRateLimits() returns null and get_account_status
+  // falls back to AgentlensPro's own calibrated pct. NEVER a guess — an absent block is reported as null.
+  rate_limits?: {
+    five_hour?: StatuslineRateLimitWindow
+    seven_day?: StatuslineRateLimitWindow
+  }
+}
+
+/** TRDD-VY1IUVUM Part-5 — the latest observed Claude-Code-authoritative window utilization. Both
+ *  fields are 0-100 or null (null = that window was absent in the record — never presented as 0). The
+ *  ts is the record's own timestamp so a consumer can judge staleness. This is the AUTHORITATIVE
+ *  5h/7d fill source (get_account_status prefers it over the calibrated estimate when present). */
+export interface RateLimitsSnapshot {
+  ts: number
+  fiveHourUtilization: number | null
+  sevenDayUtilization: number | null
 }
 
 function num(v: unknown): number {
   const n = typeof v === 'number' ? v : Number(v)
   return Number.isFinite(n) ? n : 0
+}
+
+/** Like num() but returns null (not 0) for an unresolvable value — the honest "absent" for a
+ *  utilization figure, so a missing window is never silently reported as 0% consumed. */
+function numOrNull(v: unknown): number | null {
+  if (v == null) return null
+  const n = typeof v === 'number' ? v : Number(v)
+  return Number.isFinite(n) ? n : null
 }
 
 /**
@@ -83,6 +116,9 @@ export class StatuslineUsageReader {
   private billingEvents: StatuslineBillingEvent[] = []
   private static readonly BILLING_MAX = 100_000
   private static readonly BILLING_MAX_AGE_MS = 8 * 24 * 60 * 60 * 1000
+  // TRDD-VY1IUVUM Part-5: latest-wins snapshot of Claude Code's own rate_limits utilization. Only a
+  // record carrying a rate_limits block updates it; a rotated/shrunk file resets it to null (below).
+  private latestRateLimits: RateLimitsSnapshot | null = null
 
   constructor(filePath?: string) {
     this.filePath = filePath ?? statuslineUsageLogPath()
@@ -110,6 +146,7 @@ export class StatuslineUsageReader {
       this.carry = ''
       this.agg.clear()
       this.billingEvents = []
+      this.latestRateLimits = null
     }
     if (size === this.offset) return
 
@@ -199,6 +236,28 @@ export class StatuslineUsageReader {
     a.peakContextTokens = Math.max(a.peakContextTokens, totalInput)
     a.samples += 1
     this.agg.set(sid, a)
+
+    // TRDD-VY1IUVUM Part-5: latest-wins capture of CC's authoritative window utilization. The block
+    // is absent on older statusline builds — only update when present, and only when this record is
+    // at least as new as the last one seen (guards a late/out-of-order line clobbering a fresher
+    // snapshot, mirroring the aggregate's ts guard above). Machine-wide (not per-session): the
+    // rate-limit window is per-ACCOUNT, and every session on the account shares the same fill.
+    if (rec.rate_limits) {
+      const recTs = num(rec.ts)
+      const five = numOrNull(rec.rate_limits.five_hour?.utilization)
+      const seven = numOrNull(rec.rate_limits.seven_day?.utilization)
+      if ((five !== null || seven !== null) && (this.latestRateLimits === null || recTs >= this.latestRateLimits.ts)) {
+        this.latestRateLimits = { ts: recTs, fiveHourUtilization: five, sevenDayUtilization: seven }
+      }
+    }
+  }
+
+  /** TRDD-VY1IUVUM Part-5: the latest Claude-Code-authoritative window utilization, or null when no
+   *  ingested record has carried a rate_limits block (an older statusline build, or none yet). Refreshes
+   *  the tail first (throttled) so get_account_status always reflects the newest persisted line. */
+  getLatestRateLimits(): RateLimitsSnapshot | null {
+    this.refreshIfStale()
+    return this.latestRateLimits
   }
 
   /** Returns the aggregate for a session, or undefined if it never wrote a statusline line. */

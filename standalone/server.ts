@@ -38,6 +38,8 @@ import {
 } from '../src/burnMonitor'
 import { calibrateFromStopFailure } from '../src/capacityCalibration'
 import { getCurrentAccount } from '../src/accountInfo'
+import { getTtlContext } from '../src/ttlContext'
+import { classifyTtlRegime, type SessionTtlKind, type TtlContext } from '../src/shared/cacheTtl'
 import { buildContextComposition, resolveLoggedAncestor } from '../src/contextComposition'
 import { buildContextHistory } from '../src/contextHistory'
 import { generateSuggestions } from '../src/instructionAdvisor'
@@ -363,7 +365,54 @@ const gateThresholds: Partial<GateThresholds> = (() => {
   return out
 })()
 
-function buildGateState(now: number, parent: { contextTokens: number | null; idleMs: number | null }): AgentGateState {
+// ── TTL-regime resolution for the gate + status paths (TRDD-VY1IUVUM) ─────────
+// The machine TtlContext (auth regime + prompt-caching env overrides). The usage-credit overflow
+// signal needs the 5h window fill — read from the LAST computed burn status rather than
+// recomputing (the gate sits on the PreToolUse hot path; the state drifts on minute scale, so a
+// ≤4s-stale pct is fine). getTtlContext caches its own fs/account reads for ~60s.
+function currentTtlContext(): TtlContext {
+  return getTtlContext(lastBurnStatus?.window.fiveHour.pctConsumed ?? null)
+}
+
+/**
+ * Best-effort TTL kind of the session CALLING the gate. Signals, strongest first:
+ *   1. the hook-event ring — a SubagentStart whose agent_id matches the caller's session id
+ *      proves it is a spawned agent, and its agent_type distinguishes fork (reads the PARENT's
+ *      cache entry → parent-regime TTL) from every other subagent (own 5-min cache);
+ *   2. the transcript path — subagent transcripts live at .../<parent>/subagents/agent-<id>.jsonl
+ *      (and worktree fleets under a "-claude-worktrees" mangled dir), main transcripts directly
+ *      under the project dir. These are the same path facts logReader's lineage linking uses.
+ * No signal → null, so the classifier reports 'assumed' instead of guessing.
+ */
+function resolveCallerTtlKind(sessionId: string | null, transcriptPath: string | null): SessionTtlKind | null {
+  if (sessionId && sessionId !== 'unknown') {
+    const bare = sessionId.startsWith('agent-') ? sessionId.slice('agent-'.length) : sessionId
+    // Newest match wins (a name/id can be reused across restarts — the latest launch is the caller).
+    for (let i = recentHookEvents.length - 1; i >= 0; i--) {
+      const r = recentHookEvents[i]
+      if (r.ev !== 'SubagentStart' || r.payload?.agent_id !== bare) continue
+      return r.payload?.agent_type === 'fork' ? 'fork' : 'subagent'
+    }
+  }
+  if (transcriptPath) {
+    const base = path.basename(transcriptPath)
+    if (base.startsWith('agent-') || transcriptPath.includes(`${path.sep}subagents${path.sep}`) ||
+        transcriptPath.includes('-claude-worktrees')) {
+      // A spawned transcript whose SubagentStart already left the ring: kind is provably a child,
+      // but fork-vs-fresh is no longer distinguishable — 'subagent' is the doc-certain floor
+      // (5-min ALWAYS); calling it 'fork' would grant an unproven 1h tier.
+      return 'subagent'
+    }
+    return 'main'
+  }
+  return null
+}
+
+function buildGateState(
+  now: number,
+  parent: { contextTokens: number | null; idleMs: number | null },
+  caller?: { sessionId: string | null; transcriptPath: string | null },
+): AgentGateState {
   let starts60 = 0
   let starts120 = 0
   let lastStop: HookEventRecord | null = null
@@ -420,6 +469,13 @@ function buildGateState(now: number, parent: { contextTokens: number | null; idl
     thrash: act.available ? act.thrash : null,
     premiumShare: act.premium.sampled > 0 ? act.premium.share : null,
     premiumModel: act.premium.lastModel,
+    // The CALLER's TTL regime (TRDD-VY1IUVUM): a fork reads the CALLER's cache entry, so the
+    // fork cold checks must run against ITS tier — 1h on a subscription main session, not the
+    // global 5-min the gate used to assume. Unresolvable kind → the classifier says 'assumed'.
+    ttl: classifyTtlRegime(
+      resolveCallerTtlKind(caller?.sessionId ?? null, caller?.transcriptPath ?? null),
+      currentTtlContext(),
+    ),
     thresholds: gateThresholds,
   }
 }
@@ -612,10 +668,21 @@ startMcpHttpServer({
   // reconstructed from the raw OTEL request body indexed by the collector. Works for OTEL-only sessions.
   getCallContext: (sessionId, sel) => resolveCallContext(sessionId, sel),
   // TRDD-OG9PARZQ: realtime burn status + one-call session self-diagnostic for the fleet's Claudes.
-  getBurnStatus: () => { const { sessions, events, now } = gatherBurn(); return computeBurnStatus(events, sessions, burnConfig, now) },
-  getSessionStatus: (sel) => { const { sessions, events, now } = gatherBurn(); return computeSessionStatus(sessions, events, burnConfig, sel, now) },
+  // TRDD-VY1IUVUM: pass the machine TtlContext so each session's keepWarm classifies against ITS
+  // resolved regime (main/subagent/fork × auth) instead of silently defaulting to ASSUMED_TTL_REGIME
+  // — without this the 5-min floor was applied even to subscription main sessions riding the 1h tier.
+  getBurnStatus: () => { const { sessions, events, now } = gatherBurn(); return computeBurnStatus(events, sessions, burnConfig, now, currentTtlContext()) },
+  getSessionStatus: (sel) => { const { sessions, events, now } = gatherBurn(); return computeSessionStatus(sessions, events, burnConfig, sel, now, currentTtlContext()) },
   // TRDD-BURNWDGT: the current live OAuth account (identity + plan) for get_account_status + window labels.
   getAccount: () => getCurrentAccount(),
+  // TRDD-VY1IUVUM Part-5: the machine's TTL context (auth regime + env overrides) for the
+  // get_account_status human-readable summary's cacheTtl field.
+  getTtlContext: () => currentTtlContext(),
+  // TRDD-VY1IUVUM Part-5: Claude Code's own rate_limits.{five_hour,seven_day}.utilization, when the
+  // statusline build persists it into the usage log — the authoritative window-fill source for
+  // get_account_status. null when absent (a statusline.py build that doesn't emit it yet, or no
+  // recent-enough record) — the handler falls back to AgentlensPro's own calibrated pct.
+  getRateLimits: () => statuslineReader.getLatestRateLimits(),
   // TRDD-GOD0108C: hot-path feeds for check_burn_risk — the in-memory event ring (zero disk)
   // and the incremental bodies tracker (CACHE_THRASH + huge-request burst without full stats).
   getRecentHookEvents: () => recentHookEvents,
@@ -656,7 +723,10 @@ function tickBurn(): void {
   let status
   try {
     const { sessions, events, now } = gatherBurn()
-    status = computeBurnStatus(events, sessions, burnConfig, now)
+    // TRDD-VY1IUVUM: same TTL-aware wiring as the getBurnStatus accessor above — the SSE tick feeds
+    // the dashboard AND seeds currentTtlContext()'s own usage-credit signal (lastBurnStatus), so
+    // omitting it here would leave the ticked keepWarm data on the assumed 5-min floor forever.
+    status = computeBurnStatus(events, sessions, burnConfig, now, currentTtlContext())
   } catch (e) {
     console.warn('[AgentLens] burn tick error:', e)
     return
@@ -2215,7 +2285,7 @@ const uiServer = http.createServer((req, res) => {
         const transcriptPath = typeof p.transcript_path === 'string' ? p.transcript_path : null
         // Real parent context (tokens from the transcript's last usage) + cache warmth (mtime).
         const parent = transcriptPath ? readTranscriptContext(transcriptPath, now) : { contextTokens: null, idleMs: null }
-        const state = buildGateState(now, parent)
+        const state = buildGateState(now, parent, { sessionId, transcriptPath })
         persistStats.gateChecks++
 
         if (p.hook_event_name === 'PostToolUse') {

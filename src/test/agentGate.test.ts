@@ -8,6 +8,7 @@ import {
   type AgentGateState, type ParentContext,
 } from '../agentGate'
 import type { ThrashReport } from '../bodiesActivity'
+import { classifyTtlRegime } from '../shared/cacheTtl'
 
 // ── agent-launch burn gate (TRDD-GOD0108C) ────────────────────────────────────
 // Pure decision tests + a real-fs transcript-tail parse.
@@ -147,6 +148,56 @@ suite('agentGate — evaluateAgentGate (TRDD-GOD0108C)', () => {
     assert.strictEqual(evaluateAgentGate({}, armed).code, 'COLD_RESUME_FANOUT', 'precondition: no evidence → still armed')
     const d = evaluateAgentGate({}, { ...armed, stallRecovered: true })
     assert.deepStrictEqual(d, { decision: 'allow', code: null, reason: null })
+  })
+})
+
+suite('agentGate — TTL-regime awareness (TRDD-VY1IUVUM)', () => {
+  // The fork cold checks read the CALLING session's cache entry, so "cold" is regime-relative:
+  // the SAME 7-min idle that trips COLD_FORK on the assumed 5-min floor is warm on a
+  // subscription MAIN session's 1-hour tier.
+  const subMain = classifyTtlRegime('main', { auth: 'subscription', force5m: false, enable1h: false })
+
+  test('7-min idle fat fork: COLD_FORK on the assumed floor, plain FORK_FAT_PARENT under the 1h tier', () => {
+    const base = state({ parent: { contextTokens: 450_000, idleMs: 7 * 60_000 } })
+    assert.strictEqual(evaluateAgentGate({ subagent_type: 'fork' }, base).code, 'COLD_FORK', 'assumed floor: cold')
+    const warm = evaluateAgentGate({ subagent_type: 'fork' }, { ...base, ttl: subMain })
+    assert.strictEqual(warm.code, 'FORK_FAT_PARENT', 'the 1h tier keeps a 7-min idle warm — fat warning only')
+  })
+
+  test('FORK_STORM_FORMING does not arm under the 1h tier at 7-min idle (the entry is still warm)', () => {
+    const s = state({ parent: { contextTokens: 450_000, idleMs: 7 * 60_000 }, startsLast2min: 2, ttl: subMain })
+    const d = evaluateAgentGate({ subagent_type: 'fork' }, s)
+    assert.notStrictEqual(d.code, 'FORK_STORM_FORMING')
+    // A 65-min+ idle exceeds even the 1h tier (+slack) — the storm rule arms again.
+    const reallyCold = evaluateAgentGate({ subagent_type: 'fork' }, { ...s, parent: { contextTokens: 450_000, idleMs: 66 * 60_000 } })
+    assert.strictEqual(reallyCold.code, 'FORK_STORM_FORMING')
+    assert.ok(reallyCold.reason?.includes('60-min TTL (doc-matrix)'), `the deny must carry the regime provenance: ${reallyCold.reason ?? ''}`)
+  })
+
+  test('an EXPLICIT coldIdleMs override still wins over the regime (the env knob must not become a no-op)', () => {
+    const s = state({
+      parent: { contextTokens: 450_000, idleMs: 7 * 60_000 },
+      ttl: subMain,
+      thresholds: { coldIdleMs: 6 * 60_000 },
+    })
+    assert.strictEqual(evaluateAgentGate({ subagent_type: 'fork' }, s).code, 'COLD_FORK')
+  })
+
+  test('deny/warn messages carry ttlAssumedMin + ttlSource, never a hardcoded 5-min claim', () => {
+    const coldFork = evaluateAgentGate({ subagent_type: 'fork' }, state({ parent: { contextTokens: 450_000, idleMs: 7 * 60_000 } }))
+    assert.ok(coldFork.reason?.includes('5-min TTL (assumed)'), coldFork.reason ?? '')
+    // COLD_RESUME rules protect the fanned-out SUBAGENT conversations — doc-matrix 5-min always.
+    const resume = evaluateAgentGate({}, state({ lastStopFailureMs: NOW - 3 * 60_000, startsLast2min: 1 }))
+    assert.ok(resume.reason?.includes('5-min TTL (doc-matrix)'), resume.reason ?? '')
+    const msg = evaluateSendMessageGate(state({ lastStopFailureMs: NOW - 3 * 60_000, targetLiveness: 'dead' }))
+    assert.ok(msg.reason?.includes('5-min TTL (doc-matrix)'), msg.reason ?? '')
+  })
+
+  test('COLD_RESUME_FANOUT stays armed even when the CALLER rides the 1h tier — it guards the subagent tier', () => {
+    // The fan-out launches create fresh agent conversations whose prefix entries are 5-min ALWAYS;
+    // a warm 1h main entry does not warm those, so the caller regime must not disarm the rule.
+    const d = evaluateAgentGate({}, state({ lastStopFailureMs: NOW - 3 * 60_000, startsLast2min: 1, ttl: subMain }))
+    assert.strictEqual(d.code, 'COLD_RESUME_FANOUT')
   })
 })
 

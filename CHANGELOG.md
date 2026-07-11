@@ -4,6 +4,37 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.2.0] — 2026-07-11
+
+### Fixed
+
+- **Cache-TTL misclassification on subscription accounts (TRDD-VY1IUVUM)** — `resolveAuthRegime`
+  compared `billingType === 'subscription'` EXACTLY, but the real `~/.claude.json` oauthAccount value
+  is `stripe_subscription` (Anthropic prefixes the billing shape with the payment processor). Every
+  subscription account fell through to the API-key branch → the wrong 5-min cache TTL → the burn-gate
+  and keepWarm emitted FALSE cold-rewrite warnings on sessions that actually ride the 1-hour tier. Now
+  any billingType whose lowercased value CONTAINS `subscription` resolves to the subscription regime
+  (also survives any future processor prefix). Regression-tested.
+
+### Added
+
+- **TTL-aware cache diagnostics (TRDD-VY1IUVUM)** — the doc-verified TTL matrix lives in ONE runtime-
+  neutral module (`src/shared/cacheTtl.ts`): main+subscription = 1h, usage-credits/API/subagent = 5m,
+  fork inherits the parent, `FORCE_PROMPT_CACHING_5M`/`ENABLE_PROMPT_CACHING_1H` overrides honored.
+  keepWarm, the burn-gate COLD_RESUME/COLD_FORK, and gap-based warnings now classify against the
+  session's resolved regime instead of a hardcoded 5-min constant, each number stamped with a
+  `ttlSource` (`doc-matrix`/`config`/`measured`/`assumed`) — the measured falsifier flips to
+  `measured` when observed cache behaviour contradicts the assumption. No silent guesses.
+- **`get_account_status` Part-5 enrichment** — now returns a one-line human `summary` plus `plan`
+  ("Max 5x"/"Max 20x"/"Pro" from planType + rateLimitTier), billing `mode` (subscription-within-plan
+  vs drawing-usage-credits vs API pay-per-token), the session `cacheTtl` {minutes, regime, ttlSource},
+  and `usageWindows` {fiveHourPct, sevenDayPct, windowSource} — Claude Code's own `rate_limits`
+  utilization when the statusline persists it (`windowSource: cc-rate-limits`), else AgentlensPro's
+  calibrated pct (`calibrated`), else null (`none`) — a null is NEVER presented as 0.
+- **SKILL.md "Cache TTL tracking" section** — the matrix, how to read the TTL-aware output (the four
+  `ttlSource` values), true cold rewrites (full-prefix spikes) vs normal suffix writes, and the audit
+  one-liners.
+
 ## [2.1.0] — 2026-07-11
 
 ### Added

@@ -38,6 +38,8 @@ import { buildSpawnRollup } from './shared/spawnRollup'
 import { buildTokensByCause } from './shared/tokensByCause'
 import type { BurnStatus, SessionStatus, AccountWindowBudget } from './burnMonitor'
 import { type AccountInfo, accountLabelFor } from './accountInfo'
+import { classifyTtlRegime, type TtlContext } from './shared/cacheTtl'
+import type { RateLimitsSnapshot } from './statuslineUsage'
 import { listSessionFileIds } from './contextComposition'
 import { generateSuggestions } from './instructionAdvisor'
 import { readAllInstructionContent } from './instructionFiles'
@@ -699,14 +701,17 @@ const TOOLS = [
   {
     name: 'get_account_status',
     description:
-      'WHICH OAuth account you are on right now + its PLAN and how much of ITS rate-limit window is left. ' +
-      'Rate limits are PER ACCOUNT — rotating to a second email does NOT reset the first. Returns the ' +
-      'current account (email/org label, account id), plan TYPE (max/pro/team/enterprise/free from the ' +
-      'keychain, plus billingType subscription-vs-api and whether extra token-usage billing is enabled), ' +
-      'and, for that account, the % of the rolling 5h + 7d window consumed with the time-to-exhaustion ' +
-      'projection (null when no window capacity is configured — never invented). The OAuth token is NEVER ' +
-      'read or returned — only the plan string. Use this after a rotation, or before a long run, to know ' +
-      'the ACCOUNT you will actually burn.',
+      'WHICH OAuth account you are on right now + its PLAN, billing MODE, cache-TTL regime, and how much ' +
+      'of ITS rate-limit window is left — with a one-line human `summary`. Rate limits are PER ACCOUNT — ' +
+      'rotating to a second email does NOT reset the first. Returns: the current account (email/org label, ' +
+      'account id); `plan` (e.g. "Max 5x"/"Max 20x"/"Pro" from planType + rateLimitTier); `mode` ' +
+      '(subscription-within-plan vs drawing-usage-credits vs API pay-per-token); `cacheTtl` {minutes, ' +
+      'regime, ttlSource} — the prompt-cache TTL your MAIN session actually rides (1h on a subscription, ' +
+      '5min on usage-credits/API), so a warm gap is not misread as cold; and `usageWindows` {fiveHourPct, ' +
+      'sevenDayPct, windowSource} — Claude Code\'s own rate_limits utilization when available ' +
+      '(windowSource "cc-rate-limits"), else AgentlensPro\'s calibrated pct ("calibrated"), else null ' +
+      '("none") — a null is NEVER presented as 0. The OAuth token is NEVER read or returned. Use this ' +
+      'after a rotation, or before a long run, to know the ACCOUNT you will actually burn.',
     inputSchema: { type: 'object' as const, properties: {} },
   },
   {
@@ -2272,12 +2277,86 @@ export function labelBurnStatusAccounts(status: BurnStatus, account: AccountInfo
   return { ...status, accountWindows: status.accountWindows.map(w => labelAccountWindow(w, account)) }
 }
 
+// TRDD-VY1IUVUM Part-5 — the human plan name from the keychain planType + the rate-limit tier. The
+// tier string carries the multiplier Anthropic actually enforces (observed: "default_claude_max_5x" →
+// Max 5x, "..._20x" → Max 20x); planType alone ("max") loses it. Falls back to a capitalized planType
+// when no multiplier is present, and to the raw tier when planType is unknown — never a silent 'max'.
+function describePlan(planType: string | null | undefined, rateLimitTier: string | null | undefined): string {
+  const mult = (rateLimitTier ?? '').toLowerCase().match(/(\d+)x\b/)  // default_claude_max_5x → "5"
+  const suffix = mult ? ` ${mult[1]}x` : ''
+  switch ((planType ?? '').toLowerCase()) {
+    case 'max': return `Max${suffix}`
+    case 'pro': return 'Pro'
+    case 'team': return 'Team'
+    case 'enterprise': return 'Enterprise'
+    case 'free': return 'Free'
+    default: return planType ? `${planType}${suffix}` : (mult ? `Max ${mult[1]}x` : 'unknown')
+  }
+}
+
+// TRDD-VY1IUVUM Part-5 — the account billing MODE in human words, resolved from the same auth regime
+// the cache-TTL classification uses (ttlCtx.auth). When no ttlCtx is supplied (unit callers), it
+// degrades to a coarse read of billingType — a substring match on 'subscription' so the
+// stripe_subscription value the account really carries is not mistaken for API-key billing.
+function describeAccountMode(authRegime: string | null): string {
+  switch (authRegime) {
+    case 'subscription': return 'subscription (within plan)'
+    case 'usage-credits': return 'subscription drawing usage credits (over plan limit)'
+    case 'api-key': return 'API key (pay-per-token)'
+    default: return 'unresolved'
+  }
+}
+
 // Exported for unit tests. get_account_status: the current account (identity + plan) + how much of ITS
-// rate-limit window is left. The OAuth token is never touched — only the plan string from accountInfo.
-export function handleGetAccountStatus(account: AccountInfo | null, burn: BurnStatus | null) {
+// rate-limit window is left + (TRDD-VY1IUVUM Part-5) its billing MODE, the machine's cache-TTL regime,
+// and the authoritative 5h/7d window fill. The OAuth token is never touched — only the plan string.
+// ttlCtx + rateLimits are optional so the pre-Part-5 two-arg callers (and unit tests) keep working; the
+// standalone server always passes both (getTtlContext / getRateLimits accessors).
+export function handleGetAccountStatus(
+  account: AccountInfo | null,
+  burn: BurnStatus | null,
+  ttlCtx: TtlContext | null = null,
+  rateLimits: RateLimitsSnapshot | null = null,
+) {
   const uuid = account?.accountUuid ?? null
   const win = burn?.accountWindows.find(w => (w.accountUuid ?? null) === uuid) ?? null
+
+  // Auth regime: from the resolved ttlCtx when present; else a coarse fallback off billingType (the
+  // substring match is the stripe_subscription fix — an exact 'subscription' compare would misread it).
+  const authRegime: string | null = ttlCtx?.auth
+    ?? (account?.billingType
+      ? (account.billingType.toLowerCase().includes('subscription') ? 'subscription' : 'api-key')
+      : null)
+
+  // Cache-TTL regime for the current session (always 'main' here — get_account_status is a main-
+  // conversation tool). classifyTtlRegime with a null ctx yields the honest 'assumed' 5-min floor.
+  const ttlRegime = classifyTtlRegime('main', ttlCtx)
+
+  // Authoritative-preferred window fill: Claude Code's own rate_limits utilization when the statusline
+  // build persists it, else AgentlensPro's calibrated pct, else null (never a null presented as 0).
+  const usageWindows: { fiveHourPct: number | null; sevenDayPct: number | null; windowSource: 'cc-rate-limits' | 'calibrated' | 'none' } =
+    (rateLimits && (rateLimits.fiveHourUtilization !== null || rateLimits.sevenDayUtilization !== null))
+      ? { fiveHourPct: rateLimits.fiveHourUtilization, sevenDayPct: rateLimits.sevenDayUtilization, windowSource: 'cc-rate-limits' }
+      : (win && win.budget.capacityConfigured)
+        ? { fiveHourPct: win.budget.fiveHour.pctConsumed, sevenDayPct: win.budget.sevenDay.pctConsumed, windowSource: 'calibrated' }
+        : { fiveHourPct: null, sevenDayPct: null, windowSource: 'none' }
+
+  const plan = account && account.source !== 'none' ? describePlan(account.planType, account.rateLimitTier) : 'unknown'
+  const mode = describeAccountMode(authRegime)
+  const cacheTtl = { minutes: ttlRegime.ttlAssumedMin, regime: authRegime ?? 'unknown', ttlSource: ttlRegime.ttlSource, basis: ttlRegime.ttlBasis }
+
+  // One-line human digest — the "clean human-readable summary" the Part-5 directive asks for, sitting
+  // alongside the structured fields so a reader gets the gist without parsing the object.
+  const emailStr = account?.email ?? account?.label ?? 'account unresolved'
+  const pct = (v: number | null) => v !== null ? `${Math.round(v)}%` : 'n/a'
+  const summary = `${emailStr} · ${plan} · ${mode} · 5h ${pct(usageWindows.fiveHourPct)} / 7d ${pct(usageWindows.sevenDayPct)} (${usageWindows.windowSource}) · cache TTL ${cacheTtl.minutes}min (${cacheTtl.ttlSource})`
+
   return {
+    summary,
+    plan,
+    mode,
+    cacheTtl,
+    usageWindows,
     account: account && account.source !== 'none'
       ? {
           accountId: account.accountUuid,
@@ -2360,6 +2439,13 @@ export interface McpServerOptions {
   /** TRDD-BURNWDGT — the current live OAuth account (identity + plan type). Powers get_account_status and
    *  labels the per-account window budgets in get_window_budget / get_burn_status. */
   getAccount?: AccountAccessor
+  /** TRDD-VY1IUVUM Part-5 — the machine's resolved TTL context (auth regime + prompt-caching env
+   *  overrides). Feeds get_account_status's cacheTtl summary field (classified for kind='main'). */
+  getTtlContext?: () => TtlContext
+  /** TRDD-VY1IUVUM Part-5 — Claude Code's own rate_limits.{five_hour,seven_day}.utilization, when the
+   *  statusline build persists it into the usage log. null when absent or stale — get_account_status
+   *  then falls back to AgentlensPro's own calibrated window pct (never presents a null as 0). */
+  getRateLimits?: () => RateLimitsSnapshot | null
   /** TRDD-PJC8N1HO — collector downtime windows during which OTEL exports were dropped/lost. Returned
    *  by get_recent_sessions so an agent orienting itself sees explicit "telemetry lost HH:MM–HH:MM"
    *  gaps instead of assuming continuous coverage. */
@@ -2390,6 +2476,8 @@ export function createMcpServer(opts: McpServerOptions): Server {
     const getBurnStatus = opts.getBurnStatus ?? null
     const getSessionStatus = opts.getSessionStatus ?? null
     const getAccount = opts.getAccount ?? null
+    const getTtlContext = opts.getTtlContext ?? null
+    const getRateLimits = opts.getRateLimits ?? null
 
     let result: unknown
     switch (req.params.name) {
@@ -2477,7 +2565,10 @@ export function createMcpServer(opts: McpServerOptions): Server {
           : { message: 'Session status unavailable in this runtime (no live session/statusline source wired).' }
         break
       case 'get_account_status':
-        result = handleGetAccountStatus(getAccount?.() ?? null, getBurnStatus?.() ?? null)
+        result = handleGetAccountStatus(
+          getAccount?.() ?? null, getBurnStatus?.() ?? null,
+          getTtlContext?.() ?? null, getRateLimits?.() ?? null,
+        )
         break
       case 'get_window_budget':
         result = handleGetWindowBudget(getBurnStatus?.() ?? null, getAccount?.() ?? null, args as { accountId?: string })
