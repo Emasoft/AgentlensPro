@@ -9,7 +9,7 @@
 
 AgentlensPro is the professional version of AgentLens, birthed from a fork of [AgentLens](https://github.com/RogerReed/agentlens).
 
-AgentlensPro receives **OpenTelemetry traces** from Copilot, Claude Code, and Codex in real time — giving you span timing, time-to-first-token, loop detection, file diffs, and actionable recommendations. It also reads **local session files** written automatically by each agent as a zero-config fallback — including OpenCode's local **SQLite database** — backfilling history and filling gaps when OTEL isn't configured. Both sources are shown in one unified dashboard, and 32 diagnostic tools are exposed through the `agentlenspro-cli` command and the bundled Claude Code skill.
+AgentlensPro receives **OpenTelemetry traces** from Copilot, Claude Code, and Codex in real time — giving you span timing, time-to-first-token, loop detection, file diffs, and actionable recommendations. It also reads **local session files** written automatically by each agent as a zero-config fallback — including OpenCode's local **SQLite database** — backfilling history and filling gaps when OTEL isn't configured. Both sources are shown in one unified dashboard, and 32 diagnostic tools are exposed through the single `agentlenspro` command and the bundled Claude Code skill.
 
 ## Compatibility
 
@@ -17,7 +17,7 @@ AgentlensPro keeps the following surfaces byte-compatible with AgentLens so exis
 
 - **`~/.agentlens`** — the data directory (spans, session cards, offsets) is unchanged.
 - **`AGENTLENS_*` environment variables** — all server/gate/retention tuning vars keep their names.
-- **`spy-agentlens*.sh` hook script names** — the scripts keep their names, and legacy hooks already installed in `~/.claude/settings.json` by absolute path keep resolving. Since v1.0.0, `--install-hooks` registers the `agentlenspro-hook` / `agentlenspro-gate` PATH bins instead (see [the PATH-binary contract](#the-path-binary-contract)) and migrates any legacy absolute-path entries when re-run.
+- **Hook registrations self-migrate** — since v2.0.0 hooks are registered as the command strings `agentlenspro hook` / `agentlenspro gate` (see [the single-executable contract](#the-single-executable-contract)). `agentlenspro setup` (or a re-run of `--install-hooks`) rewrites every previous generation found in `~/.claude/settings.json`: the v1 `agentlenspro-hook`/`agentlenspro-gate` PATH bins and the v0 absolute-path `spy-agentlens*` entries.
 
 ## Getting Started
 
@@ -39,33 +39,46 @@ Open <http://localhost:3000> after the server starts. The OTLP receiver listens 
 
 > **Log file ingestion** reads local session files from `~/.claude/`, `~/.codex/`, `~/.copilot/`, and OpenCode's SQLite database at `~/.local/share/opencode/` directly. See [Local Mode Options](#local-mode-options) for environment variables.
 
-### Diagnostics CLI and Claude Code skill
+### Setup, diagnostics CLI, and Claude Code skill
 
-The `agentlenspro-cli` command exposes all 32 diagnostic tools (recent sessions, cost, burn budget, workspace patterns, …) against the running server, plus installers for the Claude Code integration:
+`agentlenspro setup` is the one-command installer/repairer: it detects the current state
+(server, data store, hooks, skill, telemetry env — including broken or partial installs),
+converges every piece, **independently verifies each step**, and finishes with an
+end-to-end self-test. It is idempotent — a second run is all no-ops.
 
 ```bash
-agentlenspro-cli --start-server                    # server up (idempotent); --dashboard opens the UI
-agentlenspro-cli list --desc                       # discover tools
-agentlenspro-cli help <tool>                       # flags from the live schema
-agentlenspro-cli <tool> --param value --out FILE   # full JSON to disk, digest to stdout
-agentlenspro-cli --install-otel                    # wire Claude Code telemetry (verified transaction)
-agentlenspro-cli --install-hooks                   # wire lifecycle hook capture + the burn-gate
-agentlenspro-cli --install-skill                   # (re)install the agentlenspro-diagnostics skill
+agentlenspro setup                        # detect → converge → verify → self-test
+agentlenspro setup --dry-run              # print the per-step plan, change nothing
+agentlenspro setup --yes                  # non-interactive (accepts e.g. old-package removal)
 ```
 
-#### The PATH-binary contract
+The same executable exposes all 32 diagnostic tools (recent sessions, cost, burn budget,
+workspace patterns, …) against the running server, plus the individual installers:
 
-The package publishes five bins (`package.json → bin`): `agentlenspro` (the server),
-`agentlenspro-cli` (diagnostics), `agentlenspro-heartbeat-cost`, and the two hook entry
-points `agentlenspro-hook` / `agentlenspro-gate`. `--install-hooks` writes those **bare
-bin names** into `~/.claude/settings.json` — never absolute paths into the package tree —
-so hook registrations survive package relocations (an absolute path under Homebrew's
-versioned Cellar would dangle after every `brew upgrade`). The two hook bins are thin
-wrappers that resolve the real forwarder/gate scripts relative to their own installed
-location at every fire, and the installer refuses to register a name that does not
-resolve on `PATH` (a bare-name hook that isn't on `PATH` would silently never fire).
-`--uninstall-hooks` removes both generations: the bare PATH names and any legacy
-absolute-path `spy-agentlens*` entries.
+```bash
+agentlenspro server start                 # server up (idempotent); `dashboard` opens the UI
+agentlenspro server status                # pid, uptime, memory, span store, disk writes
+agentlenspro list --desc                  # discover tools
+agentlenspro help <tool>                  # flags from the live schema
+agentlenspro <tool> --param value --out FILE   # full JSON to disk, digest to stdout
+agentlenspro --install-otel               # wire Claude Code telemetry (verified transaction)
+agentlenspro --install-hooks              # wire lifecycle hook capture + the burn-gate
+agentlenspro --install-skill              # (re)install the agentlenspro-diagnostics skill
+```
+
+#### The single-executable contract
+
+The package publishes exactly ONE bin (`package.json → bin`): `agentlenspro`. Everything —
+server control, dashboard, diagnostics, the hook entry points, heartbeat cost, setup — is a
+subcommand. Hooks are registered in `~/.claude/settings.json` as the command strings
+`agentlenspro hook` / `agentlenspro gate` (hook commands are shell strings, so arguments
+are valid) — never absolute paths into the package tree, so registrations survive package
+relocations (an absolute path under Homebrew's versioned Cellar would dangle after every
+`brew upgrade`). The installer refuses to register the commands when `agentlenspro` does
+not resolve on `PATH` (a hook the shell cannot find would silently never fire).
+`--uninstall-hooks` removes every generation: the v2 command strings, the v1
+`agentlenspro-hook`/`agentlenspro-gate` PATH-bin names, and any v0 absolute-path
+`spy-agentlens*` entries.
 
 ### Docker (OTEL only)
 
@@ -92,19 +105,9 @@ Open <http://localhost:3000> after the container starts.
 
 #### Configuring Agents for Local / Docker
 
-Use the included setup scripts to configure agents automatically, or see [Manual Configuration](#manual-configuration) for the manual steps.
-
-```bash
-# macOS / Linux
-chmod +x scripts/configure-agents.sh
-./scripts/configure-agents.sh
-```
-
-```powershell
-# Windows (PowerShell)
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-.\scripts\configure-agents.ps1
-```
+Run `agentlenspro setup` to configure the Claude Code integration automatically (telemetry
+env, hooks, skill — each step verified), or see [Manual Configuration](#manual-configuration)
+for the manual steps for every agent (Claude Code, Codex, Copilot CLI).
 
 ## Features
 
@@ -177,7 +180,7 @@ Capacity comes from one of three sources, in precedence order:
 2. **Manual (file):** the same keys in `~/.agentlens/burn-config.json`.
 3. **Auto-calibrated (observed):** Anthropic does not publish the raw caps, so with no manual config AgentlensPro **measures** one — when a rate-limit `StopFailure` kills a turn *before* the account's 5h window rolled, the consumption accumulated since the window started is a proven lower bound on the cap. It is persisted per account into `burn-config.json` (`observed` section) and reported as `capacitySource: "observed"` with the calibration date (`capacityObservedAt`). Observed figures only ever **ratchet up** (a later window that consumed more before limiting raises them; a smaller one proves nothing), a natural 5h rollover never calibrates (it measures elapsed time, not the cap), and any manual cap always wins — auto-calibration never touches a user-configured value.
 
-Lifecycle hook capture (`agentlenspro-cli --install-hooks`) is what delivers the `StopFailure` events auto-calibration listens for.
+Lifecycle hook capture (`agentlenspro --install-hooks`, or `agentlenspro setup`) is what delivers the `StopFailure` events auto-calibration listens for.
 
 ## Exporting and Importing Session Data
 

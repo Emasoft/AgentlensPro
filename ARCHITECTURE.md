@@ -1062,11 +1062,16 @@ agentlenspro/
 │   └── sidebar.js                # Compiled sidebar script
 ├── standalone/
 │   ├── server.ts                 # Standalone HTTP server (no VS Code)
-│   └── cli.ts                    # npx entrypoint: `agentlenspro` — starts server, auto-opens browser (--no-open to suppress)
+│   └── cli.ts                    # The ONE executable: `agentlenspro` — thin shim over src/cli/main.ts
+├── src/cli/                      # The single-executable dispatcher (TRDD-7284WCW7)
+│   ├── main.ts                   # Top-level dispatch: --version/--help fast paths, subcommand routing
+│   ├── diagnosticsCli.ts         # 32 diagnostic tools + ops flags (schemas live from the server)
+│   ├── serverControl.ts          # server start|stop|restart|status [--supervise], dashboard
+│   ├── hookHandlers.ts           # `agentlenspro hook` / `agentlenspro gate` stdin handlers
+│   ├── hookInstall.ts            # hook/OTEL/skill (un)installers + registration migration
+│   ├── heartbeatCostCli.ts       # `agentlenspro heartbeat-cost`
+│   └── cliCore.ts                # shared JSON-RPC/REST transport + endpoint/env resolution
 ├── scripts/
-│   ├── agentlens-cli.js          # `agentlenspro-cli` — 32 diagnostic tools + --install-otel/--install-hooks/--install-skill
-│   ├── agentlenspro-hook.js      # `agentlenspro-hook` PATH bin — wraps spy-agentlens.{sh,mjs} (lifecycle forwarder)
-│   ├── agentlenspro-gate.js      # `agentlenspro-gate` PATH bin — wraps spy-agentlens-gate.{sh,mjs} (burn gate)
 │   └── safe_config_edit.py       # Verified-transaction config editor (backup, verify-diff, lock)
 ├── esbuild.js                    # Build configuration (4 targets)
 ├── package.json                  # npm package manifest — bins, scripts, dependencies
