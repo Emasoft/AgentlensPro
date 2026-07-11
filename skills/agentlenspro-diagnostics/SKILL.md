@@ -136,7 +136,7 @@ Monitor(command: "agentlenspro --guard 15", description: "burn guard", persisten
 | Risk | Meaning | What to DO when it fires |
 |---|---|---|
 | `FANOUT_BURST` | ≥5 subagents launched in 2min (hook events) | If the parent session is fat or the cache cold, STOP launching; warm with ONE agent first |
-| `COLD_RESUME_RISK` | a StopFailure (rate-limit turn death) ≤10min ago | Do NOT resume a fan-out: the stall outlived the 5-min cache TTL — check `get_account_status` headroom, warm with one agent, then ramp |
+| `COLD_RESUME_RISK` | a StopFailure (rate-limit turn death) ≤10min ago | Do NOT resume a fan-out: the stall likely outlived the fan-out's cache TTL — subagents ALWAYS ride the 5-min tier (even when the main session is on the 1-hour subscription tier), so their prefixes go cold fast. Check `get_account_status` headroom, warm with one agent, then ramp |
 | `COMPACTION_REWRITE` | PreCompact ≤5min ago | The next turn rewrites the full prefix; avoid fan-outs/model switches until warm |
 | `HUGE_REQUEST_BURST` | ≥3 requests >1MB in 90s | A fat-context fan-out is IN FLIGHT — stop adding agents, let the wave settle |
 | `BURN_SPIKE` | live burn > 250k tokens/min (5-min window) | Run `investigate_burn --windowHours 1` NOW to name the source before it drains the window |

@@ -1,9 +1,9 @@
 ---
 trdd-id: 1758VB34
 title: Docs/help/skill consistency audit — verify every doc claim against shipped code
-column: backburner
+column: complete
 created: 2026-07-11T10:01:47+0200
-updated: 2026-07-11T10:01:47+0200
+updated: 2026-07-11T10:58:09+0200
 current-owner: orchestrator-agentlenspro
 priority: 3
 severity: LOW
@@ -11,11 +11,37 @@ effort: S
 labels: [docs, correctness]
 task-type: docs
 release-via: publish
-blocked-by: [VY1IUVUM]
-implementation-commits: []
+blocked-by: []
+implementation-commits: [a1a9e59]
 ---
 
 # Docs/help/skill consistency audit
+
+## ⏵ STATE — READ THIS FIRST ON RESUME — 2026-07-11 (COMPLETE — awaiting tag → published)
+
+Done on `docs/ttl-consistency-audit`, releasing as v2.3.1. Findings + resolutions (each verified
+against code, not assumed):
+
+- **`CACHE_TTL_MS` is GONE** (grep-proven — removed by VY1IUVUM). Fixed `ARCHITECTURE.md` L894 (the
+  "~5 minutes (`CACHE_TTL_MS`)" claim → the per-session `TtlRegime` / `computeKeepWarm(timeline, regime)`
+  model) and L988 (the file-tree descriptor; added a `cacheTtl.ts` line).
+- **`SKILL.md` `COLD_RESUME_RISK` row** → regime-aware (subagents ALWAYS ride 5-min even when the main
+  session is 1-hour). The other "5-min" refs in ARCHITECTURE/SKILL are the SPAN window / BURN window /
+  cold-resume-fanout window — CORRECT, left as-is (verified, not blindly changed).
+- **CLI --help / tool list** is auto-generated from the live MCP schema, so `get_agent_tokens` /
+  `get_account_status` (new fields) / `get_account_state_at` appear automatically — no manual help edit.
+- **Doc command refs verified present**: `pnpm run local`/`capture`/`demo`/`check-types`/`lint`/
+  `test:unit` all exist in package.json. `pnpm run local` was NOT stale (as the hit list warned).
+- **`media/dashboard.css` build-ownership DECISION = gitignore it** (Option A). Evidence: it is an
+  esbuild output (bundled from `media/src/styles/*.css` via the dashboard entry's CSS imports), yet was
+  the ONLY tracked build artifact — every sibling (`media/dashboard.js`, `standalone/*.js`,
+  `media/sidebar.js`, even its own `.css.map`) is already gitignored. Applied `git rm --cached` +
+  `.gitignore` entry; the single owner is now `media/src/styles/*.css`. SAFE: publish.yml runs
+  `node esbuild.js --production` BEFORE `npm pack`, and `npm pack --dry-run` confirmed the 31.5kB
+  `media/dashboard.css` still ships (it stays in the `files` allowlist; pack reads on-disk, not git).
+
+- **SUPERSEDED — do NOT carry forward**: the hit list's premise that this needed VY1IUVUM to merge
+  first (it has — v2.2.0) and the "esbuild overwrites dashboard.css → decide" open question (decided).
 
 ## Requirement (USER 2026-07-11)
 
