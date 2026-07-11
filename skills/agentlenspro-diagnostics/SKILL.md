@@ -1,7 +1,7 @@
 ---
 name: agentlenspro-diagnostics
 description: >-
-  Query AgentlensPro token/cost forensics from any project via the global agentlenspro-cli — use when
+  Query AgentlensPro token/cost forensics from any project via the single global agentlenspro executable — use when
   a session is burning tokens, a rate-limit window drains too fast, the prompt cache keeps
   breaking, you need the cost of a session / heartbeat / sub-agent fleet, or any "why is this so
   expensive" question. GUARD in realtime with check_burn_risk / `--guard` (arm in a background
@@ -15,15 +15,17 @@ description: >-
   cache-break causes/timeline, expensive writes, heartbeat cost, config comparison, SQL
   analytics). START with investigate_burn — the ONE-command investigation that names the
   window-burn culprits (fork storms, premium-model fan-outs, idle-fleet keep-warm, image
-  residency) ranked with evidence. Also the operations surface: start the server (--start-server), open the
-  dashboard (--dashboard), (re)install this skill (--install-skill),
-  and wire/unwire Claude Code capture — telemetry env vars (--install-otel / --uninstall-otel)
-  and lifecycle hook events (--install-hooks / --uninstall-hooks).
+  residency) ranked with evidence. Also the operations surface: the one-command idempotent
+  installer/repairer (`agentlenspro setup [--dry-run] [--yes]` — detect, converge, verify each
+  step, self-test), server control (`server start|stop|restart|status [--supervise]`), open the
+  dashboard (`dashboard`), (re)install this skill (--install-skill), and wire/unwire Claude Code
+  capture — telemetry env vars (--install-otel / --uninstall-otel) and lifecycle hook events
+  (--install-hooks / --uninstall-hooks).
 ---
 
 # AgentlensPro diagnostics via the global CLI
 
-`agentlenspro-cli` is a PATH binary installed with the **agentlenspro** package (npm global,
+`agentlenspro` is a PATH binary installed with the **agentlenspro** package (npm global,
 npx, or Homebrew — whichever install method put it on PATH) and works from **any** project
 directory. This skill deliberately relies ONLY on PATH binaries — it ships no scripts and never
 references package-internal or repository paths, because the package layout differs per install
@@ -32,18 +34,18 @@ is deliberately NOT registered anywhere: resident MCP schemas cost ~8k tokens on
 toolset changes break the prompt-cache prefix. The CLI costs zero resident tokens; its
 subcommands, flags, and help come from the server's own live schemas, so it is never stale.
 
-If `agentlenspro-cli` is not on PATH, (re)install the package — `npm install -g agentlenspro`
+If `agentlenspro` is not on PATH, (re)install the package — `npm install -g agentlenspro`
 (or the Homebrew formula; developers working from a checkout use `npm link`). This skill never
 installs the server itself; the CLI starts it on demand.
 
 ## Commands
 
 ```bash
-agentlenspro-cli list --desc                    # every tool + one-line description
-agentlenspro-cli help <tool>                    # a tool's description + typed flags (live schema)
-agentlenspro-cli <tool> [--param value ...]     # direct call
-agentlenspro-cli call <tool> '<json-args>'      # raw JSON args object
-agentlenspro-cli batch '<json-array>'           # N tools in ONE invocation: [{"tool":"…","args":{…}}]
+agentlenspro list --desc                    # every tool + one-line description
+agentlenspro help <tool>                    # a tool's description + typed flags (live schema)
+agentlenspro <tool> [--param value ...]     # direct call
+agentlenspro call <tool> '<json-args>'      # raw JSON args object
+agentlenspro batch '<json-array>'           # N tools in ONE invocation: [{"tool":"…","args":{…}}]
 ```
 
 ## Options (concise)
@@ -61,8 +63,8 @@ agentlenspro-cli batch '<json-array>'           # N tools in ONE invocation: [{"
 | `--purge-bodies` | delete ALL archived body volumes (the live 72h window is untouched) |
 | `--risk` | one-shot realtime culprit check (~40ms REST fast path): prints only the ACTIVE burn risks, each naming the culprit session/workspace/model + magnitude |
 | `--install-skill` | (re)install THIS skill into `~/.claude/skills/` — idempotent, reports installed/updated/current |
-| `--install-hooks` | register the `agentlenspro-hook` PATH bin on the 10 LIFECYCLE hook events (SessionStart/End, Stop, StopFailure, Pre/PostCompact, Permission, Notification, SubagentStart/Stop) AND the burn-gate (the `agentlenspro-gate` PATH bin on PreToolUse/PostToolUse matched to `^(Task\|Agent\|Workflow\|SendMessage)$` only — see "The burn-gate" below) via the same verified transaction. Bare bin names, not absolute paths — registrations survive Homebrew version bumps; the install refuses if the bins are not on PATH. Also removes dead claude-spyglass entries and legacy absolute-path `spy-agentlens*` registrations. Never touches other tools' hooks. Idempotent; needs a session restart |
-| `--uninstall-hooks` | remove exactly those agentlens hook entries — both PATH-bin names and legacy absolute-path `spy-agentlens*` registrations (nothing else) |
+| `--install-hooks` | register the `agentlenspro hook` command string on the 10 LIFECYCLE hook events (SessionStart/End, Stop, StopFailure, Pre/PostCompact, Permission, Notification, SubagentStart/Stop) AND the burn-gate (`agentlenspro gate` on PreToolUse/PostToolUse matched to `^(Task\|Agent\|Workflow\|SendMessage)$` only — see "The burn-gate" below) via the same verified transaction. Bare bin + subcommand, never absolute paths — registrations survive Homebrew version bumps; the install refuses if `agentlenspro` is not on PATH. Also migrates every previous-generation registration (`agentlenspro-hook`/`agentlenspro-gate` PATH bins, absolute-path `spy-agentlens*` scripts) and removes dead claude-spyglass entries. Never touches other tools' hooks. Idempotent; needs a session restart |
+| `--uninstall-hooks` | remove exactly those agentlens hook entries — every generation: v2 command strings, v1 PATH-bin names, legacy absolute-path `spy-agentlens*` registrations (nothing else) |
 | `--install-otel` | add the 19 Claude Code telemetry env vars to `~/.claude/settings.json` via a verified transaction: atomic backup+rename, cross-process lock, post-verify, refuses an unparseable file, all other content untouched, idempotent (`changed=false` when already installed) |
 | `--uninstall-otel` | remove exactly those 19 vars, same guarantees |
 
@@ -98,7 +100,7 @@ boot refuses cleanly. `batch --out` files are position-prefixed (`out-1-<tool>.j
    ```bash
    MAIN_ROOT="$(git worktree list | head -n1 | awk '{print $1}')"
    REPORT_DIR="$MAIN_ROOT/reports/agentlens-diagnostics"; mkdir -p "$REPORT_DIR"
-   agentlenspro-cli get_cache_break_causes --out "$REPORT_DIR/$(date +%Y%m%d_%H%M%S%z)-break-causes.json"
+   agentlenspro get_cache_break_causes --out "$REPORT_DIR/$(date +%Y%m%d_%H%M%S%z)-break-causes.json"
    ```
 
    (`./reports/` must be gitignored; add it if missing.) Read back only the fields you need.
@@ -113,10 +115,10 @@ lifecycle hook events — SubagentStart/StopFailure/PreCompact — arrive within
 `--install-hooks` is active). `check_burn_risk` fuses them into 5 flags; `--guard` watches:
 
 ```bash
-agentlenspro-cli --risk                   # FASTEST culprit check (~40ms, REST): only the ACTIVE
+agentlenspro --risk                   # FASTEST culprit check (~40ms, REST): only the ACTIVE
                                        # risks, each naming WHO (session/workspace/model) + size
-agentlenspro-cli --guard 15               # watch loop: one [burn-guard] line per risk TRANSITION
-agentlenspro-cli check_burn_risk          # same report via MCP (full flags incl. inactive ones)
+agentlenspro --guard 15               # watch loop: one [burn-guard] line per risk TRANSITION
+agentlenspro check_burn_risk          # same report via MCP (full flags incl. inactive ones)
 ```
 
 Every risk detail NAMES THE CULPRIT: launch/stall attribution is exact (SubagentStart /
@@ -128,7 +130,7 @@ when nothing was attributable the message says so and points at `investigate_bur
 batches** — each stdout line then interrupts you the moment a risk fires:
 
 ```
-Monitor(command: "agentlenspro-cli --guard 15", description: "burn guard", persistent: true)
+Monitor(command: "agentlenspro --guard 15", description: "burn guard", persistent: true)
 ```
 
 | Risk | Meaning | What to DO when it fires |
@@ -168,7 +170,7 @@ model when a wave just triggered CACHE_THRASH / a fan-out burst (one per session
 10min — per-call injections are themselves a cache-break cause).
 
 Operational facts: fail-open by construction (server down = 13ms silent no-op — the gate can
-never stall or fail a turn). **Switches are REALTIME and machine-wide** — `agentlenspro-cli
+never stall or fail a turn). **Switches are REALTIME and machine-wide** — `agentlenspro
 --hooks` shows them, `--hooks gate=off|warn|enforce capture=on|off advisor=on|off` flips them
 instantly for every running session (the server is the decision point; registrations never
 change, so no restarts). Per-session escape hatch: `AGENTLENS_GATE=off` env (checked in the
@@ -176,7 +178,7 @@ hook script before any network). Thresholds tune via `AGENTLENS_GATE_FORK_FAT_TO
 `_RUNAWAY_60S` / `_FANOUT_WARN_2MIN` / `_COLD_IDLE_MS` / `_COLD_RESUME_WINDOW_MS`. Deny/warn
 counts appear in `--status` and `/api/server-stats` under `gate`; every gate intervention
 also lands on the dashboard's notification panel (SSE alerts). If a deny is wrong for a
-legitimate mass fan-out, `agentlenspro-cli --hooks gate=warn` for that run and restore after.
+legitimate mass fan-out, `agentlenspro --hooks gate=warn` for that run and restore after.
 
 ## High-value tools (cheat-sheet)
 
