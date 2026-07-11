@@ -177,12 +177,24 @@ export interface ScratchFileContent {
 // returned content at maxBytes (default 200KB) with an explicit `truncated` flag; a deleted/absent
 // file returns { exists:false } (never a silent null). Shared by the standalone /api/generated-file
 // route and the VS Code dashboardPanel postMessage bridge so both enforce the same guard + cap.
+//
+// SECURITY (path-traversal containment): isClaudeScratchPath is a REGEX over the raw string — it only
+// asserts the path CONTAINS a `/tmp/claude-<x>/` segment, so `/tmp/claude-501/../../../etc/passwd`
+// matches yet resolves outside the scratch tree. Because the standalone UI server sets
+// `Access-Control-Allow-Origin: *`, a raw-string check would let ANY website the user is browsing read
+// arbitrary local files (ssh keys, .env, settings.json with OAuth tokens) via /api/generated-file.
+// The fix is realpath containment: resolve symlinks + `..` to the CANONICAL path and re-check the
+// regex on THAT — a canonical path has no `..`, so a match now genuinely means "inside a scratch
+// tree". All stat/read then use the canonical path, never the caller-supplied string.
 export function readScratchFile(p: string, maxBytes = 200 * 1024): ScratchFileContent {
   if (!isClaudeScratchPath(p)) return { exists: false, error: 'path not under a Claude scratch tree' }
+  let real: string
+  try { real = fs.realpathSync(p) } catch { return { exists: false } }
+  if (!isClaudeScratchPath(real)) return { exists: false, error: 'path not under a Claude scratch tree' }
   try {
-    const st = fs.statSync(p)
+    const st = fs.statSync(real)
     if (!st.isFile()) return { exists: false, error: 'not a file' }
-    const buf = fs.readFileSync(p)
+    const buf = fs.readFileSync(real)
     return {
       exists: true,
       sizeBytes: st.size,

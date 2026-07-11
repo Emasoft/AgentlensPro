@@ -103,6 +103,22 @@ suite('generatedFiles — resolve + read', () => {
       assert.strictEqual((r.content ?? '').length, 10)
     } finally { fs.rmSync(dir, { recursive: true, force: true }) }
   })
+
+  test('readScratchFile refuses a .. traversal that escapes the scratch tree (path-traversal containment)', () => {
+    // A path that CONTAINS a /tmp/claude-*/ segment but climbs back out with `..` matches the naming
+    // regex yet resolves OUTSIDE the tree. Without realpath containment this leaked arbitrary local
+    // files (ssh keys, .env, settings.json) — cross-origin, via /api/generated-file + ACAO:*.
+    const dir = fs.mkdtempSync('/tmp/claude-trav-')
+    try {
+      // Build the string by hand (path.join would normalize the `..` away): it must stay a literal
+      // traversal so it still matches the scratch regex but realpath-resolves to /etc/hosts.
+      const traversal = `${dir}/../../../../../../../../etc/hosts`
+      assert.strictEqual(isClaudeScratchPath(traversal), true, 'raw string still matches the scratch regex')
+      const r = readScratchFile(traversal)
+      assert.strictEqual(r.exists, false, 'realpath containment must refuse the escaped path')
+      assert.strictEqual(r.content, undefined, 'no outside-tree content is returned')
+    } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+  })
 })
 
 suite('generatedFiles — bounded scratch-tree index', () => {
