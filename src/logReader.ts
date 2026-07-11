@@ -2247,8 +2247,15 @@ function _extractTextContent(content: unknown): string {
  *   - Frames: 24-byte frame header + pageSize bytes of page data
  *     Frame header: pgno (4), dbSize (4), salt1 (4), salt2 (4), cksum1 (4), cksum2 (4)
  * Frames whose salts don't match the WAL header belong to a stale WAL — stop there.
+ *
+ * COMMIT BOUNDARY (S1-F6): a frame's `dbSize` header field is NON-ZERO only on the LAST frame of a
+ * committed transaction (it records the db size in pages after that commit); it is 0 on every
+ * mid-transaction frame. OpenCode writes to this WAL continuously, so the tail frames can be an
+ * in-flight transaction that has not committed (and may roll back). Applying them would surface
+ * uncommitted rows as if committed. So we apply frames only up to and including the LAST commit frame;
+ * a trailing uncommitted transaction is ignored (it becomes visible on the next scan once it commits).
  */
-function _mergeWal(dbBuf: Uint8Array, walBuf: Uint8Array): Uint8Array {
+export function _mergeWal(dbBuf: Uint8Array, walBuf: Uint8Array): Uint8Array {
   const dv = (b: Uint8Array) => new DataView(b.buffer, b.byteOffset, b.byteLength)
   if (walBuf.length < 32) return dbBuf
   const wDv = dv(walBuf)
@@ -2260,14 +2267,18 @@ function _mergeWal(dbBuf: Uint8Array, walBuf: Uint8Array): Uint8Array {
   const salt2 = wDv.getUint32(20)
 
   const FRAME = 24 + pageSize
-  let result = new Uint8Array(dbBuf)
-  let off = 32
 
-  while (off + FRAME <= walBuf.length) {
-    const pgno   = wDv.getUint32(off)
-    const fSalt1 = wDv.getUint32(off + 8)
-    const fSalt2 = wDv.getUint32(off + 12)
-    if (fSalt1 !== salt1 || fSalt2 !== salt2) break  // stale generation
+  // Pass 1: find the end offset of the LAST committed transaction (last salt-matching commit frame).
+  let lastCommitEnd = 32 // no commit seen yet → apply nothing, main db is the truth
+  for (let off = 32; off + FRAME <= walBuf.length; off += FRAME) {
+    if (wDv.getUint32(off + 8) !== salt1 || wDv.getUint32(off + 12) !== salt2) break // stale generation
+    if (wDv.getUint32(off + 4) !== 0) lastCommitEnd = off + FRAME // dbSize != 0 → commit frame
+  }
+
+  // Pass 2: apply only the frames up to the last commit boundary (last-writer-wins per page).
+  let result = new Uint8Array(dbBuf)
+  for (let off = 32; off < lastCommitEnd; off += FRAME) {
+    const pgno = wDv.getUint32(off)
     if (pgno >= 1) {
       const pageOff = (pgno - 1) * pageSize
       const pageEnd = pageOff + pageSize
@@ -2278,7 +2289,6 @@ function _mergeWal(dbBuf: Uint8Array, walBuf: Uint8Array): Uint8Array {
       }
       result.set(walBuf.slice(off + 24, off + 24 + pageSize), pageOff)
     }
-    off += FRAME
   }
 
   return result
