@@ -3,7 +3,7 @@ trdd-id: 4AFOFVFD
 title: Code-review remediation — 16 fixed + merged, 7 deferred to implement
 column: dev
 created: 2026-07-11T13:15:51+0200
-updated: 2026-07-11T13:15:51+0200
+updated: 2026-07-11T15:49:19+0200
 current-owner: claude-code-review
 assignee: claude-code-review
 priority: 2
@@ -13,7 +13,7 @@ labels: [security, correctness, review, ingest, pricing]
 task-type: bugfix
 parent-trdd: null
 npt: []
-eht: []
+eht: [TRDD-DYG4ZTXW]
 blocked-by: []
 supersedes: []
 superseded-by: []
@@ -61,19 +61,43 @@ for the owner to trigger (live to every agent on the machine).
 - ✅ S2-F5, S1-F7, S1-F8, S1-F9 — committed `bcb033c` (accounting).
 - ✅ S1-F6 — committed `5badd13` (OpenCode WAL commit-boundary).
 - ✅ S3-F5 — committed `3208971` (hook install append_unique, race-safe).
-- ⬜ **S3-F3 — the ONLY remaining item.** Unify OTLP ingest. HIGHEST RISK (live hot
-  path). Plan: the standalone server's OWN inline `processLogs`/`processTraces`
-  (`standalone/server.ts` ~1030-1130 / ~987-1014) is what SHIPS; the unit-tested
-  `src/otlpCollector.ts` is dead in prod (grep 0 `new OtlpCollector` outside tests)
-  AND richer — it has `gen_ai.choice`/`gen_ai.assistant.message` response-content
-  buffering (`formatGenAiEventContent`) + full Codex normalization
-  (`resolveCodexSessionId`, prompt-ordinal split) the inline path lacks. So the
-  SHIPPED path silently drops gen_ai response text + groups Codex differently than
-  tests validate. Correct fix: extract the shared ingest into ONE module both call
-  (or delete the dead class + move its tests onto the inline fns so tests exercise
-  shipped code). Verify with a test that drives the ACTUAL shipped path with a
-  gen_ai response event + a multi-prompt Codex conversation. Gate green baseline
-  before starting: 870 passing.
+- 🔬 **S3-F3 — the LAST item. CORRECTED three-way analysis (verified 2026-07-11).**
+  The handoff's two-way view (standalone-inline vs collector) was INCOMPLETE. There
+  are THREE divergent OTLP-log ingest implementations with BIDIRECTIONAL gaps:
+  1. **`standalone/server.ts` `processLogs` (@1036) — SHIPPED.** HAS: Claude
+     rich-event gate + tool_result + body-pointer registry (TRDD-ICHAVFCS/BURNWDGT)
+     + account capture. MISSING: gen_ai response buffering; per-prompt Codex split
+     (it groups Codex by conversation-id only, @1106-1110).
+  2. **`src/otlpCollector.ts` (721 LOC) — DEAD in prod** (0 `new OtlpCollector`, 0
+     imports). HAS: gen_ai buffering (`formatGenAiEventContent` @689 +
+     `genAiResponseBuffer`, injected into the store via
+     `sessionStore.injectSpanAttribute`) AND per-prompt Codex normalization
+     (`resolveCodexSessionId` @289).
+  3. **`src/otlpParser.ts` (280 LOC) — only `classifyOtlpPayload` used in prod.**
+     `parseLogPayload`/`parseTracePayload` are dead-but-tested; `parseLogPayload`
+     HAS the same per-prompt Codex `resolveSessionId` (@155-200, tested by
+     otlpParser.test.ts) but NO gen_ai buffering, NO Claude/body-pointer handling
+     (Codex-only). Its Codex state is per-CALL (fresh maps); the collector's is
+     per-INSTANCE (cross-payload).
+  Per-prompt `codex:<conv>:prompt-N` grouping is the UNAMBIGUOUS design intent —
+  asserted across otlpCollector.test.ts, otlpParser.test.ts, AND spanSummarizer.test.ts
+  (the summarizer the shipped path FEEDS already expects prompt-N keying). The
+  shipped path is the drifted outlier.
+  - ⬜ **S3-F3a (DO NOW — correctness, clean):** extract otlpParser's Codex
+    `resolveSessionId` into ONE shared STATEFUL class `src/codexSessionNormalizer.ts`.
+    Wire all three: otlpParser (per-call instance — unchanged behavior), otlpCollector
+    (delegate — unchanged behavior), standalone `processLogs` (MODULE-LEVEL singleton →
+    per-prompt grouping, replacing the @1106-1110 conversation-id branch). Single
+    source of truth, no duplication, nothing deleted. TDD: a NEW test drives the
+    SHIPPED `processLogs` with a 2-prompt Codex conversation → assert two distinct
+    `codex:<conv>:prompt-1/2` groups (must fail before). Design spec: §"S3-F3a spec".
+  - ⬜ **S3-F3b (DERIVED TRDD — enrichment, deferred):** port gen_ai response
+    buffering to the shipped path. BLOCKED on store surgery: `SegmentedSpanStore`
+    (the shipped store) has NO `injectSpanAttribute` (only the legacy `sessionStore`
+    does), and the buffer needs a `processTraces` drain. Higher risk (attribute
+    injection into possibly-persisted disk segments), lower value (data enrichment,
+    not accounting). Tracked separately — NOT dropped.
+  Gate green baseline before starting: 872 passing.
 
 **Load-bearing facts / gotchas:**
 - `pnpm`/`tsc`/`esbuild` run under default Node (26 here); the Mocha suite runs
@@ -137,17 +161,56 @@ added regression tests, and gated (858→862, 0 failing).
 ## Deferred findings (7) — the open work order
 
 ### 1. S3-F3 [MEDIUM, highest risk] — unify OTLP ingest, kill OtlpCollector drift
-- **Where:** `standalone/server.ts` inline `processLogs`/`processTraces` vs the
-  unit-tested-but-unused `src/otlpCollector.ts`.
-- **Bug:** the tested class is dead in production; the shipped inline path is
-  MISSING `gen_ai.choice`/`gen_ai.assistant.message` response-content buffering
-  and the full Codex session normalization the tests validate → gen_ai response
-  text silently dropped, Codex sessions grouped differently than tested.
-- **Fix approach:** extract the shared ingest logic into one module both the
-  (retained) collector and the standalone call — OR delete the dead class and
-  move its tests onto the inline functions so tests exercise shipped code.
-- **Test:** a test that drives the ACTUAL shipped ingest path with a
-  gen_ai response event + a multi-prompt Codex conversation.
+- **Where:** THREE divergent impls (see STATE §S3-F3): `standalone/server.ts`
+  `processLogs` (SHIPPED), `src/otlpCollector.ts` (dead), `src/otlpParser.ts`
+  (`parseLogPayload` dead-but-tested).
+- **Bug:** bidirectional gaps. The shipped path groups Codex by conversation-id,
+  not per-prompt `codex:<conv>:prompt-N` (the design intent asserted across 3 test
+  files), AND drops gen_ai response text.
+- **Split (verified three-way, 2026-07-11):** S3-F3a (Codex, do now) + S3-F3b
+  (gen_ai, derived TRDD).
+
+## S3-F3a spec — shared Codex session normalizer (the DO-NOW half)
+
+**Goal:** ONE source of truth for the `codex:<conv>:prompt-N` per-prompt grouping,
+used by all three ingest impls. Nothing deleted; no duplicated logic.
+
+1. **NEW `src/codexSessionNormalizer.ts`** — a STATEFUL class `CodexSessionNormalizer`
+   holding the maps as instance fields (`codexSessionByOtelTraceId`,
+   `codexCurrentSessionByConversation`, `codexSessionStateById`,
+   `codexPromptOrdinalByConversation`, `codexActivePromptSessionId`), with the EXACT
+   logic lifted from `otlpParser.parseLogPayload` @133-200 — `getSessionState`,
+   `nextPromptSessionId`, `isCodexPromptEventName`, and `resolveSessionId(opts)`
+   returning `string | undefined`. No behavior change vs that code; a pure structural
+   extraction (per-call closures → instance methods). Keep `isCodexPromptEventName`
+   exported too (otlpParser uses it at @259 for the root-span mapping).
+2. **`src/otlpParser.ts`** — replace the inline `resolveSessionId` + its five closure
+   maps (@133-200) with `const norm = new CodexSessionNormalizer()` at the top of
+   `parseLogPayload` and call `norm.resolveSessionId(...)`. Per-CALL instance ⇒
+   identical per-payload behavior ⇒ otlpParser.test.ts unchanged/green.
+3. **`src/otlpCollector.ts`** — replace `resolveCodexSessionId` (@289) + its supporting
+   private methods/fields with an instance `private codexNorm = new CodexSessionNormalizer()`
+   and delegate. Identical behavior ⇒ otlpCollector.test.ts unchanged/green. (Leave the
+   gen_ai buffer code alone — that is S3-F3b.)
+4. **`standalone/server.ts`** — add a MODULE-LEVEL singleton `const codexNorm = new
+   CodexSessionNormalizer()` (state must persist across per-request `processLogs` calls,
+   like the collector's instance did). In the Codex branch of `processLogs` (@1106-1110)
+   replace the conversation-id-only grouping with the normalizer: compute `conversationKey`
+   (conv.id/thread.id/session.id/traceId, matching otlpParser @223-233 + fallback), call
+   `codexNorm.resolveSessionId({conversationId, otlpTraceId, turnId, spanName:name})`, and
+   key the span's `traceId` on the returned `codex:<conv>:prompt-N` (fallbacks preserved:
+   `sessionId || otlpTraceId || conversationKey`). Stamp `codex.session.id` /
+   `codex.conversation.id` / `codex.turn.id` attrs like otlpParser @249-253 so
+   spanSummarizer (which expects prompt-N keying) groups correctly. Do NOT touch the
+   Claude/body-pointer branches.
+5. **TDD (write FIRST, must fail before step 4):** NEW `src/test/standaloneCodexIngest.test.ts`
+   drives the SHIPPED `processLogs` (export it if not already; a test importing
+   `OtlpCollector` proves nothing) with a 2-prompt Codex conversation (same conversation.id,
+   two `codex.user_prompt` events + responses) → assert two distinct groups
+   `codex:<conv>:prompt-1` and `codex:<conv>:prompt-2` reach the span store, NOT one
+   conversation-id group.
+- **S3-F3b (gen_ai) → separate DERIVED TRDD.** Needs `SegmentedSpanStore.injectSpanAttribute`
+  + a `processTraces` buffer drain; higher risk, lower value. Not this turn.
 
 ### 2. S3-F5 [LOW] — hookInstall TOCTOU
 - **Where:** `src/cli/hookInstall.ts` — reads settings, computes `r.rebuilt`,
