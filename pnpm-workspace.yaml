@@ -34,3 +34,12 @@ strictDepBuilds: true
 # on — reviewed and required.
 allowBuilds:
   esbuild: true
+# Security overrides — force patched versions of transitive deps flagged by
+# Dependabot (2026-07-11). hono is the only RUNTIME one (shipped via the MCP SDK
+# bundle); the rest are build/test-only. js-yaml pinned <5 to take the 4.x
+# backport fix without the 5.x major bump.
+overrides:
+  hono: '>=4.12.25'
+  shell-quote: '>=1.8.4'
+  serialize-javascript: '>=7.0.5'
+  js-yaml: '>=4.2.0 <5'
