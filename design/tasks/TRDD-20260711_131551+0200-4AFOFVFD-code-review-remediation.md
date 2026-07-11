@@ -56,15 +56,24 @@ and the three per-slice reports alongside it. 4 regression tests added
 until a real `pnpm run deploy:safe` (build + restart) is run — deliberately left
 for the owner to trigger (live to every agent on the machine).
 
-**NEXT ACTION — implement the 7 DEFERRED findings (this TRDD's open work), each
-with a regression test, gating after each:**
-1. S3-F3 — unify OTLP ingest (kill `OtlpCollector` production drift). HIGHEST RISK.
-2. S3-F5 — hookInstall TOCTOU (no stale whole-array `set`).
-3. S1-F6 — OpenCode WAL commit-boundary (don't surface uncommitted frames).
-4. S1-F9 — per-turn fast-mode pricing (no whole-session `-fast` stamp).
-5. S1-F8 — match each `tool_result` to its own `toolUseResult` (or enforce+doc 1:1).
-6. S1-F7 — define `SessionStore.tokensUsed` precisely (no bucket double-count).
-7. S2-F5 — thread the model's `cacheReadPerMTok` into `priceWaste` (drop hardcoded 0.1×).
+**DEFERRED-FINDINGS PROGRESS — 6 of 7 DONE + tested (on branch
+`fix/code-review-deferred-findings`), 1 remaining:**
+- ✅ S2-F5, S1-F7, S1-F8, S1-F9 — committed `bcb033c` (accounting).
+- ✅ S1-F6 — committed `5badd13` (OpenCode WAL commit-boundary).
+- ✅ S3-F5 — committed `3208971` (hook install append_unique, race-safe).
+- ⬜ **S3-F3 — the ONLY remaining item.** Unify OTLP ingest. HIGHEST RISK (live hot
+  path). Plan: the standalone server's OWN inline `processLogs`/`processTraces`
+  (`standalone/server.ts` ~1030-1130 / ~987-1014) is what SHIPS; the unit-tested
+  `src/otlpCollector.ts` is dead in prod (grep 0 `new OtlpCollector` outside tests)
+  AND richer — it has `gen_ai.choice`/`gen_ai.assistant.message` response-content
+  buffering (`formatGenAiEventContent`) + full Codex normalization
+  (`resolveCodexSessionId`, prompt-ordinal split) the inline path lacks. So the
+  SHIPPED path silently drops gen_ai response text + groups Codex differently than
+  tests validate. Correct fix: extract the shared ingest into ONE module both call
+  (or delete the dead class + move its tests onto the inline fns so tests exercise
+  shipped code). Verify with a test that drives the ACTUAL shipped path with a
+  gen_ai response event + a multi-prompt Codex conversation. Gate green baseline
+  before starting: 870 passing.
 
 **Load-bearing facts / gotchas:**
 - `pnpm`/`tsc`/`esbuild` run under default Node (26 here); the Mocha suite runs
