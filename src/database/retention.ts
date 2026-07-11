@@ -14,8 +14,23 @@ export async function runRetention(
 ): Promise<void> {
   const cutoffMs = Date.now() - retentionDays * 86_400_000
 
-  // Delete old sessions; CASCADE handles timeline_entries and edit_details.
+  // Explicit child-first deletes for the sessions about to be removed. sql.js does NOT reliably honor
+  // ON DELETE CASCADE (writer.ts / db.ts delete children explicitly for the same reason), so a
+  // sessions-only DELETE leaves orphaned timeline_entries / edit_details / generated_files rows — and
+  // the blob-eviction pass below keys its "known" span_ids off timeline_entries, so those orphan rows
+  // would keep their blob files alive forever (unbounded disk growth despite a "successful" retention).
+  // Delete deepest child first, then the sessions. The child predicate `s.start_time < ?` covers both
+  // main and sidechain cutoff sessions (the exact set the two session DELETEs below remove).
   try {
+    db.run(
+      `DELETE FROM edit_details WHERE timeline_entry_id IN (
+         SELECT te.id FROM timeline_entries te
+         JOIN sessions s ON s.session_id = te.session_id
+         WHERE s.start_time < ?)`,
+      [cutoffMs],
+    )
+    db.run('DELETE FROM timeline_entries WHERE session_id IN (SELECT session_id FROM sessions WHERE start_time < ?)', [cutoffMs])
+    db.run('DELETE FROM generated_files WHERE session_id IN (SELECT session_id FROM sessions WHERE start_time < ?)', [cutoffMs])
     db.run('DELETE FROM sessions WHERE start_time < ? AND is_sidechain = 0', [cutoffMs])
     // Sidechain sessions without a corresponding main session in the retained range.
     db.run(
