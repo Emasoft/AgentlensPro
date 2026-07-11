@@ -49,8 +49,8 @@ awareness (current account, plan type, % 5h + % 7d remaining). See [[agentlens-a
 context is ~98% **MESSAGES** (the append-only transcript), ~2% tool schemas, ~0.2% system prompt (CLAUDE.md
 + rules are TINY in the prefix, NOT the bloat). The Anthropic API is STATELESS, so the WHOLE transcript is
 re-sent every call and a block only leaves on COMPACTION — so anything pasted early rides forward, re-read
-(cache_read) every turn, for the session's life. The acute case: **ANIME2SVG (claude-fable-5) carries 8
-stuck screenshots = 525.1k tokens = ~half its 1M window, re-read every turn (~$425 of its ~$1,342 cost)**
+(cache_read) every turn, for the session's life. The acute case: **a local visual (SVG) agent
+(claude-fable-5) carried 8 stuck screenshots = 525.1k tokens = ~half its 1M window, re-read every turn (~$425 of its ~$1,342 cost)**
 [^3]. Fix: do image work in a SUBAGENT (isolated context → image never enters the parent transcript);
 compact aggressively. AgentLens ALREADY parses these bodies (`src/rawBodyContext.ts buildCallContext`);
 the missing piece is a queryable index + MCP tools + a resident-blob alert — tracked in TRDD-CTXQUERY.
