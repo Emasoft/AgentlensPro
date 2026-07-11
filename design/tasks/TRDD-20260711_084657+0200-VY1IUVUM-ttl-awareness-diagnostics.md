@@ -23,14 +23,23 @@ implementation-commits: []
 
 # TTL-awareness in cache diagnostics (USER directive 2026-07-11, doc-verified)
 
-## ⏵ STATE — READ THIS FIRST ON RESUME — 2026-07-11
+## ⏵ STATE — READ THIS FIRST ON RESUME — 2026-07-11 (IMPL INCOMPLETE — agent failed)
 
-- **Current state**: spec expanded per USER directive (relayed via the retired keep-warm
-  fork, then INDEPENDENTLY VERIFIED against code.claude.com/docs/en/prompt-caching.md by
-  the orchestrator). Implementation agent launching on feat/ttl-awareness.
-- **NEXT ACTION**: agent delivers parts 1–3; orchestrator deploys + releases; the janitor
-  cadence proposal (part 4) is a GitHub issue on Emasoft/ai-maestro-janitor, filed by the
-  orchestrator, NOT this repo's work.
+- **Current state**: PARTIALLY IMPLEMENTED, NOT MERGED. The implementation agent ran out of
+  usage credits mid-work. Branch `feat/ttl-awareness` holds 3 good commits (d51f1a0 shared
+  `cacheTtl` module, de77d15 keepWarm TTL-regime classification + measured falsifier,
+  11225fd gate COLD_RESUME/COLD_FORK TTL-aware) PLUS a WIP snapshot commit (582c507) that
+  preserves the half-wired server/burnMonitor work — it is NOT mergeable: unused imports
+  (`getTtlContext`, `cardTtlRegime`, `ASSUMED_TTL_REGIME`), and an uncommitted-then-WIP
+  `src/ttlContext.ts` that DUPLICATES / needs reconciling with the committed
+  `src/shared/cacheTtl` module. main is UNAFFECTED (still assumes 5-min TTL — so the current
+  docs/ARCHITECTURE.md keepWarm section correctly describe SHIPPED behavior; do NOT
+  pre-emptively rewrite them until this merges).
+- **NEXT ACTION (to finish)**: on `feat/ttl-awareness`, reconcile `src/ttlContext.ts` vs
+  `src/shared/cacheTtl` into ONE module, finish the server + burnMonitor wiring, clear the
+  unused imports, add the fixture matrix tests, gates (baseline now 783/0 after main moved),
+  bump v2.2.0, merge --no-ff. THEN task #43 docs audit runs (its TTL items become live).
+  The 3 core commits are sound — resume, don't restart.
 
 ## THE VERIFIED TTL MATRIX (doc facts — the ground truth this feature encodes)
 
