@@ -167,8 +167,26 @@ export async function installHooks(uninstall: boolean, opts: InstallHooksOptions
     removedOurs += r.removedOurs
     removedSpyglass += r.removedSpyglass
     if (r.installed) added++
-    if (r.rebuilt.length === 0) ops.push({ op: 'delete', path: ['hooks', ev] })
-    else ops.push({ op: 'set', path: ['hooks', ev], value: r.rebuilt })
+    if (r.rebuilt.length === 0) {
+      ops.push({ op: 'delete', path: ['hooks', ev] })
+    } else if (uninstall || r.removedOurs > 0 || r.removedSpyglass > 0) {
+      // A strip (migrating a previous generation / removing dead spyglass entries) can only be
+      // expressed as a whole-array replace — the rare, deliberate path.
+      ops.push({ op: 'set', path: ['hooks', ev], value: r.rebuilt })
+    } else {
+      // PURE ADD (nothing to strip): append our matcher(s) with append_unique instead of a whole-array
+      // `set`. The `set` value is computed from THIS function's earlier read of settings.json, so a
+      // hook another tool appends to the same event between that read and the transaction would be
+      // clobbered by the stale snapshot (S3-F5 TOCTOU). append_unique is idempotent and is evaluated
+      // against the FRESH array inside safe_config_edit's lock, so a concurrent foreign entry survives.
+      // The appended matchers are byte-identical to what rebuildEventMatchers produces.
+      if (HOOK_EVENTS.includes(ev)) {
+        ops.push({ op: 'append_unique', path: ['hooks', ev], value: { hooks: [{ type: 'command', command: HOOK_CMD, timeout: 2, async: true }] }, unique_by_substring: HOOK_CMD })
+      }
+      if (GATE_EVENTS.includes(ev)) {
+        ops.push({ op: 'append_unique', path: ['hooks', ev], value: { matcher: GATE_MATCHER, hooks: [{ type: 'command', command: GATE_CMD, timeout: 3 }] }, unique_by_substring: GATE_CMD })
+      }
+    }
   }
   // env.SPYGLASS_DIR only feeds the spyglass hook commands — dead once those are removed.
   const env = settings.env as Record<string, unknown> | undefined
