@@ -4,6 +4,53 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.0.0] — 2026-07-11
+
+ONE executable + the `setup` verb (TRDD-7284WCW7).
+
+### Breaking
+
+- **The package now publishes exactly ONE bin: `agentlenspro`.** The bins
+  `agentlenspro-cli`, `agentlenspro-hook`, `agentlenspro-gate`, and
+  `agentlenspro-heartbeat-cost` are removed, along with the loose scripts they wrapped
+  (`spy-agentlens*.{sh,mjs}`, `agentlens-up.sh`, `agentlens-supervise.js`, `install.sh`,
+  `configure-*.{sh,ps1}`). Everything is a subcommand of the single executable:
+  `agentlenspro setup | server start|stop|restart|status [--supervise] | dashboard | hook |
+  gate | heartbeat-cost | telemetry | list | help <tool> | <tool> …` plus the existing
+  `--install-otel/--install-hooks/--install-skill/--start-server` flags. Bare
+  `npx agentlenspro` still runs the server in the foreground, `~/.agentlens` and every
+  `AGENTLENS_*` env var are unchanged.
+- **Hook registrations are now the command strings `agentlenspro hook` / `agentlenspro gate`.**
+  Registrations written by earlier versions (the v1 `agentlenspro-hook`/`agentlenspro-gate`
+  PATH bins and the v0 absolute-path `spy-agentlens*` entries) are auto-migrated by
+  `agentlenspro setup` or a re-run of `--install-hooks`; `--uninstall-hooks` strips every
+  generation.
+
+### Added
+
+- **`agentlenspro setup [--dry-run] [--yes]`** — the idempotent installer/repairer:
+  detect → converge → verify-per-step → final end-to-end self-test. Every step re-verifies
+  real state through an independent path (fresh JSON re-parse after safeConfigEdit, sha256
+  compare after the skill copy, HTTP/pid/span-count probes after a server start, EXECUTION of
+  the registered hook commands against synthetic payloads), fails fast non-zero on any
+  verification failure, and repairs broken/maimed installs: missing/wrong/truncated telemetry
+  env, duplicated or stale hook registrations of every past generation, skill content drift,
+  corrupt `forensics.db` (backed up aside as `.corrupt-<ts>` — data is never wiped), and
+  old-generation `agentlens-dashboard` installs (removal gated on `--yes`). A second run is
+  all no-ops. The final self-test posts a synthetic OTLP span and reads it back through
+  `get_recent_sessions`, then runs the hook + gate handlers against synthetic stdin payloads,
+  reporting a per-step unicode result table.
+- **`agentlenspro --version` / `-v` and `--help`** answer from static data with ZERO side
+  effects — no data-dir creation, no server checks (previously `npx agentlenspro --version`
+  booted the span store and exited 1).
+
+### Fixed
+
+- **`--install-otel` now delegates to the telemetry-config module** instead of a second
+  hand-synced env-key table (which had already drifted — it lacked
+  `CLAUDE_CODE_ENHANCED_TELEMETRY_BETA`); uninstall now restores pre-existing values
+  byte-identically instead of blind-deleting keys.
+
 ## [1.0.1] — 2026-07-11
 
 Five field defects found dogfooding the P6 burn-gate + cache diagnostics (all live-verified).

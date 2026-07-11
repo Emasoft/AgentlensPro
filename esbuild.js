@@ -75,7 +75,22 @@ async function main() {
 		platform: 'node',
 		outfile: 'standalone/cli.js',
 		logLevel: 'silent',
-		plugins: [esbuildProblemMatcherPlugin],
+		// sql.js resolves from node_modules at runtime (same stance as the server bundle) —
+		// inlining its WASM loader would bloat the CLI for a path only `setup` touches.
+		external: ['sql.js'],
+		plugins: [
+			esbuildProblemMatcherPlugin,
+			{
+				// cli.ts lazily imports ./server on the bare no-args path. Left to esbuild, that
+				// dynamic import would INLINE the entire server into cli.js (a second full copy of
+				// the collector). Marking it external keeps cli.js the thin dispatcher: at runtime
+				// require('./server') resolves the sibling standalone/server.js bundle instead.
+				name: 'external-sibling-server',
+				setup(build) {
+					build.onResolve({ filter: /^\.\/server$/ }, () => ({ path: './server', external: true }));
+				},
+			},
+		],
 	});
 
 	if (watch) {

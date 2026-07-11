@@ -2,7 +2,7 @@
 //
 // investigate_burn explains a drained window AFTER the fact; this module warns AS the
 // explosion starts, by fusing the three feeds the server already receives in realtime:
-//   1. lifecycle hook events (spy-agentlens.sh): SubagentStart bursts = a fan-out is
+//   1. lifecycle hook events (`agentlenspro hook`): SubagentStart bursts = a fan-out is
 //      launching NOW; StopFailure = a rate-limit stall just killed a turn (the cache TTL
 //      will outlive the stall — resuming a fan-out into it is the measured worst case);
 //      PreCompact = a full-prefix rewrite is happening.

@@ -1,5 +1,5 @@
 // Hook-event store — Claude Code lifecycle hook payloads (SessionStart/Stop/StopFailure/
-// PreCompact/...) forwarded by scripts/spy-agentlens.sh, persisted as append-only NDJSON in
+// PreCompact/...) forwarded by `agentlenspro hook`, persisted as append-only NDJSON in
 // daily buckets (<dir>/YYYY-MM-DD.ndjsonl). These events carry signals the JSONL transcripts
 // and OTEL bodies do NOT: exact rate-limit turn deaths (StopFailure), compaction boundaries
 // with trigger (PreCompact), and true session lifecycle. Append-only daily buckets on purpose:

@@ -6,22 +6,22 @@ Doctrine sentences in this file must cite their evidence (a report path under `r
 
 ## AgentlensPro diagnostics (CLI — the MCP server is deliberately NOT registered)
 
-All 32 diagnostic tools are called via the globally-linked **`agentlenspro-cli`** (`npm link` from
-this repo; source `scripts/agentlens-cli.js`), not MCP: resident MCP schemas cost ~8k tokens per
-turn and any toolset change breaks the prompt-cache prefix, so `.mcp.json` intentionally does
-not register the server. The user-scoped **`agentlenspro-diagnostics`** skill documents the full
-surface; the essentials:
+All 32 diagnostic tools are called via the globally-linked single **`agentlenspro`** executable
+(`npm link` from this repo; source `standalone/cli.ts` → `src/cli/*`), not MCP: resident MCP
+schemas cost ~8k tokens per turn and any toolset change breaks the prompt-cache prefix, so
+`.mcp.json` intentionally does not register the server. The user-scoped
+**`agentlenspro-diagnostics`** skill documents the full surface; the essentials:
 
 ```bash
-agentlenspro-cli --start-server                     # server up (idempotent); --dashboard opens the UI
-agentlenspro-cli list --desc                        # discover tools
-agentlenspro-cli help <tool>                        # flags from the live schema
-agentlenspro-cli <tool> --param value --out FILE    # full JSON to disk, digest to stdout
-agentlenspro-cli --install-otel | --uninstall-otel   # wire/unwire Claude Code telemetry (verified transaction)
-agentlenspro-cli --install-hooks | --uninstall-hooks # wire/unwire lifecycle hook capture + the burn-gate
-                                                     # (PreToolUse deny on agent-launch disasters; AGENTLENS_GATE=off)
-agentlenspro-cli --install-skill                     # (re)install this skill into ~/.claude/skills/
-bash scripts/install.sh                              # one-command install: deps, build, link, skill, server
+agentlenspro setup [--dry-run] [--yes]           # detect → converge → verify → self-test (idempotent installer/repairer)
+agentlenspro server start|stop|restart|status    # manage the server; `dashboard` opens the UI
+agentlenspro list --desc                         # discover tools
+agentlenspro help <tool>                         # flags from the live schema
+agentlenspro <tool> --param value --out FILE     # full JSON to disk, digest to stdout
+agentlenspro --install-otel | --uninstall-otel   # wire/unwire Claude Code telemetry (verified transaction)
+agentlenspro --install-hooks | --uninstall-hooks # wire/unwire lifecycle hook capture + the burn-gate
+                                                 # (PreToolUse deny on agent-launch disasters; AGENTLENS_GATE=off)
+agentlenspro --install-skill                     # (re)install this skill into ~/.claude/skills/
 ```
 
 Both `--install-*` settings flags go through `safeConfigEdit`; they never clobber other tools'

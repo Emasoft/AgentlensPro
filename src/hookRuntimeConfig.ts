@@ -14,7 +14,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 
 export interface HookRuntimeConfig {
-  /** Store lifecycle hook events (spy-agentlens.sh forwarder). Off = accept + drop. */
+  /** Store lifecycle hook events (the `agentlenspro hook` forwarder). Off = accept + drop. */
   captureEnabled: boolean
   /** The PreToolUse burn-gate. Off = every launch allowed silently. */
   gateEnabled: boolean
