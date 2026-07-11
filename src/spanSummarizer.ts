@@ -9,6 +9,7 @@
  */
 
 import { Span } from './shared/telemetryTypes'
+import { contextTokens } from './shared/tokenBuckets'
 import { detectLoopSignals } from './loopDetector'
 import { buildCopilotSessions } from './summarizers/copilot'
 import { buildClaudeSessions } from './summarizers/claude'
@@ -236,6 +237,11 @@ export function summarizeSpans(spans: Span[]) {
     sum + s.attributes.reduce((a, attr) => a + (attr.value?.stringValue?.length || 0), 0), 0)
 
   const totalCacheRead = sessions.reduce((s, sess) => s + sess.cacheReadTokens, 0)
+  // Context-size denominator (raw input + cache-read + cache-create) via the single-source helper, so
+  // the aggregate cache-hit rate stays a real 0–1 fraction and matches every per-card rate. Dividing
+  // cache-read by RAW input alone yields >1 (e.g. ~200 = "20000%") because a session reads millions of
+  // cache tokens against a few thousand raw-input tokens (the four buckets are disjoint).
+  const totalContext = sessions.reduce((s, sess) => s + contextTokens(sess), 0)
   const sessionTotalInput = sessions.reduce((s, sess) => s + sess.inputTokens, 0)
   const sessionTotalOutput = sessions.reduce((s, sess) => s + sess.outputTokens, 0)
   const sessionTotalLlm = sessions.reduce((s, sess) => s + sess.totalLlmCalls, 0)
@@ -249,7 +255,7 @@ export function summarizeSpans(spans: Span[]) {
       totalLlmCalls: sessionTotalLlm,
       avgInputPerCall: sessionTotalLlm > 0 ? Math.round(sessionTotalInput / sessionTotalLlm) : 0,
       avgTtft: ttftCount > 0 ? Math.round(ttftSum / ttftCount) : 0,
-      cacheHitRate: sessionTotalInput > 0 ? totalCacheRead / sessionTotalInput : 0,
+      cacheHitRate: totalContext > 0 ? totalCacheRead / totalContext : 0,
       toolDefWaste: totalChars > 0 ? toolDefSize / totalChars : 0,
       sysInstructionWaste: totalChars > 0 ? sysInstructionSize / totalChars : 0,
       topTokenConsumers: sessions
