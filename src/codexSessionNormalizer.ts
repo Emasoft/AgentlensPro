@@ -20,6 +20,16 @@ export function isCodexPromptEventName(name: string): boolean {
     || name === 'codex.session_start'
 }
 
+/** The canonical per-prompt session key. Single-sourced because the DOWNSTREAM summarizer
+ *  (`summarizers/codex.ts` groupCodexSpansBySession) independently re-derives the per-prompt
+ *  grouping from stored spans — if the two spelled this key differently, the ingest store-key and
+ *  the summarized `/api/summary` group would silently disagree (a session would split or merge
+ *  wrongly). Both now call THIS, so the FORMAT cannot drift even though the two grouping
+ *  ALGORITHMS legitimately differ (a streaming resolver vs a batch grouper — see S3-F3a follow-up). */
+export function codexPromptSessionId(conversationId: string, ordinal: number): string {
+  return `codex:${conversationId}:prompt-${ordinal}`
+}
+
 export class CodexSessionNormalizer {
   private codexSessionByOtelTraceId = new Map<string, string>()
   private codexCurrentSessionByConversation = new Map<string, string>()
@@ -48,7 +58,7 @@ export class CodexSessionNormalizer {
   private nextPromptSessionId(conversationId: string): string {
     const next = (this.codexPromptOrdinalByConversation.get(conversationId) ?? 0) + 1
     this.codexPromptOrdinalByConversation.set(conversationId, next)
-    return `codex:${conversationId}:prompt-${next}`
+    return codexPromptSessionId(conversationId, next)
   }
 
   resolveSessionId(opts: {

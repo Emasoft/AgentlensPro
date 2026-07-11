@@ -45,12 +45,23 @@ Codex by conversation-id alone.
 
 **THE FOURTH copy — the summarizer.** `src/summarizers/codex.ts` `groupCodexSpansBySession`
 re-derives the SAME `codex:<conv>:prompt-N` grouping from stored spans (honoring an
-explicit `codex.session.id` first, else re-deriving via its own ordinal). It is a fourth,
-independent copy — and the one that determines the **user-visible** `/api/summary`
-grouping. Consequence: the ingest store-key (impls 1-3) and the summarized view (impl 4)
-are grouped by SEPARATE logic, so an ingest-side grouping change (S3-F3a) has ~zero
-`/api/summary` effect. True single-source-of-truth would fold impl 4 into the normalizer
-too (different lifecycle — full-span-list adapter, not a drop-in) — deferred.
+explicit `codex.session.id` first, else re-deriving via its own ordinal). It is a fourth
+grouper — and the one that determines the **user-visible** `/api/summary` grouping. The
+ingest store-key (impls 1-3) and the summarized view (impl 4) are grouped by SEPARATE
+logic, so an ingest-side grouping change (S3-F3a) has ~zero `/api/summary` effect.
+
+**Phase 0b (2026-07-11) — analyzed and PARTIALLY unified; full fold REJECTED.** impl 4 is a
+BATCH grouper (takes the whole stored-span list, time-SORTS it, honors an explicit
+`codex.session.id` AS the key, absorbs same-trace non-prompt spans); the normalizer is a
+STREAMING resolver (one ingest event at a time, no explicit-id input, incremental trace
+map). Feeding the span list through `resolveSessionId` does NOT reproduce impl 4's output
+(explicit-id honoring, same-trace guard, and pre-scan all differ), so a full fold would
+change the user-visible grouping — rejected. What WAS unified: the two ATOMS both share and
+that could silently drift — the prompt-event predicate (`isCodexPromptEventName`, re-exported
+into `helpers.ts` as `isCodexPromptSpanName`, ending a byte-identical copy) and the key
+FORMAT (`codexPromptSessionId(conv, n)`), both single-sourced in `codexSessionNormalizer.ts`.
+`groupCodexSpansBySession` is now covered by a characterization test
+(`src/test/codexGrouping.test.ts`) that locks its output.[^3]
 
 ## Notes and lessons learned
 [^1]: [ocd:2026-07-11 lmd:2026-07-11] S3-F3 was first scoped (from a compaction handoff)
@@ -73,3 +84,15 @@ too (different lifecycle — full-span-list adapter, not a drop-in) — deferred
   Lesson: when porting a mechanism across stores, port the REQUIREMENT (attach content to a
   span by id, any order) not the incidental MACHINERY (a buffer that existed to work around
   the old store's mutate-in-place constraint).
+[^3]: [ocd:2026-07-11 lmd:2026-07-11] Phase 0b was scoped as "fold the fourth copy onto the
+  normalizer (adapter: full-span-list in, groups out)". After verifying the algorithms, the
+  full fold was REJECTED: the batch grouper honors an explicit `codex.session.id` as the key,
+  same-trace-absorbs non-prompt spans, and time-sorts — none of which the streaming resolver
+  does, so delegating per-span to `resolveSessionId` would change the user-visible `/api/summary`
+  grouping. Shipped instead: single-source only the two atoms that can DRIFT (the prompt
+  predicate + the key format) and add the missing characterization test. Lesson: "N copies of X"
+  is not always "N copies of ONE thing to merge" — sometimes it is N legitimately-different
+  algorithms that share a few ATOMS; unify the atoms (safe), not the algorithms (here, output-
+  changing). Verify the merge preserves output with a characterization test BEFORE assuming a
+  fold is mechanical — the fourth copy had zero tests, so "output unchanged" was unprovable until
+  one existed.

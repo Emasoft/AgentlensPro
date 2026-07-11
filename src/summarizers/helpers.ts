@@ -115,12 +115,12 @@ export function getFirstAttr(span: Span, keys: string[]): string {
   return ''
 }
 
-export function isCodexPromptSpanName(name: string): boolean {
-  return name === 'codex.user_prompt'
-    || name === 'codex.prompt'
-    || name === 'codex.user_message'
-    || name === 'codex.session_start'
-}
+// Which Codex event names OPEN a prompt cycle is single-sourced in the normalizer
+// (isCodexPromptEventName). This used to be a BYTE-IDENTICAL second copy here — a latent drift
+// where adding a new prompt-event name to one path (ingest) but not the other (summarize) would
+// split a session's spans across two groups. Re-exported under the summarizer's historical name so
+// every importer keeps working while there is exactly ONE definition.
+export { isCodexPromptEventName as isCodexPromptSpanName } from '../codexSessionNormalizer'
 
 export function isCodexToolDecisionSpan(name: string): boolean {
   return name === 'codex.tool_decision'
