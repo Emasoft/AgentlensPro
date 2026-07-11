@@ -27,6 +27,7 @@
 // the one scan pass and the multi-MB raw body is dropped immediately, so memory stays bounded.
 
 import { parseUserId } from './rawBodyContext'
+import { claudeProjectsDirs } from './logReader'
 import { estimateTokensFromBytes } from './tokenEstimator'
 import { calcTokenCostUsd } from './shared/pricing'
 import {
@@ -37,6 +38,7 @@ import {
   type CostBucket, type OutputSpike, type CacheCreationScanCoverage,
 } from './cacheCreationForensics'
 import * as fs from 'fs'
+import * as path from 'path'
 
 export { DEFAULT_BODIES_DIR }
 
@@ -650,6 +652,9 @@ export interface CacheBreakTimelineOptions {
   windowHours?: number
   scanCap?: number
   topN?: number   // cap on the returned `events` array (default 25, max 100) — repeatOffenders/causeHistogram are unaffected
+  /** Claude projects roots searched for a sub-agent child's transcript (test override; defaults
+   *  to claudeProjectsDirs() — the same roots the log reader ingests from). */
+  projectsDirs?: string[]
 }
 
 function numOr0(v: unknown): number { return typeof v === 'number' && isFinite(v) ? v : 0 }
@@ -805,10 +810,100 @@ function scanSessionsAndResponses(bodiesDir: string, windowHours: number | undef
   return { bySession, respById, coverage }
 }
 
+// ── agent-* child sessions (2026-07-11 field fix) ────────────────────────────────
+// A sub-agent card's session id is `agent-<agentId>` (the subagents/*.jsonl filename convention),
+// but the child's API calls carry the PARENT's session_id in metadata.user_id — so the raw-bodies
+// scan groups every child turn under the parent, an exact `sessionId: 'agent-…'` lookup matched
+// nothing, and every child timeline came back turnsClassified 0 (per-child cache forensics were
+// impossible). The child's OWN transcript (<projects>/<mangled>/<parentSessionId>/subagents/
+// agent-<agentId>.jsonl) holds the missing link: its assistant `message.id`s ARE the child's API
+// response ids, and turn i+1 of the same stream carries turn i's response id as
+// previous_message_id — so the child's turns are exactly the parent-bucket turns whose
+// previous_message_id is one of the child's message ids, plus the stream head (recovered below).
+
+const SUBAGENT_TRANSCRIPT_CAP = 64 * 1024 * 1024 // a child transcript beyond this is pathological — honest miss, never a hang
+
+function findSubagentTranscript(fileName: string, projectsDirs: string[]): string | null {
+  for (const dir of projectsDirs) {
+    let projects: string[]
+    try { projects = fs.readdirSync(dir) } catch { continue }
+    for (const proj of projects) {
+      let entries: fs.Dirent[]
+      try { entries = fs.readdirSync(path.join(dir, proj), { withFileTypes: true }) } catch { continue }
+      for (const e of entries) {
+        if (!e.isDirectory()) continue // session dirs only — .jsonl siblings can never contain subagents/
+        const candidate = path.join(dir, proj, e.name, 'subagents', fileName)
+        if (fs.existsSync(candidate)) return candidate
+      }
+    }
+  }
+  return null
+}
+
+interface SubagentStream { turns: ScannedTurn[]; note: string }
+
+function resolveSubagentStream(
+  sessionId: string,
+  bySession: Map<string, ScannedTurn[]>,
+  projectsDirs?: string[],
+): SubagentStream | null {
+  // Accept both the served card id (`agent-<agentId>`) and the bare agentId a spawn placeholder uses.
+  const fileName = (sessionId.startsWith('agent-') ? sessionId : `agent-${sessionId}`) + '.jsonl'
+  const transcript = findSubagentTranscript(fileName, projectsDirs ?? claudeProjectsDirs())
+  if (!transcript) return null
+  let raw: string
+  try {
+    if (fs.statSync(transcript).size > SUBAGENT_TRANSCRIPT_CAP) return null
+    raw = fs.readFileSync(transcript, 'utf-8')
+  } catch { return null }
+  // The child's assistant message ids ARE its API response ids (verified byte-exact on real data).
+  const ids = new Set<string>()
+  for (const line of raw.split('\n')) {
+    if (!line.includes('"id":"msg_')) continue
+    try {
+      const e = JSON.parse(line) as { type?: string; message?: { id?: string } }
+      if (e.type === 'assistant' && typeof e.message?.id === 'string' && e.message.id.startsWith('msg_')) ids.add(e.message.id)
+    } catch { /* partial/foreign line — skip */ }
+  }
+  // The directory that CONTAINS subagents/ IS the parent session id (deterministic, no guessing —
+  // the same linkage logReader uses to parent these transcripts at ingest).
+  const parentSessionId = path.basename(path.dirname(path.dirname(transcript)))
+  const parentTurns = bySession.get(parentSessionId)
+  if (!parentTurns || ids.size === 0) return null
+  // Chain membership: a request whose previous_message_id names one of the child's responses is
+  // the child's NEXT call — that identifies every child turn except the stream head.
+  const chained = parentTurns
+    .filter(t => t.previousMessageId !== undefined && ids.has(t.previousMessageId))
+    .sort((a, b) => a.mtimeMs - b.mtimeMs)
+  if (chained.length === 0) return null
+  // Stream-head recovery: the child's FIRST request produced its first message id but carries no
+  // chain link of its own. It shares the child conversation's first message block byte-for-byte
+  // with the chained turns and, being a fresh stream, has NO previous_message_id — take the latest
+  // such head before the first chained turn. (A fork child inherits the parent's history, so its
+  // head DOES carry a previous id and is simply not recovered; the chain still covers every later
+  // turn, and classifyTurns marks the earliest included turn COLD_START either way.)
+  const head = chained[0]
+  const headFp = head.prefix?.messageBlocks[0]?.fp
+  let turns = chained
+  if (headFp !== undefined) {
+    const candidate = parentTurns
+      .filter(t => t.previousMessageId === undefined && t.mtimeMs < head.mtimeMs && t.prefix?.messageBlocks[0]?.fp === headFp)
+      .sort((a, b) => b.mtimeMs - a.mtimeMs)[0]
+    if (candidate) turns = [candidate, ...chained]
+  }
+  return {
+    turns,
+    note: `Resolved '${sessionId}' as a sub-agent CHILD via its subagents transcript: ${turns.length} of ` +
+      `parent ${parentSessionId}'s ${parentTurns.length} scanned turn(s) belong to this child ` +
+      `(${ids.size} child response id(s) harvested from the transcript).`,
+  }
+}
+
 /** Build a session's cache-break ROOT-CAUSE timeline + repeat-offender rollup. Reconstructs the
  *  session's ordered turns from the raw OTEL bodies, classifies each significant cache_creation turn's
  *  break, and rolls repeated (cause, culprit-element) pairs into chronic offenders (flagged SYSTEMATIC
- *  at ≥ threshold turns). LAZY + BOUNDED: one recency-first capped scan; honest coverage. */
+ *  at ≥ threshold turns). `agent-<agentId>` child sessions resolve via their subagents transcript (see
+ *  resolveSubagentStream). LAZY + BOUNDED: one recency-first capped scan; honest coverage. */
 export async function buildCacheBreakTimeline(opts: CacheBreakTimelineOptions = {}): Promise<CacheBreakTimelineReport> {
   const bodiesDir = opts.bodiesDir ?? DEFAULT_BODIES_DIR
   const minTokens = opts.minTokens ?? DEFAULT_MIN_TOKENS
@@ -826,11 +921,26 @@ export async function buildCacheBreakTimeline(opts: CacheBreakTimelineOptions = 
 
   // Resolve the target session: exact sessionId > scope-prefix heaviest > overall heaviest by cache_creation.
   const target = resolveTarget(bySession, respById, opts)
-  if (!target) {
-    return baseReport(minTokens, coverage)
+  if (target) {
+    return buildReportForSession(target.sid, target.turns, respById, minTokens, coverage, opts.topN)
   }
-
-  return buildReportForSession(target.sid, target.turns, respById, minTokens, coverage, opts.topN)
+  if (opts.sessionId) {
+    // Not a metadata session id — try the sub-agent child path before giving up (2026-07-11 fix).
+    const sub = resolveSubagentStream(opts.sessionId, bySession, opts.projectsDirs)
+    if (sub) {
+      return buildReportForSession(opts.sessionId, sub.turns, respById, minTokens,
+        { ...coverage, note: `${coverage.note} ${sub.note}` }, opts.topN)
+    }
+    if (opts.sessionId.startsWith('agent-')) {
+      return baseReport(minTokens, {
+        ...coverage,
+        note: `${coverage.note} '${opts.sessionId}' looks like a sub-agent child id, but no subagents ` +
+          `transcript (or no scanned parent turn) matched it — child timelines resolve via ` +
+          `<projects>/<mangled>/<parentSessionId>/subagents/${opts.sessionId}.jsonl plus the parent's raw bodies.`,
+      })
+    }
+  }
+  return baseReport(minTokens, coverage)
 }
 
 function baseReport(minTokens: number, coverage: CacheBreakTimelineReport['coverage']): CacheBreakTimelineReport {
