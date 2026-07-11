@@ -39,3 +39,5 @@ agent-lens-export-*.json
 /downloads_dev/
 /libs_dev/
 /builds_dev/
+# npm pack output (regeneratable) — never commit
+*.tgz
