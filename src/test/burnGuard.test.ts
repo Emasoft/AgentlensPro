@@ -176,6 +176,8 @@ suite('burnGuard — check_burn_risk (TRDD-W6UH8LPA)', () => {
           thrash: {
             active: true, count: 4, rebilledTokens: 1_800_000, model: 'claude-fable-5', windowMs: 300_000,
             suspects: [{ session: '249c4216-4db4-4b64-9a10-b994b9aa0001', model: 'claude-fable-5', count: 4, bytes: 12_000_000 }],
+            topSource: { session: '249c4216-4db4-4b64-9a10-b994b9aa0001', count: 4, rebilledTokens: 1_800_000 },
+            coldStartSessions: 0, coldStartRebilledTokens: 0,
           },
           premium: { share: 1, sampled: 4, lastModel: 'claude-fable-5' },
         },
@@ -197,7 +199,7 @@ suite('burnGuard — check_burn_risk (TRDD-W6UH8LPA)', () => {
           count: 4, bytes: 9_000_000,
           senders: [{ session: '777b8f52-aaaa-bbbb-cccc-000000000001', model: 'claude-fable-5', count: 4, bytes: 9_000_000 }],
         },
-        thrash: { active: false, count: 0, rebilledTokens: 0, model: null, windowMs: 300_000, suspects: [] },
+        thrash: { active: false, count: 0, rebilledTokens: 0, model: null, windowMs: 300_000, suspects: [], topSource: null, coldStartSessions: 0, coldStartRebilledTokens: 0 },
         premium: { share: 0, sampled: 0, lastModel: null },
       },
     })
