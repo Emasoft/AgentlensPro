@@ -340,7 +340,9 @@ graph LR
     PL --> SP
 ```
 
-**Key non-obvious behaviour:** Codex session IDs (`codex:{conversationId}:{turnId}`) are assigned on arrival. Once set, the mapping is immutable even if spans arrive out of order or are retried.
+**Key non-obvious behaviour:** Codex session IDs (`codex:{conversationId}:prompt-N`, an ordinal per prompt cycle, or `codex:{conversationId}:{turnId}` when a turn id is present) are assigned on arrival. Once set, the mapping is immutable even if spans arrive out of order or are retried.
+
+This per-prompt grouping lives **once** in `src/codexSessionNormalizer.ts` (`CodexSessionNormalizer` — it owns `codexSessionByOtelTraceId`, `codexCurrentSessionByConversation`, the per-conversation prompt ordinal, and the resolve logic). All three OTLP-log ingest paths share it: `otlpParser.parseLogPayload` constructs one per call (state scoped to a payload), while `OtlpCollector` and the standalone server's `processLogs` each hold one long-lived instance so the grouping persists across payloads. Before this consolidation the shipped standalone path had drifted to group Codex by conversation id alone. The downstream summarizer (`summarizers/codex.ts` `groupCodexSpansBySession`) independently re-derives the same per-prompt grouping from stored spans, so it is the store key, not the summarized view, that this normalizer keeps consistent.
 
 ### Standalone span store — segmented, append-only, no eviction
 

@@ -4,6 +4,54 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.4.0] — 2026-07-11
+
+Round-2 remediation of the whole-codebase code review (TRDD-4AFOFVFD), plus a security
+hardening surfaced during the follow-up evaluation.
+
+### Security
+
+- **Scoped the dashboard server's `Access-Control-Allow-Origin` to allowed origins (TRDD-F6BM1BDI).**
+  The standalone UI server previously returned `Access-Control-Allow-Origin: *` on every response.
+  The CSRF guard added earlier only refused cross-origin *writes*; reads were left open, so any web
+  page you happened to be browsing could `fetch("http://localhost:<UI_PORT>/api/summary")` and read
+  your local AI-session data (prompt text, costs, model names, project file paths) cross-origin. The
+  server now echoes `Access-Control-Allow-Origin` only for same-origin / loopback origins (reusing the
+  existing `isDisallowedCrossOrigin` predicate) plus `Vary: Origin`; a cross-origin page receives no
+  CORS header, so the browser blocks it from reading the response. The same-origin dashboard and
+  loopback tooling are unaffected — there was no legitimate cross-origin browser consumer.
+
+### Fixed
+
+- **Unified Codex per-prompt session grouping into one shared normalizer (S3-F3a).** The three
+  OTLP-log ingest paths — `standalone/server.ts` `processLogs` (the shipped npx/Docker path),
+  `src/otlpCollector.ts`, and `src/otlpParser.ts` — each carried their own copy of the
+  `codex:<conversation>:prompt-N` grouping logic, and the shipped path had drifted to group Codex by
+  conversation id alone. The logic now lives once in the new `src/codexSessionNormalizer.ts`
+  (net −158/+79 LOC); the shipped path groups per prompt and stamps `codex.session.id`. No change to
+  summarized sessions (the summarizer re-derives per-prompt grouping downstream) — this removes
+  duplication and closes the ingest-side drift.
+- **Cache-break waste uses the model's own cache-read rate (S2-F5)** — `priceWaste` no longer
+  hardcodes a 0.1× cache-read multiplier, so non-0.1× models (e.g. codex-mini at 0.25×) report the
+  correct wasted figure.
+- **`SessionStore.tokensUsed` no longer double-counts (S1-F7)** — one token-key family per provider
+  instead of summing native + `gen_ai.*` + cache + output into one scalar.
+- **`tool_result` attributed to its own `toolUseResult` (S1-F8)** — a multi-`tool_result` user entry
+  no longer attributes one entry-level usage to every block.
+- **Per-turn fast-mode pricing (S1-F9)** — a single fast turn no longer flips a whole mixed session
+  to `-fast` pricing; each turn is priced at its own speed.
+- **OpenCode WAL commit-boundary (S1-F6)** — `_mergeWal` now stops at the last committed frame, so an
+  in-flight (uncommitted) transaction can no longer surface as committed rows.
+- **Race-safe hook install (S3-F5)** — hook installation appends via `append_unique` instead of
+  rewriting the whole `hooks.<event>` array from a stale snapshot, so a foreign hook added
+  concurrently is preserved.
+
+### Added
+
+- **`GET /api/debug/codex-store-groups`** — a read-only, localhost-only debug endpoint returning the
+  distinct stored `codex.*` span trace IDs, exposing the ingest-level Codex grouping that the summary
+  API masks (added to make the S3-F3a store-grouping directly testable).
+
 ## [2.3.1] — 2026-07-11
 
 ### Fixed
