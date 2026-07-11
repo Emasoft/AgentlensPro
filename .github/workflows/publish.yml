@@ -98,7 +98,10 @@ jobs:
   #     attached automatically under trusted publishing.
   # Registry-side prerequisite (one-time, web UI, owner-only): npmjs trusted
   # publisher for package `agentlenspro` → GitHub Actions, repo
-  # Emasoft/AgentlensPro, workflow `release.yml`, no environment.
+  # Emasoft/AgentlensPro, workflow `publish.yml`, no environment. npm authorizes
+  # the workflow FILENAME — this file was renamed release.yml → publish.yml to
+  # match the registered trusted-publisher entry (and the SVG-BBOX convention);
+  # renaming either side alone breaks the OIDC claim match.
   publish-npm:
     needs: package
     runs-on: ubuntu-latest
