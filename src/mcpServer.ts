@@ -2101,16 +2101,15 @@ export function handleGetAgentTokens(
   const q = (args.agentId ?? '').trim()
   if (!q) return { error: 'agentId is required — a bare agent id, its agent-<id> transcript form, or a full sessionId.' }
   const qLower = q.toLowerCase()
+  const qBare = stripAgentPrefix(qLower)
 
-  // Exact sessionId match takes PRECEDENCE over the normalized forms: served ids are unique, so a
-  // full sessionId always resolves to exactly one card. This is the escape hatch the ambiguity
-  // error advertises — without the precedence an 'agent-x' query would ALSO normalized-match an
-  // un-merged bare-'x' placeholder twin and the escape hatch could never escape.
-  let matches = sessions.filter(s => s.sessionId.toLowerCase() === qLower)
-  if (matches.length === 0) {
-    const bare = stripAgentPrefix(qLower)
-    matches = sessions.filter(s => stripAgentPrefix(s.sessionId.toLowerCase()) === bare)
-  }
+  // Normalized equivalence class first (bare id ↔ agent-<id>, case-insensitive). Exact sessionId
+  // equality must NOT take blanket precedence: a spawn PLACEHOLDER's sessionId IS the bare agent id,
+  // so on an un-merged placeholder + transcript pair a bare-id query would "exactly" match the
+  // zero-bucket placeholder and silently serve it over the real totals — a guess dressed as
+  // precision. Exact equality is only trusted as a TIE-BREAK below, when the query carries the
+  // distinguishing agent-<id> form.
+  let matches = sessions.filter(s => stripAgentPrefix(s.sessionId.toLowerCase()) === qBare)
 
   const parentArg = args.parentSessionId?.trim()
   if (parentArg && matches.length > 0) {
@@ -2134,12 +2133,21 @@ export function handleGetAgentTokens(
     }
   }
   if (matches.length > 1) {
-    // NEVER guess between conflicting cards (e.g. a placeholder + transcript pair the cross-parent
-    // guard left un-merged): list the candidates and let the caller pin one.
-    return {
-      error: `Agent id "${q}" is ambiguous — ${matches.length} cards match. Pass the full sessionId ` +
-        'of one candidate, or parentSessionId to scope the lookup.',
-      candidates: matches.map(agentCandidateSummary),
+    // Tie-break by exact sessionId ONLY when the query is distinguishable (it carried the agent-
+    // prefix, so it names exactly one card of the pair). A bare-id query equals the placeholder's
+    // sessionId BY CONSTRUCTION — treating that as intent would be the silent guess this tool bans.
+    const exact = matches.filter(s => s.sessionId.toLowerCase() === qLower)
+    if (exact.length === 1 && qLower !== qBare) {
+      matches = exact
+    } else {
+      // NEVER guess between conflicting cards (e.g. a placeholder + transcript pair the
+      // cross-parent guard left un-merged): list the candidates and let the caller pin one — by
+      // parentSessionId (each candidate carries its parent), or by the agent-<id> transcript form.
+      return {
+        error: `Agent id "${q}" is ambiguous — ${matches.length} cards match. Pass parentSessionId ` +
+          'to scope the lookup, or the full sessionId of one candidate (the agent-<id> transcript form).',
+        candidates: matches.map(agentCandidateSummary),
+      }
     }
   }
 
