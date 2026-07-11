@@ -7,6 +7,7 @@ import {
   isCodexToolDecisionSpan, isCodexToolCallSpan, isCodexToolResultSpan,
   summarizeToolResult, normalizeUserRequest,
 } from './helpers'
+import { codexPromptSessionId } from '../codexSessionNormalizer'
 
 export function buildCodexSessions(spans: Span[]): SessionSummaryCard[] {
   const toMs = (s: Span) => nanoToMs(s.startTime) || s.receivedAt || 0
@@ -352,7 +353,15 @@ function isCodexTimelineLlmSpan(span: Span, inputTokens: number, outputTokens: n
     || span.name === 'codex.stream_event'
 }
 
-function groupCodexSpansBySession(spans: Span[]): Record<string, Span[]> {
+// Exported for the characterization test (src/test/codexGrouping.test.ts). This BATCH grouper is a
+// deliberately DISTINCT algorithm from the streaming CodexSessionNormalizer used at ingest: it takes
+// the full stored-span list, time-sorts it, honors an explicit codex.session.id as the group key, and
+// absorbs same-trace non-prompt spans — none of which the incremental resolver does. The two share
+// only the atoms that must never drift (the prompt-event predicate + the codexPromptSessionId format),
+// which are single-sourced in codexSessionNormalizer.ts. A full fold onto the resolver was analyzed and
+// rejected: it would change this function's (user-visible /api/summary) output. See TRDD-4AFOFVFD
+// §S3-F3a follow-up and the [[otlp-ingest-topology]] wikimem lesson.
+export function groupCodexSpansBySession(spans: Span[]): Record<string, Span[]> {
   type WorkingGroup = { key: string; spans: Span[]; hasPrompt: boolean }
 
   const groups = new Map<string, WorkingGroup>()
@@ -395,7 +404,7 @@ function groupCodexSpansBySession(spans: Span[]): Record<string, Span[]> {
   function nextPromptKey(conversationId: string): string {
     const next = (ordinalByConversation.get(conversationId) ?? 0) + 1
     ordinalByConversation.set(conversationId, next)
-    return `codex:${conversationId}:prompt-${next}`
+    return codexPromptSessionId(conversationId, next)
   }
 
   const codexSpans = spans

@@ -234,6 +234,19 @@ TRUE single-source-of-truth, `groupCodexSpansBySession` should ALSO consume
 small adapter, not a drop-in). Deferred: candidate for the broader /go-on-yourself
 eval; not bundled into S3-F3a (separate change, separate risk).
 
+**✅ RESOLVED 2026-07-11 (Phase 0b of the /go-on-yourself plan, commit see git log).**
+The full fold was ANALYZED and REJECTED: `groupCodexSpansBySession` is a BATCH grouper
+(time-sorts the whole span list, honors an explicit `codex.session.id` AS the key,
+absorbs same-trace non-prompt spans) — feeding spans through the streaming
+`resolveSessionId` does NOT reproduce that output, so a full fold would CHANGE the
+user-visible `/api/summary` grouping. Shipped instead: single-source only the two atoms
+that could silently DRIFT — the prompt-event predicate (`isCodexPromptEventName`,
+re-exported into `helpers.ts` as `isCodexPromptSpanName`, ending a byte-identical copy)
+and the key format (`codexPromptSessionId(conv, n)`), both now in
+`codexSessionNormalizer.ts` — and add the missing characterization test
+(`src/test/codexGrouping.test.ts`, 6 cases) that LOCKS the batch grouper's output. Gate
+GREEN 890/0. Rationale + lesson: `[[otlp-ingest-topology]]` `[^3]`.
+
 ### 2. S3-F5 [LOW] — hookInstall TOCTOU
 - **Where:** `src/cli/hookInstall.ts` — reads settings, computes `r.rebuilt`,
   hands `safeConfigEdit` a whole-array `set` of `hooks.<ev>`.

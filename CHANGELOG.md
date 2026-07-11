@@ -6,6 +6,17 @@ All notable changes to AgentlensPro are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **Codex per-prompt grouping — the two drift-prone atoms are now single-sourced.** The
+  prompt-cycle event predicate and the `codex:<conv>:prompt-N` key format were duplicated
+  between the ingest-side `CodexSessionNormalizer` and the summarizer's batch grouper
+  (`groupCodexSpansBySession`); both now share one definition, so the ingest store-key and the
+  user-visible `/api/summary` grouping cannot diverge on those. The two grouping *algorithms*
+  intentionally stay distinct (a streaming resolver vs a batch grouper) — a full merge was
+  rejected because it would change the summarizer's output; a new characterization test locks
+  that output. No user-facing behavior change.
+
 ### Added
 
 - **Assistant response text for gen_ai agents (Codex/OpenAI) in the dashboard (S3-F3b).** The
