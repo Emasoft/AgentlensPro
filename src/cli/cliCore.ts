@@ -1,0 +1,174 @@
+// src/cli/cliCore.ts — shared transport + formatting layer of the single `agentlenspro`
+// executable (TRDD-7284WCW7). Ported from scripts/agentlens-cli.js so the whole CLI is ONE
+// type-checked codebase bundled into standalone/cli.js instead of five loose bin scripts.
+//
+// Everything here reads its endpoints/paths through FUNCTIONS (not module-load constants):
+// the unit tests call these helpers in-process after pointing AGENTLENS_MCP_URL /
+// AGENTLENS_UI_URL / DATA_DIR at ephemeral fixtures, and a load-time constant would freeze
+// the real machine's values before the test could override them.
+
+import * as http from 'http'
+import * as os from 'os'
+import * as path from 'path'
+
+/** MCP JSON-RPC endpoint of the running server. */
+export function mcpEndpoint(): string {
+  return process.env.AGENTLENS_MCP_URL || 'http://localhost:4316/mcp'
+}
+
+/** Dashboard URL (UI port). */
+export function dashboardUrl(): string {
+  return process.env.AGENTLENS_DASHBOARD_URL || 'http://localhost:3000'
+}
+
+/** Base URL for the server's plain REST /api/* routes (UI port). */
+export function uiBaseUrl(): string {
+  return process.env.AGENTLENS_UI_URL || 'http://localhost:3000'
+}
+
+/** The AgentlensPro data directory (span store, logs, pidfile, forensics.db). */
+export function dataDir(): string {
+  return process.env.DATA_DIR || path.join(os.homedir(), '.agentlens')
+}
+
+/** ~/.claude/settings.json — overridable ONLY for tests; production always targets the real file. */
+export function claudeSettingsPath(): string {
+  return process.env.AGENTLENS_CLAUDE_SETTINGS || path.join(os.homedir(), '.claude', 'settings.json')
+}
+
+export const sleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms))
+
+export const fmtGb = (b: number): string => `${(b / 1024 ** 3).toFixed(2)}GB`
+export const fmtMb = (b: number): string => `${(b / 1048576).toFixed(1)}MB`
+
+interface JsonRpcError { code?: number; message?: string }
+interface JsonRpcResponse { error?: JsonRpcError; result?: unknown }
+
+/** One JSON-RPC call over the server's Streamable-HTTP MCP transport. */
+export function rpc(method: string, params: unknown): Promise<unknown> {
+  const body = JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method, params })
+  const u = new URL(mcpEndpoint())
+  const opts: http.RequestOptions = {
+    hostname: u.hostname,
+    port: u.port,
+    path: u.pathname,
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      // The Streamable-HTTP transport requires the client to accept BOTH content types.
+      Accept: 'application/json, text/event-stream',
+      'Content-Length': Buffer.byteLength(body),
+    },
+  }
+  return new Promise((resolve, reject) => {
+    const req = http.request(opts, res => {
+      let raw = ''
+      res.on('data', (c: Buffer) => { raw += c })
+      res.on('end', () => {
+        // The transport may answer as SSE ("event: message\ndata: {...}") or as plain JSON.
+        const line = raw.split('\n').find(l => l.startsWith('data:'))
+        const payload = line ? line.slice(5).trim() : raw
+        try {
+          const j = JSON.parse(payload) as JsonRpcResponse
+          if (j.error) return reject(new Error(`${j.error.message || 'rpc error'} (${j.error.code})`))
+          resolve(j.result)
+        } catch {
+          reject(new Error(`bad response (${res.statusCode}): ${raw.slice(0, 300)}`))
+        }
+      })
+    })
+    req.on('error', e => reject(new Error(`cannot reach ${mcpEndpoint()}: ${e.message}`)))
+    req.write(body)
+    req.end()
+  })
+}
+
+/** The MCP handshake: initialize, then the session is usable on this stateless endpoint. */
+export async function init(): Promise<void> {
+  await rpc('initialize', {
+    protocolVersion: '2024-11-05',
+    capabilities: {},
+    clientInfo: { name: 'agentlenspro', version: '2.0.0' },
+  })
+}
+
+export interface ToolSchema {
+  properties?: Record<string, { type?: string; description?: string }>
+  required?: string[]
+}
+export interface ToolInfo { name: string; description?: string; inputSchema?: ToolSchema }
+
+let toolCache: ToolInfo[] | null = null
+export async function fetchTools(): Promise<ToolInfo[]> {
+  if (!toolCache) toolCache = ((await rpc('tools/list', {}) as { tools?: ToolInfo[] }).tools) || []
+  return toolCache
+}
+
+/** Tool names use underscores; accept the dashed spelling too (CLI muscle memory). */
+export function resolveTool(tools: ToolInfo[], name: string): ToolInfo | null {
+  const norm = name.replace(/-/g, '_').toLowerCase()
+  return tools.find(t => t.name.toLowerCase() === norm) || null
+}
+
+interface ToolCallResult { content?: Array<{ text?: unknown }> }
+export function textOf(result: unknown): string {
+  const c = (result as ToolCallResult | null)?.content?.[0]
+  return c && typeof c.text === 'string' ? c.text : JSON.stringify(result)
+}
+
+/** A one-line digest so the agent's context receives the ANSWER, not the payload. */
+export function digest(obj: unknown): string {
+  if (obj && typeof obj === 'object') {
+    const o = obj as { verdict?: unknown; text?: unknown }
+    if (typeof o.verdict === 'string') return o.verdict
+    if (typeof o.text === 'string') return o.text.split('\n').slice(0, 3).join(' | ')
+  }
+  const s = JSON.stringify(obj)
+  return s.length > 300 ? `${s.slice(0, 300)}…` : s
+}
+
+export async function callTool(tool: string, args: Record<string, unknown> | undefined, full: boolean): Promise<unknown> {
+  const a: Record<string, unknown> = { ...(args || {}) }
+  if (full) a.verbosity = 'full'
+  const res = await rpc('tools/call', { name: tool, arguments: a })
+  const text = textOf(res)
+  try { return JSON.parse(text) } catch { return text }
+}
+
+export function firstSentence(s: unknown): string {
+  const one = String(s || '').trim().split('. ')[0]
+  return one.length > 140 ? `${one.slice(0, 140)}…` : one
+}
+
+/** Plain HTTP JSON helper for the server's /api/* routes (REST on the UI port, not JSON-RPC). */
+export function apiRequest(method: string, apiPath: string, payload?: unknown): Promise<Record<string, unknown>> {
+  const u = new URL(apiPath, uiBaseUrl())
+  const body = payload === undefined ? null : JSON.stringify(payload)
+  return new Promise((resolve, reject) => {
+    const req = http.request({
+      hostname: u.hostname, port: u.port, path: u.pathname, method,
+      headers: body ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } : {},
+    }, res => {
+      let raw = ''
+      res.on('data', (c: Buffer) => { raw += c })
+      res.on('end', () => {
+        try {
+          const j = JSON.parse(raw) as Record<string, unknown>
+          if (res.statusCode !== 200) return reject(new Error(String(j.error || `HTTP ${res.statusCode}`)))
+          resolve(j)
+        } catch { reject(new Error(`bad response (${res.statusCode}): ${raw.slice(0, 200)}`)) }
+      })
+    })
+    req.on('error', e => reject(new Error(`server unreachable at ${uiBaseUrl()}: ${e.message}`)))
+    if (body) req.write(body)
+    req.end()
+  })
+}
+
+export function parseWhen(v: string | undefined, flag: string): number | undefined {
+  if (v === undefined) return undefined
+  if (/^\d+(\.\d+)?$/.test(v)) return Date.now() - Number(v) * 3600e3 // bare number = hours ago
+  const t = Date.parse(v)
+  if (Number.isNaN(t)) throw new Error(`--${flag} expects an ISO date or a number of hours, got "${v}"`)
+  return t
+}

@@ -294,7 +294,7 @@ async function archiveOtelBodies(): Promise<void> {
     bodiesPassRunning = false
   }
 }
-// Lifecycle hook events (spy-agentlens.sh → POST /api/hook-events): append-only NDJSON daily
+// Lifecycle hook events (`agentlenspro hook` → POST /api/hook-events): append-only NDJSON daily
 // buckets. Signals JSONL/OTEL lack: StopFailure (rate-limit turn deaths), PreCompact trigger,
 // exact session lifecycle. TRDD-Q6ZOUVK5.
 const HOOK_EVENTS_DIR = path.join(DATA_DIR, 'hook-events')

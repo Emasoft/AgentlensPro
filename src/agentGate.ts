@@ -1,7 +1,7 @@
 // Agent-launch burn gate — the PREVENTION half of the guard stack (TRDD-GOD0108C).
 //
 // evaluateAgentGate() is the pure decision core behind POST /api/agent-gate, called by
-// scripts/spy-agentlens-gate.sh from a PreToolUse hook matched on Agent|Task|Workflow|
+// `agentlenspro gate` from a PreToolUse hook matched on Agent|Task|Workflow|
 // SendMessage ONLY (SendMessage routes to the narrower evaluateSendMessageGate below).
 // It answers one question in-memory: "will THIS launch, right now, multiply a burn that is
 // already forming?" — and denies only the four high-confidence disaster signatures measured

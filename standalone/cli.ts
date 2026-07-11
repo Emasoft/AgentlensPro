@@ -1,19 +1,21 @@
 #!/usr/bin/env node
-// AgentLens standalone CLI — run with: bunx agentlens  |  npx agentlens  |  node standalone/cli.js
+// AgentlensPro — the ONE executable (TRDD-7284WCW7): npx agentlenspro | node standalone/cli.js
 //
-//   agentlens                                     → start the dashboard server (default)
-//   agentlens telemetry install|uninstall|status  → manage Claude Code full-telemetry config
+//   agentlenspro                    → run the server in the foreground (serves the dashboard)
+//   agentlenspro <subcommand> …     → setup / server / dashboard / hook / gate / telemetry /
+//                                     heartbeat-cost / diagnostics — see src/cli/main.ts
 //
+// This file is a shim: the entire dispatcher lives in src/cli/main.ts, where BOTH tsc gates
+// type-check it. Only the server loader lives here, because src/ cannot import standalone/.
 // The server module (./server) has top-level side effects (it binds ports on load), so it is
-// imported DYNAMICALLY only on the default path — a telemetry subcommand must never start it.
-import { runTelemetryCli } from '../src/telemetryConfig'
+// injected as a LAZY loader, executed ONLY on the bare no-args path, and marked external in
+// esbuild.js — cli.js requires the sibling server.js bundle at runtime instead of inlining a
+// second copy of the whole server.
+import { cliMain } from '../src/cli/main'
 
-async function main(): Promise<void> {
-  const argv = process.argv.slice(2)
-  if (argv[0] === 'telemetry') {
-    process.exit(await runTelemetryCli(argv.slice(1)))
-  }
-  await import('./server')
-}
-
-main()
+cliMain(process.argv.slice(2), () => import('./server'))
+  .then(code => { process.exitCode = code })
+  .catch(e => {
+    console.error(`FAIL: ${(e as Error).message}`)
+    process.exit(1)
+  })

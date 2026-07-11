@@ -2,10 +2,11 @@
 <!--
   AgentLens collector — macOS launchd template (TRDD-PJC8N1HO spec 1).
 
-  Runs the supervisor (scripts/agentlens-supervise.js), which keeps standalone/server.js alive with
-  exponential-backoff restart + crash.log. launchd's own KeepAlive is the outer safety net (it restarts
-  the supervisor itself if THAT ever dies); the supervisor is the inner net (restarts the collector on
-  every crash and records why).
+  Runs the supervisor (`agentlenspro server start --supervise`, the single executable's foreground
+  supervision mode), which keeps standalone/server.js alive with exponential-backoff restart +
+  crash.log. launchd's own KeepAlive is the outer safety net (it restarts the supervisor itself if
+  THAT ever dies); the supervisor is the inner net (restarts the collector on every crash and
+  records why).
 
   Install:
     1. Replace @NODE@ with `command -v node`, @REPO@ with this repo's absolute path, @USER@ with your
@@ -23,7 +24,10 @@
   <key>ProgramArguments</key>
   <array>
     <string>@NODE@</string>
-    <string>@REPO@/scripts/agentlens-supervise.js</string>
+    <string>@REPO@/standalone/cli.js</string>
+    <string>server</string>
+    <string>start</string>
+    <string>--supervise</string>
   </array>
 
   <key>WorkingDirectory</key>
