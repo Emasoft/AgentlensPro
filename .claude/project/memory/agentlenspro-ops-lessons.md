@@ -62,6 +62,17 @@ Install topology + data model (code location is independent of data):
   dev link with `cd <repo> && npm link`. Caveat: a JUST-published version can be briefly blocked
   by the supply-chain min-release-age guard — install the local tarball (`npm pack` →
   `npm i ./agentlenspro-X.tgz`, byte-identical) to sidestep it.[^4]
+- **DOGFOOD-LINK DEPLOY IS STRICT: green gates BEFORE any bundle write.** Because the link makes
+  every `node esbuild.js` instantly live to ALL Claude Code instances on the machine, a broken
+  build has machine-wide blast radius (the CLI powers hooks + the burn-gate PreToolUse deny on
+  every agent launch — a crashing `agentlenspro gate`/`hook` could stall or break many sessions).
+  So NEVER write the linked bundle from an unverified tree. Required order, abort on the first
+  red: `pnpm run check-types` (tsc root+media, 0 errors) → `pnpm run lint` (0 errors) →
+  `node scripts/check-no-mirrors.js` → `pnpm run compile-tests` (Node ≥22) → full `npx mocha`
+  under Node 20 (baseline 849/0) → ONLY THEN `node esbuild.js` + `agentlenspro server restart`.
+  If any gate is red, do NOT build — the currently-linked bundle stays the last known-good one.
+  The gate is fail-open by construction (server down = silent no-op), so the danger is a bundle
+  that LOADS but misbehaves — which only tests catch, hence tests are mandatory, not optional.[^5]
 
 Governed by [[cache-ttl-model]] (TTL regimes) and [[agentlens-burn-token-model]]
 (accounting); see also [[agentlenspro-publish-pipeline]].
@@ -90,3 +101,11 @@ Governed by [[cache-ttl-model]] (TTL regimes) and [[agentlens-burn-token-model]]
   (self-contained, runs with no repo) and by running the CLI from `/tmp`. Lesson: when a
   "how is this installed?" worry surfaces, separate the two questions — *where's the code?* vs
   *where's the state?* — and answer the state question from `os.homedir()`, not the package path.
+[^5]: [ocd:2026-07-11 lmd:2026-07-11] the user chose to KEEP the npm link for dogfooding (live
+  build reaches all agents) and made testing NON-negotiable: "a broken cli tool could break many
+  Claude Code instances." The subtlety that makes tests (not just tsc/lint) mandatory: the burn-gate
+  is fail-OPEN, so a bundle that fails to load can't hurt anyone (silent no-op) — but a bundle that
+  LOADS and then misbehaves (wrong deny, crash mid-hook, bad exit code) DOES reach every session,
+  and only a real test run catches that class. Lesson: when a build artifact is live-linked to many
+  consumers, "it compiles" is not "it's safe to ship" — the full suite must be green BEFORE the
+  bundle is written, and a red gate means the last known-good bundle stays in place, not a rebuild.
