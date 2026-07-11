@@ -58,6 +58,7 @@ import {
 import type { Span } from '../src/shared/telemetryTypes'
 import type { SessionSummaryCard, CollectorGap } from '../src/shared/summarizerTypes'
 import { CodexSessionNormalizer } from '../src/codexSessionNormalizer'
+import { formatGenAiEventContent } from '../src/genAiContent'
 
 const OTLP_PORT  = parseInt(process.env.OTLP_PORT  ?? '4318')
 const UI_PORT    = parseInt(process.env.UI_PORT    ?? '3000')
@@ -1076,6 +1077,25 @@ function processLogs(payload: unknown, collectorPath = '/v1/logs'): number {
         // conventions while the unit-tested collector class passed (found 2026-07-10).
         const name = resolveLogEventName(attrStr(attrs, 'event.name', 'event_name', 'name', 'event'), r)
         const bare = bareLogEventName(name)
+        // S3-F3b: gen_ai_latest_experimental (Codex/OpenAI) emits the assistant's RESPONSE TEXT as a
+        // separate log event (gen_ai.choice / gen_ai.assistant.message), not as a span attribute — it
+        // is correlated to its LLM span by traceId:spanId and can arrive before OR after that span, on
+        // a different HTTP request. The rich-event gate below would DROP it (noteDroppedLogEvent), so
+        // handle it FIRST: format it into the gen_ai.output.messages shape extractResponseText reads,
+        // and record a read-time overlay on the store. The overlay merges into the matching span
+        // whenever that span is next read (loadRange), so ordering does not matter and no persisted
+        // segment is rewritten. Mirrors src/otlpCollector.ts (the extension-host path) via the shared
+        // formatGenAiEventContent — the ONE formatter both ingest paths import.
+        if (name === 'gen_ai.choice' || name === 'gen_ai.assistant.message') {
+          const genTrace = typeof r.traceId === 'string' ? r.traceId : ''
+          const genSpan = typeof r.spanId === 'string' ? r.spanId : ''
+          if (genTrace && genSpan) {
+            const raw = attrStr(attrs, 'gen_ai.event.content')
+            const formatted = raw ? formatGenAiEventContent(raw, name) : ''
+            if (formatted) { spanStore.injectSpanAttribute(genTrace, genSpan, 'gen_ai.output.messages', formatted) }
+          }
+          continue
+        }
         // TRDD-ICHAVFCS: index pointers to the raw API request/response bodies (OTEL_LOG_RAW_API_BODIES)
         // so a call can be resolved to its body file and its full context tree reconstructed on demand.
         // Store only the lightweight pointer — never the multi-MB body — then skip (no timeline value).
@@ -2724,6 +2744,23 @@ const uiServer = http.createServer((req, res) => {
     const codexTraceIds = [...new Set(spans.filter(s => s.name.startsWith('codex.')).map(s => s.traceId))].sort()
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ codexTraceIds }))
+    return
+  }
+
+  // S3-F3b: read one attribute off ONE stored span, through a FRESH spanStore.loadRange — the only
+  // place the store's read-time gen_ai overlay (injectSpanAttribute) is directly observable. A live
+  // loadRange re-parses the span from disk and merges the overlay, so this proves the gen_ai response
+  // content actually reaches the span on read (which /api/summary would fold away). Read-only, and the
+  // server is localhost-only (same seam class as the other /api/debug/* endpoints).
+  if (req.method === 'GET' && url?.startsWith('/api/debug/span-attr')) {
+    const q = new URLSearchParams((req.url ?? '').split('?')[1] ?? '')
+    const traceId = q.get('traceId') ?? ''
+    const spanId = q.get('spanId') ?? ''
+    const key = q.get('key') || 'gen_ai.output.messages'
+    const span = spanStore.loadRange(0, Infinity).find(s => s.traceId === traceId && s.spanId === spanId)
+    const attr = span?.attributes.find(a => a.key === key)
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ found: !!span, value: attr?.value.stringValue ?? null }))
     return
   }
 

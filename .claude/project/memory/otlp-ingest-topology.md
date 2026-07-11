@@ -19,11 +19,19 @@ truth" trap, see [[agentlens-burn-token-model]] lesson on rich-event drift).
 1. **`standalone/server.ts` `processLogs` — THE SHIPPED PATH.** The standalone server has
    its OWN inline `processLogs`/`processTraces`; it persists to `SegmentedSpanStore`. This
    is what runs on user machines. It uniquely also handles the Claude rich-event gate,
-   `tool_result`, and the body-pointer registry (raw API bodies).
+   `tool_result`, and the body-pointer registry (raw API bodies). Since S3-F3b it ALSO
+   injects gen_ai response content: a `gen_ai.choice`/`gen_ai.assistant.message` log event
+   is formatted (shared `src/genAiContent.ts`) and merged into its LLM span via
+   `SegmentedSpanStore.injectSpanAttribute` — a **read-time overlay** (merged on `loadRange`,
+   not a disk-segment rewrite), so arrival order is irrelevant and no buffer/drain is
+   needed.[^2]
 2. **`src/otlpCollector.ts` (`OtlpCollector` class) — DEAD in prod** (0 `new OtlpCollector`
-   outside tests). The old VS-Code-era HTTP collector; unit-tested + reactivatable. It
-   uniquely still has the gen_ai response-content buffering (`formatGenAiEventContent` →
-   `sessionStore.injectSpanAttribute`) the shipped path lacks (deferred as TRDD-DYG4ZTXW).
+   outside tests). The old VS-Code-era HTTP collector; unit-tested + reactivatable. Its
+   gen_ai response-content buffering (`formatGenAiEventContent` → the LEGACY
+   `sessionStore.injectSpanAttribute`, which mutates an in-memory span) is the SAME formatter
+   the shipped path now shares; only the buffer/drain differs (the legacy store cannot inject
+   into a not-yet-arrived span, so it needs a `genAiResponseBuffer` — the segmented store's
+   overlay does not).
 3. **`src/otlpParser.ts` — only `classifyOtlpPayload` is used in prod.** Its
    `parseLogPayload`/`parseTracePayload` are dead-but-tested.
 
@@ -52,3 +60,16 @@ too (different lifecycle — full-span-list adapter, not a drop-in) — deferred
   pipeline (ingest AND the downstream summarizer/reader), not just the ingest layer —
   `grep -rn "codex:.*prompt-" src standalone` surfaced all four. The user-visible behavior
   may be owned by a copy the finding never named.
+[^2]: [ocd:2026-07-11 lmd:2026-07-11] S3-F3b (gen_ai buffering to the shipped path) was
+  scoped as "port the collector's buffer + drain + injectSpanAttribute" but shipped as a
+  SIMPLER read-time overlay with NO buffer. Why: the collector needed a buffer only because
+  the legacy `sessionStore.injectSpanAttribute` mutates an EXISTING in-memory span (nothing
+  to mutate if the span hasn't arrived, hence buffer-until-it-does). `SegmentedSpanStore`
+  instead records the attribute in an overlay `Map<traceId:spanId, {k:v}>` and merges it in
+  `loadRange` — so a span appended later still picks it up, and one flushed earlier still
+  picks it up; order is irrelevant and the buffer/drain is dead weight. Cap-evicted (500,
+  oldest-first) so a never-arriving span cannot leak; in-memory only (lost on restart), an
+  accepted tradeoff for LOW-severity enrichment whose dominant ordering is span-first anyway.
+  Lesson: when porting a mechanism across stores, port the REQUIREMENT (attach content to a
+  span by id, any order) not the incidental MACHINERY (a buffer that existed to work around
+  the old store's mutate-in-place constraint).

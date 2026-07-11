@@ -4,6 +4,22 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [Unreleased]
+
+### Added
+
+- **Assistant response text for gen_ai agents (Codex/OpenAI) in the dashboard (S3-F3b).** The
+  gen_ai_latest_experimental instrumentation emits the assistant's reply as a separate
+  `gen_ai.choice` / `gen_ai.assistant.message` log event correlated to its LLM span by
+  traceId:spanId — which the shipped standalone ingest path previously DROPPED, so those
+  sessions showed no response text. The server now formats that event into `gen_ai.output.messages`
+  and merges it into the matching span via a new read-time attribute overlay on the segmented
+  span store (`SegmentedSpanStore.injectSpanAttribute`), applied when the span is read so the
+  event may arrive before or after the span and no persisted segment is ever rewritten. The
+  formatter is now the one shared `src/genAiContent.ts` both ingest paths import (no duplicate).
+  New read-only localhost debug endpoint `/api/debug/span-attr` exposes one stored span attribute
+  for verification.
+
 ## [2.4.1] — 2026-07-11
 
 ### Fixed

@@ -6,6 +6,7 @@ import { callBodyRegistry } from './rawBodyContext'
 import { countFallback } from './shared/fallbackCounters'
 import { resolveLogEventName, bareLogEventName, CLAUDE_RICH_LOG_EVENTS, BODY_POINTER_LOG_EVENTS } from './otlpLogEvents'
 import { CodexSessionNormalizer, isCodexPromptEventName } from './codexSessionNormalizer'
+import { formatGenAiEventContent } from './genAiContent'
 
 const MAX_BODY_BYTES = 50 * 1024 * 1024 // 50 MB
 
@@ -381,7 +382,7 @@ export class OtlpCollector {
             const logSpanId = typeof rec.spanId === 'string' ? rec.spanId : ''
             if (logTraceId && logSpanId) {
               const raw = this.getAttrFrom(attrs, ['gen_ai.event.content'])
-              const formatted = raw ? this.formatGenAiEventContent(raw, eventName) : ''
+              const formatted = raw ? formatGenAiEventContent(raw, eventName) : ''
               if (formatted) {
                 const bufKey = `${logTraceId}:${logSpanId}`
                 this.genAiResponseBuffer.set(bufKey, formatted)
@@ -612,29 +613,6 @@ export class OtlpCollector {
       count++
     }
     return count
-  }
-
-  // Normalises a gen_ai.choice or gen_ai.assistant.message event content value into the
-  // gen_ai.output.messages array format expected by extractResponseText in the summarizer.
-  private formatGenAiEventContent(raw: string, eventName: string): string {
-    try {
-      const parsed = JSON.parse(raw) as Record<string, unknown>
-      // gen_ai.choice wraps the message: { finish_reason, index, message: { role, content } }
-      const msg: Record<string, unknown> = eventName === 'gen_ai.choice' && parsed.message
-        ? parsed.message as Record<string, unknown>
-        : parsed
-      const role = msg.role ?? 'assistant'
-      let content = msg.content
-      // Normalise string content to block array format for extractResponseText compatibility
-      if (typeof content === 'string') {
-        content = [{ type: 'text', text: content }]
-      }
-      return JSON.stringify([{ role, content }])
-    } catch {
-      // Unparseable gen_ai event content → the response text is silently lost; count it (P6).
-      countFallback('otlp.genAiEventUnparseable')
-      return ''
-    }
   }
 
   async stop() {
