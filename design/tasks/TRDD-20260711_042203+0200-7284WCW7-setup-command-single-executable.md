@@ -1,9 +1,9 @@
 ---
 trdd-id: 7284WCW7
 title: agentlenspro setup — idempotent install/repair verb + single-executable consolidation
-column: dev
+column: published
 created: 2026-07-11T04:22:03+0200
-updated: 2026-07-11T06:58:00+0200
+updated: 2026-07-11T10:35:44+0200
 current-owner: orchestrator-agentlenspro
 assignee: setup-command-agent
 priority: 1

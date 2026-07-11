@@ -1,9 +1,11 @@
 ---
 trdd-id: VY1IUVUM
 title: TTL-awareness — keepWarm and COLD_RESUME must not hardcode the 5-minute cache TTL
-column: complete
+column: published
 created: 2026-07-11T08:46:57+0200
-updated: 2026-07-11T10:32:04+0200
+updated: 2026-07-11T10:35:44+0200
+published-version: 2.2.0
+published-at: 2026-07-11T10:34:21+0200
 current-owner: orchestrator-agentlenspro
 assignee: ttl-awareness-agent
 priority: 1

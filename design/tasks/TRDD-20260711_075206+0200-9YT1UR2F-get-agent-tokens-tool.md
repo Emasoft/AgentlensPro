@@ -1,9 +1,9 @@
 ---
 trdd-id: 9YT1UR2F
 title: get_agent_tokens — exact per-agent token/cost query, CC-display reconcilable
-column: dev
+column: published
 created: 2026-07-11T07:52:06+0200
-updated: 2026-07-11T09:05:00+0200
+updated: 2026-07-11T10:35:44+0200
 current-owner: orchestrator-agentlenspro
 assignee: agent-tokens-agent
 priority: 2
