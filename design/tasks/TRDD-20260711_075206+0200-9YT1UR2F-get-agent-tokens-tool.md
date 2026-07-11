@@ -3,7 +3,7 @@ trdd-id: 9YT1UR2F
 title: get_agent_tokens — exact per-agent token/cost query, CC-display reconcilable
 column: dev
 created: 2026-07-11T07:52:06+0200
-updated: 2026-07-11T07:52:06+0200
+updated: 2026-07-11T09:05:00+0200
 current-owner: orchestrator-agentlenspro
 assignee: agent-tokens-agent
 priority: 2
@@ -17,17 +17,34 @@ feature-branch: feat/get-agent-tokens
 merge-strategy: merge
 must-pass-tests-before-merge: true
 test-requirements: [unit, lint, typecheck]
-implementation-commits: []
+implementation-commits: [2f172b1, cdfb3ca, 072a564, add9415, a55436a]
 ---
 
 # get_agent_tokens — exact tokens/cost for ONE agent
 
-## ⏵ STATE — READ THIS FIRST ON RESUME — 2026-07-11
+## ⏵ STATE — READ THIS FIRST ON RESUME — 2026-07-11 (post-merge)
 
-- **Current state**: spec approved (USER order 2026-07-11: "does our tool have a command to
-  get the exact tokens used by a given agent? if not, you should add it"). Implementation
-  agent launching on feat/get-agent-tokens.
-- **NEXT ACTION**: agent delivers; orchestrator verifies, deploys, ships in next release.
+- **Current state**: IMPLEMENTED + MERGED to main (`a55436a`, --no-ff, pushed). Gates all
+  green: tsc (root + media + test tsconfigs), eslint --quiet, check-no-mirrors, esbuild,
+  full mocha under Node 20 — **783 passing / 0 failing** (baseline 774/0, +9 new real-fs
+  tests, zero regressions). Version 2.1.0 + CHANGELOG + SKILL.md row shipped in the merge.
+- **ADDENDUM applied (2026-07-11)**: CC's per-agent footer ↓ was empirically decoded as
+  CUMULATIVE (input + cache_read + cache_creation) across ALL turns incl. the launch turn,
+  output excluded/sub-rounding. `ccDisplayEquivalent` therefore carries
+  `{ cumulativeInputSideTokens, lastTurnContextRead }` (NOT the originally drafted
+  `cumulativeInputTokens` name) + a note stating ↓ is volume moved, not billing. A test
+  asserts cumulativeInputSideTokens == the fixture transcript's summed input-side buckets.
+- **Design decision worth knowing**: bare-id exact-sessionId precedence was REMOVED
+  (commit cdfb3ca) — a spawn placeholder's sessionId IS the bare agent id, so blanket
+  precedence silently served the zero-bucket placeholder of an un-merged
+  placeholder+transcript pair. Exact equality is only a tie-break when the query carries
+  the distinguishing `agent-<id>` form; a bare shared id errors listing both candidates.
+- **Implementation**: `handleGetAgentTokens` + TOOLS entry + dispatch case, all in
+  src/mcpServer.ts (the ONE shared registry — the CLI reads tools/list live, no second
+  dispatch table). Tests: src/test/mcpAgentTokens.test.ts (real-fs, temp CLAUDE_CONFIG_DIR,
+  incl. the cross-tool consistency assertion vs get_subagent_tree on the same fixture child).
+- **NEXT ACTION**: orchestrator verifies on a live agent id, advances column, ships v2.1.0
+  in the next release (release-via: publish).
 
 ## Requirement
 
