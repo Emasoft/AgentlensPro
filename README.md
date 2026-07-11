@@ -326,6 +326,10 @@ Only one server can bind a given port pair at a time. To run a second instance, 
 OTLP_PORT=4319 UI_PORT=3001 bunx agentlenspro
 ```
 
+### Security & privacy
+
+The dashboard and OTLP receiver bind to `127.0.0.1` by default, so they are not reachable from the network — your session data never leaves your machine. A web page you are browsing can still reach `localhost` from your own browser, so the server also refuses cross-origin browser requests: state-changing requests from a foreign origin are rejected, and responses carry `Access-Control-Allow-Origin` only for same-origin/loopback origins — a page on another site cannot read your local session data (prompts, costs, file paths). Setting `BIND_HOST=0.0.0.0` for LAN access removes the network boundary; only do so on a trusted network.
+
 ### Docker (OTEL only)
 
 > **Log file ingestion is not available in Docker mode.** The container is isolated from the host filesystem. Use the native process option above if you need local session log history.
