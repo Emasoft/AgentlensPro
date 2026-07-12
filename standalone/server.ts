@@ -59,6 +59,8 @@ import type { Span } from '../src/shared/telemetryTypes'
 import type { SessionSummaryCard, CollectorGap } from '../src/shared/summarizerTypes'
 import { CodexSessionNormalizer } from '../src/codexSessionNormalizer'
 import { formatGenAiEventContent } from '../src/genAiContent'
+import { ResourceMonitor } from '../src/resourceMonitor'
+import { AdmissionController, admissionLimitsFromEnv, type AdmitResult } from '../src/admissionController'
 
 const OTLP_PORT  = parseInt(process.env.OTLP_PORT  ?? '4318')
 const UI_PORT    = parseInt(process.env.UI_PORT    ?? '3000')
@@ -400,6 +402,10 @@ function ingestHookEvent(payload: unknown): { status: number; body: Record<strin
 // can never ingest (unparseable / 400) is dropped LOUDLY so the spool cannot wedge; only a real disk
 // fault (ingest throws) keeps the file for a later retry.
 const HOOK_SPOOL_DIR = path.join(DATA_DIR, 'hook-spool')
+/** Count of hook events waiting on disk for the drain (surfaced on /api/server-stats). */
+function hookSpoolCount(): number {
+  try { return fs.readdirSync(HOOK_SPOOL_DIR).filter((n) => n.endsWith('.json')).length } catch { return 0 }
+}
 function drainHookSpool(): void {
   let names: string[]
   try { names = fs.readdirSync(HOOK_SPOOL_DIR).filter((n) => n.endsWith('.json')).sort() } catch { return } // no spool dir — nothing to drain
@@ -2251,7 +2257,37 @@ function readBodyCapped(req: http.IncomingMessage, maxBytes: number, onBody: (bu
   req.on('end', () => { if (!overflowed) onBody(Buffer.concat(chunks)) })
 }
 
-const uiServer = http.createServer((req, res) => {
+// D3K7QM2P/1c — one resource monitor + one admission controller shared by BOTH HTTP servers (the
+// process has ONE resource pool). Under 20+ concurrent Claude instances the controller bounds
+// in-flight work, queues the overflow briefly, and sheds (503 + Retry-After) only at a hard wall —
+// LOSS-FREE: a shed hook is spooled by the CLI (1a) + drained later, a shed OTLP export is retried
+// by the exporter / backfilled by the next scan, and a shed gate fails OPEN (never blocks a launch).
+const resourceMonitor = new ResourceMonitor(DATA_DIR)
+const admission = new AdmissionController(admissionLimitsFromEnv(process.env, Math.max(1, os.cpus().length)), () => resourceMonitor.sample())
+
+// These endpoints must ALWAYS answer, even at capacity: /events is a long-lived SSE stream (holding
+// an admission slot for its whole lifetime would drain the pool), /api/server-stats is how monitors
+// and the CLI read health under load, and GET /api/hook-config is the kill-switch read (you must be
+// able to turn capture/gate OFF when the box is on fire).
+function isAdmissionExempt(method: string, url: string): boolean {
+  return url === '/events'
+    || url === '/api/server-stats'
+    || (method === 'GET' && url === '/api/hook-config')
+}
+function sendBusy(res: http.ServerResponse, adm: AdmitResult): void {
+  res.writeHead(503, { 'Content-Type': 'application/json', 'Retry-After': String(adm.retryAfterSec ?? 1) })
+  res.end(JSON.stringify({ error: 'server busy — backpressure', reason: adm.reason }))
+}
+// Release the admission slot exactly once, whether the response finished normally or the client
+// aborted mid-flight — a 'finish' THEN 'close' must not double-decrement.
+function admitLeaveOnDone(res: http.ServerResponse): void {
+  let left = false
+  const leaveOnce = (): void => { if (!left) { left = true; admission.leave() } }
+  res.on('finish', leaveOnce)
+  res.on('close', leaveOnce)
+}
+
+const uiServer = http.createServer(async (req, res) => {
   const url = (req.url ?? '/').split('?')[0]
   instrumentResponse(req, res, url)
   // ACAO only for allowed (same-origin/loopback) origins — never the wildcard (see setAllowedOriginCors:
@@ -2265,6 +2301,15 @@ const uiServer = http.createServer((req, res) => {
     res.writeHead(403, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ error: 'cross-origin request refused' }))
     return
+  }
+
+  // D3K7QM2P/1c — admission control: bound in-flight work under concurrent load, shed at a hard wall.
+  // Exempt endpoints (SSE, stats, kill-switch reads) bypass it; everything else reserves a slot that
+  // is released when the response finishes (or the client aborts).
+  if (!isAdmissionExempt(req.method ?? 'GET', url)) {
+    const adm = await admission.enter()
+    if (!adm.ok) { sendBusy(res, adm); return }
+    admitLeaveOnDone(res)
   }
 
   if (url === '/events') {
@@ -2347,7 +2392,12 @@ const uiServer = http.createServer((req, res) => {
         files: { spans: spanStoreStats.totalBytes, offsets: sizeOf(OFFSETS_FILE), cards: sizeOf(CARDS_FILE) },
       },
       bodies: { archive: archiveDiskUsage(BODIES_ARCHIVE_DIR), lastPass: p.bodiesLastPurge },
-      hookEvents: { ...hookEventsDiskUsage(HOOK_EVENTS_DIR), receivedSinceBoot: p.hookEventWrites },
+      hookEvents: { ...hookEventsDiskUsage(HOOK_EVENTS_DIR), receivedSinceBoot: p.hookEventWrites, spooled: hookSpoolCount() },
+      // D3K7QM2P/1c — live backpressure: in-flight/queued now, and admitted/shed since boot. A
+      // rising shedTotal under a 20-instance burst is the controller doing its job (shed = spooled +
+      // drained, never lost). `resources` is the same sample the controller admits/sheds on.
+      admission: admission.stats(),
+      resources: resourceMonitor.sample(),
       gate: {
         mode: hookRuntime.gateMode, enabled: hookRuntime.gateEnabled,
         captureEnabled: hookRuntime.captureEnabled, advisorEnabled: hookRuntime.advisorEnabled,
@@ -3023,13 +3073,19 @@ const uiServer = http.createServer((req, res) => {
 
 // ── OTLP server ───────────────────────────────────────────────────────────────
 
-const otlpServer = http.createServer((req, res) => {
+const otlpServer = http.createServer(async (req, res) => {
   if (req.method === 'GET' && req.url === '/agentlens/standalone') {
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ agentlens: true, kind: 'standalone' }))
     return
   }
   if (req.method !== 'POST') { res.writeHead(200); res.end(); return }
+  // D3K7QM2P/1c — admission control on the heavy OTLP ingest POST (the health GET + non-POST above
+  // are exempt). A shed export is safe: the exporter retries and the next JSONL scan backfills, so
+  // no telemetry is lost — the server just refuses to melt under a 20-instance burst.
+  const adm = await admission.enter()
+  if (!adm.ok) { sendBusy(res, adm); return }
+  admitLeaveOnDone(res)
   // 64MB cap: a legitimate OTLP export batch is well under this; a bigger body is a bug or an attack
   // and must not buffer unbounded into the collector's heap (the OtlpCollector class caps at 50MB).
   readBodyCapped(req, 64 * 1024 * 1024, (bodyBuf) => {
