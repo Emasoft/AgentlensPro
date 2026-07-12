@@ -1,9 +1,9 @@
 ---
 trdd-id: HUWJVQJA
 title: CLI environment/system detection surface — agentlenspro env (facets + JSON report)
-column: dev
+column: complete
 created: 2026-07-13T01:12:21+0200
-updated: 2026-07-13T01:12:21+0200
+updated: 2026-07-13T01:35:00+0200
 current-owner: claude-code-review
 assignee: claude-code-review
 priority: 2
@@ -23,6 +23,22 @@ implementation-commits: []
 # CLI environment/system detection surface
 
 ## ⏵ STATE — READ FIRST — 2026-07-13
+
+**✅ DONE + gated GREEN 1002 passing / 0 failing (was 938 baseline; +64 tests). Committed on
+`feat/cli-env-detection` (f611c4a feature, docs commit next), verified live.** All 10 facets ship
+in `src/environment/` behind the `EnvFacet` registry; `agentlenspro env [facet] [--json] [--out FILE]
+| env list` wired in main.ts + USAGE. Foundation + 3 exemplars authored directly; the 7 detector
+modules via a parallel spark-agent fan-out on the exemplar contract. Live smoke confirmed:
+terminal=iterm via process ancestry, git worktree+branch, tailscale running, agentlens ports
+4316/4318/3000, 31 plugins, `--out` writes 10 facets as JSON with only a digest to stdout. Two
+post-fan-out fixes: `go` probed with `go version` (not `--version` → garbage), tooling label spacing.
+Docs: README "Environment diagnostics" + ARCHITECTURE tree + CHANGELOG [2.6.0] + package.json → 2.6.0.
+**NOT pushed — v2.6.0 release awaits USER confirmation** (npm pkg, not a plugin).
+
+---
+_Original plan below (superseded by the DONE summary above):_
+
+## ⏵ STATE (original plan) — 2026-07-13
 
 **Ask (user, /goal):** add a diagnostic surface to the `agentlenspro` CLI that detects and reports
 the full nature of the runtime environment — terminal kind (iTerm/Ghostty/WezTerm/kitty/Alacritty/

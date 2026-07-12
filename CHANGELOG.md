@@ -6,6 +6,26 @@ All notable changes to AgentlensPro are documented here.
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-07-13
+
+### Added
+
+- **`agentlenspro env` — environment/system detection surface.** A new client-side diagnostic
+  (no server needed) that reports the full nature of the runtime environment, queryable one facet
+  at a time or all at once as a single JSON report. `--out FILE` writes the full JSON to disk and
+  prints only a one-line digest, keeping big reports out of the terminal / an agent's context.
+  Ten facets: **terminal** (hosting terminal by *process ancestry* — iTerm/Ghostty/WezTerm/kitty/
+  Alacritty/Warp/Hyper/Windows Terminal/macOS Terminal/VS Code/tmux — not `$TERM_PROGRAM`, which
+  lies across subshells/ssh/multiplexers — plus ai-maestro agent, multiplexer, ssh, tmux),
+  **os**, **runtime** (CI runner, container/dev-container/WSL/sandbox, Claude Code context),
+  **claude** (config dir, settings permission summary, plugins, CLI version), **filesystem**
+  (fs type, git repo + worktree main-vs-linked + branch, free disk), **user**, **network**
+  (interfaces, VPN incl. Tailscale, proxy, DNS, listening ports, gateway — no outbound calls),
+  **cloud** (AWS/Azure/GCP via env/config/CLI — never contacts a metadata server), **tooling**
+  (runtimes, package managers, compilers, linters, version managers), **mcp** (configured MCP
+  servers). Every detector is fail-soft and time-boxes its probes. `agentlenspro env list` shows
+  the facets. New "Environment diagnostics" section in the README.
+
 ## [2.5.1] - 2026-07-13
 
 ### Added
