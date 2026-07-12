@@ -29,7 +29,7 @@ import { evaluateAgentGate, evaluateSendMessageGate, buildAdvisory, readTranscri
 import { checkBurnRisk } from '../src/burnGuard'
 import { loadHookRuntimeConfig, saveHookRuntimeConfig } from '../src/hookRuntimeConfig'
 import { ContextCompositionIndex } from '../src/contextCompositionIndex'
-import { LogReader, type OpenCodeSqlFactory } from '../src/logReader'
+import { LogReader, claudeProjectsDirs, type OpenCodeSqlFactory } from '../src/logReader'
 import { readScratchFile } from '../src/generatedFiles'
 import { StatuslineUsageReader } from '../src/statuslineUsage'
 import {
@@ -2698,6 +2698,69 @@ const uiServer = http.createServer(async (req, res) => {
         console.warn('[AgentLens] write-prompts-file error:', e)
       }
       res.writeHead(200); res.end()
+    })
+    return
+  }
+
+  // POST /api/branch-dump — write the over-threshold node outputs of a serialized branch to files
+  // under the Claude projects tree, so the dashboard "copy branch" button (TRDD-4CH9QLAH) keeps the
+  // clipboard payload small and hands Claude a grep-able path to the full output. WHY the destination
+  // is pinned this tightly: the request is already CSRF-guarded (uiServer refuses a foreign Origin on
+  // non-GET) and admission-controlled, but a filesystem WRITE is the highest-value target, so the
+  // path is confined to <claudeProjectsDir>/<real-project-slug>/agentlens-branch-dumps/ — the slug
+  // must be separator-free AND name an EXISTING project dir (proves it is a real project, never an
+  // arbitrary mkdir), each filename is sanitized to a single safe segment, and a containment check
+  // (resolved parent === resolved dump root) rejects anything that could escape. No traversal, no
+  // foreign path — an unguarded write endpoint on a browser-reachable localhost port is the exact
+  // arbitrary-file-write vector the CSRF gate exists to close.
+  if (req.method === 'POST' && url === '/api/branch-dump') {
+    readBodyCapped(req, 48 * 1024 * 1024, (bodyBuf) => {
+      try {
+        const body = JSON.parse(bodyBuf.toString('utf-8')) as {
+          slug?: string; sessionId?: string; dumps?: { id?: string; name?: string; content?: string }[]
+        }
+        const slug = typeof body.slug === 'string' ? body.slug : ''
+        const sessionId = typeof body.sessionId === 'string' ? body.sessionId : ''
+        const dumps = Array.isArray(body.dumps) ? body.dumps : []
+        // Claude project slugs are mangled dir basenames — already separator-free. Reject anything else
+        // (a slug with '/' or '..' is either a bug or an attempted traversal).
+        if (!/^[A-Za-z0-9._-]+$/.test(slug) || slug.includes('..')) {
+          res.writeHead(400, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ error: 'invalid project slug' })); return
+        }
+        // The slug MUST name a real, existing Claude project dir — this both validates the caller and
+        // guarantees we never mkdir an arbitrary tree for an attacker-chosen name.
+        const projRoot = claudeProjectsDirs()
+          .map(r => path.join(r, slug))
+          .find(p => { try { return fs.statSync(p).isDirectory() } catch { return false } })
+        if (!projRoot) {
+          res.writeHead(400, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ error: 'unknown project slug (no matching Claude project dir)' })); return
+        }
+        const dumpRoot = path.join(projRoot, 'agentlens-branch-dumps')
+        fs.mkdirSync(dumpRoot, { recursive: true })
+        const dumpRootResolved = path.resolve(dumpRoot)
+        const ts = new Date().toISOString().replace(/[:.]/g, '-')
+        const safe = (s: string): string => s.replace(/[^A-Za-z0-9._-]+/g, '-').slice(0, 60) || 'x'
+        const paths: Record<string, string> = {}
+        for (const d of dumps) {
+          const id = typeof d.id === 'string' ? d.id : ''
+          if (!/^[A-Za-z0-9_-]+$/.test(id)) continue // skip a malformed placeholder id (must round-trip into text)
+          const fileName = `${safe(sessionId)}-${ts}-${safe(d.name ?? 'output')}-${safe(id)}.txt`
+          const target = path.join(dumpRoot, fileName)
+          // Defense-in-depth: the sanitized single-segment name cannot contain a path separator, so the
+          // file must sit DIRECTLY in the dump root. Assert that on the resolved path before writing.
+          if (path.dirname(path.resolve(target)) !== dumpRootResolved) continue
+          fs.writeFileSync(target, typeof d.content === 'string' ? d.content : '', 'utf-8')
+          paths[id] = target
+        }
+        console.log(`[AgentLens] branch-dump: ${Object.keys(paths).length} file(s) → ${dumpRoot}`)
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ dir: dumpRoot, paths }))
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: String(e instanceof Error ? e.message : e) }))
+      }
     })
     return
   }

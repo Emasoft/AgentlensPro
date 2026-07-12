@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { rangedSessions, sessionSummary, sessionTimelines, focusedSessionId, vscode } from '../state'
 import { getAgentSourceLabel, getAgentColor, formatMs, formatSessionTime } from '../utils'
+import { CopyBranchButton } from '../CopyBranchButton'
 import { calcEntryCost, fmtUsd } from '../sessionMetrics'
 import { contextTokens } from '../../../src/shared/tokenBuckets'
 import type { SessionSummaryCard, TimelineEntry } from '../types'
@@ -657,6 +658,7 @@ export function FlowCanvas({ sess, height = 520 }: { sess: SessionSummaryCard; h
           <option value="300">Fast</option>
         </select>
         <span id={progressId} style="font-size:10px;color:var(--muted)" />
+        <CopyBranchButton card={sess} />
       </div>
       <div style="display:flex;gap:12px;margin-bottom:6px;font-size:10px;color:var(--muted);flex-wrap:wrap;align-items:center">
         {([

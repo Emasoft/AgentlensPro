@@ -26,6 +26,12 @@ import { findServerJs } from './serverControl'
 // Every fs/spawn op here is best-effort and guarded — the hook contract is "always exit 0 fast,
 // never fail a tool call", so nothing in this file may throw or block.
 const REVIVE_LOCK_TTL_MS = Math.max(2_000, Number(process.env.AGENTLENS_REVIVE_LOCK_TTL_MS) || 15_000)
+// A lock written THIS millisecond can read as slightly-negative age: fs.statSync().mtimeMs carries
+// sub-ms precision while Date.now() truncates to integer ms, so (Date.now() - mtimeMs) is often a
+// small NEGATIVE fraction when the write + the check land in the same ms (measured ~97% of the time
+// on a fast machine). A short tolerance treats such a lock as "just written" (fresh), not stale —
+// see reviveDaemonDetached. Also absorbs minor NTP skew between the FS clock and the JS clock.
+const REVIVE_LOCK_SKEW_MS = 2_000
 // Read per-call (not a module const) so a live AGENTLENS_HOOK_SPOOL_MAX change is honored — each
 // hook is a short-lived process, so the env read is negligible. Floor of 1: a user may set a small
 // cap deliberately; the default 20k is the real safety bound.
@@ -60,7 +66,13 @@ function reviveDaemonDetached(): void {
     const lock = path.join(dataDir(), '.daemon-revive.lock')
     try {
       const age = Date.now() - fs.statSync(lock).mtimeMs
-      if (age >= 0 && age < REVIVE_LOCK_TTL_MS) return // another hook already triggered a revive
+      // Fresh lock ⇒ another hook already triggered a revive within the burst window. A just-written
+      // lock's age is often a tiny NEGATIVE fraction (sub-ms mtime precision vs truncated Date.now()),
+      // so the freshness window is [−skew, TTL): treat a slightly-future mtime as fresh, and re-arm
+      // only on a genuinely OLD lock (age ≥ TTL) or an absurdly-future one (clock jump beyond skew).
+      // The previous `age >= 0` guard rejected the sub-ms-future case and re-armed a fresh lock ~97%
+      // of the time — a spurious double-revive (harmless: the server pidfile rejects a second instance).
+      if (age > -REVIVE_LOCK_SKEW_MS && age < REVIVE_LOCK_TTL_MS) return
     } catch { /* no lock — proceed to claim it */ }
     try { fs.mkdirSync(dataDir(), { recursive: true }); fs.writeFileSync(lock, String(Date.now())) } catch { /* best effort */ }
     // Spool-only mode: record the event to disk for the drain but do NOT auto-spawn the server.
