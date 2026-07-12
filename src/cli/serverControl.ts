@@ -8,6 +8,12 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { apiRequest, dataDir, dashboardUrl, fmtGb, fmtMb, init, mcpEndpoint, sleep } from './cliCore'
 
+/** Count of hook events durably spooled to disk but not yet reingested (server was down / shedding).
+ *  Zero in the healthy case; a non-zero, non-shrinking value means the daemon isn't draining. */
+export function hookSpoolDepth(): number {
+  try { return fs.readdirSync(path.join(dataDir(), 'hook-spool')).filter((n) => n.endsWith('.json')).length } catch { return 0 }
+}
+
 /** Locate the standalone/server.js bundle. The CLI bundle lives NEXT TO it
  *  (<pkg>/standalone/cli.js), the test build three levels under out/test/, so a single
  *  fixed relative path would be wrong in one layout — walk the candidates. */
@@ -268,4 +274,28 @@ export async function serverCommand(argv: string[]): Promise<void> {
     default:
       throw new Error(`server expects start|stop|restart|status (got "${verb ?? ''}") — e.g. agentlenspro server start [--supervise]`)
   }
+}
+
+// ── Daemon (D3K7QM2P/1b) — the always-on ingestion role ─────────────────────────────────────────
+// In the hook-revive architecture the ingestion daemon IS the standalone server (it owns OTLP :4318
+// + the JSONL scan + the hook-spool drain); `daemon` is the CLI surface that names that role for the
+// user and reports the ingestion-specific health (the hook-spool depth). start/stop/restart share the
+// server lifecycle verbatim (one process, one pidfile guard); `daemon start --supervise` is what
+// launchd runs for true always-on (1d). This is a thin alias by design — a second lifecycle would be
+// a second source of truth for "is ingestion up".
+export async function daemonCommand(argv: string[]): Promise<void> {
+  const verb = argv[0] ?? 'status'
+  if (verb === 'status') {
+    await showStatus()
+    const spooled = hookSpoolDepth()
+    console.log(`ingestion: always-on daemon = the standalone server (OTLP :4318 + JSONL scan + hook-spool drain).`)
+    console.log(`hook-spool: ${spooled} event(s) awaiting drain${spooled > 0 ? ' — undelivered hooks are safe on disk and reingested on the next drain tick' : ''}`)
+    return
+  }
+  if (verb === 'start' || verb === 'stop' || verb === 'restart') {
+    // The daemon and the server are one process — reuse the exact lifecycle (incl. --supervise).
+    await serverCommand(argv)
+    return
+  }
+  throw new Error(`daemon expects start|stop|restart|status (got "${verb}") — e.g. agentlenspro daemon start --supervise`)
 }

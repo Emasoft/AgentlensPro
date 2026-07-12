@@ -29,6 +29,10 @@ usage:
   agentlenspro server start|stop|restart|status [--supervise]
                                               manage the background server; --supervise runs the
                                               crash-restart supervisor in the foreground
+  agentlenspro daemon start|stop|restart|status [--supervise]
+                                              the always-on ingestion daemon (same process as the
+                                              server); status also shows the hook-spool depth. hooks
+                                              auto-revive it, so no log is lost while it is down
   agentlenspro dashboard                      ensure the server is up, then open the dashboard
   agentlenspro telemetry install|uninstall|status
                                               manage the Claude Code full-telemetry env (verified transaction)

@@ -20,7 +20,7 @@ import { runTelemetryCli } from '../telemetryConfig'
 import { runDiagnosticsCli, USAGE } from './diagnosticsCli'
 import { runHookCommand } from './hookHandlers'
 import { runHeartbeatCost } from './heartbeatCostCli'
-import { ensureServer, openDashboard, serverCommand } from './serverControl'
+import { ensureServer, openDashboard, serverCommand, daemonCommand } from './serverControl'
 import { runSetupCli } from './setup'
 
 /** The package version, read from the package.json that ships next to the bundle. Walks up
@@ -67,6 +67,11 @@ export async function cliMain(argv: string[], startServer: () => Promise<unknown
       return runSetupCli(argv.slice(1))
     case 'server':
       await serverCommand(argv.slice(1))
+      return 0
+    case 'daemon':
+      // The always-on ingestion daemon (D3K7QM2P) — same process as `server`, named for its role;
+      // adds hook-spool depth to status. `daemon start --supervise` is what launchd runs.
+      await daemonCommand(argv.slice(1))
       return 0
     case 'dashboard':
       await ensureServer()
