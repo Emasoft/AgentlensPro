@@ -21,6 +21,7 @@ import { runDiagnosticsCli, USAGE } from './diagnosticsCli'
 import { runHookCommand } from './hookHandlers'
 import { runHeartbeatCost } from './heartbeatCostCli'
 import { runConfigCli } from './configCli'
+import { runEnvCli } from './envCli'
 import { ensureServer, openDashboard, serverCommand, daemonCommand } from './serverControl'
 import { runSetupCli } from './setup'
 
@@ -85,6 +86,11 @@ export async function cliMain(argv: string[], startServer: () => Promise<unknown
       // Data-retention config (TRDD-ZAV74M8Q): read/write DATA_DIR/config.json directly — no
       // server needed, so it works while the server is down and the values persist across uninstall.
       return runConfigCli(argv.slice(1))
+    case 'env':
+      // Environment/system detection (TRDD-HUWJVQJA): terminal kind, OS, Claude/ai-maestro/CI/
+      // container context, filesystem/worktree, network, cloud, tooling, MCP — all client-side, no
+      // server. One facet at a time or the whole report; `--out FILE` keeps big reports off stdout.
+      return runEnvCli(argv.slice(1))
     case undefined:
       // Bare `agentlenspro` / `npx agentlenspro`: the original behavior — run the server in
       // the foreground; it serves the dashboard (and opens the browser unless

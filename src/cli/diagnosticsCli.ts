@@ -45,6 +45,11 @@ usage:
   agentlenspro config get <key>               one retention knob's effective value + where it came from
   agentlenspro config set <key> <value>       persist a retention knob to ~/.agentlens/config.json
                                               (survives uninstall/upgrade; restart to apply; env still wins)
+  agentlenspro env [facet] [--json] [--out F]  detect the runtime environment: terminal kind, OS,
+                                              Claude/ai-maestro/CI/container context, filesystem/worktree,
+                                              user, network/VPN/proxy, cloud (AWS/Azure/GCP), tooling,
+                                              MCP servers. No facet = whole report; --out writes full
+                                              JSON to a file (digest to stdout). env list shows facets
 
 diagnostics (schemas come live from the server):
   agentlenspro list [--desc]                  all tools (names; --desc adds one-line descriptions)
