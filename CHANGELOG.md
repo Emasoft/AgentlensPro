@@ -6,6 +6,22 @@ All notable changes to AgentlensPro are documented here.
 
 ## [Unreleased]
 
+## [2.5.1] - 2026-07-13
+
+### Added
+
+- **Persistent, discoverable data-retention config.** Retention was already tunable via the
+  `AGENTLENS_*` environment variables, but env vars are ephemeral and never reach the launchd
+  daemon. A new `agentlenspro config` CLI now reads and writes the five retention knobs
+  (`spansRetentionDays`, `summaryWindowHours`, `bodiesMaxAgeHours`, `bodiesMaxGb`,
+  `bodiesRetentionDays`) to a persistent `~/.agentlens/config.json` that survives an
+  uninstall/upgrade/CLI-path-change like the data it governs, and the always-on daemon re-reads
+  it every boot. `agentlenspro config` lists every knob with its effective value and source;
+  `config get <key>` / `config set <key> <value>` inspect and persist one. The server resolves each
+  knob at boot with the precedence **env var > config.json > built-in default** (env stays the ops
+  override), each value min-floored. A `set` on a corrupt config file refuses to write rather than
+  clobbering it. New "Data retention" section in the README documents all five knobs.
+
 ## [2.5.0] - 2026-07-12
 
 ### Added

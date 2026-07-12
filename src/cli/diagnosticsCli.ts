@@ -41,6 +41,10 @@ usage:
   agentlenspro hook                           lifecycle hook handler (stdin → server; registered by setup)
   agentlenspro gate                           agent-launch burn gate (stdin → server; registered by setup)
   agentlenspro heartbeat-cost [--oneline]     exact token + $ cost of the last settled heartbeat fire
+  agentlenspro config [list]                  show data-retention knobs: effective value + source
+  agentlenspro config get <key>               one retention knob's effective value + where it came from
+  agentlenspro config set <key> <value>       persist a retention knob to ~/.agentlens/config.json
+                                              (survives uninstall/upgrade; restart to apply; env still wins)
 
 diagnostics (schemas come live from the server):
   agentlenspro list [--desc]                  all tools (names; --desc adds one-line descriptions)
