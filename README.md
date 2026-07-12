@@ -153,6 +153,30 @@ Loading is incremental and runs in the background, sorted newest-first so recent
 
 **What log data does not include:** time-to-first-token, per-tool execution timing, streaming speed, loop detection signals, or structured error telemetry. Enable OTEL for those. OpenCode sessions show a blue info banner in the Session Overview noting that OTEL traces and TTFT are not available.
 
+## Data retention
+
+All ingested data lives under the data directory (`~/.agentlens`, or `$DATA_DIR`). This directory is **independent of where the package is installed** — it survives an uninstall, a version upgrade, and a CLI-path change, so your history is never lost when you update. Deletion is always logged, never silent, and only ever removes whole expired segments/volumes (spans and OTEL bodies are archived, never truncated mid-window).
+
+Five knobs control how long each kind of data is kept:
+
+| Knob | Default | Environment variable | What it governs |
+| --- | --- | --- | --- |
+| `spansRetentionDays` | 30 days | `AGENTLENS_SPANS_RETENTION_DAYS` | span segments (the trace DB) kept on disk |
+| `summaryWindowHours` | 24 hours | `AGENTLENS_SUMMARY_WINDOW_HOURS` | in-memory rolling summary window (disk keeps everything) |
+| `bodiesMaxAgeHours` | 72 hours | `AGENTLENS_BODIES_MAX_AGE_HOURS` | raw OTEL bodies kept as plain files before archiving |
+| `bodiesMaxGb` | 8 GB | `AGENTLENS_BODIES_MAX_GB` | live-bodies size cap (archives oldest-first; never deletes) |
+| `bodiesRetentionDays` | 31 days | `AGENTLENS_BODIES_RETENTION_DAYS` | archived OTEL bodies kept before whole-volume deletion |
+
+**Set a value persistently** with the CLI — it is written to `~/.agentlens/config.json` (in the durable data directory, so it too survives uninstall/upgrade, and the always-on daemon re-reads it every boot):
+
+```bash
+agentlenspro config                              # list every knob: effective value + source
+agentlenspro config get spansRetentionDays       # one knob's value + where it came from
+agentlenspro config set spansRetentionDays 90    # persist a change (restart the server/daemon to apply)
+```
+
+Each knob is resolved at boot with the precedence **environment variable > `config.json` > built-in default** — the env var stays the ephemeral ops override, the file is the durable setting you set once. Every value has a safety floor (e.g. days ≥ 1), and a below-floor value from any source is clamped. Restart the server/daemon (`agentlenspro server restart`) after a change.
+
 ## Cost Estimation
 
 The **Analytics** tab (Estimated Cost section) shows the dollar cost of Copilot, Claude Code, and Codex sessions.

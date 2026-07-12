@@ -61,6 +61,7 @@ import { CodexSessionNormalizer } from '../src/codexSessionNormalizer'
 import { formatGenAiEventContent } from '../src/genAiContent'
 import { ResourceMonitor } from '../src/resourceMonitor'
 import { AdmissionController, admissionLimitsFromEnv, type AdmitResult } from '../src/admissionController'
+import { resolveRetention } from '../src/retentionConfig'
 
 const OTLP_PORT  = parseInt(process.env.OTLP_PORT  ?? '4318')
 const UI_PORT    = parseInt(process.env.UI_PORT    ?? '3000')
@@ -69,6 +70,11 @@ const BIND_HOST  = process.env.BIND_HOST ?? '127.0.0.1'
 
 const mediaDir  = path.join(__dirname, '..', 'media')
 const DATA_DIR  = process.env.DATA_DIR ?? path.join(os.homedir(), '.agentlens')
+// Retention knobs resolved once at boot: env var > DATA_DIR/config.json > built-in default (min-floored
+// inside resolveKnob). The config.json layer makes retention PERSISTENTLY settable — it survives a
+// repo delete / uninstall / upgrade like the data it governs, and the launchd daemon (whose own env a
+// shell export cannot reach) re-reads it every boot. See src/retentionConfig.ts (TRDD-ZAV74M8Q).
+const RET = resolveRetention(DATA_DIR, process.env)
 // P4 segmented span store: daily NDJSON segments under DATA_DIR/spans/ (src/segmentedSpanStore.ts).
 // The old single-file spans.json exists only as a migration source — split into segments on the
 // first boot and preserved as spans.json.bak, never deleted.
@@ -131,15 +137,12 @@ let sseClients: http.ServerResponse[] = []
 // floor (the live summarization window), logged loudly — while DISK keeps every span, and any
 // range query reloads older segments on demand via spanStore.loadRange().
 const SUMMARY_WINDOW_FLOOR_MS = 5 * 60_000
-const SUMMARY_WINDOW_MS = Math.max(
-  SUMMARY_WINDOW_FLOOR_MS,
-  (Number(process.env.AGENTLENS_SUMMARY_WINDOW_HOURS) || 24) * 3600e3,
-)
+const SUMMARY_WINDOW_MS = Math.max(SUMMARY_WINDOW_FLOOR_MS, RET.summaryWindowHours * 3600e3)
 let effectiveWindowMs = SUMMARY_WINDOW_MS
 
 // Retention: whole expired segments only, on boot + daily, each deletion logged explicitly
 // ("retention: deleted segment 2026-06-01.ndjson, N spans, age 39d"). Never a silent drop.
-const SPANS_RETENTION_DAYS = Math.max(1, Number(process.env.AGENTLENS_SPANS_RETENTION_DAYS) || 30)
+const SPANS_RETENTION_DAYS = RET.spansRetentionDays
 
 const SAVE_INTERVAL_MS = Math.max(1000, Number(process.env.AGENTLENS_SAVE_INTERVAL_MS) || 5000)
 
@@ -234,9 +237,9 @@ function addSpan(span: Span) {
 // than the retention window. Every pass is logged; a silent cap would read as data loss.
 const BODIES_DIR = path.join(DATA_DIR, 'otel-bodies')
 const BODIES_ARCHIVE_DIR = path.join(DATA_DIR, 'otel-bodies-archive')
-const BODIES_MAX_AGE_MS = Math.max(1, Number(process.env.AGENTLENS_BODIES_MAX_AGE_HOURS) || 72) * 3600e3
-const BODIES_MAX_BYTES = Math.max(0.5, Number(process.env.AGENTLENS_BODIES_MAX_GB) || 8) * 1024 ** 3
-const BODIES_RETENTION_DAYS = Math.max(1, Number(process.env.AGENTLENS_BODIES_RETENTION_DAYS) || 31)
+const BODIES_MAX_AGE_MS = RET.bodiesMaxAgeHours * 3600e3
+const BODIES_MAX_BYTES = RET.bodiesMaxGb * 1024 ** 3
+const BODIES_RETENTION_DAYS = RET.bodiesRetentionDays
 
 let bodiesPassRunning = false
 async function archiveOtelBodies(): Promise<void> {
