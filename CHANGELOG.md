@@ -6,6 +6,8 @@ All notable changes to AgentlensPro are documented here.
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-07-12
+
 ### Added
 
 - **Dashboard custom datetime range.** The time-range picker gains a `15m` quick preset and explicit
