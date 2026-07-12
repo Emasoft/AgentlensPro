@@ -8,6 +8,11 @@ All notable changes to AgentlensPro are documented here.
 
 ### Added
 
+- **Dashboard custom datetime range.** The time-range picker gains a `15m` quick preset and explicit
+  from/to `datetime-local` inputs (local time) for an arbitrary custom window, plus an active-window
+  chip showing the exact selected range. Setting either input switches to a `custom` range and fires
+  the same server query as a preset. (Text/agent/type/workspace filtering was already instant —
+  Preact computed signals recompute on every keystroke with no debounce.)
 - **Always-on, no-loss ingestion + resource-aware admission control (D3K7QM2P).** Ingestion now
   survives the server being down AND 20+ concurrent Claude instances hammering it:
   - **Durable hook-spool + auto-revive.** A hook event that can't be delivered (server down, or shed

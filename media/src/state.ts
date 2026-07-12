@@ -12,7 +12,9 @@ export const CHART_MAX = 25
 
 // ── Time range navigation ─────────────────────────────────────────────────────
 
-export type TimePreset = '1h' | '6h' | '24h' | '7d' | '30d' | 'all'
+// 'custom' carries an explicit since/until from the datetime-local inputs (not in TIME_PRESETS —
+// it is set directly, never via makeTimeRange). '15m' is the shortest quick window.
+export type TimePreset = '15m' | '1h' | '6h' | '24h' | '7d' | '30d' | 'all' | 'custom'
 
 export interface TimeRange {
   preset: TimePreset
@@ -20,7 +22,10 @@ export interface TimeRange {
   until?: number   // unix ms — undefined means now
 }
 
+// Quick-select presets (the button row). 'custom' is deliberately absent — it is driven by the
+// from/to datetime inputs, so makeTimeRange (which looks up this table) is never called with it.
 export const TIME_PRESETS: Array<{ id: TimePreset; label: string; ms: number | null }> = [
+  { id: '15m',  label: '15m',  ms: 15 * 60_000 },
   { id: '1h',   label: '1h',   ms: 60 * 60_000 },
   { id: '6h',   label: '6h',   ms: 6 * 60 * 60_000 },
   { id: '24h',  label: '24h',  ms: 24 * 60 * 60_000 },
@@ -30,9 +35,16 @@ export const TIME_PRESETS: Array<{ id: TimePreset; label: string; ms: number | n
 ]
 
 export function makeTimeRange(preset: TimePreset): TimeRange {
-  const p = TIME_PRESETS.find(t => t.id === preset)!
-  if (p.ms === null) return { preset }
+  const p = TIME_PRESETS.find(t => t.id === preset)
+  if (!p || p.ms === null) return { preset }   // 'all'/'custom'/unknown → no computed lower bound
   return { preset, since: Date.now() - p.ms }
+}
+
+/** An explicit from/to window (from the datetime inputs). Normalizes order so since ≤ until. */
+export function makeCustomRange(sinceMs: number, untilMs: number): TimeRange {
+  const lo = Math.min(sinceMs, untilMs)
+  const hi = Math.max(sinceMs, untilMs)
+  return { preset: 'custom', since: lo, until: hi }
 }
 
 // Active time range — defaults to 'all' (no time bound, always live)
