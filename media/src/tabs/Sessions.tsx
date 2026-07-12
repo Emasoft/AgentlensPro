@@ -16,6 +16,7 @@ import { fmtUsd } from './Cost'
 import { generateInsights, InsightCard } from './Insights'
 import { buildDisplaySummary, tokenBreakdown, formatTokenBreakdown } from '../utils'
 import { Step, TimelineWaterfall } from './Traces'
+import { CopyBranchButton } from '../CopyBranchButton'
 import { SpawnCostPanel } from './cacheShared'
 import { computeKeepWarm } from '../../../src/shared/keepWarm'
 import { FlowCanvas } from './Flow'
@@ -259,6 +260,7 @@ function SessionDetail({ sess }: { sess: SessionSummaryCard }) {
         {navBtn('flow', `Flow${sess.totalLlmCalls > 0 ? ' (' + sess.totalLlmCalls + ')' : ''}`)}
         {navBtn('tools', `Tools${sess.totalToolCalls > 0 ? ' (' + sess.totalToolCalls + ')' : ''}`)}
         {navBtn('files', `Files${fileCount > 0 ? ' (' + fileCount + ')' : ''}`)}
+        <span style="margin-left:auto;display:flex;align-items:center;padding-right:4px"><CopyBranchButton card={sess} /></span>
       </div>
 
       <div style="padding:12px 14px">

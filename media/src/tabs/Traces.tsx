@@ -6,6 +6,7 @@ import {
   timelineMetric, timelineSortByValue, timelineGroupByTurn, sessionGeneratedFiles,
 } from '../state'
 import { GeneratedFilesList } from '../GeneratedFilesView'
+import { CopyBranchButton } from '../CopyBranchButton'
 import type { TimelineMetric } from '../state'
 import {
   formatMs, formatCompact, syntaxHighlightJson,
@@ -1130,6 +1131,7 @@ function SubAgentBranch({ child, sessIdx }: { child: SessionSummaryCard; sessIdx
             onClick={e => { e.stopPropagation(); focusedSessionId.value = child.sessionId; setOpen(true) }}
             style="padding:1px 6px;font-size:9px;cursor:pointer;border-radius:3px;border:1px solid var(--border);background:transparent;color:var(--vscode-textLink-foreground,#4fc3f7)"
             title="focus this sub-agent session">open →</button>
+          <CopyBranchButton card={child} />
         </div>
       </div>
       {open && (
