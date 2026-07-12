@@ -364,6 +364,33 @@ The standalone server persists every received span through `src/segmentedSpanSto
 - **One-time migration.** The first boot splits a legacy `spans.json` (NDJSON or the older whole-array format) into daily segments and renames it to `spans.json.bak` — preserved, never deleted.
 - **No native dependencies** (deliberate): better-sqlite3 would give indexed queries but breaks `npx` portability; plain NDJSON + a JSON index stays pure-Node and greppable.
 
+### Always-on, no-loss ingestion + admission control (D3K7QM2P)
+
+Ingestion must keep going whenever any Claude instance is active, lose nothing, and survive 20+
+instances (plus subagents) hammering the CLI at once. This is achieved WITHOUT a two-process split —
+the ingestion daemon **is** the standalone server, kept always-on by the hooks themselves:
+
+- **JSONL is already loss-less.** Claude/Codex/Copilot write their transcripts to disk themselves;
+  `LogReader.scan()` tails them with persisted byte offsets and backfills everything on restart. The
+  server being down never loses a transcript.
+- **Hook durability (`src/cli/hookHandlers.ts`).** A hook event that can't be delivered — server down,
+  or shed under load — is appended to `~/.agentlens/hook-spool/` and a **detached, stampede-locked**
+  server revive is fired (`.daemon-revive.lock`, the pidfile guard as backstop). The server drains the
+  spool through the same `/api/hook-events` ingest path on boot and on a slow tick, so nothing is lost
+  across the revive window. The spool is bounded (oldest-dropped) so a permanently-down server can't
+  fill the disk. `AGENTLENS_NO_REVIVE=1` is a spool-only mode for externally-supervised setups.
+- **`agentlenspro daemon`** names this role (start/stop/restart/status/install/uninstall); `status`
+  shows the spool depth, `install` writes a launchd agent for 24/7 supervision (opt-in).
+- **Admission control (`src/resourceMonitor.ts` + `src/admissionController.ts`).** Both HTTP servers
+  share one resource monitor (RSS, per-core load, free disk — TTL-cached) and one bounded-concurrency
+  controller. Under load it queues overflow briefly (bounded + deadlined, never blocking a caller
+  unbounded) and sheds `503 + Retry-After` only at a hard wall. **Shedding is loss-free**: a shed hook
+  spools (above), a shed OTLP export is retried by the exporter / backfilled by the next scan, and a
+  shed agent-gate fails open (never blocks a launch). `/events` (SSE), `/api/server-stats`, and the
+  hook-config kill-switch read are exempt so health + control always answer under load. Limits are
+  env-tunable (`AGENTLENS_MAX_INFLIGHT*`, `AGENTLENS_MAX_RSS_MB`, `AGENTLENS_MIN_FREE_DISK_MB`,
+  `AGENTLENS_LOADAVG_MAX`, `AGENTLENS_ADMIT_*`) and CPU-scaled; live counters ride `/api/server-stats`.
+
 ---
 
 ## 6. Session Summarizer

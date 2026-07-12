@@ -6,6 +6,26 @@ All notable changes to AgentlensPro are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **Always-on, no-loss ingestion + resource-aware admission control (D3K7QM2P).** Ingestion now
+  survives the server being down AND 20+ concurrent Claude instances hammering it:
+  - **Durable hook-spool + auto-revive.** A hook event that can't be delivered (server down, or shed
+    under load) is now spooled to `~/.agentlens/hook-spool/` and a detached, stampede-locked server
+    revive is fired, instead of being silently dropped. The server reingests the spool on boot and on
+    a slow tick, so nothing a live Claude instance emits is lost across the revive window. (JSONL
+    transcripts were already loss-less via offset-backfill; this closes the OTEL/hook gap.)
+  - **`agentlenspro daemon start|stop|restart|status|install|uninstall`.** Names the always-on
+    ingestion role (the same process as the server); `status` shows the hook-spool depth; `install`
+    sets up a launchd agent (macOS) to keep it up 24/7 across reboot (opt-in — hooks already revive
+    it whenever Claude is active).
+  - **Admission control.** Both HTTP servers (UI :3000, OTLP :4318) share a resource monitor
+    (RSS / per-core load / free disk) and a bounded-concurrency controller that queues overflow
+    briefly and sheds (`503 + Retry-After`) only at a hard wall — never blocking a caller unbounded.
+    Shedding is loss-free (a shed hook spools, a shed OTLP export retries, a shed gate fails open).
+    `/events`, `/api/server-stats`, and the hook-config kill-switch read are exempt; limits are
+    env-tunable and CPU-scaled. `/api/server-stats` now reports live admission + resource counters.
+
 ### Changed
 
 - **Codex per-prompt grouping — the two drift-prone atoms are now single-sourced.** The

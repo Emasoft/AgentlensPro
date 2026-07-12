@@ -14,7 +14,69 @@
 //          failure ⇒ silent exit 0 (fail-open): a gate that can block a launch because
 //          AgentlensPro is down would be worse than no gate.
 
-import { uiBaseUrl } from './cliCore'
+import { spawn } from 'child_process'
+import * as fs from 'fs'
+import * as path from 'path'
+import { uiBaseUrl, dataDir } from './cliCore'
+import { findServerJs } from './serverControl'
+
+// D3K7QM2P/1a — hook durability. When the server can't take a hook event (down, or shedding under
+// load), we must NOT lose it: durably spool the payload to disk (the server's boot/periodic drain
+// reingests it) and fire a DETACHED, stampede-locked revive so the always-on ingestion comes back.
+// Every fs/spawn op here is best-effort and guarded — the hook contract is "always exit 0 fast,
+// never fail a tool call", so nothing in this file may throw or block.
+const REVIVE_LOCK_TTL_MS = Math.max(2_000, Number(process.env.AGENTLENS_REVIVE_LOCK_TTL_MS) || 15_000)
+// Read per-call (not a module const) so a live AGENTLENS_HOOK_SPOOL_MAX change is honored — each
+// hook is a short-lived process, so the env read is negligible. Floor of 1: a user may set a small
+// cap deliberately; the default 20k is the real safety bound.
+function spoolMaxFiles(): number { return Math.max(1, Number(process.env.AGENTLENS_HOOK_SPOOL_MAX) || 20_000) }
+
+/** Durably record an undeliverable hook payload for the server's boot/periodic drain. Bounded so a
+ *  permanently-down server can't fill the disk: over the cap, the OLDEST spooled events are dropped
+ *  (loudly) — losing the stalest beats an unbounded spool. Never throws. */
+function spoolHookEvent(payload: Buffer): void {
+  try {
+    const dir = path.join(dataDir(), 'hook-spool')
+    fs.mkdirSync(dir, { recursive: true })
+    let names: string[] = []
+    try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.json')).sort() } catch { /* none yet */ }
+    const cap = spoolMaxFiles()
+    if (names.length >= cap) {
+      const over = names.length - cap + 1
+      for (let i = 0; i < over; i++) { try { fs.unlinkSync(path.join(dir, names[i])) } catch { /* raced */ } }
+      process.stderr.write(`[agentlenspro] hook-spool full (${cap}) — dropped ${over} oldest event(s)\n`)
+    }
+    // ts-pid-rand keeps names sortable-by-time AND collision-free across concurrent hook processes.
+    const name = `${Date.now()}-${process.pid}-${Math.random().toString(36).slice(2, 8)}.json`
+    fs.writeFileSync(path.join(dir, name), payload)
+  } catch { /* best effort — a hook must never throw */ }
+}
+
+/** Fire a DETACHED server revive without waiting (the hook must exit 0 fast). A short-TTL mtime lock
+ *  collapses a burst of N hooks into ONE spawn; the server's own pidfile guard rejects a second
+ *  canonical instance if two race. Never throws, never blocks. */
+function reviveDaemonDetached(): void {
+  try {
+    const lock = path.join(dataDir(), '.daemon-revive.lock')
+    try {
+      const age = Date.now() - fs.statSync(lock).mtimeMs
+      if (age >= 0 && age < REVIVE_LOCK_TTL_MS) return // another hook already triggered a revive
+    } catch { /* no lock — proceed to claim it */ }
+    try { fs.mkdirSync(dataDir(), { recursive: true }); fs.writeFileSync(lock, String(Date.now())) } catch { /* best effort */ }
+    // Spool-only mode: record the event to disk for the drain but do NOT auto-spawn the server.
+    // Used by tests, and by anyone who supervises the daemon externally (launchd) and doesn't want
+    // hooks spawning it. The lock is still written above so the stampede semantics are unchanged.
+    if (process.env.AGENTLENS_NO_REVIVE === '1') return
+    let serverJs: string
+    try { serverJs = findServerJs() } catch { return } // no bundle resolvable — cannot revive
+    const child = spawn(process.execPath, ['--max-old-space-size=6144', serverJs], {
+      cwd: path.dirname(path.dirname(serverJs)),
+      detached: true,
+      stdio: 'ignore',
+    })
+    child.unref()
+  } catch { /* best effort — a hook must never throw */ }
+}
 
 function readStdin(stream: NodeJS.ReadableStream): Promise<Buffer> {
   return new Promise((resolve) => {
@@ -26,18 +88,26 @@ function readStdin(stream: NodeJS.ReadableStream): Promise<Buffer> {
   })
 }
 
-/** Forward one lifecycle payload. Never throws — the fire-and-forget contract. */
+/** Forward one lifecycle payload. Never throws — the fire-and-forget contract. On ANY delivery
+ *  failure (server down, timeout, or a non-2xx like a 503 shed under load) the event is durably
+ *  SPOOLED and a detached daemon revive is fired, so no hook a live Claude instance emits is lost
+ *  (D3K7QM2P/1a) — the previous behavior silently dropped it. */
 export async function forwardHookEvent(payload: Buffer, opts: { baseUrl?: string; timeoutMs?: number } = {}): Promise<void> {
   const base = opts.baseUrl ?? uiBaseUrl()
   const timeoutMs = opts.timeoutMs ?? Math.max(200, Number(process.env.AGENTLENS_HOOK_TIMEOUT || 1) * 1000)
   try {
-    await fetch(`${base}/api/hook-events`, {
+    const res = await fetch(`${base}/api/hook-events`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: new Uint8Array(payload),
       signal: AbortSignal.timeout(timeoutMs),
     })
-  } catch { /* server down / timeout — silent no-op by contract */ }
+    if (res.ok) return // delivered + ingested — nothing to spool
+    // A non-2xx means NOT ingested (e.g. admission-control 503 under 20-instance load, or a
+    // transient error). Fall through to spool + revive, exactly as for a connection failure.
+  } catch { /* server down / timeout — fall through to spool + revive */ }
+  spoolHookEvent(payload)
+  reviveDaemonDetached()
 }
 
 /** Run one gate check. Returns the server's response body ('' = allow / any failure). */
