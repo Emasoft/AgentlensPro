@@ -177,6 +177,34 @@ agentlenspro config set spansRetentionDays 90    # persist a change (restart the
 
 Each knob is resolved at boot with the precedence **environment variable > `config.json` > built-in default** — the env var stays the ephemeral ops override, the file is the durable setting you set once. Every value has a safety floor (e.g. days ≥ 1), and a below-floor value from any source is clamped. Restart the server/daemon (`agentlenspro server restart`) after a change.
 
+## Environment diagnostics
+
+`agentlenspro env` reports the full nature of the environment the CLI is running in — entirely client-side (no server needed). Query one facet, or omit the facet for the whole report; `--json` emits a machine-readable object and `--out FILE` writes the full JSON to disk while printing only a one-line digest (so a big report never floods your terminal or an agent's context).
+
+```bash
+agentlenspro env                       # whole environment, human digest
+agentlenspro env list                  # the available facets
+agentlenspro env terminal              # just the terminal/host facet
+agentlenspro env --json --out env.json # full report to a file (digest to stdout)
+```
+
+Ten facets are detected:
+
+| Facet | What it reports |
+| --- | --- |
+| `terminal` | hosting terminal by **process ancestry** (iTerm/Ghostty/WezTerm/kitty/Alacritty/Warp/Hyper/Windows Terminal/macOS Terminal/VS Code/tmux…), multiplexer, ai-maestro agent, ssh, tmux session/pane |
+| `os` | OS product + version, kernel, arch, CPU, memory, uptime |
+| `runtime` | CI runner, container/dev-container/WSL/sandbox, Claude Code context (entrypoint, session, VS Code integrated, plugin hook) |
+| `claude` | Claude Code config dir, settings permission summary, installed plugins, `CLAUDE.md` presence, CLI version |
+| `filesystem` | cwd/home/project dir, filesystem type, git repo + **worktree** (main vs linked) + branch, free disk |
+| `user` | user, uid/gid, groups, shell, sudo-capable |
+| `network` | interfaces, VPN (Tailscale/utun/WireGuard), proxy config, DNS, listening local ports, default gateway |
+| `cloud` | AWS / Azure / GCP signals from env vars, local config, and installed CLIs (never contacts a metadata server) |
+| `tooling` | installed runtimes, package managers, compilers, linters/formatters, version managers — with versions |
+| `mcp` | configured MCP servers from `~/.claude.json` + the project `.mcp.json` |
+
+The terminal detector walks the process ancestry rather than trusting `$TERM_PROGRAM` (which is inherited into subshells and goes stale across `ssh`/`sudo`/multiplexers), so it reports the *real* host. Every detector is fail-soft and time-boxes its probes — an off-cloud `aws` or a stalled `tailscale` can never wedge the report.
+
 ## Cost Estimation
 
 The **Analytics** tab (Estimated Cost section) shows the dollar cost of Copilot, Claude Code, and Codex sessions.

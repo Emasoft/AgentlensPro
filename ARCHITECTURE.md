@@ -1117,8 +1117,19 @@ agentlenspro/
 │   ├── hookHandlers.ts           # `agentlenspro hook` / `agentlenspro gate` stdin handlers
 │   ├── hookInstall.ts            # hook/OTEL/skill (un)installers + registration migration
 │   ├── heartbeatCostCli.ts       # `agentlenspro heartbeat-cost`
+│   ├── configCli.ts              # `agentlenspro config` — retention knobs (TRDD-ZAV74M8Q)
+│   ├── envCli.ts                 # `agentlenspro env` — environment/system detection (TRDD-HUWJVQJA)
 │   ├── setup.ts                  # `agentlenspro setup` — detect → converge → verify-per-step → self-test
 │   └── cliCore.ts                # shared JSON-RPC/REST transport + endpoint/env resolution
+├── src/environment/             # `agentlenspro env` facet registry (TRDD-HUWJVQJA) — all fail-soft,
+│   │                            #   pure classifiers + async gather(), no server, injectable for tests
+│   ├── types.ts                  # the EnvFacet contract + EnvReport
+│   ├── exec.ts                   # fail-soft time-boxed run()/which()/toolVersion() helpers
+│   ├── index.ts                  # the facet REGISTRY + gatherAll() (runs facets concurrently)
+│   ├── terminal.ts               # terminal kind by PROCESS ANCESTRY + ai-maestro/tmux/ssh
+│   ├── os.ts · runtime.ts · claude.ts · filesystem.ts · user.ts
+│   └── network.ts · cloud.ts · tooling.ts · mcp.ts
+├── src/retentionConfig.ts       # persistent retention config layer (TRDD-ZAV74M8Q)
 ├── scripts/
 │   └── safe_config_edit.py       # Verified-transaction config editor (backup, verify-diff, lock)
 ├── esbuild.js                    # Build configuration (4 targets)
