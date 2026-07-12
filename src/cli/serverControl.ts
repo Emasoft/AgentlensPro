@@ -5,6 +5,7 @@
 
 import { spawn, execFileSync } from 'child_process'
 import * as fs from 'fs'
+import * as os from 'os'
 import * as path from 'path'
 import { apiRequest, dataDir, dashboardUrl, fmtGb, fmtMb, init, mcpEndpoint, sleep } from './cliCore'
 
@@ -292,10 +293,101 @@ export async function daemonCommand(argv: string[]): Promise<void> {
     console.log(`hook-spool: ${spooled} event(s) awaiting drain${spooled > 0 ? ' — undelivered hooks are safe on disk and reingested on the next drain tick' : ''}`)
     return
   }
+  if (verb === 'install') { daemonInstall({ load: !argv.includes('--no-load') }); return }
+  if (verb === 'uninstall') { daemonUninstall(); return }
   if (verb === 'start' || verb === 'stop' || verb === 'restart') {
     // The daemon and the server are one process — reuse the exact lifecycle (incl. --supervise).
     await serverCommand(argv)
     return
   }
-  throw new Error(`daemon expects start|stop|restart|status (got "${verb}") — e.g. agentlenspro daemon start --supervise`)
+  throw new Error(`daemon expects start|stop|restart|status|install|uninstall (got "${verb}") — e.g. agentlenspro daemon start --supervise`)
+}
+
+// ── Always-on supervision via launchd (D3K7QM2P/1d) ─────────────────────────────────────────────
+// The hook-revive (1a) already keeps the daemon up whenever a Claude instance is active. `daemon
+// install` goes further: a per-user launchd agent runs `daemon start --supervise` at login and
+// KeepAlive-restarts the supervisor, so ingestion is up 24/7 even with zero Claude instances and
+// across reboots. Opt-in (never forced by `setup`) because a standing background daemon is the
+// user's choice. macOS only for now; linux gets a printed systemd-user recipe.
+const LAUNCHD_LABEL = 'com.agentlens.collector'
+// Embedded (not read from scripts/) so an npm-installed package can self-install without shipping the
+// template file. @NODE@/@CLI@/@REPO@/@USER@ are filled at install time.
+const LAUNCHD_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${LAUNCHD_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@NODE@</string>
+    <string>@CLI@</string>
+    <string>daemon</string>
+    <string>start</string>
+    <string>--supervise</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>@REPO@</string>
+  <key>KeepAlive</key>
+  <true/>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>@HOME@/.agentlens/launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>@HOME@/.agentlens/launchd.err.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>AGENTLENS_MAX_OLD_SPACE_MB</key>
+    <string>6144</string>
+  </dict>
+</dict>
+</plist>
+`
+
+function launchAgentsPath(overrideDir?: string): string {
+  return path.join(overrideDir ?? path.join(os.homedir(), 'Library', 'LaunchAgents'), `${LAUNCHD_LABEL}.plist`)
+}
+
+/** Install (or refresh) the launchd agent. Returns the plist path. `load:false` and a
+ *  `launchAgentsDir` override make it testable without touching the real system. */
+export function daemonInstall(opts: { launchAgentsDir?: string; load?: boolean } = {}): { path: string; installed: boolean } {
+  if (process.platform !== 'darwin') {
+    console.log('daemon install: launchd is macOS-only. On linux, run a systemd USER service:')
+    console.log(`  ~/.config/systemd/user/agentlens.service → ExecStart=${process.execPath} ${cliJsPath()} daemon start --supervise`)
+    console.log('  then: systemctl --user enable --now agentlens.service')
+    return { path: '', installed: false }
+  }
+  const cli = cliJsPath()
+  const plistPath = launchAgentsPath(opts.launchAgentsDir)
+  const filled = LAUNCHD_PLIST
+    .replace(/@NODE@/g, process.execPath)
+    .replace(/@CLI@/g, cli)
+    .replace(/@REPO@/g, path.dirname(path.dirname(cli)))
+    .replace(/@HOME@/g, os.homedir())
+  fs.mkdirSync(path.dirname(plistPath), { recursive: true })
+  fs.writeFileSync(plistPath, filled)
+  if (opts.load !== false) {
+    // `load -w` (re)loads and marks it enabled; a re-install first unloads so the new plist takes.
+    try { execFileSync('launchctl', ['unload', plistPath], { stdio: 'ignore' }) } catch { /* not loaded yet */ }
+    try { execFileSync('launchctl', ['load', '-w', plistPath], { stdio: 'ignore' }) } catch (e) { console.warn(`launchctl load failed: ${String(e)} — the plist is written; load it manually.`) }
+  }
+  console.log(`daemon install: launchd agent → ${plistPath} (${opts.load !== false ? 'loaded' : 'written, not loaded'})`)
+  return { path: plistPath, installed: true }
+}
+
+/** Remove the launchd agent (unload + delete the plist). Idempotent. */
+export function daemonUninstall(opts: { launchAgentsDir?: string } = {}): { path: string; removed: boolean } {
+  const plistPath = launchAgentsPath(opts.launchAgentsDir)
+  if (process.platform === 'darwin') { try { execFileSync('launchctl', ['unload', plistPath], { stdio: 'ignore' }) } catch { /* not loaded */ } }
+  let removed = false
+  try { fs.unlinkSync(plistPath); removed = true } catch { /* already gone */ }
+  console.log(`daemon uninstall: ${removed ? `removed ${plistPath}` : 'nothing to remove'}`)
+  return { path: plistPath, removed }
+}
+
+/** The bundled CLI entry (standalone/cli.js) — sibling of the server bundle. */
+function cliJsPath(): string {
+  return path.join(path.dirname(findServerJs()), 'cli.js')
 }

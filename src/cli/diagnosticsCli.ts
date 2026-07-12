@@ -33,6 +33,8 @@ usage:
                                               the always-on ingestion daemon (same process as the
                                               server); status also shows the hook-spool depth. hooks
                                               auto-revive it, so no log is lost while it is down
+  agentlenspro daemon install|uninstall       install/remove a launchd agent (macOS) that keeps the
+                                              daemon up 24/7 across logout+reboot (opt-in)
   agentlenspro dashboard                      ensure the server is up, then open the dashboard
   agentlenspro telemetry install|uninstall|status
                                               manage the Claude Code full-telemetry env (verified transaction)
