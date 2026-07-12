@@ -30,6 +30,26 @@ All notable changes to AgentlensPro are documented here.
     Shedding is loss-free (a shed hook spools, a shed OTLP export retries, a shed gate fails open).
     `/events`, `/api/server-stats`, and the hook-config kill-switch read are exempt; limits are
     env-tunable and CPU-scaled. `/api/server-stats` now reports live admission + resource counters.
+- **Copy a fully-expanded branch tree from the dashboard.** Each session in the Sessions detail —
+  plus every sub-agent branch and the Flow view — gains a **⧉ tree** button that copies the whole
+  branch (the session and its recursive sub-agents, every timeline step, thinking/response/tool I/O)
+  as a self-describing TEXT tree. The header carries the session id + project slug + source; every
+  LLM/tool node carries a grep-able **OTEL match key** `⟨span=… req=… trace=…⟩` so the raw OTEL
+  request is trivially found; and any node whose output exceeds ~8 KB is written to a dump file under
+  `~/.claude/projects/<slug>/agentlens-branch-dumps/` — via the new localhost-only
+  `POST /api/branch-dump`, confined to the Claude projects tree (slug must name a real project dir;
+  path-traversal + CSRF guarded) — with its path substituted inline, keeping the clipboard small
+  while preserving the full output on disk.
+
+### Fixed
+
+- **Hook-revive stampede lock no longer re-arms on a just-written lock.** The freshness check used
+  `age >= 0 && age < TTL`, but `fs.statSync().mtimeMs` carries sub-ms precision while `Date.now()`
+  truncates to integer ms — so a lock written in the same millisecond as the check reads a tiny
+  *negative* age (~97 % of the time on a fast machine), failed the `>= 0` guard, and was treated as
+  stale. A burst of hooks then each fired a revive instead of collapsing to one (benign — the server
+  pidfile rejects a second instance — but a real defect). The window is now `[−skew, TTL)` with a 2 s
+  clock-skew tolerance.
 
 ### Changed
 

@@ -873,6 +873,20 @@ sequenceDiagram
     Note over EXT: showWarning/Error/InformationMessage<br/>with 'View Alerts' + 'Copy Prompt' buttons<br/>Copy Prompt writes AI-ready text to clipboard
 ```
 
+### Copy-branch export (⧉ tree) + `/api/branch-dump`
+
+The Sessions detail section bar, each sub-agent branch (`SubAgentBranch`), and the Flow view carry a
+`CopyBranchButton` (`media/src/CopyBranchButton.tsx`) that serializes a whole branch to a
+self-describing text tree via the runtime-neutral `src/shared/branchSerialize.ts` (the same pure
+module the mocha suite tests — one source of truth, imported by the webview). It materializes lazy
+descendants with the existing `loadSessionDetail` / `loadBlob` messages, stamps a session-id +
+project-slug header and a per-node OTEL match key `⟨span=… req=… trace=…⟩`, and offloads any body over
+~8 KB to `POST /api/branch-dump` — a localhost-only writer confined to
+`~/.claude/projects/<slug>/agentlens-branch-dumps/` (the slug must name a real project dir;
+single-segment filename; resolved-parent containment check; inherits the uiServer CSRF + admission
+guards). If the endpoint is unavailable the button inlines an honest "omitted" marker so a copy never
+fails.
+
 ---
 
 ## 11. Cost Calculation

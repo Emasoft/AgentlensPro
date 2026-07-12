@@ -54,7 +54,20 @@ substitution (written by a new localhost-only server endpoint under the Claude p
   So the webview glue is async: recurse `childrenByParent`, fire `loadSessionDetail` per descendant,
   await the `sessionTimelines`/`blobCache` signals, THEN call the pure serializer.
 
-**NEXT ACTION:** implement sub-phase 3a (pure serializer + mocha test). See Sub-phases below.
+**✅ ALL SUB-PHASES DONE + verified (2026-07-12), gate GREEN 927/0. Merged to main via the
+whole-Phase-3 `--no-ff` merge; NOT pushed (v2.5.0 release deferred to plan end, user-confirmed).**
+- Commits: 3a `f27e1d2` · derived-fix `458e462` · 3b `123031f` · 3c `f79e9e4` · docs.
+- **Mount correction (verified live):** the Traces/Flow TABS do not exist in this UI — the session
+  tree renders inside the **Sessions detail** (`TimelineWaterfall` + `FlowCanvas`, Sessions.tsx). The
+  ⧉ tree button is wired on the Sessions section bar (primary, per-session) + `SubAgentBranch` header
+  + `FlowCanvas` toolbar; the dead `SessionBlock` (Traces-tab-only) mount was reverted.
+- **Dev-browser verified (headless):** button renders on the section bar; one click produced a 101 KB
+  self-describing tree (session-id+slug header, per-node OTEL match keys), zero runtime error. The
+  endpoint happy-path is covered by the 4 real-boot mocha tests; the live canonical server is a stale
+  pre-endpoint build (20 h uptime) so it 404s /api/branch-dump → this PROVED the button's graceful
+  'omitted'-marker fallback. The dump files materialize once the canonical server is redeployed.
+- Slug for the dump POST = `(projectPath||workspace).replace(/[/\\.]/g,'-')` — the Claude project-dir
+  encoding, verified to match this project's real `-Users-…-AgentlensPro` dir.
 
 **Sub-phases (each: gate `bash scripts/safe-deploy.sh --dry-run` GREEN ≥911, commit on
 `feat/copy-branch-otel`):**
