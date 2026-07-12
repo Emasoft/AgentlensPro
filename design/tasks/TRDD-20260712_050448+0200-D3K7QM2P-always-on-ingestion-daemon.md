@@ -1,9 +1,9 @@
 ---
 trdd-id: D3K7QM2P
 title: Always-on no-loss ingestion — hook-revive + spool + resource-aware admission control
-column: dev
+column: complete
 created: 2026-07-12T05:04:48+0200
-updated: 2026-07-12T05:04:48+0200
+updated: 2026-07-12T06:10:00+0200
 current-owner: claude-code-review
 assignee: claude-code-review
 priority: 2
@@ -30,15 +30,33 @@ audit-requirements: []
 review-requirements: [code-review]
 runtime-targets: [macos, linux]
 impacts: [install-script, config-schema]
-attempts: 0
+attempts: 1
 test-failures: 0
-last-test-result: not-run
-last-test-at: null
-implementation-commits: []
+last-test-result: pass
+last-test-at: 2026-07-12T06:05:00+0200
+implementation-commits: [96cf899, acf0fef, ce972a9, 44e0610]
 pr-url: null
 ---
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-07-12
+
+**✅ DONE — all four sub-phases shipped + gated GREEN 911 passing / 0 failing, on branch
+`feat/always-on-ingestion` (merged --no-ff to main; see git log). Not pushed — v2.5.0 release is at
+the END of the whole plan.**
+- **1a** hook durability (spool-on-fail + detached stampede-locked revive + boot/tick drain) — commit
+  `96cf899`. The `/api/hook-events` handler body was extracted to a shared `ingestHookEvent` reused
+  by the drain.
+- **1b** `agentlenspro daemon start|stop|restart|status` (+ `hookSpoolDepth`) — commit `acf0fef`.
+- **1c** resource monitor + admission control (bounded concurrency, deadlined queue, hard-wall shed,
+  shared by both HTTP servers; exempt: /events, /api/server-stats, GET /api/hook-config; stats on
+  /api/server-stats) — commit `ce972a9`.
+- **1d** `daemon install|uninstall` launchd 24/7 supervision (opt-in) + docs (CHANGELOG, ARCHITECTURE,
+  wikimem `always-on-ingestion-model.md`) — commit `44e0610`.
+
+**Architecture (as shipped):** hook-revive + spool, NOT the two-process split (user-confirmed). The
+daemon IS the server. Full model + the two lessons: wikimem `[[always-on-ingestion-model]]`.
+
+---
 
 **What this is:** Phase 1 of the /go-on-yourself plan — make ingestion always-on and
 loss-less whenever any Claude instance is active, AND survive 20+ concurrent Claude
