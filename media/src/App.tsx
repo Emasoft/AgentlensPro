@@ -6,7 +6,7 @@ import {
   cacheSessionDetail, cacheSessionComposition, cacheSessionHistory, cacheGeneratedFileContent, blobCache,
   focusedSessionId, invalidateSessionDrill, mergeChangedSessionCards,
   dailyStats, lifetimeStats, burnRateData, serverBurnStatus, searchResults, rangedSearchResults,
-  timeRange, makeTimeRange, TIME_PRESETS, CHART_MAX,
+  timeRange, makeTimeRange, makeCustomRange, TIME_PRESETS, CHART_MAX,
   vscode, displaySessions, rangedSessions,
   sessionTextFilter, filteredSessions, evidenceSessionIds,
   sessionSortKey, sessionSortDir,
@@ -516,6 +516,21 @@ const AGENT_FILTER_OPTIONS: Array<{ value: AgentFilter; label: string; color: st
   { value: 'opencode',   label: 'OpenCode', color: '#FFFFFF' },
 ]
 
+// Phase 2 (D3K7QM2P sibling): format a unix-ms as the local `YYYY-MM-DDTHH:mm` a <input
+// type="datetime-local"> expects, and a short human label for the active-range chip. Local time
+// throughout — new Date(inputValue) parses a datetime-local string as LOCAL, so the round-trip is
+// consistent with the user's clock.
+function msToLocalInput(ms: number): string {
+  const d = new Date(ms)
+  const p = (n: number): string => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`
+}
+function fmtWindowLabel(ms: number): string {
+  const d = new Date(ms)
+  const p = (n: number): string => String(n).padStart(2, '0')
+  return `${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
 function TimeRangePicker({ hideAgentFilter = false }: { hideAgentFilter?: boolean }) {
   const range = timeRange.value
   const agent = selectedAgentFilter.value
@@ -523,6 +538,8 @@ function TimeRangePicker({ hideAgentFilter = false }: { hideAgentFilter?: boolea
   const responseTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [loading, setLoading] = useState(false)
   const [searchError, setSearchError] = useState<string | null>(null)
+  const [customFrom, setCustomFrom] = useState('')
+  const [customTo, setCustomTo] = useState('')
   const tab = normalizeTabId(activeTab.value)
   const showReset = tab !== 'help'
 
@@ -548,6 +565,8 @@ function TimeRangePicker({ hideAgentFilter = false }: { hideAgentFilter?: boolea
     timeRange.value = { preset: 'all' }
     sessionSortKey.value = 'start_time'
     sessionSortDir.value = 'desc'
+    setCustomFrom('')
+    setCustomTo('')
   }
 
   function fireSearch(r: typeof timeRange.value) {
@@ -587,6 +606,18 @@ function TimeRangePicker({ hideAgentFilter = false }: { hideAgentFilter?: boolea
     fireSearch(r)
   }
 
+  // Apply an explicit from/to window from the datetime inputs. An empty bound is defaulted so the
+  // user can set just one side: empty from → 1h before `to`; empty to → now. Fires the same server
+  // query path as a preset (rangedSessions then merges DB history with in-memory sessions).
+  function applyCustom(from: string, to: string) {
+    const untilMs = to ? new Date(to).getTime() : Date.now()
+    const sinceMs = from ? new Date(from).getTime() : untilMs - 60 * 60_000
+    if (!Number.isFinite(sinceMs) || !Number.isFinite(untilMs)) return
+    const r = makeCustomRange(sinceMs, untilMs)
+    timeRange.value = r
+    fireSearch(r)
+  }
+
   // Clear loading indicator and timeout when results arrive
   useEffect(() => {
     if (rangedSearchResults.value !== null) {
@@ -622,6 +653,30 @@ function TimeRangePicker({ hideAgentFilter = false }: { hideAgentFilter?: boolea
           >{p.label}</button>
         ))}
       </div>
+
+      {/* Custom from/to window (datetime-local, local time). Setting either input switches the range
+          to 'custom' and fires the same server query as a preset. */}
+      <span style="width:1px;height:14px;background:var(--border);margin:0 8px;flex-shrink:0" />
+      <div style="display:flex;gap:3px;align-items:center">
+        <input type="datetime-local"
+          value={range.preset === 'custom' && range.since ? msToLocalInput(range.since) : customFrom}
+          onChange={e => { const v = (e.target as HTMLInputElement).value; setCustomFrom(v); applyCustom(v, range.preset === 'custom' && range.until ? msToLocalInput(range.until) : customTo) }}
+          title="From (local time)"
+          style="font-size:10px;padding:1px 3px;border:1px solid var(--vscode-panel-border);border-radius:3px;background:var(--vscode-input-background,transparent);color:var(--vscode-input-foreground,var(--muted))" />
+        <span style="font-size:10px;color:var(--muted)">→</span>
+        <input type="datetime-local"
+          value={range.preset === 'custom' && range.until ? msToLocalInput(range.until) : customTo}
+          onChange={e => { const v = (e.target as HTMLInputElement).value; setCustomTo(v); applyCustom(range.preset === 'custom' && range.since ? msToLocalInput(range.since) : customFrom, v) }}
+          title="To (local time)"
+          style="font-size:10px;padding:1px 3px;border:1px solid var(--vscode-panel-border);border-radius:3px;background:var(--vscode-input-background,transparent);color:var(--vscode-input-foreground,var(--muted))" />
+      </div>
+
+      {/* Active-window chip — most useful for custom (shows the exact resolved window). */}
+      {range.preset === 'custom' && range.since && (
+        <span style="margin-left:6px;font-size:10px;color:var(--vscode-button-foreground,#fff);background:var(--vscode-button-background);padding:1px 7px;border-radius:9px;white-space:nowrap" title="Active time window">
+          {fmtWindowLabel(range.since)} → {range.until ? fmtWindowLabel(range.until) : 'now'}
+        </span>
+      )}
 
       {/* Divider + Agent filter — hidden on tabs that don't need it */}
       {!hideAgentFilter && <>
@@ -668,7 +723,7 @@ function TimeRangePicker({ hideAgentFilter = false }: { hideAgentFilter?: boolea
         <button
           class="icon-btn"
           style="margin-left:2px;border-bottom:none;margin-bottom:0;border-radius:3px"
-          onClick={() => { const r = makeTimeRange(range.preset); timeRange.value = r; fireSearch(r) }}
+          onClick={() => { const r = range.preset === 'custom' ? range : makeTimeRange(range.preset); timeRange.value = r; fireSearch(r) }}
           title="Refresh this time range"
         ><IconRefresh /></button>
       )}
