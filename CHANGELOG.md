@@ -26,6 +26,12 @@ All notable changes to AgentlensPro are documented here.
   servers). Every detector is fail-soft and time-boxes its probes. `agentlenspro env list` shows
   the facets. New "Environment diagnostics" section in the README.
 
+### Changed
+
+- **`agentlenspro-diagnostics` skill + README** now document the `config` (data retention) and
+  `env` (environment detection) commands with recipes and use cases, so the full CLI surface is
+  covered.
+
 ## [2.5.1] - 2026-07-13
 
 ### Added

@@ -20,7 +20,11 @@ description: >-
   step, self-test), server control (`server start|stop|restart|status [--supervise]`), open the
   dashboard (`dashboard`), (re)install this skill (--install-skill), and wire/unwire Claude Code
   capture — telemetry env vars (--install-otel / --uninstall-otel) and lifecycle hook events
-  (--install-hooks / --uninstall-hooks).
+  (--install-hooks / --uninstall-hooks). Two server-independent local commands round it out:
+  `agentlenspro config` (persist the data-retention knobs to ~/.agentlens/config.json — survives
+  uninstall/upgrade; env var > file > default) and `agentlenspro env` (detect the runtime
+  environment — terminal kind by process ancestry, OS, Claude Code / ai-maestro / CI / container /
+  worktree context, user, network + VPN, cloud, tooling, MCP servers — one facet or one big JSON report).
 ---
 
 # AgentlensPro diagnostics via the global CLI
@@ -78,6 +82,64 @@ Bodies lifecycle: live plain files for 72h → auto-archived hourly into monthly
 access, ~8-10× smaller) → volumes deleted only after `AGENTLENS_BODIES_RETENTION_DAYS` (31).
 One server at a time: the canonical instance owns `~/.agentlens/server.pid` and a second
 boot refuses cleanly. `batch --out` files are position-prefixed (`out-1-<tool>.json`).
+
+## Local commands — no server needed (`config`, `env`)
+
+These two subcommands run entirely client-side (they never touch the MCP server), so they work
+whether or not the server is up.
+
+### `agentlenspro config` — persistent data retention
+
+Retention is tunable by five `AGENTLENS_*` env vars, but env vars are ephemeral and never reach the
+launchd daemon. `config` persists them to `~/.agentlens/config.json` (in the data dir, so a value set
+once survives an uninstall / upgrade / CLI-path change, and the always-on daemon re-reads it every
+boot). Each knob resolves at boot as **env var > config.json > built-in default**, min-floored.
+
+```bash
+agentlenspro config                              # list every knob: effective value + source (env|file|default)
+agentlenspro config get spansRetentionDays       # one knob's value + where it came from
+agentlenspro config set spansRetentionDays 90    # persist a change (prints "restart to apply")
+agentlenspro server restart                       # apply it
+```
+
+Knobs: `spansRetentionDays` (30) · `summaryWindowHours` (24) · `bodiesMaxAgeHours` (72) ·
+`bodiesMaxGb` (8) · `bodiesRetentionDays` (31). A `set` on a corrupt config file REFUSES to write
+rather than clobbering it. Recipe — keep a year of traces on a big disk:
+`agentlenspro config set spansRetentionDays 365 && agentlenspro server restart`.
+
+### `agentlenspro env` — environment / system detection
+
+Reports the full nature of the environment the CLI is running in — terminal kind resolved by
+**process ancestry** (not `$TERM_PROGRAM`, which lies across subshells/ssh/multiplexers). Query one
+facet, or omit it for the whole report; `--out FILE` writes the full JSON to disk and prints only a
+one-line digest (keep a big report out of context).
+
+```bash
+agentlenspro env                       # whole environment, human digest
+agentlenspro env list                  # the 10 facets + aliases
+agentlenspro env terminal              # one facet (iterm/ghostty/tmux/vscode/…, ai-maestro, ssh)
+agentlenspro env --json --out env.json # full report to a file (digest to stdout) — the agent default
+agentlenspro env filesystem            # git worktree (main vs linked) + branch, fs type, free disk
+```
+
+| Facet (aliases) | Reports |
+|---|---|
+| `terminal` (term) | host terminal by process ancestry, multiplexer, ai-maestro agent, ssh, tmux |
+| `os` (system) | OS product/version, kernel, arch, CPU, memory, uptime |
+| `runtime` (ci, container, context) | CI runner, container/dev-container/WSL/sandbox, Claude Code context |
+| `claude` (claude-code, permissions) | config dir, settings permission summary, plugin cache, CLAUDE.md, CLI version |
+| `filesystem` (fs, disk) | cwd/home/project, fs type, git repo + worktree + branch, free disk |
+| `user` (account, whoami) | user, uid/gid, groups, shell, sudo-capable |
+| `network` (net) | interfaces, VPN (Tailscale/utun/WireGuard), proxy, DNS, listening ports, gateway |
+| `cloud` (aws, azure, gcp) | AWS/Azure/GCP via env + local config + installed CLI (never contacts a metadata server) |
+| `tooling` (tools, dev) | runtimes, package managers, compilers, linters, version managers — with versions |
+| `mcp` (mcp-servers) | configured MCP servers from `~/.claude.json` + project `.mcp.json` |
+
+Use cases: attach `agentlenspro env --json --out env.json` to a bug report; in CI, `agentlenspro env
+runtime` confirms you're on GitHub Actions / in a container before running; `agentlenspro env terminal`
+disambiguates a tmux pane from its GUI host; `agentlenspro env tooling` inventories a fresh machine.
+Every detector is fail-soft and time-boxes its probes — an off-cloud `aws` or a stalled `tailscale`
+can never wedge the report.
 
 ## Output formats
 

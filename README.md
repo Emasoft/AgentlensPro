@@ -205,6 +205,13 @@ Ten facets are detected:
 
 The terminal detector walks the process ancestry rather than trusting `$TERM_PROGRAM` (which is inherited into subshells and goes stale across `ssh`/`sudo`/multiplexers), so it reports the *real* host. Every detector is fail-soft and time-boxes its probes — an off-cloud `aws` or a stalled `tailscale` can never wedge the report.
 
+**Use cases:**
+
+- **Bug reports** — attach `agentlenspro env --json --out env.json` so a maintainer sees your exact OS, terminal, tooling versions, and Claude Code context without a back-and-forth.
+- **CI guards** — `agentlenspro env runtime` confirms you're on GitHub Actions / inside a container before a step runs; `agentlenspro env filesystem` tells a script whether it's in a linked git worktree vs the main checkout.
+- **"Which terminal am I in?"** — `agentlenspro env terminal` disambiguates a tmux pane from its GUI host terminal (iTerm/Ghostty/…) and flags whether you're inside an ai-maestro agent or over SSH.
+- **New-machine inventory** — `agentlenspro env tooling` lists every installed runtime, package manager, compiler, and linter with versions in one shot.
+
 ## Cost Estimation
 
 The **Analytics** tab (Estimated Cost section) shows the dollar cost of Copilot, Claude Code, and Codex sessions.
