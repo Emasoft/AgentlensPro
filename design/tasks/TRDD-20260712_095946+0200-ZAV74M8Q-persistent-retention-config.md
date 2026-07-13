@@ -1,7 +1,7 @@
 ---
 trdd-id: ZAV74M8Q
 title: Persistent, discoverable retention config (config.json + agentlenspro config CLI)
-column: complete
+column: published
 created: 2026-07-12T09:59:46+0200
 updated: 2026-07-13T00:00:00+0200
 current-owner: claude-code-review
@@ -32,8 +32,8 @@ now `resolveRetention(DATA_DIR, process.env)` — behavior-identical when env un
 precedence, min-floor, fail-soft load, atomic set, preserve-other-keys, reject-below-min/unknown/NaN,
 REFUSE-on-corrupt), README "Data retention" section. Bundle rebuilt (`node esbuild.js`). CHANGELOG
 `[2.5.1]` + package.json → 2.5.1. Committed on `feat/configurable-retention`, merged --no-ff to main.
-**NOT pushed / NOT tagged — v2.5.1 release awaits USER confirmation** (per /go-on-yourself: npm pkg,
-not a plugin).
+**✅ PUBLISHED as v2.5.1 (2026-07-13)** via OIDC (latest, trustedPublisher + SLSA attestations, docker,
+GitHub Release, npx smoke); the local server was restarted onto the retention-config build.
 
 ---
 _Superseded planning notes below (the work above is authoritative):_

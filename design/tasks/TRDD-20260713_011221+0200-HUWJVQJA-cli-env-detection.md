@@ -1,9 +1,9 @@
 ---
 trdd-id: HUWJVQJA
 title: CLI environment/system detection surface — agentlenspro env (facets + JSON report)
-column: complete
+column: published
 created: 2026-07-13T01:12:21+0200
-updated: 2026-07-13T01:35:00+0200
+updated: 2026-07-13T02:05:00+0200
 current-owner: claude-code-review
 assignee: claude-code-review
 priority: 2
@@ -33,7 +33,10 @@ terminal=iterm via process ancestry, git worktree+branch, tailscale running, age
 4316/4318/3000, 31 plugins, `--out` writes 10 facets as JSON with only a digest to stdout. Two
 post-fan-out fixes: `go` probed with `go version` (not `--version` → garbage), tooling label spacing.
 Docs: README "Environment diagnostics" + ARCHITECTURE tree + CHANGELOG [2.6.0] + package.json → 2.6.0.
-**NOT pushed — v2.6.0 release awaits USER confirmation** (npm pkg, not a plugin).
+The diagnostics skill + README + help now document `config` and `env` with recipes.
+**✅ PUBLISHED as v2.6.0 (2026-07-13):** OIDC npm (latest=2.6.0, trustedPublisher + SLSA attestations),
+docker image, GitHub Release; npx registry smoke confirms `env` ships. Local server restarted onto the
+new build. Pre-publish checklist GREEN (publint --strict exit 0, tarball 15 files no leaks).
 
 ---
 _Original plan below (superseded by the DONE summary above):_
