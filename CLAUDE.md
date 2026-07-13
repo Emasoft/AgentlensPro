@@ -6,7 +6,7 @@ Doctrine sentences in this file must cite their evidence (a report path under `r
 
 ## AgentlensPro diagnostics (CLI — the MCP server is deliberately NOT registered)
 
-All 32 diagnostic tools are called via the globally-linked single **`agentlenspro`** executable
+All diagnostic tools (discover them with `agentlenspro list --desc`) are called via the globally-linked single **`agentlenspro`** executable
 (`npm link` from this repo; source `standalone/cli.ts` → `src/cli/*`), not MCP: resident MCP
 schemas cost ~8k tokens per turn and any toolset change breaks the prompt-cache prefix, so
 `.mcp.json` intentionally does not register the server. The user-scoped

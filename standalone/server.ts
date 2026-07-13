@@ -745,6 +745,10 @@ startMcpHttpServer({
     const summary = buildSessionSummary()
     return summary?.sessions ?? []
   },
+  // TRDD-OCNHOHE9: a session's timeline, reparsing a disk-restored stripped card on demand (same
+  // path /api/timeline uses). Without this the MCP tools fell back to the card's empty inline
+  // timeline, so check_cache_expiry could not find the last api_request ts and returned 'unknown'.
+  getTimeline: (id) => resolveSessionCard(id)?.timeline ?? [],
   // The standalone cards already carry their inline timeline (log-parsed), so the MCP diagnostics
   // read per-turn tokens off the card; composition is reconstructed on demand from the raw .jsonl —
   // the same route /api/composition/:id serves the browser. This makes the P4 inflation / cache-break
@@ -1476,6 +1480,27 @@ function buildSessionSummary(): ReturnType<typeof summarizeSpans> | null {
     summary = { ...(summary ?? { backgroundSpans: [], efficiency: { totalInputTokens: 0, totalOutputTokens: 0, totalLlmCalls: 0, avgInputPerCall: 0, avgTtft: 0, cacheHitRate: 0, toolDefWaste: 0, sysInstructionWaste: 0, topTokenConsumers: [] } }), sessions: merged }
   }
   return summary
+}
+
+// Resolve one session's card, reparsing a disk-restored card whose timeline was STRIPPED on startup
+// (TRDD-PJC8N1HO spec 3: the offset resume skips the file, so the card carries an empty timeline until
+// it is actually drilled). Shared by the lazy /api/timeline route AND the MCP getTimeline accessor, so
+// both surfaces see the same reconstructed entries — check_cache_expiry (TRDD-OCNHOHE9) needs the last
+// api_request/llm timestamp, which a stripped card lacks until this reparse runs.
+function resolveSessionCard(sessionId: string): SessionSummaryCard | null {
+  const summary = buildSessionSummary()
+  let session = summary?.sessions.find(s => s.sessionId === sessionId) ?? null
+  if (session && (session.timeline?.length ?? 0) === 0 && logSessions.has(sessionId)) {
+    try {
+      const reparsed = logReader.reparseSession(sessionId)
+      if (reparsed) {
+        statuslineReader.overlay(reparsed.card)
+        logSessions.set(reparsed.card.sessionId, reparsed.card)
+        session = reparsed.card
+      }
+    } catch { /* on-demand rebuild is best-effort — fall back to the stripped card's empty timeline */ }
+  }
+  return session
 }
 
 // Drop the heavy per-session detail (full timeline + per-file ops) from the inlined/broadcast
@@ -2934,21 +2959,8 @@ const uiServer = http.createServer(async (req, res) => {
 
   if (req.method === 'GET' && url?.startsWith('/api/timeline/')) {
     const sessionId = decodeURIComponent(url.slice('/api/timeline/'.length))
-    const summary = buildSessionSummary()
-    let session = summary?.sessions.find(s => s.sessionId === sessionId) ?? null
-    // TRDD-PJC8N1HO spec 3: a card RESTORED (stripped) from disk on startup has an empty timeline (its
-    // file was skipped by the offset resume). When such a card is actually drilled, re-parse its ONE
-    // file on demand to rebuild the timeline, then cache the full card in logSessions for next time.
-    if (session && (session.timeline?.length ?? 0) === 0 && logSessions.has(sessionId)) {
-      try {
-        const reparsed = logReader.reparseSession(sessionId)
-        if (reparsed) {
-          statuslineReader.overlay(reparsed.card)
-          logSessions.set(reparsed.card.sessionId, reparsed.card)
-          session = reparsed.card
-        }
-      } catch { /* on-demand rebuild is best-effort — fall back to the stripped card's empty timeline */ }
-    }
+    // Shared reparse-on-demand for a disk-restored stripped card (see resolveSessionCard).
+    const session = resolveSessionCard(sessionId)
     res.writeHead(200, { 'Content-Type': 'application/json' })
     // TRDD-ZS1GDXVY: generatedFiles (session-level group + truncation flag) rides the lazy timeline
     // payload, not the bulk summary — stripSessionDetail drops it from /api/summary to keep it light.

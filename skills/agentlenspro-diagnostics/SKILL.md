@@ -280,7 +280,20 @@ upgrade. Use `get_cache_break_gap_report` to separate TTL-expiry from a real pre
 agentlenspro get_account_status                      # your session's cacheTtl regime + windowSource
 agentlenspro get_cache_break_gap_report              # TTL-expiry vs real prefix change, per gap
 agentlenspro get_cache_break_causes                  # what breaks the cache machine-wide
+agentlenspro check_cache_expiry                      # is my cache cold yet? (newest main session)
+agentlenspro check_cache_expiry --all                # every session's fresh/expired verdict
+agentlenspro check_cache_expiry --thresholdMinutes 60 --out /tmp/exp.json   # probe "> 1h idle"
 ```
+
+**Is a specific claude's cache expired yet?** `check_cache_expiry` answers exactly "has more than
+the TTL passed since this session's last LLM request?" — idle since the last `api_request`, compared
+to that session's TTL (1h subscription-main, 5min subagent/usage-credits), so `expired` means the
+prefix was likely evicted and the next request pays a full cache-creation write. Per session it
+returns `verdict` (fresh|expired|unknown), `idleHuman` ("1h 12m"), `ttlMin`+`ttlSource`+`ttlBasis`
+(same honesty contract — unknown auth → an `assumed` 5-min floor, never a silent guess), and
+`lastRequestAt`. Default = the newest MAIN session; `--all` = every session; `--sessionId <id>` = one;
+`--thresholdMinutes N` overrides the TTL with an explicit cutoff (e.g. `60` to probe "more than 1h").
+A `verdict:"unknown"` means no LLM request was recorded for that session.
 
 ## High-value tools (cheat-sheet)
 
@@ -300,6 +313,7 @@ agentlenspro get_cache_break_causes                  # what breaks the cache mac
 | What keeps breaking the cache, machine-wide? | `get_cache_break_causes` |
 | Per-turn break diagnosis of one session | `get_cache_break_timeline --sessionId <id>` |
 | TTL expiry vs real prefix change? | `get_cache_break_gap_report` |
+| **Has a session's cache EXPIRED (idle > its TTL)?** | `check_cache_expiry` — idle since the last LLM request vs the per-session TTL (1h subscription-main, 5min subagent/usage-credits). Per session: `verdict` fresh\|expired\|unknown, `idleHuman`, `ttlMin`/`ttlSource`/`ttlBasis`, `lastRequestAt`. Default = newest main session; `--all` = every session; `--sessionId <id>` = one; `--thresholdMinutes N` overrides the TTL (e.g. `60` = "> 1h idle"). `unknown` = no LLM request recorded |
 | Biggest single cache writes + contents | `trace_expensive_writes` |
 | What did the last janitor heartbeat cost? | `get_heartbeat_cost` |
 | Which config (model/spawn/effort) costs most? | `compare_configs --groupBy <dim>` |

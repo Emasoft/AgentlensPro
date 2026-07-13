@@ -52,8 +52,9 @@ agentlenspro setup --dry-run              # print the per-step plan, change noth
 agentlenspro setup --yes                  # non-interactive (accepts e.g. old-package removal)
 ```
 
-The same executable exposes all 32 diagnostic tools (recent sessions, cost, burn budget,
-workspace patterns, …) against the running server, plus the individual installers:
+The same executable exposes every diagnostic tool (recent sessions, cost, burn budget,
+cache-expiry, workspace patterns, …) against the running server — run `agentlenspro list`
+to see the full set — plus the individual installers:
 
 ```bash
 agentlenspro server start                 # server up (idempotent); `dashboard` opens the UI

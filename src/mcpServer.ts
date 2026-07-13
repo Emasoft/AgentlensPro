@@ -38,7 +38,8 @@ import { buildSpawnRollup } from './shared/spawnRollup'
 import { buildTokensByCause } from './shared/tokensByCause'
 import type { BurnStatus, SessionStatus, AccountWindowBudget } from './burnMonitor'
 import { type AccountInfo, accountLabelFor } from './accountInfo'
-import { classifyTtlRegime, type TtlContext } from './shared/cacheTtl'
+import { classifyTtlRegime, sessionTtlKindOf, type TtlContext } from './shared/cacheTtl'
+import { assessCacheExpiry, type CacheExpiryVerdict } from './cacheExpiry'
 import type { RateLimitsSnapshot } from './statuslineUsage'
 // TRDD-YQZ9P8IL — plan/mode formatting + the auth-regime resolver live in accountStateTimeline (ONE
 // source of truth shared by get_account_status and the account-state timeline sampler); resolveStateAt
@@ -698,6 +699,29 @@ const TOOLS = [
       properties: {
         sessionId: { type: 'string', description: 'Your session id if known (exact match)' },
         workspace: { type: 'string', description: 'Your workspace path prefix — resolves the newest live session under it' },
+      },
+    },
+  },
+  // ── Cache-expiry probe (TRDD-OCNHOHE9) ────────────────────────────────────────
+  {
+    name: 'check_cache_expiry',
+    description:
+      'Has a session\'s prompt cache EXPIRED? Measures idle time since the session\'s last LLM ' +
+      '(api_request) call and compares it to that session\'s TTL — 1h for a subscription main ' +
+      'conversation, 5min for a subagent (ALWAYS) or a usage-credits/API session — so "expired" ' +
+      'means the cached prefix was likely evicted and the next request pays a full cache-creation ' +
+      'write (~1.25× the prefix). Returns per session: `verdict` (fresh|expired|unknown), `idleHuman` ' +
+      '(e.g. "1h 12m"), `ttlMin`+`ttlSource`+`ttlBasis` (the TTL and WHY that number — never a bare ' +
+      'guess; unknown auth surfaces an "assumed" 5-min floor), `lastRequestAt`, and `reason`. Default ' +
+      'target = the newest MAIN session (you rarely know your own id); pass `all:true` for every ' +
+      'session, `sessionId` for one, or `thresholdMinutes` to override the TTL with an explicit cutoff ' +
+      '(e.g. 60 to probe "more than 1h idle"). A `verdict:"unknown"` means no LLM request was recorded.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        sessionId: { type: 'string', description: 'Check one session by exact id (default: newest main session)' },
+        all: { type: 'boolean', description: 'Check every known session instead of just the newest main one' },
+        thresholdMinutes: { type: 'number', description: 'Explicit idle cutoff in minutes; overrides the per-session TTL (e.g. 60 = "> 1h idle")' },
       },
     },
   },
@@ -1604,6 +1628,85 @@ function handleGetInstructionSuggestions(
 function asTimeline(getTimeline: ((id: string) => unknown[]) | null, id: string, card?: SessionSummaryCard): TimelineEntry[] {
   const raw = getTimeline ? getTimeline(id) : (card?.timeline ?? [])
   return raw as TimelineEntry[]
+}
+
+// ── check_cache_expiry (TRDD-OCNHOHE9) ────────────────────────────────────────
+// Is a session past its prompt-cache TTL? Finds each target's last LLM-request time, classifies
+// its per-session TTL regime, and reports fresh/expired/unknown via the pure assessCacheExpiry.
+type CacheExpiryRow = CacheExpiryVerdict & {
+  sessionId: string
+  workspace: string
+  kind: string
+  /** ISO of the last LLM request the idle was measured from, or null when none was recorded. */
+  lastRequestAt: string | null
+}
+
+// The freshest billed call. api_request entries are the ground-truth LLM calls; 'llm' spans are a
+// fallback for OTEL-only cards that predate log correlation. NaN timestamps are skipped, not zeroed.
+function lastLlmRequestMs(timeline: TimelineEntry[]): number | null {
+  let best: number | null = null
+  for (const e of timeline) {
+    if (e.type !== 'api_request' && e.type !== 'llm') continue
+    const ms = Date.parse(e.timestamp)
+    if (!Number.isNaN(ms) && (best === null || ms > best)) best = ms
+  }
+  return best
+}
+
+function assessOneSession(
+  card: SessionSummaryCard,
+  getTimeline: ((id: string) => unknown[]) | null,
+  ctx: TtlContext | null,
+  nowMs: number,
+  thresholdMs?: number,
+): CacheExpiryRow {
+  const lastMs = lastLlmRequestMs(asTimeline(getTimeline, card.sessionId, card))
+  const kind = sessionTtlKindOf(card)
+  const verdict = assessCacheExpiry({ lastRequestAtMs: lastMs, nowMs, kind, ctx, thresholdMs })
+  return {
+    ...verdict,
+    sessionId: card.sessionId,
+    workspace: card.workspace,
+    kind,
+    lastRequestAt: lastMs === null ? null : new Date(lastMs).toISOString(),
+  }
+}
+
+function handleCheckCacheExpiry(
+  sessions: SessionSummaryCard[],
+  getTimeline: ((id: string) => unknown[]) | null,
+  ctx: TtlContext | null,
+  args: { sessionId?: string; all?: boolean; thresholdMinutes?: number },
+): { sessions: CacheExpiryRow[] } {
+  const nowMs = Date.now()
+  const thresholdMs =
+    typeof args.thresholdMinutes === 'number' && args.thresholdMinutes > 0
+      ? args.thresholdMinutes * 60_000
+      : undefined
+
+  let targets: SessionSummaryCard[]
+  if (args.sessionId) {
+    targets = sessions.filter(s => s.sessionId === args.sessionId)
+  } else if (args.all) {
+    targets = sessions
+  } else {
+    // Default: the caller's active conversation — the newest MAIN session by its last LLM request
+    // (agents rarely know their own sessionId). Fall back to any kind if there are no main cards.
+    const mains = sessions.filter(s => sessionTtlKindOf(s) === 'main')
+    const pool = mains.length > 0 ? mains : sessions
+    let newest: SessionSummaryCard | null = null
+    let newestMs = -1
+    for (const s of pool) {
+      const ms = lastLlmRequestMs(asTimeline(getTimeline, s.sessionId, s)) ?? Date.parse(s.startTime)
+      if (!Number.isNaN(ms) && ms > newestMs) {
+        newestMs = ms
+        newest = s
+      }
+    }
+    targets = newest ? [newest] : []
+  }
+
+  return { sessions: targets.map(c => assessOneSession(c, getTimeline, ctx, nowMs, thresholdMs)) }
 }
 
 // Per-turn context size + cache split from a session timeline. Entries carry the FOUR DISJOINT
@@ -2573,6 +2676,12 @@ export function createMcpServer(opts: McpServerOptions): Server {
         result = handleGetAccountStatus(
           getAccount?.() ?? null, getBurnStatus?.() ?? null,
           getTtlContext?.() ?? null, getRateLimits?.() ?? null,
+        )
+        break
+      case 'check_cache_expiry':
+        result = handleCheckCacheExpiry(
+          sessions, getTimeline, getTtlContext?.() ?? null,
+          args as { sessionId?: string; all?: boolean; thresholdMinutes?: number },
         )
         break
       case 'get_account_state_at':

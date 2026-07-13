@@ -6,6 +6,21 @@ All notable changes to AgentlensPro are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **`check_cache_expiry` — is a session's prompt cache expired yet?** A new diagnostic that
+  measures idle time since a session's last LLM (`api_request`) call and compares it to that
+  session's TTL — 1h for a subscription main conversation, 5min for a subagent (always) or a
+  usage-credits/API session — so `expired` means the cached prefix was likely evicted and the next
+  request pays a full cache-creation write (~1.25× the prefix). Per session it returns `verdict`
+  (fresh|expired|unknown), `idleHuman` (e.g. "1h 12m"), `ttlMin`/`ttlSource`/`ttlBasis` (the same
+  honesty contract as the rest of the TTL surface — unknown auth surfaces an `assumed` 5-min floor,
+  never a silent guess), `lastRequestAt`, and a human `reason`. Default target is the newest MAIN
+  session (`agentlenspro check_cache_expiry`); `--all` covers every session, `--sessionId <id>` one,
+  and `--thresholdMinutes N` overrides the TTL with an explicit cutoff (e.g. `60` to probe "> 1h
+  idle"). Reuses the doc-verified TTL classifier (`src/shared/cacheTtl.ts`) — no TTL number is
+  re-declared. Pure core in `src/cacheExpiry.ts` (15 unit tests). (TRDD-OCNHOHE9)
+
 ## [2.6.0] - 2026-07-13
 
 ### Added
