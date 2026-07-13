@@ -87,12 +87,15 @@ export function parseListeningPortsLsof(text: string): ListeningPort[] {
   return out
 }
 
-/** Find the default route's gateway from `netstat -rn` (macOS/BSD style: `default <gw> <flags> <netif>`).
- *  Returns null when no default route line is present. Pure. */
+/** Find the default route's gateway from `netstat -rn`. Handles both the macOS/BSD style
+ *  (`default <gw> <flags> <netif>`) and the Linux numeric style (`0.0.0.0 <gw> 0.0.0.0 UG ...`),
+ *  since `-n` suppresses the `default` alias on Linux. Returns null when no default route is present. Pure. */
 export function parseDefaultGateway(text: string): string | null {
   for (const line of text.split('\n')) {
     const cols = line.trim().split(/\s+/)
     if (cols[0] === 'default' && cols[1]) return cols[1]
+    // Linux: the default route is the 0.0.0.0 destination; its gateway is a real router IP, not 0.0.0.0.
+    if (cols[0] === '0.0.0.0' && cols[1] && cols[1] !== '0.0.0.0') return cols[1]
   }
   return null
 }

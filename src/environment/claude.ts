@@ -6,7 +6,7 @@
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { which, toolVersion } from './exec'
+import { toolVersion } from './exec'
 import type { EnvFacet } from './types'
 
 export interface PermissionSummary {
@@ -69,7 +69,8 @@ async function gather(): Promise<ClaudeFacetData> {
   const userClaudeMd = fs.existsSync(path.join(configDir, 'CLAUDE.md'))
   const projectClaudeMd = fs.existsSync(path.join(process.cwd(), 'CLAUDE.md'))
   const sessionId = process.env.CLAUDE_CODE_SESSION_ID ?? null
-  const cliVersion = which('claude') ? await toolVersion('claude', ['--version']) : null
+  // toolVersion already returns null when the binary is not on PATH, so no separate which() guard.
+  const cliVersion = await toolVersion('claude', ['--version'])
 
   return {
     configDir,
@@ -90,7 +91,7 @@ function render(value: unknown): string {
     `config dir:    ${v.configDir}`,
     `settings.json: ${v.settingsPresent ? 'present' : 'absent'}`,
     `permissions:   mode ${p.defaultMode ?? 'unset'}   · allow ${p.allow} / deny ${p.deny} / ask ${p.ask}`,
-    `plugins:       ${v.pluginsInstalled} installed`,
+    `plugin cache:  ${v.pluginsInstalled} entries`,
     `CLAUDE.md:     user ${v.userClaudeMd ? 'yes' : 'no'}   · project ${v.projectClaudeMd ? 'yes' : 'no'}`,
     `cli:           ${v.cliVersion ?? 'not found'}`,
   ].join('\n')

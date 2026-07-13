@@ -67,7 +67,7 @@ async function gather(): Promise<CloudFacetValue> {
   const base = cloudFromEnvAndFiles(process.env, exists, os.homedir())
   const [awsCli, azureCli, gcpCli] = await Promise.all([
     toolVersion('aws', ['--version']),
-    toolVersion('az', ['version']),
+    toolVersion('az', ['--version']),
     toolVersion('gcloud', ['--version']),
   ])
   return {

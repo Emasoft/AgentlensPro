@@ -80,6 +80,16 @@ suite('environment/network (TRDD-HUWJVQJA — network facet pure helpers)', () =
     assert.strictEqual(parseDefaultGateway(text), '192.168.1.1')
   })
 
+  test('parseDefaultGateway finds the Linux 0.0.0.0 default route (netstat -rn numeric)', () => {
+    const text = [
+      'Kernel IP routing table',
+      'Destination     Gateway         Genmask         Flags   MSS Window  irtt Iface',
+      '0.0.0.0         192.168.1.254   0.0.0.0         UG        0 0          0 eth0',
+      '192.168.1.0     0.0.0.0         255.255.255.0   U         0 0          0 eth0',
+    ].join('\n')
+    assert.strictEqual(parseDefaultGateway(text), '192.168.1.254')
+  })
+
   test('parseDefaultGateway returns null when there is no default route', () => {
     const text = ['Destination   Gateway   Flags   Netif', '127   127.0.0.1   UCS   lo0'].join('\n')
     assert.strictEqual(parseDefaultGateway(text), null)

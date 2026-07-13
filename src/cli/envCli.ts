@@ -5,6 +5,30 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { FACETS, gatherAll, resolveFacet } from '../environment'
+import type { EnvFacet } from '../environment/types'
+
+/** Gather one facet, catching a stray throw so a single misbehaving detector can never reject the
+ *  whole command (mirrors the per-facet backstop in gatherAll). Returns the { error } shape on failure. */
+async function gatherOne(facet: EnvFacet): Promise<unknown> {
+  try {
+    return await facet.gather()
+  } catch (e) {
+    return { error: (e as Error).message }
+  }
+}
+
+/** Render a facet value, tolerating both the { error } backstop shape and a throw from render() — the
+ *  env report must ALWAYS print something for every facet, never crash partway through. */
+function renderSafe(facet: EnvFacet, value: unknown): string {
+  if (value && typeof value === 'object' && 'error' in (value as object)) {
+    return `  (unavailable: ${String((value as { error: unknown }).error)})`
+  }
+  try {
+    return facet.render(value)
+  } catch (e) {
+    return `  (render error: ${(e as Error).message})`
+  }
+}
 
 interface ParsedArgs {
   facet: string | null
@@ -66,13 +90,13 @@ export async function runEnvCli(argv: string[]): Promise<number> {
       console.error(`unknown facet: ${args.facet}\nknown: ${FACETS.map((f) => f.name).join(', ')}  (run: agentlenspro env list)`)
       return 1
     }
-    const value = await facet.gather()
+    const value = await gatherOne(facet)
     if (args.out) return writeOut(args.out, value, `facet ${facet.name}`)
     if (args.json) {
       console.log(JSON.stringify(value, null, 2))
       return 0
     }
-    console.log(facet.render(value))
+    console.log(renderSafe(facet, value))
     return 0
   }
 
@@ -86,7 +110,7 @@ export async function runEnvCli(argv: string[]): Promise<number> {
   const blocks: string[] = [`environment report — ${report.capturedAt}`]
   for (const f of FACETS) {
     blocks.push(`\n── ${f.name} ${'─'.repeat(Math.max(0, 40 - f.name.length))}`)
-    blocks.push(f.render(report.facets[f.name]))
+    blocks.push(renderSafe(f, report.facets[f.name]))
   }
   console.log(blocks.join('\n'))
   return 0
