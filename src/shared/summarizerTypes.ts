@@ -449,6 +449,11 @@ export interface BackgroundSpanSummary {
   purpose: string
   inputTokens: number
   outputTokens: number
+  /** Claude Code >= 2.1.202 stamps workflow-spawned agents with `workflow.run_id`/`workflow.name`
+   *  OTEL attributes, explicitly so a workflow run's activity can be reconstructed from telemetry.
+   *  Optional: absent on older CC builds and on background spans that are not workflow agents. */
+  workflowRunId?: string
+  workflowName?: string
 }
 
 export interface FullSummary {

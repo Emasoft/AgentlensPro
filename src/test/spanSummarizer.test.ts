@@ -176,6 +176,37 @@ suite('SpanSummarizer', () => {
       assert.strictEqual(result.sessions.length, 0)
     })
 
+    test('captures workflow.run_id / workflow.name from workflow-spawned agents (CC >= 2.1.202)', () => {
+      // Claude Code 2.1.202 added these attrs explicitly so a workflow run's activity can be
+      // reconstructed from OTel. Raw spans persist them verbatim, but nothing downstream reads raw —
+      // if the summarizer drops them, the signal is stored-but-invisible.
+      const wf = makeSpan({
+        name: 'claude_code.llm_request',
+        traceId: 'wf-orphan-trace',
+        attributes: [
+          makeAttr('workflow.run_id', 'wf_abc123'),
+          makeAttr('workflow.name', 'review-changes'),
+          makeAttr('gen_ai.request.model', 'claude-sonnet-5'),
+        ],
+      })
+      const result = summarizeSpans([wf])
+      const bg = result.backgroundSpans.find(b => b.workflowRunId === 'wf_abc123')
+      assert.ok(bg, 'the workflow attrs must survive summarization')
+      assert.strictEqual(bg?.workflowName, 'review-changes')
+      // With no gen_ai.agent.name, the workflow name is the label an operator recognizes —
+      // not the bare span name.
+      assert.strictEqual(bg?.purpose, 'workflow: review-changes')
+    })
+
+    test('a background span WITHOUT workflow attrs omits the fields (older CC builds)', () => {
+      const plain = makeSpan({ name: 'telemetry_upload', traceId: 'plain-trace' })
+      const result = summarizeSpans([plain])
+      const bg = result.backgroundSpans.find(b => b.name === 'telemetry_upload')
+      assert.ok(bg)
+      assert.strictEqual(bg?.workflowRunId, undefined)
+      assert.strictEqual(bg?.workflowName, undefined)
+    })
+
     test('computes efficiency metrics', () => {
       const agent = makeAgentSpan({
         spanId: 'a1',
