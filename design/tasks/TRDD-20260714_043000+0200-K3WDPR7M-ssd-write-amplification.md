@@ -1,9 +1,9 @@
 ---
 trdd-id: K3WDPR7M
-title: SSD write amplification — raw OTEL bodies rewrite the whole conversation every turn; move the body store to compressed content-addressed SQLite
+title: SSD write amplification — raw OTEL bodies rewrite the whole conversation every turn; move the body store to a fileless-DuckDB to immutable-Parquet loop
 column: dev
 created: 2026-07-14T04:30:00+0200
-updated: 2026-07-14T12:25:00+0200
+updated: 2026-07-14T13:45:00+0200
 current-owner: main
 task-type: bugfix
 severity: critical
@@ -80,38 +80,54 @@ rest.
   live hook fires (server stayed down, ports free). **The brake is currently ARMED — disarm with
   `rm ~/.agentlens/NO_REVIVE` once the fix lands.**
 
-## ⏵ PHASE 1 BAKE-OFF — DECIDED BY MEASUREMENT (2026-07-14)
+## ⏵ PHASE 1 BAKE-OFF — DECIDED BY **REAL DEVICE-WRITE** MEASUREMENT (2026-07-14, redone)
 
-Evidence: `reports/storage-bakeoff/20260714_122132+0200-duckdb-vs-sqlite.md`.
-Harness: `scripts_dev/bakeoff-duckdb.mjs`. 40 real bodies, chronological, **real file sizes**,
-marginal cost averaged over 10 turns (a 1-turn delta is 256 KB-block-quantized noise).
+Evidence: `reports/storage-bakeoff/20260714_134500+0200-real-disk-writes.md`.
+Harness: `scripts_dev/measure_writes.py` + `scripts_dev/writeprobe.mjs`. 40 real bodies,
+chronological; 20-turn baseline then 20 MEASURED turns. Raw input = **881 KB/turn** (what CC writes today).
 
-| layout | stored | ratio | **per-turn write** | ingest/turn |
-|---|---|---|---|---|
-| A whole-body row + zstd | 8.26 MB | 3.6× | 179 KB | 8 ms |
-| B per-section, **no dedup** | 9.01 MB | 3.3× | 486 KB | 44 ms |
-| C per-section + dedup (**DuckDB**) | 3.76 MB | 8.0× | 179 KB | 187 ms |
-| **D per-section + dedup (SQLite)** | **2.58 MB** | **11.6×** | **16 KB** | 14 ms |
+⚠ **SUPERSEDES the first bake-off** (`…122132+0200-duckdb-vs-sqlite.md`), which ranked engines on
+**file-size growth** — a PROXY, and wrong by up to **57×**. The USER challenged whether the numbers were
+real; they were not. We now read **`ri_diskio_byteswritten`** (`proc_pid_rusage`) — the same counter
+Activity Monitor shows — **validated against a known 64 MB fsync'd write before use**, and every layout
+is **forced fully durable (fsync) before sampling**. Without that forcing, `sqlite_tuned` measured
+**0 KB/turn** — its pages were merely still dirty in the page cache. A too-good-to-be-true number is a
+harness bug, not a result.
 
-**DECISION: SQLite is the WRITE store; DuckDB is the ANALYTICS engine ATTACHed over it READ_ONLY**
-(`INSTALL sqlite; ATTACH '…' (TYPE SQLITE, READ_ONLY)` — verified working, zero-copy, no second file).
-This also sidesteps DuckDB's single-writer-process limit: the server owns the file, N readers attach it.
+| layout | **REAL write/turn** | stored | vs raw |
+|---|---|---|---|
+| **floor** — append-only zstd, no index/engine (the yardstick) | **14 KB** | 1.98 MB | 63× |
+| **duckdb_parquet** — fileless DuckDB → immutable ZSTD Parquet | **15 KB** | **1.21 MB** | **59×** |
+| sqlite_tuned — WAL, synchronous=NORMAL, 16K pages, batched commit | 65 KB | 3.30 MB | 14× |
+| sqlite — WAL, commit/turn, checkpoint(TRUNCATE) | 125 KB | 2.96 MB | 7× |
+| **duckdb persistent `.db`** — content-addressed + `USING COMPRESSION zstd` | **5,018 KB** | 4.01 MB | **5.7× WORSE than raw** |
 
-Three findings, each of which would otherwise have shipped a bug:
-1. **The `storage_compatibility_version` trap.** It defaults to **`v0.10.2`**, which PREDATES zstd column
-   compression (v1.2.0) ⇒ `USING COMPRESSION zstd` is **silently ignored** and big strings are stored
-   **uncompressed**; the first run produced a DB **2× LARGER than the raw JSON**. Must opt in explicitly.
-   **Never infer compression from a ratio — assert it** via `pragma_storage_info` (that is what caught it).
-2. **HYPOTHESIS REFUTED — DuckDB's native cross-row zstd window does NOT capture our redundancy.** I
-   predicted the columnar per-vector streaming zstd (`zstd.cpp`: `ZSTD_VECTOR_SIZE=2048`, `ZSTD_e_continue`
-   between values, level 3 ⇒ ~2 MB window) would dedupe the identical 342 KB `tools` array natively.
-   **B (3.3×) is no better than A (3.6×).** Sectioning alone buys nothing; **content-addressed
-   `INSERT OR IGNORE` does 100 % of the work.**
-3. **DuckDB writes 11× more per turn (179 KB vs 16 KB)** — architectural (256 KB blocks + row-group
-   rewrite on checkpoint), not tunable. It is *worse* than measured: a row-group rewrite burns SSD
-   without changing file size, so the size-delta proxy undercounts it.
+**DECISION: fileless (in-memory) DuckDB → immutable, hive-partitioned, ZSTD Parquet.** It writes at the
+theoretical floor (15 KB vs 14 KB) AND produces the smallest store (1.21 MB — 39 % smaller than the
+flat-file floor, because Parquet's column-chunk zstd + dictionary encoding beats per-section zstd).
+Projected: **37 GB/day → 0.63 GB/day (59×).**
 
-Projected at ~30 req/min: today **35 GB/day** → DuckDB store **7.5 GB/day** → **SQLite store 0.7 GB/day**.
+Findings, each of which would otherwise have shipped a bug:
+1. **A persistent DuckDB file is the WORST option — 5 MB/turn to store a 881 KB body (5.7× worse than
+   doing nothing).** Columnar OLAP: 256 KB blocks + row-group rewrite on checkpoint. Architectural, not
+   tunable. The file-size proxy said 179 KB — a **28× underestimate**, because a row-group rewrite burns
+   SSD writes without growing the file.
+2. **`memory_limit` is NOT the mechanism** (correcting the guide's framing): it sizes the buffer pool; a
+   persistent store still rewrote row groups at 5 MB/turn. The lever is the **fileless DB + `COPY … TO`
+   Parquet** — parts are written once and never rewritten.
+3. **The `storage_compatibility_version` trap.** Defaults to **`v0.10.2`**, which PREDATES zstd column
+   compression (v1.2.0) ⇒ `USING COMPRESSION zstd` is **silently ignored** and big strings stored
+   **uncompressed**; the first run produced a DB **2× LARGER than the raw JSON**. Never infer compression
+   from a ratio — assert it (`pragma_storage_info`); that is what caught it.
+4. **HYPOTHESIS REFUTED — DuckDB's native cross-row zstd window does NOT capture our redundancy.**
+   Per-section rows without dedup (3.3×) are no better than whole-body rows (3.6×). **Content-addressed
+   dedup does 100 % of the work** — Parquet has no cross-file content-addressing, so the dedup must stay
+   OURS.
+5. **The RAM disk is still required and is ORTHOGONAL.** No DuckDB setting can stop **Claude Code itself**
+   from writing its ~881 KB raw body per request. The RAM disk targets CC's write; the Parquet loop
+   targets ours. Both are needed.
+6. **The raw bodies on the RAM disk ARE the write-ahead log** — never delete a body until the Parquet
+   part containing it is durable. Bounds crash exposure to one flush interval at **zero SSD cost**.
 
 **NEXT ACTION** — in order:
 1. **Body store → compressed content-addressed SQLite** (per the bake-off). `blob(sha PK, n, z)` holding
