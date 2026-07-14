@@ -27,6 +27,10 @@ export const RAW_BODIES_DEFAULT = false
 
 export interface CaptureConfig {
   rawBodies?: boolean
+  /** Absolute path to the RAM-disk spool bodies dir, persisted when capture is turned on with a spool
+   *  (TRDD-K3WDPR7M Phase 3). The server reads it to resolve BODIES_DIR while capture is on, and the
+   *  capture-OFF path reads it to delete exactly the sink WE wrote. */
+  spoolDir?: string
 }
 
 export type CaptureSource = 'env' | 'file' | 'default'
@@ -52,7 +56,13 @@ export function loadCaptureConfig(dataDir: string): CaptureConfig {
   const c = obj.capture ?? {}
   const out: CaptureConfig = {}
   if (typeof c.rawBodies === 'boolean') out.rawBodies = c.rawBodies
+  if (typeof c.spoolDir === 'string' && c.spoolDir.length > 0) out.spoolDir = c.spoolDir
   return out
+}
+
+/** The persisted RAM-disk spool bodies dir, or undefined when none is configured. */
+export function spoolDirConfigured(dataDir: string): string | undefined {
+  return loadCaptureConfig(dataDir).spoolDir
 }
 
 /** Resolve capture + where the value came from (env > file > default). */
@@ -86,6 +96,27 @@ export function setRawBodyCapture(dataDir: string, enabled: boolean): void {
     obj = JSON.parse(fs.readFileSync(p, 'utf-8')) as typeof obj
   }
   obj.capture = { ...(obj.capture ?? {}), rawBodies: enabled }
+  fs.mkdirSync(dataDir, { recursive: true })
+  const tmp = `${p}.tmp`
+  fs.writeFileSync(tmp, JSON.stringify(obj, null, 2) + '\n', 'utf-8')
+  fs.renameSync(tmp, p) // atomic replace
+}
+
+/**
+ * Persist (or, with `undefined`, clear) the RAM-disk spool bodies dir. Same atomic + non-destructive +
+ * refuse-corrupt contract as setRawBodyCapture: PRESERVES every other key, and THROWS on an existing
+ * non-JSON file rather than clobbering it.
+ */
+export function setSpoolDir(dataDir: string, spoolDir: string | undefined): void {
+  const p = configPath(dataDir)
+  let obj: { capture?: Record<string, unknown>; [k: string]: unknown } = {}
+  if (fs.existsSync(p)) {
+    obj = JSON.parse(fs.readFileSync(p, 'utf-8')) as typeof obj
+  }
+  const cap = { ...(obj.capture ?? {}) }
+  if (spoolDir === undefined) delete cap.spoolDir
+  else cap.spoolDir = spoolDir
+  obj.capture = cap
   fs.mkdirSync(dataDir, { recursive: true })
   const tmp = `${p}.tmp`
   fs.writeFileSync(tmp, JSON.stringify(obj, null, 2) + '\n', 'utf-8')

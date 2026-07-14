@@ -21,6 +21,7 @@ import { runDiagnosticsCli, USAGE } from './diagnosticsCli'
 import { runHookCommand } from './hookHandlers'
 import { runHeartbeatCost } from './heartbeatCostCli'
 import { runConfigCli } from './configCli'
+import { runSpoolCli } from './spoolCli'
 import { runEnvCli } from './envCli'
 import { runDisableCli, runEnableCli } from './disableCli'
 import { ensureServer, openDashboard, serverCommand, daemonCommand } from './serverControl'
@@ -95,6 +96,10 @@ export async function cliMain(argv: string[], startServer: () => Promise<unknown
       // Data-retention config (TRDD-ZAV74M8Q): read/write DATA_DIR/config.json directly — no
       // server needed, so it works while the server is down and the values persist across uninstall.
       return runConfigCli(argv.slice(1))
+    case 'spool':
+      // RAM-disk spool for raw-body capture (TRDD-K3WDPR7M Phase 3). `spool ensure` is what the
+      // boot-remount LaunchAgent runs at login — re-create the spool iff capture is on, else no-op.
+      return runSpoolCli(argv.slice(1))
     case 'env':
       // Environment/system detection (TRDD-HUWJVQJA): terminal kind, OS, Claude/ai-maestro/CI/
       // container context, filesystem/worktree, network, cloud, tooling, MCP — all client-side, no

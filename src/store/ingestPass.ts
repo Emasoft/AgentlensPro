@@ -41,6 +41,11 @@ export interface IngestPassOptions {
    *  one that cannot otherwise be provoked (fs.readFileSync is a getter-only property in modern Node
    *  and cannot be stubbed). Defaults to the real read. */
   readFile?: (p: string) => string
+  /** Skip files whose NAME is in this set BEFORE reading/hashing them (TRDD-K3WDPR7M Phase 3, item 5).
+   *  The server seeds it once per boot from the store's already-ingested src_name set, so a spool drain
+   *  every 60s does not re-read+re-hash bodies that are already durable. MUTATED in place: each name is
+   *  added as it is ingested, so a later pass skips it too. */
+  skipNames?: Set<string>
 }
 
 export interface IngestPassResult {
@@ -88,11 +93,13 @@ export async function ingestPass(opts: IngestPassOptions): Promise<IngestPassRes
     batchSize = DEFAULT_BATCH,
     onProgress,
     readFile = (p: string) => fs.readFileSync(p, 'utf8'),
+    skipNames,
   } = opts
 
   const res: IngestPassResult = { ingested: 0, deleted: 0, bytesIn: 0, bytesStored: 0, failed: [], throttled: false }
   const cutoff = maxAgeMs > 0 ? Date.now() - maxAgeMs : Infinity
-  const all = bodyFiles(bodiesDir).filter((f) => f.mtime < cutoff)
+  // Skip already-durable names BEFORE the age filter/read — the whole point is to not touch them at all.
+  const all = bodyFiles(bodiesDir).filter((f) => f.mtime < cutoff && !skipNames?.has(f.name))
   if (all.length === 0) return res
 
   // (file, sha256 of its exact bytes) for the batch currently in flight. The sha is taken from the
@@ -138,6 +145,7 @@ export async function ingestPass(opts: IngestPassOptions): Promise<IngestPassRes
       res.ingested++
       res.bytesIn += f.size
       res.bytesStored += r.newBytes
+      skipNames?.add(f.name) // now durable → a later pass must not re-read+re-hash it
       batch.push({ p: f.p, name: f.name, bodyId: r.bodyId, size: f.size })
     } catch (e) {
       res.failed.push(`${f.name}: ${(e as Error).message}`)

@@ -54,8 +54,10 @@ import { SegmentedSpanStore, migrateLegacySpansFile, spanTimestampMs } from '../
 // (TRDD-K3WDPR7M Phase 3). The read/purge helpers stay — the existing .wad volumes still hold real
 // history that has not been migrated yet.
 import { purgeArchiveVolumes, archiveDiskUsage, extractArchive } from '../src/bodyArchive'
-import { openStore, type Store } from '../src/store/db'
+import { openStore, allOf, type Store } from '../src/store/db'
 import { DEFAULT_MAX_BYTES_PER_PASS, ingestPass } from '../src/store/ingestPass'
+import { rawBodyCaptureEnabled, spoolDirConfigured } from '../src/captureConfig'
+import { ensureRamDisk, ramDiskInfo, spoolSizeMb } from '../src/ramdisk'
 import { exportBodiesFromStore } from '../src/store/bodyStore'
 import {
   loadLogOffsets, loadPersistedCards,
@@ -299,11 +301,50 @@ function addSpan(span: Span) {
 // The live-size cap (AGENTLENS_BODIES_MAX_GB, default 8) is an emergency valve that archives
 // oldest-first — it also never deletes. The only true deletion is whole archive volumes older
 // than the retention window. Every pass is logged; a silent cap would read as data loss.
-const BODIES_DIR = path.join(DATA_DIR, 'otel-bodies')
+const LEGACY_BODIES_DIR = path.join(DATA_DIR, 'otel-bodies')
 const BODIES_ARCHIVE_DIR = path.join(DATA_DIR, 'otel-bodies-archive')
 const BODIES_MAX_AGE_MS = RET.bodiesMaxAgeHours * 3600e3
 const BODIES_MAX_BYTES = RET.bodiesMaxGb * 1024 ** 3
 const BODIES_RETENTION_DAYS = RET.bodiesRetentionDays
+
+// ── RAM-disk spool resolution (TRDD-K3WDPR7M Phase 3) ─────────────────────────
+// When raw-body capture is ON, Claude Code writes bodies to a RAM-disk spool so the ~30 GB/day of
+// writes land in volatile memory, not the SSD. Resolve it HERE, at boot, re-creating the spool if a
+// reboot cleared it — BEFORE the first drain. If it cannot be (re)created, we must NOT ingest from the
+// configured spool path (its RAM disk is gone); we drain ONLY the legacy dir so leftovers from stale
+// sessions are still reclaimed, and say so loudly rather than ingest from a wrong dir.
+const CAPTURE_ON = rawBodyCaptureEnabled(DATA_DIR, process.env)
+let SPOOL_MODE = false
+let SPOOL_SIZE_BYTES = 0
+let PRIMARY_BODIES_DIR = LEGACY_BODIES_DIR
+if (CAPTURE_ON) {
+  const configured = spoolDirConfigured(DATA_DIR)
+  if (configured) {
+    try {
+      const info = ramDiskInfo()
+      SPOOL_SIZE_BYTES = info.mounted
+        ? (info.sizeBytes ?? 0)
+        : ensureRamDisk(spoolSizeMb(process.env)).sizeBytes // reboot re-create, BEFORE the first pass
+      PRIMARY_BODIES_DIR = configured
+      SPOOL_MODE = true
+    } catch (e) {
+      console.error(`[AgentLens] capture is ON but the RAM-disk spool could not be (re)created — NOT ingesting from ${configured}; draining only the legacy dir. ${(e as Error).message}`)
+    }
+  }
+}
+// The live bodies dir the gate's activity tracker + the drain watch (spool in spool mode, else legacy).
+const BODIES_DIR = PRIMARY_BODIES_DIR
+
+// Drain targets, each with its own emergency size-cap. In spool mode the spool's cap is min(configured
+// cap, 70% of the RAM disk) so a runaway producer can never fill volatile memory; the legacy dir is
+// ALSO drained (leftovers from pre-spool / stale sessions) at the normal cap.
+interface DrainTarget { dir: string; capBytes: number }
+const drainTargets: DrainTarget[] = SPOOL_MODE
+  ? [
+      { dir: PRIMARY_BODIES_DIR, capBytes: SPOOL_SIZE_BYTES > 0 ? Math.min(BODIES_MAX_BYTES, Math.floor(SPOOL_SIZE_BYTES * 0.7)) : BODIES_MAX_BYTES },
+      { dir: LEGACY_BODIES_DIR, capBytes: BODIES_MAX_BYTES },
+    ]
+  : [{ dir: LEGACY_BODIES_DIR, capBytes: BODIES_MAX_BYTES }]
 
 // The bodies pass: ingest raw bodies into the content-addressed store, then reclaim their disk space
 // (TRDD-K3WDPR7M Phase 3). This REPLACES the old .wad archiver, which gzipped each body into a
@@ -323,45 +364,71 @@ const INGEST_MAX_BYTES_PER_PASS = Math.max(
 )
 let bodyStore: Store | null = null
 let bodiesPassRunning = false
+// Seeded ONCE per boot from the store's already-ingested src_name set, then MUTATED by ingestPass as
+// names are ingested — so a 60s spool drain never re-reads+re-hashes a body that is already durable
+// (TRDD-K3WDPR7M Phase 3, item 5).
+let ingestSkipNames: Set<string> | null = null
+
+async function seedIngestSkipNames(store: Store): Promise<Set<string>> {
+  const set = new Set<string>()
+  try {
+    const rows = (await store.con.runAndReadAll(`SELECT DISTINCT src_name FROM ${allOf(store, 'body')}`)).getRowObjects()
+    for (const row of rows) { if (row.src_name != null) set.add(String(row.src_name)) }
+  } catch (e) {
+    console.warn('[AgentLens] could not seed the ingest skip-set (will re-hash existing bodies once):', e)
+  }
+  return set
+}
 
 async function archiveOtelBodies(): Promise<void> {
-  if (bodiesPassRunning) return // an hourly tick must never overlap a still-running pass
+  if (bodiesPassRunning) return // a tick must never overlap a still-running pass
   bodiesPassRunning = true
   try {
-    if (!fs.existsSync(BODIES_DIR)) return
-    // The size cap is the emergency valve: over it, ingest EVERYTHING (age 0) rather than only what
-    // has aged out, so a runaway producer cannot outrun the drain.
-    let liveBytes = 0
-    for (const f of fs.readdirSync(BODIES_DIR)) {
-      if (!f.endsWith('.request.json') && !f.endsWith('.response.json')) continue
-      try { liveBytes += fs.statSync(path.join(BODIES_DIR, f)).size } catch { /* raced */ }
-    }
-    const overCap = liveBytes > BODIES_MAX_BYTES
-
+    const targets = drainTargets.filter((t) => fs.existsSync(t.dir))
+    if (targets.length === 0) return
     bodyStore ??= await openStore({ dir: path.join(DATA_DIR, 'store') })
-    const r = await ingestPass({
-      bodiesDir: BODIES_DIR,
-      store: bodyStore,
-      maxAgeMs: overCap ? 0 : BODIES_MAX_AGE_MS,
-      maxBytesPerPass: INGEST_MAX_BYTES_PER_PASS, // THE THROTTLE — never an unbounded boot pass again
-      deleteAfter: true,                          // safe: ingestPass verifies from the DURABLE store first
-    })
+    const skip = (ingestSkipNames ??= await seedIngestSkipNames(bodyStore))
+
+    let ingested = 0, deleted = 0, bytesIn = 0, bytesStored = 0, liveBytesTotal = 0, throttled = false
+    const failed: string[] = []
+    for (const target of targets) {
+      // The size cap is the emergency valve: over it, ingest EVERYTHING (age 0) rather than only what
+      // has aged out, so a runaway producer cannot outrun the drain (in spool mode: cannot fill RAM).
+      let liveBytes = 0
+      for (const f of fs.readdirSync(target.dir)) {
+        if (!f.endsWith('.request.json') && !f.endsWith('.response.json')) continue
+        try { liveBytes += fs.statSync(path.join(target.dir, f)).size } catch { /* raced */ }
+      }
+      liveBytesTotal += liveBytes
+      const overCap = liveBytes > target.capBytes
+      const r = await ingestPass({
+        bodiesDir: target.dir,
+        store: bodyStore,
+        maxAgeMs: overCap ? 0 : BODIES_MAX_AGE_MS,
+        maxBytesPerPass: INGEST_MAX_BYTES_PER_PASS, // THE THROTTLE — never an unbounded boot pass again
+        deleteAfter: true,                          // safe: ingestPass verifies from the DURABLE store first
+        skipNames: skip,                            // don't re-read+re-hash already-durable bodies
+      })
+      ingested += r.ingested; deleted += r.deleted; bytesIn += r.bytesIn; bytesStored += r.bytesStored
+      throttled ||= r.throttled
+      for (const f of r.failed) failed.push(f)
+    }
 
     const purged = purgeArchiveVolumes(BODIES_ARCHIVE_DIR, BODIES_RETENTION_DAYS)
     persistStats.bodiesLastPurge = {
-      at: Date.now(), removedFiles: r.deleted, freedBytes: r.bytesIn,
-      keptFiles: 0, keptBytes: Math.max(0, liveBytes - r.bytesIn),
+      at: Date.now(), removedFiles: deleted, freedBytes: bytesIn,
+      keptFiles: 0, keptBytes: Math.max(0, liveBytesTotal - bytesIn),
     }
-    if (r.ingested > 0 || purged.removed.length > 0) {
-      console.log(`[AgentLens] bodies → store: ingested ${r.ingested}, reclaimed ${r.deleted} file(s) ` +
-        `(${(r.bytesIn / 1024 ** 3).toFixed(2)}GB read → ${(r.bytesStored / 1048576).toFixed(1)}MB new spans)` +
-        `${r.throttled ? ' [throttled — more next pass]' : ''}` +
+    if (ingested > 0 || purged.removed.length > 0) {
+      console.log(`[AgentLens] bodies → store: ingested ${ingested}, reclaimed ${deleted} file(s) ` +
+        `(${(bytesIn / 1024 ** 3).toFixed(2)}GB read → ${(bytesStored / 1048576).toFixed(1)}MB new spans)` +
+        `${SPOOL_MODE ? ' [spool]' : ''}${throttled ? ' [throttled — more next pass]' : ''}` +
         `${purged.removed.length > 0 ? `; purged legacy volume(s) ${purged.removed.join(', ')} (${(purged.freedBytes / 1024 ** 3).toFixed(2)}GB)` : ''}`)
     }
     // A body we could not PROVE we can return is a body we have no right to delete. Say so loudly —
     // a silent skip would look identical to success while the corpus quietly rotted.
-    if (r.failed.length > 0) {
-      console.warn(`[AgentLens] ${r.failed.length} body/bodies could NOT be verified and were KEPT on disk: ${r.failed.slice(0, 5).join('; ')}`)
+    if (failed.length > 0) {
+      console.warn(`[AgentLens] ${failed.length} body/bodies could NOT be verified and were KEPT on disk: ${failed.slice(0, 5).join('; ')}`)
     }
   } catch (e) {
     console.warn('[AgentLens] bodies ingest pass failed:', e)
@@ -385,8 +452,13 @@ function purgeHookEvents(): void {
 
 void archiveOtelBodies() // enforce on boot — a long-dead server must not leave the corpus unbounded
 purgeHookEvents()
-const bodiesPurgeTimer = setInterval(() => { void archiveOtelBodies(); purgeHookEvents() }, 3600e3)
+// Spool mode drains every 60s (the bodies sit in volatile RAM — reclaim them fast); otherwise the
+// legacy hourly cadence is plenty for plain-file bodies on disk.
+const BODIES_PASS_INTERVAL_MS = SPOOL_MODE ? 60_000 : 3600e3
+const bodiesPurgeTimer = setInterval(() => { void archiveOtelBodies() }, BODIES_PASS_INTERVAL_MS)
 bodiesPurgeTimer.unref()
+const hookPurgeTimer = setInterval(() => { purgeHookEvents() }, 3600e3)
+hookPurgeTimer.unref()
 
 // ── Agent-launch burn gate + realtime activity (TRDD-GOD0108C) ────────────────
 // The gate sits behind a PreToolUse hook, so every read here must be in-memory:

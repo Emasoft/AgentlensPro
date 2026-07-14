@@ -9,8 +9,12 @@ import {
   RETENTION_META, configPath, findMeta, loadRetentionConfig, resolveKnobWithSource, setRetentionKey,
   type RetentionKeyMeta,
 } from '../retentionConfig'
-import { RAW_BODIES_ENV, RAW_BODIES_KEY, rawBodyCaptureWithSource, setRawBodyCapture } from '../captureConfig'
-import { ensureTelemetryConfig } from '../telemetryConfig'
+import {
+  RAW_BODIES_ENV, RAW_BODIES_KEY, rawBodyCaptureWithSource, setRawBodyCapture, setSpoolDir, spoolDirConfigured,
+} from '../captureConfig'
+import { ensureTelemetryConfig, type EnsureResult } from '../telemetryConfig'
+import { ensureRamDisk, spoolDir, spoolSizeMb, type EnsureRamDiskResult } from '../ramdisk'
+import { installSpoolLaunchAgent, removeSpoolLaunchAgent } from './spoolLaunchAgent'
 
 /** The one non-numeric knob (TRDD-BKF5NZD3): raw-body capture is a boolean, and it is OFF by default
  *  because turning it on costs ~35 GB/day of SSD writes. Special-cased rather than forced into the
@@ -81,18 +85,7 @@ async function setConfig(dir: string, key: string, rawValue: string): Promise<nu
       console.error(`value must be on|off, got: ${JSON.stringify(rawValue)}`)
       return 1
     }
-    setRawBodyCapture(dir, enabled)
-    // Apply to settings.json NOW rather than waiting for a server restart: with capture turned OFF
-    // the whole point is to stop the bleeding immediately, and a user who has to remember a second
-    // command to make the setting real does not have a working off switch.
-    const r = await ensureTelemetryConfig({ dataDir: dir, captureRawBodies: enabled })
-    console.log(`set ${CAPTURE_KEY} = ${enabled ? 'on' : 'off'} in ${configPath(dir)}`)
-    if (r.removed.includes(RAW_BODIES_KEY)) console.log(`removed ${RAW_BODIES_KEY} from ${r.settingsPath}`)
-    else if (r.added.includes(RAW_BODIES_KEY) || enabled) console.log(`wired ${RAW_BODIES_KEY} → file:${r.bodiesDir}`)
-    // Claude Code reads its env block at LAUNCH, so a settings edit reaches only FUTURE sessions —
-    // this is exactly why 13 already-running sessions kept writing through the first fix.
-    console.log('restart your Claude Code sessions for this to take effect (env is read at launch).')
-    return 0
+    return applyCaptureSetting(dir, enabled)
   }
   const m: RetentionKeyMeta | undefined = findMeta(key)
   if (!m) {
@@ -109,6 +102,80 @@ async function setConfig(dir: string, key: string, rawValue: string): Promise<nu
   setRetentionKey(dir, m.key, value)
   console.log(`set ${m.key} = ${value} ${m.unit} in ${configPath(dir)}`)
   console.log(`restart the server/daemon to apply:  agentlenspro server restart`)
+  return 0
+}
+
+/** Seams for the capture on/off flow, so the fail-fast refusal + spool wiring are unit-testable
+ *  without a real RAM disk / launchd (TRDD-K3WDPR7M Phase 3). Defaults are the real implementations. */
+export interface CaptureToggleDeps {
+  ensureRamDisk: (sizeMb: number) => EnsureRamDiskResult
+  ensureTelemetry: (opts: { dataDir: string; captureRawBodies: boolean; bodiesDir?: string }) => Promise<EnsureResult>
+  installSpoolAgent: () => void
+  removeSpoolAgent: () => void
+}
+
+/** ProgramArguments for the boot-remount LaunchAgent: this node re-running this CLI's `spool ensure`. */
+function spoolProgramArgs(): string[] {
+  return [process.execPath, process.argv[1] ?? 'agentlenspro', 'spool', 'ensure']
+}
+
+function realCaptureDeps(): CaptureToggleDeps {
+  return {
+    ensureRamDisk: (mb) => ensureRamDisk(mb),
+    ensureTelemetry: (o) => ensureTelemetryConfig(o),
+    installSpoolAgent: () => { installSpoolLaunchAgent(spoolProgramArgs()) },
+    removeSpoolAgent: () => { removeSpoolLaunchAgent() },
+  }
+}
+
+/**
+ * Turn raw-body capture on/off. ON routes bodies to a RAM-disk spool so the ~30 GB/day of writes land
+ * in volatile memory instead of the SSD; OFF deletes the sink and removes the boot-remount agent.
+ *
+ * FAIL-FAST (item 3): if the RAM disk cannot be created/mounted, capture is REFUSED — non-zero exit,
+ * clear message, and the env key is NEVER pointed at an SSD path. Nothing is persisted on that failure.
+ */
+export async function applyCaptureSetting(
+  dir: string,
+  enabled: boolean,
+  deps: CaptureToggleDeps = realCaptureDeps(),
+): Promise<number> {
+  if (enabled) {
+    let spool: EnsureRamDiskResult
+    try {
+      spool = deps.ensureRamDisk(spoolSizeMb(process.env))
+    } catch (e) {
+      console.error(`cannot enable ${CAPTURE_KEY}: RAM-disk spool unavailable — ${(e as Error).message}`)
+      console.error('capture NOT enabled (refusing to write ~30 GB/day of raw bodies to the SSD).')
+      return 1
+    }
+    const bodies = spoolDir(spool.mountPoint)
+    // Wire settings.json FIRST (the failure-prone async I/O) and persist the durable knob only after it
+    // succeeds — so a failed converge never leaves capture claiming "on" with no sink actually wired.
+    await deps.ensureTelemetry({ dataDir: dir, captureRawBodies: true, bodiesDir: bodies })
+    setRawBodyCapture(dir, true)
+    setSpoolDir(dir, bodies)
+    deps.installSpoolAgent()
+    console.log(`set ${CAPTURE_KEY} = on in ${configPath(dir)}`)
+    console.log(`RAM-disk spool ready → ${spool.mountPoint} (${Math.round(spool.sizeBytes / 1048576)} MB)`)
+    console.log(`wired ${RAW_BODIES_KEY} → file:${bodies}`)
+    console.log('restart your Claude Code sessions for this to take effect (env is read at launch).')
+    return 0
+  }
+  // OFF: read the previously-configured spool FIRST so ensureTelemetry deletes exactly the sink WE
+  // wrote (its guard matches only `file:${bodiesDir}`); fall back to the default dir for a legacy
+  // (pre-spool) capture-on install whose key pointed at DATA_DIR/otel-bodies. Persist OFF up front —
+  // the whole point of "off" is to stop the bleeding even if the settings write then fails.
+  const prevSpool = spoolDirConfigured(dir)
+  setRawBodyCapture(dir, false)
+  const r = await deps.ensureTelemetry({
+    dataDir: dir, captureRawBodies: false, ...(prevSpool ? { bodiesDir: prevSpool } : {}),
+  })
+  setSpoolDir(dir, undefined)
+  deps.removeSpoolAgent()
+  console.log(`set ${CAPTURE_KEY} = off in ${configPath(dir)}`)
+  if (r.removed.includes(RAW_BODIES_KEY)) console.log(`removed ${RAW_BODIES_KEY} from ${r.settingsPath}`)
+  console.log('restart your Claude Code sessions for this to take effect (env is read at launch).')
   return 0
 }
 
