@@ -38,9 +38,25 @@ export interface Store {
    *  no cross-file content-addressing, so the dedup has to be OURS or every flush would re-store
    *  spans that are already on disk. */
   known: Set<string>
-  /** Monotonic part number, so a flush can never overwrite an existing (immutable) part. */
+  /** Per-store sequence used in part names — see partName() for why names must be collision-free. */
   nextPart: number
   close(): Promise<void>
+}
+
+/**
+ * A part name that CANNOT collide across concurrent writers. This is load-bearing: DuckDB's
+ * `COPY TO` SILENTLY OVERWRITES an existing file (verified by experiment, 2026-07-14), so if two
+ * processes — the server's hourly ingest pass and a CLI backfill, say — ever derived the same name,
+ * the second flush would silently DESTROY the first's spans: dangling references, unrecoverable
+ * bodies, and nothing notices until someone asks for one. The first scheme did exactly that (a
+ * monotonic counter seeded from the directory's FILE COUNT — two writers, same count, same name).
+ *
+ * epoch-ms + pid + per-store sequence needs no coordination: different processes differ in pid,
+ * different stores in one process differ in seq, and one store is single-threaded per flush. Order
+ * never mattered anyway — reads glob every part, and assembly order comes from the `pos` column.
+ */
+function partName(seq: number): string {
+  return `part-${Date.now()}-${process.pid}-${seq}.parquet`
 }
 
 export const DEFAULT_MEMORY_LIMIT = '8GB'
@@ -117,10 +133,11 @@ export async function openStore(opts: StoreOptions): Promise<Store> {
     for (const r of rows) known.add(String(r.sha))
   }
 
-  const nextPart = partFiles(opts.dir, BLOBS_DIR).length + partFiles(opts.dir, BODIES_DIR).length
-
   return {
-    con, dir: opts.dir, known, nextPart,
+    // nextPart starts at 0 per store instance: it only disambiguates flushes WITHIN this store —
+    // cross-process uniqueness comes from the pid+timestamp in partName(). Deriving it from the
+    // directory's file count (the first scheme) was the collision bug.
+    con, dir: opts.dir, known, nextPart: 0,
     async close() { con.closeSync(); inst.closeSync() },
   }
 }
@@ -134,11 +151,14 @@ export async function flush(store: Store): Promise<number> {
   const bodies = Number((await store.con.runAndReadAll('SELECT count(*) c FROM body')).getRowObjects()[0].c)
   if (n === 0 && bodies === 0) return 0
 
-  const tag = String(store.nextPart++).padStart(6, '0')
+  const tag = partName(store.nextPart++)
   const write = async (table: string, sub: string) => {
     const c = Number((await store.con.runAndReadAll(`SELECT count(*) c FROM ${table}`)).getRowObjects()[0].c)
     if (c === 0) return
-    const out = path.join(store.dir, sub, `part-${tag}.parquet`)
+    const out = path.join(store.dir, sub, tag)
+    // Defence in depth behind the unique name: COPY TO silently overwrites, and an overwritten part
+    // is destroyed data. If this ever fires, the naming invariant is broken — stop, don't clobber.
+    if (fs.existsSync(out)) throw new Error(`refusing to overwrite existing part ${out} — part naming must be collision-free`)
     await store.con.run(`COPY ${table} TO ${q(out)} (FORMAT PARQUET, COMPRESSION ZSTD)`)
     await store.con.run(`DELETE FROM ${table}`) // in-memory only — costs no disk write
   }

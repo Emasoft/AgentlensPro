@@ -132,7 +132,9 @@ export async function ingestPass(opts: IngestPassOptions): Promise<IngestPassRes
     try { raw = readFile(f.p) } catch { continue } // vanished mid-pass — fine
 
     try {
-      const r = await ingestBody(store, f.name, raw) // (1) refuses anything not byte-exact
+      // f.mtime = the CAPTURE time. Omitting it stamps the body with ingest time and silently breaks
+      // every time-window query over the store (the first backfill's mistake).
+      const r = await ingestBody(store, f.name, raw, f.mtime) // (1) refuses anything not byte-exact
       res.ingested++
       res.bytesIn += f.size
       res.bytesStored += r.newBytes

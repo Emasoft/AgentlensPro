@@ -14,6 +14,8 @@
 //      it is the property the whole 59x saving rests on.
 import { DuckDBTimestampValue } from '@duckdb/node-api'
 import { createHash } from 'crypto'
+import * as fs from 'fs'
+import * as path from 'path'
 import { allOf, flush, Store } from './db'
 import { Part, reassemble, sectionize, sha256 } from './sections'
 
@@ -37,8 +39,14 @@ export interface BodyMeta {
 }
 
 /** Pull the few fields worth indexing. Tolerant by design: an unparseable or unexpected body must
- *  still be STORED (its bytes are the point) — it just gets null metadata. */
-export function extractMeta(raw: string, srcName: string): BodyMeta {
+ *  still be STORED (its bytes are the point) — it just gets null metadata.
+ *
+ *  `tsMs` is the body's CAPTURE time (the source file's mtime / the archive entry's mtimeMs) and the
+ *  caller must pass it whenever it knows it: defaulting to "now" stamps a backfilled body with its
+ *  INGEST time, which silently breaks every time-window query over the store. (The first backfill did
+ *  exactly that — recoverable later via the retained .wad .idx entries and the span body-pointer
+ *  events, see TRDD-K3WDPR7M — but new ingests must never add to the damage.) */
+export function extractMeta(raw: string, srcName: string, tsMs?: number): BodyMeta {
   const kind: BodyMeta['kind'] = srcName.includes('.response.') ? 'response' : 'request'
   let sessionId: string | null = null
   let model: string | null = null
@@ -55,7 +63,7 @@ export function extractMeta(raw: string, srcName: string): BodyMeta {
       if (typeof u.session_id === 'string') sessionId = u.session_id
     }
   } catch { /* keep the bytes, lose the index — never the other way round */ }
-  return { sessionId, model, kind, ts: new Date() }
+  return { sessionId, model, kind, ts: tsMs !== undefined ? new Date(tsMs) : new Date() }
 }
 
 /** The body's identity IS its content hash: ingesting the same bytes twice is idempotent by
@@ -76,7 +84,7 @@ async function bodyExists(store: Store, bodyId: string): Promise<boolean> {
  * THROWS if the body would not reconstruct byte-identically — we refuse to store what we cannot
  * return.
  */
-export async function ingestBody(store: Store, srcName: string, raw: string): Promise<IngestResult> {
+export async function ingestBody(store: Store, srcName: string, raw: string, tsMs?: number): Promise<IngestResult> {
   const bodyId = bodyIdOf(raw)
   const rawBytes = Buffer.byteLength(raw, 'utf8')
 
@@ -110,7 +118,7 @@ export async function ingestBody(store: Store, srcName: string, raw: string): Pr
   }
   app.closeSync()
 
-  const meta = extractMeta(raw, srcName)
+  const meta = extractMeta(raw, srcName, tsMs)
   const b = await store.con.createAppender('body')
   b.appendVarchar(bodyId)
   b.appendVarchar(srcName)
@@ -184,4 +192,52 @@ export async function reconstructBody(store: Store, bodyId: string): Promise<str
 /** Make everything ingested so far durable. Returns the number of spans written. */
 export async function flushStore(store: Store): Promise<number> {
   return flush(store)
+}
+
+/**
+ * Export bodies from the store as plain files into `destDir` — the store half of the
+ * `/api/bodies/export` read path (TRDD-K3WDPR7M). Once ingestPass reclaims a source file, the store
+ * is the ONLY place that body exists; without this, "export last week's bodies" would silently return
+ * only whatever the legacy .wad happened to hold, and the caller would read the gap as "no traffic".
+ *
+ * One body at a time (reconstruct → write → free), never the corpus — the memory discipline the whole
+ * store follows. A name that already exists in destDir is SKIPPED, so this composes with the legacy
+ * archive extraction (whichever runs first wins; the bytes are identical when both have the body).
+ * Every reconstruction passes through reconstructBody's sha256 gate, so an exported file is PROVEN to
+ * be the original — this endpoint must never fabricate evidence.
+ */
+export async function exportBodiesFromStore(
+  store: Store,
+  destDir: string,
+  sinceMs: number,
+  untilMs: number,
+): Promise<{ files: number; bytes: number; failed: string[] }> {
+  fs.mkdirSync(destDir, { recursive: true })
+  // NOTE on `ts`: capture time for bodies ingested after the tsMs plumbing landed; INGEST time for the
+  // first backfill (recoverable — see extractMeta). Over-inclusive beats silently missing, so the
+  // window filters on what we have.
+  const rows = (await store.con.runAndReadAll(`
+    SELECT body_id, src_name FROM ${allOf(store, 'body')}
+    WHERE epoch_ms(ts) >= ${Math.floor(sinceMs)} AND epoch_ms(ts) <= ${untilMs === Infinity ? Number.MAX_SAFE_INTEGER : Math.floor(untilMs)}
+  `)).getRowObjects()
+
+  let files = 0
+  let bytes = 0
+  const failed: string[] = []
+  for (const r of rows) {
+    const name = String(r.src_name)
+    // Path safety: src_name is data (it came off a filename we once read, but the store contents
+    // could in principle be anything) — never let it climb out of destDir.
+    const out = path.join(destDir, path.basename(name))
+    if (fs.existsSync(out)) continue // the archive half already produced it
+    try {
+      const raw = await reconstructBody(store, String(r.body_id))
+      fs.writeFileSync(out, raw)
+      files++
+      bytes += Buffer.byteLength(raw, 'utf8')
+    } catch (e) {
+      failed.push(`${name}: ${(e as Error).message}`) // named, never silently skipped
+    }
+  }
+  return { files, bytes, failed }
 }

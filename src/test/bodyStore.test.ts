@@ -5,7 +5,7 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { flush, memoryLimit, openStore, Store } from '../store/db'
-import { bodyIdOf, extractMeta, ingestBody, reconstructBody } from '../store/bodyStore'
+import { bodyIdOf, exportBodiesFromStore, extractMeta, ingestBody, reconstructBody } from '../store/bodyStore'
 import { sha256 } from '../store/sections'
 
 const REAL_BODIES = path.join(os.homedir(), '.agentlens', 'otel-bodies')
@@ -109,6 +109,86 @@ suite('bodyStore — the store must return exactly what it was given', () => {
 
   test('a body id is its content hash — ingestion is idempotent by construction', () => {
     assert.strictEqual(bodyIdOf('{"a":1}'), sha256('{"a":1}'))
+  })
+})
+
+suite('bodyStore — CONCURRENT writers must never destroy each other (part-name collision)', () => {
+  test('two stores flushing into the SAME directory produce distinct parts and lose nothing', async () => {
+    // The bug this pins: part names were derived from the directory's FILE COUNT, so two writers
+    // (the server's ingest pass + a CLI backfill — a combination that nearly happened for real on
+    // 2026-07-14) computed the SAME name, and DuckDB's COPY TO silently OVERWRITES an existing file
+    // (verified by experiment). The second flush destroyed the first's spans: dangling references,
+    // unrecoverable bodies, and nothing notices until someone asks for one.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentlens-store-'))
+    const a = await openStore({ dir, memoryLimit: '2GB', threads: 2 })
+    const b = await openStore({ dir, memoryLimit: '2GB', threads: 2 })
+    try {
+      // Different content per writer, so a lost part is DETECTABLE as a missing body.
+      const rawA = synthBody(3)
+      const rawB = JSON.stringify({ model: 'other', tools: [{ t: 'b'.repeat(2000) }] })
+      const ra = await ingestBody(a, 'a.request.json', rawA)
+      const rb = await ingestBody(b, 'b.request.json', rawB)
+      // Both flush from the same on-disk state — the exact collision scenario.
+      await flush(a)
+      await flush(b)
+
+      // A THIRD reader sees the union of the durable parts. Both bodies must be retrievable —
+      // if a part was overwritten, one of these reconstructions throws on a missing blob.
+      const c = await openStore({ dir, memoryLimit: '2GB', threads: 2 })
+      try {
+        assert.strictEqual(await reconstructBody(c, ra.bodyId), rawA, 'writer A\'s body must survive writer B\'s flush')
+        assert.strictEqual(await reconstructBody(c, rb.bodyId), rawB, 'writer B\'s body must survive')
+      } finally { await c.close() }
+
+      // Duplicate spans across writers (each has its own dedup set) are WASTE, not corruption —
+      // reads key by sha, so either copy serves. The invariant under test is no LOSS.
+    } finally { await a.close(); await b.close() }
+  })
+})
+
+suite('bodyStore — export from the store (the read path for reclaimed bodies)', () => {
+  test('the store half of /api/bodies/export: window filter, skip-existing, byte-exact', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentlens-store-'))
+    const store = await openStore({ dir, memoryLimit: '2GB', threads: 2 })
+    try {
+      const t0 = Date.parse('2026-07-01T00:00:00Z')
+      const inWin = synthBody(2)
+      const outWin = JSON.stringify({ model: 'old', tools: [{ t: 'z'.repeat(2000) }] })
+      await ingestBody(store, 'in.request.json', inWin, t0)
+      await ingestBody(store, 'out.request.json', outWin, t0 - 30 * 86400e3) // a month earlier
+
+      const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'agentlens-export-'))
+      // A pre-existing file with the same name must be SKIPPED, not clobbered — the legacy archive
+      // half of the export may have produced it first, and the two halves must compose.
+      fs.writeFileSync(path.join(dest, 'in.request.json'), 'already here')
+
+      const r1 = await exportBodiesFromStore(store, dest, t0 - 86400e3, t0 + 86400e3)
+      assert.strictEqual(r1.files, 0, 'the only in-window body already exists — nothing written')
+      assert.strictEqual(fs.readFileSync(path.join(dest, 'in.request.json'), 'utf8'), 'already here')
+
+      fs.unlinkSync(path.join(dest, 'in.request.json'))
+      const r2 = await exportBodiesFromStore(store, dest, t0 - 86400e3, t0 + 86400e3)
+      assert.strictEqual(r2.files, 1, 'in-window body exported; out-of-window one filtered')
+      assert.deepStrictEqual(r2.failed, [])
+      assert.strictEqual(fs.readFileSync(path.join(dest, 'in.request.json'), 'utf8'), inWin, 'byte-exact')
+      assert.ok(!fs.existsSync(path.join(dest, 'out.request.json')))
+    } finally { await store.close() }
+  })
+
+  test('ts is the CAPTURE time when the caller knows it — not the ingest time', async () => {
+    // The first backfill stamped 22k bodies with ingest time because this parameter did not exist;
+    // every time-window query over those rows lies until the recovery migration runs. New ingests
+    // must never add to that damage.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentlens-store-'))
+    const store = await openStore({ dir, memoryLimit: '2GB', threads: 2 })
+    try {
+      const captured = Date.parse('2026-07-03T12:00:00Z')
+      const r = await ingestBody(store, 't.request.json', synthBody(1), captured)
+      const row = (await store.con.runAndReadAll(
+        `SELECT epoch_ms(ts) t FROM body WHERE body_id = '${r.bodyId}'`,
+      )).getRowObjects()[0]
+      assert.strictEqual(Number(row.t), captured)
+    } finally { await store.close() }
   })
 })
 

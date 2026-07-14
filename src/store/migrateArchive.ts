@@ -82,7 +82,9 @@ export async function migrateArchiveToStore(opts: ArchiveMigrationOptions): Prom
     r.bytesIn += e.size
 
     try {
-      const ing = await ingestBody(store, e.name, raw)
+      // e.mtimeMs is the ORIGINAL capture time, preserved by the archiver in the .idx — pass it
+      // through or the store stamps the lump with today's date and time-window queries lie.
+      const ing = await ingestBody(store, e.name, raw, e.mtimeMs)
       if (ing.newBlobs === 0 && ing.newBytes === 0) r.alreadyPresent++
       r.ingested++
       r.bytesStored += ing.newBytes

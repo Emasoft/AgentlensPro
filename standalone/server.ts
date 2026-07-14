@@ -56,6 +56,7 @@ import { SegmentedSpanStore, migrateLegacySpansFile, spanTimestampMs } from '../
 import { purgeArchiveVolumes, archiveDiskUsage, extractArchive } from '../src/bodyArchive'
 import { openStore, type Store } from '../src/store/db'
 import { DEFAULT_MAX_BYTES_PER_PASS, ingestPass } from '../src/store/ingestPass'
+import { exportBodiesFromStore } from '../src/store/bodyStore'
 import {
   loadLogOffsets, loadPersistedCards,
   recordCollectorStart, recordCollectorHeartbeat, recordCollectorStop, computeCollectorGaps,
@@ -2876,9 +2877,27 @@ const uiServer = http.createServer(async (req, res) => {
         const since = typeof body.sinceMs === 'number' ? body.sinceMs : 0
         const until = typeof body.untilMs === 'number' ? body.untilMs : Infinity
         const r = extractArchive(BODIES_ARCHIVE_DIR, destDir, e => e.mtimeMs >= since && e.mtimeMs <= until)
-        console.log(`[AgentLens] bodies export: ${r.files} file(s), ${(r.bytes / 1048576).toFixed(1)}MB → ${destDir}`)
-        res.writeHead(200, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({ ...r, destDir }))
+        // The store half of the export (TRDD-K3WDPR7M): once ingestPass reclaims a source file, the
+        // content-addressed store is the ONLY place that body exists. Without this, an export window
+        // would return only what the legacy .wad happens to hold and the caller would read the gap as
+        // "no traffic". Skip-existing makes the two halves compose (identical bytes either way).
+        void (async () => {
+          let storeFiles = 0
+          let storeBytes = 0
+          let storeFailed: string[] = []
+          try {
+            bodyStore ??= await openStore({ dir: path.join(DATA_DIR, 'store') })
+            const s = await exportBodiesFromStore(bodyStore, destDir, since, until)
+            storeFiles = s.files; storeBytes = s.bytes; storeFailed = s.failed
+          } catch (e) {
+            // The archive half already succeeded — report the store half's failure rather than
+            // failing the whole export, but NEVER silently (a partial export must say so).
+            storeFailed = [`store export failed: ${e instanceof Error ? e.message : String(e)}`]
+          }
+          console.log(`[AgentLens] bodies export: ${r.files} archive + ${storeFiles} store file(s), ${((r.bytes + storeBytes) / 1048576).toFixed(1)}MB → ${destDir}${storeFailed.length ? ` (${storeFailed.length} FAILED)` : ''}`)
+          res.writeHead(200, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ files: r.files + storeFiles, bytes: r.bytes + storeBytes, fromArchive: r.files, fromStore: storeFiles, failed: storeFailed, destDir }))
+        })()
       } catch (e) {
         res.writeHead(500, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ error: String(e instanceof Error ? e.message : e) }))
