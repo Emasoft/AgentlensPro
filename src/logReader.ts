@@ -226,6 +226,11 @@ export class LogReader {
   // cold-start value. Exposed via getLogScanStats() and the server's /api/debug/log-scan-stats.
   private _incrementalReads = 0
   private _fullReads = 0
+  // TRDD-X2E6OSWK — how many files the per-file change gate (_processFile) has stat()ed. This is the
+  // metric the CPU-spin fix is judged on: a FULL scan stats every log file on the machine (~12.5k
+  // here), a TARGETED scan stats only the paths fs.watch actually named. If this keeps climbing by
+  // thousands per scan in steady state, the incremental path has regressed back to a full sweep.
+  private _filesStatted = 0
 
   constructor(options: LogReaderOptions = {}) {
     this.log = options.log ?? (() => { /* silent */ })
@@ -245,8 +250,8 @@ export class LogReader {
    * Live-tail proof counters (TRDD-U0UYC38A): incremental (tail-from-offset) vs full (from-0)
    * parses of the large streaming logs. See the field comments for the invariant they prove.
    */
-  getLogScanStats(): { incrementalReads: number; fullReads: number } {
-    return { incrementalReads: this._incrementalReads, fullReads: this._fullReads }
+  getLogScanStats(): { incrementalReads: number; fullReads: number; filesStatted: number } {
+    return { incrementalReads: this._incrementalReads, fullReads: this._fullReads, filesStatted: this._filesStatted }
   }
 
   /**
@@ -409,10 +414,29 @@ export class LogReader {
   }
 
   /**
-   * Scans all log directories and returns new/updated session results.
-   * Files that are new or have changed since the last scan are re-parsed.
+   * Scans log directories and returns new/updated session results. Files that are new or have grown
+   * since the last scan are re-parsed (incrementally, from their stored tail offset).
+   *
+   * TRDD-X2E6OSWK — TWO MODES, because the single full-sweep mode was a CPU sink:
+   *
+   *  - FULL (no argument): recursive readdir of every log root + one statSync per file found. On
+   *    this machine that is ~120 directories and ~12,508 `.jsonl` files. It was previously run on a
+   *    flat 5s timer AND on every debounced fs.watch burst, uncached — profiled at ~8.5% of the
+   *    process's wall-clock CPU, forever (reports/cpu-profile/20260714_203932+0200-cpu-spin.md).
+   *    It is now only the slow correctness BACKSTOP.
+   *
+   *  - TARGETED (`changedPaths`): stat + parse ONLY the paths the caller's fs.watch named. One stat
+   *    per changed file instead of 12,508. This is the steady state.
+   *
+   * Both modes go through the SAME per-file change gate (`_processFile`), so a targeted scan can
+   * never double-parse bytes a full scan already consumed, and vice versa — the tail offsets are
+   * the single source of truth for "what has been read", not the scan mode.
+   *
+   * A targeted scan is NOT a correctness substitute for the full one: fs.watch coalesces (and, on
+   * macOS, can drop) events, so the caller MUST keep running the full sweep on a slow timer.
    */
-  scan(): LogSessionResult[] {
+  scan(changedPaths?: readonly string[]): LogSessionResult[] {
+    if (changedPaths) return this._scanPaths(changedPaths)
     return [
       ...this._scanClaude(),
       ...this._scanCodex(),
@@ -420,6 +444,74 @@ export class LogReader {
       ...this._scanCopilotVSCode(),
       ...this._scanOpenCode(),
     ]
+  }
+
+  /** The TARGETED scan (see `scan`): only the named paths are touched. */
+  private _scanPaths(changedPaths: readonly string[]): LogSessionResult[] {
+    const results: LogSessionResult[] = []
+    const roots = this._logRoots()          // resolved once per scan, not once per path
+    const seen = new Set<string>()
+    for (const filePath of changedPaths) {
+      if (seen.has(filePath)) continue      // a watch burst names the same file many times
+      seen.add(filePath)
+      const agentKey = this._agentKeyForPath(filePath, roots)
+      if (!agentKey) continue               // not a log we own (lock file, editor swapfile, a dir…)
+      const result = this.parseFile(filePath, agentKey)
+      if (result) results.push(result)
+    }
+    // OpenCode is ONE multi-session SQLite DB with its own 2-stat change gate, and its writes land
+    // on the `-wal` sibling rather than the `.db` file — a path-level filter would miss them. Always
+    // re-checking it costs 2 stats per data dir, so the targeted scan keeps OpenCode exactly as
+    // fresh as the full sweep does.
+    results.push(...this._scanOpenCode())
+    return results
+  }
+
+  /** The log roots, resolved once (each resolver stats its candidates, so don't call them per path). */
+  private _logRoots(): { claude: string[]; codex: string[]; copilot: string | null; vscode: string[] } {
+    return {
+      claude: claudeProjectsDirs(),
+      codex: codexSessionsDirs(),
+      copilot: copilotSessionStateDir(),
+      vscode: vscodeFamilyWorkspaceStorageRoots(),
+    }
+  }
+
+  /**
+   * Which agent (if any) owns an absolute path — the classifier the TARGETED scan uses in place of a
+   * directory walk. Returns null for anything no agent claims: a recursive fs.watch reports EVERY
+   * write under the watched roots (lock files, `.tmp` siblings, directories), not just our logs.
+   * The per-agent rules mirror the full scanners exactly, so the two modes cannot disagree about
+   * which file backs which session.
+   */
+  private _agentKeyForPath(
+    filePath: string,
+    roots: { claude: string[]; codex: string[]; copilot: string | null; vscode: string[] },
+  ): string | null {
+    const under = (root: string): boolean =>
+      filePath === root || filePath.startsWith(root.endsWith(path.sep) ? root : root + path.sep)
+    const inChatSessions = (): boolean => path.basename(path.dirname(filePath)) === 'chatSessions'
+
+    if (filePath.endsWith('.jsonl')) {
+      for (const dir of roots.claude) if (under(dir)) return 'claude'
+      for (const dir of roots.codex) if (under(dir)) return 'codex'
+      // Copilot CLI: only <uuid>/events.jsonl is a session (_scanCopilot builds that exact path).
+      if (roots.copilot && under(roots.copilot)) return path.basename(filePath) === 'events.jsonl' ? 'copilot' : null
+      for (const root of roots.vscode) if (under(root) && inChatSessions()) return 'copilot_vscode'
+      return null
+    }
+
+    if (filePath.endsWith('.json')) {
+      for (const root of roots.vscode) {
+        if (!under(root) || !inChatSessions()) continue
+        // _scanCopilotVSCode prefers the newer <uuid>.jsonl delta log and SKIPS the <uuid>.json
+        // snapshot when both exist. Mirror that, or a touched snapshot would overwrite the card the
+        // delta log just produced with an older, coarser one.
+        return fs.existsSync(filePath.slice(0, -'.json'.length) + '.jsonl') ? null : 'copilot_vscode_json'
+      }
+    }
+
+    return null
   }
 
   // ── Claude Code ─────────────────────────────────────────────────────────────
@@ -1513,6 +1605,7 @@ export class LogReader {
     parseFn: () => LogSessionResult | null,
   ): LogSessionResult | null {
     try {
+      this._filesStatted++   // TRDD-X2E6OSWK: the scan-gate cost meter (see the field's comment)
       const stat = fs.statSync(filePath)
       const prev = this.fileState.get(filePath)
       if (prev && stat.mtimeMs === prev.mtimeMs && stat.size === prev.bytesRead) return null

@@ -59,6 +59,8 @@ suite('LogReader — export/import round-trip makes an unchanged file skip on th
     // The offset is present, so the export reflects it (proving it seeded the in-memory state).
     assert.strictEqual(restarted.exportFileState()[file].bytesRead, stat.size)
     // No full read has happened yet — the counters are still zero (the file was skipped, not re-parsed).
-    assert.deepStrictEqual(restarted.getLogScanStats(), { incrementalReads: 0, fullReads: 0 })
+    // `filesStatted` (TRDD-X2E6OSWK) is the third counter: importFileState stats the file to validate
+    // its identity, but that is not the SCAN gate, so it stays 0 until a scan actually runs.
+    assert.deepStrictEqual(restarted.getLogScanStats(), { incrementalReads: 0, fullReads: 0, filesStatted: 0 })
   })
 })

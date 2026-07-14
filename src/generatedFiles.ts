@@ -66,20 +66,67 @@ export interface ScratchIndexResult {
   truncated: boolean   // true if the tree held MORE than maxFiles — the cap was hit (never silent)
 }
 
+// ── Directory-listing cache (TRDD-X2E6OSWK) ───────────────────────────────────
+// attachGeneratedFiles() runs on EVERY incremental parse of EVERY Claude session — i.e. on every
+// JSONL append, several times a second across a busy machine. It was re-reading the OS temp roots
+// (/tmp, /private/tmp, /var/folders/…/T — big, shared directories) plus every `claude-*` tree under
+// them, from scratch, every single time. A CPU profile of the FIXED server under a 4-writer load
+// caught it red-handed: 14.2s of `readdir` across 948 parses (~15ms each) — 9.4% of wall-clock CPU
+// and, once the two loops in TRDD-X2E6OSWK's brief were fixed, the single largest non-idle cost left.
+//
+// The gate is the directory's OWN mtime, which POSIX updates whenever an entry is created, removed,
+// or renamed inside it. So: a new `claude-*` tree bumps the root's mtime; a new project slug bumps
+// the uid dir's mtime; a new session dir bumps the slug's mtime. Every one of those is therefore
+// still discovered on the very next call — this caches the LISTING, it does not cache the ANSWER.
+// (Writes to a file's CONTENT do not bump the parent's mtime — which is exactly why this is safe:
+// the listing cannot go stale for anything the listing is used to find, and file sizes/mtimes are
+// still statted fresh below.)
+const listingCache = new Map<string, { mtimeMs: number; names: string[] }>()
+const LISTING_CACHE_MAX = 5000   // a scratch tree per session adds up over a long uptime
+
+// The cost meter this fix is judged on: `readdirs` must stay ~flat while a session is being appended
+// to, instead of climbing on every parse. Read by the tests and by /api/debug/log-scan-stats.
+let listingReaddirs = 0
+let listingHits = 0
+
+function listDirCached(dir: string): string[] {
+  let mtimeMs: number
+  try { mtimeMs = fs.statSync(dir).mtimeMs } catch { listingCache.delete(dir); return [] }
+  const hit = listingCache.get(dir)
+  if (hit && hit.mtimeMs === mtimeMs) { listingHits++; return hit.names }
+  let names: string[]
+  try { names = fs.readdirSync(dir) } catch { listingCache.delete(dir); return [] }
+  listingReaddirs++
+  // Pure cache, never state: dropping it costs one re-listing, so a hard clear on overflow is a
+  // correct (and bounded) eviction policy.
+  if (listingCache.size >= LISTING_CACHE_MAX) listingCache.clear()
+  listingCache.set(dir, { mtimeMs, names })
+  return names
+}
+
+/** Real readdir calls vs listing-cache hits inside the scratch indexer. */
+export function scratchListingStats(): { readdirs: number; hits: number; cached: number } {
+  return { readdirs: listingReaddirs, hits: listingHits, cached: listingCache.size }
+}
+
+/** Drop the cached directory listings. Exposed for tests; not needed in production (the mtime gate
+ *  keeps entries honest on its own). */
+export function clearScratchListingCache(): void {
+  listingCache.clear()
+}
+
 // Locate the session's scratch directories: {root}/claude-*/<project-slug>/<sessionUuid>. Shallow,
-// guarded readdir at each level — a slug/uid we can't read is skipped, not fatal (fail-open on
+// guarded listing at each level — a slug/uid we can't read is skipped, not fatal (fail-open on
 // discovery, fail-fast on genuinely bad input is not applicable here — a missing tree is normal).
+// The per-session existence check stays a REAL statSync every call: it is one syscall, and it is the
+// one thing that must never be served from a cache.
 function findSessionScratchDirs(sessionUuid: string, roots: string[]): string[] {
   const dirs: string[] = []
   for (const root of roots) {
-    let uidDirs: string[]
-    try { uidDirs = fs.readdirSync(root) } catch { continue }
-    for (const uid of uidDirs) {
+    for (const uid of listDirCached(root)) {
       if (!uid.startsWith('claude-')) continue
       const uidPath = path.join(root, uid)
-      let slugs: string[]
-      try { slugs = fs.readdirSync(uidPath) } catch { continue }
-      for (const slug of slugs) {
+      for (const slug of listDirCached(uidPath)) {
         const candidate = path.join(uidPath, slug, sessionUuid)
         try { if (fs.statSync(candidate).isDirectory()) dirs.push(candidate) } catch { /* not here */ }
       }
@@ -103,9 +150,10 @@ export function indexScratchTree(
   let truncated = false
   while (queue.length > 0) {
     const dir = queue.shift() as string
-    let names: string[]
-    try { names = fs.readdirSync(dir) } catch { continue }
-    for (const name of names) {
+    // Same mtime-gated listing (TRDD-X2E6OSWK): a file ADDED to this scratch dir bumps the dir's
+    // mtime and is listed on the next call, while the per-file size/mtime below is always statted
+    // fresh — so a file that merely GREW is still reported at its current size.
+    for (const name of listDirCached(dir)) {
       const full = path.join(dir, name)
       let st: fs.Stats
       try { st = fs.statSync(full) } catch { continue }

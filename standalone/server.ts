@@ -13,6 +13,7 @@ import * as path from 'path'
 import * as os from 'os'
 import { exec, execFile } from 'child_process'
 import { summarizeSpans } from '../src/spanSummarizer'
+import { VersionedCache } from '../src/derivedCache'
 import { mergeOtelAndLogSessions, linkSubagentTranscripts } from '../src/feedMergePolicy'
 import { calcTokenCostUsd } from '../src/shared/pricing'
 import { contextTokens } from '../src/shared/tokenBuckets'
@@ -30,7 +31,7 @@ import { checkBurnRisk } from '../src/burnGuard'
 import { loadHookRuntimeConfig, saveHookRuntimeConfig } from '../src/hookRuntimeConfig'
 import { ContextCompositionIndex } from '../src/contextCompositionIndex'
 import { LogReader, claudeProjectsDirs, type OpenCodeSqlFactory } from '../src/logReader'
-import { readScratchFile } from '../src/generatedFiles'
+import { readScratchFile, scratchListingStats } from '../src/generatedFiles'
 import { StatuslineUsageReader } from '../src/statuslineUsage'
 import {
   loadBurnConfig, gatherConsumptionEvents, computeBurnStatus, computeSessionStatus,
@@ -156,6 +157,37 @@ const BUILD_ID = computeBuildId()
 let spans: Span[] = []
 let sseClients: http.ServerResponse[] = []
 
+// TRDD-X2E6OSWK — the cache key for every DERIVED view of the ingested data.
+//
+// `spans` and `logSessions` are the ONLY inputs to the dashboard model (summary → stripped summary →
+// sidebar → analytics). Rebuilding that model is expensive (a 120s profile of the live server
+// measured the rebuild storm at ~19% of wall-clock CPU), and it was being rebuilt from scratch on
+// every push, every burn tick and every API request. So: every mutation of either input bumps this
+// counter, and each derived value is memoized against it (VersionedCache). Same version ⇒ the
+// rebuild is provably redundant, so skipping it cannot serve stale data — only save the CPU.
+//
+// It is a plain counter and NOT a timestamp: two mutations inside the same millisecond must produce
+// two distinct versions, or the second one's data would be invisible until a third arrived.
+let dataVersion = 0
+function markDataChanged(): void { dataVersion++ }
+
+// The derived-view caches. They are the CPU fix's other half: the dashboard model was rebuilt from
+// scratch by EVERY caller — the coalesced push, the 4s burn tick, and ~10 API/MCP routes — so one
+// second of normal traffic could re-run summarizeSpans over the whole span window several times over
+// IDENTICAL inputs. Memoizing on `dataVersion` makes them all share ONE rebuild per actual data
+// change. Pure memos: same version in ⇒ identical value out.
+//
+// DECLARED HERE, not next to the builders that use them, and that placement is LOAD-BEARING: module
+// init already calls buildSessionSummary() (the resident-blob scan → compositionProjectResolver runs
+// during startup), and esbuild's CJS output hoists a later `const` to `undefined` instead of raising
+// a TDZ error — so a declaration further down silently produced
+// "TypeError: Cannot read properties of undefined (reading 'get')" inside a swallowed catch. Keep
+// every cache above the first caller.
+const summaryCache = new VersionedCache<ReturnType<typeof summarizeSpans> | null>()
+const strippedCache = new VersionedCache<ReturnType<typeof summarizeSpans> | null>()
+const sidebarCache = new VersionedCache<ReturnType<typeof computeSidebarData> | null>()
+const analyticsCache = new VersionedCache<ReturnType<typeof computeAnalyticsData> | null>()
+
 // In-memory model: `spans` is the rolling SUMMARIZATION WINDOW, bounded by TIME, never by a
 // span count. The old MAX_SPANS=50k cap existed because the flat array grew unbounded under
 // the full firehose and OOM-killed the process (~4GB heap in ~19 min ⇒ ~175 spans/sec, so the
@@ -201,6 +233,7 @@ try {
 // Nothing is evicted: older spans stay on disk and remain loadable by range.
 try {
   spans = spanStore.loadRange(Date.now() - SUMMARY_WINDOW_MS, Infinity)
+  markDataChanged()
   const st = spanStore.stats()
   console.log(`[AgentLens] Loaded ${spans.length} span(s) (last ${Math.round(SUMMARY_WINDOW_MS / 3600e3)}h window) from ${SPANS_DIR} — store holds ${st.totalSpans} span(s) across ${st.segments} segment(s), nothing evicted`)
 } catch (e) {
@@ -236,6 +269,7 @@ function flushSpanAppends(): void {
   // Live appends keep `spans` roughly time-ordered, so only filter when the head has aged out.
   if (spans.length > 0 && spanTimestampMs(spans[0]) < cutoff) {
     spans = spans.filter(s => spanTimestampMs(s) >= cutoff)
+    markDataChanged()   // the summarization window shrank — every derived view must be rebuilt
   }
 }
 const spanFlushTimer = setInterval(flushSpanAppends, SAVE_INTERVAL_MS)
@@ -249,6 +283,7 @@ function clearPersistedSpans(): void {
 function addSpan(span: Span) {
   if (span.receivedAt === undefined) span.receivedAt = Date.now()
   spans.push(span)
+  markDataChanged()
   spanStore.append(span) // O(record): buffered, appended by the flush tick — never a rewrite
 }
 
@@ -633,7 +668,23 @@ if (IS_CANONICAL) {
 
 // Indexed by sessionId; OTEL-derived sessions (from spans) take precedence —
 // when the same session ID appears in both, the OTEL version is used.
+//
+// TRDD-X2E6OSWK: write through putLogSession/clearLogSessions, NEVER `logSessions.set(...)` directly.
+// The derived-view caches are keyed on `dataVersion`, so a write that forgets to bump it would leave
+// the dashboard showing the PREVIOUS state until some unrelated mutation happened to bump it. Routing
+// every write through one funnel makes that class of bug impossible by construction rather than by
+// discipline. (Reads — get/has/values/size — go straight to the map.)
 let logSessions: Map<string, SessionSummaryCard> = new Map()
+
+function putLogSession(card: SessionSummaryCard): void {
+  logSessions.set(card.sessionId, card)
+  markDataChanged()
+}
+
+function clearLogSessions(): void {
+  logSessions.clear()
+  markDataChanged()
+}
 
 function buildImportCardStandalone(raw: Record<string, unknown>): SessionSummaryCard {
   const num = (v: unknown, def = 0): number => (typeof v === 'number' ? v : def)
@@ -889,17 +940,46 @@ function tickBurn(): void {
 // 4s cadence gives ≤10s alert latency with margin (acceptance) without a heavy per-second rebuild.
 setInterval(tickBurn, 4000)
 
-function runLogScan() {
-  const results = logReader.scan()
+// TRDD-X2E6OSWK — INCREMENTAL LOG SCANNING.
+//
+// The old design ran a FULL scan (recursive readdir of every log root + one statSync per file —
+// ~12,508 files on this machine) on a flat 5s timer AND on every debounced fs.watch burst. Profiled
+// on the live server it burned ~8.5% of wall-clock CPU forever, and it got WORSE the more agent
+// sessions were running (more writes → more watch events → more full sweeps).
+//
+// Now: fs.watch already tells us WHICH file changed, so the steady-state scan stats only those paths
+// (typically 1–3), and the full sweep is demoted to a slow correctness BACKSTOP. The backstop is not
+// optional: recursive fs.watch on macOS (FSEvents) coalesces and can drop events under load, and a
+// dir that did not exist at startup never got a watcher at all — so a periodic full sweep is the
+// only thing that guarantees no file is missed. It just must not be the steady-state path.
+const FULL_RESCAN_MS = 60_000
+// Absolute paths named by fs.watch since the last scan. Drained by each targeted scan.
+const pendingWatchPaths = new Set<string>()
+// Set when a watch event arrives with NO filename (the platform coalesced it away). We cannot target
+// what we cannot name, so the next scan is promoted to a full sweep instead of guessing — guessing
+// would silently drop a session's new lines, and losing log lines is not a tradeoff we make.
+let watchNeedsFullScan = false
+
+function runLogScan(mode: 'full' | 'targeted' = 'full') {
+  let results: ReturnType<typeof logReader.scan>
+  if (mode === 'full') {
+    pendingWatchPaths.clear()   // a full sweep subsumes every pending hint
+    results = logReader.scan()
+  } else {
+    if (pendingWatchPaths.size === 0) return
+    const paths = [...pendingWatchPaths]
+    pendingWatchPaths.clear()
+    results = logReader.scan(paths)
+  }
   // logReader.scan() returns ONLY sessions whose byte offset advanced (incremental tail — unchanged
   // files return null), so `changedCards` is exactly the set that grew this scan. That set drives
   // the immediate targeted push below; the heavier full-summary rebuild stays coalesced.
   const changedCards: SessionSummaryCard[] = []
   for (const { card, childCards } of results) {
     statuslineReader.overlay(card)
-    logSessions.set(card.sessionId, card)
+    putLogSession(card)
     changedCards.push(card)
-    for (const child of childCards ?? []) { logSessions.set(child.sessionId, child); changedCards.push(child) }
+    for (const child of childCards ?? []) { putLogSession(child); changedCards.push(child) }
   }
   if (changedCards.length > 0) {
     pushSessionChanged(changedCards)   // TRDD-U0UYC38A: targeted, immediate — sub-second drill refresh
@@ -916,19 +996,37 @@ setInterval(() => {
   scheduleDurableSave()
 }, 30_000)
 
-// Debounced scan triggered by fs.watch events — fires 300 ms after the last event.
+// Debounced scan triggered by fs.watch events — fires 300 ms after the last event. Events arrive in
+// bursts (one JSONL append can emit several), so the debounce collapses a burst into ONE scan over
+// the union of the paths it named.
 let watchScanTimer: ReturnType<typeof setTimeout> | null = null
 function scheduleWatchScan() {
   if (watchScanTimer) clearTimeout(watchScanTimer)
-  watchScanTimer = setTimeout(() => { watchScanTimer = null; runLogScan() }, 300)
+  watchScanTimer = setTimeout(() => {
+    watchScanTimer = null
+    const mode = watchNeedsFullScan ? 'full' : 'targeted'
+    watchNeedsFullScan = false
+    runLogScan(mode)
+  }, 300)
 }
 
-function setupLogWatcher() {
+/** Returns how many watchers actually attached, so a total failure can be reported instead of
+ *  silently degrading log freshness to the slow backstop. */
+function setupLogWatcher(): { attached: number; failed: string[] } {
+  let attached = 0
+  const failed: string[] = []
   for (const dir of logReader.getWatchDirs()) {
     try {
-      fs.watch(dir, { recursive: true, persistent: false }, scheduleWatchScan)
-    } catch { /* dir may not exist yet — poll will cover it */ }
+      fs.watch(dir, { recursive: true, persistent: false }, (_event, filename) => {
+        // `filename` is relative to `dir` on every platform that supports recursive watching.
+        if (filename) pendingWatchPaths.add(path.resolve(dir, filename.toString()))
+        else watchNeedsFullScan = true
+        scheduleWatchScan()
+      })
+      attached++
+    } catch { failed.push(dir) }   // dir may not exist yet — the backstop sweep will still cover it
   }
+  return { attached, failed }
 }
 
 async function startLogIngestion() {
@@ -980,7 +1078,7 @@ async function startLogIngestion() {
 
   let restoredFromDisk = false
   if (deltaCurrent && cardsMap.size > 0) {
-    for (const card of cardsMap.values()) logSessions.set(card.sessionId, card)
+    for (const card of cardsMap.values()) putLogSession(card)
     restoredFromDisk = true
   }
   if (deltaCurrent && offsetsMap.size > 0) {
@@ -990,11 +1088,18 @@ async function startLogIngestion() {
     console.log(`[AgentLens] Log-ingest semantics changed (v${LOG_INGEST_VERSION}) — cold-rescanning; stale delta-log entries will be tombstoned on the next durable save`)
   }
 
-  // Register the poll first so it always runs, even if no files exist yet at startup.
-  setInterval(runLogScan, 5_000)
-  // Watch log directories for file-system events so updates appear immediately,
-  // without waiting for the next poll interval.
-  setupLogWatcher()
+  // Watch log directories for file-system events: this is the STEADY-STATE path — an event names the
+  // changed file, so the debounced scan stats only that file (TRDD-X2E6OSWK).
+  const watch = setupLogWatcher()
+  if (watch.failed.length > 0) {
+    console.warn(`[AgentLens] No fs.watch on ${watch.failed.length} log dir(s) — they refresh only on the ${FULL_RESCAN_MS / 1000}s backstop sweep: ${watch.failed.join(', ')}`)
+  }
+  // The full sweep is the correctness BACKSTOP for what the watcher coalesces, drops, or never saw.
+  // If NOT ONE watcher attached there is no steady-state path at all, so fall back to the old fast
+  // full-poll cadence rather than silently degrading every session's freshness to 60s.
+  const rescanMs = watch.attached > 0 ? FULL_RESCAN_MS : 5_000
+  if (watch.attached === 0) console.warn(`[AgentLens] fs.watch unavailable on every log dir — falling back to a ${rescanMs / 1000}s full poll (higher CPU)`)
+  setInterval(() => runLogScan('full'), rescanMs)
   console.log('[AgentLens] Log ingestion enabled — scanning local session files')
 
   const AGENT_KEY_LABEL: Record<string, string> = {
@@ -1019,14 +1124,14 @@ async function startLogIngestion() {
   // OpenCode: one DB file = many sessions, handled separately.
   const ocResults = logReader.scanOpenCode()
   for (const { card } of ocResults) {
-    logSessions.set(card.sessionId, card)
+    putLogSession(card)
     countByKey.set('opencode', (countByKey.get('opencode') ?? 0) + 1)
   }
 
   // spec 3: when cards were restored from disk, the cold full-file batch below is UNNECESSARY (and is
-  // exactly the minutes-long rescan we are eliminating) — the 5s poll + fs.watch already registered
-  // above will incrementally pick up any file that changed while the collector was down. Push the
-  // restored list to any connected browser and return.
+  // exactly the minutes-long rescan we are eliminating) — the fs.watch hints + the backstop sweep
+  // already registered above will incrementally pick up any file that changed while the collector was
+  // down. Push the restored list to any connected browser and return.
   if (restoredFromDisk) {
     console.log(`[AgentLens] Fast restart — ${logSessions.size} sessions restored from disk; skipping cold rescan`)
     schedulePushUpdate()
@@ -1045,8 +1150,8 @@ async function startLogIngestion() {
       const result = logReader.parseFile(file.filePath, file.agentKey)
       if (result) {
         statuslineReader.overlay(result.card)
-        logSessions.set(result.card.sessionId, result.card)
-        for (const child of result.childCards ?? []) logSessions.set(child.sessionId, child)
+        putLogSession(result.card)
+        for (const child of result.childCards ?? []) putLogSession(child)
         countByKey.set(file.agentKey, (countByKey.get(file.agentKey) ?? 0) + 1)
       }
     } catch { /* skip bad file */ }
@@ -1521,6 +1626,10 @@ function computeAnalyticsData(sessions: ReturnType<typeof summarizeSpans>['sessi
 }
 
 function buildSessionSummary(): ReturnType<typeof summarizeSpans> | null {
+  return summaryCache.get(dataVersion, computeSessionSummary)
+}
+
+function computeSessionSummary(): ReturnType<typeof summarizeSpans> | null {
   let summary: ReturnType<typeof summarizeSpans> | null = null
   try { summary = summarizeSpans(spans) } catch (e) { console.warn('[AgentLens] summarizeSpans error:', e) }
 
@@ -1555,7 +1664,7 @@ function resolveSessionCard(sessionId: string): SessionSummaryCard | null {
       const reparsed = logReader.reparseSession(sessionId)
       if (reparsed) {
         statuslineReader.overlay(reparsed.card)
-        logSessions.set(reparsed.card.sessionId, reparsed.card)
+        putLogSession(reparsed.card)
         session = reparsed.card
       }
     } catch { /* on-demand rebuild is best-effort — fall back to the stripped card's empty timeline */ }
@@ -1571,12 +1680,32 @@ function stripSessionDetail(summary: ReturnType<typeof summarizeSpans> | null): 
   return { ...summary, sessions: summary.sessions.map(s => ({ ...s, timeline: [], fileOps: undefined, generatedFiles: undefined, generatedFilesTruncated: undefined })) }
 }
 
+// The three memoized derivations of the summary. Each is a PURE function of (spans, logSessions) —
+// no clock, no request state — so caching them on `dataVersion` is sound. `computeSidebarPayload` is
+// deliberately NOT here: it reads Date.now() (isActive / lastActivityMs / burnRate), so a cached copy
+// would freeze the "session is live" indicator once the data stopped changing.
+function buildStrippedSummary(): ReturnType<typeof summarizeSpans> | null {
+  return strippedCache.get(dataVersion, () => stripSessionDetail(buildSessionSummary()))
+}
+function buildSidebarData(): ReturnType<typeof computeSidebarData> | null {
+  return sidebarCache.get(dataVersion, () => {
+    const s = buildSessionSummary()
+    return s ? computeSidebarData(s, spans) : null
+  })
+}
+function buildAnalyticsData(): ReturnType<typeof computeAnalyticsData> | null {
+  return analyticsCache.get(dataVersion, () => {
+    const s = buildSessionSummary()
+    return s ? computeAnalyticsData(s.sessions) : null
+  })
+}
+
 function buildUpdatePayload(): string {
   const sessionSummary = buildSessionSummary()
-  const stripped = stripSessionDetail(sessionSummary)
-  const sidebar = sessionSummary ? computeSidebarData(sessionSummary, spans) : null
+  const stripped = buildStrippedSummary()
+  const sidebar = buildSidebarData()
   const sidebarLive = sessionSummary ? computeSidebarPayload(sessionSummary, spans) : null
-  const analyticsData = sessionSummary ? computeAnalyticsData(sessionSummary.sessions) : null
+  const analyticsData = buildAnalyticsData()
   return JSON.stringify({
     type: 'update', buildId: BUILD_ID, summary: { toolCalls: {} }, sessionSummary: stripped, sidebar, analyticsData,
     // TRDD-PJC8N1HO spec 2: collector downtime windows ride every update so the dashboard renders the
@@ -1617,7 +1746,17 @@ function pushSessionChanged(cards: SessionSummaryCard[]): void {
 // OOM-killed (FATAL mark-compact) in ~40s. Debouncing to at most once per PUSH_COALESCE_MS turns N
 // firehose POSTs into ONE rebuild, so the working set stays bounded and RSS plateaus. Trailing-edge
 // (not leading) so a burst emits exactly one update after it settles.
-const PUSH_COALESCE_MS = 1000
+//
+// TRDD-X2E6OSWK — the floor was 1000 ms, and under the normal load of this machine (several agent
+// sessions appending JSONL continuously) it was re-armed continuously and fired at that floor
+// indefinitely: a FULL dashboard rebuild every second, forever, measured at ~19% of the process's
+// wall-clock CPU. 4000 ms is the same cadence the burn tick already runs at, and it costs the
+// dashboard NOTHING in liveness: the instant a session's log grows, pushSessionChanged() above sends
+// the changed cards immediately (sub-second, untouched by this constant). What this timer coalesces
+// is only the AGGREGATE view — sidebar counters, analytics roll-ups, the OTEL-wins re-merge — which
+// no user can perceive updating 4× a second. It also lines up with tickBurn's 4s beat, so the two now
+// usually share ONE memoized summary rebuild (same dataVersion) instead of forcing two.
+const PUSH_COALESCE_MS = 4000
 let pushTimer: ReturnType<typeof setTimeout> | null = null
 function schedulePushUpdate() {
   if (pushTimer) return
@@ -1630,7 +1769,7 @@ function getHtml(): string {
   const sessionSummary = buildSessionSummary()
   // Strip full timeline + per-file ops before inlining — they can be many MB across sessions.
   // Both are loaded lazily via /api/timeline/:sessionId after first paint.
-  const sessionSummaryJson = safeJson(stripSessionDetail(sessionSummary))
+  const sessionSummaryJson = safeJson(buildStrippedSummary())
   const sidebarLive = sessionSummary ? computeSidebarPayload(sessionSummary, spans) : {
     isActive: false, lastActivityMs: 0, sessionCount: 0, agentSources: [], currentSession: null, burnRate: null,
   }
@@ -2443,7 +2582,7 @@ const uiServer = http.createServer(async (req, res) => {
           if (!id || !VALID_SOURCES.has(s['source'] as string)) continue
           if (logSessions.has(id)) { skipped++; continue }
           const card = buildImportCardStandalone(s)
-          logSessions.set(id, card)
+          putLogSession(card)   // card.sessionId === id (buildImportCardStandalone reads the same field)
           imported++
         }
         pushUpdate()
@@ -2771,13 +2910,16 @@ const uiServer = http.createServer(async (req, res) => {
 
   if (req.method === 'POST' && url === '/api/clear') {
     spans = []
-    logSessions.clear()
+    markDataChanged()
+    clearLogSessions()
     logReader.clearFileState()
     clearPersistedSpans()
     pushUpdate()          // send cleared state to clients immediately
     res.writeHead(200); res.end()
-    // Re-ingest after the response is sent so the client sees the cleared state first.
-    setImmediate(() => runLogScan())
+    // Re-ingest after the response is sent so the client sees the cleared state first. FULL: the tail
+    // offsets were just wiped, so every file must be re-read — a targeted scan would only see the
+    // handful of paths the watcher happened to name since the last scan.
+    setImmediate(() => runLogScan('full'))
     return
   }
 
@@ -2947,6 +3089,7 @@ const uiServer = http.createServer(async (req, res) => {
         const body = JSON.parse(bodyBuf.toString('utf-8')) as { type?: string }
         if (body.type === 'clearAll') {
           spans = []
+          markDataChanged()
           clearPersistedSpans()
           pushUpdate()
         }
@@ -2957,9 +3100,8 @@ const uiServer = http.createServer(async (req, res) => {
   }
 
   if (req.method === 'GET' && url === '/api/summary') {
-    const summary = buildSessionSummary()
     res.writeHead(200, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify(stripSessionDetail(summary)))
+    res.end(JSON.stringify(buildStrippedSummary()))
     return
   }
 
@@ -2982,9 +3124,24 @@ const uiServer = http.createServer(async (req, res) => {
   // only their appended bytes; `fullReads` counts from-0 (cold-start/fallback) parses. Appending to
   // a live session must bump incrementalReads while fullReads stays put — the "no full-file rescans
   // on each append" acceptance check.
+  // TRDD-X2E6OSWK adds the CPU-spin proof: `filesStatted` must grow by ~1 per changed file in steady
+  // state (targeted scan), NOT by ~12.5k every scan (full sweep); and the derived-view caches must
+  // show hits, meaning the dashboard model is rebuilt once per data change instead of per caller.
   if (req.method === 'GET' && url === '/api/debug/log-scan-stats') {
     res.writeHead(200, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify(logReader.getLogScanStats()))
+    res.end(JSON.stringify({
+      ...logReader.getLogScanStats(),
+      dataVersion,
+      derivedCaches: {
+        summary: summaryCache.stats(),
+        stripped: strippedCache.stats(),
+        sidebar: sidebarCache.stats(),
+        analytics: analyticsCache.stats(),
+      },
+      // The scratch indexer runs on every incremental parse; `readdirs` must stay ~flat while a
+      // session is appended to (it re-walks the OS temp roots only when their listing really changed).
+      scratchListing: scratchListingStats(),
+    }))
     return
   }
 
