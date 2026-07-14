@@ -3,7 +3,7 @@ trdd-id: K3WDPR7M
 title: SSD write amplification — raw OTEL bodies rewrite the whole conversation every turn; move the body store to compressed content-addressed SQLite
 column: dev
 created: 2026-07-14T04:30:00+0200
-updated: 2026-07-14T04:30:00+0200
+updated: 2026-07-14T12:25:00+0200
 current-owner: main
 task-type: bugfix
 severity: critical
@@ -80,11 +80,45 @@ rest.
   live hook fires (server stayed down, ports free). **The brake is currently ARMED — disarm with
   `rm ~/.agentlens/NO_REVIVE` once the fix lands.**
 
+## ⏵ PHASE 1 BAKE-OFF — DECIDED BY MEASUREMENT (2026-07-14)
+
+Evidence: `reports/storage-bakeoff/20260714_122132+0200-duckdb-vs-sqlite.md`.
+Harness: `scripts_dev/bakeoff-duckdb.mjs`. 40 real bodies, chronological, **real file sizes**,
+marginal cost averaged over 10 turns (a 1-turn delta is 256 KB-block-quantized noise).
+
+| layout | stored | ratio | **per-turn write** | ingest/turn |
+|---|---|---|---|---|
+| A whole-body row + zstd | 8.26 MB | 3.6× | 179 KB | 8 ms |
+| B per-section, **no dedup** | 9.01 MB | 3.3× | 486 KB | 44 ms |
+| C per-section + dedup (**DuckDB**) | 3.76 MB | 8.0× | 179 KB | 187 ms |
+| **D per-section + dedup (SQLite)** | **2.58 MB** | **11.6×** | **16 KB** | 14 ms |
+
+**DECISION: SQLite is the WRITE store; DuckDB is the ANALYTICS engine ATTACHed over it READ_ONLY**
+(`INSTALL sqlite; ATTACH '…' (TYPE SQLITE, READ_ONLY)` — verified working, zero-copy, no second file).
+This also sidesteps DuckDB's single-writer-process limit: the server owns the file, N readers attach it.
+
+Three findings, each of which would otherwise have shipped a bug:
+1. **The `storage_compatibility_version` trap.** It defaults to **`v0.10.2`**, which PREDATES zstd column
+   compression (v1.2.0) ⇒ `USING COMPRESSION zstd` is **silently ignored** and big strings are stored
+   **uncompressed**; the first run produced a DB **2× LARGER than the raw JSON**. Must opt in explicitly.
+   **Never infer compression from a ratio — assert it** via `pragma_storage_info` (that is what caught it).
+2. **HYPOTHESIS REFUTED — DuckDB's native cross-row zstd window does NOT capture our redundancy.** I
+   predicted the columnar per-vector streaming zstd (`zstd.cpp`: `ZSTD_VECTOR_SIZE=2048`, `ZSTD_e_continue`
+   between values, level 3 ⇒ ~2 MB window) would dedupe the identical 342 KB `tools` array natively.
+   **B (3.3×) is no better than A (3.6×).** Sectioning alone buys nothing; **content-addressed
+   `INSERT OR IGNORE` does 100 % of the work.**
+3. **DuckDB writes 11× more per turn (179 KB vs 16 KB)** — architectural (256 KB blocks + row-group
+   rewrite on checkpoint), not tunable. It is *worse* than measured: a row-group rewrite burns SSD
+   without changing file size, so the size-delta proxy undercounts it.
+
+Projected at ~30 req/min: today **35 GB/day** → DuckDB store **7.5 GB/day** → **SQLite store 0.7 GB/day**.
+
 **NEXT ACTION** — in order:
-1. **Body store → compressed content-addressed SQLite.** `blocks(hash BLOB PK, z BLOB)` holding each
-   unique message block compressed once; `bodies(id PK, session_id, ts, meta, block_refs)` holding the
-   ordered refs. `INSERT OR IGNORE` on blocks ⇒ repeats write ~0 bytes. Ingest each loose body, then
-   DELETE it. **Retire the `.wad` archiver entirely** (it is the second-copy amplifier).
+1. **Body store → compressed content-addressed SQLite** (per the bake-off). `blob(sha PK, n, z)` holding
+   each unique section compressed once; `body` + `section(body_id, pos, path, idx, sha, n_bytes)` holding
+   the ordered refs **with size + hash in clear** (so all analytics run with zero decompression).
+   `INSERT OR IGNORE` ⇒ repeats write 0 bytes. Ingest each loose body, then DELETE it.
+   **Retire the `.wad` archiver entirely** (it is the second-copy amplifier).
 2. **Cards/offsets → SQLite rows, delta writes only.** UPSERT only the cards/offsets that actually
    CHANGED (`runLogScan` already returns just the advanced sessions). Kills the 10 MB/min of full-file
    rewrites outright. The project ALREADY has SQLite infra (`src/database/`) — reuse, do not re-invent.
