@@ -49,7 +49,12 @@ import { generateSuggestions } from '../src/instructionAdvisor'
 import { detectInstructionFiles, appendSuggestion } from '../src/instructionFiles'
 import { atomicWriteFileSync, heapPressure, RequestLog } from '../src/serverRuntime'
 import { SegmentedSpanStore, migrateLegacySpansFile, spanTimestampMs } from '../src/segmentedSpanStore'
-import { appendToArchive, purgeArchiveVolumes, archiveDiskUsage, extractArchive } from '../src/bodyArchive'
+// appendToArchive is GONE: bodies now go into the content-addressed store, not a gzip .wad lump
+// (TRDD-K3WDPR7M Phase 3). The read/purge helpers stay — the existing .wad volumes still hold real
+// history that has not been migrated yet.
+import { purgeArchiveVolumes, archiveDiskUsage, extractArchive } from '../src/bodyArchive'
+import { openStore, type Store } from '../src/store/db'
+import { DEFAULT_MAX_BYTES_PER_PASS, ingestPass } from '../src/store/ingestPass'
 import {
   loadLogOffsets, loadPersistedCards,
   recordCollectorStart, recordCollectorHeartbeat, recordCollectorStop, computeCollectorGaps,
@@ -264,67 +269,66 @@ const BODIES_MAX_AGE_MS = RET.bodiesMaxAgeHours * 3600e3
 const BODIES_MAX_BYTES = RET.bodiesMaxGb * 1024 ** 3
 const BODIES_RETENTION_DAYS = RET.bodiesRetentionDays
 
+// The bodies pass: ingest raw bodies into the content-addressed store, then reclaim their disk space
+// (TRDD-K3WDPR7M Phase 3). This REPLACES the old .wad archiver, which gzipped each body into a
+// monthly volume — it had no cross-body dedup (every turn re-stored the whole re-sent transcript AND
+// an identical 268 KB tools array), and its boot pass was UNBOUNDED: measured at 694 MB/min of device
+// writes, which made "restart the server" a disk-punishing event all by itself.
+//
+// The store gets the same corpus 167x smaller (measured on 4.00 GB of real bodies -> 24 MB of zstd
+// Parquet, all 7,439 verified byte-identical), and ingestPass only deletes a body AFTER proving it
+// reconstructs byte-for-byte from a DURABLE Parquet part.
+//
+// The legacy .wad volumes are still READ (extractArchive) and still age out on the retention window —
+// they hold real history we have not migrated yet, and RULE 0 forbids destroying it on a guess.
+const INGEST_MAX_BYTES_PER_PASS = Math.max(
+  16 * 1024 ** 2,
+  Number(process.env.AGENTLENS_INGEST_MAX_BYTES_PER_PASS) || DEFAULT_MAX_BYTES_PER_PASS,
+)
+let bodyStore: Store | null = null
 let bodiesPassRunning = false
+
 async function archiveOtelBodies(): Promise<void> {
-  if (bodiesPassRunning) return // an hourly tick must never overlap a still-running first pass
+  if (bodiesPassRunning) return // an hourly tick must never overlap a still-running pass
   bodiesPassRunning = true
   try {
-    let entries: { p: string; name: string; mtime: number; size: number }[] = []
-    try {
-      if (!fs.existsSync(BODIES_DIR)) return
-      for (const f of fs.readdirSync(BODIES_DIR)) {
-        if (!f.endsWith('.request.json') && !f.endsWith('.response.json')) continue
-        try {
-          const st = fs.statSync(path.join(BODIES_DIR, f))
-          entries.push({ p: path.join(BODIES_DIR, f), name: f, mtime: st.mtimeMs, size: st.size })
-        } catch { /* raced with a writer — skip */ }
-      }
-    } catch (e) {
-      console.warn('[AgentLens] otel-bodies retention scan failed:', e)
-      return
+    if (!fs.existsSync(BODIES_DIR)) return
+    // The size cap is the emergency valve: over it, ingest EVERYTHING (age 0) rather than only what
+    // has aged out, so a runaway producer cannot outrun the drain.
+    let liveBytes = 0
+    for (const f of fs.readdirSync(BODIES_DIR)) {
+      if (!f.endsWith('.request.json') && !f.endsWith('.response.json')) continue
+      try { liveBytes += fs.statSync(path.join(BODIES_DIR, f)).size } catch { /* raced */ }
     }
-    const cutoff = Date.now() - BODIES_MAX_AGE_MS
-    let archived = 0
-    let archivedBytes = 0
-    const moveToArchive = async (e: { p: string; name: string; mtime: number; size: number }): Promise<void> => {
-      try {
-        const data = fs.readFileSync(e.p)
-        appendToArchive(BODIES_ARCHIVE_DIR, e.name, data, e.mtime)
-        fs.unlinkSync(e.p) // only after the archive append succeeded — a failure keeps the live file
-        archived++
-        archivedBytes += e.size
-      } catch (err) {
-        console.warn(`[AgentLens] could not archive ${e.name}:`, err)
-      }
-      // Yield between files: the first pass can chew tens of thousands of files, and a sync loop
-      // would starve the OTLP/UI listeners for minutes.
-      await new Promise(r => setImmediate(r))
-    }
-    const kept: typeof entries = []
-    for (const e of entries) {
-      if (e.mtime < cutoff) await moveToArchive(e)
-      else kept.push(e)
-    }
-    entries = kept
-    let totalBytes = entries.reduce((a, e) => a + e.size, 0)
-    if (totalBytes > BODIES_MAX_BYTES) {
-      entries.sort((a, b) => a.mtime - b.mtime) // oldest first
-      for (const e of entries) {
-        if (totalBytes <= BODIES_MAX_BYTES) break
-        await moveToArchive(e)
-        totalBytes -= e.size
-      }
-    }
+    const overCap = liveBytes > BODIES_MAX_BYTES
+
+    bodyStore ??= await openStore({ dir: path.join(DATA_DIR, 'store') })
+    const r = await ingestPass({
+      bodiesDir: BODIES_DIR,
+      store: bodyStore,
+      maxAgeMs: overCap ? 0 : BODIES_MAX_AGE_MS,
+      maxBytesPerPass: INGEST_MAX_BYTES_PER_PASS, // THE THROTTLE — never an unbounded boot pass again
+      deleteAfter: true,                          // safe: ingestPass verifies from the DURABLE store first
+    })
+
     const purged = purgeArchiveVolumes(BODIES_ARCHIVE_DIR, BODIES_RETENTION_DAYS)
     persistStats.bodiesLastPurge = {
-      at: Date.now(), removedFiles: archived, freedBytes: archivedBytes,
-      keptFiles: entries.length, keptBytes: totalBytes,
+      at: Date.now(), removedFiles: r.deleted, freedBytes: r.bytesIn,
+      keptFiles: 0, keptBytes: Math.max(0, liveBytes - r.bytesIn),
     }
-    if (archived > 0 || purged.removed.length > 0) {
-      const arch = archiveDiskUsage(BODIES_ARCHIVE_DIR)
-      console.log(`[AgentLens] otel-bodies retention: archived ${archived} file(s) (${(archivedBytes / 1024 ** 3).toFixed(2)}GB → archive now ${(arch.bytes / 1024 ** 3).toFixed(2)}GB/${arch.entries} lumps)` +
-        `${purged.removed.length > 0 ? `; purged volume(s) ${purged.removed.join(', ')} (${(purged.freedBytes / 1024 ** 3).toFixed(2)}GB)` : ''}; live ${(totalBytes / 1024 ** 3).toFixed(2)}GB`)
+    if (r.ingested > 0 || purged.removed.length > 0) {
+      console.log(`[AgentLens] bodies → store: ingested ${r.ingested}, reclaimed ${r.deleted} file(s) ` +
+        `(${(r.bytesIn / 1024 ** 3).toFixed(2)}GB read → ${(r.bytesStored / 1048576).toFixed(1)}MB new spans)` +
+        `${r.throttled ? ' [throttled — more next pass]' : ''}` +
+        `${purged.removed.length > 0 ? `; purged legacy volume(s) ${purged.removed.join(', ')} (${(purged.freedBytes / 1024 ** 3).toFixed(2)}GB)` : ''}`)
     }
+    // A body we could not PROVE we can return is a body we have no right to delete. Say so loudly —
+    // a silent skip would look identical to success while the corpus quietly rotted.
+    if (r.failed.length > 0) {
+      console.warn(`[AgentLens] ${r.failed.length} body/bodies could NOT be verified and were KEPT on disk: ${r.failed.slice(0, 5).join('; ')}`)
+    }
+  } catch (e) {
+    console.warn('[AgentLens] bodies ingest pass failed:', e)
   } finally {
     bodiesPassRunning = false
   }
