@@ -20,6 +20,7 @@ process.env.DATA_DIR = tmpHome
 // so the DATA_DIR set above still governs every path these modules resolve.
 import { agentlensDisabled, armKillSwitch, disarmKillSwitch, killSwitchPath } from '../cli/killSwitch'
 import { runHookCommand, reviveDisabledOnDisk } from '../cli/hookHandlers'
+import { ensureServer, runSupervise } from '../cli/serverControl'
 
 suite('global kill-switch', () => {
   setup(() => { delete process.env.AGENTLENS_DISABLED; disarmKillSwitch() })
@@ -95,5 +96,21 @@ suite('global kill-switch', () => {
     // Spawning a detached server is the one side-effect that must never slip a missed guard, so it
     // is gated independently of the hook entry point.
     assert.strictEqual(reviveDisabledOnDisk(), true)
+  })
+
+  test('ensureServer REFUSES while disabled — the CLI was the kill-switch bypass', async () => {
+    // The widest hole, found by catching a live server running 2.5h AFTER `disable` stopped it: the
+    // HOOK path was gated but the CLI path was not, and every diagnostics tool call funnels through
+    // ensureServer(). The project CLAUDE.md tells every Claude session to run diagnostics BEFORE any
+    // task — so a disabled install came straight back the next time any running session started work.
+    armKillSwitch()
+    await assert.rejects(() => ensureServer(), /DISABLED/, 'a disabled AgentlensPro must not spawn a server')
+  })
+
+  test('runSupervise REFUSES while disabled — a supervisor would out-stubborn the switch', () => {
+    // The supervisor exists to restart the server forever. Ungated, `disable` would stop a server
+    // that launchd instantly brought back — the flag would be decorative.
+    armKillSwitch()
+    assert.throws(() => runSupervise(), /DISABLED/)
   })
 })
