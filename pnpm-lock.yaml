@@ -14,6 +14,9 @@ importers:
 
   .:
     dependencies:
+      '@duckdb/node-api':
+        specifier: 1.5.4-r.1
+        version: 1.5.4-r.1
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(supports-color@8.1.1)(zod@4.4.3)
@@ -33,9 +36,6 @@ importers:
         specifier: ^1.14.1
         version: 1.14.1
     devDependencies:
-      '@duckdb/node-api':
-        specifier: 1.5.4-r.1
-        version: 1.5.4-r.1
       '@types/mocha':
         specifier: ^10.0.10
         version: 10.0.10
@@ -1939,7 +1939,7 @@ snapshots:
   '@esbuild/win32-x64@0.28.1':
     optional: true
 
-  '@eslint-community/eslint-utils@4.9.1(eslint@9.39.4)':
+  '@eslint-community/eslint-utils@4.9.1(eslint@9.39.4(supports-color@8.1.1))':
     dependencies:
       eslint: 9.39.4(supports-color@8.1.1)
       eslint-visitor-keys: 3.4.3
@@ -2138,7 +2138,7 @@ snapshots:
 
   '@typescript-eslint/utils@8.59.2(eslint@9.39.4(supports-color@8.1.1))(typescript@5.9.3)':
     dependencies:
-      '@eslint-community/eslint-utils': 4.9.1(eslint@9.39.4)
+      '@eslint-community/eslint-utils': 4.9.1(eslint@9.39.4(supports-color@8.1.1))
       '@typescript-eslint/scope-manager': 8.59.2
       '@typescript-eslint/types': 8.59.2
       '@typescript-eslint/typescript-estree': 8.59.2(typescript@5.9.3)
@@ -2550,7 +2550,7 @@ snapshots:
 
   eslint@9.39.4(supports-color@8.1.1):
     dependencies:
-      '@eslint-community/eslint-utils': 4.9.1(eslint@9.39.4)
+      '@eslint-community/eslint-utils': 4.9.1(eslint@9.39.4(supports-color@8.1.1))
       '@eslint-community/regexpp': 4.12.2
       '@eslint/config-array': 0.21.2(supports-color@8.1.1)
       '@eslint/config-helpers': 0.4.2
