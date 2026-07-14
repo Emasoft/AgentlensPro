@@ -12,7 +12,7 @@ import {
 // All tests run entirely against fixture files in a per-test temp dir — the real
 // ~/.claude/settings.json is NEVER touched (TRDD-M36W16L0).
 
-type Opts = Required<Pick<TelemetryConfigOptions, 'settingsPath' | 'markerPath' | 'bodiesDir' | 'otlpPort'>>
+type Opts = Required<Pick<TelemetryConfigOptions, 'settingsPath' | 'markerPath' | 'bodiesDir' | 'otlpPort' | 'dataDir'>>
 type Marker = { keys: Record<string, { hadKey: boolean; priorValue: string | null }> }
 
 suite('telemetryConfig', () => {
@@ -26,6 +26,10 @@ suite('telemetryConfig', () => {
       markerPath:   path.join(dir, 'telemetry-managed.json'),
       bodiesDir:    path.join(dir, 'otel-bodies'),
       otlpPort:     4318,
+      // Pin the data dir at the tmp fixture: capture is resolved from <dataDir>/config.json, so
+      // without this the suite would read the REAL ~/.agentlens/config.json and pass or fail
+      // depending on whether the developer happens to have raw-body capture on (TRDD-BKF5NZD3).
+      dataDir:      dir,
     }
   })
 
@@ -112,8 +116,14 @@ suite('telemetryConfig', () => {
     assert.strictEqual((await fs.stat(opts.bodiesDir)).isDirectory(), true)
   })
 
-  test('OTEL_LOG_RAW_API_BODIES points at the configured bodies dir', async () => {
-    await ensureTelemetryConfig(opts)
+  test('OTEL_LOG_RAW_API_BODIES points at the configured bodies dir — but ONLY when opted in', async () => {
+    // CONTRACT CHANGE (TRDD-BKF5NZD3): raw-body capture used to be wired unconditionally, which made
+    // it impossible to turn off — the server re-added the key on every boot while Claude Code dumped
+    // the whole conversation to disk on every request (~35 GB/day). It is now opt-in.
+    await ensureTelemetryConfig({ ...opts, captureRawBodies: false })
+    assert.strictEqual((await readEnv())?.OTEL_LOG_RAW_API_BODIES, undefined, 'off by default')
+
+    await ensureTelemetryConfig({ ...opts, captureRawBodies: true })
     assert.strictEqual((await readEnv())?.OTEL_LOG_RAW_API_BODIES, `file:${opts.bodiesDir}`)
   })
 

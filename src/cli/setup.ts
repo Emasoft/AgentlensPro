@@ -26,6 +26,7 @@ import * as os from 'os'
 import * as path from 'path'
 import { loadSqlJs } from '../forensicsDb'
 import { ensureTelemetryConfig, ownedTelemetryKeys } from '../telemetryConfig'
+import { rawBodyCaptureEnabled, RAW_BODIES_KEY } from '../captureConfig'
 import { sleep } from './cliCore'
 import {
   CLI_BIN, GATE_CMD, GATE_EVENTS, GATE_MATCHER, HOOK_CMD, HOOK_EVENTS, HookMatcher,
@@ -481,7 +482,11 @@ const stepOtel: StepDef = {
   async run(ctx) {
     const bodiesDir = path.join(ctx.dataDir, 'otel-bodies')
     const markerPath = path.join(ctx.dataDir, 'telemetry-managed.json')
-    const expected = ownedTelemetryKeys(bodiesDir, ctx.otlpPort)
+    // Raw-body capture is opt-in (TRDD-BKF5NZD3). Resolve it ONCE and feed the SAME value to both
+    // the expected-table and ensure(), or setup's verify would demand a key ensure deliberately
+    // deleted (or vice-versa) and the repairer would fight itself on every run.
+    const captureRawBodies = rawBodyCaptureEnabled(ctx.dataDir, process.env)
+    const expected = ownedTelemetryKeys(bodiesDir, ctx.otlpPort, captureRawBodies)
     const state = readSettingsFresh(ctx.settingsPath)
     if (state === 'unparseable') {
       return { result: { step: this.name, found: 'settings.json unparseable', action: 'refused', verify: 'FAIL', detail: 'fix the file manually, then re-run setup' }, acted: false }
@@ -489,29 +494,43 @@ const stepOtel: StepDef = {
     const env = (state !== 'absent' && state.env && typeof state.env === 'object' ? state.env : {}) as Record<string, unknown>
     const missing = Object.keys(expected).filter(k => env[k] === undefined)
     const wrong = Object.keys(expected).filter(k => env[k] !== undefined && env[k] !== expected[k])
-    const converged = missing.length === 0 && wrong.length === 0
-    const found = converged ? 'telemetry env current' : `${missing.length} missing, ${wrong.length} wrong key(s)`
+    // A LEFTOVER capture key is drift too — and the kind that costs ~35 GB/day. Without this,
+    // `converged` would be true (the key simply isn't in `expected`), setup would skip ensure(), and
+    // the repairer would happily report a healthy install while the burn kept running.
+    const staleCapture = !captureRawBodies && env[RAW_BODIES_KEY] === `file:${bodiesDir}`
+    const converged = missing.length === 0 && wrong.length === 0 && !staleCapture
+    const found = converged
+      ? 'telemetry env current'
+      : `${missing.length} missing, ${wrong.length} wrong key(s)${staleCapture ? ', raw-body capture to remove' : ''}`
 
     if (ctx.dryRun) {
       return { result: { step: this.name, found, action: converged ? 'none' : 'would: wire telemetry env (verified transaction)', verify: 'SKIP', detail: 'dry-run' }, acted: false }
     }
     let acted = false
     if (!converged) {
-      await ensureTelemetryConfig({ settingsPath: ctx.settingsPath, markerPath, bodiesDir, otlpPort: ctx.otlpPort })
+      await ensureTelemetryConfig({ settingsPath: ctx.settingsPath, markerPath, bodiesDir, otlpPort: ctx.otlpPort, dataDir: ctx.dataDir, captureRawBodies })
       acted = true
     }
-    // VERIFY — independent re-parse; every owned key must hold exactly the expected value.
+    // VERIFY — independent re-parse; every owned key must hold exactly the expected value, and the
+    // opted-out capture key must be GONE (verifying only what we wrote would miss what we failed to
+    // delete — the whole defect this TRDD fixes).
     const after = readSettingsFresh(ctx.settingsPath)
     if (after === 'absent' || after === 'unparseable') {
       return { result: { step: this.name, found, action: acted ? 'wired' : 'none', verify: 'FAIL', detail: `post-state ${after}` }, acted }
     }
     const envAfter = (after.env && typeof after.env === 'object' ? after.env : {}) as Record<string, unknown>
     const bad = Object.keys(expected).find(k => envAfter[k] !== expected[k])
+    const stillStale = !captureRawBodies && envAfter[RAW_BODIES_KEY] === `file:${bodiesDir}`
+    const verifyFail = bad ?? (stillStale ? RAW_BODIES_KEY : undefined)
     return {
       result: {
         step: this.name, found, action: acted ? 'wired' : 'none',
-        verify: bad ? 'FAIL' : 'PASS',
-        detail: bad ? `${bad} = ${JSON.stringify(envAfter[bad])} (expected ${JSON.stringify(expected[bad])})` : `${Object.keys(expected).length} key(s) exact`,
+        verify: verifyFail ? 'FAIL' : 'PASS',
+        detail: bad
+          ? `${bad} = ${JSON.stringify(envAfter[bad])} (expected ${JSON.stringify(expected[bad])})`
+          : stillStale
+            ? `${RAW_BODIES_KEY} still set (capture is off — it must be absent)`
+            : `${Object.keys(expected).length} key(s) exact${captureRawBodies ? '' : '; raw-body capture off'}`,
       },
       acted,
     }

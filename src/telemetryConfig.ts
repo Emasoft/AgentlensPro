@@ -23,6 +23,7 @@ import * as path from 'path'
 import * as os from 'os'
 import * as fs from 'fs/promises'
 import { safeConfigEdit, SafeEditOp } from './safeConfigEdit'
+import { rawBodyCaptureEnabled, RAW_BODIES_KEY } from './captureConfig'
 
 export interface TelemetryConfigOptions {
   /** settings.json to manage. Default: ~/.claude/settings.json */
@@ -33,6 +34,14 @@ export interface TelemetryConfigOptions {
   bodiesDir?: string
   /** OTLP collector port the endpoint should point at. Default: 4318 */
   otlpPort?: number
+  /** AgentLens data dir — where the durable capture knob lives. Default: ~/.agentlens */
+  dataDir?: string
+  /**
+   * Capture raw API bodies? Default: resolved from the durable knob (env > config.json > OFF).
+   * Pin it only in tests, or where the caller has already resolved it. When FALSE, ensure() actively
+   * DELETES our key from settings.json — see the note there (TRDD-BKF5NZD3).
+   */
+  captureRawBodies?: boolean
 }
 
 /**
@@ -58,6 +67,8 @@ export interface EnsureResult {
   changed: boolean
   added: string[]
   overrode: string[]
+  /** Owned keys DELETED because the user opted out of them (today: raw-body capture). */
+  removed: string[]
   settingsPath: string
   markerPath: string
   bodiesDir: string
@@ -80,14 +91,18 @@ export interface StatusResult {
 }
 
 function resolveOptions(options: TelemetryConfigOptions): {
-  settingsPath: string; markerPath: string; bodiesDir: string; otlpPort: number
+  settingsPath: string; markerPath: string; bodiesDir: string; otlpPort: number; captureRawBodies: boolean
 } {
   const home = os.homedir()
+  const dataDir = options.dataDir ?? path.join(home, '.agentlens')
   return {
     settingsPath: options.settingsPath ?? path.join(home, '.claude', 'settings.json'),
     markerPath:   options.markerPath   ?? path.join(home, '.agentlens', 'telemetry-managed.json'),
-    bodiesDir:    options.bodiesDir    ?? path.join(home, '.agentlens', 'otel-bodies'),
+    bodiesDir:    options.bodiesDir    ?? path.join(dataDir, 'otel-bodies'),
     otlpPort:     options.otlpPort     ?? 4318,
+    // Resolved from the durable knob (env > config.json > OFF) unless the caller pins it. This is
+    // the whole point of TRDD-BKF5NZD3: capture is a DECISION, not wiring we force-converge.
+    captureRawBodies: options.captureRawBodies ?? rawBodyCaptureEnabled(dataDir, process.env),
   }
 }
 
@@ -96,8 +111,15 @@ function resolveOptions(options: TelemetryConfigOptions): {
  * Cross-checked against the reference full-telemetry config the user configured by hand
  * this session (TRDD-M36W16L0 STATE). Every value is a string — settings.json env values
  * are strings, and Claude Code reads these as env vars.
+ *
+ * Everything here is cheap, idempotent WIRING (where to send, in what format, how often) — which is
+ * why force-converging it on every server boot is correct. `OTEL_LOG_RAW_API_BODIES` is the ONE
+ * exception: it is a capture policy costing ~35 GB/day (Claude Code re-serializes the whole
+ * conversation to disk on every request), so it is owned ONLY when the user opted in. While it was
+ * owned unconditionally, deleting it from settings.json was futile — the next server boot put it
+ * back (TRDD-BKF5NZD3).
  */
-function ownedKeys(bodiesDir: string, otlpPort: number): Record<string, string> {
+function ownedKeys(bodiesDir: string, otlpPort: number, captureRawBodies: boolean): Record<string, string> {
   return {
     CLAUDE_CODE_ENABLE_TELEMETRY:                      '1',
     CLAUDE_CODE_ENHANCED_TELEMETRY_BETA:               '1',
@@ -114,7 +136,7 @@ function ownedKeys(bodiesDir: string, otlpPort: number): Record<string, string> 
     OTEL_LOG_TOOL_DETAILS:                             '1',
     OTEL_LOG_TOOL_CONTENT:                             '1',
     OTEL_LOG_ASSISTANT_RESPONSES:                      '1',
-    OTEL_LOG_RAW_API_BODIES:                           `file:${bodiesDir}`,
+    ...(captureRawBodies ? { [RAW_BODIES_KEY]: `file:${bodiesDir}` } : {}),
     OTEL_METRICS_INCLUDE_SESSION_ID:                   'true',
     OTEL_METRICS_INCLUDE_VERSION:                      'true',
     OTEL_METRICS_INCLUDE_ENTRYPOINT:                   'true',
@@ -125,9 +147,11 @@ function ownedKeys(bodiesDir: string, otlpPort: number): Record<string, string> 
 /** The expected key→value telemetry env table for a given bodies dir / OTLP port. Exported
  *  for `agentlenspro setup`, whose VERIFY step must compare the settings file against the
  *  expected values through a path independent of the writer (falsify-the-layer discipline) —
- *  re-exporting the ONE table keeps setup from growing a drift-prone copy. */
-export function ownedTelemetryKeys(bodiesDir: string, otlpPort: number): Record<string, string> {
-  return ownedKeys(bodiesDir, otlpPort)
+ *  re-exporting the ONE table keeps setup from growing a drift-prone copy. `captureRawBodies` is
+ *  REQUIRED (not defaulted) so a caller cannot accidentally verify against a table that demands a
+ *  key the user opted out of — verify must expect exactly what ensure writes. */
+export function ownedTelemetryKeys(bodiesDir: string, otlpPort: number, captureRawBodies: boolean): Record<string, string> {
+  return ownedKeys(bodiesDir, otlpPort, captureRawBodies)
 }
 
 /**
@@ -209,8 +233,8 @@ async function readMarker(markerPath: string): Promise<TelemetryMarker | null> {
  * so a later uninstall can restore it exactly.
  */
 export async function ensureTelemetryConfig(options: TelemetryConfigOptions = {}): Promise<EnsureResult> {
-  const { settingsPath, markerPath, bodiesDir, otlpPort } = resolveOptions(options)
-  const owned = ownedKeys(bodiesDir, otlpPort)
+  const { settingsPath, markerPath, bodiesDir, otlpPort, captureRawBodies } = resolveOptions(options)
+  const owned = ownedKeys(bodiesDir, otlpPort, captureRawBodies)
 
   const { settings } = await readSettingsOrThrow(settingsPath)
   const { env, envPreexisting } = extractEnv(settings, settingsPath)
@@ -222,6 +246,7 @@ export async function ensureTelemetryConfig(options: TelemetryConfigOptions = {}
   const markerKeys: Record<string, ManagedKeyRecord> = { ...(existingMarker?.keys ?? {}) }
   const added: string[] = []
   const overrode: string[] = []
+  const removed: string[] = []
   let changed = false
 
   const ops: SafeEditOp[] = []
@@ -233,6 +258,20 @@ export async function ensureTelemetryConfig(options: TelemetryConfigOptions = {}
       else if (String(env[key]) !== value) overrode.push(key)
     }
     if (env[key] !== value) { ops.push({ op: 'set', path: ['env', key], value }); changed = true }
+  }
+
+  // Capture OFF must ACTIVELY DELETE the key, not merely stop owning it. Dropping it from `owned`
+  // is NOT enough: the loop above only touches owned keys, so a key already in settings.json would
+  // sit there forever and Claude Code would keep dumping every conversation to disk. This delete is
+  // what makes "off" mean off (TRDD-BKF5NZD3).
+  //
+  // Guard: delete ONLY the value WE would have written (`file:${bodiesDir}`). A user who points the
+  // sink at their own directory made that choice deliberately and owns its cost — silently deleting
+  // a config we never wrote would be the same overreach that force-converging was.
+  if (!captureRawBodies && env[RAW_BODIES_KEY] === `file:${bodiesDir}`) {
+    ops.push({ op: 'delete', path: ['env', RAW_BODIES_KEY] })
+    removed.push(RAW_BODIES_KEY)
+    changed = true
   }
 
   const marker: TelemetryMarker = {
@@ -263,7 +302,7 @@ export async function ensureTelemetryConfig(options: TelemetryConfigOptions = {}
     await atomicWriteJson(markerPath, marker)
   }
 
-  return { changed, added, overrode, settingsPath, markerPath, bodiesDir, backupPath }
+  return { changed, added, overrode, removed, settingsPath, markerPath, bodiesDir, backupPath }
 }
 
 /**
@@ -271,7 +310,7 @@ export async function ensureTelemetryConfig(options: TelemetryConfigOptions = {}
  * marker. Idempotent: with no marker there is nothing to undo. Never touches non-owned keys.
  */
 export async function removeTelemetryConfig(options: TelemetryConfigOptions = {}): Promise<RemoveResult> {
-  const { settingsPath, markerPath } = resolveOptions(options)
+  const { settingsPath, markerPath, captureRawBodies } = resolveOptions(options)
   const marker = await readMarker(markerPath)
   if (!marker) return { changed: false, restored: [], deleted: [], settingsPath }
 
@@ -299,6 +338,17 @@ export async function removeTelemetryConfig(options: TelemetryConfigOptions = {}
   const finalEnv: Record<string, string> = { ...env }
   const ops: SafeEditOp[] = []
   for (const [key, rec] of Object.entries(marker.keys)) {
+    // "Uninstall = restore prior state" is the right contract for WIRING — but not for raw-body
+    // capture the user has switched OFF. On this machine the marker truthfully records
+    // hadKey:true (the key predated AgentLens), so a faithful restore would put the ~35 GB/day sink
+    // BACK and Claude Code would resume dumping every conversation to disk — an uninstall that makes
+    // the burn worse. Capture-off is an explicit intent that must outlive the removal of our wiring,
+    // so we delete rather than restore. Turning capture back on re-installs it (TRDD-BKF5NZD3).
+    if (key === RAW_BODIES_KEY && !captureRawBodies) {
+      if (key in finalEnv) { ops.push({ op: 'delete', path: ['env', key] }); delete finalEnv[key] }
+      deleted.push(key)
+      continue
+    }
     if (rec.hadKey && rec.priorValue !== null) {
       if (finalEnv[key] !== rec.priorValue) ops.push({ op: 'set', path: ['env', key], value: rec.priorValue })
       finalEnv[key] = rec.priorValue // re-set exactly what the user had
@@ -330,8 +380,8 @@ export async function removeTelemetryConfig(options: TelemetryConfigOptions = {}
 
 /** Per-key install status for `agentlens telemetry status`. Tolerates a corrupt marker. */
 export async function telemetryConfigStatus(options: TelemetryConfigOptions = {}): Promise<StatusResult> {
-  const { settingsPath, markerPath, bodiesDir, otlpPort } = resolveOptions(options)
-  const owned = ownedKeys(bodiesDir, otlpPort)
+  const { settingsPath, markerPath, bodiesDir, otlpPort, captureRawBodies } = resolveOptions(options)
+  const owned = ownedKeys(bodiesDir, otlpPort, captureRawBodies)
   const { settings } = await readSettingsOrThrow(settingsPath)
   const env = (typeof settings.env === 'object' && settings.env !== null && !Array.isArray(settings.env))
     ? settings.env as Record<string, string>

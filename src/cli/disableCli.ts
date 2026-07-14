@@ -8,6 +8,9 @@
 // every already-running session, because every hook is a fresh process that re-reads the disk.
 import { armKillSwitch, disarmKillSwitch, killSwitchPath, agentlensDisabled } from './killSwitch'
 import { findServerPid, stopServer } from './serverControl'
+import { dataDir } from './cliCore'
+import { setRawBodyCapture, rawBodyCaptureEnabled, RAW_BODIES_KEY } from '../captureConfig'
+import { ensureTelemetryConfig } from '../telemetryConfig'
 
 export async function runDisableCli(args: string[]): Promise<number> {
   const reason = args.filter(a => !a.startsWith('-')).join(' ') || undefined
@@ -28,9 +31,30 @@ export async function runDisableCli(args: string[]): Promise<number> {
     }
   }
 
+  // The single biggest write AgentlensPro causes is not one WE make — it is the one we ASK Claude
+  // Code to make: OTEL_LOG_RAW_API_BODIES makes it dump the whole conversation to disk on every
+  // request (~35 GB/day, TRDD-K3WDPR7M). A kill-switch that stops our server but leaves that key in
+  // settings.json would still be burning the disk, so "disabled" would be a lie. Turn capture off
+  // durably (so no later server boot re-arms it) and strip the key now.
+  let capture = 'raw-body capture was already off'
+  try {
+    if (rawBodyCaptureEnabled(dataDir(), process.env)) {
+      setRawBodyCapture(dataDir(), false)
+    }
+    const r = await ensureTelemetryConfig({ captureRawBodies: false })
+    capture = r.removed.includes(RAW_BODIES_KEY)
+      ? 'raw-body capture OFF — key removed from settings.json (restart Claude sessions to stop them writing)'
+      : 'raw-body capture was already off'
+  } catch (e) {
+    // Never fail the kill-switch on this: the flag is already armed and the server already stopped.
+    // Report loudly instead of silently leaving the user believing the burn is off.
+    capture = `WARNING: could not remove ${RAW_BODIES_KEY} (${(e as Error).message}) — remove it from settings.json by hand`
+  }
+
   console.log('AgentlensPro is now DISABLED.')
-  console.log(`  flag:   ${p}`)
-  console.log(`  server: ${stopped}`)
+  console.log(`  flag:    ${p}`)
+  console.log(`  server:  ${stopped}`)
+  console.log(`  capture: ${capture}`)
   console.log('')
   console.log('  Every hook, the burn-gate, auto-revive and background ingestion are OFF —')
   console.log('  in every Claude session already running, from its next hook fire. No restart needed.')
