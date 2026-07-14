@@ -6,6 +6,8 @@ All notable changes to AgentlensPro are documented here.
 
 ## [Unreleased]
 
+## [2.7.0] - 2026-07-15
+
 ### Added
 
 - **`check_cache_expiry` — is a session's prompt cache expired yet?** A new diagnostic that
@@ -20,6 +22,51 @@ All notable changes to AgentlensPro are documented here.
   and `--thresholdMinutes N` overrides the TTL with an explicit cutoff (e.g. `60` to probe "> 1h
   idle"). Reuses the doc-verified TTL classifier (`src/shared/cacheTtl.ts`) — no TTL number is
   re-declared. Pure core in `src/cacheExpiry.ts` (15 unit tests). (TRDD-OCNHOHE9)
+
+- **Global kill switch — `agentlenspro disable [reason]` / `agentlenspro enable`.** A single flag
+  file now disarms every hook, the burn-gate, server auto-revive, and background ingestion in
+  **every** Claude Code session already running, on that session's very next hook fire — no
+  restart needed, which a `settings.json` edit cannot achieve (a running session keeps using the
+  config it loaded at launch). `disable` also stops a running server and turns raw-body capture
+  off (removing `OTEL_LOG_RAW_API_BODIES` from `settings.json`), so "disabled" actually means
+  nothing is still writing. `enable` clears the flag; hooks resume on their next fire.
+  (TRDD-K3WDPR7M)
+
+- **Raw-body capture is now opt-in, off by default.** `agentlenspro config set captureRawBodies
+  on|off` (env `AGENTLENS_CAPTURE_RAW_BODIES`) toggles it. Turning it on (macOS only) mounts a
+  RAM-disk spool (`AgentLensSpool`, 2 GB default, `AGENTLENS_SPOOL_MB` to resize), points
+  `OTEL_LOG_RAW_API_BODIES` at the spool instead of a real disk path, and installs a boot-remount
+  LaunchAgent (`agentlenspro spool ensure`) so a reboot doesn't strand capture pointed at a
+  vanished RAM disk. If the RAM disk cannot be created, capture is refused rather than silently
+  falling back to writing raw bodies to the SSD. Previously this was force-armed on every server
+  boot with no way to turn it off. (TRDD-BKF5NZD3)
+
+- **Content-addressed body store — fileless DuckDB → immutable zstd Parquet.** Captured bodies are
+  now ingested into `<dataDir>/store/` and deduplicated across turns instead of accumulating as
+  loose JSON files or feeding an ever-growing gzip archive. A body is deleted from its source only
+  after it is proven to reconstruct byte-identically from the durable store (verify, then delete).
+  Measured on this project's own captured history: ~52 GB of raw bodies (live capture plus the
+  drained legacy `.wad` archive) compressed to ~270 MB of Parquet on disk (~190×), with every body
+  verified byte-identical at ingest time — full-corpus validation was still running at the time of
+  writing (`reports/storage-migration/20260715_003054+0200-backfill-and-drain.md`). A smaller,
+  independently-run dry run measured 167× (4.00 GB → 24 MB, 7,439/7,439 bodies verified).
+  `--export-bodies` now reads from both the store and the legacy `.wad` archive (kept as a
+  read-only fallback, never deleted automatically), so a time-window export can no longer silently
+  miss a body that has already been reclaimed from disk. (TRDD-K3WDPR7M)
+
+- **Delta persistence for session/offset state.** `log-sessions.json` and `log-offsets.json` no
+  longer get rewritten in full on every save — previously ~9.4 MB/min of device writes combined,
+  regardless of how much actually changed. Only the records that changed are now appended to a
+  delta log, with periodic compaction back into a fresh snapshot. (TRDD-K3WDPR7M)
+
+### Fixed
+
+- **Server CPU spin under sustained load.** The dashboard rebuild is now memoized (an unchanged
+  model is not rebuilt), and log scanning is now targeted at the specific paths `fs.watch` names
+  instead of a full directory sweep on every tick, with a 60-second full sweep kept only as a
+  correctness backstop for events the watcher coalesces or misses. Measured under identical
+  synthetic load: 17.1% → 3.0% CPU with one writing session, 28.8% → 8.2% with four.
+  (TRDD-X2E6OSWK)
 
 ## [2.6.0] - 2026-07-13
 

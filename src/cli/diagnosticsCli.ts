@@ -52,6 +52,11 @@ usage:
   agentlenspro config get <key>               one retention knob's effective value + where it came from
   agentlenspro config set <key> <value>       persist a retention knob to ~/.agentlens/config.json
                                               (survives uninstall/upgrade; restart to apply; env still wins)
+                                              captureRawBodies on|off turns raw-body capture on/off
+                                              (opt-in, default off; on mounts a RAM-disk spool on macOS)
+  agentlenspro spool ensure                   (re)create the RAM-disk spool for raw-body capture — a
+                                              no-op when capture is off; run at login by a LaunchAgent
+                                              (installed automatically when capture is turned on)
   agentlenspro env [facet] [--json] [--out F]  detect the runtime environment: terminal kind, OS,
                                               Claude/ai-maestro/CI/container context, filesystem/worktree,
                                               user, network/VPN/proxy, cloud (AWS/Azure/GCP), tooling,
@@ -74,8 +79,9 @@ operations:
   --stop-server         graceful SIGTERM to the running server (flushes all stores first)
   --dashboard           ensure the server is up, then open the dashboard
   --purge-db            clear the span store + session cards (server re-ingests from logs)
-  --export-bodies DIR   extract the archived OTEL bodies into DIR as plain files
-                        (optionally --since <ISO|hours> / --until <ISO>)
+  --export-bodies DIR   extract OTEL bodies into DIR as plain files, from BOTH the content-
+                        addressed store and the legacy .wad archive (optionally --since <ISO|hours>
+                        / --until <ISO>)
   --purge-bodies        delete ALL archived body volumes (the live 72h window is untouched)
   --risk                one-shot realtime culprit check (~50ms, REST fast path): prints ONLY the
                         active burn risks — each names the culprit session/workspace/model and

@@ -77,11 +77,16 @@ rate-limit turn deaths (StopFailure), compaction boundaries + trigger (PreCompac
 session lifecycle — into `~/.agentlens/hook-events/` (NDJSON daily buckets, 31d retention).
 Query: `GET /api/hook-events?session=&ev=&since=&until=&limit=` on the UI port.
 
-Bodies lifecycle: live plain files for 72h → auto-archived hourly into monthly WAD volumes
-(`~/.agentlens/otel-bodies-archive/bodies-YYYY-MM.wad` — gzip lumps + NDJSON index, random
-access, ~8-10× smaller) → volumes deleted only after `AGENTLENS_BODIES_RETENTION_DAYS` (31).
-One server at a time: the canonical instance owns `~/.agentlens/server.pid` and a second
-boot refuses cleanly. `batch --out` files are position-prefixed (`out-1-<tool>.json`).
+Bodies lifecycle: raw capture is opt-in and off by default (`agentlenspro config set
+captureRawBodies on|off`); when on, bodies land in a RAM-disk spool (macOS) instead of the SSD.
+Live plain files (72h, `bodiesMaxAgeHours`) are ingested into a content-addressed store
+(`~/.agentlens/store/` — fileless DuckDB → immutable zstd Parquet, deduped across turns,
+~190× measured on this project's own history) — a body is deleted from its source only after it
+is proven to reconstruct byte-identically from the store. The legacy monthly `.wad` archive
+(`~/.agentlens/otel-bodies-archive/bodies-YYYY-MM.wad`) is a read-only fallback for history not
+yet migrated, never written to again; `--export-bodies` reads from both. One server at a time:
+the canonical instance owns `~/.agentlens/server.pid` and a second boot refuses cleanly.
+`batch --out` files are position-prefixed (`out-1-<tool>.json`).
 
 ## Local commands — no server needed (`config`, `env`)
 
@@ -103,9 +108,20 @@ agentlenspro server restart                       # apply it
 ```
 
 Knobs: `spansRetentionDays` (30) · `summaryWindowHours` (24) · `bodiesMaxAgeHours` (72) ·
-`bodiesMaxGb` (8) · `bodiesRetentionDays` (31). A `set` on a corrupt config file REFUSES to write
-rather than clobbering it. Recipe — keep a year of traces on a big disk:
-`agentlenspro config set spansRetentionDays 365 && agentlenspro server restart`.
+`bodiesMaxGb` (8) · `bodiesRetentionDays` (31) · `captureRawBodies` (off) — the one boolean knob,
+`config set captureRawBodies on|off`; turning it on mounts a RAM-disk spool (macOS,
+`agentlenspro spool ensure` re-creates it after a reboot) so raw bodies never touch the SSD. A
+`set` on a corrupt config file REFUSES to write rather than clobbering it. Recipe — keep a year of
+traces on a big disk: `agentlenspro config set spansRetentionDays 365 && agentlenspro server
+restart`.
+
+### Emergency stop: `agentlenspro disable [reason]` / `enable`
+
+The global brake — one flag file that disarms every hook, the burn-gate, server auto-revive, and
+background ingestion in **every** Claude Code session already running, on that session's next hook
+fire. No restart needed (a `settings.json` edit alone cannot reach a session that already loaded
+its config). `disable` also stops a running server and turns raw-body capture off; `enable` clears
+the flag.
 
 ### `agentlenspro env` — environment / system detection
 

@@ -81,6 +81,12 @@ not resolve on `PATH` (a hook the shell cannot find would silently never fire).
 `agentlenspro-hook`/`agentlenspro-gate` PATH-bin names, and any v0 absolute-path
 `spy-agentlens*` entries.
 
+#### Emergency stop: `agentlenspro disable` / `enable`
+
+If AgentlensPro (or something it configured) is misbehaving, `agentlenspro disable [reason]` is the global brake: it drops a flag file that disarms every hook, the burn-gate, server auto-revive, and background ingestion **in every Claude Code session already running**, on that session's very next hook fire — no restart needed. It also stops the running server and turns off raw-body capture (see [Raw-body capture](#raw-body-capture--opt-in-off-by-default)), since a kill switch that left either running would still be writing to disk. `agentlenspro enable` clears the flag; hooks resume on their next fire.
+
+A `settings.json` edit cannot do this on its own — a session that already loaded its config at launch keeps using it until it restarts. The flag file is the one channel that reaches every already-running process.
+
 ### Docker (OTEL only)
 
 > **Note:** Docker cannot read local session log files from your host machine without explicit volume mounts for each agent directory. Docker mode receives OTEL traces only — log file ingestion is not available. Use the local option above if you need log file history.
@@ -164,9 +170,9 @@ Five knobs control how long each kind of data is kept:
 | --- | --- | --- | --- |
 | `spansRetentionDays` | 30 days | `AGENTLENS_SPANS_RETENTION_DAYS` | span segments (the trace DB) kept on disk |
 | `summaryWindowHours` | 24 hours | `AGENTLENS_SUMMARY_WINDOW_HOURS` | in-memory rolling summary window (disk keeps everything) |
-| `bodiesMaxAgeHours` | 72 hours | `AGENTLENS_BODIES_MAX_AGE_HOURS` | raw OTEL bodies kept as plain files before archiving |
-| `bodiesMaxGb` | 8 GB | `AGENTLENS_BODIES_MAX_GB` | live-bodies size cap (archives oldest-first; never deletes) |
-| `bodiesRetentionDays` | 31 days | `AGENTLENS_BODIES_RETENTION_DAYS` | archived OTEL bodies kept before whole-volume deletion |
+| `bodiesMaxAgeHours` | 72 hours | `AGENTLENS_BODIES_MAX_AGE_HOURS` | raw OTEL bodies kept as plain files before being ingested into the content-addressed store (below) |
+| `bodiesMaxGb` | 8 GB | `AGENTLENS_BODIES_MAX_GB` | live-bodies size cap — an emergency valve that forces immediate ingestion of everything when exceeded (never deletes) |
+| `bodiesRetentionDays` | 31 days | `AGENTLENS_BODIES_RETENTION_DAYS` | legacy `.wad` archive volumes kept before whole-volume deletion (new bodies no longer archive there — see below) |
 
 **Set a value persistently** with the CLI — it is written to `~/.agentlens/config.json` (in the durable data directory, so it too survives uninstall/upgrade, and the always-on daemon re-reads it every boot):
 
@@ -177,6 +183,26 @@ agentlenspro config set spansRetentionDays 90    # persist a change (restart the
 ```
 
 Each knob is resolved at boot with the precedence **environment variable > `config.json` > built-in default** — the env var stays the ephemeral ops override, the file is the durable setting you set once. Every value has a safety floor (e.g. days ≥ 1), and a below-floor value from any source is clamped. Restart the server/daemon (`agentlenspro server restart`) after a change.
+
+### Raw-body capture — opt-in, off by default
+
+Claude Code can be told to dump the full raw request/response body of every LLM call to disk (`OTEL_LOG_RAW_API_BODIES`) — useful for deep forensic replay, but expensive if left running unmanaged (on the order of tens of MB/min of writes). AgentlensPro keeps this **off by default** and only wires it up through a verified toggle:
+
+```bash
+agentlenspro config set captureRawBodies on    # turn capture on
+agentlenspro config set captureRawBodies off   # turn capture off (the default)
+agentlenspro spool ensure                      # re-create the RAM-disk spool after a reboot
+```
+
+Turning capture **on** (macOS only) mounts a RAM-disk spool (`AgentLensSpool`, 2 GB default, resizable with `AGENTLENS_SPOOL_MB`) and points the raw-body writes at it, so the write itself lands in volatile memory instead of wearing the SSD — the durable copy is the compressed body store described below. If the RAM disk cannot be created, capture is **refused** (non-zero exit) rather than silently falling back to writing raw bodies to disk. A LaunchAgent re-creates the spool at login so a reboot doesn't leave capture pointed at a RAM disk that no longer exists. Restart your Claude Code sessions after toggling — the env var is read at launch.
+
+### The body store — bodies are deduplicated and compressed, not hoarded on disk
+
+Captured (and log-file-sourced) bodies are ingested into a content-addressed store (`<dataDir>/store/` — fileless DuckDB flushed to immutable, zstd-compressed Parquet parts) instead of accumulating as loose JSON files or an ever-growing gzip archive. A body is deleted from its source location only after it has been proven to reconstruct byte-identically from the durable store — verify, then delete, never the reverse. Because consecutive turns re-send most of the same transcript, the store also deduplicates identical spans across turns, which is most of where the size reduction comes from.
+
+Measured on this project's own captured history: ~52 GB of raw bodies (live capture plus a drained legacy archive) compressed to ~270 MB on disk (~190×), with every body verified byte-identical at ingest time — a full-corpus validation sweep was still running at the time of writing (see `reports/storage-migration/20260715_003054+0200-backfill-and-drain.md`). A separate, smaller dry run independently measured 167× (4.00 GB → 24 MB, 7,439/7,439 bodies verified).
+
+The legacy `.wad` archive is kept as a read-only fallback for history not yet migrated — it is never deleted automatically. `agentlenspro --export-bodies DIR` reads from **both** the store and the `.wad` archive, so exporting a time range never silently misses a body that has already been reclaimed from disk.
 
 ## Environment diagnostics
 
