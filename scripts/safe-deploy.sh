@@ -15,8 +15,9 @@
 #   --dry-run      run every gate but do NOT build or restart (a CI-style check)
 #   --no-restart   build on green but leave the running server as-is
 #
-# Node note: pnpm/tsc/esbuild run under the invoking Node; the mocha suite's known-good baseline runs
-# under Node 20, resolved automatically (override with AGENTLENS_TEST_NODE=/path/to/node).
+# Node note: everything runs under the invoking Node, which must satisfy package.json `engines` and be
+# able to load the store engine (see require_store_capable_node). Override the mocha runner with
+# AGENTLENS_TEST_NODE=/path/to/node.
 #
 # Testability: every external command is overridable via an env var (GATE_CHECKTYPES, GATE_LINT,
 # GATE_MIRRORS, GATE_COMPILE_TESTS, GATE_MOCHA, BUILD_CMD, SMOKE_CMD, RESTART_CMD) so the safety logic
@@ -50,29 +51,31 @@ EOF
   esac
 done
 
-# Resolve the Node used for the mocha step (Node 20 baseline). AGENTLENS_TEST_NODE overrides; else the
-# newest local nvm v20; else the current node (with the version echoed) so a missing exact version
-# never hard-blocks a deploy.
+# Resolve the Node used for the mocha step. AGENTLENS_TEST_NODE overrides; else the current node.
+#
+# WHY NO PIN ANY MORE (was: "newest local nvm v20"): the pin existed only to dodge mocha 10's ancient
+# yargs@16, which throws `require is not defined in ES module scope` on modern Node. mocha 11 (yargs@18)
+# fixed that and the whole suite passes on the current Node. Pinning the gate to an EOL runtime
+# (Node 18 EOL 2025-04, Node 20 EOL 2026-04) also hid the fact that the product's real floor had moved,
+# so the pin is gone and the floor is declared in package.json `engines` instead.
 resolve_test_node() {
   if [ -n "${AGENTLENS_TEST_NODE:-}" ] && [ -x "${AGENTLENS_TEST_NODE}" ]; then
     printf '%s' "${AGENTLENS_TEST_NODE}"; return
   fi
-  local nvmdir="$HOME/.nvm/versions/node"
-  if [ -d "$nvmdir" ]; then
-    # Glob the v20.* dirs (nullglob → empty on no match) and pick the highest by version sort — no
-    # `ls | grep` (SC2010), and version-sort so v20.10 > v20.9 (lexical glob order would get that wrong).
-    shopt -s nullglob
-    local candidates=("$nvmdir"/v20.*)
-    shopt -u nullglob
-    if [ "${#candidates[@]}" -gt 0 ]; then
-      local best
-      best="$(printf '%s\n' "${candidates[@]}" | sort -V | tail -1)"
-      if [ -n "$best" ] && [ -x "$best/bin/node" ]; then
-        printf '%s' "$best/bin/node"; return
-      fi
-    fi
-  fi
   command -v node
+}
+
+# Fail LOUDLY (never silently skip) when the store engine cannot load on the resolved Node. @duckdb/node-api
+# ships a PREBUILT native binary per platform (optionalDependencies, esbuild-style — never built from
+# source), so a failure here means a genuinely unsupported platform/runtime, not a missing toolchain. A
+# green gate on a runtime that cannot open the database is worse than a red one.
+require_store_capable_node() {
+  local n="$1"
+  if ! "$n" -e 'require("@duckdb/node-api")' >/dev/null 2>&1; then
+    printf 'FATAL: %s (%s) cannot load @duckdb/node-api (the store engine) — unsupported platform/runtime.\n' \
+      "$n" "$("$n" -v 2>/dev/null)" >&2
+    exit 1
+  fi
 }
 
 # Gate/build/restart commands — overridable for tests (defaults are the real gates).
@@ -112,6 +115,7 @@ if [ -n "${GATE_MOCHA:-}" ]; then
 else
   TEST_NODE="$(resolve_test_node)"
   echo "  test node: $TEST_NODE ($("$TEST_NODE" --version 2>/dev/null))"
+  require_store_capable_node "$TEST_NODE"
   PATH="$(dirname "$TEST_NODE"):$PATH" npx mocha || fail "test suite"
 fi
 
