@@ -12,6 +12,30 @@ npt: []
 eht: []
 ---
 
+## ⏵ STATE — 2026-07-15 NIGHT — deep re-audit found 2 latent defects (both fixed, `ee88e0b`)
+
+Re-auditing my own "completed" checkmarks surfaced, in order of severity:
+
+1. **Part-name collision = silent data loss (FIXED).** Part names came from the directory's FILE
+   COUNT; two concurrent writers compute the same name, and **`COPY TO` silently overwrites**
+   (verified by experiment). Now epoch-ms+pid+seq names + a refuse-to-overwrite guard, plus a
+   concurrent-writers test. Prior corpus checked: no damage (old seeds always exceeded max tag;
+   live store validates 0 dangling).
+2. **The read path dead-ended (FIXED).** Reclaimed bodies existed only in the store and nothing
+   read the store; `/api/bodies/export` now has a store half (`exportBodiesFromStore`).
+3. **KNOWN GAP — backfilled `ts` is INGEST time, not capture time.** `ingestBody` now takes `tsMs`
+   (both callers pass file mtime / .idx mtimeMs), but the first backfill's ~22k rows + drained
+   lumps carry ingest-day timestamps. RECOVERY PATH: the retained `.wad` `.idx` entries hold true
+   mtimes by src_name, and span body-pointer events hold capture times — a schema migration (the
+   framework exists, `src/store/migrate.ts`) can rewrite the `bodies` parts from that map. Bytes
+   are unaffected (hash-proven); only time-window queries lie until then.
+4. **forensics.db is NOT a live write source** (plan claim stale): untouched since Jul 9,
+   `openForensicsDb` has no callers. The `loadSpawnMap` unresolved-spawn bug remains a separate
+   functional issue, not a burn issue.
+5. **Phase 3's RAM-disk spool was NOT actually built** when I first marked it done — only the
+   archiver retirement was. Now in flight (opus agent, spec in this session): capture-on requires
+   the spool, fail-fast, 60s drain, LaunchAgent remount.
+
 ## ⏵ STATE — 2026-07-14 EVENING — Phases 2/3/4 LANDED, gate green (1093 passing)
 
 **Every claim below is measured, not reasoned.** Device writes via `ri_diskio_byteswritten` —
