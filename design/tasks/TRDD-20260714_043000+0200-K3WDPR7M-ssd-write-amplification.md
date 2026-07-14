@@ -12,6 +12,49 @@ npt: []
 eht: []
 ---
 
+## ⏵ STATE — 2026-07-14 EVENING — Phases 2/3/4 LANDED, gate green (1093 passing)
+
+**Every claim below is measured, not reasoned.** Device writes via `ri_diskio_byteswritten` —
+file-size growth LIES (a row-group rewrite burns writes without growing the file).
+
+| burn source | before | after | where |
+|---|---|---|---|
+| Claude Code raw bodies | ~21 MB/min | **0** (capture opt-in, default OFF) | TRDD-BKF5NZD3 |
+| `.wad` archiver boot pass | **694 MB/min** | **retired** → throttled store ingest | `d925107` |
+| `log-sessions.json` + `log-offsets.json` | 9.4 MB/min | **~0** (delta append) | `9985c34` |
+| our store | — | **15 KB/turn** (floor is 14) | `e63ec01` |
+| CPU spin | 50–78% | fix in flight | TRDD-X2E6OSWK |
+
+**DRY RUN on the real corpus (deleteAfter=false — NOTHING deleted):**
+`7,439 bodies · 4.00 GB → 0.024 GB zstd Parquet (167×) · VERIFIED 7439/7439 byte-identical from the
+DURABLE store · 0 failures.`
+
+**The extension is CANCELLED, on evidence** (user-ratified): the measured floor is 14 KB/turn and
+plain SQL already achieves 15 KB/turn. A custom Rust DuckDB extension cannot beat the floor — at
+best it recovers ~1 KB/turn — while costing a per-platform native binary loaded in-process, which
+breaks the prebuilt-binary/npx-installable property. Reopen ONLY if profiling shows the JS
+sectioner is a real bottleneck.
+
+**CPU-spin root cause (profiled, and it REFUTES the old 4s-tick theory):** `buildUpdatePayload()`
+rebuilds the whole dashboard on a **1-second** debounce floor (the code's own comment says 4s), and
+`runLogScan()` does a full readdir+stat of **12,508 files every 5 s** *and* on every `fs.watch`
+event. Together ~78% of non-idle CPU.
+Evidence: `reports/cpu-profile/20260714_203932+0200-cpu-spin.md`.
+
+**NEXT ACTION:** Phase 5 — full backfill + reclaim. Authorized by the user, gated on the dry run
+above. `ingestPass` only deletes a body after proving it reconstructs byte-for-byte from a DURABLE
+Parquet part.
+
+**SUPERSEDED — do NOT carry forward:**
+- ~~"the 4-second tickBurn rebuild causes the CPU spin"~~ — measured and refuted twice.
+- ~~"memory_limit removes the write amplification"~~ — it does NOT (the persistent `.db` burned
+  5 MB/turn *with* it set). Being FILELESS does. `memory_limit`'s real job is to stop DuckDB
+  spilling to `temp_directory` (which defaults to `.tmp` — a hidden SSD write path we now disable).
+- ~~"this session writes 0 raw bodies"~~ — it did; I read the wrong metadata field (`session_uuid`;
+  the real one is `session_id`), so everything attributed to `?`.
+
+---
+
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-14
 
 **USER-REPORTED SYMPTOM (the trigger).** "We got a big problem with the server — it is burning my SSD
