@@ -58,6 +58,16 @@ function spoolHookEvent(payload: Buffer): void {
   } catch { /* best effort — a hook must never throw */ }
 }
 
+/** The out-of-band brake: `<dataDir>/NO_REVIVE` on disk stops every future hook from resurrecting the
+ *  server. Needed because AGENTLENS_NO_REVIVE only reaches a hook that the agent spawned with it
+ *  already in its env — an operator facing a runaway server cannot retrofit env onto a running agent,
+ *  and `kill` alone is futile when the very next hook spawns it again. A file any shell can touch is
+ *  the only brake that actually reaches the hook. Fail-OPEN (a stat error ⇒ not disabled): a
+ *  filesystem hiccup must not silently stop ingestion. */
+export function reviveDisabledOnDisk(): boolean {
+  try { return fs.existsSync(path.join(dataDir(), 'NO_REVIVE')) } catch { return false }
+}
+
 /** Fire a DETACHED server revive without waiting (the hook must exit 0 fast). A short-TTL mtime lock
  *  collapses a burst of N hooks into ONE spawn; the server's own pidfile guard rejects a second
  *  canonical instance if two race. Never throws, never blocks. */
@@ -78,7 +88,15 @@ function reviveDaemonDetached(): void {
     // Spool-only mode: record the event to disk for the drain but do NOT auto-spawn the server.
     // Used by tests, and by anyone who supervises the daemon externally (launchd) and doesn't want
     // hooks spawning it. The lock is still written above so the stampede semantics are unchanged.
+    //
+    // TWO switches, because the env var alone cannot stop a revive in practice: a hook is spawned by
+    // the AGENT (Claude Code), so it inherits THAT process's env — an operator watching a runaway
+    // server has no way to inject AGENTLENS_NO_REVIVE into an already-running agent, and killing the
+    // server just makes the next hook resurrect it. The on-disk flag is the out-of-band brake that a
+    // human (or `agentlenspro server stop --stay-down`) can set from any shell, and it is honored by
+    // every future hook process because each one re-reads it from the filesystem.
     if (process.env.AGENTLENS_NO_REVIVE === '1') return
+    if (reviveDisabledOnDisk()) return
     let serverJs: string
     try { serverJs = findServerJs() } catch { return } // no bundle resolvable — cannot revive
     const child = spawn(process.execPath, ['--max-old-space-size=6144', serverJs], {
