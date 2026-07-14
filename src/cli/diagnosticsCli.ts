@@ -41,6 +41,13 @@ usage:
   agentlenspro hook                           lifecycle hook handler (stdin → server; registered by setup)
   agentlenspro gate                           agent-launch burn gate (stdin → server; registered by setup)
   agentlenspro heartbeat-cost [--oneline]     exact token + $ cost of the last settled heartbeat fire
+  agentlenspro disable [reason]               GLOBAL BRAKE — turn every AgentlensPro side-effect OFF
+                                              (hooks, burn-gate, auto-revive, background ingestion) in
+                                              EVERY running Claude session, on its next hook fire. Stops
+                                              the server too. Works WITHOUT restarting any session — a
+                                              settings edit does not, because a running agent loaded its
+                                              config at launch.
+  agentlenspro enable                         undo disable — hooks resume on their next fire
   agentlenspro config [list]                  show data-retention knobs: effective value + source
   agentlenspro config get <key>               one retention knob's effective value + where it came from
   agentlenspro config set <key> <value>       persist a retention knob to ~/.agentlens/config.json

@@ -19,6 +19,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { uiBaseUrl, dataDir } from './cliCore'
 import { findServerJs } from './serverControl'
+import { agentlensDisabled, noRevivePath } from './killSwitch'
 
 // D3K7QM2P/1a — hook durability. When the server can't take a hook event (down, or shedding under
 // load), we must NOT lose it: durably spool the payload to disk (the server's boot/periodic drain
@@ -65,7 +66,12 @@ function spoolHookEvent(payload: Buffer): void {
  *  the only brake that actually reaches the hook. Fail-OPEN (a stat error ⇒ not disabled): a
  *  filesystem hiccup must not silently stop ingestion. */
 export function reviveDisabledOnDisk(): boolean {
-  try { return fs.existsSync(path.join(dataDir(), 'NO_REVIVE')) } catch { return false }
+  // Either brake stops a revive: the NARROW one (NO_REVIVE — keep ingesting, just don't spawn a
+  // server) or the GLOBAL one (DISABLED — stop everything). Checked here as well as at the hook
+  // entry point on purpose: reviveDaemonDetached() spawns a detached process, and that is the one
+  // side-effect that must never slip through a missed guard.
+  if (agentlensDisabled()) { return true }
+  try { return fs.existsSync(noRevivePath()) } catch { return false }
 }
 
 /** Fire a DETACHED server revive without waiting (the hook must exit 0 fast). A short-TTL mtime lock
@@ -158,6 +164,12 @@ export async function runGateCheck(payload: Buffer, opts: { baseUrl?: string; ti
 
 /** Process entry for `agentlenspro hook` / `agentlenspro gate`. Always resolves 0. */
 export async function runHookCommand(kind: 'hook' | 'gate'): Promise<number> {
+  // GLOBAL kill-switch, first thing and before stdin: `<dataDir>/DISABLED` disarms every hook in
+  // every RUNNING Claude session on the next fire — the only channel that reaches an agent whose
+  // env and config were fixed at launch (see killSwitch.ts; 13 stale sessions kept writing through
+  // a settings edit during the 2026-07-14 SSD incident). Returning 0 with no output is a no-op for
+  // a hook and an ALLOW for the gate — a disabled AgentlensPro must never block the user's work.
+  if (agentlensDisabled()) { return 0 }
   // The gate kill-switch must short-circuit BEFORE stdin is read: the runner may hold the
   // pipe open, and a disabled gate must cost nothing (matches spy-agentlens-gate.sh).
   if (kind === 'gate' && (process.env.AGENTLENS_GATE || 'on') === 'off') return 0
