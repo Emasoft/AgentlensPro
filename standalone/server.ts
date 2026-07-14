@@ -51,10 +51,11 @@ import { atomicWriteFileSync, heapPressure, RequestLog } from '../src/serverRunt
 import { SegmentedSpanStore, migrateLegacySpansFile, spanTimestampMs } from '../src/segmentedSpanStore'
 import { appendToArchive, purgeArchiveVolumes, archiveDiskUsage, extractArchive } from '../src/bodyArchive'
 import {
-  loadLogOffsets, saveLogOffsets, loadPersistedCards, savePersistedCards,
+  loadLogOffsets, loadPersistedCards,
   recordCollectorStart, recordCollectorHeartbeat, recordCollectorStop, computeCollectorGaps,
-  type LifecycleStore,
+  LOG_INGEST_VERSION, type LifecycleStore, type PersistedFileState,
 } from '../src/collectorState'
+import { DeltaLog } from '../src/store/deltaLog'
 import type { Span } from '../src/shared/telemetryTypes'
 import type { SessionSummaryCard, CollectorGap } from '../src/shared/summarizerTypes'
 import { CodexSessionNormalizer } from '../src/codexSessionNormalizer'
@@ -81,14 +82,36 @@ const RET = resolveRetention(DATA_DIR, process.env)
 const SPANS_DIR = path.join(DATA_DIR, 'spans')
 const LEGACY_SPANS_FILE = path.join(DATA_DIR, 'spans.json')
 // TRDD-PJC8N1HO — durable-state sidecars (all under DATA_DIR, all written atomically):
-const OFFSETS_FILE   = path.join(DATA_DIR, 'log-offsets.json')     // spec 3: logReader tail offsets
-const CARDS_FILE     = path.join(DATA_DIR, 'log-sessions.json')    // spec 3: stripped log cards (fast restart)
+const OFFSETS_FILE   = path.join(DATA_DIR, 'log-offsets.json')     // legacy whole-file sidecar — migration source only (see offsetsLog below)
+const CARDS_FILE     = path.join(DATA_DIR, 'log-sessions.json')    // legacy whole-file sidecar — migration source only (see cardsLog below)
 const LIFECYCLE_FILE = path.join(DATA_DIR, 'collector-lifecycle.json') // spec 2: start/stop/heartbeat log
 const REQUEST_LOG    = path.join(DATA_DIR, 'requests.log')         // spec 6: one line per HTTP request
 
 // Ensure DATA_DIR exists before any sidecar is written (lifecycle/offsets/crash all live here). The
 // spans loader below also mkdir's it, but the lifecycle start marker fires first, so do it up front.
 try { if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true }) } catch { /* best effort */ }
+
+// TRDD-K3WDPR7M Phase 4: delta-log persistence for the two heaviest sidecars — append-only NDJSON
+// (snapshot + delta) instead of rewriting the whole file every interval. Keyed by each record's own
+// id, so save() diffs record-by-record and writes ONLY what changed (was: 31.6MB/300s + 3.1MB/60s
+// unconditionally — ~9.4MB/min of pure SSD wear). OFFSETS_FILE/CARDS_FILE above are migration sources
+// only from here on — never written again.
+const cardsLog = new DeltaLog<SessionSummaryCard>(DATA_DIR, 'log-sessions')
+const offsetsLog = new DeltaLog<PersistedFileState>(DATA_DIR, 'log-offsets')
+
+// DeltaLog has no notion of LOG_INGEST_VERSION (unlike the old {v, cards}/{v, offsets} wrapper it
+// replaces) — without an external stamp, a future semantics bump would silently keep serving
+// stale-semantics records forever instead of forcing the cold rescan collectorState.ts documents.
+// Written only after a successful save (saveCardsNow/saveOffsetsNow) or a version-confirmed migration,
+// so a crash before the first post-bump save leaves the marker stale too and the NEXT boot correctly
+// retries the cold rescan rather than trusting a half-migrated delta log.
+const DELTA_VERSION_FILE = path.join(DATA_DIR, 'log-delta-version.json')
+function deltaVersionIsCurrent(): boolean {
+  try { return (JSON.parse(fs.readFileSync(DELTA_VERSION_FILE, 'utf8')) as { v?: unknown }).v === LOG_INGEST_VERSION } catch { return false }
+}
+function stampDeltaVersion(): void {
+  try { atomicWriteFileSync(DELTA_VERSION_FILE, JSON.stringify({ v: LOG_INGEST_VERSION })) } catch { /* best effort, mirrors the lifecycle stamps elsewhere */ }
+}
 
 // spec 6: request log (ring buffer + rotating file) so any future crash is attributable to a request.
 const requestLog = new RequestLog(REQUEST_LOG)
@@ -914,20 +937,53 @@ async function startLogIngestion() {
     logReader = new LogReader({ log: (msg) => console.log(msg), sqlFactory })
   } catch { /* no sql.js — OpenCode falls back to JSON */ }
 
-  // TRDD-PJC8N1HO spec 3: FAST RESTART. Import persisted tail offsets so the first scan SKIPS every
-  // unchanged file (0 cold-start full reads) instead of re-parsing ~12k files from byte 0, and restore
-  // the stripped log cards so the dashboard list + MCP are fresh in <5s. The heavy per-step timeline is
-  // re-parsed on demand (see /api/timeline). A missing/corrupt sidecar → the normal cold scan below.
+  // TRDD-PJC8N1HO spec 3 / TRDD-K3WDPR7M Phase 4: FAST RESTART. Load the delta logs so the first scan
+  // SKIPS every unchanged file (0 cold-start full reads) instead of re-parsing ~12k files from byte 0,
+  // and restores the stripped log cards so the dashboard list + MCP are fresh in <5s. load() runs
+  // UNCONDITIONALLY (even when the version stamp below is stale) so DeltaLog's internal `written`
+  // hashes are seeded from whatever is on disk — otherwise the first post-rescan save() would re-append
+  // every record instead of diffing against it. Only the RESTORE is gated on the version stamp.
+  let cardsMap = cardsLog.load()
+  let offsetsMap = offsetsLog.load()
+  let deltaCurrent = deltaVersionIsCurrent()
+
+  // One-time migration (TRDD-K3WDPR7M): the legacy whole-file sidecar still exists and the delta log
+  // has never been seeded. loadPersistedCards/loadLogOffsets already refuse a version-stale legacy file
+  // (return null), so migrated data is current-version by construction — stamp it immediately so the
+  // restore check right below (on this SAME boot) doesn't discard what was just migrated. The legacy
+  // file is deliberately NOT deleted (RULE 0 — a follow-up task reclaims it once the delta log has
+  // proven itself).
+  if (cardsMap.size === 0 && cardsLog.diskBytes() === 0 && fs.existsSync(CARDS_FILE)) {
+    const legacyCards = loadPersistedCards(CARDS_FILE)
+    if (legacyCards && legacyCards.length > 0) {
+      cardsMap = new Map<string, SessionSummaryCard>(legacyCards.map((c): [string, SessionSummaryCard] => [c.sessionId, c]))
+      cardsLog.save(cardsMap)
+      stampDeltaVersion()
+      deltaCurrent = true
+      console.log(`[AgentLens] Migrated ${cardsMap.size} session card(s) from legacy ${path.basename(CARDS_FILE)} into the delta log`)
+    }
+  }
+  if (offsetsMap.size === 0 && offsetsLog.diskBytes() === 0 && fs.existsSync(OFFSETS_FILE)) {
+    const legacyOffsets = loadLogOffsets(OFFSETS_FILE)
+    if (legacyOffsets) {
+      offsetsMap = new Map<string, PersistedFileState>(Object.entries(legacyOffsets))
+      offsetsLog.save(offsetsMap)
+      stampDeltaVersion()
+      deltaCurrent = true
+      console.log(`[AgentLens] Migrated ${offsetsMap.size} log tail offset(s) from legacy ${path.basename(OFFSETS_FILE)} into the delta log`)
+    }
+  }
+
   let restoredFromDisk = false
-  const persistedCards = loadPersistedCards(CARDS_FILE)
-  if (persistedCards && persistedCards.length > 0) {
-    for (const card of persistedCards) logSessions.set(card.sessionId, card)
+  if (deltaCurrent && cardsMap.size > 0) {
+    for (const card of cardsMap.values()) logSessions.set(card.sessionId, card)
     restoredFromDisk = true
   }
-  const persistedOffsets = loadLogOffsets(OFFSETS_FILE)
-  if (persistedOffsets) {
-    const { imported, skipped } = logReader.importFileState(persistedOffsets)
-    console.log(`[AgentLens] Resumed ${imported} log tail offset${imported !== 1 ? 's' : ''} (${skipped} invalid/rotated → cold read)${restoredFromDisk ? `; restored ${persistedCards!.length} session cards` : ''}`)
+  if (deltaCurrent && offsetsMap.size > 0) {
+    const { imported, skipped } = logReader.importFileState(Object.fromEntries(offsetsMap))
+    console.log(`[AgentLens] Resumed ${imported} log tail offset${imported !== 1 ? 's' : ''} (${skipped} invalid/rotated → cold read)${restoredFromDisk ? `; restored ${cardsMap.size} session cards` : ''}`)
+  } else if (!deltaCurrent && (cardsMap.size > 0 || offsetsMap.size > 0)) {
+    console.log(`[AgentLens] Log-ingest semantics changed (v${LOG_INGEST_VERSION}) — cold-rescanning; stale delta-log entries will be tombstoned on the next durable save`)
   }
 
   // Register the poll first so it always runs, even if no files exist yet at startup.
@@ -2200,23 +2256,34 @@ const OFFSETS_SAVE_MS = Math.max(10_000, Number(process.env.AGENTLENS_OFFSETS_SA
 const CARDS_SAVE_MS = Math.max(30_000, Number(process.env.AGENTLENS_CARDS_SAVE_MS) || 300_000)
 let lastCardsSave = 0
 
-// Byte accounting via statSync after the write — a second JSON.stringify of a 27MB object just
-// to count bytes would double the serialization cost of every save.
+// Byte accounting: DeltaLog.save() returns exactly what it wrote to the device, so no statSync of a
+// (now unused) whole file is needed. Writes/Bytes are only bumped when bytes > 0 — DeltaLog's whole
+// point is that an unchanged save costs ZERO device writes, and counting one of those as "a write"
+// would hide the very fix this delta log exists to prove.
 function sizeOf(file: string): number {
   try { return fs.statSync(file).size } catch { return 0 }
 }
 function saveOffsetsNow(): void {
   try {
-    saveLogOffsets(OFFSETS_FILE, logReader.exportFileState())
-    persistStats.offsetsWrites++
-    persistStats.offsetsBytes += sizeOf(OFFSETS_FILE)
+    const records = new Map<string, PersistedFileState>(Object.entries(logReader.exportFileState()))
+    const r = offsetsLog.save(records)
+    if (r.bytes > 0) {
+      persistStats.offsetsWrites++
+      persistStats.offsetsBytes += r.bytes
+      stampDeltaVersion()
+    }
   } catch (e) { console.warn('[AgentLens] Could not save log offsets:', e) }
 }
 function saveCardsNow(): void {
   try {
-    savePersistedCards(CARDS_FILE, [...logSessions.values()].map(stripCardForPersist))
-    persistStats.cardsWrites++
-    persistStats.cardsBytes += sizeOf(CARDS_FILE)
+    const records = new Map<string, SessionSummaryCard>()
+    for (const [id, card] of logSessions) records.set(id, stripCardForPersist(card))
+    const r = cardsLog.save(records)
+    if (r.bytes > 0) {
+      persistStats.cardsWrites++
+      persistStats.cardsBytes += r.bytes
+      stampDeltaVersion()
+    }
     lastCardsSave = Date.now()
   } catch (e) { console.warn('[AgentLens] Could not save log cards:', e) }
 }
@@ -2417,7 +2484,10 @@ const uiServer = http.createServer(async (req, res) => {
       persistence: {
         ...p,
         totalBytesWritten: p.spanAppendBytes + p.offsetsBytes + p.cardsBytes + p.hookEventBytes,
-        files: { spans: spanStoreStats.totalBytes, offsets: sizeOf(OFFSETS_FILE), cards: sizeOf(CARDS_FILE) },
+        // diskBytes(), not sizeOf(OFFSETS_FILE/CARDS_FILE): those legacy paths are migration sources
+        // only now and are never written again, so statting them would report a stale (or eventually
+        // absent) number forever instead of the real delta-log footprint.
+        files: { spans: spanStoreStats.totalBytes, offsets: offsetsLog.diskBytes(), cards: cardsLog.diskBytes() },
       },
       bodies: { archive: archiveDiskUsage(BODIES_ARCHIVE_DIR), lastPass: p.bodiesLastPurge },
       hookEvents: { ...hookEventsDiskUsage(HOOK_EVENTS_DIR), receivedSinceBoot: p.hookEventWrites, spooled: hookSpoolCount() },
