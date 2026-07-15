@@ -62,6 +62,11 @@ async function main() {
 		platform: 'node',
 		outfile: 'standalone/server.js',
 		logLevel: 'silent',
+		// @duckdb/node-api loads prebuilt platform-specific .node binaries via optionalDependencies —
+		// native addons CANNOT be bundled, so it must resolve from node_modules at runtime (it is a
+		// declared runtime dependency, same stance as sql.js's dynamic require). Without this the
+		// whole build fails on the .node loader, which is how the store code silently never shipped.
+		external: ['@duckdb/node-api'],
 		plugins: [esbuildProblemMatcherPlugin],
 	});
 
@@ -77,7 +82,8 @@ async function main() {
 		logLevel: 'silent',
 		// sql.js resolves from node_modules at runtime (same stance as the server bundle) —
 		// inlining its WASM loader would bloat the CLI for a path only `setup` touches.
-		external: ['sql.js'],
+		// @duckdb/node-api: native .node addon, unbundlable — see the server target above.
+		external: ['sql.js', '@duckdb/node-api'],
 		plugins: [
 			esbuildProblemMatcherPlugin,
 			{
