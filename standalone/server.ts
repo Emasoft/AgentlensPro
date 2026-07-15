@@ -24,7 +24,7 @@ import { classifyOtlpPayload } from '../src/otlpParser'
 import { resolveLogEventName, bareLogEventName, CLAUDE_RICH_LOG_EVENTS, BODY_POINTER_LOG_EVENTS } from '../src/otlpLogEvents'
 import { startMcpHttpServer, labelBurnStatusAccounts } from '../src/mcpServer'
 import { resolveCallContext, callBodyRegistry } from '../src/rawBodyContext'
-import { appendHookEvent, readHookEvents, purgeHookEventBuckets, hookEventsDiskUsage, type HookEventRecord } from '../src/hookEventStore'
+import { appendHookEvent, readHookEvents, purgeHookEventBuckets, hookEventsDiskUsage, verifyAppendedLine, quarantineSpoolFile, type HookEventRecord, type AppendPosition } from '../src/hookEventStore'
 import { BodiesActivityTracker } from '../src/bodiesActivity'
 import { evaluateAgentGate, evaluateSendMessageGate, buildAdvisory, readTranscriptContext, resolveMessageTargetLiveness, type AgentGateState, type GateThresholds, type LaunchSpawner } from '../src/agentGate'
 import { checkBurnRisk } from '../src/burnGuard'
@@ -56,6 +56,7 @@ import { SegmentedSpanStore, migrateLegacySpansFile, spanTimestampMs } from '../
 import { purgeArchiveVolumes, archiveDiskUsage, extractArchive } from '../src/bodyArchive'
 import { openStore, allOf, type Store } from '../src/store/db'
 import { DEFAULT_MAX_BYTES_PER_PASS, ingestPass } from '../src/store/ingestPass'
+import { verifyVolumeInStore } from '../src/store/archiveVerify'
 import { rawBodyCaptureEnabled, spoolDirConfigured } from '../src/captureConfig'
 import { ensureRamDisk, ramDiskInfo, spoolSizeMb } from '../src/ramdisk'
 import { exportBodiesFromStore } from '../src/store/bodyStore'
@@ -414,7 +415,19 @@ async function archiveOtelBodies(): Promise<void> {
       for (const f of r.failed) failed.push(f)
     }
 
-    const purged = purgeArchiveVolumes(BODIES_ARCHIVE_DIR, BODIES_RETENTION_DAYS)
+    // Retention ageing of archive volumes — GATED (TRDD-K3WDPR7M, 2026-07-15 USER directive): a
+    // volume dies only after EVERY lump in it is proven in the store (bytes + capture-ts row). A
+    // volume the gate cannot bless is KEPT and named, no matter how old — ageing out is a schedule,
+    // not a proof. The .idx sidecar always survives (capture-time provenance).
+    const gate = bodyStore
+    const purged = await purgeArchiveVolumes(BODIES_ARCHIVE_DIR, BODIES_RETENTION_DAYS, async (volumeName) => {
+      const v = await verifyVolumeInStore(gate, BODIES_ARCHIVE_DIR, volumeName)
+      if (!v.ok) {
+        console.warn(`[AgentLens] archive volume ${volumeName} aged out but FAILED store verification ` +
+          `(${v.verified}/${v.entries} proven) — KEPT: ${v.failed.slice(0, 3).join('; ')}`)
+      }
+      return v.ok
+    })
     persistStats.bodiesLastPurge = {
       at: Date.now(), removedFiles: deleted, freedBytes: bytesIn,
       keptFiles: 0, keptBytes: Math.max(0, liveBytesTotal - bytesIn),
@@ -423,7 +436,7 @@ async function archiveOtelBodies(): Promise<void> {
       console.log(`[AgentLens] bodies → store: ingested ${ingested}, reclaimed ${deleted} file(s) ` +
         `(${(bytesIn / 1024 ** 3).toFixed(2)}GB read → ${(bytesStored / 1048576).toFixed(1)}MB new spans)` +
         `${SPOOL_MODE ? ' [spool]' : ''}${throttled ? ' [throttled — more next pass]' : ''}` +
-        `${purged.removed.length > 0 ? `; purged legacy volume(s) ${purged.removed.join(', ')} (${(purged.freedBytes / 1024 ** 3).toFixed(2)}GB)` : ''}`)
+        `${purged.removed.length > 0 ? `; purged legacy volume(s) ${purged.removed.join(', ')} (${(purged.freedBytes / 1024 ** 3).toFixed(2)}GB, verified in store first)` : ''}`)
     }
     // A body we could not PROVE we can return is a body we have no right to delete. Say so loudly —
     // a silent skip would look identical to success while the corpus quietly rotted.
@@ -493,7 +506,7 @@ function pushRecentHookEvent(rec: HookEventRecord): void {
 // same path (validate → append → ring → stats → StopFailure calibration). Returns an HTTP-shaped
 // result; never throws on a bad payload (a 400 is returned) so the drain can proceed to the next
 // file — only a genuine disk fault in appendHookEvent throws, which the drain treats as "retry".
-function ingestHookEvent(payload: unknown): { status: number; body: Record<string, unknown> } {
+function ingestHookEvent(payload: unknown): { status: number; body: Record<string, unknown>; pos?: AppendPosition; line?: string } {
   const p = payload as Record<string, unknown> | null
   if (!p || typeof p !== 'object' || typeof p.hook_event_name !== 'string' || p.hook_event_name === '') {
     return { status: 400, body: { error: 'payload must be a JSON object with hook_event_name' } }
@@ -503,7 +516,7 @@ function ingestHookEvent(payload: unknown): { status: number; body: Record<strin
     // non-2xx here would make disabled capture look like a server outage).
     return { status: 200, body: { ok: true, dropped: 'captureEnabled=false' } }
   }
-  const { rec, bytes } = appendHookEvent(HOOK_EVENTS_DIR, p)
+  const { rec, bytes, pos, line } = appendHookEvent(HOOK_EVENTS_DIR, p)
   pushRecentHookEvent(rec) // the in-memory ring the gate + check_burn_risk read
   persistStats.hookEventWrites++
   persistStats.hookEventBytes += bytes
@@ -530,15 +543,20 @@ function ingestHookEvent(payload: unknown): { status: number; body: Record<strin
       console.warn('[AgentLens] capacity calibration error:', e)
     }
   }
-  return { status: 200, body: { ok: true } }
+  return { status: 200, body: { ok: true }, pos, line }
 }
 
 // D3K7QM2P/1a: drain the durable hook-spool on boot. When the server was DOWN (or shedding under
 // load), `agentlenspro hook` writes each raw payload to DATA_DIR/hook-spool/<ts>-<rand>.json instead
 // of losing it; on the next boot we reingest every spooled event through ingestHookEvent, then delete
-// its file. Idempotent: a crash mid-drain leaves the remaining files for the next boot. A payload that
-// can never ingest (unparseable / 400) is dropped LOUDLY so the spool cannot wedge; only a real disk
-// fault (ingest throws) keeps the file for a later retry.
+// its file — but ONLY after proving the durable copy exists. TRDD-K3WDPR7M (2026-07-15 USER directive:
+// a source file may be deleted ONLY after the durable destination is confirmed to hold ALL its data):
+//   • a 200 ingest is NOT trusted — we read the appended line back from its bucket and compare it
+//     byte-for-byte before unlinking the spool file; a mismatch KEEPS the file (counted + warned);
+//   • an unparseable or 400 payload can never ingest, but it is still DATA — it is QUARANTINED into
+//     hook-spool/rejected/ (never deleted), which keeps the spool unwedged WITHOUT destroying it;
+//   • a genuine disk fault (ingest throws) keeps the file for the next boot's retry.
+// Idempotent: a crash mid-drain leaves the remaining files for the next boot.
 const HOOK_SPOOL_DIR = path.join(DATA_DIR, 'hook-spool')
 /** Count of hook events waiting on disk for the drain (surfaced on /api/server-stats). */
 function hookSpoolCount(): number {
@@ -548,28 +566,49 @@ function drainHookSpool(): void {
   let names: string[]
   try { names = fs.readdirSync(HOOK_SPOOL_DIR).filter((n) => n.endsWith('.json')).sort() } catch { return } // no spool dir — nothing to drain
   if (names.length === 0) return
-  let drained = 0, dropped = 0, kept = 0
+  const rejectedDir = path.join(HOOK_SPOOL_DIR, 'rejected')
+  let drained = 0, rejected = 0, unverified = 0, kept = 0
   for (const name of names) {
     const file = path.join(HOOK_SPOOL_DIR, name)
     let raw: string
     try { raw = fs.readFileSync(file, 'utf-8') } catch { continue } // vanished / unreadable — skip
     let payload: unknown
     try { payload = JSON.parse(raw) } catch {
-      // Unparseable spool file will NEVER ingest — drop it so the spool cannot wedge forever.
-      try { fs.unlinkSync(file) } catch { /* raced */ }
-      dropped++; continue
+      // Unparseable will NEVER ingest — quarantine it (NEVER delete: it is still data). TRDD-K3WDPR7M.
+      try { quarantineSpoolFile(file, rejectedDir); rejected++ } catch { kept++ }
+      continue
     }
+    let r: { status: number; pos?: AppendPosition; line?: string }
     try {
-      const r = ingestHookEvent(payload)
-      try { fs.unlinkSync(file) } catch { /* raced */ } // ingested OR 400 (bad payload) → remove either way
-      if (r.status === 200) drained++; else dropped++
+      r = ingestHookEvent(payload)
     } catch {
       // A genuine disk fault in appendHookEvent — keep the file for the next boot's retry.
-      kept++
+      kept++; continue
+    }
+    if (r.status !== 200) {
+      // A 400 (bad payload) can never ingest either — quarantine, never delete. TRDD-K3WDPR7M.
+      try { quarantineSpoolFile(file, rejectedDir); rejected++ } catch { kept++ }
+      continue
+    }
+    if (!r.pos || !r.line) {
+      // 200 with nothing appended (capture disabled by policy) — not an error and not bad data. Keep
+      // it: a later boot with capture re-enabled ingests it. Deleting it would silently drop the event.
+      kept++; continue
+    }
+    // 200 WITH an append — but do NOT trust the status. Read the bucket back and prove the exact line
+    // is durable at the reported offset before deleting the only other copy (verify-before-delete).
+    if (verifyAppendedLine(r.pos, r.line)) {
+      try { fs.unlinkSync(file) } catch { /* raced */ } // durable copy proven → safe to drop the spool file
+      drained++
+    } else {
+      // Ingest said 200 but the read-back did not match — the durable copy is NOT proven. Keep the spool
+      // file so the next boot retries; never destroy the only guaranteed copy on an unproven write.
+      unverified++
+      console.warn(`[AgentLens] hook-spool: append NOT verified for ${name} — keeping spool file (durable copy unproven)`)
     }
   }
-  if (drained || dropped || kept) {
-    console.log(`[AgentLens] hook-spool: drained ${drained} event(s)${dropped ? `, dropped ${dropped} bad` : ''}${kept ? `, kept ${kept} for retry` : ''}`)
+  if (drained || rejected || unverified || kept) {
+    console.log(`[AgentLens] hook-spool: drained ${drained} event(s)${rejected ? `, quarantined ${rejected} bad` : ''}${unverified ? `, kept ${unverified} unverified` : ''}${kept ? `, kept ${kept} for retry` : ''}`)
   }
 }
 
@@ -2980,18 +3019,37 @@ const uiServer = http.createServer(async (req, res) => {
 
   if (req.method === 'POST' && url === '/api/bodies/purge') {
     try {
-      // Explicit destructive op from the CLI: delete EVERY archive volume. The live 72h window is
-      // untouched (it regenerates hourly into the archive anyway); automatic ageing is handled by
-      // the retention pass, so this endpoint is only for a deliberate manual reclaim.
-      const usage = archiveDiskUsage(BODIES_ARCHIVE_DIR)
-      let removed = 0
-      for (const f of fs.existsSync(BODIES_ARCHIVE_DIR) ? fs.readdirSync(BODIES_ARCHIVE_DIR) : []) {
-        if (!/^bodies-\d{4}-\d{2}\.wad(\.idx)?$/.test(f)) continue
-        try { fs.unlinkSync(path.join(BODIES_ARCHIVE_DIR, f)); removed++ } catch { /* ignore */ }
-      }
-      console.log(`[AgentLens] bodies archive purged: ${usage.entries} lump(s), ${(usage.bytes / 1024 ** 3).toFixed(2)}GB freed`)
-      res.writeHead(200, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ removedFiles: removed, freedBytes: usage.bytes, lumps: usage.entries }))
+      // Explicit destructive op from the CLI — but destruction is EARNED, never assumed
+      // (TRDD-K3WDPR7M, 2026-07-15 USER directive): each volume is deleted ONLY after every one of
+      // its lumps is proven in the store (exact bytes + the (src_name, capture-ts) row). A volume
+      // that fails stays on disk with its failures named. The .idx sidecars are ALWAYS kept —
+      // capture-time provenance at ~0.05% of the volume's size.
+      void (async () => {
+        try {
+          bodyStore ??= await openStore({ dir: path.join(DATA_DIR, 'store') })
+          const names = (fs.existsSync(BODIES_ARCHIVE_DIR) ? fs.readdirSync(BODIES_ARCHIVE_DIR) : [])
+            .filter((f) => /^bodies-\d{4}-\d{2}\.wad$/.test(f))
+          const removed: string[] = []
+          const kept: Array<{ volume: string; verified: number; entries: number; failedSample: string[] }> = []
+          let freedBytes = 0
+          for (const v of names) {
+            const proof = await verifyVolumeInStore(bodyStore, BODIES_ARCHIVE_DIR, v)
+            if (!proof.ok) {
+              kept.push({ volume: v, verified: proof.verified, entries: proof.entries, failedSample: proof.failed.slice(0, 5) })
+              continue
+            }
+            const p = path.join(BODIES_ARCHIVE_DIR, v)
+            try { freedBytes += fs.statSync(p).size; fs.unlinkSync(p); removed.push(v) } catch { /* raced */ }
+          }
+          console.log(`[AgentLens] bodies archive purge: removed ${removed.length} verified volume(s) ` +
+            `(${(freedBytes / 1024 ** 3).toFixed(2)}GB), kept ${kept.length} unproven; .idx sidecars retained`)
+          res.writeHead(200, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ removed, kept, freedBytes }))
+        } catch (e) {
+          res.writeHead(500, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ error: String(e instanceof Error ? e.message : e) }))
+        }
+      })()
     } catch (e) {
       res.writeHead(500, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ error: String(e instanceof Error ? e.message : e) }))

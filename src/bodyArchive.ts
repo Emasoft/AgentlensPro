@@ -95,25 +95,41 @@ export function readArchiveEntry(entry: ArchivedBody): Buffer {
   }
 }
 
-/** Drop whole volumes older than the retention window (a volume covers one UTC month). */
-export function purgeArchiveVolumes(archiveDir: string, olderThanDays: number): { removed: string[]; freedBytes: number } {
+/**
+ * Drop whole volumes older than the retention window (a volume covers one UTC month).
+ *
+ * `canDelete` is the verify-before-delete gate (TRDD-K3WDPR7M, USER directive 2026-07-15): the
+ * caller proves the durable store holds EVERY lump of the volume before the volume is destroyed.
+ * A volume the gate does not bless is KEPT and reported in `kept` — ageing out is never, on its
+ * own, a reason to destroy data that might exist nowhere else. Callers without a store (tests,
+ * legacy tooling) must pass an explicit gate; there is deliberately NO default-allow.
+ *
+ * The `.idx` sidecar is KEPT even when the volume is deleted: it is ~0.05% of the volume's size
+ * and is the only remaining record of each lump's capture time (provenance the ts-recovery
+ * migration feeds on).
+ */
+export async function purgeArchiveVolumes(
+  archiveDir: string,
+  olderThanDays: number,
+  canDelete: (volumeName: string) => Promise<boolean>,
+): Promise<{ removed: string[]; kept: string[]; freedBytes: number }> {
   const cutoff = Date.now() - olderThanDays * 86400e3
   const removed: string[] = []
+  const kept: string[] = []
   let freedBytes = 0
   let names: string[]
-  try { names = fs.readdirSync(archiveDir).filter(f => VOLUME_RE.test(f)) } catch { return { removed, freedBytes } }
+  try { names = fs.readdirSync(archiveDir).filter(f => VOLUME_RE.test(f)) } catch { return { removed, kept, freedBytes } }
   for (const v of names) {
     const m = VOLUME_RE.exec(v)!
     // A volume is purgeable only when its whole month ended before the cutoff.
     const monthEnd = Date.UTC(Number(m[1]), Number(m[2]), 1) // first ms of the FOLLOWING month
     if (monthEnd >= cutoff) continue
+    if (!(await canDelete(v))) { kept.push(v); continue }
     const volume = path.join(archiveDir, v)
-    for (const f of [volume, `${volume}.idx`]) {
-      try { freedBytes += fs.statSync(f).size; fs.unlinkSync(f) } catch { /* already gone */ }
-    }
+    try { freedBytes += fs.statSync(volume).size; fs.unlinkSync(volume) } catch { /* already gone */ }
     removed.push(v)
   }
-  return { removed, freedBytes }
+  return { removed, kept, freedBytes }
 }
 
 /** Extract archived bodies (optionally filtered) back into plain files at destDir. */

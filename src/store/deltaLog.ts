@@ -84,15 +84,23 @@ export class DeltaLog<T> {
     return out
   }
 
+  /** Replay NDJSON files in order into a fresh map — the ONE definition of "how lines become state",
+   *  shared by load() and compaction's verify so there is never a second, drifting parser. Later lines
+   *  win; a tombstone (d:1) deletes. */
+  private replay(files: string[]): Map<string, T> {
+    const map = new Map<string, T>()
+    for (const file of files) {
+      for (const l of this.readLines(file)) {
+        if (l.d === 1) map.delete(l.k)
+        else if (l.v !== undefined) map.set(l.k, l.v)
+      }
+    }
+    return map
+  }
+
   /** Snapshot, then deltas replayed in order. Later lines win; tombstones delete. */
   load(): Map<string, T> {
-    const map = new Map<string, T>()
-    const apply = (l: Line<T>) => {
-      if (l.d === 1) map.delete(l.k)
-      else if (l.v !== undefined) map.set(l.k, l.v)
-    }
-    for (const l of this.readLines(this.snapshotPath)) apply(l)
-    for (const l of this.readLines(this.deltaPath)) apply(l)
+    const map = this.replay([this.snapshotPath, this.deltaPath])
 
     // Seed the written-hashes from what we just loaded, or the first save after a restart would
     // re-append every record (turning a restart into a full 31.6 MB rewrite — the very thing we are
@@ -105,7 +113,13 @@ export class DeltaLog<T> {
     try { return fs.statSync(file).size } catch { return 0 }
   }
 
-  /** Rewrite the snapshot from `records` and drop the delta. The ONE expensive write — amortized. */
+  /** Test seam: called after the candidate snapshot bytes are written to `path` and BEFORE they are
+   *  verified. Production no-op. A test overrides it to simulate a silently corrupted/truncated
+   *  snapshot write and prove compaction's verify catches it and KEEPS the delta (TRDD-K3WDPR7M). */
+  protected onSnapshotWritten(_path: string): void { /* no-op in production */ }
+
+  /** Rewrite the snapshot from `records`, VERIFY it from disk, then drop the delta. The ONE expensive
+   *  write — amortized. */
   private compact(records: Map<string, T>): number {
     let body = ''
     for (const [k, v] of records) body += JSON.stringify({ k, v }) + '\n'
@@ -113,9 +127,40 @@ export class DeltaLog<T> {
     // silently truncate the corpus on the next load.
     const tmp = `${this.snapshotPath}.tmp`
     fs.writeFileSync(tmp, body)
+    this.onSnapshotWritten(tmp)
+
+    // TRDD-K3WDPR7M (2026-07-15 USER directive: a source file may be deleted ONLY after the durable
+    // destination is confirmed to hold ALL its data). The delta is the ONLY other copy of every change
+    // it holds; a silently truncated/short snapshot write (disk full, fs bug) followed by rmSync would
+    // destroy those records forever. So PROVE the snapshot before committing to it: read the candidate
+    // BACK FROM DISK (not in-memory state — the whole point is to catch a bad write) and confirm it
+    // reproduces EXACTLY the saved record set (count + every per-record hash). Verify the temp file
+    // BEFORE the rename, so a failure leaves the OLD snapshot AND the delta fully intact — nothing is
+    // committed, nothing is lost — and surface the fault per this file's fail-fast convention (throw,
+    // exactly as readLines() throws on a corrupt mid-file line).
+    const reloaded = this.replay([tmp])
+    const expected = new Map<string, string>()
+    for (const [k, v] of records) expected.set(k, sha(JSON.stringify(v)))
+    let mismatch: string | null = null
+    if (reloaded.size !== expected.size) {
+      mismatch = `holds ${reloaded.size} records, expected ${expected.size}`
+    } else {
+      for (const [k, want] of expected) {
+        const got = reloaded.get(k)
+        if (got === undefined || sha(JSON.stringify(got)) !== want) {
+          mismatch = `record ${JSON.stringify(k)} is not durable in the snapshot`
+          break
+        }
+      }
+    }
+    if (mismatch !== null) {
+      try { fs.rmSync(tmp, { force: true }) } catch { /* discard the bad candidate */ }
+      throw new Error(`${this.snapshotPath}: compaction verify failed (${mismatch}); delta KEPT, snapshot NOT replaced — no records lost`)
+    }
+
     fs.renameSync(tmp, this.snapshotPath)
-    // Only AFTER the snapshot is durable — deleting the delta first would lose every change it holds
-    // if the rename never happened.
+    // Only AFTER the snapshot is durable AND verified — deleting the delta any earlier would lose every
+    // change it holds if the rename never happened or the write was short.
     try { fs.rmSync(this.deltaPath, { force: true }) } catch { /* nothing to drop */ }
     return Buffer.byteLength(body)
   }

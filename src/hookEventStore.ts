@@ -49,14 +49,74 @@ export function buildHookEventRecord(payload: Record<string, unknown>, ts: numbe
   }
 }
 
-/** Append one hook event; returns the record (for the server's in-memory ring) + bytes
- *  written (for its persistence accounting). */
-export function appendHookEvent(dir: string, payload: Record<string, unknown>): { rec: HookEventRecord; bytes: number } {
+/** The exact on-disk location of one appended line — enough to read it back and PROVE it is durable
+ *  before destroying the only other copy. TRDD-K3WDPR7M (2026-07-15 USER directive: a source file may
+ *  be deleted ONLY after the durable destination is confirmed to hold its data). */
+export interface AppendPosition {
+  /** The daily bucket the line was appended to. */
+  bucketPath: string
+  /** Byte offset where the line STARTS — the bucket's size immediately before the append. */
+  offset: number
+  /** Byte length of the appended line, including its trailing newline. */
+  length: number
+}
+
+/** Append one hook event; returns the record (for the server's in-memory ring), bytes written (for
+ *  its persistence accounting), the exact append position + the exact line bytes — so a caller can
+ *  read the line back and verify it is durable before deleting a spool copy (TRDD-K3WDPR7M). */
+export function appendHookEvent(dir: string, payload: Record<string, unknown>): { rec: HookEventRecord; bytes: number; pos: AppendPosition; line: string } {
   const rec = buildHookEventRecord(payload)
   const line = `${JSON.stringify(rec)}\n`
+  const bucket = bucketPath(dir, rec.ts)
   fs.mkdirSync(dir, { recursive: true })
-  fs.appendFileSync(bucketPath(dir, rec.ts), line)
-  return { rec, bytes: Buffer.byteLength(line) }
+  // Capture the offset BEFORE the append: appendFileSync writes at end-of-file, so the current size is
+  // exactly where this line begins. Reading it here (not after) is what lets verifyAppendedLine seek
+  // to this line and nothing else.
+  let offset = 0
+  try { offset = fs.statSync(bucket).size } catch { /* bucket does not exist yet — starts at 0 */ }
+  fs.appendFileSync(bucket, line)
+  const length = Buffer.byteLength(line)
+  return { rec, bytes: length, pos: { bucketPath: bucket, offset, length }, line }
+}
+
+/** Read back the bytes we believe we appended and prove they equal `expectedLine` byte-for-byte.
+ *  Reads the FILE at the recorded offset — never trusts in-memory state, because the whole point is to
+ *  catch a silently short/failed WRITE (disk full, truncation, fs bug). Returns false on any shortfall
+ *  or mismatch so the caller KEEPS the source copy. TRDD-K3WDPR7M (2026-07-15 USER directive: verify
+ *  the durable destination before deleting the source). */
+export function verifyAppendedLine(pos: AppendPosition, expectedLine: string): boolean {
+  const expected = Buffer.from(expectedLine, 'utf-8')
+  if (expected.length !== pos.length) return false // the recorded length must match the line we expect
+  let fd: number
+  try { fd = fs.openSync(pos.bucketPath, 'r') } catch { return false } // bucket vanished — cannot prove durability
+  try {
+    const buf = Buffer.alloc(pos.length)
+    const read = fs.readSync(fd, buf, 0, pos.length, pos.offset)
+    if (read !== pos.length) return false // fewer bytes than expected — a truncated / short write
+    return buf.equals(expected)
+  } finally {
+    fs.closeSync(fd)
+  }
+}
+
+/** Move a spool file that can never ingest (unparseable JSON, or a payload the server rejects with a
+ *  400) into a `rejected/` quarantine dir instead of deleting it. TRDD-K3WDPR7M (2026-07-15 USER
+ *  directive): a payload we cannot ingest is still DATA — destroying it is the exact loss the directive
+ *  forbids. Quarantine keeps the spool unwedged WITHOUT throwing anything away. Same basename; on a
+ *  name collision suffix `-1`, `-2`, ... so no quarantined file is ever overwritten. Returns the
+ *  destination path. */
+export function quarantineSpoolFile(file: string, rejectedDir: string): string {
+  fs.mkdirSync(rejectedDir, { recursive: true })
+  const base = path.basename(file)
+  let dest = path.join(rejectedDir, base)
+  if (fs.existsSync(dest)) {
+    const ext = path.extname(base)
+    const stem = base.slice(0, base.length - ext.length)
+    let i = 1
+    do { dest = path.join(rejectedDir, `${stem}-${i}${ext}`); i++ } while (fs.existsSync(dest))
+  }
+  fs.renameSync(file, dest)
+  return dest
 }
 
 export interface HookEventFilter {
