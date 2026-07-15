@@ -10,6 +10,19 @@ All notable changes to AgentlensPro are documented here.
 
 ### Added
 
+- **`get_account_burners` — who exhausted a given OAuth account's rate-limit window.** After a forced
+  account rotation, `agentlenspro get_account_burners` (default `--account previous`, `--window_hours
+  5`; `168` = the 7d window) ranks the sessions that drew on THAT account's window by
+  billable-weighted fill (input×1, output×5, cacheRead×0.1, cacheCreate×1.25), with cost, bucket
+  split, share%, attribution, workspace and model — the window defaults to ending at the account's
+  rotation-out moment, i.e. exactly the window that got exhausted. Attribution is TIME-based against
+  the machine's account-state timeline (one OAuth token is active machine-wide at a time), so a
+  session alive across a rotation splits correctly between the two accounts instead of pooling onto
+  one card. Fills the gap between `investigate_burn` (window culprits, but no account filter) and
+  `get_window_budget` (per-account, but no per-session ranking). Coverage gaps are disclosed — when
+  the oldest available event is younger than the window start, totals are labeled a lower bound.
+  (TRDD-1XM0YSWQ)
+
 - **`get_body_writers` — which sessions are still writing raw OTEL bodies, ranked.** A session keeps
   its launch-time `OTEL_LOG_RAW_API_BODIES` env until restarted, so stale sessions keep writing
   ~0.7–1.9 MB request bodies per LLM call. The new diagnostic (`agentlenspro get_body_writers

@@ -997,6 +997,9 @@ startMcpHttpServer({
   // TRDD-1FEIW17E: get_body_writers reads all-time per-session totals from the durable store —
   // same lazy-open the ingest pass uses, so the first call after boot pays the open, not every call.
   getStore: async () => (bodyStore ??= await openStore({ dir: path.join(DATA_DIR, 'store') })),
+  // TRDD-1XM0YSWQ: get_account_burners ranks sessions inside one account's window — same deduped
+  // event stream the burn tick consumes, gathered fresh so the answer reflects this instant.
+  getConsumptionEvents: () => gatherBurn().events,
   // TRDD-PJC8N1HO spec 2: an orienting agent sees where telemetry was lost, not just the sessions.
   getCollectorGaps,
 }, MCP_PORT, BIND_HOST)

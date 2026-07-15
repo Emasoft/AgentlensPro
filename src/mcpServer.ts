@@ -36,7 +36,7 @@ import type { BodiesActivityReport } from './bodiesActivity'
 import { buildResidentCostReport } from './shared/residentCost'
 import { buildSpawnRollup } from './shared/spawnRollup'
 import { buildTokensByCause } from './shared/tokensByCause'
-import type { BurnStatus, SessionStatus, AccountWindowBudget } from './burnMonitor'
+import type { BurnStatus, SessionStatus, AccountWindowBudget, ConsumptionEvent } from './burnMonitor'
 import { type AccountInfo, accountLabelFor } from './accountInfo'
 import { classifyTtlRegime, sessionTtlKindOf, type TtlContext } from './shared/cacheTtl'
 import { assessCacheExpiry, type CacheExpiryVerdict } from './cacheExpiry'
@@ -57,6 +57,8 @@ import {
 // TRDD-1FEIW17E — who is writing raw OTEL bodies (live-dir scan + store totals, exact union).
 import { scanLiveBodyWriters, queryStoreWriterTotals, buildBodyWritersReport } from './bodyWriters'
 import type { Store } from './store/db'
+// TRDD-1XM0YSWQ — who exhausted a given account's rate-limit window (time-based attribution).
+import { readAccountSegments, resolveTargetAccount, buildAccountBurnersReport } from './accountBurners'
 import {
   buildCacheBreakTimeline, buildCauseCostPeakReport, buildCacheBreakCauses, formatTimeline, type TimelineFormat,
 } from './cacheBreakTimeline'
@@ -410,6 +412,26 @@ const TOOLS = [
       properties: {
         workspace: { type: 'string', description: 'Filter by workspace path prefix' },
         days:      { type: 'number', description: 'Only include sessions from the last N days (default: all)' },
+      },
+    },
+  },
+  {
+    name: 'get_account_burners',
+    description:
+      'WHO exhausted a given OAuth account\'s rate-limit window — sessions ranked by billable-weighted ' +
+      'window fill (input×1, output×5, cacheRead×0.1, cacheCreate×1.25), with cost, bucket split, share%, ' +
+      'top attribution (agent/skill/compaction/main), workspace and model. Default account is `previous` ' +
+      '(the one rotated away from — THE question after a forced account rotation), default window ends at ' +
+      'that account\'s rotation-out moment. Attribution is TIME-based against the machine account-state ' +
+      'timeline, so a session alive across a rotation splits correctly between accounts. Coverage gaps ' +
+      'are disclosed, never papered over. Result includes a preformatted `text` table.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        account:      { type: 'string', description: '`previous` (default) | `current` | an account_uuid prefix | an email' },
+        window_hours: { type: 'number', description: 'Window length in hours: 5 = the 5h window (default), 168 = the 7d window' },
+        until_iso:    { type: 'string', description: 'Window end (ISO). Default: the account\'s last-active instant (its rotation-out moment; now if current)' },
+        limit:        { type: 'number', description: 'Max ranked sessions returned (default 15)' },
       },
     },
   },
@@ -2589,6 +2611,9 @@ export interface McpServerOptions {
   /** TRDD-1FEIW17E — the server's durable body store (opened lazily). get_body_writers reads
    *  all-time per-session totals from it; a null/absent store degrades to live-dir-only. */
   getStore?: () => Promise<Store | null>
+  /** TRDD-1XM0YSWQ — the burn monitor's deduped consumption-event stream (api_request events +
+   *  statusline deltas). get_account_burners scopes it by account segment × window and ranks. */
+  getConsumptionEvents?: () => ConsumptionEvent[]
 }
 
 export function createMcpServer(opts: McpServerOptions): Server {
@@ -2624,6 +2649,30 @@ export function createMcpServer(opts: McpServerOptions): Server {
       case 'get_workspace_patterns':
         result = handleGetWorkspacePatterns(sessions, args as { workspace?: string; days?: number })
         break
+      case 'get_account_burners': {
+        const a = args as { account?: string; window_hours?: number; until_iso?: string; limit?: number }
+        const nowMs = Date.now()
+        const segments = readAccountSegments()
+        if (segments.length === 0) {
+          result = { error: 'No account-state timeline yet (~/.agentlens/account-state.ndjson) — the server records it on account changes; nothing to attribute against.' }
+          break
+        }
+        const target = resolveTargetAccount(segments, a.account ?? 'previous', nowMs)
+        if (!target) {
+          result = { error: `No account matches '${a.account ?? 'previous'}' in the timeline. Known: ${[...new Set(segments.map(s => `${s.accountId.slice(0, 8)} (${s.email ?? '?'})`))].join(', ')}` }
+          break
+        }
+        const untilMs = a.until_iso ? Date.parse(a.until_iso) : target.lastActiveMs
+        if (!Number.isFinite(untilMs)) { result = { error: `Unparseable until_iso '${a.until_iso}'` }; break }
+        result = buildAccountBurnersReport({
+          events: opts.getConsumptionEvents?.() ?? [],
+          target,
+          cards: sessions.map(s => ({ sessionId: s.sessionId, workspace: s.workspace, source: s.source, model: s.model })),
+          windowHours: Math.min(24 * 14, Math.max(0.25, a.window_hours ?? 5)),
+          untilMs, nowMs, limit: Math.max(1, a.limit ?? 15),
+        })
+        break
+      }
       case 'get_body_writers': {
         const a = args as { window_min?: number; active_min?: number; limit?: number }
         const nowMs = Date.now()
