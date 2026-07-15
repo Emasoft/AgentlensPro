@@ -3,7 +3,7 @@ trdd-id: AMEA4O4Z
 title: Log-event sink — persist every gated-out OTEL log event instead of dropping it
 column: dev
 created: 2026-07-16T00:22:48+0200
-updated: 2026-07-16T00:22:48+0200
+updated: 2026-07-16T00:38:00+0200
 current-owner: main
 task-type: feature
 severity: major
@@ -15,7 +15,20 @@ eht: []
 
 # Log-event sink — persist every gated-out OTEL log event instead of dropping it
 
-## ⏵ STATE — 2026-07-16 ~00:22 — AUTHORED, starting TDD
+## ⏵ STATE — 2026-07-16 ~00:38 — LANDED + LIVE-VERIFIED, awaiting user review
+
+Implemented, tested (suite 1236 green, +8: 6 sink + 2 collector-gate), bundled (esbuild OK,
+symbols in bundle), deployed (server restart, pid 11951), LIVE-VERIFIED: within 20s of boot the
+sink held 9 previously-dropped events (hook_execution_start/complete ×6, tool_decision ×2,
+assistant_response ×1) in `~/.agentlens/log-events/2026-07-15.ndjsonl` with full attrs + session
+ids; `server status` shows `log-events sink: 9 persisted since boot ... (retention 31d)`.
+
+Landed pieces: `src/ndjsonBuckets.ts` (generic daily-bucket machinery, extracted from
+hookEventStore — its tests stayed green unchanged), `src/logEventSink.ts` (shared record builder +
+append/purge/usage), retention knob `logEventsRetentionDays` (env
+`AGENTLENS_LOG_EVENTS_RETENTION_DAYS`, def 31) in RETENTION_META, both gate drop sites wired
+(standalone processLogs — the live path — and OtlpCollector via optional constructor sinkDir),
+hourly purge, `/api/server-stats.logEvents`, CLI status line, CHANGELOG [Unreleased].
 
 **USER request (2026-07-16, verbatim):** "i do not want to loose any logged data or llm call
 request raw from the OTEL telemetry or the hooks." → investigation found the collector's
@@ -23,8 +36,6 @@ rich-event gate DROPPING 10 event types on the floor (live counts since one 5h b
 hook_execution_start/complete 637+637, tool_decision 393, assistant_response 210, user_prompt 81,
 hook_registered 121, plugin_loaded 99, mcp_server_connection 33, skill_activated 5,
 subagent_completed 2). USER picked fix option 1: persist them.
-
-**NEXT ACTION:** extract generic daily-bucket module from hookEventStore, then TDD logEventSink.
 
 ## Problem
 

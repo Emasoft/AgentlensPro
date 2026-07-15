@@ -130,6 +130,8 @@ interface ServerStats {
     lastPass: { removedFiles: number; keptBytes: number }
   }
   hookEvents?: { receivedSinceBoot: number; files: number; bytes: number }
+  // TRDD-AMEA4O4Z: gated-out OTEL log events persisted to the sink (absent on pre-sink servers).
+  logEvents?: { persistedSinceBoot: number; files: number; bytes: number; retentionDays: number }
   gate?: { mode: string; checks: number; denies: number; warns: number; advisories: number }
   dataDir: string
 }
@@ -168,6 +170,8 @@ export async function showStatus(): Promise<void> {
     `bodies: archive ${s.bodies.archive.volumes} volume(s), ${s.bodies.archive.entries} lumps, ${fmtGb(s.bodies.archive.bytes)}; last pass archived ${s.bodies.lastPass.removedFiles} (live kept ${fmtGb(s.bodies.lastPass.keptBytes)})`,
     // hookEvents/gate are absent when --status hits a server built before TRDD-Q6ZOUVK5/GOD0108C — skip, don't crash.
     ...(s.hookEvents ? [`hooks:  ${s.hookEvents.receivedSinceBoot} event(s) since boot, ${s.hookEvents.files} bucket(s) ${fmtMb(s.hookEvents.bytes)} on disk`] : []),
+    // logEvents is absent when --status hits a server built before TRDD-AMEA4O4Z — skip, don't crash.
+    ...(s.logEvents ? [`log-events sink: ${s.logEvents.persistedSinceBoot} persisted since boot, ${s.logEvents.files} bucket(s) ${fmtMb(s.logEvents.bytes)} on disk (retention ${s.logEvents.retentionDays}d)`] : []),
     ...(s.gate ? [`gate:   mode=${s.gate.mode} — ${s.gate.checks} check(s), ${s.gate.denies} deny, ${s.gate.warns} warn, ${s.gate.advisories} advisories since boot`] : []),
     `data:   ${s.dataDir} (spans ${fmtMb(per.files.spans)}, cards ${fmtMb(per.files.cards)}, offsets ${fmtMb(per.files.offsets)})`,
   ].join('\n'))

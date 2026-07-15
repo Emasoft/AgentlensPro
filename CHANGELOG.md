@@ -6,6 +6,21 @@ All notable changes to AgentlensPro are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **Log-event sink — gated-out OTEL log events are persisted, never dropped (TRDD-AMEA4O4Z).**
+  The OTLP rich-event gate converts only `api_request`/`compaction`/`api_error`/
+  `api_retries_exhausted` + `tool_result` into spans; everything else (`user_prompt`,
+  `assistant_response`, `tool_decision`, `hook_execution_*`, `mcp_server_connection`,
+  `plugin_loaded`, `hook_registered`, `skill_activated`, `subagent_completed`) used to be counted
+  and DISCARDED — several of those exist nowhere else (permission decisions and lifecycle events
+  are not in the transcripts). Now every rejected event is appended in full (merged attributes,
+  ids, body) to `~/.agentlens/log-events/YYYY-MM-DD.ndjsonl`, with a new retention knob
+  `AGENTLENS_LOG_EVENTS_RETENTION_DAYS` (default 31). `server status` gains a `log-events sink:`
+  line; `/api/server-stats` gains `logEvents`. The generic daily-bucket machinery was extracted
+  to `src/ndjsonBuckets.ts` (shared with hook-events — the purge date logic has a subtle
+  overflow-date trap and must have exactly one implementation).
+
 ## [2.7.0] - 2026-07-15
 
 ### Added

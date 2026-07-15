@@ -15,6 +15,7 @@ export interface RetentionConfig {
   bodiesMaxAgeHours?: number
   bodiesMaxGb?: number
   bodiesRetentionDays?: number
+  logEventsRetentionDays?: number
 }
 
 export interface RetentionKeyMeta {
@@ -34,6 +35,9 @@ export const RETENTION_META: readonly RetentionKeyMeta[] = [
   { key: 'bodiesMaxAgeHours',   env: 'AGENTLENS_BODIES_MAX_AGE_HOURS',  def: 72, min: 1,   unit: 'hours', desc: 'raw OTEL bodies kept as plain files before archiving' },
   { key: 'bodiesMaxGb',         env: 'AGENTLENS_BODIES_MAX_GB',         def: 8,  min: 0.5, unit: 'GB',    desc: 'live-bodies size cap (archives oldest-first; never deletes)' },
   { key: 'bodiesRetentionDays', env: 'AGENTLENS_BODIES_RETENTION_DAYS', def: 31, min: 1,   unit: 'days',  desc: 'archived OTEL bodies kept before whole-volume deletion' },
+  // TRDD-AMEA4O4Z: gated-out OTEL log events (user_prompt, tool_decision, hook_execution_*, ...)
+  // persisted as daily NDJSON buckets instead of being dropped — this bounds how long they live.
+  { key: 'logEventsRetentionDays', env: 'AGENTLENS_LOG_EVENTS_RETENTION_DAYS', def: 31, min: 1, unit: 'days', desc: 'gated-out OTEL log events kept as daily NDJSON buckets' },
 ]
 
 export function configPath(dataDir: string): string {

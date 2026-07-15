@@ -8,6 +8,12 @@
 
 import * as fs from 'fs'
 import * as path from 'path'
+// The generic daily-bucket machinery lives in src/ndjsonBuckets.ts (shared with logEventSink,
+// TRDD-AMEA4O4Z) — the date/purge logic carries the NaN-overflow trap documented there and must
+// have exactly ONE implementation.
+import { appendBucketLine, bucketDayMs, bucketsDiskUsage, purgeBuckets, type AppendPosition } from './ndjsonBuckets'
+
+export type { AppendPosition } from './ndjsonBuckets'
 
 export interface HookEventRecord {
   /** Server receive time (ms epoch) — the hook fires within ~1s of the real event. */
@@ -18,24 +24,6 @@ export interface HookEventRecord {
   session?: string
   /** The raw hook payload, verbatim — refinement/classification happens at read time. */
   payload: Record<string, unknown>
-}
-
-function bucketPath(dir: string, ts: number): string {
-  return path.join(dir, `${new Date(ts).toISOString().slice(0, 10)}.ndjsonl`)
-}
-
-// A bucket filename → the UTC ms of the day it holds, or null when the file is not one of ours.
-// The shape regex alone is NOT enough: `2026-13-99.ndjsonl` matches `\d{2}-\d{2}` yet parses to
-// NaN, and NaN silently defeats BOTH the read fast-path (`NaN > until` is false, so the bucket is
-// scanned) and a string-compare purge (`'2026-13-99' >= cutoff` is always true, so it is never
-// deleted — an unpurgeable file counted in disk usage forever). Parse once, here, for all three.
-function bucketDayMs(filename: string): number | null {
-  if (!/^\d{4}-\d{2}-\d{2}\.ndjsonl$/.test(filename)) return null
-  const day = filename.slice(0, 10)
-  const ms = Date.parse(`${day}T00:00:00Z`)
-  // Date.parse accepts overflow ('2026-02-31'); round-trip to reject anything not calendar-real.
-  if (!Number.isFinite(ms) || new Date(ms).toISOString().slice(0, 10) !== day) return null
-  return ms
 }
 
 /** One construction point for the record shape — the disk line and the server's in-memory
@@ -49,34 +37,15 @@ export function buildHookEventRecord(payload: Record<string, unknown>, ts: numbe
   }
 }
 
-/** The exact on-disk location of one appended line — enough to read it back and PROVE it is durable
- *  before destroying the only other copy. TRDD-K3WDPR7M (2026-07-15 USER directive: a source file may
- *  be deleted ONLY after the durable destination is confirmed to hold its data). */
-export interface AppendPosition {
-  /** The daily bucket the line was appended to. */
-  bucketPath: string
-  /** Byte offset where the line STARTS — the bucket's size immediately before the append. */
-  offset: number
-  /** Byte length of the appended line, including its trailing newline. */
-  length: number
-}
-
 /** Append one hook event; returns the record (for the server's in-memory ring), bytes written (for
  *  its persistence accounting), the exact append position + the exact line bytes — so a caller can
- *  read the line back and verify it is durable before deleting a spool copy (TRDD-K3WDPR7M). */
+ *  read the line back and verify it is durable before deleting a spool copy (TRDD-K3WDPR7M:
+ *  2026-07-15 USER directive — a source file may be deleted ONLY after the durable destination is
+ *  confirmed to hold its data). */
 export function appendHookEvent(dir: string, payload: Record<string, unknown>): { rec: HookEventRecord; bytes: number; pos: AppendPosition; line: string } {
   const rec = buildHookEventRecord(payload)
-  const line = `${JSON.stringify(rec)}\n`
-  const bucket = bucketPath(dir, rec.ts)
-  fs.mkdirSync(dir, { recursive: true })
-  // Capture the offset BEFORE the append: appendFileSync writes at end-of-file, so the current size is
-  // exactly where this line begins. Reading it here (not after) is what lets verifyAppendedLine seek
-  // to this line and nothing else.
-  let offset = 0
-  try { offset = fs.statSync(bucket).size } catch { /* bucket does not exist yet — starts at 0 */ }
-  fs.appendFileSync(bucket, line)
-  const length = Buffer.byteLength(line)
-  return { rec, bytes: length, pos: { bucketPath: bucket, offset, length }, line }
+  const { pos, line, bytes } = appendBucketLine(dir, rec.ts, JSON.stringify(rec))
+  return { rec, bytes, pos, line }
 }
 
 /** Read back the bytes we believe we appended and prove they equal `expectedLine` byte-for-byte.
@@ -166,34 +135,9 @@ export function readHookEvents(dir: string, filter: HookEventFilter = {}): HookE
 
 /** Delete daily buckets older than retentionDays. Returns the removed filenames + freed bytes. */
 export function purgeHookEventBuckets(dir: string, retentionDays: number): { removed: string[]; freedBytes: number } {
-  const removed: string[] = []
-  let freedBytes = 0
-  const cutoffDay = new Date(Date.now() - retentionDays * 86_400_000).toISOString().slice(0, 10)
-  const cutoffMs = Date.parse(`${cutoffDay}T00:00:00Z`)
-  let files: string[]
-  try { files = fs.readdirSync(dir) } catch { return { removed, freedBytes } }
-  for (const f of files) {
-    const dayMs = bucketDayMs(f)
-    if (dayMs === null) continue   // not one of our buckets — never delete a foreign file
-    if (dayMs >= cutoffMs) continue
-    const p = path.join(dir, f)
-    try {
-      freedBytes += fs.statSync(p).size
-      fs.unlinkSync(p)
-      removed.push(f)
-    } catch { /* raced — skip */ }
-  }
-  return { removed, freedBytes }
+  return purgeBuckets(dir, retentionDays)
 }
 
 export function hookEventsDiskUsage(dir: string): { files: number; bytes: number } {
-  let files = 0
-  let bytes = 0
-  try {
-    for (const f of fs.readdirSync(dir)) {
-      if (bucketDayMs(f) === null) continue
-      try { bytes += fs.statSync(path.join(dir, f)).size; files++ } catch { /* raced */ }
-    }
-  } catch { /* no dir yet */ }
-  return { files, bytes }
+  return bucketsDiskUsage(dir)
 }

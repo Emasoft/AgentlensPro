@@ -15,12 +15,17 @@ function tmpDir(): { dir: string; cleanup: () => void } {
 const spans = findMeta('spansRetentionDays')! // present by construction; the meta table is the source of truth
 
 suite('retentionConfig (TRDD-ZAV74M8Q — persistent, discoverable retention config)', () => {
-  test('RETENTION_META has 5 knobs with unique keys and env names', () => {
+  test('RETENTION_META has 6 knobs with unique keys and env names', () => {
     // The single source of truth both server and CLI read — a duplicate key/env would silently shadow.
-    assert.strictEqual(RETENTION_META.length, 5)
-    assert.strictEqual(new Set(RETENTION_META.map((m) => m.key)).size, 5)
-    assert.strictEqual(new Set(RETENTION_META.map((m) => m.env)).size, 5)
+    assert.strictEqual(RETENTION_META.length, 6)
+    assert.strictEqual(new Set(RETENTION_META.map((m) => m.key)).size, 6)
+    assert.strictEqual(new Set(RETENTION_META.map((m) => m.env)).size, 6)
     for (const m of RETENTION_META) assert.ok(m.def >= m.min, `${m.key} default must be ≥ its min`)
+    // TRDD-AMEA4O4Z: the log-event sink's retention knob must exist with the documented default.
+    const le = RETENTION_META.find((m) => m.key === 'logEventsRetentionDays')
+    assert.ok(le, 'logEventsRetentionDays knob missing')
+    assert.strictEqual(le.env, 'AGENTLENS_LOG_EVENTS_RETENTION_DAYS')
+    assert.strictEqual(le.def, 31)
   })
 
   test('precedence: env var wins over file wins over default', () => {
@@ -66,11 +71,12 @@ suite('retentionConfig (TRDD-ZAV74M8Q — persistent, discoverable retention con
     } finally { cleanup() }
   })
 
-  test('resolveRetention resolves all 5 knobs at once (defaults when nothing set)', () => {
+  test('resolveRetention resolves all 6 knobs at once (defaults when nothing set)', () => {
     const { dir, cleanup } = tmpDir()
     try {
       assert.deepStrictEqual(resolveRetention(dir, {}), {
         spansRetentionDays: 30, summaryWindowHours: 24, bodiesMaxAgeHours: 72, bodiesMaxGb: 8, bodiesRetentionDays: 31,
+        logEventsRetentionDays: 31, // TRDD-AMEA4O4Z — the log-event sink's bucket lifetime
       })
     } finally { cleanup() }
   })

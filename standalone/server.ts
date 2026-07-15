@@ -25,6 +25,7 @@ import { resolveLogEventName, bareLogEventName, CLAUDE_RICH_LOG_EVENTS, BODY_POI
 import { startMcpHttpServer, labelBurnStatusAccounts } from '../src/mcpServer'
 import { resolveCallContext, callBodyRegistry } from '../src/rawBodyContext'
 import { appendHookEvent, readHookEvents, purgeHookEventBuckets, hookEventsDiskUsage, verifyAppendedLine, quarantineSpoolFile, type HookEventRecord, type AppendPosition } from '../src/hookEventStore'
+import { buildDroppedLogEventRecord, appendDroppedLogEvent, purgeLogEventBuckets, logEventsDiskUsage } from '../src/logEventSink'
 import { BodiesActivityTracker } from '../src/bodiesActivity'
 import { evaluateAgentGate, evaluateSendMessageGate, buildAdvisory, readTranscriptContext, resolveMessageTargetLiveness, type AgentGateState, type GateThresholds, type LaunchSpawner } from '../src/agentGate'
 import { checkBurnRisk } from '../src/burnGuard'
@@ -233,6 +234,7 @@ const persistStats = {
   offsetsWrites: 0, offsetsBytes: 0,
   cardsWrites: 0, cardsBytes: 0,
   hookEventWrites: 0, hookEventBytes: 0,
+  logEventWrites: 0, logEventBytes: 0,
   gateChecks: 0, gateDenies: 0, gateWarns: 0, gateAdvisories: 0,
   bodiesLastPurge: { at: 0, removedFiles: 0, freedBytes: 0, keptFiles: 0, keptBytes: 0 },
 }
@@ -477,14 +479,44 @@ function purgeHookEvents(): void {
   }
 }
 
+// Gated-out OTEL log events (user_prompt, assistant_response, tool_decision, hook_execution_*, ...)
+// persisted instead of dropped (TRDD-AMEA4O4Z — USER 2026-07-16: lose no logged data). Same
+// append-only daily-bucket model as hook-events; RET knob bounds how long the buckets live.
+const LOG_EVENTS_DIR = path.join(DATA_DIR, 'log-events')
+const LOG_EVENTS_RETENTION_DAYS = RET.logEventsRetentionDays
+// A sink failure must never reject the whole OTLP payload (that would lose the spans too), but it
+// must not be silent either — warn once per boot per error message, then keep counting drops.
+const logSinkWarned = new Set<string>()
+function persistDroppedLogEvent(name: string, bare: string, attrs: RawAttr[], rec: Record<string, unknown>): void {
+  try {
+    const { bytes } = appendDroppedLogEvent(LOG_EVENTS_DIR, buildDroppedLogEventRecord(name, bare, attrs, rec))
+    persistStats.logEventWrites++
+    persistStats.logEventBytes += bytes
+  } catch (e) {
+    const msg = (e as Error).message
+    if (!logSinkWarned.has(msg)) {
+      logSinkWarned.add(msg)
+      console.warn(`[AgentLens] log-event sink append FAILED (event lost — disk problem?): ${msg}`)
+    }
+  }
+}
+
+function purgeLogEvents(): void {
+  const r = purgeLogEventBuckets(LOG_EVENTS_DIR, LOG_EVENTS_RETENTION_DAYS)
+  if (r.removed.length > 0) {
+    console.log(`[AgentLens] log-events retention: purged ${r.removed.length} bucket(s), ${(r.freedBytes / 1048576).toFixed(1)}MB`)
+  }
+}
+
 void archiveOtelBodies() // enforce on boot — a long-dead server must not leave the corpus unbounded
 purgeHookEvents()
+purgeLogEvents()
 // Spool mode drains every 60s (the bodies sit in volatile RAM — reclaim them fast); otherwise the
 // legacy hourly cadence is plenty for plain-file bodies on disk.
 const BODIES_PASS_INTERVAL_MS = SPOOL_MODE ? 60_000 : 3600e3
 const bodiesPurgeTimer = setInterval(() => { void archiveOtelBodies() }, BODIES_PASS_INTERVAL_MS)
 bodiesPurgeTimer.unref()
-const hookPurgeTimer = setInterval(() => { purgeHookEvents() }, 3600e3)
+const hookPurgeTimer = setInterval(() => { purgeHookEvents(); purgeLogEvents() }, 3600e3)
 hookPurgeTimer.unref()
 
 // ── Agent-launch burn gate + realtime activity (TRDD-GOD0108C) ────────────────
@@ -1521,6 +1553,10 @@ function processLogs(payload: unknown, collectorPath = '/v1/logs'): number {
         const isClaudeRichEvent = CLAUDE_RICH_LOG_EVENTS.has(bare)
         if (!isCodexEvent && !isClaudeToolResult && !isClaudeRichEvent) {
           noteDroppedLogEvent(name)
+          // TRDD-AMEA4O4Z: not ingested as a span, but never discarded — persist the full event
+          // (merged attrs + ids + body) to the append-only log-events sink. tool_decision,
+          // mcp_server_connection, hook_registered etc. exist NOWHERE else.
+          persistDroppedLogEvent(name, bare, attrs, r)
           continue
         }
         if (isCodexEvent && isCodexWebsocketSpanName(name)) continue
@@ -2766,6 +2802,8 @@ const uiServer = http.createServer(async (req, res) => {
       },
       bodies: { archive: archiveDiskUsage(BODIES_ARCHIVE_DIR), lastPass: p.bodiesLastPurge },
       hookEvents: { ...hookEventsDiskUsage(HOOK_EVENTS_DIR), receivedSinceBoot: p.hookEventWrites, spooled: hookSpoolCount() },
+      // TRDD-AMEA4O4Z: gated-out OTEL log events persisted (not dropped) — sink disk usage + boot counters.
+      logEvents: { ...logEventsDiskUsage(LOG_EVENTS_DIR), persistedSinceBoot: p.logEventWrites, persistedBytesSinceBoot: p.logEventBytes, retentionDays: LOG_EVENTS_RETENTION_DAYS },
       // D3K7QM2P/1c — live backpressure: in-flight/queued now, and admitted/shed since boot. A
       // rising shedTotal under a 20-instance burst is the controller doing its job (shed = spooled +
       // drained, never lost). `resources` is the same sample the controller admits/sheds on.
