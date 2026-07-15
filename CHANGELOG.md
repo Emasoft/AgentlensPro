@@ -47,8 +47,10 @@ All notable changes to AgentlensPro are documented here.
   after it is proven to reconstruct byte-identically from the durable store (verify, then delete).
   Measured on this project's own captured history: ~52 GB of raw bodies (live capture plus the
   drained legacy `.wad` archive) compressed to ~270 MB of Parquet on disk (~190×), with every body
-  verified byte-identical at ingest time — full-corpus validation was still running at the time of
-  writing (`reports/storage-migration/20260715_003054+0200-backfill-and-drain.md`). A smaller,
+  verified byte-identical at ingest time, then re-proven by an independent full-corpus validation
+  sweep — 328,606/328,606 spans content-address OK and 100,600/100,600 bodies reconstructing to
+  the exact sha256 of their original source files, zero dangling references
+  (`reports/storage-migration/20260715_003054+0200-backfill-and-drain.md`). A smaller,
   independently-run dry run measured 167× (4.00 GB → 24 MB, 7,439/7,439 bodies verified).
   `--export-bodies` now reads from both the store and the legacy `.wad` archive (kept as a
   read-only fallback, never deleted automatically), so a time-window export can no longer silently
@@ -67,6 +69,13 @@ All notable changes to AgentlensPro are documented here.
   correctness backstop for events the watcher coalesces or misses. Measured under identical
   synthetic load: 17.1% → 3.0% CPU with one writing session, 28.8% → 8.2% with four.
   (TRDD-X2E6OSWK)
+
+- **The bundle build silently never shipped the body store.** `@duckdb/node-api` loads prebuilt
+  native `.node` binaries that esbuild cannot bundle, so every build since the store landed
+  failed — and because a failed esbuild leaves the previous outfile untouched, the stale
+  `standalone/server.js` looked current while containing none of the new code. The package is now
+  marked `external` in both node bundle targets and resolves from `node_modules` at runtime (it is
+  a declared runtime dependency — the same stance `sql.js` already takes). (TRDD-K3WDPR7M)
 
 ## [2.6.0] - 2026-07-13
 
