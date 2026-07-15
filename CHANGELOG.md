@@ -10,6 +10,17 @@ All notable changes to AgentlensPro are documented here.
 
 ### Added
 
+- **`get_body_writers` — which sessions are still writing raw OTEL bodies, ranked.** A session keeps
+  its launch-time `OTEL_LOG_RAW_API_BODIES` env until restarted, so stale sessions keep writing
+  ~0.7–1.9 MB request bodies per LLM call. The new diagnostic (`agentlenspro get_body_writers
+  [--window_min 30] [--active_min 10] [--limit 20]`) names each writer session with its workspace and
+  model, its recent write rate (MB/min over the window), an `active` flag (wrote within
+  `--active_min`), and its total bytes — ranked by rate, then total, so the terminals to restart are
+  the top rows. Attribution unit is the request body (its tail carries `session_id`; responses carry
+  no session metadata and are reported in aggregate, never guessed). Totals are the exact union of
+  the ingested store history and not-yet-ingested live files — a file present in both is counted
+  once — and a down/absent store degrades to live-dir-only with an explicit note. (TRDD-1FEIW17E)
+
 - **`check_cache_expiry` — is a session's prompt cache expired yet?** A new diagnostic that
   measures idle time since a session's last LLM (`api_request`) call and compares it to that
   session's TTL — 1h for a subscription main conversation, 5min for a subagent (always) or a

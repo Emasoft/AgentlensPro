@@ -994,6 +994,9 @@ startMcpHttpServer({
   // and the incremental bodies tracker (CACHE_THRASH + huge-request burst without full stats).
   getRecentHookEvents: () => recentHookEvents,
   getBodiesActivity: () => bodiesActivityReport(),
+  // TRDD-1FEIW17E: get_body_writers reads all-time per-session totals from the durable store —
+  // same lazy-open the ingest pass uses, so the first call after boot pays the open, not every call.
+  getStore: async () => (bodyStore ??= await openStore({ dir: path.join(DATA_DIR, 'store') })),
   // TRDD-PJC8N1HO spec 2: an orienting agent sees where telemetry was lost, not just the sessions.
   getCollectorGaps,
 }, MCP_PORT, BIND_HOST)

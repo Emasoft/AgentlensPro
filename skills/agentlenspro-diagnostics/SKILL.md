@@ -336,6 +336,7 @@ A `verdict:"unknown"` means no LLM request was recorded for that session.
 | Which config (model/spawn/effort) costs most? | `compare_configs --groupBy <dim>` |
 | Ad-hoc analytics over the fact DB | `run_diagnostics_sql --preset <name>` / `--sql '<SELECT…>'` |
 | Recent sessions / workspace patterns | `get_recent_sessions`, `get_workspace_patterns` |
+| **Which sessions still write raw OTEL bodies (restart targets)?** | `get_body_writers` — ranked by recent rate then total; `active` rows wrote within `--active_min` (default 10m) and keep writing until their process restarts. Request-body attribution (responses aggregated); totals = exact store+live union. `--window_min 30 --limit 20` |
 
 Sibling PATH binary for the janitor heartbeat: `agentlenspro-heartbeat-cost --oneline` prints
 the exact settled cost of the previous heartbeat fire. It ships as a bin of the agentlenspro

@@ -52,7 +52,11 @@ import { ContextCompositionIndex, type CompositionBlockKind, type GroupBy } from
 import {
   buildCacheCreationReport, buildExpensiveWritesTrace, buildCacheBreakGapReport,
   formatExpensiveWrites, formatCostPeaks, type CostPeakGroupBy, type CostBucket, type ForensicsFormat,
+  DEFAULT_BODIES_DIR,
 } from './cacheCreationForensics'
+// TRDD-1FEIW17E — who is writing raw OTEL bodies (live-dir scan + store totals, exact union).
+import { scanLiveBodyWriters, queryStoreWriterTotals, buildBodyWritersReport } from './bodyWriters'
+import type { Store } from './store/db'
 import {
   buildCacheBreakTimeline, buildCauseCostPeakReport, buildCacheBreakCauses, formatTimeline, type TimelineFormat,
 } from './cacheBreakTimeline'
@@ -406,6 +410,24 @@ const TOOLS = [
       properties: {
         workspace: { type: 'string', description: 'Filter by workspace path prefix' },
         days:      { type: 'number', description: 'Only include sessions from the last N days (default: all)' },
+      },
+    },
+  },
+  {
+    name: 'get_body_writers',
+    description:
+      'Identifies WHICH sessions are writing raw OTEL API bodies (OTEL_LOG_RAW_API_BODIES) and ranks ' +
+      'them by recent write rate, then total written. A session keeps its launch-time env until ' +
+      'restarted, so the `active` rows are the terminals still burning disk RIGHT NOW. Attribution ' +
+      'unit is the request body (responses carry no session metadata and are aggregated separately). ' +
+      'Totals are the exact union of the ingested store history and not-yet-ingested live files — ' +
+      'never double-counted. Result includes a preformatted `text` table.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        window_min: { type: 'number', description: 'Rate window in minutes (default 30)' },
+        active_min: { type: 'number', description: 'A session writing within this many minutes is flagged active (default 10)' },
+        limit:      { type: 'number', description: 'Max ranked writers returned (default 20)' },
       },
     },
   },
@@ -2564,6 +2586,9 @@ export interface McpServerOptions {
   /** TRDD-GOD0108C — the server's BodiesActivityTracker report (incremental bodies scan). Powers
    *  the CACHE_THRASH risk and replaces the stat-every-file HUGE_REQUEST_BURST pass. */
   getBodiesActivity?: () => BodiesActivityReport | null
+  /** TRDD-1FEIW17E — the server's durable body store (opened lazily). get_body_writers reads
+   *  all-time per-session totals from it; a null/absent store degrades to live-dir-only. */
+  getStore?: () => Promise<Store | null>
 }
 
 export function createMcpServer(opts: McpServerOptions): Server {
@@ -2599,6 +2624,26 @@ export function createMcpServer(opts: McpServerOptions): Server {
       case 'get_workspace_patterns':
         result = handleGetWorkspacePatterns(sessions, args as { workspace?: string; days?: number })
         break
+      case 'get_body_writers': {
+        const a = args as { window_min?: number; active_min?: number; limit?: number }
+        const nowMs = Date.now()
+        const windowMs = Math.max(1, a.window_min ?? 30) * 60_000
+        const activeMs = Math.max(1, a.active_min ?? 10) * 60_000
+        const live = scanLiveBodyWriters(DEFAULT_BODIES_DIR, nowMs, windowMs)
+        // Store totals are best-effort: a closed/broken store degrades to live-only (the note says
+        // so) because "which sessions must I restart" must be answerable even mid-migration.
+        const storeHandle = opts.getStore ? await opts.getStore().catch(() => null) : null
+        // recentSrcNames floor: live retention is 72h, +24h slack covers every file still on disk.
+        const totals = storeHandle
+          ? await queryStoreWriterTotals(storeHandle, nowMs - 96 * 3600_000).catch(() => null)
+          : null
+        result = buildBodyWritersReport({
+          live, store: totals,
+          cards: sessions.map(s => ({ sessionId: s.sessionId, workspace: s.workspace, source: s.source })),
+          nowMs, windowMs, activeMs, limit: Math.max(1, a.limit ?? 20),
+        })
+        break
+      }
       case 'get_session_detail': {
         const id = (args as { sessionId: string }).sessionId
         // Composition is optional context — a null accessor or non-Claude session just omits it.
