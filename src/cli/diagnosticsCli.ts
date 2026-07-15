@@ -82,7 +82,8 @@ operations:
   --export-bodies DIR   extract OTEL bodies into DIR as plain files, from BOTH the content-
                         addressed store and the legacy .wad archive (optionally --since <ISO|hours>
                         / --until <ISO>)
-  --purge-bodies        delete ALL archived body volumes (the live 72h window is untouched)
+  --purge-bodies        delete archived body volumes PROVEN durable in the store; a volume that
+                        fails verification is kept and named (the live 72h window is untouched)
   --risk                one-shot realtime culprit check (~50ms, REST fast path): prints ONLY the
                         active burn risks — each names the culprit session/workspace/model and
                         the magnitude — or "no active burn risks"
@@ -420,8 +421,13 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
   }
 
   if (ops.purgeBodies) {
+    // Response shape changed with the verify-before-delete gate (TRDD-K3WDPR7M): removed/kept are
+    // now per-volume arrays — a volume the store cannot prove is KEPT with its failures named.
     const r = await apiRequest('POST', '/api/bodies/purge')
-    console.log(`bodies archive purged: ${r.lumps} lump(s), ${fmtGb(Number(r.freedBytes))} freed (live 72h window untouched)`)
+    const removed = Array.isArray(r.removed) ? r.removed as string[] : []
+    const kept = Array.isArray(r.kept) ? r.kept as Array<{ volume: string; verified: number; entries: number }> : []
+    console.log(`bodies archive purge: removed ${removed.length} verified volume(s) (${fmtGb(Number(r.freedBytes))} freed), kept ${kept.length} unproven; .idx sidecars + live 72h window untouched`)
+    for (const k of kept) console.log(`  KEPT ${k.volume}: only ${k.verified}/${k.entries} lump(s) proven in the store`)
     return
   }
 

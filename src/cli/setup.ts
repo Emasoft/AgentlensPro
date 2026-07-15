@@ -21,6 +21,7 @@
 import { spawn, spawnSync, execFileSync } from 'child_process'
 import * as crypto from 'crypto'
 import * as fs from 'fs'
+import { agentlensDisabled } from './killSwitch'
 import * as http from 'http'
 import * as os from 'os'
 import * as path from 'path'
@@ -600,6 +601,13 @@ const stepServer: StepDef = {
       if ((await serverStats(ctx)) !== null) {
         return { result: { step: this.name, found, action: 'stop old server', verify: 'FAIL', detail: `pid ${pre.pid} did not stop within 10s` }, acted: true }
       }
+    }
+    // The kill-switch gates EVERY spawn path, including setup (TRDD-K3WDPR7M): this was the one
+    // spawn site with no guard, discovered when a server booted minutes after `agentlenspro
+    // disable`. The server now also refuses at its own boot — this check just makes setup report
+    // the refusal honestly instead of spawning a child that immediately exits 78.
+    if (agentlensDisabled()) {
+      return { result: { step: this.name, found, action: 'start server', verify: 'FAIL', detail: 'AgentlensPro is DISABLED — run `agentlenspro enable` first' }, acted: false }
     }
     const serverJs = findServerJs()
     fs.mkdirSync(ctx.dataDir, { recursive: true })

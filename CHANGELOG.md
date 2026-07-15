@@ -61,6 +61,38 @@ All notable changes to AgentlensPro are documented here.
   regardless of how much actually changed. Only the records that changed are now appended to a
   delta log, with periodic compaction back into a fresh snapshot. (TRDD-K3WDPR7M)
 
+- **Verify-before-delete is now a universal invariant, not just a body-store rule.** Every code
+  path that deletes a source after ingesting it first proves the durable store holds *all* of that
+  record's data — the exact bytes *and* the `(src_name, capture-time)` row (±2s) — through one
+  shared gate (`src/store/verifyInStore.ts`) so the bar cannot drift apart per call site.
+  Byte-identity alone is not enough: the first backfill held every byte perfectly (hash-proven
+  twice) while stamping 100,600 rows with ingest time instead of capture time, so a bytes-only gate
+  would have blessed broken metadata. The gate now guards the live/spool reclaim, the legacy `.wad`
+  drain, the retention purge, and the explicit purge endpoint. Two lifecycle sources previously
+  trusted on faith are now gated the same way: appended hook-event lines are read back from their
+  daily bucket byte-for-byte before the spool file is unlinked, and delta-log compaction re-parses
+  the candidate snapshot from disk (record count + per-record hash) before the delta is dropped, so
+  a short or corrupt snapshot write aborts with the old snapshot and the delta both intact. A hook
+  payload that can never ingest (unparseable, or rejected with a 400) is now **quarantined** to
+  `hook-spool/rejected/` rather than deleted — it is still data. `POST /api/bodies/purge` now
+  verifies each archive volume individually and returns `{removed, kept, freedBytes}`; an unproven
+  volume is kept and named, and the `.idx` sidecars are always retained. (TRDD-K3WDPR7M)
+
+- **Store schema v2 — capture-time recovery.** A staged migration (`src/store/tsRecovery.ts`,
+  `migrate.ts`, `CURRENT_SCHEMA=2`) corrects `body.ts` from the archive `.idx` sidecars' ground
+  truth and materializes **alias rows** so content captured under several names has one queryable
+  row per name — previously content-dedup meant the second and later names got no row at all. It
+  runs the store's crash-safe migration protocol (build in `<dir>.migrating`, full validation,
+  body-id set-equality, atomic swap, old store kept as `.old-v1`) and aborts with the live store
+  untouched on any alias it cannot prove. **Not every timestamp is recoverable, and the docs do not
+  pretend otherwise:** of the ~100,600 backfilled rows, the ~78,031 that join an archive `.idx` can
+  be corrected to their true capture time, but the remaining ~22,569 were reclaimed from live files
+  that had already been deleted (no `.idx` to recover from) — their capture times are unrecoverable,
+  so those rows keep their ingest-time `ts`. Inventing a capture time would be fabrication. Related:
+  `ingestBody` now records a `(src_name, ts)` row for every capture event even when the content
+  dedups, so a duplicate-content capture is still queryable by name and can pass the
+  verify-before-delete gate. (TRDD-K3WDPR7M)
+
 ### Fixed
 
 - **Server CPU spin under sustained load.** The dashboard rebuild is now memoized (an unchanged

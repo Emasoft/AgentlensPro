@@ -407,9 +407,10 @@ Claude Code raw body write
     IN-MEMORY DuckDB instance — never a persistent .duckdb file (see below)
   → flush(): the in-memory tables are written ONCE to immutable, zstd-compressed Parquet parts
     under store/{blobs,bodies,parts}/ and never rewritten
-  → VERIFY: reconstructBody() re-reads the body from the flushed, DURABLE Parquet parts and
-    compares its sha256 against the original file's bytes
-  → only on a proven byte-identical match is the source file deleted
+  → VERIFY: verifyBodyInStore() re-reads the body from the flushed, DURABLE Parquet parts,
+    compares its sha256 against the original file's bytes, AND confirms a (src_name, capture-ts)
+    row exists for it (src/store/verifyInStore.ts)
+  → only when the exact bytes AND that row are both proven is the source file deleted
 ```
 
 **Why fileless DuckDB.** A *persistent* `.duckdb` file rewrites row-groups internally — measured
@@ -444,10 +445,44 @@ is a separate, explicit decision — and remain readable: `src/store/migrateArch
 store and the `.wad` archive so an export never silently misses a body that has already been
 reclaimed from the live directory.
 
+**Verify-before-delete — one gate, every deletion site.** The reclaim above is not the only place
+that destroys a source once its data is durable; `src/store/verifyInStore.ts` is the single gate
+they all share, so the bar cannot drift apart per call site. `verifyBodyInStore()` proves three
+things before any delete: the body reconstructs byte-identically from the durable store, a body row
+exists for *that* `src_name` (not merely the same content under another name — the row is what
+time-window queries and exports see), and, when the caller knows it, the row's `ts` matches the
+capture time (±2 s). It gates the live/spool reclaim (`ingestPass.ts`), the `.wad` drain
+(`migrateArchive.ts`), the retention purge (`purgeArchiveVolumes`, which now requires the gate and
+keeps any unproven volume regardless of age), and the explicit `POST /api/bodies/purge`
+(`verifyVolumeInStore` in `src/store/archiveVerify.ts` proves a whole volume lump-by-lump; the
+response is `{removed, kept, freedBytes}`, and the `.idx` sidecars are always retained — at ~0.05%
+of a volume's size they are the only remaining record of each lump's capture time). Two lifecycle
+sources outside the body store are gated the same way: the hook-event spool drain reads each appended
+NDJSON line back from its daily bucket byte-for-byte before unlinking the spool file
+(`verifyAppendedLine` in `src/hookEventStore.ts`), and a payload that can never ingest — unparseable,
+or a 400 — is **quarantined** into `hook-spool/rejected/` (`quarantineSpoolFile`) instead of deleted,
+because a payload we cannot ingest is still data.
+
+**Schema v2 — capture-time recovery (`CURRENT_SCHEMA = 2`).** The first backfill and the `.wad`
+drain both ran on stale compiled code that did not pass the capture time, so ~78,031 `.idx`-joinable
+rows carry the ingest batch time instead of the real capture time (the bytes are hash-proven correct;
+only `ts` lied). `src/store/tsRecovery.ts` builds a v1→v2 migration that corrects `body.ts` from the
+archive `.idx` sidecars' ground truth and materializes **alias rows** — the archive can hold the same
+content under several `src_name`s, but `ingestBody` dedups on content, so the later names had no body
+row; v2 adds one row per missing `(src_name → existing body_id)`, each with its own capture `ts`. It
+runs through the standard staged migration protocol (`src/store/migrate.ts`: build `<dir>.migrating`,
+`validateStore` #1 + body-id set-equality #2, atomic swap, old store kept as `.old-v1`) and aborts
+with the live store untouched on any alias whose `body_id` the store does not hold. The recovery is
+partial by necessity, and the store does not hide it: the ~22,569 rows backfilled from live files
+that were already deleted have no `.idx` entry, so their capture times are **unrecoverable** and
+those rows keep their ingest-time `ts` — inventing a time would be fabrication.
+
 Measured on this project's own captured history: ~52 GB of raw bodies (live capture plus the
 drained legacy archive) compressed to ~270 MB of Parquet on disk (~190×), with every body verified
-byte-identical at ingest time — full-corpus validation was still in progress at the time of
-writing (`reports/storage-migration/20260715_003054+0200-backfill-and-drain.md`). A smaller,
+byte-identical at ingest time and re-proven by an independent full-corpus validation sweep —
+328,606/328,606 spans content-address OK, 100,600/100,600 bodies reconstruct to the exact sha256 of
+their source, zero dangling references
+(`reports/storage-migration/20260715_003054+0200-backfill-and-drain.md`). A smaller,
 independently-run dry run separately measured 167× (4.00 GB → 24 MB, 7,439/7,439 bodies
 verified).
 
@@ -460,9 +495,12 @@ changed. `src/store/deltaLog.ts`'s `DeltaLog<T>` replaces the whole-file rewrite
 form and appends **only** the records that changed (plus tombstones for records that disappeared)
 to the delta file — a save where nothing changed now writes zero bytes. The delta log is
 periodically compacted back into a fresh snapshot once it grows past the snapshot's own size
-(bounding replay cost on load), and a crash mid-append can only lose a torn trailing line, which
-`load()` drops on the next read — the record it belonged to is simply re-derived and re-appended
-on the next save.
+(bounding replay cost on load); compaction re-parses the freshly written snapshot **from disk** and
+confirms it reproduces the exact record set — count plus per-record hash — *before* the delta is
+dropped, so a silently short or corrupt snapshot write aborts with the old snapshot and the delta
+both intact rather than truncating the corpus. A crash mid-append can only lose a torn trailing
+line, which `load()` drops on the next read — the record it belonged to is simply re-derived and
+re-appended on the next save.
 
 ---
 

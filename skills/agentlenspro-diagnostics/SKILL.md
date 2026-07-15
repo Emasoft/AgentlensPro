@@ -64,7 +64,7 @@ agentlenspro batch '<json-array>'           # N tools in ONE invocation: [{"tool
 | `--dashboard` | ensure the server is up, then open the dashboard (http://localhost:3000) |
 | `--purge-db` | clear the span store + session cards; the server re-ingests from the agent logs |
 | `--export-bodies DIR` | re-inflate archived OTEL bodies into DIR as plain files; `--since <hours\|ISO>` / `--until <ISO>` filter by time |
-| `--purge-bodies` | delete ALL archived body volumes (the live 72h window is untouched) |
+| `--purge-bodies` | delete archived body volumes proven durable in the store (each verified lump-by-lump); unproven volumes are kept and named, `.idx` sidecars always retained (the live 72h window is untouched) |
 | `--risk` | one-shot realtime culprit check (~40ms REST fast path): prints only the ACTIVE burn risks, each naming the culprit session/workspace/model + magnitude |
 | `--install-skill` | (re)install THIS skill into `~/.claude/skills/` — idempotent, reports installed/updated/current |
 | `--install-hooks` | register the `agentlenspro hook` command string on the 10 LIFECYCLE hook events (SessionStart/End, Stop, StopFailure, Pre/PostCompact, Permission, Notification, SubagentStart/Stop) AND the burn-gate (`agentlenspro gate` on PreToolUse/PostToolUse matched to `^(Task\|Agent\|Workflow\|SendMessage)$` only — see "The burn-gate" below) via the same verified transaction. Bare bin + subcommand, never absolute paths — registrations survive Homebrew version bumps; the install refuses if `agentlenspro` is not on PATH. Also migrates every previous-generation registration (`agentlenspro-hook`/`agentlenspro-gate` PATH bins, absolute-path `spy-agentlens*` scripts) and removes dead claude-spyglass entries. Never touches other tools' hooks. Idempotent; needs a session restart |
@@ -81,8 +81,9 @@ Bodies lifecycle: raw capture is opt-in and off by default (`agentlenspro config
 captureRawBodies on|off`); when on, bodies land in a RAM-disk spool (macOS) instead of the SSD.
 Live plain files (72h, `bodiesMaxAgeHours`) are ingested into a content-addressed store
 (`~/.agentlens/store/` — fileless DuckDB → immutable zstd Parquet, deduped across turns,
-~190× measured on this project's own history) — a body is deleted from its source only after it
-is proven to reconstruct byte-identically from the store. The legacy monthly `.wad` archive
+~190× measured on this project's own history) — a source is deleted only after the store is proven
+to hold its exact bytes AND its `(src_name, capture-time)` row, one gate shared by `.wad` volumes
+and the hook-event spool; a payload that cannot ingest is quarantined, never deleted. The legacy monthly `.wad` archive
 (`~/.agentlens/otel-bodies-archive/bodies-YYYY-MM.wad`) is a read-only fallback for history not
 yet migrated, never written to again; `--export-bodies` reads from both. One server at a time:
 the canonical instance owns `~/.agentlens/server.pid` and a second boot refuses cleanly.

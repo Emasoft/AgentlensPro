@@ -81,6 +81,20 @@ const BIND_HOST  = process.env.BIND_HOST ?? '127.0.0.1'
 
 const mediaDir  = path.join(__dirname, '..', 'media')
 const DATA_DIR  = process.env.DATA_DIR ?? path.join(os.homedir(), '.agentlens')
+
+// THE KILL-SWITCH, ENFORCED AT THE CHOKEPOINT (TRDD-K3WDPR7M). Guarding the CLI's spawn sites was
+// not enough: on 2026-07-15 a server booted 3 minutes after `agentlenspro disable` through a spawn
+// path that carried no guard (`setup` had none; a hook's revive raced the flag) — and a running
+// writer during the store migration's atomic swap would have stranded fresh bodies in the renamed
+// old dir, i.e. real data loss. Guarding N call sites always misses the N+1th; the ONE spawn path
+// every future caller must pass through is this process's own boot, so the flag is honored HERE,
+// before any port binds, any store opens, or any timer arms. `agentlenspro enable` removes the flag
+// and the next hook revives the server normally.
+if (fs.existsSync(path.join(DATA_DIR, 'DISABLED'))) {
+  console.error(`[AgentLens] DISABLED flag present (${path.join(DATA_DIR, 'DISABLED')}) — server refusing to boot.`)
+  console.error('Re-enable with:  agentlenspro enable')
+  process.exit(78) // EX_CONFIG: a deliberate refusal, distinguishable from a crash
+}
 // Retention knobs resolved once at boot: env var > DATA_DIR/config.json > built-in default (min-floored
 // inside resolveKnob). The config.json layer makes retention PERSISTENTLY settable — it survives a
 // repo delete / uninstall / upgrade like the data it governs, and the launchd daemon (whose own env a
