@@ -45,18 +45,34 @@ async function bodyTs(dir: string, srcName: string): Promise<number> {
 }
 
 suite('parseIdxTsMap — the .idx is the ground truth feeding a whole-table rewrite', () => {
-  test('parses NDJSON entries and keeps the LAST mtime for a duplicated name', async () => {
+  test('parses NDJSON entries, keeps the LAST mtime for a duplicated name, ROUNDS float mtimes', async () => {
     const p = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'agentlens-idx-')), 'x.wad.idx')
+    // Real .idx mtimes are floats (statSync mtimeMs keeps sub-ms fraction) — the first migration run
+    // against the REAL archive aborted on BigInt(1783577015814.2808) because the test fixture used
+    // tidy integers. The fixture now looks like the real data.
     fs.writeFileSync(p, [
-      JSON.stringify({ n: 'a.request.json', o: 0, l: 10, s: 20, m: 111 }),
-      JSON.stringify({ n: 'b.request.json', o: 10, l: 10, s: 20, m: 222 }),
-      JSON.stringify({ n: 'a.request.json', o: 20, l: 10, s: 20, m: 333 }),
+      JSON.stringify({ n: 'a.request.json', o: 0, l: 10, s: 20, m: 111.7002 }),
+      JSON.stringify({ n: 'b.request.json', o: 10, l: 10, s: 20, m: 222.0305 }),
+      JSON.stringify({ n: 'a.request.json', o: 20, l: 10, s: 20, m: 333.4999 }),
       '',
     ].join('\n'))
     const map = await parseIdxTsMap([p])
     assert.strictEqual(map.size, 2)
     assert.strictEqual(map.get('a.request.json'), 333)
     assert.strictEqual(map.get('b.request.json'), 222)
+  })
+
+  test('a float-mtime correction survives the whole migration (the first real run aborted here)', async () => {
+    const dir2 = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'agentlens-migf-')), 'store')
+    await seedStore(dir2)
+    const c: TsCorrections = {
+      // A sub-ms fraction exactly as statSync produces them (the real abort was on …5814.2808).
+      tsBySrcName: new Map([['a.request.json', CAPTURE + 0.2808]]),
+      aliases: [],
+    }
+    const r = await migrateStore(dir2, { migrations: [makeTsRecoveryMigration(c)] })
+    assert.strictEqual(r.error, undefined)
+    assert.strictEqual(await bodyTs(dir2, 'a.request.json'), CAPTURE)
   })
 
   test('THROWS on a malformed idx line — silently skipping it would silently not correct rows', async () => {

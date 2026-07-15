@@ -45,7 +45,10 @@ export async function parseIdxTsMap(idxPaths: string[]): Promise<Map<string, num
       // silently skipping entries would mean silently not correcting them.
       const e = JSON.parse(line) as { n?: unknown; m?: unknown }
       if (typeof e.n !== 'string' || typeof e.m !== 'number') throw new Error(`${p}: malformed idx line: ${line.slice(0, 120)}`)
-      map.set(e.n, e.m)
+      // Real .idx mtimes are FLOATS (statSync mtimeMs keeps sub-ms fraction, e.g. …586.0305) and the
+      // appender's BigInt(ms*1000) THROWS on a fraction — round HERE, at the one entry point, so no
+      // consumer can trip on it. Sub-ms is far inside the ±2s verification tolerance.
+      map.set(e.n, Math.round(e.m))
     }
   }
   return map
@@ -77,7 +80,9 @@ async function appendBodyRows(to: Store, rows: BodyRow[]): Promise<void> {
     b.appendVarchar(r.src_name)
     b.appendVarchar(r.kind)
     if (r.session_id === null) b.appendNull(); else b.appendVarchar(r.session_id)
-    b.appendTimestamp(new DuckDBTimestampValue(BigInt(r.ts_ms) * 1000n))
+    // Defensive round: a float ms (idx mtimes, or any future caller) must never abort a 4-hour
+    // migration at the appender — BigInt() throws on non-integers.
+    b.appendTimestamp(new DuckDBTimestampValue(BigInt(Math.round(r.ts_ms)) * 1000n))
     if (r.model === null) b.appendNull(); else b.appendVarchar(r.model)
     b.appendBigInt(BigInt(r.raw_bytes))
     b.appendVarchar(r.body_sha256)
