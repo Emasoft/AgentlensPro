@@ -3,7 +3,7 @@ trdd-id: K3WDPR7M
 title: SSD write amplification — raw OTEL bodies rewrite the whole conversation every turn; move the body store to a fileless-DuckDB to immutable-Parquet loop
 column: dev
 created: 2026-07-14T04:30:00+0200
-updated: 2026-07-15T10:09:00+0200
+updated: 2026-07-15T21:40:00+0200
 current-owner: main
 task-type: bugfix
 severity: critical
@@ -11,6 +11,34 @@ scope: project
 npt: []
 eht: []
 ---
+
+## ⏵ STATE — 2026-07-15 ~21:40 — WAD VERIFY+RECLAIM DONE (15.78 GB reclaimed, 0 lost); Phases 3/4/6 still open
+
+**Supersedes the ~10:09 block below (its NEXT ACTION 5a is DONE).**
+
+1. **Wad verify+reclaim COMPLETE — clean pass.** `verify-and-reclaim-wad.cjs --delete` proved all
+   **78,355/78,355 lumps** byte+capture-ts identical vs the `.idx`, **0 failed**, 170.8 min. Then
+   deleted ONLY `bodies-2026-07.wad` (**15.78 GB reclaimed**) and KEPT `bodies-2026-07.wad.idx`
+   (8.5 MB). Archive dir now holds only the `.idx`. Log: `/tmp/wad-verify.txt`.
+   **AUDIT (RULE 0.5):** authorized by USER 2026-07-15 verbatim — "delete the wad only after the
+   verification passes"; executed 2026-07-15T19:35:00Z after the 0-failed proof.
+2. **The verifier had to be DAEMONIZED to finish.** Harness-tracked `run_in_background` tasks were
+   killed twice by session-lifecycle events (each before the first progress line, losing all
+   progress — no checkpoint). Fix: `scripts_dev/detach-run.py` (double-fork + `os.setsid`; macOS has
+   no `setsid`) reparents to init (ppid 1); the daemon then survived a server restart AND a
+   `/compact`. Lesson captured in LOCAL memory `detach-long-jobs-from-session-lifecycle`.
+3. **Disk picture now** (`du -sh ~/.agentlens/*`, was ~22 GB): `otel-bodies` **6.0 G** (raw CC bodies,
+   still SSD — Phase 3 RAM-disk pipeline NOT built yet), `spans` 551 M, `store` 269 M (v2 compact),
+   `store.old-v0` 270 M (pre-migration backup — separate USER disposal decision), plus stale
+   `spans.json.bak*` (99 M + 83 M), `log-sessions.snapshot` 33 M. The 15.78 GB wad — the single
+   biggest offender — is gone.
+4. **NEXT ACTIONS (K3WDPR7M still `dev` — the store loop is not finished):** (a) Phase 3 — RAM-disk
+   body pipeline so CC's ~21 MB/min never touches the SSD and `otel-bodies` (6 G) stops growing;
+   retire `archiveOtelBodies()`. (b) Phase 4 — delta writes for `log-sessions.json`/`log-offsets.json`
+   + fold `forensics.db` + fix `loadSpawnMap()`. (c) Phase 6 — profile the CPU spin (`--cpu-prof`
+   first; earlier root cause REFUTED). (d) `store.old-v0` disposal = USER call. (e) USER: restart
+   stale Claude sessions (still writing raw bodies). (f) branch `feat/cache-expiry-probe` NOT pushed
+   — push/PR = USER call.
 
 ## ⏵ STATE — 2026-07-15 ~10:09 — MIGRATION DONE (schema v2, probe 0 wrong); server LIVE on v2; wad verify+reclaim IN FLIGHT
 
