@@ -23,10 +23,13 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { allOf, openStore, Store } from './db'
+import { emptyCorrections, makeTsRecoveryMigration } from './tsRecovery'
 import { validateStore, ValidationReport } from './validate'
 
-/** Bump when the on-disk layout changes, and add a Migration for it below. */
-export const CURRENT_SCHEMA = 1
+/** Bump when the on-disk layout OR the semantics of a column change, and add a Migration below.
+ *  v2: body.ts is CAPTURE time everywhere recoverable (v1 backfills stamped ingest time), and every
+ *  archive src_name has its own body row (aliases for content-deduped lumps). */
+export const CURRENT_SCHEMA = 2
 
 export interface StoreManifest {
   schemaVersion: number
@@ -69,9 +72,10 @@ export interface Migration {
   up(from: Store, to: Store): Promise<void>
 }
 
-/** Registered steps, applied in order. Empty until a schema change actually happens — a framework with
- *  a fake migration in it is a framework nobody has tested on a real one. */
-export const MIGRATIONS: Migration[] = []
+/** Registered steps, applied in order. The default v1->v2 carries EMPTY corrections (a pure copy) —
+ *  correct for any store that never had a mis-stamped backfill. The real recovery run passes a
+ *  corrections-loaded migration via opts.migrations instead. */
+export const MIGRATIONS: Migration[] = [makeTsRecoveryMigration(emptyCorrections())]
 
 export interface MigrateResult {
   migrated: boolean
@@ -97,12 +101,15 @@ async function bodyIds(s: Store): Promise<Set<string>> {
  */
 export async function migrateStore(
   dir: string,
-  opts: { onProgress?: (m: string) => void; target?: number } = {},
+  opts: { onProgress?: (m: string) => void; target?: number; migrations?: Migration[] } = {},
 ): Promise<MigrateResult> {
   const log = opts.onProgress ?? (() => {})
   // `target` exists so the SAFETY RAILS can be tested against a real migration — a framework whose
   // reject-on-loss path has never actually run is a framework you are trusting on faith.
+  // `migrations` lets a runner supply a corrections-loaded step (e.g. the real .idx-driven ts
+  // recovery) without mutating the module-level registry.
   const target = opts.target ?? CURRENT_SCHEMA
+  const registry = opts.migrations ?? MIGRATIONS
   const current = readManifest(dir).schemaVersion
   const res: MigrateResult = { migrated: false, fromVersion: current, toVersion: current, missing: [] }
 
@@ -114,22 +121,25 @@ export async function migrateStore(
     return res
   }
 
-  const steps = MIGRATIONS.filter((m) => m.from >= current && m.to <= target).sort((a, b) => a.from - b.from)
+  const steps = registry.filter((m) => m.from >= current && m.to <= target).sort((a, b) => a.from - b.from)
   // A gap in the chain means we cannot get there from here. Better to stop than to apply a partial
   // chain and leave the store in a version that no code claims to understand.
-  let v = current
+  // Schema 0 IS the v1 layout (the manifest simply predates versioning), so a 0->N chain legally
+  // starts at the 1->… step; without this a pre-manifest store could never reach v2.
+  let v = current === 0 ? 1 : current
+  // Schema 0 -> 1 is the ONE legal pure stamp: v1 IS the original layout; the manifest simply did
+  // not exist yet. Stamping touches no data. (When target > 1 the staged chain below runs from 1
+  // and its final manifest carries the real target, so no separate stamp is needed.)
+  if (current === 0 && target === 1) {
+    writeManifest(dir, { schemaVersion: 1, createdAt: new Date().toISOString() })
+    log('stamped an unversioned store as schema v1 (layout unchanged — no data touched)')
+    return { ...res, migrated: true, toVersion: 1 }
+  }
   for (const s of steps) {
     if (s.from !== v) { res.error = `no migration path from schema v${v} (next step starts at v${s.from})`; return res }
     v = s.to
   }
   if (v !== target) {
-    // Schema 0 -> 1 with no registered steps is the ONE legal no-op: v1 IS the original layout; the
-    // manifest simply did not exist yet. Stamping it is correct and touches no data.
-    if (current === 0 && target === 1 && steps.length === 0) {
-      writeManifest(dir, { schemaVersion: 1, createdAt: new Date().toISOString() })
-      log('stamped an unversioned store as schema v1 (layout unchanged — no data touched)')
-      return { ...res, migrated: true, toVersion: 1 }
-    }
     res.error = `no migration path from schema v${current} to v${target}`
     return res
   }

@@ -13,8 +13,8 @@
 // something, and a validator that quietly drops what it cannot handle is how a corpus rots unnoticed.
 import { listArchiveEntries, readArchiveEntry } from '../bodyArchive'
 import { flush, Store } from './db'
-import { ingestBody, reconstructBody } from './bodyStore'
-import { sha256 } from './sections'
+import { ingestBody } from './bodyStore'
+import { verifyBodyInStore } from './verifyInStore'
 
 export interface ArchiveMigrationResult {
   entries: number
@@ -51,21 +51,20 @@ export async function migrateArchiveToStore(opts: ArchiveMigrationOptions): Prom
   r.entries = entries.length
   if (entries.length === 0) return r
 
-  let batch: Array<{ name: string; bodyId: string; raw: string }> = []
+  let batch: Array<{ name: string; raw: string; mtimeMs: number }> = []
 
   const settle = async () => {
     if (batch.length === 0) return
     await flush(store) // durable BEFORE we claim anything is verified
     if (verify) {
       for (const b of batch) {
-        try {
-          // Reconstructed from the DURABLE Parquet, compared against the bytes we read out of the WAD.
-          const back = await reconstructBody(store, b.bodyId)
-          if (sha256(back) === sha256(b.raw)) r.verified++
-          else r.failed.push(`${b.name}: reconstruction != archived bytes`)
-        } catch (e) {
-          r.failed.push(`${b.name}: ${(e as Error).message}`)
-        }
+        // The universal gate (USER directive 2026-07-15): exact bytes from the DURABLE store AND the
+        // (src_name, capture-ts) row. "Verified" here is what later authorizes archive reclamation,
+        // so it must mean ALL the lump's data — a byte-only check once blessed a drain that stamped
+        // every lump with the wrong capture time.
+        const v = await verifyBodyInStore(store, b.name, b.raw, b.mtimeMs)
+        if (v.ok) r.verified++
+        else r.failed.push(v.reason ?? b.name)
       }
     }
     batch = []
@@ -85,10 +84,10 @@ export async function migrateArchiveToStore(opts: ArchiveMigrationOptions): Prom
       // e.mtimeMs is the ORIGINAL capture time, preserved by the archiver in the .idx — pass it
       // through or the store stamps the lump with today's date and time-window queries lie.
       const ing = await ingestBody(store, e.name, raw, e.mtimeMs)
-      if (ing.newBlobs === 0 && ing.newBytes === 0) r.alreadyPresent++
+      if (ing.existed) r.alreadyPresent++ // the explicit flag — newBlobs===0 also fires for a fully-deduped NEW body
       r.ingested++
       r.bytesStored += ing.newBytes
-      batch.push({ name: e.name, bodyId: ing.bodyId, raw })
+      batch.push({ name: e.name, raw, mtimeMs: e.mtimeMs })
     } catch (err) {
       r.failed.push(`${e.name}: ${(err as Error).message}`)
       continue

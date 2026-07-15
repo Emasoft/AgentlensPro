@@ -27,6 +27,9 @@ export interface IngestResult {
   newBlobs: number
   /** Bytes of those new spans — the marginal cost of this body. */
   newBytes: number
+  /** True when a body row with this content already existed: NO new row was written, so a tsMs passed
+   *  to this call was NOT applied (rows live in immutable Parquet and are never updated in place). */
+  existed?: boolean
 }
 
 /** Metadata we keep IN CLEAR (never compressed) so the analytics the user asked for — what is in this
@@ -79,6 +82,28 @@ async function bodyExists(store: Store, bodyId: string): Promise<boolean> {
   return Number(r[0].c) > 0
 }
 
+/** SQL-quote a string literal — src_names come from the filesystem; never trust them in SQL. */
+function sqlq(s: string): string { return `'${s.replace(/'/g, "''")}'` }
+
+/** Append ONE body row (metadata extracted from the raw content; ts = capture time when given).
+ *  Shared by the fresh-ingest path and the dedup path — both record the same row shape. */
+async function appendBodyRow(
+  store: Store, bodyId: string, srcName: string, raw: string, rawBytes: number, tsMs?: number,
+): Promise<void> {
+  const meta = extractMeta(raw, srcName, tsMs)
+  const b = await store.con.createAppender('body')
+  b.appendVarchar(bodyId)
+  b.appendVarchar(srcName)
+  b.appendVarchar(meta.kind)
+  if (meta.sessionId === null) b.appendNull(); else b.appendVarchar(meta.sessionId)
+  b.appendTimestamp(new DuckDBTimestampValue(BigInt(meta.ts.getTime()) * 1000n))
+  if (meta.model === null) b.appendNull(); else b.appendVarchar(meta.model)
+  b.appendBigInt(BigInt(rawBytes))
+  b.appendVarchar(bodyId) // body_sha256 == body_id (content-addressed)
+  b.endRow()
+  b.closeSync()
+}
+
 /**
  * Ingest one body. Idempotent: re-ingesting the same bytes writes NOTHING and reports newBlobs = 0.
  * THROWS if the body would not reconstruct byte-identically — we refuse to store what we cannot
@@ -89,7 +114,19 @@ export async function ingestBody(store: Store, srcName: string, raw: string, tsM
   const rawBytes = Buffer.byteLength(raw, 'utf8')
 
   if (await bodyExists(store, bodyId)) {
-    return { bodyId, rawBytes, newBlobs: 0, newBytes: 0 } // already have it, byte-for-byte
+    // Content dedup — but each CAPTURE EVENT still deserves its own (src_name, ts) body row: without
+    // it, a file whose bytes dedup against an earlier capture would have no row, so the
+    // verify-before-delete gate could never pass for it and time-window queries would miss it.
+    // Blobs/parts are shared by body_id; only the ~200-byte row is added.
+    const named = (await store.con.runAndReadAll(
+      `SELECT count(*) c FROM ${allOf(store, 'body')} WHERE body_id = '${bodyId}' AND src_name = ${sqlq(srcName)}`,
+    )).getRowObjects()
+    if (Number(named[0].c) === 0) {
+      await appendBodyRow(store, bodyId, srcName, raw, rawBytes, tsMs)
+    }
+    // `existed` is explicit because newBlobs===0 is NOT a reliable "already present" signal: a brand-new
+    // body whose every span dedups also reports 0 new blobs.
+    return { bodyId, rawBytes, newBlobs: 0, newBytes: 0, existed: true }
   }
 
   const { parts, blobs } = sectionize(raw)
@@ -118,18 +155,7 @@ export async function ingestBody(store: Store, srcName: string, raw: string, tsM
   }
   app.closeSync()
 
-  const meta = extractMeta(raw, srcName, tsMs)
-  const b = await store.con.createAppender('body')
-  b.appendVarchar(bodyId)
-  b.appendVarchar(srcName)
-  b.appendVarchar(meta.kind)
-  if (meta.sessionId === null) b.appendNull(); else b.appendVarchar(meta.sessionId)
-  b.appendTimestamp(new DuckDBTimestampValue(BigInt(meta.ts.getTime()) * 1000n))
-  if (meta.model === null) b.appendNull(); else b.appendVarchar(meta.model)
-  b.appendBigInt(BigInt(rawBytes))
-  b.appendVarchar(bodyId) // body_sha256 == body_id (content-addressed)
-  b.endRow()
-  b.closeSync()
+  await appendBodyRow(store, bodyId, srcName, raw, rawBytes, tsMs)
 
   const p = await store.con.createAppender('part')
   let pos = 0

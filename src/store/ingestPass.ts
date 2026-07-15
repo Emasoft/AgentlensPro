@@ -21,8 +21,8 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { flush, Store } from './db'
-import { ingestBody, reconstructBody } from './bodyStore'
-import { sha256 } from './sections'
+import { ingestBody } from './bodyStore'
+import { verifyBodyInStore } from './verifyInStore'
 
 export interface IngestPassOptions {
   bodiesDir: string
@@ -102,10 +102,10 @@ export async function ingestPass(opts: IngestPassOptions): Promise<IngestPassRes
   const all = bodyFiles(bodiesDir).filter((f) => f.mtime < cutoff && !skipNames?.has(f.name))
   if (all.length === 0) return res
 
-  // (file, sha256 of its exact bytes) for the batch currently in flight. The sha is taken from the
-  // FILE, so the post-flush check compares the store against the source — not against something we
-  // derived from the same in-memory object (which would prove nothing).
-  let batch: Array<{ p: string; name: string; bodyId: string; size: number }> = []
+  // The batch currently in flight. The post-flush check re-reads the FILE, so the verification
+  // compares the store against the source — not against something we derived from the same
+  // in-memory object (which would prove nothing).
+  let batch: Array<{ p: string; name: string; mtime: number; size: number }> = []
 
   const settleBatch = async () => {
     if (batch.length === 0) return
@@ -113,11 +113,13 @@ export async function ingestPass(opts: IngestPassOptions): Promise<IngestPassRes
 
     for (const b of batch) {
       try {
-        // (3) Round-trip through the DURABLE store, compared against the source file's own bytes.
-        const back = await reconstructBody(store, b.bodyId)
+        // (3) The universal delete gate (USER directive 2026-07-15): the DURABLE store must hold the
+        // source's exact bytes AND its (src_name, capture-ts) row. Byte-identity alone once passed a
+        // backfill that stamped 100k bodies with the wrong time — metadata is data too.
         const onDisk = readFile(b.p)
-        if (sha256(back) !== sha256(onDisk)) {
-          res.failed.push(b.name)
+        const v = await verifyBodyInStore(store, b.name, onDisk, b.mtime)
+        if (!v.ok) {
+          res.failed.push(v.reason ?? b.name)
           continue // NOT deleted
         }
         if (deleteAfter) {
@@ -146,7 +148,7 @@ export async function ingestPass(opts: IngestPassOptions): Promise<IngestPassRes
       res.bytesIn += f.size
       res.bytesStored += r.newBytes
       skipNames?.add(f.name) // now durable → a later pass must not re-read+re-hash it
-      batch.push({ p: f.p, name: f.name, bodyId: r.bodyId, size: f.size })
+      batch.push({ p: f.p, name: f.name, mtime: f.mtime, size: f.size })
     } catch (e) {
       res.failed.push(`${f.name}: ${(e as Error).message}`)
       continue
