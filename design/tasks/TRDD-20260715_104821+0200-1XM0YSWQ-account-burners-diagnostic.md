@@ -3,7 +3,7 @@ trdd-id: 1XM0YSWQ
 title: get_account_burners — who exhausted a given OAuth account's rate-limit window, ranked
 column: ai_review
 created: 2026-07-15T10:48:21+0200
-updated: 2026-07-15T11:10:00+0200
+updated: 2026-07-15T11:35:00+0200
 current-owner: main
 task-type: feature
 scope: project
@@ -14,13 +14,16 @@ eht: []
 
 # get_account_burners — who exhausted a given account's window
 
-## ⏵ STATE — 2026-07-15 ~11:10 — LANDED + LIVE-VERIFIED
+## ⏵ STATE — 2026-07-15 ~11:35 — v2 LANDED (dual tables + project rollup + exhaustion marker), LIVE-VERIFIED
 
-Implemented, tested (13 tests, suite 1211 green), bundled + deployed (pid 94779), live-verified:
-previous account = fmuaddib@gmail.com (75099fe9, rotated out 10:20+0200). Its final 5h window:
-1,247 calls, 76.1M equiv, $507 across 11 sessions — top 3 = ai-maestro MANAGER 25%, ANIME2SVG 19%,
-llm-externalizer 14% (58% combined). 7d: 452.5M equiv / $2,972 — ANIME2SVG 19% ($872) the single
-biggest. Coverage full (oldest event Jul 7 < window start). Docs: CHANGELOG 2.7.0 + skill.
+USER follow-up implemented same day: (1) PROJECT/agent rollup — sessions pooled by workspace,
+explicit cache-created + cache-read token columns; (2) BOTH windows (5h + 7d tables) in one call —
+`window_hours` arg REMOVED (no legacy); (3) MOST LIKELY EXHAUSTED marker: fill% against calibrated
+capacity — own `observed` calibration first, else a SAME-PLAN account's as a labeled proxy
+(`resolveWindowCapacity`), else `undetermined` (never guessed). Suite 1215 green, deployed pid
+74161, live: fmuaddib's 5h at **85%** vs 7d at 53% of the Max-20x proxy capacity → the 5h window
+forced the rotation. 5h top: ai-maestro 25%, ANIME2SVG 19%, llm-externalizer 14%. 7d top:
+ai-maestro 25% ($594, 3 sessions), ANIME2SVG 19% ($872), janitor 17%. Docs updated in place.
 Awaiting user review → complete.
 
 **USER request (2026-07-15, verbatim):** "who is responsible for exhausting most of the previous 5h

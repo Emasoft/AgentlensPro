@@ -36,7 +36,8 @@ import type { BodiesActivityReport } from './bodiesActivity'
 import { buildResidentCostReport } from './shared/residentCost'
 import { buildSpawnRollup } from './shared/spawnRollup'
 import { buildTokensByCause } from './shared/tokensByCause'
-import type { BurnStatus, SessionStatus, AccountWindowBudget, ConsumptionEvent } from './burnMonitor'
+import { loadBurnConfig, type BurnStatus, type SessionStatus, type AccountWindowBudget, type ConsumptionEvent } from './burnMonitor'
+import * as os from 'os'
 import { type AccountInfo, accountLabelFor } from './accountInfo'
 import { classifyTtlRegime, sessionTtlKindOf, type TtlContext } from './shared/cacheTtl'
 import { assessCacheExpiry, type CacheExpiryVerdict } from './cacheExpiry'
@@ -418,20 +419,22 @@ const TOOLS = [
   {
     name: 'get_account_burners',
     description:
-      'WHO exhausted a given OAuth account\'s rate-limit window — sessions ranked by billable-weighted ' +
-      'window fill (input×1, output×5, cacheRead×0.1, cacheCreate×1.25), with cost, bucket split, share%, ' +
-      'top attribution (agent/skill/compaction/main), workspace and model. Default account is `previous` ' +
-      '(the one rotated away from — THE question after a forced account rotation), default window ends at ' +
-      'that account\'s rotation-out moment. Attribution is TIME-based against the machine account-state ' +
-      'timeline, so a session alive across a rotation splits correctly between accounts. Coverage gaps ' +
-      'are disclosed, never papered over. Result includes a preformatted `text` table.',
+      'WHO exhausted a given OAuth account\'s rate-limit windows — BOTH the 5h and the 7d window in one ' +
+      'call, each as a PROJECT/agent table (sessions grouped by workspace, so a restarted agent stays one ' +
+      'row) with share%, billable-weighted equiv, cost, explicit cache-created and cache-read token ' +
+      'columns, session count and top model; per-session rows are in the JSON too. The window nearer/over ' +
+      'its calibrated capacity at the rotation moment is marked MOST LIKELY EXHAUSTED (the rotation ' +
+      'trigger) — capacity comes from the account\'s own observed calibration, else a same-plan account\'s ' +
+      'as a labeled proxy, else the verdict says undetermined. Default account is `previous` (the one ' +
+      'rotated away from), windows end at its rotation-out moment. Attribution is TIME-based against the ' +
+      'machine account-state timeline, so a session alive across a rotation splits correctly between ' +
+      'accounts. Coverage gaps are disclosed. Result includes a preformatted `text` with both tables.',
     inputSchema: {
       type: 'object' as const,
       properties: {
-        account:      { type: 'string', description: '`previous` (default) | `current` | an account_uuid prefix | an email' },
-        window_hours: { type: 'number', description: 'Window length in hours: 5 = the 5h window (default), 168 = the 7d window' },
-        until_iso:    { type: 'string', description: 'Window end (ISO). Default: the account\'s last-active instant (its rotation-out moment; now if current)' },
-        limit:        { type: 'number', description: 'Max ranked sessions returned (default 15)' },
+        account:   { type: 'string', description: '`previous` (default) | `current` | an account_uuid prefix | an email' },
+        until_iso: { type: 'string', description: 'Window end (ISO). Default: the account\'s last-active instant (its rotation-out moment; now if current)' },
+        limit:     { type: 'number', description: 'Max ranked rows per table (default 15)' },
       },
     },
   },
@@ -2650,7 +2653,7 @@ export function createMcpServer(opts: McpServerOptions): Server {
         result = handleGetWorkspacePatterns(sessions, args as { workspace?: string; days?: number })
         break
       case 'get_account_burners': {
-        const a = args as { account?: string; window_hours?: number; until_iso?: string; limit?: number }
+        const a = args as { account?: string; until_iso?: string; limit?: number }
         const nowMs = Date.now()
         const segments = readAccountSegments()
         if (segments.length === 0) {
@@ -2667,9 +2670,10 @@ export function createMcpServer(opts: McpServerOptions): Server {
         result = buildAccountBurnersReport({
           events: opts.getConsumptionEvents?.() ?? [],
           target,
+          allSegments: segments,
           cards: sessions.map(s => ({ sessionId: s.sessionId, workspace: s.workspace, source: s.source, model: s.model })),
-          windowHours: Math.min(24 * 14, Math.max(0.25, a.window_hours ?? 5)),
           untilMs, nowMs, limit: Math.max(1, a.limit ?? 15),
+          observed: loadBurnConfig(process.env, os.homedir()).observed,
         })
         break
       }

@@ -10,17 +10,21 @@ All notable changes to AgentlensPro are documented here.
 
 ### Added
 
-- **`get_account_burners` — who exhausted a given OAuth account's rate-limit window.** After a forced
-  account rotation, `agentlenspro get_account_burners` (default `--account previous`, `--window_hours
-  5`; `168` = the 7d window) ranks the sessions that drew on THAT account's window by
-  billable-weighted fill (input×1, output×5, cacheRead×0.1, cacheCreate×1.25), with cost, bucket
-  split, share%, attribution, workspace and model — the window defaults to ending at the account's
-  rotation-out moment, i.e. exactly the window that got exhausted. Attribution is TIME-based against
-  the machine's account-state timeline (one OAuth token is active machine-wide at a time), so a
-  session alive across a rotation splits correctly between the two accounts instead of pooling onto
-  one card. Fills the gap between `investigate_burn` (window culprits, but no account filter) and
-  `get_window_budget` (per-account, but no per-session ranking). Coverage gaps are disclosed — when
-  the oldest available event is younger than the window start, totals are labeled a lower bound.
+- **`get_account_burners` — who exhausted a given OAuth account's rate-limit windows.** After a
+  forced account rotation, `agentlenspro get_account_burners` (default `--account previous`) answers
+  in one call with BOTH windows — a 5h table and a 7d table, each grouped by PROJECT/agent (sessions
+  pooled by workspace, so a restarted agent stays one row) with share%, billable-weighted equiv
+  (input×1, output×5, cacheRead×0.1, cacheCreate×1.25), cost, explicit **cache-created** and
+  **cache-read** token columns, session count and top model; per-session rows ride in the JSON. The
+  window nearer/over its calibrated capacity at the rotation moment is marked **MOST LIKELY
+  EXHAUSTED** (the rotation trigger) — capacity from the account's own auto-calibration, else a
+  same-plan account's as a labeled proxy, else the verdict says undetermined rather than guessing.
+  Windows default to ending at the account's rotation-out moment — exactly the windows that got
+  exhausted. Attribution is TIME-based against the machine's account-state timeline (one OAuth token
+  is active machine-wide at a time), so a session alive across a rotation splits correctly between
+  the two accounts instead of pooling onto one card. Fills the gap between `investigate_burn`
+  (window culprits, but no account filter) and `get_window_budget` (per-account, but no ranking).
+  Coverage gaps are disclosed — totals older than the event sources reach are labeled a lower bound.
   (TRDD-1XM0YSWQ)
 
 - **`get_body_writers` — which sessions are still writing raw OTEL bodies, ranked.** A session keeps

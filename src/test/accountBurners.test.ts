@@ -80,85 +80,131 @@ suite('resolveTargetAccount — previous / current / prefix / email', () => {
   })
 })
 
-suite('buildAccountBurnersReport — time-based attribution, ranking, honesty', () => {
+suite('buildAccountBurnersReport — dual windows, project rollup, exhaustion marker, honesty', () => {
   const target = resolveTargetAccount(SEGS, 'previous', NOW)! // acct-bbbb, until = NOW-2h
+  const base = { target, allSegments: SEGS, untilMs: target.lastActiveMs, nowMs: NOW, limit: 10, observed: {} }
 
-  test('a session alive across the rotation splits: only events inside the target\'s stint count', () => {
+  test('a session alive across the rotation splits: only events inside the target\'s stint count (both windows)', () => {
     const events = [
-      ev({ ts: NOW - 7 * H, sessionId: 's1', cacheReadTokens: 1_000_000, costUsd: 1 }),  // in B's stint
+      ev({ ts: NOW - 4 * H, sessionId: 's1', cacheReadTokens: 1_000_000, costUsd: 1 }),  // in B's stint
       ev({ ts: NOW - 1 * H, sessionId: 's1', cacheReadTokens: 9_000_000, costUsd: 9 }),  // AFTER rotation → A's window
       ev({ ts: NOW - 9 * H, sessionId: 's1', cacheReadTokens: 5_000_000, costUsd: 5 }),  // BEFORE B's stint → A's window
     ]
-    const r = buildAccountBurnersReport({
-      events, target, cards: [], windowHours: 8, untilMs: target.lastActiveMs, nowMs: NOW, limit: 10,
-    })
-    assert.strictEqual(r.totals.events, 1)
-    assert.strictEqual(r.totals.cacheRead, 1_000_000)
-    assert.strictEqual(r.totals.costUsd, 1)
+    const r = buildAccountBurnersReport({ ...base, events, cards: [] })
+    assert.strictEqual(r.fiveHour.totals.events, 1)
+    assert.strictEqual(r.fiveHour.totals.cacheRead, 1_000_000)
+    // The 7d window reaches NOW-9h in TIME, but that instant belonged to acct-aaaa — still excluded.
+    assert.strictEqual(r.sevenDay.totals.events, 1)
+    assert.strictEqual(r.sevenDay.totals.costUsd, 1)
   })
 
   test('ranks by billable weight, not raw tokens: cache-create outranks a bigger cache-read', () => {
     const events = [
       // 10M cache-read = 1M equiv; 2M cache-create = 2.5M equiv — fewer raw tokens, MORE window fill.
-      ev({ ts: NOW - 7 * H, sessionId: 'reader', cacheReadTokens: 10_000_000 }),
-      ev({ ts: NOW - 7 * H, sessionId: 'writer', cacheCreateTokens: 2_000_000 }),
+      ev({ ts: NOW - 4 * H, sessionId: 'reader', cacheReadTokens: 10_000_000 }),
+      ev({ ts: NOW - 4 * H, sessionId: 'writer', cacheCreateTokens: 2_000_000 }),
     ]
-    const r = buildAccountBurnersReport({
-      events, target, cards: [], windowHours: 8, untilMs: target.lastActiveMs, nowMs: NOW, limit: 10,
-    })
-    assert.strictEqual(r.burners[0].sessionId, 'writer')
-    assert.strictEqual(r.burners[0].billableWeighted, 2_500_000)
-    assert.strictEqual(Math.round(r.burners[0].shareOfWindowPct + r.burners[1].shareOfWindowPct), 100)
+    const r = buildAccountBurnersReport({ ...base, events, cards: [] })
+    assert.strictEqual(r.fiveHour.burners[0].sessionId, 'writer')
+    assert.strictEqual(r.fiveHour.burners[0].billableWeighted, 2_500_000)
+    assert.strictEqual(Math.round(r.fiveHour.burners[0].shareOfWindowPct + r.fiveHour.burners[1].shareOfWindowPct), 100)
+  })
+
+  test('PROJECT rollup pools sessions of the same workspace: one row, summed cache columns', () => {
+    const events = [
+      ev({ ts: NOW - 4 * H, sessionId: 's1', cacheReadTokens: 3_000_000, cacheCreateTokens: 100_000, costUsd: 2 }),
+      ev({ ts: NOW - 3 * H, sessionId: 's2', cacheReadTokens: 5_000_000, cacheCreateTokens: 400_000, costUsd: 3 }),
+      ev({ ts: NOW - 3 * H, sessionId: 's3', cacheReadTokens: 1_000_000, costUsd: 1 }),
+    ]
+    const cards = [
+      { sessionId: 's1', workspace: '/w/anime2svg', source: 'claude_code', model: 'claude-fable-5' },
+      { sessionId: 's2', workspace: '/w/anime2svg', source: 'claude_code', model: 'claude-fable-5' },
+      { sessionId: 's3', workspace: '/w/other', source: 'claude_code', model: 'claude-opus-4-8' },
+    ]
+    const r = buildAccountBurnersReport({ ...base, events, cards })
+    assert.strictEqual(r.fiveHour.projects.length, 2)
+    const top = r.fiveHour.projects[0]
+    assert.strictEqual(top.workspace, '/w/anime2svg')
+    assert.strictEqual(top.sessions, 2)
+    assert.strictEqual(top.cacheRead, 8_000_000)
+    assert.strictEqual(top.cacheCreate, 500_000)
+    assert.strictEqual(top.topModel, 'claude-fable-5')
   })
 
   test('statusline events without a bucket split count as unknown ×1, never dropped', () => {
-    const events = [ev({ ts: NOW - 7 * H, sessionId: 's', tokens: 500_000, source: 'statusline' })]
-    const r = buildAccountBurnersReport({
-      events, target, cards: [], windowHours: 8, untilMs: target.lastActiveMs, nowMs: NOW, limit: 10,
-    })
-    assert.strictEqual(r.burners[0].billableWeighted, 500_000)
+    const events = [ev({ ts: NOW - 4 * H, sessionId: 's', tokens: 500_000, source: 'statusline' })]
+    const r = buildAccountBurnersReport({ ...base, events, cards: [] })
+    assert.strictEqual(r.fiveHour.burners[0].billableWeighted, 500_000)
   })
 
-  test('workspace/model enrich from cards; the verdict names the top burners with shares', () => {
-    const events = [ev({ ts: NOW - 7 * H, sessionId: 's1', cacheReadTokens: 1e6, costUsd: 3 })]
+  test('fill% + MOST LIKELY EXHAUSTED from the account\'s OWN observed capacity', () => {
+    const events = [
+      ev({ ts: NOW - 4 * H, sessionId: 's', cacheReadTokens: 900_000 }),   // 5h: 900k of 1M cap = 90%
+      ev({ ts: NOW - 30 * H, sessionId: 's', cacheReadTokens: 100_000 }),  // 7d-only... but outside B's stints → excluded
+    ]
+    const observed = {
+      'acct-bbbb': { window5hTokens: 1_000_000, window7dTokens: 10_000_000, window5hCostUsd: null, window7dCostUsd: null, observedAt: '2026-07-13T00:00:00Z' },
+    }
+    const r = buildAccountBurnersReport({ ...base, events, cards: [], observed })
+    assert.strictEqual(Math.round(r.fiveHour.fillPct!), 90)
+    assert.strictEqual(r.fiveHour.capacity.source, 'observed')
+    assert.strictEqual(r.mostLikelyExhausted, '5h')
+    assert.match(r.text, /◀ MOST LIKELY EXHAUSTED/)
+  })
+
+  test('falls back to a SAME-PLAN account\'s capacity as a labeled proxy', () => {
+    const events = [ev({ ts: NOW - 4 * H, sessionId: 's', cacheReadTokens: 500_000 })]
+    // acct-aaaa shares plan 'Max 20x' with acct-bbbb and has a calibration; acct-bbbb has none.
+    const observed = {
+      'acct-aaaa': { window5hTokens: 1_000_000, window7dTokens: null, window5hCostUsd: null, window7dCostUsd: null, observedAt: null },
+    }
+    const r = buildAccountBurnersReport({ ...base, events, cards: [], observed })
+    assert.strictEqual(r.fiveHour.capacity.source, 'same-plan-proxy')
+    assert.strictEqual(r.fiveHour.capacity.proxyAccountId, 'acct-aaaa')
+    assert.strictEqual(Math.round(r.fiveHour.fillPct!), 50)
+  })
+
+  test('no calibrated capacity anywhere → exhaustion UNDETERMINED, never guessed', () => {
+    const events = [ev({ ts: NOW - 4 * H, sessionId: 's', cacheReadTokens: 1000 })]
+    const r = buildAccountBurnersReport({ ...base, events, cards: [] })
+    assert.strictEqual(r.mostLikelyExhausted, 'undetermined')
+    assert.match(r.exhaustionReason, /No calibrated capacity/)
+    assert.strictEqual(r.fiveHour.fillPct, null)
+  })
+
+  test('workspace/model enrich from cards; the verdict names top projects per window', () => {
+    const events = [ev({ ts: NOW - 4 * H, sessionId: 's1', cacheReadTokens: 1e6, costUsd: 3 })]
     const r = buildAccountBurnersReport({
-      events, target,
+      ...base, events,
       cards: [{ sessionId: 's1', workspace: '/w/anime2svg', source: 'claude_code', model: 'claude-fable-5' }],
-      windowHours: 8, untilMs: target.lastActiveMs, nowMs: NOW, limit: 10,
     })
-    assert.strictEqual(r.burners[0].workspace, '/w/anime2svg')
-    assert.strictEqual(r.burners[0].model, 'claude-fable-5')
-    assert.match(r.verdict, /anime2svg \(100%/)
+    assert.strictEqual(r.fiveHour.burners[0].workspace, '/w/anime2svg')
+    assert.strictEqual(r.fiveHour.projects[0].topModel, 'claude-fable-5')
+    assert.match(r.verdict, /Top 5h projects: anime2svg \(100%/)
   })
 
-  test('discloses a coverage gap when the oldest event is younger than the window start', () => {
-    const events = [ev({ ts: NOW - 3 * H, sessionId: 's', cacheReadTokens: 1000 })] // window starts NOW-10h
-    const r = buildAccountBurnersReport({
-      events, target, cards: [], windowHours: 8, untilMs: target.lastActiveMs, nowMs: NOW, limit: 10,
-    })
+  test('discloses a coverage gap when the oldest event is younger than the 7d window start', () => {
+    const events = [ev({ ts: NOW - 3 * H, sessionId: 's', cacheReadTokens: 1000 })]
+    const r = buildAccountBurnersReport({ ...base, events, cards: [] })
     assert.strictEqual(r.coverage.coversWindow, false)
     assert.match(r.note, /COVERAGE GAP/)
   })
 
   test('no attributable events → an explicit empty verdict, never a crash', () => {
-    const r = buildAccountBurnersReport({
-      events: [], target, cards: [], windowHours: 5, untilMs: target.lastActiveMs, nowMs: NOW, limit: 10,
-    })
-    assert.strictEqual(r.totalBurners, 0)
+    const r = buildAccountBurnersReport({ ...base, events: [], cards: [] })
+    assert.strictEqual(r.fiveHour.totalBurners, 0)
+    assert.strictEqual(r.sevenDay.totalBurners, 0)
     assert.match(r.verdict, /No consumption events attribute/)
   })
 
-  test('the text table carries the header (account, window, totals) and one ranked line per burner', () => {
+  test('the text carries BOTH window tables with explicit cache-created / cache-read columns', () => {
     const events = [
-      ev({ ts: NOW - 7 * H, sessionId: 's1', cacheReadTokens: 2e6, costUsd: 4 }),
-      ev({ ts: NOW - 6 * H, sessionId: 's2', cacheCreateTokens: 1e6, costUsd: 2, attribution: 'agent:kraken' }),
+      ev({ ts: NOW - 4 * H, sessionId: 's1', cacheReadTokens: 2e6, cacheCreateTokens: 5e5, costUsd: 4 }),
     ]
-    const r = buildAccountBurnersReport({
-      events, target, cards: [], windowHours: 8, untilMs: target.lastActiveMs, nowMs: NOW, limit: 10,
-    })
-    assert.match(r.text, /window burners of b@x\.com \(rotated out\) — 8h ending/)
-    assert.match(r.text, /s2……?\s|s2/) // both sessions listed
-    assert.match(r.text, /agent:kraken/)
+    const r = buildAccountBurnersReport({ ...base, events, cards: [] })
+    assert.match(r.text, /━━ 5h window of b@x\.com \(rotated out\) ending/)
+    assert.match(r.text, /━━ 7d window of b@x\.com \(rotated out\) ending/)
+    assert.match(r.text, /cache-created\s+cache-read/)
   })
 })
 
