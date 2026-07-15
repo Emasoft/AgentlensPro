@@ -59,7 +59,9 @@ import {
 import { scanLiveBodyWriters, queryStoreWriterTotals, buildBodyWritersReport } from './bodyWriters'
 import type { Store } from './store/db'
 // TRDD-1XM0YSWQ — who exhausted a given account's rate-limit window (time-based attribution).
-import { readAccountSegments, resolveTargetAccount, buildAccountBurnersReport } from './accountBurners'
+import { readAccountSegments, resolveTargetAccount, resolveWindowUntil, buildAccountBurnersReport } from './accountBurners'
+// TRDD-8ZMZ4I6B — cost-based time-to-exhaustion of the current account's windows.
+import { buildWindowEtaReport } from './windowEta'
 import {
   buildCacheBreakTimeline, buildCauseCostPeakReport, buildCacheBreakCauses, formatTimeline, type TimelineFormat,
 } from './cacheBreakTimeline'
@@ -417,6 +419,25 @@ const TOOLS = [
     },
   },
   {
+    name: 'get_window_eta',
+    description:
+      'HOW LONG until the account exhausts its rate-limit windows, projected on the current COST rate ' +
+      '(Anthropic meters the 5h/7d windows by cost, not raw tokens — cache-read is weighted ~0.1×, so a ' +
+      'token projection is wrong). Returns both windows with consumed $ vs the calibrated $ cap, %% used, ' +
+      'the account\'s current $/min (over `rate_window_min`, default 30), an ETA in h/m and an ISO ' +
+      'exhaustion time, and marks which window EXHAUSTS FIRST. The rate is THIS account\'s own burn (rate ' +
+      'limits are per OAuth account); capacity is the account\'s observed calibration, else a same-plan ' +
+      'account\'s as a labeled proxy, else the verdict says no ETA can be projected (never guessed). ' +
+      'Default account is `current`. Result includes a preformatted `text`.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        account:         { type: 'string', description: '`current` (default) | `previous` | an account_uuid prefix | an email' },
+        rate_window_min: { type: 'number', description: 'Minutes of recent history the $/min rate is measured over (default 30). Smaller = more reactive, larger = smoother' },
+      },
+    },
+  },
+  {
     name: 'get_account_burners',
     description:
       'WHO exhausted a given OAuth account\'s rate-limit windows — BOTH the 5h and the 7d window in one ' +
@@ -432,9 +453,9 @@ const TOOLS = [
     inputSchema: {
       type: 'object' as const,
       properties: {
-        account:   { type: 'string', description: '`previous` (default) | `current` | an account_uuid prefix | an email' },
-        until_iso: { type: 'string', description: 'Window end (ISO). Default: the account\'s last-active instant (its rotation-out moment; now if current)' },
-        limit:     { type: 'number', description: 'Max ranked rows per table (default 15)' },
+        account:  { type: 'string', description: '`previous` (default) | `current` | an account_uuid prefix | an email' },
+        interval: { type: 'string', description: 'Window end: `last` (default — the account\'s rotation-out moment, the window it last filled) | `current` (ongoing, ends now) | an ISO-8601 date (the window ending at/including that instant)' },
+        limit:    { type: 'number', description: 'Max ranked rows per table (default 15)' },
       },
     },
   },
@@ -2653,7 +2674,7 @@ export function createMcpServer(opts: McpServerOptions): Server {
         result = handleGetWorkspacePatterns(sessions, args as { workspace?: string; days?: number })
         break
       case 'get_account_burners': {
-        const a = args as { account?: string; until_iso?: string; limit?: number }
+        const a = args as { account?: string; interval?: string; limit?: number }
         const nowMs = Date.now()
         const segments = readAccountSegments()
         if (segments.length === 0) {
@@ -2665,14 +2686,37 @@ export function createMcpServer(opts: McpServerOptions): Server {
           result = { error: `No account matches '${a.account ?? 'previous'}' in the timeline. Known: ${[...new Set(segments.map(s => `${s.accountId.slice(0, 8)} (${s.email ?? '?'})`))].join(', ')}` }
           break
         }
-        const untilMs = a.until_iso ? Date.parse(a.until_iso) : target.lastActiveMs
-        if (!Number.isFinite(untilMs)) { result = { error: `Unparseable until_iso '${a.until_iso}'` }; break }
+        const { untilMs, error: intervalError } = resolveWindowUntil(a.interval ?? 'last', target, nowMs)
+        if (intervalError) { result = { error: intervalError }; break }
         result = buildAccountBurnersReport({
           events: opts.getConsumptionEvents?.() ?? [],
           target,
           allSegments: segments,
           cards: sessions.map(s => ({ sessionId: s.sessionId, workspace: s.workspace, source: s.source, model: s.model })),
           untilMs, nowMs, limit: Math.max(1, a.limit ?? 15),
+          observed: loadBurnConfig(process.env, os.homedir()).observed,
+        })
+        break
+      }
+      case 'get_window_eta': {
+        const a = args as { account?: string; rate_window_min?: number }
+        const nowMs = Date.now()
+        const segments = readAccountSegments()
+        if (segments.length === 0) {
+          result = { error: 'No account-state timeline yet (~/.agentlens/account-state.ndjson) — nothing to project against.' }
+          break
+        }
+        const target = resolveTargetAccount(segments, a.account ?? 'current', nowMs)
+        if (!target) {
+          result = { error: `No account matches '${a.account ?? 'current'}'. Known: ${[...new Set(segments.map(s => `${s.accountId.slice(0, 8)} (${s.email ?? '?'})`))].join(', ')}` }
+          break
+        }
+        result = buildWindowEtaReport({
+          events: opts.getConsumptionEvents?.() ?? [],
+          target,
+          allSegments: segments,
+          nowMs,
+          rateWindowMs: Math.max(1, a.rate_window_min ?? 30) * 60_000,
           observed: loadBurnConfig(process.env, os.homedir()).observed,
         })
         break

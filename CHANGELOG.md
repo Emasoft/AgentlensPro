@@ -10,6 +10,18 @@ All notable changes to AgentlensPro are documented here.
 
 ### Added
 
+- **`get_window_eta` — how long until the current account exhausts its rate-limit windows, by COST.**
+  `agentlenspro get_window_eta` projects time-to-exhaustion on dollars, not tokens: Anthropic meters
+  the 5h/7d windows by cost (cache-read weighted ~0.1×), so a token projection over-counts the
+  ~96%-cache-read stream. Returns both windows with consumed $ vs the calibrated $ cap, % used, the
+  account's current $/min (over `--rate_window_min`, default 30), an ETA, and marks which window
+  EXHAUSTS FIRST. It models the ROLLING window correctly: a window sheds consumption older than its
+  length, so at a steady rate it plateaus at rate×length — if that is below the cap the window
+  **cannot** exhaust at that rate and the tool says so (a plateau, not a fictional countdown) rather
+  than reporting an impossible multi-window ETA. The rate is the account's own burn (rate limits are
+  per OAuth account); capacity is the account's observed calibration, else a same-plan account's as a
+  labeled proxy, else no ETA is projected (never guessed). (TRDD-8ZMZ4I6B)
+
 - **`get_account_burners` — who exhausted a given OAuth account's rate-limit windows.** After a
   forced account rotation, `agentlenspro get_account_burners` (default `--account previous`) answers
   in one call with BOTH windows — a 5h table and a 7d table, each grouped by PROJECT/agent (sessions
@@ -19,8 +31,9 @@ All notable changes to AgentlensPro are documented here.
   window nearer/over its calibrated capacity at the rotation moment is marked **MOST LIKELY
   EXHAUSTED** (the rotation trigger) — capacity from the account's own auto-calibration, else a
   same-plan account's as a labeled proxy, else the verdict says undetermined rather than guessing.
-  Windows default to ending at the account's rotation-out moment — exactly the windows that got
-  exhausted. Attribution is TIME-based against the machine's account-state timeline (one OAuth token
+  `--interval` chooses the window end: `last` (default — the account's rotation-out moment, the
+  windows it last filled), `current` (ongoing, ends now), or an ISO date (the windows ending at that
+  instant). Attribution is TIME-based against the machine's account-state timeline (one OAuth token
   is active machine-wide at a time), so a session alive across a rotation splits correctly between
   the two accounts instead of pooling onto one card. Fills the gap between `investigate_burn`
   (window culprits, but no account filter) and `get_window_budget` (per-account, but no ranking).

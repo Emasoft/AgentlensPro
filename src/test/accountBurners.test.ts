@@ -3,7 +3,7 @@
 // alive across a rotation split between accounts instead of pooling onto their card's account.
 import * as assert from 'assert'
 import {
-  buildAccountBurnersReport, resolveTargetAccount, segmentsFromRecords, type AccountSegment,
+  buildAccountBurnersReport, resolveTargetAccount, resolveWindowUntil, segmentsFromRecords, type AccountSegment,
 } from '../accountBurners'
 import type { ConsumptionEvent } from '../burnMonitor'
 
@@ -77,6 +77,28 @@ suite('resolveTargetAccount — previous / current / prefix / email', () => {
     assert.strictEqual(resolveTargetAccount(SEGS, 'acct-b', NOW)!.accountId, 'acct-bbbb')
     assert.strictEqual(resolveTargetAccount(SEGS, 'b@x.com', NOW)!.accountId, 'acct-bbbb')
     assert.strictEqual(resolveTargetAccount(SEGS, 'nope@x.com', NOW), null)
+  })
+})
+
+suite('resolveWindowUntil — last / current / by-date interval selector', () => {
+  const target = resolveTargetAccount(SEGS, 'previous', NOW)! // acct-bbbb, lastActive = NOW-2h
+
+  test('`last` ends the window at the account\'s last-active (rotation-out) instant', () => {
+    assert.strictEqual(resolveWindowUntil('last', target, NOW).untilMs, NOW - 2 * H)
+  })
+
+  test('`current` ends the window at now', () => {
+    assert.strictEqual(resolveWindowUntil('current', target, NOW).untilMs, NOW)
+  })
+
+  test('an ISO date ends the window at that instant (the window that includes it)', () => {
+    const iso = new Date(NOW - 5 * H).toISOString()
+    assert.strictEqual(resolveWindowUntil(iso, target, NOW).untilMs, NOW - 5 * H)
+  })
+
+  test('an unparseable interval returns a named error, not a silent fallback to now', () => {
+    const r = resolveWindowUntil('yesterdayish', target, NOW)
+    assert.match(r.error!, /Unparseable interval/)
   })
 })
 

@@ -67,6 +67,21 @@ export interface ResolvedAccount {
   isCurrent: boolean
 }
 
+/** Resolve the window END (`until`) from the interval selector:
+ *   `last`    → the account's last-active instant (its rotation-out moment; now if it is current) —
+ *               the window it most recently filled. DEFAULT.
+ *   `current` → now (the ongoing window; for a rotated-out account it will read ~empty after rotation).
+ *   <ISO date>→ that instant — the window that ends at / includes the given date.
+ *  Returns { untilMs, error } — error names an unparseable date instead of silently using `now`. */
+export function resolveWindowUntil(interval: string, target: ResolvedAccount, nowMs: number): { untilMs: number; error?: string } {
+  const s = interval.trim().toLowerCase()
+  if (s === 'last') return { untilMs: target.lastActiveMs }
+  if (s === 'current' || s === 'now') return { untilMs: nowMs }
+  const t = Date.parse(interval)
+  if (!Number.isFinite(t)) return { untilMs: target.lastActiveMs, error: `Unparseable interval '${interval}' — expected 'last', 'current', or an ISO-8601 date.` }
+  return { untilMs: t }
+}
+
 /** Resolve `previous` / `current` / a uuid-prefix / an email against the segment timeline. */
 export function resolveTargetAccount(segments: AccountSegment[], spec: string, nowMs: number): ResolvedAccount | null {
   if (segments.length === 0) return null
@@ -187,6 +202,16 @@ export interface AccountBurnersReport {
 const inSegments = (ts: number, segments: AccountSegment[], nowMs: number): boolean =>
   segments.some(seg => ts >= seg.startMs && ts < (seg.endMs ?? nowMs))
 
+/** THE attribution rule, exported so every window consumer shares ONE definition: an event burned
+ *  this account iff its ts is inside the requested window AND inside one of the account's active
+ *  segments (so a session alive across a rotation splits correctly). Used by the burners tables and
+ *  the window-ETA command alike — the rule must never drift between them. */
+export function eventsForAccountInWindow(
+  events: ConsumptionEvent[], target: ResolvedAccount, fromMs: number, untilMs: number, nowMs: number,
+): ConsumptionEvent[] {
+  return events.filter(e => e.ts >= fromMs && e.ts < untilMs && inSegments(e.ts, target.segments, nowMs))
+}
+
 function weighted(e: ConsumptionEvent): number {
   const known = (e.inputTokens ?? 0) + (e.outputTokens ?? 0) + (e.cacheReadTokens ?? 0) + (e.cacheCreateTokens ?? 0)
   return (e.inputTokens ?? 0) * BILLABLE_WEIGHTS.input
@@ -245,8 +270,7 @@ function buildWindowSection(opts: {
 }): WindowSection {
   const { events, target, cardBy, label, windowHours, untilMs, nowMs, limit, capacity } = opts
   const fromMs = untilMs - windowHours * 3600_000
-  const inWindow = events.filter(e =>
-    e.ts >= fromMs && e.ts < untilMs && inSegments(e.ts, target.segments, nowMs))
+  const inWindow = eventsForAccountInWindow(events, target, fromMs, untilMs, nowMs)
 
   const bySession = new Map<string, AccountBurnerRow & { attr: Map<string, number> }>()
   const totals: WindowTotals = { events: 0, tokens: 0, costUsd: 0, billableWeighted: 0, input: 0, output: 0, cacheRead: 0, cacheCreate: 0 }

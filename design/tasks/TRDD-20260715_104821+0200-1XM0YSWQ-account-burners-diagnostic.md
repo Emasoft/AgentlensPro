@@ -3,7 +3,7 @@ trdd-id: 1XM0YSWQ
 title: get_account_burners — who exhausted a given OAuth account's rate-limit window, ranked
 column: ai_review
 created: 2026-07-15T10:48:21+0200
-updated: 2026-07-15T11:35:00+0200
+updated: 2026-07-15T13:30:00+0200
 current-owner: main
 task-type: feature
 scope: project
@@ -14,7 +14,16 @@ eht: []
 
 # get_account_burners — who exhausted a given account's window
 
-## ⏵ STATE — 2026-07-15 ~11:35 — v2 LANDED (dual tables + project rollup + exhaustion marker), LIVE-VERIFIED
+## ⏵ STATE — 2026-07-15 ~13:30 — v3: `--interval` selector (last/current/by-date), LIVE-VERIFIED
+
+USER follow-up: choose the window interval. `until_iso` REPLACED by `--interval` (no legacy —
+`resolveWindowUntil`): `last` (default = rotation-out moment), `current` (ends now), or an ISO date
+(window ending at/including it); an unparseable value returns a named error, never a silent fallback.
+Also exported `eventsForAccountInWindow` as the ONE shared attribution rule (now reused by the new
+`get_window_eta`, TRDD-8ZMZ4I6B — cost-based ETA). Suite 1228 green, deployed pid 13647, all four
+interval modes live-verified (current→462 calls tail, last→1247 until 10:20, date→806, bad→error).
+
+## ⏵ STATE — 2026-07-15 ~11:35 — v2 LANDED (dual tables + project rollup + exhaustion marker), LIVE-VERIFIED [SUPERSEDED by v3 above]
 
 USER follow-up implemented same day: (1) PROJECT/agent rollup — sessions pooled by workspace,
 explicit cache-created + cache-read token columns; (2) BOTH windows (5h + 7d tables) in one call —
