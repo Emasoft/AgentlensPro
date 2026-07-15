@@ -3,7 +3,7 @@ trdd-id: K3WDPR7M
 title: SSD write amplification — raw OTEL bodies rewrite the whole conversation every turn; move the body store to a fileless-DuckDB to immutable-Parquet loop
 column: dev
 created: 2026-07-14T04:30:00+0200
-updated: 2026-07-14T13:45:00+0200
+updated: 2026-07-15T04:15:00+0200
 current-owner: main
 task-type: bugfix
 severity: critical
@@ -11,6 +11,50 @@ scope: project
 npt: []
 eht: []
 ---
+
+## ⏵ STATE — 2026-07-15 ~04:15 — VALIDATION PASSED; the store code had NEVER SHIPPED (fixed, `36c87c8`); live acceptance measurement in flight
+
+**READ THIS BLOCK FIRST — it supersedes the NIGHT block below.**
+
+1. **Full-corpus independent validation: VALID.** V1 328,606/328,606 spans content-address OK;
+   V2 100,600/100,600 bodies reconstruct to sha256 == body_id; 0 dangling; 0 errors (3.6 h,
+   store quiescent). Evidence + all reclaim figures:
+   `reports/storage-migration/20260715_003054+0200-backfill-and-drain.md`.
+2. **THE BIG CATCH — the store never shipped.** `standalone/server.js` on disk contained ZERO
+   store code: esbuild had been FAILING since d925107 wired the store into server.ts, because
+   `@duckdb/node-api`'s native `.node` bindings cannot be bundled — and a failed esbuild leaves
+   the stale outfile untouched, so the bundle *looked* current. The tsc+mocha gates run from
+   `out/` and never exercise esbuild. FIX (`36c87c8`): `external: ['@duckdb/node-api']` on both
+   node targets (it is a declared runtime dependency — runtime resolution from node_modules is
+   the intended model, same stance as sql.js). LESSON: **source-only commits change nothing at
+   runtime — a phase is "landed" only after build + restart**; the kill-switch violation below
+   is the same failure class.
+3. **Old server evidence.** The pre-store server (pid 98648) booted 17:50 Jul 14 — 4 min AFTER
+   the DISABLED flag (17:46) — because the then-deployed cli.js predated the 32f24c8 kill-switch
+   fix. Its own counters over 10 h: 5.5 GB written — offsets 1.9 GB×602 + cards 3.6 GB×112
+   rewrites ≈ 9 MB/min, the exact burn the delta log fixes. Replaced 03:59 by pid 62615 running
+   HEAD (36c87c8).
+4. **New server boot is clean:** 17,018 cards + 12,472 offsets migrated from legacy JSON into
+   the DeltaLog; fast restart; store online (411,240 spans, 270 MB); capture key absent
+   ("Full telemetry config already in place"); rss 642 MB at boot (old server: 2.9 GB).
+5. **Drain semantics confirmed as designed (not a bug):** non-spool mode drains HOURLY with a
+   72 h live window (`bodiesMaxAgeHours def 72`) and an 8 GB emergency cap (over it: ingest
+   everything, age 0). The 3.5 GB regrown backlog is all <72 h old → unreferenced by any pass
+   yet; it self-cleans as it ages. Spool mode is 60 s cadence.
+
+**NEXT ACTION:** read `/tmp/accept-writes.txt` after the 40-min sampler (task #57) — per-minute
+`ri_diskio_byteswritten` deltas of pid 62615; target ~1 MB/min AgentlensPro-attributable
+(baseline `/tmp/baseline-writes.txt`: 30.4 MB/min is Claude Code's own, with us OFF). Then
+live-verify the kill-switch (task #58: disable → start must refuse → enable). Then hand the
+USER the `.wad` decision: `otel-bodies-archive/bodies-2026-07.wad` = 16,945,501,938 bytes
+(~16.9 GB) is now fully redundant (every lump provably reconstructable) — deletion is the
+USER's call, and the 8.8 MB `.idx` MUST be kept until task #56 (ts recovery) has run.
+
+### SUPERSEDED — do NOT carry forward
+- "gates green through ab0eee0 prove the server works" — FALSE for runtime: the bundle was
+  stale-broken the whole time (item 2). Everything server-side ran old code until 03:59 Jul 15.
+- "AgentlensPro server down while disabled" — FALSE: pid 98648 ran 10 h through the disable
+  (item 3).
 
 ## ⏵ STATE — 2026-07-15 NIGHT — deep re-audit found 2 latent defects (both fixed, `ee88e0b`)
 
