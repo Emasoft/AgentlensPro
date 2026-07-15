@@ -212,7 +212,9 @@ export function eventsForAccountInWindow(
   return events.filter(e => e.ts >= fromMs && e.ts < untilMs && inSegments(e.ts, target.segments, nowMs))
 }
 
-function weighted(e: ConsumptionEvent): number {
+/** Billable-weighted tokens for one event (input×1, output×5, cacheRead×0.1, cacheCreate×1.25) — the
+ *  window-fill metric. Exported so windowEta shares ONE definition (they must never drift). */
+export function weighted(e: ConsumptionEvent): number {
   const known = (e.inputTokens ?? 0) + (e.outputTokens ?? 0) + (e.cacheReadTokens ?? 0) + (e.cacheCreateTokens ?? 0)
   return (e.inputTokens ?? 0) * BILLABLE_WEIGHTS.input
     + (e.outputTokens ?? 0) * BILLABLE_WEIGHTS.output
@@ -221,7 +223,8 @@ function weighted(e: ConsumptionEvent): number {
     + Math.max(0, e.tokens - known) * BILLABLE_WEIGHTS.unknown
 }
 
-function fmtTok(n: number): string {
+/** Compact token count (12.3M / 4k / 1.2B). Exported so windowEta shares ONE definition. */
+export function fmtTok(n: number): string {
   if (n >= 1e9) return `${(n / 1e9).toFixed(2)}B`
   if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`
   return `${(n / 1e3).toFixed(0)}k`
@@ -246,11 +249,17 @@ export function resolveWindowCapacity(
   if (target.plan) {
     const planOf = new Map<string, string | null>()
     for (const seg of allSegments) planOf.set(seg.accountId, seg.plan) // last write wins = latest plan
-    for (const [acct, cap] of Object.entries(observed)) {
-      if (acct === target.accountId) continue
-      if (planOf.get(acct) === target.plan && (pick(cap).tokens !== null || pick(cap).costUsd !== null)) {
-        return { ...pick(cap), source: 'same-plan-proxy', proxyAccountId: acct, observedAt: cap.observedAt }
-      }
+    // Pick the same-plan proxy DETERMINISTICALLY — the most recently calibrated one (then the larger
+    // cap) — so the result never depends on object-key insertion order when several accounts qualify.
+    const candidates = Object.entries(observed)
+      .filter(([acct, cap]) => acct !== target.accountId && planOf.get(acct) === target.plan
+        && (pick(cap).tokens !== null || pick(cap).costUsd !== null))
+      .sort(([, a], [, b]) =>
+        (Date.parse(b.observedAt ?? '') || 0) - (Date.parse(a.observedAt ?? '') || 0)
+        || ((pick(b).costUsd ?? pick(b).tokens ?? 0) - (pick(a).costUsd ?? pick(a).tokens ?? 0)))
+    if (candidates.length > 0) {
+      const [acct, cap] = candidates[0]
+      return { ...pick(cap), source: 'same-plan-proxy', proxyAccountId: acct, observedAt: cap.observedAt }
     }
   }
   return { tokens: null, costUsd: null, source: null, proxyAccountId: null, observedAt: null }
@@ -337,12 +346,14 @@ function buildWindowSection(opts: {
     })
     .sort((a, b) => b.billableWeighted - a.billableWeighted)
 
-  // Fill% against the calibrated capacity — tokens-based when a token cap exists (the calibration
-  // snapshot and totals.tokens share units: raw tokens), else cost-based, else null (undetermined).
-  const fillPct = capacity.tokens !== null && capacity.tokens > 0
-    ? (totals.tokens / capacity.tokens) * 100
-    : capacity.costUsd !== null && capacity.costUsd > 0
-      ? (totals.costUsd / capacity.costUsd) * 100
+  // Fill% against the calibrated capacity — COST-based first (Anthropic meters the windows by cost,
+  // and raw-token fill is inflated by the ~96%-cache-read volume: agentlens-burn-token-model). This
+  // matches get_window_eta, so the two tools' "how full is the window" never disagree. Token fill is
+  // the fallback only when no cost cap is calibrated. else null (undetermined — never invented).
+  const fillPct = capacity.costUsd !== null && capacity.costUsd > 0
+    ? (totals.costUsd / capacity.costUsd) * 100
+    : capacity.tokens !== null && capacity.tokens > 0
+      ? (totals.tokens / capacity.tokens) * 100
       : null
 
   return {

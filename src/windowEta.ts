@@ -8,9 +8,10 @@
 // and its capacity resolver (own observed calibration → same-plan proxy → none) so the ETA and the
 // burners autopsy can never disagree about which events belong to the account or what its cap is.
 
-import { BILLABLE_WEIGHTS, type ConsumptionEvent, type ObservedAccountCapacity } from './burnMonitor'
+import type { ConsumptionEvent, ObservedAccountCapacity } from './burnMonitor'
 import {
-  eventsForAccountInWindow, resolveWindowCapacity, type AccountSegment, type ResolvedAccount, type WindowCapacity,
+  eventsForAccountInWindow, resolveWindowCapacity, weighted, fmtTok,
+  type AccountSegment, type ResolvedAccount, type WindowCapacity,
 } from './accountBurners'
 
 export interface WindowEtaSection {
@@ -53,15 +54,6 @@ export interface WindowEtaReport {
   text: string
 }
 
-function weighted(e: ConsumptionEvent): number {
-  const known = (e.inputTokens ?? 0) + (e.outputTokens ?? 0) + (e.cacheReadTokens ?? 0) + (e.cacheCreateTokens ?? 0)
-  return (e.inputTokens ?? 0) * BILLABLE_WEIGHTS.input
-    + (e.outputTokens ?? 0) * BILLABLE_WEIGHTS.output
-    + (e.cacheReadTokens ?? 0) * BILLABLE_WEIGHTS.cacheRead
-    + (e.cacheCreateTokens ?? 0) * BILLABLE_WEIGHTS.cacheCreate
-    + Math.max(0, e.tokens - known) * BILLABLE_WEIGHTS.unknown
-}
-
 /** The readable ETA, chosen by the reason so a rolling-window plateau is never dressed up as a
  *  finite countdown. */
 export function humanEta(etaMinutes: number | null, reason: WindowEtaSection['etaReason']): string {
@@ -76,12 +68,6 @@ export function humanEta(etaMinutes: number | null, reason: WindowEtaSection['et
       return hh > 0 ? `${hh}h ${mm}m` : `${mm}m`
     }
   }
-}
-
-function fmtTok(n: number): string {
-  if (n >= 1e9) return `${(n / 1e9).toFixed(2)}B`
-  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`
-  return `${(n / 1e3).toFixed(0)}k`
 }
 
 function buildSection(opts: {
