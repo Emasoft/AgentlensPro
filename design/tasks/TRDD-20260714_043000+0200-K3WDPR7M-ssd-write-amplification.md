@@ -3,7 +3,7 @@ trdd-id: K3WDPR7M
 title: SSD write amplification — raw OTEL bodies rewrite the whole conversation every turn; move the body store to a fileless-DuckDB to immutable-Parquet loop
 column: dev
 created: 2026-07-14T04:30:00+0200
-updated: 2026-07-15T04:15:00+0200
+updated: 2026-07-15T06:00:00+0200
 current-owner: main
 task-type: bugfix
 severity: critical
@@ -11,6 +11,44 @@ scope: project
 npt: []
 eht: []
 ---
+
+## ⏵ STATE — 2026-07-15 ~06:00 — USER directives: universal verify-before-delete + verified .wad reclamation; ts recovery ready to run
+
+**Supersedes the ~04:15 block below. USER directives (verbatim, 2026-07-15):**
+1. "do not delete the wad, ingest it" → then superseded by (3).
+2. "improve the ingestion system adding a verification step. only after the verification that all
+   data was imported, you can delete the source file."
+3. "delete the wad only after the verification passes." ← the STANDING authorization: full per-lump
+   verification (bytes + capture-ts) ⇒ delete `bodies-2026-07.wad`, ALWAYS keep the 8.8 MB `.idx`.
+4. "the verification step must be done everytime the source is gonna be deleted after. even for
+   OTEL logs, statusline logs, hooks logs, etc." → the UNIVERSAL invariant.
+
+**Probe evidence (`scripts_dev/probe-ts-damage.cjs`):** 78,031/78,031 idx-joinable rows carry
+ingest-batch ts (drain ran 21:52→00:15 on STALE out/ — tsMs support wasn't compiled); 22,569 pass-1
+rows also ingest-day ts, their true times UNRECOVERABLE (sources deleted, no span↔file linkage in
+code — do not fabricate); 323 idx names have NO row (content-dedup aliases).
+
+**LANDED (commit `ddd633b`, 1179 tests green):** `src/store/verifyInStore.ts` (THE gate: bytes
+reconstruct + (src_name,ts) row ±2s) wired into ingestPass + migrateArchive; ingestBody now writes
+an alias row per deduped capture (else the gate could never pass for duplicates) + explicit
+`existed` flag; `src/store/tsRecovery.ts` + CURRENT_SCHEMA=2 (staged migration: .idx-driven ts
+corrections + alias materialization, aborts on unprovable alias); `src/store/archiveVerify.ts`
+(per-lump volume verification); `purgeArchiveVolumes` now REQUIRES an async canDelete gate and
+keeps `.idx` (uncommitted with its tests until the server wiring lands).
+
+**IN FLIGHT:** background agent implementing hook-spool drain verification (+ rejected/ quarantine
+instead of unlink) and DeltaLog compaction read-back verification.
+
+**NEXT ACTIONS, in order:**
+1. Agent done → wire server.ts: archiveOtelBodies passes the verifyVolumeInStore gate to
+   purgeArchiveVolumes; rewrite POST /api/bodies/purge to verify-then-delete (keep .idx).
+2. Full gate → commit (stage agent-created files BY NAME too) → rebuild bundle.
+3. `agentlenspro server stop` → `pnpm run compile-tests` → `node scripts_dev/run-ts-migration.cjs`
+   (staged, VERIFY#1 full validation ≈3.6 h, VERIFY#2 set-equality, swap; v1 kept at store.old-v1).
+4. Re-run probe (expect tsWrong=0, aliases present) → server start.
+5. `node scripts_dev/verify-and-reclaim-wad.cjs --delete` (~2.5 h): full per-lump proof, then
+   deletes ONLY the .wad per directive (3); audit line in output.
+6. Docs (README/ARCHITECTURE/CHANGELOG/skill) + this STATE, final commit.
 
 ## ⏵ STATE — 2026-07-15 ~04:15 — VALIDATION PASSED; the store code had NEVER SHIPPED (fixed, `36c87c8`); live acceptance measurement in flight
 
