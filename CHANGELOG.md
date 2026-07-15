@@ -70,6 +70,15 @@ All notable changes to AgentlensPro are documented here.
   synthetic load: 17.1% → 3.0% CPU with one writing session, 28.8% → 8.2% with four.
   (TRDD-X2E6OSWK)
 
+- **Transcript tailer could resume mid-file on a replaced transcript.** Claude Code ≥2.1.208
+  prunes superseded file-history backups from session transcripts (replace-by-rename ⇒ new
+  inode), breaking the old append-only assumption. The live tail's resume guard checked only
+  that the file had not shrunk — a prune combined with an append inside one scan interval can
+  leave the new file at least as large as the old read offset, and the tailer would then resume
+  mid-file on a different file, welding misaligned bytes onto the stale session accumulator.
+  The resume guard now also requires the inode to match (the boot-time offset import already
+  did); any replacement rebuilds the card from offset 0. (TRDD-K3WDPR7M)
+
 - **The bundle build silently never shipped the body store.** `@duckdb/node-api` loads prebuilt
   native `.node` binaries that esbuild cannot bundle, so every build since the store landed
   failed — and because a failed esbuild leaves the previous outfile untouched, the stale

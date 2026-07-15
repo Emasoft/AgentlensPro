@@ -1575,7 +1575,14 @@ export class LogReader {
 
     const prevOffset = prev?.bytesRead ?? 0
     const cached = this.accumCache.get(filePath) as T | undefined
-    const canResume = cached !== undefined && prevOffset > 0 && stat.size >= prevOffset
+    // Resume only when the file is provably the SAME file: size alone is not identity. Claude Code
+    // ≥2.1.208 prunes transcripts via replace-by-rename (new inode), and a prune+append inside one
+    // scan interval can leave the new file at size ≥ the old offset — a size-only guard would then
+    // resume mid-file on a DIFFERENT file, welding misaligned bytes onto the stale accumulator.
+    // ino is optional (pre-existing in-memory state set before a stat carried it) — absent means
+    // "no identity claim", and the size check alone decides, as before.
+    const sameFile = prev?.ino === undefined || stat.ino === prev.ino
+    const canResume = cached !== undefined && prevOffset > 0 && stat.size >= prevOffset && sameFile
     const accum = canResume ? cached : factory()
 
     // TRDD-U0UYC38A: count the read kind so the live-tail behaviour is verifiable. A resumed read

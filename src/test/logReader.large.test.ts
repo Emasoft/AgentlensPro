@@ -259,6 +259,43 @@ suite('LogReader — large / streaming JSONL', () => {
     }
   })
 
+  test('rebuilds from offset 0 when the file is replaced by rename without shrinking (inode change)', () => {
+    // Claude Code ≥2.1.208 prunes superseded file-history backups from transcripts, so a
+    // transcript can now be REPLACED mid-session (write-temp + rename ⇒ NEW inode). A pure
+    // prune shrinks the file and the size guard catches it — but a prune combined with an
+    // append inside one scan interval can land the new file at size ≥ the old offset, and a
+    // size-only guard would then RESUME mid-file on a different file, mixing the stale
+    // accumulator with misaligned bytes. The identity check must be the inode, not the size.
+    const fx = claudeFixture()
+    try {
+      let orig = claudeUser('2026-06-23T10:00:00.000Z', fx.cwd, 'First session')
+      for (let i = 0; i < 6; i++) orig += claudeAssistant(`2026-06-23T10:0${i + 1}:00.000Z`, fx.cwd, U)
+      fs.writeFileSync(fx.file, orig)
+
+      const reader = new LogReader({ streamChunkBytes: 64 })
+      const first = findCard(scanClaude(reader), fx.id)?.card
+      assert.strictEqual(first!.turns, 6)
+      const accum1 = accumOf(reader, fx.file)
+
+      // Build a DIFFERENT session at least as large as the fully-consumed old file, and swap
+      // it in atomically (rename ⇒ new inode, same path). Size ≥ old offset by construction.
+      let repl = claudeUser('2026-06-23T11:00:00.000Z', fx.cwd, 'Replacement session')
+      for (let i = 0; i < 8; i++) repl += claudeAssistant(`2026-06-23T11:0${i + 1}:00.000Z`, fx.cwd, U)
+      assert.ok(repl.length >= orig.length, 'fixture must not shrink or the size guard hides the bug')
+      const tmp = `${fx.file}.tmp`
+      fs.writeFileSync(tmp, repl)
+      fs.renameSync(tmp, fx.file)
+
+      const second = findCard(scanClaude(reader), fx.id)?.card
+      assert.strictEqual(second!.userRequest, 'Replacement session')
+      assert.strictEqual(second!.turns, 8, 'a replaced file must rebuild from 0, never resume mid-file')
+      assert.strictEqual(second!.inputTokens, 8 * PER_TURN_INPUT)
+      assert.notStrictEqual(accumOf(reader, fx.file), accum1, 'replacement must allocate a fresh accumulator')
+    } finally {
+      fx.cleanup()
+    }
+  })
+
   test('preserves a 4-byte UTF-8 character split across a read-chunk boundary', () => {
     const fx = claudeFixture()
     try {
