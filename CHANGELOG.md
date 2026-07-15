@@ -83,7 +83,7 @@ All notable changes to AgentlensPro are documented here.
   truth and materializes **alias rows** so content captured under several names has one queryable
   row per name — previously content-dedup meant the second and later names got no row at all. It
   runs the store's crash-safe migration protocol (build in `<dir>.migrating`, full validation,
-  body-id set-equality, atomic swap, old store kept as `.old-v1`) and aborts with the live store
+  body-id set-equality, atomic swap, old store kept as `.old-v<from>`) and aborts with the live store
   untouched on any alias it cannot prove. **Not every timestamp is recoverable, and the docs do not
   pretend otherwise:** of the ~100,600 backfilled rows, the ~78,031 that join an archive `.idx` can
   be corrected to their true capture time, but the remaining ~22,569 were reclaimed from live files

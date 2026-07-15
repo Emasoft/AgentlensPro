@@ -3,7 +3,7 @@ trdd-id: K3WDPR7M
 title: SSD write amplification — raw OTEL bodies rewrite the whole conversation every turn; move the body store to a fileless-DuckDB to immutable-Parquet loop
 column: dev
 created: 2026-07-14T04:30:00+0200
-updated: 2026-07-15T06:00:00+0200
+updated: 2026-07-15T10:09:00+0200
 current-owner: main
 task-type: bugfix
 severity: critical
@@ -12,7 +12,34 @@ npt: []
 eht: []
 ---
 
-## ⏵ STATE — 2026-07-15 ~06:00 — USER directives: universal verify-before-delete + verified .wad reclamation; ts recovery ready to run
+## ⏵ STATE — 2026-07-15 ~10:09 — MIGRATION DONE (schema v2, probe 0 wrong); server LIVE on v2; wad verify+reclaim IN FLIGHT
+
+**Supersedes the ~06:00 block below (its NEXT ACTIONS 1–4 are DONE).**
+
+1. **Schema-v2 migration SUCCEEDED** (attempt 3; attempts 1–2 aborted SAFE — port guard, then
+   float-mtime `BigInt` throw, fixed in `223ad27`). 78,354 ts corrections + 323 alias rows;
+   VERIFY#1 full validation 208 min: 100,600 bodies + 328,606 spans, **0 lost**; atomic swap done.
+   Manifest: `schemaVersion: 2, migratedFrom: 0`. Backup kept at `~/.agentlens/store.old-v0`
+   (NOT `.old-v1` — schema 0 IS the v1 layout, the backup is named `.old-v<from>`; disposal is a
+   separate USER decision). Log: `/tmp/ts-migration3.txt`.
+2. **Post-migration probe PASS** (`/tmp/ts-probe-after.txt`): 78,354/78,354 idx-joinable rows
+   ts-CORRECT (±2s), **0 wrong**; 22,569 rows keep ingest-ts (capture times unrecoverable by
+   design — documented in CHANGELOG/README/ARCHITECTURE, commit `eaf0b53`). Body rows now
+   100,923 = 100,600 + 323 aliases.
+3. **Server re-enabled + LIVE on the v2 store** (pid 64106, boot 10:07): ui/mcp/otlp up,
+   0.0 MB disk writes since boot, archive 78,355 lumps / 15.79 GB visible.
+4. **IN FLIGHT: wad verify+reclaim** — `scripts_dev/verify-and-reclaim-wad.cjs --delete`
+   running in background (~2.5 h) → `/tmp/wad-verify.txt` (`WAD_VERIFY_EXIT=<n>` appended).
+   Full per-lump proof (bytes + capture-ts vs .idx); on 100% pass it deletes ONLY
+   `bodies-2026-07.wad` (16.9 GB), ALWAYS keeps the `.idx`. AUDIT (RULE 0.5): authorized by
+   USER 2026-07-15 verbatim — "delete the wad only after the verification passes".
+5. **NEXT ACTIONS:** (a) read `/tmp/wad-verify.txt` on completion — pass ⇒ confirm .wad gone +
+   `.idx` kept, record audit line; fail ⇒ NOTHING deleted, read named failures, fix, re-run;
+   (b) final report to user (migration + wad verdicts, `du -sh ~/.agentlens/*`, branch state —
+   `feat/cache-expiry-probe` NOT pushed, push/PR = USER call); (c) USER still needs to restart
+   stale Claude sessions (they keep writing raw bodies until relaunch).
+
+## ⏵ STATE — 2026-07-15 ~06:00 — USER directives: universal verify-before-delete + verified .wad reclamation; ts recovery ready to run [SUPERSEDED]
 
 **Supersedes the ~04:15 block below. USER directives (verbatim, 2026-07-15):**
 1. "do not delete the wad, ingest it" → then superseded by (3).

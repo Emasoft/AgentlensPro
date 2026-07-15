@@ -471,7 +471,7 @@ archive `.idx` sidecars' ground truth and materializes **alias rows** — the ar
 content under several `src_name`s, but `ingestBody` dedups on content, so the later names had no body
 row; v2 adds one row per missing `(src_name → existing body_id)`, each with its own capture `ts`. It
 runs through the standard staged migration protocol (`src/store/migrate.ts`: build `<dir>.migrating`,
-`validateStore` #1 + body-id set-equality #2, atomic swap, old store kept as `.old-v1`) and aborts
+`validateStore` #1 + body-id set-equality #2, atomic swap, old store kept as `.old-v<from>`) and aborts
 with the live store untouched on any alias whose `body_id` the store does not hold. The recovery is
 partial by necessity, and the store does not hide it: the ~22,569 rows backfilled from live files
 that were already deleted have no `.idx` entry, so their capture times are **unrecoverable** and
