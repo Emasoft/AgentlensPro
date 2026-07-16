@@ -2081,7 +2081,9 @@ function handleGetContextComposition(composition: ContextComposition | null, arg
   }
 }
 
-function handleGetContextGrowth(s: SessionSummaryCard, timeline: TimelineEntry[]) {
+// Exported for the ai-maestro consumed-fields contract test (AgentlensPro#3) — the perTurn cache
+// read-vs-created split is consumed downstream, so its shape must fail CI on rename, not drift.
+export function handleGetContextGrowth(s: SessionSummaryCard, timeline: TimelineEntry[]) {
   const growth = computeTurnGrowth(timeline)
   if (growth.length === 0) return { sessionId: s.sessionId, message: 'No per-turn token data (OTEL session without turn indices, or empty timeline).' }
   const peak = growth.reduce((m, g) => Math.max(m, g.promptTokens), 0)
