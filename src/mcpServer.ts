@@ -394,7 +394,9 @@ const TOOLS = [
     description:
       'Returns { sessions, collectorGaps }: recent AgentlensPro session summaries — cost, turns, model, ' +
       'prompt excerpt, top tools used, loop signals — plus collectorGaps, any windows where the ' +
-      'collector was offline and telemetry was lost. Use this to orient yourself to recent work ' +
+      'collector was offline and telemetry was lost. Ranked by LAST ACTIVITY (not start date), so ' +
+      'long-running sessions still emitting rank first; rows carry lastActive and active:true when ' +
+      'live within the last 5 minutes. Use this to orient yourself to recent work ' +
       '(and to know if coverage has gaps) before starting a new task.',
     inputSchema: {
       type: 'object' as const,
@@ -1340,7 +1342,12 @@ const TOOLS = [
 
 // ── Tool handlers ─────────────────────────────────────────────────────────────
 
-function handleGetRecentSessions(
+// A session is "active" when its last activity is within this window — bounded by the OTEL
+// span-store heartbeat cadence, so a session still emitting spans always qualifies.
+const ACTIVE_WINDOW_MS = 5 * 60_000
+
+// Exported for unit tests (TRDD-RS3NGN53 — ranking must be by last ACTIVITY, provable).
+export function handleGetRecentSessions(
   sessions: SessionSummaryCard[],
   args: { limit?: number; agent?: string; workspace?: string },
 ) {
@@ -1348,10 +1355,19 @@ function handleGetRecentSessions(
   if (args.agent)     filtered = filtered.filter(s => s.source === args.agent)
   if (args.workspace) filtered = filtered.filter(s => s.sessionId.includes(args.workspace!) || (s.userRequest ?? '').includes(args.workspace!))
   const limit = Math.min(args.limit ?? 10, 50)
-  const top = filtered.slice(0, limit)
+  // "Recent" means recently ACTIVE, not recently STARTED (TRDD-RS3NGN53): the caller's list is
+  // start-date-ordered, which buried long-running sessions still emitting spans NOW below fresh
+  // idle ones (live-confirmed: 4 actively-emitting sessions missing from the default top-10).
+  // Never trust caller order — re-rank on start + duration here, the one place it matters.
+  const lastActiveMs = (s: SessionSummaryCard): number => (Date.parse(s.startTime) || 0) + (s.durationMs || 0)
+  const now = Date.now()
+  const top = [...filtered].sort((a, b) => lastActiveMs(b) - lastActiveMs(a)).slice(0, limit)
   return top.map(s => ({
     sessionId:   s.sessionId,
     date:        s.startTime.slice(0, 16).replace('T', ' '),
+    lastActive:  new Date(lastActiveMs(s)).toISOString().slice(0, 16).replace('T', ' '),
+    // Rides only on live sessions — absent means idle, never a false.
+    ...(now - lastActiveMs(s) < ACTIVE_WINDOW_MS ? { active: true as const } : {}),
     agent:       s.source,
     model:       s.model,
     prompt:      s.userRequest ? s.userRequest.slice(0, 120) + (s.userRequest.length > 120 ? '…' : '') : null,
