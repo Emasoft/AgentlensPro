@@ -41,3 +41,9 @@ agent-lens-export-*.json
 /builds_dev/
 # npm pack output (regeneratable) — never commit
 *.tgz
+
+# tldr CLI index caches + local config (regenerable, machine-local) and editor swap files —
+# they kept the dirty-tree detector firing on artifacts that must never be committed.
+.tldr/
+.tldrignore
+*.swp
