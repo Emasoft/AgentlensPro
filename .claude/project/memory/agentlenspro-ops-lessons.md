@@ -1,6 +1,6 @@
 ---
 name: agentlenspro-ops-lessons
-description: "how to deploy agentlenspro on a machine / setup vs manual install / hooks stopped firing after an upgrade / config file wiped or corrupted after an edit / is agentlenspro npm-linked or registry-installed / does switching the cli to an ordinary npm install lose my db or settings / where does the data live / can other agents on this machine use the cli / does the dev npm link affect normal published users / background agent shows running but does nothing / a fork started acting like the orchestrator / does agentlenspro run on Windows / setup fails with unsupported platform or node too old — operational doctrine and field lessons"
+description: "how to deploy agentlenspro on a machine / setup vs manual install / hooks stopped firing after an upgrade / config file wiped or corrupted after an edit / is agentlenspro npm-linked or registry-installed / does switching the cli to an ordinary npm install lose my db or settings / where does the data live / can other agents on this machine use the cli / does the dev npm link affect normal published users / background agent shows running but does nothing / a fork started acting like the orchestrator / does agentlenspro run on Windows / setup fails with unsupported platform or node too old / server hangs at 100% cpu and every request times out or SIGTERM is ignored / a settings.json env key keeps reverting or getting overwritten after every server restart — operational doctrine and field lessons"
 ocd: 2026-07-11
 lmd: 2026-07-16
 metadata:
@@ -129,3 +129,22 @@ Governed by [[cache-ttl-model]] (TTL regimes) and [[agentlens-burn-token-model]]
   bogus-root fixture test fail the environment step before the step under test. DO use plain
   `require.resolve(dep)` for "can the running code load its runtime deps"; reserve
   `paths:` overrides for probing a DIFFERENT tree than the one executing.
+
+[^8]: [id:ATOM-WEDGE-BOUND, status:valid, keywords:"server_hang 100%_cpu every_request_hangs event_loop_starved SIGTERM_ignored unbounded_scan flatMap_reparse", ocd:2026-07-16, lmd:2026-07-16]
+  DO NOT let any request handler run unbounded synchronous O(corpus) work on the event loop
+  (the wedge class: `scanPool.flatMap(asTimeline)` = 50 back-to-back multi-MB transcript
+  reparses → 100% CPU, EVERY request hangs, SIGTERM ignored, SIGKILL required — recurred twice,
+  2026-07-13/16), BECAUSE a bare `await` of a resolved promise drains only MICROTASKS — queued
+  HTTP requests are macrotasks and never interleave. DO use `scanWithBudget` (src/mcpServer.ts:
+  setImmediate yield per item + deadline + honest stoppedEarly coverage) for every corpus-fanning
+  drill; the loopWatchdog (SharedArrayBuffer beat + worker SIGKILL/respawn) is the backstop, and
+  the per-tool start/done log lines in server.log name a wedger (last start with no done).
+
+[^9]: [id:ATOM-ONE-RESOLVER, status:valid, keywords:"settings_key_overwritten_on_boot two_writers_converge different_value spool_repointed_ssd OTEL_LOG_RAW_API_BODIES", ocd:2026-07-16, lmd:2026-07-16]
+  DO NOT let two code paths independently COMPUTE the value of a force-converged config key
+  (the CLI wired OTEL_LOG_RAW_API_BODIES at the RAM-disk spool; the spool-BLIND server-boot
+  converge re-pointed it at the legacy SSD dir minutes later — last writer wins, silently),
+  BECAUSE converge-on-boot means the boot's answer always eventually wins, so any writer
+  disagreement becomes permanent drift toward the boot's value. DO route every writer through
+  the ONE resolver (`effectiveBodiesDir` in src/captureConfig.ts, commit 4efe0f5); when adding
+  a converged key, ask "who else computes this value?" before shipping.
