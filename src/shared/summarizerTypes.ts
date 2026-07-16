@@ -583,3 +583,85 @@ export interface TokensByCauseReport {
   estimated: false             // tokens + per-call cost are EXACT ground truth (not estimates)
   note: string
 }
+
+// ── Conversation transcript — the narrative per-turn session reader (TRDD-B22NYTOY) ──────────────
+// Unlike ContextHistory (which MERGES same-kind blocks per turn for composition analytics), a
+// Conversation preserves the VERBATIM ordered sequence of what happened: user prompt → assistant
+// thinking → text → tool calls with their paired outputs. Built purely from the session .jsonl.
+
+export type ConversationBlockKind =
+  | 'userText' | 'assistantText' | 'thinking' | 'toolUse' | 'toolResult'
+  | 'attachment' | 'systemNote' | 'image'
+
+export interface ConversationBlock {
+  kind: ConversationBlockKind
+  /** Verbatim content (tool inputs serialized; Bash shows the command). Capped per block +
+   *  bounded by a whole-conversation text budget — `truncated` on the Conversation says so. */
+  text?: string
+  toolName?: string
+  /** Pairs a toolResult back to its toolUse. */
+  toolUseId?: string
+  /** Estimator token count of the FULL text (pre-cap). */
+  tokens?: number
+  /** Kind-specific extras: attachment label, systemNote subtype, image note, … */
+  meta?: Record<string, unknown>
+}
+
+export interface ConversationUsage {
+  input: number
+  output: number
+  cacheRead: number
+  cacheCreate: number
+  /** usage.cache_creation.ephemeral_5m_input_tokens — the 5-minute cache-TTL tier. */
+  tier5m: number
+  /** usage.cache_creation.ephemeral_1h_input_tokens — the 1-hour cache-TTL tier. */
+  tier1h: number
+}
+
+export interface ConversationTurn {
+  /** 1-based sequential entry number across ALL roles — the drill key for get_conversation. */
+  turn: number
+  role: 'user' | 'assistant' | 'system'
+  /** Assistant turns: message.id — the merge key across streaming chunks (stable across resumes). */
+  messageId?: string
+  model?: string
+  ts?: string
+  /** From the system/turn_duration record that closes an assistant turn. */
+  durationMs?: number
+  /** True for subagent (sidechain) records. */
+  sidechain?: boolean
+  usage?: ConversationUsage
+  /** ORDERED, verbatim block sequence — never merged. */
+  blocks: ConversationBlock[]
+}
+
+export interface ConversationCompaction {
+  /** The compaction happened after this turn number (0 = before the first kept turn). */
+  afterTurn: number
+  trigger?: string
+  preTokens?: number
+  postTokens?: number
+  droppedTokens?: number
+}
+
+export interface Conversation {
+  sessionId: string
+  /** Latest ai-title record — the human-meaningful session title. */
+  title?: string
+  /** Latest agent-name record — set for named agent sessions. */
+  agentName?: string
+  /** cli | claude-desktop-3p | … from the first assistant record. */
+  entrypoint?: string
+  cwd?: string
+  /** First non-synthetic model seen. */
+  model?: string
+  turns: ConversationTurn[]
+  compactions: ConversationCompaction[]
+  /** Record types seen but not rendered as turns (ai-title, mode, file-history-*, unknowns…),
+   *  with counts — passthrough visibility, never a silent drop. */
+  otherRecords: Record<string, number>
+  totals: { turns: number; toolCalls: number; durationMs: number; usage: ConversationUsage }
+  truncated: boolean
+  /** Set when rebuilt from the parent's log (fork/sub-agent with no own .jsonl). */
+  reconstructedFrom?: string
+}
