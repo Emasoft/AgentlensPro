@@ -8,7 +8,7 @@ current-owner: main
 task-type: bugfix
 severity: critical
 scope: project
-implementation-commits: [3b1520a]
+implementation-commits: [3b1520a, 956c006, 3a8fe7c]
 ---
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-16 16:0x
