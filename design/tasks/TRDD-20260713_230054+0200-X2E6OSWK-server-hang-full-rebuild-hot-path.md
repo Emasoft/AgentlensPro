@@ -1,17 +1,52 @@
 ---
 trdd-id: X2E6OSWK
 title: Server degrades into a 100% CPU spin and every request hangs — full session rebuild on a 4s timer and on every tool call
-column: dev
+column: ai_review
 created: 2026-07-13T23:00:54+0200
-updated: 2026-07-16T15:49:14+0200
+updated: 2026-07-16T16:24:44+0200
 current-owner: main
 task-type: bugfix
 severity: critical
 scope: project
-implementation-commits: [3b1520a, 956c006, 3a8fe7c, 4949af7]
+implementation-commits: [3b1520a, 956c006, 3a8fe7c, 4949af7, 4b4dc8f]
 ---
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-16 16:0x
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-16 16:24
+
+**✅ ALL DELIVERABLES SHIPPED (commit 4b4dc8f closes the last two) — column → ai_review.**
+The wedge class ("unbounded synchronous O(corpus) work inline in one request") is now closed at
+THREE layers: every corpus-fanning drill is bounded, any future wedge names itself in the log, and
+the watchdog self-heals a starvation that slips through anyway.
+
+- **Sibling-handler sweep DONE (4b4dc8f)**: `scanWithBudget` is the ONE bounded-scan primitive
+  (setImmediate macrotask yield per item + deadline — a bare await of a resolved promise drains
+  only microtasks and still starves I/O). Swept results:
+  - `check_cache_expiry` default path — WAS a full wedge (reparsed EVERY main synchronously to
+    find the caller's newest session). Now: rank by card-metadata lastActivityMs, reparse only the
+    top EXPIRY_NEWEST_PROBE=12 (an LLM request IS card activity, so the true newest cannot rank
+    below the probe). Live: 20+min hang → **6.5s** post-restart, picks the correct session.
+  - `check_cache_expiry --all` — WAS a synchronous map over the whole corpus. Now newest-first
+    scanWithBudget + coverage block. Live: returns at the 20s budget, **"SAMPLE: 78 of 13248"**.
+  - `get_cache_break_report` workspace mode — pool capped at 20 but one sync reparse per
+    iteration; now scanWithBudget + stoppedEarly note.
+  - Audited CLEAN (no fix needed): find_context_hogs + get_context_inflation_report (capped
+    pools, per-iteration REAL async I/O via getComposition), find_relevant_context +
+    predict_session_cost (card-metadata only, no reparse), get_call_context /
+    get_session_detail / conversation / history (single-session).
+  - get_cost_by_cause refactored onto the shared primitive; CAUSE_SCAN_TIME_BUDGET_MS renamed
+    DRILL_SCAN_TIME_BUDGET_MS (shared by every drill).
+- **Per-tool duration logging DONE (4b4dc8f)**: `handleMcpRequest` peeks tools/call and logs
+  `tool <name> start` + `tool <name> done in Xms (status N)` at the one choke point every tool
+  call crosses. The START line is the wedge-namer — a wedged handler never finishes, so the last
+  start with no done in `~/.agentlens/server.log` IS the culprit. HTTP /api routes were already
+  timed per-request by instrumentResponse (requestLog).
+- Tests: 3 new bounded-scan tests (probe cap + precision ranking; budget stop honest coverage;
+  complete-coverage label). Suite **1303 passing / 0 failing**, tsc 0, lint 0. Deployed pid 85113
+  (esbuild succeeded + server restart; symbols grep-verified in the bundle).
+- **Remaining gate**: human review (ai_review → human_review → complete). Shipped in v2.8.0 were
+  956c006/3a8fe7c/4949af7; commit 4b4dc8f is post-2.8.0 and rides the next release.
+
+(Superseded 16:0x addendum, kept for lineage:)
 
 **CULPRIT NAMED + BOUNDED (commits 956c006, 3a8fe7c) — wedge class closed for this handler;
 watchdog + per-request logging still OPEN (that's why column stays dev).**

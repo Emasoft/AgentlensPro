@@ -6,6 +6,20 @@ All notable changes to AgentlensPro are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Every corpus-fanning drill is now scan-bounded, and any future wedge names itself
+  (TRDD-X2E6OSWK, final deliverables).** `check_cache_expiry` still carried the wedge shape the
+  2.8.0 fix closed for `get_cost_by_cause`: its default path reparsed EVERY main transcript
+  synchronously just to find the caller's newest session (thousands of multi-MB reparses right
+  after a restart — a 20+ minute hang, now 6.5s via a 12-card newest-activity probe), and `--all`
+  mapped the entire corpus inline (now newest-first under the shared 20s budget with an honest
+  `coverage` block — live: "SAMPLE: 78 of 13248"). `get_cache_break_report` workspace mode gained
+  the same yield+budget treatment. All drills share one bounded-scan primitive (`scanWithBudget`:
+  one macrotask per card + deadline). The MCP endpoint also logs `tool <name> start` / `done in
+  Xms` per call — a wedged handler never finishes, so the last start line with no done in
+  `server.log` names the culprit.
+
 ## [2.8.0] - 2026-07-16
 
 ### Fixed
