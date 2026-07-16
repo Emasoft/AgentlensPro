@@ -1,5 +1,8 @@
 import * as assert from 'assert'
 import * as http from 'http'
+import * as fs from 'fs'
+import * as os from 'os'
+import * as path from 'path'
 import type { OutputChannelLike } from '../vscodeCompat'
 import { OtlpCollector } from '../otlpCollector'
 import { SessionStore } from '../sessionStore'
@@ -642,5 +645,74 @@ suite('OtlpCollector', () => {
     const spans = store.addedSpans as Array<{ name: string; traceId: string }>
     assert.deepStrictEqual(spans.map(s => s.name), ['claude_code.tool_result', 'claude_code.tool_result'])
     assert.deepStrictEqual(spans.map(s => s.traceId), ['sess-tools', 'sess-tools'])
+  })
+})
+
+// ── TRDD-AMEA4O4Z: the log-event sink — gated-out events are PERSISTED, never discarded ──
+suite('OtlpCollector — log-event sink', () => {
+  const TEST_PORT = 15318 + Math.floor(Math.random() * 1000)
+  let collector: OtlpCollector
+  let sinkDir: string
+
+  setup(async () => {
+    sinkDir = fs.mkdtempSync(path.join(os.tmpdir(), `al-sink-${process.pid}-`))
+    collector = new OtlpCollector(TEST_PORT, mockStore() as unknown as SessionStore, mockOutputChannel(), sinkDir)
+    await collector.start()
+  })
+
+  teardown(async () => {
+    await collector.stop()
+    fs.rmSync(sinkDir, { recursive: true, force: true })
+  })
+
+  test('a gate-rejected event (user_prompt) is counted AND persisted to the sink with attrs intact', async () => {
+    const payload = {
+      resourceLogs: [{
+        scopeLogs: [{
+          logRecords: [{
+            timeUnixNano: '1700000000000000000',
+            attributes: [
+              { key: 'event.name', value: { stringValue: 'user_prompt' } },
+              { key: 'session.id', value: { stringValue: 'sess-sink' } },
+              { key: 'prompt', value: { stringValue: 'what time is it' } },
+            ],
+          }],
+        }],
+      }],
+    }
+    const res = await postJson(TEST_PORT, '/v1/logs', payload)
+    assert.strictEqual(res.status, 200)
+    // Counter unchanged behavior: still counted as not-ingested-as-span.
+    assert.deepStrictEqual(collector.getDroppedLogEvents(), { user_prompt: 1 })
+    // NEW behavior: the full event survives in the day bucket.
+    const buckets = fs.readdirSync(sinkDir).filter(f => f.endsWith('.ndjsonl'))
+    assert.strictEqual(buckets.length, 1)
+    const lines = fs.readFileSync(path.join(sinkDir, buckets[0]), 'utf-8').trim().split('\n')
+    assert.strictEqual(lines.length, 1)
+    const rec = JSON.parse(lines[0]) as { ev: string; session?: string; attrs: Record<string, unknown>; tsEvent?: number }
+    assert.strictEqual(rec.ev, 'user_prompt')
+    assert.strictEqual(rec.session, 'sess-sink')
+    assert.strictEqual(rec.attrs['prompt'], 'what time is it')
+    assert.strictEqual(rec.tsEvent, 1_700_000_000_000)
+  })
+
+  test('an ACCEPTED rich event (api_request) is NOT written to the sink — only rejected events are', async () => {
+    const payload = {
+      resourceLogs: [{
+        scopeLogs: [{
+          logRecords: [{
+            timeUnixNano: '1700000000000000000',
+            attributes: [
+              { key: 'event.name', value: { stringValue: 'api_request' } },
+              { key: 'session.id', value: { stringValue: 'sess-rich' } },
+            ],
+          }],
+        }],
+      }],
+    }
+    const res = await postJson(TEST_PORT, '/v1/logs', payload)
+    assert.strictEqual(res.status, 200)
+    assert.deepStrictEqual(collector.getDroppedLogEvents(), {})
+    assert.deepStrictEqual(fs.readdirSync(sinkDir), [])
   })
 })

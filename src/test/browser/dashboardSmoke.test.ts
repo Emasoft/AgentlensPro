@@ -114,12 +114,16 @@ async function ephemeralPort(): Promise<number> {
 // row, assistant rows with model + usage, tool_use/tool_result pair). Written
 // into the isolated HOME's ~/.claude/projects/ BEFORE the server boots so the
 // first log scan ingests them through the production path — no mocked internals.
-interface FixtureSession { sessionId: string; prompt: string; model: string }
+// `title`/`entrypoint` (optional) emit the ai-title record + top-level entrypoint field so the
+// card-enrichment path (TRDD-B22NYTOY P4) is exercised end-to-end: the session row must headline
+// the TITLE (the prompt moves to the tooltip), and the Transcript header must badge the entrypoint.
+interface FixtureSession { sessionId: string; prompt: string; model: string; title?: string; entrypoint?: string }
 
 const FIXTURES: FixtureSession[] = [
   { sessionId: `p9-smoke-alpha-${process.pid}`, prompt: 'P9 fixture alpha — browser smoke seed', model: 'claude-opus-4-8' },
   { sessionId: `p9-smoke-beta-${process.pid}`, prompt: 'P9 fixture beta — dashboard render check', model: 'claude-sonnet-5' },
   { sessionId: `p9-smoke-gamma-${process.pid}`, prompt: 'P9 fixture gamma — session list card', model: 'claude-sonnet-5' },
+  { sessionId: `p9-smoke-delta-${process.pid}`, prompt: 'P9 fixture delta — transcript narrative seed', model: 'claude-sonnet-5', title: 'p9-delta-titled-session', entrypoint: 'cli' },
 ]
 
 function claudeSessionJsonl(fx: FixtureSession, cwd: string, baseMs: number, tokens: number): string {
@@ -129,7 +133,9 @@ function claudeSessionJsonl(fx: FixtureSession, cwd: string, baseMs: number, tok
     cache_read_input_tokens: n * 4, cache_creation_input_tokens: n,
   })
   const rows: unknown[] = [
-    { type: 'user', timestamp: ts(0), sessionId: fx.sessionId, cwd, message: { content: fx.prompt } },
+    // entrypoint rides as a top-level field on ordinary records (first wins in the parser).
+    { type: 'user', timestamp: ts(0), sessionId: fx.sessionId, cwd, message: { content: fx.prompt }, ...(fx.entrypoint ? { entrypoint: fx.entrypoint } : {}) },
+    ...(fx.title ? [{ type: 'ai-title', timestamp: ts(500), sessionId: fx.sessionId, aiTitle: fx.title }] : []),
     {
       type: 'assistant', timestamp: ts(1_500), sessionId: fx.sessionId, cwd,
       message: {
@@ -350,16 +356,77 @@ const TAB_CONTENT: Array<{ id: string; contentSel: string }> = [
       const rowCount = await page.$$eval('#sessions-content table > tbody > tr', (rows) => rows.length)
       assert.strictEqual(rowCount, FIXTURES.length, `expected ${FIXTURES.length} session rows, got ${rowCount}`)
       for (const fx of FIXTURES) {
-        const occurrences = await page.evaluate((needle: string) => {
+        // A titled fixture headlines its ai-title (the prompt moves to the tooltip attribute,
+        // which textContent does not include) — so the visible needle is title ?? prompt.
+        const needle = fx.title ?? fx.prompt
+        const occurrences = await page.evaluate((n: string) => {
           const el = document.querySelector('#sessions-content')
           const text = el && el.textContent ? el.textContent : ''
-          return text.split(needle).length - 1
-        }, fx.prompt)
-        assert.strictEqual(occurrences, 1, `prompt "${fx.prompt}" must appear exactly once in the session list, found ${occurrences}`)
+          return text.split(n).length - 1
+        }, needle)
+        assert.strictEqual(occurrences, 1, `headline "${needle}" must appear exactly once in the session list, found ${occurrences}`)
       }
 
       await page.screenshot({ path: path.join(SCREENSHOT_DIR, `p9-dashboard-${theme}-${shotStamp}.png`) as `${string}.png` })
       assert.deepStrictEqual(errors, [], `zero console errors expected (${theme}):\n${errors.join('\n')}`)
+      await page.close()
+    })
+  }
+
+  // Transcript sub-tab (TRDD-B22NYTOY): expand the TITLED fixture session and open its Transcript.
+  // The view fetches /api/conversation/:id, whose builder re-parses the fixture .jsonl from the
+  // isolated HOME — so this exercises parser → endpoint → dashboard end-to-end. Verified content:
+  // the verbatim user prompt (open text block), the assistant reply, a collapsed tool row, and the
+  // entrypoint badge from the card-enrichment signals. One pass per theme, screenshot each.
+  for (const theme of ['dark', 'light'] as const) {
+    test(`${theme} theme — Transcript sub-tab renders the conversation narrative`, async function () {
+      this.timeout(90_000)
+      const fx = FIXTURES.find((f) => f.title)!
+      const { page, errors } = await newPage(theme)
+
+      // Expand the titled fixture's row (click the row whose headline carries the title).
+      await page.click('button.tab[data-tab="sessions"]')
+      await page.waitForSelector('#sessions-content table tbody tr', { timeout: 15_000 })
+      const clicked = await page.evaluate((needle: string) => {
+        const rows = Array.from(document.querySelectorAll('#sessions-content table tbody tr'))
+        const row = rows.find((r) => (r.textContent ?? '').includes(needle)) as HTMLElement | undefined
+        if (row) { row.click(); return true }
+        return false
+      }, fx.title!)
+      assert.ok(clicked, `session row headlined "${fx.title}" must exist`)
+
+      // The detail nav mounts with the Transcript button; click it by its label text.
+      // Poll from the TEST side (each page.evaluate is a fresh renderer task): headless Chrome
+      // parks an idle page — in-page rAF-polled waitForFunction generates no renderer activity, so
+      // both Preact's deferred effects AND fetch-response delivery can stall ~25s (measured; the
+      // server answered external curl in 0.03s at 0% CPU throughout — purely a renderer stall).
+      const pollFor = async (fn: () => boolean | Promise<boolean>, what: string, timeoutMs = 20_000): Promise<void> => {
+        const t0 = Date.now()
+        while (!(await fn())) {
+          if (Date.now() - t0 > timeoutMs) assert.fail(`timed out waiting for ${what}`)
+          await sleep(500)
+        }
+      }
+      await pollFor(() => page.evaluate(() =>
+        Array.from(document.querySelectorAll('button')).some((b) => (b.textContent ?? '').trim() === 'Transcript')), 'Transcript nav button')
+      await page.evaluate(() => {
+        const btn = Array.from(document.querySelectorAll('button')).find((b) => (b.textContent ?? '').trim() === 'Transcript') as HTMLElement
+        btn.click()
+      })
+
+      // Wait on the LAST turn's text — the prompt alone false-passes (the SessionDetail header
+      // above the nav shows userRequest regardless of which section is active).
+      await pollFor(() => page.evaluate(() => (document.body.textContent ?? '').includes('Done — summary written.')), 'transcript turns')
+      const bodyText = await page.evaluate(() => document.body.textContent ?? '')
+      assert.ok(bodyText.includes(fx.prompt), 'verbatim user prompt must render as an open text block')
+      assert.ok(bodyText.includes('→ Read'), 'collapsed tool-use row must render')
+      // Badge check by EXACT span text — a bare substring test ("cli") would false-pass on "click".
+      const badge = await page.evaluate((ep: string) =>
+        Array.from(document.querySelectorAll('span')).some((s) => (s.textContent ?? '').trim() === ep), fx.entrypoint!)
+      assert.ok(badge, `entrypoint badge "${fx.entrypoint}" must render in the transcript header`)
+
+      await page.screenshot({ path: path.join(SCREENSHOT_DIR, `p9-transcript-${theme}-${shotStamp}.png`) as `${string}.png` })
+      assert.deepStrictEqual(errors, [], `zero console errors expected (${theme} transcript):\n${errors.join('\n')}`)
       await page.close()
     })
   }

@@ -20,11 +20,13 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
+import { isDisallowedCrossOrigin, setAllowedOriginCors } from './httpOrigin'
 import { calcTokenCostUsd } from './shared/pricing'
 import { contextTokens } from './shared/tokenBuckets'
 import type {
   SessionSummaryCard, TimelineEntry, ContextComposition,
   CacheBreakReport, CacheBreakOffender, ContextHistory, CallContext, CollectorGap,
+  Conversation, ConversationTurn,
 } from './shared/summarizerTypes'
 import { buildCacheBreakReport } from './shared/cacheBreak'
 import { investigateBurn } from './burnInvestigator'
@@ -36,9 +38,11 @@ import type { BodiesActivityReport } from './bodiesActivity'
 import { buildResidentCostReport } from './shared/residentCost'
 import { buildSpawnRollup } from './shared/spawnRollup'
 import { buildTokensByCause } from './shared/tokensByCause'
-import type { BurnStatus, SessionStatus, AccountWindowBudget } from './burnMonitor'
+import { loadBurnConfig, type BurnStatus, type SessionStatus, type AccountWindowBudget, type ConsumptionEvent } from './burnMonitor'
+import * as os from 'os'
 import { type AccountInfo, accountLabelFor } from './accountInfo'
-import { classifyTtlRegime, type TtlContext } from './shared/cacheTtl'
+import { classifyTtlRegime, sessionTtlKindOf, type TtlContext } from './shared/cacheTtl'
+import { assessCacheExpiry, type CacheExpiryVerdict } from './cacheExpiry'
 import type { RateLimitsSnapshot } from './statuslineUsage'
 // TRDD-YQZ9P8IL — plan/mode formatting + the auth-regime resolver live in accountStateTimeline (ONE
 // source of truth shared by get_account_status and the account-state timeline sampler); resolveStateAt
@@ -51,7 +55,15 @@ import { ContextCompositionIndex, type CompositionBlockKind, type GroupBy } from
 import {
   buildCacheCreationReport, buildExpensiveWritesTrace, buildCacheBreakGapReport,
   formatExpensiveWrites, formatCostPeaks, type CostPeakGroupBy, type CostBucket, type ForensicsFormat,
+  DEFAULT_BODIES_DIR,
 } from './cacheCreationForensics'
+// TRDD-1FEIW17E — who is writing raw OTEL bodies (live-dir scan + store totals, exact union).
+import { scanLiveBodyWriters, queryStoreWriterTotals, buildBodyWritersReport } from './bodyWriters'
+import type { Store } from './store/db'
+// TRDD-1XM0YSWQ — who exhausted a given account's rate-limit window (time-based attribution).
+import { readAccountSegments, resolveTargetAccount, resolveWindowUntil, buildAccountBurnersReport } from './accountBurners'
+// TRDD-8ZMZ4I6B — cost-based time-to-exhaustion of the current account's windows.
+import { buildWindowEtaReport } from './windowEta'
 import {
   buildCacheBreakTimeline, buildCauseCostPeakReport, buildCacheBreakCauses, formatTimeline, type TimelineFormat,
 } from './cacheBreakTimeline'
@@ -383,7 +395,9 @@ const TOOLS = [
     description:
       'Returns { sessions, collectorGaps }: recent AgentlensPro session summaries — cost, turns, model, ' +
       'prompt excerpt, top tools used, loop signals — plus collectorGaps, any windows where the ' +
-      'collector was offline and telemetry was lost. Use this to orient yourself to recent work ' +
+      'collector was offline and telemetry was lost. Ranked by LAST ACTIVITY (not start date), so ' +
+      'long-running sessions still emitting rank first; rows carry lastActive and active:true when ' +
+      'live within the last 5 minutes. Use this to orient yourself to recent work ' +
       '(and to know if coverage has gaps) before starting a new task.',
     inputSchema: {
       type: 'object' as const,
@@ -405,6 +419,65 @@ const TOOLS = [
       properties: {
         workspace: { type: 'string', description: 'Filter by workspace path prefix' },
         days:      { type: 'number', description: 'Only include sessions from the last N days (default: all)' },
+      },
+    },
+  },
+  {
+    name: 'get_window_eta',
+    description:
+      'HOW LONG until the account exhausts its rate-limit windows, projected on the current COST rate ' +
+      '(Anthropic meters the 5h/7d windows by cost, not raw tokens — cache-read is weighted ~0.1×, so a ' +
+      'token projection is wrong). Returns both windows with consumed $ vs the calibrated $ cap, %% used, ' +
+      'the account\'s current $/min (over `rate_window_min`, default 30), an ETA in h/m and an ISO ' +
+      'exhaustion time, and marks which window EXHAUSTS FIRST. The rate is THIS account\'s own burn (rate ' +
+      'limits are per OAuth account); capacity is the account\'s observed calibration, else a same-plan ' +
+      'account\'s as a labeled proxy, else the verdict says no ETA can be projected (never guessed). ' +
+      'Default account is `current`. Result includes a preformatted `text`.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        account:         { type: 'string', description: '`current` (default) | `previous` | an account_uuid prefix | an email' },
+        rate_window_min: { type: 'number', description: 'Minutes of recent history the $/min rate is measured over (default 30). Smaller = more reactive, larger = smoother' },
+      },
+    },
+  },
+  {
+    name: 'get_account_burners',
+    description:
+      'WHO exhausted a given OAuth account\'s rate-limit windows — BOTH the 5h and the 7d window in one ' +
+      'call, each as a PROJECT/agent table (sessions grouped by workspace, so a restarted agent stays one ' +
+      'row) with share%, billable-weighted equiv, cost, explicit cache-created and cache-read token ' +
+      'columns, session count and top model; per-session rows are in the JSON too. The window nearer/over ' +
+      'its calibrated capacity at the rotation moment is marked MOST LIKELY EXHAUSTED (the rotation ' +
+      'trigger) — capacity comes from the account\'s own observed calibration, else a same-plan account\'s ' +
+      'as a labeled proxy, else the verdict says undetermined. Default account is `previous` (the one ' +
+      'rotated away from), windows end at its rotation-out moment. Attribution is TIME-based against the ' +
+      'machine account-state timeline, so a session alive across a rotation splits correctly between ' +
+      'accounts. Coverage gaps are disclosed. Result includes a preformatted `text` with both tables.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        account:  { type: 'string', description: '`previous` (default) | `current` | an account_uuid prefix | an email' },
+        interval: { type: 'string', description: 'Window end: `last` (default — the account\'s rotation-out moment, the window it last filled) | `current` (ongoing, ends now) | an ISO-8601 date (the window ending at/including that instant)' },
+        limit:    { type: 'number', description: 'Max ranked rows per table (default 15)' },
+      },
+    },
+  },
+  {
+    name: 'get_body_writers',
+    description:
+      'Identifies WHICH sessions are writing raw OTEL API bodies (OTEL_LOG_RAW_API_BODIES) and ranks ' +
+      'them by recent write rate, then total written. A session keeps its launch-time env until ' +
+      'restarted, so the `active` rows are the terminals still burning disk RIGHT NOW. Attribution ' +
+      'unit is the request body (responses carry no session metadata and are aggregated separately). ' +
+      'Totals are the exact union of the ingested store history and not-yet-ingested live files — ' +
+      'never double-counted. Result includes a preformatted `text` table.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        window_min: { type: 'number', description: 'Rate window in minutes (default 30)' },
+        active_min: { type: 'number', description: 'A session writing within this many minutes is flagged active (default 10)' },
+        limit:      { type: 'number', description: 'Max ranked writers returned (default 20)' },
       },
     },
   },
@@ -505,6 +578,29 @@ const TOOLS = [
         sessionId: { type: 'string', description: 'Session ID from get_recent_sessions' },
         turn:      { type: 'number', description: 'Optional 1-based step/turn to drill into (returns its blocks WITH full text)' },
         blockId:   { type: 'string', description: 'Optional block id (with turn) to return just that one block\'s full text' },
+      },
+    },
+  },
+  {
+    name: 'get_conversation',
+    description:
+      'The NARRATIVE per-turn reader of a session (TRDD-B22NYTOY) — the session as a readable ' +
+      'conversation, reconstructed verbatim from its .jsonl: each user prompt, the assistant\'s ' +
+      'thinking and reply text, every tool call with its input AND its paired output, subagent ' +
+      '(sidechain) turns labeled, compaction boundaries with exact pre/post/dropped tokens, per-turn ' +
+      'wall duration and usage incl. the cache-TTL tier split (5m/1h). Ordered blocks — never merged ' +
+      '(use get_context_history for the composition/cost lens instead). Progressive: omit turn for the ' +
+      'header + per-turn summaries (role, preview, tools, usage); pass turn=N for that turn VERBATIM ' +
+      '(full text); pass turnFrom/turnTo for a bounded verbatim range. Reconstructs a fork/sub-agent ' +
+      'from its parent transcript. This is THE tool to answer "show me what was actually said and done".',
+    inputSchema: {
+      type: 'object' as const,
+      required: ['sessionId'],
+      properties: {
+        sessionId: { type: 'string', description: 'Session ID from get_recent_sessions' },
+        turn:      { type: 'number', description: 'Optional 1-based turn to return VERBATIM (all blocks, full text)' },
+        turnFrom:  { type: 'number', description: 'Optional range start (verbatim, capped to 20 turns per call)' },
+        turnTo:    { type: 'number', description: 'Optional range end (inclusive, with turnFrom)' },
       },
     },
   },
@@ -698,6 +794,29 @@ const TOOLS = [
       properties: {
         sessionId: { type: 'string', description: 'Your session id if known (exact match)' },
         workspace: { type: 'string', description: 'Your workspace path prefix — resolves the newest live session under it' },
+      },
+    },
+  },
+  // ── Cache-expiry probe (TRDD-OCNHOHE9) ────────────────────────────────────────
+  {
+    name: 'check_cache_expiry',
+    description:
+      'Has a session\'s prompt cache EXPIRED? Measures idle time since the session\'s last LLM ' +
+      '(api_request) call and compares it to that session\'s TTL — 1h for a subscription main ' +
+      'conversation, 5min for a subagent (ALWAYS) or a usage-credits/API session — so "expired" ' +
+      'means the cached prefix was likely evicted and the next request pays a full cache-creation ' +
+      'write (~1.25× the prefix). Returns per session: `verdict` (fresh|expired|unknown), `idleHuman` ' +
+      '(e.g. "1h 12m"), `ttlMin`+`ttlSource`+`ttlBasis` (the TTL and WHY that number — never a bare ' +
+      'guess; unknown auth surfaces an "assumed" 5-min floor), `lastRequestAt`, and `reason`. Default ' +
+      'target = the newest MAIN session (you rarely know your own id); pass `all:true` for every ' +
+      'session, `sessionId` for one, or `thresholdMinutes` to override the TTL with an explicit cutoff ' +
+      '(e.g. 60 to probe "more than 1h idle"). A `verdict:"unknown"` means no LLM request was recorded.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        sessionId: { type: 'string', description: 'Check one session by exact id (default: newest main session)' },
+        all: { type: 'boolean', description: 'Check every known session instead of just the newest main one' },
+        thresholdMinutes: { type: 'number', description: 'Explicit idle cutoff in minutes; overrides the per-session TTL (e.g. 60 = "> 1h idle")' },
       },
     },
   },
@@ -1224,7 +1343,12 @@ const TOOLS = [
 
 // ── Tool handlers ─────────────────────────────────────────────────────────────
 
-function handleGetRecentSessions(
+// A session is "active" when its last activity is within this window — bounded by the OTEL
+// span-store heartbeat cadence, so a session still emitting spans always qualifies.
+const ACTIVE_WINDOW_MS = 5 * 60_000
+
+// Exported for unit tests (TRDD-RS3NGN53 — ranking must be by last ACTIVITY, provable).
+export function handleGetRecentSessions(
   sessions: SessionSummaryCard[],
   args: { limit?: number; agent?: string; workspace?: string },
 ) {
@@ -1232,10 +1356,22 @@ function handleGetRecentSessions(
   if (args.agent)     filtered = filtered.filter(s => s.source === args.agent)
   if (args.workspace) filtered = filtered.filter(s => s.sessionId.includes(args.workspace!) || (s.userRequest ?? '').includes(args.workspace!))
   const limit = Math.min(args.limit ?? 10, 50)
-  const top = filtered.slice(0, limit)
+  // "Recent" means recently ACTIVE, not recently STARTED (TRDD-RS3NGN53): the caller's list is
+  // start-date-ordered, which buried long-running sessions still emitting spans NOW below fresh
+  // idle ones (live-confirmed: 4 actively-emitting sessions missing from the default top-10).
+  // Never trust caller order — re-rank on start + duration here, the one place it matters.
+  const lastActiveMs = (s: SessionSummaryCard): number => (Date.parse(s.startTime) || 0) + (s.durationMs || 0)
+  const now = Date.now()
+  const top = [...filtered].sort((a, b) => lastActiveMs(b) - lastActiveMs(a)).slice(0, limit)
   return top.map(s => ({
     sessionId:   s.sessionId,
     date:        s.startTime.slice(0, 16).replace('T', ' '),
+    lastActive:  new Date(lastActiveMs(s)).toISOString().slice(0, 16).replace('T', ' '),
+    // Rides only on live sessions — absent means idle, never a false.
+    ...(now - lastActiveMs(s) < ACTIVE_WINDOW_MS ? { active: true as const } : {}),
+    // Transcript-signal enrichment (TRDD-B22NYTOY P4) — absent when the transcript carries none.
+    ...(s.title ? { title: s.title } : {}),
+    ...(s.entrypoint ? { entrypoint: s.entrypoint } : {}),
     agent:       s.source,
     model:       s.model,
     prompt:      s.userRequest ? s.userRequest.slice(0, 120) + (s.userRequest.length > 120 ? '…' : '') : null,
@@ -1606,6 +1742,85 @@ function asTimeline(getTimeline: ((id: string) => unknown[]) | null, id: string,
   return raw as TimelineEntry[]
 }
 
+// ── check_cache_expiry (TRDD-OCNHOHE9) ────────────────────────────────────────
+// Is a session past its prompt-cache TTL? Finds each target's last LLM-request time, classifies
+// its per-session TTL regime, and reports fresh/expired/unknown via the pure assessCacheExpiry.
+type CacheExpiryRow = CacheExpiryVerdict & {
+  sessionId: string
+  workspace: string
+  kind: string
+  /** ISO of the last LLM request the idle was measured from, or null when none was recorded. */
+  lastRequestAt: string | null
+}
+
+// The freshest billed call. api_request entries are the ground-truth LLM calls; 'llm' spans are a
+// fallback for OTEL-only cards that predate log correlation. NaN timestamps are skipped, not zeroed.
+function lastLlmRequestMs(timeline: TimelineEntry[]): number | null {
+  let best: number | null = null
+  for (const e of timeline) {
+    if (e.type !== 'api_request' && e.type !== 'llm') continue
+    const ms = Date.parse(e.timestamp)
+    if (!Number.isNaN(ms) && (best === null || ms > best)) best = ms
+  }
+  return best
+}
+
+function assessOneSession(
+  card: SessionSummaryCard,
+  getTimeline: ((id: string) => unknown[]) | null,
+  ctx: TtlContext | null,
+  nowMs: number,
+  thresholdMs?: number,
+): CacheExpiryRow {
+  const lastMs = lastLlmRequestMs(asTimeline(getTimeline, card.sessionId, card))
+  const kind = sessionTtlKindOf(card)
+  const verdict = assessCacheExpiry({ lastRequestAtMs: lastMs, nowMs, kind, ctx, thresholdMs })
+  return {
+    ...verdict,
+    sessionId: card.sessionId,
+    workspace: card.workspace,
+    kind,
+    lastRequestAt: lastMs === null ? null : new Date(lastMs).toISOString(),
+  }
+}
+
+function handleCheckCacheExpiry(
+  sessions: SessionSummaryCard[],
+  getTimeline: ((id: string) => unknown[]) | null,
+  ctx: TtlContext | null,
+  args: { sessionId?: string; all?: boolean; thresholdMinutes?: number },
+): { sessions: CacheExpiryRow[] } {
+  const nowMs = Date.now()
+  const thresholdMs =
+    typeof args.thresholdMinutes === 'number' && args.thresholdMinutes > 0
+      ? args.thresholdMinutes * 60_000
+      : undefined
+
+  let targets: SessionSummaryCard[]
+  if (args.sessionId) {
+    targets = sessions.filter(s => s.sessionId === args.sessionId)
+  } else if (args.all) {
+    targets = sessions
+  } else {
+    // Default: the caller's active conversation — the newest MAIN session by its last LLM request
+    // (agents rarely know their own sessionId). Fall back to any kind if there are no main cards.
+    const mains = sessions.filter(s => sessionTtlKindOf(s) === 'main')
+    const pool = mains.length > 0 ? mains : sessions
+    let newest: SessionSummaryCard | null = null
+    let newestMs = -1
+    for (const s of pool) {
+      const ms = lastLlmRequestMs(asTimeline(getTimeline, s.sessionId, s)) ?? Date.parse(s.startTime)
+      if (!Number.isNaN(ms) && ms > newestMs) {
+        newestMs = ms
+        newest = s
+      }
+    }
+    targets = newest ? [newest] : []
+  }
+
+  return { sessions: targets.map(c => assessOneSession(c, getTimeline, ctx, nowMs, thresholdMs)) }
+}
+
 // Per-turn context size + cache split from a session timeline. Entries carry the FOUR DISJOINT
 // buckets (entry.inputTokens is the raw uncached share since the 2026-07-10 normalization — see
 // src/shared/tokenBuckets.ts), so promptTokens (the FULL prompt that turn) is derived as
@@ -1694,6 +1909,7 @@ function subAgentChildren(sessions: SessionSummaryCard[], parentId: string) {
 
 type CompositionAccessor = (sessionId: string) => Promise<ContextComposition | null>
 type HistoryAccessor = (sessionId: string) => Promise<ContextHistory | null>
+type ConversationAccessor = (sessionId: string) => Promise<Conversation | null>
 type CallContextAccessor = (sessionId: string, sel: { requestId?: string; spanId?: string }) => Promise<CallContext | null>
 // Burn/session status are computed at the accessor site (server/extension) where the live sessions +
 // statusline billing events live; the MCP layer just serializes the ready object (TRDD-OG9PARZQ).
@@ -1780,6 +1996,71 @@ function handleGetContextHistory(
       diff: { added: s.diff.added.length, changed: s.diff.changed.length, removed: s.diff.removed.length, firstChangeBlockId: s.diff.firstChangeBlockId },
       blocks: s.blocks.map(b => ({ id: b.id, kind: b.kind, label: b.label, tokens: b.tokens, role: b.role })),
     })),
+  }
+}
+
+// ── get_conversation (TRDD-B22NYTOY) — the narrative lens over a session ──────────────────────────
+// Progressive drill-down IS the bounding strategy (same contract as get_context_history): the
+// no-arg shape carries per-turn SUMMARIES only (preview text, no full blocks); full verbatim text
+// is returned only for one turn or a hard-capped range. leanify still caps whatever comes back.
+const CONVERSATION_SUMMARY_TURN_CAP = 500
+const CONVERSATION_RANGE_CAP = 20
+
+/** One turn, verbatim — every block with its full stored text. */
+function verbatimTurn(t: ConversationTurn) {
+  return {
+    turn: t.turn, role: t.role, ts: t.ts, model: t.model,
+    ...(t.sidechain ? { sidechain: true } : {}),
+    ...(t.durationMs !== undefined ? { durationMs: t.durationMs } : {}),
+    ...(t.usage ? { usage: t.usage } : {}),
+    blocks: t.blocks.map(b => ({ kind: b.kind, ...(b.toolName ? { toolName: b.toolName } : {}), ...(b.toolUseId ? { toolUseId: b.toolUseId } : {}), ...(b.tokens ? { tokens: b.tokens } : {}), ...(b.meta ? { meta: b.meta } : {}), text: b.text ?? '' })),
+  }
+}
+
+function handleGetConversation(
+  conv: Conversation | null,
+  args: { sessionId: string; turn?: number; turnFrom?: number; turnTo?: number },
+) {
+  if (!conv) return { sessionId: args.sessionId, message: 'No local Claude log to reconstruct (OTEL-only session, or its transcript is not on disk).' }
+  if (conv.turns.length === 0 && conv.reconstructedFrom) {
+    return { sessionId: args.sessionId, reconstructedFrom: conv.reconstructedFrom, message: `This spawned session has no transcript of its own — its conversation lives in parent ${conv.reconstructedFrom}, whose log is not on disk to reconstruct.` }
+  }
+  const header = {
+    sessionId: conv.sessionId,
+    title: conv.title, agentName: conv.agentName, entrypoint: conv.entrypoint, cwd: conv.cwd, model: conv.model,
+    totals: conv.totals, compactions: conv.compactions, otherRecords: conv.otherRecords,
+    truncated: conv.truncated, reconstructedFrom: conv.reconstructedFrom,
+  }
+  // One turn, verbatim.
+  if (args.turn !== undefined) {
+    const t = conv.turns.find(x => x.turn === args.turn)
+    if (!t) return { sessionId: args.sessionId, turn: args.turn, message: `No turn ${args.turn} (session has ${conv.turns.length}).` }
+    return { sessionId: conv.sessionId, ...verbatimTurn(t) }
+  }
+  // Bounded verbatim range.
+  if (args.turnFrom !== undefined || args.turnTo !== undefined) {
+    const from = Math.max(1, args.turnFrom ?? 1)
+    const to = Math.min(args.turnTo ?? from + CONVERSATION_RANGE_CAP - 1, from + CONVERSATION_RANGE_CAP - 1)
+    const picked = conv.turns.filter(t => t.turn >= from && t.turn <= to)
+    return { sessionId: conv.sessionId, turnFrom: from, turnTo: to, rangeCap: CONVERSATION_RANGE_CAP, turns: picked.map(verbatimTurn) }
+  }
+  // Whole session: header + per-turn summaries (drill with turn=N for full text).
+  return {
+    ...header,
+    turnCount: conv.turns.length,
+    turns: conv.turns.slice(0, CONVERSATION_SUMMARY_TURN_CAP).map(t => {
+      const firstText = t.blocks.find(b => (b.kind === 'userText' || b.kind === 'assistantText' || b.kind === 'systemNote') && b.text)
+      const tools = t.blocks.filter(b => b.kind === 'toolUse').map(b => b.toolName ?? 'tool')
+      return {
+        turn: t.turn, role: t.role, ts: t.ts,
+        ...(t.sidechain ? { sidechain: true } : {}),
+        ...(t.durationMs !== undefined ? { durationMs: t.durationMs } : {}),
+        ...(t.usage ? { usage: t.usage } : {}),
+        blockCount: t.blocks.length,
+        ...(tools.length ? { tools } : {}),
+        preview: (firstText?.text ?? '').slice(0, 100),
+      }
+    }),
   }
 }
 
@@ -2432,6 +2713,9 @@ export interface McpServerOptions {
    *  Powers get_context_history — every block drillable to its actual text with per-block tokens +
    *  per-step usage/cost + a diff. Async because it streams a (possibly multi-GB) log file. */
   getHistory?: HistoryAccessor
+  /** Optionally reconstruct the NARRATIVE conversation from the raw Claude .jsonl (TRDD-B22NYTOY).
+   *  Powers get_conversation — verbatim ordered turns (prompts, replies, tool in/out pairs). */
+  getConversation?: ConversationAccessor
   /** Optionally reconstruct the full literal context of ONE llm call from its raw OTEL request body
    *  (TRDD-ICHAVFCS). Powers get_call_context — the per-call drill target that works for OTEL-only
    *  sessions with no local .jsonl. Async because it reads the (possibly multi-MB) raw body file. */
@@ -2461,6 +2745,12 @@ export interface McpServerOptions {
   /** TRDD-GOD0108C — the server's BodiesActivityTracker report (incremental bodies scan). Powers
    *  the CACHE_THRASH risk and replaces the stat-every-file HUGE_REQUEST_BURST pass. */
   getBodiesActivity?: () => BodiesActivityReport | null
+  /** TRDD-1FEIW17E — the server's durable body store (opened lazily). get_body_writers reads
+   *  all-time per-session totals from it; a null/absent store degrades to live-dir-only. */
+  getStore?: () => Promise<Store | null>
+  /** TRDD-1XM0YSWQ — the burn monitor's deduped consumption-event stream (api_request events +
+   *  statusline deltas). get_account_burners scopes it by account segment × window and ranks. */
+  getConsumptionEvents?: () => ConsumptionEvent[]
 }
 
 export function createMcpServer(opts: McpServerOptions): Server {
@@ -2477,6 +2767,7 @@ export function createMcpServer(opts: McpServerOptions): Server {
     const getTimeline = opts.getTimeline ?? null
     const getComposition = opts.getComposition ?? null
     const getHistory = opts.getHistory ?? null
+    const getConversation = opts.getConversation ?? null
     const getCallContext = opts.getCallContext ?? null
     const getBurnStatus = opts.getBurnStatus ?? null
     const getSessionStatus = opts.getSessionStatus ?? null
@@ -2496,6 +2787,74 @@ export function createMcpServer(opts: McpServerOptions): Server {
       case 'get_workspace_patterns':
         result = handleGetWorkspacePatterns(sessions, args as { workspace?: string; days?: number })
         break
+      case 'get_account_burners': {
+        const a = args as { account?: string; interval?: string; limit?: number }
+        const nowMs = Date.now()
+        const segments = readAccountSegments()
+        if (segments.length === 0) {
+          result = { error: 'No account-state timeline yet (~/.agentlens/account-state.ndjson) — the server records it on account changes; nothing to attribute against.' }
+          break
+        }
+        const target = resolveTargetAccount(segments, a.account ?? 'previous', nowMs)
+        if (!target) {
+          result = { error: `No account matches '${a.account ?? 'previous'}' in the timeline. Known: ${[...new Set(segments.map(s => `${s.accountId.slice(0, 8)} (${s.email ?? '?'})`))].join(', ')}` }
+          break
+        }
+        const { untilMs, error: intervalError } = resolveWindowUntil(a.interval ?? 'last', target, nowMs)
+        if (intervalError) { result = { error: intervalError }; break }
+        result = buildAccountBurnersReport({
+          events: opts.getConsumptionEvents?.() ?? [],
+          target,
+          allSegments: segments,
+          cards: sessions.map(s => ({ sessionId: s.sessionId, workspace: s.workspace, source: s.source, model: s.model })),
+          untilMs, nowMs, limit: Math.max(1, a.limit ?? 15),
+          observed: loadBurnConfig(process.env, os.homedir()).observed,
+        })
+        break
+      }
+      case 'get_window_eta': {
+        const a = args as { account?: string; rate_window_min?: number }
+        const nowMs = Date.now()
+        const segments = readAccountSegments()
+        if (segments.length === 0) {
+          result = { error: 'No account-state timeline yet (~/.agentlens/account-state.ndjson) — nothing to project against.' }
+          break
+        }
+        const target = resolveTargetAccount(segments, a.account ?? 'current', nowMs)
+        if (!target) {
+          result = { error: `No account matches '${a.account ?? 'current'}'. Known: ${[...new Set(segments.map(s => `${s.accountId.slice(0, 8)} (${s.email ?? '?'})`))].join(', ')}` }
+          break
+        }
+        result = buildWindowEtaReport({
+          events: opts.getConsumptionEvents?.() ?? [],
+          target,
+          allSegments: segments,
+          nowMs,
+          rateWindowMs: Math.max(1, a.rate_window_min ?? 30) * 60_000,
+          observed: loadBurnConfig(process.env, os.homedir()).observed,
+        })
+        break
+      }
+      case 'get_body_writers': {
+        const a = args as { window_min?: number; active_min?: number; limit?: number }
+        const nowMs = Date.now()
+        const windowMs = Math.max(1, a.window_min ?? 30) * 60_000
+        const activeMs = Math.max(1, a.active_min ?? 10) * 60_000
+        const live = scanLiveBodyWriters(DEFAULT_BODIES_DIR, nowMs, windowMs)
+        // Store totals are best-effort: a closed/broken store degrades to live-only (the note says
+        // so) because "which sessions must I restart" must be answerable even mid-migration.
+        const storeHandle = opts.getStore ? await opts.getStore().catch(() => null) : null
+        // recentSrcNames floor: live retention is 72h, +24h slack covers every file still on disk.
+        const totals = storeHandle
+          ? await queryStoreWriterTotals(storeHandle, nowMs - 96 * 3600_000).catch(() => null)
+          : null
+        result = buildBodyWritersReport({
+          live, store: totals,
+          cards: sessions.map(s => ({ sessionId: s.sessionId, workspace: s.workspace, source: s.source })),
+          nowMs, windowMs, activeMs, limit: Math.max(1, a.limit ?? 20),
+        })
+        break
+      }
       case 'get_session_detail': {
         const id = (args as { sessionId: string }).sessionId
         // Composition is optional context — a null accessor or non-Claude session just omits it.
@@ -2523,6 +2882,12 @@ export function createMcpServer(opts: McpServerOptions): Server {
         const history = getHistory ? await getHistory(id).catch(() => null) : null
         const card = sessions.find(x => x.sessionId === id)
         result = handleGetContextHistory(history, card, args as { sessionId: string; turn?: number; blockId?: string })
+        break
+      }
+      case 'get_conversation': {
+        const id = (args as { sessionId: string }).sessionId
+        const conv = getConversation ? await getConversation(id).catch(() => null) : null
+        result = handleGetConversation(conv, args as { sessionId: string; turn?: number; turnFrom?: number; turnTo?: number })
         break
       }
       case 'get_context_growth': {
@@ -2573,6 +2938,12 @@ export function createMcpServer(opts: McpServerOptions): Server {
         result = handleGetAccountStatus(
           getAccount?.() ?? null, getBurnStatus?.() ?? null,
           getTtlContext?.() ?? null, getRateLimits?.() ?? null,
+        )
+        break
+      case 'check_cache_expiry':
+        result = handleCheckCacheExpiry(
+          sessions, getTimeline, getTtlContext?.() ?? null,
+          args as { sessionId?: string; all?: boolean; thresholdMinutes?: number },
         )
         break
       case 'get_account_state_at':
@@ -2755,6 +3126,10 @@ export function createMcpServer(opts: McpServerOptions): Server {
  * Each request gets its own transport instance (stateless per-request for
  * Streamable HTTP). The server instance is reused across requests.
  */
+// 4 MB matches the standalone server's JSON-tool POST routes — tool-call requests are small; only
+// hostile or broken clients exceed this.
+const MCP_BODY_MAX_BYTES = 4 * 1024 * 1024
+
 export function handleMcpRequest(
   server: Server,
   req: http.IncomingMessage,
@@ -2767,19 +3142,37 @@ export function handleMcpRequest(
     return
   }
 
-  // Buffer and parse the body before passing to the transport.
-  let raw = ''
-  req.on('data', (chunk: Buffer) => { raw += chunk.toString() })
+  // Buffer and parse the body before passing to the transport — with a hard byte cap. MCP tool
+  // calls are small JSON; without the cap a runaway or hostile client could grow the buffer until
+  // the heap dies (every capped POST route in the standalone server guards this the same way, and
+  // this was the one uncapped POST body on the machine). On overflow the socket is destroyed and
+  // no handler runs — mirroring standalone readBodyCapped semantics.
+  const chunks: Buffer[] = []
+  let received = 0
+  let overflowed = false
+  req.on('data', (c: Buffer) => {
+    received += c.length
+    if (received > MCP_BODY_MAX_BYTES) { overflowed = true; req.destroy() }
+    else chunks.push(c)
+  })
+  req.on('error', () => { /* transport error — never crash the endpoint */ })
   req.on('end', () => {
+    if (overflowed) return
+    const raw = Buffer.concat(chunks).toString()
     let parsedBody: unknown
     try { parsedBody = raw ? JSON.parse(raw) : undefined } catch { parsedBody = undefined }
 
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
+    // Close the transport when the RESPONSE is done, whatever path got it there. 'close' fires
+    // after a normal finish AND on client abort, and attaching it BEFORE handling fixes two leaks
+    // the previous shape had: on handleRequest rejection the transport was never closed, and on a
+    // fast response 'finish' could fire before the success-path .then() attached its listener.
+    res.once('close', () => { transport.close().catch(() => { /* already closed */ }) })
     server.connect(transport)
       .then(() => transport.handleRequest(req, res, parsedBody))
-      .then(() => { res.on('finish', () => { transport.close().catch(() => {}) }) })
       .catch(err => {
         if (!res.headersSent) { res.writeHead(500); res.end(JSON.stringify({ error: String(err) })) }
+        else res.end() // headers already streamed — end the response so 'close' fires and cleans up
       })
   })
 }
@@ -2797,10 +3190,21 @@ export function startMcpHttpServer(
 ): http.Server {
   const server = createMcpServer(opts)
   const httpServer = http.createServer((req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*')
+    // ACAO only for same-origin/loopback origins — never the wildcard. MCP responses carry the
+    // user's session data (prompts, costs, project paths), so ACAO:* let ANY browsed page read
+    // them cross-origin — the same read-exfil class the UI server closed (TRDD-F6BM1BDI). The
+    // policy is shared via src/httpOrigin.ts; non-browser clients send no Origin and are unaffected.
+    setAllowedOriginCors(req, res)
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS')
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept, mcp-session-id')
     if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return }
+    // Refuse cross-origin browser mutations before any handler runs: a "simple" POST needs no
+    // preflight, and POST /mcp EXECUTES a tool — a write side effect the blocked read can't undo.
+    if (req.method !== 'GET' && req.method !== 'HEAD' && isDisallowedCrossOrigin(req)) {
+      res.writeHead(403, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: 'cross-origin request refused' }))
+      return
+    }
     handleMcpRequest(server, req, res)
   })
   httpServer.on('error', (err: NodeJS.ErrnoException) => {

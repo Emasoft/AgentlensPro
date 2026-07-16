@@ -14,12 +14,15 @@ parent-trdd: VY1IUVUM
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-13
 
 **Component states**
-- `src/cacheExpiry.ts` (pure assessment) — TO BUILD.
-- `src/test/cacheExpiry.test.ts` (unit) — TO BUILD (TDD, write first).
-- `check_cache_expiry` MCP tool in `src/mcpServer.ts` — TO WIRE (auto-exposes as `agentlenspro check_cache_expiry`).
-- docs (diagnostics skill, README, CHANGELOG, help) — TO UPDATE.
+- `src/cacheExpiry.ts` (pure assessment) — DONE. `assessCacheExpiry` + `formatIdle`, reuses `classifyTtlRegime`.
+- `src/test/cacheExpiry.test.ts` (unit) — DONE, 15 tests PASS under Node 20 (mocha `ui:tdd` → `suite`/`test`).
+- `check_cache_expiry` MCP tool in `src/mcpServer.ts` — DONE. `handleCheckCacheExpiry` + `lastLlmRequestMs` +
+  tool def + switch case; `check-types` GREEN both runtimes. Auto-exposes as `agentlenspro check_cache_expiry`.
+- docs — DONE: diagnostics skill (recipes + cheat-sheet row), README (count-free), CHANGELOG [Unreleased], CLAUDE.md.
+- Incidental fix: README + CLAUDE.md "32 diagnostic tools" was stale (real count 41) → made count-free (drift-proof).
 
-**NEXT ACTION**: write `src/test/cacheExpiry.test.ts` red, then `src/cacheExpiry.ts` to green.
+**NEXT ACTION**: run `bash scripts/safe-deploy.sh --dry-run` (full gate under Node 20); then `node esbuild.js` +
+live smoke `agentlenspro check_cache_expiry --all`; then commit on `feat/cache-expiry-probe`.
 
 **Load-bearing facts**
 - The TTL model is DONE in `src/shared/cacheTtl.ts`: `classifyTtlRegime(kind, ctx) → { ttlMs, ttlAssumedMin, ttlSource, ttlBasis }`, `sessionTtlKindOf(card) → 'main'|'subagent'|'fork'`, `ttlPhrase(regime)`. REUSE — never re-encode a TTL number (there is a grep test `ttlLiterals.test.ts` that fails on a re-declared 5-min literal).

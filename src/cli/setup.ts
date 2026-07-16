@@ -21,11 +21,14 @@
 import { spawn, spawnSync, execFileSync } from 'child_process'
 import * as crypto from 'crypto'
 import * as fs from 'fs'
+import { agentlensDisabled } from './killSwitch'
 import * as http from 'http'
 import * as os from 'os'
 import * as path from 'path'
 import { loadSqlJs } from '../forensicsDb'
+import { readFsMarkers } from '../environment/runtime'
 import { ensureTelemetryConfig, ownedTelemetryKeys } from '../telemetryConfig'
+import { rawBodyCaptureEnabled, RAW_BODIES_KEY } from '../captureConfig'
 import { sleep } from './cliCore'
 import {
   CLI_BIN, GATE_CMD, GATE_EVENTS, GATE_MATCHER, HOOK_CMD, HOOK_EVENTS, HookMatcher,
@@ -280,6 +283,131 @@ interface StepDef {
   run: (ctx: Ctx) => Promise<{ result: StepResult; acted: boolean }>
 }
 
+// ── Environment probe (TRDD-KVDT1XMS) — read-only heuristics, ALWAYS the first step ─────────
+// Facts are gathered from the real machine, then judged by a pure function (unit-testable
+// fact-by-fact). FAIL blocks the whole pipeline (fail-fast); degradable problems only warn.
+
+export interface EnvFacts {
+  platform: NodeJS.Platform
+  arch: string
+  /** process.versions.node — no leading 'v'. */
+  nodeVersion: string
+  /** The supported floor, read from package.json engines.node (never hardcoded twice). */
+  nodeFloor: string
+  wsl: boolean
+  /** @duckdb/node-api is a declared runtime dep (span store) — unresolvable = broken install. */
+  duckdbResolvable: boolean
+  /** sql.js is degradable: OpenCode ingestion falls back to per-message JSON files. */
+  sqljsResolvable: boolean
+  claudeDirPresent: boolean
+  /** Something answers on the OTLP port but the UI port does not look like OUR server. */
+  otlpPortBusyForeign: boolean
+  freeDiskBytes: number | null
+}
+
+/** '>=20.9.0' | '20.9.0' → '20.9.0'. The engines field is the ONE home of the floor. */
+function parseNodeFloor(repoRoot: string): string {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8')) as { engines?: { node?: string } }
+    const spec = pkg.engines?.node ?? ''
+    const m = spec.match(/(\d+)\.(\d+)\.(\d+)/)
+    if (m) return m[0]
+  } catch { /* fall through to the compiled floor */ }
+  return '20.9.0'
+}
+
+function versionAtLeast(version: string, floor: string): boolean {
+  const v = version.split('.').map(Number)
+  const f = floor.split('.').map(Number)
+  for (let i = 0; i < 3; i++) {
+    if ((v[i] ?? 0) > (f[i] ?? 0)) return true
+    if ((v[i] ?? 0) < (f[i] ?? 0)) return false
+  }
+  return true
+}
+
+async function gatherEnvFacts(ctx: Ctx): Promise<EnvFacts> {
+  // Plain require.resolve — the deps that matter are the ones THIS process (the installed
+  // package) would load, NOT whatever sits under the injectable repoRoot (that root is for
+  // skill/package FILES; pointing dep resolution at it made a bogus-root fixture fail here
+  // instead of at the skill step it targets).
+  const resolvable = (mod: string): boolean => {
+    try { require.resolve(mod); return true } catch { return false }
+  }
+  // Foreign-process heuristic: OTLP port answers ⇒ occupied; ours iff the paired UI port serves
+  // /api/server-stats. A foreign OTLP squatter would silently eat every span the hooks emit.
+  let otlpBusy = false
+  try { await httpJson(ctx.otlpPort, 'GET', '/'); otlpBusy = true } catch { otlpBusy = false }
+  let uiIsOurs = false
+  if (otlpBusy) {
+    try { uiIsOurs = (await httpJson(ctx.uiPort, 'GET', '/api/server-stats')).status === 200 } catch { uiIsOurs = false }
+  }
+  let freeDiskBytes: number | null = null
+  try {
+    // dataDir may not exist yet — probe the nearest existing ancestor.
+    let probe = ctx.dataDir
+    while (!fs.existsSync(probe)) { const up = path.dirname(probe); if (up === probe) break; probe = up }
+    const s = fs.statfsSync(probe)
+    freeDiskBytes = s.bavail * s.bsize
+  } catch { freeDiskBytes = null }
+  return {
+    platform: process.platform,
+    arch: process.arch,
+    nodeVersion: process.versions.node,
+    nodeFloor: parseNodeFloor(ctx.repoRoot),
+    wsl: readFsMarkers().wsl,
+    duckdbResolvable: resolvable('@duckdb/node-api'),
+    sqljsResolvable: resolvable('sql.js'),
+    claudeDirPresent: fs.existsSync(path.join(ctx.home, '.claude')),
+    otlpPortBusyForeign: otlpBusy && !uiIsOurs,
+    freeDiskBytes,
+  }
+}
+
+/** Pure verdict over gathered facts — exported for unit tests (TRDD-KVDT1XMS). */
+export function judgeEnvFacts(facts: EnvFacts): StepResult {
+  const step = 'environment'
+  const label = `${facts.platform}${facts.wsl ? ' (WSL)' : ''} ${facts.arch}, node v${facts.nodeVersion}`
+  // Hard gates first — each is a state in which the install CANNOT work.
+  if (facts.platform === 'win32') {
+    return {
+      step, found: label, action: 'none', verify: 'FAIL',
+      detail: 'native Windows is unsupported — run inside WSL2 (Ubuntu recommended): install Node >= '
+        + `${facts.nodeFloor} in the WSL distro and run \`npm install -g agentlenspro\` there`,
+    }
+  }
+  if (!versionAtLeast(facts.nodeVersion, facts.nodeFloor)) {
+    return {
+      step, found: label, action: 'none', verify: 'FAIL',
+      detail: `Node v${facts.nodeVersion} is below the supported floor ${facts.nodeFloor} (package.json engines.node) — upgrade Node`,
+    }
+  }
+  if (!facts.duckdbResolvable) {
+    return {
+      step, found: label, action: 'none', verify: 'FAIL',
+      detail: '@duckdb/node-api is not resolvable — the span store cannot run (broken install: reinstall with `npm install -g agentlenspro`)',
+    }
+  }
+  // Degradable heuristics — warn, never block.
+  const warns: string[] = []
+  if (!facts.sqljsResolvable) warns.push('sql.js not resolvable — OpenCode SQLite ingestion degrades to per-message JSON')
+  if (facts.otlpPortBusyForeign) warns.push('OTLP port answers but the UI port is not our server — a foreign process may be squatting the collector port')
+  if (!facts.claudeDirPresent) warns.push('~/.claude absent — no Claude Code on this machine yet? hooks/skill will install for its first run')
+  if (facts.freeDiskBytes !== null && facts.freeDiskBytes < 2 ** 30) warns.push(`low disk: ${(facts.freeDiskBytes / 2 ** 20).toFixed(0)}MB free at the data dir`)
+  return {
+    step, found: label, action: 'none', verify: 'PASS',
+    detail: warns.length ? warns.join('; ') : 'no incompatibilities detected',
+  }
+}
+
+const stepEnvironment: StepDef = {
+  name: 'environment',
+  async run(ctx) {
+    const result = judgeEnvFacts(await gatherEnvFacts(ctx))
+    return { result, acted: false } // pure probe — never ACTs, dry-run identical
+  },
+}
+
 /** Total spans persisted in the segmented store, read from the per-segment index files —
  *  a path independent of the server (VERIFY must not trust the process it just started). */
 function storeSpanCount(dataDir: string): number {
@@ -481,7 +609,11 @@ const stepOtel: StepDef = {
   async run(ctx) {
     const bodiesDir = path.join(ctx.dataDir, 'otel-bodies')
     const markerPath = path.join(ctx.dataDir, 'telemetry-managed.json')
-    const expected = ownedTelemetryKeys(bodiesDir, ctx.otlpPort)
+    // Raw-body capture is opt-in (TRDD-BKF5NZD3). Resolve it ONCE and feed the SAME value to both
+    // the expected-table and ensure(), or setup's verify would demand a key ensure deliberately
+    // deleted (or vice-versa) and the repairer would fight itself on every run.
+    const captureRawBodies = rawBodyCaptureEnabled(ctx.dataDir, process.env)
+    const expected = ownedTelemetryKeys(bodiesDir, ctx.otlpPort, captureRawBodies)
     const state = readSettingsFresh(ctx.settingsPath)
     if (state === 'unparseable') {
       return { result: { step: this.name, found: 'settings.json unparseable', action: 'refused', verify: 'FAIL', detail: 'fix the file manually, then re-run setup' }, acted: false }
@@ -489,29 +621,43 @@ const stepOtel: StepDef = {
     const env = (state !== 'absent' && state.env && typeof state.env === 'object' ? state.env : {}) as Record<string, unknown>
     const missing = Object.keys(expected).filter(k => env[k] === undefined)
     const wrong = Object.keys(expected).filter(k => env[k] !== undefined && env[k] !== expected[k])
-    const converged = missing.length === 0 && wrong.length === 0
-    const found = converged ? 'telemetry env current' : `${missing.length} missing, ${wrong.length} wrong key(s)`
+    // A LEFTOVER capture key is drift too — and the kind that costs ~35 GB/day. Without this,
+    // `converged` would be true (the key simply isn't in `expected`), setup would skip ensure(), and
+    // the repairer would happily report a healthy install while the burn kept running.
+    const staleCapture = !captureRawBodies && env[RAW_BODIES_KEY] === `file:${bodiesDir}`
+    const converged = missing.length === 0 && wrong.length === 0 && !staleCapture
+    const found = converged
+      ? 'telemetry env current'
+      : `${missing.length} missing, ${wrong.length} wrong key(s)${staleCapture ? ', raw-body capture to remove' : ''}`
 
     if (ctx.dryRun) {
       return { result: { step: this.name, found, action: converged ? 'none' : 'would: wire telemetry env (verified transaction)', verify: 'SKIP', detail: 'dry-run' }, acted: false }
     }
     let acted = false
     if (!converged) {
-      await ensureTelemetryConfig({ settingsPath: ctx.settingsPath, markerPath, bodiesDir, otlpPort: ctx.otlpPort })
+      await ensureTelemetryConfig({ settingsPath: ctx.settingsPath, markerPath, bodiesDir, otlpPort: ctx.otlpPort, dataDir: ctx.dataDir, captureRawBodies })
       acted = true
     }
-    // VERIFY — independent re-parse; every owned key must hold exactly the expected value.
+    // VERIFY — independent re-parse; every owned key must hold exactly the expected value, and the
+    // opted-out capture key must be GONE (verifying only what we wrote would miss what we failed to
+    // delete — the whole defect this TRDD fixes).
     const after = readSettingsFresh(ctx.settingsPath)
     if (after === 'absent' || after === 'unparseable') {
       return { result: { step: this.name, found, action: acted ? 'wired' : 'none', verify: 'FAIL', detail: `post-state ${after}` }, acted }
     }
     const envAfter = (after.env && typeof after.env === 'object' ? after.env : {}) as Record<string, unknown>
     const bad = Object.keys(expected).find(k => envAfter[k] !== expected[k])
+    const stillStale = !captureRawBodies && envAfter[RAW_BODIES_KEY] === `file:${bodiesDir}`
+    const verifyFail = bad ?? (stillStale ? RAW_BODIES_KEY : undefined)
     return {
       result: {
         step: this.name, found, action: acted ? 'wired' : 'none',
-        verify: bad ? 'FAIL' : 'PASS',
-        detail: bad ? `${bad} = ${JSON.stringify(envAfter[bad])} (expected ${JSON.stringify(expected[bad])})` : `${Object.keys(expected).length} key(s) exact`,
+        verify: verifyFail ? 'FAIL' : 'PASS',
+        detail: bad
+          ? `${bad} = ${JSON.stringify(envAfter[bad])} (expected ${JSON.stringify(expected[bad])})`
+          : stillStale
+            ? `${RAW_BODIES_KEY} still set (capture is off — it must be absent)`
+            : `${Object.keys(expected).length} key(s) exact${captureRawBodies ? '' : '; raw-body capture off'}`,
       },
       acted,
     }
@@ -581,6 +727,13 @@ const stepServer: StepDef = {
       if ((await serverStats(ctx)) !== null) {
         return { result: { step: this.name, found, action: 'stop old server', verify: 'FAIL', detail: `pid ${pre.pid} did not stop within 10s` }, acted: true }
       }
+    }
+    // The kill-switch gates EVERY spawn path, including setup (TRDD-K3WDPR7M): this was the one
+    // spawn site with no guard, discovered when a server booted minutes after `agentlenspro
+    // disable`. The server now also refuses at its own boot — this check just makes setup report
+    // the refusal honestly instead of spawning a child that immediately exits 78.
+    if (agentlensDisabled()) {
+      return { result: { step: this.name, found, action: 'start server', verify: 'FAIL', detail: 'AgentlensPro is DISABLED — run `agentlenspro enable` first' }, acted: false }
     }
     const serverJs = findServerJs()
     fs.mkdirSync(ctx.dataDir, { recursive: true })
@@ -745,7 +898,7 @@ function printDetection(ctx: Ctx): void {
 
 // ── Runner ──────────────────────────────────────────────────────────────────────────────────
 
-const STEPS: StepDef[] = [stepData, stepHooks, stepSkill, stepOtel, stepOldPackage, stepServer, stepSelfTest]
+const STEPS: StepDef[] = [stepEnvironment, stepData, stepHooks, stepSkill, stepOtel, stepOldPackage, stepServer, stepSelfTest]
 
 export async function runSetup(opts: SetupOptions = {}): Promise<SetupOutcome> {
   const ctx = resolveCtx(opts)

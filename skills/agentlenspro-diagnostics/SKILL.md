@@ -64,7 +64,7 @@ agentlenspro batch '<json-array>'           # N tools in ONE invocation: [{"tool
 | `--dashboard` | ensure the server is up, then open the dashboard (http://localhost:3000) |
 | `--purge-db` | clear the span store + session cards; the server re-ingests from the agent logs |
 | `--export-bodies DIR` | re-inflate archived OTEL bodies into DIR as plain files; `--since <hours\|ISO>` / `--until <ISO>` filter by time |
-| `--purge-bodies` | delete ALL archived body volumes (the live 72h window is untouched) |
+| `--purge-bodies` | delete archived body volumes proven durable in the store (each verified lump-by-lump); unproven volumes are kept and named, `.idx` sidecars always retained (the live 72h window is untouched) |
 | `--risk` | one-shot realtime culprit check (~40ms REST fast path): prints only the ACTIVE burn risks, each naming the culprit session/workspace/model + magnitude |
 | `--install-skill` | (re)install THIS skill into `~/.claude/skills/` — idempotent, reports installed/updated/current |
 | `--install-hooks` | register the `agentlenspro hook` command string on the 10 LIFECYCLE hook events (SessionStart/End, Stop, StopFailure, Pre/PostCompact, Permission, Notification, SubagentStart/Stop) AND the burn-gate (`agentlenspro gate` on PreToolUse/PostToolUse matched to `^(Task\|Agent\|Workflow\|SendMessage)$` only — see "The burn-gate" below) via the same verified transaction. Bare bin + subcommand, never absolute paths — registrations survive Homebrew version bumps; the install refuses if `agentlenspro` is not on PATH. Also migrates every previous-generation registration (`agentlenspro-hook`/`agentlenspro-gate` PATH bins, absolute-path `spy-agentlens*` scripts) and removes dead claude-spyglass entries. Never touches other tools' hooks. Idempotent; needs a session restart |
@@ -77,11 +77,39 @@ rate-limit turn deaths (StopFailure), compaction boundaries + trigger (PreCompac
 session lifecycle — into `~/.agentlens/hook-events/` (NDJSON daily buckets, 31d retention).
 Query: `GET /api/hook-events?session=&ev=&since=&until=&limit=` on the UI port.
 
-Bodies lifecycle: live plain files for 72h → auto-archived hourly into monthly WAD volumes
-(`~/.agentlens/otel-bodies-archive/bodies-YYYY-MM.wad` — gzip lumps + NDJSON index, random
-access, ~8-10× smaller) → volumes deleted only after `AGENTLENS_BODIES_RETENTION_DAYS` (31).
-One server at a time: the canonical instance owns `~/.agentlens/server.pid` and a second
-boot refuses cleanly. `batch --out` files are position-prefixed (`out-1-<tool>.json`).
+Bodies lifecycle: raw capture is opt-in and off by default (`agentlenspro config set
+captureRawBodies on|off`); when on, bodies land in a RAM-disk spool (macOS) instead of the SSD.
+Live plain files (72h, `bodiesMaxAgeHours`) are ingested into a content-addressed store
+(`~/.agentlens/store/` — fileless DuckDB → immutable zstd Parquet, deduped across turns,
+~190× measured on this project's own history) — a source is deleted only after the store is proven
+to hold its exact bytes AND its `(src_name, capture-time)` row, one gate shared by `.wad` volumes
+and the hook-event spool; a payload that cannot ingest is quarantined, never deleted. The legacy monthly `.wad` archive
+(`~/.agentlens/otel-bodies-archive/bodies-YYYY-MM.wad`) is a read-only fallback for history not
+yet migrated, never written to again; `--export-bodies` reads from both. One server at a time:
+the canonical instance owns `~/.agentlens/server.pid` and a second boot refuses cleanly.
+`batch --out` files are position-prefixed (`out-1-<tool>.json`).
+
+## Install / repair — `agentlenspro setup`
+
+ONE idempotent verb installs, verifies, or repairs the whole stack:
+
+```bash
+agentlenspro setup --dry-run   # read-only: shows what would change, exits 0
+agentlenspro setup --yes       # converge: every step CHECK → ACT → VERIFY, then self-test
+```
+
+Pipeline (fail-fast — a FAIL stops the run, remaining steps SKIP, exit non-zero):
+**environment** (read-only heuristics: platform/arch + WSL label, Node vs the engines floor,
+native-dep resolvability, foreign-process-on-OTLP-port, `~/.claude` presence, free disk —
+hard-fails on native Windows with WSL2 guidance, on old Node, or on a broken install) →
+data-store (sqlite quick_check; corrupt DB backed ASIDE, never wiped) → hooks → skill →
+otel-env → old-package migration → server → final end-to-end self-test (synthetic span
+round-trip + registered hook/gate execution). A second run over a converged install reports
+**0 actions** — that is the idempotency proof. Data is NEVER deleted by setup.
+
+**Platforms: macOS and Linux; Windows ONLY via WSL2** (native win32 is refused by the
+environment probe — install Node ≥ 20.9 inside the WSL distro and `npm install -g agentlenspro`
+there). Hook registrations changed by setup need a Claude Code session restart to take effect.
 
 ## Local commands — no server needed (`config`, `env`)
 
@@ -103,9 +131,20 @@ agentlenspro server restart                       # apply it
 ```
 
 Knobs: `spansRetentionDays` (30) · `summaryWindowHours` (24) · `bodiesMaxAgeHours` (72) ·
-`bodiesMaxGb` (8) · `bodiesRetentionDays` (31). A `set` on a corrupt config file REFUSES to write
-rather than clobbering it. Recipe — keep a year of traces on a big disk:
-`agentlenspro config set spansRetentionDays 365 && agentlenspro server restart`.
+`bodiesMaxGb` (8) · `bodiesRetentionDays` (31) · `captureRawBodies` (off) — the one boolean knob,
+`config set captureRawBodies on|off`; turning it on mounts a RAM-disk spool (macOS,
+`agentlenspro spool ensure` re-creates it after a reboot) so raw bodies never touch the SSD. A
+`set` on a corrupt config file REFUSES to write rather than clobbering it. Recipe — keep a year of
+traces on a big disk: `agentlenspro config set spansRetentionDays 365 && agentlenspro server
+restart`.
+
+### Emergency stop: `agentlenspro disable [reason]` / `enable`
+
+The global brake — one flag file that disarms every hook, the burn-gate, server auto-revive, and
+background ingestion in **every** Claude Code session already running, on that session's next hook
+fire. No restart needed (a `settings.json` edit alone cannot reach a session that already loaded
+its config). `disable` also stops a running server and turns raw-body capture off; `enable` clears
+the flag.
 
 ### `agentlenspro env` — environment / system detection
 
@@ -280,7 +319,20 @@ upgrade. Use `get_cache_break_gap_report` to separate TTL-expiry from a real pre
 agentlenspro get_account_status                      # your session's cacheTtl regime + windowSource
 agentlenspro get_cache_break_gap_report              # TTL-expiry vs real prefix change, per gap
 agentlenspro get_cache_break_causes                  # what breaks the cache machine-wide
+agentlenspro check_cache_expiry                      # is my cache cold yet? (newest main session)
+agentlenspro check_cache_expiry --all                # every session's fresh/expired verdict
+agentlenspro check_cache_expiry --thresholdMinutes 60 --out /tmp/exp.json   # probe "> 1h idle"
 ```
+
+**Is a specific claude's cache expired yet?** `check_cache_expiry` answers exactly "has more than
+the TTL passed since this session's last LLM request?" — idle since the last `api_request`, compared
+to that session's TTL (1h subscription-main, 5min subagent/usage-credits), so `expired` means the
+prefix was likely evicted and the next request pays a full cache-creation write. Per session it
+returns `verdict` (fresh|expired|unknown), `idleHuman` ("1h 12m"), `ttlMin`+`ttlSource`+`ttlBasis`
+(same honesty contract — unknown auth → an `assumed` 5-min floor, never a silent guess), and
+`lastRequestAt`. Default = the newest MAIN session; `--all` = every session; `--sessionId <id>` = one;
+`--thresholdMinutes N` overrides the TTL with an explicit cutoff (e.g. `60` to probe "more than 1h").
+A `verdict:"unknown"` means no LLM request was recorded for that session.
 
 ## High-value tools (cheat-sheet)
 
@@ -300,11 +352,16 @@ agentlenspro get_cache_break_causes                  # what breaks the cache mac
 | What keeps breaking the cache, machine-wide? | `get_cache_break_causes` |
 | Per-turn break diagnosis of one session | `get_cache_break_timeline --sessionId <id>` |
 | TTL expiry vs real prefix change? | `get_cache_break_gap_report` |
+| **Has a session's cache EXPIRED (idle > its TTL)?** | `check_cache_expiry` — idle since the last LLM request vs the per-session TTL (1h subscription-main, 5min subagent/usage-credits). Per session: `verdict` fresh\|expired\|unknown, `idleHuman`, `ttlMin`/`ttlSource`/`ttlBasis`, `lastRequestAt`. Default = newest main session; `--all` = every session; `--sessionId <id>` = one; `--thresholdMinutes N` overrides the TTL (e.g. `60` = "> 1h idle"). `unknown` = no LLM request recorded |
 | Biggest single cache writes + contents | `trace_expensive_writes` |
 | What did the last janitor heartbeat cost? | `get_heartbeat_cost` |
 | Which config (model/spawn/effort) costs most? | `compare_configs --groupBy <dim>` |
 | Ad-hoc analytics over the fact DB | `run_diagnostics_sql --preset <name>` / `--sql '<SELECT…>'` |
-| Recent sessions / workspace patterns | `get_recent_sessions`, `get_workspace_patterns` |
+| Recent sessions / workspace patterns | `get_recent_sessions` (ranked by LAST ACTIVITY, not start date; rows carry `lastActive` + `active:true` for sessions live in the last 5min — plus the AI session `title`/`entrypoint` when the transcript carries them), `get_workspace_patterns` |
+| **"Show me what was actually SAID and DONE in a session"** | `get_conversation` — the narrative reader: verbatim ordered turns (user prompt → thinking → reply → each tool call with its paired output), sidechain turns labeled, compaction dividers with pre/post/dropped tokens, per-turn duration + usage incl. cache-TTL tier 5m/1h. Progressive: no-arg = per-turn summaries; `--turn N` = that turn verbatim; `--turnFrom/--turnTo` = bounded range. Content lens; `get_context_history` stays the cost/composition lens |
+| **Which sessions still write raw OTEL bodies (restart targets)?** | `get_body_writers` — ranked by recent rate then total; `active` rows wrote within `--active_min` (default 10m) and keep writing until their process restarts. Request-body attribution (responses aggregated); totals = exact store+live union. `--window_min 30 --limit 20` |
+| **Who exhausted the PREVIOUS account's windows (post-rotation autopsy)?** | `get_account_burners` — BOTH the 5h and 7d tables in one call, grouped by project/agent (sessions pooled by workspace) with cache-created + cache-read columns; the window nearer its calibrated capacity at rotation is marked MOST LIKELY EXHAUSTED. Default `--account previous` (also `current`, uuid prefix, email); `--interval last`(default)`/current/<ISO-date>` picks the window end. Time-based attribution: cross-rotation sessions split correctly between accounts |
+| **How long until the CURRENT account's window runs out?** | `get_window_eta` — COST-based ETA (Anthropic meters windows by cost, not tokens): consumed $ vs calibrated $ cap, current $/min, ETA + which window exhausts first. Models the rolling window — says "won't exhaust at this rate" when steady-state fill plateaus below the cap instead of a fictional countdown. `--rate_window_min 30`, `--account current` |
 
 Sibling PATH binary for the janitor heartbeat: `agentlenspro-heartbeat-cost --oneline` prints
 the exact settled cost of the previous heartbeat fire. It ships as a bin of the agentlenspro

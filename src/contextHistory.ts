@@ -1,7 +1,6 @@
 import * as fs from 'fs'
-import * as path from 'path'
 import * as readline from 'readline'
-import { claudeProjectsDirs } from './logReader'
+import { classifyAttachment, findSessionFile } from './contextComposition'
 import { countTokens, calibrateTokens } from './tokenEstimator'
 import type {
   ContextHistory, ContextHistoryStep, ContextBlock, ContextBlockKind, StepDiff,
@@ -29,81 +28,9 @@ const TEXT_BUDGET_BYTES = Math.max(1, Number(process.env.AGENTLENS_HISTORY_TEXT_
 // (see calibrateStepBlocks) so a step's block counts sum to its usage-bucket truth.
 function utf8Len(v: unknown): number { return typeof v === 'string' ? Buffer.byteLength(v, 'utf8') : 0 }
 
-function sumFields(obj: Record<string, unknown>, keys: string[]): number {
-  let n = 0
-  for (const k of keys) n += utf8Len(obj[k])
-  return n
-}
-
-function firstText(obj: Record<string, unknown>, keys: string[]): string {
-  for (const k of keys) { const v = obj[k]; if (typeof v === 'string' && v.length > 0) return v }
-  return ''
-}
-
-function joinedText(v: unknown): string {
-  if (Array.isArray(v)) return v.filter(s => typeof s === 'string').join('\n')
-  return typeof v === 'string' ? v : ''
-}
-
-function joinedLen(v: unknown): number {
-  if (Array.isArray(v)) return v.reduce((n: number, s) => n + utf8Len(s), 0)
-  return utf8Len(v)
-}
-
-// Locate the .jsonl for a sessionId across all Claude project dirs (filename == sessionId). Copied
-// from contextComposition.ts (not exported there) so this module resolves session files identically.
-function findSessionFile(sessionId: string): string | null {
-  for (const dir of claudeProjectsDirs()) {
-    let projects: string[]
-    try { projects = fs.readdirSync(dir) } catch { continue }
-    for (const proj of projects) {
-      const candidate = path.join(dir, proj, `${sessionId}.jsonl`)
-      if (fs.existsSync(candidate)) return candidate
-    }
-  }
-  return null
-}
-
-// Classify one `attachment` entry into a (label, kind, bytes, text). Copied from contextComposition.ts
-// so the injected-content taxonomy is identical; the kind returned here is mapped to a ContextBlockKind
-// by the caller. Returns null for attachment shapes that carry no meaningful injected content.
-function classifyAttachment(att: Record<string, unknown>): { label: string; kind: string; bytes: number; text: string } | null {
-  const t = String(att['type'] ?? '')
-  const hookName = att['hookName'] ? String(att['hookName']) : undefined
-  switch (t) {
-    case 'hook_additional_context':
-    case 'hook_success':
-    case 'hook_non_blocking_error':
-    case 'async_hook_response': {
-      const bytes = sumFields(att, ['content', 'stdout', 'stderr', 'response'])
-      if (bytes === 0) return null
-      return { label: `hook: ${hookName ?? 'unknown'}`, kind: 'hook', bytes, text: firstText(att, ['content', 'stdout', 'stderr', 'response']) }
-    }
-    case 'skill_listing':
-      return { label: 'skill catalog', kind: 'skill', bytes: utf8Len(att['content']), text: firstText(att, ['content']) }
-    case 'deferred_tools_delta':
-      return { label: 'tool catalog', kind: 'toolCatalog', bytes: joinedLen(att['addedLines']), text: joinedText(att['addedLines']) }
-    case 'agent_listing_delta':
-      return { label: 'agent catalog', kind: 'agentCatalog', bytes: joinedLen(att['addedLines']), text: joinedText(att['addedLines']) }
-    case 'mcp_instructions_delta':
-      return { label: 'mcp instructions', kind: 'mcp', bytes: joinedLen(att['addedBlocks']) + joinedLen(att['addedNames']), text: joinedText(att['addedBlocks']) || joinedText(att['addedNames']) }
-    case 'file':
-    case 'edited_text_file':
-    case 'compact_file_reference': {
-      const name = (att['displayPath'] ?? att['filename'] ?? att['path'] ?? 'file') as string
-      const bytes = sumFields(att, ['content', 'text'])
-      if (bytes === 0) return null
-      return { label: `file: ${path.basename(name)}`, kind: 'file', bytes, text: firstText(att, ['content', 'text']) }
-    }
-    case 'task_reminder':
-      return { label: 'task reminder', kind: 'reminder', bytes: utf8Len(att['content']), text: firstText(att, ['content']) }
-    case 'invoked_skills':
-    case 'skill':
-      return { label: 'invoked skills', kind: 'skill', bytes: utf8Len(att['content']), text: firstText(att, ['content']) }
-    default:
-      return null
-  }
-}
+// Session-file resolution AND attachment classification live in contextComposition (the ONE
+// exported resolver/classifier, TRDD-B22NYTOY) — this module previously carried byte-identical
+// private copies (plus their string helpers), which is how drift starts.
 
 // Map classifyAttachment's kind string onto a ContextBlockKind for the block taxonomy.
 function attachmentKind(kind: string): ContextBlockKind {

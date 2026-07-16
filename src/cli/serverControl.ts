@@ -8,6 +8,7 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { apiRequest, dataDir, dashboardUrl, fmtGb, fmtMb, init, mcpEndpoint, sleep } from './cliCore'
+import { agentlensDisabled, killSwitchPath } from './killSwitch'
 
 /** Count of hook events durably spooled to disk but not yet reingested (server was down / shedding).
  *  Zero in the healthy case; a non-zero, non-shrinking value means the daemon isn't draining. */
@@ -33,8 +34,23 @@ export function findServerJs(): string {
 
 function serverLogPath(): string { return path.join(dataDir(), 'server.log') }
 
-/** Start the standalone server if the MCP endpoint is unreachable; wait until it answers. */
+/** Start the standalone server if the MCP endpoint is unreachable; wait until it answers.
+ *
+ *  Honors the GLOBAL kill-switch. This is the LAST hole through which a disabled AgentlensPro could
+ *  resurrect itself, and it was a wide one: every diagnostics tool call goes through here, and the
+ *  project CLAUDE.md tells every Claude session to run diagnostics BEFORE any task — so a disabled
+ *  install came straight back the next time any of the ~16 running sessions started work (observed
+ *  2026-07-14: the server was stopped at 15:07 and was found alive again at 17:43). The hook path was
+ *  already gated; the CLI path was not. A kill-switch with a bypass is not a kill-switch. */
 export async function ensureServer(): Promise<void> {
+  // FIRST — before we even probe the network. A disabled AgentlensPro must cost nothing: no socket,
+  // no retry timeout, and above all no spawn.
+  if (agentlensDisabled()) {
+    throw new Error(
+      `AgentlensPro is DISABLED (${killSwitchPath()}) — refusing to start the server.\n` +
+      'Re-enable with:  agentlenspro enable',
+    )
+  }
   try { await init(); return } catch { /* not up — start it */ }
   const serverJs = findServerJs()
   // stdout/stderr go to a log file, NOT /dev/null — when the server dies at boot (port
@@ -114,6 +130,8 @@ interface ServerStats {
     lastPass: { removedFiles: number; keptBytes: number }
   }
   hookEvents?: { receivedSinceBoot: number; files: number; bytes: number }
+  // TRDD-AMEA4O4Z: gated-out OTEL log events persisted to the sink (absent on pre-sink servers).
+  logEvents?: { persistedSinceBoot: number; files: number; bytes: number; retentionDays: number }
   gate?: { mode: string; checks: number; denies: number; warns: number; advisories: number }
   dataDir: string
 }
@@ -152,6 +170,8 @@ export async function showStatus(): Promise<void> {
     `bodies: archive ${s.bodies.archive.volumes} volume(s), ${s.bodies.archive.entries} lumps, ${fmtGb(s.bodies.archive.bytes)}; last pass archived ${s.bodies.lastPass.removedFiles} (live kept ${fmtGb(s.bodies.lastPass.keptBytes)})`,
     // hookEvents/gate are absent when --status hits a server built before TRDD-Q6ZOUVK5/GOD0108C — skip, don't crash.
     ...(s.hookEvents ? [`hooks:  ${s.hookEvents.receivedSinceBoot} event(s) since boot, ${s.hookEvents.files} bucket(s) ${fmtMb(s.hookEvents.bytes)} on disk`] : []),
+    // logEvents is absent when --status hits a server built before TRDD-AMEA4O4Z — skip, don't crash.
+    ...(s.logEvents ? [`log-events sink: ${s.logEvents.persistedSinceBoot} persisted since boot, ${s.logEvents.files} bucket(s) ${fmtMb(s.logEvents.bytes)} on disk (retention ${s.logEvents.retentionDays}d)`] : []),
     ...(s.gate ? [`gate:   mode=${s.gate.mode} — ${s.gate.checks} check(s), ${s.gate.denies} deny, ${s.gate.warns} warn, ${s.gate.advisories} advisories since boot`] : []),
     `data:   ${s.dataDir} (spans ${fmtMb(per.files.spans)}, cards ${fmtMb(per.files.cards)}, offsets ${fmtMb(per.files.offsets)})`,
   ].join('\n'))
@@ -177,6 +197,16 @@ const HEALTHY_MS = 60_000       // a child that ran this long is "healthy" → r
 const STDERR_TAIL_BYTES = 8 * 1024
 
 export function runSupervise(): void {
+  // The supervisor is the one path that would out-stubborn the kill-switch: it exists to restart the
+  // server forever, so if it ignored the flag, `agentlenspro disable` would stop a server that
+  // launchd immediately brought back. Refuse to supervise a disabled install (exit non-zero so a
+  // supervising launchd surfaces it rather than silently respawning us in a loop).
+  if (agentlensDisabled()) {
+    throw new Error(
+      `AgentlensPro is DISABLED (${killSwitchPath()}) — refusing to supervise.\n` +
+      'Re-enable with:  agentlenspro enable',
+    )
+  }
   const serverJs = findServerJs()
   const crashLog = path.join(dataDir(), 'crash.log')
   const maxOldSpace = String(Number(process.env.AGENTLENS_MAX_OLD_SPACE_MB) || 6144)

@@ -1,8 +1,8 @@
 ---
 name: agentlenspro-publish-pipeline
-description: "how do I release / publish a new version of agentlenspro / npm publish fails E404 Not Found PUT / CI publish rejected / provenance badge missing / can I publish from local / how was the package bootstrapped on npm — the release pipeline, its laws, and the bootstrap history"
+description: "how do I release / publish a new version of agentlenspro / npm publish fails E404 Not Found PUT / CI publish rejected / provenance badge missing / can I publish from local / how was the package bootstrapped on npm / zizmor flags the workflows / where are the SBOM and checksums for a release / my zizmor ignore comment is not working — the release pipeline, its laws, and the bootstrap history"
 ocd: 2026-07-11
-lmd: 2026-07-11
+lmd: 2026-07-16
 metadata:
   node_type: memory
   type: project
@@ -40,6 +40,18 @@ attestation automatic), and creates the GitHub Release. Verified live: v1.0.1 (r
 - Trusted-publisher admin via CLI: `npm trust list|github|revoke` (npm ≥ 11.15, one
   interactive 2FA tap by design). Deep procedures: user-scope skills `npm-oidc-publishing`
   + `npm-pre/post-publish-checklist`.
+- **Provenance artifacts on every Release** (TRDD-OMMPS5TF, 3cc7574): the package job
+  generates `SHA256SUMS.txt` over the tarball + an SPDX SBOM (anchore/sbom-action,
+  SHA-pinned) and attaches both as Release assets beside the tarball; `docker.yml` builds
+  with `provenance: mode=max` + `sbom: true` (buildx attestations on the image manifest).
+  The attest step's SUBJECT stays the tarball alone — SBOM/checksums ride as assets, they
+  are not attestation subjects.
+- **Workflow hardening laws** (zizmor 0 findings since 3cc7574): ALL actions SHA-pinned
+  (first-party included — release paths sign attestations); `persist-credentials: false`
+  on every checkout; NO dependency cache (`cache: pnpm`) in release-path jobs
+  (cache-poisoning surface — ci.yml keeps its cache, CI ≠ release). A zizmor inline
+  ignore only registers as its OWN comment marker `# zizmor: ignore[rule]` — appending
+  the ignore text inside an existing pin comment does nothing.[^4]
 
 History: 1.0.0 was the sanctioned LOCAL bootstrap publish (2026-07-11, browser/passkey
 auth from a detached worktree of main — the registry cannot attach a trusted publisher to
@@ -72,3 +84,12 @@ after, and every release since is CI-only. See also [[agentlenspro-identity]],
   (git-archive / .dockerignore-excluded), never the dirty working tree — npm's
   build-before-pack hid the same class on the npm side; (c) a `vX.Y.Z` tag fans out to
   TWO publish workflows — check both conclusions.
+[^4]: [ocd:2026-07-16 lmd:2026-07-16] two traps from the TRDD-OMMPS5TF hardening pass:
+  (a) DO NOT append `zizmor: ignore[rule]` inside an existing comment (e.g. the SHA-pin
+  version comment), BECAUSE zizmor only recognizes the ignore when it is its own `#`-marked
+  comment on the line — the finding silently persists. DO give the ignore its own
+  `# zizmor: ignore[rule]` marker. (b) DO NOT auto-"fix" `publish.yml:27
+  id-token-write-unscoped` findings, BECAUSE it is a FALSE POSITIVE here — `id-token:
+  write` is already job-scoped (package job: attest-build-provenance; publish job: npm
+  OIDC) and Actions permissions cannot be scoped tighter than per-job. DO verify scoping
+  against the live file before acting on that detector.

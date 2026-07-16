@@ -6,6 +6,236 @@ All notable changes to AgentlensPro are documented here.
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-07-16
+
+### Added
+
+- **`get_conversation` — the narrative per-turn session reader (TRDD-B22NYTOY).** Reconstructs a
+  session as a readable conversation, verbatim from its `.jsonl` transcript: each user prompt, the
+  assistant's thinking and reply, every tool call with its input AND paired output
+  (`tool_use_id`), subagent (sidechain) turns labeled, compaction boundaries with exact
+  pre/post/dropped token counts, per-turn wall duration, and usage including the cache-TTL tier
+  split (ephemeral 5m/1h). Assistant streaming chunks merge by `message.id`; blocks stay in
+  verbatim order (never merged — `get_context_history` remains the composition/cost lens).
+  Harvests the transcript signals nothing parsed before: `system/turn_duration`,
+  `system/compact_boundary`, `ai-title`, `agent-name`, `entrypoint`,
+  `usage.cache_creation.ephemeral_5m/1h`. Progressive drill-down (`--turn N`,
+  `--turnFrom/--turnTo`); served to the dashboard at `GET /api/conversation/:id`.
+
+- **Dashboard Transcript sub-tab — the session as a readable conversation (TRDD-B22NYTOY).**
+  Every session's drill-in gains a Transcript view: role-colored turns (user amber / assistant
+  blue / subagent violet), user prompts and assistant replies open as wrapped text, thinking and
+  tool input/output as collapsibles that grow the page (no inner scrollbars), compaction dividers
+  with pre→post token counts, last-300 paging with "Show earlier turns". Header shows the AI
+  session title, entrypoint badge, and totals (incl. cache-read and 1h-tier volume).
+
+- **Session cards carry the AI-generated title and entrypoint (TRDD-B22NYTOY).** The log parser
+  harvests `ai-title` (latest wins) and the top-level `entrypoint` field (first wins) into
+  `card.title`/`card.entrypoint`; the Sessions list headlines the title when present (the first
+  prompt moves to the tooltip). Forward-only: a session gets its title on its next transcript
+  append/scan — dormant snapshot-served sessions keep the prompt headline.
+
+- **Setup environment probe — heuristic incompatibility checks, Windows is WSL2-only
+  (TRDD-KVDT1XMS).** `agentlenspro setup` now opens with a read-only environment step: platform
+  and WSL detection, Node version vs the `engines.node` floor, runtime-dep resolvability
+  (`@duckdb/node-api` hard, `sql.js` degradable), a foreign-process-on-the-OTLP-port heuristic,
+  `~/.claude` presence, and free-disk. Hard incompatibilities fail fast BEFORE anything is
+  touched; native win32 is refused with WSL2 guidance (macOS + Linux + Windows-via-WSL2 are the
+  supported platforms). CLI help and the diagnostics skill document the probe and the platform
+  matrix.
+
+### Changed
+
+- **`get_recent_sessions` ranks by LAST ACTIVITY, not start date (TRDD-RS3NGN53).** A
+  long-running session still emitting spans now ranks first instead of falling off the top-10
+  behind fresh idle sessions. Rows gain `lastActive`, `active: true` (within a 5-minute liveness
+  window; absent when idle), and the session `title`/`entrypoint` when the transcript carries
+  them.
+
+### Security
+
+- **MCP endpoint hardened like the UI server (review sweep).** The standalone MCP HTTP endpoint
+  no longer sends `Access-Control-Allow-Origin: *` — the origin policy is now shared with the UI
+  server (`src/httpOrigin.ts`, one source of truth): allowed same-origin/loopback origins are
+  echoed, anything else gets no ACAO and cross-origin browser POSTs are refused with 403 before a
+  tool executes. Request bodies are hard-capped at 4 MB (the one previously uncapped POST body —
+  an OOM vector), and the per-request transport is closed on response `close` (it used to leak on
+  handler rejection). Bonus fix the new tests surfaced: IPv6 loopback origins (`http://[::1]`)
+  were silently refused because WHATWG `URL.hostname` keeps the brackets — now allowed as intended.
+
+- **Release-path provenance hardening (TRDD-OMMPS5TF).** Every GitHub Release now ships
+  `SHA256SUMS.txt` and an SPDX SBOM (anchore/sbom-action, SHA-pinned) next to the tarball; the
+  Docker image is built with `provenance: mode=max` + `sbom: true` attestations. All first-party
+  actions across ci/publish/docker workflows are SHA-pinned, every checkout sets
+  `persist-credentials: false`, and the release path installs dependencies cold (no cache — a
+  poisoned store must not flow into signed artifacts). zizmor: 0 high/medium/low findings.
+
+- **Log-event sink — gated-out OTEL log events are persisted, never dropped (TRDD-AMEA4O4Z).**
+  The OTLP rich-event gate converts only `api_request`/`compaction`/`api_error`/
+  `api_retries_exhausted` + `tool_result` into spans; everything else (`user_prompt`,
+  `assistant_response`, `tool_decision`, `hook_execution_*`, `mcp_server_connection`,
+  `plugin_loaded`, `hook_registered`, `skill_activated`, `subagent_completed`) used to be counted
+  and DISCARDED — several of those exist nowhere else (permission decisions and lifecycle events
+  are not in the transcripts). Now every rejected event is appended in full (merged attributes,
+  ids, body) to `~/.agentlens/log-events/YYYY-MM-DD.ndjsonl`, with a new retention knob
+  `AGENTLENS_LOG_EVENTS_RETENTION_DAYS` (default 31). `server status` gains a `log-events sink:`
+  line; `/api/server-stats` gains `logEvents`. The generic daily-bucket machinery was extracted
+  to `src/ndjsonBuckets.ts` (shared with hook-events — the purge date logic has a subtle
+  overflow-date trap and must have exactly one implementation).
+
+## [2.7.0] - 2026-07-15
+
+### Added
+
+- **`get_window_eta` — how long until the current account exhausts its rate-limit windows, by COST.**
+  `agentlenspro get_window_eta` projects time-to-exhaustion on dollars, not tokens: Anthropic meters
+  the 5h/7d windows by cost (cache-read weighted ~0.1×), so a token projection over-counts the
+  ~96%-cache-read stream. Returns both windows with consumed $ vs the calibrated $ cap, % used, the
+  account's current $/min (over `--rate_window_min`, default 30), an ETA, and marks which window
+  EXHAUSTS FIRST. It models the ROLLING window correctly: a window sheds consumption older than its
+  length, so at a steady rate it plateaus at rate×length — if that is below the cap the window
+  **cannot** exhaust at that rate and the tool says so (a plateau, not a fictional countdown) rather
+  than reporting an impossible multi-window ETA. The rate is the account's own burn (rate limits are
+  per OAuth account); capacity is the account's observed calibration, else a same-plan account's as a
+  labeled proxy, else no ETA is projected (never guessed). (TRDD-8ZMZ4I6B)
+
+- **`get_account_burners` — who exhausted a given OAuth account's rate-limit windows.** After a
+  forced account rotation, `agentlenspro get_account_burners` (default `--account previous`) answers
+  in one call with BOTH windows — a 5h table and a 7d table, each grouped by PROJECT/agent (sessions
+  pooled by workspace, so a restarted agent stays one row) with share%, billable-weighted equiv
+  (input×1, output×5, cacheRead×0.1, cacheCreate×1.25), cost, explicit **cache-created** and
+  **cache-read** token columns, session count and top model; per-session rows ride in the JSON. The
+  window nearer/over its calibrated capacity at the rotation moment is marked **MOST LIKELY
+  EXHAUSTED** (the rotation trigger) — capacity from the account's own auto-calibration, else a
+  same-plan account's as a labeled proxy, else the verdict says undetermined rather than guessing.
+  `--interval` chooses the window end: `last` (default — the account's rotation-out moment, the
+  windows it last filled), `current` (ongoing, ends now), or an ISO date (the windows ending at that
+  instant). Attribution is TIME-based against the machine's account-state timeline (one OAuth token
+  is active machine-wide at a time), so a session alive across a rotation splits correctly between
+  the two accounts instead of pooling onto one card. Fills the gap between `investigate_burn`
+  (window culprits, but no account filter) and `get_window_budget` (per-account, but no ranking).
+  Coverage gaps are disclosed — totals older than the event sources reach are labeled a lower bound.
+  (TRDD-1XM0YSWQ)
+
+- **`get_body_writers` — which sessions are still writing raw OTEL bodies, ranked.** A session keeps
+  its launch-time `OTEL_LOG_RAW_API_BODIES` env until restarted, so stale sessions keep writing
+  ~0.7–1.9 MB request bodies per LLM call. The new diagnostic (`agentlenspro get_body_writers
+  [--window_min 30] [--active_min 10] [--limit 20]`) names each writer session with its workspace and
+  model, its recent write rate (MB/min over the window), an `active` flag (wrote within
+  `--active_min`), and its total bytes — ranked by rate, then total, so the terminals to restart are
+  the top rows. Attribution unit is the request body (its tail carries `session_id`; responses carry
+  no session metadata and are reported in aggregate, never guessed). Totals are the exact union of
+  the ingested store history and not-yet-ingested live files — a file present in both is counted
+  once — and a down/absent store degrades to live-dir-only with an explicit note. (TRDD-1FEIW17E)
+
+- **`check_cache_expiry` — is a session's prompt cache expired yet?** A new diagnostic that
+  measures idle time since a session's last LLM (`api_request`) call and compares it to that
+  session's TTL — 1h for a subscription main conversation, 5min for a subagent (always) or a
+  usage-credits/API session — so `expired` means the cached prefix was likely evicted and the next
+  request pays a full cache-creation write (~1.25× the prefix). Per session it returns `verdict`
+  (fresh|expired|unknown), `idleHuman` (e.g. "1h 12m"), `ttlMin`/`ttlSource`/`ttlBasis` (the same
+  honesty contract as the rest of the TTL surface — unknown auth surfaces an `assumed` 5-min floor,
+  never a silent guess), `lastRequestAt`, and a human `reason`. Default target is the newest MAIN
+  session (`agentlenspro check_cache_expiry`); `--all` covers every session, `--sessionId <id>` one,
+  and `--thresholdMinutes N` overrides the TTL with an explicit cutoff (e.g. `60` to probe "> 1h
+  idle"). Reuses the doc-verified TTL classifier (`src/shared/cacheTtl.ts`) — no TTL number is
+  re-declared. Pure core in `src/cacheExpiry.ts` (15 unit tests). (TRDD-OCNHOHE9)
+
+- **Global kill switch — `agentlenspro disable [reason]` / `agentlenspro enable`.** A single flag
+  file now disarms every hook, the burn-gate, server auto-revive, and background ingestion in
+  **every** Claude Code session already running, on that session's very next hook fire — no
+  restart needed, which a `settings.json` edit cannot achieve (a running session keeps using the
+  config it loaded at launch). `disable` also stops a running server and turns raw-body capture
+  off (removing `OTEL_LOG_RAW_API_BODIES` from `settings.json`), so "disabled" actually means
+  nothing is still writing. `enable` clears the flag; hooks resume on their next fire.
+  (TRDD-K3WDPR7M)
+
+- **Raw-body capture is now opt-in, off by default.** `agentlenspro config set captureRawBodies
+  on|off` (env `AGENTLENS_CAPTURE_RAW_BODIES`) toggles it. Turning it on (macOS only) mounts a
+  RAM-disk spool (`AgentLensSpool`, 2 GB default, `AGENTLENS_SPOOL_MB` to resize), points
+  `OTEL_LOG_RAW_API_BODIES` at the spool instead of a real disk path, and installs a boot-remount
+  LaunchAgent (`agentlenspro spool ensure`) so a reboot doesn't strand capture pointed at a
+  vanished RAM disk. If the RAM disk cannot be created, capture is refused rather than silently
+  falling back to writing raw bodies to the SSD. Previously this was force-armed on every server
+  boot with no way to turn it off. (TRDD-BKF5NZD3)
+
+- **Content-addressed body store — fileless DuckDB → immutable zstd Parquet.** Captured bodies are
+  now ingested into `<dataDir>/store/` and deduplicated across turns instead of accumulating as
+  loose JSON files or feeding an ever-growing gzip archive. A body is deleted from its source only
+  after it is proven to reconstruct byte-identically from the durable store (verify, then delete).
+  Measured on this project's own captured history: ~52 GB of raw bodies (live capture plus the
+  drained legacy `.wad` archive) compressed to ~270 MB of Parquet on disk (~190×), with every body
+  verified byte-identical at ingest time, then re-proven by an independent full-corpus validation
+  sweep — 328,606/328,606 spans content-address OK and 100,600/100,600 bodies reconstructing to
+  the exact sha256 of their original source files, zero dangling references
+  (`reports/storage-migration/20260715_003054+0200-backfill-and-drain.md`). A smaller,
+  independently-run dry run measured 167× (4.00 GB → 24 MB, 7,439/7,439 bodies verified).
+  `--export-bodies` now reads from both the store and the legacy `.wad` archive (kept as a
+  read-only fallback, never deleted automatically), so a time-window export can no longer silently
+  miss a body that has already been reclaimed from disk. (TRDD-K3WDPR7M)
+
+- **Delta persistence for session/offset state.** `log-sessions.json` and `log-offsets.json` no
+  longer get rewritten in full on every save — previously ~9.4 MB/min of device writes combined,
+  regardless of how much actually changed. Only the records that changed are now appended to a
+  delta log, with periodic compaction back into a fresh snapshot. (TRDD-K3WDPR7M)
+
+- **Verify-before-delete is now a universal invariant, not just a body-store rule.** Every code
+  path that deletes a source after ingesting it first proves the durable store holds *all* of that
+  record's data — the exact bytes *and* the `(src_name, capture-time)` row (±2s) — through one
+  shared gate (`src/store/verifyInStore.ts`) so the bar cannot drift apart per call site.
+  Byte-identity alone is not enough: the first backfill held every byte perfectly (hash-proven
+  twice) while stamping 100,600 rows with ingest time instead of capture time, so a bytes-only gate
+  would have blessed broken metadata. The gate now guards the live/spool reclaim, the legacy `.wad`
+  drain, the retention purge, and the explicit purge endpoint. Two lifecycle sources previously
+  trusted on faith are now gated the same way: appended hook-event lines are read back from their
+  daily bucket byte-for-byte before the spool file is unlinked, and delta-log compaction re-parses
+  the candidate snapshot from disk (record count + per-record hash) before the delta is dropped, so
+  a short or corrupt snapshot write aborts with the old snapshot and the delta both intact. A hook
+  payload that can never ingest (unparseable, or rejected with a 400) is now **quarantined** to
+  `hook-spool/rejected/` rather than deleted — it is still data. `POST /api/bodies/purge` now
+  verifies each archive volume individually and returns `{removed, kept, freedBytes}`; an unproven
+  volume is kept and named, and the `.idx` sidecars are always retained. (TRDD-K3WDPR7M)
+
+- **Store schema v2 — capture-time recovery.** A staged migration (`src/store/tsRecovery.ts`,
+  `migrate.ts`, `CURRENT_SCHEMA=2`) corrects `body.ts` from the archive `.idx` sidecars' ground
+  truth and materializes **alias rows** so content captured under several names has one queryable
+  row per name — previously content-dedup meant the second and later names got no row at all. It
+  runs the store's crash-safe migration protocol (build in `<dir>.migrating`, full validation,
+  body-id set-equality, atomic swap, old store kept as `.old-v<from>`) and aborts with the live store
+  untouched on any alias it cannot prove. **Not every timestamp is recoverable, and the docs do not
+  pretend otherwise:** of the ~100,600 backfilled rows, the ~78,031 that join an archive `.idx` can
+  be corrected to their true capture time, but the remaining ~22,569 were reclaimed from live files
+  that had already been deleted (no `.idx` to recover from) — their capture times are unrecoverable,
+  so those rows keep their ingest-time `ts`. Inventing a capture time would be fabrication. Related:
+  `ingestBody` now records a `(src_name, ts)` row for every capture event even when the content
+  dedups, so a duplicate-content capture is still queryable by name and can pass the
+  verify-before-delete gate. (TRDD-K3WDPR7M)
+
+### Fixed
+
+- **Server CPU spin under sustained load.** The dashboard rebuild is now memoized (an unchanged
+  model is not rebuilt), and log scanning is now targeted at the specific paths `fs.watch` names
+  instead of a full directory sweep on every tick, with a 60-second full sweep kept only as a
+  correctness backstop for events the watcher coalesces or misses. Measured under identical
+  synthetic load: 17.1% → 3.0% CPU with one writing session, 28.8% → 8.2% with four.
+  (TRDD-X2E6OSWK)
+
+- **Transcript tailer could resume mid-file on a replaced transcript.** Claude Code ≥2.1.208
+  prunes superseded file-history backups from session transcripts (replace-by-rename ⇒ new
+  inode), breaking the old append-only assumption. The live tail's resume guard checked only
+  that the file had not shrunk — a prune combined with an append inside one scan interval can
+  leave the new file at least as large as the old read offset, and the tailer would then resume
+  mid-file on a different file, welding misaligned bytes onto the stale session accumulator.
+  The resume guard now also requires the inode to match (the boot-time offset import already
+  did); any replacement rebuilds the card from offset 0. (TRDD-K3WDPR7M)
+
+- **The bundle build silently never shipped the body store.** `@duckdb/node-api` loads prebuilt
+  native `.node` binaries that esbuild cannot bundle, so every build since the store landed
+  failed — and because a failed esbuild leaves the previous outfile untouched, the stale
+  `standalone/server.js` looked current while containing none of the new code. The package is now
+  marked `external` in both node bundle targets and resolves from `node_modules` at runtime (it is
+  a declared runtime dependency — the same stance `sql.js` already takes). (TRDD-K3WDPR7M)
+
 ## [2.6.0] - 2026-07-13
 
 ### Added

@@ -13,6 +13,7 @@ import * as path from 'path'
 import * as os from 'os'
 import { exec, execFile } from 'child_process'
 import { summarizeSpans } from '../src/spanSummarizer'
+import { VersionedCache } from '../src/derivedCache'
 import { mergeOtelAndLogSessions, linkSubagentTranscripts } from '../src/feedMergePolicy'
 import { calcTokenCostUsd } from '../src/shared/pricing'
 import { contextTokens } from '../src/shared/tokenBuckets'
@@ -22,15 +23,17 @@ import { ensureTelemetryConfig, ensureAgentLensStopHook } from '../src/telemetry
 import { classifyOtlpPayload } from '../src/otlpParser'
 import { resolveLogEventName, bareLogEventName, CLAUDE_RICH_LOG_EVENTS, BODY_POINTER_LOG_EVENTS } from '../src/otlpLogEvents'
 import { startMcpHttpServer, labelBurnStatusAccounts } from '../src/mcpServer'
+import { isDisallowedCrossOrigin, setAllowedOriginCors } from '../src/httpOrigin'
 import { resolveCallContext, callBodyRegistry } from '../src/rawBodyContext'
-import { appendHookEvent, readHookEvents, purgeHookEventBuckets, hookEventsDiskUsage, type HookEventRecord } from '../src/hookEventStore'
+import { appendHookEvent, readHookEvents, purgeHookEventBuckets, hookEventsDiskUsage, verifyAppendedLine, quarantineSpoolFile, type HookEventRecord, type AppendPosition } from '../src/hookEventStore'
+import { buildDroppedLogEventRecord, appendDroppedLogEvent, purgeLogEventBuckets, logEventsDiskUsage } from '../src/logEventSink'
 import { BodiesActivityTracker } from '../src/bodiesActivity'
 import { evaluateAgentGate, evaluateSendMessageGate, buildAdvisory, readTranscriptContext, resolveMessageTargetLiveness, type AgentGateState, type GateThresholds, type LaunchSpawner } from '../src/agentGate'
 import { checkBurnRisk } from '../src/burnGuard'
 import { loadHookRuntimeConfig, saveHookRuntimeConfig } from '../src/hookRuntimeConfig'
 import { ContextCompositionIndex } from '../src/contextCompositionIndex'
 import { LogReader, claudeProjectsDirs, type OpenCodeSqlFactory } from '../src/logReader'
-import { readScratchFile } from '../src/generatedFiles'
+import { readScratchFile, scratchListingStats } from '../src/generatedFiles'
 import { StatuslineUsageReader } from '../src/statuslineUsage'
 import {
   loadBurnConfig, gatherConsumptionEvents, computeBurnStatus, computeSessionStatus,
@@ -45,16 +48,27 @@ import { AccountStateTimeline, buildAccountStateRecord } from '../src/accountSta
 import { classifyTtlRegime, type SessionTtlKind, type TtlContext } from '../src/shared/cacheTtl'
 import { buildContextComposition, resolveLoggedAncestor } from '../src/contextComposition'
 import { buildContextHistory } from '../src/contextHistory'
+import { buildConversation } from '../src/conversation'
 import { generateSuggestions } from '../src/instructionAdvisor'
 import { detectInstructionFiles, appendSuggestion } from '../src/instructionFiles'
 import { atomicWriteFileSync, heapPressure, RequestLog } from '../src/serverRuntime'
 import { SegmentedSpanStore, migrateLegacySpansFile, spanTimestampMs } from '../src/segmentedSpanStore'
-import { appendToArchive, purgeArchiveVolumes, archiveDiskUsage, extractArchive } from '../src/bodyArchive'
+// appendToArchive is GONE: bodies now go into the content-addressed store, not a gzip .wad lump
+// (TRDD-K3WDPR7M Phase 3). The read/purge helpers stay — the existing .wad volumes still hold real
+// history that has not been migrated yet.
+import { purgeArchiveVolumes, archiveDiskUsage, extractArchive } from '../src/bodyArchive'
+import { openStore, allOf, type Store } from '../src/store/db'
+import { DEFAULT_MAX_BYTES_PER_PASS, ingestPass } from '../src/store/ingestPass'
+import { verifyVolumeInStore } from '../src/store/archiveVerify'
+import { rawBodyCaptureEnabled, spoolDirConfigured } from '../src/captureConfig'
+import { ensureRamDisk, ramDiskInfo, spoolSizeMb } from '../src/ramdisk'
+import { exportBodiesFromStore } from '../src/store/bodyStore'
 import {
-  loadLogOffsets, saveLogOffsets, loadPersistedCards, savePersistedCards,
+  loadLogOffsets, loadPersistedCards,
   recordCollectorStart, recordCollectorHeartbeat, recordCollectorStop, computeCollectorGaps,
-  type LifecycleStore,
+  LOG_INGEST_VERSION, type LifecycleStore, type PersistedFileState,
 } from '../src/collectorState'
+import { DeltaLog } from '../src/store/deltaLog'
 import type { Span } from '../src/shared/telemetryTypes'
 import type { SessionSummaryCard, CollectorGap } from '../src/shared/summarizerTypes'
 import { CodexSessionNormalizer } from '../src/codexSessionNormalizer'
@@ -70,6 +84,20 @@ const BIND_HOST  = process.env.BIND_HOST ?? '127.0.0.1'
 
 const mediaDir  = path.join(__dirname, '..', 'media')
 const DATA_DIR  = process.env.DATA_DIR ?? path.join(os.homedir(), '.agentlens')
+
+// THE KILL-SWITCH, ENFORCED AT THE CHOKEPOINT (TRDD-K3WDPR7M). Guarding the CLI's spawn sites was
+// not enough: on 2026-07-15 a server booted 3 minutes after `agentlenspro disable` through a spawn
+// path that carried no guard (`setup` had none; a hook's revive raced the flag) — and a running
+// writer during the store migration's atomic swap would have stranded fresh bodies in the renamed
+// old dir, i.e. real data loss. Guarding N call sites always misses the N+1th; the ONE spawn path
+// every future caller must pass through is this process's own boot, so the flag is honored HERE,
+// before any port binds, any store opens, or any timer arms. `agentlenspro enable` removes the flag
+// and the next hook revives the server normally.
+if (fs.existsSync(path.join(DATA_DIR, 'DISABLED'))) {
+  console.error(`[AgentLens] DISABLED flag present (${path.join(DATA_DIR, 'DISABLED')}) — server refusing to boot.`)
+  console.error('Re-enable with:  agentlenspro enable')
+  process.exit(78) // EX_CONFIG: a deliberate refusal, distinguishable from a crash
+}
 // Retention knobs resolved once at boot: env var > DATA_DIR/config.json > built-in default (min-floored
 // inside resolveKnob). The config.json layer makes retention PERSISTENTLY settable — it survives a
 // repo delete / uninstall / upgrade like the data it governs, and the launchd daemon (whose own env a
@@ -81,14 +109,36 @@ const RET = resolveRetention(DATA_DIR, process.env)
 const SPANS_DIR = path.join(DATA_DIR, 'spans')
 const LEGACY_SPANS_FILE = path.join(DATA_DIR, 'spans.json')
 // TRDD-PJC8N1HO — durable-state sidecars (all under DATA_DIR, all written atomically):
-const OFFSETS_FILE   = path.join(DATA_DIR, 'log-offsets.json')     // spec 3: logReader tail offsets
-const CARDS_FILE     = path.join(DATA_DIR, 'log-sessions.json')    // spec 3: stripped log cards (fast restart)
+const OFFSETS_FILE   = path.join(DATA_DIR, 'log-offsets.json')     // legacy whole-file sidecar — migration source only (see offsetsLog below)
+const CARDS_FILE     = path.join(DATA_DIR, 'log-sessions.json')    // legacy whole-file sidecar — migration source only (see cardsLog below)
 const LIFECYCLE_FILE = path.join(DATA_DIR, 'collector-lifecycle.json') // spec 2: start/stop/heartbeat log
 const REQUEST_LOG    = path.join(DATA_DIR, 'requests.log')         // spec 6: one line per HTTP request
 
 // Ensure DATA_DIR exists before any sidecar is written (lifecycle/offsets/crash all live here). The
 // spans loader below also mkdir's it, but the lifecycle start marker fires first, so do it up front.
 try { if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true }) } catch { /* best effort */ }
+
+// TRDD-K3WDPR7M Phase 4: delta-log persistence for the two heaviest sidecars — append-only NDJSON
+// (snapshot + delta) instead of rewriting the whole file every interval. Keyed by each record's own
+// id, so save() diffs record-by-record and writes ONLY what changed (was: 31.6MB/300s + 3.1MB/60s
+// unconditionally — ~9.4MB/min of pure SSD wear). OFFSETS_FILE/CARDS_FILE above are migration sources
+// only from here on — never written again.
+const cardsLog = new DeltaLog<SessionSummaryCard>(DATA_DIR, 'log-sessions')
+const offsetsLog = new DeltaLog<PersistedFileState>(DATA_DIR, 'log-offsets')
+
+// DeltaLog has no notion of LOG_INGEST_VERSION (unlike the old {v, cards}/{v, offsets} wrapper it
+// replaces) — without an external stamp, a future semantics bump would silently keep serving
+// stale-semantics records forever instead of forcing the cold rescan collectorState.ts documents.
+// Written only after a successful save (saveCardsNow/saveOffsetsNow) or a version-confirmed migration,
+// so a crash before the first post-bump save leaves the marker stale too and the NEXT boot correctly
+// retries the cold rescan rather than trusting a half-migrated delta log.
+const DELTA_VERSION_FILE = path.join(DATA_DIR, 'log-delta-version.json')
+function deltaVersionIsCurrent(): boolean {
+  try { return (JSON.parse(fs.readFileSync(DELTA_VERSION_FILE, 'utf8')) as { v?: unknown }).v === LOG_INGEST_VERSION } catch { return false }
+}
+function stampDeltaVersion(): void {
+  try { atomicWriteFileSync(DELTA_VERSION_FILE, JSON.stringify({ v: LOG_INGEST_VERSION })) } catch { /* best effort, mirrors the lifecycle stamps elsewhere */ }
+}
 
 // spec 6: request log (ring buffer + rotating file) so any future crash is attributable to a request.
 const requestLog = new RequestLog(REQUEST_LOG)
@@ -128,6 +178,37 @@ const BUILD_ID = computeBuildId()
 let spans: Span[] = []
 let sseClients: http.ServerResponse[] = []
 
+// TRDD-X2E6OSWK — the cache key for every DERIVED view of the ingested data.
+//
+// `spans` and `logSessions` are the ONLY inputs to the dashboard model (summary → stripped summary →
+// sidebar → analytics). Rebuilding that model is expensive (a 120s profile of the live server
+// measured the rebuild storm at ~19% of wall-clock CPU), and it was being rebuilt from scratch on
+// every push, every burn tick and every API request. So: every mutation of either input bumps this
+// counter, and each derived value is memoized against it (VersionedCache). Same version ⇒ the
+// rebuild is provably redundant, so skipping it cannot serve stale data — only save the CPU.
+//
+// It is a plain counter and NOT a timestamp: two mutations inside the same millisecond must produce
+// two distinct versions, or the second one's data would be invisible until a third arrived.
+let dataVersion = 0
+function markDataChanged(): void { dataVersion++ }
+
+// The derived-view caches. They are the CPU fix's other half: the dashboard model was rebuilt from
+// scratch by EVERY caller — the coalesced push, the 4s burn tick, and ~10 API/MCP routes — so one
+// second of normal traffic could re-run summarizeSpans over the whole span window several times over
+// IDENTICAL inputs. Memoizing on `dataVersion` makes them all share ONE rebuild per actual data
+// change. Pure memos: same version in ⇒ identical value out.
+//
+// DECLARED HERE, not next to the builders that use them, and that placement is LOAD-BEARING: module
+// init already calls buildSessionSummary() (the resident-blob scan → compositionProjectResolver runs
+// during startup), and esbuild's CJS output hoists a later `const` to `undefined` instead of raising
+// a TDZ error — so a declaration further down silently produced
+// "TypeError: Cannot read properties of undefined (reading 'get')" inside a swallowed catch. Keep
+// every cache above the first caller.
+const summaryCache = new VersionedCache<ReturnType<typeof summarizeSpans> | null>()
+const strippedCache = new VersionedCache<ReturnType<typeof summarizeSpans> | null>()
+const sidebarCache = new VersionedCache<ReturnType<typeof computeSidebarData> | null>()
+const analyticsCache = new VersionedCache<ReturnType<typeof computeAnalyticsData> | null>()
+
 // In-memory model: `spans` is the rolling SUMMARIZATION WINDOW, bounded by TIME, never by a
 // span count. The old MAX_SPANS=50k cap existed because the flat array grew unbounded under
 // the full firehose and OOM-killed the process (~4GB heap in ~19 min ⇒ ~175 spans/sec, so the
@@ -155,6 +236,7 @@ const persistStats = {
   offsetsWrites: 0, offsetsBytes: 0,
   cardsWrites: 0, cardsBytes: 0,
   hookEventWrites: 0, hookEventBytes: 0,
+  logEventWrites: 0, logEventBytes: 0,
   gateChecks: 0, gateDenies: 0, gateWarns: 0, gateAdvisories: 0,
   bodiesLastPurge: { at: 0, removedFiles: 0, freedBytes: 0, keptFiles: 0, keptBytes: 0 },
 }
@@ -173,6 +255,7 @@ try {
 // Nothing is evicted: older spans stay on disk and remain loadable by range.
 try {
   spans = spanStore.loadRange(Date.now() - SUMMARY_WINDOW_MS, Infinity)
+  markDataChanged()
   const st = spanStore.stats()
   console.log(`[AgentLens] Loaded ${spans.length} span(s) (last ${Math.round(SUMMARY_WINDOW_MS / 3600e3)}h window) from ${SPANS_DIR} — store holds ${st.totalSpans} span(s) across ${st.segments} segment(s), nothing evicted`)
 } catch (e) {
@@ -208,6 +291,7 @@ function flushSpanAppends(): void {
   // Live appends keep `spans` roughly time-ordered, so only filter when the head has aged out.
   if (spans.length > 0 && spanTimestampMs(spans[0]) < cutoff) {
     spans = spans.filter(s => spanTimestampMs(s) >= cutoff)
+    markDataChanged()   // the summarization window shrank — every derived view must be rebuilt
   }
 }
 const spanFlushTimer = setInterval(flushSpanAppends, SAVE_INTERVAL_MS)
@@ -221,6 +305,7 @@ function clearPersistedSpans(): void {
 function addSpan(span: Span) {
   if (span.receivedAt === undefined) span.receivedAt = Date.now()
   spans.push(span)
+  markDataChanged()
   spanStore.append(span) // O(record): buffered, appended by the flush tick — never a rewrite
 }
 
@@ -235,73 +320,149 @@ function addSpan(span: Span) {
 // The live-size cap (AGENTLENS_BODIES_MAX_GB, default 8) is an emergency valve that archives
 // oldest-first — it also never deletes. The only true deletion is whole archive volumes older
 // than the retention window. Every pass is logged; a silent cap would read as data loss.
-const BODIES_DIR = path.join(DATA_DIR, 'otel-bodies')
+const LEGACY_BODIES_DIR = path.join(DATA_DIR, 'otel-bodies')
 const BODIES_ARCHIVE_DIR = path.join(DATA_DIR, 'otel-bodies-archive')
 const BODIES_MAX_AGE_MS = RET.bodiesMaxAgeHours * 3600e3
 const BODIES_MAX_BYTES = RET.bodiesMaxGb * 1024 ** 3
 const BODIES_RETENTION_DAYS = RET.bodiesRetentionDays
 
+// ── RAM-disk spool resolution (TRDD-K3WDPR7M Phase 3) ─────────────────────────
+// When raw-body capture is ON, Claude Code writes bodies to a RAM-disk spool so the ~30 GB/day of
+// writes land in volatile memory, not the SSD. Resolve it HERE, at boot, re-creating the spool if a
+// reboot cleared it — BEFORE the first drain. If it cannot be (re)created, we must NOT ingest from the
+// configured spool path (its RAM disk is gone); we drain ONLY the legacy dir so leftovers from stale
+// sessions are still reclaimed, and say so loudly rather than ingest from a wrong dir.
+const CAPTURE_ON = rawBodyCaptureEnabled(DATA_DIR, process.env)
+let SPOOL_MODE = false
+let SPOOL_SIZE_BYTES = 0
+let PRIMARY_BODIES_DIR = LEGACY_BODIES_DIR
+if (CAPTURE_ON) {
+  const configured = spoolDirConfigured(DATA_DIR)
+  if (configured) {
+    try {
+      const info = ramDiskInfo()
+      SPOOL_SIZE_BYTES = info.mounted
+        ? (info.sizeBytes ?? 0)
+        : ensureRamDisk(spoolSizeMb(process.env)).sizeBytes // reboot re-create, BEFORE the first pass
+      PRIMARY_BODIES_DIR = configured
+      SPOOL_MODE = true
+    } catch (e) {
+      console.error(`[AgentLens] capture is ON but the RAM-disk spool could not be (re)created — NOT ingesting from ${configured}; draining only the legacy dir. ${(e as Error).message}`)
+    }
+  }
+}
+// The live bodies dir the gate's activity tracker + the drain watch (spool in spool mode, else legacy).
+const BODIES_DIR = PRIMARY_BODIES_DIR
+
+// Drain targets, each with its own emergency size-cap. In spool mode the spool's cap is min(configured
+// cap, 70% of the RAM disk) so a runaway producer can never fill volatile memory; the legacy dir is
+// ALSO drained (leftovers from pre-spool / stale sessions) at the normal cap.
+interface DrainTarget { dir: string; capBytes: number }
+const drainTargets: DrainTarget[] = SPOOL_MODE
+  ? [
+      { dir: PRIMARY_BODIES_DIR, capBytes: SPOOL_SIZE_BYTES > 0 ? Math.min(BODIES_MAX_BYTES, Math.floor(SPOOL_SIZE_BYTES * 0.7)) : BODIES_MAX_BYTES },
+      { dir: LEGACY_BODIES_DIR, capBytes: BODIES_MAX_BYTES },
+    ]
+  : [{ dir: LEGACY_BODIES_DIR, capBytes: BODIES_MAX_BYTES }]
+
+// The bodies pass: ingest raw bodies into the content-addressed store, then reclaim their disk space
+// (TRDD-K3WDPR7M Phase 3). This REPLACES the old .wad archiver, which gzipped each body into a
+// monthly volume — it had no cross-body dedup (every turn re-stored the whole re-sent transcript AND
+// an identical 268 KB tools array), and its boot pass was UNBOUNDED: measured at 694 MB/min of device
+// writes, which made "restart the server" a disk-punishing event all by itself.
+//
+// The store gets the same corpus 167x smaller (measured on 4.00 GB of real bodies -> 24 MB of zstd
+// Parquet, all 7,439 verified byte-identical), and ingestPass only deletes a body AFTER proving it
+// reconstructs byte-for-byte from a DURABLE Parquet part.
+//
+// The legacy .wad volumes are still READ (extractArchive) and still age out on the retention window —
+// they hold real history we have not migrated yet, and RULE 0 forbids destroying it on a guess.
+const INGEST_MAX_BYTES_PER_PASS = Math.max(
+  16 * 1024 ** 2,
+  Number(process.env.AGENTLENS_INGEST_MAX_BYTES_PER_PASS) || DEFAULT_MAX_BYTES_PER_PASS,
+)
+let bodyStore: Store | null = null
 let bodiesPassRunning = false
+// Seeded ONCE per boot from the store's already-ingested src_name set, then MUTATED by ingestPass as
+// names are ingested — so a 60s spool drain never re-reads+re-hashes a body that is already durable
+// (TRDD-K3WDPR7M Phase 3, item 5).
+let ingestSkipNames: Set<string> | null = null
+
+async function seedIngestSkipNames(store: Store): Promise<Set<string>> {
+  const set = new Set<string>()
+  try {
+    const rows = (await store.con.runAndReadAll(`SELECT DISTINCT src_name FROM ${allOf(store, 'body')}`)).getRowObjects()
+    for (const row of rows) { if (row.src_name != null) set.add(String(row.src_name)) }
+  } catch (e) {
+    console.warn('[AgentLens] could not seed the ingest skip-set (will re-hash existing bodies once):', e)
+  }
+  return set
+}
+
 async function archiveOtelBodies(): Promise<void> {
-  if (bodiesPassRunning) return // an hourly tick must never overlap a still-running first pass
+  if (bodiesPassRunning) return // a tick must never overlap a still-running pass
   bodiesPassRunning = true
   try {
-    let entries: { p: string; name: string; mtime: number; size: number }[] = []
-    try {
-      if (!fs.existsSync(BODIES_DIR)) return
-      for (const f of fs.readdirSync(BODIES_DIR)) {
+    const targets = drainTargets.filter((t) => fs.existsSync(t.dir))
+    if (targets.length === 0) return
+    bodyStore ??= await openStore({ dir: path.join(DATA_DIR, 'store') })
+    const skip = (ingestSkipNames ??= await seedIngestSkipNames(bodyStore))
+
+    let ingested = 0, deleted = 0, bytesIn = 0, bytesStored = 0, liveBytesTotal = 0, throttled = false
+    const failed: string[] = []
+    for (const target of targets) {
+      // The size cap is the emergency valve: over it, ingest EVERYTHING (age 0) rather than only what
+      // has aged out, so a runaway producer cannot outrun the drain (in spool mode: cannot fill RAM).
+      let liveBytes = 0
+      for (const f of fs.readdirSync(target.dir)) {
         if (!f.endsWith('.request.json') && !f.endsWith('.response.json')) continue
-        try {
-          const st = fs.statSync(path.join(BODIES_DIR, f))
-          entries.push({ p: path.join(BODIES_DIR, f), name: f, mtime: st.mtimeMs, size: st.size })
-        } catch { /* raced with a writer — skip */ }
+        try { liveBytes += fs.statSync(path.join(target.dir, f)).size } catch { /* raced */ }
       }
-    } catch (e) {
-      console.warn('[AgentLens] otel-bodies retention scan failed:', e)
-      return
+      liveBytesTotal += liveBytes
+      const overCap = liveBytes > target.capBytes
+      const r = await ingestPass({
+        bodiesDir: target.dir,
+        store: bodyStore,
+        maxAgeMs: overCap ? 0 : BODIES_MAX_AGE_MS,
+        maxBytesPerPass: INGEST_MAX_BYTES_PER_PASS, // THE THROTTLE — never an unbounded boot pass again
+        deleteAfter: true,                          // safe: ingestPass verifies from the DURABLE store first
+        skipNames: skip,                            // don't re-read+re-hash already-durable bodies
+      })
+      ingested += r.ingested; deleted += r.deleted; bytesIn += r.bytesIn; bytesStored += r.bytesStored
+      throttled ||= r.throttled
+      for (const f of r.failed) failed.push(f)
     }
-    const cutoff = Date.now() - BODIES_MAX_AGE_MS
-    let archived = 0
-    let archivedBytes = 0
-    const moveToArchive = async (e: { p: string; name: string; mtime: number; size: number }): Promise<void> => {
-      try {
-        const data = fs.readFileSync(e.p)
-        appendToArchive(BODIES_ARCHIVE_DIR, e.name, data, e.mtime)
-        fs.unlinkSync(e.p) // only after the archive append succeeded — a failure keeps the live file
-        archived++
-        archivedBytes += e.size
-      } catch (err) {
-        console.warn(`[AgentLens] could not archive ${e.name}:`, err)
+
+    // Retention ageing of archive volumes — GATED (TRDD-K3WDPR7M, 2026-07-15 USER directive): a
+    // volume dies only after EVERY lump in it is proven in the store (bytes + capture-ts row). A
+    // volume the gate cannot bless is KEPT and named, no matter how old — ageing out is a schedule,
+    // not a proof. The .idx sidecar always survives (capture-time provenance).
+    const gate = bodyStore
+    const purged = await purgeArchiveVolumes(BODIES_ARCHIVE_DIR, BODIES_RETENTION_DAYS, async (volumeName) => {
+      const v = await verifyVolumeInStore(gate, BODIES_ARCHIVE_DIR, volumeName)
+      if (!v.ok) {
+        console.warn(`[AgentLens] archive volume ${volumeName} aged out but FAILED store verification ` +
+          `(${v.verified}/${v.entries} proven) — KEPT: ${v.failed.slice(0, 3).join('; ')}`)
       }
-      // Yield between files: the first pass can chew tens of thousands of files, and a sync loop
-      // would starve the OTLP/UI listeners for minutes.
-      await new Promise(r => setImmediate(r))
-    }
-    const kept: typeof entries = []
-    for (const e of entries) {
-      if (e.mtime < cutoff) await moveToArchive(e)
-      else kept.push(e)
-    }
-    entries = kept
-    let totalBytes = entries.reduce((a, e) => a + e.size, 0)
-    if (totalBytes > BODIES_MAX_BYTES) {
-      entries.sort((a, b) => a.mtime - b.mtime) // oldest first
-      for (const e of entries) {
-        if (totalBytes <= BODIES_MAX_BYTES) break
-        await moveToArchive(e)
-        totalBytes -= e.size
-      }
-    }
-    const purged = purgeArchiveVolumes(BODIES_ARCHIVE_DIR, BODIES_RETENTION_DAYS)
+      return v.ok
+    })
     persistStats.bodiesLastPurge = {
-      at: Date.now(), removedFiles: archived, freedBytes: archivedBytes,
-      keptFiles: entries.length, keptBytes: totalBytes,
+      at: Date.now(), removedFiles: deleted, freedBytes: bytesIn,
+      keptFiles: 0, keptBytes: Math.max(0, liveBytesTotal - bytesIn),
     }
-    if (archived > 0 || purged.removed.length > 0) {
-      const arch = archiveDiskUsage(BODIES_ARCHIVE_DIR)
-      console.log(`[AgentLens] otel-bodies retention: archived ${archived} file(s) (${(archivedBytes / 1024 ** 3).toFixed(2)}GB → archive now ${(arch.bytes / 1024 ** 3).toFixed(2)}GB/${arch.entries} lumps)` +
-        `${purged.removed.length > 0 ? `; purged volume(s) ${purged.removed.join(', ')} (${(purged.freedBytes / 1024 ** 3).toFixed(2)}GB)` : ''}; live ${(totalBytes / 1024 ** 3).toFixed(2)}GB`)
+    if (ingested > 0 || purged.removed.length > 0) {
+      console.log(`[AgentLens] bodies → store: ingested ${ingested}, reclaimed ${deleted} file(s) ` +
+        `(${(bytesIn / 1024 ** 3).toFixed(2)}GB read → ${(bytesStored / 1048576).toFixed(1)}MB new spans)` +
+        `${SPOOL_MODE ? ' [spool]' : ''}${throttled ? ' [throttled — more next pass]' : ''}` +
+        `${purged.removed.length > 0 ? `; purged legacy volume(s) ${purged.removed.join(', ')} (${(purged.freedBytes / 1024 ** 3).toFixed(2)}GB, verified in store first)` : ''}`)
     }
+    // A body we could not PROVE we can return is a body we have no right to delete. Say so loudly —
+    // a silent skip would look identical to success while the corpus quietly rotted.
+    if (failed.length > 0) {
+      console.warn(`[AgentLens] ${failed.length} body/bodies could NOT be verified and were KEPT on disk: ${failed.slice(0, 5).join('; ')}`)
+    }
+  } catch (e) {
+    console.warn('[AgentLens] bodies ingest pass failed:', e)
   } finally {
     bodiesPassRunning = false
   }
@@ -320,10 +481,45 @@ function purgeHookEvents(): void {
   }
 }
 
+// Gated-out OTEL log events (user_prompt, assistant_response, tool_decision, hook_execution_*, ...)
+// persisted instead of dropped (TRDD-AMEA4O4Z — USER 2026-07-16: lose no logged data). Same
+// append-only daily-bucket model as hook-events; RET knob bounds how long the buckets live.
+const LOG_EVENTS_DIR = path.join(DATA_DIR, 'log-events')
+const LOG_EVENTS_RETENTION_DAYS = RET.logEventsRetentionDays
+// A sink failure must never reject the whole OTLP payload (that would lose the spans too), but it
+// must not be silent either — warn once per boot per error message, then keep counting drops.
+const logSinkWarned = new Set<string>()
+function persistDroppedLogEvent(name: string, bare: string, attrs: RawAttr[], rec: Record<string, unknown>): void {
+  try {
+    const { bytes } = appendDroppedLogEvent(LOG_EVENTS_DIR, buildDroppedLogEventRecord(name, bare, attrs, rec))
+    persistStats.logEventWrites++
+    persistStats.logEventBytes += bytes
+  } catch (e) {
+    const msg = (e as Error).message
+    if (!logSinkWarned.has(msg)) {
+      logSinkWarned.add(msg)
+      console.warn(`[AgentLens] log-event sink append FAILED (event lost — disk problem?): ${msg}`)
+    }
+  }
+}
+
+function purgeLogEvents(): void {
+  const r = purgeLogEventBuckets(LOG_EVENTS_DIR, LOG_EVENTS_RETENTION_DAYS)
+  if (r.removed.length > 0) {
+    console.log(`[AgentLens] log-events retention: purged ${r.removed.length} bucket(s), ${(r.freedBytes / 1048576).toFixed(1)}MB`)
+  }
+}
+
 void archiveOtelBodies() // enforce on boot — a long-dead server must not leave the corpus unbounded
 purgeHookEvents()
-const bodiesPurgeTimer = setInterval(() => { void archiveOtelBodies(); purgeHookEvents() }, 3600e3)
+purgeLogEvents()
+// Spool mode drains every 60s (the bodies sit in volatile RAM — reclaim them fast); otherwise the
+// legacy hourly cadence is plenty for plain-file bodies on disk.
+const BODIES_PASS_INTERVAL_MS = SPOOL_MODE ? 60_000 : 3600e3
+const bodiesPurgeTimer = setInterval(() => { void archiveOtelBodies() }, BODIES_PASS_INTERVAL_MS)
 bodiesPurgeTimer.unref()
+const hookPurgeTimer = setInterval(() => { purgeHookEvents(); purgeLogEvents() }, 3600e3)
+hookPurgeTimer.unref()
 
 // ── Agent-launch burn gate + realtime activity (TRDD-GOD0108C) ────────────────
 // The gate sits behind a PreToolUse hook, so every read here must be in-memory:
@@ -358,7 +554,7 @@ function pushRecentHookEvent(rec: HookEventRecord): void {
 // same path (validate → append → ring → stats → StopFailure calibration). Returns an HTTP-shaped
 // result; never throws on a bad payload (a 400 is returned) so the drain can proceed to the next
 // file — only a genuine disk fault in appendHookEvent throws, which the drain treats as "retry".
-function ingestHookEvent(payload: unknown): { status: number; body: Record<string, unknown> } {
+function ingestHookEvent(payload: unknown): { status: number; body: Record<string, unknown>; pos?: AppendPosition; line?: string } {
   const p = payload as Record<string, unknown> | null
   if (!p || typeof p !== 'object' || typeof p.hook_event_name !== 'string' || p.hook_event_name === '') {
     return { status: 400, body: { error: 'payload must be a JSON object with hook_event_name' } }
@@ -368,7 +564,7 @@ function ingestHookEvent(payload: unknown): { status: number; body: Record<strin
     // non-2xx here would make disabled capture look like a server outage).
     return { status: 200, body: { ok: true, dropped: 'captureEnabled=false' } }
   }
-  const { rec, bytes } = appendHookEvent(HOOK_EVENTS_DIR, p)
+  const { rec, bytes, pos, line } = appendHookEvent(HOOK_EVENTS_DIR, p)
   pushRecentHookEvent(rec) // the in-memory ring the gate + check_burn_risk read
   persistStats.hookEventWrites++
   persistStats.hookEventBytes += bytes
@@ -395,15 +591,20 @@ function ingestHookEvent(payload: unknown): { status: number; body: Record<strin
       console.warn('[AgentLens] capacity calibration error:', e)
     }
   }
-  return { status: 200, body: { ok: true } }
+  return { status: 200, body: { ok: true }, pos, line }
 }
 
 // D3K7QM2P/1a: drain the durable hook-spool on boot. When the server was DOWN (or shedding under
 // load), `agentlenspro hook` writes each raw payload to DATA_DIR/hook-spool/<ts>-<rand>.json instead
 // of losing it; on the next boot we reingest every spooled event through ingestHookEvent, then delete
-// its file. Idempotent: a crash mid-drain leaves the remaining files for the next boot. A payload that
-// can never ingest (unparseable / 400) is dropped LOUDLY so the spool cannot wedge; only a real disk
-// fault (ingest throws) keeps the file for a later retry.
+// its file — but ONLY after proving the durable copy exists. TRDD-K3WDPR7M (2026-07-15 USER directive:
+// a source file may be deleted ONLY after the durable destination is confirmed to hold ALL its data):
+//   • a 200 ingest is NOT trusted — we read the appended line back from its bucket and compare it
+//     byte-for-byte before unlinking the spool file; a mismatch KEEPS the file (counted + warned);
+//   • an unparseable or 400 payload can never ingest, but it is still DATA — it is QUARANTINED into
+//     hook-spool/rejected/ (never deleted), which keeps the spool unwedged WITHOUT destroying it;
+//   • a genuine disk fault (ingest throws) keeps the file for the next boot's retry.
+// Idempotent: a crash mid-drain leaves the remaining files for the next boot.
 const HOOK_SPOOL_DIR = path.join(DATA_DIR, 'hook-spool')
 /** Count of hook events waiting on disk for the drain (surfaced on /api/server-stats). */
 function hookSpoolCount(): number {
@@ -413,28 +614,49 @@ function drainHookSpool(): void {
   let names: string[]
   try { names = fs.readdirSync(HOOK_SPOOL_DIR).filter((n) => n.endsWith('.json')).sort() } catch { return } // no spool dir — nothing to drain
   if (names.length === 0) return
-  let drained = 0, dropped = 0, kept = 0
+  const rejectedDir = path.join(HOOK_SPOOL_DIR, 'rejected')
+  let drained = 0, rejected = 0, unverified = 0, kept = 0
   for (const name of names) {
     const file = path.join(HOOK_SPOOL_DIR, name)
     let raw: string
     try { raw = fs.readFileSync(file, 'utf-8') } catch { continue } // vanished / unreadable — skip
     let payload: unknown
     try { payload = JSON.parse(raw) } catch {
-      // Unparseable spool file will NEVER ingest — drop it so the spool cannot wedge forever.
-      try { fs.unlinkSync(file) } catch { /* raced */ }
-      dropped++; continue
+      // Unparseable will NEVER ingest — quarantine it (NEVER delete: it is still data). TRDD-K3WDPR7M.
+      try { quarantineSpoolFile(file, rejectedDir); rejected++ } catch { kept++ }
+      continue
     }
+    let r: { status: number; pos?: AppendPosition; line?: string }
     try {
-      const r = ingestHookEvent(payload)
-      try { fs.unlinkSync(file) } catch { /* raced */ } // ingested OR 400 (bad payload) → remove either way
-      if (r.status === 200) drained++; else dropped++
+      r = ingestHookEvent(payload)
     } catch {
       // A genuine disk fault in appendHookEvent — keep the file for the next boot's retry.
-      kept++
+      kept++; continue
+    }
+    if (r.status !== 200) {
+      // A 400 (bad payload) can never ingest either — quarantine, never delete. TRDD-K3WDPR7M.
+      try { quarantineSpoolFile(file, rejectedDir); rejected++ } catch { kept++ }
+      continue
+    }
+    if (!r.pos || !r.line) {
+      // 200 with nothing appended (capture disabled by policy) — not an error and not bad data. Keep
+      // it: a later boot with capture re-enabled ingests it. Deleting it would silently drop the event.
+      kept++; continue
+    }
+    // 200 WITH an append — but do NOT trust the status. Read the bucket back and prove the exact line
+    // is durable at the reported offset before deleting the only other copy (verify-before-delete).
+    if (verifyAppendedLine(r.pos, r.line)) {
+      try { fs.unlinkSync(file) } catch { /* raced */ } // durable copy proven → safe to drop the spool file
+      drained++
+    } else {
+      // Ingest said 200 but the read-back did not match — the durable copy is NOT proven. Keep the spool
+      // file so the next boot retries; never destroy the only guaranteed copy on an unproven write.
+      unverified++
+      console.warn(`[AgentLens] hook-spool: append NOT verified for ${name} — keeping spool file (durable copy unproven)`)
     }
   }
-  if (drained || dropped || kept) {
-    console.log(`[AgentLens] hook-spool: drained ${drained} event(s)${dropped ? `, dropped ${dropped} bad` : ''}${kept ? `, kept ${kept} for retry` : ''}`)
+  if (drained || rejected || unverified || kept) {
+    console.log(`[AgentLens] hook-spool: drained ${drained} event(s)${rejected ? `, quarantined ${rejected} bad` : ''}${unverified ? `, kept ${unverified} unverified` : ''}${kept ? `, kept ${kept} for retry` : ''}`)
   }
 }
 
@@ -606,7 +828,23 @@ if (IS_CANONICAL) {
 
 // Indexed by sessionId; OTEL-derived sessions (from spans) take precedence —
 // when the same session ID appears in both, the OTEL version is used.
+//
+// TRDD-X2E6OSWK: write through putLogSession/clearLogSessions, NEVER `logSessions.set(...)` directly.
+// The derived-view caches are keyed on `dataVersion`, so a write that forgets to bump it would leave
+// the dashboard showing the PREVIOUS state until some unrelated mutation happened to bump it. Routing
+// every write through one funnel makes that class of bug impossible by construction rather than by
+// discipline. (Reads — get/has/values/size — go straight to the map.)
 let logSessions: Map<string, SessionSummaryCard> = new Map()
+
+function putLogSession(card: SessionSummaryCard): void {
+  logSessions.set(card.sessionId, card)
+  markDataChanged()
+}
+
+function clearLogSessions(): void {
+  logSessions.clear()
+  markDataChanged()
+}
 
 function buildImportCardStandalone(raw: Record<string, unknown>): SessionSummaryCard {
   const num = (v: unknown, def = 0): number => (typeof v === 'number' ? v : def)
@@ -745,6 +983,10 @@ startMcpHttpServer({
     const summary = buildSessionSummary()
     return summary?.sessions ?? []
   },
+  // TRDD-OCNHOHE9: a session's timeline, reparsing a disk-restored stripped card on demand (same
+  // path /api/timeline uses). Without this the MCP tools fell back to the card's empty inline
+  // timeline, so check_cache_expiry could not find the last api_request ts and returned 'unknown'.
+  getTimeline: (id) => resolveSessionCard(id)?.timeline ?? [],
   // The standalone cards already carry their inline timeline (log-parsed), so the MCP diagnostics
   // read per-turn tokens off the card; composition is reconstructed on demand from the raw .jsonl —
   // the same route /api/composition/:id serves the browser. This makes the P4 inflation / cache-break
@@ -762,6 +1004,12 @@ startMcpHttpServer({
     const sess = buildSessionSummary()?.sessions ?? []
     const parentOf = (sid: string): string | undefined => sess.find(s => s.sessionId === sid)?.parentSessionId
     return buildContextHistory(id, resolveLoggedAncestor(id, parentOf) ?? parentOf(id))
+  },
+  // TRDD-B22NYTOY: the NARRATIVE conversation (verbatim ordered turns). Same fork/ancestor fallback.
+  getConversation: (id) => {
+    const sess = buildSessionSummary()?.sessions ?? []
+    const parentOf = (sid: string): string | undefined => sess.find(s => s.sessionId === sid)?.parentSessionId
+    return buildConversation(id, resolveLoggedAncestor(id, parentOf) ?? parentOf(id))
   },
   // TRDD-ICHAVFCS: resolve a call (sessionId + requestId/spanId) to its full literal context tree,
   // reconstructed from the raw OTEL request body indexed by the collector. Works for OTEL-only sessions.
@@ -786,6 +1034,12 @@ startMcpHttpServer({
   // and the incremental bodies tracker (CACHE_THRASH + huge-request burst without full stats).
   getRecentHookEvents: () => recentHookEvents,
   getBodiesActivity: () => bodiesActivityReport(),
+  // TRDD-1FEIW17E: get_body_writers reads all-time per-session totals from the durable store —
+  // same lazy-open the ingest pass uses, so the first call after boot pays the open, not every call.
+  getStore: async () => (bodyStore ??= await openStore({ dir: path.join(DATA_DIR, 'store') })),
+  // TRDD-1XM0YSWQ: get_account_burners ranks sessions inside one account's window — same deduped
+  // event stream the burn tick consumes, gathered fresh so the answer reflects this instant.
+  getConsumptionEvents: () => gatherBurn().events,
   // TRDD-PJC8N1HO spec 2: an orienting agent sees where telemetry was lost, not just the sessions.
   getCollectorGaps,
 }, MCP_PORT, BIND_HOST)
@@ -858,17 +1112,46 @@ function tickBurn(): void {
 // 4s cadence gives ≤10s alert latency with margin (acceptance) without a heavy per-second rebuild.
 setInterval(tickBurn, 4000)
 
-function runLogScan() {
-  const results = logReader.scan()
+// TRDD-X2E6OSWK — INCREMENTAL LOG SCANNING.
+//
+// The old design ran a FULL scan (recursive readdir of every log root + one statSync per file —
+// ~12,508 files on this machine) on a flat 5s timer AND on every debounced fs.watch burst. Profiled
+// on the live server it burned ~8.5% of wall-clock CPU forever, and it got WORSE the more agent
+// sessions were running (more writes → more watch events → more full sweeps).
+//
+// Now: fs.watch already tells us WHICH file changed, so the steady-state scan stats only those paths
+// (typically 1–3), and the full sweep is demoted to a slow correctness BACKSTOP. The backstop is not
+// optional: recursive fs.watch on macOS (FSEvents) coalesces and can drop events under load, and a
+// dir that did not exist at startup never got a watcher at all — so a periodic full sweep is the
+// only thing that guarantees no file is missed. It just must not be the steady-state path.
+const FULL_RESCAN_MS = 60_000
+// Absolute paths named by fs.watch since the last scan. Drained by each targeted scan.
+const pendingWatchPaths = new Set<string>()
+// Set when a watch event arrives with NO filename (the platform coalesced it away). We cannot target
+// what we cannot name, so the next scan is promoted to a full sweep instead of guessing — guessing
+// would silently drop a session's new lines, and losing log lines is not a tradeoff we make.
+let watchNeedsFullScan = false
+
+function runLogScan(mode: 'full' | 'targeted' = 'full') {
+  let results: ReturnType<typeof logReader.scan>
+  if (mode === 'full') {
+    pendingWatchPaths.clear()   // a full sweep subsumes every pending hint
+    results = logReader.scan()
+  } else {
+    if (pendingWatchPaths.size === 0) return
+    const paths = [...pendingWatchPaths]
+    pendingWatchPaths.clear()
+    results = logReader.scan(paths)
+  }
   // logReader.scan() returns ONLY sessions whose byte offset advanced (incremental tail — unchanged
   // files return null), so `changedCards` is exactly the set that grew this scan. That set drives
   // the immediate targeted push below; the heavier full-summary rebuild stays coalesced.
   const changedCards: SessionSummaryCard[] = []
   for (const { card, childCards } of results) {
     statuslineReader.overlay(card)
-    logSessions.set(card.sessionId, card)
+    putLogSession(card)
     changedCards.push(card)
-    for (const child of childCards ?? []) { logSessions.set(child.sessionId, child); changedCards.push(child) }
+    for (const child of childCards ?? []) { putLogSession(child); changedCards.push(child) }
   }
   if (changedCards.length > 0) {
     pushSessionChanged(changedCards)   // TRDD-U0UYC38A: targeted, immediate — sub-second drill refresh
@@ -885,19 +1168,37 @@ setInterval(() => {
   scheduleDurableSave()
 }, 30_000)
 
-// Debounced scan triggered by fs.watch events — fires 300 ms after the last event.
+// Debounced scan triggered by fs.watch events — fires 300 ms after the last event. Events arrive in
+// bursts (one JSONL append can emit several), so the debounce collapses a burst into ONE scan over
+// the union of the paths it named.
 let watchScanTimer: ReturnType<typeof setTimeout> | null = null
 function scheduleWatchScan() {
   if (watchScanTimer) clearTimeout(watchScanTimer)
-  watchScanTimer = setTimeout(() => { watchScanTimer = null; runLogScan() }, 300)
+  watchScanTimer = setTimeout(() => {
+    watchScanTimer = null
+    const mode = watchNeedsFullScan ? 'full' : 'targeted'
+    watchNeedsFullScan = false
+    runLogScan(mode)
+  }, 300)
 }
 
-function setupLogWatcher() {
+/** Returns how many watchers actually attached, so a total failure can be reported instead of
+ *  silently degrading log freshness to the slow backstop. */
+function setupLogWatcher(): { attached: number; failed: string[] } {
+  let attached = 0
+  const failed: string[] = []
   for (const dir of logReader.getWatchDirs()) {
     try {
-      fs.watch(dir, { recursive: true, persistent: false }, scheduleWatchScan)
-    } catch { /* dir may not exist yet — poll will cover it */ }
+      fs.watch(dir, { recursive: true, persistent: false }, (_event, filename) => {
+        // `filename` is relative to `dir` on every platform that supports recursive watching.
+        if (filename) pendingWatchPaths.add(path.resolve(dir, filename.toString()))
+        else watchNeedsFullScan = true
+        scheduleWatchScan()
+      })
+      attached++
+    } catch { failed.push(dir) }   // dir may not exist yet — the backstop sweep will still cover it
   }
+  return { attached, failed }
 }
 
 async function startLogIngestion() {
@@ -910,27 +1211,67 @@ async function startLogIngestion() {
     logReader = new LogReader({ log: (msg) => console.log(msg), sqlFactory })
   } catch { /* no sql.js — OpenCode falls back to JSON */ }
 
-  // TRDD-PJC8N1HO spec 3: FAST RESTART. Import persisted tail offsets so the first scan SKIPS every
-  // unchanged file (0 cold-start full reads) instead of re-parsing ~12k files from byte 0, and restore
-  // the stripped log cards so the dashboard list + MCP are fresh in <5s. The heavy per-step timeline is
-  // re-parsed on demand (see /api/timeline). A missing/corrupt sidecar → the normal cold scan below.
-  let restoredFromDisk = false
-  const persistedCards = loadPersistedCards(CARDS_FILE)
-  if (persistedCards && persistedCards.length > 0) {
-    for (const card of persistedCards) logSessions.set(card.sessionId, card)
-    restoredFromDisk = true
+  // TRDD-PJC8N1HO spec 3 / TRDD-K3WDPR7M Phase 4: FAST RESTART. Load the delta logs so the first scan
+  // SKIPS every unchanged file (0 cold-start full reads) instead of re-parsing ~12k files from byte 0,
+  // and restores the stripped log cards so the dashboard list + MCP are fresh in <5s. load() runs
+  // UNCONDITIONALLY (even when the version stamp below is stale) so DeltaLog's internal `written`
+  // hashes are seeded from whatever is on disk — otherwise the first post-rescan save() would re-append
+  // every record instead of diffing against it. Only the RESTORE is gated on the version stamp.
+  let cardsMap = cardsLog.load()
+  let offsetsMap = offsetsLog.load()
+  let deltaCurrent = deltaVersionIsCurrent()
+
+  // One-time migration (TRDD-K3WDPR7M): the legacy whole-file sidecar still exists and the delta log
+  // has never been seeded. loadPersistedCards/loadLogOffsets already refuse a version-stale legacy file
+  // (return null), so migrated data is current-version by construction — stamp it immediately so the
+  // restore check right below (on this SAME boot) doesn't discard what was just migrated. The legacy
+  // file is deliberately NOT deleted (RULE 0 — a follow-up task reclaims it once the delta log has
+  // proven itself).
+  if (cardsMap.size === 0 && cardsLog.diskBytes() === 0 && fs.existsSync(CARDS_FILE)) {
+    const legacyCards = loadPersistedCards(CARDS_FILE)
+    if (legacyCards && legacyCards.length > 0) {
+      cardsMap = new Map<string, SessionSummaryCard>(legacyCards.map((c): [string, SessionSummaryCard] => [c.sessionId, c]))
+      cardsLog.save(cardsMap)
+      stampDeltaVersion()
+      deltaCurrent = true
+      console.log(`[AgentLens] Migrated ${cardsMap.size} session card(s) from legacy ${path.basename(CARDS_FILE)} into the delta log`)
+    }
   }
-  const persistedOffsets = loadLogOffsets(OFFSETS_FILE)
-  if (persistedOffsets) {
-    const { imported, skipped } = logReader.importFileState(persistedOffsets)
-    console.log(`[AgentLens] Resumed ${imported} log tail offset${imported !== 1 ? 's' : ''} (${skipped} invalid/rotated → cold read)${restoredFromDisk ? `; restored ${persistedCards!.length} session cards` : ''}`)
+  if (offsetsMap.size === 0 && offsetsLog.diskBytes() === 0 && fs.existsSync(OFFSETS_FILE)) {
+    const legacyOffsets = loadLogOffsets(OFFSETS_FILE)
+    if (legacyOffsets) {
+      offsetsMap = new Map<string, PersistedFileState>(Object.entries(legacyOffsets))
+      offsetsLog.save(offsetsMap)
+      stampDeltaVersion()
+      deltaCurrent = true
+      console.log(`[AgentLens] Migrated ${offsetsMap.size} log tail offset(s) from legacy ${path.basename(OFFSETS_FILE)} into the delta log`)
+    }
   }
 
-  // Register the poll first so it always runs, even if no files exist yet at startup.
-  setInterval(runLogScan, 5_000)
-  // Watch log directories for file-system events so updates appear immediately,
-  // without waiting for the next poll interval.
-  setupLogWatcher()
+  let restoredFromDisk = false
+  if (deltaCurrent && cardsMap.size > 0) {
+    for (const card of cardsMap.values()) putLogSession(card)
+    restoredFromDisk = true
+  }
+  if (deltaCurrent && offsetsMap.size > 0) {
+    const { imported, skipped } = logReader.importFileState(Object.fromEntries(offsetsMap))
+    console.log(`[AgentLens] Resumed ${imported} log tail offset${imported !== 1 ? 's' : ''} (${skipped} invalid/rotated → cold read)${restoredFromDisk ? `; restored ${cardsMap.size} session cards` : ''}`)
+  } else if (!deltaCurrent && (cardsMap.size > 0 || offsetsMap.size > 0)) {
+    console.log(`[AgentLens] Log-ingest semantics changed (v${LOG_INGEST_VERSION}) — cold-rescanning; stale delta-log entries will be tombstoned on the next durable save`)
+  }
+
+  // Watch log directories for file-system events: this is the STEADY-STATE path — an event names the
+  // changed file, so the debounced scan stats only that file (TRDD-X2E6OSWK).
+  const watch = setupLogWatcher()
+  if (watch.failed.length > 0) {
+    console.warn(`[AgentLens] No fs.watch on ${watch.failed.length} log dir(s) — they refresh only on the ${FULL_RESCAN_MS / 1000}s backstop sweep: ${watch.failed.join(', ')}`)
+  }
+  // The full sweep is the correctness BACKSTOP for what the watcher coalesces, drops, or never saw.
+  // If NOT ONE watcher attached there is no steady-state path at all, so fall back to the old fast
+  // full-poll cadence rather than silently degrading every session's freshness to 60s.
+  const rescanMs = watch.attached > 0 ? FULL_RESCAN_MS : 5_000
+  if (watch.attached === 0) console.warn(`[AgentLens] fs.watch unavailable on every log dir — falling back to a ${rescanMs / 1000}s full poll (higher CPU)`)
+  setInterval(() => runLogScan('full'), rescanMs)
   console.log('[AgentLens] Log ingestion enabled — scanning local session files')
 
   const AGENT_KEY_LABEL: Record<string, string> = {
@@ -955,14 +1296,14 @@ async function startLogIngestion() {
   // OpenCode: one DB file = many sessions, handled separately.
   const ocResults = logReader.scanOpenCode()
   for (const { card } of ocResults) {
-    logSessions.set(card.sessionId, card)
+    putLogSession(card)
     countByKey.set('opencode', (countByKey.get('opencode') ?? 0) + 1)
   }
 
   // spec 3: when cards were restored from disk, the cold full-file batch below is UNNECESSARY (and is
-  // exactly the minutes-long rescan we are eliminating) — the 5s poll + fs.watch already registered
-  // above will incrementally pick up any file that changed while the collector was down. Push the
-  // restored list to any connected browser and return.
+  // exactly the minutes-long rescan we are eliminating) — the fs.watch hints + the backstop sweep
+  // already registered above will incrementally pick up any file that changed while the collector was
+  // down. Push the restored list to any connected browser and return.
   if (restoredFromDisk) {
     console.log(`[AgentLens] Fast restart — ${logSessions.size} sessions restored from disk; skipping cold rescan`)
     schedulePushUpdate()
@@ -981,8 +1322,8 @@ async function startLogIngestion() {
       const result = logReader.parseFile(file.filePath, file.agentKey)
       if (result) {
         statuslineReader.overlay(result.card)
-        logSessions.set(result.card.sessionId, result.card)
-        for (const child of result.childCards ?? []) logSessions.set(child.sessionId, child)
+        putLogSession(result.card)
+        for (const child of result.childCards ?? []) putLogSession(child)
         countByKey.set(file.agentKey, (countByKey.get(file.agentKey) ?? 0) + 1)
       }
     } catch { /* skip bad file */ }
@@ -1220,6 +1561,10 @@ function processLogs(payload: unknown, collectorPath = '/v1/logs'): number {
         const isClaudeRichEvent = CLAUDE_RICH_LOG_EVENTS.has(bare)
         if (!isCodexEvent && !isClaudeToolResult && !isClaudeRichEvent) {
           noteDroppedLogEvent(name)
+          // TRDD-AMEA4O4Z: not ingested as a span, but never discarded — persist the full event
+          // (merged attrs + ids + body) to the append-only log-events sink. tool_decision,
+          // mcp_server_connection, hook_registered etc. exist NOWHERE else.
+          persistDroppedLogEvent(name, bare, attrs, r)
           continue
         }
         if (isCodexEvent && isCodexWebsocketSpanName(name)) continue
@@ -1457,6 +1802,10 @@ function computeAnalyticsData(sessions: ReturnType<typeof summarizeSpans>['sessi
 }
 
 function buildSessionSummary(): ReturnType<typeof summarizeSpans> | null {
+  return summaryCache.get(dataVersion, computeSessionSummary)
+}
+
+function computeSessionSummary(): ReturnType<typeof summarizeSpans> | null {
   let summary: ReturnType<typeof summarizeSpans> | null = null
   try { summary = summarizeSpans(spans) } catch (e) { console.warn('[AgentLens] summarizeSpans error:', e) }
 
@@ -1478,6 +1827,27 @@ function buildSessionSummary(): ReturnType<typeof summarizeSpans> | null {
   return summary
 }
 
+// Resolve one session's card, reparsing a disk-restored card whose timeline was STRIPPED on startup
+// (TRDD-PJC8N1HO spec 3: the offset resume skips the file, so the card carries an empty timeline until
+// it is actually drilled). Shared by the lazy /api/timeline route AND the MCP getTimeline accessor, so
+// both surfaces see the same reconstructed entries — check_cache_expiry (TRDD-OCNHOHE9) needs the last
+// api_request/llm timestamp, which a stripped card lacks until this reparse runs.
+function resolveSessionCard(sessionId: string): SessionSummaryCard | null {
+  const summary = buildSessionSummary()
+  let session = summary?.sessions.find(s => s.sessionId === sessionId) ?? null
+  if (session && (session.timeline?.length ?? 0) === 0 && logSessions.has(sessionId)) {
+    try {
+      const reparsed = logReader.reparseSession(sessionId)
+      if (reparsed) {
+        statuslineReader.overlay(reparsed.card)
+        putLogSession(reparsed.card)
+        session = reparsed.card
+      }
+    } catch { /* on-demand rebuild is best-effort — fall back to the stripped card's empty timeline */ }
+  }
+  return session
+}
+
 // Drop the heavy per-session detail (full timeline + per-file ops) from the inlined/broadcast
 // payload — across thousands of sessions these add up to tens of MB and freeze the browser on
 // first paint. Both are fetched lazily per session via /api/timeline/:id (loadSessionDetail).
@@ -1486,12 +1856,32 @@ function stripSessionDetail(summary: ReturnType<typeof summarizeSpans> | null): 
   return { ...summary, sessions: summary.sessions.map(s => ({ ...s, timeline: [], fileOps: undefined, generatedFiles: undefined, generatedFilesTruncated: undefined })) }
 }
 
+// The three memoized derivations of the summary. Each is a PURE function of (spans, logSessions) —
+// no clock, no request state — so caching them on `dataVersion` is sound. `computeSidebarPayload` is
+// deliberately NOT here: it reads Date.now() (isActive / lastActivityMs / burnRate), so a cached copy
+// would freeze the "session is live" indicator once the data stopped changing.
+function buildStrippedSummary(): ReturnType<typeof summarizeSpans> | null {
+  return strippedCache.get(dataVersion, () => stripSessionDetail(buildSessionSummary()))
+}
+function buildSidebarData(): ReturnType<typeof computeSidebarData> | null {
+  return sidebarCache.get(dataVersion, () => {
+    const s = buildSessionSummary()
+    return s ? computeSidebarData(s, spans) : null
+  })
+}
+function buildAnalyticsData(): ReturnType<typeof computeAnalyticsData> | null {
+  return analyticsCache.get(dataVersion, () => {
+    const s = buildSessionSummary()
+    return s ? computeAnalyticsData(s.sessions) : null
+  })
+}
+
 function buildUpdatePayload(): string {
   const sessionSummary = buildSessionSummary()
-  const stripped = stripSessionDetail(sessionSummary)
-  const sidebar = sessionSummary ? computeSidebarData(sessionSummary, spans) : null
+  const stripped = buildStrippedSummary()
+  const sidebar = buildSidebarData()
   const sidebarLive = sessionSummary ? computeSidebarPayload(sessionSummary, spans) : null
-  const analyticsData = sessionSummary ? computeAnalyticsData(sessionSummary.sessions) : null
+  const analyticsData = buildAnalyticsData()
   return JSON.stringify({
     type: 'update', buildId: BUILD_ID, summary: { toolCalls: {} }, sessionSummary: stripped, sidebar, analyticsData,
     // TRDD-PJC8N1HO spec 2: collector downtime windows ride every update so the dashboard renders the
@@ -1532,7 +1922,17 @@ function pushSessionChanged(cards: SessionSummaryCard[]): void {
 // OOM-killed (FATAL mark-compact) in ~40s. Debouncing to at most once per PUSH_COALESCE_MS turns N
 // firehose POSTs into ONE rebuild, so the working set stays bounded and RSS plateaus. Trailing-edge
 // (not leading) so a burst emits exactly one update after it settles.
-const PUSH_COALESCE_MS = 1000
+//
+// TRDD-X2E6OSWK — the floor was 1000 ms, and under the normal load of this machine (several agent
+// sessions appending JSONL continuously) it was re-armed continuously and fired at that floor
+// indefinitely: a FULL dashboard rebuild every second, forever, measured at ~19% of the process's
+// wall-clock CPU. 4000 ms is the same cadence the burn tick already runs at, and it costs the
+// dashboard NOTHING in liveness: the instant a session's log grows, pushSessionChanged() above sends
+// the changed cards immediately (sub-second, untouched by this constant). What this timer coalesces
+// is only the AGGREGATE view — sidebar counters, analytics roll-ups, the OTEL-wins re-merge — which
+// no user can perceive updating 4× a second. It also lines up with tickBurn's 4s beat, so the two now
+// usually share ONE memoized summary rebuild (same dataVersion) instead of forcing two.
+const PUSH_COALESCE_MS = 4000
 let pushTimer: ReturnType<typeof setTimeout> | null = null
 function schedulePushUpdate() {
   if (pushTimer) return
@@ -1545,7 +1945,7 @@ function getHtml(): string {
   const sessionSummary = buildSessionSummary()
   // Strip full timeline + per-file ops before inlining — they can be many MB across sessions.
   // Both are loaded lazily via /api/timeline/:sessionId after first paint.
-  const sessionSummaryJson = safeJson(stripSessionDetail(sessionSummary))
+  const sessionSummaryJson = safeJson(buildStrippedSummary())
   const sidebarLive = sessionSummary ? computeSidebarPayload(sessionSummary, spans) : {
     isActive: false, lastActivityMs: 0, sessionCount: 0, agentSources: [], currentSession: null, burnRate: null,
   }
@@ -2175,23 +2575,34 @@ const OFFSETS_SAVE_MS = Math.max(10_000, Number(process.env.AGENTLENS_OFFSETS_SA
 const CARDS_SAVE_MS = Math.max(30_000, Number(process.env.AGENTLENS_CARDS_SAVE_MS) || 300_000)
 let lastCardsSave = 0
 
-// Byte accounting via statSync after the write — a second JSON.stringify of a 27MB object just
-// to count bytes would double the serialization cost of every save.
+// Byte accounting: DeltaLog.save() returns exactly what it wrote to the device, so no statSync of a
+// (now unused) whole file is needed. Writes/Bytes are only bumped when bytes > 0 — DeltaLog's whole
+// point is that an unchanged save costs ZERO device writes, and counting one of those as "a write"
+// would hide the very fix this delta log exists to prove.
 function sizeOf(file: string): number {
   try { return fs.statSync(file).size } catch { return 0 }
 }
 function saveOffsetsNow(): void {
   try {
-    saveLogOffsets(OFFSETS_FILE, logReader.exportFileState())
-    persistStats.offsetsWrites++
-    persistStats.offsetsBytes += sizeOf(OFFSETS_FILE)
+    const records = new Map<string, PersistedFileState>(Object.entries(logReader.exportFileState()))
+    const r = offsetsLog.save(records)
+    if (r.bytes > 0) {
+      persistStats.offsetsWrites++
+      persistStats.offsetsBytes += r.bytes
+      stampDeltaVersion()
+    }
   } catch (e) { console.warn('[AgentLens] Could not save log offsets:', e) }
 }
 function saveCardsNow(): void {
   try {
-    savePersistedCards(CARDS_FILE, [...logSessions.values()].map(stripCardForPersist))
-    persistStats.cardsWrites++
-    persistStats.cardsBytes += sizeOf(CARDS_FILE)
+    const records = new Map<string, SessionSummaryCard>()
+    for (const [id, card] of logSessions) records.set(id, stripCardForPersist(card))
+    const r = cardsLog.save(records)
+    if (r.bytes > 0) {
+      persistStats.cardsWrites++
+      persistStats.cardsBytes += r.bytes
+      stampDeltaVersion()
+    }
     lastCardsSave = Date.now()
   } catch (e) { console.warn('[AgentLens] Could not save log cards:', e) }
 }
@@ -2214,15 +2625,8 @@ durableSaveTimer.unref()
 // present and neither same-origin (Origin.host === Host — works on any BIND_HOST) nor loopback. The
 // dashboard is same-origin (allowed); CLI/hook Node clients send no Origin (allowed). One gate closes
 // the whole class regardless of the blanket ACAO:* header.
-function isDisallowedCrossOrigin(req: http.IncomingMessage): boolean {
-  const origin = req.headers.origin
-  if (typeof origin !== 'string' || origin === '') return false // non-browser / same-origin-no-Origin → allow
-  let u: URL
-  try { u = new URL(origin) } catch { return true } // unparseable Origin → refuse
-  if (req.headers.host && u.host === req.headers.host) return false // genuine same-origin → allow
-  const hn = u.hostname // no brackets for IPv6 loopback
-  return !(hn === 'localhost' || hn === '127.0.0.1' || hn === '::1')
-}
+// The predicate lives in src/httpOrigin.ts — SHARED with the MCP endpoint (startMcpHttpServer),
+// so "which origins are allowed" has exactly one definition for every locally-bound HTTP surface.
 
 // Set Access-Control-Allow-Origin ONLY for an allowed origin (same-origin or loopback), never the
 // wildcard. The UI read endpoints (/api/summary, /api/sessions, /api/session/*, /api/debug/*) carry
@@ -2231,15 +2635,7 @@ function isDisallowedCrossOrigin(req: http.IncomingMessage): boolean {
 // the JSON cross-origin (a drive-by localhost-exfil, the READ counterpart to the write vector the
 // CSRF gate closes). The dashboard is same-origin (needs no ACAO); loopback tooling gets its origin
 // echoed; a cross-origin page gets NO ACAO, so the browser blocks it from reading the body. Reuses
-// isDisallowedCrossOrigin so "which origins are allowed" lives in ONE place. Vary:Origin keeps caches
-// from serving one origin's ACAO to another.
-function setAllowedOriginCors(req: http.IncomingMessage, res: http.ServerResponse): void {
-  const origin = req.headers.origin
-  if (typeof origin === 'string' && origin !== '' && !isDisallowedCrossOrigin(req)) {
-    res.setHeader('Access-Control-Allow-Origin', origin)
-    res.setHeader('Vary', 'Origin')
-  }
-}
+// isDisallowedCrossOrigin so "which origins are allowed" lives in ONE place (src/httpOrigin.ts).
 
 // Accumulate a request body with a hard byte cap + an error listener, mirroring the guarded
 // /api/hook-events and /api/agent-gate handlers. On overflow the socket is destroyed and onBody is NOT
@@ -2347,7 +2743,7 @@ const uiServer = http.createServer(async (req, res) => {
           if (!id || !VALID_SOURCES.has(s['source'] as string)) continue
           if (logSessions.has(id)) { skipped++; continue }
           const card = buildImportCardStandalone(s)
-          logSessions.set(id, card)
+          putLogSession(card)   // card.sessionId === id (buildImportCardStandalone reads the same field)
           imported++
         }
         pushUpdate()
@@ -2392,10 +2788,15 @@ const uiServer = http.createServer(async (req, res) => {
       persistence: {
         ...p,
         totalBytesWritten: p.spanAppendBytes + p.offsetsBytes + p.cardsBytes + p.hookEventBytes,
-        files: { spans: spanStoreStats.totalBytes, offsets: sizeOf(OFFSETS_FILE), cards: sizeOf(CARDS_FILE) },
+        // diskBytes(), not sizeOf(OFFSETS_FILE/CARDS_FILE): those legacy paths are migration sources
+        // only now and are never written again, so statting them would report a stale (or eventually
+        // absent) number forever instead of the real delta-log footprint.
+        files: { spans: spanStoreStats.totalBytes, offsets: offsetsLog.diskBytes(), cards: cardsLog.diskBytes() },
       },
       bodies: { archive: archiveDiskUsage(BODIES_ARCHIVE_DIR), lastPass: p.bodiesLastPurge },
       hookEvents: { ...hookEventsDiskUsage(HOOK_EVENTS_DIR), receivedSinceBoot: p.hookEventWrites, spooled: hookSpoolCount() },
+      // TRDD-AMEA4O4Z: gated-out OTEL log events persisted (not dropped) — sink disk usage + boot counters.
+      logEvents: { ...logEventsDiskUsage(LOG_EVENTS_DIR), persistedSinceBoot: p.logEventWrites, persistedBytesSinceBoot: p.logEventBytes, retentionDays: LOG_EVENTS_RETENTION_DAYS },
       // D3K7QM2P/1c — live backpressure: in-flight/queued now, and admitted/shed since boot. A
       // rising shedTotal under a 20-instance burst is the controller doing its job (shed = spooled +
       // drained, never lost). `resources` is the same sample the controller admits/sheds on.
@@ -2638,9 +3039,27 @@ const uiServer = http.createServer(async (req, res) => {
         const since = typeof body.sinceMs === 'number' ? body.sinceMs : 0
         const until = typeof body.untilMs === 'number' ? body.untilMs : Infinity
         const r = extractArchive(BODIES_ARCHIVE_DIR, destDir, e => e.mtimeMs >= since && e.mtimeMs <= until)
-        console.log(`[AgentLens] bodies export: ${r.files} file(s), ${(r.bytes / 1048576).toFixed(1)}MB → ${destDir}`)
-        res.writeHead(200, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({ ...r, destDir }))
+        // The store half of the export (TRDD-K3WDPR7M): once ingestPass reclaims a source file, the
+        // content-addressed store is the ONLY place that body exists. Without this, an export window
+        // would return only what the legacy .wad happens to hold and the caller would read the gap as
+        // "no traffic". Skip-existing makes the two halves compose (identical bytes either way).
+        void (async () => {
+          let storeFiles = 0
+          let storeBytes = 0
+          let storeFailed: string[] = []
+          try {
+            bodyStore ??= await openStore({ dir: path.join(DATA_DIR, 'store') })
+            const s = await exportBodiesFromStore(bodyStore, destDir, since, until)
+            storeFiles = s.files; storeBytes = s.bytes; storeFailed = s.failed
+          } catch (e) {
+            // The archive half already succeeded — report the store half's failure rather than
+            // failing the whole export, but NEVER silently (a partial export must say so).
+            storeFailed = [`store export failed: ${e instanceof Error ? e.message : String(e)}`]
+          }
+          console.log(`[AgentLens] bodies export: ${r.files} archive + ${storeFiles} store file(s), ${((r.bytes + storeBytes) / 1048576).toFixed(1)}MB → ${destDir}${storeFailed.length ? ` (${storeFailed.length} FAILED)` : ''}`)
+          res.writeHead(200, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ files: r.files + storeFiles, bytes: r.bytes + storeBytes, fromArchive: r.files, fromStore: storeFiles, failed: storeFailed, destDir }))
+        })()
       } catch (e) {
         res.writeHead(500, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ error: String(e instanceof Error ? e.message : e) }))
@@ -2651,18 +3070,37 @@ const uiServer = http.createServer(async (req, res) => {
 
   if (req.method === 'POST' && url === '/api/bodies/purge') {
     try {
-      // Explicit destructive op from the CLI: delete EVERY archive volume. The live 72h window is
-      // untouched (it regenerates hourly into the archive anyway); automatic ageing is handled by
-      // the retention pass, so this endpoint is only for a deliberate manual reclaim.
-      const usage = archiveDiskUsage(BODIES_ARCHIVE_DIR)
-      let removed = 0
-      for (const f of fs.existsSync(BODIES_ARCHIVE_DIR) ? fs.readdirSync(BODIES_ARCHIVE_DIR) : []) {
-        if (!/^bodies-\d{4}-\d{2}\.wad(\.idx)?$/.test(f)) continue
-        try { fs.unlinkSync(path.join(BODIES_ARCHIVE_DIR, f)); removed++ } catch { /* ignore */ }
-      }
-      console.log(`[AgentLens] bodies archive purged: ${usage.entries} lump(s), ${(usage.bytes / 1024 ** 3).toFixed(2)}GB freed`)
-      res.writeHead(200, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ removedFiles: removed, freedBytes: usage.bytes, lumps: usage.entries }))
+      // Explicit destructive op from the CLI — but destruction is EARNED, never assumed
+      // (TRDD-K3WDPR7M, 2026-07-15 USER directive): each volume is deleted ONLY after every one of
+      // its lumps is proven in the store (exact bytes + the (src_name, capture-ts) row). A volume
+      // that fails stays on disk with its failures named. The .idx sidecars are ALWAYS kept —
+      // capture-time provenance at ~0.05% of the volume's size.
+      void (async () => {
+        try {
+          bodyStore ??= await openStore({ dir: path.join(DATA_DIR, 'store') })
+          const names = (fs.existsSync(BODIES_ARCHIVE_DIR) ? fs.readdirSync(BODIES_ARCHIVE_DIR) : [])
+            .filter((f) => /^bodies-\d{4}-\d{2}\.wad$/.test(f))
+          const removed: string[] = []
+          const kept: Array<{ volume: string; verified: number; entries: number; failedSample: string[] }> = []
+          let freedBytes = 0
+          for (const v of names) {
+            const proof = await verifyVolumeInStore(bodyStore, BODIES_ARCHIVE_DIR, v)
+            if (!proof.ok) {
+              kept.push({ volume: v, verified: proof.verified, entries: proof.entries, failedSample: proof.failed.slice(0, 5) })
+              continue
+            }
+            const p = path.join(BODIES_ARCHIVE_DIR, v)
+            try { freedBytes += fs.statSync(p).size; fs.unlinkSync(p); removed.push(v) } catch { /* raced */ }
+          }
+          console.log(`[AgentLens] bodies archive purge: removed ${removed.length} verified volume(s) ` +
+            `(${(freedBytes / 1024 ** 3).toFixed(2)}GB), kept ${kept.length} unproven; .idx sidecars retained`)
+          res.writeHead(200, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ removed, kept, freedBytes }))
+        } catch (e) {
+          res.writeHead(500, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ error: String(e instanceof Error ? e.message : e) }))
+        }
+      })()
     } catch (e) {
       res.writeHead(500, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ error: String(e instanceof Error ? e.message : e) }))
@@ -2672,13 +3110,16 @@ const uiServer = http.createServer(async (req, res) => {
 
   if (req.method === 'POST' && url === '/api/clear') {
     spans = []
-    logSessions.clear()
+    markDataChanged()
+    clearLogSessions()
     logReader.clearFileState()
     clearPersistedSpans()
     pushUpdate()          // send cleared state to clients immediately
     res.writeHead(200); res.end()
-    // Re-ingest after the response is sent so the client sees the cleared state first.
-    setImmediate(() => runLogScan())
+    // Re-ingest after the response is sent so the client sees the cleared state first. FULL: the tail
+    // offsets were just wiped, so every file must be re-read — a targeted scan would only see the
+    // handful of paths the watcher happened to name since the last scan.
+    setImmediate(() => runLogScan('full'))
     return
   }
 
@@ -2848,6 +3289,7 @@ const uiServer = http.createServer(async (req, res) => {
         const body = JSON.parse(bodyBuf.toString('utf-8')) as { type?: string }
         if (body.type === 'clearAll') {
           spans = []
+          markDataChanged()
           clearPersistedSpans()
           pushUpdate()
         }
@@ -2858,9 +3300,8 @@ const uiServer = http.createServer(async (req, res) => {
   }
 
   if (req.method === 'GET' && url === '/api/summary') {
-    const summary = buildSessionSummary()
     res.writeHead(200, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify(stripSessionDetail(summary)))
+    res.end(JSON.stringify(buildStrippedSummary()))
     return
   }
 
@@ -2883,9 +3324,24 @@ const uiServer = http.createServer(async (req, res) => {
   // only their appended bytes; `fullReads` counts from-0 (cold-start/fallback) parses. Appending to
   // a live session must bump incrementalReads while fullReads stays put — the "no full-file rescans
   // on each append" acceptance check.
+  // TRDD-X2E6OSWK adds the CPU-spin proof: `filesStatted` must grow by ~1 per changed file in steady
+  // state (targeted scan), NOT by ~12.5k every scan (full sweep); and the derived-view caches must
+  // show hits, meaning the dashboard model is rebuilt once per data change instead of per caller.
   if (req.method === 'GET' && url === '/api/debug/log-scan-stats') {
     res.writeHead(200, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify(logReader.getLogScanStats()))
+    res.end(JSON.stringify({
+      ...logReader.getLogScanStats(),
+      dataVersion,
+      derivedCaches: {
+        summary: summaryCache.stats(),
+        stripped: strippedCache.stats(),
+        sidebar: sidebarCache.stats(),
+        analytics: analyticsCache.stats(),
+      },
+      // The scratch indexer runs on every incremental parse; `readdirs` must stay ~flat while a
+      // session is appended to (it re-walks the OS temp roots only when their listing really changed).
+      scratchListing: scratchListingStats(),
+    }))
     return
   }
 
@@ -2934,21 +3390,8 @@ const uiServer = http.createServer(async (req, res) => {
 
   if (req.method === 'GET' && url?.startsWith('/api/timeline/')) {
     const sessionId = decodeURIComponent(url.slice('/api/timeline/'.length))
-    const summary = buildSessionSummary()
-    let session = summary?.sessions.find(s => s.sessionId === sessionId) ?? null
-    // TRDD-PJC8N1HO spec 3: a card RESTORED (stripped) from disk on startup has an empty timeline (its
-    // file was skipped by the offset resume). When such a card is actually drilled, re-parse its ONE
-    // file on demand to rebuild the timeline, then cache the full card in logSessions for next time.
-    if (session && (session.timeline?.length ?? 0) === 0 && logSessions.has(sessionId)) {
-      try {
-        const reparsed = logReader.reparseSession(sessionId)
-        if (reparsed) {
-          statuslineReader.overlay(reparsed.card)
-          logSessions.set(reparsed.card.sessionId, reparsed.card)
-          session = reparsed.card
-        }
-      } catch { /* on-demand rebuild is best-effort — fall back to the stripped card's empty timeline */ }
-    }
+    // Shared reparse-on-demand for a disk-restored stripped card (see resolveSessionCard).
+    const session = resolveSessionCard(sessionId)
     res.writeHead(200, { 'Content-Type': 'application/json' })
     // TRDD-ZS1GDXVY: generatedFiles (session-level group + truncation flag) rides the lazy timeline
     // payload, not the bulk summary — stripSessionDetail drops it from /api/summary to keep it light.
@@ -3033,6 +3476,31 @@ const uiServer = http.createServer(async (req, res) => {
         console.warn('[AgentLens] history parse failed', e)
         res.writeHead(200, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ history: null }))
+      })
+    return
+  }
+
+  if (req.method === 'GET' && url?.startsWith('/api/conversation/')) {
+    // TRDD-B22NYTOY: the NARRATIVE conversation — verbatim ordered turns (prompts, replies, tool
+    // in/out pairs, compaction dividers). Same ?parent= + nearest-logged-ancestor fallback as
+    // /api/history; the client renders lazily (blocks collapsed), so the whole reconstruction ships.
+    if (heavyGuard(res, url, 'conversation')) return
+    const sessionId = decodeURIComponent(url.slice('/api/conversation/'.length))
+    const rawUrl = req.url ?? ''
+    const qIdx = rawUrl.indexOf('?')
+    const parentHint = qIdx >= 0 ? new URLSearchParams(rawUrl.slice(qIdx + 1)).get('parent') ?? undefined : undefined
+    const convSessions = buildSessionSummary()?.sessions ?? []
+    const parentOf = (id: string): string | undefined => convSessions.find(s => s.sessionId === id)?.parentSessionId
+    const parentSessionId = resolveLoggedAncestor(sessionId, parentOf) ?? parentOf(sessionId) ?? parentHint
+    buildConversation(sessionId, parentSessionId)
+      .then(conversation => {
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ conversation }))
+      })
+      .catch(e => {
+        console.warn('[AgentLens] conversation parse failed', e)
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ conversation: null }))
       })
     return
   }

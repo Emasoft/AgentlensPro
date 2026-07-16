@@ -3,7 +3,7 @@ trdd-id: F6BM1BDI
 title: Scope the UI server ACAO from wildcard to same-origin/loopback (close cross-origin read exfil)
 column: dev
 created: 2026-07-11T16:33:42+0200
-updated: 2026-07-11T16:38:06+0200
+updated: 2026-07-16T11:26:00+0200
 current-owner: claude-code-review
 assignee: claude-code-review
 priority: 3
@@ -38,13 +38,24 @@ implementation-commits: []
 pr-url: null
 ---
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-07-11
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-07-16
 
 **✅ DONE + verified (2026-07-11).** `setAllowedOriginCors` (reuses `isDisallowedCrossOrigin`)
 replaces the blanket `ACAO: *`; evil.com gets no ACAO, loopback origin echoed, same-origin
 needs none. TDD `src/test/standaloneCors.test.ts` (real boot, 3 cases). Gate GREEN
 **876 passing / 0 failing**, tsc 0-error. RED provable by inspection (blanket `*` fails all
 3 assertions). Committed + merged to main (see git log). Not pushed (npm pkg, not a plugin).
+
+**2026-07-16 addendum — the MCP endpoint sibling is CLOSED (branch review sweep).** The
+standalone MCP HTTP server (`startMcpHttpServer`) carried the SAME `ACAO: *` this TRDD removed
+from the UI server. Fixed on `feat/cache-expiry-probe`: the predicate + echo helper moved to
+**`src/httpOrigin.ts`** (ONE source of truth; `standalone/server.ts` and `src/mcpServer.ts` both
+import it), `/mcp` gets scoped ACAO + a 403 CSRF gate on cross-origin POST (POST executes a tool)
++ a 4 MB body cap + leak-proof per-request transport close. Extracting the predicate surfaced a
+latent bug in THIS TRDD's original implementation: WHATWG `URL.hostname` keeps the brackets on
+IPv6 (`'[::1]'`), so the `hn === '::1'` comparison never matched and IPv6-loopback origins were
+silently refused (fail-closed, but wrong) — now stripped and unit-tested. Coverage:
+`src/test/httpOrigin.test.ts` (unit) + 5 MCP cases in `standaloneCors.test.ts` (real boot).
 
 **What this is:** a security hardening surfaced during the /go-on-yourself broader
 eval after the code-review remediation (TRDD-4AFOFVFD). The round-1 sweep closed the

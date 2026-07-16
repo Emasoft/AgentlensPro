@@ -5,6 +5,7 @@ import { SpanAttribute } from './shared/telemetryTypes'
 import { callBodyRegistry } from './rawBodyContext'
 import { countFallback } from './shared/fallbackCounters'
 import { resolveLogEventName, bareLogEventName, CLAUDE_RICH_LOG_EVENTS, BODY_POINTER_LOG_EVENTS } from './otlpLogEvents'
+import { appendDroppedLogEvent, buildDroppedLogEventRecord } from './logEventSink'
 import { CodexSessionNormalizer, isCodexPromptEventName } from './codexSessionNormalizer'
 import { formatGenAiEventContent } from './genAiContent'
 
@@ -34,11 +35,18 @@ export class OtlpCollector {
   // records whose name could not be resolved from attrs, the OTLP eventName field, or the body.
   private droppedLogEvents = new Map<string, number>()
   private readonly DROPPED_EVENTS_MAX_NAMES = 50
+  // TRDD-AMEA4O4Z: warn once per boot per error message when the sink append fails — a sink
+  // failure must never reject the OTLP payload (that would lose the spans too), nor be silent.
+  private logSinkWarned = new Set<string>()
 
   constructor(
     private port: number,
     private store: SessionStore,
-    private output: OutputChannelLike
+    private output: OutputChannelLike,
+    /** When set, every log event the rich-event gate rejects is PERSISTED here as append-only
+     *  daily NDJSON buckets instead of being discarded (TRDD-AMEA4O4Z). Mirrors the standalone
+     *  path — the two gates must never disagree about what survives. */
+    private logEventsSinkDir?: string,
   ) {}
 
   setIngestionEnabled(on: boolean) {
@@ -436,6 +444,20 @@ export class OtlpCollector {
 
           if (!isCodexEvent && !isClaudeToolResult && !isClaudeRichEvent) {
             this.noteDroppedLogEvent(eventName)
+            // TRDD-AMEA4O4Z: not ingested as a span, but never discarded — persist the full event
+            // to the sink when one is configured (mirrors the standalone gate exactly).
+            if (this.logEventsSinkDir) {
+              try {
+                appendDroppedLogEvent(this.logEventsSinkDir,
+                  buildDroppedLogEventRecord(eventName, bareEvent, attrs, rec as Record<string, unknown>))
+              } catch (e) {
+                const msg = (e as Error).message
+                if (!this.logSinkWarned.has(msg)) {
+                  this.logSinkWarned.add(msg)
+                  this.output.appendLine(`[AgentLens] log-event sink append FAILED (event lost — disk problem?): ${msg}`)
+                }
+              }
+            }
             continue
           }
           if (isCodexEvent && this.isCodexWebsocketSpan(eventName, attrs)) {continue}

@@ -9,6 +9,10 @@
  */
 
 import { Span } from './shared/telemetryTypes'
+// A real import, not just the type re-export below — `export type { X } from` does NOT bring X into
+// this module's scope, and tsc's "Cannot find name" for a name visibly listed 10 lines up is easy to
+// misread as a stale-build problem.
+import type { BackgroundSpanSummary } from './shared/summarizerTypes'
 import { contextTokens } from './shared/tokenBuckets'
 import { detectLoopSignals } from './loopDetector'
 import { buildCopilotSessions } from './summarizers/copilot'
@@ -158,17 +162,29 @@ export function summarizeSpans(spans: Span[]) {
   sessions.forEach(s => { s.loopSignals = detectLoopSignals(s) })
 
   // Background/orphan spans — associate with sessions by traceId
-  const bgByTraceId: Record<string, Array<{ name: string; model: string; purpose: string; inputTokens: number; outputTokens: number }>> = {}
+  const bgByTraceId: Record<string, BackgroundSpanSummary[]> = {}
   const backgroundSpans = orphanSpans.filter(s => !s.name.startsWith('codex.')).map(s => {
     const agentName = getAttrStr(s, 'gen_ai.agent.name')
     const model = getAttrStr(s, 'gen_ai.request.model')
     const inTok = getAttrInt(s, 'gen_ai.usage.input_tokens')
     const outTok = getAttrInt(s, 'gen_ai.usage.output_tokens')
+    // CC >= 2.1.202: workflow-spawned agents carry workflow.run_id / workflow.name, added upstream
+    // precisely so a workflow run can be reconstructed from OTel. Capture them here or the signal is
+    // persisted-but-invisible: raw spans keep the attrs verbatim, but nothing downstream reads raw.
+    const workflowRunId = getAttrStr(s, 'workflow.run_id')
+    const workflowName = getAttrStr(s, 'workflow.name')
     let purpose = agentName || s.name
     if (agentName === 'title') { purpose = 'Generate chat title' }
     if (agentName === 'progressMessages') { purpose = 'Generate progress messages' }
     if (purpose === 'copilotLanguageModelWrapper' || s.name === 'copilotLanguageModelWrapper') { purpose = 'Extension language model call' }
-    const bg = { name: s.name, model, purpose, inputTokens: inTok, outputTokens: outTok }
+    // A workflow agent with no agent name would otherwise show as a bare span name — the workflow
+    // name is the human-meaningful label the operator actually recognizes.
+    if (!agentName && workflowName) { purpose = `workflow: ${workflowName}` }
+    const bg: BackgroundSpanSummary = {
+      name: s.name, model, purpose, inputTokens: inTok, outputTokens: outTok,
+      ...(workflowRunId ? { workflowRunId } : {}),
+      ...(workflowName ? { workflowName } : {}),
+    }
     const tid = s.traceId || ''
     if (tid) {
       if (!bgByTraceId[tid]) { bgByTraceId[tid] = [] }

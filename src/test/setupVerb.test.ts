@@ -165,8 +165,11 @@ suite('setup — virgin HOME full converge (real server on ephemeral ports)', ()
 
   test('every owned telemetry env key holds exactly the expected value for the fixture ports', () => {
     const env = (readSettings(f).env ?? {}) as Record<string, string>
-    const expected = ownedTelemetryKeys(path.join(f.dataDir, 'otel-bodies'), ports.otlp)
+    // capture=false: setup must NOT wire raw-body capture by default (TRDD-BKF5NZD3 — it costs
+    // ~35 GB/day, so a fresh install must never turn it on behind the user's back).
+    const expected = ownedTelemetryKeys(path.join(f.dataDir, 'otel-bodies'), ports.otlp, false)
     for (const [k, v] of Object.entries(expected)) assert.strictEqual(env[k], v, k)
+    assert.ok(!('OTEL_LOG_RAW_API_BODIES' in env), 'a default setup must not arm raw-body capture')
   })
 
   test('the final self-test verified the OTLP→get_recent_sessions round-trip and the hook/gate handlers', () => {
@@ -275,7 +278,7 @@ suite('setup — repair matrix (broken fixtures, real converge)', () => {
 
   test('wrong + truncated telemetry env is repaired to the full expected key set', () => {
     const env = (readSettings(f).env ?? {}) as Record<string, string>
-    const expected = ownedTelemetryKeys(path.join(f.dataDir, 'otel-bodies'), ports.otlp)
+    const expected = ownedTelemetryKeys(path.join(f.dataDir, 'otel-bodies'), ports.otlp, false)
     for (const [k, v] of Object.entries(expected)) assert.strictEqual(env[k], v, k)
     assert.strictEqual(stepOf(repaired, 'otel-env').verify, 'PASS')
   })

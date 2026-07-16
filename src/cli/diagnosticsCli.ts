@@ -25,7 +25,11 @@ export const USAGE = `agentlenspro — AI-agent observability: server, dashboard
 usage:
   agentlenspro                                start the server in the foreground (serves the dashboard)
   agentlenspro setup [--dry-run] [--yes]      detect → converge → verify: install or repair everything
-                                              (server, DB, hooks, skill, telemetry env), then self-test
+                                              (server, DB, hooks, skill, telemetry env), then self-test.
+                                              Starts with a read-only environment probe (platform,
+                                              Node floor, native deps, port squatters, disk) that
+                                              fails fast on real incompatibilities. Platforms:
+                                              macOS + Linux; Windows via WSL2 ONLY (native win32 refused)
   agentlenspro server start|stop|restart|status [--supervise]
                                               manage the background server; --supervise runs the
                                               crash-restart supervisor in the foreground
@@ -41,10 +45,22 @@ usage:
   agentlenspro hook                           lifecycle hook handler (stdin → server; registered by setup)
   agentlenspro gate                           agent-launch burn gate (stdin → server; registered by setup)
   agentlenspro heartbeat-cost [--oneline]     exact token + $ cost of the last settled heartbeat fire
+  agentlenspro disable [reason]               GLOBAL BRAKE — turn every AgentlensPro side-effect OFF
+                                              (hooks, burn-gate, auto-revive, background ingestion) in
+                                              EVERY running Claude session, on its next hook fire. Stops
+                                              the server too. Works WITHOUT restarting any session — a
+                                              settings edit does not, because a running agent loaded its
+                                              config at launch.
+  agentlenspro enable                         undo disable — hooks resume on their next fire
   agentlenspro config [list]                  show data-retention knobs: effective value + source
   agentlenspro config get <key>               one retention knob's effective value + where it came from
   agentlenspro config set <key> <value>       persist a retention knob to ~/.agentlens/config.json
                                               (survives uninstall/upgrade; restart to apply; env still wins)
+                                              captureRawBodies on|off turns raw-body capture on/off
+                                              (opt-in, default off; on mounts a RAM-disk spool on macOS)
+  agentlenspro spool ensure                   (re)create the RAM-disk spool for raw-body capture — a
+                                              no-op when capture is off; run at login by a LaunchAgent
+                                              (installed automatically when capture is turned on)
   agentlenspro env [facet] [--json] [--out F]  detect the runtime environment: terminal kind, OS,
                                               Claude/ai-maestro/CI/container context, filesystem/worktree,
                                               user, network/VPN/proxy, cloud (AWS/Azure/GCP), tooling,
@@ -67,9 +83,11 @@ operations:
   --stop-server         graceful SIGTERM to the running server (flushes all stores first)
   --dashboard           ensure the server is up, then open the dashboard
   --purge-db            clear the span store + session cards (server re-ingests from logs)
-  --export-bodies DIR   extract the archived OTEL bodies into DIR as plain files
-                        (optionally --since <ISO|hours> / --until <ISO>)
-  --purge-bodies        delete ALL archived body volumes (the live 72h window is untouched)
+  --export-bodies DIR   extract OTEL bodies into DIR as plain files, from BOTH the content-
+                        addressed store and the legacy .wad archive (optionally --since <ISO|hours>
+                        / --until <ISO>)
+  --purge-bodies        delete archived body volumes PROVEN durable in the store; a volume that
+                        fails verification is kept and named (the live 72h window is untouched)
   --risk                one-shot realtime culprit check (~50ms, REST fast path): prints ONLY the
                         active burn risks — each names the culprit session/workspace/model and
                         the magnitude — or "no active burn risks"
@@ -407,8 +425,13 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
   }
 
   if (ops.purgeBodies) {
+    // Response shape changed with the verify-before-delete gate (TRDD-K3WDPR7M): removed/kept are
+    // now per-volume arrays — a volume the store cannot prove is KEPT with its failures named.
     const r = await apiRequest('POST', '/api/bodies/purge')
-    console.log(`bodies archive purged: ${r.lumps} lump(s), ${fmtGb(Number(r.freedBytes))} freed (live 72h window untouched)`)
+    const removed = Array.isArray(r.removed) ? r.removed as string[] : []
+    const kept = Array.isArray(r.kept) ? r.kept as Array<{ volume: string; verified: number; entries: number }> : []
+    console.log(`bodies archive purge: removed ${removed.length} verified volume(s) (${fmtGb(Number(r.freedBytes))} freed), kept ${kept.length} unproven; .idx sidecars + live 72h window untouched`)
+    for (const k of kept) console.log(`  KEPT ${k.volume}: only ${k.verified}/${k.entries} lump(s) proven in the store`)
     return
   }
 

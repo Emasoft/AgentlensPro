@@ -392,6 +392,116 @@ the ingestion daemon **is** the standalone server, kept always-on by the hooks t
   env-tunable (`AGENTLENS_MAX_INFLIGHT*`, `AGENTLENS_MAX_RSS_MB`, `AGENTLENS_MIN_FREE_DISK_MB`,
   `AGENTLENS_LOADAVG_MAX`, `AGENTLENS_ADMIT_*`) and CPU-scaled; live counters ride `/api/server-stats`.
 
+### Body store — content-addressed, verify-then-delete (TRDD-K3WDPR7M)
+
+Raw OTEL request/response bodies (opt-in capture — `src/captureConfig.ts`,
+`agentlenspro config set captureRawBodies on|off`) no longer accumulate as loose JSON files or
+feed a gzip archiver. They are ingested into a **content-addressed body store** at
+`<dataDir>/store/` (`src/store/db.ts`, `bodyStore.ts`, `ingestPass.ts`):
+
+```text
+Claude Code raw body write
+  → live bodies dir (plain files: DATA_DIR/otel-bodies, or the RAM-disk spool when capture is on)
+  → ingestPass(): sectionize the body into literal + shared-span parts (src/store/sections.ts),
+    hash each span (its content IS its address), write new spans + body/part metadata into an
+    IN-MEMORY DuckDB instance — never a persistent .duckdb file (see below)
+  → flush(): the in-memory tables are written ONCE to immutable, zstd-compressed Parquet parts
+    under store/{blobs,bodies,parts}/ and never rewritten
+  → VERIFY: verifyBodyInStore() re-reads the body from the flushed, DURABLE Parquet parts,
+    compares its sha256 against the original file's bytes, AND confirms a (src_name, capture-ts)
+    row exists for it (src/store/verifyInStore.ts)
+  → only when the exact bytes AND that row are both proven is the source file deleted
+```
+
+**Why fileless DuckDB.** A *persistent* `.duckdb` file rewrites row-groups internally — measured
+at 5 MB of device writes for a single 881 KB turn (300× worse than the alternative below). Running
+DuckDB `:memory:` and flushing to Parquet parts that are written once and never rewritten avoids
+that amplification entirely; `temp_directory` is set to `''` so an over-limit query fails loudly
+instead of silently spilling to the SSD mid-query.
+
+**Deduplication.** Because consecutive turns re-send most of the same transcript, spans are
+deduplicated by content hash across the whole store (`Store.known`, reloaded from the durable
+Parquet parts on boot) — re-ingesting a body that shares spans with an earlier one adds zero new
+bytes for those spans. This is most of where the size reduction below comes from, not compression
+alone.
+
+**RAM-disk spool (opt-in capture only, macOS).** When raw-body capture is on, the *write itself*
+is the SSD wear the store cannot avoid downstream, so `src/ramdisk.ts` mounts a RAM-disk volume
+(`AgentLensSpool`) and Claude Code's `OTEL_LOG_RAW_API_BODIES` is pointed at it instead of a real
+path — the live bodies dir the pipeline above drains is then volatile memory, not disk. A
+boot-time LaunchAgent (`agentlenspro spool ensure`, `src/cli/spoolLaunchAgent.ts`) re-creates the
+spool at login, since a reboot destroys the RAM disk but Claude Code reads the env var only at
+launch; the drain runs every 60s in spool mode (vs. hourly otherwise) with an emergency cap so a
+runaway producer cannot fill volatile memory.
+
+**Legacy `.wad` archive — read-only fallback, not the current write path.** Before this store, an
+hourly archiver pass gzip-packed each body into a monthly `.wad` volume (`src/bodyArchive.ts`)
+with no cross-body dedup — the identical ~268 KB `tools` array was stored again every single turn.
+That archiving behavior is retired (the same periodic pass now ingests into the content-addressed
+store instead), but existing `.wad` volumes are **never deleted automatically** — reclaiming them
+is a separate, explicit decision — and remain readable: `src/store/migrateArchive.ts` drains a
+`.wad` volume into the content-addressed store the same verify-then-delete way, and
+`/api/bodies/export` (`exportBodiesFromStore` in `src/store/bodyStore.ts`) reads from **both** the
+store and the `.wad` archive so an export never silently misses a body that has already been
+reclaimed from the live directory.
+
+**Verify-before-delete — one gate, every deletion site.** The reclaim above is not the only place
+that destroys a source once its data is durable; `src/store/verifyInStore.ts` is the single gate
+they all share, so the bar cannot drift apart per call site. `verifyBodyInStore()` proves three
+things before any delete: the body reconstructs byte-identically from the durable store, a body row
+exists for *that* `src_name` (not merely the same content under another name — the row is what
+time-window queries and exports see), and, when the caller knows it, the row's `ts` matches the
+capture time (±2 s). It gates the live/spool reclaim (`ingestPass.ts`), the `.wad` drain
+(`migrateArchive.ts`), the retention purge (`purgeArchiveVolumes`, which now requires the gate and
+keeps any unproven volume regardless of age), and the explicit `POST /api/bodies/purge`
+(`verifyVolumeInStore` in `src/store/archiveVerify.ts` proves a whole volume lump-by-lump; the
+response is `{removed, kept, freedBytes}`, and the `.idx` sidecars are always retained — at ~0.05%
+of a volume's size they are the only remaining record of each lump's capture time). Two lifecycle
+sources outside the body store are gated the same way: the hook-event spool drain reads each appended
+NDJSON line back from its daily bucket byte-for-byte before unlinking the spool file
+(`verifyAppendedLine` in `src/hookEventStore.ts`), and a payload that can never ingest — unparseable,
+or a 400 — is **quarantined** into `hook-spool/rejected/` (`quarantineSpoolFile`) instead of deleted,
+because a payload we cannot ingest is still data.
+
+**Schema v2 — capture-time recovery (`CURRENT_SCHEMA = 2`).** The first backfill and the `.wad`
+drain both ran on stale compiled code that did not pass the capture time, so ~78,031 `.idx`-joinable
+rows carry the ingest batch time instead of the real capture time (the bytes are hash-proven correct;
+only `ts` lied). `src/store/tsRecovery.ts` builds a v1→v2 migration that corrects `body.ts` from the
+archive `.idx` sidecars' ground truth and materializes **alias rows** — the archive can hold the same
+content under several `src_name`s, but `ingestBody` dedups on content, so the later names had no body
+row; v2 adds one row per missing `(src_name → existing body_id)`, each with its own capture `ts`. It
+runs through the standard staged migration protocol (`src/store/migrate.ts`: build `<dir>.migrating`,
+`validateStore` #1 + body-id set-equality #2, atomic swap, old store kept as `.old-v<from>`) and aborts
+with the live store untouched on any alias whose `body_id` the store does not hold. The recovery is
+partial by necessity, and the store does not hide it: the ~22,569 rows backfilled from live files
+that were already deleted have no `.idx` entry, so their capture times are **unrecoverable** and
+those rows keep their ingest-time `ts` — inventing a time would be fabrication.
+
+Measured on this project's own captured history: ~52 GB of raw bodies (live capture plus the
+drained legacy archive) compressed to ~270 MB of Parquet on disk (~190×), with every body verified
+byte-identical at ingest time and re-proven by an independent full-corpus validation sweep —
+328,606/328,606 spans content-address OK, 100,600/100,600 bodies reconstruct to the exact sha256 of
+their source, zero dangling references
+(`reports/storage-migration/20260715_003054+0200-backfill-and-drain.md`). A smaller,
+independently-run dry run separately measured 167× (4.00 GB → 24 MB, 7,439/7,439 bodies
+verified).
+
+### Delta-log persistence for session/offset state (TRDD-K3WDPR7M)
+
+`log-sessions.json` and `log-offsets.json` were previously rewritten **in full** on every save —
+measured at ~9.4 MB/min of device writes combined, regardless of how many records actually
+changed. `src/store/deltaLog.ts`'s `DeltaLog<T>` replaces the whole-file rewrite with a
+`<name>.snapshot.ndjson` + `<name>.delta.ndjson` pair: each save hashes every record's serialized
+form and appends **only** the records that changed (plus tombstones for records that disappeared)
+to the delta file — a save where nothing changed now writes zero bytes. The delta log is
+periodically compacted back into a fresh snapshot once it grows past the snapshot's own size
+(bounding replay cost on load); compaction re-parses the freshly written snapshot **from disk** and
+confirms it reproduces the exact record set — count plus per-record hash — *before* the delta is
+dropped, so a silently short or corrupt snapshot write aborts with the old snapshot and the delta
+both intact rather than truncating the corpus. A crash mid-append can only lose a torn trailing
+line, which `load()` drops on the next read — the record it belonged to is simply re-derived and
+re-appended on the next save.
+
 ---
 
 ## 6. Session Summarizer

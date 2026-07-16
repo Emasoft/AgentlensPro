@@ -21,7 +21,9 @@ import { runDiagnosticsCli, USAGE } from './diagnosticsCli'
 import { runHookCommand } from './hookHandlers'
 import { runHeartbeatCost } from './heartbeatCostCli'
 import { runConfigCli } from './configCli'
+import { runSpoolCli } from './spoolCli'
 import { runEnvCli } from './envCli'
+import { runDisableCli, runEnableCli } from './disableCli'
 import { ensureServer, openDashboard, serverCommand, daemonCommand } from './serverControl'
 import { runSetupCli } from './setup'
 
@@ -63,6 +65,14 @@ export async function cliMain(argv: string[], startServer: () => Promise<unknown
       return runHookCommand('hook')
     case 'gate':
       return runHookCommand('gate')
+    case 'disable':
+      // THE GLOBAL BRAKE. Arms <dataDir>/DISABLED, which disarms every hook, the burn-gate, server
+      // auto-revive and all background ingestion — in EVERY Claude session already running, on its
+      // next hook fire. This is the only channel that reaches an agent whose env and settings were
+      // fixed at launch; a settings edit reaches nothing that is already running (see killSwitch.ts).
+      return runDisableCli(argv.slice(1))
+    case 'enable':
+      return runEnableCli()
     case 'telemetry':
       return runTelemetryCli(argv.slice(1))
     case 'setup':
@@ -86,6 +96,10 @@ export async function cliMain(argv: string[], startServer: () => Promise<unknown
       // Data-retention config (TRDD-ZAV74M8Q): read/write DATA_DIR/config.json directly — no
       // server needed, so it works while the server is down and the values persist across uninstall.
       return runConfigCli(argv.slice(1))
+    case 'spool':
+      // RAM-disk spool for raw-body capture (TRDD-K3WDPR7M Phase 3). `spool ensure` is what the
+      // boot-remount LaunchAgent runs at login — re-create the spool iff capture is on, else no-op.
+      return runSpoolCli(argv.slice(1))
     case 'env':
       // Environment/system detection (TRDD-HUWJVQJA): terminal kind, OS, Claude/ai-maestro/CI/
       // container context, filesystem/worktree, network, cloud, tooling, MCP — all client-side, no

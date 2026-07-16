@@ -49,7 +49,10 @@ function joinedText(v: unknown): string {
 // meaningful injected content (pure deltas with counts only, etc.). The taxonomy is derived from real
 // logs: hook injections (by hookName), the skill catalog, tool/agent/mcp catalog deltas, file reads,
 // task reminders.
-function classifyAttachment(att: Record<string, unknown>): { label: string; kind: string; bytes: number; text: string } | null {
+// EXPORTED as the ONE attachment classifier (TRDD-B22NYTOY): contextHistory and conversation
+// import it — an identical private copy previously lived in contextHistory (verified byte-equal
+// before de-duping), and the injected-content taxonomy must never fork.
+export function classifyAttachment(att: Record<string, unknown>): { label: string; kind: string; bytes: number; text: string } | null {
   const t = String(att['type'] ?? '')
   const hookName = att['hookName'] ? String(att['hookName']) : undefined
   switch (t) {
@@ -109,7 +112,10 @@ export function resolveLoggedAncestor(sessionId: string, parentOf: (id: string) 
 }
 
 // Locate the .jsonl for a sessionId across all Claude project dirs (filename == sessionId).
-function findSessionFile(sessionId: string): string | null {
+// EXPORTED as the ONE canonical resolver (TRDD-B22NYTOY): contextHistory and conversation import
+// it — this function was previously duplicated un-exported in contextHistory, and duplicated
+// resolution logic is exactly how subtle drift starts.
+export function findSessionFile(sessionId: string): string | null {
   for (const dir of claudeProjectsDirs()) {
     let projects: string[]
     try { projects = fs.readdirSync(dir) } catch { continue }
