@@ -3,7 +3,7 @@ trdd-id: 5F3SE1JM
 title: Ship AgentlensPro as an ai-maestro dependency — compatibility alignment + locked CLI contract
 column: ai_review
 created: 2026-07-16T12:44:03+0200
-updated: 2026-07-16T14:41:24+0200
+updated: 2026-07-16T20:55:00+0200
 current-owner: main
 task-type: feature
 severity: major
@@ -11,13 +11,26 @@ scope: project
 npt: []
 eht: []
 labels: [ai-maestro, integration, contract, cli]
-implementation-commits: [d1a3074, 098b458]
+implementation-commits: [d1a3074, 098b458, 2343ab0]
 test-requirements: [unit, typecheck, lint]
 ---
 
 # Ship AgentlensPro as an ai-maestro dependency
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-07-16
+## ⏵ STATE addendum — 2026-07-16 20:55 — cache-health surface locked (Phase 3, closes the last open #3 question)
+
+The ai-maestro Claude's one remaining question on #3 ("are check_cache_expiry /
+get_cache_break_report / get_cache_break_gap_report / get_cache_break_timeline stable in 2.8.0?"
+— the tailored janitor consumes them to prevent cache-miss/expiration) is ANSWERED as commit
+`2343ab0`: +7 contract tests pin the consumed paths (expiry rows incl. `marginMs` TTL-remaining;
+break-report per-session + cross-session payload keys; the gap report's 6 FIXED bucket keys = the
+5m-TTL-expiry-vs-genuine-break diagnostic; the timeline report + a type-level CacheBreakEvent pin
+incl. `ttlTier`/`TTL_EXPIRY`). Honest split posted on #3: everything pinned ships in 2.8.0 EXCEPT
+the additive scan-honesty metadata from 4b4dc8f (expiry `coverage{...}`/`note`, break-report
+`scanStoppedEarly`/`scanNote`) which lands next release. Gate: 1314/0, tsc 0, lint 0. v2.8.0 is
+LIVE on npm (verified earlier today) — nothing owner-gated remains on this card; gate = human review.
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (superseded by the 20:55 addendum above) — 2026-07-16
 
 **✅ ALIGNMENT COMPLETE (Phase 2 done, ~14:30). The ONE remaining step is OWNER-GATED: publish
 v2.8.0.** The ai-maestro Claude answered #70 and filed the reciprocal AgentlensPro#3:
