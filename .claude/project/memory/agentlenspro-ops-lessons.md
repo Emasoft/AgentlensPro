@@ -148,3 +148,20 @@ Governed by [[cache-ttl-model]] (TTL regimes) and [[agentlens-burn-token-model]]
   disagreement becomes permanent drift toward the boot's value. DO route every writer through
   the ONE resolver (`effectiveBodiesDir` in src/captureConfig.ts, commit 4efe0f5); when adding
   a converged key, ask "who else computes this value?" before shipping.
+
+[^10]: [id:ATOM-THREE-SQL-ENGINES, status:valid, keywords:"add_preset_wrong_engine pragma_rejected duckdb_preset_in_diagnostics_sql which_sql_engine no_wal_no_database_file", ocd:2026-07-16, lmd:2026-07-16]
+  DO NOT add DuckDB-flavored SQL (pragma_database_size, SUMMARIZE, parquet_metadata, a .wal
+  check) to `run_diagnostics_sql` presets, BECAUSE that tool runs on the sql.js/SQLite
+  forensics SNAPSHOT (src/forensicsSql.ts → forensicsDb.ts; its gate rejects PRAGMA outright)
+  — and the DuckDB store is FILELESS (`:memory:` catalog rebuilt from Parquet parts at every
+  open: no db file, no WAL, no catalog file to back up). DO route by engine: transcripts →
+  `run_transcript_sql` (src/transcriptSql.ts, DuckDB over .jsonl), fact-DB analytics →
+  `run_diagnostics_sql` (SQLite), store tuning → the connection SETs in src/store/db.ts.
+  (The 2026-07-16 corpus-mining shortlist got items 2+4 wrong on exactly this — TRDD-802FP7ZL.)
+
+[^11]: [id:ATOM-RAW-NUL-BINARY, status:valid, keywords:"grep_returns_nothing_on_source_file file_says_data binary_file_matches nul_byte_in_source separator_byte", ocd:2026-07-16, lmd:2026-07-16]
+  DO NOT put a raw 0x00 byte in a source file (e.g. as an unambiguous hash-field/join
+  separator), BECAUSE file(1) then classifies the whole module as "data" and grep/diff treat
+  it as binary — grep -n silently returns NOTHING on a file full of matches (cost a real
+  head-scratch on cacheBreakTimeline.ts, 2026-07-16, commit c294238). DO spell it as the backslash-u0000 escape — byte-identical runtime string, text-classified source. Symptom to recall
+  this by: "grep finds nothing in a file that obviously contains the pattern."
