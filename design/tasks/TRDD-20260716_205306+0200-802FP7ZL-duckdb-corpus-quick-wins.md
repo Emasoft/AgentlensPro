@@ -1,9 +1,9 @@
 ---
 trdd-id: 802FP7ZL
 title: DuckDB corpus quick-win adoptions — object cache on the store connection + migration run-twice contract test
-column: planned
+column: ai_review
 created: 2026-07-16T20:53:06+0200
-updated: 2026-07-16T20:53:06+0200
+updated: 2026-07-16T21:10:00+0200
 current-owner: main
 task-type: refactor
 severity: minor
@@ -11,13 +11,20 @@ scope: project
 npt: []
 eht: []
 labels: [store, duckdb, tests, corpus-mining]
-implementation-commits: []
+implementation-commits: [1c378c9]
 test-requirements: [unit, typecheck, lint]
 ---
 
 # DuckDB corpus quick-win adoptions (items 3 + 5 of the mining shortlist)
 
-## ⏵ STATE — 2026-07-16 20:53
+## ⏵ STATE — 2026-07-16 21:10 — SHIPPED
+
+Both items landed in `1c378c9` (TDD: object-cache test red → db.ts line → green; run-twice test
+pinned the existing short-circuit). Gate 1316/0, tsc 0, lint 0. Deployed per the law: esbuild OK,
+symbol grep-verified in `standalone/server.js`, server restarted healthy (pid 201). The synthesis
+report got a correction addendum for the two premise-wrong items. Gate: human review.
+
+## Original scope — 2026-07-16 20:53
 
 Adopting the two SMALL items from the DuckDB-skills corpus mining
 (`reports/duckdb-skills-mining/20260716_190500+0200-SYNTHESIS.md`) that survived verification
