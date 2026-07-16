@@ -6,6 +6,8 @@ All notable changes to AgentlensPro are documented here.
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-07-16
+
 ### Added
 
 - **`get_conversation` — the narrative per-turn session reader (TRDD-B22NYTOY).** Reconstructs a
