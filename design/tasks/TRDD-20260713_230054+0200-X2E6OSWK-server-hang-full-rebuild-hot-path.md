@@ -1,16 +1,35 @@
 ---
 trdd-id: X2E6OSWK
 title: Server degrades into a 100% CPU spin and every request hangs — full session rebuild on a 4s timer and on every tool call
-column: dev
+column: ai_review
 created: 2026-07-13T23:00:54+0200
-updated: 2026-07-13T23:00:54+0200
+updated: 2026-07-16T14:10:28+0200
 current-owner: main
 task-type: bugfix
 severity: critical
 scope: project
+implementation-commits: [3b1520a]
 ---
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-13
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-16
+
+**✅ FIXED + MEASURED + LIVE-PROVEN (commit 3b1520a, 2026-07-14) — this addendum supersedes the
+07-13 block below, whose NEXT ACTION list is DONE/OBSOLETE.** The 07-13 hypothesis (the 4s
+tickBurn rebuild) was REFUTED by a cpu-prof capture: `buildSessionSummary()` was only 289 ms
+(7.2% duty). The real causes, all fixed:
+1. `buildUpdatePayload()` rebuilt the whole dashboard model on a 1-SECOND debounce with nothing
+   cached → now 4s + version-keyed memo (`src/derivedCache.ts` `VersionedCache`, keyed on the
+   `dataVersion` counter bumped at every mutation point; summary/stripped/sidebar/analytics all
+   share one rebuild per actual data change).
+2. `runLogScan()` full readdir+stat of ~12.5k files every 5s AND per fs.watch event → targeted
+   watcher-driven scans + 60s full-sweep backstop (+ fast-poll fallback when no watcher attaches).
+3. Scratch-tree walk re-listed the whole dir per append → mtime-gated.
+Measured: CPU 17.1%→3.0% (1 writer), 28.8%→8.2% (4 writers). Regression guards:
+`src/test/derivedCache.test.ts` (7 tests pin the memo semantics incl. reference identity +
+fail-fast) and `getLogScanStats()` counters (incrementalReads/fullReads/filesStatted) make a
+full-sweep regression observable. Live proof: 2026-07-16 server up 2h24m+ at real corpus
+(451k stored spans / 17.3k cards), every request instant all day — the original hang developed
+at 40 min. Column → ai_review (human review is the remaining gate).
 
 **Symptom (MEASURED, not inferred).** The standalone server degrades over ~40 min into a
 permanent **~100% CPU spin** (observed pid 16412: 103.5 / 112.2 / 89.6 %CPU, RSS 2.6 GB,

@@ -1,9 +1,9 @@
 ---
 trdd-id: AMEA4O4Z
 title: Log-event sink — persist every gated-out OTEL log event instead of dropping it
-column: dev
+column: ai_review
 created: 2026-07-16T00:22:48+0200
-updated: 2026-07-16T00:38:00+0200
+updated: 2026-07-16T14:10:28+0200
 current-owner: main
 task-type: feature
 severity: major

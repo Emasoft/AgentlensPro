@@ -1,9 +1,9 @@
 ---
 trdd-id: OCNHOHE9
 title: CLI cache-expiry probe — is a session past its prompt-cache TTL
-column: dev
+column: ai_review
 created: 2026-07-13T21:52:20+0200
-updated: 2026-07-13T21:52:20+0200
+updated: 2026-07-16T14:10:28+0200
 current-owner: main
 task-type: feature
 scope: project
