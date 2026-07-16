@@ -1,10 +1,10 @@
 ---
 trdd-id: O981ZJKV
 title: CLI cost-observability expansion — 14-item work order, coverage map + gaps
-column: dev
+column: ai_review
 created: 2026-07-10T12:35:54+0200
-updated: 2026-07-16T11:58:00+0200
-implementation-commits: [1093245, 9aa20fa, 674ed43]
+updated: 2026-07-16T11:59:00+0200
+implementation-commits: [1093245, 9aa20fa, 674ed43, 8b9da82, 29d666d, 655a30a]
 current-owner: agentlens-session
 task-type: feature
 release-via: none
@@ -20,6 +20,31 @@ test-requirements: [unit, typecheck, lint]
 # 14-item cost-observability work order (2026-07-10)
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-07-16
+
+**✅ WORK ORDER FULLY DISPOSITIONED (2026-07-16, second addendum — supersedes the "remaining
+open" claim below).** Re-verification against the live tool surface + git found the three
+"backburner children" had ALL already shipped and the prior addendum's open-items list was stale:
+
+- **Item 2 (window-capacity auto-calibration): SHIPPED + FIRED IN PRODUCTION.** Landed as
+  TRDD-BURNWDGT P5 (commit 8b9da82, `src/capacityCalibration.ts` + StopFailure ingest wiring +
+  2 test suites). Live proof today: `~/.agentlens/burn-config.json` carries an observed capacity
+  for account 80ddbe47… measured 2026-07-13 from a real rate-limit hit, and `get_window_budget`
+  reports `capacitySource: "observed"` with zero manual config. Nothing left to build.
+- **Item 9 (predict next similar-session cost): SHIPPED.** `predict_session_cost`
+  (commit 29d666d) — live-verified today: 12 matched precedents, p50 $3.50 / p75 $7.51
+  distribution with keyword+type+size-band similarity, exactly as specced.
+- **Item 13 (runtime inventory): SHIPPED.** `get_runtime_inventory` (commit 655a30a) —
+  live-verified today: 9 CC instances, per-tree RSS rollup (16.4 GB), CC version, ranked.
+- **Item 14 (cross-platform): RESOLVED BY DECISION.** TRDD-KVDT1XMS shipped the WSL2-only
+  gate — native win32 FAILS setup with "run inside WSL2", platform matrix documented in USAGE +
+  skill. Native-Windows support is a declared non-goal; no fixes child exists or is needed
+  unless the user reverses that decision.
+- **Item 11: MOSTLY COVERED** after child TRDD-5GFSFX0Q restored the attribution feed (see
+  addendum below). Disclosed, deliberately deferred: per-invocation averages + marketplace
+  filter (data model has plugin, not marketplace).
+
+Every coverage-map row is now COVERED, SHIPPED, or RESOLVED-BY-DECISION. Column → `ai_review`
+(each shipped member was individually gated + live-verified; human review is the remaining gate).
 
 **2026-07-16 addendum (child TRDD-5GFSFX0Q, fixed + live-verified):** re-grounding item 11 found
 the ENTIRE per-cause attribution feed dead machine-wide — this umbrella's own Phase B log-wins
