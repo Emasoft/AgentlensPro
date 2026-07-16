@@ -1,9 +1,9 @@
 ---
 trdd-id: 5F3SE1JM
 title: Ship AgentlensPro as an ai-maestro dependency — compatibility alignment + locked CLI contract
-column: dev
+column: ai_review
 created: 2026-07-16T12:44:03+0200
-updated: 2026-07-16T12:44:03+0200
+updated: 2026-07-16T14:41:24+0200
 current-owner: main
 task-type: feature
 severity: major
@@ -11,13 +11,32 @@ scope: project
 npt: []
 eht: []
 labels: [ai-maestro, integration, contract, cli]
-implementation-commits: [d1a3074]
+implementation-commits: [d1a3074, 098b458]
 test-requirements: [unit, typecheck, lint]
 ---
 
 # Ship AgentlensPro as an ai-maestro dependency
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-07-16
+
+**✅ ALIGNMENT COMPLETE (Phase 2 done, ~14:30). The ONE remaining step is OWNER-GATED: publish
+v2.8.0.** The ai-maestro Claude answered #70 and filed the reciprocal AgentlensPro#3:
+AgentlensPro is now an **official ai-maestro dependency** — npm CLI, floor `>=2.8.0`, installed
+by their `scripts/install-agentlens.sh` (their commit 5d889dc5, TRDD-WF0UE9BC), same tier as
+tldr/fastedit/distill; no CC-plugin wrapper. Their rulings: `~/.agentlens` machine-scope state
+ACCEPTABLE; ports no-collision (they are :23000); pin 2.8.0. Phase 2 delivered (commit 098b458):
+- `src/test/cliContract.aimaestro.test.ts` locks the 6 additional consumed tools — with
+  **corrected** field names (their Q2 list guessed `cost`/`cache_read`/`billingMode`/
+  `fiveHour`/`sevenDay`, none of which exist); the true paths are pinned and the corrections
+  posted on #3 so their parsers are written against reality.
+- R16 security confirm ANSWERED with code evidence: no account tool emits OAuth token material
+  (`accountInfo.ts:10-13` — `parseSubscriptionType` single choke-point; tokens never returned/
+  logged/persisted; AgentlensPro has no rotation capability at all).
+- Gate: 1294 passing / 0 failing, tsc 0, lint 0 errors.
+Their installer fail-soft no-ops until v2.8.0 is on npm — so the end-to-end go-live rides
+entirely on the owner's push + tag.
+
+(Superseded Phase-1 block below, kept for lineage:)
 
 **Phase 1 DONE (contract lock + coordination filed); Phase 2 BLOCKED on the ai-maestro Claude's
 answers.** User directive (verbatim, 2026-07-16): "check the open issues and align with
