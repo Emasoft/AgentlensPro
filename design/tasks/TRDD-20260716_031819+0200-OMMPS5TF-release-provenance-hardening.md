@@ -1,9 +1,9 @@
 ---
 trdd-id: OMMPS5TF
 title: Release-path provenance hardening — SBOM + checksums + image SBOM attestation
-column: dev
+column: ai_review
 created: 2026-07-16T03:18:19+0200
-updated: 2026-07-16T03:18:19+0200
+updated: 2026-07-16T03:37:27+0200
 current-owner: main
 task-type: security
 severity: major

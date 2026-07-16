@@ -1,9 +1,9 @@
 ---
 trdd-id: RS3NGN53
 title: get_recent_sessions ranks by LAST ACTIVITY — currently-active sessions surface first
-column: dev
+column: ai_review
 created: 2026-07-16T03:18:19+0200
-updated: 2026-07-16T03:18:19+0200
+updated: 2026-07-16T03:37:27+0200
 current-owner: main
 task-type: bugfix
 severity: major

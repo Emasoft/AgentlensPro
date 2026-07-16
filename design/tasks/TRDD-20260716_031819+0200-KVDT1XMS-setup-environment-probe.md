@@ -1,9 +1,9 @@
 ---
 trdd-id: KVDT1XMS
 title: Setup environment probe — heuristic incompatibility checks, WSL-only Windows gate, help+skill sync
-column: dev
+column: ai_review
 created: 2026-07-16T03:18:19+0200
-updated: 2026-07-16T03:18:19+0200
+updated: 2026-07-16T03:37:27+0200
 current-owner: main
 task-type: feature
 severity: major
