@@ -14,6 +14,7 @@ import * as os from 'os'
 import { exec, execFile } from 'child_process'
 import { summarizeSpans } from '../src/spanSummarizer'
 import { VersionedCache } from '../src/derivedCache'
+import { startLoopWatchdog } from '../src/loopWatchdog'
 import { mergeOtelAndLogSessions, linkSubagentTranscripts, graftOtelAttribution } from '../src/feedMergePolicy'
 import { calcTokenCostUsd } from '../src/shared/pricing'
 import { contextTokens } from '../src/shared/tokenBuckets'
@@ -3807,6 +3808,21 @@ uiServer.listen(UI_PORT, BIND_HOST, () => {
 
   // Start log ingestion after the server is ready
   startLogIngestion()
+
+  // TRDD-X2E6OSWK: the event-loop watchdog backstop. Twice a drill handler starved the loop into
+  // a permanent wedge where every request hung and SIGTERM was ignored — machine-wide
+  // observability dead until a human SIGKILLed it hours later. The worker-thread watchdog
+  // SIGKILLs + respawns this exact process (same argv/env) after a sustained stall; the 120s
+  // min-uptime guard keeps a boot wedge from crash-looping. AGENTLENS_WATCHDOG=off disables;
+  // AGENTLENS_WATCHDOG_STALL_S tunes the threshold (default 60s — drills are budget-bounded at
+  // 20s, so a healthy server can never trip it).
+  if ((process.env.AGENTLENS_WATCHDOG ?? 'on') !== 'off') {
+    const stallEnv = Number(process.env.AGENTLENS_WATCHDOG_STALL_S)
+    startLoopWatchdog({
+      stallSeconds: Number.isFinite(stallEnv) && stallEnv > 0 ? stallEnv : 60,
+      log: (m) => console.warn(m),
+    })
+  }
 })
 
 // ── Graceful shutdown — flush data before exit ────────────────────────────────
