@@ -144,11 +144,11 @@ function card(id: string, o: { start?: string; source?: SessionSummaryCard['sour
 }
 
 suite('handleGetCostByCause — MCP tool (TRDD-UBEP5XY7)', () => {
-  test('session mode returns the rollup reconciled against the normalized session totals', () => {
+  test('session mode returns the rollup reconciled against the normalized session totals', async () => {
     const tl = [apiReq({ input: 100, output: 50, read: 800, create: 50, cost: 0.02, querySource: 'repl_main_thread' })]
     // inputTokens is RAW on every card (four disjoint buckets): total = 150+800+50+50 = 1050.
     const s = card('s1', { timeline: tl, input: 150, output: 50, read: 800, create: 50 })
-    const r = handleGetCostByCause([s], null, { sessionId: 's1' }) as TokensByCauseReport
+    const r = await handleGetCostByCause([s], null, { sessionId: 's1' }) as TokensByCauseReport
     assert.strictEqual(r.sessionId, 's1')
     assert.strictEqual(r.reconciliation.sessionTotalTokens, 1050)
     assert.strictEqual(r.reconciliation.attributedTotalTokens, 1000)
@@ -156,12 +156,12 @@ suite('handleGetCostByCause — MCP tool (TRDD-UBEP5XY7)', () => {
     assert.strictEqual(dimOf(r, 'querySource').rows[0].key, 'repl_main_thread')
   })
 
-  test('unknown session returns an explicit error', () => {
-    const r = handleGetCostByCause([], null, { sessionId: 'nope' }) as { error?: string }
+  test('unknown session returns an explicit error', async () => {
+    const r = await handleGetCostByCause([], null, { sessionId: 'nope' }) as { error?: string }
     assert.ok(r.error && /not found/.test(r.error))
   })
 
-  test('leaderboard mode aggregates across sessions with an honest coverage block', () => {
+  test('leaderboard mode aggregates across sessions with an honest coverage block', async () => {
     const now = Date.now()
     const recent = (h: number) => new Date(now - h * 3600_000).toISOString()
     const sessions = [
@@ -172,7 +172,7 @@ suite('handleGetCostByCause — MCP tool (TRDD-UBEP5XY7)', () => {
       // Outside the 7d window: not even considered.
       card('d', { start: new Date(now - 30 * 24 * 3600_000).toISOString() }),
     ]
-    const r = handleGetCostByCause(sessions, null, {}) as TokensByCauseReport & { days: number; coverage: { sessionsConsidered: number; claudeCodeSessions: number; sessionsScanned: number; complete: boolean; scanCap: number } }
+    const r = await handleGetCostByCause(sessions, null, {}) as TokensByCauseReport & { days: number; coverage: { sessionsConsidered: number; claudeCodeSessions: number; sessionsScanned: number; complete: boolean; scanCap: number } }
     assert.strictEqual(r.days, 7)
     assert.strictEqual(r.coverage.sessionsConsidered, 3)
     assert.strictEqual(r.coverage.claudeCodeSessions, 2)
@@ -187,14 +187,48 @@ suite('handleGetCostByCause — MCP tool (TRDD-UBEP5XY7)', () => {
     assert.strictEqual(skill.costUsd, 0.03)
   })
 
-  test('leaderboard caps the scan at the most-recent CC sessions and says so (coverage.complete false)', () => {
+  test('leaderboard caps the scan at the most-recent CC sessions and says so (coverage.complete false)', async () => {
     const now = Date.now()
     const sessions = Array.from({ length: CAUSE_SCAN_CAP + 5 }, (_, i) =>
       card('s' + i, { start: new Date(now - i * 60_000).toISOString(), timeline: [apiReq({ input: 1, querySource: 'q' })], input: 1 }))
-    const r = handleGetCostByCause(sessions, null, { days: 7 }) as { coverage: { sessionsScanned: number; sessionsSkipped: number; complete: boolean; note: string } }
+    const r = await handleGetCostByCause(sessions, null, { days: 7 }) as { coverage: { sessionsScanned: number; sessionsSkipped: number; complete: boolean; note: string } }
     assert.strictEqual(r.coverage.sessionsScanned, CAUSE_SCAN_CAP)
     assert.strictEqual(r.coverage.sessionsSkipped, 5)
     assert.strictEqual(r.coverage.complete, false)
     assert.ok(/SAMPLE/.test(r.coverage.note))
+  })
+
+  // X2E6OSWK — the leaderboard scan must never be able to starve the event loop: each pool entry
+  // can reparse a whole transcript synchronously (getTimeline), so the loop yields one macrotask
+  // per session and a deadline stops it honestly.
+  test('leaderboard yields the event loop between sessions (a queued macrotask runs mid-scan)', async () => {
+    const now = Date.now()
+    const sessions = Array.from({ length: 5 }, (_, i) =>
+      card('y' + i, { start: new Date(now - i * 60_000).toISOString(), timeline: [], input: 1 }))
+    let interleaved = false
+    // getTimeline is invoked once per scanned session; a macrotask queued before the call must get
+    // to run BEFORE the scan finishes — with the old unyielding flatMap it could not.
+    const seen: string[] = []
+    const getTimeline = (id: string): unknown[] => { seen.push(id); return [] }
+    setImmediate(() => { if (seen.length < sessions.length) interleaved = true })
+    await handleGetCostByCause(sessions, getTimeline, { days: 7 })
+    assert.strictEqual(seen.length, 5, 'all sessions scanned')
+    assert.ok(interleaved, 'a concurrently queued macrotask must run before the scan completes')
+  })
+
+  test('leaderboard stops at the time budget with honest coverage (stoppedEarly, complete false)', async () => {
+    const now = Date.now()
+    const sessions = Array.from({ length: 10 }, (_, i) =>
+      card('t' + i, { start: new Date(now - i * 60_000).toISOString(), timeline: [], input: 1 }))
+    // Each fake reparse burns ~15ms synchronously; a 1ms budget must stop after the first session.
+    const getTimeline = (): unknown[] => { const until = Date.now() + 15; while (Date.now() < until) { /* spin */ } return [] }
+    const r = await handleGetCostByCause(sessions, getTimeline, { days: 7 }, 1) as {
+      coverage: { sessionsScanned: number; sessionsSkipped: number; stoppedEarly: boolean; complete: boolean; note: string }
+    }
+    assert.ok(r.coverage.stoppedEarly, 'the deadline must trip')
+    assert.ok(r.coverage.sessionsScanned < 10, 'not all sessions scanned')
+    assert.strictEqual(r.coverage.complete, false)
+    assert.strictEqual(r.coverage.sessionsScanned + r.coverage.sessionsSkipped, 10, 'skipped accounts for the budget stop')
+    assert.ok(/time budget/.test(r.coverage.note), 'the note names the budget stop')
   })
 })

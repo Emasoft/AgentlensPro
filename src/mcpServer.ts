@@ -2514,10 +2514,18 @@ function normalizedSessionTotalTokens(s: SessionSummaryCard): number {
 // block states the bound explicitly — the find_context_hogs honesty pattern.
 export const CAUSE_SCAN_CAP = 50
 
-export function handleGetCostByCause(
+// X2E6OSWK: cap on how long the cross-session scan may hold the event loop. Each pool entry can
+// trigger a SYNCHRONOUS full-transcript reparse (resolveSessionCard on a stripped card — after a
+// server restart that is EVERY disk-restored card), so 50 back-to-back reparses ran for minutes
+// inline in one request and starved the loop into the wedge state (100% CPU, every request
+// hanging — the 2026-07-16 recurrence). The budget stops the scan honestly instead.
+export const CAUSE_SCAN_TIME_BUDGET_MS = 20_000
+
+export async function handleGetCostByCause(
   sessions: SessionSummaryCard[],
   getTimeline: ((id: string) => unknown[]) | null,
   args: { sessionId?: string; days?: number },
+  timeBudgetMs: number = CAUSE_SCAN_TIME_BUDGET_MS,
 ) {
   if (args.sessionId) {
     const s = sessions.find(x => x.sessionId === args.sessionId)
@@ -2539,29 +2547,48 @@ export function handleGetCostByCause(
     // the MOST RECENT" is what the coverage note promises.
     .sort((a, b) => Date.parse(b.startTime) - Date.parse(a.startTime))
   const scanPool = candidates.slice(0, CAUSE_SCAN_CAP)
-  const merged = scanPool.flatMap(s => asTimeline(getTimeline, s.sessionId, s))
+  // One session per macrotask, deadline-checked: a stripped card's timeline is reparsed from its
+  // whole JSONL transcript SYNCHRONOUSLY inside asTimeline, so the yield between iterations is what
+  // lets queued requests interleave, and the deadline is what bounds the worst case. Never flatMap
+  // this loop back together — the unyielding 50-reparse flatMap is the exact wedge this replaced.
+  const merged: unknown[] = []
+  const scanned: SessionSummaryCard[] = []
+  const deadline = Date.now() + timeBudgetMs
+  let stoppedEarly = false
+  for (const s of scanPool) {
+    if (Date.now() > deadline) { stoppedEarly = true; break }
+    merged.push(...asTimeline(getTimeline, s.sessionId, s))
+    scanned.push(s)
+    await new Promise<void>(resolve => setImmediate(resolve))
+  }
   // Window ground truth = Σ normalized per-session totals over the SCANNED pool only, so the
   // reconciliation remainder compares like with like (scanned traffic vs scanned api_requests).
-  const windowTotal = scanPool.reduce((n, s) => n + normalizedSessionTotalTokens(s), 0)
-  const report = buildTokensByCause(merged, {
-    sessionsScanned: scanPool.length,
+  const windowTotal = scanned.reduce((n, s) => n + normalizedSessionTotalTokens(s), 0)
+  const report = buildTokensByCause(merged as Parameters<typeof buildTokensByCause>[0], {
+    sessionsScanned: scanned.length,
     sessionTotalTokens: windowTotal,
   })
-  const skipped = candidates.length - scanPool.length
+  const skipped = candidates.length - scanned.length
   return {
     ...report,
     days,
     coverage: {
       sessionsConsidered: inWindow.length,
       claudeCodeSessions: candidates.length,
-      sessionsScanned: scanPool.length,
+      sessionsScanned: scanned.length,
       sessionsSkipped: skipped,
       scanCap: CAUSE_SCAN_CAP,
+      stoppedEarly,
       complete: skipped === 0,
       note: skipped === 0
         ? `Complete coverage: all ${candidates.length} Claude Code sessions in the last ${days}d were scanned (${inWindow.length} total sessions considered).`
-        : `SAMPLE, not full coverage: ${scanPool.length} most-recent Claude Code sessions scanned (cap ${CAUSE_SCAN_CAP}); ` +
-          `${skipped} of ${candidates.length} in the ${days}d window were NOT scanned. Totals reflect the scanned sample only.`,
+        : stoppedEarly
+          ? `SAMPLE, not full coverage: the ${timeBudgetMs / 1000}s scan time budget stopped the scan after ` +
+            `${scanned.length} of ${candidates.length} Claude Code sessions (transcript reparses are expensive right ` +
+            `after a server restart). Totals reflect the scanned sample only — retry for wider coverage as reparsed ` +
+            `timelines are cached on their cards.`
+          : `SAMPLE, not full coverage: ${scanned.length} most-recent Claude Code sessions scanned (cap ${CAUSE_SCAN_CAP}); ` +
+            `${skipped} of ${candidates.length} in the ${days}d window were NOT scanned. Totals reflect the scanned sample only.`,
     },
   }
 }
@@ -2914,7 +2941,7 @@ export function createMcpServer(opts: McpServerOptions): Server {
         result = handleGetAgentTokens(sessions, getTimeline, args as { agentId: string; parentSessionId?: string })
         break
       case 'get_cost_by_cause':
-        result = handleGetCostByCause(sessions, getTimeline, args as { sessionId?: string; days?: number })
+        result = await handleGetCostByCause(sessions, getTimeline, args as { sessionId?: string; days?: number })
         break
       case 'get_call_context': {
         const a = args as { sessionId: string; requestId?: string; spanId?: string }
