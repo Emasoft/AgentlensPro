@@ -1,9 +1,9 @@
 ---
 trdd-id: X2E6OSWK
 title: Server degrades into a 100% CPU spin and every request hangs — full session rebuild on a 4s timer and on every tool call
-column: ai_review
+column: dev
 created: 2026-07-13T23:00:54+0200
-updated: 2026-07-16T14:10:28+0200
+updated: 2026-07-16T15:24:16+0200
 current-owner: main
 task-type: bugfix
 severity: critical
@@ -11,7 +11,51 @@ scope: project
 implementation-commits: [3b1520a]
 ---
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-16
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-16 15:24
+
+**⟲ REOPENED — the wedge RECURRED at 15:0x on 2026-07-16, ~3h34m after boot. The 14:10 addendum
+below ("FIXED + LIVE-PROVEN") was PREMATURE: 3b1520a measurably reduced steady-state CPU but did
+NOT eliminate the failure class at today's corpus (455k stored spans / 17.3k cards).**
+
+**Recurrence evidence (measured, preserved):**
+- pid 54681: **104.5% CPU, RSS 3.0 GB, uptime 3h34m**; `/api/server-stats` and every tool hang;
+  SIGTERM ignored (event loop fully starved) → SIGKILL required; fresh boot healthy (pid 88978).
+- 8s native sample (preserved:
+  `reports/cpu-profile/20260716_152409+0200-wedge-native-sample-pid54681.txt`): the MAIN thread is
+  inside an **HTTP-request Promise handler** (http_parser → MakeCallback → RunMicrotasks →
+  PromiseFulfillReactionJob) running a **giant `Array.prototype.flatMap`** (1411/6311 samples),
+  with top-of-stack `stat` (551) + `__getdirentries64` (303) + `__open_nocancel` (269) — a
+  synchronous per-request DIRECTORY WALK — plus `DateParser` (Date.parse in a hot loop) and GC
+  pressure (SafepointTable/SizeFromMap). JS frames are JIT-anonymous — native sampling cannot
+  name the function; a V8-level profile is required to convict.
+- Distinct from the 07-13 signature: this is REQUEST-DRIVEN (one handler doing O(corpus)
+  synchronous work inline), not the periodic rebuild storm 3b1520a fixed.
+
+**NEXT ACTION (in order):**
+1. Name the culprit: grep the drill handlers for the signature — `flatMap` over corpus-sized
+   arrays + `listSessionFileIds`/readdir walks + `Date.parse` per entry. Prime suspects: the
+   `fileBackedPool` consumers (find_relevant_context / predict_session_cost scan file-backed
+   pools then parse transcripts), get_cost_by_cause's CAUSE_SCAN_CAP×getTimeline reparse (incl.
+   the 5GFSFX0Q graft path), get_context_inflation_report / get_cache_break_report (workspace
+   scans), conversation/history drills on 15k-line transcripts.
+2. Get a NAMED profile: boot with `node --cpu-prof` (or SIGUSR1 inspector attach at the next
+   wedge) and reproduce by replaying the drill traffic; or add per-request duration logging on
+   the drill routes (cheap, permanent) so the wedge names itself.
+3. Fix at the right altitude — TWO layers, both required:
+   a. **Bound per-request work** (caps + async yields or worker_threads for corpus-sized drills):
+      no HTTP handler may run unbounded synchronous O(corpus) work on the event loop.
+   b. **Event-loop watchdog + self-heal**: monitor loop lag in-process; on sustained starvation
+      (>N s) log the offender state and exit non-zero so the supervisor restarts — a wedged
+      observability server is worse than a restarted one (and the ai-maestro guardian
+      integration now DEPENDS on this CLI's availability).
+4. Only after (2) names a genuinely compute-bound kernel: apply the USER's standing directive —
+   a targeted **Rust helper** (napi-rs module or sidecar) for that measured hot path. A full
+   Rust rewrite is NOT the fix for this bug: the defect is unbounded synchronous work on a
+   single event loop — an architecture error that a faster language merely postpones; bounding +
+   watchdog + worker isolation fix it in any language, and Rust is reserved for kernels that
+   remain hot AFTER they are bounded.
+
+(Superseded 14:10 addendum, kept for lineage:)
 
 **✅ FIXED + MEASURED + LIVE-PROVEN (commit 3b1520a, 2026-07-14) — this addendum supersedes the
 07-13 block below, whose NEXT ACTION list is DONE/OBSOLETE.** The 07-13 hypothesis (the 4s
