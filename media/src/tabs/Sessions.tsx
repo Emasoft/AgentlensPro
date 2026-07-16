@@ -17,6 +17,7 @@ import { generateInsights, InsightCard } from './Insights'
 import { buildDisplaySummary, tokenBreakdown, formatTokenBreakdown } from '../utils'
 import { Step, TimelineWaterfall } from './Traces'
 import { CopyBranchButton } from '../CopyBranchButton'
+import { TranscriptView } from '../TranscriptView'
 import { SpawnCostPanel } from './cacheShared'
 import { computeKeepWarm } from '../../../src/shared/keepWarm'
 import { FlowCanvas } from './Flow'
@@ -25,7 +26,7 @@ import type { SessionSummaryCard, FileOpSummary } from '../types'
 
 // ── Session detail panel (shown in expanded row) ──────────────────────────────
 
-type Section = 'overview' | 'trace' | 'files' | 'flow' | 'tools'
+type Section = 'overview' | 'transcript' | 'trace' | 'files' | 'flow' | 'tools'
 
 function PromptBlock({ text }: { text: string }) {
   const [expanded, setExpanded] = useState(false)
@@ -256,6 +257,7 @@ function SessionDetail({ sess }: { sess: SessionSummaryCard }) {
     <div style="border-top:1px solid var(--border)" onClick={e => e.stopPropagation()}>
       <div style="display:flex;gap:0;padding:0 8px;border-bottom:1px solid var(--border);background:var(--vscode-editorWidget-background,var(--bg));overflow-x:auto">
         {navBtn('overview', 'Overview')}
+        {navBtn('transcript', 'Transcript')}
         {navBtn('trace', `Trace${visibleEntries.length > 0 ? ' (' + visibleEntries.length + ')' : ''}`)}
         {navBtn('flow', `Flow${sess.totalLlmCalls > 0 ? ' (' + sess.totalLlmCalls + ')' : ''}`)}
         {navBtn('tools', `Tools${sess.totalToolCalls > 0 ? ' (' + sess.totalToolCalls + ')' : ''}`)}
@@ -383,6 +385,8 @@ function SessionDetail({ sess }: { sess: SessionSummaryCard }) {
 
           </div>
         )}
+
+        {section === 'transcript' && <TranscriptView sess={sess} />}
 
         {section === 'trace' && (
           <div>

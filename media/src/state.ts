@@ -260,6 +260,40 @@ export function cacheCompositionSummary(sessionId: string, summary: CompositionS
   sessionCompositionSummaries.value = next
 }
 
+// Per-session NARRATIVE conversation (TRDD-B22NYTOY) — verbatim ordered turns, fetched lazily when
+// the Transcript sub-tab is opened. Keyed by sessionId; a present `null` means the host had no
+// local transcript (OTEL-only session); an absent key means "not yet fetched". Direct fetch (no
+// vscode round-trip) per the requestCompositionSummary precedent: the standalone server is the
+// only runtime, so a relative fetch to /api/conversation is always correct.
+export const sessionConversations = signal<Record<string, import('./types').Conversation | null>>({})
+const conversationLRU: string[] = []
+const conversationInFlight = new Set<string>()
+
+export function requestConversation(sessionId: string, parentSessionId?: string): void {
+  if (!sessionId || conversationInFlight.has(sessionId) || sessionId in sessionConversations.value) return
+  conversationInFlight.add(sessionId)
+  const url = `/api/conversation/${encodeURIComponent(sessionId)}${parentSessionId ? '?parent=' + encodeURIComponent(parentSessionId) : ''}`
+  fetch(url)
+    .then(r => r.json())
+    .then((data: { conversation: import('./types').Conversation | null }) => cacheConversation(sessionId, data.conversation ?? null))
+    // null is the honest terminal state ("no transcript"), never a perpetual pending key.
+    .catch(() => cacheConversation(sessionId, null))
+}
+
+export function cacheConversation(sessionId: string, conversation: import('./types').Conversation | null): void {
+  conversationInFlight.delete(sessionId)
+  const existing = conversationLRU.indexOf(sessionId)
+  if (existing !== -1) conversationLRU.splice(existing, 1)
+  conversationLRU.push(sessionId)
+  const next: Record<string, import('./types').Conversation | null> = { ...sessionConversations.value, [sessionId]: conversation }
+  while (conversationLRU.length > DETAIL_CACHE_MAX) {
+    const evicted = conversationLRU.shift()
+    if (evicted === undefined) break
+    delete next[evicted]
+  }
+  sessionConversations.value = next
+}
+
 export function cacheSessionComposition(sessionId: string, composition: ContextComposition | null): void {
   const existing = compositionLRU.indexOf(sessionId)
   if (existing !== -1) compositionLRU.splice(existing, 1)
