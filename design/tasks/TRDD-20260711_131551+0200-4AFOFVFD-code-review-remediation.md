@@ -1,9 +1,9 @@
 ---
 trdd-id: 4AFOFVFD
 title: Code-review remediation — 16 fixed + merged, 7 deferred to implement
-column: dev
+column: ai_review
 created: 2026-07-11T13:15:51+0200
-updated: 2026-07-11T16:27:58+0200
+updated: 2026-07-16T17:20:25+0200
 current-owner: claude-code-review
 assignee: claude-code-review
 priority: 2
@@ -39,7 +39,20 @@ implementation-commits: [7d89ad3, a03ee4b, 8150494, 36728a6, fb94170]
 pr-url: null
 ---
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-11
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-16 17:20
+
+**✅ ALL 23 FINDINGS DISPOSITIONED — column → ai_review.** Verified 2026-07-16: the branch
+`fix/code-review-deferred-findings` (bcb033c, 5badd13, 3208971, 7fe9ed0 = the 6 implemented
+deferred items + S3-F3a) is FULLY MERGED into `main` (`git branch --merged main` lists it;
+`git log main..fix/code-review-deferred-findings` is empty). S3-F3b lives in its own
+TRDD-DYG4ZTXW — now `column: complete`. The "NOT LIVE YET" note below is stale: the bundle
+has been rebuilt + the server restarted many times since (v2.8.0 shipped 2026-07-16).
+Nothing remains to implement; the gate is human review. The merged work branch is left in
+place (all commits reachable from main).
+
+(Superseded 2026-07-11 block, kept for lineage:)
+
+## STATE (superseded) — 2026-07-11
 
 **What this is:** the remediation record for a whole-codebase xhigh code review
 (3 parallel Opus reviewers over ~45k LOC, all 10 angles each, + an orchestrator

@@ -1,9 +1,10 @@
 ---
 trdd-id: BKF5NZD3
 title: Raw-body capture must be opt-in — the server re-arms it on every boot
-column: dev
+column: ai_review
+implementation-commits: [82d856a, 32f24c8]
 created: 2026-07-14T17:30:07+0200
-updated: 2026-07-14T17:30:07+0200
+updated: 2026-07-16T17:20:25+0200
 current-owner: a0fce09a
 task-type: bugfix
 parent-trdd: K3WDPR7M
@@ -12,7 +13,20 @@ severity: critical
 
 # Raw-body capture must be opt-in — the server re-arms it on every boot
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-14
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-16 17:20
+
+**✅ IMPLEMENTED + LIVE-VERIFIED — column → ai_review.** The fix landed in commits `82d856a`
+(capture opt-in: `src/captureConfig.ts` durable knob default OFF, `ownedKeys()` gated,
+active own-value deletion, uninstall no-restore) and `32f24c8` (kill-switch bypass closed in
+ensureServer/runSupervise); both merged to `main`. Live proof (2026-07-16, the strongest form:
+the server booted MULTIPLE times today for the v2.8.0 + X2E6OSWK deploys): `grep -c
+OTEL_LOG_RAW_API_BODIES ~/.claude/settings.json` → **0** — the re-arm is dead — and
+`agentlenspro config list` shows `captureRawBodies off (default)`. Shipped in v2.8.0.
+Remaining gate: human review.
+
+(Superseded 2026-07-14 pre-fix block, kept for lineage:)
+
+## STATE (superseded) — 2026-07-14
 
 **The SSD burn never stopped, and this is why.** `OTEL_LOG_RAW_API_BODIES` is an
 unconditionally-**owned** telemetry key (`src/telemetryConfig.ts:117`) that the server
