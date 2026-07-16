@@ -3,7 +3,7 @@ trdd-id: B22NYTOY
 title: Conversation transcript view — narrative per-turn session reader (CLI tool + dashboard)
 column: dev
 created: 2026-07-16T02:10:29+0200
-updated: 2026-07-16T02:45:00+0200
+updated: 2026-07-16T03:05:00+0200
 current-owner: main
 task-type: feature
 severity: major
@@ -14,19 +14,23 @@ eht: []
 
 # Conversation transcript view — narrative per-turn session reader
 
-## ⏵ STATE — 2026-07-16 ~02:45 — P1+P2 LANDED + LIVE-VERIFIED; NEXT: P3 dashboard Transcript sub-tab
+## ⏵ STATE — 2026-07-16 ~03:05 — P1+P2+P3 LANDED; NEXT: P4 (card enrichment + smoke + close)
 
-- **P1 DONE** (commit e4d7bfa): `src/conversation.ts` ordered-blocks parser + 15 fixture tests
-  (suite 1251 green); findSessionFile + classifyAttachment de-duped into contextComposition
-  exports. Real-world: 15,304-line transcript in 190ms, 3092 turns, compactions exact.
-- **P2 DONE**: `get_conversation` MCP tool (progressive: summaries → --turn N verbatim →
-  --turnFrom/--turnTo range cap 20), accessor + `GET /api/conversation/:id` (heavyGuard) in
-  standalone, SKILL.md cheat-sheet row, CHANGELOG. Deployed (pid 82148), live-verified: 3119
-  turns, 5 compactions, verbatim first prompt + tool lists over the CLI.
-- **NEXT ACTION (P3):** dashboard Transcript sub-tab — NEW `media/src/TranscriptView.tsx`,
-  Sessions.tsx navBtn + section==='transcript', state.ts requestConversation(), App.tsx message
-  branch, server.ts shim `loadConversation` → `/api/conversation/:id`. Then P4 (card
-  enrichment ai-title/entrypoint, browser smoke, final deploy).
+- **P1 DONE** (e4d7bfa): `src/conversation.ts` ordered-blocks parser + 15 fixture tests (suite
+  1251 green); findSessionFile + classifyAttachment de-duped into contextComposition exports.
+  Real-world: 15,304-line transcript in 190ms, compactions exact.
+- **P2 DONE** (6aa5b11): `get_conversation` MCP tool (progressive drill-down; range cap 20),
+  accessor + `GET /api/conversation/:id` (heavyGuard), SKILL.md row, CHANGELOG. CLI live-verified.
+- **P3 DONE** (31ab64f): dashboard Transcript sub-tab — `media/src/TranscriptView.tsx` chat-reader
+  (role-colored turns, collapsibles that grow the page, compaction dividers, last-300 paging),
+  Sessions.tsx navBtn+section, state.ts requestConversation. DESIGN DEVIATION from plan: DIRECT
+  fetch (requestCompositionSummary precedent) instead of App.tsx message branch + server shim
+  branch — standalone is the only runtime; 2 fewer files. Endpoint live-verified (3132 turns).
+- **NEXT ACTION (P4):** card enrichment — `src/logReader.ts` parse `ai-title` → card.title +
+  `entrypoint` → card.entrypoint (SessionSummaryCard optional fields in summarizerTypes),
+  Sessions.tsx row headline shows title; browser smoke: dashboardSmoke Transcript sub-tab click +
+  light/dark screenshots (AGENTLENSPRO_BROWSER_TESTS=1); full gate; esbuild + restart;
+  live-verify dashboard visually; close TRDD (column → ai_review).
 
 ## ⏵ [SUPERSEDED] STATE — 2026-07-16 ~02:10 — PLAN APPROVED, starting Phase 1 (parser core, TDD)
 
