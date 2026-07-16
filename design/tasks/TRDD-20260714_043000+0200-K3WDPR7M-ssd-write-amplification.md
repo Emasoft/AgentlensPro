@@ -3,7 +3,7 @@ trdd-id: K3WDPR7M
 title: SSD write amplification — raw OTEL bodies rewrite the whole conversation every turn; move the body store to a fileless-DuckDB to immutable-Parquet loop
 column: dev
 created: 2026-07-14T04:30:00+0200
-updated: 2026-07-16T17:26:00+0200
+updated: 2026-07-16T17:45:00+0200
 current-owner: main
 task-type: bugfix
 severity: critical

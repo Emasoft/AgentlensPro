@@ -4,7 +4,7 @@ title: Raw-body capture must be opt-in — the server re-arms it on every boot
 column: ai_review
 implementation-commits: [82d856a, 32f24c8]
 created: 2026-07-14T17:30:07+0200
-updated: 2026-07-16T17:20:25+0200
+updated: 2026-07-16T17:45:00+0200
 current-owner: a0fce09a
 task-type: bugfix
 parent-trdd: K3WDPR7M
