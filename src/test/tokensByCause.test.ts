@@ -216,6 +216,26 @@ suite('handleGetCostByCause — MCP tool (TRDD-UBEP5XY7)', () => {
     assert.ok(interleaved, 'a concurrently queued macrotask must run before the scan completes')
   })
 
+  // X2E6OSWK follow-up: pool selection is by LAST ACTIVITY. A fleet spawning ephemeral subagents
+  // every minute must not push the heavy, still-active long-lived sessions out of the scan pool
+  // (measured: the flagship session ranked #446 by startTime → machine-wide attribution read 0).
+  test('leaderboard ranks and windows by last ACTIVITY, not startTime — an old-started active session is scanned first', async () => {
+    const now = Date.now()
+    const activeOld = card('old-active', {
+      start: new Date(now - 10 * 24 * 3600_000).toISOString(),   // started 10d ago — outside a startTime window
+      timeline: [apiReq({ input: 40, cost: 0.04, skill: 'heavy' })], // active NOW (fixture timestamps are new Date())
+      input: 40,
+    })
+    const freshIdle = Array.from({ length: CAUSE_SCAN_CAP }, (_, i) =>
+      card('fresh' + i, { start: new Date(now - i * 1000).toISOString(), timeline: [], input: 1 }))
+    const r = await handleGetCostByCause([...freshIdle, activeOld], null, { days: 7 }) as TokensByCauseReport & {
+      coverage: { sessionsScanned: number }
+    }
+    // The old-started active session must be IN the window and IN the pool — its skill row proves it was scanned.
+    assert.strictEqual(dimOf(r, 'skill').rows[0]?.key, 'heavy',
+      'the active old-started session must be scanned (last-activity ranking), not dropped for its startTime')
+  })
+
   test('leaderboard stops at the time budget with honest coverage (stoppedEarly, complete false)', async () => {
     const now = Date.now()
     const sessions = Array.from({ length: 10 }, (_, i) =>

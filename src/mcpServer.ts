@@ -38,7 +38,7 @@ import type { BodiesActivityReport } from './bodiesActivity'
 import { buildResidentCostReport } from './shared/residentCost'
 import { buildSpawnRollup } from './shared/spawnRollup'
 import { buildTokensByCause } from './shared/tokensByCause'
-import { loadBurnConfig, type BurnStatus, type SessionStatus, type AccountWindowBudget, type ConsumptionEvent } from './burnMonitor'
+import { loadBurnConfig, lastActivityMs, type BurnStatus, type SessionStatus, type AccountWindowBudget, type ConsumptionEvent } from './burnMonitor'
 import * as os from 'os'
 import { type AccountInfo, accountLabelFor } from './accountInfo'
 import { classifyTtlRegime, sessionTtlKindOf, type TtlContext } from './shared/cacheTtl'
@@ -2541,11 +2541,15 @@ export async function handleGetCostByCause(
   // scan but still counted in `considered` for honest coverage.
   const days = Math.min(Math.max(args.days ?? 7, 1), 90)
   const cutoff = Date.now() - days * 24 * 60 * 60 * 1000
-  const inWindow = sessions.filter(s => Date.parse(s.startTime) >= cutoff)
+  // Window + ranking are by LAST ACTIVITY, not startTime. On a busy fleet the newest-STARTED cards
+  // are ephemeral subagents/heartbeats with no attribution, while the heavy long-lived sessions
+  // (started days ago, still burning NOW) never make a startTime-ranked pool — measured 2026-07-16:
+  // 13,241 CC cards, the active flagship session ranked #446 by startTime, and the machine-wide
+  // leaderboard read 0 attributed calls while that session's own drill showed 1155. startTime also
+  // silently DROPS an old-started-but-active session from the window itself.
+  const inWindow = sessions.filter(s => lastActivityMs(s) >= cutoff)
   const candidates = inWindow.filter(s => s.source === 'claude_code')
-    // Newest-first before capping — the raw session list order is not guaranteed, and "the cap keeps
-    // the MOST RECENT" is what the coverage note promises.
-    .sort((a, b) => Date.parse(b.startTime) - Date.parse(a.startTime))
+    .sort((a, b) => lastActivityMs(b) - lastActivityMs(a))
   const scanPool = candidates.slice(0, CAUSE_SCAN_CAP)
   // One session per macrotask, deadline-checked: a stripped card's timeline is reparsed from its
   // whole JSONL transcript SYNCHRONOUSLY inside asTimeline, so the yield between iterations is what
@@ -2587,8 +2591,8 @@ export async function handleGetCostByCause(
             `${scanned.length} of ${candidates.length} Claude Code sessions (transcript reparses are expensive right ` +
             `after a server restart). Totals reflect the scanned sample only — retry for wider coverage as reparsed ` +
             `timelines are cached on their cards.`
-          : `SAMPLE, not full coverage: ${scanned.length} most-recent Claude Code sessions scanned (cap ${CAUSE_SCAN_CAP}); ` +
-            `${skipped} of ${candidates.length} in the ${days}d window were NOT scanned. Totals reflect the scanned sample only.`,
+          : `SAMPLE, not full coverage: the ${scanned.length} most-recently-ACTIVE Claude Code sessions scanned (cap ${CAUSE_SCAN_CAP}); ` +
+            `${skipped} of ${candidates.length} active in the ${days}d window were NOT scanned. Totals reflect the scanned sample only.`,
     },
   }
 }
