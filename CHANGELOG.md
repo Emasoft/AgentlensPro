@@ -6,6 +6,18 @@ All notable changes to AgentlensPro are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **The cache-health tool surface is now a locked CLI contract (AgentlensPro#3).** The
+  ai-maestro-tailored janitor consumes `check_cache_expiry`, `get_cache_break_report`,
+  `get_cache_break_gap_report`, and `get_cache_break_timeline` to prevent cache-miss/expiration;
+  their consumed field paths (incl. `marginMs` TTL-remaining, the 6 fixed gap-bucket keys, the
+  `ttlTier`/`TTL_EXPIRY` idle-vs-break distinction) are pinned in `cliContract.aimaestro.test.ts`
+  — any reshape fails CI with a message routing the author to issue #3 first. All pinned fields
+  ship in 2.8.0 except the additive scan-honesty metadata (`check_cache_expiry` `coverage{...}`
+  / `note`, `get_cache_break_report` `scanStoppedEarly`/`scanNote`), which lands with this
+  release.
+
 ### Fixed
 
 - **Raw-body capture no longer gets silently re-pointed at the SSD by a server restart

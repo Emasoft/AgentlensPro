@@ -2165,7 +2165,9 @@ function fileBackedPool(
   return { pool: backed.slice(0, limit), considered: scoped.length, withLog: backed.length }
 }
 
-async function handleGetCacheBreakReport(
+// Exported for the ai-maestro CLI contract lock (cliContract.aimaestro.test.ts) — the tailored
+// janitor consumes this payload's field names, so a rename must fail the gate, not ship silently.
+export async function handleGetCacheBreakReport(
   sessions: SessionSummaryCard[],
   getTimeline: ((id: string) => unknown[]) | null,
   getComposition: CompositionAccessor | null,

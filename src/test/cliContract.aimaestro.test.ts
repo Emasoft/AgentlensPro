@@ -16,6 +16,23 @@
 //   get_account_status   → account, plan, mode, cacheTtl   (mode, NOT billingMode)
 //   get_window_budget    → capacitySource, machineWide.capacitySource
 //   get_conversation     → sessionId, turns[].{turn,role,blocks[].kind}
+//
+// Cache-health surface (the ai-maestro-tailored janitor's "prevent cache-miss/expiration"
+// consumption — named on #3, 2026-07-16):
+//   check_cache_expiry          → sessions[].{sessionId,kind,lastRequestAt,verdict,idleMs,ttlMs,
+//                                 ttlMin,marginMs,reason}; --all adds coverage{sessionsConsidered,
+//                                 sessionsScanned,stoppedEarly,note} (coverage is POST-2.8.0 additive)
+//   get_cache_break_report      → per-session {cacheHitRatePct,totalWastedTokens,totalWastedCostUsd,
+//                                 breakCount,breaks[].{turn,cause,wastedTokens},topOffenders[]};
+//                                 cross-session {scope,sessionsConsidered,sessionsWithLog,
+//                                 sessionsAnalyzed,topOffenders[]} (scanStoppedEarly/scanNote POST-2.8.0)
+//   get_cache_break_gap_report  → tierSplit{totalCacheCreateTokens,ephemeral5m/1hTokens,
+//                                 ephemeral5m/1hPct}, gapBuckets[] (the 6 fixed bucket keys ARE the
+//                                 TTL-expiry-vs-genuine-break distinction), bigEventCount, coverage
+//   get_cache_break_timeline    → minTokens,systematicThreshold,turnsInSession,turnsClassified,
+//                                 totalCacheCreateTokens,events[].{turn,ts,cause,culprit,
+//                                 cacheCreateTokens,gapMinutes,ttlTier},causeHistogram,
+//                                 repeatOffenders,coverage
 import * as assert from 'assert'
 import * as fs from 'fs'
 import * as os from 'os'
@@ -23,7 +40,12 @@ import * as path from 'path'
 import {
   buildCostRollup, handleGetAgentTokens, handleGetContextGrowth,
   handleGetAccountStatus, handleGetWindowBudget,
+  handleCheckCacheExpiry, handleGetCacheBreakReport,
 } from '../mcpServer'
+import { analyzeCacheBreaks, type CacheTurnInput } from '../shared/cacheBreak'
+import { buildCacheBreakGapReport, type GapBucketKey } from '../cacheCreationForensics'
+import { buildCacheBreakTimeline, type CacheBreakEvent } from '../cacheBreakTimeline'
+import type { ContextComposition } from '../shared/summarizerTypes'
 import { computeBurnStatus, DEFAULT_THRESHOLDS, type ConsumptionEvent, type BurnConfig } from '../burnMonitor'
 import { buildConversationFromFile } from '../conversation'
 import type { SessionSummaryCard, TimelineEntry } from '../shared/summarizerTypes'
@@ -143,5 +165,136 @@ suite('CLI contract lock — ai-maestro consumed fields (AgentlensPro#3)', () =>
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
     }
+  })
+
+  // ── Cache-health surface (ai-maestro-tailored janitor: "prevent cache-miss/expiration") ──────
+
+  test('check_cache_expiry serves per-row verdict/idleMs/ttl*/marginMs (TTL-remaining) + lastRequestAt', async () => {
+    const s = card({ sessionId: 'expiry-target' })
+    const tenMinAgoIso = new Date(Date.now() - 10 * 60_000).toISOString()
+    const getTimeline = (): unknown[] => [{
+      type: 'api_request', spanId: 'r', label: 'api', durationMs: 1, isError: false, timestamp: tenMinAgoIso,
+    }]
+    const ttlCtx: TtlContext = { auth: 'subscription', force5m: false, enable1h: false }
+    const res = await handleCheckCacheExpiry([s], getTimeline, ttlCtx, { sessionId: 'expiry-target' })
+    assert.strictEqual(res.sessions.length, 1, 'fixture must produce a row')
+    const row = res.sessions[0] as unknown as Record<string, unknown>
+    assert.strictEqual(row.sessionId, 'expiry-target', BREAK('check_cache_expiry.sessions[].sessionId'))
+    assert.strictEqual(typeof row.kind, 'string', BREAK('check_cache_expiry.sessions[].kind'))
+    assert.strictEqual(typeof row.lastRequestAt, 'string', BREAK('check_cache_expiry.sessions[].lastRequestAt'))
+    assert.ok(row.verdict === 'fresh' || row.verdict === 'expired' || row.verdict === 'unknown',
+      BREAK('check_cache_expiry.sessions[].verdict (fresh|expired|unknown)'))
+    assert.strictEqual(typeof row.idleMs, 'number', BREAK('check_cache_expiry.sessions[].idleMs'))
+    assert.strictEqual(typeof row.ttlMs, 'number', BREAK('check_cache_expiry.sessions[].ttlMs'))
+    assert.strictEqual(typeof row.ttlMin, 'number', BREAK('check_cache_expiry.sessions[].ttlMin'))
+    assert.strictEqual(typeof row.marginMs, 'number', BREAK('check_cache_expiry.sessions[].marginMs (TTL-remaining; negative = expired)'))
+    assert.strictEqual(typeof row.reason, 'string', BREAK('check_cache_expiry.sessions[].reason'))
+  })
+
+  test('check_cache_expiry --all serves coverage{sessionsConsidered,sessionsScanned,stoppedEarly,note} (post-2.8.0 additive)', async () => {
+    const ttlCtx: TtlContext = { auth: 'subscription', force5m: false, enable1h: false }
+    const res = await handleCheckCacheExpiry([card({})], null, ttlCtx, { all: true })
+    assert.ok(res.coverage, BREAK('check_cache_expiry(--all).coverage'))
+    assert.strictEqual(typeof res.coverage!.sessionsConsidered, 'number', BREAK('check_cache_expiry.coverage.sessionsConsidered'))
+    assert.strictEqual(typeof res.coverage!.sessionsScanned, 'number', BREAK('check_cache_expiry.coverage.sessionsScanned'))
+    assert.strictEqual(typeof res.coverage!.stoppedEarly, 'boolean', BREAK('check_cache_expiry.coverage.stoppedEarly'))
+    assert.strictEqual(typeof res.coverage!.note, 'string', BREAK('check_cache_expiry.coverage.note'))
+  })
+
+  test('get_cache_break_report per-session serves cacheHitRatePct/totalWasted*/breakCount/breaks[]/topOffenders[]', async () => {
+    // Two turns; turn 2 switches model → a guaranteed MODEL_SWITCHED break with wasted tokens.
+    const s = card({ sessionId: 'break-target', model: 'claude-sonnet-5' })
+    const tl = (turn: number, model: string): TimelineEntry => ({
+      type: 'llm', spanId: `l${turn}`, label: 'llm', durationMs: 5, isError: false,
+      timestamp: new Date(NOW + turn * 60_000).toISOString(), turn, model,
+      inputTokens: 10, outputTokens: 20, cacheReadTokens: turn === 1 ? 0 : 1_000, cacheCreateTokens: 50_000,
+    } as TimelineEntry)
+    const getTimeline = (): unknown[] => [tl(1, 'claude-sonnet-5'), tl(2, 'claude-opus-4-8')]
+    const getComposition = async (): Promise<ContextComposition> => ({
+      sessionId: 'break-target', estimated: true, truncated: false,
+      turns: [{ turn: 1, sources: [] }, { turn: 2, sources: [] }],
+    })
+    const res = await handleGetCacheBreakReport([s], getTimeline, getComposition, { sessionId: 'break-target' }) as Record<string, unknown>
+    assert.strictEqual(res.sessionId, 'break-target', BREAK('get_cache_break_report.sessionId'))
+    assert.strictEqual(typeof res.cacheHitRatePct, 'number', BREAK('get_cache_break_report.cacheHitRatePct'))
+    assert.strictEqual(typeof res.totalWastedTokens, 'number', BREAK('get_cache_break_report.totalWastedTokens'))
+    assert.strictEqual(typeof res.totalWastedCostUsd, 'number', BREAK('get_cache_break_report.totalWastedCostUsd'))
+    assert.strictEqual(typeof res.breakCount, 'number', BREAK('get_cache_break_report.breakCount'))
+    const breaks = res.breaks as Array<Record<string, unknown>>
+    assert.ok(Array.isArray(breaks) && breaks.length > 0, 'fixture must produce a break')
+    assert.strictEqual(typeof breaks[0].turn, 'number', BREAK('get_cache_break_report.breaks[].turn'))
+    assert.strictEqual(typeof breaks[0].cause, 'string', BREAK('get_cache_break_report.breaks[].cause'))
+    assert.strictEqual(typeof breaks[0].wastedTokens, 'number', BREAK('get_cache_break_report.breaks[].wastedTokens'))
+    const off = res.topOffenders as Array<Record<string, unknown>>
+    assert.ok(Array.isArray(off) && off.length > 0, BREAK('get_cache_break_report.topOffenders[]'))
+    for (const f of ['label', 'kind', 'cause', 'occurrences', 'wastedTokens', 'wastedCostUsd'] as const) {
+      assert.ok(f in off[0], BREAK(`get_cache_break_report.topOffenders[].${f}`))
+    }
+  })
+
+  test('get_cache_break_report cross-session serves scope/sessionsConsidered/sessionsWithLog/sessionsAnalyzed/topOffenders', async () => {
+    const getComposition = async (): Promise<ContextComposition | null> => null
+    const res = await handleGetCacheBreakReport([card({})], null, getComposition, {}) as Record<string, unknown>
+    assert.strictEqual(typeof res.scope, 'string', BREAK('get_cache_break_report.scope'))
+    assert.strictEqual(typeof res.sessionsConsidered, 'number', BREAK('get_cache_break_report.sessionsConsidered'))
+    assert.strictEqual(typeof res.sessionsWithLog, 'number', BREAK('get_cache_break_report.sessionsWithLog'))
+    assert.strictEqual(typeof res.sessionsAnalyzed, 'number', BREAK('get_cache_break_report.sessionsAnalyzed'))
+    assert.ok(Array.isArray(res.topOffenders), BREAK('get_cache_break_report.topOffenders'))
+  })
+
+  test('get_cache_break_report break engine serves the cause taxonomy the janitor keys on (analyzeCacheBreaks)', () => {
+    const turns: CacheTurnInput[] = [
+      { turn: 1, sources: [], inputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 },
+      { turn: 2, sources: [], inputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 100_000, hasFastMode: true },
+    ]
+    const r = analyzeCacheBreaks('s', turns, { writeRateUsdPerMTok: 10, inputRateUsdPerMTok: 2 })
+    assert.strictEqual(typeof r.cacheHitRate, 'number', BREAK('cacheBreak engine.cacheHitRate'))
+    assert.strictEqual(typeof r.totalWastedTokens, 'number', BREAK('cacheBreak engine.totalWastedTokens'))
+    const broke = r.turns.find(t => t.broke)
+    assert.ok(broke, 'fixture must break')
+    assert.strictEqual(typeof broke!.cause, 'string', BREAK('cacheBreak engine turns[].cause'))
+  })
+
+  test('get_cache_break_gap_report serves tierSplit + the 6 fixed gap buckets (TTL-expiry vs genuine-break distinction)', async () => {
+    const dir = path.join(os.tmpdir(), `al-gap-contract-${Date.now()}-missing`)
+    const res = await buildCacheBreakGapReport({ bodiesDir: dir })
+    assert.strictEqual(typeof res.minCacheCreate, 'number', BREAK('get_cache_break_gap_report.minCacheCreate'))
+    assert.strictEqual(typeof res.bigEventCount, 'number', BREAK('get_cache_break_gap_report.bigEventCount'))
+    const ts = res.tierSplit as unknown as Record<string, unknown>
+    for (const f of ['totalCacheCreateTokens', 'ephemeral5mTokens', 'ephemeral1hTokens', 'ephemeral5mPct', 'ephemeral1hPct'] as const) {
+      assert.strictEqual(typeof ts[f], 'number', BREAK(`get_cache_break_gap_report.tierSplit.${f}`))
+    }
+    const expectedBuckets: GapBucketKey[] = ['first-call(no prev)', '<4.5m', '4.5-6m(=5m TTL)', '6-15m', '15-65m', '>65m(1h TTL)']
+    assert.deepStrictEqual(res.gapBuckets.map(b => b.bucket), expectedBuckets,
+      BREAK('get_cache_break_gap_report.gapBuckets[].bucket — the 6 keys ARE the TTL-vs-break diagnostic'))
+    assert.strictEqual(typeof res.gapBuckets[0].events, 'number', BREAK('get_cache_break_gap_report.gapBuckets[].events'))
+    assert.strictEqual(typeof res.gapBuckets[0].cacheCreateTokens, 'number', BREAK('get_cache_break_gap_report.gapBuckets[].cacheCreateTokens'))
+    assert.ok(Array.isArray(res.interpretation), BREAK('get_cache_break_gap_report.interpretation'))
+    assert.ok(res.coverage && typeof res.coverage === 'object', BREAK('get_cache_break_gap_report.coverage'))
+  })
+
+  test('get_cache_break_timeline (format=json, the default) serves the report shape + coverage honesty block', async () => {
+    const dir = path.join(os.tmpdir(), `al-tl-contract-${Date.now()}-missing`)
+    const res = await buildCacheBreakTimeline({ bodiesDir: dir })
+    assert.strictEqual(typeof res.minTokens, 'number', BREAK('get_cache_break_timeline.minTokens'))
+    assert.strictEqual(typeof res.systematicThreshold, 'number', BREAK('get_cache_break_timeline.systematicThreshold'))
+    assert.strictEqual(typeof res.turnsInSession, 'number', BREAK('get_cache_break_timeline.turnsInSession'))
+    assert.strictEqual(typeof res.turnsClassified, 'number', BREAK('get_cache_break_timeline.turnsClassified'))
+    assert.strictEqual(typeof res.totalCacheCreateTokens, 'number', BREAK('get_cache_break_timeline.totalCacheCreateTokens'))
+    assert.ok(Array.isArray(res.events), BREAK('get_cache_break_timeline.events'))
+    assert.ok(Array.isArray(res.causeHistogram), BREAK('get_cache_break_timeline.causeHistogram'))
+    assert.ok(Array.isArray(res.repeatOffenders), BREAK('get_cache_break_timeline.repeatOffenders'))
+    assert.strictEqual(typeof res.coverage.dirExists, 'boolean', BREAK('get_cache_break_timeline.coverage.dirExists'))
+    assert.strictEqual(typeof res.coverage.complete, 'boolean', BREAK('get_cache_break_timeline.coverage.complete'))
+    assert.strictEqual(typeof res.coverage.note, 'string', BREAK('get_cache_break_timeline.coverage.note'))
+    // Per-event field names pinned at the TYPE level: renaming any of these fails compilation,
+    // which fails the gate — the hermetic empty-dir run above cannot exercise a populated event.
+    const ev: CacheBreakEvent = {
+      turn: 2, ts: '2026-07-16T00:00:00.000Z', cause: 'TTL_EXPIRY', culpritLayer: 'timing',
+      culpritId: 'ttl', culprit: 'idle gap', cacheCreateTokens: 1, cacheReadTokens: 0,
+      inputTokens: 0, outputTokens: 0, costUsd: 0, gapMinutes: 6, ttlTier: '5m', remediation: 'heartbeat',
+    }
+    assert.strictEqual(ev.ttlTier, '5m', BREAK('get_cache_break_timeline.events[].ttlTier (5m|1h|none)'))
+    assert.strictEqual(ev.cause, 'TTL_EXPIRY', BREAK('get_cache_break_timeline.events[].cause (incl. TTL_EXPIRY)'))
   })
 })
