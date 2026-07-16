@@ -3,7 +3,7 @@ trdd-id: O981ZJKV
 title: CLI cost-observability expansion — 14-item work order, coverage map + gaps
 column: dev
 created: 2026-07-10T12:35:54+0200
-updated: 2026-07-10T16:05:00+0200
+updated: 2026-07-16T11:58:00+0200
 implementation-commits: [1093245, 9aa20fa, 674ed43]
 current-owner: agentlens-session
 task-type: feature
@@ -19,7 +19,21 @@ test-requirements: [unit, typecheck, lint]
 
 # 14-item cost-observability work order (2026-07-10)
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-07-10
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-07-16
+
+**2026-07-16 addendum (child TRDD-5GFSFX0Q, fixed + live-verified):** re-grounding item 11 found
+the ENTIRE per-cause attribution feed dead machine-wide — this umbrella's own Phase B log-wins
+merge dropped the OTEL card wholesale, starving `get_cost_by_cause` (0 api_request calls
+everywhere), the webview per-cause toggle, and burnMonitor's last-call cost. Fixed by grafting the
+OTEL twin's `api_request` entries onto the served log card (see the child TRDD). Item 11 status
+CORRECTION: the skill/plugin/mcp dimensions ALREADY EXIST (TRDD-UBEP5XY7's tokensByCause) — with
+the feed restored, item 11 is **MOSTLY COVERED** (ranked per-skill totals + cost live-proven);
+still absent: per-invocation averages and a marketplace filter (data model has plugin, not
+marketplace — disclosed). Remaining open in this umbrella: window-capacity auto-calibration
+(item 2 child), native-Windows fixes child TRDD (WSL target satisfied; docs shipped via
+TRDD-KVDT1XMS).
+
+## (superseded header) ⏵ STATE — 2026-07-10
 
 **NEW-NOW SCOPE SHIPPED 2026-07-10** (`get_cost_rollup`, `get_rate_limit_report`, and the
 late-added asks: **realtime hook switches** — `hookRuntimeConfig` + `/api/hook-config` +

@@ -6,6 +6,18 @@ All notable changes to AgentlensPro are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Per-cause attribution feed restored (TRDD-5GFSFX0Q).** The Phase B log-wins merge dropped the
+  colliding OTEL card wholesale — and with it the `api_request` timeline entries that are the ONLY
+  per-call attribution ground truth (exact `cost_usd` + query-source/agent/skill/plugin/MCP
+  causes). Every transcript-covered Claude session — i.e. all interactive sessions — reported
+  **zero** attributed calls in `get_cost_by_cause`, the dashboard per-cause toggle, and the burn
+  monitor's last-call cost. The served log card now gets the OTEL twin's `api_request` entries
+  grafted onto its timeline at drill time (totals-neutral by construction; log totals still win;
+  reconciliation stays honest). Live proof: 0 → 957 attributed calls on the fixing session, with
+  real per-skill and per-agent cost rows.
+
 ## [2.8.0] - 2026-07-16
 
 ### Added

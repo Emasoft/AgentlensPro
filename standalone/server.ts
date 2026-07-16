@@ -14,7 +14,7 @@ import * as os from 'os'
 import { exec, execFile } from 'child_process'
 import { summarizeSpans } from '../src/spanSummarizer'
 import { VersionedCache } from '../src/derivedCache'
-import { mergeOtelAndLogSessions, linkSubagentTranscripts } from '../src/feedMergePolicy'
+import { mergeOtelAndLogSessions, linkSubagentTranscripts, graftOtelAttribution } from '../src/feedMergePolicy'
 import { calcTokenCostUsd } from '../src/shared/pricing'
 import { contextTokens } from '../src/shared/tokenBuckets'
 import { countFallback, fallbackTotals } from '../src/shared/fallbackCounters'
@@ -70,7 +70,7 @@ import {
 } from '../src/collectorState'
 import { DeltaLog } from '../src/store/deltaLog'
 import type { Span } from '../src/shared/telemetryTypes'
-import type { SessionSummaryCard, CollectorGap } from '../src/shared/summarizerTypes'
+import type { SessionSummaryCard, CollectorGap, TimelineEntry } from '../src/shared/summarizerTypes'
 import { CodexSessionNormalizer } from '../src/codexSessionNormalizer'
 import { formatGenAiEventContent } from '../src/genAiContent'
 import { ResourceMonitor } from '../src/resourceMonitor'
@@ -1805,9 +1805,23 @@ function buildSessionSummary(): ReturnType<typeof summarizeSpans> | null {
   return summaryCache.get(dataVersion, computeSessionSummary)
 }
 
+// Pre-merge side-map: sessionId → the OTEL card's `api_request` attribution entries. Captured
+// BEFORE mergeOtelAndLogSessions drops the OTEL twin, so resolveSessionCard can graft the one
+// timeline dimension only OTEL carries back onto the served log card (TRDD-5GFSFX0Q). Holds
+// references (no copies) and is rebuilt together with the memoized summary, so it can never go
+// stale relative to the cards it serves.
+let otelAttributionBySession = new Map<string, TimelineEntry[]>()
+
 function computeSessionSummary(): ReturnType<typeof summarizeSpans> | null {
   let summary: ReturnType<typeof summarizeSpans> | null = null
   try { summary = summarizeSpans(spans) } catch (e) { console.warn('[AgentLens] summarizeSpans error:', e) }
+
+  otelAttributionBySession = new Map(
+    (summary?.sessions ?? [])
+      .filter(s => s.source === 'claude_code')
+      .map(s => [s.sessionId, (s.timeline ?? []).filter(e => e.type === 'api_request')] as const)
+      .filter(([, entries]) => entries.length > 0),
+  )
 
   // Merge log-sourced sessions. On ID collision the source's PREFERRED feed wins
   // (src/feedMergePolicy.ts): for Claude the LOG transcript card wins — transcripts are durable
@@ -1844,6 +1858,17 @@ function resolveSessionCard(sessionId: string): SessionSummaryCard | null {
         session = reparsed.card
       }
     } catch { /* on-demand rebuild is best-effort — fall back to the stripped card's empty timeline */ }
+  }
+  // TRDD-5GFSFX0Q: a log card that won the Phase B collision carries the transcript timeline,
+  // which has NO api_request attribution entries (those live only on the displaced OTEL twin).
+  // Graft them onto a SHALLOW COPY so the stored card stays pure (the reparse path re-stores the
+  // untouched transcript card, keeping the graft idempotent per drill) and every drill consumer —
+  // get_cost_by_cause, /api/timeline, the webview per-cause toggle — gets the attribution back.
+  if (session && session.source === 'claude_code' && session.dataSource === 'log') {
+    const otelEntries = otelAttributionBySession.get(sessionId)
+    if (otelEntries !== undefined && otelEntries.length > 0) {
+      session = { ...session, timeline: graftOtelAttribution(session.timeline ?? [], otelEntries) }
+    }
   }
   return session
 }
