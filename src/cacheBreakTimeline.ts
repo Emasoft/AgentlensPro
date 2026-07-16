@@ -360,7 +360,11 @@ export function extractTurnPrefix(body: RawRequestForBreak | null): TurnPrefix |
 
   const tools: PrefixTool[] = (Array.isArray(body.tools) ? body.tools : []).map(t => {
     const name = typeof t.name === 'string' ? t.name : '?'
-    const defBytes = `${typeof t.description === 'string' ? t.description : ''} ${JSON.stringify(t.input_schema ?? {})}`
+    // NUL (U+0000) as the fingerprint field separator (no description/schema can contain it) —
+    // ALWAYS spelled as the escape, never a raw 0x00 byte: a raw NUL in the source makes
+    // grep/file/diff classify this whole file as binary (bitten 2026-07-16). Same for the
+    // order-sensitive joins in diffTools below.
+    const defBytes = `${typeof t.description === 'string' ? t.description : ''}\u0000${JSON.stringify(t.input_schema ?? {})}`
     return { name, deferred: t.defer_loading === true, isMcp: name.startsWith('mcp__'), fp: fnv1a(defBytes) }
   })
 
@@ -476,7 +480,7 @@ function diffTools(prev: TurnPrefix, cur: TurnPrefix): CacheBreakVerdict | null 
     return mkTools('TOOLSET_CHANGED', changed, `tool(s) ${added.length ? 'added ' + fmtList(added) : ''}${removed.length ? ' removed ' + fmtList(removed) : ''}`.trim())
   }
   // Same set: order change?
-  if (curNames.join(' ') !== prevNames.join(' ')) {
+  if (curNames.join('\u0000') !== prevNames.join('\u0000')) {
     const firstMoved = curNames.find((n, i) => prevNames[i] !== n) ?? curNames[0]
     return mkTools('TOOLS_REORDERED', [firstMoved], `same ${curNames.length} tools, order changed (first at "${firstMoved}")`)
   }
