@@ -1,9 +1,9 @@
 ---
 trdd-id: TQXYCGRN
 title: `preact` is one edit away from the popular package `react`
-column: proposal
+column: refused
 created: 2026-07-16T03:00:27+0200
-updated: 2026-07-16T03:00:27+0200
+updated: 2026-07-16T11:01:00+0200
 current-owner: janitor
 task-type: bugfix
 severity: high
@@ -53,5 +53,9 @@ scheduler dispatches **janitor-security-agent** to fix it at the next free heart
 The dispatched agent is fail-safe: it fixes what is safe and FLAGS what needs a human (it never
 rotates credentials, never force-pushes, never pushes to `main`). It returns one line plus a report
 path, and closes the ticket with an explicit status.
+
+## Approval log
+
+- 2026-07-16T11:01:00+0200: **REFUSED** at the proposal gate by main Claude on USER authorization — verbatim: "evaluate the proposals of the janitor yourself and decide wisely. you have my trust. but coordinate with it via github issues." (USER, 2026-07-16). False positive — `preact` is the genuine package (preact-10.28.3.tgz, authentic registry resolution) and is this repo's OWN UI framework; evidence file lives in gitignored `downloads_dev/` (research corpus, never installed/executed). Detector feedback filed upstream: https://github.com/Emasoft/ai-maestro-janitor/issues/99.
 
 ## Notes and lessons learned

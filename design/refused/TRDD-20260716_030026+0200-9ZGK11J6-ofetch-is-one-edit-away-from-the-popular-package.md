@@ -1,9 +1,9 @@
 ---
 trdd-id: 9ZGK11J6
 title: `ofetch` is one edit away from the popular package `fetch`
-column: proposal
+column: refused
 created: 2026-07-16T03:00:26+0200
-updated: 2026-07-16T03:00:26+0200
+updated: 2026-07-16T11:01:00+0200
 current-owner: janitor
 task-type: bugfix
 severity: high
@@ -53,5 +53,9 @@ scheduler dispatches **janitor-security-agent** to fix it at the next free heart
 The dispatched agent is fail-safe: it fixes what is safe and FLAGS what needs a human (it never
 rotates credentials, never force-pushes, never pushes to `main`). It returns one line plus a report
 path, and closes the ticket with an explicit status.
+
+## Approval log
+
+- 2026-07-16T11:01:00+0200: **REFUSED** at the proposal gate by main Claude on USER authorization — verbatim: "evaluate the proposals of the janitor yourself and decide wisely. you have my trust. but coordinate with it via github issues." (USER, 2026-07-16). False positive — `ofetch` is the genuine unjs package (resolved to registry.npmjs.org/ofetch/-/ofetch-1.5.1.tgz in the flagged lockfile); evidence file lives in gitignored `downloads_dev/` (downloaded research corpus, never installed or executed by this project). Detector feedback filed upstream: https://github.com/Emasoft/ai-maestro-janitor/issues/99.
 
 ## Notes and lessons learned

@@ -1,9 +1,9 @@
 ---
 trdd-id: MAFCVI5T
 title: a workflow's token or permission scope is wider than the job needs in .github/workflows
-column: proposal
+column: refused
 created: 2026-07-16T03:00:18+0200
-updated: 2026-07-16T03:00:18+0200
+updated: 2026-07-16T11:01:00+0200
 current-owner: janitor
 task-type: security
 severity: medium
@@ -53,5 +53,9 @@ scheduler dispatches **janitor-security-agent** to fix it at the next free heart
 The dispatched agent is fail-safe: it fixes what is safe and FLAGS what needs a human (it never
 rotates credentials, never force-pushes, never pushes to `main`). It returns one line plus a report
 path, and closes the ticket with an explicit status.
+
+## Approval log
+
+- 2026-07-16T11:01:00+0200: **REFUSED** at the proposal gate by main Claude on USER authorization — verbatim: "evaluate the proposals of the janitor yourself and decide wisely. you have my trust. but coordinate with it via github issues." (USER, 2026-07-16). False positive — verified against the live workflow: workflow-level `permissions:` is `contents: read`; `id-token: write` is JOB-scoped (publish.yml:27 Sigstore attestation, :145 npm OIDC) and Actions permissions cannot be scoped tighter than per-job; environment-gating would break the npm trusted-publisher exchange (registered with environment EMPTY). Same finding already triaged as FP in TRDD-OMMPS5TF. Detector feedback filed upstream: https://github.com/Emasoft/ai-maestro-janitor/issues/99.
 
 ## Notes and lessons learned
