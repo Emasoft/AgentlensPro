@@ -1,8 +1,8 @@
 ---
 name: agentlenspro-ops-lessons
-description: "how to deploy agentlenspro on a machine / setup vs manual install / hooks stopped firing after an upgrade / config file wiped or corrupted after an edit / is agentlenspro npm-linked or registry-installed / does switching the cli to an ordinary npm install lose my db or settings / where does the data live / can other agents on this machine use the cli / does the dev npm link affect normal published users / background agent shows running but does nothing / a fork started acting like the orchestrator — operational doctrine and field lessons"
+description: "how to deploy agentlenspro on a machine / setup vs manual install / hooks stopped firing after an upgrade / config file wiped or corrupted after an edit / is agentlenspro npm-linked or registry-installed / does switching the cli to an ordinary npm install lose my db or settings / where does the data live / can other agents on this machine use the cli / does the dev npm link affect normal published users / background agent shows running but does nothing / a fork started acting like the orchestrator / does agentlenspro run on Windows / setup fails with unsupported platform or node too old — operational doctrine and field lessons"
 ocd: 2026-07-11
-lmd: 2026-07-11
+lmd: 2026-07-16
 metadata:
   node_type: memory
   type: project
@@ -17,6 +17,13 @@ Operational doctrine (v2.0.0+, single executable):
   spy paths, v1 PATH bins, v2 `agentlenspro hook`/`gate` command strings), repairs
   broken/maimed installs (truncated configs, duplicate entries, corrupt sqlite backed
   aside as `.corrupt-<ts>`), and NEVER wipes `~/.agentlens`. Second run must be 0 actions.
+- **Setup runs a read-only environment probe FIRST** (stepEnvironment, TRDD-KVDT1XMS,
+  cbb484e): pure heuristics before any action — FAIL (blocks setup, exit non-zero) on
+  native `win32` ("run inside WSL2" — inside WSL `process.platform === 'linux'`, so WSL is
+  never blocked), Node below `engines.node` (read from package.json, never hardcoded), or
+  `@duckdb/node-api` unresolvable; WARN-only on `sql.js` missing (OpenCode degrades to
+  per-message JSON), a foreign process on the OTLP/UI ports, `~/.claude` absent, or <1 GB
+  free disk. Platforms: macOS + Linux; Windows via WSL2 ONLY.[^7]
 - **Server control**: `agentlenspro server start|stop|restart|status [--supervise]` —
   restart is graceful (span flush) and the deploy step after any rebuild.
 - **Hook changes need a Claude session restart** — running sessions keep the old
@@ -115,3 +122,10 @@ Governed by [[cache-ttl-model]] (TTL regimes) and [[agentlens-burn-token-model]]
   never pushed). Lesson: before writing a fact to PROJECT memory, ask "would this be TRUE and USEFUL
   for a stranger cloning the repo on a different machine?" — a path like `/opt/homebrew/...`, a
   hostname, or "on THIS machine / the owner decided…" answers no ⇒ it is LOCAL, not PROJECT.
+[^7]: [ocd:2026-07-16 lmd:2026-07-16] the probe's dependency check first resolved
+  `@duckdb/node-api`/`sql.js` with `require.resolve(dep, { paths: [repoRoot] })` — WRONG,
+  BECAUSE the deps that matter at runtime are the INSTALLED PACKAGE'S OWN (the CLI resolves
+  them from its own node_modules), and pinning resolution to an injectable repoRoot made the
+  bogus-root fixture test fail the environment step before the step under test. DO use plain
+  `require.resolve(dep)` for "can the running code load its runtime deps"; reserve
+  `paths:` overrides for probing a DIFFERENT tree than the one executing.
