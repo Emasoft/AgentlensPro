@@ -1784,41 +1784,89 @@ function assessOneSession(
   }
 }
 
-function handleCheckCacheExpiry(
+// How many newest-by-activity candidates the DEFAULT path reparses to find the caller's active
+// conversation. Card-level lastActivityMs is metadata-cheap (no reparse), and an LLM request IS
+// card activity — so the session with the newest last-LLM-request cannot rank below sessions with
+// zero newer activity; the probe only disambiguates staleness among the leaders. Before this cap
+// the default path reparsed EVERY main transcript synchronously (thousands after a restart, when
+// all disk-restored cards are timeline-stripped) — the same wedge shape as the cost-by-cause
+// flatMap (X2E6OSWK). Exported for the unit tests.
+export const EXPIRY_NEWEST_PROBE = 12
+
+// Exported for unit tests (X2E6OSWK — bounded-scan behavior is pinned, not assumed).
+export async function handleCheckCacheExpiry(
   sessions: SessionSummaryCard[],
   getTimeline: ((id: string) => unknown[]) | null,
   ctx: TtlContext | null,
   args: { sessionId?: string; all?: boolean; thresholdMinutes?: number },
-): { sessions: CacheExpiryRow[] } {
+  timeBudgetMs: number = DRILL_SCAN_TIME_BUDGET_MS,
+): Promise<{
+  sessions: CacheExpiryRow[]
+  coverage?: { sessionsConsidered: number; sessionsScanned: number; stoppedEarly: boolean; note: string }
+  note?: string
+}> {
   const nowMs = Date.now()
   const thresholdMs =
     typeof args.thresholdMinutes === 'number' && args.thresholdMinutes > 0
       ? args.thresholdMinutes * 60_000
       : undefined
 
-  let targets: SessionSummaryCard[]
   if (args.sessionId) {
-    targets = sessions.filter(s => s.sessionId === args.sessionId)
-  } else if (args.all) {
-    targets = sessions
-  } else {
-    // Default: the caller's active conversation — the newest MAIN session by its last LLM request
-    // (agents rarely know their own sessionId). Fall back to any kind if there are no main cards.
-    const mains = sessions.filter(s => sessionTtlKindOf(s) === 'main')
-    const pool = mains.length > 0 ? mains : sessions
-    let newest: SessionSummaryCard | null = null
-    let newestMs = -1
-    for (const s of pool) {
-      const ms = lastLlmRequestMs(asTimeline(getTimeline, s.sessionId, s)) ?? Date.parse(s.startTime)
-      if (!Number.isNaN(ms) && ms > newestMs) {
-        newestMs = ms
-        newest = s
-      }
-    }
-    targets = newest ? [newest] : []
+    const targets = sessions.filter(s => s.sessionId === args.sessionId)
+    return { sessions: targets.map(c => assessOneSession(c, getTimeline, ctx, nowMs, thresholdMs)) }
   }
 
-  return { sessions: targets.map(c => assessOneSession(c, getTimeline, ctx, nowMs, thresholdMs)) }
+  if (args.all) {
+    // Whole-corpus assessment, newest-activity first so the budget spends itself on the sessions a
+    // caller actually cares about. Every card can trigger a synchronous transcript reparse, hence
+    // the one-per-macrotask + deadline scan — the unbounded `sessions.map(assessOneSession)` this
+    // replaced was a full wedge (O(corpus) synchronous work inline in one request).
+    const pool = [...sessions].sort((a, b) => lastActivityMs(b) - lastActivityMs(a))
+    const { results, scanned, stoppedEarly } =
+      await scanWithBudget(pool, timeBudgetMs, c => assessOneSession(c, getTimeline, ctx, nowMs, thresholdMs))
+    return {
+      sessions: results,
+      coverage: {
+        sessionsConsidered: pool.length,
+        sessionsScanned: scanned.length,
+        stoppedEarly,
+        note: stoppedEarly
+          ? `SAMPLE, not full coverage: the ${timeBudgetMs / 1000}s scan budget stopped after ` +
+            `${scanned.length} of ${pool.length} sessions (newest-activity first; reparsed timelines ` +
+            `are cached on their cards, so a retry widens coverage).`
+          : `Complete coverage: all ${pool.length} sessions assessed.`,
+      },
+    }
+  }
+
+  // Default: the caller's active conversation — the newest MAIN session by its last LLM request
+  // (agents rarely know their own sessionId). Fall back to any kind if there are no main cards.
+  // BOUNDED: rank by card-metadata lastActivityMs (cheap), reparse ONLY the top candidates for the
+  // precise last-request time — see EXPIRY_NEWEST_PROBE for why the probe cannot miss the true
+  // newest session.
+  const mains = sessions.filter(s => sessionTtlKindOf(s) === 'main')
+  const pool = (mains.length > 0 ? mains : sessions)
+    .sort((a, b) => lastActivityMs(b) - lastActivityMs(a))
+    .slice(0, EXPIRY_NEWEST_PROBE)
+  const { results, stoppedEarly } = await scanWithBudget(pool, timeBudgetMs, s => ({
+    s,
+    ms: lastLlmRequestMs(asTimeline(getTimeline, s.sessionId, s)) ?? Date.parse(s.startTime),
+  }))
+  let newest: SessionSummaryCard | null = null
+  let newestMs = -1
+  for (const { s, ms } of results) {
+    if (!Number.isNaN(ms) && ms > newestMs) {
+      newestMs = ms
+      newest = s
+    }
+  }
+  const targets = newest ? [newest] : []
+  return {
+    sessions: targets.map(c => assessOneSession(c, getTimeline, ctx, nowMs, thresholdMs)),
+    // Honest pick: a budget-stopped probe chose from a subset — say so instead of presenting the
+    // pick as the corpus-wide newest.
+    ...(stoppedEarly ? { note: 'Newest-session probe stopped early on the scan time budget — the pick is from the probed subset only.' } : {}),
+  }
 }
 
 // Per-turn context size + cache split from a session timeline. Entries carry the FOUR DISJOINT
@@ -2150,10 +2198,13 @@ async function handleGetCacheBreakReport(
 
   const scope = args.workspace?.trim()
   const { pool, considered, withLog } = fileBackedPool(sessions, scope ? (s => (s.workspace ?? '').startsWith(scope)) : null, 20)
+  // The pool is capped at 20, but each reportFor runs one SYNCHRONOUS transcript reparse
+  // (asTimeline) before its composition await — scanWithBudget adds the macrotask yield + deadline
+  // so post-restart worst cases (20 stripped multi-MB cards) stay interleavable and bounded.
+  const { results, scanned, stoppedEarly } = await scanWithBudget(pool, DRILL_SCAN_TIME_BUDGET_MS, reportFor)
   const merged = new Map<string, CacheBreakOffender>()
   let analyzed = 0
-  for (const s of pool) {
-    const report = await reportFor(s)
+  for (const report of results) {
     if (!report) continue
     analyzed++
     for (const o of report.offenders) {
@@ -2171,6 +2222,10 @@ async function handleGetCacheBreakReport(
     sessionsConsidered: considered,
     sessionsWithLog:    withLog,
     sessionsAnalyzed:   analyzed,
+    ...(stoppedEarly ? {
+      scanStoppedEarly: true,
+      scanNote: `SAMPLE: the ${DRILL_SCAN_TIME_BUDGET_MS / 1000}s scan budget stopped after ${scanned.length} of ${pool.length} pooled sessions — retry to widen (reparsed timelines are cached).`,
+    } : {}),
     topOffenders:       ranked.slice(0, 15).map(o => ({ ...o, wastedCostUsd: +o.wastedCostUsd.toFixed(4) })),
   }
 }
@@ -2514,18 +2569,41 @@ function normalizedSessionTotalTokens(s: SessionSummaryCard): number {
 // block states the bound explicitly — the find_context_hogs honesty pattern.
 export const CAUSE_SCAN_CAP = 50
 
-// X2E6OSWK: cap on how long the cross-session scan may hold the event loop. Each pool entry can
-// trigger a SYNCHRONOUS full-transcript reparse (resolveSessionCard on a stripped card — after a
-// server restart that is EVERY disk-restored card), so 50 back-to-back reparses ran for minutes
+// X2E6OSWK: cap on how long ANY corpus-fanning drill scan may hold the event loop. Each pool entry
+// can trigger a SYNCHRONOUS full-transcript reparse (resolveSessionCard on a stripped card — after
+// a server restart that is EVERY disk-restored card), so 50 back-to-back reparses ran for minutes
 // inline in one request and starved the loop into the wedge state (100% CPU, every request
 // hanging — the 2026-07-16 recurrence). The budget stops the scan honestly instead.
-export const CAUSE_SCAN_TIME_BUDGET_MS = 20_000
+export const DRILL_SCAN_TIME_BUDGET_MS = 20_000
+
+// X2E6OSWK: the ONE bounded-scan primitive for every corpus-fanning drill handler. The
+// setImmediate yield between items is a MACROTASK boundary — a bare `await` of a resolved promise
+// only drains microtasks and would still starve I/O, so queued HTTP requests could never
+// interleave. The deadline bounds the worst case. Never fold such a loop back into a map/flatMap —
+// the unyielding 50-reparse flatMap was the exact 2026-07-16 wedge this replaced.
+async function scanWithBudget<T, R>(
+  pool: T[],
+  timeBudgetMs: number,
+  perItem: (item: T) => R | Promise<R>,
+): Promise<{ results: R[]; scanned: T[]; stoppedEarly: boolean }> {
+  const results: R[] = []
+  const scanned: T[] = []
+  const deadline = Date.now() + timeBudgetMs
+  let stoppedEarly = false
+  for (const item of pool) {
+    if (Date.now() > deadline) { stoppedEarly = true; break }
+    results.push(await perItem(item))
+    scanned.push(item)
+    await new Promise<void>(resolve => setImmediate(resolve))
+  }
+  return { results, scanned, stoppedEarly }
+}
 
 export async function handleGetCostByCause(
   sessions: SessionSummaryCard[],
   getTimeline: ((id: string) => unknown[]) | null,
   args: { sessionId?: string; days?: number },
-  timeBudgetMs: number = CAUSE_SCAN_TIME_BUDGET_MS,
+  timeBudgetMs: number = DRILL_SCAN_TIME_BUDGET_MS,
 ) {
   if (args.sessionId) {
     const s = sessions.find(x => x.sessionId === args.sessionId)
@@ -2551,20 +2629,11 @@ export async function handleGetCostByCause(
   const candidates = inWindow.filter(s => s.source === 'claude_code')
     .sort((a, b) => lastActivityMs(b) - lastActivityMs(a))
   const scanPool = candidates.slice(0, CAUSE_SCAN_CAP)
-  // One session per macrotask, deadline-checked: a stripped card's timeline is reparsed from its
-  // whole JSONL transcript SYNCHRONOUSLY inside asTimeline, so the yield between iterations is what
-  // lets queued requests interleave, and the deadline is what bounds the worst case. Never flatMap
-  // this loop back together — the unyielding 50-reparse flatMap is the exact wedge this replaced.
-  const merged: unknown[] = []
-  const scanned: SessionSummaryCard[] = []
-  const deadline = Date.now() + timeBudgetMs
-  let stoppedEarly = false
-  for (const s of scanPool) {
-    if (Date.now() > deadline) { stoppedEarly = true; break }
-    merged.push(...asTimeline(getTimeline, s.sessionId, s))
-    scanned.push(s)
-    await new Promise<void>(resolve => setImmediate(resolve))
-  }
+  // One session per macrotask, deadline-checked (scanWithBudget): a stripped card's timeline is
+  // reparsed from its whole JSONL transcript SYNCHRONOUSLY inside asTimeline.
+  const { results, scanned, stoppedEarly } =
+    await scanWithBudget(scanPool, timeBudgetMs, s => asTimeline(getTimeline, s.sessionId, s))
+  const merged: unknown[] = results.flat()
   // Window ground truth = Σ normalized per-session totals over the SCANNED pool only, so the
   // reconciliation remainder compares like with like (scanned traffic vs scanned api_requests).
   const windowTotal = scanned.reduce((n, s) => n + normalizedSessionTotalTokens(s), 0)
@@ -2974,7 +3043,7 @@ export function createMcpServer(opts: McpServerOptions): Server {
         )
         break
       case 'check_cache_expiry':
-        result = handleCheckCacheExpiry(
+        result = await handleCheckCacheExpiry(
           sessions, getTimeline, getTtlContext?.() ?? null,
           args as { sessionId?: string; all?: boolean; thresholdMinutes?: number },
         )
@@ -3194,6 +3263,22 @@ export function handleMcpRequest(
     const raw = Buffer.concat(chunks).toString()
     let parsedBody: unknown
     try { parsedBody = raw ? JSON.parse(raw) : undefined } catch { parsedBody = undefined }
+
+    // X2E6OSWK: per-TOOL duration logging at the one choke point every tool call crosses. The HTTP
+    // request log times POST /mcp but cannot say WHICH tool — and a WEDGED handler never finishes,
+    // so a completion-only log can't name it either. The start line is the wedge-namer: the last
+    // "tool <name> start" with no matching done line in the server log IS the culprit. 'close'
+    // fires after a normal finish AND on client abort, so the done line covers errors too. Two
+    // console writes per CLI-driven call — negligible volume (dashboard polling never hits /mcp).
+    const body = parsedBody as { method?: string; params?: { name?: string } } | undefined
+    const calledTool = body?.method === 'tools/call' ? body.params?.name : undefined
+    if (calledTool) {
+      const toolT0 = Date.now()
+      console.log(`[AgentLens] tool ${calledTool} start`)
+      res.once('close', () => {
+        console.log(`[AgentLens] tool ${calledTool} done in ${Date.now() - toolT0}ms (status ${res.statusCode})`)
+      })
+    }
 
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
     // Close the transport when the RESPONSE is done, whatever path got it there. 'close' fires

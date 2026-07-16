@@ -1,6 +1,8 @@
 import * as assert from 'assert'
 import { TTL_5M_MS, TTL_1H_MS, type TtlContext } from '../shared/cacheTtl'
 import { assessCacheExpiry, formatIdle } from '../cacheExpiry'
+import { handleCheckCacheExpiry, EXPIRY_NEWEST_PROBE } from '../mcpServer'
+import type { SessionSummaryCard, TimelineEntry } from '../shared/summarizerTypes'
 
 // ── Cache-expiry probe (TRDD-OCNHOHE9) ────────────────────────────────────────
 // assessCacheExpiry composes the doc-verified TTL regime (cacheTtl.ts) with a
@@ -101,5 +103,85 @@ suite('assessCacheExpiry — explicit --threshold-minutes override', () => {
     const v = assessCacheExpiry({ lastRequestAtMs: NOW - 30 * 60_000, nowMs: NOW, kind: 'main', ctx: SUBSCRIPTION, thresholdMs: 0 })
     assert.strictEqual(v.usedThresholdOverride, false)
     assert.strictEqual(v.ttlMs, TTL_1H_MS)
+  })
+})
+
+// ── MCP handler — bounded corpus scans (TRDD-X2E6OSWK) ────────────────────────
+// The handler used to reparse EVERY main transcript synchronously (default path) and map the
+// WHOLE corpus (--all) — the exact unbounded-synchronous shape that wedged the server on
+// 2026-07-16. These tests pin the bounds: the default path probes only the newest-by-activity
+// candidates, and --all yields per card under a time budget with honest coverage.
+
+function expiryCard(id: string, startTime: string): SessionSummaryCard {
+  return {
+    sessionId: id, traceId: 't-' + id, source: 'claude_code', dataSource: 'log',
+    workspace: '/ws', userRequest: 'req', model: 'claude-opus-4-8', turns: 1,
+    inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0,
+    cacheHitRate: 0, durationMs: 1000, startTime,
+    filesRead: [], filesSearched: [], filesChanged: [], filesWritten: [],
+    toolCounts: {}, totalToolCalls: 0, totalLlmCalls: 1, errors: 0,
+    // timeline [] = a stripped/disk-restored card: activity ranking falls back to startTime and
+    // asTimeline must go through getTimeline (the reparse) — the post-restart worst case.
+    outcome: 'text_response', timeline: [], backgroundSpans: [], loopSignals: [],
+  }
+}
+
+function apiRequestAt(iso: string): TimelineEntry {
+  return { type: 'api_request', spanId: 'r', label: 'api', durationMs: 1, isError: false, timestamp: iso }
+}
+
+suite('handleCheckCacheExpiry — bounded scans (TRDD-X2E6OSWK)', () => {
+  const CTX: TtlContext = { auth: 'subscription', force5m: false, enable1h: false }
+
+  test('default path reparses only the newest-activity probe, and precision-ranks within it', async () => {
+    const now = Date.now()
+    const iso = (minAgo: number): string => new Date(now - minAgo * 60_000).toISOString()
+    // 30 stripped mains, activity rank = startTime rank (m0 newest). m2 carries the NEWEST actual
+    // api_request, so precision ranking inside the probe must pick m2 over the rank-1 card.
+    const cards = Array.from({ length: 30 }, (_, i) => expiryCard(`m${i}`, iso(i)))
+    const probed = new Set<string>()
+    const getTimeline = (id: string): unknown[] => {
+      probed.add(id)
+      return [apiRequestAt(id === 'm2' ? iso(0) : iso(Number(id.slice(1)) + 1))]
+    }
+    const r = await handleCheckCacheExpiry(cards, getTimeline, CTX, {})
+    assert.strictEqual(r.sessions.length, 1)
+    assert.strictEqual(r.sessions[0].sessionId, 'm2')
+    // Probe bound: only the top EXPIRY_NEWEST_PROBE by activity are ever reparsed (assessOneSession
+    // re-reads the winner, which is already in the probed set).
+    assert.ok(probed.size <= EXPIRY_NEWEST_PROBE, `probed ${probed.size} > cap ${EXPIRY_NEWEST_PROBE}`)
+    assert.ok(!probed.has('m20'), 'a card outside the probe window must never be reparsed')
+  })
+
+  test('--all stops on the time budget with honest coverage, newest-activity first', async () => {
+    const now = Date.now()
+    const cards = Array.from({ length: 40 }, (_, i) =>
+      expiryCard(`s${i}`, new Date(now - i * 60_000).toISOString()))
+    // Each "reparse" burns ~8ms synchronously — the wedge ingredient the budget exists to bound.
+    const getTimeline = (): unknown[] => {
+      const until = Date.now() + 8
+      while (Date.now() < until) { /* synchronous spin */ }
+      return [apiRequestAt(new Date(now).toISOString())]
+    }
+    const r = await handleCheckCacheExpiry(cards, getTimeline, CTX, { all: true }, 1)
+    assert.ok(r.coverage, '--all must return a coverage block')
+    assert.strictEqual(r.coverage!.stoppedEarly, true)
+    assert.strictEqual(r.coverage!.sessionsConsidered, 40)
+    assert.ok(r.coverage!.sessionsScanned < 40, 'the budget must stop the scan before the corpus ends')
+    assert.strictEqual(r.sessions.length, r.coverage!.sessionsScanned)
+    assert.ok(/SAMPLE/.test(r.coverage!.note), 'a budget stop must be labeled a SAMPLE')
+    // Newest-activity first: the scanned prefix is the newest cards, so the budget is spent on
+    // the sessions a caller actually cares about.
+    assert.strictEqual(r.sessions[0].sessionId, 's0')
+  })
+
+  test('--all reports complete coverage when the corpus fits the budget', async () => {
+    const now = Date.now()
+    const cards = [expiryCard('a', new Date(now).toISOString()), expiryCard('b', new Date(now - 60_000).toISOString())]
+    const getTimeline = (): unknown[] => [apiRequestAt(new Date(now).toISOString())]
+    const r = await handleCheckCacheExpiry(cards, getTimeline, CTX, { all: true })
+    assert.strictEqual(r.sessions.length, 2)
+    assert.strictEqual(r.coverage!.stoppedEarly, false)
+    assert.ok(/Complete coverage/.test(r.coverage!.note))
   })
 })
