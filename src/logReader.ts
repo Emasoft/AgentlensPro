@@ -1643,6 +1643,10 @@ interface CardAccum {
   userRequest: string
   timeline: TimelineEntry[]
   initiator: 'user' | 'agent' | 'api'
+  // Transcript-signal enrichment (TRDD-B22NYTOY P4): latest `ai-title` record → title; first
+  // top-level `entrypoint` field → entrypoint. Only the Claude path populates these today.
+  title?: string
+  entrypoint?: string
 }
 
 // Per-path byte/operation accumulator for file tool I/O (Claude logs). Converted to the
@@ -1986,6 +1990,15 @@ function _claudeOnEntry(a: ClaudeAccum, entry: Record<string, unknown>): void {
   const ts = entry['timestamp'] as string | undefined
   if (ts) { if (!a.firstTimestamp) a.firstTimestamp = ts; a.lastTimestamp = ts }
   if (entry['cwd'] && !a.workspace) a.workspace = entry['cwd'] as string
+  // Card enrichment (TRDD-B22NYTOY P4). ai-title: CC regenerates the title as the session evolves,
+  // so LATEST wins (same rule as src/conversation.ts). entrypoint rides on many record types
+  // (user/assistant/attachment/system) but never changes within a session, so FIRST wins.
+  if (entry['type'] === 'ai-title' && typeof entry['aiTitle'] === 'string' && entry['aiTitle']) {
+    a.card.title = entry['aiTitle'] as string
+  }
+  if (!a.card.entrypoint && typeof entry['entrypoint'] === 'string' && entry['entrypoint']) {
+    a.card.entrypoint = entry['entrypoint'] as string
+  }
 
   if (entry['type'] === 'user') {
     // isSidechain: true → session was spawned by the Agent tool, not typed by a human.
@@ -2237,6 +2250,10 @@ function _buildCard(
     // exactly the registry's key, so this attributes correctly. undefined when unknown (fail-soft).
     accountId: callBodyRegistry.accountFor(sessionId),
     workspace,
+    // Spread-conditionally so cards without the transcript signals stay field-free (exact-shape
+    // assertions elsewhere compare with deepStrictEqual; an explicit undefined would break them).
+    ...(acc.title ? { title: acc.title.slice(0, 200) } : {}),
+    ...(acc.entrypoint ? { entrypoint: acc.entrypoint } : {}),
     userRequest: acc.userRequest.slice(0, 500),
     model,
     turns: acc.turns,

@@ -516,13 +516,17 @@ function SessionRow({ sess, showWorkspace }: { sess: SessionSummaryCard; showWor
           )}
         </td>
 
-        {/* Prompt */}
+        {/* Headline: the AI-generated session title when the transcript carries one (ai-title,
+            TRDD-B22NYTOY P4) — upright + medium so it reads as a NAME; the first prompt stays in
+            the tooltip. Falls back to the italic first-prompt exactly as before. */}
         <td style="padding:4px 6px;max-width:0;width:100%">
-          {prompt
-            ? <span style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-style:italic;color:var(--foreground)" title={prompt}>{prompt}</span>
-            : sess.turns === 0
-              ? <span style="color:var(--muted);font-size:11px">…</span>
-              : <span style="color:var(--muted);font-size:11px">—</span>
+          {sess.title
+            ? <span style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:500;color:var(--foreground)" title={prompt ? `${sess.title}\n\n${prompt}` : sess.title}>{sess.title}</span>
+            : prompt
+              ? <span style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-style:italic;color:var(--foreground)" title={prompt}>{prompt}</span>
+              : sess.turns === 0
+                ? <span style="color:var(--muted);font-size:11px">…</span>
+                : <span style="color:var(--muted);font-size:11px">—</span>
           }
         </td>
 

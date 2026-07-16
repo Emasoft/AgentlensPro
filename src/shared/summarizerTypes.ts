@@ -54,6 +54,13 @@ export interface SessionSummaryCard {
   spawnAsync?: boolean
   workspace: string
   projectPath?: string
+  // Human-readable session title + launch surface, harvested from transcript signals
+  // (TRDD-B22NYTOY P4). `title` = the latest `ai-title` record's aiTitle (CC regenerates it as the
+  // session evolves — latest wins); `entrypoint` = the first record's top-level entrypoint field
+  // ('cli', 'sdk-cli', …; it never changes within a session — first wins). Both absent when the
+  // transcript carries no such signal — consumers fall back to userRequest, never fabricate.
+  title?: string
+  entrypoint?: string
   userRequest: string
   model: string
   turns: number

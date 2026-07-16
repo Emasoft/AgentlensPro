@@ -1,9 +1,9 @@
 ---
 trdd-id: B22NYTOY
 title: Conversation transcript view — narrative per-turn session reader (CLI tool + dashboard)
-column: dev
+column: ai_review
 created: 2026-07-16T02:10:29+0200
-updated: 2026-07-16T03:05:00+0200
+updated: 2026-07-16T03:20:00+0200
 current-owner: main
 task-type: feature
 severity: major
@@ -14,7 +14,31 @@ eht: []
 
 # Conversation transcript view — narrative per-turn session reader
 
-## ⏵ STATE — 2026-07-16 ~03:05 — P1+P2+P3 LANDED; NEXT: P4 (card enrichment + smoke + close)
+## ⏵ STATE — 2026-07-16 ~03:20 — ALL 4 PHASES LANDED + LIVE-VERIFIED; column → ai_review
+
+- **P4 DONE:** card enrichment — logReader `_claudeOnEntry` harvests `ai-title` (latest wins) +
+  top-level `entrypoint` (first wins) into `SessionSummaryCard.title/entrypoint` (spread-conditional
+  in `_buildCard`; 3 TDD tests in `logReader.cardTitle.test.ts`); Sessions row headlines the title
+  (upright/medium, prompt → tooltip); `conversation.ts` entrypoint/cwd harvest hoisted
+  record-agnostic (was assistant-only — user/attachment/system records carry it too, live-verified).
+  Browser smoke: 4th TITLED fixture + 2 Transcript sub-tab tests (dark/light screenshots,
+  role-colored turns, `→ Read` collapsed rows, exact-span `cli` badge check — a substring test
+  false-passes on "click"). Suite 1259 green WITH browser tests; gate clean; deployed pid 70383.
+- **LIVE-VERIFIED (2026-07-16 ~03:18):** `/api/summary` card for session a0fce09a carries
+  `title: "conversation-transcript-viewer"`, `entrypoint: "cli"`; dashboard Transcript tab renders
+  the real 3196-turn session (title header, cli badge, compaction dividers, paging).
+- **Known limitations (deliberate scope cuts, follow-up TRDDs if wanted):**
+  (a) title/entrypoint are NOT persisted to SQLite (fixed-column schema; migration needed) — cards
+  served from the DB snapshot lose them; live-scanned cards (any session that appends) carry them.
+  Forward-only enrichment: dormant sessions stay prompt-headlined.
+  (b) opencode's DB has its own `title` column — could feed card.title for that source too.
+- **HARNESS LESSON (headless-Chrome stall):** in headless puppeteer an idle page parks — Preact's
+  rAF-deferred effects AND fetch-response delivery stalled ~25s while the server answered external
+  curl in 0.03s at 0% CPU. In-page rAF-polled `waitForFunction` generates no renderer activity and
+  never unsticks it; TEST-SIDE `page.evaluate` polling (each evaluate = a renderer task) does —
+  response landed in 504ms. Pattern now in dashboardSmoke `pollFor()`.
+
+## ⏵ [SUPERSEDED] STATE — 2026-07-16 ~03:05 — P1+P2+P3 LANDED; NEXT: P4 (card enrichment + smoke + close)
 
 - **P1 DONE** (e4d7bfa): `src/conversation.ts` ordered-blocks parser + 15 fixture tests (suite
   1251 green); findSessionFile + classifyAttachment de-duped into contextComposition exports.

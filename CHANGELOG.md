@@ -20,6 +20,19 @@ All notable changes to AgentlensPro are documented here.
   `usage.cache_creation.ephemeral_5m/1h`. Progressive drill-down (`--turn N`,
   `--turnFrom/--turnTo`); served to the dashboard at `GET /api/conversation/:id`.
 
+- **Dashboard Transcript sub-tab — the session as a readable conversation (TRDD-B22NYTOY).**
+  Every session's drill-in gains a Transcript view: role-colored turns (user amber / assistant
+  blue / subagent violet), user prompts and assistant replies open as wrapped text, thinking and
+  tool input/output as collapsibles that grow the page (no inner scrollbars), compaction dividers
+  with pre→post token counts, last-300 paging with "Show earlier turns". Header shows the AI
+  session title, entrypoint badge, and totals (incl. cache-read and 1h-tier volume).
+
+- **Session cards carry the AI-generated title and entrypoint (TRDD-B22NYTOY).** The log parser
+  harvests `ai-title` (latest wins) and the top-level `entrypoint` field (first wins) into
+  `card.title`/`card.entrypoint`; the Sessions list headlines the title when present (the first
+  prompt moves to the tooltip). Forward-only: a session gets its title on its next transcript
+  append/scan — dormant snapshot-served sessions keep the prompt headline.
+
 - **Log-event sink — gated-out OTEL log events are persisted, never dropped (TRDD-AMEA4O4Z).**
   The OTLP rich-event gate converts only `api_request`/`compaction`/`api_error`/
   `api_retries_exhausted` + `tool_result` into spans; everything else (`user_prompt`,

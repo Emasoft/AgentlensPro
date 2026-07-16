@@ -133,6 +133,11 @@ export async function buildConversationFromFile(filePath: string, sessionId: str
     try { e = JSON.parse(line) } catch { continue }
     const type = e['type']
     const ts = typeof e['timestamp'] === 'string' ? (e['timestamp'] as string) : undefined
+    // entrypoint/cwd ride as top-level fields on MANY record types (user, assistant, attachment,
+    // system — verified on live transcripts), so harvest them record-agnostically: first wins.
+    // Harvesting only from assistant rows missed sessions whose first carrier is a user row.
+    if (!entrypoint && typeof e['entrypoint'] === 'string') entrypoint = e['entrypoint'] as string
+    if (!cwd && typeof e['cwd'] === 'string') cwd = e['cwd'] as string
 
     if (type === 'assistant') {
       const msg = e['message'] as Record<string, unknown> | undefined
@@ -145,8 +150,6 @@ export async function buildConversationFromFile(filePath: string, sessionId: str
           .reduce((n, k) => n + (Number(usage?.[k]) || 0), 0)
         if (sum === 0) continue
       }
-      if (!entrypoint && typeof e['entrypoint'] === 'string') entrypoint = e['entrypoint'] as string
-      if (!cwd && typeof e['cwd'] === 'string') cwd = e['cwd'] as string
       if (!model && rowModel && rowModel !== '<synthetic>') model = rowModel
 
       const id = (msg['id'] as string | undefined) ?? (e['requestId'] as string | undefined)
