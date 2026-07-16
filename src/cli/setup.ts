@@ -28,7 +28,7 @@ import * as path from 'path'
 import { loadSqlJs } from '../forensicsDb'
 import { readFsMarkers } from '../environment/runtime'
 import { ensureTelemetryConfig, ownedTelemetryKeys } from '../telemetryConfig'
-import { rawBodyCaptureEnabled, RAW_BODIES_KEY } from '../captureConfig'
+import { rawBodyCaptureEnabled, effectiveBodiesDir, RAW_BODIES_KEY } from '../captureConfig'
 import { sleep } from './cliCore'
 import {
   CLI_BIN, GATE_CMD, GATE_EVENTS, GATE_MATCHER, HOOK_CMD, HOOK_EVENTS, HookMatcher,
@@ -607,12 +607,14 @@ const stepSkill: StepDef = {
 const stepOtel: StepDef = {
   name: 'otel-env',
   async run(ctx) {
-    const bodiesDir = path.join(ctx.dataDir, 'otel-bodies')
     const markerPath = path.join(ctx.dataDir, 'telemetry-managed.json')
     // Raw-body capture is opt-in (TRDD-BKF5NZD3). Resolve it ONCE and feed the SAME value to both
     // the expected-table and ensure(), or setup's verify would demand a key ensure deliberately
     // deleted (or vice-versa) and the repairer would fight itself on every run.
     const captureRawBodies = rawBodyCaptureEnabled(ctx.dataDir, process.env)
+    // Same ONE bodies-dir resolution as ensure()'s default (spool when capture is on) — a
+    // hard-coded legacy path here made setup's verify/repair fight the spool-aware CLI writer.
+    const bodiesDir = effectiveBodiesDir(ctx.dataDir, captureRawBodies)
     const expected = ownedTelemetryKeys(bodiesDir, ctx.otlpPort, captureRawBodies)
     const state = readSettingsFresh(ctx.settingsPath)
     if (state === 'unparseable') {

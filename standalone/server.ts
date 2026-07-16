@@ -3716,7 +3716,11 @@ async function applyAutoConfig(): Promise<void> {
     return
   }
   try {
-    const r = await ensureTelemetryConfig({ otlpPort: OTLP_PORT })
+    // bodiesDir = PRIMARY_BODIES_DIR: MOUNT truth, not config truth. When the spool failed to
+    // (re)mount this boot, the config still names it — but pointing Claude Code at an unmounted
+    // /Volumes path would materialize a plain SSD directory nothing drains. The key must name the
+    // dir this server actually watches + drains.
+    const r = await ensureTelemetryConfig({ otlpPort: OTLP_PORT, bodiesDir: PRIMARY_BODIES_DIR })
     if (r.changed) {
       console.log(`[AgentLens] Full telemetry config applied → ${r.settingsPath} (${r.added.length} added, ${r.overrode.length} overridden${r.backupPath ? `; backup ${r.backupPath}` : ''})`)
       console.log('[AgentLens] ⚠ Restart your Claude Code sessions for telemetry to take effect.')

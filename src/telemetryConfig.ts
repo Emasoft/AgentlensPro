@@ -23,7 +23,7 @@ import * as path from 'path'
 import * as os from 'os'
 import * as fs from 'fs/promises'
 import { safeConfigEdit, SafeEditOp } from './safeConfigEdit'
-import { rawBodyCaptureEnabled, RAW_BODIES_KEY } from './captureConfig'
+import { rawBodyCaptureEnabled, effectiveBodiesDir, RAW_BODIES_KEY } from './captureConfig'
 
 export interface TelemetryConfigOptions {
   /** settings.json to manage. Default: ~/.claude/settings.json */
@@ -95,14 +95,18 @@ function resolveOptions(options: TelemetryConfigOptions): {
 } {
   const home = os.homedir()
   const dataDir = options.dataDir ?? path.join(home, '.agentlens')
+  // Resolved from the durable knob (env > config.json > OFF) unless the caller pins it. This is
+  // the whole point of TRDD-BKF5NZD3: capture is a DECISION, not wiring we force-converge.
+  const captureRawBodies = options.captureRawBodies ?? rawBodyCaptureEnabled(dataDir, process.env)
   return {
     settingsPath: options.settingsPath ?? path.join(home, '.claude', 'settings.json'),
     markerPath:   options.markerPath   ?? path.join(home, '.agentlens', 'telemetry-managed.json'),
-    bodiesDir:    options.bodiesDir    ?? path.join(dataDir, 'otel-bodies'),
+    // Default through the ONE bodies-dir resolution (spool when capture is on) — a legacy-only
+    // default here made every spool-blind caller (server boot, --install-otel) overwrite the CLI's
+    // spool value on the next converge, re-pointing Claude Code's write firehose at the SSD.
+    bodiesDir:    options.bodiesDir    ?? effectiveBodiesDir(dataDir, captureRawBodies),
     otlpPort:     options.otlpPort     ?? 4318,
-    // Resolved from the durable knob (env > config.json > OFF) unless the caller pins it. This is
-    // the whole point of TRDD-BKF5NZD3: capture is a DECISION, not wiring we force-converge.
-    captureRawBodies: options.captureRawBodies ?? rawBodyCaptureEnabled(dataDir, process.env),
+    captureRawBodies,
   }
 }
 

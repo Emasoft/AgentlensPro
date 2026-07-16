@@ -11,8 +11,8 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import {
-  RAW_BODIES_ENV, RAW_BODIES_KEY, loadCaptureConfig, rawBodyCaptureEnabled, rawBodyCaptureWithSource,
-  setRawBodyCapture,
+  RAW_BODIES_ENV, RAW_BODIES_KEY, effectiveBodiesDir, loadCaptureConfig, rawBodyCaptureEnabled,
+  rawBodyCaptureWithSource, setRawBodyCapture, setSpoolDir,
 } from '../captureConfig'
 import { ensureTelemetryConfig, ownedTelemetryKeys, removeTelemetryConfig } from '../telemetryConfig'
 
@@ -160,5 +160,41 @@ suite('telemetry converge — capture off must actually stop the burn', () => {
     const on = ownedTelemetryKeys('/b', 4318, true)
     assert.ok(!(RAW_BODIES_KEY in off), 'setup must not VERIFY a key ensure deliberately deleted')
     assert.strictEqual(on[RAW_BODIES_KEY], 'file:/b')
+  })
+})
+
+// The two-writer defect (2026-07-16): the CLI capture-on flow wired the key at the RAM-disk spool,
+// then the server-boot converge — whose bodiesDir default was hard-coded to the legacy SSD dir —
+// overwrote it minutes later, silently re-pointing Claude Code's ~35 GB/day at the SSD. The contract:
+// there is ONE resolution of the bodies dir (effectiveBodiesDir), and a spool-BLIND caller of
+// ensureTelemetryConfig must converge the SAME value the spool-AWARE writer wrote.
+suite('effectiveBodiesDir — the one bodies-dir resolution (TRDD-K3WDPR7M spool × TRDD-BKF5NZD3 converge)', () => {
+  test('capture on + spool configured → the spool dir', () => {
+    const dir = tmp()
+    setSpoolDir(dir, '/Volumes/TestSpool/otel-bodies')
+    assert.strictEqual(effectiveBodiesDir(dir, true), '/Volumes/TestSpool/otel-bodies')
+  })
+  test('capture on + no spool configured → the legacy dir', () => {
+    const dir = tmp()
+    assert.strictEqual(effectiveBodiesDir(dir, true), path.join(dir, 'otel-bodies'))
+  })
+  test('capture off → the legacy dir even when a spool is configured (off never targets the spool)', () => {
+    const dir = tmp()
+    setSpoolDir(dir, '/Volumes/TestSpool/otel-bodies')
+    assert.strictEqual(effectiveBodiesDir(dir, false), path.join(dir, 'otel-bodies'))
+  })
+
+  test('a spool-BLIND converge (the server-boot shape) writes the SPOOL value, not the legacy dir', async () => {
+    const f = fixture()
+    // A tmp-rooted spool path (ensure mkdir-s the bodies dir, and /Volumes needs root) — the point
+    // is only that it differs from the legacy <dataDir>/otel-bodies.
+    const spool = path.join(f.dir, 'spool', 'otel-bodies')
+    setRawBodyCapture(f.dir, true)
+    setSpoolDir(f.dir, spool)
+    // No bodiesDir in the options — exactly how the server boot calls ensure. Before the fix this
+    // converged file:<legacy> and clobbered the CLI's spool value.
+    const { bodiesDir: _omit, ...blind } = f.opts as { bodiesDir: string } & Record<string, unknown>
+    await ensureTelemetryConfig(blind)
+    assert.strictEqual(envOf(f.settingsPath)[RAW_BODIES_KEY], `file:${spool}`)
   })
 })

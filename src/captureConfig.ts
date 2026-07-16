@@ -14,6 +14,7 @@
 //
 // Precedence matches retention (src/retentionConfig.ts): env > config.json > built-in default.
 import * as fs from 'fs'
+import * as path from 'path'
 import { configPath } from './retentionConfig'
 
 /** Ops override. Set to 1/true/on to capture, 0/false/off to not — anything else is ignored. */
@@ -63,6 +64,18 @@ export function loadCaptureConfig(dataDir: string): CaptureConfig {
 /** The persisted RAM-disk spool bodies dir, or undefined when none is configured. */
 export function spoolDirConfigured(dataDir: string): string | undefined {
   return loadCaptureConfig(dataDir).spoolDir
+}
+
+/**
+ * THE one resolution of "where should Claude Code write raw bodies": the configured RAM-disk spool
+ * when capture is on (TRDD-K3WDPR7M Phase 3), else the legacy SSD dir. Every writer of the
+ * OTEL_LOG_RAW_API_BODIES settings value must resolve through this — while the CLI capture-on flow
+ * was spool-aware but telemetryConfig's default was not, the two writers converged DIFFERENT values
+ * and the server boot (the last writer) silently re-pointed Claude Code's ~35 GB/day at the SSD
+ * (observed 2026-07-16, minutes after the spool was wired).
+ */
+export function effectiveBodiesDir(dataDir: string, captureOn: boolean): string {
+  return (captureOn ? spoolDirConfigured(dataDir) : undefined) ?? path.join(dataDir, 'otel-bodies')
 }
 
 /** Resolve capture + where the value came from (env > file > default). */
