@@ -3,12 +3,12 @@ trdd-id: X2E6OSWK
 title: Server degrades into a 100% CPU spin and every request hangs — full session rebuild on a 4s timer and on every tool call
 column: dev
 created: 2026-07-13T23:00:54+0200
-updated: 2026-07-16T15:39:34+0200
+updated: 2026-07-16T15:49:14+0200
 current-owner: main
 task-type: bugfix
 severity: critical
 scope: project
-implementation-commits: [3b1520a, 956c006, 3a8fe7c]
+implementation-commits: [3b1520a, 956c006, 3a8fe7c, 4949af7]
 ---
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-16 16:0x
@@ -30,13 +30,17 @@ watchdog + per-request logging still OPEN (that's why column stays dev).**
   busy fleet the 50 newest-STARTED cards were ephemeral subagents (flagship active session ranked
   #446) and machine-wide attribution read 0 while single-session drills showed 1155 calls. Now
   lastActivityMs ranks + windows. Live proof: leaderboard 0 → **5974 attributed calls**.
-- **STILL OPEN (next actions)**: (1) event-loop watchdog + self-heal (worker thread detects
-  sustained loop starvation → spawns detached restarter → exits — a wedged observability server
-  is worse than a restarted one, and the ai-maestro guardian integration depends on availability);
-  (2) per-request duration logging on drill routes so any future wedge names itself; (3) sweep
-  the OTHER corpus-fanning drill handlers (cache_break/context_inflation/find_context_hogs/
-  check_cache_expiry machine scan) for the same unbounded-synchronous shape and apply the same
-  yield+budget pattern.
+- **Watchdog SHIPPED (4949af7)**: `src/loopWatchdog.ts` — main beats a SharedArrayBuffer every 1s
+  (a starved loop cannot beat; the silence is the signal); a worker thread checks it and on a 60s
+  stall spawns a detached restarter (SIGKILL — TERM is provably ignored — then respawn same
+  execPath/argv/env). Guards: system-sleep detection (worker's own timer gap), 120s min-uptime
+  (no boot crash-loop), unref everywhere, fail-soft start. Tested END-TO-END on a real child that
+  starves its own loop (SIGKILL observed + detached respawn marker) + healthy-loop + grace-window
+  tests. Envs: AGENTLENS_WATCHDOG=off, AGENTLENS_WATCHDOG_STALL_S. Deployed pid 69197.
+- **STILL OPEN (next actions)**: (1) per-request duration logging on drill routes so any future
+  wedge names itself; (2) sweep the OTHER corpus-fanning drill handlers (cache_break/
+  context_inflation/find_context_hogs/check_cache_expiry machine scan) for the same
+  unbounded-synchronous shape and apply the same yield+budget pattern.
 
 (Superseded 15:24 addendum, kept for lineage:)
 

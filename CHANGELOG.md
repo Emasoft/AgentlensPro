@@ -18,6 +18,15 @@ All notable changes to AgentlensPro are documented here.
   machine-wide attribution read 0 while heavy active sessions never got scanned; the pool now
   ranks and windows by last activity (live: 0 → 5974 attributed calls machine-wide).
 
+### Added
+
+- **Event-loop watchdog + self-heal (TRDD-X2E6OSWK).** A worker thread monitors a SharedArrayBuffer
+  heartbeat the main loop writes every second; on a sustained stall (default 60s,
+  `AGENTLENS_WATCHDOG_STALL_S`) it SIGKILLs the wedged process via a detached restarter and
+  respawns the same server config — because a starved loop provably ignores SIGTERM and a wedged
+  observability server is worse than a restarted one. System-sleep and 120s min-uptime guards
+  prevent wake-from-sleep and boot-wedge crash-loops. `AGENTLENS_WATCHDOG=off` disables.
+
 - **Per-cause attribution feed restored (TRDD-5GFSFX0Q).** The Phase B log-wins merge dropped the
   colliding OTEL card wholesale — and with it the `api_request` timeline entries that are the ONLY
   per-call attribution ground truth (exact `cost_usd` + query-source/agent/skill/plugin/MCP
