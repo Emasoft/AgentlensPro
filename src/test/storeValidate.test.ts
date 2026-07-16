@@ -262,4 +262,52 @@ suite('store migration — a schema change must never corrupt or lose the corpus
     assert.ok(fs.existsSync(`${dir}.migrating`), 'staging is kept so a human can see what went wrong')
     assert.ok(!fs.existsSync(`${dir}.old-v1`), 'nothing was swapped, so no backup should exist')
   })
+
+  test('migrate run TWICE is a byte-level no-op — the second run applies zero migrations (TRDD-802FP7ZL)', async () => {
+    // The idempotency contract: an already-current store must short-circuit BEFORE any staging,
+    // renaming, or manifest write — a cron/installer that calls migrate on every boot must never
+    // churn bytes, stack .old-vN backups, or bump manifest timestamps on an up-to-date store.
+    const { dir, store, raws } = await seeded(4)
+    await store.close()
+    writeManifest(dir, { schemaVersion: 1, createdAt: new Date().toISOString() })
+    MIGRATIONS.push(copyMigration('none'))
+
+    const first = await migrateStore(dir, { target: 2 })
+    assert.strictEqual(first.error, undefined, first.error)
+    assert.strictEqual(first.migrated, true)
+
+    // Snapshot the store dir BYTES (recursive listing + manifest content) before the re-run.
+    const listing = (d: string): string =>
+      fs.readdirSync(d, { recursive: true }).map(String).sort().join('\n')
+    const before = listing(dir)
+    const manifestBefore = fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8')
+
+    const second = await migrateStore(dir, { target: 2 })
+    assert.strictEqual(second.migrated, false, 'an already-current store must not re-migrate')
+    assert.strictEqual(second.error, undefined, 'a no-op is a SUCCESS, not an error')
+    assert.strictEqual(second.fromVersion, 2)
+    assert.strictEqual(second.toVersion, 2)
+    assert.strictEqual(second.backupDir, undefined, 'no swap happened, so no new backup may exist')
+    assert.ok(!fs.existsSync(`${dir}.old-v2`), 'a second run must never stack another .old-vN')
+    assert.ok(!fs.existsSync(`${dir}.migrating`), 'a no-op must not even create a staging dir')
+    assert.strictEqual(listing(dir), before, 'the store dir must be byte-listing identical')
+    assert.strictEqual(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8'), manifestBefore,
+      'the manifest must not be rewritten (createdAt/migratedFrom must not churn)')
+    await assertLiveIntact(dir, raws.length)
+  })
+})
+
+suite('openStore connection settings (TRDD-802FP7ZL)', () => {
+  test('the parquet object cache is ON — footers of the immutable parts are cached across scans', async () => {
+    // The store re-scans part globs constantly (dedup reload at open, every reconstruction, ingest
+    // verification). Parts are content-addressed and never rewritten, so cached Parquet metadata
+    // can never go stale — the one precondition the object cache needs.
+    const dir = tmp()
+    const store = await openStore({ dir, memoryLimit: '2GB', threads: 2 })
+    try {
+      const rows = (await store.con.runAndReadAll(
+        "SELECT current_setting('enable_object_cache') AS v")).getRowObjects()
+      assert.strictEqual(String(rows[0].v), 'true', 'enable_object_cache must be set at openStore')
+    } finally { await store.close() }
+  })
 })

@@ -110,6 +110,10 @@ export async function openStore(opts: StoreOptions): Promise<Store> {
   await con.run("SET temp_directory = ''")
   // We never rely on row order (every read is keyed by body_id/pos), so let DuckDB parallelize freely.
   await con.run('SET preserve_insertion_order = false')
+  // Cache Parquet footers/metadata across the part-glob re-scans (dedup reload at open, every body
+  // reconstruction, ingest verification). Safe HERE because parts are immutable + content-addressed
+  // (never rewritten in place), so a cached footer can never go stale (TRDD-802FP7ZL).
+  await con.run('SET enable_object_cache = true')
 
   // Staging lives in RAM. It is flushed to immutable Parquet and then DELETEd — and a DELETE from an
   // in-memory table costs NO disk write, which is what keeps the per-turn cost at ~15 KB.

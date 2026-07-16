@@ -18,6 +18,15 @@ All notable changes to AgentlensPro are documented here.
   / `note`, `get_cache_break_report` `scanStoppedEarly`/`scanNote`), which lands with this
   release.
 
+### Changed
+
+- **The DuckDB store connection now enables the Parquet object cache** (`enable_object_cache=true`,
+  TRDD-802FP7ZL — adopted from the DuckDB-skills corpus mining): footers/metadata of the immutable,
+  content-addressed parts are cached across the store's constant part-glob re-scans (dedup reload
+  at open, body reconstruction, ingest verification). Staleness is impossible by construction —
+  parts are never rewritten in place. Also pinned by contract test: running the store migration
+  twice is a byte-level no-op (no re-migration, no stacked `.old-vN` backups, manifest untouched).
+
 ### Fixed
 
 - **Raw-body capture no longer gets silently re-pointed at the SSD by a server restart
