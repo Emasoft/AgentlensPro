@@ -8,6 +8,15 @@ All notable changes to AgentlensPro are documented here.
 
 ### Fixed
 
+- **Raw-body capture no longer gets silently re-pointed at the SSD by a server restart
+  (TRDD-BKF5NZD3 × K3WDPR7M).** Turning capture on wires `OTEL_LOG_RAW_API_BODIES` at the RAM-disk
+  spool — but the server-boot converge computed the bodies dir independently, defaulting to the
+  legacy SSD path, and overwrote the spool value on the next boot (two writers, two answers, last
+  one wins). There is now ONE resolution (`effectiveBodiesDir`: spool when capture is on, else
+  legacy) shared by every writer, and the server boot converges MOUNT truth (`PRIMARY_BODIES_DIR`)
+  so a failed spool remount can never leave the key pointing at an unmounted `/Volumes` path that
+  nothing drains.
+
 - **Every corpus-fanning drill is now scan-bounded, and any future wedge names itself
   (TRDD-X2E6OSWK, final deliverables).** `check_cache_expiry` still carried the wedge shape the
   2.8.0 fix closed for `get_cost_by_cause`: its default path reparsed EVERY main transcript

@@ -22,12 +22,16 @@ eht: []
   yield + 20s deadline, now shared by every corpus-fanning drill incl. check_cache_expiry), and
   BACKSTOPPED (event-loop watchdog 4949af7 + per-tool start/done logging 4b4dc8f so any future
   wedge names itself). Shipped in v2.8.0 + follow-up.
-- **(a) Phase 3 — RAM-disk body spool: premise DOWNGRADED, not built, deliberately.** The spool
-  was designed when raw-body capture was always-on. TRDD-BKF5NZD3 made capture **opt-in, default
-  OFF** and the burn is measured dead: `~/.agentlens/otel-bodies` newest file is 2026-07-15 12:08
-  — **29+ hours of zero writes** at 6.0 GB static. The spool is now CONDITIONAL work: required
-  only before recommending `captureRawBodies=on` to anyone; do not build it speculatively
-  (lazy-cat rule). Gate it behind an explicit capture-on request.
+- **(a) Phase 3 — RAM-disk body spool: ✅ BUILT AND LIVE (correcting this addendum's first
+  version, which said "not built" off the stale 21:40 block — the CODE disproved it).** The full
+  pipeline ships in `standalone/server.ts` (spool resolution at boot with re-create-on-reboot,
+  drain targets with RAM caps, verified-then-delete ingest into the store) + the capture-on CLI
+  flow (spool creation, `capture.spoolDir` persistence, LaunchAgent remount). ACTIVATED on this
+  machine 2026-07-16 ~17:30 per the USER's data-retention directive ("no otel logs" = broken):
+  `captureRawBodies=on`, 2 GB spool at `/Volumes/AgentLensSpool`, key wired `file:<spool>`.
+  Follow-up defect found + fixed in the activation: the spool-blind server-boot converge
+  re-pointed the key at the legacy SSD dir minutes after the CLI wired the spool — closed by the
+  ONE bodies-dir resolution (`effectiveBodiesDir`, commit `4efe0f5`, 4 regression tests).
 - **(b) Phase 4 — the burn half ALREADY LANDED**: log-sessions/log-offsets delta append shipped in
   `9985c34` (9.4 MB/min → ~0, measured via ri_diskio_byteswritten). Remaining Phase-4 items are
   NOT burn issues: `forensics.db` fold (openForensicsDb has 0 prod callers — dead path) and the

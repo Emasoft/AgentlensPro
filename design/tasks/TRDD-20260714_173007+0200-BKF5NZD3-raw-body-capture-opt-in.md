@@ -13,6 +13,18 @@ severity: critical
 
 # Raw-body capture must be opt-in — the server re-arms it on every boot
 
+## ⏵ STATE addendum — 2026-07-16 17:45 — capture turned ON on this machine + converge defect fixed
+
+Per the USER's standing directive ("I do not want to lose any logged data or llm call request raw
+from the OTEL telemetry"), capture-off-by-default was WRONG for this machine even though it is the
+right product default: the user reported "no otel logs" as breakage. `captureRawBodies=on` set
+2026-07-16 ~17:30 — 2 GB RAM-disk spool mounted, key wired at `file:/Volumes/AgentLensSpool/
+otel-bodies` (SSD burn stays dead: bodies land in volatile memory, verified-then-deleted into the
+store). Activation exposed a converge defect: the spool-blind server boot re-pointed the key at
+the legacy SSD dir — fixed by the ONE bodies-dir resolution (`effectiveBodiesDir`, commit
+`4efe0f5`; live-proven post-restart). Claude sessions read env at LAUNCH: capture resumes per
+session as each is restarted.
+
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-16 17:20
 
 **✅ IMPLEMENTED + LIVE-VERIFIED — column → ai_review.** The fix landed in commits `82d856a`
