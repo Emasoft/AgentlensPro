@@ -1,9 +1,9 @@
 ---
 trdd-id: F6BM1BDI
 title: Scope the UI server ACAO from wildcard to same-origin/loopback (close cross-origin read exfil)
-column: dev
+column: ai_review
 created: 2026-07-11T16:33:42+0200
-updated: 2026-07-16T11:26:00+0200
+updated: 2026-07-16T11:59:30+0200
 current-owner: claude-code-review
 assignee: claude-code-review
 priority: 3
