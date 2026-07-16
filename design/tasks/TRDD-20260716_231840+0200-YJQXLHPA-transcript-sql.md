@@ -1,9 +1,9 @@
 ---
 trdd-id: YJQXLHPA
 title: run_transcript_sql — ad-hoc DuckDB SQL over the Claude session transcripts
-column: planned
+column: ai_review
 created: 2026-07-16T23:18:40+0200
-updated: 2026-07-16T23:18:40+0200
+updated: 2026-07-16T23:45:00+0200
 current-owner: main
 task-type: feature
 severity: minor
@@ -17,7 +17,18 @@ test-requirements: [unit, typecheck, lint]
 
 # run_transcript_sql — SQL over the transcripts (DuckDB corpus item 1)
 
-## ⏵ STATE — 2026-07-16 23:18 — authored, starting Phase 1
+## ⏵ STATE — 2026-07-16 23:45 — SHIPPED END-TO-END
+
+All three phases done same-evening: engine + 12 real-DuckDB tests (phase-1 commit), MCP tool
+`run_transcript_sql` + CHANGELOG + skill row (phase-2 commit), gate 1328/0 + tsc ×2 + lint 0,
+deploy law honored (esbuild OK, symbol grep 2 hits in standalone/server.js, server restarted
+pid 37329), and LIVE-verified on the real corpus: no-arg lists the 4 presets; `--preset
+usage_by_model --window 6` returned 7 models (98,707 opus assistant records — correct: the
+window bounds FILES by mtime, and a recently-touched long transcript carries its whole history;
+record-level time filtering is what the raw SQL surface is for, e.g. WHERE "timestamp" >= …).
+Gate: human review.
+
+## Original plan — 2026-07-16 23:18
 
 The last open item of the DuckDB-skills mining shortlist
 (`reports/duckdb-skills-mining/20260716_190500+0200-SYNTHESIS.md` item 1), resumed on the user's

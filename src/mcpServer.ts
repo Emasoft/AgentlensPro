@@ -78,6 +78,8 @@ import {
   buildCompareConfigs, type GroupByDim, type MetricKey, type AggKey, type CompareFilter,
 } from './forensicsCompare'
 import { runDiagnosticsSql, type SqlFormat } from './forensicsSql'
+// TRDD-YJQXLHPA — ad-hoc DuckDB SQL over the session .jsonl transcripts (bounded, read-only).
+import { runTranscriptSql } from './transcriptSql'
 
 // TRDD-CTXQUERY — one process-lifetime, LRU-cached composition index shared by all composition tools.
 // It reads the shared callBodyRegistry singleton (fed by both OTLP ingestors) directly, so the tools
@@ -1336,6 +1338,29 @@ const TOOLS = [
         params: { type: 'object', description: 'Named params bound safely into a preset or sql (e.g. window, sessionId, model, k). Never string-concatenated.' },
         format: { type: 'string', description: 'json (default, includes raw rows) | table (unicode-bordered, no raw rows) | markdown (no raw rows) — table/markdown carry the same data as one compact rendered string instead of doubling it' },
         limit:  { type: 'number', description: 'Row cap (default 50, hard max 2000). Wide TEXT/JSON cells are truncated at 500 chars with a marker; raise limit explicitly for a bigger pull.' },
+      },
+    },
+  },
+  {
+    name: 'run_transcript_sql',
+    description:
+      'Ad-hoc SQL (DuckDB) DIRECTLY over the Claude session .jsonl transcripts — answers cost/cause/' +
+      'content questions no hand-written drill covers, e.g. "which records carry usage.cache_creation ' +
+      'over N", "what record types exist", "group output tokens by model". The bounded file set ' +
+      '(sessionId fast path, else an mtime window, default 24h) is exposed as ONE relation named ' +
+      '`transcripts` (union_by_name over heterogeneous records; live still-growing files tolerated; ' +
+      '`filename` column identifies the source). Two modes: `preset` (frozen library — omit both ' +
+      'preset and sql to list it) or `sql` (read-only single SELECT/WITH; DDL/DML/ATTACH/PRAGMA ' +
+      'rejected). Every result carries a coverage block naming exactly which files were queried. ' +
+      'NOT a replacement for the session cards/drills — an analysis surface beside them.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        preset:      { type: 'string', description: 'Name of a built-in preset (mutually exclusive with sql). Omit both to list the library.' },
+        sql:         { type: 'string', description: "Raw read-only SQL over the `transcripts` view (single SELECT or WITH…SELECT). Quote camelCase columns: \"sessionId\", \"timestamp\"." },
+        sessionId:   { type: 'string', description: 'Query exactly this session transcript (fast path — one file; the window does not apply).' },
+        window:      { type: 'number', description: 'Only transcripts modified in the last N hours feed the view (default 24). Ignored with sessionId.' },
+        limit:       { type: 'number', description: 'Row cap (default 50, hard max 2000). A hit cap is reported in coverage, never silent.' },
       },
     },
   },
@@ -3199,6 +3224,13 @@ export function createMcpServer(opts: McpServerOptions): Server {
           await ensureFreshIndex({ windowHours: win })
         }
         result = await runDiagnosticsSql(a)
+        break
+      }
+      case 'run_transcript_sql': {
+        const a = args as { preset?: string; sql?: string; sessionId?: string; window?: number; limit?: number }
+        result = await runTranscriptSql({
+          preset: a.preset, sql: a.sql, sessionId: a.sessionId, windowHours: a.window, limit: a.limit,
+        })
         break
       }
       default:

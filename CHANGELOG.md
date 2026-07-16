@@ -8,6 +8,16 @@ All notable changes to AgentlensPro are documented here.
 
 ### Added
 
+- **`run_transcript_sql` — ad-hoc DuckDB SQL directly over the Claude session `.jsonl` transcripts**
+  (TRDD-YJQXLHPA, the last DuckDB-corpus shortlist item). The bounded file set (a `sessionId` fast
+  path, else an mtime window, default 24h — never the whole 17k-file corpus) is exposed as one
+  `transcripts` relation (`read_ndjson_auto`, union-by-name, live still-growing files tolerated,
+  64MB lines). Frozen presets (`record_type_histogram`, `usage_by_model`, `cache_heavy_turns`,
+  `sessions_by_output`) plus a raw read-only SELECT surface behind the same statement gate as
+  `run_diagnostics_sql`; every result carries a coverage block naming exactly which files were
+  queried, and the row cap reports itself. An analysis surface BESIDE the cards/drills, not a
+  LogReader replacement.
+
 - **The cache-health tool surface is now a locked CLI contract (AgentlensPro#3).** The
   ai-maestro-tailored janitor consumes `check_cache_expiry`, `get_cache_break_report`,
   `get_cache_break_gap_report`, and `get_cache_break_timeline` to prevent cache-miss/expiration;
