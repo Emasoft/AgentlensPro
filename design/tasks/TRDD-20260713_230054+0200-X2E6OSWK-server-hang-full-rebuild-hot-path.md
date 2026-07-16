@@ -3,7 +3,7 @@ trdd-id: X2E6OSWK
 title: Server degrades into a 100% CPU spin and every request hangs — full session rebuild on a 4s timer and on every tool call
 column: dev
 created: 2026-07-13T23:00:54+0200
-updated: 2026-07-16T15:24:16+0200
+updated: 2026-07-16T15:39:34+0200
 current-owner: main
 task-type: bugfix
 severity: critical
@@ -11,7 +11,34 @@ scope: project
 implementation-commits: [3b1520a]
 ---
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-16 15:24
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-16 16:0x
+
+**CULPRIT NAMED + BOUNDED (commits 956c006, 3a8fe7c) — wedge class closed for this handler;
+watchdog + per-request logging still OPEN (that's why column stays dev).**
+
+- **Named**: `handleGetCostByCause` leaderboard mode — `scanPool.flatMap(asTimeline)` ran up to 50
+  SYNCHRONOUS full-transcript reparses inline (after a restart every disk-restored card is
+  timeline-stripped, so the first cross-session drill reparses ~50 multi-MB JSONLs back-to-back).
+  Matches every frame of the 15:24 native sample (flatMap + stat/getdirentries/open + Date.parse
+  + GC). CONFIRMED as the failure shape; the 15:00 request itself is unprovable without
+  per-request logs (hence the logging deliverable below).
+- **Bounded (956c006)**: one session per macrotask (queued requests interleave) + a 20s deadline
+  with honest coverage (`stoppedEarly`, note explains reparsed timelines are cached so a retry
+  widens). Tests: yield-interleave proof + budget stop. Live: post-restart worst case returns
+  promptly, server responsive throughout.
+- **Bonus defect found + fixed (3a8fe7c)**: the pool ranked AND windowed by startTime, so on a
+  busy fleet the 50 newest-STARTED cards were ephemeral subagents (flagship active session ranked
+  #446) and machine-wide attribution read 0 while single-session drills showed 1155 calls. Now
+  lastActivityMs ranks + windows. Live proof: leaderboard 0 → **5974 attributed calls**.
+- **STILL OPEN (next actions)**: (1) event-loop watchdog + self-heal (worker thread detects
+  sustained loop starvation → spawns detached restarter → exits — a wedged observability server
+  is worse than a restarted one, and the ai-maestro guardian integration depends on availability);
+  (2) per-request duration logging on drill routes so any future wedge names itself; (3) sweep
+  the OTHER corpus-fanning drill handlers (cache_break/context_inflation/find_context_hogs/
+  check_cache_expiry machine scan) for the same unbounded-synchronous shape and apply the same
+  yield+budget pattern.
+
+(Superseded 15:24 addendum, kept for lineage:)
 
 **⟲ REOPENED — the wedge RECURRED at 15:0x on 2026-07-16, ~3h34m after boot. The 14:10 addendum
 below ("FIXED + LIVE-PROVEN") was PREMATURE: 3b1520a measurably reduced steady-state CPU but did

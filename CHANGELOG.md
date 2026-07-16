@@ -8,6 +8,16 @@ All notable changes to AgentlensPro are documented here.
 
 ### Fixed
 
+- **Server wedge under drill load closed + leaderboard pool corrected (TRDD-X2E6OSWK).** The
+  `get_cost_by_cause` cross-session scan ran up to 50 synchronous full-transcript reparses inline
+  in one request (worst right after a restart, when every disk-restored card is timeline-stripped)
+  — minutes of unyielding event-loop work that starved the server into a 100%-CPU wedge where
+  every request hung. The scan now yields one macrotask per session and stops at a 20s time budget
+  with honest `coverage.stoppedEarly` disclosure. Separately, the scan pool ranked and windowed by
+  `startTime`, so on a busy fleet the pool filled with ephemeral just-started subagent cards and
+  machine-wide attribution read 0 while heavy active sessions never got scanned; the pool now
+  ranks and windows by last activity (live: 0 → 5974 attributed calls machine-wide).
+
 - **Per-cause attribution feed restored (TRDD-5GFSFX0Q).** The Phase B log-wins merge dropped the
   colliding OTEL card wholesale — and with it the `api_request` timeline entries that are the ONLY
   per-call attribution ground truth (exact `cost_usd` + query-source/agent/skill/plugin/MCP
