@@ -6,7 +6,19 @@ All notable changes to AgentlensPro are documented here.
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-07-16
+
 ### Fixed
+
+- **Per-cause attribution feed restored (TRDD-5GFSFX0Q).** The Phase B log-wins merge dropped the
+  colliding OTEL card wholesale — and with it the `api_request` timeline entries that are the ONLY
+  per-call attribution ground truth (exact `cost_usd` + query-source/agent/skill/plugin/MCP
+  causes). Every transcript-covered Claude session — i.e. all interactive sessions — reported
+  **zero** attributed calls in `get_cost_by_cause`, the dashboard per-cause toggle, and the burn
+  monitor's last-call cost. The served log card now gets the OTEL twin's `api_request` entries
+  grafted onto its timeline at drill time (totals-neutral by construction; log totals still win;
+  reconciliation stays honest). Live proof: 0 → 957 attributed calls on the fixing session, with
+  real per-skill and per-agent cost rows.
 
 - **Server wedge under drill load closed + leaderboard pool corrected (TRDD-X2E6OSWK).** The
   `get_cost_by_cause` cross-session scan ran up to 50 synchronous full-transcript reparses inline
@@ -27,19 +39,11 @@ All notable changes to AgentlensPro are documented here.
   observability server is worse than a restarted one. System-sleep and 120s min-uptime guards
   prevent wake-from-sleep and boot-wedge crash-loops. `AGENTLENS_WATCHDOG=off` disables.
 
-- **Per-cause attribution feed restored (TRDD-5GFSFX0Q).** The Phase B log-wins merge dropped the
-  colliding OTEL card wholesale — and with it the `api_request` timeline entries that are the ONLY
-  per-call attribution ground truth (exact `cost_usd` + query-source/agent/skill/plugin/MCP
-  causes). Every transcript-covered Claude session — i.e. all interactive sessions — reported
-  **zero** attributed calls in `get_cost_by_cause`, the dashboard per-cause toggle, and the burn
-  monitor's last-call cost. The served log card now gets the OTEL twin's `api_request` entries
-  grafted onto its timeline at drill time (totals-neutral by construction; log totals still win;
-  reconciliation stays honest). Live proof: 0 → 957 attributed calls on the fixing session, with
-  real per-skill and per-agent cost rows.
-
-## [2.8.0] - 2026-07-16
-
-### Added
+- **Locked CLI field contracts for downstream consumers (AgentlensPro#2, #3).** The exact JSON
+  paths consumed by ai-maestro and its janitor (`get_account_status`, `get_burn_status`,
+  `investigate_burn`, `get_agent_tokens`, `get_cost_rollup`, `get_context_growth`,
+  `get_window_budget`, `get_conversation`) are now pinned by CI contract tests — a rename fails
+  the gate and routes the author to the coordination issue before shipping.
 
 - **`get_conversation` — the narrative per-turn session reader (TRDD-B22NYTOY).** Reconstructs a
   session as a readable conversation, verbatim from its `.jsonl` transcript: each user prompt, the
