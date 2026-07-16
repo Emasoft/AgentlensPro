@@ -52,6 +52,15 @@ All notable changes to AgentlensPro are documented here.
 
 ### Security
 
+- **MCP endpoint hardened like the UI server (review sweep).** The standalone MCP HTTP endpoint
+  no longer sends `Access-Control-Allow-Origin: *` — the origin policy is now shared with the UI
+  server (`src/httpOrigin.ts`, one source of truth): allowed same-origin/loopback origins are
+  echoed, anything else gets no ACAO and cross-origin browser POSTs are refused with 403 before a
+  tool executes. Request bodies are hard-capped at 4 MB (the one previously uncapped POST body —
+  an OOM vector), and the per-request transport is closed on response `close` (it used to leak on
+  handler rejection). Bonus fix the new tests surfaced: IPv6 loopback origins (`http://[::1]`)
+  were silently refused because WHATWG `URL.hostname` keeps the brackets — now allowed as intended.
+
 - **Release-path provenance hardening (TRDD-OMMPS5TF).** Every GitHub Release now ships
   `SHA256SUMS.txt` and an SPDX SBOM (anchore/sbom-action, SHA-pinned) next to the tarball; the
   Docker image is built with `provenance: mode=max` + `sbom: true` attestations. All first-party

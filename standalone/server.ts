@@ -23,6 +23,7 @@ import { ensureTelemetryConfig, ensureAgentLensStopHook } from '../src/telemetry
 import { classifyOtlpPayload } from '../src/otlpParser'
 import { resolveLogEventName, bareLogEventName, CLAUDE_RICH_LOG_EVENTS, BODY_POINTER_LOG_EVENTS } from '../src/otlpLogEvents'
 import { startMcpHttpServer, labelBurnStatusAccounts } from '../src/mcpServer'
+import { isDisallowedCrossOrigin, setAllowedOriginCors } from '../src/httpOrigin'
 import { resolveCallContext, callBodyRegistry } from '../src/rawBodyContext'
 import { appendHookEvent, readHookEvents, purgeHookEventBuckets, hookEventsDiskUsage, verifyAppendedLine, quarantineSpoolFile, type HookEventRecord, type AppendPosition } from '../src/hookEventStore'
 import { buildDroppedLogEventRecord, appendDroppedLogEvent, purgeLogEventBuckets, logEventsDiskUsage } from '../src/logEventSink'
@@ -2624,15 +2625,8 @@ durableSaveTimer.unref()
 // present and neither same-origin (Origin.host === Host — works on any BIND_HOST) nor loopback. The
 // dashboard is same-origin (allowed); CLI/hook Node clients send no Origin (allowed). One gate closes
 // the whole class regardless of the blanket ACAO:* header.
-function isDisallowedCrossOrigin(req: http.IncomingMessage): boolean {
-  const origin = req.headers.origin
-  if (typeof origin !== 'string' || origin === '') return false // non-browser / same-origin-no-Origin → allow
-  let u: URL
-  try { u = new URL(origin) } catch { return true } // unparseable Origin → refuse
-  if (req.headers.host && u.host === req.headers.host) return false // genuine same-origin → allow
-  const hn = u.hostname // no brackets for IPv6 loopback
-  return !(hn === 'localhost' || hn === '127.0.0.1' || hn === '::1')
-}
+// The predicate lives in src/httpOrigin.ts — SHARED with the MCP endpoint (startMcpHttpServer),
+// so "which origins are allowed" has exactly one definition for every locally-bound HTTP surface.
 
 // Set Access-Control-Allow-Origin ONLY for an allowed origin (same-origin or loopback), never the
 // wildcard. The UI read endpoints (/api/summary, /api/sessions, /api/session/*, /api/debug/*) carry
@@ -2641,15 +2635,7 @@ function isDisallowedCrossOrigin(req: http.IncomingMessage): boolean {
 // the JSON cross-origin (a drive-by localhost-exfil, the READ counterpart to the write vector the
 // CSRF gate closes). The dashboard is same-origin (needs no ACAO); loopback tooling gets its origin
 // echoed; a cross-origin page gets NO ACAO, so the browser blocks it from reading the body. Reuses
-// isDisallowedCrossOrigin so "which origins are allowed" lives in ONE place. Vary:Origin keeps caches
-// from serving one origin's ACAO to another.
-function setAllowedOriginCors(req: http.IncomingMessage, res: http.ServerResponse): void {
-  const origin = req.headers.origin
-  if (typeof origin === 'string' && origin !== '' && !isDisallowedCrossOrigin(req)) {
-    res.setHeader('Access-Control-Allow-Origin', origin)
-    res.setHeader('Vary', 'Origin')
-  }
-}
+// isDisallowedCrossOrigin so "which origins are allowed" lives in ONE place (src/httpOrigin.ts).
 
 // Accumulate a request body with a hard byte cap + an error listener, mirroring the guarded
 // /api/hook-events and /api/agent-gate handlers. On overflow the socket is destroyed and onBody is NOT

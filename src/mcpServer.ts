@@ -20,6 +20,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
+import { isDisallowedCrossOrigin, setAllowedOriginCors } from './httpOrigin'
 import { calcTokenCostUsd } from './shared/pricing'
 import { contextTokens } from './shared/tokenBuckets'
 import type {
@@ -3125,6 +3126,10 @@ export function createMcpServer(opts: McpServerOptions): Server {
  * Each request gets its own transport instance (stateless per-request for
  * Streamable HTTP). The server instance is reused across requests.
  */
+// 4 MB matches the standalone server's JSON-tool POST routes — tool-call requests are small; only
+// hostile or broken clients exceed this.
+const MCP_BODY_MAX_BYTES = 4 * 1024 * 1024
+
 export function handleMcpRequest(
   server: Server,
   req: http.IncomingMessage,
@@ -3137,19 +3142,37 @@ export function handleMcpRequest(
     return
   }
 
-  // Buffer and parse the body before passing to the transport.
-  let raw = ''
-  req.on('data', (chunk: Buffer) => { raw += chunk.toString() })
+  // Buffer and parse the body before passing to the transport — with a hard byte cap. MCP tool
+  // calls are small JSON; without the cap a runaway or hostile client could grow the buffer until
+  // the heap dies (every capped POST route in the standalone server guards this the same way, and
+  // this was the one uncapped POST body on the machine). On overflow the socket is destroyed and
+  // no handler runs — mirroring standalone readBodyCapped semantics.
+  const chunks: Buffer[] = []
+  let received = 0
+  let overflowed = false
+  req.on('data', (c: Buffer) => {
+    received += c.length
+    if (received > MCP_BODY_MAX_BYTES) { overflowed = true; req.destroy() }
+    else chunks.push(c)
+  })
+  req.on('error', () => { /* transport error — never crash the endpoint */ })
   req.on('end', () => {
+    if (overflowed) return
+    const raw = Buffer.concat(chunks).toString()
     let parsedBody: unknown
     try { parsedBody = raw ? JSON.parse(raw) : undefined } catch { parsedBody = undefined }
 
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
+    // Close the transport when the RESPONSE is done, whatever path got it there. 'close' fires
+    // after a normal finish AND on client abort, and attaching it BEFORE handling fixes two leaks
+    // the previous shape had: on handleRequest rejection the transport was never closed, and on a
+    // fast response 'finish' could fire before the success-path .then() attached its listener.
+    res.once('close', () => { transport.close().catch(() => { /* already closed */ }) })
     server.connect(transport)
       .then(() => transport.handleRequest(req, res, parsedBody))
-      .then(() => { res.on('finish', () => { transport.close().catch(() => {}) }) })
       .catch(err => {
         if (!res.headersSent) { res.writeHead(500); res.end(JSON.stringify({ error: String(err) })) }
+        else res.end() // headers already streamed — end the response so 'close' fires and cleans up
       })
   })
 }
@@ -3167,10 +3190,21 @@ export function startMcpHttpServer(
 ): http.Server {
   const server = createMcpServer(opts)
   const httpServer = http.createServer((req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*')
+    // ACAO only for same-origin/loopback origins — never the wildcard. MCP responses carry the
+    // user's session data (prompts, costs, project paths), so ACAO:* let ANY browsed page read
+    // them cross-origin — the same read-exfil class the UI server closed (TRDD-F6BM1BDI). The
+    // policy is shared via src/httpOrigin.ts; non-browser clients send no Origin and are unaffected.
+    setAllowedOriginCors(req, res)
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS')
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept, mcp-session-id')
     if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return }
+    // Refuse cross-origin browser mutations before any handler runs: a "simple" POST needs no
+    // preflight, and POST /mcp EXECUTES a tool — a write side effect the blocked read can't undo.
+    if (req.method !== 'GET' && req.method !== 'HEAD' && isDisallowedCrossOrigin(req)) {
+      res.writeHead(403, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: 'cross-origin request refused' }))
+      return
+    }
     handleMcpRequest(server, req, res)
   })
   httpServer.on('error', (err: NodeJS.ErrnoException) => {

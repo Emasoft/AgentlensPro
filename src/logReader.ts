@@ -1434,7 +1434,10 @@ export class LogReader {
     try {
       const stat = fs.statSync(filePath)
       const prev = this.fileState.get(filePath)
-      if (prev && stat.mtimeMs === prev.mtimeMs && stat.size === prev.bytesRead) return null
+      // + same-inode when recorded — a rename-replace can land on identical mtime+size (see the
+      // _processFile gate's note for the full rationale).
+      if (prev && stat.mtimeMs === prev.mtimeMs && stat.size === prev.bytesRead
+        && (prev.ino === undefined || stat.ino === prev.ino)) return null
       if (stat.size > LogReader.MAX_JSON_BYTES) {
         // A single JSON object cannot be parsed incrementally without a streaming JSON
         // parser; these snapshot files are small in practice. Skip oversized ones with
@@ -1514,7 +1517,10 @@ export class LogReader {
     // Read failures are logged but swallowed (the session just goes stale) — counted (P6).
     try { stat = fs.statSync(filePath) } catch (err) { countFallback('logReader.fileReadError'); this.log(`[LogReader] read error ${filePath}: ${err}`); return null }
     const prev = this.fileState.get(filePath)
-    if (prev && stat.mtimeMs === prev.mtimeMs && stat.size === prev.bytesRead) return null
+    // + same-inode when recorded — a rename-replace can land on identical mtime+size (see the
+    // _processFile gate's note for the full rationale).
+    if (prev && stat.mtimeMs === prev.mtimeMs && stat.size === prev.bytesRead
+      && (prev.ino === undefined || stat.ino === prev.ino)) return null
     if (stat.size > LogReader.MAX_ARRAY_READ_BYTES) {
       // Record state so the next poll skips it (rather than re-stat-and-log every 30s).
       this.fileState.set(filePath, { bytesRead: stat.size, mtimeMs: stat.mtimeMs })
@@ -1571,7 +1577,10 @@ export class LogReader {
     // Read failures are logged but swallowed (the session just goes stale) — counted (P6).
     try { stat = fs.statSync(filePath) } catch (err) { countFallback('logReader.fileReadError'); this.log(`[LogReader] read error ${filePath}: ${err}`); return null }
     const prev = this.fileState.get(filePath)
-    if (prev && stat.mtimeMs === prev.mtimeMs && stat.size === prev.bytesRead) return null
+    // + same-inode when recorded — a rename-replace can land on identical mtime+size (see the
+    // _processFile gate's note for the full rationale).
+    if (prev && stat.mtimeMs === prev.mtimeMs && stat.size === prev.bytesRead
+      && (prev.ino === undefined || stat.ino === prev.ino)) return null
 
     const prevOffset = prev?.bytesRead ?? 0
     const cached = this.accumCache.get(filePath) as T | undefined
@@ -1615,7 +1624,12 @@ export class LogReader {
       this._filesStatted++   // TRDD-X2E6OSWK: the scan-gate cost meter (see the field's comment)
       const stat = fs.statSync(filePath)
       const prev = this.fileState.get(filePath)
-      if (prev && stat.mtimeMs === prev.mtimeMs && stat.size === prev.bytesRead) return null
+      // The unchanged-file short-circuit must ALSO match the inode when one is recorded: a file
+      // REPLACED by rename can (rarely) land on identical mtime+size, and returning early here
+      // would skip the new file forever — the deeper ino check in _readNewLines never runs when
+      // this gate fires. Absent ino (pre-stat in-memory state) means "no evidence of a swap".
+      if (prev && stat.mtimeMs === prev.mtimeMs && stat.size === prev.bytesRead
+        && (prev.ino === undefined || stat.ino === prev.ino)) return null
       // parseFn reads its own bytes via _readNewLines; state update happens there.
       return parseFn()
     } catch {
