@@ -87,7 +87,9 @@ export function claudeContextFromEnv(env: NodeJS.ProcessEnv): ClaudeContext {
   }
 }
 
-function readFsMarkers(): FsMarkers {
+// Exported (TRDD-KVDT1XMS): the setup environment probe reuses THIS WSL detection — the
+// /proc/version read must have exactly one implementation.
+export function readFsMarkers(): FsMarkers {
   const exists = (p: string): boolean => {
     try { return fs.existsSync(p) } catch { return false }
   }
