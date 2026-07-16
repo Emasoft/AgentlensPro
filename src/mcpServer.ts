@@ -25,6 +25,7 @@ import { contextTokens } from './shared/tokenBuckets'
 import type {
   SessionSummaryCard, TimelineEntry, ContextComposition,
   CacheBreakReport, CacheBreakOffender, ContextHistory, CallContext, CollectorGap,
+  Conversation, ConversationTurn,
 } from './shared/summarizerTypes'
 import { buildCacheBreakReport } from './shared/cacheBreak'
 import { investigateBurn } from './burnInvestigator'
@@ -574,6 +575,29 @@ const TOOLS = [
         sessionId: { type: 'string', description: 'Session ID from get_recent_sessions' },
         turn:      { type: 'number', description: 'Optional 1-based step/turn to drill into (returns its blocks WITH full text)' },
         blockId:   { type: 'string', description: 'Optional block id (with turn) to return just that one block\'s full text' },
+      },
+    },
+  },
+  {
+    name: 'get_conversation',
+    description:
+      'The NARRATIVE per-turn reader of a session (TRDD-B22NYTOY) — the session as a readable ' +
+      'conversation, reconstructed verbatim from its .jsonl: each user prompt, the assistant\'s ' +
+      'thinking and reply text, every tool call with its input AND its paired output, subagent ' +
+      '(sidechain) turns labeled, compaction boundaries with exact pre/post/dropped tokens, per-turn ' +
+      'wall duration and usage incl. the cache-TTL tier split (5m/1h). Ordered blocks — never merged ' +
+      '(use get_context_history for the composition/cost lens instead). Progressive: omit turn for the ' +
+      'header + per-turn summaries (role, preview, tools, usage); pass turn=N for that turn VERBATIM ' +
+      '(full text); pass turnFrom/turnTo for a bounded verbatim range. Reconstructs a fork/sub-agent ' +
+      'from its parent transcript. This is THE tool to answer "show me what was actually said and done".',
+    inputSchema: {
+      type: 'object' as const,
+      required: ['sessionId'],
+      properties: {
+        sessionId: { type: 'string', description: 'Session ID from get_recent_sessions' },
+        turn:      { type: 'number', description: 'Optional 1-based turn to return VERBATIM (all blocks, full text)' },
+        turnFrom:  { type: 'number', description: 'Optional range start (verbatim, capped to 20 turns per call)' },
+        turnTo:    { type: 'number', description: 'Optional range end (inclusive, with turnFrom)' },
       },
     },
   },
@@ -1865,6 +1889,7 @@ function subAgentChildren(sessions: SessionSummaryCard[], parentId: string) {
 
 type CompositionAccessor = (sessionId: string) => Promise<ContextComposition | null>
 type HistoryAccessor = (sessionId: string) => Promise<ContextHistory | null>
+type ConversationAccessor = (sessionId: string) => Promise<Conversation | null>
 type CallContextAccessor = (sessionId: string, sel: { requestId?: string; spanId?: string }) => Promise<CallContext | null>
 // Burn/session status are computed at the accessor site (server/extension) where the live sessions +
 // statusline billing events live; the MCP layer just serializes the ready object (TRDD-OG9PARZQ).
@@ -1951,6 +1976,71 @@ function handleGetContextHistory(
       diff: { added: s.diff.added.length, changed: s.diff.changed.length, removed: s.diff.removed.length, firstChangeBlockId: s.diff.firstChangeBlockId },
       blocks: s.blocks.map(b => ({ id: b.id, kind: b.kind, label: b.label, tokens: b.tokens, role: b.role })),
     })),
+  }
+}
+
+// ── get_conversation (TRDD-B22NYTOY) — the narrative lens over a session ──────────────────────────
+// Progressive drill-down IS the bounding strategy (same contract as get_context_history): the
+// no-arg shape carries per-turn SUMMARIES only (preview text, no full blocks); full verbatim text
+// is returned only for one turn or a hard-capped range. leanify still caps whatever comes back.
+const CONVERSATION_SUMMARY_TURN_CAP = 500
+const CONVERSATION_RANGE_CAP = 20
+
+/** One turn, verbatim — every block with its full stored text. */
+function verbatimTurn(t: ConversationTurn) {
+  return {
+    turn: t.turn, role: t.role, ts: t.ts, model: t.model,
+    ...(t.sidechain ? { sidechain: true } : {}),
+    ...(t.durationMs !== undefined ? { durationMs: t.durationMs } : {}),
+    ...(t.usage ? { usage: t.usage } : {}),
+    blocks: t.blocks.map(b => ({ kind: b.kind, ...(b.toolName ? { toolName: b.toolName } : {}), ...(b.toolUseId ? { toolUseId: b.toolUseId } : {}), ...(b.tokens ? { tokens: b.tokens } : {}), ...(b.meta ? { meta: b.meta } : {}), text: b.text ?? '' })),
+  }
+}
+
+function handleGetConversation(
+  conv: Conversation | null,
+  args: { sessionId: string; turn?: number; turnFrom?: number; turnTo?: number },
+) {
+  if (!conv) return { sessionId: args.sessionId, message: 'No local Claude log to reconstruct (OTEL-only session, or its transcript is not on disk).' }
+  if (conv.turns.length === 0 && conv.reconstructedFrom) {
+    return { sessionId: args.sessionId, reconstructedFrom: conv.reconstructedFrom, message: `This spawned session has no transcript of its own — its conversation lives in parent ${conv.reconstructedFrom}, whose log is not on disk to reconstruct.` }
+  }
+  const header = {
+    sessionId: conv.sessionId,
+    title: conv.title, agentName: conv.agentName, entrypoint: conv.entrypoint, cwd: conv.cwd, model: conv.model,
+    totals: conv.totals, compactions: conv.compactions, otherRecords: conv.otherRecords,
+    truncated: conv.truncated, reconstructedFrom: conv.reconstructedFrom,
+  }
+  // One turn, verbatim.
+  if (args.turn !== undefined) {
+    const t = conv.turns.find(x => x.turn === args.turn)
+    if (!t) return { sessionId: args.sessionId, turn: args.turn, message: `No turn ${args.turn} (session has ${conv.turns.length}).` }
+    return { sessionId: conv.sessionId, ...verbatimTurn(t) }
+  }
+  // Bounded verbatim range.
+  if (args.turnFrom !== undefined || args.turnTo !== undefined) {
+    const from = Math.max(1, args.turnFrom ?? 1)
+    const to = Math.min(args.turnTo ?? from + CONVERSATION_RANGE_CAP - 1, from + CONVERSATION_RANGE_CAP - 1)
+    const picked = conv.turns.filter(t => t.turn >= from && t.turn <= to)
+    return { sessionId: conv.sessionId, turnFrom: from, turnTo: to, rangeCap: CONVERSATION_RANGE_CAP, turns: picked.map(verbatimTurn) }
+  }
+  // Whole session: header + per-turn summaries (drill with turn=N for full text).
+  return {
+    ...header,
+    turnCount: conv.turns.length,
+    turns: conv.turns.slice(0, CONVERSATION_SUMMARY_TURN_CAP).map(t => {
+      const firstText = t.blocks.find(b => (b.kind === 'userText' || b.kind === 'assistantText' || b.kind === 'systemNote') && b.text)
+      const tools = t.blocks.filter(b => b.kind === 'toolUse').map(b => b.toolName ?? 'tool')
+      return {
+        turn: t.turn, role: t.role, ts: t.ts,
+        ...(t.sidechain ? { sidechain: true } : {}),
+        ...(t.durationMs !== undefined ? { durationMs: t.durationMs } : {}),
+        ...(t.usage ? { usage: t.usage } : {}),
+        blockCount: t.blocks.length,
+        ...(tools.length ? { tools } : {}),
+        preview: (firstText?.text ?? '').slice(0, 100),
+      }
+    }),
   }
 }
 
@@ -2603,6 +2693,9 @@ export interface McpServerOptions {
    *  Powers get_context_history — every block drillable to its actual text with per-block tokens +
    *  per-step usage/cost + a diff. Async because it streams a (possibly multi-GB) log file. */
   getHistory?: HistoryAccessor
+  /** Optionally reconstruct the NARRATIVE conversation from the raw Claude .jsonl (TRDD-B22NYTOY).
+   *  Powers get_conversation — verbatim ordered turns (prompts, replies, tool in/out pairs). */
+  getConversation?: ConversationAccessor
   /** Optionally reconstruct the full literal context of ONE llm call from its raw OTEL request body
    *  (TRDD-ICHAVFCS). Powers get_call_context — the per-call drill target that works for OTEL-only
    *  sessions with no local .jsonl. Async because it reads the (possibly multi-MB) raw body file. */
@@ -2654,6 +2747,7 @@ export function createMcpServer(opts: McpServerOptions): Server {
     const getTimeline = opts.getTimeline ?? null
     const getComposition = opts.getComposition ?? null
     const getHistory = opts.getHistory ?? null
+    const getConversation = opts.getConversation ?? null
     const getCallContext = opts.getCallContext ?? null
     const getBurnStatus = opts.getBurnStatus ?? null
     const getSessionStatus = opts.getSessionStatus ?? null
@@ -2768,6 +2862,12 @@ export function createMcpServer(opts: McpServerOptions): Server {
         const history = getHistory ? await getHistory(id).catch(() => null) : null
         const card = sessions.find(x => x.sessionId === id)
         result = handleGetContextHistory(history, card, args as { sessionId: string; turn?: number; blockId?: string })
+        break
+      }
+      case 'get_conversation': {
+        const id = (args as { sessionId: string }).sessionId
+        const conv = getConversation ? await getConversation(id).catch(() => null) : null
+        result = handleGetConversation(conv, args as { sessionId: string; turn?: number; turnFrom?: number; turnTo?: number })
         break
       }
       case 'get_context_growth': {

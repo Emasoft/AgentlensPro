@@ -8,6 +8,18 @@ All notable changes to AgentlensPro are documented here.
 
 ### Added
 
+- **`get_conversation` — the narrative per-turn session reader (TRDD-B22NYTOY).** Reconstructs a
+  session as a readable conversation, verbatim from its `.jsonl` transcript: each user prompt, the
+  assistant's thinking and reply, every tool call with its input AND paired output
+  (`tool_use_id`), subagent (sidechain) turns labeled, compaction boundaries with exact
+  pre/post/dropped token counts, per-turn wall duration, and usage including the cache-TTL tier
+  split (ephemeral 5m/1h). Assistant streaming chunks merge by `message.id`; blocks stay in
+  verbatim order (never merged — `get_context_history` remains the composition/cost lens).
+  Harvests the transcript signals nothing parsed before: `system/turn_duration`,
+  `system/compact_boundary`, `ai-title`, `agent-name`, `entrypoint`,
+  `usage.cache_creation.ephemeral_5m/1h`. Progressive drill-down (`--turn N`,
+  `--turnFrom/--turnTo`); served to the dashboard at `GET /api/conversation/:id`.
+
 - **Log-event sink — gated-out OTEL log events are persisted, never dropped (TRDD-AMEA4O4Z).**
   The OTLP rich-event gate converts only `api_request`/`compaction`/`api_error`/
   `api_retries_exhausted` + `tool_result` into spans; everything else (`user_prompt`,

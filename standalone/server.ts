@@ -47,6 +47,7 @@ import { AccountStateTimeline, buildAccountStateRecord } from '../src/accountSta
 import { classifyTtlRegime, type SessionTtlKind, type TtlContext } from '../src/shared/cacheTtl'
 import { buildContextComposition, resolveLoggedAncestor } from '../src/contextComposition'
 import { buildContextHistory } from '../src/contextHistory'
+import { buildConversation } from '../src/conversation'
 import { generateSuggestions } from '../src/instructionAdvisor'
 import { detectInstructionFiles, appendSuggestion } from '../src/instructionFiles'
 import { atomicWriteFileSync, heapPressure, RequestLog } from '../src/serverRuntime'
@@ -1002,6 +1003,12 @@ startMcpHttpServer({
     const sess = buildSessionSummary()?.sessions ?? []
     const parentOf = (sid: string): string | undefined => sess.find(s => s.sessionId === sid)?.parentSessionId
     return buildContextHistory(id, resolveLoggedAncestor(id, parentOf) ?? parentOf(id))
+  },
+  // TRDD-B22NYTOY: the NARRATIVE conversation (verbatim ordered turns). Same fork/ancestor fallback.
+  getConversation: (id) => {
+    const sess = buildSessionSummary()?.sessions ?? []
+    const parentOf = (sid: string): string | undefined => sess.find(s => s.sessionId === sid)?.parentSessionId
+    return buildConversation(id, resolveLoggedAncestor(id, parentOf) ?? parentOf(id))
   },
   // TRDD-ICHAVFCS: resolve a call (sessionId + requestId/spanId) to its full literal context tree,
   // reconstructed from the raw OTEL request body indexed by the collector. Works for OTEL-only sessions.
@@ -3483,6 +3490,31 @@ const uiServer = http.createServer(async (req, res) => {
         console.warn('[AgentLens] history parse failed', e)
         res.writeHead(200, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ history: null }))
+      })
+    return
+  }
+
+  if (req.method === 'GET' && url?.startsWith('/api/conversation/')) {
+    // TRDD-B22NYTOY: the NARRATIVE conversation — verbatim ordered turns (prompts, replies, tool
+    // in/out pairs, compaction dividers). Same ?parent= + nearest-logged-ancestor fallback as
+    // /api/history; the client renders lazily (blocks collapsed), so the whole reconstruction ships.
+    if (heavyGuard(res, url, 'conversation')) return
+    const sessionId = decodeURIComponent(url.slice('/api/conversation/'.length))
+    const rawUrl = req.url ?? ''
+    const qIdx = rawUrl.indexOf('?')
+    const parentHint = qIdx >= 0 ? new URLSearchParams(rawUrl.slice(qIdx + 1)).get('parent') ?? undefined : undefined
+    const convSessions = buildSessionSummary()?.sessions ?? []
+    const parentOf = (id: string): string | undefined => convSessions.find(s => s.sessionId === id)?.parentSessionId
+    const parentSessionId = resolveLoggedAncestor(sessionId, parentOf) ?? parentOf(sessionId) ?? parentHint
+    buildConversation(sessionId, parentSessionId)
+      .then(conversation => {
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ conversation }))
+      })
+      .catch(e => {
+        console.warn('[AgentLens] conversation parse failed', e)
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ conversation: null }))
       })
     return
   }

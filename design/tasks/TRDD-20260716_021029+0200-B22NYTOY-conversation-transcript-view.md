@@ -3,7 +3,7 @@ trdd-id: B22NYTOY
 title: Conversation transcript view — narrative per-turn session reader (CLI tool + dashboard)
 column: dev
 created: 2026-07-16T02:10:29+0200
-updated: 2026-07-16T02:10:29+0200
+updated: 2026-07-16T02:45:00+0200
 current-owner: main
 task-type: feature
 severity: major
@@ -14,7 +14,21 @@ eht: []
 
 # Conversation transcript view — narrative per-turn session reader
 
-## ⏵ STATE — 2026-07-16 ~02:10 — PLAN APPROVED, starting Phase 1 (parser core, TDD)
+## ⏵ STATE — 2026-07-16 ~02:45 — P1+P2 LANDED + LIVE-VERIFIED; NEXT: P3 dashboard Transcript sub-tab
+
+- **P1 DONE** (commit e4d7bfa): `src/conversation.ts` ordered-blocks parser + 15 fixture tests
+  (suite 1251 green); findSessionFile + classifyAttachment de-duped into contextComposition
+  exports. Real-world: 15,304-line transcript in 190ms, 3092 turns, compactions exact.
+- **P2 DONE**: `get_conversation` MCP tool (progressive: summaries → --turn N verbatim →
+  --turnFrom/--turnTo range cap 20), accessor + `GET /api/conversation/:id` (heavyGuard) in
+  standalone, SKILL.md cheat-sheet row, CHANGELOG. Deployed (pid 82148), live-verified: 3119
+  turns, 5 compactions, verbatim first prompt + tool lists over the CLI.
+- **NEXT ACTION (P3):** dashboard Transcript sub-tab — NEW `media/src/TranscriptView.tsx`,
+  Sessions.tsx navBtn + section==='transcript', state.ts requestConversation(), App.tsx message
+  branch, server.ts shim `loadConversation` → `/api/conversation/:id`. Then P4 (card
+  enrichment ai-title/entrypoint, browser smoke, final deploy).
+
+## ⏵ [SUPERSEDED] STATE — 2026-07-16 ~02:10 — PLAN APPROVED, starting Phase 1 (parser core, TDD)
 
 **USER intent (2026-07-16):** token-companion shows "the actual output and prompt of each agent
 and tool — AgentlensPro does not show them, or does but in a confusing way". Approved plan:
