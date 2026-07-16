@@ -28,7 +28,13 @@ jobs:
       attestations: write   # store the in-toto attestation on the repository
 
     steps:
-      - uses: actions/checkout@v7
+      # Every action SHA-pinned — including first-party (TRDD-OMMPS5TF): this workflow signs
+      # attestations and publishes, so a rewritten tag anywhere in it is a supply-chain hole.
+      # persist-credentials off: nothing here pushes; the default leaves the GITHUB_TOKEN in
+      # .git/config where any later step (or a compromised dep's postinstall) can read it.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       # pnpm via corepack — the version comes from package.json "packageManager"
       # (single source of truth, same pattern as ci.yml; no third-party action).
@@ -37,11 +43,15 @@ jobs:
       - name: Enable corepack (pnpm)
         run: corepack enable
 
+      # NO dependency cache in the release path (zizmor cache-poisoning): a poisoned pnpm
+      # store restored here would flow straight into the signed release artifacts. CI keeps
+      # its cache; releases install cold — determinism over the ~1min saved.
+      # (zizmor ignore: its model says setup-node "enables caching by default" — it does not;
+      # the `cache:` input defaults OFF and is deliberately absent here.)
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0  # zizmor: ignore[cache-poisoning]
         with:
           node-version: 22
-          cache: pnpm
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -69,11 +79,29 @@ jobs:
       - name: Pack npm tarball
         run: npm pack
 
-      # The two Release steps only make sense on a tag push — a workflow_dispatch
+      # Release-asset integrity (TRDD-OMMPS5TF, janitor provenance-audit): consumers verifying a
+      # downloaded tarball need a checksum file NEXT TO the asset — the in-toto attestation covers
+      # provenance (who built it), the checksum covers transport integrity (what you downloaded).
+      - name: Generate release checksums
+        run: sha256sum agentlenspro-*.tgz > SHA256SUMS.txt
+
+      # SPDX SBOM over the packed project (TRDD-OMMPS5TF): the release ships a dependency
+      # inventory so consumers can audit/diff what is inside. Attached explicitly below —
+      # the action's own uploaders are disabled so the Release step stays the ONE attach point.
+      - name: Generate SBOM (SPDX)
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: .
+          format: spdx-json
+          output-file: agentlenspro-sbom.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      # The Release steps only make sense on a tag push — a workflow_dispatch
       # run (used to retry the npm publish) has no tag to attach a Release to.
       - name: Attest build provenance (in-toto / SLSA)
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/attest-build-provenance@v4
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-path: 'agentlenspro-*.tgz'
 
@@ -82,7 +110,10 @@ jobs:
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
         with:
           generate_release_notes: true
-          files: 'agentlenspro-*.tgz'
+          files: |
+            agentlenspro-*.tgz
+            SHA256SUMS.txt
+            agentlenspro-sbom.spdx.json
 
   # npm Trusted Publishing (OIDC) — this job MIRRORS the PROVEN Emasoft/SVG-BBOX
   # publish workflow (the user's reference config; npm's own docs are sparse):
@@ -115,16 +146,20 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Enable corepack (pnpm)
         run: corepack enable
 
+      # No cache here either (see the package job) — this job runs `npm publish`, the single
+      # most supply-chain-sensitive step in the repo. (zizmor ignore: caching is OFF — the
+      # `cache:` input defaults off and is deliberately absent; see the package job note.)
       - name: Setup Node.js 24 (bundled npm has OIDC support)
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0  # zizmor: ignore[cache-poisoning]
         with:
           node-version: 24
-          cache: pnpm
 
       - name: Verify toolchain versions
         # Ported from the proven SVG-BBOX workflow: fail fast if the runner image

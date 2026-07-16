@@ -18,7 +18,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Nothing here pushes to git; registry auth is docker/login-action's own token flow.
+          persist-credentials: false
 
       # Third-party actions pinned to full commit SHAs (tag-rewrite protection).
       - name: Set up QEMU (for cross-platform builds)
@@ -64,5 +67,9 @@ jobs:
           cache-to: type=gha,mode=max
           # SLSA build provenance: buildx attaches an in-toto attestation to the
           # image manifest so consumers can verify what built the image and from
-          # which commit (janitor audit — release-path provenance).
-          provenance: true
+          # which commit (janitor audit — release-path provenance). mode=max
+          # records the full build steps + materials (TRDD-OMMPS5TF); sbom adds
+          # an SPDX inventory attestation so `docker buildx imagetools inspect`
+          # answers "what is inside this image", not just "who built it".
+          provenance: mode=max
+          sbom: true

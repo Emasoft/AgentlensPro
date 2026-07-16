@@ -28,7 +28,9 @@ jobs:
         node-version: [20, 22]
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       # pnpm via corepack — the version comes from package.json "packageManager"
       # (single source of truth; no third-party action needed). MUST run before
@@ -42,7 +44,7 @@ jobs:
       # died at setup on the Node 20 leg). pnpm is dev tooling only; the
       # matrix node below is what actually builds and runs the tests.
       - name: Setup Node.js 22 (for pnpm install)
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 22
           cache: pnpm
@@ -55,7 +57,7 @@ jobs:
       # cannot run on — mirroring the local workflow (deps installed under the
       # default node, mocha executed under Node 20 via PATH).
       - name: Setup Node.js ${{ matrix.node-version }} (test runtime)
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: ${{ matrix.node-version }}
 
@@ -96,7 +98,9 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Enable corepack (pnpm)
         run: corepack enable
@@ -104,7 +108,7 @@ jobs:
       # Node 22 for BOTH install and test runtime here: the corepack-pinned pnpm
       # needs >=22.13, and the unit matrix already proves the suite on Node 20.
       - name: Setup Node.js 22
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 22
           cache: pnpm
