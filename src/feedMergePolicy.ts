@@ -1,4 +1,4 @@
-import type { SessionSummaryCard, TokensSource } from './shared/summarizerTypes'
+import type { SessionSummaryCard, TimelineEntry, TokensSource } from './shared/summarizerTypes'
 
 /**
  * Feed-collision doctrine — which data source wins when a LOG card and an OTEL card
@@ -34,6 +34,35 @@ export function preferredDataSource(source: SessionSummaryCard['source']): 'otel
 /** Note attached to a log card that WON a collision — its OTEL twin's slices were displaced. */
 export const OTEL_DISPLACED_NOTE =
   'Token totals come from the log transcript; the colliding OTEL card for this session was displaced (OTEL is a lossy lower bound).'
+
+// ── Timeline attribution graft (TRDD-5GFSFX0Q) ────────────────────────────────
+// The log-wins doctrine above is about token TOTALS. The per-call ATTRIBUTION ground truth —
+// `api_request` timeline entries carrying exact cost_usd + who caused the call (querySource /
+// agent / skill / plugin / mcp) — exists ONLY on the OTEL card (built from the rich log events;
+// the transcript parser never produces that entry type), and those entries are totals-neutral by
+// construction (never summed into session aggregates). Dropping the OTEL card wholesale therefore
+// starved get_cost_by_cause / the per-cause webview toggle / burnMonitor's last-call cost for
+// every transcript-covered Claude session. The graft keeps the doctrine (log totals serve) while
+// MERGING the one timeline dimension only OTEL has.
+
+/**
+ * Appends the OTEL timeline's `api_request` attribution entries to a log-derived timeline.
+ * Pure: returns a NEW array; inputs are never mutated. Dedupes by spanId (defensive — the log
+ * side produces no api_request entries today) and sorts by timestamp so drill consumers keep a
+ * chronological timeline. An empty/absent OTEL side returns the log timeline as-is.
+ */
+export function graftOtelAttribution(
+  logTimeline: TimelineEntry[],
+  otelTimeline: TimelineEntry[] | undefined,
+): TimelineEntry[] {
+  const grafts = (otelTimeline ?? []).filter(e => e.type === 'api_request')
+  if (grafts.length === 0) return logTimeline
+  const seen = new Set(logTimeline.filter(e => e.type === 'api_request').map(e => e.spanId))
+  const fresh = grafts.filter(e => !seen.has(e.spanId))
+  if (fresh.length === 0) return logTimeline
+  return [...logTimeline, ...fresh]
+    .sort((a, b) => (a.timestamp || '') < (b.timestamp || '') ? -1 : 1)
+}
 
 /** Stamps the log-wins collision outcome: the log transcript's totals serve; OTEL was displaced. */
 export function stampLogWins(logCard: SessionSummaryCard): void {
