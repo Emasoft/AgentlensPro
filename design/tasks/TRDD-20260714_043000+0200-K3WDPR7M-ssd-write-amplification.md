@@ -3,7 +3,7 @@ trdd-id: K3WDPR7M
 title: SSD write amplification — raw OTEL bodies rewrite the whole conversation every turn; move the body store to a fileless-DuckDB to immutable-Parquet loop
 column: dev
 created: 2026-07-14T04:30:00+0200
-updated: 2026-07-15T21:40:00+0200
+updated: 2026-07-16T17:26:00+0200
 current-owner: main
 task-type: bugfix
 severity: critical
@@ -12,7 +12,38 @@ npt: []
 eht: []
 ---
 
-## ⏵ STATE — 2026-07-15 ~21:40 — WAD VERIFY+RECLAIM DONE (15.78 GB reclaimed, 0 lost); Phases 3/4/6 still open
+## ⏵ STATE — 2026-07-16 17:26 — RECONCILIATION: Phase 6 RESOLVED by X2E6OSWK; Phase 3 premise DOWNGRADED; Phase 4 burn-half already landed
+
+**Supersedes the ~21:40 block's NEXT-ACTIONS list below (items c/e resolved; a re-scoped).**
+
+- **(c) Phase 6 — CPU spin: ✅ RESOLVED via TRDD-X2E6OSWK (2026-07-16).** The planned `--cpu-prof`
+  profiling is moot: the culprit was NAMED (get_cost_by_cause's unyielding 50-reparse flatMap,
+  matched frame-by-frame against the 15:24 native sample), BOUNDED (scanWithBudget: macrotask
+  yield + 20s deadline, now shared by every corpus-fanning drill incl. check_cache_expiry), and
+  BACKSTOPPED (event-loop watchdog 4949af7 + per-tool start/done logging 4b4dc8f so any future
+  wedge names itself). Shipped in v2.8.0 + follow-up.
+- **(a) Phase 3 — RAM-disk body spool: premise DOWNGRADED, not built, deliberately.** The spool
+  was designed when raw-body capture was always-on. TRDD-BKF5NZD3 made capture **opt-in, default
+  OFF** and the burn is measured dead: `~/.agentlens/otel-bodies` newest file is 2026-07-15 12:08
+  — **29+ hours of zero writes** at 6.0 GB static. The spool is now CONDITIONAL work: required
+  only before recommending `captureRawBodies=on` to anyone; do not build it speculatively
+  (lazy-cat rule). Gate it behind an explicit capture-on request.
+- **(b) Phase 4 — the burn half ALREADY LANDED**: log-sessions/log-offsets delta append shipped in
+  `9985c34` (9.4 MB/min → ~0, measured via ri_diskio_byteswritten). Remaining Phase-4 items are
+  NOT burn issues: `forensics.db` fold (openForensicsDb has 0 prod callers — dead path) and the
+  `loadSpawnMap` unresolved-spawn bug (forensics-only). Both are cleanup chores on a dead code
+  path; low priority.
+- **Known gap #3 (ts backfill) is CLOSED — do not reopen.** The v2 migration corrected all
+  78,354 idx-joinable rows (probe: 0 wrong ±2s); the residual 22,569 rows keep ingest-ts because
+  their capture times are UNRECOVERABLE BY DESIGN — accepted + documented in
+  CHANGELOG/README/ARCHITECTURE (commit `eaf0b53`).
+- **Genuinely open, in order:** (1) forensics fold + loadSpawnMap (dead-path chores, low
+  priority); (2) conditional RAM-disk spool (only if capture-on is ever recommended). USER-gated:
+  `store.old-v0` (270 M) + `spans.json.bak*` (182 M) disposal; branch pushes.
+
+(Superseded ~21:40 block, kept for lineage:)
+
+## STATE (superseded) — 2026-07-15 ~21:40 — WAD VERIFY+RECLAIM DONE (15.78 GB reclaimed, 0 lost); Phases 3/4/6 still open
 
 **Supersedes the ~10:09 block below (its NEXT ACTION 5a is DONE).**
 

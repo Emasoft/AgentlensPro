@@ -1,9 +1,9 @@
 ---
 trdd-id: 4CH9QLAH
 title: Copy fully-expanded branch tree + OTEL↔JSONL pinpoint (Phase 3)
-column: dev
+column: ai_review
 created: 2026-07-12T07:14:50+0200
-updated: 2026-07-12T07:14:50+0200
+updated: 2026-07-16T17:26:00+0200
 current-owner: claude-code-review
 assignee: claude-code-review
 priority: 3
@@ -30,7 +30,18 @@ implementation-commits: []
 
 # Copy fully-expanded branch tree + OTEL↔JSONL pinpoint (Phase 3)
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-12
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-16 17:26
+
+**✅ SHIPPED END-TO-END — column → ai_review.** Verified 2026-07-16: all Phase-3 sub-phase
+commits are merged to `main` and shipped in **v2.8.0** (published to npm via OIDC today), and the
+one dangling item in the 07-12 block below is resolved — the live server has long been redeployed,
+so `/api/branch-dump` is in the shipped bundle (grep-verified 3 hits in `standalone/server.js`)
+and the 404-fallback path the dev-browser test exercised no longer applies. The "NOT pushed"
+note is stale (main is pushed through 8bb7913). Remaining gate: human review.
+
+(Superseded 2026-07-12 block, kept for lineage:)
+
+## STATE (superseded) — 2026-07-12
 
 **What this is:** Phase 3 (final feature phase) of the approved plan
 `~/.claude/plans/cheerful-herding-meteor.md`. Phases 0a/0b/1/2 are DONE + merged (gate 911/0).
