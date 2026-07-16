@@ -33,6 +33,32 @@ All notable changes to AgentlensPro are documented here.
   prompt moves to the tooltip). Forward-only: a session gets its title on its next transcript
   append/scan — dormant snapshot-served sessions keep the prompt headline.
 
+- **Setup environment probe — heuristic incompatibility checks, Windows is WSL2-only
+  (TRDD-KVDT1XMS).** `agentlenspro setup` now opens with a read-only environment step: platform
+  and WSL detection, Node version vs the `engines.node` floor, runtime-dep resolvability
+  (`@duckdb/node-api` hard, `sql.js` degradable), a foreign-process-on-the-OTLP-port heuristic,
+  `~/.claude` presence, and free-disk. Hard incompatibilities fail fast BEFORE anything is
+  touched; native win32 is refused with WSL2 guidance (macOS + Linux + Windows-via-WSL2 are the
+  supported platforms). CLI help and the diagnostics skill document the probe and the platform
+  matrix.
+
+### Changed
+
+- **`get_recent_sessions` ranks by LAST ACTIVITY, not start date (TRDD-RS3NGN53).** A
+  long-running session still emitting spans now ranks first instead of falling off the top-10
+  behind fresh idle sessions. Rows gain `lastActive`, `active: true` (within a 5-minute liveness
+  window; absent when idle), and the session `title`/`entrypoint` when the transcript carries
+  them.
+
+### Security
+
+- **Release-path provenance hardening (TRDD-OMMPS5TF).** Every GitHub Release now ships
+  `SHA256SUMS.txt` and an SPDX SBOM (anchore/sbom-action, SHA-pinned) next to the tarball; the
+  Docker image is built with `provenance: mode=max` + `sbom: true` attestations. All first-party
+  actions across ci/publish/docker workflows are SHA-pinned, every checkout sets
+  `persist-credentials: false`, and the release path installs dependencies cold (no cache — a
+  poisoned store must not flow into signed artifacts). zizmor: 0 high/medium/low findings.
+
 - **Log-event sink — gated-out OTEL log events are persisted, never dropped (TRDD-AMEA4O4Z).**
   The OTLP rich-event gate converts only `api_request`/`compaction`/`api_error`/
   `api_retries_exhausted` + `tool_result` into spans; everything else (`user_prompt`,

@@ -21,6 +21,10 @@ AgentlensPro keeps the following surfaces byte-compatible with AgentLens so exis
 
 ## Getting Started
 
+**Supported platforms: macOS and Linux. On Windows, run inside WSL2 only** — install Node ≥ 20.9
+in the WSL distro and `npm install -g agentlenspro` there; native win32 is refused by the setup
+environment probe (the log-ingestion paths, RAM-disk spool, and hook plumbing are POSIX).
+
 ### Local (OTEL and log files)
 
 The fastest way to get started — run directly on your machine with no install required. Because it runs natively it has full access to your local session log files.
@@ -44,7 +48,11 @@ Open <http://localhost:3000> after the server starts. The OTLP receiver listens 
 `agentlenspro setup` is the one-command installer/repairer: it detects the current state
 (server, data store, hooks, skill, telemetry env — including broken or partial installs),
 converges every piece, **independently verifies each step**, and finishes with an
-end-to-end self-test. It is idempotent — a second run is all no-ops.
+end-to-end self-test. It is idempotent — a second run is all no-ops. It opens with a
+read-only **environment probe** that fails fast on real incompatibilities (native Windows →
+use WSL2, Node below the supported floor, a broken install whose native deps don't resolve)
+and warns on degradable ones (a foreign process squatting the OTLP port, low disk, no
+`~/.claude` yet).
 
 ```bash
 agentlenspro setup                        # detect → converge → verify → self-test

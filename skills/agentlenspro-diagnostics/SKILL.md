@@ -89,6 +89,28 @@ yet migrated, never written to again; `--export-bodies` reads from both. One ser
 the canonical instance owns `~/.agentlens/server.pid` and a second boot refuses cleanly.
 `batch --out` files are position-prefixed (`out-1-<tool>.json`).
 
+## Install / repair — `agentlenspro setup`
+
+ONE idempotent verb installs, verifies, or repairs the whole stack:
+
+```bash
+agentlenspro setup --dry-run   # read-only: shows what would change, exits 0
+agentlenspro setup --yes       # converge: every step CHECK → ACT → VERIFY, then self-test
+```
+
+Pipeline (fail-fast — a FAIL stops the run, remaining steps SKIP, exit non-zero):
+**environment** (read-only heuristics: platform/arch + WSL label, Node vs the engines floor,
+native-dep resolvability, foreign-process-on-OTLP-port, `~/.claude` presence, free disk —
+hard-fails on native Windows with WSL2 guidance, on old Node, or on a broken install) →
+data-store (sqlite quick_check; corrupt DB backed ASIDE, never wiped) → hooks → skill →
+otel-env → old-package migration → server → final end-to-end self-test (synthetic span
+round-trip + registered hook/gate execution). A second run over a converged install reports
+**0 actions** — that is the idempotency proof. Data is NEVER deleted by setup.
+
+**Platforms: macOS and Linux; Windows ONLY via WSL2** (native win32 is refused by the
+environment probe — install Node ≥ 20.9 inside the WSL distro and `npm install -g agentlenspro`
+there). Hook registrations changed by setup need a Claude Code session restart to take effect.
+
 ## Local commands — no server needed (`config`, `env`)
 
 These two subcommands run entirely client-side (they never touch the MCP server), so they work
@@ -335,7 +357,7 @@ A `verdict:"unknown"` means no LLM request was recorded for that session.
 | What did the last janitor heartbeat cost? | `get_heartbeat_cost` |
 | Which config (model/spawn/effort) costs most? | `compare_configs --groupBy <dim>` |
 | Ad-hoc analytics over the fact DB | `run_diagnostics_sql --preset <name>` / `--sql '<SELECT…>'` |
-| Recent sessions / workspace patterns | `get_recent_sessions`, `get_workspace_patterns` |
+| Recent sessions / workspace patterns | `get_recent_sessions` (ranked by LAST ACTIVITY, not start date; rows carry `lastActive` + `active:true` for sessions live in the last 5min — plus the AI session `title`/`entrypoint` when the transcript carries them), `get_workspace_patterns` |
 | **"Show me what was actually SAID and DONE in a session"** | `get_conversation` — the narrative reader: verbatim ordered turns (user prompt → thinking → reply → each tool call with its paired output), sidechain turns labeled, compaction dividers with pre/post/dropped tokens, per-turn duration + usage incl. cache-TTL tier 5m/1h. Progressive: no-arg = per-turn summaries; `--turn N` = that turn verbatim; `--turnFrom/--turnTo` = bounded range. Content lens; `get_context_history` stays the cost/composition lens |
 | **Which sessions still write raw OTEL bodies (restart targets)?** | `get_body_writers` — ranked by recent rate then total; `active` rows wrote within `--active_min` (default 10m) and keep writing until their process restarts. Request-body attribution (responses aggregated); totals = exact store+live union. `--window_min 30 --limit 20` |
 | **Who exhausted the PREVIOUS account's windows (post-rotation autopsy)?** | `get_account_burners` — BOTH the 5h and 7d tables in one call, grouped by project/agent (sessions pooled by workspace) with cache-created + cache-read columns; the window nearer its calibrated capacity at rotation is marked MOST LIKELY EXHAUSTED. Default `--account previous` (also `current`, uuid prefix, email); `--interval last`(default)`/current/<ISO-date>` picks the window end. Time-based attribution: cross-rotation sessions split correctly between accounts |

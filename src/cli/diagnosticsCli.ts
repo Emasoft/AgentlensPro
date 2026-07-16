@@ -25,7 +25,11 @@ export const USAGE = `agentlenspro — AI-agent observability: server, dashboard
 usage:
   agentlenspro                                start the server in the foreground (serves the dashboard)
   agentlenspro setup [--dry-run] [--yes]      detect → converge → verify: install or repair everything
-                                              (server, DB, hooks, skill, telemetry env), then self-test
+                                              (server, DB, hooks, skill, telemetry env), then self-test.
+                                              Starts with a read-only environment probe (platform,
+                                              Node floor, native deps, port squatters, disk) that
+                                              fails fast on real incompatibilities. Platforms:
+                                              macOS + Linux; Windows via WSL2 ONLY (native win32 refused)
   agentlenspro server start|stop|restart|status [--supervise]
                                               manage the background server; --supervise runs the
                                               crash-restart supervisor in the foreground

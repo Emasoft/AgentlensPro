@@ -45,6 +45,19 @@ suite('get_recent_sessions last-activity ranking (TRDD-RS3NGN53)', () => {
     assert.strictEqual('active' in staleRow, false, 'idle session carries NO active field (absent, not false)')
   })
 
+  test('title/entrypoint ride the row when the card carries them, absent otherwise', () => {
+    // Tests the transcript-signal passthrough: the orient-yourself listing shows session titles.
+    const now = Date.now()
+    const titled = card('titled', new Date(now - 60_000).toISOString(), 30_000, { title: 'my-session', entrypoint: 'cli' })
+    const plain = card('plain', new Date(now - 120_000).toISOString(), 30_000)
+    const rows = handleGetRecentSessions([titled, plain], {})
+    const t = rows.find(r => r.sessionId === 'titled')!
+    const p = rows.find(r => r.sessionId === 'plain')!
+    assert.strictEqual(t.title, 'my-session')
+    assert.strictEqual(t.entrypoint, 'cli')
+    assert.strictEqual('title' in p, false, 'no fabricated title field')
+  })
+
   test('filters and limit still apply after the re-sort', () => {
     // Tests that agent filtering happens on the re-sorted list and limit caps it.
     const now = Date.now()

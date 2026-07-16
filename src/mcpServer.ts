@@ -1368,6 +1368,9 @@ export function handleGetRecentSessions(
     lastActive:  new Date(lastActiveMs(s)).toISOString().slice(0, 16).replace('T', ' '),
     // Rides only on live sessions — absent means idle, never a false.
     ...(now - lastActiveMs(s) < ACTIVE_WINDOW_MS ? { active: true as const } : {}),
+    // Transcript-signal enrichment (TRDD-B22NYTOY P4) — absent when the transcript carries none.
+    ...(s.title ? { title: s.title } : {}),
+    ...(s.entrypoint ? { entrypoint: s.entrypoint } : {}),
     agent:       s.source,
     model:       s.model,
     prompt:      s.userRequest ? s.userRequest.slice(0, 120) + (s.userRequest.length > 120 ? '…' : '') : null,
