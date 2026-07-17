@@ -15,13 +15,13 @@ import {
 } from '../utils'
 import { calcEntryCost, calcSessionCost, fmtUsd } from '../sessionMetrics'
 import { countTokens } from '../tokenEstimator'
-import { buildCacheBreakReport, cacheBreaksByTurn, CAUSE_LABEL } from '../../../src/shared/cacheBreak'
+import { buildCacheBreakReport, cacheBreaksByTurn, CAUSE_LABEL, diffTurnSources } from '../../../src/shared/cacheBreak'
 import { contextTokens } from '../../../src/shared/tokenBuckets'
 import { buildTokensByCause, CAUSE_DIMENSION_LABEL } from '../../../src/shared/tokensByCause'
 import { entryBeforeWindow } from '../../../src/shared/timeWindow'
 import { spawnKindBadge, hitRateColor, formatPct, SpawnCostPanel } from './cacheShared'
 import { BlockRow } from './HistoryTab'
-import type { SessionSummaryCard, TimelineEntry, BackgroundSpanSummary, CacheBreakTurn, ContextSource, CallContext, CauseDimension } from '../types'
+import type { SessionSummaryCard, TimelineEntry, BackgroundSpanSummary, CacheBreakTurn, ContextSource, CallContext, CauseDimension, TurnSourceDiff } from '../types'
 
 // Colour per composition source-kind — shared with the ContextTab legend so the LLM-call context
 // breakdown reads the same as the Context tab. Injected-block kinds (hook/skill/catalog/…) plus the
@@ -983,31 +983,190 @@ function buildTurnNodes(tSteps: Step[], totals: TurnTotals, hostSources: Context
   return nodes
 }
 
-// One turn = a collapsible parent row whose value is the SUM of its child steps. Shows all 5
-// values (input/output/cache-read/cache-write/cost) and a bar of the selected metric; expands to a
-// RECURSIVE bar-tree that drills each component down to the actual content (P5).
-// The expandable detail beneath a turn flagged as an avoidable cache break: the cause, the exact
-// offending block, the wasted cache-created tokens/cost, and the one-line remediation hint.
-function CacheBreakDetail({ cb }: { cb: CacheBreakTurn }) {
+// One excerpt pane (BEFORE or AFTER) with a lightweight line-level change highlight. Text WRAPS
+// (pre-wrap + break-word) so there is never a horizontal inner scrollbar — the no-nested-scrollbars
+// rule; the excerpt itself is already length-capped by the composition parser, so the pane's height
+// is bounded and never needs a vertical scroller either.
+function ExcerptPane({ title, lines, tone }: { title: string; lines: Array<{ text: string; changed: boolean }>; tone: 'before' | 'after' }) {
+  const changedBg = tone === 'before' ? 'rgba(244,71,71,0.16)' : 'rgba(129,199,132,0.18)'
   return (
-    <div style="margin:2px 0 4px 24px;padding:8px 10px;border-left:3px solid var(--error,#f44747);background:rgba(244,71,71,0.08);border-radius:0 4px 4px 0;font-size:10px;line-height:1.5">
-      <div style="font-weight:600;color:var(--error,#f44747);margin-bottom:3px">Cache break — {CAUSE_LABEL[cb.cause]}</div>
-      {cb.breakSourceLabel && (
-        <div>Offending block: <code style="color:var(--vscode-charts-orange,#e2a03f)">{cb.breakSourceLabel}</code>{cb.breakSourceKind ? ` (${cb.breakSourceKind})` : ''}</div>
-      )}
-      <div>
-        Wasted re-write: <strong>{formatCompact(cb.wastedTokens)}</strong> cache-created tokens
-        {cb.wastedCostUsd > 0 && <> · <strong>~{fmtUsd(cb.wastedCostUsd)}</strong></>}
+    <div style="margin-top:5px">
+      <div style="font-size:9px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);margin-bottom:2px">{title}</div>
+      <div style="font-family:var(--vscode-editor-font-family,ui-monospace,monospace);font-size:10px;line-height:1.45;background:var(--vscode-textCodeBlock-background,rgba(127,127,127,0.08));border:1px solid var(--border);border-radius:4px;padding:6px 8px;white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere">
+        {lines.map((l, i) => (
+          <div key={i} style={l.changed ? `background:${changedBg};border-radius:2px` : ''}>{l.text || ' '}</div>
+        ))}
       </div>
-      {cb.idleGapMs !== undefined && cb.cause === 'IDLE_TTL_EXPIRY' && (
-        <div>Idle gap: {formatMs(cb.idleGapMs)} (&gt; 5-min TTL)</div>
-      )}
-      {cb.remediation && <div style="margin-top:3px;color:var(--muted)">→ {cb.remediation}</div>}
     </div>
   )
 }
 
-function TurnGroup({ turn, tSteps, sessIdx, sessionModel, metric, maxTurnMetric, highlightSpanId, subAgents, cacheBreak, hostSources }: {
+// Split two excerpts into per-line change flags (set-based: a line present in one side but not the
+// other is "changed"). Good enough for the short, parser-capped excerpts and keeps the diff honest
+// without shipping an LCS implementation into the bundle.
+function splitDiffLines(before: string, after: string): { before: Array<{ text: string; changed: boolean }>; after: Array<{ text: string; changed: boolean }> } {
+  const b = before.split('\n'); const a = after.split('\n')
+  const bSet = new Set(b); const aSet = new Set(a)
+  return {
+    before: b.map(text => ({ text, changed: !aSet.has(text) })),
+    after: a.map(text => ({ text, changed: !bSet.has(text) })),
+  }
+}
+
+const DIFF_STATUS_COLOR: Record<TurnSourceDiff['status'], string> = {
+  added: 'var(--vscode-charts-green,#81c784)',
+  removed: 'var(--error,#f44747)',
+  resized: 'var(--vscode-charts-orange,#e2a03f)',
+  unchanged: 'var(--muted)',
+}
+
+// The block-level before/after content of the ONE block that broke the prefix cache. Degrades
+// gracefully: an added block shows only AFTER, a removed block only BEFORE, and a block whose
+// excerpt the parser didn't capture shows the token-size change with an explicit "raw-body capture"
+// note — never fabricated text.
+function OffenderContent({ o }: { o: TurnSourceDiff }) {
+  const hasBefore = o.prevExcerpt !== undefined && o.prevExcerpt !== ''
+  const hasAfter = o.curExcerpt !== undefined && o.curExcerpt !== ''
+  if (o.status === 'resized' && hasBefore && hasAfter) {
+    const d = splitDiffLines(o.prevExcerpt!, o.curExcerpt!)
+    return <>
+      <ExcerptPane title={`Before · turn was ${formatCompact(o.prevTokens)} tok`} lines={d.before} tone="before" />
+      <ExcerptPane title={`After · now ${formatCompact(o.curTokens)} tok`} lines={d.after} tone="after" />
+    </>
+  }
+  if (o.status === 'added') {
+    return hasAfter
+      ? <ExcerptPane title="After · new block (absent from the previous turn)" lines={o.curExcerpt!.split('\n').map(text => ({ text, changed: true }))} tone="after" />
+      : <div style="margin-top:4px;color:var(--muted)">New block added this turn ({formatCompact(o.curTokens)} tok). Full text needs raw-body capture enabled.</div>
+  }
+  if (o.status === 'removed') {
+    return hasBefore
+      ? <ExcerptPane title="Before · block removed this turn" lines={o.prevExcerpt!.split('\n').map(text => ({ text, changed: true }))} tone="before" />
+      : <div style="margin-top:4px;color:var(--muted)">Block present last turn ({formatCompact(o.prevTokens)} tok) was dropped this turn. Full text needs raw-body capture enabled.</div>
+  }
+  // resized but at least one excerpt missing → show the size change only, honestly labelled.
+  return (
+    <div style="margin-top:4px;color:var(--muted)">
+      Block content changed: {formatCompact(o.prevTokens)} → {formatCompact(o.curTokens)} tok.
+      {(!hasBefore || !hasAfter) && ' Full before/after text needs raw-body capture enabled.'}
+    </div>
+  )
+}
+
+// The cache-break POPUP (#92, TRDD-CB9POPUP): clicking the ⚡ badge opens this. It shows the
+// before/after prompt-prefix BLOCK diff between the two consecutive turns, the first-divergent block
+// (the one that actually broke the prefix cache) highlighted, plus every added/removed/resized block.
+// Data is 100% client-reachable from the already-loaded ContextComposition (each block's `excerpt`
+// is the real injected text) — no server round-trip. Non-block causes and missing/loading
+// compositions degrade gracefully with an explicit note; nothing is fabricated.
+// The card has NO overflow scroller (no-nested-scrollbars rule): the parser-capped excerpts + a
+// capped changed-block list keep it bounded, and long text wraps.
+const CHANGED_CAP = 14
+function CacheBreakModal({ cb, turn, prevTurn, prevSources, curSources, onClose }: {
+  cb: CacheBreakTurn
+  turn: number
+  prevTurn?: number
+  prevSources?: ContextSource[]
+  curSources?: ContextSource[]
+  onClose: () => void
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  const diff = (prevSources && curSources) ? diffTurnSources(prevSources, curSources) : null
+  // The first divergence is authoritative and, by construction (shared diffTurnSources), equals the
+  // analyzer's named offender in cb.breakSourceLabel/Kind.
+  const offender = diff?.find(e => e.isFirstDivergence)
+    ?? (cb.breakSourceLabel ? diff?.find(e => e.label === cb.breakSourceLabel && e.kind === (cb.breakSourceKind ?? e.kind)) : undefined)
+  const changed = (diff ?? []).filter(e => e.status !== 'unchanged')
+    .sort((a, b) => (Number(b.isFirstDivergence) - Number(a.isFirstDivergence)) || (Math.abs(b.curTokens - b.prevTokens) - Math.abs(a.curTokens - a.prevTokens)))
+  const unchangedCount = (diff ?? []).length - changed.length
+
+  return (
+    <>
+      <div onClick={onClose} style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:400" />
+      <div class="cache-break-diff-popup" role="dialog" aria-label="Cache break prefix diff"
+        onClick={e => e.stopPropagation()}
+        style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:401;width:calc(100vw - 32px);max-width:720px;background:var(--vscode-editor-background,var(--bg));color:var(--vscode-foreground,var(--fg));border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 40px rgba(0,0,0,0.5);padding:14px 16px;font-size:11px;line-height:1.5">
+        <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px">
+          <span style="font-weight:700;color:var(--error,#f44747)">⚡ Cache break — {CAUSE_LABEL[cb.cause]}</span>
+          <span style="color:var(--muted);font-size:10px">
+            {prevTurn !== undefined ? `Turn ${prevTurn} → ${turn}` : `Turn ${turn}`} · prompt-prefix diff
+          </span>
+          <button onClick={onClose} title="Close (Esc)"
+            style="margin-left:auto;background:transparent;border:1px solid var(--border);border-radius:4px;color:var(--muted);cursor:pointer;font-size:12px;line-height:1;padding:3px 8px">✕</button>
+        </div>
+
+        <div style="margin-bottom:10px">
+          <span>Wasted re-write: <strong>{formatCompact(cb.wastedTokens)}</strong> cache-created tokens</span>
+          {cb.wastedCostUsd > 0 && <span> · <strong>~{fmtUsd(cb.wastedCostUsd)}</strong></span>}
+          {cb.idleGapMs !== undefined && cb.cause === 'IDLE_TTL_EXPIRY' && <span> · idle gap {formatMs(cb.idleGapMs)} (&gt; 5-min TTL)</span>}
+          {cb.remediation && <div style="margin-top:3px;color:var(--muted)">→ {cb.remediation}</div>}
+        </div>
+
+        {diff === null ? (
+          <div style="padding:8px 10px;border-left:3px solid var(--vscode-charts-orange,#e2a03f);background:rgba(226,160,63,0.08);border-radius:0 4px 4px 0;color:var(--muted)">
+            {curSources === undefined
+              ? 'Session composition is still loading — reopen in a moment for the block-level before/after.'
+              : 'Previous-turn composition isn’t available (turn 1, or a fork/sub-agent whose context comes from the parent transcript), so a block-level before/after can’t be shown here. The cause and cost above are still exact.'}
+          </div>
+        ) : offender ? (
+          <div style="margin-bottom:10px;padding:8px 10px;border-left:3px solid var(--error,#f44747);background:rgba(244,71,71,0.08);border-radius:0 4px 4px 0">
+            <div style="margin-bottom:2px">
+              <span style="font-weight:600">First divergence — this block broke the prefix cache:</span>
+            </div>
+            <div>
+              <code style="color:var(--vscode-charts-orange,#e2a03f)">{offender.label}</code>
+              <span style="color:var(--muted)"> ({offender.kind})</span>
+              <span style={`margin-left:8px;font-size:9px;font-weight:700;text-transform:uppercase;color:${DIFF_STATUS_COLOR[offender.status]}`}>{offender.status}</span>
+            </div>
+            <OffenderContent o={offender} />
+          </div>
+        ) : (
+          <div style="margin-bottom:10px;padding:8px 10px;border-left:3px solid var(--vscode-charts-orange,#e2a03f);background:rgba(226,160,63,0.08);border-radius:0 4px 4px 0;color:var(--muted)">
+            This break is a session-level change ({CAUSE_LABEL[cb.cause]}), not a specific injected block — there is no single block-content before/after to show. Any block-size changes this turn are listed below.
+          </div>
+        )}
+
+        {changed.length > 0 && (
+          <div>
+            <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px">
+              Changed blocks, turn {prevTurn ?? '—'} → {turn} · {changed.length}{unchangedCount > 0 ? ` (+${unchangedCount} unchanged share the prefix)` : ''}
+            </div>
+            <table style="width:100%;border-collapse:collapse;font-size:10px;table-layout:fixed">
+              <thead>
+                <tr style="color:var(--muted);text-align:left">
+                  <th style="font-weight:500;padding:2px 6px">Block</th>
+                  <th style="font-weight:500;padding:2px 6px;width:70px">Kind</th>
+                  <th style="font-weight:500;padding:2px 6px;width:110px;text-align:right">Before → after tok</th>
+                  <th style="font-weight:500;padding:2px 6px;width:64px;text-align:right">Change</th>
+                </tr>
+              </thead>
+              <tbody>
+                {changed.slice(0, CHANGED_CAP).map(e => (
+                  <tr key={e.key} style={`border-top:1px solid var(--border)${e.isFirstDivergence ? ';background:rgba(244,71,71,0.06)' : ''}`}>
+                    <td style="padding:3px 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title={e.label}>{e.isFirstDivergence ? '⚡ ' : ''}{e.label}</td>
+                    <td style="padding:3px 6px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{e.kind}</td>
+                    <td style="padding:3px 6px;text-align:right;font-variant-numeric:tabular-nums">{formatCompact(e.prevTokens)} → {formatCompact(e.curTokens)}</td>
+                    <td style={`padding:3px 6px;text-align:right;font-weight:600;text-transform:uppercase;font-size:9px;color:${DIFF_STATUS_COLOR[e.status]}`}>{e.status}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {changed.length > CHANGED_CAP && (
+              <div style="font-size:10px;color:var(--muted);padding:3px 6px">+{changed.length - CHANGED_CAP} more changed blocks…</div>
+            )}
+          </div>
+        )}
+      </div>
+    </>
+  )
+}
+
+function TurnGroup({ turn, tSteps, sessIdx, sessionModel, metric, maxTurnMetric, highlightSpanId, subAgents, cacheBreak, hostSources, prevTurn, prevSources }: {
   turn: number
   tSteps: Array<{ step: Step; i: number }>
   sessIdx: number; sessionModel: string
@@ -1016,6 +1175,8 @@ function TurnGroup({ turn, tSteps, sessIdx, sessionModel, metric, maxTurnMetric,
   subAgents?: SessionSummaryCard[]
   cacheBreak?: CacheBreakTurn
   hostSources?: ContextSource[]
+  prevTurn?: number
+  prevSources?: ContextSource[]
 }) {
   const totals = sumSteps(tSteps.map(x => x.step), sessionModel)
   const hasHighlight = !!highlightSpanId && tSteps.some(x => x.step.entry.spanId === highlightSpanId)
@@ -1040,8 +1201,8 @@ function TurnGroup({ turn, tSteps, sessIdx, sessionModel, metric, maxTurnMetric,
               Turn {turn} · {tSteps.length} step{tSteps.length !== 1 ? 's' : ''}
               {broke && (
                 <span
-                  onClick={e => { e.stopPropagation(); setBreakOpen(v => !v) }}
-                  title="Prompt cache broke this turn — click for the cause + wasted cost"
+                  onClick={e => { e.stopPropagation(); setBreakOpen(true) }}
+                  title="Prompt cache broke this turn — click for the before/after prefix diff"
                   style="margin-left:8px;font-size:9px;padding:1px 6px;border-radius:8px;font-weight:700;cursor:pointer;background:var(--error,#f44747);color:#fff;white-space:nowrap">
                   ⚡ cache break: {CAUSE_LABEL[cacheBreak!.cause]}
                 </span>
@@ -1059,7 +1220,10 @@ function TurnGroup({ turn, tSteps, sessIdx, sessionModel, metric, maxTurnMetric,
           <span style={tv > 0 ? 'font-weight:600' : 'color:var(--muted)'}>{formatMetricValue(metric, tv)}</span>
         </div>
       </div>
-      {broke && breakOpen && <CacheBreakDetail cb={cacheBreak!} />}
+      {broke && breakOpen && (
+        <CacheBreakModal cb={cacheBreak!} turn={turn} prevTurn={prevTurn}
+          prevSources={prevSources} curSources={hostSources} onClose={() => setBreakOpen(false)} />
+      )}
       {open && (
         <div class="wf-turn-children">
           {(() => {
@@ -1285,6 +1449,12 @@ export function TimelineWaterfall({ steps, sessionDur, sessionModel, sessIdx = 0
   // clicking a call shows what its context was made of (the composition breakdown).
   const hostSourcesByTurn = new Map<number, ContextSource[]>()
   for (const t of composition?.turns ?? []) hostSourcesByTurn.set(t.turn, t.sources)
+  // turn → its PREVIOUS turn, in chronological timeline order (INDEPENDENT of the display sort), so
+  // the cache-break popup (#92) diffs turn N-1 → N against the real prior turn — the same pairing the
+  // analyzer used, so the popup's first-divergence always matches the badge's cause.
+  const chronoTurns = [...new Set(steps.map(s => s.entry.turn).filter((t): t is number => t !== undefined))].sort((a, b) => a - b)
+  const prevTurnByTurn = new Map<number, number>()
+  for (let i = 1; i < chronoTurns.length; i++) prevTurnByTurn.set(chronoTurns[i], chronoTurns[i - 1])
   // When the composition was reconstructed from a PARENT transcript (fork/sub-agent with no own log),
   // the parent's turn numbering doesn't line up with this session's own timeline turns, so a per-turn
   // lookup usually misses. Fall back to the UNION of all inherited injected blocks so the fork's calls
@@ -1451,7 +1621,9 @@ export function TimelineWaterfall({ steps, sessionDur, sessionModel, sessIdx = 0
                     sessionModel={sessionModel} metric={metric}
                     maxTurnMetric={maxTurnMetric} highlightSpanId={highlightSpanId}
                     subAgents={subsByTurn.get(g.turn)} cacheBreak={breaksByTurn.get(g.turn)}
-                    hostSources={resolveHostSources(g.turn)} />
+                    hostSources={resolveHostSources(g.turn)}
+                    prevTurn={prevTurnByTurn.get(g.turn)}
+                    prevSources={composition?.reconstructedFrom ? undefined : resolveHostSources(prevTurnByTurn.get(g.turn))} />
                 </div>
               </div>
             ))

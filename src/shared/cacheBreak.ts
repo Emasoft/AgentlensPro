@@ -1,6 +1,6 @@
 import type {
   ContextSource, ContextComposition, TimelineEntry,
-  CacheBreakCause, CacheBreakTurn, CacheBreakOffender, CacheBreakReport,
+  CacheBreakCause, CacheBreakTurn, CacheBreakOffender, CacheBreakReport, TurnSourceDiff,
 } from './summarizerTypes'
 import { lookupRates } from './pricing'
 
@@ -84,20 +84,72 @@ function causeForKind(kind: string): CacheBreakCause {
   return 'INJECTED_BLOCK_CHANGED'
 }
 
-// Find the first block (in `cur` order) that is absent from `prev`, or present but with a changed
-// token size — the earliest divergence the prefix cache would trip on. Returns null when the two
-// turns carry the same blocks at the same sizes (order aside).
-function firstDivergentBlock(prev: ContextSource[], cur: ContextSource[]): ContextSource | null {
+/**
+ * Full turn-to-turn block set-diff (add / remove / resize / unchanged), with the FIRST divergence
+ * flagged — the earliest byte the prefix cache trips on. This is the single source of truth for the
+ * diff: `firstDivergentBlock` (the analyzer) and the cache-break popup (#92, TRDD-CB9POPUP) both
+ * consume it, so the popup's highlighted offender is always identical to the analyzer's verdict.
+ *
+ * Ordering & "first divergence" are the SET-diff semantics the classifier has always used (the
+ * composition parser emits blocks heaviest-first, not in true prompt position — see the module
+ * header): the first added/resized block in `cur` order, else the first block dropped from `prev`.
+ * Entries are returned in `cur` order first, then dropped-from-`prev` blocks.
+ */
+export function diffTurnSources(prev: ContextSource[], cur: ContextSource[]): TurnSourceDiff[] {
   const prevByKey = new Map<string, ContextSource>()
   for (const s of prev) prevByKey.set(sourceKey(s), s)
+  const curKeys = new Set(cur.map(sourceKey))
+
+  // Locate the first divergence's key exactly as the classifier did (cur order, then prev-dropped).
+  let firstKey: string | null = null
   for (const s of cur) {
     const p = prevByKey.get(sourceKey(s))
-    if (!p || p.tokens !== s.tokens) return s
+    if (!p || p.tokens !== s.tokens) { firstKey = sourceKey(s); break }
+  }
+  if (firstKey === null) {
+    for (const s of prev) if (!curKeys.has(sourceKey(s))) { firstKey = sourceKey(s); break }
+  }
+  // Flag only the FIRST entry carrying that key (a duplicate kind::label in one turn must not
+  // double-flag) — mirrors the classifier returning a single ContextSource.
+  let firstMarked = false
+  const markFirst = (key: string): boolean => {
+    if (!firstMarked && key === firstKey) { firstMarked = true; return true }
+    return false
+  }
+
+  const out: TurnSourceDiff[] = []
+  for (const s of cur) {
+    const key = sourceKey(s)
+    const p = prevByKey.get(key)
+    const status = !p ? 'added' : (p.tokens !== s.tokens ? 'resized' : 'unchanged')
+    out.push({
+      key, label: s.label, kind: s.kind, status,
+      prevTokens: p?.tokens ?? 0, curTokens: s.tokens,
+      prevExcerpt: p?.excerpt, curExcerpt: s.excerpt,
+      isFirstDivergence: markFirst(key),
+    })
   }
   // A block present in prev but dropped in cur is also a divergence (the prefix shortened/shifted).
-  const curKeys = new Set(cur.map(sourceKey))
-  for (const s of prev) if (!curKeys.has(sourceKey(s))) return s
-  return null
+  for (const s of prev) {
+    const key = sourceKey(s)
+    if (curKeys.has(key)) continue
+    out.push({
+      key, label: s.label, kind: s.kind, status: 'removed',
+      prevTokens: s.tokens, curTokens: 0,
+      prevExcerpt: s.excerpt, curExcerpt: undefined,
+      isFirstDivergence: markFirst(key),
+    })
+  }
+  return out
+}
+
+// Find the first block that broke the prefix (the earliest divergence). Reuses diffTurnSources so
+// the classifier and the popup can never disagree. Returns the cur block (added/resized) or, for a
+// dropped block, the prev block — the classifier reads only its `.kind`/`.label`.
+function firstDivergentBlock(prev: ContextSource[], cur: ContextSource[]): ContextSource | null {
+  const d = diffTurnSources(prev, cur).find(e => e.isFirstDivergence)
+  if (!d) return null
+  return cur.find(s => sourceKey(s) === d.key) ?? prev.find(s => sourceKey(s) === d.key) ?? null
 }
 
 // Price a wasted re-write. Only cache_creation above the cheap cache_read floor is "wasted": the

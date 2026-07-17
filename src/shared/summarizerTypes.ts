@@ -420,6 +420,23 @@ export interface CacheBreakTurn {
   remediation?: string        // one-line fix hint for this cause
 }
 
+// One block's before/after state across a turn transition, for the cache-break diff popup (#92,
+// TRDD-CB9POPUP). `status` is the set-diff verdict by stable identity (kind::label); `excerpt`s are
+// the ACTUAL injected text (capped by the composition parser) so the popup shows the real content
+// that changed, not just a label. `isFirstDivergence` marks the earliest block the prefix cache
+// would trip on — the SAME one the analyzer names in CacheBreakTurn.breakSourceLabel/Kind.
+export interface TurnSourceDiff {
+  key: string                 // sourceKey = `${kind}::${label}`
+  label: string
+  kind: string
+  status: 'added' | 'removed' | 'resized' | 'unchanged'
+  prevTokens: number          // 0 when added
+  curTokens: number           // 0 when removed
+  prevExcerpt?: string        // present when the block existed in the previous turn and carried an excerpt
+  curExcerpt?: string         // present when the block exists in the current turn and carries an excerpt
+  isFirstDivergence: boolean  // the first block (cur order, then dropped-from-prev) that broke the prefix
+}
+
 export interface CacheBreakOffender {
   label: string
   kind: string
