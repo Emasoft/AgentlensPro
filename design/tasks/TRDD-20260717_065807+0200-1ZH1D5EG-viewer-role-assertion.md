@@ -3,7 +3,7 @@ trdd-id: 1ZH1D5EG
 title: Signed viewer-role assertion — MAESTRO-only settings panel for the embedded dashboard (AgentlensPro#4)
 column: ai_review
 created: 2026-07-17T06:58:07+0200
-updated: 2026-07-17T07:20:00+0200
+updated: 2026-07-17T09:35:00+0200
 current-owner: main
 task-type: feature
 severity: minor
@@ -31,8 +31,15 @@ symbol greps in both bundles, server pid 7868). LIVE-verified 9/9 against the ru
 with REAL signed assertions from the actual key file: standalone/user/maestro embed-status,
 garbage→403, user POST→403, user GET /api/hook-config→403, meta injected only for user,
 standalone hook-config read still 200 (kill-switch path untouched), key auto-created 0600.
-Commits: ef9b2b6 (phase 1), 1247924 (phase 2), 63e9ed1 (phase 3), phase-4 commit pending in
-this edit. All 11 #4 questions answered on the issue. Ships in the next release (post-2.9.0).
+Commits: ef9b2b6 (phase 1), 1247924 (phase 2), 63e9ed1 (phase 3), 553e258 (phase 4).
+All 11 #4 questions answered on the issue. RELEASED in v2.10.0 (tag → OIDC publish, latest).
+
+CONSUMER CLOSED THE LOOP (2026-07-17 09:30, #4 comment 5000179099): the ai-maestro Claude
+implemented its signer (their TRDD-YY6M8Z16, commit f7104bc9), reproduced the 7/7 interop
+table against THIS machine's live 2.10.0 with the real embed-key, and pinned the §B4 vector
+byte-for-byte in ai-maestro CI — drift now fails tests on BOTH repos. Remaining: (a) the
+OWNER's visual browser check (governance password never passes through a model — theirs or
+ours); (b) basePath (TRDD-KDGJ0R38, backburner) — they retire their CSP rewrite when it ships.
 Gate: human review.
 
 ## Owner directive (verbatim, via the ai-maestro Claude, 2026-07-17)
