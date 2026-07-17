@@ -341,7 +341,8 @@ export async function daemonCommand(argv: string[]): Promise<void> {
 // user's choice. macOS only for now; linux gets a printed systemd-user recipe.
 const LAUNCHD_LABEL = 'com.agentlens.collector'
 // Embedded (not read from scripts/) so an npm-installed package can self-install without shipping the
-// template file. @NODE@/@CLI@/@REPO@/@USER@ are filled at install time.
+// template file. @NODE@/@CLI@/@REPO@/@HOME@ are filled at install time (no username assumed — @HOME@
+// is os.homedir(); commit 2088d7e removed the old @USER@ path).
 const LAUNCHD_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0">
 <dict>

@@ -75,6 +75,21 @@ agentlenspro --install-hooks              # wire lifecycle hook capture + the bu
 agentlenspro --install-skill              # (re)install the agentlenspro-diagnostics skill
 ```
 
+Run it as an always-on login daemon (macOS launchd) so ingestion is up across reboots even with
+no Claude session open:
+
+```bash
+agentlenspro daemon install               # write + load the launchd agent (opt-in; never forced)
+agentlenspro daemon status                # is the daemon up? (adds hook-spool depth)
+agentlenspro daemon uninstall             # unload + remove it
+```
+
+`daemon install` writes `~/Library/LaunchAgents/com.agentlens.collector.plist` from a template
+baked into the CLI (no separate file to copy, and no username is assumed — the paths resolve from
+your own `$HOME`). To customize it — a different log path, an extra `EnvironmentVariable` — edit
+that installed plist and `launchctl unload`/`load` it, or re-run `daemon install` to regenerate
+it. On Linux, run `agentlenspro daemon start --supervise` under a systemd **user** service.
+
 #### The single-executable contract
 
 The package publishes exactly ONE bin (`package.json → bin`): `agentlenspro`. Everything —
@@ -170,8 +185,12 @@ payload = {"v":1,"role":"maestro"|"user","iat":<unix_ms>,"exp":<unix_ms>,"nonce"
 ```
 
 - **Key:** `~/.agentlens/embed-key` — 32 random bytes as lowercase hex, created by the server on
-  first start with mode `0600`. The server refuses to boot on a corrupt or wider-than-0600 key
-  file (a world-readable shared secret is not a shared secret). The proxy reads the same file.
+  first start with mode `0600` (POSIX; on Windows the permission check is skipped and NTFS ACLs
+  apply). The proxy reads the same file. If the key file is unusable — corrupt hex, or wider than
+  `0600` on POSIX — the **embed feature is disabled** (the server logs a loud warning and any
+  request that carries `X-Agentlens-Viewer` is refused with 403), but the dashboard keeps running
+  normally in standalone mode. An opt-in proxy feature never takes the whole server down; fix or
+  delete the key file and a fresh `0600` key is created on the next boot.
 - **No header ⇒ standalone mode** — full access, exactly today's behavior. Solo users, local
   hooks, and the CLI never send the header and are unaffected.
 - **`role:"maestro"`** ⇒ full access. **`role:"user"`** ⇒ restricted viewer: only

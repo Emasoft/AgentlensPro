@@ -4,6 +4,28 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.10.1] - 2026-07-17
+
+### Fixed
+
+- **A bad embed-key no longer takes the whole server down** (TRDD-WYC4KB50, remediating the xhigh
+  code review of the 2.10.0 viewer-role work). The viewer-role assertion is an opt-in feature used
+  only behind a proxy, but an unusable `~/.agentlens/embed-key` (corrupt hex, or wider than `0600`)
+  used to throw at boot and crash the entire server — OTLP ingestion, hook capture, and the CLI
+  along with it, then hook-revive respawned a crash loop. Now the embed feature simply disables
+  itself (a loud warning is logged; any request carrying `X-Agentlens-Viewer` is refused with 403)
+  while the dashboard keeps running in standalone mode — matching the #4 §B5 contract. On Windows
+  the POSIX `0600` mode check is skipped (Node reports a `0600`-created file as `0666` there, which
+  had made every second boot fail).
+- **Hardening from the same review:** `GET /` and `/api/embed-status` now send
+  `Vary: X-Agentlens-Viewer` so a cache can't serve one viewer role's page to another; the
+  restricted-viewer tab policy is centralized in one predicate (tab bar, deep-link, and host-message
+  guards can no longer drift apart); the bell dropdown's "Configure alerts →" button is hidden for
+  restricted viewers (it opened nothing); `resolveViewerRole` guards against non-object JSON payloads;
+  and `ensureEmbedKey`'s create path reuses the hardened atomic-write helper (fsync + temp cleanup).
+  The MCP-port viewer-role non-goal (loopback, server-to-server, never proxied to viewers) and the
+  Docker embed-key volume requirement are now documented.
+
 ## [2.10.0] - 2026-07-17
 
 ### Added

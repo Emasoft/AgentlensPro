@@ -42,6 +42,11 @@ COPY --from=builder --chown=agentlens:agentlens /app/media/dashboard.css  ./medi
 COPY --from=builder --chown=agentlens:agentlens /app/media/help-mascot.png ./media/help-mascot.png
 COPY --from=builder --chown=agentlens:agentlens /app/media/mascot.png     ./media/mascot.png
 
+# DATA_DIR=/data holds the SQLite DB, span segments, config, and the viewer-role embed-key
+# (TRDD-1ZH1D5EG). In the default container no reverse proxy stamps X-Agentlens-Viewer, so the
+# server runs in standalone mode and the key is simply unused. To use viewer-role embedding across
+# the container boundary (a host proxy signing assertions), bind-mount /data to a host directory the
+# proxy user can read — the embed contract is a shared file, same user, same host (WYC4KB50 #12).
 RUN mkdir -p /data && chown agentlens:agentlens /data
 VOLUME ["/data"]
 
