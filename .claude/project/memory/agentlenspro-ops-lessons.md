@@ -1,8 +1,8 @@
 ---
 name: agentlenspro-ops-lessons
-description: "how to deploy agentlenspro on a machine / setup vs manual install / hooks stopped firing after an upgrade / config file wiped or corrupted after an edit / is agentlenspro npm-linked or registry-installed / does switching the cli to an ordinary npm install lose my db or settings / where does the data live / can other agents on this machine use the cli / does the dev npm link affect normal published users / background agent shows running but does nothing / a fork started acting like the orchestrator / does agentlenspro run on Windows / setup fails with unsupported platform or node too old / server hangs at 100% cpu and every request times out or SIGTERM is ignored / a settings.json env key keeps reverting or getting overwritten after every server restart — operational doctrine and field lessons"
+description: "how to deploy agentlenspro on a machine / setup vs manual install / hooks stopped firing after an upgrade / config file wiped or corrupted after an edit / is agentlenspro npm-linked or registry-installed / does switching the cli to an ordinary npm install lose my db or settings / where does the data live / can other agents on this machine use the cli / does the dev npm link affect normal published users / background agent shows running but does nothing / a fork started acting like the orchestrator / does agentlenspro run on Windows / setup fails with unsupported platform or node too old / server hangs at 100% cpu and every request times out or SIGTERM is ignored / a settings.json env key keeps reverting or getting overwritten after every server restart / the diagnostics skill shows a stale tool count or drifted from the live CLI surface / how many diagnostic tools are there / keeping the skill and the CLI --help in sync — operational doctrine and field lessons"
 ocd: 2026-07-11
-lmd: 2026-07-16
+lmd: 2026-07-17
 metadata:
   node_type: memory
   type: project
@@ -176,3 +176,15 @@ Governed by [[cache-ttl-model]] (TTL regimes) and [[agentlens-burn-token-model]]
   template duplicate was removed for exactly the two-versions-drift this rule predicts.
   Repo hygiene corollary: test fixtures use synthetic homes (`/Users/x`), never the dev
   machine's real username.
+
+[^13]: [id:ATOM-SKILL-CLI-DISCOVERY-SYNC, status:valid, keywords:"diagnostics_skill_stale tool_count_hardcoded how_many_diagnostic_tools skill_drifted_from_cli list_--desc discovery_surfaces keep_skill_and_help_in_sync", ocd:2026-07-17, lmd:2026-07-17]
+  DO NOT hardcode a diagnostic-tool COUNT (the skill said "all 37 tools"; the live surface was 46
+  on 2026-07-17) or an exhaustive tool/flag/matcher list in the two discovery surfaces — the
+  `agentlenspro-diagnostics` SKILL.md and the CLI `USAGE` in src/cli/diagnosticsCli.ts — BECAUSE
+  the tool set grows and any baked-in number/list silently goes stale (the burn-gate prose matcher
+  had also drifted to `^(Task|Agent|Workflow)$`, missing `SendMessage`). DO write "run `list --desc`
+  for the live set" and, whenever the skill is touched, re-verify every concrete flag/bucket/matcher
+  against the LIVE schema (`agentlenspro help <tool>`, `list | grep -c .`, the authoritative
+  `GATE_MATCHER` in src/cli/hookInstall.ts) — never against memory. Both surfaces ship in the npm
+  tarball (the skill via `--install-skill`, the help bundled into standalone/cli.js), so a stale one
+  reaches every user. (TRDD-HNNRGXJH, commit e7599db.)
