@@ -1,12 +1,13 @@
 ---
 trdd-id: CB9POPUP
 title: Cache-break icon opens a before/after prompt-prefix diff popup
-column: dev
+column: human_review
 created: 2026-07-17T17:03:53+0200
-updated: 2026-07-17T17:03:53+0200
+updated: 2026-07-17T17:19:24+0200
 current-owner: spark
 task-type: feature
 relevant-rules: [no-nested-scrollbars]
+implementation-commits: [2edb933]
 ---
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-17
@@ -29,7 +30,12 @@ relevant-rules: [no-nested-scrollbars]
   `diffTurnSources(prev, cur)` (new, exported); `firstDivergentBlock` was refactored to reuse it so
   the popup's "first divergence" is identical to the engine's `breakSourceLabel/Kind`. Diff entry
   type `TurnSourceDiff` added to `src/shared/summarizerTypes.ts` (auto re-exported to media).
-- **NEXT ACTION:** DONE through implement; run the gate + deploy + browser check (STEP 4).
+- **NEXT ACTION:** DONE. Shipped in commit 2edb933. Gates green (check-types ×2, lint 0-err/238-warn,
+  check-mirrors OK 113 exports, mocha 1381 passing incl. 3 new diffTurnSources tests). esbuild ok +
+  server restarted; bundle grep `cache-break-diff-popup` = present. In-browser at :3000: clicked a
+  REAL ⚡ badge (Turn 1→2, "Tools changed") → popup rendered the agent-catalog ADDED first-divergence
+  with its real excerpt + 5 changed blocks; 0 nested scrollers; fits viewport; verified light AND dark.
+  Awaiting human review.
 - **Graceful degradation (no fabrication):** non-block causes (MODEL_SWITCHED / FAST_MODE /
   EFFORT_CHANGED / IDLE_TTL_EXPIRY / COMPACTION / UPGRADE) → popup states the cause is not a
   block-content change and shows whatever block diff exists. Missing previous composition (turn 1 /
