@@ -109,19 +109,24 @@ const RET = resolveRetention(DATA_DIR, process.env)
 // on first boot; ai-maestro's proxy reads the same file (same user, same host) to sign the
 // X-Agentlens-Viewer assertions this server verifies per request.
 //
-// SOFT-FAIL (WYC4KB50 #1): the viewer-role gate is an OPT-IN feature used only behind a proxy that
-// stamps the header. If the key file is unusable (corrupt hex, or wider than 0600 on POSIX), do NOT
-// take the whole product down — a solo user's OTLP ingestion, hook capture, and CLI have nothing to
-// do with embedding. Log loudly and run with EMBED_KEY = null: resolveViewerRole then rejects any
-// PRESENT X-Agentlens-Viewer header with 403 (feature disabled, fail-closed) while an ABSENT header
-// stays 'standalone' (full access, unchanged). #4 §B5's "key unusable ⇒ present-header reject, server
-// keeps running" is the contracted behavior — the earlier refuse-to-boot was stricter than the spec.
+// FAIL-CLOSED BOOT (TRDD-F1VX3M7C, owner directive — reverses WYC4KB50 #1's soft-fail). The
+// embed-key is a SHARED HMAC SECRET: ai-maestro's proxy signs viewer-role assertions with the same
+// file. If it is unusable — corrupt hex, or wider than 0600 on POSIX — the safe posture is to
+// REFUSE TO BOOT, not to run on with an undecidable or leaked key. A mode wider than 0600 means
+// another local account can read the shared secret and mint 'maestro' assertions; refusing to boot
+// forces the operator to protect (chmod 600) or remove the file before the server serves anything.
+// We exit EX_CONFIG (78) — the same deliberate-refusal code the DISABLED kill-switch uses above —
+// so the supervisor treats it as TERMINAL and does not respawn-loop (src/cli/serverControl.ts). The
+// normal case (a well-formed 0600 key, auto-created on first boot) loads without incident; only an
+// already-broken install reaches the catch. Past this point EMBED_KEY is always a valid key at
+// runtime — the `| null` is kept only so resolveViewerRole's pure contract stays defensively total.
 let EMBED_KEY: Buffer | null = null
 try {
   EMBED_KEY = ensureEmbedKey(DATA_DIR)
 } catch (e) {
-  console.error(`[AgentLens] viewer-role embed feature DISABLED — embed-key at ${DATA_DIR}/embed-key is unusable: ${(e as Error).message}`)
-  console.error('[AgentLens] the dashboard runs normally in standalone mode; to re-enable proxy-embedding, fix or delete the key file (a fresh 0600 key is created on next boot).')
+  console.error(`[AgentLens] embed-key at ${DATA_DIR}/embed-key is unusable: ${(e as Error).message}`)
+  console.error('[AgentLens] refusing to boot — chmod 600 the key file or delete it (a fresh 0600 key is created on next boot). See AgentlensPro#4.')
+  process.exit(78) // EX_CONFIG: a deliberate refusal, distinguishable from a crash — the supervisor treats 78 as terminal
 }
 // P4 segmented span store: daily NDJSON segments under DATA_DIR/spans/ (src/segmentedSpanStore.ts).
 // The old single-file spans.json exists only as a migration source — split into segments on the

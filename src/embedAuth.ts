@@ -49,10 +49,12 @@ export const VIEWER_HEADER = 'x-agentlens-viewer'
  * - a mode wider than 0600 THROWS — a world-readable shared secret is not a shared secret,
  *   and quietly using it would let any local account mint maestro assertions.
  *
- * The THROW is the loader's contract; it does NOT mean the server must die. The boot site wraps
- * this call and, on throw, disables the embed feature (key = null ⇒ any present X-Agentlens-Viewer
- * → 403) while OTLP ingestion, hook capture, and the CLI keep running — an opt-in feature must not
- * take the whole product down (code-review WYC4KB50 #1).
+ * The THROW is the loader's contract. The standalone boot site treats it as FATAL and refuses to
+ * boot (exit EX_CONFIG 78, which the supervisor treats as terminal) rather than run on with a
+ * corrupt or exposed shared secret — a mode wider than 0600 would let any local account mint
+ * 'maestro' assertions, so the safe posture is to force the operator to fix (chmod 600) or remove
+ * the file first (TRDD-F1VX3M7C, reversing the earlier WYC4KB50 #1 soft-fail per the owner's
+ * directive; the public AgentlensPro#4 contract already documented refuse-to-boot).
  */
 export function ensureEmbedKey(dataDir: string): Buffer {
   const file = path.join(dataDir, 'embed-key')

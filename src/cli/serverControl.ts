@@ -241,6 +241,17 @@ export function runSupervise(): void {
     child.on('exit', (code, signal) => {
       const uptimeS = ((Date.now() - started) / 1000).toFixed(1)
       if (shuttingDown) return  // deliberate stop — don't restart
+      // EX_CONFIG (78) is a DELIBERATE config refusal, not a crash: the server exits 78 when the
+      // DISABLED kill-switch is present or the shared embed-key is unusable (corrupt, or wider than
+      // 0600). Respawning it would just refuse again — a perpetual backed-off loop that never
+      // converges and floods crash.log (TRDD-F1VX3M7C). Treat 78 as TERMINAL: log once, stop
+      // supervising, and surface the non-zero exit so a launchd/terminal parent sees it. The
+      // operator fixes the config (chmod 600 / re-enable) and restarts.
+      if (code === 78) {
+        const tail78 = stderrTail.toString('utf8').trim().split('\n').slice(-12).join(' | ')
+        logCrash(`collector refused to start (EX_CONFIG 78) uptime=${uptimeS}s — a config refusal, not a crash; NOT restarting. Fix the config and restart. stderr-tail: ${tail78 || '(none)'}`)
+        process.exit(78)
+      }
       const tail = stderrTail.toString('utf8').trim().split('\n').slice(-12).join(' | ')
       logCrash(`collector exited code=${code} signal=${signal} uptime=${uptimeS}s — restarting in ${backoffMs}ms. stderr-tail: ${tail || '(none)'}`)
       // A child that ran healthily before dying gets a fresh backoff; a crash-loop backs off geometrically.
