@@ -3610,7 +3610,17 @@ const uiServer = http.createServer(async (req, res) => {
   }
 
   if (url === '/' || url === '/index.html') {
-    res.writeHead(200, { 'Content-Type': 'text/html' })
+    res.writeHead(200, {
+      'Content-Type': 'text/html',
+      // TRDD-FMIZO8Y4 — the embed contract, made EXPLICIT instead of permission-by-omission:
+      // loopback-served apps (the ai-maestro UI on localhost:23000, any local tool) MAY iframe the
+      // dashboard — that is now guaranteed, so a future hardening pass cannot silently break the
+      // integration — while a REMOTE page framing http://localhost:<UI_PORT> (drive-by clickjack of
+      // the local dashboard) is refused by the browser. Framing counterpart of the F6BM1BDI
+      // same-origin/loopback read hardening.
+      'Content-Security-Policy':
+        "frame-ancestors 'self' http://localhost:* http://127.0.0.1:* https://localhost:* https://127.0.0.1:*",
+    })
     res.end(getHtml())
     return
   }

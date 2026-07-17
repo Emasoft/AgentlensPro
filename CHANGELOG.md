@@ -8,6 +8,15 @@ All notable changes to AgentlensPro are documented here.
 
 ### Added
 
+- **The dashboard is now embeddable by loopback apps — the ai-maestro iframe contract**
+  (TRDD-FMIZO8Y4). The HTML response carries an explicit
+  `Content-Security-Policy: frame-ancestors` allowing `'self'` + any `localhost`/`127.0.0.1`
+  port (the ai-maestro UI on :23000) while refusing remote-page framing of the local dashboard.
+  New query params: `?tab=<id>` deep-links a validated initial tab; `?embed=1` hides
+  host-integration chrome (the sidebar toggle). Parser lives in the runtime-neutral
+  `src/shared/embedParams.ts` (unit-tested; an unknown `tab` can never reach the UI state).
+  README gains an "Embedding the dashboard" section documenting the contract.
+
 - **`run_transcript_sql` — ad-hoc DuckDB SQL directly over the Claude session `.jsonl` transcripts**
   (TRDD-YJQXLHPA, the last DuckDB-corpus shortlist item). The bounded file set (a `sessionId` fast
   path, else an mtime window, default 24h — never the whole 17k-file corpus) is exposed as one

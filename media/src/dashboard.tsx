@@ -1,6 +1,7 @@
 import { render } from 'preact'
-import { App } from './App'
-import { setVscode } from './state'
+import { App, TABS } from './App'
+import { setVscode, activeTab } from './state'
+import { parseEmbedParams } from '../../src/shared/embedParams'
 
 import './styles/base.css'
 import './styles/toolbar.css'
@@ -17,5 +18,12 @@ import './styles/graph.css'
 
 const vscode = window.acquireVsCodeApi()
 setVscode(vscode)
+
+// TRDD-FMIZO8Y4 — the ai-maestro embed contract: ?tab=<id> deep-links a validated initial tab,
+// ?embed=1 marks the body so VS-Code-era chrome (the sidebar toggle) hides inside a host iframe.
+// Parsed ONCE before render so the first paint already lands on the requested view.
+const embedParams = parseEmbedParams(window.location.search, TABS.map(t => t.id))
+if (embedParams.tab) activeTab.value = embedParams.tab
+if (embedParams.embed) document.body.classList.add('embedded')
 
 render(<App />, document.getElementById('app')!)

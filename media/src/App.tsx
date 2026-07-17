@@ -35,7 +35,9 @@ const sidebarOpen = signal(true)
 const configOpen = signal(false)
 const bellOpen = signal(false)
 
-const TABS = [
+// Exported for the boot-time embed/deep-link parse (media/src/dashboard.tsx, TRDD-FMIZO8Y4):
+// the ?tab= validation list must be THESE ids, not a hand-synced copy that drifts.
+export const TABS = [
   { id: 'sessions',   label: 'Sessions',   title: 'Session list with expand-in-place detail — trace, files, cost, and flagged issues for each session.' },
   { id: 'context',    label: 'Context',    title: 'Context-window growth per turn: how large the prompt gets each turn (new input + cache-read + cache-created), expandable to the composition of each turn and sub-agent sub-sessions.' },
   { id: 'cache',      label: 'Cache',      title: 'Prompt-cache health: hit-rate SLI trend, worst sessions, top cache-break causes, the wasted-$ leaderboard of offending blocks, and the sub-agent fleet tree with per-child cache-warmth.' },

@@ -138,6 +138,26 @@ for the manual steps for every agent (Claude Code, Codex, Copilot CLI).
 - **Export** — Export filtered sessions as JSON (full or redacted); respects the active agent, source, time range, and text filters
 - **Import** — Import sessions from a previous AgentlensPro (or AgentLens) JSON export; drag-drop or file-pick, shows a preview with session count by source and date range, imports with live progress and automatic deduplication (existing sessions are skipped)
 
+## Embedding the dashboard
+
+The dashboard is embeddable by any **loopback-served** app (e.g. the ai-maestro UI) via a plain
+iframe — this is an explicit contract, not an accident of missing headers:
+
+```html
+<iframe src="http://localhost:3000/?embed=1&tab=cache" style="width:100%;height:100%;border:0"></iframe>
+```
+
+- **Who may embed:** the dashboard HTML is served with
+  `Content-Security-Policy: frame-ancestors 'self' http://localhost:* http://127.0.0.1:* https://localhost:* https://127.0.0.1:*` —
+  any local app on any loopback port may frame it; a remote page cannot (the browser refuses,
+  closing drive-by framing of your local telemetry).
+- **`?tab=<id>`** deep-links the initial view. Valid ids: `sessions`, `context`, `cache`,
+  `history`, `analytics`, `patterns`, `export`, `import` (unknown values fall back to the default).
+- **`?embed=1`** (also `true`/`yes`) hides host-integration chrome (the sidebar toggle); the
+  dashboard keeps its own tabs and controls, so it behaves as a self-contained panel.
+- The iframe's `/api/*` calls are same-origin *inside* the frame — no CORS setup is needed by the
+  embedding app.
+
 ## Data Sources
 
 AgentlensPro collects data from two independent sources per agent. Each session row shows a badge — **OTEL** or **Log** — indicating where its data came from. If both capture the same session: for Claude sessions the log transcript wins on collision (OTEL is a lossy lower bound), and OTEL wins only where no transcript exists; for every other agent OTEL wins.

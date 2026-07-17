@@ -65,3 +65,8 @@ body { font-family: var(--vscode-font-family); color: var(--fg); background: var
   flex-shrink: 0;
 }
 .sidebar-toggle-btn:hover { color: var(--fg); background: var(--hover); }
+
+/* TRDD-FMIZO8Y4 — embedded in a host iframe (?embed=1, e.g. the ai-maestro UI): the sidebar
+   toggle is VS-Code-era chrome with no meaning inside a host page, so it hides; every other
+   control (tabs, bell, gear, help) stays — an embedded observability panel keeps its own nav. */
+body.embedded .sidebar-toggle-btn { display: none; }
