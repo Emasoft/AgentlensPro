@@ -196,6 +196,19 @@ export function openDashboard(): void {
 const HEALTHY_MS = 60_000       // a child that ran this long is "healthy" → reset backoff on its exit
 const STDERR_TAIL_BYTES = 8 * 1024
 
+/**
+ * EX_CONFIG (78) is a DELIBERATE config refusal, not a crash: the standalone server exits 78 when
+ * the DISABLED kill-switch is present or the shared embed-key is unusable (corrupt, or wider than
+ * 0600). The supervisor must NOT respawn such an exit — respawning just re-refuses forever, a
+ * perpetual backed-off loop that never converges and floods crash.log. Every other non-clean exit
+ * (a signal kill, a V8 OOM abort code 134, a generic error) is a real crash and still earns the
+ * backoff-respawn. Extracted as a named predicate so the policy is unit-testable without spawning a
+ * real process (the live handler's terminal branch calls process.exit). (TRDD-F1VX3M7C.)
+ */
+export function isTerminalExit(code: number | null): boolean {
+  return code === 78
+}
+
 export function runSupervise(): void {
   // The supervisor is the one path that would out-stubborn the kill-switch: it exists to restart the
   // server forever, so if it ignored the flag, `agentlenspro disable` would stop a server that
@@ -247,7 +260,7 @@ export function runSupervise(): void {
       // converges and floods crash.log (TRDD-F1VX3M7C). Treat 78 as TERMINAL: log once, stop
       // supervising, and surface the non-zero exit so a launchd/terminal parent sees it. The
       // operator fixes the config (chmod 600 / re-enable) and restarts.
-      if (code === 78) {
+      if (isTerminalExit(code)) {
         const tail78 = stderrTail.toString('utf8').trim().split('\n').slice(-12).join(' | ')
         logCrash(`collector refused to start (EX_CONFIG 78) uptime=${uptimeS}s — a config refusal, not a crash; NOT restarting. Fix the config and restart. stderr-tail: ${tail78 || '(none)'}`)
         process.exit(78)
