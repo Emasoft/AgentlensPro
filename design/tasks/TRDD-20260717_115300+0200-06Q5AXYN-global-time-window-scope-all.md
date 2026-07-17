@@ -3,14 +3,14 @@ trdd-id: 06Q5AXYN
 title: Global time-window — scope every list, stat, and chart to the picker
 column: dev
 created: 2026-07-17T11:53:00+0200
-updated: 2026-07-17T12:30:00+0200
+updated: 2026-07-17T16:52:00+0200
 current-owner: main
 task-type: feature
 relevant-rules: []
-implementation-commits: [a0d0eaf, 5f9b2f5, 3c2a757]
+implementation-commits: [a0d0eaf, 5f9b2f5, 3c2a757, aed5642]
 ---
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-17 11:53 — STARTING
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-17 16:52 — PHASE 3 DONE, LIVE-VERIFIED
 
 User directive: the time-range picker (15m/1h/…/All) must scope **everything listed — sessions,
 file/hook events, turns, AND all statistics / bar charts / pie charts**. Today it renders on every
@@ -55,10 +55,30 @@ What IS delivered & LIVE:
 Gate green throughout: tsc ×2, mirrors OK, lint 0 err, mocha 1368/0. Deploy: esbuild + server
 restart (pid 4531); banner reword confirmed rendering; tab bar confirms no Cost tab.
 
-NEXT ACTION: report the correction to the user. Open decisions: (1) D2 (Phase 3 drilled-turn
-divider) still unconfirmed — user was away; (2) the removed Cost tab means the 30-day/lifetime cost
-history is not visible at all — ask whether to restore it (as a live, windowed view) or leave it.
-Do NOT start Phase 3 or a Cost-restore without the user's call.
+Phase 3 (commit aed5642, D2 = divider, confirmed by user): TimelineWaterfall (Traces.tsx — the ONLY
+live drilled-turn view per the LIVE-TREE CORRECTION above; HistoryTab.tsx has no TimelineEntry-based
+turn list, so it was out of scope) now dims turns/steps whose entries are entirely before the active
+window's `since` bound (`.wf-before-window`, opacity 0.55) and renders one "before this window"
+divider (`.wf-window-divider`) at the chronological boundary — never hides, conversation stays
+whole. New pure predicate `entryBeforeWindow(timestamp, since)` in src/shared/timeWindow.ts
+(point-in-time counterpart of `sessionInWindow`), 5 new unit tests, all green. Divider is skipped
+(items still dim individually) when the list is sorted by value, since the before/after boundary is
+scattered there, not a single point.
+
+Live-verified at :3000, 15m preset: drilled into a 6-day-old still-active session (this very
+AgentlensPro dev session — included in the 15m window via D1's interval-overlap) — 4820 steps
+dimmed, exactly 1 divider rendered right before the first in-window turn, sessions list stayed
+scoped (12-13 sessions), zero console errors. Screenshots: reports/screenshots/20260717_164900+0200
+(dark) and …164905+0200 (light-emulated — pixel-identical: confirmed via grep that dashboard.css has
+zero `prefers-color-scheme` rules, so the app is genuinely single-themed; the new CSS uses the same
+--border/--muted vars as the rest of the file, so it inherits whatever theme the app ever gets).
+
+NEXT ACTION: none — Phase 3 done. Open decision carried forward from the live-tree correction: the
+removed/dead Cost tab means the 30-day/lifetime cost history is not visible at all; ask the user
+whether to restore it (as a live, windowed view) or leave it. Not started without the user's call.
+Phase 5 (final full-suite verify + deploy) can be considered folded into the per-phase gates already
+run each time (tsc x2 + lint + mirrors + mocha green, esbuild + restart + symbol grep, live check) —
+no separate Phase 5 pass is pending unless the user wants one final end-to-end walk of every tab.
 
 Verify: pnpm run check-types (×2) + lint + check-mirrors + mocha; node esbuild.js + server restart +
 symbol grep; live at :3000 pick 15m, walk every tab, light+dark screenshots.
