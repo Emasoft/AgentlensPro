@@ -1,5 +1,6 @@
 import { signal, computed } from '@preact/signals'
 import { calcSessionCost } from './sessionMetrics'
+import { sessionInWindow } from '../../src/shared/timeWindow'
 import type {
   FullSummary, SessionSummaryCard, TimelineEntry, FileOpSummary,
   AgentFilter, InitiatorFilter, DataSourceFilter, InsightFilter, WorkspaceFilter, VsCodeApi,
@@ -495,6 +496,8 @@ export const displaySessions = computed<SessionSummaryCard[]>(() => {
 })
 
 // Sessions scoped to the active time range + agent filter.
+// "In window" is decided by the single shared sessionInWindow predicate (src/shared/timeWindow.ts,
+// interval-overlap) so rangedSessions and every surface derived from it agree (TRDD-06Q5AXYN D1).
 // Live/All → in-memory displaySessions.
 // Bounded preset → merge DB results with in-memory sessions that fall in the window
 // so that sessions not yet persisted to the DB are never missed.
@@ -509,13 +512,11 @@ export const rangedSessions = computed<SessionSummaryCard[]>(() => {
   const since = range.since ?? 0
   const until = range.until ?? Date.now()
 
-  // Always include in-memory sessions that fall in the window (covers sessions not yet in DB)
+  // Always include in-memory sessions active in the window (covers sessions not yet in DB).
+  // Interval-overlap via sessionInWindow so a session still active now but started before the
+  // window is included, not dropped by a start-time-only test (TRDD-06Q5AXYN D1).
   const allInMemory = agentFilteredSessions.value
-  const inMemory = allInMemory.filter(s => {
-    if (!s.startTime) return false
-    const ms = new Date(s.startTime).getTime()
-    return ms >= since && ms <= until
-  })
+  const inMemory = allInMemory.filter(s => sessionInWindow(s, since, until))
 
   const dbResults = rangedSearchResults.value
   if (!dbResults) return inMemory  // still loading — show in-memory matches as fallback

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'preact/hooks'
-import { sessionSummary, sessionHistories, focusedSessionId, sessionGeneratedFiles, requestContextHistory } from '../state'
+import { filteredSessions, sessionHistories, focusedSessionId, sessionGeneratedFiles, requestContextHistory } from '../state'
 import { GeneratedFilesList } from '../GeneratedFilesView'
 import { formatCompact, formatSessionTime, getAgentDotHtml } from '../utils'
 import { fmtUsd } from '../sessionMetrics'
@@ -258,8 +258,9 @@ function StepRow({ step, prev, sessionModel }: { step: ContextHistoryStep; prev:
 }
 
 export function History() {
-  const summary = sessionSummary.value
-  const sessions = summary?.sessions ?? []
+  // Windowed session list so the History picker only offers sessions in the active time range
+  // (TRDD-06Q5AXYN); a 15m filter must not reach a weeks-old session's transcript.
+  const sessions = filteredSessions.value
   const histories = sessionHistories.value
   const [picked, setPicked] = useState('')
 

@@ -1,5 +1,5 @@
 import type { Span, SpanAttribute, SpanTreeNode, SessionSummaryCard } from './types'
-import { sessionSummary, displaySessions, agentFilteredSessions, sessionLimit } from './state'
+import { sessionSummary, filteredSessions, agentFilteredSessions, sessionLimit } from './state'
 import { contextTokens } from '../../src/shared/tokenBuckets'
 
 // ── HTML escape ───────────────────────────────────────────────────────────────
@@ -572,7 +572,10 @@ export function getSessionOffset(): number {
 }
 
 export function buildDisplaySummary(sessionsOverride?: SessionSummaryCard[]) {
-  const sessions = sessionsOverride ?? displaySessions.value
+  // Default to the WINDOWED canonical list (filteredSessions), not the limit-sliced displaySessions,
+  // so a summary with no explicit override honors the active time-range picker. Only the Alerts tab
+  // relies on this default (Sessions/Insights pass explicit overrides) (TRDD-06Q5AXYN).
+  const sessions = sessionsOverride ?? filteredSessions.value
   let totalInputTokens = 0, totalOutputTokens = 0, totalLlmCalls = 0, cacheRead = 0, totalContext = 0
   sessions.forEach(s => {
     totalInputTokens += s.inputTokens ?? 0

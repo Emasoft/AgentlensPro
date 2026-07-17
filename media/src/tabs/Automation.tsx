@@ -1,5 +1,5 @@
 import { useState } from 'preact/hooks'
-import { displaySessions } from '../state'
+import { filteredSessions } from '../state'
 import {
   getErrorHealth,
   getIdenticalToolRepeat,
@@ -456,7 +456,8 @@ export function checkAutomations(sessions: SessionSummaryCard[]): AutomationTrig
 // ── UI ─────────────────────────────────────────────────────────────────────────
 
 export function Automation() {
-  const sessions = displaySessions.value
+  // Windowed session list so the Automation view honors the active time range (TRDD-06Q5AXYN).
+  const sessions = filteredSessions.value
   const [configs, setConfigs] = useState(getAutomationConfigs)
   const [profiles, setProfiles] = useState(getAgentProfiles)
 

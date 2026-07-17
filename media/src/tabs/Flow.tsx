@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { rangedSessions, sessionSummary, sessionTimelines, focusedSessionId, vscode } from '../state'
+import { filteredSessions, sessionTimelines, focusedSessionId, vscode } from '../state'
 import { getAgentSourceLabel, getAgentColor, formatMs, formatSessionTime } from '../utils'
 import { CopyBranchButton } from '../CopyBranchButton'
 import { calcEntryCost, fmtUsd } from '../sessionMetrics'
@@ -684,7 +684,8 @@ export function FlowCanvas({ sess, height = 520 }: { sess: SessionSummaryCard; h
 // ── Full Flow tab (with session picker) ───────────────────────────────────────
 
 export function Flow() {
-  const sessions = sessionSummary.value?.sessions ?? rangedSessions.value
+  // Windowed session list so the Flow picker honors the active time range (TRDD-06Q5AXYN).
+  const sessions = filteredSessions.value
   const [searchText, setSearchText] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
   const searchRef = useRef<HTMLDivElement>(null)

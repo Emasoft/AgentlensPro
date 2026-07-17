@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'preact/hooks'
-import { displaySessions, sessionTimelines, sessionCompositions, serverBurnStatus } from '../state'
+import { filteredSessions, sessionTimelines, sessionCompositions, serverBurnStatus } from '../state'
 import { buildCacheBreakReport } from '../../../src/shared/cacheBreak'
 import { buildDisplaySummary, formatMs, formatCompact } from '../utils'
 import {
@@ -647,7 +647,7 @@ function HooksSection() {
 }
 
 export function Alerts() {
-  const sessions = displaySessions.value
+  const sessions = filteredSessions.value
   const [configs, setConfigs] = useState(getAlertConfigs)
   const [profiles, setProfiles] = useState(getAgentProfiles)
   const hasSessions = sessions.length > 0
