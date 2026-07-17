@@ -3,7 +3,7 @@ trdd-id: WYC4KB50
 title: Viewer-role assertion — xhigh code-review remediation (13 findings)
 column: ai_review
 created: 2026-07-17T10:34:17+0200
-updated: 2026-07-17T11:22:00+0200
+updated: 2026-07-17T14:24:30+0200
 current-owner: main
 task-type: bugfix
 parent-trdd: 1ZH1D5EG
@@ -27,12 +27,17 @@ header → 403 (fail-closed), dashboard / → 200. And on the real running serve
 keyLoaded:true, garbage header → 403, Vary present. So the opt-in embed feature can no longer take
 the product down, matching #4 §B5.
 
-REMAINING (both gated on the user, not blockers):
-- The #4 GitHub heads-up (OUTWARD) — #1 changes the "refuses to boot on a bad key" wording I posted
-  to #4 + README. Draft ready; await user before posting.
-- Tagging v2.10.1 (triggers OIDC publish) — await user; version + CHANGELOG already bumped.
+REMAINING:
+- ⚠ REVERSED (2026-07-17): finding #1's soft-fail was reversed to fail-closed refuse-to-boot by
+  TRDD-F1VX3M7C (owner directive "go with the more secure version"). Consequences: (a) the #4 §B1
+  heads-up is NO LONGER NEEDED — the public thread already documents refuse-to-boot, now accurate
+  again; (b) the "SUPERSEDED — do NOT carry forward" note below (bad key ⇒ feature disabled, server
+  runs) is ITSELF now superseded — the truth is refuse-to-boot again (exit EX_CONFIG 78,
+  supervisor-terminal). See TRDD-F1VX3M7C.
+- Tagging v2.10.1 (triggers OIDC publish) — still USER-gated; version + CHANGELOG already bumped
+  (now describing the fail-closed behavior).
 
-Gate: human review. NEXT ACTION: none autonomous — await user on the #4 post + the v2.10.1 tag.
+Gate: human review. NEXT ACTION: none autonomous — await user on the v2.10.1 tag.
 
 Treatment (proportionate — the user's standing directive is security is reactive-only in this
 project, so speculative-deployment findings get a documented non-goal, not a speculative gate):
