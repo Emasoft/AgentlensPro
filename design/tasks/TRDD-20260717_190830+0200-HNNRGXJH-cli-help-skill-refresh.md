@@ -1,16 +1,40 @@
 ---
 trdd-id: HNNRGXJH
 title: Refresh the diagnostics skill to the live CLI surface and add an examples section to the CLI help
-column: dev
+column: complete
 created: 2026-07-17T19:08:30+0200
-updated: 2026-07-17T19:08:30+0200
+updated: 2026-07-17T19:14:00+0200
 current-owner: main
 task-type: docs
 relevant-rules: []
-implementation-commits: []
+implementation-commits: [e7599db]
 ---
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-17 19:08
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-17 19:14 — DONE + LOCALLY DEPLOYED
+
+DONE (commit e7599db). Both artifacts refreshed + verified; ships in the next npm release (the
+skill is in the tarball, the CLI help is in `standalone/cli.js`). If a release cuts this,
+move column complete→published like F1VX3M7C.
+
+### Shipped
+- CLI help: `examples:` section added to `USAGE` (`src/cli/diagnosticsCli.ts`) — 15 worked recipes.
+- Skill (`skills/agentlenspro-diagnostics/SKILL.md`): (a) de-numbered "37" → "run `list --desc`
+  for the live set"; (b) matcher prose `^(Task|Agent|Workflow)$` → `…|SendMessage)$`; (c) new
+  "Server, daemon & telemetry control" section; (d) new "Context-composition & session-drill
+  tools" table (19 previously-undocumented tools; every flag verified against the live schema —
+  get_cache_creation_report bucket list corrected to cache_creation|output|input|total|billable_weighted).
+- Gate: tsc ×2 = 0, lint 0-err, check-mirrors OK (113 exports), mocha 1381 passing / 8 pending / 0
+  failing. esbuild rebuilt; `standalone/cli.js` carries the new help marker; `agentlenspro
+  --install-skill` synced installed==repo; `agentlenspro --help` renders the examples; `list`
+  count = 46.
+- No server restart: CLI-only change (server bundle byte-identical; `--help` is pre-network).
+
+### NEXT ACTION
+None. Ships with the next release (user-gated, like the other unpushed local-main commits).
+
+--- original plan (below) preserved ---
+
+## ⏵ (superseded plan) — 2026-07-17 19:08
 
 User directive (verbatim): "update the skill with the latest cli commands, and also extend the
 cli help with more examples and use cases."
