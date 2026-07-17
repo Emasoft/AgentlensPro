@@ -168,10 +168,10 @@ Governed by [[cache-ttl-model]] (TTL regimes) and [[agentlens-burn-token-model]]
 
 [^12]: [id:ATOM-NO-USERNAME-ASSUMPTION, status:valid, keywords:"hardcoded_username shipped_path_assumes_home /Users/USER launchd_plist_template portable_install any_machine dev_machine_path_in_repo", ocd:2026-07-17, lmd:2026-07-17]
   DO NOT let any SHIPPED surface (tarball file, doc, contract, template) assume the
-  installer's username or home layout — e.g. `/Users/@USER@/…` in the old
-  scripts/agentlens.plist.template, BECAUSE anyone installs AgentlensPro/ai-maestro on any
-  machine (owner directive 2026-07-17); `/Users/<name>` breaks custom/network homes and
-  non-macOS. DO derive paths at runtime (`os.homedir()`, `DATA_DIR` env) — the embedded
+  installer's username or home layout — e.g. the `@USER@`-substituted `/Users/…` log paths
+  in the old scripts/agentlens.plist.template, BECAUSE anyone installs AgentlensPro/ai-maestro
+  on any machine (owner directive 2026-07-17); a `/Users/<name>`-shaped path breaks
+  custom/network homes and non-macOS. DO derive paths at runtime (`os.homedir()`, `DATA_DIR` env) — the embedded
   plist in serverControl.ts (`@HOME@` substitution) is the one source of truth; the stale
   template duplicate was removed for exactly the two-versions-drift this rule predicts.
   Repo hygiene corollary: test fixtures use synthetic homes (`/Users/x`), never the dev
