@@ -23,9 +23,14 @@
 //                                                   deliberately broken header would BE the
 //                                                   attack. Invalid must be stricter than
 //                                                   restricted, or the check is theatre.)
+//   header present but key is null (embed feature → 'invalid'     (the key file was unusable at
+//     disabled: unusable key file at boot)            boot, so the server can't verify anything —
+//                                                   an unverifiable assertion is still 403, never a
+//                                                   downgrade. Absent header stays 'standalone'.)
 import * as crypto from 'crypto'
 import * as fs from 'fs'
 import * as path from 'path'
+import { atomicWriteFileSync } from './serverRuntime'
 
 export type ViewerRole = 'standalone' | 'maestro' | 'restricted' | 'invalid'
 
@@ -43,13 +48,24 @@ export const VIEWER_HEADER = 'x-agentlens-viewer'
  *   the consumer's copy and every assertion it signs would quietly become invalid;
  * - a mode wider than 0600 THROWS — a world-readable shared secret is not a shared secret,
  *   and quietly using it would let any local account mint maestro assertions.
+ *
+ * The THROW is the loader's contract; it does NOT mean the server must die. The boot site wraps
+ * this call and, on throw, disables the embed feature (key = null ⇒ any present X-Agentlens-Viewer
+ * → 403) while OTLP ingestion, hook capture, and the CLI keep running — an opt-in feature must not
+ * take the whole product down (code-review WYC4KB50 #1).
  */
 export function ensureEmbedKey(dataDir: string): Buffer {
   const file = path.join(dataDir, 'embed-key')
   if (fs.existsSync(file)) {
-    const mode = fs.statSync(file).mode & 0o777
-    if ((mode & 0o077) !== 0) {
-      throw new Error(`[AgentLens] embed-key at ${file} has mode 0${mode.toString(8)} — wider than 0600; refusing to use a shared secret other accounts can read (chmod 600 it; see AgentlensPro#4)`)
+    // POSIX permission bits are meaningful only on POSIX filesystems. On Windows Node emulates
+    // st_mode from the file's read-only flag (a 0600-created file reads back as 0666), so the
+    // "wider than 0600" check would spuriously throw on every second boot — skip it off-POSIX
+    // (WYC4KB50 #2). ACL-based protection is the platform's job there.
+    if (process.platform !== 'win32') {
+      const mode = fs.statSync(file).mode & 0o777
+      if ((mode & 0o077) !== 0) {
+        throw new Error(`[AgentLens] embed-key at ${file} has mode 0${mode.toString(8)} — wider than 0600; refusing to use a shared secret other accounts can read (chmod 600 it; see AgentlensPro#4)`)
+      }
     }
     const hex = fs.readFileSync(file, 'utf8').trim()
     if (!/^[0-9a-f]{64}$/.test(hex)) {
@@ -59,20 +75,22 @@ export function ensureEmbedKey(dataDir: string): Buffer {
   }
   fs.mkdirSync(dataDir, { recursive: true })
   const key = crypto.randomBytes(32)
-  // Atomic create: write-tmp + rename so a concurrent reader never sees a partial key.
-  const tmp = `${file}.tmp.${process.pid}`
-  fs.writeFileSync(tmp, key.toString('hex') + '\n', { mode: 0o600 })
-  fs.renameSync(tmp, file)
+  // Atomic create at mode 0600 via the shared helper (temp + fsync + rename, tmp cleaned on error) —
+  // one hardened write path instead of a second hand-rolled tmp+rename that skipped fsync (WYC4KB50 #7).
+  atomicWriteFileSync(file, key.toString('hex') + '\n', 0o600)
   return key
 }
 
 /**
  * Resolve the viewer role for one request. `headerValue` is `req.headers['x-agentlens-viewer']`
- * (undefined when absent). Never throws. Zero clock-skew tolerance on `exp` — signer and
- * verifier share one host clock (#4 Q6).
+ * (undefined when absent). `key` is null when the embed feature is disabled (the key file was
+ * unusable at boot) — a present header then resolves to 'invalid' (can't verify ⇒ 403, never a
+ * downgrade). Never throws. Zero clock-skew tolerance on `exp` — signer and verifier share one
+ * host clock (#4 Q6).
  */
-export function resolveViewerRole(headerValue: string | undefined, key: Buffer, nowMs: number): ViewerRole {
+export function resolveViewerRole(headerValue: string | undefined, key: Buffer | null, nowMs: number): ViewerRole {
   if (headerValue === undefined) return 'standalone'
+  if (key === null) return 'invalid' // embed feature disabled: a header we cannot verify is not trusted
   try {
     const parts = headerValue.split('.')
     if (parts.length !== 2 || !parts[0] || !parts[1]) return 'invalid'
@@ -82,11 +100,16 @@ export function resolveViewerRole(headerValue: string | undefined, key: Buffer, 
     // timingSafeEqual throws on length mismatch — a short/garbage signature must not crash
     // the request handler, so length is checked first (length is not secret).
     if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) return 'invalid'
-    const payload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8'))
-    if (payload.v !== 1) return 'invalid' // unknown contract version — reject, never best-effort
-    if (typeof payload.exp !== 'number' || nowMs > payload.exp) return 'invalid'
-    if (payload.role === 'maestro') return 'maestro'
-    if (payload.role === 'user') return 'restricted'
+    const payload: unknown = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8'))
+    // JSON.parse accepts non-objects (null, 42, "x", []) — guard before any property access so a
+    // crafted scalar payload yields a clean 'invalid' rather than depending on the outer catch
+    // (WYC4KB50 #11).
+    if (typeof payload !== 'object' || payload === null) return 'invalid'
+    const p = payload as { v?: unknown; exp?: unknown; role?: unknown }
+    if (p.v !== 1) return 'invalid' // unknown contract version — reject, never best-effort
+    if (typeof p.exp !== 'number' || nowMs > p.exp) return 'invalid'
+    if (p.role === 'maestro') return 'maestro'
+    if (p.role === 'user') return 'restricted'
     return 'invalid' // unknown role — a spec violation, not a viewer
   } catch {
     return 'invalid'

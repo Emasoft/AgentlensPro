@@ -19,13 +19,17 @@ import * as v8 from 'v8'
  * target. rename(2) is atomic on POSIX, so a reader (or a crash) sees either the whole old file or the
  * whole new one — never a half-written file. The temp lives in the same directory as the target so the
  * rename stays on one filesystem (a cross-device rename is not atomic and would fall back to copy).
+ *
+ * `mode` (optional): the permission bits for the created file (subject to umask), e.g. `0o600` for a
+ * secret. Applied at open time so the file is never briefly world-readable between create and chmod.
+ * Omitted ⇒ Node's default (0o666 & ~umask), matching every pre-existing caller.
  */
-export function atomicWriteFileSync(file: string, data: string | Buffer): void {
+export function atomicWriteFileSync(file: string, data: string | Buffer, mode?: number): void {
   // Unique-ish temp suffix so two writers to the same path can't clobber each other's temp file.
   const tmp = `${file}.tmp-${process.pid}-${Date.now()}`
   let fd: number | undefined
   try {
-    fd = fs.openSync(tmp, 'w')
+    fd = mode === undefined ? fs.openSync(tmp, 'w') : fs.openSync(tmp, 'w', mode)
     fs.writeSync(fd, data as string)
     // fsync so the bytes are on disk before the rename — otherwise a crash right after rename could
     // still expose an empty file if the data write was still buffered.

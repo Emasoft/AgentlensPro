@@ -23,7 +23,12 @@ function b64url(buf: Buffer): string {
 
 /** Hand-rolled signer (independent of signViewerAssertion) so the tests pin the WIRE format. */
 function sign(payload: object, key: Buffer): string {
-  const p = b64url(Buffer.from(JSON.stringify(payload)))
+  return signValue(payload, key)
+}
+
+/** Sign an ARBITRARY JSON value (incl. non-objects) so the verifier's type guards can be exercised. */
+function signValue(value: unknown, key: Buffer): string {
+  const p = b64url(Buffer.from(JSON.stringify(value)))
   const sig = crypto.createHmac('sha256', key).update(p).digest()
   return `${p}.${b64url(sig)}`
 }
@@ -100,6 +105,27 @@ suite('resolveViewerRole — the X-Agentlens-Viewer contract (TRDD-1ZH1D5EG / Ag
     assert.strictEqual(resolveViewerRole(noExp, KEY, NOW), 'invalid')
     assert.strictEqual(resolveViewerRole(noRole, KEY, NOW), 'invalid')
   })
+
+  test('a validly-SIGNED but non-object payload (null, number, string, array) → invalid (WYC4KB50 #11 guard, not the outer catch)', () => {
+    for (const v of [null, 42, 'maestro', [1, 2]]) {
+      assert.strictEqual(resolveViewerRole(signValue(v, KEY), KEY, NOW), 'invalid', `payload=${JSON.stringify(v)}`)
+    }
+  })
+
+  test('a comma-joined duplicated header (Node coalesces repeated X-Agentlens-Viewer into one string) → invalid (WYC4KB50 #10)', () => {
+    const a = sign({ v: 1, role: 'maestro', iat: NOW, exp: NOW + 60_000, nonce: 'ca' }, KEY)
+    const b = sign({ v: 1, role: 'user', iat: NOW, exp: NOW + 60_000, nonce: 'cb' }, KEY)
+    // Even two INDIVIDUALLY-valid assertions, coalesced by Node, must not grant — the '.' split
+    // sees >2 parts and rejects. Pins the invariant the server-level Array.isArray guard mirrors.
+    assert.strictEqual(resolveViewerRole(`${a}, ${b}`, KEY, NOW), 'invalid')
+    assert.strictEqual(resolveViewerRole('a, b', KEY, NOW), 'invalid')
+  })
+
+  test('a null key (embed feature disabled at boot) → present header is invalid, absent header is still standalone (WYC4KB50 #1)', () => {
+    const h = sign({ v: 1, role: 'maestro', iat: NOW, exp: NOW + 60_000, nonce: 'nd' }, KEY)
+    assert.strictEqual(resolveViewerRole(h, null, NOW), 'invalid')
+    assert.strictEqual(resolveViewerRole(undefined, null, NOW), 'standalone')
+  })
 })
 
 suite('signViewerAssertion — the reference signer round-trips through the verifier', () => {
@@ -147,7 +173,10 @@ suite('ensureEmbedKey — the shared-secret file ai-maestro reads (TRDD-1ZH1D5EG
     }
   })
 
-  test('a key file with mode wider than 0600 is REFUSED — a world-readable shared secret is not a shared secret (#4 §B1)', () => {
+  test('a key file with mode wider than 0600 is REFUSED on POSIX — a world-readable shared secret is not a shared secret (#4 §B1)', function () {
+    // The mode check is POSIX-only (WYC4KB50 #2): Windows emulates st_mode and would report a
+    // 0600-created file as 0666, so the check is skipped there and this assertion doesn't apply.
+    if (process.platform === 'win32') this.skip()
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'embedkey-'))
     try {
       const hex = crypto.randomBytes(32).toString('hex')
