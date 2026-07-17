@@ -29,6 +29,20 @@ All notable changes to AgentlensPro are documented here.
   The MCP-port viewer-role non-goal (loopback, server-to-server, never proxied to viewers) and the
   Docker embed-key volume requirement are now documented.
 
+### Changed
+
+- **The dashboard time-range picker now scopes more of the UI, and matches on activity rather than
+  just start time** (TRDD-06Q5AXYN). A single `sessionInWindow` authority (interval-overlap:
+  `start ≤ until && start + duration ≥ since`) drives the window, so a long or resumed session that
+  is active *now* but began before the selected range is correctly included. The picker now also
+  scopes the History, Alerts, and Automation surfaces (previously unscoped), alongside the sessions
+  list and every statistic, bar chart, and pie derived from it.
+- **The "collector offline" banner now reads as historical and is scoped to the window**
+  (TRDD-06Q5AXYN). It reflects only collector gaps that intersect the selected time range and is
+  worded in the past tense ("was offline … telemetry lost during these windows"), so an embedded
+  dashboard no longer looks like the collector is down when it is actually up (the gap detector only
+  ever reports past windows).
+
 ## [2.10.0] - 2026-07-17
 
 ### Added
