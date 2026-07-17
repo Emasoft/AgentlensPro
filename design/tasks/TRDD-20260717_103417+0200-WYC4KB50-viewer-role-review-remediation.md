@@ -1,22 +1,38 @@
 ---
 trdd-id: WYC4KB50
 title: Viewer-role assertion — xhigh code-review remediation (13 findings)
-column: dev
+column: ai_review
 created: 2026-07-17T10:34:17+0200
-updated: 2026-07-17T10:34:17+0200
+updated: 2026-07-17T11:22:00+0200
 current-owner: main
 task-type: bugfix
 parent-trdd: 1ZH1D5EG
 relevant-rules: []
-implementation-commits: []
+implementation-commits: [0d93c51, 29ca817, f1d923e, 9e97df4, 43f7a36]
 ---
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-17 10:34
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-17 11:22 — SHIPPED (all 13)
 
-Remediation of the `/code-review xhigh` on `798c7bc..HEAD` (the viewer-role assertion 1ZH1D5EG +
-2.10.0 + portability work). 13 findings, ranked most-severe first. User said "fix all".
+Remediation of the `/code-review xhigh` on `798c7bc..HEAD` (viewer-role assertion 1ZH1D5EG + 2.10.0
++ portability). 13 findings, "fix all" — ALL DONE across 4 code/doc commits + this TRDD.
 
-NEXT ACTION: implement Phase 1 (verifier core) — see phase list below.
+Gate: check-types ×2 = 0, lint 0 errors (239 pre-existing no-console warnings), check-mirrors OK,
+mocha 1355 passing / 8 pending / 0 failing (+3 new embedAuth tests). Deploy law honored: esbuild
+OK, symbol greps landed ('embed feature DISABLED' ×1, Vary ×2 in server.js; restricted-tab predicate
+×6 in dashboard.js), server restarted pid 35280.
+
+LIVE-PROVEN the #1 soft-fail (the load-bearing fix) on a throwaway instance with a CORRUPT key:
+server stayed ALIVE (no crash), logged the disable warning, embed-status → keyLoaded:false, a present
+header → 403 (fail-closed), dashboard / → 200. And on the real running server: no-header → standalone
+keyLoaded:true, garbage header → 403, Vary present. So the opt-in embed feature can no longer take
+the product down, matching #4 §B5.
+
+REMAINING (both gated on the user, not blockers):
+- The #4 GitHub heads-up (OUTWARD) — #1 changes the "refuses to boot on a bad key" wording I posted
+  to #4 + README. Draft ready; await user before posting.
+- Tagging v2.10.1 (triggers OIDC publish) — await user; version + CHANGELOG already bumped.
+
+Gate: human review. NEXT ACTION: none autonomous — await user on the #4 post + the v2.10.1 tag.
 
 Treatment (proportionate — the user's standing directive is security is reactive-only in this
 project, so speculative-deployment findings get a documented non-goal, not a speculative gate):
