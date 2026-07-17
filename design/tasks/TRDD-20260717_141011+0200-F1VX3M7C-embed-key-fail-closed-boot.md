@@ -1,18 +1,18 @@
 ---
 trdd-id: F1VX3M7C
 title: Embed-key bad/exposed at boot — fail-closed refuse-to-boot with a supervisor-terminal EX_CONFIG exit
-column: dev
+column: complete
 created: 2026-07-17T14:10:11+0200
-updated: 2026-07-17T14:10:11+0200
+updated: 2026-07-17T14:23:55+0200
 current-owner: main
 task-type: security
 release-via: publish
 relevant-rules: []
 parent-trdd: WYC4KB50
-implementation-commits: []
+implementation-commits: [4a443ca, ca67c6f, b87c412]
 ---
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-17 14:10 — STARTING
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-17 14:24 — DONE + LOCALLY DEPLOYED (tag/publish gated)
 
 USER directive (2026-07-17, verbatim): "security is always a good thing, so go with the more
 secure version." Ruling on the coherence risk I flagged: the public AgentlensPro#4 thread states
@@ -54,8 +54,26 @@ Reverting makes the public #4 thread + README accurate again ⇒ the #4 §B1 hea
 4. Full gate (tsc ×2 + lint + check-mirrors + mocha) + deploy law (esbuild + server restart +
    symbol grep) + memory update (standalone-server-security-model layer 5 correction).
 
+### DONE (2026-07-17 14:24) — all 4 phases shipped locally
+- P1 code (4a443ca): server.ts boot → fail-closed exit 78; serverControl.ts `isTerminalExit`
+  predicate + terminal-78 handler; embedAuth.ts doc. P2 docs (ca67c6f): CHANGELOG 2.10.1 + README
+  → fail-closed. P3 test (b87c412): 5 tests pin `isTerminalExit` (78 terminal; 0/1/134/null respawn).
+- Gate GREEN: tsc ×2 = 0, lint 0 errors (238 pre-existing no-console warnings), check-mirrors OK
+  (110 shared exports), mocha 1373 passing / 8 pending / 0 failing (+5 new).
+- Deploy law: `node esbuild.js` OK; bundles are gitignored artifacts (nothing to commit); symbol
+  grep confirms server.js:37211-37214 refuse-to-boot + `process.exit(78)`, cli.js `isTerminalExit`
+  + terminal branch, OLD "embed feature DISABLED" string GONE. Server restarted pid 4531→2372
+  (canonical=true, ui:3000/otlp:4318) — the REAL 0600 key still boots normally (happy path intact).
+- LIVE-PROOF on throwaway instances: corrupt key → EXIT 78; 0644 (wider-than-0600) key → EXIT 78
+  with "wider than 0600; refusing to use a shared secret other accounts can read". No port bound,
+  no hang. The supervisor-terminal-78 wiring means no respawn-loop.
+- Memory corrected (standalone-server-security-model): body → fail-closed; [^3] soft-fail lesson
+  SUPERSEDED-by [^4] (fail-closed, WHY = owner directive security>availability + crash-loop mitigated
+  via terminal-78).
+
 ### NEXT ACTION
-Phase 1 code edits (server.ts boot site + serverControl.ts exit handler + embedAuth.ts doc).
+None autonomous. The #4 §B1 heads-up is NO LONGER NEEDED (the public thread already documents
+refuse-to-boot, now accurate again). Tagging v2.10.1 (→ OIDC publish) stays USER-gated.
 
 ### Gated (do NOT do autonomously)
 - Tagging v2.10.1 (triggers OIDC publish) — stays USER-gated per CLAUDE.md publishing rules.
