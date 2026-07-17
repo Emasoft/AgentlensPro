@@ -10,6 +10,16 @@ import type {
 // Maximum sessions rendered in any single chart or table
 export const CHART_MAX = 25
 
+// TRDD-1ZH1D5EG — the AgentlensPro#4 viewer-role contract, webview half. The server injects
+// <meta name="agentlens-viewer" content="restricted"> into the document it serves when the
+// request carried a valid role:"user" assertion. A boot CONSTANT, not a signal: the verdict is
+// per-document (decided server-side from the signed header) and cannot change within a page
+// life. UI-only convenience — the real enforcement is the server's method gate; hiding the
+// settings chrome here just keeps a restricted viewer from seeing controls that would 403.
+export const viewerRestricted =
+  typeof document !== 'undefined'
+  && document.querySelector('meta[name="agentlens-viewer"]')?.getAttribute('content') === 'restricted'
+
 // ── Time range navigation ─────────────────────────────────────────────────────
 
 // 'custom' carries an explicit since/until from the datetime-local inputs (not in TIME_PRESETS —

@@ -1,6 +1,6 @@
 import { render } from 'preact'
 import { App, TABS } from './App'
-import { setVscode, activeTab } from './state'
+import { setVscode, activeTab, viewerRestricted } from './state'
 import { parseEmbedParams } from '../../src/shared/embedParams'
 
 import './styles/base.css'
@@ -22,7 +22,11 @@ setVscode(vscode)
 // TRDD-FMIZO8Y4 — the ai-maestro embed contract: ?tab=<id> deep-links a validated initial tab,
 // ?embed=1 marks the body so VS-Code-era chrome (the sidebar toggle) hides inside a host iframe.
 // Parsed ONCE before render so the first paint already lands on the requested view.
-const embedParams = parseEmbedParams(window.location.search, TABS.map(t => t.id))
+// TRDD-1ZH1D5EG — a restricted viewer cannot deep-link into Import (its tab button is hidden,
+// so an activeTab of 'import' would strand them on a view whose only action 403s).
+const embedParams = parseEmbedParams(
+  window.location.search,
+  TABS.map(t => t.id).filter(id => !(viewerRestricted && id === 'import')))
 if (embedParams.tab) activeTab.value = embedParams.tab
 if (embedParams.embed) document.body.classList.add('embedded')
 

@@ -12,6 +12,7 @@ import {
   sessionSortKey, sessionSortDir,
   workspaceFilter, availableWorkspaces, shortWorkspaceName,
   enableOtelIngestion, enableLogIngestion, otlpPort, collectorGaps,
+  viewerRestricted,
 } from './state'
 import type { TimelineEntry, FileOpSummary, AgentFilter, InitiatorFilter, DataSourceFilter, WorkspaceFilter, DailyStatRow, LifetimeStats, BurnRate, Projection, SessionSummaryCard, ContextComposition, GeneratedFileRef, GeneratedFileContent } from './types'
 
@@ -426,6 +427,11 @@ export function App() {
         }
       } else if (msg.type === 'switchTab' && msg.tab) {
         const tab = normalizeTabId(msg.tab)
+        // TRDD-1ZH1D5EG — a restricted viewer must not reach the settings panel or the Import
+        // tab through host messages either; the tab-bar filter alone would leave this path open.
+        if (viewerRestricted && (tab === 'import' || tab === 'alerts' || tab === 'automation' || tab === 'settings-automation')) {
+          return
+        }
         if (tab === 'alerts' || tab === 'automation' || tab === 'settings-automation') {
           configOpen.value = true
         } else {
@@ -489,10 +495,12 @@ export function App() {
         >
           {sidebarOpen.value ? '◄' : '►'}
         </button>
-        {TABS.map(t => <Tab key={t.id} id={t.id} label={t.label} />)}
+        {/* TRDD-1ZH1D5EG — a restricted viewer loses Import (its only action is a gated POST)
+            and the gear (the MAESTRO-only settings panel). UI-only; the server gate is the law. */}
+        {TABS.filter(t => !(viewerRestricted && t.id === 'import')).map(t => <Tab key={t.id} id={t.id} label={t.label} />)}
         <div style="margin-left:auto;display:flex;align-items:center;border-left:1px solid var(--border);padding-left:2px">
           <BellButton />
-          <GearButton />
+          {!viewerRestricted && <GearButton />}
           <HelpButton />
         </div>
       </div>
@@ -504,7 +512,7 @@ export function App() {
         <ActivePanel />
       </div>
 
-      <ConfigPanel />
+      {!viewerRestricted && <ConfigPanel />}
       <img id="mascot-img" src="" alt="AgentLens mascot" style="display:none" />
     </>
   )
