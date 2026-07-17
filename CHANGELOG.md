@@ -8,15 +8,18 @@ All notable changes to AgentlensPro are documented here.
 
 ### Fixed
 
-- **A bad embed-key no longer takes the whole server down** (TRDD-WYC4KB50, remediating the xhigh
-  code review of the 2.10.0 viewer-role work). The viewer-role assertion is an opt-in feature used
-  only behind a proxy, but an unusable `~/.agentlens/embed-key` (corrupt hex, or wider than `0600`)
-  used to throw at boot and crash the entire server — OTLP ingestion, hook capture, and the CLI
-  along with it, then hook-revive respawned a crash loop. Now the embed feature simply disables
-  itself (a loud warning is logged; any request carrying `X-Agentlens-Viewer` is refused with 403)
-  while the dashboard keeps running in standalone mode — matching the #4 §B5 contract. On Windows
-  the POSIX `0600` mode check is skipped (Node reports a `0600`-created file as `0666` there, which
-  had made every second boot fail).
+- **A bad or exposed embed-key refuses to boot, fail-closed** (TRDD-F1VX3M7C, over TRDD-WYC4KB50's
+  remediation of the xhigh code review of the 2.10.0 viewer-role work). The `~/.agentlens/embed-key`
+  is a shared HMAC secret — ai-maestro's proxy signs viewer-role assertions with the same file. If
+  it is unusable (corrupt hex) or **wider than `0600`** on POSIX (a world/group-readable shared
+  secret any local account could read to mint `maestro` assertions), the server refuses to boot with
+  a clear remediation message (`chmod 600` it, or delete it and a fresh `0600` key is created next
+  boot) rather than run on with an undecidable or leaked signing key. The refusal exits `EX_CONFIG`
+  (78), which the supervisor treats as **terminal** — it does not respawn — so a misconfiguration
+  surfaces once instead of respawn-looping (the earlier soft-fail's crash-loop hazard, now closed).
+  A present `X-Agentlens-Viewer` header is still refused with 403; an absent header is still full
+  standalone access. On Windows the POSIX `0600` check is skipped (Node reports a `0600`-created file
+  as `0666` there, which had made every second boot fail).
 - **Hardening from the same review:** `GET /` and `/api/embed-status` now send
   `Vary: X-Agentlens-Viewer` so a cache can't serve one viewer role's page to another; the
   restricted-viewer tab policy is centralized in one predicate (tab bar, deep-link, and host-message

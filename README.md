@@ -186,11 +186,12 @@ payload = {"v":1,"role":"maestro"|"user","iat":<unix_ms>,"exp":<unix_ms>,"nonce"
 
 - **Key:** `~/.agentlens/embed-key` — 32 random bytes as lowercase hex, created by the server on
   first start with mode `0600` (POSIX; on Windows the permission check is skipped and NTFS ACLs
-  apply). The proxy reads the same file. If the key file is unusable — corrupt hex, or wider than
-  `0600` on POSIX — the **embed feature is disabled** (the server logs a loud warning and any
-  request that carries `X-Agentlens-Viewer` is refused with 403), but the dashboard keeps running
-  normally in standalone mode. An opt-in proxy feature never takes the whole server down; fix or
-  delete the key file and a fresh `0600` key is created on the next boot.
+  apply). The proxy reads the same file. If the key file is unusable — corrupt hex, or **wider than
+  `0600`** on POSIX (a world/group-readable shared secret any local account could read to mint
+  `maestro` assertions) — the server **refuses to boot, fail-closed**, with a clear remediation
+  message (`chmod 600` it, or delete it and a fresh `0600` key is created next boot) rather than
+  run on with an undecidable or leaked signing key. The refusal exits `EX_CONFIG` (78), which the
+  supervisor treats as terminal, so a misconfiguration surfaces once instead of respawn-looping.
 - **No header ⇒ standalone mode** — full access, exactly today's behavior. Solo users, local
   hooks, and the CLI never send the header and are unaffected.
 - **`role:"maestro"`** ⇒ full access. **`role:"user"`** ⇒ restricted viewer: only
