@@ -119,6 +119,23 @@ operations:
   --uninstall-otel      remove exactly those env vars, restoring any pre-existing values
                         (same transaction guarantees)
 
+examples:  (discover the rest with 'list --desc' then 'help <tool>')
+  agentlenspro investigate_burn --windowHours 5      "my 5h window drained — what burned it, WHO?" START HERE
+  agentlenspro --risk                                fastest realtime culprit check (~50ms); only ACTIVE risks
+  agentlenspro --guard 15                            arm in a bg monitor BEFORE a fan-out; 1 line/risk transition
+  agentlenspro get_burn_status                       is anything burning RIGHT NOW across all live sessions?
+  agentlenspro get_account_status                    which account/plan/cache-TTL + how much 5h/7d window is left
+  agentlenspro get_agent_tokens --agentId abc123     EXACT tokens + $ for ONE sub-agent
+  agentlenspro get_cost_rollup --groupBy project --windowHours 5    cost per project over the last 5h
+  agentlenspro predict_session_cost --task "xhigh review of auth"   estimate the $ BEFORE you launch
+  agentlenspro check_cache_expiry                    has the newest main session's prompt cache gone cold?
+  agentlenspro get_conversation --sessionId <id> --turn 7          read one turn of a session verbatim
+  agentlenspro batch '[{"tool":"get_burn_status"},{"tool":"get_account_status"}]'   N answers, ONE re-read
+  agentlenspro get_cache_break_causes --out breaks.json            full JSON to disk, one-line digest to stdout
+  agentlenspro env --json --out env.json             full environment report to a file (attach to a bug report)
+  agentlenspro setup --dry-run                       read-only preview of what install/repair would change
+  agentlenspro server status       agentlenspro daemon status      agentlenspro dashboard
+
 globals: --full (unshaped payload)   --out PATH (full JSON to disk, digest to stdout)
 server:  $AGENTLENS_MCP_URL (default http://localhost:4316/mcp); logs -> ~/.agentlens/server.log`
 

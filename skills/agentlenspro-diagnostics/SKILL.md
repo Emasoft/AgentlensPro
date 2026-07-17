@@ -9,8 +9,8 @@ description: >-
   stall, compaction rewrites, huge-request bursts, burn spikes, and CACHE_THRASH — the prefix
   being re-written every turn instead of read). PREVENT with the burn-gate hooks
   (--install-hooks): a PreToolUse gate on agent-launch tools DENIES the four measured disaster
-  launches with the reason fed back to the agent. Covers all 37 diagnostic
-  tools (burn status, session burn profile, per-agent exact tokens, interval cost rollups, rate-limit forensics,
+  launches with the reason fed back to the agent. Covers the full diagnostic-tool suite — run
+  `list --desc` for the live set (burn status, session burn profile, per-agent exact tokens, interval cost rollups, rate-limit forensics,
   account/plan + window budget,
   cache-break causes/timeline, expensive writes, heartbeat cost, config comparison, SQL
   analytics). START with investigate_burn — the ONE-command investigation that names the
@@ -110,6 +110,31 @@ round-trip + registered hook/gate execution). A second run over a converged inst
 **Platforms: macOS and Linux; Windows ONLY via WSL2** (native win32 is refused by the
 environment probe — install Node ≥ 20.9 inside the WSL distro and `npm install -g agentlenspro`
 there). Hook registrations changed by setup need a Claude Code session restart to take effect.
+
+## Server, daemon & telemetry control
+
+The tools call a resident server; these verbs manage it. `setup` wires everything, but each is
+also a standalone command:
+
+```bash
+agentlenspro server start|stop|restart|status      # the UI/API + OTLP server (background)
+agentlenspro server start --supervise              # foreground crash-restart supervisor (exit 78 = terminal, no respawn)
+agentlenspro dashboard                             # ensure the server is up, then open http://localhost:3000
+agentlenspro daemon start|stop|restart|status      # the always-on ingestion daemon (same process as the server);
+                                                   # `status` also prints the hook-spool depth. Hooks auto-revive it,
+                                                   # so no log is lost while it is down
+agentlenspro daemon install|uninstall              # launchd agent (macOS) keeping the daemon up 24/7 across
+                                                   # logout+reboot — opt-in; the CLI still starts it on demand without this
+agentlenspro telemetry install|uninstall|status    # the Claude Code full-telemetry env in ~/.claude/settings.json
+                                                   # (verified transaction; the verb form of --install-otel/--uninstall-otel,
+                                                   # plus `status` to check whether it is wired)
+agentlenspro heartbeat-cost [--oneline]            # exact token + $ cost of the last settled janitor heartbeat fire
+```
+
+`server` vs `daemon`: they are the SAME process — `server` is the operator-facing name (it serves
+the dashboard), `daemon` is the ingestion-facing name (it drains the hook spool). Use `daemon
+install` only when you want ingestion to survive a full logout/reboot without any Claude session
+running; for interactive use the on-demand `--start-server` (or any tool call) is enough.
 
 ## Local commands — no server needed (`config`, `env`)
 
@@ -251,7 +276,7 @@ before spawning fresh agents, and images left resident in context.
 ## The burn-gate — PREVENTION, not just warning (installed by `--install-hooks`)
 
 Warnings only work if someone is watching. The gate acts by itself: a PreToolUse hook on
-`^(Task|Agent|Workflow)$` (agent-launch tools ONLY — never per-tool-call overhead) asks the
+`^(Task|Agent|Workflow|SendMessage)$` (agent-launch tools ONLY — never per-tool-call overhead) asks the
 resident server before every launch (one curl, measured 14ms end-to-end, decision p50 0.9ms)
 and **DENIES the four measured disaster signatures**, feeding the reason back to the agent so
 it can adapt instead of just failing:
@@ -363,6 +388,34 @@ A `verdict:"unknown"` means no LLM request was recorded for that session.
 | **Which sessions still write raw OTEL bodies (restart targets)?** | `get_body_writers` — ranked by recent rate then total; `active` rows wrote within `--active_min` (default 10m) and keep writing until their process restarts. Request-body attribution (responses aggregated); totals = exact store+live union. `--window_min 30 --limit 20` |
 | **Who exhausted the PREVIOUS account's windows (post-rotation autopsy)?** | `get_account_burners` — BOTH the 5h and 7d tables in one call, grouped by project/agent (sessions pooled by workspace) with cache-created + cache-read columns; the window nearer its calibrated capacity at rotation is marked MOST LIKELY EXHAUSTED. Default `--account previous` (also `current`, uuid prefix, email); `--interval last`(default)`/current/<ISO-date>` picks the window end. Time-based attribution: cross-rotation sessions split correctly between accounts |
 | **How long until the CURRENT account's window runs out?** | `get_window_eta` — COST-based ETA (Anthropic meters windows by cost, not tokens): consumed $ vs calibrated $ cap, current $/min, ETA + which window exhausts first. Models the rolling window — says "won't exhaust at this rate" when steady-state fill plateaus below the cap instead of a fictional countdown. `--rate_window_min 30`, `--account current` |
+
+## Context-composition & session-drill tools
+
+The cheat-sheet above is the burn/cost/cache core. This cluster answers "WHAT is in the context
+and WHERE did it come from" — the raw-body forensics behind the dashboard's drill views. (Still:
+`list --desc` is the full, never-stale index.)
+
+| Question | Tool |
+|---|---|
+| WHAT occupies the context window per turn? (injected blocks: hook injections, skill/tool/agent/mcp catalogs, files) | `get_context_composition --sessionId <id>` |
+| Full per-step context history from the raw `.jsonl`, every block drillable to its ACTUAL text (the cost/composition lens) | `get_context_history --sessionId <id>` |
+| Cumulative context-size trajectory per turn (prompt size, cache-READ vs cache-CREATED split, new uncached) | `get_context_growth --sessionId <id>` |
+| Biggest cumulative context contributors (turns × per-turn weight); flags RUNAWAY sources | `get_context_inflation_report` |
+| Top context-consuming sources (files, tool outputs, rules, memories, catalogs) by cumulative token cost | `find_context_hogs` |
+| Eviction-candidate finder: blocks (images, tool_results, pasted files, bash output) RESIDENT across many turns | `find_resident_blobs` |
+| Generic composition query engine over the raw-body context blocks ("all possible queries") | `query_context_blocks` |
+| Drill into ONE context block and return its ACTUAL text | `get_block_content` |
+| The FULL literal context of ONE llm call — `{system, messages[], tools[]}` from the raw OTEL body | `get_call_context` |
+| How many IMAGES a session sent + what re-reading them cost | `get_image_report` |
+| Ranks WHO/WHAT burns the most of a cost BUCKET (cache_creation default; also output/input/total/billable_weighted) | `get_cache_creation_report` |
+| Full timeline (LLM calls, tool calls, file edits) for one session | `get_session_detail --sessionId <id>` |
+| One-call self-diagnostic for YOUR session (pass your workspace path; resolves the newest live session) | `get_session_status --workspace <path>` |
+| Sub-agent spawn tree with each child's spawn-KIND (fork = cache-warm / fresh / worktree) | `get_subagent_tree --sessionId <id>` |
+| Tokens-by-CAUSE attribution rollup — WHO spent the tokens | `get_cost_by_cause` |
+| Diagnose prompt-cache breaks (the base report; `causes`/`timeline`/`gap` are the deeper cuts) | `get_cache_break_report` |
+| Efficiency trends — are sessions getting more/less expensive; best agent/model combos; recurring problems | `get_efficiency_report` |
+| Given a task, keyword-match past prompts → files accessed in similar sessions + est cost/turns | `find_relevant_context --task "<describe it>"` |
+| Pending suggestions to improve a workspace's agent-instruction file (CLAUDE.md / AGENTS.md) | `get_instruction_suggestions --workspace <path>` |
 
 Sibling PATH binary for the janitor heartbeat: `agentlenspro-heartbeat-cost --oneline` prints
 the exact settled cost of the previous heartbeat fire. It ships as a bin of the agentlenspro
