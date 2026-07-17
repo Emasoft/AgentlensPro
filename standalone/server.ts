@@ -18,6 +18,7 @@ import { startLoopWatchdog } from '../src/loopWatchdog'
 import { mergeOtelAndLogSessions, linkSubagentTranscripts, graftOtelAttribution } from '../src/feedMergePolicy'
 import { calcTokenCostUsd } from '../src/shared/pricing'
 import { contextTokens } from '../src/shared/tokenBuckets'
+import { ensureEmbedKey, resolveViewerRole, type ViewerRole } from '../src/embedAuth'
 import { countFallback, fallbackTotals } from '../src/shared/fallbackCounters'
 import { autoConfigureCodex, autoConfigureCopilotStandalone } from '../src/autoConfigNode'
 import { ensureTelemetryConfig, ensureAgentLensStopHook } from '../src/telemetryConfig'
@@ -104,6 +105,10 @@ if (fs.existsSync(path.join(DATA_DIR, 'DISABLED'))) {
 // repo delete / uninstall / upgrade like the data it governs, and the launchd daemon (whose own env a
 // shell export cannot reach) re-reads it every boot. See src/retentionConfig.ts (TRDD-ZAV74M8Q).
 const RET = resolveRetention(DATA_DIR, process.env)
+// TRDD-1ZH1D5EG — the shared HMAC key for the AgentlensPro#4 viewer-role contract. Created 0600
+// on first boot; ai-maestro's proxy reads the same file (same user, same host) to sign the
+// X-Agentlens-Viewer assertions this server verifies per request.
+const EMBED_KEY = ensureEmbedKey(DATA_DIR)
 // P4 segmented span store: daily NDJSON segments under DATA_DIR/spans/ (src/segmentedSpanStore.ts).
 // The old single-file spans.json exists only as a migration source — split into segments on the
 // first boot and preserved as spans.json.bak, never deleted.
@@ -1967,7 +1972,7 @@ function schedulePushUpdate() {
 
 // ── Dashboard HTML ────────────────────────────────────────────────────────────
 
-function getHtml(): string {
+function getHtml(restrictedViewer = false): string {
   const sessionSummary = buildSessionSummary()
   // Strip full timeline + per-file ops before inlining — they can be many MB across sessions.
   // Both are loaded lazily via /api/timeline/:sessionId after first paint.
@@ -1977,11 +1982,16 @@ function getHtml(): string {
   }
   const sidebarInitJson = safeJson(sidebarLive)
 
+  // TRDD-1ZH1D5EG — the meta tag is how the RESTRICTED verdict (decided server-side from the
+  // signed X-Agentlens-Viewer assertion) reaches the webview: the boot code reads it and hides
+  // the settings chrome. UI-only convenience — the real enforcement is the server's method gate.
+  const viewerMeta = restrictedViewer ? '\n  <meta name="agentlens-viewer" content="restricted">' : ''
+
   return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="viewport" content="width=device-width,initial-scale=1">${viewerMeta}
   <title>AgentLens</title>
   <link rel="icon" href="/mascot.png" type="image/png">
   <link rel="stylesheet" href="/dashboard.css">
@@ -2725,6 +2735,50 @@ const uiServer = http.createServer(async (req, res) => {
   if (req.method !== 'GET' && req.method !== 'HEAD' && isDisallowedCrossOrigin(req)) {
     res.writeHead(403, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ error: 'cross-origin request refused' }))
+    return
+  }
+
+  // TRDD-1ZH1D5EG — the AgentlensPro#4 viewer-role contract (§B5 decision table). ai-maestro's
+  // proxy deletes any inbound X-Agentlens-Viewer and re-stamps it from its server-side session:
+  //   absent     → standalone (hooks, CLI, solo browsers — today's behavior, unchanged)
+  //   maestro    → full access
+  //   restricted → reads only (GET/HEAD/OPTIONS), minus the config read below
+  //   invalid    → 403 EVERYTHING — never a downgrade to standalone: if a broken header fell
+  //                back to full access, sending deliberate garbage would BE the attack.
+  // ONE blanket method gate, not per-route checks — a hidden settings panel is not a restricted
+  // one unless its endpoints are dead too, and a per-route list always misses the next route.
+  // A duplicated header (string[]) is present-but-unverifiable → invalid.
+  const rawViewerHeader = req.headers['x-agentlens-viewer']
+  const viewerRole: ViewerRole = Array.isArray(rawViewerHeader)
+    ? 'invalid'
+    : resolveViewerRole(rawViewerHeader, EMBED_KEY, Date.now())
+  if (viewerRole === 'invalid') {
+    res.writeHead(403, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ error: 'unverifiable viewer assertion — rejected (AgentlensPro#4 §B5)' }))
+    return
+  }
+  if (viewerRole === 'restricted'
+      // GET /api/hook-config is the one read that LEAKS settings (capture paths, gate state) —
+      // the panel a restricted viewer must not even open (#4 Q4). Local kill-switch consumers
+      // (CLI, hooks) send no header, so they are standalone and unaffected.
+      && ((req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS')
+        || url === '/api/hook-config')) {
+    res.writeHead(403, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ error: 'restricted viewer — this surface requires a maestro assertion (AgentlensPro#4)' }))
+    return
+  }
+
+  // TRDD-1ZH1D5EG (#4 Q9) — the wiring probe: lets ai-maestro PROVE its proxy stamps assertions
+  // and this gate consumes them, instead of assuming (a proxy that stamps nothing would
+  // otherwise pass its tests while the gate never engages). keyLoaded is always true here
+  // because a failed key load refuses boot (fail-fast in ensureEmbedKey).
+  if (req.method === 'GET' && url === '/api/embed-status') {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({
+      mode: viewerRole === 'standalone' ? 'standalone' : 'embedded',
+      role: viewerRole === 'maestro' ? 'maestro' : viewerRole === 'restricted' ? 'user' : null,
+      keyLoaded: true,
+    }))
     return
   }
 
@@ -3621,7 +3675,7 @@ const uiServer = http.createServer(async (req, res) => {
       'Content-Security-Policy':
         "frame-ancestors 'self' http://localhost:* http://127.0.0.1:* https://localhost:* https://127.0.0.1:*",
     })
-    res.end(getHtml())
+    res.end(getHtml(viewerRole === 'restricted'))
     return
   }
 
