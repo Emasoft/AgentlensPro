@@ -20,6 +20,18 @@ export const viewerRestricted =
   typeof document !== 'undefined'
   && document.querySelector('meta[name="agentlens-viewer"]')?.getAttribute('content') === 'restricted'
 
+// TRDD-1ZH1D5EG (WYC4KB50 #6) — the ONE list of tab ids a restricted viewer must never reach, so
+// the three enforcement sites (tab-bar filter, deep-link parser, host-message switchTab guard)
+// can't drift apart. 'import' is a real tab (its POST /action 403s server-side); the settings
+// pseudo-tabs open the config panel (already suppressed for restricted viewers). Add a future
+// settings-adjacent tab here ONCE and every site honors it.
+export const RESTRICTED_BLOCKED_TABS = new Set(['import', 'alerts', 'automation', 'settings-automation'])
+
+/** True when a restricted viewer must be blocked from `tabId`. Non-restricted viewers: always false. */
+export function isRestrictedBlockedTab(tabId: string): boolean {
+  return viewerRestricted && RESTRICTED_BLOCKED_TABS.has(tabId)
+}
+
 // ── Time range navigation ─────────────────────────────────────────────────────
 
 // 'custom' carries an explicit since/until from the datetime-local inputs (not in TIME_PRESETS —

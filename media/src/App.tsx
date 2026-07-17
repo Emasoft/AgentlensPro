@@ -7,12 +7,12 @@ import {
   focusedSessionId, invalidateSessionDrill, mergeChangedSessionCards,
   dailyStats, lifetimeStats, burnRateData, serverBurnStatus, searchResults, rangedSearchResults,
   timeRange, makeTimeRange, makeCustomRange, TIME_PRESETS, CHART_MAX,
-  vscode, displaySessions, rangedSessions,
+  vscode, displaySessions,
   sessionTextFilter, filteredSessions, evidenceSessionIds,
   sessionSortKey, sessionSortDir,
   workspaceFilter, availableWorkspaces, shortWorkspaceName,
   enableOtelIngestion, enableLogIngestion, otlpPort, collectorGaps,
-  viewerRestricted,
+  viewerRestricted, isRestrictedBlockedTab,
 } from './state'
 import type { TimelineEntry, FileOpSummary, AgentFilter, InitiatorFilter, DataSourceFilter, WorkspaceFilter, DailyStatRow, LifetimeStats, BurnRate, Projection, SessionSummaryCard, ContextComposition, GeneratedFileRef, GeneratedFileContent } from './types'
 
@@ -202,12 +202,17 @@ function AlertStatusCard({ alerts }: { alerts: TriggeredAlert[] }) {
             })}
           </div>
         )}
-        <div style="padding:8px 12px;border-top:1px solid var(--border)">
-          <button
-            style="font-size:11px;color:var(--accent);background:none;border:none;cursor:pointer;padding:0"
-            onClick={() => { bellOpen.value = false; configOpen.value = true }}
-          >Configure alerts →</button>
-        </div>
+        {/* WYC4KB50 #3 — hide for a restricted viewer: ConfigPanel never mounts for them, so this
+            button would open nothing. A dead affordance, not a security hole (the panel and its
+            /api/hook-config read are both blocked), but confusing — gate it like the gear button. */}
+        {!viewerRestricted && (
+          <div style="padding:8px 12px;border-top:1px solid var(--border)">
+            <button
+              style="font-size:11px;color:var(--accent);background:none;border:none;cursor:pointer;padding:0"
+              onClick={() => { bellOpen.value = false; configOpen.value = true }}
+            >Configure alerts →</button>
+          </div>
+        )}
       </div>
     </>
   )
@@ -429,7 +434,8 @@ export function App() {
         const tab = normalizeTabId(msg.tab)
         // TRDD-1ZH1D5EG — a restricted viewer must not reach the settings panel or the Import
         // tab through host messages either; the tab-bar filter alone would leave this path open.
-        if (viewerRestricted && (tab === 'import' || tab === 'alerts' || tab === 'automation' || tab === 'settings-automation')) {
+        // One shared predicate (WYC4KB50 #6) so this list can't drift from the tab-bar/deep-link ones.
+        if (isRestrictedBlockedTab(tab)) {
           return
         }
         if (tab === 'alerts' || tab === 'automation' || tab === 'settings-automation') {
@@ -497,7 +503,7 @@ export function App() {
         </button>
         {/* TRDD-1ZH1D5EG — a restricted viewer loses Import (its only action is a gated POST)
             and the gear (the MAESTRO-only settings panel). UI-only; the server gate is the law. */}
-        {TABS.filter(t => !(viewerRestricted && t.id === 'import')).map(t => <Tab key={t.id} id={t.id} label={t.label} />)}
+        {TABS.filter(t => !isRestrictedBlockedTab(t.id)).map(t => <Tab key={t.id} id={t.id} label={t.label} />)}
         <div style="margin-left:auto;display:flex;align-items:center;border-left:1px solid var(--border);padding-left:2px">
           <BellButton />
           {!viewerRestricted && <GearButton />}
@@ -638,11 +644,6 @@ function TimeRangePicker({ hideAgentFilter = false }: { hideAgentFilter?: boolea
   }, [rangedSearchResults.value])
 
   const isActive = range.preset !== 'all'
-  // For "All" time: use full unfiltered in-memory list (no limit, no agent filter)
-  // so pills reflect every agent that has ever recorded a session in memory.
-  // For bounded presets: use rangedSessions which merges DB history with in-memory.
-  const baseSessions = isActive ? rangedSessions.value : (sessionSummary.value?.sessions ?? [])
-  const presentSources = new Set(baseSessions.map(s => s.source))
 
   return (
     <div style="display:flex;align-items:center;gap:0;padding:0 8px 6px;background:var(--vscode-editor-background);border-bottom:1px solid var(--vscode-panel-border);flex-shrink:0">

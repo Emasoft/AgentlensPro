@@ -1,6 +1,6 @@
 import { render } from 'preact'
 import { App, TABS } from './App'
-import { setVscode, activeTab, viewerRestricted } from './state'
+import { setVscode, activeTab, isRestrictedBlockedTab } from './state'
 import { parseEmbedParams } from '../../src/shared/embedParams'
 
 import './styles/base.css'
@@ -26,7 +26,7 @@ setVscode(vscode)
 // so an activeTab of 'import' would strand them on a view whose only action 403s).
 const embedParams = parseEmbedParams(
   window.location.search,
-  TABS.map(t => t.id).filter(id => !(viewerRestricted && id === 'import')))
+  TABS.map(t => t.id).filter(id => !isRestrictedBlockedTab(id)))
 if (embedParams.tab) activeTab.value = embedParams.tab
 if (embedParams.embed) document.body.classList.add('embedded')
 
