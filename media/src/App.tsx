@@ -261,14 +261,26 @@ function HelpButton() {
 // windows (pushed on every SSE update) so a gap in coverage is visible instead of a silent hole. Null
 // when the collector has no recorded downtime.
 function CollectorGapBanner() {
-  const gaps = collectorGaps.value
-  if (!gaps || gaps.length === 0) return null
+  const allGaps = collectorGaps.value
+  if (!allGaps || allGaps.length === 0) return null
+  // Scope the downtime windows to the active time range (only gaps that intersect it); 'all' shows
+  // every recorded gap. computeCollectorGaps only ever emits PAST windows (a gap is bounded by the
+  // NEXT run's start), so this is a HISTORICAL record — worded past-tense below, not a current-state
+  // alarm. Fixes the embed "collector is offline" false alarm (TRDD-06Q5AXYN Phase 4).
+  const range = timeRange.value
+  const gaps = range.preset === 'all'
+    ? allGaps
+    : allGaps.filter(g => {
+        const s = Date.parse(g.startedAt), e = Date.parse(g.endedAt)
+        return !Number.isNaN(s) && !Number.isNaN(e) && s <= (range.until ?? Date.now()) && e >= (range.since ?? 0)
+      })
+  if (gaps.length === 0) return null
   const recent = [...gaps].reverse().slice(0, 3)  // newest first
   const fmt = (iso: string): string => { const d = new Date(iso); return isNaN(d.getTime()) ? iso : d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) }
   const dur = (ms: number): string => ms >= 3_600_000 ? `${(ms / 3_600_000).toFixed(1)}h` : ms >= 60_000 ? `${Math.round(ms / 60_000)}m` : `${Math.round(ms / 1000)}s`
   return (
     <div style="margin:4px 8px;padding:6px 10px;border-radius:4px;background:rgba(244,71,71,0.12);border:1px solid var(--error,#f44747);color:var(--error,#f44747);font-size:11px">
-      <strong>⚠ Collector offline — telemetry lost</strong>
+      <strong>⚠ Collector was offline — telemetry lost during these windows</strong>
       {recent.map((g, i) => (
         <div key={i} style="opacity:.9;font-variant-numeric:tabular-nums">
           {fmt(g.startedAt)} → {fmt(g.endedAt)} · {dur(g.durationMs)} · {g.reason === 'crash' ? 'crash' : 'clean shutdown'}
