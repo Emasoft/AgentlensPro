@@ -3,7 +3,7 @@ import type { ComponentChildren } from 'preact'
 import {
   filteredSessions, sessionSummary, sessionTimelines, sessionCompositions, blobCache,
   focusedSessionId, vscode, cacheHitSliThreshold, callContexts,
-  timelineMetric, timelineSortByValue, timelineGroupByTurn, sessionGeneratedFiles,
+  timelineMetric, timelineSortByValue, timelineGroupByTurn, sessionGeneratedFiles, timeRange,
 } from '../state'
 import { GeneratedFilesList } from '../GeneratedFilesView'
 import { CopyBranchButton } from '../CopyBranchButton'
@@ -18,6 +18,7 @@ import { countTokens } from '../tokenEstimator'
 import { buildCacheBreakReport, cacheBreaksByTurn, CAUSE_LABEL } from '../../../src/shared/cacheBreak'
 import { contextTokens } from '../../../src/shared/tokenBuckets'
 import { buildTokensByCause, CAUSE_DIMENSION_LABEL } from '../../../src/shared/tokensByCause'
+import { entryBeforeWindow } from '../../../src/shared/timeWindow'
 import { spawnKindBadge, hitRateColor, formatPct, SpawnCostPanel } from './cacheShared'
 import { BlockRow } from './HistoryTab'
 import type { SessionSummaryCard, TimelineEntry, BackgroundSpanSummary, CacheBreakTurn, ContextSource, CallContext, CauseDimension } from '../types'
@@ -1082,6 +1083,17 @@ function TurnGroup({ turn, tSteps, sessIdx, sessionModel, metric, maxTurnMetric,
   )
 }
 
+// TRDD-06Q5AXYN Phase 3 (D2): the subtle boundary marker between turns/steps that are dimmed as
+// "before this window" and the in-window content below. Text sits on the rule itself (Slack-style
+// divider), theme-aware via the shared --border/--muted vars so it reads correctly in both themes.
+function WindowBoundaryDivider() {
+  return (
+    <div class="wf-window-divider">
+      <span>before this window</span>
+    </div>
+  )
+}
+
 // A sub-agent's reported footprint as a TurnTotals so it renders with the same FiveValues strip.
 // Tokens come from the child card's buckets; cost is the token-mode session cost of the child.
 function subAgentTotals(child: SessionSummaryCard): TurnTotals {
@@ -1327,6 +1339,30 @@ export function TimelineWaterfall({ steps, sessionDur, sessionModel, sessIdx = 0
   }
   const maxTurnMetric = Math.max(0, ...turnGroups.map(g => g.agg))
 
+  // TRDD-06Q5AXYN Phase 3 (D2): a turn/step whose entries are entirely before the active window's
+  // `since` bound is still rendered (never hidden — the drilled conversation stays whole) but
+  // dimmed behind a "before this window" divider, so the time-range picker's scope promise holds
+  // even down here. A turn counts as before-window only when EVERY step in it is (conservative —
+  // a turn straddling the boundary is left un-dimmed rather than over-marked). The divider only
+  // makes sense in chronological order; sorted-by-value order scatters the boundary across the
+  // list, so items still dim individually there but no divider line is drawn.
+  const since = timeRange.value.since
+  const isChronological = !(metric !== 'time' && sortByValue)
+  let prevTurnBeforeWindow = false
+  const turnDividers = turnGroups.map(g => {
+    const beforeWindow = since !== undefined && g.tSteps.every(x => entryBeforeWindow(x.step.entry.timestamp, since))
+    const showDivider = isChronological && !beforeWindow && prevTurnBeforeWindow
+    prevTurnBeforeWindow = beforeWindow
+    return { beforeWindow, showDivider }
+  })
+  let prevStepBeforeWindow = false
+  const stepDividers = ordered.map(({ step }) => {
+    const beforeWindow = entryBeforeWindow(step.entry.timestamp, since)
+    const showDivider = isChronological && !beforeWindow && prevStepBeforeWindow
+    prevStepBeforeWindow = beforeWindow
+    return { beforeWindow, showDivider }
+  })
+
   // Sub-agents spawned by this session nest under the turn that spawned them (spawnedByTurn). Any
   // whose spawn turn isn't among the rendered turns (or in flat mode) are shown after the list so
   // none are lost.
@@ -1407,17 +1443,27 @@ export function TimelineWaterfall({ steps, sessionDur, sessionModel, sessIdx = 0
       {filterApplied && ordered.length === 0
         ? <div class="empty-state" style="padding:10px 0;font-size:11px">No steps match “{filterApplied}”</div>
         : groupByTurn && hasTurns
-          ? turnGroups.map(g => (
-              <TurnGroup key={g.turn} turn={g.turn} tSteps={g.tSteps} sessIdx={sessIdx}
-                sessionModel={sessionModel} metric={metric}
-                maxTurnMetric={maxTurnMetric} highlightSpanId={highlightSpanId}
-                subAgents={subsByTurn.get(g.turn)} cacheBreak={breaksByTurn.get(g.turn)}
-                hostSources={resolveHostSources(g.turn)} />
+          ? turnGroups.map((g, gi) => (
+              <div key={g.turn}>
+                {turnDividers[gi].showDivider && <WindowBoundaryDivider />}
+                <div class={turnDividers[gi].beforeWindow ? 'wf-before-window' : undefined}>
+                  <TurnGroup turn={g.turn} tSteps={g.tSteps} sessIdx={sessIdx}
+                    sessionModel={sessionModel} metric={metric}
+                    maxTurnMetric={maxTurnMetric} highlightSpanId={highlightSpanId}
+                    subAgents={subsByTurn.get(g.turn)} cacheBreak={breaksByTurn.get(g.turn)}
+                    hostSources={resolveHostSources(g.turn)} />
+                </div>
+              </div>
             ))
-          : ordered.map(({ step, i }) => (
-              <StepRow key={step.entry.spanId + i} step={step} idx={i} sessIdx={sessIdx}
-                sessionDur={sessionDur} sessionModel={sessionModel} metric={metric} maxMetric={maxMetric}
-                highlightSpanId={highlightSpanId} hostSources={resolveHostSources(step.entry.turn)} compNote={compNote} sessionId={sessionId} />
+          : ordered.map(({ step, i }, oi) => (
+              <div key={step.entry.spanId + i}>
+                {stepDividers[oi].showDivider && <WindowBoundaryDivider />}
+                <div class={stepDividers[oi].beforeWindow ? 'wf-before-window' : undefined}>
+                  <StepRow step={step} idx={i} sessIdx={sessIdx}
+                    sessionDur={sessionDur} sessionModel={sessionModel} metric={metric} maxMetric={maxMetric}
+                    highlightSpanId={highlightSpanId} hostSources={resolveHostSources(step.entry.turn)} compNote={compNote} sessionId={sessionId} />
+                </div>
+              </div>
             ))
       }
       {orphanSubs.length > 0 && (

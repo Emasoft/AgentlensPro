@@ -1,5 +1,5 @@
 import * as assert from 'assert'
-import { sessionInWindow } from '../shared/timeWindow'
+import { sessionInWindow, entryBeforeWindow } from '../shared/timeWindow'
 
 // Fixed window [1000, 2000] ms. iso() turns an epoch-ms into the ISO string the card carries.
 const SINCE = 1000
@@ -62,5 +62,27 @@ suite('sessionInWindow — interval-overlap time-window predicate (TRDD-06Q5AXYN
 
   test('a card with an unparseable startTime is OUT', () => {
     assert.strictEqual(sessionInWindow({ startTime: 'not-a-date', durationMs: 100 }, SINCE, UNTIL), false)
+  })
+})
+
+suite('entryBeforeWindow — drilled-turn "before this window" predicate (TRDD-06Q5AXYN D2)', () => {
+  test('a timestamp before since is before-window', () => {
+    assert.strictEqual(entryBeforeWindow(iso(500), SINCE), true)
+  })
+
+  test('a timestamp equal to since is NOT before-window (inclusive lower edge)', () => {
+    assert.strictEqual(entryBeforeWindow(iso(SINCE), SINCE), false)
+  })
+
+  test('a timestamp after since is NOT before-window', () => {
+    assert.strictEqual(entryBeforeWindow(iso(1500), SINCE), false)
+  })
+
+  test('since === undefined (no lower bound, e.g. the "all" preset) means nothing is before-window', () => {
+    assert.strictEqual(entryBeforeWindow(iso(0), undefined), false)
+  })
+
+  test('an unparseable timestamp is NOT before-window (never fabricate a match)', () => {
+    assert.strictEqual(entryBeforeWindow('not-a-date', SINCE), false)
   })
 })

@@ -20,3 +20,16 @@ export function sessionInWindow(
   // interval-overlap: [startMs, endMs] ∩ [since, until] ≠ ∅
   return startMs <= until && endMs >= since
 }
+
+// Point-in-time counterpart of sessionInWindow, for a drilled per-session turn/step view
+// (TRDD-06Q5AXYN D2). A session is shown WHOLE even when it started before the active window —
+// but a turn/step whose own TimelineEntry.timestamp falls before `since` is still "outside" the
+// picker's promise, so callers dim it behind a "before this window" divider instead of hiding it
+// (hiding would silently break the conversation into a partial transcript).
+// `since === undefined` means no lower bound (e.g. the 'all' preset) — nothing is ever "before" it.
+export function entryBeforeWindow(timestamp: string, since: number | undefined): boolean {
+  if (since === undefined) return false
+  const ms = Date.parse(timestamp)
+  if (Number.isNaN(ms)) return false
+  return ms < since
+}

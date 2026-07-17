@@ -58,3 +58,14 @@
 .wf-turn-row { background: var(--hover); min-height: 32px; }
 .wf-turn-row:hover { opacity: 0.92; }
 .wf-turn-children { border-left: 2px solid var(--border); margin-left: 8px; }
+
+/* TRDD-06Q5AXYN Phase 3 (D2): drilled turn/step rows older than the active time-window's `since`
+   bound are dimmed (never hidden — the conversation stays whole), with a subtle labelled rule
+   marking the boundary where in-window content resumes. --border/--muted already flip per theme
+   (see base.css), so both stay legible in light and dark without a dedicated dark-mode override. */
+.wf-before-window { opacity: 0.55; }
+.wf-window-divider {
+  display: flex; align-items: center; gap: 8px; margin: 6px 0;
+  font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em;
+}
+.wf-window-divider::before, .wf-window-divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
