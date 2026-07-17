@@ -108,7 +108,21 @@ const RET = resolveRetention(DATA_DIR, process.env)
 // TRDD-1ZH1D5EG — the shared HMAC key for the AgentlensPro#4 viewer-role contract. Created 0600
 // on first boot; ai-maestro's proxy reads the same file (same user, same host) to sign the
 // X-Agentlens-Viewer assertions this server verifies per request.
-const EMBED_KEY = ensureEmbedKey(DATA_DIR)
+//
+// SOFT-FAIL (WYC4KB50 #1): the viewer-role gate is an OPT-IN feature used only behind a proxy that
+// stamps the header. If the key file is unusable (corrupt hex, or wider than 0600 on POSIX), do NOT
+// take the whole product down — a solo user's OTLP ingestion, hook capture, and CLI have nothing to
+// do with embedding. Log loudly and run with EMBED_KEY = null: resolveViewerRole then rejects any
+// PRESENT X-Agentlens-Viewer header with 403 (feature disabled, fail-closed) while an ABSENT header
+// stays 'standalone' (full access, unchanged). #4 §B5's "key unusable ⇒ present-header reject, server
+// keeps running" is the contracted behavior — the earlier refuse-to-boot was stricter than the spec.
+let EMBED_KEY: Buffer | null = null
+try {
+  EMBED_KEY = ensureEmbedKey(DATA_DIR)
+} catch (e) {
+  console.error(`[AgentLens] viewer-role embed feature DISABLED — embed-key at ${DATA_DIR}/embed-key is unusable: ${(e as Error).message}`)
+  console.error('[AgentLens] the dashboard runs normally in standalone mode; to re-enable proxy-embedding, fix or delete the key file (a fresh 0600 key is created on next boot).')
+}
 // P4 segmented span store: daily NDJSON segments under DATA_DIR/spans/ (src/segmentedSpanStore.ts).
 // The old single-file spans.json exists only as a migration source — split into segments on the
 // first boot and preserved as spans.json.bak, never deleted.
@@ -1972,7 +1986,10 @@ function schedulePushUpdate() {
 
 // ── Dashboard HTML ────────────────────────────────────────────────────────────
 
-function getHtml(restrictedViewer = false): string {
+// `restrictedViewer` is REQUIRED, not defaulted (WYC4KB50 #5): a `= false` default would fail OPEN —
+// a future call site that forgot the arg would silently serve the full (unrestricted) settings chrome
+// to a restricted viewer. Making it mandatory turns that omission into a compile error.
+function getHtml(restrictedViewer: boolean): string {
   const sessionSummary = buildSessionSummary()
   // Strip full timeline + per-file ops before inlining — they can be many MB across sessions.
   // Both are loaded lazily via /api/timeline/:sessionId after first paint.
@@ -2702,12 +2719,15 @@ const admission = new AdmissionController(admissionLimitsFromEnv(process.env, Ma
 
 // These endpoints must ALWAYS answer, even at capacity: /events is a long-lived SSE stream (holding
 // an admission slot for its whole lifetime would drain the pool), /api/server-stats is how monitors
-// and the CLI read health under load, and GET /api/hook-config is the kill-switch read (you must be
-// able to turn capture/gate OFF when the box is on fire).
+// and the CLI read health under load, GET /api/hook-config is the kill-switch read (you must be able
+// to turn capture/gate OFF when the box is on fire), and GET /api/embed-status is a header-only wiring
+// probe the embedding proxy's health-check hits (WYC4KB50 #9 — the gate block returns it before
+// admission today, but registering it here keeps it exempt if that block is ever reordered).
 function isAdmissionExempt(method: string, url: string): boolean {
   return url === '/events'
     || url === '/api/server-stats'
     || (method === 'GET' && url === '/api/hook-config')
+    || (method === 'GET' && url === '/api/embed-status')
 }
 function sendBusy(res: http.ServerResponse, adm: AdmitResult): void {
   res.writeHead(503, { 'Content-Type': 'application/json', 'Retry-After': String(adm.retryAfterSec ?? 1) })
@@ -2770,14 +2790,15 @@ const uiServer = http.createServer(async (req, res) => {
 
   // TRDD-1ZH1D5EG (#4 Q9) — the wiring probe: lets ai-maestro PROVE its proxy stamps assertions
   // and this gate consumes them, instead of assuming (a proxy that stamps nothing would
-  // otherwise pass its tests while the gate never engages). keyLoaded is always true here
-  // because a failed key load refuses boot (fail-fast in ensureEmbedKey).
+  // otherwise pass its tests while the gate never engages). keyLoaded is FALSE when the key file
+  // was unusable at boot (WYC4KB50 #1) — the feature is disabled and the embedding side sees why
+  // (a present header would 403) instead of guessing. Vary so a cache can't cross viewer roles.
   if (req.method === 'GET' && url === '/api/embed-status') {
-    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Vary': 'X-Agentlens-Viewer' })
     res.end(JSON.stringify({
       mode: viewerRole === 'standalone' ? 'standalone' : 'embedded',
       role: viewerRole === 'maestro' ? 'maestro' : viewerRole === 'restricted' ? 'user' : null,
-      keyLoaded: true,
+      keyLoaded: EMBED_KEY !== null,
     }))
     return
   }
@@ -3666,6 +3687,11 @@ const uiServer = http.createServer(async (req, res) => {
   if (url === '/' || url === '/index.html') {
     res.writeHead(200, {
       'Content-Type': 'text/html',
+      // TRDD-1ZH1D5EG (WYC4KB50 #4) — the served HTML differs by viewer role (the restricted meta
+      // tag), so it MUST NOT be cached across roles: a shared cache keyed only on the URL could hand
+      // a maestro the restricted page (or vice versa). Vary on the request header the verdict derives
+      // from so any cache keys on it too.
+      'Vary': 'X-Agentlens-Viewer',
       // TRDD-FMIZO8Y4 — the embed contract, made EXPLICIT instead of permission-by-omission:
       // loopback-served apps (the ai-maestro UI on localhost:23000, any local tool) MAY iframe the
       // dashboard — that is now guaranteed, so a future hardening pass cannot silently break the

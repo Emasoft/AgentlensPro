@@ -3346,6 +3346,13 @@ export function startMcpHttpServer(
     // user's session data (prompts, costs, project paths), so ACAO:* let ANY browsed page read
     // them cross-origin — the same read-exfil class the UI server closed (TRDD-F6BM1BDI). The
     // policy is shared via src/httpOrigin.ts; non-browser clients send no Origin and are unaffected.
+    //
+    // NON-GOAL (WYC4KB50 #8): the TRDD-1ZH1D5EG viewer-role gate (X-Agentlens-Viewer) is wired into
+    // the UI server ONLY, not here. That is deliberate: this endpoint binds loopback (127.0.0.1) and
+    // is reached server-to-server by MCP clients (Claude Code, the CLI) — ai-maestro's reverse proxy
+    // forwards the UI port, not this one, so no browser viewer reaches it. If a future deployment
+    // ever proxies THIS port to untrusted viewers, it must add the viewer-role gate here too — the
+    // loopback bind + origin check is the current containment, not a role check.
     setAllowedOriginCors(req, res)
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS')
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept, mcp-session-id')
