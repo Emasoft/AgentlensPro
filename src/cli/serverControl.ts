@@ -190,8 +190,8 @@ export function openDashboard(): void {
 // Keeps the collector alive: on any non-clean exit (a V8 OOM abort exits 134, a signal kill,
 // etc.) it restarts the collector with EXPONENTIAL BACKOFF and appends the crash reason to
 // DATA_DIR/crash.log. Before this existed the collector died silently and every OTEL export
-// in the dead window was lost. Runs in the FOREGROUND so a process manager (launchd via
-// scripts/agentlens.plist.template, or a terminal) supervises the supervisor.
+// in the dead window was lost. Runs in the FOREGROUND so a process manager (launchd via the
+// embedded plist that `daemon install` writes, or a terminal) supervises the supervisor.
 
 const HEALTHY_MS = 60_000       // a child that ran this long is "healthy" → reset backoff on its exit
 const STDERR_TAIL_BYTES = 8 * 1024

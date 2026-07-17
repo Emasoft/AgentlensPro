@@ -14,8 +14,8 @@ suite('environment/filesystem — pure helpers (TRDD-HUWJVQJA)', () => {
   })
 
   test('pickMountFsType prefers the LONGEST matching mountpoint over a shorter one', () => {
-    // '/Users/emanuelesabetta/proj' matches both '/' and '/Users' — the longer wins (hfs, not apfs).
-    assert.strictEqual(pickMountFsType(MOUNT_OUTPUT, '/Users/emanuelesabetta/proj'), 'hfs')
+    // '/Users/x/proj' matches both '/' and '/Users' — the longer wins (hfs, not apfs).
+    assert.strictEqual(pickMountFsType(MOUNT_OUTPUT, '/Users/x/proj'), 'hfs')
   })
 
   test('pickMountFsType does not match a sibling path with the same string prefix', () => {

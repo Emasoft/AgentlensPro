@@ -41,7 +41,6 @@
     "standalone/cli.js",
     "standalone/server.js",
     "scripts/safe_config_edit.py",
-    "scripts/agentlens.plist.template",
     "media/dashboard.js",
     "media/dashboard.css",
     "media/sidebar.js",
