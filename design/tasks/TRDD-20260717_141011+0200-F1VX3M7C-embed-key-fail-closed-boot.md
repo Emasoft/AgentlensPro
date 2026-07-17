@@ -1,15 +1,17 @@
 ---
 trdd-id: F1VX3M7C
 title: Embed-key bad/exposed at boot — fail-closed refuse-to-boot with a supervisor-terminal EX_CONFIG exit
-column: complete
+column: published
 created: 2026-07-17T14:10:11+0200
-updated: 2026-07-17T14:23:55+0200
+updated: 2026-07-17T15:34:55+0200
 current-owner: main
 task-type: security
 release-via: publish
 relevant-rules: []
 parent-trdd: WYC4KB50
 implementation-commits: [4a443ca, ca67c6f, b87c412]
+released-in: v2.10.1
+release-run: 29584261167
 ---
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-17 14:24 — DONE + LOCALLY DEPLOYED (tag/publish gated)
