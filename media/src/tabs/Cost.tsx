@@ -1,6 +1,6 @@
 import { useState } from 'preact/hooks'
 import { useEffect, useRef } from 'preact/hooks'
-import { sessionSummary, displaySessions, filteredSessions, dailyStats, lifetimeStats, selectedAgentFilter, timeRange, makeTimeRange, focusedSessionId, activeTab } from '../state'
+import { sessionSummary, displaySessions, filteredSessions, dailyStats, lifetimeStats, timeRange, makeTimeRange, focusedSessionId, activeTab } from '../state'
 import type { TimePreset } from '../state'
 import { getAgentColor, getSessionGlobalNumber, formatCompact, getAgentSourceLabel, formatSessionTime } from '../utils'
 import { calcSessionCost } from '../sessionMetrics'
@@ -497,18 +497,18 @@ export function Cost() {
         )}
       </div>
 
-      {/* 30-day history */}
-      {(() => {
+      {/* Token & cost history. The dailyStats/lifetimeStats feeds are lifetime + per-DAY bucketed,
+          independent of the time-range picker — correct for "All", meaningless for a 15m window. So
+          under a bounded preset we derive the totals from the already-window-scoped priced session
+          set and drop the 30-day bar chart (a per-day chart of a 15m window says nothing). This is
+          why a bounded window used to still show 30-day/lifetime numbers (TRDD-06Q5AXYN Phase 2). */}
+      {timeRange.value.preset === 'all' ? (() => {
         const stats = dailyStats.value
         const lifetime = lifetimeStats.value
-        const agentFilter = selectedAgentFilter.value
-        const filteredStats = agentFilter !== 'all'
-          ? stats
-          : stats
         return (
           <div style="margin-bottom:24px">
             <h3 style="margin:0 0 8px;font-size:13px;color:var(--muted)">30-DAY TOKEN &amp; COST HISTORY</h3>
-            <HistoryChart rows={filteredStats} />
+            <HistoryChart rows={stats} />
             <div style="font-size:10px;color:var(--muted);margin-top:4px">Click a bar to filter the session table to that day. Click again to clear.</div>
             {lifetime && lifetime.totalSessions > 0 && (
               <div style="display:flex;gap:20px;font-size:11px;color:var(--muted);flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid var(--vscode-panel-border)">
@@ -520,6 +520,27 @@ export function Cost() {
                 )}
               </div>
             )}
+          </div>
+        )
+      })() : (() => {
+        // Bounded window: aggregate over the window-scoped priced sessions (allCosts respects the
+        // active pricing mode). A per-day chart is dropped; the tiles report the window's totals.
+        const totalTokens = pricedSessions.reduce((n, s) =>
+          n + (s.inputTokens ?? 0) + (s.outputTokens ?? 0) + (s.cacheReadTokens ?? 0) + (s.cacheCreateTokens ?? 0), 0)
+        const totalCostUsd = allCosts.reduce((sum, c) => sum + c.cost.totalUsd, 0)
+        const startsMs = pricedSessions.map(s => Date.parse(s.startTime || '')).filter(n => !Number.isNaN(n))
+        const oldest = startsMs.length ? Math.min(...startsMs) : 0
+        const newest = startsMs.length ? Math.max(...startsMs) : 0
+        const fmt = (ms: number): string => new Date(ms).toISOString().slice(0, 16).replace('T', ' ')
+        return (
+          <div style="margin-bottom:24px">
+            <h3 style="margin:0 0 8px;font-size:13px;color:var(--muted)">TOKEN &amp; COST — SELECTED WINDOW</h3>
+            <div style="display:flex;gap:20px;font-size:11px;color:var(--muted);flex-wrap:wrap;padding:8px 0;border-top:1px solid var(--vscode-panel-border)">
+              <span>{pricedSessions.length} session{pricedSessions.length === 1 ? '' : 's'} in window</span>
+              <span>{formatCompact(totalTokens)} tokens</span>
+              <span style="color:var(--foreground)">~{'$' + totalCostUsd.toFixed(2)} estimated cost</span>
+              {oldest > 0 && <span>{fmt(oldest)} → {fmt(newest)}</span>}
+            </div>
           </div>
         )
       })()}
