@@ -2,17 +2,23 @@
 name: dashboard-tree-render-topology
 description: "where does the session timeline / waterfall / flow tree render in the dashboard / I added a button to Traces.tsx or Flow.tsx but it's invisible / there is no Traces or Flow tab in the UI / which component actually shows the subagent tree"
 ocd: 2026-07-12
-lmd: 2026-07-12
+lmd: 2026-07-17
 metadata:
   node_type: memory
   tier: component
   type: project
 ---
 
-The dashboard has **no `Traces` tab and no `Flow` tab**. `App.tsx` `TABS` + `ActivePanel`
-(media/src/App.tsx ~L38-62) render only: `sessions`, `context`, `cache`, `history`, `analytics`,
-`patterns` (Advisor), `export`, `import`, `help`. `Traces()` and `Flow()` top-level exports exist
-but are **dead** (no `<Traces/>` / `<Flow/>` render path).
+The dashboard has **no `Traces` tab, no `Flow` tab, and no `Cost` tab**. `App.tsx` `TABS` +
+`ActivePanel` (media/src/App.tsx, `TABS` at ~L41) render only these 8: `sessions`, `context`,
+`cache`, `history`, `analytics`, `patterns` (Advisor), `export`, `import` (plus `help`, a corner
+button). `Traces()`, `Flow()`, AND `Cost()` top-level exports exist but are **dead** — esbuild
+tree-shakes them (no `<Traces/>` / `<Flow/>` / `<Cost/>` render path). Consequence for Cost: the
+30-day HistoryChart + lifetime tiles it wraps (fed by `dailyStats`/`lifetimeStats`) render
+**nowhere**; the only LIVE cost pieces are `fmtUsd` / `CostBarChart` / `CostSection`, imported by
+Sessions / Analytics / Help. Three components render **directly in App.tsx, not via `TABS`** — so
+they are live despite not being tab entries: `<Alerts/>` (L117), `<Automation/>` (L120),
+`<CollectorGapBanner/>` (L526).
 
 The session tree the user actually sees is **expand-in-place inside the Sessions tab**. `Sessions.tsx`
 `SessionDetail` has a sub-section bar (`Overview | Trace | Flow | Tools | Files`, a `section` useState)
@@ -41,3 +47,10 @@ dashboard.js, but a NEW server route (e.g. an `/api/*` endpoint) needs the serve
   SessionBlock mount was invisible because the Traces tab doesn't exist. Lesson: the file name
   (`Traces.tsx`/`Flow.tsx`) is NOT the render surface — verify the actual `ActivePanel`/`SessionDetail`
   render path before mounting UI, and prefer a live dev-browser check to confirm the element renders.
+[^2]: [ocd:2026-07-17 lmd:2026-07-17 keywords:"edited_dead_code inert_edit tree_shaken Cost_tab Flow_reroute file_inventory_vs_render_tree recall_before_editing"] DO NOT trust a file-based
+  inventory (a `.tsx` under `media/src/tabs/`) as the set of live surfaces — TRDD-06Q5AXYN (global
+  time-window) edited dead code TWICE: Phase 2 rewrote `Cost()`'s aggregates and a Phase-1 reroute
+  touched `Flow()`; BOTH landed **inert** (tree-shaken, changed nothing the user sees). BECAUSE the
+  work started from a file list and I did NOT recall THIS page first, the same trap as [^1] was
+  re-hit. DO map `App.tsx` `TABS`/`ActivePanel` (the live-render set) — and recall this page — BEFORE
+  editing or mounting any tab component.
