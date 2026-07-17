@@ -158,6 +158,30 @@ iframe — this is an explicit contract, not an accident of missing headers:
 - The iframe's `/api/*` calls are same-origin *inside* the frame — no CORS setup is needed by the
   embedding app.
 
+### Viewer-role assertion (restricting the settings panel behind a proxy)
+
+A host that reverse-proxies the dashboard to multiple humans (e.g. ai-maestro) can restrict the
+settings panel per viewer by stamping a signed `X-Agentlens-Viewer` header on each forwarded
+request (full spec: [issue #4](https://github.com/Emasoft/AgentlensPro/issues/4)):
+
+```text
+X-Agentlens-Viewer: <b64url(payload)>.<b64url(HMAC-SHA256(b64url(payload), key))>
+payload = {"v":1,"role":"maestro"|"user","iat":<unix_ms>,"exp":<unix_ms>,"nonce":"<hex>"}
+```
+
+- **Key:** `~/.agentlens/embed-key` — 32 random bytes as lowercase hex, created by the server on
+  first start with mode `0600`. The server refuses to boot on a corrupt or wider-than-0600 key
+  file (a world-readable shared secret is not a shared secret). The proxy reads the same file.
+- **No header ⇒ standalone mode** — full access, exactly today's behavior. Solo users, local
+  hooks, and the CLI never send the header and are unaffected.
+- **`role:"maestro"`** ⇒ full access. **`role:"user"`** ⇒ restricted viewer: only
+  `GET`/`HEAD`/`OPTIONS` pass (every mutating endpoint returns 403), `GET /api/hook-config` is
+  also refused, and the served page hides the settings panel, the gear button, and the Import tab.
+- **Any unverifiable header** (bad signature, expired, malformed, unknown `v`, unknown role)
+  ⇒ the whole request is refused with 403 — never a silent downgrade to full access.
+- **`GET /api/embed-status`** echoes `{mode, role, keyLoaded}` so the embedding side can prove
+  its assertions are actually consumed.
+
 ## Data Sources
 
 AgentlensPro collects data from two independent sources per agent. Each session row shows a badge — **OTEL** or **Log** — indicating where its data came from. If both capture the same session: for Claude sessions the log transcript wins on collision (OTEL is a lossy lower bound), and OTEL wins only where no transcript exists; for every other agent OTEL wins.

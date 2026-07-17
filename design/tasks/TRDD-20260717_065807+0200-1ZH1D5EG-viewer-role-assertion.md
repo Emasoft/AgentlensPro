@@ -1,9 +1,9 @@
 ---
 trdd-id: 1ZH1D5EG
 title: Signed viewer-role assertion — MAESTRO-only settings panel for the embedded dashboard (AgentlensPro#4)
-column: dev
+column: ai_review
 created: 2026-07-17T06:58:07+0200
-updated: 2026-07-17T06:58:07+0200
+updated: 2026-07-17T07:20:00+0200
 current-owner: main
 task-type: feature
 severity: minor
@@ -16,6 +16,24 @@ test-requirements: [unit, typecheck, lint]
 ---
 
 # Signed viewer-role assertion (owner directive relayed via AgentlensPro#4)
+
+## ⏵ STATE — 2026-07-17 07:20 — SHIPPED + LIVE-PROVEN (all 4 phases)
+
+Mid-implementation the ai-maestro Claude posted the FULL spec (#4 comment 2) with a runnable
+test vector and 11 questions — three deltas adopted over the original design below: `v:1`
+contract version (unknown → reject), **invalid ≠ restricted** (an unverifiable header 403s the
+WHOLE request — §B5: garbage falling back to standalone would BE the attack), and a
+wider-than-0600 key file refuses boot. `GET /api/embed-status` added (their Q9 falsifiability
+ask). The #4 §B4 cross-repo test vector is pinned byte-for-byte in embedAuth.test.ts.
+
+Gate: 1352/0 passing, tsc ×2 0, lint 0 errors, mirrors OK. Deploy law honored (esbuild OK,
+symbol greps in both bundles, server pid 7868). LIVE-verified 9/9 against the running server
+with REAL signed assertions from the actual key file: standalone/user/maestro embed-status,
+garbage→403, user POST→403, user GET /api/hook-config→403, meta injected only for user,
+standalone hook-config read still 200 (kill-switch path untouched), key auto-created 0600.
+Commits: ef9b2b6 (phase 1), 1247924 (phase 2), 63e9ed1 (phase 3), phase-4 commit pending in
+this edit. All 11 #4 questions answered on the issue. Ships in the next release (post-2.9.0).
+Gate: human review.
 
 ## Owner directive (verbatim, via the ai-maestro Claude, 2026-07-17)
 

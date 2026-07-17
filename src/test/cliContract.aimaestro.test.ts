@@ -33,6 +33,13 @@
 //                                 totalCacheCreateTokens,events[].{turn,ts,cause,culprit,
 //                                 cacheCreateTokens,gapMinutes,ttlTier},causeHistogram,
 //                                 repeatOffenders,coverage
+//
+// Embed viewer-role assertion (AgentlensPro#4, TRDD-1ZH1D5EG — ai-maestro's proxy signs, we verify):
+//   header `X-Agentlens-Viewer: <b64url(payload)>.<b64url(HMAC-SHA256(b64url(payload), key))>`,
+//   payload {v:1,role:"maestro"|"user",iat,exp,nonce}, key = ~/.agentlens/embed-key (hex, 0600).
+//   Decision table (§B5): absent→standalone(full), maestro→full, user→restricted(GET/HEAD/OPTIONS
+//   only, minus GET /api/hook-config; settings chrome hidden), ANY failure→invalid(403 everything).
+//   GET /api/embed-status → {mode:"standalone"|"embedded", role:"maestro"|"user"|null, keyLoaded}.
 import * as assert from 'assert'
 import * as fs from 'fs'
 import * as os from 'os'
@@ -43,6 +50,7 @@ import {
   handleCheckCacheExpiry, handleGetCacheBreakReport,
 } from '../mcpServer'
 import { analyzeCacheBreaks, type CacheTurnInput } from '../shared/cacheBreak'
+import { resolveViewerRole, signViewerAssertion, VIEWER_HEADER } from '../embedAuth'
 import { buildCacheBreakGapReport, type GapBucketKey } from '../cacheCreationForensics'
 import { buildCacheBreakTimeline, type CacheBreakEvent } from '../cacheBreakTimeline'
 import type { ContextComposition } from '../shared/summarizerTypes'
@@ -296,5 +304,29 @@ suite('CLI contract lock — ai-maestro consumed fields (AgentlensPro#3)', () =>
     }
     assert.strictEqual(ev.ttlTier, '5m', BREAK('get_cache_break_timeline.events[].ttlTier (5m|1h|none)'))
     assert.strictEqual(ev.cause, 'TTL_EXPIRY', BREAK('get_cache_break_timeline.events[].cause (incl. TTL_EXPIRY)'))
+  })
+})
+
+// ── Embed viewer-role assertion (AgentlensPro#4, TRDD-1ZH1D5EG) ────────────────────────────────
+// ai-maestro's proxy SIGNS these; we verify. The full behavioral matrix (incl. the #4 §B4
+// cross-repo test vector) lives in embedAuth.test.ts — this suite pins only the pieces their
+// implementation hardcodes, so a rename/reshape fails HERE with a message routing to the issue.
+suite('CLI contract lock — embed viewer-role assertion (AgentlensPro#4)', () => {
+  test('the wire header name is x-agentlens-viewer', () => {
+    assert.strictEqual(VIEWER_HEADER, 'x-agentlens-viewer',
+      BREAK('the X-Agentlens-Viewer header name (their proxy stamps it per request)'))
+  })
+
+  test('the §B5 decision table verdicts: absent→standalone, user→restricted, maestro→maestro, garbage→invalid', () => {
+    const key = Buffer.from('a'.repeat(64), 'hex')
+    const now = 1_800_000_000_000
+    assert.strictEqual(resolveViewerRole(undefined, key, now), 'standalone',
+      BREAK('no-header ⇒ standalone full access (solo users must lose nothing)'))
+    assert.strictEqual(resolveViewerRole(signViewerAssertion('maestro', key, now, 60_000), key, now), 'maestro',
+      BREAK('valid maestro assertion ⇒ full access'))
+    assert.strictEqual(resolveViewerRole(signViewerAssertion('user', key, now, 60_000), key, now), 'restricted',
+      BREAK('valid user assertion ⇒ restricted viewer'))
+    assert.strictEqual(resolveViewerRole('garbage-header', key, now), 'invalid',
+      BREAK('unverifiable assertion ⇒ invalid/403 — NEVER a downgrade to standalone'))
   })
 })

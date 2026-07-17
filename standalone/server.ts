@@ -18,7 +18,7 @@ import { startLoopWatchdog } from '../src/loopWatchdog'
 import { mergeOtelAndLogSessions, linkSubagentTranscripts, graftOtelAttribution } from '../src/feedMergePolicy'
 import { calcTokenCostUsd } from '../src/shared/pricing'
 import { contextTokens } from '../src/shared/tokenBuckets'
-import { ensureEmbedKey, resolveViewerRole, type ViewerRole } from '../src/embedAuth'
+import { ensureEmbedKey, resolveViewerRole, VIEWER_HEADER, type ViewerRole } from '../src/embedAuth'
 import { countFallback, fallbackTotals } from '../src/shared/fallbackCounters'
 import { autoConfigureCodex, autoConfigureCopilotStandalone } from '../src/autoConfigNode'
 import { ensureTelemetryConfig, ensureAgentLensStopHook } from '../src/telemetryConfig'
@@ -2748,7 +2748,7 @@ const uiServer = http.createServer(async (req, res) => {
   // ONE blanket method gate, not per-route checks — a hidden settings panel is not a restricted
   // one unless its endpoints are dead too, and a per-route list always misses the next route.
   // A duplicated header (string[]) is present-but-unverifiable → invalid.
-  const rawViewerHeader = req.headers['x-agentlens-viewer']
+  const rawViewerHeader = req.headers[VIEWER_HEADER]
   const viewerRole: ViewerRole = Array.isArray(rawViewerHeader)
     ? 'invalid'
     : resolveViewerRole(rawViewerHeader, EMBED_KEY, Date.now())

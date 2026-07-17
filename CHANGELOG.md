@@ -4,6 +4,24 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [Unreleased]
+
+### Added
+
+- **Signed viewer-role assertion — the settings panel can now be restricted per viewer behind a
+  trusted proxy** (TRDD-1ZH1D5EG, co-designed with the ai-maestro Claude on
+  [#4](https://github.com/Emasoft/AgentlensPro/issues/4); owner-directed). A host that
+  reverse-proxies the dashboard stamps an HMAC-signed `X-Agentlens-Viewer` header per request
+  (`{v:1, role, iat, exp, nonce}` signed over the base64url payload with the shared
+  `~/.agentlens/embed-key`, created 0600 on first boot). No header = standalone mode, byte-for-byte
+  today's behavior. `role:"user"` = restricted viewer: one blanket server gate allows only
+  GET/HEAD/OPTIONS (plus refuses the config read `GET /api/hook-config`), and the served page
+  hides the settings panel, gear, and Import tab at every entry point (tab bar, deep-link, host
+  message). Any unverifiable header is refused outright with 403 — never downgraded to full
+  access, so a deliberately broken header cannot be used to shed the restriction. The #4
+  cross-repo test vector is pinned in CI so the two implementations cannot silently diverge, and
+  `GET /api/embed-status` lets the embedding side PROVE the gate is live.
+
 ## [2.9.0] - 2026-07-17
 
 ### Added

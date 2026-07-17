@@ -29,6 +29,10 @@ import * as path from 'path'
 
 export type ViewerRole = 'standalone' | 'maestro' | 'restricted' | 'invalid'
 
+// The wire header, lowercase as Node presents it in req.headers. ONE constant — the server and
+// the contract tests both import it, so a rename cannot half-land.
+export const VIEWER_HEADER = 'x-agentlens-viewer'
+
 /**
  * Read (or create on first boot) the shared HMAC key at `<dataDir>/embed-key`: 32 random
  * bytes as 64 lowercase hex chars, single line, mode 0600. ai-maestro reads the same file as
