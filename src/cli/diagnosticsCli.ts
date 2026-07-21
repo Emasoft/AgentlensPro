@@ -132,12 +132,18 @@ examples:  (discover the rest with 'list --desc' then 'help <tool>')
   agentlenspro get_conversation --sessionId <id> --turn 7          read one turn of a session verbatim
   agentlenspro batch '[{"tool":"get_burn_status"},{"tool":"get_account_status"}]'   N answers, ONE re-read
   agentlenspro get_cache_break_causes --out breaks.json            full JSON to disk, one-line digest to stdout
+  agentlenspro reload-cost                           recent /reload-plugins events + the exact cache-write tokens + $ each cost
+  agentlenspro get_lifecycle_events --kinds '["CLEAR"]'            when did /clear (and other session boundaries) fire
   agentlenspro env --json --out env.json             full environment report to a file (attach to a bug report)
   agentlenspro setup --dry-run                       read-only preview of what install/repair would change
   agentlenspro server status       agentlenspro daemon status      agentlenspro dashboard
 
 globals: --full (unshaped payload)   --out PATH (full JSON to disk, digest to stdout)
 server:  $AGENTLENS_MCP_URL (default http://localhost:4316/mcp); logs -> ~/.agentlens/server.log`
+
+// Short CLI aliases → the full tool name (TRDD-EYA3X5MQ). `reload-cost` is the user-requested
+// shortcut for "how much did each /reload-plugins cost me?"; the full tool stays callable too.
+const CMD_ALIASES: Record<string, string> = { 'reload-cost': 'get_plugin_reload_costs' }
 
 // ── Realtime risk / guard / hook-switch ops ─────────────────────────────────────────────────
 
@@ -476,7 +482,7 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
   if (cmd === 'help') {
     if (!rest[1]) throw new Error('help requires a tool name (agentlenspro list)')
     const tools = await fetchTools()
-    const t = resolveTool(tools, rest[1])
+    const t = resolveTool(tools, CMD_ALIASES[rest[1]] ?? rest[1])
     if (!t) throw new Error(`unknown tool "${rest[1]}" (agentlenspro list)`)
     console.log(renderHelp(t))
     return
@@ -511,9 +517,9 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
     return
   }
 
-  // Anything else is a tool subcommand.
+  // Anything else is a tool subcommand (or a short alias like `reload-cost`).
   const tools = await fetchTools()
-  const t = resolveTool(tools, cmd)
+  const t = resolveTool(tools, CMD_ALIASES[cmd] ?? cmd)
   if (!t) {
     throw new Error(`unknown command or tool "${cmd}". Tools:\n  ${tools.map(x => x.name).join('\n  ')}`)
   }

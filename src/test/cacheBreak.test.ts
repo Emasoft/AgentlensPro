@@ -98,4 +98,15 @@ suite('cacheBreak PLUGINS_RELOADED (TRDD-EYA3X5MQ — /reload-plugins multi-cata
     assert.notStrictEqual(r.turns[1].cause, 'PLUGINS_RELOADED')
     assert.strictEqual(r.turns[1].confidence, undefined)
   })
+
+  test('catalogs appearing for the FIRST time (session warmup) is NOT a reload', () => {
+    // Turn 1 has no catalog sources; turn 2 injects all 3. That is initial establishment, not a
+    // /reload-plugins RE-registration — the prevKinds guard must not mislabel it (the turn-2 false positive).
+    const turns: CacheTurnInput[] = [
+      { turn: 1, sources: [src('file', 'CLAUDE.md', 100)], inputTokens: 0, cacheReadTokens: 1000, cacheCreateTokens: 0 },
+      { turn: 2, sources: [src('file', 'CLAUDE.md', 100), src('toolCatalog', 'tools', 120), src('skill', 'skills', 250), src('agentCatalog', 'agents', 60)],
+        inputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 500_000 },
+    ]
+    assert.notStrictEqual(analyzeCacheBreaks('s', turns).turns[1].cause, 'PLUGINS_RELOADED')
+  })
 })

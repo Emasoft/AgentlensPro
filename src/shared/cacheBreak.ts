@@ -192,9 +192,13 @@ function classifyTurn(prev: CacheTurnInput, cur: CacheTurnInput, opts: AnalyzeCa
   // single-first-divergence pick (step 3), else it collapses to whichever catalog sorted first
   // (INJECTED_BLOCK_CHANGED / TOOLS_CHANGED) and the reload — the machine's #1 cache-break cost —
   // is never named. Confidence = high for 3+ catalogs, medium for exactly 2. (TRDD-EYA3X5MQ)
+  const prevKinds = new Set(prev.sources.map(s => s.kind))
   const churnedCatalogs = new Set<string>()
   for (const d of diffTurnSources(prev.sources, cur.sources)) {
-    if (d.status !== 'unchanged' && RELOAD_CATALOG_KINDS.has(d.kind)) churnedCatalogs.add(d.kind)
+    // Require the catalog kind to have EXISTED in prev: a /reload-plugins RE-registers ALREADY-present
+    // catalogs, so a kind appearing for the FIRST time is session warmup (initial injection), not a
+    // reload — this is what keeps turn-2 cold-start churn from being mislabeled a reload.
+    if (d.status !== 'unchanged' && RELOAD_CATALOG_KINDS.has(d.kind) && prevKinds.has(d.kind)) churnedCatalogs.add(d.kind)
   }
   if (churnedCatalogs.size >= 2) {
     const kinds = [...churnedCatalogs].sort()

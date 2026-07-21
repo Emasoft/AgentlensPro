@@ -606,9 +606,13 @@ export function classifyCacheBreak(prev: TurnPrefix | null, cur: TurnPrefix, tim
   //     per-layer classifier would name only the first (usually TOOLSET_CHANGED) and hide the reload —
   //     the machine's #1 cache-break cost. Detect the ≥2-catalog co-churn signature FIRST and name it.
   //     Confidence: high = all 3 churned, medium = 2. (TRDD-EYA3X5MQ)
-  const skillChurned = catalogKindChurned(prev.systemBlocks, cur.systemBlocks, 'skillcatalog')
-  const agentChurned = catalogKindChurned(prev.systemBlocks, cur.systemBlocks, 'agentcatalog')
-  const churn = [toolsV ? 'tools' : null, skillChurned ? 'skills' : null, agentChurned ? 'agents' : null].filter(Boolean) as string[]
+  // Require each catalog to have EXISTED in prev (a reload RE-registers established catalogs; a
+  // first-appearance is session warmup, not a reload).
+  const prevSysKinds = new Set(prev.systemBlocks.map(b => b.kind))
+  const skillChurned = prevSysKinds.has('skillcatalog') && catalogKindChurned(prev.systemBlocks, cur.systemBlocks, 'skillcatalog')
+  const agentChurned = prevSysKinds.has('agentcatalog') && catalogKindChurned(prev.systemBlocks, cur.systemBlocks, 'agentcatalog')
+  const toolsChurned = prev.tools.length > 0 && toolsV !== null
+  const churn = [toolsChurned ? 'tools' : null, skillChurned ? 'skills' : null, agentChurned ? 'agents' : null].filter(Boolean) as string[]
   if (churn.length >= 2) {
     return { cause: 'PLUGINS_RELOADED', culpritLayer: 'tools', culpritId: 'plugins:reloaded',
       culpritSummary: `plugin reload — ${churn.length} catalogs churned together (${churn.join(', ')})`,
@@ -716,6 +720,7 @@ export interface CacheBreakEvent {
   model?: string
   remediation: string
   rawDiffSummary?: string
+  confidence?: 'high' | 'medium' // set for PLUGINS_RELOADED: high = 3 catalogs churned, medium = 2
 }
 
 export interface RepeatOffender {
@@ -1046,6 +1051,7 @@ function classifyTurns(turns: ScannedTurn[], respById: Map<string, ResponseUsage
       model: evModel,
       remediation: REMEDIATION[verdict.cause],
       rawDiffSummary: verdict.rawDiffSummary,
+      confidence: verdict.confidence,
     })
   }
   return events

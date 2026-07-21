@@ -34,6 +34,10 @@ import { checkBurnRisk } from './burnGuard'
 import { buildRateLimitReport } from './rateLimitReport'
 import { buildRuntimeInventory } from './runtimeInventory'
 import type { HookEventRecord } from './hookEventStore'
+import { readHookEvents } from './hookEventStore'
+import { extractLifecycleEvents, type LifecycleKind } from './lifecycleEvents'
+import * as path from 'path'
+import * as fs from 'fs'
 import type { BodiesActivityReport } from './bodiesActivity'
 import { buildResidentCostReport } from './shared/residentCost'
 import { buildSpawnRollup } from './shared/spawnRollup'
@@ -1049,7 +1053,8 @@ const TOOLS = [
       'write, DIFFS its cached prefix against the previous turn in the docs hierarchy order (model → ' +
       'tools → effort → system → message-prefix), finds the FIRST divergent element = the break point, ' +
       'and CLASSIFIES the definitive culprit into a cause code: TOOLSET_CHANGED, TOOLS_REORDERED, ' +
-      'TOOL_SEARCH_DEFERRED, MCP_TOOLS_CHANGED, MODEL_SWITCH, EFFORT_SWITCH, HOOK_INJECTION, ' +
+      'TOOL_SEARCH_DEFERRED, MCP_TOOLS_CHANGED, PLUGINS_RELOADED (≥2 of tool/skill/agent catalogs ' +
+      'churned together = /reload-plugins — see get_plugin_reload_costs / `reload-cost`), MODEL_SWITCH, EFFORT_SWITCH, HOOK_INJECTION, ' +
       'SKILL_INJECTION, SKILL_DESCRIPTION_TRUNCATION, SKILL_CHANGED, INLINE_EXEC_RESULT_CHANGED, ' +
       'CLAUDE_MD_CHANGED, AGENT_METADATA_CHANGED, SYSTEM_TIMESTAMP, CONTEXT_ORDER_CHANGED, TTL_EXPIRY, ' +
       'COLD_START, COMPACTION, SUBAGENT_INTERLEAVE (A→B→A stream artifact — sub-agent calls share the ' +
@@ -1073,6 +1078,49 @@ const TOOLS = [
         window:    { type: 'number', description: 'Only scan bodies from the last N hours; omit for the bounded most-recent scan across all history' },
         topN:      { type: 'number', description: 'Cap on the returned per-turn events log, most-recent-first (default 25, max 100). repeatOffenders/causeHistogram are always computed over ALL classified turns regardless.' },
         format:    { type: 'string', description: 'Output format: json (default, full object) | table | markdown | timeline' },
+      },
+    },
+  },
+  {
+    name: 'get_plugin_reload_costs',
+    description:
+      'THE /reload-plugins COST SHORTCUT (TRDD-EYA3X5MQ). Lists the most recent /reload-plugins events ' +
+      'across all recent sessions with the EXACT cache-write cost each caused — tokens (cache_creation) ' +
+      '+ USD. A /reload-plugins re-registers the tool+skill+agent catalogs in the STABLE PREFIX, so the ' +
+      'cost is billed on the NEXT model turn (the local slash command itself makes no API call); this ' +
+      'classifies each session turn (via the SAME composition path get_cache_break_report uses — works ' +
+      'wherever the aggregate does, no raw-OTEL-body capture required) by the multi-catalog co-churn ' +
+      'signature — ≥2 of {tool, skill, agent} catalogs changing TOGETHER in one turn, which no organic ' +
+      'single change (a lazy tool-search load, one MCP toggle) produces. Each row: session, sessionStart, ' +
+      'turn, which catalogs churned, confidence (high=3 catalogs / medium=2), cacheCreateTokens, ' +
+      'wastedCostUsd, evidence (inference). Most-recent-first. This is the machine-measured #1 cache-break ' +
+      'cost. Reads sessionsConsidered/sessionsAnalyzed for scan scope (pool capped at 40, time-budgeted).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        window:    { type: 'number', description: 'Only scan bodies from the last N hours; omit for the bounded most-recent scan across all history' },
+        minTokens: { type: 'number', description: 'Only count reload turns whose cache_creation ≥ this (default 5000)' },
+        topN:      { type: 'number', description: 'Cap on the returned reloads list, most-recent-first (default 25, max 200)' },
+      },
+    },
+  },
+  {
+    name: 'get_lifecycle_events',
+    description:
+      'The session-LIFECYCLE timeline (TRDD-EYA3X5MQ): /clear, /compact, resume, fork, startup, ' +
+      'session-end, turn-death (StopFailure), and Pre/PostCompact — the harness events that bound and ' +
+      'RESET a session — read from the lifecycle hook-event store (needs --install-hooks). Most notably ' +
+      '/clear (SessionStart source=clear), the cost REMEDY that resets the transcript floor. Each row: ts, ' +
+      'session, kind, detail (the source/reason/trigger/error_type discriminator), ev (raw hook name). ' +
+      'Per-turn Stop events are excluded by default (noise); pass `kinds` to select an exact set. Says ' +
+      'honestly when the hook store is absent (dirExists:false).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        session: { type: 'string', description: 'Only this session id' },
+        kinds:   { type: 'array', items: { type: 'string' }, description: 'Keep only these lifecycle kinds (e.g. ["CLEAR","STOP_FAILURE","COMPACT"]); default = all except the per-turn STOP' },
+        window:  { type: 'number', description: 'Only events from the last N hours' },
+        limit:   { type: 'number', description: 'Cap the returned events, most-recent-first (default 100)' },
       },
     },
   },
@@ -2257,6 +2305,76 @@ export async function handleGetCacheBreakReport(
   }
 }
 
+// get_plugin_reload_costs / `reload-cost` (TRDD-EYA3X5MQ) — the user's shortcut for "how much did each
+// /reload-plugins cost me?". Built on the SAME composition path as get_cache_break_report (not the raw
+// OTEL bodies, which may be un-captured on a given machine), so it works wherever the aggregate report
+// does. Each session's turns are classified by the P4 cache-break classifier; we keep ONLY the
+// PLUGINS_RELOADED turns (≥2 of tool/skill/agent catalogs churned together) and list them most-recent-
+// first. The cost is the turn's cache_creation — billed on the turn that first carries the reloaded
+// catalog, since /reload-plugins is a local command whose changed prefix rides the NEXT model request.
+async function handleGetPluginReloadCosts(
+  sessions: SessionSummaryCard[],
+  getTimeline: ((id: string) => unknown[]) | null,
+  getComposition: CompositionAccessor | null,
+  args: { window?: number; minTokens?: number; topN?: number; workspace?: string },
+) {
+  if (!getComposition) return { error: 'Composition accessor unavailable — reload-cost needs local Claude logs.' }
+  const cap = Math.min(Math.max(1, args.topN ?? 25), 200)
+  const scope = args.workspace?.trim()
+  const sinceMs = args.window ? Date.now() - args.window * 3_600_000 : undefined
+  const pred = (s: SessionSummaryCard) => {
+    if (scope && !(s.workspace ?? '').startsWith(scope)) return false
+    if (sinceMs !== undefined && Date.parse(s.startTime) < sinceMs) return false
+    return true
+  }
+  const { pool, considered, withLog } = fileBackedPool(sessions, pred, 40)
+  const reportFor = async (s: SessionSummaryCard): Promise<{ card: SessionSummaryCard; report: CacheBreakReport | null }> =>
+    ({ card: s, report: buildCacheBreakReport(s.sessionId, asTimeline(getTimeline, s.sessionId, s), await getComposition(s.sessionId), s.model) })
+  const { results, scanned, stoppedEarly } = await scanWithBudget(pool, DRILL_SCAN_TIME_BUDGET_MS, reportFor)
+
+  const reloads: Array<{
+    sessionId: string; sessionStart: string; turn: number; catalogs: string | null
+    confidence: 'high' | 'medium'; cacheCreateTokens: number; wastedCostUsd: number; model?: string; evidence: 'inference'
+  }> = []
+  let totalCC = 0, totalCost = 0, analyzed = 0
+  for (const r of results) {
+    if (!r || !r.report) continue
+    analyzed++
+    for (const t of r.report.turns) {
+      if (t.cause !== 'PLUGINS_RELOADED') continue
+      if (t.wastedTokens <= 0) continue   // a cost list excludes zero-cost churns (interleave artifacts / no real rewrite)
+      totalCC += t.wastedTokens
+      totalCost += t.wastedCostUsd
+      reloads.push({
+        sessionId: r.report.sessionId, sessionStart: r.card.startTime, turn: t.turn,
+        catalogs: t.breakSourceLabel ?? null, confidence: t.confidence ?? 'medium',
+        cacheCreateTokens: t.wastedTokens, wastedCostUsd: +t.wastedCostUsd.toFixed(4),
+        model: r.card.model, evidence: 'inference',
+      })
+    }
+  }
+  // Most-recent-first: session start (ISO, lexical == chronological) then turn descending within a session.
+  reloads.sort((a, b) => (a.sessionStart < b.sessionStart ? 1 : a.sessionStart > b.sessionStart ? -1 : b.turn - a.turn))
+  const shown = reloads.slice(0, cap)
+  return {
+    windowHours: args.window ?? null, scope: scope ?? 'all',
+    sessionsConsidered: considered, sessionsWithLog: withLog, sessionsAnalyzed: analyzed,
+    reloadsFound: reloads.length,
+    totalCacheCreateTokens: totalCC, totalCostUsd: +totalCost.toFixed(4),
+    ...(stoppedEarly ? {
+      scanStoppedEarly: true,
+      scanNote: `SAMPLE: the ${DRILL_SCAN_TIME_BUDGET_MS / 1000}s scan budget stopped after ${scanned.length} of ${pool.length} pooled sessions — retry to widen (reparsed timelines are cached).`,
+    } : {}),
+    reloads: shown,
+    reloadsNote: reloads.length > cap
+      ? `Showing the most recent ${shown.length} of ${reloads.length} inferred reloads (raise topN, max 200).`
+      : undefined,
+    note: reloads.length === 0
+      ? 'No /reload-plugins detected in the scanned sessions (a reload shows as ≥2 of tool/skill/agent catalogs churning in one turn). Inference source = the same composition path as get_cache_break_report.'
+      : undefined,
+  }
+}
+
 async function handleGetContextInflationReport(
   sessions: SessionSummaryCard[],
   getComposition: CompositionAccessor | null,
@@ -3140,6 +3258,27 @@ export function createMcpServer(opts: McpServerOptions): Server {
         const a = args as { sessionId?: string; scope?: string; minTokens?: number; window?: number; topN?: number; format?: TimelineFormat }
         const report = await buildCacheBreakTimeline({ sessionId: a.sessionId, scope: a.scope, minTokens: a.minTokens, windowHours: a.window, topN: a.topN })
         result = formatTimeline(report, a.format ?? 'json')
+        break
+      }
+      case 'get_plugin_reload_costs': {
+        result = await handleGetPluginReloadCosts(sessions, getTimeline, getComposition, args as { window?: number; minTokens?: number; topN?: number; workspace?: string })
+        break
+      }
+      case 'get_lifecycle_events': {
+        const a = args as { session?: string; kinds?: string[]; window?: number; limit?: number }
+        const dir = path.join(os.homedir(), '.agentlens', 'hook-events')
+        const dirExists = fs.existsSync(dir)
+        // Date.now() is fine here — mcpServer is not a Workflow script (that is the only place it is banned).
+        const sinceMs = a.window ? Date.now() - a.window * 3_600_000 : undefined
+        const records = dirExists ? readHookEvents(dir, { session: a.session, sinceMs, limit: 1000 }) : []
+        const events = extractLifecycleEvents(records, {
+          session: a.session, kinds: a.kinds as LifecycleKind[] | undefined, limit: a.limit ?? 100,
+        })
+        result = {
+          hookEventsDir: dir, dirExists, count: events.length, events,
+          note: dirExists ? undefined
+            : `No lifecycle hook-event store at ${dir} — run 'agentlenspro --install-hooks' then restart the session to capture /clear and other lifecycle events.`,
+        }
         break
       }
       case 'check_burn_risk': {
