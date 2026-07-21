@@ -29,6 +29,7 @@ import { isDisallowedCrossOrigin, setAllowedOriginCors } from '../src/httpOrigin
 import { resolveCallContext, callBodyRegistry } from '../src/rawBodyContext'
 import { appendHookEvent, readHookEvents, purgeHookEventBuckets, hookEventsDiskUsage, verifyAppendedLine, quarantineSpoolFile, type HookEventRecord, type AppendPosition } from '../src/hookEventStore'
 import { extractLifecycleEvents, type LifecycleKind } from '../src/lifecycleEvents'
+import { scanCacheRiskCommands, type CacheRiskKind } from '../src/cacheRiskCommands'
 import { buildDroppedLogEventRecord, appendDroppedLogEvent, purgeLogEventBuckets, logEventsDiskUsage } from '../src/logEventSink'
 import { BodiesActivityTracker } from '../src/bodiesActivity'
 import { evaluateAgentGate, evaluateSendMessageGate, buildAdvisory, readTranscriptContext, resolveMessageTargetLiveness, type AgentGateState, type GateThresholds, type LaunchSpawner } from '../src/agentGate'
@@ -2986,6 +2987,36 @@ const uiServer = http.createServer(async (req, res) => {
     const events = extractLifecycleEvents(records, { session, kinds, limit: Number.isFinite(limNum) && limNum > 0 ? limNum : 200 })
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ hookEventsDir: HOOK_EVENTS_DIR, dirExists: fs.existsSync(HOOK_EVENTS_DIR), count: events.length, events }))
+    return
+  }
+
+  // Cache-breaking slash commands, read straight from the Claude Code transcripts (TRDD-EYA3X5MQ).
+  // Distinct from /api/lifecycle-events, which reports what the HOOK store saw: this needs no hook
+  // at all and is retroactive over the whole history. DEFAULT WINDOW 7 DAYS — the scan is bounded by
+  // file mtime, so a window keeps a page load ~1.4s instead of ~5s for all history.
+  if (req.method === 'GET' && url === '/api/cache-risk-commands') {
+    const rawUrl = req.url ?? ''
+    const qIdx = rawUrl.indexOf('?')
+    const q = new URLSearchParams(qIdx >= 0 ? rawUrl.slice(qIdx + 1) : '')
+    const winNum = Number(q.get('window'))
+    const windowHours = Number.isFinite(winNum) && winNum > 0 ? winNum : 24 * 7
+    const limNum = Number(q.get('limit'))
+    const kinds = q.get('kinds')?.split(',').map(s => s.trim()).filter(Boolean) as CacheRiskKind[] | undefined
+    // Scan unlimited, then slice — the scan already collects the window before capping, so this
+    // costs nothing extra and lets the response state the TRUE total. A capped list whose count
+    // silently equals the cap reads as "that is all there was", which is how an undercount hides.
+    const limit = Number.isFinite(limNum) && limNum > 0 ? limNum : 300
+    const all = scanCacheRiskCommands({
+      sinceMs: Date.now() - windowHours * 3_600_000,
+      kinds: kinds?.length ? kinds : undefined,
+    })
+    const commands = all.slice(0, limit)
+    // Per-kind counts come from the FULL window, not the capped page — a chip that counts only the
+    // visible rows silently under-reports exactly the kinds that are most frequent.
+    const byKind: Record<string, number> = {}
+    for (const c of all) byKind[c.kind] = (byKind[c.kind] ?? 0) + 1
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ windowHours, total: all.length, count: commands.length, truncated: all.length > commands.length, byKind, commands }))
     return
   }
 

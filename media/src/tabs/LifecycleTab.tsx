@@ -30,6 +30,101 @@ const KIND_STYLE: Record<LifecycleKind, { color: string; glyph: string; label: s
 // The kinds offered as filter chips (STOP is opt-in — it fires every turn and is pure noise here).
 const FILTERABLE: LifecycleKind[] = ['CLEAR', 'COMPACT', 'STARTUP', 'RESUME', 'FORK', 'STOP_FAILURE', 'SESSION_END', 'CONFIG_CHANGE']
 
+// Cache-breaking slash commands (TRDD-EYA3X5MQ). A SEPARATE source from the hook store above: these
+// are read straight out of the Claude Code transcripts, so they need no hook installed and cover the
+// whole history. `mutation` is the honest part — a bare /plugin or /mcp only OPENS a picker, so it
+// may have cost nothing; `reload-cost` on the CLI is what settles that against the actual turn.
+type CacheRiskKind =
+  | 'PLUGINS_RELOADED' | 'SKILLS_RELOADED' | 'PLUGIN_CHANGED' | 'MCP_SERVER_TOGGLE'
+  | 'MODEL_SWITCHED' | 'ACCOUNT_SWITCHED' | 'COMPACTION' | 'CLEAR'
+
+interface RiskCommand { ts: number; session?: string; command: string; args?: string; kind: CacheRiskKind; mutation: 'certain' | 'ambiguous' }
+
+const RISK_STYLE: Record<CacheRiskKind, { color: string; label: string }> = {
+  PLUGINS_RELOADED:  { color: '#ef5350', label: 'plugins reloaded' },
+  SKILLS_RELOADED:   { color: '#ff8a65', label: 'skills reloaded' },
+  PLUGIN_CHANGED:    { color: '#ffa726', label: 'plugin changed' },
+  MCP_SERVER_TOGGLE: { color: '#ffca28', label: 'MCP toggled' },
+  MODEL_SWITCHED:    { color: '#ba68c8', label: 'model switched' },
+  ACCOUNT_SWITCHED:  { color: '#7986cb', label: 'account switched' },
+  COMPACTION:        { color: '#4dd0e1', label: '/compact' },
+  CLEAR:             { color: '#66bb6a', label: '/clear' },
+}
+
+function CacheRiskCommands() {
+  const [cmds, setCmds] = useState<RiskCommand[]>([])
+  const [total, setTotal] = useState(0)
+  const [kindCounts, setKindCounts] = useState<Record<string, number>>({})
+  const [days, setDays] = useState(7)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let live = true
+    setLoading(true)
+    fetch(`/api/cache-risk-commands?window=${days * 24}&limit=300`)
+      .then(r => r.json())
+      .then((d: { commands?: RiskCommand[]; total?: number; byKind?: Record<string, number> }) => {
+        if (!live) return
+        const list = Array.isArray(d.commands) ? d.commands : []
+        setCmds(list)
+        // The list is capped; show the TRUE total so a capped view never reads as the whole story.
+        setTotal(typeof d.total === 'number' ? d.total : list.length)
+        setKindCounts(d.byKind ?? {})
+      })
+      .catch(() => { if (live) { setCmds([]); setTotal(0); setKindCounts({}) } })
+      .finally(() => { if (live) setLoading(false) })
+    return () => { live = false }
+  }, [days])
+
+  const byKind = Object.entries(kindCounts).sort((a, b) => b[1] - a[1]) as Array<[CacheRiskKind, number]>
+
+  return (
+    <div style="margin-bottom:26px">
+      <div style="font-size:14px;font-weight:600;margin-bottom:2px">Cache-breaking commands</div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:10px">
+        Slash commands that rewrite the cached prefix, read from the Claude Code transcripts (no hook needed).
+        The cost lands on the NEXT model turn — run <code>agentlenspro reload-cost</code> for the tokens and $ per event.
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:10px">
+        {[1, 7, 30].map(d => (
+          <button key={d} onClick={() => setDays(d)}
+            style={`font-size:10px;padding:2px 8px;border-radius:10px;cursor:pointer;border:1px solid ${days === d ? '#4fc3f7' : 'var(--border,#3a3a3a)'};background:${days === d ? '#4fc3f722' : 'transparent'};color:${days === d ? '#4fc3f7' : 'var(--muted)'}`}>
+            {d}d
+          </button>
+        ))}
+        <span style="font-size:11px;color:var(--muted);margin-left:6px">
+          {loading ? 'scanning…' : total > cmds.length
+            ? `showing ${cmds.length} of ${total} commands`
+            : `${total} command${total === 1 ? '' : 's'}`}
+        </span>
+      </div>
+
+      {!loading && byKind.length > 0 && (
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
+          {byKind.map(([k, n]) => (
+            <span key={k} style={`font-size:10px;padding:2px 8px;border-radius:10px;border:1px solid ${(RISK_STYLE[k]?.color ?? '#888')}55;color:${RISK_STYLE[k]?.color ?? 'var(--muted)'}`}>
+              {RISK_STYLE[k]?.label ?? k} · {n}
+            </span>
+          ))}
+        </div>
+      )}
+
+      <div style="display:flex;flex-direction:column;gap:1px">
+        {cmds.map((c, i) => (
+          <div key={i} style="display:flex;align-items:center;gap:10px;padding:4px 8px;font-size:11px">
+            <span style={`color:${RISK_STYLE[c.kind]?.color ?? 'var(--muted)'};width:150px;font-weight:600`}>{c.command}{c.args ? ` ${c.args}` : ''}</span>
+            <span style="color:var(--muted);width:170px">{new Date(c.ts).toLocaleString()}</span>
+            <span style={`color:${RISK_STYLE[c.kind]?.color ?? 'var(--muted)'};width:130px`}>{RISK_STYLE[c.kind]?.label ?? c.kind}</span>
+            <span style={`width:80px;color:${c.mutation === 'certain' ? 'var(--muted)' : '#ffca28'}`} title={c.mutation === 'certain' ? 'always rewrites the prefix' : 'may have opened a picker and changed nothing — reload-cost settles it against the actual turn'}>{c.mutation}</span>
+            <span style="color:var(--muted);opacity:.7;font-family:var(--mono,monospace);font-size:10px">{(c.session ?? '').slice(0, 8)}</span>
+          </div>
+        ))}
+        {!loading && cmds.length === 0 && <div style="font-size:12px;color:var(--muted);padding:8px 0">No cache-breaking commands in this window.</div>}
+      </div>
+    </div>
+  )
+}
+
 export function Lifecycle() {
   const [events, setEvents] = useState<LifecycleEvent[]>([])
   const [dirExists, setDirExists] = useState(true)
@@ -64,6 +159,7 @@ export function Lifecycle() {
 
   return (
     <div style="padding:12px 16px;max-width:1100px">
+      <CacheRiskCommands />
       <div style="font-size:14px;font-weight:600;margin-bottom:2px">Session lifecycle</div>
       <div style="font-size:11px;color:var(--muted);margin-bottom:12px">
         Harness events that bound and RESET a session — <span style="color:#66bb6a">/clear</span> (the cost
