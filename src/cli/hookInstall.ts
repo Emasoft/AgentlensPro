@@ -25,6 +25,12 @@ import { claudeSettingsPath } from './cliCore'
 export const HOOK_EVENTS = [
   'SessionStart', 'SessionEnd', 'Stop', 'StopFailure', 'PreCompact', 'PostCompact',
   'PermissionRequest', 'Notification', 'SubagentStart', 'SubagentStop',
+  // ConfigChange (TRDD-EYA3X5MQ) — fires when a config file changes mid-session (source:
+  // user_settings|project_settings|local_settings|policy_settings|skills). A `/reload-plugins`
+  // re-reads plugin/skill config, so a `skills`-sourced ConfigChange is the CANDIDATE hook signal
+  // for a plugin reload (the machine's #1 cache-break cost). Rare (not per-turn) → negligible
+  // overhead. Whether /reload-plugins actually emits it is confirmed empirically after install.
+  'ConfigChange',
 ]
 
 // The burn gate (TRDD-GOD0108C) is the ONE narrow exception to the no-PreToolUse rule: it is

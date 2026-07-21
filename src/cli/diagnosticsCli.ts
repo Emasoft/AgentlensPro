@@ -101,7 +101,7 @@ operations:
                         BEFORE agent fan-outs.
   --install-skill       (re)install the agentlenspro-diagnostics skill into ~/.claude/skills/
                         from the packaged copy — idempotent (installed / updated / already current)
-  --install-hooks       register 'agentlenspro hook' on the 10 LIFECYCLE hook events AND the
+  --install-hooks       register 'agentlenspro hook' on the LIFECYCLE hook events AND the
                         burn-gate 'agentlenspro gate' (PreToolUse/PostToolUse matched to
                         ^(Task|Agent|Workflow|SendMessage)$ only) — denies the four measured
                         disaster launches with the reason fed back to the agent; fail-open
