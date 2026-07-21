@@ -56,6 +56,9 @@ window is ~1.4s vs ~5s for all history).
 (`/clear` also arrives as `SessionStart{source:clear}`): `[[hook-events-pipeline]]`. The general
 Claude Code hook/event catalog and the ConfigChange refutation live in the USER-scope reference
 `[[claude-code-hook-types]]`. Cost/TTL background: `[[cache-ttl-model]]`, `[[agentlens-burn-token-model]]`.
+The sibling reader on the same substrate — which plugin VERSION a session has loaded, and the
+`attachment` record type that proves it — is `[[loaded-plugin-version-detection]]`; it consumes the
+`/reload-plugins` events this page produces as its `lastReloadTs` join.
 
 ## Notes and lessons learned
 [^1]: [id:ATOM-LAYR-ONLY, status:valid, keywords:"no hook sees it therefore undetectable only detection path wrong layer enumerate layers before concluding", ocd:2026-07-21, lmd:2026-07-21]
