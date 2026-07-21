@@ -7,7 +7,7 @@ updated: 2026-07-21T21:34:29+0200
 current-owner: main
 task-type: feature
 scope: project
-implementation-commits: []
+implementation-commits: [c1742c3]
 relevant-rules: []
 ---
 
