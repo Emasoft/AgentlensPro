@@ -37,6 +37,7 @@ import type { HookEventRecord } from './hookEventStore'
 import { readHookEvents } from './hookEventStore'
 import { extractLifecycleEvents, type LifecycleKind } from './lifecycleEvents'
 import { scanCacheRiskCommands, type CacheRiskCommand, type CacheRiskKind } from './cacheRiskCommands'
+import { buildAttributionReport } from './skillAttribution'
 import * as path from 'path'
 import * as fs from 'fs'
 import type { BodiesActivityReport } from './bodiesActivity'
@@ -1106,6 +1107,27 @@ const TOOLS = [
         topN:      { type: 'number', description: 'Cap on the returned events list, most-recent-first (default 25, max 200)' },
         workspace: { type: 'string', description: 'Only sessions whose workspace path starts with this' },
         kinds:     { type: 'array', items: { type: 'string' }, description: 'Filter to these kinds: PLUGINS_RELOADED, SKILLS_RELOADED, PLUGIN_CHANGED, ACCOUNT_SWITCHED, MCP_SERVER_TOGGLE, MODEL_SWITCHED, COMPACTION, CLEAR' },
+      },
+    },
+  },
+  {
+    name: 'get_skill_attribution',
+    description:
+      'WHICH SKILL OR PLUGIN IS SPENDING MY MONEY — CLI alias `skill-cost` (TRDD-A4BA8IU5). Rolls up ' +
+      'tokens and USD per skill and per plugin from the `attributionSkill` / `attributionPlugin` stamps ' +
+      'Claude Code writes on assistant records. Exact and retroactive over the whole history: read off ' +
+      'disk, no hook, no schema, no OTEL capture required. Usage is counted ONCE per message id — ' +
+      'Claude Code writes one message as many content-block rows and repeats the full usage on each, ' +
+      'so a naive sum over-counts 2-5x (duplicateRowsSkipped reports what was collapsed). Each rollup: ' +
+      'messages, input/cacheRead/cacheWrite/output tokens, costUsd (priced per message with that ' +
+      "message's own model), models seen, first/last timestamp. Sorted most-expensive-first, which is " +
+      'the point — this is how you find the skill behind a burn. Read pricedMessages vs ' +
+      'attributedMessages for coverage.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        window: { type: 'number', description: 'Only count messages from the last N hours; omit for all history' },
+        topN:   { type: 'number', description: 'Cap each list (by cost, highest first); totals are unaffected' },
       },
     },
   },
@@ -3336,6 +3358,16 @@ export function createMcpServer(opts: McpServerOptions): Server {
         const a = args as { sessionId?: string; scope?: string; minTokens?: number; window?: number; topN?: number; format?: TimelineFormat }
         const report = await buildCacheBreakTimeline({ sessionId: a.sessionId, scope: a.scope, minTokens: a.minTokens, windowHours: a.window, topN: a.topN })
         result = formatTimeline(report, a.format ?? 'json')
+        break
+      }
+      case 'get_skill_attribution': {
+        const a = args as { window?: number; topN?: number }
+        // Date.now() is fine here — mcpServer is not a Workflow script (that is the only place it is banned).
+        const rep = buildAttributionReport({
+          sinceMs: a.window ? Date.now() - a.window * 3_600_000 : undefined,
+          topN: a.topN,
+        })
+        result = { ...rep, windowHours: a.window ?? null }
         break
       }
       case 'get_cache_risk_costs': {

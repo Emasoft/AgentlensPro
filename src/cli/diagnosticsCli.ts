@@ -134,6 +134,7 @@ examples:  (discover the rest with 'list --desc' then 'help <tool>')
   agentlenspro get_cache_break_causes --out breaks.json            full JSON to disk, one-line digest to stdout
   agentlenspro reload-cost                           recent cache-breaking commands (/reload-plugins, /reload-skills, /plugin, /login, /mcp, /model) + the cache-write tokens + $ each cost
   agentlenspro reload-cost --kinds '["ACCOUNT_SWITCHED"]'   just one kind (see byKind in the output for the full per-command totals)
+  agentlenspro skill-cost --topN 10             which SKILL / PLUGIN is spending your money (tokens + $ per skill, most expensive first)
   agentlenspro get_lifecycle_events --kinds '["CLEAR"]'            when did /clear (and other session boundaries) fire
   agentlenspro env --json --out env.json             full environment report to a file (attach to a bug report)
   agentlenspro setup --dry-run                       read-only preview of what install/repair would change
@@ -150,6 +151,7 @@ server:  $AGENTLENS_MCP_URL (default http://localhost:4316/mcp); logs -> ~/.agen
 const CMD_ALIASES: Record<string, string> = {
   'reload-cost': 'get_cache_risk_costs',
   'cache-risk-cost': 'get_cache_risk_costs',
+  'skill-cost': 'get_skill_attribution',
 }
 
 // ── Realtime risk / guard / hook-switch ops ─────────────────────────────────────────────────

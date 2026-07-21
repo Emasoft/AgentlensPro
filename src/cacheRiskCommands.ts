@@ -103,7 +103,7 @@ export interface ScanOptions {
 }
 
 /** Every `*.jsonl` under the given roots, one level deep (Claude Code's layout: <root>/<slug>/*.jsonl). */
-function transcriptFiles(dirs: ReadonlyArray<string>): string[] {
+export function transcriptFiles(dirs: ReadonlyArray<string>): string[] {
   const out: string[] = []
   for (const root of dirs) {
     let slugs: string[]
