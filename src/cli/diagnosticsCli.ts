@@ -132,7 +132,8 @@ examples:  (discover the rest with 'list --desc' then 'help <tool>')
   agentlenspro get_conversation --sessionId <id> --turn 7          read one turn of a session verbatim
   agentlenspro batch '[{"tool":"get_burn_status"},{"tool":"get_account_status"}]'   N answers, ONE re-read
   agentlenspro get_cache_break_causes --out breaks.json            full JSON to disk, one-line digest to stdout
-  agentlenspro reload-cost                           recent /reload-plugins events + the exact cache-write tokens + $ each cost
+  agentlenspro reload-cost                           recent cache-breaking commands (/reload-plugins, /reload-skills, /plugin, /login, /mcp, /model) + the cache-write tokens + $ each cost
+  agentlenspro reload-cost --kinds '["ACCOUNT_SWITCHED"]'   just one kind (see byKind in the output for the full per-command totals)
   agentlenspro get_lifecycle_events --kinds '["CLEAR"]'            when did /clear (and other session boundaries) fire
   agentlenspro env --json --out env.json             full environment report to a file (attach to a bug report)
   agentlenspro setup --dry-run                       read-only preview of what install/repair would change
@@ -142,8 +143,14 @@ globals: --full (unshaped payload)   --out PATH (full JSON to disk, digest to st
 server:  $AGENTLENS_MCP_URL (default http://localhost:4316/mcp); logs -> ~/.agentlens/server.log`
 
 // Short CLI aliases → the full tool name (TRDD-EYA3X5MQ). `reload-cost` is the user-requested
-// shortcut for "how much did each /reload-plugins cost me?"; the full tool stays callable too.
-const CMD_ALIASES: Record<string, string> = { 'reload-cost': 'get_plugin_reload_costs' }
+// shortcut for "how much did each /reload-plugins cost me?"; it now answers the same question for
+// every prefix-breaking command (/reload-skills, a mutating /plugin, /login, /mcp, /model), so the
+// tool behind it is named for the whole family. The alias keeps the name the user asked for, and
+// the full tool stays callable too.
+const CMD_ALIASES: Record<string, string> = {
+  'reload-cost': 'get_cache_risk_costs',
+  'cache-risk-cost': 'get_cache_risk_costs',
+}
 
 // ── Realtime risk / guard / hook-switch ops ─────────────────────────────────────────────────
 

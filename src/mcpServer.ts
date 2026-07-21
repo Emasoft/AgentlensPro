@@ -36,6 +36,7 @@ import { buildRuntimeInventory } from './runtimeInventory'
 import type { HookEventRecord } from './hookEventStore'
 import { readHookEvents } from './hookEventStore'
 import { extractLifecycleEvents, type LifecycleKind } from './lifecycleEvents'
+import { scanCacheRiskCommands, type CacheRiskCommand, type CacheRiskKind } from './cacheRiskCommands'
 import * as path from 'path'
 import * as fs from 'fs'
 import type { BodiesActivityReport } from './bodiesActivity'
@@ -1054,7 +1055,7 @@ const TOOLS = [
       'tools → effort → system → message-prefix), finds the FIRST divergent element = the break point, ' +
       'and CLASSIFIES the definitive culprit into a cause code: TOOLSET_CHANGED, TOOLS_REORDERED, ' +
       'TOOL_SEARCH_DEFERRED, MCP_TOOLS_CHANGED, PLUGINS_RELOADED (≥2 of tool/skill/agent catalogs ' +
-      'churned together = /reload-plugins — see get_plugin_reload_costs / `reload-cost`), MODEL_SWITCH, EFFORT_SWITCH, HOOK_INJECTION, ' +
+      'churned together = /reload-plugins — see get_cache_risk_costs / `reload-cost`), MODEL_SWITCH, EFFORT_SWITCH, HOOK_INJECTION, ' +
       'SKILL_INJECTION, SKILL_DESCRIPTION_TRUNCATION, SKILL_CHANGED, INLINE_EXEC_RESULT_CHANGED, ' +
       'CLAUDE_MD_CHANGED, AGENT_METADATA_CHANGED, SYSTEM_TIMESTAMP, CONTEXT_ORDER_CHANGED, TTL_EXPIRY, ' +
       'COLD_START, COMPACTION, SUBAGENT_INTERLEAVE (A→B→A stream artifact — sub-agent calls share the ' +
@@ -1082,25 +1083,29 @@ const TOOLS = [
     },
   },
   {
-    name: 'get_plugin_reload_costs',
+    name: 'get_cache_risk_costs',
     description:
-      'THE /reload-plugins COST SHORTCUT (TRDD-EYA3X5MQ). Lists the most recent /reload-plugins events ' +
-      'across all recent sessions with the EXACT cache-write cost each caused — tokens (cache_creation) ' +
-      '+ USD. A /reload-plugins re-registers the tool+skill+agent catalogs in the STABLE PREFIX, so the ' +
-      'cost is billed on the NEXT model turn (the local slash command itself makes no API call); this ' +
-      'classifies each session turn (via the SAME composition path get_cache_break_report uses — works ' +
-      'wherever the aggregate does, no raw-OTEL-body capture required) by the multi-catalog co-churn ' +
-      'signature — ≥2 of {tool, skill, agent} catalogs changing TOGETHER in one turn, which no organic ' +
-      'single change (a lazy tool-search load, one MCP toggle) produces. Each row: session, sessionStart, ' +
-      'turn, which catalogs churned, confidence (high=3 catalogs / medium=2), cacheCreateTokens, ' +
-      'wastedCostUsd, evidence (inference). Most-recent-first. This is the machine-measured #1 cache-break ' +
-      'cost. Reads sessionsConsidered/sessionsAnalyzed for scan scope (pool capped at 40, time-budgeted).',
+      'THE CACHE-BREAKING-COMMAND COST SHORTCUT — CLI alias `reload-cost` (TRDD-EYA3X5MQ). Lists the most ' +
+      'recent prefix-breaking slash commands with the cache-write cost each caused (cache_creation tokens ' +
+      '+ USD): /reload-plugins, /reload-skills, a mutating /plugin (install|uninstall|enable|disable|' +
+      'update|marketplace), /login and /logout (a credential swap makes the previous cache entry ' +
+      'unreachable), /mcp and /model. The causes are EXACT, not inferred — Claude Code persists every ' +
+      'built-in command it runs as a transcript entry, so this is read off disk retroactively with no ' +
+      'hook, no restart and no OTEL-body capture. The cost comes from the same composition path ' +
+      'get_cache_break_report uses, joined on the turn wall-clock: a command at time T is billed on the ' +
+      'FIRST turn at or after T, because the local command makes no API call and its changed prefix rides ' +
+      'the NEXT model request. Menu commands (bare /plugin, /mcp, /model) are marked mutation=ambiguous ' +
+      'and charged 0 when the following turn did not actually break. Read byKind for the per-command ' +
+      'totals, eventsPriced vs commandsFoundInTranscripts for coverage, and unexplainedReloadTurns for ' +
+      'reload-shaped turns no command explains (co-churn INFERENCE, listed separately and never summed in).',
     inputSchema: {
       type: 'object' as const,
       properties: {
-        window:    { type: 'number', description: 'Only scan bodies from the last N hours; omit for the bounded most-recent scan across all history' },
-        minTokens: { type: 'number', description: 'Only count reload turns whose cache_creation ≥ this (default 5000)' },
-        topN:      { type: 'number', description: 'Cap on the returned reloads list, most-recent-first (default 25, max 200)' },
+        window:    { type: 'number', description: 'Only consider commands from the last N hours; omit for all history' },
+        minTokens: { type: 'number', description: 'Skip events whose billed cache_creation is below this' },
+        topN:      { type: 'number', description: 'Cap on the returned events list, most-recent-first (default 25, max 200)' },
+        workspace: { type: 'string', description: 'Only sessions whose workspace path starts with this' },
+        kinds:     { type: 'array', items: { type: 'string' }, description: 'Filter to these kinds: PLUGINS_RELOADED, SKILLS_RELOADED, PLUGIN_CHANGED, ACCOUNT_SWITCHED, MCP_SERVER_TOGGLE, MODEL_SWITCHED, COMPACTION, CLEAR' },
       },
     },
   },
@@ -2305,24 +2310,51 @@ export async function handleGetCacheBreakReport(
   }
 }
 
-// get_plugin_reload_costs / `reload-cost` (TRDD-EYA3X5MQ) — the user's shortcut for "how much did each
-// /reload-plugins cost me?". Built on the SAME composition path as get_cache_break_report (not the raw
-// OTEL bodies, which may be un-captured on a given machine), so it works wherever the aggregate report
-// does. Each session's turns are classified by the P4 cache-break classifier; we keep ONLY the
-// PLUGINS_RELOADED turns (≥2 of tool/skill/agent catalogs churned together) and list them most-recent-
-// first. The cost is the turn's cache_creation — billed on the turn that first carries the reloaded
-// catalog, since /reload-plugins is a local command whose changed prefix rides the NEXT model request.
-async function handleGetPluginReloadCosts(
+// get_cache_risk_costs / `reload-cost` (TRDD-EYA3X5MQ) — "what did each cache-breaking command cost
+// me?". EXACT, not inferred: Claude Code persists every built-in slash command it runs as a
+// transcript entry, so /reload-plugins, /reload-skills, a mutating /plugin, /login|/logout, /mcp and
+// /model are read straight off disk with their real wall-clock (src/cacheRiskCommands.ts). The COST
+// still comes from the same composition path get_cache_break_report uses, joined on
+// CacheBreakTurn.tsMs: a command at time T is billed on the FIRST turn at or after T, because the
+// local command makes no API call of its own and its changed prefix rides the NEXT model request.
+//
+// The join is also what settles the ambiguous commands. Bare /plugin, /mcp and /model open a picker
+// the user may simply close — so an invocation is only charged when the turn that followed it
+// actually broke. No break after it ⇒ cost 0, stated as such, never quietly dropped.
+//
+// The old co-churn heuristic survives ONLY as a labeled residue: reload-shaped turns that no command
+// explains. It over-counted badly (102 vs 69 actual on this machine) so it must never be summed into
+// the exact rows — but discarding it outright would hide real breaks in sessions whose transcript
+// has been rotated away.
+async function handleGetCacheRiskCosts(
   sessions: SessionSummaryCard[],
   getTimeline: ((id: string) => unknown[]) | null,
   getComposition: CompositionAccessor | null,
-  args: { window?: number; minTokens?: number; topN?: number; workspace?: string },
+  args: { window?: number; minTokens?: number; topN?: number; workspace?: string; kinds?: string[] },
 ) {
   if (!getComposition) return { error: 'Composition accessor unavailable — reload-cost needs local Claude logs.' }
   const cap = Math.min(Math.max(1, args.topN ?? 25), 200)
   const scope = args.workspace?.trim()
   const sinceMs = args.window ? Date.now() - args.window * 3_600_000 : undefined
+  const minTokens = Math.max(0, args.minTokens ?? 0)
+
+  // 1. The exact causes, off disk. Machine-wide and retroactive — no hook, no restart, no capture.
+  const commands = scanCacheRiskCommands({
+    sinceMs,
+    kinds: args.kinds?.length ? (args.kinds as CacheRiskKind[]) : undefined,
+  })
+  const bySession = new Map<string, CacheRiskCommand[]>()
+  for (const c of commands) {
+    if (!c.session) continue
+    const list = bySession.get(c.session)
+    if (list) list.push(c); else bySession.set(c.session, [c])
+  }
+
+  // 2. Price them. Analysing a session is the expensive half, so spend the bounded pool ONLY on
+  //    sessions a command was actually typed in — otherwise the budget goes to sessions that can
+  //    contribute nothing to this report.
   const pred = (s: SessionSummaryCard) => {
+    if (!bySession.has(s.sessionId)) return false
     if (scope && !(s.workspace ?? '').startsWith(scope)) return false
     if (sinceMs !== undefined && Date.parse(s.startTime) < sinceMs) return false
     return true
@@ -2332,46 +2364,92 @@ async function handleGetPluginReloadCosts(
     ({ card: s, report: buildCacheBreakReport(s.sessionId, asTimeline(getTimeline, s.sessionId, s), await getComposition(s.sessionId), s.model) })
   const { results, scanned, stoppedEarly } = await scanWithBudget(pool, DRILL_SCAN_TIME_BUDGET_MS, reportFor)
 
-  const reloads: Array<{
-    sessionId: string; sessionStart: string; turn: number; catalogs: string | null
-    confidence: 'high' | 'medium'; cacheCreateTokens: number; wastedCostUsd: number; model?: string; evidence: 'inference'
-  }> = []
-  let totalCC = 0, totalCost = 0, analyzed = 0
+  interface Row {
+    when: string; sessionId: string; command: string; args?: string
+    kind: CacheRiskKind; mutation: 'certain' | 'ambiguous'
+    turn: number | null; cacheCreateTokens: number; wastedCostUsd: number
+    model?: string; evidence: 'exact'; note?: string
+  }
+  const rows: Row[] = []
+  const residue: Array<{ sessionId: string; turn: number; catalogs: string | null; cacheCreateTokens: number; wastedCostUsd: number; evidence: 'inference' }> = []
+  let totalCC = 0, totalCost = 0, analyzed = 0, priced = 0
+
   for (const r of results) {
     if (!r || !r.report) continue
     analyzed++
+    const cmds = (bySession.get(r.report.sessionId) ?? []).slice().sort((a, b) => a.ts - b.ts)
+    const timed = r.report.turns.filter(t => t.tsMs !== undefined).sort((a, b) => (a.tsMs ?? 0) - (b.tsMs ?? 0))
+    const explained = new Set<number>()
+    // A turn's cache_creation is ONE cost. Several commands can land before the same next turn
+    // (two /login 18s apart, a /reload-plugins immediately followed by /reload-skills) — they broke
+    // the prefix once, together, so only the EARLIEST is charged and the rest are listed at 0 with
+    // the reason. Charging each of them the full turn is exactly the double-count that made the old
+    // heuristic untrustworthy; `cmds` is sorted ascending so "earliest" is the first one seen.
+    const charged = new Set<number>()
+    for (const c of cmds) {
+      const billed = timed.find(t => (t.tsMs ?? 0) >= c.ts)
+      const alreadyCharged = billed !== undefined && charged.has(billed.turn)
+      const broke = billed?.broke === true && billed.wastedTokens > 0 && !alreadyCharged
+      if (billed) explained.add(billed.turn)
+      if (broke && billed.wastedTokens < minTokens) continue
+      const cc = broke ? billed.wastedTokens : 0
+      const usd = broke ? billed.wastedCostUsd : 0
+      if (broke) charged.add(billed.turn)
+      totalCC += cc; totalCost += usd
+      if (cc > 0) priced++
+      const row: Row = {
+        when: new Date(c.ts).toISOString(), sessionId: c.session ?? r.report.sessionId,
+        command: c.command, kind: c.kind, mutation: c.mutation,
+        turn: billed?.turn ?? null, cacheCreateTokens: cc, wastedCostUsd: +usd.toFixed(4),
+        model: r.card.model, evidence: 'exact',
+      }
+      if (c.args) row.args = c.args
+      if (!billed) row.note = 'no turn recorded at or after this command — cost unattributable'
+      else if (alreadyCharged) row.note = `turn ${billed.turn} was already charged to an earlier command — they broke the prefix once, together`
+      else if (!broke) row.note = 'the next turn did not break — this invocation changed nothing (menu opened and closed)'
+      rows.push(row)
+    }
+    // Reload-shaped turns nothing explains. Reported separately, never summed with the exact rows.
     for (const t of r.report.turns) {
-      if (t.cause !== 'PLUGINS_RELOADED') continue
-      if (t.wastedTokens <= 0) continue   // a cost list excludes zero-cost churns (interleave artifacts / no real rewrite)
-      totalCC += t.wastedTokens
-      totalCost += t.wastedCostUsd
-      reloads.push({
-        sessionId: r.report.sessionId, sessionStart: r.card.startTime, turn: t.turn,
-        catalogs: t.breakSourceLabel ?? null, confidence: t.confidence ?? 'medium',
-        cacheCreateTokens: t.wastedTokens, wastedCostUsd: +t.wastedCostUsd.toFixed(4),
-        model: r.card.model, evidence: 'inference',
+      if (t.cause !== 'PLUGINS_RELOADED' || t.wastedTokens <= 0 || explained.has(t.turn)) continue
+      residue.push({
+        sessionId: r.report.sessionId, turn: t.turn, catalogs: t.breakSourceLabel ?? null,
+        cacheCreateTokens: t.wastedTokens, wastedCostUsd: +t.wastedCostUsd.toFixed(4), evidence: 'inference',
       })
     }
   }
-  // Most-recent-first: session start (ISO, lexical == chronological) then turn descending within a session.
-  reloads.sort((a, b) => (a.sessionStart < b.sessionStart ? 1 : a.sessionStart > b.sessionStart ? -1 : b.turn - a.turn))
-  const shown = reloads.slice(0, cap)
+
+  rows.sort((a, b) => (a.when < b.when ? 1 : a.when > b.when ? -1 : 0))
+  const shown = rows.slice(0, cap)
+  const byKind: Record<string, { events: number; cacheCreateTokens: number; costUsd: number }> = {}
+  for (const r of rows) {
+    const k = byKind[r.kind] ?? (byKind[r.kind] = { events: 0, cacheCreateTokens: 0, costUsd: 0 })
+    k.events++; k.cacheCreateTokens += r.cacheCreateTokens; k.costUsd = +(k.costUsd + r.wastedCostUsd).toFixed(4)
+  }
+
   return {
     windowHours: args.window ?? null, scope: scope ?? 'all',
+    commandsFoundInTranscripts: commands.length,
+    sessionsWithCommands: bySession.size,
     sessionsConsidered: considered, sessionsWithLog: withLog, sessionsAnalyzed: analyzed,
-    reloadsFound: reloads.length,
+    eventsPriced: priced, eventsListed: rows.length,
     totalCacheCreateTokens: totalCC, totalCostUsd: +totalCost.toFixed(4),
+    byKind,
     ...(stoppedEarly ? {
       scanStoppedEarly: true,
       scanNote: `SAMPLE: the ${DRILL_SCAN_TIME_BUDGET_MS / 1000}s scan budget stopped after ${scanned.length} of ${pool.length} pooled sessions — retry to widen (reparsed timelines are cached).`,
     } : {}),
-    reloads: shown,
-    reloadsNote: reloads.length > cap
-      ? `Showing the most recent ${shown.length} of ${reloads.length} inferred reloads (raise topN, max 200).`
+    events: shown,
+    eventsNote: rows.length > cap ? `Showing the most recent ${shown.length} of ${rows.length} (raise topN, max 200).` : undefined,
+    unexplainedReloadTurns: residue.length ? residue.slice(0, cap) : undefined,
+    unexplainedNote: residue.length
+      ? `${residue.length} reload-shaped turn(s) had no matching command in the transcript (co-churn INFERENCE — historically over-counts; listed separately and NOT included in the totals above).`
       : undefined,
-    note: reloads.length === 0
-      ? 'No /reload-plugins detected in the scanned sessions (a reload shows as ≥2 of tool/skill/agent catalogs churning in one turn). Inference source = the same composition path as get_cache_break_report.'
-      : undefined,
+    note: commands.length === 0
+      ? 'No cache-risk commands found in the transcripts for this window/scope.'
+      : rows.length === 0
+        ? `Found ${commands.length} command(s) in the transcripts, but none of their sessions is in the analysable pool (needs local Claude logs + composition). Widen the window or drop the workspace filter.`
+        : undefined,
   }
 }
 
@@ -3260,8 +3338,8 @@ export function createMcpServer(opts: McpServerOptions): Server {
         result = formatTimeline(report, a.format ?? 'json')
         break
       }
-      case 'get_plugin_reload_costs': {
-        result = await handleGetPluginReloadCosts(sessions, getTimeline, getComposition, args as { window?: number; minTokens?: number; topN?: number; workspace?: string })
+      case 'get_cache_risk_costs': {
+        result = await handleGetCacheRiskCosts(sessions, getTimeline, getComposition, args as { window?: number; minTokens?: number; topN?: number; workspace?: string; kinds?: string[] })
         break
       }
       case 'get_lifecycle_events': {
