@@ -1,5 +1,6 @@
 import * as assert from 'assert'
 import { classifySlashCommand, parseCommandBlock, extractCacheRiskCommand } from '../cacheRiskCommands'
+import { analyzeCacheBreaks, type CacheTurnInput } from '../shared/cacheBreak'
 
 // ── Cache-risk slash commands read from the transcript (TRDD-EYA3X5MQ) ──────────────────────────
 // Ground truth for the causes the hook layer cannot see: there is no plugin-reload hook and
@@ -98,5 +99,40 @@ suite('cacheRiskCommands — transcript command detection (TRDD-EYA3X5MQ)', () =
   test('an unparseable timestamp is dropped rather than dated to the epoch', () => {
     assert.strictEqual(extractCacheRiskCommand({ ...RELOAD_ENTRY, timestamp: 'not-a-date' }), undefined)
     assert.strictEqual(extractCacheRiskCommand({ ...RELOAD_ENTRY, timestamp: undefined }), undefined)
+  })
+})
+
+// The join between the two halves: a command carries a wall-clock, a broken turn now carries one
+// too (CacheBreakTurn.tsMs), and "the command is billed on the first turn at or after it" is only
+// expressible if that field actually survives the analyzer.
+suite('cacheBreak — tsMs is the command→turn join key (TRDD-EYA3X5MQ)', () => {
+  const T1 = Date.parse('2026-07-21T11:00:00.000Z')
+  const T2 = Date.parse('2026-07-21T11:02:30.000Z')
+  const turns: CacheTurnInput[] = [
+    { turn: 1, sources: [], inputTokens: 0, cacheReadTokens: 1000, cacheCreateTokens: 0, timestampMs: T1 },
+    { turn: 2, sources: [], inputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 500_000, timestampMs: T2, model: 'b', },
+  ]
+
+  test('the emitted broken turn carries the turn wall-clock', () => {
+    const broken = analyzeCacheBreaks('s1', [{ ...turns[0], model: 'a' }, turns[1]]).turns.filter(t => t.broke)
+    assert.ok(broken.length >= 1, 'expected at least one broken turn')
+    assert.strictEqual(broken[0].tsMs, T2)
+  })
+
+  test('a command at 11:02:02 attributes to the FIRST turn at or after it, not the one before', () => {
+    const cmdTs = Date.parse('2026-07-21T11:02:02.291Z')   // the real reload from this session
+    const all = analyzeCacheBreaks('s1', [{ ...turns[0], model: 'a' }, turns[1]]).turns
+    const billed = all.filter(t => t.tsMs !== undefined && t.tsMs >= cmdTs)
+      .sort((a, b) => (a.tsMs ?? 0) - (b.tsMs ?? 0))[0]
+    assert.strictEqual(billed.turn, 2)
+    assert.strictEqual(billed.wastedTokens, 500_000)
+  })
+
+  test('a turn with no timeline timestamp leaves tsMs undefined rather than inventing 0', () => {
+    const noTs = analyzeCacheBreaks('s1', [
+      { turn: 1, sources: [], inputTokens: 0, cacheReadTokens: 1000, cacheCreateTokens: 0, model: 'a' },
+      { turn: 2, sources: [], inputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 500_000, model: 'b' },
+    ]).turns.filter(t => t.broke)
+    assert.strictEqual(noTs[0].tsMs, undefined)
   })
 })

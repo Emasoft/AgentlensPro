@@ -184,7 +184,7 @@ function classifyTurn(prev: CacheTurnInput, cur: CacheTurnInput, opts: AnalyzeCa
     turn: cur.turn, broke: true, cause,
     breakSourceLabel: label, breakSourceKind: kind,
     wastedTokens: wasted, wastedCostUsd: priceWaste(wasted, opts),
-    idleGapMs: gap, remediation: REMEDIATION[cause], confidence,
+    idleGapMs: gap, remediation: REMEDIATION[cause], confidence, tsMs: cur.timestampMs,
   })
 
   // 1. Model switch — a full, model-specific invalidation, dominates any block diff.

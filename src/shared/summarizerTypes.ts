@@ -422,6 +422,11 @@ export interface CacheBreakTurn {
   idleGapMs?: number          // inter-turn wall-clock gap (set when cause = IDLE_TTL_EXPIRY)
   remediation?: string        // one-line fix hint for this cause
   confidence?: 'high' | 'medium' // set for PLUGINS_RELOADED: high = 3+ catalogs churned, medium = 2
+  // Wall-clock of this turn (epoch ms), when the timeline carried one. This is the join key that
+  // lets an EXACT cause — a slash command read out of the transcript (src/cacheRiskCommands.ts) —
+  // be attributed to the turn that actually paid for it: a command at time T is billed on the
+  // first turn at or after T, because the changed prefix rides the NEXT model request.
+  tsMs?: number
 }
 
 // One block's before/after state across a turn transition, for the cache-break diff popup (#92,
