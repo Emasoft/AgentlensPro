@@ -28,6 +28,7 @@ import { startMcpHttpServer, labelBurnStatusAccounts } from '../src/mcpServer'
 import { isDisallowedCrossOrigin, setAllowedOriginCors } from '../src/httpOrigin'
 import { resolveCallContext, callBodyRegistry } from '../src/rawBodyContext'
 import { appendHookEvent, readHookEvents, purgeHookEventBuckets, hookEventsDiskUsage, verifyAppendedLine, quarantineSpoolFile, type HookEventRecord, type AppendPosition } from '../src/hookEventStore'
+import { extractLifecycleEvents, type LifecycleKind } from '../src/lifecycleEvents'
 import { buildDroppedLogEventRecord, appendDroppedLogEvent, purgeLogEventBuckets, logEventsDiskUsage } from '../src/logEventSink'
 import { BodiesActivityTracker } from '../src/bodiesActivity'
 import { evaluateAgentGate, evaluateSendMessageGate, buildAdvisory, readTranscriptContext, resolveMessageTargetLiveness, type AgentGateState, type GateThresholds, type LaunchSpawner } from '../src/agentGate'
@@ -2968,6 +2969,23 @@ const uiServer = http.createServer(async (req, res) => {
     })
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ count: events.length, events }))
+    return
+  }
+
+  // Lifecycle events (Lifecycle dashboard tab / get_lifecycle_events): typed session-boundary events
+  // (/clear, /compact, resume, fork, startup, session-end, turn-death) mapped from the hook store.
+  // TRDD-EYA3X5MQ. Per-turn STOP excluded by default; pass ?kinds=CLEAR,COMPACT to select an exact set.
+  if (req.method === 'GET' && url === '/api/lifecycle-events') {
+    const rawUrl = req.url ?? ''
+    const qIdx = rawUrl.indexOf('?')
+    const q = new URLSearchParams(qIdx >= 0 ? rawUrl.slice(qIdx + 1) : '')
+    const limNum = Number(q.get('limit'))
+    const kinds = q.get('kinds')?.split(',').map(s => s.trim()).filter(Boolean) as LifecycleKind[] | undefined
+    const session = q.get('session') ?? undefined
+    const records = readHookEvents(HOOK_EVENTS_DIR, { session, limit: 1000 })
+    const events = extractLifecycleEvents(records, { session, kinds, limit: Number.isFinite(limNum) && limNum > 0 ? limNum : 200 })
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ hookEventsDir: HOOK_EVENTS_DIR, dirExists: fs.existsSync(HOOK_EVENTS_DIR), count: events.length, events }))
     return
   }
 

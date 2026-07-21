@@ -71,9 +71,11 @@ export interface LifecycleFilter {
   limit?: number              // cap the returned count (after most-recent-first sort)
 }
 
-// Kinds excluded by default because they fire on EVERY turn and would drown the session-boundary
-// signal a lifecycle view exists to show. Opt back in with an explicit `kinds` filter.
-const DEFAULT_EXCLUDED: ReadonlySet<LifecycleKind> = new Set<LifecycleKind>(['STOP'])
+// Kinds excluded by default because they are high-volume and low-signal, and would drown the
+// cost-relevant boundaries (/clear, compaction, turn-death) a lifecycle view exists to show: STOP
+// fires every TURN, and SESSION_END fires for every session (expected, rarely actionable). Opt
+// either back in with an explicit `kinds` filter.
+const DEFAULT_EXCLUDED: ReadonlySet<LifecycleKind> = new Set<LifecycleKind>(['STOP', 'SESSION_END'])
 
 /**
  * Extract typed lifecycle events from raw hook records, most-recent-first. By default the per-turn

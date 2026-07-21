@@ -27,6 +27,7 @@ import { Patterns } from './tabs/Patterns'
 import { Context } from './tabs/ContextTab'
 import { Cache } from './tabs/CacheTab'
 import { History } from './tabs/HistoryTab'
+import { Lifecycle } from './tabs/LifecycleTab'
 import { Automation, checkAutomations } from './tabs/Automation'
 import { instructionFiles, appliedSuggestions, dismissedIds } from './tabs/Instructions'
 import { IngestionToggles, McpToggle } from './tabs/Settings'
@@ -43,6 +44,7 @@ export const TABS = [
   { id: 'context',    label: 'Context',    title: 'Context-window growth per turn: how large the prompt gets each turn (new input + cache-read + cache-created), expandable to the composition of each turn and sub-agent sub-sessions.' },
   { id: 'cache',      label: 'Cache',      title: 'Prompt-cache health: hit-rate SLI trend, worst sessions, top cache-break causes, the wasted-$ leaderboard of offending blocks, and the sub-agent fleet tree with per-child cache-warmth.' },
   { id: 'history',    label: 'History',    title: 'Full per-step context history reconstructed from the raw .jsonl — every block (messages, tool in/out, hooks, catalogs, files, sub-agent output, post-compact) drillable to its actual text, with per-step usage/cost and red burn-event highlights (cache breaks, massive cache-writes, model switches, fleet spawns).' },
+  { id: 'lifecycle',  label: 'Lifecycle',  title: 'Session-lifecycle timeline from the hook store: /clear (the cost remedy that resets the transcript floor), /compact, resume, fork, startup, session-end, and turn-death (StopFailure). Filter by kind; high-volume per-turn stops and per-session ends are hidden by default.' },
   { id: 'analytics',  label: 'Analytics',  title: 'Aggregate charts and metrics: token/cost trends, agent comparison, tool distribution, and active insights.' },
   { id: 'patterns',   label: 'Advisor',    title: 'Cross-session behavioral patterns, efficiency map, hot files, and instruction file recommendations.' },
   { id: 'export',     label: 'Export',     title: 'Export raw or redacted session data as JSON files.' },
@@ -56,6 +58,7 @@ function ActivePanel() {
     case 'context':   return <Context />
     case 'cache':     return <Cache />
     case 'history':   return <History />
+    case 'lifecycle': return <Lifecycle />
     case 'analytics': return <Analytics />
     case 'patterns':  return <Patterns />
     case 'export':    return <Export />

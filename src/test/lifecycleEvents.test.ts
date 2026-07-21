@@ -51,16 +51,21 @@ suite('lifecycleEvents — other events + discriminators', () => {
 suite('lifecycleEvents — extract (sort, default STOP filter, session, limit)', () => {
   const records: HookEventRecord[] = [
     rec('SessionStart', 300, { source: 'clear' }),
+    rec('SessionEnd', 275, { reason: 'clear' }),
     rec('Stop', 250, {}),
     rec('StopFailure', 200, { error_type: 'overloaded' }),
     rec('SessionStart', 100, { source: 'startup' }, 's2'),
     rec('PermissionRequest', 90, {}),
   ]
 
-  test('returns most-recent-first and EXCLUDES per-turn STOP by default', () => {
+  test('most-recent-first; EXCLUDES per-turn STOP and per-session SESSION_END by default', () => {
     const evs = extractLifecycleEvents(records)
     assert.deepStrictEqual(evs.map(e => e.kind), ['CLEAR', 'STOP_FAILURE', 'STARTUP'])
-    assert.deepStrictEqual(evs.map(e => e.ts), [300, 200, 100]) // descending; STOP(250) + PermissionRequest dropped
+    assert.deepStrictEqual(evs.map(e => e.ts), [300, 200, 100]) // descending; STOP(250), SESSION_END(275), PermissionRequest dropped
+  })
+
+  test('SESSION_END is opt-in via an explicit kinds filter', () => {
+    assert.deepStrictEqual(extractLifecycleEvents(records, { kinds: ['SESSION_END'] }).map(e => e.detail), ['clear'])
   })
 
   test('explicit kinds filter can re-include STOP and narrow the set', () => {
