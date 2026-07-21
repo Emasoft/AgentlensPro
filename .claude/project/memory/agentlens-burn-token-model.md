@@ -105,6 +105,10 @@ fresh session starts from a small base, collapsing the per-turn re-bill (`cost �
 per-turn-context` loses on both factors in a woken marathon). Evidence (gitignored, machine-local):
 `reports/burn-investigation/20260721_100514+0200-3-account-exhaustion-culprit.md`.
 
+**Scope note:** this page is PROJECT scope (git-tracked and pushed) and is clean — no secrets, home
+paths, usernames, emails or hostnames. The `memory-scope-leak` detector has flagged it for a
+"high-entropy secret"; that is a verified false positive on long identifiers, not a leak.[^8]
+
 ## Notes and lessons learned
 [^1]: [ocd:2026-07-08 lmd:2026-07-08] The statusline event path originally carried only a total
   (`deltaTokens`), so the per-bucket breakdown landed 100% in `unknown` for exactly the no-OTEL sessions
@@ -159,4 +163,14 @@ per-turn-context` loses on both factors in a woken marathon). Evidence (gitignor
   reload-cost returned 0 / "0 request body files" there) even while the aggregate reports show data.
   DO build it on the COMPOSITION path (`buildCacheBreakReport` over `getComposition` + the `sessions`
   cards — what `get_cache_break_report` uses) — that source is persisted and has data wherever the
-  aggregate does; per-turn wall-clock ts is unavailable there, so order by the session card's `startTime`.
+  aggregate does. (Superseded in part: per-turn wall-clock IS available now — `CacheBreakTurn.tsMs`
+  was exposed for the command→turn join, so order by that rather than the card's `startTime`.
+  See [[cache-risk-command-detection]].)
+[^8]: [id:ATOM-ENTR-IDENT, status:valid, keywords:"memory-scope-leak detector high-entropy secret false positive long camelCase identifier flagged as secret in project memory page", ocd:2026-07-21, lmd:2026-07-21]
+  DO NOT act on a `memory-scope-leak` "high-entropy secret" finding against THIS page without
+  checking the actual string, BECAUSE it is a verified FALSE POSITIVE (2026-07-21): the detector's
+  entropy heuristic does not exempt long identifiers, and the flagged runs are `scanSessionsAndResponses`,
+  `consumedBillableWeighted`, `buildCacheBreakTimeline` and friends — a technical page is mostly made
+  of those. Scanned for every real secret shape (`sk-`/`ghp_`/`AKIA`/PEM/JWT/40-hex/`token=`) and for
+  home paths, emails and hosts: all absent. DO grep the concrete secret shapes before demoting a page
+  to LOCAL, and keep the verdict (`reports/janitor-memory-scope-leak/`) so it is not re-litigated.
