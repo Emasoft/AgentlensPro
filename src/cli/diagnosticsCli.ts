@@ -152,6 +152,8 @@ const CMD_ALIASES: Record<string, string> = {
   'reload-cost': 'get_cache_risk_costs',
   'cache-risk-cost': 'get_cache_risk_costs',
   'skill-cost': 'get_skill_attribution',
+  'plugin-versions': 'get_loaded_plugin_versions',
+  'stale-plugins': 'get_loaded_plugin_versions',
 }
 
 // ── Realtime risk / guard / hook-switch ops ─────────────────────────────────────────────────

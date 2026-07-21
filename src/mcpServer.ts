@@ -38,6 +38,7 @@ import { readHookEvents } from './hookEventStore'
 import { extractLifecycleEvents, type LifecycleKind } from './lifecycleEvents'
 import { scanCacheRiskCommands, type CacheRiskCommand, type CacheRiskKind } from './cacheRiskCommands'
 import { buildAttributionReport } from './skillAttribution'
+import { buildLoadedVersionsReport } from './loadedPluginVersions'
 import * as path from 'path'
 import * as fs from 'fs'
 import type { BodiesActivityReport } from './bodiesActivity'
@@ -1128,6 +1129,32 @@ const TOOLS = [
       properties: {
         window: { type: 'number', description: 'Only count messages from the last N hours; omit for all history' },
         topN:   { type: 'number', description: 'Cap each list (by cost, highest first); totals are unaffected' },
+      },
+    },
+  },
+  {
+    name: 'get_loaded_plugin_versions',
+    description:
+      'WHICH PLUGIN VERSION IS EACH SESSION ACTUALLY RUNNING — CLI alias `plugin-versions` ' +
+      '(AgentlensPro#5). A plugin update lands machine-wide, but hooks and skills are SESSION-LOADED: ' +
+      'a running session keeps executing the OLD cached code until its own /reload-plugins, so a ' +
+      'fleet rollout leaves invisible old-behavior ghosts that look exactly like "the fix does not ' +
+      'work". Read off disk from the harness-emitted skill-load attachment (which carries the ' +
+      'versioned plugin-cache path), compared against the newest version in ~/.claude/plugins/cache. ' +
+      'loadedVersion is the MAX version observed in the session, deliberately NOT the ' +
+      'latest-by-timestamp one: a compaction replays earlier skill invocations as fresh records ' +
+      'carrying their ORIGINAL older content, so 18 of 19 multi-version sessions measured are ' +
+      'non-monotone in time. stale is TRI-STATE — true (behind the cache), false (current), or ' +
+      "'unknown' when a reload happened after our last evidence, because a fabricated verdict is " +
+      'worse than an honest gap. There is no pid: read lastActivityTs (transcript mtime) with ' +
+      'activeMinutes for liveness, and sessionsScanned vs sessionsWithSkillEvidence for the blind ' +
+      'spot — a session that invoked no plugin skill is absent from rows, NOT current.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        plugin:        { type: 'string',  description: 'Only this plugin, bare name (e.g. ai-maestro-janitor)' },
+        activeMinutes: { type: 'number',  description: 'Only sessions whose transcript was touched in the last N minutes' },
+        staleOnly:     { type: 'boolean', description: 'Only sessions behind the cache (keeps unknown, drops current)' },
       },
     },
   },
@@ -3368,6 +3395,11 @@ export function createMcpServer(opts: McpServerOptions): Server {
           topN: a.topN,
         })
         result = { ...rep, windowHours: a.window ?? null }
+        break
+      }
+      case 'get_loaded_plugin_versions': {
+        const a = args as { plugin?: string; activeMinutes?: number; staleOnly?: boolean }
+        result = buildLoadedVersionsReport({ plugin: a.plugin, activeMinutes: a.activeMinutes, staleOnly: a.staleOnly })
         break
       }
       case 'get_cache_risk_costs': {
