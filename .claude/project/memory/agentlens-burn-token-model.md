@@ -1,8 +1,8 @@
 ---
 name: agentlens-burn-token-model
-description: "5h/7d account window drained fast / burning 1M+ tokens per minute / what is consuming all the tokens / impossible that a few Claude sessions burned the window / cost vs token window limit / cache-read dominating burn / OTEL and JSONL report different token numbers for the same session / session cost looks 100x too big or negative"
+description: "5h/7d account window drained fast / burning 1M+ tokens per minute / what is consuming all the tokens / impossible that a few Claude sessions burned the window / cost vs token window limit / cache-read dominating burn / OTEL and JSONL report different token numbers for the same session / session cost looks 100x too big or negative / all 3 OAuth accounts drained one after another over ~2 days / a huge idle main session re-woken every ~15 min by a heartbeat cron / plugin reloads forcing full cache-CREATE rewrites / what exhausted my 7-day rate-limit window with no visible rate-limit wall"
 ocd: 2026-07-08
-lmd: 2026-07-10
+lmd: 2026-07-21
 metadata:
   node_type: memory
   tier: hub
@@ -91,6 +91,20 @@ as 1 log card + up to ~336 per-trace OTEL cards. Correlation key (`session.id` a
 llm_request + interaction spans. Merge semantics need care: OTEL totals are LOWER BOUNDS beyond
 the MAX_SPANS window and include sub-agent calls the log parent excludes.
 
+**INCIDENT (2026-07-19 → 07-21) — a heartbeat cron, not the user, burned ~2 days of window across
+all 3 accounts[^6]:** a ~400k-token **main** conversation (`querySource: repl_main_thread`) was left
+idle but kept alive by a background heartbeat cron firing every ~15 min for ~2 days (~190 turns). Every
+fire is a full main-conversation turn, so each re-billed the whole ~400k prefix; on top of that **~6
+plugin reloads mid-session each broke the cache prefix → a full ~400k cache-CREATE write (billed
+1.25×)**, the expensive bucket the steady-state model (96% cheap cache-read) does NOT cover. OAuth
+auto-rotation then fed the runaway to each account in turn with **no visible rate-limit wall** — the
+drain was silent until the 7-day window was ~176% consumed across the three. This is the third burn
+multiplier beyond the two in the root-cause line above: **(4) an automated waker (cron/heartbeat) ×
+(5) idle-but-huge session × (6) silent cross-account rotation.** Root fix that worked: `/clear` — a
+fresh session starts from a small base, collapsing the per-turn re-bill (`cost ≈ turns ×
+per-turn-context` loses on both factors in a woken marathon). Evidence (gitignored, machine-local):
+`reports/burn-investigation/20260721_100514+0200-3-account-exhaustion-culprit.md`.
+
 ## Notes and lessons learned
 [^1]: [ocd:2026-07-08 lmd:2026-07-08] The statusline event path originally carried only a total
   (`deltaTokens`), so the per-bucket breakdown landed 100% in `unknown` for exactly the no-OTEL sessions
@@ -130,3 +144,11 @@ the MAX_SPANS window and include sub-agent calls the log parent excludes.
   for OTHER implementations of the same wire format and live-verify on the RUNNING deployment, not
   just the unit-tested class; and make drops observable (the otlpDroppedLogEvents counter) so the
   next silent-drop class self-reports.
+[^6]: [ocd:2026-07-21 lmd:2026-07-21 keywords:"heartbeat_cron_burn all_3_accounts_drained idle_400k_session plugin_reload_cache_create silent_no_rate_limit_wall"]
+  DO NOT leave a huge (300k+) main session idle while a background heartbeat/cron keeps waking it,
+  and DO NOT chase mid-session plugin reloads on such a session, BECAUSE every automated wake is a
+  full main turn that re-bills the entire prefix and every reload forces a full cache-CREATE rewrite
+  (1.25×) — together they drained all 3 OAuth accounts over ~2 days with no visible rate-limit wall
+  (auto-rotation masked it). DO `/clear` (or pause the waker) to reset the per-turn floor the moment a
+  woken marathon is suspected; diagnose with `agentlenspro --risk` / `get_burn_status` /
+  `get_account_status` (raw-body capture may be off, so investigate_burn can be blind).
