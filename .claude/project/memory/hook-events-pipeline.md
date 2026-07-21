@@ -2,7 +2,7 @@
 name: hook-events-pipeline
 description: "how does AgentLens capture Claude Code lifecycle events / where do StopFailure PreCompact SessionStart events come from / what is spy-agentlens.sh / hook-events store, --install-hooks, why not PreToolUse / Stop hook error every turn"
 ocd: 2026-07-10
-lmd: 2026-07-10
+lmd: 2026-07-21
 metadata:
   node_type: memory
   type: project
@@ -47,6 +47,13 @@ settings.json. Hook config changes need a session restart.
 **See also** the general Claude Code hook-event catalog (all ~30 events, payloads, matcher
 support, I/O schema, and the "no plugin-reload hook / detect via ConfigChange-or-inference"
 fact): USER-scope reference `[[claude-code-hook-types]]`.
+
+**See also** `[[cache-risk-command-detection]]` — the OTHER capture path. Some events arrive by
+BOTH routes (`/clear` is `SessionStart{source:clear}` here and a `<command-name>` transcript entry
+there), but the prefix-breaking commands (`/reload-plugins`, `/reload-skills`, `/plugin`, `/login`)
+reach NO hook at all and are visible only in the transcript. `ConfigChange` is registered by
+`--install-hooks` because a mid-session config change is itself a real cache-break cause — NOT
+because it detects a plugin reload; that hypothesis was measured and refuted 2026-07-21.
 
 ## Notes and lessons learned
 [^1]: [ocd:2026-07-10 lmd:2026-07-10] Two field lessons from shipping this. (a) The
