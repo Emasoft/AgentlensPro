@@ -26,10 +26,14 @@ export const HOOK_EVENTS = [
   'SessionStart', 'SessionEnd', 'Stop', 'StopFailure', 'PreCompact', 'PostCompact',
   'PermissionRequest', 'Notification', 'SubagentStart', 'SubagentStop',
   // ConfigChange (TRDD-EYA3X5MQ) — fires when a config file changes mid-session (source:
-  // user_settings|project_settings|local_settings|policy_settings|skills). A `/reload-plugins`
-  // re-reads plugin/skill config, so a `skills`-sourced ConfigChange is the CANDIDATE hook signal
-  // for a plugin reload (the machine's #1 cache-break cost). Rare (not per-turn) → negligible
-  // overhead. Whether /reload-plugins actually emits it is confirmed empirically after install.
+  // user_settings|project_settings|local_settings|policy_settings|skills). Kept because a
+  // mid-session config change IS a real cache-break cause worth timestamping; rare (not
+  // per-turn) → negligible overhead.
+  // REFUTED 2026-07-21: it is NOT a `/reload-plugins` signal. Measured after an explicit
+  // `/reload-plugins` with the hook installed: the reload emitted ZERO hook events, and the
+  // whole store (40,858 records / 13 days) holds ev==ConfigChange exactly 0 times. Do NOT
+  // re-test this — plugin reload is detectable ONLY by the tool/skill/agent catalog co-churn
+  // inference in src/shared/cacheBreak.ts.
   'ConfigChange',
 ]
 

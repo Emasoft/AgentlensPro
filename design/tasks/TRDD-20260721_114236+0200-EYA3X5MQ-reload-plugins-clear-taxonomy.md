@@ -21,10 +21,24 @@ cache-write tokens + $; add a full lifecycle-events view (CLI + dashboard) from 
 
 **Plan file:** `~/.claude/plans/swift-riding-otter.md` (approved).
 
-**NEXT ACTION:** none — feature COMPLETE + deploy-verified. Two follow-ups remain OPTIONAL/USER-
-gated: (1) empirically confirm ConfigChange fires on /reload-plugins (needs `--install-hooks` +
-session restart + one /reload-plugins — the co-churn inference already works without it); (2) ship
-decision — these 6 commits are unpushed on local main (leave-local stands per the user).
+**NEXT ACTION:** none — feature COMPLETE + deploy-verified, and the last open experiment is now
+CLOSED (see P3 REFUTED below). Only the ship decision remains USER-gated: the commits are unpushed
+on local main (leave-local stands per the user).
+
+**P3 EXPERIMENT CLOSED — REFUTED (2026-07-21 13:04):** `/reload-plugins` does **NOT** fire
+`ConfigChange`. Method: USER ran `agentlenspro --install-hooks` (ConfigChange registered in
+`~/.claude/settings.json`, all 12 pre-existing hook events preserved — safeConfigEdit clean),
+restarted Claude, ran `/reload-plugins` (34 plugins · 117 skills · 75 agents · 27 hooks). Result:
+the reload emitted **zero** hook events of any kind, and a full scan of the store (13 files,
+**40,858 records**) finds `ev == ConfigChange` **0 times, ever**. Controls: the newest record
+post-dates the reload (capture alive, not a write gap); the ingest has NO event allowlist
+(`hookEventStore.ts:34` stores `hook_event_name` verbatim), so a fired event could not have been
+dropped; the 16 `grep ConfigChange` hits are the assistant's own text inside
+`last_assistant_message` payloads, not events. ⇒ **co-churn inference is the ONLY detection path**
+(already shipped + live-verified: 102 reloads / $9.19). The ConfigChange registration STAYS — a
+mid-session config change is itself a real cache-break cause worth timestamping — but its comment
+in `src/cli/hookInstall.ts` was corrected from "CANDIDATE reload signal" to the refutation, so no
+future session re-runs this experiment.
 
 **P5/P6 DONE:** Lifecycle dashboard tab + `/api/lifecycle-events`; PLUGINS_RELOADED label
 auto-renders in Cache/Traces (shared CAUSE_LABEL — 'Plugins reloaded' verified in dashboard.js).
@@ -49,10 +63,11 @@ Deploy: esbuild + server restart, symbol-grep confirms all new symbols shipped; 
   stable prefix of the NEXT model turn → billed as that turn's `cache_creation`. One occurrence
   = one reload. The classifier already attributes a turn's cache_creation to its first divergent
   prefix element.
-- Detection: NO plugin-reload hook exists; built-ins don't fire `UserPromptSubmit`. Candidate
-  hook = `ConfigChange` (matcher `skills`) — UNVERIFIED, confirm empirically (P3). Robust path =
-  co-churn inference (covers the historical $235, no hook data). `/clear` = `SessionStart{clear}`
-  (already captured). Full hooks reference: USER memory `[[claude-code-hook-types]]`.
+- Detection: NO plugin-reload hook exists; built-ins don't fire `UserPromptSubmit`; and
+  `ConfigChange` is REFUTED as a reload signal (measured — see the P3 block above). Co-churn
+  inference is therefore the ONLY path (it also covers the historical $235, which has no hook
+  data). `/clear` = `SessionStart{clear}` (already captured). Full hooks reference: USER memory
+  `[[claude-code-hook-types]]`.
 - Two live taxonomies both need the cause: `src/shared/cacheBreak.ts` (P4, drives
   `get_cache_break_report` + dashboard `CAUSE_LABEL`) and `src/cacheBreakTimeline.ts` (drives
   `get_cache_break_timeline`). `cacheBreak.ts` has an UNUSED `PLUGIN_TOGGLE` enum value — repurpose.
