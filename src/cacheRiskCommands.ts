@@ -1,6 +1,12 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { claudeProjectsDirs } from './logReader'
+import { classifySlashCommand, type CacheRiskKind, type MutationCertainty } from './shared/cacheRiskKinds'
+
+// Re-exported (never re-declared) so host callers have one import site and check-mirrors keeps the
+// dashboard honest — the vocabulary itself lives in src/shared/cacheRiskKinds.ts.
+export { classifySlashCommand, CACHE_RISK_STYLE } from './shared/cacheRiskKinds'
+export type { CacheRiskKind, MutationCertainty } from './shared/cacheRiskKinds'
 
 // Cache-risk slash commands, read straight out of the Claude Code transcript (TRDD-EYA3X5MQ).
 //
@@ -18,20 +24,6 @@ import { claudeProjectsDirs } from './logReader'
 // open an interactive menu the user may simply close, and `/model` may be re-selected to the same
 // model. Those are 'ambiguous': the caller must corroborate them against real cost/catalog churn
 // before charging a cache break to them, or it repeats the over-count the inference already made.
-
-/** What the command does to the cached prefix. Mirrors the CacheBreakCause vocabulary. */
-export type CacheRiskKind =
-  | 'PLUGINS_RELOADED'   // /reload-plugins — re-registers tool + skill + agent catalogs
-  | 'SKILLS_RELOADED'    // /reload-skills — re-registers the skill catalog
-  | 'PLUGIN_CHANGED'     // /plugin install|uninstall|enable|disable|update|marketplace …
-  | 'MCP_SERVER_TOGGLE'  // /mcp — connecting/disconnecting a server rewrites the tool block
-  | 'MODEL_SWITCHED'     // /model — caches are per-model, so a switch cannot hit the old entry
-  | 'ACCOUNT_SWITCHED'   // /login, /logout — a different credential cannot read the old cache
-  | 'COMPACTION'         // /compact — rebuilds the message layer
-  | 'CLEAR'              // /clear — resets the transcript floor (the REMEDY, tracked for contrast)
-
-/** Whether the command necessarily changed the prefix, or only *might* have. */
-export type MutationCertainty = 'certain' | 'ambiguous'
 
 // NO catalog sizes here, deliberately. `/reload-plugins` prints
 // `Reloaded: 34 plugins · 117 skills · 75 agents · 27 hooks · …` into the live conversation, which
@@ -53,49 +45,6 @@ export interface CacheRiskCommand {
   mutation: MutationCertainty
 }
 
-/** `/plugin` sub-commands that actually mutate the installed set (bare `/plugin` opens a menu). */
-const PLUGIN_MUTATING = /^(install|uninstall|remove|enable|disable|update|marketplace)\b/i
-
-/**
- * Map a slash command to its cache effect. Returns undefined for commands that do not touch the
- * cached prefix. Kept pure and table-driven so the vocabulary lives in exactly one place.
- */
-export function classifySlashCommand(
-  name: string,
-  args?: string,
-): { kind: CacheRiskKind; mutation: MutationCertainty } | undefined {
-  const cmd = name.trim().toLowerCase()
-  const a = (args ?? '').trim()
-  switch (cmd) {
-    case '/reload-plugins': return { kind: 'PLUGINS_RELOADED', mutation: 'certain' }
-    case '/reload-skills': return { kind: 'SKILLS_RELOADED', mutation: 'certain' }
-    case '/login':
-    case '/logout': return { kind: 'ACCOUNT_SWITCHED', mutation: 'certain' }
-    case '/compact': return { kind: 'COMPACTION', mutation: 'certain' }
-    case '/clear': return { kind: 'CLEAR', mutation: 'certain' }
-    // Menu-driven commands: an argument means the user named the mutation outright, so it is
-    // certain; bare invocation only OPENS the picker and may change nothing at all.
-    case '/plugin':
-    case '/plugins':
-      if (!a) return { kind: 'PLUGIN_CHANGED', mutation: 'ambiguous' }
-      // `/plugin plugin update x` and `/plugin marketplace add y` both appear in real transcripts —
-      // strip one redundant leading `plugin` before testing the verb.
-      return PLUGIN_MUTATING.test(a.replace(/^plugins?\s+/i, ''))
-        ? { kind: 'PLUGIN_CHANGED', mutation: 'certain' }
-        : undefined
-    case '/mcp': return { kind: 'MCP_SERVER_TOGGLE', mutation: 'ambiguous' }
-    case '/model': return { kind: 'MODEL_SWITCHED', mutation: a ? 'certain' : 'ambiguous' }
-    default: return undefined
-  }
-}
-
-// The command block is ANCHORED to the start of the message. Claude Code emits a command entry as
-// a `<command-name>` block (optionally behind a `<local-command-caveat>` preamble) and nothing
-// else — so anchoring is what separates a command that was RUN from a message that merely QUOTES
-// one. Searching anywhere in the text counts every assistant explanation, tool_result, pasted log
-// and handoff note that contains the literal tag. Measured on this machine: 687 loose
-// `<command-name>/reload-plugins</command-name>` hits vs 613 anchored ones — 74 of them (11%) were
-// quotes, including this very feature's own design notes.
 const RE_NAME = /^(?:\s*<local-command-caveat>[\s\S]*?<\/local-command-caveat>)?\s*<command-name>([^<]*)<\/command-name>/
 const RE_ARGS = /<command-args>([^<]*)<\/command-args>/
 

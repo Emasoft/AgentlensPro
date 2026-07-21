@@ -34,22 +34,14 @@ const FILTERABLE: LifecycleKind[] = ['CLEAR', 'COMPACT', 'STARTUP', 'RESUME', 'F
 // are read straight out of the Claude Code transcripts, so they need no hook installed and cover the
 // whole history. `mutation` is the honest part — a bare /plugin or /mcp only OPENS a picker, so it
 // may have cost nothing; `reload-cost` on the CLI is what settles that against the actual turn.
-type CacheRiskKind =
-  | 'PLUGINS_RELOADED' | 'SKILLS_RELOADED' | 'PLUGIN_CHANGED' | 'MCP_SERVER_TOGGLE'
-  | 'MODEL_SWITCHED' | 'ACCOUNT_SWITCHED' | 'COMPACTION' | 'CLEAR'
+//
+// The vocabulary and its styling are IMPORTED from src/shared/, never re-declared here: the first
+// version of this tab kept a private copy of the union and the style map, and adding EFFORT_CHANGED
+// to the host left this copy silently stale (the chip fell through to a raw enum name). check-mirrors
+// now fails the build if these symbols reappear as local declarations.
+import { CACHE_RISK_STYLE as RISK_STYLE, type CacheRiskKind, type MutationCertainty } from '../../../src/shared/cacheRiskKinds'
 
-interface RiskCommand { ts: number; session?: string; command: string; args?: string; kind: CacheRiskKind; mutation: 'certain' | 'ambiguous' }
-
-const RISK_STYLE: Record<CacheRiskKind, { color: string; label: string }> = {
-  PLUGINS_RELOADED:  { color: '#ef5350', label: 'plugins reloaded' },
-  SKILLS_RELOADED:   { color: '#ff8a65', label: 'skills reloaded' },
-  PLUGIN_CHANGED:    { color: '#ffa726', label: 'plugin changed' },
-  MCP_SERVER_TOGGLE: { color: '#ffca28', label: 'MCP toggled' },
-  MODEL_SWITCHED:    { color: '#ba68c8', label: 'model switched' },
-  ACCOUNT_SWITCHED:  { color: '#7986cb', label: 'account switched' },
-  COMPACTION:        { color: '#4dd0e1', label: '/compact' },
-  CLEAR:             { color: '#66bb6a', label: '/clear' },
-}
+interface RiskCommand { ts: number; session?: string; command: string; args?: string; kind: CacheRiskKind; mutation: MutationCertainty }
 
 function CacheRiskCommands() {
   const [cmds, setCmds] = useState<RiskCommand[]>([])

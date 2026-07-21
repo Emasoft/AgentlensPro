@@ -49,6 +49,19 @@ suite('cacheRiskCommands — transcript command detection (TRDD-EYA3X5MQ)', () =
     assert.strictEqual(classifySlashCommand('/janitor-resume'), undefined)
   })
 
+  test('/effort is a prefix break — certain with an arg, ambiguous when it opens the picker', () => {
+    assert.deepStrictEqual(classifySlashCommand('/effort', 'high'), { kind: 'EFFORT_CHANGED', mutation: 'certain' })
+    assert.strictEqual(classifySlashCommand('/effort')?.mutation, 'ambiguous')
+  })
+
+  // These cost real money but in ANOTHER context, so billing them to this session's next turn
+  // would be a wrong number. Pinned so a future changelog sweep does not "fix" the omission.
+  test('/fork, /subtask, /branch and /resume are NOT cache-risk commands for this session', () => {
+    for (const c of ['/fork', '/subtask', '/branch', '/resume']) {
+      assert.strictEqual(classifySlashCommand(c), undefined, `${c} must not classify`)
+    }
+  })
+
   test('the command block must be ANCHORED — a message quoting the tag is not a command', () => {
     assert.ok(parseCommandBlock('<command-name>/reload-plugins</command-name>'))
     // an assistant explaining the feature, or a pasted log, must NOT register as a reload
