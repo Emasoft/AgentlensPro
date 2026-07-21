@@ -56,6 +56,11 @@ const DEFAULT_IDLE_TTL_MS = 5 * 60_000
 // an avoidable break). All of them qualify — the parser never emits the conversation-message layer.
 const CATALOG_KINDS = new Set(['toolCatalog', 'agentCatalog'])
 
+// Catalog kinds a `/reload-plugins` re-registers together (tool + skill + agent + mcp). When ≥2 of
+// these diverge in ONE turn it is the reload signature — no organic single change (one MCP toggle, a
+// lazy tool-search load) touches more than one at once. (TRDD-EYA3X5MQ)
+const RELOAD_CATALOG_KINDS = new Set(['toolCatalog', 'agentCatalog', 'skill', 'mcp'])
+
 const REMEDIATION: Record<CacheBreakCause, string> = {
   TOOLS_CHANGED:          'Never remove tools mid-session; use defer-loading stubs + tool-search so the catalog stays byte-identical.',
   TOOLS_REORDERED:        'Emit tools in a stable sorted order so the catalog bytes do not shuffle turn-to-turn.',
@@ -64,7 +69,7 @@ const REMEDIATION: Record<CacheBreakCause, string> = {
   EFFORT_CHANGED:         'Keep the reasoning-effort level fixed within a conversation; changing it invalidates the prefix.',
   FAST_MODE:              'Toggling fast mode invalidates the cache — decide it once at session start.',
   MCP_SERVER_TOGGLE:      'Keep MCP servers with non-deferred tools connected for the whole session, or make their tools deferred.',
-  PLUGIN_TOGGLE:          'Do not toggle plugins that provide non-deferred MCP tools mid-session.',
+  PLUGINS_RELOADED:       'A /reload-plugins re-registered the tool/skill/agent catalogs mid-session, rewriting the whole prefix. Reload plugins at session start (or in a fresh session), not mid-conversation.',
   TOOL_DENY:              'Avoid denying an entire tool mid-session; scope the deny narrower or set it before the session starts.',
   INJECTED_BLOCK_CHANGED: 'Move this volatile injected block (hook/file/rule/memory) into the message suffix, after the last cache breakpoint.',
   COMPACTION:             'Compaction rebuilds the conversation layer — expected once; avoid compacting more than necessary.',
@@ -172,17 +177,30 @@ function classifyTurn(prev: CacheTurnInput, cur: CacheTurnInput, opts: AnalyzeCa
     ? cur.timestampMs - prev.timestampMs : undefined
   const wasted = cur.cacheCreateTokens
 
-  const emit = (cause: CacheBreakCause, label?: string, kind?: string, gap?: number): CacheBreakTurn => ({
+  const emit = (cause: CacheBreakCause, label?: string, kind?: string, gap?: number, confidence?: 'high' | 'medium'): CacheBreakTurn => ({
     turn: cur.turn, broke: true, cause,
     breakSourceLabel: label, breakSourceKind: kind,
     wastedTokens: wasted, wastedCostUsd: priceWaste(wasted, opts),
-    idleGapMs: gap, remediation: REMEDIATION[cause],
+    idleGapMs: gap, remediation: REMEDIATION[cause], confidence,
   })
 
   // 1. Model switch — a full, model-specific invalidation, dominates any block diff.
   if (cur.model && prev.model && cur.model !== prev.model) return emit('MODEL_SWITCHED')
   // 2. Fast mode turned on this turn.
   if (cur.hasFastMode && !prev.hasFastMode) return emit('FAST_MODE')
+  // 2.5 Plugin reload — /reload-plugins re-registers ≥2 catalogs at once. Detect BEFORE the
+  // single-first-divergence pick (step 3), else it collapses to whichever catalog sorted first
+  // (INJECTED_BLOCK_CHANGED / TOOLS_CHANGED) and the reload — the machine's #1 cache-break cost —
+  // is never named. Confidence = high for 3+ catalogs, medium for exactly 2. (TRDD-EYA3X5MQ)
+  const churnedCatalogs = new Set<string>()
+  for (const d of diffTurnSources(prev.sources, cur.sources)) {
+    if (d.status !== 'unchanged' && RELOAD_CATALOG_KINDS.has(d.kind)) churnedCatalogs.add(d.kind)
+  }
+  if (churnedCatalogs.size >= 2) {
+    const kinds = [...churnedCatalogs].sort()
+    return emit('PLUGINS_RELOADED', `${kinds.length} catalogs churned (${kinds.join(', ')})`, 'catalog',
+      undefined, churnedCatalogs.size >= 3 ? 'high' : 'medium')
+  }
   // 3. A localizable stable-block divergence (the common structural break).
   const diverged = firstDivergentBlock(prev.sources, cur.sources)
   if (diverged) return emit(causeForKind(diverged.kind), diverged.label, diverged.kind)
@@ -318,7 +336,7 @@ export const CAUSE_LABEL: Record<CacheBreakCause, string> = {
   TOOLS_CHANGED: 'Tools changed', TOOLS_REORDERED: 'Tools reordered',
   SYSTEM_PROMPT_TIMESTAMP: 'System-prompt timestamp', MODEL_SWITCHED: 'Model switched',
   EFFORT_CHANGED: 'Effort changed', FAST_MODE: 'Fast mode toggled',
-  MCP_SERVER_TOGGLE: 'MCP server toggled', PLUGIN_TOGGLE: 'Plugin toggled',
+  MCP_SERVER_TOGGLE: 'MCP server toggled', PLUGINS_RELOADED: 'Plugins reloaded',
   TOOL_DENY: 'Tool denied', INJECTED_BLOCK_CHANGED: 'Injected block changed',
   COMPACTION: 'Compaction', UPGRADE: 'Upgrade', RESUME_AFTER_UPGRADE: 'Resume after upgrade',
   IDLE_TTL_EXPIRY: 'Idle TTL expiry', UNKNOWN: 'Unknown',

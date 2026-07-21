@@ -524,3 +524,37 @@ suite('cacheBreakTimeline — real machine data', () => {
     }
   })
 })
+
+suite('cacheBreakTimeline — PLUGINS_RELOADED (TRDD-EYA3X5MQ — cross-layer catalog co-churn)', () => {
+  // A plugin reload re-registers tools + the skill catalog + the agent catalog together, so it churns
+  // the tools LAYER and two system BLOCKS at once. Build system blocks whose text triggers the
+  // skillcatalog / agentcatalog content kinds, then vary how many churn.
+  const skillBlk = (n: number) => ({ type: 'text' as const, text: `The following skills are available for use with the Skill tool: ${Array.from({ length: n }, (_, i) => 'skill-' + i).join(', ')}`, cache_control: CC })
+  const agentBlk = (n: number) => ({ type: 'text' as const, text: `Available agent types for the Agent tool: ${Array.from({ length: n }, (_, i) => 'agent-' + i).join(', ')}`, cache_control: CC })
+  const sysHead = { type: 'text' as const, text: 'You are a helpful agent.', cache_control: CC }
+
+  test('tools + skill catalog + agent catalog all churn → PLUGINS_RELOADED, confidence high', () => {
+    const prev = reqBody({ tools: [{ name: 'Bash' }, { name: 'Read' }], system: [sysHead, skillBlk(3), agentBlk(2)] })
+    const cur = reqBody({ tools: [{ name: 'Bash' }, { name: 'Read' }, { name: 'Write' }], system: [sysHead, skillBlk(4), agentBlk(3)] })
+    const v = classify(prev, cur)
+    assert.strictEqual(v.cause, 'PLUGINS_RELOADED')
+    assert.strictEqual(v.confidence, 'high')
+    assert.ok(v.culpritSummary.includes('tools') && v.culpritSummary.includes('skills') && v.culpritSummary.includes('agents'))
+  })
+
+  test('exactly 2 catalogs churn (tools + skills; agents unchanged) → PLUGINS_RELOADED, confidence medium', () => {
+    const prev = reqBody({ tools: [{ name: 'Bash' }, { name: 'Read' }], system: [sysHead, skillBlk(3), agentBlk(2)] })
+    const cur = reqBody({ tools: [{ name: 'Bash' }, { name: 'Read' }, { name: 'Write' }], system: [sysHead, skillBlk(4), agentBlk(2)] })
+    const v = classify(prev, cur)
+    assert.strictEqual(v.cause, 'PLUGINS_RELOADED')
+    assert.strictEqual(v.confidence, 'medium')
+  })
+
+  test('only the skill catalog changes → NOT a reload (single-catalog cause wins)', () => {
+    const prev = reqBody({ tools: [{ name: 'Bash' }, { name: 'Read' }], system: [sysHead, skillBlk(3), agentBlk(2)] })
+    const cur = reqBody({ tools: [{ name: 'Bash' }, { name: 'Read' }], system: [sysHead, skillBlk(4), agentBlk(2)] })
+    const v = classify(prev, cur)
+    assert.notStrictEqual(v.cause, 'PLUGINS_RELOADED')
+    assert.strictEqual(v.confidence, undefined)
+  })
+})

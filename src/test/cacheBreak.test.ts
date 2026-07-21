@@ -63,3 +63,39 @@ suite('cacheBreak diffTurnSources (#92, TRDD-CB9POPUP — before/after prefix di
     assert.strictEqual(first.status, 'removed')
   })
 })
+
+suite('cacheBreak PLUGINS_RELOADED (TRDD-EYA3X5MQ — /reload-plugins multi-catalog co-churn)', () => {
+  // Turn 1 = the cached prefix; turn 2 = the first turn carrying the reloaded catalogs. The reload cost
+  // lands here as cache_creation, exactly where a /reload-plugins re-registration would.
+  const reloadTurns = (cur: ContextSource[]): CacheTurnInput[] => [
+    { turn: 1, sources: [src('toolCatalog', 'tools', 100), src('skill', 'skills', 200), src('agentCatalog', 'agents', 50)],
+      inputTokens: 0, cacheReadTokens: 1000, cacheCreateTokens: 0 },
+    { turn: 2, sources: cur, inputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 500_000 },
+  ]
+
+  test('all 3 catalogs churn in one turn → PLUGINS_RELOADED, confidence high', () => {
+    const r = analyzeCacheBreaks('s', reloadTurns(
+      [src('toolCatalog', 'tools', 120), src('skill', 'skills', 250), src('agentCatalog', 'agents', 60)]))
+    const t2 = r.turns[1]
+    assert.strictEqual(t2.cause, 'PLUGINS_RELOADED')
+    assert.strictEqual(t2.confidence, 'high')
+    assert.strictEqual(t2.wastedTokens, 500_000)
+    assert.ok(t2.broke)
+  })
+
+  test('exactly 2 catalogs churn → PLUGINS_RELOADED, confidence medium', () => {
+    // agentCatalog unchanged (50→50); tool + skill catalogs resized.
+    const r = analyzeCacheBreaks('s', reloadTurns(
+      [src('toolCatalog', 'tools', 120), src('skill', 'skills', 250), src('agentCatalog', 'agents', 50)]))
+    assert.strictEqual(r.turns[1].cause, 'PLUGINS_RELOADED')
+    assert.strictEqual(r.turns[1].confidence, 'medium')
+  })
+
+  test('only 1 catalog changes → NOT a reload (stays the single-block cause)', () => {
+    // Only the skill catalog resized; tools + agents identical → single-catalog change, not a reload.
+    const r = analyzeCacheBreaks('s', reloadTurns(
+      [src('toolCatalog', 'tools', 100), src('skill', 'skills', 250), src('agentCatalog', 'agents', 50)]))
+    assert.notStrictEqual(r.turns[1].cause, 'PLUGINS_RELOADED')
+    assert.strictEqual(r.turns[1].confidence, undefined)
+  })
+})

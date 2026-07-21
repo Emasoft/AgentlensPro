@@ -399,7 +399,7 @@ export type CacheBreakCause =
   | 'EFFORT_CHANGED'          // reasoning-effort level changed
   | 'FAST_MODE'               // fast mode toggled on
   | 'MCP_SERVER_TOGGLE'       // an MCP server whose tools load into the prefix connected/disconnected
-  | 'PLUGIN_TOGGLE'           // a plugin providing non-deferred MCP tools toggled
+  | 'PLUGINS_RELOADED'        // /reload-plugins re-registered ≥2 catalogs (tool+skill+agent) in one turn
   | 'TOOL_DENY'               // an entire tool denied
   | 'INJECTED_BLOCK_CHANGED'  // a supposedly-stable injected file/rule/memory or per-turn hook mutated
   | 'COMPACTION'              // conversation compaction rebuilt the message layer
@@ -418,6 +418,7 @@ export interface CacheBreakTurn {
   wastedCostUsd: number       // 0 unless rates were supplied to the analyzer
   idleGapMs?: number          // inter-turn wall-clock gap (set when cause = IDLE_TTL_EXPIRY)
   remediation?: string        // one-line fix hint for this cause
+  confidence?: 'high' | 'medium' // set for PLUGINS_RELOADED: high = 3+ catalogs churned, medium = 2
 }
 
 // One block's before/after state across a turn transition, for the cache-break diff popup (#92,

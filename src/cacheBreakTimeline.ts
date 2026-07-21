@@ -48,6 +48,7 @@ export type CacheBreakTimelineCause =
   | 'TOOLS_REORDERED'           // identical tool set, different order (cache is byte-order sensitive)
   | 'TOOL_SEARCH_DEFERRED'      // a newly-present deferred (defer_loading) tool — tool-search loaded it mid-session
   | 'MCP_TOOLS_CHANGED'         // mcp__ tools added/removed (an MCP server / plugin toggled)
+  | 'PLUGINS_RELOADED'          // /reload-plugins re-registered ≥2 catalogs (tools+skills+agents) in one turn
   | 'MODEL_SWITCH'              // model changed mid-session (caches are model-specific)
   | 'EFFORT_SWITCH'             // extended-thinking / reasoning-effort setting changed
   | 'HOOK_INJECTION'            // a per-turn injected hook block mutated (writes into the cached prefix)
@@ -84,6 +85,7 @@ const REMEDIATION: Record<CacheBreakTimelineCause, string> = {
   TOOLS_REORDERED:            'The tool set is the same but its ORDER shuffled. Emit tools in a stable sorted order so the catalog bytes never move.',
   TOOL_SEARCH_DEFERRED:       'A deferred tool keeps loading mid-session (tool-search). Pre-load the tools you know you need at session start, or accept the one-time load cost.',
   MCP_TOOLS_CHANGED:          'An MCP server / plugin toggled its non-deferred tools mid-session. Keep MCP servers connected for the whole session, or make their tools deferred.',
+  PLUGINS_RELOADED:           'A /reload-plugins re-registered the tool + skill + agent catalogs together, rewriting the whole prefix at the write rate. Reload plugins at session start or in a fresh session, never mid-conversation.',
   MODEL_SWITCH:               'The model changed mid-session — caches are model-specific. Hand off to a sub-agent instead of switching model in place.',
   EFFORT_SWITCH:              'The extended-thinking / reasoning-effort setting changed. Fix the effort level once at session start; changing it invalidates system + messages.',
   HOOK_INJECTION:             'A per-turn hook writes a mutating block INTO the cached prefix. Move the hook output after the last cache breakpoint (into the current user message), or make it stable.',
@@ -433,6 +435,7 @@ export interface CacheBreakVerdict {
   culpritSummary: string     // pointer-only, human-readable — never full content
   ttlTier?: TtlTier
   rawDiffSummary?: string     // attached only for UNCLASSIFIED
+  confidence?: 'high' | 'medium' // set for PLUGINS_RELOADED: high = 3 catalogs churned, medium = 2
 }
 
 export interface BreakTiming {
@@ -496,6 +499,14 @@ function mkTools(cause: CacheBreakTimelineCause, names: string[], summary: strin
   return { cause, culpritLayer: 'tools', culpritId: `tools:${cause}:${names.slice(0, 3).sort().join(',')}`, culpritSummary: summary }
 }
 function fmtList(xs: string[]): string { return xs.length <= 3 ? xs.join(', ') : `${xs.slice(0, 3).join(', ')} +${xs.length - 3} more` }
+
+// Did the blocks of ONE content kind (e.g. skillcatalog, agentcatalog) change between two turns? Set
+// diff by fingerprint — a plugin reload re-registers a whole catalog, so its fp-set shifts. Used only
+// by the cross-layer plugin-reload detector below. (TRDD-EYA3X5MQ)
+function catalogKindChurned(prev: PrefixBlock[], cur: PrefixBlock[], kind: BlockContentKind): boolean {
+  const fps = (bs: PrefixBlock[]) => bs.filter(b => b.kind === kind).map(b => b.fp).sort().join('|')
+  return fps(prev) !== fps(cur)
+}
 
 // Diff a block layer POSITIONALLY — the prompt cache breaks at the first differing BYTE position, so
 // the first differing block POSITION in the cached prefix is the true break point. This is what makes
@@ -590,6 +601,19 @@ export function classifyCacheBreak(prev: TurnPrefix | null, cur: TurnPrefix, tim
   }
   // 2. Tools — invalidates tools + system + messages (higher than effort, which keeps tools cached).
   const toolsV = diffTools(prev, cur)
+  // 2a. Plugin reload — /reload-plugins re-registers the tool + skill + agent catalogs TOGETHER, so it
+  //     churns multiple layers at once (tools layer + system skillcatalog/agentcatalog blocks). The
+  //     per-layer classifier would name only the first (usually TOOLSET_CHANGED) and hide the reload —
+  //     the machine's #1 cache-break cost. Detect the ≥2-catalog co-churn signature FIRST and name it.
+  //     Confidence: high = all 3 churned, medium = 2. (TRDD-EYA3X5MQ)
+  const skillChurned = catalogKindChurned(prev.systemBlocks, cur.systemBlocks, 'skillcatalog')
+  const agentChurned = catalogKindChurned(prev.systemBlocks, cur.systemBlocks, 'agentcatalog')
+  const churn = [toolsV ? 'tools' : null, skillChurned ? 'skills' : null, agentChurned ? 'agents' : null].filter(Boolean) as string[]
+  if (churn.length >= 2) {
+    return { cause: 'PLUGINS_RELOADED', culpritLayer: 'tools', culpritId: 'plugins:reloaded',
+      culpritSummary: `plugin reload — ${churn.length} catalogs churned together (${churn.join(', ')})`,
+      confidence: churn.length >= 3 ? 'high' : 'medium' }
+  }
   if (toolsV) return toolsV
   // 3. Effort / thinking / tool_choice — invalidates system + messages (bytes may be unchanged).
   if (prev.effort !== cur.effort) {
