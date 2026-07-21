@@ -42,6 +42,10 @@ is empty and label which evidence it used.
 preserves other tools' hooks; removes dead claude-spyglass entries); never hand-edit
 settings.json. Hook config changes need a session restart.
 
+**See also** the general Claude Code hook-event catalog (all ~30 events, payloads, matcher
+support, I/O schema, and the "no plugin-reload hook / detect via ConfigChange-or-inference"
+fact): USER-scope reference `[[claude-code-hook-types]]`.
+
 ## Notes and lessons learned
 [^1]: [ocd:2026-07-10 lmd:2026-07-10] Two field lessons from shipping this. (a) The
   bucket-name regex \d{4}-\d{2}-\d{2} also matches calendar-invalid names ('2026-13-99' →
