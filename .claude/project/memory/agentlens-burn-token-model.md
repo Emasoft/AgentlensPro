@@ -152,3 +152,11 @@ per-turn-context` loses on both factors in a woken marathon). Evidence (gitignor
   (auto-rotation masked it). DO `/clear` (or pause the waker) to reset the per-turn floor the moment a
   woken marathon is suspected; diagnose with `agentlenspro --risk` / `get_burn_status` /
   `get_account_status` (raw-body capture may be off, so investigate_burn can be blind).
+[^7]: [id:ATOM-CBRK-SUBST, status:valid, keywords:"cache break attribution composition path vs raw OTEL bodies buildCacheBreakReport buildCacheBreakTimeline reload-cost returned 0 empty bodies dir", ocd:2026-07-21, lmd:2026-07-21]
+  DO NOT build a new cache-break / reload-cost tool on the raw-OTEL-bodies TIMELINE path
+  (`buildCacheBreakTimeline`/`buildPluginReloadCosts`/`scanSessionsAndResponses`), BECAUSE the
+  `~/.agentlens/otel-bodies` dir can be EMPTY on a machine with body-archiving off (TRDD-EYA3X5MQ:
+  reload-cost returned 0 / "0 request body files" there) even while the aggregate reports show data.
+  DO build it on the COMPOSITION path (`buildCacheBreakReport` over `getComposition` + the `sessions`
+  cards — what `get_cache_break_report` uses) — that source is persisted and has data wherever the
+  aggregate does; per-turn wall-clock ts is unavailable there, so order by the session card's `startTime`.
