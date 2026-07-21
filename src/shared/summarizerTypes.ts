@@ -400,6 +400,9 @@ export type CacheBreakCause =
   | 'FAST_MODE'               // fast mode toggled on
   | 'MCP_SERVER_TOGGLE'       // an MCP server whose tools load into the prefix connected/disconnected
   | 'PLUGINS_RELOADED'        // /reload-plugins re-registered ≥2 catalogs (tool+skill+agent) in one turn
+  | 'SKILLS_RELOADED'         // /reload-skills re-registered the skill catalog
+  | 'PLUGIN_CHANGED'          // /plugin install|uninstall|enable|disable|update|marketplace … changed the installed set
+  | 'ACCOUNT_SWITCHED'        // /login or /logout — a different credential cannot read the previous account's cache
   | 'TOOL_DENY'               // an entire tool denied
   | 'INJECTED_BLOCK_CHANGED'  // a supposedly-stable injected file/rule/memory or per-turn hook mutated
   | 'COMPACTION'              // conversation compaction rebuilt the message layer
