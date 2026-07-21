@@ -32,8 +32,8 @@ export const HOOK_EVENTS = [
   // REFUTED 2026-07-21: it is NOT a `/reload-plugins` signal. Measured after an explicit
   // `/reload-plugins` with the hook installed: the reload emitted ZERO hook events, and the
   // whole store (40,858 records / 13 days) holds ev==ConfigChange exactly 0 times. Do NOT
-  // re-test this — plugin reload is detectable ONLY by the tool/skill/agent catalog co-churn
-  // inference in src/shared/cacheBreak.ts.
+  // re-test this. No hook observes a plugin reload — but the TRANSCRIPT does: Claude Code
+  // persists the command itself, which src/cacheRiskCommands.ts reads exactly and retroactively.
   'ConfigChange',
 ]
 
