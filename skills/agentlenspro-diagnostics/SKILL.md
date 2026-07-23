@@ -9,7 +9,10 @@ description: >-
   stall, compaction rewrites, huge-request bursts, burn spikes, and CACHE_THRASH — the prefix
   being re-written every turn instead of read). PREVENT with the burn-gate hooks
   (--install-hooks): a PreToolUse gate on agent-launch tools DENIES the four measured disaster
-  launches with the reason fed back to the agent. Covers the full diagnostic-tool suite — run
+  launches with the reason fed back to the agent. BUDGET a timed run before you start it — "will
+  this test round / batch / fan-out exhaust the 5h window before it finishes, and how do I abort it
+  if the burn rate says yes" — with get_window_eta (cost-based ETA, names the binding window) plus
+  a ready abort-watch loop. Covers the full diagnostic-tool suite — run
   `list --desc` for the live set (burn status, session burn profile, per-agent exact tokens, interval cost rollups, rate-limit forensics,
   account/plan + window budget,
   cache-break causes/timeline, expensive writes, heartbeat cost, config comparison, SQL
@@ -165,11 +168,17 @@ restart`.
 
 ### Emergency stop: `agentlenspro disable [reason]` / `enable`
 
-The global brake — one flag file that disarms every hook, the burn-gate, server auto-revive, and
-background ingestion in **every** Claude Code session already running, on that session's next hook
-fire. No restart needed (a `settings.json` edit alone cannot reach a session that already loaded
-its config). `disable` also stops a running server and turns raw-body capture off; `enable` clears
-the flag.
+The global brake **on AgentlensPro itself** — one flag file that disarms every hook, the burn-gate,
+server auto-revive, and background ingestion in **every** Claude Code session already running, on
+that session's next hook fire. No restart needed (a `settings.json` edit alone cannot reach a
+session that already loaded its config). `disable` also stops a running server and turns raw-body
+capture off; `enable` clears the flag.
+
+⚠ **This is NOT how you stop a burning workload.** It stops the *measurement*, not the burn — it
+removes the gate that was denying disaster launches and blinds you exactly when the numbers matter
+most. Reach for it only to take AgentlensPro out of the picture (debugging its own overhead,
+handing the machine to someone else). To abort a run that is draining the window, see
+**Budgeting a timed run** below.
 
 ### `agentlenspro env` — environment / system detection
 
@@ -224,7 +233,10 @@ can never wedge the report.
    the MAIN repo's `./reports/agentlens-diagnostics/` with a local-time+offset timestamp:
 
    ```bash
-   MAIN_ROOT="$(git worktree list | head -n1 | awk '{print $1}')"
+   # --porcelain is mandatory: plain `git worktree list` prints "<path> <sha> [branch]", so
+   # awk/cut on the first space TRUNCATES any path containing a space (routine on macOS) and
+   # the report is written to a directory nobody will ever look in.
+   MAIN_ROOT="$(git worktree list --porcelain | sed -n '1s/^worktree //p')"
    REPORT_DIR="$MAIN_ROOT/reports/agentlens-diagnostics"; mkdir -p "$REPORT_DIR"
    agentlenspro get_cache_break_causes --out "$REPORT_DIR/$(date +%Y%m%d_%H%M%S%z)-break-causes.json"
    ```
@@ -259,13 +271,17 @@ batches** — each stdout line then interrupts you the moment a risk fires:
 Monitor(command: "agentlenspro --guard 15", description: "burn guard", persistent: true)
 ```
 
+For a batch with a known duration (a test round, a sweep), the guard is only half the job — it
+watches the *rate*. Run the preflight in **Budgeting a timed run** below first to learn whether the
+window survives the run at all, and to get the abort condition.
+
 | Risk | Meaning | What to DO when it fires |
 |---|---|---|
 | `FANOUT_BURST` | ≥5 subagents launched in 2min (hook events) | If the parent session is fat or the cache cold, STOP launching; warm with ONE agent first |
 | `COLD_RESUME_RISK` | a StopFailure (rate-limit turn death) ≤10min ago | Do NOT resume a fan-out: the stall likely outlived the fan-out's cache TTL — subagents ALWAYS ride the 5-min tier (even when the main session is on the 1-hour subscription tier), so their prefixes go cold fast. Check `get_account_status` headroom, warm with one agent, then ramp |
 | `COMPACTION_REWRITE` | PreCompact ≤5min ago | The next turn rewrites the full prefix; avoid fan-outs/model switches until warm |
 | `HUGE_REQUEST_BURST` | ≥3 requests >1MB in 90s | A fat-context fan-out is IN FLIGHT — stop adding agents, let the wave settle |
-| `BURN_SPIKE` | live burn > 250k tokens/min (5-min window) | Run `investigate_burn --windowHours 1` NOW to name the source before it drains the window |
+| `BURN_SPIKE` | live burn > 250k tokens/min (5-min window) | Run `investigate_burn --windowHours 1` NOW to name the source before it drains the window. The flag reports rate, **not** time-left (it says `Window time-left unavailable` without calibrated capacity) — pair it with `get_window_eta` to learn whether the window actually survives the run |
 | `CACHE_THRASH` | ≥3 responses in 5min with big `cache_creation` and ~zero `cache_read` (exact Anthropic usage) | The prefix is being INVALIDATED every turn — a subagent/fork or a prefix-mutating tool is re-billing the whole context per call. STOP launching agents; `investigate_burn --windowHours 1` then `get_cache_break_causes` to name the mutator |
 
 Hook-event risks need `--install-hooks` (the `sources` block says which feeds are absent).
@@ -305,6 +321,89 @@ hook script before any network). Thresholds tune via `AGENTLENS_GATE_FORK_FAT_TO
 counts appear in `--status` and `/api/server-stats` under `gate`; every gate intervention
 also lands on the dashboard's notification panel (SSE alerts). If a deny is wrong for a
 legitimate mass fan-out, `agentlenspro --hooks gate=warn` for that run and restore after.
+
+## Budgeting a timed run — will this batch outlive the window? (preflight → watch → abort)
+
+A long batch — a scenario-test round, a fan-out, an audit sweep — has ONE question behind it:
+**does the run finish before the rate-limit window does?** The guard alone cannot answer it:
+`BURN_SPIKE` fires on *rate*, and its own message says `Window time-left unavailable (capacity not
+configured)` unless `AGENTLENS_WINDOW_5H_TOKENS`/`_7D_TOKENS` are calibrated. `get_window_eta`
+answers it regardless, because it projects on **cost** (Anthropic meters the windows by cost, not
+tokens) and falls back to a same-plan account's observed capacity — always labeled, never guessed.
+
+**1 — Preflight, BEFORE the first launch.** Get the ETA and the run's predicted cost:
+
+```bash
+agentlenspro get_window_eta --rate_window_min 30   # read `text`: $/min · ETA · which window EXHAUSTS FIRST
+agentlenspro predict_session_cost --task "<the batch you are about to run>"   # p75 = budget-safe
+```
+
+Decision rule — compare the binding window's ETA to the run's expected duration:
+
+| ETA vs expected duration | do |
+|---|---|
+| `willExhaustAtCurrentRate: false` ("won't exhaust at this rate") | **GO** — the rolling window plateaus below the cap |
+| ETA > 2× duration | **GO** |
+| ETA 1–2× duration | GO, but arm the guard (step 2) and re-check at every checkpoint (step 3) |
+| ETA < duration | **DO NOT START** — wait for the window to roll, or cut the batch down |
+
+Read `capacity.source` before trusting the threshold: `observed` = this account's own calibration
+(trust it); `same-plan-proxy` = another account on the same plan (order-of-magnitude — treat the
+boundary as soft and leave margin); absent = no ETA is projected at all, calibrate first.
+`bindingWindow` is a plain string (`"5h"` or `"7d"`) naming which window binds — check it, because
+a 90-minute batch is usually bounded by the 5h window even when the 7d one exhausts sooner overall.
+
+**2 — Arm the guard for the whole run** (one stdout line per risk TRANSITION, so it interrupts you
+rather than needing to be polled):
+
+```
+Monitor(command: "agentlenspro --guard 15", description: "burn guard — <batch name>", persistent: true)
+```
+
+**3 — Re-check at checkpoints, not just at the start.** The $/min at minute 0 is not the $/min at
+minute 40 — one fan-out moves it by an order of magnitude. Re-run `get_window_eta` after each phase
+(and on every `BURN_SPIKE` the guard emits) and re-apply the table above.
+
+An unattended abort-watch for the **5h** window, which exits non-zero so a runner can kill itself
+(swap `fiveHour` → `sevenDay` to bind on the weekly window):
+
+```bash
+RUN_MIN_LEFT=90          # minutes of batch still to go — update at each phase
+while sleep 120; do
+  agentlenspro get_window_eta --full 2>/dev/null | node -e '
+    let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
+      const w=JSON.parse(s).fiveHour;
+      if(!w.willExhaustAtCurrentRate) process.exit(0);          // plateaus below cap — fine
+      if(w.etaMinutes==null) process.exit(0);                   // no capacity ⇒ no ETA; never guess
+      const left=Number(process.argv[1]);
+      if(w.etaMinutes < left){
+        console.error(`[abort] 5h window exhausts in ${w.etaHuman} < ${left}m of run left`);
+        process.exit(1);
+      }
+    })' "$RUN_MIN_LEFT" || break     # non-zero ⇒ stop the batch
+done
+```
+
+Keep the pipe direct, as written. Capturing the JSON into a shell variable first and replaying it
+with `echo "$J"` **corrupts it under zsh**, whose builtin `echo` expands `\n` by default — the
+escaped newlines inside the `text` field become real ones and `JSON.parse` dies on "Bad control
+character in string literal". Use `printf '%s'` if a variable is unavoidable.
+
+**4 — The abort itself is YOURS. Know what each brake does and does not do:**
+
+| lever | what it actually does |
+|---|---|
+| your runner | **the only thing that can stop your batch.** AgentlensPro measures and warns; it does not own your process tree. The ETA and the guard tell you WHEN — the kill is the caller's |
+| burn-gate at `gate=enforce` (the default; `agentlenspro --hooks` shows it) | DENIES agent launches matching the **four measured disaster signatures** — THRASH_ACTIVE, RUNAWAY_FANOUT, COLD_RESUME_FANOUT, FORK_STORM_FORMING. That is disaster prevention, **not** a window budget: it will never stop a well-behaved run that is simply too long |
+| `agentlenspro --hooks gate=warn` | the opposite of a brake — loosens the gate for a legitimate mass fan-out. Restore to `enforce` after |
+| `agentlenspro disable` | stops AgentlensPro, **not your burn** (see Emergency stop above) |
+
+So a batch that must be able to abort itself needs the stop condition in **its own loop** — the
+snippet in step 3 is that loop; wire its non-zero exit to however your harness terminates.
+
+**5 — After the run, attribute what it cost:** `get_cost_rollup --groupBy subagent --windowHours
+<run length>` for the per-agent bill, and if the window did drain, `get_rate_limit_report` (what
+exactly filled it) or `investigate_burn --windowHours 5` (ranked causes with evidence).
 
 ## Cache TTL tracking — a warm gap is NOT a cold rewrite (TRDD-VY1IUVUM)
 
@@ -387,7 +486,11 @@ A `verdict:"unknown"` means no LLM request was recorded for that session.
 | **"Show me what was actually SAID and DONE in a session"** | `get_conversation` — the narrative reader: verbatim ordered turns (user prompt → thinking → reply → each tool call with its paired output), sidechain turns labeled, compaction dividers with pre/post/dropped tokens, per-turn duration + usage incl. cache-TTL tier 5m/1h. Progressive: no-arg = per-turn summaries; `--turn N` = that turn verbatim; `--turnFrom/--turnTo` = bounded range. Content lens; `get_context_history` stays the cost/composition lens |
 | **Which sessions still write raw OTEL bodies (restart targets)?** | `get_body_writers` — ranked by recent rate then total; `active` rows wrote within `--active_min` (default 10m) and keep writing until their process restarts. Request-body attribution (responses aggregated); totals = exact store+live union. `--window_min 30 --limit 20` |
 | **Who exhausted the PREVIOUS account's windows (post-rotation autopsy)?** | `get_account_burners` — BOTH the 5h and 7d tables in one call, grouped by project/agent (sessions pooled by workspace) with cache-created + cache-read columns; the window nearer its calibrated capacity at rotation is marked MOST LIKELY EXHAUSTED. Default `--account previous` (also `current`, uuid prefix, email); `--interval last`(default)`/current/<ISO-date>` picks the window end. Time-based attribution: cross-rotation sessions split correctly between accounts |
-| **How long until the CURRENT account's window runs out?** | `get_window_eta` — COST-based ETA (Anthropic meters windows by cost, not tokens): consumed $ vs calibrated $ cap, current $/min, ETA + which window exhausts first. Models the rolling window — says "won't exhaust at this rate" when steady-state fill plateaus below the cap instead of a fictional countdown. `--rate_window_min 30`, `--account current` |
+| **How long until the CURRENT account's window runs out?** | `get_window_eta` — COST-based ETA (Anthropic meters windows by cost, not tokens): consumed $ vs calibrated $ cap, current $/min, ETA + which window exhausts first. Models the rolling window — says "won't exhaust at this rate" when steady-state fill plateaus below the cap instead of a fictional countdown. Per window: `willExhaustAtCurrentRate`, `etaMinutes`/`etaHuman`, `capacity.source` (`observed` \| `same-plan-proxy`); `bindingWindow` is the string `"5h"`\|`"7d"`. `--rate_window_min 30`, `--account current`. **The preflight for any timed batch — see Budgeting a timed run** |
+| **WHICH SKILL or PLUGIN is spending the money?** | `get_skill_attribution` (alias `skill-cost`) — tokens + USD per skill and per plugin from the `attributionSkill`/`attributionPlugin` stamps, exact and retroactive over all history (no hook, no OTEL). Counts usage ONCE per message id — a naive sum over-counts 2–5× (`duplicateRowsSkipped` reports the collapse). Sorted most-expensive-first. `--window N`, `--topN` |
+| **What did each cache-breaking COMMAND cost?** | `get_cache_risk_costs` (alias `reload-cost`) — every prefix-breaking slash command priced exactly: `/reload-plugins`, `/reload-skills`, mutating `/plugin`, `/login`\|`/logout`, `/mcp`, `/model`. Causes are read off the transcript retroactively, not inferred; a command at T is billed on the FIRST turn at or after T. `byKind` for totals, `unexplainedReloadTurns` for co-churn inference (listed separately, never summed in). `--window`, `--kinds`, `--topN` |
+| **Which plugin version is each session ACTUALLY running?** (stale-hook ghosts) | `get_loaded_plugin_versions` (alias `plugin-versions`) — a plugin update lands machine-wide but hooks/skills are SESSION-loaded, so a running session keeps executing old cached code until its own `/reload-plugins`. `loadedVersion` = MAX version observed (not latest-by-timestamp: compaction replays old skill loads as fresh records). `stale` is TRI-STATE — true \| false \| `'unknown'`. `--plugin`, `--activeMinutes`, `--staleOnly` |
+| **When did this session /clear, /compact, fork, resume, or die?** | `get_lifecycle_events` — the harness events that bound and RESET a session, from the lifecycle hook store (needs `--install-hooks`). Includes StopFailure (turn death) and Pre/PostCompact; `/clear` is the cost REMEDY that resets the transcript floor. Per-turn Stop excluded by default. `--session`, `--kinds`, `--window`, `--limit`. Says `dirExists:false` honestly when the store is absent |
 
 ## Context-composition & session-drill tools
 
