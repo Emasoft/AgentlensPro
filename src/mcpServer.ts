@@ -29,7 +29,7 @@ import type {
   Conversation, ConversationTurn,
 } from './shared/summarizerTypes'
 import { buildCacheBreakReport } from './shared/cacheBreak'
-import { investigateBurn } from './burnInvestigator'
+import { investigateBurn, attachCausingCalls } from './burnInvestigator'
 import { checkBurnRisk } from './burnGuard'
 import { buildRateLimitReport } from './rateLimitReport'
 import { buildRuntimeInventory } from './runtimeInventory'
@@ -3460,7 +3460,13 @@ export function createMcpServer(opts: McpServerOptions): Server {
           result = { error: `untilIso "${a.untilIso}" is not a parseable ISO datetime` }
           break
         }
-        result = investigateBurn({ windowHours: a.windowHours, untilMs, maxFiles: a.maxFiles })
+        {
+          const inv = investigateBurn({ windowHours: a.windowHours, untilMs, maxFiles: a.maxFiles })
+          // Name the VERBATIM tool-call behind each fan-out finding (reads the JSONL only for real
+          // findings — a no-op on a blind/empty scan, so the fast path is untouched).
+          await attachCausingCalls(inv)
+          result = inv
+        }
         break
       }
       case 'get_heartbeat_cost': {

@@ -19,6 +19,7 @@ import { calcTokenCostUsd } from './shared/pricing'
 import { readHookEvents } from './hookEventStore'
 import { resolveBodiesReadScope } from './captureConfig'
 import { dataDir as agentlensDataDir } from './dataDir'
+import { causingToolCall, type CausingCall } from './causingToolCall'
 
 export const BURN_CAUSES = [
   'FORK_STORM',            // fan-out forked a fat parent into a cold cache — N × full-prefix writes
@@ -38,6 +39,10 @@ export interface BurnFinding {
   confidence: 'high' | 'medium' | 'low'
   verdict: string              // one sentence, with numbers
   evidence: Record<string, unknown>
+  /** The VERBATIM tool-call that spawned this peak — attached by attachCausingCalls (async, opt-in). */
+  causingCall?: CausingCall
+  /** Why the causing call could not be resolved — honest, never a fabricated call. */
+  causingCallUnavailable?: string
 }
 
 export interface BurnInvestigation {
@@ -269,6 +274,8 @@ function detectStormsAndRewrites(
       shareOfWindow: totalEquiv > 0 ? equiv / totalEquiv : 0,
       evidence: {
         window: `${iso(c.fromTs)} → ${iso(c.toTs)}`,
+        // Machine-readable anchor for attachCausingCalls: the burst START (the fan-out precedes it).
+        peakStartMs: c.fromTs,
         fullPrefixWrites: c.spikes.length,
         coldWrites: c.coldSpikes,
         cacheCreationTokens: c.cc,
@@ -572,5 +579,38 @@ export function investigateBurn(opts: InvestigateOptions = {}): BurnInvestigatio
       .slice(0, 20),
     findings,
     verdict,
+  }
+}
+
+/**
+ * Enrich each fan-out finding with the VERBATIM tool-call that spawned it — the operator's actual
+ * question ("which call caused this?"). ASYNC and SEPARATE from investigateBurn (which stays sync)
+ * so the DuckDB transcript read is paid ONLY here, only for real findings that anchor a workspace +
+ * time — never on a blind/empty scan. A finding whose cause can't be resolved records the honest
+ * reason; nothing is ever fabricated. Mutates `inv` in place and also appends the calls to the
+ * top-line verdict so the digest names them (full literal, per the reporting choice).
+ */
+export async function attachCausingCalls(
+  inv: BurnInvestigation,
+  opts: { projectsDirs?: string[] } = {},
+): Promise<void> {
+  for (const f of inv.findings) {
+    const ev = f.evidence
+    const atMs = typeof ev.peakStartMs === 'number' ? (ev.peakStartMs as number) : undefined
+    const wss = Array.isArray(ev.workspaces) ? (ev.workspaces as string[]) : []
+    // Only fan-out findings anchor a spawn call (a workspace + a burst-start time). Keep-warm and
+    // image-residency findings have no single spawning call, so they carry none.
+    if (atMs === undefined || wss.length === 0) continue
+    // evidence.workspaces are shortWs'd (homedir → '~'); the transcript slug needs the absolute path.
+    const first = wss[0]
+    const workspace = first.startsWith('~') ? path.join(os.homedir(), first.slice(1)) : first
+    const r = await causingToolCall({ workspace, atMs, projectsDirs: opts.projectsDirs })
+    if (r.call) f.causingCall = r.call
+    else f.causingCallUnavailable = r.reason
+  }
+  const named = inv.findings.filter(f => f.causingCall).slice(0, 3)
+  if (named.length > 0) {
+    inv.verdict += ` Causing call${named.length > 1 ? 's' : ''}: ` +
+      named.map((f, i) => `${i + 1}. ${f.causingCall!.tool}(${f.causingCall!.input})`).join(' ')
   }
 }
