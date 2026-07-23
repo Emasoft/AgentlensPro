@@ -4,6 +4,71 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.11.0] - 2026-07-23
+
+### Added
+
+- **`agentlenspro budget` — will the rate-limit window outlast a timed run, and abort it if not.**
+  Answers the question behind every scenario suite, audit sweep, and fan-out: *may I start this?*
+  Projected on **cost**, because Anthropic meters the 5h/7d windows by cost (cache-read weighted
+  ~0.1×), so a token projection is simply wrong. One-shot it for a preflight
+  (`--minutes 90`), or `--watch` the whole run — the minutes still to go are re-derived from t0,
+  so the verdict sharpens by itself instead of trusting a number the caller has to keep updating.
+  **The exit code is the interface** — `0` go · `1` ABORT · `2` cannot project — so a harness wires
+  it straight to its kill path. `--with-risks` folds the burn guard into the same stdout stream, so
+  ONE background monitor covers both the budget and the realtime risks. Capacity provenance is
+  labeled (`observed` vs `same-plan-proxy`), and when no capacity is calibrated it says no ETA can
+  be projected rather than inventing one.
+- **`agentlenspro watch` — peak alerting over any usage metric, without ever stopping.** 14 metrics
+  across three scopes (session tokens/cost/turns · account 5h/7d percent and dollars · machine-wide
+  live burn) × three modes (`total`, `rate` per minute, `since` a baseline that defaults to the
+  moment the watch started). A past `--since` is reconstructed from the transcript, deduped by
+  message id — Claude Code repeats one message's full usage on every content-block row, and the
+  naive sum over-counted cache-read by 1.7× and output by 2.1× on a real session. Peaks are reported
+  as **excursions**: one line when the value crosses the threshold, one when it falls back carrying
+  the maximum reached and how long it lasted, with hysteresis so a value oscillating on the
+  threshold does not report a "peak" every poll. Silence between the two is deliberate — a line per
+  sample would flood a monitor, and a monitor that floods is stopped automatically.
+- **Durable, SSD-friendly logging on both watchers** (`--log FILE`, `--flush-ms N`). Lines coalesce
+  for a second (configurable, `0` = write through) and land as one append, so a multi-day watch does
+  not turn every 200-byte event into a flash page-program cycle. The trade is explicit and bounded —
+  at most `flush-ms` of lines are lost to an unclean kill — but integrity is not traded: only
+  complete lines are buffered, a flush is a single `O_APPEND` write (so two watchers on one file
+  interleave rather than clobber), the buffer is capped and a failing disk drops the oldest lines
+  **and counts them**, and `exit`/`SIGINT`/`SIGTERM` all flush first.
+
+### Fixed
+
+- **A mistyped flag exited `1` — the same code `budget` uses to mean ABORT.** The CLI shim maps every
+  thrown error to exit 1, so a bad command line killed a batch *and* told the operator it was a burn.
+  Argument validation now raises a typed error that both watchers return as **`EX_USAGE` (64)**,
+  consistent with the server's existing `EX_CONFIG` (78) refusal. Runtime failures still exit 1.
+- **A `SIGINT` handler added for flush-on-exit disabled Ctrl-C.** Installing a listener removes
+  Node's default termination, so a watcher with `--log` flushed on Ctrl-C and then kept running,
+  needing `kill -9`. The handler now flushes, detaches, and re-raises — terminating with the
+  conventional 128+signum status.
+- **Excursion hysteresis was inverted for negative thresholds.** The exit level was
+  `threshold × hysteresis`, which at `-100 × 0.9 = -90` sits *above* the trigger, closing an
+  excursion while still past its own threshold. Reachable: a falling cumulative yields a negative
+  rate. It is now `threshold − |threshold| × (1 − hysteresis)`, correct for either sign.
+- **A permanently blind feed was indistinguishable from a quiet one** — both produced no output
+  forever. The watch now reports the transition once, and again on recovery.
+- **A threshold on a cumulative total is a silent dead end** — an odometer crosses once and can never
+  cross back, so exactly one alert fires and the following silence looks like a dead feed. The watch
+  now says so at arm time and names the modes that do what was meant.
+
+### Changed
+
+- **The diagnostics skill leads with the question, not the install guide.** It opened with
+  installation, config, and environment detection — the three things an agent never needs first.
+  New sections above all of that: a router from 16 real questions to one command; a taxonomy of the
+  four measurement kinds (cumulative, rolling gauge, live rate, instant gauge) and which modes each
+  can honestly answer; six worked end-to-end examples; and a failure-triage table. The skill also
+  documents the four diagnostic tools added since its last refresh (`get_lifecycle_events`,
+  `get_cache_risk_costs`, `get_skill_attribution`, `get_loaded_plugin_versions`) — coverage is back
+  to 50/50 — and corrects a report-path recipe whose `git worktree list | awk '{print $1}'`
+  truncated any repository path containing a space.
+
 ## [2.10.1] - 2026-07-17
 
 ### Fixed
