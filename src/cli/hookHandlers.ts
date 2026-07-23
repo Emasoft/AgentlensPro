@@ -38,6 +38,10 @@ const REVIVE_LOCK_SKEW_MS = 2_000
 // cap deliberately; the default 20k is the real safety bound.
 function spoolMaxFiles(): number { return Math.max(1, Number(process.env.AGENTLENS_HOOK_SPOOL_MAX) || 20_000) }
 
+/** The gate kill-switch (AGENTLENS_GATE=off disarms the burn-gate; default on). One definition,
+ *  read per-call so a live env change is honored — used by both runGateCheck and runHookCommand. */
+function gateDisabled(): boolean { return (process.env.AGENTLENS_GATE || 'on') === 'off' }
+
 /** Durably record an undeliverable hook payload for the server's boot/periodic drain. Bounded so a
  *  permanently-down server can't fill the disk: over the cap, the OLDEST spooled events are dropped
  *  (loudly) — losing the stalest beats an unbounded spool. Never throws. */
@@ -130,7 +134,9 @@ function readStdin(stream: NodeJS.ReadableStream): Promise<Buffer> {
  *  (D3K7QM2P/1a) — the previous behavior silently dropped it. */
 export async function forwardHookEvent(payload: Buffer, opts: { baseUrl?: string; timeoutMs?: number } = {}): Promise<void> {
   const base = opts.baseUrl ?? uiBaseUrl()
-  const timeoutMs = opts.timeoutMs ?? Math.max(200, Number(process.env.AGENTLENS_HOOK_TIMEOUT || 1) * 1000)
+  // Number(env)||default, NOT Number(env||default): a non-numeric value like "2s" must fall back to
+  // the default, not become NaN → AbortSignal.timeout(NaN) throws → swallowed → silent spool-only.
+  const timeoutMs = opts.timeoutMs ?? Math.max(200, (Number(process.env.AGENTLENS_HOOK_TIMEOUT) || 1) * 1000)
   try {
     const res = await fetch(`${base}/api/hook-events`, {
       method: 'POST',
@@ -148,9 +154,10 @@ export async function forwardHookEvent(payload: Buffer, opts: { baseUrl?: string
 
 /** Run one gate check. Returns the server's response body ('' = allow / any failure). */
 export async function runGateCheck(payload: Buffer, opts: { baseUrl?: string; timeoutMs?: number } = {}): Promise<string> {
-  if ((process.env.AGENTLENS_GATE || 'on') === 'off') return '' // kill-switch BEFORE any network
+  if (gateDisabled()) return '' // kill-switch BEFORE any network
   const base = opts.baseUrl ?? uiBaseUrl()
-  const timeoutMs = opts.timeoutMs ?? Math.max(200, Number(process.env.AGENTLENS_GATE_TIMEOUT || 2) * 1000)
+  // Number(env)||default (see forwardHookEvent): "2s" must fall back to 2, not NaN → throw → fail-open.
+  const timeoutMs = opts.timeoutMs ?? Math.max(200, (Number(process.env.AGENTLENS_GATE_TIMEOUT) || 2) * 1000)
   try {
     const res = await fetch(`${base}/api/agent-gate`, {
       method: 'POST',
@@ -158,6 +165,11 @@ export async function runGateCheck(payload: Buffer, opts: { baseUrl?: string; ti
       body: new Uint8Array(payload),
       signal: AbortSignal.timeout(timeoutMs),
     })
+    // A non-2xx is a FAILURE, not a verdict — fail-open. Returning a 5xx error page here would write
+    // "Internal Server Error" to the gate's stdout, which the model reads as a deny/advisory and could
+    // block the tool call (the exact opposite of the fail-open contract). forwardHookEvent guards the
+    // same way with its res.ok check.
+    if (!res.ok) return ''
     return await res.text()
   } catch { return '' } // server down / timeout — allow silently
 }
@@ -172,7 +184,7 @@ export async function runHookCommand(kind: 'hook' | 'gate'): Promise<number> {
   if (agentlensDisabled()) { return 0 }
   // The gate kill-switch must short-circuit BEFORE stdin is read: the runner may hold the
   // pipe open, and a disabled gate must cost nothing (matches spy-agentlens-gate.sh).
-  if (kind === 'gate' && (process.env.AGENTLENS_GATE || 'on') === 'off') return 0
+  if (kind === 'gate' && gateDisabled()) return 0
   const payload = await readStdin(process.stdin)
   if (kind === 'hook') {
     await forwardHookEvent(payload)

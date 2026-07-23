@@ -9,6 +9,7 @@
 import { armKillSwitch, disarmKillSwitch, killSwitchPath, agentlensDisabled } from './killSwitch'
 import { findServerPid, stopServer } from './serverControl'
 import { dataDir } from './cliCore'
+import { EXIT } from './cliErrors'
 import { setRawBodyCapture, rawBodyCaptureEnabled, RAW_BODIES_KEY } from '../captureConfig'
 import { ensureTelemetryConfig } from '../telemetryConfig'
 
@@ -60,25 +61,30 @@ export async function runDisableCli(args: string[]): Promise<number> {
   console.log('  in every Claude session already running, from its next hook fire. No restart needed.')
   console.log('')
   console.log('  Re-enable with:  agentlenspro enable')
-  return 0
+  // The flag is armed either way (the brake IS on for AgentlensPro's own hooks), but if we could not
+  // stop a running server OR strip the capture key, the ~35 GB/day burn may still be flowing. A script
+  // that keys on the exit code to confirm "the burn is stopped" must NOT read that as success.
+  const partialFailure = stopped.startsWith('WARNING') || capture.startsWith('WARNING')
+  return partialFailure ? EXIT.ABORT : EXIT.OK
 }
 
 export function runEnableCli(): number {
   if (!agentlensDisabled()) {
     console.log('AgentlensPro is already enabled (no kill-switch flag present).')
-    return 0
+    return EXIT.OK
   }
-  // An env-set AGENTLENS_DISABLED cannot be cleared by deleting a file — say so rather than claim a
-  // success the user will not observe.
+  // An env-set AGENTLENS_DISABLED cannot be cleared by deleting a file — say so, and return non-zero
+  // (cannot-answer) rather than claim a success the user will not observe: the flag is gone but every
+  // process inheriting the env stays disabled, so "enable" did not achieve what was asked.
   if (process.env.AGENTLENS_DISABLED === '1') {
     disarmKillSwitch()
     console.log('Removed the kill-switch flag, but AGENTLENS_DISABLED=1 is set in this environment —')
     console.log('AgentlensPro stays disabled for any process that inherits it. Unset it to re-enable.')
-    return 0
+    return EXIT.UNKNOWN
   }
   disarmKillSwitch()
   console.log('AgentlensPro is now ENABLED.')
   console.log(`  removed: ${killSwitchPath()}`)
   console.log('  Hooks resume on their next fire; the server is revived by the next hook.')
-  return 0
+  return EXIT.OK
 }

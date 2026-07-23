@@ -16,14 +16,18 @@ export function mcpEndpoint(): string {
   return process.env.AGENTLENS_MCP_URL || 'http://localhost:4316/mcp'
 }
 
+/** The UI/dashboard server's default base — ONE definition so dashboardUrl and uiBaseUrl can never
+ *  drift on the fallback port. Each still honors its own env override. */
+const DEFAULT_UI_URL = 'http://localhost:3000'
+
 /** Dashboard URL (UI port). */
 export function dashboardUrl(): string {
-  return process.env.AGENTLENS_DASHBOARD_URL || 'http://localhost:3000'
+  return process.env.AGENTLENS_DASHBOARD_URL || DEFAULT_UI_URL
 }
 
 /** Base URL for the server's plain REST /api/* routes (UI port). */
 export function uiBaseUrl(): string {
-  return process.env.AGENTLENS_UI_URL || 'http://localhost:3000'
+  return process.env.AGENTLENS_UI_URL || DEFAULT_UI_URL
 }
 
 /** The AgentlensPro data directory (span store, logs, pidfile, forensics.db).
@@ -64,6 +68,9 @@ export function rpc(method: string, params: unknown): Promise<unknown> {
     const req = http.request(opts, res => {
       let raw = ''
       res.on('data', (c: Buffer) => { raw += c })
+      // Without this, a socket reset AFTER headers but BEFORE 'end' never fires 'end' and the promise
+      // hangs forever (the req 'error' handler only covers pre-response failures).
+      res.on('error', e => reject(new Error(`response stream error from ${mcpEndpoint()}: ${e.message}`)))
       res.on('end', () => {
         // The transport may answer as SSE ("event: message\ndata: {...}") or as plain JSON.
         const line = raw.split('\n').find(l => l.startsWith('data:'))
@@ -98,10 +105,17 @@ export interface ToolSchema {
 }
 export interface ToolInfo { name: string; description?: string; inputSchema?: ToolSchema }
 
-let toolCache: ToolInfo[] | null = null
+// Keyed by endpoint, not a single slot: the whole module reads endpoints per-call so a test can
+// repoint AGENTLENS_MCP_URL mid-process (see the header). A single-slot cache would freeze the first
+// endpoint's tools and return them after a repoint — the exact invariant this file exists to keep.
+const toolCache = new Map<string, ToolInfo[]>()
 export async function fetchTools(): Promise<ToolInfo[]> {
-  if (!toolCache) toolCache = ((await rpc('tools/list', {}) as { tools?: ToolInfo[] }).tools) || []
-  return toolCache
+  const ep = mcpEndpoint()
+  const cached = toolCache.get(ep)
+  if (cached) return cached
+  const tools = ((await rpc('tools/list', {}) as { tools?: ToolInfo[] }).tools) || []
+  toolCache.set(ep, tools)
+  return tools
 }
 
 /** Tool names use underscores; accept the dashed spelling too (CLI muscle memory). */
@@ -151,6 +165,8 @@ export function apiRequest(method: string, apiPath: string, payload?: unknown): 
     }, res => {
       let raw = ''
       res.on('data', (c: Buffer) => { raw += c })
+      // A socket reset mid-response never fires 'end' — settle the promise instead of hanging forever.
+      res.on('error', e => reject(new Error(`response stream error from ${uiBaseUrl()}: ${e.message}`)))
       res.on('end', () => {
         try {
           const j = JSON.parse(raw) as Record<string, unknown>
