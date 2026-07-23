@@ -205,8 +205,16 @@ async function runRisk(): Promise<void> {
   try {
     rep = await fetchBurnRisk()
   } catch (e) {
-    // The REST path needs no MCP init, so a failure here usually means no server at all.
-    throw new Error(`${(e as Error).message} — start it: agentlenspro server start`)
+    // "Start the server" is only useful advice when there ISN'T one. A busy/overloaded server
+    // fails here too (seen live at rss 5.4GB under backpressure), and telling the operator to
+    // start an already-running server sends them down the wrong path during the exact incident
+    // this command exists to diagnose. So the hint is chosen from the failure shape.
+    const msg = (e as Error).message
+    const refused = /ECONNREFUSED|ENOENT|not running|connect/i.test(msg)
+    const hint = refused
+      ? 'start it: agentlenspro server start'
+      : 'the server answered but not usefully — check `agentlenspro server status` and ~/.agentlens/server.log; if it is wedged, `agentlenspro server restart`'
+    throw new Error(`${msg} — ${hint}`)
   }
   const active = (rep.risks || []).filter(r => r.active)
   if (active.length === 0) {

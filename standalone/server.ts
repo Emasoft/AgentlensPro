@@ -13,6 +13,7 @@ import * as path from 'path'
 import * as os from 'os'
 import { exec, execFile } from 'child_process'
 import { summarizeSpans } from '../src/spanSummarizer'
+import { packageVersion } from '../src/packageVersion'
 import { VersionedCache } from '../src/derivedCache'
 import { startLoopWatchdog } from '../src/loopWatchdog'
 import { mergeOtelAndLogSessions, linkSubagentTranscripts, graftOtelAttribution } from '../src/feedMergePolicy'
@@ -258,6 +259,9 @@ const SAVE_INTERVAL_MS = Math.max(1000, Number(process.env.AGENTLENS_SAVE_INTERV
 // Every byte this process writes to DATA_DIR is counted here and reported by /api/server-stats,
 // so "how much is the collector writing?" is one CLI call instead of a kernel-counter hunt.
 const SERVER_STARTED_AT = Date.now()
+// Resolved ONCE at boot, not per request: an install that cannot identify its own build is
+// broken, and failing at startup is a clearer signal than a 500 on the stats endpoint.
+const SERVER_VERSION = packageVersion()
 const persistStats = {
   spanAppendWrites: 0, spanAppendBytes: 0,
   offsetsWrites: 0, offsetsBytes: 0,
@@ -2877,6 +2881,9 @@ const uiServer = http.createServer(async (req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({
       pid: process.pid,
+      // Which BUILD is answering. Without it, "is the running server current?" needs a process
+      // table lookup + a bundle grep; a stale server otherwise looks identical to a fresh one.
+      version: SERVER_VERSION,
       startedAt: new Date(SERVER_STARTED_AT).toISOString(),
       uptimeSec: Math.round((Date.now() - SERVER_STARTED_AT) / 1000),
       ports: { ui: UI_PORT, mcp: MCP_PORT, otlp: OTLP_PORT },

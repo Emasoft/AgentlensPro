@@ -14,8 +14,7 @@
 //      (it binds ports on load), so the shim injects it as a LAZY loader — it must never be
 //      imported on any other path.
 
-import * as fs from 'fs'
-import * as path from 'path'
+import { packageVersion } from '../packageVersion'
 import { runTelemetryCli } from '../telemetryConfig'
 import { runDiagnosticsCli, USAGE } from './diagnosticsCli'
 import { runHookCommand } from './hookHandlers'
@@ -29,23 +28,9 @@ import { runSetupCli } from './setup'
 import { runBudgetCli } from './budgetCli'
 import { runWatchCli } from './watchCli'
 
-/** The package version, read from the package.json that ships next to the bundle. Walks up
- *  from __dirname because the bundle lives at <pkg>/standalone/cli.js while the test build
- *  lives at <repo>/out/test/cli/ — a fixed ../package.json would be wrong in one of them. */
-export function packageVersion(): string {
-  let dir = __dirname
-  for (let i = 0; i < 6; i++) {
-    const p = path.join(dir, 'package.json')
-    try {
-      const pkg = JSON.parse(fs.readFileSync(p, 'utf8')) as { name?: string; version?: string }
-      if (pkg.name === 'agentlenspro' && pkg.version) return pkg.version
-    } catch { /* not here — keep walking */ }
-    const parent = path.dirname(dir)
-    if (parent === dir) break
-    dir = parent
-  }
-  throw new Error(`cannot locate the agentlenspro package.json above ${__dirname}`)
-}
+// Re-exported so existing `--version` callers keep importing it from here; the implementation
+// moved to src/packageVersion.ts so the server can share it without pulling in this dispatcher.
+export { packageVersion }
 
 /** CLI entry. `startServer` lazily imports standalone/server (injected by the shim — src/
  *  cannot import standalone/ without inverting the build layering). Returns the exit code. */
