@@ -79,6 +79,22 @@ const isSpyglass = (h: HookCommandEntry): boolean =>
 // installing, dead claude-spyglass entries too), drop matchers left empty, append our entry
 // on lifecycle events and the gate entry on agent-launch tool events. Pure — returns the new
 // list + what was stripped; the caller decides whether anything changed.
+// The two registration shapes, each defined ONCE. They are built on two code paths — the
+// whole-array rebuild and the append_unique op — and a comment used to assert the two were
+// "byte-identical", a claim maintained by hand. Bumping a timeout on one path and missing the
+// other registers a DIFFERENT hook depending on whether the install had anything to strip, which
+// is invisible until someone diffs two machines' settings.json.
+
+/** The lifecycle forwarder: async, so it cannot block a turn. */
+export function lifecycleMatcher(cmd: string): HookMatcher {
+  return { hooks: [{ type: 'command', command: cmd, timeout: 2, async: true }] }
+}
+
+/** The burn gate: SYNC (an async hook cannot deny) and scoped to agent-launch tools only. */
+export function gateMatcher(gateCmd: string): HookMatcher {
+  return { matcher: GATE_MATCHER, hooks: [{ type: 'command', command: gateCmd, timeout: 3 }] }
+}
+
 export function rebuildEventMatchers(
   matchers: HookMatcher[], ev: string, uninstall: boolean, cmd: string, gateCmd: string
 ): RebuildResult {
@@ -92,12 +108,11 @@ export function rebuildEventMatchers(
     if (kept.length > 0) out.rebuilt.push({ ...m, hooks: kept }) // a matcher left empty is dropped
   }
   if (!uninstall && HOOK_EVENTS.includes(ev)) {
-    out.rebuilt.push({ hooks: [{ type: 'command', command: cmd, timeout: 2, async: true }] })
+    out.rebuilt.push(lifecycleMatcher(cmd))
     out.installed = true
   }
   if (!uninstall && GATE_EVENTS.includes(ev)) {
-    // SYNC (no async:true — an async hook cannot deny) + matched to agent-launch tools only.
-    out.rebuilt.push({ matcher: GATE_MATCHER, hooks: [{ type: 'command', command: gateCmd, timeout: 3 }] })
+    out.rebuilt.push(gateMatcher(gateCmd))
     out.installed = true
   }
   return out
@@ -189,12 +204,12 @@ export async function installHooks(uninstall: boolean, opts: InstallHooksOptions
       // hook another tool appends to the same event between that read and the transaction would be
       // clobbered by the stale snapshot (S3-F5 TOCTOU). append_unique is idempotent and is evaluated
       // against the FRESH array inside safe_config_edit's lock, so a concurrent foreign entry survives.
-      // The appended matchers are byte-identical to what rebuildEventMatchers produces.
+      // Both paths build the matcher from the SAME factory, so they cannot drift apart.
       if (HOOK_EVENTS.includes(ev)) {
-        ops.push({ op: 'append_unique', path: ['hooks', ev], value: { hooks: [{ type: 'command', command: HOOK_CMD, timeout: 2, async: true }] }, unique_by_substring: HOOK_CMD })
+        ops.push({ op: 'append_unique', path: ['hooks', ev], value: lifecycleMatcher(HOOK_CMD), unique_by_substring: HOOK_CMD })
       }
       if (GATE_EVENTS.includes(ev)) {
-        ops.push({ op: 'append_unique', path: ['hooks', ev], value: { matcher: GATE_MATCHER, hooks: [{ type: 'command', command: GATE_CMD, timeout: 3 }] }, unique_by_substring: GATE_CMD })
+        ops.push({ op: 'append_unique', path: ['hooks', ev], value: gateMatcher(GATE_CMD), unique_by_substring: GATE_CMD })
       }
     }
   }
