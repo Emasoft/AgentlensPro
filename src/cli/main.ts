@@ -28,10 +28,6 @@ import { runSetupCli } from './setup'
 import { runBudgetCli } from './budgetCli'
 import { runWatchCli } from './watchCli'
 
-// Re-exported so existing `--version` callers keep importing it from here; the implementation
-// moved to src/packageVersion.ts so the server can share it without pulling in this dispatcher.
-export { packageVersion }
-
 /** CLI entry. `startServer` lazily imports standalone/server (injected by the shim — src/
  *  cannot import standalone/ without inverting the build layering). Returns the exit code. */
 export async function cliMain(argv: string[], startServer: () => Promise<unknown>): Promise<number> {
