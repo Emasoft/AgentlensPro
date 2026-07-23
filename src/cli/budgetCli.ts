@@ -18,6 +18,7 @@ import { fetchBurnRisk } from './diagnosticsCli'
 import { LineLog, clampFlushMs, DEFAULT_FLUSH_MS } from './lineLog'
 import { numArg, strArg, clamp } from './argHelpers'
 import { UsageError, EXIT } from './cliErrors'
+import { whoIsBurning, formatCulprits } from './attribution'
 
 /** Sink for every line this command prints, so `--log` mirrors stdout exactly — a log that
  *  differs from what the operator saw is worse than no log. Threaded as a parameter rather than
@@ -226,13 +227,18 @@ async function runWatch(o: BudgetOptions, say: Say): Promise<number> {
       const { key, win } = pickWindow(eta, o.window)
       const d = decideBudget(win, remainingMin, o.margin)
       if (d.verdict === 'NO_GO') {
-        say(`[budget] ABORT — ${key}: ${d.reason}`)
+        // An abort without a culprit forces the operator to start an investigation at the worst
+        // possible moment. fiveMin, not oneMin: an abort is about a SUSTAINED drain, and the
+        // one-minute window would let a single fat turn misname the cause.
+        const who = formatCulprits(await whoIsBurning('fiveMin'))
+        say(`[budget] ABORT — ${key}: ${d.reason}${who ? ` — ${who}` : ''}`)
         return BUDGET_EXIT.ABORT
       }
       if (d.verdict !== lastVerdict) {
         // The reason already carries both numbers; appending the remaining time again read as
         // "…of run left (0m of run left)".
-        say(`[budget] ${d.verdict} — ${key}: ${d.reason}`)
+        const who = d.verdict === 'TIGHT' ? formatCulprits(await whoIsBurning('fiveMin')) : ''
+        say(`[budget] ${d.verdict} — ${key}: ${d.reason}${who ? ` — ${who}` : ''}`)
         lastVerdict = d.verdict
       }
     } catch (e) {

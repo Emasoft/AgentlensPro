@@ -4,6 +4,34 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.11.2] - 2026-07-23
+
+### Added
+
+- **Every peak and every abort now names WHO caused it.** An alert reading "cache-create hit
+  2M/min" answered half the question: the reader's next thought is always *is that my project, a
+  sub-agent, or another workdir on this machine?*, and finding out meant leaving the alert to run a
+  second investigation — usually finishing after the excursion had passed. `watch`'s `PEAK-START` /
+  `PEAK` lines and `budget`'s `ABORT` / `TIGHT` lines now carry `who: project (session, rate, share
+  of machine total)`, heaviest first, with the session being watched tagged `←THIS`. `--json`
+  consumers get the same ranking as a structured `culprits` array. The data already existed in
+  `get_burn_status.topSessions`; the alerts simply were not using it.
+
+  Three deliberate properties: the lookup runs **only when an event actually fires**, so a quiet
+  watch costs exactly what it did before; a **peak** ranks on the one-minute window (that is what
+  spiked) while an **abort** ranks on five minutes (a sustained drain, which a single fat turn
+  would otherwise misname); and attribution is **additive** — if the feed cannot name anyone the
+  alert still goes out unadorned, because an alert suppressed by a failed garnish is the worst
+  possible trade.
+
+### Fixed
+
+- **A test fixture embedded real local project names and session ids.** `attribution.test.ts`
+  shipped with one machine's actual workdir names and live session UUIDs, which are meaningless on
+  any other contributor's checkout and are published to a public repository. The fixture keeps the
+  verified payload SHAPE and is now entirely synthetic (`/workspaces/alpha-service`, invented
+  ids), matching the convention the rest of the suite already followed.
+
 ## [2.11.1] - 2026-07-23
 
 ### Changed

@@ -33,6 +33,7 @@ import { init, callTool, sleep } from './cliCore'
 import { LineLog, clampFlushMs, DEFAULT_FLUSH_MS } from './lineLog'
 import { numArg, strArg, clamp } from './argHelpers'
 import { UsageError, EXIT } from './cliErrors'
+import { whoIsBurning, formatCulprits, culpritsJson } from './attribution'
 
 export type MetricScope = 'session' | 'account' | 'machine'
 export type WatchMode = 'total' | 'rate' | 'since'
@@ -470,13 +471,22 @@ export async function runWatchLoop(o: WatchOptions, emit: Emit): Promise<number>
 
     const stepped = stepPeak(peak, shown, now, o.threshold, o.hysteresis)
     peak = stepped.state
-    for (const ev of stepped.events) {
-      if (ev.kind === 'onset') {
-        emit(`[watch] PEAK-START ${m.name} ${o.mode} = ${fmtValue(ev.value, m.unit)}${suffix} (>= ${fmtValue(o.threshold, m.unit)})`,
-          { event: 'peak_start', metric: m.name, value: ev.value, threshold: o.threshold })
-      } else {
-        emit(`[watch] PEAK ${m.name} ${o.mode} max ${fmtValue(ev.value, m.unit)}${suffix} over ${fmtDur(ev.durationMs || 0)}, now ${fmtValue(shown, m.unit)}`,
-          { event: 'peak', metric: m.name, peak: ev.value, durationMs: ev.durationMs, current: shown })
+    if (stepped.events.length > 0) {
+      // WHO is causing it — fetched only when an event actually fires, never on the quiet path.
+      // The reader's next question after "cache-create spiked" is always "my project, a
+      // sub-agent, or another workdir?", and leaving the alert to find out means investigating an
+      // excursion that has usually ended by then.
+      const culprits = await whoIsBurning('oneMin')
+      const who = formatCulprits(culprits, o.session)
+      const whoJson = culpritsJson(culprits)
+      for (const ev of stepped.events) {
+        if (ev.kind === 'onset') {
+          emit(`[watch] PEAK-START ${m.name} ${o.mode} = ${fmtValue(ev.value, m.unit)}${suffix} (>= ${fmtValue(o.threshold, m.unit)})${who ? ` — ${who}` : ''}`,
+            { event: 'peak_start', metric: m.name, value: ev.value, threshold: o.threshold, culprits: whoJson })
+        } else {
+          emit(`[watch] PEAK ${m.name} ${o.mode} max ${fmtValue(ev.value, m.unit)}${suffix} over ${fmtDur(ev.durationMs || 0)}, now ${fmtValue(shown, m.unit)}${who ? ` — ${who}` : ''}`,
+            { event: 'peak', metric: m.name, peak: ev.value, durationMs: ev.durationMs, current: shown, culprits: whoJson })
+        }
       }
     }
   }

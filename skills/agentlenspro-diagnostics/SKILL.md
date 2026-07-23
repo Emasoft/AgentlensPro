@@ -136,6 +136,9 @@ And exactly one **scope**, which decides what the number covers and what you mus
    not silently substitute a token count.
 3. **Provenance is labeled.** `capacity.source: same-plan-proxy` means the window cap was borrowed
    from another account on your plan — good to an order of magnitude, not a hard boundary.
+4. **Every alert names the culprit.** A peak or an abort carries `who:` — the top workdirs by
+   burn, with each one's share and the watched session marked `←THIS`. The machine is shared by
+   many sessions and workdirs, so *"is this mine?"* is part of the alert, never a follow-up.
 
 **Exit codes are a contract** (both long-lived commands): `0` fine · `1` **ABORT** (budget only) ·
 `2` could not answer honestly · `64` your command line was wrong. A harness can branch on these;
@@ -164,8 +167,8 @@ Monitor(command: "agentlenspro budget --minutes 90 --watch 120 --with-risks",
 
 | Line | What it means | Do |
 |---|---|---|
-| `[budget] ABORT — …` | the window will run out before the batch finishes | **stop launching, kill the batch.** The command has already exited 1 |
-| `[budget] TIGHT — …` | it fits, but under the safety margin | stop *adding* work; let what is running finish |
+| `[budget] ABORT — … — who: proj (sess, rate, share)` | the window will run out before the batch finishes, **and the line names the workdirs draining it** | **stop launching, kill the batch.** The command has already exited 1. If the top culprit is NOT your project, the drain is someone else's — killing your batch may not be the fix |
+| `[budget] TIGHT — … — who: …` | it fits, but under the safety margin | stop *adding* work; let what is running finish. Check whether the named culprit is yours |
 | `[burn-guard] FANOUT_BURST` / `RUNAWAY_FANOUT` | too many sub-agents launched too fast | pause launching; let the wave settle |
 | `[burn-guard] CACHE_THRASH` | the prefix is being re-billed every turn | stop launching NOW and run `investigate_burn --windowHours 1` |
 | `[burn-guard] COLD_RESUME_RISK` | a rate-limit stall just ended | warm with ONE agent before resuming the fan-out |
@@ -217,6 +220,19 @@ agentlenspro watch --metric cache-create --session <id> --mode rate --threshold 
 
 You get `PEAK-START` when it crosses, then silence, then `PEAK … max N/min over 3m` when it falls
 back — that pair is one spike. **Silence between them is the design**, not a stall.
+
+**Every peak names WHO caused it**, because "cache-create hit 2M/min" without a culprit just
+starts a second investigation:
+
+```
+[watch] PEAK-START tokens-per-min total = 5.61M (>= 1) — who: alpha-service (aaaa1111, 1.3M/min,
+47%) · beta-service (04332240, 865k/min, 31%) · gamma-tools (7877ae1f, 613k/min, 22%)
+```
+
+Each entry is `project (session, rate, share of machine total)`, heaviest first, and the session
+you are watching is tagged **`←THIS`** — so "is it my project, a sub-agent, or another workdir?"
+is answered in the alert itself, without comparing ids by eye. Attribution is **additive**: if the
+feed cannot name anyone, the peak line still fires without it.
 
 - **`rate`, not `total`** — a cumulative total crosses once and can never cross back, so `total`
   can only ever fire a single alert. The watch warns you at arm time if you ask for it anyway.
