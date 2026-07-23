@@ -1,9 +1,9 @@
 ---
 trdd-id: D8CRFNN0
 title: an agent-context file may be poisoned: node_modules/playwright/lib/agents/generateAgents.js
-column: proposal
+column: planned
 created: 2026-07-23T13:45:15+0200
-updated: 2026-07-23T13:45:15+0200
+updated: 2026-07-23T15:05:05+0200
 current-owner: janitor
 task-type: security
 severity: critical
@@ -18,7 +18,7 @@ ticket-origin: ai-context-poisoning
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-23
 
-**PROPOSED BY THE JANITOR — awaiting approval. NOT authorized to execute.**
+**APPROVED — support ticket `T-IQEMVGJY` is queued for dispatch.**
 
 The janitor detected this in code the **USER owns**, so it may only propose. It has NOT touched
 anything and will not, until a human or the main Claude approves by running:
