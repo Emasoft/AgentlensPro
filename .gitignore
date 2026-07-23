@@ -21,8 +21,9 @@ export_*.json
 agent-lens-export-*.json
 # Local staging
 .staged-issues/
-# Claude Code per-developer settings (permissions, hooks — not project config)
-.claude/settings.json
+# Claude Code settings. settings.json is PROJECT scope and IS tracked — it carries the
+# repo's shared agent policy (currently one PreToolUse deny hook), so a clone inherits it.
+# settings.local.json stays per-developer: personal permissions, machine paths, experiments.
 .claude/settings.local.json
 # ai-maestro-janitor runtime state (per-session, regeneratable — never commit)
 .claude/janitor/
