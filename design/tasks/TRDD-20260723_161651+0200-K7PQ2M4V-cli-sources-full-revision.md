@@ -3,7 +3,7 @@ trdd-id: K7PQ2M4V
 title: Full revision of the CLI sources for production readiness
 column: dev
 created: 2026-07-23T16:16:51+0200
-updated: 2026-07-23T17:05:00+0200
+updated: 2026-07-23T17:59:27+0200
 implementation-commits: [baf2ad3]
 current-owner: session-7877ae1f
 task-type: refactor
@@ -34,6 +34,27 @@ first real bug was. Delegate the per-file read, keep the whole-repo view yoursel
   dropping a shipped contract would relocate real stores. `server status` prints which won.
 - **Fixed a test env leak this surfaced:** `killSwitch.test.ts` set `DATA_DIR` at module scope and
   never restored it, so four "REAL captured bodies" suites had been silently skipping.
+
+**Per-file review triage (each finding verified against source; false positives dropped):**
+
+- `serverControl.ts` — `6eed437` (5 failures-that-read-as-success, a NaN defeating a fallback, 3 dedups).
+- `hookInstall.ts` — `c1120eb` (one factory per hook shape); TOCTOU split to TRDD-T0CT9U4X.
+- `setup.ts` — `eed1c64` (stale-capture-key presence test = the 35 GB/day burn detector; storeSpanCount
+  ENOENT-only; parseNodeFloor → null instead of a hardcoded floor).
+- `diagnosticsCli.ts` + `configCli.ts` — `79add08`. diagnostics: reject a non-JSON `call` arg,
+  guard `batch`/`--since`/`--until` missing values, and fix the burn-guard "server back" log ordering
+  (endpoint is stateless — verified rpc sends no session header — so re-init only while __down).
+  config: sink-before-source ON order, settings-key-first OFF order, and usage errors now return the
+  shared `EXIT.USAGE` (64). Dropped 2 false positives (ON "ignores EnsureResult" — it only exists on
+  success; OFF `finally` cleanup — would tear the sink down under a live source).
+
+**Follow-ups surfaced (tracked, not yet done):**
+
+- `diagnosticsCli.ts` has NO test file — `runDiagnosticsCli` / `parseToolFlags` / `call` / `batch` /
+  `runGuard` are entirely untested. A proper suite is a distinct task (delegate to js-test-writer with
+  an explicit test count), not an inline addition to this triage.
+- `spoolCli.ts` returns bare `1` for an unknown subcommand (ramdiskSpool.test.ts:198 pins it) — same
+  usage-error-should-be-`EXIT.USAGE` inconsistency just fixed in configCli; fix when triaging spoolCli.
 
 **Origin:** the user's verdict on the CLI written earlier in the session — *"the code is still far
 from production ready. do a full revision of the cli sources, improve what you can."* Deferred once
