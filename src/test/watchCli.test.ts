@@ -1,6 +1,7 @@
 import * as assert from 'assert'
 import {
-  METRICS, findMetric, newPeakState, stepPeak, parseWatchArgs, fmtValue, fmtDur, baselineSql,
+  METRICS, findMetric, metricsWithPastSupport, newPeakState, stepPeak, parseWatchArgs,
+  projectSample, fmtValue, fmtDur, baselineSql,
 } from '../cli/watchCli'
 
 // ── `agentlenspro watch` (generic metric peak watcher) ────────────────────────
@@ -112,8 +113,14 @@ suite('watch: option gate refuses dishonest combinations', () => {
     assert.throws(() => parseWatchArgs(['--metric', 'cost', '--threshold', '1']), /needs --session/)
   })
 
-  test('refuses a per-run total for a machine-wide live rate', () => {
+  test('refuses "since" on a machine-wide LIVE RATE with the rate-specific reason', () => {
     assert.throws(() => parseWatchArgs(['--metric', 'tokens-per-min', '--mode', 'since', '--threshold', '1']),
+      /already a rate/)
+  })
+
+  test('refuses "since" on a machine-wide GAUGE with the no-total reason', () => {
+    // active-sessions is machine-scoped but not a rate, so it exercises the other rule.
+    assert.throws(() => parseWatchArgs(['--metric', 'active-sessions', '--mode', 'since', '--threshold', '1']),
       /no per-run total/)
   })
 
@@ -127,9 +134,54 @@ suite('watch: option gate refuses dishonest combinations', () => {
       /already a rate/)
   })
 
-  test('refuses a PAST --since for a non-session metric — it cannot be reconstructed', () => {
+  test('refuses a PAST --since for a rolling gauge — it cannot be reconstructed', () => {
     assert.throws(() => parseWatchArgs(['--metric', 'pct-5h', '--mode', 'since', '--since', '2020-01-01T00:00:00Z', '--threshold', '1']),
-      /only be reconstructed for session-scoped/)
+      /rolling gauges/)
+  })
+
+  // REGRESSION: the gate used to allow a past --since for ANY session metric while the
+  // reconstruction path supported only the four token columns, so `--metric cost --mode since
+  // --since <past>` parsed cleanly and then threw at runtime, after the watch had been armed.
+  // Capability now lives on the metric (pastSql) and the gate reads it, so the two cannot drift.
+  test('refuses a PAST --since for session metrics that cannot be reconstructed (cost, turns)', () => {
+    for (const m of ['cost', 'turns']) {
+      assert.throws(
+        () => parseWatchArgs(['--metric', m, '--session', 'a', '--mode', 'since', '--since', '2020-01-01T00:00:00Z', '--threshold', '1']),
+        /cannot be reconstructed/,
+        `${m} must be refused at PARSE time, not at runtime`)
+    }
+  })
+
+  test('allows a PAST --since for every metric that declares a pastSql', () => {
+    for (const m of metricsWithPastSupport()) {
+      const o = parseWatchArgs(['--metric', m, '--session', 'a', '--mode', 'since', '--since', '2020-01-01T00:00:00Z', '--threshold', '1'])
+      assert.strictEqual(o.metric.name, m)
+    }
+  })
+
+  test('every metric the gate accepts for a past --since really has the SQL to compute it', () => {
+    // The invariant that makes the regression above impossible to reintroduce.
+    for (const m of METRICS) {
+      const accepted = (() => {
+        try {
+          parseWatchArgs(['--metric', m.name, ...(m.scope === 'session' ? ['--session', 'a'] : []),
+            '--mode', 'since', '--since', '2020-01-01T00:00:00Z', '--threshold', '1'])
+          return true
+        } catch { return false }
+      })()
+      assert.strictEqual(accepted, Boolean(m.pastSql), `${m.name}: gate says ${accepted}, pastSql says ${Boolean(m.pastSql)}`)
+    }
+  })
+
+  test('refuses a FUTURE --since instead of silently baselining from now', () => {
+    const future = new Date(Date.now() + 3_600_000).toISOString()
+    assert.throws(() => parseWatchArgs(['--metric', 'input', '--session', 'a', '--mode', 'since', '--since', future, '--threshold', '1']),
+      /FUTURE/)
+  })
+
+  test('refuses --session on a metric it cannot narrow, rather than ignoring the flag', () => {
+    assert.throws(() => parseWatchArgs(['--metric', 'pct-5h', '--session', 'abc', '--threshold', '1']),
+      /does not narrow it/)
   })
 
   test('refuses --since outside --mode since rather than ignoring it', () => {
@@ -167,7 +219,7 @@ suite('watch: past-baseline SQL dedupes by message id', () => {
   // Claude Code repeats one message's full usage on every content-block row; the naive sum
   // over-counted cache_read 1.7x and output 2.1x on a real session. The GROUP BY is the fix and
   // must never be dropped.
-  const sql = baselineSql('2026-07-23T07:00:00Z')
+  const sql = baselineSql('2026-07-23T07:00:00Z', 'sum(cr)')
 
   test('groups by message id inside a subquery instead of summing rows directly', () => {
     assert.match(sql, /GROUP BY message\.id/)
@@ -182,6 +234,94 @@ suite('watch: past-baseline SQL dedupes by message id', () => {
   test('is a single read-only SELECT', () => {
     assert.ok(sql.trim().startsWith('SELECT'))
     assert.ok(!/;/.test(sql), 'no statement separator — the tool takes one statement')
+  })
+
+  test('a quote in the instant cannot terminate the literal', () => {
+    assert.ok(!baselineSql("2026-01-01' OR '1'='1", 'sum(i)').includes("' OR '"))
+  })
+
+  test("`tokens` reconstructs as input+output — get_agent_tokens' totalTokens EXCLUDES cache", () => {
+    // Measured: input 1550 + output 614578 = totalTokens 616128, against 315M cache-read on the
+    // same session. Summing all four here would disagree with the live gauge by ~500x.
+    assert.strictEqual(findMetric('tokens').pastSql, 'sum(i) + sum(o)')
+  })
+})
+
+suite('watch: metric readers pull from their own source payload', () => {
+  // The registry owns extraction, so these run the SHIPPING readers against the field names the
+  // live tools actually return (captured from get_agent_tokens / get_window_eta / get_burn_status).
+  const agentTokens = {
+    inputTokens: 1550, outputTokens: 614578, cacheReadTokens: 314999420,
+    cacheCreateTokens: 5221518, totalTokens: 616128, cost_usd: 205.5064, turns: 775,
+  }
+  const eta = {
+    fiveHour: { fillPct: 26.1, consumedCostUsd: 341.4, costPerMin: 2.22 },
+    sevenDay: { fillPct: 8.8, consumedCostUsd: 1034.2 },
+  }
+  const burn = { activeSessions: 8, accountWindows: [{ fiveMinTokensPerMin: 1421678 }, { fiveMinTokensPerMin: 181342 }] }
+
+  const reads = (name: string, p: Record<string, unknown>): number | null => findMetric(name).read(p)
+
+  test('session metrics map onto the get_agent_tokens field names', () => {
+    assert.strictEqual(reads('input', agentTokens), 1550)
+    assert.strictEqual(reads('output', agentTokens), 614578)
+    assert.strictEqual(reads('cache-read', agentTokens), 314999420)
+    assert.strictEqual(reads('cache-create', agentTokens), 5221518)
+    assert.strictEqual(reads('tokens', agentTokens), 616128)
+    assert.strictEqual(reads('cost', agentTokens), 205.5064)
+    assert.strictEqual(reads('turns', agentTokens), 775)
+  })
+
+  test('account metrics map onto the two get_window_eta windows', () => {
+    assert.strictEqual(reads('pct-5h', eta), 26.1)
+    assert.strictEqual(reads('pct-7d', eta), 8.8)
+    assert.strictEqual(reads('cost-5h', eta), 341.4)
+    assert.strictEqual(reads('cost-7d', eta), 1034.2)
+    assert.strictEqual(reads('cost-per-min', eta), 2.22)
+  })
+
+  test('machine burn SUMS the per-account windows', () => {
+    assert.strictEqual(reads('tokens-per-min', burn), 1421678 + 181342)
+    assert.strictEqual(reads('active-sessions', burn), 8)
+  })
+
+  test('an absent or non-finite field reads as null, NEVER as 0', () => {
+    // A fabricated 0 would make a threshold watcher either alert on nothing or go quiet on a
+    // dead feed — both indistinguishable from a real measurement.
+    assert.strictEqual(reads('cost', {}), null)
+    assert.strictEqual(reads('pct-5h', {}), null)
+    assert.strictEqual(reads('tokens-per-min', { accountWindows: [] }), null)
+    assert.strictEqual(reads('input', { inputTokens: Number.NaN }), null)
+  })
+})
+
+suite('watch: projectSample mode arithmetic', () => {
+  const cumulative = findMetric('output')
+  const alreadyRate = findMetric('tokens-per-min')
+  const t0 = 1_000_000
+
+  test('total reports the raw current value', () => {
+    assert.strictEqual(projectSample('total', cumulative, 500, { v: 100, at: t0 }, t0 + 60_000, 0), 500)
+  })
+
+  test('since subtracts the baseline', () => {
+    assert.strictEqual(projectSample('since', cumulative, 500, { v: 100, at: t0 }, t0 + 60_000, 300), 200)
+  })
+
+  test('rate differences a cumulative metric per minute', () => {
+    assert.strictEqual(projectSample('rate', cumulative, 700, { v: 100, at: t0 }, t0 + 120_000, 0), 300)
+  })
+
+  test('rate reads an already-per-minute source straight through, never differencing it', () => {
+    assert.strictEqual(projectSample('rate', alreadyRate, 42, { v: 10, at: t0 }, t0 + 60_000, 0), 42)
+  })
+
+  test('two samples at the same instant yield 0, not Infinity', () => {
+    assert.strictEqual(projectSample('rate', cumulative, 700, { v: 100, at: t0 }, t0, 0), 0)
+  })
+
+  test('a falling cumulative gives a negative rate rather than being clamped away', () => {
+    assert.strictEqual(projectSample('rate', cumulative, 100, { v: 700, at: t0 }, t0 + 60_000, 0), -600)
   })
 })
 

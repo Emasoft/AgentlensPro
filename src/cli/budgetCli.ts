@@ -16,10 +16,13 @@ import { init, callTool } from './cliCore'
 import { sleep } from './cliCore'
 import { fetchBurnRisk } from './diagnosticsCli'
 import { LineLog, clampFlushMs, DEFAULT_FLUSH_MS } from './lineLog'
+import { numArg, strArg, clamp } from './argHelpers'
 
-/** Every line this command prints goes through here, so `--log` mirrors stdout exactly — a log
- *  that differs from what the operator saw is worse than no log. Rebound in runBudgetCli. */
-let say: (line: string) => void = (line: string) => console.log(line)
+/** Sink for every line this command prints, so `--log` mirrors stdout exactly — a log that
+ *  differs from what the operator saw is worse than no log. Threaded as a parameter rather than
+ *  held in a module variable: a mutable global emitter is not reentrant, and restoring it in a
+ *  `finally` restores a fresh closure rather than the caller's. */
+export type Say = (line: string) => void
 
 export type BudgetVerdict = 'GO' | 'TIGHT' | 'NO_GO' | 'UNKNOWN'
 
@@ -48,6 +51,8 @@ export interface BudgetDecision {
 }
 
 export const BUDGET_EXIT = { GO: 0, ABORT: 1, UNKNOWN: 2 } as const
+export const MIN_BUDGET_INTERVAL_SEC = 10
+export const MAX_BUDGET_INTERVAL_SEC = 900
 
 /** PURE decision core — no I/O, so the thresholds are unit-testable against real payloads.
  *
@@ -115,36 +120,27 @@ export function parseBudgetArgs(argv: string[]): BudgetOptions {
   }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
-    if (a === '--minutes' || a === '-m') o.minutes = num(argv[++i], '--minutes')
-    else if (a === '--hours') o.minutes = num(argv[++i], '--hours') * 60
+    if (a === '--minutes' || a === '-m') o.minutes = numArg(argv[++i], '--minutes')
+    else if (a === '--hours') o.minutes = numArg(argv[++i], '--hours') * 60
     else if (a === '--window' || a === '-w') {
       const v = argv[++i]
       if (v !== '5h' && v !== '7d' && v !== 'binding') throw new Error(`--window expects 5h|7d|binding, got "${v}"`)
       o.window = v
-    } else if (a === '--margin') o.margin = num(argv[++i], '--margin')
-    else if (a === '--rate-window-min') o.rateWindowMin = num(argv[++i], '--rate-window-min')
+    } else if (a === '--margin') o.margin = numArg(argv[++i], '--margin')
+    else if (a === '--rate-window-min') o.rateWindowMin = numArg(argv[++i], '--rate-window-min')
     else if (a === '--watch') {
       o.watch = true
       const next = argv[i + 1]
       if (next && /^\d+$/.test(next)) { o.intervalSec = Number(next); i++ }
     } else if (a === '--with-risks') o.withRisks = true
     else if (a === '--json') o.json = true
-    else if (a === '--log') {
-      const v = argv[++i]
-      if (!v || v.startsWith('--')) throw new Error('--log expects a file path')
-      o.log = v
-    } else if (a === '--flush-ms') o.flushMs = clampFlushMs(num(argv[++i], '--flush-ms'))
+    else if (a === '--log') o.log = strArg(argv[++i], '--log')
+    else if (a === '--flush-ms') o.flushMs = clampFlushMs(numArg(argv[++i], '--flush-ms'))
     else throw new Error(`unknown budget flag "${a}" — see: agentlenspro budget --help`)
   }
   if (!(o.minutes > 0)) throw new Error('budget needs the run length: --minutes N (or --hours H)')
-  o.intervalSec = Math.max(10, Math.min(900, o.intervalSec))
+  o.intervalSec = clamp(Math.round(o.intervalSec), MIN_BUDGET_INTERVAL_SEC, MAX_BUDGET_INTERVAL_SEC)
   return o
-}
-
-function num(v: string | undefined, flag: string): number {
-  const n = Number(v)
-  if (!v || Number.isNaN(n)) throw new Error(`${flag} expects a number, got "${v ?? ''}"`)
-  return n
 }
 
 async function fetchEta(rateWindowMin: number | undefined): Promise<EtaPayload> {
@@ -179,7 +175,7 @@ exit: 0 GO/TIGHT (or watch ran the full duration) · 1 NO-GO (abort the run) · 
   agentlenspro budget --hours 2 --watch 120 --with-risks # arm in a Monitor for the whole run`
 
 /** One-shot: decide once, print one line (or JSON), exit with the verdict's code. */
-async function runOnce(o: BudgetOptions): Promise<number> {
+async function runOnce(o: BudgetOptions, say: Say): Promise<number> {
   await init()
   const eta = await fetchEta(o.rateWindowMin)
   const { key, win } = pickWindow(eta, o.window)
@@ -207,7 +203,7 @@ async function runOnce(o: BudgetOptions): Promise<number> {
  *  A server outage does NOT abort: being unable to measure is not evidence of exhaustion, and
  *  killing a legitimate run on a transient blip is the worse failure. The outage is reported
  *  once per episode so the silence is never mistaken for a clean bill of health. */
-async function runWatch(o: BudgetOptions): Promise<number> {
+async function runWatch(o: BudgetOptions, say: Say): Promise<number> {
   await init()
   const t0 = Date.now()
   const deadline = t0 + o.minutes * 60_000
@@ -239,7 +235,7 @@ async function runWatch(o: BudgetOptions): Promise<number> {
     } catch (e) {
       if (!down) { say(`[budget] server unreachable: ${(e as Error).message} — still watching, NOT aborting`); down = true }
     }
-    if (o.withRisks) await emitRiskTransitions(riskActive)
+    if (o.withRisks) await emitRiskTransitions(riskActive, say)
     await sleep(o.intervalSec * 1000)
   }
 }
@@ -247,7 +243,7 @@ async function runWatch(o: BudgetOptions): Promise<number> {
 /** Fold the realtime burn guard into the same stdout stream so one Monitor covers both. Same
  *  transition-only contract as `--guard`; a risk feed failure is swallowed because the budget
  *  verdict is the load-bearing signal here and must not be lost to a risk-endpoint hiccup. */
-async function emitRiskTransitions(active: Set<string>): Promise<void> {
+async function emitRiskTransitions(active: Set<string>, say: Say): Promise<void> {
   try {
     const rep = await fetchBurnRisk()
     for (const r of rep.risks || []) {
@@ -262,12 +258,10 @@ export async function runBudgetCli(argv: string[]): Promise<number> {
   let log: LineLog | null = null
   try {
     const o = parseBudgetArgs(argv)
-    if (o.log) {
-      log = new LineLog(o.log, { flushMs: o.flushMs })
-      const sink = log
-      say = (line: string) => { console.log(line); sink.write(line) }
-    }
-    return await (o.watch ? runWatch(o) : runOnce(o))
+    if (o.log) log = new LineLog(o.log, { flushMs: o.flushMs })
+    const sink = log
+    const say: Say = (line: string) => { console.log(line); if (sink) sink.write(line) }
+    return await (o.watch ? runWatch(o, say) : runOnce(o, say))
   } catch (e) {
     // Mirror the failure onto STDOUT before rethrowing. The CLI convention puts `FAIL:` on
     // stderr, but Monitor only turns STDOUT lines into events — so a mistyped flag or an
@@ -279,6 +273,6 @@ export async function runBudgetCli(argv: string[]): Promise<number> {
     throw e
   } finally {
     // The buffered tail must reach disk on EVERY exit path, the throw above included.
-    if (log) { log.close(); say = (line: string) => console.log(line) }
+    if (log) log.close()
   }
 }
