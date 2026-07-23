@@ -136,6 +136,7 @@ operations:
 
 examples:  (discover the rest with 'list --desc' then 'help <tool>')
   agentlenspro investigate_burn --windowHours 5      "my 5h window drained — what burned it, WHO?" START HERE
+  agentlenspro burn_seismic --windowHours 8          PROVEN statistical (seismology-style) burn analysis: FDR events, thrash vs marathon
   agentlenspro --risk                                fastest realtime culprit check (~50ms); only ACTIVE risks
   agentlenspro --guard 15                            arm in a bg monitor BEFORE a fan-out; 1 line/risk transition
   agentlenspro get_burn_status                       is anything burning RIGHT NOW across all live sessions?

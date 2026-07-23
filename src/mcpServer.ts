@@ -30,6 +30,7 @@ import type {
 } from './shared/summarizerTypes'
 import { buildCacheBreakReport } from './shared/cacheBreak'
 import { investigateBurn, attachCausingCalls } from './burnInvestigator'
+import { burnSeismic, renderBurnSeismic, resolveSeismicFiles, type SeismicScope } from './burnSeismic'
 import { checkBurnRisk, attachRiskCausingCalls } from './burnGuard'
 import { buildRateLimitReport } from './rateLimitReport'
 import { buildRuntimeInventory } from './runtimeInventory'
@@ -1308,6 +1309,40 @@ const TOOLS = [
         windowHours: { type: 'number', description: 'Hours to look back (default 5 — one rate-limit window; max 48)' },
         untilIso:    { type: 'string', description: 'End of the window (ISO); default now. Use to investigate a past drain.' },
         maxFiles:    { type: 'number', description: 'Scan cap per body kind (default 8000; largest-first so the burn is never the part dropped)' },
+      },
+    },
+  },
+  {
+    name: 'burn_seismic',
+    description:
+      'PROVEN statistical (seismology-style) anomaly analysis of a token burn — when you do not want a ' +
+      'heuristic verdict but a reproducible MEASUREMENT with named, textbook methods. Reconstructs a ' +
+      'per-minute COST series ($/min) directly from each turn\'s message.usage (cache_creation=cold WRITE, ' +
+      'cache_read, output) × the real per-model rates (the single pricing source), streamed from the raw ' +
+      'session JSONL by DuckDB (works with OTEL capture OFF; images are skipped, never abort the read). ' +
+      'Then runs, over that series: a ROBUST baseline (median + MAD → Iglewicz–Hoaglin modified-z, immune ' +
+      'to the outliers being detected); distribution p-values from the `stochastic` DuckDB community ' +
+      'extension when available (independent of, and cross-checked to Δ≤2e-16 against, the internal ' +
+      'unit-tested core), else the core; Benjamini–Hochberg FDR (a proven false-discovery bound, not a ' +
+      'hand-picked threshold); STA/LTA (Allen 1978) and CUSUM (Page 1954) as onset / change-point ' +
+      'diagnostics; a Gutenberg–Richter log-magnitude for ranking. Segments the window into FDR-significant ' +
+      'EVENTS, each decomposed into the two burn MODES — CACHE_THRASH (cold-write dominated: an unstable ' +
+      'MCP tool surface / model|effort switch cold-invalidates the whole prefix) and MARATHON RE-READ ' +
+      '(read dominated: a fat session re-reads its huge prefix every turn) — plus a ranked TOP-SESSIONS ' +
+      'table (the biggest burners) and every SPAWN call inside the mainshock verbatim. Returns the full ' +
+      'structured result AND a rendered report; a window with no significant event says so, never fabricates one.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        scope:            { type: 'string', description: "'fleet' (default; all recent sessions), 'workspace' (one project), or 'session'" },
+        workspace:        { type: 'string', description: "For scope='workspace': the project path (e.g. ~/Code/foo)" },
+        sessionId:        { type: 'string', description: "For scope='session': the session id or a unique prefix" },
+        windowHours:      { type: 'number', description: 'Hours to look back (default 8; max 72)' },
+        bucketMinutes:    { type: 'number', description: 'Time-bin width in minutes (default 1)' },
+        includeSubagents: { type: 'boolean', description: 'fleet/workspace: also scan subagent transcripts (default false — the spawners)' },
+        fdrAlpha:         { type: 'number', description: 'Benjamini–Hochberg false-discovery level (default 0.01)' },
+        pvalueEngine:     { type: 'string', description: "'auto' (default; use the stochastic extension if it loads), 'stochastic' (require it), 'internal' (TS core)" },
+        maxFiles:         { type: 'number', description: 'Cap on transcripts scanned, most-recent first (default 300)' },
       },
     },
   },
@@ -3471,6 +3506,32 @@ export function createMcpServer(opts: McpServerOptions): Server {
           await attachCausingCalls(inv)
           result = inv
         }
+        break
+      }
+      case 'burn_seismic': {
+        const a = args as {
+          scope?: SeismicScope; workspace?: string; sessionId?: string; windowHours?: number
+          bucketMinutes?: number; includeSubagents?: boolean; fdrAlpha?: number
+          pvalueEngine?: 'auto' | 'stochastic' | 'internal'; maxFiles?: number
+        }
+        const scope: SeismicScope = a.scope ?? 'fleet'
+        if (scope === 'workspace' && !a.workspace) { result = { error: "scope='workspace' requires a workspace path" }; break }
+        if (scope === 'session' && !a.sessionId) { result = { error: "scope='session' requires a sessionId" }; break }
+        const windowHours = Math.min(72, Math.max(0.1, a.windowHours ?? 8))
+        const sinceMs = Date.now() - windowHours * 3600_000
+        const files = resolveSeismicFiles({
+          scope, workspace: a.workspace, sessionId: a.sessionId, sinceMs,
+          includeSubagents: a.includeSubagents, maxFiles: a.maxFiles,
+        })
+        const seismic = await burnSeismic({
+          files, sinceIso: new Date(sinceMs).toISOString(), bucketMinutes: a.bucketMinutes,
+          fdrAlpha: a.fdrAlpha, pvalueEngine: a.pvalueEngine, topEvents: 10, topSessions: 10,
+        })
+        // Ship the rendered report AND the structured result: the CLI prints `report` verbatim, an
+        // MCP/API caller keeps the machine-readable fields. buckets[] is dropped from the wire form
+        // (480+ rows) — the report + events/sessions already carry the signal.
+        const { buckets: _buckets, ...wire } = seismic
+        result = { report: renderBurnSeismic(seismic), ...wire }
         break
       }
       case 'get_heartbeat_cost': {

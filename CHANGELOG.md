@@ -4,6 +4,29 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.12.0] - 2026-07-23
+
+### Added
+
+- **`burn_seismic` — a proven statistical (seismology-style) burn analysis.** When a heuristic
+  verdict isn't enough, this reconstructs a per-minute **cost** series ($/min) from each turn's
+  `message.usage` × the real per-model rates (streamed from the raw session JSONL by DuckDB, so it
+  works with OTEL capture off and image-bloated lines are skipped, never aborting the read), then
+  runs a stack of **named, textbook methods**, each unit-tested against its published constant:
+  a robust **median/MAD → Iglewicz–Hoaglin modified-z** baseline (immune to the outliers it
+  detects), distribution p-values from the **`stochastic` DuckDB community extension** when
+  available (an independent engine cross-checked to Δ≤2e-16 Poisson / ≤7e-8 normal against the
+  internal core, else the core — the engine used is disclosed), **Benjamini–Hochberg FDR** (a
+  proven false-discovery bound, not a hand-picked threshold), **STA/LTA** (Allen 1978) and
+  **CUSUM** (Page 1954) as onset / change-point diagnostics, and a Gutenberg–Richter log-magnitude.
+  It segments the window into FDR-significant **events**, decomposes each into the two burn modes —
+  **CACHE_THRASH** (cold-write dominated: an unstable MCP tool surface / model|effort switch
+  cold-invalidates the whole prefix) and **MARATHON RE-READ** (read dominated: a fat session
+  re-reads its huge prefix every turn) — ranks the top burning sessions, and lists every spawn
+  call inside the mainshock verbatim. `agentlenspro burn_seismic --windowHours 8` (scope
+  `fleet` | `workspace` | `session`). Motivated by a real incident where a spawn-count view and a
+  cost view disagreed about the cause; the cost seismogram resolves it with math, not opinion.
+
 ## [2.11.4] - 2026-07-23
 
 ### Fixed
