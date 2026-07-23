@@ -1,8 +1,8 @@
 ---
 name: agentlenspro-publish-pipeline
-description: "how do I release / publish a new version of agentlenspro / npm publish fails E404 Not Found PUT / CI publish rejected / provenance badge missing / can I publish from local / how was the package bootstrapped on npm / zizmor flags the workflows / where are the SBOM and checksums for a release / my zizmor ignore comment is not working — the release pipeline, its laws, and the bootstrap history"
+description: "how do I release / publish a new version of agentlenspro / npm publish fails E404 Not Found PUT / CI publish rejected / provenance badge missing / can I publish from local / how was the package bootstrapped on npm / zizmor flags the workflows / where are the SBOM and checksums for a release / my zizmor ignore comment is not working / I pushed the tag but no release workflow ran — the release pipeline, its laws, and the bootstrap history"
 ocd: 2026-07-11
-lmd: 2026-07-16
+lmd: 2026-07-23
 metadata:
   node_type: memory
   type: project
@@ -93,3 +93,11 @@ after, and every release since is CI-only. See also [[agentlenspro-identity]],
   write` is already job-scoped (package job: attest-build-provenance; publish job: npm
   OIDC) and Actions permissions cannot be scoped tighter than per-job. DO verify scoping
   against the live file before acting on that detector.
+[^5]: [id:ATOM-TAG-PUSH3, status:valid, keywords:"pushed_the_tag_but_no_release_ran git_push_tags_triggered_nothing publish_workflow_never_fired more_than_three_tags_at_once npm_version_did_not_change", ocd:2026-07-23, lmd:2026-07-23]
+  DO NOT release with a bare `git push --tags`, BECAUSE GitHub silently drops tag-push events
+  when MORE THAN THREE tags arrive in one push — on 2026-07-23 that push carried 24 never-pushed
+  legacy `v0.x` tags alongside `v2.11.3`, so ZERO workflow runs were created: no error, no run in
+  the list, npm still on 2.11.2, and the release looked done. DO push exactly one tag
+  (`git push origin vX.Y.Z`); if it is already pushed, recover with
+  `gh workflow run publish.yml --ref vX.Y.Z` (the tag-guarded steps make it safe) and confirm with
+  `npm view agentlenspro version` plus `_npmUser` = the OIDC bot and `dist.attestations` present.

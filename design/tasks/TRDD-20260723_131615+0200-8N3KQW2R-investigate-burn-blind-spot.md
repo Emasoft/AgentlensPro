@@ -1,10 +1,11 @@
 ---
 trdd-id: 8N3KQW2R
 title: investigate_burn reports nothing-burned while scanning the wrong bodies dir
-column: publish
+column: published
 created: 2026-07-23T13:16:15+0200
-updated: 2026-07-23T13:42:00+0200
-implementation-commits: [590c308]
+updated: 2026-07-23T14:52:00+0200
+implementation-commits: [590c308, 017ce78, c0bb910, 758b69f]
+external-refs: [Emasoft/ai-maestro-janitor#108]
 current-owner: session-7877ae1f
 task-type: bugfix
 approval-tier: 0
@@ -18,17 +19,18 @@ test-requirements: [unit]
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-23
 
-**State:** FIXED and verified in commit `590c308`; skill + CHANGELOG updated; version bumped to
-2.11.3. Remaining: tag and let CI publish.
+**State:** DONE. Published as **2.11.3** (OIDC, `_npmUser` = `GitHub Actions
+<npm-oidc-no-reply@github.com>`, `dist.attestations` PRESENT) and installed globally; the CLI now
+returns real findings instead of "nothing burned here". Follow-ups shipped in **2.11.4**.
 
-**NEXT ACTION** — publish (tag-driven OIDC, CI-only — never `npm publish` locally):
+**NEXT ACTION** — none for this TRDD. Open item is upstream:
+**Emasoft/ai-maestro-janitor#108** (the fan-out that shares one message between the 370 KB common
+context and the per-agent task — the actual burn source this fix made visible).
 
-```bash
-git add package.json CHANGELOG.md skills/agentlenspro-diagnostics/SKILL.md \
-  design/tasks/TRDD-20260723_131615+0200-8N3KQW2R-investigate-burn-blind-spot.md
-git commit -m "chore(release): 2.11.3"
-git tag v2.11.3 && git push && git push --tags
-```
+**Release trap hit and recorded:** `git push --tags` carried 24 legacy `v0.x` tags with `v2.11.3`;
+GitHub silently drops tag-push events past three, so ZERO runs were created and npm stayed on
+2.11.2 while the release looked done. Recovered with `gh workflow run publish.yml --ref v2.11.3`.
+Push ONE tag. Lesson `ATOM-TAG-PUSH3` in `[[agentlenspro-publish-pipeline]]`.
 
 **Proof it works** — same 1h window, before → after:
 `0 files scanned / "nothing burned here" / complete:true`
