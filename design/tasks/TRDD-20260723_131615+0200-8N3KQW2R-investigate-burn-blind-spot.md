@@ -1,9 +1,10 @@
 ---
 trdd-id: 8N3KQW2R
 title: investigate_burn reports nothing-burned while scanning the wrong bodies dir
-column: todo
+column: publish
 created: 2026-07-23T13:16:15+0200
-updated: 2026-07-23T13:16:15+0200
+updated: 2026-07-23T13:42:00+0200
+implementation-commits: [590c308]
 current-owner: session-7877ae1f
 task-type: bugfix
 approval-tier: 0
@@ -17,15 +18,33 @@ test-requirements: [unit]
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-23
 
-**State:** diagnosed and evidenced, NOT yet fixed. No code touched. Two defects, both ✓ VERIFIED
-by reading the source and measuring the filesystem.
+**State:** FIXED and verified in commit `590c308`; skill + CHANGELOG updated; version bumped to
+2.11.3. Remaining: tag and let CI publish.
 
-**NEXT ACTION** — open `src/burnInvestigator.ts:375` and replace the hardcoded default:
+**NEXT ACTION** — publish (tag-driven OIDC, CI-only — never `npm publish` locally):
 
 ```bash
-grep -n "otel-bodies" src/burnInvestigator.ts        # → line 375, the hardcoded default
-grep -n "effectiveBodiesDir" src/captureConfig.ts    # → line 77, the canonical resolver
+git add package.json CHANGELOG.md skills/agentlenspro-diagnostics/SKILL.md \
+  design/tasks/TRDD-20260723_131615+0200-8N3KQW2R-investigate-burn-blind-spot.md
+git commit -m "chore(release): 2.11.3"
+git tag v2.11.3 && git push && git push --tags
 ```
+
+**Proof it works** — same 1h window, before → after:
+`0 files scanned / "nothing burned here" / complete:true`
+→ `614 request + 613 response bodies across BOTH dirs, 32,060,504 equiv tokens, est $179.03,
+3 findings (top FORK_STORM)`.
+
+**Trap found while verifying:** the global `agentlenspro` on PATH is a symlink to the *published*
+package (`/opt/homebrew/lib/node_modules/agentlenspro`), NOT this repo — `npm link` is not in
+effect, so CLAUDE.md's "globally-linked" claim is stale. A local rebuild + `server restart` does
+NOT change what the `agentlenspro` command runs. Verify new code with
+`node -e 'require("./out/test/<mod>.js")'` or re-link.
+
+**Also fixed here (same root cause, unasked):** six sibling readers shared the hardcoded path —
+`burnGuard` (`--risk`), `cacheBreakTimeline`, `cacheCreationForensics`, `forensicsIndex`,
+`heartbeatCost`, `sessionBurnProfile`. Leaving them would have kept `--risk` — the cross-check the
+new BLIND verdict points at — reading the same empty directory.
 
 **Facts (measured 2026-07-23):**
 

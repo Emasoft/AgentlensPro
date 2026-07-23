@@ -4,6 +4,45 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.11.3] - 2026-07-23
+
+### Fixed
+
+- **`investigate_burn` reported "nothing burned here" while it was blind.** Measured at one
+  instant: `get_burn_status` showed 2,315,075 tokens/min across 7 active sessions while
+  `investigate_burn --windowHours 1` answered *"No API traffic found in the window — nothing burned
+  here"* with `requestFilesScanned: 0`, `complete: true`, *"full coverage of the window"*. An
+  absence of DATA was being presented as an absence of BURN — and because the diagnostics skill
+  routes agents to this tool first, that verdict was closing real investigations.
+
+  Two independent defects:
+
+  1. **The wrong directory.** Seven readers hardcoded `~/.agentlens/otel-bodies` and never consulted
+     the configured `capture.spoolDir`, so every install that redirects raw bodies — the documented
+     setup, since capture writes ~35 GB/day — scanned an empty path. The failure becomes total
+     exactly when the legacy corpus finishes draining: 1,876 live body files in the spool, 0 in the
+     directory being read. A new resolver, `resolveBodiesReadScope`, answers the *reader's* question
+     (every directory that can still hold bodies, spool first, plus the ones that are missing) as
+     distinct from `effectiveBodiesDir`, which answers the *writer's*. `DEFAULT_BODIES_DIR` is now
+     `defaultBodiesDir()`, resolved per call — the constant froze one value for the process
+     lifetime, and the spool is a RAM disk remounted after reboot.
+  2. **The dishonest zero.** A scan that read nothing now sets `coverage.complete: false` and
+     returns a `BLIND` verdict naming the cause (`capture-off`, `no-bodies-dir`,
+     `dirs-empty-in-window`), stating plainly that this is not evidence nothing burned, and pointing
+     at `--risk` / `get_burn_status`, which read the live feed and never go blind.
+     `coverage.dirsScanned` / `dirsMissing` report where it actually looked.
+
+  Same fix reaches `--risk` (burn guard), the cache-break timeline, cache-creation forensics,
+  heartbeat cost and session burn profiles, which shared the hardcoded path. Verified on the real
+  corpus over the same one-hour window: `0 files / "nothing burned here"` became **614 request +
+  613 response bodies, 32,060,504 input-equivalent tokens, est $179.03, 3 findings** (top:
+  `FORK_STORM`).
+
+### Changed
+
+- The diagnostics skill now warns, in the router and the cheat-sheet, that `investigate_burn` is
+  forensic — only as good as raw-body capture — and names the checks that never go blind.
+
 ## [2.11.2] - 2026-07-23
 
 ### Added

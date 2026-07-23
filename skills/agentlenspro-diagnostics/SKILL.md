@@ -24,7 +24,8 @@ description: >-
   cache-break causes/timeline, expensive writes, heartbeat cost, config comparison, SQL
   analytics). START with investigate_burn — the ONE-command investigation that names the
   window-burn culprits (fork storms, premium-model fan-outs, idle-fleet keep-warm, image
-  residency) ranked with evidence. Also the operations surface: the one-command idempotent
+  residency) ranked with evidence; if it reports BLIND it saw no raw bodies, so fall back to
+  --risk / get_burn_status, which read the live feed. Also the operations surface: the one-command idempotent
   installer/repairer (`agentlenspro setup [--dry-run] [--yes]` — detect, converge, verify each
   step, self-test), server control (`server start|stop|restart|status [--supervise]`), open the
   dashboard (`dashboard`), (re)install this skill (--install-skill), and wire/unwire Claude Code
@@ -74,7 +75,7 @@ reference for when that command's output needs interpreting.
 | Your question, in the words you would use | Command |
 |---|---|
 | "Something is burning tokens RIGHT NOW — what?" | `agentlenspro --risk` (~40ms) then `investigate_burn` |
-| "My window drained. What used it, and who?" | `agentlenspro investigate_burn --windowHours 5` |
+| "My window drained. What used it, and who?" | `agentlenspro investigate_burn --windowHours 5` (if it answers `BLIND`, it read no raw bodies — use `--risk` / `get_burn_status`) |
 | "Will this test round / batch / fan-out fit in the window? Should I even start?" | `agentlenspro budget --minutes N` |
 | "Run my batch and STOP it if the window won't survive" | `agentlenspro budget --minutes N --watch --with-risks` (exit 1 = abort) |
 | "Tell me whenever <metric> spikes, and keep telling me" | `agentlenspro watch --metric <m> --threshold N` |
@@ -195,8 +196,19 @@ agentlenspro get_skill_attribution --window 6       # 3. WHICH skill/plugin, if 
 workspace and model in each line, so it often ends the investigation by itself.
 
 `investigate_burn` returns `verdict` (read this first — it is a plain sentence naming the culprits),
-`findings` (ranked, each with its evidence), `attribution` (by workspace) and `totals`. The finding
-codes tell you what to change:
+`findings` (ranked, each with its evidence), `attribution` (by workspace) and `totals`.
+
+> **It is a FORENSIC tool: it reads raw request/response bodies off disk, so it is only as good as
+> the capture.** If `coverage.blind` is set (or the verdict starts with `BLIND`), it saw NOTHING —
+> that is an absence of DATA, never evidence that nothing burned. `coverage.dirsScanned` /
+> `dirsMissing` tell you where it looked. Turn capture on with
+> `agentlenspro config set captureRawBodies on`, and meanwhile use **`agentlenspro --risk`** and
+> **`get_burn_status`** — they read the LIVE feed and never go blind. Never close an investigation
+> on a blind result: a `--windowHours 1` scan once reported "nothing burned here" while
+> `get_burn_status` showed 2.3M tokens/min, because it was reading the wrong directory
+> (fixed in 2.11.3 — but capture can still be off, and the window can still predate it).
+
+The finding codes tell you what to change:
 
 | Finding | What actually happened | Fix |
 |---|---|---|
@@ -853,7 +865,7 @@ A `verdict:"unknown"` means no LLM request was recorded for that session.
 
 | Question | Tool |
 |---|---|
-| **"My window drained — what burned it and WHO?"** | **`investigate_burn`** — START HERE. ONE command does the whole investigation: exact billed usage (by hour/model, est $), workspace attribution, and ranked cause findings with evidence (`FORK_STORM`, `SUBAGENT_BOOT_TAX`, `PREMIUM_MODEL_FANOUT`, `FAT_SESSION_REWRITES`, `IDLE_FLEET_KEEPWARM`, `IMAGE_BLOB_RESIDENT`, `RATE_LIMIT_COLD_RESUME`) + a plain verdict naming the culprits. Flags: `--windowHours 5` (default), `--untilIso <ISO>` for a past drain, `--maxFiles`. Drill deeper only if needed with the tools below |
+| **"My window drained — what burned it and WHO?"** | **`investigate_burn`** — START HERE. ONE command does the whole investigation: exact billed usage (by hour/model, est $), workspace attribution, and ranked cause findings with evidence (`FORK_STORM`, `SUBAGENT_BOOT_TAX`, `PREMIUM_MODEL_FANOUT`, `FAT_SESSION_REWRITES`, `IDLE_FLEET_KEEPWARM`, `IMAGE_BLOB_RESIDENT`, `RATE_LIMIT_COLD_RESUME`) + a plain verdict naming the culprits. Flags: `--windowHours 5` (default), `--untilIso <ISO>` for a past drain, `--maxFiles`. **Forensic — reads raw bodies off disk: if `coverage.blind` is set the verdict starts with `BLIND` and it saw nothing (capture off / dir missing / window predates capture). That is no DATA, not no BURN — cross-check with `--risk` or `get_burn_status`, which read the live feed.** Drill deeper only if needed with the tools below |
 | Is something burning RIGHT NOW? | `get_burn_status` |
 | Which account am I on — email, plan (Pro/Max 5x/Max 20x), billing MODE, cache-TTL regime, 5h/7d fill? | `get_account_status` — one-line `summary` + `plan`/`mode`/`cacheTtl {minutes,regime,ttlSource}`/`usageWindows {fiveHourPct,sevenDayPct,windowSource}` (windowSource `cc-rate-limits` when Claude Code's own rate_limits are ingested, else `calibrated`, else `none` — a null is never shown as 0) |
 | What account/mode/plan/cache-TTL was I on at a PAST instant T? | `get_account_state_at --ts <ms-epoch>` (or `--iso <ISO-8601>`) — binary-searches the change-detected account-state timeline (`~/.agentlens/account-state.ndjson`, written ONLY on a discrete state change, ~a few writes/hour), so you can attribute a past span/burn to the mode+plan+TTL in force then. Null (never fabricated) when the timeline doesn't reach that far back |
