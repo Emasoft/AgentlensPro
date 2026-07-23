@@ -51,6 +51,21 @@ If `agentlenspro` is not on PATH, (re)install the package — `npm install -g ag
 (or the Homebrew formula; developers working from a checkout use `npm link`). This skill never
 installs the server itself; the CLI starts it on demand.
 
+## Version floor — check this FIRST if a command is "unknown"
+
+This document describes **agentlenspro 2.11.0+**. The `budget` and `watch` commands and the
+`get_lifecycle_events` / `get_cache_risk_costs` / `get_skill_attribution` /
+`get_loaded_plugin_versions` tools **do not exist before 2.11.0** — on an older install they fail
+as an unknown command or unknown tool, which reads like a broken skill rather than an old binary.
+
+```bash
+agentlenspro --version          # < 2.11.0 ⇒ npm install -g agentlenspro@latest
+```
+
+If a Claude session cannot see this skill's newest content, that session loaded the skill at
+startup: run **`/reload-skills`**. This is a standalone skill, so **`/reload-plugins` will NOT
+refresh it** — the two reload paths are distinct.
+
 ## START HERE — route your question to one command
 
 Read this table first. Most questions are answered by ONE command; the rest of this document is
@@ -128,15 +143,42 @@ And exactly one **scope**, which decides what the number covers and what you mus
 
 ## Worked examples
 
-**1 — "I'm about to run a 90-minute scenario suite. Is that safe, and stop it if not."**
+**1 — "I am an AGENT about to orchestrate a batch of sub-agents / a scenario suite, and it must
+stop itself before it drains the window."** ← the flagship case
+
+This is the full loop, and it is the scenario this skill exists for. You are the orchestrator; the
+batch is expensive; nobody is watching.
 
 ```bash
-agentlenspro budget --minutes 90                    # preflight; exit 0 = go, 1 = don't start
-# then, for the run itself, in ONE Monitor (budget verdict + burn guard on one stream):
-#   Monitor(command: "agentlenspro budget --minutes 90 --watch 120 --with-risks", persistent: true)
+# 1. PREFLIGHT — do not launch anything until this says go.
+agentlenspro budget --minutes 90            # exit 0 = go · 1 = do NOT start · 2 = cannot project
 ```
-Wire the watch's **non-zero exit to your runner's kill path** — that is the whole abort mechanism.
-AgentlensPro decides; it does not own your process tree.
+
+```
+# 2. ARM — one Monitor covers the budget verdict AND the realtime burn risks.
+Monitor(command: "agentlenspro budget --minutes 90 --watch 120 --with-risks",
+        description: "budget+guard — scenario suite", persistent: true)
+```
+
+**3. React to what arrives on that stream — each line means something different:**
+
+| Line | What it means | Do |
+|---|---|---|
+| `[budget] ABORT — …` | the window will run out before the batch finishes | **stop launching, kill the batch.** The command has already exited 1 |
+| `[budget] TIGHT — …` | it fits, but under the safety margin | stop *adding* work; let what is running finish |
+| `[burn-guard] FANOUT_BURST` / `RUNAWAY_FANOUT` | too many sub-agents launched too fast | pause launching; let the wave settle |
+| `[burn-guard] CACHE_THRASH` | the prefix is being re-billed every turn | stop launching NOW and run `investigate_burn --windowHours 1` |
+| `[burn-guard] COLD_RESUME_RISK` | a rate-limit stall just ended | warm with ONE agent before resuming the fan-out |
+| nothing for a long time | normal — it is silent until something changes | no action |
+
+**4. TaskStop the monitor when the batch ends**, or a guard armed for 90 minutes keeps emitting
+for the rest of the session.
+
+**Two things this does NOT do, so plan for them:**
+- **It cannot stop your batch.** AgentlensPro measures and decides; it does not own your process
+  tree. Wire `budget --watch`'s **non-zero exit to your own kill path** — that IS the mechanism.
+- The **burn-gate** (`--install-hooks`) denies only the four measured disaster launches. It will
+  never stop a well-behaved batch that is merely too long. That is what `budget` is for.
 
 **2 — "Something is eating the window right now."**
 
@@ -181,6 +223,7 @@ agentlenspro get_account_burners --account previous # if the account rotated
 
 | What you see | What it means | Do |
 |---|---|---|
+| `unknown command`/`unknown tool` for something documented here | Your install predates **2.11.0**; the skill is newer than the binary. | `agentlenspro --version`, then `npm install -g agentlenspro@latest` |
 | `FAIL: server busy — backpressure — start it: …` | The server **is running** and is shedding load under admission control. **The "start it" hint is wrong in this case** — starting a second one is not the fix. | `agentlenspro --status` to confirm it is up and see `memory:`. Wait and retry; if `rss` is multi-GB the span store is large — consider `agentlenspro config` retention or `--purge-db` |
 | `FAIL: … server unreachable …` | Nothing is listening. | `agentlenspro server start` (or `setup`) |
 | exit **64** with `[watch]/[budget] FAIL:` | Your command line was wrong; nothing was armed. | Read the message — it names the valid values |
