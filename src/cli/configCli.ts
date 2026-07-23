@@ -5,6 +5,7 @@
 // boot: env var > config.json > built-in default. See src/retentionConfig.ts.
 
 import { dataDir } from './cliCore'
+import { EXIT } from './cliErrors'
 import {
   RETENTION_META, configPath, findMeta, loadRetentionConfig, resolveKnobWithSource, setRetentionKey,
   type RetentionKeyMeta,
@@ -64,17 +65,17 @@ function getConfig(dir: string, key: string): number {
     const { enabled, source } = rawBodyCaptureWithSource(dir, process.env)
     console.log(`${CAPTURE_KEY} = ${enabled ? 'on' : 'off'}  (source: ${source}; env ${RAW_BODIES_ENV}; default off)`)
     console.log(CAPTURE_DESC)
-    return 0
+    return EXIT.OK
   }
   const m = findMeta(key)
   if (!m) {
     console.error(`unknown retention key: ${key}\nvalid keys: ${RETENTION_META.map((x) => x.key).join(', ')}`)
-    return 1
+    return EXIT.USAGE
   }
   const { value, source } = resolveKnobWithSource(m, loadRetentionConfig(dir), process.env)
   console.log(`${m.key} = ${value} ${m.unit}  (source: ${source}; env ${m.env}; default ${m.def}; min ${m.min})`)
   console.log(m.desc)
-  return 0
+  return EXIT.OK
 }
 
 /** `agentlenspro config set <key> <value>` — validate and persist to config.json (atomic, non-destructive). */
@@ -83,26 +84,26 @@ async function setConfig(dir: string, key: string, rawValue: string): Promise<nu
     const enabled = parseOnOff(rawValue)
     if (enabled === undefined) {
       console.error(`value must be on|off, got: ${JSON.stringify(rawValue)}`)
-      return 1
+      return EXIT.USAGE
     }
     return applyCaptureSetting(dir, enabled)
   }
   const m: RetentionKeyMeta | undefined = findMeta(key)
   if (!m) {
     console.error(`unknown config key: ${key}\nvalid keys: ${[...RETENTION_META.map((x) => x.key), CAPTURE_KEY].join(', ')}`)
-    return 1
+    return EXIT.USAGE
   }
   const value = Number(rawValue)
   if (rawValue.trim() === '' || !Number.isFinite(value)) {
     console.error(`value must be a number, got: ${JSON.stringify(rawValue)}`)
-    return 1
+    return EXIT.USAGE
   }
   // setRetentionKey enforces the min floor and THROWS on a corrupt existing file rather than
-  // clobbering it — surface that as a fail-fast CLI error, never a silent reset.
+  // clobbering it — that throw propagates to the top-level fail-fast handler, never a silent reset.
   setRetentionKey(dir, m.key, value)
   console.log(`set ${m.key} = ${value} ${m.unit} in ${configPath(dir)}`)
   console.log(`restart the server/daemon to apply:  agentlenspro server restart`)
-  return 0
+  return EXIT.OK
 }
 
 /** Seams for the capture on/off flow, so the fail-fast refusal + spool wiring are unit-testable
@@ -147,36 +148,44 @@ export async function applyCaptureSetting(
     } catch (e) {
       console.error(`cannot enable ${CAPTURE_KEY}: RAM-disk spool unavailable — ${(e as Error).message}`)
       console.error('capture NOT enabled (refusing to write ~30 GB/day of raw bodies to the SSD).')
-      return 1
+      return EXIT.ABORT
     }
     const bodies = spoolDir(spool.mountPoint)
-    // Wire settings.json FIRST (the failure-prone async I/O) and persist the durable knob only after it
-    // succeeds — so a failed converge never leaves capture claiming "on" with no sink actually wired.
+    // Order matters on failure: make the SINK fully durable BEFORE signalling the SOURCE. Install the
+    // boot-remount agent first (so a reboot re-creates the spool), THEN wire settings.json — that env
+    // write is what tells Claude Code to start dumping bodies — THEN persist our own knob last. If any
+    // step throws we exit non-zero having never left capture "on" without a reboot-surviving spool
+    // behind it (the earlier failure mode: agent installed last, so a throw there left Claude writing
+    // to a spool that vanished on the next reboot). A stray agent from a later throw only re-runs
+    // `spool ensure`, which no-ops while capture is off.
+    deps.installSpoolAgent()
     await deps.ensureTelemetry({ dataDir: dir, captureRawBodies: true, bodiesDir: bodies })
     setRawBodyCapture(dir, true)
     setSpoolDir(dir, bodies)
-    deps.installSpoolAgent()
     console.log(`set ${CAPTURE_KEY} = on in ${configPath(dir)}`)
     console.log(`RAM-disk spool ready → ${spool.mountPoint} (${Math.round(spool.sizeBytes / 1048576)} MB)`)
     console.log(`wired ${RAW_BODIES_KEY} → file:${bodies}`)
     console.log('restart your Claude Code sessions for this to take effect (env is read at launch).')
-    return 0
+    return EXIT.OK
   }
   // OFF: read the previously-configured spool FIRST so ensureTelemetry deletes exactly the sink WE
   // wrote (its guard matches only `file:${bodiesDir}`); fall back to the default dir for a legacy
-  // (pre-spool) capture-on install whose key pointed at DATA_DIR/otel-bodies. Persist OFF up front —
-  // the whole point of "off" is to stop the bleeding even if the settings write then fails.
+  // (pre-spool) capture-on install whose key pointed at DATA_DIR/otel-bodies.
   const prevSpool = spoolDirConfigured(dir)
-  setRawBodyCapture(dir, false)
+  // Remove the settings.json key FIRST — that write is what actually stops Claude Code dumping bodies
+  // (our own knob does not). Only once it succeeds do we flip the knob and tear down the sink, so a
+  // failed settings write leaves capture fully ON and self-consistent (recoverable by re-running)
+  // rather than a config-off / env-on split that keeps the ~35 GB/day going while claiming "off".
   const r = await deps.ensureTelemetry({
     dataDir: dir, captureRawBodies: false, ...(prevSpool ? { bodiesDir: prevSpool } : {}),
   })
+  setRawBodyCapture(dir, false)
   setSpoolDir(dir, undefined)
   deps.removeSpoolAgent()
   console.log(`set ${CAPTURE_KEY} = off in ${configPath(dir)}`)
   if (r.removed.includes(RAW_BODIES_KEY)) console.log(`removed ${RAW_BODIES_KEY} from ${r.settingsPath}`)
   console.log('restart your Claude Code sessions for this to take effect (env is read at launch).')
-  return 0
+  return EXIT.OK
 }
 
 /** Entry for `agentlenspro config [...]`. Returns the process exit code (fail-fast, non-zero on error). */
@@ -186,20 +195,18 @@ export async function runConfigCli(argv: string[]): Promise<number> {
   switch (sub) {
     case 'list':
       listConfig(dir)
-      return 0
+      return EXIT.OK
     case 'get':
-      if (!argv[1]) { console.error('usage: agentlenspro config get <key>'); return 1 }
+      if (!argv[1]) { console.error('usage: agentlenspro config get <key>'); return EXIT.USAGE }
       return getConfig(dir, argv[1])
     case 'set':
-      if (!argv[1] || argv[2] === undefined) { console.error('usage: agentlenspro config set <key> <value>'); return 1 }
-      try {
-        return await setConfig(dir, argv[1], argv[2])
-      } catch (e) {
-        console.error((e as Error).message)
-        return 1
-      }
+      if (!argv[1] || argv[2] === undefined) { console.error('usage: agentlenspro config set <key> <value>'); return EXIT.USAGE }
+      // A runtime failure (e.g. setRetentionKey refusing a corrupt config.json) propagates to the
+      // top-level fail-fast handler — the same uniform exit-1 path list/get already rely on. Only the
+      // usage mistakes (here and inside setConfig) carry the distinct EXIT.USAGE (64).
+      return await setConfig(dir, argv[1], argv[2])
     default:
       console.error(`unknown config subcommand: ${sub}\nusage: agentlenspro config [list] | config get <key> | config set <key> <value>`)
-      return 1
+      return EXIT.USAGE
   }
 }

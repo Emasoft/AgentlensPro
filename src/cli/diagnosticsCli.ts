@@ -270,7 +270,13 @@ async function runGuard(intervalSec: number | undefined): Promise<void> {
   const wasActive = new Set<string>()
   for (;;) {
     try {
+      // While recovering from an outage, re-do the handshake BEFORE the fetch: harmless on the REST
+      // fast path, and it re-establishes the MCP session for an older server on the fallback path.
+      if (wasActive.has('__down')) await init()
       const rep = await fetchBurnRisk()
+      // A successful fetch IS the proof the server is back — announce recovery HERE, before any risk
+      // line, not after processing them (which reads as "resuming" while the guard is already resumed).
+      if (wasActive.has('__down')) { console.log('[burn-guard] server back — resuming'); wasActive.delete('__down') }
       for (const risk of rep.risks || []) {
         if (risk.active && !wasActive.has(risk.code)) {
           console.log(`[burn-guard] ${risk.code}: ${risk.detail}`)
@@ -289,9 +295,6 @@ async function runGuard(intervalSec: number | undefined): Promise<void> {
     } catch (e) {
       // Server restart mid-watch must not kill the guard — report once per outage.
       if (!wasActive.has('__down')) { console.log(`[burn-guard] server unreachable: ${(e as Error).message}`); wasActive.add('__down') }
-    }
-    if (wasActive.has('__down')) {
-      try { await init(); console.log('[burn-guard] server back — resuming'); wasActive.delete('__down') } catch { /* still down */ }
     }
     await sleep(interval)
   }
@@ -416,8 +419,13 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
     else if (argv[i] === '--export-bodies') {
       ops.exportBodies = argv[++i]
       if (!ops.exportBodies) throw new Error('--export-bodies needs a destination directory')
-    } else if (argv[i] === '--since') ops.since = argv[++i]
-    else if (argv[i] === '--until') ops.until = argv[++i]
+    } else if (argv[i] === '--since') {
+      ops.since = argv[++i]
+      if (!ops.since) throw new Error('--since needs a value (ISO timestamp or hours)')
+    } else if (argv[i] === '--until') {
+      ops.until = argv[++i]
+      if (!ops.until) throw new Error('--until needs a value (ISO timestamp)')
+    }
     else if (argv[i] === '--install-skill') ops.installSkill = true
     else if (argv[i] === '--guard') {
       ops.guard = true
@@ -527,12 +535,21 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
   if (cmd === 'call') {
     const tool = rest[1]
     if (!tool) throw new Error('call requires a tool name')
-    const rawArgs = rest[2] && rest[2].startsWith('{') ? JSON.parse(rest[2]) as Record<string, unknown> : {}
+    // A present-but-non-JSON second arg is a mistake (usually flag syntax on the wrong verb) — fail
+    // fast rather than silently call the tool with {} and measure the wrong thing.
+    let rawArgs: Record<string, unknown> = {}
+    if (rest[2] !== undefined) {
+      if (!rest[2].startsWith('{')) {
+        throw new Error('call expects a JSON object as the second argument — for flag syntax use: agentlenspro <tool> --flag value')
+      }
+      rawArgs = JSON.parse(rest[2]) as Record<string, unknown>
+    }
     emit(tool, await callTool(tool, rawArgs, globals.full), globals)
     return
   }
 
   if (cmd === 'batch') {
+    if (!rest[1]) throw new Error('batch requires a JSON array: [{"tool":"...","args":{...}}]')
     const spec = JSON.parse(rest[1]) as Array<{ tool: string; args?: Record<string, unknown>; full?: boolean }>
     if (!Array.isArray(spec)) throw new Error('batch requires a JSON array')
     // Sequential on purpose: the endpoint is stateless per request and the server does bounded
