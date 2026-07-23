@@ -47,11 +47,16 @@ janitor's own `agent_config_patterns.scan_text()` found **0 invisible/bidi unico
 
 **NEXT ACTION: none.** Do not re-investigate this dedupe key — read this block instead.
 
-**Standing hazard worth knowing (NOT a vulnerability, and NOT this TRDD's work):** if anyone ever
-runs `npx playwright init-agents --loop=claude` in this repo, it writes `.mcp.json`
-(`generateAgents.js:58`) and would re-register an MCP server — contradicting the deliberate
-unregistration in commit `d4c0dd4` and the `CLAUDE.md` rule "Do not re-register the MCP server
-without asking the user". Review anything that command generates before an agent loads it.
+**The residual hazard is ALREADY guarded — do not "add" a control here.** The generator writes
+`.mcp.json` (`generateAgents.js:58`), which would re-register an MCP server, contradicting the
+deliberate unregistration in commit `d4c0dd4` and the `CLAUDE.md` rule "Do not re-register the MCP
+server without asking the user". This project already blocks that invocation at the tool layer:
+`scripts/deny-playwright-init-agents.js`, a `PreToolUse(Bash)` deny hook registered at
+`.claude/settings.json:9`, whose header comment reached these same conclusions independently and
+earlier. The hook is deliberately conservative — it matches the phrase anywhere in a Bash command,
+so it also denies a harmless *mention* (it denied this ticket's own close command until the wording
+was changed). That is by design: "blocking a harmless mention is the cheap failure". If it fires on
+you, REPHRASE — do not disable it, widen an exception, or route around it.
 
 **SUPERSEDED — do NOT carry forward:** the pre-dispatch framing below (`AICTX-001` as a live
 `critical`, and its stock line "a GitHub Actions workflow is vulnerable", which was never accurate —
