@@ -1,8 +1,9 @@
 import * as assert from 'assert'
 import {
   METRICS, findMetric, metricsWithPastSupport, newPeakState, stepPeak, exitThreshold,
-  parseWatchArgs, projectSample, fmtValue, fmtDur, baselineSql,
+  parseWatchArgs, projectSample, fmtValue, fmtDur, baselineSql, runWatchCli,
 } from '../cli/watchCli'
+import { UsageError, EXIT } from '../cli/cliErrors'
 
 // ── `agentlenspro watch` (generic metric peak watcher) ────────────────────────
 // The peak engine and the option gate are pure, so these exercise the real logic — no mocks.
@@ -350,6 +351,65 @@ suite('watch: projectSample mode arithmetic', () => {
 
   test('a falling cumulative gives a negative rate rather than being clamped away', () => {
     assert.strictEqual(projectSample('rate', cumulative, 100, { v: 700, at: t0 }, t0 + 60_000, 0), -600)
+  })
+})
+
+suite('watch: a caller mistake must not look like a runtime abort', () => {
+  // standalone/cli.ts maps every THROWN error to exit 1 — the same code `budget --watch` uses to
+  // mean "abort the run". A mistyped flag therefore used to be indistinguishable from a real
+  // abort: the harness kills the batch and the operator goes hunting a burn that never happened.
+  test('every argument validation raises UsageError, not a bare Error', () => {
+    const bad: string[][] = [
+      [], ['--metric'], ['--metric', 'bananas'], ['--metric', 'input'],
+      ['--metric', 'input', '--session', 'a', '--mode', 'sideways'],
+      ['--metric', 'input', '--session', 'a', '--threshold', 'lots'],
+      ['--metric', 'input', '--session', 'a', '--nope'],
+      ['--metric', 'pct-5h', '--session', 'a', '--threshold', '1'],
+      ['--metric', 'input', '--session', 'a', '--threshold', '1', '--for', '-5'],
+    ]
+    for (const argv of bad) {
+      assert.throws(() => parseWatchArgs(argv), (e: Error) => e instanceof UsageError,
+        `expected UsageError for: ${JSON.stringify(argv)}`)
+    }
+  })
+
+  test('runWatchCli RETURNS EX_USAGE (64) for a bad command line instead of throwing', async () => {
+    const orig = { log: console.log, error: console.error }
+    const out: string[] = []
+    console.log = (...a: unknown[]) => { out.push(a.map(String).join(' ')) }
+    console.error = () => { /* captured, not printed */ }
+    let code: number
+    try { code = await runWatchCli(['--metric', 'bananas']) } finally { console.log = orig.log; console.error = orig.error }
+    assert.strictEqual(code, EXIT.USAGE)
+    assert.strictEqual(EXIT.USAGE, 64, 'sysexits EX_USAGE — the repo already uses EX_CONFIG 78')
+    assert.ok(out.some(l => l.startsWith('[watch] FAIL:')), 'the reason must still reach STDOUT for Monitor')
+  })
+
+  test('no args prints usage and exits EX_USAGE; --help exits 0', async () => {
+    const orig = console.log
+    console.log = () => { /* silence the usage block */ }
+    try {
+      assert.strictEqual(await runWatchCli([]), EXIT.USAGE)
+      assert.strictEqual(await runWatchCli(['--help']), EXIT.OK)
+    } finally { console.log = orig }
+  })
+
+  test('an infinite numeric flag is refused rather than silently clamped', () => {
+    assert.throws(() => parseWatchArgs(['--metric', 'input', '--session', 'a', '--threshold', '1', '--interval', '1e999']),
+      /finite number/)
+  })
+})
+
+suite('watch: --for bounds the lifetime', () => {
+  const base = ['--metric', 'input', '--session', 'a', '--threshold', '1']
+
+  test('defaults to 0, meaning run until killed (the Monitor/daemon case)', () => {
+    assert.strictEqual(parseWatchArgs(base).forMinutes, 0)
+  })
+
+  test('accepts a positive duration and refuses a negative one', () => {
+    assert.strictEqual(parseWatchArgs([...base, '--for', '90']).forMinutes, 90)
+    assert.throws(() => parseWatchArgs([...base, '--for', '-1']), /non-negative/)
   })
 })
 

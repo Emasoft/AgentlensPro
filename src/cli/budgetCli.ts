@@ -17,6 +17,7 @@ import { sleep } from './cliCore'
 import { fetchBurnRisk } from './diagnosticsCli'
 import { LineLog, clampFlushMs, DEFAULT_FLUSH_MS } from './lineLog'
 import { numArg, strArg, clamp } from './argHelpers'
+import { UsageError, EXIT } from './cliErrors'
 
 /** Sink for every line this command prints, so `--log` mirrors stdout exactly — a log that
  *  differs from what the operator saw is worse than no log. Threaded as a parameter rather than
@@ -50,7 +51,9 @@ export interface BudgetDecision {
   remainingMin: number
 }
 
-export const BUDGET_EXIT = { GO: 0, ABORT: 1, UNKNOWN: 2 } as const
+/** Budget's verdict codes ARE the shared CLI contract — aliased, not redefined, so the two can
+ *  never disagree about what 1 means. `USAGE` (64) is added by the shared table. */
+export const BUDGET_EXIT = { GO: EXIT.OK, ABORT: EXIT.ABORT, UNKNOWN: EXIT.UNKNOWN } as const
 export const MIN_BUDGET_INTERVAL_SEC = 10
 export const MAX_BUDGET_INTERVAL_SEC = 900
 
@@ -124,7 +127,7 @@ export function parseBudgetArgs(argv: string[]): BudgetOptions {
     else if (a === '--hours') o.minutes = numArg(argv[++i], '--hours') * 60
     else if (a === '--window' || a === '-w') {
       const v = argv[++i]
-      if (v !== '5h' && v !== '7d' && v !== 'binding') throw new Error(`--window expects 5h|7d|binding, got "${v}"`)
+      if (v !== '5h' && v !== '7d' && v !== 'binding') throw new UsageError(`--window expects 5h|7d|binding, got "${v}"`)
       o.window = v
     } else if (a === '--margin') o.margin = numArg(argv[++i], '--margin')
     else if (a === '--rate-window-min') o.rateWindowMin = numArg(argv[++i], '--rate-window-min')
@@ -136,9 +139,9 @@ export function parseBudgetArgs(argv: string[]): BudgetOptions {
     else if (a === '--json') o.json = true
     else if (a === '--log') o.log = strArg(argv[++i], '--log')
     else if (a === '--flush-ms') o.flushMs = clampFlushMs(numArg(argv[++i], '--flush-ms'))
-    else throw new Error(`unknown budget flag "${a}" — see: agentlenspro budget --help`)
+    else throw new UsageError(`unknown budget flag "${a}" — see: agentlenspro budget --help`)
   }
-  if (!(o.minutes > 0)) throw new Error('budget needs the run length: --minutes N (or --hours H)')
+  if (!(o.minutes > 0)) throw new UsageError('budget needs the run length: --minutes N (or --hours H)')
   o.intervalSec = clamp(Math.round(o.intervalSec), MIN_BUDGET_INTERVAL_SEC, MAX_BUDGET_INTERVAL_SEC)
   return o
 }
@@ -270,6 +273,12 @@ export async function runBudgetCli(argv: string[]): Promise<number> {
     const msg = `[budget] FAIL: ${(e as Error).message}`
     console.log(msg)
     if (log) log.write(msg)
+    if (e instanceof UsageError) {
+      // EX_USAGE, not a throw: the shim maps every throw to exit 1, which is this command's ABORT
+      // signal. A mistyped flag must never look to a harness like a legitimate abort.
+      console.error(`FAIL: ${e.message}`)
+      return EXIT.USAGE
+    }
     throw e
   } finally {
     // The buffered tail must reach disk on EVERY exit path, the throw above included.

@@ -490,6 +490,14 @@ a chatty alert destroys itself. Hysteresis exists so a value oscillating on the 
 open and close an excursion every poll. `--every` opts into per-sample echo; `--json` emits one
 object per line.
 
+**Exit codes are a contract**, and a caller mistake never borrows a runtime code: `0` stopped
+cleanly (`--for` elapsed) · `2` the metric had no value to watch · **`64` (sysexits EX_USAGE) the
+command line was wrong**. `budget` gains the same `64`, so a mistyped flag can no longer be
+mistaken by a harness for its `1` = ABORT. `--for MINUTES` bounds a watch's lifetime (default `0`
+= until killed). If the feed stops returning a value the watch says so ONCE and keeps polling —
+an hour of silence must never be readable as "nothing crossed the threshold" when it means "there
+has been nothing to measure".
+
 **It refuses what it cannot answer honestly** rather than returning a plausible number: a
 session metric with no `--session`, a "since" on something that is already a rate, a per-run total
 for machine-wide burn, a past `--since` on a rolling gauge. A feed that has no value yields a

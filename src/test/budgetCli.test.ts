@@ -1,5 +1,6 @@
 import * as assert from 'assert'
 import { decideBudget, pickWindow, parseBudgetArgs, fmtMin, BUDGET_EXIT, runBudgetCli, EtaPayload } from '../cli/budgetCli'
+import { UsageError, EXIT } from '../cli/cliErrors'
 
 // ── `agentlenspro budget` (timed-run window budgeting) ────────────────────────
 // The decision core is pure, so these are real tests over real payload shapes — the fixtures
@@ -126,7 +127,14 @@ suite('budget: parseBudgetArgs', () => {
   })
 
   test('rejects a non-numeric duration', () => {
-    assert.throws(() => parseBudgetArgs(['--minutes', 'soon']), /expects a number/)
+    assert.throws(() => parseBudgetArgs(['--minutes', 'soon']), /expects a finite number/)
+  })
+
+  test('every argument validation raises UsageError so it can carry EX_USAGE', () => {
+    for (const argv of [[], ['--minutes', 'soon'], ['--minutes', '5', '--window', '1h'], ['--minutes', '5', '--nope']]) {
+      assert.throws(() => parseBudgetArgs(argv), (e: Error) => e instanceof UsageError,
+        `expected UsageError for ${JSON.stringify(argv)}`)
+    }
   })
 
   test('parses --with-risks and --json', () => {
@@ -140,19 +148,17 @@ suite('budget: failures reach STDOUT, not only stderr', () => {
   // Monitor turns only STDOUT lines into events. A mistyped flag whose error went solely to
   // stderr produced a watch that emitted nothing and ended — indistinguishable from "armed and
   // quiet". This pins the mirror so that regression cannot come back.
-  test('runBudgetCli prints a [budget] FAIL line on stdout and still rethrows', async () => {
+  test('a bad command line RETURNS EX_USAGE and still reports on stdout', async () => {
+    // It must NOT throw: the shim maps every throw to exit 1, which is this command's ABORT
+    // signal — a typo would then be indistinguishable from a real "stop the run".
     const lines: string[] = []
-    const orig = console.log
+    const orig = { log: console.log, error: console.error }
     console.log = (...a: unknown[]) => { lines.push(a.map(String).join(' ')) }
-    let threw = false
-    try {
-      await runBudgetCli(['--minutes', '5', '--window', '1h'])
-    } catch {
-      threw = true
-    } finally {
-      console.log = orig
-    }
-    assert.strictEqual(threw, true, 'the error must still propagate for the non-zero exit')
+    console.error = () => { /* captured */ }
+    let code: number
+    try { code = await runBudgetCli(['--minutes', '5', '--window', '1h']) } finally { console.log = orig.log; console.error = orig.error }
+    assert.strictEqual(code, EXIT.USAGE)
+    assert.notStrictEqual(EXIT.USAGE, BUDGET_EXIT.ABORT, 'a caller mistake must never share ABORT’s code')
     assert.ok(lines.some(l => l.startsWith('[budget] FAIL:')), `expected a stdout FAIL line, got ${JSON.stringify(lines)}`)
     assert.ok(lines.some(l => l.includes('5h|7d|binding')), 'the stdout line must carry the actual reason')
   })

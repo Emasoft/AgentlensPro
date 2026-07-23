@@ -32,6 +32,7 @@
 import { init, callTool, sleep } from './cliCore'
 import { LineLog, clampFlushMs, DEFAULT_FLUSH_MS } from './lineLog'
 import { numArg, strArg, clamp } from './argHelpers'
+import { UsageError, EXIT } from './cliErrors'
 
 export type MetricScope = 'session' | 'account' | 'machine'
 export type WatchMode = 'total' | 'rate' | 'since'
@@ -111,7 +112,7 @@ const SOURCE: Record<MetricScope, (session: string | null) => { tool: string; ar
 export function findMetric(name: string): MetricDef {
   const m = METRICS.find(x => x.name === name)
   if (m) return m
-  throw new Error(`unknown metric "${name}" — one of: ${METRICS.map(x => x.name).join(', ')}`)
+  throw new UsageError(`unknown metric "${name}" — one of: ${METRICS.map(x => x.name).join(', ')}`)
 }
 
 export function metricsWithPastSupport(): string[] {
@@ -202,6 +203,8 @@ export interface WatchOptions {
   json: boolean
   log: string | null
   flushMs: number
+  /** Stop after this many minutes. 0 = run until killed, which is the Monitor/daemon case. */
+  forMinutes: number
 }
 
 export function parseWatchArgs(argv: string[]): WatchOptions {
@@ -216,6 +219,7 @@ export function parseWatchArgs(argv: string[]): WatchOptions {
   let json = false
   let log: string | null = null
   let flushMs = DEFAULT_FLUSH_MS
+  let forMinutes = 0
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
@@ -223,7 +227,7 @@ export function parseWatchArgs(argv: string[]): WatchOptions {
       case '--metric': metricName = strArg(argv[++i], '--metric'); break
       case '--mode': {
         const v = strArg(argv[++i], '--mode')
-        if (v !== 'total' && v !== 'rate' && v !== 'since') throw new Error(`--mode expects total|rate|since, got "${v}"`)
+        if (v !== 'total' && v !== 'rate' && v !== 'since') throw new UsageError(`--mode expects total|rate|since, got "${v}"`)
         mode = v
         break
       }
@@ -234,21 +238,23 @@ export function parseWatchArgs(argv: string[]): WatchOptions {
       case '--hysteresis': hysteresis = numArg(argv[++i], '--hysteresis'); break
       case '--log': log = strArg(argv[++i], '--log'); break
       case '--flush-ms': flushMs = clampFlushMs(numArg(argv[++i], '--flush-ms')); break
+      case '--for': forMinutes = numArg(argv[++i], '--for'); break
       case '--every': every = true; break
       case '--json': json = true; break
-      default: throw new Error(`unknown watch flag "${a}" — see: agentlenspro watch --help`)
+      default: throw new UsageError(`unknown watch flag "${a}" — see: agentlenspro watch --help`)
     }
   }
 
-  if (!metricName) throw new Error(`watch needs a metric: --metric <name> — one of: ${METRICS.map(m => m.name).join(', ')}`)
+  if (!metricName) throw new UsageError(`watch needs a metric: --metric <name> — one of: ${METRICS.map(m => m.name).join(', ')}`)
   const metric = findMetric(metricName)
   validateCombination(metric, mode, sinceIso, session, threshold, every)
 
+  if (forMinutes < 0) throw new UsageError(`--for expects a non-negative number of minutes, got ${forMinutes}`)
   return {
     metric, mode, threshold, sinceIso, session,
     intervalSec: clamp(Math.round(intervalSec), MIN_INTERVAL_SEC, MAX_INTERVAL_SEC),
     hysteresis: clamp(hysteresis, 0, 1),
-    every, json, log, flushMs,
+    every, json, log, flushMs, forMinutes,
   }
 }
 
@@ -260,24 +266,24 @@ function validateCombination(
   session: string | null, threshold: number | null, every: boolean,
 ): void {
   if (metric.scope === 'session' && !session) {
-    throw new Error(`--metric ${metric.name} is session-scoped and needs --session <id> (find one: agentlenspro get_recent_sessions)`)
+    throw new UsageError(`--metric ${metric.name} is session-scoped and needs --session <id> (find one: agentlenspro get_recent_sessions)`)
   }
   if (metric.scope !== 'session' && session) {
-    throw new Error(`--metric ${metric.name} is ${metric.scope}-scoped; --session does not narrow it (drop the flag, or pick a session-scoped metric)`)
+    throw new UsageError(`--metric ${metric.name} is ${metric.scope}-scoped; --session does not narrow it (drop the flag, or pick a session-scoped metric)`)
   }
   if (metric.isRate && mode === 'since') {
-    throw new Error(`--metric ${metric.name} is already a rate; "since" has no meaning for it — use --mode total`)
+    throw new UsageError(`--metric ${metric.name} is already a rate; "since" has no meaning for it — use --mode total`)
   }
   if (metric.scope === 'machine' && mode === 'since') {
-    throw new Error(`--metric ${metric.name} is machine-wide live state with no per-run total — use --mode total or rate`)
+    throw new UsageError(`--metric ${metric.name} is machine-wide live state with no per-run total — use --mode total or rate`)
   }
   if (sinceIso !== null) {
-    if (mode !== 'since') throw new Error('--since only applies to --mode since')
+    if (mode !== 'since') throw new UsageError('--since only applies to --mode since')
     const t = Date.parse(sinceIso)
-    if (Number.isNaN(t)) throw new Error(`--since expects an ISO datetime, got "${sinceIso}"`)
-    if (t > Date.now()) throw new Error(`--since is in the FUTURE (${sinceIso}); omit it to baseline from now`)
+    if (Number.isNaN(t)) throw new UsageError(`--since expects an ISO datetime, got "${sinceIso}"`)
+    if (t > Date.now()) throw new UsageError(`--since is in the FUTURE (${sinceIso}); omit it to baseline from now`)
     if (!metric.pastSql) {
-      throw new Error(
+      throw new UsageError(
         `a PAST --since cannot be reconstructed for ${metric.name}`
         + (metric.scope === 'session'
           ? ` (its value is not recoverable from the transcript slice) — reconstructable metrics: ${metricsWithPastSupport().join(', ')}`
@@ -286,7 +292,7 @@ function validateCombination(
     }
   }
   if (threshold === null && !every) {
-    throw new Error('watch needs --threshold N (report peaks above it) or --every (echo every sample)')
+    throw new UsageError('watch needs --threshold N (report peaks above it) or --every (echo every sample)')
   }
 }
 
@@ -348,6 +354,7 @@ ${METRICS.map(m => `      ${m.name.padEnd(16)} ${m.scope.padEnd(8)} ${m.describe
   --threshold N          report peaks at or above this value (required unless --every)
   --hysteresis F         an excursion ends below threshold x F (default ${DEFAULT_HYSTERESIS}) — stops flapping
   --interval SEC         poll period, ${MIN_INTERVAL_SEC}..${MAX_INTERVAL_SEC} (default ${DEFAULT_INTERVAL_SEC})
+  --for MINUTES          stop after this long (default 0 = run until killed)
   --every                also echo every sample, not just peaks (noisy — Monitor may stop it)
   --json                 emit one JSON object per line instead of text
   --log <file>           also append every emitted line to a file (created if absent)
@@ -355,6 +362,8 @@ ${METRICS.map(m => `      ${m.name.padEnd(16)} ${m.scope.padEnd(8)} ${m.describe
                          max 60000, 0 = write through). Spares the SSD on a long watch; at most
                          N ms of lines are lost if the process is killed uncleanly, and a line is
                          never torn — flushes are whole lines in one append
+
+exit: 0 stopped cleanly (--for elapsed) · 2 the metric had no value to watch · 64 bad command line
 
   agentlenspro watch --metric cache-create --session <id> --mode rate --threshold 50000
   agentlenspro watch --metric pct-5h --threshold 80
@@ -415,7 +424,14 @@ export async function runWatchLoop(o: WatchOptions, emit: Emit): Promise<number>
 
   let peak = newPeakState()
   let down = false
+  let blind = false
+  const deadline = o.forMinutes > 0 ? t0 + o.forMinutes * 60_000 : Infinity
   for (;;) {
+    if (Date.now() >= deadline) {
+      emit(`[watch] watch window elapsed (${o.forMinutes}m) — stopping`,
+        { event: 'elapsed', metric: m.name, forMinutes: o.forMinutes })
+      return EXIT.OK
+    }
     await sleep(o.intervalSec * 1000)
 
     let value: number | null
@@ -428,7 +444,19 @@ export async function runWatchLoop(o: WatchOptions, emit: Emit): Promise<number>
       if (!down) { emit(`[watch] server unreachable: ${(e as Error).message} — still watching`, { event: 'down' }); down = true }
       continue
     }
-    if (value === null) continue
+    if (value === null) {
+      // A feed that answers but carries no number is NOT the same as a quiet metric, and the
+      // difference is invisible: both produce no output. Report the transition once, so an hour
+      // of silence is never read as "nothing crossed the threshold" when it means "there has
+      // been nothing to measure since the first minute".
+      if (!blind) {
+        emit(`[watch] ${m.name} has stopped returning a value — still polling, but reporting nothing until it does`,
+          { event: 'blind', metric: m.name })
+        blind = true
+      }
+      continue
+    }
+    if (blind) { emit(`[watch] ${m.name} is reporting again`, { event: 'sighted', metric: m.name }); blind = false }
 
     const now = Date.now()
     const shown = projectSample(o.mode, m, value, prev, now, baseline)
@@ -455,8 +483,8 @@ export async function runWatchLoop(o: WatchOptions, emit: Emit): Promise<number>
 }
 
 export async function runWatchCli(argv: string[]): Promise<number> {
-  if (argv.length === 0) { console.log(WATCH_USAGE); return 2 }
-  if (argv[0] === '--help' || argv[0] === '-h') { console.log(WATCH_USAGE); return 0 }
+  if (argv.length === 0) { console.log(WATCH_USAGE); return EXIT.USAGE }
+  if (argv[0] === '--help' || argv[0] === '-h') { console.log(WATCH_USAGE); return EXIT.OK }
 
   let log: LineLog | null = null
   try {
@@ -471,11 +499,17 @@ export async function runWatchCli(argv: string[]): Promise<number> {
     return await runWatchLoop(o, emit)
   } catch (e) {
     // Monitor turns only STDOUT into events, so an error that went to stderr alone would leave a
-    // watch that emitted nothing — indistinguishable from "armed and quiet". Silence must never
-    // look like success.
+    // watch that emitted nothing — indistinguishable from "armed and quiet". stderr gets it too,
+    // because that is where a shell user and a CI log look.
     const msg = `[watch] FAIL: ${(e as Error).message}`
     console.log(msg)
     if (log) log.write(msg)
+    if (e instanceof UsageError) {
+      // A caller mistake RETURNS EX_USAGE instead of throwing, so it can never be confused with
+      // a runtime failure — the shim maps every throw to exit 1, which `budget` uses for ABORT.
+      console.error(`FAIL: ${e.message}`)
+      return EXIT.USAGE
+    }
     throw e
   } finally {
     // The buffered tail must reach disk on EVERY exit path, the throw above included — an error
