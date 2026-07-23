@@ -4,6 +4,31 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.11.4] - 2026-07-23
+
+### Fixed
+
+- **A quoted phrase could impersonate a workspace in burn attribution.** The scanner took the
+  first `Primary working directory: ` hit anywhere in a request body, but a transcript *quotes*
+  that phrase whenever the conversation is about this code — so a session that had read
+  `burnInvestigator.ts` captured the regex's own source and `investigate_burn` reported `([^` as
+  the machine's top-burning workspace, with 110.8 MB attributed to a string. Every hit is now
+  checked and the first one actually shaped like an absolute path wins, so a real Environment
+  block always beats an earlier quotation.
+- **`--risk` told you to start a server that was already running.** Its failure path appended
+  "— start it: `agentlenspro server start`" unconditionally, so a busy or wedged server (observed
+  at rss 5.4 GB under backpressure) gave advice identical to no server at all — during exactly the
+  incident the command exists to diagnose. The hint now follows the failure shape: connection
+  refused says start it; anything else points at `server status`, the log, and `server restart`.
+
+### Added
+
+- **`/api/server-stats` reports the server's `version`.** It exposed pid, uptime and ports but
+  nothing identifying the build, so "is the running server current?" required a process-table
+  lookup plus a bundle grep — a stale server looked identical to a fresh one. Resolved once at
+  boot from the shared `packageVersion()` the CLI already used (moved to `src/packageVersion.ts`
+  so both surfaces read one implementation rather than two copies of the same walker).
+
 ## [2.11.3] - 2026-07-23
 
 ### Fixed
