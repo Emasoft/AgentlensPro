@@ -234,7 +234,7 @@ Loading is incremental and runs in the background, sorted newest-first so recent
 
 ## Data retention
 
-All ingested data lives under the data directory (`~/.agentlens`, or `$DATA_DIR`). This directory is **independent of where the package is installed** — it survives an uninstall, a version upgrade, and a CLI-path change, so your history is never lost when you update. Deletion is always logged, never silent, and only ever removes whole expired segments/volumes (spans and OTEL bodies are archived, never truncated mid-window).
+All ingested data lives under the data directory: **`$AGENTLENS_DATA_DIR`** if set, else `$DATA_DIR`, else `~/.agentlens`. Prefer the namespaced variable — `DATA_DIR` is a name Docker images, CI systems and data tooling also use, so a stray value in your environment would silently relocate the whole store; it is still honoured because it is a shipped contract, and `agentlenspro server status` reports which one won. This directory is **independent of where the package is installed** — it survives an uninstall, a version upgrade, and a CLI-path change, so your history is never lost when you update. Deletion is always logged, never silent, and only ever removes whole expired segments/volumes (spans and OTEL bodies are archived, never truncated mid-window).
 
 Five knobs control how long each kind of data is kept:
 

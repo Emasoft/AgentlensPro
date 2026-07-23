@@ -9,8 +9,9 @@ import {
 import type { CallComposition } from '../contextCompositionIndex'
 import {
   openForensicsDb, openReadonlyForensicsSnapshot, loadSqlJs,
-  billableWeight, tierClassify, DEFAULT_FORENSICS_DB, DEFAULT_MAIN_DB, type SqlDatabase,
+  billableWeight, tierClassify, defaultForensicsDb, defaultMainDb, type SqlDatabase,
 } from '../forensicsDb'
+import { defaultBodiesDir } from '../cacheCreationForensics'
 
 // TRDD-FB5RG4P1 Phase 1 — REAL tests: no mocked bodies, no mocked join, no mocked DB. Every test
 // writes real request/response JSON to a tmp otel-bodies dir + a real sql.js main DB with a sessions
@@ -341,10 +342,11 @@ suite('FAL Phase 1 — 🐌 real machine data (skips when ~/.agentlens absent)',
     // 🐌 real-machine slow test: indexes up to REQUEST_INDEX_CAP request bodies off disk (each up to
     // 64MB) — far past the 10s default. Skipped entirely in CI (no ~/.agentlens/otel-bodies there).
     this.timeout(180000)
-    const realBodies = path.join(os.homedir(), '.agentlens', 'otel-bodies')
-    if (!fs.existsSync(realBodies)) { this.skip(); return }
+    // Follows the resolved bodies dir, not a hardcoded home path — on a machine with a spool this
+    // test used to skip while a live corpus sat elsewhere, so it silently never ran.
+    if (!fs.existsSync(defaultBodiesDir())) { this.skip(); return }
     const tmpDb = path.join(tmpRoot, 'real-forensics.db')
-    const res = await indexApiCalls({ forensicsDbPath: tmpDb, mainDbPath: DEFAULT_MAIN_DB, scanCap: 200 })
+    const res = await indexApiCalls({ forensicsDbPath: tmpDb, mainDbPath: defaultMainDb(), scanCap: 200 })
     assert.equal(res.dbAvailable, true)
     assert.ok(res.coverage.responseFilesTotal >= 0)
     // Every inserted row must carry an explicit spawn_resolution (honesty invariant).
@@ -353,6 +355,6 @@ suite('FAL Phase 1 — 🐌 real machine data (skips when ~/.agentlens absent)',
       const bad = queryOne(fdb!.raw, "SELECT COUNT(*) AS n FROM api_calls WHERE spawn_resolution IS NULL")!
       assert.equal(bad.n, 0)
     } finally { fdb!.close() }
-    assert.ok(DEFAULT_FORENSICS_DB.length > 0)
+    assert.ok(defaultForensicsDb().length > 0)
   })
 })

@@ -39,7 +39,6 @@ import { extractLifecycleEvents, type LifecycleKind } from './lifecycleEvents'
 import { scanCacheRiskCommands, type CacheRiskCommand, type CacheRiskKind } from './cacheRiskCommands'
 import { buildAttributionReport } from './skillAttribution'
 import { buildLoadedVersionsReport } from './loadedPluginVersions'
-import * as path from 'path'
 import * as fs from 'fs'
 import type { BodiesActivityReport } from './bodiesActivity'
 import { buildResidentCostReport } from './shared/residentCost'
@@ -64,6 +63,7 @@ import {
   formatExpensiveWrites, formatCostPeaks, type CostPeakGroupBy, type CostBucket, type ForensicsFormat,
   defaultBodiesDir,
 } from './cacheCreationForensics'
+import { dataPath } from './dataDir'
 // TRDD-1FEIW17E — who is writing raw OTEL bodies (live-dir scan + store totals, exact union).
 import { scanLiveBodyWriters, queryStoreWriterTotals, buildBodyWritersReport } from './bodyWriters'
 import type { Store } from './store/db'
@@ -3408,7 +3408,7 @@ export function createMcpServer(opts: McpServerOptions): Server {
       }
       case 'get_lifecycle_events': {
         const a = args as { session?: string; kinds?: string[]; window?: number; limit?: number }
-        const dir = path.join(os.homedir(), '.agentlens', 'hook-events')
+        const dir = dataPath('hook-events')
         const dirExists = fs.existsSync(dir)
         // Date.now() is fine here — mcpServer is not a Workflow script (that is the only place it is banned).
         const sinceMs = a.window ? Date.now() - a.window * 3_600_000 : undefined

@@ -11,18 +11,35 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 
-// DATA_DIR is the override cliCore.dataDir() honors (NOT AGENTLENS_DATA_DIR — getting this wrong
-// would point the test at the user's REAL ~/.agentlens and arm their live kill-switch).
+// This suite MUST resolve the data dir to a tmpdir — pointing it at the user's real ~/.agentlens
+// would arm their live kill-switch. AGENTLENS_DATA_DIR is the namespaced override and takes
+// precedence over the generic DATA_DIR (src/dataDir.ts).
+//
+// It is set in suiteSetup and RESTORED in suiteTeardown, never at module scope. Mocha loads every
+// test file into ONE process, so a module-scope assignment leaks into every file imported after
+// this one: it silently redirected the "against REAL captured bodies" suites to this tmpdir, and
+// they skipped instead of running. Safe to do late — the resolver reads the environment on each
+// call rather than capturing it at import time.
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agentlens-ks-'))
-process.env.DATA_DIR = tmpHome
 
-// Safe to import statically: dataDir() is read LAZILY on each call, not captured at import time —
-// so the DATA_DIR set above still governs every path these modules resolve.
 import { agentlensDisabled, armKillSwitch, disarmKillSwitch, killSwitchPath } from '../cli/killSwitch'
 import { runHookCommand, reviveDisabledOnDisk } from '../cli/hookHandlers'
 import { ensureServer, runSupervise } from '../cli/serverControl'
 
 suite('global kill-switch', () => {
+  let savedDataDir: string | undefined
+  let savedGeneric: string | undefined
+  suiteSetup(() => {
+    savedDataDir = process.env.AGENTLENS_DATA_DIR
+    savedGeneric = process.env.DATA_DIR
+    process.env.AGENTLENS_DATA_DIR = tmpHome
+  })
+  suiteTeardown(() => {
+    if (savedDataDir === undefined) delete process.env.AGENTLENS_DATA_DIR
+    else process.env.AGENTLENS_DATA_DIR = savedDataDir
+    if (savedGeneric === undefined) delete process.env.DATA_DIR
+    else process.env.DATA_DIR = savedGeneric
+  })
   setup(() => { delete process.env.AGENTLENS_DISABLED; disarmKillSwitch() })
   teardown(() => { delete process.env.AGENTLENS_DISABLED; disarmKillSwitch() })
 

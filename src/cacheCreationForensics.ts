@@ -27,11 +27,11 @@
 
 import * as fs from 'fs'
 import * as path from 'path'
-import * as os from 'os'
 import { parseUserId } from './rawBodyContext'
 import { buildCallComposition, type CallComposition } from './contextCompositionIndex'
 import { calcTokenCostUsd } from './shared/pricing'
 import { resolveBodiesReadScope } from './captureConfig'
+import { dataDir as agentlensDataDir } from './dataDir'
 
 /**
  * Where the raw bodies are, resolved AT CALL TIME — the shared default for every raw-body reader.
@@ -44,8 +44,8 @@ import { resolveBodiesReadScope } from './captureConfig'
  * lifetime. Readers that must see BOTH dirs (a drain in progress) use resolveBodiesReadScope.
  */
 export function defaultBodiesDir(): string {
-  const dataDir = path.join(os.homedir(), '.agentlens')
-  return resolveBodiesReadScope(dataDir, process.env).dirs[0] ?? path.join(dataDir, 'otel-bodies')
+  const dir = agentlensDataDir()
+  return resolveBodiesReadScope(dir, process.env).dirs[0] ?? path.join(dir, 'otel-bodies')
 }
 
 // Bounded scan caps — same convention as HOG_SCAN_CAP / CAUSE_SCAN_CAP in mcpServer.ts, sized for

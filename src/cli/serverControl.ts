@@ -8,6 +8,7 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { apiRequest, dataDir, dashboardUrl, fmtGb, fmtMb, init, mcpEndpoint, sleep } from './cliCore'
+import { dataDirSource } from '../dataDir'
 import { agentlensDisabled, killSwitchPath } from './killSwitch'
 
 /** Count of hook events durably spooled to disk but not yet reingested (server was down / shedding).
@@ -160,6 +161,10 @@ export async function showStatus(): Promise<void> {
   const per = s.persistence
   console.log([
     `server: RUNNING pid=${s.pid} uptime=${uptime} canonical=${s.canonical} (ui:${s.ports.ui} mcp:${s.ports.mcp} otlp:${s.ports.otlp})`,
+    // WHICH store, and which input chose it. A relocated data dir is invisible otherwise: every
+    // reader just reports an empty result, and the generic $DATA_DIR can be set by unrelated
+    // tooling, so "why is my history gone" needs an answer on the first line of status.
+    `data:   ${dataDirSource()}`,
     `memory: rss=${s.memory.rssMb}MB heap=${s.memory.heapUsedMb}/${s.memory.heapLimitMb}MB`,
     // Segmented store (P4) exposes spans.store/windowMs; a pre-P4 server exposes cap/fileLines/
     // fileBytes instead — render whichever shape arrived, don't crash on the other.

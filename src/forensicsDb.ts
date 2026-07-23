@@ -15,11 +15,15 @@
 
 import * as fs from 'fs'
 import * as path from 'path'
-import * as os from 'os'
+import { dataPath } from './dataDir'
 import { lookupRates } from './shared/pricing'
 
-export const DEFAULT_FORENSICS_DB = path.join(os.homedir(), '.agentlens', 'forensics.db')
-export const DEFAULT_MAIN_DB = path.join(os.homedir(), '.agentlens', 'agentlens.db')
+// Functions, not consts: a module-level const freezes the path at import time, so it ignores a
+// $DATA_DIR / $AGENTLENS_DATA_DIR set after the module graph loads — which is exactly how the test
+// suite isolates itself, and how a relocated store is meant to work. Same defect the raw-bodies
+// dir had (TRDD-8N3KQW2R): a frozen path sends every reader to a store that isn't the live one.
+export function defaultForensicsDb(): string { return dataPath('forensics.db') }
+export function defaultMainDb(): string { return dataPath('agentlens.db') }
 
 // ── Minimal sql.js surface ──────────────────────────────────────────────────────
 // We avoid @types/sql.js (its transitive @types/emscripten pulls in browser lib types). Only the
@@ -210,7 +214,7 @@ export class ForensicsDb {
 
 /** Open (or create) forensics.db, apply the schema, register the custom fns. Returns null when sql.js
  *  is unavailable in this runtime (see loadSqlJs) — callers surface a graceful "engine unavailable". */
-export async function openForensicsDb(dbPath: string = DEFAULT_FORENSICS_DB): Promise<ForensicsDb | null> {
+export async function openForensicsDb(dbPath: string = defaultForensicsDb()): Promise<ForensicsDb | null> {
   const SQL = await loadSqlJs()
   if (!SQL) { return null }
   fs.mkdirSync(path.dirname(dbPath), { recursive: true })
@@ -231,7 +235,7 @@ export async function openForensicsDb(dbPath: string = DEFAULT_FORENSICS_DB): Pr
  *  file is a separate DB from agentlens.db, so source session data is doubly protected. The custom
  *  fns are registered so ad-hoc SQL can call them. Returns null when the DB is absent or sql.js is
  *  unavailable. */
-export async function openReadonlyForensicsSnapshot(dbPath: string = DEFAULT_FORENSICS_DB): Promise<SqlDatabase | null> {
+export async function openReadonlyForensicsSnapshot(dbPath: string = defaultForensicsDb()): Promise<SqlDatabase | null> {
   const SQL = await loadSqlJs()
   if (!SQL) { return null }
   let buf: Buffer

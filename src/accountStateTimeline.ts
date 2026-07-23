@@ -20,8 +20,8 @@
  */
 
 import * as fs from 'fs'
-import * as os from 'os'
 import * as path from 'path'
+import { dataPath } from './dataDir'
 import { classifyTtlRegime, type TtlContext } from './shared/cacheTtl'
 import type { AccountInfo } from './accountInfo'
 
@@ -96,9 +96,11 @@ function discreteKey(r: AccountStateRecord): string {
   return [r.accountId ?? '∅', r.mode, r.plan, r.authRegime, r.ttlMinutes].join('')
 }
 
-/** Resolves the timeline file path. AGENTLENS_ACCOUNT_STATE_LOG overrides; else ~/.agentlens/account-state.ndjson. */
+/** Resolves the timeline file path. AGENTLENS_ACCOUNT_STATE_LOG overrides; else it follows the
+ *  data directory, which honours $DATA_DIR — hardcoding the home path here made this file the one
+ *  thing a relocated store left behind. */
 export function accountStateTimelinePath(): string {
-  return process.env['AGENTLENS_ACCOUNT_STATE_LOG'] || path.join(os.homedir(), '.agentlens', 'account-state.ndjson')
+  return process.env['AGENTLENS_ACCOUNT_STATE_LOG'] || dataPath('account-state.ndjson')
 }
 
 /**

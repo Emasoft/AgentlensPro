@@ -7,8 +7,7 @@
 // 5h window ENDING at the stall: response bodies carry Anthropic's own billed usage, so "the
 // combined requests that triggered the limit" is measured, not estimated.
 
-import * as os from 'os'
-import * as path from 'path'
+import { dataPath } from './dataDir'
 import { readHookEvents, type HookEventRecord } from './hookEventStore'
 import { investigateBurn } from './burnInvestigator'
 
@@ -72,7 +71,7 @@ export function buildRateLimitReport(opts: RateLimitReportOptions = {}): unknown
   const now = opts.now ?? Date.now()
   const hours = Math.max(1, Math.min(24 * 14, opts.windowHours ?? 24))
   const maxEpisodes = Math.max(1, Math.min(20, opts.maxEpisodes ?? 5))
-  const dir = opts.hookEventsDir ?? path.join(os.homedir(), '.agentlens', 'hook-events')
+  const dir = opts.hookEventsDir ?? dataPath('hook-events')
   const sinceMs = now - hours * 3600e3
   const window = { sinceIso: new Date(sinceMs).toISOString(), untilIso: new Date(now).toISOString(), hours }
 

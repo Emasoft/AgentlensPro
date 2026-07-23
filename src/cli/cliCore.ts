@@ -26,10 +26,10 @@ export function uiBaseUrl(): string {
   return process.env.AGENTLENS_UI_URL || 'http://localhost:3000'
 }
 
-/** The AgentlensPro data directory (span store, logs, pidfile, forensics.db). */
-export function dataDir(): string {
-  return process.env.DATA_DIR || path.join(os.homedir(), '.agentlens')
-}
+/** The AgentlensPro data directory (span store, logs, pidfile, forensics.db).
+ *  Implementation moved to src/dataDir.ts so the server and the src/ modules can share it without
+ *  importing the CLI; re-exported here so existing callers are untouched. */
+export { dataDir } from '../dataDir'
 
 /** ~/.claude/settings.json — overridable ONLY for tests; production always targets the real file. */
 export function claudeSettingsPath(): string {

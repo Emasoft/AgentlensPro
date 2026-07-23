@@ -6,7 +6,7 @@
 // params are BOUND (never concatenated), and every result is row-capped. Presets skip the gate (they
 // are frozen, not user-supplied) but still bind params + apply the cap.
 
-import { openReadonlyForensicsSnapshot, DEFAULT_FORENSICS_DB, type SqlDatabase, type SqlStatement } from './forensicsDb'
+import { openReadonlyForensicsSnapshot, defaultForensicsDb, type SqlDatabase, type SqlStatement } from './forensicsDb'
 
 export type SqlFormat = 'json' | 'table' | 'markdown'
 export interface RunDiagnosticsSqlOptions {
@@ -275,7 +275,7 @@ export async function runDiagnosticsSql(opts: RunDiagnosticsSqlOptions = {}): Pr
     mode = 'sql'
   }
 
-  const db = await openReadonlyForensicsSnapshot(opts.forensicsDbPath ?? DEFAULT_FORENSICS_DB)
+  const db = await openReadonlyForensicsSnapshot(opts.forensicsDbPath ?? defaultForensicsDb())
   if (!db) {
     return { mode, preset: opts.preset, dbAvailable: false, note: 'forensics.db unavailable (no OTEL bodies indexed yet, or sql.js unavailable in this runtime).' }
   }

@@ -6,7 +6,7 @@
 // as its own group and in the coverage block (same honesty contract as CCFORNSC's unattributed bucket).
 
 import {
-  openReadonlyForensicsSnapshot, DEFAULT_FORENSICS_DB, type SqlDatabase, type SqlStatement,
+  openReadonlyForensicsSnapshot, defaultForensicsDb, type SqlDatabase, type SqlStatement,
 } from './forensicsDb'
 
 export type GroupByDim =
@@ -202,7 +202,7 @@ export async function buildCompareConfigs(opts: CompareConfigsOptions = {}): Pro
     coverage: { note: 'forensics.db unavailable (no OTEL bodies indexed yet, or sql.js unavailable in this runtime).' },
     dbAvailable: false,
   }
-  const db = await openReadonlyForensicsSnapshot(opts.forensicsDbPath ?? DEFAULT_FORENSICS_DB)
+  const db = await openReadonlyForensicsSnapshot(opts.forensicsDbPath ?? defaultForensicsDb())
   if (!db) { return empty }
 
   try {

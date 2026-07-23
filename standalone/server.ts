@@ -14,6 +14,7 @@ import * as os from 'os'
 import { exec, execFile } from 'child_process'
 import { summarizeSpans } from '../src/spanSummarizer'
 import { packageVersion } from '../src/packageVersion'
+import { dataDir as agentlensDataDir } from '../src/dataDir'
 import { VersionedCache } from '../src/derivedCache'
 import { startLoopWatchdog } from '../src/loopWatchdog'
 import { mergeOtelAndLogSessions, linkSubagentTranscripts, graftOtelAttribution } from '../src/feedMergePolicy'
@@ -88,7 +89,7 @@ const MCP_PORT   = parseInt(process.env.MCP_PORT   ?? '4316')
 const BIND_HOST  = process.env.BIND_HOST ?? '127.0.0.1'
 
 const mediaDir  = path.join(__dirname, '..', 'media')
-const DATA_DIR  = process.env.DATA_DIR ?? path.join(os.homedir(), '.agentlens')
+const DATA_DIR  = agentlensDataDir()
 
 // THE KILL-SWITCH, ENFORCED AT THE CHOKEPOINT (TRDD-K3WDPR7M). Guarding the CLI's spawn sites was
 // not enough: on 2026-07-15 a server booted 3 minutes after `agentlenspro disable` through a spawn

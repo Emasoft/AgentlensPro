@@ -18,6 +18,7 @@ import * as path from 'path'
 import { calcTokenCostUsd } from './shared/pricing'
 import { readHookEvents } from './hookEventStore'
 import { resolveBodiesReadScope } from './captureConfig'
+import { dataDir as agentlensDataDir } from './dataDir'
 
 export const BURN_CAUSES = [
   'FORK_STORM',            // fan-out forked a fat parent into a cold cache — N × full-prefix writes
@@ -403,7 +404,7 @@ const shortWs = (ws: string): string => ws.replace(os.homedir(), '~')
 // ── entry point ───────────────────────────────────────────────────────────────
 
 export function investigateBurn(opts: InvestigateOptions = {}): BurnInvestigation {
-  const dataDir = opts.dataDir ?? path.join(os.homedir(), '.agentlens')
+  const dataDir = opts.dataDir ?? agentlensDataDir()
   // An explicit bodiesDir is an override (tests, ops); otherwise ask the resolver where the
   // bodies REALLY are — the spool, the legacy dir, or both. Reading the legacy path
   // unconditionally is the bug this replaces (TRDD-8N3KQW2R).
