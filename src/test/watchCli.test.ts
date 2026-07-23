@@ -1,7 +1,7 @@
 import * as assert from 'assert'
 import {
-  METRICS, findMetric, metricsWithPastSupport, newPeakState, stepPeak, parseWatchArgs,
-  projectSample, fmtValue, fmtDur, baselineSql,
+  METRICS, findMetric, metricsWithPastSupport, newPeakState, stepPeak, exitThreshold,
+  parseWatchArgs, projectSample, fmtValue, fmtDur, baselineSql,
 } from '../cli/watchCli'
 
 // ── `agentlenspro watch` (generic metric peak watcher) ────────────────────────
@@ -76,6 +76,29 @@ suite('watch: peak excursion engine', () => {
 
   test('a value exactly AT the threshold opens an excursion (>= not >)', () => {
     assert.strictEqual(stepPeak(newPeakState(), 100, 0, T, HYST).events.length, 1)
+  })
+
+  // REGRESSION: the exit level was `threshold * hysteresis`, which INVERTS the band for a
+  // negative threshold — at -100/0.9 the product is -90, above the trigger, so an excursion
+  // closed at -95 while still past its own threshold. Reachable: a falling cumulative gives a
+  // negative rate.
+  test('the exit level always sits strictly BELOW the threshold, for either sign', () => {
+    assert.strictEqual(exitThreshold(100, 0.9), 90)
+    assert.strictEqual(exitThreshold(-100, 0.9), -110)
+    assert.ok(exitThreshold(-100, 0.9) < -100, 'a negative threshold must not invert the band')
+    assert.strictEqual(exitThreshold(100, 1), 100, 'hysteresis 1 = no band')
+    assert.strictEqual(exitThreshold(0, 0.9), 0)
+  })
+
+  test('a negative threshold tracks an excursion instead of closing it immediately', () => {
+    const NEG = -100
+    const opened = stepPeak(newPeakState(), -100, 0, NEG, HYST)
+    assert.strictEqual(opened.events.length, 1, 'reaching -100 opens the excursion')
+    const held = stepPeak(opened.state, -95, 1_000, NEG, HYST)
+    assert.deepStrictEqual(held.events, [], '-95 is above the threshold — it must NOT close here')
+    const closed = stepPeak(held.state, -120, 2_000, NEG, HYST)
+    assert.strictEqual(closed.events.length, 1, 'closes only once past the band at -110')
+    assert.strictEqual(closed.events[0].value, -95, 'the excursion max is the LEAST negative value')
   })
 })
 
@@ -227,7 +250,8 @@ suite('watch: past-baseline SQL dedupes by message id', () => {
   })
 
   test('filters on the timestamp and skips records with no usage', () => {
-    assert.match(sql, /"timestamp" >= '2026-07-23T07:00:00Z'/)
+    // The instant is emitted in canonical toISOString() form, not echoed as the caller typed it.
+    assert.match(sql, /"timestamp" >= '2026-07-23T07:00:00\.000Z'/)
     assert.match(sql, /message\.usage IS NOT NULL/)
   })
 
@@ -236,8 +260,12 @@ suite('watch: past-baseline SQL dedupes by message id', () => {
     assert.ok(!/;/.test(sql), 'no statement separator — the tool takes one statement')
   })
 
-  test('a quote in the instant cannot terminate the literal', () => {
-    assert.ok(!baselineSql("2026-01-01' OR '1'='1", 'sum(i)').includes("' OR '"))
+  test('the instant is rebuilt canonically, so no injected text can survive into the SQL', () => {
+    // Sanitising by stripping quotes only removes the metacharacter you thought of; rebuilding
+    // the value with toISOString() makes it structurally incapable of carrying any.
+    assert.match(baselineSql('2026-07-23T07:00:00+02:00', 'sum(i)'), /"timestamp" >= '2026-07-23T05:00:00\.000Z'/)
+    assert.throws(() => baselineSql("2026-01-01' OR '1'='1", 'sum(i)'), /ISO datetime/)
+    assert.throws(() => baselineSql('yesterday', 'sum(i)'), /ISO datetime/)
   })
 
   test("`tokens` reconstructs as input+output — get_agent_tokens' totalTokens EXCLUDES cache", () => {

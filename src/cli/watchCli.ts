@@ -127,6 +127,18 @@ export function newPeakState(): PeakState {
   return { above: false, peak: 0, peakAtMs: 0, startedAtMs: 0 }
 }
 
+/** The level an open excursion must fall BELOW to close — always strictly under the threshold.
+ *
+ *  Computed as a band subtracted from the threshold, not as `threshold * hysteresis`, because
+ *  multiplying inverts the band for a negative threshold: at threshold -100 and hysteresis 0.9
+ *  the product is -90, which sits ABOVE the trigger, so an excursion would close at -95 while
+ *  still past its own threshold. Rates are legitimately negative (a falling cumulative), so this
+ *  is reachable, not theoretical. */
+export function exitThreshold(threshold: number, hysteresis: number): number {
+  const band = Math.abs(threshold) * (1 - clamp(hysteresis, 0, 1))
+  return threshold - band
+}
+
 /** PURE excursion tracker. An "excursion" starts when the value reaches the threshold and ends
  *  when it falls back under `threshold * hysteresis`; the PEAK event carries the maximum reached
  *  in between. Reporting only at the two edges is what keeps this Monitor-safe — a line per
@@ -139,7 +151,7 @@ export function stepPeak(
   st: PeakState, value: number, atMs: number, threshold: number, hysteresis: number,
 ): { state: PeakState; events: PeakEvent[] } {
   const events: PeakEvent[] = []
-  const exitAt = threshold * clamp(hysteresis, 0, 1)
+  const exitAt = exitThreshold(threshold, hysteresis)
   let s = st
   if (!s.above) {
     if (value >= threshold) {
@@ -293,8 +305,12 @@ export async function sampleMetric(m: MetricDef, session: string | null): Promis
  *  id is mandatory: Claude Code repeats one message's full usage on every content-block row, so
  *  the naive sum over-counts (measured 1.7x on cache_read, 2.1x on output). */
 export function baselineSql(sinceIso: string, expr: string): string {
-  const iso = sinceIso.replace(/'/g, '')   // the value is ISO-validated upstream; strip quotes so
-                                           // it can never terminate the literal regardless.
+  // Re-derive a CANONICAL ISO string from the parsed instant rather than sanitising the caller's
+  // text. Stripping quotes only removes the one metacharacter thought of; a value rebuilt by
+  // toISOString() is structurally incapable of carrying any, whatever arrives here.
+  const t = Date.parse(sinceIso)
+  if (Number.isNaN(t)) throw new Error(`baselineSql needs an ISO datetime, got "${sinceIso}"`)
+  const iso = new Date(t).toISOString()
   return `SELECT ${expr} AS v FROM (`
     + 'SELECT message.id AS mid, '
     + 'max(COALESCE(message.usage.input_tokens,0)) AS i, '
@@ -387,6 +403,14 @@ export async function runWatchLoop(o: WatchOptions, emit: Emit): Promise<number>
   if (o.mode === 'since' && !m.cumulative) {
     emit(`[watch] note: ${m.name} is a ROLLING gauge, so its "since" delta can go negative as old usage leaves the window`,
       { event: 'note', metric: m.name })
+  }
+  if (o.threshold !== null && o.mode === 'total' && m.cumulative) {
+    // A monotone total that crosses its threshold never comes back under it, so the excursion
+    // can never close: exactly one PEAK-START will ever fire and no PEAK line will follow. That
+    // is correct arithmetic and useless as a peak alert, and it looks identical to a stuck feed
+    // — so say so at arm time rather than letting the silence be misread for hours.
+    emit(`[watch] note: ${m.name} --mode total only ever RISES, so this fires once when it crosses ${fmtValue(o.threshold, m.unit)} and then stays above — for recurring peaks use --mode rate, or --mode since to measure this run alone`,
+      { event: 'note', metric: m.name, reason: 'monotonic_total_threshold' })
   }
 
   let peak = newPeakState()

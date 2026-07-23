@@ -22,7 +22,15 @@
 //     are dropped and COUNTED, and the count is reported, because silently losing events would
 //     make the log lie by omission;
 //   * exit, SIGINT and SIGTERM all flush before the process goes away, so an orderly stop loses
-//     nothing at all.
+//     nothing at all — and the signal handlers RE-RAISE, because installing a SIGINT listener
+//     removes Node's default termination and would otherwise leave a watcher that flushes on
+//     Ctrl-C and then keeps running (measured: the process survived SIGINT and needed a kill -9).
+//
+// What is deliberately NOT done: fsync. `appendFileSync` hands the bytes to the OS page cache;
+// only fsync guarantees they survive a power cut. Calling it per flush would force a physical
+// write every time and defeat the entire purpose of coalescing. A power cut can therefore lose
+// recent lines — the same bounded loss already accepted for the flush window — but it cannot
+// corrupt what is already there, because every write is an append of whole lines.
 
 import * as fs from 'fs'
 import * as path from 'path'
@@ -52,6 +60,7 @@ export class LineLog {
   private readonly maxBytes: number
   private readonly onError: (msg: string) => void
   private readonly onProcessExit: () => void
+  private readonly onSignal: (sig: NodeJS.Signals) => void
 
   constructor(private readonly file: string, opts: LineLogOptions = {}) {
     this.flushMs = clampFlushMs(opts.flushMs ?? DEFAULT_FLUSH_MS)
@@ -61,10 +70,19 @@ export class LineLog {
     // see NOW, not a surprise at the first event an hour into a run.
     fs.mkdirSync(path.dirname(path.resolve(file)), { recursive: true })
     fs.appendFileSync(file, '')
+
     this.onProcessExit = () => this.flush()
+    // Node REMOVES its default "terminate on SIGINT/SIGTERM" the moment a listener exists. A
+    // handler that only flushed would therefore make Ctrl-C stop working on exactly the commands
+    // that run longest (verified: the process survived SIGINT and needed kill -9). So: flush,
+    // detach, and re-raise, which both terminates and yields the conventional 128+signum status.
+    this.onSignal = (sig: NodeJS.Signals) => {
+      this.close()
+      process.kill(process.pid, sig)
+    }
     process.once('exit', this.onProcessExit)
-    process.once('SIGINT', this.onProcessExit)
-    process.once('SIGTERM', this.onProcessExit)
+    process.on('SIGINT', this.onSignal)
+    process.on('SIGTERM', this.onSignal)
   }
 
   /** Buffer one COMPLETE line. Embedded newlines are stripped so one event stays one line — a
@@ -113,14 +131,15 @@ export class LineLog {
     }
   }
 
-  /** Final flush + detach the exit handlers. Idempotent. */
+  /** Final flush + detach the process handlers. Idempotent, and safe to call from inside the
+   *  signal handler — detaching is what lets the re-raise reach Node's default behavior. */
   close(): void {
     if (this.closed) return
     this.flush()
     this.closed = true
     process.removeListener('exit', this.onProcessExit)
-    process.removeListener('SIGINT', this.onProcessExit)
-    process.removeListener('SIGTERM', this.onProcessExit)
+    process.removeListener('SIGINT', this.onSignal)
+    process.removeListener('SIGTERM', this.onSignal)
   }
 
   /** Test/diagnostic view of the coalescing state. */

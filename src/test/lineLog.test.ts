@@ -179,6 +179,71 @@ suite('lineLog: coalescing without losing integrity', () => {
   })
 })
 
+suite('lineLog: a signal handler must not disable Ctrl-C', () => {
+  // REGRESSION, verified by measurement before the fix: installing a SIGINT listener REMOVES
+  // Node's default termination, so a handler that only flushed left `watch --log f` running
+  // after Ctrl-C and needing kill -9 — on exactly the commands that run longest. A real child
+  // process is the only honest test of this; an in-process assertion would prove nothing.
+  const child = (body: string): string => `
+    const { LineLog } = require(${JSON.stringify(path.resolve('out/test/cli/lineLog.js'))})
+    ${body}
+    setInterval(() => {}, 1000)
+    console.log('ready')
+  `
+
+  function runUntilReady(script: string): { proc: import('child_process').ChildProcess; ready: Promise<void> } {
+    const { spawn } = require('child_process') as typeof import('child_process')
+    const proc = spawn(process.execPath, ['-e', script], { stdio: ['ignore', 'pipe', 'pipe'] })
+    const ready = new Promise<void>(resolve => {
+      proc.stdout?.on('data', (d: Buffer) => { if (d.toString().includes('ready')) resolve() })
+    })
+    return { proc, ready }
+  }
+
+  test('SIGINT flushes the buffer AND terminates the process', async function () {
+    this.timeout(15_000)
+    const { file, cleanup } = tmpFile()
+    try {
+      const { proc, ready } = runUntilReady(child(
+        `const log = new LineLog(${JSON.stringify(file)}, { flushMs: 60000 })\n    log.write('buffered before the signal')`))
+      await ready
+      const exited = new Promise<number | null>(resolve => proc.on('exit', (_c, sig) => resolve(sig ? 1 : 0)))
+      proc.kill('SIGINT')
+      const timeout = new Promise<'hung'>(r => setTimeout(() => r('hung'), 5_000))
+      const outcome = await Promise.race([exited, timeout])
+      if (outcome === 'hung') { proc.kill('SIGKILL'); assert.fail('the process survived SIGINT — Ctrl-C is disabled') }
+      assert.strictEqual(read(file), 'buffered before the signal\n', 'the buffered tail must still reach disk')
+    } finally { cleanup() }
+  })
+
+  test('SIGTERM flushes and terminates too', async function () {
+    this.timeout(15_000)
+    const { file, cleanup } = tmpFile()
+    try {
+      const { proc, ready } = runUntilReady(child(
+        `const log = new LineLog(${JSON.stringify(file)}, { flushMs: 60000 })\n    log.write('term tail')`))
+      await ready
+      const exited = new Promise<void>(resolve => proc.on('exit', () => resolve()))
+      proc.kill('SIGTERM')
+      const timeout = new Promise<'hung'>(r => setTimeout(() => r('hung'), 5_000))
+      const outcome = await Promise.race([exited.then(() => 'exited' as const), timeout])
+      if (outcome === 'hung') { proc.kill('SIGKILL'); assert.fail('the process survived SIGTERM') }
+      assert.strictEqual(read(file), 'term tail\n')
+    } finally { cleanup() }
+  })
+
+  test('close() detaches the signal handlers so a later Ctrl-C behaves normally', () => {
+    const { file, cleanup } = tmpFile()
+    try {
+      const before = process.listenerCount('SIGINT')
+      const log = new LineLog(file, { flushMs: 60_000 })
+      assert.strictEqual(process.listenerCount('SIGINT'), before + 1)
+      log.close()
+      assert.strictEqual(process.listenerCount('SIGINT'), before, 'no listener may outlive the log')
+    } finally { cleanup() }
+  })
+})
+
 suite('lineLog: clampFlushMs', () => {
   test('keeps a sane value, floors nonsense to the default, and caps the maximum', () => {
     assert.strictEqual(clampFlushMs(500), 500)
