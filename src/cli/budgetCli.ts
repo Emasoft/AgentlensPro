@@ -15,6 +15,11 @@
 import { init, callTool } from './cliCore'
 import { sleep } from './cliCore'
 import { fetchBurnRisk } from './diagnosticsCli'
+import { LineLog, clampFlushMs, DEFAULT_FLUSH_MS } from './lineLog'
+
+/** Every line this command prints goes through here, so `--log` mirrors stdout exactly — a log
+ *  that differs from what the operator saw is worse than no log. Rebound in runBudgetCli. */
+let say: (line: string) => void = (line: string) => console.log(line)
 
 export type BudgetVerdict = 'GO' | 'TIGHT' | 'NO_GO' | 'UNKNOWN'
 
@@ -99,10 +104,15 @@ export interface BudgetOptions {
   json: boolean
   withRisks: boolean
   rateWindowMin?: number
+  log: string | null
+  flushMs: number
 }
 
 export function parseBudgetArgs(argv: string[]): BudgetOptions {
-  const o: BudgetOptions = { minutes: 0, window: 'binding', margin: 2, watch: false, intervalSec: 60, json: false, withRisks: false }
+  const o: BudgetOptions = {
+    minutes: 0, window: 'binding', margin: 2, watch: false, intervalSec: 60, json: false, withRisks: false,
+    log: null, flushMs: DEFAULT_FLUSH_MS,
+  }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--minutes' || a === '-m') o.minutes = num(argv[++i], '--minutes')
@@ -119,6 +129,11 @@ export function parseBudgetArgs(argv: string[]): BudgetOptions {
       if (next && /^\d+$/.test(next)) { o.intervalSec = Number(next); i++ }
     } else if (a === '--with-risks') o.withRisks = true
     else if (a === '--json') o.json = true
+    else if (a === '--log') {
+      const v = argv[++i]
+      if (!v || v.startsWith('--')) throw new Error('--log expects a file path')
+      o.log = v
+    } else if (a === '--flush-ms') o.flushMs = clampFlushMs(num(argv[++i], '--flush-ms'))
     else throw new Error(`unknown budget flag "${a}" — see: agentlenspro budget --help`)
   }
   if (!(o.minutes > 0)) throw new Error('budget needs the run length: --minutes N (or --hours H)')
@@ -153,6 +168,10 @@ Projected on COST (how Anthropic meters the windows), never on raw tokens.
                             Monitor covers both the budget and the realtime guard
   --rate-window-min N       minutes of history the $/min rate is measured over (default 30)
   --json                    machine-readable one-shot result
+  --log <file>              also append every emitted line to a file
+  --flush-ms N              coalesce log writes for N ms (default 1000, max 60000, 0 = write
+                            through) — spares the SSD on a long watch; at most N ms of lines are
+                            lost on an unclean kill, and a line is never torn
 
 exit: 0 GO/TIGHT (or watch ran the full duration) · 1 NO-GO (abort the run) · 2 cannot project
 
@@ -166,7 +185,7 @@ async function runOnce(o: BudgetOptions): Promise<number> {
   const { key, win } = pickWindow(eta, o.window)
   const d = decideBudget(win, o.minutes, o.margin)
   if (o.json) {
-    console.log(JSON.stringify({
+    say(JSON.stringify({
       verdict: d.verdict, window: key, runMinutes: o.minutes, margin: o.margin,
       etaMinutes: d.etaMinutes, reason: d.reason,
       capacitySource: (win && win.capacity && win.capacity.source) || null,
@@ -176,7 +195,7 @@ async function runOnce(o: BudgetOptions): Promise<number> {
   } else {
     const cap = win && win.capacity && win.capacity.source
     const capNote = cap === 'same-plan-proxy' ? ' [capacity is a same-plan proxy — treat the boundary as soft]' : ''
-    console.log(`[budget] ${d.verdict} — ${key} window vs ${fmtMin(o.minutes)} run: ${d.reason}${capNote}`)
+    say(`[budget] ${d.verdict} — ${key} window vs ${fmtMin(o.minutes)} run: ${d.reason}${capNote}`)
   }
   return d.verdict === 'NO_GO' ? BUDGET_EXIT.ABORT : d.verdict === 'UNKNOWN' ? BUDGET_EXIT.UNKNOWN : BUDGET_EXIT.GO
 }
@@ -192,33 +211,33 @@ async function runWatch(o: BudgetOptions): Promise<number> {
   await init()
   const t0 = Date.now()
   const deadline = t0 + o.minutes * 60_000
-  console.log(`[budget] armed — ${fmtMin(o.minutes)} run vs the ${o.window} window, margin ${o.margin}x, polling every ${o.intervalSec}s (silent unless the verdict changes)`)
+  say(`[budget] armed — ${fmtMin(o.minutes)} run vs the ${o.window} window, margin ${o.margin}x, polling every ${o.intervalSec}s (silent unless the verdict changes)`)
   let lastVerdict: BudgetVerdict | null = null
   let down = false
   const riskActive = new Set<string>()
   for (;;) {
     const remainingMin = (deadline - Date.now()) / 60_000
     if (remainingMin <= 0) {
-      console.log(`[budget] run window elapsed (${fmtMin(o.minutes)}) — watch complete, never went NO-GO`)
+      say(`[budget] run window elapsed (${fmtMin(o.minutes)}) — watch complete, never went NO-GO`)
       return BUDGET_EXIT.GO
     }
     try {
       const eta = await fetchEta(o.rateWindowMin)
-      if (down) { console.log('[budget] server back — resuming'); down = false }
+      if (down) { say('[budget] server back — resuming'); down = false }
       const { key, win } = pickWindow(eta, o.window)
       const d = decideBudget(win, remainingMin, o.margin)
       if (d.verdict === 'NO_GO') {
-        console.log(`[budget] ABORT — ${key}: ${d.reason}`)
+        say(`[budget] ABORT — ${key}: ${d.reason}`)
         return BUDGET_EXIT.ABORT
       }
       if (d.verdict !== lastVerdict) {
         // The reason already carries both numbers; appending the remaining time again read as
         // "…of run left (0m of run left)".
-        console.log(`[budget] ${d.verdict} — ${key}: ${d.reason}`)
+        say(`[budget] ${d.verdict} — ${key}: ${d.reason}`)
         lastVerdict = d.verdict
       }
     } catch (e) {
-      if (!down) { console.log(`[budget] server unreachable: ${(e as Error).message} — still watching, NOT aborting`); down = true }
+      if (!down) { say(`[budget] server unreachable: ${(e as Error).message} — still watching, NOT aborting`); down = true }
     }
     if (o.withRisks) await emitRiskTransitions(riskActive)
     await sleep(o.intervalSec * 1000)
@@ -232,23 +251,34 @@ async function emitRiskTransitions(active: Set<string>): Promise<void> {
   try {
     const rep = await fetchBurnRisk()
     for (const r of rep.risks || []) {
-      if (r.active && !active.has(r.code)) { console.log(`[burn-guard] ${r.code}: ${r.detail}`); active.add(r.code) }
-      else if (!r.active && active.has(r.code)) { console.log(`[burn-guard] ${r.code} cleared`); active.delete(r.code) }
+      if (r.active && !active.has(r.code)) { say(`[burn-guard] ${r.code}: ${r.detail}`); active.add(r.code) }
+      else if (!r.active && active.has(r.code)) { say(`[burn-guard] ${r.code} cleared`); active.delete(r.code) }
     }
   } catch { /* risk feed is advisory here — the budget verdict above is the signal that matters */ }
 }
 
 export async function runBudgetCli(argv: string[]): Promise<number> {
   if (argv[0] === '--help' || argv[0] === '-h') { console.log(BUDGET_USAGE); return 0 }
+  let log: LineLog | null = null
   try {
     const o = parseBudgetArgs(argv)
+    if (o.log) {
+      log = new LineLog(o.log, { flushMs: o.flushMs })
+      const sink = log
+      say = (line: string) => { console.log(line); sink.write(line) }
+    }
     return await (o.watch ? runWatch(o) : runOnce(o))
   } catch (e) {
     // Mirror the failure onto STDOUT before rethrowing. The CLI convention puts `FAIL:` on
     // stderr, but Monitor only turns STDOUT lines into events — so a mistyped flag or an
     // unreachable server at arm time would produce a watch that emits NOTHING and ends, which
     // is indistinguishable from "armed and all quiet". Silence must never look like success.
-    console.log(`[budget] FAIL: ${(e as Error).message}`)
+    const msg = `[budget] FAIL: ${(e as Error).message}`
+    console.log(msg)
+    if (log) log.write(msg)
     throw e
+  } finally {
+    // The buffered tail must reach disk on EVERY exit path, the throw above included.
+    if (log) { log.close(); say = (line: string) => console.log(line) }
   }
 }

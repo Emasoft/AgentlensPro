@@ -27,6 +27,7 @@ import { runDisableCli, runEnableCli } from './disableCli'
 import { ensureServer, openDashboard, serverCommand, daemonCommand } from './serverControl'
 import { runSetupCli } from './setup'
 import { runBudgetCli } from './budgetCli'
+import { runWatchCli } from './watchCli'
 
 /** The package version, read from the package.json that ships next to the bundle. Walks up
  *  from __dirname because the bundle lives at <pkg>/standalone/cli.js while the test build
@@ -95,6 +96,11 @@ export async function cliMain(argv: string[], startServer: () => Promise<unknown
       // watch for any timed batch. Its exit code IS the interface (0 go / 1 abort / 2 cannot
       // project), so a harness can wire `budget --watch` straight to its own kill path.
       return runBudgetCli(argv.slice(1))
+    case 'watch':
+      // Generic peak/threshold watcher over ANY usage metric. Sibling of `budget`, not a
+      // duplicate of it: budget answers one question and EXITS on the answer; watch observes
+      // indefinitely and never stops on an alert.
+      return runWatchCli(argv.slice(1))
     case 'heartbeat-cost':
       await runHeartbeatCost(argv.slice(1))
       return 0

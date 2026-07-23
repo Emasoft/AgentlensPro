@@ -52,6 +52,14 @@ usage:
                                               IS the interface — 0 go / 1 ABORT / 2 cannot project — so a
                                               harness wires it straight to its kill path. --with-risks
                                               folds the burn guard into the same stream (one Monitor)
+  agentlenspro watch --metric <name> [--mode total|rate|since] [--threshold N] [--log F]
+                                              watch ANY usage metric (session tokens/cost/turns,
+                                              account 5h-7d percent + $, machine-wide burn) and
+                                              report every PEAK above the threshold WITHOUT ever
+                                              stopping — each excursion's max and duration. Log
+                                              writes are coalesced (--flush-ms, default 1s) to
+                                              spare the SSD; run "agentlenspro watch" with no args
+                                              for the metric list
   agentlenspro disable [reason]               GLOBAL BRAKE — turn every AgentlensPro side-effect OFF
                                               (hooks, burn-gate, auto-revive, background ingestion) in
                                               EVERY running Claude session, on its next hook fire. Stops
