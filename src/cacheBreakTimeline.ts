@@ -31,7 +31,7 @@ import { claudeProjectsDirs } from './logReader'
 import { estimateTokensFromBytes } from './tokenEstimator'
 import { calcTokenCostUsd } from './shared/pricing'
 import {
-  DEFAULT_BODIES_DIR, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, RESPONSE_SCAN_CAP,
+  defaultBodiesDir, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, RESPONSE_SCAN_CAP,
   listBySuffix, boundedRecent, readJsonBounded,
   bucketValueOf, tokenCountsFullCost, tokenCountsTotal,
   type TokenCounts, type CacheCreationReport, type CacheCreationGroupRow,
@@ -40,7 +40,7 @@ import {
 import * as fs from 'fs'
 import * as path from 'path'
 
-export { DEFAULT_BODIES_DIR }
+export { defaultBodiesDir }
 
 // ── Cause taxonomy ──────────────────────────────────────────────────────────────
 export type CacheBreakTimelineCause =
@@ -938,7 +938,7 @@ function resolveSubagentStream(
  *  at ≥ threshold turns). `agent-<agentId>` child sessions resolve via their subagents transcript (see
  *  resolveSubagentStream). LAZY + BOUNDED: one recency-first capped scan; honest coverage. */
 export async function buildCacheBreakTimeline(opts: CacheBreakTimelineOptions = {}): Promise<CacheBreakTimelineReport> {
-  const bodiesDir = opts.bodiesDir ?? DEFAULT_BODIES_DIR
+  const bodiesDir = opts.bodiesDir ?? defaultBodiesDir()
   const minTokens = opts.minTokens ?? DEFAULT_MIN_TOKENS
   const scanCap = opts.scanCap ?? RESPONSE_SCAN_CAP
   const dirExists = fs.existsSync(bodiesDir)
@@ -1174,7 +1174,7 @@ function emptyCauseCostPeakReport(bucket: CostBucket, bodiesDir: string, scanCap
  *  burning the most money", not just "which session/account/model". LAZY + BOUNDED: one shared scan
  *  (scanSessionsAndResponses); classification cost is O(turns already read), not an extra disk pass. */
 export async function buildCauseCostPeakReport(opts: CauseCostPeakOptions = {}): Promise<CacheCreationReport> {
-  const bodiesDir = opts.bodiesDir ?? DEFAULT_BODIES_DIR
+  const bodiesDir = opts.bodiesDir ?? defaultBodiesDir()
   const minTokens = opts.minTokens ?? DEFAULT_MIN_TOKENS
   const scanCap = opts.scanCap ?? RESPONSE_SCAN_CAP
   const bucket = opts.bucket ?? 'cache_creation'
@@ -1306,7 +1306,7 @@ export interface CacheBreakCausesOptions {
  *  enriched culpritId, so "MCP server chrome-devtools" / "hook: pss-skills" / "harness ToolSearch" /
  *  "model claude-sonnet-5" surface as chronic perpetrators. LAZY + BOUNDED: one shared scan. */
 export async function buildCacheBreakCauses(opts: CacheBreakCausesOptions = {}): Promise<CacheBreakCausesReport> {
-  const bodiesDir = opts.bodiesDir ?? DEFAULT_BODIES_DIR
+  const bodiesDir = opts.bodiesDir ?? defaultBodiesDir()
   const minTokens = opts.minTokens ?? DEFAULT_MIN_TOKENS
   const scanCap = opts.scanCap ?? RESPONSE_SCAN_CAP
   const topN = Math.min(Math.max(1, opts.topN ?? 20), 100)

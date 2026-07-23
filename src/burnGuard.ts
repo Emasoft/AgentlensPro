@@ -18,6 +18,7 @@ import * as os from 'os'
 import * as path from 'path'
 import { readHookEvents, type HookEventRecord } from './hookEventStore'
 import { fmtFatSenders, type BodiesActivityReport } from './bodiesActivity'
+import { defaultBodiesDir } from './cacheCreationForensics'
 
 /** WHO spawned, from SubagentStart events (payloads carry session_id/cwd/agent_type):
  *  top-2 spawning sessions with dir + agent types — culprit naming for FANOUT_BURST. */
@@ -97,7 +98,9 @@ export interface BurnGuardOptions {
 
 export function checkBurnRisk(opts: BurnGuardOptions = {}): BurnRiskReport {
   const now = opts.now ?? Date.now()
-  const bodiesDir = opts.bodiesDir ?? path.join(os.homedir(), '.agentlens', 'otel-bodies')
+  // Resolved, not hardcoded: the legacy dir is empty on any install that redirects bodies to a
+  // spool, and a guard reading an empty dir silently reports "no risk" (TRDD-8N3KQW2R).
+  const bodiesDir = opts.bodiesDir ?? defaultBodiesDir()
   const hookDir = opts.hookEventsDir ?? path.join(os.homedir(), '.agentlens', 'hook-events')
   const fanoutThreshold = Math.max(2, opts.fanoutThreshold ?? 5)
   const spikeTpm = Math.max(10_000, opts.spikeTokensPerMin ?? 250_000)

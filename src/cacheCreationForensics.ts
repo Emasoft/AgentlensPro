@@ -31,8 +31,22 @@ import * as os from 'os'
 import { parseUserId } from './rawBodyContext'
 import { buildCallComposition, type CallComposition } from './contextCompositionIndex'
 import { calcTokenCostUsd } from './shared/pricing'
+import { resolveBodiesReadScope } from './captureConfig'
 
-export const DEFAULT_BODIES_DIR = path.join(os.homedir(), '.agentlens', 'otel-bodies')
+/**
+ * Where the raw bodies are, resolved AT CALL TIME — the shared default for every raw-body reader.
+ *
+ * It is a function, not a const, for two reasons. (1) A const computed at module load pinned the
+ * LEGACY dir forever, so every reader went blind the moment capture was redirected to a spool —
+ * investigate_burn reported "nothing burned here" during a measured 2.3M tok/min burn while 1,876
+ * live bodies sat in the spool (TRDD-8N3KQW2R). (2) The spool is a RAM disk remounted by a
+ * LaunchAgent after reboot, so a value frozen at server boot can be wrong for the whole process
+ * lifetime. Readers that must see BOTH dirs (a drain in progress) use resolveBodiesReadScope.
+ */
+export function defaultBodiesDir(): string {
+  const dataDir = path.join(os.homedir(), '.agentlens')
+  return resolveBodiesReadScope(dataDir, process.env).dirs[0] ?? path.join(dataDir, 'otel-bodies')
+}
 
 // Bounded scan caps — same convention as HOG_SCAN_CAP / CAUSE_SCAN_CAP in mcpServer.ts, sized for
 // the (much larger) raw-body-file universe rather than the session universe. Only metadata (name +
@@ -173,7 +187,7 @@ function indexRequestsByPreviousMessageId(entries: DirEntry[]): Map<string, Requ
 export async function scanCacheCreationEvents(
   opts: CacheCreationScanOptions = {},
 ): Promise<{ events: CacheCreationEvent[]; coverage: CacheCreationScanCoverage }> {
-  const bodiesDir = opts.bodiesDir ?? DEFAULT_BODIES_DIR
+  const bodiesDir = opts.bodiesDir ?? defaultBodiesDir()
   const scanCap = opts.scanCap ?? RESPONSE_SCAN_CAP
   const dirExists = fs.existsSync(bodiesDir)
   if (!dirExists) {
@@ -544,7 +558,7 @@ export async function buildExpensiveWritesTrace(
   const minOutputTokens = Math.max(0, opts.minOutputTokens ?? 0)
   const topN = Math.min(opts.topN ?? 6, 25)
   const chainDepth = Math.min(Math.max(0, opts.chainDepth ?? 0), MAX_CHAIN_DEPTH)
-  const bodiesDir = opts.bodiesDir ?? DEFAULT_BODIES_DIR
+  const bodiesDir = opts.bodiesDir ?? defaultBodiesDir()
   const timeFrom = opts.timeFromIso ? Date.parse(opts.timeFromIso) : undefined
   const timeTo = opts.timeToIso ? Date.parse(opts.timeToIso) : undefined
   const { events, coverage } = await scanCacheCreationEvents(opts)

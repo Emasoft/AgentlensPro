@@ -4,7 +4,7 @@ import * as os from 'os'
 import * as path from 'path'
 import {
   scanCacheCreationEvents, buildCacheCreationReport, buildExpensiveWritesTrace, buildCacheBreakGapReport,
-  formatExpensiveWrites, formatCostPeaks, DEFAULT_BODIES_DIR,
+  formatExpensiveWrites, formatCostPeaks, defaultBodiesDir,
 } from '../cacheCreationForensics'
 
 // TRDD-CCFORNSC — REAL tests for the cache_creation forensic diagnostics: no mocked bodies, no mocked
@@ -138,9 +138,13 @@ suite('cacheCreationForensics — scanCacheCreationEvents (the previous_message_
     assert.ok(coverage.note.includes('OTEL_LOG_RAW_API_BODIES'))
   })
 
-  test('DEFAULT_BODIES_DIR resolves under the home directory (the documented default)', () => {
-    assert.ok(DEFAULT_BODIES_DIR.includes('.agentlens'))
-    assert.ok(DEFAULT_BODIES_DIR.includes('otel-bodies'))
+  test('defaultBodiesDir() resolves to a bodies dir that exists, not a hardcoded legacy path', () => {
+    // The contract changed with TRDD-8N3KQW2R: a reader must land on the dir that actually holds
+    // bodies (the configured spool when one is mounted), and fall back to the legacy dir only when
+    // nothing else resolves. Asserting the literal legacy path is what let every reader go blind.
+    const d = defaultBodiesDir()
+    assert.ok(path.isAbsolute(d), `expected an absolute path, got ${d}`)
+    assert.ok(d.endsWith('otel-bodies'), `expected a bodies dir, got ${d}`)
   })
 })
 
@@ -580,7 +584,7 @@ suite('cacheCreationForensics — real machine data', () => {
   // 🐌 slow — scans the real ~/.agentlens/otel-bodies directory (thousands of files). Skips when the
   // directory is absent (CI / a machine that never enabled OTEL_LOG_RAW_API_BODIES).
   test('scans the REAL OTEL bodies directory without crashing and reports honest coverage', async function () {
-    if (!fs.existsSync(DEFAULT_BODIES_DIR)) { this.skip(); return }
+    if (!fs.existsSync(defaultBodiesDir())) { this.skip(); return }
     this.timeout(60_000)
     const report = await buildCacheCreationReport({ windowHours: 5 })
     assert.ok(report.coverage.dirExists)

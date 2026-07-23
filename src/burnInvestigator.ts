@@ -17,6 +17,7 @@ import * as os from 'os'
 import * as path from 'path'
 import { calcTokenCostUsd } from './shared/pricing'
 import { readHookEvents } from './hookEventStore'
+import { resolveBodiesReadScope } from './captureConfig'
 
 export const BURN_CAUSES = [
   'FORK_STORM',            // fan-out forked a fat parent into a cold cache — N × full-prefix writes
@@ -44,8 +45,16 @@ export interface BurnInvestigation {
     requestFilesScanned: number
     responseFilesScanned: number
     bytesOnDisk: number
+    /** True ONLY when the whole window was actually seen. A scan that found no corpus to read is
+     *  BLIND, not complete — reporting it as complete is what turns "no data" into "no burn". */
     complete: boolean
     note: string
+    /** The dirs actually scanned, and the candidates that were absent (an unmounted spool, a
+     *  drained legacy dir). Present so a zero-file result can name WHERE it looked. */
+    dirsScanned: string[]
+    dirsMissing: string[]
+    /** Set when the scan could not see the corpus. The caller must not read the totals as facts. */
+    blind?: 'capture-off' | 'no-bodies-dir' | 'dirs-empty-in-window'
   }
   totals: {
     calls: number
@@ -71,7 +80,11 @@ export interface BurnInvestigation {
 }
 
 export interface InvestigateOptions {
+  /** Test/ops override. When set, ONLY this dir is scanned (no config resolution). */
   bodiesDir?: string
+  /** Where config.json lives. Default ~/.agentlens — used to resolve the real bodies dirs. */
+  dataDir?: string
+  env?: NodeJS.ProcessEnv
   hookEventsDir?: string
   windowHours?: number         // default 5 (a rate-limit window)
   untilMs?: number             // default now
@@ -94,19 +107,24 @@ const equivOf = (cc: number, cr: number): number => cc * 1.25 + cr * 0.1
 
 // ── corpus scan ───────────────────────────────────────────────────────────────
 
-function listWindow(dir: string, suffix: string, sinceMs: number, untilMs: number, cap: number):
+function listWindow(dirs: string[], suffix: string, sinceMs: number, untilMs: number, cap: number):
   { files: { p: string; mtime: number; size: number }[]; present: number } {
-  let names: string[]
-  try { names = fs.readdirSync(dir) } catch { return { files: [], present: 0 } }
   const files: { p: string; mtime: number; size: number }[] = []
   let present = 0
-  for (const f of names) {
-    if (!f.endsWith(suffix)) continue
-    let st: fs.Stats
-    try { st = fs.statSync(path.join(dir, f)) } catch { continue }
-    if (st.mtimeMs < sinceMs || st.mtimeMs > untilMs) continue
-    present++
-    files.push({ p: path.join(dir, f), mtime: st.mtimeMs, size: st.size })
+  // Several dirs, one corpus: the live spool and the legacy SSD dir can BOTH hold bodies for the
+  // same window (a drain in progress), so the window is their union — not whichever we happened
+  // to look at first.
+  for (const dir of dirs) {
+    let names: string[]
+    try { names = fs.readdirSync(dir) } catch { continue }
+    for (const f of names) {
+      if (!f.endsWith(suffix)) continue
+      let st: fs.Stats
+      try { st = fs.statSync(path.join(dir, f)) } catch { continue }
+      if (st.mtimeMs < sinceMs || st.mtimeMs > untilMs) continue
+      present++
+      files.push({ p: path.join(dir, f), mtime: st.mtimeMs, size: st.size })
+    }
   }
   // Over cap: keep the LARGEST files (they carry the burn); count the drop in coverage.
   files.sort((a, b) => b.size - a.size)
@@ -372,15 +390,32 @@ const shortWs = (ws: string): string => ws.replace(os.homedir(), '~')
 // ── entry point ───────────────────────────────────────────────────────────────
 
 export function investigateBurn(opts: InvestigateOptions = {}): BurnInvestigation {
-  const bodiesDir = opts.bodiesDir ?? path.join(os.homedir(), '.agentlens', 'otel-bodies')
-  const hookDir = opts.hookEventsDir ?? path.join(os.homedir(), '.agentlens', 'hook-events')
+  const dataDir = opts.dataDir ?? path.join(os.homedir(), '.agentlens')
+  // An explicit bodiesDir is an override (tests, ops); otherwise ask the resolver where the
+  // bodies REALLY are — the spool, the legacy dir, or both. Reading the legacy path
+  // unconditionally is the bug this replaces (TRDD-8N3KQW2R).
+  const scope = opts.bodiesDir
+    // The override gets the SAME existence check as a resolved dir: a caller who points at a path
+    // that isn't there must be told it isn't there, not handed an "empty window" verdict.
+    ? (() => {
+      let ok = false
+      try { ok = fs.statSync(opts.bodiesDir as string).isDirectory() } catch { ok = false }
+      return {
+        dirs: ok ? [opts.bodiesDir as string] : [],
+        missing: ok ? [] : [opts.bodiesDir as string],
+        captureOn: true,
+        spoolConfigured: false,
+      }
+    })()
+    : resolveBodiesReadScope(dataDir, opts.env ?? process.env)
+  const hookDir = opts.hookEventsDir ?? path.join(dataDir, 'hook-events')
   const hours = Math.min(48, Math.max(0.25, opts.windowHours ?? 5))
   const untilMs = opts.untilMs ?? Date.now()
   const sinceMs = untilMs - hours * 3600_000
   const cap = Math.min(20_000, Math.max(100, opts.maxFiles ?? 8000))
 
-  const reqList = listWindow(bodiesDir, '.request.json', sinceMs, untilMs, cap)
-  const respList = listWindow(bodiesDir, '.response.json', sinceMs, untilMs, cap)
+  const reqList = listWindow(scope.dirs, '.request.json', sinceMs, untilMs, cap)
+  const respList = listWindow(scope.dirs, '.response.json', sinceMs, untilMs, cap)
   const resps = scanResponses(respList.files)
   const reqs: ReqRec[] = []
   for (const f of reqList.files) {
@@ -430,11 +465,44 @@ export function investigateBurn(opts: InvestigateOptions = {}): BurnInvestigatio
     attr.set(key, a)
   }
 
+  // ── Blind-spot classification ───────────────────────────────────────────────
+  // Zero scanned files has TWO very different meanings, and conflating them is what let this tool
+  // answer "nothing burned here" during a measured 2.3M tok/min burn. An empty corpus means the
+  // investigator CANNOT SEE, not that nothing happened — so it must say so, and coverage.complete
+  // must be false. Only a corpus that was actually read can support a "nothing burned" verdict.
+  const nothingScanned = reqList.files.length === 0 && respList.files.length === 0
+  const blind: 'capture-off' | 'no-bodies-dir' | 'dirs-empty-in-window' | undefined =
+    !nothingScanned ? undefined
+      : scope.dirs.length === 0 ? 'no-bodies-dir'
+        : !scope.captureOn ? 'capture-off'
+          : 'dirs-empty-in-window'
+
+  const where = scope.dirs.length ? scope.dirs.map(shortWs).join(', ') : '(none exist)'
+  const absent = scope.missing.length ? ` Missing: ${scope.missing.map(shortWs).join(', ')}.` : ''
+  const blindVerdict =
+    blind === 'no-bodies-dir'
+      ? `BLIND — no raw-body directory exists, so this window was never observed.${absent} `
+        + 'This is NOT evidence that nothing burned: turn capture on with `agentlenspro config set '
+        + 'captureRawBodies on`, and meanwhile use `agentlenspro --risk` / `get_burn_status`, which '
+        + 'read the live feed and never go blind.'
+      : blind === 'capture-off'
+        ? `BLIND — raw-body capture is OFF and ${where} holds nothing for this window, so there is `
+          + 'nothing to investigate FROM. This is NOT evidence that nothing burned — cross-check with '
+          + '`agentlenspro --risk` / `get_burn_status` (live feed, never blind).'
+        : `BLIND — scanned ${where} and found 0 request/response bodies in the window.${absent} `
+          + 'Capture is on, so either the window predates capture, the spool was drained/unmounted, or '
+          + 'the bounds are wrong. This is NOT evidence that nothing burned — cross-check with '
+          + '`agentlenspro --risk` / `get_burn_status` (live feed, never blind).'
+
   const attributedShare = findings.reduce((a, f) => a + f.shareOfWindow, 0)
   const top = findings.slice(0, 3)
-  const verdict = resps.length === 0
-    ? 'No API traffic found in the window — nothing burned here (check the window bounds or the bodies dir).'
-    : top.length === 0
+  const verdict = blind
+    ? blindVerdict
+    : resps.length === 0
+      ? `Scanned ${reqList.files.length} request bodies in ${where} but no RESPONSE bodies — usage `
+        + 'cannot be measured for this window (responses carry the billed numbers). Traffic existed; '
+        + 'the totals below are not a burn measurement.'
+      : top.length === 0
       ? `No known burn pattern detected: ${fmtK(Math.round(totalEquiv))} input-equivalent tokens across ${resps.length} calls look like ordinary traffic (largest single write ${fmtK(Math.max(0, ...resps.map(r => r.cc)))}).`
       : `Top culprit${top.length > 1 ? 's' : ''}: ` +
         top.map((f, i) => `${i + 1}. ${f.cause} (${fmtK(f.equivTokens)} equiv, ${(f.shareOfWindow * 100).toFixed(0)}%) — ${f.verdict}`).join(' ') +
@@ -447,10 +515,18 @@ export function investigateBurn(opts: InvestigateOptions = {}): BurnInvestigatio
       requestFilesScanned: reqList.files.length,
       responseFilesScanned: respList.files.length,
       bytesOnDisk: reqList.files.reduce((a, f) => a + f.size, 0),
-      complete: reqList.files.length === reqList.present && respList.files.length === respList.present,
-      note: reqList.files.length === reqList.present
-        ? 'full coverage of the window'
-        : `CAP HIT: scanned the ${reqList.files.length} largest of ${reqList.present} request files (responses ${respList.files.length}/${respList.present}) — totals reflect the scanned set only`,
+      // A blind scan is never "complete" — it saw nothing, which is the opposite of full coverage.
+      complete: !blind
+        && reqList.files.length === reqList.present
+        && respList.files.length === respList.present,
+      note: blind
+        ? `BLIND (${blind}): scanned ${where} — 0 bodies in the window.${absent} Totals are not a measurement.`
+        : reqList.files.length === reqList.present
+          ? `full coverage of the window (scanned ${where})`
+          : `CAP HIT: scanned the ${reqList.files.length} largest of ${reqList.present} request files (responses ${respList.files.length}/${respList.present}) — totals reflect the scanned set only`,
+      dirsScanned: scope.dirs,
+      dirsMissing: scope.missing,
+      ...(blind ? { blind } : {}),
     },
     totals: {
       calls: resps.length,

@@ -57,15 +57,49 @@ const NOW = Date.now()
 const MIN = 60_000
 
 suite('burnInvestigator — investigate_burn (TRDD-TW14MO7A)', () => {
-  test('empty corpus: honest empty verdict, zero totals, complete coverage', () => {
+  // NOTE: this test previously asserted `complete === true` and a "No API traffic found in the
+  // window — nothing burned here" verdict for an empty corpus, i.e. it PINNED the bug fixed in
+  // TRDD-8N3KQW2R. A scan that read nothing has not achieved full coverage — it is blind, and
+  // saying otherwise is what let the tool answer "nothing burned here" during a measured
+  // 2,315,075 tok/min burn. Zero scanned files must NEVER produce a reassuring verdict.
+  test('empty corpus: reports BLIND, refuses to claim complete coverage or that nothing burned', () => {
     const { dir, hooks, cleanup } = corpus()
     try {
       const r = investigateBurn({ bodiesDir: dir, hookEventsDir: hooks, untilMs: NOW })
       assert.strictEqual(r.totals.calls, 0)
       assert.strictEqual(r.totals.inputEquivTokens, 0)
-      assert.strictEqual(r.coverage.complete, true)
-      assert.ok(r.verdict.includes('No API traffic'), r.verdict)
+      assert.strictEqual(r.coverage.complete, false, 'a scan that saw nothing is not complete')
+      assert.strictEqual(r.coverage.blind, 'dirs-empty-in-window')
+      assert.ok(r.verdict.startsWith('BLIND'), r.verdict)
+      assert.ok(/NOT evidence that nothing burned/.test(r.verdict), r.verdict)
+      assert.ok(/get_burn_status/.test(r.verdict), 'must name a cross-check that never goes blind')
+      assert.ok(!/nothing burned here/.test(r.verdict), 'must not reassure on an unread corpus')
       assert.deepStrictEqual(r.findings, [])
+    } finally { cleanup() }
+  })
+
+  test('a bodies dir that does not exist is BLIND with no-bodies-dir, and names what is missing', () => {
+    const { dir, hooks, cleanup } = corpus()
+    try {
+      const gone = path.join(dir, 'not-here')
+      const r = investigateBurn({ bodiesDir: gone, hookEventsDir: hooks, untilMs: NOW })
+      // An explicit bodiesDir override that does not exist must not masquerade as an empty window.
+      assert.strictEqual(r.coverage.blind, 'no-bodies-dir')
+      assert.strictEqual(r.coverage.complete, false)
+      assert.deepStrictEqual(r.coverage.dirsScanned, [])
+      assert.deepStrictEqual(r.coverage.dirsMissing, [gone])
+      assert.ok(r.verdict.startsWith('BLIND'), r.verdict)
+    } finally { cleanup() }
+  })
+
+  test('coverage always names the dirs it read, so a zero result can be located', () => {
+    const { dir, hooks, cleanup } = corpus()
+    try {
+      resp(dir, NOW - 5 * MIN, 'claude-opus-4-8', 10_000, 5_000)
+      const r = investigateBurn({ bodiesDir: dir, hookEventsDir: hooks, untilMs: NOW })
+      assert.deepStrictEqual(r.coverage.dirsScanned, [dir])
+      assert.strictEqual(r.coverage.blind, undefined)
+      assert.strictEqual(r.coverage.complete, true)
     } finally { cleanup() }
   })
 

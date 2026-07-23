@@ -12,7 +12,7 @@ import * as os from 'os'
 import * as path from 'path'
 import {
   RAW_BODIES_ENV, RAW_BODIES_KEY, effectiveBodiesDir, loadCaptureConfig, rawBodyCaptureEnabled,
-  rawBodyCaptureWithSource, setRawBodyCapture, setSpoolDir,
+  rawBodyCaptureWithSource, resolveBodiesReadScope, setRawBodyCapture, setSpoolDir,
 } from '../captureConfig'
 import { ensureTelemetryConfig, ownedTelemetryKeys, removeTelemetryConfig } from '../telemetryConfig'
 
@@ -182,6 +182,74 @@ suite('effectiveBodiesDir — the one bodies-dir resolution (TRDD-K3WDPR7M spool
     const dir = tmp()
     setSpoolDir(dir, '/Volumes/TestSpool/otel-bodies')
     assert.strictEqual(effectiveBodiesDir(dir, false), path.join(dir, 'otel-bodies'))
+  })
+})
+
+// The READER's counterpart (TRDD-8N3KQW2R). effectiveBodiesDir answers "where should Claude Code
+// WRITE now" — a single answer. A reader needs every dir that can still HOLD bodies: capture may be
+// off while yesterday's corpus is on disk, and a spool can hold live traffic while the legacy dir
+// still holds an undrained corpus. Resolving readers through the writer's answer is what made
+// investigate_burn report "nothing burned here" during a measured 2.3M tok/min burn.
+suite('resolveBodiesReadScope — where a READER looks (TRDD-8N3KQW2R)', () => {
+  test('an existing spool is scanned FIRST, ahead of the legacy dir', () => {
+    const dir = tmp()
+    const spool = path.join(dir, 'spool-bodies')
+    fs.mkdirSync(spool, { recursive: true })
+    fs.mkdirSync(path.join(dir, 'otel-bodies'), { recursive: true })
+    setSpoolDir(dir, spool)
+    setRawBodyCapture(dir, true)
+    const s = resolveBodiesReadScope(dir, {})
+    assert.deepStrictEqual(s.dirs, [spool, path.join(dir, 'otel-bodies')])
+    assert.deepStrictEqual(s.missing, [])
+    assert.strictEqual(s.spoolConfigured, true)
+  })
+
+  test('a configured but UNMOUNTED spool is reported missing, not silently skipped', () => {
+    // The spool is a RAM disk remounted by a LaunchAgent — between reboot and remount it is simply
+    // absent, and a reader that hides that fact reports an empty window as an empty world.
+    const dir = tmp()
+    fs.mkdirSync(path.join(dir, 'otel-bodies'), { recursive: true })
+    setSpoolDir(dir, '/Volumes/NotMounted/otel-bodies')
+    setRawBodyCapture(dir, true)
+    const s = resolveBodiesReadScope(dir, {})
+    assert.deepStrictEqual(s.dirs, [path.join(dir, 'otel-bodies')])
+    assert.deepStrictEqual(s.missing, ['/Volumes/NotMounted/otel-bodies'])
+  })
+
+  test('capture OFF still resolves the dirs — old bodies remain readable after capture stops', () => {
+    const dir = tmp()
+    const spool = path.join(dir, 'spool-bodies')
+    fs.mkdirSync(spool, { recursive: true })
+    setSpoolDir(dir, spool)
+    setRawBodyCapture(dir, false)
+    const s = resolveBodiesReadScope(dir, {})
+    assert.strictEqual(s.captureOn, false)
+    assert.ok(s.dirs.includes(spool), 'a reader must still see the spool it wrote yesterday')
+  })
+
+  test('nothing on disk → no dirs, and both candidates listed as missing', () => {
+    const dir = tmp()
+    setSpoolDir(dir, '/Volumes/NotMounted/otel-bodies')
+    const s = resolveBodiesReadScope(dir, {})
+    assert.deepStrictEqual(s.dirs, [])
+    assert.strictEqual(s.missing.length, 2)
+  })
+
+  test('no spool configured → exactly the legacy dir, never a duplicate', () => {
+    const dir = tmp()
+    fs.mkdirSync(path.join(dir, 'otel-bodies'), { recursive: true })
+    const s = resolveBodiesReadScope(dir, {})
+    assert.deepStrictEqual(s.dirs, [path.join(dir, 'otel-bodies')])
+    assert.strictEqual(s.spoolConfigured, false)
+  })
+
+  test('a spool configured to the legacy path is deduped, not scanned twice', () => {
+    const dir = tmp()
+    const legacy = path.join(dir, 'otel-bodies')
+    fs.mkdirSync(legacy, { recursive: true })
+    setSpoolDir(dir, legacy)
+    setRawBodyCapture(dir, true)
+    assert.deepStrictEqual(resolveBodiesReadScope(dir, {}).dirs, [legacy])
   })
 
   test('a spool-BLIND converge (the server-boot shape) writes the SPOOL value, not the legacy dir', async () => {

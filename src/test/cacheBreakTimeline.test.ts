@@ -4,7 +4,7 @@ import * as os from 'os'
 import * as path from 'path'
 import {
   extractTurnPrefix, classifyCacheBreak, buildCacheBreakTimeline, buildCauseCostPeakReport, formatTimeline,
-  DEFAULT_BODIES_DIR, type RawRequestForBreak, type BreakTiming,
+  defaultBodiesDir, type RawRequestForBreak, type BreakTiming,
 } from '../cacheBreakTimeline'
 
 // TRDD-6TQ2FBUR — REAL tests for the cache-break ROOT-CAUSE timeline. The classifier tests build a
@@ -428,7 +428,7 @@ suite('cacheBreakTimeline — buildCauseCostPeakReport (cross-session cause cost
   // 🐌 slow — scans the real ~/.agentlens/otel-bodies directory (thousands of files). Skips when the
   // directory is absent (CI / a machine that never enabled OTEL_LOG_RAW_API_BODIES).
   test('builds a cause cost-peak report from the REAL OTEL bodies without crashing', async function () {
-    if (!fs.existsSync(DEFAULT_BODIES_DIR)) { this.skip(); return }
+    if (!fs.existsSync(defaultBodiesDir())) { this.skip(); return }
     this.timeout(120_000)
     const report = await buildCauseCostPeakReport({ windowHours: 5, minTokens: 50_000 })
     assert.ok(report.coverage.note.length > 0)
@@ -511,7 +511,7 @@ suite('cacheBreakTimeline — real machine data', () => {
   // 🐌 slow — scans the real ~/.agentlens/otel-bodies directory (thousands of files). Skips when the
   // directory is absent (CI / a machine that never enabled OTEL_LOG_RAW_API_BODIES).
   test('builds a timeline from the REAL OTEL bodies without crashing and reports honest coverage', async function () {
-    if (!fs.existsSync(DEFAULT_BODIES_DIR)) { this.skip(); return }
+    if (!fs.existsSync(defaultBodiesDir())) { this.skip(); return }
     this.timeout(120_000)
     const report = await buildCacheBreakTimeline({ windowHours: 5, minTokens: 50_000 })
     assert.ok(report.coverage.dirExists)

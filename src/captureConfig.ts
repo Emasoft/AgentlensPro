@@ -78,6 +78,44 @@ export function effectiveBodiesDir(dataDir: string, captureOn: boolean): string 
   return (captureOn ? spoolDirConfigured(dataDir) : undefined) ?? path.join(dataDir, 'otel-bodies')
 }
 
+/** Where the raw bodies a READER can actually see live, and what is missing. */
+export interface BodiesReadScope {
+  /** Existing, scannable dirs — spool first (it holds the live traffic), deduped. */
+  dirs: string[]
+  /** Candidates that do NOT exist: an unmounted spool, or a legacy dir that was fully drained. */
+  missing: string[]
+  captureOn: boolean
+  /** True when a spool is configured — i.e. the legacy dir alone is NOT the whole picture. */
+  spoolConfigured: boolean
+}
+
+/**
+ * WHERE TO READ raw bodies from — deliberately NOT `effectiveBodiesDir`, which answers the
+ * writer's question ("where should Claude Code dump bodies NOW"). A reader must also see bodies
+ * left by a PREVIOUS sink: capture may be off while yesterday's corpus is still on disk, and a
+ * spool can hold the live traffic while the legacy SSD dir still holds an undrained corpus.
+ *
+ * Resolving a reader through the writer's single-answer function is what made investigate_burn
+ * report "nothing burned here" during a 2.3M tok/min burn (2026-07-23, TRDD-8N3KQW2R): it read
+ * the hardcoded legacy dir — 0 files, because the corpus had finished draining — while 1,876
+ * live body files sat in the configured spool. Hence: every existing candidate, and an explicit
+ * list of the missing ones so the caller can say WHY it is blind instead of saying "nothing".
+ */
+export function resolveBodiesReadScope(dataDir: string, env: NodeJS.ProcessEnv): BodiesReadScope {
+  const captureOn = rawBodyCaptureEnabled(dataDir, env)
+  const spool = spoolDirConfigured(dataDir)
+  const candidates = [...new Set([...(spool ? [spool] : []), path.join(dataDir, 'otel-bodies')])]
+  const dirs: string[] = []
+  const missing: string[] = []
+  for (const d of candidates) {
+    // A dir that exists but is unreadable is as blind as an absent one — treat both as missing.
+    let ok = false
+    try { ok = fs.statSync(d).isDirectory() } catch { ok = false }
+    ;(ok ? dirs : missing).push(d)
+  }
+  return { dirs, missing, captureOn, spoolConfigured: spool != null }
+}
+
 /** Resolve capture + where the value came from (env > file > default). */
 export function rawBodyCaptureWithSource(
   dataDir: string,

@@ -62,7 +62,7 @@ import { ContextCompositionIndex, type CompositionBlockKind, type GroupBy } from
 import {
   buildCacheCreationReport, buildExpensiveWritesTrace, buildCacheBreakGapReport,
   formatExpensiveWrites, formatCostPeaks, type CostPeakGroupBy, type CostBucket, type ForensicsFormat,
-  DEFAULT_BODIES_DIR,
+  defaultBodiesDir,
 } from './cacheCreationForensics'
 // TRDD-1FEIW17E — who is writing raw OTEL bodies (live-dir scan + store totals, exact union).
 import { scanLiveBodyWriters, queryStoreWriterTotals, buildBodyWritersReport } from './bodyWriters'
@@ -3214,7 +3214,7 @@ export function createMcpServer(opts: McpServerOptions): Server {
         const nowMs = Date.now()
         const windowMs = Math.max(1, a.window_min ?? 30) * 60_000
         const activeMs = Math.max(1, a.active_min ?? 10) * 60_000
-        const live = scanLiveBodyWriters(DEFAULT_BODIES_DIR, nowMs, windowMs)
+        const live = scanLiveBodyWriters(defaultBodiesDir(), nowMs, windowMs)
         // Store totals are best-effort: a closed/broken store degrades to live-only (the note says
         // so) because "which sessions must I restart" must be answerable even mid-migration.
         const storeHandle = opts.getStore ? await opts.getStore().catch(() => null) : null

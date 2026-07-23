@@ -21,7 +21,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { calcTokenCostUsd } from './shared/pricing'
-import { DEFAULT_BODIES_DIR } from './cacheCreationForensics'
+import { defaultBodiesDir } from './cacheCreationForensics'
 import { sessionIdOf } from './sessionBurnProfile'
 
 const MAX_BYTES = 8 * 1024 * 1024
@@ -185,7 +185,7 @@ export interface HeartbeatCostOptions {
 /** Exact cost of one heartbeat fire. Default `fire: 'last-complete'` — see the module header for why the
  *  in-flight fire cannot be measured exactly from inside itself. */
 export async function buildHeartbeatCost(opts: HeartbeatCostOptions = {}): Promise<HeartbeatCostReport> {
-  const bodiesDir = opts.bodiesDir ?? DEFAULT_BODIES_DIR
+  const bodiesDir = opts.bodiesDir ?? defaultBodiesDir()
   const marker = opts.marker ?? DEFAULT_MARKER
   const windowHours = opts.windowHours ?? 3
   const wantCurrent = opts.fire === 'current'

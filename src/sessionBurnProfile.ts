@@ -23,7 +23,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { calcTokenCostUsd } from './shared/pricing'
-import { DEFAULT_BODIES_DIR } from './cacheCreationForensics'
+import { defaultBodiesDir } from './cacheCreationForensics'
 
 const MAX_BYTES = 8 * 1024 * 1024
 const CHARS_PER_TOKEN = 4
@@ -354,7 +354,7 @@ function judge(p: SessionBurnProfile): { verdict: string; remediation: string[] 
 /** One-call burn diagnosis for a single session. Bounded by mtime window + file-size cap; the newest
  *  request is the only body fully parsed. Coverage is always reported honestly. */
 export async function buildSessionBurnProfile(opts: SessionBurnProfileOptions): Promise<SessionBurnProfile> {
-  const bodiesDir = opts.bodiesDir ?? DEFAULT_BODIES_DIR
+  const bodiesDir = opts.bodiesDir ?? defaultBodiesDir()
   const windowHours = opts.windowHours ?? 6
   const target = opts.sessionId
   if (!fs.existsSync(bodiesDir)) {
