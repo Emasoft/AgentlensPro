@@ -4,6 +4,31 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.11.1] - 2026-07-23
+
+### Changed
+
+- **The diagnostics skill states its version floor and teaches every worked example to completion.**
+  2.11.0 shipped the skill without recording that `budget`, `watch`, and the four tools it newly
+  documents (`get_lifecycle_events`, `get_cache_risk_costs`, `get_skill_attribution`,
+  `get_loaded_plugin_versions`) **all first exist in 2.11.0** — so a reader on an older install
+  followed it into `unknown command`, which reads as a broken skill rather than an old binary. The
+  floor, the one-line check, and a failure-triage row are now up front, along with the note that a
+  stale session needs `/reload-skills` (this is a standalone skill; `/reload-plugins` does not
+  refresh it).
+- **Every worked example now covers reading the output, not just issuing the command.** The
+  agent-orchestration scenario — preflight, one monitor for budget + burn guard, a per-line
+  reaction table for `[budget] ABORT`/`TIGHT` and each `[burn-guard]` risk, and the explicit
+  statement that AgentlensPro cannot stop your batch — is promoted to example 1, and the thin
+  four-line version it duplicated is gone. The burn investigation now explains the order to read
+  `--risk` → `investigate_burn` → `get_skill_attribution` and decodes all seven finding codes
+  (`FORK_STORM`, `SUBAGENT_BOOT_TAX`, `PREMIUM_MODEL_FANOUT`, `FAT_SESSION_REWRITES`,
+  `IDLE_FLEET_KEEPWARM`, `IMAGE_BLOB_RESIDENT`, `RATE_LIMIT_COLD_RESUME`) into what happened and
+  what to change. The alerting example explains how to size a threshold instead of guessing one;
+  the cost example says why `--mode since` with a past instant is refused for `cost`; the logging
+  example states that rotation is not built in; and the post-mortem example names `--untilIso` as
+  the flag that moves the analysis back to the drain instead of a window that has already rolled.
+
 ## [2.11.0] - 2026-07-23
 
 ### Added

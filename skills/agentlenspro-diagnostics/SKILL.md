@@ -183,25 +183,62 @@ for the rest of the session.
 **2 — "Something is eating the window right now."**
 
 ```bash
-agentlenspro --risk                                 # who, what, how big — 40ms
-agentlenspro investigate_burn --windowHours 1       # ranked causes with evidence
-agentlenspro get_skill_attribution --window 6       # if a skill/plugin is the culprit
+agentlenspro --risk                                 # 1. WHO — 40ms, only the ACTIVE risks
+agentlenspro investigate_burn --windowHours 1       # 2. WHY — ranked causes with evidence
+agentlenspro get_skill_attribution --window 6       # 3. WHICH skill/plugin, if that is the shape
 ```
+
+**Read it in that order, and stop as soon as you have the culprit.** `--risk` names the session,
+workspace and model in each line, so it often ends the investigation by itself.
+
+`investigate_burn` returns `verdict` (read this first — it is a plain sentence naming the culprits),
+`findings` (ranked, each with its evidence), `attribution` (by workspace) and `totals`. The finding
+codes tell you what to change:
+
+| Finding | What actually happened | Fix |
+|---|---|---|
+| `FORK_STORM` | forks of a fat parent into a cold cache — each re-pays the whole prefix | compact the parent first, or stop forking it |
+| `SUBAGENT_BOOT_TAX` | many short-lived agents, each paying its own boot | fewer, longer-lived agents |
+| `PREMIUM_MODEL_FANOUT` | an expensive default model across a fan-out | pin a cheaper model for the bulk work |
+| `FAT_SESSION_REWRITES` | one huge session re-writing its prefix | `/clear` or compact — see the Cache TTL section |
+| `IDLE_FLEET_KEEPWARM` | agents kept warm doing nothing | shut the idle ones down |
+| `IMAGE_BLOB_RESIDENT` | screenshots riding forward in context every turn | analyze images in a sub-agent, or compact immediately |
+| `RATE_LIMIT_COLD_RESUME` | a fan-out resumed into a dead cache after a stall | warm with ONE agent, then ramp |
+
+⚠️ `get_skill_attribution` counts each message **once**; a naive sum over the same rows
+over-counts 2–5×. Read `duplicateRowsSkipped` if the number looks too small — that is the
+correction, not a loss. Also check `pricedMessages` vs `attributedMessages` for coverage.
 
 **3 — "Alert me whenever cache-creation spikes in this session."**
 
 ```bash
 agentlenspro watch --metric cache-create --session <id> --mode rate --threshold 50000
 ```
-`rate` not `total`: a cumulative total crosses once and stays above, so it can only ever fire a
-single alert — the watch warns you about exactly this if you ask for it.
 
-**4 — "How much has this run cost so far?"**
+You get `PEAK-START` when it crosses, then silence, then `PEAK … max N/min over 3m` when it falls
+back — that pair is one spike. **Silence between them is the design**, not a stall.
+
+- **`rate`, not `total`** — a cumulative total crosses once and can never cross back, so `total`
+  can only ever fire a single alert. The watch warns you at arm time if you ask for it anyway.
+- **Sizing the threshold:** run once with `--every --for 5` to see the normal range, then set the
+  threshold above it. A threshold under the noise floor produces one permanent excursion.
+- **Widen `--hysteresis`** (e.g. `0.7`) if a jittery metric opens and closes repeatedly.
+
+**4 — "How much has THIS run cost so far?"**
 
 ```bash
 agentlenspro watch --metric cost --session <id> --mode since --every --interval 60 --for 90
 ```
-`since` with no `--since` baselines at the moment the watch starts, which is what "this run" means.
+
+`since` with no `--since` baselines at the moment the watch starts — which is exactly what "this
+run" means. Every line is the delta since then, not the session lifetime.
+
+- Want the lifetime instead? `--mode total`.
+- Want a number for a run that **already started**? `--since <ISO>` — but only for
+  `input`/`output`/`cache-read`/`cache-create`/`tokens`. `cost` is refused for a past instant
+  because per-message pricing is not recoverable from the transcript slice, and a token count
+  wearing a dollar sign would be a fabricated figure.
+- One-shot alternative, no watching: `get_cost_rollup --groupBy session --windowHours 2`.
 
 **5 — "Keep a durable record for a long unattended run."**
 
@@ -209,15 +246,34 @@ agentlenspro watch --metric cost --session <id> --mode since --every --interval 
 agentlenspro watch --metric tokens-per-min --threshold 2000000 \
   --log ~/logs/burn.log --flush-ms 1000 --for 480
 ```
-Writes coalesce to spare the SSD; at most 1s of lines is lost on an unclean kill and a line is
-never torn. Ctrl-C flushes and exits normally.
+
+The log mirrors stdout exactly, so the file is what you saw. Add `--json` for one object per line
+if something downstream parses it.
+
+- **`--flush-ms 1000`** coalesces writes so a multi-day watch does not grind the SSD. At most 1s of
+  lines is lost to an unclean kill; a line is never half-written. `--flush-ms 0` writes through if
+  you would rather trade the wear.
+- **Ctrl-C flushes and exits** normally — the buffered tail still lands.
+- **Rotation is not built in.** The file grows without bound; hand it to `logrotate` or point
+  `--log` at a fresh path per run.
+- Pair it with `--for` so an unattended watch has a definite end.
 
 **6 — "Post-mortem: my window ran out an hour ago."**
 
 ```bash
-agentlenspro get_rate_limit_report                  # the stall episodes + what filled the window
-agentlenspro get_account_burners --account previous # if the account rotated
+agentlenspro get_rate_limit_report                  # 1. the stall episodes + what filled the window
+agentlenspro investigate_burn --windowHours 5 --untilIso <when-it-drained>   # 2. ranked causes THEN
+agentlenspro get_account_burners --account previous # 3. only if the account rotated
 ```
+
+`get_rate_limit_report` gives `episodes` (the stalls, with sessions/workspaces/errors) and
+`attributed` — the newest episode's window broken down by exact billed usage. `--untilIso` on
+`investigate_burn` is what moves the analysis back to the drain instead of now; without it you are
+investigating a window that has already rolled.
+
+`get_account_burners` is for **after a rotation**: it marks `mostLikelyExhausted` with an
+`exhaustionReason`, and splits cross-rotation sessions between accounts by time. If you have not
+rotated, skip it — the first two commands are the answer.
 
 ## When a command fails — read the failure, don't retry blindly
 
