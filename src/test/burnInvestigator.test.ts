@@ -92,6 +92,29 @@ suite('burnInvestigator — investigate_burn (TRDD-TW14MO7A)', () => {
     } finally { cleanup() }
   })
 
+  test('a transcript QUOTING the Environment phrase cannot masquerade as the workspace', () => {
+    // Regression: a session discussing this scanner's own source made the raw-text match capture
+    // the regex source `([^` and rank it as the machine's top-burning workspace. The real
+    // Environment block must win over any earlier quoted mention.
+    const { dir, hooks, cleanup } = corpus()
+    try {
+      const p = path.join(dir, 'quoted.request.json')
+      fs.writeFileSync(p, JSON.stringify({ body: {
+        model: 'claude-opus-4-8',
+        messages: [{ role: 'user', content: [{ type: 'text', text:
+          'the scanner uses /Primary working directory: ([^\\\\\\n"]+)/ to find it'.padEnd(3000, 'x') }] }],
+        system: '# Environment\n - Primary working directory: /Users/x/real-project\n',
+      } }))
+      fs.utimesSync(p, (NOW - MIN) / 1000, (NOW - MIN) / 1000)
+      resp(dir, NOW - MIN, 'claude-opus-4-8', 10_000, 5_000)
+
+      const r = investigateBurn({ bodiesDir: dir, hookEventsDir: hooks, untilMs: NOW })
+      const seen = r.attribution.map(a => a.workspace)
+      assert.ok(seen.includes('/Users/x/real-project'), `expected the real workspace, got ${JSON.stringify(seen)}`)
+      assert.ok(!seen.some(w => w.startsWith('([')), `a quoted regex was attributed as a workspace: ${JSON.stringify(seen)}`)
+    } finally { cleanup() }
+  })
+
   test('coverage always names the dirs it read, so a zero result can be located', () => {
     const { dir, hooks, cleanup } = corpus()
     try {

@@ -152,7 +152,18 @@ function scanResponses(files: { p: string; mtime: number }[]): RespRec[] {
   return out.sort((a, b) => a.ts - b.ts)
 }
 
-const WS_RE = /Primary working directory: ([^\\\n"]+)/
+// Global on purpose: the FIRST hit in a request body is not necessarily the real Environment
+// block. A transcript QUOTES the phrase whenever the conversation is about this code — a session
+// that read this very file made the scanner capture the regex's own source, `([^`, and report it
+// as the machine's top-burning workspace. So: scan every hit and take the first that is actually
+// shaped like an absolute path. (Same class as counting `<command-name>` markers by raw grep:
+// transcripts contain their own markers.)
+const WS_RE = /Primary working directory: ([^\\\n"]+)/g
+
+/** An Environment-block workspace is always absolute — posix `/…` or Windows `C:\…`. */
+function looksLikeWorkspace(s: string): boolean {
+  return s.startsWith('/') || /^[A-Za-z]:[\\/]/.test(s)
+}
 const MODEL_RE = /"model"\s*:\s*"([^"]+)"/
 // A base64 image payload inside content blocks; we only need "is a big blob present and how big".
 const IMG_RE = /"data"\s*:\s*"([A-Za-z0-9+/=]{20000,})/g
@@ -189,8 +200,10 @@ function scanRequest(f: { p: string; mtime: number; size: number }, maxScanBytes
         if (i >= 0 && text.length - i > 2600) fingerprint = djb2(text.slice(i, i + 2600))
       }
       if (!workspace) {
-        const m = WS_RE.exec(text)
-        if (m) workspace = m[1].trim()
+        for (const m of text.matchAll(WS_RE)) {
+          const cand = m[1].trim()
+          if (looksLikeWorkspace(cand)) { workspace = cand; break }
+        }
       }
       for (const m of text.matchAll(IMG_RE)) imageBytes += m[1].length
       if (workspace && fingerprint && model !== '?' && offset > 2 * CHUNK && imageBytes === 0) break
