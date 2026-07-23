@@ -128,12 +128,66 @@ installs, and NEVER wipes `~/.agentlens` data. Deploy on this machine = `node es
 (or `pnpm run package`) + `agentlenspro server restart` (graceful: flushes spans, verifies
 dashboard/OTLP). Hook registration changes need a Claude session restart to take effect.
 
-## Cache/TTL model (do not re-derive — doc-verified 2026-07-11)
+## HOW TOKEN USAGE / CACHE ECONOMICS WORK — read before reasoning about burn OR writing any cost/attribution code (doc-verified 2026-07-11, re-affirmed after a live mis-scaling)
 
-The prompt-cache TTL is NOT a universal 5 minutes: subscription MAIN conversations get 1h
-automatically (drops to 5m when drawing usage credits); subagents are ALWAYS 5m; forks read
-and renew the PARENT's entry; cron fires are main-conversation turns. Small per-turn
-`cache_creation` is normal suffix writing — only full-prefix-sized spikes are true cold
-rewrites (causes: model/effort/fast-mode switch, MCP connect/disconnect, bare-tool deny,
-compact, CC upgrade). The diagnostics encode this as the TTL-regime matrix (TRDD-VY1IUVUM);
-the full model with measured costs: `.claude/project/memory/cache-ttl-model.md`.
+This is the model both the human AND the code must obey. Getting it wrong produces confident
+false culprits and cost code that lies. The load-bearing rule is #1.
+
+**1. Windows are metered by COST (USD-equivalent), NOT by raw token count.** The 5h and 7d
+rate-limit windows fill by what the requests *cost*, so a token count alone tells you nothing
+until each token is weighted by its rate. Any burn/attribution number that sums raw tokens is
+wrong; it must weight every bucket. `investigate_burn` does this correctly —
+`src/burnInvestigator.ts` `equivOf = cc*1.25 + cr*0.1` (input-equivalents); the full per-model
+$ view is the `billable_weighted` bucket (`cacheCreationForensics.ts` / `mcpServer.ts`).
+
+**2. Per-token cost weights (Claude; per-model in `src/shared/pricing.ts`).** Relative to
+1× input: **cache READ ≈ 0.1×**, **cache WRITE (`cache_creation`) ≈ 1.25×**, **output ≈ 5×**
+(opus-4-8: input 5.00, cacheRead 0.50, cacheWrite 6.25, output 25.00 per MTok). A few models
+differ (codex-mini reads at 0.25×) — code that must be exact reads the rate from `pricing.ts`,
+never a hardcoded flat factor. Cost code MUST weight `cache_read × readRate`,
+`cache_creation × writeRate`, `output × outputRate` — never treat a token as a token.
+
+**3. Cache TTL depends on WHERE the turn runs — memorize this:**
+- **MAIN conversation → 1h TTL** automatically (subscription). **Drops to 5m when the account
+  is drawing usage credits / in overage.**
+- **Fresh sub-agents → ALWAYS 5m TTL.**
+- **Cron / heartbeat fires are MAIN-conversation turns** → they get the 1h TTL, but each one
+  still re-reads the whole prefix (cheap if warm, a cold WRITE if the TTL lapsed since the last turn).
+- A turn arriving *after* its TTL has elapsed hits a COLD cache → the entire prefix is re-billed
+  at the **write** rate (1.25×), not the read rate. Keeping turns closer together than the TTL is
+  what keeps them at 0.1×.
+
+**4. What RESETS the cache prefix → forces a full cold WRITE (1.25× the whole prefix) on the
+next turn.** Avoid mid-session unless necessary:
+`/reload-plugins` and `/reload-skills` (re-register the tool/skill/agent catalogs in the stable
+prefix), `/login` (new auth ⇒ new prefix), a `/model` / reasoning-effort / fast-mode switch, an
+MCP server connect/disconnect, a bare-tool **deny**, `/compact`, and a Claude Code upgrade.
+`/clear` resets the transcript floor (a deliberate, GOOD reset — cheap thereafter). A small
+per-turn `cache_creation` is just normal suffix writing; only a **full-prefix-sized** spike is a
+true cold rewrite.
+
+**5. Fork agents PRESERVE the cache; fresh subagents DON'T.** A **fork** inherits the parent's
+context and reads+renews the PARENT's cache entry → warm 0.1× reads. A **fresh subagent** starts
+a NEW prefix → a cold WRITE (1.25×) up front, plus a 5m TTL. So when a fan-out needs the parent's
+context, **fork** it; spawning N fresh subagents off a fat parent pays the whole fat prefix as a
+cold write N times — this is the **FORK_STORM** burn pattern (the dominant real-world window-eater).
+
+**6. Request SIZE ≠ billed COST — the exact trap to never repeat.** The request body always
+carries the full transcript, so a "fat" request (megabytes on the wire) is **cheap** if it's a
+warm cache READ (0.1×) and **expensive** only on a cold WRITE. A byte-size signal (e.g. the
+`HUGE_REQUEST_BURST` risk) flags a fat request *in flight*; it is NOT a cost verdict. Rank
+culprits by cache-**weighted** equiv (`investigate_burn`), never by request bytes or raw tokens.
+
+**7. Consequences that follow from the above:**
+- The window-eater is **cold full-prefix WRITES**, above all FORK_STORMs; warm re-reads barely
+  move the meter even when huge.
+- **Rotating accounts does NOT reduce burn** — it only changes which account pays for the same
+  cold writes. The fix is always to stop the *source* (kill the fan-out, `/compact` the fat parent).
+- An un-evicted image/blob re-sent every turn is the worst resident-context cost (one 8-image
+  paste ≈ 525k tokens/turn, ~$425) — analyze images in a subagent or `/compact` immediately.
+- To answer "what's burning NOW", read the **live** window (`--risk`, 5-min `get_burn_status`)
+  weighted by cost; to answer "what burned the window", read `investigate_burn` (already weighted).
+  Do not answer a "now" question from a 5h aggregate, or a cost question from a byte signal.
+
+Diagnostics encode this as the TTL-regime matrix (TRDD-VY1IUVUM); the full model with measured
+costs: `.claude/project/memory/cache-ttl-model.md`.
