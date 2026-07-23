@@ -318,6 +318,10 @@ suite('setup — fail-fast refusals (no silent continue)', () => {
     const f = makeFixture()
     try {
       const bogusRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'al-bogus-root-'))
+      // A manifest with a real engines.node, so the run reaches the SKILL step — which is what
+      // this test is about. Without one the ENVIRONMENT step now fails first (the Node floor is
+      // read from engines.node and is never guessed), and the skill step would never run.
+      fs.writeFileSync(path.join(bogusRoot, 'package.json'), JSON.stringify({ engines: { node: '>=20.9.0' } }))
       try {
         const ports = { ui: await freePort(), mcp: await freePort(), otlp: await freePort() }
         const outcome = await runSetup(setupOpts(f, ports, { repoRoot: bogusRoot }))

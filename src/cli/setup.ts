@@ -292,8 +292,9 @@ export interface EnvFacts {
   arch: string
   /** process.versions.node — no leading 'v'. */
   nodeVersion: string
-  /** The supported floor, read from package.json engines.node (never hardcoded twice). */
-  nodeFloor: string
+  /** The supported floor, read from package.json engines.node (never hardcoded twice).
+   *  Null when the manifest could not supply one — reported as a failed check, never guessed. */
+  nodeFloor: string | null
   wsl: boolean
   /** @duckdb/node-api is a declared runtime dep (span store) — unresolvable = broken install. */
   duckdbResolvable: boolean
@@ -305,15 +306,22 @@ export interface EnvFacts {
   freeDiskBytes: number | null
 }
 
-/** '>=20.9.0' | '20.9.0' → '20.9.0'. The engines field is the ONE home of the floor. */
-function parseNodeFloor(repoRoot: string): string {
+/** '>=20.9.0' | '20.9.0' → '20.9.0', or NULL when the manifest cannot supply one.
+ *
+ *  engines.node is the ONE home of the floor, so there is no compiled second copy to fall back to.
+ *  The old code returned a hardcoded '20.9.0' on any failure, which made the "ONE home" claim
+ *  false and was silent: after a floor bump, an unreadable package.json meant setup validated
+ *  against the stale number and PASSED a Node version the package no longer supports.
+ *
+ *  It returns null rather than throwing because this runs during environment DETECTION, and a
+ *  detection crash would bypass the step machinery that is supposed to report the problem — the
+ *  caller turns null into a visible failed check instead. */
+function parseNodeFloor(repoRoot: string): string | null {
+  let pkg: { engines?: { node?: string } }
   try {
-    const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8')) as { engines?: { node?: string } }
-    const spec = pkg.engines?.node ?? ''
-    const m = spec.match(/(\d+)\.(\d+)\.(\d+)/)
-    if (m) return m[0]
-  } catch { /* fall through to the compiled floor */ }
-  return '20.9.0'
+    pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8')) as { engines?: { node?: string } }
+  } catch { return null }
+  return (pkg.engines?.node ?? '').match(/(\d+)\.(\d+)\.(\d+)/)?.[0] ?? null
 }
 
 function versionAtLeast(version: string, floor: string): boolean {
@@ -376,6 +384,13 @@ export function judgeEnvFacts(facts: EnvFacts): StepResult {
         + `${facts.nodeFloor} in the WSL distro and run \`npm install -g agentlenspro\` there`,
     }
   }
+  if (facts.nodeFloor === null) {
+    return {
+      step, found: label, action: 'none', verify: 'FAIL',
+      detail: 'cannot read engines.node from the package manifest — the install is incomplete, so the '
+        + 'supported Node floor is unknown and will NOT be guessed (reinstall with `npm install -g agentlenspro`)',
+    }
+  }
   if (!versionAtLeast(facts.nodeVersion, facts.nodeFloor)) {
     return {
       step, found: label, action: 'none', verify: 'FAIL',
@@ -419,7 +434,15 @@ function storeSpanCount(dataDir: string): number {
       const content = fs.readFileSync(path.join(spansDir, f), 'utf8')
       total += content.split('\n').filter(Boolean).length
     }
-  } catch { /* no store yet — 0 */ }
+  } catch (e) {
+    // ONLY "no store yet" may answer 0. This count feeds the data-preservation assertion
+    // (postSpanCount < preSpanCount), so a permission or I/O error that returns 0 makes the
+    // comparison `anything < 0` — permanently false. Spans could be lost during the restart and
+    // the check would still PASS, which is the one thing it exists to catch.
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw new Error(`cannot count the span store at ${spansDir}: ${(e as Error).message}`)
+    }
+  }
   return total
 }
 
@@ -626,7 +649,13 @@ const stepOtel: StepDef = {
     // A LEFTOVER capture key is drift too — and the kind that costs ~35 GB/day. Without this,
     // `converged` would be true (the key simply isn't in `expected`), setup would skip ensure(), and
     // the repairer would happily report a healthy install while the burn kept running.
-    const staleCapture = !captureRawBodies && env[RAW_BODIES_KEY] === `file:${bodiesDir}`
+    // PRESENCE, not a value match. When capture is off the key must be ABSENT, so any value is
+    // stale. Comparing against `file:${bodiesDir}` only caught the key when it happened to point
+    // at today's resolved dir — a user who had capture on with a different bodies dir, then turned
+    // it off, kept a live key Claude Code still honours: ~35 GB/day of raw bodies still being
+    // written while setup reported converged/PASS. That is the exact burn the kill-switch exists
+    // for, hidden by the tool meant to detect it.
+    const staleCapture = !captureRawBodies && env[RAW_BODIES_KEY] !== undefined
     const converged = missing.length === 0 && wrong.length === 0 && !staleCapture
     const found = converged
       ? 'telemetry env current'
@@ -649,7 +678,9 @@ const stepOtel: StepDef = {
     }
     const envAfter = (after.env && typeof after.env === 'object' ? after.env : {}) as Record<string, unknown>
     const bad = Object.keys(expected).find(k => envAfter[k] !== expected[k])
-    const stillStale = !captureRawBodies && envAfter[RAW_BODIES_KEY] === `file:${bodiesDir}`
+    // Same presence test as the detection above — a verify that is laxer than its detection can
+    // confirm a repair that did not happen.
+    const stillStale = !captureRawBodies && envAfter[RAW_BODIES_KEY] !== undefined
     const verifyFail = bad ?? (stillStale ? RAW_BODIES_KEY : undefined)
     return {
       result: {
