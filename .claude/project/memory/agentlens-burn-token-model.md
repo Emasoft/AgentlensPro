@@ -185,3 +185,12 @@ paths, usernames, emails or hostnames. The `memory-scope-leak` detector has flag
   configured `capture.spoolDir` (1,876 body files sat in the spool; the hardcoded dir held 0).
   DO cross-check with `--risk` / `get_burn_status` (they read the live feed and never go blind),
   and treat a zero-file scan as a BLIND SPOT, never as a clean verdict. Fix: TRDD-8N3KQW2R.
+[^10]: [id:ATOM-READ-SEMANTICS, status:valid, keywords:"get_cost_rollup_sinceIso_is_not_a_delta one_minute_window_reported_320M_tokens totalTokens_excludes_cache how_to_measure_tokens_used_since_a_timestamp", ocd:2026-07-23, lmd:2026-07-23]
+  DO NOT read `get_cost_rollup --sinceIso T` as "tokens since T", and DO NOT read
+  `get_agent_tokens.totalTokens` as the session's token consumption, BECAUSE the first returns
+  WHOLE-SESSION totals for every session that merely OVERLAPS the window (a 1-minute window
+  reported 320M tokens) and the second is input+output only, EXCLUDING cache (1,550 + 614,578 =
+  616,128 on a session with 315M cache-read). Both read like deltas/totals and are neither, so a
+  watcher built on them reports numbers that are wrong by orders of magnitude in the direction
+  that hides a problem. DO compute "since T" by SAMPLE-AND-SUBTRACT (snapshot at t0, subtract),
+  and always sum the four buckets explicitly when you mean total tokens.
