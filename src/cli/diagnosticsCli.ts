@@ -45,6 +45,13 @@ usage:
   agentlenspro hook                           lifecycle hook handler (stdin → server; registered by setup)
   agentlenspro gate                           agent-launch burn gate (stdin → server; registered by setup)
   agentlenspro heartbeat-cost [--oneline]     exact token + $ cost of the last settled heartbeat fire
+  agentlenspro budget --minutes N [--watch [SEC]] [--with-risks] [--window 5h|7d|binding]
+                                              will the rate-limit window OUTLAST a timed run? Preflight
+                                              once, or --watch the whole batch: the minutes still to go
+                                              derive from t0, so the check sharpens by itself. Exit code
+                                              IS the interface — 0 go / 1 ABORT / 2 cannot project — so a
+                                              harness wires it straight to its kill path. --with-risks
+                                              folds the burn guard into the same stream (one Monitor)
   agentlenspro disable [reason]               GLOBAL BRAKE — turn every AgentlensPro side-effect OFF
                                               (hooks, burn-gate, auto-revive, background ingestion) in
                                               EVERY running Claude session, on its next hook fire. Stops
@@ -162,12 +169,14 @@ const CMD_ALIASES: Record<string, string> = {
 // handshake (~10ms vs ~700ms), FULL unshaped risk list. Falls back to the MCP tool once for
 // servers predating /api/burn-risk, then stays on whichever path worked.
 let riskViaRest = true
-interface BurnRiskReport {
+export interface BurnRiskReport {
   risks?: Array<{ code: string; detail: string; active: boolean }>
   advice?: string
   sources?: { hookEvents?: unknown; bodies?: unknown; burnStatus?: unknown }
 }
-async function fetchBurnRisk(): Promise<BurnRiskReport> {
+// Exported so `budget --with-risks` can fold guard transitions into its own stream (one Monitor
+// instead of two) without duplicating the REST-then-MCP fallback logic.
+export async function fetchBurnRisk(): Promise<BurnRiskReport> {
   if (riskViaRest) {
     try {
       return await apiRequest('GET', '/api/burn-risk') as BurnRiskReport

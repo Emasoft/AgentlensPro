@@ -26,6 +26,7 @@ import { runEnvCli } from './envCli'
 import { runDisableCli, runEnableCli } from './disableCli'
 import { ensureServer, openDashboard, serverCommand, daemonCommand } from './serverControl'
 import { runSetupCli } from './setup'
+import { runBudgetCli } from './budgetCli'
 
 /** The package version, read from the package.json that ships next to the bundle. Walks up
  *  from __dirname because the bundle lives at <pkg>/standalone/cli.js while the test build
@@ -89,6 +90,11 @@ export async function cliMain(argv: string[], startServer: () => Promise<unknown
       await ensureServer()
       openDashboard()
       return 0
+    case 'budget':
+      // "Will the rate-limit window outlast this run?" — the preflight + self-updating abort
+      // watch for any timed batch. Its exit code IS the interface (0 go / 1 abort / 2 cannot
+      // project), so a harness can wire `budget --watch` straight to its own kill path.
+      return runBudgetCli(argv.slice(1))
     case 'heartbeat-cost':
       await runHeartbeatCost(argv.slice(1))
       return 0

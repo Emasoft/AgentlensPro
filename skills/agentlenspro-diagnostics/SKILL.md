@@ -9,10 +9,12 @@ description: >-
   stall, compaction rewrites, huge-request bursts, burn spikes, and CACHE_THRASH — the prefix
   being re-written every turn instead of read). PREVENT with the burn-gate hooks
   (--install-hooks): a PreToolUse gate on agent-launch tools DENIES the four measured disaster
-  launches with the reason fed back to the agent. BUDGET a timed run before you start it — "will
-  this test round / batch / fan-out exhaust the 5h window before it finishes, and how do I abort it
-  if the burn rate says yes" — with get_window_eta (cost-based ETA, names the binding window) plus
-  a ready abort-watch loop. Covers the full diagnostic-tool suite — run
+  launches with the reason fed back to the agent. BUDGET a timed run with ONE command —
+  `agentlenspro budget --minutes N [--watch] [--with-risks]` answers "will this test round / batch /
+  fan-out exhaust the 5h window before it finishes, and how do I abort it if the burn rate says
+  yes": exit 0 go / 1 ABORT / 2 cannot project, the remaining time re-derived from t0 as the run
+  proceeds, and the burn guard folded into the same stream so ONE monitor covers both.
+  Covers the full diagnostic-tool suite — run
   `list --desc` for the live set (burn status, session burn profile, per-agent exact tokens, interval cost rollups, rate-limit forensics,
   account/plan + window budget,
   cache-break causes/timeline, expensive writes, heartbeat cost, config comparison, SQL
@@ -340,14 +342,39 @@ configured)` unless `AGENTLENS_WINDOW_5H_TOKENS`/`_7D_TOKENS` are calibrated. `g
 answers it regardless, because it projects on **cost** (Anthropic meters the windows by cost, not
 tokens) and falls back to a same-plan account's observed capacity — always labeled, never guessed.
 
-**1 — Preflight, BEFORE the first launch.** Get the ETA and the run's predicted cost:
+**The whole workflow is one command — `agentlenspro budget`.** It wraps the preflight, the
+verdict, the abort condition and (optionally) the burn guard, and **its exit code is the
+interface**: `0` go · `1` ABORT · `2` cannot project. Everything below explains what it decides
+and how to fall back to the raw tools; you do not have to assemble it by hand.
+
+```bash
+agentlenspro budget --minutes 90                          # preflight: one line, one exit code
+agentlenspro budget --hours 2 --watch 120 --with-risks    # arm for the whole run (Monitor-friendly)
+agentlenspro budget --minutes 90 --json                   # machine-readable
+```
+
+| flag | meaning |
+|---|---|
+| `--minutes N` / `--hours H` | how long the run needs (**required** — a budget with no duration has no question to answer) |
+| `--window 5h\|7d\|binding` | which window must survive it; default `binding` = whichever the payload says runs out first |
+| `--margin M` | GO requires `ETA ≥ remaining × M` (default `2`); values below 1 are clamped, so a margin can never make an abort look safe |
+| `--watch [SEC]` | keep watching (default 60s). **The minutes still to go derive from t0**, so the check sharpens by itself and exits `1` the moment the verdict turns NO-GO |
+| `--with-risks` | fold `[burn-guard]` risk transitions into the same stdout stream — **one Monitor covers both** |
+| `--rate-window-min N` | minutes of history the $/min rate is measured over (default 30) |
+
+That last point is why this is a command and not a snippet: a hand-rolled loop makes the caller
+re-supply "minutes left" at every checkpoint, and a stale value keeps saying GO for the whole run —
+exactly the case the check existed to catch.
+
+**1 — Preflight, BEFORE the first launch.** `agentlenspro budget --minutes 90` answers it
+outright. To see the underlying numbers, or to add a cost estimate:
 
 ```bash
 agentlenspro get_window_eta --rate_window_min 30   # read `text`: $/min · ETA · which window EXHAUSTS FIRST
 agentlenspro predict_session_cost --task "<the batch you are about to run>"   # p75 = budget-safe
 ```
 
-Decision rule — compare the binding window's ETA to the run's expected duration:
+Decision rule — the same one `budget` applies, comparing the window's ETA to the run's duration:
 
 | ETA vs expected duration | do |
 |---|---|
@@ -366,8 +393,12 @@ a 90-minute batch is usually bounded by the 5h window even when the 7d one exhau
 rather than needing to be polled):
 
 ```
-Monitor(command: "agentlenspro --guard 15", description: "burn guard — <batch name>", persistent: true)
+Monitor(command: "agentlenspro budget --hours 2 --watch 120 --with-risks", description: "budget+guard — <batch name>", persistent: true)
 ```
+
+One Monitor, both signals: `[budget]` verdict transitions **and** `[burn-guard]` risk transitions
+on the same stream, silent while nothing changes. (Arming only the guard —
+`agentlenspro --guard 15` — is still correct when there is no fixed run length to budget against.)
 
 `persistent: true` is right for a batch (no deadline guessing — `timeout_ms` is then ignored and
 may be omitted), but it means the watch lives until the SESSION ends. **`TaskStop` it when the
@@ -379,7 +410,9 @@ the step-3 checkpoint loop instead.
 minute 40 — one fan-out moves it by an order of magnitude. Re-run `get_window_eta` after each phase
 (and on every `BURN_SPIKE` the guard emits) and re-apply the table above.
 
-An unattended abort-watch for the **5h** window, which exits non-zero so a runner can kill itself
+`agentlenspro budget --minutes N --watch [SEC]` IS this loop — it re-derives the remaining time
+from t0 itself and exits `1` on NO-GO, so wire its non-zero exit to however your harness
+terminates. The equivalent hand-rolled form, for a harness that cannot shell out to the CLI
 (swap `fiveHour` → `sevenDay` to bind on the weekly window):
 
 ```bash
@@ -408,7 +441,7 @@ character in string literal". Use `printf '%s'` if a variable is unavoidable.
 
 | lever | what it actually does |
 |---|---|
-| your runner | **the only thing that can stop your batch.** AgentlensPro measures and warns; it does not own your process tree. The ETA and the guard tell you WHEN — the kill is the caller's |
+| your runner, driven by `budget --watch`'s exit code | **the only thing that can stop your batch.** AgentlensPro measures and decides; it does not own your process tree. `budget --watch` exits `1` at the abort point — wiring that to your kill path is the whole mechanism |
 | burn-gate at `gate=enforce` (the default; `agentlenspro --hooks` shows it) | DENIES agent launches matching the **four measured disaster signatures** — THRASH_ACTIVE, RUNAWAY_FANOUT, COLD_RESUME_FANOUT, FORK_STORM_FORMING. That is disaster prevention, **not** a window budget: it will never stop a well-behaved run that is simply too long |
 | `agentlenspro --hooks gate=warn` | the opposite of a brake — loosens the gate for a legitimate mass fan-out. Restore to `enforce` after |
 | `agentlenspro disable` | stops AgentlensPro, **not your burn** (see Emergency stop above) |
