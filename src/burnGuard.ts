@@ -19,7 +19,7 @@ import { readHookEvents, type HookEventRecord } from './hookEventStore'
 import { fmtFatSenders, type BodiesActivityReport } from './bodiesActivity'
 import { defaultBodiesDir } from './cacheCreationForensics'
 import { dataPath } from './dataDir'
-import { causingToolCall, type CausingCall } from './causingToolCall'
+import { causingToolCalls, composition, type SpawnCall } from './causingToolCall'
 
 /** WHO spawned, from SubagentStart events (payloads carry session_id/cwd/agent_type):
  *  top-2 spawning sessions with dir + agent types — culprit naming for FANOUT_BURST. */
@@ -52,10 +52,12 @@ export interface BurnRisk {
   active: boolean
   detail: string
   evidence?: Record<string, unknown>
-  /** The VERBATIM tool-call that triggered this risk — attached by attachRiskCausingCalls (async). */
-  causingCall?: CausingCall
-  /** Why the causing call could not be resolved — honest, never a fabricated call. */
-  causingCallUnavailable?: string
+  /** EVERY spawn call in this risk's window, numbered + verbatim (attached by attachRiskCausingCalls). */
+  causingCalls?: SpawnCall[]
+  /** Compact composition tally of causingCalls, e.g. "Agent/general-purpose×3, Workflow×2". */
+  causingCallsComposition?: string
+  /** Why no causing calls could be resolved — honest, never a fabricated call. */
+  causingCallsUnavailable?: string
 }
 
 export interface BurnRiskReport {
@@ -285,12 +287,16 @@ export async function attachRiskCausingCalls(
     const atMs = ev && typeof ev.spawnAtMs === 'number' ? (ev.spawnAtMs as number) : undefined
     const workspace = ev && typeof ev.spawnWorkspace === 'string' ? (ev.spawnWorkspace as string) : undefined
     if (atMs === undefined || !workspace) continue // only risks that anchor a spawn call
-    const res = await causingToolCall({ workspace, atMs, projectsDirs: opts.projectsDirs })
-    if (res.call) {
-      r.causingCall = res.call
-      r.detail += ` Causing call: ${res.call.tool}(${res.call.input})`
+    const res = await causingToolCalls({ workspace, atMs, projectsDirs: opts.projectsDirs })
+    if (res.calls.length > 0) {
+      r.causingCalls = res.calls
+      r.causingCallsComposition = composition(res.calls)
+      // Numbered/timed/measured composition on the risk line; full verbatim inputs live in causingCalls[].
+      r.detail += ` Causing calls (${res.calls.length}: ${r.causingCallsComposition}): ` +
+        res.calls.map(c => `${c.n}. ${c.tool}${c.subagentType ? `/${c.subagentType}` : ''}` +
+          `${c.model ? `/${c.model}` : ''} @${c.iso}`).join('; ')
     } else {
-      r.causingCallUnavailable = res.reason
+      r.causingCallsUnavailable = res.reason
     }
   }
 }

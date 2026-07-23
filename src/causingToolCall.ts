@@ -1,53 +1,60 @@
-// src/causingToolCall.ts — given a burn PEAK (a time, plus a session or workspace), extract the
-// EXACT tool_use call that CAUSED it, VERBATIM, from the Claude session JSONL transcript.
+// src/causingToolCall.ts — given a burn PEAK (a time window, plus a session or workspace), extract
+// EVERY spawn tool-call that could have caused it, VERBATIM, from the Claude session JSONL — numbered,
+// time-ordered, and measured (composition counts). NOT a single "nearest" call: a fork-storm is a
+// SUSTAINED burst driven by potentially many spawns (Workflows that fan out internally, repeated
+// Agent/Task calls), so reporting one is misleading — the full list is the honest view.
 //
-// WHY: a burn peak with no causing tool-call is useless — the operator still has to hand-dig the
-// transcript to learn WHICH Agent()/Workflow()/Task() spawned the fork storm. Every peak reporter
-// (investigate_burn, --risk / burn-guard, watch, get_burn_status) attaches this so the peak NAMES
-// its cause.
+// WHY: a burn peak with no causing calls is useless — the operator still has to hand-dig the
+// transcript. Every peak reporter (investigate_burn, --risk / burn-guard, watch, get_burn_status)
+// attaches this so the peak lists WHAT spawned the storm, when, and how many of each.
 //
-// HOW: transcripts reach ~2 GB (base64 images), so we do NOT parse them in JS (readline + JSON.parse
-// on a 100 MB line is the exact slowness this avoids). DuckDB's read_json — already a runtime dep, it
-// backs the forensics store — streams the NDJSON in C++, projects only {timestamp,type,message}, and
-// extracts the spawn tool_use with a JSON path. The join is by TIMESTAMP (the append-only transcript
-// is chronological). `maximum_object_size` is raised past the largest image-bloated line so a fat
-// line is SKIPPED (ignore_errors), never aborting the read. Query verified against a live 21 MB
-// transcript before this shipped.
+// HOW: transcripts reach ~2 GB (base64 images), so we do NOT parse them in JS. DuckDB's read_json —
+// already a runtime dep, it backs the forensics store — streams the NDJSON in C++, projects only
+// {timestamp,type,message}, and extracts every spawn tool_use in the window with a JSON path. Reads
+// the JSONL (always present), so it works even when raw-body capture is OFF. maximum_object_size is
+// raised past the largest image-bloated line so a fat line is SKIPPED (ignore_errors), never aborting
+// the read. Query verified against a live transcript before shipping.
 //
 // Fast-path discipline: callers invoke this ONLY when a peak actually fires (never on the quiet
-// path), so --risk's ~50 ms budget is untouched; the streaming read is paid only to explain a real
-// peak.
+// path), so --risk's ~50 ms budget is untouched; the streaming read is paid only to explain a peak.
 
 import * as fs from 'fs'
 import * as path from 'path'
 import { claudeProjectsDirs } from './logReader'
 
-/** Tools whose call fans out / spawns work — i.e. the cause of a FORK_STORM / fan-out burst. */
+/** Tools whose call fans out / spawns work — the candidates behind a FORK_STORM / fan-out burst. */
 export const SPAWN_TOOLS = ['Task', 'Agent', 'Workflow', 'SendMessage'] as const
 
-export interface CausingCall {
-  /** The tool that spawned the burst, e.g. 'Workflow'. */
+/** One spawn tool-call found in the window. */
+export interface SpawnCall {
+  /** 1-based index in TIME order (oldest first) — the "numbered" view. */
+  n: number
+  /** When the call was issued (ISO). */
+  iso: string
+  /** The tool, e.g. 'Workflow' | 'Agent'. */
   tool: string
-  /** The tool_use input, VERBATIM (JSON) — the "exact call string" the operator asked for. */
+  /** input.subagent_type when present (Agent/Task), else null. */
+  subagentType: string | null
+  /** input.model when the call pinned one, else null (inherited). */
+  model: string | null
+  /** The tool_use input, VERBATIM (JSON) — the exact call, not a digest. */
   input: string
   /** The session whose transcript issued the call. */
   sessionId: string
-  /** The issuing turn's timestamp (ISO). */
-  iso: string
 }
 
-export interface CausingCallOptions {
-  /** The peak time. The causing spawn is the LAST one in [atMs - windowMs, atMs + forwardSlackMs]. */
+export interface CausingCallsOptions {
+  /** The peak time. Spawns are collected across [atMs - windowMs, atMs + forwardSlackMs]. */
   atMs: number
   /** Live peaks know it (SubagentStart payload). Resolves <sessionId>.jsonl directly. */
   sessionId?: string
-  /** investigate_burn knows the workspace, not the session — resolves that workspace's transcripts. */
+  /** investigate_burn knows the workspace — resolves that workspace's transcripts. */
   workspace?: string
   /** Explicit transcript file (tests / a known path). Takes precedence. */
   jsonlPath?: string
-  /** Look-back window before atMs (the fan-out precedes the child cache-writes). Default 15 min. */
+  /** How far back before atMs to collect spawns (a sustained burst spans time). Default 15 min. */
   windowMs?: number
-  /** Allowance AFTER atMs for clock skew between file mtime and transcript ts. Default 90 s. */
+  /** Allowance AFTER atMs for clock skew. Default 90 s. */
   forwardSlackMs?: number
   /** Spawn-tool filter. Default SPAWN_TOOLS. */
   tools?: readonly string[]
@@ -57,10 +64,12 @@ export interface CausingCallOptions {
 
 export type CausingCallReason = 'no-locator' | 'no-transcript' | 'none-in-window' | 'duckdb-unavailable'
 
-export interface CausingCallResult {
-  /** The verbatim causing call, or null when it cannot be found. NEVER fabricated. */
-  call: CausingCall | null
-  /** Why `call` is null — surfaced honestly so a peak says "cause unavailable (reason)". */
+export interface CausingCallsResult {
+  /** Every spawn call in the window, oldest-first (numbered). Empty when none / unresolved. */
+  calls: SpawnCall[]
+  windowFromIso: string
+  windowToIso: string
+  /** Set when `calls` is empty — the honest reason, never a fabricated call. */
   reason?: CausingCallReason
 }
 
@@ -69,7 +78,7 @@ const DEFAULT_FORWARD_SLACK_MS = 90_000
 // 256 MB: a single image-bloated turn (~100 MB base64) must SKIP under ignore_errors, not abort the
 // read. The largest object DuckDB will buffer for one line.
 const MAX_OBJECT_SIZE = 268_435_456
-// mtime is a coarse proxy for "this session was active near the peak" — a session file spans time, so
+// mtime is a coarse "this session was active near the peak" proxy — a session file spans time, so
 // widen the mtime gate by an hour on each side before the precise ts filter runs inside DuckDB.
 const MTIME_SLACK_MS = 3600_000
 const MAX_FILES = 8
@@ -80,12 +89,11 @@ function slugForWorkspace(ws: string): string {
 }
 
 /** Candidate transcript file(s) for this peak, most-recently-modified first (capped). */
-function resolveTranscripts(opts: CausingCallOptions): string[] {
+function resolveTranscripts(opts: CausingCallsOptions): string[] {
   if (opts.jsonlPath) return fs.existsSync(opts.jsonlPath) ? [opts.jsonlPath] : []
   const bases = opts.projectsDirs ?? claudeProjectsDirs()
 
   if (opts.sessionId) {
-    // The transcript file is <sessionId>.jsonl inside the session's workspace project dir.
     const out: string[] = []
     for (const base of bases) {
       let subs: string[]
@@ -129,74 +137,93 @@ const iso = (ms: number): string => new Date(ms).toISOString()
 const sqlStr = (s: string): string => `'${s.replace(/'/g, "''")}'`
 
 /**
- * The verbatim causing tool-call for a peak, or `{ call: null, reason }` — never a fabricated call.
- * DuckDB streams the candidate transcript(s) and returns the LAST spawn-class tool_use in the window.
+ * EVERY spawn tool-call in the peak window, numbered + time-ordered + verbatim — or an empty list
+ * with a reason (never fabricated). One DuckDB streaming pass over the candidate transcript(s).
  */
-export async function causingToolCall(opts: CausingCallOptions): Promise<CausingCallResult> {
+export async function causingToolCalls(opts: CausingCallsOptions): Promise<CausingCallsResult> {
+  const windowMs = opts.windowMs ?? DEFAULT_WINDOW_MS
+  const fwd = opts.forwardSlackMs ?? DEFAULT_FORWARD_SLACK_MS
+  const windowFromIso = iso(opts.atMs - windowMs)
+  const windowToIso = iso(opts.atMs + fwd)
+
   const files = resolveTranscripts(opts)
   if (files.length === 0) {
     const located = Boolean(opts.jsonlPath || opts.sessionId || opts.workspace)
-    return { call: null, reason: located ? 'no-transcript' : 'no-locator' }
+    return { calls: [], windowFromIso, windowToIso, reason: located ? 'no-transcript' : 'no-locator' }
   }
 
   let duck: typeof import('@duckdb/node-api')
-  try { duck = await import('@duckdb/node-api') } catch { return { call: null, reason: 'duckdb-unavailable' } }
+  try { duck = await import('@duckdb/node-api') } catch { return { calls: [], windowFromIso, windowToIso, reason: 'duckdb-unavailable' } }
 
-  const windowMs = opts.windowMs ?? DEFAULT_WINDOW_MS
-  const fwd = opts.forwardSlackMs ?? DEFAULT_FORWARD_SLACK_MS
-  const fromIso = iso(opts.atMs - windowMs)
-  const toIso = iso(opts.atMs + fwd)
   const tools = opts.tools ?? SPAWN_TOOLS
   const toolList = tools.map(sqlStr).join(', ')
   const fileList = files.map(sqlStr).join(', ')
 
-  // filename=true tags each row with its source file so a multi-session workspace scan still knows
-  // WHICH session issued the winning call. json_extract(... '$.content[*]') returns a LIST that
-  // UNNEST flattens to one row per content block; the last spawn tool_use by timestamp is the cause.
+  // filename=true tags each row with its source file so a multi-session workspace scan knows WHICH
+  // session issued each call. json_extract(... '$.content[*]') returns a LIST that UNNEST flattens to
+  // one row per content block; ORDER BY ts ASC gives the numbered, oldest-first burst timeline.
   const sql = `
     WITH lines AS (
       SELECT filename, timestamp, type, message
       FROM read_json([${fileList}], format='newline_delimited',
              columns={timestamp:'VARCHAR', type:'VARCHAR', message:'JSON'},
              maximum_object_size=${MAX_OBJECT_SIZE}, ignore_errors=true, filename=true)
-      WHERE type='assistant' AND timestamp >= ${sqlStr(fromIso)} AND timestamp <= ${sqlStr(toIso)}
+      WHERE type='assistant' AND timestamp >= ${sqlStr(windowFromIso)} AND timestamp <= ${sqlStr(windowToIso)}
     ),
     blocks AS (
       SELECT filename, timestamp, UNNEST(json_extract(message, '$.content[*]')) AS block FROM lines
     )
     SELECT filename, timestamp AS ts,
            json_extract_string(block, '$.name') AS tool,
+           json_extract_string(block, '$.input.subagent_type') AS subagent_type,
+           json_extract_string(block, '$.input.model') AS model,
            CAST(json_extract(block, '$.input') AS VARCHAR) AS input
     FROM blocks
     WHERE json_extract_string(block, '$.type') = 'tool_use'
       AND json_extract_string(block, '$.name') IN (${toolList})
-    ORDER BY timestamp DESC
-    LIMIT 1;`
+    ORDER BY timestamp ASC;`
 
   const inst = await duck.DuckDBInstance.create(':memory:')
   const con = await inst.connect()
   try {
     const rows = (await con.runAndReadAll(sql)).getRowObjects()
-    if (rows.length === 0) return { call: null, reason: 'none-in-window' }
-    const r = rows[0]
-    const file = String(r.filename)
-    return {
-      call: {
-        tool: String(r.tool),
-        input: String(r.input),
-        sessionId: opts.sessionId ?? path.basename(file, '.jsonl'),
-        iso: String(r.ts),
-      },
-    }
+    if (rows.length === 0) return { calls: [], windowFromIso, windowToIso, reason: 'none-in-window' }
+    const calls: SpawnCall[] = rows.map((r, i) => ({
+      n: i + 1,
+      iso: String(r.ts),
+      tool: String(r.tool),
+      subagentType: r.subagent_type == null ? null : String(r.subagent_type),
+      model: r.model == null ? null : String(r.model),
+      input: String(r.input),
+      sessionId: opts.sessionId ?? path.basename(String(r.filename), '.jsonl'),
+    }))
+    return { calls, windowFromIso, windowToIso }
   } finally {
     con.closeSync()
     inst.closeSync()
   }
 }
 
-/** One-line render for text reporters (--risk, watch). Full literal input (the user's explicit
- *  choice); a null result renders its honest reason, never a guess. */
-export function renderCausingCall(r: CausingCallResult): string {
-  if (r.call) return `cause-call: ${r.call.tool}(${r.call.input}) @ ${r.call.sessionId.slice(0, 8)} ${r.call.iso}`
-  return `cause-call: unavailable (${r.reason ?? 'unknown'})`
+/** Compact "Agent/general-purpose/opus×2, Workflow×2, …" tally of a spawn list, most-frequent first. */
+export function composition(calls: SpawnCall[]): string {
+  const by = new Map<string, number>()
+  for (const c of calls) {
+    const key = [c.tool, c.subagentType, c.model].filter(Boolean).join('/')
+    by.set(key, (by.get(key) ?? 0) + 1)
+  }
+  return [...by.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k}×${n}`).join(', ')
+}
+
+/** Numbered, time-ordered, measured block for text reporters (--risk, watch, investigate_burn).
+ *  Full literal input per call (the user's explicit choice); an empty result renders its honest
+ *  reason, never a guess. */
+export function renderCausingCalls(r: CausingCallsResult): string {
+  if (r.calls.length === 0) return `cause-calls: none (${r.reason ?? 'unknown'})`
+  const head = `cause-calls: ${r.calls.length} spawn call(s) in ${r.windowFromIso}→${r.windowToIso} — ${composition(r.calls)}`
+  const lines = r.calls.map(c => {
+    const tag = [c.tool, c.subagentType && `subagent_type=${c.subagentType}`, c.model && `model=${c.model}`]
+      .filter(Boolean).join(' ')
+    return `  ${c.n}. ${c.iso}  ${tag}  ${c.input}`
+  })
+  return [head, ...lines].join('\n')
 }

@@ -19,7 +19,7 @@ import { calcTokenCostUsd } from './shared/pricing'
 import { readHookEvents } from './hookEventStore'
 import { resolveBodiesReadScope } from './captureConfig'
 import { dataDir as agentlensDataDir } from './dataDir'
-import { causingToolCall, type CausingCall } from './causingToolCall'
+import { causingToolCalls, composition, type SpawnCall } from './causingToolCall'
 
 export const BURN_CAUSES = [
   'FORK_STORM',            // fan-out forked a fat parent into a cold cache — N × full-prefix writes
@@ -39,10 +39,12 @@ export interface BurnFinding {
   confidence: 'high' | 'medium' | 'low'
   verdict: string              // one sentence, with numbers
   evidence: Record<string, unknown>
-  /** The VERBATIM tool-call that spawned this peak — attached by attachCausingCalls (async, opt-in). */
-  causingCall?: CausingCall
-  /** Why the causing call could not be resolved — honest, never a fabricated call. */
-  causingCallUnavailable?: string
+  /** EVERY spawn call in this peak's window, numbered + verbatim (attached by attachCausingCalls). */
+  causingCalls?: SpawnCall[]
+  /** Compact composition tally of causingCalls, e.g. "Agent/general-purpose×3, Workflow×2". */
+  causingCallsComposition?: string
+  /** Why no causing calls could be resolved — honest, never a fabricated call. */
+  causingCallsUnavailable?: string
 }
 
 export interface BurnInvestigation {
@@ -274,8 +276,10 @@ function detectStormsAndRewrites(
       shareOfWindow: totalEquiv > 0 ? equiv / totalEquiv : 0,
       evidence: {
         window: `${iso(c.fromTs)} → ${iso(c.toTs)}`,
-        // Machine-readable anchor for attachCausingCalls: the burst START (the fan-out precedes it).
+        // Machine-readable anchor for attachCausingCalls: the burst START and END, so the causing-call
+        // scan covers the WHOLE sustained burst (a fan-out is many spawns over time, not one).
         peakStartMs: c.fromTs,
+        peakEndMs: c.toTs,
         fullPrefixWrites: c.spikes.length,
         coldWrites: c.coldSpikes,
         cacheCreationTokens: c.cc,
@@ -598,19 +602,26 @@ export async function attachCausingCalls(
     const ev = f.evidence
     const atMs = typeof ev.peakStartMs === 'number' ? (ev.peakStartMs as number) : undefined
     const wss = Array.isArray(ev.workspaces) ? (ev.workspaces as string[]) : []
-    // Only fan-out findings anchor a spawn call (a workspace + a burst-start time). Keep-warm and
-    // image-residency findings have no single spawning call, so they carry none.
+    // Only fan-out findings anchor spawn calls (a workspace + a burst-start time). Keep-warm and
+    // image-residency findings have no spawning call, so they carry none.
     if (atMs === undefined || wss.length === 0) continue
     // evidence.workspaces are shortWs'd (homedir → '~'); the transcript slug needs the absolute path.
     const first = wss[0]
     const workspace = first.startsWith('~') ? path.join(os.homedir(), first.slice(1)) : first
-    const r = await causingToolCall({ workspace, atMs, projectsDirs: opts.projectsDirs })
-    if (r.call) f.causingCall = r.call
-    else f.causingCallUnavailable = r.reason
+    // The whole window (fromTs → toTs), not just the start: a SUSTAINED burst is many spawns over
+    // time, and reporting one nearest-timestamp call misattributes it. atMs is the burst midpoint.
+    const toMs = typeof ev.peakEndMs === 'number' ? (ev.peakEndMs as number) : atMs
+    const mid = Math.round((atMs + toMs) / 2)
+    const r = await causingToolCalls({ workspace, atMs: mid, windowMs: Math.max(15 * 60_000, toMs - atMs), projectsDirs: opts.projectsDirs })
+    if (r.calls.length > 0) { f.causingCalls = r.calls; f.causingCallsComposition = composition(r.calls) }
+    else f.causingCallsUnavailable = r.reason
   }
-  const named = inv.findings.filter(f => f.causingCall).slice(0, 3)
-  if (named.length > 0) {
-    inv.verdict += ` Causing call${named.length > 1 ? 's' : ''}: ` +
-      named.map((f, i) => `${i + 1}. ${f.causingCall!.tool}(${f.causingCall!.input})`).join(' ')
+  // Numbered, timed, measured summary of the top finding's calls appended to the top-line verdict
+  // (the full verbatim inputs live in each finding's causingCalls[]).
+  const named = inv.findings.find(f => f.causingCalls && f.causingCalls.length > 0)
+  if (named && named.causingCalls) {
+    inv.verdict += ` Causing calls (${named.causingCalls.length}: ${named.causingCallsComposition}): ` +
+      named.causingCalls.map(c => `${c.n}. ${c.tool}${c.subagentType ? `/${c.subagentType}` : ''}` +
+        `${c.model ? `/${c.model}` : ''} @${c.iso}`).join('; ')
   }
 }
