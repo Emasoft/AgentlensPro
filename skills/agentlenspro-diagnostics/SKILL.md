@@ -51,6 +51,158 @@ If `agentlenspro` is not on PATH, (re)install the package — `npm install -g ag
 (or the Homebrew formula; developers working from a checkout use `npm link`). This skill never
 installs the server itself; the CLI starts it on demand.
 
+## START HERE — route your question to one command
+
+Read this table first. Most questions are answered by ONE command; the rest of this document is
+reference for when that command's output needs interpreting.
+
+| Your question, in the words you would use | Command |
+|---|---|
+| "Something is burning tokens RIGHT NOW — what?" | `agentlenspro --risk` (~40ms) then `investigate_burn` |
+| "My window drained. What used it, and who?" | `agentlenspro investigate_burn --windowHours 5` |
+| "Will this test round / batch / fan-out fit in the window? Should I even start?" | `agentlenspro budget --minutes N` |
+| "Run my batch and STOP it if the window won't survive" | `agentlenspro budget --minutes N --watch --with-risks` (exit 1 = abort) |
+| "Tell me whenever <metric> spikes, and keep telling me" | `agentlenspro watch --metric <m> --threshold N` |
+| "How much has THIS run consumed so far?" | `agentlenspro watch --metric <m> --mode since --every` |
+| "Am I about to do something that explodes?" (fan-out, workflow) | arm `agentlenspro --guard 15` in a Monitor first |
+| "Why is this ONE session so expensive?" | `get_session_burn_profile --sessionId <id>` |
+| "What exactly did agent X consume?" | `get_agent_tokens --agentId <id>` |
+| "What keeps breaking my prompt cache?" | `get_cache_break_causes`, then `get_cache_break_timeline --sessionId <id>` |
+| "Which skill or plugin is spending the money?" | `get_skill_attribution` |
+| "How long until my account's window runs out?" | `get_window_eta` |
+| "What is even IN my context, and what did it cost?" | `get_context_composition --sessionId <id>` |
+| "Which model/plan am I on; how full are the windows?" | `get_account_status` |
+| "Is this session running stale plugin code?" | `get_loaded_plugin_versions --staleOnly` |
+| "I don't know which tool I need" | `agentlenspro list --desc`, then `agentlenspro help <tool>` |
+
+**Two long-lived commands, and they are NOT interchangeable — pick by whether you want it to stop:**
+
+| | `budget` | `watch` |
+|---|---|---|
+| answers | "will the rate-limit window outlast a run of N minutes?" | "when does this metric spike?" |
+| ends? | **yes — exits on the verdict** (`1` = ABORT the run) | **no — reports every peak and keeps going** |
+| use when | you are about to start, or are running, something with a known duration | you want ongoing alerting with no duration in mind |
+
+## Taxonomy — what these numbers ARE (read before choosing `--mode`)
+
+Every metric belongs to exactly one **measurement kind**, and the kind decides which questions are
+answerable. This is why the commands refuse some combinations instead of returning a number: the
+refusal is the design, not a limitation.
+
+| Kind | Behaves like | Metrics | `total` | `rate` | `since` |
+|---|---|---|---|---|---|
+| **Cumulative** | an odometer — only ever rises | `input` `output` `cache-read` `cache-create` `tokens` `cost` `turns` | ✅ | ✅ | ✅ exact |
+| **Rolling gauge** | a fuel gauge on a window that empties behind you | `pct-5h` `pct-7d` `cost-5h` `cost-7d` | ✅ | ✅ | ⚠️ allowed, but can go **negative** as old usage leaves the window (the watch says so at arm time) |
+| **Live rate** | a speedometer — already per-minute | `cost-per-min` `tokens-per-min` | ✅ | ✅ read straight, never differenced | ❌ *"already a rate"* |
+| **Instant gauge** | a headcount — true only right now | `active-sessions` | ✅ | ✅ | ❌ *"no per-run total"* |
+
+Kind and scope are independent: `cost-per-min` is a live rate on the **account**, `tokens-per-min`
+a live rate on the **machine**.
+
+⚠️ **A threshold on a cumulative `total` fires exactly once and then never again** — an odometer
+that passes 100k never drops back under it, so the excursion cannot close. That is arithmetically
+right and useless as an alert, so the watch warns you at arm time and points at `--mode rate`
+(recurring spikes) or `--mode since` (this run only). Prefer those two for alerting.
+
+And exactly one **scope**, which decides what the number covers and what you must pass:
+
+| Scope | Covers | Requires | Served by |
+|---|---|---|---|
+| **session** | one conversation | `--session <id>` (get one from `get_recent_sessions`) | `get_agent_tokens` |
+| **account** | one OAuth account's rate-limit windows | nothing | `get_window_eta` |
+| **machine** | every session on this box | nothing | `get_burn_status` |
+
+**Three honesty rules the output obeys — trust them when reading it:**
+
+1. **`null` is not `0`.** A feed with no number says so and the watch reports it; it never prints a
+   `0` you might act on. If a value stops arriving, the watch says that too, once.
+2. **A refusal beats a plausible number.** `--metric cost --mode since --since <past>` is rejected
+   at parse time because a past cost cannot be reconstructed without per-message pricing — it does
+   not silently substitute a token count.
+3. **Provenance is labeled.** `capacity.source: same-plan-proxy` means the window cap was borrowed
+   from another account on your plan — good to an order of magnitude, not a hard boundary.
+
+**Exit codes are a contract** (both long-lived commands): `0` fine · `1` **ABORT** (budget only) ·
+`2` could not answer honestly · `64` your command line was wrong. A harness can branch on these;
+`64` deliberately never collides with `1`, so a typo can't masquerade as a real abort.
+
+## Worked examples
+
+**1 — "I'm about to run a 90-minute scenario suite. Is that safe, and stop it if not."**
+
+```bash
+agentlenspro budget --minutes 90                    # preflight; exit 0 = go, 1 = don't start
+# then, for the run itself, in ONE Monitor (budget verdict + burn guard on one stream):
+#   Monitor(command: "agentlenspro budget --minutes 90 --watch 120 --with-risks", persistent: true)
+```
+Wire the watch's **non-zero exit to your runner's kill path** — that is the whole abort mechanism.
+AgentlensPro decides; it does not own your process tree.
+
+**2 — "Something is eating the window right now."**
+
+```bash
+agentlenspro --risk                                 # who, what, how big — 40ms
+agentlenspro investigate_burn --windowHours 1       # ranked causes with evidence
+agentlenspro get_skill_attribution --window 6       # if a skill/plugin is the culprit
+```
+
+**3 — "Alert me whenever cache-creation spikes in this session."**
+
+```bash
+agentlenspro watch --metric cache-create --session <id> --mode rate --threshold 50000
+```
+`rate` not `total`: a cumulative total crosses once and stays above, so it can only ever fire a
+single alert — the watch warns you about exactly this if you ask for it.
+
+**4 — "How much has this run cost so far?"**
+
+```bash
+agentlenspro watch --metric cost --session <id> --mode since --every --interval 60 --for 90
+```
+`since` with no `--since` baselines at the moment the watch starts, which is what "this run" means.
+
+**5 — "Keep a durable record for a long unattended run."**
+
+```bash
+agentlenspro watch --metric tokens-per-min --threshold 2000000 \
+  --log ~/logs/burn.log --flush-ms 1000 --for 480
+```
+Writes coalesce to spare the SSD; at most 1s of lines is lost on an unclean kill and a line is
+never torn. Ctrl-C flushes and exits normally.
+
+**6 — "Post-mortem: my window ran out an hour ago."**
+
+```bash
+agentlenspro get_rate_limit_report                  # the stall episodes + what filled the window
+agentlenspro get_account_burners --account previous # if the account rotated
+```
+
+## When a command fails — read the failure, don't retry blindly
+
+| What you see | What it means | Do |
+|---|---|---|
+| `FAIL: server busy — backpressure — start it: …` | The server **is running** and is shedding load under admission control. **The "start it" hint is wrong in this case** — starting a second one is not the fix. | `agentlenspro --status` to confirm it is up and see `memory:`. Wait and retry; if `rss` is multi-GB the span store is large — consider `agentlenspro config` retention or `--purge-db` |
+| `FAIL: … server unreachable …` | Nothing is listening. | `agentlenspro server start` (or `setup`) |
+| exit **64** with `[watch]/[budget] FAIL:` | Your command line was wrong; nothing was armed. | Read the message — it names the valid values |
+| exit **2** | The question could not be answered honestly (no calibrated capacity, or the metric had no value). | Not a crash. Calibrate, or pick a metric with a live feed |
+| `[watch] … has stopped returning a value` | The feed went quiet mid-watch; the watch is still polling. | Check the session still exists / the server is healthy |
+| `capacity.source: same-plan-proxy` | The window cap is borrowed from another account on your plan. | Treat thresholds as soft; it is an estimate, not a boundary |
+| A watch that printed `armed` and nothing since | Usually correct — it is silent until something crosses. | Confirm with `--every` briefly, or `--for 1` to see it stop cleanly |
+
+## Where the rest of this document is
+
+| If you need | Go to |
+|---|---|
+| the four rules that keep a diagnosis cheap (batch, `--out`, never paste JSON) | **Rules for agents** |
+| every tool, by the question it answers | **High-value tools (cheat-sheet)** and **Context-composition & session-drill tools** |
+| realtime risk flags and what to DO about each | **Realtime guard** |
+| what the burn-gate blocks automatically | **The burn-gate** |
+| the full `budget` flag surface and the abort recipe | **Budgeting a timed run** |
+| the full `watch` flag surface, metrics, and durable logging | **Watching ANY metric for peaks** |
+| why a 20-minute gap is NOT a cold cache | **Cache TTL tracking** |
+| installing, repairing, starting, or stopping anything | **Install / repair**, **Server, daemon & telemetry control** |
+| turning AgentlensPro itself off | **Emergency stop** |
+
 ## Commands
 
 ```bash
