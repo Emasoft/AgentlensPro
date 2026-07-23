@@ -23,6 +23,7 @@ import {
 } from '../cli/spoolLaunchAgent'
 import { applyCaptureSetting, type CaptureToggleDeps } from '../cli/configCli'
 import { runSpoolCli } from '../cli/spoolCli'
+import { EXIT } from '../cli/cliErrors'
 import type { EnsureResult } from '../telemetryConfig'
 import { openStore, Store } from '../store/db'
 import { ingestPass } from '../store/ingestPass'
@@ -195,7 +196,8 @@ suite('spool CLI — ensure iff capture is on', () => {
   })
 
   test('an unknown subcommand fails with a usage error', () => {
-    assert.strictEqual(runSpoolCli(['bogus'], { ensureRamDisk: () => ({ mountPoint: '/x', sizeBytes: 1 }) }), 1)
+    // EX_USAGE 64 — a caller mistake, distinct from a runtime abort (1); see src/cli/cliErrors.ts.
+    assert.strictEqual(runSpoolCli(['bogus'], { ensureRamDisk: () => ({ mountPoint: '/x', sizeBytes: 1 }) }), EXIT.USAGE)
   })
 })
 
