@@ -2,7 +2,7 @@
 name: agentlens-burn-token-model
 description: "5h/7d account window drained fast / burning 1M+ tokens per minute / what is consuming all the tokens / impossible that a few Claude sessions burned the window / cost vs token window limit / cache-read dominating burn / OTEL and JSONL report different token numbers for the same session / session cost looks 100x too big or negative / all 3 OAuth accounts drained one after another over ~2 days / a huge idle main session re-woken every ~15 min by a heartbeat cron / plugin reloads forcing full cache-CREATE rewrites / what exhausted my 7-day rate-limit window with no visible rate-limit wall"
 ocd: 2026-07-08
-lmd: 2026-07-21
+lmd: 2026-07-23
 metadata:
   node_type: memory
   tier: hub
@@ -174,3 +174,14 @@ paths, usernames, emails or hostnames. The `memory-scope-leak` detector has flag
   of those. Scanned for every real secret shape (`sk-`/`ghp_`/`AKIA`/PEM/JWT/40-hex/`token=`) and for
   home paths, emails and hosts: all absent. DO grep the concrete secret shapes before demoting a page
   to LOCAL, and keep the verdict (`reports/janitor-memory-scope-leak/`) so it is not re-litigated.
+[^9]: [id:ATOM-INVB-BLIND, status:valid, keywords:"investigate_burn_says_nothing_burned no_API_traffic_found_in_the_window findings_zero_while_burn_status_shows_millions requestFilesScanned_0_complete_true raw_body_dir_ignores_spoolDir", ocd:2026-07-23, lmd:2026-07-23]
+  DO NOT read `investigate_burn`'s "No API traffic found in the window — nothing burned here"
+  as an absence of BURN, BECAUSE it is an absence of DATA: measured 2026-07-23 at one instant,
+  `get_burn_status` showed 2,315,075 tok/min across 7 sessions while `investigate_burn
+  --windowHours 1` returned findings 0, all totals 0 and coverage `requestFilesScanned: 0,
+  bytesOnDisk: 0, complete: TRUE, note "full coverage of the window"` — because
+  `src/burnInvestigator.ts:375` hardcodes `~/.agentlens/otel-bodies` and never calls
+  `effectiveBodiesDir()` (`src/captureConfig.ts:77`), so it misses every machine with a
+  configured `capture.spoolDir` (1,876 body files sat in the spool; the hardcoded dir held 0).
+  DO cross-check with `--risk` / `get_burn_status` (they read the live feed and never go blind),
+  and treat a zero-file scan as a BLIND SPOT, never as a clean verdict. Fix: TRDD-8N3KQW2R.
