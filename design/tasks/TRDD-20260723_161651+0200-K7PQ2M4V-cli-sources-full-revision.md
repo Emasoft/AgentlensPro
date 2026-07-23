@@ -3,7 +3,8 @@ trdd-id: K7PQ2M4V
 title: Full revision of the CLI sources for production readiness
 column: dev
 created: 2026-07-23T16:16:51+0200
-updated: 2026-07-23T16:16:51+0200
+updated: 2026-07-23T17:05:00+0200
+implementation-commits: [baf2ad3]
 current-owner: session-7877ae1f
 task-type: refactor
 approval-tier: 0
@@ -17,7 +18,22 @@ test-requirements: [unit]
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-23
 
-**State:** review in flight. No code changed yet.
+**State:** first finding found, fixed and shipped (`baf2ad3`) BEFORE the delegated review returned —
+it came from the defect class the reviewer structurally cannot see. The externalizer batches 1-5
+files per request, so cross-file duplication across 20 files is its blind spot; that is where the
+first real bug was. Delegate the per-file read, keep the whole-repo view yourself.
+
+**Landed so far:**
+
+- **The data directory was resolved in ten places, nine of them hardcoded.** `$DATA_DIR` is a
+  documented contract and the test suite's isolation mechanism, so a relocated store left every
+  reader on the default — empty, "nothing found". TRDD-8N3KQW2R's blind-spot one level up. One
+  resolver now: `src/dataDir.ts`, evaluated per call.
+- **Namespaced the variable** on the user's warning that `DATA_DIR` is collision-prone (Docker, CI,
+  data tooling all set it). `AGENTLENS_DATA_DIR` wins; the bare name is still honoured because
+  dropping a shipped contract would relocate real stores. `server status` prints which won.
+- **Fixed a test env leak this surfaced:** `killSwitch.test.ts` set `DATA_DIR` at module scope and
+  never restored it, so four "REAL captured bodies" suites had been silently skipping.
 
 **Origin:** the user's verdict on the CLI written earlier in the session — *"the code is still far
 from production ready. do a full revision of the cli sources, improve what you can."* Deferred once
