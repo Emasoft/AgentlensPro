@@ -19,6 +19,7 @@ import { readHookEvents, type HookEventRecord } from './hookEventStore'
 import { fmtFatSenders, type BodiesActivityReport } from './bodiesActivity'
 import { defaultBodiesDir } from './cacheCreationForensics'
 import { dataPath } from './dataDir'
+import { causingToolCall, type CausingCall } from './causingToolCall'
 
 /** WHO spawned, from SubagentStart events (payloads carry session_id/cwd/agent_type):
  *  top-2 spawning sessions with dir + agent types — culprit naming for FANOUT_BURST. */
@@ -51,6 +52,10 @@ export interface BurnRisk {
   active: boolean
   detail: string
   evidence?: Record<string, unknown>
+  /** The VERBATIM tool-call that triggered this risk — attached by attachRiskCausingCalls (async). */
+  causingCall?: CausingCall
+  /** Why the causing call could not be resolved — honest, never a fabricated call. */
+  causingCallUnavailable?: string
 }
 
 export interface BurnRiskReport {
@@ -132,7 +137,17 @@ export function checkBurnRisk(opts: BurnGuardOptions = {}): BurnRiskReport {
       ? `${starts.length} subagents launched in the last 2min (threshold ${fanoutThreshold}) — a fan-out is starting NOW` +
         `${startOrigins ? `. Spawners: ${startOrigins}` : ''}. If the parent session is large, every fork re-pays its prefix; if the cache is cold (>5min idle or a stall just ended), each pays it at the WRITE rate.`
       : `${starts.length} subagent start(s) in the last 2min`,
-    evidence: { subagentStarts2min: starts.length, threshold: fanoutThreshold },
+    evidence: {
+      subagentStarts2min: starts.length, threshold: fanoutThreshold,
+      // Anchor for the async causing-call lookup: WHERE the fan-out is spawning and WHEN. The
+      // spawning tool_use precedes the SubagentStart, so causingToolCall windows back from here.
+      ...(starts.length >= fanoutThreshold && starts[0]
+        ? {
+          spawnAtMs: starts[0].ts,
+          ...(typeof starts[0].payload?.cwd === 'string' ? { spawnWorkspace: starts[0].payload.cwd } : {}),
+        }
+        : {}),
+    },
   })
 
   const stops = events('StopFailure', now - 600_000, 20)
@@ -250,5 +265,32 @@ export function checkBurnRisk(opts: BurnGuardOptions = {}): BurnRiskReport {
     sources: { hookEvents: hooksAvailable, bodies: bodiesAvailable, burnStatus: opts.burnStatus != null },
     advice: active.length === 0 ? null
       : `PAUSE before spawning more agents: let in-flight waves settle, warm a cold cache with ONE agent first, and prefer cheap models for fan-out work.${windowClause}`,
+  }
+}
+
+/**
+ * Enrich each ACTIVE risk that anchors a fan-out (a workspace + a time) with the VERBATIM spawning
+ * tool-call. ASYNC and SEPARATE from checkBurnRisk (which stays sync) so the DuckDB transcript read
+ * runs ONLY when a peak actually fired — the quiet no-risk path never opens a transcript, keeping
+ * --risk's ~50 ms budget intact. Reads the JSONL (always present), so it works even when raw-body
+ * capture is OFF. Honest on failure; never fabricates a call. Mutates `report` in place.
+ */
+export async function attachRiskCausingCalls(
+  report: BurnRiskReport,
+  opts: { projectsDirs?: string[] } = {},
+): Promise<void> {
+  for (const r of report.risks) {
+    if (!r.active) continue
+    const ev = r.evidence
+    const atMs = ev && typeof ev.spawnAtMs === 'number' ? (ev.spawnAtMs as number) : undefined
+    const workspace = ev && typeof ev.spawnWorkspace === 'string' ? (ev.spawnWorkspace as string) : undefined
+    if (atMs === undefined || !workspace) continue // only risks that anchor a spawn call
+    const res = await causingToolCall({ workspace, atMs, projectsDirs: opts.projectsDirs })
+    if (res.call) {
+      r.causingCall = res.call
+      r.detail += ` Causing call: ${res.call.tool}(${res.call.input})`
+    } else {
+      r.causingCallUnavailable = res.reason
+    }
   }
 }

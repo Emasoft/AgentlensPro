@@ -35,7 +35,7 @@ import { scanCacheRiskCommands, type CacheRiskKind } from '../src/cacheRiskComma
 import { buildDroppedLogEventRecord, appendDroppedLogEvent, purgeLogEventBuckets, logEventsDiskUsage } from '../src/logEventSink'
 import { BodiesActivityTracker } from '../src/bodiesActivity'
 import { evaluateAgentGate, evaluateSendMessageGate, buildAdvisory, readTranscriptContext, resolveMessageTargetLiveness, type AgentGateState, type GateThresholds, type LaunchSpawner } from '../src/agentGate'
-import { checkBurnRisk } from '../src/burnGuard'
+import { checkBurnRisk, attachRiskCausingCalls } from '../src/burnGuard'
 import { loadHookRuntimeConfig, saveHookRuntimeConfig } from '../src/hookRuntimeConfig'
 import { ContextCompositionIndex } from '../src/contextCompositionIndex'
 import { LogReader, claudeProjectsDirs, type OpenCodeSqlFactory } from '../src/logReader'
@@ -3074,6 +3074,9 @@ const uiServer = http.createServer(async (req, res) => {
         recentEvents: recentHookEvents,
         bodiesActivity: bodiesActivityReport(),
       })
+      // Name the verbatim spawning call behind an active fan-out risk (reads the session JSONL —
+      // always present, so it works with raw-body capture off — only when a risk actually fired).
+      await attachRiskCausingCalls(report)
       res.writeHead(200, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify(report))
     } catch (e) {

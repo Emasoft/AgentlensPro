@@ -30,7 +30,7 @@ import type {
 } from './shared/summarizerTypes'
 import { buildCacheBreakReport } from './shared/cacheBreak'
 import { investigateBurn, attachCausingCalls } from './burnInvestigator'
-import { checkBurnRisk } from './burnGuard'
+import { checkBurnRisk, attachRiskCausingCalls } from './burnGuard'
 import { buildRateLimitReport } from './rateLimitReport'
 import { buildRuntimeInventory } from './runtimeInventory'
 import type { HookEventRecord } from './hookEventStore'
@@ -3425,7 +3425,7 @@ export function createMcpServer(opts: McpServerOptions): Server {
       }
       case 'check_burn_risk': {
         const a = args as { fanoutThreshold?: number; spikeTokensPerMin?: number }
-        result = checkBurnRisk({
+        const report = checkBurnRisk({
           burnStatus: getBurnStatus?.() ?? null,
           fanoutThreshold: a.fanoutThreshold,
           spikeTokensPerMin: a.spikeTokensPerMin,
@@ -3434,6 +3434,10 @@ export function createMcpServer(opts: McpServerOptions): Server {
           recentEvents: opts.getRecentHookEvents?.(),
           bodiesActivity: opts.getBodiesActivity?.() ?? null,
         })
+        // Name the verbatim spawning call behind an active fan-out risk (reads the JSONL only when a
+        // risk fired — the quiet path never opens a transcript).
+        await attachRiskCausingCalls(report)
+        result = report
         break
       }
       case 'get_cost_rollup': {
