@@ -14,7 +14,15 @@ import { agentlensDisabled, killSwitchPath } from './killSwitch'
 /** Count of hook events durably spooled to disk but not yet reingested (server was down / shedding).
  *  Zero in the healthy case; a non-zero, non-shrinking value means the daemon isn't draining. */
 export function hookSpoolDepth(): number {
-  try { return fs.readdirSync(path.join(dataDir(), 'hook-spool')).filter((n) => n.endsWith('.json')).length } catch { return 0 }
+  try {
+    return fs.readdirSync(spoolDirPath()).filter((n) => n.endsWith('.json')).length
+  } catch (e) {
+    // "No spool directory" genuinely means zero. Anything else — a permission denial, an I/O
+    // error — is NOT zero, and reporting it as zero tells the operator "healthy, nothing pending"
+    // while undelivered hooks pile up unread. Only ENOENT may answer 0.
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return 0
+    throw new Error(`cannot read the hook spool (${spoolDirPath()}): ${(e as Error).message}`)
+  }
 }
 
 /** Locate the standalone/server.js bundle. The CLI bundle lives NEXT TO it
@@ -33,7 +41,15 @@ export function findServerJs(): string {
   throw new Error(`server bundle missing (looked near ${__dirname}) — run \`node esbuild.js\` in the AgentlensPro repo first`)
 }
 
+// Paths under the data dir, each named ONCE. They were built inline at several call sites, so a
+// relocated store or a renamed file had to be found by grep rather than by following a symbol.
 function serverLogPath(): string { return path.join(dataDir(), 'server.log') }
+function pidfilePath(): string { return path.join(dataDir(), 'server.pid') }
+function spoolDirPath(): string { return path.join(dataDir(), 'hook-spool') }
+
+/** Heap cap for the server process. Named once: it appears in the direct spawn, the supervisor,
+ *  and the launchd plist template, and three copies drift the moment one is tuned. */
+export const DEFAULT_MAX_OLD_SPACE_MB = 6144
 
 /** Start the standalone server if the MCP endpoint is unreachable; wait until it answers.
  *
@@ -57,30 +73,51 @@ export async function ensureServer(): Promise<void> {
   // stdout/stderr go to a log file, NOT /dev/null — when the server dies at boot (port
   // conflict, corrupt store) the reason must be readable, or every failure looks like
   // "did not become ready".
+  // If the log cannot be opened we still start — but we REMEMBER why, because the old code sent
+  // the streams to /dev/null and then told the user to "check server.log". They would find an
+  // empty file and no reason, which is the one outcome the log exists to prevent.
   let outFd: number | 'ignore'
-  try { fs.mkdirSync(dataDir(), { recursive: true }); outFd = fs.openSync(serverLogPath(), 'a') } catch { outFd = 'ignore' }
-  const child = spawn(process.execPath, ['--max-old-space-size=6144', serverJs], {
+  let logProblem = ''
+  try {
+    fs.mkdirSync(dataDir(), { recursive: true })
+    outFd = fs.openSync(serverLogPath(), 'a')
+  } catch (e) {
+    outFd = 'ignore'
+    logProblem = ` (server output is being DISCARDED — ${serverLogPath()} could not be opened: ${(e as Error).message})`
+  }
+  const child = spawn(process.execPath, [`--max-old-space-size=${DEFAULT_MAX_OLD_SPACE_MB}`, serverJs], {
     cwd: path.dirname(path.dirname(serverJs)),
     detached: true,
     stdio: ['ignore', outFd, outFd],
   })
+  // Without this, an async spawn failure (EMFILE, EAGAIN) emits an unhandled 'error' event and the
+  // process dies with a raw stack trace instead of the actionable message below.
+  let spawnError: Error | null = null
+  child.on('error', (err) => { spawnError = err })
   child.unref()
   if (typeof outFd === 'number') fs.closeSync(outFd)
   for (let i = 0; i < 80; i++) { // up to 20s — DB open + first scan can be slow
     await sleep(250)
+    if (spawnError) throw new Error(`failed to spawn the server: ${(spawnError as Error).message}`)
     try { await init(); console.log(`server started (pid ${child.pid}) — logs: ${serverLogPath()}`); return } catch { /* keep polling */ }
   }
-  throw new Error(`server did not become ready within 20s — check ${serverLogPath()}`)
+  throw new Error(`server did not become ready within 20s — check ${serverLogPath()}${logProblem}`)
 }
 
 /** The server's PID, through a fallback chain that also covers builds predating
  *  /api/server-stats: stats endpoint → pidfile → lsof on the MCP port. Null when nothing runs. */
 export async function findServerPid(): Promise<number | null> {
-  try { return Number((await apiRequest('GET', '/api/server-stats')).pid) } catch { /* older build or down */ }
+  // Guard the conversion: a stats payload without `pid` yields NaN, and NaN is not null, so every
+  // downstream `pid === null` check passes it straight through to process.kill(NaN) — an obscure
+  // throw instead of the pidfile/lsof fallbacks that would have found the process.
+  try {
+    const pid = Number((await apiRequest('GET', '/api/server-stats')).pid)
+    if (Number.isFinite(pid) && pid > 0) return pid
+  } catch { /* older build or down */ }
   // Is anything answering MCP at all? If not, the server is genuinely down.
   try { await init() } catch { return null }
   try {
-    const pid = Number(fs.readFileSync(path.join(dataDir(), 'server.pid'), 'utf-8').trim())
+    const pid = Number(fs.readFileSync(pidfilePath(), 'utf-8').trim())
     if (pid > 0) { process.kill(pid, 0); return pid }
   } catch { /* no/stale pidfile (pre-pidfile build) — fall through to lsof */ }
   const port = new URL(mcpEndpoint()).port
@@ -150,7 +187,7 @@ export async function showStatus(): Promise<void> {
     console.log(`server: NOT RUNNING (${(e as Error).message})`)
     // The pidfile may still name a live process bound to different ports, or be stale.
     try {
-      const pid = Number(fs.readFileSync(path.join(dataDir(), 'server.pid'), 'utf-8').trim())
+      const pid = Number(fs.readFileSync(pidfilePath(), 'utf-8').trim())
       try { process.kill(pid, 0); console.log(`pidfile: ${pid} (process alive — a server may be up on non-default ports)`) }
       catch { console.log(`pidfile: ${pid} (stale — process gone)`) }
     } catch { /* no pidfile */ }
@@ -227,7 +264,7 @@ export function runSupervise(): void {
   }
   const serverJs = findServerJs()
   const crashLog = path.join(dataDir(), 'crash.log')
-  const maxOldSpace = String(Number(process.env.AGENTLENS_MAX_OLD_SPACE_MB) || 6144)
+  const maxOldSpace = String(Number(process.env.AGENTLENS_MAX_OLD_SPACE_MB) || DEFAULT_MAX_OLD_SPACE_MB)
   const maxBackoffMs = Number(process.env.AGENTLENS_SUPERVISE_MAX_BACKOFF_MS) || 30_000
 
   try { fs.mkdirSync(dataDir(), { recursive: true }) } catch { /* best effort */ }
@@ -400,7 +437,7 @@ const LAUNCHD_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
   <key>EnvironmentVariables</key>
   <dict>
     <key>AGENTLENS_MAX_OLD_SPACE_MB</key>
-    <string>6144</string>
+    <string>@MAXHEAP@</string>
   </dict>
 </dict>
 </plist>
@@ -414,10 +451,14 @@ function launchAgentsPath(overrideDir?: string): string {
  *  `launchAgentsDir` override make it testable without touching the real system. */
 export function daemonInstall(opts: { launchAgentsDir?: string; load?: boolean } = {}): { path: string; installed: boolean } {
   if (process.platform !== 'darwin') {
-    console.log('daemon install: launchd is macOS-only. On linux, run a systemd USER service:')
-    console.log(`  ~/.config/systemd/user/agentlens.service → ExecStart=${process.execPath} ${cliJsPath()} daemon start --supervise`)
-    console.log('  then: systemctl --user enable --now agentlens.service')
-    return { path: '', installed: false }
+    // THROW rather than print-and-return: nothing was installed, and exiting 0 makes a script
+    // (or an agent) treat a no-op as a successful install. The recipe still reaches the operator
+    // because it is in the error text.
+    throw new Error(
+      'daemon install: launchd is macOS-only — nothing was installed. On linux, run a systemd USER service:\n'
+      + `  ~/.config/systemd/user/agentlens.service → ExecStart=${process.execPath} ${cliJsPath()} daemon start --supervise\n`
+      + '  then: systemctl --user enable --now agentlens.service',
+    )
   }
   const cli = cliJsPath()
   const plistPath = launchAgentsPath(opts.launchAgentsDir)
@@ -426,15 +467,30 @@ export function daemonInstall(opts: { launchAgentsDir?: string; load?: boolean }
     .replace(/@CLI@/g, cli)
     .replace(/@REPO@/g, path.dirname(path.dirname(cli)))
     .replace(/@HOME@/g, os.homedir())
+    .replace(/@MAXHEAP@/g, String(DEFAULT_MAX_OLD_SPACE_MB))
   fs.mkdirSync(path.dirname(plistPath), { recursive: true })
-  fs.writeFileSync(plistPath, filled)
+  // temp + rename: an interrupted write would otherwise leave a truncated plist that launchd may
+  // load malformed or refuse silently. Atomic on the same filesystem.
+  const tmpPlist = `${plistPath}.tmp`
+  fs.writeFileSync(tmpPlist, filled)
+  fs.renameSync(tmpPlist, plistPath)
+  let loaded = false
   if (opts.load !== false) {
     // `load -w` (re)loads and marks it enabled; a re-install first unloads so the new plist takes.
     try { execFileSync('launchctl', ['unload', plistPath], { stdio: 'ignore' }) } catch { /* not loaded yet */ }
-    try { execFileSync('launchctl', ['load', '-w', plistPath], { stdio: 'ignore' }) } catch (e) { console.warn(`launchctl load failed: ${String(e)} — the plist is written; load it manually.`) }
+    try {
+      execFileSync('launchctl', ['load', '-w', plistPath], { stdio: 'ignore' })
+      loaded = true
+    } catch (e) {
+      console.warn(`launchctl load failed: ${String(e)} — the plist is written; load it manually.`)
+    }
   }
-  console.log(`daemon install: launchd agent → ${plistPath} (${opts.load !== false ? 'loaded' : 'written, not loaded'})`)
-  return { path: plistPath, installed: true }
+  // Report what HAPPENED, not what was requested. The old message printed "loaded" whenever load
+  // was asked for, so a failed launchctl told the user the daemon was running while it was not —
+  // and telemetry went missing with a success message on screen.
+  const state = opts.load === false ? 'written, not loaded' : loaded ? 'loaded' : 'written, LOAD FAILED — load it manually'
+  console.log(`daemon install: launchd agent → ${plistPath} (${state})`)
+  return { path: plistPath, installed: opts.load === false ? true : loaded }
 }
 
 /** Remove the launchd agent (unload + delete the plist). Idempotent. */
