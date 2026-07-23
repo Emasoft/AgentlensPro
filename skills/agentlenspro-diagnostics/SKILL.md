@@ -275,6 +275,15 @@ For a batch with a known duration (a test round, a sweep), the guard is only hal
 watches the *rate*. Run the preflight in **Budgeting a timed run** below first to learn whether the
 window survives the run at all, and to get the abort condition.
 
+**Monitor is not always available, and the failure is silent** — per the Claude Code tools
+reference it does not exist on Amazon Bedrock, Google Cloud's Agent Platform or Microsoft Foundry,
+nor when `DISABLE_TELEMETRY` or `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is set (a plausible
+combination on a machine running a telemetry product). It also inherits **Bash** permission rules,
+so a restrictive allowlist can deny `agentlenspro` here exactly as it would in a shell. When
+Monitor is unavailable, do not skip the guard — poll it instead: `agentlenspro --risk` is a ~40ms
+REST call printing only the ACTIVE risks, so a checkpoint in your own loop (step 3 below) covers
+the same ground without the tool.
+
 | Risk | Meaning | What to DO when it fires |
 |---|---|---|
 | `FANOUT_BURST` | ≥5 subagents launched in 2min (hook events) | If the parent session is fat or the cache cold, STOP launching; warm with ONE agent first |
@@ -359,6 +368,12 @@ rather than needing to be polled):
 ```
 Monitor(command: "agentlenspro --guard 15", description: "burn guard — <batch name>", persistent: true)
 ```
+
+`persistent: true` is right for a batch (no deadline guessing — `timeout_ms` is then ignored and
+may be omitted), but it means the watch lives until the SESSION ends. **`TaskStop` it when the
+batch finishes**, or a guard for a 90-minute run keeps emitting for the rest of the day. If Monitor
+is unavailable in this environment (see the guard section above), fold `agentlenspro --risk` into
+the step-3 checkpoint loop instead.
 
 **3 — Re-check at checkpoints, not just at the start.** The $/min at minute 0 is not the $/min at
 minute 40 — one fan-out moves it by an order of magnitude. Re-run `get_window_eta` after each phase
