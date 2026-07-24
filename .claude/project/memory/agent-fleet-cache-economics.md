@@ -20,9 +20,13 @@ Two controlled experiments run via the Workflow tool, measured by reading each s
   base is re-read (0.1×) on EVERY request of EVERY worker.
 - **Concurrent identical spawns RACE the cache:** 3 byte-identical agents launched within ~1 s
   EACH paid the full 186k cold write (cache_read 0) — the cache entry only exists once the first
-  request *completes*. A 4th identical agent launched 5 s AFTER the wave hit 100%:
-  cache_creation 0, cache_read 186,076 → a **12.5× cheaper boot**. Consequence: **prime one
-  worker first, then `pipeline()` the rest** — never open with a `parallel()` wave of twins.
+  request *completes*. A 4th identical agent launched 5 s AFTER the wave COMPLETED hit 100%:
+  cache_creation 0, cache_read 186,076 → a **12.5× cheaper boot**. Consequence: **AWAIT one
+  warm completion first, then fan out** — never open with a `parallel()` wave of twins. The
+  primer need only be a TRIVIAL same-prefix warm request (final lines "warm-up, do nothing"),
+  so no real item is serialized; a fixed launch stagger is NOT equivalent — it races the first
+  request's time-to-first-response (10–60s+, variable), and Workflow scripts have no
+  sleep/timer anyway (an awaited `agent()` completion is the only wait primitive).
 - **Inline vs Skill-tool loading (A/B, 6 agents, mock 4-skill pipeline with a forced retry):**
   warm steady-state ≈ 699k (inline) vs ≈ 795k (lazy) weighted/agent → **inlining always-used
   skills is ~12% cheaper** and makes the request count deterministic (17 vs 20–30). But the
@@ -47,11 +51,18 @@ See also: [[cache-ttl-model]] (the TTL regimes behind the 5-min subagent window)
 
 ## Notes and lessons learned
 
-[^1]: [id:ATOM-WAVE-RACE, status:valid, keywords:"parallel_wave_cold_write cache_race identical_agents_no_sharing prime_then_pipeline fan_out_boot_tax", ocd:2026-07-24, lmd:2026-07-24]
-  DO NOT launch a parallel wave of identical agents expecting "first writes, rest read",
-  BECAUSE the cache entry exists only after the first request COMPLETES — simultaneous twins
-  all miss and each pays the full cold write (measured: 3/3 paid 186k). DO prime with ONE
-  worker, then pipeline the rest; a 5s stagger measured a 100% hit (12.5× cheaper boot).
+[^1]: [id:ATOM-WAVE-RACE, status:valid, keywords:"parallel_wave_cold_write cache_race identical_agents_no_sharing prime_then_pipeline fan_out_boot_tax launch_stagger_races_ttft warm_request_prime", ocd:2026-07-24, lmd:2026-07-24]
+  DO NOT open with a parallel wave of identical agents OR a fixed launch stagger ("5s apart"),
+  BECAUSE the cache entry exists only after the first request COMPLETES and time-to-first-response
+  varies 10–60s+ — simultaneous twins 3/3 paid the full 186k write, and a stagger just races TTFT.
+  DO AWAIT one trivial same-prefix warm request, then fan out (boot after completion: 100% hit,
+  12.5× cheaper).
+
+[^1a]: [id:ATOM-STAG-AMBG, status:valid, keywords:"stagger_after_launch_vs_completion ambiguous_measurement_phrasing 5s_stagger_misread", ocd:2026-07-24, lmd:2026-07-24]
+  DO NOT record a timing measurement as "N s after the wave" without naming the anchor,
+  BECAUSE this page's original "5s stagger → 100% hit" (anchor: wave COMPLETION) was read as
+  "5s after LAUNCH suffices" and nearly shipped a racing design. DO anchor every latency claim
+  to its event (launch vs first-response completion) when writing it down.
 
 [^2]: [id:ATOM-REQC-1ST, status:valid, keywords:"request_count_dominates skill_loading_second_order inline_vs_skill_tool wandering_agent_cost tool_call_boundary", ocd:2026-07-24, lmd:2026-07-24]
   DO NOT optimize skill-loading strategy before request-count discipline, BECAUSE each request
