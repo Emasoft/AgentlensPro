@@ -34,7 +34,8 @@ dedicated warmer is pure waste — any main turn each ~55 min suffices.[^2] The 
 matrix is encoded in the diagnostics by TRDD-VY1IUVUM (`ttlAssumedMin` + `ttlSource`
 provenance, measured-TTL falsifier). Governed by [[agentlens-burn-token-model]]; see also
 [[agentlenspro-ops-lessons]], [[burn-seismic-statistical-model]] (the detector that classifies a
-cold rewrite statistically — COLD_REWRITE tag, thrash-vs-marathon decomposition).
+cold rewrite statistically — COLD_REWRITE tag, thrash-vs-marathon decomposition),
+[[agent-fleet-cache-economics]] (measured spawn/boot economics under these TTL regimes).
 
 ## Notes and lessons learned
 

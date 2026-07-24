@@ -48,7 +48,8 @@ a heuristic verdict. The load-bearing design facts:
 rank by excess, and disclose calibration — never mean±kσ on a raw cost series.
 
 See also: [[agentlens-burn-token-model]] (the cost/cache economics the $ series is built from),
-[[cache-ttl-model]] (why cold writes spike).
+[[cache-ttl-model]] (why cold writes spike), [[agent-fleet-cache-economics]] (measured fleet
+spawn/boot economics — what a FANOUT_RATE event's culprits did wrong).
 
 ## Notes and lessons learned
 

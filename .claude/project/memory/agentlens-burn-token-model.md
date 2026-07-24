@@ -110,7 +110,8 @@ paths, usernames, emails or hostnames. The `memory-scope-leak` detector has flag
 "high-entropy secret"; that is a verified false positive on long identifiers, not a leak.[^8]
 
 See also: [[burn-seismic-statistical-model]] (the calibrated statistical detector built ON this
-cost model — marked-point-process null, PELT events, per-event root-cause attribution).
+cost model — marked-point-process null, PELT events, per-event root-cause attribution);
+[[agent-fleet-cache-economics]] (measured fleet spawn/cache-race/inline-vs-lazy economics).
 
 ## Notes and lessons learned
 [^1]: [ocd:2026-07-08 lmd:2026-07-08] The statusline event path originally carried only a total
