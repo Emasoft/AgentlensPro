@@ -47,7 +47,11 @@ cache) instead of fresh spawns.
 
 See also: [[cache-ttl-model]] (the TTL regimes behind the 5-min subagent window),
 [[agentlens-burn-token-model]] (the cost/weight doctrine), [[burn-seismic-statistical-model]]
-(FANOUT_RATE — the detector that catches fleets violating these rules).
+(FANOUT_RATE — the detector that catches fleets violating these rules),
+[[workflow-fleet-launch-economics]] (USER scope — the portable launch rules these
+measurements produced, incl. the Workflow-sandbox constraints and the account-wide 429
+hazard), [[read-once-edit-batched]] (USER scope — the file-touching half: merged
+read-find-fix workers, staleness signals, zero-LLM discovery).
 
 ## Notes and lessons learned
 
