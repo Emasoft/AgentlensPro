@@ -2,7 +2,7 @@
 name: cache-ttl-model
 description: "keepWarm says cold turns but the session felt warm / is the cache TTL 5 minutes or 1 hour / why did the heartbeat look like it was rewriting the cache / do fork pingers save money / when is cache_creation a real cold rewrite — the verified TTL-regime matrix and measured keep-warm economics"
 ocd: 2026-07-11
-lmd: 2026-07-11
+lmd: 2026-07-24
 metadata:
   node_type: memory
   type: project
@@ -33,7 +33,8 @@ of ANY kind re-reads the full prefix at the 0.1× rate ≈ $0.50/turn; a 230s fo
 dedicated warmer is pure waste — any main turn each ~55 min suffices.[^2] The TTL-regime
 matrix is encoded in the diagnostics by TRDD-VY1IUVUM (`ttlAssumedMin` + `ttlSource`
 provenance, measured-TTL falsifier). Governed by [[agentlens-burn-token-model]]; see also
-[[agentlenspro-ops-lessons]].
+[[agentlenspro-ops-lessons]], [[burn-seismic-statistical-model]] (the detector that classifies a
+cold rewrite statistically — COLD_REWRITE tag, thrash-vs-marathon decomposition).
 
 ## Notes and lessons learned
 

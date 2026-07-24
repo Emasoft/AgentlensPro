@@ -2,7 +2,7 @@
 name: agentlens-burn-token-model
 description: "5h/7d account window drained fast / burning 1M+ tokens per minute / what is consuming all the tokens / impossible that a few Claude sessions burned the window / cost vs token window limit / cache-read dominating burn / OTEL and JSONL report different token numbers for the same session / session cost looks 100x too big or negative / all 3 OAuth accounts drained one after another over ~2 days / a huge idle main session re-woken every ~15 min by a heartbeat cron / plugin reloads forcing full cache-CREATE rewrites / what exhausted my 7-day rate-limit window with no visible rate-limit wall"
 ocd: 2026-07-08
-lmd: 2026-07-23
+lmd: 2026-07-24
 metadata:
   node_type: memory
   tier: hub
@@ -108,6 +108,9 @@ per-turn-context` loses on both factors in a woken marathon). Evidence (gitignor
 **Scope note:** this page is PROJECT scope (git-tracked and pushed) and is clean — no secrets, home
 paths, usernames, emails or hostnames. The `memory-scope-leak` detector has flagged it for a
 "high-entropy secret"; that is a verified false positive on long identifiers, not a leak.[^8]
+
+See also: [[burn-seismic-statistical-model]] (the calibrated statistical detector built ON this
+cost model — marked-point-process null, PELT events, per-event root-cause attribution).
 
 ## Notes and lessons learned
 [^1]: [ocd:2026-07-08 lmd:2026-07-08] The statusline event path originally carried only a total
