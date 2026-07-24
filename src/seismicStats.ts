@@ -17,6 +17,10 @@
 //   • STA/LTA trigger — Allen, BSSA 68(5), 1978. The standard seismic onset/offset event detector.
 //   • CUSUM — Page, Biometrika 41, 1954. Sequential mean-shift (change-point) detector.
 //   • Lanczos lgamma — Lanczos, SIAM 1964. Accurate log-Γ for the Poisson sum.
+//   • CFAR local background — Finn & Johnson (CA-CFAR, RCA Rev. 29, 1968) with GUARD cells and the
+//     trimmed-mean variant for a NON-HOMOGENEOUS background (Gandhi & Kassam, IEEE T-AES 24(4),
+//     1988; cf. Rohling's OS-CFAR, IEEE T-AES 19(4), 1983). Estimates the background LOCALLY around
+//     each cell so a slowly-varying (day/night) level cannot be mistaken for an anomaly.
 
 // ───────────────────────── robust location / scale ─────────────────────────
 
@@ -75,6 +79,99 @@ export function modifiedZScores(xs: readonly number[], b: RobustBaseline = robus
   return xs.map(x => modifiedZ(x, b.median, b.mad, b.meanAD))
 }
 
+// ───────────────────────── CFAR local background (nonstationary null) ─────────────────────────
+
+export interface CfarOptions {
+  /** Reference cells per side (leading AND lagging). 0 disables (every cell returns null). */
+  reference: number
+  /** Guard cells per side, excluded from the reference sample together with the cell under test.
+   *  An event spills into the minutes next to its peak, and a baseline built from those cells would
+   *  be raised by the very anomaly it is supposed to detect (CFAR self-masking). */
+  guard: number
+  /** Fraction trimmed from EACH tail before the mean (TM-CFAR). The upper trim is what makes the
+   *  estimate survive an interfering event INSIDE the reference window; contamination beyond this
+   *  fraction starts to raise the local level. Default 0.25. */
+  trim?: number
+  /** Minimum usable reference cells; below it the cell yields null so the CALLER can fall back to a
+   *  global estimate rather than trust a 3-sample background (series edges, sparse masks). Default 30. */
+  minReference?: number
+  /** Optional mask: only cells with include[j] === true enter the reference sample (e.g. ACTIVE
+   *  buckets for a hurdle model). */
+  include?: readonly boolean[]
+}
+
+export interface CfarCell {
+  /** Usable reference cells behind this estimate (after guard + mask + edge truncation). */
+  n: number
+  /** Trimmed mean of the reference sample — the local background LEVEL (TM-CFAR). */
+  trimmedMean: number
+  /** WINSORIZED variance of the same sample (Tukey; the standard scale companion to a trimmed
+   *  mean — cf. Yuen 1974): the trimmed tails are CAPPED at the boundary values instead of dropped,
+   *  so a burst inside the window cannot inflate it while the estimate keeps all n cells and avoids
+   *  the systematic shrinkage that dropping them causes. This is what measures the background's
+   *  OVER-DISPERSION (variance ≫ mean ⇒ counts are not Poisson). */
+  winsorVar: number
+  /** Robust location/scale of the same sample (median/MAD/meanAD/σ̂) for a robust local z. */
+  baseline: RobustBaseline
+}
+
+/** Per-cell LOCAL background estimate — the CFAR family (Finn & Johnson 1968; trimmed-mean variant
+ *  Gandhi & Kassam 1988). For each index the reference sample is the cells at offsets d with
+ *  `guard < |d| ≤ guard + reference`, so the cell under test and its guard band never contribute.
+ *
+ *  Why this exists: a GLOBAL median/λ̂ asserts a STATIONARY background. A real activity series is
+ *  not stationary (day/night, work-session regimes), and under one global level every busy-but-
+ *  NORMAL bucket reads as an anomaly — the measured false-alarm rate then sits far above α no
+ *  matter how exact the tail probabilities are. A local background restores the constant-false-
+ *  alarm property the whole detector depends on.
+ *
+ *  Known limit (documented, not hidden): an event lasting longer than `trim`·(reference cells) —
+ *  or than the median's 50% breakdown for the robust baseline — partially sets its own background
+ *  and is attenuated. Widen `reference` (or rely on the changepoint segmentation, which is
+ *  independent of this estimate) for regime-scale events. */
+export function cfarLocalStats(xs: readonly number[], o: CfarOptions): (CfarCell | null)[] {
+  const n = xs.length
+  const R = Math.max(0, Math.floor(o.reference))
+  const G = Math.max(0, Math.floor(o.guard))
+  const trim = Math.min(0.49, Math.max(0, o.trim ?? 0.25))
+  const minRef = Math.max(1, Math.floor(o.minReference ?? 30))
+  const out = new Array<CfarCell | null>(n).fill(null)
+  if (R === 0) return out
+  for (let i = 0; i < n; i++) {
+    const sample: number[] = []
+    for (let d = -(G + R); d <= G + R; d++) {
+      if (Math.abs(d) <= G) continue // the cell under test + its guard band
+      const j = i + d
+      if (j < 0 || j >= n) continue
+      if (o.include && !o.include[j]) continue
+      sample.push(xs[j])
+    }
+    if (sample.length < minRef) continue // caller falls back to the global estimate
+    const s = sample.sort((a, b) => a - b)
+    // Keep at least one element even for a tiny sample: k is capped at ⌊(n−1)/2⌋.
+    const k = Math.min(Math.floor(s.length * trim), Math.floor((s.length - 1) / 2))
+    let sum = 0
+    for (let t = k; t < s.length - k; t++) sum += s[t]
+    // Winsorized scale: clamp to the trim boundaries (s is sorted, so clamping ≡ replacing the
+    // dropped tails with the boundary order statistics), then the usual mean/variance over all n.
+    const lo = s[k], hi = s[s.length - 1 - k]
+    let wsum = 0
+    for (let t = 0; t < s.length; t++) wsum += Math.min(hi, Math.max(lo, s[t]))
+    const winMean = wsum / s.length
+    let wss = 0
+    for (let t = 0; t < s.length; t++) {
+      const d = Math.min(hi, Math.max(lo, s[t])) - winMean
+      wss += d * d
+    }
+    out[i] = {
+      n: s.length, trimmedMean: sum / (s.length - 2 * k),
+      winsorVar: s.length > 1 ? wss / (s.length - 1) : 0,
+      baseline: robustBaseline(s),
+    }
+  }
+  return out
+}
+
 // ───────────────────────── Poisson tail + lgamma ─────────────────────────
 
 const LANCZOS_G = 7
@@ -105,6 +202,32 @@ export function poissonSF(k: number, lambda: number): number {
   const lnL = Math.log(lambda)
   let cdf = 0 // Σ_{i=0}^{k−1} pmf(i),  pmf(i) = exp(i·lnλ − λ − lnΓ(i+1))
   for (let i = 0; i < k; i++) cdf += Math.exp(i * lnL - lambda - lgamma(i + 1))
+  return Math.max(0, Math.min(1, 1 - cdf))
+}
+
+/** Negative-binomial (Poisson–Gamma mixture) upper tail P(X ≥ k | mean, variance) — the OVER-DISPERSED
+ *  count law. Real arrival counts are almost never Poisson: turns arrive in CLUSTERS (one action
+ *  triggers a burst; sessions start and stop), so variance ≫ mean and a Poisson tail declares
+ *  ordinary busy minutes improbable — measured on live fleet data as a 13.5% background
+ *  false-alarm share where 5% was expected. The NB adds exactly one parameter for that excess
+ *  variance and CONTAINS Poisson as its limiting case (variance → mean ⇒ r → ∞), so using it can
+ *  only remove false alarms, never manufacture significance.
+ *
+ *  Method-of-moments parameterization (Cameron & Trivedi, *Regression Analysis of Count Data*):
+ *  success probability p = μ/σ², size r = μ²/(σ²−μ); pmf(i) = Γ(i+r)/(Γ(r)·i!)·p^r·(1−p)^i, summed
+ *  in log-space through {@link lgamma}. Falls back to the exact Poisson tail when the sample is NOT
+ *  over-dispersed (σ² ≤ μ) — under-dispersion is not evidence for a wider law. */
+export function negBinomSF(k: number, mean: number, variance: number): number {
+  if (k <= 0) return 1
+  if (!(mean > 0)) return 0
+  if (!(variance > mean)) return poissonSF(k, mean)
+  const r = (mean * mean) / (variance - mean)
+  const p = mean / variance
+  const lnP = Math.log(p)
+  const ln1mP = Math.log1p(-p)
+  const lgR = lgamma(r)
+  let cdf = 0 // Σ_{i=0}^{k−1} pmf(i)
+  for (let i = 0; i < k; i++) cdf += Math.exp(lgamma(i + r) - lgR - lgamma(i + 1) + r * lnP + i * ln1mP)
   return Math.max(0, Math.min(1, 1 - cdf))
 }
 
@@ -191,6 +314,39 @@ export function benjaminiYekutieli(pvalues: readonly number[], alpha: number): B
   let harmonic = 0
   for (let i = 1; i <= m; i++) harmonic += 1 / i
   return benjaminiHochberg(pvalues, alpha / harmonic)
+}
+
+// ───────────────────────── null-share estimation (calibration honesty) ─────────────────────────
+
+/** Storey's (2002, JRSS-B 64(3)) π₀ — the estimated proportion of TRUE NULLS among a set of
+ *  p-values: π̂₀ = #{p > λ} / ((1−λ)·m), conventionally at λ = 0.5. Under H₀ p-values are uniform,
+ *  so half of the nulls land above 0.5; anomalies land near 0 and barely touch that half.
+ *
+ *  Why the burn report needs it: "share of background buckets with p < 0.05" is NOT a calibration
+ *  measure when real anomalies are present — a MORE sensitive detector finds more true anomalies
+ *  that miss the strict FDR bar, so the share RISES as the null improves. π̂₀ separates the two:
+ *  the null-attributable part of that share is α·π̂₀, and the remainder is signal.
+ *  Clamped to (0,1]; sampling noise can push the raw ratio slightly above 1 when there is no signal. */
+export function storeyPi0(pvalues: readonly number[], lambda = 0.5): number {
+  const m = pvalues.length
+  if (m === 0 || !(lambda > 0 && lambda < 1)) return 1
+  const above = pvalues.filter(p => p > lambda).length
+  return Math.min(1, Math.max(1 / m, above / ((1 - lambda) * m)))
+}
+
+/** Uniformity of the UPPER half of a p-value histogram: max(bin)/min(bin) over the bins above 0.5.
+ *  Signal lives near 0 and cannot bend this half, so a ratio near 1 means the null is well
+ *  specified while a large ratio is direct evidence of MIS-specification (or of discreteness, which
+ *  is conservative and shows as a pile in the TOP bin). 1 for an empty/degenerate sample. */
+export function upperTailUniformity(pvalues: readonly number[], bins = 10): number {
+  const half = Math.floor(bins / 2)
+  const h = new Array<number>(bins).fill(0)
+  for (const p of pvalues) h[Math.min(bins - 1, Math.max(0, Math.floor(p * bins)))]++
+  const upper = h.slice(half)
+  const min = Math.min(...upper)
+  const max = Math.max(...upper)
+  if (max === 0) return 1
+  return max / Math.max(1, min)
 }
 
 // ───────────────────────── STA/LTA event trigger ─────────────────────────
