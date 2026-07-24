@@ -58,9 +58,14 @@ export function robustBaseline(xs: readonly number[]): RobustBaseline {
 }
 
 /** Iglewicz–Hoaglin (1993) modified z-score. |M| > 3.5 ⇒ outlier.
- *  0.6745 = Φ⁻¹(0.75) = 1/1.4826. When MAD = 0, fall back to mean-abs-dev with √(π/2)=1.253314. */
+ *  0.6745 = Φ⁻¹(0.75) = 1/1.4826. When MAD collapses, fall back to mean-abs-dev with
+ *  √(π/2)=1.253314. The collapse gate is RELATIVE (like robustNoiseSigma): a majority of identical
+ *  values leaves MAD ≈ 1e-16 float residue rather than exactly 0, and dividing by a residue scale
+ *  turns every point into a fake extreme outlier. NOTE the fallback's known bound: when the
+ *  anomalies themselves drive meanAD, a mass-fraction f of shifted points scores at most
+ *  z ≈ 1/(1.253314·f) — robustness working as intended (half the data can never be "an outlier"). */
 export function modifiedZ(x: number, med: number, madv: number, meanAD: number): number {
-  if (madv > 0) return (0.6745 * (x - med)) / madv
+  if (madv > 1e-8 * meanAD && madv > 0) return (0.6745 * (x - med)) / madv
   if (meanAD > 0) return (x - med) / (1.253314 * meanAD)
   return 0
 }
@@ -129,6 +134,27 @@ export function normalSf(z: number): number {
   return Math.max(0, Math.min(1, 1 - normalCdf(z)))
 }
 
+// ───────────────────────── Fisher's combined test ─────────────────────────
+
+/** χ² survival function for EXACTLY 4 degrees of freedom — the null of Fisher's method over two
+ *  p-values. Closed form (Erlang-2 tail): SF(x) = e^(−x/2)·(1 + x/2). No approximation. */
+export function chiSquaredSF4(x: number): number {
+  if (!(x > 0)) return 1
+  if (!Number.isFinite(x)) return 0
+  return Math.exp(-x / 2) * (1 + x / 2)
+}
+
+/** Fisher's method (Fisher 1932) for TWO independent p-values: X = −2(ln p₁ + ln p₂) ~ χ²₄ under
+ *  H₀. Here p₁ = the Poisson RATE test and p₂ = the lognormal INTENSITY test — independent by
+ *  Poisson thinning (arrival counts ⊥ per-arrival marks). A p ≤ 0 is infinitely strong evidence
+ *  (combined 0); a p of 1 contributes nothing. */
+export function fisherCombine(p1: number, p2: number): number {
+  const a = Math.min(1, p1)
+  const b = Math.min(1, p2)
+  if (a <= 0 || b <= 0) return 0
+  return chiSquaredSF4(-2 * (Math.log(a) + Math.log(b)))
+}
+
 // ───────────────────────── Benjamini–Hochberg FDR ─────────────────────────
 
 export interface BHResult {
@@ -153,6 +179,18 @@ export function benjaminiHochberg(pvalues: readonly number[], alpha: number): BH
   }
   for (let rank = 0; rank <= kMax; rank++) rejected[order[rank][1]] = true
   return { rejected, threshold: kMax >= 0 ? ((kMax + 1) / m) * alpha : 0, nRejected: kMax + 1 }
+}
+
+/** Benjamini–Yekutieli (2001) step-up: BH run at level α/H(m), H(m)=Σᵢ1/i. Controls FDR ≤ α under
+ *  ARBITRARY dependence between the tests (BH alone needs independence or PRDS — plausible for our
+ *  positively-correlated one-sided minute buckets, but not guaranteed). The returned `threshold` is
+ *  the effective BY critical p. Conservative by the factor H(m) (~ln m). */
+export function benjaminiYekutieli(pvalues: readonly number[], alpha: number): BHResult {
+  const m = pvalues.length
+  if (m === 0) return { rejected: [], threshold: 0, nRejected: 0 }
+  let harmonic = 0
+  for (let i = 1; i <= m; i++) harmonic += 1 / i
+  return benjaminiHochberg(pvalues, alpha / harmonic)
 }
 
 // ───────────────────────── STA/LTA event trigger ─────────────────────────
@@ -229,6 +267,99 @@ export function cusum(xs: readonly number[], target: number, K: number, H: numbe
     if (sp >= H || sm >= H) { alarms.push(i); sp = 0; sm = 0 }
   }
   return { splus, sminus, alarms }
+}
+
+// ───────────────────────── PELT changepoint segmentation ─────────────────────────
+
+/** Robust noise-scale estimate from FIRST DIFFERENCES (Donoho's wavelet-shrinkage estimator):
+ *  for iid noise, sd(xᵢ₊₁ − xᵢ) = σ√2, so σ̂ = 1.4826·MAD(diff)/√2. Signal steps land in the MAD's
+ *  discarded tail, so a series with genuine level shifts still yields the NOISE scale, not the
+ *  shift scale. When MAD(diff) collapses to 0 — which is the NORMAL case for our zero-inflated
+ *  cost series (>50% quiet minutes ⇒ >50% zero diffs), not an exotic edge — fall back to the
+ *  mean-abs-dev with the √(π/2)=1.253314 normal-consistency factor (the same fallback ladder
+ *  Iglewicz–Hoaglin prescribe for the modified z), because a floored σ̂≈0 would make PELT read
+ *  every tiny wiggle as an infinitely confident changepoint and shatter the series. 0 only for
+ *  n < 2 or a truly noise-free series. */
+export function robustNoiseSigma(xs: readonly number[]): number {
+  if (xs.length < 2) return 0
+  const diffs: number[] = []
+  for (let i = 1; i < xs.length; i++) diffs.push(xs[i] - xs[i - 1])
+  const med = median(diffs)
+  const m = mad(diffs, med)
+  const ma = meanAbsDev(diffs, med)
+  // Collapse detection must be RELATIVE, not `m > 0`: when the majority of diffs are identical the
+  // true MAD is 0, but float residue (e.g. 4.8−5.2 = −0.40000000000000036) leaves m ≈ 1e-16 — and a
+  // 1e-16 scale makes every wiggle an infinitely confident changepoint. For a healthy distribution
+  // MAD and meanAD are the same order (Normal: MAD ≈ 0.674·meanAD·√(π/2)); a collapsed MAD sits
+  // orders of magnitude below meanAD, so the 1e-8 relative gate cleanly separates the two regimes.
+  if (m > 1e-8 * ma) return (1.4826 * m) / Math.SQRT2
+  return (1.253314 * ma) / Math.SQRT2
+}
+
+export interface PeltSegment {
+  /** Inclusive bucket-index bounds. */
+  from: number
+  to: number
+  mean: number
+}
+
+export interface PeltResult {
+  /** First index of each NEW segment after a change (empty = homogeneous series). */
+  changepoints: number[]
+  segments: PeltSegment[]
+}
+
+/** PELT — Pruned Exact Linear Time changepoint detection (Killick, Fearnhead & Eckley 2012, JASA).
+ *  Exact minimizer of Σ segRSS/σ̂² + β·(#changepoints) for a change-in-mean model; the pruning step
+ *  (valid with K=0 for the RSS cost class) keeps it near-linear. Default penalty β = 2·ln n (BIC).
+ *  σ̂ from {@link robustNoiseSigma}, floored so a noise-free step series still splits (RSS>0 vs
+ *  σ̂=0 must read as an infinitely confident change, not 0/0). */
+export function pelt(xs: readonly number[], opts?: { penalty?: number }): PeltResult {
+  const n = xs.length
+  if (n === 0) return { changepoints: [], segments: [] }
+  const beta = opts?.penalty ?? 2 * Math.log(Math.max(2, n))
+  const sigma = robustNoiseSigma(xs)
+  const sigma2 = Math.max(sigma * sigma, 1e-12)
+
+  // Prefix sums → O(1) segment RSS: rss[a,b) = ΣX² − (ΣX)²/len.
+  const S1 = new Array<number>(n + 1).fill(0)
+  const S2 = new Array<number>(n + 1).fill(0)
+  for (let i = 0; i < n; i++) { S1[i + 1] = S1[i] + xs[i]; S2[i + 1] = S2[i] + xs[i] * xs[i] }
+  const cost = (a: number, b: number): number => {
+    const len = b - a
+    const sum = S1[b] - S1[a]
+    const rss = Math.max(0, S2[b] - S2[a] - (sum * sum) / len)
+    return rss / sigma2
+  }
+
+  // F[t] = optimal penalized cost of x[0,t); last[t] = start of the final segment in that optimum.
+  const F = new Array<number>(n + 1).fill(0)
+  const last = new Array<number>(n + 1).fill(0)
+  F[0] = -beta
+  let candidates = [0]
+  for (let t = 1; t <= n; t++) {
+    let best = Infinity
+    let bestTau = 0
+    for (const tau of candidates) {
+      const v = F[tau] + cost(tau, t) + beta
+      if (v < best) { best = v; bestTau = tau }
+    }
+    F[t] = best
+    last[t] = bestTau
+    // PELT pruning: a τ that cannot beat F[t] now can never beat it later (K=0 for RSS).
+    candidates = candidates.filter(tau => F[tau] + cost(tau, t) <= F[t])
+    candidates.push(t)
+  }
+
+  // Backtrack the segment starts.
+  const starts: number[] = []
+  for (let t = n; t > 0; t = last[t]) starts.push(last[t])
+  starts.reverse()
+  const segments: PeltSegment[] = starts.map((s, i) => {
+    const e = (i + 1 < starts.length ? starts[i + 1] : n) - 1
+    return { from: s, to: e, mean: (S1[e + 1] - S1[s]) / (e - s + 1) }
+  })
+  return { changepoints: starts.slice(1), segments }
 }
 
 // ───────────────────────── magnitude (Gutenberg–Richter analog) ─────────────────────────

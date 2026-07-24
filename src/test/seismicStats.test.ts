@@ -3,8 +3,8 @@
 import * as assert from 'assert'
 import {
   median, mad, meanAbsDev, robustBaseline, modifiedZ, modifiedZScores,
-  lgamma, poissonSF, benjaminiHochberg, staLta, cusum, magnitude,
-  erf, normalCdf, normalSf,
+  lgamma, poissonSF, benjaminiHochberg, benjaminiYekutieli, staLta, cusum, magnitude,
+  erf, normalCdf, normalSf, chiSquaredSF4, fisherCombine, robustNoiseSigma, pelt,
 } from '../seismicStats'
 
 const close = (a: number, b: number, eps = 1e-9): void =>
@@ -107,6 +107,68 @@ suite('seismicStats — CUSUM change-point (Page 1954)', () => {
   })
   test('a stationary series at target never alarms', () => {
     assert.strictEqual(cusum([0, 0, 0, 0, 0, 0], 0, 1, 3).alarms.length, 0)
+  })
+})
+
+suite('seismicStats — Fisher combined test (χ²₄ closed form)', () => {
+  test('χ²₄ SF closed form: SF(0)=1, SF(2·ln4)=(1+ln4)/4, SF(∞)=0', () => {
+    close(chiSquaredSF4(0), 1)
+    close(chiSquaredSF4(2 * Math.log(4)), (1 + Math.log(4)) / 4) // = 0.5965736…
+    close(chiSquaredSF4(Infinity), 0)
+    close(chiSquaredSF4(-3), 1) // a non-positive statistic carries no evidence
+  })
+  test('Fisher: combine(0.5,0.5)=0.59657…; identity combine(1,p)=p·(1−ln p); edge cases', () => {
+    close(fisherCombine(0.5, 0.5), (1 + Math.log(4)) / 4)
+    close(fisherCombine(1, 0.05), 0.05 * (1 - Math.log(0.05))) // = 0.1997866…
+    close(fisherCombine(1, 1), 1)
+    close(fisherCombine(0, 0.5), 0) // p=0 is infinitely strong evidence
+  })
+})
+
+suite('seismicStats — Benjamini–Yekutieli FDR (arbitrary dependence)', () => {
+  test('BY = BH at α/H(m): the BH-all-rejected ladder is fully REFUSED under BY', () => {
+    // H(5)=2.28333 → eff α=.021898 → largest crit .0219 < smallest p .01·(5/1)? rank-by-rank: none pass.
+    const p = [0.01, 0.02, 0.03, 0.04, 0.05]
+    assert.strictEqual(benjaminiHochberg(p, 0.05).nRejected, 5)
+    assert.strictEqual(benjaminiYekutieli(p, 0.05).nRejected, 0)
+  })
+  test('BY still rejects strong evidence: [.001,.002,.5] → 2 rejected (H(3)=1.8333)', () => {
+    const r = benjaminiYekutieli([0.001, 0.002, 0.5], 0.05)
+    assert.strictEqual(r.nRejected, 2)
+    assert.deepStrictEqual(r.rejected, [true, true, false])
+  })
+})
+
+suite('seismicStats — PELT changepoint (Killick–Fearnhead–Eckley 2012)', () => {
+  test('robustNoiseSigma: flat → 0; diffs [−2,−1,0,1,2] (MAD 1) → 1.4826/√2', () => {
+    close(robustNoiseSigma([3, 3, 3, 3, 3]), 0)
+    close(robustNoiseSigma([0, -2, -3, -3, -2, 0]), 1.4826 / Math.SQRT2)
+  })
+  test('MAD(diff)=0 collapse (the zero-inflated-series case) falls back to meanAD, never a 0 scale', () => {
+    // Alternating ±0.2 over 24 pts: diffs = 12×(−0.4) + 11×(+0.4) → median −0.4, MAD 0 (majority
+    // identical). meanAD = 11·0.8/23 → σ̂ = 1.253314·(8.8/23)/√2. A 0 here would shatter PELT.
+    const xs = Array.from({ length: 24 }, (_, i) => (i % 2 === 0 ? 0.2 : -0.2))
+    close(robustNoiseSigma(xs), (1.253314 * (8.8 / 23)) / Math.SQRT2)
+  })
+  test('an exact step [0×10, 5×10] splits at index 10 with the true segment means', () => {
+    const xs = [...Array(10).fill(0), ...Array(10).fill(5)]
+    const r = pelt(xs)
+    assert.deepStrictEqual(r.changepoints, [10])
+    assert.deepStrictEqual(r.segments.map(s => [s.from, s.to, s.mean]), [[0, 9, 0], [10, 19, 5]])
+  })
+  test('a flat series has NO changepoints (the β penalty beats a free split)', () => {
+    const r = pelt(Array(20).fill(3))
+    assert.deepStrictEqual(r.changepoints, [])
+    assert.strictEqual(r.segments.length, 1)
+    close(r.segments[0].mean, 3)
+  })
+  test('two steps [0×8, 5×8, 1×8] recover both boundaries exactly', () => {
+    const xs = [...Array(8).fill(0), ...Array(8).fill(5), ...Array(8).fill(1)]
+    assert.deepStrictEqual(pelt(xs).changepoints, [8, 16])
+  })
+  test('a step under deterministic ±0.2 noise still splits at the true boundary', () => {
+    const xs = Array.from({ length: 24 }, (_, i) => (i < 12 ? 0 : 5) + (i % 2 === 0 ? 0.2 : -0.2))
+    assert.deepStrictEqual(pelt(xs).changepoints, [12])
   })
 })
 
