@@ -1315,22 +1315,27 @@ const TOOLS = [
   {
     name: 'burn_seismic',
     description:
-      'PROVEN statistical (seismology-style) anomaly analysis of a token burn — when you do not want a ' +
-      'heuristic verdict but a reproducible MEASUREMENT with named, textbook methods. Reconstructs a ' +
-      'per-minute COST series ($/min) directly from each turn\'s message.usage (cache_creation=cold WRITE, ' +
-      'cache_read, output) × the real per-model rates (the single pricing source), streamed from the raw ' +
-      'session JSONL by DuckDB (works with OTEL capture OFF; images are skipped, never abort the read). ' +
-      'Then runs, over that series: a ROBUST baseline (median + MAD → Iglewicz–Hoaglin modified-z, immune ' +
-      'to the outliers being detected); distribution p-values from the `stochastic` DuckDB community ' +
-      'extension when available (independent of, and cross-checked to Δ≤2e-16 against, the internal ' +
-      'unit-tested core), else the core; Benjamini–Hochberg FDR (a proven false-discovery bound, not a ' +
-      'hand-picked threshold); STA/LTA (Allen 1978) and CUSUM (Page 1954) as onset / change-point ' +
-      'diagnostics; a Gutenberg–Richter log-magnitude for ranking. Segments the window into FDR-significant ' +
-      'EVENTS, each decomposed into the two burn MODES — CACHE_THRASH (cold-write dominated: an unstable ' +
-      'MCP tool surface / model|effort switch cold-invalidates the whole prefix) and MARATHON RE-READ ' +
-      '(read dominated: a fat session re-reads its huge prefix every turn) — plus a ranked TOP-SESSIONS ' +
-      'table (the biggest burners) and every SPAWN call inside the mainshock verbatim. Returns the full ' +
-      'structured result AND a rendered report; a window with no significant event says so, never fabricates one.',
+      'PROVEN statistical (seismology-style) anomaly analysis of a token burn — a reproducible ' +
+      'MEASUREMENT with named, textbook methods, not a heuristic verdict. Reconstructs a per-minute COST ' +
+      'series ($/min) from each turn\'s message.usage (cache_creation=cold WRITE, cache_read, output) × ' +
+      'the real per-model rates (the single pricing source), streamed from the raw session JSONL by ' +
+      'DuckDB (works with OTEL capture OFF; image-bloated lines skip, never abort). The NULL MODEL is the ' +
+      'series\' true generative structure — a MARKED POINT PROCESS: cost/min = (Poisson turn count) × ' +
+      '(lognormal per-turn cost). Each factor gets its CORRECT tail: an exact Poisson RATE test (trimmed ' +
+      'background λ̂) and a robust lognormal INTENSITY test (log per-turn cost, median/MAD, active buckets ' +
+      'only), combined by Fisher\'s method (χ²₄ closed form; independent by Poisson thinning) — and that ' +
+      'decomposition IS the root cause: FANOUT_RATE (many-turns burst = spawn storm), FAT_TURN_THRASH ' +
+      '(cold-write dominated = prefix cold-invalidation), FAT_TURN_MARATHON (read dominated = fat-prefix ' +
+      're-read), COMPOUND. Significance: Benjamini–Hochberg FDR (PRDS-valid; Benjamini–Yekutieli 2001) or ' +
+      'the arbitrary-dependence BY variant, with a CALIBRATION self-check on the background buckets. ' +
+      'Events = PELT changepoint segments (Killick 2012, exact penalized) containing FDR-significant ' +
+      'buckets, ranked by EXCESS $ over baseline (not raw totals); STA/LTA (Allen 1978) + CUSUM (Page ' +
+      '1954) ride as diagnostics. Distribution tails come from the `stochastic` DuckDB community ' +
+      'extension when available (independent engine, cross-checked to Δ≤2e-16; disclosed), else the ' +
+      'unit-tested internal core. Per event: per-session EXCESS attribution with COLD_REWRITE / ' +
+      'MODEL_SWITCH cause tags, plus every SPAWN call inside the mainshock verbatim. Returns the ' +
+      'structured result AND a rendered report; a window with no significant event says so, never ' +
+      'fabricates one.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -1340,7 +1345,8 @@ const TOOLS = [
         windowHours:      { type: 'number', description: 'Hours to look back (default 8; max 72)' },
         bucketMinutes:    { type: 'number', description: 'Time-bin width in minutes (default 1)' },
         includeSubagents: { type: 'boolean', description: 'fleet/workspace: also scan subagent transcripts (default false — the spawners)' },
-        fdrAlpha:         { type: 'number', description: 'Benjamini–Hochberg false-discovery level (default 0.01)' },
+        fdrAlpha:         { type: 'number', description: 'False-discovery level for the combined test (default 0.01)' },
+        fdrMethod:        { type: 'string', description: "'bh' (default; Benjamini–Hochberg, PRDS-valid) or 'by' (Benjamini–Yekutieli — guaranteed under arbitrary dependence, ~ln(m) conservative)" },
         pvalueEngine:     { type: 'string', description: "'auto' (default; use the stochastic extension if it loads), 'stochastic' (require it), 'internal' (TS core)" },
         maxFiles:         { type: 'number', description: 'Cap on transcripts scanned, most-recent first (default 300)' },
       },
@@ -3511,7 +3517,7 @@ export function createMcpServer(opts: McpServerOptions): Server {
       case 'burn_seismic': {
         const a = args as {
           scope?: SeismicScope; workspace?: string; sessionId?: string; windowHours?: number
-          bucketMinutes?: number; includeSubagents?: boolean; fdrAlpha?: number
+          bucketMinutes?: number; includeSubagents?: boolean; fdrAlpha?: number; fdrMethod?: 'bh' | 'by'
           pvalueEngine?: 'auto' | 'stochastic' | 'internal'; maxFiles?: number
         }
         const scope: SeismicScope = a.scope ?? 'fleet'
@@ -3525,7 +3531,8 @@ export function createMcpServer(opts: McpServerOptions): Server {
         })
         const seismic = await burnSeismic({
           files, sinceIso: new Date(sinceMs).toISOString(), bucketMinutes: a.bucketMinutes,
-          fdrAlpha: a.fdrAlpha, pvalueEngine: a.pvalueEngine, topEvents: 10, topSessions: 10,
+          fdrAlpha: a.fdrAlpha, fdrMethod: a.fdrMethod, pvalueEngine: a.pvalueEngine,
+          topEvents: 10, topSessions: 10,
         })
         // Ship the rendered report AND the structured result: the CLI prints `report` verbatim, an
         // MCP/API caller keeps the machine-readable fields. buckets[] is dropped from the wire form

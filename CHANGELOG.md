@@ -4,6 +4,37 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.13.0] - 2026-07-24
+
+### Changed
+
+- **`burn_seismic` v2 — the statistics rebuilt on the series' true generative model.** An honest
+  re-evaluation of v1 found its composition flawed: it asserted a **Gaussian null on raw $/min**
+  (a non-negative, right-skewed, zero-inflated series), so its p-values were mis-calibrated and the
+  advertised BH-FDR false-discovery bound did not actually hold; event boundaries came from ad-hoc
+  gap-bridging; and rankings used raw totals that conflate baseline with anomaly. v2 replaces the
+  model, keeping every already-sound part (DuckDB streaming extraction, single pricing source,
+  robust median/MAD core, `stochastic`-extension engine with disclosure):
+  - **Null = marked point process**: cost/min = (Poisson turn count) × (lognormal per-turn cost).
+    An exact Poisson **RATE** test (trimmed background λ̂) and a robust lognormal **INTENSITY** test
+    (log per-turn cost, active buckets only — the hurdle that fixes zero-inflation), combined by
+    **Fisher's method** (χ²₄ closed form; independent by Poisson thinning). The decomposition IS
+    the root cause: `FANOUT_RATE` (spawn storm) / `FAT_TURN_THRASH` (cold-write) /
+    `FAT_TURN_MARATHON` (fat-prefix re-read) / `COMPOUND`.
+  - **FDR with documented dependence handling**: BH default (PRDS-valid per Benjamini–Yekutieli
+    2001), new `fdrMethod: 'by'` for the arbitrary-dependence guarantee — plus a **calibration
+    self-check** (background false-positive share) printed in every report.
+  - **Events from PELT** (Killick–Fearnhead–Eckley 2012, exact penalized changepoint detection on
+    log1p cost) instead of gap-bridging; a sustained plateau is taken whole, a lone spike is not
+    diluted by quiet minutes.
+  - **Excess-based ranking + per-event attribution**: events and sessions rank by $ above baseline,
+    and each event carries its per-session excess culprits with `COLD_REWRITE` (single-turn
+    cache_creation ≈ the session's whole prefix) and `MODEL_SWITCH` cause tags.
+  - New math primitives (`fisherCombine`, `chiSquaredSF4`, `benjaminiYekutieli`, `pelt`,
+    `robustNoiseSigma`) each unit-tested against hand-computed textbook constants; the PELT noise
+    estimator survived a real degenerate case the tests caught (majority-identical diffs leave a
+    float-residue MAD ~1e-16 — the collapse gate is now relative, not `> 0`).
+
 ## [2.12.0] - 2026-07-23
 
 ### Added
