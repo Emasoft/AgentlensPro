@@ -1321,9 +1321,13 @@ const TOOLS = [
       'the real per-model rates (the single pricing source), streamed from the raw session JSONL by ' +
       'DuckDB (works with OTEL capture OFF; image-bloated lines skip, never abort). The NULL MODEL is the ' +
       'series\' true generative structure — a MARKED POINT PROCESS: cost/min = (Poisson turn count) × ' +
-      '(lognormal per-turn cost). Each factor gets its CORRECT tail: an exact Poisson RATE test (trimmed ' +
-      'background λ̂) and a robust lognormal INTENSITY test (log per-turn cost, median/MAD, active buckets ' +
-      'only), combined by Fisher\'s method (χ²₄ closed form; independent by Poisson thinning) — and that ' +
+      '(lognormal per-turn cost) — measured against a LOCAL background: a CFAR reference window ' +
+      '(Finn–Johnson 1968; trimmed-mean variant Gandhi–Kassam 1988) estimates every bucket\'s baseline from ' +
+      'its own neighbourhood minus a guard band, so a day/night regime is not mistaken for an anomaly (one ' +
+      'global background measured a 13.5% false-alarm share against a 5% target). Each factor gets its ' +
+      'CORRECT tail: an exact Poisson RATE test (trimmed LOCAL background λ̂ₜ) and a robust lognormal ' +
+      'INTENSITY test (log per-turn cost, local median, active buckets only), combined by Fisher\'s method ' +
+      '(χ²₄ closed form; independent by Poisson thinning) — and that ' +
       'decomposition IS the root cause: FANOUT_RATE (many-turns burst = spawn storm), FAT_TURN_THRASH ' +
       '(cold-write dominated = prefix cold-invalidation), FAT_TURN_MARATHON (read dominated = fat-prefix ' +
       're-read), COMPOUND. Significance: Benjamini–Hochberg FDR (PRDS-valid; Benjamini–Yekutieli 2001) or ' +
@@ -1348,6 +1352,11 @@ const TOOLS = [
         fdrAlpha:         { type: 'number', description: 'False-discovery level for the combined test (default 0.01)' },
         fdrMethod:        { type: 'string', description: "'bh' (default; Benjamini–Hochberg, PRDS-valid) or 'by' (Benjamini–Yekutieli — guaranteed under arbitrary dependence, ~ln(m) conservative)" },
         pvalueEngine:     { type: 'string', description: "'auto' (default; use the stochastic extension if it loads), 'stochastic' (require it), 'internal' (TS core)" },
+        rateLaw:          { type: 'string', description: "Count law for the RATE test: 'auto' (default — negative binomial where the local background is over-dispersed, exact Poisson elsewhere) or 'poisson' (FORCE variance ≡ mean; reproduces the pre-NB false-alarm rate — a falsifier, not a tuning knob)" },
+        cfarReference:    { type: 'number', description: 'LOCAL-background reference cells per side (default 120 = ±2h at 1-min buckets). 0 = one GLOBAL stationary background (v2.13 behaviour) — set it to A/B the effect' },
+        cfarGuard:        { type: 'number', description: 'Guard cells per side excluded from each local background so an event cannot set its own baseline (default 15)' },
+        cfarTrim:         { type: 'number', description: 'Trim fraction per tail of the local reference sample (default 0.25) — an interfering burst under that share is trimmed out of the background' },
+        cfarMinReference: { type: 'number', description: 'Minimum reference cells before a local estimate is trusted; below it that bucket falls back to global (default 30, disclosed as localBaseline.fallbackShare)' },
         maxFiles:         { type: 'number', description: 'Cap on transcripts scanned, most-recent first (default 300)' },
       },
     },
@@ -3519,6 +3528,8 @@ export function createMcpServer(opts: McpServerOptions): Server {
           scope?: SeismicScope; workspace?: string; sessionId?: string; windowHours?: number
           bucketMinutes?: number; includeSubagents?: boolean; fdrAlpha?: number; fdrMethod?: 'bh' | 'by'
           pvalueEngine?: 'auto' | 'stochastic' | 'internal'; maxFiles?: number
+          cfarReference?: number; cfarGuard?: number; cfarTrim?: number; cfarMinReference?: number
+          rateLaw?: 'auto' | 'poisson'
         }
         const scope: SeismicScope = a.scope ?? 'fleet'
         if (scope === 'workspace' && !a.workspace) { result = { error: "scope='workspace' requires a workspace path" }; break }
@@ -3532,6 +3543,8 @@ export function createMcpServer(opts: McpServerOptions): Server {
         const seismic = await burnSeismic({
           files, sinceIso: new Date(sinceMs).toISOString(), bucketMinutes: a.bucketMinutes,
           fdrAlpha: a.fdrAlpha, fdrMethod: a.fdrMethod, pvalueEngine: a.pvalueEngine,
+          cfarReference: a.cfarReference, cfarGuard: a.cfarGuard,
+          cfarTrim: a.cfarTrim, cfarMinReference: a.cfarMinReference, rateLaw: a.rateLaw,
           topEvents: 10, topSessions: 10,
         })
         // Ship the rendered report AND the structured result: the CLI prints `report` verbatim, an

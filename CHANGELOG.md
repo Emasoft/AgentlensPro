@@ -4,6 +4,68 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.14.0] - 2026-07-24
+
+### Changed
+
+- **`burn_seismic` — the background is now LOCAL (CFAR), which is what finally calibrates the null.**
+  v2.13 gave each factor its correct tail but measured both against ONE window-wide background, i.e.
+  it asserted a **stationary** series. Fleet activity is not stationary (day/night, session regimes),
+  so every busy-but-NORMAL minute read as improbable: the live run's own calibration self-check
+  reported a **13.5% background false-alarm share against the 5% target** — a mis-specified null, not
+  a mis-computed tail. Each bucket now takes its background from its own neighbourhood:
+  - **CFAR reference window** (Finn & Johnson 1968; trimmed-mean variant for a non-homogeneous
+    background, Gandhi & Kassam 1988; cf. Rohling's OS-CFAR 1983): reference cells on both sides,
+    minus a **guard band**, so an event can never set its own baseline. Trimmed mean for the local
+    Poisson λ̂ₜ, local median/MAD for the intensity and the $ baselines.
+  - **Per-bucket λ̂ₜ** now drives the exact Poisson tail (and is passed per row to the `stochastic`
+    extension), replacing one global λ̂; **excess** is measured against the summed LOCAL expectation
+    of the event's own buckets, so a busy-hour event is not credited with the hour's normal spend.
+  - **Degeneracy guards, both stated in code**: a finite window of zeros cannot prove a zero rate, so
+    λ̂ₜ is floored at the Jeffreys-smoothed ½-event rate (λ̂=0 would make any single turn infinitely
+    significant); and a perfectly flat reference window supplies no scale, so the intensity z uses
+    the **local location with the window-wide scale** rather than degenerating to 0 (no evidence) or
+    ±∞ (infinite confidence from a few dozen samples).
+  - **Disclosure**: every result/report carries `localBaseline {reference, guard, trim,
+    fallbackShare}` — including the share of buckets that had too few reference cells and fell back
+    to the global estimate (series edges, short windows). `cfarReference: 0` restores the v2.13
+    stationary null for an explicit A/B.
+  - **Documented limit**: an event longer than the trim fraction of the reference window partially
+    sets its own background and is attenuated — widen `cfarReference`, or rely on the PELT
+    segmentation, which is independent of this estimate.
+  - New fixture `(f)`: on a day/night series with one real burst, three configurations isolate the
+    two mechanisms — forced-Poisson + global reproduces the defect (>20% background share), the NB
+    restores calibration by absorbing the regime as dispersion, and the LOCAL background collapses
+    that dispersion, tracks λ̂ₜ per regime (1 vs 20 instead of one 10.5), and resolves the burst
+    ~10⁴× more sharply. All configurations still name it `FANOUT_RATE`.
+
+- **The rate law is now the NEGATIVE BINOMIAL where the background is over-dispersed — this is what
+  the 13.5% false-alarm share actually was.** Measuring the live p-values decomposed the miss: the
+  intensity factor was fine (3.2% of background below 0.05) while the RATE factor carried 13.5%.
+  Turn counts are not Poisson — turns arrive in CLUSTERS (one action triggers a burst; sessions
+  start and stop), so variance ≫ mean (measured median σ²/μ ≈ 1.9 locally, 7.2 globally) and a
+  Poisson tail calls ordinary busy minutes improbable. The NB (Poisson–Gamma mixture, method-of-
+  moments from the local **winsorized** variance) adds exactly one parameter for that excess
+  variance and **contains Poisson as its limit**, so it can only remove false alarms, never
+  manufacture significance. `rateLaw: 'poisson'` forces the old law as an explicit falsifier.
+  The `stochastic` cross-check survives fractional sizes through the exact identity
+  P(X ≥ k) = 1 − I_p(r, k) (regularized incomplete beta), since the extension's own
+  `dist_negative_binomial_*` accepts only an integer size.
+
+### Fixed
+
+- **The calibration self-check was itself confounded — it now reports what it can actually
+  measure.** "Share of background buckets with p < 0.05, expect ≤5%" is not a calibration statistic
+  when real anomalies are present: a MORE sensitive detector finds more true anomalies that miss the
+  stricter FDR bar, so the number RISES as the null improves (measured: the better-specified local
+  null read 13.3% against the worse global null's 9.8%). The report now separates the two with named
+  methods — **Storey's π̂₀** (2002) for the true-null share, the **null-attributable part** α·π̂₀, and
+  the **upper-half histogram uniformity** (signal cannot bend the p > 0.5 half, so a ratio near 1 is
+  direct evidence the null is well specified). The live fleet now reads: `background p<0.05 = 11.5%,
+  of which 4.6% is null-attributable (π̂₀=0.92 ⇒ ~8% genuine signal); upper-half uniformity 2.6×`.
+  Chasing the raw share instead would have selected the global-NB configuration, which scores 5.4%
+  by detecting **nothing at all** — calibration bought with blindness.
+
 ## [2.13.0] - 2026-07-24
 
 ### Changed

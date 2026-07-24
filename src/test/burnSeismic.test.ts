@@ -128,6 +128,59 @@ suite('burnSeismic v2 — rate×intensity decomposition names the cause', () => 
     assert.strictEqual(r.pvalueEngine, 'internal')
   })
 
+  test('(f) NONSTATIONARY day/night: the global null calls the busy regime an anomaly, the LOCAL (CFAR) null does not — and still finds the real burst', async () => {
+    // 120 quiet minutes (1 turn) then 120 busy minutes (20 turns) at IDENTICAL per-turn cost: a
+    // regime change, not an anomaly. One genuine 200-turn burst sits inside the busy regime — the
+    // detector must separate "busy because it is daytime" from "busy because something went wrong".
+    const turns: Turn[] = []
+    for (let m = 0; m < 120; m++) turns.push({ min: m, cr: 20_000, out: 10 })
+    for (let m = 120; m < 240; m++) {
+      const n = m === 180 ? 200 : 20
+      for (let k = 0; k < n; k++) turns.push({ min: m, cr: 20_000, out: 10 })
+    }
+    const file = writeTranscript(turns)
+    const common = { files: [file], sinceIso: SINCE, pvalueEngine: 'internal' as const }
+    // Three configurations isolate the two mechanisms — each has its own falsifier.
+    const poissonGlobal = await burnSeismic({ ...common, cfarReference: 0, rateLaw: 'poisson' })
+    const glob = await burnSeismic({ ...common, cfarReference: 0 })
+    const loc = await burnSeismic({ ...common, cfarReference: 40, cfarGuard: 5, cfarMinReference: 20 })
+
+    // 1. THE DEFECT, reproduced on demand: one stationary background + a Poisson law calls every
+    //    ordinary busy minute improbable — the live-fleet symptom (a >5% background share).
+    assert.strictEqual(poissonGlobal.rateLaw, 'poisson')
+    assert.ok(poissonGlobal.calibration.observedBackgroundShare! > 0.2,
+      `the stationary Poisson null must mis-calibrate here (got ${poissonGlobal.calibration.observedBackgroundShare})`)
+
+    // 2. The NEGATIVE BINOMIAL fixes the SHAPE: the regime mixture is absorbed as over-dispersion
+    //    (σ²/μ ≫ 1) and calibration is restored — but at the cost of a much wider null.
+    assert.strictEqual(glob.rateLaw, 'negative-binomial')
+    assert.ok(glob.dispersionIndex > 3, `the mixture shows up as dispersion (got ${glob.dispersionIndex})`)
+    assert.ok(glob.calibration.observedBackgroundShare! <= 0.05 + 1e-9)
+
+    // 3. The LOCAL background fixes the LEVEL, which is what the dispersion parameter was papering
+    //    over: each window is homogeneous again (dispersion collapses), λ̂ₜ tracks the regime instead
+    //    of averaging it, and the REAL burst becomes orders of magnitude more significant.
+    assert.ok(loc.localBaseline && loc.localBaseline.fallbackShare < 0.6)
+    assert.ok(loc.calibration.observedBackgroundShare! <= 0.05 + 1e-9)
+    assert.ok(loc.dispersionIndex <= 1, `local windows are homogeneous (got ${loc.dispersionIndex})`)
+    const at = (min: number): number => loc.buckets[min].lambda
+    assert.ok(Math.abs(at(60) - 1) < 0.2, `quiet-regime λ̂ ≈ 1 (got ${at(60)})`)
+    assert.ok(Math.abs(at(200) - 20) < 2, `busy-regime λ̂ ≈ 20 (got ${at(200)})`)
+    assert.ok(Math.abs(glob.buckets[60].lambda - glob.buckets[200].lambda) < 1e-9,
+      'the global null must use ONE λ̂ for both regimes — that is the thing being fixed')
+    assert.ok(loc.buckets[180].pValueRate < glob.buckets[180].pValueRate / 100,
+      `the burst is far better resolved locally (${loc.buckets[180].pValueRate} vs ${glob.buckets[180].pValueRate})`)
+
+    // …and under every configuration the REAL burst is still found and named.
+    for (const r of [glob, loc]) {
+      assert.ok(r.mainshock, 'the 200-turn burst must remain a significant event')
+      assert.strictEqual(r.mainshock!.fromIso, bucketIso(180))
+      assert.strictEqual(r.mainshock!.cause, 'FANOUT_RATE')
+    }
+    assert.match(renderBurnSeismic(loc), /LOCAL CFAR/)
+    assert.match(renderBurnSeismic(glob), /NegBinom/)
+  })
+
   test('(e) no files → typed reason no-files; nothing fabricated', async () => {
     const r = await burnSeismic({ files: [], sinceIso: SINCE, pvalueEngine: 'internal' })
     assert.strictEqual(r.reason, 'no-files')

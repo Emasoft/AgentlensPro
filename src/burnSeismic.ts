@@ -14,7 +14,12 @@
 // TRUE generative structure — a MARKED POINT PROCESS: cost/min = (Poisson turn count) × (lognormal
 // per-turn cost). v1 asserted a Gaussian null on raw $/min (non-negative, skewed, zero-inflated) and
 // its p-values were therefore mis-calibrated; v2's factorization gives each factor its CORRECT tail:
-//   • RATE test:       turns/bucket ~ Poisson(λ̂), exact tail; λ̂ = trimmed background MLE
+//   • background:      LOCAL, not global — a CFAR reference window (Finn–Johnson 1968; trimmed-mean
+//                      variant Gandhi–Kassam 1988) estimates each bucket's background from its own
+//                      neighbourhood, minus a guard band, so a slowly-varying day/night level is not
+//                      read as an anomaly (v2.13's single global null measured a 13.5% background
+//                      false-alarm share against a 5% target — a mis-specified, not a mis-computed, null)
+//   • RATE test:       turns/bucket ~ Poisson(λ̂ₜ), exact tail; λ̂ₜ = trimmed LOCAL background MLE
 //   • INTENSITY test:  log per-turn cost over ACTIVE buckets (hurdle) → robust median/MAD →
 //                      Iglewicz–Hoaglin modified-z → normal tail (log licenses the Gaussian)
 //   • combination:     Fisher 1932, χ²₄ closed form (independent by Poisson thinning) — and the
@@ -35,8 +40,9 @@ import * as path from 'path'
 import { claudeProjectsDirs } from './logReader'
 import { lookupRates } from './shared/pricing'
 import {
-  median, robustBaseline, modifiedZ, modifiedZScores, normalSf, poissonSF, fisherCombine,
-  benjaminiHochberg, benjaminiYekutieli, staLta, cusum, pelt, magnitude,
+  median, robustBaseline, modifiedZ, modifiedZScores, normalSf, negBinomSF, fisherCombine,
+  benjaminiHochberg, benjaminiYekutieli, staLta, cusum, pelt, magnitude, cfarLocalStats,
+  storeyPi0, upperTailUniformity,
   type RobustBaseline,
 } from './seismicStats'
 import { SPAWN_TOOLS, type SpawnCall } from './causingToolCall'
@@ -141,6 +147,24 @@ export interface BurnSeismicOptions {
    *  or 'by' (Benjamini–Yekutieli — guaranteed under ARBITRARY dependence, ~ln(m) conservative).
    *  Default 'bh'. */
   fdrMethod?: 'bh' | 'by'
+  /** Count law for the RATE test: 'auto' (default) uses the negative binomial wherever the local
+   *  background is over-dispersed (σ² > μ) and the exact Poisson elsewhere; 'poisson' FORCES the
+   *  Poisson law (variance ≡ mean). Forcing it is how you reproduce the mis-calibration the NB
+   *  exists to fix — it is a falsifier, not a tuning knob. */
+  rateLaw?: 'auto' | 'poisson'
+  /** LOCAL-background (CFAR) reference cells PER SIDE. Default 120 (±2 h at 1-minute buckets).
+   *  0 forces the single GLOBAL background (the stationary null) — useful to A/B the effect and to
+   *  reproduce a v2.13 result. A window shorter than ~2·(guard+minReference) simply falls back. */
+  cfarReference?: number
+  /** Guard cells per side, excluded from every local background (an event must not set its own
+   *  baseline). Default 15 — wide enough for a typical burst's shoulders at 1-minute buckets. */
+  cfarGuard?: number
+  /** Trim fraction per tail of the local reference sample (TM-CFAR). Default 0.25: an interfering
+   *  burst occupying under a quarter of the window is trimmed out of the background. */
+  cfarTrim?: number
+  /** Minimum usable reference cells before a LOCAL estimate is trusted; below it that bucket falls
+   *  back to the global estimate (disclosed as `localBaseline.fallbackShare`). Default 30. */
+  cfarMinReference?: number
   /** STA / LTA window minutes and trigger thresholds (Allen 1978). Defaults 3 / 60, on 4, off 1.5. */
   staMinutes?: number
   ltaMinutes?: number
@@ -173,8 +197,12 @@ export interface SeismicBucket {
    *  inactive bucket. Log scale: per-turn cost is a product of positive factors, so the Gaussian
    *  tail is asserted only after the symmetrizing transform. */
   modZ: number
-  /** RATE p — exact Poisson exceedance P(X ≥ turns | λ̂). Counts are Poisson: calibrated as-is. */
+  /** RATE p — exact Poisson exceedance P(X ≥ turns | λ̂ₜ). Counts are Poisson: calibrated as-is. */
   pValueRate: number
+  /** The LOCAL background rate λ̂ₜ actually used for this bucket (global λ̂ where it fell back). */
+  lambda: number
+  /** The LOCAL background $/bucket used for this bucket's excess (global median where it fell back). */
+  baselineUsd: number
   /** INTENSITY p — lognormal upper tail normalSf(modZ); 1 for an inactive bucket (no evidence). */
   pValueIntensity: number
   /** COMBINED p — Fisher's method over (rate, intensity), χ²₄ closed form. Drives the FDR. */
@@ -183,6 +211,11 @@ export interface SeismicBucket {
   fdrSignificant: boolean
   staLtaRatio: number
 }
+
+/** Which count law the RATE test used. 'poisson' = no over-dispersion anywhere; 'negative-binomial'
+ *  = every bucket's local background had σ² > μ (the normal case for clustered turn arrivals);
+ *  'mixed' = some buckets each way (the NB reduces to Poisson exactly where σ² ≤ μ). */
+export type RateLaw = 'poisson' | 'negative-binomial' | 'mixed'
 
 export type BurnMode = 'CACHE_THRASH' | 'MARATHON_REREAD' | 'MIXED'
 
@@ -270,17 +303,39 @@ export interface BurnSeismicResult {
   bucketCount: number
   /** Robust baseline of the per-bucket COST series (median/MAD/σ̂). */
   baseline: RobustBaseline
-  /** Robust background turn rate λ̂ of the Poisson RATE test. */
+  /** GLOBAL robust background turn rate λ̂ — the window-wide trimmed Poisson MLE, used where a
+   *  local estimate is unavailable and reported as the window's headline rate. */
   poissonLambda: number
   /** Robust baseline of log per-turn cost over ACTIVE buckets (the INTENSITY null). */
   intensityBaseline: RobustBaseline
+  /** The count law the RATE test used, and the median variance-to-mean ratio (Fisher's index of
+   *  dispersion) of the local backgrounds. D ≈ 1 is Poisson; D ≫ 1 means clustered arrivals, which
+   *  is what the negative-binomial parameter absorbs. */
+  rateLaw: RateLaw
+  dispersionIndex: number
   fdrAlpha: number
   fdrMethod: 'bh' | 'by'
   fdrThreshold: number
   fdrSignificantCount: number
-  /** Honesty metric: share of BACKGROUND (non-significant) buckets with combined p < 0.05 —
-   *  ≈ 0.05 when the null is calibrated. null when the background is too small to estimate. */
-  calibration: { alpha: number; observedBackgroundShare: number | null }
+  /** Honesty metrics on the BACKGROUND (non-significant) buckets.
+   *  - `observedBackgroundShare`: share with combined p < α (null when the background is too small).
+   *  - `pi0`: Storey's estimated share of TRUE NULLS among the ACTIVE background.
+   *  - `nullAttributableShare`: α·π̂₀ — the part of the observed share the null explains; the
+   *    remainder is genuine signal that missed the stricter FDR bar, NOT mis-calibration. Comparing
+   *    the raw share to a flat 5% is what makes a MORE sensitive detector look worse.
+   *  - `upperUniformity`: max/min over the p-histogram bins above 0.5. Signal cannot bend that half,
+   *    so ≈1 means the null is well specified; a large ratio is direct evidence it is not. */
+  calibration: {
+    alpha: number
+    observedBackgroundShare: number | null
+    pi0: number | null
+    nullAttributableShare: number | null
+    upperUniformity: number | null
+  }
+  /** The LOCAL-background (CFAR) configuration actually in force, plus the share of buckets that
+   *  had too few reference cells and fell back to the global background. null when the local
+   *  background is disabled (cfarReference = 0) — i.e. the stationary v2.13 null. */
+  localBaseline: { reference: number; guard: number; trim: number; fallbackShare: number } | null
   /** Which engine produced the distribution p-values (disclosed for reproducibility):
    *  'stochastic' = the community DuckDB extension; 'internal' = the unit-tested TS core. */
   pvalueEngine: 'stochastic' | 'internal'
@@ -334,14 +389,40 @@ async function loadStochastic(query: Query, require: boolean): Promise<boolean> 
  *  core): the RATE tail P(X ≥ turns | λ) (exact Poisson) and the INTENSITY tail 1−Φ(z) of the
  *  log per-turn-cost modified-z. One SQL pass over an inline values table; the Fisher combination
  *  stays in JS (closed form — exact either way). */
-async function extPValues(query: Query, turns: number[], zIntensity: number[], lambda: number): Promise<{ pRate: number[]; pIntensity: number[] }> {
-  const rows = turns.map((t, i) => `(${i}, ${Math.max(0, Math.round(t))}, ${Number.isFinite(zIntensity[i]) ? zIntensity[i] : 0})`).join(',')
-  // P(X ≥ k) = P(X > k) + P(X = k) = complement(λ,k) + pmf(λ,k) — avoids the k−1 negative-arg edge.
+async function extPValues(
+  query: Query, turns: number[], zIntensity: number[], lambdas: number[], variances: number[],
+): Promise<{ pRate: number[]; pIntensity: number[] }> {
+  // λ (and the over-dispersion) are PER ROW: each bucket carries its own LOCAL background, so the
+  // tail must be evaluated against that bucket's λ̂ₜ, not one window-wide constant. Where the local
+  // background is over-dispersed (σ² > μ — the normal case for clustered turn arrivals) the row
+  // carries the method-of-moments negative-binomial (size r, probability p) and SQL takes the NB
+  // tail; otherwise r = 0 marks "not over-dispersed" and the exact Poisson tail is used.
+  const num = (x: number): number => (Number.isFinite(x) ? x : 0)
+  const rows = turns.map((t, i) => {
+    const mu = num(lambdas[i])
+    const v = num(variances[i])
+    const over = v > mu && mu > 0
+    const r = over ? (mu * mu) / (v - mu) : 0
+    const p = over ? mu / v : 0.5
+    return `(${i}, ${Math.max(0, Math.round(t))}, ${num(zIntensity[i])}, ${mu}, ${r}, ${p})`
+  }).join(',')
+  // Poisson: P(X ≥ k) = P(X > k) + P(X = k) = complement(λ,k) + pmf(λ,k) — avoids the k−1 edge.
+  // NB: the extension's dist_negative_binomial_* takes an INTEGER size, but the method-of-moments
+  // r is fractional (the Pólya case), so casting it would silently change the distribution. The
+  // exact identity through the regularized incomplete beta is used instead —
+  //   P(X ≥ k) = 1 − I_p(r, k)   (verified: r=1,p=½ ⇒ P(X≥2)=¼; r=2,p=½ ⇒ P(X≥2)=½)
+  // — which is still an INDEPENDENT implementation (Boost's beta) of the same law, so the
+  // cross-engine check survives. Every argument is cast to DOUBLE: the inline VALUES table types
+  // literals as DECIMAL, which matches no distribution signature.
   const out = await query(`
-    WITH t(i, turns, modz) AS (VALUES ${rows})
+    WITH t(i, turns, modz, lam, nb_r, nb_p) AS (VALUES ${rows})
     SELECT i,
-      dist_poisson_cdf_complement(${lambda}, turns) + dist_poisson_pdf(${lambda}, turns) AS p_pois,
-      dist_normal_cdf_complement(0.0, 1.0, modz) AS p_norm
+      CASE
+        WHEN turns <= 0 THEN 1.0
+        WHEN nb_r > 0 THEN 1 - dist_beta_cdf(CAST(nb_r AS DOUBLE), CAST(turns AS DOUBLE), CAST(nb_p AS DOUBLE))
+        ELSE dist_poisson_cdf_complement(CAST(lam AS DOUBLE), CAST(turns AS DOUBLE))
+             + dist_poisson_pdf(CAST(lam AS DOUBLE), CAST(turns AS DOUBLE)) END AS p_pois,
+      dist_normal_cdf_complement(0.0, 1.0, CAST(modz AS DOUBLE)) AS p_norm
     FROM t ORDER BY i;`)
   const pRate = new Array<number>(turns.length).fill(1)
   const pIntensity = new Array<number>(turns.length).fill(1)
@@ -362,6 +443,10 @@ export async function burnSeismic(opts: BurnSeismicOptions): Promise<BurnSeismic
   const modZThreshold = opts.modZThreshold ?? 3.5
   const fdrAlpha = opts.fdrAlpha ?? 0.01
   const fdrMethod = opts.fdrMethod ?? 'bh'
+  const cfarRef = Math.max(0, Math.floor(opts.cfarReference ?? 120))
+  const cfarGuard = Math.max(0, Math.floor(opts.cfarGuard ?? 15))
+  const cfarTrim = opts.cfarTrim ?? 0.25
+  const cfarMinRef = Math.max(1, Math.floor(opts.cfarMinReference ?? 30))
   const staMin = opts.staMinutes ?? 3
   const ltaMin = opts.ltaMinutes ?? 60
   const staOn = opts.staLtaOn ?? 4
@@ -377,8 +462,10 @@ export async function burnSeismic(opts: BurnSeismicOptions): Promise<BurnSeismic
     windowSinceIso: sinceIso, bucketMinutes, filesAnalysed: opts.files.length,
     totalUsd: 0, totalWriteUsd: 0, totalReadUsd: 0, totalOutputUsd: 0, totalTurns: 0, bucketCount: 0,
     baseline: zeroBaseline, poissonLambda: 0, intensityBaseline: zeroBaseline,
+    rateLaw: 'poisson', dispersionIndex: 1,
     fdrAlpha, fdrMethod, fdrThreshold: 0, fdrSignificantCount: 0,
-    calibration: { alpha: 0.05, observedBackgroundShare: null }, pvalueEngine: 'internal',
+    calibration: { alpha: 0.05, observedBackgroundShare: null, pi0: null, nullAttributableShare: null, upperUniformity: null },
+    localBaseline: null, pvalueEngine: 'internal',
     dominantModeOverall: 'MIXED', verdict: '',
     changePoints: [], peltChangepoints: [], events: [], sessions: [], spawnsInMainshock: [], buckets: [], reason,
   })
@@ -468,26 +555,98 @@ export async function burnSeismic(opts: BurnSeismicOptions): Promise<BurnSeismic
     // normalSf(modZ(cost)) produced mis-calibrated p-values. The calibrated null is the MARKED
     // POINT PROCESS below: cost/min = (Poisson turn count) × (lognormal per-turn cost).
     const baseline = robustBaseline(cost)
+    const wSeries = grid.map(g => g.w)
+    const rSeries = grid.map(g => g.r)
+    const medianW = median(wSeries)
+    const medianR = median(rSeries)
+
+    // LOCAL BACKGROUND (CFAR). v2.13 asserted ONE stationary background for the whole window; a real
+    // fleet series is not stationary (day/night, session regimes), so every busy-but-NORMAL minute
+    // read as an anomaly — the live calibration self-check measured a 13.5% background false-alarm
+    // share against the 5% target. That is a mis-specified null, not a mis-computed tail: no amount
+    // of exactness in the Poisson/lognormal tails can fix a background that is wrong for the hour.
+    // Each bucket now takes its background from its OWN neighbourhood (reference cells either side,
+    // minus a guard band so an event cannot set its own level), trimmed/median-based so an
+    // interfering burst inside the window does not raise it. Where the window cannot be filled
+    // (series edges, short windows) the bucket falls back to the global estimate — disclosed.
+    const cfarOpts = { reference: cfarRef, guard: cfarGuard, trim: cfarTrim, minReference: cfarMinRef }
+    const locCost = cfarLocalStats(cost, cfarOpts)
+    const locTurns = cfarLocalStats(turns, cfarOpts)
+    const locW = cfarLocalStats(wSeries, cfarOpts)
+    const locR = cfarLocalStats(rSeries, cfarOpts)
 
     // RATE null: robust background turn rate λ̂ — the trimmed Poisson MLE (mean of the buckets
-    // whose count modified-z is not extreme, so a burst cannot inflate its own baseline).
+    // whose count modified-z is not extreme, so a burst cannot inflate its own baseline). Computed
+    // GLOBALLY as the fallback, and LOCALLY (same trimmed estimator, CFAR window) per bucket.
     const turnModZ = modifiedZScores(turns, robustBaseline(turns))
     const bg = turns.filter((_, i) => Math.abs(turnModZ[i]) <= modZThreshold)
     const lambda = bg.length ? bg.reduce((s, v) => s + v, 0) / bg.length
       : turns.reduce((s, v) => s + v, 0) / Math.max(1, turns.length)
+    // A FINITE window of zeros cannot prove the rate is exactly 0, and λ̂=0 would make any single
+    // turn infinitely significant (P(X≥1|0) = 0 — a certainty the data does not support). Floor at
+    // the Jeffreys-smoothed rate for an all-zero sample: half an event over the reference cells.
+    const lambdaFloor = (n: number): number => 0.5 / Math.max(1, n)
+    const lambdaAt = grid.map((_, i) => {
+      const L = locTurns[i]
+      return L ? Math.max(L.trimmedMean, lambdaFloor(L.n)) : Math.max(lambda, lambdaFloor(turns.length))
+    })
+
+    // OVER-DISPERSION. Turn counts are NOT Poisson: turns arrive in CLUSTERS (one action triggers a
+    // burst; sessions start and stop), so the background variance far exceeds its mean and a Poisson
+    // tail calls ordinary busy minutes improbable — measured on the live fleet as a 13.5% background
+    // false-alarm share against the 5% target, unchanged by the local baseline because the level was
+    // never the problem: the SHAPE was. Each bucket therefore carries its local winsorized variance,
+    // and the rate tail is the negative binomial (Poisson–Gamma mixture) whenever σ² > μ — a strict
+    // generalization that CONTAINS Poisson (σ²→μ ⇒ r→∞), so it can only remove false alarms.
+    const globalTurnVar = (() => { // window-wide fallback, on the same trimmed background sample
+      if (bg.length < 2) return 0
+      const m = bg.reduce((s, v) => s + v, 0) / bg.length
+      return bg.reduce((s, v) => s + (v - m) * (v - m), 0) / (bg.length - 1)
+    })()
+    // rateLaw:'poisson' pins variance ≡ mean, which makes negBinomSF degenerate to the exact Poisson
+    // tail everywhere — the falsifier that reproduces the pre-NB false-alarm rate on demand.
+    const varAt = grid.map((_, i) => (opts.rateLaw === 'poisson' ? lambdaAt[i] : locTurns[i]?.winsorVar ?? globalTurnVar))
+    const dispersionAt = grid.map((_, i) => (lambdaAt[i] > 0 ? varAt[i] / lambdaAt[i] : 1))
+    const dispersionIndex = median(dispersionAt)
+    const overDispersedShare = dispersionAt.filter(d => d > 1).length / Math.max(1, grid.length)
+    const rateLaw: RateLaw = overDispersedShare === 0 ? 'poisson'
+      : overDispersedShare > 0.99 ? 'negative-binomial' : 'mixed'
 
     // INTENSITY null: log per-turn cost over ACTIVE buckets only (the hurdle — a quiet minute is a
     // zero of the OCCUPANCY process, not a tiny cost; folding it in would bias median/MAD low and
     // inflate every active minute's z). The log transform is what licenses a Gaussian tail on
-    // multiplicative per-turn cost (prefix size × rate × …).
-    const isActive = (i: number): boolean => grid[i].turns > 0 && grid[i].cost > 0
-    const active: number[] = []
-    for (let i = 0; i < grid.length; i++) if (isActive(i)) active.push(i)
-    const logPerTurn = active.map(i => Math.log(cost[i] / turns[i]))
+    // multiplicative per-turn cost (prefix size × rate × …). The local variant masks the reference
+    // window to its ACTIVE cells — sparser than the window itself, hence its own lower minimum.
+    const activeMask = grid.map(g => g.turns > 0 && g.cost > 0)
+    const isActive = (i: number): boolean => activeMask[i]
+    const logPT = grid.map((_g, i) => (activeMask[i] ? Math.log(cost[i] / turns[i]) : 0))
+    const logPerTurn = logPT.filter((_, i) => activeMask[i])
     const intensityBaseline = logPerTurn.length ? robustBaseline(logPerTurn) : zeroBaseline
-    const zIntensity = new Array<number>(grid.length).fill(0)
-    for (let k = 0; k < active.length; k++) {
-      zIntensity[active[k]] = modifiedZ(logPerTurn[k], intensityBaseline.median, intensityBaseline.mad, intensityBaseline.meanAD)
+    const locInt = cfarLocalStats(logPT, {
+      ...cfarOpts, include: activeMask, minReference: Math.max(12, Math.floor(cfarMinRef / 3)),
+    })
+    // LOCAL location, POOLED scale. A reference window can be perfectly flat (zero MAD *and* zero
+    // meanAD — uniform traffic, or a short synthetic series), and a zero-width scale is not a
+    // measurement: it makes the robust z either 0 (no evidence — a fat turn beside 25 identical
+    // quiet ones would score NOTHING) or ±∞ (infinite confidence from 25 samples). Neither is
+    // honest, so when the local scale collapses the WINDOW-WIDE dispersion supplies the scale while
+    // the local median still supplies the level — the part nonstationarity actually corrupts.
+    const zIntensity = grid.map((_, i) => {
+      if (!activeMask[i]) return 0
+      const lb = locInt[i]?.baseline
+      const loc = lb ? lb.median : intensityBaseline.median
+      const scale = lb && (lb.mad > 0 || lb.meanAD > 0) ? lb : intensityBaseline
+      return modifiedZ(logPT[i], loc, scale.mad, scale.meanAD)
+    })
+
+    // Per-bucket background LEVELS for the excess arithmetic (local where available, else global).
+    const baseAt = grid.map((_, i) => locCost[i]?.baseline.median ?? baseline.median)
+    const wBaseAt = grid.map((_, i) => locW[i]?.baseline.median ?? medianW)
+    const rBaseAt = grid.map((_, i) => locR[i]?.baseline.median ?? medianR)
+    const localCells = locTurns.filter(c => c !== null).length
+    const localBaseline = cfarRef === 0 ? null : {
+      reference: cfarRef, guard: cfarGuard, trim: cfarTrim,
+      fallbackShare: grid.length ? 1 - localCells / grid.length : 1,
     }
 
     // Distribution tails from the `stochastic` community extension when available (an independent,
@@ -498,10 +657,11 @@ export async function burnSeismic(opts: BurnSeismicOptions): Promise<BurnSeismic
     let pRate: number[]
     let pIntensity: number[]
     if (useExt) {
-      const pv = await extPValues(query, turns, zIntensity, lambda)
+      const pv = await extPValues(query, turns, zIntensity, lambdaAt, varAt)
       pRate = pv.pRate; pIntensity = pv.pIntensity
     } else {
-      pRate = turns.map(t => poissonSF(t, lambda))
+      // negBinomSF falls back to the exact Poisson tail itself when the bucket is not over-dispersed.
+      pRate = turns.map((t, i) => negBinomSF(t, lambdaAt[i], varAt[i]))
       pIntensity = zIntensity.map(normalSf)
     }
     // An inactive bucket carries NO intensity evidence: p ≡ 1 regardless of engine (its z slot is a
@@ -528,7 +688,8 @@ export async function burnSeismic(opts: BurnSeismicOptions): Promise<BurnSeismic
 
     const buckets: SeismicBucket[] = grid.map((g, i) => ({
       iso: g.iso, costUsd: g.cost, writeUsd: g.w, readUsd: g.r, outputUsd: g.o, turns: g.turns,
-      modZ: zIntensity[i], pValueRate: pRate[i], pValueIntensity: pIntensity[i], pValue: pCombined[i],
+      modZ: zIntensity[i], pValueRate: pRate[i], lambda: lambdaAt[i], baselineUsd: baseAt[i],
+      pValueIntensity: pIntensity[i], pValue: pCombined[i],
       fdrSignificant: bh.rejected[i], staLtaRatio: sta.ratio[i],
     }))
 
@@ -548,9 +709,9 @@ export async function burnSeismic(opts: BurnSeismicOptions): Promise<BurnSeismic
       if (rf >= 0.5 && rf > wf) return 'MARATHON_REREAD'
       return 'MIXED'
     }
+    // Magnitude uses a FIXED window-wide reference (like Richter's reference amplitude) so events
+    // stay comparable across regimes; only the ENERGY (the excess) is measured locally.
     const refCost = Math.max(baseline.median, 1e-9)
-    const medianW = median(grid.map(g => g.w))
-    const medianR = median(grid.map(g => g.r))
     // Evidence score −ln p, capped so p=0 (underflow) stays finite and comparable.
     const evScore = (x: number): number => -Math.log(Math.max(x, 1e-320))
 
@@ -599,22 +760,25 @@ export async function burnSeismic(opts: BurnSeismicOptions): Promise<BurnSeismic
     const finalize = (from: number, to: number): SeismicEvent => {
       let costUsdE = 0, w = 0, r = 0, o = 0, tn = 0, peakUsd = 0, peakIso = grid[from].iso
       let peakModZ = 0, peakSta = 0, minP = 1, minPRate = 1, minPIntensity = 1
+      let peakIdx = from, baseSum = 0, wBaseSum = 0, rBaseSum = 0
       for (let i = from; i <= to; i++) {
         const b = buckets[i]
         costUsdE += b.costUsd; w += b.writeUsd; r += b.readUsd; o += b.outputUsd; tn += b.turns
-        if (b.costUsd > peakUsd) { peakUsd = b.costUsd; peakIso = b.iso }
+        baseSum += baseAt[i]; wBaseSum += wBaseAt[i]; rBaseSum += rBaseAt[i]
+        if (b.costUsd > peakUsd) { peakUsd = b.costUsd; peakIso = b.iso; peakIdx = i }
         if (b.modZ > peakModZ) peakModZ = b.modZ
         if (b.staLtaRatio > peakSta) peakSta = b.staLtaRatio
         if (b.pValue < minP) minP = b.pValue
         if (b.pValueRate < minPRate) minPRate = b.pValueRate
         if (b.pValueIntensity < minPIntensity) minPIntensity = b.pValueIntensity
       }
-      const durBuckets = to - from + 1
-      const excessUsd = Math.max(0, costUsdE - baseline.median * durBuckets)
+      // Excess against the LOCAL expectation summed over the event's own buckets — a busy-hour event
+      // is not credited with the busy hour's normal spend, and a quiet-hour event is not discounted.
+      const excessUsd = Math.max(0, costUsdE - baseSum)
       // Which factor carries the statistical evidence decides the cause class; at intensity
       // dominance the W/R split of the COMPONENT excesses separates thrash from marathon.
-      const excessW = Math.max(0, w - medianW * durBuckets)
-      const excessR = Math.max(0, r - medianR * durBuckets)
+      const excessW = Math.max(0, w - wBaseSum)
+      const excessR = Math.max(0, r - rBaseSum)
       const sRate = evScore(minPRate)
       const sInt = evScore(minPIntensity)
       const cause: EventCause = sRate >= 2 * sInt ? 'FANOUT_RATE'
@@ -625,7 +789,7 @@ export async function burnSeismic(opts: BurnSeismicOptions): Promise<BurnSeismic
         durMin: (isoToMs(grid[to].iso) - isoToMs(grid[from].iso)) / 60_000 + bucketMinutes,
         costUsd: costUsdE, excessUsd, writeUsd: w, readUsd: r, outputUsd: o, turns: tn,
         peakUsd, peakIso, peakModZ, peakStaLta: peakSta, minP, minPRate, minPIntensity,
-        magnitude: magnitude(Math.max(0, peakUsd - baseline.median), refCost),
+        magnitude: magnitude(Math.max(0, peakUsd - baseAt[peakIdx]), refCost),
         dominantMode: modeOf(w, r, costUsdE), cause,
         culprits: buildCulprits(from, to),
       }
@@ -638,9 +802,9 @@ export async function burnSeismic(opts: BurnSeismicOptions): Promise<BurnSeismic
         if (bh.rejected[i]) { if (first < 0) first = i; last = i }
       }
       if (first < 0) continue
-      let segCost = 0
-      for (let i = seg.from; i <= seg.to; i++) segCost += cost[i]
-      const elevated = segCost / (seg.to - seg.from + 1) > baseline.median
+      let segCost = 0, segBase = 0
+      for (let i = seg.from; i <= seg.to; i++) { segCost += cost[i]; segBase += baseAt[i] }
+      const elevated = segCost > segBase // vs the LOCAL expectation of the same buckets
       rawEvents.push(elevated ? finalize(seg.from, seg.to) : finalize(first, last))
     }
     // Events rank by EXCESS (the anomaly's energy), not raw $ — raw totals conflate the baseline.
@@ -696,6 +860,12 @@ export async function burnSeismic(opts: BurnSeismicOptions): Promise<BurnSeismic
     const observedBackgroundShare = bgIdx.length >= 20
       ? bgIdx.filter(i => pCombined[i] < 0.05).length / bgIdx.length
       : null
+    // π̂₀ and the shape check run on the ACTIVE background only: an inactive bucket carries p ≡ 1 by
+    // construction (the hurdle), and a pile of exact 1s would fake both a perfect π̂₀ and a broken
+    // uniformity ratio in every configuration.
+    const bgActiveP = bgIdx.filter(i => isActive(i)).map(i => pCombined[i])
+    const pi0 = bgActiveP.length >= 20 ? storeyPi0(bgActiveP) : null
+    const upperUniformity = bgActiveP.length >= 20 ? upperTailUniformity(bgActiveP) : null
 
     const totalWriteUsd = grid.reduce((s, g) => s + g.w, 0)
     const totalReadUsd = grid.reduce((s, g) => s + g.r, 0)
@@ -717,9 +887,13 @@ export async function burnSeismic(opts: BurnSeismicOptions): Promise<BurnSeismic
       windowSinceIso: sinceIso, bucketMinutes, filesAnalysed: files.length,
       totalUsd, totalWriteUsd, totalReadUsd, totalOutputUsd,
       totalTurns: turns.reduce((s, v) => s + v, 0), bucketCount: grid.length,
-      baseline, poissonLambda: lambda, intensityBaseline,
+      baseline, poissonLambda: lambda, intensityBaseline, rateLaw, dispersionIndex,
       fdrAlpha, fdrMethod, fdrThreshold: bh.threshold, fdrSignificantCount: bh.nRejected,
-      calibration: { alpha: 0.05, observedBackgroundShare },
+      calibration: {
+        alpha: 0.05, observedBackgroundShare, pi0,
+        nullAttributableShare: pi0 === null ? null : 0.05 * pi0, upperUniformity,
+      },
+      localBaseline,
       pvalueEngine, dominantModeOverall, verdict, changePoints, peltChangepoints,
       events: events.slice(0, topEvents), mainshock, sessions, spawnsInMainshock, buckets,
     }
@@ -742,12 +916,23 @@ export function renderBurnSeismic(r: BurnSeismicResult): string {
   L.push(`    split: cache-WRITE(cold) ${money(r.totalWriteUsd)} (${pctOf(r.totalWriteUsd, r.totalUsd)})` +
          `  cache-READ ${money(r.totalReadUsd)} (${pctOf(r.totalReadUsd, r.totalUsd)})` +
          `  output ${money(r.totalOutputUsd)} (${pctOf(r.totalOutputUsd, r.totalUsd)})`)
-  L.push(`  null model: turns ~ Poisson(λ̂=${r.poissonLambda.toFixed(2)}/bucket) × per-turn cost ~ lognormal` +
+  const rateLawStr = r.rateLaw === 'poisson' ? 'Poisson' : r.rateLaw === 'negative-binomial'
+    ? 'NegBinom(over-dispersed)' : 'NegBinom/Poisson per bucket'
+  L.push(`  null model: turns ~ ${rateLawStr}(λ̂=${r.poissonLambda.toFixed(2)}/bucket, dispersion σ²/μ=${r.dispersionIndex.toFixed(1)}) × per-turn cost ~ lognormal` +
          ` (log-median ${r.intensityBaseline.median.toFixed(2)}, log-MAD ${r.intensityBaseline.mad.toFixed(2)}); Fisher-combined (χ²₄)`)
   L.push(`  cost baseline (median/MAD): ${money(r.baseline.median)}/min, MAD ${money(r.baseline.mad)}`)
+  L.push(`  background: ${r.localBaseline
+    ? `LOCAL CFAR ±${r.localBaseline.reference} buckets, guard ±${r.localBaseline.guard}, trim ${r.localBaseline.trim}` +
+      ` (${(100 * r.localBaseline.fallbackShare).toFixed(0)}% of buckets fell back to global)`
+    : 'GLOBAL (stationary null — local background disabled)'}`)
   L.push(`  p-value engine: ${r.pvalueEngine === 'stochastic' ? 'stochastic community extension (independent)' : 'internal TS core (unit-tested vs textbook + stochastic Δ≤2e-16)'}`)
   L.push(`  significance: ${r.fdrMethod.toUpperCase()} FDR α=${r.fdrAlpha} on combined p → ${r.fdrSignificantCount} significant buckets (crit p ≤ ${r.fdrThreshold.toExponential(2)})`)
-  L.push(`  calibration: background share with p<0.05 = ${r.calibration.observedBackgroundShare === null ? 'n/a (background too small)' : (100 * r.calibration.observedBackgroundShare).toFixed(1) + '% (expected ≤5% — Poisson-discrete conservative)'}`)
+  const cal = r.calibration
+  L.push(`  calibration: background p<0.05 = ${cal.observedBackgroundShare === null ? 'n/a (background too small)'
+    : (100 * cal.observedBackgroundShare).toFixed(1) + '%'}` +
+    (cal.pi0 === null ? '' : `, of which ${(100 * cal.nullAttributableShare!).toFixed(1)}% is null-attributable` +
+      ` (Storey π̂₀=${cal.pi0.toFixed(2)} ⇒ ~${(100 * (1 - cal.pi0)).toFixed(0)}% of active background is genuine signal);` +
+      ` upper-half uniformity ${cal.upperUniformity!.toFixed(1)}× (≈1 = well-specified null)`))
   L.push(`  segmentation: PELT changepoints ${r.peltChangepoints.length}   |   CUSUM alarms ${r.changePoints.length}`)
   if (r.verdict) L.push(`  VERDICT: ${r.verdict}`)
 
