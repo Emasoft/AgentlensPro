@@ -1,8 +1,8 @@
 ---
 name: otlp-ingest-topology
-description: "which OTLP ingest path is actually live / codex sessions grouped wrong / grouped by conversation not per prompt / multiple otlp parsers or processLogs copies / where does the shipped ingest live / second router is a second truth / why did an ingest fix not take effect / how many places parse the OTLP wire format"
+description: "which OTLP ingest path is actually live / codex sessions grouped wrong / grouped by conversation not per prompt / multiple otlp parsers or processLogs copies / where does the shipped ingest live / second router is a second truth / why did an ingest fix not take effect / how many places parse the OTLP wire format / what OTEL attributes does Claude Code emit / which telemetry fields are we not reading / where does client_request_id or tool_source go"
 ocd: 2026-07-11
-lmd: 2026-07-11
+lmd: 2026-07-26
 metadata:
   node_type: memory
   tier: hub
@@ -62,6 +62,30 @@ into `helpers.ts` as `isCodexPromptSpanName`, ending a byte-identical copy) and 
 FORMAT (`codexPromptSessionId(conv, n)`), both single-sourced in `codexSessionNormalizer.ts`.
 `groupCodexSpansBySession` is now covered by a characterization test
 (`src/test/codexGrouping.test.ts`) that locks its output.[^3]
+
+**The Claude Code OTEL surface — what it emits, and what we do NOT read** (source:
+code.claude.com/docs/en/monitoring-usage.md, verified 2026-07-26). Metrics:
+`claude_code.{session,lines_of_code,pull_request,commit}.count`, `claude_code.cost.usage`,
+`claude_code.token.usage`, `claude_code.code_edit_tool.decision`, `claude_code.active_time.total`.
+Log events: `claude_code.{user_prompt,assistant_response,tool_result,api_request,api_error,
+api_refusal,api_request_body,api_response_body,tool_decision,permission_mode_changed,auth,
+mcp_server_connection,internal_error,plugin_installed,plugin_loaded}`. Spans:
+`claude_code.{interaction,llm_request,tool,tool.blocked_on_user,tool.execution,hook}`.
+Token/cost attrs: `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_creation_tokens`,
+`cost_usd`, `cost_usd_micros`. Identity/route attrs: `model`, `query_source`, `speed`, `effort`,
+`attempt`, `agent_id`, `parent_agent_id`, `agent.name`, `subagent_type`, `workflow.run_id`,
+`workflow.name`, `skill_name`, `tool_name`, `tool_use_id`, `mcp_server_name`, `mcp_tool_name`.
+Correlation attrs: `prompt.id`, `message.uuid`, `client_request_id`.
+
+**Three of those are arriving on disk and read by NOTHING here** (verified by grep, 2026-07-26):
+`client_request_id`, `message.uuid`, `tool_source`. `client_request_id` is the interesting one —
+our per-call attribution currently walks the `previous_message_id` chain (cacheCreationForensics.ts),
+which structurally cannot attribute a session's most recent call NOR a compaction's own
+summarization call, leaving them in the `unattributable` bucket of `get_cache_event_log`. Whether
+`client_request_id` joins to the uuid-named body files is UNPROVEN — a 5-sample probe matched 0,
+but the sample was the oldest ids of the day against a rolling RAM-disk spool, so it is
+inconclusive, not negative. `workflow.run_id`/`workflow.name` ARE already ingested (spanSummarizer.ts).
+Content-size knob we do not set: `CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH` (default 60 KB truncation).
 
 ## Notes and lessons learned
 [^1]: [ocd:2026-07-11 lmd:2026-07-11] S3-F3 was first scoped (from a compaction handoff)
