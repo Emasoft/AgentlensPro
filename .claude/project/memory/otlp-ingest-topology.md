@@ -77,17 +77,45 @@ Token/cost attrs: `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_c
 `workflow.name`, `skill_name`, `tool_name`, `tool_use_id`, `mcp_server_name`, `mcp_tool_name`.
 Correlation attrs: `prompt.id`, `message.uuid`, `client_request_id`.
 
-**Three of those are arriving on disk and read by NOTHING here** (verified by grep, 2026-07-26):
-`client_request_id`, `message.uuid`, `tool_source`. `client_request_id` is the interesting one —
-our per-call attribution currently walks the `previous_message_id` chain (cacheCreationForensics.ts),
-which structurally cannot attribute a session's most recent call NOR a compaction's own
-summarization call, leaving them in the `unattributable` bucket of `get_cache_event_log`. Whether
-`client_request_id` joins to the uuid-named body files is UNPROVEN — a 5-sample probe matched 0,
-but the sample was the oldest ids of the day against a rolling RAM-disk spool, so it is
-inconclusive, not negative. `workflow.run_id`/`workflow.name` ARE already ingested (spanSummarizer.ts).
-Content-size knob we do not set: `CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH` (default 60 KB truncation).
+**`request_id` — NOT `client_request_id` — is the OTEL↔raw-body join key** (measured 2026-07-26 over
+one day's events: `request_id` matched a body filename 482/2046, `client_request_id` **0/1993**).
+`request_id` carries the API id (`req_011C…`) that names the body files; the 482/2046 shortfall is
+just RAM-disk spool eviction, not a join failure. This matters because the OTEL `api_request` event
+ALSO carries `session.id` **directly** — so joining on `request_id` attributes a call without the
+`previous_message_id` chain that `cacheCreationForensics.ts` walks today, and that chain is exactly
+what leaves a session's newest call and a compaction's own summarization call `unattributable` in
+`get_cache_event_log`. `query_source` even labels the compaction call **`compact`** (observed
+distribution: `repl_main_thread`, `agent:*`, `agent_summary`, `away_summary`, `compact`,
+`web_fetch_apply`). Claude Code additionally emits a **`claude_code.compaction`** event carrying
+`trigger` / `pre_tokens` / `post_tokens`. Still read by nothing here: `message.uuid`, `tool_source`.
+`workflow.run_id`/`workflow.name` ARE already ingested (spanSummarizer.ts). Content-size knob we do
+not set: `CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH` (default 60 KB truncation).[^4]
+
+**The raw responses carry the cache-diagnostics beta.** Claude Code sends
+`anthropic-beta: cache-diagnosis-2026-04-07`, so response bodies have a top-level `diagnostics`:
+`null` when the prefix held, else `cache_miss_reason: {type, cache_missed_input_tokens}` with type ∈
+`model_changed | system_changed | tools_changed | messages_changed | previous_message_not_found |
+unavailable`. Measured over 350 recent bodies: 347 `null`, 3 `messages_changed` (one at 214,223
+missed tokens). This is a GROUND-TRUTH cache-miss reason per call — we currently infer the reason
+statistically (burnSeismic's COLD_REWRITE tag, the gap-bucket heuristic) when the API states it.
+
+**Prefer OTEL `cost_usd` over recomputing from pricing.ts.** The event carries `cost_usd` +
+`cost_usd_micros`, and Claude Code's own price table is TTL-tier-aware where ours is not (see
+[[cache-ttl-model]] [^3]). Verified to the cent on a live call: in=2, cache_read=62,610,
+cache_creation=405,521 (all `ephemeral_1h`), out=133 → $10.00/MTok reproduces `cost_usd` 4.089850
+EXACTLY; the flat $6.25 gives 2.569146. Recomputing is only needed on the JSONL-only path.
 
 ## Notes and lessons learned
+[^4]: [id:ATOM-REQID-JOIN, status:valid, keywords:"client_request_id_assumed_to_be_the_body_join_key request_id_is_the_real_one uuid_named_bodies_are_not_client_request_id inconclusive_probe_reported_as_open", ocd:2026-07-26, lmd:2026-07-26]
+  DO NOT assume `client_request_id` is the key that joins an OTEL event to its raw body file,
+  BECAUSE it matched **0 of 1993** body filenames while the plain `request_id` matched 482/2046 —
+  `request_id` holds the `req_011C…` API id the files are actually named after, and the uuid-shaped
+  body names are something else entirely. The name similarity is the whole trap: `client_request_id`
+  reads like the more specific, more "correct" identifier. DO test a join key against real filenames
+  before building on it. (The 5-sample probe that first suggested this was reported as INCONCLUSIVE
+  rather than negative, which is what left the door open to check it properly instead of shipping
+  the guess — record a weak probe as weak.)
+
 [^1]: [ocd:2026-07-11 lmd:2026-07-11] S3-F3 was first scoped (from a compaction handoff)
   as a two-way, then three-way divergence; the ACTUAL topology is four-way — the
   summarizer's `groupCodexSpansBySession` was missed by the finding AND by the initial

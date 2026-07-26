@@ -21,8 +21,14 @@ code.claude.com/docs/en/prompt-caching.md, fetched + verified 2026-07-11):
 | Fork | inherits parent | reads the PARENT's entry; every hit RESETS the parent's timer |
 
 **The WRITE rate is tiered by that same TTL — and our cost function ignores it.** A 5-minute write
-bills at **1.25×** base input; a **1-hour write at 2×** (platform prompt-caching doc, verified
-2026-07-26). Main conversations on a subscription take the 1h tier automatically, so their writes
+bills at **1.25×** base input; a **1-hour write at 2×**. Not extrapolated from the API pricing doc —
+**verified against Claude Code's OWN `cost_usd`** three ways (2026-07-26): (1) solving the implied
+write rate over ~700 opus calls gives a median of exactly **$10.0000**/MTok with p10 exactly
+**$6.2500** (both published tiers present, so NEITHER flat rate is correct); (2) joining those
+events to their raw bodies on `request_id`, the implied rate matches the body's
+`usage.cache_creation.ephemeral_{5m,1h}` tier **26/26**; (3) one call reconciles to the cent —
+in=2, read=62,610, write=405,521 (all 1h), out=133 → $10/MTok yields `cost_usd` **4.089850** exactly,
+while the flat $6.25 yields 2.569146. Main conversations on a subscription take the 1h tier automatically, so their writes
 cost **2×**. `calcTokenCostUsd` (src/shared/pricing.ts) takes ONE `cacheWriteTokens` argument and
 prices it at `cacheWritePerMTok` = the **5m** rate, so **every main-session write we report is 60%
 low** — for opus-5, $6.25/MTok charged where $10.00/MTok applies. The fix is available for free: we
