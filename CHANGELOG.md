@@ -4,6 +4,67 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.16.0] - 2026-07-26
+
+### Added
+
+- **`get_subscription_usage` — the AUTHORITATIVE 5h / 7d window utilization.** Every other window
+  tool here *infers* the cap: `capacityCalibration` derives a lower bound from observed rate-limit
+  hits and `computeWindowBudget` projects against it (`capacitySource: observed | same-plan-proxy |
+  none`, and no ETA at all when uncalibrated). Anthropic publishes the real percentage — the same one
+  `/usage` renders — so this replaces an estimate with a measurement. Parses the generic **`limits[]`**
+  array (`{kind, group, percent, severity, resetsAt, isActive, scopeLabel}`, kinds `session` /
+  `weekly_all` / `weekly_scoped`) rather than only the two named windows, because the payload already
+  carries per-model buckets that named-field parsing silently drops. Also reports
+  **`usageCreditsEnabled`**, the live oracle for the prompt-cache TTL regime (credits off = the
+  automatic 1-hour TTL, so main-conversation writes bill at 2×; credits on = 5 minutes, 1.25×).
+  Technique credit: [`pizzimenti/ccgauge`](https://github.com/pizzimenti/ccgauge).
+  - The endpoint is **undocumented and 429s hard — re-knocking RE-ARMS the lockout** rather than
+    queueing. Hence a 10-minute cache, `Retry-After` honored (delta-seconds *or* HTTP-date, then
+    Anthropic's own `anthropic-ratelimit-*-reset` headers), exponential back-off on **consecutive**
+    429s (10 min → 2 h), and a cross-process lock with a TOCTOU re-check so two callers cannot
+    double-hit and then fail to escalate.
+  - Failures degrade to the last reading with an explicit **`reason`** (`cooldown` / `no_token` /
+    `opt_in_required` / `lock_contended` / `http_error`) rather than a re-derived guess, and a stale
+    reading **suppresses its reset countdowns** — a countdown computed from a cached `resets_at`
+    renders as live for a window that may already have rolled.
+  - On macOS the OAuth token is in the login keychain, not `~/.claude/.credentials.json` (which does
+    not exist there). The keychain read is **opt-in** via `AGENTLENS_READ_KEYCHAIN_USAGE=1`, because
+    an un-ACL'd read pops a password prompt — the same discipline `accountInfo.ts` already uses.
+
+### Changed
+
+- **`get_cache_event_log` now reads the OTEL span store first**, with the raw bodies as enrichment
+  and fallback. `claude_code.api_request` events carry **`session.id` directly**, so attribution no
+  longer depends on the `previous_message_id` chain — which structurally cannot attribute a session's
+  most recent call, nor **a compaction's own summarization call** (the next request does not chain to
+  it). Live, the `unattributable` count went **91 → 0**. New columns: **query source** (which labels
+  the compaction call `compact`), **cache miss reason** — the API's own verdict from the
+  cache-diagnosis beta (`system_changed` / `tools_changed` / `messages_changed` / …), where we
+  previously *inferred* the cause statistically — and a `costSource` marking each row `harness` or
+  `computed`. The join back to a raw body is **`request_id`**, the API id the body files are named
+  after (measured: 482/2046 matches in a day, the shortfall being spool eviction), **not**
+  `client_request_id` (0/1993 — the similar name is a trap).
+- **The CLI prints pre-rendered output as text.** A tool returning `{format: 'table'|'markdown', text}`
+  was passed through `JSON.stringify`, so a carefully aligned table arrived as one unreadable
+  `\n`-riddled line — the exact opposite of asking for a table. `format: 'json'` is untouched.
+
+### Fixed
+
+- **Cache writes were priced at a flat 1.25×, under-reporting the common case by 60%.** The write
+  rate is **tiered by TTL**: 5-minute writes bill at 1.25× base input, **1-hour writes at 2×** — and
+  Claude Code puts every main-conversation turn on a subscription into the 1h tier automatically.
+  Verified against Claude Code's OWN `cost_usd` rather than extrapolated from the API pricing page:
+  solving the implied rate over ~700 opus calls gives a median of **exactly $10.00/MTok** with a p10
+  of **exactly $6.25** (both tiers occur, so neither flat rate is correct); joined to their raw
+  bodies the implied rate matches the body's `usage.cache_creation.ephemeral_{5m,1h}` tier **26/26**;
+  and one call reconciles to the cent (in=2, read=62,610, write=405,521 all-1h, out=133 → `cost_usd`
+  4.089850, which only $10/MTok produces). `calcTokenCostUsd` gained a trailing `cacheWrite1hTokens`
+  argument defaulting to 0 — a caller that does not know the split keeps today's pricing exactly, so
+  the correction is opt-in per call site and can never silently move a number. `cacheWrite1hRate`
+  derives 2× **only** for entries with the Anthropic 1.25× shape, so a provider that prices writes
+  differently (or not at all) is never handed a rate it does not charge.
+
 ## [2.15.0] - 2026-07-26
 
 ### Added

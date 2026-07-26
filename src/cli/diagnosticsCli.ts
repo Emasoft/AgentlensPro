@@ -390,9 +390,27 @@ function emit(tool: string, result: unknown, globals: { out: string | null }): v
     fs.writeFileSync(globals.out, JSON.stringify(result, null, 2))
     console.log(`${tool}: ${digest(result)}`)
     console.log(`full -> ${globals.out}`)
+  } else if (typeof result === 'string') {
+    console.log(result)
+  } else if (isRenderedText(result)) {
+    // A tool that already rendered itself (format: table | markdown | timeline) returns
+    // { format, text, … }. Printing that as JSON escapes every newline, so a carefully aligned
+    // table arrives as one unreadable "\n"-riddled line — the exact opposite of asking for a table.
+    // Print the rendering, then whatever else the tool attached (coverage, notes) as JSON beside it.
+    const { text, format: _f, ...rest } = result
+    console.log(text)
+    if (Object.keys(rest).length > 0) console.log(JSON.stringify(rest, null, 2))
   } else {
-    console.log(typeof result === 'string' ? result : JSON.stringify(result, null, 2))
+    console.log(JSON.stringify(result, null, 2))
   }
+}
+
+/** A pre-rendered, human-facing payload: `{ format: <non-json>, text: string }`. `format: 'json'`
+ *  never takes this path — a caller who asked for JSON gets JSON. */
+function isRenderedText(v: unknown): v is { format: string; text: string } & Record<string, unknown> {
+  if (typeof v !== 'object' || v === null) return false
+  const o = v as Record<string, unknown>
+  return typeof o.text === 'string' && typeof o.format === 'string' && o.format !== 'json'
 }
 
 // ── Main dispatcher ──────────────────────────────────────────────────────────────────────────

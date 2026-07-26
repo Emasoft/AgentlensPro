@@ -141,11 +141,19 @@ wrong; it must weight every bucket. `investigate_burn` does this correctly —
 $ view is the `billable_weighted` bucket (`cacheCreationForensics.ts` / `mcpServer.ts`).
 
 **2. Per-token cost weights (Claude; per-model in `src/shared/pricing.ts`).** Relative to
-1× input: **cache READ ≈ 0.1×**, **cache WRITE (`cache_creation`) ≈ 1.25×**, **output ≈ 5×**
-(opus-4-8: input 5.00, cacheRead 0.50, cacheWrite 6.25, output 25.00 per MTok). A few models
-differ (codex-mini reads at 0.25×) — code that must be exact reads the rate from `pricing.ts`,
-never a hardcoded flat factor. Cost code MUST weight `cache_read × readRate`,
-`cache_creation × writeRate`, `output × outputRate` — never treat a token as a token.
+1× input: **cache READ ≈ 0.1×**, **output ≈ 5×**, and the **cache WRITE is TIERED BY TTL —
+5-minute = 1.25×, 1-hour = 2×** (opus-5 / opus-4-8: input 5.00, cacheRead 0.50, cacheWrite-5m 6.25,
+**cacheWrite-1h 10.00**, output 25.00 per MTok). The tier is not cosmetic: Claude Code puts every
+main-conversation turn on a subscription into the **1h** tier automatically, so most writes on this
+machine bill at 2× and the old flat 1.25× under-reported them by 60%. Verified against Claude Code's
+own `cost_usd`, three ways — median implied rate exactly $10.00/MTok with p10 exactly $6.25 over
+~700 opus calls; 26/26 agreement with the raw body's `usage.cache_creation.ephemeral_{5m,1h}` tier;
+and one call reconciled to the cent. `calcTokenCostUsd` takes the 1h portion as a trailing argument
+(default 0 = today's all-5m behavior); `cacheWrite1hRate` derives 2× only for entries with the
+Anthropic 1.25× shape, so a provider that prices writes differently is never handed a rate it does
+not charge. **Prefer a harness-reported `cost_usd` (OTEL `claude_code.api_request`) over recomputing
+— Claude Code's own table is tier-aware.** A few models differ (codex-mini reads at 0.25×) — code
+that must be exact reads the rate from `pricing.ts`, never a hardcoded flat factor.
 
 **3. Cache TTL depends on WHERE the turn runs — memorize this:**
 - **MAIN conversation → 1h TTL** automatically (subscription). **Drops to 5m when the account
@@ -188,6 +196,12 @@ culprits by cache-**weighted** equiv (`investigate_burn`), never by request byte
 - To answer "what's burning NOW", read the **live** window (`--risk`, 5-min `get_burn_status`)
   weighted by cost; to answer "what burned the window", read `investigate_burn` (already weighted).
   Do not answer a "now" question from a 5h aggregate, or a cost question from a byte signal.
+- For "**how full is the window really**", read `get_subscription_usage` — Anthropic's own 5h/7d
+  percentages (what `/usage` shows). Everything else here INFERS the cap from observed rate-limit
+  hits. Its `usageCreditsEnabled` is also the live TTL-regime oracle (credits off = 1h TTL = 2× writes).
+- For "**did that turn miss the cache**", read `get_cache_event_log` — one row per call, sourced from
+  the OTEL span store (whose `api_request` events carry `session.id` directly, so a compaction's own
+  summarization call is attributed instead of being invisible) with the API's own `cache_miss_reason`.
 
 Diagnostics encode this as the TTL-regime matrix (TRDD-VY1IUVUM); the full model with measured
 costs: `.claude/project/memory/cache-ttl-model.md`.
