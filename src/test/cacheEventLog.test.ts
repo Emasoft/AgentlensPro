@@ -96,8 +96,11 @@ function teardown(): void {
   fs.rmSync(tmpRoot, { recursive: true, force: true })
 }
 
+// spansDir points at an empty temp dir on purpose: these fixtures exercise the RAW-BODY fallback,
+// and without the override the builder would read this machine's real OTEL span store and assert
+// against live data.
 const build = (over: Parameters<typeof buildCacheEventLog>[0] = {}): Promise<CacheEventLog> =>
-  buildCacheEventLog({ project: PROJECT_A, bodiesDir, ...over })
+  buildCacheEventLog({ project: PROJECT_A, bodiesDir, spansDir: path.join(tmpRoot, 'no-spans'), ...over })
 
 suite('cacheEventLog', () => {
   suiteSetup(setup)
@@ -157,14 +160,33 @@ suite('cacheEventLog', () => {
   test('reports cost and input-equivalents from the model rates, never a hardcoded weighting', async () => {
     const log = await build({ mode: 'peak', contextEvents: 0 })
     const peak = log.rows[0]
-    // 2 input + 100,000 read + 200,000 write + 100 output at the opus-5 rates.
-    const expected = (2 * 5.00 + 100_000 * 0.50 + 200_000 * 6.25 + 100 * 25.00) / 1_000_000
+    // 2 input + 100,000 read + 200,000 write + 100 output at the opus-5 rates. The write is in the
+    // 1-HOUR tier (the fixture says so), which bills at 2x base input = $10.00/MTok — NOT the
+    // $6.25 5-minute rate. Pricing it at 6.25 would give 1.3025 here; that 60% under-count is
+    // exactly the bug this asserts against.
+    const expected = (2 * 5.00 + 100_000 * 0.50 + 200_000 * 10.00 + 100 * 25.00) / 1_000_000
     // costUsd is rounded to 4 decimals for display; the weighting below is taken from the UNROUNDED
     // value, so a long ledger cannot accumulate rounding drift into its total.
     assert.strictEqual(peak.costUsd, +expected.toFixed(4))
     // Input-equivalents = cost expressed in plain input tokens: the cache read contributes 0.1x and
     // the write 1.25x, which is why a 200k write outweighs a 100k read six-fold.
     assert.strictEqual(peak.weightedInputEquivalentTokens, Math.round(expected / (5.00 / 1_000_000)))
+  })
+
+  test('prices a 5-minute write at 1.25x and a 1-hour write at 2x — the tier is not cosmetic', () => {
+    const { calcTokenCostUsd, cacheWrite1hRate, lookupRates } = require('../shared/pricing') as
+      typeof import('../shared/pricing')
+    const W = 1_000_000
+    const fiveMin = calcTokenCostUsd(0, 0, W, 0, MODEL)          // no 1h portion → all 5m
+    const oneHour = calcTokenCostUsd(0, 0, W, 0, MODEL, W)       // the whole write in the 1h tier
+    assert.strictEqual(fiveMin, 6.25, '5-minute write = 1.25x the $5.00 input rate')
+    assert.strictEqual(oneHour, 10.00, '1-hour write = 2x the $5.00 input rate')
+    // Half and half, to prove the split is applied per-portion rather than all-or-nothing.
+    assert.strictEqual(calcTokenCostUsd(0, 0, W, 0, MODEL, W / 2), 8.125)
+    // A provider that does not price cache writes must never be handed a derived 2x rate.
+    const gpt = lookupRates('gpt-4o')
+    assert.ok(gpt && gpt.cacheWritePerMTok === 0)
+    assert.strictEqual(cacheWrite1hRate(gpt), 0, 'no write rate → no derived 1h rate')
   })
 
   test('keeps zero-cache-write calls in recent mode — a ledger of writes only cannot show a warm turn', async () => {

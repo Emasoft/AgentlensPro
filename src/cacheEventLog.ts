@@ -23,11 +23,39 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { claudeProjectsDirs } from './logReader'
 import {
-  scanCacheCreationEvents,
+  scanCacheCreationEvents, readJsonBounded, defaultBodiesDir, MAX_RESPONSE_BYTES,
   type CacheCreationEvent,
   type CacheCreationScanCoverage,
 } from './cacheCreationForensics'
+import { scanOtelCallEvents } from './otelCallEvents'
 import { calcTokenCostUsd, lookupRates } from './shared/pricing'
+
+/** One API call, normalized from EITHER source. The OTEL path is preferred: it carries `session.id`
+ *  directly (so a session's newest call and a compaction's own summarization call are attributable,
+ *  which the body path's previous_message_id chain cannot do) and Claude Code's own tier-aware
+ *  `cost_usd`. The body path fills in what OTEL does not carry — the 5m/1h write split and the
+ *  cache-miss reason — and serves as the whole source when no span store is readable. */
+interface NormalizedCall {
+  ts: number
+  sessionId?: string
+  model?: string
+  input: number
+  output: number
+  cacheRead: number
+  cacheCreate: number
+  cacheCreate1h: number
+  costUsd: number | null            // non-null only when the harness reported it
+  querySource?: string
+  cacheMissReason?: string
+  cacheMissedTokens?: number
+  source: 'otel' | 'body'
+}
+
+/** The `diagnostics` block Claude Code's cache-diagnosis beta puts on every response body. */
+interface RawDiagnosticsBody {
+  usage?: { cache_creation?: { ephemeral_1h_input_tokens?: unknown } }
+  diagnostics?: { cache_miss_reason?: { type?: unknown; cache_missed_input_tokens?: unknown } | null } | null
+}
 
 export type CacheEventMode = 'peak' | 'recent'
 export type CacheEventFormat = 'table' | 'json' | 'markdown'
@@ -89,6 +117,15 @@ export interface CacheEventRow {
   cacheReadTokens: number
   outputTokens: number
   cacheWriteTtl: CacheWriteTtl | null
+  /** What the request was: `repl_main_thread`, `compact` (a compaction's own summarization call),
+   *  `agent:*`, `agent_summary`, `away_summary`, … Present only on the OTEL path. */
+  querySource: string | null
+  /** The API's OWN verdict on why the prefix missed, from the cache-diagnosis beta —
+   *  `system_changed` | `tools_changed` | `messages_changed` | `model_changed` | … — not inferred. */
+  cacheMissReason: string | null
+  cacheMissedTokens: number | null
+  /** 'harness' when the cost is Claude Code's own tier-aware figure; 'computed' when priced locally. */
+  costSource: 'harness' | 'computed' | 'unpriced'
   // Cost-weighted size in INPUT-EQUIVALENT tokens: what this call would have cost had every token
   // been a plain input token. This is the only honest way to compare buckets, because Anthropic
   // meters the rate-limit windows by COST, not by raw token count (cache read ~0.1x, cache write
@@ -117,6 +154,9 @@ export interface CacheEventLog {
   timezone: string
   rows: CacheEventRow[]
   totals: CacheEventLogTotals
+  /** Which feed the rows came from. 'otel' is exact (session.id per call, harness-reported
+   *  tier-aware cost); 'raw-bodies' is the fallback and cannot attribute a session's newest call. */
+  source: 'otel' | 'raw-bodies'
   // Split, because the two exclusions mean opposite things to the reader: `otherProject` is the
   // boundary working as intended, while `unattributable` is data about THIS project that could not be
   // proven to be ours. Reporting one number would hide a coverage gap behind a privacy guarantee.
@@ -133,6 +173,9 @@ export interface CacheEventLogOptions {
   limit?: number
   windowHours?: number
   bodiesDir?: string
+  // Injectable so a test can point at an empty dir and get the raw-body fallback deterministically.
+  // Without it a unit test would read the developer's REAL span store and assert against live data.
+  spansDir?: string
   scanCap?: number
 }
 
@@ -141,40 +184,83 @@ const MAX_CONTEXT_EVENTS = 25
 const DEFAULT_RECENT_LIMIT = 12
 const MAX_RECENT_LIMIT = 200
 
-function ttlOf(event: CacheCreationEvent): CacheWriteTtl | null {
-  if (event.cacheCreation1hTokens > 0) return '1-hour'
-  if (event.cacheCreation5mTokens > 0) return '5-minute'
-  return null
-}
-
-function rowOf(event: CacheCreationEvent, role: CacheEventRole): CacheEventRow {
-  const rates = event.model ? lookupRates(event.model) : null
-  const costUsd = event.model
-    ? calcTokenCostUsd(event.inputTokens, event.cacheReadTokens, event.cacheCreateTokens, event.outputTokens, event.model)
-    : null
+function rowOf(call: NormalizedCall, role: CacheEventRole): CacheEventRow {
+  const rates = call.model ? lookupRates(call.model) : null
+  // Prefer the harness's own figure: Claude Code prices the cache-write TTL tiers separately (a
+  // 1-hour write bills at 2x base input, a 5-minute write at 1.25x), so recomputing locally can only
+  // match it — and silently under-reports whenever the tier is unknown. We recompute ONLY when the
+  // harness did not report a cost, and then we feed the 1h portion through so the tier is honored.
+  const costUsd = call.costUsd !== null
+    ? call.costUsd
+    : call.model
+      ? calcTokenCostUsd(call.input, call.cacheRead, call.cacheCreate, call.output, call.model, call.cacheCreate1h)
+      : null
+  const costSource: CacheEventRow['costSource'] =
+    call.costUsd !== null ? 'harness' : costUsd !== null ? 'computed' : 'unpriced'
+  const ttl: CacheWriteTtl | null = call.cacheCreate <= 0
+    ? null
+    : call.cacheCreate1h > 0 ? '1-hour' : call.source === 'body' ? '5-minute' : null
   // Divide the real dollar cost by the model's own base input rate. Doing it this way (rather than
   // hardcoding 0.1x/1.25x/5x) means the weighting stays correct for any model whose multipliers
   // differ from the Claude family — the ratios are read from pricing.ts, never assumed.
   const weighted = costUsd !== null && rates && rates.inputPerMTok > 0
     ? Math.round(costUsd / (rates.inputPerMTok / 1_000_000))
     : null
-  const scale = writeScaleOf(event.cacheCreateTokens)
+  const scale = writeScaleOf(call.cacheCreate)
   return {
     role,
-    localTime: new Date(event.ts).toLocaleTimeString('en-GB', { hour12: false }),
-    iso: new Date(event.ts).toISOString(),
-    sessionId: event.sessionId ?? '',
-    model: event.model ?? null,
-    inputTokens: event.inputTokens,
-    cacheWriteTokens: event.cacheCreateTokens,
-    cacheReadTokens: event.cacheReadTokens,
-    outputTokens: event.outputTokens,
-    cacheWriteTtl: ttlOf(event),
+    localTime: new Date(call.ts).toLocaleTimeString('en-GB', { hour12: false }),
+    iso: new Date(call.ts).toISOString(),
+    sessionId: call.sessionId ?? '',
+    model: call.model ?? null,
+    inputTokens: call.input,
+    cacheWriteTokens: call.cacheCreate,
+    cacheReadTokens: call.cacheRead,
+    outputTokens: call.output,
+    cacheWriteTtl: ttl,
+    querySource: call.querySource ?? null,
+    cacheMissReason: call.cacheMissReason ?? null,
+    cacheMissedTokens: call.cacheMissedTokens ?? null,
+    costSource,
     weightedInputEquivalentTokens: weighted,
     costUsd: costUsd === null ? null : +costUsd.toFixed(4),
     writeScale: scale,
     writeMarker: WRITE_SCALE_EMOJI.repeat(scale),
   }
+}
+
+/** Normalize a raw-body scan event. Used as the fallback source, and as the enrichment that adds the
+ *  5m/1h write split and the cache-miss reason to an OTEL-sourced call. */
+function fromBody(e: CacheCreationEvent): NormalizedCall {
+  return {
+    ts: e.ts, sessionId: e.sessionId, model: e.model,
+    input: e.inputTokens, output: e.outputTokens,
+    cacheRead: e.cacheReadTokens, cacheCreate: e.cacheCreateTokens,
+    cacheCreate1h: e.cacheCreation1hTokens,
+    costUsd: null,              // the body carries usage, never a cost — we price it ourselves
+    source: 'body',
+  }
+}
+
+/** Read the two things OTEL does not carry from a call's raw body, when it is still on the spool:
+ *  the cache-write TTL split (OTEL reports one undifferentiated `cache_creation_tokens`) and the
+ *  API's own `cache_miss_reason`. Keyed by `request_id`, which IS the body filename stem. */
+function enrichFromBody(bodiesDir: string, requestId: string | undefined): Partial<NormalizedCall> {
+  if (!requestId) return {}
+  const body = readJsonBounded<RawDiagnosticsBody>(
+    path.join(bodiesDir, `${requestId}.response.json`), MAX_RESPONSE_BYTES)
+  if (!body) return {}
+  const out: Partial<NormalizedCall> = {}
+  const h1 = body.usage?.cache_creation?.ephemeral_1h_input_tokens
+  if (typeof h1 === 'number') out.cacheCreate1h = h1
+  const reason = body.diagnostics?.cache_miss_reason
+  if (reason && typeof reason.type === 'string') {
+    out.cacheMissReason = reason.type
+    if (typeof reason.cache_missed_input_tokens === 'number') {
+      out.cacheMissedTokens = reason.cache_missed_input_tokens
+    }
+  }
+  return out
 }
 
 function totalsOf(rows: readonly CacheEventRow[]): CacheEventLogTotals {
@@ -219,11 +305,30 @@ export async function buildCacheEventLog(opts: CacheEventLogOptions = {}): Promi
     includeZeroCacheCreate: true,
   })
 
+  // OTEL FIRST. Its api_request events carry session.id directly, so attribution is exact — no
+  // previous_message_id chain, which means a session's newest call and a compaction's own
+  // summarization call (query_source `compact`) finally appear instead of falling into the
+  // unattributable bucket. Each is then enriched from its raw body via `request_id` (the body
+  // filename stem) for the two things OTEL omits: the 5m/1h write split and cache_miss_reason.
+  const bodiesDir = opts.bodiesDir ?? defaultBodiesDir()
+  const otel = scanOtelCallEvents({ spansDir: opts.spansDir, windowHours: opts.windowHours })
+  const calls: NormalizedCall[] = otel.events.length > 0
+    ? otel.events.map(e => ({
+        ts: e.ts, sessionId: e.sessionId, model: e.model,
+        input: e.inputTokens, output: e.outputTokens,
+        cacheRead: e.cacheReadTokens, cacheCreate: e.cacheCreateTokens,
+        cacheCreate1h: 0, costUsd: e.costUsd, querySource: e.querySource,
+        source: 'otel' as const,
+        ...enrichFromBody(bodiesDir, e.requestId),
+      }))
+    : events.map(fromBody)
+  const usingOtel = otel.events.length > 0
+
   const owner = buildSessionProjectIndex()
-  const mine: CacheCreationEvent[] = []
+  const mine: NormalizedCall[] = []
   let otherProject = 0
   let unattributable = 0
-  for (const e of events) {
+  for (const e of calls) {
     const ownedBy = e.sessionId ? owner.get(e.sessionId) : undefined
     if (ownedBy === undefined) { unattributable += 1; continue }
     if (ownedBy !== project || (opts.sessionId && e.sessionId !== opts.sessionId)) { otherProject += 1; continue }
@@ -236,8 +341,9 @@ export async function buildCacheEventLog(opts: CacheEventLogOptions = {}): Promi
     // Cost, not cache-write size: the costliest call is sometimes an OUTPUT spike (billed ~5x), and a
     // ledger that only ever points at the biggest write would never show it. Ties go to the most
     // recent so "the peak" means the one the user just watched happen.
-    const costOf = (e: CacheCreationEvent): number =>
-      e.model ? calcTokenCostUsd(e.inputTokens, e.cacheReadTokens, e.cacheCreateTokens, e.outputTokens, e.model) : 0
+    const costOf = (e: NormalizedCall): number => e.costUsd !== null
+      ? e.costUsd
+      : e.model ? calcTokenCostUsd(e.input, e.cacheRead, e.cacheCreate, e.output, e.model, e.cacheCreate1h) : 0
     let peakIndex = 0
     for (let i = 1; i < mine.length; i++) {
       if (costOf(mine[i]) >= costOf(mine[peakIndex])) peakIndex = i
@@ -261,11 +367,17 @@ export async function buildCacheEventLog(opts: CacheEventLogOptions = {}): Promi
       otherProject,
       unattributable,
       note: `${otherProject} call(s) excluded as belonging to another project (the scoping boundary ` +
-        `working as intended) and ${unattributable} as unattributable to any session. A call is ` +
-        'attributed through the FOLLOWING request\'s previous_message_id, so a session\'s most recent ' +
-        'call — and a compaction\'s own summarization call, which the next request does not chain to — ' +
-        'stay unattributable. They are never guessed into a project by timing.',
+        `working as intended) and ${unattributable} as unattributable to any session. ` + (usingOtel
+          ? 'Source is the OTEL span store, whose api_request events carry session.id directly, so ' +
+            'attribution is exact and even a compaction\'s own summarization call (query_source ' +
+            '`compact`) is attributed — an unattributable count here means an event with no session.id.'
+          : 'Source is the raw-body scan (no OTEL span store readable): a call is attributed through ' +
+            'the FOLLOWING request\'s previous_message_id, so a session\'s most recent call — and a ' +
+            'compaction\'s own summarization call, which the next request does not chain to — cannot ' +
+            'be attributed.') +
+        ' They are never guessed into a project by timing.',
     },
+    source: usingOtel ? 'otel' : 'raw-bodies',
     legend: [
       `Cache write marker: ${WRITE_SCALE_EMOJI} 1+ tokens · ${WRITE_SCALE_EMOJI.repeat(2)} 10,000+ · ` +
         `${WRITE_SCALE_EMOJI.repeat(3)} 50,000+ · ${WRITE_SCALE_EMOJI.repeat(4)} 150,000+ · ` +
@@ -275,8 +387,11 @@ export async function buildCacheEventLog(opts: CacheEventLogOptions = {}): Promi
       'Cache write TTL: 1-hour = a main-conversation turn on a subscription; 5-minute = a subagent, ' +
         'or a usage-credits session. A 5-minute write with zero cache read is a fresh subagent paying ' +
         'for a cold copy of its parent\'s context.',
-      'Source is the OTEL response bodies, not the session transcript — a compaction\'s own ' +
-        'summarization call exists only there.',
+      'Never sourced from the session transcript: a compaction\'s own summarization call is a real ' +
+        'API call that the .jsonl does not record, so read from there a compaction looks free.',
+      'Cost source: `harness` rows carry Claude Code\'s own cost_usd, which prices the cache-write ' +
+        'TTL tiers separately (1-hour writes bill at 2x base input, 5-minute at 1.25x). `computed` ' +
+        'rows were priced locally from the rate table.',
     ],
     coverage,
   }
@@ -303,23 +418,28 @@ const NUMBER = (n: number): string => n.toLocaleString('en-US')
 export function formatCacheEventLog(log: CacheEventLog, format: CacheEventFormat): unknown {
   if (format === 'json') return log
 
-  const header = ['', 'Time', 'Input tokens', 'Cache write', '', 'Cache read', 'Output tokens', 'Cache write TTL', 'Weighted', 'Cost USD']
+  const header = ['', 'Time', 'Query source', 'Input tokens', 'Cache write', '', 'Cache read',
+                  'Output tokens', 'Cache write TTL', 'Cache miss reason', 'Weighted', 'Cost USD']
   const body = log.rows.map(r => [
     r.role === 'peak' ? '▶' : ' ',
     r.localTime,
+    r.querySource ?? '—',
     NUMBER(r.inputTokens),
     NUMBER(r.cacheWriteTokens),
     r.writeMarker,
     NUMBER(r.cacheReadTokens),
     NUMBER(r.outputTokens),
     r.cacheWriteTtl ?? '—',
+    r.cacheMissReason
+      ? `${r.cacheMissReason}${r.cacheMissedTokens ? ` (${NUMBER(r.cacheMissedTokens)})` : ''}`
+      : '—',
     r.weightedInputEquivalentTokens === null ? '—' : NUMBER(r.weightedInputEquivalentTokens),
     r.costUsd === null ? 'unpriced' : `$${r.costUsd.toFixed(4)}`,
   ])
   const totalRow = [
-    '', 'TOTAL',
+    '', 'TOTAL', '',
     NUMBER(log.totals.inputTokens), NUMBER(log.totals.cacheWriteTokens), '',
-    NUMBER(log.totals.cacheReadTokens), NUMBER(log.totals.outputTokens), '',
+    NUMBER(log.totals.cacheReadTokens), NUMBER(log.totals.outputTokens), '', '',
     NUMBER(log.totals.weightedInputEquivalentTokens), `$${log.totals.costUsd.toFixed(4)}`,
   ]
 
@@ -327,7 +447,11 @@ export function formatCacheEventLog(log: CacheEventLog, format: CacheEventFormat
   const title = log.mode === 'peak'
     ? `Cache event ledger — costliest call in window, with ${(log.rows.length - 1) / 2 >= 1 ? 'surrounding' : 'no surrounding'} calls`
     : `Cache event ledger — ${log.rows.length} most recent call(s)`
-  const scope = `project ${log.project} (from ${log.projectResolvedFrom}) · times local (${log.timezone})`
+  const costNote = log.rows.some(r => r.costSource === 'harness')
+    ? 'cost reported by Claude Code (tier-aware)'
+    : 'cost computed locally'
+  const scope = `project ${log.project} (from ${log.projectResolvedFrom}) · source ${log.source} · `
+    + `${costNote} · times local (${log.timezone})`
 
   if (format === 'markdown') {
     lines.push(`# ${title}`, '', scope, '')

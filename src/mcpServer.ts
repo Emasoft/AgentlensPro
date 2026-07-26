@@ -68,6 +68,7 @@ import {
   buildCacheEventLog, formatCacheEventLog,
   type CacheEventMode, type CacheEventFormat,
 } from './cacheEventLog'
+import { getSubscriptionUsage, formatSubscriptionUsage } from './subscriptionUsage'
 import { dataPath } from './dataDir'
 // TRDD-1FEIW17E — who is writing raw OTEL bodies (live-dir scan + store totals, exact union).
 import { scanLiveBodyWriters, queryStoreWriterTotals, buildBodyWritersReport } from './bodyWriters'
@@ -1548,6 +1549,34 @@ const TOOLS = [
         limit:     { type: 'number', description: 'How many recent calls to list (default 12, max 200). mode=recent only.' },
         window:    { type: 'number', description: 'Only calls from the last N hours; omit for the bounded most-recent scan' },
         format:    { type: 'string', description: 'table (default) | json | markdown' },
+      },
+    },
+  },
+  {
+    name: 'get_subscription_usage',
+    description:
+      'The AUTHORITATIVE 5-hour and 7-day rate-limit window utilization — Anthropic\'s own numbers, ' +
+      'the same ones `/usage` renders, not a local projection. Every other window tool here INFERS ' +
+      'the cap (capacityCalibration derives a lower bound from observed rate-limit hits, and reports ' +
+      'no ETA at all when uncalibrated); this reads the real percentage. Returns the generic ' +
+      '`limits[]` array — `{kind, group, percent, severity, resetsAt, isActive, scopeLabel}` with ' +
+      'kinds `session` / `weekly_all` / `weekly_scoped` (a per-model bucket) — rather than only the ' +
+      'two named windows, because the payload already carries buckets that named-field parsing drops. ' +
+      'Also reports `usageCreditsEnabled`, which is the live oracle for the prompt-cache TTL regime: ' +
+      'credits OFF = the automatic 1-hour TTL (so main-conversation cache writes bill at 2x base ' +
+      'input); credits ON = the TTL drops to 5 minutes (1.25x). Reads the OAuth token Claude Code ' +
+      'already stores — the credentials file first, then the macOS keychain, and the keychain path is ' +
+      'OPT-IN via AGENTLENS_READ_KEYCHAIN_USAGE=1 because an un-ACL\'d read pops a password prompt. ' +
+      'The endpoint is UNDOCUMENTED and community-reverse-engineered, and it 429s hard — results are ' +
+      'cached for 10 minutes and a 429 arms an escalating back-off, so `force` is for a deliberate ' +
+      'one-off refresh, never a loop. Every failure degrades to the last known reading with an ' +
+      'explicit `reason` (cooldown / no_token / opt_in_required / lock_contended / http_error), and a ' +
+      'stale reading suppresses its reset countdowns rather than rendering a rolled window as live.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        force:  { type: 'boolean', description: 'Bypass the 10-minute cache and refetch now. Respects an active 429 back-off.' },
+        format: { type: 'string', description: 'table (default) | json' },
       },
     },
   },
@@ -3464,6 +3493,14 @@ export function createMcpServer(opts: McpServerOptions): Server {
       case 'get_cache_break_gap_report': {
         const a = args as { minCacheCreate?: number; window?: number }
         result = await buildCacheBreakGapReport({ minCacheCreate: a.minCacheCreate, windowHours: a.window })
+        break
+      }
+      case 'get_subscription_usage': {
+        const a = args as { force?: boolean; format?: string }
+        const usage = await getSubscriptionUsage({ force: a.force })
+        result = (a.format ?? 'table') === 'json'
+          ? (usage ?? { error: 'unavailable', reason: 'no_token_or_opt_in_required' })
+          : { format: 'table', text: formatSubscriptionUsage(usage) }
         break
       }
       case 'get_cache_event_log': {

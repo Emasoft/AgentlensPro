@@ -21,7 +21,12 @@ export type PricingMode = 'token' | 'request' | 'request-annual'
 export interface ModelRates {
   inputPerMTok: number              // USD per 1M input tokens (token mode)
   cacheReadPerMTok: number          // USD per 1M cache-read tokens (token mode, 0 if n/a)
-  cacheWritePerMTok: number         // USD per 1M cache-write tokens (token mode, 0 if n/a)
+  cacheWritePerMTok: number         // USD per 1M cache-write tokens, 5-MINUTE TTL tier (0 if n/a)
+  // USD per 1M cache-write tokens at the 1-HOUR TTL tier. Optional: when absent it is derived (see
+  // cacheWrite1hRate). The tier is NOT cosmetic — Claude Code puts every main-conversation turn on
+  // a subscription into the 1h tier automatically, so this is the rate most writes on such a
+  // machine actually pay, and pricing them at the 5m rate under-reports by 60%.
+  cacheWrite1hPerMTok?: number
   outputPerMTok: number             // USD per 1M output tokens (token mode)
   contextWindowTokens: number       // max context window for Projection estimates; 0 = unknown
   multiplier: number                // Pre-Jun 1 Copilot request multiplier × $0.04/prompt (0 = included/free)
@@ -152,26 +157,59 @@ function tieredCost(tokens: number, baseRatePerMTok: number, aboveRatePerMTok: n
        + ((tokens - THRESHOLD) / 1_000_000) * aboveRatePerMTok
 }
 
+/** The 1-HOUR cache-write rate for a model.
+ *
+ *  Anthropic prices a 5-minute cache write at 1.25x base input and a 1-hour write at 2x. Verified
+ *  against Claude Code's OWN `cost_usd` (2026-07-26): solving the implied rate over ~700 opus calls
+ *  gives a median of exactly $10.00/MTok (= 2x the $5.00 input rate) with a p10 of exactly $6.25
+ *  (= 1.25x), and joining those calls to their raw bodies the implied rate matches the body's
+ *  `usage.cache_creation.ephemeral_{5m,1h}` tier 26/26.
+ *
+ *  An explicit `cacheWrite1hPerMTok` always wins. Otherwise the 2x rule is applied ONLY when the
+ *  table's write rate has the Anthropic 1.25x shape — a provider that prices writes differently, or
+ *  not at all (`cacheWritePerMTok: 0`, as every non-Anthropic entry here does), must never be handed
+ *  a derived rate it does not charge. Deriving rather than hand-editing ~15 entries also means a
+ *  future Claude model is priced correctly the moment its input rate is added. */
+export function cacheWrite1hRate(rates: ModelRates): number {
+  if (rates.cacheWrite1hPerMTok !== undefined) return rates.cacheWrite1hPerMTok
+  const anthropicShape = rates.cacheWritePerMTok > 0
+    && Math.abs(rates.cacheWritePerMTok - rates.inputPerMTok * 1.25) < 1e-9
+  return anthropicShape ? rates.inputPerMTok * 2 : rates.cacheWritePerMTok
+}
+
 // Model-id-keyed cost with the >200K per-call tiered surcharge — the write-time path (cost_usd
 // stored in the sessions table) where the caller has per-call buckets.
+//
+// `cacheWrite1hTokens` is the portion OF `cacheWriteTokens` that was written at the 1-hour TTL
+// (from `usage.cache_creation.ephemeral_1h_input_tokens`). It defaults to 0, so a caller that does
+// not know the split keeps today's all-5m pricing exactly — the correction is opt-in per call site
+// and can never silently move a number the caller did not intend to change.
 export function calcTokenCostUsd(
   inputTokens: number,
   cacheReadTokens: number,
   cacheWriteTokens: number,
   outputTokens: number,
   modelId: string,
+  cacheWrite1hTokens = 0,
 ): number {
   const rates = lookupRates(modelId)
   if (!rates) return 0
+  // Clamp: the 1h portion cannot exceed the total, and a caller passing a bogus negative must not
+  // produce a credit. Whatever is left over is the 5-minute tier.
+  const w1h = Math.max(0, Math.min(cacheWrite1hTokens, cacheWriteTokens))
+  const w5m = cacheWriteTokens - w1h
+  const rate1h = cacheWrite1hRate(rates)
   if (rates.inputAbove200kPerMTok !== undefined) {
     return tieredCost(inputTokens,     rates.inputPerMTok,      rates.inputAbove200kPerMTok)
          + tieredCost(cacheReadTokens,  rates.cacheReadPerMTok,  rates.cacheReadAbove200kPerMTok!)
-         + tieredCost(cacheWriteTokens, rates.cacheWritePerMTok, rates.cacheWriteAbove200kPerMTok!)
+         + tieredCost(w5m,              rates.cacheWritePerMTok, rates.cacheWriteAbove200kPerMTok!)
+         + tieredCost(w1h,              rate1h,                  rates.cacheWriteAbove200kPerMTok!)
          + tieredCost(outputTokens,     rates.outputPerMTok,     rates.outputAbove200kPerMTok!)
   }
   return (inputTokens     / 1_000_000) * rates.inputPerMTok
        + (cacheReadTokens / 1_000_000) * rates.cacheReadPerMTok
-       + (cacheWriteTokens/ 1_000_000) * rates.cacheWritePerMTok
+       + (w5m             / 1_000_000) * rates.cacheWritePerMTok
+       + (w1h             / 1_000_000) * rate1h
        + (outputTokens    / 1_000_000) * rates.outputPerMTok
 }
 
