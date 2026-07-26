@@ -83,10 +83,25 @@ const RATES: Record<string, ModelRates> = {
   'claude-opus-4-6':    { inputPerMTok:  5.00, cacheReadPerMTok: 0.50,  cacheWritePerMTok:  6.25, outputPerMTok: 25.00, contextWindowTokens: 1_000_000, multiplier: 3,    multiplierAnnualPostJun1: 27 },
   'claude-opus-4-7':    { inputPerMTok:  5.00, cacheReadPerMTok: 0.50,  cacheWritePerMTok:  6.25, outputPerMTok: 25.00, contextWindowTokens: 1_000_000, multiplier: 15,   multiplierAnnualPostJun1: 27 },
   'claude-opus-4-8':    { inputPerMTok:  5.00, cacheReadPerMTok: 0.50,  cacheWritePerMTok:  6.25, outputPerMTok: 25.00, contextWindowTokens: 1_000_000, multiplier: 15,   multiplierAnnualPostJun1: 27 },
+  // Opus 5 — same sticker as 4.8 ($5/$6.25/$0.50/$25). Was MISSING until 2026-07-26: lookupRates
+  // prefix-matches only LONGER ids, so `claude-opus-5` matched no key at all and every opus-5 call
+  // priced at $0 (the same silent-$0 failure claude-sonnet-5 hit). Copilot multipliers unknown for
+  // a model this new — left 0 rather than copied from 4.8, so an absent multiplier reads as absent.
+  'claude-opus-5':      { inputPerMTok:  5.00, cacheReadPerMTok: 0.50,  cacheWritePerMTok:  6.25, outputPerMTok: 25.00, contextWindowTokens: 1_000_000, multiplier: 0,    multiplierAnnualPostJun1: 0 },
   // fast mode (/fast toggle in Claude Code) — model ID appended with -fast by logReader when usage.speed === 'fast'
-  'claude-opus-4-6-fast':{ inputPerMTok: 30.00, cacheReadPerMTok: 3.00, cacheWritePerMTok: 37.50, outputPerMTok: 150.00, contextWindowTokens: 1_000_000, multiplier: 30,  multiplierAnnualPostJun1: 30 },
+  // Opus 4.6 ACCEPTS speed:'fast' but runs at standard speed and is "billed at standard rates"
+  // (pricing doc, re-read 2026-07-26). So a 4.6 call tagged -fast must price at the STANDARD 4.6
+  // rates — the old 30.00/150.00 here over-billed such a call 6x. Kept as an entry rather than
+  // deleted because logReader still appends -fast whenever usage.speed === 'fast'.
+  'claude-opus-4-6-fast':{ inputPerMTok:  5.00, cacheReadPerMTok: 0.50, cacheWritePerMTok:  6.25, outputPerMTok:  25.00, contextWindowTokens: 1_000_000, multiplier: 30,  multiplierAnnualPostJun1: 30 },
+  // Opus 4.7 was REMOVED from fast mode in Claude Code 2.1.219 — speed:'fast' now returns an error,
+  // so no NEW call can carry this id. Retained at the old premium rates because sessions recorded
+  // while 4.7 fast mode existed are still on disk and must keep pricing at what they actually cost.
   'claude-opus-4-7-fast':{ inputPerMTok: 30.00, cacheReadPerMTok: 3.00, cacheWritePerMTok: 37.50, outputPerMTok: 150.00, contextWindowTokens: 1_000_000, multiplier: 30,  multiplierAnnualPostJun1: 30 },
   'claude-opus-4-8-fast':{ inputPerMTok: 10.00, cacheReadPerMTok: 1.00, cacheWritePerMTok: 12.50, outputPerMTok:  50.00, contextWindowTokens: 1_000_000, multiplier: 30,  multiplierAnnualPostJun1: 30 },
+  // Fast mode applies to Opus 5 + Opus 4.8 only (CC 2.1.219). $10 in / $50 out; cache write and read
+  // stay at the standard 1.25x / 0.1x of THIS (premium) input rate, not of the standard one.
+  'claude-opus-5-fast': { inputPerMTok: 10.00, cacheReadPerMTok: 1.00, cacheWritePerMTok: 12.50, outputPerMTok:  50.00, contextWindowTokens: 1_000_000, multiplier: 0,   multiplierAnnualPostJun1: 0 },
   'claude-fable-5':      { inputPerMTok: 10.00, cacheReadPerMTok: 1.00, cacheWritePerMTok: 12.50, outputPerMTok:  50.00, contextWindowTokens: 1_000_000, multiplier: 0,   multiplierAnnualPostJun1: 0 },  // not yet in Copilot billing docs
   // ── Google ─────────────────────────────────────────────────────────────────
   'gemini-2.5-pro':  { inputPerMTok: 1.25, cacheReadPerMTok: 0.125, cacheWritePerMTok: 0, outputPerMTok: 10.00, contextWindowTokens: 1_000_000, multiplier: 1,    multiplierAnnualPostJun1: 1 },  // long-context surcharge (>200K tokens) not implemented

@@ -42,7 +42,12 @@ const turn = (ts: string, cwd: string, msgId: string, model: string, speed: 'fas
   }) + '\n'
 
 suite('logReader fast-mode pricing (S1-F9)', () => {
-  const MODEL = 'claude-opus-4-6' // base input $5.00/MTok, `-fast` $30.00/MTok
+  // Base input $5.00/MTok, `-fast` $10.00/MTok. Was opus-4-6 until 2026-07-26: Claude Code 2.1.219
+  // dropped 4.6/4.7 from fast mode, and a fast-tagged 4.6 call is now billed at STANDARD rates — so
+  // its `-fast` rate equals its base rate and this suite's "the blend is cheaper than all-fast"
+  // assertion had nothing left to measure. The subject under test is the BLEND, so it needs a model
+  // where fast is genuinely premium; 4.8 is one of the two that still is.
+  const MODEL = 'claude-opus-4-8'
 
   test('a uniformly-fast session stamps <model>-fast and carries no speedBlendedCostUsd', () => {
     const fx = claudeFixture()
@@ -62,7 +67,7 @@ suite('logReader fast-mode pricing (S1-F9)', () => {
     try {
       fs.writeFileSync(fx.file,
         userText('2026-07-10T10:00:00Z', fx.cwd, 'go')
-        + turn('2026-07-10T10:00:01Z', fx.cwd, 'm1', MODEL, 'fast')       // 1M input @ $30 = $30
+        + turn('2026-07-10T10:00:01Z', fx.cwd, 'm1', MODEL, 'fast')       // 1M input @ $10 = $10
         + turn('2026-07-10T10:00:02Z', fx.cwd, 'm2', MODEL, undefined))   // 1M input @ $5  = $5
       const card = scanClaude(new LogReader({})).find(r => r.card.sessionId === fx.id)!.card
       assert.strictEqual(card.model, MODEL, 'mixed session keeps the base model (not -fast)')
