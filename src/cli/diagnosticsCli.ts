@@ -582,6 +582,14 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
     return
   }
   const args = parseToolFlags(rest.slice(1), t.inputSchema)
+  // A tool that takes a `project` scopes its output to ONE project. The server runs as a detached
+  // background process, so ITS cwd is meaningless — only the CLI knows which project the human is
+  // standing in. Forward that cwd whenever the caller did not name a project, so the default is
+  // "the project I am in" and never "every project on this machine" (these tools read a shared
+  // bodies directory that interleaves ~20 concurrent sessions across unrelated repositories).
+  if (t.inputSchema?.properties?.['project'] && args['project'] === undefined) {
+    args['project'] = process.cwd()
+  }
   emit(t.name, await callTool(t.name, args, globals.full), globals)
 }
 

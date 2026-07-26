@@ -97,6 +97,11 @@ export interface CacheCreationScanOptions {
   bodiesDir?: string
   windowHours?: number
   scanCap?: number
+  // Keep calls with ZERO cache_creation (pure warm cache-read turns). Off by default because every
+  // forensic tool here ranks WRITES. The per-call event LOG (cacheEventLog.ts) needs them: a ledger
+  // that hides the cheap warm turns cannot show that the turn before a cold write was warm, which is
+  // exactly the comparison that tells a TTL expiry apart from a prefix break.
+  includeZeroCacheCreate?: boolean
 }
 
 interface RawResponseBody {
@@ -216,7 +221,7 @@ export async function scanCacheCreationEvents(
     const body = readJsonBounded<RawResponseBody>(r.path, MAX_RESPONSE_BYTES)
     if (!body || !body.usage) continue
     const cc = numOr0(body.usage.cache_creation_input_tokens)
-    if (cc <= 0) continue
+    if (cc <= 0 && !opts.includeZeroCacheCreate) continue
     const responseId = strOrUndef(body.id)
     const link = responseId ? prevIndex.get(responseId) : undefined
     const model = link?.model ?? strOrUndef(body.model) ?? strOrUndef(body.message?.model)

@@ -64,6 +64,10 @@ import {
   formatExpensiveWrites, formatCostPeaks, type CostPeakGroupBy, type CostBucket, type ForensicsFormat,
   defaultBodiesDir,
 } from './cacheCreationForensics'
+import {
+  buildCacheEventLog, formatCacheEventLog,
+  type CacheEventMode, type CacheEventFormat,
+} from './cacheEventLog'
 import { dataPath } from './dataDir'
 // TRDD-1FEIW17E — who is writing raw OTEL bodies (live-dir scan + store totals, exact union).
 import { scanLiveBodyWriters, queryStoreWriterTotals, buildBodyWritersReport } from './bodyWriters'
@@ -1513,6 +1517,37 @@ const TOOLS = [
         sessionId:   { type: 'string', description: 'Query exactly this session transcript (fast path — one file; the window does not apply).' },
         window:      { type: 'number', description: 'Only transcripts modified in the last N hours feed the view (default 24). Ignored with sessionId.' },
         limit:       { type: 'number', description: 'Row cap (default 50, hard max 2000). A hit cap is reported in coverage, never silent.' },
+      },
+    },
+  },
+  {
+    name: 'get_cache_event_log',
+    description:
+      'The per-call CACHE LEDGER for ONE project — answers "did that compaction / command / turn burn ' +
+      'tokens on a cache miss?" in a single call. One row per API call with every bucket spelled out ' +
+      '(input tokens, cache write, cache read, output tokens), its cache-write TTL tier (1-hour = main ' +
+      'conversation on a subscription; 5-minute = a subagent or a usage-credits session), the ' +
+      'cost-weighted size in INPUT-EQUIVALENT tokens, and the exact USD. Cache writes are flagged with ' +
+      'a 🔥 marker repeated 1-5 times by order of magnitude (1+ / 10k+ / 50k+ / 150k+ / 400k+), so a ' +
+      'full-prefix rewrite never looks like a routine suffix write. mode=peak (default) centres the ' +
+      'costliest call in the window and shows the `context` calls BEFORE and AFTER it — a cold write is ' +
+      'only interpretable next to the warm turns around it; mode=recent lists the last `limit` calls ' +
+      'regardless of cost. SCOPED TO ONE PROJECT BY DEFAULT: rows are emitted only for sessions this ' +
+      'project owns (resolved via ~/.claude/projects/<slug>/<sessionId>.jsonl); calls belonging to any ' +
+      'other project, or not attributable to a session, are counted in `excluded` and never printed. ' +
+      'Pass `project` (an absolute path or a project slug) to read a different project. Reads the OTEL ' +
+      'response bodies, not the session transcript — a compaction\'s own summarization call exists ONLY ' +
+      'there, so from the transcript a compaction looks free.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        mode:      { type: 'string', description: 'peak (default) = the costliest call in the window plus its surrounding calls | recent = the last `limit` calls regardless of cost' },
+        project:   { type: 'string', description: 'Absolute project path or Claude project slug. Defaults to the calling working directory — NEVER to all projects.' },
+        sessionId: { type: 'string', description: 'Narrow to one session inside the project (default: every session the project owns)' },
+        context:   { type: 'number', description: 'How many calls to show before AND after the peak (default 3, max 25). mode=peak only.' },
+        limit:     { type: 'number', description: 'How many recent calls to list (default 12, max 200). mode=recent only.' },
+        window:    { type: 'number', description: 'Only calls from the last N hours; omit for the bounded most-recent scan' },
+        format:    { type: 'string', description: 'table (default) | json | markdown' },
       },
     },
   },
@@ -3429,6 +3464,18 @@ export function createMcpServer(opts: McpServerOptions): Server {
       case 'get_cache_break_gap_report': {
         const a = args as { minCacheCreate?: number; window?: number }
         result = await buildCacheBreakGapReport({ minCacheCreate: a.minCacheCreate, windowHours: a.window })
+        break
+      }
+      case 'get_cache_event_log': {
+        const a = args as {
+          mode?: CacheEventMode; project?: string; sessionId?: string
+          context?: number; limit?: number; window?: number; format?: CacheEventFormat
+        }
+        const log = await buildCacheEventLog({
+          mode: a.mode, project: a.project, sessionId: a.sessionId,
+          contextEvents: a.context, limit: a.limit, windowHours: a.window,
+        })
+        result = formatCacheEventLog(log, a.format ?? 'table')
         break
       }
       case 'get_cache_break_timeline': {

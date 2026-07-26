@@ -4,6 +4,51 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.15.0] - 2026-07-26
+
+### Added
+
+- **`get_cache_event_log` — the per-call cache ledger, in ONE call.** Answering "did that compaction
+  burn tokens on a cache miss?" previously took ~8 turns of ad-hoc `jq` over the raw spool. Every
+  number was already on disk; what was missing was a single tool that puts them in a table. One row
+  per API call with each bucket spelled out (input tokens, cache write, cache read, output tokens),
+  its cache-write **TTL tier** (1-hour = a main-conversation turn on a subscription; 5-minute = a
+  subagent or a usage-credits session), the **cost-weighted size in input-equivalent tokens**, and the
+  exact USD.
+  - **`mode=peak`** (default) centres the costliest call in the window and shows the `context` calls
+    **before and after** it — a cold write is only interpretable next to the warm turns around it (a
+    137k write reads as a disaster alone, and as a cheap one-off beside the 613k prefix it replaced).
+    **`mode=recent`** lists the last `limit` calls regardless of cost.
+  - **Cache writes carry a 🔥 marker repeated 1–5 times by order of magnitude** (1+ / 10k+ / 50k+ /
+    150k+ / 400k+), so a full-prefix rewrite never looks like a routine suffix write. Column widths
+    count an emoji as the two terminal columns it occupies, not the one code point it is.
+  - **Scoped to ONE project as a hard boundary, not a filter.** This machine interleaves ~20
+    concurrent sessions from unrelated repositories into one shared bodies directory. Rows are emitted
+    only for sessions the project provably owns (`~/.claude/projects/<slug>/<sessionId>.jsonl`); the
+    CLI forwards its own cwd so the default is "the project I am in", never "everything on this
+    machine". Pass `project` (an absolute path or a slug) to read elsewhere. Exclusions are reported
+    **split** into `otherProject` (the boundary working) and `unattributable` (a coverage gap) —
+    one merged number would hide the gap behind the guarantee.
+  - Reads the **OTEL response bodies, not the session transcript**: a compaction's own summarization
+    request never appears in the transcript, so read from the `.jsonl` a compaction looks free.
+    It is attributed through the following request's `previous_message_id`, which a post-compaction
+    request does not chain to — so that one call is counted as `unattributable` rather than guessed
+    into a project by timing.
+
+### Fixed
+
+- **`claude-opus-5` was unpriced — every call on the current default Opus model costed $0.** The
+  rate table stopped at `claude-opus-4-8`, and `lookupRates` prefix-matches only keys *shorter* than
+  the query, so `claude-opus-5` matched nothing at all and fell through to the `unpriced` path. Same
+  silent-$0 failure `claude-sonnet-5` hit in 2.9. Added at the documented $5 / $6.25 / $0.50 / $25 per
+  MTok, plus `claude-opus-5-fast` at $10 / $50 (fast mode now applies to Opus 5 and Opus 4.8 —
+  Claude Code 2.1.219). Verified against the Anthropic pricing doc on 2026-07-26.
+- **`claude-opus-4-6-fast` over-billed 6×.** Opus 4.6 accepts `speed:"fast"` but runs at standard
+  speed and *is billed at standard rates*; the entry priced it at the $30/$150 premium. Now standard.
+  `claude-opus-4-7-fast` is retained at the premium rates — 2.1.219 removed 4.7 from fast mode so no
+  new call can carry that id, but sessions recorded while it existed must keep pricing at what they
+  actually cost.
+
 ## [2.14.0] - 2026-07-24
 
 ### Changed
