@@ -99,6 +99,12 @@ unavailable`. Measured over 350 recent bodies: 347 `null`, 3 `messages_changed` 
 missed tokens). This is a GROUND-TRUTH cache-miss reason per call — we currently infer the reason
 statistically (burnSeismic's COLD_REWRITE tag, the gap-bucket heuristic) when the API states it.
 
+**ACTED ON in v2.16.0** (`ba5a432`): `src/otelCallEvents.ts` reads `claude_code.api_request` +
+`claude_code.compaction` from the span store, and `get_cache_event_log` now sources from it first
+(raw bodies became enrichment + fallback). Live result: `unattributable` **91 → 0**, cost from the
+harness, and the compaction call visible as `query_source: compact`. `cache_miss_reason` is surfaced
+as a column. Still unread: `message.uuid`, `tool_source`.
+
 **Prefer OTEL `cost_usd` over recomputing from pricing.ts.** The event carries `cost_usd` +
 `cost_usd_micros`, and Claude Code's own price table is TTL-tier-aware where ours is not (see
 [[cache-ttl-model]] [^3]). Verified to the cent on a live call: in=2, cache_read=62,610,

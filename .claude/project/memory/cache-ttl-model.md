@@ -29,12 +29,14 @@ events to their raw bodies on `request_id`, the implied rate matches the body's
 `usage.cache_creation.ephemeral_{5m,1h}` tier **26/26**; (3) one call reconciles to the cent —
 in=2, read=62,610, write=405,521 (all 1h), out=133 → $10/MTok yields `cost_usd` **4.089850** exactly,
 while the flat $6.25 yields 2.569146. Main conversations on a subscription take the 1h tier automatically, so their writes
-cost **2×**. `calcTokenCostUsd` (src/shared/pricing.ts) takes ONE `cacheWriteTokens` argument and
-prices it at `cacheWritePerMTok` = the **5m** rate, so **every main-session write we report is 60%
-low** — for opus-5, $6.25/MTok charged where $10.00/MTok applies. The fix is available for free: we
-already parse the split (`cacheCreation5mTokens` / `cacheCreation1hTokens` in
-cacheCreationForensics.ts, from `usage.cache_creation`), so the tier never has to be assumed — the
-rate table needs a `cacheWrite1hPerMTok` and the cost function needs the two buckets separately.[^3]
+cost **2×**. **FIXED in v2.16.0** (`ba5a432`): `calcTokenCostUsd` takes a trailing `cacheWrite1hTokens` argument
+(default 0, so an unaware caller keeps the old behavior and the correction can never silently move a
+number), and `cacheWrite1hRate` derives 2×base-input — but ONLY for entries with the Anthropic 1.25×
+shape, so a provider that prices writes differently, or not at all, is never handed a rate it does
+not charge. Deriving beat hand-editing ~15 entries: a future Claude model is priced correctly the
+moment its input rate is added.[^3] **Better still, prefer the harness's own number**: the OTEL
+`claude_code.api_request` event carries `cost_usd`, and Claude Code's price table is already
+tier-aware — `get_cache_event_log` marks each row `costSource: harness | computed`.
 Cache READS are 0.1× in both tiers and a read refreshes the TTL for free (break-even: one read for a
 5m entry, two for a 1h entry).
 
