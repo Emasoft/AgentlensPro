@@ -159,12 +159,21 @@ Governed by [[cache-ttl-model]] (TTL regimes) and [[agentlens-burn-token-model]]
   `run_diagnostics_sql` (SQLite), store tuning → the connection SETs in src/store/db.ts.
   (The 2026-07-16 corpus-mining shortlist got items 2+4 wrong on exactly this — TRDD-802FP7ZL.)
 
-[^11]: [id:ATOM-RAW-NUL-BINARY, status:valid, keywords:"grep_returns_nothing_on_source_file file_says_data binary_file_matches nul_byte_in_source separator_byte", ocd:2026-07-16, lmd:2026-07-16]
+[^11]: [id:ATOM-RAW-NUL-BINARY, status:valid, keywords:"grep_returns_nothing_on_source_file file_says_data binary_file_matches nul_byte_in_source separator_byte control_byte_in_source verify_reports_missing_but_code_is_there", ocd:2026-07-16, lmd:2026-07-28]
   DO NOT put a raw 0x00 byte in a source file (e.g. as an unambiguous hash-field/join
   separator), BECAUSE file(1) then classifies the whole module as "data" and grep/diff treat
   it as binary — grep -n silently returns NOTHING on a file full of matches (cost a real
   head-scratch on cacheBreakTimeline.ts, 2026-07-16, commit c294238). DO spell it as the backslash-u0000 escape — byte-identical runtime string, text-classified source. Symptom to recall
   this by: "grep finds nothing in a file that obviously contains the pattern."
+  RECURRED 2026-07-27 (commit 95d2a1d, burnMonitor.ts:553) **while this lesson already
+  existed and already named the remedy** — proof that a recall-by-symptom lesson cannot fire
+  at WRITE time, only after you already have the symptom. So the guardrail is now MECHANICAL:
+  `scripts_dev/verify-session.sh` § "SOURCE HYGIENE" fails on any sub-0x20 byte (bar TAB/LF/CR)
+  in hand-written sources. Swept 2026-07-28 (commit 3608982): four modules were binary —
+  burnMonitor, accountStateTimeline, sessionBurnProfile, forensicsIndex. Caveat learned in that
+  sweep: **esbuild re-emits a `\x01` source escape as a RAW byte** (it only keeps non-ASCII
+  escaped), so `standalone/*.js` is binary no matter how clean the source — never scan the
+  bundles, or the check becomes a permanent FAIL people learn to ignore.
 
 [^12]: [id:ATOM-NO-USERNAME-ASSUMPTION, status:valid, keywords:"hardcoded_username shipped_path_assumes_home /Users/USER launchd_plist_template portable_install any_machine dev_machine_path_in_repo", ocd:2026-07-17, lmd:2026-07-17]
   DO NOT let any SHIPPED surface (tarball file, doc, contract, template) assume the
