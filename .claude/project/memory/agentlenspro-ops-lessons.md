@@ -209,7 +209,7 @@ Governed by [[cache-ttl-model]] (TTL regimes) and [[agentlens-burn-token-model]]
   independent. The guard is now keyed on the data dir and refuses a second claimant whatever its
   ports (commit 7d15f6b). Owner directive 2026-07-28: only ONE agentlenspro server may ever run.
 
-[^15]: [id:ATOM-WHICH-BINARY-AM-I-TESTING, status:valid, keywords:"rebuilt_but_nothing_changed fix_verified_but_not_live global_npm_install_vs_npm_link esbuild_then_restart_did_nothing measuring_the_published_bundle which_agentlenspro", ocd:2026-07-28, lmd:2026-07-28]
+[^15]: [id:ATOM-WHICH-BINARY-AM-I-TESTING, status:valid, keywords:"rebuilt_but_nothing_changed fix_verified_but_not_live global_npm_install_vs_npm_link esbuild_then_restart_did_nothing measuring_the_published_bundle which_agentlenspro npx_ran_the_wrong_version npx_pinned_version_ignored post_publish_smoke_test_lies", ocd:2026-07-28, lmd:2026-07-28]
   DO NOT conclude a local change is live after `node esbuild.js` + `agentlenspro server restart`,
   BECAUSE `agentlenspro` may be a REAL global npm install of a PUBLISHED version rather than an
   `npm link` to the repo — in which case the repo bundle is never executed and a whole round of
@@ -218,3 +218,12 @@ Governed by [[cache-ttl-model]] (TTL regimes) and [[agentlens-burn-token-model]]
   the RUNNING pid actually executes — snapshot `ps -eo pid,command`, read the path it names, and
   grep THAT file for a symbol only the new code has — then verify against a repo-built instance with
   its own `DATA_DIR`+`HOME` (see [^14]), or `npm link` first.
+  SAME ATOM, SECOND VECTOR (2026-07-28, v2.17.0 publish): **`npx -y agentlenspro@2.17.0 --version`
+  printed `2.16.0`, twice** — an explicit `pkg@VERSION` does NOT guarantee npx runs that version
+  when a GLOBAL install of the same bin is on PATH; npx prefers the resolvable binary. This silently
+  defeats the standard post-publish smoke test (the checklist calls npx "the single strongest smoke
+  test" precisely because it is supposed to be cache-free and auth-free). It briefly looked like the
+  release had shipped a stale bundle. DO verify a publish by EXTRACTING the tarball and running it by
+  path — `npm pack pkg@X && tar -xzf … && node package/<bin> --version` — which resolves nothing and
+  cannot be shadowed; the registry-side `_npmUser.trustedPublisher` + `dist.attestations` checks are
+  the other half and are equally unshadowable.
