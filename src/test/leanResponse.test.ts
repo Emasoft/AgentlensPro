@@ -28,25 +28,29 @@ function windowBudget(overrides: Record<string, unknown> = {}): Record<string, u
   }
 }
 
+/** FOUR accounts, as the live machine actually reports. The count is load-bearing: with a single
+ *  element every index is 0, so a `.map(shapeRow)` that leaks the array INDEX into the `depth`
+ *  parameter looks correct. That exact bug shipped past a one-element fixture and was only caught
+ *  against the live server — element N was shaped as if it sat N levels deep and its answer elided
+ *  at the depth guard. Assertions below therefore target the LAST account, not the first. */
 function windowBudgetPayload(): Record<string, unknown> {
+  const account = (i: number): Record<string, unknown> => ({
+    accountUuid: `account-uuid-${i}`,
+    accountLabel: `account${i}@example.com`,
+    fiveMinTokensPerMin: 1072271 - i,
+    events: 14592 - i,
+    budget: {
+      fiveHour: windowBudget(),
+      sevenDay: windowBudget({ window: '7d' }),
+      capacitySource: 'none',
+      capacityConfigured: false,
+      capacityObservedAt: null,
+    },
+  })
   return {
     capacitySource: 'observed',
     capacityObservedAt: '2026-07-13T22:13:33.635Z',
-    accounts: [
-      {
-        accountUuid: '75099fe9-8c66-4edd-bd99-a05593a57928',
-        accountLabel: 'fmuaddib@gmail.com',
-        fiveMinTokensPerMin: 1072271,
-        events: 14592,
-        budget: {
-          fiveHour: windowBudget(),
-          sevenDay: windowBudget({ window: '7d' }),
-          capacitySource: 'none',
-          capacityConfigured: false,
-          capacityObservedAt: null,
-        },
-      },
-    ],
+    accounts: [account(0), account(1), account(2), account(3)],
     machineWide: {
       fiveHour: windowBudget(),
       sevenDay: windowBudget({ window: '7d' }),
@@ -81,6 +85,14 @@ suite('leanResponse — the answer survives shaping', () => {
     ]) {
       assert.ok(paths.has(p), `lost "${p}" — the shaper deleted part of the answer. Kept: ${[...paths].join(', ')}`)
     }
+    // leafPaths collapses arrays, so the check above passes if ANY account kept the path. Assert the
+    // LAST account explicitly — that is the one an index-as-depth leak silently guts.
+    const accounts = lean.accounts as Record<string, unknown>[]
+    assert.strictEqual(accounts.length, 4, 'expected all four accounts')
+    const last = accounts[accounts.length - 1]
+    const lastFiveHour = ((last.budget as Record<string, unknown>).fiveHour) as Record<string, unknown>
+    assert.ok(lastFiveHour, 'the LAST account lost its budget.fiveHour entirely')
+    assert.strictEqual(lastFiveHour.pctConsumed, 47.67, 'the LAST account lost budget.fiveHour.pctConsumed')
   })
 
   test('get_account_status keeps the authoritative usageWindows percentages', () => {
@@ -96,16 +108,34 @@ suite('leanResponse — the answer survives shaping', () => {
     assert.strictEqual((lean.cacheTtl as Record<string, unknown>).minutes, 60)
   })
 
-  test('check_burn_risk keeps each risk’s evidence object', () => {
+  test('check_burn_risk keeps EVERY risk’s evidence, not just the first', () => {
+    // Five risks: with the index leaking into `depth`, risks[4].evidence elides at the guard while
+    // risks[0].evidence survives — so this must assert across all of them, never just [0].
+    const codes = ['BURN_SPIKE', 'FORK_STORM', 'HUGE_REQUEST_BURST', 'COLD_REWRITE', 'STOP_FAILURES']
     const lean = leanify({
-      activeCount: 1,
-      risks: [{ code: 'BURN_SPIKE', active: true, detail: 'live burn 1072k tokens/min', evidence: { fiveMinTokensPerMin: 1072271, threshold: 400000 } }],
+      activeCount: 5,
+      risks: codes.map((code, i) => ({
+        code, active: true, detail: `${code} detail`,
+        evidence: { fiveMinTokensPerMin: 1072271 + i, threshold: 400000 },
+      })),
     }) as Record<string, unknown>
-    const risk = (lean.risks as Record<string, unknown>[])[0]
-    const ev = risk.evidence as Record<string, unknown>
-    assert.ok(ev, 'evidence was dropped — the risk becomes unauditable')
-    assert.strictEqual(ev.fiveMinTokensPerMin, 1072271)
-    assert.strictEqual(ev.threshold, 400000)
+    const risks = lean.risks as Record<string, unknown>[]
+    risks.forEach((risk, i) => {
+      const ev = risk.evidence as Record<string, unknown>
+      assert.ok(ev, `risks[${i}].evidence was dropped — that risk becomes unauditable`)
+      assert.strictEqual(ev.threshold, 400000, `risks[${i}].evidence.threshold lost`)
+    })
+  })
+
+  test('array position never changes how deeply a row is shaped', () => {
+    // The regression that shipped: `.map(shapeRow)` handed the INDEX to `depth`, so the deeper a row
+    // sat in the array the more of its answer was elided. Every row must shape identically.
+    const row = () => ({ a: { b: { c: { leaf: 1 } } } })
+    const lean = leanify({ rows: [row(), row(), row(), row(), row()] }) as Record<string, unknown>
+    const shaped = (lean.rows as unknown[]).map(r => JSON.stringify(r))
+    for (let i = 1; i < shaped.length; i++) {
+      assert.strictEqual(shaped[i], shaped[0], `row ${i} shaped differently from row 0 — index leaked into depth`)
+    }
   })
 
   test('declared derivation (breakdown) is still removed', () => {

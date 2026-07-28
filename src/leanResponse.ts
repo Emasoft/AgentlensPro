@@ -118,9 +118,12 @@ function shapeRow(row: unknown, depth = 0): unknown {
 
 /** Truncate an array to its significant head, DISCLOSING what was dropped (never a silent cut). */
 function headOf(arr: unknown[], limit: number, label: string): { rows: unknown[]; note?: string } {
-  if (arr.length <= limit) return { rows: arr.map(shapeRow) }
+  // `.map(shapeRow)` would hand the array INDEX to `depth`, so element N would be shaped as if it sat
+  // N levels deep and its answer would elide at the depth guard — the top-level rows of every
+  // array-shaped tool (get_window_budget's accounts, check_burn_risk's risks) start at depth 0.
+  if (arr.length <= limit) return { rows: arr.map(r => shapeRow(r, 0)) }
   return {
-    rows: arr.slice(0, limit).map(shapeRow),
+    rows: arr.slice(0, limit).map(r => shapeRow(r, 0)),
     note: `showing top ${limit} of ${arr.length} ${label} — call with verbosity:"full" for all`,
   }
 }
