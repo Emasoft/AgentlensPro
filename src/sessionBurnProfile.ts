@@ -190,7 +190,7 @@ function analyzeToolStability(reqs: ReqEntry[]): ToolStability {
     const prev = reqs[i - 1].toolNames
     const cur = reqs[i].toolNames
     if (prev.length === 0 && cur.length === 0) continue
-    if (prev.join(' ') === cur.join(' ')) continue
+    if (prev.join('\x00') === cur.join('\x00')) continue
     turnsChanged++
     const ps = new Set(prev), cs = new Set(cur)
     const added = cur.filter(n => !ps.has(n))

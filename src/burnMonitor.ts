@@ -550,7 +550,11 @@ function observedCapacityFor(
     const calibrated = Object.keys(config.observed)
     if (calibrated.length !== 1) return null
     const active = new Set<string>()
-    for (const e of events) active.add(e.accountUuid ?? ' unattributed')
+    // The leading SPACE is load-bearing: it makes the sentinel unable to collide with a real
+    // accountUuid (uuids are hex-and-dashes, never whitespace). Do NOT "tidy" it away, and do NOT
+    // reach for a control character such as \0 to make that point — a raw NUL in a source file makes
+    // `file` report it as binary `data` and silently blinds `grep -n`/`-c` on the WHOLE file.
+    for (const e of events) active.add(e.accountUuid ?? ' unattributed')
     if (active.size > 1) return null
     if (active.size === 1 && !active.has(calibrated[0])) return null
     return config.observed[calibrated[0]]

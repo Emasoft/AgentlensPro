@@ -91,9 +91,9 @@ export function buildAccountStateRecord(account: AccountInfo | null, ttlCtx: Ttl
 }
 
 /** The discrete change-detection key — everything EXCEPT the continuously-moving parts (ts, and the
- *  5h/7d % which are never in the record). A  join can't collide with any field's own content. */
+ *  5h/7d % which are never in the record). A 0x01 join can't collide with any field's own content. */
 function discreteKey(r: AccountStateRecord): string {
-  return [r.accountId ?? '∅', r.mode, r.plan, r.authRegime, r.ttlMinutes].join('')
+  return [r.accountId ?? '∅', r.mode, r.plan, r.authRegime, r.ttlMinutes].join('\x01')
 }
 
 /** Resolves the timeline file path. AGENTLENS_ACCOUNT_STATE_LOG overrides; else it follows the
