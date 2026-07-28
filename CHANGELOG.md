@@ -4,6 +4,46 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.17.1] - 2026-07-29
+
+### Security
+
+- **Patched all 7 open Dependabot advisories (5 high, 1 moderate, 1 low).** Every one was
+  **transitive** — nothing in `dependencies` was itself vulnerable — and three of the four packages
+  arrive through a single parent, `@modelcontextprotocol/sdk`:
+
+  | package | path | scope | fix |
+  |---|---|---|---|
+  | `fast-uri` | ← `ajv` ← MCP SDK | runtime | `>=3.1.4 <4` |
+  | `body-parser` | ← `express` ← MCP SDK | runtime | `>=2.3.0 <3` |
+  | `@hono/node-server` | ← MCP SDK | runtime | `>=2.0.5` |
+  | `brace-expansion` | ← `minimatch` ← eslint/typescript-eslint | dev only | per-major, in place |
+
+  Applied as `overrides` in `pnpm-workspace.yaml`, which already held the previous security round —
+  the shipped `standalone/*.js` bundles these packages, so the rebuild is what actually reaches
+  consumers.
+
+  Three details that decided the pins rather than being incidental:
+  - **`fast-uri` takes `>=3.1.4`, not `3.1.3`.** CVE-2026-13676 is fixed in 3.1.3, but
+    CVE-2026-16221 lists 3.1.3 *itself* as vulnerable. Pinning the lower version would have closed
+    one alert, left the other open, and looked finished.
+  - **Every override is upper-bounded.** A first attempt at a bare `fast-uri: '>=3.1.4'` resolved
+    **4.1.1** — a major `ajv` never asked for (it declares `^3.0.1`). An override with an open upper
+    bound silently hands a consumer a major it does not support, which is the same class of
+    breakage the overrides exist to prevent.
+  - **`@hono/node-server` has no 1.x patch** — the fix is 2.0.5, a major, and the SDK we resolve
+    (1.29.0) declares only `^1.19.9`. Taken anyway because the SDK's own next release widens that
+    range to `^1.19.9 || ^2.0.5`, i.e. upstream states 2.x is compatible; 1.30.0 could not simply be
+    adopted today because it is younger than this repo's `minimumReleaseAge` window, and weakening a
+    supply-chain gate to close a medium advisory is a bad trade. Verified at runtime rather than
+    assumed: a server booted on an isolated `DATA_DIR`/`HOME` answers a real JSON-RPC `initialize`
+    over the hono 2.x adaptor.
+
+- **No change to the Docker workflow.** The janitor's `prov-in-toto-attestation-missing-on-build`
+  finding against `docker.yml:59` is a **false positive** — there is exactly one
+  `build-push-action` use and the same `with:` block already sets `provenance: mode=max` and
+  `sbom: true` fifteen lines below. The detector matches the `uses:` line without parsing the block.
+
 ## [2.17.0] - 2026-07-28
 
 ### Added

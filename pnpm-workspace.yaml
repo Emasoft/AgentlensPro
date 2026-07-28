@@ -43,3 +43,33 @@ overrides:
   shell-quote: '>=1.8.4'
   serialize-javascript: '>=7.0.5'
   js-yaml: '>=4.2.0 <5'
+  # 2026-07-28 round. All seven alerts were TRANSITIVE — nothing in `dependencies`
+  # was itself vulnerable — and three of the four packages arrive via the one
+  # parent, @modelcontextprotocol/sdk.
+  #   fast-uri    <- ajv          <- @modelcontextprotocol/sdk   RUNTIME
+  #   body-parser <- express      <- @modelcontextprotocol/sdk   RUNTIME
+  #   @hono/node-server           <- @modelcontextprotocol/sdk   RUNTIME
+  #   brace-expansion <- minimatch <- eslint/typescript-eslint   dev only
+  # fast-uri takes >=3.1.4, not 3.1.3: CVE-2026-13676 is fixed in 3.1.3 but
+  # CVE-2026-16221 lists 3.1.3 itself as vulnerable, so the lower pin would have
+  # closed one alert and left the other open while looking done.
+  # Bounded <4 deliberately: a bare '>=3.1.4' resolved fast-uri@4.1.1, a major bump
+  # ajv never asked for (it declares ^3.0.1) — an override with an open upper bound
+  # silently hands a consumer a major it does not support. 3.1.4 patches both CVEs
+  # inside the declared range, so nothing has to be taken on faith.
+  fast-uri: '>=3.1.4 <4'
+  body-parser: '>=2.3.0 <3'
+  # @hono/node-server has NO 1.x patch — the fix lands in 2.0.5, a major bump, and
+  # the SDK we resolve (1.29.0) declares only ^1.19.9. It is pinned here anyway
+  # because the SDK's OWN next release (1.30.0) widens that range to
+  # '^1.19.9 || ^2.0.5', i.e. upstream states 2.x is compatible; we cannot simply
+  # take 1.30.0 today because it is younger than the minimumReleaseAge window
+  # above, and weakening a supply-chain gate to close a medium advisory is a bad
+  # trade. Revisit when 1.30.0 matures: this override should then be redundant.
+  '@hono/node-server': '>=2.0.5'
+  # brace-expansion ships three affected majors and one advisory covers all of
+  # them, so a single flat pin would force one major onto consumers of the others.
+  # Range-selective keys patch each line in place.
+  'brace-expansion@<1.1.16': '>=1.1.16 <2'
+  'brace-expansion@>=2.0.0 <2.1.2': '>=2.1.2 <3'
+  'brace-expansion@>=3.0.0 <5.0.7': '>=5.0.7'
