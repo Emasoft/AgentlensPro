@@ -472,7 +472,13 @@ export interface WindowConsumption {
   capacityCostUsd: number | null
   pctConsumedCost: number | null        // null when no cost cap — NEVER invented
   tokensPerMin: number                  // the current burn rate used for the projection
-  minutesToExhaustion: number | null    // null when capacity unset or burn rate 0
+  minutesToExhaustion: number | null    // null when capacity unset, burn rate 0, or the cap is falsified
+  /** Consumption has passed an AUTO-OBSERVED capacity. That capacity is only ever a proven LOWER
+   *  BOUND, so exceeding it does NOT mean the window is full — it means the bound is stale and every
+   *  figure derived from it (pctConsumed, pctConsumedCost, minutesToExhaustion) is meaningless. A
+   *  pooled 7d budget reported 171.51% consumed this way: a percentage above 100 on an open window is
+   *  self-falsifying, and nothing downstream treated it as the falsification it was. */
+  capacityExceeded: boolean
 }
 // pctConsumed is RAW-TOKEN based (consumedTokens / capacityTokens). If a plan's rate-limit window is
 // COST-based (Anthropic weights cache-read at 0.1× / 0.2×), raw tokens over-state consumption — read
@@ -493,13 +499,22 @@ export interface WindowBudget {
 function windowConsumption(
   events: ConsumptionEvent[], now: number, windowMs: number, label: '5h' | '7d',
   capacity: number | null, projectionTokensPerMin: number, capacityCost: number | null = null,
+  /** Whether `capacity` is an auto-observed LOWER BOUND rather than a user-configured true cap.
+   *  Only a lower bound can be "exceeded" while the window is still open. */
+  capacityIsLowerBound = false,
 ): WindowConsumption {
   const { tokens, cost, breakdown } = windowSum(events, now, windowMs)
   const pct = capacity !== null && capacity > 0 ? +(tokens / capacity * 100).toFixed(2) : null
   const pctCost = capacityCost !== null && capacityCost > 0 ? +(cost / capacityCost * 100).toFixed(2) : null
   const remaining = capacity !== null ? capacity - tokens : null
-  const minutesToExhaustion =
-    remaining !== null && remaining > 0 && projectionTokensPerMin > 0
+  const capacityExceeded = capacityIsLowerBound && (
+    (capacity !== null && capacity > 0 && tokens > capacity) ||
+    (capacityCost !== null && capacityCost > 0 && cost > capacityCost))
+  // A configured cap that is spent means 0 minutes left — a real, actionable answer. An OBSERVED cap
+  // that is spent means only that our lower bound was too low: we do not know how much window
+  // remains, and reporting "0 minutes" would drive a rotation the data never justified. Say null.
+  const minutesToExhaustion = capacityExceeded ? null
+    : remaining !== null && remaining > 0 && projectionTokensPerMin > 0
       ? +(remaining / projectionTokensPerMin).toFixed(1)
       : (remaining !== null && remaining <= 0 ? 0 : null)
   return {
@@ -509,7 +524,7 @@ function windowConsumption(
     breakdown,
     capacityTokens: capacity, pctConsumed: pct,
     capacityCostUsd: capacityCost, pctConsumedCost: pctCost,
-    tokensPerMin: projectionTokensPerMin, minutesToExhaustion,
+    tokensPerMin: projectionTokensPerMin, minutesToExhaustion, capacityExceeded,
   }
 }
 
@@ -518,13 +533,27 @@ function windowConsumption(
  *  machine-wide pooled budget (accountUuid === undefined) observed applies only when exactly ONE
  *  account has been calibrated: pooled consumption on a multi-account machine has no single cap
  *  (rate limits are per account), so guessing there would over-promise headroom. */
-function observedCapacityFor(config: BurnConfig, accountUuid: string | null | undefined): ObservedAccountCapacity | null {
+function observedCapacityFor(
+  config: BurnConfig, accountUuid: string | null | undefined, events: ConsumptionEvent[] = [],
+): ObservedAccountCapacity | null {
   const manual = config.window5hTokens !== null || config.window7dTokens !== null ||
     config.window5hCostUsd !== null || config.window7dCostUsd !== null
   if (manual) return null
   if (accountUuid === undefined) {
-    const keys = Object.keys(config.observed)
-    return keys.length === 1 ? config.observed[keys[0]] : null
+    // Pooled budget. A per-account cap describes pooled consumption ONLY when a single account
+    // produced all of it. The old test counted CALIBRATED accounts, which is the wrong question: this
+    // machine had one calibrated account and four active ones, so four accounts' pooled 7d burn was
+    // divided by one account's cap and reported as 171.51% consumed — a percentage above 100 on an
+    // open window, i.e. proof the denominator was not a cap. Count who actually BURNED instead, and
+    // count the unattributed bucket as its own account: consumption we cannot attribute is
+    // consumption we cannot claim a per-account cap for.
+    const calibrated = Object.keys(config.observed)
+    if (calibrated.length !== 1) return null
+    const active = new Set<string>()
+    for (const e of events) active.add(e.accountUuid ?? ' unattributed')
+    if (active.size > 1) return null
+    if (active.size === 1 && !active.has(calibrated[0])) return null
+    return config.observed[calibrated[0]]
   }
   return accountUuid !== null ? config.observed[accountUuid] ?? null : null
 }
@@ -538,7 +567,7 @@ export function computeWindowBudget(
   events: ConsumptionEvent[], config: BurnConfig, projectionTokensPerMin: number, now: number,
   accountUuid?: string | null,
 ): WindowBudget {
-  const obs = observedCapacityFor(config, accountUuid)
+  const obs = observedCapacityFor(config, accountUuid, events)
   const cap5h = config.window5hTokens ?? obs?.window5hTokens ?? null
   const cap7d = config.window7dTokens ?? obs?.window7dTokens ?? null
   const cap5hCost = config.window5hCostUsd ?? obs?.window5hCostUsd ?? null
@@ -548,9 +577,12 @@ export function computeWindowBudget(
   // account's budget may claim 'observed' — the others are honestly 'none'.
   const manual = config.capacitySource === 'env' || config.capacitySource === 'config'
   const source: BurnConfig['capacitySource'] = manual ? config.capacitySource : obs !== null ? 'observed' : 'none'
+  // Only an auto-observed cap is a lower bound; a user-configured cap is the real ceiling and being
+  // past it genuinely means the window is spent.
+  const lowerBound = source === 'observed'
   return {
-    fiveHour: windowConsumption(events, now, FIVE_HOURS_MS, '5h', cap5h, projectionTokensPerMin, cap5hCost),
-    sevenDay: windowConsumption(events, now, SEVEN_DAYS_MS, '7d', cap7d, projectionTokensPerMin, cap7dCost),
+    fiveHour: windowConsumption(events, now, FIVE_HOURS_MS, '5h', cap5h, projectionTokensPerMin, cap5hCost, lowerBound),
+    sevenDay: windowConsumption(events, now, SEVEN_DAYS_MS, '7d', cap7d, projectionTokensPerMin, cap7dCost, lowerBound),
     capacitySource: source,
     capacityConfigured: configured,
     capacityObservedAt: source === 'observed' ? obs?.observedAt ?? null : null,
