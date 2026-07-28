@@ -3,6 +3,7 @@ import {
   computeWindowBudget, DEFAULT_THRESHOLDS,
   type ConsumptionEvent, type BurnConfig, type ObservedAccountCapacity,
 } from '../burnMonitor'
+import { windowFillPct } from '../mcpServer'
 
 // When may an auto-calibrated capacity be applied, and what does exceeding one mean?
 //
@@ -105,5 +106,25 @@ suite('window capacity — exceeding an observed LOWER BOUND is a falsification,
     const budget = computeWindowBudget(events, config({ observed: { 'acct-A': observed() } }), 1000, NOW, 'acct-A')
     assert.strictEqual(budget.fiveHour.capacityExceeded, false)
     assert.strictEqual(budget.fiveHour.minutesToExhaustion, 600)   // (1_000_000-400_000)/1000
+  })
+})
+
+suite('windowFillPct — one honest utilisation number', () => {
+  test('prefers the COST percentage: windows are metered by cost, not raw tokens', () => {
+    // The real divergence measured on this machine: the same 7d window read 171.51% by tokens and
+    // 64.49% by cost, because ~96% of the volume is cache reads billed at 0.1x.
+    assert.strictEqual(windowFillPct({ pctConsumed: 171.51, pctConsumedCost: 64.49, capacityExceeded: false }), 64.49)
+  })
+
+  test('falls back to raw tokens only when no cost cap exists', () => {
+    assert.strictEqual(windowFillPct({ pctConsumed: 47.67, pctConsumedCost: null, capacityExceeded: false }), 47.67)
+  })
+
+  test('an exceeded lower bound has no percentage at all — null, never a number off a wrong divisor', () => {
+    assert.strictEqual(windowFillPct({ pctConsumed: 171.51, pctConsumedCost: 120, capacityExceeded: true }), null)
+  })
+
+  test('no capacity anywhere → null, never 0 (absence is not emptiness)', () => {
+    assert.strictEqual(windowFillPct({ pctConsumed: null, pctConsumedCost: null, capacityExceeded: false }), null)
   })
 })

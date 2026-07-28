@@ -3056,6 +3056,22 @@ export async function handleGetCostByCause(
 
 /** Attach a human label to one account's window budget: the current account's email/org, else a short
  *  account id (a rotated-away account is not resolvable to an email — only its id is known). */
+/**
+ * How full a rolling window is, as one honest percentage.
+ *
+ * COST first, raw tokens only as a fallback: the plan's windows are metered by cost-equivalent, not
+ * by token count (a cache read bills at 0.1x), so with ~96% of volume being cache reads the raw-token
+ * percentage systematically overstates the fill. Reporting it as *the* utilisation is what let a
+ * pooled 7d window read 171.51% while the cost figure for the same window read 64.49%.
+ *
+ * Null when the capacity is an auto-observed LOWER BOUND that consumption has already passed: the
+ * denominator is then proven wrong, and any percentage off it is noise wearing a number's clothes.
+ */
+export function windowFillPct(w: { pctConsumed: number | null; pctConsumedCost: number | null; capacityExceeded: boolean }): number | null {
+  if (w.capacityExceeded) return null
+  return w.pctConsumedCost ?? w.pctConsumed
+}
+
 function labelAccountWindow(w: AccountWindowBudget, account: AccountInfo | null): AccountWindowBudget {
   const label = account
     ? accountLabelFor(account, w.accountUuid)
@@ -3096,7 +3112,7 @@ export function handleGetAccountStatus(
     (rateLimits && (rateLimits.fiveHourUtilization !== null || rateLimits.sevenDayUtilization !== null))
       ? { fiveHourPct: rateLimits.fiveHourUtilization, sevenDayPct: rateLimits.sevenDayUtilization, windowSource: 'cc-rate-limits' }
       : (win && win.budget.capacityConfigured)
-        ? { fiveHourPct: win.budget.fiveHour.pctConsumed, sevenDayPct: win.budget.sevenDay.pctConsumed, windowSource: 'calibrated' }
+        ? { fiveHourPct: windowFillPct(win.budget.fiveHour), sevenDayPct: windowFillPct(win.budget.sevenDay), windowSource: 'calibrated' }
         : { fiveHourPct: null, sevenDayPct: null, windowSource: 'none' }
 
   const plan = account && account.source !== 'none' ? describePlan(account.planType, account.rateLimitTier) : 'unknown'
