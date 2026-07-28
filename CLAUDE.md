@@ -21,6 +21,8 @@ agentlenspro <tool> --param value --out FILE     # full JSON to disk, digest to 
 agentlenspro --install-otel | --uninstall-otel   # wire/unwire Claude Code telemetry (verified transaction)
 agentlenspro --install-hooks | --uninstall-hooks # wire/unwire lifecycle hook capture + the burn-gate
                                                  # (PreToolUse deny on agent-launch disasters; AGENTLENS_GATE=off)
+                                                 # + the image cache-guard on Read (WARN-only;
+                                                 # AGENTLENS_CACHE_GUARD=off / --hooks cacheguard=off)
 agentlenspro --install-skill                     # (re)install this skill into ~/.claude/skills/
 ```
 
@@ -186,7 +188,12 @@ prefix), `/login` (new auth ⇒ new prefix), a `/model` / reasoning-effort / fas
 MCP server connect/disconnect, a bare-tool **deny**, `/compact`, and a Claude Code upgrade.
 `/clear` resets the transcript floor (a deliberate, GOOD reset — cheap thereafter). A small
 per-turn `cache_creation` is just normal suffix writing; only a **full-prefix-sized** spike is a
-true cold rewrite.
+true cold rewrite. **Reading an IMAGE is not on this list** — a widely-shared write-up claims an
+image anywhere in a request invalidates the whole messages tier, but none of the 14 measured
+`CacheBreakCause` values is an image read, and adding one is suffix writing like any other content.
+An image is expensive as a RESIDENT block (doctrine 7 / `src/shared/residentCost.ts`), not as a
+prefix break; do not repeat the invalidation claim. Evidence:
+`reports/cache-guard/20260728_201256+0200-image-cache-premise-check.md`.
 
 **5. Fork agents PRESERVE the cache; fresh subagents DON'T.** A **fork** inherits the parent's
 context and reads+renews the PARENT's cache entry → warm 0.1× reads. A **fresh subagent** starts

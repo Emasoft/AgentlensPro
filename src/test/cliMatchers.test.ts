@@ -14,11 +14,15 @@ import {
 // must migrate and uninstall must strip.
 
 suite('agentlenspro — rebuildEventMatchers (hook install/uninstall)', () => {
-  test('install injects the gate entry on the ^(Task|Agent|Workflow|SendMessage)$ matcher, SYNC (no async)', () => {
+  test('install injects the gate entry on the agent-launch + Read matcher, SYNC (no async)', () => {
     // A fresh PreToolUse event gains exactly the gate matcher with the gate command, timeout 3, sync.
     // SendMessage joined in P6: resuming a dead agent re-runs the request that killed it, so the
     // server gates messages too (narrower — cache-thrash / cold-resume only, never routine traffic).
-    assert.strictEqual(GATE_MATCHER, '^(Task|Agent|Workflow|SendMessage)$')
+    // Read joined 2026-07-28 for the image cache-guard — the one non-rare tool in the matcher. Its
+    // cost is bounded on the CLI side (runGateCheck answers a non-image Read locally, no network),
+    // NOT by the matcher, so this string is pinned here to make widening it a deliberate act:
+    // every name added is a hook process on every one of that tool's calls.
+    assert.strictEqual(GATE_MATCHER, '^(Task|Agent|Workflow|SendMessage|Read)$')
     const r = rebuildEventMatchers([], 'PreToolUse', false, HOOK_CMD, GATE_CMD)
     assert.strictEqual(r.installed, true)
     const gate = r.rebuilt.find(m => m.matcher === GATE_MATCHER)

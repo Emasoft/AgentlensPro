@@ -17,7 +17,7 @@ import {
   apiRequest, callTool, dashboardUrl, dataDir, digest, fetchTools, firstSentence, fmtGb,
   fmtMb, init, mcpEndpoint, parseWhen, resolveTool, sleep, ToolInfo, ToolSchema,
 } from './cliCore'
-import { installHooks, installOtel, installSkill } from './hookInstall'
+import { installHooks, installOtel, installSkills } from './hookInstall'
 import { ensureServer, openDashboard, showStatus, stopServer } from './serverControl'
 
 export const USAGE = `agentlenspro — AI-agent observability: server, dashboard, diagnostics, hooks, setup
@@ -108,6 +108,7 @@ operations:
                         the magnitude — or "no active burn risks"
   --hooks [k=v ...]     show or flip the hook switches IN REALTIME for every running session
                         (server-side decision point — no restarts): gate=off|warn|enforce|on,
+                        cacheguard=on|off (image-read resident-cost warnings),
                         capture=on|off (lifecycle event storage), advisor=on|off (in-band
                         PostToolUse warnings). No args = show current config + file path
   --guard [seconds]     realtime burn guard: polls the risk report (default 15s, REST fast path)
@@ -118,10 +119,14 @@ operations:
                         from the packaged copy — idempotent (installed / updated / already current)
   --install-hooks       register 'agentlenspro hook' on the LIFECYCLE hook events AND the
                         burn-gate 'agentlenspro gate' (PreToolUse/PostToolUse matched to
-                        ^(Task|Agent|Workflow|SendMessage)$ only) — denies the four measured
+                        ^(Task|Agent|Workflow|SendMessage|Read)$) — denies the four measured
                         disaster launches with the reason fed back to the agent; fail-open
                         when the server is down; AGENTLENS_GATE=off disables,
-                        AGENTLENS_GATE_MODE=warn downgrades denies to warnings. Verified
+                        AGENTLENS_GATE_MODE=warn downgrades denies to warnings. Read is
+                        matched only for the image cache-guard, which WARNS (never denies)
+                        when reading an image would add a resident block to an already-fat
+                        session; a non-image Read is answered locally with no network call.
+                        AGENTLENS_CACHE_GUARD=off silences just that guard. Verified
                         transaction; migrates every previous-generation registration
                         (spy-agentlens*.sh paths, agentlenspro-hook/-gate PATH bins) and
                         removes dead claude-spyglass entries + env.SPYGLASS_DIR. Other tools'
@@ -230,13 +235,17 @@ async function runRisk(): Promise<void> {
 // Realtime hook switches: no args = show; k=v args = set. Applies INSTANTLY to every running
 // session machine-wide (the server is the decision point; registrations never change).
 async function runHooksConfig(kvs: string[]): Promise<void> {
-  interface HookConfig { gateEnabled: boolean; gateMode: string; captureEnabled: boolean; advisorEnabled: boolean }
+  interface HookConfig {
+    gateEnabled: boolean; gateMode: string; captureEnabled: boolean; advisorEnabled: boolean
+    cacheGuardEnabled: boolean
+  }
   if (kvs.length === 0) {
     const r = await apiRequest('GET', '/api/hook-config') as unknown as { config: HookConfig; file: string }
     const c = r.config
     console.log(`gate:     ${c.gateEnabled ? c.gateMode : 'off'}   (gate=off|warn|enforce)`)
     console.log(`capture:  ${c.captureEnabled ? 'on' : 'off'}       (capture=on|off — lifecycle event storage)`)
     console.log(`advisor:  ${c.advisorEnabled ? 'on' : 'off'}       (advisor=on|off — PostToolUse in-band warnings)`)
+    console.log(`cacheguard: ${c.cacheGuardEnabled ? 'on' : 'off'}     (cacheguard=on|off — warn on image reads into a fat session)`)
     console.log(`config file: ${r.file} (changes apply in realtime to ALL sessions)`)
     return
   }
@@ -254,11 +263,14 @@ async function runHooksConfig(kvs: string[]): Promise<void> {
     } else if (k === 'advisor') {
       if (v !== 'on' && v !== 'off') throw new Error(`advisor expects on|off, got "${v}"`)
       patch.advisorEnabled = v === 'on'
-    } else throw new Error(`unknown hook switch "${k}" (gate|capture|advisor)`)
+    } else if (k === 'cacheguard') {
+      if (v !== 'on' && v !== 'off') throw new Error(`cacheguard expects on|off, got "${v}"`)
+      patch.cacheGuardEnabled = v === 'on'
+    } else throw new Error(`unknown hook switch "${k}" (gate|capture|advisor|cacheguard)`)
   }
   const r = await apiRequest('POST', '/api/hook-config', patch) as unknown as { config: HookConfig }
   const c = r.config
-  console.log(`applied realtime (all sessions): gate=${c.gateEnabled ? c.gateMode : 'off'} capture=${c.captureEnabled ? 'on' : 'off'} advisor=${c.advisorEnabled ? 'on' : 'off'}`)
+  console.log(`applied realtime (all sessions): gate=${c.gateEnabled ? c.gateMode : 'off'} capture=${c.captureEnabled ? 'on' : 'off'} advisor=${c.advisorEnabled ? 'on' : 'off'} cacheguard=${c.cacheGuardEnabled ? 'on' : 'off'}`)
 }
 
 // Realtime burn guard: poll the risk report and print one line per risk TRANSITION —
@@ -473,7 +485,7 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
   }
 
   // Skill install is standalone too — pure file copy, no server, no settings mutation.
-  if (ops.installSkill) { installSkill(); return }
+  if (ops.installSkill) { installSkills(); return }
 
   // One-shot realtime culprit check — REST fast path, ~50ms end-to-end incl. node boot.
   if (ops.risk) { await runRisk(); return }

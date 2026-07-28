@@ -137,7 +137,12 @@ suite('standalone server — hook/gate/burn endpoints (real boot)', () => {
     const r = await httpReq(uiPort, 'GET', '/api/hook-config')
     assert.strictEqual(r.status, 200)
     const j = r.json as { config: unknown }
-    assert.deepStrictEqual(j.config, { captureEnabled: true, gateEnabled: true, gateMode: 'enforce', advisorEnabled: true })
+    // deepStrictEqual on the WHOLE object on purpose: a new switch must be a deliberate act that
+    // updates this line, because every field here is a default that ships to every user.
+    assert.deepStrictEqual(j.config, {
+      captureEnabled: true, gateEnabled: true, gateMode: 'enforce', advisorEnabled: true,
+      cacheGuardEnabled: true,
+    })
   })
 
   test('POST /api/hook-config captureEnabled=false round-trips through a subsequent GET', async () => {

@@ -33,7 +33,7 @@ import { sleep } from './cliCore'
 import {
   CLI_BIN, GATE_CMD, GATE_EVENTS, GATE_MATCHER, HOOK_CMD, HOOK_EVENTS, HookMatcher,
   installHooks, installSkill, isOurHookCommand, rebuildEventMatchers, resolveOnPath,
-  sha256File, SKILL_NAME, findPackageRoot,
+  sha256File, SKILL_NAMES, findPackageRoot,
 } from './hookInstall'
 import { findServerJs } from './serverControl'
 
@@ -574,28 +574,40 @@ const stepHooks: StepDef = {
 const stepSkill: StepDef = {
   name: 'skill',
   async run(ctx) {
-    const src = path.join(ctx.repoRoot, 'skills', SKILL_NAME, 'SKILL.md')
-    const dst = path.join(ctx.skillsDir, SKILL_NAME, 'SKILL.md')
-    if (!fs.existsSync(src)) {
-      return { result: { step: this.name, found: `shipped skill missing at ${src}`, action: 'refused', verify: 'FAIL', detail: 'package is incomplete' }, acted: false }
+    // EVERY shipped skill, not just the first: a second skill that was shipped in the tarball but
+    // never checked here would be installed once and then never repaired or refreshed, and setup's
+    // whole contract is "detect → converge → verify" for the things it owns.
+    const skills = SKILL_NAMES.map(name => {
+      const src = path.join(ctx.repoRoot, 'skills', name, 'SKILL.md')
+      const dst = path.join(ctx.skillsDir, name, 'SKILL.md')
+      const srcExists = fs.existsSync(src)
+      return {
+        name, src, dst, srcExists,
+        srcHash: srcExists ? sha256File(src) : null,
+        dstHash: fs.existsSync(dst) ? sha256File(dst) : null,
+      }
+    })
+    const missing = skills.filter(s => !s.srcExists)
+    if (missing.length > 0) {
+      return { result: { step: this.name, found: `shipped skill missing at ${missing.map(s => s.src).join(', ')}`, action: 'refused', verify: 'FAIL', detail: 'package is incomplete' }, acted: false }
     }
-    const srcHash = sha256File(src)
-    const dstExists = fs.existsSync(dst)
-    const dstHash = dstExists ? sha256File(dst) : null
+    const stale = skills.filter(s => s.dstHash !== s.srcHash)
     const supersededDir = path.join(ctx.skillsDir, 'agentlens-diagnostics')
     const hasSuperseded = fs.existsSync(supersededDir)
-    const found = `${dstExists ? (dstHash === srcHash ? 'current' : 'content drift') : 'not installed'}${hasSuperseded ? ' + superseded agentlens-diagnostics present' : ''}`
+    const found = `${skills.length - stale.length}/${skills.length} current` +
+      (stale.length > 0 ? ` (${stale.map(s => `${s.name}: ${s.dstHash === null ? 'not installed' : 'content drift'}`).join(', ')})` : '') +
+      (hasSuperseded ? ' + superseded agentlens-diagnostics present' : '')
 
     if (ctx.dryRun) {
       const plan: string[] = []
-      if (dstHash !== srcHash) plan.push('install/refresh SKILL.md')
+      if (stale.length > 0) plan.push(`install/refresh ${stale.map(s => s.name).join(', ')}`)
       if (hasSuperseded) plan.push('move old agentlens-diagnostics aside')
       return { result: { step: this.name, found, action: plan.length ? `would: ${plan.join('; ')}` : 'none', verify: 'SKIP', detail: 'dry-run' }, acted: false }
     }
 
     let acted = false
-    if (dstHash !== srcHash) {
-      installSkill({ repoRoot: ctx.repoRoot, skillsDir: ctx.skillsDir, log: ctx.log })
+    for (const s of stale) {
+      installSkill({ repoRoot: ctx.repoRoot, skillsDir: ctx.skillsDir, log: ctx.log, name: s.name })
       acted = true
     }
     let supersededNote = ''
@@ -614,13 +626,17 @@ const stepSkill: StepDef = {
         supersededNote = '; agentlens-diagnostics left untouched (content not recognisably ours)'
       }
     }
-    // VERIFY — hash compare on a FRESH read of both files (not the writer's buffer).
-    const ok = fs.existsSync(dst) && sha256File(dst) === sha256File(src)
+    // VERIFY — hash compare on a FRESH read of both files (not the writer's buffer), for EVERY
+    // skill. One bad apple fails the step and is named, so "PASS" can never mean "the first one
+    // was fine and the rest were not looked at".
+    const bad = skills.filter(s => !(fs.existsSync(s.dst) && sha256File(s.dst) === sha256File(s.src)))
     return {
       result: {
         step: this.name, found, action: acted ? 'installed/refreshed' : 'none',
-        verify: ok ? 'PASS' : 'FAIL',
-        detail: (ok ? `sha256 match${supersededNote}` : 'installed hash differs from shipped hash'),
+        verify: bad.length === 0 ? 'PASS' : 'FAIL',
+        detail: (bad.length === 0
+          ? `sha256 match on ${skills.length} skill(s)${supersededNote}`
+          : `installed hash differs from shipped hash: ${bad.map(s => s.name).join(', ')}`),
       },
       acted,
     }

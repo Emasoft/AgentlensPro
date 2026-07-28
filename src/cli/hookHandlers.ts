@@ -17,6 +17,7 @@
 import { spawn } from 'child_process'
 import * as fs from 'fs'
 import * as path from 'path'
+import { isImageReadPath } from '../shared/imageReads'
 import { uiBaseUrl, dataDir } from './cliCore'
 import { findServerJs } from './serverControl'
 import { agentlensDisabled, noRevivePath } from './killSwitch'
@@ -41,6 +42,30 @@ function spoolMaxFiles(): number { return Math.max(1, Number(process.env.AGENTLE
 /** The gate kill-switch (AGENTLENS_GATE=off disarms the burn-gate; default on). One definition,
  *  read per-call so a live env change is honored — used by both runGateCheck and runHookCommand. */
 function gateDisabled(): boolean { return (process.env.AGENTLENS_GATE || 'on') === 'off' }
+
+/** The image cache-guard's OWN kill-switch. Deliberately separate from AGENTLENS_GATE: the guard
+ *  rides the same PreToolUse hook but matches `Read`, so someone who finds it chatty must be able
+ *  to silence it WITHOUT also disarming the agent-launch disaster gate — one shared switch would
+ *  make "the image warning annoys me" cost you the fork-storm protection too. */
+function cacheGuardDisabled(): boolean { return (process.env.AGENTLENS_CACHE_GUARD || 'on') === 'off' }
+
+/** Decide LOCALLY whether a gate payload is worth a round-trip to the server.
+ *
+ *  `Read` is in GATE_MATCHER solely for the image cache-guard, and a session reads far more files
+ *  than it launches agents — so answering "this Read is a .ts file, the guard has nothing to say"
+ *  here costs one JSON parse instead of an HTTP call with a 2s timeout on every single read.
+ *  Unparseable payloads fall through to the server: that is the fail-open direction, and a payload
+ *  shape we do not recognise is exactly when we should not be the one deciding. */
+function skipGateRoundTrip(payload: Buffer): boolean {
+  let p: { tool_name?: unknown; tool_input?: { file_path?: unknown } | null }
+  try {
+    p = JSON.parse(payload.toString('utf-8')) as typeof p
+  } catch {
+    return false
+  }
+  if (p?.tool_name !== 'Read') return false
+  return cacheGuardDisabled() || !isImageReadPath(p.tool_input?.file_path)
+}
 
 /** Durably record an undeliverable hook payload for the server's boot/periodic drain. Bounded so a
  *  permanently-down server can't fill the disk: over the cap, the OLDEST spooled events are dropped
@@ -155,6 +180,7 @@ export async function forwardHookEvent(payload: Buffer, opts: { baseUrl?: string
 /** Run one gate check. Returns the server's response body ('' = allow / any failure). */
 export async function runGateCheck(payload: Buffer, opts: { baseUrl?: string; timeoutMs?: number } = {}): Promise<string> {
   if (gateDisabled()) return '' // kill-switch BEFORE any network
+  if (skipGateRoundTrip(payload)) return '' // non-image Read, or the guard is off — no network
   const base = opts.baseUrl ?? uiBaseUrl()
   // Number(env)||default (see forwardHookEvent): "2s" must fall back to 2, not NaN → throw → fail-open.
   const timeoutMs = opts.timeoutMs ?? Math.max(200, (Number(process.env.AGENTLENS_GATE_TIMEOUT) || 2) * 1000)

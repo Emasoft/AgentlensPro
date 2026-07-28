@@ -22,6 +22,10 @@ export interface HookRuntimeConfig {
   gateMode: 'enforce' | 'warn'
   /** The PostToolUse in-band advisory to the model. */
   advisorEnabled: boolean
+  /** The image-read cache-guard (warns when an image would become resident in a fat session).
+   *  Separate from gateEnabled on purpose: it rides the SAME PreToolUse hook but matches `Read`,
+   *  a hot path, so it must be silenceable without disarming the agent-launch disaster gate. */
+  cacheGuardEnabled: boolean
 }
 
 export const HOOK_CONFIG_DEFAULTS: HookRuntimeConfig = {
@@ -29,6 +33,7 @@ export const HOOK_CONFIG_DEFAULTS: HookRuntimeConfig = {
   gateEnabled: true,
   gateMode: 'enforce',
   advisorEnabled: true,
+  cacheGuardEnabled: true,
 }
 
 function coerce(raw: unknown, envMode: string | undefined): HookRuntimeConfig {
@@ -44,6 +49,7 @@ function coerce(raw: unknown, envMode: string | undefined): HookRuntimeConfig {
     gateEnabled: bool(o.gateEnabled, HOOK_CONFIG_DEFAULTS.gateEnabled),
     gateMode: mode,
     advisorEnabled: bool(o.advisorEnabled, HOOK_CONFIG_DEFAULTS.advisorEnabled),
+    cacheGuardEnabled: bool(o.cacheGuardEnabled, HOOK_CONFIG_DEFAULTS.cacheGuardEnabled),
   }
 }
 

@@ -17,6 +17,7 @@ import {
   ASSUMED_TTL_REGIME, COLD_IDLE_SLACK_MS, DEFAULT_COLD_IDLE_MS,
   classifyTtlRegime, ttlPhrase, type TtlRegime,
 } from './shared/cacheTtl'
+import { isImageReadPath } from './shared/imageReads'
 
 // The conversations a COLD_RESUME rule protects are the SUBAGENT ones (the fanned-out launches /
 // the dead agent a SendMessage resumes) — per the doc matrix those ride the 5-min tier ALWAYS,
@@ -37,6 +38,12 @@ export interface GateThresholds {
   fanoutWarn2min: number
   /** How long after a StopFailure the cold-resume rule stays armed (default 10min). */
   coldResumeWindowMs: number
+  /** Session context (tokens) above which reading an image earns a resident-cost warning
+   *  (default 50k). Below it the per-turn tax is noise. */
+  imgWarnTokens: number
+  /** Session context (tokens) at which an image read would be disaster-class (default 300k).
+   *  Present, and deliberately NOT armed to deny — see evaluateImageReadGate. */
+  imgDenyTokens: number
 }
 
 export const DEFAULT_GATE_THRESHOLDS: GateThresholds = {
@@ -47,6 +54,8 @@ export const DEFAULT_GATE_THRESHOLDS: GateThresholds = {
   runaway60s: 8,
   fanoutWarn2min: 5,
   coldResumeWindowMs: 600_000,
+  imgWarnTokens: 50_000,
+  imgDenyTokens: 300_000,
 }
 
 export interface ParentContext {
@@ -109,6 +118,7 @@ export interface AgentGateDecision {
   code:
     | 'THRASH_ACTIVE' | 'RUNAWAY_FANOUT' | 'COLD_RESUME_FANOUT' | 'FORK_STORM_FORMING'
     | 'FORK_FAT_PARENT' | 'COLD_FORK' | 'FANOUT_HEADSUP' | 'COLD_RESUME_MESSAGE'
+    | 'IMG_RESIDENT'
     | null
   reason: string | null
 }
@@ -395,6 +405,64 @@ export function evaluateSendMessageGate(state: AgentGateState): AgentGateDecisio
       `write rate. Wait ~60s for the wall to clear, then retry this message. Override: AGENTLENS_GATE=off.`)
   }
   return { decision: 'allow', code: null, reason: null }
+}
+
+/**
+ * Cache-guard for image reads — the PRE-FLIGHT counterpart to the post-hoc resident-cost report
+ * (src/shared/residentCost.ts). Absorbs the useful half of `0x0funky/claude-cache-guard`.
+ *
+ * PREMISE CORRECTION, deliberate and load-bearing. That project's central claim is that an image
+ * ANYWHERE in a request invalidates the entire messages tier, so the next call rewrites the whole
+ * conversation at the cache-WRITE rate (they report ~700x overhead). This repo cannot corroborate
+ * that for Claude Code: `CacheBreakCause` enumerates the 14 break causes measured here — tools
+ * added/reordered, model/effort/fast-mode switches, MCP toggles, plugin+skill reloads, account
+ * switch, tool deny, injected-block mutation, compaction — and an image read is NOT among them.
+ * Shipping their framing would mean denying a hot-path tool on an uncorroborated mechanism, i.e.
+ * manufacturing exactly the confident false culprit CLAUDE.md warns about.
+ *
+ * What IS measured here is the RESIDENT cost: `cost ≈ turns × per-turn-context`, so an image block
+ * is re-billed on every turn from the one that added it until a compaction evicts it. That is real,
+ * it is large in a fat session, and — conveniently — every remedy is the same (delegate the look to
+ * a subagent, batch reads into one turn, write findings down instead of re-reading). So the advice
+ * survives the correction intact; only the mechanism sentence and the price tag change.
+ *
+ * WARN ONLY, on purpose. This module's contract is "deny only high-confidence disaster
+ * signatures ... a gate that cries wolf gets AGENTLENS_GATE=off'd and then prevents nothing", and
+ * a per-turn resident tax is not the same class of event as a forming fork storm. Read is also a
+ * hot path where a false deny is maximally annoying. `imgDenyTokens` exists and is honoured as the
+ * "this is now dominating the session" phrasing trigger; arming it to actually deny is a one-line
+ * change once the per-image token cost is MEASURED here (today's two available figures disagree by
+ * ~40x, so no number is quoted at all rather than a wrong one).
+ */
+export function evaluateImageReadGate(
+  toolInput: Record<string, unknown> | null | undefined,
+  state: AgentGateState,
+): AgentGateDecision {
+  const th = { ...DEFAULT_GATE_THRESHOLDS, ...state.thresholds }
+  const allow: AgentGateDecision = { decision: 'allow', code: null, reason: null }
+  const input = toolInput ?? {}
+  const filePath = typeof input.file_path === 'string' ? input.file_path : null
+  if (!isImageReadPath(filePath)) return allow
+
+  // No readable transcript ⇒ no context size ⇒ no claim. A warning needs a real number behind it;
+  // inventing one is how a gate earns its way onto the ignore list.
+  const ctx = state.parent.contextTokens
+  if (ctx === null || ctx < th.imgWarnTokens) return allow
+
+  const name = filePath.split('/').filter(Boolean).pop() ?? filePath
+  const dominating = ctx >= th.imgDenyTokens
+    ? ' This session is already large enough that resident blocks dominate its per-turn cost.'
+    : ''
+  return {
+    decision: 'warn', code: 'IMG_RESIDENT',
+    reason: `[agentlens cache-guard] reading ${name} into a ~${k(ctx)}-token session. An image block is ` +
+      `RESIDENT: it rides forward in the prefix and is re-billed on EVERY later turn until a compaction ` +
+      `evicts it — the cost is not the one read, it is the read times every turn that follows.${dominating} ` +
+      `Cheapest first: (1) delegate the look to a subagent — it reads the image in ITS small context and ` +
+      `returns a text verdict, so nothing lands here; (2) if you look here, read every image you need in ` +
+      `ONE message and draw the conclusions in that same turn — batching costs no more than one; ` +
+      `(3) write the verdict down and never re-read the file. Silence: AGENTLENS_CACHE_GUARD=off.`,
+  }
 }
 
 /**

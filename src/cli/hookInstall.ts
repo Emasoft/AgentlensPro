@@ -42,7 +42,14 @@ export const HOOK_EVENTS = [
 // and it must be SYNC (async hooks cannot deny) with a hard 3s timeout so a dead server never
 // stalls a turn. SendMessage joined the matcher in P6: resuming a DEAD agent re-runs the
 // request that killed it, so the server gates it — but ONLY on cache-thrash / cold-resume.
-export const GATE_MATCHER = '^(Task|Agent|Workflow|SendMessage)$'
+//
+// `Read` (2026-07-28) is the ONE non-rare tool in the matcher, and it is here only for the image
+// cache-guard, which warns when an image would become RESIDENT in an already-fat session. Its cost
+// is bounded on the CLI side, not by the matcher: runGateCheck answers a Read locally (one JSON
+// parse, no network) unless the path is actually an image — so the overwhelmingly common
+// read-a-source-file case never reaches the server. Silence it alone with
+// AGENTLENS_CACHE_GUARD=off, which leaves the agent-launch gate armed.
+export const GATE_MATCHER = '^(Task|Agent|Workflow|SendMessage|Read)$'
 export const GATE_EVENTS = ['PreToolUse', 'PostToolUse']
 
 /** The ONE published bin (package.json "bin") — what must resolve on PATH. */
@@ -274,9 +281,17 @@ export interface InstallSkillOptions {
   /** Target skills dir. Default ~/.claude/skills */
   skillsDir?: string
   log?: (line: string) => void
+  /** Which shipped skill to install. Default SKILL_NAME. */
+  name?: string
 }
 
 export const SKILL_NAME = 'agentlenspro-diagnostics'
+
+/** Every skill this package ships and installs into the user scope. SKILL_NAME stays the anchor
+ *  findPackageRoot probes for (it has always been present, so the probe keeps working on any
+ *  older layout); this list is what `--install-skill` and setup's drift check iterate. Adding a
+ *  skill directory without adding it here would ship it in the tarball and never install it. */
+export const SKILL_NAMES: readonly string[] = [SKILL_NAME, 'agentlenspro-cache-guard']
 
 /** Walk up from a start dir to the first directory containing the shipped skill. The CLI
  *  bundle lives at <pkg>/standalone/cli.js and the test build at <repo>/out/test/cli/, so a
@@ -302,19 +317,37 @@ export function sha256File(file: string): string {
  *  skill if it was deleted. Returns what happened so `setup` can RECORD it. */
 export function installSkill(opts: InstallSkillOptions = {}): 'installed' | 'updated' | 'current' {
   const log = opts.log ?? ((line: string) => console.log(line))
+  const name = opts.name ?? SKILL_NAME
   const root = opts.repoRoot ?? findPackageRoot(__dirname)
   if (!root) throw new Error(`skill source missing — no skills/${SKILL_NAME}/SKILL.md above ${__dirname}`)
-  const src = path.join(root, 'skills', SKILL_NAME, 'SKILL.md')
+  const src = path.join(root, 'skills', name, 'SKILL.md')
   if (!fs.existsSync(src)) throw new Error(`skill source missing at ${src} — is the package intact?`)
-  const dst = path.join(opts.skillsDir ?? path.join(os.homedir(), '.claude', 'skills'), SKILL_NAME, 'SKILL.md')
+  const dst = path.join(opts.skillsDir ?? path.join(os.homedir(), '.claude', 'skills'), name, 'SKILL.md')
   const content = fs.readFileSync(src, 'utf8')
   const existed = fs.existsSync(dst)
   if (existed && fs.readFileSync(dst, 'utf8') === content) {
-    log(`skill ${SKILL_NAME}: already current (${dst})`)
+    log(`skill ${name}: already current (${dst})`)
     return 'current'
   }
   fs.mkdirSync(path.dirname(dst), { recursive: true })
   fs.writeFileSync(dst, content)
-  log(`skill ${SKILL_NAME}: ${existed ? 'updated' : 'installed'} -> ${dst}`)
+  log(`skill ${name}: ${existed ? 'updated' : 'installed'} -> ${dst}`)
   return existed ? 'updated' : 'installed'
+}
+
+/** Install EVERY shipped skill. One failure must not silently skip the rest — a partially
+ *  installed skill set is the state that produces "I ran --install-skill and the guard still
+ *  isn't there" — so each is attempted and the errors are collected and rethrown together. */
+export function installSkills(opts: InstallSkillOptions = {}): Array<{ name: string; outcome: string }> {
+  const results: Array<{ name: string; outcome: string }> = []
+  const failures: string[] = []
+  for (const name of SKILL_NAMES) {
+    try {
+      results.push({ name, outcome: installSkill({ ...opts, name }) })
+    } catch (e) {
+      failures.push(`${name}: ${(e as Error).message}`)
+    }
+  }
+  if (failures.length > 0) throw new Error(`skill install failed — ${failures.join('; ')}`)
+  return results
 }

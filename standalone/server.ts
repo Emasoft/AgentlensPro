@@ -34,7 +34,7 @@ import { extractLifecycleEvents, type LifecycleKind } from '../src/lifecycleEven
 import { scanCacheRiskCommands, type CacheRiskKind } from '../src/cacheRiskCommands'
 import { buildDroppedLogEventRecord, appendDroppedLogEvent, purgeLogEventBuckets, logEventsDiskUsage } from '../src/logEventSink'
 import { BodiesActivityTracker } from '../src/bodiesActivity'
-import { evaluateAgentGate, evaluateSendMessageGate, buildAdvisory, readTranscriptContext, resolveMessageTargetLiveness, type AgentGateState, type GateThresholds, type LaunchSpawner } from '../src/agentGate'
+import { evaluateAgentGate, evaluateSendMessageGate, evaluateImageReadGate, buildAdvisory, readTranscriptContext, resolveMessageTargetLiveness, type AgentGateState, type GateThresholds, type LaunchSpawner } from '../src/agentGate'
 import { checkBurnRisk, attachRiskCausingCalls } from '../src/burnGuard'
 import { loadHookRuntimeConfig, saveHookRuntimeConfig } from '../src/hookRuntimeConfig'
 import { ContextCompositionIndex } from '../src/contextCompositionIndex'
@@ -711,6 +711,8 @@ const gateThresholds: Partial<GateThresholds> = (() => {
   set('runaway60s', 'AGENTLENS_GATE_RUNAWAY_60S')
   set('fanoutWarn2min', 'AGENTLENS_GATE_FANOUT_WARN_2MIN')
   set('coldResumeWindowMs', 'AGENTLENS_GATE_COLD_RESUME_WINDOW_MS')
+  set('imgWarnTokens', 'AGENTLENS_GATE_IMG_WARN_TOKENS')
+  set('imgDenyTokens', 'AGENTLENS_GATE_IMG_DENY_TOKENS')
   return out
 })()
 
@@ -3179,7 +3181,13 @@ const uiServer = http.createServer(async (req, res) => {
         // unknown one gets a warning, never a hard deny (2026-07-11 field fix).
         if (!hookRuntime.gateEnabled) { res.writeHead(204); res.end(); return }
         let d
-        if (p.tool_name === 'SendMessage') {
+        if (p.tool_name === 'Read') {
+          // Read is matched ONLY for the image cache-guard, and that guard has its own runtime
+          // switch: it rides a hot path, so "the image warning annoys me" must never cost the user
+          // the agent-launch disaster gate. Warn-only by construction — see evaluateImageReadGate.
+          if (!hookRuntime.cacheGuardEnabled) { res.writeHead(204); res.end(); return }
+          d = evaluateImageReadGate((p.tool_input ?? null) as Record<string, unknown> | null, state)
+        } else if (p.tool_name === 'SendMessage') {
           const to = (p.tool_input as Record<string, unknown> | null | undefined)?.to
           state.messageTarget = typeof to === 'string' ? to : null
           state.targetLiveness = resolveMessageTargetLiveness(to, recentHookEvents)

@@ -4,6 +4,60 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.17.0] - 2026-07-28
+
+### Added
+
+- **Image cache-guard — a pre-flight warning at the moment it can still change the decision.** A
+  `PreToolUse` hook on `Read` that speaks when the target is an image *and* the session is already
+  large. Until now every image accounting path here was post-hoc, reconstructed from OTEL bodies
+  after the money was spent. Technique credit:
+  [`0x0funky/claude-cache-guard`](https://github.com/0x0funky/claude-cache-guard).
+  - **Its central premise is deliberately NOT adopted.** That project reports that an image
+    *anywhere* in a request invalidates the whole message cache, so the next call rewrites the
+    entire conversation at the write rate (~700× overhead). This repo measures 14 distinct
+    `CacheBreakCause` values — tools changed/reordered, model / effort / fast-mode switches, MCP
+    toggles, plugin and skill reloads, account switch, tool deny, injected-block mutation,
+    compaction — and an image read is **not one of them**. Denying a hot-path tool on an
+    uncorroborated mechanism is exactly the confident-false-culprit failure the cost doctrine warns
+    about, so the guard asserts only what is measured here: **resident cost**
+    (`cost ≈ turns × per-turn-context`, `src/shared/residentCost.ts`) — the image rides forward and
+    is re-billed on every later turn until a compaction evicts it. Every remedy is the same either
+    way, so the advice survives the correction intact; only the mechanism sentence changes.
+  - **Warn-only, by construction.** `src/agentGate.ts`'s contract is "deny only high-confidence
+    disaster signatures … a gate that cries wolf gets `AGENTLENS_GATE=off`'d and then prevents
+    nothing", and a per-turn resident tax is not the same class of event as a forming fork storm.
+    `imgDenyTokens` (300k) exists and escalates the *phrasing*; arming it to deny is a one-line
+    change once the per-image token cost is measured here (the two figures available today disagree
+    by ~40×, so the guard quotes no per-image number at all rather than a wrong one).
+  - **`Read` is the first non-rare tool in `GATE_MATCHER`, and its cost is bounded on the CLI
+    side**, not by the matcher: `runGateCheck` answers a non-image `Read` locally with one JSON
+    parse and no network call, so ordinary source reading never reaches the server. The shared
+    predicate lives in `src/shared/imageReads.ts` — two copies would drift silently in the
+    safe-looking direction.
+  - **Its own switch**, so "this warning annoys me" never costs you the agent-launch gate:
+    `agentlenspro --hooks cacheguard=off` (instant, all sessions, no restart) or
+    `AGENTLENS_CACHE_GUARD=off` (per process, short-circuits before any network call).
+    Thresholds: `AGENTLENS_GATE_IMG_WARN_TOKENS` (50k) / `AGENTLENS_GATE_IMG_DENY_TOKENS` (300k).
+  - New model-invoked skill **`agentlenspro-cache-guard`** teaching the batching / delegate-to-a-
+    subagent / write-it-down discipline with this project's verified numbers (read 0.1×, output 5×,
+    write 1.25× at 5-min and **2× at the 1-hour tier** — a 20× spread, not the 12.5× quoted
+    upstream). `--install-skill` and `setup` now install and drift-check **every** shipped skill
+    rather than only the first.
+
+### Fixed
+
+- **No raw control bytes in source — they make `grep` silently blind.** Five separator sentinels
+  across four modules (`burnMonitor`, `accountStateTimeline`, `sessionBurnProfile`,
+  `forensicsIndex`) were raw `0x00` / `0x01` bytes inside string literals. A single sub-`0x09` byte
+  makes `file(1)` classify the module as binary `data`, and a content `grep` over it stops
+  reporting lines — so an audit gets a confident, wrong "not found". One of these was introduced in
+  2.16.0 and immediately caused a verification pass to report a present, correct fix as *missing*.
+  They are now source **escapes** (`'\x01'` is four printable characters producing the identical
+  byte at runtime — an exact behavioural no-op), and a mechanical source-hygiene check guards
+  against the next one, since the prose lesson warning about it had already existed for eleven days
+  and did not prevent the recurrence.
+
 ## [2.16.0] - 2026-07-26
 
 ### Added
