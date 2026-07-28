@@ -71,8 +71,9 @@ agentlenspro list --desc                  # discover tools
 agentlenspro help <tool>                  # flags from the live schema
 agentlenspro <tool> --param value --out FILE   # full JSON to disk, digest to stdout
 agentlenspro --install-otel               # wire Claude Code telemetry (verified transaction)
-agentlenspro --install-hooks              # wire lifecycle hook capture + the burn-gate
-agentlenspro --install-skill              # (re)install the agentlenspro-diagnostics skill
+agentlenspro --install-hooks              # wire lifecycle capture + burn-gate + image cache-guard
+agentlenspro --install-skill              # (re)install every shipped skill into ~/.claude/skills/
+agentlenspro --hooks                      # show/flip the runtime switches (instant, no restart)
 ```
 
 Run it as an always-on login daemon (macOS launchd) so ingestion is up across reboots even with
@@ -103,6 +104,49 @@ not resolve on `PATH` (a hook the shell cannot find would silently never fire).
 `--uninstall-hooks` removes every generation: the v2 command strings, the v1
 `agentlenspro-hook`/`agentlenspro-gate` PATH-bin names, and any v0 absolute-path
 `spy-agentlens*` entries.
+
+#### Prevention: the burn-gate and the image cache-guard
+
+Everything else here is forensics — it tells you what a session cost after it cost it. These two
+`PreToolUse` hooks are the only parts that speak *before* the money moves.
+
+**The burn-gate** matches agent-launch tools (`Task`, `Agent`, `Workflow`, `SendMessage`) and
+**denies** the four measured disaster signatures — cache-thrash in progress, a runaway fan-out, a
+fan-out into the cold cache left by a rate-limit stall, and a forming fork storm. The reason is fed
+back to the agent so it can adapt, and it always names a concrete retry path.
+
+**The image cache-guard** matches `Read` and **warns** when the target is an image and the session
+is already large. An image block is *resident*: it rides forward in the prefix and is re-billed on
+every later turn until a compaction evicts it, so the cost is not the one read — it is the read
+times every turn that follows. The warning names the cheaper paths (delegate the look to a
+subagent, batch every image into one turn, write the verdict down instead of re-reading).
+
+> It **warns and never denies**, deliberately. A widely-shared write-up claims an image anywhere in
+> a request invalidates the whole message cache; AgentlensPro measures 14 distinct causes of a
+> prefix break and an image read is not one of them, so denying a hot-path tool on that basis would
+> be manufacturing a false culprit. The resident-cost mechanism is measured here, is large on its
+> own, and leads to exactly the same advice.
+
+`Read` is the one non-rare tool in the matcher, so its cost is bounded on the CLI side rather than
+by the matcher: a non-image read is answered locally with a single JSON parse and no network call.
+
+Both are switchable in realtime for every running session at once — the registrations stay static
+and the server is the decision point:
+
+```bash
+agentlenspro --hooks                      # show: gate, capture, advisor, cacheguard
+agentlenspro --hooks gate=warn            # downgrade every gate deny to a warning
+agentlenspro --hooks cacheguard=off       # silence the image guard; the burn-gate stays armed
+```
+
+Per-process env equivalents: `AGENTLENS_GATE=off`, `AGENTLENS_GATE_MODE=warn`,
+`AGENTLENS_CACHE_GUARD=off` (this one short-circuits before any network call). Thresholds:
+`AGENTLENS_GATE_IMG_WARN_TOKENS` (50k) and `AGENTLENS_GATE_IMG_DENY_TOKENS` (300k, phrasing only).
+The two switches are separate on purpose — finding the image warning chatty must never cost you the
+fork-storm protection.
+
+The model-invoked skill **`agentlenspro-cache-guard`** teaches the underlying discipline (batch,
+delegate, write it down, compact after) with this project's verified rates.
 
 #### Emergency stop: `agentlenspro disable` / `enable`
 

@@ -356,8 +356,8 @@ agentlenspro batch '<json-array>'           # N tools in ONE invocation: [{"tool
 | `--export-bodies DIR` | re-inflate archived OTEL bodies into DIR as plain files; `--since <hours\|ISO>` / `--until <ISO>` filter by time |
 | `--purge-bodies` | delete archived body volumes proven durable in the store (each verified lump-by-lump); unproven volumes are kept and named, `.idx` sidecars always retained (the live 72h window is untouched) |
 | `--risk` | one-shot realtime culprit check (~40ms REST fast path): prints only the ACTIVE burn risks, each naming the culprit session/workspace/model + magnitude |
-| `--install-skill` | (re)install THIS skill into `~/.claude/skills/` — idempotent, reports installed/updated/current |
-| `--install-hooks` | register the `agentlenspro hook` command string on the 10 LIFECYCLE hook events (SessionStart/End, Stop, StopFailure, Pre/PostCompact, Permission, Notification, SubagentStart/Stop) AND the burn-gate (`agentlenspro gate` on PreToolUse/PostToolUse matched to `^(Task\|Agent\|Workflow\|SendMessage)$` only — see "The burn-gate" below) via the same verified transaction. Bare bin + subcommand, never absolute paths — registrations survive Homebrew version bumps; the install refuses if `agentlenspro` is not on PATH. Also migrates every previous-generation registration (`agentlenspro-hook`/`agentlenspro-gate` PATH bins, absolute-path `spy-agentlens*` scripts) and removes dead claude-spyglass entries. Never touches other tools' hooks. Idempotent; needs a session restart |
+| `--install-skill` | (re)install EVERY shipped skill into `~/.claude/skills/` (this one + `agentlenspro-cache-guard`) — idempotent, reports installed/updated/current per skill |
+| `--install-hooks` | register the `agentlenspro hook` command string on the 10 LIFECYCLE hook events (SessionStart/End, Stop, StopFailure, Pre/PostCompact, Permission, Notification, SubagentStart/Stop) AND the burn-gate (`agentlenspro gate` on PreToolUse/PostToolUse matched to `^(Task\|Agent\|Workflow\|SendMessage\|Read)$` — `Read` only for the image cache-guard, see "The burn-gate" below) via the same verified transaction. Bare bin + subcommand, never absolute paths — registrations survive Homebrew version bumps; the install refuses if `agentlenspro` is not on PATH. Also migrates every previous-generation registration (`agentlenspro-hook`/`agentlenspro-gate` PATH bins, absolute-path `spy-agentlens*` scripts) and removes dead claude-spyglass entries. Never touches other tools' hooks. Idempotent; needs a session restart |
 | `--uninstall-hooks` | remove exactly those agentlens hook entries — every generation: v2 command strings, v1 PATH-bin names, legacy absolute-path `spy-agentlens*` registrations (nothing else) |
 | `--install-otel` | add the 19 Claude Code telemetry env vars to `~/.claude/settings.json` via a verified transaction: atomic backup+rename, cross-process lock, post-verify, refuses an unparseable file, all other content untouched, idempotent (`changed=false` when already installed) |
 | `--uninstall-otel` | remove exactly those 19 vars, same guarantees |
@@ -588,7 +588,7 @@ before spawning fresh agents, and images left resident in context.
 ## The burn-gate — PREVENTION, not just warning (installed by `--install-hooks`)
 
 Warnings only work if someone is watching. The gate acts by itself: a PreToolUse hook on
-`^(Task|Agent|Workflow|SendMessage)$` (agent-launch tools ONLY — never per-tool-call overhead) asks the
+`^(Task|Agent|Workflow|SendMessage|Read)$` asks the
 resident server before every launch (one curl, measured 14ms end-to-end, decision p50 0.9ms)
 and **DENIES the four measured disaster signatures**, feeding the reason back to the agent so
 it can adapt instead of just failing:
@@ -607,13 +607,27 @@ allow. A PostToolUse advisory on the same matcher injects ONE deduped in-band wa
 model when a wave just triggered CACHE_THRASH / a fan-out burst (one per session+risk per
 10min — per-call injections are themselves a cache-break cause).
 
+**`Read` is in the matcher for ONE thing: the image cache-guard**, which WARNS (never denies)
+when the file being read is an image and the session context is already ≥`imgWarnTokens` (50k).
+An image block is RESIDENT — it rides forward in the prefix and is re-billed on every later turn
+until a compaction evicts it — so the reason names the cheaper paths: delegate the look to a
+subagent, batch every image into ONE turn, write the verdict down instead of re-reading. It is
+warn-only on purpose: the 14 measured `CacheBreakCause` values do NOT include an image read, so
+the popular "an image invalidates the whole message cache" claim is not corroborated here and must
+not become a deny on a hot-path tool. `Read` is also the only non-rare tool in the matcher, and its
+cost is bounded on the CLI side — a NON-image read is answered locally with one JSON parse and no
+network call. Switch it off alone with `--hooks cacheguard=off` or `AGENTLENS_CACHE_GUARD=off`;
+the agent-launch gate stays armed. Deeper discipline: the `agentlenspro-cache-guard` skill.
+
 Operational facts: fail-open by construction (server down = 13ms silent no-op — the gate can
 never stall or fail a turn). **Switches are REALTIME and machine-wide** — `agentlenspro
---hooks` shows them, `--hooks gate=off|warn|enforce capture=on|off advisor=on|off` flips them
+--hooks` shows them, `--hooks gate=off|warn|enforce capture=on|off advisor=on|off
+cacheguard=on|off` flips them
 instantly for every running session (the server is the decision point; registrations never
 change, so no restarts). Per-session escape hatch: `AGENTLENS_GATE=off` env (checked in the
 hook script before any network). Thresholds tune via `AGENTLENS_GATE_FORK_FAT_TOKENS` /
-`_RUNAWAY_60S` / `_FANOUT_WARN_2MIN` / `_COLD_IDLE_MS` / `_COLD_RESUME_WINDOW_MS`. Deny/warn
+`_RUNAWAY_60S` / `_FANOUT_WARN_2MIN` / `_COLD_IDLE_MS` / `_COLD_RESUME_WINDOW_MS` /
+`_IMG_WARN_TOKENS` / `_IMG_DENY_TOKENS`. Deny/warn
 counts appear in `--status` and `/api/server-stats` under `gate`; every gate intervention
 also lands on the dashboard's notification panel (SSE alerts). If a deny is wrong for a
 legitimate mass fan-out, `agentlenspro --hooks gate=warn` for that run and restore after.

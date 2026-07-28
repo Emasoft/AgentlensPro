@@ -55,6 +55,9 @@ reach NO hook at all and are visible only in the transcript. `ConfigChange` is r
 `--install-hooks` because a mid-session config change is itself a real cache-break cause — NOT
 because it detects a plugin reload; that hypothesis was measured and refuted 2026-07-21.
 
+See also: [[image-resident-cost-guard]] (the PreToolUse consumer that put `Read` — the first
+non-rare tool — into `GATE_MATCHER`, and how its per-call cost is bounded CLI-side).
+
 ## Notes and lessons learned
 [^1]: [ocd:2026-07-10 lmd:2026-07-10] Two field lessons from shipping this. (a) The
   bucket-name regex \d{4}-\d{2}-\d{2} also matches calendar-invalid names ('2026-13-99' →

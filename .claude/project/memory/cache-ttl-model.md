@@ -61,6 +61,9 @@ provenance, measured-TTL falsifier). Governed by [[agentlens-burn-token-model]];
 cold rewrite statistically — COLD_REWRITE tag, thrash-vs-marathon decomposition),
 [[agent-fleet-cache-economics]] (measured spawn/boot economics under these TTL regimes).
 
+See also: [[image-resident-cost-guard]] (consumes these write tiers — 1.25x at 5-min, 2x at 1-hour —
+for the 20x read/write spread the cache-guard skill teaches).
+
 ## Notes and lessons learned
 
 [^1]: [ocd:2026-07-11 lmd:2026-07-11] earlier this project treated the 5-min TTL as

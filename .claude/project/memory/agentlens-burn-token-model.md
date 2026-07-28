@@ -111,7 +111,9 @@ paths, usernames, emails or hostnames. The `memory-scope-leak` detector has flag
 
 See also: [[burn-seismic-statistical-model]] (the calibrated statistical detector built ON this
 cost model — marked-point-process null, PELT events, per-event root-cause attribution);
-[[agent-fleet-cache-economics]] (measured fleet spawn/cache-race/inline-vs-lazy economics).
+[[agent-fleet-cache-economics]] (measured fleet spawn/cache-race/inline-vs-lazy economics);
+[[image-resident-cost-guard]] (this model applied to image blocks — and why an image read is NOT a
+prefix break, so the pre-flight guard warns instead of denying).
 
 ## Notes and lessons learned
 [^1]: [ocd:2026-07-08 lmd:2026-07-08] The statusline event path originally carried only a total

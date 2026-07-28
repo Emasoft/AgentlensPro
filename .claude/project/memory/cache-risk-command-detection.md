@@ -60,6 +60,9 @@ The sibling reader on the same substrate — which plugin VERSION a session has 
 `attachment` record type that proves it — is `[[loaded-plugin-version-detection]]`; it consumes the
 `/reload-plugins` events this page produces as its `lastReloadTs` join.
 
+See also: [[image-resident-cost-guard]] (the same `CacheBreakCause` taxonomy used as EVIDENCE OF
+ABSENCE — an image read is not among the 14, which is why the image guard warns instead of denying).
+
 ## Notes and lessons learned
 [^1]: [id:ATOM-LAYR-ONLY, status:valid, keywords:"no hook sees it therefore undetectable only detection path wrong layer enumerate layers before concluding", ocd:2026-07-21, lmd:2026-07-21]
   DO NOT conclude "no hook observes X, therefore X is only detectable by inference" — that claim
