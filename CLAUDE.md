@@ -121,6 +121,20 @@ workflow — a present auth token silently masks OIDC. Load-bearing facts:
 
 ## Operations — deploy, install, repair
 
+- **EXACTLY ONE server may own a data directory — and changing ports does NOT isolate an instance.**
+  `MCP_PORT`/`UI_PORT`/`OTLP_PORT` isolate the *listeners*; both processes still append to the same
+  span store, log-tail offsets and session cards. To run a second instance you MUST give it its own
+  **`DATA_DIR`** (and `HOME`), which is what every test in `src/test/` already does. The guard in
+  `standalone/server.ts` is keyed on the data dir and refuses a second claimant whatever its ports
+  (atomic `wx`, stale-lock takeover, ownership-checked release). Evidence:
+  `reports/window-capacity-investigation/20260726_195540+0200-inferred-vs-actual-capacity.md`.
+- **Check WHICH agentlenspro you are about to test.** `agentlenspro` may be a real global npm install
+  (`/opt/homebrew/lib/node_modules/agentlenspro`, a published version) rather than an `npm link` to
+  this repo — in which case `node esbuild.js` + `agentlenspro server restart` does **not** deploy your
+  change, and measuring "the live server" silently measures the published bundle. `ls -ld
+  $(readlink -f $(which agentlenspro))` tells you which; verify a new symbol is in the bundle the
+  *running pid* is executing (`ps -eo pid,command` snapshot, then grep the file it names).
+
 ONE executable (`agentlenspro`) manages everything. The idempotent installer/repairer is
 `agentlenspro setup [--dry-run] [--yes]`: detect → converge → verify-per-step → final
 self-test; it migrates hook registrations across generations, repairs broken/maimed

@@ -1,8 +1,8 @@
 ---
 name: agentlenspro-ops-lessons
-description: "how to deploy agentlenspro on a machine / setup vs manual install / hooks stopped firing after an upgrade / config file wiped or corrupted after an edit / is agentlenspro npm-linked or registry-installed / does switching the cli to an ordinary npm install lose my db or settings / where does the data live / can other agents on this machine use the cli / does the dev npm link affect normal published users / background agent shows running but does nothing / a fork started acting like the orchestrator / does agentlenspro run on Windows / setup fails with unsupported platform or node too old / server hangs at 100% cpu and every request times out or SIGTERM is ignored / a settings.json env key keeps reverting or getting overwritten after every server restart / the diagnostics skill shows a stale tool count or drifted from the live CLI surface / how many diagnostic tools are there / keeping the skill and the CLI --help in sync — operational doctrine and field lessons"
+description: "how to deploy agentlenspro on a machine / setup vs manual install / hooks stopped firing after an upgrade / config file wiped or corrupted after an edit / is agentlenspro npm-linked or registry-installed / does switching the cli to an ordinary npm install lose my db or settings / where does the data live / can other agents on this machine use the cli / does the dev npm link affect normal published users / background agent shows running but does nothing / a fork started acting like the orchestrator / does agentlenspro run on Windows / setup fails with unsupported platform or node too old / server hangs at 100% cpu and every request times out or SIGTERM is ignored / a settings.json env key keeps reverting or getting overwritten after every server restart / the diagnostics skill shows a stale tool count or drifted from the live CLI surface / how many diagnostic tools are there / keeping the skill and the CLI --help in sync / can I run a second server for testing / two servers at once / I changed the ports so it is isolated right / dev instance wrote to my live data dir / invalid log tail offsets after a restart / I rebuilt and restarted but nothing changed / my fix is not live even though esbuild succeeded / am I testing the repo build or the published one — operational doctrine and field lessons"
 ocd: 2026-07-11
-lmd: 2026-07-17
+lmd: 2026-07-28
 metadata:
   node_type: memory
   type: project
@@ -188,3 +188,24 @@ Governed by [[cache-ttl-model]] (TTL regimes) and [[agentlens-burn-token-model]]
   `GATE_MATCHER` in src/cli/hookInstall.ts) — never against memory. Both surfaces ship in the npm
   tarball (the skill via `--install-skill`, the help bundled into standalone/cli.js), so a stale one
   reaches every user. (TRDD-HNNRGXJH, commit e7599db.)
+
+[^14]: [id:ATOM-PORTS-ARE-NOT-ISOLATION, status:valid, keywords:"second_server_same_data_dir isolated_ports_not_isolated two_servers_one_datadir dev_instance_against_live_data 182_invalid_offsets DATA_DIR_override MCP_PORT_UI_PORT_OTLP_PORT single_instance_guard", ocd:2026-07-28, lmd:2026-07-28]
+  DO NOT start a second AgentlensPro server by overriding only `MCP_PORT`/`UI_PORT`/`OTLP_PORT`,
+  BECAUSE ports isolate the LISTENERS while both processes keep appending to the SAME span store,
+  log-tail offsets and session cards — and the old single-instance guard was gated on
+  `OTLP_PORT === 4318`, so changing ports silently opted OUT of the very check that would have
+  stopped it (a dev instance ran ~4 min against the live `~/.agentlens`; the next restart found 182
+  log-tail offsets invalid where 95 of 107 prior restarts found zero). DO set **`DATA_DIR`** (and
+  `HOME`) as well — that is what every test in `src/test/` does and what makes an instance genuinely
+  independent. The guard is now keyed on the data dir and refuses a second claimant whatever its
+  ports (commit 7d15f6b). Owner directive 2026-07-28: only ONE agentlenspro server may ever run.
+
+[^15]: [id:ATOM-WHICH-BINARY-AM-I-TESTING, status:valid, keywords:"rebuilt_but_nothing_changed fix_verified_but_not_live global_npm_install_vs_npm_link esbuild_then_restart_did_nothing measuring_the_published_bundle which_agentlenspro", ocd:2026-07-28, lmd:2026-07-28]
+  DO NOT conclude a local change is live after `node esbuild.js` + `agentlenspro server restart`,
+  BECAUSE `agentlenspro` may be a REAL global npm install of a PUBLISHED version rather than an
+  `npm link` to the repo — in which case the repo bundle is never executed and a whole round of
+  "live verification" measures the published code while reporting it as the fix (happened
+  2026-07-28: identical 87%/84% numbers before and after, which is what exposed it). DO check what
+  the RUNNING pid actually executes — snapshot `ps -eo pid,command`, read the path it names, and
+  grep THAT file for a symbol only the new code has — then verify against a repo-built instance with
+  its own `DATA_DIR`+`HOME` (see [^14]), or `npm link` first.
