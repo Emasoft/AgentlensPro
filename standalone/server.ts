@@ -833,27 +833,58 @@ function buildGateState(
 // injections that later get stripped in place are themselves a cache-break cause (#778).
 const advisoryIssued = new Map<string, number>()
 
-// ── Single-instance guard (canonical instance only) ──────────────────────────
-// EADDRINUSE on any of the three listeners already makes a same-port double start exit(1); the
-// pidfile adds (a) a discoverable PID for `agentlenspro-cli --status/--stop-server` without a lsof
-// hunt, and (b) a fast, explicit refusal BEFORE boot-time side effects (bodies purge, migration,
-// auto-config) when a canonical server is already alive. Isolated-port instances (tests, headless
-// proofs — see the canonical-instance gate in applyAutoConfig) never write it: they are meant to
-// coexist and must not evict the real server's pidfile.
+// ── Single-instance guard (keyed on the DATA DIRECTORY) ──────────────────────
+// EXACTLY ONE server may own a data directory at a time. The shared resource is the DATA DIR — the
+// span store, log-tail offsets and session cards are all appended to by whoever is running — so the
+// lock is keyed on it, never on a port.
+//
+// This gate used to apply only when `OTLP_PORT === 4318`, on the reasoning that isolated-port
+// instances "are meant to coexist". They cannot: changing ports isolates the LISTENERS while both
+// processes still read and write one `~/.agentlens`. On 2026-07-28 a dev instance started with only
+// `MCP_PORT`/`UI_PORT`/`OTLP_PORT` overridden ran for ~4 minutes against the live data dir alongside
+// the real server; the next restart found 182 log-tail offsets invalid (95 of 107 prior restarts
+// found zero) and cold-re-read them. Nothing was lost — the recovery path is designed for it — but
+// nothing had prevented it either, and the escape hatch was documented as if it were safe.
+//
+// Isolating an instance therefore means giving it its OWN `DATA_DIR` (plus `HOME`), which is what the
+// test suite already does and what makes its instances genuinely independent: a different data dir is
+// a different lock file, so those still start freely. Ports alone no longer buy an exemption.
 const PID_FILE = path.join(DATA_DIR, 'server.pid')
 const IS_CANONICAL = OTLP_PORT === 4318
-if (IS_CANONICAL) {
+/** Release the lock, but ONLY when this process still holds it. An unconditional unlink would let a
+ *  shutting-down server delete a lock that a successor had already taken over — handing a third
+ *  process a free pass into a data dir that is once again occupied. */
+function releasePidFile(): void {
   try {
-    const prior = Number(fs.readFileSync(PID_FILE, 'utf-8').trim())
+    if (Number(fs.readFileSync(PID_FILE, 'utf-8').trim()) === process.pid) fs.unlinkSync(PID_FILE)
+  } catch { /* already gone, unreadable, or not ours — nothing to release */ }
+}
+{
+  // `wx` = atomic create-if-absent. Two servers racing at the same instant cannot both win it, which
+  // a read-then-write check could not guarantee.
+  const claim = (): boolean => {
+    try { fs.writeFileSync(PID_FILE, String(process.pid), { flag: 'wx' }); return true } catch { return false }
+  }
+  if (!claim()) {
+    let prior = 0
+    try { prior = Number(fs.readFileSync(PID_FILE, 'utf-8').trim()) } catch { /* unreadable — treat as stale */ }
+    let holderAlive = false
     if (prior > 0 && prior !== process.pid) {
-      try {
-        process.kill(prior, 0) // throws when the process is gone — then the pidfile is stale
-        console.error(`[AgentlensPro] Another AgentlensPro server is already running (pid ${prior}). Use \`agentlenspro-cli --status\` / \`--stop-server\`, or set OTLP_PORT for an isolated instance.`)
-        process.exit(1)
-      } catch { /* stale pidfile — take over below */ }
+      try { process.kill(prior, 0); holderAlive = true } catch { /* gone — the lock is stale */ }
     }
-  } catch { /* no pidfile — first start */ }
-  try { atomicWriteFileSync(PID_FILE, String(process.pid)) } catch (e) { console.warn('[AgentLens] Could not write pidfile:', e) }
+    if (holderAlive) {
+      console.error(
+        `[AgentlensPro] Refusing to start: another AgentlensPro server (pid ${prior}) already owns this data directory (${DATA_DIR}).\n` +
+        '[AgentlensPro] Only ONE server may run per data directory — two processes appending to the same span store, offsets and cards corrupt each other.\n' +
+        '[AgentlensPro] Use `agentlenspro server status` / `agentlenspro server restart`, or for a genuinely isolated instance set DATA_DIR (and HOME) as well as the ports — changing ports alone does NOT isolate storage.')
+      process.exit(1)
+    }
+    // Stale lock (holder gone, or the file was unreadable): take it over.
+    try { atomicWriteFileSync(PID_FILE, String(process.pid)) } catch (e) { console.warn('[AgentLens] Could not write pidfile:', e) }
+  }
+  // Release on the way out so the next start is not left diagnosing a stale lock. The explicit
+  // shutdown/crash paths call releasePidFile() too; this covers every other exit.
+  process.once('exit', releasePidFile)
 }
 
 // ── Log file sessions ─────────────────────────────────────────────────────────
@@ -4006,7 +4037,7 @@ function shutdown() {
   // state change (matches the span-store's shutdown-flush discipline).
   try { accountStateTimeline.stop() } catch { /* ignore */ }
   try { recordCollectorStop(LIFECYCLE_FILE, lifecycle) } catch { /* ignore */ }
-  if (IS_CANONICAL) { try { fs.unlinkSync(PID_FILE) } catch { /* ignore */ } }
+  releasePidFile()
   process.exit(0)
 }
 process.on('SIGINT', shutdown)
@@ -4031,7 +4062,7 @@ process.on('uncaughtException', (err) => {
   recordCrash('uncaughtException', err)
   try { flushSpanAppends() } catch { /* ignore */ }
   try { saveOffsetsNow() } catch { /* ignore */ }
-  if (IS_CANONICAL) { try { fs.unlinkSync(PID_FILE) } catch { /* ignore */ } }
+  releasePidFile()
   console.error('[AgentLens] FATAL uncaughtException (recorded in crash.log):', err)
   process.exit(1)
 })
