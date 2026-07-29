@@ -227,3 +227,11 @@ Governed by [[cache-ttl-model]] (TTL regimes) and [[agentlens-burn-token-model]]
   path — `npm pack pkg@X && tar -xzf … && node package/<bin> --version` — which resolves nothing and
   cannot be shadowed; the registry-side `_npmUser.trustedPublisher` + `dist.attestations` checks are
   the other half and are equally unshadowable.
+[^16]: [id:ATOM-DETECTOR-MATCHED-ITS-OWN-VOCABULARY, status:valid, keywords:"memory-scope-leak flags this page machine-host false positive page about the rule trips the rule detector matched meta-text scope leak proposed", ocd:2026-07-29, lmd:2026-07-29]
+  DO NOT go hunting for a leak when `memory-scope-leak` flags THIS page for `machine-host`,
+  BECAUSE the only match is the word "hostname" in the scope-routing rule this page QUOTES — a
+  page that documents the leak rule necessarily contains the leak rule's vocabulary, so the
+  detector matches its own description. DO grep the page for a concrete host/user/path first
+  (`ipazia|\.local|MacBook|/Users/<real-name>`) and only act if one is REAL; verified clean
+  2026-07-29. Sibling case, already recorded on its own page: the "high-entropy secret" hit on
+  [[agentlens-burn-token-model]] is long camelCase identifiers (ATOM-ENTR-IDENT).
