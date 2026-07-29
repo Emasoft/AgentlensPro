@@ -48,3 +48,11 @@ agent-lens-export-*.json
 .tldr/
 .tldrignore
 *.swp
+
+# Janitor detector OUTPUT inside the memory store — NOT memory pages (no node frontmatter);
+# they are regenerated on every sweep and describe a moment, not a fact. PROJECT memory is
+# tracked AND PUSHED, so committing one ships a snapshot finding to every cloner — and a
+# stale "2 pages leak private data" file is worse than none, since the reader cannot tell
+# it was investigated and dismissed. The verdicts belong in the pages themselves as dated
+# lessons (see ATOM-DETECTOR-MATCHED-ITS-OWN-VOCABULARY); the scratch file does not.
+.claude/project/memory/*-proposed.md
