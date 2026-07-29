@@ -507,9 +507,15 @@ function windowConsumption(
   const pct = capacity !== null && capacity > 0 ? +(tokens / capacity * 100).toFixed(2) : null
   const pctCost = capacityCost !== null && capacityCost > 0 ? +(cost / capacityCost * 100).toFixed(2) : null
   const remaining = capacity !== null ? capacity - tokens : null
+  // COST decides when a cost bound exists; the raw-token bound is only the fallback. ORing the two
+  // was wrong in the direction this whole change set out to fix: raw tokens systematically OVERSTATE
+  // fill (a cache read bills at 0.1x and is ~96% of volume here), so a window sitting at 40% by cost
+  // routinely passes its observed TOKEN bound — and flagging that as "exceeded" makes windowFillPct
+  // return null, throwing away the honest cost percentage. Same rule as windowFillPct: cost first.
   const capacityExceeded = capacityIsLowerBound && (
-    (capacity !== null && capacity > 0 && tokens > capacity) ||
-    (capacityCost !== null && capacityCost > 0 && cost > capacityCost))
+    capacityCost !== null && capacityCost > 0
+      ? cost > capacityCost
+      : capacity !== null && capacity > 0 && tokens > capacity)
   // A configured cap that is spent means 0 minutes left — a real, actionable answer. An OBSERVED cap
   // that is spent means only that our lower bound was too low: we do not know how much window
   // remains, and reporting "0 minutes" would drive a rotation the data never justified. Say null.
@@ -534,7 +540,11 @@ function windowConsumption(
  *  account has been calibrated: pooled consumption on a multi-account machine has no single cap
  *  (rate limits are per account), so guessing there would over-promise headroom. */
 function observedCapacityFor(
-  config: BurnConfig, accountUuid: string | null | undefined, events: ConsumptionEvent[] = [],
+  config: BurnConfig, accountUuid: string | null | undefined, events: ConsumptionEvent[],
+  /** The window the caller is about to report. The "who burned" test MUST be scoped to it: `events`
+   *  is the whole retained stream, so scanning all of it let a second account that burned once six
+   *  days ago suppress the pooled *5h* capacity forever — a window it never touched. */
+  now: number, windowMs: number,
 ): ObservedAccountCapacity | null {
   const manual = config.window5hTokens !== null || config.window7dTokens !== null ||
     config.window5hCostUsd !== null || config.window7dCostUsd !== null
@@ -554,7 +564,11 @@ function observedCapacityFor(
     // accountUuid (uuids are hex-and-dashes, never whitespace). Do NOT "tidy" it away, and do NOT
     // reach for a control character such as \0 to make that point — a raw NUL in a source file makes
     // `file` report it as binary `data` and silently blinds `grep -n`/`-c` on the WHOLE file.
-    for (const e of events) active.add(e.accountUuid ?? ' unattributed')
+    const from = now - windowMs
+    for (const e of events) {
+      if (e.ts < from || e.ts > now) continue
+      active.add(e.accountUuid ?? ' unattributed')
+    }
     if (active.size > 1) return null
     if (active.size === 1 && !active.has(calibrated[0])) return null
     return config.observed[calibrated[0]]
@@ -571,22 +585,29 @@ export function computeWindowBudget(
   events: ConsumptionEvent[], config: BurnConfig, projectionTokensPerMin: number, now: number,
   accountUuid?: string | null,
 ): WindowBudget {
-  const obs = observedCapacityFor(config, accountUuid, events)
-  const cap5h = config.window5hTokens ?? obs?.window5hTokens ?? null
-  const cap7d = config.window7dTokens ?? obs?.window7dTokens ?? null
-  const cap5hCost = config.window5hCostUsd ?? obs?.window5hCostUsd ?? null
-  const cap7dCost = config.window7dCostUsd ?? obs?.window7dCostUsd ?? null
+  // Resolved PER WINDOW: the pooled eligibility test ("did exactly one account burn here?") has a
+  // different answer over 5h than over 7d, and applying the 7d answer to both is what silently
+  // stripped the 5h capacity on any machine that had rotated accounts within the week.
+  const obs5h = observedCapacityFor(config, accountUuid, events, now, FIVE_HOURS_MS)
+  const obs7d = observedCapacityFor(config, accountUuid, events, now, SEVEN_DAYS_MS)
+  const obs = obs5h ?? obs7d
+  const cap5h = config.window5hTokens ?? obs5h?.window5hTokens ?? null
+  const cap7d = config.window7dTokens ?? obs7d?.window7dTokens ?? null
+  const cap5hCost = config.window5hCostUsd ?? obs5h?.window5hCostUsd ?? null
+  const cap7dCost = config.window7dCostUsd ?? obs7d?.window7dCostUsd ?? null
   const configured = cap5h !== null || cap7d !== null || cap5hCost !== null || cap7dCost !== null
   // Per-BUDGET source, not the config's global one: on a multi-account machine only the calibrated
   // account's budget may claim 'observed' — the others are honestly 'none'.
   const manual = config.capacitySource === 'env' || config.capacitySource === 'config'
   const source: BurnConfig['capacitySource'] = manual ? config.capacitySource : obs !== null ? 'observed' : 'none'
   // Only an auto-observed cap is a lower bound; a user-configured cap is the real ceiling and being
-  // past it genuinely means the window is spent.
-  const lowerBound = source === 'observed'
+  // past it genuinely means the window is spent. Per window, because a window whose cap did NOT come
+  // from an observation must not inherit the other window's lower-bound semantics.
+  const lowerBound5h = !manual && obs5h !== null
+  const lowerBound7d = !manual && obs7d !== null
   return {
-    fiveHour: windowConsumption(events, now, FIVE_HOURS_MS, '5h', cap5h, projectionTokensPerMin, cap5hCost, lowerBound),
-    sevenDay: windowConsumption(events, now, SEVEN_DAYS_MS, '7d', cap7d, projectionTokensPerMin, cap7dCost, lowerBound),
+    fiveHour: windowConsumption(events, now, FIVE_HOURS_MS, '5h', cap5h, projectionTokensPerMin, cap5hCost, lowerBound5h),
+    sevenDay: windowConsumption(events, now, SEVEN_DAYS_MS, '7d', cap7d, projectionTokensPerMin, cap7dCost, lowerBound7d),
     capacitySource: source,
     capacityConfigured: configured,
     capacityObservedAt: source === 'observed' ? obs?.observedAt ?? null : null,
@@ -761,16 +782,24 @@ export function evaluateBurnAlerts(
 
   // Rule 3 — rate-limit window % (only when a capacity is configured).
   for (const [rule, wc] of [['window_5h_pct', budget.fiveHour], ['window_7d_pct', budget.sevenDay]] as const) {
-    if (wc.pctConsumed !== null && wc.pctConsumed > th.windowPct) {
+    // Same two rules the rest of the module now follows, and for the same reason — an alert is the
+    // LOUDEST surface, so it must not be the one place a falsified number still gets printed:
+    //   1. capacityExceeded ⇒ the denominator is proven wrong, so there is no percentage to report
+    //      (this is what kept raising a severity:'error' "7d window 172% consumed · ~0min to
+    //      exhaustion" — the rotate-now false alarm — off a bound we already knew was stale);
+    //   2. otherwise prefer the COST percentage, because the windows meter by cost and raw tokens
+    //      overstate fill. Raw tokens remain the fallback when no cost cap was configured/observed.
+    const fill = wc.capacityExceeded ? null : wc.pctConsumedCost ?? wc.pctConsumed
+    if (fill !== null && fill > th.windowPct) {
       const cause = topSession?.dominantCause ?? null
       const proj = wc.minutesToExhaustion !== null ? ` · ~${wc.minutesToExhaustion}min to exhaustion at current rate` : ''
       alerts.push({
         id: `${rule}:global`,
         rule, severity: 'error',
-        label: `${wc.window} rate-limit window ${wc.pctConsumed.toFixed(0)}% consumed`,
-        detail: `${wc.window} window ${wc.pctConsumed.toFixed(1)}% consumed (threshold ${th.windowPct}%)${proj}. Top consumer: ${sessionLabel(sessions, topSession?.sessionId ?? null)}${cause ? ` · cause: ${cause}` : ''}`,
+        label: `${wc.window} rate-limit window ${fill.toFixed(0)}% consumed`,
+        detail: `${wc.window} window ${fill.toFixed(1)}% consumed (threshold ${th.windowPct}%)${proj}. Top consumer: ${sessionLabel(sessions, topSession?.sessionId ?? null)}${cause ? ` · cause: ${cause}` : ''}`,
         sessionId: topSession?.sessionId ?? null, cause,
-        value: wc.pctConsumed, threshold: th.windowPct, ts: now,
+        value: fill, threshold: th.windowPct, ts: now,
       })
     }
   }

@@ -147,6 +147,78 @@ const REQUEST_LOG    = path.join(DATA_DIR, 'requests.log')         // spec 6: on
 // spans loader below also mkdir's it, but the lifecycle start marker fires first, so do it up front.
 try { if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true }) } catch { /* best effort */ }
 
+// ── Single-instance guard (keyed on the DATA DIRECTORY) ──────────────────────
+// EXACTLY ONE server may own a data directory at a time. The shared resource is the DATA DIR — the
+// span store, log-tail offsets and session cards are all appended to by whoever is running — so the
+// lock is keyed on it, never on a port.
+//
+// This gate used to apply only when `OTLP_PORT === 4318`, on the reasoning that isolated-port
+// instances "are meant to coexist". They cannot: changing ports isolates the LISTENERS while both
+// processes still read and write one `~/.agentlens`. On 2026-07-28 a dev instance started with only
+// `MCP_PORT`/`UI_PORT`/`OTLP_PORT` overridden ran for ~4 minutes against the live data dir alongside
+// the real server; the next restart found 182 log-tail offsets invalid (95 of 107 prior restarts
+// found zero) and cold-re-read them. Nothing was lost — the recovery path is designed for it — but
+// nothing had prevented it either, and the escape hatch was documented as if it were safe.
+//
+// Isolating an instance therefore means giving it its OWN `DATA_DIR` (plus `HOME`), which is what the
+// test suite already does and what makes its instances genuinely independent: a different data dir is
+// a different lock file, so those still start freely. Ports alone no longer buy an exemption.
+//
+// POSITION IS PART OF THE CONTRACT: this must sit immediately after the DATA_DIR mkdir and BEFORE any
+// module-level code that touches the dir — the legacy spans.json migration, the span-store boot load,
+// the delta-version stamp. Refusing to start only after migrating the shared span store means the
+// loser has already written to the data dir it was refused, which is precisely the corruption the
+// lock exists to prevent. Do not move this below the sidecar/store initialisation.
+const PID_FILE = path.join(DATA_DIR, 'server.pid')
+/** Release the lock, but ONLY when this process still holds it. An unconditional unlink would let a
+ *  shutting-down server delete a lock that a successor had already taken over — handing a third
+ *  process a free pass into a data dir that is once again occupied. */
+function releasePidFile(): void {
+  try {
+    if (Number(fs.readFileSync(PID_FILE, 'utf-8').trim()) === process.pid) fs.unlinkSync(PID_FILE)
+  } catch { /* already gone, unreadable, or not ours — nothing to release */ }
+}
+{
+  // `wx` = atomic create-if-absent. Two servers racing at the same instant cannot both win it, which
+  // a read-then-write check could not guarantee.
+  const claim = (): boolean => {
+    try { fs.writeFileSync(PID_FILE, String(process.pid), { flag: 'wx' }); return true } catch { return false }
+  }
+  const refuse = (holder: number): never => {
+    console.error(
+      `[AgentlensPro] Refusing to start: another AgentlensPro server (pid ${holder}) already owns this data directory (${DATA_DIR}).\n` +
+      '[AgentlensPro] Only ONE server may run per data directory — two processes appending to the same span store, offsets and cards corrupt each other.\n' +
+      '[AgentlensPro] Use `agentlenspro server status` / `agentlenspro server restart`, or for a genuinely isolated instance set DATA_DIR (and HOME) as well as the ports — changing ports alone does NOT isolate storage.')
+    process.exit(1)
+  }
+  if (!claim()) {
+    let prior = 0
+    try { prior = Number(fs.readFileSync(PID_FILE, 'utf-8').trim()) } catch { /* unreadable — treat as stale */ }
+    let holderAlive = false
+    if (prior > 0 && prior !== process.pid) {
+      try { process.kill(prior, 0); holderAlive = true } catch { /* gone — the lock is stale */ }
+    }
+    if (holderAlive) refuse(prior)
+    // Stale lock (holder gone, or the file was unreadable). Take it over by UNLINK + re-`wx`, never by
+    // an unconditional overwrite: two servers booting onto the same stale lock would both see a dead
+    // holder and both overwrite it, and both would then run against one data dir — the exact outcome
+    // this guard exists to prevent. With unlink + re-claim exactly one wins the create; the loser
+    // finds a live holder and refuses.
+    try { fs.unlinkSync(PID_FILE) } catch { /* another starter removed it first — fine, re-claim below */ }
+    if (!claim()) {
+      let winner = 0
+      try { winner = Number(fs.readFileSync(PID_FILE, 'utf-8').trim()) } catch { /* the dir is simply not writable */ }
+      if (winner > 0 && winner !== process.pid) refuse(winner)
+      // No winner to name ⇒ the pidfile is unwritable (read-only/full data dir), not contended. That
+      // has always been a warn-and-continue: the lock is an optimisation, not a licence to run.
+      console.warn(`[AgentLens] Could not write pidfile at ${PID_FILE} — continuing without the single-instance lock`)
+    }
+  }
+  // Release on the way out so the next start is not left diagnosing a stale lock. The explicit
+  // shutdown/crash paths call releasePidFile() too; this covers every other exit.
+  process.once('exit', releasePidFile)
+}
+
 // TRDD-K3WDPR7M Phase 4: delta-log persistence for the two heaviest sidecars — append-only NDJSON
 // (snapshot + delta) instead of rewriting the whole file every interval. Keyed by each record's own
 // id, so save() diffs record-by-record and writes ONLY what changed (was: 31.6MB/300s + 3.1MB/60s
@@ -832,62 +904,19 @@ function buildGateState(
 }
 
 // PostToolUse advisory dedupe: ONE in-band injection per session+risk per 10min — per-call
-// injections that later get stripped in place are themselves a cache-break cause (#778).
+// injections that later get stripped in place are themselves a cache-break cause (#778). Also keyed
+// by the PreToolUse IMG_RESIDENT warning (same `${session}:${code}` shape, disjoint codes).
 const advisoryIssued = new Map<string, number>()
+/** Prune the oldest half so a long-lived server never grows the dedupe map unbounded. Called from
+ *  EVERY writer — a writer that only sets and never prunes is how the map grows forever. */
+function pruneAdvisoryIssued(now: number): void {
+  if (advisoryIssued.size <= 200) return
+  for (const [k, v] of [...advisoryIssued.entries()].sort((a, b) => a[1] - b[1]).slice(0, 100)) {
+    if (v <= now) advisoryIssued.delete(k)
+  }
+}
 
-// ── Single-instance guard (keyed on the DATA DIRECTORY) ──────────────────────
-// EXACTLY ONE server may own a data directory at a time. The shared resource is the DATA DIR — the
-// span store, log-tail offsets and session cards are all appended to by whoever is running — so the
-// lock is keyed on it, never on a port.
-//
-// This gate used to apply only when `OTLP_PORT === 4318`, on the reasoning that isolated-port
-// instances "are meant to coexist". They cannot: changing ports isolates the LISTENERS while both
-// processes still read and write one `~/.agentlens`. On 2026-07-28 a dev instance started with only
-// `MCP_PORT`/`UI_PORT`/`OTLP_PORT` overridden ran for ~4 minutes against the live data dir alongside
-// the real server; the next restart found 182 log-tail offsets invalid (95 of 107 prior restarts
-// found zero) and cold-re-read them. Nothing was lost — the recovery path is designed for it — but
-// nothing had prevented it either, and the escape hatch was documented as if it were safe.
-//
-// Isolating an instance therefore means giving it its OWN `DATA_DIR` (plus `HOME`), which is what the
-// test suite already does and what makes its instances genuinely independent: a different data dir is
-// a different lock file, so those still start freely. Ports alone no longer buy an exemption.
-const PID_FILE = path.join(DATA_DIR, 'server.pid')
 const IS_CANONICAL = OTLP_PORT === 4318
-/** Release the lock, but ONLY when this process still holds it. An unconditional unlink would let a
- *  shutting-down server delete a lock that a successor had already taken over — handing a third
- *  process a free pass into a data dir that is once again occupied. */
-function releasePidFile(): void {
-  try {
-    if (Number(fs.readFileSync(PID_FILE, 'utf-8').trim()) === process.pid) fs.unlinkSync(PID_FILE)
-  } catch { /* already gone, unreadable, or not ours — nothing to release */ }
-}
-{
-  // `wx` = atomic create-if-absent. Two servers racing at the same instant cannot both win it, which
-  // a read-then-write check could not guarantee.
-  const claim = (): boolean => {
-    try { fs.writeFileSync(PID_FILE, String(process.pid), { flag: 'wx' }); return true } catch { return false }
-  }
-  if (!claim()) {
-    let prior = 0
-    try { prior = Number(fs.readFileSync(PID_FILE, 'utf-8').trim()) } catch { /* unreadable — treat as stale */ }
-    let holderAlive = false
-    if (prior > 0 && prior !== process.pid) {
-      try { process.kill(prior, 0); holderAlive = true } catch { /* gone — the lock is stale */ }
-    }
-    if (holderAlive) {
-      console.error(
-        `[AgentlensPro] Refusing to start: another AgentlensPro server (pid ${prior}) already owns this data directory (${DATA_DIR}).\n` +
-        '[AgentlensPro] Only ONE server may run per data directory — two processes appending to the same span store, offsets and cards corrupt each other.\n' +
-        '[AgentlensPro] Use `agentlenspro server status` / `agentlenspro server restart`, or for a genuinely isolated instance set DATA_DIR (and HOME) as well as the ports — changing ports alone does NOT isolate storage.')
-      process.exit(1)
-    }
-    // Stale lock (holder gone, or the file was unreadable): take it over.
-    try { atomicWriteFileSync(PID_FILE, String(process.pid)) } catch (e) { console.warn('[AgentLens] Could not write pidfile:', e) }
-  }
-  // Release on the way out so the next start is not left diagnosing a stale lock. The explicit
-  // shutdown/crash paths call releasePidFile() too; this covers every other exit.
-  process.once('exit', releasePidFile)
-}
 
 // ── Log file sessions ─────────────────────────────────────────────────────────
 
@@ -3155,12 +3184,7 @@ const uiServer = http.createServer(async (req, res) => {
             const last = advisoryIssued.get(key) ?? 0
             if (now - last > 600_000) {
               advisoryIssued.set(key, now)
-              if (advisoryIssued.size > 200) {
-                // Prune the oldest half so a long-lived server never grows this unbounded.
-                for (const [k, v] of [...advisoryIssued.entries()].sort((a, b) => a[1] - b[1]).slice(0, 100)) {
-                  if (v <= now) advisoryIssued.delete(k)
-                }
-              }
+              pruneAdvisoryIssued(now)
               persistStats.gateAdvisories++
               pushBurnSse({ type: 'alert', label: `burn advisory (${adv.code})`, detail: adv.text, severity: 'warning' })
               res.writeHead(200, { 'Content-Type': 'application/json' })
@@ -3208,6 +3232,18 @@ const uiServer = http.createServer(async (req, res) => {
           return
         }
         if (d.decision === 'warn') {
+          // IMG_RESIDENT rides `Read`, so unlike every other rule here it can fire many times in one
+          // turn — and its own advice is "read every image you need in ONE message", which would then
+          // earn one ~700-char systemMessage per image. Repeating a warning the model has already been
+          // given is pure noise, and noise is what gets a guard switched off. Dedupe it per session on
+          // the same 10-minute cadence as the PostToolUse advisory; the rare agent-launch rules keep
+          // warning every time, which is what makes them worth reading.
+          if (d.code === 'IMG_RESIDENT') {
+            const key = `${sessionId}:${d.code}`
+            if (now - (advisoryIssued.get(key) ?? 0) <= 600_000) { res.writeHead(204); res.end(); return }
+            advisoryIssued.set(key, now)
+            pruneAdvisoryIssued(now)
+          }
           persistStats.gateWarns++
           pushBurnSse({ type: 'alert', label: `burn-gate warning (${d.code})`, detail: d.reason ?? '', severity: 'warning' })
           res.writeHead(200, { 'Content-Type': 'application/json' })

@@ -319,7 +319,10 @@ export function installSkill(opts: InstallSkillOptions = {}): 'installed' | 'upd
   const log = opts.log ?? ((line: string) => console.log(line))
   const name = opts.name ?? SKILL_NAME
   const root = opts.repoRoot ?? findPackageRoot(__dirname)
-  if (!root) throw new Error(`skill source missing — no skills/${SKILL_NAME}/SKILL.md above ${__dirname}`)
+  // Names the ANCHOR, not `name`: findPackageRoot probes for SKILL_NAME specifically, so a failure
+  // here means that anchor was not found — saying "no skills/<the-skill-being-installed>" would send
+  // the reader looking for the wrong missing file.
+  if (!root) throw new Error(`skill source missing — no skills/${SKILL_NAME}/SKILL.md (the package-root anchor) above ${__dirname}; wanted to install "${name}"`)
   const src = path.join(root, 'skills', name, 'SKILL.md')
   if (!fs.existsSync(src)) throw new Error(`skill source missing at ${src} — is the package intact?`)
   const dst = path.join(opts.skillsDir ?? path.join(os.homedir(), '.claude', 'skills'), name, 'SKILL.md')

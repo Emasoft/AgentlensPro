@@ -242,10 +242,11 @@ async function runHooksConfig(kvs: string[]): Promise<void> {
   if (kvs.length === 0) {
     const r = await apiRequest('GET', '/api/hook-config') as unknown as { config: HookConfig; file: string }
     const c = r.config
-    console.log(`gate:     ${c.gateEnabled ? c.gateMode : 'off'}   (gate=off|warn|enforce)`)
-    console.log(`capture:  ${c.captureEnabled ? 'on' : 'off'}       (capture=on|off — lifecycle event storage)`)
-    console.log(`advisor:  ${c.advisorEnabled ? 'on' : 'off'}       (advisor=on|off — PostToolUse in-band warnings)`)
-    console.log(`cacheguard: ${c.cacheGuardEnabled ? 'on' : 'off'}     (cacheguard=on|off — warn on image reads into a fat session)`)
+    // Column-aligned on the longest switch name so the values read as a column, not a ragged edge.
+    console.log(`gate:       ${c.gateEnabled ? c.gateMode : 'off'}   (gate=off|warn|enforce)`)
+    console.log(`capture:    ${c.captureEnabled ? 'on' : 'off'}       (capture=on|off — lifecycle event storage)`)
+    console.log(`advisor:    ${c.advisorEnabled ? 'on' : 'off'}       (advisor=on|off — PostToolUse in-band warnings)`)
+    console.log(`cacheguard: ${c.cacheGuardEnabled ? 'on' : 'off'}       (cacheguard=on|off — warn on image reads into a fat session)`)
     console.log(`config file: ${r.file} (changes apply in realtime to ALL sessions)`)
     return
   }

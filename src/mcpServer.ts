@@ -847,7 +847,9 @@ const TOOLS = [
       'regime, ttlSource} — the prompt-cache TTL your MAIN session actually rides (1h on a subscription, ' +
       '5min on usage-credits/API), so a warm gap is not misread as cold; and `usageWindows` {fiveHourPct, ' +
       'sevenDayPct, windowSource} — Claude Code\'s own rate_limits utilization when available ' +
-      '(windowSource "cc-rate-limits"), else AgentlensPro\'s calibrated pct ("calibrated"), else null ' +
+      '(windowSource "cc-rate-limits"), else AgentlensPro\'s calibrated pct ("calibrated"; ' +
+      '"calibrated-exceeded" = consumption has passed the auto-observed LOWER BOUND, so the pct is ' +
+      'null because the denominator is proven stale — not because it is unknown), else null ' +
       '("none") — a null is NEVER presented as 0. The OAuth token is NEVER read or returned. Use this ' +
       'after a rotation, or before a long run, to know the ACCOUNT you will actually burn.',
     inputSchema: { type: 'object' as const, properties: {} },
@@ -3108,11 +3110,19 @@ export function handleGetAccountStatus(
 
   // Authoritative-preferred window fill: Claude Code's own rate_limits utilization when the statusline
   // build persists it, else AgentlensPro's calibrated pct, else null (never a null presented as 0).
-  const usageWindows: { fiveHourPct: number | null; sevenDayPct: number | null; windowSource: 'cc-rate-limits' | 'calibrated' | 'none' } =
+  const usageWindows: { fiveHourPct: number | null; sevenDayPct: number | null; windowSource: 'cc-rate-limits' | 'calibrated' | 'calibrated-exceeded' | 'none' } =
     (rateLimits && (rateLimits.fiveHourUtilization !== null || rateLimits.sevenDayUtilization !== null))
       ? { fiveHourPct: rateLimits.fiveHourUtilization, sevenDayPct: rateLimits.sevenDayUtilization, windowSource: 'cc-rate-limits' }
       : (win && win.budget.capacityConfigured)
-        ? { fiveHourPct: windowFillPct(win.budget.fiveHour), sevenDayPct: windowFillPct(win.budget.sevenDay), windowSource: 'calibrated' }
+        ? {
+            fiveHourPct: windowFillPct(win.budget.fiveHour), sevenDayPct: windowFillPct(win.budget.sevenDay),
+            // A calibrated capacity that consumption has already PASSED yields a null pct — and a bare
+            // 'calibrated' + null is indistinguishable from 'we have no data', which is a different
+            // (and much less urgent) situation. Name the falsification so the reader knows the bound
+            // is stale rather than absent.
+            windowSource: (win.budget.fiveHour.capacityExceeded || win.budget.sevenDay.capacityExceeded)
+              ? 'calibrated-exceeded' : 'calibrated',
+          }
         : { fiveHourPct: null, sevenDayPct: null, windowSource: 'none' }
 
   const plan = account && account.source !== 'none' ? describePlan(account.planType, account.rateLimitTier) : 'unknown'

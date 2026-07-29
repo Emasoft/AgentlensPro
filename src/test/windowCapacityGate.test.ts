@@ -107,6 +107,47 @@ suite('window capacity — exceeding an observed LOWER BOUND is a falsification,
     assert.strictEqual(budget.fiveHour.capacityExceeded, false)
     assert.strictEqual(budget.fiveHour.minutesToExhaustion, 600)   // (1_000_000-400_000)/1000
   })
+
+  test('past the TOKEN bound but well under the COST bound is NOT exceeded — cost is the meter', () => {
+    // The whole reason windowFillPct prefers cost: raw tokens overstate fill because a cache read
+    // bills at 0.1x and is ~96% of volume. So a cache-read-heavy window routinely passes its observed
+    // TOKEN bound while sitting at 40% by cost. Treating that as a falsification nulled the one honest
+    // number — the same "no answer" failure this suite exists to prevent, pointing the other way.
+    // Asserted end-to-end through computeWindowBudget: the sibling windowFillPct tests below pass
+    // `capacityExceeded` by hand, so they cannot see what the pipeline actually produces.
+    const events = [ev('acct-A', 2_000_000, 40)]   // 2x the token bound, 40% of the $100 cost bound
+    const budget = computeWindowBudget(events, config({ observed: { 'acct-A': observed() } }), 1000, NOW, 'acct-A')
+    assert.strictEqual(budget.fiveHour.pctConsumed, 200, 'raw-token pct should still be reported as-is')
+    assert.strictEqual(budget.fiveHour.pctConsumedCost, 40)
+    assert.strictEqual(budget.fiveHour.capacityExceeded, false,
+      'the token bound alone must not falsify a cap that the COST figure says is 40% full')
+    assert.strictEqual(windowFillPct(budget.fiveHour), 40, 'threw away the honest cost percentage')
+  })
+
+  test('past the COST bound IS exceeded, even when raw tokens sit under the token bound', () => {
+    // The converse: an output-heavy window can cost more than the bound on fewer tokens. Cost decides.
+    const events = [ev('acct-A', 500_000, 150)]    // half the token bound, 1.5x the $100 cost bound
+    const budget = computeWindowBudget(events, config({ observed: { 'acct-A': observed() } }), 1000, NOW, 'acct-A')
+    assert.strictEqual(budget.fiveHour.capacityExceeded, true)
+    assert.strictEqual(budget.fiveHour.minutesToExhaustion, null)
+    assert.strictEqual(windowFillPct(budget.fiveHour), null)
+  })
+})
+
+suite('window capacity — the "who burned" test is scoped to the window being reported', () => {
+  test('a second account active only 6 days ago must not strip the 5h capacity', () => {
+    // `events` is the whole retained stream, so testing pooled eligibility across all of it let one
+    // rotated-away account suppress the 5h window — a window it never touched — until retention aged
+    // its last event out. Each window answers "who burned HERE" for itself.
+    const events = [ev('acct-A', 400_000, 40, HOUR), ev('acct-B', 900_000, 90, 6 * 24 * HOUR)]
+    const budget = computeWindowBudget(events, config({ observed: { 'acct-A': observed() } }), 0, NOW)
+    assert.strictEqual(budget.fiveHour.capacityTokens, 1_000_000,
+      'only acct-A burned in the last 5h, so its cap describes the pooled 5h window')
+    assert.strictEqual(budget.fiveHour.pctConsumed, 40)
+    assert.strictEqual(budget.sevenDay.capacityTokens, null,
+      'TWO accounts burned inside 7d, so no per-account cap describes that pool')
+    assert.strictEqual(budget.sevenDay.pctConsumed, null)
+  })
 })
 
 suite('windowFillPct — one honest utilisation number', () => {

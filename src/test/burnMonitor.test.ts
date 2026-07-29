@@ -153,6 +153,47 @@ suite('burnMonitor — alert threshold triggering', () => {
     assert.ok(!alerts2.some(a => a.rule.startsWith('window_')), 'no capacity → no window alert')
   })
 
+  test('an EXCEEDED auto-observed bound raises no window alert — the denominator is proven wrong', () => {
+    // The alert is the loudest surface, so it was the worst place for the falsified 171% figure to
+    // survive: a severity:'error' "7d window 172% consumed · ~0min to exhaustion" is a rotate-now
+    // instruction issued off a bound we already knew was stale. capacityExceeded means "we do not
+    // know how full this window is", and there is no honest alert to raise from that.
+    const events: ConsumptionEvent[] = [ev({ ts: NOW - 1000, tokens: 5_000_000, costUsd: 500 })]
+    const cfg = baseConfig({
+      observed: {
+        'acct-A': {
+          window5hTokens: 1_000_000, window7dTokens: 10_000_000,
+          window5hCostUsd: 100, window7dCostUsd: 1000,
+          observedAt: new Date(NOW - 86_400_000).toISOString(),
+        },
+      },
+      thresholds: { ...DEFAULT_THRESHOLDS, windowPct: 80 },
+    })
+    const series = computeBurnSeries(events, NOW)
+    const budget = computeWindowBudget(events, cfg, series.global.fiveMin.tokensPerMin, NOW, 'acct-A')
+    assert.strictEqual(budget.fiveHour.capacityExceeded, true, 'fixture must actually exceed the bound')
+    const alerts = evaluateBurnAlerts(series, budget, cfg, [card()], events, NOW)
+    assert.ok(!alerts.some(a => a.rule === 'window_5h_pct'),
+      'alerted "% consumed" off a capacity the same code path had already marked falsified')
+  })
+
+  test('the window alert reports the COST percentage when a cost cap exists', () => {
+    // Same preference order as windowFillPct: the windows meter by cost, so a raw-token pct would
+    // fire the alert (and print a number) that the cost figure says is nowhere near the threshold.
+    const events: ConsumptionEvent[] = [ev({ ts: NOW - 1000, tokens: 900_000, costUsd: 10 })]
+    const cfg = baseConfig({
+      window5hTokens: 1_000_000, window5hCostUsd: 100, capacitySource: 'env',
+      thresholds: { ...DEFAULT_THRESHOLDS, windowPct: 80 },
+    })
+    const series = computeBurnSeries(events, NOW)
+    const budget = computeWindowBudget(events, cfg, series.global.fiveMin.tokensPerMin, NOW)
+    assert.strictEqual(budget.fiveHour.pctConsumed, 90)
+    assert.strictEqual(budget.fiveHour.pctConsumedCost, 10)
+    const alerts = evaluateBurnAlerts(series, budget, cfg, [card()], events, NOW)
+    assert.ok(!alerts.some(a => a.rule === 'window_5h_pct'),
+      '90% by raw tokens but 10% by cost — the cost meter is the one that decides')
+  })
+
   test('cache_create_spike alert fires on a single big cache-creation call', () => {
     const events: ConsumptionEvent[] = [ev({ sessionId: 'spike', ts: NOW - 1000, tokens: 300_000, cacheCreateTokens: 300_000, attribution: 'compaction' })]
     const cfg = baseConfig({ thresholds: { ...DEFAULT_THRESHOLDS, cacheCreateSingleCall: 200_000, tokensPerMin: 1e12 } })
