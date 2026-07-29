@@ -72,4 +72,7 @@ overrides:
   # Range-selective keys patch each line in place.
   'brace-expansion@<1.1.16': '>=1.1.16 <2'
   'brace-expansion@>=2.0.0 <2.1.2': '>=2.1.2 <3'
-  'brace-expansion@>=3.0.0 <5.0.7': '>=5.0.7'
+  # Crossing to 5.x is FORCED here — unlike fast-uri, the advisory has no in-major patch for the
+  # 3.x/4.x line, 5.0.7 is the fix. Still bounded <6 for the same reason every other entry is: an
+  # open upper bound admits whatever major lands next, which is a decision nobody made.
+  'brace-expansion@>=3.0.0 <5.0.7': '>=5.0.7 <6'

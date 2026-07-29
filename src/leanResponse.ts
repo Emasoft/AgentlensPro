@@ -222,11 +222,31 @@ function narrowTo(v: unknown, maxKeys: number): unknown {
  *  context, whatever the data looks like. */
 function enforceCeiling(shaped: Record<string, unknown>, maxTokens: number): Record<string, unknown> {
   let out = shaped
-  /** Apply a degradation; keep it only if it actually shrank the payload, so no-op stages (a payload
-   *  with no arrays, say) never emit a disclosure for work they did not do. */
-  const stage = (next: Record<string, unknown>, msg: string): boolean => {
+  // ONE ceiling note, rewritten in place — never one per iteration. Each loop below steps its limit
+  // down repeatedly (arrays 3→2→1, width 16→8→4→2→1), and appending a note per step was wrong twice
+  // over: the intermediate lines are FALSE by the time the loop settles ("arrays reduced to 3" when
+  // they ended at 1), and ~15 of them at ~110 chars each is ~190 tokens of disclosure that the
+  // ceiling then cannot absorb. Measured: a payload degraded against a 60-token ceiling came out at
+  // 203 tokens, of which 7 notes WERE essentially the whole payload — the function breaching its own
+  // promise with the text explaining that it had not. One replaceable note is bounded and true.
+  const CEILING_NOTE = 'payload exceeded'
+  let applied = new Map<string, string>()
+
+  /** Apply a degradation; keep it only if it actually shrank the payload — disclosure INCLUDED, so a
+   *  stage that cannot pay for its own note is rejected and the next iteration simply degrades
+   *  harder. No-op stages (a payload with no arrays, say) never emit a note for work they did not do.
+   *  Notes from EARLIER phases (the shaper's own coverage note) are preserved; only the ceiling's own
+   *  line is replaced. */
+  const stage = (candidate: Record<string, unknown>, kind: string, detail: string): boolean => {
+    const merged = new Map(applied).set(kind, detail)
+    const note = `${CEILING_NOTE} ~${maxTokens} tokens — `
+      + [...merged].map(([k, d]) => `${k} ${d}`).join(', ')
+      + '; use verbosity:"full"'
+    const kept = (Array.isArray(out._truncated) ? (out._truncated as string[]) : [])
+      .filter(n => !n.startsWith(CEILING_NOTE))
+    const next: Record<string, unknown> = { ...candidate, _truncated: [...kept, note] }
     if (approxTokens(next) >= approxTokens(out)) return false
-    next._truncated = [...(Array.isArray(out._truncated) ? (out._truncated as string[]) : []), msg]
+    applied = merged
     out = next
     return true
   }
@@ -234,22 +254,19 @@ function enforceCeiling(shaped: Record<string, unknown>, maxTokens: number): Rec
   for (let limit = MAX_ROWS; limit >= 1 && approxTokens(out) > maxTokens; limit--) {
     const next: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(out)) next[k] = Array.isArray(v) ? v.slice(0, limit) : v
-    stage(next, `payload exceeded ~${maxTokens} tokens — arrays reduced to ${limit} row(s); use verbosity:"full"`)
+    stage(next, 'arrays', `→ ${limit} row(s)`)
   }
 
   for (let level = objectDepth(out) - 1; level >= 1 && approxTokens(out) > maxTokens; level--) {
-    stage(pruneBelow(out, level) as Record<string, unknown>,
-      `payload exceeded ~${maxTokens} tokens — nested objects elided below level ${level}; use verbosity:"full"`)
+    stage(pruneBelow(out, level) as Record<string, unknown>, 'nesting', `→ elided below level ${level}`)
   }
 
   for (let keys = 16; keys >= 1 && approxTokens(out) > maxTokens; keys = Math.floor(keys / 2)) {
-    stage(narrowTo(out, keys) as Record<string, unknown>,
-      `payload exceeded ~${maxTokens} tokens — objects narrowed to ${keys} field(s); use verbosity:"full"`)
+    stage(narrowTo(out, keys) as Record<string, unknown>, 'width', `→ ${keys} field(s)`)
   }
 
   if (approxTokens(out) > maxTokens) {
-    stage(clipDeep(out, 120) as Record<string, unknown>,
-      `payload exceeded ~${maxTokens} tokens — strings clipped to 120 chars; use verbosity:"full"`)
+    stage(clipDeep(out, 120) as Record<string, unknown>, 'strings', '→ clipped to 120 chars')
   }
   return out
 }

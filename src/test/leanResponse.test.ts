@@ -175,6 +175,29 @@ suite('leanResponse — bounded and honest', () => {
       'degraded the payload without disclosing it')
   })
 
+  test('the ceiling holds INCLUDING the disclosure text it adds to say so', () => {
+    // The regression this pins: `stage()` used to compare a candidate against the current payload
+    // BEFORE attaching the ~110-char note it was about to add, so every stage looked cheaper than it
+    // was. Up to ~15 stages can run, and their accumulated `_truncated` text could push the payload
+    // back over the ceiling — the one thing this function promises cannot happen.
+    //
+    // A SMALL ceiling is the only place it shows: the notes are a rounding error against 1200 tokens
+    // and decisive against 60. The payload below needs arrays, depth AND width degraded, so several
+    // stages fire and several notes accumulate.
+    const wide: Record<string, unknown> = {}
+    for (let i = 0; i < 40; i++) {
+      wide[`field${i}`] = { nested: { deeper: { rows: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] } } }
+    }
+    for (const maxTokens of [60, 120, 300]) {
+      const lean = leanify(wide, { maxTokens }) as Record<string, unknown>
+      const approx = Math.ceil(JSON.stringify(lean).length / 4)
+      const notes = Array.isArray(lean._truncated) ? (lean._truncated as string[]).length : 0
+      assert.ok(approx <= maxTokens,
+        `ceiling ${maxTokens} breached: ${approx} tokens with ${notes} disclosure note(s) — ` +
+        'the notes are part of the payload and must be counted against the ceiling that added them')
+    }
+  })
+
   test('a nested array cut is disclosed, never silent', () => {
     const lean = leanify({ row: { items: [1, 2, 3, 4, 5, 6, 7] } }) as Record<string, unknown>
     const items = (lean.row as Record<string, unknown>).items as unknown[]
