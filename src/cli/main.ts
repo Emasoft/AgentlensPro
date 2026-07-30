@@ -27,6 +27,7 @@ import { ensureServer, openDashboard, serverCommand, daemonCommand } from './ser
 import { runSetupCli } from './setup'
 import { runBudgetCli } from './budgetCli'
 import { runWatchCli } from './watchCli'
+import { runCtxmapCli } from './ctxmapCli'
 
 /** CLI entry. `startServer` lazily imports standalone/server (injected by the shim — src/
  *  cannot import standalone/ without inverting the build layering). Returns the exit code. */
@@ -98,6 +99,13 @@ export async function cliMain(argv: string[], startServer: () => Promise<unknown
       // container context, filesystem/worktree, network, cloud, tooling, MCP — all client-side, no
       // server. One facet at a time or the whole report; `--out FILE` keeps big reports off stdout.
       return runEnvCli(argv.slice(1))
+    case 'ctxmap':
+      // What is actually INSIDE a captured request (TRDD-CTXMAP1): every system block, tool schema,
+      // message block and named section of an injected context blob, with tokens calibrated to the
+      // exact input total from the paired response. Purely local — reads the captured bodies, never
+      // the server. This is the only surface that can answer "what is in the context", as opposed to
+      // "what did it cost"; the session JSONL records none of it.
+      return runCtxmapCli(argv.slice(1))
     case undefined:
       // Bare `agentlenspro` / `npx agentlenspro`: the original behavior — run the server in
       // the foreground; it serves the dashboard (and opens the browser unless
