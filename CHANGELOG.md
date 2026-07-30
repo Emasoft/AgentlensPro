@@ -4,6 +4,51 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.18.0] - 2026-07-30
+
+### Added
+
+- **`agentlenspro ctxmap` — what is actually INSIDE a captured API request, with EXACT token
+  counts.** Every other surface in this product measures what a request *cost*; none could say what
+  was *in* it. The session JSONL is not a substitute — it records neither the system prompt, nor tool
+  schemas, nor the injected context block. `ctxmap` decomposes the captured raw body into every
+  system block, tool schema, message block, and named file section, and **measures** each one with
+  Anthropic's `count_tokens` endpoint (free of inference charges) rather than estimating it: an
+  element's cost is the difference between two prefix counts. `--diff A B` shows what changed between
+  two turns, `--find` searches captured requests, `--list` enumerates them, `--estimate` skips the
+  network. Needs `ANTHROPIC_API_KEY` or a Claude Code login.
+  - **Completeness is checked, not claimed.** The residual (`exact total − Σ elements`) is computed
+    and printed; it is 0 on both verified requests. Every top-level request field is classified as
+    decomposed or non-tokenizing, and an unrecognised field raises a warning instead of being
+    silently dropped.
+  - First measurements: a lean 4-tool subagent's context is 96.8% a single injected user block, of
+    which CLAUDE.md is 64,868 tokens (28.6%), while the entire tool surface is 2.2%; the `Agent`
+    tool's agent-type catalog costs **65,177 tokens** in a full session. The local estimator reads
+    **~29% low** on this content (161,685 vs 226,910 measured; 2.56 chars/token).
+  - Evidence: `reports/ctxmap/20260730_145401+0200-exact-token-decomposition.md`.
+
+### Fixed
+
+- **`cache_control` made `count_tokens` reject every request.** Captured bodies carry
+  `cache_control.ephemeral.scope`, which the endpoint refuses ("Extra inputs are not permitted").
+  It is now stripped before counting — lossless, since `cache_control` selects a caching policy and
+  changes no token, and immune to future drift in that field's shape.
+- **A blanket "any 400 means merge this block" rule turned total failure into a confident empty
+  answer.** The systemic `cache_control` 400 failed all 456 elements of a request, each was silently
+  "merged" to zero, and the report still claimed `mode=exact` with a total of nothing. The rule now
+  matches only the two message-sequence errors it may legitimately forgive (an assistant message
+  cannot end with `thinking`; a `tool_use` requires its `tool_result`), a run that measures zero
+  elements refuses outright, and a row that absorbs a merged block is renamed to say what it contains
+  (`tool_use:Edit+tool_result`).
+- **`ctxmap --find` searched only the system prompt** and so could not locate the single largest
+  thing in the context: CLAUDE.md and the rules arrive as `messages[0]`, not as `system`. It now
+  searches the whole request and reports where the match was found — the tool's own headline finding
+  was unfindable with its own search.
+- **An ambiguous id prefix resolved to whichever file `readdir` returned first.** `ctxmap 1` silently
+  analyzed one of 63 matching captures; it now refuses and lists them. A directory path passed as a
+  request now reports itself as a directory instead of failing deep inside with `EISDIR`, and
+  `--out --json` no longer creates a file named `--json`.
+
 ## [2.17.2] - 2026-07-30
 
 ### Fixed

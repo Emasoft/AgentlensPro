@@ -33,6 +33,25 @@ Before any task: `get_recent_sessions` (recent work + cost) and `get_workspace_p
 (hot files, recurring issues) — batch them in one invocation. Do not re-register the MCP
 server without asking the user.
 
+### "What is IN the context" is answered ONLY by `agentlenspro ctxmap`, and its numbers are EXACT
+
+The session JSONL records neither the system prompt, nor tool schemas, nor the injected context
+block — so grepping a transcript to ask "does a subagent get CLAUDE.md?" measures nothing and
+answers confidently wrong (it did, twice, in both directions). The captured raw body is the ground
+truth, and `ctxmap` decomposes it with **measured** counts, not estimates: every element's cost is a
+difference between two `count_tokens` calls, and the residual (`exact total − Σ elements`) is printed
+so completeness is checked rather than claimed (0 on both verified requests). `--estimate` opts out
+into the local estimator, which reads **~29% low** on this content (161,685 vs 226,910 measured;
+2.56 chars/token) — never quote an estimated ctxmap number as a token count.
+Do NOT try to pair a request to its response to get a total: nothing on disk links them (uuid vs
+`req_<id>`), `previous_message_id` needs a successor call that 0 of 3 sampled requests had, and one
+`session_id` carries concurrent interleaved streams. `count_tokens` makes pairing unnecessary; the
+response's `usage` is still the only source for how the input was *billed* (the 5m/1h split).
+Measured surprises worth knowing: a lean 4-tool subagent's context is 96.8% one injected user block,
+of which CLAUDE.md is 64,868 tokens (28.6%), while the whole tool surface is 2.2%; and the `Agent`
+tool's `agent-listing` catalog costs **65,177 tokens** in a full session.
+Evidence: `reports/ctxmap/20260730_145401+0200-exact-token-decomposition.md`.
+
 ## What this is
 
 AgentlensPro (repo: <https://github.com/Emasoft/AgentlensPro>, forked from AgentLens) is a local AI-agent observability product — a CLI, an **npx/standalone server** with a served dashboard, a **Docker image**, and Claude Code skills, all from one codebase (the VS Code extension host was removed pre-fork). It ingests OpenTelemetry traces and local session log files from Copilot, Claude Code, Codex, and OpenCode, persists them to a local SQLite DB, and renders a dashboard. See `ARCHITECTURE.md` (deep, with mermaid diagrams) and `README.md` (user-facing) for full detail.
