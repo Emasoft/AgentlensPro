@@ -109,6 +109,9 @@ export interface CtxElement {
   raw: number
   tokens: number
   cut?: CtxCut
+  /** The full path, when the element is an injected file. `label` is the basename (it has to fit a
+   *  chart axis); this is what a reader can paste back into a conversation and act on. */
+  full?: string
   /** Per-element provenance. 'exact' = its own prefix difference was measured. 'merged' = the API
    *  forbids a request ending at this block (an assistant message may not end with `thinking`; a
    *  `tool_use` requires its `tool_result`), so its tokens are counted inside the next element —
@@ -284,21 +287,26 @@ function classify(text: string): string {
 /** Carve a large injected block into named sections, so "218k tokens of context" becomes a list of
  *  files. Every byte lands in exactly one section (the leading remainder becomes `preamble`) — a
  *  decomposer that drops bytes misreports the total it is meant to explain. */
-export function splitInjected(text: string): { label: string; text: string }[] {
-  const marks: { at: number; label: string }[] = []
-  const push = (re: RegExp, make: (name: string) => string): void => {
-    for (const m of text.matchAll(re)) marks.push({ at: m.index ?? 0, label: make(m[1]) })
+/** A label is the BASENAME because that is what fits a chart axis, but the full path is what a
+ *  reader can actually paste back into a conversation and act on — so `full` carries it alongside
+ *  rather than forcing every consumer to re-derive it from the raw captures. */
+export function splitInjected(text: string): { label: string; text: string; full?: string }[] {
+  const marks: { at: number; label: string; full?: string }[] = []
+  const push = (re: RegExp, make: (name: string) => string, keepFull = false): void => {
+    for (const m of text.matchAll(re)) {
+      marks.push({ at: m.index ?? 0, label: make(m[1]), ...(keepFull ? { full: m[1] } : {}) })
+    }
   }
-  push(/^Contents of (\S+)/gm, n => `file:${path.basename(n)}`)
+  push(/^Contents of (\S+)/gm, n => `file:${path.basename(n)}`, true)
   push(/<command-message>([^<]+)<\/command-message>/g, n => `skill:${n}`)
   push(/^# (claudeMd|userEmail|currentDate|gitStatus)\b/gm, n => `meta:${n}`)
   marks.sort((a, b) => a.at - b.at)
   if (marks.length === 0) return [{ label: classify(text), text }]
-  const out: { label: string; text: string }[] = []
+  const out: { label: string; text: string; full?: string }[] = []
   if (marks[0].at > 0) out.push({ label: 'preamble', text: text.slice(0, marks[0].at) })
   for (let i = 0; i < marks.length; i++) {
     const end = i + 1 < marks.length ? marks[i + 1].at : text.length
-    out.push({ label: marks[i].label, text: text.slice(marks[i].at, end) })
+    out.push({ label: marks[i].label, text: text.slice(marks[i].at, end), ...(marks[i].full ? { full: marks[i].full } : {}) })
   }
   return out
 }
@@ -308,8 +316,8 @@ const SPLIT_THRESHOLD = 20_000
 
 export function extractElements(req: RequestBody): CtxElement[] {
   const els: CtxElement[] = []
-  const add = (section: string, label: string, text: string, detail = '', cut?: CtxCut): void => {
-    els.push({ section, label, detail, chars: text.length, raw: countTokens(text), tokens: 0, cut })
+  const add = (section: string, label: string, text: string, detail = '', cut?: CtxCut, full?: string): void => {
+    els.push({ section, label, detail, chars: text.length, raw: countTokens(text), tokens: 0, cut, full })
   }
 
   ;(req.system ?? []).forEach((b, i) => {
@@ -338,7 +346,7 @@ export function extractElements(req: RequestBody): CtxElement[] {
         let end = 0
         for (const p of parts) {
           end += p.text.length
-          add(section, p.label, p.text, where, parts.length > 1 ? { ...cut, textEnd: end } : cut)
+          add(section, p.label, p.text, where, parts.length > 1 ? { ...cut, textEnd: end } : cut, p.full)
         }
       } else if (b.type === 'tool_use') {
         add(section, `tool_use:${b.name ?? '?'}`, JSON.stringify(b.input ?? {}), where, cut)

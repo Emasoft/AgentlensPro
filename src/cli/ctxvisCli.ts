@@ -22,6 +22,7 @@ import {
   type CapturedTurn, type CacheVerdict, type EnvFingerprint, type BaselineEntry,
 } from '../ctxVisual'
 import { readBody, type ResponseBody } from '../capturedBody'
+import { renderCtxVisHtml, type HtmlReport } from '../ctxVisualHtml'
 import { EXIT } from './cliErrors'
 
 export const CTXVIS_USAGE = `agentlenspro ctxvis — what an agent puts in context, and what its 2nd turn costs
@@ -65,6 +66,42 @@ interface AgentMeasurement {
   turns: { file: string; total: number; report: CtxReport }[]
   verdict: CacheVerdict | null
   note?: string
+}
+
+/** Project the internal measurements onto the renderer's input shape. Kept as an explicit mapping
+ *  rather than handing the renderer the internals, so a change to either side is a type error here
+ *  instead of a silently blank panel in the report. */
+export function toHtmlReport(ms: AgentMeasurement[], warnings: string[]): HtmlReport {
+  return {
+    generatedAt: new Date().toISOString().replace('T', ' ').slice(0, 19),
+    warnings,
+    agents: ms.map(m => ({
+      agent: m.agent,
+      isSubject: m.isSubject,
+      fromBaseline: m.fromBaseline,
+      note: m.note,
+      turns: m.turns.map(t => ({
+        total: t.total,
+        elements: t.report.elements.map(e => ({ label: e.label, tokens: e.tokens, full: e.full })),
+      })),
+      verdict: m.verdict && {
+        kind: m.verdict.divergence.kind,
+        headline: m.verdict.divergence.kind === 'break'
+          ? `PREFIX BROKEN at ${m.verdict.divergence.tier}[${m.verdict.divergence.index}]`
+          : m.verdict.divergence.kind === 'append'
+            ? 'prefix intact — only the new tail is written'
+            : 'identical requests',
+        detail: m.verdict.divergence.label,
+        predictedSurviving: m.verdict.predictedSurviving,
+        predictedRewritten: m.verdict.predictedRewritten,
+        actualCacheRead: m.verdict.actualCacheRead,
+        actualCacheWrite: m.verdict.actualCacheWrite,
+        actualCostUsd: m.verdict.actualCostUsd,
+        agreement: m.verdict.agreement,
+        agreementNote: m.verdict.agreementNote,
+      },
+    })),
+  }
 }
 
 /** The response captured for a request, if one is on disk. Named `req_<id>.response.json` beside the
@@ -372,6 +409,14 @@ export async function runCtxvisCli(argv: string[]): Promise<number> {
     try {
       fs.writeFileSync(lastPath, JSON.stringify({ measurements, warnings }))
     } catch { /* a missing --reuse-last cache is not worth failing the run over */ }
+
+    const htmlFile = flag('--html')
+    if (htmlFile) {
+      const html = renderCtxVisHtml(toHtmlReport(measurements, warnings))
+      fs.mkdirSync(path.dirname(path.resolve(htmlFile)), { recursive: true })
+      fs.writeFileSync(htmlFile, html)
+      console.log(`visual report → ${htmlFile}`)
+    }
 
     const text = asJson ? JSON.stringify({ measurements, warnings }, null, 2) : renderReport(measurements, warnings)
     const brokeCount = measurements.filter(m => m.verdict?.divergence.kind === 'break').length
