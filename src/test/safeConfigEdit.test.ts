@@ -143,6 +143,107 @@ suite('safe_config_edit.py — transactional config editor', () => {
     assert.strictEqual((JSON.parse(r2.stdout) as { changed: boolean }).changed, false, 'second run is a no-op')
   })
 
+  // remove_by_substring — the symmetric counterpart of append_unique, and it
+  // exists for the same reason (S3-F5): expressing a removal as a whole-array
+  // `set` computes the survivors from a read taken BEFORE the lock, so a foreign
+  // entry appended in between is clobbered. These cases pin the semantics that
+  // make the filter safe to evaluate inside the lock instead.
+  interface HookEntry { type: string; command: string }
+  interface Matcher { matcher?: string; hooks: HookEntry[] }
+  function withHooks(post: Matcher[]): Record<string, unknown> {
+    const f = richFixture()
+    ;(f.hooks as Record<string, unknown>).PostToolUse = post
+    return f
+  }
+  function postToolUse(): Matcher[] {
+    return (JSON.parse(fs.readFileSync(file, 'utf-8')) as {
+      hooks: { PostToolUse: Matcher[] }
+    }).hooks.PostToolUse
+  }
+  const OURS = { type: 'command', command: '/usr/bin/env python3 /skills/gh_register_hook.py' }
+  const FOREIGN = { type: 'command', command: '/other/vendor/tool.py' }
+
+  test('remove_by_substring drops only our nested entry, keeping a foreign sibling in the SAME matcher', () => {
+    fs.writeFileSync(file, JSON.stringify(withHooks([{ matcher: 'Bash', hooks: [FOREIGN, OURS] }]), null, 2))
+    const r = runEditor(file, {
+      ops: [{ op: 'remove_by_substring', path: ['hooks', 'PostToolUse'], substring: 'gh_register_hook.py', nested_key: 'hooks' }],
+    })
+    assert.strictEqual(r.status, 0, r.stderr)
+    assert.strictEqual((JSON.parse(r.stdout) as { changed: boolean }).changed, true)
+    const post = postToolUse()
+    assert.strictEqual(post.length, 1, 'matcher survives because a foreign hook remains')
+    assert.deepStrictEqual(post[0].hooks, [FOREIGN], 'only ours removed')
+    const after = JSON.parse(fs.readFileSync(file, 'utf-8')) as { theme: string; env: Record<string, string> }
+    assert.strictEqual(after.theme, 'dark', 'unrelated keys untouched')
+    assert.strictEqual(after.env.EXISTING_KEY, 'user-value')
+  })
+
+  test('remove_by_substring drops a matcher left empty, and a foreign matcher present at lock time survives (S3-F5)', () => {
+    // The spec names ONLY the substring — it never carries the surviving array —
+    // so an entry another tool added is filtered against the FILE, not a stale snapshot.
+    fs.writeFileSync(file, JSON.stringify(withHooks([
+      { matcher: 'Bash', hooks: [OURS] },
+      { matcher: 'Bash', hooks: [FOREIGN] },
+    ]), null, 2))
+    const r = runEditor(file, {
+      ops: [{ op: 'remove_by_substring', path: ['hooks', 'PostToolUse'], substring: 'gh_register_hook.py', nested_key: 'hooks' }],
+    })
+    assert.strictEqual(r.status, 0, r.stderr)
+    const post = postToolUse()
+    assert.strictEqual(post.length, 1, 'the husk matcher is dropped')
+    assert.deepStrictEqual(post[0].hooks, [FOREIGN], 'the foreign matcher survives untouched')
+
+    const again = runEditor(file, {
+      ops: [{ op: 'remove_by_substring', path: ['hooks', 'PostToolUse'], substring: 'gh_register_hook.py', nested_key: 'hooks' }],
+    })
+    assert.strictEqual((JSON.parse(again.stdout) as { changed: boolean }).changed, false, 'idempotent')
+  })
+
+  test('remove_by_substring without nested_key removes whole top-level elements', () => {
+    fs.writeFileSync(file, JSON.stringify(withHooks([
+      { matcher: 'Bash', hooks: [OURS] },
+      { matcher: 'Read', hooks: [FOREIGN] },
+    ]), null, 2))
+    const r = runEditor(file, {
+      ops: [{ op: 'remove_by_substring', path: ['hooks', 'PostToolUse'], substring: 'gh_register_hook.py' }],
+    })
+    assert.strictEqual(r.status, 0, r.stderr)
+    const post = postToolUse()
+    assert.strictEqual(post.length, 1)
+    assert.strictEqual(post[0].matcher, 'Read')
+  })
+
+  test('remove_by_substring on an absent path is a no-op, not an error', () => {
+    fs.writeFileSync(file, JSON.stringify(richFixture(), null, 2))
+    const before = fs.readFileSync(file, 'utf-8')
+    const r = runEditor(file, {
+      ops: [{ op: 'remove_by_substring', path: ['hooks', 'SessionEnd'], substring: 'anything' }],
+    })
+    assert.strictEqual(r.status, 0, r.stderr)
+    assert.strictEqual((JSON.parse(r.stdout) as { changed: boolean }).changed, false)
+    assert.strictEqual(fs.readFileSync(file, 'utf-8'), before, 'file byte-identical')
+  })
+
+  test('remove_by_substring rejects a missing substring as a bad spec, file untouched', () => {
+    fs.writeFileSync(file, JSON.stringify(withHooks([{ matcher: 'Bash', hooks: [OURS] }]), null, 2))
+    const before = fs.readFileSync(file, 'utf-8')
+    const r = runEditor(file, { ops: [{ op: 'remove_by_substring', path: ['hooks', 'PostToolUse'] }] })
+    assert.strictEqual(r.status, 6, `expected BadSpec exit 6, got ${r.status}: ${r.stderr}`)
+    assert.strictEqual(fs.readFileSync(file, 'utf-8'), before, 'file byte-identical')
+  })
+
+  test('remove_by_substring refuses when the target is not an array', () => {
+    const f = richFixture()
+    ;(f.hooks as Record<string, unknown>).PostToolUse = 'not-an-array'
+    fs.writeFileSync(file, JSON.stringify(f, null, 2))
+    const before = fs.readFileSync(file, 'utf-8')
+    const r = runEditor(file, {
+      ops: [{ op: 'remove_by_substring', path: ['hooks', 'PostToolUse'], substring: 'x' }],
+    })
+    assert.strictEqual(r.status, 2, `expected Refused exit 2, got ${r.status}: ${r.stderr}`)
+    assert.strictEqual(fs.readFileSync(file, 'utf-8'), before, 'file byte-identical')
+  })
+
   test('no-op spec (values already in place) changes nothing and writes no backup', () => {
     const original = richFixture()
     fs.writeFileSync(file, JSON.stringify(original, null, 2))

@@ -40,6 +40,8 @@ Spec (stdin, JSON):
       {"op": "delete", "path": ["env", "STALE"]},
       {"op": "append_unique", "path": ["hooks", "Stop"], "value": {...},
        "unique_by_substring": ".agentlens/pending-prompt.txt"},
+      {"op": "remove_by_substring", "path": ["hooks", "Stop"],
+       "substring": "my-hook.py", "nested_key": "hooks"},   // nested_key optional
       {"op": "ensure_line_in_section",              // TOML mode only
        "section": "otel", "key_prefix": "exporter", "line": "exporter = ..."}
   ] }
@@ -165,6 +167,32 @@ def verify_diff(original_tree, new_tree, ops):
                 node = node[seg]
             if present:
                 raise VerifyFailed(f"delete op path {op['path']} still present after apply")
+        elif kind == "remove_by_substring":
+            node = new_tree
+            for seg in op["path"]:
+                if not isinstance(node, dict) or seg not in node:
+                    node = None
+                    break
+                node = node[seg]
+            if isinstance(node, list):
+                needle = op["substring"]
+                nested = op.get("nested_key")
+                # Assert exactly what the op promised. With nested_key the promise
+                # is scoped to the nested arrays -- an element that mentions the
+                # needle OUTSIDE them (e.g. in a matcher string) is deliberately
+                # kept, so asserting on the whole array would reject a correct run.
+                if nested:
+                    survivors = [
+                        x for el in node if isinstance(el, dict) and isinstance(el.get(nested), list)
+                        for x in el[nested]
+                    ]
+                else:
+                    survivors = node
+                if any(needle in json.dumps(el, ensure_ascii=False) for el in survivors):
+                    raise VerifyFailed(
+                        f"remove_by_substring at {op['path']}: "
+                        f"{needle!r} still present after apply"
+                    )
 
 
 # ---------------------------------------------------------------------------
@@ -222,6 +250,50 @@ def apply_ops(tree, ops):
             needle = op["unique_by_substring"]
             if not any(needle in json.dumps(el, ensure_ascii=False) for el in arr):
                 arr.append(op["value"])
+                changed = True
+        elif kind == "remove_by_substring":
+            # The symmetric counterpart of append_unique, and it exists for the same
+            # reason (S3-F5): a caller that removes entries by computing the surviving
+            # array and sending `set` computes it from a read taken BEFORE the lock, so
+            # a foreign entry another tool appends in between is clobbered. Evaluated
+            # here, the filter runs on the fresh tree inside the lock instead.
+            needle = op.get("substring")
+            if not isinstance(needle, str) or not needle:
+                raise BadSpec("remove_by_substring requires a non-empty 'substring'")
+            nested = op.get("nested_key")
+            if nested is not None and not isinstance(nested, str):
+                raise BadSpec("remove_by_substring 'nested_key' must be a string")
+
+            container = new_tree
+            for seg in op["path"][:-1]:
+                container = container.get(seg) if isinstance(container, dict) else None
+                if container is None:
+                    break
+            if not isinstance(container, dict):
+                continue  # the path does not exist -- a no-op, not an error
+            leaf = op["path"][-1]
+            arr = container.get(leaf)
+            if arr is None:
+                continue  # nothing there to remove -- a no-op, not an error
+            if not isinstance(arr, list):
+                raise Refused(f"remove_by_substring at {op['path']}: target is not an array")
+
+            def hit(element):
+                return needle in json.dumps(element, ensure_ascii=False)
+
+            kept = []
+            for el in arr:
+                if nested and isinstance(el, dict) and isinstance(el.get(nested), list):
+                    inner = [x for x in el[nested] if not hit(x)]
+                    if not inner:
+                        continue  # the element held only ours -- drop the husk
+                    kept.append({**el, nested: inner} if len(inner) != len(el[nested]) else el)
+                elif hit(el):
+                    continue
+                else:
+                    kept.append(el)
+            if json.dumps(kept, ensure_ascii=False) != json.dumps(arr, ensure_ascii=False):
+                container[leaf] = kept
                 changed = True
         else:
             raise BadSpec(f"unknown op kind: {kind!r}")
