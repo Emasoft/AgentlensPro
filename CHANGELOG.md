@@ -36,8 +36,24 @@ All notable changes to AgentlensPro are documented here.
     expansion with full paths, a billing bar showing reused-versus-re-written at the same scale as
     the content bar, light/dark, no inner scrollers.
 
+- **`AGENTLENS_BASE_PATH` — serve the dashboard under a path prefix (closes #4).** ai-maestro
+  root-mounted the dashboard on a separate port purely because the assets and `/api/*` are
+  root-absolute: under a prefix on their existing port the browser resolves them against *their*
+  origin and they hit ai-maestro's own `/api/*`, silently cross-wiring two APIs. The separate port is
+  a different origin, so `frame-ancestors 'self'` no longer covered the parent and they had to drop
+  and re-issue the CSP. With a base path they can serve same-origin and the CSP as written is
+  satisfied. Stripping is **conditional** — an unprefixed path still serves, because hooks and the
+  CLI talk to the server directly and know nothing about a proxy prefix; a base path is a serving
+  concern, never an access gate.
+
 ### Changed
 
+- **The no-OAuth-token guarantee on the account tools is now asserted by tests (closes #3).**
+  `get_account_status` / `get_account_burners` / `get_window_budget` never emitted token material,
+  but nothing locked it. `parseOauthAccount` and `parseSubscriptionType` — the two choke-points
+  everything account-facing is built from — are now fed inputs that really do carry access and
+  refresh tokens and asserted to leak neither the literal values nor anything credential-shaped,
+  including on the malformed path where a passthrough would hide.
 - **`ctxmap` keeps the full path of each injected file** (`CtxElement.full`). The label stays the
   basename because that is what fits a chart axis, but `gh-actions.md` alone is not something a
   reader can paste back into a conversation and act on.
