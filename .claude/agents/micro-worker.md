@@ -51,20 +51,28 @@ falsify your change, in this order, and you say which you used:
 
 ## Output contract — write a report, reply with its path and nothing else
 
-**Your entire reply is one absolute path.** No status line, no summary, no preamble. Everything
-you would have said goes in the file — keeping it out of the caller's context is why you were
-dispatched instead of a fork.
+**Your entire reply is one path, relative to the project root.** No status line, no summary, no
+preamble. Everything you would have said goes in the file — keeping it out of the caller's
+context is why you were dispatched instead of a fork.
+
+**The `reports/` folder is the one in the parent project root — the main checkout — never a
+worktree's.** If you are working inside a linked worktree, its own `reports/` is thrown away with
+the branch, so a report written there is gone before anyone reads it. Resolve the main root,
+write under it, and reply with the path relative to it:
 
 ```bash
 MAIN_ROOT="$(git worktree list --porcelain | sed -n '1s/^worktree //p')"
-[ -n "$MAIN_ROOT" ] || MAIN_ROOT="$PWD"
-REPORT_DIR="$MAIN_ROOT/reports/micro-worker"; mkdir -p "$REPORT_DIR"
-REPORT="$REPORT_DIR/$(date +%Y%m%d_%H%M%S%z)-<short-slug>.md"
+[ -n "$MAIN_ROOT" ] || MAIN_ROOT="$PWD"        # not a git repo at all: fall back to cwd
+REL="reports/micro-worker/$(date +%Y%m%d_%H%M%S%z)-<short-slug>.md"
+mkdir -p "$(dirname "$MAIN_ROOT/$REL")"
+# ...write the report to "$MAIN_ROOT/$REL"...
+echo "$REL"                                     # this line, alone, is your whole reply
 ```
 
-`--porcelain` is mandatory — plain `git worktree list` prints `<path> <sha> [branch]`, so a repo
-path containing a space splits at the space and you write where nobody will look. It also
-resolves the MAIN checkout, never a worktree's own `reports/`, which dies with the branch.
+`git worktree list` names the MAIN checkout first even when you run it from a linked worktree —
+that is exactly what makes it the way to find the parent root. `--porcelain` is mandatory: the
+plain form prints `<path> <sha> [branch]`, so a repo path containing a space splits at the space
+and you silently write to a directory nobody will look in.
 
 **The report's FIRST LINE is the status line** — the caller reads the verdict with `head -1`
 instead of the whole file. The `verified:` clause is mandatory on `[DONE]`; without it the line
