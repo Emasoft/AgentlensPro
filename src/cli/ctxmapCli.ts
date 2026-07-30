@@ -32,10 +32,11 @@ import {
   resolveAnthropicAuth, countTokensExact, mapLimit, countable,
   type AnthropicAuth, type CountableRequest,
 } from '../exactTokens'
-import { readBody, type ContentBlock, type Message, type ToolDef, type RequestBody, type Usage, type ResponseBody } from '../capturedBody'
+import { readBody, PREFIX_STUB, type ContentBlock, type Message, type ToolDef, type RequestBody, type Usage, type ResponseBody } from '../capturedBody'
 import { EXIT } from './cliErrors'
 
 export type { ContentBlock, Message, ToolDef, RequestBody, Usage, ResponseBody }
+export { PREFIX_STUB }
 
 export const CTXMAP_USAGE = `agentlenspro ctxmap — what is actually inside a captured API request
 
@@ -356,9 +357,12 @@ export function extractElements(req: RequestBody): CtxElement[] {
 
 /** Rebuild the request truncated at `cut` — the countable prefix whose difference from the previous
  *  one is this element's exact cost. System/tool prefixes need a message (the API requires one), so
- *  they carry a fixed one-token stand-in that cancels out in the differencing. */
-export const PREFIX_STUB = { role: 'user', content: 'x' }
-
+ *  they carry a fixed one-token stand-in that cancels out in the differencing.
+ *
+ *  NOTE for anyone reaching for this to build an ABSOLUTE prefix (ctxvis needed one): these cuts are
+ *  built for DIFFERENCING consecutive elements, so the `system` cut deliberately omits `tools` — the
+ *  tools cancel in the subtraction. As an absolute prefix it would therefore be short by the entire
+ *  tool surface. `buildCommonPrefix` in src/ctxVisual.ts is the absolute form. */
 export function buildPrefix(req: RequestBody, cut: CtxCut): CountableRequest {
   const model = req.model ?? ''
   const sys = req.system ?? []

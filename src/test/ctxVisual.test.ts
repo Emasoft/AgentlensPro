@@ -18,7 +18,7 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import {
-  selectTurns, divergence, cacheVerdict, mintNonce, NONCE_PREFIX,
+  selectTurns, divergence, cacheVerdict, mintNonce, NONCE_PREFIX, assertNonce,
   loadBaselines, saveBaselines, validateBaselines, fingerprintDrift,
   listRequestCaptures,
   type EnvFingerprint, type BaselineStore,
@@ -56,6 +56,22 @@ suite('ctxvis — mintNonce', () => {
     assert.ok(n.startsWith(NONCE_PREFIX), `expected the ${NONCE_PREFIX} prefix, got ${n}`)
     assert.strictEqual(n.length, NONCE_PREFIX.length + 8)
     assert.match(n.slice(NONCE_PREFIX.length), /^[0-9A-F]{8}$/)
+  })
+})
+
+suite('ctxvis — assertNonce', () => {
+  test('accepts a minted nonce', () => {
+    assertNonce(mintNonce(() => 0.9))
+    assertNonce(NONCE)
+  })
+
+  test('REFUSES a short marker, which would match unrelated captures', () => {
+    // Found while smoke-testing the CLI: `--measured x=y` selected arbitrary captures containing
+    // the letter "y" and produced a confident, fictional turn comparison. A marker that matches
+    // everything is not a marker, and a plausible-looking wrong report is worse than an error.
+    for (const bad of ['y', 'test', 'nonce', '', 'AGENTLENS-CTXVIS-', 'AGENTLENS-CTXVIS-zzzzzzzz']) {
+      assert.throws(() => assertNonce(bad), /not a ctxvis nonce/, `"${bad}" must be refused`)
+    }
   })
 })
 

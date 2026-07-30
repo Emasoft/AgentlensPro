@@ -28,6 +28,7 @@ import { runSetupCli } from './setup'
 import { runBudgetCli } from './budgetCli'
 import { runWatchCli } from './watchCli'
 import { runCtxmapCli } from './ctxmapCli'
+import { runCtxvisCli } from './ctxvisCli'
 
 /** CLI entry. `startServer` lazily imports standalone/server (injected by the shim — src/
  *  cannot import standalone/ without inverting the build layering). Returns the exit code. */
@@ -106,6 +107,11 @@ export async function cliMain(argv: string[], startServer: () => Promise<unknown
       // the server. This is the only surface that can answer "what is in the context", as opposed to
       // "what did it cost"; the session JSONL records none of it.
       return runCtxmapCli(argv.slice(1))
+    case 'ctxvis':
+      // The turn-over-turn half of the same question: ctxmap says what is in ONE request, ctxvis
+      // says what changed on the agent's SECOND turn and whether that broke the cache prefix —
+      // which is what decides whether the agent is cheap to keep running or only cheap to start.
+      return runCtxvisCli(argv.slice(1))
     case undefined:
       // Bare `agentlenspro` / `npx agentlenspro`: the original behavior — run the server in
       // the foreground; it serves the dashboard (and opens the browser unless

@@ -27,7 +27,8 @@
 
 import * as fs from 'fs'
 import * as path from 'path'
-import { readBody, messageTexts, type RequestBody, type Usage } from './capturedBody'
+import { readBody, messageTexts, PREFIX_STUB, type RequestBody, type Usage } from './capturedBody'
+import { stripCacheControl, type CountableRequest } from './exactTokens'
 import { calcTokenCostUsd } from './shared/pricing'
 
 // ── selecting a spawned agent's turns ─────────────────────────────────────────
@@ -61,6 +62,27 @@ export function mintNonce(rand: () => number = Math.random): string {
   let s = ''
   while (s.length < 8) s += Math.floor(rand() * 16).toString(16)
   return NONCE_PREFIX + s.slice(0, 8).toUpperCase()
+}
+
+const NONCE_RE = new RegExp(`^${NONCE_PREFIX}[0-9A-F]{8}$`)
+
+/**
+ * Reject anything that is not a minted nonce.
+ *
+ * This is not defensive pedantry — it is the guard against the exact failure this module exists to
+ * prevent. A short or common marker (`x`, `y`, `test`) is a substring of half the captures on disk,
+ * so selection silently matches unrelated requests and the run then reports a confident, entirely
+ * fictional turn comparison. Observed while smoke-testing: `--measured x=y` "found" two turns with
+ * the same message count and reported a plausible ambiguity about them. Garbage that looks like a
+ * measurement is worse than an error, so this is a hard refusal rather than a warning.
+ */
+export function assertNonce(nonce: string): void {
+  if (!NONCE_RE.test(nonce)) {
+    throw new Error(
+      `"${nonce}" is not a ctxvis nonce (expected ${NONCE_PREFIX}XXXXXXXX with 8 hex digits). ` +
+      'A short marker matches unrelated captures and would produce a confident but fictional report.',
+    )
+  }
 }
 
 /**
@@ -224,6 +246,71 @@ export function divergence(a: RequestBody, b: RequestBody): Divergence {
   const appended = bm.length - am.length
   if (appended === 0) return none('identical', 'nothing changed between the two turns')
   return none('append', `${appended} message${appended === 1 ? '' : 's'} appended; prefix intact`, appended)
+}
+
+// ── measuring the surviving prefix ────────────────────────────────────────────
+
+/**
+ * The request truncated to everything that SURVIVES into turn 2 — i.e. strictly before the
+ * divergence point, in canonical tier order.
+ *
+ * This is NOT `buildPrefix` from ctxmapCli. Those cuts exist to difference two CONSECUTIVE
+ * elements, so the `system` cut omits `tools` deliberately (they cancel in the subtraction). Used as
+ * an absolute prefix it would be short by the entire tool surface — ~94k tokens on a fat agent,
+ * which would turn a healthy verdict into an alarming one.
+ */
+export function buildCommonPrefix(a: RequestBody, div: Divergence): { req: CountableRequest; stubAdded: boolean } {
+  const model = a.model ?? ''
+  const tools = a.tools ?? []
+  const sys = a.system ?? []
+  const msgs = a.messages ?? []
+
+  if (div.kind === 'break' && div.tier === 'tools') {
+    return { req: { model, tools: tools.slice(0, div.index!), messages: [PREFIX_STUB] }, stubAdded: true }
+  }
+  if (div.kind === 'break' && div.tier === 'system') {
+    return {
+      req: {
+        model,
+        ...(tools.length ? { tools } : {}),
+        system: sys.slice(0, div.index!),
+        messages: [PREFIX_STUB],
+      },
+      stubAdded: true,
+    }
+  }
+
+  const head = div.kind === 'break' && div.tier === 'messages' ? msgs.slice(0, div.index!) : msgs
+  const shell = { model, ...(tools.length ? { tools } : {}), ...(sys.length ? { system: sys } : {}) }
+  if (head.length === 0) return { req: { ...shell, messages: [PREFIX_STUB] }, stubAdded: true }
+
+  // count_tokens rejects a conversation whose last message is from the assistant. Truncating at a
+  // message boundary lands there roughly half the time, so this is the normal case, not an edge one.
+  // Appending the stub makes it countable; the caller differences the stub back out.
+  const last = head[head.length - 1]
+  const stubAdded = last?.role === 'assistant'
+  const messages = (stubAdded ? [...head, PREFIX_STUB] : head) as CountableRequest['messages']
+  return { req: { ...shell, messages }, stubAdded }
+}
+
+/**
+ * Exact token count of the surviving prefix, or null when it could not be measured. Never estimates
+ * — a number that looks measured and is not would corrupt the very comparison this exists to make.
+ */
+export async function measureCommonPrefix(
+  a: RequestBody,
+  div: Divergence,
+  count: (r: CountableRequest) => Promise<number>,
+): Promise<number | null> {
+  const { req, stubAdded } = buildCommonPrefix(a, div)
+  try {
+    const total = await count(stripCacheControl(req))
+    if (!stubAdded) return total
+    const stub = await count({ model: a.model ?? '', messages: [PREFIX_STUB] } as CountableRequest)
+    return Math.max(0, total - stub)
+  } catch {
+    return null
+  }
 }
 
 // ── the cache verdict ─────────────────────────────────────────────────────────

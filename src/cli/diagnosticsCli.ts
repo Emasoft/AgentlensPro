@@ -82,6 +82,15 @@ usage:
                                               MCP servers. No facet = whole report; --out writes full
                                               JSON to a file (digest to stdout). env list shows facets
 
+context (purely local — reads the captured request bodies, never the server):
+  agentlenspro ctxmap <request.json>          what is actually INSIDE a captured request: every system
+                                              block, tool schema, message and named context section,
+                                              measured with count_tokens. --diff A B, --find, --list
+  agentlenspro ctxvis --measured <a>=<nonce>  what an agent's SECOND turn changed, and whether that
+                                              broke the prompt-cache prefix (what it costs to KEEP
+                                              running, not just to start). Driven by the skill
+                                              /agentlenspro-visualize-context
+
 diagnostics (schemas come live from the server):
   agentlenspro list [--desc]                  all tools (names; --desc adds one-line descriptions)
   agentlenspro help <tool>                    a tool's description + flags (from the live schema)

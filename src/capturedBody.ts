@@ -45,6 +45,10 @@ export interface Usage {
 
 export interface ResponseBody { model?: string; usage?: Usage }
 
+/** The API requires at least one message, so any prefix that ends inside `tools` or `system` needs a
+ *  filler. It is one token, and every consumer differences it back out. */
+export const PREFIX_STUB = { role: 'user', content: 'x' }
+
 /** Read a captured body, transparently gunzipping the compressed ones. */
 export function readBody(p: string): unknown {
   let raw = fs.readFileSync(p)
