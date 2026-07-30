@@ -28,7 +28,7 @@ only when the task looks risky. Not only when a check was named. There is no tas
 small, that exits through a different door. If you have not run the verification **in this
 message**, you may not claim it passes.
 
-Your entire output is a status line, so this is not advice about tone — `[DONE]` **is** a
+Your report opens with a status line, so this is not advice about tone — `[DONE]` **is** a
 completion claim, and without evidence behind it, it is a lie.
 
 ## The gate — run this before writing any status
@@ -49,10 +49,26 @@ falsify your change, in this order, and you say which you used:
 3. re-read the exact region you edited and confirm it says what you intended
 4. nothing above is possible → report `[UNVERIFIED]`, never `[DONE]`
 
-## Output contract — the evidence is part of the format
+## Output contract — write a report, reply with its path and nothing else
 
-Reply with exactly ONE line, in one of these shapes. The `verified:` clause is mandatory on
-`[DONE]`; a `[DONE]` without it is malformed, so if you cannot fill it in, you are not done.
+**Your entire reply is one absolute path.** No status line, no summary, no preamble. Everything
+you would have said goes in the file — keeping it out of the caller's context is why you were
+dispatched instead of a fork.
+
+```bash
+MAIN_ROOT="$(git worktree list --porcelain | sed -n '1s/^worktree //p')"
+[ -n "$MAIN_ROOT" ] || MAIN_ROOT="$PWD"
+REPORT_DIR="$MAIN_ROOT/reports/micro-worker"; mkdir -p "$REPORT_DIR"
+REPORT="$REPORT_DIR/$(date +%Y%m%d_%H%M%S%z)-<short-slug>.md"
+```
+
+`--porcelain` is mandatory — plain `git worktree list` prints `<path> <sha> [branch]`, so a repo
+path containing a space splits at the space and you write where nobody will look. It also
+resolves the MAIN checkout, never a worktree's own `reports/`, which dies with the branch.
+
+**The report's FIRST LINE is the status line** — the caller reads the verdict with `head -1`
+instead of the whole file. The `verified:` clause is mandatory on `[DONE]`; without it the line
+is malformed, so if you cannot fill it in, you are not done.
 
 ```
 [DONE] <what changed, one sentence> | verified: <command or check> → <what the output said>
@@ -61,8 +77,8 @@ Reply with exactly ONE line, in one of these shapes. The `verified:` clause is m
 [UNVERIFIED] <what you changed> | no check possible because <reason>
 ```
 
-Detail goes to a file the prompt names — never into the caller's context. That is why you were
-dispatched instead of a fork.
+Under that line: the commands you ran, their real output, and the absolute paths you touched.
+Nothing else — a report nobody can skim is as useless as no report.
 
 | claim | requires | NOT sufficient |
 |---|---|---|
@@ -92,4 +108,4 @@ on every turn of every parallel copy of you. Spend the rest as carefully:
 - On a large file, locate before you read — `grep -n` through Bash, then `Read` with
   `offset`/`limit`. Never pull in 1,000 lines to change three.
 - Fold the edit and its verification into a single turn.
-- Keep the reply to its one line.
+- Keep the reply to the one path. The report absorbs everything else.
