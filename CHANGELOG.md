@@ -4,6 +4,66 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.17.2] - 2026-07-30
+
+### Fixed
+
+- **A window at 64% by cost was reported as 171% and "~0 min to exhaustion".** `capacityExceeded`
+  in `src/burnMonitor.ts` ORed the observed *raw-token* bound with the cost bound, and raw tokens
+  systematically overstate fill — a cache read bills at 0.1× and is ~96% of volume here. Once
+  "exceeded" was set, `windowFillPct` returned `null`, discarding the cost percentage that is the
+  authoritative one. It reproduced on its own example: 171.51% by tokens, 64.49% by cost. Now
+  cost-first with the token bound as fallback. The unit test had missed it only because it
+  hardcoded `capacityExceeded: false` instead of letting the pipeline decide; the new tests let
+  `computeWindowBudget` produce it in both directions.
+
+- **The same self-falsifying 171% still reached the dashboard as a `severity: 'error'`
+  rotate-now alert**, because the window-pct alert rules kept keying off raw-token `pctConsumed`
+  and ignored `capacityExceeded`. The false alarm the fix was written to kill was surviving on
+  the loudest surface in the product.
+
+- **One account that burned once six days ago permanently stripped the pooled 5h capacity.**
+  `observedCapacityFor` built its "who actually burned" set from the entire retained event
+  stream instead of the window being reported. It is now scoped per window, and
+  `computeWindowBudget` resolves capacity and the lower-bound flag separately for each.
+
+- **The data-directory lock in `standalone/server.ts` landed ~570 lines too late** — after
+  `migrateLegacySpansFile()` and the store boot. A second server that would be refused had
+  already migrated and written to the shared span store (leaving a `spans.json.bak`) before
+  printing "Refusing to start", which is exactly the corruption the lock exists to prevent. The
+  claim now happens immediately after the `DATA_DIR` mkdir, and the ordering is stated as part of
+  the contract. Stale-lock takeover is `unlink` + re-`wx` so exactly one racer wins the create;
+  the previous `atomicWriteFileSync` let two servers both "take over" the same stale lock.
+
+- **The image cache-guard shipped the noise it warns about.** `IMG_RESIDENT` fired once per image
+  with no dedupe, on `Read` — the one hot tool in `GATE_MATCHER` — so following the warning's own
+  advice ("read every image you need in ONE message") produced one ~700-character `systemMessage`
+  per image in a single turn. It is now deduped per session on the PostToolUse advisory's existing
+  10-minute cadence.
+
+- **`leanResponse` breached its own ceiling with the text explaining that it had not.** `stage()`
+  compared a candidate against the current payload *before* attaching the ~110-character note it
+  was about to add, and each loop appended one note per iteration (up to ~15). Measured against a
+  60-token ceiling: 203 tokens out, of which 7 notes were essentially the whole payload. The note
+  is now one line per ceiling pass, rewritten in place and attached *before* the shrink
+  comparison, so a stage that cannot pay for its own disclosure is rejected. Rewriting in place is
+  also the honest form — the intermediate lines were false by the time a loop settled ("arrays
+  reduced to 3" when they ended at 1).
+
+- `windowSource` reported `'calibrated'` even when both percentages were nulled, making a
+  stale/exceeded bound indistinguishable from "calibrated but no data"; that case is now
+  `'calibrated-exceeded'`. Plus an error string naming the wrong skill and a broken column in
+  `--hooks`.
+
+### Changed
+
+- Five janitor proposal TRDDs refused with their evidence recorded (`design/refused/`). All four
+  typosquat findings cite lockfiles inside gitignored `downloads_dev/` archives that have no
+  `node_modules` — nothing was installed and no install script ran — and three of the names are
+  not in this project's dependency tree at all. The fourth, `preact`, **is** our real dependency
+  (`package.json`), so the ticket's "if it is a squat, remove it" would have deleted the package
+  the whole dashboard is built on.
+
 ## [2.17.1] - 2026-07-29
 
 ### Security
