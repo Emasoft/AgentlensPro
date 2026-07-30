@@ -19,6 +19,7 @@ import * as os from 'os'
 import * as path from 'path'
 import {
   selectTurns, divergence, cacheVerdict, mintNonce, NONCE_PREFIX, assertNonce,
+  findBreakpoints, survivingCut,
   loadBaselines, saveBaselines, validateBaselines, fingerprintDrift,
   listRequestCaptures,
   type EnvFingerprint, type BaselineStore,
@@ -231,6 +232,70 @@ suite('ctxvis — divergence', () => {
     assert.strictEqual(d.kind, 'break')
     assert.strictEqual(d.tier, 'messages')
     assert.strictEqual(d.index, 1)
+  })
+})
+
+suite('ctxvis — cache breakpoints', () => {
+  // Modelled on a REAL Explore subagent capture: breakpoints at system[1], system[2] and the last
+  // message, and none at the tools boundary. Claude Code appended `cc_prev_req=` to the billing
+  // block at system[0] on turn 2, so the divergence landed BEFORE every breakpoint — and the API
+  // billed cache_read 0, re-writing all 84,158 tokens even though the 89 tool schemas were
+  // byte-identical. Predicting from the divergence point alone claimed 67,964 would survive.
+  const withBreakpoints = (): RequestBody => ({
+    model: 'claude-opus-5',
+    tools: [{ name: 'Bash' }, { name: 'Read' }],
+    system: [
+      { type: 'text', text: 'billing metadata; cc_is_subagent=true' },
+      { type: 'text', text: 'the big system prompt', cache_control: { type: 'ephemeral' } },
+      { type: 'text', text: 'more system', cache_control: { type: 'ephemeral' } },
+    ] as RequestBody['system'],
+    messages: [msg('user', `go ${NONCE}`)],
+  })
+
+  test('finds breakpoints in canonical order and ignores blocks without one', () => {
+    assert.deepStrictEqual(findBreakpoints(withBreakpoints()), [
+      { tier: 'system', index: 1 },
+      { tier: 'system', index: 2 },
+    ])
+  })
+
+  test('a divergence BEFORE every breakpoint leaves nothing — not the identical prefix before it', () => {
+    const a = withBreakpoints()
+    const b = clone(a)
+    b.system![0] = { type: 'text', text: 'billing metadata; cc_is_subagent=true; cc_prev_req=req_x' }
+    const div = divergence(a, b)
+    assert.strictEqual(div.tier, 'system')
+    assert.strictEqual(div.index, 0)
+    assert.strictEqual(survivingCut(a, div), null,
+      'no breakpoint precedes system[0], so the byte-identical tool schemas are still re-written')
+  })
+
+  test('a later divergence falls back to the last breakpoint before it', () => {
+    const a = withBreakpoints()
+    a.messages!.push(msg('assistant', 'reply'), msg('user', 'next'))
+    const b = clone(a)
+    b.messages![1] = msg('assistant', 'edited reply')
+    const div = divergence(a, b)
+    assert.strictEqual(div.tier, 'messages')
+    assert.deepStrictEqual(survivingCut(a, div), { tier: 'system', index: 2 })
+  })
+
+  test('a breakpoint AT the divergence does not survive — its own segment changed', () => {
+    const a = withBreakpoints()
+    const b = clone(a)
+    b.system![1] = { type: 'text', text: 'changed', cache_control: { type: 'ephemeral' } } as never
+    const div = divergence(a, b)
+    assert.strictEqual(div.index, 1)
+    assert.deepStrictEqual(survivingCut(a, div), null,
+      'the breakpoint at system[1] cannot vouch for a segment that itself changed')
+  })
+
+  test('an append has no cut — the whole of turn 1 survives', () => {
+    const a = withBreakpoints()
+    const b = clone(a)
+    b.messages!.push(msg('assistant', 'x'))
+    assert.strictEqual(survivingCut(a, divergence(a, b)), null)
+    assert.strictEqual(divergence(a, b).kind, 'append')
   })
 })
 

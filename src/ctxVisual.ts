@@ -248,6 +248,53 @@ export function divergence(a: RequestBody, b: RequestBody): Divergence {
   return none('append', `${appended} message${appended === 1 ? '' : 's'} appended; prefix intact`, appended)
 }
 
+// ── cache breakpoints ─────────────────────────────────────────────────────────
+
+/** A position in the canonical prefix order. tools < system < messages. */
+export interface PrefixPos { tier: CacheTier; index: number }
+
+const TIER_RANK: Record<CacheTier, number> = { tools: 0, system: 1, messages: 2 }
+const before = (a: PrefixPos, b: PrefixPos): boolean =>
+  TIER_RANK[a.tier] !== TIER_RANK[b.tier] ? TIER_RANK[a.tier] < TIER_RANK[b.tier] : a.index < b.index
+
+/**
+ * Where the request declares `cache_control` breakpoints.
+ *
+ * THIS IS WHY IT MATTERS, and it was measured, not assumed. A cached segment ends at a breakpoint,
+ * so what survives a change is the last breakpoint STRICTLY BEFORE it — not the change's own
+ * position. On a real Explore subagent the breakpoints sit at system[1], system[2] and the final
+ * message; there is none at the tools boundary. So when Claude Code appended `cc_prev_req=` to the
+ * billing block at system[0] on turn 2, nothing at all survived — the API billed cache_read 0 and
+ * re-wrote all 84,158 tokens, even though the 89 tool schemas were byte-identical.
+ *
+ * Predicting from the divergence point alone said 67,964 tokens should have survived. It was wrong,
+ * and only the cross-check against billing revealed it.
+ */
+export function findBreakpoints(req: RequestBody): PrefixPos[] {
+  const out: PrefixPos[] = []
+  const hasCC = (v: unknown): boolean =>
+    typeof v === 'object' && v !== null && (v as { cache_control?: unknown }).cache_control !== undefined
+  ;(req.tools ?? []).forEach((t, i) => { if (hasCC(t)) out.push({ tier: 'tools', index: i }) })
+  ;(req.system ?? []).forEach((s, i) => { if (hasCC(s)) out.push({ tier: 'system', index: i }) })
+  ;(req.messages ?? []).forEach((m, i) => {
+    const c = m.content
+    if (Array.isArray(c) ? c.some(hasCC) : hasCC(c)) out.push({ tier: 'messages', index: i })
+  })
+  return out
+}
+
+/**
+ * The cut that actually survives a divergence: the last breakpoint strictly before it, or null when
+ * no breakpoint precedes it — in which case NOTHING is reused, however much of the prefix happens to
+ * be byte-identical.
+ */
+export function survivingCut(req: RequestBody, div: Divergence): PrefixPos | null {
+  if (div.kind !== 'break') return null // append/identical: the whole of A survives, no cut needed
+  const at: PrefixPos = { tier: div.tier!, index: div.index! }
+  const eligible = findBreakpoints(req).filter(bp => before(bp, at))
+  return eligible.length ? eligible[eligible.length - 1] : null
+}
+
 // ── measuring the surviving prefix ────────────────────────────────────────────
 
 /**
@@ -265,22 +312,30 @@ export function buildCommonPrefix(a: RequestBody, div: Divergence): { req: Count
   const sys = a.system ?? []
   const msgs = a.messages ?? []
 
-  if (div.kind === 'break' && div.tier === 'tools') {
-    return { req: { model, tools: tools.slice(0, div.index!), messages: [PREFIX_STUB] }, stubAdded: true }
+  // What survives is bounded by the last cache_control breakpoint BEFORE the divergence, not by the
+  // divergence itself — see survivingCut. With no breakpoint before it, nothing is reused at all,
+  // however much of the prefix is byte-identical.
+  const cut = survivingCut(a, div)
+  if (div.kind === 'break' && !cut) {
+    return { req: { model, messages: [PREFIX_STUB] }, stubAdded: true }
   }
-  if (div.kind === 'break' && div.tier === 'system') {
+
+  if (cut && cut.tier === 'tools') {
+    return { req: { model, tools: tools.slice(0, cut.index + 1), messages: [PREFIX_STUB] }, stubAdded: true }
+  }
+  if (cut && cut.tier === 'system') {
     return {
       req: {
         model,
         ...(tools.length ? { tools } : {}),
-        system: sys.slice(0, div.index!),
+        system: sys.slice(0, cut.index + 1),
         messages: [PREFIX_STUB],
       },
       stubAdded: true,
     }
   }
 
-  const head = div.kind === 'break' && div.tier === 'messages' ? msgs.slice(0, div.index!) : msgs
+  const head = cut && cut.tier === 'messages' ? msgs.slice(0, cut.index + 1) : msgs
   const shell = { model, ...(tools.length ? { tools } : {}), ...(sys.length ? { system: sys } : {}) }
   if (head.length === 0) return { req: { ...shell, messages: [PREFIX_STUB] }, stubAdded: true }
 
