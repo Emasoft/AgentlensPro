@@ -4,6 +4,47 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.19.0] - 2026-07-30
+
+### Added
+
+- **`agentlenspro ctxvis` + the `/agentlenspro-visualize-context` skill — what an agent costs to
+  KEEP RUNNING, not just to start.** `ctxmap` answers "what is in one request", which compares agents
+  at startup. It says nothing about the number that actually decides the bill: whether a turn's
+  prefix survives byte-exact into the next turn. A turn whose prefix holds is re-read at 0.1×; a turn
+  whose prefix broke pays the write rate on everything from the break onward — so a lean agent that
+  breaks its prefix every turn is more expensive than a fat agent that never does. The skill spawns
+  the named agent(s) for real, reads their raw OTLP captures, and reports turn 1, turn 2, the exact
+  diff, and a cache verdict. Accepts one or more agents; the subject is always spawned (a new agent
+  has nothing on disk to read) while `Explore` / `Plan` / `general-purpose` are cached baselines,
+  re-validated against the environment the subject was just measured in.
+  - **Capture selection is exact, not heuristic.** A subagent shares its parent's `session_id` and
+    one session interleaves concurrent streams, so session id cannot isolate a spawned agent. The
+    skill plants a nonce — but the nonce alone is not enough, because the *parent's* requests carry
+    it too (it emitted the `Agent` tool_use and receives the tool_result) and they are larger and
+    more numerous. The discriminator is position: a subagent's injected prompt is `messages[0]` and
+    the parent's copy never is. Verified on a live run, where it rejected 41 captures from the
+    spawning session.
+  - **The cache verdict is predicted, then checked against what was billed.** `divergence()` walks
+    the canonical `tools → system → messages` order; turn 2's response `usage` is ground truth. Both
+    are shown. Where they disagree the report says so rather than picking the flattering number —
+    which already caught a wrong prediction of its own during development.
+  - **What survives is bounded by the last `cache_control` breakpoint BEFORE the change**, not by the
+    change's own position. A byte-identical prefix sitting before the first breakpoint is still
+    re-written in full.
+  - `--html FILE` writes a self-contained report that opens offline: measured bands, per-band
+    expansion with full paths, a billing bar showing reused-versus-re-written at the same scale as
+    the content bar, light/dark, no inner scrollers.
+
+### Changed
+
+- **`ctxmap` keeps the full path of each injected file** (`CtxElement.full`). The label stays the
+  basename because that is what fits a chart axis, but `gh-actions.md` alone is not something a
+  reader can paste back into a conversation and act on.
+- **`ctxmap` and `ctxvis` now appear in `agentlenspro --help`.** Both are dispatched before
+  `runDiagnosticsCli`, and `list`/`help` read the running server's tool list, so neither was
+  discoverable anywhere — `ctxmap` had that blind spot since it shipped.
+
 ## [2.18.0] - 2026-07-30
 
 ### Added

@@ -291,7 +291,9 @@ export const SKILL_NAME = 'agentlenspro-diagnostics'
  *  findPackageRoot probes for (it has always been present, so the probe keeps working on any
  *  older layout); this list is what `--install-skill` and setup's drift check iterate. Adding a
  *  skill directory without adding it here would ship it in the tarball and never install it. */
-export const SKILL_NAMES: readonly string[] = [SKILL_NAME, 'agentlenspro-cache-guard']
+export const SKILL_NAMES: readonly string[] = [
+  SKILL_NAME, 'agentlenspro-cache-guard', 'agentlenspro-visualize-context',
+]
 
 /** Walk up from a start dir to the first directory containing the shipped skill. The CLI
  *  bundle lives at <pkg>/standalone/cli.js and the test build at <repo>/out/test/cli/, so a

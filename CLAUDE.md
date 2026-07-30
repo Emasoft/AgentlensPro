@@ -52,6 +52,34 @@ of which CLAUDE.md is 64,868 tokens (28.6%), while the whole tool surface is 2.2
 tool's `agent-listing` catalog costs **65,177 tokens** in a full session.
 Evidence: `reports/ctxmap/20260730_145401+0200-exact-token-decomposition.md`.
 
+### "What does this agent cost to KEEP running" is answered ONLY by `agentlenspro ctxvis`
+
+`ctxmap` compares agents at STARTUP. The number that decides the bill is whether a turn's prefix
+survives byte-exact into the next turn: a prefix that holds is re-read at 0.1×, a prefix that broke
+pays the write rate on everything from the break onward — so a lean agent that breaks its prefix
+every turn costs more than a fat agent that never does. `/agentlenspro-visualize-context <agent>`
+spawns the agent for real and measures turns 1 and 2; the subject is ALWAYS spawned (a new agent has
+nothing on disk to read) while Explore/Plan/general-purpose are cached baselines revalidated against
+the subject's own fresh capture.
+
+Two rules that are load-bearing and were each learned the expensive way. **Selection needs a nonce
+AND a position test**: a subagent shares its parent's `session_id`, and the parent's own requests
+carry the nonce too (it emitted the `Agent` tool_use and receives the tool_result) and are larger and
+more numerous — so "the body contains the nonce" selects exactly the wrong captures with full
+confidence. A subagent's injected prompt is `messages[0]`; the parent's copy never is. **What
+survives a change is the last `cache_control` breakpoint STRICTLY BEFORE it, not the change's own
+position** — a byte-identical prefix sitting before the first breakpoint is still re-written in full.
+Measured: Claude Code appends `cc_prev_req=` to `system[0]` on a subagent's turn 2, the breakpoints
+sit at `system[1]`/`system[2]`, and all 89 identical tool schemas were re-written (`cache_read 0`,
+84,158 written, $0.53). Predicting from the divergence point alone claimed 67,964 would survive; only
+the cross-check against billed `usage` revealed it, which is why the verdict always prints both and
+reports a disagreement rather than the flattering number. **That finding is ONE verified pair — its
+preconditions look general across a 120-request sample, but "every subagent turn goes cold" is NOT
+established** (the aggregate needed request↔response pairing, which is measured-dead here; the
+nearest-after heuristic mispaired subagent requests with main-conversation responses and reported an
+impossible 189,753-token median `cache_read` against ~85k requests).
+Evidence: `reports/ctxvis/20260730_173855+0200-prefix-break-and-turn2-cost.md`.
+
 ## What this is
 
 AgentlensPro (repo: <https://github.com/Emasoft/AgentlensPro>, forked from AgentLens) is a local AI-agent observability product — a CLI, an **npx/standalone server** with a served dashboard, a **Docker image**, and Claude Code skills, all from one codebase (the VS Code extension host was removed pre-fork). It ingests OpenTelemetry traces and local session log files from Copilot, Claude Code, Codex, and OpenCode, persists them to a local SQLite DB, and renders a dashboard. See `ARCHITECTURE.md` (deep, with mermaid diagrams) and `README.md` (user-facing) for full detail.
