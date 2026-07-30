@@ -24,7 +24,6 @@
 
 import * as fs from 'fs'
 import * as path from 'path'
-import * as zlib from 'zlib'
 import { resolveDataDir } from '../dataDir'
 import { resolveBodiesReadScope } from '../captureConfig'
 import { countTokens, calibrateTokens } from '../tokenEstimator'
@@ -33,7 +32,10 @@ import {
   resolveAnthropicAuth, countTokensExact, mapLimit, countable,
   type AnthropicAuth, type CountableRequest,
 } from '../exactTokens'
+import { readBody, type ContentBlock, type Message, type ToolDef, type RequestBody, type Usage, type ResponseBody } from '../capturedBody'
 import { EXIT } from './cliErrors'
+
+export type { ContentBlock, Message, ToolDef, RequestBody, Usage, ResponseBody }
 
 export const CTXMAP_USAGE = `agentlenspro ctxmap — what is actually inside a captured API request
 
@@ -53,33 +55,9 @@ ANTHROPIC_API_KEY or a Claude Code login. With --estimate, counts fall back to t
 which reads ~40% low on this content.`
 
 // ── shapes ────────────────────────────────────────────────────────────────────
-
-interface ContentBlock {
-  type?: string
-  text?: string
-  name?: string
-  input?: unknown
-  content?: unknown
-  thinking?: string
-}
-interface Message { role?: string; content?: ContentBlock[] | string }
-interface ToolDef { name?: string; description?: string }
-interface RequestBody {
-  model?: string
-  system?: (ContentBlock | string)[]
-  messages?: Message[]
-  tools?: ToolDef[]
-}
-/** The response's FULL usage object, kept whole. The 5m/1h split decides the cache-write rate, so
- *  dropping it would discard the one number that turns tokens into money. */
-interface Usage {
-  input_tokens?: number
-  output_tokens?: number
-  cache_creation_input_tokens?: number
-  cache_read_input_tokens?: number
-  cache_creation?: { ephemeral_5m_input_tokens?: number; ephemeral_1h_input_tokens?: number }
-  service_tier?: string
-}
+// Declared once in src/capturedBody.ts — ctxvis needs the same shapes and a second copy is the
+// drift this repo fails builds over. Re-exported here so existing importers of ctxmapCli are
+// unaffected.
 
 /** Which top-level request fields were accounted for, so "nothing was missed" is a checked claim
  *  rather than an assurance. `unknown` is the future-proofing: a content-bearing field added by the
@@ -160,18 +138,6 @@ export interface CtxReport {
 }
 
 // ── io ────────────────────────────────────────────────────────────────────────
-
-function readBody(p: string): unknown {
-  let raw = fs.readFileSync(p)
-  if (raw[0] === 0x1f && raw[1] === 0x8b) raw = zlib.gunzipSync(raw)
-  try {
-    return JSON.parse(raw.toString('utf8'))
-  } catch (e) {
-    // Name the file: a bare "Unexpected token" from a 900KB body is unactionable, and a
-    // half-flushed capture is the normal way this fails.
-    throw new Error(`${path.basename(p)} is not readable as a captured body: ${(e as Error).message}`)
-  }
-}
 
 /** A dir in the read scope stat'd as a directory when the scope was resolved, but permissions can
  *  still deny the listing — and a scan that dies on one dir reports nothing about the others. */
@@ -270,7 +236,6 @@ function pairUsage(requestPath: string, model: string | undefined, rawTotal: num
   return selectPairing(bodies, model, rawTotal)
 }
 
-interface ResponseBody { model?: string; usage?: Usage }
 
 /** The pairing rule, separated from the io so it can be tested directly. `cands` arrives ordered
  *  closest-in-time first, which is what breaks an exact tie on size. */
