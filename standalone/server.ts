@@ -15,6 +15,7 @@ import { exec, execFile } from 'child_process'
 import { summarizeSpans } from '../src/spanSummarizer'
 import { packageVersion } from '../src/packageVersion'
 import { dataDir as agentlensDataDir } from '../src/dataDir'
+import { normalizeBasePath, stripBasePath } from '../src/basePath'
 import { VersionedCache } from '../src/derivedCache'
 import { startLoopWatchdog } from '../src/loopWatchdog'
 import { mergeOtelAndLogSessions, linkSubagentTranscripts, graftOtelAttribution } from '../src/feedMergePolicy'
@@ -90,6 +91,10 @@ const BIND_HOST  = process.env.BIND_HOST ?? '127.0.0.1'
 
 const mediaDir  = path.join(__dirname, '..', 'media')
 const DATA_DIR  = agentlensDataDir()
+
+/** AgentlensPro#4 — the prefix this server is mounted under when a reverse proxy serves it beneath a
+ *  path. Rules live in src/basePath.ts so they are unit-testable without booting this file. */
+const BASE_PATH = normalizeBasePath(process.env.AGENTLENS_BASE_PATH)
 
 // THE KILL-SWITCH, ENFORCED AT THE CHOKEPOINT (TRDD-K3WDPR7M). Guarding the CLI's spawn sites was
 // not enough: on 2026-07-15 a server booted 3 minutes after `agentlenspro disable` through a spawn
@@ -2084,8 +2089,11 @@ function getHtml(restrictedViewer: boolean): string {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">${viewerMeta}
   <title>AgentLens</title>
-  <link rel="icon" href="/mascot.png" type="image/png">
-  <link rel="stylesheet" href="/dashboard.css">
+  <link rel="icon" href="${BASE_PATH}/mascot.png" type="image/png">
+  <link rel="stylesheet" href="${BASE_PATH}/dashboard.css">
+  <!-- AgentlensPro#4: the mount prefix, read by media/src/apiBase.ts. A <base> tag cannot do this
+       job — it rewrites RELATIVE urls, and every fetch here is root-absolute. -->
+  <script>window.__AGENTLENS_BASE__ = ${JSON.stringify(BASE_PATH)};</script>
   <style>
     /* ── VS Code theme variable shim ─────────────────────────────────────── */
     :root {
@@ -2605,7 +2613,7 @@ function getHtml(restrictedViewer: boolean): string {
     };
   </script>
 
-  <script src="/dashboard.js" onload="console.log('[AgentLens] dashboard.js loaded', Date.now())"></script>
+  <script src="${BASE_PATH}/dashboard.js" onload="console.log('[AgentLens] dashboard.js loaded', Date.now())"></script>
 
   <script>
     // Sidebar collapse driven by dashboard toggle
@@ -2615,7 +2623,7 @@ function getHtml(restrictedViewer: boolean): string {
     });
 </script>
   <script>var __SIDEBAR_INIT__ = ${sidebarInitJson};</script>
-  <script src="/sidebar.js"></script>
+  <script src="${BASE_PATH}/sidebar.js"></script>
 </body>
 </html>`
 }
@@ -2817,7 +2825,17 @@ function admitLeaveOnDone(res: http.ServerResponse): void {
 }
 
 const uiServer = http.createServer(async (req, res) => {
-  const url = (req.url ?? '/').split('?')[0]
+  // AgentlensPro#4 — BASE PATH. ai-maestro root-mounts us on a separate port purely because our
+  // assets and /api/* are root-absolute: under a prefix on their existing port those would resolve
+  // against THEIR origin and hit ai-maestro's own /api/*, silently cross-wiring two different APIs.
+  // The separate port is what forces them to rewrite our CSP frame-ancestors. With a base path they
+  // can serve us same-origin and `frame-ancestors 'self'` is satisfied exactly as written.
+  //
+  // Stripped HERE, at the one place the path is derived, so all ~36 exact-match routes below keep
+  // working untouched. Stripping is CONDITIONAL: a request that does not carry the prefix is served
+  // as-is, because hooks and the CLI talk to this server directly and know nothing about a prefix
+  // the operator set for a proxy. The base path is a serving concern, never an access gate.
+  const url = stripBasePath((req.url ?? '/').split('?')[0], BASE_PATH)
   instrumentResponse(req, res, url)
   // ACAO only for allowed (same-origin/loopback) origins — never the wildcard (see setAllowedOriginCors:
   // the read endpoints carry the user's session data, so ACAO:* was a cross-origin read-exfil vector).

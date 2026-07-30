@@ -2,6 +2,7 @@ import { render } from 'preact'
 import { App, TABS } from './App'
 import { setVscode, activeTab, isRestrictedBlockedTab } from './state'
 import { parseEmbedParams } from '../../src/shared/embedParams'
+import { installBasePathFetch } from './apiBase'
 
 import './styles/base.css'
 import './styles/toolbar.css'
@@ -15,6 +16,19 @@ import './styles/help.css'
 import './styles/tooltip.css'
 import './styles/insights.css'
 import './styles/graph.css'
+
+// AgentlensPro#4 — make every request mount-aware, ONCE, before anything can issue one.
+//
+// This is a deliberate global override, not an oversight. The alternative is prefixing each of the
+// ten root-absolute fetch sites by hand, which works right up until someone adds an eleventh — and
+// that regression is invisible until a proxied deployment 404s. The rule is uniform and total
+// ("a root-absolute path resolves against our mount, not the origin"), so it belongs at one
+// chokepoint rather than replicated at every call.
+//
+// Contained by construction: this bundle is self-contained (iife) and issues no third-party
+// requests, and apiUrl() only rewrites paths starting with '/' — an absolute URL passes through
+// untouched. With no prefix set (every standalone install) it is the identity function.
+installBasePathFetch()
 
 const vscode = window.acquireVsCodeApi()
 setVscode(vscode)

@@ -57,7 +57,7 @@ import type { ContextComposition } from '../shared/summarizerTypes'
 import { computeBurnStatus, DEFAULT_THRESHOLDS, type ConsumptionEvent, type BurnConfig } from '../burnMonitor'
 import { buildConversationFromFile } from '../conversation'
 import type { SessionSummaryCard, TimelineEntry } from '../shared/summarizerTypes'
-import type { AccountInfo } from '../accountInfo'
+import { parseOauthAccount, parseSubscriptionType, type AccountInfo } from '../accountInfo'
 import type { TtlContext } from '../shared/cacheTtl'
 
 const NOW = 1_700_000_000_000
@@ -328,5 +328,77 @@ suite('CLI contract lock — embed viewer-role assertion (AgentlensPro#4)', () =
       BREAK('valid user assertion ⇒ restricted viewer'))
     assert.strictEqual(resolveViewerRole('garbage-header', key, now), 'invalid',
       BREAK('unverifiable assertion ⇒ invalid/403 — NEVER a downgrade to standalone'))
+  })
+})
+
+// AgentlensPro#3 asked us to CONFIRM that the account-facing tools never emit OAuth token material.
+// The confirmation was true when checked by hand (three live tools, zero credential-shaped hits) —
+// but a confirmation nobody can re-run is exactly the silent drift that issue exists to prevent. The
+// risk is not that today's code leaks; it is that a future "just pass the whole blob through"
+// refactor of either parser widens it and no gate notices. These two functions ARE the choke-points:
+// everything account-facing downstream is built from what they return.
+suite('CLI contract lock — account tools never emit OAuth token material (AgentlensPro#3)', () => {
+  const ACCESS = 'sk-ant-oat01-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+  const REFRESH = 'sk-ant-ort01-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB'
+
+  /** Every way a secret could ride out: the literal values, and the shapes a leak would take. */
+  const assertNoSecret = (emitted: unknown, what: string): void => {
+    const s = JSON.stringify(emitted ?? null)
+    for (const secret of [ACCESS, REFRESH]) {
+      assert.ok(!s.includes(secret), BREAK(`${what} emitted a literal OAuth token`))
+    }
+    for (const re of [/sk-ant-[A-Za-z0-9_-]{10,}/, /eyJ[A-Za-z0-9_-]{20,}/, /"(access|refresh)_?[Tt]oken"/]) {
+      assert.ok(!re.test(s), BREAK(`${what} emitted credential-shaped material matching ${re}`))
+    }
+  }
+
+  test('parseOauthAccount lifts identity only — a ~/.claude.json carrying tokens leaks none of them', () => {
+    // A realistic file: the identity fields the tools legitimately surface, sitting right beside
+    // token material, exactly as they do on disk.
+    const claudeJson = JSON.stringify({
+      oauthAccount: {
+        accountUuid: '80ddbe47-7ad4-4af7-a381-cf908e33c916',
+        emailAddress: 'someone@example.com',
+        organizationUuid: 'org-1234',
+        organizationRateLimitTier: 'tier_4',
+        userRateLimitTier: 'tier_3',
+        displayName: 'Someone',
+        accessToken: ACCESS,
+        refreshToken: REFRESH,
+      },
+      accessToken: ACCESS,
+      other: { nested: { refreshToken: REFRESH } },
+    })
+    const id = parseOauthAccount(claudeJson)
+    assert.ok(id, 'the identity must still parse — this test must not pass by returning nothing')
+    // The input key is `emailAddress`; the emitted field is `email` — assert the EMITTED name, so
+    // this test also pins the rename the tools' consumers depend on.
+    assert.strictEqual(id.email, 'someone@example.com', 'identity fields still surface')
+    assert.strictEqual(id.organizationRateLimitTier, 'tier_4')
+    assertNoSecret(id, 'parseOauthAccount')
+  })
+
+  test('parseSubscriptionType returns the plan string ONLY — the credential blob around it is dropped', () => {
+    // This is the higher-risk parser: its input is the KEYCHAIN blob, which really does hold the
+    // access and refresh tokens. It must return one non-secret string and nothing else.
+    for (const blob of [
+      JSON.stringify({ claudeAiOauth: { subscriptionType: 'max', accessToken: ACCESS, refreshToken: REFRESH } }),
+      JSON.stringify({ subscriptionType: 'pro', accessToken: ACCESS }), // older top-level shape
+    ]) {
+      const plan = parseSubscriptionType(blob)
+      assert.ok(plan === 'max' || plan === 'pro', 'the plan must still be extracted')
+      assert.strictEqual(typeof plan, 'string', BREAK('parseSubscriptionType must return a bare string, never the blob'))
+      assertNoSecret(plan, 'parseSubscriptionType')
+    }
+  })
+
+  test('a malformed or token-only blob yields null, never a passthrough of what it could not parse', () => {
+    // The failure path is where a passthrough would hide: "I could not parse it, here it is back".
+    for (const bad of ['not json', '', '{}', JSON.stringify({ accessToken: ACCESS })]) {
+      assertNoSecret(parseSubscriptionType(bad), 'parseSubscriptionType(malformed)')
+      assertNoSecret(parseOauthAccount(bad), 'parseOauthAccount(malformed)')
+    }
+    assert.strictEqual(parseSubscriptionType(JSON.stringify({ accessToken: ACCESS })), null,
+      BREAK('a blob with no subscriptionType must yield null, not something derived from the token'))
   })
 })
