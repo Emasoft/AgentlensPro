@@ -4,7 +4,7 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
-## [2.19.0] - 2026-07-30
+## [2.19.0] - 2026-07-31
 
 ### Added
 
@@ -45,6 +45,17 @@ All notable changes to AgentlensPro are documented here.
   satisfied. Stripping is **conditional** — an unprefixed path still serves, because hooks and the
   CLI talk to the server directly and know nothing about a proxy prefix; a base path is a serving
   concern, never an access gate.
+
+- **`safe_config_edit.py` gained a `remove_by_substring` op — the symmetric counterpart of
+  `append_unique`, and it exists for the same reason.** Removing entries could only be expressed as
+  a whole-array `set`, whose value the caller computes from a read taken *before* the editor's lock,
+  so a hook another tool appends in between is silently clobbered (the S3-F5 TOCTOU that
+  `hookInstall.ts` already names, and already dodges on the pure-add path by using `append_unique`).
+  The new op names only the substring, never a surviving array, so the filter runs on the tree the
+  editor itself read under the lock; optional `nested_key` keeps a sibling hook sharing our matcher
+  and drops the matcher only when it held nothing else. `verify_diff` asserts the promise, scoped to
+  the nested arrays when `nested_key` is set. The script is in the published `files` allowlist, so
+  this reaches anyone driving the editor directly.
 
 ### Changed
 
