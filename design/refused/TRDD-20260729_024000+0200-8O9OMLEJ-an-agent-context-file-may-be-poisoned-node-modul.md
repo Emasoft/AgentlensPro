@@ -1,9 +1,9 @@
 ---
 trdd-id: 8O9OMLEJ
 title: an agent-context file may be poisoned: node_modules/playwright/lib/agents/generateAgents.js
-column: proposal
+column: refused
 created: 2026-07-29T02:40:00+0200
-updated: 2026-07-29T02:40:00+0200
+updated: 2026-07-30T11:45:59+0200
 current-owner: janitor
 task-type: security
 severity: critical
@@ -53,5 +53,21 @@ scheduler dispatches **janitor-security-agent** to fix it at the next free heart
 The dispatched agent is fail-safe: it fixes what is safe and FLAGS what needs a human (it never
 rotates credentials, never force-pushes, never pushes to `main`). It returns one line plus a report
 path, and closes the ticket with an explicit status.
+
+## Approval log
+
+- 2026-07-30T11:45:59+0200 — REFUSED by the project Claude on the USER's authority. The finding
+  points at `node_modules/playwright/lib/agents/generateAgents.js`, which is **not editable state**:
+  `pnpm install` regenerates it, so any "fix" is erased on the next install and the ticket would
+  re-open forever. Verified first-hand rather than assumed:
+  `require('./node_modules/playwright/package.json').scripts` is `{}` — playwright runs **nothing**
+  at install time, so merely having the package on disk executes no code. The generator only runs on
+  an explicit playwright subcommand, and that invocation is already refused by the armed
+  `PreToolUse(Bash)` deny hook `scripts/deny-playwright-init-agents.js`, confirmed registered in
+  `.claude/settings.json` (which is PROJECT scope and tracked, so every clone inherits it). The
+  ticket's own remediation ("strip the covert unicode") does not describe its own finding (a
+  `writeFile('.claude/agents/…')` call) — template and detector have drifted apart, so following it
+  would act on a payload that was never alleged to exist. Refusing costs nothing: the actual attack
+  path is blocked at the only place it can be triggered.
 
 ## Notes and lessons learned
