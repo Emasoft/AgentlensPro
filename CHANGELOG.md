@@ -4,6 +4,40 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.20.0] - 2026-07-31
+
+### Added
+
+- **`micro-worker` — the first of the shipped superoptimized agents.** A minimal-footprint worker
+  for one bounded, fully-specified task, pinned to `sonnet[1m]` at medium effort with a four-tool
+  surface (`Bash, Read, Edit, Write`). Omitting the `Skill` tool drops the entire skill catalog
+  from its prefix, and carrying no MCP keeps the tool tier small — the two levers that dominate a
+  subagent's startup cost.
+
+  Two properties are structural rather than advisory. **Verification is unconditional**: the
+  `obra/superpowers` Iron Law (*no completion claims without fresh verification evidence*) is
+  inlined, and the evidence is folded into the output format, so a `[DONE]` without its
+  `verified:` clause is malformed — a task cannot waive it and neither can the agent. When a
+  prompt names no check, the agent derives the narrowest falsifying one and says which it used,
+  or reports `[UNVERIFIED]`. **Its reply is one project-relative path and nothing else**: the
+  report goes to `reports/micro-worker/<ts±tz>-<slug>.md` under the *parent project root* — never
+  a linked worktree's `reports/`, which is thrown away with the branch — and its first line is
+  the status line, so a caller reads the verdict with `head -1` instead of paying for the detail
+  in context.
+
+- **`verification-before-completion` skill**, vendored verbatim from `obra/superpowers` (MIT) with
+  a provenance header pinning the upstream ref. The agent carries an inlined condensation because
+  it ships without the `Skill` tool; the copy exists so the two can be kept in step.
+
+### Changed
+
+- **The npm tarball now ships `.claude/agents/` and `.claude/skills/`.** Without this the agent
+  work existed only in the repo — the allowlist excluded it, so a published version delivered
+  none of it. `.claude/project/memory/` (1.6 MB of internal engineering notes) and
+  `.claude/settings.json` (whose hook references a script outside the allowlist) are deliberately
+  left out; verified against `npm pack --dry-run` rather than assumed, since npm's handling of
+  dot-directories in `files` is not obvious.
+
 ## [2.19.0] - 2026-07-31
 
 ### Added
