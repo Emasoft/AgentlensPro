@@ -2,7 +2,7 @@
 name: dashboard-tree-render-topology
 description: "where does the session timeline / waterfall / flow tree render in the dashboard / I added a button to Traces.tsx or Flow.tsx but it's invisible / there is no Traces or Flow tab in the UI / which component actually shows the subagent tree"
 ocd: 2026-07-12
-lmd: 2026-07-17
+lmd: 2026-07-30
 metadata:
   node_type: memory
   tier: component
@@ -42,12 +42,12 @@ dashboard.js, but a NEW server route (e.g. an `/api/*` endpoint) needs the serve
 [[always-on-ingestion-model]].
 
 ## Notes and lessons learned
-[^1]: [ocd:2026-07-12 lmd:2026-07-12] TRDD-4CH9QLAH (copy-branch ⧉ tree button) first wired the button
+[^1]: [id:ATOM-FILENAME-NOT-RENDER-SURFACE, status:valid, keywords:"added_button_to_traces_tsx_but_invisible file_name_not_the_render_surface verify_actual_render_path_before_mounting dev_browser_check", ocd:2026-07-12, lmd:2026-07-12] TRDD-4CH9QLAH (copy-branch ⧉ tree button) first wired the button
   into `SessionBlock` (Traces tab) + `SubAgentBranch` + the Flow toolbar, then dev-browser found the
   SessionBlock mount was invisible because the Traces tab doesn't exist. Lesson: the file name
   (`Traces.tsx`/`Flow.tsx`) is NOT the render surface — verify the actual `ActivePanel`/`SessionDetail`
   render path before mounting UI, and prefer a live dev-browser check to confirm the element renders.
-[^2]: [ocd:2026-07-17 lmd:2026-07-17 keywords:"edited_dead_code inert_edit tree_shaken Cost_tab Flow_reroute file_inventory_vs_render_tree recall_before_editing"] DO NOT trust a file-based
+[^2]: [id:ATOM-RECALL-BEFORE-EDITING-DEAD-CODE, status:valid, keywords:"edited_dead_code inert_edit tree_shaken Cost_tab Flow_reroute file_inventory_vs_render_tree recall_before_editing", ocd:2026-07-17, lmd:2026-07-17] DO NOT trust a file-based
   inventory (a `.tsx` under `media/src/tabs/`) as the set of live surfaces — TRDD-06Q5AXYN (global
   time-window) edited dead code TWICE: Phase 2 rewrote `Cost()`'s aggregates and a Phase-1 reroute
   touched `Flow()`; BOTH landed **inert** (tree-shaken, changed nothing the user sees). BECAUSE the

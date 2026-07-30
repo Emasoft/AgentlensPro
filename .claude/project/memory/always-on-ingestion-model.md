@@ -2,7 +2,7 @@
 name: always-on-ingestion-model
 description: "how does no-loss ingestion work / is a log lost when the server is down / why isn't there a separate ingestion daemon / where do undelivered hooks go / hook-spool / server melts under many claude instances / 20 instances hammering the cli / admission control / 503 Retry-After / server busy backpressure / how to keep ingestion up 24/7 / daemon install launchd / why did a request get shed"
 ocd: 2026-07-12
-lmd: 2026-07-12
+lmd: 2026-07-30
 metadata:
   node_type: memory
   type: project
@@ -51,16 +51,18 @@ events POSTed while the server is down. Both are closed below.[^1]
   spool + detached revive are best-effort and fully guarded.
 - Admission shedding is a COST/stability control, not security. It fails toward availability
   (queue→shed→spool), never toward blocking a Claude launch.
-- See also [[agentlens-burn-token-model]] (the gate the admission controller sheds), [[cache-ttl-model]].
+- See also [[agentlens-burn-token-model]] (the gate the admission controller sheds), [[cache-ttl-model]],
+  [[dashboard-tree-render-topology]] (the same "rebuild needs a process restart" discipline
+  applies to a new `/api/*` route here).
 
 ## Notes and lessons learned
-[^1]: [ocd:2026-07-12 lmd:2026-07-12] Phase 1 was PLANNED as a two-process split (separate ingestion
+[^1]: [id:ATOM-VERIFY-LOSS-VECTORS-FIRST, status:valid, keywords:"why_isnt_there_a_separate_ingestion_daemon jsonl_already_loss_less two_process_split_rejected verify_actual_loss_vectors_before_building", ocd:2026-07-12, lmd:2026-07-12] Phase 1 was PLANNED as a two-process split (separate ingestion
   daemon; dashboard a reader). During implementation the investigation surfaced that JSONL is already
   loss-less (offset backfill) and the split is high-risk for marginal benefit; flagged to the user,
   who chose the simpler hook-revive + spool. Lesson: verify the ACTUAL loss vectors before building
   a big architecture to fix an assumed one — most of "no log lost" was already true, so the remaining
   gap (OTEL + hooks during downtime) had a far cheaper solution than a process split.
-[^2]: [ocd:2026-07-12 lmd:2026-07-12] a first admission integration test asserted a concurrent burst
+[^2]: [id:ATOM-DETERMINISTIC-OVERLOAD-TEST, status:valid, keywords:"timing_dependent_overload_test_flaky admission_shed_did_not_trigger force_condition_deterministically_hard_rss_wall", ocd:2026-07-12, lmd:2026-07-12] a first admission integration test asserted a concurrent burst
   would shed — it did NOT, because `/api/summary` on an empty server is too fast for requests to
   overlap at maxInflight=2 (shedTotal=0). Lesson: never assert on timing-dependent overload in an
   integration test; force the condition deterministically (a 1 MiB hard RSS wall sheds every request

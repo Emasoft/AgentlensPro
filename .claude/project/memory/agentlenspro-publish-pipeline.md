@@ -2,7 +2,7 @@
 name: agentlenspro-publish-pipeline
 description: "how do I release / publish a new version of agentlenspro / npm publish fails E404 Not Found PUT / CI publish rejected / provenance badge missing / can I publish from local / how was the package bootstrapped on npm / zizmor flags the workflows / where are the SBOM and checksums for a release / my zizmor ignore comment is not working / I pushed the tag but no release workflow ran — the release pipeline, its laws, and the bootstrap history"
 ocd: 2026-07-11
-lmd: 2026-07-23
+lmd: 2026-07-30
 metadata:
   node_type: memory
   type: project
@@ -57,20 +57,22 @@ History: 1.0.0 was the sanctioned LOCAL bootstrap publish (2026-07-11, browser/p
 auth from a detached worktree of main — the registry cannot attach a trusted publisher to
 a package that does not exist, npm/cli#8544); the trusted publisher was configured right
 after, and every release since is CI-only. See also [[agentlenspro-identity]],
-[[cache-ttl-model]].
+[[cache-ttl-model]], [[agentlenspro-ops-lessons]] (ops doctrine that cites this pipeline),
+[[dashboard-tree-render-topology]] (a rebuild here needs a server restart, same discipline
+that page's dashboard-bundle rule follows).
 
 ## Notes and lessons learned
 
-[^1]: [ocd:2026-07-11 lmd:2026-07-11] the user registered the trusted publisher as
+[^1]: [id:ATOM-PUBLISH-FILENAME-MISMATCH, status:valid, keywords:"npm_publish_fails_E404_Not_Found_PUT trusted_publisher_registered_filename_mismatch renamed_workflow_to_match", ocd:2026-07-11, lmd:2026-07-11] the user registered the trusted publisher as
   `publish.yml` while the repo's workflow was `release.yml`; every CI publish would have
   died at the exchange. Fixed by renaming the workflow (899292b) — the cheaper side to
   move. Lesson: treat (registered filename ↔ actual filename) as one invariant; check it
   in publish-readiness.
-[^2]: [ocd:2026-07-11 lmd:2026-07-11] the fork inherited a stale `.npmignore` that silenced
+[^2]: [id:ATOM-NPMIGNORE-SHADOWS-GITIGNORE, status:valid, keywords:"npmignore_silently_overrides_gitignore private_reports_in_tarball_dry_run files_allowlist_single_selector", ocd:2026-07-11, lmd:2026-07-11] the fork inherited a stale `.npmignore` that silenced
   `.gitignore`, putting gitignored `reports/` and `design/` into the tarball dry-run.
   Deleted it and moved to the `files` whitelist (ec8be5e). Lesson: two selectors deciding
   one question is the bug class; keep exactly one.
-[^3]: [ocd:2026-07-11 lmd:2026-07-11] the Docker publish (docker.yml) silently FAILED for
+[^3]: [id:ATOM-DOCKER-PUBLISH-SILENT-FAIL, status:valid, keywords:"docker_publish_silently_failed_while_npm_succeeded latest_tag_stuck_two_releases dockerfile_copy_gitignored_build_artifact verify_from_clean_context", ocd:2026-07-11, lmd:2026-07-11] the Docker publish (docker.yml) silently FAILED for
   v2.3.1 AND v2.4.0 while npm published fine — nobody noticed until v2.4.0, so `:latest`
   sat stuck at 2.3.0 for two releases. Cause: the Dockerfile `COPY media/dashboard.css`
   from the build context, but 2.3.1 made dashboard.css a gitignored esbuild build artifact
@@ -84,7 +86,7 @@ after, and every release since is CI-only. See also [[agentlenspro-identity]],
   (git-archive / .dockerignore-excluded), never the dirty working tree — npm's
   build-before-pack hid the same class on the npm side; (c) a `vX.Y.Z` tag fans out to
   TWO publish workflows — check both conclusions.
-[^4]: [ocd:2026-07-16 lmd:2026-07-16] two traps from the TRDD-OMMPS5TF hardening pass:
+[^4]: [id:ATOM-ZIZMOR-IGNORE-OWN-COMMENT, status:valid, keywords:"zizmor_ignore_comment_not_working ignore_must_be_its_own_comment_marker id_token_write_unscoped_false_positive", ocd:2026-07-16, lmd:2026-07-16] two traps from the TRDD-OMMPS5TF hardening pass:
   (a) DO NOT append `zizmor: ignore[rule]` inside an existing comment (e.g. the SHA-pin
   version comment), BECAUSE zizmor only recognizes the ignore when it is its own `#`-marked
   comment on the line — the finding silently persists. DO give the ignore its own

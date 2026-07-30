@@ -2,7 +2,7 @@
 name: otlp-ingest-topology
 description: "which OTLP ingest path is actually live / codex sessions grouped wrong / grouped by conversation not per prompt / multiple otlp parsers or processLogs copies / where does the shipped ingest live / second router is a second truth / why did an ingest fix not take effect / how many places parse the OTLP wire format / what OTEL attributes does Claude Code emit / which telemetry fields are we not reading / where does client_request_id or tool_source go"
 ocd: 2026-07-11
-lmd: 2026-07-26
+lmd: 2026-07-30
 metadata:
   node_type: memory
   tier: hub
@@ -122,14 +122,14 @@ EXACTLY; the flat $6.25 gives 2.569146. Recomputing is only needed on the JSONL-
   rather than negative, which is what left the door open to check it properly instead of shipping
   the guess — record a weak probe as weak.)
 
-[^1]: [ocd:2026-07-11 lmd:2026-07-11] S3-F3 was first scoped (from a compaction handoff)
+[^1]: [id:ATOM-FOURTH-COPY-MISSED, status:valid, keywords:"how_many_places_parse_the_otlp_wire_format second_router_second_truth summarizer_grouper_missed_by_finding grep_whole_pipeline_not_just_ingest", ocd:2026-07-11, lmd:2026-07-11] S3-F3 was first scoped (from a compaction handoff)
   as a two-way, then three-way divergence; the ACTUAL topology is four-way — the
   summarizer's `groupCodexSpansBySession` was missed by the finding AND by the initial
   analysis. Lesson: when consolidating "the N implementations of X", grep the WHOLE
   pipeline (ingest AND the downstream summarizer/reader), not just the ingest layer —
   `grep -rn "codex:.*prompt-" src standalone` surfaced all four. The user-visible behavior
   may be owned by a copy the finding never named.
-[^2]: [ocd:2026-07-11 lmd:2026-07-11] S3-F3b (gen_ai buffering to the shipped path) was
+[^2]: [id:ATOM-PORT-REQUIREMENT-NOT-MACHINERY, status:valid, keywords:"gen_ai_buffering_ported_as_simpler_overload segmented_span_store_read_time_overlay port_requirement_not_incidental_machinery", ocd:2026-07-11, lmd:2026-07-11] S3-F3b (gen_ai buffering to the shipped path) was
   scoped as "port the collector's buffer + drain + injectSpanAttribute" but shipped as a
   SIMPLER read-time overlay with NO buffer. Why: the collector needed a buffer only because
   the legacy `sessionStore.injectSpanAttribute` mutates an EXISTING in-memory span (nothing
@@ -142,7 +142,7 @@ EXACTLY; the flat $6.25 gives 2.569146. Recomputing is only needed on the JSONL-
   Lesson: when porting a mechanism across stores, port the REQUIREMENT (attach content to a
   span by id, any order) not the incidental MACHINERY (a buffer that existed to work around
   the old store's mutate-in-place constraint).
-[^3]: [ocd:2026-07-11 lmd:2026-07-11] Phase 0b was scoped as "fold the fourth copy onto the
+[^3]: [id:ATOM-N-COPIES-NOT-ALWAYS-ONE-MERGE, status:valid, keywords:"full_fold_rejected_would_change_grouping unify_atoms_not_algorithms characterization_test_before_assuming_fold_is_mechanical", ocd:2026-07-11, lmd:2026-07-11] Phase 0b was scoped as "fold the fourth copy onto the
   normalizer (adapter: full-span-list in, groups out)". After verifying the algorithms, the
   full fold was REJECTED: the batch grouper honors an explicit `codex.session.id` as the key,
   same-trace-absorbs non-prompt spans, and time-sorts — none of which the streaming resolver

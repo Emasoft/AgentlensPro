@@ -72,6 +72,11 @@ jobs:
       - name: Check no mirrors
         run: node scripts/check-no-mirrors.js
 
+      # Recall-invariant guard for the PROJECT wikimem: a `[^N]` lesson without `keywords:`
+      # is on disk and unreachable, because keywords is the only field recall ranks on.
+      - name: Check memory lessons are recallable
+        run: node scripts/check-memory-lessons.js
+
       # Bundles MUST be built BEFORE the unit suite: the server integration
       # tests boot the bundled standalone/server.js, which is an esbuild output
       # (only the .ts sources are tracked). Running mocha first fails with

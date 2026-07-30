@@ -2,7 +2,7 @@
 name: agentlenspro-ops-lessons
 description: "how to deploy agentlenspro on a machine / setup vs manual install / hooks stopped firing after an upgrade / config file wiped or corrupted after an edit / is agentlenspro npm-linked or registry-installed / does switching the cli to an ordinary npm install lose my db or settings / where does the data live / can other agents on this machine use the cli / does the dev npm link affect normal published users / background agent shows running but does nothing / a fork started acting like the orchestrator / does agentlenspro run on Windows / setup fails with unsupported platform or node too old / server hangs at 100% cpu and every request times out or SIGTERM is ignored / a settings.json env key keeps reverting or getting overwritten after every server restart / the diagnostics skill shows a stale tool count or drifted from the live CLI surface / how many diagnostic tools are there / keeping the skill and the CLI --help in sync / can I run a second server for testing / two servers at once / I changed the ports so it is isolated right / dev instance wrote to my live data dir / invalid log tail offsets after a restart / I rebuilt and restarted but nothing changed / my fix is not live even though esbuild succeeded / am I testing the repo build or the published one — operational doctrine and field lessons"
 ocd: 2026-07-11
-lmd: 2026-07-28
+lmd: 2026-07-30
 metadata:
   node_type: memory
   type: project
@@ -77,23 +77,24 @@ never this git-tracked page[^6]):
   catches.[^5]
 
 Governed by [[cache-ttl-model]] (TTL regimes) and [[agentlens-burn-token-model]]
-(accounting); see also [[agentlenspro-publish-pipeline]].
+(accounting); see also [[agentlenspro-publish-pipeline]], [[agentlenspro-identity]] (the
+project-identity hub this operational doctrine serves).
 
 ## Notes and lessons learned
 
-[^1]: [ocd:2026-07-11 lmd:2026-07-11] promoted from the old-repo LOCAL note
+[^1]: [id:ATOM-SETTINGS-WIPE-GUARDRAIL, status:valid, keywords:"config_file_wiped_or_corrupted_after_edit settings.json_wiped safeConfigEdit_guard start_fresh_on_parse_failure_removed", ocd:2026-07-11, lmd:2026-07-11] promoted from the old-repo LOCAL note
   `config-writes-only-via-safe-editor` so the fork's contributors inherit it — the wipe
   incident predates the fork but the guarded code (`src/safeConfigEdit.ts`) is in this
   repo.
-[^2]: [ocd:2026-07-11 lmd:2026-07-11] pinger-v4 incident: the fork collapsed a bounded
+[^2]: [id:ATOM-ZOMBIE-FORK-LIVENESS, status:valid, keywords:"background_agent_shows_running_but_does_nothing zombie_fork_stuck_blocking_call liveness_by_transcript_mtime_not_task_alive", ocd:2026-07-11, lmd:2026-07-11] pinger-v4 incident: the fork collapsed a bounded
   230s tick loop into one unbounded kill-file poll; it sat "running" 4h with its
   transcript untouched. The gate's keep-warm allowance and the liveness-by-mtime rule
   come from this.
-[^3]: [ocd:2026-07-11 lmd:2026-07-11] promoted from the old-repo LOCAL note
+[^3]: [id:ATOM-FORK-IDENTITY-ANCHOR, status:valid, keywords:"a_fork_started_acting_like_the_orchestrator fork_mistakes_itself_for_orchestrator compaction_or_mid_life_directive identity_anchor_birth_prompt", ocd:2026-07-11, lmd:2026-07-11] promoted from the old-repo LOCAL note
   `fork-mis-resume-as-orchestrator` (a fork inherited a compaction summary and acted as a
   second orchestrator, spawning a duplicate phase agent). The anchor discipline plus the
   gate's fork rules are the guardrails.
-[^4]: [ocd:2026-07-11 lmd:2026-07-11] the user (correctly) worried that (a) the machine's CLI
+[^4]: [id:ATOM-LINK-VS-REGISTRY-DECOUPLED, status:valid, keywords:"does_switching_cli_to_ordinary_npm_install_lose_my_db_or_settings does_dev_npm_link_affect_normal_published_users code_location_vs_data_location_decoupled", ocd:2026-07-11, lmd:2026-07-11] the user (correctly) worried that (a) the machine's CLI
   "being linked to the repo" might make it non-standard/unavailable to other agents and (b)
   switching to a normal install could wipe their DB/settings. Both fears dissolve on the same
   root fact: **code location and data location are fully decoupled.** The link only decides
@@ -103,7 +104,7 @@ Governed by [[cache-ttl-model]] (TTL regimes) and [[agentlens-burn-token-model]]
   (self-contained, runs with no repo) and by running the CLI from `/tmp`. Lesson: when a
   "how is this installed?" worry surfaces, separate the two questions — *where's the code?* vs
   *where's the state?* — and answer the state question from `os.homedir()`, not the package path.
-[^5]: [ocd:2026-07-11 lmd:2026-07-11] this deploy discipline exists because a dogfood (`npm link`)
+[^5]: [id:ATOM-DEPLOY-STRICT-TESTS-MANDATORY, status:valid, keywords:"npm_link_dogfood_deploy_strict green_gates_before_bundle_write burn_gate_fail_open_but_bundle_misbehaves deploy_safe_script", ocd:2026-07-11, lmd:2026-07-11] this deploy discipline exists because a dogfood (`npm link`)
   setup makes a build LIVE to many consumers at once, and testing is then non-negotiable. The subtlety
   that makes tests (not just tsc/lint) mandatory: the burn-gate is fail-OPEN, so a bundle that fails to
   load can't hurt anyone (silent no-op) — but a bundle that LOADS and then misbehaves (wrong deny,
@@ -112,7 +113,7 @@ Governed by [[cache-ttl-model]] (TTL regimes) and [[agentlens-burn-token-model]]
   ship" — the full suite must be green BEFORE the bundle is written, and a red gate means the last
   known-good bundle stays in place, not a rebuild. (A specific machine's CHOICE to run this dogfood
   setup is LOCAL-scope config, not recorded on this shared page.[^6])
-[^6]: [ocd:2026-07-11 lmd:2026-07-11] this page originally carried this MACHINE's specific install
+[^6]: [id:ATOM-PROJECT-SCOPE-LEAK-CORRECTED, status:valid, keywords:"machine_specific_install_state_moved_to_local project_memory_is_pushed_to_every_cloner would_this_be_true_for_a_stranger_cloning", ocd:2026-07-11, lmd:2026-07-11] this page originally carried this MACHINE's specific install
   state — that its `agentlenspro` was npm-linked at a concrete Homebrew path to a concrete repo path,
   and the owner's decision to dogfood the live build to their running agents. WRONG scope: PROJECT
   memory is git-tracked and pushed, so every future cloner would have inherited one machine's private
@@ -122,7 +123,7 @@ Governed by [[cache-ttl-model]] (TTL regimes) and [[agentlens-burn-token-model]]
   never pushed). Lesson: before writing a fact to PROJECT memory, ask "would this be TRUE and USEFUL
   for a stranger cloning the repo on a different machine?" — a path like `/opt/homebrew/...`, a
   hostname, or "on THIS machine / the owner decided…" answers no ⇒ it is LOCAL, not PROJECT.
-[^7]: [ocd:2026-07-16 lmd:2026-07-16] the probe's dependency check first resolved
+[^7]: [id:ATOM-DEP-RESOLVE-OWN-NODE-MODULES, status:valid, keywords:"setup_fails_with_unsupported_platform environment_probe_dependency_check require_resolve_paths_override bogus_root_fixture_test_failed", ocd:2026-07-16, lmd:2026-07-16] the probe's dependency check first resolved
   `@duckdb/node-api`/`sql.js` with `require.resolve(dep, { paths: [repoRoot] })` — WRONG,
   BECAUSE the deps that matter at runtime are the INSTALLED PACKAGE'S OWN (the CLI resolves
   them from its own node_modules), and pinning resolution to an injectable repoRoot made the

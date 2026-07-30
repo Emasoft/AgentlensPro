@@ -2,7 +2,7 @@
 name: standalone-server-security-model
 description: "can a website read my local agentlens data / is the dashboard server exposed / cross-origin CORS localhost security / why does a POST from another origin get 403 / drive-by localhost exfiltration / ACAO wildcard vs scoped / how is the standalone server protected against a browsed page / CSRF on the local server / who may iframe the dashboard / 403 unverifiable viewer assertion / settings gear missing in embed / bad embed-key refuses to boot fail-closed / why won't the server start with a corrupt or wide-perms embed-key / EX_CONFIG 78 refuse to boot / embed-key wider than 0600 exposed shared secret / (earlier the bad key disabled the feature and kept running — now reversed) / restrict settings panel per user"
 ocd: 2026-07-11
-lmd: 2026-07-17
+lmd: 2026-07-30
 metadata:
   node_type: memory
   tier: component
@@ -59,7 +59,7 @@ The OTLP receiver (`otlpServer`) sets NO CORS header — it is reached server-to
 agent SDK exporters, never a browser.
 
 ## Notes and lessons learned
-[^1]: [ocd:2026-07-11 lmd:2026-07-11] The round-1 review added the CSRF WRITE gate but
+[^1]: [id:ATOM-CSRF-WRITE-VS-CORS-READ-SEPARATE, status:valid, keywords:"acao_wildcard_left_on_read_endpoints cross_origin_read_exfil_hole csrf_write_gate_and_cors_read_are_separate_controls scope_acao_explicitly", ocd:2026-07-11, lmd:2026-07-11] The round-1 review added the CSRF WRITE gate but
   left `Access-Control-Allow-Origin: *` on responses with the comment "read endpoints are
   non-sensitive" — false: they carry the user's prompts/costs/paths, so `*` was a
   cross-origin READ-exfil hole (the read counterpart to the write vector). Lesson: a CSRF

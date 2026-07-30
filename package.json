@@ -77,6 +77,7 @@
     "watch-tests": "tsc -p tsconfig.test.json -w",
     "check-types": "tsc --noEmit && tsc --noEmit -p media/tsconfig.json",
     "check-mirrors": "node scripts/check-no-mirrors.js",
+    "check-memory": "node scripts/check-memory-lessons.js",
     "lint": "eslint src media/src",
     "test:unit": "pnpm run compile-tests && mocha",
     "test:browser": "pnpm run compile-tests && node esbuild.js && AGENTLENSPRO_BROWSER_TESTS=1 mocha --no-config --ui tdd out/test/test/browser/dashboardSmoke.test.js"

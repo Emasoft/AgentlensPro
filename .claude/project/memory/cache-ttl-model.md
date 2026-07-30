@@ -2,7 +2,7 @@
 name: cache-ttl-model
 description: "keepWarm says cold turns but the session felt warm / is the cache TTL 5 minutes or 1 hour / why did the heartbeat look like it was rewriting the cache / do fork pingers save money / when is cache_creation a real cold rewrite / are our cache-write dollar figures too low / why is a 1-hour cache write more expensive / what is the minimum prefix size that caches at all — the verified TTL-regime matrix, the tiered write rate, and measured keep-warm economics"
 ocd: 2026-07-11
-lmd: 2026-07-26
+lmd: 2026-07-30
 metadata:
   node_type: memory
   type: project
@@ -62,11 +62,15 @@ cold rewrite statistically — COLD_REWRITE tag, thrash-vs-marathon decompositio
 [[agent-fleet-cache-economics]] (measured spawn/boot economics under these TTL regimes).
 
 See also: [[image-resident-cost-guard]] (consumes these write tiers — 1.25x at 5-min, 2x at 1-hour —
-for the 20x read/write spread the cache-guard skill teaches).
+for the 20x read/write spread the cache-guard skill teaches); [[agentlenspro-identity]] (cites
+this page for cache accounting truths); [[agentlenspro-publish-pipeline]] (cites this page's
+TTL-tier-aware `cost_usd` fact); [[always-on-ingestion-model]] (cites this page alongside the
+burn-token accounting model); [[otlp-ingest-topology]] (cites this page's TTL-tier-aware
+`cost_usd` preference).
 
 ## Notes and lessons learned
 
-[^1]: [ocd:2026-07-11 lmd:2026-07-11] earlier this project treated the 5-min TTL as
+[^1]: [id:ATOM-TTL-IS-REGIME-NOT-CONSTANT, status:valid, keywords:"is_the_cache_ttl_5_minutes_or_1_hour treated_5min_ttl_as_universal subscription_main_session_1h_ttl classify_regime_before_classifying_turn", ocd:2026-07-11, lmd:2026-07-11] earlier this project treated the 5-min TTL as
   universal (P6 keepWarm CACHE_TTL_MS, COLD_RESUME's 10-min window) and attributed 7-min
   heartbeat gaps to TTL-expiry rewrites; wrong — subscription main sessions run a 1h TTL,
   and the observed creations were invalidations or usage-credit windows. Lesson: a TTL is
@@ -83,7 +87,7 @@ for the 20x read/write spread the cache-guard skill teaches).
   data rather than assumed. (Parsing a field and then not using it is how a known fact becomes a
   silent error.)
 
-[^2]: [ocd:2026-07-11 lmd:2026-07-11] the fork keep-warm pinger doctrine (unbounded 230s
+[^2]: [id:ATOM-KEEPWARM-PREMISE-RETIRED, status:valid, keywords:"do_fork_pingers_save_money keep_warm_pinger_built_on_5min_premise verify_the_premise_before_optimizing_implementation pinger_v4_zombie", ocd:2026-07-11, lmd:2026-07-11] the fork keep-warm pinger doctrine (unbounded 230s
   ticks) was built on the 5-min premise and retired the day the 1h fact landed; its v4
   instance had ALSO degenerated into a zombie (one endless blocking shell poll — alive in
   the UI, zero API turns, zero warming; liveness = transcript mtime, never task-alive

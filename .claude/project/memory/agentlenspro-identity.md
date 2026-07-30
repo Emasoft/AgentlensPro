@@ -2,7 +2,7 @@
 name: agentlenspro-identity
 description: "what is this repo / where did it come from / is this the fork or the original agentlens / where is the old tree / what shipped in v1.0.0 / no-squash merge policy"
 ocd: 2026-07-10
-lmd: 2026-07-11
+lmd: 2026-07-30
 metadata:
   node_type: memory
   type: project
@@ -49,7 +49,7 @@ remains future work.
 
 ## Notes and lessons learned
 
-[^1]: [ocd:2026-07-11 lmd:2026-07-11] v1.x shipped five PATH bins
+[^1]: [id:ATOM-FIVE-BIN-DEPLOYMENT-SUPERSEDED, status:valid, keywords:"five_path_bins_removed one_executable_agentlenspro v2.0.0_single_bin doc_or_config_naming_old_bins_is_stale", ocd:2026-07-11, lmd:2026-07-11] v1.x shipped five PATH bins
   (`agentlenspro-cli/-hook/-gate/-heartbeat-cost` + `agentlenspro`); the USER ordered ONE
   executable and v2.0.0 removed the other four (hook registrations became the command
   strings `agentlenspro hook`/`agentlenspro gate`, auto-migrated by `setup`). Any doc or

@@ -2,7 +2,7 @@
 name: agentlens-burn-token-model
 description: "5h/7d account window drained fast / burning 1M+ tokens per minute / what is consuming all the tokens / impossible that a few Claude sessions burned the window / cost vs token window limit / cache-read dominating burn / OTEL and JSONL report different token numbers for the same session / session cost looks 100x too big or negative / all 3 OAuth accounts drained one after another over ~2 days / a huge idle main session re-woken every ~15 min by a heartbeat cron / plugin reloads forcing full cache-CREATE rewrites / what exhausted my 7-day rate-limit window with no visible rate-limit wall"
 ocd: 2026-07-08
-lmd: 2026-07-24
+lmd: 2026-07-30
 metadata:
   node_type: memory
   tier: hub
@@ -113,15 +113,20 @@ See also: [[burn-seismic-statistical-model]] (the calibrated statistical detecto
 cost model — marked-point-process null, PELT events, per-event root-cause attribution);
 [[agent-fleet-cache-economics]] (measured fleet spawn/cache-race/inline-vs-lazy economics);
 [[image-resident-cost-guard]] (this model applied to image blocks — and why an image read is NOT a
-prefix break, so the pre-flight guard warns instead of denying).
+prefix break, so the pre-flight guard warns instead of denying); [[agentlenspro-identity]]
+(project identity page that cites this accounting model); [[agentlenspro-ops-lessons]] (ops
+doctrine governed by this model, per its own "Governed by" line); [[always-on-ingestion-model]]
+(cites this as the gate the admission controller sheds); [[cache-ttl-model]] (the TTL/write-tier
+model this page's cost figures depend on); [[otlp-ingest-topology]] (cites this page's rich-event
+drift lesson — the "second router is a second truth" trap).
 
 ## Notes and lessons learned
-[^1]: [ocd:2026-07-08 lmd:2026-07-08] The statusline event path originally carried only a total
+[^1]: [id:ATOM-STATUSLINE-BUCKET-SPLIT, status:valid, keywords:"statusline_breakdown_landed_in_unknown per_bucket_split_missing_no_otel_sessions StatuslineBillingEvent_commit", ocd:2026-07-08, lmd:2026-07-08] The statusline event path originally carried only a total
   (`deltaTokens`), so the per-bucket breakdown landed 100% in `unknown` for exactly the no-OTEL sessions
   the burn monitor watches — the breakdown looked broken until the split was threaded through
   `StatuslineBillingEvent` (commit d3c04b1). Lesson: when adding a per-bucket view, verify it against the
   LIVE event source (statusline), not just the rich OTEL path — most live sessions have no OTEL.
-[^2]: [ocd:2026-07-08 lmd:2026-07-08] Two wrong claims made during the investigation, corrected by
+[^2]: [id:ATOM-BURN-INVESTIGATION-WRONG-CLAIMS, status:valid, keywords:"1008_per_M_pricing_bug_false measurement_artifact_cumulative_delta fat_floor_claude_md_hypothesis_wrong cache_break_only_4_percent derive_from_per_turn_buckets", ocd:2026-07-08, lmd:2026-07-08] Two wrong claims made during the investigation, corrected by
   measurement: (a) I reported a "$1008/M / $317-per-turn pricing bug" — FALSE, it was a
   measurement artifact: the statusline writes sparsely, so a per-turn cost `delta` (cumulative − prev)
   lumped MANY turns. Recomputing cost from each line's own buckets vs Claude Code's reported cumulative
@@ -131,14 +136,14 @@ prefix break, so the pre-flight guard warns instead of denying).
   ~98% transcript / ~0.2% system-prompt, and cache-BREAK turns are only ~4% (of which ~47% are 5-min TTL
   idle-expiry). The cache is EFFICIENT (96% read); the cost is the SIZE re-read, not breakage. AgentLens
   also over-reports $/hr ~4× from the same sparse-delta artifact (TRDD-BURNWDGT fix).
-[^3]: [ocd:2026-07-08 lmd:2026-07-08] The concrete acute case: scanning the OTEL raw bodies, the 120
+[^3]: [id:ATOM-IMAGE-RESIDENT-BLOB, status:valid, keywords:"8_screenshots_pasted_once_resent_every_turn 525k_tokens_from_images visual_agent_analyze_in_subagent un_evicted_image_blob_most_expensive_mistake", ocd:2026-07-08, lmd:2026-07-08] The concrete acute case: scanning the OTEL raw bodies, the 120
   LARGEST request bodies on the machine were ALL from ONE local visual-agent workspace (model
   claude-fable-5), each carrying the IDENTICAL 8 images = 525.1k tokens, with the total growing
   turn-over-turn — proving 8
   screenshots pasted once and re-sent every turn thereafter. Lesson: a visual agent must analyze images in
   a SUBAGENT (isolated context) or compact immediately; an un-evicted image blob is the single most
   expensive resident-context mistake (~$425 from one paste). This is the evidence behind TRDD-CTXQUERY.
-[^4]: [ocd:2026-07-10 lmd:2026-07-10] The dual convention survived so long because THREE mechanisms
+[^4]: [id:ATOM-DUAL-TOKEN-CONVENTION, status:valid, keywords:"otel_cards_incl_cache_log_cards_raw comment_convention_claim_wrong verify_cited_lines_before_building token_convention_parity_test", ocd:2026-07-10, lmd:2026-07-10] The dual convention survived so long because THREE mechanisms
   hid it: (a) a read-time detection heuristic (`inputTokens < cache` in mcpServer sessionCost)
   repaired MCP outputs but not the persisted cost or the dashboard's raw fields; (b) a code comment
   in _buildSubAgentCards claimed "parent log cards store incl-cache" citing claude.ts:143/340 +
@@ -147,14 +152,14 @@ prefix break, so the pre-flight guard warns instead of denying).
   convention on that comment's authority. Lesson: a convention claim in a comment is a HYPOTHESIS —
   verify the cited lines before building on it, and prefer one measured parity test over any number
   of compensating readers.
-[^5]: [ocd:2026-07-10 lmd:2026-07-10] The rich-event ingest fix was first applied ONLY to
+[^5]: [id:ATOM-SECOND-ROUTER-SECOND-TRUTH, status:valid, keywords:"fix_applied_to_one_copy_not_the_deployed_one standalone_processLogs_drifted grep_for_other_implementations otlpDroppedLogEvents_counter", ocd:2026-07-10, lmd:2026-07-10] The rich-event ingest fix was first applied ONLY to
   src/otlpCollector.ts (unit-tested, green) while the deployment kept dropping every event — the
   standalone server has its OWN processLogs that had drifted (never gained the gate). Lesson: the
   "second router is a second truth" failure mode — before declaring an ingest/parse fix done, grep
   for OTHER implementations of the same wire format and live-verify on the RUNNING deployment, not
   just the unit-tested class; and make drops observable (the otlpDroppedLogEvents counter) so the
   next silent-drop class self-reports.
-[^6]: [ocd:2026-07-21 lmd:2026-07-21 keywords:"heartbeat_cron_burn all_3_accounts_drained idle_400k_session plugin_reload_cache_create silent_no_rate_limit_wall"]
+[^6]: [id:ATOM-HEARTBEAT-CRON-BURN, status:valid, keywords:"heartbeat_cron_burn all_3_accounts_drained idle_400k_session plugin_reload_cache_create silent_no_rate_limit_wall", ocd:2026-07-21, lmd:2026-07-21]
   DO NOT leave a huge (300k+) main session idle while a background heartbeat/cron keeps waking it,
   and DO NOT chase mid-session plugin reloads on such a session, BECAUSE every automated wake is a
   full main turn that re-bills the entire prefix and every reload forces a full cache-CREATE rewrite

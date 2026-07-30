@@ -2,7 +2,7 @@
 name: hook-events-pipeline
 description: "how does AgentLens capture Claude Code lifecycle events / where do StopFailure PreCompact SessionStart events come from / what is spy-agentlens.sh / hook-events store, --install-hooks, why not PreToolUse / Stop hook error every turn"
 ocd: 2026-07-10
-lmd: 2026-07-21
+lmd: 2026-07-30
 metadata:
   node_type: memory
   type: project
@@ -59,7 +59,7 @@ See also: [[image-resident-cost-guard]] (the PreToolUse consumer that put `Read`
 non-rare tool — into `GATE_MATCHER`, and how its per-call cost is bounded CLI-side).
 
 ## Notes and lessons learned
-[^1]: [ocd:2026-07-10 lmd:2026-07-10] Two field lessons from shipping this. (a) The
+[^1]: [id:ATOM-BUCKET-NAME-NAN-AND-STOP-HOOK-EXIT, status:valid, keywords:"stop_hook_error_every_turn bucket_name_regex_matches_calendar_invalid_dates NaN_defeats_purge happy_path_must_exit_0_on_absent_optional_input", ocd:2026-07-10, lmd:2026-07-10] Two field lessons from shipping this. (a) The
   bucket-name regex \d{4}-\d{2}-\d{2} also matches calendar-invalid names ('2026-13-99' →
   NaN, '2026-02-31' overflows): NaN silently defeated BOTH the read fast-path and the
   string-compare purge — an unpurgeable file counted forever. Fixed with bucketDayMs()
