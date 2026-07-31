@@ -2,7 +2,7 @@ import * as assert from 'assert'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { openCountCache, cacheKey, nullCountCache, CACHE_DIR, CACHE_FILE } from '../countCache'
+import { openCountCache, cacheKey, nullCountCache, CACHE_DIR, CACHE_FILE, MAX_ROWS } from '../countCache'
 
 // The cache exists to make a 152s measurement cost 2s. Every test here guards a way it could instead
 // make it FAST AND WRONG, which is strictly worse than slow — the tool's whole claim is that its
@@ -77,7 +77,60 @@ suite('countCache — fast, or honest about not knowing', () => {
 
     const b = openCountCache({ dir, apiVersion: API })
     assert.strictEqual(b.get(k, body), null, 'an error row must not be served as a token count')
-    assert.match(b.getError(k) ?? '', /400/)
+    assert.match(b.getError(k, body) ?? '', /400/)
+  })
+
+  // Without this the sentinel could only ever probe successful counts, so a remembered 400 would be
+  // served forever even if the endpoint started accepting that body.
+  test('a remembered 400 is eligible for the freshness probe', () => {
+    const dir = tmpDir()
+    const body = '{"bad":2}'
+    const k = cacheKey(body)
+    const c = openCountCache({ dir, apiVersion: API })
+    c.putError(k, 'm', 'count_tokens 400: nope')
+    c.stats()
+
+    const d = openCountCache({ dir, apiVersion: API })
+    assert.strictEqual(d.largestHit(), null, 'nothing probed before a lookup happens')
+    d.getError(k, body)
+    const probe = d.largestHit()
+    assert.ok(probe, 'an error row must be probeable')
+    assert.strictEqual(probe?.tokens, -1, '-1 is what marks the probe as expecting another 400')
+    assert.strictEqual(probe?.wireBody, body, 'the probe must carry the exact bytes to re-post')
+  })
+
+  // A real count always outranks an error row, so the probe stays as strong as possible.
+  test('a successful count outranks an error row as the probe', () => {
+    const dir = tmpDir()
+    const good = '{"good":1}', bad = '{"bad":3}'
+    const c = openCountCache({ dir, apiVersion: API })
+    c.put(cacheKey(good), 'm', 5000)
+    c.putError(cacheKey(bad), 'm', 'count_tokens 400: nope')
+    c.stats()
+
+    const d = openCountCache({ dir, apiVersion: API })
+    d.getError(cacheKey(bad), bad)
+    d.get(cacheKey(good), good)
+    assert.strictEqual(d.largestHit()?.tokens, 5000)
+  })
+
+  test('compaction bounds the file and keeps the newest rows', () => {
+    const dir = tmpDir()
+    const c = openCountCache({ dir, apiVersion: API })
+    for (let i = 0; i < MAX_ROWS + 500; i++) c.put(cacheKey(`{"i":${i}}`), 'm', i + 1)
+    c.stats()
+
+    const before = fs.readFileSync(path.join(dir, CACHE_DIR, CACHE_FILE), 'utf8').trim().split('\n').length
+    assert.ok(before > MAX_ROWS, 'precondition: the file is oversized before compaction')
+
+    const d = openCountCache({ dir, apiVersion: API })   // compacts on open
+    const after = fs.readFileSync(path.join(dir, CACHE_DIR, CACHE_FILE), 'utf8').trim().split('\n').length
+    assert.strictEqual(after, MAX_ROWS, 'compaction must bound the file')
+
+    const newest = `{"i":${MAX_ROWS + 499}}`
+    assert.strictEqual(d.get(cacheKey(newest), newest), MAX_ROWS + 500, 'newest row must survive')
+    const oldest = '{"i":0}'
+    assert.strictEqual(d.get(cacheKey(oldest), oldest), null, 'oldest row is the one dropped')
   })
 
   test('bypassReads serves nothing but still records — --refresh must not leave the cache stale', () => {
@@ -123,7 +176,7 @@ suite('countCache — fast, or honest about not knowing', () => {
     n.put('k', 'm', 1)
     n.putError('k', 'm', 'boom')
     assert.strictEqual(n.get('k', 'body'), null)
-    assert.strictEqual(n.getError('k'), null)
+    assert.strictEqual(n.getError('k', 'body'), null)
     assert.strictEqual(n.largestHit(), null)
     assert.strictEqual(n.stats().hits, 0)
   })

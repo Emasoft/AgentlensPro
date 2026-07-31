@@ -118,7 +118,7 @@ export async function countTokensExact(
     // A remembered 400 means these exact bytes are a request the endpoint refuses to validate. That
     // verdict is deterministic, so re-asking costs a full prefix upload to be told the same thing —
     // on a large capture roughly a third of all calls are these.
-    const err = opts.cache?.getError(key)
+    const err = opts.cache?.getError(key, body)
     if (err != null) throw new CountTokensError(err, 400)
   }
   try {

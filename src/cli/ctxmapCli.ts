@@ -30,11 +30,11 @@ import { countTokens, calibrateTokens } from '../tokenEstimator'
 import type { TokenSource } from '../shared/summarizerTypes'
 import {
   resolveAnthropicAuth, countTokensExact, postCountTokens, mapLimit, countable,
-  countConcurrency, API_VERSION,
+  countConcurrency, API_VERSION, CountTokensError,
   type AnthropicAuth, type CountableRequest,
 } from '../exactTokens'
 import { openCountCache, type CountCache } from '../countCache'
-import { readBody, PREFIX_STUB, type ContentBlock, type Message, type ToolDef, type RequestBody, type Usage, type ResponseBody } from '../capturedBody'
+import { readBody, readBodyText, PREFIX_STUB, type ContentBlock, type Message, type ToolDef, type RequestBody, type Usage, type ResponseBody } from '../capturedBody'
 import { EXIT } from './cliErrors'
 
 export type { ContentBlock, Message, ToolDef, RequestBody, Usage, ResponseBody }
@@ -726,9 +726,21 @@ async function exactifyLeanElseFull(
     return { report: r, ex: await exactifyReport(r, req, auth, countConcurrency(), cache, false) }
   }
   const ex = await exactifyReport(r, req, auth, countConcurrency(), cache, true)
-  if (r.mode !== 'exact' || r.coverage.residual === 0) return { report: r, ex }
-  console.error(`ctxmap: lean prefixes left a residual of ${r.coverage.residual} tokens`
-    + ' — re-measuring with full prefixes so the report stays exact')
+  // The guard must fire on BOTH ways lean can be wrong, and the residual only exists on a fully
+  // measured run:
+  //   - residual != 0            → the omitted preamble did not cancel.
+  //   - ex.failed > 0            → some prefix could not be measured AT ALL. Lean prefixes drop
+  //                                `system`/`tools`, so they can provoke a 400 the full prefix never
+  //                                would; and on a partially-failed run `mode` stays 'estimated' and
+  //                                `residual` is never computed, so there is nothing left to check.
+  // Keying only on `residual !== 0` meant the check silently disabled itself in exactly the case
+  // where lean was the likely cause of the failure — fast, unverified, and reported as if measured.
+  if (ex.failed === 0 && r.coverage.residual === 0) return { report: r, ex }
+  console.error(ex.failed > 0
+    ? `ctxmap: ${ex.failed} element(s) could not be measured with lean prefixes`
+      + ' — re-measuring with full prefixes before trusting the result'
+    : `ctxmap: lean prefixes left a residual of ${r.coverage.residual} tokens`
+      + ' — re-measuring with full prefixes so the report stays exact')
   const fresh = loadAndAnalyze(file)
   return { report: fresh.report, ex: await exactifyReport(fresh.report, fresh.req, auth, countConcurrency(), cache, false) }
 }
@@ -739,22 +751,55 @@ async function exactifyLeanElseFull(
  *  A network failure here returns null — "could not disprove" is not "proven stale", and turning a
  *  flaky connection into a discarded cache would make the tool slower exactly when it is least able
  *  to afford it. */
-async function cacheDrifted(cache: CountCache, auth: AnthropicAuth): Promise<string | null> {
+export type Freshness =
+  | { state: 'no-hits' }
+  /** The probe ran and agreed — the only state that licenses saying the cache was verified. */
+  | { state: 'agreed' }
+  | { state: 'drifted'; model: string }
+  /** The probe could not complete. NOT evidence of drift, and NOT evidence of freshness either. */
+  | { state: 'unchecked'; reason: string }
+
+export async function checkFreshness(cache: CountCache, auth: AnthropicAuth): Promise<Freshness> {
   const probe = cache.largestHit()
-  if (!probe) return null
+  if (!probe) return { state: 'no-hits' }
+  // tokens === -1 marks a remembered HTTP 400. For those the EXPECTED outcome is another 400, so the
+  // two branches invert: throwing a 400 is agreement, and a successful count means the endpoint now
+  // accepts a body it used to reject — real drift.
+  const expectsError = probe.tokens === -1
   try {
     // Post the recorded bytes directly: this path never consults the cache, and asking the cache to
     // confirm the cache would prove nothing.
     const live = await postCountTokens(probe.wireBody, auth, { retries: 1 })
-    return live === probe.tokens ? null : probe.model
-  } catch { return null }
+    if (expectsError) return { state: 'drifted', model: probe.model }
+    return live === probe.tokens ? { state: 'agreed' } : { state: 'drifted', model: probe.model }
+  } catch (e) {
+    if (expectsError && e instanceof CountTokensError && e.status === 400) return { state: 'agreed' }
+    // Collapsing this into "no drift" made the digest claim a verification that never happened —
+    // a 429 or a dropped connection read exactly like agreement.
+    return { state: 'unchecked', reason: (e as Error).message }
+  }
 }
 
-function reportCacheStats(cache: CountCache): void {
+function reportCacheStats(cache: CountCache, fresh: Freshness): void {
   const s = cache.stats()
   if (s.hits === 0 && s.writes === 0) return
-  console.error(`ctxmap: count cache — ${s.hits} hit(s), ${s.misses} measured live`
-    + `${s.hits > 0 ? ' (largest hit re-verified live)' : ''}`)
+  const note = fresh.state === 'agreed' ? ' (largest hit re-verified live)'
+    : fresh.state === 'unchecked' ? ` (NOT verified — the freshness probe failed: ${fresh.reason})`
+      : fresh.state === 'drifted' ? ' (cache discarded — see above)'
+        : ''
+  console.error(`ctxmap: count cache — ${s.hits} hit(s), ${s.misses} measured live${note}`)
+}
+
+/** The two warnings every run must print, on every path. Keeping them in one function is what stops
+ *  a new early-return from silently dropping them: an element that stayed ESTIMATED and a block that
+ *  was MERGED into its neighbour both change how a number should be read. */
+function reportMeasurementCaveats(ex: { failed: number; merged: number; failures: { label: string; error: string }[] }): void {
+  for (const f of ex.failures.slice(0, 5)) console.error(`ctxmap: not measured — ${f.label}: ${f.error}`)
+  if (ex.failed > 0) console.error(`ctxmap: ${ex.failed} element(s) stay estimated`)
+  if (ex.merged > 0) {
+    console.error(`ctxmap: ${ex.merged} block(s) cannot legally end a request (thinking / unanswered tool_use)`
+      + ' — their tokens are counted in the next element, so the total stays exact')
+  }
 }
 
 /** Analyze, then measure — unless the caller opted out. Exact counting costs one count_tokens call
@@ -774,35 +819,43 @@ async function analyzeMaybeExact(file: string, exact: boolean, refresh = false):
   console.error(`ctxmap: measuring ${report.elements.length} elements via count_tokens (auth: ${auth.source})`
     + `${report.elements.length > 200 ? ' — large request, expect a minute or more' : ''}…`)
   const lean = await exactifyLeanElseFull(report, req, auth, cache, file)
-  const { failed, merged, failures } = lean.ex
-  const measured = lean.report
 
   // FRESHNESS SENTINEL. A cached count is only trustworthy while the tokenizer behind a model id is
   // unchanged — which is true in practice for dated snapshots, but is not a contract. Rather than
   // guess a TTL, re-measure the single largest entry this run actually served from cache and compare.
   // One call proves it, and a mismatch heals itself instead of quietly reporting a stale total.
-  const drifted = await cacheDrifted(cache, auth)
-  if (drifted) {
-    console.error(`ctxmap: cached counts for ${drifted} disagree with a live re-measurement`
+  const fresh = await checkFreshness(cache, auth)
+  if (fresh.state === 'drifted') {
+    console.error(`ctxmap: cached counts for ${fresh.model} disagree with a live re-measurement`
       + ' — discarding them and measuring again from scratch')
-    cache.dropModel(drifted)
-    const fresh = loadAndAnalyze(file)
-    const redo = await exactifyLeanElseFull(fresh.report, fresh.req, auth,
-      openCountCache({ apiVersion: API_VERSION }), file)
-    reportCacheStats(cache)
-    for (const f of redo.ex.failures.slice(0, 5)) console.error(`ctxmap: not measured — ${f.label}: ${f.error}`)
+    cache.dropModel(fresh.model)
+    const reloaded = loadAndAnalyze(file)
+    const redoCache = openCountCache({ apiVersion: API_VERSION })
+    const redo = await exactifyLeanElseFull(reloaded.report, reloaded.req, auth, redoCache, file)
+    // Flush the redo handle too — its stats() call is the only thing that writes its buffered rows,
+    // so without it the whole re-measurement is thrown away and re-uploaded next run.
+    redoCache.stats()
+    reportCacheStats(cache, fresh)
+    reportMeasurementCaveats(redo.ex)
     return redo.report
   }
-  reportCacheStats(cache)
-  for (const f of failures.slice(0, 5)) console.error(`ctxmap: not measured — ${f.label}: ${f.error}`)
-  if (failed > 0) console.error(`ctxmap: ${failed} element(s) stay estimated`)
-  if (merged > 0) {
-    console.error(`ctxmap: ${merged} block(s) cannot legally end a request (thinking / unanswered tool_use)`
-      + ' — their tokens are counted in the next element, so the total stays exact')
-  }
+  reportCacheStats(cache, fresh)
+  reportMeasurementCaveats(lean.ex)
   // The lean path may have fallen back and re-analysed, so return the report that was MEASURED, not
   // the one loaded at the top — they are different objects and only one carries the numbers.
-  return measured
+  return lean.report
+}
+
+/** The first argument that is neither a flag nor a flag's value. `--top N` and `--out FILE` take a
+ *  value, so the scan has to skip two tokens for those or the value would be mistaken for the path. */
+const VALUED_FLAGS = new Set(['--top', '--out', '--limit'])
+export function firstOperand(argv: string[]): string | undefined {
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]
+    if (!a.startsWith('--')) return a
+    if (VALUED_FLAGS.has(a)) i++
+  }
+  return undefined
 }
 
 export async function runCtxmapCli(argv: string[]): Promise<number> {
@@ -859,7 +912,10 @@ export async function runCtxmapCli(argv: string[]): Promise<number> {
           if (!f.endsWith('.request.json')) continue
           const full = path.join(d, f)
           let raw: string
-          try { raw = fs.readFileSync(full, 'utf8') } catch { continue }
+          // readBodyText, NOT fs.readFileSync — captures may be gzipped, and decoding those bytes as
+          // utf8 yields mojibake that can never contain the needle, so the prefilter would skip every
+          // compressed capture and report "no match" for text that is present.
+          try { raw = readBodyText(full) } catch { continue }
           if (!raw.includes(needle) && !raw.includes(escaped)) continue
           let body: RequestBody
           try { body = readBody(full) as RequestBody } catch { continue }
@@ -888,7 +944,12 @@ export async function runCtxmapCli(argv: string[]): Promise<number> {
       return emit(renderDiff(a, b), `net ${b.total - a.total >= 0 ? '+' : ''}${fmt(b.total - a.total)} tokens`)
     }
 
-    const r = await analyzeMaybeExact(argv[0], exact, refresh)
+    // The FIRST NON-FLAG argument is the capture, not argv[0]. The help block presents --refresh as
+    // a free-standing flag, so `ctxmap --refresh <file>` must work; taking argv[0] verbatim made the
+    // documented spelling fail with "--refresh is not a captured body".
+    const target = firstOperand(argv)
+    if (!target) { console.error('ctxmap: no request given'); return EXIT.USAGE }
+    const r = await analyzeMaybeExact(target, exact, refresh)
     const digest = `${fmt(r.total)} tokens (${r.mode}) across ${r.elements.length} elements`
     return emit(asJson ? JSON.stringify(r, null, 2) : renderReport(r, topN), digest)
   } catch (e) {

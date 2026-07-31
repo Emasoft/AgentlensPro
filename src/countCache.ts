@@ -28,6 +28,14 @@ export const CACHE_FORMAT = 1
 export const CACHE_DIR = 'countcache'
 export const CACHE_FILE = 'counts.ndjson'
 
+/** Rows kept after a compaction. The file is read AND JSON.parsed in full before the tool makes its
+ *  first API call, so unbounded growth turns a 2s warm run back into a slow one and eventually dies
+ *  on the heap. Because the key is the exact wire body, editing any file in the measured context
+ *  invalidates every key and appends a whole fresh row-set — so growth is the normal case, not an
+ *  edge case, and something has to bound it. Compaction keeps the NEWEST rows: a stale entry is
+ *  worth less than a recent one, and the newest are the ones a repeated run will ask for. */
+export const MAX_ROWS = 20_000
+
 interface Row {
   v: number
   /** The anthropic-version the count was taken under — a different API version may tokenize differently. */
@@ -60,7 +68,7 @@ export interface CountCache {
    *  identical bytes, and ~1/3 of a large run. Re-uploading a 100k-token prefix each run just to be
    *  rejected again is the single biggest remaining cost on a warm run. Only 400 is ever remembered:
    *  401/403 (credential), 429 (rate limit) and 5xx are all transient or environmental. */
-  getError(key: string): string | null
+  getError(key: string, wireBody: string): string | null
   putError(key: string, model: string, message: string): void
   /** The biggest entry served from cache this run — the sentinel the caller re-measures live. */
   largestHit(): { model: string; tokens: number; wireBody: string } | null
@@ -146,6 +154,30 @@ export function openCountCache(opts: OpenCountCacheOptions): CountCache {
     }
   } catch { /* no cache yet — the first run creates it */ }
 
+  // COMPACTION. `map` is already the fully-resolved state (tombstones applied, last-write-wins), so
+  // rewriting the file from it is lossless for everything still reachable. Done atomically via a
+  // temp file + rename so a concurrent reader sees either the old file or the new one, never a
+  // half-written one; a failure here is non-fatal because an oversized cache is still a CORRECT
+  // cache, just a slow one.
+  if (map.size > MAX_ROWS) {
+    const keep = [...map.entries()].slice(-MAX_ROWS)
+    map.clear()
+    for (const [k, v] of keep) map.set(k, v)
+    const now = new Date().toISOString()
+    const body = keep.map(([key, v]) => JSON.stringify({
+      v: CACHE_FORMAT, api: opts.apiVersion, model: v.model, key, tokens: v.tokens, at: now,
+      ...(v.err ? { err: v.err } : {}),
+    } as Row)).join('\n') + '\n'
+    const tmp = `${file}.compact-${process.pid}`
+    try {
+      fs.mkdirSync(dir, { recursive: true })
+      fs.writeFileSync(tmp, body)
+      fs.renameSync(tmp, file)
+    } catch {
+      try { fs.unlinkSync(tmp) } catch { /* nothing to clean up */ }
+    }
+  }
+
   let hits = 0, misses = 0, writes = 0
   let largest: { model: string; tokens: number; wireBody: string } | null = null
   const pending: string[] = []
@@ -188,11 +220,17 @@ export function openCountCache(opts: OpenCountCacheOptions): CountCache {
       // crash mid-run keeps most of the work.
       if (pending.length >= 32) appendPending()
     },
-    getError(key) {
+    getError(key, wireBody) {
       if (opts.bypassReads) return null
       const found = map.get(key)
       if (!found?.err) return null
       hits++
+      // Error rows are candidates for the freshness probe too. Excluding them meant a remembered 400
+      // could never be re-checked: if the endpoint's validation changed so that prefix became
+      // countable, the stale 400 would be served forever and that element stay estimated. Their
+      // `tokens` is -1, so they sort below every real count and are only probed when nothing else
+      // was hit — the probe re-posts the bytes and a now-successful count reads as drift.
+      if (!largest) largest = { model: found.model, tokens: found.tokens, wireBody }
       return found.err
     },
     putError(key, model, message) {

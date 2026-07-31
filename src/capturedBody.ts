@@ -49,12 +49,23 @@ export interface ResponseBody { model?: string; usage?: Usage }
  *  filler. It is one token, and every consumer differences it back out. */
 export const PREFIX_STUB = { role: 'user', content: 'x' }
 
-/** Read a captured body, transparently gunzipping the compressed ones. */
-export function readBody(p: string): unknown {
+/** The decoded TEXT of a captured body, gunzipped when needed but NOT parsed.
+ *
+ *  Exists so a caller that only needs a substring test decodes exactly the same bytes `readBody`
+ *  would parse. Reading the file with `fs.readFileSync(p, 'utf8')` instead silently mojibakes every
+ *  gzipped capture, and a substring test then misses text that is really there — a false negative
+ *  that looks identical to "not present". */
+export function readBodyText(p: string): string {
   let raw = fs.readFileSync(p)
   if (raw[0] === 0x1f && raw[1] === 0x8b) raw = zlib.gunzipSync(raw)
+  return raw.toString('utf8')
+}
+
+/** Read a captured body, transparently gunzipping the compressed ones. */
+export function readBody(p: string): unknown {
+  const text = readBodyText(p)
   try {
-    return JSON.parse(raw.toString('utf8'))
+    return JSON.parse(text)
   } catch (e) {
     // Name the file: a bare "Unexpected token" from a 900KB body is unactionable, and a
     // half-flushed capture is the normal way this fails.
