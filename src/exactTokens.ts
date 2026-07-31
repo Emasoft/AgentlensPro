@@ -15,9 +15,10 @@
 // calls are bounded in concurrency and retried on 429.
 
 import { execFileSync } from 'child_process'
+import { cacheKey, type CountCache } from './countCache'
 
 const ENDPOINT = 'https://api.anthropic.com/v1/messages/count_tokens'
-const API_VERSION = '2023-06-01'
+export const API_VERSION = '2023-06-01'
 const OAUTH_BETA = 'oauth-2025-04-20'
 
 export interface AnthropicAuth {
@@ -100,12 +101,48 @@ const sleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms))
 /** One exact count. Retries only what is worth retrying: 429 and 5xx. A 4xx other than 429 is a
  *  malformed request — retrying it just burns the rate limit and hides the real error. */
 export async function countTokensExact(
-  req: CountableRequest, auth: AnthropicAuth, opts: { retries?: number; timeoutMs?: number } = {},
+  req: CountableRequest, auth: AnthropicAuth,
+  opts: { retries?: number; timeoutMs?: number; cache?: CountCache } = {},
 ): Promise<number> {
-  const retries = opts.retries ?? 4
   // Strip here rather than at each call site: a caller that forgets would get a 400 on every request
   // and, worse, one that is easy to mistake for a per-element problem.
   const body = JSON.stringify(stripCacheControl(req))
+  // The cache is keyed on THIS string — the exact bytes about to be posted. So a hit is not an
+  // approximation of the answer, it is the answer to a request that was already asked verbatim; and
+  // anything that changes the payload (an edited file, a disabled MCP server, a code change in how
+  // prefixes are built) changes the key and produces a miss rather than a stale number.
+  const key = opts.cache ? cacheKey(body) : null
+  if (key !== null) {
+    const hit = opts.cache?.get(key, body)
+    if (hit != null) return hit
+    // A remembered 400 means these exact bytes are a request the endpoint refuses to validate. That
+    // verdict is deterministic, so re-asking costs a full prefix upload to be told the same thing —
+    // on a large capture roughly a third of all calls are these.
+    const err = opts.cache?.getError(key)
+    if (err != null) throw new CountTokensError(err, 400)
+  }
+  try {
+    const tokens = await postCountTokens(body, auth, opts)
+    if (key !== null) opts.cache?.put(key, req.model, tokens)
+    return tokens
+  } catch (e) {
+    // ONLY 400. A 401/403 is a credential problem, a 429 is rate limiting and a 5xx is the server —
+    // all transient or environmental, and remembering any of them would poison the cache with a
+    // verdict about the world rather than about these bytes.
+    if (key !== null && e instanceof CountTokensError && e.status === 400) {
+      opts.cache?.putError(key, req.model, e.message)
+    }
+    throw e
+  }
+}
+
+/** POST an ALREADY-BUILT body. Separate from countTokensExact so the freshness sentinel can re-ask
+ *  the exact bytes a cache entry was recorded under, instead of rebuilding them from a parsed copy
+ *  and probing a request that is merely equivalent. */
+export async function postCountTokens(
+  body: string, auth: AnthropicAuth, opts: { retries?: number; timeoutMs?: number } = {},
+): Promise<number> {
+  const retries = opts.retries ?? 4
   let lastErr: CountTokensError | undefined
   for (let attempt = 0; attempt <= retries; attempt++) {
     const ac = new AbortController()
@@ -138,6 +175,18 @@ export async function countTokensExact(
     }
   }
   throw lastErr ?? new CountTokensError('count_tokens failed')
+}
+
+export const DEFAULT_COUNT_CONCURRENCY = 4
+
+/** How many count_tokens calls may be in flight. Kept at 4 by default until measured: a run of this
+ *  shape uploads ~22M tokens of prefix payload, so it may be BANDWIDTH-bound rather than
+ *  latency-bound, and in that regime a higher ceiling buys nothing while risking 429 storms. The env
+ *  knob exists so the question can be settled by measurement instead of taste. */
+export function countConcurrency(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = Number(env.AGENTLENS_COUNT_CONCURRENCY?.trim())
+  if (!Number.isFinite(raw) || raw < 1) return DEFAULT_COUNT_CONCURRENCY
+  return Math.min(64, Math.floor(raw))
 }
 
 /** Run `jobs` with bounded concurrency, preserving input order. count_tokens is rate-limited, and a

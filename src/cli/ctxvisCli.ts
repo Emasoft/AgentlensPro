@@ -14,7 +14,10 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { resolveDataDir } from '../dataDir'
 import { resolveBodiesReadScope } from '../captureConfig'
-import { resolveAnthropicAuth, countTokensExact, type CountableRequest } from '../exactTokens'
+import {
+  resolveAnthropicAuth, countTokensExact, countConcurrency, API_VERSION, type CountableRequest,
+} from '../exactTokens'
+import { openCountCache } from '../countCache'
 import { loadAndAnalyze, exactifyReport, type CtxReport } from './ctxmapCli'
 import {
   selectTurns, listRequestCaptures, divergence, measureCommonPrefix, cacheVerdict, assertNonce,
@@ -302,7 +305,12 @@ export async function runCtxvisCli(argv: string[]): Promise<number> {
       console.error('no Anthropic credential resolved — ctxvis measures with count_tokens and will not estimate')
       return EXIT.UNKNOWN
     }
-    const count = (r: CountableRequest): Promise<number> => countTokensExact(r, auth)
+    // ONE cache for the whole run. ctxvis measures up to 8 captures (4 agents x 2 turns) whose
+    // prefixes are byte-identical up to the point each agent's context diverges, so sharing the
+    // handle across them is where most of the saving comes from — a per-report cache would re-ask
+    // the API for prefixes the previous report had just measured.
+    const cache = openCountCache({ apiVersion: API_VERSION, bypassReads: argv.includes('--refresh') })
+    const count = (r: CountableRequest): Promise<number> => countTokensExact(r, auth, { cache })
 
     const files = listRequestCaptures(bodyDirs())
     if (files.length === 0) {
@@ -331,7 +339,7 @@ export async function runCtxvisCli(argv: string[]): Promise<number> {
       const turns: AgentMeasurement['turns'] = []
       for (const t of use) {
         const { req, report } = loadAndAnalyze(t.file)
-        const ex = await exactifyReport(report, req, auth)
+        const ex = await exactifyReport(report, req, auth, countConcurrency(), cache)
         if (ex.failed > 0 && report.elements.length === ex.failed) {
           warnings.push(`${agent}: every element failed to measure (${ex.failures[0]?.error ?? 'unknown'})`)
         }
