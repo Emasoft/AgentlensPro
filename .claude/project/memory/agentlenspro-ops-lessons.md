@@ -1,6 +1,6 @@
 ---
 name: agentlenspro-ops-lessons
-description: "how to deploy agentlenspro on a machine / setup vs manual install / hooks stopped firing after an upgrade / config file wiped or corrupted after an edit / is agentlenspro npm-linked or registry-installed / does switching the cli to an ordinary npm install lose my db or settings / where does the data live / can other agents on this machine use the cli / does the dev npm link affect normal published users / background agent shows running but does nothing / a fork started acting like the orchestrator / does agentlenspro run on Windows / setup fails with unsupported platform or node too old / server hangs at 100% cpu and every request times out or SIGTERM is ignored / a settings.json env key keeps reverting or getting overwritten after every server restart / the diagnostics skill shows a stale tool count or drifted from the live CLI surface / how many diagnostic tools are there / keeping the skill and the CLI --help in sync / can I run a second server for testing / two servers at once / I changed the ports so it is isolated right / dev instance wrote to my live data dir / invalid log tail offsets after a restart / I rebuilt and restarted but nothing changed / my fix is not live even though esbuild succeeded / am I testing the repo build or the published one — operational doctrine and field lessons"
+description: "how to deploy agentlenspro on a machine / setup vs manual install / hooks stopped firing after an upgrade / config file wiped or corrupted after an edit / which file does pnpm read its settings from / minimumReleaseAge or trustPolicy is set but not taking effect / is this supply-chain knob actually live / a guard blocks me editing package.json / is agentlenspro npm-linked or registry-installed / does switching the cli to an ordinary npm install lose my db or settings / where does the data live / can other agents on this machine use the cli / does the dev npm link affect normal published users / background agent shows running but does nothing / a fork started acting like the orchestrator / does agentlenspro run on Windows / setup fails with unsupported platform or node too old / server hangs at 100% cpu and every request times out or SIGTERM is ignored / a settings.json env key keeps reverting or getting overwritten after every server restart / the diagnostics skill shows a stale tool count or drifted from the live CLI surface / how many diagnostic tools are there / keeping the skill and the CLI --help in sync / can I run a second server for testing / two servers at once / I changed the ports so it is isolated right / dev instance wrote to my live data dir / invalid log tail offsets after a restart / I rebuilt and restarted but nothing changed / my fix is not live even though esbuild succeeded / am I testing the repo build or the published one — operational doctrine and field lessons"
 ocd: 2026-07-11
 lmd: 2026-07-30
 metadata:
@@ -79,6 +79,26 @@ never this git-tracked page[^6]):
 Governed by [[cache-ttl-model]] (TTL regimes) and [[agentlens-burn-token-model]]
 (accounting); see also [[agentlenspro-publish-pipeline]], [[agentlenspro-identity]] (the
 project-identity hub this operational doctrine serves).
+
+
+^ATOM-B4ON-5F31 [desc:"pnpm 11 reads supply-chain knobs ONLY from pnpm-workspace.yaml — the package.json#pnpm and .npmrc copies are inert, and a guard blocks removing them", keywords: which_file_does_pnpm_read_settings_from minimumReleaseAge_not_taking_effect trustPolicy_ignored package.json_pnpm_block_does_nothing npmrc_supply_chain_knob_inert supply-chain_safeguard_looks_disabled_but_is_not three_files_declare_one_pnpm_setting, ocd: 2026-07-31, lmd: 2026-07-31]
+
+Measured on pnpm 11.9.0 by falsifying each layer in isolated scratch dirs (not inferred from docs):
+a dir with ONLY `package.json#pnpm` reports `minimumReleaseAge=undefined` / `trustPolicy=undefined`
+— identical to a control dir with no config at all. A dir with ONLY `.npmrc` (`minimum-release-age`
+etc.) reports `undefined` too. A dir with ONLY `pnpm-workspace.yaml` reports `7200` /
+`no-downgrade`. With `.npmrc: 3000` AND `pnpm-workspace.yaml: 7200` present, pnpm reports **7200** —
+the workspace file wins outright and `.npmrc` contributes nothing.
+
+So in this repo the supply-chain knobs are LIVE via `pnpm-workspace.yaml` (minimumReleaseAge 7200,
+trustPolicy no-downgrade, blockExoticSubdeps true, plus trustPolicyExclude); the SAME three settings
+also sit in `package.json#pnpm` and `.npmrc`, where pnpm 11 ignores them. npm independently proves
+those copies dead by warning `Unknown project config "trust-policy"` / `"block-exotic-subdeps"` on
+every run. The dead copies were NOT removed: the janitor's `pkg-manager-guard` PreToolUse hook
+refuses the edit (`minimumReleaseAge removed (was 7200 ≥ threshold 7200)`), because it models
+`package.json#pnpm` as load-bearing. Overriding needs
+`CLAUDE_PLUGIN_OPTION_PKG_MANAGER_HOOK_ALLOW_USER_OVERRIDE=true` in Claude Code's own environment.
+Context: the refused proposal TRDD-JJFGDV3W, which claimed the safeguard was "disabled". [^17]
 
 ## Notes and lessons learned
 
@@ -236,3 +256,4 @@ project-identity hub this operational doctrine serves).
   (`ipazia|\.local|MacBook|/Users/<real-name>`) and only act if one is REAL; verified clean
   2026-07-29. Sibling case, already recorded on its own page: the "high-entropy secret" hit on
   [[agentlens-burn-token-model]] is long camelCase identifiers (ATOM-ENTR-IDENT).
+[^17]: [id:ATOM-7U4Z-2V6H, status:valid, desc:"resolve a setting the way the tool resolves it, and don't route around a guard that disputes you", keywords:"setting_present_in_config_but_not_taking_effect is_this_knob_actually_live config_declared_in_several_files prove_which_file_the_tool_reads guard_disagrees_with_my_analysis", ocd:2026-07-31, lmd:2026-07-31] DO NOT conclude a setting is live (or dead) from reading the config files, BECAUSE a tool reads only the file IT reads — here three files declared the same knobs and pnpm 11 honoured exactly one, so both "the safeguard is disabled" and "package.json is authoritative" were confidently wrong in opposite directions. DO falsify each layer separately: one scratch dir per source plus a no-config control, and make the sources DISAGREE so the winner is identified rather than merely present. DO NOT route around a safety guard once your test contradicts it, even holding proof, BECAUSE the guard encodes someone else's model of the same risk and being right about the mechanism is not the same as being right about the consequence. DO report the conflict and leave the decision to the human who owns the override.
