@@ -1,8 +1,8 @@
 ---
 name: agentlenspro-publish-pipeline
-description: "how do I release / publish a new version of agentlenspro / npm publish fails E404 Not Found PUT / CI publish rejected / provenance badge missing / can I publish from local / how was the package bootstrapped on npm / zizmor flags the workflows / where are the SBOM and checksums for a release / my zizmor ignore comment is not working / I pushed the tag but no release workflow ran — the release pipeline, its laws, and the bootstrap history"
+description: "how do I release / publish a new version of agentlenspro / npm publish fails E404 Not Found PUT / CI publish rejected / provenance badge missing / can I publish from local / how was the package bootstrapped on npm / zizmor flags the workflows / where are the SBOM and checksums for a release / my zizmor ignore comment is not working / I pushed the tag but no release workflow ran / a file I committed is missing from the published package / the agent or skill did not reach users after publishing / feature missing after npm install / the tarball does not match the repo / what does the files allowlist actually ship — the release pipeline, its laws, and the bootstrap history"
 ocd: 2026-07-11
-lmd: 2026-07-30
+lmd: 2026-07-31
 metadata:
   node_type: memory
   type: project
@@ -61,6 +61,24 @@ after, and every release since is CI-only. See also [[agentlenspro-identity]],
 [[dashboard-tree-render-topology]] (a rebuild here needs a server restart, same discipline
 that page's dashboard-bundle rule follows).
 
+
+^ATOM-V9M7-ODAK [desc:"the files allowlist is the sole tarball selector and omits SILENTLY — .claude/ was absent, so shipped agents reached no consumer", keywords: agent_not_shipped_to_users file_missing_from_npm_tarball published_package_missing_files files_allowlist_omits_silently dot_directory_not_packed version_bump_ships_nothing .claude_not_in_tarball, ocd: 2026-07-31, lmd: 2026-07-31]
+
+The npm `files` allowlist is the ONE selector deciding the tarball, and its failure mode is silent
+OMISSION: a path not listed simply does not ship, and nothing errors at pack or publish time. Until
+2.20.0 `.claude/` was absent from it, so `.claude/agents/micro-worker.md` and its vendored
+`verification-before-completion` skill existed in the repo and on GitHub but reached zero consumers
+— and a version bump alone would have burned an immutable version on a tarball substantively
+identical to 2.19.0. 2.20.0 adds `.claude/agents/` and `.claude/skills/` only: `.claude/project/memory/`
+is excluded (1.6 MB of contributor notes that nothing can read from inside `node_modules`, since
+memgrep resolves `<git-root>/.claude/project/memory` — the CONSUMER's repo, not ours), and
+`.claude/settings.json` is excluded because its PreToolUse hook references
+`scripts/deny-playwright-init-agents.js`, which is not itself in the allowlist. npm's handling of
+dot-directories in `files` is not self-evident, so inclusion was verified with
+`npm pack --dry-run --json` before tagging and against the published tarball afterwards
+(`npm pack agentlenspro@2.20.0` + `tar -tzf` → 18 files, 992 KB, both `.claude` paths present, zero
+memory/settings entries). [^6]
+
 ## Notes and lessons learned
 
 [^1]: [id:ATOM-PUBLISH-FILENAME-MISMATCH, status:valid, keywords:"npm_publish_fails_E404_Not_Found_PUT trusted_publisher_registered_filename_mismatch renamed_workflow_to_match", ocd:2026-07-11, lmd:2026-07-11] the user registered the trusted publisher as
@@ -103,3 +121,4 @@ that page's dashboard-bundle rule follows).
   (`git push origin vX.Y.Z`); if it is already pushed, recover with
   `gh workflow run publish.yml --ref vX.Y.Z` (the tag-guarded steps make it safe) and confirm with
   `npm view agentlenspro version` plus `_npmUser` = the OIDC bot and `dist.attestations` present.
+[^6]: [id:ATOM-LFVJ-JN99, status:valid, desc:"repo content is not published content — diff the tarball, not the working tree", keywords:"shipped_but_missing committed_but_not_published tarball_does_not_match_repo feature_missing_after_install verify_tarball_not_repo npm_pack_before_tagging", ocd:2026-07-31, lmd:2026-07-31] DO NOT assume content ships because it is committed, pushed, and visible on GitHub, BECAUSE the npm `files` allowlist omits SILENTLY — no warning at pack, none at publish — so the first symptom is a user reporting a missing feature after the version is already immutable. DO diff the TARBALL, not the repo: `npm pack --dry-run --json` before tagging, and `npm pack <pkg>@<ver>` + `tar -tzf` after publishing, asserting both the paths you expect to be present AND the ones you deliberately excluded.
