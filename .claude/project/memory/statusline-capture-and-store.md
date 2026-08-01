@@ -1,6 +1,6 @@
 ---
 name: statusline-capture-and-store
-description: "how do I get rate_limits without hitting the usage endpoint / why is session_id coming back as hugeint / JSON.stringify throws Do not know how to serialize a BigInt / why did lifecycle-events go empty / can I add a second statusLine / does Claude Code send the 5h 7d windows on stdin / should I pack N samples per row in parquet / how big should a parquet chunk be / get_account_status shows another account's window / was that turn actually a cache miss / how do I verify a claimed cold cache write in one command / is the 1-hour write tier real on this machine / why does the same turn show up twelve times / why is the burn monitor reporting far more cost than was really spent / the statusline burn path over-counts / I raised a feed's sample rate and its deltas broke / Could not convert string to INT128 / failed to cast column session_id from VARCHAR to UUID / one row blinds every view / Could not find key effort in struct / a struct field missing from one parquet file / subagents view binder error / Referenced column not found in FROM clause / an older payload without rate_limits crashes the query / all five views died at once — the statusline sample store, its measured format choices, the cache/peaks query views, the one-event-per-turn billing rule, and the DuckDB traps that shipped bugs"
+description: "how do I get rate_limits without hitting the usage endpoint / why is session_id coming back as hugeint / JSON.stringify throws Do not know how to serialize a BigInt / why did lifecycle-events go empty / can I add a second statusLine / does Claude Code send the 5h 7d windows on stdin / should I pack N samples per row in parquet / how big should a parquet chunk be / get_account_status shows another account's window / was that turn actually a cache miss / how do I verify a claimed cold cache write in one command / is the 1-hour write tier real on this machine / why does the same turn show up twelve times / why is the burn monitor reporting far more cost than was really spent / the statusline burn path over-counts / I raised a feed's sample rate and its deltas broke / Could not convert string to INT128 / failed to cast column session_id from VARCHAR to UUID / one row blinds every view / Could not find key effort in struct / a struct field missing from one parquet file / subagents view binder error / Referenced column not found in FROM clause / an older payload without rate_limits crashes the query / all five views died at once / the query says BLIND but the data is there / a record is missing from its own day's window / how big can this store get before queries slow down — the statusline sample store, its measured format choices, the cache/peaks query views, the one-event-per-turn billing rule, and the DuckDB traps that shipped bugs"
 ocd: 2026-08-01
 lmd: 2026-08-01
 metadata:
@@ -76,6 +76,26 @@ costs 20% of the file because that is what it is worth — and it earns it as th
 OTEL span store (the docs specify it equals the `prompt.id` span attribute; nothing else indexes it).
 
 Live result: **109×** — 6,310 rows / 13 sessions in 85.3 KB against a 9.08 MB raw equivalent.
+
+**Scale, measured not guessed:** a synthetic FULL-RETENTION store — 90 day-partitions × 15 parts ×
+50 rows = **1,350 parts** — answers `sessions` / `cache` / `peaks` in **~500 ms** each, from a
+1.29 MB generated SQL string. So one normalized relation per FILE (trap 1b) is affordable at the
+retention ceiling; there is no need to trade it for a multi-file reader.
+
+## A record's `ts` and its PARTITION do not agree — and the mismatch reported BLIND
+
+`flush()` files a whole batch under the day it is **WRITTEN**, not by any record's own `ts`. A batch
+appended just before UTC midnight and flushed just after therefore lands those records in the **next**
+day's partition. Partition selection is day-granular, so a window covering the earlier day skipped
+that partition and the query returned **BLIND** — "we cannot see" — for data it was holding.
+
+That failure signature is the point: not a wrong count, not a crash, but the store's own
+absence-vs-blindness contract inverted. `filesInWindow` therefore carries **`PARTITION_SLACK_MS`** (one
+day each side). It widens FILE selection only — every row is still filtered on `ts`, so a
+slack-admitted partition cannot leak an out-of-window row. **The slack and the write-time
+partitioning are a PAIR**; changing either alone reintroduces this, which is why the flush comment
+now says so. (The comment there previously claimed the code partitioned "by the FIRST record's day"
+and called the skew "harmless" — both false, and that is how it went unnoticed.)[^11]
 
 ## Five DuckDB traps that each SHIPPED a bug (all invisible to tsc)
 
