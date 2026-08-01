@@ -243,6 +243,193 @@ export async function installHooks(uninstall: boolean, opts: InstallHooksOptions
   return { changed: result.changed, addedEvents: added, removedOurs, removedSpyglass, backupPath: result.backupPath }
 }
 
+/** The status-line capture registration. Unlike `hooks`, `statusLine` is a SINGLE object with one
+ *  `command` string and settings scopes OVERRIDE rather than merge — so capture cannot be added
+ *  BESIDE an existing status line, only WRAPPED around it. The wrapper re-runs the original
+ *  command through a shell (exactly as Claude Code does) and passes its stdout through untouched. */
+export const STATUSLINE_CMD = 'agentlenspro statusline'
+/** The `subagentStatusLine` variant — same wrapper, different event name, different settings key.
+ *  Note the prefix is shared with STATUSLINE_CMD, which is harmless because the two are never read
+ *  from the same settings key. */
+export const SUBAGENT_STATUSLINE_CMD = 'agentlenspro statusline --subagent'
+
+/** The two status-line settings keys and the command each registers. Kept as data so install,
+ *  uninstall and the tests all walk the SAME list — a third surface (should Claude Code add one)
+ *  is one row here, not a second copy of the transaction. */
+export const STATUSLINE_SURFACES: ReadonlyArray<{ key: string; cmd: string; blanksWhenEmpty: boolean }> = [
+  // The main status line BLANKS if its command prints nothing, so a capture-only install there is
+  // only acceptable when there was no status line to begin with.
+  { key: 'statusLine', cmd: STATUSLINE_CMD, blanksWhenEmpty: true },
+  // subagentStatusLine does NOT: omitting a task id keeps that row's default rendering, so a
+  // capture-only wrapper is invisible. This is why it can be installed unconditionally.
+  { key: 'subagentStatusLine', cmd: SUBAGENT_STATUSLINE_CMD, blanksWhenEmpty: false },
+]
+
+/** POSIX single-quoting: wrap in quotes and rewrite each embedded quote as `'\''` (close, escaped
+ *  quote, reopen). The original command may contain spaces, quotes, pipes or globs, and it has to
+ *  survive being carried inside another command string byte-for-byte — a naive join would silently
+ *  corrupt any status line fancier than `script.sh`. */
+export function shSingleQuote(s: string): string {
+  return `'${s.replace(/'/g, "'\\''")}'`
+}
+
+/** Inverse of shSingleQuote over the whole remainder of a command string. Returns null unless the
+ *  input is one complete, well-formed single-quoted word — a partial parse would hand uninstall a
+ *  truncated command and permanently damage the user's status line. */
+export function parseSingleQuoted(s: string): string | null {
+  if (s[0] !== "'") return null
+  let out = ''
+  for (let i = 1; i < s.length;) {
+    if (s[i] === "'") {
+      if (s.slice(i, i + 4) === "'\\''") { out += "'"; i += 4; continue }
+      return i === s.length - 1 ? out : null // the closing quote must end the string
+    }
+    out += s[i++]
+  }
+  return null // unterminated
+}
+
+/** Is this command string our capture wrapper? */
+export function isOurStatuslineCommand(command: unknown): boolean {
+  return typeof command === 'string' && command.trimStart().startsWith(STATUSLINE_CMD)
+}
+
+/** Recover the command our wrapper was wrapped AROUND. Returns '' for a capture-only wrapper (no
+ *  inner command), or null when `command` is not ours / not parseable. */
+export function unwrapStatuslineCommand(command: string): string | null {
+  if (!isOurStatuslineCommand(command)) return null
+  const marker = '--inner '
+  const at = command.indexOf(marker)
+  if (at < 0) return '' // capture-only wrapper — there was no status line to restore
+  return parseSingleQuoted(command.slice(at + marker.length).trim())
+}
+
+export interface InstallStatuslineOptions {
+  settingsPath?: string
+  pathEnv?: string
+  log?: (line: string) => void
+}
+
+export type StatuslineAction = 'wrapped' | 'capture-only' | 'unchanged' | 'restored' | 'removed' | 'absent'
+
+export interface StatuslineSurfaceResult {
+  key: string
+  action: StatuslineAction
+  /** The user's own command we wrapped (install) or restored (uninstall); null when there is none. */
+  inner: string | null
+}
+
+export interface InstallStatuslineResult {
+  changed: boolean
+  surfaces: StatuslineSurfaceResult[]
+  backupPath: string | null
+}
+
+/** Plan the ops for ONE status-line surface. Split out from the transaction so the decision table
+ *  (wrap / capture-only / leave alone / restore / remove) is testable without touching a settings
+ *  file, and so both surfaces provably go through the same rules. */
+export function planStatuslineSurface(
+  surface: { key: string; cmd: string; blanksWhenEmpty: boolean },
+  current: string | null,
+  uninstall: boolean,
+  settingsFile: string,
+): { ops: SafeEditOp[]; result: StatuslineSurfaceResult } {
+  const { key, cmd } = surface
+  const mine = current !== null && isOurStatuslineCommand(current)
+
+  if (uninstall) {
+    if (!mine) return { ops: [], result: { key, action: 'absent', inner: null } }
+    const inner = unwrapStatuslineCommand(current)
+    if (inner === null) {
+      // Ours by prefix, but the inner command will not parse. Restoring a truncated command would
+      // leave a broken status line and deleting the key would destroy the user's configuration —
+      // refuse and let a human look, which is recoverable either way.
+      throw new Error(
+        `refusing: ${key}.command looks like ours but its --inner argument is not parseable, so the `
+        + `original cannot be restored safely. Edit ${settingsFile} by hand. Current value: ${current}`
+      )
+    }
+    // A capture-only wrapper wrapped nothing, so there is nothing to restore: remove the key and
+    // leave the user exactly as they were before install.
+    return inner === ''
+      ? { ops: [{ op: 'delete', path: [key] }], result: { key, action: 'removed', inner: null } }
+      : { ops: [{ op: 'set', path: [key, 'command'], value: inner }], result: { key, action: 'restored', inner } }
+  }
+
+  if (mine) return { ops: [], result: { key, action: 'unchanged', inner: unwrapStatuslineCommand(current) || null } }
+
+  const hasInner = current !== null && current.trim() !== ''
+  const wrapped = hasInner ? `${cmd} --inner ${shSingleQuote(current)}` : cmd
+  const ops: SafeEditOp[] = [
+    // `type` must be present and "command" — set it explicitly so installing onto a settings file
+    // that has no such key yet produces a complete, valid object rather than half of one.
+    { op: 'set', path: [key, 'type'], value: 'command' },
+    { op: 'set', path: [key, 'command'], value: wrapped },
+  ]
+  return { ops, result: { key, action: hasInner ? 'wrapped' : 'capture-only', inner: hasInner ? current : null } }
+}
+
+/** Install (or remove) the status-line capture wrappers via the verified transaction engine.
+ *
+ *  BOTH surfaces are handled: `statusLine` (the session's own line — rate-limit windows, context
+ *  window, harness cost, prompt_id) and `subagentStatusLine` (the ONLY published source of
+ *  per-subagent tokenCount / contextWindowSize / effort / cwd). One transaction, so the settings
+ *  file is never left with one surface wired and the other not.
+ *
+ *  Only each key's `command` (and `type`) is touched, so `refreshInterval`, `padding` and
+ *  `hideVimModeIndicator` survive untouched. Idempotent: an already-wrapped command is left alone
+ *  rather than double-wrapped. */
+export async function installStatusline(uninstall: boolean, opts: InstallStatuslineOptions = {}): Promise<InstallStatuslineResult> {
+  const settingsFile = opts.settingsPath ?? claudeSettingsPath()
+  const log = opts.log ?? ((line: string) => console.log(line))
+
+  if (!uninstall && !resolveOnPath(CLI_BIN, opts.pathEnv)) {
+    throw new Error(
+      `refusing: '${CLI_BIN}' is not on PATH — a status line registered as '${STATUSLINE_CMD}' would produce `
+      + 'NO output, and Claude Code blanks the status line when its command fails. '
+      + 'Install the package first (npm i -g agentlenspro, or npm link from the repo checkout), then re-run.'
+    )
+  }
+
+  let settings: Record<string, unknown> = {}
+  if (fs.existsSync(settingsFile)) {
+    // Refuse-unparseable, same stance as safe_config_edit: never "start fresh" over user config.
+    try { settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8')) as Record<string, unknown> }
+    catch { throw new Error(`refusing: ${settingsFile} is not parseable JSON — fix it before editing the status line`) }
+  }
+
+  const ops: SafeEditOp[] = []
+  const surfaces: StatuslineSurfaceResult[] = []
+  for (const surface of STATUSLINE_SURFACES) {
+    const obj = (settings[surface.key] && typeof settings[surface.key] === 'object' && !Array.isArray(settings[surface.key])
+      ? settings[surface.key] : null) as Record<string, unknown> | null
+    const current = typeof obj?.command === 'string' ? obj.command : null
+    const planned = planStatuslineSurface(surface, current, uninstall, settingsFile)
+    ops.push(...planned.ops)
+    surfaces.push(planned.result)
+  }
+
+  if (ops.length === 0) {
+    log(uninstall ? 'no agentlens status-line wrapper present — nothing to remove' : 'status-line capture already installed — nothing to change')
+    return { changed: false, surfaces, backupPath: null }
+  }
+
+  const result = await safeConfigEdit(settingsFile, 'json', ops, { createIfMissing: !uninstall })
+  for (const s of surfaces) {
+    if (s.action === 'wrapped') log(`${s.key}: wrapped for capture\n  inner: ${s.inner}`)
+    else if (s.action === 'capture-only') log(`${s.key}: capture installed (nothing existing to wrap — prints nothing)`)
+    else if (s.action === 'restored') log(`${s.key}: restored the original command\n  ${s.inner}`)
+    else if (s.action === 'removed') log(`${s.key}: removed (it was capture-only — there was no original to restore)`)
+    else if (s.action === 'unchanged') log(`${s.key}: already installed`)
+    else log(`${s.key}: no agentlens wrapper present`)
+  }
+  log(`${settingsFile}: changed=${result.changed}${result.backupPath ? ` backup=${result.backupPath}` : ''} attempts=${result.attempts}`)
+  // Unlike hooks, a status-line change needs no session restart: Claude Code re-reads the setting
+  // on the next update trigger, so the very next assistant message runs the wrapper.
+  log('takes effect on the next status-line refresh — no session restart needed')
+  return { changed: result.changed, surfaces, backupPath: result.backupPath }
+}
+
 export interface InstallOtelOptions {
   settingsPath?: string
   markerPath?: string

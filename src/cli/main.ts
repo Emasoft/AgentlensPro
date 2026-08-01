@@ -29,6 +29,7 @@ import { runBudgetCli } from './budgetCli'
 import { runWatchCli } from './watchCli'
 import { runCtxmapCli } from './ctxmapCli'
 import { runCtxvisCli } from './ctxvisCli'
+import { runStatuslineCommand } from './statuslineCapture'
 
 /** CLI entry. `startServer` lazily imports standalone/server (injected by the shim — src/
  *  cannot import standalone/ without inverting the build layering). Returns the exit code. */
@@ -50,6 +51,12 @@ export async function cliMain(argv: string[], startServer: () => Promise<unknown
       return runHookCommand('hook')
     case 'gate':
       return runHookCommand('gate')
+    case 'statusline':
+      // The status-line capture wrapper. Sits on the RENDER path (every assistant message plus a
+      // refreshInterval timer), so it belongs beside hook/gate in the hot-path band: read stdin,
+      // exec the real status-line command, forward the payload. It must reach `return` before any
+      // module with side effects is touched.
+      return runStatuslineCommand(argv.slice(1))
     case 'disable':
       // THE GLOBAL BRAKE. Arms <dataDir>/DISABLED, which disarms every hook, the burn-gate, server
       // auto-revive and all background ingestion — in EVERY Claude session already running, on its

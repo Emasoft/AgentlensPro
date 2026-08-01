@@ -143,7 +143,10 @@ function reviveDaemonDetached(): void {
   } catch { /* best effort — a hook must never throw */ }
 }
 
-function readStdin(stream: NodeJS.ReadableStream): Promise<Buffer> {
+/** Exported so the status-line wrapper reads stdin through the SAME implementation — it needs the
+ *  identical "a closed/absent stdin resolves rather than hangs" behavior, and two copies of that
+ *  rule would be two places for it to rot. */
+export function readStdin(stream: NodeJS.ReadableStream): Promise<Buffer> {
   return new Promise((resolve) => {
     const chunks: Buffer[] = []
     stream.on('data', (c: Buffer) => chunks.push(c))

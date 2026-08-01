@@ -17,7 +17,7 @@ import {
   apiRequest, callTool, dashboardUrl, dataDir, digest, fetchTools, firstSentence, fmtGb,
   fmtMb, init, mcpEndpoint, parseWhen, resolveTool, sleep, ToolInfo, ToolSchema,
 } from './cliCore'
-import { installHooks, installOtel, installSkills } from './hookInstall'
+import { installHooks, installOtel, installSkills, installStatusline } from './hookInstall'
 import { ensureServer, openDashboard, showStatus, stopServer } from './serverControl'
 
 export const USAGE = `agentlenspro — AI-agent observability: server, dashboard, diagnostics, hooks, setup
@@ -147,6 +147,22 @@ operations:
                         unparseable file, pre-existing content untouched)
   --uninstall-otel      remove exactly those env vars, restoring any pre-existing values
                         (same transaction guarantees)
+  --install-statusline  capture the status-line JSON Claude Code pipes to statusLine AND
+                        subagentStatusLine. statusLine is NOT a hook event -- it is a single
+                        command string and settings scopes OVERRIDE rather than merge, so
+                        capture WRAPS the command already there (verified transaction, backup)
+                        and passes its stdout + exit code through byte-for-byte. The payload is
+                        stored VERBATIM as ev=StatusLineSample / SubagentStatusLineSample: the
+                        rate_limits 5h/7d windows -- full float precision, attributed by
+                        construction to the account that session bills to), the context window
+                        split by cache_creation/cache_read, the harness's own tier-aware
+                        cost.total_cost_usd, prompt_id (= the OTEL prompt.id attribute), and —
+                        from subagentStatusLine — per-subagent tokenCount, contextWindowSize,
+                        effort, model and cwd, which nothing else publishes. Takes effect on
+                        the next refresh; no session restart.
+  --uninstall-statusline
+                        restore the original status-line command exactly (a capture-only
+                        surface, which wrapped nothing, is removed rather than left as a stub)
 
 examples:  (discover the rest with 'list --desc' then 'help <tool>')
   agentlenspro investigate_burn --windowHours 5      "my 5h window drained — what burned it, WHO?" START HERE
@@ -448,6 +464,7 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
   const ops: Ops = { status: false, stop: false, purgeDb: false, purgeBodies: false, exportBodies: null, installSkill: false }
   let otelOp: 'install' | 'uninstall' | null = null
   let hooksOp: 'install' | 'uninstall' | null = null
+  let statuslineOp: 'install' | 'uninstall' | null = null
   const rest: string[] = []
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--full') globals.full = true
@@ -482,6 +499,8 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
     else if (argv[i] === '--uninstall-hooks') hooksOp = 'uninstall'
     else if (argv[i] === '--install-otel') otelOp = 'install'
     else if (argv[i] === '--uninstall-otel') otelOp = 'uninstall'
+    else if (argv[i] === '--install-statusline') statuslineOp = 'install'
+    else if (argv[i] === '--uninstall-statusline') statuslineOp = 'uninstall'
     else if (argv[i] === '--out') {
       globals.out = argv[++i]
       if (!globals.out) throw new Error('--out needs a path')
@@ -491,6 +510,12 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
   // Settings mutation is standalone — no server needed, exits after the transaction.
   if (otelOp) {
     await installOtel(otelOp === 'uninstall')
+    return
+  }
+
+  // Status-line capture is another standalone settings transaction.
+  if (statuslineOp) {
+    await installStatusline(statuslineOp === 'uninstall')
     return
   }
 
