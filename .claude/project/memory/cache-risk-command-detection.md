@@ -1,8 +1,8 @@
 ---
 name: cache-risk-command-detection
-description: "what actually broke my prompt cache / how does reload-cost know a /reload-plugins happened / where do the cache-break causes come from if no hook fires / does ConfigChange fire on /reload-plugins / how are /reload-skills /plugin /login /logout /model detected / why did the reload count change from 102 to 613 / where does the cost of a slash command get billed"
+description: "what actually broke my prompt cache / how does reload-cost know a /reload-plugins happened / where do the cache-break causes come from if no hook fires / does ConfigChange fire on /reload-plugins / how are /reload-skills /plugin /login /logout /model detected / why did the reload count change from 102 to 613 / where does the cost of a slash command get billed / why are so many breaks UNCLASSIFIED / an injected memory file keeps breaking the cache / a memory curator rewrote MEMORY.md under a live session / usertext block changed at msg[0]"
 ocd: 2026-07-21
-lmd: 2026-07-21
+lmd: 2026-08-01
 metadata:
   node_type: memory
   type: project
@@ -62,6 +62,28 @@ The sibling reader on the same substrate — which plugin VERSION a session has 
 
 See also: [[image-resident-cost-guard]] (the same `CacheBreakCause` taxonomy used as EVIDENCE OF
 ABSENCE — an image read is not among the 14, which is why the image guard warns instead of denying).
+
+See also: [[ctxmap-exact-measurement-cost]] — this page classifies WHY a prefix broke; that one is
+the tool that MEASURES what is in the prefix, and what measuring it exactly costs.
+
+
+^ATOM-Z7A0-4ODB [desc:"Injected auto-memory files fell through every instruction-file matcher into UNCLASSIFIED — a curator rewriting them under live sessions re-mutates msg[0] in every session that injects them.", keywords: UNCLASSIFIED_cache_break injected_memory_file_broke_the_cache MEMORY.md_rewritten_under_a_live_session usertext_block_changed_at_msg_0 memory_curator_invalidates_prefix, ocd: 2026-08-01, lmd: 2026-08-01]
+
+`get_cache_break_causes` reported ~19% of all classified break tokens as UNCLASSIFIED, with the actor
+recorded only as `usertext block changed at pos 38: msg[0] user` — nothing anyone could act on.
+Reading the raw captured bodies showed the changing region was the INJECTED AUTO-MEMORY file: its
+path is neither `CLAUDE.md` nor under `.claude/rules/`, so it matched neither instruction-file
+matcher and fell through to `usertext`.
+
+That is the worst place for a blind spot, because memory files are rewritten by a curator agent while
+other sessions are LIVE — one write re-mutates `msg[0]` and re-writes the whole prefix in every
+session that injects it. Hence `MEMORY_FILE_CHANGED` (`src/cacheBreakTimeline.ts`), matched AFTER
+`rule` and BEFORE `hook` so a memory page that merely QUOTES a hook marker is still attributed to the
+file injection, not to a hook that never fired.
+
+Honest limit: naming this cause did NOT empty the UNCLASSIFIED bucket. The dominant remaining actor
+is a mutation in the LEAD region of `msg[0]`, before the first `Contents of` boundary — unreproduced,
+because those captures had already rotated off the spool. That one is open.
 
 ## Notes and lessons learned
 [^1]: [id:ATOM-LAYR-ONLY, status:valid, keywords:"no hook sees it therefore undetectable only detection path wrong layer enumerate layers before concluding", ocd:2026-07-21, lmd:2026-07-21]
