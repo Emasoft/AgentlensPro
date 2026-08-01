@@ -153,10 +153,16 @@ interface Credentials { accessToken?: string; refreshToken?: string; expiresAt?:
 /** Identify the ACCOUNT a credential belongs to, without ever storing or logging the credential.
  *
  *  Prefer the refresh token: the access token rotates roughly hourly, so fingerprinting it would
- *  invalidate the cache on every rotation. The refresh token is stable for as long as the login is,
- *  which is exactly the lifetime we want the cache scoped to. Either way a CHANGE of account yields
- *  a fingerprint mismatch, so the cache MISSES rather than returning another account's numbers —
- *  a miss costs one request, a wrong number costs a wrong decision. */
+ *  invalidate the cache on every rotation. The refresh token is LONGER-lived, not permanent —
+ *  Anthropic rotates it server-side on refresh (documented by claude-multi-usage, which dropped the
+ *  idea of reading Claude Code's tokens precisely because self-refreshing them would rotate the
+ *  chain out from under Claude Code and log the user out). So this fingerprint can change without
+ *  an account switch. That is the SAFE direction and the whole reason to key on it: a change yields
+ *  a cache MISS and one extra request, never another account's numbers under this account's name.
+ *
+ *  COROLLARY, and it is a landmine: this module must NEVER call the token-refresh endpoint with
+ *  Claude Code's credential. Reading the access token is inert; refreshing it would invalidate the
+ *  session the user is working in. */
 function fingerprint(c: Credentials): string | null {
   const basis = c.refreshToken || c.accessToken
   return basis ? createHash('sha256').update(basis).digest('hex').slice(0, 16) : null
