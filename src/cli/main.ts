@@ -46,11 +46,20 @@ import { runStatuslineHistoryCli } from './statuslineHistoryCli'
  *  setting `process.exitCode` — i.e. by waiting for that loop to drain. So the timeout bounded the
  *  REQUEST and nothing bounded the PROCESS.
  *
- *  Safe for exactly these three because none of them writes to our own stdout: `statusline` execs its
- *  inner command with stdio 'inherit' so the child writes straight to the terminal fd, and hook/gate
- *  print at most one short line that has already been flushed by the time we get here. Every other
- *  subcommand keeps the normal drain-and-exit path, where a truncated stdout would be a real bug. */
-function exitNow(code: number): never {
+ *  BUT `process.exit()` DISCARDS a pending piped stdout write. MEASURED: write 262,144 bytes to a
+ *  pipe and exit, and the reader gets 65,536 — one pipe buffer. `gate` writes its verdict to stdout
+ *  and Claude Code READS it to decide whether to block a tool call, so a truncated write there is a
+ *  corrupted safety decision, not cosmetic damage. Hence flush first, and bound the flush too: a
+ *  reader that never drains must not reintroduce exactly the hang this function exists to prevent.
+ *
+ *  Scoped to these three commands. Every other subcommand keeps the normal drain-and-exit path. */
+async function exitNow(code: number): Promise<never> {
+  await new Promise<void>(resolve => {
+    const t = setTimeout(resolve, 500)
+    t.unref?.()
+    // A zero-length write's callback fires once everything queued before it has flushed.
+    process.stdout.write('', () => { clearTimeout(t); resolve() })
+  })
   process.exit(code)
 }
 

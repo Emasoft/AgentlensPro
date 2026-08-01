@@ -88,6 +88,47 @@ function run(subcommand: 'hook' | 'gate', env: NodeJS.ProcessEnv, stdin: string)
   })
 }
 
+suite('agentlenspro hook/gate — the exit path must be fast AND complete', () => {
+  // These two pull in opposite directions, and satisfying one alone breaks the other.
+  //
+  // FAST: an aborted fetch does not destroy its TCP socket, so the socket holds the event loop open
+  // until the OS connect timeout. A CLI that ends by setting `process.exitCode` waits for that drain
+  // — measured 10.6 s against an address that DROPS, on paths Claude Code runs per render and per
+  // tool call. `AbortSignal.timeout` is NOT the fix: it fires correctly (704 ms) and bounds only the
+  // REQUEST. The fix is process.exit().
+  //
+  // COMPLETE: process.exit() DISCARDS a pending piped stdout write past the ~64 KiB pipe buffer
+  // (measured: 262,144 written, 65,536 received). `gate` writes the verdict Claude Code READS to
+  // decide whether to block a tool call, so truncating it corrupts a safety decision. Hence flush,
+  // with a bounded wait so a reader that never drains cannot restore the hang.
+
+  test('gate: a verdict larger than the pipe buffer arrives WHOLE, not one buffer of it', async () => {
+    const BIG = 'D'.repeat(262_144)
+    const stub = await startStub(() => ({ status: 200, body: BIG }))
+    try {
+      const payload = JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Agent', tool_input: { prompt: 'x' } })
+      const r = await run('gate', baseEnv({ AGENTLENS_UI_URL: stub.base }), payload)
+      assert.strictEqual(r.code, 0)
+      assert.strictEqual(r.stdout.length, BIG.length,
+        `the verdict was truncated to ${r.stdout.length} bytes — process.exit() dropped a queued pipe write`)
+    } finally { await stub.close() }
+  })
+
+  for (const sub of ['hook', 'gate'] as const) {
+    test(`${sub}: a server that HANGS (not refuses) must not stall the tool call`, async function () {
+      this.timeout(20_000)
+      // 10.255.255.1 DROPS. A dead port REFUSES instantly and hides this entirely — which is exactly
+      // why every other test in this file (they use freePort()) passed while the bug was live.
+      const t0 = Date.now()
+      const r = await run(sub, baseEnv({ AGENTLENS_UI_URL: 'http://10.255.255.1:3000', AGENTLENS_GATE_TIMEOUT: '1', AGENTLENS_HOOK_TIMEOUT: '1' }),
+        JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Agent', tool_input: { prompt: 'x' } }))
+      const ms = Date.now() - t0
+      assert.strictEqual(r.code, 0, 'fail-open is unconditional: an unreachable server never fails the tool call')
+      assert.ok(ms < 5_000, `${sub} took ${ms}ms — a hung socket is holding the process open`)
+    })
+  }
+})
+
 suite('agentlenspro hook/gate — single-executable handler contracts', () => {
   test('forwards-and-silent: `agentlenspro hook` POSTs stdin to /api/hook-events, prints nothing, exits 0', async () => {
     // Happy path: the raw payload reaches /api/hook-events verbatim and the hook stays a silent pipe.
