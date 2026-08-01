@@ -55,6 +55,22 @@ export function parseWhenArg(v: string | undefined, nowMs: number = Date.now()):
   return t
 }
 
+/** JSON.stringify THROWS on a BigInt ("Do not know how to serialize a BigInt"), and DuckDB returns
+ *  every BIGINT column (token counts, epoch ms, count(*)) as one. The table view hid this behind
+ *  String(), so --json was the only broken path — and it failed outright rather than degrading.
+ *  Exact integers up to 2^53 become numbers; anything larger becomes a string rather than silently
+ *  losing precision. */
+export function jsonSafe(v: unknown): unknown {
+  if (typeof v === 'bigint') {
+    return v <= BigInt(Number.MAX_SAFE_INTEGER) && v >= -BigInt(Number.MAX_SAFE_INTEGER) ? Number(v) : v.toString()
+  }
+  if (Array.isArray(v)) return v.map(jsonSafe)
+  if (v && typeof v === 'object') {
+    return Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, jsonSafe(x)]))
+  }
+  return v
+}
+
 function fmtNum(v: unknown): string {
   const n = Number(v)
   if (!Number.isFinite(n)) return '-'
@@ -86,7 +102,16 @@ interface ViewSpec {
 
 /** `session_id` filtering is done in SQL rather than by narrowing the file list: a session's samples
  *  can land in any day-partition, and the column is dictionary-encoded so the scan is cheap. */
-const sessionFilter = (s?: string): string => (s ? `WHERE session_id = '${s.replace(/'/g, "''")}'` : '')
+const sessionFilter = (s?: string): string => (s ? `WHERE CAST(session_id AS VARCHAR) = '${s.replace(/'/g, "''")}'` : '')
+
+/** ALWAYS select a session id through this.
+ *
+ *  DuckDB's JSON reader AUTO-DETECTS a UUID-shaped string as the UUID type, and the node client hands
+ *  a UUID back as `{hugeint: "-42379450445917529599431978701661611460"}` — not a string, not the id,
+ *  and useless to every consumer. Worse, the inference is per-file: the same column can land as UUID
+ *  in one part and VARCHAR in another, so an un-cast union is type-unstable across the seal boundary.
+ *  Casting at every selection site keeps the id a string, always. */
+const SESSION_COL = 'CAST(session_id AS VARCHAR) AS session_id'
 
 export const VIEWS: Record<string, ViewSpec> = {
   // LATEST-WINS for the point-in-time fields and MAX for the peak — never SUM. The statusline can
@@ -95,7 +120,7 @@ export const VIEWS: Record<string, ViewSpec> = {
   sessions: {
     stream: 'main',
     sql: (limit, session) => `
-      SELECT session_id,
+      SELECT ${SESSION_COL},
              count(*)                              AS samples,
              max(context_window_used_percentage)   AS peak_pct,
              max(context_window_total_input_tokens) AS peak_ctx,
@@ -151,7 +176,7 @@ export const VIEWS: Record<string, ViewSpec> = {
   windows: {
     stream: 'main',
     sql: (limit, session) => `
-      SELECT session_id, ts,
+      SELECT ${SESSION_COL}, ts,
              rate_limits_five_hour_used_percentage  AS pct_5h,
              rate_limits_seven_day_used_percentage  AS pct_7d,
              rate_limits_five_hour_resets_at        AS resets_5h
@@ -175,7 +200,7 @@ export const VIEWS: Record<string, ViewSpec> = {
     // a view that opens with its own WITH produces two consecutive WITH clauses and a parser error.
     sql: (limit, session) => `
       SELECT session_id, ts, model, ctx, d_ctx, d_cost FROM (
-        SELECT session_id, ts, model_display_name AS model,
+        SELECT ${SESSION_COL}, ts, model_display_name AS model,
                context_window_total_input_tokens AS ctx,
                context_window_total_input_tokens
                  - lag(context_window_total_input_tokens) OVER (PARTITION BY session_id ORDER BY ts) AS d_ctx,
@@ -197,7 +222,7 @@ export const VIEWS: Record<string, ViewSpec> = {
   raw: {
     stream: 'main',
     sql: (limit, session) => `
-      SELECT ts, session_id, model_display_name AS model, effort_level AS effort,
+      SELECT ts, ${SESSION_COL}, model_display_name AS model, effort_level AS effort,
              context_window_used_percentage AS pct,
              context_window_total_input_tokens AS ctx,
              cost_total_cost_usd AS cost
@@ -275,7 +300,7 @@ export async function runStatuslineHistoryCli(argv: string[]): Promise<number> {
   }
 
   const text = asJson
-    ? JSON.stringify({ view: viewName, stream: view.stream, sinceMs, untilMs, session, count: rows.length, rows }, null, 2)
+    ? JSON.stringify(jsonSafe({ view: viewName, stream: view.stream, sinceMs, untilMs, session, count: rows.length, rows }), null, 2)
     : (rows.length === 0 ? '(no rows matched — the store has data for this window but nothing fits the filter)' : table(rows, view.cols))
   const digest = `${rows.length} row(s) — ${viewName}`
 

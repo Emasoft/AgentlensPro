@@ -14,9 +14,6 @@
  * totals; we take latest-wins snapshots + the max observed context occupancy).
  */
 
-import * as fs from 'fs'
-import * as os from 'os'
-import * as path from 'path'
 import type { SessionSummaryCard, StatuslineUsageAgg } from './shared/summarizerTypes'
 import type { StatuslineBillingEvent } from './burnMonitor'
 
@@ -76,25 +73,57 @@ function numOrNull(v: unknown): number | null {
 }
 
 /**
- * Resolves the SINGLE shared statusline usage log. Mirrors statusline.py's _agentlens_usage_log_path
- * byte-for-byte so writer and reader always agree on the path:
- *   1. $AGENTLENS_STATUSLINE_LOG (explicit full path override)
- *   2. <CLAUDE_CONFIG_DIR first entry, minus a trailing /projects>/agentlens/statusline-usage.jsonl
- *   3. ~/.claude/agentlens/statusline-usage.jsonl
+ * Project ONE captured status-line payload onto the flat record the aggregates are built from.
+ *
+ * This mapping used to live in ~/.claude/statusline.py (`write_usage_jsonl`), which is exactly why it
+ * had to move here: that script was replaced on 2026-07-31 20:28, its replacement dropped the writer,
+ * and this module's "authoritative, rate-limit-free" source silently froze for 23 hours. It also only
+ * ever emitted 13 hand-picked fields and NEVER `rate_limits` — which is why getLatestRateLimits()
+ * returned null and get_account_status fell back to a calibrated guess. Owning the projection means
+ * the product's data no longer depends on a user's personal script.
+ *
+ * `ts` is deliberately epoch SECONDS: getBillingEvents prunes against a seconds cutoff and
+ * burnMonitor.toMs() re-normalises (`ts < 1e12 ? ts*1000 : ts`). Emitting ms here would make every
+ * event look ~55,000 years old and silently prune the entire billing stream.
  */
-export function statuslineUsageLogPath(): string {
-  const override = process.env['AGENTLENS_STATUSLINE_LOG']
-  if (override) return override
-  const cfg = process.env['CLAUDE_CONFIG_DIR']
-  let base: string
-  if (cfg) {
-    let first = cfg.split(',')[0].trim()
-    if (path.basename(first) === 'projects') first = path.dirname(first)
-    base = first
-  } else {
-    base = path.join(os.homedir(), '.claude')
+export function recordFromStatuslinePayload(payload: Record<string, unknown>, tsMs: number = Date.now()): StatuslineUsageRecord | null {
+  const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {})
+  const sid = payload?.session_id
+  if (typeof sid !== 'string' || sid === '') return null
+  const cw = obj(payload.context_window)
+  const cu = obj(cw.current_usage)
+  const cost = obj(payload.cost)
+  const ws = obj(payload.workspace)
+  const rl = obj(payload.rate_limits)
+  const five = obj(rl.five_hour)
+  const seven = obj(rl.seven_day)
+  const rec: StatuslineUsageRecord = {
+    ts: Math.floor(tsMs / 1000),
+    session_id: sid,
+    project_dir: String(ws.project_dir ?? ws.current_dir ?? payload.cwd ?? ''),
+    model: String(obj(payload.model).display_name ?? ''),
+    input_tokens: num(cu.input_tokens),
+    output_tokens: num(cu.output_tokens),
+    cache_creation_input_tokens: num(cu.cache_creation_input_tokens),
+    cache_read_input_tokens: num(cu.cache_read_input_tokens),
+    total_input_tokens: num(cw.total_input_tokens),
+    total_output_tokens: num(cw.total_output_tokens),
+    context_window_size: num(cw.context_window_size),
+    used_percentage: num(cw.used_percentage),
+    total_cost_usd: num(cost.total_cost_usd),
   }
-  return path.join(base, 'agentlens', 'statusline-usage.jsonl')
+  // The live payload spells this `used_percentage`; `utilization` is the legacy CC API name the
+  // record type carries. Accept either, and attach the block ONLY when a window really reported a
+  // number — an absent window must stay null, never 0% consumed.
+  const f = numOrNull(five.used_percentage ?? five.utilization)
+  const s = numOrNull(seven.used_percentage ?? seven.utilization)
+  if (f !== null || s !== null) {
+    rec.rate_limits = {
+      ...(f !== null ? { five_hour: { utilization: f } } : {}),
+      ...(s !== null ? { seven_day: { utilization: s } } : {}),
+    }
+  }
+  return rec
 }
 
 /**
@@ -104,11 +133,7 @@ export function statuslineUsageLogPath(): string {
  * the caller only needs to invoke it right before persisting/serving each card.
  */
 export class StatuslineUsageReader {
-  private readonly filePath: string
-  private offset = 0
-  private carry = ''                                   // partial trailing line held across reads
   private readonly agg = new Map<string, StatuslineUsageAgg>()
-  private lastRefreshMs = 0
   // Per-turn billing deltas for the burn monitor (TRDD-OG9PARZQ). Each ingested line yields one event:
   // deltaCostUsd = the increment of the session's cumulative authoritative cost; deltaTokens = that
   // turn's 4 usage buckets summed. Bounded to the last 7 days + a hard cap so the firehose can't grow
@@ -119,67 +144,24 @@ export class StatuslineUsageReader {
   // TRDD-VY1IUVUM Part-5: latest-wins snapshot of Claude Code's own rate_limits utilization. Only a
   // record carrying a rate_limits block updates it; a rotated/shrunk file resets it to null (below).
   private latestRateLimits: RateLimitsSnapshot | null = null
+  // Per-session, because the machine-wide snapshot above cannot be attributed: several accounts run
+  // concurrently here and each reports its OWN window. See getRateLimitsForSessions.
+  private readonly rateLimitsBySession = new Map<string, RateLimitsSnapshot>()
 
-  constructor(filePath?: string) {
-    this.filePath = filePath ?? statuslineUsageLogPath()
-  }
-
-  /** Refreshes at most once per `throttleMs` — cheap enough to call before every card overlay. */
-  refreshIfStale(throttleMs = 2000): void {
-    const now = Date.now()
-    if (now - this.lastRefreshMs < throttleMs) return
-    this.lastRefreshMs = now
-    this.refresh()
-  }
-
-  /** Reads only the bytes appended since the last read. Rebuilds from 0 if the file shrank (rotated). */
-  refresh(): void {
-    let size: number
+  /** Ingest ONE captured status-line payload — the single entry point.
+   *
+   *  This replaced a byte-offset tail of a shared JSONL file. That file's only writer was a function
+   *  in the user's personal ~/.claude/statusline.py, so when the script was replaced the "reader"
+   *  went on running against a frozen file and every aggregate quietly went stale. Samples are now
+   *  pushed in as the server ingests them: no file, no offset, no rotation handling, and no
+   *  dependence on anything outside this product.
+   *
+   *  Never throws — a malformed sample is skipped. It is one point in a 3-second series. */
+  ingestSample(payload: Record<string, unknown>, tsMs: number = Date.now()): void {
     try {
-      size = fs.statSync(this.filePath).size
-    } catch {
-      return  // no log yet — nothing to ingest
-    }
-    if (size < this.offset) {
-      // File was truncated or rotated out from under us — restart the tail and the aggregate.
-      this.offset = 0
-      this.carry = ''
-      this.agg.clear()
-      this.billingEvents = []
-      this.latestRateLimits = null
-    }
-    if (size === this.offset) return
-
-    let fd: number
-    try {
-      fd = fs.openSync(this.filePath, 'r')
-    } catch {
-      return
-    }
-    try {
-      const len = size - this.offset
-      const buf = Buffer.allocUnsafe(len)
-      const read = fs.readSync(fd, buf, 0, len, this.offset)
-      this.offset += read
-      const text = this.carry + buf.toString('utf8', 0, read)
-      const lines = text.split('\n')
-      // The last element is either '' (chunk ended on a newline) or a partial line still being
-      // written — hold it and prepend it to the next read so a line split across reads isn't dropped.
-      this.carry = lines.pop() ?? ''
-      for (const line of lines) {
-        const t = line.trim()
-        if (!t) continue
-        let rec: StatuslineUsageRecord
-        try {
-          rec = JSON.parse(t) as StatuslineUsageRecord
-        } catch {
-          continue  // a torn line (should not happen with atomic appends) — skip it
-        }
-        this._ingest(rec)
-      }
-    } finally {
-      fs.closeSync(fd)
-    }
+      const rec = recordFromStatuslinePayload(payload, tsMs)
+      if (rec) this._ingest(rec)
+    } catch { /* one bad sample must never break ingestion */ }
   }
 
   private _ingest(rec: StatuslineUsageRecord): void {
@@ -246,8 +228,13 @@ export class StatuslineUsageReader {
       const recTs = num(rec.ts)
       const five = numOrNull(rec.rate_limits.five_hour?.utilization)
       const seven = numOrNull(rec.rate_limits.seven_day?.utilization)
-      if ((five !== null || seven !== null) && (this.latestRateLimits === null || recTs >= this.latestRateLimits.ts)) {
-        this.latestRateLimits = { ts: recTs, fiveHourUtilization: five, sevenDayUtilization: seven }
+      if (five !== null || seven !== null) {
+        const snap: RateLimitsSnapshot = { ts: recTs, fiveHourUtilization: five, sevenDayUtilization: seven }
+        if (this.latestRateLimits === null || recTs >= this.latestRateLimits.ts) this.latestRateLimits = snap
+        // Also keyed by session, so a caller that knows which sessions belong to the account it is
+        // reporting on can get THAT account's window instead of whichever session sampled last.
+        const prev = this.rateLimitsBySession.get(sid)
+        if (!prev || recTs >= prev.ts) this.rateLimitsBySession.set(sid, snap)
       }
     }
   }
@@ -256,8 +243,26 @@ export class StatuslineUsageReader {
    *  ingested record has carried a rate_limits block (an older statusline build, or none yet). Refreshes
    *  the tail first (throttled) so get_account_status always reflects the newest persisted line. */
   getLatestRateLimits(): RateLimitsSnapshot | null {
-    this.refreshIfStale()
     return this.latestRateLimits
+  }
+
+  /** The newest window reading among a GIVEN set of sessions — the account-safe accessor.
+   *
+   *  MEASURED 2026-08-01: 13 concurrent sessions on this machine reported EIGHT distinct (5h, 7d)
+   *  pairs, i.e. at least four different accounts were live at once. The machine-wide latest-wins
+   *  snapshot therefore returns whichever session happened to sample last, and a caller that labels
+   *  it with "the current account" prints one account's utilization under another's name — the exact
+   *  mis-attribution that made `get_subscription_usage` untrustworthy. Callers that know which
+   *  sessions belong to the account they are reporting on MUST use this instead.
+   *
+   *  Returns null when none of those sessions has reported a window — absent, never a stand-in. */
+  getRateLimitsForSessions(sessionIds: Iterable<string>): RateLimitsSnapshot | null {
+    let best: RateLimitsSnapshot | null = null
+    for (const sid of sessionIds) {
+      const snap = this.rateLimitsBySession.get(sid)
+      if (snap && (best === null || snap.ts >= best.ts)) best = snap
+    }
+    return best
   }
 
   /** Returns the aggregate for a session, or undefined if it never wrote a statusline line. */
@@ -268,7 +273,6 @@ export class StatuslineUsageReader {
   /** Per-turn billing deltas for the burn monitor, pruned to the last ~8 days + a hard cap. Refreshes
    *  the tail first so the caller always gets current data (cheap — throttled). */
   getBillingEvents(now = Date.now()): StatuslineBillingEvent[] {
-    this.refreshIfStale()
     const cutoffSec = (now - StatuslineUsageReader.BILLING_MAX_AGE_MS) / 1000
     if (this.billingEvents.length > StatuslineUsageReader.BILLING_MAX || this.billingEvents.some(e => e.ts < cutoffSec)) {
       this.billingEvents = this.billingEvents
@@ -285,7 +289,6 @@ export class StatuslineUsageReader {
    * statusline data. Self-refreshes on a throttle so the caller need not manage freshness.
    */
   overlay(card: SessionSummaryCard): void {
-    this.refreshIfStale()
     const a = this.agg.get(card.sessionId)
     if (!a) return
     card.statusline = a

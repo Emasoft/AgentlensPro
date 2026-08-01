@@ -13,14 +13,19 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { StatuslineStore, queryStatusline } from '../statuslineStore'
-import { VIEWS, parseWhenArg, table } from '../cli/statuslineHistoryCli'
+import { VIEWS, parseWhenArg, table, jsonSafe } from '../cli/statuslineHistoryCli'
+
+// UUID-SHAPED on purpose. DuckDB's JSON reader auto-detects a UUID-shaped string as the UUID type and
+// the node client returns it as {hugeint:"..."} — the exact bug that shipped. A placeholder like
+// "sess-0" is never inferred as UUID, so a test seeded with one passes while the bug is live.
+const SESSIONS = ['249c4216-4db4-4b64-9a10-b994b9d7bd80', '667293ab-cf8d-4640-a69e-a406ba19e2b4']
 
 function seed(root: string): void {
   const s = new StatuslineStore({ root, autoTimer: false })
   const now = Date.now()
   for (let i = 0; i < 4; i++) {
     s.append({
-      session_id: `sess-${i % 2}`,
+      session_id: SESSIONS[i % 2],
       prompt_id: `p-${i}`,
       model: { id: 'claude-opus-5', display_name: 'Opus' },
       effort: { level: 'high' },
@@ -31,7 +36,7 @@ function seed(root: string): void {
   }
   // The task struct EXACTLY as the live payload carries it — no `name` key, on purpose.
   s.append({
-    session_id: 'sess-0', columns: 120,
+    session_id: SESSIONS[0], columns: 120,
     tasks: [
       {
         id: 'a1', type: 'local_agent', status: 'completed', description: 'Advisor: namespace design',
@@ -63,6 +68,14 @@ suite('statusline-history — every view must actually EXECUTE', () => {
         for (const c of view.cols) {
           assert.ok(c.key in rows[0], `${name}: column '${c.key}' is not in the result set`)
         }
+        // THE UUID TRAP. Un-cast, DuckDB hands a UUID-shaped id back as {hugeint:"-4237945…"} — so
+        // the table prints "[object" and --json emits an object where an id belongs. Assert the
+        // actual JS type, not truthiness: an object is truthy and would sail through.
+        if ('session_id' in rows[0]) {
+          assert.strictEqual(typeof rows[0].session_id, 'string',
+            `${name}: session_id came back as ${typeof rows[0].session_id} — it must be CAST to VARCHAR`)
+          assert.ok(SESSIONS.includes(String(rows[0].session_id)), `${name}: session_id is not one of the seeded ids`)
+        }
       } finally { fs.rmSync(root, { recursive: true, force: true }) }
     })
 
@@ -72,7 +85,7 @@ suite('statusline-history — every view must actually EXECUTE', () => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sl-hist-s-'))
       try {
         seed(root)
-        const rows = await queryStatusline(root, view.stream, view.sql(40, 'sess-0'), { sinceMs: Date.now() - 3_600_000 })
+        const rows = await queryStatusline(root, view.stream, view.sql(40, SESSIONS[0]), { sinceMs: Date.now() - 3_600_000 })
         assert.ok(rows !== null, `${name}: BLIND with a session filter`)
       } finally { fs.rmSync(root, { recursive: true, force: true }) }
     })
@@ -96,9 +109,9 @@ suite('statusline-history — every view must actually EXECUTE', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sl-peaks-'))
     try {
       seed(root)
-      const rows = await queryStatusline(root, 'main', VIEWS.peaks.sql(40, 'sess-0'), { sinceMs: Date.now() - 3_600_000 })
+      const rows = await queryStatusline(root, 'main', VIEWS.peaks.sql(40, SESSIONS[0]), { sinceMs: Date.now() - 3_600_000 })
       assert.ok(rows!.length > 0)
-      // sess-0 samples are i=0,2 → ctx 100k then 200k, cost 1 then 5.
+      // SESSIONS[0]'s samples are i=0,2 → ctx 100k then 200k, cost 1 then 5.
       assert.strictEqual(Number(rows![0].d_ctx), 100_000)
       assert.strictEqual(Number(rows![0].d_cost), 4)
     } finally { fs.rmSync(root, { recursive: true, force: true }) }
@@ -116,6 +129,27 @@ suite('statusline-history — argument parsing and rendering', () => {
   test('an unparseable time throws rather than silently becoming NaN', () => {
     // NaN would flow into the window predicate and quietly match nothing, which reads as "no burn".
     assert.throws(() => parseWhenArg('last tuesday'), /unparseable time/)
+  })
+
+  test('--json survives DuckDB BigInts, which JSON.stringify throws on', async () => {
+    // Every BIGINT column (token counts, epoch ms, count(*)) arrives as a JS BigInt. The table view
+    // hid this behind String(); --json failed outright with "Do not know how to serialize a BigInt".
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sl-json-'))
+    try {
+      seed(root)
+      const rows = await queryStatusline(root, 'main', VIEWS.sessions.sql(40, undefined), { sinceMs: Date.now() - 3_600_000 })
+      assert.ok(rows!.some(r => Object.values(r).some(v => typeof v === 'bigint')), 'precondition: a BigInt is present')
+      const text = JSON.stringify(jsonSafe({ rows }))          // must not throw
+      assert.ok(JSON.parse(text).rows.length > 0)
+    } finally { fs.rmSync(root, { recursive: true, force: true }) }
+  })
+
+  test('jsonSafe keeps exact integers as numbers and only stringifies beyond 2^53', () => {
+    assert.strictEqual(jsonSafe(42n), 42)
+    assert.strictEqual(jsonSafe(-42n), -42)
+    assert.strictEqual(jsonSafe(BigInt(Number.MAX_SAFE_INTEGER) + 10n), '9007199254741001',
+      'silently rounding past 2^53 would corrupt a token count rather than flag it')
+    assert.deepStrictEqual(jsonSafe({ a: [1n, { b: 2n }] }), { a: [1, { b: 2 }] })
   })
 
   test('the table pads columns and never crashes on a missing key', () => {

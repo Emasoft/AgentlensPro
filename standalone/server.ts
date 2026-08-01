@@ -643,6 +643,10 @@ function purgeStatusline(): void {
 function ingestStatuslineSample(payload: Record<string, unknown>, stream: StatuslineStream): void {
   try {
     statuslineStore.append(payload, stream)
+    // Feed the live aggregates too. Only the MAIN stream: StatuslineUsageAgg is per-SESSION context
+    // and cost, and a subagent payload carries neither — it carries a tasks[] list whose numbers
+    // belong to other agents entirely. Mixing them in would corrupt every card's cost.
+    if (stream === 'main') statuslineReader.ingestSample(payload)
     persistStats.statuslineSamples++
   } catch (e) {
     // A sample is worth strictly less than the server staying up; count it and move on.
@@ -1056,6 +1060,26 @@ const accountStateTimeline = new AccountStateTimeline()
 let burnConfig = loadBurnConfig(process.env, os.homedir())
 
 // Gathers the current machine-wide consumption event stream once, reused by the MCP accessors + the tick.
+/** The 5h/7d window reading for the account we are ABOUT to label it with — never "whoever sampled
+ *  last".
+ *
+ *  MEASURED 2026-08-01 on this machine: 13 concurrent sessions reported EIGHT distinct (5h, 7d) pairs,
+ *  so at least four accounts were live at once. The machine-wide latest-wins snapshot would hand back
+ *  a different account's utilization and get_account_status would print it beside the current
+ *  account's email — the same class of mis-attribution that made the subscription-usage numbers
+ *  untrustworthy. Resolving through the cards' accountId keeps the number and the name together.
+ *
+ *  Returns null (absent) rather than falling back to the unattributed snapshot: a wrong window
+ *  reported confidently is worse than no window, because the caller has a calibrated estimate to
+ *  fall back on and no way to know the authoritative figure was someone else's. */
+function rateLimitsForCurrentAccount(): ReturnType<StatuslineUsageReader['getLatestRateLimits']> {
+  const uuid = getCurrentAccount()?.accountUuid
+  if (!uuid) return null
+  const sessions = buildSessionSummary()?.sessions ?? []
+  const mine = sessions.filter(s => s.accountId === uuid).map(s => s.sessionId)
+  return mine.length === 0 ? null : statuslineReader.getRateLimitsForSessions(mine)
+}
+
 function gatherBurn(now = Date.now()) {
   const sessions = buildSessionSummary()?.sessions ?? []
   const events = gatherConsumptionEvents(sessions, statuslineReader.getBillingEvents(now), now)
@@ -1182,7 +1206,7 @@ startMcpHttpServer({
   // statusline build persists it into the usage log — the authoritative window-fill source for
   // get_account_status. null when absent (a statusline.py build that doesn't emit it yet, or no
   // recent-enough record) — the handler falls back to AgentlensPro's own calibrated pct.
-  getRateLimits: () => statuslineReader.getLatestRateLimits(),
+  getRateLimits: () => rateLimitsForCurrentAccount(),
   // TRDD-GOD0108C: hot-path feeds for check_burn_risk — the in-memory event ring (zero disk)
   // and the incremental bodies tracker (CACHE_THRASH + huge-request burst without full stats).
   getRecentHookEvents: () => recentHookEvents,
