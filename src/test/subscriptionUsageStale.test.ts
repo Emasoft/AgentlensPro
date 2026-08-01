@@ -37,6 +37,8 @@ function reading(over: Partial<SubscriptionUsage> = {}): SubscriptionUsage {
     accountFp: 'acct-under-test',
     accountUuid: null,
     accountLabel: 'tester@example.com',
+    accountTier: null,
+    localClaimedLabel: null,
     accountLabelSuspect: false,
     accountVerified: 'yes',
     reason: 'ok',
@@ -160,10 +162,28 @@ suite('subscriptionUsage — a cached reading must never present itself as curre
     assert.ok(out.includes('NOT verified'), 'and the header must not claim the numbers are that account\'s')
   })
 
-  test('a disputed label is marked as disputed rather than printed as attribution', () => {
-    const out = formatSubscriptionUsage(reading({ accountLabelSuspect: true }))
-    assert.ok(/LABEL DISPUTED/.test(out), `expected the label to be marked disputed, got: ${out}`)
-    assert.ok(out.includes('tester@example.com'), 'still show it — a disputed label is a lead, not noise')
+  // OBSERVED ON THIS MACHINE 2026-08-01, and the reason the label is resolved from the TOKEN via
+  // /api/oauth/profile rather than from the config file: the keychain credential authenticated as
+  // ipazia.emasoft@gmail.com (default_claude_max_5x) while ~/.claude.json simultaneously claimed
+  // fmuaddib@gmail.com (default_claude_max_20x). Labelling from the file printed one account's
+  // utilization under another account's name, and the reader had no reason to doubt it.
+  test('when the config file names a DIFFERENT account than the token, both are shown', () => {
+    const out = formatSubscriptionUsage(reading({
+      accountLabel: 'ipazia.emasoft@gmail.com',
+      localClaimedLabel: 'fmuaddib@gmail.com',
+      accountLabelSuspect: true,
+    }))
+    assert.ok(out.includes('ipazia.emasoft@gmail.com'), 'the TOKEN\'s account owns the numbers')
+    assert.ok(out.includes('fmuaddib@gmail.com'), 'and the file\'s claim must appear, because every other tool believes it')
+    assert.ok(/DIFFERENT account/.test(out), 'stated plainly, not left for the reader to spot')
+  })
+
+  test('a matching label is printed plainly, with no disagreement noise', () => {
+    const out = formatSubscriptionUsage(reading({
+      accountLabel: 'same@example.com', localClaimedLabel: 'same@example.com', accountLabelSuspect: false,
+    }))
+    assert.ok(!/DIFFERENT account/.test(out))
+    assert.ok(out.includes('same@example.com'))
   })
 
   test('the renderer names window rollover, not merely age, when that is what happened', () => {

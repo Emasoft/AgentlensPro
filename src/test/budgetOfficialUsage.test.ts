@@ -20,6 +20,7 @@ function usage(over: Partial<SubscriptionUsage> = {}): SubscriptionUsage {
   return {
     fetchedAt: Date.now(), ageSeconds: 3, stale: false,
     accountFp: 'fp-a', accountUuid: 'uuid-a', accountLabel: 'me@example.com',
+    accountTier: null, localClaimedLabel: null,
     accountLabelSuspect: false, accountVerified: 'yes', reason: 'ok',
     limits: [
       { kind: 'session', group: 'session', percent: 6, severity: 'normal', resetsAt: null, isActive: true, scopeLabel: null, resetsInSeconds: null },

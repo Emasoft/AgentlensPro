@@ -35,6 +35,17 @@ import { dataPath } from './dataDir'
 import { getCurrentAccount } from './accountInfo'
 
 export const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage'
+/** Resolves a TOKEN to the identity it authenticates as — the only trustworthy answer to "whose
+ *  numbers are these?", because the usage endpoint itself carries no identity and answers purely to
+ *  the presented credential. Same OAuth beta header, same bearer.
+ *
+ *  MEASURED 2026-08-01, and it is why this exists: the token in this machine's keychain resolved to
+ *  `ipazia.emasoft@gmail.com` (rate_limit_tier default_claude_max_5x) while `~/.claude.json`
+ *  simultaneously claimed `fmuaddib@gmail.com` (default_claude_max_20x). Labelling a usage reading
+ *  from the config file therefore attributed one account's utilization to a different account, under
+ *  a name the reader had no reason to doubt. Shape: { account: { email, uuid, full_name },
+ *  organization: { name, rate_limit_tier, … } }. Technique credit: claude-multi-usage (OAuthService).  */
+export const PROFILE_URL = 'https://api.anthropic.com/api/oauth/profile'
 export const USAGE_BETA = 'oauth-2025-04-20'
 const DEFAULT_UA = 'claude-code/2.1.220'
 
@@ -68,16 +79,20 @@ export interface SubscriptionUsage {
    *  this field existed — `readCache` coerces the absent key to null so it reads as UNVERIFIABLE
    *  rather than as a mismatch. */
   accountFp: string | null
-  /** A HUMAN LABEL for the fingerprint, read from `~/.claude.json`'s `oauthAccount` so a usage
-   *  number can be lined up against the burn numbers `get_window_eta` and the OTEL feed report for
-   *  the same account. **Display only, and not trustworthy as identity**: the usage endpoint carries
-   *  no identity of its own and answers purely to the presented token, so swapping the token without
-   *  editing that file yields another account's numbers under an unchanged email. Never decide
-   *  anything on this — decide on `accountFp`. */
+  /** WHO THE TOKEN IS, resolved from `/api/oauth/profile` with the very credential the usage numbers
+   *  were fetched with. This is the authoritative label — it cannot disagree with the numbers,
+   *  because the same bearer produced both. Null when the profile lookup failed, which is reported
+   *  rather than papered over with the config file's guess. */
   accountUuid: string | null
   accountLabel: string | null
-  /** True when the config file's identity does NOT match the credential the reading was fetched
-   *  with, i.e. the label above is known to be lying. Reported, never acted on. */
+  accountTier: string | null
+  /** What `~/.claude.json` CLAIMED the logged-in account was at fetch time, kept only so a
+   *  disagreement can be shown. Measured on this machine: the file said fmuaddib@gmail.com /
+   *  max_20x while the token resolved to ipazia.emasoft@gmail.com / max_5x. */
+  localClaimedLabel: string | null
+  /** True when the config file's identity does NOT match the token's own. The numbers are still
+   *  correct — they belong to `accountLabel` — but any OTHER tool that labels by the config file
+   *  (including this repo's OTEL account attribution) is naming the wrong account. */
   accountLabelSuspect: boolean
   /** Was this reading PROVEN to belong to the account that is logged in right now?
    *  `yes` the fingerprints match · `no` they differ, so these are another account's numbers ·
@@ -194,6 +209,38 @@ export function loadToken(
   return { reason: 'no_token' }
 }
 
+export interface TokenIdentity { email: string | null; accountUuid: string | null; tier: string | null }
+
+/** Ask the API who this credential is. Fail-soft: a null identity is reported as "unresolved" and is
+ *  never quietly replaced by the config file's claim, because that substitution is the entire bug —
+ *  it is what let one account's utilization be printed under another account's name. */
+export async function fetchTokenIdentity(token: string, timeoutMs = HTTP_TIMEOUT_MS): Promise<TokenIdentity | null> {
+  const ctl = new AbortController()
+  const timer = setTimeout(() => ctl.abort(), timeoutMs)
+  try {
+    const res = await fetch(PROFILE_URL, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'anthropic-beta': USAGE_BETA,
+        'User-Agent': userAgent(),
+        Accept: 'application/json',
+      },
+      signal: ctl.signal,
+    })
+    if (!res.ok) return null
+    const j = await res.json() as { account?: { email?: unknown; uuid?: unknown; full_name?: unknown }
+      organization?: { rate_limit_tier?: unknown } }
+    const s = (v: unknown): string | null => typeof v === 'string' && v.length > 0 ? v : null
+    return {
+      email: s(j.account?.email) ?? s(j.account?.full_name),
+      accountUuid: s(j.account?.uuid),
+      tier: s(j.organization?.rate_limit_tier),
+    }
+  } catch {
+    return null
+  } finally { clearTimeout(timer) }
+}
+
 function readCooldown(): { until: number; consecutive: number } {
   try {
     const o = JSON.parse(fs.readFileSync(cooldownPath(), 'utf8')) as { until?: unknown; consecutive?: unknown }
@@ -246,7 +293,8 @@ export function normalize(
   reason: SubscriptionUsage['reason'],
   now = Date.now(),
   accountFp: string | null = null,
-  account: { accountUuid: string | null; label: string | null } = { accountUuid: null, label: null },
+  identity: TokenIdentity | null = null,
+  localClaimedLabel: string | null = null,
 ): SubscriptionUsage {
   const num = (v: unknown): number | null => typeof v === 'number' && isFinite(v) ? v : null
   const limits: UsageLimit[] = (Array.isArray(body.limits) ? body.limits : []).map(l => {
@@ -267,10 +315,14 @@ export function normalize(
     fetchedAt, ageSeconds,
     stale: ageSeconds * 1000 > TTL_MS * 3,
     accountFp,
-    accountUuid: account.accountUuid,
-    accountLabel: account.label,
-    // A live fetch records the label and the credential in the same breath — nothing to diverge yet.
-    accountLabelSuspect: false,
+    accountUuid: identity?.accountUuid ?? null,
+    accountLabel: identity?.email ?? null,
+    accountTier: identity?.tier ?? null,
+    localClaimedLabel,
+    // The token's own identity vs what the config file claims. Only a real, observed disagreement —
+    // never asserted when either side is unknown, because "we could not check" is not a mismatch.
+    accountLabelSuspect: identity?.email !== null && identity?.email !== undefined
+      && localClaimedLabel !== null && identity.email !== localClaimedLabel,
     // A LIVE fetch is by construction the current account's — the endpoint answered the very token
     // we just presented. Unknown only when that token could not be fingerprinted.
     accountVerified: accountFp === null ? 'unknown' : 'yes',
@@ -300,6 +352,8 @@ function readCache(): SubscriptionUsage | null {
     accountFp: raw.accountFp ?? null,
     accountUuid: raw.accountUuid ?? null,
     accountLabel: raw.accountLabel ?? null,
+    accountTier: raw.accountTier ?? null,
+    localClaimedLabel: raw.localClaimedLabel ?? null,
     accountLabelSuspect: raw.accountLabelSuspect === true,
     limits: Array.isArray(raw.limits) ? raw.limits : [],
   }
@@ -359,12 +413,9 @@ function fromCache(
   // so if one changed and the other did not, they have diverged and the email shown is not evidence
   // of anything. XOR, because the failure is symmetric: a token swapped under an unchanged email
   // (the observed case) and an email changed under an unchanged token are both a lying label.
-  // Only when verification actually HAPPENED. `unknown` means we could not read the credential at
-  // all, which is no evidence about the label — treating it as a dispute prints a scary and false
-  // "LABEL DISPUTED" on every machine that has not opted into the keychain read.
-  const currentUuid = getCurrentAccount().accountUuid
-  const labelSuspect = verified !== 'unknown' && currentUuid !== null && cached.accountUuid !== null
-    && ((cached.accountUuid === currentUuid) !== (verified === 'yes'))
+  // The mismatch was already decided at FETCH time by comparing the token's own identity against the
+  // config file's claim, so it carries forward unchanged. Re-deriving it here from the file would
+  // reintroduce the very substitution this field exists to expose.
   return {
     ...cached,
     ageSeconds: Math.max(0, Math.round((now - cached.fetchedAt) / 1000)),
@@ -375,7 +426,6 @@ function fromCache(
     // tests this one. Neither is served by collapsing two different doubts into one flag.
     stale: deriveStale(cached, now),
     accountVerified: verified,
-    accountLabelSuspect: labelSuspect,
     limits: cached.limits.map(l => ({ ...l, resetsInSeconds: secsUntil(l.resetsAt, now) })),
     reason,
   }
@@ -444,9 +494,12 @@ export async function getSubscriptionUsage(
         return serve(cached, '429')
       }
       if (!res.ok) return serve(cached, 'http_error')
-      const who = getCurrentAccount()
-      const usage = normalize(await res.json() as RawUsage, now, 'ok', now, currentFp,
-        { accountUuid: who.accountUuid, label: who.email ?? who.label })
+      // Resolve WHOSE numbers these are from the same credential that just produced them. One extra
+      // request, cached with the reading, and it is the difference between a labelled figure and a
+      // misattributed one.
+      const identity = await fetchTokenIdentity(token)
+      const claimed = getCurrentAccount().email
+      const usage = normalize(await res.json() as RawUsage, now, 'ok', now, currentFp, identity, claimed)
       try { fs.writeFileSync(cachePath(), JSON.stringify(usage)) } catch { /* best effort */ }
       try { fs.unlinkSync(cooldownPath()) } catch { /* no cooldown to clear */ }
       return usage
@@ -508,10 +561,13 @@ export function formatSubscriptionUsage(u: SubscriptionUsage | null): string {
   // header is what let a four-day-dead 96% be relayed to a user as their current utilization.
   // Name the account in the header. An unattributed percentage is what let one account's 96% be
   // read as another's current utilization; a reader who sees the email can spot that instantly.
-  const base = u.accountLabel ?? u.accountUuid?.slice(0, 8) ?? 'unidentified account'
-  // The label comes from a config file, the numbers come from a token, and the two can move apart.
-  // Say so rather than printing an email that quietly implies an attribution nobody verified.
-  const who = u.accountLabelSuspect ? `${base} — LABEL DISPUTED, credential says otherwise` : base
+  // The label is the TOKEN's own identity, so it cannot disagree with the numbers. When the config
+  // file claims a different account, say both — the reader almost certainly believes the file, and
+  // every other tool on the machine labels by it.
+  const base = u.accountLabel ?? u.accountUuid?.slice(0, 8) ?? 'unresolved account'
+  const who = u.accountLabelSuspect
+    ? `${base} ⚠ (the token's OWN account — ~/.claude.json claims ${u.localClaimedLabel}, which is a DIFFERENT account)`
+    : base
   // "for <email>" is an attribution claim. Make it only when the credential proved it; otherwise
   // name the account as an unverified label, because that is all it is.
   const lines = [u.stale
