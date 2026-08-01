@@ -178,18 +178,38 @@ export const VIEWS: Record<string, ViewSpec> = {
   // {id,type,status,description,label,startTime,model,effort,contextWindowSize,tokenCount,tokenSamples,cwd}.
   // `description` is the agent's task, `label` its current activity. Selecting `name` is a hard
   // binder error that takes the whole view down, so this list stays measured.
+  //
+  // FIELDS ARE READ THROUGH JSON, not as struct members, and that is not stylistic. DuckDB infers
+  // the `tasks` struct type PER FILE from the data in that file, so a part in which no task ever
+  // reported `effort` gets a struct type with NO `effort` KEY — and `t.effort` against it is a hard
+  // `Binder Error: Could not find key "effort" in struct` that kills the whole view. MEASURED on the
+  // live store: of six subagent parts one had no `effort` key at all and another carried it on 1 of
+  // 413 tasks. It survives today only because file selection is by DAY partition, so a sibling part
+  // that does have the key joins the union and the merged struct type includes it; a day whose parts
+  // all lack it would take the view down. `to_json(t)->>'x'` yields NULL for an absent key instead.
+  //
+  // This struct has already drifted twice — the docs list a `name` field the live payload does not
+  // have (it carries `description` and `label`), and now `effort` comes and goes — so pinning the
+  // view to a fixed struct shape is a standing bet against a payload we do not control.
   subagents: {
     stream: 'subagent',
     sql: (limit, session) => `
-      SELECT t.id AS agent_id,
-             any_value(t.description) AS task, any_value(t.model) AS model,
-             any_value(t.effort) AS effort, any_value(t.status) AS status,
-             max(TRY_CAST(t.tokenCount AS BIGINT))              AS peak_tokens,
-             100.0 * max(TRY_CAST(t.tokenCount AS BIGINT))
-                   / nullif(any_value(TRY_CAST(t.contextWindowSize AS BIGINT)), 0) AS fill_pct,
-             count(*) AS samples, max(ts) AS last_ts, any_value(t.cwd) AS cwd
-      FROM samples, unnest(tasks) AS u(t) ${sessionFilter(session)}
-      GROUP BY t.id ORDER BY peak_tokens DESC NULLS LAST LIMIT ${limit}`,
+      SELECT agent_id,
+             any_value(task) AS task, any_value(model) AS model,
+             any_value(effort) AS effort, any_value(status) AS status,
+             max(token_count)                                     AS peak_tokens,
+             100.0 * max(token_count) / nullif(any_value(ctx_size), 0) AS fill_pct,
+             count(*) AS samples, max(ts) AS last_ts, any_value(cwd) AS cwd
+      FROM (
+        SELECT ts,
+               j->>'id' AS agent_id, j->>'description' AS task, j->>'model' AS model,
+               j->>'effort' AS effort, j->>'status' AS status, j->>'cwd' AS cwd,
+               TRY_CAST(j->>'tokenCount' AS BIGINT)        AS token_count,
+               TRY_CAST(j->>'contextWindowSize' AS BIGINT) AS ctx_size
+        FROM (SELECT ts, to_json(t) AS j FROM samples, unnest(tasks) AS u(t) ${sessionFilter(session)})
+      )
+      WHERE agent_id IS NOT NULL
+      GROUP BY agent_id ORDER BY peak_tokens DESC NULLS LAST LIMIT ${limit}`,
     cols: [
       { key: 'task', label: 'task', fmt: v => String(v ?? '-').slice(0, 34) },
       { key: 'model', label: 'model', fmt: v => String(v ?? '-').replace(/^claude-/, '') },

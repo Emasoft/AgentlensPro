@@ -122,6 +122,34 @@ suite('statusline-history — every view must actually EXECUTE', () => {
     } finally { fs.rmSync(root, { recursive: true, force: true }) }
   })
 
+  test('subagents survives a tasks[] struct that is MISSING a field entirely', async () => {
+    // MEASURED on the live store: DuckDB infers the `tasks` struct type PER FILE, so a part in which
+    // no task ever reported `effort` gets a struct with NO `effort` key — and `t.effort` against it
+    // is a hard `Binder Error: Could not find key "effort" in struct` that kills the whole view. One
+    // of six live subagent parts was exactly that; another carried the field on 1 of 413 tasks. It
+    // survives in production only because file selection is by DAY partition, so a sibling part that
+    // does have the key joins the union — a day whose parts all lack it would go down.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sl-drift-'))
+    try {
+      const s = new StatuslineStore({ root, autoTimer: false })
+      const now = Date.now()
+      // Every task here omits `effort`, `label` and `cwd` — the whole store has no such key.
+      s.append({
+        session_id: SESSIONS[0],
+        tasks: [{ id: 'a1', type: 'local_agent', status: 'running', description: 'no-effort agent', startTime: now, model: 'claude-sonnet-5', contextWindowSize: 1_000_000, tokenCount: 400_000 }],
+      }, 'subagent', now)
+      s.flush()
+
+      const rows = await queryStatusline(root, 'subagent', VIEWS.subagents.sql(40, undefined), { sinceMs: now - 3_600_000 })
+      assert.ok(rows, 'a struct missing a field must not read BLIND')
+      assert.strictEqual(rows.length, 1)
+      assert.strictEqual(rows[0].effort, null, 'an absent key is NULL, not a binder error')
+      assert.strictEqual(String(rows[0].task), 'no-effort agent', 'the fields that ARE present still resolve')
+      assert.strictEqual(Number(rows[0].peak_tokens), 400_000)
+      assert.strictEqual(Math.round(Number(rows[0].fill_pct)), 40)
+    } finally { fs.rmSync(root, { recursive: true, force: true }) }
+  })
+
   test('peaks reports the DELTA between consecutive samples, not the running total', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sl-peaks-'))
     try {
