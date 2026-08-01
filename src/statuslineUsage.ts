@@ -171,6 +171,9 @@ export class StatuslineUsageReader {
     const sid = rec.session_id
     if (!sid) return
     const totalInput = num(rec.total_input_tokens)
+    // Whether we have EVER seen this session. Load-bearing for the cost delta below — read before
+    // the aggregate is created, because creating it would make every session look already-known.
+    const firstSampleOfSession = !this.agg.has(sid)
     const a: StatuslineUsageAgg = this.agg.get(sid) ?? {
       sessionId: sid, projectDir: '', model: '',
       lastInputTokens: 0, lastOutputTokens: 0, lastCacheCreateTokens: 0, lastCacheReadTokens: 0,
@@ -178,11 +181,25 @@ export class StatuslineUsageReader {
       contextWindowSize: 0, usedPercentage: 0, totalCostUsd: 0,
       peakContextTokens: 0, samples: 0, lastTs: 0,
     }
-    // Billing delta for the burn monitor (before mutating the aggregate): the increment of the
-    // cumulative authoritative cost, and this turn's 4 usage buckets summed. total_cost_usd is
-    // cumulative, so the delta is real incremental spend; a rotated/shrunk file resets prevCost to 0
-    // (agg was cleared in refresh()), so the first line after a reset counts from 0 (over-counts at
-    // most one turn — acceptable, and never negative).
+    // Billing delta for the burn monitor: the INCREMENT of the cumulative authoritative cost, and
+    // this turn's 4 usage buckets summed.
+    //
+    // THE FIRST SAMPLE OF A SESSION ESTABLISHES THE BASELINE AND BILLS NOTHING. `total_cost_usd` is
+    // the session's LIFETIME cost, and this reader holds its state in memory — so every server
+    // restart re-meets every live session at sample one with `prevCost` at 0, and would charge that
+    // session's whole history to the current 5-hour window as a single turn.
+    //
+    // MEASURED, not hypothetical: after a restart the unattributed account bucket reported
+    // $2,097.68 of 5-hour spend against 265,845 tokens — $7,890 per MTok, when the dearest rate in
+    // the table is $25 — and $2,097.53 was exactly the lifetime cost of one 2,397-sample session
+    // that had been running for hours. The window is metered by COST, so this is the number that
+    // decides "how full is my rate limit".
+    //
+    // The comment that used to sit here claimed a reset "over-counts at most one turn — acceptable".
+    // It over-counts the session's ENTIRE HISTORY, once per restart, per live session. Skipping the
+    // first delta under-counts by at most one real turn instead, and usually by nothing at all:
+    // burnMonitor.statuslineCostUsd prices a turn from its own buckets whenever the model is known
+    // and falls back to this delta only otherwise.
     const prevCost = a.totalCostUsd
     const newCost = num(rec.total_cost_usd)
     // This turn's 4 usage buckets — carried individually so the burn breakdown can attribute the split
@@ -193,7 +210,9 @@ export class StatuslineUsageReader {
     const dCacheCreate = num(rec.cache_creation_input_tokens)
     const dCacheRead = num(rec.cache_read_input_tokens)
     const deltaTokens = dInput + dOutput + dCacheCreate + dCacheRead
-    const deltaCost = Math.max(0, newCost - prevCost)
+    // The token buckets ARE this turn's own figures and stay honest on the first sample; only the
+    // cumulative-derived cost has to be suppressed.
+    const deltaCost = firstSampleOfSession ? 0 : Math.max(0, newCost - prevCost)
 
     // ONE EVENT PER TURN. These buckets are a SNAPSHOT of the last COMPLETED turn, and Claude Code
     // re-renders the status line every ~3 s whether or not a turn happened — so an idle session

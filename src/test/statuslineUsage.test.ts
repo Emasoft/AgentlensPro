@@ -194,7 +194,9 @@ suite('statuslineUsage — the aggregate rules the consumers depend on', () => {
     const evs = r.getBillingEvents(S(500))
     assert.strictEqual(evs.length, 1, '40 renders of one turn is ONE billing event')
     assert.strictEqual(evs[0].deltaTokens, 2 + 300 + 500 + 99_498, 'the turn\'s own tokens, not 40x them')
-    assert.strictEqual(evs[0].deltaCostUsd, 5)
+    assert.strictEqual(evs[0].deltaCostUsd, 0,
+      'this is the session\'s FIRST sample, so it is a cost baseline and bills nothing — see the '
+      + 'first-sample test; its TOKENS are still real, which is what this test is about')
 
     // ...and a genuinely new turn still opens its own event.
     r.ingestSample(turn({ read: 250_000 }, 8), S(400))
@@ -207,14 +209,20 @@ suite('statuslineUsage — the aggregate rules the consumers depend on', () => {
     // still end up carrying the FINAL output and the whole turn's cost, or a long response is
     // under-counted for as long as it is streaming.
     const r = new StatuslineUsageReader()
+    // An EARLIER turn first, so the session's cost baseline is already established — otherwise the
+    // first-sample rule (which bills nothing) would mask what this test is actually about.
+    r.ingestSample(turn({ read: 50_000, out: 10 }, 4.0), S(90))
     r.ingestSample(turn({ read: 99_498, out: 2 }, 5.0), S(100))
     r.ingestSample(turn({ read: 99_498, out: 119 }, 5.2), S(103))
     r.ingestSample(turn({ read: 99_498, out: 900 }, 5.9), S(106))
     const evs = r.getBillingEvents(S(200))
-    assert.strictEqual(evs.length, 1)
-    assert.strictEqual(evs[0].deltaOutput, 900, 'the completed output, not the first partial one')
-    assert.ok(Math.abs(evs[0].deltaCostUsd - 5.9) < 1e-9, 'cost accrued across the whole turn')
-    assert.strictEqual(evs[0].deltaTokens, 2 + 500 + 99_498 + 900)
+    assert.strictEqual(evs.length, 2, 'the earlier turn, then ONE event for the streaming turn')
+    const streaming = evs[1]
+    assert.strictEqual(streaming.deltaOutput, 900, 'the completed output, not the first partial one')
+    // 5.9 - 4.0: the increments accumulated across the three observations sum to the turn's TRUE
+    // cost. Asserting the sum rather than the last value is what catches an update that overwrites.
+    assert.ok(Math.abs(streaming.deltaCostUsd - 1.9) < 1e-9, 'cost accrued across the whole turn')
+    assert.strictEqual(streaming.deltaTokens, 2 + 500 + 99_498 + 900)
   })
 
   test('two sessions re-rendering concurrently keep their turns separate', () => {
@@ -228,6 +236,27 @@ suite('statuslineUsage — the aggregate rules the consumers depend on', () => {
     const evs = r.getBillingEvents(S(300))
     assert.strictEqual(evs.length, 2, 'one event per session, not one per sample')
     assert.deepStrictEqual(evs.map(e => e.sessionId).sort(), ['s1', 's2'])
+  })
+
+  test('the FIRST sample of a session bills nothing — its lifetime cost is not one turn', () => {
+    // MEASURED on a live machine: after a server restart the burn monitor's unattributed account
+    // bucket reported $2,097.68 of 5-hour spend against 265,845 tokens — $7,890 per MTok, when the
+    // dearest rate in the table is $25 — and $2,097.53 was exactly the lifetime cost of one session
+    // that had been running for hours. `total_cost_usd` is CUMULATIVE and this reader keeps its
+    // state in memory, so every restart re-meets every live session at sample one with prevCost 0.
+    // The 5h/7d windows are metered by COST, so this is the number that decides the rate limit.
+    const r = new StatuslineUsageReader()
+    r.ingestSample(turn({ read: 99_498 }, 2097.53), S(100))   // a session already hours old
+    const first = r.getBillingEvents(S(500))
+    assert.strictEqual(first.length, 1, 'the turn still exists — only its cost is unknown')
+    assert.strictEqual(first[0].deltaCostUsd, 0, 'a lifetime total must never be billed as one turn')
+    assert.ok(first[0].deltaTokens > 0, "the turn's OWN token buckets are honest and must survive")
+
+    // ...and the very next turn bills the real increment, so only the baseline is skipped.
+    r.ingestSample(turn({ read: 120_000 }, 2099.53), S(200))
+    const evs = r.getBillingEvents(S(500))
+    assert.strictEqual(evs.length, 2)
+    assert.ok(Math.abs(evs[1].deltaCostUsd - 2) < 1e-9, 'the increment, not the cumulative total')
   })
 
   test('a cost that goes backwards never produces a negative delta', () => {
