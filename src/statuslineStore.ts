@@ -137,24 +137,60 @@ export function filesInWindow(
  *
  *  `union_by_name` is what tolerates schema drift: optional blocks (`pr`, `worktree`, `agent`) appear
  *  and vanish mid-stream, and a future Claude Code version may add fields. */
-/** Force `session_id` to VARCHAR on ONE source, tolerating a source that lacks the column entirely.
+/** The columns a query may reference even when NO file in the window happens to carry them.
  *
- *  WHY, and it is not theoretical — three of five views were dead on the live store when this was
- *  written. DuckDB infers a UUID-*shaped* string as the UUID type, PER FILE. Sealed parts had
- *  inferred UUID (35,788 rows); the live WAL held one session whose id was not UUID-shaped and so
- *  inferred VARCHAR (8,007 rows); `UNION ALL BY NAME` reconciles those to UUID, and the whole query
- *  dies with `Conversion Error: Could not convert string 'x' to INT128`. ONE row with a non-UUID
+ *  WITHOUT THIS, ABSENCE IS AN ERROR RATHER THAN AN EMPTY RESULT. `union_by_name` fills a column
+ *  that SOME file has; a column NO file in the window has simply does not exist, and referencing it
+ *  is `Binder Error: Referenced column "..." not found in FROM clause`. Measured: a single sample
+ *  lacking the optional `rate_limits` and `current_usage` blocks — exactly what an older Claude Code
+ *  build, or any turn before those blocks existed, produces — killed ALL FIVE main-stream views.
+ *  That breaks this module's own contract: no data must read as BLIND, never as a crash.
+ *
+ *  Declared as a zero-row typed relation, so every name below is guaranteed to bind and to be NULL
+ *  when unobserved. It is a CONTRACT, not a schema: files still contribute any other column they
+ *  carry, and a genuinely mistyped reference still fails loudly rather than silently returning NULL.
+ *
+ *  `tasks` is deliberately ABSENT from this list. It is the subagent stream's own payload so it is
+ *  never missing there, and declaring a LIST type here risks conflicting with the real
+ *  LIST(STRUCT(...)) during reconciliation — the exact class of failure this is meant to prevent. */
+const GUARANTEED_COLUMNS: ReadonlyArray<[string, string]> = [
+  ['session_id', 'VARCHAR'],
+  ['model_display_name', 'VARCHAR'],
+  ['model_id', 'VARCHAR'],
+  ['effort_level', 'VARCHAR'],
+  ['context_window_used_percentage', 'DOUBLE'],
+  ['context_window_total_input_tokens', 'BIGINT'],
+  ['context_window_current_usage_input_tokens', 'BIGINT'],
+  ['context_window_current_usage_output_tokens', 'BIGINT'],
+  ['context_window_current_usage_cache_creation_input_tokens', 'BIGINT'],
+  ['context_window_current_usage_cache_read_input_tokens', 'BIGINT'],
+  ['cost_total_cost_usd', 'DOUBLE'],
+  ['rate_limits_five_hour_used_percentage', 'DOUBLE'],
+  ['rate_limits_seven_day_used_percentage', 'DOUBLE'],
+  ['rate_limits_five_hour_resets_at', 'BIGINT'],
+]
+
+/** The zero-row template: guarantees every GUARANTEED_COLUMNS name binds, whatever the files hold. */
+const COLUMN_TEMPLATE = `SELECT ${GUARANTEED_COLUMNS.map(([c, t]) => `NULL::${t} AS ${c}`).join(', ')} WHERE false`
+
+/** Normalize ONE source: force `session_id` to VARCHAR and guarantee the contract columns bind.
+ *
+ *  WHY the session_id half — and it is not theoretical, three of five views were dead on the live
+ *  store when this was written. DuckDB infers a UUID-*shaped* string as the UUID type, PER FILE.
+ *  Sealed parts had inferred UUID (35,788 rows); the live WAL held one session whose id was not
+ *  UUID-shaped and so inferred VARCHAR (8,007 rows); `UNION ALL BY NAME` reconciles those to UUID,
+ *  and the whole query dies with `Could not convert string 'x' to INT128`. ONE row with a non-UUID
  *  session id blinds every view that touches the column. A `CAST(... AS VARCHAR)` in the SELECT list
  *  cannot help — the failure happens in the union, before any projection.
  *
- *  The zero-row template is not decoration: `* REPLACE` is a BINDER error when the column is absent,
- *  so a malformed WAL with no `session_id` would trade one total failure for another. Unioning a
- *  typed empty relation first guarantees the column exists; the outer REPLACE then fixes its type.
- *  (The template alone does NOT fix the type — measured: UUID still wins the reconciliation.)
+ *  The template is doing TWO jobs. `* REPLACE` is a BINDER error when the column is absent, so
+ *  without a template a malformed source with no `session_id` would trade one total failure for
+ *  another; and it supplies the guaranteed columns above. (The template alone does NOT fix the
+ *  session_id TYPE — measured: UUID still wins the reconciliation, hence the outer REPLACE.)
  *  Casting UUID→VARCHAR is lossless: the id comes back as its canonical text. */
 function varcharSessionId(inner: string): string {
   return 'SELECT * REPLACE (CAST(session_id AS VARCHAR) AS session_id)'
-    + ` FROM (SELECT NULL::VARCHAR AS session_id WHERE false UNION ALL BY NAME ${inner})`
+    + ` FROM (${COLUMN_TEMPLATE} UNION ALL BY NAME ${inner})`
 }
 
 export function relationFor(

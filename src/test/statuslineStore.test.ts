@@ -318,6 +318,32 @@ suite('statuslineStore — a non-UUID session id must not blind every view', () 
     }
   })
 
+  test('a column NO file in the window carries still BINDS — absence is empty, not an error', async () => {
+    // `union_by_name` fills a column SOME file has; a column NO file has simply does not exist, and
+    // referencing it is `Binder Error: Referenced column "..." not found in FROM clause`. MEASURED:
+    // one sample lacking the optional `rate_limits` and `current_usage` blocks — what an older Claude
+    // Code build, or any turn before those blocks existed, produces — killed ALL FIVE main-stream
+    // views. That breaks this module's own contract: no data reads as BLIND, never as a crash.
+    const root = tmpRoot()
+    try {
+      const s = new StatuslineStore({ root, autoTimer: false })
+      s.append({ session_id: '249c4216-4db4-4b64-9a10-b994b9d7bd80', model: { id: 'claude-opus-5' } }, 'main', Date.now())
+      s.flush()
+      const rows = await queryStatusline(root, 'main', `
+        SELECT count(*) n,
+               count(rate_limits_five_hour_used_percentage)                 rl,
+               count(context_window_current_usage_cache_read_input_tokens)  cu,
+               count(model_display_name)                                    md,
+               count(cost_total_cost_usd)                                   c
+        FROM samples`)
+      assert.ok(rows, 'a sample without the optional blocks must not read BLIND')
+      assert.strictEqual(Number(rows[0].n), 1)
+      for (const k of ['rl', 'cu', 'md', 'c']) {
+        assert.strictEqual(Number(rows[0][k]), 0, `${k}: an unobserved column binds and is NULL`)
+      }
+    } finally { fs.rmSync(root, { recursive: true, force: true }) }
+  })
+
   test('a source with NO session_id column at all does not break the query', async () => {
     // The normalization uses `* REPLACE`, which is a BINDER error when the column is absent — so a
     // malformed WAL would trade one total failure for another without the zero-row typed template.
