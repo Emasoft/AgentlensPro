@@ -14,6 +14,7 @@
 
 import { init, callTool } from './cliCore'
 import { sleep } from './cliCore'
+import { getSubscriptionUsage, type SubscriptionUsage } from '../subscriptionUsage'
 import { fetchBurnRisk } from './diagnosticsCli'
 import { LineLog, clampFlushMs, DEFAULT_FLUSH_MS } from './lineLog'
 import { numArg, strArg, clamp } from './argHelpers'
@@ -89,6 +90,56 @@ export function decideBudget(w: EtaWindow | undefined, remainingMin: number, mar
   }
   return { verdict: 'GO', reason: `window exhausts in ${fmtMin(eta)}, ${(eta / remainingMin).toFixed(1)}x the ${fmtMin(remainingMin)} of run left`, etaMinutes: eta, remainingMin }
 }
+
+/** The authoritative utilization for the window `budget` was asked about, taken from Anthropic's own
+ *  figures rather than from our local capacity model.
+ *
+ *  WHY THIS EXISTS. The local projection divides consumption by a CAPACITY, and when no capacity has
+ *  been observed for this account it falls back to a same-plan proxy borrowed from a different one.
+ *  On 2026-08-01 that proxy put the 7d cap at $12,282 against $728 consumed and reported the window
+ *  5.9% full, so `budget` answered GO — while the account was actually at 37%, and a stale cache was
+ *  simultaneously claiming 96%. Three numbers, no agreement, and the verdict rode the one nobody had
+ *  checked. Printing the account's own figure next to the projection makes that disagreement visible
+ *  instead of leaving the reader to pick a number on faith. */
+export function officialPct(u: SubscriptionUsage | null, windowKey: string): number | null {
+  if (!u) return null
+  const want = windowKey === '5h' ? (k: string) => k === 'session' : (k: string) => k.startsWith('weekly')
+  const pcts = u.limits.filter(l => want(l.kind)).map(l => l.percent).filter(p => typeof p === 'number' && isFinite(p))
+  // The BINDING bucket is the fullest one: `weekly_all` and a per-model `weekly_scoped` are separate
+  // caps and either can be the one that stops you, so the max is the honest summary, not the mean.
+  return pcts.length ? Math.max(...pcts) : null
+}
+
+/** Downgrade a projection-based verdict when the account's OWN numbers contradict it.
+ *
+ *  Applied ONLY to a reading that is live and account-verified — a stale or unattributed one is
+ *  exactly what caused this bug, and acting on it would repeat the mistake in the other direction. */
+export function applyOfficial(d: BudgetDecision, u: SubscriptionUsage | null, pct: number | null): BudgetDecision {
+  if (!u || u.stale || u.accountVerified !== 'yes' || pct === null) return d
+  const worse = (v: BudgetVerdict): BudgetDecision =>
+    ({ ...d, verdict: v, reason: `${d.reason}; but the account's own figure says the window is ${pct}% full` })
+  if (pct >= 95 && d.verdict !== 'NO_GO') return worse('NO_GO')
+  if (pct >= 80 && (d.verdict === 'GO' || d.verdict === 'UNKNOWN')) return worse('TIGHT')
+  return d
+}
+
+/** The line printed alongside every verdict: what Anthropic says, for WHICH account, and how much
+ *  that statement can be trusted. Never silently omitted — an absent line would read as agreement. */
+export function officialLine(u: SubscriptionUsage | null, windowKey: string): string {
+  if (!u) return '[budget] official usage: UNAVAILABLE (no readable credential) — verdict rests on the local projection alone'
+  const pct = officialPct(u, windowKey)
+  const who = u.accountLabel ?? u.accountUuid?.slice(0, 8) ?? 'unidentified account'
+  const shown = pct === null ? 'n/a' : `${pct}%`
+  if (u.stale || u.accountVerified !== 'yes') {
+    const why = u.accountVerified === 'no' ? 'belongs to a DIFFERENT account'
+      : u.accountVerified === 'unknown' ? 'could not be attributed to the current account'
+        : `is ${Math.round(u.ageSeconds / 3600)}h old`
+    return `[budget] official usage: NOT USABLE — the cached reading ${why} (${u.reason}); ignoring it for the verdict`
+  }
+  return `[budget] official usage (${who}): ${windowKey} ${shown} full · 5h ${fmtPct(officialPct(u, '5h'))} · 7d ${fmtPct(officialPct(u, '7d'))} [Anthropic's own numbers, live]`
+}
+
+function fmtPct(p: number | null): string { return p === null ? 'n/a' : `${p}%` }
 
 export function fmtMin(min: number): string {
   const t = Math.max(0, Math.round(min))
@@ -179,11 +230,20 @@ exit: 0 GO/TIGHT (or watch ran the full duration) · 1 NO-GO (abort the run) · 
   agentlenspro budget --hours 2 --watch 120 --with-risks # arm in a Monitor for the whole run`
 
 /** One-shot: decide once, print one line (or JSON), exit with the verdict's code. */
+/** Anthropic's own utilization for the CURRENT account. `allowKeychain` because `budget` is a
+ *  command the user typed and is watching: the opt-in exists to stop a status line or a hook from
+ *  triggering a keychain prompt storm, which is not this call site. Without it, macOS never
+ *  refreshes the reading at all and the cache silently ages into a wrong answer. */
+async function fetchOfficial(): Promise<SubscriptionUsage | null> {
+  try { return await getSubscriptionUsage({ allowKeychain: true }) } catch { return null }
+}
+
 async function runOnce(o: BudgetOptions, say: Say): Promise<number> {
   await init()
-  const eta = await fetchEta(o.rateWindowMin)
+  const [eta, official] = await Promise.all([fetchEta(o.rateWindowMin), fetchOfficial()])
   const { key, win } = pickWindow(eta, o.window)
-  const d = decideBudget(win, o.minutes, o.margin)
+  const pct = officialPct(official, key)
+  const d = applyOfficial(decideBudget(win, o.minutes, o.margin), official, pct)
   if (o.json) {
     say(JSON.stringify({
       verdict: d.verdict, window: key, runMinutes: o.minutes, margin: o.margin,
@@ -191,10 +251,24 @@ async function runOnce(o: BudgetOptions, say: Say): Promise<number> {
       capacitySource: (win && win.capacity && win.capacity.source) || null,
       costPerMin: (win && win.costPerMin) ?? null,
       fillPct: (win && win.fillPct) ?? null,
+      // The projection's own fill (`fillPct`) and the account's own figure are DIFFERENT numbers
+      // from different sources; emitting both under distinct keys is what lets a consumer notice
+      // they disagree instead of trusting whichever one it happened to read.
+      official: official ? {
+        account: official.accountLabel ?? official.accountUuid,
+        verified: official.accountVerified,
+        stale: official.stale,
+        ageSeconds: official.ageSeconds,
+        reason: official.reason,
+        windowPct: pct,
+        fiveHourPct: officialPct(official, '5h'),
+        sevenDayPct: officialPct(official, '7d'),
+      } : null,
     }, null, 2))
   } else {
     const cap = win && win.capacity && win.capacity.source
     const capNote = cap === 'same-plan-proxy' ? ' [capacity is a same-plan proxy — treat the boundary as soft]' : ''
+    say(officialLine(official, key))
     say(`[budget] ${d.verdict} — ${key} window vs ${fmtMin(o.minutes)} run: ${d.reason}${capNote}`)
   }
   return d.verdict === 'NO_GO' ? BUDGET_EXIT.ABORT : d.verdict === 'UNKNOWN' ? BUDGET_EXIT.UNKNOWN : BUDGET_EXIT.GO
@@ -212,6 +286,7 @@ async function runWatch(o: BudgetOptions, say: Say): Promise<number> {
   const t0 = Date.now()
   const deadline = t0 + o.minutes * 60_000
   say(`[budget] armed — ${fmtMin(o.minutes)} run vs the ${o.window} window, margin ${o.margin}x, polling every ${o.intervalSec}s (silent unless the verdict changes)`)
+  say(officialLine(await fetchOfficial(), o.window === 'binding' ? '7d' : o.window))
   let lastVerdict: BudgetVerdict | null = null
   let down = false
   const riskActive = new Set<string>()
@@ -222,10 +297,12 @@ async function runWatch(o: BudgetOptions, say: Say): Promise<number> {
       return BUDGET_EXIT.GO
     }
     try {
-      const eta = await fetchEta(o.rateWindowMin)
+      const [eta, official] = await Promise.all([fetchEta(o.rateWindowMin), fetchOfficial()])
       if (down) { say('[budget] server back — resuming'); down = false }
       const { key, win } = pickWindow(eta, o.window)
-      const d = decideBudget(win, remainingMin, o.margin)
+      // Re-read the official figure every poll, not once at arm time: a long watch is exactly the
+      // situation where the window fills underneath a verdict that was decided while it was empty.
+      const d = applyOfficial(decideBudget(win, remainingMin, o.margin), official, officialPct(official, key))
       if (d.verdict === 'NO_GO') {
         // An abort without a culprit forces the operator to start an investigation at the worst
         // possible moment. fiveMin, not oneMin: an abort is about a SUSTAINED drain, and the

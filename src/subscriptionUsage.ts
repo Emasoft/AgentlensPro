@@ -27,10 +27,12 @@
 //     and a cross-process lock so two callers cannot double-hit and then fail to escalate.
 
 import { execFileSync } from 'child_process'
+import { createHash } from 'crypto'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { dataPath } from './dataDir'
+import { getCurrentAccount } from './accountInfo'
 
 export const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage'
 export const USAGE_BETA = 'oauth-2025-04-20'
@@ -59,6 +61,29 @@ export interface SubscriptionUsage {
   fetchedAt: number
   ageSeconds: number
   stale: boolean
+  /** WHICH ACCOUNT these numbers describe — a fingerprint of the OAuth credential they were fetched
+   *  with, never the credential. This machine rotates between several accounts, and the endpoint
+   *  answers for whichever token you present, so a cache without an account identity will happily
+   *  hand you the previous account's utilization after a switch. Null only for a reading written
+   *  before this field existed, which is treated as unverifiable rather than as a match. */
+  accountFp: string | null
+  /** A HUMAN LABEL for the fingerprint, read from `~/.claude.json`'s `oauthAccount` so a usage
+   *  number can be lined up against the burn numbers `get_window_eta` and the OTEL feed report for
+   *  the same account. **Display only, and not trustworthy as identity**: the usage endpoint carries
+   *  no identity of its own and answers purely to the presented token, so swapping the token without
+   *  editing that file yields another account's numbers under an unchanged email. Never decide
+   *  anything on this — decide on `accountFp`. */
+  accountUuid: string | null
+  accountLabel: string | null
+  /** True when the config file's identity does NOT match the credential the reading was fetched
+   *  with, i.e. the label above is known to be lying. Reported, never acted on. */
+  accountLabelSuspect: boolean
+  /** Was this reading PROVEN to belong to the account that is logged in right now?
+   *  `yes` the fingerprints match · `no` they differ, so these are another account's numbers ·
+   *  `unknown` the current credential could not be read, so the claim cannot be checked at all.
+   *  ALWAYS recomputed when a reading is served — never trusted from the cache file, which is the
+   *  mistake that froze `stale` at `false` and let a dead window be reported as current. */
+  accountVerified: 'yes' | 'no' | 'unknown'
   /** WHY this reading is what it is — never re-derived after the fact, because doing so mislabels
    *  lock contention as "endpoint unreachable" and races the token/cooldown state. */
   reason: 'fresh' | 'ok' | 'cooldown' | 'no_token' | 'expiring_token' | '429' | 'lock_contended'
@@ -107,25 +132,50 @@ export function userAgent(): string {
   return ua
 }
 
-interface Credentials { accessToken?: string; expiresAt?: number }
+interface Credentials { accessToken?: string; refreshToken?: string; expiresAt?: number }
+
+/** Identify the ACCOUNT a credential belongs to, without ever storing or logging the credential.
+ *
+ *  Prefer the refresh token: the access token rotates roughly hourly, so fingerprinting it would
+ *  invalidate the cache on every rotation. The refresh token is stable for as long as the login is,
+ *  which is exactly the lifetime we want the cache scoped to. Either way a CHANGE of account yields
+ *  a fingerprint mismatch, so the cache MISSES rather than returning another account's numbers —
+ *  a miss costs one request, a wrong number costs a wrong decision. */
+function fingerprint(c: Credentials): string | null {
+  const basis = c.refreshToken || c.accessToken
+  return basis ? createHash('sha256').update(basis).digest('hex').slice(0, 16) : null
+}
 
 /** The OAuth token, from the credentials FILE first (cheap, no prompt) and only then the macOS
  *  keychain behind an explicit opt-in. Returns the token in a local scope only — callers get the
  *  usage numbers, never the secret. */
-export function loadToken(env: NodeJS.ProcessEnv = process.env): { token?: string; expiresAt?: number; reason?: SubscriptionUsage['reason'] } {
+export function loadToken(
+  env: NodeJS.ProcessEnv = process.env,
+  opts: { allowKeychain?: boolean } = {},
+): { token?: string; expiresAt?: number; fp?: string | null; reason?: SubscriptionUsage['reason'] } {
   const base = env['CLAUDE_CONFIG_DIR'] || path.join(os.homedir(), '.claude')
   try {
     const raw = JSON.parse(fs.readFileSync(path.join(base, '.credentials.json'), 'utf8')) as Record<string, unknown>
     const inner = (raw['claudeAiOauth'] && typeof raw['claudeAiOauth'] === 'object')
       ? raw['claudeAiOauth'] as Credentials : raw as Credentials
     if (typeof inner.accessToken === 'string' && inner.accessToken) {
-      return { token: inner.accessToken, expiresAt: typeof inner.expiresAt === 'number' ? inner.expiresAt : undefined }
+      return {
+        token: inner.accessToken,
+        expiresAt: typeof inner.expiresAt === 'number' ? inner.expiresAt : undefined,
+        fp: fingerprint(inner),
+      }
     }
   } catch { /* absent on macOS by design — fall through to the keychain */ }
   if (process.platform !== 'darwin') return { reason: 'no_token' }
   // Opt-in ONLY: an un-ACL'd keychain read pops a macOS password prompt, and this module can be
   // called from a status line or a hook, where a prompt storm is unacceptable.
-  if (env['AGENTLENS_READ_KEYCHAIN_USAGE'] !== '1') return { reason: 'opt_in_required' }
+  //
+  // `opts.allowKeychain` is that same judgement made per CALL SITE rather than per machine: a
+  // command the user typed and is watching (`budget`) can afford one prompt, a hook cannot. It
+  // matters because on macOS the env var is unset by default, so the endpoint is never refreshed
+  // and the cache silently ages into uselessness — which is exactly how a six-day-old 96% came to
+  // be served as the current figure while the account was at 37%.
+  if (env['AGENTLENS_READ_KEYCHAIN_USAGE'] !== '1' && !opts.allowKeychain) return { reason: 'opt_in_required' }
   try {
     const raw = JSON.parse(execFileSync('security',
       ['find-generic-password', '-s', 'Claude Code-credentials', '-w'],
@@ -133,7 +183,11 @@ export function loadToken(env: NodeJS.ProcessEnv = process.env): { token?: strin
     const inner = (raw['claudeAiOauth'] && typeof raw['claudeAiOauth'] === 'object')
       ? raw['claudeAiOauth'] as Credentials : {}
     if (typeof inner.accessToken === 'string' && inner.accessToken) {
-      return { token: inner.accessToken, expiresAt: typeof inner.expiresAt === 'number' ? inner.expiresAt : undefined }
+      return {
+        token: inner.accessToken,
+        expiresAt: typeof inner.expiresAt === 'number' ? inner.expiresAt : undefined,
+        fp: fingerprint(inner),
+      }
     }
   } catch { /* denied / timeout / absent */ }
   return { reason: 'no_token' }
@@ -185,7 +239,14 @@ function secsUntil(iso: string | null, now: number): number | null {
   return isNaN(t) ? null : Math.round((t - now) / 1000)
 }
 
-export function normalize(body: RawUsage, fetchedAt: number, reason: SubscriptionUsage['reason'], now = Date.now()): SubscriptionUsage {
+export function normalize(
+  body: RawUsage,
+  fetchedAt: number,
+  reason: SubscriptionUsage['reason'],
+  now = Date.now(),
+  accountFp: string | null = null,
+  account: { accountUuid: string | null; label: string | null } = { accountUuid: null, label: null },
+): SubscriptionUsage {
   const num = (v: unknown): number | null => typeof v === 'number' && isFinite(v) ? v : null
   const limits: UsageLimit[] = (Array.isArray(body.limits) ? body.limits : []).map(l => {
     const resetsAt = typeof l.resets_at === 'string' ? l.resets_at : null
@@ -204,6 +265,14 @@ export function normalize(body: RawUsage, fetchedAt: number, reason: Subscriptio
   return {
     fetchedAt, ageSeconds,
     stale: ageSeconds * 1000 > TTL_MS * 3,
+    accountFp,
+    accountUuid: account.accountUuid,
+    accountLabel: account.label,
+    // A live fetch records the label and the credential in the same breath — nothing to diverge yet.
+    accountLabelSuspect: false,
+    // A LIVE fetch is by construction the current account's — the endpoint answered the very token
+    // we just presented. Unknown only when that token could not be fingerprinted.
+    accountVerified: accountFp === null ? 'unknown' : 'yes',
     reason,
     limits,
     fiveHourPercent: num(body.five_hour?.utilization),
@@ -219,19 +288,104 @@ function readCache(): SubscriptionUsage | null {
   try { return JSON.parse(fs.readFileSync(cachePath(), 'utf8')) as SubscriptionUsage } catch { return null }
 }
 
+/** Is this reading obsolete? TWO independent ways, and the second is the one that matters most.
+ *
+ *  Age is the obvious one. The other is that a reading whose window has already RESET describes a
+ *  window that no longer exists — no matter how recently it was fetched. `resetsAt` is an absolute
+ *  instant, so that check needs no trust in our own clock bookkeeping, which is precisely what
+ *  failed here: a snapshot of the weekly window that rolled on 2026-07-28 was still being served,
+ *  and reported as the CURRENT 96%, four days after that window ceased to exist. */
+export function deriveStale(u: SubscriptionUsage, now: number): boolean {
+  if (now - u.fetchedAt > TTL_MS * 3) return true
+  return u.limits.some(l => {
+    if (l.resetsAt === null) return false
+    const t = Date.parse(l.resetsAt)
+    return !isNaN(t) && t <= now
+  })
+}
+
+/** The ONLY way this module may serve a cached reading.
+ *
+ *  `ageSeconds` and `stale` are computed in `normalize` at WRITE time, so the values PERSISTED in
+ *  the cache file are permanently `0` and `false`. Spreading the cache verbatim therefore hands the
+ *  caller a six-day-old snapshot that self-reports as "0s old, not stale" — and every staleness
+ *  guard downstream, including this module's own `⚠ NOT LIVE` banner and its suppression of the
+ *  reset countdown, is keyed on exactly that frozen `false` and so can never fire. That is how
+ *  `budget`/`get_subscription_usage` reported a 7d window at 96% while the account was really at
+ *  36%. Both fields, plus every `resetsInSeconds` countdown, are re-derived against `now` here.
+ *
+ *  On macOS the token lives in the keychain and is read only behind an explicit opt-in, so
+ *  `opt_in_required` is the DEFAULT path, not an edge case — these returns are the common ones. */
+function fromCache(
+  cached: SubscriptionUsage,
+  reason: SubscriptionUsage['reason'],
+  now: number,
+  currentFp: string | null,
+): SubscriptionUsage {
+  // This machine switches between several accounts and the endpoint answers for whichever token is
+  // presented, so "is this reading even about the account I am logged into?" is a question the
+  // cache cannot answer by itself. Unprovable is treated as unusable, not as a pass: `unknown`
+  // (no readable credential) is stale for the same reason `no` is — we would be asserting a number
+  // we cannot attribute.
+  // VERIFICATION IS ON THE CREDENTIAL, NEVER ON `~/.claude.json`. Measured 2026-08-01: the usage
+  // endpoint's response carries NO identity field of any kind (top-level keys are all usage
+  // buckets; the only match for /account|email|user/ is `extra_usage.user_disabled`). The answer is
+  // therefore determined by exactly one thing — the token presented. Swapping the token WITHOUT
+  // touching the logged-in email is enough to get another account's numbers back, so
+  // `oauthAccount.accountUuid` from the config file is a LABEL that can disagree with the
+  // credential, and keying verification on it would reject a perfectly valid reading whenever the
+  // file lagged. Same credential ⇒ same account, by construction; that is the only sound test.
+  const verified: SubscriptionUsage['accountVerified'] =
+    currentFp === null || cached.accountFp === null ? 'unknown'
+      : cached.accountFp === currentFp ? 'yes' : 'no'
+  // Do the label and the credential move TOGETHER? They were recorded side by side at fetch time,
+  // so if one changed and the other did not, they have diverged and the email shown is not evidence
+  // of anything. XOR, because the failure is symmetric: a token swapped under an unchanged email
+  // (the observed case) and an email changed under an unchanged token are both a lying label.
+  // Only when verification actually HAPPENED. `unknown` means we could not read the credential at
+  // all, which is no evidence about the label — treating it as a dispute prints a scary and false
+  // "LABEL DISPUTED" on every machine that has not opted into the keychain read.
+  const currentUuid = getCurrentAccount().accountUuid
+  const labelSuspect = verified !== 'unknown' && currentUuid !== null && cached.accountUuid !== null
+    && ((cached.accountUuid === currentUuid) !== (verified === 'yes'))
+  return {
+    ...cached,
+    ageSeconds: Math.max(0, Math.round((now - cached.fetchedAt) / 1000)),
+    // FRESHNESS ONLY. Attribution is a separate axis reported by `accountVerified`, and conflating
+    // them called a 13-second-old reading "NOT LIVE" merely because this process could not read the
+    // credential to check whose it was. A consumer that must not act on an unattributed reading
+    // (`budget`) tests both fields; one that only wants to know whether the numbers are current
+    // tests this one. Neither is served by collapsing two different doubts into one flag.
+    stale: deriveStale(cached, now),
+    accountVerified: verified,
+    accountLabelSuspect: labelSuspect,
+    limits: cached.limits.map(l => ({ ...l, resetsInSeconds: secsUntil(l.resetsAt, now) })),
+    reason,
+  }
+}
+
 /** Fetch (or serve cache) the subscription window utilization. Never throws. */
-export async function getSubscriptionUsage(opts: { force?: boolean; now?: number } = {}): Promise<SubscriptionUsage | null> {
+export async function getSubscriptionUsage(
+  opts: { force?: boolean; now?: number; allowKeychain?: boolean } = {},
+): Promise<SubscriptionUsage | null> {
   const now = opts.now ?? Date.now()
   const cached = readCache()
-  if (!opts.force && cached && now - cached.fetchedAt < TTL_MS) {
-    return { ...cached, ageSeconds: Math.round((now - cached.fetchedAt) / 1000), reason: 'fresh' }
+  // Identify the CURRENT account BEFORE trusting any cached reading. This has to happen first —
+  // serving the within-TTL cache without knowing whose token is loaded is precisely how an account
+  // switch would be invisible: the numbers would stay put and simply describe the wrong account.
+  const { token, expiresAt, fp, reason } = loadToken(process.env, { allowKeychain: opts.allowKeychain })
+  const currentFp = fp ?? null
+  const serve = (c: SubscriptionUsage | null, r: SubscriptionUsage['reason']): SubscriptionUsage | null =>
+    c ? fromCache(c, r, now, currentFp) : null
+
+  if (!opts.force && cached && now - cached.fetchedAt < TTL_MS && cached.accountFp === currentFp && currentFp !== null) {
+    return serve(cached, 'fresh')
   }
   const cool = readCooldown()
-  if (cool.until > now) return cached ? { ...cached, reason: 'cooldown' } : null
-  const { token, expiresAt, reason } = loadToken()
-  if (!token) return cached ? { ...cached, reason: reason ?? 'no_token' } : null
+  if (cool.until > now) return serve(cached, 'cooldown')
+  if (!token) return serve(cached, reason ?? 'no_token')
   // Expired or about to expire: do not spend a request on a token Claude Code is about to rotate.
-  if (expiresAt && expiresAt < now + 30_000) return cached ? { ...cached, reason: 'expiring_token' } : null
+  if (expiresAt && expiresAt < now + 30_000) return serve(cached, 'expiring_token')
 
   // Cross-process guard. Two callers can both clear the cooldown check above before either fires;
   // without this they double-hit the endpoint and, reading the same consecutive-429 count, fail to
@@ -246,13 +400,15 @@ export async function getSubscriptionUsage(opts: { force?: boolean; now?: number
       const age = now - fs.statSync(lockPath()).mtimeMs
       if (age > HTTP_TIMEOUT_MS * 2) { fs.writeFileSync(lockPath(), String(process.pid)); held = true }
     } catch { /* fall through */ }
-    if (!held) return cached ? { ...cached, reason: 'lock_contended' } : null
+    if (!held) return serve(cached, 'lock_contended')
   }
   try {
     // Re-check under the lock: whoever won it may have just refreshed or armed a cooldown (TOCTOU).
     const again = readCache()
-    if (!opts.force && again && now - again.fetchedAt < TTL_MS) return { ...again, reason: 'fresh' }
-    if (readCooldown().until > now) return again ? { ...again, reason: 'cooldown' } : null
+    if (!opts.force && again && now - again.fetchedAt < TTL_MS && again.accountFp === currentFp && currentFp !== null) {
+      return serve(again, 'fresh')
+    }
+    if (readCooldown().until > now) return serve(again, 'cooldown')
 
     const ctl = new AbortController()
     const timer = setTimeout(() => ctl.abort(), HTTP_TIMEOUT_MS)
@@ -268,16 +424,18 @@ export async function getSubscriptionUsage(opts: { force?: boolean; now?: number
       })
       if (res.status === 429) {
         armCooldown(retryAfterSeconds(res.headers, now), now)
-        return cached ? { ...cached, reason: '429' } : null
+        return serve(cached, '429')
       }
-      if (!res.ok) return cached ? { ...cached, reason: 'http_error' } : null
-      const usage = normalize(await res.json() as RawUsage, now, 'ok', now)
+      if (!res.ok) return serve(cached, 'http_error')
+      const who = getCurrentAccount()
+      const usage = normalize(await res.json() as RawUsage, now, 'ok', now, currentFp,
+        { accountUuid: who.accountUuid, label: who.email ?? who.label })
       try { fs.writeFileSync(cachePath(), JSON.stringify(usage)) } catch { /* best effort */ }
       try { fs.unlinkSync(cooldownPath()) } catch { /* no cooldown to clear */ }
       return usage
     } finally { clearTimeout(timer) }
   } catch {
-    return cached ? { ...cached, reason: 'http_error' } : null
+    return serve(cached, 'http_error')
   } finally {
     if (held) { try { fs.unlinkSync(lockPath()) } catch { /* already gone */ } }
   }
@@ -292,6 +450,33 @@ export function usageBar(percent: number, cells = BAR_CELLS): string {
   return `[${'█'.repeat(filled)}${'░'.repeat(cells - filled)}]`
 }
 
+/** Age as a human reads it. `Math.round(ageSeconds / 60)}m` rendered a six-day-old cache as
+ *  "8525m ago", which buries the one fact the warning exists to convey. */
+function humanAge(secs: number): string {
+  if (secs < 90) return `${Math.max(0, Math.round(secs))}s`
+  const m = Math.round(secs / 60)
+  if (m < 90) return `${m}m`
+  const h = Math.floor(m / 60)
+  if (h < 48) return `${h}h ${m % 60}m`
+  return `${Math.floor(h / 24)}d ${h % 24}h`
+}
+
+/** Name the stronger reason when it applies: an EXPIRED window is not merely an old reading, it is a
+ *  reading of something that no longer exists, and a reader who sees only "old" may still anchor on
+ *  the percentage. */
+function rolledNote(u: SubscriptionUsage): string {
+  const rolled = u.limits.filter(l => {
+    if (l.resetsAt === null) return false
+    const t = Date.parse(l.resetsAt)
+    return !isNaN(t) && t <= Date.now()
+  })
+  if (rolled.length === 0) return ''
+  const which = rolled.length === u.limits.length
+    ? `every window shown has`
+    : `${rolled.length} of the ${u.limits.length} windows shown have`
+  return `; ${which} ALREADY RESET since this was read`
+}
+
 function humanReset(secs: number | null): string {
   if (secs === null) return ''
   if (secs <= 0) return 'now'
@@ -301,7 +486,22 @@ function humanReset(secs: number | null): string {
 
 export function formatSubscriptionUsage(u: SubscriptionUsage | null): string {
   if (!u) return 'subscription usage: unavailable (no token, opt-in required, or endpoint unreachable)'
-  const lines = ['Subscription window utilization (Anthropic\'s own numbers)']
+  // The header is the claim a reader acts on. "Anthropic's own numbers" is true of a LIVE read and
+  // a lie about a rolled-over snapshot, so the stale branch must not inherit it — an unqualified
+  // header is what let a four-day-dead 96% be relayed to a user as their current utilization.
+  // Name the account in the header. An unattributed percentage is what let one account's 96% be
+  // read as another's current utilization; a reader who sees the email can spot that instantly.
+  const base = u.accountLabel ?? u.accountUuid?.slice(0, 8) ?? 'unidentified account'
+  // The label comes from a config file, the numbers come from a token, and the two can move apart.
+  // Say so rather than printing an email that quietly implies an attribution nobody verified.
+  const who = u.accountLabelSuspect ? `${base} — LABEL DISPUTED, credential says otherwise` : base
+  // "for <email>" is an attribution claim. Make it only when the credential proved it; otherwise
+  // name the account as an unverified label, because that is all it is.
+  const lines = [u.stale
+    ? `Subscription window utilization — ⚠ STALE SNAPSHOT, NOT CURRENT [${who}]`
+    : u.accountVerified === 'yes'
+      ? `Subscription window utilization for ${who} (Anthropic's own numbers)`
+      : `Subscription window utilization (Anthropic's own numbers) — account NOT verified [label: ${who}]`]
   for (const l of u.limits) {
     const scope = l.scopeLabel ? ` ${l.scopeLabel}` : ''
     // A countdown computed from a CACHED resets_at renders as live for a window that may already
@@ -312,8 +512,18 @@ export function formatSubscriptionUsage(u: SubscriptionUsage | null): string {
   if (u.usageCreditsEnabled !== null) {
     lines.push(`  usage credits: ${u.usageCreditsEnabled ? 'ENABLED — prompt-cache TTL drops to 5 min' : 'disabled — 1-hour prompt-cache TTL active'}`)
   }
-  lines.push(u.stale
-    ? `  ⚠ NOT LIVE — last good read ${Math.round(u.ageSeconds / 60)}m ago (${u.reason}). Do not trust these values; run /usage in-app.`
-    : `  [cache ${u.ageSeconds}s old · ${u.reason}]`)
+  // Name the account problem separately from the age problem: they call for different actions —
+  // one is "refresh me", the other is "these belong to someone else".
+  const acct = u.accountVerified === 'no'
+    ? ' ⚠ ANOTHER ACCOUNT — the logged-in credential is not the one these were fetched with; do not read them as yours.'
+    : u.accountVerified === 'unknown'
+      ? ' ⚠ UNATTRIBUTED — could not read the current credential, so these cannot be confirmed to be THIS account\'s'
+        + ' (set AGENTLENS_READ_KEYCHAIN_USAGE=1 to let this process check).'
+      : ''
+  if (u.stale) {
+    lines.push(`  ⚠ NOT LIVE — last good read ${humanAge(u.ageSeconds)} ago (${u.reason})${rolledNote(u)}. Do not trust these values; run /usage in-app.${acct}`)
+  } else {
+    lines.push(`  [${u.accountVerified === 'yes' ? 'live · account verified' : 'live'} · cache ${u.ageSeconds}s old · ${u.reason}]${acct}`)
+  }
   return lines.join('\n')
 }
