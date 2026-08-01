@@ -70,6 +70,10 @@ burn-token accounting model); [[otlp-ingest-topology]] (cites this page's TTL-ti
 harness's own tier-aware `cost.total_cost_usd` per turn, so it is the cheapest check on the rates
 here — and its rate_limits block is the un-quantized window fill).
 
+See also: [[cumulative-vs-per-turn-fields]] — a recomputed per-turn cost must use these rates AND
+come from a correctly-differenced field; getting the rate right and the delta wrong still yields a
+wrong number (measured: a 300x one).
+
 ## Notes and lessons learned
 
 [^1]: [id:ATOM-TTL-IS-REGIME-NOT-CONSTANT, status:valid, keywords:"is_the_cache_ttl_5_minutes_or_1_hour treated_5min_ttl_as_universal subscription_main_session_1h_ttl classify_regime_before_classifying_turn", ocd:2026-07-11, lmd:2026-07-11] earlier this project treated the 5-min TTL as

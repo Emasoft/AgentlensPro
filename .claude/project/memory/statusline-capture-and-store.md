@@ -213,6 +213,11 @@ Two independent paths, exact agreement, and it picks the tier. See [[cache-ttl-m
 delta is a per-turn cost ONLY when the samples are adjacent: sampling STOPS while a session is idle,
 so a pair bracketing an idle stretch is an INTERVAL total covering every turn inside it.
 
+See also: [[cumulative-vs-per-turn-fields]] — the rules for differencing this payload's
+lifetime totals (a baseline AND a gap), which this page's billing and `peaks` lessons are both
+instances of; [[timeout-bounds-the-request-not-the-process]] (USER) — the general form of the
+capture wrapper's 10.6 s stall and its stdout-flush counterpart.
+
 ## Notes and lessons learned
 
 [^1]: [id:ATOM-SL-STATUSLINE-IS-NOT-A-HOOK, status:valid, keywords:"can_i_add_a_second_statusline add_statusline_beside_existing statusline_is_a_hook_event wrap_the_existing_statusline", ocd:2026-08-01, lmd:2026-08-01] DO NOT try to
