@@ -1,6 +1,6 @@
 ---
 name: statusline-capture-and-store
-description: "how do I get rate_limits without hitting the usage endpoint / why is session_id coming back as hugeint / JSON.stringify throws Do not know how to serialize a BigInt / why did lifecycle-events go empty / can I add a second statusLine / does Claude Code send the 5h 7d windows on stdin / should I pack N samples per row in parquet / how big should a parquet chunk be / get_account_status shows another account's window — the statusline sample store, its measured format choices, and the DuckDB traps that shipped bugs"
+description: "how do I get rate_limits without hitting the usage endpoint / why is session_id coming back as hugeint / JSON.stringify throws Do not know how to serialize a BigInt / why did lifecycle-events go empty / can I add a second statusLine / does Claude Code send the 5h 7d windows on stdin / should I pack N samples per row in parquet / how big should a parquet chunk be / get_account_status shows another account's window / was that turn actually a cache miss / how do I verify a claimed cold cache write in one command / is the 1-hour write tier real on this machine / why does the same turn show up twelve times — the statusline sample store, its measured format choices, the cache/peaks query views, and the DuckDB traps that shipped bugs"
 ocd: 2026-08-01
 lmd: 2026-08-01
 metadata:
@@ -118,6 +118,28 @@ LAST, and `get_account_status` printed it beside the current account's email: it
 caller has an estimate to fall back on and no way to know the "authoritative" figure was someone
 else's. See [[agentlens-account-window-budget]], [[cache-ttl-model]].
 
+
+^ATOM-IXQ7-DOMU [desc:"The two query views that answer cost questions from the payload — cache (warm vs cold, cost bracketed by TTL tier) and peaks (delta + its gap) — and the measured agreement that validates the pricing t", keywords: was_that_turn_a_cache_miss verify_a_cache_miss_claim statusline-history_cache_view cache_write_vs_cache_read_per_turn is_the_1h_write_tier_real d_cost_across_an_idle_gap peaks_column_overstates_a_turn, ocd: 2026-08-01, lmd: 2026-08-01] [^5] [^6]
+
+## Answering a cost question from the payload: `cache` and `peaks`
+
+`agentlenspro statusline-history cache` is the FALSIFIER for a claimed cache miss.
+`context_window.current_usage` splits each turn into fresh input / cache WRITE / cache READ, and the
+ratio IS the verdict: a warm turn re-reads its whole prefix at 0.1x and writes only the new suffix
+(measured here: write 4.7k against read 617.7k = 0.75%), while a cold rewrite puts the PREFIX in
+cache_creation (write 513.1k against read 92.5k = 84.7%). Cost is printed as a 5m/1h BRACKET because
+the write rate is tiered by TTL and the payload does not carry the tier — one number would be a guess.
+
+**MEASURED 2026-08-01, and it validates `src/shared/pricing.ts` from outside:** on four turns of one
+session the cost computed by `calcTokenCostUsd` from the payload buckets at the **1h** tier —
+4.9201 / 5.1814 / 5.2879 / 1.1693 — equals the harness's OWN cumulative `cost.total_cost_usd` delta
+to four decimals, while the 5m column (3.0940 / 3.2573 / 3.3239 / 0.7493) does not match any of them.
+Two independent paths, exact agreement, and it picks the tier. See [[cache-ttl-model]].
+
+`peaks` shows that cumulative-cost delta directly, and it now carries `gap s` + `span` because the
+delta is a per-turn cost ONLY when the samples are adjacent: sampling STOPS while a session is idle,
+so a pair bracketing an idle stretch is an INTERVAL total covering every turn inside it.
+
 ## Notes and lessons learned
 
 [^1]: [id:ATOM-SL-STATUSLINE-IS-NOT-A-HOOK, status:valid, keywords:"can_i_add_a_second_statusline add_statusline_beside_existing statusline_is_a_hook_event wrap_the_existing_statusline", ocd:2026-08-01, lmd:2026-08-01] DO NOT try to
@@ -143,3 +165,5 @@ else's. See [[agentlens-account-window-budget]], [[cache-ttl-model]].
   replaced and its writer dropped, freezing this module's "authoritative" feed for 23 h while every
   consumer kept reporting stale numbers with no error. DO own the projection in-product and push data
   in at ingest.
+[^5]: [id:ATOM-6DGB-S0MO, status:valid, keywords:"same_turn_appears_twelve_times statusline_re-renders_the_same_usage one_row_per_sample_is_wrong current_usage_is_the_last_turn_not_this_sample output_tokens_grows_while_streaming dedupe_on_the_input_buckets", ocd:2026-08-01, lmd:2026-08-01] DO NOT emit one row per status-line sample when reporting per-turn usage, BECAUSE `current_usage` describes the LAST COMPLETED turn and the status line re-renders every ~3 s whether or not a turn happened — the first live run showed a single compaction rewrite twelve times and nothing else, a table that reads as twelve cold writes. DO group by the turn's INPUT buckets (input + cache_creation + cache_read, fixed the moment the request is sent) and take `max(output_tokens)`: grouping on the full tuple splits one turn back into its streaming snapshots (out=2, then 119, then 170).
+[^6]: [id:ATOM-118H-5886, status:valid, keywords:"d_cost_looks_like_a_five_dollar_turn cumulative_cost_delta_over_an_idle_gap per-turn_cost_overstated_15x cost_total_cost_usd_is_cumulative sampling_stops_while_idle", ocd:2026-08-01, lmd:2026-08-01] DO NOT read a delta of `cost.total_cost_usd` as one turn's cost without checking the time gap between the two samples, BECAUSE the field is cumulative and sampling STOPS while a session is idle, so the pair bracketing an idle stretch carries every turn in between — read that way it reported a $0.35 warm turn as a $5 cold write, and the claim was repeated for a dozen turns before the transcript contradicted it. DO show the gap beside the delta and label anything past ~60 s an INTERVAL total.
