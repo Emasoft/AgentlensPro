@@ -226,6 +226,138 @@ suite('statuslineStore — WAL, seal, and verify-before-delete', () => {
   })
 })
 
+suite('statuslineStore — a non-UUID session id must not blind every view', () => {
+  // FOUND LIVE: three of five statusline-history views were dead with
+  // `Conversion Error: Could not convert string 'x' to INT128`, from ONE row.
+  // DuckDB infers a UUID-SHAPED string as the UUID type PER FILE: sealed parts had inferred UUID,
+  // the live WAL held a non-UUID id and inferred VARCHAR, and UNION ALL BY NAME reconciled the two
+  // to UUID. The failure is in the union, so a CAST in the SELECT list cannot reach it.
+
+  test('a sealed (UUID-inferred) part unions with a WAL holding a NON-UUID id', async () => {
+    const root = tmpRoot()
+    const prev = process.env['AGENTLENS_STATUSLINE_SEAL_ROWS']
+    process.env['AGENTLENS_STATUSLINE_SEAL_ROWS'] = '3'
+    try {
+      const s = new StatuslineStore({ root, autoTimer: false })
+      // Part 1: every id UUID-shaped ⇒ DuckDB seals it as a UUID column.
+      for (let i = 0; i < 3; i++) s.append(sample({ prompt_id: `p-${i}` }), 'main', Date.now() - 10_000 + i)
+      s.flush()
+      assert.strictEqual(await s.maybeSeal(), 1, 'precondition: the part sealed')
+      // Then a live WAL row whose session id is NOT UUID-shaped.
+      s.append(sample({ session_id: 'x' }), 'main', Date.now())
+      s.flush()
+
+      const rows = await queryStatusline(root, 'main',
+        'SELECT session_id, count(*) n FROM samples GROUP BY session_id ORDER BY n DESC')
+      assert.ok(rows, 'store seeded but read BLIND')
+      assert.strictEqual(rows.length, 2, 'both the sealed UUID session and the non-UUID one')
+      const ids = rows.map(r => String(r.session_id))
+      assert.ok(ids.includes('x'), "the non-UUID id must survive as 'x', not error and not vanish")
+      assert.ok(ids.includes('249c4216-4db4-4b64-9a10-b994b9d7bd80'),
+        'a UUID must come back as its canonical TEXT, not as a {hugeint} object')
+      assert.ok(rows.every(r => typeof r.session_id === 'string'),
+        'session_id must be VARCHAR everywhere — an object is truthy and sails through a check')
+    } finally {
+      if (prev === undefined) delete process.env['AGENTLENS_STATUSLINE_SEAL_ROWS']
+      else process.env['AGENTLENS_STATUSLINE_SEAL_ROWS'] = prev
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('a LEGACY UUID-typed part and a new VARCHAR-typed part coexist', async () => {
+    // THE REGRESSION THIS SUITE EXISTS FOR. The first fix normalized the OUTPUT of a multi-file
+    // `read_parquet([...])`, which is too late: that reader resolves ONE schema across its whole file
+    // list — taking it from the first file — and when a UUID-typed part meets a VARCHAR-typed one it
+    // coerces to UUID, failing INSIDE the reader with `failed to cast column "session_id" from type
+    // VARCHAR to UUID`. Sealing as VARCHAR stops NEW parts being UUID, but parts written before that
+    // fix are on disk for the whole 90-day retention, so the reader must tolerate a mixed store
+    // permanently. Hence one normalized relation per FILE.
+    const root = tmpRoot()
+    const prev = process.env['AGENTLENS_STATUSLINE_SEAL_ROWS']
+    process.env['AGENTLENS_STATUSLINE_SEAL_ROWS'] = '3'
+    try {
+      const s = new StatuslineStore({ root, autoTimer: false })
+      for (let i = 0; i < 3; i++) s.append(sample({ prompt_id: `p-${i}` }), 'main', Date.now() - 10_000 + i)
+      s.flush()
+      assert.strictEqual(await s.maybeSeal(), 1)          // a NEW part: VARCHAR
+      const dir = path.join(root, 'main', dayKey(Date.now()))
+
+      // Hand-write a LEGACY part exactly as the pre-fix seal did: no cast, so DuckDB's own inference
+      // types the UUID-shaped column as UUID. Writing it any other way would not reproduce the bug.
+      const legacyWal = path.join(dir, 'legacy-src.ndjson')
+      fs.writeFileSync(legacyWal, `${JSON.stringify({ ts: Date.now() - 5_000, session_id: '249c4216-4db4-4b64-9a10-b994b9d7bd80', v: 1 })}\n`)
+      const { DuckDBInstance } = await import('@duckdb/node-api')
+      const inst = await DuckDBInstance.create(':memory:')
+      const con = await inst.connect()
+      const legacyPart = path.join(dir, 'part-1-legacy-0.parquet')
+      await con.run(`COPY (SELECT * FROM read_json_auto('${legacyWal}')) TO '${legacyPart}' (FORMAT PARQUET, COMPRESSION ZSTD)`)
+      const t = (await con.runAndReadAll(`SELECT typeof(session_id) t FROM read_parquet('${legacyPart}')`)).getRowObjects()[0].t
+      con.closeSync(); inst.closeSync()
+      fs.unlinkSync(legacyWal)
+      assert.strictEqual(String(t), 'UUID', 'precondition: the legacy part really is UUID-typed')
+
+      // The non-UUID id must end up INSIDE A PART, not merely in the WAL. That distinction is what
+      // makes this test non-vacuous: with `x` only in the WAL, the parquet branch still holds nothing
+      // but UUID-shaped strings, the VARCHAR→UUID cast succeeds, and the broken code passes.
+      for (let i = 0; i < 3; i++) s.append(sample({ session_id: 'x', prompt_id: `q-${i}` }), 'main', Date.now() + i)
+      s.flush()
+      assert.strictEqual(await s.maybeSeal(), 1, 'precondition: the non-UUID id is sealed into a part')
+      assert.ok(fs.readdirSync(dir).filter(f => f.endsWith('.parquet')).length >= 3,
+        'precondition: three parts on disk — legacy UUID, new VARCHAR, and the non-UUID one')
+
+      const rows = await queryStatusline(root, 'main', 'SELECT DISTINCT session_id FROM samples')
+      assert.ok(rows, 'mixed-type store read BLIND')
+      const ids = rows.map(r => String(r.session_id)).sort()
+      assert.deepStrictEqual(ids, ['249c4216-4db4-4b64-9a10-b994b9d7bd80', 'x'],
+        'the legacy UUID part, the new VARCHAR part and the non-UUID WAL row must all read')
+      assert.ok(rows.every(r => typeof r.session_id === 'string'))
+    } finally {
+      if (prev === undefined) delete process.env['AGENTLENS_STATUSLINE_SEAL_ROWS']
+      else process.env['AGENTLENS_STATUSLINE_SEAL_ROWS'] = prev
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('a source with NO session_id column at all does not break the query', async () => {
+    // The normalization uses `* REPLACE`, which is a BINDER error when the column is absent — so a
+    // malformed WAL would trade one total failure for another without the zero-row typed template.
+    const root = tmpRoot()
+    try {
+      const dir = path.join(root, 'main', dayKey(Date.now()))
+      fs.mkdirSync(dir, { recursive: true })
+      fs.writeFileSync(path.join(dir, 'wal-99999.ndjson'), `${JSON.stringify({ ts: Date.now(), foo: 2 })}\n`)
+      const rows = await queryStatusline(root, 'main', 'SELECT count(*) n, count(session_id) nn FROM samples')
+      assert.ok(rows)
+      assert.strictEqual(Number(rows[0].n), 1)
+      assert.strictEqual(Number(rows[0].nn), 0, 'the column exists and is NULL, rather than not binding')
+    } finally { fs.rmSync(root, { recursive: true, force: true }) }
+  })
+
+  test('a sealed part stores session_id as VARCHAR, so no later repair is needed', async () => {
+    // The ROOT fix. Repairing at read time works, but every seal of an all-UUID WAL would otherwise
+    // mint another UUID-typed part and the repair would be load-bearing forever.
+    const root = tmpRoot()
+    const prev = process.env['AGENTLENS_STATUSLINE_SEAL_ROWS']
+    process.env['AGENTLENS_STATUSLINE_SEAL_ROWS'] = '3'
+    try {
+      const s = new StatuslineStore({ root, autoTimer: false })
+      for (let i = 0; i < 3; i++) s.append(sample({ prompt_id: `p-${i}` }), 'main', Date.now() - 10_000 + i)
+      s.flush()
+      assert.strictEqual(await s.maybeSeal(), 1)
+      // Read the PART directly: through `samples` the read-time repair would mask a UUID column.
+      const day = dayKey(Date.now())
+      const part = fs.readdirSync(path.join(root, 'main', day)).find(f => f.endsWith('.parquet'))!
+      const rows = await queryStatusline(root, 'main',
+        `SELECT typeof(session_id) t FROM read_parquet('${path.join(root, 'main', day, part)}') LIMIT 1`)
+      assert.strictEqual(String(rows![0].t), 'VARCHAR')
+    } finally {
+      if (prev === undefined) delete process.env['AGENTLENS_STATUSLINE_SEAL_ROWS']
+      else process.env['AGENTLENS_STATUSLINE_SEAL_ROWS'] = prev
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
 suite('statuslineStore — absence, malformed partitions, and retention', () => {
   test('an empty store reads as BLIND (null), never as an empty result set', async () => {
     // The distinction is the whole honesty contract: "no rows" from a store with no data means we

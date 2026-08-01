@@ -137,13 +137,41 @@ export function filesInWindow(
  *
  *  `union_by_name` is what tolerates schema drift: optional blocks (`pr`, `worktree`, `agent`) appear
  *  and vanish mid-stream, and a future Claude Code version may add fields. */
+/** Force `session_id` to VARCHAR on ONE source, tolerating a source that lacks the column entirely.
+ *
+ *  WHY, and it is not theoretical — three of five views were dead on the live store when this was
+ *  written. DuckDB infers a UUID-*shaped* string as the UUID type, PER FILE. Sealed parts had
+ *  inferred UUID (35,788 rows); the live WAL held one session whose id was not UUID-shaped and so
+ *  inferred VARCHAR (8,007 rows); `UNION ALL BY NAME` reconciles those to UUID, and the whole query
+ *  dies with `Conversion Error: Could not convert string 'x' to INT128`. ONE row with a non-UUID
+ *  session id blinds every view that touches the column. A `CAST(... AS VARCHAR)` in the SELECT list
+ *  cannot help — the failure happens in the union, before any projection.
+ *
+ *  The zero-row template is not decoration: `* REPLACE` is a BINDER error when the column is absent,
+ *  so a malformed WAL with no `session_id` would trade one total failure for another. Unioning a
+ *  typed empty relation first guarantees the column exists; the outer REPLACE then fixes its type.
+ *  (The template alone does NOT fix the type — measured: UUID still wins the reconciliation.)
+ *  Casting UUID→VARCHAR is lossless: the id comes back as its canonical text. */
+function varcharSessionId(inner: string): string {
+  return 'SELECT * REPLACE (CAST(session_id AS VARCHAR) AS session_id)'
+    + ` FROM (SELECT NULL::VARCHAR AS session_id WHERE false UNION ALL BY NAME ${inner})`
+}
+
 export function relationFor(
   root: string, stream: StatuslineStream, sinceMs?: number, untilMs?: number,
 ): string | null {
   const { parts, wals } = filesInWindow(root, stream, sinceMs, untilMs)
-  const rels: string[] = []
-  if (parts.length) rels.push(`SELECT * FROM read_parquet([${parts.map(q).join(',')}], union_by_name=true)`)
-  if (wals.length) rels.push(`SELECT * FROM read_json_auto([${wals.map(q).join(',')}], union_by_name=true, ignore_errors=true)`)
+  // ONE normalized relation PER FILE, deliberately not one multi-file read_parquet/read_json_auto.
+  // Both readers resolve a single schema across their file list — `read_parquet` takes it from the
+  // FIRST file and casts the rest to it, and when a UUID-typed part meets a VARCHAR-typed one it
+  // picks UUID, so a non-UUID id fails with `failed to cast column "session_id" from type VARCHAR to
+  // UUID`. That coercion happens INSIDE the reader, before any wrapper can project, so normalizing
+  // the reader's output is too late: the cast must be applied to each file's own relation.
+  // Cheap — the file list is already bounded by the query window, and DuckDB still scans in parallel.
+  const rels = [
+    ...parts.map(p => varcharSessionId(`SELECT * FROM read_parquet(${q(p)})`)),
+    ...wals.map(w => varcharSessionId(`SELECT * FROM read_json_auto(${q(w)}, ignore_errors=true)`)),
+  ]
   if (rels.length === 0) return null
   return `(${rels.join(' UNION ALL BY NAME ')})`
 }
@@ -319,8 +347,14 @@ export class StatuslineStore {
     try {
       // ORDER BY session_id measured 1.24x better compression than arrival order: it clusters each
       // session's near-identical consecutive samples into single dictionary/RLE runs.
+      //
+      // The VARCHAR normalization is the ROOT fix for the UUID-inference trap (see varcharSessionId):
+      // without it every seal of an all-UUID WAL writes a UUID-typed column, so the union with any
+      // later VARCHAR source has to be repaired at read time forever. Sealing as VARCHAR means new
+      // parts need no repair at all. Costs nothing — measured, UUID typing saved exactly 0 bytes,
+      // because ZSTD already compresses the text to a UUID's 122-bit entropy.
       await duck.con.run(
-        `COPY (SELECT * FROM read_json_auto(${q(wal)}, union_by_name=true, ignore_errors=true) ORDER BY session_id, ts)`
+        `COPY (SELECT * FROM (${varcharSessionId(`SELECT * FROM read_json_auto(${q(wal)}, union_by_name=true, ignore_errors=true)`)}) ORDER BY session_id, ts)`
         + ` TO ${q(out)} (FORMAT PARQUET, COMPRESSION ZSTD)`,
       )
       const got = Number((await duck.con.runAndReadAll(`SELECT count(*) c FROM read_parquet(${q(out)})`)).getRowObjects()[0].c)
