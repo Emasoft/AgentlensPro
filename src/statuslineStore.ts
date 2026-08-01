@@ -112,16 +112,30 @@ export function dayPartitions(root: string, stream: StatuslineStream): Array<{ d
   return out.sort((a, b) => a.dayMs - b.dayMs)
 }
 
+/** One extra day of slack on each end of a window's PARTITION selection.
+ *
+ *  A record's `ts` and the partition it lives in are not guaranteed to agree: `flush()` files a whole
+ *  batch under the day it is WRITTEN, so a batch appended just before UTC midnight and flushed just
+ *  after lands its records in the NEXT day's partition. Without slack, a query whose window is that
+ *  earlier day skips the later partition entirely and the records vanish — MEASURED: such a record
+ *  made the query return **BLIND**, which in this module means "we cannot see", when the data existed
+ *  and matched the window. Reporting absence as blindness is the one failure this store must not have.
+ *
+ *  Widening only admits more candidate FILES; `queryStatusline` still filters every row on `ts`, so
+ *  no out-of-window row can be returned. Cost is at most two extra partitions per query. */
+const PARTITION_SLACK_MS = 86_400_000
+
 /** Sealed parts + un-sealed WALs across a stream, optionally limited to a time window. The window is
- *  applied at DAY granularity only — a partition is included when its day overlaps [since, until]. */
+ *  applied at DAY granularity only — a partition is included when its day overlaps [since, until],
+ *  widened by PARTITION_SLACK_MS because a record's day and its partition's day can differ. */
 export function filesInWindow(
   root: string, stream: StatuslineStream, sinceMs?: number, untilMs?: number,
 ): { parts: string[]; wals: string[] } {
   const parts: string[] = []
   const wals: string[] = []
   for (const { dir, dayMs } of dayPartitions(root, stream)) {
-    if (sinceMs !== undefined && dayMs + 86_400_000 <= sinceMs) continue
-    if (untilMs !== undefined && dayMs > untilMs) continue
+    if (sinceMs !== undefined && dayMs + 86_400_000 + PARTITION_SLACK_MS <= sinceMs) continue
+    if (untilMs !== undefined && dayMs > untilMs + PARTITION_SLACK_MS) continue
     parts.push(...listFiles(dir, f => f.endsWith('.parquet')))
     wals.push(...listFiles(dir, f => f.startsWith('wal-') && f.endsWith('.ndjson')))
   }
@@ -295,9 +309,16 @@ export class StatuslineStore {
       if (!batch || batch.length === 0) continue
       this.buffers.set(stream, [])
       this.bufferedBytes.set(stream, 0)
-      // Partition by the FIRST record's day. A batch spanning UTC midnight puts a few records in the
-      // previous day's file; that is harmless (reads union the partitions and filter on `ts`) and far
-      // cheaper than splitting every batch by day.
+      // Partition by the day this batch is WRITTEN, not by any record's own ts. A batch appended
+      // just before UTC midnight and flushed just after therefore files those records under the NEXT
+      // day — deliberately, because splitting every batch by day would cost a day-key computation and
+      // a possible second open/fsync on every flush, at the full sample rate, to fix a skew of at
+      // most one flush interval per boundary.
+      //
+      // The skew is NOT free, though, and the comment here used to claim the opposite ("harmless"):
+      // partition selection is by day, so an un-slacked window would skip the partition holding those
+      // records and report BLIND. That is why filesInWindow carries PARTITION_SLACK_MS — the two are
+      // a pair, and neither is safe to change without the other.
       const wal = this.walPath(stream, Date.now())
       const lines = batch.join('\n') + '\n'
       try {

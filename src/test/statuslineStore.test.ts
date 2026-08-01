@@ -396,6 +396,36 @@ suite('statuslineStore — absence, malformed partitions, and retention', () => 
     } finally { fs.rmSync(root, { recursive: true, force: true }) }
   })
 
+  test('a record filed under the NEXT day is still found by a window covering its own day', async () => {
+    // flush() files a whole batch under the day it is WRITTEN, so a batch appended just before UTC
+    // midnight and flushed just after puts those records in the NEXT day's partition. Partition
+    // selection is by day, so without slack a query for the earlier day skips that partition and the
+    // records vanish — and it returned BLIND, which in this module means "we cannot see", for data
+    // that existed and matched. Reporting absence as blindness is the one failure this store must
+    // not have, so the slack in filesInWindow and the batch-partitioning in flush() are a PAIR.
+    const root = tmpRoot()
+    try {
+      const tsInDayN = Date.UTC(2026, 6, 10, 23, 59, 50)
+      const writtenDay = dayKey(Date.UTC(2026, 6, 11, 0, 0, 5))     // flushed 15 s later, next UTC day
+      const dir = path.join(root, 'main', writtenDay)
+      fs.mkdirSync(dir, { recursive: true })
+      fs.writeFileSync(path.join(dir, 'wal-1.ndjson'),
+        `${JSON.stringify({ ts: tsInDayN, session_id: '249c4216-4db4-4b64-9a10-b994b9d7bd80', cost_total_cost_usd: 1 })}\n`)
+
+      const rows = await queryStatusline(root, 'main', 'SELECT count(*) n FROM samples',
+        { sinceMs: Date.UTC(2026, 6, 10), untilMs: Date.UTC(2026, 6, 10, 23, 59, 59) })
+      assert.ok(rows, 'a record inside the window must never read as BLIND because of its partition')
+      assert.strictEqual(Number(rows[0].n), 1)
+
+      // The slack widens FILE selection only — rows are still filtered on ts, so a genuinely
+      // out-of-window row from a slack-admitted partition must NOT come back.
+      const none = await queryStatusline(root, 'main', 'SELECT count(*) n FROM samples',
+        { sinceMs: Date.UTC(2026, 6, 11), untilMs: Date.UTC(2026, 6, 11, 23, 59) })
+      assert.ok(none, 'the partition is admitted by slack, so this is a real look, not BLIND')
+      assert.strictEqual(Number(none[0].n), 0, 'but the row itself is outside the window and filtered out')
+    } finally { fs.rmSync(root, { recursive: true, force: true }) }
+  })
+
   test('a calendar-invalid day directory is neither read nor deleted', () => {
     // '2026-13-99' matches a naive \d{4}-\d{2}-\d{2} regex but parses to NaN, and NaN silently
     // defeats both the read window and the purge cutoff — an unpurgeable directory forever.
