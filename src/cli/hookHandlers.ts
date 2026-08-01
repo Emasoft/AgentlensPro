@@ -160,13 +160,17 @@ export function readStdin(stream: NodeJS.ReadableStream): Promise<Buffer> {
  *  failure (server down, timeout, or a non-2xx like a 503 shed under load) the event is durably
  *  SPOOLED and a detached daemon revive is fired, so no hook a live Claude instance emits is lost
  *  (D3K7QM2P/1a) — the previous behavior silently dropped it. */
-export async function forwardHookEvent(payload: Buffer, opts: { baseUrl?: string; timeoutMs?: number } = {}): Promise<void> {
+export async function forwardHookEvent(
+  payload: Buffer,
+  opts: { baseUrl?: string; timeoutMs?: number; path?: string; spool?: boolean } = {},
+): Promise<void> {
   const base = opts.baseUrl ?? uiBaseUrl()
+  const apiPath = opts.path ?? '/api/hook-events'
   // Number(env)||default, NOT Number(env||default): a non-numeric value like "2s" must fall back to
   // the default, not become NaN → AbortSignal.timeout(NaN) throws → swallowed → silent spool-only.
   const timeoutMs = opts.timeoutMs ?? Math.max(200, (Number(process.env.AGENTLENS_HOOK_TIMEOUT) || 1) * 1000)
   try {
-    const res = await fetch(`${base}/api/hook-events`, {
+    const res = await fetch(`${base}${apiPath}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: new Uint8Array(payload),
@@ -176,7 +180,12 @@ export async function forwardHookEvent(payload: Buffer, opts: { baseUrl?: string
     // A non-2xx means NOT ingested (e.g. admission-control 503 under 20-instance load, or a
     // transient error). Fall through to spool + revive, exactly as for a connection failure.
   } catch { /* server down / timeout — fall through to spool + revive */ }
-  spoolHookEvent(payload)
+  // opts.spool === false is for the status-line stream ONLY. Those arrive ~30/min PER SESSION (396/min
+  // measured across 13), so spooling them would fill the shared 20k hook-spool in under an hour and
+  // start dropping its OLDEST entries — which are the lifecycle events (StopFailure, PreCompact) that
+  // exist precisely because nothing else records them. A few minutes of a 3-second sample series is a
+  // cheap loss; a discarded rate-limit turn death is not. The revive still fires either way.
+  if (opts.spool !== false) spoolHookEvent(payload)
   reviveDaemonDetached()
 }
 

@@ -61,14 +61,25 @@ export const STATUSLINE_EV = 'StatusLineSample'
  *  — whereas empty output on the main status line blanks it. */
 export const SUBAGENT_STATUSLINE_EV = 'SubagentStatusLineSample'
 
+/** Samples go to their OWN endpoint, never /api/hook-events. Sharing the lifecycle bucket was
+ *  measurably destructive: at 396 samples/min they evicted the server's 600-slot lifecycle ring down
+ *  to an ~87 s span (blinding check_burn_risk's 5- and 10-minute windows) and consumed the unfiltered
+ *  1000-record budget that GET /api/lifecycle-events reads, silently truncating the timeline. */
+export const STATUSLINE_ENDPOINT = '/api/statusline-samples'
+
 /** Tight by design: this runs on the render path. The child dominates it, but a hung socket must
  *  not hold the status line hostage — a dropped sample is invisible, a frozen status line is not. */
 function captureTimeoutMs(): number {
   return Math.max(100, Number(process.env.AGENTLENS_STATUSLINE_TIMEOUT_MS) || 700)
 }
 
-/** Stamp the payload with the event name the server requires, leaving every other field verbatim.
- *  Exported so a test can pin that no field is dropped or rewritten on the way through. */
+/** Stamp the payload with which stream it came from, leaving every other field verbatim.
+ *  Exported so a test can pin that no field is dropped or rewritten on the way through.
+ *
+ *  `hook_event_name` is still stamped even though these no longer go to /api/hook-events: a NEW CLI
+ *  talking to an OLD server must still be ingestible, and the old server requires that field. The new
+ *  server reads `statusline_stream` and routes on it. Both stamps are two extra keys on a 1.5 KB
+ *  payload and they make the version skew a non-event in both directions. */
 export function toStatuslineRecord(payload: Buffer, ev: string = STATUSLINE_EV): Buffer | null {
   let parsed: unknown
   try {
@@ -77,9 +88,13 @@ export function toStatuslineRecord(payload: Buffer, ev: string = STATUSLINE_EV):
     return null // a payload shape we cannot read is not one we should be storing
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
-  // `hook_event_name` last: the server rejects a payload without it, and this module is the thing
-  // asserting it — a status-line blob that somehow carried its own must not win over ours.
-  return Buffer.from(JSON.stringify({ ...(parsed as Record<string, unknown>), hook_event_name: ev }))
+  // Ours last: a status-line blob that somehow carried either key must not win over what this
+  // module is asserting about where the sample came from.
+  return Buffer.from(JSON.stringify({
+    ...(parsed as Record<string, unknown>),
+    hook_event_name: ev,
+    statusline_stream: ev === SUBAGENT_STATUSLINE_EV ? 'subagent' : 'main',
+  }))
 }
 
 /** Forward one status-line payload to the server. Never throws, never writes to stdout, never
@@ -91,7 +106,13 @@ export async function captureStatusline(payload: Buffer, ev: string = STATUSLINE
     if (agentlensDisabled()) return // the global brake reaches sessions already running
     const record = toStatuslineRecord(payload, ev)
     if (!record) return
-    await forwardHookEvent(record, { timeoutMs: captureTimeoutMs() })
+    await forwardHookEvent(record, {
+      path: STATUSLINE_ENDPOINT,
+      timeoutMs: captureTimeoutMs(),
+      // Do NOT spool: see the note in forwardHookEvent. At this rate the shared hook-spool would
+      // evict the lifecycle events it exists to protect.
+      spool: false,
+    })
   } catch { /* contract 2: capture cannot fail the wrapper */ }
 }
 

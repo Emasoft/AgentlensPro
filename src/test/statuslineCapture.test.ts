@@ -51,8 +51,11 @@ suite('statusline capture — the wrapper must never damage the status line it w
     const out = JSON.parse(rec.toString('utf-8')) as Record<string, unknown>
     // An allowlist here would silently drop whatever field the next Claude Code version adds, and
     // the whole value of this store is answering questions nobody had thought of when it was built.
-    const { hook_event_name, ...rest } = out
+    // Exactly two keys are added: the stream the sample came from, and the legacy event name that
+    // keeps a NEW cli ingestible by an OLD server.
+    const { hook_event_name, statusline_stream, ...rest } = out
     assert.strictEqual(hook_event_name, STATUSLINE_EV)
+    assert.strictEqual(statusline_stream, 'main')
     assert.deepStrictEqual(rest, SAMPLE, 'every field must survive unmodified')
   })
 
@@ -82,8 +85,9 @@ suite('statusline capture — the wrapper must never damage the status line it w
     assert.deepStrictEqual(parseStatuslineArgs([]), { inner: null, subagent: false })
     assert.deepStrictEqual(parseStatuslineArgs(['--subagent']), { inner: null, subagent: true })
     assert.deepStrictEqual(parseStatuslineArgs(['--inner', 'x.sh', '--subagent']), { inner: 'x.sh', subagent: true })
-    const rec = toStatuslineRecord(Buffer.from('{"tasks":[]}'), SUBAGENT_STATUSLINE_EV)
-    assert.strictEqual((JSON.parse(rec!.toString()) as Record<string, unknown>).hook_event_name, SUBAGENT_STATUSLINE_EV)
+    const rec = JSON.parse(toStatuslineRecord(Buffer.from('{"tasks":[]}'), SUBAGENT_STATUSLINE_EV)!.toString()) as Record<string, unknown>
+    assert.strictEqual(rec.hook_event_name, SUBAGENT_STATUSLINE_EV)
+    assert.strictEqual(rec.statusline_stream, 'subagent', 'the server routes on this — a wrong value files subagent rows in the main stream')
   })
 
   test('a subagent payload keeps every per-task field, including the worktree cwd', () => {

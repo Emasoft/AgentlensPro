@@ -31,6 +31,7 @@ import { startMcpHttpServer, labelBurnStatusAccounts } from '../src/mcpServer'
 import { isDisallowedCrossOrigin, setAllowedOriginCors } from '../src/httpOrigin'
 import { resolveCallContext, callBodyRegistry } from '../src/rawBodyContext'
 import { appendHookEvent, readHookEvents, purgeHookEventBuckets, hookEventsDiskUsage, verifyAppendedLine, quarantineSpoolFile, type HookEventRecord, type AppendPosition } from '../src/hookEventStore'
+import { StatuslineStore, retentionDays as statuslineRetentionDays, type StatuslineStream } from '../src/statuslineStore'
 import { extractLifecycleEvents, type LifecycleKind } from '../src/lifecycleEvents'
 import { scanCacheRiskCommands, type CacheRiskKind } from '../src/cacheRiskCommands'
 import { buildDroppedLogEventRecord, appendDroppedLogEvent, purgeLogEventBuckets, logEventsDiskUsage } from '../src/logEventSink'
@@ -346,6 +347,7 @@ const persistStats = {
   cardsWrites: 0, cardsBytes: 0,
   hookEventWrites: 0, hookEventBytes: 0,
   logEventWrites: 0, logEventBytes: 0,
+  statuslineSamples: 0,
   gateChecks: 0, gateDenies: 0, gateWarns: 0, gateAdvisories: 0,
   bodiesLastPurge: { at: 0, removedFiles: 0, freedBytes: 0, keptFiles: 0, keptBytes: 0 },
 }
@@ -619,16 +621,60 @@ function purgeLogEvents(): void {
   }
 }
 
+// Status-line samples (`agentlenspro statusline` → POST /api/statusline-samples): their OWN store,
+// deliberately NOT the hook-event buckets. Measured at 396 samples/min across 13 sessions (~1.29
+// GB/day raw at 20 instances), they evicted the 600-slot lifecycle ring down to an ~87 s span —
+// blinding check_burn_risk's 5- and 10-minute windows — and ate the unfiltered 1000-record budget
+// that GET /api/lifecycle-events reads, silently truncating the timeline. Columnar + compressed here
+// instead: ~18x as zstd Parquet, and column-pruned queries in ~12 ms.
+const STATUSLINE_DIR = path.join(DATA_DIR, 'statusline')
+const statuslineStore = new StatuslineStore({ root: STATUSLINE_DIR })
+
+function purgeStatusline(): void {
+  const r = statuslineStore.purge(statuslineRetentionDays())
+  if (r.removed.length > 0) {
+    console.log(`[AgentLens] statusline retention: purged ${r.removed.length} partition(s), ${(r.freedBytes / 1048576).toFixed(1)}MB`)
+  }
+}
+
+/** Ingest one status-line sample. Shared by POST /api/statusline-samples AND the legacy path where an
+ *  older CLI (or a spooled event written by one) still posts these to /api/hook-events — both must
+ *  land in the same place or a version skew would split the history in two. */
+function ingestStatuslineSample(payload: Record<string, unknown>, stream: StatuslineStream): void {
+  try {
+    statuslineStore.append(payload, stream)
+    persistStats.statuslineSamples++
+  } catch (e) {
+    // A sample is worth strictly less than the server staying up; count it and move on.
+    statuslineIngestErrors++
+    if (statuslineIngestErrors === 1) console.warn(`[AgentLens] statusline sample append FAILED: ${(e as Error).message}`)
+  }
+}
+let statuslineIngestErrors = 0
+
+/** The two `hook_event_name` values the capture used before it had its own endpoint, mapped to the
+ *  stream each belongs to. Kept as data so the legacy bridge and any future consumer agree. */
+const STATUSLINE_EV_STREAMS: Record<string, StatuslineStream | undefined> = {
+  StatusLineSample: 'main',
+  SubagentStatusLineSample: 'subagent',
+}
+
 void archiveOtelBodies() // enforce on boot — a long-dead server must not leave the corpus unbounded
 purgeHookEvents()
 purgeLogEvents()
+purgeStatusline()
 // Spool mode drains every 60s (the bodies sit in volatile RAM — reclaim them fast); otherwise the
 // legacy hourly cadence is plenty for plain-file bodies on disk.
 const BODIES_PASS_INTERVAL_MS = SPOOL_MODE ? 60_000 : 3600e3
 const bodiesPurgeTimer = setInterval(() => { void archiveOtelBodies() }, BODIES_PASS_INTERVAL_MS)
 bodiesPurgeTimer.unref()
-const hookPurgeTimer = setInterval(() => { purgeHookEvents(); purgeLogEvents() }, 3600e3)
+const hookPurgeTimer = setInterval(() => { purgeHookEvents(); purgeLogEvents(); purgeStatusline() }, 3600e3)
 hookPurgeTimer.unref()
+// Sealing is separate from purging: a full WAL must become an immutable Parquet part promptly (a
+// 10k-row chunk is ~16 min at 20 instances), and a past day's WAL must seal whatever its size so old
+// partitions stop costing raw-JSON reads on every query. Cheap when nothing qualifies.
+const statuslineSealTimer = setInterval(() => { void statuslineStore.maybeSeal() }, 60_000)
+statuslineSealTimer.unref()
 
 // ── Agent-launch burn gate + realtime activity (TRDD-GOD0108C) ────────────────
 // The gate sits behind a PreToolUse hook, so every read here must be in-memory:
@@ -667,6 +713,14 @@ function ingestHookEvent(payload: unknown): { status: number; body: Record<strin
   const p = payload as Record<string, unknown> | null
   if (!p || typeof p !== 'object' || typeof p.hook_event_name !== 'string' || p.hook_event_name === '') {
     return { status: 400, body: { error: 'payload must be a JSON object with hook_event_name' } }
+  }
+  // Version-skew bridge: an older CLI posts status-line samples here, and its spooled files may
+  // drain here long after an upgrade. Divert them to their own store rather than appending to the
+  // lifecycle buckets — that pollution is precisely what blinded the ring and the lifecycle timeline.
+  const asStream = STATUSLINE_EV_STREAMS[p.hook_event_name]
+  if (asStream) {
+    ingestStatuslineSample(p, asStream)
+    return { status: 200, body: { ok: true, routed: 'statusline' } }
   }
   if (!hookRuntime.captureEnabled) {
     // Switch off = accept and DROP (the hook script must stay a fire-and-forget dumb pipe; a
@@ -2991,6 +3045,10 @@ const uiServer = http.createServer(async (req, res) => {
       },
       bodies: { archive: archiveDiskUsage(BODIES_ARCHIVE_DIR), lastPass: p.bodiesLastPurge },
       hookEvents: { ...hookEventsDiskUsage(HOOK_EVENTS_DIR), receivedSinceBoot: p.hookEventWrites, spooled: hookSpoolCount() },
+      // Status-line samples: their own store, so `parts`/`partBytes` (sealed, compressed) are
+      // reported apart from `walBytes` (raw and un-sealed) — a walBytes that keeps climbing while
+      // parts stays flat is the signal that sealing has stalled.
+      statusline: { ...statuslineStore.stats(), receivedSinceBoot: p.statuslineSamples, retentionDays: statuslineRetentionDays() },
       // TRDD-AMEA4O4Z: gated-out OTEL log events persisted (not dropped) — sink disk usage + boot counters.
       logEvents: { ...logEventsDiskUsage(LOG_EVENTS_DIR), persistedSinceBoot: p.logEventWrites, persistedBytesSinceBoot: p.logEventBytes, retentionDays: LOG_EVENTS_RETENTION_DAYS },
       // D3K7QM2P/1c — live backpressure: in-flight/queued now, and admitted/shed since boot. A
@@ -3015,6 +3073,36 @@ const uiServer = http.createServer(async (req, res) => {
 
   // Lifecycle hook-event ingestion (scripts/spy-agentlens.sh fire-and-forget POST). Raw payload
   // is stored verbatim; classification happens at read time so the hook script stays a dumb pipe.
+  // Status-line samples get their OWN endpoint so they never touch the lifecycle buckets. Same
+  // fire-and-forget contract as /api/hook-events: the CLI never blocks on the answer, so respond
+  // fast and never fail a render.
+  if (req.method === 'POST' && url === '/api/statusline-samples') {
+    const chunks: Buffer[] = []
+    let received = 0
+    let overflowed = false
+    req.on('data', (c: Buffer) => {
+      received += c.length
+      if (received > HOOK_EVENT_MAX_BYTES) { overflowed = true; req.destroy() }
+      else chunks.push(c)
+    })
+    req.on('end', () => {
+      if (overflowed) return // destroyed mid-stream — no response possible
+      try {
+        const payload = JSON.parse(Buffer.concat(chunks).toString('utf-8')) as Record<string, unknown>
+        if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('payload must be a JSON object')
+        // `stream` rides in the payload (the capture stamps it) so the endpoint stays a single route.
+        const stream: StatuslineStream = payload.statusline_stream === 'subagent' ? 'subagent' : 'main'
+        ingestStatuslineSample(payload, stream)
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ ok: true }))
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: String(e instanceof Error ? e.message : e) }))
+      }
+    })
+    return
+  }
+
   if (req.method === 'POST' && url === '/api/hook-events') {
     const chunks: Buffer[] = []
     let received = 0
@@ -4098,6 +4186,10 @@ function shutdown() {
   // TRDD-YQZ9P8IL: final flush of the account-state timeline so a graceful stop never loses a buffered
   // state change (matches the span-store's shutdown-flush discipline).
   try { accountStateTimeline.stop() } catch { /* ignore */ }
+  // Status-line buffer → WAL (fsynced). NOT a seal: sealing is async, this path is sync and exits,
+  // and the WAL is already durable — every read unions the un-sealed WALs, so nothing is invisible
+  // until the next boot's seal timer converts it.
+  try { statuslineStore.stop() } catch { /* ignore */ }
   try { recordCollectorStop(LIFECYCLE_FILE, lifecycle) } catch { /* ignore */ }
   releasePidFile()
   process.exit(0)

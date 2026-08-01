@@ -1,0 +1,408 @@
+// src/statuslineStore.ts — the high-frequency status-line sample store.
+//
+// WHAT LANDS HERE. Every payload Claude Code hands `statusLine` / `subagentStatusLine`, forwarded by
+// `agentlenspro statusline`. Measured live: 396 samples/min across 13 sessions (~30/min each, mean
+// 1509 B) ⇒ ~609/min ≈ 1.29 GB/day of raw JSON at 20 concurrent instances. That volume is why these
+// samples cannot live in the shared hook-event bucket (they were evicting the 600-slot lifecycle ring
+// down to an ~87 s span) and why they are stored columnar and compressed.
+//
+// THE LAYOUT, and every part of it is a measured choice, not a preference:
+//
+//   <root>/<stream>/YYYY-MM-DD/part-<epochMs>-<pid>-<seq>.parquet   sealed, immutable
+//   <root>/<stream>/YYYY-MM-DD/wal-<pid>.ndjson                     active, un-sealed
+//
+// * PARQUET+ZSTD, not zstd-NDJSON. Measured over 40k real-but-perturbed samples: parquet wins at
+//   every realistic chunk size (10k rows: 823 KB vs 933 KB; 40k: 3197 KB vs 3724 KB) AND answers a
+//   column-pruned GROUP BY in 12 ms. It only loses below ~1k rows, where its ~40-leaf footer
+//   metadata dominates — hence SEAL_ROWS is large.
+// * FLAT DOTTED KEYS, not nested structs. Measured identical in size (3194.6 KB vs 3196.6 KB) and
+//   far simpler to query: `context_window_used_percentage`, not `(context_window).used_percentage`.
+//   Arrays are NOT flattened — `tasks[]` stays a LIST so the subagent stream can be `unnest`ed.
+// * NO PACKING OF N SAMPLES PER ROW. Measured 2% WORSE (3257 KB vs 3195 KB). Parquet's
+//   dictionary+RLE already collapses an unchanging column across the whole row group, not a
+//   10-sample window: over 40,000 samples `context_window_context_window_size` costs 71 BYTES total
+//   (0.002 B/sample) and `session_id` 434 B. Packing can only take ~0 to ~0 while adding
+//   list-repetition overhead to the ~68% of fields that do vary.
+// * NO UUID TYPING. Measured to save exactly 0 bytes: ZSTD already compresses a 36-char UUID string
+//   to 16.0 B/sample, which IS a UUID's 122-bit entropy — native 16-byte storage cannot beat the
+//   entropy floor either. `prompt_id` costs 20% of the file because that is what it is worth, and it
+//   earns it as the only join key to the OTEL span store (docs: it equals the `prompt.id` attribute).
+//
+// WAL-THEN-SEAL. A 10k-row chunk is ~16 minutes at 20 instances; losing that to a crash is not
+// acceptable, so samples are first appended to a plain NDJSON WAL and only converted to Parquet once
+// the chunk is full. The WAL is written with the exact discipline of src/accountStateTimeline.ts:
+// buffer, one open+write, ONE fsync per BATCH (never per record), re-buffer on failure, never throw.
+
+import * as fs from 'fs'
+import * as path from 'path'
+import { dayKeyMs } from './ndjsonBuckets'
+
+/** The two capture surfaces. Separate trees because their schemas share almost nothing: the main
+ *  stream is one sample per row, the subagent stream carries a `tasks[]` list of live agents. */
+export type StatuslineStream = 'main' | 'subagent'
+export const STATUSLINE_STREAMS: readonly StatuslineStream[] = ['main', 'subagent']
+
+/** Rows per sealed part. Large on purpose — see the footer-metadata note in the header. Read per
+ *  call, not frozen at import, so a test (or an operator) can change it without reloading the module. */
+export function sealRows(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = Number(env['AGENTLENS_STATUSLINE_SEAL_ROWS'])
+  return Number.isFinite(raw) && raw > 0 ? raw : 10_000
+}
+
+/** Day-partitions older than this are purged whole. */
+export function retentionDays(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = Number(env['AGENTLENS_STATUSLINE_RETENTION_DAYS'])
+  return Number.isFinite(raw) && raw > 0 ? raw : 90
+}
+
+const FLUSH_MAX_RECORDS = 32
+const FLUSH_MAX_BYTES = 16 * 1024
+
+/** Flatten nested OBJECTS to dotted keys; leave ARRAYS and scalars alone.
+ *
+ *  Arrays are deliberately untouched: `tasks[]` is the subagent stream's payload and must stay a LIST
+ *  so DuckDB can `unnest` it. Flattening it into tasks_0_*, tasks_1_* would create an unbounded,
+ *  drifting column space — the one thing that actually would make this store expensive. */
+export function flattenSample(v: Record<string, unknown>, prefix = ''): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const [k, val] of Object.entries(v ?? {})) {
+    const key = `${prefix}${k}`
+    if (val && typeof val === 'object' && !Array.isArray(val)) {
+      Object.assign(out, flattenSample(val as Record<string, unknown>, `${key}_`))
+    } else {
+      out[key] = val
+    }
+  }
+  return out
+}
+
+/** UTC day key for a timestamp — the partition directory name. */
+export function dayKey(ts: number): string {
+  return new Date(ts).toISOString().slice(0, 10)
+}
+
+/** A part name that CANNOT collide across concurrent writers. Load-bearing, and copied deliberately
+ *  from src/store/db.ts:58: DuckDB's `COPY TO` SILENTLY OVERWRITES an existing file, so a scheme that
+ *  can repeat a name silently DESTROYS a sealed chunk. Deriving it from a directory file count is the
+ *  exact bug that did so once — epoch-ms + pid + per-instance seq needs no coordination. */
+function partName(seq: number): string {
+  return `part-${Date.now()}-${process.pid}-${seq}.parquet`
+}
+
+/** SQL-quote a path for a COPY / read_* literal. */
+function q(p: string): string { return `'${p.replace(/'/g, "''")}'` }
+
+function listFiles(dir: string, pred: (f: string) => boolean): string[] {
+  try { return fs.readdirSync(dir).filter(pred).map(f => path.join(dir, f)) } catch { return [] }
+}
+
+/** Every day-partition directory of a stream, oldest first, with its parsed day. Directories whose
+ *  name is not a calendar-real 'YYYY-MM-DD' are IGNORED, never touched — the same rule (and the same
+ *  parser) that keeps a foreign or malformed name from becoming an unpurgeable file forever. */
+export function dayPartitions(root: string, stream: StatuslineStream): Array<{ dir: string; dayMs: number }> {
+  const base = path.join(root, stream)
+  let names: string[]
+  try { names = fs.readdirSync(base) } catch { return [] }
+  const out: Array<{ dir: string; dayMs: number }> = []
+  for (const n of names) {
+    const ms = dayKeyMs(n)
+    if (ms === null) continue
+    out.push({ dir: path.join(base, n), dayMs: ms })
+  }
+  return out.sort((a, b) => a.dayMs - b.dayMs)
+}
+
+/** Sealed parts + un-sealed WALs across a stream, optionally limited to a time window. The window is
+ *  applied at DAY granularity only — a partition is included when its day overlaps [since, until]. */
+export function filesInWindow(
+  root: string, stream: StatuslineStream, sinceMs?: number, untilMs?: number,
+): { parts: string[]; wals: string[] } {
+  const parts: string[] = []
+  const wals: string[] = []
+  for (const { dir, dayMs } of dayPartitions(root, stream)) {
+    if (sinceMs !== undefined && dayMs + 86_400_000 <= sinceMs) continue
+    if (untilMs !== undefined && dayMs > untilMs) continue
+    parts.push(...listFiles(dir, f => f.endsWith('.parquet')))
+    wals.push(...listFiles(dir, f => f.startsWith('wal-') && f.endsWith('.ndjson')))
+  }
+  return { parts, wals }
+}
+
+/** The relation covering a window: sealed parts UNION the live WALs.
+ *
+ *  Both halves matter. Reading only the parts would make every query stale by up to a whole chunk
+ *  (~16 min); reading only the WAL would see nothing older than the last seal. Returns null when
+ *  there is genuinely nothing — a caller must report that as BLIND, and must NOT hand DuckDB a bare
+ *  glob, which is an ERROR on an empty directory rather than an empty set (src/store/db.ts:86-87).
+ *
+ *  `union_by_name` is what tolerates schema drift: optional blocks (`pr`, `worktree`, `agent`) appear
+ *  and vanish mid-stream, and a future Claude Code version may add fields. */
+export function relationFor(
+  root: string, stream: StatuslineStream, sinceMs?: number, untilMs?: number,
+): string | null {
+  const { parts, wals } = filesInWindow(root, stream, sinceMs, untilMs)
+  const rels: string[] = []
+  if (parts.length) rels.push(`SELECT * FROM read_parquet([${parts.map(q).join(',')}], union_by_name=true)`)
+  if (wals.length) rels.push(`SELECT * FROM read_json_auto([${wals.map(q).join(',')}], union_by_name=true, ignore_errors=true)`)
+  if (rels.length === 0) return null
+  return `(${rels.join(' UNION ALL BY NAME ')})`
+}
+
+/** Open the FILELESS DuckDB used for every read and every seal.
+ *
+ *  ':memory:' is not a preference — a persistent .duckdb measured 300x write amplification
+ *  (5,018 KB/turn), and memory_limit does NOT fix it (src/store/db.ts:3-21). The import is lazy so
+ *  the hook / gate / --version paths never load the native binding. */
+async function openDuck(): Promise<{ con: DuckConn; close: () => void }> {
+  const { DuckDBInstance } = await import('@duckdb/node-api')
+  const inst = await DuckDBInstance.create(':memory:', {
+    memory_limit: process.env['AGENTLENS_DUCKDB_MEMORY_LIMIT']?.trim() || '2GB',
+    threads: '2',
+  })
+  const con = await inst.connect()
+  // No spill: an over-limit query must fail loudly, not quietly write gigabytes to the SSD.
+  await con.run("SET temp_directory = ''")
+  await con.run('SET preserve_insertion_order = false')
+  return { con: con as unknown as DuckConn, close: () => { con.closeSync(); inst.closeSync() } }
+}
+
+/** The sliver of the DuckDB API this module uses — declared locally so the lazy import stays lazy
+ *  (a top-level `import type` from the native package would be erased, but the shape is tiny). */
+interface DuckConn {
+  run(sql: string): Promise<unknown>
+  runAndReadAll(sql: string): Promise<{ getRowObjects(): Array<Record<string, unknown>> }>
+}
+
+export interface StatuslineStoreStats {
+  parts: number
+  partBytes: number
+  walBytes: number
+  bufferedRows: number
+  sealedParts: number
+  droppedRows: number
+}
+
+/**
+ * One instance per server process. `append()` is called at the full sample rate, so it must stay a
+ * push onto an array; everything expensive happens on the flush/seal boundaries.
+ */
+export class StatuslineStore {
+  private readonly root: string
+  private readonly flushMs: number
+  private buffers = new Map<StatuslineStream, string[]>()
+  private bufferedBytes = new Map<StatuslineStream, number>()
+  private walRows = new Map<string, number>()   // wal path → rows written since it was created
+  private flushTimer: ReturnType<typeof setInterval> | null = null
+  private seq = 0
+  private sealing = false
+  sealedParts = 0
+  droppedRows = 0
+
+  constructor(opts: { root: string; flushMs?: number; autoTimer?: boolean }) {
+    this.root = opts.root
+    this.flushMs = opts.flushMs ?? Math.max(1000, Number(process.env['AGENTLENS_STATUSLINE_FLUSH_MS']) || 5000)
+    if (opts.autoTimer !== false) {
+      this.flushTimer = setInterval(() => { this.flush() }, this.flushMs)
+      this.flushTimer.unref?.()   // never keep the process alive just for this timer
+    }
+  }
+
+  /** Buffer one sample. Flattens to dotted keys and stamps `ts` (server receive time) — the payload
+   *  itself carries no timestamp, and every query and every partition boundary needs one. */
+  append(payload: Record<string, unknown>, stream: StatuslineStream = 'main', ts: number = Date.now()): void {
+    const flat = flattenSample(payload)
+    flat.ts = ts
+    const line = JSON.stringify(flat)
+    const buf = this.buffers.get(stream) ?? []
+    buf.push(line)
+    this.buffers.set(stream, buf)
+    this.bufferedBytes.set(stream, (this.bufferedBytes.get(stream) ?? 0) + line.length + 1)
+    if (buf.length >= FLUSH_MAX_RECORDS || (this.bufferedBytes.get(stream) ?? 0) >= FLUSH_MAX_BYTES) {
+      this.flush(stream)
+    }
+  }
+
+  /** Append the buffered batch to the day's WAL — one open, one write, ONE fsync per BATCH. Never
+   *  throws: a write failure re-buffers the batch so the next flush retries it in order. */
+  flush(only?: StatuslineStream): void {
+    for (const stream of STATUSLINE_STREAMS) {
+      if (only && stream !== only) continue
+      const batch = this.buffers.get(stream)
+      if (!batch || batch.length === 0) continue
+      this.buffers.set(stream, [])
+      this.bufferedBytes.set(stream, 0)
+      // Partition by the FIRST record's day. A batch spanning UTC midnight puts a few records in the
+      // previous day's file; that is harmless (reads union the partitions and filter on `ts`) and far
+      // cheaper than splitting every batch by day.
+      const wal = this.walPath(stream, Date.now())
+      const lines = batch.join('\n') + '\n'
+      try {
+        fs.mkdirSync(path.dirname(wal), { recursive: true })
+        const fd = fs.openSync(wal, 'a')          // O_APPEND: atomic append at EOF
+        try {
+          fs.writeSync(fd, lines)
+          fs.fsyncSync(fd)                         // durability once per BATCH, never per record
+        } finally {
+          fs.closeSync(fd)
+        }
+        this.walRows.set(wal, (this.walRows.get(wal) ?? this.countLines(wal) - batch.length) + batch.length)
+      } catch {
+        // Transient failure — put the batch back in FRONT of anything enqueued meanwhile so order is
+        // preserved, and drop it only if the backlog becomes absurd (a full disk must not OOM us).
+        const cur = this.buffers.get(stream) ?? []
+        if (cur.length + batch.length > FLUSH_MAX_RECORDS * 200) {
+          this.droppedRows += batch.length
+        } else {
+          this.buffers.set(stream, batch.concat(cur))
+          this.bufferedBytes.set(stream, (this.bufferedBytes.get(stream) ?? 0) + lines.length)
+        }
+      }
+    }
+  }
+
+  private walPath(stream: StatuslineStream, ts: number): string {
+    return path.join(this.root, stream, dayKey(ts), `wal-${process.pid}.ndjson`)
+  }
+
+  private countLines(file: string): number {
+    try {
+      const raw = fs.readFileSync(file, 'utf8')
+      if (raw.length === 0) return 0
+      return raw.split('\n').filter(l => l.length > 0).length
+    } catch { return 0 }
+  }
+
+  /** Seal every WAL that is full (or belongs to a past day) into an immutable Parquet part.
+   *
+   *  Safe to call on a timer: it is a no-op when nothing qualifies, and re-entrancy is guarded
+   *  because a seal is async while `append` keeps running. */
+  async maybeSeal(nowMs: number = Date.now()): Promise<number> {
+    if (this.sealing) return 0
+    this.sealing = true
+    let sealed = 0
+    try {
+      const today = dayKey(nowMs)
+      for (const stream of STATUSLINE_STREAMS) {
+        for (const { dir } of dayPartitions(this.root, stream)) {
+          const isPastDay = path.basename(dir) !== today
+          for (const wal of listFiles(dir, f => f.startsWith('wal-') && f.endsWith('.ndjson'))) {
+            const rows = this.countLines(wal)
+            if (rows === 0) { if (isPastDay) { try { fs.unlinkSync(wal) } catch { /* raced */ } } continue }
+            // A past day's WAL is sealed whatever its size: leaving it open forever would make every
+            // query pay to re-read raw JSON for a partition that will never grow again.
+            if (!isPastDay && rows < sealRows()) continue
+            if (await this.sealOne(wal, rows)) sealed++
+          }
+        }
+      }
+    } finally {
+      this.sealing = false
+    }
+    this.sealedParts += sealed
+    return sealed
+  }
+
+  /** Convert ONE WAL to a Parquet part and delete it — but only after PROVING the part holds every
+   *  row. Verify-before-delete is the store's standing rule: the WAL is the only other copy. */
+  private async sealOne(wal: string, expectRows: number): Promise<boolean> {
+    const dir = path.dirname(wal)
+    const out = path.join(dir, partName(this.seq++))
+    // Defence in depth behind the collision-free name: COPY TO silently overwrites, and an
+    // overwritten part is destroyed data. If this fires, the naming invariant is broken — stop.
+    if (fs.existsSync(out)) throw new Error(`refusing to overwrite existing part ${out} — part naming must be collision-free`)
+    const duck = await openDuck()
+    try {
+      // ORDER BY session_id measured 1.24x better compression than arrival order: it clusters each
+      // session's near-identical consecutive samples into single dictionary/RLE runs.
+      await duck.con.run(
+        `COPY (SELECT * FROM read_json_auto(${q(wal)}, union_by_name=true, ignore_errors=true) ORDER BY session_id, ts)`
+        + ` TO ${q(out)} (FORMAT PARQUET, COMPRESSION ZSTD)`,
+      )
+      const got = Number((await duck.con.runAndReadAll(`SELECT count(*) c FROM read_parquet(${q(out)})`)).getRowObjects()[0].c)
+      if (got !== expectRows) {
+        // Do NOT delete the WAL. Remove the untrustworthy part instead and leave the raw rows for the
+        // next attempt — a short read here would otherwise silently destroy samples.
+        try { fs.unlinkSync(out) } catch { /* best effort */ }
+        return false
+      }
+      fs.unlinkSync(wal)
+      this.walRows.delete(wal)
+      return true
+    } catch {
+      try { if (fs.existsSync(out)) fs.unlinkSync(out) } catch { /* best effort */ }
+      return false   // never throw out of the seal path — the next tick retries
+    } finally {
+      duck.close()
+    }
+  }
+
+  /** Graceful shutdown: stop the timer and flush the buffer to the WAL. Deliberately SYNCHRONOUS and
+   *  deliberately NOT sealing — the server's shutdown path is sync and ends in process.exit, and a
+   *  seal is unnecessary there because the WAL is already fsynced and every read unions the WALs.
+   *  The next boot's seal timer converts it. */
+  stop(): void {
+    if (this.flushTimer) { clearInterval(this.flushTimer); this.flushTimer = null }
+    this.flush()
+  }
+
+  /** Delete whole day-partitions older than retentionDays. Malformed directory names are ignored,
+   *  never deleted (dayPartitions gate) — deleting an unrecognised directory is how a store eats
+   *  something that was not its own. */
+  purge(days: number = retentionDays(), nowMs: number = Date.now()): { removed: string[]; freedBytes: number } {
+    const removed: string[] = []
+    let freedBytes = 0
+    const cutoffMs = dayKeyMs(dayKey(nowMs - days * 86_400_000)) ?? 0
+    for (const stream of STATUSLINE_STREAMS) {
+      for (const { dir, dayMs } of dayPartitions(this.root, stream)) {
+        if (dayMs >= cutoffMs) continue
+        try {
+          for (const f of fs.readdirSync(dir)) {
+            try { freedBytes += fs.statSync(path.join(dir, f)).size } catch { /* raced */ }
+          }
+          fs.rmSync(dir, { recursive: true, force: true })
+          removed.push(path.relative(this.root, dir))
+        } catch { /* raced — skip */ }
+      }
+    }
+    return { removed, freedBytes }
+  }
+
+  stats(): StatuslineStoreStats {
+    let parts = 0, partBytes = 0, walBytes = 0
+    for (const stream of STATUSLINE_STREAMS) {
+      for (const { dir } of dayPartitions(this.root, stream)) {
+        for (const f of listFiles(dir, () => true)) {
+          let size = 0
+          try { size = fs.statSync(f).size } catch { continue }
+          if (f.endsWith('.parquet')) { parts++; partBytes += size } else if (f.endsWith('.ndjson')) { walBytes += size }
+        }
+      }
+    }
+    let bufferedRows = 0
+    for (const b of this.buffers.values()) bufferedRows += b.length
+    return { parts, partBytes, walBytes, bufferedRows, sealedParts: this.sealedParts, droppedRows: this.droppedRows }
+  }
+}
+
+/** Run one read-only SELECT against a stream. `sql` must reference the relation as `samples`.
+ *
+ *  Returns null when the window holds no data at all, which a caller MUST surface as BLIND rather
+ *  than as "nothing happened" — the honesty contract burnInvestigator's `coverage.blind` sets. */
+export async function queryStatusline(
+  root: string, stream: StatuslineStream, sql: string,
+  opts: { sinceMs?: number; untilMs?: number } = {},
+): Promise<Array<Record<string, unknown>> | null> {
+  const rel = relationFor(root, stream, opts.sinceMs, opts.untilMs)
+  if (!rel) return null
+  const duck = await openDuck()
+  try {
+    const where: string[] = []
+    if (opts.sinceMs !== undefined) where.push(`ts >= ${Number(opts.sinceMs)}`)
+    if (opts.untilMs !== undefined) where.push(`ts <= ${Number(opts.untilMs)}`)
+    const scoped = where.length ? `(SELECT * FROM ${rel} WHERE ${where.join(' AND ')})` : rel
+    const rows = (await duck.con.runAndReadAll(`WITH samples AS ${scoped} ${sql}`)).getRowObjects()
+    return rows
+  } finally {
+    duck.close()
+  }
+}
