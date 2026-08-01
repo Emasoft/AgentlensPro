@@ -90,6 +90,13 @@ context (purely local — reads the captured request bodies, never the server):
                                               broke the prompt-cache prefix (what it costs to KEEP
                                               running, not just to start). Driven by the skill
                                               /agentlenspro-visualize-context
+  agentlenspro statusline-history [view]      the per-turn series Claude Code renders but never keeps.
+                                              views: sessions | subagents | windows | peaks | raw.
+                                              'subagents' is the ONLY source of a live agent's
+                                              tokenCount vs contextWindowSize (+ effort, model, and
+                                              the cwd that marks a worktree agent); 'windows' is the
+                                              only un-quantized 5h/7d reading. Reads disk, so it
+                                              answers with the server down. Needs --install-statusline
 
 diagnostics (schemas come live from the server):
   agentlenspro list [--desc]                  all tools (names; --desc adds one-line descriptions)

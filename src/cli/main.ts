@@ -30,6 +30,7 @@ import { runWatchCli } from './watchCli'
 import { runCtxmapCli } from './ctxmapCli'
 import { runCtxvisCli } from './ctxvisCli'
 import { runStatuslineCommand } from './statuslineCapture'
+import { runStatuslineHistoryCli } from './statuslineHistoryCli'
 
 /** CLI entry. `startServer` lazily imports standalone/server (injected by the shim — src/
  *  cannot import standalone/ without inverting the build layering). Returns the exit code. */
@@ -57,6 +58,10 @@ export async function cliMain(argv: string[], startServer: () => Promise<unknown
       // exec the real status-line command, forward the payload. It must reach `return` before any
       // module with side effects is touched.
       return runStatuslineCommand(argv.slice(1))
+    case 'statusline-history':
+      // Reads the sample store straight off disk (no server), because the moment someone asks what
+      // burned the window is exactly when the server may be down.
+      return runStatuslineHistoryCli(argv.slice(1))
     case 'disable':
       // THE GLOBAL BRAKE. Arms <dataDir>/DISABLED, which disarms every hook, the burn-gate, server
       // auto-revive and all background ingestion — in EVERY Claude session already running, on its
