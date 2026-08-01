@@ -270,6 +270,18 @@ culprits by cache-**weighted** equiv (`investigate_burn`), never by request byte
 - For "**did that turn miss the cache**", read `get_cache_event_log` — one row per call, sourced from
   the OTEL span store (whose `api_request` events carry `session.id` directly, so a compaction's own
   summarization call is attributed instead of being invisible) with the API's own `cache_miss_reason`.
+- To **FALSIFY a cost claim** — any alert, hook, or your own hypothesis asserting a cold write —
+  `agentlenspro statusline-history cache`. It needs no OTEL and no API call: it reads the status-line
+  payload's own per-turn `current_usage` split, so `write%` near 0 is a warm re-read and near 100 a
+  real prefix rewrite. Cost is printed as a **5m/1h bracket** because the payload does not carry the
+  TTL tier; a single figure there would be a guess. Use it before acting on any burn warning — one
+  such warning claimed a ~520k cache-miss write every turn while the measured turns were 0.75% write,
+  and its recommended remedy (`/compact`) is itself a cold rewrite costing ~27× a warm turn. Sibling
+  view `peaks` shows the harness's cumulative-cost delta with its **sampling gap**: a delta spanning
+  an idle stretch is an INTERVAL total, not one turn's cost. Validated three independent ways —
+  computed 1h cost equals the harness's own `cost_usd` to 4 decimals (and the 5m column matches
+  nothing), and the feed agrees with OTEL within 1–5% on every bucket over an hour.
+  Evidence: `reports/statusline-cache-verification/20260801_232422+0200-cache-view-validation.md`.
 
 Diagnostics encode this as the TTL-regime matrix (TRDD-VY1IUVUM); the full model with measured
 costs: `.claude/project/memory/cache-ttl-model.md`.
