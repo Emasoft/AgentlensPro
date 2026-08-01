@@ -426,6 +426,67 @@ suite('statuslineStore — absence, malformed partitions, and retention', () => 
     } finally { fs.rmSync(root, { recursive: true, force: true }) }
   })
 
+  test('a WAL whose record structure cannot be inferred is REFUSED, not sealed into all-NULL rows', async () => {
+    // The nastiest failure this store has, and the row COUNT does not catch it. ONE line containing a
+    // bare scalar (`42`) makes read_json_auto give up on the whole FILE and infer a single opaque
+    // `json` column instead of the record fields, so every real field reads NULL. The row count still
+    // matches, so verify-before-delete waves it through — a part of all-NULL rows is written and the
+    // WAL, the only readable copy of that raw JSON, is deleted.
+    //
+    // It hid behind an accident: without `ts` guaranteed, the seal's `ORDER BY session_id, ts` could
+    // not bind against the degenerate schema, so the seal threw and the WAL survived. Guaranteeing
+    // `ts` (correct on its own) removed the accident and turned a recoverable degradation into
+    // permanent loss — which is why the refusal is now explicit and counted.
+    const root = tmpRoot()
+    const prev = process.env['AGENTLENS_STATUSLINE_SEAL_ROWS']
+    process.env['AGENTLENS_STATUSLINE_SEAL_ROWS'] = '3'
+    try {
+      const dir = path.join(root, 'main', dayKey(Date.now()))
+      fs.mkdirSync(dir, { recursive: true })
+      const good = (i: number): string => JSON.stringify({ ts: Date.now() + i, session_id: '249c4216-4db4-4b64-9a10-b994b9d7bd80', v: i })
+      fs.writeFileSync(path.join(dir, `wal-${process.pid}.ndjson`), `${[good(0), '42', good(1), good(2)].join('\n')}\n`)
+
+      const s = new StatuslineStore({ root, autoTimer: false })
+      assert.strictEqual(await s.maybeSeal(), 0, 'a file whose fields cannot be read must NOT be sealed')
+      assert.strictEqual(fs.readdirSync(dir).filter(f => f.endsWith('.parquet')).length, 0,
+        'no part may be written — it would hold all-NULL rows and pass the row-count check')
+      assert.strictEqual(fs.readdirSync(dir).filter(f => f.startsWith('wal-')).length, 1,
+        'the WAL is the only readable copy of these samples and must survive')
+      assert.strictEqual(s.stats().corruptWals, 1,
+        'and it must be COUNTED — otherwise raw JSON sits unsealed forever with nothing reporting it')
+    } finally {
+      if (prev === undefined) delete process.env['AGENTLENS_STATUSLINE_SEAL_ROWS']
+      else process.env['AGENTLENS_STATUSLINE_SEAL_ROWS'] = prev
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('a merely TRUNCATED line does not trip the refusal — that file still seals', async () => {
+    // The refusal must be narrow. A partial line is what an interrupted writeSync actually leaves,
+    // and read_json_auto still infers the record fields for it, so those samples must seal normally.
+    // A guard that refused every imperfect WAL would strand the common case to protect the rare one.
+    const root = tmpRoot()
+    const prev = process.env['AGENTLENS_STATUSLINE_SEAL_ROWS']
+    process.env['AGENTLENS_STATUSLINE_SEAL_ROWS'] = '3'
+    try {
+      const dir = path.join(root, 'main', dayKey(Date.now()))
+      fs.mkdirSync(dir, { recursive: true })
+      const good = (i: number): string => JSON.stringify({ ts: Date.now() + i, session_id: '249c4216-4db4-4b64-9a10-b994b9d7bd80', v: i })
+      fs.writeFileSync(path.join(dir, `wal-${process.pid}.ndjson`),
+        `${[good(0), good(1), good(2), '{"ts":123,"session_id":"249c4216-4db4-4b64-9a10-b994b9d7bd80","v":'].join('\n')}\n`)
+
+      const s = new StatuslineStore({ root, autoTimer: false })
+      assert.strictEqual(await s.maybeSeal(), 1)
+      assert.strictEqual(s.stats().corruptWals, 0)
+      const rows = await queryStatusline(root, 'main', 'SELECT count(session_id) n FROM samples')
+      assert.ok(Number(rows![0].n) >= 3, 'the good records must still be queryable BY FIELD after the seal')
+    } finally {
+      if (prev === undefined) delete process.env['AGENTLENS_STATUSLINE_SEAL_ROWS']
+      else process.env['AGENTLENS_STATUSLINE_SEAL_ROWS'] = prev
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   test('a calendar-invalid day directory is neither read nor deleted', () => {
     // '2026-13-99' matches a naive \d{4}-\d{2}-\d{2} regex but parses to NaN, and NaN silently
     // defeats both the read window and the purge cutoff — an unpurgeable directory forever.

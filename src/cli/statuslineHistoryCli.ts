@@ -127,7 +127,12 @@ interface ViewSpec {
 /** DuckDB hands back BIGINT as a JS BigInt and DOUBLE as a number; arithmetic mixing the two throws
  *  ("Cannot mix BigInt and other types"). Every value entering a cost computation goes through here. */
 function n(v: unknown): number {
-  const x = typeof v === 'bigint' ? Number(v) : Number(v)
+  // `Number()` already handles BigInt, so no special case is needed — an earlier version had a
+  // `typeof v === 'bigint' ? … : …` whose branches were identical, which reads as if a case is being
+  // handled when nothing is. What DOES matter is the finite guard: a null column arrives as null,
+  // `Number(null)` is 0 but `Number(undefined)` is NaN, and a NaN reaching calcTokenCostUsd would
+  // silently poison a cost rather than fail.
+  const x = Number(v)
   return Number.isFinite(x) ? x : 0
 }
 

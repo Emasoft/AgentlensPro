@@ -168,6 +168,11 @@ export function filesInWindow(
  *  never missing there, and declaring a LIST type here risks conflicting with the real
  *  LIST(STRUCT(...)) during reconciliation — the exact class of failure this is meant to prevent. */
 const GUARANTEED_COLUMNS: ReadonlyArray<[string, string]> = [
+  // `ts` first because it is the ONE column every query touches unconditionally: queryStatusline
+  // splices `ts >= …` / `ts <= …` into the window predicate, so a file without it would fail the
+  // same way the optional blocks did. `append()` always writes it — which is exactly the reasoning
+  // that was wrong about session_id always being a UUID, so it is guaranteed rather than assumed.
+  ['ts', 'BIGINT'],
   ['session_id', 'VARCHAR'],
   ['model_display_name', 'VARCHAR'],
   ['model_id', 'VARCHAR'],
@@ -258,6 +263,9 @@ export interface StatuslineStoreStats {
   bufferedRows: number
   sealedParts: number
   droppedRows: number
+  /** WALs the seal REFUSED because their record structure could not be inferred. Non-zero means raw
+   *  JSON is sitting unsealed and unqueryable-by-field — visible here rather than silent. */
+  corruptWals: number
 }
 
 /**
@@ -275,6 +283,9 @@ export class StatuslineStore {
   private sealing = false
   sealedParts = 0
   droppedRows = 0
+  /** WALs refused because the reader could not infer their record structure — see inferenceCollapsed.
+   *  Surfaced in stats() so a corrupt WAL is visible instead of silently re-read raw forever. */
+  corruptWals = 0
 
   constructor(opts: { root: string; flushMs?: number; autoTimer?: boolean }) {
     this.root = opts.root
@@ -392,6 +403,23 @@ export class StatuslineStore {
     return sealed
   }
 
+  /** Did `read_json_auto` give up on this file's RECORD structure and fall back to one opaque column?
+   *
+   *  MEASURED, and this is the nastiest failure the store has: ONE line containing a bare scalar
+   *  (`42`) makes the reader infer the WHOLE file as a single `json` column instead of the record
+   *  fields — `DESCRIBE` returns exactly `[json]`. Every real field then reads NULL. Sealing that
+   *  writes a part of all-NULL rows and DELETES the WAL, so recoverable raw JSON is destroyed and the
+   *  row COUNT still matches, meaning verify-before-delete waves it straight through.
+   *
+   *  It stayed hidden because it used to fail for an unrelated reason: without `ts` guaranteed, the
+   *  seal's `ORDER BY session_id, ts` could not bind against the degenerate schema, so the seal threw
+   *  and the WAL survived BY ACCIDENT. Guaranteeing `ts` (correct on its own — every query references
+   *  it) removed that accident and turned a recoverable degradation into permanent data loss. Hence
+   *  this explicit check: refuse deliberately, keep the raw lines, and COUNT it so it is not silent. */
+  private inferenceCollapsed(cols: string[]): boolean {
+    return cols.length === 1 && cols[0] === 'json'
+  }
+
   /** Convert ONE WAL to a Parquet part and delete it — but only after PROVING the part holds every
    *  row. Verify-before-delete is the store's standing rule: the WAL is the only other copy. */
   private async sealOne(wal: string, expectRows: number): Promise<boolean> {
@@ -402,6 +430,15 @@ export class StatuslineStore {
     if (fs.existsSync(out)) throw new Error(`refusing to overwrite existing part ${out} — part naming must be collision-free`)
     const duck = await openDuck()
     try {
+      // Refuse a file whose record structure the reader could not infer — see inferenceCollapsed.
+      // Metadata-only, and only on the seal path (a 60 s timer), never on the append path.
+      const cols = (await duck.con.runAndReadAll(
+        `SELECT column_name FROM (DESCRIBE SELECT * FROM read_json_auto(${q(wal)}, union_by_name=true, ignore_errors=true))`,
+      )).getRowObjects().map(r => String(r.column_name))
+      if (this.inferenceCollapsed(cols)) {
+        this.corruptWals += 1
+        return false   // keep the WAL: its raw JSON is the only readable copy of these samples
+      }
       // ORDER BY session_id measured 1.24x better compression than arrival order: it clusters each
       // session's near-identical consecutive samples into single dictionary/RLE runs.
       //
@@ -476,7 +513,7 @@ export class StatuslineStore {
     }
     let bufferedRows = 0
     for (const b of this.buffers.values()) bufferedRows += b.length
-    return { parts, partBytes, walBytes, bufferedRows, sealedParts: this.sealedParts, droppedRows: this.droppedRows }
+    return { parts, partBytes, walBytes, bufferedRows, sealedParts: this.sealedParts, droppedRows: this.droppedRows, corruptWals: this.corruptWals }
   }
 }
 
