@@ -1,6 +1,6 @@
 ---
 name: statusline-capture-and-store
-description: "how do I get rate_limits without hitting the usage endpoint / why is session_id coming back as hugeint / JSON.stringify throws Do not know how to serialize a BigInt / why did lifecycle-events go empty / can I add a second statusLine / does Claude Code send the 5h 7d windows on stdin / should I pack N samples per row in parquet / how big should a parquet chunk be / get_account_status shows another account's window / was that turn actually a cache miss / how do I verify a claimed cold cache write in one command / is the 1-hour write tier real on this machine / why does the same turn show up twelve times / why is the burn monitor reporting far more cost than was really spent / the statusline burn path over-counts / I raised a feed's sample rate and its deltas broke / Could not convert string to INT128 / failed to cast column session_id from VARCHAR to UUID / one row blinds every view — the statusline sample store, its measured format choices, the cache/peaks query views, the one-event-per-turn billing rule, and the DuckDB traps that shipped bugs"
+description: "how do I get rate_limits without hitting the usage endpoint / why is session_id coming back as hugeint / JSON.stringify throws Do not know how to serialize a BigInt / why did lifecycle-events go empty / can I add a second statusLine / does Claude Code send the 5h 7d windows on stdin / should I pack N samples per row in parquet / how big should a parquet chunk be / get_account_status shows another account's window / was that turn actually a cache miss / how do I verify a claimed cold cache write in one command / is the 1-hour write tier real on this machine / why does the same turn show up twelve times / why is the burn monitor reporting far more cost than was really spent / the statusline burn path over-counts / I raised a feed's sample rate and its deltas broke / Could not convert string to INT128 / failed to cast column session_id from VARCHAR to UUID / one row blinds every view / Could not find key effort in struct / a struct field missing from one parquet file / subagents view binder error — the statusline sample store, its measured format choices, the cache/peaks query views, the one-event-per-turn billing rule, and the DuckDB traps that shipped bugs"
 ocd: 2026-08-01
 lmd: 2026-08-01
 metadata:
@@ -27,8 +27,13 @@ specify that omitting a task's `id` from the output keeps that row's DEFAULT ren
 that prints nothing changes nothing. Its `tasks[]` is the ONLY published source of per-subagent
 `tokenCount`, `contextWindowSize`, `effort`, `model` and `cwd` (the last distinguishes a worktree
 agent). **The docs list a `name` field on each task; the LIVE payload has no such key** — it carries
-`description` (the agent's task) and `label` (its current activity). Selecting `t.name` is a hard
-binder error that kills the whole query.
+`description` (the agent's task) and `label` (its current activity).
+
+**Do not select ANY of these as a struct member.** `t.name` was a hard binder error that killed the
+whole query, and the same is true of a field that merely *happens* to be absent from one file —
+`effort` comes and goes between parts (trap 4 below). The struct has drifted twice already, so a
+fixed shape is a standing bet against a payload we do not control: read every field with
+`to_json(t)->>'field'`.
 
 ## The payload DOES carry `rate_limits`, at full float precision
 
@@ -72,7 +77,7 @@ OTEL span store (the docs specify it equals the `prompt.id` span attribute; noth
 
 Live result: **109×** — 6,310 rows / 13 sessions in 85.3 KB against a 9.08 MB raw equivalent.
 
-## Three DuckDB traps that each SHIPPED a bug (all invisible to tsc)
+## Four DuckDB traps that each SHIPPED a bug (all invisible to tsc)
 
 1. **UUID auto-detection — and it bites TWICE, at two different layers.**
    *(a) In the RESULT.* `read_json_auto` detects a UUID-*shaped* string as the UUID type and the node
@@ -94,6 +99,14 @@ Live result: **109×** — 6,310 rows / 13 sessions in 85.3 KB against a 9.08 MB
    stringify beyond, never round silently.
 3. **Two consecutive `WITH` clauses.** A query spliced in after `WITH samples AS (…)` must not open
    with its own `WITH` — use a subquery.[^3]
+4. **A STRUCT field that is absent from one file.** Same per-file inference, one level down: DuckDB
+   types the `tasks` struct from the data in each file, so a part where no task reported `effort` has
+   **no such key**, and `t.effort` is a hard `Binder Error: Could not find key "effort" in struct`
+   that kills the whole view. Measured live: 1 of 6 subagent parts had no `effort` key, another
+   carried it on 1 of 413 tasks. Production survived only by accident — file selection is by DAY
+   partition, so a sibling part that has the key joins the union; a day whose parts all lack it goes
+   down. Extract with **`to_json(t)->>'field'`** (NULL for an absent key), for EVERY field — not just
+   the one that broke.[^9]
 
 Plus the inherited invariants from `src/store/db.ts`: never a persistent `.duckdb` (300× write
 amplification; `memory_limit` does NOT fix it), never a bare glob (an empty glob is an ERROR, not an
@@ -127,7 +140,7 @@ caller has an estimate to fall back on and no way to know the "authoritative" fi
 else's. See [[agentlens-account-window-budget]], [[cache-ttl-model]].
 
 
-^ATOM-IXQ7-DOMU [desc:"The two query views that answer cost questions from the payload — cache (warm vs cold, cost bracketed by TTL tier) and peaks (delta + its gap) — and the measured agreement that validates the pricing t", keywords: was_that_turn_a_cache_miss verify_a_cache_miss_claim statusline-history_cache_view cache_write_vs_cache_read_per_turn is_the_1h_write_tier_real d_cost_across_an_idle_gap peaks_column_overstates_a_turn, ocd: 2026-08-01, lmd: 2026-08-01] [^5] [^6] [^7] [^8]
+^ATOM-IXQ7-DOMU [desc:"The two query views that answer cost questions from the payload — cache (warm vs cold, cost bracketed by TTL tier) and peaks (delta + its gap) — and the measured agreement that validates the pricing t", keywords: was_that_turn_a_cache_miss verify_a_cache_miss_claim statusline-history_cache_view cache_write_vs_cache_read_per_turn is_the_1h_write_tier_real d_cost_across_an_idle_gap peaks_column_overstates_a_turn, ocd: 2026-08-01, lmd: 2026-08-01] [^5] [^6] [^7] [^8] [^9]
 
 ## Answering a cost question from the payload: `cache` and `peaks`
 
@@ -177,3 +190,4 @@ so a pair bracketing an idle stretch is an INTERVAL total covering every turn in
 [^6]: [id:ATOM-118H-5886, status:valid, keywords:"d_cost_looks_like_a_five_dollar_turn cumulative_cost_delta_over_an_idle_gap per-turn_cost_overstated_15x cost_total_cost_usd_is_cumulative sampling_stops_while_idle", ocd:2026-08-01, lmd:2026-08-01] DO NOT read a delta of `cost.total_cost_usd` as one turn's cost without checking the time gap between the two samples, BECAUSE the field is cumulative and sampling STOPS while a session is idle, so the pair bracketing an idle stretch carries every turn in between — read that way it reported a $0.35 warm turn as a $5 cold write, and the claim was repeated for a dozen turns before the transcript contradicted it. DO show the gap beside the delta and label anything past ~60 s an INTERVAL total.
 [^7]: [id:ATOM-UQSH-Y776, status:valid, keywords:"burn_monitor_over-counts statusline_path_inflates_cost_36x one_billing_event_per_sample snapshot_field_treated_as_an_increment guard_covered_cost_but_not_tokens raising_a_sample_rate_broke_a_delta", ocd:2026-08-01, lmd:2026-08-01] DO NOT emit a per-turn billing event per status-line SAMPLE, BECAUSE `current_usage` is a snapshot of the last COMPLETED turn that is republished every ~3 s — measured, 704 turns arrived as 34,498 samples and fed the burn monitor $7,628 for $208 of real spend (36.7x). The cost half of the guard was correct and useless: `deltaCostUsd` IS 0 on a re-render, but the condition was `deltaTokens > 0 || deltaCost > 0` and `deltaTokens` is the raw bucket sum. DO key the turn on its INPUT buckets and UPDATE the open event; and when you raise a feed's sample rate, re-derive every delta computed from it.
 [^8]: [id:ATOM-KR07-9K0D, status:valid, keywords:"could_not_convert_string_to_INT128 failed_to_cast_column_session_id_from_VARCHAR_to_UUID one_row_blinds_every_view non_uuid_session_id_breaks_duckdb cast_in_the_select_list_does_not_help read_parquet_takes_the_schema_from_the_first_file", ocd:2026-08-01, lmd:2026-08-01] DO NOT rely on `CAST(session_id AS VARCHAR)` in the SELECT list to survive DuckDB's per-file UUID inference, BECAUSE the coercion happens in the UNION (and inside multi-file `read_parquet`, which takes its schema from the FIRST file) — before any projection — so ONE session with a non-UUID id killed three of five live views with `Could not convert string 'x' to INT128`. DO normalize per FILE (`* REPLACE` over a zero-row typed template, since REPLACE is a binder error on a missing column) AND seal `session_id` as VARCHAR, since pre-fix UUID parts sit on disk for the whole retention.
+[^9]: [id:ATOM-KQSZ-XY9Y, status:valid, keywords:"could_not_find_key_in_struct binder_error_on_a_struct_field tasks_struct_missing_effort per_file_struct_inference duckdb_struct_field_comes_and_goes view_dies_on_one_absent_field", ocd:2026-08-01, lmd:2026-08-01] DO NOT select a `tasks[]` field as a struct member (`t.effort`), BECAUSE DuckDB infers the struct type PER FILE, so a part where no task reported that field has NO such key and `t.effort` is a hard `Binder Error: Could not find key "effort" in struct` that kills the WHOLE view — measured live, 1 of 6 subagent parts had no `effort` key and another carried it on 1 of 413 tasks; it survives today only because day-partition file selection pulls in a sibling part that does have it. DO extract with `to_json(t)->>'field'`, which yields NULL for an absent key — this struct has already drifted twice.
