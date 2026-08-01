@@ -19,6 +19,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { dataDir } from './cliCore'
 import { queryStatusline, type StatuslineStream } from '../statuslineStore'
+import { calcTokenCostUsd, lookupRates } from '../shared/pricing'
 
 export const STATUSLINE_HISTORY_USAGE = `agentlenspro statusline-history [view] [flags]
 
@@ -31,6 +32,11 @@ views:
               contextWindowSize, effort, model, and the cwd that marks a worktree agent
   windows     rate-limit 5h/7d window history (full float precision, per session)
   peaks       the largest context/cost jumps between consecutive samples — "what spiked, when"
+              (read the 'gap s'/'span' columns: a delta across an idle gap is an INTERVAL total,
+              not one turn's cost)
+  cache       per-turn cache WRITE vs READ — the falsifier for a claimed cache miss. Costs are
+              bracketed 5m/1h because the write rate is tiered by TTL and the tier is not in
+              the payload; the truth is inside the bracket.
   raw         individual samples
 
 flags:
@@ -80,10 +86,24 @@ function fmtNum(v: unknown): string {
 }
 
 function fmtTime(v: unknown): string {
-  const n = Number(v)
-  if (!Number.isFinite(n)) return '-'
-  return new Date(n).toISOString().slice(11, 19)
+  const t = Number(v)
+  if (!Number.isFinite(t)) return '-'
+  return new Date(t).toISOString().slice(11, 19)
 }
+
+/** Costs need more precision than fmtNum's 2dp: a warm turn is ~$0.35 and a cheap one ~$0.004, and
+ *  rounding the latter to 0 turns "nearly free" into "free". null (unpriced model) stays "-". */
+function fmtCost(v: unknown): string {
+  if (v === null || v === undefined) return '-'
+  const x = Number(v)
+  return Number.isFinite(x) ? x.toFixed(4) : '-'
+}
+
+/** Above this gap between consecutive samples, a cumulative-cost delta covers more than one turn.
+ *  Sampling runs at ~3 s while a turn is live, so 60 s is far outside normal jitter but still short
+ *  enough that a genuine long single turn is labelled INTERVAL rather than silently called a turn —
+ *  the conservative direction, since the failure being guarded is over-claiming. */
+const PEAK_TURN_GAP_S = 60
 
 /** Render rows as an aligned table. Kept deliberately plain: the output is read in a terminal and
  *  piped into `distill`, so no box-drawing and no colour. */
@@ -98,6 +118,17 @@ interface ViewSpec {
   stream: StatuslineStream
   sql: (limit: number, session?: string) => string
   cols: Array<{ key: string; label: string; fmt?: (v: unknown) => string }>
+  /** Derive columns in TS rather than SQL. Used by `cache`, whose numbers come from
+   *  src/shared/pricing.ts — the ONE place rates live. Re-encoding them in a SQL literal would be a
+   *  second source of truth that goes stale the next time a rate changes. */
+  post?: (rows: Array<Record<string, unknown>>) => Array<Record<string, unknown>>
+}
+
+/** DuckDB hands back BIGINT as a JS BigInt and DOUBLE as a number; arithmetic mixing the two throws
+ *  ("Cannot mix BigInt and other types"). Every value entering a cost computation goes through here. */
+function n(v: unknown): number {
+  const x = typeof v === 'bigint' ? Number(v) : Number(v)
+  return Number.isFinite(x) ? x : 0
 }
 
 /** `session_id` filtering is done in SQL rather than by narrowing the file list: a session's samples
@@ -194,18 +225,28 @@ export const VIEWS: Record<string, ViewSpec> = {
 
   // "What spiked, and when" — the delta between consecutive samples of the same session. This is
   // what the aggregate views cannot show: a session that ends at 40% may have got there in one jump.
+  //
+  // `gap_s` AND `span` ARE LOAD-BEARING, not decoration. `cost_total_cost_usd` is CUMULATIVE, so a
+  // delta is a per-turn cost ONLY when the two samples are adjacent in time — and sampling STOPS
+  // while a session sits idle, so the pair bracketing an idle stretch lumps every turn in between
+  // into one number. Reading this column without its gap is how I reported a $0.35 warm turn as a $5
+  // cold write and repeated it for a dozen turns before the transcript contradicted me. A delta over
+  // a long gap is an INTERVAL total; the view now shows the interval so it cannot be read as a turn.
   peaks: {
     stream: 'main',
     // A SUBQUERY, deliberately not a CTE: every view is spliced in after `WITH samples AS (...)`, so
     // a view that opens with its own WITH produces two consecutive WITH clauses and a parser error.
     sql: (limit, session) => `
-      SELECT session_id, ts, model, ctx, d_ctx, d_cost FROM (
+      SELECT session_id, ts, model, ctx, d_ctx, d_cost, gap_s,
+             CASE WHEN gap_s > ${PEAK_TURN_GAP_S} THEN 'INTERVAL' ELSE 'turn' END AS span
+      FROM (
         SELECT ${SESSION_COL}, ts, model_display_name AS model,
                context_window_total_input_tokens AS ctx,
                context_window_total_input_tokens
                  - lag(context_window_total_input_tokens) OVER (PARTITION BY session_id ORDER BY ts) AS d_ctx,
                cost_total_cost_usd
-                 - lag(cost_total_cost_usd) OVER (PARTITION BY session_id ORDER BY ts) AS d_cost
+                 - lag(cost_total_cost_usd) OVER (PARTITION BY session_id ORDER BY ts) AS d_cost,
+               (ts - lag(ts) OVER (PARTITION BY session_id ORDER BY ts)) / 1000.0 AS gap_s
         FROM samples ${sessionFilter(session)}
       )
       WHERE d_ctx IS NOT NULL ORDER BY d_cost DESC NULLS LAST LIMIT ${limit}`,
@@ -216,6 +257,77 @@ export const VIEWS: Record<string, ViewSpec> = {
       { key: 'ctx', label: 'ctx', fmt: fmtNum },
       { key: 'd_ctx', label: 'd ctx', fmt: fmtNum },
       { key: 'd_cost', label: 'd $', fmt: fmtNum },
+      { key: 'gap_s', label: 'gap s', fmt: fmtNum },
+      { key: 'span', label: 'span' },
+    ],
+  },
+
+  // THE FALSIFIER. Answers "was that turn actually a cold cache write?" from the payload's own
+  // per-turn buckets, so a warning that CLAIMS a huge cache miss can be CHECKED instead of believed
+  // — which is the whole reason this view exists: a hook here reported "cache-miss write ~520k"
+  // every turn while the transcript showed cache_read 630k against cache_creation ~1k, and nothing
+  // on this machine could contradict it in one command.
+  //
+  // `current_usage` splits the turn into fresh input / cache WRITE / cache READ, and the ratio IS the
+  // answer: a warm turn re-reads its whole prefix at 0.1x and writes only the new suffix, so the
+  // write stays in the hundreds while the read carries the context. A genuine cold rewrite puts the
+  // PREFIX in cache_creation — write% near 100, not near 0.
+  //
+  // GROUPED BY THE TURN'S INPUT SIDE, not one row per sample — and both halves of that were forced
+  // by the first live runs, not by theory:
+  //  * `current_usage` describes the LAST turn and the status line re-renders every ~3 s regardless,
+  //    so an idle session republishes one turn indefinitely. Ungrouped, the view showed a single
+  //    compaction rewrite twelve times and nothing else — a table that reads as twelve cold writes.
+  //  * `output_tokens` GROWS while the response streams, so grouping on it split one turn back into
+  //    its snapshots (out=2, then 119, then 170 — same write/read, three rows).
+  // The input buckets are fixed the moment the request is sent, so they identify the turn; the
+  // output is taken at its MAX (the completed response). `renders` is how many samples carried it.
+  cache: {
+    stream: 'main',
+    sql: (limit, session) => `
+      SELECT ${SESSION_COL}, min(ts) AS ts, any_value(model_id) AS model_id,
+             context_window_current_usage_input_tokens                AS in_tok,
+             context_window_current_usage_cache_creation_input_tokens AS cache_write,
+             context_window_current_usage_cache_read_input_tokens     AS cache_read,
+             max(context_window_current_usage_output_tokens)          AS out_tok,
+             count(*)                                                 AS renders
+      FROM samples ${sessionFilter(session)}
+      ${session ? 'AND' : 'WHERE'} context_window_current_usage_cache_read_input_tokens IS NOT NULL
+      GROUP BY session_id, in_tok, cache_write, cache_read
+      ORDER BY cache_write DESC NULLS LAST LIMIT ${limit}`,
+    post: rows => rows.map(r => {
+      const write = n(r.cache_write), read = n(r.cache_read)
+      const model = String(r.model_id ?? '')
+      // An unknown model must read as "-", never as $0. calcTokenCostUsd returns 0 for an unpriced
+      // id, and a 0 in a cost column is indistinguishable from "this turn was free".
+      const priced = lookupRates(model) !== null
+      // The write rate is tiered by TTL (5m = 1.25x base input, 1h = 2x) and the payload does NOT
+      // carry the tier, so a single figure would be a guess. Both bounds are shown: the true cost is
+      // inside the bracket, and when the bracket is narrow the tier does not matter to the verdict.
+      const cost5m = priced ? calcTokenCostUsd(n(r.in_tok), read, write, n(r.out_tok), model, 0) : null
+      const cost1h = priced ? calcTokenCostUsd(n(r.in_tok), read, write, n(r.out_tok), model, write) : null
+      const total = write + read
+      return {
+        ...r,
+        write_pct: total > 0 ? (100 * write) / total : null,
+        cost_5m: cost5m,
+        cost_1h: cost1h,
+        // WARM is the claim worth being able to make: the prefix was re-read, not re-written.
+        verdict: total === 0 ? 'no-cache' : write / total >= 0.5 ? 'COLD-WRITE' : write / total >= 0.05 ? 'mixed' : 'warm',
+      }
+    }),
+    cols: [
+      { key: 'ts', label: 'time', fmt: fmtTime },
+      { key: 'session_id', label: 'session', fmt: v => String(v ?? '-').slice(0, 8) },
+      { key: 'model_id', label: 'model', fmt: v => String(v ?? '-').replace(/^claude-/, '') },
+      { key: 'cache_write', label: 'WRITE', fmt: fmtNum },
+      { key: 'cache_read', label: 'read', fmt: fmtNum },
+      { key: 'out_tok', label: 'out', fmt: fmtNum },
+      { key: 'renders', label: 'rndr', fmt: fmtNum },
+      { key: 'write_pct', label: 'write%', fmt: fmtNum },
+      { key: 'cost_5m', label: '$ 5m', fmt: fmtCost },
+      { key: 'cost_1h', label: '$ 1h', fmt: fmtCost },
+      { key: 'verdict', label: 'verdict' },
     ],
   },
 
@@ -284,6 +396,7 @@ export async function runStatuslineHistoryCli(argv: string[]): Promise<number> {
   let rows: Array<Record<string, unknown>> | null
   try {
     rows = await queryStatusline(root, view.stream, view.sql(limit, session), { sinceMs, untilMs })
+    if (rows !== null && view.post) rows = view.post(rows)
   } catch (e) {
     console.error(`query failed: ${(e as Error).message}`)
     return EXIT.USAGE
