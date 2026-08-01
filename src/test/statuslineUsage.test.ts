@@ -27,6 +27,25 @@ function payload(over: Record<string, unknown> = {}): Record<string, unknown> {
 
 const S = (sec: number): number => sec * 1000   // the API takes ms; records store seconds
 
+/** A payload for a specific turn. The INPUT buckets are what identify a turn — they are fixed when
+ *  the request is sent and change on every new one — so a test that wants two turns must vary them.
+ *  Two samples carrying the same input buckets ARE the same turn, re-rendered. */
+function turn(
+  u: { input?: number; write?: number; read?: number; out?: number },
+  costUsd: number,
+): Record<string, unknown> {
+  return payload({
+    context_window: {
+      total_input_tokens: 100_000, total_output_tokens: 300, context_window_size: 1_000_000, used_percentage: 10,
+      current_usage: {
+        input_tokens: u.input ?? 2, output_tokens: u.out ?? 300,
+        cache_creation_input_tokens: u.write ?? 500, cache_read_input_tokens: u.read ?? 99_498,
+      },
+    },
+    cost: { total_cost_usd: costUsd },
+  })
+}
+
 suite('statuslineUsage — projecting a live payload onto the usage record', () => {
   test('maps the nested payload onto the flat record, including rate_limits', () => {
     const r = recordFromStatuslinePayload(payload({
@@ -152,16 +171,63 @@ suite('statuslineUsage — the aggregate rules the consumers depend on', () => {
 
   test('billing events are per-turn deltas of the cumulative cost, never the cumulative value', () => {
     const r = new StatuslineUsageReader()
-    r.ingestSample(payload({ cost: { total_cost_usd: 5 } }), S(100))
-    r.ingestSample(payload({ cost: { total_cost_usd: 9 } }), S(200))
+    r.ingestSample(turn({ read: 99_498 }, 5), S(100))
+    r.ingestSample(turn({ read: 120_000 }, 9), S(200))   // a NEW turn: its input buckets moved
     const evs = r.getBillingEvents(S(300))
     assert.strictEqual(evs.length, 2)
     assert.strictEqual(evs[1].deltaCostUsd, 4, 'the increment, not 9')
     assert.strictEqual(evs[1].sessionId, 's1')
     // The four buckets ride along so the burn breakdown can attribute the split rather than
     // dumping the whole turn into `unknown`.
-    assert.strictEqual(evs[1].deltaCacheRead, 99_498)
-    assert.strictEqual(evs[1].deltaTokens, 2 + 300 + 500 + 99_498)
+    assert.strictEqual(evs[1].deltaCacheRead, 120_000)
+    assert.strictEqual(evs[1].deltaTokens, 2 + 300 + 500 + 120_000)
+  })
+
+  test('ONE event per TURN — a re-rendered turn must not be counted once per render', () => {
+    // The bug this pins was live and severe. current_usage is a SNAPSHOT of the last completed turn
+    // and Claude Code re-renders the status line every ~3 s regardless, so an idle session republishes
+    // the same turn indefinitely. Appending per sample fed the burn monitor that turn once per render:
+    // MEASURED over 12 h on this machine, 704 real turns arrived as 34,498 samples — up to 2,575
+    // renders of ONE turn — for a 42x token and 36.7x COST over-count.
+    const r = new StatuslineUsageReader()
+    for (let i = 0; i < 40; i++) r.ingestSample(turn({ read: 99_498 }, 5), S(100 + i * 3))
+    const evs = r.getBillingEvents(S(500))
+    assert.strictEqual(evs.length, 1, '40 renders of one turn is ONE billing event')
+    assert.strictEqual(evs[0].deltaTokens, 2 + 300 + 500 + 99_498, 'the turn\'s own tokens, not 40x them')
+    assert.strictEqual(evs[0].deltaCostUsd, 5)
+
+    // ...and a genuinely new turn still opens its own event.
+    r.ingestSample(turn({ read: 250_000 }, 8), S(400))
+    assert.strictEqual(r.getBillingEvents(S(500)).length, 2)
+  })
+
+  test('a turn observed mid-stream keeps ONE event, updated to the completed output and cost', () => {
+    // output_tokens GROWS while the response streams, which is why it is deliberately not part of the
+    // turn's identity — keying on it would split one turn back into its snapshots. The event must
+    // still end up carrying the FINAL output and the whole turn's cost, or a long response is
+    // under-counted for as long as it is streaming.
+    const r = new StatuslineUsageReader()
+    r.ingestSample(turn({ read: 99_498, out: 2 }, 5.0), S(100))
+    r.ingestSample(turn({ read: 99_498, out: 119 }, 5.2), S(103))
+    r.ingestSample(turn({ read: 99_498, out: 900 }, 5.9), S(106))
+    const evs = r.getBillingEvents(S(200))
+    assert.strictEqual(evs.length, 1)
+    assert.strictEqual(evs[0].deltaOutput, 900, 'the completed output, not the first partial one')
+    assert.ok(Math.abs(evs[0].deltaCostUsd - 5.9) < 1e-9, 'cost accrued across the whole turn')
+    assert.strictEqual(evs[0].deltaTokens, 2 + 500 + 99_498 + 900)
+  })
+
+  test('two sessions re-rendering concurrently keep their turns separate', () => {
+    // The open-turn map is keyed by session; a shared key would let one session's re-render swallow
+    // another's turn, and 13 sessions sample concurrently on this machine.
+    const r = new StatuslineUsageReader()
+    for (let i = 0; i < 5; i++) {
+      r.ingestSample(turn({ read: 99_498 }, 5), S(100 + i * 3))
+      r.ingestSample({ ...turn({ read: 99_498 }, 7), session_id: 's2' }, S(101 + i * 3))
+    }
+    const evs = r.getBillingEvents(S(300))
+    assert.strictEqual(evs.length, 2, 'one event per session, not one per sample')
+    assert.deepStrictEqual(evs.map(e => e.sessionId).sort(), ['s1', 's2'])
   })
 
   test('a cost that goes backwards never produces a negative delta', () => {

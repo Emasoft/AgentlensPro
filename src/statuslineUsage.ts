@@ -134,13 +134,16 @@ export function recordFromStatuslinePayload(payload: Record<string, unknown>, ts
  */
 export class StatuslineUsageReader {
   private readonly agg = new Map<string, StatuslineUsageAgg>()
-  // Per-turn billing deltas for the burn monitor (TRDD-OG9PARZQ). Each ingested line yields one event:
-  // deltaCostUsd = the increment of the session's cumulative authoritative cost; deltaTokens = that
+  // Per-TURN billing deltas for the burn monitor (TRDD-OG9PARZQ) — one event per turn, NOT per sample.
+  // deltaCostUsd is the increment of the session's cumulative authoritative cost; deltaTokens is that
   // turn's 4 usage buckets summed. Bounded to the last 7 days + a hard cap so the firehose can't grow
   // it without limit. This is the machine-wide, rate-limit-free window-budget source.
   private billingEvents: StatuslineBillingEvent[] = []
   private static readonly BILLING_MAX = 100_000
   private static readonly BILLING_MAX_AGE_MS = 8 * 24 * 60 * 60 * 1000
+  // The OPEN event of each session's current turn, so repeat observations of that turn UPDATE it
+  // instead of appending a copy. See _ingest for why this is not optional.
+  private readonly openTurn = new Map<string, { key: string; event: StatuslineBillingEvent }>()
   // TRDD-VY1IUVUM Part-5: latest-wins snapshot of Claude Code's own rate_limits utilization. Only a
   // record carrying a rate_limits block updates it; a rotated/shrunk file resets it to null (below).
   private latestRateLimits: RateLimitsSnapshot | null = null
@@ -191,12 +194,34 @@ export class StatuslineUsageReader {
     const dCacheRead = num(rec.cache_read_input_tokens)
     const deltaTokens = dInput + dOutput + dCacheCreate + dCacheRead
     const deltaCost = Math.max(0, newCost - prevCost)
-    if (deltaTokens > 0 || deltaCost > 0) {
-      this.billingEvents.push({
+
+    // ONE EVENT PER TURN. These buckets are a SNAPSHOT of the last COMPLETED turn, and Claude Code
+    // re-renders the status line every ~3 s whether or not a turn happened — so an idle session
+    // republishes the same turn indefinitely. Appending per sample made the burn monitor count that
+    // turn once per render: MEASURED over 12 h here, 704 real turns arrived as 34,498 samples (up to
+    // 2,575 renders of a SINGLE turn), feeding it 13.8 B tokens for 325 M real and $7,628 for $208 —
+    // a 36.7x cost over-count. The cost guard alone did not catch it (deltaCost is correctly 0 on a
+    // re-render) because `deltaTokens > 0` let the event through on its own.
+    //
+    // The turn's identity is its INPUT buckets: fixed the moment the request is sent, and they change
+    // on every new turn as the context grows. `output_tokens` is deliberately NOT part of the key — it
+    // GROWS while the response streams, so keying on it splits one turn back into its snapshots.
+    // Repeat observations therefore UPDATE the open event (later output, accumulated cost) rather than
+    // append, which also keeps the live monitor current mid-turn instead of blind until the turn ends.
+    const turnKey = `${dInput}:${dCacheCreate}:${dCacheRead}`
+    const open = this.openTurn.get(sid)
+    if (open && open.key === turnKey) {
+      open.event.deltaCostUsd += deltaCost          // cost still accrues while the response streams
+      open.event.deltaOutput = dOutput              // ...and so does the output count
+      open.event.deltaTokens = dInput + dCacheCreate + dCacheRead + dOutput
+    } else if (deltaTokens > 0 || deltaCost > 0) {
+      const event: StatuslineBillingEvent = {
         ts: num(rec.ts), sessionId: sid, workspace: rec.project_dir || undefined,
         deltaCostUsd: deltaCost, deltaTokens,
         deltaInput: dInput, deltaOutput: dOutput, deltaCacheRead: dCacheRead, deltaCacheCreate: dCacheCreate,
-      })
+      }
+      this.billingEvents.push(event)
+      this.openTurn.set(sid, { key: turnKey, event })
     }
 
     // Latest-wins for the snapshot fields (lines are appended in time order; the ts guard keeps a
@@ -275,9 +300,14 @@ export class StatuslineUsageReader {
   getBillingEvents(now = Date.now()): StatuslineBillingEvent[] {
     const cutoffSec = (now - StatuslineUsageReader.BILLING_MAX_AGE_MS) / 1000
     if (this.billingEvents.length > StatuslineUsageReader.BILLING_MAX || this.billingEvents.some(e => e.ts < cutoffSec)) {
-      this.billingEvents = this.billingEvents
+      const kept = new Set(this.billingEvents = this.billingEvents
         .filter(e => e.ts >= cutoffSec)
-        .slice(-StatuslineUsageReader.BILLING_MAX)
+        .slice(-StatuslineUsageReader.BILLING_MAX))
+      // Drop any open turn whose event was just pruned. Without this the map would keep a reference to
+      // an object no longer in the array, and a later sample of that same turn would silently mutate
+      // the orphan — the turn's remaining cost would land nowhere. An open turn is always its
+      // session's newest event so this should not fire, but "should not" is not an invariant.
+      for (const [sid, o] of this.openTurn) if (!kept.has(o.event)) this.openTurn.delete(sid)
     }
     return this.billingEvents
   }
