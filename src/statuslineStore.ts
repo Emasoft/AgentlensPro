@@ -288,9 +288,14 @@ export class StatuslineStore {
           for (const wal of listFiles(dir, f => f.startsWith('wal-') && f.endsWith('.ndjson'))) {
             const rows = this.countLines(wal)
             if (rows === 0) { if (isPastDay) { try { fs.unlinkSync(wal) } catch { /* raced */ } } continue }
-            // A past day's WAL is sealed whatever its size: leaving it open forever would make every
-            // query pay to re-read raw JSON for a partition that will never grow again.
-            if (!isPastDay && rows < sealRows()) continue
+            // A WAL is sealed early in two cases where it will NEVER grow again, because leaving it
+            // open costs every query a raw-JSON re-read of a file that can only get colder:
+            //   * a PAST day's partition, and
+            //   * an ORPHAN — a WAL named for a pid that is not ours. WALs are per-pid, so every
+            //     server restart strands one; three restarts left 9.4 MB of raw JSON here that
+            //     would have sat unsealed until midnight.
+            const orphan = path.basename(wal) !== `wal-${process.pid}.ndjson`
+            if (!isPastDay && !orphan && rows < sealRows()) continue
             if (await this.sealOne(wal, rows)) sealed++
           }
         }

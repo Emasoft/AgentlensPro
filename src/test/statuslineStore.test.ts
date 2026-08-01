@@ -155,6 +155,39 @@ suite('statuslineStore — WAL, seal, and verify-before-delete', () => {
     } finally { fs.rmSync(root, { recursive: true, force: true }) }
   })
 
+  test('an ORPHANED WAL from a dead pid seals immediately, whatever its size', async () => {
+    // WALs are named per-pid, so every server restart strands one. Three restarts on this machine
+    // left 9.4 MB of raw JSON that would have stayed unsealed until midnight — re-read in full by
+    // every query, and never compressed.
+    const root = tmpRoot()
+    try {
+      const s = new StatuslineStore({ root, autoTimer: false })
+      s.append(sample(), 'main')
+      s.flush()
+      const dir = path.join(root, 'main', dayKey(Date.now()))
+      const mine = path.join(dir, `wal-${process.pid}.ndjson`)
+      const orphan = path.join(dir, 'wal-999999.ndjson')
+      fs.renameSync(mine, orphan)
+
+      assert.strictEqual(await s.maybeSeal(), 1, 'a one-row orphan still seals')
+      assert.ok(!fs.existsSync(orphan), 'the orphan WAL is consumed')
+      assert.strictEqual(fs.readdirSync(dir).filter(f => f.endsWith('.parquet')).length, 1)
+      const rows = await queryStatusline(root, 'main', 'SELECT count(*) c FROM samples')
+      assert.strictEqual(Number(rows![0].c), 1, 'and its row survived the seal')
+    } finally { fs.rmSync(root, { recursive: true, force: true }) }
+  })
+
+  test('OUR OWN under-full WAL is left alone — it is still being written to', () => {
+    const root = tmpRoot()
+    try {
+      const s = new StatuslineStore({ root, autoTimer: false })
+      s.append(sample(), 'main')
+      s.flush()
+      const wal = path.join(root, 'main', dayKey(Date.now()), `wal-${process.pid}.ndjson`)
+      assert.ok(fs.existsSync(wal), 'sealing our own live WAL at 1 row would defeat the whole chunking scheme')
+    } finally { fs.rmSync(root, { recursive: true, force: true }) }
+  })
+
   test('schema drift is tolerated — an optional block appearing mid-stream does not break reads', async () => {
     // pr / worktree / agent come and go, and a future Claude Code version may add fields. Without
     // union_by_name the second shape would fail the whole query rather than widen it.
