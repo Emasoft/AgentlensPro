@@ -64,8 +64,9 @@ export interface SubscriptionUsage {
   /** WHICH ACCOUNT these numbers describe — a fingerprint of the OAuth credential they were fetched
    *  with, never the credential. This machine rotates between several accounts, and the endpoint
    *  answers for whichever token you present, so a cache without an account identity will happily
-   *  hand you the previous account's utilization after a switch. Null only for a reading written
-   *  before this field existed, which is treated as unverifiable rather than as a match. */
+   *  hand you the previous account's utilization after a switch. Null for a reading written before
+   *  this field existed — `readCache` coerces the absent key to null so it reads as UNVERIFIABLE
+   *  rather than as a mismatch. */
   accountFp: string | null
   /** A HUMAN LABEL for the fingerprint, read from `~/.claude.json`'s `oauthAccount` so a usage
    *  number can be lined up against the burn numbers `get_window_eta` and the OTEL feed report for
@@ -285,7 +286,23 @@ export function normalize(
 }
 
 function readCache(): SubscriptionUsage | null {
-  try { return JSON.parse(fs.readFileSync(cachePath(), 'utf8')) as SubscriptionUsage } catch { return null }
+  let raw: Partial<SubscriptionUsage> | null = null
+  try { raw = JSON.parse(fs.readFileSync(cachePath(), 'utf8')) as Partial<SubscriptionUsage> } catch { return null }
+  if (!raw || typeof raw.fetchedAt !== 'number') return null
+  // NORMALIZE ABSENCE AT THE BOUNDARY. A cache file written before the identity fields existed
+  // simply has no such key, and JSON has no `undefined` — so the parsed value is `undefined`, and
+  // `undefined === null` is FALSE. Every identity comparison downstream is written against `null`,
+  // so without this coercion a pre-upgrade file takes the "fingerprints differ" branch and a
+  // perfectly valid reading gets reported as ANOTHER ACCOUNT'S. Absent and null must be the same
+  // thing exactly once, here, rather than at each of the comparison sites.
+  return {
+    ...(raw as SubscriptionUsage),
+    accountFp: raw.accountFp ?? null,
+    accountUuid: raw.accountUuid ?? null,
+    accountLabel: raw.accountLabel ?? null,
+    accountLabelSuspect: raw.accountLabelSuspect === true,
+    limits: Array.isArray(raw.limits) ? raw.limits : [],
+  }
 }
 
 /** Is this reading obsolete? TWO independent ways, and the second is the one that matters most.

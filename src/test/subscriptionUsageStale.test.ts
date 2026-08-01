@@ -20,7 +20,10 @@
 // a reading whose window has already reset is obsolete no matter how recently it was fetched.
 
 import * as assert from 'assert'
-import { deriveStale, formatSubscriptionUsage, TTL_MS, type SubscriptionUsage } from '../subscriptionUsage'
+import * as fs from 'fs'
+import * as os from 'os'
+import * as path from 'path'
+import { deriveStale, formatSubscriptionUsage, getSubscriptionUsage, TTL_MS, type SubscriptionUsage } from '../subscriptionUsage'
 
 const NOW = Date.parse('2026-08-01T07:00:00Z')
 
@@ -111,6 +114,42 @@ suite('subscriptionUsage — a cached reading must never present itself as curre
   // So the numbers are determined solely by the token presented, and swapping the token WITHOUT
   // touching the logged-in email returns another account's numbers under an unchanged label. The
   // label must therefore never be evidence of attribution; it is annotated, never believed.
+  // REGRESSION, found by testing the fix instead of trusting it. JSON has no `undefined`: a cache
+  // file written before the identity fields existed simply lacks the key, so the parsed value is
+  // `undefined` — and `undefined === null` is FALSE. Every identity comparison is written against
+  // `null`, so a pre-upgrade file took the "fingerprints differ" branch and a perfectly valid
+  // reading was reported as ANOTHER ACCOUNT'S: a false accusation introduced BY the fix for the
+  // original mis-attribution. Absence is coerced to null once, in readCache.
+  test('a pre-upgrade cache file is UNVERIFIABLE, never a different account', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sub-usage-old-'))
+    const prev = process.env['AGENTLENS_DATA_DIR']
+    process.env['AGENTLENS_DATA_DIR'] = dir
+    try {
+      // No accountFp / accountUuid / accountLabel keys at all — the pre-upgrade shape.
+      fs.writeFileSync(path.join(dir, 'subscription-usage.json'), JSON.stringify({
+        fetchedAt: Date.now() - 5_000, ageSeconds: 0, stale: false, reason: 'ok',
+        limits: [{
+          kind: 'weekly_all', group: 'weekly', percent: 37, severity: 'normal',
+          resetsAt: new Date(Date.now() + 3_600_000).toISOString(),
+          isActive: true, scopeLabel: null, resetsInSeconds: 3600,
+        }],
+        fiveHourPercent: 7, sevenDayPercent: 37, usageCreditsEnabled: false, spendPercent: 0, note: '',
+      }))
+      // A cooldown forces the cache-serving path without any network call.
+      fs.writeFileSync(path.join(dir, 'subscription-usage-cooldown.json'),
+        JSON.stringify({ until: Date.now() + 600_000, consecutive: 1 }))
+      const u = await getSubscriptionUsage({})
+      assert.ok(u, 'the cached reading is still served')
+      assert.notStrictEqual(u.accountVerified, 'no',
+        'an absent fingerprint is UNKNOWN provenance, not proof of a different account')
+      assert.strictEqual(u.accountLabelSuspect, false, 'and nothing about the label is disputed')
+    } finally {
+      if (prev === undefined) delete process.env['AGENTLENS_DATA_DIR']
+      else process.env['AGENTLENS_DATA_DIR'] = prev
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   test('freshness and attribution are SEPARATE — an unreadable credential does not age the data', () => {
     // Conflating them called a 13-second-old reading "NOT LIVE" merely because this process could
     // not read the credential to check whose it was, and printed a false LABEL DISPUTED with it.
