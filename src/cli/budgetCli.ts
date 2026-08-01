@@ -101,23 +101,49 @@ export function decideBudget(w: EtaWindow | undefined, remainingMin: number, mar
  *  simultaneously claiming 96%. Three numbers, no agreement, and the verdict rode the one nobody had
  *  checked. Printing the account's own figure next to the projection makes that disagreement visible
  *  instead of leaving the reader to pick a number on faith. */
-export function officialPct(u: SubscriptionUsage | null, windowKey: string): number | null {
-  if (!u) return null
+export interface OfficialBucket { label: string; pct: number }
+
+/** Every bucket that belongs to `windowKey`, each named. A per-model weekly cap (Fable has its own)
+ *  is a SEPARATE window from `weekly_all`, so collapsing them to one number destroys the only
+ *  distinction that changes what you do: at weekly_all 37% / Fable 74% the answer is "switch model",
+ *  and a lone "7d 74%" reads as "the week is nearly gone" instead. */
+export function officialBuckets(u: SubscriptionUsage | null, windowKey: string): OfficialBucket[] {
+  if (!u) return []
   const want = windowKey === '5h' ? (k: string) => k === 'session' : (k: string) => k.startsWith('weekly')
-  const pcts = u.limits.filter(l => want(l.kind)).map(l => l.percent).filter(p => typeof p === 'number' && isFinite(p))
-  // The BINDING bucket is the fullest one: `weekly_all` and a per-model `weekly_scoped` are separate
-  // caps and either can be the one that stops you, so the max is the honest summary, not the mean.
-  return pcts.length ? Math.max(...pcts) : null
+  return u.limits
+    .filter(l => want(l.kind) && typeof l.percent === 'number' && isFinite(l.percent))
+    // Model-scoped buckets are named by their model; that name is what the reader acts on.
+    .map(l => ({ label: l.scopeLabel ?? (l.kind === 'weekly_all' ? '7d' : l.kind === 'session' ? '5h' : l.kind), pct: l.percent }))
+}
+
+/** The bucket that actually binds — the fullest one, because either cap can be the one that stops
+ *  you. Returns the LABEL too, so a downgrade can say which window caused it. */
+export function officialBinding(u: SubscriptionUsage | null, windowKey: string): OfficialBucket | null {
+  const bs = officialBuckets(u, windowKey)
+  if (bs.length === 0) return null
+  return bs.reduce((a, b) => (b.pct > a.pct ? b : a))
+}
+
+export function officialPct(u: SubscriptionUsage | null, windowKey: string): number | null {
+  return officialBinding(u, windowKey)?.pct ?? null
 }
 
 /** Downgrade a projection-based verdict when the account's OWN numbers contradict it.
  *
  *  Applied ONLY to a reading that is live and account-verified — a stale or unattributed one is
  *  exactly what caused this bug, and acting on it would repeat the mistake in the other direction. */
-export function applyOfficial(d: BudgetDecision, u: SubscriptionUsage | null, pct: number | null): BudgetDecision {
+export function applyOfficial(
+  d: BudgetDecision,
+  u: SubscriptionUsage | null,
+  pct: number | null,
+  bindingLabel?: string,
+): BudgetDecision {
   if (!u || u.stale || u.accountVerified !== 'yes' || pct === null) return d
+  // Name the window. "the window is 96% full" sends someone to wait out the week; "Fable is 96%
+  // full" sends them to switch model, which costs nothing.
+  const which = bindingLabel ? `the ${bindingLabel} window is` : 'the window is'
   const worse = (v: BudgetVerdict): BudgetDecision =>
-    ({ ...d, verdict: v, reason: `${d.reason}; but the account's own figure says the window is ${pct}% full` })
+    ({ ...d, verdict: v, reason: `${d.reason}; but the account's own figure says ${which} ${pct}% full` })
   if (pct >= 95 && d.verdict !== 'NO_GO') return worse('NO_GO')
   if (pct >= 80 && (d.verdict === 'GO' || d.verdict === 'UNKNOWN')) return worse('TIGHT')
   return d
@@ -127,19 +153,22 @@ export function applyOfficial(d: BudgetDecision, u: SubscriptionUsage | null, pc
  *  that statement can be trusted. Never silently omitted — an absent line would read as agreement. */
 export function officialLine(u: SubscriptionUsage | null, windowKey: string): string {
   if (!u) return '[budget] official usage: UNAVAILABLE (no readable credential) — verdict rests on the local projection alone'
-  const pct = officialPct(u, windowKey)
   const who = u.accountLabel ?? u.accountUuid?.slice(0, 8) ?? 'unidentified account'
-  const shown = pct === null ? 'n/a' : `${pct}%`
   if (u.stale || u.accountVerified !== 'yes') {
     const why = u.accountVerified === 'no' ? 'belongs to a DIFFERENT account'
       : u.accountVerified === 'unknown' ? 'could not be attributed to the current account'
         : `is ${Math.round(u.ageSeconds / 3600)}h old`
     return `[budget] official usage: NOT USABLE — the cached reading ${why} (${u.reason}); ignoring it for the verdict`
   }
-  return `[budget] official usage (${who}): ${windowKey} ${shown} full · 5h ${fmtPct(officialPct(u, '5h'))} · 7d ${fmtPct(officialPct(u, '7d'))} [Anthropic's own numbers, live]`
+  // EVERY bucket, each named, because a model-scoped cap is its own window and can be the binding
+  // one while the overall week is nearly empty. Then say which one binds, so the number that drives
+  // the verdict is never left for the reader to infer.
+  const all = [...officialBuckets(u, '5h'), ...officialBuckets(u, '7d')]
+  const shown = all.length ? all.map(b => `${b.label} ${b.pct}%`).join(' · ') : 'no buckets reported'
+  const bind = officialBinding(u, windowKey)
+  const bindNote = bind ? ` — binding for ${windowKey}: ${bind.label} ${bind.pct}%` : ''
+  return `[budget] official usage (${who}): ${shown}${bindNote} [Anthropic's own numbers, live]`
 }
-
-function fmtPct(p: number | null): string { return p === null ? 'n/a' : `${p}%` }
 
 export function fmtMin(min: number): string {
   const t = Math.max(0, Math.round(min))
@@ -242,8 +271,9 @@ async function runOnce(o: BudgetOptions, say: Say): Promise<number> {
   await init()
   const [eta, official] = await Promise.all([fetchEta(o.rateWindowMin), fetchOfficial()])
   const { key, win } = pickWindow(eta, o.window)
-  const pct = officialPct(official, key)
-  const d = applyOfficial(decideBudget(win, o.minutes, o.margin), official, pct)
+  const bind = officialBinding(official, key)
+  const pct = bind?.pct ?? null
+  const d = applyOfficial(decideBudget(win, o.minutes, o.margin), official, pct, bind?.label)
   if (o.json) {
     say(JSON.stringify({
       verdict: d.verdict, window: key, runMinutes: o.minutes, margin: o.margin,
@@ -261,8 +291,12 @@ async function runOnce(o: BudgetOptions, say: Say): Promise<number> {
         ageSeconds: official.ageSeconds,
         reason: official.reason,
         windowPct: pct,
+        bindingBucket: bind?.label ?? null,
         fiveHourPct: officialPct(official, '5h'),
         sevenDayPct: officialPct(official, '7d'),
+        // Every bucket by name — a model-scoped weekly cap (Fable has its own) is a separate window
+        // and a consumer that only reads sevenDayPct cannot tell which one is actually binding.
+        buckets: [...officialBuckets(official, '5h'), ...officialBuckets(official, '7d')],
       } : null,
     }, null, 2))
   } else {
@@ -302,7 +336,8 @@ async function runWatch(o: BudgetOptions, say: Say): Promise<number> {
       const { key, win } = pickWindow(eta, o.window)
       // Re-read the official figure every poll, not once at arm time: a long watch is exactly the
       // situation where the window fills underneath a verdict that was decided while it was empty.
-      const d = applyOfficial(decideBudget(win, remainingMin, o.margin), official, officialPct(official, key))
+      const bind = officialBinding(official, key)
+      const d = applyOfficial(decideBudget(win, remainingMin, o.margin), official, bind?.pct ?? null, bind?.label)
       if (d.verdict === 'NO_GO') {
         // An abort without a culprit forces the operator to start an investigation at the worst
         // possible moment. fiveMin, not oneMin: an abort is about a SUSTAINED drain, and the

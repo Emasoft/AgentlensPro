@@ -13,7 +13,7 @@
 // other way — it is what produced the bogus 96% in the first place.
 
 import * as assert from 'assert'
-import { officialPct, applyOfficial, officialLine, type BudgetDecision } from '../cli/budgetCli'
+import { officialPct, officialBuckets, officialBinding, applyOfficial, officialLine, type BudgetDecision } from '../cli/budgetCli'
 import type { SubscriptionUsage } from '../subscriptionUsage'
 
 function usage(over: Partial<SubscriptionUsage> = {}): SubscriptionUsage {
@@ -76,11 +76,41 @@ suite('budget — the account\'s own utilization sits beside the local projectio
     assert.strictEqual(applyOfficial(GO, usage({ accountVerified: 'no' }), 96).verdict, 'GO')
   })
 
-  test('the printed line names the account, both windows, and its own trustworthiness', () => {
+  test('the printed line names the account, EVERY window by name, and its own trustworthiness', () => {
     const line = officialLine(usage(), '7d')
     assert.ok(line.includes('me@example.com'), 'an unattributed percentage is what caused the incident')
-    assert.ok(line.includes('5h 6%') && line.includes('7d 37%'), 'both windows, always')
+    assert.ok(line.includes('5h 6%') && line.includes('7d 37%'), 'both top-level windows, always')
+    assert.ok(line.includes('Fable 8%'), 'and each model-scoped cap under its OWN name')
+    assert.ok(/binding for 7d: 7d 37%/.test(line), 'and which one actually binds')
     assert.ok(line.includes('live'))
+  })
+
+  // A per-model weekly cap is a SEPARATE window. Collapsing it into one "7d" number destroys the
+  // only distinction that changes the action: weekly_all 37% + Fable 96% means "switch model",
+  // which costs nothing, whereas a bare "7d 96%" reads as "the week is gone, stop working".
+  test('a model-scoped cap can be the binding window, and is named as such', () => {
+    const u = usage({
+      limits: [
+        { kind: 'session', group: 'session', percent: 6, severity: 'normal', resetsAt: null, isActive: true, scopeLabel: null, resetsInSeconds: null },
+        { kind: 'weekly_all', group: 'weekly', percent: 37, severity: 'normal', resetsAt: null, isActive: true, scopeLabel: null, resetsInSeconds: null },
+        { kind: 'weekly_scoped', group: 'weekly', percent: 96, severity: 'critical', resetsAt: null, isActive: true, scopeLabel: 'Fable', resetsInSeconds: null },
+      ],
+    })
+    const bind = officialBinding(u, '7d')
+    assert.strictEqual(bind?.label, 'Fable')
+    assert.strictEqual(bind?.pct, 96)
+
+    const d = applyOfficial(GO, u, bind!.pct, bind!.label)
+    assert.strictEqual(d.verdict, 'NO_GO')
+    assert.ok(/the Fable window is 96% full/.test(d.reason),
+      `the verdict must name Fable, not "the window": ${d.reason}`)
+
+    assert.ok(officialLine(u, '7d').includes('binding for 7d: Fable 96%'))
+  })
+
+  test('buckets are enumerated per window, each under its own label', () => {
+    assert.deepStrictEqual(officialBuckets(usage(), '5h'), [{ label: '5h', pct: 6 }])
+    assert.deepStrictEqual(officialBuckets(usage(), '7d'), [{ label: '7d', pct: 37 }, { label: 'Fable', pct: 8 }])
   })
 
   test('an unusable reading says so instead of being silently omitted', () => {
