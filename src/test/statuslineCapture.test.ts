@@ -160,6 +160,29 @@ suite('statusline capture — pass-through is sacred (end-to-end through the bui
     assert.strictEqual(r.stdout, '')
     assert.strictEqual(r.status, 0)
   })
+
+  test('a server that HANGS (not refuses) must not freeze the render path', function () {
+    if (!available) return this.skip()
+    this.timeout(20_000)
+    // MEASURED at 10.6 SECONDS before the fix — on a surface Claude Code re-runs every render.
+    // A dead PORT refuses instantly and hides this; the failure needs an address that DROPS, which
+    // is what a firewall rule, a suspended container or a VPN flap actually looks like.
+    //
+    // The abort was never the problem: AbortSignal.timeout fires correctly (the fetch rejects in
+    // ~704 ms). Aborting a fetch does not destroy the underlying TCP socket, the socket holds the
+    // event loop open until the OS connect timeout, and the CLI finished by setting `process.exitCode`
+    // — i.e. by waiting for that loop to drain. The timeout bounded the REQUEST; nothing bounded the
+    // PROCESS. Assert the process, therefore, not the request.
+    const t0 = Date.now()
+    const r = spawnSync(process.execPath, [cliJs, 'statusline', '--inner', 'printf ok'], {
+      input: JSON.stringify(SAMPLE), encoding: 'utf-8',
+      env: { ...process.env, AGENTLENS_UI_URL: 'http://10.255.255.1:3000', AGENTLENS_STATUSLINE_TIMEOUT_MS: '700' },
+    })
+    const ms = Date.now() - t0
+    assert.strictEqual(r.stdout, 'ok', 'the status line must still render while the server is unreachable')
+    assert.strictEqual(r.status, 0)
+    assert.ok(ms < 5_000, `the render path took ${ms}ms — a hung socket is holding the process open`)
+  })
 })
 
 suite('statusline install — wrapping and unwrapping must round-trip exactly', () => {

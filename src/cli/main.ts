@@ -34,6 +34,26 @@ import { runStatuslineHistoryCli } from './statuslineHistoryCli'
 
 /** CLI entry. `startServer` lazily imports standalone/server (injected by the shim — src/
  *  cannot import standalone/ without inverting the build layering). Returns the exit code. */
+/** Exit NOW for the three hot-path commands, instead of returning and letting the event loop drain.
+ *
+ *  MEASURED, and this is a user-visible freeze, not a tidiness issue: with the server unreachable in
+ *  a way that HANGS rather than refuses (a firewall DROP, a suspended container, a VPN flap),
+ *  `agentlenspro statusline` took **10.6 seconds** — on a surface Claude Code re-runs on every render.
+ *
+ *  The abort is not the problem and was never the problem. `AbortSignal.timeout(700)` fires correctly
+ *  (measured: the fetch rejects in 704 ms). But aborting a fetch does NOT destroy the underlying TCP
+ *  socket, the socket keeps the event loop alive until the OS connect timeout, and cli.ts finishes by
+ *  setting `process.exitCode` — i.e. by waiting for that loop to drain. So the timeout bounded the
+ *  REQUEST and nothing bounded the PROCESS.
+ *
+ *  Safe for exactly these three because none of them writes to our own stdout: `statusline` execs its
+ *  inner command with stdio 'inherit' so the child writes straight to the terminal fd, and hook/gate
+ *  print at most one short line that has already been flushed by the time we get here. Every other
+ *  subcommand keeps the normal drain-and-exit path, where a truncated stdout would be a real bug. */
+function exitNow(code: number): never {
+  process.exit(code)
+}
+
 export async function cliMain(argv: string[], startServer: () => Promise<unknown>): Promise<number> {
   const cmd = argv[0]
 
@@ -49,15 +69,15 @@ export async function cliMain(argv: string[], startServer: () => Promise<unknown
 
   switch (cmd) {
     case 'hook':
-      return runHookCommand('hook')
+      return exitNow(await runHookCommand('hook'))
     case 'gate':
-      return runHookCommand('gate')
+      return exitNow(await runHookCommand('gate'))
     case 'statusline':
       // The status-line capture wrapper. Sits on the RENDER path (every assistant message plus a
       // refreshInterval timer), so it belongs beside hook/gate in the hot-path band: read stdin,
       // exec the real status-line command, forward the payload. It must reach `return` before any
       // module with side effects is touched.
-      return runStatuslineCommand(argv.slice(1))
+      return exitNow(await runStatuslineCommand(argv.slice(1)))
     case 'statusline-history':
       // Reads the sample store straight off disk (no server), because the moment someone asks what
       // burned the window is exactly when the server may be down.
