@@ -1,6 +1,6 @@
 ---
 name: statusline-capture-and-store
-description: "how do I get rate_limits without hitting the usage endpoint / why is session_id coming back as hugeint / JSON.stringify throws Do not know how to serialize a BigInt / why did lifecycle-events go empty / can I add a second statusLine / does Claude Code send the 5h 7d windows on stdin / should I pack N samples per row in parquet / how big should a parquet chunk be / get_account_status shows another account's window / was that turn actually a cache miss / how do I verify a claimed cold cache write in one command / is the 1-hour write tier real on this machine / why does the same turn show up twelve times / why is the burn monitor reporting far more cost than was really spent / the statusline burn path over-counts / I raised a feed's sample rate and its deltas broke — the statusline sample store, its measured format choices, the cache/peaks query views, the one-event-per-turn billing rule, and the DuckDB traps that shipped bugs"
+description: "how do I get rate_limits without hitting the usage endpoint / why is session_id coming back as hugeint / JSON.stringify throws Do not know how to serialize a BigInt / why did lifecycle-events go empty / can I add a second statusLine / does Claude Code send the 5h 7d windows on stdin / should I pack N samples per row in parquet / how big should a parquet chunk be / get_account_status shows another account's window / was that turn actually a cache miss / how do I verify a claimed cold cache write in one command / is the 1-hour write tier real on this machine / why does the same turn show up twelve times / why is the burn monitor reporting far more cost than was really spent / the statusline burn path over-counts / I raised a feed's sample rate and its deltas broke / Could not convert string to INT128 / failed to cast column session_id from VARCHAR to UUID / one row blinds every view — the statusline sample store, its measured format choices, the cache/peaks query views, the one-event-per-turn billing rule, and the DuckDB traps that shipped bugs"
 ocd: 2026-08-01
 lmd: 2026-08-01
 metadata:
@@ -74,12 +74,20 @@ Live result: **109×** — 6,310 rows / 13 sessions in 85.3 KB against a 9.08 MB
 
 ## Three DuckDB traps that each SHIPPED a bug (all invisible to tsc)
 
-1. **UUID auto-detection.** `read_json_auto` detects a UUID-*shaped* string as the UUID type, and the
-   node client returns it as `{hugeint:"-42379450445917529599431978701661611460"}` — not the id, and
-   useless. The inference is **per-file**, so the same column can be UUID in one part and VARCHAR in
-   another. **Always `CAST(session_id AS VARCHAR)`.** The test that missed this seeded `"sess-0"`,
-   which is never inferred as UUID — seed REAL UUIDs and assert `typeof === 'string'` (an object is
-   truthy and sails through a truthiness check).
+1. **UUID auto-detection — and it bites TWICE, at two different layers.**
+   *(a) In the RESULT.* `read_json_auto` detects a UUID-*shaped* string as the UUID type and the node
+   client returns it as `{hugeint:"-42379450445917529599431978701661611460"}` — not the id, and
+   useless. `CAST(session_id AS VARCHAR)` in the SELECT list fixes this half. The test that missed it
+   seeded `"sess-0"`, which is never inferred as UUID — seed REAL UUIDs and assert
+   `typeof === 'string'` (an object is truthy and sails through a truthiness check).
+   *(b) In the READ, where the SELECT-list cast CANNOT reach.* The inference is **per-file**, so one
+   part can be UUID and another VARCHAR; the union reconciles them to **UUID**, and multi-file
+   `read_parquet([...])` does the same *internally*, taking its schema from the FIRST file. A single
+   session whose id is not UUID-shaped then kills the query outright —
+   `Could not convert string 'x' to INT128` — and it killed three of five live views. Normalize
+   **per FILE** (`* REPLACE` over a zero-row typed template, since `* REPLACE` is a binder error when
+   the column is absent) **and** seal `session_id` as VARCHAR so new parts need no repair; pre-fix
+   UUID parts sit on disk for the whole retention, so both are required, not either.[^8]
 2. **`JSON.stringify` throws on BigInt.** Every BIGINT column (token counts, epoch ms, `count(*)`)
    arrives as a JS `BigInt`: *"Do not know how to serialize a BigInt"*. A table view hides it behind
    `String()`, so `--json` is the only broken path and it fails outright. Convert ≤2^53 to number and
@@ -119,7 +127,7 @@ caller has an estimate to fall back on and no way to know the "authoritative" fi
 else's. See [[agentlens-account-window-budget]], [[cache-ttl-model]].
 
 
-^ATOM-IXQ7-DOMU [desc:"The two query views that answer cost questions from the payload — cache (warm vs cold, cost bracketed by TTL tier) and peaks (delta + its gap) — and the measured agreement that validates the pricing t", keywords: was_that_turn_a_cache_miss verify_a_cache_miss_claim statusline-history_cache_view cache_write_vs_cache_read_per_turn is_the_1h_write_tier_real d_cost_across_an_idle_gap peaks_column_overstates_a_turn, ocd: 2026-08-01, lmd: 2026-08-01] [^5] [^6] [^7]
+^ATOM-IXQ7-DOMU [desc:"The two query views that answer cost questions from the payload — cache (warm vs cold, cost bracketed by TTL tier) and peaks (delta + its gap) — and the measured agreement that validates the pricing t", keywords: was_that_turn_a_cache_miss verify_a_cache_miss_claim statusline-history_cache_view cache_write_vs_cache_read_per_turn is_the_1h_write_tier_real d_cost_across_an_idle_gap peaks_column_overstates_a_turn, ocd: 2026-08-01, lmd: 2026-08-01] [^5] [^6] [^7] [^8]
 
 ## Answering a cost question from the payload: `cache` and `peaks`
 
@@ -168,3 +176,4 @@ so a pair bracketing an idle stretch is an INTERVAL total covering every turn in
 [^5]: [id:ATOM-6DGB-S0MO, status:valid, keywords:"same_turn_appears_twelve_times statusline_re-renders_the_same_usage one_row_per_sample_is_wrong current_usage_is_the_last_turn_not_this_sample output_tokens_grows_while_streaming dedupe_on_the_input_buckets", ocd:2026-08-01, lmd:2026-08-01] DO NOT emit one row per status-line sample when reporting per-turn usage, BECAUSE `current_usage` describes the LAST COMPLETED turn and the status line re-renders every ~3 s whether or not a turn happened — the first live run showed a single compaction rewrite twelve times and nothing else, a table that reads as twelve cold writes. DO group by the turn's INPUT buckets (input + cache_creation + cache_read, fixed the moment the request is sent) and take `max(output_tokens)`: grouping on the full tuple splits one turn back into its streaming snapshots (out=2, then 119, then 170).
 [^6]: [id:ATOM-118H-5886, status:valid, keywords:"d_cost_looks_like_a_five_dollar_turn cumulative_cost_delta_over_an_idle_gap per-turn_cost_overstated_15x cost_total_cost_usd_is_cumulative sampling_stops_while_idle", ocd:2026-08-01, lmd:2026-08-01] DO NOT read a delta of `cost.total_cost_usd` as one turn's cost without checking the time gap between the two samples, BECAUSE the field is cumulative and sampling STOPS while a session is idle, so the pair bracketing an idle stretch carries every turn in between — read that way it reported a $0.35 warm turn as a $5 cold write, and the claim was repeated for a dozen turns before the transcript contradicted it. DO show the gap beside the delta and label anything past ~60 s an INTERVAL total.
 [^7]: [id:ATOM-UQSH-Y776, status:valid, keywords:"burn_monitor_over-counts statusline_path_inflates_cost_36x one_billing_event_per_sample snapshot_field_treated_as_an_increment guard_covered_cost_but_not_tokens raising_a_sample_rate_broke_a_delta", ocd:2026-08-01, lmd:2026-08-01] DO NOT emit a per-turn billing event per status-line SAMPLE, BECAUSE `current_usage` is a snapshot of the last COMPLETED turn that is republished every ~3 s — measured, 704 turns arrived as 34,498 samples and fed the burn monitor $7,628 for $208 of real spend (36.7x). The cost half of the guard was correct and useless: `deltaCostUsd` IS 0 on a re-render, but the condition was `deltaTokens > 0 || deltaCost > 0` and `deltaTokens` is the raw bucket sum. DO key the turn on its INPUT buckets and UPDATE the open event; and when you raise a feed's sample rate, re-derive every delta computed from it.
+[^8]: [id:ATOM-KR07-9K0D, status:valid, keywords:"could_not_convert_string_to_INT128 failed_to_cast_column_session_id_from_VARCHAR_to_UUID one_row_blinds_every_view non_uuid_session_id_breaks_duckdb cast_in_the_select_list_does_not_help read_parquet_takes_the_schema_from_the_first_file", ocd:2026-08-01, lmd:2026-08-01] DO NOT rely on `CAST(session_id AS VARCHAR)` in the SELECT list to survive DuckDB's per-file UUID inference, BECAUSE the coercion happens in the UNION (and inside multi-file `read_parquet`, which takes its schema from the FIRST file) — before any projection — so ONE session with a non-UUID id killed three of five live views with `Could not convert string 'x' to INT128`. DO normalize per FILE (`* REPLACE` over a zero-row typed template, since REPLACE is a binder error on a missing column) AND seal `session_id` as VARCHAR, since pre-fix UUID parts sit on disk for the whole retention.
