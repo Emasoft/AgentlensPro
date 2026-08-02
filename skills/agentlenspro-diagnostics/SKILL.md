@@ -93,6 +93,7 @@ reference for when that command's output needs interpreting.
 | "How long until my account's window runs out?" | `get_window_eta` |
 | "What is even IN my context, and what did it cost?" | `get_context_composition --sessionId <id>` |
 | "Which model/plan am I on; how full are the windows?" | `get_account_status` |
+| "Where does EVERY account stand — should I rotate, and onto which one?" | `agentlenspro get_account_status --all` — reads only files, so it **answers with the server down** |
 | "Is this session running stale plugin code?" | `get_loaded_plugin_versions --staleOnly` |
 | "I don't know which tool I need" | `agentlenspro list --desc`, then `agentlenspro help <tool>` |
 
@@ -948,6 +949,50 @@ degrade to the last reading with an explicit `reason` (`cooldown` / `no_token` /
 rendering an already-rolled window as live. On macOS the token is in the login keychain, so the read
 is **opt-in**: export `AGENTLENS_READ_KEYCHAIN_USAGE=1` (an un-ACL'd keychain read pops a password
 prompt, which is unacceptable from a status line or hook).
+
+## Every account, not just the live one — `get_account_status --all`
+
+`get_account_status` answers for the account you are on **right now**. That is the wrong shape for a
+rotator: deciding whether to switch needs the headroom of the accounts you are **not** on, and the only
+way to learn an account's status used to be to already be on it. **You had to rotate to find out
+whether you should rotate.**
+
+```bash
+agentlenspro get_account_status --all          # a table; '*' marks the live account
+agentlenspro get_account_status --all --json   # every field, including the reason behind every null
+```
+
+```
+   account   email                       plan     5h window   7d window   observed  left
+*  75099fe9  fmuaddib@gmail.com          Max 20x  unreadable  unreadable  never     (on it)
+   32eb8302  ipazia.emasoft@gmail.com    Max 20x  0% rolled   77% aged    352m ago  07-31 15:28
+   80ddbe47  emanuele.sabetta@gmail.com  Max 20x  unreadable  unreadable  never     07-30 17:19
+```
+
+**No credential is read** — the OAuth token contract is unchanged. Every row is what was already
+observed while that account was live, stamped. It is assembled entirely from files, so it **answers
+with the server down**, which is exactly when a wedged machine is asking.
+
+**The verdict is per WINDOW, not per account**, because the 5h and 7d roll at wildly different rates:
+
+| freshness | meaning | number |
+|---|---|---|
+| `fresh` | measured inside the cache TTL | the percentage |
+| `aged` | past the TTL, but the window has **not** reset — utilization only grows | a **LOWER bound** |
+| `rolled` | the window reset **and** this machine was already off the account when the new one began | **INFERRED ~0%** |
+| `stale` | reset, but activity since cannot be excluded | `null` + a reason |
+| `unreadable` | never observed | `null` + a reason |
+
+`rolled` is the one that pays for the feature: an account at 91% whose 5h window has since reset, that
+nothing local can have filled, is **available** — not unknown. It is an **inference**, it says so, and
+its precondition ("no activity observed **by this machine**") travels in the payload — audit it with
+the `left` column before acting. It is deliberately suppressed when the reading's own account
+contradicts `~/.claude.json`, because the premise then rests on a claim known to be wrong.
+
+**`unreadable` is never an absent row.** "Cannot read this account" and "this account has no headroom"
+are opposite signals; a missing row renders as the second. An empty roster is **BLIND** (exit 1),
+never "no accounts". Per-model weekly buckets are reported separately and **never** folded into the
+verdict — a spent per-model bucket does not block other models.
 
 ## Per-project and per-subagent history — `agentlenspro statusline-history`
 

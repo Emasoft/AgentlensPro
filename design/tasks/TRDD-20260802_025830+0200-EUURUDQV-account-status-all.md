@@ -3,7 +3,7 @@ trdd-id: EUURUDQV
 title: get_account_status --all — every observed account, honestly stamped
 column: todo
 created: 2026-08-02T02:58:30+0200
-updated: 2026-08-02T03:10:00+0200
+updated: 2026-08-02T03:55:00+0200
 current-owner: unassigned
 task-type: feature
 npt: []
@@ -64,13 +64,19 @@ before Phase 2 is the difference between `--all` having history on day one and h
 
 Landed and deployed: archive materialized on restart with the live account's reading preserved.
 
-## Phase 2 — the plural verb
+## Phase 2 — the plural verb — ✅ DONE
 
 Roster (`account-state.ndjson` — the ONLY source that knows an account exists) × per-account cache.
 
-- [ ] `accounts[]` with the existing single-account shape plus `isLive`, `observedAt`, `staleSeconds`,
-      and `freshness`; plus `liveAccountId`.
-- [ ] **`freshness` is the load-bearing field**, four values:
+- [x] `accounts[]` with `isLive`, `observedAt`, `staleSeconds`, `leftAt` and `freshness`; plus
+      `liveAccountId` and `blind`. `src/allAccounts.ts`, wired to `get_account_status --all` (MCP) and
+      to a CLI fast path that **bypasses the server** — the description already claimed "works with the
+      server cold" and the first build did not: stopping the server returned `cannot reach
+      http://localhost:4316/mcp`, the one answer useless to a rotator. Fixed, not reworded.
+- [x] **`freshness` is per WINDOW, not per account** — the 5h and 7d roll at wildly different rates, so
+      a day-old reading gives a known-empty 5h and a merely-aged 7d and one label cannot say both. Five
+      values (an `aged` was added: past the TTL but not reset, so the number survives as a LOWER bound
+      rather than being discarded):
 
   | verdict | meaning |
   |---|---|
@@ -79,14 +85,29 @@ Roster (`account-state.ndjson` — the ONLY source that knows an account exists)
   | `stale` | expired, activity since cannot be excluded ⇒ `null` **with a reason** |
   | `unreadable` | roster knows the account, no usable observation ⇒ `null` **with a reason** |
 
-- [ ] `rolled` prints its **precondition in the payload** ("no activity observed by THIS machine"). It
+- [x] `rolled` prints its **precondition in the payload** ("no activity observed by THIS machine"). It
       is an inference, and the same account used from another host breaks it. A consumer must be able to
       tell an inference from a measurement; a rotator that cannot is the failure this doctrine exists to
       prevent.
-- [ ] `unreadable` is never an absent row. The outage above is exactly "not exhausted, unreadable", and
+- [x] `unreadable` is never an absent row. The outage above is exactly "not exhausted, unreadable", and
       a missing row renders identically to an account with no headroom.
-- [ ] Per-account `mode`; where 5h/7d are not the governing constraint, `null` **with a reason**, never
-      `0` — the contract `calibrated-exceeded` already honors.
+- [x] Per-account `mode`; every null carries a reason and `0` is never a stand-in for unknown.
+- [x] Per-model weekly buckets reported but NOT folded into the verdict.
+
+**Two corrections it took to get `rolled` right, both worth keeping:**
+
+1. The comparison is `leftAt` vs the **RESET INSTANT**, not vs the reading. Against `fetchedAt` it
+   reads plausibly and never fires — a reading is normally taken WHILE the account is live, so the
+   machine always leaves after it. Caught by a test that expected `rolled` and got `stale`: the
+   fixture was right and the condition was wrong.
+2. A **suspect account label disables the inference entirely**. `leftAt` derives from the timeline's
+   accountId, which comes from `~/.claude.json` — so when the reading's own account contradicts that
+   claim, "this machine left the account" is unfounded. Not hypothetical: on this host the config says
+   fmuaddib while the keychain credential belongs to ipazia, so every reading on record is ipazia's.
+
+16 tests; six mutations each verified to fail (wrong reset instant 4, stale returning 0 4, no suspect
+guard 1, omitting unreadable accounts 2, live account inheriting a stale leftAt 1, verdict taking the
+better window 1).
 
 ## Phase 3 — payload normalization the corpus measured against the live endpoint
 
