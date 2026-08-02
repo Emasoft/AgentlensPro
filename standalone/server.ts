@@ -84,6 +84,7 @@ import { formatGenAiEventContent } from '../src/genAiContent'
 import { ResourceMonitor } from '../src/resourceMonitor'
 import { AdmissionController, admissionLimitsFromEnv, type AdmitResult } from '../src/admissionController'
 import { resolveRetention } from '../src/retentionConfig'
+import { listObservedAccountUsage } from '../src/subscriptionUsage'
 
 const OTLP_PORT  = parseInt(process.env.OTLP_PORT  ?? '4318')
 const UI_PORT    = parseInt(process.env.UI_PORT    ?? '3000')
@@ -674,6 +675,16 @@ const bodiesPurgeTimer = setInterval(() => { void archiveOtelBodies() }, BODIES_
 bodiesPurgeTimer.unref()
 const hookPurgeTimer = setInterval(() => { purgeHookEvents(); purgeLogEvents(); purgeStatusline() }, 3600e3)
 hookPurgeTimer.unref()
+// Adopt the single-file usage cache into the per-account archive (issue #8). A usage FETCH archives
+// itself, but the reading already on disk when this shipped has no such moment — and it is destroyed
+// the next time any account is fetched. This is deliberately on the slow maintenance timer rather
+// than the read path: the status line calls into usage on every render, and one file read per render
+// to preserve a record that changes a few times a day is the wrong trade. Runs once at startup too,
+// because an hour is long enough for a rotation to happen first.
+const adoptUsageArchive = (): void => { try { listObservedAccountUsage() } catch { /* best effort */ } }
+adoptUsageArchive()
+const usageArchiveTimer = setInterval(adoptUsageArchive, 3600e3)
+usageArchiveTimer.unref()
 // Sealing is separate from purging: a full WAL must become an immutable Parquet part promptly (a
 // 10k-row chunk is ~16 min at 20 instances), and a past day's WAL must seal whatever its size so old
 // partitions stop costing raw-JSON reads on every query. Cheap when nothing qualifies.

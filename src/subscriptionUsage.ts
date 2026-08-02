@@ -343,16 +343,15 @@ export function normalize(
   }
 }
 
-function readCache(): SubscriptionUsage | null {
-  let raw: Partial<SubscriptionUsage> | null = null
-  try { raw = JSON.parse(fs.readFileSync(cachePath(), 'utf8')) as Partial<SubscriptionUsage> } catch { return null }
+/** NORMALIZE ABSENCE AT THE BOUNDARY. A cache file written before the identity fields existed simply
+ *  has no such key, and JSON has no `undefined` — so the parsed value is `undefined`, and
+ *  `undefined === null` is FALSE. Every identity comparison downstream is written against `null`, so
+ *  without this coercion a pre-upgrade file takes the "fingerprints differ" branch and a perfectly
+ *  valid reading gets reported as ANOTHER ACCOUNT'S. Absent and null must be the same thing exactly
+ *  once — here — rather than at each of the comparison sites. Shared by the live cache and the
+ *  per-account archive so a record cannot mean two different things depending on which file it is in. */
+function normalizeCacheRecord(raw: Partial<SubscriptionUsage> | null): SubscriptionUsage | null {
   if (!raw || typeof raw.fetchedAt !== 'number') return null
-  // NORMALIZE ABSENCE AT THE BOUNDARY. A cache file written before the identity fields existed
-  // simply has no such key, and JSON has no `undefined` — so the parsed value is `undefined`, and
-  // `undefined === null` is FALSE. Every identity comparison downstream is written against `null`,
-  // so without this coercion a pre-upgrade file takes the "fingerprints differ" branch and a
-  // perfectly valid reading gets reported as ANOTHER ACCOUNT'S. Absent and null must be the same
-  // thing exactly once, here, rather than at each of the comparison sites.
   return {
     ...(raw as SubscriptionUsage),
     accountFp: raw.accountFp ?? null,
@@ -363,6 +362,91 @@ function readCache(): SubscriptionUsage | null {
     accountLabelSuspect: raw.accountLabelSuspect === true,
     limits: Array.isArray(raw.limits) ? raw.limits : [],
   }
+}
+
+function readCache(): SubscriptionUsage | null {
+  try {
+    return normalizeCacheRecord(JSON.parse(fs.readFileSync(cachePath(), 'utf8')) as Partial<SubscriptionUsage>)
+  } catch { return null }
+}
+
+// ─── Per-account archive ────────────────────────────────────────────────────────────────────────
+//
+// WHY IT EXISTS. The live cache above is ONE file, overwritten on every fetch, so a rotation destroys
+// the previous account's numbers — and "where does every account stand" is then unanswerable for any
+// account that is not live right now. That is the bootstrap paradox in issue #8: deciding whether to
+// rotate needs the headroom of the accounts you are NOT on, and the only way to learn it was to
+// already be on them. Measured cost: a host stalled at the limit for hours while one of its accounts
+// had a nearly empty window that nothing could see.
+//
+// It is deliberately ADDITIVE — the live cache keeps its exact behaviour (TTL, cooldown, lock, every
+// existing consumer). This side-write only stops us from THROWING AWAY what we already fetched.
+//
+// KEYED BY accountUuid, NOT accountFp. The fingerprint is derived from the REFRESH token, which
+// Anthropic rotates server-side (see fingerprint() above), so it changes without an account switch —
+// keying files on it would scatter one account across a growing pile of orphaned files and never
+// group by account at all. The uuid is the stable identity; the fp stays INSIDE the record as the
+// cache-validity key it already is. (The issue comment proposed <accountFp>.json; reading
+// fingerprint()'s own doc comment is what corrected it.)
+//
+// It cannot be backfilled: a reading not archived at fetch time is gone. That is why this ships
+// before the plural verb that consumes it, not with it.
+
+const accountUsageDir = (): string => dataPath('subscription-usage')
+
+/** A uuid comes from the NETWORK (`fetchTokenIdentity`), and this one becomes a path segment. Anything
+ *  outside hex-and-dashes is refused rather than sanitized: a value that is not a uuid is not an
+ *  identity we can file under, and "clean it up and use it anyway" is how `../` becomes a filename. */
+const UUID_SHAPE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
+function accountUsagePath(uuid: string): string | null {
+  return UUID_SHAPE.test(uuid) ? path.join(accountUsageDir(), `${uuid}.json`) : null
+}
+
+/** File a reading under its own account. No-op when the account could not be identified: an
+ *  unattributed row cannot answer "whose numbers are these", and inventing a key for it would put one
+ *  account's figures under a name that means nothing — the exact misattribution the accountFp/
+ *  accountVerified machinery exists to prevent. Best-effort: the live cache is still authoritative for
+ *  the live account, so a failure here degrades the plural view, never the singular one. */
+export function archiveAccountUsage(u: SubscriptionUsage | null): void {
+  if (!u || !u.accountUuid) return
+  const dest = accountUsagePath(u.accountUuid)
+  if (!dest) return
+  try {
+    fs.mkdirSync(accountUsageDir(), { recursive: true })
+    // Write-then-rename: a reader can hit this file at any moment, and a half-written JSON parses as
+    // nothing at all — which would read as "this account was never observed", the one answer that
+    // must never be fabricated.
+    const tmp = `${dest}.tmp-${process.pid}`
+    fs.writeFileSync(tmp, JSON.stringify(u))
+    fs.renameSync(tmp, dest)
+  } catch { /* best effort */ }
+}
+
+/** Every account this machine has ever fetched a reading for, newest-first.
+ *
+ *  Adopts the legacy single-file cache on the way past, so the one reading already on disk when this
+ *  shipped is not lost — but only when it is NEWER than what is already filed for that account, or a
+ *  stale legacy file would clobber a fresher archived record on every call. */
+export function listObservedAccountUsage(): SubscriptionUsage[] {
+  const legacy = readCache()
+  if (legacy?.accountUuid) {
+    const dest = accountUsagePath(legacy.accountUuid)
+    let existing: SubscriptionUsage | null = null
+    if (dest) { try { existing = normalizeCacheRecord(JSON.parse(fs.readFileSync(dest, 'utf8')) as Partial<SubscriptionUsage>) } catch { /* none yet */ } }
+    if (!existing || legacy.fetchedAt > existing.fetchedAt) archiveAccountUsage(legacy)
+  }
+  let names: string[]
+  try { names = fs.readdirSync(accountUsageDir()) } catch { return [] }
+  const out: SubscriptionUsage[] = []
+  for (const n of names) {
+    if (!n.endsWith('.json')) continue                       // skips any .tmp-<pid> mid-write
+    if (!UUID_SHAPE.test(n.slice(0, -5))) continue           // and anything that is not one of ours
+    try {
+      const rec = normalizeCacheRecord(JSON.parse(fs.readFileSync(path.join(accountUsageDir(), n), 'utf8')) as Partial<SubscriptionUsage>)
+      if (rec) out.push(rec)
+    } catch { /* an unreadable record is one account we cannot report, not a reason to report none */ }
+  }
+  return out.sort((a, b) => b.fetchedAt - a.fetchedAt)
 }
 
 /** Is this reading obsolete? TWO independent ways, and the second is the one that matters most.
@@ -507,6 +591,9 @@ export async function getSubscriptionUsage(
       const claimed = getCurrentAccount().email
       const usage = normalize(await res.json() as RawUsage, now, 'ok', now, currentFp, identity, claimed)
       try { fs.writeFileSync(cachePath(), JSON.stringify(usage)) } catch { /* best effort */ }
+      // The SAME reading, also filed under its own account. This is the only moment it can be kept:
+      // the next fetch overwrites the line above, and a reading not archived here is gone forever.
+      archiveAccountUsage(usage)
       try { fs.unlinkSync(cooldownPath()) } catch { /* no cooldown to clear */ }
       return usage
     } finally { clearTimeout(timer) }

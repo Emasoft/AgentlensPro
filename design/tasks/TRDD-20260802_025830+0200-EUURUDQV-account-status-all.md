@@ -3,7 +3,7 @@ trdd-id: EUURUDQV
 title: get_account_status --all — every observed account, honestly stamped
 column: todo
 created: 2026-08-02T02:58:30+0200
-updated: 2026-08-02T02:58:30+0200
+updated: 2026-08-02T03:10:00+0200
 current-owner: unassigned
 task-type: feature
 npt: []
@@ -31,20 +31,38 @@ unanimous and unavailable to us: every multi-account tool holds a credential per
 usage endpoint N times. So this feature reports each account **as last observed, stamped** — never by
 acquiring a credential.
 
-## Phase 1 — key the usage cache by account (do this FIRST, alone)
+## Phase 1 — key the usage cache by account (do this FIRST, alone) — ✅ DONE
 
 `~/.agentlens/subscription-usage.json` is a single file, overwritten on every fetch, so every rotation
-destroys the previous account's last true reading. Change it to
-`~/.agentlens/subscription-usage/<accountFp>.json`.
+destroys the previous account's last true reading.
 
 Small, and **time-sensitive**: it accumulates from the day it ships and cannot be backfilled. Landing it
 before Phase 2 is the difference between `--all` having history on day one and having one row.
 
-- [ ] Per-account cache files, atomic write, same TTL/cooldown/lock discipline as today.
-- [ ] Migration reads the legacy single file once and files it under its own `accountFp` — the existing
-      "a pre-upgrade cache file was reported as ANOTHER ACCOUNT'S" bug is the reason this is not a
-      blind copy; verify the fingerprint before adopting it.
+- [x] Per-account archive at `~/.agentlens/subscription-usage/<accountUuid>.json`, atomic
+      write-then-rename, **additive** — the live cache keeps its exact TTL/cooldown/lock behaviour and
+      every existing consumer is untouched. This only stops us throwing away what was already fetched.
+- [x] **KEYED BY `accountUuid`, NOT `accountFp`** — this corrects the shape proposed in the issue
+      comment. `fingerprint()` derives from the REFRESH token, which Anthropic rotates server-side, so
+      the fp changes without an account switch; keying files on it would scatter one account across a
+      pile of orphaned files. The fp stays INSIDE the record as the cache-validity key it already is.
+      Found by reading `fingerprint()`'s own doc comment, which says exactly this.
+- [x] A uuid arriving from the network is refused unless it is uuid-shaped, never sanitized — it
+      becomes a path segment. The first version of that test was **vacuous** (it asserted the wrong
+      location, so an escaped write landed outside the sandbox and the test passed with the guard
+      removed); the data dir is now nested inside the sandbox so an escape is visible.
+- [x] Legacy single file adopted, but only when NEWER than what is already archived — otherwise a
+      stale legacy file walks a fresher record backwards on every call.
+- [x] An unidentified reading is NOT filed under a made-up key, and one unreadable record costs one
+      account rather than the whole listing.
+- [x] Adoption runs at server start and on the hourly maintenance timer — deliberately NOT on the read
+      path, which the status line hits every render.
+- [x] 7 tests, each verified to fail against its own broken version (fp-keying: 4 fail; no path guard:
+      1; unconditional adoption: 1; abort-on-bad-record: 1).
 - [ ] Retention: these are small and their whole value is age. Do not purge on the hook-event schedule.
+      **Still open** — nothing purges them today, which is correct for now but undecided.
+
+Landed and deployed: archive materialized on restart with the live account's reading preserved.
 
 ## Phase 2 — the plural verb
 

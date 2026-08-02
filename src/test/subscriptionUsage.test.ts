@@ -11,6 +11,7 @@ import * as os from 'os'
 import * as path from 'path'
 import {
   usageBar, retryAfterSeconds, normalize, formatSubscriptionUsage, loadToken,
+  archiveAccountUsage, listObservedAccountUsage,
   type SubscriptionUsage,
 } from '../subscriptionUsage'
 
@@ -115,5 +116,120 @@ suite('subscriptionUsage', () => {
       assert.strictEqual(r.token, 'tok-abc')
       assert.strictEqual(r.expiresAt, NOW + 3_600_000)
     } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+  })
+})
+
+// ─── The per-account archive (issue #8, phase 1) ─────────────────────────────────────────────────
+//
+// The live cache is one file, overwritten on every fetch, so a rotation used to destroy the previous
+// account's numbers outright. These pin the archive that stops that — the part that cannot be
+// backfilled, so a regression here is silent and permanent.
+suite('subscription usage — the per-account archive', () => {
+  const A = '32eb8302-c2a4-4333-a15f-ba17ec8960ad'
+  const B = '75099fe9-8c66-4edd-bd99-a05593a57928'
+
+  function rec(uuid: string | null, fetchedAt: number, label: string): SubscriptionUsage {
+    return {
+      fetchedAt, ageSeconds: 0, stale: false, reason: 'ok',
+      accountFp: 'fp-' + label, accountUuid: uuid, accountLabel: label, accountTier: null,
+      localClaimedLabel: null, accountLabelSuspect: false, accountVerified: 'yes',
+      limits: [], fiveHourPercent: 10, sevenDayPercent: 20,
+      usageCreditsEnabled: false, spendPercent: null, note: '',
+    } as unknown as SubscriptionUsage
+  }
+
+  /** Each case gets its own DATA_DIR: the archive is real files, and a shared dir would let one
+   *  test's records answer another's question.
+   *
+   *  The data dir is NESTED one level inside the sandbox on purpose. A `../../` traversal out of
+   *  `<data>/subscription-usage/` lands in the sandbox root, which the test owns and can assert is
+   *  untouched. Without the nesting it lands in os.tmpdir(), which is full of other files — and the
+   *  escape-attempt test then passes against a version with NO path guard at all. (Measured: it did.) */
+  function inDataDir<T>(fn: (sandbox: string) => T): T {
+    const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'acct-arch-'))
+    const dir = path.join(sandbox, 'data')
+    fs.mkdirSync(dir)
+    const prev = process.env.AGENTLENS_DATA_DIR
+    process.env.AGENTLENS_DATA_DIR = dir
+    try { return fn(sandbox) } finally {
+      if (prev === undefined) delete process.env.AGENTLENS_DATA_DIR
+      else process.env.AGENTLENS_DATA_DIR = prev
+      fs.rmSync(sandbox, { recursive: true, force: true })
+    }
+  }
+
+  test('a second account does not overwrite the first — that IS the feature', () => {
+    inDataDir(() => {
+      archiveAccountUsage(rec(A, 1000, 'a@x'))
+      archiveAccountUsage(rec(B, 2000, 'b@x'))
+      const all = listObservedAccountUsage()
+      assert.strictEqual(all.length, 2, 'both accounts must survive; one file per fetch is the bug')
+      assert.deepStrictEqual(all.map(r => r.accountUuid), [B, A], 'newest first')
+    })
+  })
+
+  test('the same account re-archived replaces its own record rather than accumulating', () => {
+    inDataDir(() => {
+      archiveAccountUsage(rec(A, 1000, 'a@x'))
+      archiveAccountUsage(rec(A, 5000, 'a@x'))
+      const all = listObservedAccountUsage()
+      assert.strictEqual(all.length, 1)
+      assert.strictEqual(all[0].fetchedAt, 5000)
+    })
+  })
+
+  test('an unidentified reading is NOT filed under a made-up key', () => {
+    inDataDir(() => {
+      archiveAccountUsage(rec(null, 1000, 'who?'))
+      assert.deepStrictEqual(listObservedAccountUsage(), [],
+        'a row that cannot say whose numbers it holds is worse than no row')
+    })
+  })
+
+  test('a uuid that is not a uuid never becomes a path', () => {
+    inDataDir(sandbox => {
+      // It arrives from the NETWORK. Sanitizing and using it anyway is how `../` becomes a filename.
+      for (const bad of ['../../evil', '../escape', 'a/b', '..', '', 'not-a-uuid']) {
+        archiveAccountUsage(rec(bad, 1000, 'x'))
+      }
+      assert.deepStrictEqual(listObservedAccountUsage(), [], 'and none of them may be reported back')
+      // The load-bearing assertion: NOTHING appeared outside the data dir. Checking only that the
+      // listing is empty is not enough — an escaped write lands outside the archive, so the listing
+      // stays empty either way and the test guards nothing.
+      assert.deepStrictEqual(fs.readdirSync(sandbox), ['data'],
+        'a write escaped the data directory')
+      const archive = path.join(sandbox, 'data', 'subscription-usage')
+      assert.deepStrictEqual(fs.existsSync(archive) ? fs.readdirSync(archive) : [], [],
+        'nothing may be filed under a key that is not an account')
+    })
+  })
+
+  test('the legacy single-file cache is adopted, but never clobbers a FRESHER archived record', () => {
+    inDataDir(() => {
+      const dir = String(process.env.AGENTLENS_DATA_DIR)
+      // Case 1: nothing archived yet — the one reading already on disk must not be lost.
+      fs.writeFileSync(path.join(dir, 'subscription-usage.json'), JSON.stringify(rec(A, 3000, 'a@x')))
+      assert.strictEqual(listObservedAccountUsage().length, 1, 'legacy reading adopted')
+      assert.strictEqual(listObservedAccountUsage()[0].fetchedAt, 3000)
+      // Case 2: the archive is NEWER. Re-adopting unconditionally would walk it backwards on every
+      // call — the legacy file is only overwritten on a fetch, so it goes stale while the archive does not.
+      archiveAccountUsage(rec(A, 9000, 'a@x'))
+      assert.strictEqual(listObservedAccountUsage()[0].fetchedAt, 9000,
+        'a stale legacy file must not overwrite a fresher archived record')
+    })
+  })
+
+  test('one unreadable record costs one account, not all of them', () => {
+    inDataDir(() => {
+      archiveAccountUsage(rec(A, 1000, 'a@x'))
+      fs.writeFileSync(path.join(String(process.env.AGENTLENS_DATA_DIR), 'subscription-usage', `${B}.json`), '{ truncated')
+      const all = listObservedAccountUsage()
+      assert.strictEqual(all.length, 1, 'the readable account still reports')
+      assert.strictEqual(all[0].accountUuid, A)
+    })
+  })
+
+  test('reading an empty archive is [] — and it is the caller who must not call that "no accounts"', () => {
+    inDataDir(() => { assert.deepStrictEqual(listObservedAccountUsage(), []) })
   })
 })
