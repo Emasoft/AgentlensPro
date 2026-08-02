@@ -51,6 +51,11 @@ const DENY = [
   `gh issue comment 8 -F ${leakFile}`,
   `cd /tmp && gh issue comment 8 --body "${ADDR}"`,              // later segment
   `gh issue create --title T --body "${WIN_HOME}\\notes"`,
+  // @-mentions in rendered prose page a real GitHub account. Both of these are TAKEN handles that
+  // agents actually paged on 2026-08-02 by writing role names.
+  `gh issue comment 8 --body "routing this to ${AT}manager for approval"`,
+  `gh issue create --title T --body "the ${AT}janitor heartbeat covers it"`,
+  `gh pr comment 4 --body "cc ${AT}Emasoft"`,                     // even the owner: the rule is absolute
 ]
 
 const ALLOW = [
@@ -73,6 +78,14 @@ const ALLOW = [
   'git add scripts/deny-identity-leak-to-github.js',
   'node scripts/test-deny-identity-leak-to-github.js',
   `echo "${ADDR}" > /tmp/scratch.txt`,
+  // A BACKTICKED handle renders as code and notifies nobody — this is the prescribed fix, so it
+  // must pass, or the guard would forbid the very thing its message tells you to do.
+  // Single-quoted on purpose: inside double quotes bash would command-substitute the backticks,
+  // which is itself why real posts use --body-file or single quotes for anything with code in it.
+  `gh issue comment 8 --body 'routing this to \`${AT}manager\` for approval'`,
+  `gh issue create --title T --body 'fenced:\n\`\`\`\n${AT}janitor\n\`\`\`\n'`,
+  // An email is the email rule's business, not a mention: its @ is preceded by a word character.
+  `gh issue comment 8 --body "contact you${AT}example.com"`,
 ]
 
 let failures = 0

@@ -154,7 +154,15 @@ with a real username in any tracked or shipped file.
 **Outbound posts** — `scripts/deny-identity-leak-to-github.js`, a PreToolUse(Bash) hook, denies a
 `gh` command that PUBLISHES prose (issue/pr/release/gist/discussion create|comment|edit|review) when
 the text carries an identity; it reads `--body-file`/`-F` from disk, because that is the shape the
-real incident took. `pnpm run check-guards` runs its 22-case matrix from `compile`/`package`.
+real incident took. `pnpm run check-guards` runs its 28-case matrix from `compile`/`package`.
+
+**Never write an `@name` outside a code block** (owner directive 2026-08-02). In rendered prose it
+PAGES that GitHub account, and the handles agents reach for are already taken — the strangers who own
+those two role-name handles were notified from repos they have nothing to do with, across 9 issues.
+Wrap it in backticks: rendered as code, it notifies nobody. The guard enforces this on outbound posts
+(it strips fenced and inline code first, so the backticked form passes — it must, or the guard would
+forbid the fix its own message prescribes). Note the convention in `~/.claude/rules/prrd-design-rules.md`
+recommends a self-id line containing a bare `@owner`; use the backticked form instead.
 Evidence: on 2026-08-02 agents pasted account tables into **three PUBLIC issue comments**
 (AgentlensPro#8, ai-maestro#95, ai-maestro#102), publishing three real addresses; the file check
 neither did nor could fire, because it scans FILES and a comment is not one. All three were redacted

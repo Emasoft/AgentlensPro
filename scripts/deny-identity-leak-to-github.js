@@ -49,6 +49,33 @@ function findEmails(text) {
   return [...new Set(hits.filter((h) => !isAllowedEmail(h)))]
 }
 
+/** Remove fenced blocks and inline code, so only text GitHub RENDERS as prose is inspected.
+ *  Inside a code span an `@name` is inert — that is precisely why backticking it is the fix. */
+function stripCode(text) {
+  return text
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/~~~[\s\S]*?~~~/g, ' ')
+    .replace(/`[^`\n]*`/g, ' ')
+}
+
+/**
+ * `@name` in rendered prose PAGES that GitHub account. The handles agents reach for are exactly the
+ * ones that are already taken: `@manager` and `@janitor` are real users, and both were notified by
+ * agents writing role names in issue bodies. Nothing marks them as a mistake at post time — the
+ * notification simply lands on a stranger, repeatedly, from a repo they have nothing to do with.
+ *
+ * An email's `@` is preceded by a word character and so never matches here; addresses are the email
+ * rule's job.
+ */
+function findMentions(text) {
+  const hits = []
+  const re = /(?:^|[^\w`@])@([A-Za-z0-9][A-Za-z0-9-]{0,38})/g
+  let m
+  const prose = stripCode(text)
+  while ((m = re.exec(prose)) !== null) hits.push('@' + m[1])
+  return [...new Set(hits)]
+}
+
 function findHomePaths(text) {
   const hits = []
   const re = /(?:\/Users\/|\/home\/|[A-Za-z]:\\Users\\)([A-Za-z0-9._-]+)/g
@@ -124,11 +151,13 @@ process.stdin.on('end', () => {
 
   const emails = findEmails(scanned)
   const homes = findHomePaths(scanned)
-  if (emails.length === 0 && homes.length === 0) process.exit(0)
+  const mentions = findMentions(scanned)
+  if (emails.length === 0 && homes.length === 0 && mentions.length === 0) process.exit(0)
 
   const found = [
     ...emails.map((e) => `email ${mask(e)}`),
     ...homes.map((h) => `home path ${mask(h)}`),
+    ...mentions.map((h) => `@-mention ${h} (pages that GitHub user)`),
   ].join(', ')
 
   process.stdout.write(JSON.stringify({
@@ -136,13 +165,14 @@ process.stdin.on('end', () => {
       hookEventName: 'PreToolUse',
       permissionDecision: 'deny',
       permissionDecisionReason:
-        `Blocked \`gh ${verb}\`: the text you are about to publish contains a personal identity — ${found}. `
-        + 'On 2026-08-02 exactly this published three real addresses to a PUBLIC issue comment, where they '
-        + 'cannot be unsent; `pnpm run check-identities` cannot catch it because that check scans tracked '
-        + 'and shipped FILES, not outbound posts. Redact before posting: genericize the path, and replace '
-        + 'the address with the account uuid or a role name — the reader almost never needs the mailbox. '
-        + 'The noreply commit identity and example.com addresses are allowed and do not trip this. '
-        + 'Guard: scripts/deny-identity-leak-to-github.js',
+        `Blocked \`gh ${verb}\`: the text you are about to publish would expose or notify someone — ${found}. `
+        + 'Both halves are from real incidents on 2026-08-02: three personal addresses were published to '
+        + 'PUBLIC issue comments, and the strangers who own @manager and @janitor were paged by agents '
+        + 'writing role names in prose. Neither can be unsent, and `pnpm run check-identities` catches '
+        + 'neither — it scans tracked and shipped FILES, not outbound posts. Fixes: genericize the path; '
+        + 'replace an address with the account uuid or a role name; and wrap any @name in BACKTICKS, which '
+        + 'renders it as code and notifies nobody. The noreply commit identity and example.com addresses '
+        + 'are allowed. Guard: scripts/deny-identity-leak-to-github.js',
     },
   }))
   process.exit(0)
