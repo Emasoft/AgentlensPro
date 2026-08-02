@@ -115,6 +115,16 @@ An identity guard that scans FILES cannot see what an agent POSTS. On 2026-08-02
 
 An `@name` written in GitHub prose PAGES the account with that handle, and the handles agents reach for are already taken by real people. On 2026-08-02 agents writing role names in issue bodies notified two strangers across 9 issues (confirmed with the authoritative `mentions:<user>` search qualifier — NOT with a text search for the handle, whose 932 hits were GitHub tokenising the word and matching every prose use of it). The fix is one character each side: wrapped in backticks the handle renders as code and notifies nobody. The outbound guard `scripts/deny-identity-leak-to-github.js` now denies a bare mention in any `gh` post, stripping fenced and inline code first so the backticked form still passes.
 
+
+^ATOM-R4X7-VMJ1 [desc:"DuckDB ignore_errors emits all-NULL rows for bad NDJSON lines - count verifies pass, degradation invisible without count(col)", keywords: duckdb_ignore_errors unparseable_ndjson_line all-NULL_row seal_verify_passes torn_line_silently_lost count_matches_but_data_degraded, type: project, ocd: 2026-08-02, lmd: 2026-08-02]
+
+DuckDB read_json_auto with ignore_errors=true does NOT drop an unparseable NDJSON line — MEASURED (2026-08-02): it lands as an all-NULL row, so a row-count verify passes and cannot detect the degradation. A truncated-after-a-value object is even silently REPAIRED (closed at EOF) and parses fully. Consequence for any seal/convert-verify design: count a required-always column (count(ts) < count(*)) to see NULL-ified torn lines; a count(*) match proves nothing about line integrity. Regression: src/test/statuslineSealAndFilter.test.ts.
+
+
+^ATOM-POFB-CO8A [desc:"safe-deploy.sh omits check-identities/check-guards - deploy green does not mean CI green; run compile gates before push", keywords: safe-deploy_missing_gate check-identities_not_in_safe-deploy CI_failed_identity_check_but_local_deploy_green push_after_deploy_failed_CI, type: project, ocd: 2026-08-02, lmd: 2026-08-02]
+
+scripts/safe-deploy.sh runs types/lint/tests/esbuild/smoke/restart but NOT check-identities or check-guards — VERIFIED 2026-08-02 (grep 0 hits; a /home/u example path in a comment sailed through safe-deploy green and failed only in CI). Before pushing, run pnpm run check-identities (or full pnpm run compile) even when safe-deploy reports DEPLOYED green.
+
 ## Notes and lessons learned
 
 [^1]: [id:ATOM-SETTINGS-WIPE-GUARDRAIL, status:valid, keywords:"config_file_wiped_or_corrupted_after_edit settings.json_wiped safeConfigEdit_guard start_fresh_on_parse_failure_removed", ocd:2026-07-11, lmd:2026-07-11] promoted from the old-repo LOCAL note
