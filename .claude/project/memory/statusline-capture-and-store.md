@@ -2,7 +2,7 @@
 name: statusline-capture-and-store
 description: "how do I get rate_limits without hitting the usage endpoint / why is session_id coming back as hugeint / JSON.stringify throws Do not know how to serialize a BigInt / why did lifecycle-events go empty / can I add a second statusLine / does Claude Code send the 5h 7d windows on stdin / should I pack N samples per row in parquet / how big should a parquet chunk be / get_account_status shows another account's window / was that turn actually a cache miss / how do I verify a claimed cold cache write in one command / is the 1-hour write tier real on this machine / why does the same turn show up twelve times / why is the burn monitor reporting far more cost than was really spent / the statusline burn path over-counts / I raised a feed's sample rate and its deltas broke / Could not convert string to INT128 / failed to cast column session_id from VARCHAR to UUID / one row blinds every view / Could not find key effort in struct / a struct field missing from one parquet file / subagents view binder error / Referenced column not found in FROM clause / an older payload without rate_limits crashes the query / all five views died at once / the query says BLIND but the data is there / a record is missing from its own day's window / how big can this store get before queries slow down / the status line freezes for ten seconds / the hook is slow when the server is down / AbortSignal timeout did not bound the command / process exit truncated stdout / the gate verdict was cut off / fixing the hang broke the output — the statusline sample store, its measured format choices, the cache/peaks query views, the one-event-per-turn billing rule, and the DuckDB traps that shipped bugs"
 ocd: 2026-08-01
-lmd: 2026-08-01
+lmd: 2026-08-02
 metadata:
   node_type: memory
   type: project
@@ -215,8 +215,8 @@ so a pair bracketing an idle stretch is an INTERVAL total covering every turn in
 
 See also: [[cumulative-vs-per-turn-fields]] — the rules for differencing this payload's
 lifetime totals (a baseline AND a gap), which this page's billing and `peaks` lessons are both
-instances of; [[timeout-bounds-the-request-not-the-process]] (USER) — the general form of the
-capture wrapper's 10.6 s stall and its stdout-flush counterpart.
+instances of; timeout-bounds-the-request-not-the-process (USER scope) — the general
+form of the capture wrapper's 10.6 s stall and its stdout-flush counterpart.
 
 ## Notes and lessons learned
 

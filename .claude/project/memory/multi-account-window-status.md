@@ -15,7 +15,7 @@ metadata:
 disk — **no credential is read for a non-live account, ever**. It exists because a rotator faces a
 bootstrap paradox: deciding whether to switch needs the headroom of the accounts it is NOT on, and the
 only way to learn an account's status used to be to already be on it. See
-[[claude-subscription-usage-endpoint]] for the singular reading it is built from.
+claude-subscription-usage-endpoint (USER scope) for the singular reading it is built from.
 
 
 ^ATOM-1SB4-NM5B [desc:"get_account_status --all joins the roster, the per-account usage archive and (not) the statusline store", keywords: where_does_the_multi_account_answer_come_from which_file_knows_an_account_exists roster_vs_usage_archive_vs_statusline_store, ocd: 2026-08-02, lmd: 2026-08-02]

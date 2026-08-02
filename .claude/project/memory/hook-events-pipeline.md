@@ -2,7 +2,7 @@
 name: hook-events-pipeline
 description: "how does AgentLens capture Claude Code lifecycle events / where do StopFailure PreCompact SessionStart events come from / what is spy-agentlens.sh / hook-events store, --install-hooks, why not PreToolUse / Stop hook error every turn"
 ocd: 2026-07-10
-lmd: 2026-07-30
+lmd: 2026-08-02
 metadata:
   node_type: memory
   type: project
@@ -35,7 +35,8 @@ only** (agent launches are rare). SYNC (async hooks cannot deny), 3s timeout, on
 `AGENTLENS_GATE=off` kill-switch, `AGENTLENS_GATE_MODE=warn` downgrade. It denies the four
 measured disaster launches (THRASH_ACTIVE / RUNAWAY_FANOUT / COLD_RESUME_FANOUT /
 FORK_STORM_FORMING) with the reason fed back to the model; PostToolUse injects ONE deduped
-additionalContext advisory per session+risk per 10min. See [[burn-gate]] docs in the skill.
+additionalContext advisory per session+risk per 10min. See the burn-gate docs in
+the skill (no dedicated memory page yet on this machine).
 
 **Why:** capture is optional — every future consumer must degrade to inference when the store
 is empty and label which evidence it used.
