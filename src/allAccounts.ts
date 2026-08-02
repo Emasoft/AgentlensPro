@@ -113,8 +113,8 @@ export function classifyWindow(
    *  the `rolled` inference, and that is not caution for its own sake — `leftAt` is derived from the
    *  timeline's accountId, which comes from that same claim. When the claim is wrong, "this machine
    *  left the account" is unfounded, and the account may be burning under a credential the config does
-   *  not name. MEASURED on the host that motivated this: `~/.claude.json` said fmuaddib while the
-   *  keychain credential belonged to ipazia, so every usage reading on record is ipazia's and the
+   *  not name. MEASURED on the host that motivated this: `~/.claude.json` said the owner account while the
+   *  keychain credential belonged to the second account, so every usage reading on record is the second account's and the
    *  idle-since premise for it was false. Inferring an empty window there would hand a rotator a
    *  green light for an account that might be the one actually burning. */
   labelSuspect = false,

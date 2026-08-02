@@ -103,7 +103,7 @@ Roster (`account-state.ndjson` — the ONLY source that knows an account exists)
 2. A **suspect account label disables the inference entirely**. `leftAt` derives from the timeline's
    accountId, which comes from `~/.claude.json` — so when the reading's own account contradicts that
    claim, "this machine left the account" is unfounded. Not hypothetical: on this host the config says
-   fmuaddib while the keychain credential belongs to ipazia, so every reading on record is ipazia's.
+   the owner account while the keychain credential belongs to the second account, so every reading on record is the second account's.
 
 16 tests; six mutations each verified to fail (wrong reset instant 4, stale returning 0 4, no suspect
 guard 1, omitting unreadable accounts 2, live account inheriting a stale leftAt 1, verdict taking the

@@ -28,7 +28,7 @@ open" claim below).** Re-verification against the live tool surface + git found 
 - **Item 2 (window-capacity auto-calibration): SHIPPED + FIRED IN PRODUCTION.** Landed as
   TRDD-BURNWDGT P5 (commit 8b9da82, `src/capacityCalibration.ts` + StopFailure ingest wiring +
   2 test suites). Live proof today: `~/.agentlens/burn-config.json` carries an observed capacity
-  for account 80ddbe47… measured 2026-07-13 from a real rate-limit hit, and `get_window_budget`
+  for account cccccccc… measured 2026-07-13 from a real rate-limit hit, and `get_window_budget`
   reports `capacitySource: "observed"` with zero manual config. Nothing left to build.
 - **Item 9 (predict next similar-session cost): SHIPPED.** `predict_session_cost`
   (commit 29d666d) — live-verified today: 12 matched precedents, p50 $3.50 / p75 $7.51

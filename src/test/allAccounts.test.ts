@@ -18,9 +18,9 @@ const NOW = Date.parse('2026-08-02T03:00:00Z')
 const HOUR = 3_600_000
 const iso = (ms: number): string => new Date(ms).toISOString()
 
-const A = '32eb8302-c2a4-4333-a15f-ba17ec8960ad'
-const B = '75099fe9-8c66-4edd-bd99-a05593a57928'
-const C = '80ddbe47-1111-4222-8333-444455556666'
+const A = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa'
+const B = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb'
+const C = 'cccccccc-3333-4333-8333-cccccccccccc'
 
 suite('classifyWindow — the four ways a stamped reading can be read', () => {
   test('inside the TTL it is a measurement', () => {

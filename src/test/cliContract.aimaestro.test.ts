@@ -357,7 +357,7 @@ suite('CLI contract lock — account tools never emit OAuth token material (Agen
     // token material, exactly as they do on disk.
     const claudeJson = JSON.stringify({
       oauthAccount: {
-        accountUuid: '80ddbe47-7ad4-4af7-a381-cf908e33c916',
+        accountUuid: 'cccccccc-3333-4333-8333-cccccccccccc',
         emailAddress: 'someone@example.com',
         organizationUuid: 'org-1234',
         organizationRateLimitTier: 'tier_4',

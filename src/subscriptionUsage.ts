@@ -40,8 +40,8 @@ export const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage'
  *  the presented credential. Same OAuth beta header, same bearer.
  *
  *  MEASURED 2026-08-01, and it is why this exists: the token in this machine's keychain resolved to
- *  `ipazia.emasoft@gmail.com` (rate_limit_tier default_claude_max_5x) while `~/.claude.json`
- *  simultaneously claimed `fmuaddib@gmail.com` (default_claude_max_20x). Labelling a usage reading
+ *  `second@example.com` (rate_limit_tier default_claude_max_5x) while `~/.claude.json`
+ *  simultaneously claimed `owner@example.com` (default_claude_max_20x). Labelling a usage reading
  *  from the config file therefore attributed one account's utilization to a different account, under
  *  a name the reader had no reason to doubt. Shape: { account: { email, uuid, full_name },
  *  organization: { name, rate_limit_tier, … } }. Technique credit: claude-multi-usage (OAuthService).  */
@@ -89,8 +89,8 @@ export interface SubscriptionUsage {
   accountLabel: string | null
   accountTier: string | null
   /** What `~/.claude.json` CLAIMED the logged-in account was at fetch time, kept only so a
-   *  disagreement can be shown. Measured on this machine: the file said fmuaddib@gmail.com /
-   *  max_20x while the token resolved to ipazia.emasoft@gmail.com / max_5x. */
+   *  disagreement can be shown. Measured on this machine: the file said owner@example.com /
+   *  max_20x while the token resolved to second@example.com / max_5x. */
   localClaimedLabel: string | null
   /** True when the config file's identity does NOT match the token's own. The numbers are still
    *  correct — they belong to `accountLabel` — but any OTHER tool that labels by the config file

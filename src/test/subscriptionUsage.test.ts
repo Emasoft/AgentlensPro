@@ -125,8 +125,8 @@ suite('subscriptionUsage', () => {
 // account's numbers outright. These pin the archive that stops that — the part that cannot be
 // backfilled, so a regression here is silent and permanent.
 suite('subscription usage — the per-account archive', () => {
-  const A = '32eb8302-c2a4-4333-a15f-ba17ec8960ad'
-  const B = '75099fe9-8c66-4edd-bd99-a05593a57928'
+  const A = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa'
+  const B = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb'
 
   function rec(uuid: string | null, fetchedAt: number, label: string): SubscriptionUsage {
     return {

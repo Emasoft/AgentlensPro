@@ -29,7 +29,7 @@ implementation-commits: [7fe8b97]
   from mcpServer (single source of truth). `get_account_state_at` MCP tool added. Sampled on the
   standalone 4s burn tick; flushed on 60s timer / 32-record / SIGTERM. Gates green (tsc 0, eslint 0,
   mirrors OK, esbuild OK, **mocha 849/0/4**). **Live-verified**: 7s of ticks produced exactly ONE
-  ndjson record (ipazia / Max 5x / subscription / 60min doc-matrix — change-detection proven), and
+  ndjson record (the second account / Max 5x / subscription / 60min doc-matrix — change-detection proven), and
   get_account_state_at resolved it.
 - **NEXT ACTION**: merge feat → main `--no-ff`; deploy; tag `v2.3.0` (push → OIDC publish); flip this
   TRDD `complete → published`.

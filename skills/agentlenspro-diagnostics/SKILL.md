@@ -963,10 +963,10 @@ agentlenspro get_account_status --all --json   # every field, including the reas
 ```
 
 ```
-   account   email                       plan     5h window   7d window   observed  left
-*  75099fe9  fmuaddib@gmail.com          Max 20x  unreadable  unreadable  never     (on it)
-   32eb8302  ipazia.emasoft@gmail.com    Max 20x  0% rolled   77% aged    352m ago  07-31 15:28
-   80ddbe47  emanuele.sabetta@gmail.com  Max 20x  unreadable  unreadable  never     07-30 17:19
+   account   email               plan     5h window   7d window   observed  left
+*  bbbbbbbb  owner@example.com   Max 20x  unreadable  unreadable  never     (on it)
+   aaaaaaaa  second@example.com  Max 20x  0% rolled   77% aged    352m ago  07-31 15:28
+   cccccccc  third@example.com   Max 20x  unreadable  unreadable  never     07-30 17:19
 ```
 
 **No credential is read** — the OAuth token contract is unchanged. Every row is what was already
