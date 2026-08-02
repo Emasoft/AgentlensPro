@@ -17,6 +17,7 @@ import {
   apiRequest, callTool, dashboardUrl, dataDir, digest, fetchTools, firstSentence, fmtGb,
   fmtMb, init, mcpEndpoint, parseWhen, resolveTool, sleep, ToolInfo, ToolSchema,
 } from './cliCore'
+import { EXIT } from './cliErrors'
 import { installHooks, installOtel, installSkills, installStatusline } from './hookInstall'
 import { ensureServer, openDashboard, showStatus, stopServer } from './serverControl'
 
@@ -431,7 +432,36 @@ function renderHelp(t: ToolInfo): string {
   return lines.join('\n')
 }
 
+/**
+ * A tool-level error payload. Every one of the server's ~27 refusal sites returns
+ * `{ error: '<why>' }`, and no successful payload carries a top-level string `error` — checked
+ * against the live surface, and a rich result that adopted that key would be a naming bug.
+ * Transport failures never reach here: `callTool` rejects and the top level maps a throw to exit 1.
+ */
+function toolError(result: unknown): string | null {
+  if (typeof result !== 'object' || result === null) return null
+  const e = (result as { error?: unknown }).error
+  return typeof e === 'string' ? e : null
+}
+
+/**
+ * Print a tool's answer, and make a REFUSAL look like one to a program (issue #9 §1).
+ *
+ * Until now an error payload was printed on stdout with exit 0, so `if rc != 0: don't parse` —
+ * the near-universal habit, and the one the janitor's rotator was about to rely on — read a
+ * refusal as a result. The contract now: **exit 0 ⇒ stdout is a result; non-zero ⇒ it is not.**
+ * The refusal goes to stderr so stdout stays parse-safe, and `--out` is NOT written: a file
+ * containing `{error: …}` is worse than no file, because the next reader finds it and trusts it.
+ * EX_UNKNOWN (2) rather than 1 — 1 is the watcher's "abort the guarded run", and a not-found must
+ * never be mistaken for that.
+ */
 function emit(tool: string, result: unknown, globals: { out: string | null }): void {
+  const err = toolError(result)
+  if (err !== null) {
+    process.exitCode = EXIT.UNKNOWN
+    console.error(JSON.stringify({ tool, error: err }, null, 2))
+    return
+  }
   if (globals.out) {
     fs.writeFileSync(globals.out, JSON.stringify(result, null, 2))
     console.log(`${tool}: ${digest(result)}`)
@@ -631,6 +661,15 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
     for (let i = 0; i < spec.length; i++) {
       const s = spec[i]
       const result = await callTool(s.tool, s.args, globals.full || !!s.full)
+      // One refused member makes the whole batch non-zero (same contract as a single call), while
+      // the remaining members still run — a batch is a convenience, not a transaction, and hiding
+      // a refusal because its siblings succeeded is exactly the failure §1 is about.
+      const itemErr = toolError(result)
+      if (itemErr !== null) {
+        process.exitCode = EXIT.UNKNOWN
+        console.error(JSON.stringify({ tool: s.tool, index: i + 1, error: itemErr }, null, 2))
+        continue
+      }
       if (globals.out) {
         // Position-prefixed so the SAME tool called twice (e.g. two run_diagnostics_sql presets)
         // cannot silently overwrite the earlier result — that exact collision happened in the field.

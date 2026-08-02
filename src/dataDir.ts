@@ -48,11 +48,32 @@ export function dataPath(...segments: string[]): string {
 /** Which input decided the directory — so `status` output can say so instead of the user guessing
  *  why their store moved. A blank/whitespace value is treated as unset, not as the empty path. */
 export function resolveDataDir(): { dir: string; source: DataDirSource } {
-  const namespaced = process.env[DATA_DIR_ENV]?.trim()
+  return resolveDataDirFrom(process.env)
+}
+
+/**
+ * The same resolution against an EXPLICIT environment. A function that already takes an `env`
+ * argument must answer "where is the store" from THAT env, not from the ambient process — otherwise
+ * it silently mixes two environments. `loadToken` did exactly that for one commit: it read consent
+ * from the developer's real `~/.agentlens/config.json` while the caller had handed it a synthetic
+ * env, so an isolated unit test performed a REAL keychain read and printed a live OAuth token in its
+ * failure diff. The gate caught it; nothing shipped.
+ *
+ * Kept here rather than re-derived at the call site: this module is "THE one answer", and a second
+ * copy of the precedence rules is how the two drift.
+ */
+export function resolveDataDirFrom(env: NodeJS.ProcessEnv): { dir: string; source: DataDirSource } {
+  const namespaced = env[DATA_DIR_ENV]?.trim()
   if (namespaced) return { dir: namespaced, source: 'agentlens-env' }
-  const generic = process.env[DATA_DIR_ENV_GENERIC]?.trim()
+  const generic = env[DATA_DIR_ENV_GENERIC]?.trim()
   if (generic) return { dir: generic, source: 'generic-env' }
-  return { dir: path.join(os.homedir(), '.agentlens'), source: 'default' }
+  const home = env.HOME?.trim() || os.homedir()
+  return { dir: path.join(home, '.agentlens'), source: 'default' }
+}
+
+/** Convenience: just the directory, resolved against an explicit environment. */
+export function dataDirFrom(env: NodeJS.ProcessEnv): string {
+  return resolveDataDirFrom(env).dir
 }
 
 /** One line for diagnostics. Names the collision hazard only when the generic variable is what

@@ -31,7 +31,7 @@ import { createHash } from 'crypto'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { dataDir, dataPath } from './dataDir'
+import { dataDirFrom, dataPath } from './dataDir'
 import { keychainReadAllowed } from './keychainConsent'
 import { getCurrentAccount } from './accountInfo'
 
@@ -208,7 +208,10 @@ export function loadToken(
   // alone: an env-only opt-in is lost by every restart that does not carry it — a deploy, a
   // hook-triggered ensureServer, a launchd revival — and the archive then stops filling in silence
   // while its existing rows keep ageing. Persisting the decision is what makes it survive.
-  if (!keychainReadAllowed(opts.dataDir ?? dataDir(), env) && !opts.allowKeychain) return { reason: 'opt_in_required' }
+  // dataDirFrom(env), NOT dataDir(): consent must come from the SAME environment the caller handed
+  // us. Reading it from the ambient process instead let a unit test with a synthetic env inherit
+  // the developer machine's real consent and perform an actual keychain read.
+  if (!keychainReadAllowed(opts.dataDir ?? dataDirFrom(env), env) && !opts.allowKeychain) return { reason: 'opt_in_required' }
   try {
     const raw = JSON.parse(execFileSync('security',
       ['find-generic-password', '-s', 'Claude Code-credentials', '-w'],

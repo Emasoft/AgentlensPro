@@ -14,7 +14,11 @@
 import { cliMain } from '../src/cli/main'
 
 cliMain(process.argv.slice(2), () => import('./server'))
-  .then(code => { process.exitCode = code })
+  // `code || process.exitCode` and not a bare assignment: a command that COMPLETED (returns 0) may
+  // still have refused to answer, and it records that by setting process.exitCode as it prints the
+  // refusal (see emit() — issue #9 §1). Overwriting with the returned 0 would republish "success"
+  // for a payload the CLI just told the caller not to parse. An explicit non-zero return still wins.
+  .then(code => { process.exitCode = code || process.exitCode || 0 })
   .catch(e => {
     console.error(`FAIL: ${(e as Error).message}`)
     process.exit(1)

@@ -101,8 +101,14 @@ suite('subscriptionUsage', () => {
     try {
       // No credentials file in this CLAUDE_CONFIG_DIR, and no opt-in: on darwin the answer must be
       // opt_in_required (NOT a keychain read, which would pop a password prompt on a test run).
-      const r = loadToken({ CLAUDE_CONFIG_DIR: dir } as NodeJS.ProcessEnv)
-      assert.strictEqual(r.token, undefined)
+      // HOME is pinned at the temp dir too: consent is resolved from the env handed in, so leaving
+      // HOME ambient would let the DEVELOPER's persisted opt-in decide a unit test's outcome —
+      // which is exactly how this assertion once performed a real keychain read.
+      const r = loadToken({ CLAUDE_CONFIG_DIR: dir, HOME: dir } as NodeJS.ProcessEnv)
+      // NEVER assert on the token VALUE: assert.strictEqual prints both sides on failure, so a
+      // regression here would dump a live OAuth token into the test log and CI output. Assert the
+      // shape instead — it fails just as loudly and says nothing it should not.
+      assert.strictEqual(typeof r.token, 'undefined', 'no token may be produced without an opt-in')
       assert.strictEqual(r.reason, process.platform === 'darwin' ? 'opt_in_required' : 'no_token')
     } finally { fs.rmSync(dir, { recursive: true, force: true }) }
   })

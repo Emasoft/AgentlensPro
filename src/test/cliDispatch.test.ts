@@ -162,6 +162,67 @@ suite('agentlenspro — diagnostics dispatch parity (absorbed agentlens-cli.js s
     } finally { await stub.close(); fs.rmSync(home, { recursive: true, force: true }) }
   })
 
+  // ── the refusal contract (issue #9 §1) ───────────────────────────────────────────────────
+  // A tool that REFUSES used to print `{error: …}` on stdout and exit 0, so a consuming program
+  // doing `if rc != 0: don't parse` — the near-universal habit, and what the janitor's rotator was
+  // about to rely on — read the refusal as an answer. exit 0 must mean "stdout is a result".
+  test('a tool-level refusal exits non-zero, keeps stdout EMPTY, and reports on stderr', async () => {
+    const home = mkHome()
+    const stub = await startMcpStub(
+      [{ name: 'get_agent_tokens', description: 'x', inputSchema: { properties: { agentId: { type: 'string' } } } }],
+      () => ({ error: 'Agent "nope" not found. Accepted forms: bare agent id, agent-<id>, or a full sessionId.' }),
+    )
+    try {
+      const r = await runCli(['get_agent_tokens', '--agentId', 'nope'], isolatedEnv(home, { AGENTLENS_MCP_URL: stub.url }))
+      assert.notStrictEqual(r.code, 0, 'a refusal must not exit 0')
+      assert.strictEqual(r.stdout.trim(), '', `stdout must stay parse-safe, got: ${r.stdout}`)
+      const payload = JSON.parse(r.stderr) as { tool: string; error: string }
+      assert.strictEqual(payload.tool, 'get_agent_tokens')
+      assert.ok(payload.error.includes('not found'), r.stderr)
+    } finally { await stub.close(); fs.rmSync(home, { recursive: true, force: true }) }
+  })
+
+  test('a refusal does NOT write --out — a file containing an error is worse than no file', async () => {
+    const home = mkHome()
+    const out = path.join(home, 'result.json')
+    const stub = await startMcpStub(
+      [{ name: 'get_agent_tokens', description: 'x', inputSchema: { properties: { agentId: { type: 'string' } } } }],
+      () => ({ error: 'nope' }),
+    )
+    try {
+      const r = await runCli(['get_agent_tokens', '--agentId', 'x', '--out', out], isolatedEnv(home, { AGENTLENS_MCP_URL: stub.url }))
+      assert.notStrictEqual(r.code, 0)
+      assert.ok(!fs.existsSync(out), 'the next reader would find that file and trust it')
+    } finally { await stub.close(); fs.rmSync(home, { recursive: true, force: true }) }
+  })
+
+  test('a SUCCESS still exits 0 with the payload on stdout — the contract cuts one way only', async () => {
+    const home = mkHome()
+    const stub = await startMcpStub(
+      [{ name: 'get_burn_status', description: 'x' }],
+      () => ({ verdict: 'quiet', errorRate: 0.02 }), // an `error`-ish KEY that is not a refusal
+    )
+    try {
+      const r = await runCli(['get_burn_status'], isolatedEnv(home, { AGENTLENS_MCP_URL: stub.url }))
+      assert.strictEqual(r.code, 0, `stderr: ${r.stderr}`)
+      assert.ok(r.stdout.includes('quiet'), r.stdout)
+    } finally { await stub.close(); fs.rmSync(home, { recursive: true, force: true }) }
+  })
+
+  test('one refused member makes a batch non-zero, and the siblings still run', async () => {
+    const home = mkHome()
+    const stub = await startMcpStub(
+      [{ name: 'a', description: 'x' }, { name: 'b', description: 'x' }],
+      (name) => (name === 'a' ? { error: 'refused' } : { ok: 'second ran' }),
+    )
+    try {
+      const r = await runCli(['batch', '[{"tool":"a"},{"tool":"b"}]'], isolatedEnv(home, { AGENTLENS_MCP_URL: stub.url }))
+      assert.notStrictEqual(r.code, 0, 'a refused member must not be hidden by a successful sibling')
+      assert.ok(r.stderr.includes('refused'), r.stderr)
+      assert.ok(r.stdout.includes('second ran'), r.stdout)
+    } finally { await stub.close(); fs.rmSync(home, { recursive: true, force: true }) }
+  })
+
   test('`heartbeat-cost --oneline` prints the verdict from get_heartbeat_cost (absorbed bin parity)', async () => {
     const home = mkHome()
     const stub = await startMcpStub([], () => ({
