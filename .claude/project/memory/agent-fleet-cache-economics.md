@@ -2,7 +2,7 @@
 name: agent-fleet-cache-economics
 description: "a wave of subagents burned way more than expected / do parallel agents share the prompt cache / concurrent identical spawns all paid the full cold write / should skills be inlined in the agent body or loaded with the Skill tool / cheapest way to run a skill pipeline over hundreds of items / workflow fan-out cost model"
 ocd: 2026-07-24
-lmd: 2026-07-24
+lmd: 2026-08-02
 metadata:
   node_type: memory
   type: project
@@ -49,9 +49,9 @@ See also: [[image-resident-cost-guard]] (the delegate-to-a-subagent remedy for i
 priced by these same fleet economics), [[cache-ttl-model]] (the TTL regimes behind the 5-min subagent window),
 [[agentlens-burn-token-model]] (the cost/weight doctrine), [[burn-seismic-statistical-model]]
 (FANOUT_RATE — the detector that catches fleets violating these rules),
-[[workflow-fleet-launch-economics]] (USER scope — the portable launch rules these
+workflow-fleet-launch-economics (USER scope — the portable launch rules these
 measurements produced, incl. the Workflow-sandbox constraints and the account-wide 429
-hazard), [[read-once-edit-batched]] (USER scope — the file-touching half: merged
+hazard), read-once-edit-batched (USER scope — the file-touching half: merged
 read-find-fix workers, staleness signals, zero-LLM discovery).
 
 ## Notes and lessons learned

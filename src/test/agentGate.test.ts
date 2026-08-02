@@ -34,6 +34,7 @@ const thrashing: ThrashReport = {
   active: true, count: 4, rebilledTokens: 1_200_000, model: 'claude-fable-5', windowMs: 300_000,
   suspects: [{ session: '249c4216-4db4-4b64-9a10-b994b9aa0001', model: 'claude-fable-5', count: 4, bytes: 13_900_000 }],
   topSource: { session: '249c4216-4db4-4b64-9a10-b994b9aa0001', count: 4, rebilledTokens: 1_200_000 },
+  unattributed: { count: 0, rebilledTokens: 0 },
   coldStartSessions: 0, coldStartRebilledTokens: 0,
 }
 
@@ -43,8 +44,8 @@ suite('agentGate — evaluateAgentGate (TRDD-GOD0108C)', () => {
     assert.deepStrictEqual(d, { decision: 'allow', code: null, reason: null })
   })
 
-  test('active cache-thrash denies ANY launch, naming re-billed tokens AND the likely culprit session', () => {
-    const d = evaluateAgentGate({}, state({ thrash: thrashing }))
+  test('active cache-thrash DENIES a fork — it re-enters the thrashing prefix per launch', () => {
+    const d = evaluateAgentGate({ subagent_type: 'fork' }, state({ thrash: thrashing }))
     assert.strictEqual(d.decision, 'deny')
     assert.strictEqual(d.code, 'THRASH_ACTIVE')
     assert.ok(d.reason?.includes('1200k'), d.reason ?? '')
@@ -52,9 +53,27 @@ suite('agentGate — evaluateAgentGate (TRDD-GOD0108C)', () => {
     assert.ok(d.reason?.includes('13.9MB'), 'the magnitude must be stated')
   })
 
+  test('active cache-thrash only WARNS a fresh non-fork launch — its own boot prefix multiplies nothing (TRDD-THRGX41P)', () => {
+    // The blanket deny used to block the very advisor/diagnostic launches that could fix the
+    // source, while doing nothing to stop the thrash itself.
+    const d = evaluateAgentGate({ subagent_type: 'general-purpose' }, state({ thrash: thrashing }))
+    assert.strictEqual(d.decision, 'warn')
+    assert.strictEqual(d.code, 'THRASH_ACTIVE')
+    assert.ok(d.reason?.includes('1200k'), d.reason ?? '')
+  })
+
+  test('a big unattributed write pool WARNS (THRASH_UNATTRIBUTED) instead of denying', () => {
+    const pool: ThrashReport = { ...thrashing, active: false, topSource: null, suspects: [], unattributed: { count: 5, rebilledTokens: 1_100_000 } }
+    const d = evaluateAgentGate({ subagent_type: 'general-purpose' }, state({ thrash: pool }))
+    assert.strictEqual(d.decision, 'warn')
+    assert.strictEqual(d.code, 'THRASH_UNATTRIBUTED')
+    assert.ok(d.reason?.includes('investigate_burn'), d.reason ?? '')
+    assert.ok(d.reason?.includes('1100k'), d.reason ?? '')
+  })
+
   test('unattributable thrash says so honestly and points at investigate_burn', () => {
     const noSuspects: ThrashReport = { ...thrashing, suspects: [] }
-    const d = evaluateAgentGate({}, state({ thrash: noSuspects }))
+    const d = evaluateAgentGate({ subagent_type: 'fork' }, state({ thrash: noSuspects }))
     assert.strictEqual(d.decision, 'deny')
     assert.ok(d.reason?.includes('not attributable'), d.reason ?? '')
     assert.ok(d.reason?.includes('investigate_burn'), d.reason ?? '')
@@ -129,7 +148,7 @@ suite('agentGate — evaluateAgentGate (TRDD-GOD0108C)', () => {
   })
 
   test('mode=warn downgrades every deny to a warning and says so', () => {
-    const d = evaluateAgentGate({}, state({ mode: 'warn', thrash: thrashing }))
+    const d = evaluateAgentGate({ subagent_type: 'fork' }, state({ mode: 'warn', thrash: thrashing }))
     assert.strictEqual(d.decision, 'warn')
     assert.strictEqual(d.code, 'THRASH_ACTIVE')
     assert.ok(d.reason?.startsWith('[deny downgraded'), d.reason ?? '')
@@ -246,8 +265,12 @@ suite('agentGate — keep-warm pinger allowance (USER ORDER 2026-07-11)', () => 
   })
 
   test('a keep-warm prompt on a NAMED non-fork agent gets no allowance (only fork/unspecified qualifies)', () => {
+    // Since TRDD-THRGX41P a fresh non-fork under thrash warns rather than denies, so "no
+    // allowance" now means: the plain thrash warning, WITHOUT the pinger-allowance wording.
     const d = evaluateAgentGate({ subagent_type: 'scout', prompt: 'keep-warm ping' }, state({ thrash: thrashing }))
-    assert.strictEqual(d.decision, 'deny')
+    assert.strictEqual(d.decision, 'warn')
+    assert.strictEqual(d.code, 'THRASH_ACTIVE')
+    assert.ok(!d.reason?.includes('keep-warm pinger allowed'), `no allowance wording for a named type: ${d.reason ?? ''}`)
   })
 })
 
@@ -377,6 +400,7 @@ suite('agentGate — buildAdvisory (PostToolUse in-band warning)', () => {
     const coldStarts: ThrashReport = {
       active: false, count: 4, rebilledTokens: 463_000, model: 'claude-fable-5', windowMs: 300_000,
       suspects: [], topSource: { session: 's1', count: 1, rebilledTokens: 120_000 },
+      unattributed: { count: 0, rebilledTokens: 0 },
       coldStartSessions: 4, coldStartRebilledTokens: 463_000,
     }
     const a = buildAdvisory(state({ thrash: coldStarts }))

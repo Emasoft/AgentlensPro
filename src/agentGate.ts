@@ -116,7 +116,7 @@ export interface AgentGateState {
 export interface AgentGateDecision {
   decision: 'allow' | 'warn' | 'deny'
   code:
-    | 'THRASH_ACTIVE' | 'RUNAWAY_FANOUT' | 'COLD_RESUME_FANOUT' | 'FORK_STORM_FORMING'
+    | 'THRASH_ACTIVE' | 'THRASH_UNATTRIBUTED' | 'RUNAWAY_FANOUT' | 'COLD_RESUME_FANOUT' | 'FORK_STORM_FORMING'
     | 'FORK_FAT_PARENT' | 'COLD_FORK' | 'FANOUT_HEADSUP' | 'COLD_RESUME_MESSAGE'
     | 'IMG_RESIDENT'
     | null
@@ -243,12 +243,25 @@ export function evaluateAgentGate(
 
   // ── deny tier: the four measured disaster signatures, most specific first ────
   if (state.thrash?.active) {
-    return deny('THRASH_ACTIVE',
+    const thrashBase =
       `AgentLens burn-gate: cache-thrash in progress — ${state.thrash.count} calls in the last ` +
       `${Math.round(state.thrash.windowMs / 60_000)}min re-WROTE ~${k(state.thrash.rebilledTokens)} tokens of prefix ` +
       `instead of reading cache${state.thrash.model ? ` (model ${state.thrash.model})` : ''}, i.e. something mutates ` +
-      `the context prefix on every call so the cache never hits. ${thrashSource(state.thrash)} Launching more agents ` +
-      `multiplies the re-billing. Fix the source first. Override: AGENTLENS_GATE=off.`)
+      `the context prefix on every call so the cache never hits. ${thrashSource(state.thrash)}`
+    // A FORK re-enters the thrashing caller's prefix and re-pays it per launch — deny. A FRESH
+    // agent boots its OWN prefix and multiplies nothing: the blanket deny blocked the very
+    // advisor/diagnostic launches that could fix the source, while stopping none of the thrash
+    // (TRDD-THRGX41P) — warn instead. The keep-warm pinger routes through deny() so its
+    // USER-ordered advisory wording is preserved.
+    if (fork || keepWarm) {
+      return deny('THRASH_ACTIVE',
+        `${thrashBase} A fork re-enters that prefix and multiplies the re-billing. Fix the source first. Override: AGENTLENS_GATE=off.`)
+    }
+    return {
+      decision: 'warn', code: 'THRASH_ACTIVE',
+      reason: `[agentlens] ${thrashBase} This fresh launch pays only its own boot prefix (forks stay denied) — ` +
+        `diagnose the source before widening fan-outs.`,
+    }
   }
   if (state.startsLast60s >= th.runaway60s) {
     const who = fmtSpawners(state.spawners)
@@ -299,6 +312,18 @@ export function evaluateAgentGate(
       decision: 'warn', code: 'FORK_FAT_PARENT',
       reason: `[agentlens] fork inherits ~${parentK} tokens of parent prefix (warm cache — read rate). ` +
         `Compact before large fan-outs to shrink what every fork re-reads.`,
+    }
+  }
+  // The unattributed big-write pool: possibly thrash whose requests could not be chained,
+  // possibly N fresh boots paying their one-time cost. It no longer denies (TRDD-THRGX41P) —
+  // it informs. The 3 mirrors the tracker's same-session repeat threshold.
+  if (!state.thrash?.active && (state.thrash?.unattributed.count ?? 0) >= 3) {
+    const t = state.thrash as ThrashReport
+    return {
+      decision: 'warn', code: 'THRASH_UNATTRIBUTED',
+      reason: `[agentlens] ${t.unattributed.count} big low-read prefix writes (~${k(t.unattributed.rebilledTokens)} tokens) ` +
+        `in ${Math.round(t.windowMs / 60_000)}min could not be attributed to any session — possible fan-out boots, ` +
+        `possible unreadable thrash. Run investigate_burn --windowHours 1 to name the source before widening fan-outs.`,
     }
   }
   if (state.startsLast2min >= th.fanoutWarn2min) {
@@ -480,6 +505,15 @@ export function buildAdvisory(state: AgentGateState): { code: string; text: stri
         `~${k(state.thrash.rebilledTokens)} tokens of prefix each turn instead of reading cache` +
         `${state.thrash.model ? ` (model ${state.thrash.model})` : ''}. ${thrashSource(state.thrash)} ` +
         `Do NOT launch more agents until the source is fixed.`,
+    }
+  }
+  if (!state.thrash?.active && (state.thrash?.unattributed.count ?? 0) >= 3) {
+    const t = state.thrash as ThrashReport
+    return {
+      code: 'THRASH_UNATTRIBUTED',
+      text: `⚠ AgentlensPro: ${t.unattributed.count} big low-read prefix writes (~${k(t.unattributed.rebilledTokens)} tokens) ` +
+        `in the last ${Math.round(t.windowMs / 60_000)}min could not be attributed to any session — possible fan-out ` +
+        `cold starts, possible thrash with unreadable requests. investigate_burn --windowHours 1 names it.`,
     }
   }
   if (state.startsLast2min >= th.fanoutWarn2min) {
