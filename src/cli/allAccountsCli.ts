@@ -13,6 +13,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { listAllAccounts, type AccountStatusRow, type AccountWindow } from '../allAccounts'
 import { loadToken } from '../subscriptionUsage'
+import { EXIT as CLI_EXIT } from './cliErrors'
 
 export const ALL_ACCOUNTS_USAGE = `agentlenspro get_account_status --all [flags]
 
@@ -30,9 +31,14 @@ freshness, per window:
 
 flags:
   --json       machine-readable output (every field, including the reasons)
-  --out FILE   write the full report to FILE; print only a one-line digest`
+  --out FILE   write the full report to FILE; print only a one-line digest
 
-export const EXIT = { OK: 0, BLIND: 1, USAGE: 2 } as const
+exit: 0 = answered · 2 = BLIND (no account ever observed — "cannot see", NOT "no accounts") · 64 = bad command line`
+
+/** The house contract (./cliErrors): BLIND is the "could not answer honestly" code (2), usage is
+ *  EX_USAGE (64). BLIND was 1 during development; unified with the CLI-wide exit vocabulary before
+ *  the feature's first mainline release so no consumer ever meets the drifted values. */
+export const EXIT = { OK: CLI_EXIT.OK, BLIND: CLI_EXIT.UNKNOWN, USAGE: CLI_EXIT.USAGE } as const
 
 /** A window in one cell: the verdict, and the number only when there IS one. `-` is not 0. */
 function cell(w: AccountWindow): string {

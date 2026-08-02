@@ -18,6 +18,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { dataDir } from './cliCore'
+import { EXIT as CLI_EXIT } from './cliErrors'
 import { queryStatusline, type StatuslineStream } from '../statuslineStore'
 import { calcTokenCostUsd, lookupRates } from '../shared/pricing'
 
@@ -50,10 +51,15 @@ flags:
   --until S      end of the window (ISO timestamp)
   --limit N      max rows (default 40)
   --json         machine-readable output
-  --out FILE     write the full report to FILE; print only a one-line digest`
+  --out FILE     write the full report to FILE; print only a one-line digest
 
-/** Exit codes: 0 answered, 1 BLIND (no data — NOT "no burn"), 2 usage. */
-export const EXIT = { OK: 0, BLIND: 1, USAGE: 2 } as const
+exit: 0 = answered · 2 = BLIND (cannot see — NOT "no burn") · 64 = bad command line · 1 = runtime failure`
+
+/** Exit codes — the house contract (./cliErrors): 0 answered · 2 BLIND ("cannot see", NOT "no
+ *  burn" — the house "could not answer honestly" code) · 64 bad command line · 1 runtime failure
+ *  (an escaped throw, mapped by the shim). BLIND was 1 and usage was 2 during development; unified
+ *  before the feature's first mainline release so no consumer ever meets the drifted vocabulary. */
+export const EXIT = { OK: CLI_EXIT.OK, BLIND: CLI_EXIT.UNKNOWN, USAGE: CLI_EXIT.USAGE } as const
 
 const VALUED_FLAGS = new Set(['--session', '--since', '--until', '--limit', '--out', '--project'])
 
@@ -164,9 +170,12 @@ const sqlStr = (s: string): string => `'${s.replace(/'/g, "''")}'`
 export function projectPredicate(p: string): string {
   const root = p.replace(/\/+$/, '')
   const exact = sqlStr(root)
-  const under = sqlStr(`${root}/%`)
+  // Escape LIKE's own wildcards inside the path before it becomes a pattern: `_` matches ANY single
+  // character, so `--project /home/u/my_project` would silently also match `/home/u/myXproject`,
+  // and a `%` matches anything at all. ESCAPE makes the path mean itself, literally.
+  const under = sqlStr(`${root.replace(/[\\%_]/g, m => `\\${m}`)}/%`)
   return `(${['workspace_project_dir', 'workspace_current_dir', 'cwd']
-    .map(c => `${c} = ${exact} OR ${c} LIKE ${under}`).join(' OR ')})`
+    .map(c => `${c} = ${exact} OR ${c} LIKE ${under} ESCAPE '\\'`).join(' OR ')})`
 }
 
 /** Compose a view's WHERE from the shared filters plus any view-specific conditions.
@@ -548,8 +557,10 @@ export async function runStatuslineHistoryCli(argv: string[]): Promise<number> {
     rows = await queryStatusline(root, view.stream, view.sql(limit, filters), { sinceMs, untilMs })
     if (rows !== null && view.post) rows = view.post(rows)
   } catch (e) {
-    console.error(`query failed: ${(e as Error).message}`)
-    return EXIT.USAGE
+    // A failed query is a RUNTIME failure, not a caller mistake: rethrow and let the shim map it
+    // to exit 1. Returning USAGE here made a DuckDB error read as "your command line was wrong",
+    // which a scripting caller would route to its own-bug handler and suppress.
+    throw new Error(`query failed: ${(e as Error).message}`)
   }
 
   // BLIND vs EMPTY, and the difference is the whole point. `null` means the store holds nothing for

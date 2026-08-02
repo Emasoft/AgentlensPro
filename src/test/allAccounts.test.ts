@@ -260,13 +260,13 @@ suite('the --all CLI — answers with the server DOWN, and BLIND is not "no acco
     }
   }
 
-  test('an empty roster exits BLIND (1), and says so in words', () => {
+  test('an empty roster exits BLIND (2 — the house "cannot answer honestly" code), and says so in words', () => {
     inSandbox('', () => {
       const errs: string[] = []
       const realErr = console.error
       console.error = (...a: unknown[]): void => { errs.push(a.join(' ')) }
       try {
-        assert.strictEqual(runAllAccountsCli([]), 1, 'BLIND must be a non-zero exit a script can branch on')
+        assert.strictEqual(runAllAccountsCli([]), 2, 'BLIND must be the house EX_UNKNOWN (2) — non-zero, and distinct from a runtime failure (1)')
       } finally { console.error = realErr }
       assert.ok(errs.join('\n').includes('cannot see'), 'and it must not read as "no accounts"')
     })

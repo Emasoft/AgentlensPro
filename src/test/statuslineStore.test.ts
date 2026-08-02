@@ -477,7 +477,10 @@ suite('statuslineStore — absence, malformed partitions, and retention', () => 
 
       const s = new StatuslineStore({ root, autoTimer: false })
       assert.strictEqual(await s.maybeSeal(), 1)
-      assert.strictEqual(s.stats().corruptWals, 0)
+      // The torn line lands in the part as an all-NULL row (measured — ignore_errors does not drop
+      // it), and since 2026-08-02 that degradation is COUNTED rather than silent. Still sealed:
+      // corruptWals is a visibility metric here, not a refusal.
+      assert.strictEqual(s.stats().corruptWals, 1)
       const rows = await queryStatusline(root, 'main', 'SELECT count(session_id) n FROM samples')
       assert.ok(Number(rows![0].n) >= 3, 'the good records must still be queryable BY FIELD after the seal')
     } finally {

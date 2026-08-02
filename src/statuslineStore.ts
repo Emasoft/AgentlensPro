@@ -190,9 +190,13 @@ const GUARANTEED_COLUMNS: ReadonlyArray<[string, string]> = [
   // The workspace block, which the `--project` filter matches on. Three location fields because a
   // session can legitimately sit at any of them: `workspace_project_dir` is the root Claude Code was
   // opened at, `workspace_current_dir`/`cwd` follow the agent (a worktree agent runs under
-  // <root>/.claude/worktrees/<x>). The subagent stream carries none of these at the top level — its
-  // per-agent cwd lives inside `tasks[]` — which is precisely why they are guaranteed rather than
-  // assumed: referencing an absent column is a binder error that kills the whole view.
+  // <root>/.claude/worktrees/<x>). The subagent stream does NOT carry the workspace_* pair at the
+  // top level (MEASURED on the live store: 0 of 6,740 samples) — but it DOES carry top-level
+  // `session_id` and `cwd` (6,740 and 6,737 of 6,740; the PARENT session's cwd), which is what lets
+  // --session and --project filter that stream: in the OR-chain the populated `cwd` term decides the
+  // row while the NULL workspace_* terms fall away. The per-agent worktree cwd additionally lives
+  // inside `tasks[]`. The absent pair is precisely why these are guaranteed rather than assumed:
+  // referencing an absent column is a binder error that kills the whole view.
   ['workspace_project_dir', 'VARCHAR'],
   ['workspace_current_dir', 'VARCHAR'],
   ['cwd', 'VARCHAR'],
@@ -402,7 +406,7 @@ export class StatuslineStore {
         for (const { dir } of dayPartitions(this.root, stream)) {
           const isPastDay = path.basename(dir) !== today
           for (const wal of listFiles(dir, f => f.startsWith('wal-') && f.endsWith('.ndjson'))) {
-            const rows = this.countLines(wal)
+            let rows = this.countLines(wal)
             if (rows === 0) { if (isPastDay) { try { fs.unlinkSync(wal) } catch { /* raced */ } } continue }
             // A WAL is sealed early in two cases where it will NEVER grow again, because leaving it
             // open costs every query a raw-JSON re-read of a file that can only get colder:
@@ -412,7 +416,24 @@ export class StatuslineStore {
             //     would have sat unsealed until midnight.
             const orphan = path.basename(wal) !== `wal-${process.pid}.ndjson`
             if (!isPastDay && !orphan && rows < sealRows()) continue
-            if (await this.sealOne(wal, rows)) sealed++
+            let target = wal
+            if (!isPastDay && !orphan) {
+              // ROTATE our own LIVE WAL before sealing it. flush() keeps appending to the fixed
+              // per-pid name, and sealOne awaits between the count and the COPY — so sealing the
+              // live file in place races the appender: COPY reads more rows than were counted,
+              // the verify fails, and a whole DuckDB instance is wasted per tick. After the atomic
+              // rename the rotated file can never grow again (flush recreates the live name on its
+              // next write), so the recount below is exact and the race is gone by construction.
+              const rot = wal.replace(/\.ndjson$/, `.rot-${Date.now().toString(36)}${this.seq}.ndjson`)
+              try { fs.renameSync(wal, rot) } catch { continue }   // raced with a purge — next tick
+              // Drop the stale row-count cache: flush() derives the fresh WAL's count from it, and
+              // a leftover entry for the old path would over-count the file that replaces it.
+              this.walRows.delete(wal)
+              target = rot
+              rows = this.countLines(rot)   // appends between count and rename landed in the rotation
+              if (rows === 0) continue
+            }
+            if (await this.sealOne(target, rows)) sealed++
           }
         }
       }
@@ -448,8 +469,12 @@ export class StatuslineStore {
     // Defence in depth behind the collision-free name: COPY TO silently overwrites, and an
     // overwritten part is destroyed data. If this fires, the naming invariant is broken — stop.
     if (fs.existsSync(out)) throw new Error(`refusing to overwrite existing part ${out} — part naming must be collision-free`)
-    const duck = await openDuck()
+    let duck: { con: DuckConn; close: () => void } | null = null
     try {
+      // openDuck INSIDE the try: a native-module/OOM failure here used to escape sealOne entirely,
+      // turning the 60 s seal timer into an unhandled-rejection warning on every tick — the exact
+      // failure the never-throw contract below exists to prevent.
+      duck = await openDuck()
       // Refuse a file whose record structure the reader could not infer — see inferenceCollapsed.
       // Metadata-only, and only on the seal path (a 60 s timer), never on the append path.
       const cols = (await duck.con.runAndReadAll(
@@ -476,8 +501,21 @@ export class StatuslineStore {
         // Do NOT delete the WAL. Remove the untrustworthy part instead and leave the raw rows for the
         // next attempt — a short read here would otherwise silently destroy samples.
         try { fs.unlinkSync(out) } catch { /* best effort */ }
+        // A SHORT part means rows were LOST in conversion outright. MEASURED, this shape does not
+        // occur for a malformed line (see the NULL-row check below) — but if a DuckDB version ever
+        // does short-read, the retry can never converge, so COUNT it or the WAL re-fails forever
+        // while stats() shows nothing wrong. got > expectRows cannot happen any more (live WALs
+        // are rotated before sealing, and orphans never grow); if it ever does, plain retry.
+        if (got < expectRows) this.corruptWals += 1
         return false
       }
+      // ignore_errors does NOT drop an unparseable line — MEASURED: it lands as an all-NULL row,
+      // so the count matches and the verify passes. Sealing then converts a torn line (a crash
+      // mid-write) into a NULL row and deletes its raw bytes. Acceptable — the line was garbage —
+      // but never silently: count(ts) < count(*) can only mean broken source lines, because
+      // append() writes ts on every record.
+      const withTs = Number((await duck.con.runAndReadAll(`SELECT count(ts) c FROM read_parquet(${q(out)})`)).getRowObjects()[0].c)
+      if (withTs < got) this.corruptWals += got - withTs
       fs.unlinkSync(wal)
       this.walRows.delete(wal)
       return true
@@ -485,7 +523,7 @@ export class StatuslineStore {
       try { if (fs.existsSync(out)) fs.unlinkSync(out) } catch { /* best effort */ }
       return false   // never throw out of the seal path — the next tick retries
     } finally {
-      duck.close()
+      duck?.close()
     }
   }
 

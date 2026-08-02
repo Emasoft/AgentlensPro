@@ -1015,8 +1015,8 @@ the `left` column before acting. It is deliberately suppressed when the reading'
 contradicts `~/.claude.json`, because the premise then rests on a claim known to be wrong.
 
 **`unreadable` is never an absent row.** "Cannot read this account" and "this account has no headroom"
-are opposite signals; a missing row renders as the second. An empty roster is **BLIND** (exit 1),
-never "no accounts". Per-model weekly buckets are reported separately and **never** folded into the
+are opposite signals; a missing row renders as the second. An empty roster is **BLIND** (exit 2 —
+the house "cannot answer honestly" code; it was 1 before v2.22.0), never "no accounts". Per-model weekly buckets are reported separately and **never** folded into the
 verdict — a spent per-model bucket does not block other models.
 
 ## Per-project and per-subagent history — `agentlenspro statusline-history`
@@ -1062,9 +1062,10 @@ matched rather than trusting the project dir.
 Every point-in-time field is **latest-wins**, peaks are **max**, and nothing is ever summed: the
 status line misses fast turns, so summing double-counts nothing and under-counts everything.
 
-**Exit codes are part of the answer.** `1` = **BLIND** — the store holds nothing for this window,
+**Exit codes are part of the answer.** `2` = **BLIND** — the store holds nothing for this window,
 which means *"cannot see"*, **never** *"no burn"* (capture may not be installed: run `agentlenspro
---install-statusline`). `0` with `(no rows matched)` is the opposite: we looked, and the filter
+--install-statusline`); `64` = bad command line, `1` = runtime failure. (BLIND was exit 1 before
+v2.22.0.) `0` with `(no rows matched)` is the opposite: we looked, and the filter
 genuinely excluded everything. Flags: `--since H|ISO` (default 24h) · `--until` · `--limit` ·
 `--session ID` · `--json` · `--out FILE` (full report to disk, one-line digest to stdout).
 
