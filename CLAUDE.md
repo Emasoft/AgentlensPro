@@ -143,11 +143,24 @@ When both capture the same session: **for Claude sessions the log transcript win
 - **Fixture JSON is gitignored** (`demo/fixtures/*.json`, `export_*.json`). Run `node scripts/redact-spans.js` before committing any fixture — they contain real telemetry/PII.
 - **`.claude/settings.json` is PROJECT scope and tracked** (only `settings.local.json` is ignored). It registers one `PreToolUse(Bash)` deny: `scripts/deny-playwright-init-agents.js`, which refuses playwright's agent-generator subcommand because it writes `.claude/agents/`, `.github/agents/`, a `copilot-setup-steps.yml` workflow, and `.mcp.json` — files an agent then loads as instructions. Installing playwright writes nothing (`scripts: {}`); the command is the only trigger, so the invocation is the only thing worth guarding. Matching is token-based (a substring version blocked `git add` of the guard's own filename); `node scripts/test-deny-playwright-init-agents.js` is the 15-case matrix.
 
-## No identities in anything tracked or shipped — enforced, not remembered
+## No identities in anything tracked, shipped, OR POSTED — enforced, not remembered
 
-`pnpm run check-identities` (`scripts/check-no-identities.js`, run by `compile`, `package`, CI, and
-the publish workflow) fails the build on a personal email address or a home path with a real username
-in any tracked or shipped file. **Skills carry a stricter bar: they must be UNIVERSAL** — installed on
+Two enforcement points, because the first one has no reach over the second surface.
+
+**Files** — `pnpm run check-identities` (`scripts/check-no-identities.js`, run by `compile`,
+`package`, CI, and the publish workflow) fails the build on a personal email address or a home path
+with a real username in any tracked or shipped file.
+
+**Outbound posts** — `scripts/deny-identity-leak-to-github.js`, a PreToolUse(Bash) hook, denies a
+`gh` command that PUBLISHES prose (issue/pr/release/gist/discussion create|comment|edit|review) when
+the text carries an identity; it reads `--body-file`/`-F` from disk, because that is the shape the
+real incident took. `pnpm run check-guards` runs its 22-case matrix from `compile`/`package`.
+Evidence: on 2026-08-02 agents pasted account tables into **three PUBLIC issue comments**
+(AgentlensPro#8, ai-maestro#95, ai-maestro#102), publishing three real addresses; the file check
+neither did nor could fire, because it scans FILES and a comment is not one. All three were redacted
+and the guard was verified to deny the actual leaked body. A synthetic `john@gmail.com` in
+ghe-marketplace#1 was left alone — verifying each hit before editing is what keeps a redaction sweep
+from mangling someone's documentation over a placeholder. **Skills carry a stricter bar: they must be UNIVERSAL** — installed on
 other people's machines, so a real session id or account uuid there is one machine's noise shipped to
 everyone. Ids in a skill must be visibly fake (≤2 distinct characters: `aaaaaaaa`, `bbbb2222`).
 
