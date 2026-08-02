@@ -309,6 +309,31 @@ investigating a window that has already rolled.
 `exhaustionReason`, and splits cross-rotation sessions between accounts by time. If you have not
 rotated, skip it — the first two commands are the answer.
 
+## The exit-code contract — read this BEFORE you shell out to this CLI
+
+If you are calling `agentlenspro` from a script or an agent loop rather than reading its output
+yourself, this is the part that decides whether your code is correct:
+
+| Exit | What it means | What stdout is |
+|---|---|---|
+| **0** | The command answered. | **A result — parse it.** |
+| **2** | The tool REFUSED (not found, no calibration, no value in the feed). Not a crash. | **Empty.** The reason is JSON on **stderr**: `{"tool": "...", "error": "..."}` |
+| **1** | A runtime failure, or a watcher's deliberate ABORT verdict (`budget --watch`). | A message, not a payload |
+| **64** | Your command line was wrong; nothing ran. | A message naming the valid values |
+
+`if rc != 0: don't parse` is therefore **correct** — that is the habit this contract is built
+around. It was not always true: before 2.22.0 a refusal printed `{"error": …}` on **stdout** and
+exited **0**, so a consumer read a refusal as an answer (issue #9 §1). If you must support an
+older binary, check for a top-level `error` key as well as the exit code.
+
+Two more things a program needs:
+
+- **`--json` is a global.** It works on every tool and overrides the human rendering, so a tool
+  that normally prints a table still gives you JSON. `--out FILE` writes the full payload to disk
+  and prints a digest instead; on a refusal the file is **not** written.
+- **A refusal never writes `--out`.** A file containing `{"error": …}` is worse than no file,
+  because the next reader finds it and trusts it.
+
 ## When a command fails — read the failure, don't retry blindly
 
 | What you see | What it means | Do |
