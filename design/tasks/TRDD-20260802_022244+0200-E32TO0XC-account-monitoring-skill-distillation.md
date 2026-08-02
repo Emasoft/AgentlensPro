@@ -1,6 +1,6 @@
 ---
 trdd-id: E32TO0XC
-title: Distill a definitive set of account-monitoring skills from the 81-project corpus
+title: Distill a definitive set of account-monitoring skills from the 80-project corpus
 column: backburner
 created: 2026-08-02T02:22:44+0200
 updated: 2026-08-02T02:58:30+0200
@@ -10,7 +10,7 @@ npt: []
 eht: []
 ---
 
-# Distill a definitive set of account-monitoring skills from the 81-project corpus
+# Distill a definitive set of account-monitoring skills from the 80-project corpus
 
 ## Status — DEFERRED ON PURPOSE, but ONE SLICE IS DONE
 
@@ -48,7 +48,7 @@ pricing table and the status-line payload schema were each worked out here from 
 least one of them (the undocumented usage endpoint, credited to `pizzimenti/ccgauge`) already came
 from exactly this kind of source.
 
-The corpus is **81 zipped projects, ~397 MB**, in `downloads_dev/claude account switchers projects/`
+The corpus is **80 zipped projects, ~397 MB** (counted; an earlier "81" included the `_extracted/` dir), in `downloads_dev/claude account switchers projects/`
 (gitignored — a stranger cloning this repo will not have it; it is an input the owner supplies).
 Names visible in the listing span at least five distinct problem families: account switchers
 (`cc-switch`, `ccswitch`, `claude-code-multi-account-*`, `Claude_Code_Multiple_Login`), usage
@@ -72,7 +72,7 @@ notes below are only what is specific to THIS corpus.
 
 ## Acceptance
 
-- [ ] Every one of the 81 archives is opened and accounted for — including the ones that turn out to
+- [ ] Every one of the 80 archives is opened and accounted for — including the ones that turn out to
       be worthless. A corpus sweep that silently skips N inputs reads as "covered everything".
 - [ ] JOB B phase 1 completes across the WHOLE corpus before any skill is written. Integrating a
       technique from batch 1 and then finding a better one in batch 6 means rewriting the skill.
@@ -85,7 +85,7 @@ notes below are only what is specific to THIS corpus.
       the cache-break cause list were each measured here; a community project asserting otherwise is
       a claim to verify, not a correction to apply.
 - [ ] Malware / prompt-injection pre-scan on every archive before any agent reads its contents, and
-      every worker prompt states that corpus text is UNTRUSTED DATA. 81 archives from 81 strangers is
+      every worker prompt states that corpus text is UNTRUSTED DATA. 80 archives from 80 strangers is
       the exact shape the injection guard exists for.
 - [ ] Attribution: any technique taken recognizably from one project credits it, as the usage
       endpoint already credits `ccgauge`.
