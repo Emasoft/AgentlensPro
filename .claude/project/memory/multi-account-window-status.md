@@ -47,4 +47,18 @@ A stale reading is NOT automatically unknown. A window carries an absolute `rese
 
 The plural verb is served by a CLI fast path that BYPASSES the server: it reads only files, and its audience is deciding what to do about a machine that is already in trouble. The first build proxied to the server and answered `cannot reach http://localhost:4316/mcp` when stopped — while the tool description already claimed it worked cold. Verify an offline claim by stopping the server and running the command.
 
+
+^ATOM-3G7H-SN3B [desc:"the archive only fills if something REFRESHES; rotation is the one moment a non-live account can be read", keywords: all_accounts_show_unreadable archive_never_fills nothing_fetches_usage_on_a_schedule when_can_a_non-live_account_be_read keychain_opt-in_does_not_reach_the_server, ocd: 2026-08-02, lmd: 2026-08-02]
+
+Archiving on fetch preserves only what something else already asked for — and nothing did: 13 h after
+the archive shipped it still held ONE record. The server now refreshes at startup, hourly, and ON
+ACCOUNT CHANGE. The last is the one that makes non-live rows possible at all: limits are per account
+and the usage endpoint only ever answers for the credential currently installed, so the ONLY chance to
+capture account B's windows is while B is live — miss it and B stays `unreadable` until the next
+rotation. The refresh passes NO `allowKeychain` (a daemon that can hang on a macOS password dialog is
+worse than a stale number), so on macOS it needs `AGENTLENS_READ_KEYCHAIN_USAGE=1` in the SERVER's
+environment; setting it for the CLI does nothing, because the fetch is server-side. [^1]
+
 ## Notes and lessons learned
+
+[^1]: [id:ATOM-EIRJ-GPEU, status:valid, desc:"log every outcome of a background refresh, not just success", keywords:"cannot_tell_if_the_timer_fired silence_means_two_things logged_only_success feature_unverifiable_from_the_log", ocd:2026-08-02, lmd:2026-08-02] DO NOT log only the SUCCESS of a periodic background refresh, BECAUSE a refusal (no readable token, a 429 cooldown) then looks exactly like the timer never firing, and "is this working?" has no answer from the log — measured: it cost a full diagnostic cycle unable to distinguish the two. DO log every outcome with its reason, deduplicated on the reason so a recurring refusal states itself once.
