@@ -11,9 +11,9 @@ const H = 3600_000
 const NOW = Date.UTC(2026, 6, 15, 12, 0, 0)
 // A realistic rotation history: A → B → A(current). B's stint = [NOW-8h, NOW-2h).
 const RECORDS = [
-  { ts: NOW - 20 * H, accountId: 'acct-aaaa', email: 'a@x.com', plan: 'Max 20x' },
-  { ts: NOW - 8 * H, accountId: 'acct-bbbb', email: 'b@x.com', plan: 'Max 20x' },
-  { ts: NOW - 2 * H, accountId: 'acct-aaaa', email: 'a@x.com', plan: 'Max 20x' },
+  { ts: NOW - 20 * H, accountId: 'acct-aaaa', email: 'a@example.com', plan: 'Max 20x' },
+  { ts: NOW - 8 * H, accountId: 'acct-bbbb', email: 'b@example.com', plan: 'Max 20x' },
+  { ts: NOW - 2 * H, accountId: 'acct-aaaa', email: 'a@example.com', plan: 'Max 20x' },
 ]
 const SEGS = segmentsFromRecords(RECORDS)
 
@@ -75,8 +75,8 @@ suite('resolveTargetAccount — previous / current / prefix / email', () => {
 
   test('uuid prefix and email both resolve; an unknown spec returns null', () => {
     assert.strictEqual(resolveTargetAccount(SEGS, 'acct-b', NOW)!.accountId, 'acct-bbbb')
-    assert.strictEqual(resolveTargetAccount(SEGS, 'b@x.com', NOW)!.accountId, 'acct-bbbb')
-    assert.strictEqual(resolveTargetAccount(SEGS, 'nope@x.com', NOW), null)
+    assert.strictEqual(resolveTargetAccount(SEGS, 'b@example.com', NOW)!.accountId, 'acct-bbbb')
+    assert.strictEqual(resolveTargetAccount(SEGS, 'nope@example.com', NOW), null)
   })
 })
 
@@ -224,8 +224,8 @@ suite('buildAccountBurnersReport — dual windows, project rollup, exhaustion ma
       ev({ ts: NOW - 4 * H, sessionId: 's1', cacheReadTokens: 2e6, cacheCreateTokens: 5e5, costUsd: 4 }),
     ]
     const r = buildAccountBurnersReport({ ...base, events, cards: [] })
-    assert.match(r.text, /━━ 5h window of b@x\.com \(rotated out\) ending/)
-    assert.match(r.text, /━━ 7d window of b@x\.com \(rotated out\) ending/)
+    assert.match(r.text, /━━ 5h window of b@example\.com \(rotated out\) ending/)
+    assert.match(r.text, /━━ 7d window of b@example\.com \(rotated out\) ending/)
     assert.match(r.text, /cache-created\s+cache-read/)
   })
 })

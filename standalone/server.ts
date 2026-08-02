@@ -31,6 +31,7 @@ import { startMcpHttpServer, labelBurnStatusAccounts } from '../src/mcpServer'
 import { isDisallowedCrossOrigin, setAllowedOriginCors } from '../src/httpOrigin'
 import { resolveCallContext, callBodyRegistry } from '../src/rawBodyContext'
 import { appendHookEvent, readHookEvents, purgeHookEventBuckets, hookEventsDiskUsage, verifyAppendedLine, quarantineSpoolFile, type HookEventRecord, type AppendPosition } from '../src/hookEventStore'
+import { StatuslineStore, retentionDays as statuslineRetentionDays, type StatuslineStream } from '../src/statuslineStore'
 import { extractLifecycleEvents, type LifecycleKind } from '../src/lifecycleEvents'
 import { scanCacheRiskCommands, type CacheRiskKind } from '../src/cacheRiskCommands'
 import { buildDroppedLogEventRecord, appendDroppedLogEvent, purgeLogEventBuckets, logEventsDiskUsage } from '../src/logEventSink'
@@ -83,6 +84,7 @@ import { formatGenAiEventContent } from '../src/genAiContent'
 import { ResourceMonitor } from '../src/resourceMonitor'
 import { AdmissionController, admissionLimitsFromEnv, type AdmitResult } from '../src/admissionController'
 import { resolveRetention } from '../src/retentionConfig'
+import { listObservedAccountUsage, getSubscriptionUsage, type SubscriptionUsage } from '../src/subscriptionUsage'
 
 const OTLP_PORT  = parseInt(process.env.OTLP_PORT  ?? '4318')
 const UI_PORT    = parseInt(process.env.UI_PORT    ?? '3000')
@@ -346,6 +348,7 @@ const persistStats = {
   cardsWrites: 0, cardsBytes: 0,
   hookEventWrites: 0, hookEventBytes: 0,
   logEventWrites: 0, logEventBytes: 0,
+  statuslineSamples: 0,
   gateChecks: 0, gateDenies: 0, gateWarns: 0, gateAdvisories: 0,
   bodiesLastPurge: { at: 0, removedFiles: 0, freedBytes: 0, keptFiles: 0, keptBytes: 0 },
 }
@@ -619,16 +622,120 @@ function purgeLogEvents(): void {
   }
 }
 
+// Status-line samples (`agentlenspro statusline` → POST /api/statusline-samples): their OWN store,
+// deliberately NOT the hook-event buckets. Measured at 396 samples/min across 13 sessions (~1.29
+// GB/day raw at 20 instances), they evicted the 600-slot lifecycle ring down to an ~87 s span —
+// blinding check_burn_risk's 5- and 10-minute windows — and ate the unfiltered 1000-record budget
+// that GET /api/lifecycle-events reads, silently truncating the timeline. Columnar + compressed here
+// instead: ~18x as zstd Parquet, and column-pruned queries in ~12 ms.
+const STATUSLINE_DIR = path.join(DATA_DIR, 'statusline')
+const statuslineStore = new StatuslineStore({ root: STATUSLINE_DIR })
+
+function purgeStatusline(): void {
+  const r = statuslineStore.purge(statuslineRetentionDays())
+  if (r.removed.length > 0) {
+    console.log(`[AgentLens] statusline retention: purged ${r.removed.length} partition(s), ${(r.freedBytes / 1048576).toFixed(1)}MB`)
+  }
+}
+
+/** Ingest one status-line sample. Shared by POST /api/statusline-samples AND the legacy path where an
+ *  older CLI (or a spooled event written by one) still posts these to /api/hook-events — both must
+ *  land in the same place or a version skew would split the history in two. */
+function ingestStatuslineSample(payload: Record<string, unknown>, stream: StatuslineStream): void {
+  try {
+    statuslineStore.append(payload, stream)
+    // Feed the live aggregates too. Only the MAIN stream: StatuslineUsageAgg is per-SESSION context
+    // and cost, and a subagent payload carries neither — it carries a tasks[] list whose numbers
+    // belong to other agents entirely. Mixing them in would corrupt every card's cost.
+    if (stream === 'main') statuslineReader.ingestSample(payload)
+    persistStats.statuslineSamples++
+  } catch (e) {
+    // A sample is worth strictly less than the server staying up; count it and move on.
+    statuslineIngestErrors++
+    if (statuslineIngestErrors === 1) console.warn(`[AgentLens] statusline sample append FAILED: ${(e as Error).message}`)
+  }
+}
+let statuslineIngestErrors = 0
+
+/** The two `hook_event_name` values the capture used before it had its own endpoint, mapped to the
+ *  stream each belongs to. Kept as data so the legacy bridge and any future consumer agree. */
+const STATUSLINE_EV_STREAMS: Record<string, StatuslineStream | undefined> = {
+  StatusLineSample: 'main',
+  SubagentStatusLineSample: 'subagent',
+}
+
 void archiveOtelBodies() // enforce on boot — a long-dead server must not leave the corpus unbounded
 purgeHookEvents()
 purgeLogEvents()
+purgeStatusline()
 // Spool mode drains every 60s (the bodies sit in volatile RAM — reclaim them fast); otherwise the
 // legacy hourly cadence is plenty for plain-file bodies on disk.
 const BODIES_PASS_INTERVAL_MS = SPOOL_MODE ? 60_000 : 3600e3
 const bodiesPurgeTimer = setInterval(() => { void archiveOtelBodies() }, BODIES_PASS_INTERVAL_MS)
 bodiesPurgeTimer.unref()
-const hookPurgeTimer = setInterval(() => { purgeHookEvents(); purgeLogEvents() }, 3600e3)
+const hookPurgeTimer = setInterval(() => { purgeHookEvents(); purgeLogEvents(); purgeStatusline() }, 3600e3)
 hookPurgeTimer.unref()
+// Adopt the single-file usage cache into the per-account archive (issue #8). A usage FETCH archives
+// itself, but the reading already on disk when this shipped has no such moment — and it is destroyed
+// the next time any account is fetched. This is deliberately on the slow maintenance timer rather
+// than the read path: the status line calls into usage on every render, and one file read per render
+// to preserve a record that changes a few times a day is the wrong trade. Runs once at startup too,
+// because an hour is long enough for a rotation to happen first.
+// Seeded null so the FIRST tick after boot counts as a change and captures the live account — a
+// server restart is exactly when the archive is most likely to be missing a current reading.
+let lastSeenAccountUuid: string | null = null
+
+const adoptUsageArchive = (): void => { try { listObservedAccountUsage() } catch { /* best effort */ } }
+adoptUsageArchive()
+
+// THE CADENCE THAT FILLS THE ARCHIVE. Archiving on fetch (src/subscriptionUsage.ts) only preserves
+// readings that something else already asked for — and nothing did: measured 13 h after the archive
+// shipped, it still held exactly ONE record, the legacy cache adopted at startup. A per-account view
+// whose data never refreshes reports every account as `unreadable` forever, which is the failure it
+// exists to prevent.
+//
+// NOTE THE OPT-IN IS NOT BYPASSED. This is a daemon, so it calls getSubscriptionUsage with NO
+// `allowKeychain`: on macOS an un-ACL'd keychain read pops a password prompt, and a background process
+// that can hang on a modal dialog is worse than a stale number. Where a token is readable (a
+// credentials file, or AGENTLENS_READ_KEYCHAIN_USAGE=1 in the SERVER's environment) this fills
+// automatically; where it is not, every call is a cheap no-op returning `opt_in_required`.
+//
+// The TTL, the 429 cooldown and the cross-process lock all live inside getSubscriptionUsage, so
+// calling it more often than the TTL costs nothing — it serves the cache and returns.
+// Logs EVERY outcome, not just success. Logging only `ok` was the first version and it made the
+// cadence unverifiable: a refusal (no readable token, a 429 cooldown) looked exactly like the timer
+// never firing, so "is this feature working?" had no answer from the log. Deduplicated on the reason
+// so a recurring refusal states itself once instead of every hour.
+let lastUsageRefreshReason: string | null = null
+const refreshAccountUsage = (why: string): void => {
+  void getSubscriptionUsage({}).then((u: SubscriptionUsage | null) => {
+    const reason = u?.reason ?? 'no-result'
+    if (reason === 'ok') {
+      console.error(`[AgentLens] usage refreshed (${why}) for ${u?.accountLabel ?? 'an unidentified account'}`)
+    } else if (reason !== lastUsageRefreshReason) {
+      console.error(`[AgentLens] usage refresh (${why}) declined: ${reason}`
+        + (reason === 'opt_in_required'
+          ? ' — the credential is in the macOS keychain and this process may not read it.'
+            + ' Start the server with AGENTLENS_READ_KEYCHAIN_USAGE=1 in its environment to enable it.'
+          : ''))
+    }
+    lastUsageRefreshReason = reason
+  }).catch(() => { /* never let a usage refresh disturb the server */ })
+}
+refreshAccountUsage('startup')
+const usageArchiveTimer = setInterval(() => {
+  adoptUsageArchive()
+  // Hourly keeps the LIVE account's row from ageing into uselessness. It cannot help a non-live
+  // account — only that account's own credential can answer for it, which is what the rotation
+  // trigger below is for.
+  refreshAccountUsage('hourly')
+}, 3600e3)
+usageArchiveTimer.unref()
+// Sealing is separate from purging: a full WAL must become an immutable Parquet part promptly (a
+// 10k-row chunk is ~16 min at 20 instances), and a past day's WAL must seal whatever its size so old
+// partitions stop costing raw-JSON reads on every query. Cheap when nothing qualifies.
+const statuslineSealTimer = setInterval(() => { void statuslineStore.maybeSeal() }, 60_000)
+statuslineSealTimer.unref()
 
 // ── Agent-launch burn gate + realtime activity (TRDD-GOD0108C) ────────────────
 // The gate sits behind a PreToolUse hook, so every read here must be in-memory:
@@ -667,6 +774,14 @@ function ingestHookEvent(payload: unknown): { status: number; body: Record<strin
   const p = payload as Record<string, unknown> | null
   if (!p || typeof p !== 'object' || typeof p.hook_event_name !== 'string' || p.hook_event_name === '') {
     return { status: 400, body: { error: 'payload must be a JSON object with hook_event_name' } }
+  }
+  // Version-skew bridge: an older CLI posts status-line samples here, and its spooled files may
+  // drain here long after an upgrade. Divert them to their own store rather than appending to the
+  // lifecycle buckets — that pollution is precisely what blinded the ring and the lifecycle timeline.
+  const asStream = STATUSLINE_EV_STREAMS[p.hook_event_name]
+  if (asStream) {
+    ingestStatuslineSample(p, asStream)
+    return { status: 200, body: { ok: true, routed: 'statusline' } }
   }
   if (!hookRuntime.captureEnabled) {
     // Switch off = accept and DROP (the hook script must stay a fire-and-forget dumb pipe; a
@@ -1002,6 +1117,26 @@ const accountStateTimeline = new AccountStateTimeline()
 let burnConfig = loadBurnConfig(process.env, os.homedir())
 
 // Gathers the current machine-wide consumption event stream once, reused by the MCP accessors + the tick.
+/** The 5h/7d window reading for the account we are ABOUT to label it with — never "whoever sampled
+ *  last".
+ *
+ *  MEASURED 2026-08-01 on this machine: 13 concurrent sessions reported EIGHT distinct (5h, 7d) pairs,
+ *  so at least four accounts were live at once. The machine-wide latest-wins snapshot would hand back
+ *  a different account's utilization and get_account_status would print it beside the current
+ *  account's email — the same class of mis-attribution that made the subscription-usage numbers
+ *  untrustworthy. Resolving through the cards' accountId keeps the number and the name together.
+ *
+ *  Returns null (absent) rather than falling back to the unattributed snapshot: a wrong window
+ *  reported confidently is worse than no window, because the caller has a calibrated estimate to
+ *  fall back on and no way to know the authoritative figure was someone else's. */
+function rateLimitsForCurrentAccount(): ReturnType<StatuslineUsageReader['getLatestRateLimits']> {
+  const uuid = getCurrentAccount()?.accountUuid
+  if (!uuid) return null
+  const sessions = buildSessionSummary()?.sessions ?? []
+  const mine = sessions.filter(s => s.accountId === uuid).map(s => s.sessionId)
+  return mine.length === 0 ? null : statuslineReader.getRateLimitsForSessions(mine)
+}
+
 function gatherBurn(now = Date.now()) {
   const sessions = buildSessionSummary()?.sessions ?? []
   const events = gatherConsumptionEvents(sessions, statuslineReader.getBillingEvents(now), now)
@@ -1128,7 +1263,7 @@ startMcpHttpServer({
   // statusline build persists it into the usage log — the authoritative window-fill source for
   // get_account_status. null when absent (a statusline.py build that doesn't emit it yet, or no
   // recent-enough record) — the handler falls back to AgentlensPro's own calibrated pct.
-  getRateLimits: () => statuslineReader.getLatestRateLimits(),
+  getRateLimits: () => rateLimitsForCurrentAccount(),
   // TRDD-GOD0108C: hot-path feeds for check_burn_risk — the in-memory event ring (zero disk)
   // and the incremental bodies tracker (CACHE_THRASH + huge-request burst without full stats).
   getRecentHookEvents: () => recentHookEvents,
@@ -1193,7 +1328,19 @@ function tickBurn(): void {
   // TRDD-YQZ9P8IL: sample the current subscription state onto the change-detected timeline. record()
   // only enqueues on a discrete change (account/mode/plan/ttl), so this 4s call is a cheap key compare
   // in the common case and a real write only a few times/hour. currentTtlContext() is 60s-cached.
-  try { accountStateTimeline.record(buildAccountStateRecord(getCurrentAccount(), currentTtlContext(), Date.now())) } catch { /* never let timeline sampling break the burn tick */ }
+  try {
+    const acct = getCurrentAccount()
+    accountStateTimeline.record(buildAccountStateRecord(acct, currentTtlContext(), Date.now()))
+    // ROTATION IS THE ONE MOMENT A NON-LIVE ACCOUNT CAN BE READ. Rate limits are per account and the
+    // usage endpoint only ever answers for the credential currently installed — so the only chance to
+    // capture account B's windows is while B is the live one. Miss it and B stays `unreadable` until
+    // the next rotation, however long that is. The rotation itself is the daemons' job; capturing the
+    // reading it makes possible is ours.
+    if (acct.accountUuid !== lastSeenAccountUuid) {
+      lastSeenAccountUuid = acct.accountUuid
+      refreshAccountUsage('account changed')
+    }
+  } catch { /* never let timeline sampling break the burn tick */ }
   pushBurnSse({ type: 'burnStatus', burnStatus: enrichBurnStatus(status) })
 
   const active = new Set<string>()
@@ -2991,6 +3138,10 @@ const uiServer = http.createServer(async (req, res) => {
       },
       bodies: { archive: archiveDiskUsage(BODIES_ARCHIVE_DIR), lastPass: p.bodiesLastPurge },
       hookEvents: { ...hookEventsDiskUsage(HOOK_EVENTS_DIR), receivedSinceBoot: p.hookEventWrites, spooled: hookSpoolCount() },
+      // Status-line samples: their own store, so `parts`/`partBytes` (sealed, compressed) are
+      // reported apart from `walBytes` (raw and un-sealed) — a walBytes that keeps climbing while
+      // parts stays flat is the signal that sealing has stalled.
+      statusline: { ...statuslineStore.stats(), receivedSinceBoot: p.statuslineSamples, retentionDays: statuslineRetentionDays() },
       // TRDD-AMEA4O4Z: gated-out OTEL log events persisted (not dropped) — sink disk usage + boot counters.
       logEvents: { ...logEventsDiskUsage(LOG_EVENTS_DIR), persistedSinceBoot: p.logEventWrites, persistedBytesSinceBoot: p.logEventBytes, retentionDays: LOG_EVENTS_RETENTION_DAYS },
       // D3K7QM2P/1c — live backpressure: in-flight/queued now, and admitted/shed since boot. A
@@ -3015,6 +3166,36 @@ const uiServer = http.createServer(async (req, res) => {
 
   // Lifecycle hook-event ingestion (scripts/spy-agentlens.sh fire-and-forget POST). Raw payload
   // is stored verbatim; classification happens at read time so the hook script stays a dumb pipe.
+  // Status-line samples get their OWN endpoint so they never touch the lifecycle buckets. Same
+  // fire-and-forget contract as /api/hook-events: the CLI never blocks on the answer, so respond
+  // fast and never fail a render.
+  if (req.method === 'POST' && url === '/api/statusline-samples') {
+    const chunks: Buffer[] = []
+    let received = 0
+    let overflowed = false
+    req.on('data', (c: Buffer) => {
+      received += c.length
+      if (received > HOOK_EVENT_MAX_BYTES) { overflowed = true; req.destroy() }
+      else chunks.push(c)
+    })
+    req.on('end', () => {
+      if (overflowed) return // destroyed mid-stream — no response possible
+      try {
+        const payload = JSON.parse(Buffer.concat(chunks).toString('utf-8')) as Record<string, unknown>
+        if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('payload must be a JSON object')
+        // `stream` rides in the payload (the capture stamps it) so the endpoint stays a single route.
+        const stream: StatuslineStream = payload.statusline_stream === 'subagent' ? 'subagent' : 'main'
+        ingestStatuslineSample(payload, stream)
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ ok: true }))
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: String(e instanceof Error ? e.message : e) }))
+      }
+    })
+    return
+  }
+
   if (req.method === 'POST' && url === '/api/hook-events') {
     const chunks: Buffer[] = []
     let received = 0
@@ -4098,6 +4279,10 @@ function shutdown() {
   // TRDD-YQZ9P8IL: final flush of the account-state timeline so a graceful stop never loses a buffered
   // state change (matches the span-store's shutdown-flush discipline).
   try { accountStateTimeline.stop() } catch { /* ignore */ }
+  // Status-line buffer → WAL (fsynced). NOT a seal: sealing is async, this path is sync and exits,
+  // and the WAL is already durable — every read unions the un-sealed WALs, so nothing is invisible
+  // until the next boot's seal timer converts it.
+  try { statuslineStore.stop() } catch { /* ignore */ }
   try { recordCollectorStop(LIFECYCLE_FILE, lifecycle) } catch { /* ignore */ }
   releasePidFile()
   process.exit(0)

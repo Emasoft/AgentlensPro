@@ -12,10 +12,18 @@
 // esbuild.js — cli.js requires the sibling server.js bundle at runtime instead of inlining a
 // second copy of the whole server.
 import { cliMain } from '../src/cli/main'
+import { EXIT, UsageError } from '../src/cli/cliErrors'
 
 cliMain(process.argv.slice(2), () => import('./server'))
-  .then(code => { process.exitCode = code })
+  // `code || process.exitCode` and not a bare assignment: a command that COMPLETED (returns 0) may
+  // still have refused to answer, and it records that by setting process.exitCode as it prints the
+  // refusal (see emit() — issue #9 §1). Overwriting with the returned 0 would republish "success"
+  // for a payload the CLI just told the caller not to parse. An explicit non-zero return still wins.
+  .then(code => { process.exitCode = code || process.exitCode || 0 })
   .catch(e => {
     console.error(`FAIL: ${(e as Error).message}`)
-    process.exit(1)
+    // EX_USAGE for a caller mistake, 1 only for a runtime failure: 1 doubles as the watchers'
+    // ABORT signal, so a typo'd tool name or flag must never read as a legitimate abort — and
+    // the tool help has promised "64 = bad command line" since issue #9.
+    process.exit(e instanceof UsageError ? EXIT.USAGE : 1)
   })

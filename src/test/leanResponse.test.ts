@@ -97,7 +97,7 @@ suite('leanResponse — the answer survives shaping', () => {
 
   test('get_account_status keeps the authoritative usageWindows percentages', () => {
     const lean = leanify({
-      summary: 'fmuaddib@gmail.com · Max 20x · subscription (within plan)',
+      summary: 'owner@example.com · Max 20x · subscription (within plan)',
       usageWindows: { fiveHourPct: 5, sevenDayPct: 96, windowSource: 'cc-rate-limits' },
       cacheTtl: { minutes: 60, regime: 'subscription', ttlSource: 'doc-matrix', basis: 'main' },
     }) as Record<string, unknown>

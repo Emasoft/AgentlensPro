@@ -66,7 +66,13 @@ for the 20x read/write spread the cache-guard skill teaches); [[agentlenspro-ide
 this page for cache accounting truths); [[agentlenspro-publish-pipeline]] (cites this page's
 TTL-tier-aware `cost_usd` fact); [[always-on-ingestion-model]] (cites this page alongside the
 burn-token accounting model); [[otlp-ingest-topology]] (cites this page's TTL-tier-aware
-`cost_usd` preference).
+`cost_usd` preference); [[statusline-capture-and-store]] (the status-line payload carries the
+harness's own tier-aware `cost.total_cost_usd` per turn, so it is the cheapest check on the rates
+here — and its rate_limits block is the un-quantized window fill).
+
+See also: [[cumulative-vs-per-turn-fields]] — a recomputed per-turn cost must use these rates AND
+come from a correctly-differenced field; getting the rate right and the delta wrong still yields a
+wrong number (measured: a 300x one).
 
 ## Notes and lessons learned
 

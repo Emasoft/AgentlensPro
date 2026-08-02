@@ -62,6 +62,12 @@ jobs:
       - name: Type check
         run: pnpm run check-types
 
+      # A publish is the one irreversible step: `skills/` ships to every installer, so an identity
+      # that reaches the tarball cannot be recalled. This runs BEFORE the bundles are built so the
+      # job stops at the cheapest point.
+      - name: Check no personal identities
+        run: pnpm run check-identities
+
       # Bundles MUST be built BEFORE the unit suite: the server integration tests
       # boot the bundled standalone/server.js (an esbuild output — only the .ts
       # sources are tracked). --production so the tests run against exactly the

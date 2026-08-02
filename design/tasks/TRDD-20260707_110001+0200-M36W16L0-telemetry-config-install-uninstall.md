@@ -29,7 +29,7 @@ configuration … when agentlens is working, it must enable the full telemetry p
 **Done manually this session (to reproduce programmatically):** added to `~/.claude/settings.json` `env`:
 `OTEL_LOGS_EXPORTER=otlp`, `OTEL_METRICS_EXPORTER=otlp`, `OTEL_LOGS_EXPORT_INTERVAL=5000`,
 `OTEL_METRIC_EXPORT_INTERVAL=10000`, `OTEL_LOG_ASSISTANT_RESPONSES=1`,
-`OTEL_LOG_RAW_API_BODIES=file:/Users/emanuelesabetta/.agentlens/otel-bodies` (user already had
+`OTEL_LOG_RAW_API_BODIES=file:~/.agentlens/otel-bodies` (user already had
 CLAUDE_CODE_ENABLE_TELEMETRY, CLAUDE_CODE_ENHANCED_TELEMETRY_BETA, endpoint 4318, http/json,
 OTEL_LOG_TOOL_CONTENT/DETAILS, OTEL_LOG_USER_PROMPTS, OTEL_TRACES_EXPORTER). Backup:
 `~/.claude/settings.json.bak-otel-*`. **AgentLens's collector accepts only http/json OTLP on 4318.**

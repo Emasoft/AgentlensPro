@@ -42,4 +42,9 @@ the previous account's window.
 **Not yet implemented** — this page is the spec; the burn breakdown groundwork (per-bucket + cost-weighted)
 already shipped (commits 2ea7fa1, d3c04b1). See TRDD-BURNWDGT STATE block for the live next-actions.
 
+See also: [[statusline-capture-and-store]] — the status-line payload is the un-quantized source for
+this budget's 5h/7d fill (the usage endpoint returns integers, the payload full floats), and it
+carries the measurement that forces a per-ACCOUNT lookup: 13 concurrent sessions here reported EIGHT
+distinct (5h, 7d) pairs, so a machine-wide "latest wins" reading is another account's window.
+
 ## Notes and lessons learned

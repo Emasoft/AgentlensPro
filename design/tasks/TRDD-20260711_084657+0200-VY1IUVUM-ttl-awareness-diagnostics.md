@@ -130,5 +130,5 @@ SKILL.md recipes + CHANGELOG v2.2.0, gates (baseline 783/0), merge --no-ff.
   TTL facts independently re-verified against the official doc by the orchestrator before
   authoring. Parts 1–3 = this TRDD; part 4 = janitor GitHub issue (orchestrator).
 - 2026-07-11 (later) — USER "fix immediately" after orchestrator wrongly asserted this
-  session was on usage credits (it is subscription/Max-5x, ipazia). Root-cause bug found +
+  session was on usage credits (it is subscription/Max-5x, the second account). Root-cause bug found +
   Part-5 account command added. Tier 0 correctness fix.

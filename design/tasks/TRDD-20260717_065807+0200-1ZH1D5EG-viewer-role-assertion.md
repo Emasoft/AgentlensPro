@@ -1,9 +1,9 @@
 ---
 trdd-id: 1ZH1D5EG
 title: Signed viewer-role assertion — MAESTRO-only settings panel for the embedded dashboard (AgentlensPro#4)
-column: ai_review
+column: complete
 created: 2026-07-17T06:58:07+0200
-updated: 2026-07-17T09:35:00+0200
+updated: 2026-08-02T14:25:00+0200
 current-owner: main
 task-type: feature
 severity: minor
@@ -99,3 +99,7 @@ MAESTRO USER. normal USERS cannot even open it, let alone change its settings."
 4. Contract pins in `src/test/cliContract.aimaestro.test.ts` + README + CHANGELOG + gate +
    deploy law + LIVE verify (curl with real signed assertions against the running server) +
    reply on #4.
+
+## Approval log
+- 2026-08-02 — AI review PASSED (ai_review backlog audit): implementation verified present in the code first-hand, not from prose. Column ai_review → human_review; the remaining gate is the human. Evidence: reports/ai-review-audit/20260802_113252+0200-batchC-security-release.md
+- 2026-08-02 — HUMAN gate closed by USER delegation ("evaluate the whole status of the project and decide yourself. just base all decisions on verified facts.", 2026-08-02); the AI audit line above is the verified basis; release-via none/absent → terminal. Column human_review → complete.

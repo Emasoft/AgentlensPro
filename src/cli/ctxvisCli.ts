@@ -14,8 +14,11 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { resolveDataDir } from '../dataDir'
 import { resolveBodiesReadScope } from '../captureConfig'
-import { resolveAnthropicAuth, countTokensExact, type CountableRequest } from '../exactTokens'
-import { loadAndAnalyze, exactifyReport, type CtxReport } from './ctxmapCli'
+import {
+  resolveAnthropicAuth, countTokensExact, countConcurrency, API_VERSION, type CountableRequest,
+} from '../exactTokens'
+import { openCountCache } from '../countCache'
+import { loadAndAnalyze, exactifyReport, checkFreshness, type CtxReport } from './ctxmapCli'
 import {
   selectTurns, listRequestCaptures, divergence, measureCommonPrefix, cacheVerdict, assertNonce,
   loadBaselines, saveBaselines, validateBaselines, BASE_AGENTS,
@@ -35,6 +38,7 @@ export const CTXVIS_USAGE = `agentlenspro ctxvis — what an agent puts in conte
   --subject <agent>   the agent under test (the others are baselines)
   --turns N           how many turns to analyse (default 2)
   --refresh-baselines re-measure the base agents even if a cached baseline looks fresh
+  --refresh-counts    ignore cached count_tokens results and re-measure every element
   --stale-ok          use a baseline whose environment no longer matches (warns loudly)
   --baselines FILE    override the baseline store path
   --html FILE         write the self-contained visual report
@@ -302,7 +306,15 @@ export async function runCtxvisCli(argv: string[]): Promise<number> {
       console.error('no Anthropic credential resolved — ctxvis measures with count_tokens and will not estimate')
       return EXIT.UNKNOWN
     }
-    const count = (r: CountableRequest): Promise<number> => countTokensExact(r, auth)
+    // ONE cache for the whole run. ctxvis measures up to 8 captures (4 agents x 2 turns) whose
+    // prefixes are byte-identical up to the point each agent's context diverges, so sharing the
+    // handle across them is where most of the saving comes from — a per-report cache would re-ask
+    // the API for prefixes the previous report had just measured.
+    // --refresh-counts, NOT --refresh: ctxvis already documents --refresh-baselines, and a second
+    // flag that is a prefix of it would silently do something entirely different to anyone who typed
+    // the shorter form meaning the longer one.
+    const cache = openCountCache({ apiVersion: API_VERSION, bypassReads: argv.includes('--refresh-counts') })
+    const count = (r: CountableRequest): Promise<number> => countTokensExact(r, auth, { cache })
 
     const files = listRequestCaptures(bodyDirs())
     if (files.length === 0) {
@@ -331,7 +343,7 @@ export async function runCtxvisCli(argv: string[]): Promise<number> {
       const turns: AgentMeasurement['turns'] = []
       for (const t of use) {
         const { req, report } = loadAndAnalyze(t.file)
-        const ex = await exactifyReport(report, req, auth)
+        const ex = await exactifyReport(report, req, auth, countConcurrency(), cache)
         if (ex.failed > 0 && report.elements.length === ex.failed) {
           warnings.push(`${agent}: every element failed to measure (${ex.failures[0]?.error ?? 'unknown'})`)
         }
@@ -352,6 +364,29 @@ export async function runCtxvisCli(argv: string[]): Promise<number> {
       measurements.push({
         agent, isSubject: agent === subject, fromBaseline: false, turns, verdict, note,
       })
+    }
+
+    // The SAME freshness check ctxmap runs. ctxvis writes its numbers into the persisted baseline
+    // store, where they become the comparison ground truth for later runs — so an undetected drift
+    // here outlives the run that introduced it. Checking only in ctxmap left the longer-lived
+    // consumer unguarded.
+    const fresh = await checkFreshness(cache, auth)
+    if (fresh.state === 'drifted') {
+      cache.dropModel(fresh.model)
+      console.error(`ctxvis: cached counts for ${fresh.model} disagree with a live re-measurement`
+        + ' — discarded. Re-run with --refresh-counts to measure from scratch; these numbers are NOT'
+        + ' being written to the baseline store.')
+      return EXIT.UNKNOWN
+    }
+    if (fresh.state === 'unchecked') {
+      warnings.push(`count cache was NOT verified this run — the freshness probe failed: ${fresh.reason}`)
+    }
+    // stats() is the ONLY thing that flushes the write buffer. Without it the tail of every run
+    // (up to 31 rows, or everything when fewer than 32 were measured) is dropped at exit and
+    // re-uploaded next time — the cache would never warm for those prefixes.
+    const cs = cache.stats()
+    if (cs.hits > 0 || cs.writes > 0) {
+      console.error(`ctxvis: count cache — ${cs.hits} hit(s), ${cs.misses} measured live`)
     }
 
     if (measurements.length === 0) {

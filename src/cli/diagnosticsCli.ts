@@ -17,7 +17,8 @@ import {
   apiRequest, callTool, dashboardUrl, dataDir, digest, fetchTools, firstSentence, fmtGb,
   fmtMb, init, mcpEndpoint, parseWhen, resolveTool, sleep, ToolInfo, ToolSchema,
 } from './cliCore'
-import { installHooks, installOtel, installSkills } from './hookInstall'
+import { EXIT, UsageError } from './cliErrors'
+import { installHooks, installOtel, installSkills, installStatusline } from './hookInstall'
 import { ensureServer, openDashboard, showStatus, stopServer } from './serverControl'
 
 export const USAGE = `agentlenspro — AI-agent observability: server, dashboard, diagnostics, hooks, setup
@@ -90,6 +91,13 @@ context (purely local — reads the captured request bodies, never the server):
                                               broke the prompt-cache prefix (what it costs to KEEP
                                               running, not just to start). Driven by the skill
                                               /agentlenspro-visualize-context
+  agentlenspro statusline-history [view]      the per-turn series Claude Code renders but never keeps.
+                                              views: sessions | subagents | windows | peaks | raw.
+                                              'subagents' is the ONLY source of a live agent's
+                                              tokenCount vs contextWindowSize (+ effort, model, and
+                                              the cwd that marks a worktree agent); 'windows' is the
+                                              only un-quantized 5h/7d reading. Reads disk, so it
+                                              answers with the server down. Needs --install-statusline
 
 diagnostics (schemas come live from the server):
   agentlenspro list [--desc]                  all tools (names; --desc adds one-line descriptions)
@@ -147,6 +155,22 @@ operations:
                         unparseable file, pre-existing content untouched)
   --uninstall-otel      remove exactly those env vars, restoring any pre-existing values
                         (same transaction guarantees)
+  --install-statusline  capture the status-line JSON Claude Code pipes to statusLine AND
+                        subagentStatusLine. statusLine is NOT a hook event -- it is a single
+                        command string and settings scopes OVERRIDE rather than merge, so
+                        capture WRAPS the command already there (verified transaction, backup)
+                        and passes its stdout + exit code through byte-for-byte. The payload is
+                        stored VERBATIM as ev=StatusLineSample / SubagentStatusLineSample: the
+                        rate_limits 5h/7d windows -- full float precision, attributed by
+                        construction to the account that session bills to), the context window
+                        split by cache_creation/cache_read, the harness's own tier-aware
+                        cost.total_cost_usd, prompt_id (= the OTEL prompt.id attribute), and —
+                        from subagentStatusLine — per-subagent tokenCount, contextWindowSize,
+                        effort, model and cwd, which nothing else publishes. Takes effect on
+                        the next refresh; no session restart.
+  --uninstall-statusline
+                        restore the original status-line command exactly (a capture-only
+                        surface, which wrapped nothing, is removed rather than left as a stub)
 
 examples:  (discover the rest with 'list --desc' then 'help <tool>')
   agentlenspro investigate_burn --windowHours 5      "my 5h window drained — what burned it, WHO?" START HERE
@@ -155,6 +179,7 @@ examples:  (discover the rest with 'list --desc' then 'help <tool>')
   agentlenspro --guard 15                            arm in a bg monitor BEFORE a fan-out; 1 line/risk transition
   agentlenspro get_burn_status                       is anything burning RIGHT NOW across all live sessions?
   agentlenspro get_account_status                    which account/plan/cache-TTL + how much 5h/7d window is left
+  agentlenspro get_account_status --all              where EVERY account stands, not just the live one — file-only, so it answers with the server DOWN
   agentlenspro get_agent_tokens --agentId abc123     EXACT tokens + $ for ONE sub-agent
   agentlenspro get_cost_rollup --groupBy project --windowHours 5    cost per project over the last 5h
   agentlenspro predict_session_cost --task "xhigh review of auth"   estimate the $ BEFORE you launch
@@ -170,7 +195,8 @@ examples:  (discover the rest with 'list --desc' then 'help <tool>')
   agentlenspro setup --dry-run                       read-only preview of what install/repair would change
   agentlenspro server status       agentlenspro daemon status      agentlenspro dashboard
 
-globals: --full (unshaped payload)   --out PATH (full JSON to disk, digest to stdout)
+globals: --full (unshaped payload)   --json (always JSON, never a rendered table)   --out PATH (full JSON to disk, digest to stdout)
+exit:    0 = stdout is a result · 2 = the tool refused (JSON reason on STDERR, stdout empty) · 64 = bad command line
 server:  $AGENTLENS_MCP_URL (default http://localhost:4316/mcp); logs -> ~/.agentlens/server.log`
 
 // Short CLI aliases → the full tool name (TRDD-EYA3X5MQ). `reload-cost` is the user-requested
@@ -361,7 +387,7 @@ export function parseToolFlags(rest: string[], schema: ToolSchema | undefined): 
   const args: Record<string, unknown> = {}
   for (let i = 0; i < rest.length; i++) {
     const tok = rest[i]
-    if (!tok.startsWith('--')) throw new Error(`unexpected argument "${tok}" — params are flags: --name value`)
+    if (!tok.startsWith('--')) throw new UsageError(`unexpected argument "${tok}" — params are flags: --name value`)
     const rawName = tok.slice(2)
     const cand = camel(rawName)
     let key = known.get(cand.toLowerCase())
@@ -373,13 +399,13 @@ export function parseToolFlags(rest: string[], schema: ToolSchema | undefined): 
       type = GLOBAL_PARAMS[cand]
     } else {
       const valid = [...Object.keys(props), ...Object.keys(GLOBAL_PARAMS)].map(k => `--${k}`).join(' ')
-      throw new Error(`unknown flag --${rawName}. Valid: ${valid}`)
+      throw new UsageError(`unknown flag --${rawName}. Valid: ${valid}`)
     }
     const next = rest[i + 1]
     if (next === undefined || next.startsWith('--')) {
       // Bare flag: only meaningful for booleans (--flag ≡ --flag true).
       if (type === 'boolean') { args[key] = true; continue }
-      throw new Error(`--${rawName} needs a value`)
+      throw new UsageError(`--${rawName} needs a value`)
     }
     args[key] = coerce(rawName, next, type)
     i++
@@ -403,11 +429,48 @@ function renderHelp(t: ToolInfo): string {
       lines.push(`  --${k.padEnd(w)}  ${String(p.type || 'any').padEnd(7)}${req} ${firstSentence(p.description)}`)
     }
   }
-  lines.push('', 'globals: --full (unshaped payload)   --out PATH (full JSON to disk, digest to stdout)')
+  lines.push('', 'globals: --full (unshaped payload)   --json (always JSON, never a rendered table)   --out PATH (full JSON to disk, digest to stdout)')
+  lines.push('exit:    0 = stdout is a result · 2 = the tool refused (JSON reason on STDERR, stdout empty) · 64 = bad command line')
   return lines.join('\n')
 }
 
-function emit(tool: string, result: unknown, globals: { out: string | null }): void {
+/**
+ * A tool-level error payload. Every one of the server's ~27 refusal sites returns
+ * `{ error: '<why>' }`, and no successful payload carries a top-level string `error` — checked
+ * against the live surface, and a rich result that adopted that key would be a naming bug.
+ * Transport failures never reach here: `callTool` rejects and the top level maps a throw to exit 1.
+ */
+function toolError(result: unknown): string | null {
+  if (typeof result !== 'object' || result === null) return null
+  const e = (result as { error?: unknown }).error
+  return typeof e === 'string' ? e : null
+}
+
+/**
+ * Print a tool's answer, and make a REFUSAL look like one to a program (issue #9 §1).
+ *
+ * Until now an error payload was printed on stdout with exit 0, so `if rc != 0: don't parse` —
+ * the near-universal habit, and the one the janitor's rotator was about to rely on — read a
+ * refusal as a result. The contract now: **exit 0 ⇒ stdout is a result; non-zero ⇒ it is not.**
+ * The refusal goes to stderr so stdout stays parse-safe, and `--out` is NOT written: a file
+ * containing `{error: …}` is worse than no file, because the next reader finds it and trusts it.
+ * EX_UNKNOWN (2) rather than 1 — 1 is the watcher's "abort the guarded run", and a not-found must
+ * never be mistaken for that.
+ */
+function emit(tool: string, result: unknown, globals: { out: string | null; json?: boolean }): void {
+  const err = toolError(result)
+  if (err !== null) {
+    process.exitCode = EXIT.UNKNOWN
+    console.error(JSON.stringify({ tool, error: err }, null, 2))
+    return
+  }
+  // `--json` overrides the human rendering: a caller who asked for JSON gets JSON even from a tool
+  // that renders itself as a table. Without this the only way to get a parseable answer out of a
+  // self-rendering tool was --out to a file, which a pipeline should not have to do.
+  if (globals.json && !globals.out) {
+    console.log(JSON.stringify(result, null, 2))
+    return
+  }
   if (globals.out) {
     fs.writeFileSync(globals.out, JSON.stringify(result, null, 2))
     console.log(`${tool}: ${digest(result)}`)
@@ -439,7 +502,10 @@ function isRenderedText(v: unknown): v is { format: string; text: string } & Rec
 
 export async function runDiagnosticsCli(argv: string[]): Promise<void> {
   // Strip the output globals and ops flags first so every command sees only its own tokens.
-  const globals = { full: false, out: null as string | null, startServer: false, dashboard: false }
+  // `json` is a GLOBAL, not a per-tool flag (issue #9 §2). It was accepted by the hand-written
+  // subcommands and rejected as "unknown flag --json" by every schema-driven tool, so a consuming
+  // program had to know which kind of command it was calling before it could ask for JSON.
+  const globals = { full: false, json: false, out: null as string | null, startServer: false, dashboard: false }
   interface Ops {
     status: boolean; stop: boolean; purgeDb: boolean; purgeBodies: boolean
     exportBodies: string | null; since?: string; until?: string; installSkill: boolean
@@ -448,9 +514,11 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
   const ops: Ops = { status: false, stop: false, purgeDb: false, purgeBodies: false, exportBodies: null, installSkill: false }
   let otelOp: 'install' | 'uninstall' | null = null
   let hooksOp: 'install' | 'uninstall' | null = null
+  let statuslineOp: 'install' | 'uninstall' | null = null
   const rest: string[] = []
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--full') globals.full = true
+    else if (argv[i] === '--json') globals.json = true
     else if (argv[i] === '--start-server') globals.startServer = true
     else if (argv[i] === '--dashboard') globals.dashboard = true
     else if (argv[i] === '--status') ops.status = true
@@ -459,13 +527,13 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
     else if (argv[i] === '--purge-bodies') ops.purgeBodies = true
     else if (argv[i] === '--export-bodies') {
       ops.exportBodies = argv[++i]
-      if (!ops.exportBodies) throw new Error('--export-bodies needs a destination directory')
+      if (!ops.exportBodies) throw new UsageError('--export-bodies needs a destination directory')
     } else if (argv[i] === '--since') {
       ops.since = argv[++i]
-      if (!ops.since) throw new Error('--since needs a value (ISO timestamp or hours)')
+      if (!ops.since) throw new UsageError('--since needs a value (ISO timestamp or hours)')
     } else if (argv[i] === '--until') {
       ops.until = argv[++i]
-      if (!ops.until) throw new Error('--until needs a value (ISO timestamp)')
+      if (!ops.until) throw new UsageError('--until needs a value (ISO timestamp)')
     }
     else if (argv[i] === '--install-skill') ops.installSkill = true
     else if (argv[i] === '--guard') {
@@ -482,15 +550,23 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
     else if (argv[i] === '--uninstall-hooks') hooksOp = 'uninstall'
     else if (argv[i] === '--install-otel') otelOp = 'install'
     else if (argv[i] === '--uninstall-otel') otelOp = 'uninstall'
+    else if (argv[i] === '--install-statusline') statuslineOp = 'install'
+    else if (argv[i] === '--uninstall-statusline') statuslineOp = 'uninstall'
     else if (argv[i] === '--out') {
       globals.out = argv[++i]
-      if (!globals.out) throw new Error('--out needs a path')
+      if (!globals.out) throw new UsageError('--out needs a path')
     } else rest.push(argv[i])
   }
 
   // Settings mutation is standalone — no server needed, exits after the transaction.
   if (otelOp) {
     await installOtel(otelOp === 'uninstall')
+    return
+  }
+
+  // Status-line capture is another standalone settings transaction.
+  if (statuslineOp) {
+    await installStatusline(statuslineOp === 'uninstall')
     return
   }
 
@@ -598,6 +674,15 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
     for (let i = 0; i < spec.length; i++) {
       const s = spec[i]
       const result = await callTool(s.tool, s.args, globals.full || !!s.full)
+      // One refused member makes the whole batch non-zero (same contract as a single call), while
+      // the remaining members still run — a batch is a convenience, not a transaction, and hiding
+      // a refusal because its siblings succeeded is exactly the failure §1 is about.
+      const itemErr = toolError(result)
+      if (itemErr !== null) {
+        process.exitCode = EXIT.UNKNOWN
+        console.error(JSON.stringify({ tool: s.tool, index: i + 1, error: itemErr }, null, 2))
+        continue
+      }
       if (globals.out) {
         // Position-prefixed so the SAME tool called twice (e.g. two run_diagnostics_sql presets)
         // cannot silently overwrite the earlier result — that exact collision happened in the field.
@@ -615,7 +700,7 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
   const tools = await fetchTools()
   const t = resolveTool(tools, CMD_ALIASES[cmd] ?? cmd)
   if (!t) {
-    throw new Error(`unknown command or tool "${cmd}". Tools:\n  ${tools.map(x => x.name).join('\n  ')}`)
+    throw new UsageError(`unknown command or tool "${cmd}". Tools:\n  ${tools.map(x => x.name).join('\n  ')}`)
   }
   if (rest.slice(1).includes('--help') || rest.slice(1).includes('-h')) {
     console.log(renderHelp(t))

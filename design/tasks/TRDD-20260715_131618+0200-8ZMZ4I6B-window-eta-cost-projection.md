@@ -1,9 +1,9 @@
 ---
 trdd-id: 8ZMZ4I6B
 title: get_window_eta — cost-based time-to-exhaustion of the current account's rate-limit windows
-column: ai_review
+column: complete
 created: 2026-07-15T13:16:18+0200
-updated: 2026-07-15T13:30:00+0200
+updated: 2026-08-02T14:25:00+0200
 current-owner: main
 task-type: feature
 scope: project
@@ -59,3 +59,8 @@ none/undetermined, never guessed). `etaReason ∈ projected|over-limit|no-capaci
 ## Verify
 `pnpm run compile` green; windowEta tests pass; live `agentlenspro get_window_eta` shows honest
 plateau verdict when the rate is below what any window needs, a finite ETA when it isn't.
+
+## Approval log
+
+- 2026-08-02 — AI review PASSED (ai_review backlog audit): implementation verified present in the code first-hand, not from prose. Column ai_review → human_review; the remaining gate is the human. Evidence: reports/ai-review-audit/20260802_113207+0200-batchA-diagnostics.md
+- 2026-08-02 — HUMAN gate closed by USER delegation ("evaluate the whole status of the project and decide yourself. just base all decisions on verified facts.", 2026-08-02); the AI audit line above is the verified basis; release-via none/absent → terminal. Column human_review → complete.

@@ -1,9 +1,9 @@
 ---
 trdd-id: 1XM0YSWQ
 title: get_account_burners — who exhausted a given OAuth account's rate-limit window, ranked
-column: ai_review
+column: complete
 created: 2026-07-15T10:48:21+0200
-updated: 2026-07-15T13:30:00+0200
+updated: 2026-08-02T14:25:00+0200
 current-owner: main
 task-type: feature
 scope: project
@@ -30,7 +30,7 @@ explicit cache-created + cache-read token columns; (2) BOTH windows (5h + 7d tab
 `window_hours` arg REMOVED (no legacy); (3) MOST LIKELY EXHAUSTED marker: fill% against calibrated
 capacity — own `observed` calibration first, else a SAME-PLAN account's as a labeled proxy
 (`resolveWindowCapacity`), else `undetermined` (never guessed). Suite 1215 green, deployed pid
-74161, live: fmuaddib's 5h at **85%** vs 7d at 53% of the Max-20x proxy capacity → the 5h window
+74161, live: the owner account's 5h at **85%** vs 7d at 53% of the Max-20x proxy capacity → the 5h window
 forced the rotation. 5h top: ai-maestro 25%, ANIME2SVG 19%, llm-externalizer 14%. 7d top:
 ai-maestro 25% ($594, 3 sessions), ANIME2SVG 19% ($872), janitor 17%. Docs updated in place.
 Awaiting user review → complete.
@@ -94,4 +94,9 @@ silently under-reporting.
 ## Verify
 
 `pnpm run compile` green; new tests pass; live `agentlenspro get_account_burners` (default =
-previous account) names the top burner sessions of fmuaddib's exhausted window with shares.
+previous account) names the top burner sessions of the owner account's exhausted window with shares.
+
+## Approval log
+
+- 2026-08-02 — AI review PASSED (ai_review backlog audit): implementation verified present in the code first-hand, not from prose. Column ai_review → human_review; the remaining gate is the human. Evidence: reports/ai-review-audit/20260802_113207+0200-batchA-diagnostics.md
+- 2026-08-02 — HUMAN gate closed by USER delegation ("evaluate the whole status of the project and decide yourself. just base all decisions on verified facts.", 2026-08-02); the AI audit line above is the verified basis; release-via none/absent → terminal. Column human_review → complete.

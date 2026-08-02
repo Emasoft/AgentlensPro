@@ -1,9 +1,10 @@
 ---
 trdd-id: K7PQ2M4V
 title: Full revision of the CLI sources for production readiness
-column: dev
+column: superseded
 created: 2026-07-23T16:16:51+0200
-updated: 2026-07-23T17:59:27+0200
+updated: 2026-08-02T01:26:42+0200
+superseded-by: M8SV6LK5
 implementation-commits: [baf2ad3]
 current-owner: session-7877ae1f
 task-type: refactor

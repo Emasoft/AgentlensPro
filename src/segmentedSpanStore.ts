@@ -26,6 +26,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { atomicWriteFileSync } from './serverRuntime'
+import { forEachNdjsonLine } from './ndjsonLines'
 import type { Span } from './shared/telemetryTypes'
 
 const DAY_MS = 86_400_000
@@ -266,16 +267,26 @@ export class SegmentedSpanStore {
       const lo = meta ? meta.minTs : dayMs
       const hi = meta ? meta.maxTs : dayMs + DAY_MS
       if (lo > untilMs || hi < sinceMs) continue
-      let raw: string
-      try { raw = fs.readFileSync(path.join(this.dir, name), 'utf-8') } catch { continue }
       let skipped = 0
-      for (const line of raw.split('\n')) {
-        if (!line) continue
-        let span: Span
-        try { span = JSON.parse(line) as Span } catch { skipped++; continue } // truncated tail line
-        const ts = spanTimestampMs(span)
-        if (ts < sinceMs || ts > untilMs) continue
-        out.push(this.applyOverlay(span))
+      let readError: string | null = null
+      // Streamed, and the failure is LOUD. This used to be a whole-file
+      // readFileSync('utf-8') inside `catch { continue }` — so any segment past V8's
+      // 512 MB max-string-length threw and that entire DAY vanished from the result with
+      // no log line, which is the exact silent loss this store's header promises never
+      // happens. Two live segments (568 MB, 531 MB) were being dropped this way.
+      try {
+        forEachNdjsonLine(path.join(this.dir, name), (line) => {
+          let span: Span
+          try { span = JSON.parse(line) as Span } catch { skipped++; return } // truncated tail line
+          const ts = spanTimestampMs(span)
+          if (ts < sinceMs || ts > untilMs) return
+          out.push(this.applyOverlay(span))
+        })
+      } catch (e) {
+        readError = String(e)
+      }
+      if (readError !== null) {
+        this.log(`[AgentLens] span store: could NOT read ${name} (${readError}) — that segment is MISSING from this query's result`)
       }
       if (skipped > 0) this.log(`[AgentLens] span store: skipped ${skipped} corrupt line(s) in ${name}`)
     }

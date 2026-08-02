@@ -1,9 +1,9 @@
 ---
 trdd-id: YJQXLHPA
 title: run_transcript_sql — ad-hoc DuckDB SQL over the Claude session transcripts
-column: ai_review
+column: complete
 created: 2026-07-16T23:18:40+0200
-updated: 2026-07-16T23:45:00+0200
+updated: 2026-08-02T14:25:00+0200
 current-owner: main
 task-type: feature
 severity: minor
@@ -80,3 +80,8 @@ the cards/summarizers.
 
 Unit suite green (+~10); tsc ×2; lint 0 errors; `agentlenspro run_transcript_sql` lists presets
 and answers a windowed query against the real corpus.
+
+## Approval log
+
+- 2026-08-02 — AI review PASSED (ai_review backlog audit): implementation verified present in the code first-hand, not from prose. Column ai_review → human_review; the remaining gate is the human. Evidence: reports/ai-review-audit/20260802_113207+0200-batchA-diagnostics.md
+- 2026-08-02 — HUMAN gate closed by USER delegation ("evaluate the whole status of the project and decide yourself. just base all decisions on verified facts.", 2026-08-02); the AI audit line above is the verified basis; release-via none/absent → terminal. Column human_review → complete.

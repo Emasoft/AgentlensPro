@@ -13,6 +13,7 @@ import {
 import {
   RAW_BODIES_ENV, RAW_BODIES_KEY, rawBodyCaptureWithSource, setRawBodyCapture, setSpoolDir, spoolDirConfigured,
 } from '../captureConfig'
+import { KEYCHAIN_ENV, KEYCHAIN_KEY, keychainConsentWithSource, setKeychainConsent } from '../keychainConsent'
 import { ensureTelemetryConfig, type EnsureResult } from '../telemetryConfig'
 import { ensureRamDisk, spoolDir, spoolSizeMb, type EnsureRamDiskResult } from '../ramdisk'
 import { installSpoolLaunchAgent, removeSpoolLaunchAgent } from './spoolLaunchAgent'
@@ -22,6 +23,12 @@ import { installSpoolLaunchAgent, removeSpoolLaunchAgent } from './spoolLaunchAg
  *  numeric RETENTION_META table — a boolean with a min/unit/floor would be a lie. */
 const CAPTURE_KEY = 'captureRawBodies'
 const CAPTURE_DESC = 'let Claude Code dump every raw API body to disk (~35 GB/day — off unless you need it)'
+
+/** The second boolean (TRDD-EUURUDQV follow-up): consent to read the OAuth credential from the macOS
+ *  keychain. Persisted here rather than left to the server's environment, because an env-only opt-in
+ *  is dropped by any restart that does not carry it — and the account archive then stops refreshing
+ *  in silence while its rows go on ageing. */
+const KEYCHAIN_DESC = 'allow reading the OAuth credential from the macOS keychain, so account usage keeps refreshing'
 
 function parseOnOff(raw: string): boolean | undefined {
   const v = raw.trim().toLowerCase()
@@ -38,12 +45,14 @@ function pad(s: string, w: number): string {
 function listConfig(dir: string): void {
   const file = loadRetentionConfig(dir)
   const cap = rawBodyCaptureWithSource(dir, process.env)
+  const kc = keychainConsentWithSource(dir, process.env)
   const rows = [
     ...RETENTION_META.map((m) => {
       const { value, source } = resolveKnobWithSource(m, file, process.env)
       return { key: m.key as string, value: String(value), unit: m.unit, source: source as string, desc: m.desc, env: m.env }
     }),
     { key: CAPTURE_KEY, value: cap.enabled ? 'on' : 'off', unit: 'bool', source: cap.source as string, desc: CAPTURE_DESC, env: RAW_BODIES_ENV },
+    { key: KEYCHAIN_KEY, value: kc.allowed ? 'on' : 'off', unit: 'bool', source: kc.source as string, desc: KEYCHAIN_DESC, env: KEYCHAIN_ENV },
   ]
   const wKey = Math.max(3, ...rows.map((r) => r.key.length))
   const wVal = Math.max(5, ...rows.map((r) => r.value.length))
@@ -67,9 +76,15 @@ function getConfig(dir: string, key: string): number {
     console.log(CAPTURE_DESC)
     return EXIT.OK
   }
+  if (key === KEYCHAIN_KEY) {
+    const { allowed, source } = keychainConsentWithSource(dir, process.env)
+    console.log(`${KEYCHAIN_KEY} = ${allowed ? 'on' : 'off'}  (source: ${source}; env ${KEYCHAIN_ENV}; default off)`)
+    console.log(KEYCHAIN_DESC)
+    return EXIT.OK
+  }
   const m = findMeta(key)
   if (!m) {
-    console.error(`unknown retention key: ${key}\nvalid keys: ${RETENTION_META.map((x) => x.key).join(', ')}`)
+    console.error(`unknown config key: ${key}\nvalid keys: ${[...RETENTION_META.map((x) => x.key), CAPTURE_KEY, KEYCHAIN_KEY].join(', ')}`)
     return EXIT.USAGE
   }
   const { value, source } = resolveKnobWithSource(m, loadRetentionConfig(dir), process.env)
@@ -88,9 +103,24 @@ async function setConfig(dir: string, key: string, rawValue: string): Promise<nu
     }
     return applyCaptureSetting(dir, enabled)
   }
+  if (key === KEYCHAIN_KEY) {
+    const allowed = parseOnOff(rawValue)
+    if (allowed === undefined) {
+      console.error(`value must be on|off, got: ${JSON.stringify(rawValue)}`)
+      return EXIT.USAGE
+    }
+    // THROWS on an existing non-JSON config rather than clobbering it — same contract as capture.
+    setKeychainConsent(dir, allowed)
+    console.log(`set ${KEYCHAIN_KEY} = ${allowed ? 'on' : 'off'} in ${configPath(dir)}`)
+    console.log(allowed
+      ? 'the server may now read the keychain, so account usage keeps refreshing across restarts'
+      : 'the keychain will not be read; account usage rows will age without refreshing')
+    console.log(`restart the server to apply:  agentlenspro server restart`)
+    return EXIT.OK
+  }
   const m: RetentionKeyMeta | undefined = findMeta(key)
   if (!m) {
-    console.error(`unknown config key: ${key}\nvalid keys: ${[...RETENTION_META.map((x) => x.key), CAPTURE_KEY].join(', ')}`)
+    console.error(`unknown config key: ${key}\nvalid keys: ${[...RETENTION_META.map((x) => x.key), CAPTURE_KEY, KEYCHAIN_KEY].join(', ')}`)
     return EXIT.USAGE
   }
   const value = Number(rawValue)

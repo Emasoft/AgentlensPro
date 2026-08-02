@@ -29,9 +29,41 @@ import { runBudgetCli } from './budgetCli'
 import { runWatchCli } from './watchCli'
 import { runCtxmapCli } from './ctxmapCli'
 import { runCtxvisCli } from './ctxvisCli'
+import { runStatuslineCommand } from './statuslineCapture'
+import { runStatuslineHistoryCli } from './statuslineHistoryCli'
+import { runAllAccountsCli } from './allAccountsCli'
 
 /** CLI entry. `startServer` lazily imports standalone/server (injected by the shim — src/
  *  cannot import standalone/ without inverting the build layering). Returns the exit code. */
+/** Exit NOW for the three hot-path commands, instead of returning and letting the event loop drain.
+ *
+ *  MEASURED, and this is a user-visible freeze, not a tidiness issue: with the server unreachable in
+ *  a way that HANGS rather than refuses (a firewall DROP, a suspended container, a VPN flap),
+ *  `agentlenspro statusline` took **10.6 seconds** — on a surface Claude Code re-runs on every render.
+ *
+ *  The abort is not the problem and was never the problem. `AbortSignal.timeout(700)` fires correctly
+ *  (measured: the fetch rejects in 704 ms). But aborting a fetch does NOT destroy the underlying TCP
+ *  socket, the socket keeps the event loop alive until the OS connect timeout, and cli.ts finishes by
+ *  setting `process.exitCode` — i.e. by waiting for that loop to drain. So the timeout bounded the
+ *  REQUEST and nothing bounded the PROCESS.
+ *
+ *  BUT `process.exit()` DISCARDS a pending piped stdout write. MEASURED: write 262,144 bytes to a
+ *  pipe and exit, and the reader gets 65,536 — one pipe buffer. `gate` writes its verdict to stdout
+ *  and Claude Code READS it to decide whether to block a tool call, so a truncated write there is a
+ *  corrupted safety decision, not cosmetic damage. Hence flush first, and bound the flush too: a
+ *  reader that never drains must not reintroduce exactly the hang this function exists to prevent.
+ *
+ *  Scoped to these three commands. Every other subcommand keeps the normal drain-and-exit path. */
+async function exitNow(code: number): Promise<never> {
+  await new Promise<void>(resolve => {
+    const t = setTimeout(resolve, 500)
+    t.unref?.()
+    // A zero-length write's callback fires once everything queued before it has flushed.
+    process.stdout.write('', () => { clearTimeout(t); resolve() })
+  })
+  process.exit(code)
+}
+
 export async function cliMain(argv: string[], startServer: () => Promise<unknown>): Promise<number> {
   const cmd = argv[0]
 
@@ -47,9 +79,29 @@ export async function cliMain(argv: string[], startServer: () => Promise<unknown
 
   switch (cmd) {
     case 'hook':
-      return runHookCommand('hook')
+      return exitNow(await runHookCommand('hook'))
     case 'gate':
-      return runHookCommand('gate')
+      return exitNow(await runHookCommand('gate'))
+    case 'statusline':
+      // The status-line capture wrapper. Sits on the RENDER path (every assistant message plus a
+      // refreshInterval timer), so it belongs beside hook/gate in the hot-path band: read stdin,
+      // exec the real status-line command, forward the payload. It must reach `return` before any
+      // module with side effects is touched.
+      return exitNow(await runStatuslineCommand(argv.slice(1)))
+    case 'statusline-history':
+      // Reads the sample store straight off disk (no server), because the moment someone asks what
+      // burned the window is exactly when the server may be down.
+      return runStatuslineHistoryCli(argv.slice(1))
+    case 'get_account_status':
+      // Only the PLURAL form short-circuits the server. `--all` is assembled entirely from files (the
+      // account-state timeline + the per-account usage archive), and its whole audience is a rotator
+      // deciding what to do about a wedged machine — where proxying to a server that may itself be
+      // down turns the one useful answer into "cannot reach localhost:4316". The singular form still
+      // goes over the wire: it needs the live session accessors, which only the server has.
+      if (argv.includes('--all')) return runAllAccountsCli(argv.slice(1))
+      // Not `--all`: fall through to the diagnostics surface, which proxies it to the server.
+      await runDiagnosticsCli(argv)
+      return 0
     case 'disable':
       // THE GLOBAL BRAKE. Arms <dataDir>/DISABLED, which disarms every hook, the burn-gate, server
       // auto-revive and all background ingestion — in EVERY Claude session already running, on its

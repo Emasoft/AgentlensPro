@@ -11,6 +11,7 @@ import * as os from 'os'
 import * as path from 'path'
 import {
   usageBar, retryAfterSeconds, normalize, formatSubscriptionUsage, loadToken,
+  archiveAccountUsage, listObservedAccountUsage, windowPct, normalizeResetsAt, deriveStale,
   type SubscriptionUsage,
 } from '../subscriptionUsage'
 
@@ -100,8 +101,14 @@ suite('subscriptionUsage', () => {
     try {
       // No credentials file in this CLAUDE_CONFIG_DIR, and no opt-in: on darwin the answer must be
       // opt_in_required (NOT a keychain read, which would pop a password prompt on a test run).
-      const r = loadToken({ CLAUDE_CONFIG_DIR: dir } as NodeJS.ProcessEnv)
-      assert.strictEqual(r.token, undefined)
+      // HOME is pinned at the temp dir too: consent is resolved from the env handed in, so leaving
+      // HOME ambient would let the DEVELOPER's persisted opt-in decide a unit test's outcome —
+      // which is exactly how this assertion once performed a real keychain read.
+      const r = loadToken({ CLAUDE_CONFIG_DIR: dir, HOME: dir } as NodeJS.ProcessEnv)
+      // NEVER assert on the token VALUE: assert.strictEqual prints both sides on failure, so a
+      // regression here would dump a live OAuth token into the test log and CI output. Assert the
+      // shape instead — it fails just as loudly and says nothing it should not.
+      assert.strictEqual(typeof r.token, 'undefined', 'no token may be produced without an opt-in')
       assert.strictEqual(r.reason, process.platform === 'darwin' ? 'opt_in_required' : 'no_token')
     } finally { fs.rmSync(dir, { recursive: true, force: true }) }
   })
@@ -115,5 +122,170 @@ suite('subscriptionUsage', () => {
       assert.strictEqual(r.token, 'tok-abc')
       assert.strictEqual(r.expiresAt, NOW + 3_600_000)
     } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+  })
+})
+
+// ─── The per-account archive (issue #8, phase 1) ─────────────────────────────────────────────────
+//
+// The live cache is one file, overwritten on every fetch, so a rotation used to destroy the previous
+// account's numbers outright. These pin the archive that stops that — the part that cannot be
+// backfilled, so a regression here is silent and permanent.
+suite('subscription usage — the per-account archive', () => {
+  const A = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa'
+  const B = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb'
+
+  function rec(uuid: string | null, fetchedAt: number, label: string): SubscriptionUsage {
+    return {
+      fetchedAt, ageSeconds: 0, stale: false, reason: 'ok',
+      accountFp: 'fp-' + label, accountUuid: uuid, accountLabel: label, accountTier: null,
+      localClaimedLabel: null, accountLabelSuspect: false, accountVerified: 'yes',
+      limits: [], fiveHourPercent: 10, sevenDayPercent: 20,
+      usageCreditsEnabled: false, spendPercent: null, note: '',
+    } as unknown as SubscriptionUsage
+  }
+
+  /** Each case gets its own DATA_DIR: the archive is real files, and a shared dir would let one
+   *  test's records answer another's question.
+   *
+   *  The data dir is NESTED one level inside the sandbox on purpose. A `../../` traversal out of
+   *  `<data>/subscription-usage/` lands in the sandbox root, which the test owns and can assert is
+   *  untouched. Without the nesting it lands in os.tmpdir(), which is full of other files — and the
+   *  escape-attempt test then passes against a version with NO path guard at all. (Measured: it did.) */
+  function inDataDir<T>(fn: (sandbox: string) => T): T {
+    const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'acct-arch-'))
+    const dir = path.join(sandbox, 'data')
+    fs.mkdirSync(dir)
+    const prev = process.env.AGENTLENS_DATA_DIR
+    process.env.AGENTLENS_DATA_DIR = dir
+    try { return fn(sandbox) } finally {
+      if (prev === undefined) delete process.env.AGENTLENS_DATA_DIR
+      else process.env.AGENTLENS_DATA_DIR = prev
+      fs.rmSync(sandbox, { recursive: true, force: true })
+    }
+  }
+
+  test('a second account does not overwrite the first — that IS the feature', () => {
+    inDataDir(() => {
+      archiveAccountUsage(rec(A, 1000, 'a@x'))
+      archiveAccountUsage(rec(B, 2000, 'b@x'))
+      const all = listObservedAccountUsage()
+      assert.strictEqual(all.length, 2, 'both accounts must survive; one file per fetch is the bug')
+      assert.deepStrictEqual(all.map(r => r.accountUuid), [B, A], 'newest first')
+    })
+  })
+
+  test('the same account re-archived replaces its own record rather than accumulating', () => {
+    inDataDir(() => {
+      archiveAccountUsage(rec(A, 1000, 'a@x'))
+      archiveAccountUsage(rec(A, 5000, 'a@x'))
+      const all = listObservedAccountUsage()
+      assert.strictEqual(all.length, 1)
+      assert.strictEqual(all[0].fetchedAt, 5000)
+    })
+  })
+
+  test('an unidentified reading is NOT filed under a made-up key', () => {
+    inDataDir(() => {
+      archiveAccountUsage(rec(null, 1000, 'who?'))
+      assert.deepStrictEqual(listObservedAccountUsage(), [],
+        'a row that cannot say whose numbers it holds is worse than no row')
+    })
+  })
+
+  test('a uuid that is not a uuid never becomes a path', () => {
+    inDataDir(sandbox => {
+      // It arrives from the NETWORK. Sanitizing and using it anyway is how `../` becomes a filename.
+      for (const bad of ['../../evil', '../escape', 'a/b', '..', '', 'not-a-uuid']) {
+        archiveAccountUsage(rec(bad, 1000, 'x'))
+      }
+      assert.deepStrictEqual(listObservedAccountUsage(), [], 'and none of them may be reported back')
+      // The load-bearing assertion: NOTHING appeared outside the data dir. Checking only that the
+      // listing is empty is not enough — an escaped write lands outside the archive, so the listing
+      // stays empty either way and the test guards nothing.
+      assert.deepStrictEqual(fs.readdirSync(sandbox), ['data'],
+        'a write escaped the data directory')
+      const archive = path.join(sandbox, 'data', 'subscription-usage')
+      assert.deepStrictEqual(fs.existsSync(archive) ? fs.readdirSync(archive) : [], [],
+        'nothing may be filed under a key that is not an account')
+    })
+  })
+
+  test('the legacy single-file cache is adopted, but never clobbers a FRESHER archived record', () => {
+    inDataDir(() => {
+      const dir = String(process.env.AGENTLENS_DATA_DIR)
+      // Case 1: nothing archived yet — the one reading already on disk must not be lost.
+      fs.writeFileSync(path.join(dir, 'subscription-usage.json'), JSON.stringify(rec(A, 3000, 'a@x')))
+      assert.strictEqual(listObservedAccountUsage().length, 1, 'legacy reading adopted')
+      assert.strictEqual(listObservedAccountUsage()[0].fetchedAt, 3000)
+      // Case 2: the archive is NEWER. Re-adopting unconditionally would walk it backwards on every
+      // call — the legacy file is only overwritten on a fetch, so it goes stale while the archive does not.
+      archiveAccountUsage(rec(A, 9000, 'a@x'))
+      assert.strictEqual(listObservedAccountUsage()[0].fetchedAt, 9000,
+        'a stale legacy file must not overwrite a fresher archived record')
+    })
+  })
+
+  test('one unreadable record costs one account, not all of them', () => {
+    inDataDir(() => {
+      archiveAccountUsage(rec(A, 1000, 'a@x'))
+      fs.writeFileSync(path.join(String(process.env.AGENTLENS_DATA_DIR), 'subscription-usage', `${B}.json`), '{ truncated')
+      const all = listObservedAccountUsage()
+      assert.strictEqual(all.length, 1, 'the readable account still reports')
+      assert.strictEqual(all[0].accountUuid, A)
+    })
+  })
+
+  test('reading an empty archive is [] — and it is the caller who must not call that "no accounts"', () => {
+    inDataDir(() => { assert.deepStrictEqual(listObservedAccountUsage(), []) })
+  })
+})
+
+// ─── Payload tolerance (issue #8, phase 3) ───────────────────────────────────────────────────────
+//
+// The shapes below were MEASURED against the live endpoint by `ccbroker` (an independent
+// reimplementation in the account-switcher corpus). We accepted exactly one spelling of each, so a
+// response using another read as "no data" — and a null `resetsAt` silently disables both the
+// already-reset check in deriveStale() and the `rolled` verdict in allAccounts.ts, which is how a
+// window that had already rolled gets served as current.
+suite('subscription usage — the payload is looser than one schema', () => {
+  test('the window percentage is accepted under EITHER spelling', () => {
+    assert.strictEqual(windowPct({ utilization: 42 }), 42)
+    assert.strictEqual(windowPct({ used_percentage: 42 }), 42, 'the spelling we used to drop')
+    assert.strictEqual(windowPct({}), null, 'absent stays null — never 0')
+    assert.strictEqual(windowPct(undefined), null)
+    assert.strictEqual(windowPct({ utilization: 'nope' }), null, 'a non-number is unknown, not 0')
+  })
+
+  test('resets_at is accepted as seconds, ms, a numeric string, or RFC3339', () => {
+    const ms = Date.parse('2026-08-05T15:59:59.000Z')
+    const secs = Math.floor(ms / 1000)
+    assert.strictEqual(normalizeResetsAt(ms), '2026-08-05T15:59:59.000Z', 'unix ms')
+    assert.strictEqual(normalizeResetsAt(secs), '2026-08-05T15:59:59.000Z', 'unix SECONDS')
+    assert.strictEqual(normalizeResetsAt(String(secs)), '2026-08-05T15:59:59.000Z', 'numeric string')
+    assert.strictEqual(normalizeResetsAt('2026-08-05T15:59:59Z'), '2026-08-05T15:59:59Z', 'RFC3339 kept verbatim')
+    assert.strictEqual(normalizeResetsAt(null), null)
+    assert.strictEqual(normalizeResetsAt(''), null)
+    assert.strictEqual(normalizeResetsAt('not a date'), null)
+  })
+
+  test('a numeric resets_at reaches the parsed limit, so the already-reset check can fire', () => {
+    // The end-to-end shape of the bug: a numeric epoch used to become null, and a null resetsAt makes
+    // deriveStale() skip the reset check entirely — serving a window that no longer exists as current.
+    const past = Math.floor((NOW - 3_600_000) / 1000)          // seconds, and already elapsed
+    const u = normalize({ limits: [{ kind: 'session', group: 'session', percent: 96, resets_at: past }] },
+      NOW, 'ok', NOW)
+    assert.ok(u.limits[0].resetsAt !== null, 'the timestamp must survive parsing')
+    assert.strictEqual(deriveStale(u, NOW), true, 'and an elapsed window must mark the reading stale')
+  })
+
+  test('an unparseable percentage stays null and never becomes 0', () => {
+    // 0 means "this window is empty" — the most dangerous substitution available, since every
+    // consumer reads it as all the headroom in the world.
+    const u = normalize({ limits: [{ kind: 'session', group: 'session', resets_at: '2026-08-05T15:59:59Z' }] },
+      NOW, 'ok', NOW)
+    assert.strictEqual(u.limits[0].percent, null)
+    const text = formatSubscriptionUsage(u)
+    assert.ok(text.includes('?'), 'and it renders as unknown')
+    assert.ok(!/\b0%/.test(text), 'never as 0%')
   })
 })

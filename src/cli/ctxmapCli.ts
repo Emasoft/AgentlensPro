@@ -29,10 +29,12 @@ import { resolveBodiesReadScope } from '../captureConfig'
 import { countTokens, calibrateTokens } from '../tokenEstimator'
 import type { TokenSource } from '../shared/summarizerTypes'
 import {
-  resolveAnthropicAuth, countTokensExact, mapLimit, countable,
+  resolveAnthropicAuth, countTokensExact, postCountTokens, mapLimit, countable,
+  countConcurrency, API_VERSION, CountTokensError,
   type AnthropicAuth, type CountableRequest,
 } from '../exactTokens'
-import { readBody, PREFIX_STUB, type ContentBlock, type Message, type ToolDef, type RequestBody, type Usage, type ResponseBody } from '../capturedBody'
+import { openCountCache, type CountCache } from '../countCache'
+import { readBody, readBodyText, PREFIX_STUB, type ContentBlock, type Message, type ToolDef, type RequestBody, type Usage, type ResponseBody } from '../capturedBody'
 import { EXIT } from './cliErrors'
 
 export type { ContentBlock, Message, ToolDef, RequestBody, Usage, ResponseBody }
@@ -44,6 +46,8 @@ export const CTXMAP_USAGE = `agentlenspro ctxmap — what is actually inside a c
   ctxmap --diff <A> <B>            what changed in the context between two requests
   ctxmap --find <text>             list captured requests containing <text> anywhere
   ctxmap --list [--limit N]        most recent captured requests
+
+  --refresh   ignore cached counts and re-measure every element from the API
 
   --top N     how many individual elements to show (default 20)
   --json      machine-readable output
@@ -371,7 +375,21 @@ export function extractElements(req: RequestBody): CtxElement[] {
  *  built for DIFFERENCING consecutive elements, so the `system` cut deliberately omits `tools` — the
  *  tools cancel in the subtraction. As an absolute prefix it would therefore be short by the entire
  *  tool surface. `buildCommonPrefix` in src/ctxVisual.ts is the absolute form. */
-export function buildPrefix(req: RequestBody, cut: CtxCut): CountableRequest {
+/**
+ * `lean` omits the parts of the prefix that are IDENTICAL in every call of a tier — the full
+ * `system` on tool cuts, and `system`+`tools` on message cuts.
+ *
+ * Why that is safe: no reported number is a cumulative count, only a DIFFERENCE between two
+ * cumulative counts within one tier (see the chains below). A term present in equal measure in the
+ * minuend and the subtrahend cancels, so those bytes can never reach the output — they were pure
+ * upload. Measured on a 252,562-token capture: 9.94M of the 22.21M tokens uploaded, 45%, existed
+ * only to cancel.
+ *
+ * It is not asserted, it is CHECKED: the run compares the sum of its differences against one
+ * untruncated count of the whole request (`coverage.residual`), and falls back to the full prefixes
+ * if that residual is not zero. So a wrong assumption costs a slow re-measure, never a wrong report.
+ */
+export function buildPrefix(req: RequestBody, cut: CtxCut, lean = false): CountableRequest {
   const model = req.model ?? ''
   const sys = req.system ?? []
   const tools = req.tools ?? []
@@ -379,6 +397,7 @@ export function buildPrefix(req: RequestBody, cut: CtxCut): CountableRequest {
     return { model, system: sys.slice(0, cut.upto + 1), messages: [PREFIX_STUB] }
   }
   if (cut.kind === 'tool') {
+    if (lean) return { model, tools: tools.slice(0, cut.upto + 1), messages: [PREFIX_STUB] }
     return { model, ...(sys.length ? { system: sys } : {}), tools: tools.slice(0, cut.upto + 1), messages: [PREFIX_STUB] }
   }
   const msgs = req.messages ?? []
@@ -394,6 +413,7 @@ export function buildPrefix(req: RequestBody, cut: CtxCut): CountableRequest {
       ? { type: 'text', text: (at.text ?? '').slice(0, cut.textEnd) }
       : at)
   }
+  if (lean) return { model, messages: [...head, { role: m?.role ?? 'user', content: kept }] }
   return {
     model,
     ...(sys.length ? { system: sys } : {}),
@@ -463,17 +483,18 @@ const MERGEABLE_ERRORS = [
  *  element estimated and is reported; the rest of the report stays exact. Nothing is invented for a
  *  step that could not be measured. */
 export async function exactifyReport(
-  r: CtxReport, req: RequestBody, auth: AnthropicAuth, concurrency = 4,
+  r: CtxReport, req: RequestBody, auth: AnthropicAuth,
+  concurrency = countConcurrency(), cache?: CountCache, lean = false,
 ): Promise<{ failed: number; merged: number; failures: { label: string; error: string }[] }> {
   const model = req.model ?? ''
   const stubOnly: CountableRequest = { model, messages: [PREFIX_STUB] }
-  const stub = await countTokensExact(stubOnly, auth)
+  const stub = await countTokensExact(stubOnly, auth, { cache })
 
   const cuts = r.elements.map(e => e.cut)
   const why = new Map<number, string>()
   const counts = await mapLimit(r.elements, concurrency, async (el, i): Promise<number | null> => {
     if (!el.cut) { why.set(i, 'no prefix descriptor'); return null }
-    try { return await countTokensExact(buildPrefix(req, el.cut), auth) } catch (e) {
+    try { return await countTokensExact(buildPrefix(req, el.cut, lean), auth, { cache }) } catch (e) {
       why.set(i, (e as Error).message)
       return null
     }
@@ -487,12 +508,17 @@ export async function exactifyReport(
   const sysEnd = lastOf('system') ?? stub
   const toolEnd = lastOf('tool') ?? sysEnd
   // system_all + tools_all, with the stub removed — the constant every message prefix carries.
-  const preamble = toolEnd - stub
+  // In lean mode the message prefixes carry no preamble at all, so there is nothing to remove.
+  const preamble = lean ? 0 : toolEnd - stub
 
   let failed = 0, merged = 0
   const failures: { label: string; error: string }[] = []
   const pending: string[] = []
-  let prevSys = stub, prevTool = sysEnd, prevMsg = 0
+  // Each tier's chain starts at the count of an EMPTY prefix of that tier. Lean tool prefixes drop
+  // `system`, so an empty one is the bare stub rather than stub+system — seeding from `sysEnd` there
+  // would charge the whole system block to the first tool as a negative, which the clamp would then
+  // silently swallow.
+  let prevSys = stub, prevTool = lean ? stub : sysEnd, prevMsg = 0
   for (let i = 0; i < r.elements.length; i++) {
     const el = r.elements[i], cum = counts[i], cut = cuts[i]
     if (cum == null || !cut) {
@@ -556,7 +582,7 @@ export async function exactifyReport(
     // a large number instead of vanishing from the report.
     // The whole-request count, not the sum of parts: it is the number the API would bill, measured
     // on the untruncated body exactly as captured.
-    r.exact = await countTokensExact(countable({ ...req } as Record<string, unknown>), auth)
+    r.exact = await countTokensExact(countable({ ...req } as Record<string, unknown>), auth, { cache })
     r.coverage.residual = r.exact - r.total
   }
   return { failed, merged, failures }
@@ -688,9 +714,97 @@ function listRequests(limit: number): string[] {
   return rows.sort((a, b) => b.m - a.m).slice(0, limit).map(r => r.p)
 }
 
+/** Measure with the LEAN prefixes, and prove it by the residual. `coverage.residual` is the gap
+ *  between the sum of the per-element differences and one untruncated count of the whole request, so
+ *  a zero residual is direct evidence the omitted preamble really did cancel. Anything else means
+ *  the assumption does not hold for this body, and the full-prefix scheme is re-run — slower, but
+ *  the report is never a number the tool cannot justify. */
+async function exactifyLeanElseFull(
+  r: CtxReport, req: RequestBody, auth: AnthropicAuth, cache: CountCache, file: string,
+): Promise<{ report: CtxReport; ex: Awaited<ReturnType<typeof exactifyReport>> }> {
+  if (process.env.AGENTLENS_LEAN_PREFIX?.trim().toLowerCase() === 'off') {
+    return { report: r, ex: await exactifyReport(r, req, auth, countConcurrency(), cache, false) }
+  }
+  const ex = await exactifyReport(r, req, auth, countConcurrency(), cache, true)
+  // The guard must fire on BOTH ways lean can be wrong, and the residual only exists on a fully
+  // measured run:
+  //   - residual != 0            → the omitted preamble did not cancel.
+  //   - ex.failed > 0            → some prefix could not be measured AT ALL. Lean prefixes drop
+  //                                `system`/`tools`, so they can provoke a 400 the full prefix never
+  //                                would; and on a partially-failed run `mode` stays 'estimated' and
+  //                                `residual` is never computed, so there is nothing left to check.
+  // Keying only on `residual !== 0` meant the check silently disabled itself in exactly the case
+  // where lean was the likely cause of the failure — fast, unverified, and reported as if measured.
+  if (ex.failed === 0 && r.coverage.residual === 0) return { report: r, ex }
+  console.error(ex.failed > 0
+    ? `ctxmap: ${ex.failed} element(s) could not be measured with lean prefixes`
+      + ' — re-measuring with full prefixes before trusting the result'
+    : `ctxmap: lean prefixes left a residual of ${r.coverage.residual} tokens`
+      + ' — re-measuring with full prefixes so the report stays exact')
+  const fresh = loadAndAnalyze(file)
+  return { report: fresh.report, ex: await exactifyReport(fresh.report, fresh.req, auth, countConcurrency(), cache, false) }
+}
+
+/** Re-measure the largest entry this run served from cache and report which model drifted, or null
+ *  when the cache agreed (or served nothing). Costs one call, and only on runs that had hits.
+ *
+ *  A network failure here returns null — "could not disprove" is not "proven stale", and turning a
+ *  flaky connection into a discarded cache would make the tool slower exactly when it is least able
+ *  to afford it. */
+export type Freshness =
+  | { state: 'no-hits' }
+  /** The probe ran and agreed — the only state that licenses saying the cache was verified. */
+  | { state: 'agreed' }
+  | { state: 'drifted'; model: string }
+  /** The probe could not complete. NOT evidence of drift, and NOT evidence of freshness either. */
+  | { state: 'unchecked'; reason: string }
+
+export async function checkFreshness(cache: CountCache, auth: AnthropicAuth): Promise<Freshness> {
+  const probe = cache.largestHit()
+  if (!probe) return { state: 'no-hits' }
+  // tokens === -1 marks a remembered HTTP 400. For those the EXPECTED outcome is another 400, so the
+  // two branches invert: throwing a 400 is agreement, and a successful count means the endpoint now
+  // accepts a body it used to reject — real drift.
+  const expectsError = probe.tokens === -1
+  try {
+    // Post the recorded bytes directly: this path never consults the cache, and asking the cache to
+    // confirm the cache would prove nothing.
+    const live = await postCountTokens(probe.wireBody, auth, { retries: 1 })
+    if (expectsError) return { state: 'drifted', model: probe.model }
+    return live === probe.tokens ? { state: 'agreed' } : { state: 'drifted', model: probe.model }
+  } catch (e) {
+    if (expectsError && e instanceof CountTokensError && e.status === 400) return { state: 'agreed' }
+    // Collapsing this into "no drift" made the digest claim a verification that never happened —
+    // a 429 or a dropped connection read exactly like agreement.
+    return { state: 'unchecked', reason: (e as Error).message }
+  }
+}
+
+function reportCacheStats(cache: CountCache, fresh: Freshness): void {
+  const s = cache.stats()
+  if (s.hits === 0 && s.writes === 0) return
+  const note = fresh.state === 'agreed' ? ' (largest hit re-verified live)'
+    : fresh.state === 'unchecked' ? ` (NOT verified — the freshness probe failed: ${fresh.reason})`
+      : fresh.state === 'drifted' ? ' (cache discarded — see above)'
+        : ''
+  console.error(`ctxmap: count cache — ${s.hits} hit(s), ${s.misses} measured live${note}`)
+}
+
+/** The two warnings every run must print, on every path. Keeping them in one function is what stops
+ *  a new early-return from silently dropping them: an element that stayed ESTIMATED and a block that
+ *  was MERGED into its neighbour both change how a number should be read. */
+function reportMeasurementCaveats(ex: { failed: number; merged: number; failures: { label: string; error: string }[] }): void {
+  for (const f of ex.failures.slice(0, 5)) console.error(`ctxmap: not measured — ${f.label}: ${f.error}`)
+  if (ex.failed > 0) console.error(`ctxmap: ${ex.failed} element(s) stay estimated`)
+  if (ex.merged > 0) {
+    console.error(`ctxmap: ${ex.merged} block(s) cannot legally end a request (thinking / unanswered tool_use)`
+      + ' — their tokens are counted in the next element, so the total stays exact')
+  }
+}
+
 /** Analyze, then measure — unless the caller opted out. Exact counting costs one count_tokens call
  *  per element (free of inference charges, but rate-limited), so it is announced, never silent. */
-async function analyzeMaybeExact(file: string, exact: boolean): Promise<CtxReport> {
+async function analyzeMaybeExact(file: string, exact: boolean, refresh = false): Promise<CtxReport> {
   const { req, report } = loadAndAnalyze(file)
   if (!exact) return report
   const auth = resolveAnthropicAuth()
@@ -699,18 +813,49 @@ async function analyzeMaybeExact(file: string, exact: boolean): Promise<CtxRepor
       + ' — falling back to estimated counts')
     return report
   }
+  const cache = openCountCache({ apiVersion: API_VERSION, bypassReads: refresh })
   // One call per element, each carrying a prefix of the body — say so before spending a minute on a
   // large request rather than appearing to hang.
   console.error(`ctxmap: measuring ${report.elements.length} elements via count_tokens (auth: ${auth.source})`
     + `${report.elements.length > 200 ? ' — large request, expect a minute or more' : ''}…`)
-  const { failed, merged, failures } = await exactifyReport(report, req, auth)
-  for (const f of failures.slice(0, 5)) console.error(`ctxmap: not measured — ${f.label}: ${f.error}`)
-  if (failed > 0) console.error(`ctxmap: ${failed} element(s) stay estimated`)
-  if (merged > 0) {
-    console.error(`ctxmap: ${merged} block(s) cannot legally end a request (thinking / unanswered tool_use)`
-      + ' — their tokens are counted in the next element, so the total stays exact')
+  const lean = await exactifyLeanElseFull(report, req, auth, cache, file)
+
+  // FRESHNESS SENTINEL. A cached count is only trustworthy while the tokenizer behind a model id is
+  // unchanged — which is true in practice for dated snapshots, but is not a contract. Rather than
+  // guess a TTL, re-measure the single largest entry this run actually served from cache and compare.
+  // One call proves it, and a mismatch heals itself instead of quietly reporting a stale total.
+  const fresh = await checkFreshness(cache, auth)
+  if (fresh.state === 'drifted') {
+    console.error(`ctxmap: cached counts for ${fresh.model} disagree with a live re-measurement`
+      + ' — discarding them and measuring again from scratch')
+    cache.dropModel(fresh.model)
+    const reloaded = loadAndAnalyze(file)
+    const redoCache = openCountCache({ apiVersion: API_VERSION })
+    const redo = await exactifyLeanElseFull(reloaded.report, reloaded.req, auth, redoCache, file)
+    // Flush the redo handle too — its stats() call is the only thing that writes its buffered rows,
+    // so without it the whole re-measurement is thrown away and re-uploaded next run.
+    redoCache.stats()
+    reportCacheStats(cache, fresh)
+    reportMeasurementCaveats(redo.ex)
+    return redo.report
   }
-  return report
+  reportCacheStats(cache, fresh)
+  reportMeasurementCaveats(lean.ex)
+  // The lean path may have fallen back and re-analysed, so return the report that was MEASURED, not
+  // the one loaded at the top — they are different objects and only one carries the numbers.
+  return lean.report
+}
+
+/** The first argument that is neither a flag nor a flag's value. `--top N` and `--out FILE` take a
+ *  value, so the scan has to skip two tokens for those or the value would be mistaken for the path. */
+const VALUED_FLAGS = new Set(['--top', '--out', '--limit'])
+export function firstOperand(argv: string[]): string | undefined {
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]
+    if (!a.startsWith('--')) return a
+    if (VALUED_FLAGS.has(a)) i++
+  }
+  return undefined
 }
 
 export async function runCtxmapCli(argv: string[]): Promise<number> {
@@ -753,11 +898,27 @@ export async function runCtxmapCli(argv: string[]): Promise<number> {
       const needle = argv[1]
       if (!needle) { console.error('--find needs a substring'); return EXIT.USAGE }
       const hits: string[] = []
+      // Prefilter on the RAW file text before parsing. Parsing every capture and re-serialising three
+      // sub-objects each cost 6.4s of CPU over 37MB; a substring test on bytes already read is ~50x
+      // cheaper and reaches the same files.
+      //
+      // Both spellings must be tried: on disk a needle may be JSON-escaped (`é` for `é`, `\"`
+      // for a quote) and so not appear literally, while a needle typed with an escape appears
+      // literally. Testing only one form silently MISSES real hits, which is worse than scanning
+      // slowly — so a candidate is any file matching either.
+      const escaped = JSON.stringify(needle).slice(1, -1)
       for (const d of bodyDirs()) {
         for (const f of safeReaddir(d)) {
           if (!f.endsWith('.request.json')) continue
+          const full = path.join(d, f)
+          let raw: string
+          // readBodyText, NOT fs.readFileSync — captures may be gzipped, and decoding those bytes as
+          // utf8 yields mojibake that can never contain the needle, so the prefilter would skip every
+          // compressed capture and report "no match" for text that is present.
+          try { raw = readBodyText(full) } catch { continue }
+          if (!raw.includes(needle) && !raw.includes(escaped)) continue
           let body: RequestBody
-          try { body = readBody(path.join(d, f)) as RequestBody } catch { continue }
+          try { body = readBody(full) as RequestBody } catch { continue }
           // Search the WHOLE request, not just `system`. Assuming injected context lives in the
           // system prompt is the exact misconception this tool exists to correct: CLAUDE.md and the
           // rules arrive as messages[0], so a system-only --find could not locate the single
@@ -773,16 +934,22 @@ export async function runCtxmapCli(argv: string[]): Promise<number> {
     }
 
     const exact = !argv.includes('--estimate')
+    const refresh = argv.includes('--refresh')
 
     if (argv[0] === '--diff') {
       const [, A, B] = argv
       if (!A || !B) { console.error('--diff needs two requests'); return EXIT.USAGE }
-      const a = await analyzeMaybeExact(A, exact), b = await analyzeMaybeExact(B, exact)
+      const a = await analyzeMaybeExact(A, exact, refresh), b = await analyzeMaybeExact(B, exact, refresh)
       if (asJson) return emit(JSON.stringify({ a, b }, null, 2), 'diff')
       return emit(renderDiff(a, b), `net ${b.total - a.total >= 0 ? '+' : ''}${fmt(b.total - a.total)} tokens`)
     }
 
-    const r = await analyzeMaybeExact(argv[0], exact)
+    // The FIRST NON-FLAG argument is the capture, not argv[0]. The help block presents --refresh as
+    // a free-standing flag, so `ctxmap --refresh <file>` must work; taking argv[0] verbatim made the
+    // documented spelling fail with "--refresh is not a captured body".
+    const target = firstOperand(argv)
+    if (!target) { console.error('ctxmap: no request given'); return EXIT.USAGE }
+    const r = await analyzeMaybeExact(target, exact, refresh)
     const digest = `${fmt(r.total)} tokens (${r.mode}) across ${r.elements.length} elements`
     return emit(asJson ? JSON.stringify(r, null, 2) : renderReport(r, topN), digest)
   } catch (e) {

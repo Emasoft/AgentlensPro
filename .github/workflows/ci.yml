@@ -77,6 +77,13 @@ jobs:
       - name: Check memory lessons are recallable
         run: node scripts/check-memory-lessons.js
 
+      # Identity guard: no personal email or home path in anything tracked or shipped, and a
+      # STRICTER bar inside skills/ — a skill is installed on other people's machines, so a real
+      # session id or account uuid there is one machine's noise shipped to everyone. Caught 31
+      # occurrences the day it was written, including three real addresses in the published skill.
+      - name: Check no personal identities
+        run: node scripts/check-no-identities.js
+
       # Bundles MUST be built BEFORE the unit suite: the server integration
       # tests boot the bundled standalone/server.js, which is an esbuild output
       # (only the .ts sources are tracked). Running mocha first fails with

@@ -16,7 +16,7 @@ suiteTeardown(() => { try { fs.rmSync(tmpDir, { recursive: true, force: true }) 
 // The real ~/.claude.json oauthAccount shape (values are synthetic — no real account here).
 const REAL_OAUTH = {
   oauthAccount: {
-    accountUuid: '32eb8302-c2a4-4333-a15f-ba17ec8960ad',
+    accountUuid: 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa',
     emailAddress: 'dev@example.com',
     organizationUuid: 'org-123',
     organizationName: 'Acme Co',
@@ -42,7 +42,7 @@ suite('accountInfo — oauthAccount parsing', () => {
   test('parseOauthAccount lifts identity fields from the real oauthAccount shape', () => {
     const id = parseOauthAccount(JSON.stringify(REAL_OAUTH))
     assert.ok(id)
-    assert.strictEqual(id?.accountUuid, '32eb8302-c2a4-4333-a15f-ba17ec8960ad')
+    assert.strictEqual(id?.accountUuid, 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa')
     assert.strictEqual(id?.email, 'dev@example.com')
     assert.strictEqual(id?.organizationName, 'Acme Co')
     assert.strictEqual(id?.billingType, 'subscription')

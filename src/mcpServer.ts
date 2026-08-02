@@ -55,6 +55,7 @@ import type { RateLimitsSnapshot } from './statuslineUsage'
 // source of truth shared by get_account_status and the account-state timeline sampler); resolveStateAt
 // powers the get_account_state_at tool (reads the ndjson off disk directly, like the forensic tools).
 import { describePlan, describeAccountMode, resolveAuthRegimeLabel, resolveStateAt } from './accountStateTimeline'
+import { listAllAccounts } from './allAccounts'
 import { listSessionFileIds } from './contextComposition'
 import { generateSuggestions } from './instructionAdvisor'
 import { readAllInstructionContent } from './instructionFiles'
@@ -851,8 +852,23 @@ const TOOLS = [
       '"calibrated-exceeded" = consumption has passed the auto-observed LOWER BOUND, so the pct is ' +
       'null because the denominator is proven stale — not because it is unknown), else null ' +
       '("none") — a null is NEVER presented as 0. The OAuth token is NEVER read or returned. Use this ' +
-      'after a rotation, or before a long run, to know the ACCOUNT you will actually burn.',
-    inputSchema: { type: 'object' as const, properties: {} },
+      'after a rotation, or before a long run, to know the ACCOUNT you will actually burn. ' +
+      'PASS `all: true` FOR EVERY ACCOUNT this machine has ever been on, not just the live one — the ' +
+      'answer a ROTATOR needs, since deciding whether to switch requires the headroom of the accounts ' +
+      'you are NOT on. Still no credential is read: each row is what was OBSERVED while that account ' +
+      'was live, with `observedAt`/`staleSeconds` and a per-window `freshness` — `fresh` (measured), ' +
+      '`aged` (past the TTL but the window has NOT reset, so a LOWER bound), `rolled` (the window reset ' +
+      'AND this machine left the account before the reading, so INFERRED ~0% — audit via `leftAt`), ' +
+      '`stale` (reset but activity since cannot be excluded → null with a reason), `unreadable` (never ' +
+      'observed → null with a reason, NEVER an absent row: "cannot read this account" and "this account ' +
+      'has no headroom" are opposite signals). Per-model weekly buckets are reported separately and NOT ' +
+      'folded into the verdict — a spent per-model bucket does not block other models.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        all: { type: 'boolean', description: 'Report every observed account instead of only the live one.' },
+      },
+    },
   },
   {
     name: 'get_account_state_at',
@@ -3449,10 +3465,15 @@ export function createMcpServer(opts: McpServerOptions): Server {
           : { message: 'Session status unavailable in this runtime (no live session/statusline source wired).' }
         break
       case 'get_account_status':
-        result = handleGetAccountStatus(
-          getAccount?.() ?? null, getBurnStatus?.() ?? null,
-          getTtlContext?.() ?? null, getRateLimits?.() ?? null,
-        )
+        // `all` reads only what is already on disk (the roster + the per-account usage archive), so it
+        // needs none of the live-session accessors the singular form depends on and works with the
+        // server cold — which is exactly when a rotator is asking.
+        result = (args as { all?: boolean } | undefined)?.all === true
+          ? listAllAccounts()
+          : handleGetAccountStatus(
+            getAccount?.() ?? null, getBurnStatus?.() ?? null,
+            getTtlContext?.() ?? null, getRateLimits?.() ?? null,
+          )
         break
       case 'check_cache_expiry':
         result = await handleCheckCacheExpiry(

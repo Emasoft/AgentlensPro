@@ -1,9 +1,9 @@
 ---
 trdd-id: FMIZO8Y4
 title: Embeddable dashboard — loopback-only frame-ancestors contract + embed/deep-link params for the ai-maestro UI
-column: ai_review
+column: complete
 created: 2026-07-17T06:17:17+0200
-updated: 2026-07-17T06:32:00+0200
+updated: 2026-08-02T14:25:00+0200
 current-owner: main
 task-type: feature
 severity: minor
@@ -78,3 +78,7 @@ in the contract post). The AgentlensPro-side deliverable is an embed CONTRACT:
 3. Gate (tsc ×2, lint, mirrors, suite) + deploy law + LIVE verify: `curl -sI` shows the CSP
    header; a real iframe page served from a second loopback port loads the dashboard with
    `?embed=1&tab=cache` (chrome-devtools screenshot); then post the contract on #3.
+
+## Approval log
+- 2026-08-02 — AI review PASSED (ai_review backlog audit): implementation verified present in the code first-hand, not from prose. Column ai_review → human_review; the remaining gate is the human. Evidence: reports/ai-review-audit/20260802_113252+0200-batchC-security-release.md
+- 2026-08-02 — HUMAN gate closed by USER delegation ("evaluate the whole status of the project and decide yourself. just base all decisions on verified facts.", 2026-08-02); the AI audit line above is the verified basis; release-via none/absent → terminal. Column human_review → complete.

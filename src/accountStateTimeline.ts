@@ -195,17 +195,78 @@ export class AccountStateTimeline {
  * append-ordered timeline). Reads the whole NDJSON — it is tiny (a few records/hour). A torn final
  * line is skipped. null when no record precedes T (the timeline doesn't reach that far back).
  */
-export function resolveStateAt(ts: number, filePath = accountStateTimelinePath()): AccountStateRecord | null {
-  let records: AccountStateRecord[]
+export function readTimeline(filePath = accountStateTimelinePath()): AccountStateRecord[] {
   try {
-    const raw = fs.readFileSync(filePath, 'utf8')
-    records = raw.split('\n')
+    return fs.readFileSync(filePath, 'utf8').split('\n')
       .filter(l => l.trim())
       .map(l => { try { return JSON.parse(l) as AccountStateRecord } catch { return null } })
       .filter((r): r is AccountStateRecord => r !== null && typeof r.ts === 'number')
   } catch {
-    return null
+    return []      // no file yet, or unreadable — "we have never observed an account", never a throw
   }
+}
+
+/** One account this machine has ever been authenticated as.
+ *
+ *  THE ROSTER IS THE ONLY SOURCE THAT KNOWS AN ACCOUNT EXISTS. `~/.claude.json` holds exactly one
+ *  `oauthAccount` — the live one — and the usage archive only holds accounts we happened to fetch for.
+ *  Without this list, an account that has never had a usage reading is invisible rather than reported
+ *  as unreadable, and "invisible" is indistinguishable from "no headroom" to anything automated. */
+export interface AccountRosterEntry {
+  accountId: string | null
+  email: string | null
+  plan: string
+  mode: string
+  authRegime: string
+  /** First time this account appears in the timeline. */
+  firstSeen: number
+  /** The most recent record FOR THIS ACCOUNT — i.e. when its state was last written.
+   *
+   *  NOT "when it was last used". The timeline is change-detected (see `record()`), so an account that
+   *  sat live and unchanged for a week has a lastStateChange a week old. It is a LOWER bound on
+   *  liveness, and naming it anything else would license a consumer to read it as an activity stamp. */
+  lastStateChange: number
+  /** When this machine stopped being on this account: the ts of the next record naming a DIFFERENT
+   *  account after its last live run. `null` when it is still the last account in the timeline.
+   *
+   *  This is what makes a stale window reading recoverable: an account this machine left at time S has
+   *  had no activity FROM THIS MACHINE since S, so a window observed before S and since reset is empty
+   *  rather than unknown. It says nothing about other machines — which is why every consumer must print
+   *  the precondition rather than treat the inference as a measurement. */
+  leftAt: number | null
+}
+
+/** Every account in the timeline, most-recently-active first. Latest-wins for the descriptive fields:
+ *  a plan upgrade or a switch to usage credits must not be reported from the oldest record. */
+export function listAccountRoster(filePath = accountStateTimelinePath()): AccountRosterEntry[] {
+  const records = readTimeline(filePath)
+  const by = new Map<string, AccountRosterEntry>()
+  for (let i = 0; i < records.length; i++) {
+    const r = records[i]
+    // Key on the uuid, falling back to the email: a record predating uuid capture still describes a
+    // real account, and dropping it would under-report the roster — the one direction that hides an
+    // account with headroom.
+    const key = r.accountId ?? r.email ?? ''
+    if (!key) continue
+    // The end of THIS record's live run: the next record naming a different account. A later run by
+    // the same account overwrites it, so what survives is the end of its LAST run.
+    let leftAt: number | null = null
+    for (let j = i + 1; j < records.length; j++) {
+      if ((records[j].accountId ?? records[j].email ?? '') !== key) { leftAt = records[j].ts; break }
+    }
+    const prev = by.get(key)
+    by.set(key, {
+      accountId: r.accountId, email: r.email, plan: r.plan, mode: r.mode, authRegime: r.authRegime,
+      firstSeen: prev ? prev.firstSeen : r.ts,
+      lastStateChange: r.ts,
+      leftAt,
+    })
+  }
+  return [...by.values()].sort((a, b) => b.lastStateChange - a.lastStateChange)
+}
+
+export function resolveStateAt(ts: number, filePath = accountStateTimelinePath()): AccountStateRecord | null {
+  const records = readTimeline(filePath)
   let lo = 0, hi = records.length - 1, ans = -1
   while (lo <= hi) {
     const mid = (lo + hi) >> 1

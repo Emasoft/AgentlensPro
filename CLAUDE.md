@@ -24,6 +24,9 @@ agentlenspro --install-hooks | --uninstall-hooks # wire/unwire lifecycle hook ca
                                                  # + the image cache-guard on Read (WARN-only;
                                                  # AGENTLENS_CACHE_GUARD=off / --hooks cacheguard=off)
 agentlenspro --install-skill                     # (re)install this skill into ~/.claude/skills/
+agentlenspro statusline-history project          # what is running in THIS project: model, effort,
+                                                 # ctx fill, cost, 5h/7d window. Self-scopes to the
+                                                 # cwd; `--project [DIR]` works on every view
 ```
 
 Both `--install-*` settings flags go through `safeConfigEdit`; they never clobber other tools'
@@ -139,6 +142,50 @@ When both capture the same session: **for Claude sessions the log transcript win
 - **`.githooks/{post-merge,post-rewrite}`** rebuild bundles after pull/rebase to keep `standalone/*.js` in sync with source, but they are **not auto-enabled** — opt in with `git config core.hooksPath .githooks`.
 - **Fixture JSON is gitignored** (`demo/fixtures/*.json`, `export_*.json`). Run `node scripts/redact-spans.js` before committing any fixture — they contain real telemetry/PII.
 - **`.claude/settings.json` is PROJECT scope and tracked** (only `settings.local.json` is ignored). It registers one `PreToolUse(Bash)` deny: `scripts/deny-playwright-init-agents.js`, which refuses playwright's agent-generator subcommand because it writes `.claude/agents/`, `.github/agents/`, a `copilot-setup-steps.yml` workflow, and `.mcp.json` — files an agent then loads as instructions. Installing playwright writes nothing (`scripts: {}`); the command is the only trigger, so the invocation is the only thing worth guarding. Matching is token-based (a substring version blocked `git add` of the guard's own filename); `node scripts/test-deny-playwright-init-agents.js` is the 15-case matrix.
+
+## No identities in anything tracked, shipped, OR POSTED — enforced, not remembered
+
+Two enforcement points, because the first one has no reach over the second surface.
+
+**Files** — `pnpm run check-identities` (`scripts/check-no-identities.js`, run by `compile`,
+`package`, CI, and the publish workflow) fails the build on a personal email address or a home path
+with a real username in any tracked or shipped file.
+
+**Outbound posts** — `scripts/deny-identity-leak-to-github.js`, a PreToolUse(Bash) hook, denies a
+`gh` command that PUBLISHES prose (issue/pr/release/gist/discussion create|comment|edit|review) when
+the text carries an identity; it reads `--body-file`/`-F` from disk, because that is the shape the
+real incident took. `pnpm run check-guards` runs its 30-case matrix from `compile`/`package`.
+
+**Never write an `@name` outside a code span** — the owner's iron rule, `~/.claude/rules/github-mentions.md`.
+In rendered prose it PAGES that account, and the handles agents reach for are already taken: two
+role-name handles paged real strangers across 9 issues. Two consequences that are not obvious and
+both cost real pages — **a raw address pages its DOMAIN** (GitHub reads it as a username, so
+`x@example.com` pages `@example` and the noreply identity pages `@users`), and **`@lru_cache` pages
+`@lru`** (a username cannot contain `_`, so the valid prefix is linkified). Backticks are the
+universal fix; nothing is exempt, not even the sanctioned self-id line. The guard therefore measures
+everything on code-STRIPPED prose, so the correct way to write any of it still passes — a guard that
+reddens on correct writing gets deleted. Note `~/.claude/rules/prrd-design-rules.md` still recommends
+a self-id line with a bare `@owner`; use the backticked form.
+Evidence: on 2026-08-02 agents pasted account tables into **three PUBLIC issue comments**
+(AgentlensPro#8, ai-maestro#95, ai-maestro#102), publishing three real addresses; the file check
+neither did nor could fire, because it scans FILES and a comment is not one. All three were redacted
+and the guard was verified to deny the actual leaked body. A fourth hit — a synthetic placeholder
+address in a redaction-feature table in ghe-marketplace#1 — was left alone: verifying each hit before
+editing is what keeps a sweep from mangling someone's documentation over a placeholder. (Writing
+that placeholder out here would itself trip `check-identities`, which is the doctrine working.) **Skills carry a stricter bar: they must be UNIVERSAL** — installed on
+other people's machines, so a real session id or account uuid there is one machine's noise shipped to
+everyone. Ids in a skill must be visibly fake (≤2 distinct characters: `aaaaaaaa`, `bbbb2222`).
+
+The check is **shape-based, never a list of the values that leaked** — a guard keyed on today's
+account goes blind the moment a different one is used, which is how the second incident gets through
+while the check still reports green. Allowlists live in the script, each entry with its reason.
+
+When the concrete value genuinely matters ("on THIS machine the config names account X"), it belongs
+in LOCAL memory (`~/.claude/projects/<slug>/memory/`), outside the repo; keep the machine-agnostic
+shape in the repo. Evidence: 31 occurrences across 15 files on 2026-08-02, including three real
+addresses in the published skill — `skills/` is in `files`, so the next publish would have shipped
+them. Verified to fail against the pre-fix tree (31 findings); published 2.19.0/2.20.0 tarballs were
+confirmed clean.
 
 ## Contribution conventions
 
@@ -270,6 +317,18 @@ culprits by cache-**weighted** equiv (`investigate_burn`), never by request byte
 - For "**did that turn miss the cache**", read `get_cache_event_log` — one row per call, sourced from
   the OTEL span store (whose `api_request` events carry `session.id` directly, so a compaction's own
   summarization call is attributed instead of being invisible) with the API's own `cache_miss_reason`.
+- To **FALSIFY a cost claim** — any alert, hook, or your own hypothesis asserting a cold write —
+  `agentlenspro statusline-history cache`. It needs no OTEL and no API call: it reads the status-line
+  payload's own per-turn `current_usage` split, so `write%` near 0 is a warm re-read and near 100 a
+  real prefix rewrite. Cost is printed as a **5m/1h bracket** because the payload does not carry the
+  TTL tier; a single figure there would be a guess. Use it before acting on any burn warning — one
+  such warning claimed a ~520k cache-miss write every turn while the measured turns were 0.75% write,
+  and its recommended remedy (`/compact`) is itself a cold rewrite costing ~27× a warm turn. Sibling
+  view `peaks` shows the harness's cumulative-cost delta with its **sampling gap**: a delta spanning
+  an idle stretch is an INTERVAL total, not one turn's cost. Validated three independent ways —
+  computed 1h cost equals the harness's own `cost_usd` to 4 decimals (and the 5m column matches
+  nothing), and the feed agrees with OTEL within 1–5% on every bucket over an hour.
+  Evidence: `reports/statusline-cache-verification/20260801_232422+0200-cache-view-validation.md`.
 
 Diagnostics encode this as the TTL-regime matrix (TRDD-VY1IUVUM); the full model with measured
 costs: `.claude/project/memory/cache-ttl-model.md`.

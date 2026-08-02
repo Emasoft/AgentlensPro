@@ -21,7 +21,14 @@ export function bucketPath(dir: string, ts: number): string {
 // deleted — an unpurgeable file counted in disk usage forever). Parse once, here, for all users.
 export function bucketDayMs(filename: string): number | null {
   if (!/^\d{4}-\d{2}-\d{2}\.ndjsonl$/.test(filename)) return null
-  const day = filename.slice(0, 10)
+  return dayKeyMs(filename.slice(0, 10))
+}
+
+/** A bare 'YYYY-MM-DD' key → the UTC ms of that day, or null when it is not a calendar-real date.
+ *  Split out of bucketDayMs so the statusline store's day-PARTITION DIRECTORIES validate through the
+ *  exact same trap-aware parse — the header's whole point is that this logic has one home. */
+export function dayKeyMs(day: string): number | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null
   const ms = Date.parse(`${day}T00:00:00Z`)
   // Date.parse accepts overflow ('2026-02-31'); round-trip to reject anything not calendar-real.
   if (!Number.isFinite(ms) || new Date(ms).toISOString().slice(0, 10) !== day) return null

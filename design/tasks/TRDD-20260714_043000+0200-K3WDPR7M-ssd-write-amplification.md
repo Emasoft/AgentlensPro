@@ -1,9 +1,9 @@
 ---
 trdd-id: K3WDPR7M
 title: SSD write amplification — raw OTEL bodies rewrite the whole conversation every turn; move the body store to a fileless-DuckDB to immutable-Parquet loop
-column: dev
+column: todo
 created: 2026-07-14T04:30:00+0200
-updated: 2026-07-16T17:45:00+0200
+updated: 2026-08-02T11:36:14+0200
 current-owner: main
 task-type: bugfix
 severity: critical
@@ -408,3 +408,9 @@ do not repeat the mistake of shipping a fix for an unmeasured hypothesis.
   cannot be optimized further, you must implement rust helpers") and the storage fix ("even 10 MB per
   minute is too much.. you have to make it write only an optimized and compressed data into sqlite db").
 - Destructive-op approval for the 22 GB reclaim: PENDING USER.
+- 2026-08-02 — Column `dev` → `todo` (board audit). The critical half is closed: Phase 6 was
+  resolved by TRDD-X2E6OSWK and the Phase-4 burn half landed in 9985c34. What the STATE block
+  still calls genuinely open is two dead-path cleanup chores (forensics fold, loadSpawnMap) plus
+  two USER-gated items (the `store.old-v0` / `spans.json.bak*` disposal, branch pushes). Nobody
+  has worked the card since 2026-07-16, so `dev` was asserting active work that was not happening.
+  Queued, not deferred — `backburner` would claim a deliberate deferral only the owner can declare.

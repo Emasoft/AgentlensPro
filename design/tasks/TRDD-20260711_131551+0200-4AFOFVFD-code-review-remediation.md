@@ -1,9 +1,9 @@
 ---
 trdd-id: 4AFOFVFD
 title: Code-review remediation — 16 fixed + merged, 7 deferred to implement
-column: ai_review
+column: published
 created: 2026-07-11T13:15:51+0200
-updated: 2026-07-16T17:20:25+0200
+updated: 2026-08-02T14:25:00+0200
 current-owner: claude-code-review
 assignee: claude-code-review
 priority: 2
@@ -309,3 +309,5 @@ GREEN 890/0. Rationale + lesson: `[[otlp-ingest-topology]]` `[^3]`.
 ## Approval log
 - 2026-07-11 — owner directed: implement ALL deferred findings correctly + test
   (no skips). This TRDD tracks that remediation.
+- 2026-08-02 — AI review PASSED (ai_review backlog audit): this card's own STATE block already recorded the work as shipped end-to-end and it re-verified against the code today. Column ai_review → human_review; the remaining gate is the human, exactly as the STATE block says.
+- 2026-08-02 — HUMAN gate closed by USER delegation ("evaluate the whole status of the project and decide yourself. just base all decisions on verified facts."). release-via publish already satisfied: all 5 implementation commits (7d89ad3, a03ee4b, 8150494, 36728a6, fb94170) re-verified ancestors of origin/main today; shipped in v2.8.0 per the STATE. EHT TRDD-DYG4ZTXW is terminal (complete). Column human_review → published (terminal as itself).

@@ -1,9 +1,9 @@
 ---
 trdd-id: CB9POPUP
 title: Cache-break icon opens a before/after prompt-prefix diff popup
-column: human_review
+column: complete
 created: 2026-07-17T17:03:53+0200
-updated: 2026-07-17T17:19:24+0200
+updated: 2026-08-02T14:25:00+0200
 current-owner: spark
 task-type: feature
 relevant-rules: [no-nested-scrollbars]
@@ -68,3 +68,7 @@ implementation-commits: [2edb933]
 
 `node esbuild.js` must print success (stale-bundle trap), then `agentlenspro server restart`, grep
 bundle for the distinctive `cache-break-diff-popup` marker, browser-check at :3000.
+
+## Approval log
+- 2026-08-02 — AI review (backlog audit, this session): verified live first-hand — the popup ships in media/src/tabs/Traces.tsx (the comment at ~L1056 cites this TRDD; `cache-break-diff-popup` dialog ~L1091, `breakOpen` ~L1184 — the STATE's `CacheBreakDetail` was folded into the popup, a rename not a removal), and commit 2edb933 is an ancestor of HEAD.
+- 2026-08-02 — HUMAN gate closed by USER delegation ("evaluate the whole status of the project and decide yourself. just base all decisions on verified facts."); release-via absent → none → terminal. Column human_review → complete.

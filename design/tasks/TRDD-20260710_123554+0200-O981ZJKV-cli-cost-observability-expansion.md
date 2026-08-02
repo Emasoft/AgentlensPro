@@ -1,9 +1,9 @@
 ---
 trdd-id: O981ZJKV
 title: CLI cost-observability expansion — 14-item work order, coverage map + gaps
-column: ai_review
+column: complete
 created: 2026-07-10T12:35:54+0200
-updated: 2026-07-16T11:59:00+0200
+updated: 2026-08-02T14:25:00+0200
 implementation-commits: [1093245, 9aa20fa, 674ed43, 8b9da82, 29d666d, 655a30a]
 current-owner: agentlens-session
 task-type: feature
@@ -28,7 +28,7 @@ open" claim below).** Re-verification against the live tool surface + git found 
 - **Item 2 (window-capacity auto-calibration): SHIPPED + FIRED IN PRODUCTION.** Landed as
   TRDD-BURNWDGT P5 (commit 8b9da82, `src/capacityCalibration.ts` + StopFailure ingest wiring +
   2 test suites). Live proof today: `~/.agentlens/burn-config.json` carries an observed capacity
-  for account 80ddbe47… measured 2026-07-13 from a real rate-limit hit, and `get_window_budget`
+  for account cccccccc… measured 2026-07-13 from a real rate-limit hit, and `get_window_budget`
   reports `capacitySource: "observed"` with zero manual config. Nothing left to build.
 - **Item 9 (predict next similar-session cost): SHIPPED.** `predict_session_cost`
   (commit 29d666d) — live-verified today: 12 matched precedents, p50 $3.50 / p75 $7.51
@@ -179,3 +179,7 @@ Phase B shipped — see above) and the step-0 integration-test surface (test age
   Fixes = child TRDD when scheduled.
 
 ## Notes and lessons learned
+
+## Approval log
+- 2026-08-02 — AI review PASSED (ai_review backlog audit): this card's own STATE block already recorded the work as shipped end-to-end and it re-verified against the code today. Column ai_review → human_review; the remaining gate is the human, exactly as the STATE block says.
+- 2026-08-02 — HUMAN gate closed by USER delegation ("evaluate the whole status of the project and decide yourself. just base all decisions on verified facts.", 2026-08-02); the AI audit line above is the verified basis; release-via none/absent → terminal. Column human_review → complete.

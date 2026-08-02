@@ -54,13 +54,14 @@ installs the server itself; the CLI starts it on demand.
 
 ## Version floor — check this FIRST if a command is "unknown"
 
-This document describes **agentlenspro 2.11.0+**. The `budget` and `watch` commands and the
-`get_lifecycle_events` / `get_cache_risk_costs` / `get_skill_attribution` /
-`get_loaded_plugin_versions` tools **do not exist before 2.11.0** — on an older install they fail
-as an unknown command or unknown tool, which reads like a broken skill rather than an old binary.
+This document describes **agentlenspro 2.21.0+**. `statusline-history` and its `--project` flag do
+not exist before **2.21.0**; the `budget` and `watch` commands and the `get_lifecycle_events` /
+`get_cache_risk_costs` / `get_skill_attribution` / `get_loaded_plugin_versions` tools do not exist
+before 2.11.0 — on an older install they fail as an unknown command or unknown tool, which reads
+like a broken skill rather than an old binary.
 
 ```bash
-agentlenspro --version          # < 2.11.0 ⇒ npm install -g agentlenspro@latest
+agentlenspro --version          # < 2.21.0 ⇒ npm install -g agentlenspro@latest
 ```
 
 If a Claude session cannot see this skill's newest content, that session loaded the skill at
@@ -83,6 +84,8 @@ reference for when that command's output needs interpreting.
 | "Am I about to do something that explodes?" (fan-out, workflow) | arm `agentlenspro --guard 15` in a Monitor first |
 | "Did that compaction / command / turn cost me a cache miss?" | `agentlenspro get_cache_event_log` — the per-call ledger: the costliest call with the calls before and after it, buckets spelled out, 🔥×1-5 by write magnitude |
 | "How full are my 5h / 7d windows, really?" | `agentlenspro get_subscription_usage` — **Anthropic's own numbers** (what `/usage` shows), not a local projection |
+| "What is running in THIS project — which sessions, on what model, how full, how much spent?" | `agentlenspro statusline-history project` (self-scoping to the cwd; add `--json` for every field) |
+| "How full is a LIVE subagent's context?" | `agentlenspro statusline-history subagents --project` — the only surface that publishes per-agent `tokenCount` vs its own window |
 | "Why is this ONE session so expensive?" | `get_session_burn_profile --sessionId <id>` |
 | "What exactly did agent X consume?" | `get_agent_tokens --agentId <id>` |
 | "What keeps breaking my prompt cache?" | `get_cache_break_causes`, then `get_cache_break_timeline --sessionId <id>` |
@@ -90,6 +93,7 @@ reference for when that command's output needs interpreting.
 | "How long until my account's window runs out?" | `get_window_eta` |
 | "What is even IN my context, and what did it cost?" | `get_context_composition --sessionId <id>` |
 | "Which model/plan am I on; how full are the windows?" | `get_account_status` |
+| "Where does EVERY account stand — should I rotate, and onto which one?" | `agentlenspro get_account_status --all` — reads only files, so it **answers with the server down** |
 | "Is this session running stale plugin code?" | `get_loaded_plugin_versions --staleOnly` |
 | "I don't know which tool I need" | `agentlenspro list --desc`, then `agentlenspro help <tool>` |
 
@@ -240,7 +244,7 @@ starts a second investigation:
 
 ```
 [watch] PEAK-START tokens-per-min total = 5.61M (>= 1) — who: alpha-service (aaaa1111, 1.3M/min,
-47%) · beta-service (04332240, 865k/min, 31%) · gamma-tools (7877ae1f, 613k/min, 22%)
+47%) · beta-service (bbbb2222, 865k/min, 31%) · gamma-tools (cccc3333, 613k/min, 22%)
 ```
 
 Each entry is `project (session, rate, share of machine total)`, heaviest first, and the session
@@ -304,6 +308,31 @@ investigating a window that has already rolled.
 `get_account_burners` is for **after a rotation**: it marks `mostLikelyExhausted` with an
 `exhaustionReason`, and splits cross-rotation sessions between accounts by time. If you have not
 rotated, skip it — the first two commands are the answer.
+
+## The exit-code contract — read this BEFORE you shell out to this CLI
+
+If you are calling `agentlenspro` from a script or an agent loop rather than reading its output
+yourself, this is the part that decides whether your code is correct:
+
+| Exit | What it means | What stdout is |
+|---|---|---|
+| **0** | The command answered. | **A result — parse it.** |
+| **2** | The tool REFUSED (not found, no calibration, no value in the feed). Not a crash. | **Empty.** The reason is JSON on **stderr**: `{"tool": "...", "error": "..."}` |
+| **1** | A runtime failure, or a watcher's deliberate ABORT verdict (`budget --watch`). | A message, not a payload |
+| **64** | Your command line was wrong; nothing ran. | A message naming the valid values |
+
+`if rc != 0: don't parse` is therefore **correct** — that is the habit this contract is built
+around. It was not always true: before 2.22.0 a refusal printed `{"error": …}` on **stdout** and
+exited **0**, so a consumer read a refusal as an answer (issue #9 §1). If you must support an
+older binary, check for a top-level `error` key as well as the exit code.
+
+Two more things a program needs:
+
+- **`--json` is a global.** It works on every tool and overrides the human rendering, so a tool
+  that normally prints a table still gives you JSON. `--out FILE` writes the full payload to disk
+  and prints a digest instead; on a refusal the file is **not** written.
+- **A refusal never writes `--out`.** A file containing `{"error": …}` is worse than no file,
+  because the next reader finds it and trusts it.
 
 ## When a command fails — read the failure, don't retry blindly
 
@@ -945,6 +974,100 @@ degrade to the last reading with an explicit `reason` (`cooldown` / `no_token` /
 rendering an already-rolled window as live. On macOS the token is in the login keychain, so the read
 is **opt-in**: export `AGENTLENS_READ_KEYCHAIN_USAGE=1` (an un-ACL'd keychain read pops a password
 prompt, which is unacceptable from a status line or hook).
+
+## Every account, not just the live one — `get_account_status --all`
+
+`get_account_status` answers for the account you are on **right now**. That is the wrong shape for a
+rotator: deciding whether to switch needs the headroom of the accounts you are **not** on, and the only
+way to learn an account's status used to be to already be on it. **You had to rotate to find out
+whether you should rotate.**
+
+```bash
+agentlenspro get_account_status --all          # a table; '*' marks the live account
+agentlenspro get_account_status --all --json   # every field, including the reason behind every null
+```
+
+```
+   account   email               plan     5h window   7d window   observed  left
+*  bbbbbbbb  owner@example.com   Max 20x  unreadable  unreadable  never     (on it)
+   aaaaaaaa  second@example.com  Max 20x  0% rolled   77% aged    352m ago  07-31 15:28
+   cccccccc  third@example.com   Max 20x  unreadable  unreadable  never     07-30 17:19
+```
+
+**No credential is read** — the OAuth token contract is unchanged. Every row is what was already
+observed while that account was live, stamped. It is assembled entirely from files, so it **answers
+with the server down**, which is exactly when a wedged machine is asking.
+
+**The verdict is per WINDOW, not per account**, because the 5h and 7d roll at wildly different rates:
+
+| freshness | meaning | number |
+|---|---|---|
+| `fresh` | measured inside the cache TTL | the percentage |
+| `aged` | past the TTL, but the window has **not** reset — utilization only grows | a **LOWER bound** |
+| `rolled` | the window reset **and** this machine was already off the account when the new one began | **INFERRED ~0%** |
+| `stale` | reset, but activity since cannot be excluded | `null` + a reason |
+| `unreadable` | never observed | `null` + a reason |
+
+`rolled` is the one that pays for the feature: an account at 91% whose 5h window has since reset, that
+nothing local can have filled, is **available** — not unknown. It is an **inference**, it says so, and
+its precondition ("no activity observed **by this machine**") travels in the payload — audit it with
+the `left` column before acting. It is deliberately suppressed when the reading's own account
+contradicts `~/.claude.json`, because the premise then rests on a claim known to be wrong.
+
+**`unreadable` is never an absent row.** "Cannot read this account" and "this account has no headroom"
+are opposite signals; a missing row renders as the second. An empty roster is **BLIND** (exit 2 —
+the house "cannot answer honestly" code; it was 1 before v2.22.0), never "no accounts". Per-model weekly buckets are reported separately and **never** folded into the
+verdict — a spent per-model bucket does not block other models.
+
+## Per-project and per-subagent history — `agentlenspro statusline-history`
+
+**The only surface that answers "what is running in THIS project, right now, and what has it cost".**
+Claude Code renders the status-line payload every few seconds and persists none of it; this reads the
+captured history off disk, so it also **works with the server down** — which is exactly when someone
+is investigating a burn.
+
+```bash
+agentlenspro statusline-history project              # ← scopes ITSELF to the cwd's project
+agentlenspro statusline-history project --json       # every field, incl. resets_at + repo identity
+agentlenspro statusline-history subagents --project  # live agents launched from here: fill%, worktree
+```
+
+`project` is the one to reach for from inside a repo. It prints one row per session **in that
+project** — model, effort, fast mode, context tokens + fill %, lifetime cost, and the **account's**
+5h / 7d window fill — and it announces the directory it resolved on **stderr**, so a piped stdout
+stays machine-readable and a wrong-repo answer can never masquerade as a right one:
+
+```
+scope: /Users/me/Code/Proj (implied by the 'project' view — pass --project DIR to override)
+session   model       effort  fast  ctx     ctx%  cost $  5h%  7d%  ver      samples  last
+bbbbbbbb  opus-5[1m]  xhigh   -     232.6k  23    537.97  80   91   2.1.220  7745     00:09:43
+```
+
+**`--project` works on EVERY view**, not just `project`. Bare `--project` means the current
+directory; `--project DIR` names one. It matches `workspace_project_dir`, `workspace_current_dir`
+**and** `cwd`, at the root or anywhere under it — so a worktree-isolated agent running in
+`<root>/.claude/worktrees/<x>` is included, while a sibling `<root>-old` is not. The subagent stream
+carries **only** `cwd` at the top level (its `workspace.*` are null), which is why all three are
+matched rather than trusting the project dir.
+
+| view | answers |
+|---|---|
+| `project` | everything about the sessions in ONE project (self-scoping; see above) |
+| `sessions` | one row per session machine-wide: peak fill, cost, span |
+| `subagents` | per-agent `tokenCount` vs its OWN `contextWindowSize` — a 150k Sonnet agent in a 200k window (75%) is in far more trouble than a 90k Fable agent in 1M (9%). Nothing else on the machine publishes this |
+| `windows` | 5h/7d history at **full float precision** — the only un-quantized window reading |
+| `peaks` | the largest context/cost jumps between consecutive samples. **Read the `span` column**: a delta across an idle gap is an INTERVAL total, not one turn |
+| `cache` | per-turn cache WRITE vs READ — the falsifier for a claimed cache miss. Cost is bracketed 5m/1h because the write rate is TTL-tiered and the tier is not in the payload |
+
+Every point-in-time field is **latest-wins**, peaks are **max**, and nothing is ever summed: the
+status line misses fast turns, so summing double-counts nothing and under-counts everything.
+
+**Exit codes are part of the answer.** `2` = **BLIND** — the store holds nothing for this window,
+which means *"cannot see"*, **never** *"no burn"* (capture may not be installed: run `agentlenspro
+--install-statusline`); `64` = bad command line, `1` = runtime failure. (BLIND was exit 1 before
+v2.22.0.) `0` with `(no rows matched)` is the opposite: we looked, and the filter
+genuinely excluded everything. Flags: `--since H|ISO` (default 24h) · `--until` · `--limit` ·
+`--session ID` · `--json` · `--out FILE` (full report to disk, one-line digest to stdout).
 
 ## High-value tools (cheat-sheet)
 

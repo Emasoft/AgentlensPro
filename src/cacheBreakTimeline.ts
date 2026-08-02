@@ -57,6 +57,7 @@ export type CacheBreakTimelineCause =
   | 'SKILL_CHANGED'             // a skill catalog / skill block changed content
   | 'INLINE_EXEC_RESULT_CHANGED'// a skill `!`-operator inline shell result differs turn-to-turn
   | 'CLAUDE_MD_CHANGED'         // an injected CLAUDE.md / rules instruction file changed
+  | 'MEMORY_FILE_CHANGED'       // an injected memory file (MEMORY.md / a wiki page) was rewritten mid-session
   | 'AGENT_METADATA_CHANGED'    // harness/agent metadata (billing header cc_version, agent-types list) changed
   | 'SYSTEM_TIMESTAMP'          // the only diff is a moving date/clock inside an otherwise-stable block
   | 'CONTEXT_ORDER_CHANGED'     // identical block content, different injection order (cache still breaks)
@@ -94,6 +95,7 @@ const REMEDIATION: Record<CacheBreakTimelineCause, string> = {
   SKILL_CHANGED:              'A skill catalog / skill block changed content mid-session. Keep the available-skills set and their text fixed within a session.',
   INLINE_EXEC_RESULT_CHANGED: 'A skill `!`-operator shell result differs each turn (e.g. a clock/`date`/`git status`), so its injected block re-writes the prefix. Pin or remove the volatile inline command.',
   CLAUDE_MD_CHANGED:          'An injected instruction file (CLAUDE.md / a rule) changed mid-session. Do not edit instruction files during a live session; a date inside them is SYSTEM_TIMESTAMP, not this.',
+  MEMORY_FILE_CHANGED:        'An injected memory file (MEMORY.md / a wiki page) was rewritten while sessions were live, mutating msg[0] and re-writing the whole prefix — in EVERY session that injects it, not just the one that wrote it. Batch memory maintenance into one pass, run it when sessions are idle, or keep the injected index stable and put churn in pages that are not injected.',
   AGENT_METADATA_CHANGED:     'Harness/agent metadata (the billing header cc_version, the agent-types list) changed — usually a Claude Code upgrade. Unavoidable once; avoid resuming huge sessions right after upgrading.',
   SYSTEM_TIMESTAMP:           'A moving date/clock inside an otherwise-static block breaks the cache every day/turn. Move the timestamp out of the cached prefix into the current user message.',
   CONTEXT_ORDER_CHANGED:      'The same blocks are injected in a DIFFERENT order — the cache is byte-order sensitive, so this still breaks it. Fix the injection order to be deterministic.',
@@ -134,14 +136,27 @@ function normalizeVolatile(text: string): string {
 
 // ── Content classification of an injected text block ──────────────────────────────
 export type BlockContentKind =
-  | 'claudemd' | 'rule' | 'agentmeta' | 'skillcatalog' | 'agentcatalog'
+  | 'claudemd' | 'rule' | 'memory' | 'agentmeta' | 'skillcatalog' | 'agentcatalog'
   | 'hook' | 'date' | 'execresult' | 'postcompact' | 'system' | 'usertext' | 'history' | 'attachment'
 
-function classifyContentKind(text: string): BlockContentKind {
+/** Exported for tests: it is a pure text→kind function, and the kinds it MISSES are exactly how a
+ *  real perpetrator ends up filed as UNCLASSIFIED. */
+export function classifyContentKind(text: string): BlockContentKind {
   if (/x-anthropic-billing-header|cc_version=|cc_entrypoint=/.test(text)) return 'agentmeta'
   if (/This session is being continued from a previous|conversation summary so far|compacted the (?:previous )?conversation|<compaction_summary|Analysis:[\s\S]{0,80}Summary:/i.test(text)) return 'postcompact'
   if (/Contents of .{0,300}CLAUDE\.md|^#\s*CLAUDE\.md/m.test(text)) return 'claudemd'
   if (/Contents of .{0,300}[/\\]\.claude[/\\]rules[/\\]/.test(text)) return 'rule'
+  // The auto-memory file is injected into msg[0] exactly like CLAUDE.md and the rules, but its path
+  // is neither `CLAUDE.md` nor under `.claude/rules/`, so it matched NEITHER matcher above and fell
+  // through to 'usertext' → UNCLASSIFIED. That mattered here more than anywhere: a memory curator
+  // rewrites these files while sessions are live, and each rewrite mutates msg[0] and re-writes the
+  // whole prefix — 19% of all classified break tokens on this machine were sitting in UNCLASSIFIED
+  // with the actor recorded only as "usertext block changed at pos 38: msg[0] user".
+  // Verified against the real injected header:
+  //   "Contents of …/memory/MEMORY.md (user's auto-memory, persists across conversations):"
+  // Checked BEFORE 'hook' on purpose: a memory PAGE body can quote a hook marker like
+  // "[janitor-memory]", and a real file injection must outrank a coincidental mention inside it.
+  if (/Contents of .{0,300}[/\\]memory[/\\]|auto-memory, persists across conversations/.test(text)) return 'memory'
   if (/<local-command-stdout>|<command-output>|command-stdout|<function_results>/.test(text)) return 'execresult'
   if (/skills are available for use with the Skill tool|The following skills are available|Available skills:/.test(text)) return 'skillcatalog'
   if (/Available agent types|available agent types for the Agent tool|subagent_type/.test(text)) return 'agentcatalog'
@@ -159,6 +174,7 @@ function classifyContentKind(text: string): BlockContentKind {
 function causeForContentKind(kind: BlockContentKind): CacheBreakTimelineCause {
   switch (kind) {
     case 'claudemd': case 'rule': return 'CLAUDE_MD_CHANGED'
+    case 'memory': return 'MEMORY_FILE_CHANGED'
     case 'agentmeta': case 'agentcatalog': return 'AGENT_METADATA_CHANGED'
     case 'skillcatalog': return 'SKILL_CHANGED'
     case 'hook': return 'HOOK_INJECTION'
