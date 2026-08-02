@@ -32,21 +32,18 @@ const POSTING = new Set([
   'discussion create', 'discussion comment',
 ])
 
-/** An address that is SUPPOSED to be public: the GitHub noreply identity this project commits with
- *  (see CLAUDE.md), and the reserved example domains. Everything else is a real person. */
-function isAllowedEmail(addr) {
-  const a = addr.toLowerCase()
-  return a.endsWith('@users.noreply.github.com')
-    || /@example\.(com|org|net)$/.test(a)
-    || /@(localhost|invalid|test)$/.test(a)
-}
+// No address is exempt any more, not even the noreply commit identity or a reserved example domain.
+// GitHub reads the DOMAIN of a raw address as a username, so `someone@example.com` in prose pages
+// `@example` and `713559+Emasoft@users.noreply.github.com` pages `@users` — the address is a leak
+// AND a page (owner rule, ~/.claude/rules/github-mentions.md). Backticks remain the universal
+// escape hatch, and everything below is measured on code-STRIPPED prose, so the correct way to
+// write any of this still passes. A guard that reddens on correct writing gets deleted.
 
 /** Placeholder home directories that carry no identity. */
 const PLACEHOLDER_USERS = new Set(['x', 'you', 'user', 'username', 'me', 'name', 'runner', 'home', 'root', 'ci'])
 
 function findEmails(text) {
-  const hits = text.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) || []
-  return [...new Set(hits.filter((h) => !isAllowedEmail(h)))]
+  return [...new Set(text.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) || [])]
 }
 
 /** Remove fenced blocks and inline code, so only text GitHub RENDERS as prose is inspected.
@@ -69,10 +66,11 @@ function stripCode(text) {
  */
 function findMentions(text) {
   const hits = []
+  // The capture stops at the first character a username cannot contain, which is why `@lru_cache`
+  // pages `@lru` — GitHub linkifies the valid prefix and drops the rest.
   const re = /(?:^|[^\w`@])@([A-Za-z0-9][A-Za-z0-9-]{0,38})/g
   let m
-  const prose = stripCode(text)
-  while ((m = re.exec(prose)) !== null) hits.push('@' + m[1])
+  while ((m = re.exec(text)) !== null) hits.push('@' + m[1])
   return [...new Set(hits)]
 }
 
@@ -149,9 +147,12 @@ process.stdin.on('end', () => {
   }
   if (!verb) process.exit(0)
 
-  const emails = findEmails(scanned)
-  const homes = findHomePaths(scanned)
-  const mentions = findMentions(scanned)
+  // ONE code-strip for all three detectors: inside a code span GitHub neither linkifies nor
+  // renders, so the backticked form of every one of these is inert and must pass.
+  const prose = stripCode(scanned)
+  const emails = findEmails(prose)
+  const homes = findHomePaths(prose)
+  const mentions = findMentions(prose)
   if (emails.length === 0 && homes.length === 0 && mentions.length === 0) process.exit(0)
 
   const found = [

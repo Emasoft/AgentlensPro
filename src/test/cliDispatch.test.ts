@@ -182,6 +182,39 @@ suite('agentlenspro — diagnostics dispatch parity (absorbed agentlens-cli.js s
     } finally { await stub.close(); fs.rmSync(home, { recursive: true, force: true }) }
   })
 
+  // ── `--json` is a GLOBAL (issue #9 §2) ───────────────────────────────────────────────────
+  // It was accepted by the hand-written subcommands and rejected as "unknown flag --json" by every
+  // schema-driven tool, so a program had to know which kind of command it was calling before it
+  // could ask for JSON.
+  test('--json is accepted by a schema-driven tool and yields parseable JSON', async () => {
+    const home = mkHome()
+    const stub = await startMcpStub(
+      [{ name: 'get_burn_status', description: 'x' }],
+      () => ({ format: 'table', text: 'a rendered table\nwith lines', extra: 1 }),
+    )
+    try {
+      const r = await runCli(['get_burn_status', '--json'], isolatedEnv(home, { AGENTLENS_MCP_URL: stub.url }))
+      assert.strictEqual(r.code, 0, `stderr: ${r.stderr}`)
+      const parsed = JSON.parse(r.stdout) as { format: string; extra: number }
+      assert.strictEqual(parsed.format, 'table', 'the caller asked for JSON, so the rendering must NOT win')
+      assert.strictEqual(parsed.extra, 1)
+    } finally { await stub.close(); fs.rmSync(home, { recursive: true, force: true }) }
+  })
+
+  test('without --json a self-rendering tool still prints its table, not JSON', async () => {
+    const home = mkHome()
+    const stub = await startMcpStub(
+      [{ name: 'get_burn_status', description: 'x' }],
+      () => ({ format: 'table', text: 'a rendered table' }),
+    )
+    try {
+      const r = await runCli(['get_burn_status'], isolatedEnv(home, { AGENTLENS_MCP_URL: stub.url }))
+      assert.strictEqual(r.code, 0, `stderr: ${r.stderr}`)
+      assert.ok(r.stdout.includes('a rendered table'), r.stdout)
+      assert.ok(!r.stdout.trim().startsWith('{'), 'the human default must survive the new global')
+    } finally { await stub.close(); fs.rmSync(home, { recursive: true, force: true }) }
+  })
+
   test('a refusal does NOT write --out — a file containing an error is worse than no file', async () => {
     const home = mkHome()
     const out = path.join(home, 'result.json')

@@ -195,7 +195,8 @@ examples:  (discover the rest with 'list --desc' then 'help <tool>')
   agentlenspro setup --dry-run                       read-only preview of what install/repair would change
   agentlenspro server status       agentlenspro daemon status      agentlenspro dashboard
 
-globals: --full (unshaped payload)   --out PATH (full JSON to disk, digest to stdout)
+globals: --full (unshaped payload)   --json (always JSON, never a rendered table)   --out PATH (full JSON to disk, digest to stdout)
+exit:    0 = stdout is a result · 2 = the tool refused (JSON reason on STDERR, stdout empty) · 64 = bad command line
 server:  $AGENTLENS_MCP_URL (default http://localhost:4316/mcp); logs -> ~/.agentlens/server.log`
 
 // Short CLI aliases → the full tool name (TRDD-EYA3X5MQ). `reload-cost` is the user-requested
@@ -428,7 +429,8 @@ function renderHelp(t: ToolInfo): string {
       lines.push(`  --${k.padEnd(w)}  ${String(p.type || 'any').padEnd(7)}${req} ${firstSentence(p.description)}`)
     }
   }
-  lines.push('', 'globals: --full (unshaped payload)   --out PATH (full JSON to disk, digest to stdout)')
+  lines.push('', 'globals: --full (unshaped payload)   --json (always JSON, never a rendered table)   --out PATH (full JSON to disk, digest to stdout)')
+  lines.push('exit:    0 = stdout is a result · 2 = the tool refused (JSON reason on STDERR, stdout empty) · 64 = bad command line')
   return lines.join('\n')
 }
 
@@ -455,11 +457,18 @@ function toolError(result: unknown): string | null {
  * EX_UNKNOWN (2) rather than 1 — 1 is the watcher's "abort the guarded run", and a not-found must
  * never be mistaken for that.
  */
-function emit(tool: string, result: unknown, globals: { out: string | null }): void {
+function emit(tool: string, result: unknown, globals: { out: string | null; json?: boolean }): void {
   const err = toolError(result)
   if (err !== null) {
     process.exitCode = EXIT.UNKNOWN
     console.error(JSON.stringify({ tool, error: err }, null, 2))
+    return
+  }
+  // `--json` overrides the human rendering: a caller who asked for JSON gets JSON even from a tool
+  // that renders itself as a table. Without this the only way to get a parseable answer out of a
+  // self-rendering tool was --out to a file, which a pipeline should not have to do.
+  if (globals.json && !globals.out) {
+    console.log(JSON.stringify(result, null, 2))
     return
   }
   if (globals.out) {
@@ -493,7 +502,10 @@ function isRenderedText(v: unknown): v is { format: string; text: string } & Rec
 
 export async function runDiagnosticsCli(argv: string[]): Promise<void> {
   // Strip the output globals and ops flags first so every command sees only its own tokens.
-  const globals = { full: false, out: null as string | null, startServer: false, dashboard: false }
+  // `json` is a GLOBAL, not a per-tool flag (issue #9 §2). It was accepted by the hand-written
+  // subcommands and rejected as "unknown flag --json" by every schema-driven tool, so a consuming
+  // program had to know which kind of command it was calling before it could ask for JSON.
+  const globals = { full: false, json: false, out: null as string | null, startServer: false, dashboard: false }
   interface Ops {
     status: boolean; stop: boolean; purgeDb: boolean; purgeBodies: boolean
     exportBodies: string | null; since?: string; until?: string; installSkill: boolean
@@ -506,6 +518,7 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
   const rest: string[] = []
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--full') globals.full = true
+    else if (argv[i] === '--json') globals.json = true
     else if (argv[i] === '--start-server') globals.startServer = true
     else if (argv[i] === '--dashboard') globals.dashboard = true
     else if (argv[i] === '--status') ops.status = true

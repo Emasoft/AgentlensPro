@@ -26,7 +26,7 @@ function reason(command) {
 // check-identities` scans tracked files by SHAPE and cannot tell a test fixture from a real leak —
 // nor should it try, since a synthetic placeholder address sitting in someone's docs is exactly the
 // ambiguity that wasted time during the 2026-08-02 sweep. The guard under test, meanwhile, must
-// treat these as real (example.com is explicitly allowed, so it cannot be used as a DENY fixture).
+// treat these as real. No address is exempt any more, so the fixture just has to be an address.
 // Building them from parts is what lets both checks stay strict.
 const AT = String.fromCharCode(64)
 const ADDR = `someone${AT}gmail.com`
@@ -56,6 +56,12 @@ const DENY = [
   `gh issue comment 8 --body "routing this to ${AT}manager for approval"`,
   `gh issue create --title T --body "the ${AT}janitor heartbeat covers it"`,
   `gh pr comment 4 --body "cc ${AT}Emasoft"`,                     // even the owner: the rule is absolute
+  // A BARE address is now denied whatever its domain: GitHub reads the domain as a username, so
+  // `x@example.com` pages `@example` and the noreply identity pages `@users`. Backtick it.
+  `gh issue comment 8 --body "authored by 713559+Emasoft${AT}users.noreply.github.com"`,
+  `gh issue comment 8 --body "configure it as you${AT}example.com"`,
+  // A username cannot contain '_', so GitHub linkifies the valid prefix — this pages `@lru`.
+  `gh issue comment 8 --body "we memoise it with ${AT}lru_cache"`,
 ]
 
 const ALLOW = [
@@ -66,9 +72,9 @@ const ALLOW = [
   // Posting, but with no identity in it.
   'gh issue create --repo Emasoft/AgentlensPro --title T --body "the setup verb now streams segments"',
   `gh issue create --title T --body-file ${cleanFile}`,
-  // The sanctioned public identity and the reserved example domains must not trip it.
-  `gh issue comment 8 --body "commits are authored by 713559+Emasoft${AT}users.noreply.github.com"`,
-  'gh issue comment 8 --body "configure it as you@example.com"',
+  // BACKTICKED, an address is inert: no leak, and no page of its domain-as-username.
+  `gh issue comment 8 --body 'authored by \`713559+Emasoft${AT}users.noreply.github.com\`'`,
+  `gh issue comment 8 --body 'configure it as \`you${AT}example.com\`'`,
   // Placeholder homes carry no identity.
   'gh issue comment 8 --body "fixtures use /Users/x/project"',
   'gh pr comment 4 --body "on CI the path is /home/runner/work"',
@@ -84,8 +90,6 @@ const ALLOW = [
   // which is itself why real posts use --body-file or single quotes for anything with code in it.
   `gh issue comment 8 --body 'routing this to \`${AT}manager\` for approval'`,
   `gh issue create --title T --body 'fenced:\n\`\`\`\n${AT}janitor\n\`\`\`\n'`,
-  // An email is the email rule's business, not a mention: its @ is preceded by a word character.
-  `gh issue comment 8 --body "contact you${AT}example.com"`,
 ]
 
 let failures = 0
