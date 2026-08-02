@@ -31,6 +31,7 @@ import { runCtxmapCli } from './ctxmapCli'
 import { runCtxvisCli } from './ctxvisCli'
 import { runStatuslineCommand } from './statuslineCapture'
 import { runStatuslineHistoryCli } from './statuslineHistoryCli'
+import { runAllAccountsCli } from './allAccountsCli'
 
 /** CLI entry. `startServer` lazily imports standalone/server (injected by the shim — src/
  *  cannot import standalone/ without inverting the build layering). Returns the exit code. */
@@ -91,6 +92,16 @@ export async function cliMain(argv: string[], startServer: () => Promise<unknown
       // Reads the sample store straight off disk (no server), because the moment someone asks what
       // burned the window is exactly when the server may be down.
       return runStatuslineHistoryCli(argv.slice(1))
+    case 'get_account_status':
+      // Only the PLURAL form short-circuits the server. `--all` is assembled entirely from files (the
+      // account-state timeline + the per-account usage archive), and its whole audience is a rotator
+      // deciding what to do about a wedged machine — where proxying to a server that may itself be
+      // down turns the one useful answer into "cannot reach localhost:4316". The singular form still
+      // goes over the wire: it needs the live session accessors, which only the server has.
+      if (argv.includes('--all')) return runAllAccountsCli(argv.slice(1))
+      // Not `--all`: fall through to the diagnostics surface, which proxies it to the server.
+      await runDiagnosticsCli(argv)
+      return 0
     case 'disable':
       // THE GLOBAL BRAKE. Arms <dataDir>/DISABLED, which disarms every hook, the burn-gate, server
       // auto-revive and all background ingestion — in EVERY Claude session already running, on its
