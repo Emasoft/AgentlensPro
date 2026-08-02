@@ -31,7 +31,8 @@ import { createHash } from 'crypto'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { dataPath } from './dataDir'
+import { dataDir, dataPath } from './dataDir'
+import { keychainReadAllowed } from './keychainConsent'
 import { getCurrentAccount } from './accountInfo'
 
 export const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage'
@@ -178,7 +179,7 @@ function fingerprint(c: Credentials): string | null {
  *  usage numbers, never the secret. */
 export function loadToken(
   env: NodeJS.ProcessEnv = process.env,
-  opts: { allowKeychain?: boolean } = {},
+  opts: { allowKeychain?: boolean; dataDir?: string } = {},
 ): { token?: string; expiresAt?: number; fp?: string | null; reason?: SubscriptionUsage['reason'] } {
   const base = env['CLAUDE_CONFIG_DIR'] || path.join(os.homedir(), '.claude')
   try {
@@ -202,7 +203,12 @@ export function loadToken(
   // matters because on macOS the env var is unset by default, so the endpoint is never refreshed
   // and the cache silently ages into uselessness — which is exactly how a six-day-old 96% came to
   // be served as the current figure while the account was at 37%.
-  if (env['AGENTLENS_READ_KEYCHAIN_USAGE'] !== '1' && !opts.allowKeychain) return { reason: 'opt_in_required' }
+  //
+  // Consent is read through keychainConsent (env > config.json > default-off), NOT from the env
+  // alone: an env-only opt-in is lost by every restart that does not carry it — a deploy, a
+  // hook-triggered ensureServer, a launchd revival — and the archive then stops filling in silence
+  // while its existing rows keep ageing. Persisting the decision is what makes it survive.
+  if (!keychainReadAllowed(opts.dataDir ?? dataDir(), env) && !opts.allowKeychain) return { reason: 'opt_in_required' }
   try {
     const raw = JSON.parse(execFileSync('security',
       ['find-generic-password', '-s', 'Claude Code-credentials', '-w'],
