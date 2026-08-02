@@ -99,7 +99,19 @@ export async function ensureServer(): Promise<void> {
   for (let i = 0; i < 80; i++) { // up to 20s — DB open + first scan can be slow
     await sleep(250)
     if (spawnError) throw new Error(`failed to spawn the server: ${(spawnError as Error).message}`)
-    try { await init(); console.log(`server started (pid ${child.pid}) — logs: ${serverLogPath()}`); return } catch { /* keep polling */ }
+    try { await init() } catch { continue } // not ready yet — keep polling
+    // Report the pid that is actually SERVING, not the child we spawned. The two differ whenever
+    // another process (a hook's ensureServer, a concurrent CLI) wins the single-instance race: our
+    // child refuses the data dir and exits, and init() then succeeds against THEIRS. Printing
+    // child.pid there names a process that is already dead, with the authority of a status line —
+    // it cost a real debugging session, where `ps eww` on the reported pid showed none of the
+    // environment we had just started the server with, because that was not the server.
+    const serving = await findServerPid().catch(() => null)
+    const who = serving === null || serving === child.pid
+      ? `pid ${serving ?? child.pid}`
+      : `pid ${serving} — an already-running server won the single-instance race; our spawn (${child.pid}) exited`
+    console.log(`server started (${who}) — logs: ${serverLogPath()}`)
+    return
   }
   throw new Error(`server did not become ready within 20s — check ${serverLogPath()}${logProblem}`)
 }
