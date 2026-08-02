@@ -21,23 +21,36 @@ function reason(command) {
   return out.trim() ? JSON.parse(out).hookSpecificOutput.permissionDecisionReason : ''
 }
 
-// A real body file carrying the exact shape that leaked: an account table with addresses.
+// The fixtures are ASSEMBLED AT RUNTIME rather than written as literals, so this file contains no
+// address-shaped and no home-path-shaped text of its own. That is not squeamishness: `pnpm run
+// check-identities` scans tracked files by SHAPE and cannot tell a test fixture from a real leak —
+// nor should it try, since a synthetic placeholder address sitting in someone's docs is exactly the
+// ambiguity that wasted time during the 2026-08-02 sweep. The guard under test, meanwhile, must
+// treat these as real (example.com is explicitly allowed, so it cannot be used as a DENY fixture).
+// Building them from parts is what lets both checks stay strict.
+const AT = String.fromCharCode(64)
+const ADDR = `someone${AT}gmail.com`
+const MAC_HOME = `/Users${'/'}realname`
+const LINUX_HOME = `/home${'/'}realname`
+const WIN_HOME = `C:\\Users${'\\'}realname`
+
+// A real body file carrying the exact shape that leaked: an account table with an address.
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'al-guard-'))
 const leakFile = path.join(tmp, 'body.md')
-fs.writeFileSync(leakFile, '| account | email |\n| 75099fe9 | someone@gmail.com |\n')
+fs.writeFileSync(leakFile, `| account | email |\n| 75099fe9 | ${ADDR} |\n`)
 const cleanFile = path.join(tmp, 'clean.md')
 fs.writeFileSync(cleanFile, '| account | plan |\n| 75099fe9 | Max 20x |\n')
 
 const DENY = [
-  'gh issue create --repo Emasoft/AgentlensPro --title T --body "ping someone@gmail.com"',
-  'gh issue comment 8 --body "the account is someone@gmail.com"',
-  'gh pr create --title T --body "see /Users/realname/Code/thing"',
-  'gh pr comment 4 --body "logs in /home/realname/.agentlens"',
-  'gh release create v1.0.0 --notes "thanks someone@gmail.com"',
+  `gh issue create --repo Emasoft/AgentlensPro --title T --body "ping ${ADDR}"`,
+  `gh issue comment 8 --body "the account is ${ADDR}"`,
+  `gh pr create --title T --body "see ${MAC_HOME}/Code/thing"`,
+  `gh pr comment 4 --body "logs in ${LINUX_HOME}/.agentlens"`,
+  `gh release create v1.0.0 --notes "thanks ${ADDR}"`,
   `gh issue create --title T --body-file ${leakFile}`,           // the shape the real incident took
   `gh issue comment 8 -F ${leakFile}`,
-  'cd /tmp && gh issue comment 8 --body "someone@gmail.com"',    // later segment
-  'gh issue create --title T --body "C:\\Users\\realname\\notes"',
+  `cd /tmp && gh issue comment 8 --body "${ADDR}"`,              // later segment
+  `gh issue create --title T --body "${WIN_HOME}\\notes"`,
 ]
 
 const ALLOW = [
@@ -49,7 +62,7 @@ const ALLOW = [
   'gh issue create --repo Emasoft/AgentlensPro --title T --body "the setup verb now streams segments"',
   `gh issue create --title T --body-file ${cleanFile}`,
   // The sanctioned public identity and the reserved example domains must not trip it.
-  'gh issue comment 8 --body "commits are authored by 713559+Emasoft@users.noreply.github.com"',
+  `gh issue comment 8 --body "commits are authored by 713559+Emasoft${AT}users.noreply.github.com"`,
   'gh issue comment 8 --body "configure it as you@example.com"',
   // Placeholder homes carry no identity.
   'gh issue comment 8 --body "fixtures use /Users/x/project"',
@@ -59,7 +72,7 @@ const ALLOW = [
   'grep -rn "[a-z]*@[a-z]*\\.com" reports/',
   'git add scripts/deny-identity-leak-to-github.js',
   'node scripts/test-deny-identity-leak-to-github.js',
-  'echo "someone@gmail.com" > /tmp/scratch.txt',
+  `echo "${ADDR}" > /tmp/scratch.txt`,
 ]
 
 let failures = 0
@@ -73,9 +86,11 @@ for (const c of ALLOW) {
 }
 
 // The denial must not reprint the address it is protecting — a transcript gets shared too.
-const r = reason('gh issue comment 8 --body "someone@gmail.com"')
-if (r.includes('someone@gmail.com')) { console.error('FAIL denial reason leaked the address verbatim'); failures++ }
-if (!r.includes('s***@gmail.com')) { console.error(`FAIL denial reason did not name the masked match: ${r}`); failures++ }
+const r = reason(`gh issue comment 8 --body "${ADDR}"`)
+if (r.includes(ADDR)) { console.error('FAIL denial reason leaked the address verbatim'); failures++ }
+if (!r.includes(`${ADDR[0]}***${AT}gmail.com`)) {
+  console.error(`FAIL denial reason did not name the masked match: ${r}`); failures++
+}
 
 fs.rmSync(tmp, { recursive: true, force: true })
 

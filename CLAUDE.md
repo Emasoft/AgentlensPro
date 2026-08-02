@@ -158,9 +158,10 @@ real incident took. `pnpm run check-guards` runs its 22-case matrix from `compil
 Evidence: on 2026-08-02 agents pasted account tables into **three PUBLIC issue comments**
 (AgentlensPro#8, ai-maestro#95, ai-maestro#102), publishing three real addresses; the file check
 neither did nor could fire, because it scans FILES and a comment is not one. All three were redacted
-and the guard was verified to deny the actual leaked body. A synthetic `john@gmail.com` in
-ghe-marketplace#1 was left alone — verifying each hit before editing is what keeps a redaction sweep
-from mangling someone's documentation over a placeholder. **Skills carry a stricter bar: they must be UNIVERSAL** — installed on
+and the guard was verified to deny the actual leaked body. A fourth hit — a synthetic placeholder
+address in a redaction-feature table in ghe-marketplace#1 — was left alone: verifying each hit before
+editing is what keeps a sweep from mangling someone's documentation over a placeholder. (Writing
+that placeholder out here would itself trip `check-identities`, which is the doctrine working.) **Skills carry a stricter bar: they must be UNIVERSAL** — installed on
 other people's machines, so a real session id or account uuid there is one machine's noise shipped to
 everyone. Ids in a skill must be visibly fake (≤2 distinct characters: `aaaaaaaa`, `bbbb2222`).
 
