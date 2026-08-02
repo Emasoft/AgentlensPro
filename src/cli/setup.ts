@@ -26,6 +26,7 @@ import * as http from 'http'
 import * as os from 'os'
 import * as path from 'path'
 import { loadSqlJs } from '../forensicsDb'
+import { countNdjsonLines } from '../ndjsonLines'
 import { readFsMarkers } from '../environment/runtime'
 import { ensureTelemetryConfig, ownedTelemetryKeys } from '../telemetryConfig'
 import { rawBodyCaptureEnabled, effectiveBodiesDir, RAW_BODIES_KEY } from '../captureConfig'
@@ -431,8 +432,10 @@ function storeSpanCount(dataDir: string): number {
   try {
     for (const f of fs.readdirSync(spansDir)) {
       if (!f.endsWith('.ndjson')) continue
-      const content = fs.readFileSync(path.join(spansDir, f), 'utf8')
-      total += content.split('\n').filter(Boolean).length
+      // Streamed, NOT readFileSync('utf8'): segments are uncapped, and a single day past
+      // ~512 MB used to throw V8's max-string-length error here — which this function
+      // rethrows, so the whole `setup` verb died on nothing worse than a busy machine.
+      total += countNdjsonLines(path.join(spansDir, f))
     }
   } catch (e) {
     // ONLY "no store yet" may answer 0. This count feeds the data-preservation assertion
