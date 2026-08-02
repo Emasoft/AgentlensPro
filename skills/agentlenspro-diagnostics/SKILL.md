@@ -83,6 +83,8 @@ reference for when that command's output needs interpreting.
 | "Am I about to do something that explodes?" (fan-out, workflow) | arm `agentlenspro --guard 15` in a Monitor first |
 | "Did that compaction / command / turn cost me a cache miss?" | `agentlenspro get_cache_event_log` — the per-call ledger: the costliest call with the calls before and after it, buckets spelled out, 🔥×1-5 by write magnitude |
 | "How full are my 5h / 7d windows, really?" | `agentlenspro get_subscription_usage` — **Anthropic's own numbers** (what `/usage` shows), not a local projection |
+| "What is running in THIS project — which sessions, on what model, how full, how much spent?" | `agentlenspro statusline-history project` (self-scoping to the cwd; add `--json` for every field) |
+| "How full is a LIVE subagent's context?" | `agentlenspro statusline-history subagents --project` — the only surface that publishes per-agent `tokenCount` vs its own window |
 | "Why is this ONE session so expensive?" | `get_session_burn_profile --sessionId <id>` |
 | "What exactly did agent X consume?" | `get_agent_tokens --agentId <id>` |
 | "What keeps breaking my prompt cache?" | `get_cache_break_causes`, then `get_cache_break_timeline --sessionId <id>` |
@@ -945,6 +947,55 @@ degrade to the last reading with an explicit `reason` (`cooldown` / `no_token` /
 rendering an already-rolled window as live. On macOS the token is in the login keychain, so the read
 is **opt-in**: export `AGENTLENS_READ_KEYCHAIN_USAGE=1` (an un-ACL'd keychain read pops a password
 prompt, which is unacceptable from a status line or hook).
+
+## Per-project and per-subagent history — `agentlenspro statusline-history`
+
+**The only surface that answers "what is running in THIS project, right now, and what has it cost".**
+Claude Code renders the status-line payload every few seconds and persists none of it; this reads the
+captured history off disk, so it also **works with the server down** — which is exactly when someone
+is investigating a burn.
+
+```bash
+agentlenspro statusline-history project              # ← scopes ITSELF to the cwd's project
+agentlenspro statusline-history project --json       # every field, incl. resets_at + repo identity
+agentlenspro statusline-history subagents --project  # live agents launched from here: fill%, worktree
+```
+
+`project` is the one to reach for from inside a repo. It prints one row per session **in that
+project** — model, effort, fast mode, context tokens + fill %, lifetime cost, and the **account's**
+5h / 7d window fill — and it announces the directory it resolved on **stderr**, so a piped stdout
+stays machine-readable and a wrong-repo answer can never masquerade as a right one:
+
+```
+scope: /Users/me/Code/Proj (implied by the 'project' view — pass --project DIR to override)
+session   model       effort  fast  ctx     ctx%  cost $  5h%  7d%  ver      samples  last
+667293ab  opus-5[1m]  xhigh   -     232.6k  23    537.97  80   91   2.1.220  7745     00:09:43
+```
+
+**`--project` works on EVERY view**, not just `project`. Bare `--project` means the current
+directory; `--project DIR` names one. It matches `workspace_project_dir`, `workspace_current_dir`
+**and** `cwd`, at the root or anywhere under it — so a worktree-isolated agent running in
+`<root>/.claude/worktrees/<x>` is included, while a sibling `<root>-old` is not. The subagent stream
+carries **only** `cwd` at the top level (its `workspace.*` are null), which is why all three are
+matched rather than trusting the project dir.
+
+| view | answers |
+|---|---|
+| `project` | everything about the sessions in ONE project (self-scoping; see above) |
+| `sessions` | one row per session machine-wide: peak fill, cost, span |
+| `subagents` | per-agent `tokenCount` vs its OWN `contextWindowSize` — a 150k Sonnet agent in a 200k window (75%) is in far more trouble than a 90k Fable agent in 1M (9%). Nothing else on the machine publishes this |
+| `windows` | 5h/7d history at **full float precision** — the only un-quantized window reading |
+| `peaks` | the largest context/cost jumps between consecutive samples. **Read the `span` column**: a delta across an idle gap is an INTERVAL total, not one turn |
+| `cache` | per-turn cache WRITE vs READ — the falsifier for a claimed cache miss. Cost is bracketed 5m/1h because the write rate is TTL-tiered and the tier is not in the payload |
+
+Every point-in-time field is **latest-wins**, peaks are **max**, and nothing is ever summed: the
+status line misses fast turns, so summing double-counts nothing and under-counts everything.
+
+**Exit codes are part of the answer.** `1` = **BLIND** — the store holds nothing for this window,
+which means *"cannot see"*, **never** *"no burn"* (capture may not be installed: run `agentlenspro
+--install-statusline`). `0` with `(no rows matched)` is the opposite: we looked, and the filter
+genuinely excluded everything. Flags: `--since H|ISO` (default 24h) · `--until` · `--limit` ·
+`--session ID` · `--json` · `--out FILE` (full report to disk, one-line digest to stdout).
 
 ## High-value tools (cheat-sheet)
 

@@ -13,7 +13,7 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { StatuslineStore, queryStatusline } from '../statuslineStore'
-import { VIEWS, parseWhenArg, table, jsonSafe } from '../cli/statuslineHistoryCli'
+import { VIEWS, parseWhenArg, table, jsonSafe, projectPredicate, whereOf } from '../cli/statuslineHistoryCli'
 
 // UUID-SHAPED on purpose. DuckDB's JSON reader auto-detects a UUID-shaped string as the UUID type and
 // the node client returns it as {hugeint:"..."} — the exact bug that shipped. A placeholder like
@@ -75,7 +75,7 @@ suite('statusline-history — every view must actually EXECUTE', () => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sl-hist-'))
       try {
         seed(root)
-        const raw = await queryStatusline(root, view.stream, view.sql(40, undefined), { sinceMs: Date.now() - 3_600_000 })
+        const raw = await queryStatusline(root, view.stream, view.sql(40, {}), { sinceMs: Date.now() - 3_600_000 })
         assert.ok(raw !== null, `${name}: store seeded but read BLIND`)
         // post() runs in the CLI between the query and the render, so a column it derives is only
         // present here if it is applied — check the rows the user actually sees, not the SQL result.
@@ -102,8 +102,33 @@ suite('statusline-history — every view must actually EXECUTE', () => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sl-hist-s-'))
       try {
         seed(root)
-        const rows = await queryStatusline(root, view.stream, view.sql(40, SESSIONS[0]), { sinceMs: Date.now() - 3_600_000 })
+        const rows = await queryStatusline(root, view.stream, view.sql(40, { session: SESSIONS[0] }), { sinceMs: Date.now() - 3_600_000 })
         assert.ok(rows !== null, `${name}: BLIND with a session filter`)
+      } finally { fs.rmSync(root, { recursive: true, force: true }) }
+    })
+
+    test(`view '${name}' runs with a --project filter`, async () => {
+      // Every view must BIND the three workspace columns, on BOTH streams. The subagent stream
+      // carries none of them in its own payload — they exist only because the store's zero-row
+      // template guarantees them — so a view that binds fine on `main` can still be a binder error
+      // on `subagent`. Running each view under a project filter is the only thing that proves it.
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sl-hist-p-'))
+      try {
+        seed(root)
+        const rows = await queryStatusline(root, view.stream, view.sql(40, { project: '/Users/x/Code/PROJ' }), { sinceMs: Date.now() - 3_600_000 })
+        assert.ok(rows !== null, `${name}: BLIND with a project filter`)
+      } finally { fs.rmSync(root, { recursive: true, force: true }) }
+    })
+
+    test(`view '${name}' runs with BOTH filters at once`, async () => {
+      // The shape this file's WHERE-composition replaced could only ever emit ONE condition; a
+      // second filter produced `WHERE a WHERE b`. Type-invisible, since it is a string.
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sl-hist-sp-'))
+      try {
+        seed(root)
+        const rows = await queryStatusline(root, view.stream,
+          view.sql(40, { session: SESSIONS[0], project: '/Users/x/Code/PROJ' }), { sinceMs: Date.now() - 3_600_000 })
+        assert.ok(rows !== null, `${name}: BLIND with both filters`)
       } finally { fs.rmSync(root, { recursive: true, force: true }) }
     })
   }
@@ -114,7 +139,7 @@ suite('statusline-history — every view must actually EXECUTE', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sl-fill-'))
     try {
       seed(root)
-      const rows = await queryStatusline(root, 'subagent', VIEWS.subagents.sql(40, undefined), { sinceMs: Date.now() - 3_600_000 })
+      const rows = await queryStatusline(root, 'subagent', VIEWS.subagents.sql(40, {}), { sinceMs: Date.now() - 3_600_000 })
       const byId = new Map(rows!.map(r => [String(r.agent_id), r]))
       assert.strictEqual(Math.round(Number(byId.get('a2')!.fill_pct)), 75)
       assert.strictEqual(Math.round(Number(byId.get('a1')!.fill_pct)), 9)
@@ -140,7 +165,7 @@ suite('statusline-history — every view must actually EXECUTE', () => {
       }, 'subagent', now)
       s.flush()
 
-      const rows = await queryStatusline(root, 'subagent', VIEWS.subagents.sql(40, undefined), { sinceMs: now - 3_600_000 })
+      const rows = await queryStatusline(root, 'subagent', VIEWS.subagents.sql(40, {}), { sinceMs: now - 3_600_000 })
       assert.ok(rows, 'a struct missing a field must not read BLIND')
       assert.strictEqual(rows.length, 1)
       assert.strictEqual(rows[0].effort, null, 'an absent key is NULL, not a binder error')
@@ -154,7 +179,7 @@ suite('statusline-history — every view must actually EXECUTE', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sl-peaks-'))
     try {
       seed(root)
-      const rows = await queryStatusline(root, 'main', VIEWS.peaks.sql(40, SESSIONS[0]), { sinceMs: Date.now() - 3_600_000 })
+      const rows = await queryStatusline(root, 'main', VIEWS.peaks.sql(40, { session: SESSIONS[0] }), { sinceMs: Date.now() - 3_600_000 })
       assert.ok(rows!.length > 0)
       // SESSIONS[0]'s samples are i=0,2 → ctx 100k then 200k, cost 1 then 5.
       assert.strictEqual(Number(rows![0].d_ctx), 100_000)
@@ -179,7 +204,7 @@ suite('statusline-history — every view must actually EXECUTE', () => {
       s.append(sample(150_000, 6.4), 'main', now - 57_000)      // 3 s later: one real turn
       s.flush()
 
-      const rows = await queryStatusline(root, 'main', VIEWS.peaks.sql(40, SESSIONS[0]), { sinceMs: now - 3_600_000 })
+      const rows = await queryStatusline(root, 'main', VIEWS.peaks.sql(40, { session: SESSIONS[0] }), { sinceMs: now - 3_600_000 })
       const bySpan = new Map(rows!.map(r => [String(r.span), r]))
       assert.ok(bySpan.has('INTERVAL'), 'the 9-minute gap must be flagged, not presented as one turn')
       assert.ok(bySpan.has('turn'), 'the 3-second delta is a genuine per-turn cost')
@@ -197,7 +222,7 @@ suite('statusline-history — every view must actually EXECUTE', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sl-cache-'))
     try {
       seed(root)
-      const raw = await queryStatusline(root, 'main', VIEWS.cache.sql(40, undefined), { sinceMs: Date.now() - 3_600_000 })
+      const raw = await queryStatusline(root, 'main', VIEWS.cache.sql(40, {}), { sinceMs: Date.now() - 3_600_000 })
       const rows = VIEWS.cache.post!(raw!)
       assert.strictEqual(rows.length, 4)
       assert.ok(rows.every(r => Number(r.renders) === 1), 'four distinct turns, one render each')
@@ -236,7 +261,7 @@ suite('statusline-history — every view must actually EXECUTE', () => {
       s.flush()
 
       const rows = VIEWS.cache.post!((await queryStatusline(
-        root, 'main', VIEWS.cache.sql(40, undefined), { sinceMs: now - 3_600_000 }))!)
+        root, 'main', VIEWS.cache.sql(40, {}), { sinceMs: now - 3_600_000 }))!)
       assert.strictEqual(rows.length, 2, 'sixteen samples, two turns')
       assert.strictEqual(Number(rows[0].renders), 12)
       assert.strictEqual(Number(rows[1].renders), 4, 'the mid-stream snapshot belongs to its own turn')
@@ -252,7 +277,7 @@ suite('statusline-history — every view must actually EXECUTE', () => {
     try {
       seed(root)
       const rows = VIEWS.cache.post!((await queryStatusline(
-        root, 'main', VIEWS.cache.sql(40, undefined), { sinceMs: Date.now() - 3_600_000 }))!)
+        root, 'main', VIEWS.cache.sql(40, {}), { sinceMs: Date.now() - 3_600_000 }))!)
       const cold = rows[0]
       // opus-5: input $5, cacheRead $0.50, cacheWrite-5m $6.25, cacheWrite-1h $10.00, output $25 /MTok.
       // 520,000 writes: 5m = 200k*6.25 + 320k*6.25(>200k tier is the same here) ; the point of the
@@ -292,7 +317,7 @@ suite('statusline-history — argument parsing and rendering', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sl-json-'))
     try {
       seed(root)
-      const rows = await queryStatusline(root, 'main', VIEWS.sessions.sql(40, undefined), { sinceMs: Date.now() - 3_600_000 })
+      const rows = await queryStatusline(root, 'main', VIEWS.sessions.sql(40, {}), { sinceMs: Date.now() - 3_600_000 })
       assert.ok(rows!.some(r => Object.values(r).some(v => typeof v === 'bigint')), 'precondition: a BigInt is present')
       const text = JSON.stringify(jsonSafe({ rows }))          // must not throw
       assert.ok(JSON.parse(text).rows.length > 0)
@@ -312,5 +337,73 @@ suite('statusline-history — argument parsing and rendering', () => {
     const lines = out.split('\n')
     assert.strictEqual(lines.length, 4, 'header + rule + 2 rows')
     assert.ok(lines[2].includes('-'), 'a missing value renders as a dash, not "undefined"')
+  })
+})
+
+suite('statusline-history — project scoping', () => {
+  test('projectPredicate matches the root and anything under it, never a same-prefix sibling', () => {
+    const p = projectPredicate('/p/alpha')
+    assert.ok(p.includes("= '/p/alpha'"), 'the root itself must match')
+    assert.ok(p.includes("LIKE '/p/alpha/%'"),
+      "the slash in the LIKE is what stops '/p/alpha' from also matching '/p/alpha-old'")
+    assert.ok(!p.includes("LIKE '/p/alpha%'"), 'a bare-prefix LIKE would swallow every sibling project')
+    for (const c of ['workspace_project_dir', 'workspace_current_dir', 'cwd']) {
+      assert.ok(p.includes(c), `${c} must be matched — a worktree agent is only findable via cwd`)
+    }
+    assert.strictEqual(projectPredicate('/p/alpha/'), p, 'a trailing slash must not change the meaning')
+    assert.ok(projectPredicate("/p/o'brien").includes("''"), "an apostrophe in a path must be escaped, not injected")
+  })
+
+  test('whereOf composes BOTH filters into ONE where clause', () => {
+    // The shape this replaced switched `${session ? 'AND' : 'WHERE'}` per view, which produces
+    // invalid SQL the moment a second filter exists — silently, since it is a string.
+    assert.strictEqual(whereOf({}), '', 'no filters means no WHERE at all')
+    const both = whereOf({ session: 's1', project: '/p/alpha' }, 'ts IS NOT NULL')
+    assert.strictEqual((both.match(/WHERE/g) ?? []).length, 1, 'exactly one WHERE')
+    assert.strictEqual((both.match(/ AND /g) ?? []).length, 2, 'session AND project AND the extra')
+    assert.ok(whereOf({}, 'x IS NOT NULL').startsWith('WHERE '), 'a view-specific condition alone still opens the WHERE')
+    assert.ok(whereOf({ session: "a'b" }).includes("'a''b'"), 'a session id is escaped too')
+  })
+
+  test('the project view scopes to one project and reports the LATEST model, not an arbitrary one', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sl-proj-'))
+    try {
+      const s = new StatuslineStore({ root, autoTimer: false })
+      const now = Date.now()
+      const sample = (session: string, i: number, model: string, ws: Record<string, unknown>, cwd: string) => ({
+        session_id: session, model: { id: model }, effort: { level: 'high' }, cwd, workspace: ws,
+        context_window: { total_input_tokens: 1000 * (i + 1), used_percentage: i + 1, context_window_size: 1_000_000 },
+        cost: { total_cost_usd: (i + 1) * 0.5 },
+        rate_limits: { five_hour: { used_percentage: 80 }, seven_day: { used_percentage: 91 } },
+      })
+      // The target project. The model CHANGES mid-session, which is what separates arg_max (latest)
+      // from any_value (whichever row the aggregate happened to see first).
+      for (let i = 0; i < 3; i++) {
+        s.append(sample(SESSIONS[0], i, i === 2 ? 'claude-opus-5' : 'claude-sonnet-5',
+          { project_dir: '/p/alpha', current_dir: '/p/alpha' }, '/p/alpha'), 'main', now - (3 - i) * 1000)
+      }
+      // A sibling whose path SHARES the target's prefix — the case a bare-prefix LIKE gets wrong.
+      s.append(sample(SESSIONS[1], 0, 'claude-sonnet-5',
+        { project_dir: '/p/alpha-old', current_dir: '/p/alpha-old' }, '/p/alpha-old'), 'main', now)
+      // No workspace block at all, only a cwd UNDER the root — a worktree-shaped session. It must be
+      // found, which is why the predicate ORs three columns instead of trusting project_dir.
+      s.append(sample('c0ffee00-0000-4000-8000-000000000000', 0, 'claude-sonnet-5',
+        {}, '/p/alpha/.claude/worktrees/w'), 'main', now)
+      s.flush()
+
+      const rows = await queryStatusline(root, 'main', VIEWS.project.sql(40, { project: '/p/alpha' }),
+        { sinceMs: now - 3_600_000 })
+      assert.ok(rows !== null, 'seeded but BLIND')
+      const ids = rows.map(r => String(r.session_id)).sort()
+      assert.deepStrictEqual(ids, [SESSIONS[0], 'c0ffee00-0000-4000-8000-000000000000'].sort(),
+        'the sibling /p/alpha-old must be excluded and the worktree-cwd session included')
+      const target = rows.find(r => r.session_id === SESSIONS[0])!
+      assert.strictEqual(target.model, 'claude-opus-5', 'model must be the LATEST sample, not an arbitrary one')
+      assert.strictEqual(Number(target.ctx), 3000, 'ctx is the latest reading')
+      assert.strictEqual(Number(target.peak_ctx), 3000, 'peak_ctx is the high-water mark')
+      assert.strictEqual(Number(target.cost_usd), 1.5, 'cost is a CUMULATIVE field — its max is its latest value')
+      assert.strictEqual(Number(target.five_h_pct), 80)
+      assert.strictEqual(typeof target.session_id, 'string', 'session_id must be CAST to VARCHAR')
+    } finally { fs.rmSync(root, { recursive: true, force: true }) }
   })
 })

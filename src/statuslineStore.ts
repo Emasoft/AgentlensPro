@@ -187,6 +187,26 @@ const GUARANTEED_COLUMNS: ReadonlyArray<[string, string]> = [
   ['rate_limits_five_hour_used_percentage', 'DOUBLE'],
   ['rate_limits_seven_day_used_percentage', 'DOUBLE'],
   ['rate_limits_five_hour_resets_at', 'BIGINT'],
+  // The workspace block, which the `--project` filter matches on. Three location fields because a
+  // session can legitimately sit at any of them: `workspace_project_dir` is the root Claude Code was
+  // opened at, `workspace_current_dir`/`cwd` follow the agent (a worktree agent runs under
+  // <root>/.claude/worktrees/<x>). The subagent stream carries none of these at the top level — its
+  // per-agent cwd lives inside `tasks[]` — which is precisely why they are guaranteed rather than
+  // assumed: referencing an absent column is a binder error that kills the whole view.
+  ['workspace_project_dir', 'VARCHAR'],
+  ['workspace_current_dir', 'VARCHAR'],
+  ['cwd', 'VARCHAR'],
+  ['workspace_repo_owner', 'VARCHAR'],
+  ['workspace_repo_name', 'VARCHAR'],
+  ['version', 'VARCHAR'],
+  // The rest of what the `project` view reports. `fast_mode` and `exceeds_200k_tokens` are here
+  // because both change what a turn COSTS (fast mode, and the 1M-context tier), so a view that
+  // silently dropped them would answer a cost question with a number that cannot be interpreted.
+  ['session_name', 'VARCHAR'],
+  ['fast_mode', 'BOOLEAN'],
+  ['thinking_enabled', 'BOOLEAN'],
+  ['exceeds_200k_tokens', 'BOOLEAN'],
+  ['rate_limits_seven_day_resets_at', 'BIGINT'],
 ]
 
 /** The zero-row template: guarantees every GUARANTEED_COLUMNS name binds, whatever the files hold. */

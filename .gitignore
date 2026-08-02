@@ -31,7 +31,11 @@ agent-lens-export-*.json
 # Agent reports (may contain private paths/tokens — never commit)
 /reports/
 /reports_dev/
-# Dev-only scratch (measurement harnesses, e2e runners) — never published
+# Dev-only scratch (measurement harnesses, e2e runners, downloaded corpora) — never published.
+# The catch-all is deliberate: the enumerated list below kept missing new ones (`_corpus_dev/`), and
+# a `_dev` folder that is NOT ignored is the failure mode that leaks a downloaded third-party corpus
+# or a private measurement dump into the repo. Any depth, so a nested `foo/bar_dev/` is covered too.
+*_dev/
 /scripts_dev/
 /docs_dev/
 /samples_dev/

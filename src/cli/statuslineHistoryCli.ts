@@ -27,6 +27,9 @@ Query the captured status-line history — the per-turn series Claude Code rende
 Reads the store on disk, so it works with the server down.
 
 views:
+  project     everything about the sessions running in ONE project: model, effort, fast mode,
+              context fill, lifetime cost, and the account's 5h/7d window fill. Scopes itself to
+              the current directory unless --project or --session says otherwise
   sessions    (default) one row per session: context fill, cost, samples, span
   subagents   per-subagent context history from subagentStatusLine — tokenCount vs
               contextWindowSize, effort, model, and the cwd that marks a worktree agent
@@ -41,6 +44,8 @@ views:
 
 flags:
   --session ID   restrict to one session id
+  --project DIR  restrict to sessions whose workspace or cwd is at or under DIR (worktree agents
+                 included). Bare --project means the current directory. Works with EVERY view
   --since S      start of the window: ISO timestamp, or a number of HOURS back (default 24)
   --until S      end of the window (ISO timestamp)
   --limit N      max rows (default 40)
@@ -50,7 +55,7 @@ flags:
 /** Exit codes: 0 answered, 1 BLIND (no data — NOT "no burn"), 2 usage. */
 export const EXIT = { OK: 0, BLIND: 1, USAGE: 2 } as const
 
-const VALUED_FLAGS = new Set(['--session', '--since', '--until', '--limit', '--out'])
+const VALUED_FLAGS = new Set(['--session', '--since', '--until', '--limit', '--out', '--project'])
 
 /** ISO timestamp, or a bare number meaning "that many hours ago". Returns undefined for absent. */
 export function parseWhenArg(v: string | undefined, nowMs: number = Date.now()): number | undefined {
@@ -116,7 +121,7 @@ export function table(rows: Array<Record<string, unknown>>, cols: Array<{ key: s
 
 interface ViewSpec {
   stream: StatuslineStream
-  sql: (limit: number, session?: string) => string
+  sql: (limit: number, f: Filters) => string
   cols: Array<{ key: string; label: string; fmt?: (v: unknown) => string }>
   /** Derive columns in TS rather than SQL. Used by `cache`, whose numbers come from
    *  src/shared/pricing.ts — the ONE place rates live. Re-encoding them in a SQL literal would be a
@@ -136,9 +141,46 @@ function n(v: unknown): number {
   return Number.isFinite(x) ? x : 0
 }
 
-/** `session_id` filtering is done in SQL rather than by narrowing the file list: a session's samples
- *  can land in any day-partition, and the column is dictionary-encoded so the scan is cheap. */
-const sessionFilter = (s?: string): string => (s ? `WHERE CAST(session_id AS VARCHAR) = '${s.replace(/'/g, "''")}'` : '')
+/** What a view is restricted to. Filtering happens in SQL rather than by narrowing the file list: a
+ *  session's samples land in any day-partition, and these columns are dictionary-encoded so the scan
+ *  is cheap. */
+export interface Filters {
+  session?: string
+  /** Absolute path. Matches a session whose workspace OR cwd is at or under it. */
+  project?: string
+}
+
+const sqlStr = (s: string): string => `'${s.replace(/'/g, "''")}'`
+
+/** Which samples belong to a project.
+ *
+ *  THREE location fields, not one, and each is load-bearing: `workspace_project_dir` is the root
+ *  Claude Code was opened at, while `workspace_current_dir` and `cwd` follow the agent — a
+ *  worktree-isolated agent runs under `<root>/.claude/worktrees/<name>`, so matching only the project
+ *  dir would drop exactly the agents most worth finding. Prefix-matching the root catches all of them.
+ *
+ *  A trailing slash is stripped so `--project /x/y/` and `--project /x/y` mean the same thing, and
+ *  the `/%` in the LIKE is what stops `/x/y` from also matching a sibling `/x/y-old`. */
+export function projectPredicate(p: string): string {
+  const root = p.replace(/\/+$/, '')
+  const exact = sqlStr(root)
+  const under = sqlStr(`${root}/%`)
+  return `(${['workspace_project_dir', 'workspace_current_dir', 'cwd']
+    .map(c => `${c} = ${exact} OR ${c} LIKE ${under}`).join(' OR ')})`
+}
+
+/** Compose a view's WHERE from the shared filters plus any view-specific conditions.
+ *
+ *  Views must NEVER hand-roll `WHERE`/`AND`. Two of them used to switch on whether a session filter
+ *  was present (`${session ? 'AND' : 'WHERE'}`), which is invalid the moment a SECOND filter exists —
+ *  a shape that silently produces broken SQL rather than a type error. */
+export function whereOf(f: Filters, ...extra: string[]): string {
+  const c: string[] = []
+  if (f.session) c.push(`CAST(session_id AS VARCHAR) = ${sqlStr(f.session)}`)
+  if (f.project) c.push(projectPredicate(f.project))
+  for (const e of extra) if (e) c.push(e)
+  return c.length ? `WHERE ${c.join(' AND ')}` : ''
+}
 
 /** ALWAYS select a session id through this.
  *
@@ -149,13 +191,76 @@ const sessionFilter = (s?: string): string => (s ? `WHERE CAST(session_id AS VAR
  *  Casting at every selection site keeps the id a string, always. */
 const SESSION_COL = 'CAST(session_id AS VARCHAR) AS session_id'
 
+/** Booleans render as `true`/`false`/`null`, three widths for a column that only ever answers one
+ *  question. `yes` / `-` reads at a glance and keeps the column 3 chars wide. */
+function fmtBool(v: unknown): string {
+  return v === true ? 'yes' : v === false ? '-' : '?'
+}
+
 export const VIEWS: Record<string, ViewSpec> = {
+  // THE ONE COMMAND FOR "what is happening in THIS project" — what a caller running inside a repo
+  // (the janitor) asks. `sessions` answers "what cost the most" machine-wide; this answers "who is
+  // running HERE, on what model, how full, and how much of the ACCOUNT window they have burnt".
+  //
+  // Everything here is LATEST-WINS via `arg_max(x, ts)` — latest NON-NULL, which matters because an
+  // optional block is absent from early samples rather than null-filled. `any_value()` would pick an
+  // arbitrary row, including one from before a /model switch or a fast-mode toggle, and report a
+  // stale model against a current cost. The two exceptions are `peak_ctx` (max, a high-water mark)
+  // and `cost_usd` (max of a CUMULATIVE field = its latest value). Never SUM any of these: the
+  // status line misses fast turns, so summing double-counts nothing and under-counts everything.
+  project: {
+    stream: 'main',
+    sql: (limit, f) => `
+      SELECT ${SESSION_COL},
+             arg_max(model_id, ts)                              AS model,
+             arg_max(effort_level, ts)                          AS effort,
+             arg_max(fast_mode, ts)                             AS fast,
+             arg_max(thinking_enabled, ts)                      AS thinking,
+             arg_max(context_window_total_input_tokens, ts)     AS ctx,
+             arg_max(context_window_used_percentage, ts)        AS ctx_pct,
+             max(context_window_total_input_tokens)             AS peak_ctx,
+             arg_max(exceeds_200k_tokens, ts)                   AS over_200k,
+             max(cost_total_cost_usd)                           AS cost_usd,
+             arg_max(rate_limits_five_hour_used_percentage, ts) AS five_h_pct,
+             arg_max(rate_limits_seven_day_used_percentage, ts) AS seven_d_pct,
+             arg_max(rate_limits_five_hour_resets_at, ts)       AS five_h_resets_at,
+             arg_max(rate_limits_seven_day_resets_at, ts)       AS seven_d_resets_at,
+             arg_max(version, ts)                               AS version,
+             arg_max(session_name, ts)                          AS session_name,
+             arg_max(workspace_repo_owner, ts)                  AS repo_owner,
+             arg_max(workspace_repo_name, ts)                   AS repo_name,
+             arg_max(workspace_project_dir, ts)                 AS project_dir,
+             arg_max(cwd, ts)                                   AS cwd,
+             count(*)                                           AS samples,
+             (max(ts) - min(ts)) / 60000.0                      AS span_min,
+             max(ts)                                            AS last_ts
+      FROM samples ${whereOf(f)}
+      GROUP BY session_id ORDER BY last_ts DESC LIMIT ${limit}`,
+    // The table is the decision surface; --json carries every column above, including the reset
+    // timestamps, the repo identity and the dirs that are constant per project and would only pad
+    // the terminal.
+    cols: [
+      { key: 'session_id', label: 'session', fmt: v => String(v ?? '-').slice(0, 8) },
+      { key: 'model', label: 'model', fmt: v => String(v ?? '-').replace(/^claude-/, '') },
+      { key: 'effort', label: 'effort' },
+      { key: 'fast', label: 'fast', fmt: fmtBool },
+      { key: 'ctx', label: 'ctx', fmt: fmtNum },
+      { key: 'ctx_pct', label: 'ctx%', fmt: fmtNum },
+      { key: 'cost_usd', label: 'cost $', fmt: fmtNum },
+      { key: 'five_h_pct', label: '5h%', fmt: fmtNum },
+      { key: 'seven_d_pct', label: '7d%', fmt: fmtNum },
+      { key: 'version', label: 'ver' },
+      { key: 'samples', label: 'samples' },
+      { key: 'last_ts', label: 'last', fmt: fmtTime },
+    ],
+  },
+
   // LATEST-WINS for the point-in-time fields and MAX for the peak — never SUM. The statusline can
   // miss fast turns, so summing its lines double-counts nothing and under-counts everything; this is
   // the same rule src/statuslineUsage.ts states and the reason its aggregates are shaped this way.
   sessions: {
     stream: 'main',
-    sql: (limit, session) => `
+    sql: (limit, f) => `
       SELECT ${SESSION_COL},
              count(*)                              AS samples,
              max(context_window_used_percentage)   AS peak_pct,
@@ -163,7 +268,7 @@ export const VIEWS: Record<string, ViewSpec> = {
              max(cost_total_cost_usd)              AS cost_usd,
              max(ts)                               AS last_ts,
              (max(ts) - min(ts)) / 60000.0         AS span_min
-      FROM samples ${sessionFilter(session)}
+      FROM samples ${whereOf(f)}
       GROUP BY session_id ORDER BY cost_usd DESC NULLS LAST LIMIT ${limit}`,
     cols: [
       { key: 'session_id', label: 'session', fmt: v => String(v ?? '-').slice(0, 8) },
@@ -198,7 +303,7 @@ export const VIEWS: Record<string, ViewSpec> = {
   // view to a fixed struct shape is a standing bet against a payload we do not control.
   subagents: {
     stream: 'subagent',
-    sql: (limit, session) => `
+    sql: (limit, f) => `
       SELECT agent_id,
              any_value(task) AS task, any_value(model) AS model,
              any_value(effort) AS effort, any_value(status) AS status,
@@ -211,7 +316,7 @@ export const VIEWS: Record<string, ViewSpec> = {
                j->>'effort' AS effort, j->>'status' AS status, j->>'cwd' AS cwd,
                TRY_CAST(j->>'tokenCount' AS BIGINT)        AS token_count,
                TRY_CAST(j->>'contextWindowSize' AS BIGINT) AS ctx_size
-        FROM (SELECT ts, to_json(t) AS j FROM samples, unnest(tasks) AS u(t) ${sessionFilter(session)})
+        FROM (SELECT ts, to_json(t) AS j FROM samples, unnest(tasks) AS u(t) ${whereOf(f)})
       )
       WHERE agent_id IS NOT NULL
       GROUP BY agent_id ORDER BY peak_tokens DESC NULLS LAST LIMIT ${limit}`,
@@ -231,13 +336,12 @@ export const VIEWS: Record<string, ViewSpec> = {
   // /api/oauth/usage returns integers, which is a +-25% capacity error at pct=2.
   windows: {
     stream: 'main',
-    sql: (limit, session) => `
+    sql: (limit, f) => `
       SELECT ${SESSION_COL}, ts,
              rate_limits_five_hour_used_percentage  AS pct_5h,
              rate_limits_seven_day_used_percentage  AS pct_7d,
              rate_limits_five_hour_resets_at        AS resets_5h
-      FROM samples ${sessionFilter(session)}
-      ${session ? 'AND' : 'WHERE'} rate_limits_five_hour_used_percentage IS NOT NULL
+      FROM samples ${whereOf(f, 'rate_limits_five_hour_used_percentage IS NOT NULL')}
       ORDER BY ts DESC LIMIT ${limit}`,
     cols: [
       { key: 'ts', label: 'time', fmt: fmtTime },
@@ -261,7 +365,7 @@ export const VIEWS: Record<string, ViewSpec> = {
     stream: 'main',
     // A SUBQUERY, deliberately not a CTE: every view is spliced in after `WITH samples AS (...)`, so
     // a view that opens with its own WITH produces two consecutive WITH clauses and a parser error.
-    sql: (limit, session) => `
+    sql: (limit, f) => `
       SELECT session_id, ts, model, ctx, d_ctx, d_cost, gap_s,
              CASE WHEN gap_s > ${PEAK_TURN_GAP_S} THEN 'INTERVAL' ELSE 'turn' END AS span
       FROM (
@@ -272,7 +376,7 @@ export const VIEWS: Record<string, ViewSpec> = {
                cost_total_cost_usd
                  - lag(cost_total_cost_usd) OVER (PARTITION BY session_id ORDER BY ts) AS d_cost,
                (ts - lag(ts) OVER (PARTITION BY session_id ORDER BY ts)) / 1000.0 AS gap_s
-        FROM samples ${sessionFilter(session)}
+        FROM samples ${whereOf(f)}
       )
       WHERE d_ctx IS NOT NULL ORDER BY d_cost DESC NULLS LAST LIMIT ${limit}`,
     cols: [
@@ -309,15 +413,14 @@ export const VIEWS: Record<string, ViewSpec> = {
   // output is taken at its MAX (the completed response). `renders` is how many samples carried it.
   cache: {
     stream: 'main',
-    sql: (limit, session) => `
+    sql: (limit, f) => `
       SELECT ${SESSION_COL}, min(ts) AS ts, any_value(model_id) AS model_id,
              context_window_current_usage_input_tokens                AS in_tok,
              context_window_current_usage_cache_creation_input_tokens AS cache_write,
              context_window_current_usage_cache_read_input_tokens     AS cache_read,
              max(context_window_current_usage_output_tokens)          AS out_tok,
              count(*)                                                 AS renders
-      FROM samples ${sessionFilter(session)}
-      ${session ? 'AND' : 'WHERE'} context_window_current_usage_cache_read_input_tokens IS NOT NULL
+      FROM samples ${whereOf(f, 'context_window_current_usage_cache_read_input_tokens IS NOT NULL')}
       GROUP BY session_id, in_tok, cache_write, cache_read
       ORDER BY cache_write DESC NULLS LAST LIMIT ${limit}`,
     post: rows => rows.map(r => {
@@ -358,12 +461,12 @@ export const VIEWS: Record<string, ViewSpec> = {
 
   raw: {
     stream: 'main',
-    sql: (limit, session) => `
+    sql: (limit, f) => `
       SELECT ts, ${SESSION_COL}, model_display_name AS model, effort_level AS effort,
              context_window_used_percentage AS pct,
              context_window_total_input_tokens AS ctx,
              cost_total_cost_usd AS cost
-      FROM samples ${sessionFilter(session)} ORDER BY ts DESC LIMIT ${limit}`,
+      FROM samples ${whereOf(f)} ORDER BY ts DESC LIMIT ${limit}`,
     cols: [
       { key: 'ts', label: 'time', fmt: fmtTime },
       { key: 'session_id', label: 'session', fmt: v => String(v ?? '-').slice(0, 8) },
@@ -413,14 +516,36 @@ export async function runStatuslineHistoryCli(argv: string[]): Promise<number> {
     return EXIT.USAGE
   }
   const limit = Math.max(1, Math.min(Number(flag('--limit')) || 40, 2000))
-  const session = flag('--session')
   const outFile = flag('--out')
   const asJson = argv.includes('--json')
   const root = statuslineRoot()
 
+  // `--project` with NO value means "the project I am running in" — that is the whole point of the
+  // flag for a caller like the janitor, which runs inside a repo and wants its own picture without
+  // knowing a path. Resolved to an absolute real path so a relative arg, a trailing slash, or a
+  // symlinked checkout all match the absolute dirs the payload records.
+  const filters: Filters = { session: flag('--session') }
+  const wantsProject = argv.includes('--project')
+  // The `project` view IMPLIES its own scope — the name is the contract, and a caller running
+  // `statusline-history project` from inside a repo means "this repo". Skipped when --session
+  // already narrows to one session, because a session filter is strictly more specific and adding
+  // an unrequested project predicate on top could return zero rows for a session that exists.
+  const impliedProject = viewName === 'project' && !wantsProject && !filters.session
+  if (wantsProject || impliedProject) {
+    const given = wantsProject ? flag('--project') : undefined
+    try { filters.project = fs.realpathSync(path.resolve(given ?? process.cwd())) } catch {
+      console.error(`no such project directory: ${given ?? process.cwd()}`)
+      return EXIT.USAGE
+    }
+    // To stderr, so a piped stdout stays machine-readable. Printed only when the scope was NOT
+    // asked for: a caller that did not name a directory still has to be able to see which one it
+    // got, or a wrong answer from the wrong repo is indistinguishable from a right one.
+    if (impliedProject) console.error(`scope: ${filters.project} (implied by the 'project' view — pass --project DIR to override)`)
+  }
+
   let rows: Array<Record<string, unknown>> | null
   try {
-    rows = await queryStatusline(root, view.stream, view.sql(limit, session), { sinceMs, untilMs })
+    rows = await queryStatusline(root, view.stream, view.sql(limit, filters), { sinceMs, untilMs })
     if (rows !== null && view.post) rows = view.post(rows)
   } catch (e) {
     console.error(`query failed: ${(e as Error).message}`)
@@ -438,7 +563,7 @@ export async function runStatuslineHistoryCli(argv: string[]): Promise<number> {
   }
 
   const text = asJson
-    ? JSON.stringify(jsonSafe({ view: viewName, stream: view.stream, sinceMs, untilMs, session, count: rows.length, rows }), null, 2)
+    ? JSON.stringify(jsonSafe({ view: viewName, stream: view.stream, sinceMs, untilMs, ...filters, count: rows.length, rows }), null, 2)
     : (rows.length === 0 ? '(no rows matched — the store has data for this window but nothing fits the filter)' : table(rows, view.cols))
   const digest = `${rows.length} row(s) — ${viewName}`
 
