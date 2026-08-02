@@ -59,12 +59,17 @@ suite('bodiesActivity — CACHE_THRASH + incremental scan (TRDD-GOD0108C)', () =
   test('thrash trips at 3 big-write/low-read responses in 5min, not at 2', () => {
     const { dir, cleanup } = tmpBodies()
     try {
-      responseFile(dir, NOW - 60_000, { cc: 300_000, cr: 1_000 })
-      responseFile(dir, NOW - 120_000, { cc: 250_000, cr: 0 })
+      // Attributed to ONE session via the request chain: since TRDD-THRGX41P only an ATTRIBUTED
+      // repeat-writer can flip `active`, so the threshold test must ride attribution.
+      responseFile(dir, NOW - 60_000, { cc: 300_000, cr: 1_000 }, 'claude-fable-5', 'msg_th0')
+      requestFile(dir, NOW - 58_000, 500_000, { session: S1, model: 'claude-fable-5', previousMessageId: 'msg_th0' })
+      responseFile(dir, NOW - 120_000, { cc: 250_000, cr: 0 }, 'claude-fable-5', 'msg_th1')
+      requestFile(dir, NOW - 118_000, 500_000, { session: S1, model: 'claude-fable-5', previousMessageId: 'msg_th1' })
       const t = new BodiesActivityTracker(dir)
       t.poll(NOW)
       assert.strictEqual(t.report(NOW).thrash.active, false, '2 misses must not trip')
-      responseFile(dir, NOW - 30_000, { cc: 400_000, cr: 20_000 })
+      responseFile(dir, NOW - 30_000, { cc: 400_000, cr: 20_000 }, 'claude-fable-5', 'msg_th2')
+      requestFile(dir, NOW - 28_000, 500_000, { session: S1, model: 'claude-fable-5', previousMessageId: 'msg_th2' })
       t.poll(NOW)
       const r = t.report(NOW)
       assert.strictEqual(r.thrash.active, true, '3 misses must trip')
@@ -103,10 +108,12 @@ suite('bodiesActivity — CACHE_THRASH + incremental scan (TRDD-GOD0108C)', () =
       responseFile(dir, NOW - 80_000, { cc: 300_000, cr: 0 })
       const t = new BodiesActivityTracker(dir)
       t.poll(NOW - 60_000)
-      assert.strictEqual(t.report(NOW).thrash.active, false)
+      // Unattributed misses count via `unattributed` since TRDD-THRGX41P (they no longer flip
+      // `active`) — the incremental-pickup intent of this test is unchanged: 2 before, 3 after.
+      assert.strictEqual(t.report(NOW).thrash.unattributed.count, 2)
       responseFile(dir, NOW - 10_000, { cc: 300_000, cr: 0 })
       t.poll(NOW)
-      assert.strictEqual(t.report(NOW).thrash.active, true, 'the new file completes the pattern')
+      assert.strictEqual(t.report(NOW).thrash.unattributed.count, 3, 'the new file completes the pattern')
     } finally { cleanup() }
   })
 
@@ -167,7 +174,10 @@ suite('bodiesActivity — CACHE_THRASH + incremental scan (TRDD-GOD0108C)', () =
       const t = new BodiesActivityTracker(dir)
       t.poll(NOW)
       const r = t.report(NOW)
-      assert.strictEqual(r.thrash.active, true)
+      // The misses carry no request chain, so since TRDD-THRGX41P they cannot flip `active` —
+      // sender attribution and suspect naming, this test's actual subject, are unchanged.
+      assert.strictEqual(r.thrash.active, false, 'unattributed misses alone do not activate')
+      assert.strictEqual(r.thrash.unattributed.count, 3)
       assert.strictEqual(r.thrash.suspects[0].session, '249c4216-4db4-4b64-9a10-b994b9aa0001')
       assert.strictEqual(r.thrash.suspects[0].model, 'claude-fable-5')
       assert.strictEqual(r.thrash.suspects[0].count, 2)
@@ -262,16 +272,54 @@ suite('bodiesActivity — CACHE_THRASH + incremental scan (TRDD-GOD0108C)', () =
     } finally { cleanup() }
   })
 
-  test('unattributed misses still pool into one pseudo-source so an unreadable thrash is never ignored', () => {
+  test('pooled unattributed misses do NOT flip active — a phantom source must not deny launches (TRDD-THRGX41P)', () => {
+    // The old rule pooled every unattributable miss into one pseudo-source and let it trip
+    // `active`, on the premise that total attribution failure is rare. Measured in the field
+    // (2026-08-02): attribution is the COMMON failure (~14% attributed), so N fresh agents'
+    // one-time boot writes read as ONE thrashing session and the gate denied an unrelated
+    // advisor launch. The pool is still counted and surfaced — it just cannot deny on its own.
     const { dir, cleanup } = tmpBodies()
     try {
-      for (let i = 0; i < 3; i++) responseFile(dir, NOW - 30_000 - i * 20_000, { cc: 250_000, cr: 0 })
+      for (let i = 0; i < 4; i++) responseFile(dir, NOW - 30_000 - i * 20_000, { cc: 250_000, cr: 0 })
       const t = new BodiesActivityTracker(dir)
       t.poll(NOW)
       const r = t.report(NOW)
-      assert.strictEqual(r.thrash.active, true, 'total attribution failure must fail toward catching thrash')
-      assert.strictEqual(r.thrash.topSource?.session, null)
+      assert.strictEqual(r.thrash.active, false, 'an unattributed pool alone must not read as one thrashing session')
+      assert.strictEqual(r.thrash.topSource, null, 'topSource is the heaviest ATTRIBUTED source — none exists here')
+      assert.strictEqual(r.thrash.count, 4, 'the misses are still counted and surfaced')
+      assert.deepStrictEqual(r.thrash.unattributed, { count: 4, rebilledTokens: 1_000_000 }, 'the pool is surfaced, not dropped')
       assert.strictEqual(r.thrash.coldStartSessions, 0, 'the unattributed pool is never counted as distinct cold-start sessions')
+    } finally { cleanup() }
+  })
+
+  test('an attributed thrasher is found even behind a BIGGER unattributed pool', () => {
+    const { dir, cleanup } = tmpBodies()
+    try {
+      for (let i = 0; i < 3; i++) {
+        responseFile(dir, NOW - 150_000 + i * 30_000, { cc: 300_000, cr: 1_000 }, 'claude-fable-5', `msg_a${i}`)
+        requestFile(dir, NOW - 145_000 + i * 30_000, 500_000, { session: S1, model: 'claude-fable-5', previousMessageId: `msg_a${i}` })
+      }
+      for (let i = 0; i < 4; i++) responseFile(dir, NOW - 40_000 - i * 15_000, { cc: 200_000, cr: 0 })
+      const t = new BodiesActivityTracker(dir)
+      t.poll(NOW)
+      const r = t.report(NOW)
+      assert.strictEqual(r.thrash.active, true)
+      assert.strictEqual(r.thrash.topSource?.session, S1, 'the ATTRIBUTED repeat-writer wins over the larger anonymous pool')
+    } finally { cleanup() }
+  })
+
+  test('a suspect whose model contradicts the thrashing model is dropped from the likely-source list', () => {
+    // The field incident printed "thrash (model claude-fable-5). Likely source: <an opus session>"
+    // — a self-contradiction: a sender on a different model cannot be the prefix-mutating caller.
+    const { dir, cleanup } = tmpBodies()
+    try {
+      for (let i = 0; i < 3; i++) responseFile(dir, NOW - 90_000 + i * 20_000, { cc: 260_000, cr: 0 }, 'claude-fable-5', `msg_m${i}`)
+      requestFile(dir, NOW - 20_000, 1_500_000, { session: S2, model: 'claude-opus-5' })
+      const t = new BodiesActivityTracker(dir)
+      t.poll(NOW)
+      const r = t.report(NOW)
+      assert.ok(!r.thrash.suspects.some(s => s.model === 'claude-opus-5'),
+        `an opus sender cannot be the source of fable thrash: ${JSON.stringify(r.thrash.suspects)}`)
     } finally { cleanup() }
   })
 

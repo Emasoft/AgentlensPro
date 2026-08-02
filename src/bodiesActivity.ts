@@ -54,9 +54,15 @@ export interface ThrashReport {
    *  attributed exactly (via the previous_message_id chain) the list is narrowed to it;
    *  otherwise this is inference from concurrent ≥400KB requests — callers label it "likely". */
   suspects: FatRequestSender[]
-  /** The heaviest single miss source (session attributed via the previous_message_id chain;
-   *  null session = the unattributed group). active keys off THIS group's count, never the total. */
-  topSource: { session: string | null; count: number; rebilledTokens: number } | null
+  /** The heaviest single ATTRIBUTED miss source (session via the previous_message_id chain), or
+   *  null when no miss could be attributed. `active` keys off THIS group's count, never the total.
+   *  The old rule let the UNATTRIBUTED pool stand in as a pseudo-source here — measured in the
+   *  field (TRDD-THRGX41P), attribution fails for MOST requests (~14% attributed), so N fresh
+   *  agents' one-time boot writes pooled into one phantom thrasher and denied unrelated launches. */
+  topSource: { session: string; count: number; rebilledTokens: number } | null
+  /** Misses whose requests could not be chained to any session — counted and surfaced (the
+   *  THRASH_UNATTRIBUTED advisory), never deny-driving on their own. */
+  unattributed: { count: number; rebilledTokens: number }
   /** FAN_OUT_COLD_START: DISTINCT attributed sessions whose in-window big writes stayed BELOW the
    *  same-session repeat threshold — N fresh agents each paying their one-time cold-start prefix
    *  write. Expected fan-out cost, advisory-only, never a reason to deny unrelated actions. */
@@ -295,9 +301,7 @@ export class BodiesActivityTracker {
 
     // Per-SOURCE attribution (2026-07-11 field fix): thrash = the SAME session re-writing its
     // prefix ≥ thrashMinCount times; N distinct sessions' single cold-start writes are a fan-out
-    // paying its one-time cost, not thrash. Unattributed misses still pool into one pseudo-source
-    // so a thrash whose requests we could not read is caught, never silently ignored — the ONLY
-    // case that re-admits the old cross-session false positive is total attribution failure.
+    // paying its one-time cost, not thrash.
     const bySource = new Map<string | null, { count: number; cc: number }>()
     for (const m of misses) {
       const sid = this.sessionOf(m)
@@ -307,13 +311,25 @@ export class BodiesActivityTracker {
       bySource.set(sid, g)
     }
     let topSource: ThrashReport['topSource'] = null
+    let unattributedCount = 0
+    let unattributedCc = 0
     let coldStartSessions = 0
     let coldStartRebilled = 0
     for (const [sid, g] of bySource) {
+      if (sid === null) {
+        // The pool of misses whose requests could not be chained to a session. It CANNOT flip
+        // `active` (TRDD-THRGX41P): attribution fails for most requests in the field, so this
+        // pool is usually N distinct one-time cold-start boots, not one mutating caller — the
+        // old pseudo-source rule denied an advisor launch over exactly that. Surfaced via
+        // `unattributed` + the THRASH_UNATTRIBUTED advisory instead of feeding the deny.
+        unattributedCount = g.count
+        unattributedCc = g.cc
+        continue
+      }
       if (topSource === null || g.count > topSource.count) {
         topSource = { session: sid, count: g.count, rebilledTokens: g.cc }
       }
-      if (sid !== null && g.count < this.opts.thrashMinCount) {
+      if (g.count < this.opts.thrashMinCount) {
         coldStartSessions++
         coldStartRebilled += g.cc
       }
@@ -322,7 +338,7 @@ export class BodiesActivityTracker {
     const windowLarge = this.largeRequests.filter(e => now - e.t <= this.opts.thrashWindowMs)
     // Exact culprit narrowing: when the thrashing source is an attributed session, name ITS fat
     // requests instead of every concurrent sender (an innocent fat parent must not be blamed).
-    const culpritLarge = thrashActive && topSource?.session
+    const culpritLarge = thrashActive && topSource
       ? windowLarge.filter(e => e.sessionId === topSource.session)
       : windowLarge
 
@@ -340,8 +356,14 @@ export class BodiesActivityTracker {
         rebilledTokens: rebilled,
         model: topModel,
         windowMs: this.opts.thrashWindowMs,
-        suspects: BodiesActivityTracker.senders(culpritLarge.length > 0 ? culpritLarge : windowLarge),
+        // A sender on a DIFFERENT model cannot be the prefix-mutating caller: the field deny
+        // named an opus session as the source of fable-5 thrash (TRDD-THRGX41P). Unknown-model
+        // senders stay — honest uncertainty is not a mismatch. An emptied list flows to the
+        // "source not attributable" wording instead of a wrong name.
+        suspects: BodiesActivityTracker.senders(culpritLarge.length > 0 ? culpritLarge : windowLarge)
+          .filter(s => topModel === null || s.model === null || s.model === topModel),
         topSource,
+        unattributed: { count: unattributedCount, rebilledTokens: unattributedCc },
         coldStartSessions,
         coldStartRebilledTokens: coldStartRebilled,
       },

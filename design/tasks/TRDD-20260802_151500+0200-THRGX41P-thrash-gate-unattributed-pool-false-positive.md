@@ -1,9 +1,9 @@
 ---
 trdd-id: THRGX41P
 title: THRASH_ACTIVE false positive — unattributed cold starts pool into one phantom source and deny unrelated launches
-column: todo
+column: complete
 created: 2026-08-02T15:15:00+0200
-updated: 2026-08-02T15:15:00+0200
+updated: 2026-08-02T18:20:00+0200
 current-owner: claude-code
 task-type: bugfix
 severity: MEDIUM
@@ -13,6 +13,24 @@ release-via: publish
 ---
 
 # THRASH_ACTIVE false positive — unattributed pooling
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-02 18:20
+
+**✅ IMPLEMENTED, TESTED, DEPLOYED.** The owner approved the proposed fix verbatim ("resume them
+all" / "fix every issue. complete all pending tasks.", 2026-08-02). Landed:
+- `src/bodiesActivity.ts`: `active` requires an ATTRIBUTED `topSource` (its type tightened to a
+  non-null session); the null pool is surfaced as the new required `ThrashReport.unattributed`
+  {count, rebilledTokens}; suspects are filtered to the thrashing model (unknown-model kept).
+- `src/agentGate.ts`: under active thrash a FORK (or the keep-warm pinger path) still hits deny;
+  a fresh non-fork launch gets a `warn` carrying the same evidence. New `THRASH_UNATTRIBUTED`
+  warn + advisory for the pool (threshold 3, mirroring the tracker's repeat threshold).
+- TDD verify-fail proven: the 4 new/changed assertions failed against the pre-fix build (pooled
+  active, attributed-over-null, model-filter, non-fork warn), then passed post-fix. 3 legacy
+  tests that encoded the old pseudo-source rule were re-anchored to their real intent.
+- Full gates green via safe-deploy; live pid verified running the bundle carrying
+  `THRASH_UNATTRIBUTED` (2 hits in standalone/server.js). The gate had reproduced the bug live
+  this same afternoon (denied a janitor-repair-agent spawn over a pooled sonnet-5 boot wave).
+Release-via publish: satisfied at the next npm release.
 
 ## The incident (2026-08-02, reported by the owner from the janitor's session)
 
@@ -70,3 +88,6 @@ only 14% of the window.
 - 2026-08-02 — filed from the owner's report + first-hand code/measurement verification; queued
   at todo per the new-directive rule (assessment delivered, fix awaits the owner's call on the
   policy points above).
+- 2026-08-02 — owner approved the proposed policy ("resume them all"; "fix every issue. complete
+  all pending tasks."). Implemented TDD-first, gates green, deployed and bundle-verified live.
+  Column todo → complete (release-via publish satisfied at the next npm release).
