@@ -24,6 +24,9 @@ agentlenspro --install-hooks | --uninstall-hooks # wire/unwire lifecycle hook ca
                                                  # + the image cache-guard on Read (WARN-only;
                                                  # AGENTLENS_CACHE_GUARD=off / --hooks cacheguard=off)
 agentlenspro --install-skill                     # (re)install this skill into ~/.claude/skills/
+agentlenspro statusline-history project          # what is running in THIS project: model, effort,
+                                                 # ctx fill, cost, 5h/7d window. Self-scopes to the
+                                                 # cwd; `--project [DIR]` works on every view
 ```
 
 Both `--install-*` settings flags go through `safeConfigEdit`; they never clobber other tools'
