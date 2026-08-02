@@ -8,6 +8,24 @@ All notable changes to AgentlensPro are documented here.
 
 ### Added
 
+- **`agentlenspro get_account_status --all` — where EVERY account stands, not just the live one.**
+  A rotator deciding whether to switch needs the headroom of the accounts it is *not* on, and until now
+  the only way to learn an account's status was to already be on it: you had to rotate to find out
+  whether you should. No credential is read (the OAuth token contract is unchanged) — each row is what
+  was already observed while that account was live, stamped, with a **per-window** freshness: `fresh`
+  (measured), `aged` (past the TTL but not reset, so a LOWER bound), `rolled` (reset **and** this
+  machine was already off the account when the new window began, so an INFERRED ~0%), `stale` and
+  `unreadable` (both `null` **with a reason**). `unreadable` is never an absent row — "cannot read this
+  account" and "this account has no headroom" are opposite signals, and a missing row reads as the
+  second. It is assembled entirely from files, so it **answers with the server down**, which is when a
+  wedged machine is asking. Per-model weekly buckets are reported separately and never folded into the
+  verdict: a spent per-model bucket does not block other models.
+
+- **Each account's usage reading is now archived instead of overwritten.** The cache was one file,
+  replaced on every fetch, so a rotation destroyed the previous account's numbers outright. Readings
+  are filed per account (`subscription-usage/<accountUuid>.json`, atomic write-then-rename) — the data
+  `--all` reports from, and the part that cannot be backfilled.
+
 - **`agentlenspro statusline-history` — the per-turn series Claude Code renders and never keeps.**
   The status-line payload is the richest per-turn signal on the machine: the 5h/7d windows at full
   float precision (every other source quantizes them to integers, a ±25% capacity error at low
@@ -31,6 +49,12 @@ All notable changes to AgentlensPro are documented here.
 
 ### Fixed
 
+- **`resets_at` in a shape we did not accept was serving windows that no longer existed.** The endpoint
+  sends it as unix seconds *or* milliseconds, as a number *or* a numeric string, *or* RFC3339; only the
+  string form parsed, so a numeric epoch became `null` — and a null `resetsAt` silently disables the
+  already-reset check, reporting a rolled window as current. Also: an unparseable percentage became
+  `0` ("this window is empty") rather than `null`, and a window percentage spelled `used_percentage`
+  rather than `utilization` read as no data at all.
 - **A session's LIFETIME cost was billed as one turn on every server restart.** `total_cost_usd` is
   cumulative, so re-meeting a live session at `prev = 0` differenced its whole history into a single
   event — one account window read **$2,097.68** against 265,845 tokens, an implied $7,890/MTok
