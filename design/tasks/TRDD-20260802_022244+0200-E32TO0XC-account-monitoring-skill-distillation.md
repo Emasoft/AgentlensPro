@@ -3,7 +3,7 @@ trdd-id: E32TO0XC
 title: Distill a definitive set of account-monitoring skills from the 81-project corpus
 column: backburner
 created: 2026-08-02T02:22:44+0200
-updated: 2026-08-02T02:22:44+0200
+updated: 2026-08-02T02:58:30+0200
 current-owner: unassigned
 task-type: artifact
 npt: []
@@ -12,10 +12,31 @@ eht: []
 
 # Distill a definitive set of account-monitoring skills from the 81-project corpus
 
-## Status — DEFERRED ON PURPOSE
+## Status — DEFERRED ON PURPOSE, but ONE SLICE IS DONE
 
-The owner supplied the corpus and asked for this **later**, not now. It sits in `backburner` until
-they pull it forward. Do not start it because the board looks idle.
+The owner supplied the corpus and asked for the full distillation **later**. It stays in `backburner`
+until they pull it forward. Do not start it because the board looks idle.
+
+**Already extracted and scanned (2026-08-02), for ONE question only** — "how do these projects report
+the status of every account, including the usage-credits/API case" (GitHub issue #8):
+
+- All 80 archives are extracted to `downloads_dev/claude account switchers projects/_extracted/`
+  (gitignored, 695 MB). Whoever picks this up does **not** need to re-extract. `claude-squad-main.zip`
+  needs a retry after its first failure — one member has a literal Windows path in its filename — and
+  turns out to be business documents, not a switcher.
+- Signal ranking across all 80 and the 10 six-of-six projects: see the report below. It tells you which
+  ~26 projects are worth reading and which are status-line renderers.
+- Findings, verified in source: `reports/account-status-corpus/20260802_025650+0200-multi-account-status-corpus-scan.md`.
+
+**Read that report's §0 before running any sweep of your own.** The first pass returned zero hits for
+three separate questions and every one was a measurement artifact: this shell is zsh, which does not
+word-split an unquoted `$VAR`, so a space-joined project list is passed as ONE nonexistent path and
+`--no-messages` swallows the error. Use `"${ARR[@]}"`, and prove the sweep can find something known
+before believing a zero.
+
+The account-status slice produced its own implementation task, [[TRDD-EUURUDQV]] — that one is on the
+board at `todo`. This card remains the BROADER distillation (the other four problem families:
+switchers, status lines, brokers/gateways, control planes).
 
 ## Why
 
