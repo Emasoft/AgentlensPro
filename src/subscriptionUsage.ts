@@ -174,6 +174,31 @@ function fingerprint(c: Credentials): string | null {
   return basis ? createHash('sha256').update(basis).digest('hex').slice(0, 16) : null
 }
 
+/**
+ * CAN this machine refresh a usage reading — answered WITHOUT reading the credential (issue #9 §4).
+ *
+ * A consumer of the account archive needs to distinguish "these rows are old because nothing has
+ * happened" from "these rows are old because nothing CAN refresh them any more", and until now the
+ * two looked identical: the rows simply aged. Calling loadToken() to find out would defeat the
+ * property that makes the archive useful — that it reads no credential — so this inspects only the
+ * file's existence and the persisted consent.
+ *
+ * The credentials path is resolved exactly as loadToken resolves it; the two must not drift.
+ */
+export function usageRefreshCapability(env: NodeJS.ProcessEnv = process.env): { canRefresh: boolean; reason: string | null } {
+  const base = env['CLAUDE_CONFIG_DIR'] || path.join(os.homedir(), '.claude')
+  if (fs.existsSync(path.join(base, '.credentials.json'))) return { canRefresh: true, reason: null }
+  if (process.platform !== 'darwin') {
+    return { canRefresh: false, reason: `no credentials file at ${path.join(base, '.credentials.json')}` }
+  }
+  if (keychainReadAllowed(dataDirFrom(env), env)) return { canRefresh: true, reason: null }
+  return {
+    canRefresh: false,
+    reason: 'the credential is in the macOS keychain and reading it is opt-in — the archive will not '
+      + 'refresh until `agentlenspro config set readKeychainUsage on` (or AGENTLENS_READ_KEYCHAIN_USAGE=1)',
+  }
+}
+
 /** The OAuth token, from the credentials FILE first (cheap, no prompt) and only then the macOS
  *  keychain behind an explicit opt-in. Returns the token in a local scope only — callers get the
  *  usage numbers, never the secret. */

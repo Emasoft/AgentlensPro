@@ -98,10 +98,16 @@ export function runAllAccountsCli(argv: string[]): number {
           : '')
   }
 
+  // A human needs the archive verdict as much as a program does (issue #9 §4): without it, rows that
+  // can never refresh again look exactly like rows that simply have not changed.
+  const archiveLine = answer.archive.maintained
+    ? ''
+    : `\n\n⚠ these rows are NOT being refreshed — ${answer.archive.reason}`
+
   const text = argv.includes('--json')
     ? JSON.stringify(answer, null, 2)
     : `${table(answer.accounts.map(row))}\n\n${answer.note}`
-    + `\n\nReasons for every null are in --json; '*' marks the live account.${diagnosis}`
+    + `\n\nReasons for every null are in --json; '*' marks the live account.${archiveLine}${diagnosis}`
 
   if (outFile) {
     fs.mkdirSync(path.dirname(path.resolve(outFile)), { recursive: true })

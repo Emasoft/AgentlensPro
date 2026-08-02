@@ -26,7 +26,10 @@
 
 import { getCurrentAccount } from './accountInfo'
 import { listAccountRoster, type AccountRosterEntry } from './accountStateTimeline'
-import { listObservedAccountUsage, TTL_MS, type SubscriptionUsage, type UsageLimit } from './subscriptionUsage'
+import {
+  listObservedAccountUsage, TTL_MS, usageRefreshCapability,
+  type SubscriptionUsage, type UsageLimit,
+} from './subscriptionUsage'
 
 /** How a single window's number should be read. */
 export type WindowFreshness =
@@ -44,14 +47,42 @@ export type WindowFreshness =
   /** No usable reading for this account at all. */
   | 'unreadable'
 
+/** What `percent` IS, for a program that cannot read the prose (issue #9 §3). `freshness` says why
+ *  the number is what it is; `bound` says what may be concluded from it — which is the part a
+ *  rotator gates on, and until now it lived only in the documentation of `freshness`. */
+export type WindowBound =
+  /** A current measurement. */
+  | 'exact'
+  /** Utilization only grows, so the true value is >= this. Safe to EXCLUDE an account on, never to select one. */
+  | 'lower'
+  /** Not measured at all — derived from a reset plus this machine having been away. Audit `leftAt`. */
+  | 'inferred'
+  /** No usable claim. `percent` is null. */
+  | 'unknown'
+
+/** Derived, never stored twice: one map is the only place the two vocabularies meet, so a `bound`
+ *  that disagrees with its `freshness` is not expressible. */
+const BOUND: Record<WindowFreshness, WindowBound> = {
+  fresh: 'exact', aged: 'lower', rolled: 'inferred', stale: 'unknown', unreadable: 'unknown',
+}
+
 export interface AccountWindow {
   /** null whenever the number would be a guess. NEVER 0 as a stand-in for unknown: "no limit applies"
    *  and "limit unknown" are opposite signals to anything automated. */
   percent: number | null
   resetsAt: string | null
   freshness: WindowFreshness
+  /** Machine-readable strength of `percent`, derived from `freshness`. */
+  bound: WindowBound
   /** Present whenever `percent` is null or inferred — why, in words a human can act on. */
   reason: string | null
+}
+
+/** The ONE constructor for a window, so `bound` cannot be forgotten at a new call site. */
+function mkWindow(
+  percent: number | null, resetsAt: string | null, freshness: WindowFreshness, reason: string | null,
+): AccountWindow {
+  return { percent, resetsAt, freshness, bound: BOUND[freshness], reason }
 }
 
 export interface AccountStatusRow {
@@ -79,17 +110,30 @@ export interface AccountStatusRow {
   accountLabelSuspect: boolean
 }
 
+/** Whether these rows can still be refreshed at all (issue #9 §4). Without it, "old because nothing
+ *  happened" and "old because nothing CAN refresh them" look identical — the rows simply age, and a
+ *  consumer keeps trusting a number that will never move again. Answered from the credentials file's
+ *  existence and the persisted consent; NO credential is read to produce it. */
+export interface ArchiveStatus {
+  maintained: boolean
+  /** Why not, when `maintained` is false — including the command that fixes it. */
+  reason: string | null
+  /** Newest reading across all accounts, or null when nothing has ever been observed. Recency is the
+   *  consumer's call: this states the fact rather than a verdict. */
+  lastObservedAt: number | null
+}
+
 export interface AllAccountsAnswer {
   accounts: AccountStatusRow[]
   liveAccountId: string | null
   /** True when the roster itself is empty — we have never observed ANY account. A consumer must read
    *  this as "cannot see", never as "no accounts". */
   blind: boolean
+  archive: ArchiveStatus
   note: string
 }
 
-const UNREADABLE = (reason: string): AccountWindow =>
-  ({ percent: null, resetsAt: null, freshness: 'unreadable', reason })
+const UNREADABLE = (reason: string): AccountWindow => mkWindow(null, null, 'unreadable', reason)
 
 /** Rank used to fold two window verdicts into one account verdict — worst wins. `rolled` outranks
  *  `aged` because it is an inference rather than a measurement, and a consumer should see the weaker
@@ -124,12 +168,10 @@ export function classifyWindow(
   const hasReset = Number.isFinite(resetMs) && resetMs <= now
 
   if (!hasReset) {
-    if (now - fetchedAt < TTL_MS) return { percent, resetsAt, freshness: 'fresh', reason: null }
-    return {
-      percent, resetsAt, freshness: 'aged',
-      reason: 'read outside the cache TTL, but this window has not reset since — utilization only '
-        + 'grows, so treat it as a LOWER bound',
-    }
+    if (now - fetchedAt < TTL_MS) return mkWindow(percent, resetsAt, 'fresh', null)
+    return mkWindow(percent, resetsAt, 'aged',
+      'read outside the cache TTL, but this window has not reset since — utilization only '
+      + 'grows, so treat it as a LOWER bound')
   }
   // The window reset, so the number describes a window that no longer exists. The only question left
   // is whether anything could have filled the NEW one.
@@ -142,16 +184,13 @@ export function classifyWindow(
   // (Caught by a test that expected `rolled` and got `stale`; the test's fixture was right and the
   // condition was wrong.)
   if (leftAt !== null && leftAt <= resetMs && !labelSuspect) {
-    return {
-      percent: 0, resetsAt: null, freshness: 'rolled',
-      reason: 'INFERRED, not measured: the window has reset since this reading, and this machine was '
-        + 'already off the account when the new window began — so no local activity can have filled '
-        + 'it. Breaks if the account is used from another host.',
-    }
+    return mkWindow(0, null, 'rolled',
+      'INFERRED, not measured: the window has reset since this reading, and this machine was '
+      + 'already off the account when the new window began — so no local activity can have filled '
+      + 'it. Breaks if the account is used from another host.')
   }
-  return {
-    percent: null, resetsAt: null, freshness: 'stale',
-    reason: labelSuspect
+  return mkWindow(null, null, 'stale',
+    labelSuspect
       ? 'the window reset after this reading, and the reading\'s own account does not match the one '
         + '~/.claude.json claims — so "this machine left the account" cannot be established and the '
         + 'window may be filling under a credential the config does not name'
@@ -159,8 +198,7 @@ export function classifyWindow(
         ? 'the window has reset since this reading and the account is still the one this machine is on '
           + '— the old number is void and the new window has not been read'
         : 'the window has reset since this reading, but this machine was still on the account after the '
-          + 'new window began — activity in it cannot be excluded',
-  }
+          + 'new window began — activity in it cannot be excluded')
 }
 
 function pickLimit(u: SubscriptionUsage, kind: string): UsageLimit | undefined {
@@ -219,10 +257,17 @@ export function listAllAccounts(opts: { now?: number; liveAccountId?: string | n
     }
   })
 
+  const capability = usageRefreshCapability()
+  const observed = accounts.map(a => a.observedAt).filter((t): t is number => t !== null)
   return {
     accounts,
     liveAccountId,
     blind: accounts.length === 0,
+    archive: {
+      maintained: capability.canRefresh,
+      reason: capability.reason,
+      lastObservedAt: observed.length > 0 ? Math.max(...observed) : null,
+    },
     note: 'Every row is what was OBSERVED while that account was live — no credential is read to '
       + 'produce it. A `rolled` window is INFERRED from its resetsAt plus this machine having been off '
       + 'the account; check `leftAt` before acting on it.',

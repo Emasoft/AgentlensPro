@@ -22,6 +22,34 @@ const A = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa'
 const B = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb'
 const C = 'cccccccc-3333-4333-8333-cccccccccccc'
 
+// ── `bound` — the machine-readable strength of `percent` (issue #9 §3) ──────────────────────
+// `freshness` says WHY the number is what it is; `bound` says what may be CONCLUDED from it, which
+// is the part a rotator gates on and which previously existed only in the prose of `freshness`.
+suite('bound — what a program may conclude from percent', () => {
+  const cases: Array<[string, ReturnType<typeof classifyWindow>, string]> = [
+    ['fresh', classifyWindow(42, iso(NOW + HOUR), NOW - 60_000, null, NOW), 'exact'],
+    ['aged', classifyWindow(77, iso(NOW + HOUR), NOW - TTL_MS * 5, null, NOW), 'lower'],
+    ['rolled', classifyWindow(91, iso(NOW - HOUR), NOW - HOUR * 5, NOW - HOUR * 3, NOW), 'inferred'],
+    ['stale', classifyWindow(91, iso(NOW - HOUR), NOW - HOUR * 5, null, NOW), 'unknown'],
+    ['unreadable', classifyWindow(null, null, NOW, null, NOW), 'unknown'],
+  ]
+  for (const [freshness, w, expected] of cases) {
+    test(`${freshness} ⇒ bound '${expected}'`, () => {
+      assert.strictEqual(w.freshness, freshness, 'fixture must actually produce that freshness')
+      assert.strictEqual(w.bound, expected)
+    })
+  }
+
+  test('every bound that is not a measurement carries a percent a consumer can defend', () => {
+    // 'lower' keeps its number (safe to EXCLUDE on), 'inferred' keeps 0 with the precondition in
+    // `reason`, and 'unknown' must be null — never 0, which reads as "empty" to anything automated.
+    for (const [, w] of cases) {
+      if (w.bound === 'unknown') assert.strictEqual(w.percent, null, `${w.freshness} must not assert a number`)
+      else assert.strictEqual(typeof w.percent, 'number', `${w.freshness} must carry its number`)
+    }
+  })
+})
+
 suite('classifyWindow — the four ways a stamped reading can be read', () => {
   test('inside the TTL it is a measurement', () => {
     const w = classifyWindow(42, iso(NOW + HOUR), NOW - 60_000, null, NOW)
