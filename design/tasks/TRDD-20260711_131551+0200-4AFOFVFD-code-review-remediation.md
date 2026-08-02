@@ -1,9 +1,9 @@
 ---
 trdd-id: 4AFOFVFD
 title: Code-review remediation — 16 fixed + merged, 7 deferred to implement
-column: ai_review
+column: human_review
 created: 2026-07-11T13:15:51+0200
-updated: 2026-07-16T17:20:25+0200
+updated: 2026-08-02T11:35:34+0200
 current-owner: claude-code-review
 assignee: claude-code-review
 priority: 2
@@ -309,3 +309,4 @@ GREEN 890/0. Rationale + lesson: `[[otlp-ingest-topology]]` `[^3]`.
 ## Approval log
 - 2026-07-11 — owner directed: implement ALL deferred findings correctly + test
   (no skips). This TRDD tracks that remediation.
+- 2026-08-02 — AI review PASSED (ai_review backlog audit): this card's own STATE block already recorded the work as shipped end-to-end and it re-verified against the code today. Column ai_review → human_review; the remaining gate is the human, exactly as the STATE block says.

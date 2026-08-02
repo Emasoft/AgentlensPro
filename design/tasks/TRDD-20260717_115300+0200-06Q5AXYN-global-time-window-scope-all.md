@@ -1,9 +1,9 @@
 ---
 trdd-id: 06Q5AXYN
 title: Global time-window — scope every list, stat, and chart to the picker
-column: dev
+column: todo
 created: 2026-07-17T11:53:00+0200
-updated: 2026-07-17T16:52:00+0200
+updated: 2026-08-02T11:36:14+0200
 current-owner: main
 task-type: feature
 relevant-rules: []
@@ -98,3 +98,11 @@ surfaced weeks-old content (compounded by drilled views reconstructing a resumed
 transcript). One `sessionInWindow` helper becomes the single source of truth; every surface routes
 through the windowed session list, and the independent aggregates derive from it under bounded
 presets.
+
+## Approval log
+
+- 2026-08-02 — Column `dev` → `todo` (board audit). Phase 3 is done and live-verified; phases 4-5
+  are real remaining work that nobody has touched since 2026-07-17. `dev` asserts someone is
+  working the card right now, and that was false for 16 days — an untrue column hides the stall
+  from the only view anyone checks, so the card is queued honestly instead. No work was undone and
+  no scope changed; pick it up from the STATE block's phase list.

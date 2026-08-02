@@ -1,9 +1,9 @@
 ---
 trdd-id: O981ZJKV
 title: CLI cost-observability expansion — 14-item work order, coverage map + gaps
-column: ai_review
+column: human_review
 created: 2026-07-10T12:35:54+0200
-updated: 2026-07-16T11:59:00+0200
+updated: 2026-08-02T11:35:34+0200
 implementation-commits: [1093245, 9aa20fa, 674ed43, 8b9da82, 29d666d, 655a30a]
 current-owner: agentlens-session
 task-type: feature
@@ -179,3 +179,6 @@ Phase B shipped — see above) and the step-0 integration-test surface (test age
   Fixes = child TRDD when scheduled.
 
 ## Notes and lessons learned
+
+## Approval log
+- 2026-08-02 — AI review PASSED (ai_review backlog audit): this card's own STATE block already recorded the work as shipped end-to-end and it re-verified against the code today. Column ai_review → human_review; the remaining gate is the human, exactly as the STATE block says.

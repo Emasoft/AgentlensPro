@@ -1,9 +1,9 @@
 ---
 trdd-id: AMEA4O4Z
 title: Log-event sink — persist every gated-out OTEL log event instead of dropping it
-column: ai_review
+column: human_review
 created: 2026-07-16T00:22:48+0200
-updated: 2026-07-16T14:10:28+0200
+updated: 2026-08-02T11:35:13+0200
 current-owner: main
 task-type: feature
 severity: major
@@ -85,3 +85,4 @@ TRDD-BKF5NZD3).
 
 - 2026-07-16 USER: picked option 1 ("1") from the investigation's proposed fixes — persist the
   dropped log events. Direct USER authorization.
+- 2026-08-02 — AI review PASSED (ai_review backlog audit): implementation verified present in the code first-hand, not from prose. Column ai_review → human_review; the remaining gate is the human. Evidence: reports/ai-review-audit/20260802_113227+0200-batchB-server-ingestion.md

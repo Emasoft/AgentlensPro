@@ -1,9 +1,9 @@
 ---
 trdd-id: 1XM0YSWQ
 title: get_account_burners — who exhausted a given OAuth account's rate-limit window, ranked
-column: ai_review
+column: human_review
 created: 2026-07-15T10:48:21+0200
-updated: 2026-07-15T13:30:00+0200
+updated: 2026-08-02T11:34:56+0200
 current-owner: main
 task-type: feature
 scope: project
@@ -95,3 +95,7 @@ silently under-reporting.
 
 `pnpm run compile` green; new tests pass; live `agentlenspro get_account_burners` (default =
 previous account) names the top burner sessions of the owner account's exhausted window with shares.
+
+## Approval log
+
+- 2026-08-02 — AI review PASSED (ai_review backlog audit): implementation verified present in the code first-hand, not from prose. Column ai_review → human_review; the remaining gate is the human. Evidence: reports/ai-review-audit/20260802_113207+0200-batchA-diagnostics.md

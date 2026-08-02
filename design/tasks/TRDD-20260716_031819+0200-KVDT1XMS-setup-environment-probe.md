@@ -1,9 +1,9 @@
 ---
 trdd-id: KVDT1XMS
 title: Setup environment probe — heuristic incompatibility checks, WSL-only Windows gate, help+skill sync
-column: ai_review
+column: human_review
 created: 2026-07-16T03:18:19+0200
-updated: 2026-07-16T03:37:27+0200
+updated: 2026-08-02T11:35:13+0200
 current-owner: main
 task-type: feature
 severity: major
@@ -42,3 +42,7 @@ Probes are injectable (ctx paths/ports) so tests drive them against fixtures.
 - `skills/agentlenspro-diagnostics/SKILL.md`: setup section — probe description, platform
   matrix, the new get_recent_sessions `active` flag and card `title`/`entrypoint` fields.
 - CHANGELOG entries for all three TRDDs of this work order (OMMPS5TF, RS3NGN53, KVDT1XMS).
+
+## Approval log
+
+- 2026-08-02 — AI review PASSED (ai_review backlog audit): implementation verified present in the code first-hand, not from prose. Column ai_review → human_review; the remaining gate is the human. Evidence: reports/ai-review-audit/20260802_113227+0200-batchB-server-ingestion.md

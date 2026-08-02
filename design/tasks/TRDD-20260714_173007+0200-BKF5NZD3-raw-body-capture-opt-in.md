@@ -1,10 +1,10 @@
 ---
 trdd-id: BKF5NZD3
 title: Raw-body capture must be opt-in — the server re-arms it on every boot
-column: ai_review
+column: human_review
 implementation-commits: [82d856a, 32f24c8]
 created: 2026-07-14T17:30:07+0200
-updated: 2026-07-16T17:45:00+0200
+updated: 2026-08-02T11:35:13+0200
 current-owner: a0fce09a
 task-type: bugfix
 parent-trdd: K3WDPR7M
@@ -106,3 +106,7 @@ right; force-converging the second removes the user's ability to say no — and 
 loop that runs on every server boot, which any hook can trigger. The guardrail: **a setting
 whose cost is unbounded is never "owned" — it is a knob, defaulting to the cheap value, and
 every undo path (uninstall, disable) must honor OFF rather than restore ON.**
+
+## Approval log
+
+- 2026-08-02 — AI review PASSED (ai_review backlog audit): implementation verified present in the code first-hand, not from prose. Column ai_review → human_review; the remaining gate is the human. Evidence: reports/ai-review-audit/20260802_113227+0200-batchB-server-ingestion.md

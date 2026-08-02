@@ -1,9 +1,9 @@
 ---
 trdd-id: F6BM1BDI
 title: Scope the UI server ACAO from wildcard to same-origin/loopback (close cross-origin read exfil)
-column: ai_review
+column: human_review
 created: 2026-07-11T16:33:42+0200
-updated: 2026-07-16T11:59:30+0200
+updated: 2026-08-02T11:35:13+0200
 current-owner: claude-code-review
 assignee: claude-code-review
 priority: 3
@@ -34,7 +34,7 @@ attempts: 0
 test-failures: 0
 last-test-result: pass
 last-test-at: 2026-07-11T16:38:06+0200
-implementation-commits: []
+implementation-commits: [39c594b]
 pr-url: null
 ---
 
@@ -127,3 +127,4 @@ would echo `*` for evil.com).
 ## Approval log
 - 2026-07-11 — surfaced during /go-on-yourself broader eval; security hardening (Tier-0
   in-scope security fix, direct continuation of the round-1 CSRF/exfil work).
+- 2026-08-02 — AI review PASSED (ai_review backlog audit): implementation verified present in the code first-hand, not from prose. Column ai_review → human_review; the remaining gate is the human. Evidence: setAllowedOriginCors at src/httpOrigin.ts:30 (imported by standalone/server.ts and src/mcpServer.ts), tests src/test/httpOrigin.test.ts + src/test/standaloneCors.test.ts, commit 39c594b, released in v2.10.0.

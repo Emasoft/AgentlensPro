@@ -1,9 +1,9 @@
 ---
 trdd-id: 5F3SE1JM
 title: Ship AgentlensPro as an ai-maestro dependency — compatibility alignment + locked CLI contract
-column: ai_review
+column: human_review
 created: 2026-07-16T12:44:03+0200
-updated: 2026-07-16T20:55:00+0200
+updated: 2026-08-02T11:35:34+0200
 current-owner: main
 task-type: feature
 severity: major
@@ -93,3 +93,6 @@ Load-bearing facts:
 - ai-maestro#70 open with the 5 questions: https://github.com/Emasoft/ai-maestro/issues/70
 
 ## Notes and lessons learned
+
+## Approval log
+- 2026-08-02 — AI review PASSED (ai_review backlog audit): implementation verified present in the code first-hand, not from prose. Column ai_review → human_review; the remaining gate is the human. Evidence: reports/ai-review-audit/20260802_113252+0200-batchC-security-release.md

@@ -1,9 +1,9 @@
 ---
 trdd-id: OCNHOHE9
 title: CLI cache-expiry probe — is a session past its prompt-cache TTL
-column: ai_review
+column: human_review
 created: 2026-07-13T21:52:20+0200
-updated: 2026-07-16T14:10:28+0200
+updated: 2026-08-02T11:34:56+0200
 current-owner: main
 task-type: feature
 scope: project
@@ -88,3 +88,4 @@ LAST request — correct by construction. `idleHuman` formatted compactly (e.g. 
 ## Approval log
 - Tier 0 (agent-independent): in-scope feature on the project's own CLI, reversible, no
   baseline/governance/release surface touched. User explicitly requested it.
+- 2026-08-02 — AI review PASSED (ai_review backlog audit): implementation verified present in the code first-hand, not from prose. Column ai_review → human_review; the remaining gate is the human. Evidence: reports/ai-review-audit/20260802_113207+0200-batchA-diagnostics.md

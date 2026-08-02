@@ -1,9 +1,9 @@
 ---
 trdd-id: WYC4KB50
 title: Viewer-role assertion — xhigh code-review remediation (13 findings)
-column: ai_review
+column: human_review
 created: 2026-07-17T10:34:17+0200
-updated: 2026-07-17T14:24:30+0200
+updated: 2026-08-02T11:35:34+0200
 current-owner: main
 task-type: bugfix
 parent-trdd: 1ZH1D5EG
@@ -88,3 +88,6 @@ as a single atomic batch. The two CONFIRMED top findings are self-inflicted avai
 defensive/cleanup/altitude fixes plus three documented non-goals for speculative deployment
 topologies (respecting the project's reactive-only security posture — see LOCAL memory
 `feedback-project-focus-tokens-not-security`).
+
+## Approval log
+- 2026-08-02 — AI review PASSED (ai_review backlog audit): implementation verified present in the code first-hand, not from prose. Column ai_review → human_review; the remaining gate is the human. Evidence: reports/ai-review-audit/20260802_113252+0200-batchC-security-release.md

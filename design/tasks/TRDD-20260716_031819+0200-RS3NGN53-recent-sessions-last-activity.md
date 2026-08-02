@@ -1,9 +1,9 @@
 ---
 trdd-id: RS3NGN53
 title: get_recent_sessions ranks by LAST ACTIVITY — currently-active sessions surface first
-column: ai_review
+column: human_review
 created: 2026-07-16T03:18:19+0200
-updated: 2026-07-16T03:37:27+0200
+updated: 2026-08-02T11:34:56+0200
 current-owner: main
 task-type: bugfix
 severity: major
@@ -30,3 +30,7 @@ In `handleGetRecentSessions` (src/mcpServer.ts:1343):
 - add `active: true` when lastActive is within the last 5 minutes (the OTEL span-window
   heartbeat cadence bound) — the marker the orchestrator uses to spot live sessions.
 - TDD: unit tests for the re-ranking + the active flag (exported handler or via tool dispatch).
+
+## Approval log
+
+- 2026-08-02 — AI review PASSED (ai_review backlog audit): implementation verified present in the code first-hand, not from prose. Column ai_review → human_review; the remaining gate is the human. Evidence: reports/ai-review-audit/20260802_113207+0200-batchA-diagnostics.md

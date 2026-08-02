@@ -1,9 +1,9 @@
 ---
 trdd-id: 4CH9QLAH
 title: Copy fully-expanded branch tree + OTEL↔JSONL pinpoint (Phase 3)
-column: ai_review
+column: human_review
 created: 2026-07-12T07:14:50+0200
-updated: 2026-07-16T17:26:00+0200
+updated: 2026-08-02T11:35:34+0200
 current-owner: claude-code-review
 assignee: claude-code-review
 priority: 3
@@ -147,3 +147,4 @@ string-replaces the placeholders before writing to the clipboard.
 Tier-0 (agent-independent) per `~/.claude/rules/trdd-approval-tiers.md`: in-scope feature work on the
 project's own source, reversible, no baseline deviation, no cross-project reach. Authored directly at
 `column: dev` under the standing `/go-on-yourself` directive + the user-approved plan.
+- 2026-08-02 — AI review PASSED (ai_review backlog audit): this card's own STATE block already recorded the work as shipped end-to-end and it re-verified against the code today. Column ai_review → human_review; the remaining gate is the human, exactly as the STATE block says.

@@ -1,9 +1,9 @@
 ---
 trdd-id: OMMPS5TF
 title: Release-path provenance hardening — SBOM + checksums + image SBOM attestation
-column: ai_review
+column: human_review
 created: 2026-07-16T03:18:19+0200
-updated: 2026-07-16T03:37:27+0200
+updated: 2026-08-02T11:35:34+0200
 current-owner: main
 task-type: security
 severity: major
@@ -36,3 +36,6 @@ workflow-security drift.
    attestation on the image manifest).
 3. Constraint: NEVER touch the OIDC publish job's auth surface (no registry-url, no token,
    filename stays `publish.yml` — npm authorizes the FILENAME).
+
+## Approval log
+- 2026-08-02 — AI review PASSED (ai_review backlog audit): implementation verified present in the code first-hand, not from prose. Column ai_review → human_review; the remaining gate is the human. Evidence: reports/ai-review-audit/20260802_113252+0200-batchC-security-release.md

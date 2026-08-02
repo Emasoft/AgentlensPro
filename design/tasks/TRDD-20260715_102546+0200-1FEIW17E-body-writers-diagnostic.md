@@ -1,9 +1,9 @@
 ---
 trdd-id: 1FEIW17E
 title: get_body_writers — identify and rank the Claude sessions writing raw OTEL bodies
-column: ai_review
+column: human_review
 created: 2026-07-15T10:25:46+0200
-updated: 2026-07-15T10:58:00+0200
+updated: 2026-08-02T11:34:56+0200
 current-owner: main
 task-type: feature
 scope: project
@@ -84,3 +84,7 @@ digest is directly readable.
 
 `pnpm run compile` green; new mocha tests pass in `out/test/test/bodyWriters.test.js`; live
 `agentlenspro get_body_writers` returns ranked writers with the known-active session(s) on top.
+
+## Approval log
+
+- 2026-08-02 — AI review PASSED (ai_review backlog audit): implementation verified present in the code first-hand, not from prose. Column ai_review → human_review; the remaining gate is the human. Evidence: reports/ai-review-audit/20260802_113207+0200-batchA-diagnostics.md
