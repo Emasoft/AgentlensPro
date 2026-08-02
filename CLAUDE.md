@@ -143,6 +143,25 @@ When both capture the same session: **for Claude sessions the log transcript win
 - **Fixture JSON is gitignored** (`demo/fixtures/*.json`, `export_*.json`). Run `node scripts/redact-spans.js` before committing any fixture — they contain real telemetry/PII.
 - **`.claude/settings.json` is PROJECT scope and tracked** (only `settings.local.json` is ignored). It registers one `PreToolUse(Bash)` deny: `scripts/deny-playwright-init-agents.js`, which refuses playwright's agent-generator subcommand because it writes `.claude/agents/`, `.github/agents/`, a `copilot-setup-steps.yml` workflow, and `.mcp.json` — files an agent then loads as instructions. Installing playwright writes nothing (`scripts: {}`); the command is the only trigger, so the invocation is the only thing worth guarding. Matching is token-based (a substring version blocked `git add` of the guard's own filename); `node scripts/test-deny-playwright-init-agents.js` is the 15-case matrix.
 
+## No identities in anything tracked or shipped — enforced, not remembered
+
+`pnpm run check-identities` (`scripts/check-no-identities.js`, run by `compile`, `package`, CI, and
+the publish workflow) fails the build on a personal email address or a home path with a real username
+in any tracked or shipped file. **Skills carry a stricter bar: they must be UNIVERSAL** — installed on
+other people's machines, so a real session id or account uuid there is one machine's noise shipped to
+everyone. Ids in a skill must be visibly fake (≤2 distinct characters: `aaaaaaaa`, `bbbb2222`).
+
+The check is **shape-based, never a list of the values that leaked** — a guard keyed on today's
+account goes blind the moment a different one is used, which is how the second incident gets through
+while the check still reports green. Allowlists live in the script, each entry with its reason.
+
+When the concrete value genuinely matters ("on THIS machine the config names account X"), it belongs
+in LOCAL memory (`~/.claude/projects/<slug>/memory/`), outside the repo; keep the machine-agnostic
+shape in the repo. Evidence: 31 occurrences across 15 files on 2026-08-02, including three real
+addresses in the published skill — `skills/` is in `files`, so the next publish would have shipped
+them. Verified to fail against the pre-fix tree (31 findings); published 2.19.0/2.20.0 tarballs were
+confirmed clean.
+
 ## Contribution conventions
 
 Branch `feat/<slug>` or `fix/<slug>` off `main`; **Conventional Commits** (`type(scope): subject`); merges are **`--no-ff`, NEVER squash — history is the audit trail**. For user-facing changes, bump `version` in `package.json` and add a `CHANGELOG.md` entry **in the same PR**; tag `main` `vX.Y.Z` after merge.

@@ -44,7 +44,7 @@ the context percentage used, the cache create, etc. — and also what project an
 queries on these data must be possible, so we can investigate."
 
 ### THE DATA SOURCE (already captured — do not re-plumb)
-- `OTEL_LOG_RAW_API_BODIES=file:/Users/emanuelesabetta/.agentlens/otel-bodies` is SET → Claude Code writes
+- `OTEL_LOG_RAW_API_BODIES=file:~/.agentlens/otel-bodies` is SET → Claude Code writes
   the full untruncated `{system, messages[], tools[]}` per call to `<uuid>.request.json` (21,878 files
   present). This IS the exact context of each call.
 - AgentLens ALREADY parses one body: `src/rawBodyContext.ts` `buildCallContext(bodyFilePath)` →

@@ -9,8 +9,8 @@ import type { ConsumptionEvent, ObservedAccountCapacity } from '../burnMonitor'
 const H = 3600_000
 const NOW = Date.UTC(2026, 6, 15, 12, 0, 0)
 const RECORDS = [
-  { ts: NOW - 40 * H, accountId: 'acct-aaaa', email: 'a@x.com', plan: 'Max 20x' },
-  { ts: NOW - 6 * H, accountId: 'acct-bbbb', email: 'b@x.com', plan: 'Max 20x' },
+  { ts: NOW - 40 * H, accountId: 'acct-aaaa', email: 'a@example.com', plan: 'Max 20x' },
+  { ts: NOW - 6 * H, accountId: 'acct-bbbb', email: 'b@example.com', plan: 'Max 20x' },
 ]
 const SEGS = segmentsFromRecords(RECORDS) // bbbb is current (open segment) since NOW-6h
 const CURRENT = resolveTargetAccount(SEGS, 'current', NOW)! // acct-bbbb

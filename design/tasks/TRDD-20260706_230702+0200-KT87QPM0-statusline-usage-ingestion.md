@@ -38,7 +38,7 @@ context_window_size, used_percentage; cost.total_cost_usd; session_id;
 workspace.project_dir; model). It already has write_context_snapshot() (~L164):
 throttled, atomic, security-hardened per-session snapshot. Extend that pattern.
 
-**Two parts:** (1) EXTEND /Users/emanuelesabetta/.claude/statusline.py (backed up:
+**Two parts:** (1) EXTEND ~/.claude/statusline.py (backed up:
 statusline.py.bak-p7-20260706_225155) with an append-only JSONL writer of the FULL
 per-turn record; (2) ADD an AgentLens src/ ingestion source that tails/parses it
 and upserts exact buckets+context+cost into session/turn records. Precedence:

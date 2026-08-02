@@ -244,7 +244,7 @@ starts a second investigation:
 
 ```
 [watch] PEAK-START tokens-per-min total = 5.61M (>= 1) — who: alpha-service (aaaa1111, 1.3M/min,
-47%) · beta-service (04332240, 865k/min, 31%) · gamma-tools (7877ae1f, 613k/min, 22%)
+47%) · beta-service (bbbb2222, 865k/min, 31%) · gamma-tools (cccc3333, 613k/min, 22%)
 ```
 
 Each entry is `project (session, rate, share of machine total)`, heaviest first, and the session
@@ -1015,7 +1015,7 @@ stays machine-readable and a wrong-repo answer can never masquerade as a right o
 ```
 scope: /Users/me/Code/Proj (implied by the 'project' view — pass --project DIR to override)
 session   model       effort  fast  ctx     ctx%  cost $  5h%  7d%  ver      samples  last
-667293ab  opus-5[1m]  xhigh   -     232.6k  23    537.97  80   91   2.1.220  7745     00:09:43
+bbbbbbbb  opus-5[1m]  xhigh   -     232.6k  23    537.97  80   91   2.1.220  7745     00:09:43
 ```
 
 **`--project` works on EVERY view**, not just `project`. Bare `--project` means the current

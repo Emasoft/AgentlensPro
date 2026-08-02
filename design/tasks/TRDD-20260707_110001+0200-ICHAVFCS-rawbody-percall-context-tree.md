@@ -36,7 +36,7 @@ and the Sessions-tab `LlmContextBreakdown` (media/src/tabs/Traces.tsx) BOTH requ
 on "This session has no local transcript to itemize (OTEL-only…)" and punts to "open the preceding
 turns yourself". For OTEL-only sessions the content bytes were never on disk.
 
-**THE SOURCE (already configured):** `OTEL_LOG_RAW_API_BODIES=file:/Users/emanuelesabetta/.agentlens/otel-bodies`
+**THE SOURCE (already configured):** `OTEL_LOG_RAW_API_BODIES=file:~/.agentlens/otel-bodies`
 is now set in ~/.claude/settings.json (this session). After a Claude Code restart, CC writes the
 UNTRUNCATED exact request body per call to `<dir>/<uuid>.request.json` (and `<request_id>.response.json`),
 emitting `claude_code.api_request_body` / `claude_code.api_response_body` LOG events with `body_ref`
