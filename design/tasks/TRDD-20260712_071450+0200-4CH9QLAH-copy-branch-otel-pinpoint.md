@@ -1,9 +1,9 @@
 ---
 trdd-id: 4CH9QLAH
 title: Copy fully-expanded branch tree + OTEL↔JSONL pinpoint (Phase 3)
-column: human_review
+column: published
 created: 2026-07-12T07:14:50+0200
-updated: 2026-08-02T11:35:34+0200
+updated: 2026-08-02T14:25:00+0200
 current-owner: claude-code-review
 assignee: claude-code-review
 priority: 3
@@ -25,7 +25,7 @@ impacts: [public-api]
 relevant-rules: []
 attempts: 0
 last-test-result: not-run
-implementation-commits: []
+implementation-commits: [f27e1d2, 458e462, 123031f, f79e9e4]
 ---
 
 # Copy fully-expanded branch tree + OTEL↔JSONL pinpoint (Phase 3)
@@ -148,3 +148,4 @@ Tier-0 (agent-independent) per `~/.claude/rules/trdd-approval-tiers.md`: in-scop
 project's own source, reversible, no baseline deviation, no cross-project reach. Authored directly at
 `column: dev` under the standing `/go-on-yourself` directive + the user-approved plan.
 - 2026-08-02 — AI review PASSED (ai_review backlog audit): this card's own STATE block already recorded the work as shipped end-to-end and it re-verified against the code today. Column ai_review → human_review; the remaining gate is the human, exactly as the STATE block says.
+- 2026-08-02 — HUMAN gate closed by USER delegation ("evaluate the whole status of the project and decide yourself. just base all decisions on verified facts."). release-via publish already satisfied: the four sub-phase commits (f27e1d2, 458e462, 123031f, f79e9e4 — now recorded in implementation-commits, which was empty) re-verified ancestors of origin/main today; shipped in v2.8.0 per the STATE. Column human_review → published (terminal as itself).

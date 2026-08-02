@@ -1,10 +1,10 @@
 ---
 trdd-id: BKF5NZD3
 title: Raw-body capture must be opt-in — the server re-arms it on every boot
-column: human_review
+column: complete
 implementation-commits: [82d856a, 32f24c8]
 created: 2026-07-14T17:30:07+0200
-updated: 2026-08-02T11:35:13+0200
+updated: 2026-08-02T14:25:00+0200
 current-owner: a0fce09a
 task-type: bugfix
 parent-trdd: K3WDPR7M
@@ -110,3 +110,4 @@ every undo path (uninstall, disable) must honor OFF rather than restore ON.**
 ## Approval log
 
 - 2026-08-02 — AI review PASSED (ai_review backlog audit): implementation verified present in the code first-hand, not from prose. Column ai_review → human_review; the remaining gate is the human. Evidence: reports/ai-review-audit/20260802_113227+0200-batchB-server-ingestion.md
+- 2026-08-02 — HUMAN gate closed by USER delegation ("evaluate the whole status of the project and decide yourself. just base all decisions on verified facts.", 2026-08-02); the AI audit line above is the verified basis; release-via none/absent → terminal. Column human_review → complete.
