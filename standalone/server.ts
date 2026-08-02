@@ -84,7 +84,7 @@ import { formatGenAiEventContent } from '../src/genAiContent'
 import { ResourceMonitor } from '../src/resourceMonitor'
 import { AdmissionController, admissionLimitsFromEnv, type AdmitResult } from '../src/admissionController'
 import { resolveRetention } from '../src/retentionConfig'
-import { listObservedAccountUsage } from '../src/subscriptionUsage'
+import { listObservedAccountUsage, getSubscriptionUsage, type SubscriptionUsage } from '../src/subscriptionUsage'
 
 const OTLP_PORT  = parseInt(process.env.OTLP_PORT  ?? '4318')
 const UI_PORT    = parseInt(process.env.UI_PORT    ?? '3000')
@@ -681,9 +681,55 @@ hookPurgeTimer.unref()
 // than the read path: the status line calls into usage on every render, and one file read per render
 // to preserve a record that changes a few times a day is the wrong trade. Runs once at startup too,
 // because an hour is long enough for a rotation to happen first.
+// Seeded null so the FIRST tick after boot counts as a change and captures the live account — a
+// server restart is exactly when the archive is most likely to be missing a current reading.
+let lastSeenAccountUuid: string | null = null
+
 const adoptUsageArchive = (): void => { try { listObservedAccountUsage() } catch { /* best effort */ } }
 adoptUsageArchive()
-const usageArchiveTimer = setInterval(adoptUsageArchive, 3600e3)
+
+// THE CADENCE THAT FILLS THE ARCHIVE. Archiving on fetch (src/subscriptionUsage.ts) only preserves
+// readings that something else already asked for — and nothing did: measured 13 h after the archive
+// shipped, it still held exactly ONE record, the legacy cache adopted at startup. A per-account view
+// whose data never refreshes reports every account as `unreadable` forever, which is the failure it
+// exists to prevent.
+//
+// NOTE THE OPT-IN IS NOT BYPASSED. This is a daemon, so it calls getSubscriptionUsage with NO
+// `allowKeychain`: on macOS an un-ACL'd keychain read pops a password prompt, and a background process
+// that can hang on a modal dialog is worse than a stale number. Where a token is readable (a
+// credentials file, or AGENTLENS_READ_KEYCHAIN_USAGE=1 in the SERVER's environment) this fills
+// automatically; where it is not, every call is a cheap no-op returning `opt_in_required`.
+//
+// The TTL, the 429 cooldown and the cross-process lock all live inside getSubscriptionUsage, so
+// calling it more often than the TTL costs nothing — it serves the cache and returns.
+// Logs EVERY outcome, not just success. Logging only `ok` was the first version and it made the
+// cadence unverifiable: a refusal (no readable token, a 429 cooldown) looked exactly like the timer
+// never firing, so "is this feature working?" had no answer from the log. Deduplicated on the reason
+// so a recurring refusal states itself once instead of every hour.
+let lastUsageRefreshReason: string | null = null
+const refreshAccountUsage = (why: string): void => {
+  void getSubscriptionUsage({}).then((u: SubscriptionUsage | null) => {
+    const reason = u?.reason ?? 'no-result'
+    if (reason === 'ok') {
+      console.error(`[AgentLens] usage refreshed (${why}) for ${u?.accountLabel ?? 'an unidentified account'}`)
+    } else if (reason !== lastUsageRefreshReason) {
+      console.error(`[AgentLens] usage refresh (${why}) declined: ${reason}`
+        + (reason === 'opt_in_required'
+          ? ' — the credential is in the macOS keychain and this process may not read it.'
+            + ' Start the server with AGENTLENS_READ_KEYCHAIN_USAGE=1 in its environment to enable it.'
+          : ''))
+    }
+    lastUsageRefreshReason = reason
+  }).catch(() => { /* never let a usage refresh disturb the server */ })
+}
+refreshAccountUsage('startup')
+const usageArchiveTimer = setInterval(() => {
+  adoptUsageArchive()
+  // Hourly keeps the LIVE account's row from ageing into uselessness. It cannot help a non-live
+  // account — only that account's own credential can answer for it, which is what the rotation
+  // trigger below is for.
+  refreshAccountUsage('hourly')
+}, 3600e3)
 usageArchiveTimer.unref()
 // Sealing is separate from purging: a full WAL must become an immutable Parquet part promptly (a
 // 10k-row chunk is ~16 min at 20 instances), and a past day's WAL must seal whatever its size so old
@@ -1282,7 +1328,19 @@ function tickBurn(): void {
   // TRDD-YQZ9P8IL: sample the current subscription state onto the change-detected timeline. record()
   // only enqueues on a discrete change (account/mode/plan/ttl), so this 4s call is a cheap key compare
   // in the common case and a real write only a few times/hour. currentTtlContext() is 60s-cached.
-  try { accountStateTimeline.record(buildAccountStateRecord(getCurrentAccount(), currentTtlContext(), Date.now())) } catch { /* never let timeline sampling break the burn tick */ }
+  try {
+    const acct = getCurrentAccount()
+    accountStateTimeline.record(buildAccountStateRecord(acct, currentTtlContext(), Date.now()))
+    // ROTATION IS THE ONE MOMENT A NON-LIVE ACCOUNT CAN BE READ. Rate limits are per account and the
+    // usage endpoint only ever answers for the credential currently installed — so the only chance to
+    // capture account B's windows is while B is the live one. Miss it and B stays `unreadable` until
+    // the next rotation, however long that is. The rotation itself is the daemons' job; capturing the
+    // reading it makes possible is ours.
+    if (acct.accountUuid !== lastSeenAccountUuid) {
+      lastSeenAccountUuid = acct.accountUuid
+      refreshAccountUsage('account changed')
+    }
+  } catch { /* never let timeline sampling break the burn tick */ }
   pushBurnSse({ type: 'burnStatus', burnStatus: enrichBurnStatus(status) })
 
   const active = new Set<string>()

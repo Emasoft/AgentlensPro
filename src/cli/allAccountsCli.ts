@@ -12,6 +12,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { listAllAccounts, type AccountStatusRow, type AccountWindow } from '../allAccounts'
+import { loadToken } from '../subscriptionUsage'
 
 export const ALL_ACCOUNTS_USAGE = `agentlenspro get_account_status --all [flags]
 
@@ -73,10 +74,34 @@ export function runAllAccountsCli(argv: string[]): number {
     return EXIT.BLIND
   }
 
+  // WHEN EVERY ROW IS UNREADABLE, SAY WHY. A table of `unreadable` with no explanation reads as "the
+  // tool is broken" — and the cause is usually one operational fact (no token this process may read),
+  // which the user can act on in seconds once it is named. Diagnosing it here costs one file check.
+  // Keyed on the LIVE account, not on "all of them". A non-live account with no reading is expected —
+  // only its own credential can answer for it, and this machine may simply not have been on it since
+  // capture began. The LIVE account having none is the state a readable token would fix, and it is
+  // also the row a reader is most likely to be looking at.
+  let diagnosis = ''
+  const live = answer.accounts.find(a => a.isLive)
+  if ((live ? live.observedAt === null : true) || answer.accounts.every(a => a.observedAt === null)) {
+    const t = loadToken()
+    diagnosis = t.token
+      ? '\n\nNo account has a usage reading yet. A token IS readable, so the next refresh should fill '
+        + 'this — the server captures one at startup, hourly, and on every account change.'
+      : `\n\nNo account has a usage reading, and NO TOKEN is readable by this process (${t.reason}).`
+        + (t.reason === 'opt_in_required'
+          ? ' On macOS the credential lives in the login keychain and reading it is opt-in, because an\n'
+            + 'un-ACL\'d read pops a password prompt. To let the SERVER refresh these numbers, set\n'
+            + '  AGENTLENS_READ_KEYCHAIN_USAGE=1\n'
+            + 'in the environment it starts in, then `agentlenspro server restart`. Setting it only for\n'
+            + 'this CLI does nothing: the fetch happens server-side.'
+          : '')
+  }
+
   const text = argv.includes('--json')
     ? JSON.stringify(answer, null, 2)
     : `${table(answer.accounts.map(row))}\n\n${answer.note}`
-    + `\n\nReasons for every null are in --json; '*' marks the live account.`
+    + `\n\nReasons for every null are in --json; '*' marks the live account.${diagnosis}`
 
   if (outFile) {
     fs.mkdirSync(path.dirname(path.resolve(outFile)), { recursive: true })
