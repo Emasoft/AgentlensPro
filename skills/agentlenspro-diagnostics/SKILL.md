@@ -54,13 +54,14 @@ installs the server itself; the CLI starts it on demand.
 
 ## Version floor — check this FIRST if a command is "unknown"
 
-This document describes **agentlenspro 2.11.0+**. The `budget` and `watch` commands and the
-`get_lifecycle_events` / `get_cache_risk_costs` / `get_skill_attribution` /
-`get_loaded_plugin_versions` tools **do not exist before 2.11.0** — on an older install they fail
-as an unknown command or unknown tool, which reads like a broken skill rather than an old binary.
+This document describes **agentlenspro 2.21.0+**. `statusline-history` and its `--project` flag do
+not exist before **2.21.0**; the `budget` and `watch` commands and the `get_lifecycle_events` /
+`get_cache_risk_costs` / `get_skill_attribution` / `get_loaded_plugin_versions` tools do not exist
+before 2.11.0 — on an older install they fail as an unknown command or unknown tool, which reads
+like a broken skill rather than an old binary.
 
 ```bash
-agentlenspro --version          # < 2.11.0 ⇒ npm install -g agentlenspro@latest
+agentlenspro --version          # < 2.21.0 ⇒ npm install -g agentlenspro@latest
 ```
 
 If a Claude session cannot see this skill's newest content, that session loaded the skill at

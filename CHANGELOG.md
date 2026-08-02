@@ -4,6 +4,72 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.21.0] - 2026-08-02
+
+### Added
+
+- **`agentlenspro statusline-history` — the per-turn series Claude Code renders and never keeps.**
+  The status-line payload is the richest per-turn signal on the machine: the 5h/7d windows at full
+  float precision (every other source quantizes them to integers, a ±25% capacity error at low
+  fill), the context window split by cache_creation/cache_read, the harness's own tier-aware
+  `cost.total_cost_usd`, and — from `subagentStatusLine` — the **only** published per-subagent
+  `tokenCount` against `contextWindowSize`, with the `effort` it runs at and the `cwd` that marks a
+  worktree-isolated agent. It is captured into a compressed Parquet store (WAL → seal → ZSTD parts,
+  ~15–18× on real samples, 90-day retention) and read by a fileless DuckDB, so **queries work with
+  the server down** — which is exactly when someone is investigating a burn.
+
+  Views: `project` · `sessions` · `subagents` · `windows` · `peaks` · `cache`. `--project [DIR]`
+  narrows any of them to one repo — matching the workspace dirs **and** `cwd`, at the root or under
+  it, so worktree agents are included and a same-prefix sibling is not; bare `--project`, and the
+  `project` view on its own, mean the current directory. An empty result reads as **BLIND** (exit 1,
+  "cannot see") and is never reported as "no burn".
+
+- **`cache` view — the falsifier for a claimed cache miss.** Per-turn WRITE vs READ, with the cost
+  bracketed 5m/1h because the write rate is TTL-tiered and the tier is not in the payload. Validated
+  against the harness's own `cost_usd`: the 1h figure matches to four decimals on every sampled
+  turn, the 5m figure matches none.
+
+### Fixed
+
+- **A session's LIFETIME cost was billed as one turn on every server restart.** `total_cost_usd` is
+  cumulative, so re-meeting a live session at `prev = 0` differenced its whole history into a single
+  event — one account window read **$2,097.68** against 265,845 tokens, an implied $7,890/MTok
+  against a $25 ceiling. The first sample of a session now establishes a baseline instead of a
+  delta.
+- **`peaks` presented an interval as a turn.** Sampling stops while a session is idle, so the pair
+  bracketing an idle stretch carries every turn in between — a warm $0.35 turn read as a $5 cold
+  write. The view now carries the gap and labels anything over 60 s `INTERVAL`.
+- **One non-UUID session id blinded three of five views.** DuckDB infers a UUID-*shaped* string as
+  the UUID type **per file**, and `UNION ALL BY NAME` then reconciles a VARCHAR file into it and dies
+  (`Could not convert string 'x' to INT128`). Sources are normalized one file at a time, under a
+  zero-row typed template that also guarantees every queried column BINDS — a column absent from
+  every file in the window is a hard binder error that takes the whole view down, and the workspace
+  block hits it on the entire subagent stream.
+- **A WAL whose records could not be read was sealed anyway**, as all-NULL rows over a row count that
+  passed verify-before-delete. One malformed line collapses DuckDB's inference to a single opaque
+  `json` column; the store now refuses to seal that file rather than converting a recoverable
+  degradation into permanent data loss.
+- **An unreachable server froze the status line for 10.6 s per render**, and the same stall hit
+  `hook` and `gate` on every tool call. The timeout was firing correctly — it bounds the REQUEST,
+  while the aborted socket keeps the event loop alive. The paired fix is that a hot-path command
+  which exits early must still flush stdout past the ~64 KiB pipe buffer, or `gate`'s verdict is
+  truncated into a corrupted safety decision.
+- Samples filed near a UTC-day boundary read as BLIND rather than as themselves; orphaned WALs from
+  dead pids stayed raw instead of being sealed; `tasks[]` fields are read through JSON so a key
+  missing from one part cannot kill the `subagents` view; one billing event is emitted per TURN, not
+  per status-line render.
+- **The account-window numbers were wrong three ways**, and `budget` rode the worst of them: a
+  pre-upgrade cache file was reported as another account's, the window was labelled from the config
+  file's claim rather than the token's own account, and `budget` now reports every model-scoped
+  window by name and says which one binds.
+- **Injected MEMORY files are named in cache-break analysis** instead of being filed as
+  `UNCLASSIFIED`.
+
+### Changed
+
+- `ctxmap` caches exact counts and no longer uploads the preamble that cancels out; the fast paths
+  now run the same checks that made the slow path trustworthy.
+
 ## [2.20.0] - 2026-07-31
 
 ### Added
