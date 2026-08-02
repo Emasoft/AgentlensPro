@@ -17,7 +17,7 @@ import {
   apiRequest, callTool, dashboardUrl, dataDir, digest, fetchTools, firstSentence, fmtGb,
   fmtMb, init, mcpEndpoint, parseWhen, resolveTool, sleep, ToolInfo, ToolSchema,
 } from './cliCore'
-import { EXIT } from './cliErrors'
+import { EXIT, UsageError } from './cliErrors'
 import { installHooks, installOtel, installSkills, installStatusline } from './hookInstall'
 import { ensureServer, openDashboard, showStatus, stopServer } from './serverControl'
 
@@ -387,7 +387,7 @@ export function parseToolFlags(rest: string[], schema: ToolSchema | undefined): 
   const args: Record<string, unknown> = {}
   for (let i = 0; i < rest.length; i++) {
     const tok = rest[i]
-    if (!tok.startsWith('--')) throw new Error(`unexpected argument "${tok}" — params are flags: --name value`)
+    if (!tok.startsWith('--')) throw new UsageError(`unexpected argument "${tok}" — params are flags: --name value`)
     const rawName = tok.slice(2)
     const cand = camel(rawName)
     let key = known.get(cand.toLowerCase())
@@ -399,13 +399,13 @@ export function parseToolFlags(rest: string[], schema: ToolSchema | undefined): 
       type = GLOBAL_PARAMS[cand]
     } else {
       const valid = [...Object.keys(props), ...Object.keys(GLOBAL_PARAMS)].map(k => `--${k}`).join(' ')
-      throw new Error(`unknown flag --${rawName}. Valid: ${valid}`)
+      throw new UsageError(`unknown flag --${rawName}. Valid: ${valid}`)
     }
     const next = rest[i + 1]
     if (next === undefined || next.startsWith('--')) {
       // Bare flag: only meaningful for booleans (--flag ≡ --flag true).
       if (type === 'boolean') { args[key] = true; continue }
-      throw new Error(`--${rawName} needs a value`)
+      throw new UsageError(`--${rawName} needs a value`)
     }
     args[key] = coerce(rawName, next, type)
     i++
@@ -527,13 +527,13 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
     else if (argv[i] === '--purge-bodies') ops.purgeBodies = true
     else if (argv[i] === '--export-bodies') {
       ops.exportBodies = argv[++i]
-      if (!ops.exportBodies) throw new Error('--export-bodies needs a destination directory')
+      if (!ops.exportBodies) throw new UsageError('--export-bodies needs a destination directory')
     } else if (argv[i] === '--since') {
       ops.since = argv[++i]
-      if (!ops.since) throw new Error('--since needs a value (ISO timestamp or hours)')
+      if (!ops.since) throw new UsageError('--since needs a value (ISO timestamp or hours)')
     } else if (argv[i] === '--until') {
       ops.until = argv[++i]
-      if (!ops.until) throw new Error('--until needs a value (ISO timestamp)')
+      if (!ops.until) throw new UsageError('--until needs a value (ISO timestamp)')
     }
     else if (argv[i] === '--install-skill') ops.installSkill = true
     else if (argv[i] === '--guard') {
@@ -554,7 +554,7 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
     else if (argv[i] === '--uninstall-statusline') statuslineOp = 'uninstall'
     else if (argv[i] === '--out') {
       globals.out = argv[++i]
-      if (!globals.out) throw new Error('--out needs a path')
+      if (!globals.out) throw new UsageError('--out needs a path')
     } else rest.push(argv[i])
   }
 
@@ -700,7 +700,7 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
   const tools = await fetchTools()
   const t = resolveTool(tools, CMD_ALIASES[cmd] ?? cmd)
   if (!t) {
-    throw new Error(`unknown command or tool "${cmd}". Tools:\n  ${tools.map(x => x.name).join('\n  ')}`)
+    throw new UsageError(`unknown command or tool "${cmd}". Tools:\n  ${tools.map(x => x.name).join('\n  ')}`)
   }
   if (rest.slice(1).includes('--help') || rest.slice(1).includes('-h')) {
     console.log(renderHelp(t))

@@ -12,6 +12,7 @@
 // esbuild.js — cli.js requires the sibling server.js bundle at runtime instead of inlining a
 // second copy of the whole server.
 import { cliMain } from '../src/cli/main'
+import { EXIT, UsageError } from '../src/cli/cliErrors'
 
 cliMain(process.argv.slice(2), () => import('./server'))
   // `code || process.exitCode` and not a bare assignment: a command that COMPLETED (returns 0) may
@@ -21,5 +22,8 @@ cliMain(process.argv.slice(2), () => import('./server'))
   .then(code => { process.exitCode = code || process.exitCode || 0 })
   .catch(e => {
     console.error(`FAIL: ${(e as Error).message}`)
-    process.exit(1)
+    // EX_USAGE for a caller mistake, 1 only for a runtime failure: 1 doubles as the watchers'
+    // ABORT signal, so a typo'd tool name or flag must never read as a legitimate abort — and
+    // the tool help has promised "64 = bad command line" since issue #9.
+    process.exit(e instanceof UsageError ? EXIT.USAGE : 1)
   })

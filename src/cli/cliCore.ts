@@ -10,6 +10,7 @@
 import * as http from 'http'
 import * as os from 'os'
 import * as path from 'path'
+import { UsageError } from './cliErrors'
 
 /** MCP JSON-RPC endpoint of the running server. */
 export function mcpEndpoint(): string {
@@ -185,6 +186,6 @@ export function parseWhen(v: string | undefined, flag: string): number | undefin
   if (v === undefined) return undefined
   if (/^\d+(\.\d+)?$/.test(v)) return Date.now() - Number(v) * 3600e3 // bare number = hours ago
   const t = Date.parse(v)
-  if (Number.isNaN(t)) throw new Error(`--${flag} expects an ISO date or a number of hours, got "${v}"`)
+  if (Number.isNaN(t)) throw new UsageError(`--${flag} expects an ISO date or a number of hours, got "${v}"`)
   return t
 }

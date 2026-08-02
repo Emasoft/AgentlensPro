@@ -148,7 +148,7 @@ suite('agentlenspro — diagnostics dispatch parity (absorbed agentlens-cli.js s
     } finally { await stub.close(); fs.rmSync(home, { recursive: true, force: true }) }
   })
 
-  test('an unknown flag fails fast (non-zero) with the valid flag list — never a silently-ignored argument', async () => {
+  test('an unknown flag exits 64 (EX_USAGE) with the valid flag list — never silently ignored, never mistaken for an abort', async () => {
     const home = mkHome()
     const stub = await startMcpStub(
       [{ name: 'get_burn_status', description: 'x', inputSchema: { properties: { topN: { type: 'number' } } } }],
@@ -156,9 +156,22 @@ suite('agentlenspro — diagnostics dispatch parity (absorbed agentlens-cli.js s
     )
     try {
       const r = await runCli(['get_burn_status', '--nope', '1'], isolatedEnv(home, { AGENTLENS_MCP_URL: stub.url }))
-      assert.notStrictEqual(r.code, 0, 'unknown flag must exit non-zero')
+      assert.strictEqual(r.code, 64, 'a bad flag must exit EX_USAGE 64 — the tool help promises it, and 1 is the watch ABORT signal')
       assert.ok(r.stderr.includes('unknown flag --nope'), r.stderr)
       assert.ok(!stub.calls.some(c => c.method === 'tools/call'), 'no tool call may be issued for a bad flag')
+    } finally { await stub.close(); fs.rmSync(home, { recursive: true, force: true }) }
+  })
+
+  test('an unknown COMMAND exits 64 (EX_USAGE) and names the valid tools — a typo must not look like a runtime failure', async () => {
+    // Field defect (issue #9 follow-up): a typo'd tool name exited 1 — the same code budget/watch
+    // use for "abort the guarded run" — while the tool help had promised "64 = bad command line".
+    const home = mkHome()
+    const stub = await startMcpStub([{ name: 'get_burn_status', description: 'x' }], () => ({}))
+    try {
+      const r = await runCli(['get_burn_statsu'], isolatedEnv(home, { AGENTLENS_MCP_URL: stub.url }))
+      assert.strictEqual(r.code, 64, `stderr: ${r.stderr}`)
+      assert.ok(r.stderr.includes('get_burn_status'), 'the refusal must name the valid tools')
+      assert.ok(!stub.calls.some(c => c.method === 'tools/call'), 'nothing may execute on a typo')
     } finally { await stub.close(); fs.rmSync(home, { recursive: true, force: true }) }
   })
 
