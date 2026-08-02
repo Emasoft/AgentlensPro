@@ -60,7 +60,9 @@ const HTTP_TIMEOUT_MS = 8_000
 export interface UsageLimit {
   kind: string                 // session | weekly_all | weekly_scoped | …
   group: string                // session | weekly
-  percent: number
+  /** null when the payload had no parseable percentage. NEVER 0 for that case — 0 means "this window
+   *  is empty", which is the most dangerous thing a consumer can be told about a window nobody read. */
+  percent: number | null
   severity: string             // normal | critical
   resetsAt: string | null
   isActive: boolean
@@ -114,7 +116,10 @@ export interface SubscriptionUsage {
   note: string
 }
 
-interface RawWindow { utilization?: unknown; resets_at?: unknown }
+// Both spellings, because the endpoint has used both. `ccbroker` measured this against the live API
+// and tolerates the pair; we accepted only `utilization`, so a response using the other spelling read
+// as "no window" — a null where a real number existed.
+interface RawWindow { utilization?: unknown; used_percentage?: unknown; resets_at?: unknown }
 interface RawLimit {
   kind?: unknown; group?: unknown; percent?: unknown; severity?: unknown
   resets_at?: unknown; is_active?: unknown
@@ -293,6 +298,45 @@ function secsUntil(iso: string | null, now: number): number | null {
   return isNaN(t) ? null : Math.round((t - now) / 1000)
 }
 
+/** A window's fill, whichever way the endpoint spelled it this time. Both are percentages (0-100). */
+export function windowPct(w: RawWindow | null | undefined): number | null {
+  for (const v of [w?.utilization, w?.used_percentage]) {
+    if (typeof v === 'number' && isFinite(v)) return v
+  }
+  return null
+}
+
+/** `resets_at` in every shape the endpoint has produced, normalized to an ISO string.
+ *
+ *  MEASURED BY `ccbroker` AGAINST THE LIVE API: it may be a unix timestamp in SECONDS or in
+ *  MILLISECONDS, as a JSON number or as a numeric string, or an RFC3339 string. We accepted only the
+ *  string form, so a numeric epoch became `null` — and a null `resetsAt` silently disables the
+ *  already-reset check in `deriveStale()` and the `rolled` verdict in allAccounts.ts. A window that
+ *  had rolled would then be served as if it were current, which is exactly the four-days-stale 96%
+ *  incident `deriveStale`'s own comment was written after.
+ *
+ *  The 1e12 threshold is ccbroker's: below it the value cannot plausibly be milliseconds (1e12 ms is
+ *  2001), so it is seconds. */
+export function normalizeResetsAt(raw: unknown): string | null {
+  let n: number | null = null
+  if (typeof raw === 'number' && isFinite(raw)) {
+    n = raw
+  } else if (typeof raw === 'string') {
+    const s = raw.trim()
+    if (s === '') return null
+    if (/^\d+(\.\d+)?$/.test(s)) {
+      n = Number(s)
+    } else {
+      const t = Date.parse(s)
+      return isNaN(t) ? null : s          // already a date string — keep it verbatim
+    }
+  }
+  if (n === null) return null
+  const ms = n < 1e12 ? n * 1000 : n
+  const d = new Date(ms)
+  return isNaN(d.getTime()) ? null : d.toISOString()
+}
+
 export function normalize(
   body: RawUsage,
   fetchedAt: number,
@@ -304,11 +348,15 @@ export function normalize(
 ): SubscriptionUsage {
   const num = (v: unknown): number | null => typeof v === 'number' && isFinite(v) ? v : null
   const limits: UsageLimit[] = (Array.isArray(body.limits) ? body.limits : []).map(l => {
-    const resetsAt = typeof l.resets_at === 'string' ? l.resets_at : null
+    const resetsAt = normalizeResetsAt(l.resets_at)
     return {
       kind: typeof l.kind === 'string' ? l.kind : 'unknown',
       group: typeof l.group === 'string' ? l.group : 'unknown',
-      percent: num(l.percent) ?? 0,
+      // NOT `?? 0`. A percentage that could not be parsed is UNKNOWN, and rendering it as an empty
+      // window is the single worst substitution this module can make — every consumer downstream reads
+      // 0 as "all the headroom in the world". The one place that formats it prints `?`, and the two
+      // that compute on it already skip a null.
+      percent: num(l.percent),
       severity: typeof l.severity === 'string' ? l.severity : 'normal',
       resetsAt,
       isActive: l.is_active === true,
@@ -334,8 +382,8 @@ export function normalize(
     accountVerified: accountFp === null ? 'unknown' : 'yes',
     reason,
     limits,
-    fiveHourPercent: num(body.five_hour?.utilization),
-    sevenDayPercent: num(body.seven_day?.utilization),
+    fiveHourPercent: windowPct(body.five_hour),
+    sevenDayPercent: windowPct(body.seven_day),
     usageCreditsEnabled: typeof body.extra_usage?.is_enabled === 'boolean' ? body.extra_usage.is_enabled : null,
     spendPercent: num(body.spend?.percent),
     note: 'Utilization is Anthropic\'s own figure for this account (the numbers /usage shows), not a '
@@ -673,7 +721,11 @@ export function formatSubscriptionUsage(u: SubscriptionUsage | null): string {
     // A countdown computed from a CACHED resets_at renders as live for a window that may already
     // have rolled — so it is suppressed entirely while stale, not merely annotated.
     const reset = u.stale ? '' : `  resets ${humanReset(l.resetsInSeconds)}`
-    lines.push(`  ${(l.kind + scope).padEnd(22)} ${usageBar(l.percent)} ${String(l.percent).padStart(3)}%  ${l.severity}${reset}`)
+    // An unparseable percentage renders as `?`, not as an empty bar. A drawn-empty bar is read as
+    // "nothing used" at a glance, which is the opposite of "we do not know".
+    const bar = l.percent === null ? '[unreadable]' : usageBar(l.percent)
+    const pct = l.percent === null ? '  ?' : String(l.percent).padStart(3)
+    lines.push(`  ${(l.kind + scope).padEnd(22)} ${bar} ${pct}%  ${l.severity}${reset}`)
   }
   if (u.usageCreditsEnabled !== null) {
     lines.push(`  usage credits: ${u.usageCreditsEnabled ? 'ENABLED — prompt-cache TTL drops to 5 min' : 'disabled — 1-hour prompt-cache TTL active'}`)

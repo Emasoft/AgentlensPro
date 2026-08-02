@@ -11,7 +11,7 @@ import * as os from 'os'
 import * as path from 'path'
 import {
   usageBar, retryAfterSeconds, normalize, formatSubscriptionUsage, loadToken,
-  archiveAccountUsage, listObservedAccountUsage,
+  archiveAccountUsage, listObservedAccountUsage, windowPct, normalizeResetsAt, deriveStale,
   type SubscriptionUsage,
 } from '../subscriptionUsage'
 
@@ -231,5 +231,55 @@ suite('subscription usage — the per-account archive', () => {
 
   test('reading an empty archive is [] — and it is the caller who must not call that "no accounts"', () => {
     inDataDir(() => { assert.deepStrictEqual(listObservedAccountUsage(), []) })
+  })
+})
+
+// ─── Payload tolerance (issue #8, phase 3) ───────────────────────────────────────────────────────
+//
+// The shapes below were MEASURED against the live endpoint by `ccbroker` (an independent
+// reimplementation in the account-switcher corpus). We accepted exactly one spelling of each, so a
+// response using another read as "no data" — and a null `resetsAt` silently disables both the
+// already-reset check in deriveStale() and the `rolled` verdict in allAccounts.ts, which is how a
+// window that had already rolled gets served as current.
+suite('subscription usage — the payload is looser than one schema', () => {
+  test('the window percentage is accepted under EITHER spelling', () => {
+    assert.strictEqual(windowPct({ utilization: 42 }), 42)
+    assert.strictEqual(windowPct({ used_percentage: 42 }), 42, 'the spelling we used to drop')
+    assert.strictEqual(windowPct({}), null, 'absent stays null — never 0')
+    assert.strictEqual(windowPct(undefined), null)
+    assert.strictEqual(windowPct({ utilization: 'nope' }), null, 'a non-number is unknown, not 0')
+  })
+
+  test('resets_at is accepted as seconds, ms, a numeric string, or RFC3339', () => {
+    const ms = Date.parse('2026-08-05T15:59:59.000Z')
+    const secs = Math.floor(ms / 1000)
+    assert.strictEqual(normalizeResetsAt(ms), '2026-08-05T15:59:59.000Z', 'unix ms')
+    assert.strictEqual(normalizeResetsAt(secs), '2026-08-05T15:59:59.000Z', 'unix SECONDS')
+    assert.strictEqual(normalizeResetsAt(String(secs)), '2026-08-05T15:59:59.000Z', 'numeric string')
+    assert.strictEqual(normalizeResetsAt('2026-08-05T15:59:59Z'), '2026-08-05T15:59:59Z', 'RFC3339 kept verbatim')
+    assert.strictEqual(normalizeResetsAt(null), null)
+    assert.strictEqual(normalizeResetsAt(''), null)
+    assert.strictEqual(normalizeResetsAt('not a date'), null)
+  })
+
+  test('a numeric resets_at reaches the parsed limit, so the already-reset check can fire', () => {
+    // The end-to-end shape of the bug: a numeric epoch used to become null, and a null resetsAt makes
+    // deriveStale() skip the reset check entirely — serving a window that no longer exists as current.
+    const past = Math.floor((NOW - 3_600_000) / 1000)          // seconds, and already elapsed
+    const u = normalize({ limits: [{ kind: 'session', group: 'session', percent: 96, resets_at: past }] },
+      NOW, 'ok', NOW)
+    assert.ok(u.limits[0].resetsAt !== null, 'the timestamp must survive parsing')
+    assert.strictEqual(deriveStale(u, NOW), true, 'and an elapsed window must mark the reading stale')
+  })
+
+  test('an unparseable percentage stays null and never becomes 0', () => {
+    // 0 means "this window is empty" — the most dangerous substitution available, since every
+    // consumer reads it as all the headroom in the world.
+    const u = normalize({ limits: [{ kind: 'session', group: 'session', resets_at: '2026-08-05T15:59:59Z' }] },
+      NOW, 'ok', NOW)
+    assert.strictEqual(u.limits[0].percent, null)
+    const text = formatSubscriptionUsage(u)
+    assert.ok(text.includes('?'), 'and it renders as unknown')
+    assert.ok(!/\b0%/.test(text), 'never as 0%')
   })
 })

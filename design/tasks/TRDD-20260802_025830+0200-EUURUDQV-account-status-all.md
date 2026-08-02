@@ -1,9 +1,9 @@
 ---
 trdd-id: EUURUDQV
 title: get_account_status --all — every observed account, honestly stamped
-column: todo
+column: ai_review
 created: 2026-08-02T02:58:30+0200
-updated: 2026-08-02T03:55:00+0200
+updated: 2026-08-02T04:20:00+0200
 current-owner: unassigned
 task-type: feature
 npt: []
@@ -109,21 +109,40 @@ Roster (`account-state.ndjson` — the ONLY source that knows an account exists)
 guard 1, omitting unreadable accounts 2, live account inheriting a stale leftAt 1, verdict taking the
 better window 1).
 
-## Phase 3 — payload normalization the corpus measured against the live endpoint
+## Phase 3 — payload normalization the corpus measured against the live endpoint — ✅ DONE
 
-- [ ] Accept `utilization` **or** `used_percentage` for the percentage.
-- [ ] Accept `resets_at` as unix **seconds or ms**, as a **number or numeric string**, or **RFC3339**
-      (`ccbroker`'s `secOrMsToMs`, `< 1e12` ⇒ seconds).
-- [ ] **Model-scoped weekly buckets must not count toward an account-wide "spent" verdict** — a spent
-      per-model bucket does not block other models. Check `budget`'s model-scoped reporting against this.
+- [x] `windowPct()` accepts `utilization` **or** `used_percentage`.
+- [x] `normalizeResetsAt()` accepts unix **seconds or ms**, as a **number or numeric string**, or
+      **RFC3339** (kept verbatim). The `< 1e12 ⇒ seconds` threshold is ccbroker's.
+      **This was not cosmetic**: we accepted only the string form, so a numeric epoch became `null` —
+      and a null `resetsAt` silently disables BOTH the already-reset check in `deriveStale()` and the
+      `rolled` verdict, serving a window that no longer exists as if it were current. That is the same
+      failure `deriveStale`'s own comment was written after (a weekly window that rolled on 07-28 still
+      being reported as a current 96% four days later).
+- [x] **A third bug, found while in there:** `percent: num(l.percent) ?? 0` turned an unparseable
+      percentage into **0** — "this window is empty", the most dangerous substitution available, since
+      every consumer reads it as all the headroom in the world. `UsageLimit.percent` is now
+      `number | null`; the formatter prints `?` and `[unreadable]` rather than an empty bar, and the
+      two computing consumers already skipped nulls.
+- [x] Model-scoped weekly buckets are kept out of the account verdict (done in phase 2; `budget`'s
+      `officialBuckets` already reports them by model name, which was already correct).
+- [x] 4 tests, each verified to fail against its own broken version (single spelling, string-only
+      resets_at, `?? 0`, seconds-as-ms).
 
 ## Verification
 
-- [ ] Regression tests **verified to fail** against the unfixed version — in particular a `rolled` row
-      computed from a synthetic observation whose `resetsAt` is in the past, and an `unreadable` row that
-      must not collapse into a missing entry.
-- [ ] A sample payload handed to ai-maestro to test the rotator against **before the shape is frozen**
-      (offered in the issue comment).
+- [x] Regression tests verified to fail against the unfixed version — 20 tests across the three
+      phases, 14 mutations each confirmed to be caught.
+- [x] A real sample posted to issue #8 for ai-maestro to test the rotator against before the shape is
+      frozen.
+- [ ] **AWAITING ai-maestro's response on the payload shape.** That is the only thing left; the shape
+      is deliberately not frozen until the rotator has run against it.
+
+## Still open
+
+- [ ] Retention for the per-account archive. Nothing purges it today, which is correct for now
+      (records are ~1 KB and their whole value is age) but undecided.
+- [ ] The `has_extra_usage_enabled` lead below.
 
 ## Open lead, not a confirmed bug
 

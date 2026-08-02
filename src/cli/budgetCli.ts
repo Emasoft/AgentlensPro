@@ -113,7 +113,9 @@ export function officialBuckets(u: SubscriptionUsage | null, windowKey: string):
   return u.limits
     .filter(l => want(l.kind) && typeof l.percent === 'number' && isFinite(l.percent))
     // Model-scoped buckets are named by their model; that name is what the reader acts on.
-    .map(l => ({ label: l.scopeLabel ?? (l.kind === 'weekly_all' ? '7d' : l.kind === 'session' ? '5h' : l.kind), pct: l.percent }))
+    // The filter above already dropped every null percent, so the assertion is what the predicate
+    // proved — it is not narrowing a maybe into a definitely.
+    .map(l => ({ label: l.scopeLabel ?? (l.kind === 'weekly_all' ? '7d' : l.kind === 'session' ? '5h' : l.kind), pct: l.percent as number }))
 }
 
 /** The bucket that actually binds — the fullest one, because either cap can be the one that stops
