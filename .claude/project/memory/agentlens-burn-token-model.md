@@ -120,6 +120,11 @@ doctrine governed by this model, per its own "Governed by" line); [[always-on-in
 model this page's cost figures depend on); [[otlp-ingest-topology]] (cites this page's rich-event
 drift lesson — the "second router is a second truth" trap).
 
+
+^ATOM-4QBH-SS0F [desc:"Which tool answers which sub-agent question — fleet tree vs single agent vs context composition vs prefix survival", keywords: how_much_context_does_each_sub-agent_use per-subagent_token_cost which_agent_is_burning_the_window fleet_cost_after_a_fan-out fork_vs_fresh_spawn_cost subagent_spawn_tree agent_down-arrow_number_is_not_cost, type: reference, ocd: 2026-08-02, lmd: 2026-08-02]
+
+Three tools answer "what is every sub-agent costing me", and they are not interchangeable. `get_subagent_tree --sessionId <any node in the tree>` is the FLEET view: every child with its spawn-KIND (fork = cache-warm; fresh/worktree/fleet = cache-cold), model (inherited vs override), spawning turn, rolled-up tokens and cost — plus `spawnRollup` with named antipatterns (FLEET-COLD = 3+ cold children re-billing the inherited prefix, WORKTREE-SCATTER, MODEL-MIX), each with its aggregate waste and a one-line remediation. The root resolves automatically from any node, so a child id is enough. `get_agent_tokens --agentId <id>` is the SINGLE-agent view: the four disjoint billing buckets, cost_usd, spawn metadata, and `lastTurnContextRead` — the live context-size proxy. Its `ccDisplayEquivalent` reconciles with Claude Code's per-agent down-arrow footer, which is VOLUME MOVED, not billing — quote cost_usd for spend, never the arrow. An async child with no transcript is flagged `asyncTokensUnknown` (unknown, NOT measured-free). `ctxmap` decomposes ONE agent's context at STARTUP; `ctxvis` measures whether its prefix SURVIVES into turn 2, which is the number that decides the recurring bill. Call the tree BEFORE a fan-out to pick the cheaper spawn shape, not only after to explain the invoice.
+
 ## Notes and lessons learned
 [^1]: [id:ATOM-STATUSLINE-BUCKET-SPLIT, status:valid, keywords:"statusline_breakdown_landed_in_unknown per_bucket_split_missing_no_otel_sessions StatuslineBillingEvent_commit", ocd:2026-07-08, lmd:2026-07-08] The statusline event path originally carried only a total
   (`deltaTokens`), so the per-bucket breakdown landed 100% in `unknown` for exactly the no-OTEL sessions
