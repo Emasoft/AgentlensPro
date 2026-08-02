@@ -171,8 +171,8 @@ export function projectPredicate(p: string): string {
   const root = p.replace(/\/+$/, '')
   const exact = sqlStr(root)
   // Escape LIKE's own wildcards inside the path before it becomes a pattern: `_` matches ANY single
-  // character, so `--project /home/u/my_project` would silently also match `/home/u/myXproject`,
-  // and a `%` matches anything at all. ESCAPE makes the path mean itself, literally.
+  // character, so `--project /a/my_project` would silently also match `/a/myXproject`, and a `%`
+  // matches anything at all. ESCAPE makes the path mean itself, literally.
   const under = sqlStr(`${root.replace(/[\\%_]/g, m => `\\${m}`)}/%`)
   return `(${['workspace_project_dir', 'workspace_current_dir', 'cwd']
     .map(c => `${c} = ${exact} OR ${c} LIKE ${under} ESCAPE '\\'`).join(' OR ')})`
