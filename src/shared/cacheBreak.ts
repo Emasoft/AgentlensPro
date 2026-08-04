@@ -79,6 +79,7 @@ const REMEDIATION: Record<CacheBreakCause, string> = {
   UPGRADE:                'A Claude Code upgrade invalidates the cache once — unavoidable, but do not resume large sessions right after upgrading.',
   RESUME_AFTER_UPGRADE:   'Resuming after an upgrade forces a full re-read (the most expensive turn) — avoid resuming huge sessions post-upgrade.',
   IDLE_TTL_EXPIRY:        'A >5-min idle gap let the cache expire; keep turns within the TTL or accept the one-time re-warm.',
+  UNATTRIBUTABLE:         'A real cold write (more written than read) with nothing in the block diff to blame. Do NOT guess a culprit from timing or plausibility — run get_cache_break_timeline, which diffs the raw request bodies against their actual cache_control breakpoints.',
   UNKNOWN:                'Cause could not be localised from the block diff; inspect the raw prefix around this turn.',
 }
 
@@ -180,11 +181,14 @@ function classifyTurn(prev: CacheTurnInput, cur: CacheTurnInput, opts: AnalyzeCa
     ? cur.timestampMs - prev.timestampMs : undefined
   const wasted = cur.cacheCreateTokens
 
-  const emit = (cause: CacheBreakCause, label?: string, kind?: string, gap?: number, confidence?: 'high' | 'medium'): CacheBreakTurn => ({
+  const emit = (
+    cause: CacheBreakCause, label?: string, kind?: string, gap?: number,
+    confidence?: 'high' | 'medium' | 'low', attribution?: CacheBreakTurn['attribution'],
+  ): CacheBreakTurn => ({
     turn: cur.turn, broke: true, cause,
     breakSourceLabel: label, breakSourceKind: kind,
     wastedTokens: wasted, wastedCostUsd: priceWaste(wasted, opts),
-    idleGapMs: gap, remediation: REMEDIATION[cause], confidence, tsMs: cur.timestampMs,
+    idleGapMs: gap, remediation: REMEDIATION[cause], confidence, attribution, tsMs: cur.timestampMs,
   })
 
   // 1. Model switch — a full, model-specific invalidation, dominates any block diff.
@@ -218,13 +222,31 @@ function classifyTurn(prev: CacheTurnInput, cur: CacheTurnInput, opts: AnalyzeCa
       undefined, churnedCatalogs.size >= 3 ? 'high' : 'medium')
   }
   // 3. A localizable stable-block divergence (the common structural break).
+  //
+  // MARKED `block-diff-only` / confidence `low`, and that is not hedging — it is the honest
+  // provenance. This is a SET DIFF with no breakpoint model, while the API caches the prefix ending
+  // at a `cache_control` breakpoint and looks back at most 20 blocks. So a block changing AFTER the
+  // governing breakpoint cannot have caused the miss, and a break can occur with NO block changed.
+  // Measured 2026-08-04: `system[0]` changes on every single request while those turns bill 0.3-0.7%
+  // write — proof that "the first block that changed" is not what decides a hit. This path cannot
+  // do better (ContextSource carries no positions and no cache_control), so it must not present its
+  // guess as a verdict. For a breakpoint-verified answer use get_cache_break_timeline, which reads
+  // the raw bodies. (TRDD-V8YOWHVT)
   const diverged = firstDivergentBlock(prev.sources, cur.sources)
-  if (diverged) return emit(causeForKind(diverged.kind), diverged.label, diverged.kind)
+  if (diverged) return emit(causeForKind(diverged.kind), diverged.label, diverged.kind, undefined, 'low', 'block-diff-only')
   // 4. No block diff but a long idle gap with a real re-write → the entry expired (one-time).
   if (idleGapMs !== undefined && idleGapMs > idleTtl && cur.cacheCreateTokens > 0) {
     return emit('IDLE_TTL_EXPIRY', undefined, undefined, idleGapMs)
   }
-  // 5. No localizable cause — expected conversation growth, NOT flagged as an avoidable break.
+  // 5. Nothing localisable — but "nothing to point at" covers two situations that must not be
+  //    conflated, because doing so hides the costliest event this analyzer exists to surface:
+  //    - a MODEST write with no divergence is expected suffix writing. Not a break. Stays silent.
+  //    - a write that DOMINATES the turn (more written than read) with nothing to blame is a real
+  //      cold rewrite we cannot name. Reporting that as "no break" makes it invisible; inventing a
+  //      culprit for it is worse. Report it, unnamed. (TRDD-V8YOWHVT)
+  if (wasted > 0 && wasted > cur.cacheReadTokens) {
+    return emit('UNATTRIBUTABLE', undefined, undefined, idleGapMs, 'low', 'block-diff-only')
+  }
   return {
     turn: cur.turn, broke: false, cause: 'UNKNOWN',
     wastedTokens: 0, wastedCostUsd: 0, idleGapMs,
@@ -357,5 +379,5 @@ export const CAUSE_LABEL: Record<CacheBreakCause, string> = {
   ACCOUNT_SWITCHED: 'Account switched',
   TOOL_DENY: 'Tool denied', INJECTED_BLOCK_CHANGED: 'Injected block changed',
   COMPACTION: 'Compaction', UPGRADE: 'Upgrade', RESUME_AFTER_UPGRADE: 'Resume after upgrade',
-  IDLE_TTL_EXPIRY: 'Idle TTL expiry', UNKNOWN: 'Unknown',
+  IDLE_TTL_EXPIRY: 'Idle TTL expiry', UNATTRIBUTABLE: 'Unattributable cold write', UNKNOWN: 'Unknown',
 }

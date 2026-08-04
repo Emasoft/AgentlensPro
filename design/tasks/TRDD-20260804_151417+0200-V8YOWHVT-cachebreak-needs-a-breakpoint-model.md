@@ -11,7 +11,34 @@ relevant-rules: []
 
 # cacheBreak.ts attributes cache breaks with no model of `cache_control` breakpoints
 
-## The defect
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-04 15:4x
+
+**The body below OVERSTATES the defect. Corrected after reading the code rather than inferring it.**
+
+- `src/cacheBreakTimeline.ts` (the RAW-BODY path, behind `get_cache_break_timeline`) **already models
+  the message-level breakpoint**: `extractTurnPrefix` diffs the tools array + the system array + the
+  message blocks *"up to and including the LAST message-level `cache_control` breakpoint (everything
+  after that is the volatile current-turn tail … excluded from the break diff)"*. So the
+  `HOOK_INJECTION` verdict that triggered this card is **better founded than I claimed**, and the
+  blanket statement "our classifier has no breakpoint model" was wrong.
+- `src/shared/cacheBreak.ts` (the COMPOSITION path, behind the webview Cache tab and
+  `CacheBreakCause`) has **no** breakpoint model and structurally cannot acquire one: its input is
+  `ContextSource[]`, which carries neither block positions nor `cache_control`. This half of the
+  defect stands in full.
+- **Still open, and now the sharpest question:** `extractTurnPrefix` includes the **whole system
+  array**, ignoring the system-level breakpoints measured at `system[2]`/`system[3]`. `system[0]`
+  (the billing header) changes on EVERY request, so any turn it classifies has a guaranteed
+  system-tier divergence. Whether that produces false attribution depends on how `segmentInjected`
+  splits that text — **NOT YET VERIFIED. Do not assume either way.**
+
+**NEXT ACTION:** make `cacheBreak.ts` stop claiming a culprit it cannot justify (add an explicit
+attribution provenance + `UNATTRIBUTABLE`), then verify the `segmentInjected`/`system[0]` question
+against real bodies before touching `cacheBreakTimeline.ts` at all.
+
+**SUPERSEDED — do NOT carry forward:** "our cache-break classifier has no breakpoint model" as a
+statement about the product as a whole; it is true only of the composition path.
+
+## The defect (as originally written — read with the STATE block above)
 
 `analyzeCacheBreaks` / `firstDivergentBlock` (`src/shared/cacheBreak.ts`) name a culprit by
 **set-diffing the injected context blocks between two turns and taking the first one that changed**.

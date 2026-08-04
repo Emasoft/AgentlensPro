@@ -96,7 +96,13 @@ suite('cacheBreak PLUGINS_RELOADED (TRDD-EYA3X5MQ — /reload-plugins multi-cata
     const r = analyzeCacheBreaks('s', reloadTurns(
       [src('toolCatalog', 'tools', 100), src('skill', 'skills', 250), src('agentCatalog', 'agents', 50)]))
     assert.notStrictEqual(r.turns[1].cause, 'PLUGINS_RELOADED')
-    assert.strictEqual(r.turns[1].confidence, undefined)
+    // This used to assert `confidence === undefined` as a PROXY for "not a reload". That proxy died
+    // when TRDD-V8YOWHVT gave every set-diff attribution `confidence: 'low'`. Assert the intent
+    // directly instead — and more strictly than before: it is a low-confidence, set-diff-derived
+    // single-block attribution, NOT a reload verdict (which alone carries 'high'/'medium').
+    assert.strictEqual(r.turns[1].attribution, 'block-diff-only')
+    assert.strictEqual(r.turns[1].confidence, 'low')
+    assert.ok(!['high', 'medium'].includes(String(r.turns[1].confidence)), 'reload confidences must not appear here')
   })
 
   test('catalogs appearing for the FIRST time (session warmup) is NOT a reload', () => {
@@ -108,5 +114,61 @@ suite('cacheBreak PLUGINS_RELOADED (TRDD-EYA3X5MQ — /reload-plugins multi-cata
         inputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 500_000 },
     ]
     assert.notStrictEqual(analyzeCacheBreaks('s', turns).turns[1].cause, 'PLUGINS_RELOADED')
+  })
+})
+
+// ATTRIBUTION PROVENANCE (TRDD-V8YOWHVT).
+//
+// This analyzer set-diffs injected context blocks and names the first one that changed. That is NOT
+// the API's criterion: it caches the prefix ending at a `cache_control` breakpoint and looks back at
+// most 20 blocks, so a block changing after the governing breakpoint cannot have caused the miss and
+// a break can happen with no block changed at all. Measured 2026-08-04 on live bodies: `system[0]`
+// changes on EVERY request while those same turns bill 0.3-0.7% write — which alone disproves
+// "first changed block wins". This path cannot do better (ContextSource has no positions and no
+// cache_control), so it must not present its guess as a verdict. These tests pin that honesty.
+suite('cacheBreak attribution provenance (TRDD-V8YOWHVT)', () => {
+  const src = (label: string, tokens: number, kind = 'hook'): ContextSource =>
+    ({ label, kind, tokens, bytes: tokens * 4, count: 1 })
+
+  const pair = (a: ContextSource[], b: ContextSource[], read: number, write: number): CacheTurnInput[] => [
+    { turn: 1, sources: a, cacheReadTokens: 0, cacheCreateTokens: 1000, inputTokens: 0, model: 'claude-opus-5' },
+    { turn: 2, sources: b, cacheReadTokens: read, cacheCreateTokens: write, inputTokens: 0, model: 'claude-opus-5' },
+  ]
+
+  test('a set-diff culprit is labelled block-diff-only at LOW confidence, never as a verdict', () => {
+    const t = analyzeCacheBreaks('s', pair([src('hook: x', 100)], [src('hook: x', 900)], 50_000, 2_000)).turns[1]
+    assert.strictEqual(t.broke, true)
+    assert.strictEqual(t.breakSourceLabel, 'hook: x', 'it may still NAME a suspect')
+    assert.strictEqual(t.attribution, 'block-diff-only', 'but it must disclose how it got there')
+    assert.strictEqual(t.confidence, 'low', 'and must not imply the answer is verified')
+  })
+
+  test('a DOMINANT write with nothing to blame is UNATTRIBUTABLE, not silently "no break"', () => {
+    // Identical sources: the diff has nothing to point at. But 400k written against 40k read is a
+    // real cold rewrite — reporting it as broke:false would hide the costliest event there is.
+    const same = [src('hook: x', 100)]
+    const t = analyzeCacheBreaks('s', pair(same, [src('hook: x', 100)], 40_000, 400_000)).turns[1]
+    assert.strictEqual(t.cause, 'UNATTRIBUTABLE')
+    assert.strictEqual(t.broke, true, 'an expensive event must be visible')
+    assert.strictEqual(t.wastedTokens, 400_000, 'and must carry its real cost')
+    assert.ok(!t.breakSourceLabel, 'but must NOT name a culprit it cannot justify')
+    assert.match(String(t.remediation), /get_cache_break_timeline/, 'it should route to the breakpoint-aware tool')
+  })
+
+  test('a MODEST write with nothing to blame stays silent — this must not become a false-positive generator', () => {
+    // The guard on the rule above: ordinary suffix writing (2k written, 400k re-read warm) is what
+    // every healthy turn looks like. If UNATTRIBUTABLE fired here it would flag every turn as a break.
+    const same = [src('hook: x', 100)]
+    const t = analyzeCacheBreaks('s', pair(same, [src('hook: x', 100)], 400_000, 2_000)).turns[1]
+    assert.strictEqual(t.broke, false)
+    assert.strictEqual(t.cause, 'UNKNOWN')
+    assert.strictEqual(t.wastedTokens, 0)
+  })
+
+  test('UNATTRIBUTABLE turns still rank as offenders so the cost is not lost from the leaderboard', () => {
+    const same = [src('hook: x', 100)]
+    const r = analyzeCacheBreaks('s', pair(same, [src('hook: x', 100)], 40_000, 400_000))
+    assert.strictEqual(r.totalWastedTokens, 400_000)
+    assert.strictEqual(r.offenders[0].cause, 'UNATTRIBUTABLE')
   })
 })
