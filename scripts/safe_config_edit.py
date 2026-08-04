@@ -263,6 +263,9 @@ def apply_ops(tree, ops):
             nested = op.get("nested_key")
             if nested is not None and not isinstance(nested, str):
                 raise BadSpec("remove_by_substring 'nested_key' must be a string")
+            prune = op.get("prune_empty")
+            if prune is not None and not isinstance(prune, bool):
+                raise BadSpec("remove_by_substring 'prune_empty' must be a boolean")
 
             container = new_tree
             for seg in op["path"][:-1]:
@@ -292,7 +295,16 @@ def apply_ops(tree, ops):
                     continue
                 else:
                     kept.append(el)
-            if json.dumps(kept, ensure_ascii=False) != json.dumps(arr, ensure_ascii=False):
+            # prune_empty: when nothing survives, take the key out instead of leaving an empty
+            # array behind. It belongs HERE and not in a separate `delete` op for the same reason
+            # the filter does: a caller can only decide "this array is now empty" from its pre-lock
+            # read, and a `delete` issued on that basis removes an entry a concurrent writer added
+            # in between. Evaluated on the fresh array, the deletion happens only when it is true.
+            if not kept and op.get("prune_empty") is True:
+                if leaf in container:
+                    del container[leaf]
+                    changed = True
+            elif json.dumps(kept, ensure_ascii=False) != json.dumps(arr, ensure_ascii=False):
                 container[leaf] = kept
                 changed = True
         else:
