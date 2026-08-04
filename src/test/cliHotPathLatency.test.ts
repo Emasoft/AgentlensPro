@@ -133,6 +133,26 @@ suite('CLI hot-path latency guard (TRDD-E8XIC2PM)', () => {
     } finally { fs.rmSync(home, { recursive: true, force: true }) }
   })
 
+  test('the top-level FAILURE exit flushes too — a failed command must not truncate what it wrote', () => {
+    // The same invariant, one level up, and it was missed when the hot-path commands were fixed:
+    // `standalone/cli.ts`'s catch handler ended in a bare `process.exit()`. A command that had
+    // already written a large payload to stdout and THEN failed would deliver a TRUNCATED payload
+    // alongside a non-zero exit — which reads as a corrupt result rather than a clean failure.
+    // Asserted on the source AND on the shipped bundle, because the bundle is what runs.
+    const src = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'standalone', 'cli.ts'), 'utf8')
+    // Measured on comment-STRIPPED code. The comment above that line names `process.exit()` as the
+    // thing not to use, so a raw text match reddens on the correct version — a guard that fails on
+    // good writing gets deleted, which is how the rule it protects dies.
+    const catchBlock = src.slice(src.indexOf('.catch('))
+      .split('\n').filter(l => !l.trimStart().startsWith('//')).join('\n')
+    assert.ok(catchBlock.includes('exitNow('), 'the top-level catch must exit through the flushing path')
+    assert.ok(!/\bprocess\.exit\(/.test(catchBlock), 'a bare process.exit() here discards a queued stdout write')
+    if (fs.existsSync(CLI_JS)) {
+      const bundle = fs.readFileSync(CLI_JS, 'utf8')
+      assert.ok(bundle.includes('FAIL: '), 'the failure path is present in the shipped bundle')
+    }
+  })
+
   test('the exit path stays COMPLETE: a write past the pipe buffer is not discarded by exiting early', async () => {
     // The paired invariant, and the two pull in OPPOSITE directions: exiting early bounds the hang
     // and truncates the output; waiting for the flush completes the output and restores the hang.
