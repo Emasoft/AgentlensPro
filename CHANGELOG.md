@@ -8,6 +8,18 @@ All notable changes to AgentlensPro are documented here.
 
 ### Fixed
 
+- **`--install-hooks` / `--uninstall-hooks` could delete another tool's hook from your
+  `settings.json`.** Adding was already safe (`append_unique`, evaluated inside the transaction
+  lock); *stripping* — migrating a previous-generation entry, or clearing dead spyglass ones — still
+  committed the surviving array computed from the read taken BEFORE the lock, so a hook another tool
+  appended in between was silently replaced away. Same for the now-empty case, which issued a
+  `delete` on the same stale conclusion. Both are now predicates the transaction evaluates on the
+  fresh array (`remove_by_substring`, with a new `prune_empty` for the empty case), so a concurrent
+  foreign entry survives. One narrow exception is stated rather than hidden: a registration whose
+  command no literal needle can express (the ours-matcher is a regex) keeps the whole-array replace
+  for that event alone, because emitting a filter that matches nothing would report a strip that
+  removed nothing.
+
 - **The report named a perpetrator for a break that never happened.** `msg[0]` carries the
   CONVERSATION's identity — its `usertext` segment is the caller's own opening words, which are
   immutable within one conversation — but the block diff treated a divergence there as a changed

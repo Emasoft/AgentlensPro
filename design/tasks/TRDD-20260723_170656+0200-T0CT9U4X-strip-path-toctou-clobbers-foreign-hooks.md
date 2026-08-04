@@ -1,10 +1,11 @@
 ---
 trdd-id: T0CT9U4X
 title: The hook strip path can clobber another tool's hooks in the user's settings.json
-column: todo
+column: human_review
 created: 2026-07-23T17:06:56+0200
-updated: 2026-07-23T17:06:56+0200
-current-owner: session-7877ae1f
+updated: 2026-08-05T00:12:00+0200
+current-owner: session
+implementation-commits: [4da41dc]
 task-type: bugfix
 approval-tier: 0
 severity: high
@@ -16,11 +17,32 @@ parent-trdd: K7PQ2M4V
 
 # The hook strip path can clobber another tool's hooks in the user's settings.json
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-07-23
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-05
 
-**State:** confirmed against the source, NOT fixed. Deliberately split out of TRDD-K7PQ2M4V because
-the fix touches `scripts/safe_config_edit.py` — the verified transaction that guards every user
-config file — and that is the highest-risk file in the repo to change casually.
+**FIXED and committed (`4da41dc`).** Every path now sends a PREDICATE the transaction evaluates on
+the fresh array inside its lock — `append_unique` to add, `remove_by_substring` (+ `prune_empty`) to
+strip. No whole-array `set` and no `delete` survive on the strip path.
+
+Three things worth knowing that the plan below did not anticipate:
+
+1. **`remove_by_substring` already existed** in `scripts/safe_config_edit.py`, fully implemented and
+   verified (apply + a verify-diff assertion), and was simply unused from TypeScript. The Python
+   change needed was therefore tiny: a `prune_empty` flag, because `{op:'delete'}` for the
+   now-empty case is the SAME defect wearing a different op — "this array is empty" is a conclusion
+   drawn from the pre-lock read.
+2. **The needles must be DATA** (the op list crosses into Python), and `isOurHookCommand` is a
+   REGEX — so `agentlenspro<TAB>hook` is ours while containing no generation literal, and its own
+   text cannot be a needle either (the engine matches `json.dumps(element)`, where a tab is
+   escaped). `buildEventOps` falls back to the whole-array replace for THAT event alone rather than
+   emitting a filter that strips nothing while reporting a removal.
+3. **The property belongs to the OP LIST, not to a file**, so the tests apply the ops to a tree
+   carrying a foreign entry those ops never saw — the interleave made deterministic instead of
+   raced. Verified to discriminate: the same fixture under the old `set` leaves 0 of 1 foreign hooks.
+
+**NEXT ACTION:** human review. Not yet released (`release-via: publish`).
+
+**Superseded — do NOT carry forward:** the body's claim that a strip "can only be expressed as a
+whole-array replace", and the NEXT ACTION proposing a new op — the op was already there.
 
 **The defect.** `installHooks` (`src/cli/hookInstall.ts`) reads `settings.json`, computes a rebuilt
 matcher array, then commits inside `safeConfigEdit`'s lock. On the PURE-ADD path it uses
