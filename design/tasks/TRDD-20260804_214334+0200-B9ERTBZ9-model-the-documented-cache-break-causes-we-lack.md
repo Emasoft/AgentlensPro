@@ -1,24 +1,60 @@
 ---
 trdd-id: B9ERTBZ9
 title: Model the documented cache-break causes the classifier lacks
-column: dev
+column: human_review
 created: 2026-08-04T21:43:34+0200
-updated: 2026-08-04T21:43:34+0200
+updated: 2026-08-04T22:47:03+0200
 current-owner: session
 task-type: feature
 relevant-rules: []
 npt: []
 eht: []
+implementation-commits: [05497e8]
 ---
 
 # Model the documented cache-break causes the classifier lacks
 
-## ⏵ STATE — READ THIS FIRST ON RESUME
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-04T22:47+0200
 
-Unblocked by TRDD-V8YOWHVT (attribution soundness settled; raw-body path verified breakpoint-aware).
-Sourced from 7 doc reports in `reports/cache-invalidation-research/` (15 doc pages, 2026-08-04).
+**TIER 1 IS IMPLEMENTED, TESTED AND COMMITTED (`05497e8`).** Every acceptance box below is ticked.
+Whole unit suite green (2,035 passing); `check-types`, `lint`, `check-identities`, `check-mirrors`,
+`check-guards` all pass. Version bumped to 2.23.0 with a CHANGELOG entry; `CLAUDE.md` §4 and the
+`agentlenspro-diagnostics` skill carry the new facts.
 
-**NEXT ACTION:** implement TIER 1 below in `src/cacheBreakTimeline.ts`, TDD, one cause at a time.
+**NEXT ACTION:** deploy on this machine (`pnpm run deploy:safe`), then human review. NOT published —
+publishing is tag-driven and is the owner's call.
+
+### What the real corpus says about the new causes — read this before judging the work
+
+On the last 24 h of captured bodies (115 classified events, 6.95 M cache_creation tokens) **none of
+the new causes fired**, and `UNCLASSIFIED` is unchanged at 32.4% (39 events, 2.25 M tokens). That is
+the expected result, not a defect: every TIER 1 cause is *rare by construction* (a cwd/git snapshot
+differs only across streams; an effort change needs two explicit values in consecutive turns of one
+session; the no-cache pair needs a joinable response for one of the 4 marker-less requests on this
+machine). They are modelled so that when one DOES happen it is named instead of silently pooled.
+
+**The residual UNCLASSIFIED is a DIFFERENT gap, and it is now the biggest one.** Its dominant real
+shape is `usertext block changed at pos 46: msg[0] user` — a SEGMENT of the giant injected first user
+message changed, and `classifyContentKind` has no kind for it, so it falls to `usertext` →
+`UNCLASSIFIED`. That is segment-level content classification, not a missing documented cause; it is
+out of this TRDD's scope and is filed as its own card.
+
+### Design decisions a later reader must not undo
+
+- **Absent ≠ any explicit value.** `THINKING_CONFIG_CHANGED` / `EFFORT_PARAM_CHANGED` /
+  `TOOL_CHOICE_CHANGED` fire ONLY between two different EXPLICIT values. "Setting a parameter
+  explicitly to its default is equivalent to omitting it" and the per-model defaults are unpublished,
+  so absent→explicit is undecidable from a captured body. Do not "improve" this into a guess.
+- **`EFFORT_SWITCH` now means `speed`/fast mode only** — the old blended thinking+speed+tool_choice
+  signature is gone.
+- **An unknown model gets NO `BELOW_MIN_CACHEABLE` verdict.** The minimum spread is 8×; a borrowed
+  threshold would be wrong for most models.
+- **`LOOKBACK_OVERFLOW` requires `cache_read === 0`.** That is what separates it from `NORMAL_GROWTH`,
+  which finds its entry and reads it. Its distance is counted in MESSAGES (conservative).
+- **The env/git regions are checked BEFORE the block diff, but only when the NORMALIZED region also
+  differs** — otherwise a moving clock inside them would steal `SYSTEM_TIMESTAMP`.
+- **The prompt-size accumulator must not materialize message text.** The naive version (build the
+  string, then measure it) slowed the bounded scan enough to time out the real-corpus test.
 
 ## The rule that scopes this
 
@@ -53,19 +89,32 @@ gateway rejecting a breakpoint. **Adding these would be unemittable enum values.
 
 ## Acceptance criteria
 
-- [ ] Each TIER 1 cause has a detector reading ONLY data already captured — no new capture surface.
-- [ ] `EFFORT_PARAM_CHANGED` does NOT fire when effort is set explicitly to the model's default
+- [x] Each TIER 1 cause has a detector reading ONLY data already captured — no new capture surface.
+      (`output_config`, the `<env>`/`# Environment` and `gitStatus:` regions, and the cache_control
+      marker count all come out of the request body the scan already parses.)
+- [x] `EFFORT_PARAM_CHANGED` does NOT fire when effort is set explicitly to the model's default
       (documented no-op). Pinned by a test — this is the one that will produce false positives.
-- [ ] `BELOW_MIN_CACHEABLE` reads the per-model minimum from a table, not a single constant: the
+      Solved WITHOUT a defaults table (there is none published): fire only between two different
+      EXPLICIT values, because two explicit values cannot both be the default.
+- [x] `BELOW_MIN_CACHEABLE` reads the per-model minimum from a table, not a single constant: the
       spread is 8× (512 → 4,096) and a threshold keyed on one model id is wrong for the rest.
-- [ ] `LOOKBACK_OVERFLOW` replaces `UNCLASSIFIED`/`UNATTRIBUTABLE` only when the ≥20-block condition
-      actually holds; otherwise the honest unnamed verdict stands.
-- [ ] Every new cause carries a remediation string stating its CONDITION, not an absolute — the
+      An unknown model returns `undefined` → no verdict, never a borrowed number. Pinned by a test
+      that runs the SAME prompt against Opus 5 and Haiku 4.5 and gets opposite answers.
+- [x] `LOOKBACK_OVERFLOW` replaces `UNCLASSIFIED`/`UNATTRIBUTABLE` only when the ≥20-block condition
+      actually holds; otherwise the honest unnamed verdict stands. Pinned at 24 (fires) and 19 (does
+      not — `COLD_START` stands).
+- [x] Every new cause carries a remediation string stating its CONDITION, not an absolute — the
       lesson from `c6802f0` (reload/MCP text asserted an unconditional reset the docs contradict).
-- [ ] Tests built from REAL captured bodies. Both method errors that produced TRDD-V8YOWHVT
+      Pinned by a test asserting each new remediation names a condition.
+- [x] Tests built from REAL captured bodies. Both method errors that produced TRDD-V8YOWHVT
       (cross-stream diffing, breakpoint-blind diffing) were invisible to synthetic fixtures.
-- [ ] `CLAUDE.md` §4 and the `agentlenspro-diagnostics` skill updated; CHANGELOG entry; version bump.
-- [ ] No count of enum values written into prose anywhere — that error propagated to 4 files today.
+      Fixtures reproduce shapes measured across the 1,377-request live spool (values anonymized so
+      `check-identities` stays green), PLUS a real-corpus test that drives both region extractors over
+      the actual captured bodies — a regex matching nothing would otherwise keep every other test green.
+- [x] `CLAUDE.md` §4 and the `agentlenspro-diagnostics` skill updated; CHANGELOG entry; version bump
+      (2.23.0). The skill's stale "not corroborated" image claim was corrected to the measured result
+      in the same pass, and its enum COUNT in prose removed.
+- [x] No count of enum values written into prose anywhere — that error propagated to 4 files today.
 
 ## Evidence
 
