@@ -60,3 +60,6 @@ agent-lens-export-*.json
 # it was investigated and dismissed. The verdicts belong in the pages themselves as dated
 # lessons (see ATOM-DETECTOR-MATCHED-ITS-OWN-VOCABULARY); the scratch file does not.
 .claude/project/memory/*-proposed.md
+/.trashcan/*
+!/.trashcan/.gitkeep
+!/.trashcan/README.txt
