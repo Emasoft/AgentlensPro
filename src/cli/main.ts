@@ -55,8 +55,12 @@ import { runLastCompactCli } from './lastCompactCli'
  *  corrupted safety decision, not cosmetic damage. Hence flush first, and bound the flush too: a
  *  reader that never drains must not reintroduce exactly the hang this function exists to prevent.
  *
- *  Scoped to these three commands. Every other subcommand keeps the normal drain-and-exit path. */
-async function exitNow(code: number): Promise<never> {
+ *  Scoped to these three commands. Every other subcommand keeps the normal drain-and-exit path.
+ *
+ *  Exported for the latency guard (TRDD-E8XIC2PM): the flush-vs-exit invariant lives HERE, not in any
+ *  one command, so a test that drives this function covers every command that exits through it —
+ *  including ones added later. */
+export async function exitNow(code: number): Promise<never> {
   await new Promise<void>(resolve => {
     const t = setTimeout(resolve, 500)
     t.unref?.()
@@ -64,6 +68,48 @@ async function exitNow(code: number): Promise<never> {
     process.stdout.write('', () => { clearTimeout(t); resolve() })
   })
   process.exit(code)
+}
+
+// ── Latency classification (TRDD-E8XIC2PM) ───────────────────────────────────────────────────────
+// Every subcommand below is either on a HARNESS HOT PATH with a wall-clock ceiling, or exempt WITH A
+// REASON. It lives beside the dispatch on purpose: the guard test derives the command set from the
+// `case` labels in this file, so adding a case without classifying it FAILS rather than defaulting
+// silently into the untested set — which is exactly how `statusline` shipped a 10.6 s stall while a
+// thorough "server down" suite stayed green (every test pointed at a closed port, which REFUSES
+// instantly; only an address that DROPS reproduces it).
+//
+// A blanket exemption list with no reasons rots into "everything is exempt", so each one says why.
+export const HOT_PATH_BUDGET_MS: Readonly<Record<string, number>> = {
+  // Claude Code runs these itself, per tool call and per render. The registered hook timeouts are
+  // 2 s (lifecycle) and 3 s (gate), so the ceiling has to sit under the timeout the harness enforces.
+  hook: 2_000,
+  gate: 2_500,
+  statusline: 2_000,
+  // Not run by Claude Code, but polled in loops by agents and heartbeats, and both are documented to
+  // answer with the server DOWN. Neither touches the network today; the budget is what catches the
+  // day one of them grows a fetch.
+  'cache-expired': 1_500,
+  'last-compact': 1_500,
+}
+
+export const LATENCY_EXEMPT: Readonly<Record<string, string>> = {
+  'statusline-history': 'an investigation verb a human or agent invokes deliberately; it may legitimately scan a large sample store',
+  get_account_status: '--all is file-backed and fast, but the singular form proxies to the server BY DESIGN (it needs live session accessors); a rotator calls it out of band, never per render',
+  disable: 'one-shot operator action (arms the global brake) — a human waits for it',
+  enable: 'one-shot operator action, the counterpart of disable',
+  telemetry: 'installer surface: edits user config through the verified transaction, which takes a cross-process lock',
+  setup: 'the installer/repairer — detect, converge, verify, self-test; it is expected to take seconds',
+  server: 'starts or stops the long-running server; it IS the thing a hot path calls, not a caller',
+  daemon: 'same process as `server`, launched by launchd — long-running by definition',
+  dashboard: 'ensures the server then opens a browser; a human is watching',
+  budget: 'a preflight projection, and `--watch` observes for as long as the caller asks',
+  watch: 'observes INDEFINITELY by design — a ceiling here would contradict the verb',
+  'heartbeat-cost': 'an analysis verb over historical fires; not on any per-turn path',
+  config: 'reads/writes the data-retention config; invoked by a human or an installer',
+  spool: 'creates/removes a RAM-disk spool — mount work, run at login by a LaunchAgent',
+  env: 'environment detection report; a diagnostic a human reads',
+  ctxmap: 'decomposes captured request bodies with real token counting — inherently slow, and asked once',
+  ctxvis: 'SPAWNS an agent and measures two of its turns; it is the slowest verb we ship, deliberately',
 }
 
 export async function cliMain(argv: string[], startServer: () => Promise<unknown>): Promise<number> {

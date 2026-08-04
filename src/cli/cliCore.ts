@@ -49,6 +49,37 @@ export const fmtMb = (b: number): string => `${(b / 1048576).toFixed(1)}MB`
 interface JsonRpcError { code?: number; message?: string }
 interface JsonRpcResponse { error?: JsonRpcError; result?: unknown }
 
+/** How long to wait for the TCP CONNECT before giving up. Deliberately bounds the CONNECT and not
+ *  the response: a legitimate call can take a long time SERVER-side (`ctxvis` spawns an agent and
+ *  measures two of its turns), so an idle-socket timeout would kill correct work, while an
+ *  unanswered connect is never anything but a dead endpoint.
+ *
+ *  MEASURED, and this is why it exists: with no bound at all, `agentlenspro cache-expired` took
+ *  **75 seconds** against an address that DROPS — the OS connect timeout — on a verb documented to
+ *  answer with the server down. The hand-fix that bounded `hook`/`gate`/`statusline` (TRDD-E8XIC2PM)
+ *  covered a different transport; everything on this one was still unbounded, which the latency
+ *  guard caught on its first run. A closed port REFUSES instantly and hides this completely. */
+const CONNECT_TIMEOUT_MS = Math.max(200, Number(process.env.AGENTLENS_CONNECT_TIMEOUT_MS) || 800)
+
+/** Arm a connect deadline on an in-flight request. Cleared the moment the socket connects or the
+ *  response starts; on expiry the request is destroyed with a precise reason, so the caller gets a
+ *  fail-fast error instead of a process that looks wedged. Returns the clear function. */
+function armConnectDeadline(req: http.ClientRequest, endpoint: string): () => void {
+  const timer = setTimeout(() => {
+    req.destroy(new Error(
+      `no connection to ${endpoint} within ${CONNECT_TIMEOUT_MS}ms — the address is not answering ` +
+      '(a DROP, not a refusal); raise AGENTLENS_CONNECT_TIMEOUT_MS if this endpoint is simply slow to accept'
+    ))
+  }, CONNECT_TIMEOUT_MS)
+  timer.unref?.()
+  const clear = () => clearTimeout(timer)
+  // 'connect' covers a fresh socket; 'response' covers a pooled one that never emits it.
+  req.on('socket', s => { s.on('connect', clear) })
+  req.on('response', clear)
+  req.on('error', clear)
+  return clear
+}
+
 /** One JSON-RPC call over the server's Streamable-HTTP MCP transport. */
 export function rpc(method: string, params: unknown): Promise<unknown> {
   const body = JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method, params })
@@ -85,6 +116,7 @@ export function rpc(method: string, params: unknown): Promise<unknown> {
         }
       })
     })
+    armConnectDeadline(req, mcpEndpoint())
     req.on('error', e => reject(new Error(`cannot reach ${mcpEndpoint()}: ${e.message}`)))
     req.write(body)
     req.end()
@@ -176,6 +208,8 @@ export function apiRequest(method: string, apiPath: string, payload?: unknown): 
         } catch { reject(new Error(`bad response (${res.statusCode}): ${raw.slice(0, 200)}`)) }
       })
     })
+    // Same unbounded-connect exposure as rpc() above — same bound, for the same reason.
+    armConnectDeadline(req, uiBaseUrl())
     req.on('error', e => reject(new Error(`server unreachable at ${uiBaseUrl()}: ${e.message}`)))
     if (body) req.write(body)
     req.end()

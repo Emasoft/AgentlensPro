@@ -8,6 +8,27 @@ All notable changes to AgentlensPro are documented here.
 
 ### Fixed
 
+- **Every CLI verb on the MCP transport hung for ~75 seconds against an unreachable-but-not-refusing
+  address.** `rpc()` (and its REST sibling) called `http.request` with no bound at all, so a
+  black-holed connect waited out the OS timeout. Measured: `agentlenspro cache-expired` took
+  **75,103 ms** — a verb documented to answer with the server DOWN — where the stall that motivated
+  the hot-path work was 10.6 s. The earlier fix bounded `hook`/`gate`/`statusline`, which use a
+  different transport; everything on this one was still unbounded. There is now a **connect
+  deadline** (`AGENTLENS_CONNECT_TIMEOUT_MS`, default 800 ms) that bounds the CONNECT and
+  deliberately not the response — a legitimate call can be slow server-side (`ctxvis` spawns an
+  agent and measures two of its turns), while an unanswered connect is never anything but a dead
+  endpoint. Same five commands now: 1,432 / 1,225 / 931 / 1,018 / 1,006 ms.
+- **Nothing stopped the next hot-path command from shipping without that guard**, which is how this
+  one existed at all. Every dispatched subcommand is now classified beside the dispatch — a
+  wall-clock ceiling (`HOT_PATH_BUDGET_MS`) or an exemption **with a written reason**
+  (`LATENCY_EXEMPT`) — and a table-driven test derives the command set from the source, so adding a
+  `case` without classifying it fails rather than joining the untested set silently. It runs against
+  an address that **DROPS**, never a closed port: a closed port refuses instantly, which is exactly
+  why a thorough "server down" suite stayed green while the stall was live, and the test SKIPS loudly
+  where the sandbox refuses instead of blackholing rather than banking a meaningless pass. The
+  paired invariant (a write past the ~64 KiB pipe buffer must not be discarded by exiting early) is
+  asserted on `exitNow` itself, so it covers commands added later too.
+
 - **`--install-hooks` / `--uninstall-hooks` could delete another tool's hook from your
   `settings.json`.** Adding was already safe (`append_unique`, evaluated inside the transaction
   lock); *stripping* — migrating a previous-generation entry, or clearing dead spyglass ones — still
