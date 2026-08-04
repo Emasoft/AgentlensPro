@@ -8,6 +8,37 @@ All notable changes to AgentlensPro are documented here.
 
 ### Fixed
 
+- **`--export-bodies --json` exported your whole raw-body archive into a directory named
+  `--json`.** The ops flags took the next token as their value without checking that it was one, so a
+  flag written where a value belongs was read as the value and the request was misread twice —
+  silently, and reported as success. Measured: **345 MB / 542 captured request bodies** written into
+  a directory named `--json` in the current working directory, untracked and un-gitignored, i.e. raw
+  API payloads one careless `git add -A` from being published. Exiting the CLI does not stop it: the
+  export runs server-side. `--out --json` was the same defect in miniature — exit 0, a file literally
+  named `--json`, and the `--json` the caller asked for silently dropped. `--out`,
+  `--export-bodies`, `--since` and `--until` now refuse a flag as their value (exit 64).
+- **`--out` threw away the answer when its directory did not exist.** The tool call succeeded, the
+  server did the work, and the very last statement failed with `ENOENT` — exit 1, payload gone,
+  nothing to retry from but the whole call. `ctxmap`'s equivalent had always created the parent
+  directory; the diagnostics path now does too, where the discarded work is most expensive.
+- **The burn guard printed its advice line for the first episode only, then never again for the
+  life of the process** — a guard meant to be armed for days. Its state Set held risk codes *and*
+  two control sentinels, so `size > 0` (the test for "is an episode running") stayed true forever
+  once the advice flag was added, the "episode over" branch never ran, and the flag was never
+  cleared. The two flags are now their own fields, and the transition logic is a pure exported
+  function: it went unverified because it lived inside an infinite polling loop with no seam to test.
+- **`ctxmap --find` reported `(no match)` for text that was in the request.** Captures are JSON on
+  disk, so a needle containing a quote or a backslash matches only its escaped form. The raw
+  prefilter knew that and accepted either spelling; the stage that actually decides re-serialised the
+  parsed body (escaping those characters again) and tested only the literal needle — so the file
+  passed the first stage and was dropped by the second. In a tool whose job is answering "is X in my
+  context", a false negative is indistinguishable from a true one.
+- **`ctxmap --list` reported nothing when any one body directory was unreadable**, instead of
+  reporting the ones that were: it was the last scan still calling `readdirSync` unguarded, and the
+  configured spool is scanned first, so a single `EACCES` suppressed every capture. It also returned
+  `EX_USAGE` (64) for an empty spool — a healthy machine that has captured nothing yet — which sends
+  a harness looking for a bug in its own call; it now returns 2 and says when capture is simply off.
+
 - **Every CLI verb on the MCP transport hung for ~75 seconds against an unreachable-but-not-refusing
   address.** `rpc()` (and its REST sibling) called `http.request` with no bound at all, so a
   black-holed connect waited out the OS timeout. Measured: `agentlenspro cache-expired` took

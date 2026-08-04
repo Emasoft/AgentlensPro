@@ -84,16 +84,51 @@ eht: []
    needle must still report no match — so the escaping fix cannot degrade into matching everything.
    Suite 2,065.
 
+7. **`diagnosticsCli.ts` REVIEWED by hand — 3 more defects, fixed and deployed (`47d5951`,
+   `fd0033d`).** Found by hunting the shape item 6 named, which is the argument for writing it down.
+
+   - **The ops flags took the next token as their value without checking it WAS one.** `--out --json`
+     exited 0, wrote a file literally named `--json`, and dropped the `--json` the caller asked for.
+     The severe form is `--export-bodies --json`: MEASURED at **345 MB / 542 raw request bodies**
+     written into a directory named `--json` in the cwd — untracked, un-gitignored, one careless
+     `git add -A` from publication. **Exiting the CLI does not stop it** — the export runs
+     server-side and the server had to be stopped. (That measurement was involuntary: the
+     falsification pass ran the test against the unguarded code and triggered a real export. The
+     files were staged to `.trashcan/`, not deleted.)
+   - **`--out` discarded the answer when its directory did not exist** — ENOENT from the LAST
+     statement, after the server had done the work. `ctxmap`'s emit always created the dir.
+   - **The burn guard advised on its first episode and never again for the life of the process.**
+     Risk codes and two control sentinels shared one Set, so `size > 0` — the test for "is an episode
+     running" — never went false again once the advice flag was added. The transitions are now a pure
+     exported `guardStep`, because the reason this was never caught is that it lived inside an
+     infinite polling loop with no seam to test.
+
+   10 tests, **verified to fail against the pre-fix source** (5 of 5 targeted), re-verified through
+   `agentlenspro` on PATH after `deploy:safe`. Suite 2,075.
+
+   **A test for a guard runs in the state where that guard is missing** — that is what a falsification
+   pass IS, and what a regression creates. This suite was not safe in that state; it now points the
+   endpoint at a port that refuses instantly, so a regression fails an assertion instead of exporting
+   the archive into the working tree. Re-verified by re-removing the guard: fails, creates nothing.
+
 **NEXT ACTION:** take the next per-file surface by hand — route (c) is working, so (b) is no longer
 blocking (it stays an option if the remaining surface proves slow). Unreviewed and largest first:
-`setup.ts` (994, but it already has two dedicated test suites), `diagnosticsCli.ts` (734),
-`statuslineHistoryCli.ts` (686 — note its STORE was hardened separately, see Out of scope; the CLI
-view was not), `watchCli.ts` (529). Whatever produces the findings, they are a HYPOTHESIS list:
-verify each against the source before any edit.
+`setup.ts` (994, but it already has two dedicated test suites), `statuslineHistoryCli.ts` (686 — note
+its STORE was hardened separately, see Out of scope; the CLI view was not), `watchCli.ts` (529),
+`hookInstall.ts` (594, partially covered by the TOCTOU work). Whatever produces the findings, they
+are a HYPOTHESIS list: verify each against the source before any edit.
 
-**The pattern to look for, now that it has three instances:** a two-stage scan whose stages disagree
-about what counts as a match, and any "no results" path that reports a code or a message asserting
-more than the run established.
+**The pattern to look for, now that it has SIX instances across two files** — it is the productive
+hypothesis, not a summary: *the command reports success while having misread the request or thrown
+the answer away.* Concretely, four shapes worth grepping for in the files still unreviewed:
+
+1. a two-stage scan whose stages disagree about what counts as a match;
+2. a "no results" path whose exit code or message asserts more than the run established;
+3. `argv[++i]` taken as a value with no check that it is not itself a flag;
+4. a write of an expensive result with no `mkdir -p` before it.
+
+None of the six crash. That is why none were caught by a suite that was green throughout, and it is
+the reason this card is a READ of the source rather than a test-writing exercise.
 
 **The exit-code contract is VERIFIED cross-file — do not re-derive it.** It holds through two
 mechanisms that reconcile in one place, which is why a single grep looks inconsistent:
