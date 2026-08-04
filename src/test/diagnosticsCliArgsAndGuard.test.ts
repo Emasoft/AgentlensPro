@@ -86,6 +86,22 @@ suite('--out: the payload must survive a path whose directory does not exist', (
 })
 
 suite('ops flags: a value that is itself a flag is a mistake, not a value', () => {
+  // This suite must be unable to do damage even when the guard it tests is ABSENT — which is the
+  // state it runs in during any falsification pass, and the state a regression would put it in.
+  // MEASURED the first time it ran against the unguarded code: `--export-bodies --json` was accepted
+  // as a destination, the CLI POSTed a real export, and the server wrote 345 MB / 542 raw-body files
+  // into a directory named "--json" in the repo root — untracked, ungitignored, full of captured
+  // request bodies. The CLI exiting did not stop it; the server had to be stopped. So the endpoint is
+  // pointed at a port that refuses instantly: a regression now fails the assertion instead of
+  // exporting the archive into the working tree.
+  const DEAD = 'http://127.0.0.1:1'
+  let prevUi: string | undefined
+  setup(() => { prevUi = process.env.AGENTLENS_UI_URL; process.env.AGENTLENS_UI_URL = DEAD })
+  teardown(() => {
+    if (prevUi === undefined) delete process.env.AGENTLENS_UI_URL
+    else process.env.AGENTLENS_UI_URL = prevUi
+  })
+
   const rejects = async (argv: string[]): Promise<void> => {
     await assert.rejects(runDiagnosticsCli(argv), (e: Error) => e instanceof UsageError,
       `expected a UsageError for ${JSON.stringify(argv)}`)
