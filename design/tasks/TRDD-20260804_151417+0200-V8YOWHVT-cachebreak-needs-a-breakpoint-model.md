@@ -31,9 +31,22 @@ relevant-rules: []
   system-tier divergence. Whether that produces false attribution depends on how `segmentInjected`
   splits that text — **NOT YET VERIFIED. Do not assume either way.**
 
-**NEXT ACTION:** make `cacheBreak.ts` stop claiming a culprit it cannot justify (add an explicit
-attribution provenance + `UNATTRIBUTABLE`), then verify the `segmentInjected`/`system[0]` question
-against real bodies before touching `cacheBreakTimeline.ts` at all.
+**DONE (commit `14c8c62`, 2020 tests passing):** `cacheBreak.ts` no longer claims a culprit it cannot
+justify. Every set-diff attribution carries `attribution: 'block-diff-only'` + `confidence: 'low'`,
+and a write that DOMINATES its turn with nothing to blame is now `UNATTRIBUTABLE` (`broke: true`,
+real `wastedTokens`) instead of the old silent `broke: false` / `wastedTokens: 0`, which hid the
+costliest event the analyzer exists to surface. A modest write with no divergence still stays
+silent — both directions are pinned by tests so this cannot become a false-positive generator.
+
+**NEXT ACTION — one step, runnable as written:** verify the `system[0]` question before touching
+`cacheBreakTimeline.ts`. `extractTurnPrefix` feeds the WHOLE `system[]` array into the diff, but the
+real breakpoints sit at `system[2]`/`system[3]`, and `system[0]` (the billing header) changes on
+every request. Determine whether `segmentInjected()` emits that volatile text as a diffable block:
+if it does, every classified turn carries a guaranteed system-tier divergence and system-level
+attributions from that path are suspect; if it does not, the path is sound as-is. Decide it by
+diffing two consecutive same-stream request bodies from `/Volumes/AgentLensSpool/otel-bodies` —
+separate the streams FIRST (a subagent shares the parent's session id; diffing across streams
+manufactures a divergence at index 0 every time, which cost two wrong conclusions on 2026-08-04).
 
 **SUPERSEDED — do NOT carry forward:** "our cache-break classifier has no breakpoint model" as a
 statement about the product as a whole; it is true only of the composition path.
