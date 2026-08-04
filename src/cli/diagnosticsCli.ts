@@ -52,6 +52,12 @@ usage:
                                               (-q prints nothing: exit 0 = EXPIRED, 1 = fresh).
                                               Cannot-answer is exit 2 with stdout EMPTY — it never
                                               prints 'false' for a question it could not resolve
+  agentlenspro last-compact [--seconds] [--project DIR] [--trigger manual|auto] [--json]
+                                              how long ago did THIS project compact? Prints the age
+                                              of the newest compaction — manual /compact OR auto —
+                                              from the PreCompact hook, off disk (server may be
+                                              down). No compaction on record = exit 2, stdout EMPTY
+                                              (never "0s ago", which is the opposite claim)
   agentlenspro budget --minutes N [--watch [SEC]] [--with-risks] [--window 5h|7d|binding]
                                               will the rate-limit window OUTLAST a timed run? Preflight
                                               once, or --watch the whole batch: the minutes still to go

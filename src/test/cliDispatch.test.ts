@@ -416,6 +416,106 @@ suite('agentlenspro — diagnostics dispatch parity (absorbed agentlens-cli.js s
     } finally { fs.rmSync(home, { recursive: true, force: true }) }
   })
 
+  // ── `last-compact`: the delta, off disk, with no server (2026-08-04) ─────────────────────────
+  // Spawns the REAL bundle against a temp DATA_DIR holding a real hook-event bucket — no MCP stub,
+  // because the whole point of this verb is that it answers while the server is down.
+  function seedCompact(home: string, atMs: number, cwd: string, trigger = 'manual'): string {
+    const dataDir = path.join(home, '.agentlens')
+    const dir = path.join(dataDir, 'hook-events')
+    fs.mkdirSync(dir, { recursive: true })
+    const rec = {
+      ts: atMs, ev: 'PreCompact', session: 'cccc3333-1111-2222-3333-444444444444',
+      payload: { hook_event_name: 'PreCompact', session_id: 'cccc3333-1111-2222-3333-444444444444', cwd, trigger },
+    }
+    fs.appendFileSync(path.join(dir, `${new Date(atMs).toISOString().slice(0, 10)}.ndjsonl`), `${JSON.stringify(rec)}\n`)
+    return dataDir
+  }
+
+  test('prints the AGE of the last compaction, with the trigger on stderr', async () => {
+    const home = mkHome()
+    try {
+      const project = fs.mkdtempSync(path.join(os.tmpdir(), 'al-proj-'))
+      const dataDir = seedCompact(home, Date.now() - (2 * 3600 + 14 * 60) * 1000, project, 'auto')
+      const r = await runCli(['last-compact', '--project', project], isolatedEnv(home, { DATA_DIR: dataDir }))
+      assert.strictEqual(r.code, 0, `stderr: ${r.stderr}`)
+      assert.strictEqual(r.stdout.trim(), '2h 14m', 'stdout is the delta alone')
+      assert.ok(r.stderr.includes('auto compact'), `the trigger belongs in the answer: ${r.stderr}`)
+      fs.rmSync(project, { recursive: true, force: true })
+    } finally { fs.rmSync(home, { recursive: true, force: true }) }
+  })
+
+  test('--seconds prints a bare integer a shell can compare', async () => {
+    const home = mkHome()
+    try {
+      const project = fs.mkdtempSync(path.join(os.tmpdir(), 'al-proj-'))
+      const dataDir = seedCompact(home, Date.now() - 90_000, project)
+      const r = await runCli(['last-compact', '--project', project, '--seconds'], isolatedEnv(home, { DATA_DIR: dataDir }))
+      assert.strictEqual(r.code, 0, `stderr: ${r.stderr}`)
+      const secs = Number(r.stdout.trim())
+      assert.ok(Number.isInteger(secs) && secs >= 89 && secs <= 95, `expected ~90, got "${r.stdout.trim()}"`)
+      fs.rmSync(project, { recursive: true, force: true })
+    } finally { fs.rmSync(home, { recursive: true, force: true }) }
+  })
+
+  test('NO compaction on record exits 2 with stdout EMPTY — never "0"', async () => {
+    // The mistake this forbids: `age=$(last-compact --seconds)` yielding 0 for a project that has
+    // never compacted would assert the opposite of the truth (just compacted).
+    const home = mkHome()
+    try {
+      const project = fs.mkdtempSync(path.join(os.tmpdir(), 'al-proj-'))
+      const other = fs.mkdtempSync(path.join(os.tmpdir(), 'al-other-'))
+      const dataDir = seedCompact(home, Date.now() - 60_000, other)
+      const r = await runCli(['last-compact', '--project', project], isolatedEnv(home, { DATA_DIR: dataDir }))
+      assert.strictEqual(r.code, 2, `stderr: ${r.stderr}`)
+      assert.strictEqual(r.stdout, '', 'an unknown age must print no number at all')
+      assert.ok(r.stderr.includes('cannot answer'), r.stderr)
+      fs.rmSync(project, { recursive: true, force: true })
+      fs.rmSync(other, { recursive: true, force: true })
+    } finally { fs.rmSync(home, { recursive: true, force: true }) }
+  })
+
+  test('an empty store (capture never installed) exits 2 and says so', async () => {
+    const home = mkHome()
+    try {
+      const r = await runCli(['last-compact'], isolatedEnv(home, { DATA_DIR: path.join(home, '.agentlens') }))
+      assert.strictEqual(r.code, 2)
+      assert.strictEqual(r.stdout, '')
+      assert.ok(r.stderr.includes('install-hooks'), `the cause must be actionable: ${r.stderr}`)
+    } finally { fs.rmSync(home, { recursive: true, force: true }) }
+  })
+
+  test('--json carries the record; --trigger narrows to one kind', async () => {
+    const home = mkHome()
+    try {
+      const project = fs.mkdtempSync(path.join(os.tmpdir(), 'al-proj-'))
+      const dataDir = seedCompact(home, Date.now() - 3 * 3_600_000, project, 'manual')
+      seedCompact(home, Date.now() - 600_000, project, 'auto')
+      const env = isolatedEnv(home, { DATA_DIR: dataDir })
+      const j = await runCli(['last-compact', '--project', project, '--json'], env)
+      assert.strictEqual(j.code, 0, `stderr: ${j.stderr}`)
+      const parsed = JSON.parse(j.stdout) as { found: boolean; trigger: string; ageSeconds: number }
+      assert.strictEqual(parsed.found, true)
+      assert.strictEqual(parsed.trigger, 'auto', 'the newest wins by default')
+      const m = await runCli(['last-compact', '--project', project, '--trigger', 'manual', '--seconds'], env)
+      assert.ok(Number(m.stdout.trim()) > 10_000, `--trigger manual must reach past the auto one: ${m.stdout}`)
+      fs.rmSync(project, { recursive: true, force: true })
+    } finally { fs.rmSync(home, { recursive: true, force: true }) }
+  })
+
+  test('a bad flag or a bad --trigger exits 64, naming what was wrong', async () => {
+    const home = mkHome()
+    try {
+      const bad = await runCli(['last-compact', '--windodays', '3'], isolatedEnv(home))
+      assert.strictEqual(bad.code, 64, `stderr: ${bad.stderr}`)
+      assert.ok(bad.stderr.includes('--windodays'), bad.stderr)
+      assert.ok(bad.stderr.includes('last-compact --help'), bad.stderr)
+      const trig = await runCli(['last-compact', '--trigger', 'sometimes'], isolatedEnv(home))
+      assert.strictEqual(trig.code, 64, `stderr: ${trig.stderr}`)
+      assert.ok(trig.stderr.includes('manual|auto'), trig.stderr)
+      assert.strictEqual(trig.stdout, '')
+    } finally { fs.rmSync(home, { recursive: true, force: true }) }
+  })
+
   test('`server frobnicate` rejects the unknown verb with a usage error (non-zero)', async () => {
     const home = mkHome()
     try {

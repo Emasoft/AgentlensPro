@@ -27,6 +27,10 @@ agentlenspro --install-skill                     # (re)install this skill into ~
 agentlenspro statusline-history project          # what is running in THIS project: model, effort,
                                                  # ctx fill, cost, 5h/7d window. Self-scopes to the
                                                  # cwd; `--project [DIR]` works on every view
+agentlenspro last-compact [--seconds]            # how long ago THIS project compacted (manual OR
+                                                 # auto), from the PreCompact hook — off disk, works
+                                                 # with the server down. No record = exit 2, stdout
+                                                 # EMPTY (never "0", the opposite claim)
 agentlenspro cache-expired [-q]                  # has THIS project's main conversation outlived its
                                                  # cache TTL? one word, `true`/`false` (-q: exit
                                                  # 0=expired 1=fresh 2=cannot answer). Never prints
