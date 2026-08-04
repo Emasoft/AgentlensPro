@@ -1,11 +1,12 @@
 ---
 trdd-id: V8YOWHVT
 title: cacheBreak.ts attributes cache breaks with no model of cache_control breakpoints
-column: todo
+column: complete
 created: 2026-08-04T15:14:17+0200
-updated: 2026-08-04T15:14:17+0200
+updated: 2026-08-04T15:52:00+0200
 current-owner: unassigned
 task-type: bugfix
+implementation-commits: [14c8c62, 9629b40]
 relevant-rules: []
 ---
 
@@ -25,11 +26,15 @@ relevant-rules: []
   `CacheBreakCause`) has **no** breakpoint model and structurally cannot acquire one: its input is
   `ContextSource[]`, which carries neither block positions nor `cache_control`. This half of the
   defect stands in full.
-- **Still open, and now the sharpest question:** `extractTurnPrefix` includes the **whole system
-  array**, ignoring the system-level breakpoints measured at `system[2]`/`system[3]`. `system[0]`
-  (the billing header) changes on EVERY request, so any turn it classifies has a guaranteed
-  system-tier divergence. Whether that produces false attribution depends on how `segmentInjected`
-  splits that text — **NOT YET VERIFIED. Do not assume either way.**
+- **RESOLVED 2026-08-04 — no defect.** The question was whether `extractTurnPrefix` including the
+  whole `system[]` array causes false attribution, given `system[0]` changes every request.
+  MEASURED by running the real `extractTurnPrefix` over live bodies: `segmentInjected` *does* emit
+  it, labelled `harness/billing header`, kind `agentmeta`, and it diverges on **57/57 and 25/25**
+  consecutive same-stream pairs — 100%. But `cacheBreakTimeline.ts:543-544` **filters `agentmeta`
+  out before the positional diff**, with a comment naming precisely this failure ("would pin every
+  idle-TTL / message-prefix / sub-agent break on a constant"). The path is sound as written.
+  Consequence: **the `HOOK_INJECTION` verdict on the 399k write STANDS** — it came from a
+  breakpoint-aware, `agentmeta`-filtered diff, and the doubt recorded in this card was unfounded.
 
 **DONE (commit `14c8c62`, 2020 tests passing):** `cacheBreak.ts` no longer claims a culprit it cannot
 justify. Every set-diff attribution carries `attribution: 'block-diff-only'` + `confidence: 'low'`,
@@ -38,15 +43,20 @@ real `wastedTokens`) instead of the old silent `broke: false` / `wastedTokens: 0
 costliest event the analyzer exists to surface. A modest write with no divergence still stays
 silent — both directions are pinned by tests so this cannot become a false-positive generator.
 
-**NEXT ACTION — one step, runnable as written:** verify the `system[0]` question before touching
-`cacheBreakTimeline.ts`. `extractTurnPrefix` feeds the WHOLE `system[]` array into the diff, but the
-real breakpoints sit at `system[2]`/`system[3]`, and `system[0]` (the billing header) changes on
-every request. Determine whether `segmentInjected()` emits that volatile text as a diffable block:
-if it does, every classified turn carries a guaranteed system-tier divergence and system-level
-attributions from that path are suspect; if it does not, the path is sound as-is. Decide it by
-diffing two consecutive same-stream request bodies from `/Volumes/AgentLensSpool/otel-bodies` —
-separate the streams FIRST (a subagent shares the parent's session id; diffing across streams
-manufactures a divergence at index 0 every time, which cost two wrong conclusions on 2026-08-04).
+**NEXT ACTION: none — this card is done.** Both halves are settled: the composition path now
+discloses its provenance (`14c8c62`), and the raw-body path was verified sound. Move to `complete`.
+
+The two follow-ons this card was said to block are **unblocked**, and both shrank:
+- *Naming the 399k `HOOK_INJECTION` owner* — the classifier is trustworthy here, so the remaining
+  gap is only that its block label (`hook: PostToolUse injection`) names the hook TYPE, not WHICH
+  hook. That is a labelling improvement, not a correctness fix.
+- *The ~18 documented-but-unmodelled causes* — no longer blocked on attribution soundness. Still a
+  scoping decision for the owner.
+
+**Method warning worth carrying forward:** when diffing raw bodies, separate the interleaved streams
+FIRST. A subagent shares the parent's session id, so diffing across streams manufactures a
+divergence at index 0 every time — that error cost two wrong conclusions on 2026-08-04 before the
+stream split was applied.
 
 **SUPERSEDED — do NOT carry forward:** "our cache-break classifier has no breakpoint model" as a
 statement about the product as a whole; it is true only of the composition path.
