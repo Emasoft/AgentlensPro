@@ -905,10 +905,37 @@ upgrade. Use `get_cache_break_gap_report` to separate TTL-expiry from a real pre
 agentlenspro get_account_status                      # your session's cacheTtl regime + windowSource
 agentlenspro get_cache_break_gap_report              # TTL-expiry vs real prefix change, per gap
 agentlenspro get_cache_break_causes                  # what breaks the cache machine-wide
-agentlenspro check_cache_expiry                      # is my cache cold yet? (newest main session)
+agentlenspro cache-expired                           # → the WORD 'true' or 'false' (this project)
+agentlenspro cache-expired -q                        # → nothing; exit 0 = EXPIRED, 1 = fresh
+agentlenspro check_cache_expiry                      # the full verdict object (this project's main)
 agentlenspro check_cache_expiry --all                # every session's fresh/expired verdict
 agentlenspro check_cache_expiry --thresholdMinutes 60 --out /tmp/exp.json   # probe "> 1h idle"
 ```
+
+**Want a plain true/false? Use `cache-expired`, not the tool.** The tool returns a verdict OBJECT and
+exits 0 either way, so a script has to parse JSON and cannot branch on `$?`. The verb is the same
+verdict in a shape a shell consumes:
+
+```bash
+if agentlenspro cache-expired -q; then echo "cold — the next turn re-writes the whole prefix"; fi
+[ "$(agentlenspro cache-expired)" = true ] && do_something     # the value form
+```
+
+- **stdout is exactly one word** (`true` = expired, `false` = fresh); which session was measured goes
+  to **stderr**, so a pipe stays parse-safe and a wrong-repo answer can never look like a right one.
+- **exit**: default `0` = answered · `2` = cannot answer (stdout **empty**) · `64` = bad flags.
+  With `-q`: `0` = EXPIRED · `1` = fresh · `2` = cannot answer.
+- **It never prints `false` for a question it could not resolve.** No LLM call recorded, no session in
+  scope, or the server unreachable → exit 2 with the reason on stderr, because "warm" and "I cannot
+  tell" lead to opposite decisions. A transport failure exits **2, never 1** — under `-q`, 1 means fresh.
+- Flags: `--project DIR` (default: the current directory) · `--session ID` · `--threshold-minutes N`
+  · `--json` (the full object plus a top-level `expired` boolean).
+
+**Scoping (changed 2026-08-04, and it was a real defect):** both this verb and `check_cache_expiry`
+now default to **the calling project's** newest main session. The old default picked the newest main
+session machine-wide — measured, a probe run inside one repo answered about a session in an unrelated
+one with nothing in the payload disclosing it. Pass `--project ''` to `check_cache_expiry` for the old
+machine-wide pick; `--all` still spans every project unless you scope it.
 
 **Is a specific claude's cache expired yet?** `check_cache_expiry` answers exactly "has more than
 the TTL passed since this session's last LLM request?" — idle since the last `api_request`, compared
@@ -1089,7 +1116,7 @@ genuinely excluded everything. Flags: `--since H|ISO` (default 24h) · `--until`
 | What keeps breaking the cache, machine-wide? | `get_cache_break_causes` |
 | Per-turn break diagnosis of one session | `get_cache_break_timeline --sessionId <id>` |
 | TTL expiry vs real prefix change? | `get_cache_break_gap_report` |
-| **Has a session's cache EXPIRED (idle > its TTL)?** | `check_cache_expiry` — idle since the last LLM request vs the per-session TTL (1h subscription-main, 5min subagent/usage-credits). Per session: `verdict` fresh\|expired\|unknown, `idleHuman`, `ttlMin`/`ttlSource`/`ttlBasis`, `lastRequestAt`. Default = newest main session; `--all` = every session; `--sessionId <id>` = one; `--thresholdMinutes N` overrides the TTL (e.g. `60` = "> 1h idle"). `unknown` = no LLM request recorded |
+| **Has a session's cache EXPIRED (idle > its TTL)?** | **`agentlenspro cache-expired`** for a plain `true`/`false` a shell can branch on (`-q` → exit 0 = expired, 1 = fresh, 2 = cannot answer; it never prints `false` for a question it could not resolve). `check_cache_expiry` for the full object — idle since the last LLM request vs the per-session TTL (1h subscription-main, 5min subagent/usage-credits). Per session: `verdict` fresh\|expired\|unknown, `idleHuman`, `ttlMin`/`ttlSource`/`ttlBasis`, `lastRequestAt`. Default = **this project's** newest main session; `--all` = every session; `--sessionId <id>` = one; `--project ''` = machine-wide; `--thresholdMinutes N` overrides the TTL (e.g. `60` = "> 1h idle"). `unknown` = no LLM request recorded |
 | Biggest single cache writes + contents | `trace_expensive_writes` |
 | What did the last janitor heartbeat cost? | `get_heartbeat_cost` |
 | Which config (model/spawn/effort) costs most? | `compare_configs --groupBy <dim>` |

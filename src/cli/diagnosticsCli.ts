@@ -46,6 +46,12 @@ usage:
   agentlenspro hook                           lifecycle hook handler (stdin → server; registered by setup)
   agentlenspro gate                           agent-launch burn gate (stdin → server; registered by setup)
   agentlenspro heartbeat-cost [--oneline]     exact token + $ cost of the last settled heartbeat fire
+  agentlenspro cache-expired [-q] [--project DIR] [--session ID] [--threshold-minutes N]
+                                              has THIS project's main conversation outlived its
+                                              prompt-cache TTL? Prints one word, 'true' or 'false'
+                                              (-q prints nothing: exit 0 = EXPIRED, 1 = fresh).
+                                              Cannot-answer is exit 2 with stdout EMPTY — it never
+                                              prints 'false' for a question it could not resolve
   agentlenspro budget --minutes N [--watch [SEC]] [--with-risks] [--window 5h|7d|binding]
                                               will the rate-limit window OUTLAST a timed run? Preflight
                                               once, or --watch the whole batch: the minutes still to go

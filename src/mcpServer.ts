@@ -824,14 +824,21 @@ const TOOLS = [
       'write (~1.25× the prefix). Returns per session: `verdict` (fresh|expired|unknown), `idleHuman` ' +
       '(e.g. "1h 12m"), `ttlMin`+`ttlSource`+`ttlBasis` (the TTL and WHY that number — never a bare ' +
       'guess; unknown auth surfaces an "assumed" 5-min floor), `lastRequestAt`, and `reason`. Default ' +
-      'target = the newest MAIN session (you rarely know your own id); pass `all:true` for every ' +
-      'session, `sessionId` for one, or `thresholdMinutes` to override the TTL with an explicit cutoff ' +
-      '(e.g. 60 to probe "more than 1h idle"). A `verdict:"unknown"` means no LLM request was recorded.',
+      'target = the newest MAIN session OF THE CALLING PROJECT (you rarely know your own id, and a ' +
+      'machine-wide pick would silently answer about someone else\'s repo); pass `all:true` for every ' +
+      'session, `sessionId` for one, `project` to name another repo (or `""` for machine-wide), or ' +
+      '`thresholdMinutes` to override the TTL with an explicit cutoff (e.g. 60 to probe "more than 1h ' +
+      'idle"). A `verdict:"unknown"` means no LLM request was recorded. For a plain true/false a shell ' +
+      'can branch on, use the CLI verb `agentlenspro cache-expired` instead of parsing this payload.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         sessionId: { type: 'string', description: 'Check one session by exact id (default: newest main session)' },
         all: { type: 'boolean', description: 'Check every known session instead of just the newest main one' },
+        // The CLI auto-forwards its cwd into any tool that declares `project`, so this makes the
+        // default "my own conversation" TRUE rather than aspirational — see the scoping note on
+        // handleCheckCacheExpiry for why the unscoped default was a wrong-answer generator.
+        project: { type: 'string', description: 'Absolute project path — restrict to sessions whose workspace is at or under it. Defaults to the calling working directory; pass "" for machine-wide' },
         thresholdMinutes: { type: 'number', description: 'Explicit idle cutoff in minutes; overrides the per-session TTL (e.g. 60 = "> 1h idle")' },
       },
     },
@@ -2052,15 +2059,26 @@ function assessOneSession(
 // flatMap (X2E6OSWK). Exported for the unit tests.
 export const EXPIRY_NEWEST_PROBE = 12
 
+/** Is this card's workspace AT or UNDER `root`? Path-boundary aware on purpose: a bare
+ *  `startsWith` makes `/x/y` match the sibling `/x/y-old`, which is the same off-by-one-directory
+ *  bug the SQL side guards with its `/%` pattern. Same shape as logReader's containment check. */
+function workspaceUnder(workspace: string | undefined, root: string): boolean {
+  if (!workspace) return false
+  const w = workspace.replace(/\/+$/, '')
+  const r = root.replace(/\/+$/, '')
+  return w === r || w.startsWith(`${r}/`)
+}
+
 // Exported for unit tests (X2E6OSWK — bounded-scan behavior is pinned, not assumed).
 export async function handleCheckCacheExpiry(
   sessions: SessionSummaryCard[],
   getTimeline: ((id: string) => unknown[]) | null,
   ctx: TtlContext | null,
-  args: { sessionId?: string; all?: boolean; thresholdMinutes?: number },
+  args: { sessionId?: string; all?: boolean; project?: string; thresholdMinutes?: number },
   timeBudgetMs: number = DRILL_SCAN_TIME_BUDGET_MS,
 ): Promise<{
   sessions: CacheExpiryRow[]
+  scope?: { project: string | null; sessionsInScope: number }
   coverage?: { sessionsConsidered: number; sessionsScanned: number; stoppedEarly: boolean; note: string }
   note?: string
 }> {
@@ -2075,6 +2093,20 @@ export async function handleCheckCacheExpiry(
     return { sessions: targets.map(c => assessOneSession(c, getTimeline, ctx, nowMs, thresholdMs)) }
   }
 
+  // PROJECT SCOPE, and it is a correctness fix rather than a convenience. The default pick used to
+  // be the newest main session MACHINE-WIDE, so a caller asking "has MY cache expired" from inside
+  // one repo was answered about whichever repo happened to be busiest — measured live: a probe run
+  // in AgentlensPro returned a session in an unrelated project, with nothing in the payload saying
+  // so. Filtering here (not client-side) also spends the bounded probe budget on sessions that can
+  // actually be the answer, which is what makes the pick reliable on a busy machine.
+  // An explicit empty string is the documented opt-out: `project: ""` = machine-wide.
+  const projectRoot = args.project?.trim() ? args.project.trim().replace(/\/+$/, '') : null
+  const inScope = projectRoot === null
+    ? sessions
+    : sessions.filter(s => workspaceUnder(s.projectPath ?? s.workspace, projectRoot))
+  const scope = { project: projectRoot, sessionsInScope: inScope.length }
+  sessions = inScope
+
   if (args.all) {
     // Whole-corpus assessment, newest-activity first so the budget spends itself on the sessions a
     // caller actually cares about. Every card can trigger a synchronous transcript reparse, hence
@@ -2085,6 +2117,7 @@ export async function handleCheckCacheExpiry(
       await scanWithBudget(pool, timeBudgetMs, c => assessOneSession(c, getTimeline, ctx, nowMs, thresholdMs))
     return {
       sessions: results,
+      scope,
       coverage: {
         sessionsConsidered: pool.length,
         sessionsScanned: scanned.length,
@@ -2122,6 +2155,7 @@ export async function handleCheckCacheExpiry(
   const targets = newest ? [newest] : []
   return {
     sessions: targets.map(c => assessOneSession(c, getTimeline, ctx, nowMs, thresholdMs)),
+    scope,
     // Honest pick: a budget-stopped probe chose from a subset — say so instead of presenting the
     // pick as the corpus-wide newest.
     ...(stoppedEarly ? { note: 'Newest-session probe stopped early on the scan time budget — the pick is from the probed subset only.' } : {}),
@@ -3478,7 +3512,7 @@ export function createMcpServer(opts: McpServerOptions): Server {
       case 'check_cache_expiry':
         result = await handleCheckCacheExpiry(
           sessions, getTimeline, getTtlContext?.() ?? null,
-          args as { sessionId?: string; all?: boolean; thresholdMinutes?: number },
+          args as { sessionId?: string; all?: boolean; project?: string; thresholdMinutes?: number },
         )
         break
       case 'get_account_state_at':
