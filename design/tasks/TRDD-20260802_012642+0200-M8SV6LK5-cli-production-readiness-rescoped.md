@@ -1,10 +1,10 @@
 ---
 trdd-id: M8SV6LK5
 title: CLI sources production-readiness review — re-scoped against today's src/cli
-column: todo
+column: dev
 created: 2026-08-02T01:26:42+0200
-updated: 2026-08-02T01:26:42+0200
-current-owner: unassigned
+updated: 2026-08-05T00:32:00+0200
+current-owner: session
 task-type: audit
 supersedes: K7PQ2M4V
 relevant-rules: []
