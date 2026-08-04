@@ -13,7 +13,10 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { StatuslineStore, queryStatusline } from '../statuslineStore'
-import { VIEWS, parseWhenArg, table, jsonSafe, projectPredicate, whereOf } from '../cli/statuslineHistoryCli'
+import {
+  VIEWS, parseWhenArg, table, jsonSafe, projectPredicate, whereOf,
+  tzLabel, coverageLine, storeFreshness,
+} from '../cli/statuslineHistoryCli'
 
 // UUID-SHAPED on purpose. DuckDB's JSON reader auto-detects a UUID-shaped string as the UUID type and
 // the node client returns it as {hugeint:"..."} — the exact bug that shipped. A placeholder like
@@ -404,6 +407,80 @@ suite('statusline-history — project scoping', () => {
       assert.strictEqual(Number(target.cost_usd), 1.5, 'cost is a CUMULATIVE field — its max is its latest value')
       assert.strictEqual(Number(target.five_h_pct), 80)
       assert.strictEqual(typeof target.session_id, 'string', 'session_id must be CAST to VARCHAR')
+    } finally { fs.rmSync(root, { recursive: true, force: true }) }
+  })
+})
+
+// THE CLOCK AND THE COVERAGE CONTRACT.
+//
+// Written after a real failure on 2026-08-04: the `cache` view — THE falsifier for a claimed cache
+// miss — was declared BLIND and abandoned mid-measurement while capture was live and 41s fresh. Two
+// independent defects combined to produce a convincing illusion of staleness, and neither was
+// visible to the type checker:
+//   1. times rendered UTC under a bare `time` header, while every sibling surface renders local, so
+//      on a +0200 machine the newest row always looked two hours old;
+//   2. the view is RANKED by write and CAPPED by --limit, so recent low-write turns fall off the
+//      list entirely and the newest row shown is unrelated to the newest row stored.
+// Both are regressions a future edit could reintroduce silently, so both are pinned here.
+suite('statusline-history — the clock and the coverage contract', () => {
+  test('renders LOCAL wall-clock time, never UTC', () => {
+    const t = Date.parse('2026-08-04T12:43:16.000Z')
+    const d = new Date(t)
+    const p = (x: number): string => String(x).padStart(2, '0')
+    const col = VIEWS.cache.cols.find(c => c.key === 'ts')!
+    assert.strictEqual(col.fmt!(t), `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`,
+      'the cache view must print the instant\'s LOCAL wall clock')
+    // On any machine actually offset from UTC, the old rendering must now be provably absent —
+    // otherwise this test passes vacuously in CI (UTC) while the bug is live on a developer's box.
+    if (d.getTimezoneOffset() !== 0) {
+      assert.notStrictEqual(col.fmt!(t), new Date(t).toISOString().slice(11, 19),
+        'a UTC render is the regression: it reads as offset-hours of staleness')
+    }
+  })
+
+  test('tzLabel is the ±HHMM offset that makes the clock unambiguous', () => {
+    assert.match(tzLabel(new Date('2026-08-04T12:43:16.000Z')), /^[+-]\d{4}$/,
+      'must be the %z spelling this repo uses for every dated artefact')
+  })
+
+  test('every view declares how it is sorted', () => {
+    for (const [name, v] of Object.entries(VIEWS)) {
+      assert.ok(typeof v.sortedBy === 'string' && v.sortedBy.length > 0,
+        `${name} must declare sortedBy — the footer cannot name a sort that does not exist`)
+    }
+  })
+
+  test('coverageLine reports rows, sort, sample count and freshness', () => {
+    const now = Date.parse('2026-08-04T12:44:00.000Z')
+    const line = coverageLine(40, 'cache WRITE, largest first', { newestTs: now - 41_000, samples: 1234 }, now)
+    for (const part of ['40 row(s)', 'cache WRITE, largest first', '1234 sample(s)', '41s ago']) {
+      assert.ok(line.includes(part), `coverage line must carry "${part}": ${line}`)
+    }
+  })
+
+  test('an unknown freshness says so rather than fabricating a timestamp', () => {
+    assert.ok(coverageLine(0, 'time, newest first', { newestTs: null, samples: 0 }, Date.now())
+      .includes('newest sample: unknown'))
+  })
+
+  test('storeFreshness reports the STORE\'s newest sample, not the newest row a ranked+capped view shows', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sl-fresh-'))
+    try {
+      seed(root)
+      const fresh = await storeFreshness(root, 'main', {}, {})
+      const all = await queryStatusline(root, 'main', 'SELECT ts FROM samples', {})
+      const trueMax = Math.max(...all!.map(r => Number(r.ts)))
+      assert.strictEqual(fresh.newestTs, trueMax,
+        'freshness must be max(ts) over the whole window, independent of any view ranking')
+      assert.strictEqual(fresh.samples, all!.length, 'and the honest sample count for that window')
+
+      // The decisive case: rank by WRITE and cap at 1, and the single row returned is the cold
+      // rewrite — NOT the newest sample. A reader taking that row's time for "now" concludes the
+      // capture died. Freshness must be unaffected by the cap.
+      const ranked = await queryStatusline(root, 'main', VIEWS.cache.sql(1, {}), {})
+      assert.strictEqual(ranked!.length, 1)
+      assert.ok(Number(ranked![0].ts) <= fresh.newestTs!,
+        'the ranked view\'s row can only be older than or equal to the store\'s newest sample')
     } finally { fs.rmSync(root, { recursive: true, force: true }) }
   })
 })
