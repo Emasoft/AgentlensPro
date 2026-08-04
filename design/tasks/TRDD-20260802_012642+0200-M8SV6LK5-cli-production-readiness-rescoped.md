@@ -61,11 +61,19 @@ two dedicated test suites), `ctxmapCli.ts` (960 — its remote-call path is now 
 rest is unread), `diagnosticsCli.ts` (734), `watchCli.ts` (529). Whatever produces the findings, they
 are a HYPOTHESIS list: verify each against the source before any edit.
 
-**The next cross-file property worth checking** (do this before more per-file reading — it is what the
-per-file view cannot see): the exit-code contract. `agentlenspro` promises `0 = stdout is a result`,
-`2 = refused`, `64 = bad command line`, and an external consumer already depends on it
-(GitHub AgentlensPro#9). Only `diagnosticsCli` and `serverControl` were observed setting exit codes
-directly; whether EVERY `run*Cli` routes failures through `cliErrors`' `EXIT` is unverified.
+**The exit-code contract is VERIFIED cross-file — do not re-derive it.** It holds through two
+mechanisms that reconcile in one place, which is why a single grep looks inconsistent:
+
+- The file-backed verbs **RETURN** a code (`allAccountsCli` → `EXIT.BLIND`, `cacheExpiredCli` →
+  `EXIT.UNKNOWN`, `lastCompactCli` → `EXIT.USAGE`, …).
+- `diagnosticsCli.emit()` cannot return — it prints inside a dispatch that returns 0 — so a refusal
+  sets `process.exitCode = EXIT.UNKNOWN` and writes the reason to **stderr**, leaving stdout empty.
+- `standalone/cli.ts` reconciles both with `code || process.exitCode || 0`, so a command that
+  completed while refusing keeps the refusal instead of republishing success over it.
+
+Two defects WERE found on that path and are fixed: the top-level catch left via a bare
+`process.exit()` (`c851bcd`), and the connect deadline was bounding the RESPONSE (`d388709` — see the
+handoff; it was caught only by running the installed command on PATH, with the whole suite green).
 
 **Second known-open item still open:** the hot-path exit semantics are now additionally pinned by
 `src/test/cliHotPathLatency.test.ts` (TRDD-E8XIC2PM, shipped tonight) — the classification beside the
