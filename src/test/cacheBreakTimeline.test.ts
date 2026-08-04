@@ -624,7 +624,11 @@ suite('cacheBreakTimeline — buildCauseCostPeakReport (cross-session cause cost
   test('builds a cause cost-peak report from the REAL OTEL bodies without crashing', async function () {
     if (!fs.existsSync(defaultBodiesDir())) { this.skip(); return }
     this.timeout(120_000)
-    const report = await buildCauseCostPeakReport({ windowHours: 5, minTokens: 50_000 })
+    // scanCap is not decoration: this reads a LIVE capture directory that grows all day (measured
+    // 1,377 → 5,467 files in one evening on this machine), so an uncapped scan is a test whose
+    // runtime is set by how busy the user was — it passed for weeks and then blew a 120 s timeout
+    // with no code change. The cap makes the cost of this test a constant.
+    const report = await buildCauseCostPeakReport({ windowHours: 5, minTokens: 50_000, scanCap: 300 })
     assert.ok(report.coverage.note.length > 0)
     assert.strictEqual(report.groupBy, 'cause')
     for (const g of report.groups) assert.ok(g.key.length > 0)
@@ -710,7 +714,9 @@ suite('cacheBreakTimeline — real machine data', () => {
     // capture spool it shares the run with the second real-corpus test below. It timed out at 120s
     // in a full-suite run while passing in 58s alone — a harness bound, not a product property.
     this.timeout(240_000)
-    const report = await buildCacheBreakTimeline({ windowHours: 5, minTokens: 50_000 })
+    // Capped for the same reason as the cost-peak test above: the capture directory is live and
+    // grows all day, so an uncapped scan makes this test's runtime a function of the user's traffic.
+    const report = await buildCacheBreakTimeline({ windowHours: 5, minTokens: 50_000, scanCap: 300 })
     assert.ok(report.coverage.dirExists)
     assert.ok(report.coverage.note.length > 0)
     assert.ok(report.turnsClassified >= 0)
