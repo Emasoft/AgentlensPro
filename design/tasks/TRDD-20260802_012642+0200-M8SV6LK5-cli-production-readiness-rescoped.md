@@ -14,9 +14,37 @@ eht: []
 
 # CLI sources production-readiness review — re-scoped
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-02
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-05
 
-**State:** NOT STARTED. This supersedes TRDD-K7PQ2M4V, which was not resumable as written.
+**IN PROGRESS.** Three things are done; one is running.
+
+1. **Starting condition confirmed** — `reports/cli-revision/` was empty, exactly as this card
+   predicted. Bundle current (2.23.0, rebuilt + deployed this session).
+2. **FRESH baseline captured** — `reports/cli-revision/20260805_002915+0200-baseline.md`: all six
+   gates green, and the file inventory re-measured (27 files, 8,232 lines). **Cite that file, never
+   K7PQ2M4V's numbers** — citing stale numbers is exactly how the previous card died.
+3. **First known-open item FIXED** (`8c47b4e`): `server start` announced a failure that had not
+   happened. The defect was a DECISION, not a duration — startup is O(store), so a fixed 20 s budget
+   failed precisely on the machines that use the tool most. The wait is now bounded by LIVENESS
+   (`startupVerdict`, a named pure function with its four cases pinned), a dead child fails in
+   ~250 ms with the log tail attached instead of after 20 s with a pointer to a file, and the
+   timeout message states what is TRUE rather than announcing a failure. 8 new tests; suite 2,055.
+4. **Delegated per-file review RUNNING** on OpenRouter free-pool (zero Anthropic window cost, as this
+   card requires): `llm-ext scan-folder` over `src/cli/*.ts`, `answer_mode 0` (one report per file),
+   instructions at the scratchpad path in the launch command. Reports land in
+   `reports/llm-externalizer/`. It was at 50% after 3 min — free models are slow; check for the
+   `.md` outputs before assuming it failed.
+
+**NEXT ACTION:** read the per-file reports as a HYPOTHESIS list — every finding verified against the
+source before any edit — and keep the cross-file view yourself (the externalizer batches 1–5 files
+per request, so cross-file duplication is structurally invisible to it).
+
+**Second known-open item still open:** the hot-path exit semantics are now additionally pinned by
+`src/test/cliHotPathLatency.test.ts` (TRDD-E8XIC2PM, shipped tonight) — the classification beside the
+dispatch means a refactor that drops `exitNow` from a hot-path command now fails a test rather than
+shipping.
+
+**This supersedes TRDD-K7PQ2M4V**, which was not resumable as written.
 
 **Why K7PQ2M4V was superseded rather than continued** — three facts, each verified on disk before
 this card was written, not inferred:
