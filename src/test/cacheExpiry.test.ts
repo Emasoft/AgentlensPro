@@ -112,10 +112,10 @@ suite('assessCacheExpiry — explicit --threshold-minutes override', () => {
 // 2026-07-16. These tests pin the bounds: the default path probes only the newest-by-activity
 // candidates, and --all yields per card under a time budget with honest coverage.
 
-function expiryCard(id: string, startTime: string): SessionSummaryCard {
+function expiryCard(id: string, startTime: string, workspace = '/ws'): SessionSummaryCard {
   return {
     sessionId: id, traceId: 't-' + id, source: 'claude_code', dataSource: 'log',
-    workspace: '/ws', userRequest: 'req', model: 'claude-opus-4-8', turns: 1,
+    workspace, userRequest: 'req', model: 'claude-opus-4-8', turns: 1,
     inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0,
     cacheHitRate: 0, durationMs: 1000, startTime,
     filesRead: [], filesSearched: [], filesChanged: [], filesWritten: [],
@@ -129,6 +129,66 @@ function expiryCard(id: string, startTime: string): SessionSummaryCard {
 function apiRequestAt(iso: string): TimelineEntry {
   return { type: 'api_request', spanId: 'r', label: 'api', durationMs: 1, isError: false, timestamp: iso }
 }
+
+// PROJECT SCOPE. Measured defect (2026-08-04): the default "newest MAIN session" was picked
+// machine-wide, so a probe run inside one repo answered about a session in an unrelated one, with
+// nothing in the payload disclosing the swap — a confidently wrong answer to "has MY cache
+// expired". The filter runs BEFORE the bounded probe so the budget is spent on sessions that can
+// actually be the answer.
+suite('handleCheckCacheExpiry — project scope (2026-08-04)', () => {
+  const CTX: TtlContext = { auth: 'subscription', force5m: false, enable1h: false }
+  const iso = (minAgo: number): string => new Date(Date.now() - minAgo * 60_000).toISOString()
+  // Every card reports the same recent request: these tests pin WHICH session is selected, and a
+  // per-card timestamp would let the precision ranking, not the scope filter, decide the winner.
+  const tl = (): unknown[] => [apiRequestAt(iso(1))]
+
+  test('the default pick is the newest main OF THE NAMED PROJECT, not the busiest one on the machine', async () => {
+    // The foreign session is strictly newer — under the old rule it won every time.
+    const cards = [
+      expiryCard('foreign', iso(1), '/other/repo'),
+      expiryCard('mine', iso(30), '/my/repo'),
+    ]
+    const r = await handleCheckCacheExpiry(cards, tl, CTX, { project: '/my/repo' })
+    assert.strictEqual(r.sessions.length, 1)
+    assert.strictEqual(r.sessions[0].sessionId, 'mine')
+    assert.strictEqual(r.scope?.project, '/my/repo')
+    assert.strictEqual(r.scope?.sessionsInScope, 1)
+  })
+
+  test('a sibling directory that merely shares a prefix is NOT in scope', async () => {
+    const cards = [expiryCard('sibling', iso(1), '/my/repo-old')]
+    const r = await handleCheckCacheExpiry(cards, tl, CTX, { project: '/my/repo' })
+    assert.strictEqual(r.sessions.length, 0, '/my/repo-old must not match /my/repo')
+    assert.strictEqual(r.scope?.sessionsInScope, 0)
+  })
+
+  test('a worktree UNDER the project root IS in scope', async () => {
+    const cards = [expiryCard('wt', iso(1), '/my/repo/.claude/worktrees/w1')]
+    const r = await handleCheckCacheExpiry(cards, tl, CTX, { project: '/my/repo/' })
+    assert.strictEqual(r.sessions.length, 1)
+    assert.strictEqual(r.sessions[0].sessionId, 'wt')
+  })
+
+  test('an empty project string is the documented machine-wide opt-out, and --all is scoped too', async () => {
+    const cards = [
+      expiryCard('foreign', iso(1), '/other/repo'),
+      expiryCard('mine', iso(30), '/my/repo'),
+    ]
+    const wide = await handleCheckCacheExpiry(cards, tl, CTX, { project: '' })
+    assert.strictEqual(wide.sessions[0].sessionId, 'foreign', 'empty string must not filter')
+    assert.strictEqual(wide.scope?.project, null)
+    const scopedAll = await handleCheckCacheExpiry(cards, tl, CTX, { all: true, project: '/my/repo' })
+    assert.deepStrictEqual(scopedAll.sessions.map(s => s.sessionId), ['mine'])
+    assert.strictEqual(scopedAll.coverage?.sessionsConsidered, 1, 'coverage counts the SCOPED corpus')
+  })
+
+  test('an explicit sessionId still wins — a project filter can only contradict an exact id', async () => {
+    const cards = [expiryCard('elsewhere', iso(1), '/other/repo')]
+    const r = await handleCheckCacheExpiry(cards, tl, CTX, { sessionId: 'elsewhere', project: '/my/repo' })
+    assert.strictEqual(r.sessions.length, 1)
+    assert.strictEqual(r.sessions[0].sessionId, 'elsewhere')
+  })
+})
 
 suite('handleCheckCacheExpiry — bounded scans (TRDD-X2E6OSWK)', () => {
   const CTX: TtlContext = { auth: 'subscription', force5m: false, enable1h: false }

@@ -27,6 +27,10 @@ agentlenspro --install-skill                     # (re)install this skill into ~
 agentlenspro statusline-history project          # what is running in THIS project: model, effort,
                                                  # ctx fill, cost, 5h/7d window. Self-scopes to the
                                                  # cwd; `--project [DIR]` works on every view
+agentlenspro cache-expired [-q]                  # has THIS project's main conversation outlived its
+                                                 # cache TTL? one word, `true`/`false` (-q: exit
+                                                 # 0=expired 1=fresh 2=cannot answer). Never prints
+                                                 # `false` for a question it could not resolve
 ```
 
 Both `--install-*` settings flags go through `safeConfigEdit`; they never clobber other tools'

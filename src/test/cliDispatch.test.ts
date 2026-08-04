@@ -307,6 +307,115 @@ suite('agentlenspro — diagnostics dispatch parity (absorbed agentlens-cli.js s
     } finally { fs.rmSync(home, { recursive: true, force: true }) }
   })
 
+  // ── `cache-expired`: a boolean a shell can branch on (2026-08-04) ────────────────────────────
+  // The verdict itself is check_cache_expiry's; what is pinned here is the SHAPE, because that is
+  // the whole reason the verb exists: one word on stdout, an exit code that separates EXPIRED from
+  // fresh from cannot-answer, and — the load-bearing one — never the word 'false' for a question
+  // that could not be resolved. "Warm" and "I don't know" lead to opposite decisions.
+  function expiryStub(row: Record<string, unknown> | null, scope?: Record<string, unknown>): Promise<McpStub> {
+    return startMcpStub(
+      [{ name: 'check_cache_expiry', description: 'x', inputSchema: { properties: { project: { type: 'string' }, sessionId: { type: 'string' } } } }],
+      () => ({ sessions: row ? [row] : [], ...(scope ? { scope } : {}) }),
+    )
+  }
+  const EXPIRED = { verdict: 'expired', sessionId: 'aaaaaaaa-1111-2222-3333-444444444444', workspace: '/my/repo', idleHuman: '2h 5m', ttlMin: 60 }
+  const FRESH = { ...EXPIRED, verdict: 'fresh', idleHuman: '3m 0s' }
+
+  test('an EXPIRED cache prints exactly `true` on stdout and exits 0', async () => {
+    const home = mkHome()
+    const stub = await expiryStub(EXPIRED)
+    try {
+      const r = await runCli(['cache-expired'], isolatedEnv(home, { AGENTLENS_MCP_URL: stub.url }))
+      assert.strictEqual(r.code, 0, `stderr: ${r.stderr}`)
+      assert.strictEqual(r.stdout, 'true\n', 'stdout must be the word alone — it is parsed as a value')
+      assert.ok(r.stderr.includes('/my/repo'), 'the measured session goes to stderr, never stdout')
+    } finally { await stub.close(); fs.rmSync(home, { recursive: true, force: true }) }
+  })
+
+  test('a FRESH cache prints exactly `false` and still exits 0 — the word is the answer', async () => {
+    const home = mkHome()
+    const stub = await expiryStub(FRESH)
+    try {
+      const r = await runCli(['cache-expired'], isolatedEnv(home, { AGENTLENS_MCP_URL: stub.url }))
+      assert.strictEqual(r.code, 0, `stderr: ${r.stderr}`)
+      assert.strictEqual(r.stdout, 'false\n')
+    } finally { await stub.close(); fs.rmSync(home, { recursive: true, force: true }) }
+  })
+
+  test('--quiet is a pure predicate: 0 = expired, 1 = fresh, and NOTHING on stdout', async () => {
+    const home = mkHome()
+    const hot = await expiryStub(EXPIRED)
+    try {
+      const r = await runCli(['cache-expired', '-q'], isolatedEnv(home, { AGENTLENS_MCP_URL: hot.url }))
+      assert.strictEqual(r.code, 0, `expired must be the shell-true branch: ${r.stderr}`)
+      assert.strictEqual(r.stdout, '', 'quiet means quiet')
+    } finally { await hot.close() }
+    const warm = await expiryStub(FRESH)
+    try {
+      const r = await runCli(['cache-expired', '--quiet'], isolatedEnv(home, { AGENTLENS_MCP_URL: warm.url }))
+      assert.strictEqual(r.code, 1, `fresh must be the shell-false branch: ${r.stderr}`)
+      assert.strictEqual(r.stdout, '')
+    } finally { await warm.close(); fs.rmSync(home, { recursive: true, force: true }) }
+  })
+
+  test('the CLI scopes the question to the caller\'s project by default', async () => {
+    const home = mkHome()
+    const stub = await expiryStub(EXPIRED)
+    try {
+      await runCli(['cache-expired'], isolatedEnv(home, { AGENTLENS_MCP_URL: stub.url }))
+      const call = stub.calls.find(c => c.method === 'tools/call')
+      const sent = (call?.params as { arguments: { project?: string } }).arguments
+      assert.strictEqual(sent.project, process.cwd(), 'an unscoped question answers about the wrong repo')
+    } finally { await stub.close(); fs.rmSync(home, { recursive: true, force: true }) }
+  })
+
+  test('an UNKNOWN verdict exits 2 with stdout EMPTY — never the word `false`', async () => {
+    // The defect this guards: 'unknown' means no LLM call was ever recorded, which is not "warm".
+    const home = mkHome()
+    const stub = await expiryStub({ verdict: 'unknown', sessionId: 'bbbb2222-1111-2222-3333-444444444444', reason: 'no LLM request recorded for this session' })
+    try {
+      const r = await runCli(['cache-expired'], isolatedEnv(home, { AGENTLENS_MCP_URL: stub.url }))
+      assert.strictEqual(r.code, 2, `stderr: ${r.stderr}`)
+      assert.strictEqual(r.stdout, '', 'an unresolvable question must print no verdict at all')
+      assert.ok(r.stderr.includes('cannot answer'), r.stderr)
+    } finally { await stub.close(); fs.rmSync(home, { recursive: true, force: true }) }
+  })
+
+  test('no session in scope exits 2 and names the project it looked in', async () => {
+    const home = mkHome()
+    const stub = await expiryStub(null, { project: '/my/repo', sessionsInScope: 0 })
+    try {
+      const r = await runCli(['cache-expired'], isolatedEnv(home, { AGENTLENS_MCP_URL: stub.url }))
+      assert.strictEqual(r.code, 2)
+      assert.strictEqual(r.stdout, '')
+      assert.ok(r.stderr.includes('/my/repo'), r.stderr)
+    } finally { await stub.close(); fs.rmSync(home, { recursive: true, force: true }) }
+  })
+
+  test('an unreachable server exits 2, NOT 1 — in --quiet mode 1 would read as "fresh"', async () => {
+    const home = mkHome()
+    try {
+      const r = await runCli(['cache-expired', '-q'], isolatedEnv(home, { AGENTLENS_MCP_URL: 'http://127.0.0.1:1/mcp' }))
+      assert.strictEqual(r.code, 2, `a transport failure must never be reported as a verdict: ${r.stderr}`)
+      assert.strictEqual(r.stdout, '')
+      assert.ok(r.stderr.includes('server'), r.stderr)
+    } finally { fs.rmSync(home, { recursive: true, force: true }) }
+  })
+
+  test('a bad flag exits 64 (EX_USAGE), so a typo can never masquerade as a verdict', async () => {
+    const home = mkHome()
+    try {
+      const r = await runCli(['cache-expired', '--treshold-minutes', '60'], isolatedEnv(home))
+      assert.strictEqual(r.code, 64, `stderr: ${r.stderr}`)
+      assert.strictEqual(r.stdout, '')
+      // The message must name the TYPO'D FLAG. Asserting only the exit code passed against a build
+      // where the verb did not exist at all (unknown *command* is also 64) — a test that is green
+      // before the feature ships is measuring nothing.
+      assert.ok(r.stderr.includes('--treshold-minutes'), `the refusal must name the flag: ${r.stderr}`)
+      assert.ok(r.stderr.includes('cache-expired --help'), `and point at the verb's own help: ${r.stderr}`)
+    } finally { fs.rmSync(home, { recursive: true, force: true }) }
+  })
+
   test('`server frobnicate` rejects the unknown verb with a usage error (non-zero)', async () => {
     const home = mkHome()
     try {

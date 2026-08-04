@@ -32,6 +32,7 @@ import { runCtxvisCli } from './ctxvisCli'
 import { runStatuslineCommand } from './statuslineCapture'
 import { runStatuslineHistoryCli } from './statuslineHistoryCli'
 import { runAllAccountsCli } from './allAccountsCli'
+import { runCacheExpiredCli } from './cacheExpiredCli'
 
 /** CLI entry. `startServer` lazily imports standalone/server (injected by the shim — src/
  *  cannot import standalone/ without inverting the build layering). Returns the exit code. */
@@ -126,6 +127,12 @@ export async function cliMain(argv: string[], startServer: () => Promise<unknown
       await ensureServer()
       openDashboard()
       return 0
+    case 'cache-expired':
+      // "Has MY cache expired — true or false?" The verdict is check_cache_expiry's; this verb is
+      // the SHAPE a shell can branch on (one word on stdout, or `-q` for a pure exit-code
+      // predicate) plus the project scoping that makes "my" mean this repo and not the busiest one
+      // on the machine. It never prints a verdict it could not verify: cannot-answer is exit 2.
+      return runCacheExpiredCli(argv.slice(1))
     case 'budget':
       // "Will the rate-limit window outlast this run?" — the preflight + self-updating abort
       // watch for any timed batch. Its exit code IS the interface (0 go / 1 abort / 2 cannot
