@@ -33,6 +33,7 @@ import { runStatuslineCommand } from './statuslineCapture'
 import { runStatuslineHistoryCli } from './statuslineHistoryCli'
 import { runAllAccountsCli } from './allAccountsCli'
 import { runCacheExpiredCli } from './cacheExpiredCli'
+import { runLastCompactCli } from './lastCompactCli'
 
 /** CLI entry. `startServer` lazily imports standalone/server (injected by the shim — src/
  *  cannot import standalone/ without inverting the build layering). Returns the exit code. */
@@ -133,6 +134,12 @@ export async function cliMain(argv: string[], startServer: () => Promise<unknown
       // predicate) plus the project scoping that makes "my" mean this repo and not the busiest one
       // on the machine. It never prints a verdict it could not verify: cannot-answer is exit 2.
       return runCacheExpiredCli(argv.slice(1))
+    case 'last-compact':
+      // "How long ago did this project compact?" — the age of the newest PreCompact (manual OR
+      // auto), read off the hook store, so it answers with the server down. Sibling of
+      // cache-expired: the delta on stdout, the WHICH on stderr, and a never-compacted project
+      // exits 2 with stdout empty rather than reporting an age of zero.
+      return runLastCompactCli(argv.slice(1))
     case 'budget':
       // "Will the rate-limit window outlast this run?" — the preflight + self-updating abort
       // watch for any timed batch. Its exit code IS the interface (0 go / 1 abort / 2 cannot

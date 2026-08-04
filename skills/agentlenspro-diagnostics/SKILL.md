@@ -907,6 +907,8 @@ agentlenspro get_cache_break_gap_report              # TTL-expiry vs real prefix
 agentlenspro get_cache_break_causes                  # what breaks the cache machine-wide
 agentlenspro cache-expired                           # → the WORD 'true' or 'false' (this project)
 agentlenspro cache-expired -q                        # → nothing; exit 0 = EXPIRED, 1 = fresh
+agentlenspro last-compact                            # → how long ago this project compacted ("2h 14m")
+agentlenspro last-compact --seconds                  # → a bare integer for arithmetic
 agentlenspro check_cache_expiry                      # the full verdict object (this project's main)
 agentlenspro check_cache_expiry --all                # every session's fresh/expired verdict
 agentlenspro check_cache_expiry --thresholdMinutes 60 --out /tmp/exp.json   # probe "> 1h idle"
@@ -930,6 +932,33 @@ if agentlenspro cache-expired -q; then echo "cold — the next turn re-writes th
   tell" lead to opposite decisions. A transport failure exits **2, never 1** — under `-q`, 1 means fresh.
 - Flags: `--project DIR` (default: the current directory) · `--session ID` · `--threshold-minutes N`
   · `--json` (the full object plus a top-level `expired` boolean).
+
+**How long ago did this project compact? `last-compact`.** A compaction rewrites the whole prefix at
+the write rate, so "when did it last happen" is a cost question, and the answer is a **delta** — the
+form the decision actually needs:
+
+```bash
+agentlenspro last-compact                  # stdout: "2h 14m"   stderr: which compaction (trigger, session)
+age=$(agentlenspro last-compact --seconds) && [ "$age" -lt 300 ] && echo "compacted just now"
+```
+
+- **Manual `/compact` AND auto-compact both count** — they cost the identical rewrite. The newest of
+  either wins and the stderr line names which (`manual compact at …` / `auto compact at …`);
+  `--trigger manual|auto` narrows it.
+- Sourced from the **PreCompact lifecycle hook** (the compaction itself, with its trigger), read
+  straight off the hook-event store — so it **answers with the server down**. It needs
+  `agentlenspro --install-hooks`; with capture never installed the store is empty and the command
+  says exactly that.
+- **exit**: `0` = answered · `2` = no compaction on record (stdout **EMPTY**) · `64` = bad flags.
+  A never-compacted project prints **nothing**, never `0` — "no compaction" and "compacted 0s ago"
+  are opposite claims, and `age=$(… --seconds)` must not hand a script a number it would read as
+  "just now".
+- Flags: `--project DIR` (default: current directory; `''` = any project) · `--session ID` ·
+  `--trigger manual|auto` · `--window-days N` (default 31, the store's retention) · `--json` (adds
+  the ISO stamps, the matching PostCompact completion and how long the compaction took).
+- Scope is path-boundary aware and symlink-tolerant: a worktree under the root counts, a sibling
+  `<root>-old` does not, and a `cwd` recorded through a symlink (macOS `/var` → `/private/var`) still
+  matches its resolved root.
 
 **Scoping (changed 2026-08-04, and it was a real defect):** both this verb and `check_cache_expiry`
 now default to **the calling project's** newest main session. The old default picked the newest main
