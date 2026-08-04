@@ -1115,6 +1115,26 @@ matched rather than trusting the project dir.
 | `peaks` | the largest context/cost jumps between consecutive samples. **Read the `span` column**: a delta across an idle gap is an INTERVAL total, not one turn |
 | `cache` | per-turn cache WRITE vs READ — the falsifier for a claimed cache miss. Cost is bracketed 5m/1h because the write rate is TTL-tiered and the tier is not in the payload |
 
+**Times are LOCAL, and every time header carries the machine's `±HHMM` offset** (v2.22.0+). Before
+that they rendered UTC under a bare `time` header while `get_cache_event_log` rendered local — two
+views of one store, two hours apart, nothing marking it. On a UTC+2 box the newest row always looked
+~2h old, which reads as "capture died".
+
+**Read the coverage line before concluding anything is stale.** Most views are RANKED (by cost /
+write / peak), not chronological, and every view is capped by `--limit` (default 40) — so the newest
+row you SEE is unrelated to the newest row STORED. Each run prints, to stderr:
+
+```
+coverage: 40 row(s), sorted by cache WRITE, largest first · 2976 sample(s) in window · newest sample 14:55:00 +0200 (11s ago)
+note: capped at --limit 40 and ranked by cache WRITE, largest first, so RECENT low-ranking turns can
+      be missing. That is truncation, NOT stale capture — compare 'newest sample' above against your
+      clock, and raise --limit to see more.
+```
+
+`newest sample` is the store's real high-water mark, computed independently of the view's ranking and
+cap — it is the number that answers "is capture alive?". `--json` carries the same as `sortedBy`,
+`newestSampleTs`, `samplesInWindow`.
+
 Every point-in-time field is **latest-wins**, peaks are **max**, and nothing is ever summed: the
 status line misses fast turns, so summing double-counts nothing and under-counts everything.
 

@@ -85,6 +85,25 @@ Honest limit: naming this cause did NOT empty the UNCLASSIFIED bucket. The domin
 is a mutation in the LEAD region of `msg[0]`, before the first `Contents of` boundary — unreproduced,
 because those captures had already rotated off the spool. That one is open.
 
+
+^ATOM-0CUW-IVP6 [desc:"MEASURED breakpoint layout: system[2]/system[3]/last-message — and why 'first divergent block' is NOT what decides a cache hit", keywords: why_did_the_classifier_blame_the_wrong_block is_first_divergent_block_the_right_criterion where_are_the_cache_control_breakpoints cache_broke_but_no_block_changed system[0]_changes_every_turn_but_the_turn_is_warm 20_block_lookback_overflow, ocd: 2026-08-04, lmd: 2026-08-04]
+
+MEASURED 2026-08-04 from live raw request bodies: Claude Code places **3 of the 4 allowed**
+`cache_control` breakpoints, at **`system[2]`, `system[3]`, and the LAST message block** — `1h` on a
+main-conversation subscription turn, `5m` on the interleaved subagent stream. The layout was stable
+across the sample, but it is MEASURED, not contractual: parse the markers, never assume positions.
+
+The load-bearing consequence: **`system[0]` (the `x-anthropic-billing-header` block) changes on EVERY
+request, while those same turns bill 0.3-0.7% write against ~440k warm read.** If "the first block
+that changed" were what decides a cache hit, every turn would be a full cold rewrite. They are not.
+A change BEFORE the first breakpoint does not decide the hit, a change AFTER the governing
+breakpoint cannot have caused a miss, and a break can happen with NO block changed at all (the
+20-block lookback overrunning is sufficient on a tool-heavy turn).
+
+`src/shared/cacheBreak.ts` has no breakpoint model — `firstDivergentBlock()` set-diffs blocks and
+names the first change — so it can name a block that could not have caused the break, and every
+consumer inherits that. Tracked as TRDD-V8YOWHVT, which blocks adding the ~18 unmodelled causes. [^4]
+
 ## Notes and lessons learned
 [^1]: [id:ATOM-LAYR-ONLY, status:valid, keywords:"no hook sees it therefore undetectable only detection path wrong layer enumerate layers before concluding", ocd:2026-07-21, lmd:2026-07-21]
   DO NOT conclude "no hook observes X, therefore X is only detectable by inference" — that claim
@@ -103,3 +122,4 @@ because those captures had already rotated off the spool. That one is open.
   seconds apart map to the SAME next turn and the prefix was rewritten once — two `/login` 18s apart
   double-billed a real turn until it was caught on live data. DO charge the earliest command and
   list the others at 0 with the reason.
+[^4]: [id:ATOM-J4J4-NGJG, status:valid, desc:"an attribution method that ignores the mechanism launders a guess into a number", keywords:"classifier_named_a_culprit_it_cannot_justify wrong_culprit_worse_than_no_culprit diffing_interleaved_streams_as_one prove_the_emitter_before_naming_it", ocd:2026-08-04, lmd:2026-08-04] DO NOT ship a culprit-naming diagnostic whose attribution method does not model the mechanism it attributes, BECAUSE it converts a guess into a confident number that sends someone to fix the wrong component — cacheBreak.ts names "the first changed block" while the API keys on the prefix ending at a `cache_control` breakpoint with a 20-block lookback, so its answer can be a block that provably could not have caused the break. DO make the verdict say UNATTRIBUTABLE when the evidence cannot single out a culprit; a wrong name is strictly worse than no name.

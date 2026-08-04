@@ -69,8 +69,8 @@ const REMEDIATION: Record<CacheBreakCause, string> = {
   EFFORT_CHANGED:         'Keep the reasoning-effort level fixed within a conversation; changing it invalidates the prefix.',
   FAST_MODE:              'Toggling fast mode invalidates the cache — decide it once at session start.',
   MCP_SERVER_TOGGLE:      'Keep MCP servers with non-deferred tools connected for the whole session, or make their tools deferred.',
-  PLUGINS_RELOADED:       'A /reload-plugins re-registered the tool/skill/agent catalogs mid-session, rewriting the whole prefix. Reload plugins at session start (or in a fresh session), not mid-conversation.',
-  SKILLS_RELOADED:        'A /reload-skills re-registered the skill catalog mid-session. Reload skills at session start, or accept one full prefix rewrite per reload.',
+  PLUGINS_RELOADED:       'A /reload-plugins churned 2+ catalogs in one turn. It resets the prefix ONLY when a reloaded plugin supplies an MCP server whose tools load into the prefix — per the docs, "skills, commands, agents, hooks, LSP servers, monitors, and themes never invalidate the cache". Since v2.1.163 the command warns and skips such a reload unless --force, so check whether --force was passed before blaming the reload.',
+  SKILLS_RELOADED:        'A /reload-skills re-registered the skill catalog. This is NOT documented as a cache event anywhere, and skills sit in the docs\' never-invalidates list — treat this attribution as INFERRED and look for a co-occurring cause before acting on it.',
   PLUGIN_CHANGED:         'Installing/removing/enabling/updating a plugin mid-session rewrites the tool+skill+agent catalogs. Do plugin surgery in a scratch session, then restart.',
   ACCOUNT_SWITCHED:       'A /login or /logout swapped the credential mid-session; the previous account\'s cache entry is unreachable. Finish the session on one account, or rotate at a natural boundary.',
   TOOL_DENY:              'Avoid denying an entire tool mid-session; scope the deny narrower or set it before the session starts.',
@@ -79,6 +79,7 @@ const REMEDIATION: Record<CacheBreakCause, string> = {
   UPGRADE:                'A Claude Code upgrade invalidates the cache once — unavoidable, but do not resume large sessions right after upgrading.',
   RESUME_AFTER_UPGRADE:   'Resuming after an upgrade forces a full re-read (the most expensive turn) — avoid resuming huge sessions post-upgrade.',
   IDLE_TTL_EXPIRY:        'A >5-min idle gap let the cache expire; keep turns within the TTL or accept the one-time re-warm.',
+  UNATTRIBUTABLE:         'A real cold write (more written than read) with nothing in the block diff to blame. Do NOT guess a culprit from timing or plausibility — run get_cache_break_timeline, which diffs the raw request bodies against their actual cache_control breakpoints.',
   UNKNOWN:                'Cause could not be localised from the block diff; inspect the raw prefix around this turn.',
 }
 
@@ -180,11 +181,14 @@ function classifyTurn(prev: CacheTurnInput, cur: CacheTurnInput, opts: AnalyzeCa
     ? cur.timestampMs - prev.timestampMs : undefined
   const wasted = cur.cacheCreateTokens
 
-  const emit = (cause: CacheBreakCause, label?: string, kind?: string, gap?: number, confidence?: 'high' | 'medium'): CacheBreakTurn => ({
+  const emit = (
+    cause: CacheBreakCause, label?: string, kind?: string, gap?: number,
+    confidence?: 'high' | 'medium' | 'low', attribution?: CacheBreakTurn['attribution'],
+  ): CacheBreakTurn => ({
     turn: cur.turn, broke: true, cause,
     breakSourceLabel: label, breakSourceKind: kind,
     wastedTokens: wasted, wastedCostUsd: priceWaste(wasted, opts),
-    idleGapMs: gap, remediation: REMEDIATION[cause], confidence, tsMs: cur.timestampMs,
+    idleGapMs: gap, remediation: REMEDIATION[cause], confidence, attribution, tsMs: cur.timestampMs,
   })
 
   // 1. Model switch — a full, model-specific invalidation, dominates any block diff.
@@ -193,8 +197,17 @@ function classifyTurn(prev: CacheTurnInput, cur: CacheTurnInput, opts: AnalyzeCa
   if (cur.hasFastMode && !prev.hasFastMode) return emit('FAST_MODE')
   // 2.5 Plugin reload — /reload-plugins re-registers ≥2 catalogs at once. Detect BEFORE the
   // single-first-divergence pick (step 3), else it collapses to whichever catalog sorted first
-  // (INJECTED_BLOCK_CHANGED / TOOLS_CHANGED) and the reload — the machine's #1 cache-break cost —
-  // is never named. Confidence = high for 3+ catalogs, medium for exactly 2. (TRDD-EYA3X5MQ)
+  // (INJECTED_BLOCK_CHANGED / TOOLS_CHANGED) and the reload is never named. Confidence = high for
+  // 3+ catalogs, medium for exactly 2. (TRDD-EYA3X5MQ)
+  //
+  // SCOPE, corrected 2026-08-04 against the docs: this classifier only ever runs on a turn that
+  // ALREADY paid a real cache_creation, so naming the reload as the culprit of an OBSERVED break is
+  // sound. What is NOT sound — and what the remediation text used to say — is that a reload always
+  // rewrites the prefix. It does not: "Skills, commands, agents, hooks, LSP servers, monitors, and
+  // themes never invalidate the cache", and only a plugin supplying an MCP server whose tools LOAD
+  // INTO THE PREFIX can. Deferred MCP tools (the default) merely append. So a ≥2-catalog churn is
+  // evidence of a reload having happened, not proof that the reload is what cost the tokens; the
+  // remediation now says so rather than sending the reader to stop reloading plugins.
   const prevKinds = new Set(prev.sources.map(s => s.kind))
   const churnedCatalogs = new Set<string>()
   for (const d of diffTurnSources(prev.sources, cur.sources)) {
@@ -209,13 +222,31 @@ function classifyTurn(prev: CacheTurnInput, cur: CacheTurnInput, opts: AnalyzeCa
       undefined, churnedCatalogs.size >= 3 ? 'high' : 'medium')
   }
   // 3. A localizable stable-block divergence (the common structural break).
+  //
+  // MARKED `block-diff-only` / confidence `low`, and that is not hedging — it is the honest
+  // provenance. This is a SET DIFF with no breakpoint model, while the API caches the prefix ending
+  // at a `cache_control` breakpoint and looks back at most 20 blocks. So a block changing AFTER the
+  // governing breakpoint cannot have caused the miss, and a break can occur with NO block changed.
+  // Measured 2026-08-04: `system[0]` changes on every single request while those turns bill 0.3-0.7%
+  // write — proof that "the first block that changed" is not what decides a hit. This path cannot
+  // do better (ContextSource carries no positions and no cache_control), so it must not present its
+  // guess as a verdict. For a breakpoint-verified answer use get_cache_break_timeline, which reads
+  // the raw bodies. (TRDD-V8YOWHVT)
   const diverged = firstDivergentBlock(prev.sources, cur.sources)
-  if (diverged) return emit(causeForKind(diverged.kind), diverged.label, diverged.kind)
+  if (diverged) return emit(causeForKind(diverged.kind), diverged.label, diverged.kind, undefined, 'low', 'block-diff-only')
   // 4. No block diff but a long idle gap with a real re-write → the entry expired (one-time).
   if (idleGapMs !== undefined && idleGapMs > idleTtl && cur.cacheCreateTokens > 0) {
     return emit('IDLE_TTL_EXPIRY', undefined, undefined, idleGapMs)
   }
-  // 5. No localizable cause — expected conversation growth, NOT flagged as an avoidable break.
+  // 5. Nothing localisable — but "nothing to point at" covers two situations that must not be
+  //    conflated, because doing so hides the costliest event this analyzer exists to surface:
+  //    - a MODEST write with no divergence is expected suffix writing. Not a break. Stays silent.
+  //    - a write that DOMINATES the turn (more written than read) with nothing to blame is a real
+  //      cold rewrite we cannot name. Reporting that as "no break" makes it invisible; inventing a
+  //      culprit for it is worse. Report it, unnamed. (TRDD-V8YOWHVT)
+  if (wasted > 0 && wasted > cur.cacheReadTokens) {
+    return emit('UNATTRIBUTABLE', undefined, undefined, idleGapMs, 'low', 'block-diff-only')
+  }
   return {
     turn: cur.turn, broke: false, cause: 'UNKNOWN',
     wastedTokens: 0, wastedCostUsd: 0, idleGapMs,
@@ -348,5 +379,5 @@ export const CAUSE_LABEL: Record<CacheBreakCause, string> = {
   ACCOUNT_SWITCHED: 'Account switched',
   TOOL_DENY: 'Tool denied', INJECTED_BLOCK_CHANGED: 'Injected block changed',
   COMPACTION: 'Compaction', UPGRADE: 'Upgrade', RESUME_AFTER_UPGRADE: 'Resume after upgrade',
-  IDLE_TTL_EXPIRY: 'Idle TTL expiry', UNKNOWN: 'Unknown',
+  IDLE_TTL_EXPIRY: 'Idle TTL expiry', UNATTRIBUTABLE: 'Unattributable cold write', UNKNOWN: 'Unknown',
 }

@@ -7,10 +7,17 @@ import { isImageReadPath } from '../shared/imageReads'
 // these tests are as much about what the guard must STAY SILENT on as about what it warns for. A
 // guard that speaks on ordinary source reads gets switched off, and then it prevents nothing.
 //
-// It is WARN-ONLY by construction: this repo's measured `CacheBreakCause` taxonomy does not list
-// an image read among the 14 causes of a prefix break, so the upstream "an image invalidates the
-// whole messages tier" claim is not corroborated here and must not become a deny. What IS measured
-// is resident cost (turns x per-turn-context), and that is what the reason text may assert.
+// It is WARN-ONLY by construction, and as of 2026-08-04 that rests on a MEASUREMENT rather than on
+// an absence. Seven consecutive image appends each wrote exactly the image's own 3,252 tokens while
+// re-reading everything before them, so the upstream "an image invalidates the whole messages tier"
+// claim is FALSE for Claude Code, not merely uncorroborated — and a deny built on it would have
+// blocked a hot-path tool on a fiction. What IS real is resident cost (turns x per-turn-context),
+// and that is the only mechanism the reason text may assert.
+//
+// The older rationale here argued from `CacheBreakCause` not listing an image among "the 14 causes".
+// That was unsound twice over: an enum records what WE instrumented rather than what the API does,
+// and the enum has 18 values, not 14. Evidence:
+// reports/image-cache-test/20260804_144500+0200-image-append-cache-measurement.md
 
 const NOW = Date.now()
 

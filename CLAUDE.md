@@ -283,19 +283,61 @@ that must be exact reads the rate from `pricing.ts`, never a hardcoded flat fact
   at the **write** rate (1.25×), not the read rate. Keeping turns closer together than the TTL is
   what keeps them at 0.1×.
 
-**4. What RESETS the cache prefix → forces a full cold WRITE (1.25× the whole prefix) on the
-next turn.** Avoid mid-session unless necessary:
-`/reload-plugins` and `/reload-skills` (re-register the tool/skill/agent catalogs in the stable
-prefix), `/login` (new auth ⇒ new prefix), a `/model` / reasoning-effort / fast-mode switch, an
-MCP server connect/disconnect, a bare-tool **deny**, `/compact`, and a Claude Code upgrade.
-`/clear` resets the transcript floor (a deliberate, GOOD reset — cheap thereafter). A small
-per-turn `cache_creation` is just normal suffix writing; only a **full-prefix-sized** spike is a
-true cold rewrite. **Reading an IMAGE is not on this list** — a widely-shared write-up claims an
-image anywhere in a request invalidates the whole messages tier, but none of the 14 measured
-`CacheBreakCause` values is an image read, and adding one is suffix writing like any other content.
-An image is expensive as a RESIDENT block (doctrine 7 / `src/shared/residentCost.ts`), not as a
-prefix break; do not repeat the invalidation claim. Evidence:
-`reports/cache-guard/20260728_201256+0200-image-cache-premise-check.md`.
+**4. What RESETS the cache prefix → forces a full cold WRITE on the next turn (1.25× at the 5m
+tier, **2×** at the 1h tier — see doctrine 2).** Avoid mid-session unless necessary. **Four of these
+are CONDITIONAL, and the condition IS the fact**: stating them unconditionally made every plugin
+reload and every MCP blip look like a guaranteed full-prefix rewrite.
+
+- **Unconditional:** a `/model` switch — including every `opusplan` plan-mode toggle and every
+  **automatic safety-classifier fallback**, which invalidates with no user action at all; a
+  reasoning-**effort** change; turning **fast mode** on (costs once per conversation — turning it
+  off and back on afterwards is free); `/compact`; and a Claude Code **upgrade** (worst case:
+  resuming a long session after one — "the most expensive request you send").
+- **CONDITIONAL — MCP connect/disconnect** invalidates *only when that server's tools load into the
+  prefix*. With tool search on (the default) they are **deferred**, and a server "connecting,
+  disconnecting, or changing its tool list only appends new content and doesn't disturb anything
+  already cached." Involuntary churn counts: a stdio process exiting, an HTTP session expiring, an
+  auto-reconnect, or a pushed dynamic tool update.
+- **CONDITIONAL — `/reload-plugins`** resets *only* when a reloaded plugin supplies an MCP server
+  whose tools load into the prefix. "Skills, commands, agents, hooks, LSP servers, monitors, and
+  themes **never** invalidate the cache." Since v2.1.163 the command refuses such a reload unless
+  forced: "When the reload would change which MCP tools are loaded and invalidate the prompt cache,
+  the command warns and skips unless you pass `--force`."
+- **CONDITIONAL — a tool `deny`** resets only in the **tool-name position** (a bare name, `Bash(*)`,
+  or a tool-name glob). Scoped rules like `Bash(rm *)` and all allow/ask rules are cache-safe, and an
+  `mcp__*` glob is free while those tools are deferred (they were never in the prefix).
+- **UNDOCUMENTED — `/reload-skills` and `/login`.** Searched every cache page: neither appears in any
+  invalidation list. We ship `SKILLS_RELOADED` and `ACCOUNT_SWITCHED`; treat both as **INFERRED**,
+  not doc-backed.
+- **Cache-SAFE, and worth knowing:** `/clear` resets the transcript floor (a deliberate, GOOD reset).
+  **`/rewind` hits the EARLIER cache entry** — it truncates back to a prefix already cached and kept
+  warm by every turn since, so it is warm even past the nominal TTL, which makes it the cheap way to
+  abandon a detour. **`/cd` is engineered cache-safe**: "the new directory's `CLAUDE.md` is appended
+  as a message instead of rebuilding the system prompt." Also free: editing files, editing CLAUDE.md
+  mid-session (it does not apply until `/clear`/`/compact`/restart), changing output style or
+  permission mode, invoking skills/commands, `/recap`, and spawning a subagent.
+- **A worktree is a DIFFERENT working directory ⇒ a different prefix** — the system prompt embeds
+  cwd, platform, shell, OS and memory paths, so two worktrees of one repo never share a cache. And
+  sequential sessions share a prefix only when the startup **git-status snapshot** matches (branch +
+  recent commits are in the system prompt).
+
+A small per-turn `cache_creation` is just normal suffix writing; only a **full-prefix-sized** spike
+is a true cold rewrite.
+
+**Reading an IMAGE does NOT reset the prefix — MEASURED 2026-08-04, no longer merely
+uncorroborated.** 8 × 1568² images read one per turn: `cache_creation` stayed flat at exactly
+**3,252 tokens** (the image's own size) while `cache_read` grew by exactly **+3,252** each turn —
+seven consecutive appends, zero invalidations. The API doc's "Images | messages ✘ | adding/removing
+images anywhere in the prompt" row describes **mutating or removing an image already inside the
+prefix**, not appending one; Anthropic's own `cache_miss_reason` enum carries no image cause and
+defines `messages_changed` as an earlier entry "altered, reordered, or removed **rather than
+appended to**". Per-image cost is `(W×H)/750` — 3,278 predicted vs **3,252 measured** (0.8%); there
+is **no ~1,600 cap** at this size. An image is expensive as a RESIDENT block (doctrine 7 /
+`src/shared/residentCost.ts`), not as a prefix break. Evidence:
+`reports/image-cache-test/20260804_144500+0200-image-append-cache-measurement.md` (supersedes the
+premise-check at `reports/cache-guard/20260728_201256+0200-image-cache-premise-check.md`, whose
+"not corroborated" verdict was correct but which argued from the absence of an image cause in our
+own enum — evidence about our instrumentation, not about API behaviour).
 
 **5. Fork agents PRESERVE the cache; fresh subagents DON'T.** A **fork** inherits the parent's
 context and reads+renews the PARENT's cache entry → warm 0.1× reads. A **fresh subagent** starts
@@ -314,8 +356,12 @@ culprits by cache-**weighted** equiv (`investigate_burn`), never by request byte
   move the meter even when huge.
 - **Rotating accounts does NOT reduce burn** — it only changes which account pays for the same
   cold writes. The fix is always to stop the *source* (kill the fan-out, `/compact` the fat parent).
-- An un-evicted image/blob re-sent every turn is the worst resident-context cost (one 8-image
-  paste ≈ 525k tokens/turn, ~$425) — analyze images in a subagent or `/compact` immediately.
+- An un-evicted image/blob re-sent every turn is a real resident cost, but the old figure here —
+  "one 8-image paste ≈ 525k tokens/turn, ~$425" — was **wrong by ~20×** and is retracted: a 1568²
+  image measures **3,252 tokens**, so eight are ~26k/turn (~$0.013/turn of opus-5 cache-read). The
+  525k was the whole resident context, misattributed to the images. Still worth evicting on a long
+  run (26k re-read across 100 turns is 2.6M cache-read tokens) — but analyze images in a subagent
+  rather than reaching for `/compact`, which is itself a cold rewrite and usually the costlier fix.
 - To answer "what's burning NOW", read the **live** window (`--risk`, 5-min `get_burn_status`)
   weighted by cost; to answer "what burned the window", read `investigate_burn` (already weighted).
   Do not answer a "now" question from a 5h aggregate, or a cost question from a byte signal.

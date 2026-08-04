@@ -409,6 +409,12 @@ export type CacheBreakCause =
   | 'UPGRADE'                 // Claude Code upgraded
   | 'RESUME_AFTER_UPGRADE'    // a session resumed after an upgrade (full re-read)
   | 'IDLE_TTL_EXPIRY'         // a >5-min gap let the cache entry expire (one-time, not structural)
+  // A write that DOMINATED the turn (more written than read) with nothing in the block diff to
+  // point at. Distinct from UNKNOWN, and the distinction is the point: UNKNOWN is "nothing
+  // happened worth reporting", UNATTRIBUTABLE is "something expensive happened and we will not
+  // guess who did it". Conflating them hides the single costliest event this analyzer exists to
+  // surface. (TRDD-V8YOWHVT)
+  | 'UNATTRIBUTABLE'
   | 'UNKNOWN'                 // a break whose cause the diff couldn't localise
 
 export interface CacheBreakTurn {
@@ -421,7 +427,22 @@ export interface CacheBreakTurn {
   wastedCostUsd: number       // 0 unless rates were supplied to the analyzer
   idleGapMs?: number          // inter-turn wall-clock gap (set when cause = IDLE_TTL_EXPIRY)
   remediation?: string        // one-line fix hint for this cause
-  confidence?: 'high' | 'medium' // set for PLUGINS_RELOADED: high = 3+ catalogs churned, medium = 2
+  confidence?: 'high' | 'medium' | 'low' // PLUGINS_RELOADED: high = 3+ catalogs churned, medium = 2.
+                                         // 'low' = a set-diff attribution (see `attribution`).
+  /** HOW the culprit was arrived at — provenance, not decoration (TRDD-V8YOWHVT).
+   *
+   *  `breakpoint-verified` — the divergence was located against the request's real `cache_control`
+   *  breakpoints, so the named block could actually have caused the miss.
+   *
+   *  `block-diff-only` — the culprit is the first block that changed in a SET DIFF of injected
+   *  context, with NO breakpoint model. That is not the API's criterion: it caches the prefix
+   *  ending at a breakpoint and looks back at most 20 blocks, so a block changing after the
+   *  governing breakpoint cannot be the cause, and a break can occur with no block changed at all.
+   *  This path (composition-based `cacheBreak.ts`) cannot do better — `ContextSource` carries
+   *  neither positions nor `cache_control` — so it must SAY so rather than imply a verified answer.
+   *  Measured 2026-08-04: `system[0]` changes on every request while those turns bill 0.3-0.7%
+   *  write, which is proof on its own that "first changed block" does not decide a cache hit. */
+  attribution?: 'breakpoint-verified' | 'block-diff-only'
   // Wall-clock of this turn (epoch ms), when the timeline carried one. This is the join key that
   // lets an EXACT cause — a slash command read out of the transcript (src/cacheRiskCommands.ts) —
   // be attributed to the turn that actually paid for it: a command at time T is billed on the

@@ -439,7 +439,7 @@ export function evaluateSendMessageGate(state: AgentGateState): AgentGateDecisio
  * PREMISE CORRECTION, deliberate and load-bearing. That project's central claim is that an image
  * ANYWHERE in a request invalidates the entire messages tier, so the next call rewrites the whole
  * conversation at the cache-WRITE rate (they report ~700x overhead). This repo cannot corroborate
- * that for Claude Code: `CacheBreakCause` enumerates the 14 break causes measured here — tools
+ * that for Claude Code: `CacheBreakCause` enumerates the break causes measured here — tools
  * added/reordered, model/effort/fast-mode switches, MCP toggles, plugin+skill reloads, account
  * switch, tool deny, injected-block mutation, compaction — and an image read is NOT among them.
  * Shipping their framing would mean denying a hot-path tool on an uncorroborated mechanism, i.e.

@@ -49,7 +49,10 @@ flags:
                  included). Bare --project means the current directory. Works with EVERY view
   --since S      start of the window: ISO timestamp, or a number of HOURS back (default 24)
   --until S      end of the window (ISO timestamp)
-  --limit N      max rows (default 40)
+  --limit N      max rows (default 40). Most views are RANKED (by cost / write / peak), NOT
+                 chronological, so a recent low-ranking turn can fall off the list — raise this
+                 to see it. Every run prints a coverage line naming the sort and the store's
+                 newest sample, so truncation is never mistaken for stale capture
   --json         machine-readable output
   --out FILE     write the full report to FILE; print only a one-line digest
 
@@ -96,10 +99,30 @@ function fmtNum(v: unknown): string {
   return String(Math.round(n * 100) / 100)
 }
 
+/** LOCAL time, never UTC — a correctness fix, not a preference.
+ *
+ *  This rendered `toISOString()` (UTC) under a bare `time` header, while every sibling surface
+ *  (get_cache_event_log's `localTime`) renders local. On a +0200 machine two views of the SAME
+ *  store therefore disagreed by two hours with nothing marking the difference, and the newest row
+ *  always looked ~2h old. That is precisely how it was read: on 2026-08-04 this view — THE
+ *  falsifier for a claimed cache miss — was declared BLIND and abandoned mid-measurement while it
+ *  was in fact live and 41 s fresh. A diagnostic that merely looks dead is worse than one that is,
+ *  because it gets routed around silently. The offset is now printed in the header too (tzLabel). */
 function fmtTime(v: unknown): string {
   const t = Number(v)
   if (!Number.isFinite(t)) return '-'
-  return new Date(t).toISOString().slice(11, 19)
+  const d = new Date(t)
+  const p = (x: number): string => String(x).padStart(2, '0')
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+}
+
+/** The machine's UTC offset as `+HHMM`, appended to every time-column header. A bare `time` header
+ *  is what let the UTC/local mismatch above go unnoticed for as long as it did; a labelled one
+ *  cannot. Matches the `%z` spelling used for every dated filename in this repo. */
+export function tzLabel(d: Date = new Date()): string {
+  const off = -d.getTimezoneOffset()
+  const a = Math.abs(off)
+  return `${off < 0 ? '-' : '+'}${String(Math.floor(a / 60)).padStart(2, '0')}${String(a % 60).padStart(2, '0')}`
 }
 
 /** Costs need more precision than fmtNum's 2dp: a warm turn is ~$0.35 and a cheap one ~$0.004, and
@@ -128,6 +151,13 @@ export function table(rows: Array<Record<string, unknown>>, cols: Array<{ key: s
 interface ViewSpec {
   stream: StatuslineStream
   sql: (limit: number, f: Filters) => string
+  /** How this view's SQL ranks its rows, in plain words, for the coverage footer.
+   *
+   *  Most views are RANKED (by cost, by write, by peak) rather than chronological, and every view is
+   *  capped by --limit. Those two facts together mean the newest row in the OUTPUT is unrelated to
+   *  the newest row in the STORE — so a perfectly live capture can present as stale. Naming the sort
+   *  is what turns that from a trap into a fact the reader can act on. */
+  sortedBy: string
   cols: Array<{ key: string; label: string; fmt?: (v: unknown) => string }>
   /** Derive columns in TS rather than SQL. Used by `cache`, whose numbers come from
    *  src/shared/pricing.ts — the ONE place rates live. Re-encoding them in a SQL literal would be a
@@ -245,6 +275,7 @@ export const VIEWS: Record<string, ViewSpec> = {
              max(ts)                                            AS last_ts
       FROM samples ${whereOf(f)}
       GROUP BY session_id ORDER BY last_ts DESC LIMIT ${limit}`,
+    sortedBy: 'time (last sample), newest first',
     // The table is the decision surface; --json carries every column above, including the reset
     // timestamps, the repo identity and the dirs that are constant per project and would only pad
     // the terminal.
@@ -279,6 +310,7 @@ export const VIEWS: Record<string, ViewSpec> = {
              (max(ts) - min(ts)) / 60000.0         AS span_min
       FROM samples ${whereOf(f)}
       GROUP BY session_id ORDER BY cost_usd DESC NULLS LAST LIMIT ${limit}`,
+    sortedBy: 'cost, highest first',
     cols: [
       { key: 'session_id', label: 'session', fmt: v => String(v ?? '-').slice(0, 8) },
       { key: 'samples', label: 'samples' },
@@ -329,6 +361,7 @@ export const VIEWS: Record<string, ViewSpec> = {
       )
       WHERE agent_id IS NOT NULL
       GROUP BY agent_id ORDER BY peak_tokens DESC NULLS LAST LIMIT ${limit}`,
+    sortedBy: 'peak tokens, highest first',
     cols: [
       { key: 'task', label: 'task', fmt: v => String(v ?? '-').slice(0, 34) },
       { key: 'model', label: 'model', fmt: v => String(v ?? '-').replace(/^claude-/, '') },
@@ -352,12 +385,15 @@ export const VIEWS: Record<string, ViewSpec> = {
              rate_limits_five_hour_resets_at        AS resets_5h
       FROM samples ${whereOf(f, 'rate_limits_five_hour_used_percentage IS NOT NULL')}
       ORDER BY ts DESC LIMIT ${limit}`,
+    sortedBy: 'time, newest first',
     cols: [
       { key: 'ts', label: 'time', fmt: fmtTime },
       { key: 'session_id', label: 'session', fmt: v => String(v ?? '-').slice(0, 8) },
       { key: 'pct_5h', label: '5h %', fmt: fmtNum },
       { key: 'pct_7d', label: '7d %', fmt: fmtNum },
-      { key: 'resets_5h', label: '5h resets', fmt: v => (Number.isFinite(Number(v)) ? new Date(Number(v) * 1000).toISOString().slice(11, 16) : '-') },
+      // Local, via fmtTime, so this cannot drift from the `time` column beside it — the reset clock
+      // reading UTC while the sample clock read local was the same bug twice in one row.
+      { key: 'resets_5h', label: '5h resets', fmt: v => (Number.isFinite(Number(v)) ? fmtTime(Number(v) * 1000).slice(0, 5) : '-') },
     ],
   },
 
@@ -388,6 +424,7 @@ export const VIEWS: Record<string, ViewSpec> = {
         FROM samples ${whereOf(f)}
       )
       WHERE d_ctx IS NOT NULL ORDER BY d_cost DESC NULLS LAST LIMIT ${limit}`,
+    sortedBy: 'cost delta, largest first',
     cols: [
       { key: 'ts', label: 'time', fmt: fmtTime },
       { key: 'session_id', label: 'session', fmt: v => String(v ?? '-').slice(0, 8) },
@@ -432,6 +469,7 @@ export const VIEWS: Record<string, ViewSpec> = {
       FROM samples ${whereOf(f, 'context_window_current_usage_cache_read_input_tokens IS NOT NULL')}
       GROUP BY session_id, in_tok, cache_write, cache_read
       ORDER BY cache_write DESC NULLS LAST LIMIT ${limit}`,
+    sortedBy: 'cache WRITE, largest first',
     post: rows => rows.map(r => {
       const write = n(r.cache_write), read = n(r.cache_read)
       const model = String(r.model_id ?? '')
@@ -476,6 +514,7 @@ export const VIEWS: Record<string, ViewSpec> = {
              context_window_total_input_tokens AS ctx,
              cost_total_cost_usd AS cost
       FROM samples ${whereOf(f)} ORDER BY ts DESC LIMIT ${limit}`,
+    sortedBy: 'time, newest first',
     cols: [
       { key: 'ts', label: 'time', fmt: fmtTime },
       { key: 'session_id', label: 'session', fmt: v => String(v ?? '-').slice(0, 8) },
@@ -490,6 +529,38 @@ export const VIEWS: Record<string, ViewSpec> = {
 
 export function statuslineRoot(): string {
   return path.join(dataDir(), 'statusline')
+}
+
+/** What the STORE holds for this filter, independent of what the view's ranking and --limit chose
+ *  to show. This is the only number that answers "is capture alive?", and it must be computed
+ *  separately precisely BECAUSE the view's own rows cannot answer it: a ranked, capped view shows
+ *  the top-N by cost/write, whose newest member can be hours older than the newest sample on disk.
+ *
+ *  Never allowed to take the real answer down — a freshness probe that throws would turn a working
+ *  query into a runtime failure, which is a strictly worse outcome than an unknown freshness line. */
+export async function storeFreshness(
+  root: string, stream: StatuslineStream, f: Filters, opts: { sinceMs?: number; untilMs?: number },
+): Promise<{ newestTs: number | null; samples: number }> {
+  try {
+    const r = await queryStatusline(root, stream, `SELECT max(ts) AS ts, count(*) AS n FROM samples ${whereOf(f)}`, opts)
+    if (r === null || r.length === 0) return { newestTs: null, samples: 0 }
+    const ts = Number(r[0].ts)
+    const samples = Number(r[0].n)
+    return { newestTs: Number.isFinite(ts) ? ts : null, samples: Number.isFinite(samples) ? samples : 0 }
+  } catch {
+    return { newestTs: null, samples: 0 }
+  }
+}
+
+/** The one-line coverage footer. Says what was shown, how it was ranked, and how fresh the STORE is
+ *  — the three facts whose absence let a live view be mistaken for a dead one. */
+export function coverageLine(
+  shown: number, sortedBy: string, fresh: { newestTs: number | null; samples: number }, nowMs: number,
+): string {
+  const freshness = fresh.newestTs === null
+    ? 'newest sample: unknown'
+    : `newest sample ${fmtTime(fresh.newestTs)} ${tzLabel()} (${Math.max(0, Math.round((nowMs - fresh.newestTs) / 1000))}s ago)`
+  return `coverage: ${shown} row(s), sorted by ${sortedBy} · ${fresh.samples} sample(s) in window · ${freshness}`
 }
 
 export async function runStatuslineHistoryCli(argv: string[]): Promise<number> {
@@ -573,10 +644,36 @@ export async function runStatuslineHistoryCli(argv: string[]): Promise<number> {
     return EXIT.BLIND
   }
 
+  // Time columns render LOCAL, and the header carries the machine's offset, so this view's clock can
+  // never be silently compared against a sibling surface's (get_cache_event_log renders local too).
+  const cols = view.cols.map(c => (c.fmt === fmtTime ? { ...c, label: `${c.label} ${tzLabel()}` } : c))
+
+  const fresh = await storeFreshness(root, view.stream, filters, { sinceMs, untilMs })
+
   const text = asJson
-    ? JSON.stringify(jsonSafe({ view: viewName, stream: view.stream, sinceMs, untilMs, ...filters, count: rows.length, rows }), null, 2)
-    : (rows.length === 0 ? '(no rows matched — the store has data for this window but nothing fits the filter)' : table(rows, view.cols))
+    ? JSON.stringify(jsonSafe({
+      view: viewName, stream: view.stream, sinceMs, untilMs, ...filters,
+      sortedBy: view.sortedBy, newestSampleTs: fresh.newestTs, samplesInWindow: fresh.samples,
+      count: rows.length, rows,
+    }), null, 2)
+    : (rows.length === 0 ? '(no rows matched — the store has data for this window but nothing fits the filter)' : table(rows, cols))
   const digest = `${rows.length} row(s) — ${viewName}`
+
+  // To stderr, so a piped stdout stays machine-readable. Always printed on the human path: the
+  // freshness line is what makes "the newest row looks old" CHECKABLE instead of alarming.
+  if (!asJson) {
+    console.error(coverageLine(rows.length, view.sortedBy, fresh, Date.now()))
+    // The exact trap that cost a live measurement on 2026-08-04: a view that is both RANKED and
+    // CAPPED shows the top-N by rank, so recent low-ranking turns are simply absent — which from
+    // the table alone is indistinguishable from capture having died. Name it explicitly.
+    if (rows.length >= limit && !view.sortedBy.startsWith('time')) {
+      console.error(
+        `note: capped at --limit ${limit} and ranked by ${view.sortedBy}, so RECENT low-ranking turns `
+        + "can be missing. That is truncation, NOT stale capture — compare 'newest sample' above "
+        + 'against your clock, and raise --limit to see more.',
+      )
+    }
+  }
 
   if (outFile) {
     fs.mkdirSync(path.dirname(path.resolve(outFile)), { recursive: true })
