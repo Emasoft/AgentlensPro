@@ -292,7 +292,13 @@ reload and every MCP blip look like a guaranteed full-prefix rewrite.
   **automatic safety-classifier fallback**, which invalidates with no user action at all; a
   reasoning-**effort** change; turning **fast mode** on (costs once per conversation — turning it
   off and back on afterwards is free); `/compact`; and a Claude Code **upgrade** (worst case:
-  resuming a long session after one — "the most expensive request you send").
+  resuming a long session after one — "the most expensive request you send"). One caveat on the
+  effort/thinking row: **setting a parameter explicitly to its default is equivalent to omitting
+  it** and does NOT invalidate — and no page enumerates the per-model defaults, so an
+  absent→explicit transition is undecidable from a captured body. `agentlenspro` therefore names
+  `EFFORT_PARAM_CHANGED` / `THINKING_CONFIG_CHANGED` / `TOOL_CHOICE_CHANGED` only between two
+  DIFFERENT explicit values (two explicit values cannot both be the default) and leaves the
+  ambiguous case unnamed rather than guessing.
 - **CONDITIONAL — MCP connect/disconnect** invalidates *only when that server's tools load into the
   prefix*. With tool search on (the default) they are **deferred**, and a server "connecting,
   disconnecting, or changing its tool list only appends new content and doesn't disturb anything
@@ -320,6 +326,22 @@ reload and every MCP blip look like a guaranteed full-prefix rewrite.
   cwd, platform, shell, OS and memory paths, so two worktrees of one repo never share a cache. And
   sequential sessions share a prefix only when the startup **git-status snapshot** matches (branch +
   recent commits are in the system prompt).
+
+**Two documented ways to get NO cache at all, neither of which raises an error.** (a) The prompt is
+under the model's **minimum cacheable length** — 512 tokens for Opus 5 / Fable 5 / Mythos 5, 1,024 for
+Opus 4.8 and the Sonnet 5 family, 2,048 for Opus 4.7 and Haiku 3.5, 4,096 for Opus 4.6/4.5 and Haiku
+4.5. That is an **8× spread, so a threshold keyed on one model id is wrong for the rest**; below it,
+both usage counters come back 0 and the call quietly pays the full input rate. (b) The request carries
+**no `cache_control` marker at all** — `DISABLE_PROMPT_CACHING*`, or simply a caller that does not
+cache a class of calls (measured on this machine: 4 of 1,377 captured requests, all small Haiku
+utility calls). And one way to lose a cache you *did* write: **the lookback window is 20 blocks**, so a
+conversation that grows ≥20 blocks past its last write walks past its own entry and re-writes
+everything with `cache_read: 0` — the discriminator against ordinary growth, which still reads.
+`agentlenspro` names these `BELOW_MIN_CACHEABLE`, `CACHING_DISABLED` and `LOOKBACK_OVERFLOW`
+(TRDD-B9ERTBZ9). Evidence: `reports/cache-invalidation-research/20260804_142700+0200-prompt-caching-docs.md`
+§2.5 + A-13/A-14 — whose §4.1 also records that two fetches of that page returned two different
+minimum lists, so re-verify a row against the live page before trusting it for a model you have not
+measured.
 
 A small per-turn `cache_creation` is just normal suffix writing; only a **full-prefix-sized** spike
 is a true cold rewrite.

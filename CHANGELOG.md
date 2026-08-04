@@ -4,6 +4,36 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.23.0] - 2026-08-04
+
+### Added
+
+- **The cache-break classifier now models the documented causes it was missing** (TRDD-B9ERTBZ9), each
+  detectable from raw request bodies we already capture — a documented cause we could NOT detect was
+  deliberately left out, because an enum value nothing can emit implies coverage that does not exist.
+  - `CACHING_DISABLED` / `BELOW_MIN_CACHEABLE` — the two ways to get **no cache at all, with no
+    error**: a request with no `cache_control` marker anywhere, and a prompt under the model's minimum
+    cacheable length. Both report `cache_read: 0` *and* `cache_creation: 0`, so the cache_creation
+    floor used to drop exactly the turns that pay full input rate on every call; they are now admitted
+    through it. The minimum is read from a **per-model table** (512 → 4,096 tokens, an 8× spread) and
+    an unknown model yields no verdict rather than a borrowed threshold.
+  - `LOOKBACK_OVERFLOW` — an unchanged prefix that still read nothing because ≥20 blocks were appended
+    since the last write and the 20-block lookback window walked past the entry. Claimed only when
+    `cache_read` is 0, which is what separates it from ordinary growth (growth finds its entry and
+    reads it).
+  - `WORKING_DIR_CHANGED` / `GIT_STATE_CHANGED` — the environment block and the startup git snapshot
+    ride inside one large system block, so the positional block diff could only ever report "that
+    block changed" and filed both under `UNCLASSIFIED`. Extracted as their own regions, hashed
+    pointer-only (a cwd is an absolute home path and must never reach a report), and guarded so a
+    region differing only by a timestamp is still named `SYSTEM_TIMESTAMP`.
+  - `THINKING_CONFIG_CHANGED` / `EFFORT_PARAM_CHANGED` / `TOOL_CHOICE_CHANGED` — the request
+    parameters rendered into the prompt, split out of the old blended `EFFORT_SWITCH` signature (which
+    now covers only `speed`/fast mode). `output_config.effort` is present on **every** sampled request
+    and was not captured at all, so an effort change simply landed in `UNCLASSIFIED`. Each fires only
+    between two different EXPLICIT values: setting a parameter explicitly to the model default is a
+    documented no-op and the per-model defaults are unpublished, so an absent→explicit transition is
+    undecidable and stays unnamed rather than guessed.
+
 ## [2.22.0] - 2026-08-04
 
 ### Fixed
