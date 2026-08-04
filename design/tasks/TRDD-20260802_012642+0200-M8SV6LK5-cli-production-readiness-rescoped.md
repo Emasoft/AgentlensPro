@@ -29,15 +29,43 @@ eht: []
    (`startupVerdict`, a named pure function with its four cases pinned), a dead child fails in
    ~250 ms with the log tail attached instead of after 20 s with a pointer to a file, and the
    timeout message states what is TRUE rather than announcing a failure. 8 new tests; suite 2,055.
-4. **Delegated per-file review RUNNING** on OpenRouter free-pool (zero Anthropic window cost, as this
-   card requires): `llm-ext scan-folder` over `src/cli/*.ts`, `answer_mode 0` (one report per file),
-   instructions at the scratchpad path in the launch command. Reports land in
-   `reports/llm-externalizer/`. It was at 50% after 3 min — free models are slow; check for the
-   `.md` outputs before assuming it failed.
+4. **Delegated per-file review FAILED — and the free pool is why.** `llm-ext scan-folder` over
+   `src/cli/*.ts` ran 17 minutes and produced **zero** reports. The log says it plainly:
+   `[circuit-breaker] 77 consecutive failures detected` and ~76 `[model-retry] …:free: request error:
+   This operation was aborted` across `nvidia/nemotron-3.5-content-safety:free`,
+   `poolside/laguna-xs-2.1:free` and `cohere/north-mini-code:free`. The progress counter sat at
+   "50/100" the whole time while worker batches restarted from 60s — it was looping on retries, not
+   advancing. Killed.
 
-**NEXT ACTION:** read the per-file reports as a HYPOTHESIS list — every finding verified against the
-source before any edit — and keep the cross-file view yourself (the externalizer batches 1–5 files
-per request, so cross-file duplication is structurally invisible to it).
+   **Do NOT simply re-run it.** The models themselves are aborting; a narrower batch may complete but
+   the same pool is the bottleneck. Options, in order: (a) re-run over the FIVE largest files only;
+   (b) ask the owner whether a PAID OpenRouter profile is acceptable — that costs money, which is
+   their call, and this card's "costs nothing against the Anthropic window" constraint is about the
+   Anthropic window, not about spending nothing at all; (c) review by hand, which is what happened
+   for the files reviewed so far.
+
+5. **Cross-file findings so far (the half the externalizer structurally cannot produce):**
+   - Every network call site in `src/cli` is bounded — verified by reading all four raw sites
+     (`hookHandlers` ×2 via `AbortSignal.timeout` with the `Number(env)||default` guard, `setup.ts`
+     ×2 via `req.setTimeout`). Pinned by `src/test/cliNetworkBounds.test.ts` (`5bfa886`).
+   - **That guard was itself too narrow**, found by asking where the CLI's outbound calls actually
+     live: `count_tokens` (`src/exactTokens.ts`) and the profile endpoint
+     (`src/subscriptionUsage.ts`) sit one level ABOVE `src/cli`, so a `src/cli`-only scan would
+     declare the CLI safe while the calls it makes went unchecked. Both are correctly bounded today;
+     the scan now covers `src/cli` + the top level of `src/`, and deliberately not the subdirectories
+     (the server holds long-lived connections by design; a noisy guard gets deleted). `df8a12e`.
+
+**NEXT ACTION:** decide the review route (see 4 above — it needs the owner for option (b)), then take
+the next per-file surface by hand. Unreviewed and largest first: `setup.ts` (994, but it already has
+two dedicated test suites), `ctxmapCli.ts` (960 — its remote-call path is now verified bounded, the
+rest is unread), `diagnosticsCli.ts` (734), `watchCli.ts` (529). Whatever produces the findings, they
+are a HYPOTHESIS list: verify each against the source before any edit.
+
+**The next cross-file property worth checking** (do this before more per-file reading — it is what the
+per-file view cannot see): the exit-code contract. `agentlenspro` promises `0 = stdout is a result`,
+`2 = refused`, `64 = bad command line`, and an external consumer already depends on it
+(GitHub AgentlensPro#9). Only `diagnosticsCli` and `serverControl` were observed setting exit codes
+directly; whether EVERY `run*Cli` routes failures through `cliErrors`' `EXIT` is unverified.
 
 **Second known-open item still open:** the hot-path exit semantics are now additionally pinned by
 `src/test/cliHotPathLatency.test.ts` (TRDD-E8XIC2PM, shipped tonight) — the classification beside the
