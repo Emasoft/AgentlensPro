@@ -73,8 +73,16 @@ function armConnectDeadline(req: http.ClientRequest, endpoint: string): () => vo
   }, CONNECT_TIMEOUT_MS)
   timer.unref?.()
   const clear = () => clearTimeout(timer)
-  // 'connect' covers a fresh socket; 'response' covers a pooled one that never emits it.
-  req.on('socket', s => { s.on('connect', clear) })
+  req.on('socket', s => {
+    // `connecting` is the ONLY reliable test. Waiting for the 'connect' event alone silently turns
+    // this into a RESPONSE deadline — the very thing this must not be — because a socket that is
+    // already established (agent pool reuse, or one assigned after connecting) never emits it.
+    // MEASURED when it was wrong: TCP connect to a live, listening server took 1 ms and the request
+    // was still destroyed at 800 ms, because the loaded server took longer than that to REPLY. Every
+    // diagnostics verb would have failed against a busy-but-healthy server.
+    if (!s.connecting) { clear(); return }
+    s.once('connect', clear)
+  })
   req.on('response', clear)
   req.on('error', clear)
   return clear
