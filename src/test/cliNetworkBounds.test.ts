@@ -15,22 +15,37 @@ import * as path from 'path'
 // the recurrence this audit exists to prevent, and it must fail here rather than be found by a user
 // whose machine hangs.
 
-const CLI_DIR = path.join(__dirname, '..', '..', '..', 'src', 'cli')
+const SRC_DIR = path.join(__dirname, '..', '..', '..', 'src')
+const CLI_DIR = path.join(SRC_DIR, 'cli')
+
+/** `src/cli` plus the top level of `src/` — deliberately NOT the whole tree. The CLI's own verbs
+ *  live in the first; the outbound calls they REACH live in the second (`exactTokens.ts` posts to
+ *  count_tokens, `subscriptionUsage.ts` to the profile endpoint), and a scan that stopped at
+ *  `src/cli` would have declared the CLI safe while the calls it actually makes sat outside the
+ *  scan — the same shape as the defect this guard exists for. Subdirectories are excluded because
+ *  the server legitimately holds long-lived connections; widening there would trade a real guard
+ *  for noise, and a noisy guard gets deleted. */
+function scannedFiles(): Array<{ label: string; full: string }> {
+  const out: Array<{ label: string; full: string }> = []
+  for (const f of fs.readdirSync(CLI_DIR)) if (f.endsWith('.ts')) out.push({ label: `cli/${f}`, full: path.join(CLI_DIR, f) })
+  for (const f of fs.readdirSync(SRC_DIR)) if (f.endsWith('.ts')) out.push({ label: f, full: path.join(SRC_DIR, f) })
+  return out
+}
 
 /** How a call site can be bounded. `armConnectDeadline` is cliCore's own helper (a connect deadline,
  *  deliberately not a request timeout — a legitimate call can be slow SERVER-side). */
-const BOUND_MARKERS = ['AbortSignal.timeout', '.setTimeout(', 'armConnectDeadline', 'signal:']
+const BOUND_MARKERS = ['AbortSignal.timeout', '.setTimeout(', 'armConnectDeadline', 'signal:', 'ac.abort', 'ctl.abort']
 const CALL_SITE = /\b(?:fetch\(|https?\.request\()/
 
-suite('src/cli: every network call is bounded (TRDD-M8SV6LK5 — the cross-file half)', () => {
+suite('every network call the CLI can make is bounded (TRDD-M8SV6LK5 — the cross-file half)', () => {
   test('no call site can hang the process waiting for an address that never answers', () => {
-    const files = fs.readdirSync(CLI_DIR).filter(f => f.endsWith('.ts'))
-    assert.ok(files.length >= 20, `expected the CLI sources, found ${files.length}`)
+    const files = scannedFiles()
+    assert.ok(files.length >= 25, `expected the CLI + top-level sources, found ${files.length}`)
 
     const unbounded: string[] = []
     let sitesChecked = 0
-    for (const f of files) {
-      const lines = fs.readFileSync(path.join(CLI_DIR, f), 'utf8').split('\n')
+    for (const { label, full } of files) {
+      const lines = fs.readFileSync(full, 'utf8').split('\n')
       lines.forEach((line, i) => {
         if (line.trimStart().startsWith('//') || line.trimStart().startsWith('*')) return
         if (!CALL_SITE.test(line)) return
@@ -38,11 +53,11 @@ suite('src/cli: every network call is bounded (TRDD-M8SV6LK5 — the cross-file 
         // The bound may sit in the options object, on the request handle a few lines below, or in
         // the helper the call is wrapped in — so look at the surrounding block, not one line.
         const window = lines.slice(Math.max(0, i - 12), i + 25).join('\n')
-        if (!BOUND_MARKERS.some(m => window.includes(m))) unbounded.push(`${f}:${i + 1}  ${line.trim().slice(0, 90)}`)
+        if (!BOUND_MARKERS.some(m => window.includes(m))) unbounded.push(`${label}:${i + 1}  ${line.trim().slice(0, 90)}`)
       })
     }
 
-    assert.ok(sitesChecked >= 4, `the scanner found ${sitesChecked} call sites — it has stopped matching, which would make this test vacuous`)
+    assert.ok(sitesChecked >= 7, `the scanner found ${sitesChecked} call sites — it has stopped matching, which would make this test vacuous`)
     assert.deepStrictEqual(unbounded, [],
       'unbounded network call(s) — an address that DROPS will hang the command:\n  ' + unbounded.join('\n  '))
   })
