@@ -3,7 +3,7 @@ trdd-id: M8SV6LK5
 title: CLI sources production-readiness review — re-scoped against today's src/cli
 column: dev
 created: 2026-08-02T01:26:42+0200
-updated: 2026-08-05T00:32:00+0200
+updated: 2026-08-05T02:05:00+0200
 current-owner: session
 task-type: audit
 supersedes: K7PQ2M4V
@@ -55,11 +55,45 @@ eht: []
      the scan now covers `src/cli` + the top level of `src/`, and deliberately not the subdirectories
      (the server holds long-lived connections by design; a noisy guard gets deleted). `df8a12e`.
 
-**NEXT ACTION:** decide the review route (see 4 above — it needs the owner for option (b)), then take
-the next per-file surface by hand. Unreviewed and largest first: `setup.ts` (994, but it already has
-two dedicated test suites), `ctxmapCli.ts` (960 — its remote-call path is now verified bounded, the
-rest is unread), `diagnosticsCli.ts` (734), `watchCli.ts` (529). Whatever produces the findings, they
-are a HYPOTHESIS list: verify each against the source before any edit.
+6. **`ctxmapCli.ts` REVIEWED by hand — 3 defects, all fixed and deployed (`9eb5c26`).** Route (c) —
+   by hand — is what produced them; the free pool never would have, since two of the three are
+   cross-stage and one is a cross-file consistency break.
+
+   All three are the SAME failure wearing different clothes, which is the finding worth carrying
+   forward: **the scan reported a confident ANSWER for a lookup that never completed.** In a tool
+   whose entire job is "is X in my context", a false negative is indistinguishable from a true one
+   and the reader stops looking.
+
+   - **`--find` decided on ONE spelling while its own prefilter tried TWO.** Captures are JSON on
+     disk, so a needle carrying a quote or backslash matches only its escaped form. The prefilter
+     knew that (and its comment says testing one form "silently MISSES real hits"); the deciding
+     stage then re-serialised the parsed body and tested only the literal needle. MEASURED through
+     the installed command against a capture containing `he said "hi" loudly`: `--find 'said "hi"
+     loudly'` printed `(no match)`.
+   - **`--list` was the one scan in the file still calling `fs.readdirSync` directly.** A dir that
+     exists but denies listing passes the read scope's `isDirectory()` check and throws EACCES out of
+     the command — and the spool is scanned FIRST, so one unreadable dir suppressed every capture in
+     the readable ones. MEASURED: exit 1, `EACCES: permission denied, scandir …/spool`.
+   - **`--list` on an empty spool returned EX_USAGE 64**, which `cliErrors.ts` documents as never
+     coming from a healthy invocation. Now `EXIT.UNKNOWN` plus the actionable half the old message
+     lacked (says when capture is OFF).
+
+   5 tests in `src/test/ctxmapScanHonesty.test.ts`, **verified to fail against the pre-fix source**
+   (4 failing, with the real EACCES and the literal `(no match)` in the output) and re-verified
+   through `agentlenspro` on PATH after `deploy:safe`. One is a negative control — a genuinely absent
+   needle must still report no match — so the escaping fix cannot degrade into matching everything.
+   Suite 2,065.
+
+**NEXT ACTION:** take the next per-file surface by hand — route (c) is working, so (b) is no longer
+blocking (it stays an option if the remaining surface proves slow). Unreviewed and largest first:
+`setup.ts` (994, but it already has two dedicated test suites), `diagnosticsCli.ts` (734),
+`statuslineHistoryCli.ts` (686 — note its STORE was hardened separately, see Out of scope; the CLI
+view was not), `watchCli.ts` (529). Whatever produces the findings, they are a HYPOTHESIS list:
+verify each against the source before any edit.
+
+**The pattern to look for, now that it has three instances:** a two-stage scan whose stages disagree
+about what counts as a match, and any "no results" path that reports a code or a message asserting
+more than the run established.
 
 **The exit-code contract is VERIFIED cross-file — do not re-derive it.** It holds through two
 mechanisms that reconcile in one place, which is why a single grep looks inconsistent:
