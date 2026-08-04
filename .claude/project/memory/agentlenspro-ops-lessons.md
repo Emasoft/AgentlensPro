@@ -130,6 +130,50 @@ scripts/safe-deploy.sh runs types/lint/tests/esbuild/smoke/restart but NOT check
 
 There is NO API that reports whether a prompt-cache entry is still alive, so every cache-freshness verdict AgentlensPro gives is an INFERENCE from local evidence (last api_request timestamp vs the session's TTL regime) — by design, not as a shortcut. The only ground truth is to send a request and read cache_read vs cache_creation in the response, and if the cache HAD expired that probe itself pays the full rewrite, so an exact zero-cost answer is impossible in principle. Consequence: agentlenspro cache-expired and last-compact consume ZERO tokens — verified 2026-08-04 three ways: (1) the path is cacheExpiredCli -> callTool -> http://localhost:4316/mcp, and the server side is assessCacheExpiry (pure math) + getTtlContext -> getCurrentAccount -> readFileSync(~/.claude.json); (2) the three api.anthropic.com strings in the CLI bundle belong to OTHER verbs and are unreachable from these paths — /api/oauth/profile and /api/oauth/usage (subscriptionUsage.ts, account metadata) and /v1/messages/count_tokens (exactTokens.ts, ctxmap's exact measurement); (3) neither new module imports either file. Zero tokens does NOT mean zero cost: see TRDD-CXPLAT01 for the 20-40s probe latency measured the same day.
 
+
+^ATOM-KRXC-PSWU [desc:"The MCP transport had NO connect bound (75s stalls); the fix is a CONNECT deadline, never a request timeout — server-side slowness is legitimate", keywords: CLI_hangs_75_seconds cache-expired_takes_forever command_stalls_when_server_unreachable http.request_has_no_timeout connect_timeout_vs_request_timeout address_drops_instead_of_refusing, ocd: 2026-08-04, lmd: 2026-08-04]
+
+**A hot-path CLI verb must bound the CONNECT — and only the connect.** `rpc()` / `apiRequest()` called
+`http.request` with no bound at all, so an address that DROPS (a firewall blackhole, a suspended
+container, a VPN flap) held the process until the OS connect timeout. MEASURED 2026-08-05:
+`agentlenspro cache-expired` took **75,103 ms** — a verb whose documented purpose is answering when the
+server is DOWN. Fixed by an 800 ms connect deadline (`AGENTLENS_CONNECT_TIMEOUT_MS`), cleared on
+`connect` for a fresh socket and on `response` for a pooled one; 873 ms after, exit 2, with a reason
+that names the cause. Commit cc5326c, TRDD-E8XIC2PM.
+
+**Bound the CONNECT, never the request.** A legitimate call can be slow SERVER-side — `ctxvis` spawns
+an agent and measures two of its turns — so an idle-socket timeout kills correct work, while an
+unanswered connect is never anything but a dead endpoint.
+
+**Two traps this class hides behind.** (1) A closed port REFUSES instantly; only an address that DROPS
+(`10.255.255.1`) reproduces the stall, which is why a thorough "server down" suite stayed green for
+weeks while three commands took 10.6 s each. (2) `AbortSignal.timeout` bounds the REQUEST, not the
+PROCESS: the aborted socket keeps the event loop alive, so a CLI that ends by setting `process.exitCode`
+still waits it out — see `exitNow` in `src/cli/main.ts`, which must ALSO flush stdout first, because
+`process.exit()` discards a queued pipe write past ~64 KiB (measured: 262,144 written, 65,536 received). [^22]
+
+
+^ATOM-WPOI-PJMS [desc:"The verified transaction protects the FILE, not your INTENT: an op carrying a computed RESULT (set/delete) reintroduces the very race the lock closes", keywords: safe_config_edit_clobbers_another_tool's_hook transaction_lock_did_not_prevent_the_overwrite whole-array_set_is_stale settings.json_entry_disappeared ops_must_carry_predicates, ocd: 2026-08-04, lmd: 2026-08-04]
+
+**`safeConfigEdit` protects the FILE, not your INTENT.** The lock, the verify-diff and the atomic
+rename are all real — and an op that carries a computed **RESULT** still clobbers a concurrent writer,
+because the value was computed from a read taken BEFORE the lock and the transaction faithfully writes
+exactly what it was asked for. The verify-diff cannot catch it either: the change IS inside the declared
+op path, which is the one thing it checks.
+
+Found in our own hook installer (TRDD-T0CT9U4X, commit 4da41dc): the strip path committed
+`{op:'set', path:['hooks',ev], value:<array computed pre-lock>}`, so a hook ANOTHER tool appended to
+that event in between was silently deleted — from the user's `~/.claude/settings.json`, by the tool
+whose transaction exists because this project once destroyed one. `{op:'delete'}` is the same defect in
+a different op: "this array is now empty" is also a pre-lock conclusion.
+
+**RULE: ops carry PREDICATES, never results** — `append_unique` to add, `remove_by_substring`
+(+`prune_empty`) to strip. Two constraints that follow: the predicate crosses a process boundary into
+Python, so it must be DATA (a substring, never a regex or a callback); and a needle is matched against
+`json.dumps(element)`, so it must be a literal JSON does not escape — a command containing a tab or a
+quote will never match its own raw text, and a caller that cannot express a removal must say so and
+fall back loudly rather than emit a filter that strips nothing while reporting success.
+
 ## Notes and lessons learned
 
 [^1]: [id:ATOM-SETTINGS-WIPE-GUARDRAIL, status:valid, keywords:"config_file_wiped_or_corrupted_after_edit settings.json_wiped safeConfigEdit_guard start_fresh_on_parse_failure_removed", ocd:2026-07-11, lmd:2026-07-11] promoted from the old-repo LOCAL note
@@ -291,3 +335,4 @@ There is NO API that reports whether a prompt-cache entry is still alive, so eve
 [^19]: [id:ATOM-OT53-GHOC, status:valid, desc:"A file-scoped check proves nothing about outbound text; verify each hit before redacting", keywords:"green_identity_check_but_public_leak pasting_an_account_table_into_an_issue bulk_redaction_sweep is_this_hit_a_real_address_or_a_placeholder", ocd:2026-08-02, lmd:2026-08-02] DO NOT paste a tool table into a GitHub issue, PR or comment without redacting it first, and DO NOT conclude "no identities are exposed" from a green `check-identities`, BECAUSE that check scans tracked and shipped FILES only — three real addresses sat in public comments while it reported clean, and a published address cannot be unsent. DO route the account/status views through a redaction pass before posting (the PreToolUse guard now refuses the obvious cases), and when sweeping a repo for leaks, VERIFY each hit before editing: one of the four hits found that day was a synthetic `johndoe` example in someone's documentation, and a bulk redaction would have mangled it for nothing.
 [^20]: [id:ATOM-RFW9-SKOO, status:valid, desc:"A text search for a handle counts the word, not the ping", keywords:"searching_for_at-mentions_returns_thousands_of_hits same_count_for_different_handles mentions_qualifier", ocd:2026-08-02, lmd:2026-08-02] DO NOT search for who was paged with a text query like `@manager user:Emasoft`, BECAUSE GitHub tokenises away the `@` and matches the WORD — it returned 932 hits, nearly identical counts for four different handles, which is a signal that means nothing. DO use the `mentions:<user>` qualifier, which is recorded from the actual notification and returned the true answer (5 issues each).
 [^21]: [id:ATOM-SFJF-ZAN0, status:valid, desc:"Leak-shaped examples are leaks to a shape-based checker - even inside the note describing the incident", keywords:"identity_check_flags_memory_page home_path_example_in_note check-identities_scans_memory example_path_blocks_CI defang_examples_in_docs", ocd:2026-08-02, lmd:2026-08-02] DO NOT spell a home-path-shaped or email-shaped example literally in ANY tracked file — including PROJECT memory pages — BECAUSE check-identities is shape-based and scans everything tracked/shipped, so the example itself blocks CI (it did, twice today: a code comment, then the memory note DESCRIBING that incident). DO describe the shape in words (a home-path-shaped example) or use the documented placeholders.
+[^22]: [id:ATOM-QJAG-2CZ8, status:valid, desc:"A test that reads the LIVE capture dir must pass scanCap — uncapped, its runtime is set by the user's traffic", keywords:"test_suddenly_times_out_with_no_code_change test_scans_the_live_capture_directory suite_got_slower_overnight scanCap_in_tests flaky_slow_test_real_corpus", ocd:2026-08-04, lmd:2026-08-04] DO NOT let a test read the live capture directory (`~/.agentlens/otel-bodies` or the RAM-disk spool) without a `scanCap`, BECAUSE that directory grows with the machine's own activity — measured 1,377 → 5,467 files in a single evening — so the test's runtime is a function of how busy the user was, and it will blow its timeout one day with no code change behind it (two did, in the deploy gate, and the first instinct is to hunt a regression that does not exist). DO pass `scanCap` (300 is plenty) and let the report's own coverage block state that it sampled: 120 s+ timeouts became 2.1 s / 2.3 s / 5.5 s and the whole suite went 9 min → 52 s.

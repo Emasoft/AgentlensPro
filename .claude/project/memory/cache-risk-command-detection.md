@@ -104,6 +104,35 @@ breakpoint cannot have caused a miss, and a break can happen with NO block chang
 names the first change — so it can name a block that could not have caused the break, and every
 consumer inherits that. Tracked as TRDD-V8YOWHVT, which blocks adding the ~18 unmodelled causes. [^4]
 
+
+^ATOM-XWZZ-AEW4 [desc:"msg[0] is the CONVERSATION's identity: a divergence in its usertext segment means a different sub-agent stream, NOT a broken prefix — and the fix must key on the segment KIND", keywords: msg0_changed_but_nothing_broke subagent_shares_parent_session_id cache_break_blames_a_user_prompt UNCLASSIFIED_dominant_avoidable_perpetrator different_conversations_one_session_id fan-out_cache_report_over-attributes, ocd: 2026-08-04, lmd: 2026-08-04]
+
+**`msg[0]` is the conversation's identity, not a mutable block.** A sub-agent's API calls carry the
+PARENT's `session_id`, so two consecutive requests grouped under one id are frequently two different
+CONVERSATIONS. The caller's own opening words are immutable within a conversation, so a divergence in
+a `usertext` segment of `msg[0]` means "different agent", never "this agent's prefix was invalidated".
+Each stream keeps its own cache entry.
+
+MEASURED (2026-08-04, this machine): **397 of 2,003** consecutive real turn-pairs diverge first exactly
+there, and every sampled one is a different sub-agent TASK PROMPT ("You are doing a CODE REVIEW of…",
+"You are auditing source files…"). Before the fix these were filed as `UNCLASSIFIED` and then ranked as
+the *"Dominant AVOIDABLE perpetrator, 23.2%"* — a report telling the operator to fix something that
+never happened. After: `UNCLASSIFIED` 29.1% → 5.7%, the verdict moved to a real cause, and a genuinely
+avoidable 251k-token `MEMORY_FILE_CHANGED` surfaced from under the noise.
+
+The A→B→A interleave signature cannot catch these: it keys on model + tool catalog, and two sub-agents
+of the same type share both.
+
+**The load-bearing detail:** the test requires kind `usertext` on BOTH sides. CLAUDE.md, the rules and
+the memory index are injected INTO `msg[0]` and DO change mid-conversation (a memory rewrite alone was
+19% of classified break tokens here), so they keep their own kinds and their own causes; a compaction
+rewrite of `msg[0]` is `postcompact` and is claimed earlier. Implemented in `diffBlocks`
+(`src/cacheBreakTimeline.ts`), TRDD-00NOBU9W, commit 8e7d2f1.
+
+Per-stream innocence and aggregate cost are BOTH true: the fan-out still pays N cold prefixes because
+the shared context and the per-agent tail sit in one message with no breakpoint between them. That is a
+spawn-shape cost (`spawnRollup`'s FLEET-COLD), not an invalidation — see [[agent-fleet-cache-economics]].
+
 ## Notes and lessons learned
 [^1]: [id:ATOM-LAYR-ONLY, status:valid, keywords:"no hook sees it therefore undetectable only detection path wrong layer enumerate layers before concluding", ocd:2026-07-21, lmd:2026-07-21]
   DO NOT conclude "no hook observes X, therefore X is only detectable by inference" — that claim
