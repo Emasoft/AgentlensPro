@@ -4,6 +4,43 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.22.0] - 2026-08-04
+
+### Fixed
+
+- **`statusline-history` rendered UTC under a bare `time` header while every sibling surface renders
+  local.** On a UTC+2 machine two views of the SAME store disagreed by two hours with nothing marking
+  the difference, so the newest row always looked ~2h old. Combined with the second defect below, the
+  `cache` view — *the* falsifier for a claimed cache miss — was declared BLIND and abandoned
+  mid-measurement while capture was live and 41s fresh. Times now render **local**, and every time
+  column header carries the machine's `±HHMM` offset.
+- **`statusline-history` gave no way to tell truncation from stale capture.** Most views are RANKED
+  (by cost / write / peak) and every view is capped by `--limit` (default 40), so the newest row in
+  the OUTPUT is unrelated to the newest row in the STORE. Every run now prints a coverage line naming
+  the sort, the sample count, and the store's true newest sample with its age; a ranked result that
+  hit the limit says so explicitly. `--json` carries `sortedBy` / `newestSampleTs` / `samplesInWindow`.
+- **The cache-break classifier presented a guess as a verdict.** `cacheBreak.ts` set-diffs injected
+  context blocks and names the first that changed — not the API's criterion, which caches the prefix
+  ending at a `cache_control` breakpoint with a 20-block lookback. Measured: `system[0]` changes on
+  every request while those turns bill 0.3–0.7% write, which alone disproves "first changed block
+  wins". Every set-diff attribution now carries `attribution: 'block-diff-only'` and
+  `confidence: 'low'`; `get_cache_break_timeline` (raw bodies, breakpoint-aware) remains the
+  authoritative path and is what the remediation now points to.
+- **Reload/MCP remediation text was wrong, not just imprecise.** `PLUGINS_RELOADED` told users to
+  stop reloading plugins mid-conversation; the docs say skills, commands, agents, hooks, LSP servers,
+  monitors and themes **never** invalidate the cache, only a plugin supplying an MCP server whose
+  tools load into the prefix does, and since v2.1.163 the command refuses that reload without
+  `--force`. `SKILLS_RELOADED` is not documented as a cache event anywhere and is now labelled
+  INFERRED.
+
+### Added
+
+- **`UNATTRIBUTABLE` cache-break cause.** A write that dominates its turn (more written than read)
+  with nothing in the diff to blame previously reported `broke: false` / `wastedTokens: 0` — silently
+  hiding the costliest event the analyzer exists to surface. It is now reported with its real cost and
+  **no culprit named**, because a wrong name sends someone to fix the wrong component. A modest write
+  with no divergence still stays silent, so this cannot become a false-positive generator.
+
 ## [2.21.0] - 2026-08-02
 
 ### Added
