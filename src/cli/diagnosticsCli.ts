@@ -321,6 +321,46 @@ async function runHooksConfig(kvs: string[]): Promise<void> {
   console.log(`applied realtime (all sessions): gate=${c.gateEnabled ? c.gateMode : 'off'} capture=${c.captureEnabled ? 'on' : 'off'} advisor=${c.advisorEnabled ? 'on' : 'off'} cacheguard=${c.cacheGuardEnabled ? 'on' : 'off'}`)
 }
 
+/** What the guard remembers between polls. The two control flags are their OWN fields and are
+ *  deliberately NOT members of `active`: they used to be sentinel keys (`__down`, `__advised`) in the
+ *  same set, and that is precisely what broke the advice line — `active.size > 0` was then also true
+ *  when nothing was burning and only a sentinel remained, so the "episode over" branch never ran and
+ *  `__advised` was never cleared. The guard printed advice for its FIRST episode and silently never
+ *  again, for the lifetime of a process that is meant to run for days. */
+export interface GuardState { active: Set<string>; advised: boolean; down: boolean }
+export const newGuardState = (): GuardState => ({ active: new Set(), advised: false, down: false })
+
+/** One poll, as the lines it should print. Pure and exported so the transitions can be tested
+ *  without a server and without runGuard's infinite loop — the loop is why this logic went
+ *  unverified. `rep === null` means the fetch failed; `error` then carries why. Mutates `st`, which
+ *  the caller keeps across polls. */
+export function guardStep(st: GuardState, rep: BurnRiskReport | null, error?: string): string[] {
+  const out: string[] = []
+  if (rep === null) {
+    // Server restart mid-watch must not kill the guard — report once per outage, not once per poll.
+    if (!st.down) { out.push(`[burn-guard] server unreachable: ${error ?? 'unknown error'}`); st.down = true }
+    return out
+  }
+  // A successful fetch IS the proof the server is back — announce recovery BEFORE any risk line, not
+  // after processing them (which reads as "resuming" while the guard is already resumed).
+  if (st.down) { out.push('[burn-guard] server back — resuming'); st.down = false }
+  for (const risk of rep.risks || []) {
+    if (risk.active && !st.active.has(risk.code)) {
+      out.push(`[burn-guard] ${risk.code}: ${risk.detail}`)
+      st.active.add(risk.code)
+    } else if (!risk.active && st.active.has(risk.code)) {
+      out.push(`[burn-guard] ${risk.code} cleared`)
+      st.active.delete(risk.code)
+    }
+  }
+  // Advice rides the FIRST line of an episode and is suppressed for the rest of it. An episode ends
+  // when no risk is active — which is now a question about RISK CODES alone, so it can actually be
+  // answered, and the next episode gets its advice.
+  if (st.active.size === 0) st.advised = false
+  else if (rep.advice && !st.advised) { out.push(`[burn-guard] advice: ${rep.advice}`); st.advised = true }
+  return out
+}
+
 // Realtime burn guard: poll the risk report and print one line per risk TRANSITION —
 // fired→'[burn-guard] CODE: detail', cleared→'[burn-guard] CODE cleared'. Silent while
 // quiet, so the stdout stream is Monitor-friendly (each line = one notification; no noise).
@@ -328,35 +368,18 @@ async function runGuard(intervalSec: number | undefined): Promise<void> {
   const interval = Math.max(5, Math.min(300, intervalSec || 15)) * 1000
   await init()
   console.log(`[burn-guard] armed — polling burn risk every ${interval / 1000}s (silent while quiet)`)
-  const wasActive = new Set<string>()
+  const st = newGuardState()
   for (;;) {
+    let lines: string[]
     try {
       // While recovering from an outage, re-do the handshake BEFORE the fetch: harmless on the REST
       // fast path, and it re-establishes the MCP session for an older server on the fallback path.
-      if (wasActive.has('__down')) await init()
-      const rep = await fetchBurnRisk()
-      // A successful fetch IS the proof the server is back — announce recovery HERE, before any risk
-      // line, not after processing them (which reads as "resuming" while the guard is already resumed).
-      if (wasActive.has('__down')) { console.log('[burn-guard] server back — resuming'); wasActive.delete('__down') }
-      for (const risk of rep.risks || []) {
-        if (risk.active && !wasActive.has(risk.code)) {
-          console.log(`[burn-guard] ${risk.code}: ${risk.detail}`)
-          wasActive.add(risk.code)
-        } else if (!risk.active && wasActive.has(risk.code)) {
-          console.log(`[burn-guard] ${risk.code} cleared`)
-          wasActive.delete(risk.code)
-        }
-      }
-      if (wasActive.size > 0 && rep.advice) {
-        // advice rides only on the first line of an episode; suppress repeats
-        if (!wasActive.has('__advised')) { console.log(`[burn-guard] advice: ${rep.advice}`); wasActive.add('__advised') }
-      } else {
-        wasActive.delete('__advised')
-      }
+      if (st.down) await init()
+      lines = guardStep(st, await fetchBurnRisk())
     } catch (e) {
-      // Server restart mid-watch must not kill the guard — report once per outage.
-      if (!wasActive.has('__down')) { console.log(`[burn-guard] server unreachable: ${(e as Error).message}`); wasActive.add('__down') }
+      lines = guardStep(st, null, (e as Error).message)
     }
+    for (const l of lines) console.log(l)
     await sleep(interval)
   }
 }
@@ -484,7 +507,7 @@ function emit(tool: string, result: unknown, globals: { out: string | null; json
     return
   }
   if (globals.out) {
-    fs.writeFileSync(globals.out, JSON.stringify(result, null, 2))
+    writeOut(globals.out, result)
     console.log(`${tool}: ${digest(result)}`)
     console.log(`full -> ${globals.out}`)
   } else if (typeof result === 'string') {
@@ -500,6 +523,29 @@ function emit(tool: string, result: unknown, globals: { out: string | null; json
   } else {
     console.log(JSON.stringify(result, null, 2))
   }
+}
+
+/** Write a `--out` payload, creating the parent directory first.
+ *
+ *  Without the mkdir the tool call SUCCEEDS, the server does the (sometimes expensive) work, and the
+ *  answer is then thrown away by an ENOENT from the very last statement — measured:
+ *  `--out ./nope/deep/a.json` exits 1 with the payload gone and nothing to retry from except the
+ *  whole call. ctxmap's own emit has always created the dir; this is the same guarantee for the
+ *  diagnostics path, where the discarded work costs the most. */
+export function writeOut(file: string, result: unknown): void {
+  fs.mkdirSync(path.dirname(path.resolve(file)), { recursive: true })
+  fs.writeFileSync(file, JSON.stringify(result, null, 2))
+}
+
+/** The value that follows a flag. A value that is ITSELF a flag is a caller mistake, never a value:
+ *  `--out --json` wrote a file literally named "--json" in the cwd AND silently swallowed the
+ *  `--json` the caller had asked for, so the request was misread twice and reported as success
+ *  (measured — exit 0, junk file created). ctxmapCli guards its own flag values this way; this is
+ *  that guard for the ops flags, which are the ones that create files and directories. */
+function takeValue(argv: string[], i: number, flag: string, what: string): string {
+  const v = argv[i]
+  if (v === undefined || v.startsWith('--')) throw new UsageError(`${flag} needs ${what}`)
+  return v
 }
 
 /** A pre-rendered, human-facing payload: `{ format: <non-json>, text: string }`. `format: 'json'`
@@ -537,16 +583,9 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
     else if (argv[i] === '--stop-server') ops.stop = true
     else if (argv[i] === '--purge-db') ops.purgeDb = true
     else if (argv[i] === '--purge-bodies') ops.purgeBodies = true
-    else if (argv[i] === '--export-bodies') {
-      ops.exportBodies = argv[++i]
-      if (!ops.exportBodies) throw new UsageError('--export-bodies needs a destination directory')
-    } else if (argv[i] === '--since') {
-      ops.since = argv[++i]
-      if (!ops.since) throw new UsageError('--since needs a value (ISO timestamp or hours)')
-    } else if (argv[i] === '--until') {
-      ops.until = argv[++i]
-      if (!ops.until) throw new UsageError('--until needs a value (ISO timestamp)')
-    }
+    else if (argv[i] === '--export-bodies') ops.exportBodies = takeValue(argv, ++i, '--export-bodies', 'a destination directory')
+    else if (argv[i] === '--since') ops.since = takeValue(argv, ++i, '--since', 'a value (ISO timestamp or hours)')
+    else if (argv[i] === '--until') ops.until = takeValue(argv, ++i, '--until', 'a value (ISO timestamp)')
     else if (argv[i] === '--install-skill') ops.installSkill = true
     else if (argv[i] === '--guard') {
       ops.guard = true
@@ -564,10 +603,8 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
     else if (argv[i] === '--uninstall-otel') otelOp = 'uninstall'
     else if (argv[i] === '--install-statusline') statuslineOp = 'install'
     else if (argv[i] === '--uninstall-statusline') statuslineOp = 'uninstall'
-    else if (argv[i] === '--out') {
-      globals.out = argv[++i]
-      if (!globals.out) throw new UsageError('--out needs a path')
-    } else rest.push(argv[i])
+    else if (argv[i] === '--out') globals.out = takeValue(argv, ++i, '--out', 'a path')
+    else rest.push(argv[i])
   }
 
   // Settings mutation is standalone — no server needed, exits after the transaction.
@@ -699,7 +736,7 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
         // Position-prefixed so the SAME tool called twice (e.g. two run_diagnostics_sql presets)
         // cannot silently overwrite the earlier result — that exact collision happened in the field.
         const p = `${globals.out}-${i + 1}-${s.tool}.json`
-        fs.writeFileSync(p, JSON.stringify(result, null, 2))
+        writeOut(p, result)
         console.log(`${s.tool}: ${digest(result)}\n  full -> ${p}`)
       } else {
         console.log(`=== ${s.tool} ===\n${typeof result === 'string' ? result : JSON.stringify(result)}`)
