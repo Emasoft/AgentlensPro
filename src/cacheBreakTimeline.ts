@@ -118,7 +118,7 @@ export const CACHE_BREAK_REMEDIATION: Record<CacheBreakTimelineCause, string> = 
   TTL_EXPIRY:                 'No prefix change — the cache entry simply expired between turns. A heartbeat within the TTL (5m/1h) would convert these writes back to cache_read.',
   COLD_START:                 'A cold cache warm (first turn / resume / no prior cached prefix). Expected once per session; not an avoidable per-turn break.',
   COMPACTION:                 'Conversation compaction rebuilt the message layer. Expected once per compaction; avoid compacting more than necessary.',
-  SUBAGENT_INTERLEAVE:        'A sub-agent stream interleaves with the parent under the SAME session id (A→B→A pattern) — each stream keeps its OWN cache, so nothing actually broke; the child bills its own (smaller) prefix. Pin the sub-agent\'s tools + model in its frontmatter to shrink that footprint.',
+  SUBAGENT_INTERLEAVE:        'Two requests grouped under one session id belong to DIFFERENT streams — sub-agent calls carry the parent\'s session id. Claimed on either of two signatures: the A→B→A pattern (this request matches turn-2\'s tool catalog + model, not turn-1\'s), or a different msg[0] prompt (the conversation\'s own opening words, immutable within one conversation). Each stream keeps its OWN cache, so nothing actually broke and there is nothing to fix; the child bills its own (smaller) prefix. Pin the sub-agent\'s tools + model in its frontmatter to shrink that footprint.',
   NORMAL_GROWTH:              'Not a break — append-only growth: this turn\'s NEW content was cached for the first time (expected incremental write). Reduce it only by producing/ingesting less content per turn.',
   MESSAGE_TRIMMED:            'A block was REMOVED from the cached message prefix (harness context-editing / tool-result clearing / message deletion) — everything after the removal point re-writes. Prefer compaction or a fresh session over mid-session trimming of a huge transcript.',
   ATTACHMENT_CHANGED:         'A non-text block (image / tool_use input) inside the cached prefix changed or moved. Past attachments should be immutable; an image riding in the prefix re-bills the tail on any change.',
@@ -271,8 +271,11 @@ function causeForContentKind(kind: BlockContentKind): CacheBreakTimelineCause {
 // Code concatenates CLAUDE.md + every rule + memory + the skills list into ONE giant system-reminder,
 // so segmenting lets the diff pinpoint the CLAUDE.md segment vs a rule vs the skills list vs a date,
 // instead of blaming the whole mega-block. Fail-soft: a block with no boundary markers is one segment.
-interface Segment { kind: BlockContentKind; label: string; text: string }
-function segmentInjected(text: string, blockLabel: string): Segment[] {
+export interface Segment { kind: BlockContentKind; label: string; text: string }
+/** Exported for tests and for offline forensics on real bodies: the SEGMENTATION is what decides
+ *  which culprit a break can be pinned to, so a segment nothing classifies is how a real perpetrator
+ *  ends up as UNCLASSIFIED (TRDD-00NOBU9W). */
+export function segmentInjected(text: string, blockLabel: string): Segment[] {
   const boundary = /Contents of ([^\n(]+?\.[A-Za-z0-9_]+)/g
   const marks: { idx: number; label: string }[] = []
   let m: RegExpExecArray | null
@@ -738,6 +741,29 @@ function diffBlocks(prevBlocksRaw: PrefixBlock[], curBlocksRaw: PrefixBlock[], l
     // First divergence at position i. Classify most-specific-first.
     if (c.kind === 'postcompact' || p.kind === 'postcompact') return mkBlock('COMPACTION', layer, c, `conversation compaction rebuilt the ${layer} prefix at ${c.label}`)
     if (p.norm === c.norm) return mkBlock('SYSTEM_TIMESTAMP', layer, c, `moving date/clock in ${c.label}`)
+    // msg[0] carries the CONVERSATION'S IDENTITY, and its `usertext` segment is the caller's own
+    // opening words — which are immutable within one conversation. So a divergence THERE does not
+    // mean a block changed; it means these two requests are different conversations that happen to
+    // share a session id, which is the norm for sub-agents (their calls carry the PARENT's id).
+    // Nothing broke: each stream keeps its own cache entry.
+    //
+    // Measured over 2,003 consecutive real turn-pairs (TRDD-00NOBU9W): 397 diverge first exactly
+    // here, and every sampled one is a different sub-agent TASK PROMPT ("You are doing a CODE
+    // REVIEW of…", "You are auditing source files…"). They were landing in UNCLASSIFIED, which then
+    // ranked as the "Dominant AVOIDABLE perpetrator" at 23.2% — a report telling the operator to go
+    // fix something that never happened. The existing A→B→A signature cannot catch them: it keys on
+    // model + tool catalog, and two sub-agents of the same type share both.
+    //
+    // The KIND is the load-bearing part of the test. The harness injects CLAUDE.md, the rules and the
+    // memory index INTO msg[0], and those DO change mid-conversation — a memory rewrite alone was 19%
+    // of classified break tokens on this machine. Those segments carry their own kinds
+    // (claudemd/rule/memory/skillcatalog/hook/date), so requiring `usertext` on BOTH sides leaves
+    // every one of them exactly where it was. A compaction rewrite of msg[0] is `postcompact` and was
+    // already claimed above.
+    if (layer === 'message' && c.label.startsWith('msg[0]') && c.kind === 'usertext' && p.kind === 'usertext') {
+      return { cause: 'SUBAGENT_INTERLEAVE', culpritLayer: 'message', culpritId: 'interleave:root-differs',
+        culpritSummary: 'msg[0]\'s own prompt text differs — these two requests are DIFFERENT conversations sharing one session id (a sub-agent\'s calls carry the parent\'s session id), so neither one broke the other\'s cache' }
+    }
     // Same content, different position (this block existed earlier in prev, and prev's block still
     // exists later in cur) → a pure reorder, not a content change.
     if (prevFps.has(c.fp) && curFps.has(p.fp)) {

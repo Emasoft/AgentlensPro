@@ -6,6 +6,25 @@ All notable changes to AgentlensPro are documented here.
 
 ## [2.23.0] - 2026-08-04
 
+### Fixed
+
+- **The report named a perpetrator for a break that never happened.** `msg[0]` carries the
+  CONVERSATION's identity — its `usertext` segment is the caller's own opening words, which are
+  immutable within one conversation — but the block diff treated a divergence there as a changed
+  block and filed it as `UNCLASSIFIED`. Measured over 2,003 consecutive real turn-pairs: **397
+  diverge first exactly there, and every sampled one is a different sub-agent TASK PROMPT** sharing
+  the parent's session id (sub-agent calls carry it). Nothing broke — each stream keeps its own cache
+  — yet `get_cache_break_causes` crowned that segment *"Dominant AVOIDABLE perpetrator, 23.2%"*, i.e.
+  told the operator to fix something that never happened. The existing A→B→A signature cannot catch
+  these: it keys on model + tool catalog, and two sub-agents of the same type share both. Such pairs
+  are now `SUBAGENT_INTERLEAVE` (an EXPECTED cause, excluded from the avoidable ranking).
+  On the same 24 h window `UNCLASSIFIED` fell from **29.1% to 5.7%** (39 events → 4), the verdict
+  moved to a real actionable cause (a mid-session model switch), and `MEMORY_FILE_CHANGED` — a
+  genuinely avoidable 251k-token break — surfaced from underneath the noise. The discriminator is the
+  segment KIND on BOTH sides: CLAUDE.md, the rules and the memory index are injected INTO `msg[0]`
+  and DO change mid-conversation (a memory rewrite alone was 19% of classified break tokens here),
+  so they keep their own kinds and their own causes; a compaction rewrite stays `COMPACTION`.
+
 ### Added
 
 - **The cache-break classifier now models the documented causes it was missing** (TRDD-B9ERTBZ9), each

@@ -4,7 +4,8 @@ import * as os from 'os'
 import * as path from 'path'
 import {
   extractTurnPrefix, classifyCacheBreak, buildCacheBreakTimeline, buildCauseCostPeakReport, formatTimeline,
-  defaultBodiesDir, CACHE_BREAK_REMEDIATION, type RawRequestForBreak, type BreakTiming,
+  defaultBodiesDir, CACHE_BREAK_REMEDIATION, EXPECTED_CAUSES,
+  type RawRequestForBreak, type BreakTiming,
 } from '../cacheBreakTimeline'
 
 // TRDD-6TQ2FBUR — REAL tests for the cache-break ROOT-CAUSE timeline. The classifier tests build a
@@ -340,6 +341,53 @@ suite('cacheBreakTimeline — TRDD-B9ERTBZ9 documented causes (env / git / param
     // A marker-less request is CACHING_DISABLED even when it is also below the minimum: nothing was
     // ever offered to the cache, so "the prompt was too small" would name a condition that never applied.
     assert.strictEqual(v.cause, 'CACHING_DISABLED')
+  })
+
+  // ── TRDD-00NOBU9W — msg[0] is the CONVERSATION's identity, not a mutable block ────────────────
+  // Measured over 2,003 consecutive real turn-pairs: 397 of them diverge FIRST at a `usertext`
+  // segment of msg[0], and every one is a different SUB-AGENT TASK PROMPT ("You are doing a CODE
+  // REVIEW of…", "You are auditing source files…") sharing the parent's session id. Nothing broke —
+  // each stream keeps its own cache — yet the block diff filed them as UNCLASSIFIED and the report
+  // crowned that segment "Dominant AVOIDABLE perpetrator, 23.2%", i.e. told the operator to go fix
+  // something that never happened. The user's own first words are immutable within a conversation;
+  // the FILES injected around them are not, which is why the discriminator is the segment KIND.
+  const AGENT_A = 'You are doing a CODE REVIEW of a diff in the repo /w/proj (a plugin; Rust crate at scripts/x). Get your review scope with: git diff'
+  const AGENT_B = 'You are auditing source files in /w/proj for REAL BUGS. Read each file COMPLETELY (offset/limit chunks for files >2000 lines).'
+
+  test('a DIFFERENT msg[0] task prompt is a different conversation — not an avoidable break', () => {
+    const v = classify(reqBody({ messages: injectedMsg(AGENT_A) }), reqBody({ messages: injectedMsg(AGENT_B) }))
+    assert.strictEqual(v.cause, 'SUBAGENT_INTERLEAVE')
+    assert.ok(EXPECTED_CAUSES.has(v.cause), 'a stream switch must rank as EXPECTED, never as a perpetrator')
+  })
+
+  test('an injected MEMORY file inside msg[0] is still MEMORY_FILE_CHANGED (the 19% cause survives)', () => {
+    const mem = (body: string) => `Contents of /w/.claude/projects/p/memory/MEMORY.md (user's auto-memory, persists across conversations):\n${body}`
+    const v = classify(reqBody({ messages: injectedMsg(mem('- [a](a.md) — one line')) }),
+      reqBody({ messages: injectedMsg(mem('- [a](a.md) — one line\n- [b](b.md) — another')) }))
+    assert.strictEqual(v.cause, 'MEMORY_FILE_CHANGED')
+  })
+
+  test('an injected CLAUDE.md inside msg[0] is still CLAUDE_MD_CHANGED', () => {
+    const md = (body: string) => `Contents of /w/CLAUDE.md (project instructions):\n${body}`
+    const v = classify(reqBody({ messages: injectedMsg(md('rule alpha')) }), reqBody({ messages: injectedMsg(md('rule beta')) }))
+    assert.strictEqual(v.cause, 'CLAUDE_MD_CHANGED')
+  })
+
+  test('a compaction that rewrites msg[0] is still COMPACTION, not a stream switch', () => {
+    const v = classify(reqBody({ messages: injectedMsg(AGENT_A) }),
+      reqBody({ messages: injectedMsg('This session is being continued from a previous conversation that ran out of context. Summary: …') }))
+    assert.strictEqual(v.cause, 'COMPACTION')
+  })
+
+  test('a usertext change at a LATER message is NOT a stream switch — only msg[0] carries identity', () => {
+    const tail = { type: 'text' as const, text: 'stable tail block', cache_control: CC }
+    const msgs = (mid: string): RawRequestForBreak['messages'] => [
+      { role: 'user', content: [{ type: 'text', text: AGENT_A }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'ok' }] },
+      { role: 'user', content: [{ type: 'text', text: mid }, tail] },
+    ]
+    const v = classify(reqBody({ messages: msgs('first follow-up') }), reqBody({ messages: msgs('a different follow-up') }))
+    assert.notStrictEqual(v.cause, 'SUBAGENT_INTERLEAVE')
   })
 
   test('every new cause carries a remediation stating its CONDITION, never an absolute', () => {
