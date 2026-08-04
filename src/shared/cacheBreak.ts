@@ -69,8 +69,8 @@ const REMEDIATION: Record<CacheBreakCause, string> = {
   EFFORT_CHANGED:         'Keep the reasoning-effort level fixed within a conversation; changing it invalidates the prefix.',
   FAST_MODE:              'Toggling fast mode invalidates the cache — decide it once at session start.',
   MCP_SERVER_TOGGLE:      'Keep MCP servers with non-deferred tools connected for the whole session, or make their tools deferred.',
-  PLUGINS_RELOADED:       'A /reload-plugins re-registered the tool/skill/agent catalogs mid-session, rewriting the whole prefix. Reload plugins at session start (or in a fresh session), not mid-conversation.',
-  SKILLS_RELOADED:        'A /reload-skills re-registered the skill catalog mid-session. Reload skills at session start, or accept one full prefix rewrite per reload.',
+  PLUGINS_RELOADED:       'A /reload-plugins churned 2+ catalogs in one turn. It resets the prefix ONLY when a reloaded plugin supplies an MCP server whose tools load into the prefix — per the docs, "skills, commands, agents, hooks, LSP servers, monitors, and themes never invalidate the cache". Since v2.1.163 the command warns and skips such a reload unless --force, so check whether --force was passed before blaming the reload.',
+  SKILLS_RELOADED:        'A /reload-skills re-registered the skill catalog. This is NOT documented as a cache event anywhere, and skills sit in the docs\' never-invalidates list — treat this attribution as INFERRED and look for a co-occurring cause before acting on it.',
   PLUGIN_CHANGED:         'Installing/removing/enabling/updating a plugin mid-session rewrites the tool+skill+agent catalogs. Do plugin surgery in a scratch session, then restart.',
   ACCOUNT_SWITCHED:       'A /login or /logout swapped the credential mid-session; the previous account\'s cache entry is unreachable. Finish the session on one account, or rotate at a natural boundary.',
   TOOL_DENY:              'Avoid denying an entire tool mid-session; scope the deny narrower or set it before the session starts.',
@@ -193,8 +193,17 @@ function classifyTurn(prev: CacheTurnInput, cur: CacheTurnInput, opts: AnalyzeCa
   if (cur.hasFastMode && !prev.hasFastMode) return emit('FAST_MODE')
   // 2.5 Plugin reload — /reload-plugins re-registers ≥2 catalogs at once. Detect BEFORE the
   // single-first-divergence pick (step 3), else it collapses to whichever catalog sorted first
-  // (INJECTED_BLOCK_CHANGED / TOOLS_CHANGED) and the reload — the machine's #1 cache-break cost —
-  // is never named. Confidence = high for 3+ catalogs, medium for exactly 2. (TRDD-EYA3X5MQ)
+  // (INJECTED_BLOCK_CHANGED / TOOLS_CHANGED) and the reload is never named. Confidence = high for
+  // 3+ catalogs, medium for exactly 2. (TRDD-EYA3X5MQ)
+  //
+  // SCOPE, corrected 2026-08-04 against the docs: this classifier only ever runs on a turn that
+  // ALREADY paid a real cache_creation, so naming the reload as the culprit of an OBSERVED break is
+  // sound. What is NOT sound — and what the remediation text used to say — is that a reload always
+  // rewrites the prefix. It does not: "Skills, commands, agents, hooks, LSP servers, monitors, and
+  // themes never invalidate the cache", and only a plugin supplying an MCP server whose tools LOAD
+  // INTO THE PREFIX can. Deferred MCP tools (the default) merely append. So a ≥2-catalog churn is
+  // evidence of a reload having happened, not proof that the reload is what cost the tokens; the
+  // remediation now says so rather than sending the reader to stop reloading plugins.
   const prevKinds = new Set(prev.sources.map(s => s.kind))
   const churnedCatalogs = new Set<string>()
   for (const d of diffTurnSources(prev.sources, cur.sources)) {
