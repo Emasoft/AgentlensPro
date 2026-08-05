@@ -1,9 +1,9 @@
 ---
 trdd-id: M8SV6LK5
 title: CLI sources production-readiness review — re-scoped against today's src/cli
-column: dev
+column: human_review
 created: 2026-08-02T01:26:42+0200
-updated: 2026-08-05T03:54:48+0200
+updated: 2026-08-05T04:03:22+0200
 current-owner: session
 task-type: audit
 supersedes: K7PQ2M4V
@@ -16,8 +16,9 @@ eht: []
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-05
 
-**FILE-BY-FILE AUDIT COMPLETE** — all 10 `src/cli` files reviewed by hand, 24 defects fixed. One
-cosmetic follow-up remains (the `hookInstall.ts:147` escape spelling); see NEXT ACTION at the end.
+**COMPLETE — awaiting human review.** All 10 `src/cli` files reviewed by hand, 24 defects fixed,
+tested, falsified, deployed and PATH-verified. Nothing left in flight. See the closing block at the
+end for the three findings that outlive the defect list.
 
 > **`updated:` went BACKWARDS once, on purpose.** Three edits during this session typed it from
 > memory instead of reading `date`, landing up to two hours in the future (a `04:55` while the clock
@@ -324,24 +325,45 @@ cosmetic follow-up remains (the `hookInstall.ts:147` escape spelling); see NEXT 
 falsified, deployed and PATH-verified; suite 2,055 → 2,133.** Plus one server defect found and fixed
 along the way (`TRDD-2YP3DB9Y`, at `human_review`).
 
-**NEXT ACTION — one cosmetic follow-up, then this card closes.** `hookInstall.ts:147` should spell
-its control-character class with ESCAPES — `/["\\\x00-\x1f]/`, identical to the regex engine — so the
-file is plain text again and greppable. **The Edit tool CANNOT do it:** Read renders the control
-bytes as spaces, so `old_string` can never match (tried; "String to replace not found"). This is the
-rare case that genuinely needs a byte-level rewrite, and it is NOT urgent — the code is correct as
-written. Do it deliberately, in a session with room:
+15. **The follow-up is DONE (`8a6ec4e`) — and it was not cosmetic after all.** `hookInstall.ts:147`
+    now spells its class with escapes, `/["\\\x00-\x1f]/`.
 
-```bash
-perl -i -pe 's/\Q["\\\x00-\x1f]\E/["\\\\\\x00-\\x1f]/ if $. == 147' src/cli/hookInstall.ts
-file src/cli/hookInstall.ts                      # must now say "text", not "data"
-grep -c safeConfigEdit src/cli/hookInstall.ts    # must print 3 WITHOUT -a, not empty
-pnpm run check-types && npx mocha out/test/test/hookInstall.toctou.test.js
-```
+    - **Equivalence was PROVEN, not asserted:** both spellings tested against all 256 byte values,
+      **zero disagreements**. A regex change justified by "it's obviously the same" is how a silent
+      behaviour change ships.
+    - **The substitution self-reported its own match count** (`1 NUL, 1 0x1F`), because a no-op
+      `perl -i` is silent — and a silent no-op here would look exactly like success, which is the
+      identical failure mode as the vacuous grep that created this item.
+    - **It found a second thing.** With the escaped spelling, `no-control-regex` no longer fires, so
+      the `eslint-disable-next-line` above it was **dead code**. The repo's normal `pnpm run lint`
+      could not see it — only `--report-unused-disable-directives` reports it, and it does so as an
+      **error**. Directive removed; the WHY is now a comment at the site so nobody "simplifies" the
+      escapes back into raw bytes.
+    - Verified end to end: `file(1)` reports UTF-8 text · `grep -c safeConfigEdit` returns 3 **without
+      `-a`** · zero control bytes remain anywhere in the file · 0 lint errors · no type errors ·
+      **suite 2,133 passing, 0 failing** · `node esbuild.js` succeeded and both bundles carry the new
+      spelling with no raw NUL · PATH-verified (`agentlenspro` resolves to this repo's `cli.js`, and
+      `setup --dry-run` exercises the hooks step and reports `registrations current`).
 
-**Verify the substitution actually matched before trusting it — a no-op `perl -i` is silent**, and a
-silent no-op here looks exactly like success (which is the same failure mode as the vacuous grep that
-created this item). The recipe was also written to `.janitor/state/resume-directive.txt`, but that
-file is consumed and rewritten by the compaction hook — this card is the durable copy.
+    **Why the Edit tool could not do this, which is worth remembering:** Read renders control bytes
+    as spaces, so `old_string` can never match them — `Edit` is structurally incapable of touching a
+    line containing a raw NUL, and it fails with the same "String to replace not found" it gives for
+    an ordinary typo. That is the one legitimate case for a byte-level rewrite here. Note the
+    ordering: once the bytes were escaped, the line became plain text and `Edit` handled the
+    follow-up edit (removing the dead directive) normally.
+
+**CARD COMPLETE — moved to `human_review`.** All 10 `src/cli` files reviewed by hand; 24 defects
+found, fixed, tested, falsified, deployed and PATH-verified; suite 2,055 → 2,133. One server defect
+found and fixed along the way (`TRDD-2YP3DB9Y`, also at `human_review`). Nothing in this card is
+blocked and nothing is left in flight.
+
+**For the reviewer, the three findings that outlive the defect list:**
+1. **A grep that returns nothing is not evidence of absence** until you have checked it was allowed
+   to read the file. One byte hid 594 lines from every text tool on this machine.
+2. **A sweep is not done when the grep returns** — only when every hit is dispositioned. Shape 3's
+   sweep named three files and I acted on two.
+3. **Falsify every test.** The first `ctxvisCli` tests were green against broken code because their
+   fixture tripped an earlier guard and never reached the code under test.
 
 **A SWEEP IS NOT DONE WHEN THE GREP RETURNS — it is done when every hit is dispositioned.** Shape 3's
 sweep listed `ctxvisCli:259` and I fixed two of the three files it named. Write the hit list down and
