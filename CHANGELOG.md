@@ -8,6 +8,20 @@ All notable changes to AgentlensPro are documented here.
 
 ### Fixed
 
+- **`statusline-history --session --json` answered about every session instead of the one you
+  asked for.** `ctxmap` and `statusline-history` each looked flag values up through a private helper
+  that mapped a flag-shaped value to `undefined` — deliberately, so `--out --json` could not create a
+  file named `--json`. Avoiding the junk file was right; doing it by discarding the flag was not, and
+  the command then ran as though the flag had never been typed. Measured: `--session --json` returned
+  **14 sessions instead of 1** with exit 0, and the `--json` output reported no session filter at all;
+  `ctxmap --list --limit --json` silently fell back to the default 20; both `--out --json` wrote no
+  file and exited 0. A missing file is a nuisance — an unfiltered answer presented as a filtered one
+  is a wrong answer with nothing in the output to say so. All of these now exit 64. Bare `--project`
+  is unaffected: it is the documented spelling for "the directory I am in". Two latent issues
+  surfaced in the process and are also fixed — `statusline-history` read its flag values inside the
+  `try` meant for the time parser (so one flag would have reported a caller mistake as a return code
+  while its siblings threw), and `ctxmap`'s catch had no `UsageError` branch, so a mistyped flag would
+  have returned **1** — the code this project reserves as the watchers' ABORT signal.
 - **`env --out` silently did nothing when given no path, and wrote a file named after the next flag
   when given one.** `agentlenspro env --out` printed the report to stdout and exited 0 — the caller
   asked for a file, got none, and was told everything was fine; `env --out --json` wrote a file

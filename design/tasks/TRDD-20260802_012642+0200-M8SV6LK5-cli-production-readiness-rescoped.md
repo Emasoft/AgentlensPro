@@ -3,7 +3,7 @@ trdd-id: M8SV6LK5
 title: CLI sources production-readiness review — re-scoped against today's src/cli
 column: dev
 created: 2026-08-02T01:26:42+0200
-updated: 2026-08-05T03:10:00+0200
+updated: 2026-08-05T04:05:00+0200
 current-owner: session
 task-type: audit
 supersedes: K7PQ2M4V
@@ -135,14 +135,42 @@ eht: []
    That suite also chdirs to a throwaway directory, for the reason item 7 records: **these cases
    WRITE the junk file when the guard is absent**, which is the state a falsification pass creates.
 
-**NEXT ACTION:** take the next per-file surface by hand — route (c) is working, so (b) is no longer
-blocking (it stays an option if the remaining surface proves slow). Shapes 3 and 4 are now SWEPT
-across all of `src/cli`; shapes 1 and 2 still need a read, because neither is greppable. Unreviewed
-and largest first: `setup.ts` (994, but it already has two dedicated test suites),
-`statuslineHistoryCli.ts` (686 — note its STORE was hardened separately, see Out of scope; the CLI
-view was not), `watchCli.ts` (529), `hookInstall.ts` (594, partially covered by the TOCTOU work).
-Whatever produces the findings, they are a HYPOTHESIS list: verify each against the source before any
-edit.
+9. **`statuslineHistoryCli.ts` REVIEWED — and shape 3 has an OPPOSITE, worse form (`75c2325`).**
+   The file is otherwise the best-hardened in `src/cli` (its honesty contract is written at the top
+   and held everywhere I checked). The defect is in how it looked flags up.
+
+   Both this file and `ctxmapCli` carried a private lookup that mapped a flag-shaped value to
+   `undefined` — deliberately, so `--out --json` could not create a file named `--json`. Avoiding the
+   junk file was RIGHT; discarding the flag to do it was not, and the command then ran as if the flag
+   had never been typed. MEASURED on the installed CLI:
+   - `statusline-history sessions --session --json` → **14 sessions instead of 1**, exit 0, and the
+     `--json` reported no session filter at all.
+   - `ctxmap --list --limit --json` → silently used the default 20.
+   - both `--out --json` → exit 0, no file.
+
+   **A missing file is a nuisance; an unfiltered answer presented as a filtered one is a WRONG
+   ANSWER, and nothing in the output says so.** So shape 3 has two faces and the sweep must look for
+   both: *accepting* a flag as a value (a48c0ce) and *discarding* the flag entirely (here). Now one
+   lookup, `argHelpers.flagValue` — absent → undefined (that is what optional means), present with a
+   bad value → UsageError, `bareOk` for the one legally valueless flag (`--project`).
+
+   Two latent issues fell out of doing it properly, neither reachable before:
+   - `statusline-history` read its flag values INSIDE the `try` meant for the time parser, so one
+     flag would have reported a caller mistake as a return code while its siblings threw.
+   - **`ctxmap`'s catch had no `UsageError` branch → a caller mistake would have returned 1**, which
+     `cliErrors` reserves as the watchers' ABORT signal and a watcher wires straight to its kill path.
+
+   11 tests, falsified (7 fail against the silent-drop version; the correct-usage cases pass in
+   both), PATH-verified including that bare `--project` still works and a real `--session` still
+   filters to 1 row. Suite 2,095.
+
+**NEXT ACTION:** take the next per-file surface by hand. Shapes 3 and 4 are SWEPT across all of
+`src/cli` — but shape 3 now has TWO faces (accept-as-value and discard-the-flag), and the sweep that
+found the first would have missed the second, so **re-read the shape list below before trusting the
+sweep**. Shapes 1 and 2 still need a read; neither is greppable. Unreviewed and largest first:
+`setup.ts` (994, but it already has two dedicated test suites), `watchCli.ts` (529),
+`hookInstall.ts` (594, partially covered by the TOCTOU work), `budgetCli.ts` (407). Whatever produces
+the findings, they are a HYPOTHESIS list: verify each against the source before any edit.
 
 **The pattern to look for, now that it has SIX instances across two files** — it is the productive
 hypothesis, not a summary: *the command reports success while having misread the request or thrown
@@ -150,7 +178,10 @@ the answer away.* Concretely, four shapes worth grepping for in the files still 
 
 1. a two-stage scan whose stages disagree about what counts as a match;
 2. a "no results" path whose exit code or message asserts more than the run established;
-3. `argv[++i]` taken as a value with no check that it is not itself a flag;
+3. a flag's value handled without checking it IS one — in EITHER direction, and the second face was
+   found only after the first was already "swept": **(a)** `argv[++i]` accepted as a value when it is
+   the next flag, and **(b)** a flag-shaped value mapped to `undefined`, which discards the flag and
+   answers a different question;
 4. a write of an expensive result with no `mkdir -p` before it.
 
 None of the six crash. That is why none were caught by a suite that was green throughout, and it is
