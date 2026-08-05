@@ -4,10 +4,18 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
-## [2.23.0] - 2026-08-04
+## [2.23.0] - 2026-08-05
 
 ### Fixed
 
+- **`claude-sonnet-5` would have silently under-billed by 50% from 1 September.** Its table row
+  carried the introductory $2/$10 rate with only a comment asking a future human to flip four
+  numbers when the promo ends 2026-08-31 — and nothing fires on a date. The flip is now data
+  (`ModelRates.scheduledChange`), resolved by `lookupRates` against the **call's own timestamp**,
+  so a session recorded during the promo keeps reporting what it actually cost forever (the same
+  reason `claude-opus-4-7-fast` is retained at its old premium rates) while a September call bills
+  at the $3/$15 sticker. An unparseable timestamp resolves like an absent one — never to the
+  pre-change rate, which a naive NaN comparison would have pinned it to.
 - **`ctxvis` presented partially-measured turns as fully measured.** Its usage text promises "every
   number that says measured came from count_tokens; nothing is estimated" — but an element whose
   prefix could not be counted keeps its estimated value and is still summed into the turn total, and
