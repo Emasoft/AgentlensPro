@@ -125,6 +125,26 @@ export async function cliMain(argv: string[], startServer: () => Promise<unknown
     return 0
   }
 
+  // HELP IS TOTAL — `--help`/`-h` ANYWHERE in argv means "describe, never do" (owner directive
+  // 2026-08-05). The incident that mandates it: `agentlenspro disable --help` EXECUTED the
+  // disable — runDisableCli folds non-flag args into the reason and arms the kill-switch
+  // unconditionally, so a help probe stopped the server, disarmed every hook on the machine and
+  // stripped the telemetry env. "Every verb parses its own flags before acting" is a property no
+  // dispatcher can guarantee verb-by-verb (any new verb can regress it), so the guarantee lives
+  // HERE, before any dispatch — the git/npm contract: `git commit --help` never commits.
+  // A diagnostics tool gets its real schema help when the server is up; anything else (or a down
+  // server) gets the global USAGE, which documents every management verb.
+  if (argv.some(a => a === '--help' || a === '-h')) {
+    if (cmd && !cmd.startsWith('-')) {
+      try {
+        await runDiagnosticsCli(['help', cmd])
+        return 0
+      } catch { /* not a known tool, or no server — the global usage below covers the verbs */ }
+    }
+    console.log(USAGE)
+    return 0
+  }
+
   switch (cmd) {
     case 'hook':
       return exitNow(await runHookCommand('hook'))
