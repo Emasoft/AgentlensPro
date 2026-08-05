@@ -3,7 +3,7 @@ trdd-id: M8SV6LK5
 title: CLI sources production-readiness review — re-scoped against today's src/cli
 column: dev
 created: 2026-08-02T01:26:42+0200
-updated: 2026-08-05T04:05:00+0200
+updated: 2026-08-05T04:55:00+0200
 current-owner: session
 task-type: audit
 supersedes: K7PQ2M4V
@@ -164,13 +164,48 @@ eht: []
    both), PATH-verified including that bare `--project` still works and a real `--session` still
    filters to 1 row. Suite 2,095.
 
+10. **`watchCli.ts` REVIEWED — 2 defects, fixed and deployed (`fb25bac`).** Both are shape 2, and
+    both were found by reading the file against ITS OWN stated contract rather than against the
+    generic list — which is the lesson worth carrying: this file writes its invariants at the top,
+    so the fastest audit is to check whether it keeps them.
+
+    - **`tokens-per-min` reported a blind feed as a quiet machine.** It summed
+      `w.fiveMinTokensPerMin || 0`, which guards the empty ARRAY but not windows carrying no rate —
+      those summed to a measured **0**, and a `NaN` did too. MEASURED against the compiled module:
+      `read({accountWindows: [{}, {}]})` → `0`. The file's own `n()` helper exists to prevent exactly
+      this ("null, not 0"), and this is the worst place to break it: for a burn watcher `0/min` reads
+      as "nothing is burning", so a threshold watch sat SILENT while blind — and the loop's `blind`
+      transition line, written to announce that state, only fires on `null` and so never could.
+    - **`--for N` was not a deadline.** Checked only at the top of the loop while the sleep was
+      always a full interval, so it overshot by up to one interval, took one more sample WITH its
+      alerts after the window closed, and then reported the REQUESTED duration. `--for 1
+      --interval 900` ran ~15 min and printed "watch window elapsed (1m)". A deadline that is not a
+      deadline is worse than none, because a harness sizes its own timeout around it.
+
+    10 tests, falsified (4/4 targeted fail against the reverted logic, and every over-refusal guard
+    — genuine zero, partial feed, plain interval — passes in BOTH). PATH-verified end to end: the
+    same `--for 1 --interval 900` now stops at **68 s** and prints "1m requested, 1m actual".
+    Suite 2,105.
+
+    Timing lived inside the poll loop with no seam, exactly like `runGuard` in item 7; it is now the
+    pure `nextSleepMs`. **Two of eleven defects have now hidden in an untestable loop — treat a
+    `for(;;)` with logic inline as a finding in itself.**
+
 **NEXT ACTION:** take the next per-file surface by hand. Shapes 3 and 4 are SWEPT across all of
 `src/cli` — but shape 3 now has TWO faces (accept-as-value and discard-the-flag), and the sweep that
 found the first would have missed the second, so **re-read the shape list below before trusting the
 sweep**. Shapes 1 and 2 still need a read; neither is greppable. Unreviewed and largest first:
-`setup.ts` (994, but it already has two dedicated test suites), `watchCli.ts` (529),
-`hookInstall.ts` (594, partially covered by the TOCTOU work), `budgetCli.ts` (407). Whatever produces
-the findings, they are a HYPOTHESIS list: verify each against the source before any edit.
+`setup.ts` (994, but it already has two dedicated test suites), `hookInstall.ts` (594, partially
+covered by the TOCTOU work), `budgetCli.ts` (407 — the closest sibling to `watchCli`, so re-check
+shape 5 and the file's own header claims there first), `ctxvisCli.ts` (463). Whatever produces the
+findings, they are a HYPOTHESIS list: verify each against the source before any edit.
+
+**Two methods have now outperformed the generic shape list, and both are cheaper:**
+- **Read a file against ITS OWN stated invariants.** `watchCli` and `statuslineHistoryCli` both write
+  their contracts at the top; in both, the defect was the one place the file broke its own rule.
+- **Shape 5 — logic inside a `for(;;)` with no test seam.** Two of eleven defects hid there
+  (`runGuard`'s advice flag, `watch`'s deadline). Extracting the step to a pure function is what
+  made each testable, and each extraction found the bug immediately.
 
 **The pattern to look for, now that it has SIX instances across two files** — it is the productive
 hypothesis, not a summary: *the command reports success while having misread the request or thrown

@@ -8,6 +8,21 @@ All notable changes to AgentlensPro are documented here.
 
 ### Fixed
 
+- **`watch --metric tokens-per-min` reported a blind feed as a quiet machine.** The reader summed
+  `fiveMinTokensPerMin || 0` across the account windows, which guarded an empty array but not an
+  array of windows that carry no rate — those summed to a measured **0**, and a `NaN` did too.
+  For a burn watcher `0/min` reads as "nothing is burning", so a threshold watch sat silent while
+  blind, and the loop's own `blind` transition line (which exists to announce exactly that) fires
+  only on `null` and so never could. It now sums the windows that carry a number and answers `null`
+  when none do; a partially-reporting feed still sums what it has, and a genuine idle `0` is still
+  `0`.
+- **`watch --for N` was not a deadline.** The window was only checked at the top of the poll loop
+  while the sleep was always a full interval, so the watch overshot by up to one interval and took
+  one more sample — alerts included — after the window had closed, then reported the *requested*
+  duration. Measured: `--for 1 --interval 900` ran ~15 minutes and printed "watch window elapsed
+  (1m)". The sleep is now trimmed to whatever is left of the window, and the stop line states the
+  actual elapsed time beside the requested one — verified end to end at **68 s** for that same
+  command.
 - **`statusline-history --session --json` answered about every session instead of the one you
   asked for.** `ctxmap` and `statusline-history` each looked flag values up through a private helper
   that mapped a flag-shaped value to `undefined` — deliberately, so `--out --json` could not create a
