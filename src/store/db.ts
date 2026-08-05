@@ -88,7 +88,21 @@ function q(p: string): string { return `'${p.replace(/'/g, "''")}'` }
 function parquetScan(dir: string, sub: string): string | null {
   const files = partFiles(dir, sub)
   if (files.length === 0) return null
-  return `read_parquet([${files.map(q).join(',')}])`
+  // `union_by_name := true` is LOAD-BEARING once parts span two schema generations (TRDD-219K7C1N).
+  // A file LIST without it resolves ONE schema from the FIRST file, and measured on a two-part
+  // fixture the outcome depends on READ ORDER: old-file-first DROPS the newer column from every row
+  // with NO error, new-file-first throws `schema mismatch in glob`, and any query naming that column
+  // throws a Binder Error. `partFiles` uses readdirSync over `part-<Date.now()>-…` names, so older
+  // parts sort first in practice — the drop is the reachable one.
+  // Reconciling by name costs ~0-40 ms across this store's 2,610 parts (84-134 ms either way, within
+  // noise once the object cache is warm).
+  // This is HALF the fix: it makes the parts agree with each other. Making them agree with the
+  // staging table is `allOf`'s `UNION ALL BY NAME` — neither alone is sufficient.
+  // NOTE this deliberately differs from statuslineStore's per-file normalization: THERE the schema is
+  // INFERRED per file by read_json_auto (which can also collapse), so only a per-file relation is
+  // safe. Parquet carries an explicit schema, so name-reconciliation is sufficient here — and a
+  // 2,610-way UNION would be the slower answer to a problem this store does not have.
+  return `read_parquet([${files.map(q).join(',')}], union_by_name := true)`
 }
 
 export async function openStore(opts: StoreOptions): Promise<Store> {
@@ -178,5 +192,15 @@ export async function flush(store: Store): Promise<number> {
 export function allOf(store: Store, table: 'blob' | 'body' | 'part'): string {
   const sub = table === 'blob' ? BLOBS_DIR : table === 'body' ? BODIES_DIR : PARTS_DIR
   const scan = parquetScan(store.dir, sub)
-  return scan ? `(SELECT * FROM ${scan} UNION ALL SELECT * FROM ${table})` : `(SELECT * FROM ${table})`
+  // `UNION ALL BY NAME`, not positional — the OTHER half of TRDD-219K7C1N, and the scan's
+  // union_by_name does not fix this one. Durable parts written before a column existed simply do not
+  // have it, so mid-transition the scan yields N columns and the staging table N+1. Positional
+  // `UNION ALL` then fails the arity check (`Set operations can only apply to expressions with the
+  // same number of result columns`) and takes down EVERY store read until the last old part ages out
+  // — measured on a two-generation fixture. BY NAME matches on column name instead, filling the
+  // absent column with NULL for the old rows, which is the truth about them.
+  // Keep BY NAME even though the arity error is loud: positional matching is also silently WRONG when
+  // the counts happen to agree but the order does not (a column added in the MIDDLE of CREATE TABLE),
+  // and that failure has no symptom at all.
+  return scan ? `(SELECT * FROM ${scan} UNION ALL BY NAME SELECT * FROM ${table})` : `(SELECT * FROM ${table})`
 }
