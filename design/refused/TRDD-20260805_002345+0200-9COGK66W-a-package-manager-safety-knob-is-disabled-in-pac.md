@@ -51,11 +51,13 @@ PreToolUse hook REFUSES that edit (`minimumReleaseAge removed (was 7200 ≥ thre
 it models that block as load-bearing. The dispatch would have pitted a janitor agent against a
 janitor guard over a non-problem.
 
-**This is a DEDUPE FAILURE worth reporting upstream.** `ticket-dedupe-key:
-PKGPOL-001:package-manager config` did not prevent re-proposal after TRDD-JJFGDV3W was refused on
-this exact premise. A refusal that does not suppress the re-proposal means every future session pays
-the same adjudication — which is precisely what happened here. The detector lives in the janitor
-plugin, a DIFFERENT project, so the fix there is an upstream issue, never an edit from here.
+**This is a DEDUPE FAILURE, and it is now FILED UPSTREAM as
+`Emasoft/ai-maestro-plugins` issue #15.** `ticket-dedupe-key: PKGPOL-001:package-manager config` did
+not prevent re-proposal after TRDD-JJFGDV3W was refused on this exact premise. A refusal that does not
+suppress the re-proposal means every future session pays the same adjudication — which is precisely
+what happened here. The detector lives in the janitor plugin, a DIFFERENT project, so the fix there is
+an upstream issue, never an edit from here. **If this proposal appears a THIRD time, check that issue
+before spending anything on it.**
 
 **The standing lesson this repo already recorded, and which held:** do not conclude a setting is live
 or dead from READING config files — a tool reads only the file it reads. Three files declared these
