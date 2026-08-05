@@ -587,3 +587,34 @@ suite('agentlenspro — help is TOTAL: --help anywhere never executes the verb',
     } finally { fs.rmSync(home, { recursive: true, force: true }) }
   })
 })
+
+suite('agentlenspro — management help never touches the network (PR-15 review)', () => {
+  test('disable --help completes fast against an accept-then-hang MCP endpoint', async function () {
+    this.timeout(30_000)
+    // The first help-total cut routed EVERY `X --help` through the diagnostics help path, which
+    // initializes the MCP client — so static help for a management verb waited on a wedged
+    // socket. A management verb's help must come from USAGE with zero I/O: against a server
+    // that accepts and never answers, it must return in well under the client's connect/read
+    // deadlines (the unfixed path burned them in full).
+    // The falsifier is the CONNECTION COUNT, not wall-clock: the diagnostics client's own
+    // connect deadline keeps even the unfixed path under any sane timing bound (measured — a
+    // duration assertion passed both ways). Unfixed code opens ≥1 connection to fetch a schema
+    // it will never use for static text; fixed code opens exactly 0.
+    let connections = 0
+    const hang = http.createServer(() => { /* accept, never respond */ })
+    hang.on('connection', () => { connections++ })
+    await new Promise<void>(r => hang.listen(0, '127.0.0.1', r))
+    const port = String((hang.address() as AddressInfo).port)
+    const home = mkHome()
+    try {
+      // The wedged-server precondition: a live-looking pidfile, so the client would dial.
+      fs.mkdirSync(path.join(home, '.agentlens'), { recursive: true })
+      fs.writeFileSync(path.join(home, '.agentlens', 'server.pid'), String(process.pid))
+      const r = await runCli(['disable', '--help'], isolatedEnv(home, { MCP_PORT: port, UI_PORT: port }))
+      assert.strictEqual(r.code, 0, `stderr: ${r.stderr}`)
+      assert.match(r.stdout, /usage/i)
+      assert.ok(!fs.existsSync(path.join(home, '.agentlens', 'DISABLED')))
+      assert.strictEqual(connections, 0, 'management help must open ZERO connections')
+    } finally { hang.close(); fs.rmSync(home, { recursive: true, force: true }) }
+  })
+})
