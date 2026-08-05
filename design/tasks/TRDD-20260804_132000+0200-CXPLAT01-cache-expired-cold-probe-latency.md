@@ -1,9 +1,9 @@
 ---
 trdd-id: CXPLAT01
 title: cache-expired intermittently takes 20-40s because the newest-session probe reparses the biggest transcript
-column: todo
+column: human_review
 created: 2026-08-04T13:20:00+0200
-updated: 2026-08-05T04:28:22+0200
+updated: 2026-08-05T06:05:40+0200
 current-owner: claude-code
 task-type: bugfix
 severity: MEDIUM
@@ -132,3 +132,10 @@ Approval log below reserves for a human. This section only makes that decision b
   a cache is expired without consuming tokens?". The token answer is yes (zero, proven); the
   measurement that proved it surfaced this latency defect. Filed at todo — the fix touches the
   server's bounded-scan design, which the owner should approve before it is changed.
+- 2026-08-05 — Column `todo` → `human_review`. No work was done or undone; this corrects the column
+  to match what the entry above already says. That entry reserves steps 1-2 for the owner, and
+  step 3's test asserts behaviour that does not exist yet (committing it would leave the suite red),
+  so **there is nothing here an agent can pick up** — and `todo` advertises exactly that. Same
+  correction applied to TRDD-06Q5AXYN in this session, for the same reason and by the same standard:
+  a column that overstates AVAILABILITY hides a card awaiting a human just as effectively as `dev`
+  hides a stall. The evidence the decision needs was added earlier today and is unchanged.
