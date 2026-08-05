@@ -3,7 +3,7 @@ trdd-id: M8SV6LK5
 title: CLI sources production-readiness review — re-scoped against today's src/cli
 column: dev
 created: 2026-08-02T01:26:42+0200
-updated: 2026-08-05T03:35:38+0200
+updated: 2026-08-05T03:54:48+0200
 current-owner: session
 task-type: audit
 supersedes: K7PQ2M4V
@@ -16,7 +16,8 @@ eht: []
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-05
 
-**IN PROGRESS.**
+**FILE-BY-FILE AUDIT COMPLETE** — all 10 `src/cli` files reviewed by hand, 24 defects fixed. One
+cosmetic follow-up remains (the `hookInstall.ts:147` escape spelling); see NEXT ACTION at the end.
 
 > **`updated:` went BACKWARDS once, on purpose.** Three edits during this session typed it from
 > memory instead of reading `date`, landing up to two hours in the future (a `04:55` while the clock
@@ -283,13 +284,64 @@ eht: []
     both. **Only the falsification pass could have caught it.** A test whose SETUP trips an earlier
     guard never reaches the code under test, and that is invisible while it is green (`10b81ab`).
 
-**NEXT ACTION:** take the next per-file surface by hand. Shapes 3 and 4 are SWEPT across all of
-`src/cli` — but shape 3 now has TWO faces (accept-as-value and discard-the-flag), and the sweep that
-found the first would have missed the second, so **re-read the shape list below before trusting the
-sweep**. Shapes 1, 2 and 5 still need a read; none is greppable. Shape 6 is SWEPT (no second instance). Unreviewed and largest first:
-`setup.ts` (994, but it already has two dedicated test suites) and `hookInstall.ts` (594, partially
-covered by the TOCTOU work). Whatever produces the findings, they are a HYPOTHESIS list: verify each
-against the source before any edit.
+14. **`hookInstall.ts` and `setup.ts` REVIEWED — the last two files, and BOTH ARE CLEAN. No defects,
+    no commits.** Reported as a negative result, because an audit that only ever reports findings
+    cannot tell "I looked and it was fine" apart from "I never got there."
+
+    **But the first sweep over `hookInstall.ts` was VACUOUS, and looked identical to clean.** That
+    file carries a raw NUL (0x00) and 0x1F at line 147, inside `/["\\<NUL>-<0x1F>]/` with an
+    `eslint-disable no-control-regex` above it — deliberate, committed in `4da41dc`, and correct.
+    The consequence is not: `file(1)` calls the file **"data"**, and `grep` here is **ugrep 7.5.0**,
+    which classifies it as binary and then prints **nothing — exit 1, empty stdout, EMPTY STDERR**.
+    Not "Binary file matches", not an error. So `grep -c safeConfigEdit` returned empty while
+    `grep -ac` returned 3. **Every shape sweep that included this file was measuring nothing while
+    presenting as a clean result.** Re-run with `-a`, all six shapes now dispositioned:
+    - shape 3 — N/A, the file parses no argv (one `indexOf` on a command string).
+    - shape 4 — `mkdirSync` precedes the only `writeFileSync` (573→574); config writes go through
+      `safeConfigEdit`, per doctrine.
+    - shape 5 — no unbounded loops.
+    - shape 2 — both `ops.length === 0` paths (278, 461) log the SPECIFIC reason and return the real
+      counts. The opposite of the defect.
+    - shape 1 — the genuine hazard, and it is handled: `removalNeedle` emits a **substring filter**,
+      so a needle could in principle strip an entry the rebuild decided to keep. It cannot strip the
+      entry being installed, because removals are pushed BEFORE `append_unique` and ops apply in
+      order (the comment at 179 says so and is accurate). The residual — a FOREIGN command containing
+      the literal `agentlenspro hook` — is the subject of the already-open **TRDD-T0CT9U4X**, so it
+      belongs there, not in a new card.
+
+    `setup.ts` (994): flags are booleans only (`--dry-run`, `--yes`); no `writeFileSync` at all; both
+    `renameSync` calls are sibling renames; no unbounded loops; and every `action: 'none'` carries an
+    explicit `verify:` verdict plus a detail — including `SKIP` with a reason when a probe genuinely
+    could not run (`sql.js unavailable`). That is shape 2 solved, not shape 2 present.
+
+    **THE LESSON, and it generalises past this repo: a grep that returns nothing is not evidence of
+    absence until you have checked it was allowed to read the file.** One byte made a 594-line file
+    invisible to every text tool on this machine, silently, in the direction that looks like success.
+    `grep -a` is now the default for source sweeps here; only this one file is affected today
+    (checked all of `src/**.ts` with `file(1)`) — but a second NUL would be exactly as invisible.
+
+**AUDIT COMPLETE — all 10 `src/cli` files reviewed by hand. 24 defects found, fixed, tested,
+falsified, deployed and PATH-verified; suite 2,055 → 2,133.** Plus one server defect found and fixed
+along the way (`TRDD-2YP3DB9Y`, at `human_review`).
+
+**NEXT ACTION — one cosmetic follow-up, then this card closes.** `hookInstall.ts:147` should spell
+its control-character class with ESCAPES — `/["\\\x00-\x1f]/`, identical to the regex engine — so the
+file is plain text again and greppable. **The Edit tool CANNOT do it:** Read renders the control
+bytes as spaces, so `old_string` can never match (tried; "String to replace not found"). This is the
+rare case that genuinely needs a byte-level rewrite, and it is NOT urgent — the code is correct as
+written. Do it deliberately, in a session with room:
+
+```bash
+perl -i -pe 's/\Q["\\\x00-\x1f]\E/["\\\\\\x00-\\x1f]/ if $. == 147' src/cli/hookInstall.ts
+file src/cli/hookInstall.ts                      # must now say "text", not "data"
+grep -c safeConfigEdit src/cli/hookInstall.ts    # must print 3 WITHOUT -a, not empty
+pnpm run check-types && npx mocha out/test/test/hookInstall.toctou.test.js
+```
+
+**Verify the substitution actually matched before trusting it — a no-op `perl -i` is silent**, and a
+silent no-op here looks exactly like success (which is the same failure mode as the vacuous grep that
+created this item). The recipe was also written to `.janitor/state/resume-directive.txt`, but that
+file is consumed and rewritten by the compaction hook — this card is the durable copy.
 
 **A SWEEP IS NOT DONE WHEN THE GREP RETURNS — it is done when every hit is dispositioned.** Shape 3's
 sweep listed `ctxvisCli:259` and I fixed two of the three files it named. Write the hit list down and
