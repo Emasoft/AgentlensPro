@@ -525,3 +525,65 @@ suite('agentlenspro — diagnostics dispatch parity (absorbed agentlens-cli.js s
     } finally { fs.rmSync(home, { recursive: true, force: true }) }
   })
 })
+
+suite('agentlenspro — help is TOTAL: --help anywhere never executes the verb', () => {
+  // Owner directive 2026-08-05, from a live incident: `agentlenspro disable --help` EXECUTED the
+  // disable — it armed <dataDir>/DISABLED, stopped the running server, disarmed every hook on the
+  // machine and stripped the telemetry env, because runDisableCli folds non-flag args into the
+  // reason and acts unconditionally. The guarantee cannot live verb-by-verb (any new verb can
+  // regress it), so it lives in the dispatcher: `--help`/`-h` anywhere in argv routes to help and
+  // NOTHING is dispatched — the git/npm contract (`git commit --help` never commits).
+
+  test('disable --help does NOT arm the kill-switch (the incident, exactly)', async () => {
+    const home = mkHome()
+    try {
+      const r = await runCli(['disable', '--help'], isolatedEnv(home))
+      assert.strictEqual(r.code, 0, `stderr: ${r.stderr}`)
+      const flag = path.join(home, '.agentlens', 'DISABLED')
+      assert.ok(!fs.existsSync(flag), 'a help probe must never create the DISABLED flag')
+      assert.match(r.stdout, /usage/i, 'help output must actually be help')
+    } finally { fs.rmSync(home, { recursive: true, force: true }) }
+  })
+
+  test('disable -h is the same contract as --help', async () => {
+    const home = mkHome()
+    try {
+      const r = await runCli(['disable', '-h'], isolatedEnv(home))
+      assert.strictEqual(r.code, 0, `stderr: ${r.stderr}`)
+      assert.ok(!fs.existsSync(path.join(home, '.agentlens', 'DISABLED')))
+    } finally { fs.rmSync(home, { recursive: true, force: true }) }
+  })
+
+  test('every management verb with --help exits 0, prints help, and leaves HOME untouched', async function () {
+    this.timeout(60_000)
+    // The full verb surface from the dispatch switch. Hot-path verbs (hook/gate/statusline) are
+    // included deliberately: help must win over their read-stdin behavior too, or a probe hangs.
+    const verbs = [
+      'disable', 'enable', 'telemetry', 'setup', 'server', 'daemon', 'config', 'env', 'spool',
+      'budget', 'watch', 'heartbeat-cost', 'statusline-history', 'cache-expired', 'last-compact',
+      'ctxmap', 'ctxvis', 'hook', 'gate', 'statusline', 'list',
+    ]
+    for (const verb of verbs) {
+      const home = mkHome()
+      try {
+        const r = await runCli([verb, '--help'], isolatedEnv(home))
+        assert.strictEqual(r.code, 0, `\`${verb} --help\` must exit 0 — stderr: ${r.stderr}`)
+        assert.ok(r.stdout.length > 0, `\`${verb} --help\` must print SOMETHING`)
+        assert.deepStrictEqual(
+          fs.readdirSync(home), [],
+          `\`${verb} --help\` mutated HOME — a help probe executed the verb`,
+        )
+      } finally { fs.rmSync(home, { recursive: true, force: true }) }
+    }
+  })
+
+  test('--help placed late in a longer argv still wins (flags after real-looking args)', async () => {
+    const home = mkHome()
+    try {
+      const r = await runCli(['disable', 'because', 'reasons', '--help'], isolatedEnv(home))
+      assert.strictEqual(r.code, 0)
+      assert.ok(!fs.existsSync(path.join(home, '.agentlens', 'DISABLED')),
+        'the reason-looking args must not smuggle the verb past the help intercept')
+    } finally { fs.rmSync(home, { recursive: true, force: true }) }
+  })
+})
