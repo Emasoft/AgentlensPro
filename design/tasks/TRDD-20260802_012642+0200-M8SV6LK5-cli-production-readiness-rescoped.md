@@ -3,7 +3,7 @@ trdd-id: M8SV6LK5
 title: CLI sources production-readiness review — re-scoped against today's src/cli
 column: dev
 created: 2026-08-02T01:26:42+0200
-updated: 2026-08-05T04:55:00+0200
+updated: 2026-08-05T02:58:00+0200
 current-owner: session
 task-type: audit
 supersedes: K7PQ2M4V
@@ -16,7 +16,12 @@ eht: []
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-05
 
-**IN PROGRESS.** Three things are done; one is running.
+**IN PROGRESS.**
+
+> **`updated:` was wrong and is corrected — it now reads 02:58, EARLIER than the 04:55 a previous
+> edit wrote.** Three edits during this session set it from memory instead of from `date`, landing up
+> to two hours in the future. The board sorts on this field, so a fabricated future stamp parks a
+> card at the top of every view until the clock catches up. Read the clock; never type a timestamp.
 
 1. **Starting condition confirmed** — `reports/cli-revision/` was empty, exactly as this card
    predicted. Bundle current (2.23.0, rebuilt + deployed this session).
@@ -191,14 +196,49 @@ eht: []
     pure `nextSleepMs`. **Two of eleven defects have now hidden in an untestable loop — treat a
     `for(;;)` with logic inline as a finding in itself.**
 
+11. **`budgetCli.ts` REVIEWED — 5 defects (`72594a5`, `f8d5eac`). The first is the file's own worst
+    case, one layer below where it was already guarded.**
+
+    - **The projection and the account cross-check could read DIFFERENT windows.** `bindingWindow` has
+      THREE documented values (`src/windowEta.ts` types it `'5h' | '7d' | 'none'`). `'none'` is
+      truthy, so it sailed past the `|| '5h'` fallback and became the window KEY — and two consumers
+      resolved that same key by different rules: `pickWindow`'s `key === '7d' ? sevenDay : fiveHour`
+      gave the **5h** window to the projection, while `officialBuckets`' `key === '5h' ? session :
+      startsWith('weekly')` gave the **7d** buckets to the cross-check. MEASURED live: bindingWindow
+      `none`, 5h **81%**, 7d 31% — `applyOfficial` downgrades at ≥80 but was handed 31, so **budget
+      answered GO with the 5h window at 81%**. "none" was printed to the operator as a window name.
+    - **`--with-risks` failed SILENTLY.** Zero `[burn-guard]` lines against a dead risk endpoint and
+      no hint the feed had failed — a caller who asked for risk coverage and gets nothing reads it as
+      "no risks", the one conclusion silence cannot support. Now reported once per outage.
+    - **The watch overran its own deadline** by up to one poll interval before reporting completion,
+      and reported the REQUESTED duration: 33 s for a 15 s window, printed "(0m)". Now 15 s.
+    - **The arm-time official line hardcoded `'7d'`** for `--window binding`, announcing a binding
+      window that later verdict lines could contradict. The note is omitted until it is resolved.
+    - **A rejected reading named a cause that had not fired** — found by running the FIXED command on
+      PATH, i.e. by the verification rather than the review. `deriveStale` has two causes and the
+      second (a window that has already RESET) is the one that matters; `budget` rendered every stale
+      reading as an age in whole hours, so it printed **`NOT USABLE — the cached reading is 0h old
+      (fresh)`**. `subscriptionUsage` now exports `staleReason()` and `deriveStale` delegates to it,
+      so the boolean and the explanation share one set of predicates.
+
+    13 tests. `nextSleepMs` moved to `cliCore` beside `sleep`: both long-lived watchers had the same
+    deadline bug, and two copies of that arithmetic is how one stops trimming. Suite 2,117.
+
+    **The lesson that generalises: TWO of these were found by the verification step, not the read.**
+    Running the fixed command on PATH is not a formality — it is a second, independent detector.
+
 **NEXT ACTION:** take the next per-file surface by hand. Shapes 3 and 4 are SWEPT across all of
 `src/cli` — but shape 3 now has TWO faces (accept-as-value and discard-the-flag), and the sweep that
 found the first would have missed the second, so **re-read the shape list below before trusting the
-sweep**. Shapes 1 and 2 still need a read; neither is greppable. Unreviewed and largest first:
+sweep**. Shapes 1, 2 and 5 still need a read; none is greppable. Unreviewed and largest first:
 `setup.ts` (994, but it already has two dedicated test suites), `hookInstall.ts` (594, partially
-covered by the TOCTOU work), `budgetCli.ts` (407 — the closest sibling to `watchCli`, so re-check
-shape 5 and the file's own header claims there first), `ctxvisCli.ts` (463). Whatever produces the
+covered by the TOCTOU work), `ctxvisCli.ts` (463), `statuslineCapture.ts` (167). Whatever produces the
 findings, they are a HYPOTHESIS list: verify each against the source before any edit.
+
+**Shape 6 — a value with more states than its consumers handle.** `bindingWindow` is
+`'5h' | '7d' | 'none'` and every consumer assumed two; the third was truthy, so it slipped past a
+`||` fallback and each consumer resolved it differently. Grep the TYPES for a union whose third
+member has no branch, and check the `||`/`??` fallbacks that are supposed to catch it.
 
 **Two methods have now outperformed the generic shape list, and both are cheaper:**
 - **Read a file against ITS OWN stated invariants.** `watchCli` and `statuslineHistoryCli` both write

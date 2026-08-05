@@ -8,6 +8,25 @@ All notable changes to AgentlensPro are documented here.
 
 ### Fixed
 
+- **`budget` could run its projection on one rate-limit window and its account cross-check on
+  another.** `bindingWindow` has three values (`5h` / `7d` / `none`), and `none` — "neither window is
+  projected to exhaust" — is truthy, so it slipped past the `|| '5h'` fallback and became the window
+  key. Two consumers then resolved that key differently: the projection read the **5h** window while
+  the account cross-check read the **7d** buckets, and `none` was printed as if it were a window
+  name. Measured live: `bindingWindow: none`, 5h at **81%**, 7d at 31% — the "downgrade at ≥80%" rule
+  was handed 31 and never fired, so `budget` answered **GO** with the 5h window at 81%.
+- **`budget --with-risks` failed silently.** A dead risk endpoint produced zero `[burn-guard]` lines
+  and no indication the feed was down — which reads as "no burn risks", the one conclusion the
+  silence cannot support. Now reported once per outage, and once on recovery.
+- **`budget --watch` overran the run window** by up to one poll interval before reporting completion,
+  and reported the requested duration rather than the actual: 33 s for a 15 s window, printed as
+  "(0m)". Now trimmed to the deadline (15 s), with both figures stated.
+- **`budget` explained a rejected usage reading with a cause that had not fired.** Staleness has two
+  causes — too old, or a window that has already reset — and every stale reading was rendered as an
+  age in whole hours, so one dropped for the *reset* reason printed `NOT USABLE — the cached reading
+  is 0h old (fresh)`. Every part of that contradicts the rejection, on the line whose job is
+  justifying it. The cause is now named, sub-hour ages render in minutes, and the fetch reason is
+  labelled `fetched:` (it describes how the reading was obtained, not why it was rejected).
 - **`watch --metric tokens-per-min` reported a blind feed as a quiet machine.** The reader summed
   `fiveMinTokensPerMin || 0` across the account windows, which guarded an empty array but not an
   array of windows that carry no rate — those summed to a measured **0**, and a `NaN` did too.
