@@ -8,6 +8,19 @@ All notable changes to AgentlensPro are documented here.
 
 ### Fixed
 
+- **`ctxvis` presented partially-measured turns as fully measured.** Its usage text promises "every
+  number that says measured came from count_tokens; nothing is estimated" — but an element whose
+  prefix could not be counted keeps its estimated value and is still summed into the turn total, and
+  the warning fired only when *every* element failed. Ten estimated elements out of five hundred went
+  out silently as a measured figure, into the persisted baseline store that later runs compare
+  against. Any measurement failure is now named, and a partial one says so.
+- **`ctxvis` dropped flags whose value was missing, and reported every failure as exit 64.**
+  `--subject --json` left no agent marked as the subject (so the environment fingerprint that
+  validates cached baselines came from an arbitrary one), `--baselines --json` wrote the baseline
+  store to its default path while the caller believed they had redirected it, and `--html --json`
+  produced no report — all exiting 0. Separately, every thrown error returned 64, so an unreadable
+  baseline store or a corrupt capture told a caller its command line was wrong. `--html` is also
+  validated up front now rather than after the run has already spent its `count_tokens` calls.
 - **A wedged server froze the status line it was only supposed to observe.** The capture wrapper is
   documented as fire-and-forget — "a hung socket must not hold the status line hostage" — but it
   awaited the capture outright once the inner command had finished, so a server that *accepts* the

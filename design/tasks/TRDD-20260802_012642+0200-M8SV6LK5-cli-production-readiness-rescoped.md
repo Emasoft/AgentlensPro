@@ -3,7 +3,7 @@ trdd-id: M8SV6LK5
 title: CLI sources production-readiness review — re-scoped against today's src/cli
 column: dev
 created: 2026-08-02T01:26:42+0200
-updated: 2026-08-05T03:15:20+0200
+updated: 2026-08-05T03:35:38+0200
 current-owner: session
 task-type: audit
 supersedes: K7PQ2M4V
@@ -255,13 +255,49 @@ eht: []
     tested; `accountVerified` is fully branched; `AuthRegime`/`TtlSource` have no CLI consumer.
     Recording the negative result because a sweep that lists only hits cannot be trusted later.
 
+13. **`ctxvisCli.ts` REVIEWED — 4 defects (`aa31812`), one of them A MISS FROM THIS AUDIT'S OWN
+    SWEEP.** The file promises, in its usage text: *"Every number that says 'measured' came from
+    count_tokens; nothing is estimated."* Four ways it did not keep that.
+
+    - **A PARTIALLY measured turn was presented as fully measured.** `exactifyReport` leaves an
+      uncountable element at its ESTIMATED value and still sums it into the turn total, but ctxvis
+      warned only when EVERY element failed. `ctxmap` surfaces exactly this
+      (`reportMeasurementCaveats`) — the consumer WITHOUT it is the one whose numbers are written
+      into the persisted baseline store and become ground truth for later runs.
+    - **The flag lookup dropped a flag with no value** — the same helper already fixed in `ctxmapCli`
+      and `statuslineHistoryCli`. **This file was in that sweep's grep output (`ctxvisCli:259`) and I
+      acted on only two of three.** `--subject --json` left NO agent as the subject, so the
+      environment fingerprint validating every cached baseline came from an arbitrary one;
+      `--baselines --json` wrote the store to its DEFAULT path while the caller believed otherwise.
+    - **EVERY throw returned 64.** An unreadable baseline store or a corrupt capture told a harness
+      its command line was wrong. Caller mistakes are `UsageError` now; everything else is runtime.
+    - **`--html` was validated only AFTER the credential check and the whole measurement**, so a bad
+      value was refused once the run had already spent its `count_tokens` calls.
+
+    6 tests, PATH-verified. Suite 2,128.
+
+    **THE LESSON, and it is about the method, not the file: the first version of these tests passed
+    against the BROKEN code.** They used a bogus nonce, `assertNonce` rejected it during argument
+    parsing, and the pre-fix blanket `return EXIT.USAGE` made every one of them green — so they
+    proved nothing about the flag they named. Green tests, a correct fix, and a suite lying about
+    both. **Only the falsification pass could have caught it.** A test whose SETUP trips an earlier
+    guard never reaches the code under test, and that is invisible while it is green (`10b81ab`).
+
 **NEXT ACTION:** take the next per-file surface by hand. Shapes 3 and 4 are SWEPT across all of
 `src/cli` — but shape 3 now has TWO faces (accept-as-value and discard-the-flag), and the sweep that
 found the first would have missed the second, so **re-read the shape list below before trusting the
 sweep**. Shapes 1, 2 and 5 still need a read; none is greppable. Shape 6 is SWEPT (no second instance). Unreviewed and largest first:
-`setup.ts` (994, but it already has two dedicated test suites), `hookInstall.ts` (594, partially
-covered by the TOCTOU work), `ctxvisCli.ts` (463), `statuslineCapture.ts` (167). Whatever produces the
-findings, they are a HYPOTHESIS list: verify each against the source before any edit.
+`setup.ts` (994, but it already has two dedicated test suites) and `hookInstall.ts` (594, partially
+covered by the TOCTOU work). Whatever produces the findings, they are a HYPOTHESIS list: verify each
+against the source before any edit.
+
+**A SWEEP IS NOT DONE WHEN THE GREP RETURNS — it is done when every hit is dispositioned.** Shape 3's
+sweep listed `ctxvisCli:259` and I fixed two of the three files it named. Write the hit list down and
+tick it off; "I remember which ones mattered" is how the third one survives.
+
+**AND FALSIFY EVERY TEST, not just the risky-looking ones.** The first `ctxvisCli` tests passed
+against the broken code because their fixture tripped an earlier guard. A green test that never
+reaches the code under test is indistinguishable from a real one until you break the code on purpose.
 
 **Shape 6 — a value with more states than its consumers handle.** `bindingWindow` is
 `'5h' | '7d' | 'none'` and every consumer assumed two; the third was truthy, so it slipped past a
