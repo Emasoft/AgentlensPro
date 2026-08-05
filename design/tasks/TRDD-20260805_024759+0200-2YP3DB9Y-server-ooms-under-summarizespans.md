@@ -1,9 +1,10 @@
 ---
 trdd-id: 2YP3DB9Y
 title: The server OOMs and dies, preceded by thousands of summarizeSpans stack overflows
-column: todo
+column: human_review
 created: 2026-08-05T02:47:59+0200
-updated: 2026-08-05T02:47:59+0200
+updated: 2026-08-05T03:45:26+0200
+implementation-commits: [9da7609]
 current-owner: session
 task-type: bugfix
 relevant-rules: []
@@ -15,9 +16,34 @@ eht: []
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body)
 
-**FILED, NOT STARTED.** Found while auditing `src/cli` (TRDD-M8SV6LK5); this is server-side, so it is
-its own card rather than scope creep. The server has been restarted and is healthy — the defect is
-NOT resolved, only cleared.
+**STACK OVERFLOW: ROOT-CAUSED AND FIXED (`9da7609`). OOM: expected to follow, NOT yet proven.**
+
+**Root cause — `Math.max(...xs)` past V8's max-arguments limit.** `src/summarizers/codex.ts` did
+`Math.max(...allEndTimes)` inside `buildCodexSessions`' per-trace map, so the array was one trace
+group's spans: unbounded. A spread passes every element as an ARGUMENT, and past ~125k that throws
+exactly `RangeError: Maximum call stack size exceeded`.
+
+**What turned the guess into a location:** the live log's stack named the frame directly —
+`server.js:11349 ← Array.map ← buildCodexSessions ← summarizeSpans ← computeSessionSummary ←
+buildSessionSummary ← buildUpdatePayload ← pushUpdate ← tickBurn`. So it fires from the **dashboard
+push every 4 s**, not from a user request, which is why it accumulated continuously.
+
+**Fixed at all four sites**, not just the one in the stack: `codex.ts` (now the shared, named
+`maxOrDefault`), `claude.ts` ×2 (`timeline.push(...)` / `backgroundSpans.push(...)` on a merged
+session), `copilot.ts` (`stack.push(...children)`).
+
+**VERIFIED LIVE:** the count had grown 3,579 → **4,238** while the card sat here (~45 min). After
+deploying the fix: **0 new in 45 s**, with the tick running every 4 s (~11 opportunities).
+
+**Still open, and deliberately not claimed:** no OOM has occurred since, but two crashes took hours
+to build, so "the heap exhaustion is gone" is NOT established — it is only the most likely
+consequence of removing a 4-second error storm. Re-check `grep -c 'FATAL ERROR' ~/.agentlens/server.log`
+after a long run (it stood at **2**).
+
+**The lesson worth keeping:** `capacityCalibration.ts:145` ALREADY documents this exact hazard
+("reduce, not `Math.min(...spread)` … V8's max-arguments limit → RangeError"). The knowledge was in
+the codebase and never reached these four sites — which is why the fix is a shared named function
+carrying the evidence, rather than a fourth inline loop.
 
 ## What happened, measured
 
