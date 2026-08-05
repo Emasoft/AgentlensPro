@@ -14,6 +14,13 @@ import { DATA_DIR_ENV } from '../dataDir'
 // the three files were acted on. Worth a test precisely because the sweep is what failed, not the
 // reasoning about the defect.
 
+/** A VALID nonce — `AGENTLENS-CTXVIS-` + 8 uppercase hex. This is load-bearing, not decoration: an
+ *  invalid one makes `assertNonce` throw during argument parsing, and the pre-fix code returned 64
+ *  for every throw — so a test written with a bogus nonce PASSED against the broken version and
+ *  proved nothing about the flag it claimed to be testing. Caught by the falsification pass, which
+ *  is the only thing that could have caught it. */
+const NONCE = 'AGENTLENS-CTXVIS-0123ABCD'
+
 function scratchDataDir(): string {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'agentlens-ctxvis-'))
   fs.mkdirSync(path.join(d, 'otel-bodies'), { recursive: true })
@@ -45,16 +52,16 @@ suite('ctxvis: a flag with no value must not be silently dropped', () => {
   test('--subject swallowing the next flag is refused', async () => {
     // Before: subject became undefined, so NO agent was marked as the subject and the environment
     // fingerprint that validates every cached baseline was taken from an arbitrary one instead.
-    await refuses(['--subject', '--json', '--measured', 'a=abcd1234abcd'], '--subject')
+    await refuses(['--subject', '--json', '--measured', `a=${NONCE}`], '--subject')
   })
 
   test('--html, --out, --baselines and --turns are refused the same way', async () => {
-    await refuses(['--html', '--json', '--measured', 'a=abcd1234abcd'], '--html')
-    await refuses(['--out', '--json', '--measured', 'a=abcd1234abcd'], '--out')
+    await refuses(['--html', '--json', '--measured', `a=${NONCE}`], '--html')
+    await refuses(['--out', '--json', '--measured', `a=${NONCE}`], '--out')
     // --baselines is the worst of them: dropping it wrote the persisted baseline store to the
     // DEFAULT path while the caller believed they had redirected it.
-    await refuses(['--baselines', '--json', '--measured', 'a=abcd1234abcd'], '--baselines')
-    await refuses(['--turns', '--json', '--measured', 'a=abcd1234abcd'], '--turns')
+    await refuses(['--baselines', '--json', '--measured', `a=${NONCE}`], '--baselines')
+    await refuses(['--turns', '--json', '--measured', `a=${NONCE}`], '--turns')
   })
 
   test('a malformed --measured is still a caller mistake (64), not a runtime failure', async () => {
@@ -68,7 +75,7 @@ suite('ctxvis: a flag with no value must not be silently dropped', () => {
     const err = console.error
     console.error = (): void => { /* the diagnostic */ }
     try {
-      const code = await runCtxvisCli(['--measured', 'Explore=abcd1234abcd', '--subject', 'Explore'])
+      const code = await runCtxvisCli(['--measured', `Explore=${NONCE}`, '--subject', 'Explore'])
       assert.notStrictEqual(code, EXIT.USAGE,
         'a well-formed command line that fails for a REAL reason must not report exit 64')
     } finally { console.error = err }
