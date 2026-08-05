@@ -26,7 +26,8 @@ import {
 } from '../ctxVisual'
 import { readBody, type ResponseBody } from '../capturedBody'
 import { renderCtxVisHtml, type HtmlReport } from '../ctxVisualHtml'
-import { EXIT } from './cliErrors'
+import { EXIT, UsageError } from './cliErrors'
+import { flagValue } from './argHelpers'
 
 export const CTXVIS_USAGE = `agentlenspro ctxvis — what an agent puts in context, and what its 2nd turn costs
 
@@ -154,10 +155,12 @@ function parseMeasured(argv: string[]): { agent: string; nonce: string }[] {
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] !== '--measured') continue
     const v = argv[i + 1]
-    if (!v || v.startsWith('--')) throw new Error('--measured needs <agent>=<nonce>')
+    // UsageError, not Error: these ARE caller mistakes, and the catch below now distinguishes them
+    // from a runtime failure so only one of the two claims the command line was wrong.
+    if (!v || v.startsWith('--')) throw new UsageError('--measured needs <agent>=<nonce>')
     const eq = v.lastIndexOf('=')
     if (eq <= 0 || eq === v.length - 1) {
-      throw new Error(`--measured must be <agent>=<nonce>, got "${v}"`)
+      throw new UsageError(`--measured must be <agent>=<nonce>, got "${v}"`)
     }
     const nonce = v.slice(eq + 1)
     assertNonce(nonce) // a short marker matches unrelated captures — see assertNonce
@@ -254,18 +257,24 @@ export async function runCtxvisCli(argv: string[]): Promise<number> {
     return argv.length === 0 ? EXIT.USAGE : 0
   }
 
-  const flag = (name: string): string | undefined => {
-    const i = argv.indexOf(name)
-    const v = i >= 0 ? argv[i + 1] : undefined
-    return v?.startsWith('--') ? undefined : v
-  }
-  const subject = flag('--subject')
-  const outFile = flag('--out')
+  // flagValue, not a local copy. The local one mapped a flag-shaped value to undefined, so
+  // `--subject --json` left NO agent marked as the subject and the environment fingerprint was
+  // silently taken from an arbitrary one; `--html --json` wrote no report; `--baselines --json`
+  // ignored the override and wrote the baseline store to its default path. Every one of those
+  // reports success. (This file was in the sweep that fixed the same helper in ctxmapCli and
+  // statuslineHistoryCli and was missed — the grep listed it; only two of three were acted on.)
+  const flag = (name: string, what = 'a value'): string | undefined => flagValue(argv, name, what)
+  const subject = flag('--subject', 'an agent name')
+  const outFile = flag('--out', 'a path')
   const asJson = argv.includes('--json')
   const refresh = argv.includes('--refresh-baselines')
   const staleOk = argv.includes('--stale-ok')
-  const turnsWanted = Number(flag('--turns')) || 2
-  const storePath = flag('--baselines') ?? path.join(dataDir(), 'ctxvis-baselines.json')
+  const turnsWanted = Number(flag('--turns', 'a number')) || 2
+  const storePath = flag('--baselines', 'a path') ?? path.join(dataDir(), 'ctxvis-baselines.json')
+  // Read UP HERE with the others, not at the point of use. It used to be read after the credential
+  // check and the whole measurement, so a bad `--html` value was refused only once the run had
+  // already spent its count_tokens calls — an argument error that costs money before it is reported.
+  const htmlFile = flag('--html', 'a path')
   const lastPath = path.join(dataDir(), 'ctxvis-last.json')
 
   const emit = (text: string, digest: string): number => {
@@ -344,8 +353,18 @@ export async function runCtxvisCli(argv: string[]): Promise<number> {
       for (const t of use) {
         const { req, report } = loadAndAnalyze(t.file)
         const ex = await exactifyReport(report, req, auth, countConcurrency(), cache)
-        if (ex.failed > 0 && report.elements.length === ex.failed) {
-          warnings.push(`${agent}: every element failed to measure (${ex.failures[0]?.error ?? 'unknown'})`)
+        // ANY unmeasured element has to be surfaced, not just a total wipeout. This header promises
+        // "every number that says measured came from count_tokens; nothing is estimated" — and an
+        // element whose prefix could not be counted keeps its ESTIMATED value and is summed into the
+        // turn total anyway. Warning only when ALL of them failed meant 10 estimated elements out of
+        // 500 were presented, silently, as a measured figure. ctxmap surfaces exactly this
+        // (`reportMeasurementCaveats`); the longer-lived consumer was the one without it, and these
+        // numbers are what get written into the persisted baseline store.
+        if (ex.failed > 0) {
+          const all = report.elements.length === ex.failed
+          warnings.push(`${agent}: ${all ? 'EVERY' : ex.failed} element(s) could not be measured`
+            + ` (${ex.failures[0]?.error ?? 'unknown'})`
+            + (all ? '' : ` — this turn's total mixes ${ex.failed} estimated element(s) into a measured figure`))
         }
         turns.push({ file: t.file, total: report.elements.reduce((a, e) => a + e.tokens, 0), report })
       }
@@ -445,7 +464,6 @@ export async function runCtxvisCli(argv: string[]): Promise<number> {
       fs.writeFileSync(lastPath, JSON.stringify({ measurements, warnings }))
     } catch { /* a missing --reuse-last cache is not worth failing the run over */ }
 
-    const htmlFile = flag('--html')
     if (htmlFile) {
       const html = renderCtxVisHtml(toHtmlReport(measurements, warnings))
       fs.mkdirSync(path.dirname(path.resolve(htmlFile)), { recursive: true })
@@ -458,6 +476,10 @@ export async function runCtxvisCli(argv: string[]): Promise<number> {
     return emit(text, `${measurements.length} agent(s), ${brokeCount} with a broken prefix`)
   } catch (e) {
     console.error((e as Error).message)
-    return EXIT.USAGE
+    // A caller mistake is 64; anything else is a RUNTIME failure and must not claim the command line
+    // was wrong. Returning USAGE for everything meant an unreadable baseline store, a corrupt
+    // capture, or a failed count all told a harness "your invocation was bad" — so it would go
+    // looking for its own bug and never see the real one.
+    return e instanceof UsageError ? EXIT.USAGE : EXIT.ABORT
   }
 }
