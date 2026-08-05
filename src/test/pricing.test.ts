@@ -90,4 +90,56 @@ suite('pricing', () => {
     const expected = (300_000 / 1_000_000) * 3.00
     assert.ok(Math.abs(cost - expected) < 0.0001, `Expected $${expected}, got $${cost}`)
   })
+
+  // ── Announced rate changes (sonnet-5 introductory pricing ends 2026-08-31) ──────────────────
+  // Before this gate existed the table carried a COMMENT telling a future human to hand-edit four
+  // numbers on the right morning. Nothing fires on a date, so from 2026-09-01 every sonnet-5 call
+  // would have billed at $2/$10 against a real $3/$15 — a silent 50% under-report, with no error,
+  // no unpriced flag, and no way to notice from the output.
+
+  test('a call DURING the promo bills at the introductory rate', () => {
+    const rates = lookupRates('claude-sonnet-5', '2026-08-15T12:00:00Z')
+    assert.strictEqual(rates!.inputPerMTok, 2.00)
+    assert.strictEqual(rates!.outputPerMTok, 10.00)
+  })
+
+  test('a call ON OR AFTER the end date bills at the sticker rate', () => {
+    const rates = lookupRates('claude-sonnet-5', '2026-09-01T00:00:00Z')
+    assert.strictEqual(rates!.inputPerMTok, 3.00, 'input must revert to $3/MTok')
+    assert.strictEqual(rates!.cacheReadPerMTok, 0.30)
+    assert.strictEqual(rates!.cacheWritePerMTok, 3.75)
+    assert.strictEqual(rates!.outputPerMTok, 15.00, 'output must revert to $15/MTok')
+  })
+
+  test('calcTokenCostUsd applies the scheduled change via the call timestamp', () => {
+    const during = calcTokenCostUsd(1_000_000, 0, 0, 0, 'claude-sonnet-5', 0, '2026-08-15T12:00:00Z')
+    const after  = calcTokenCostUsd(1_000_000, 0, 0, 0, 'claude-sonnet-5', 0, '2026-09-01T00:00:00Z')
+    assert.ok(Math.abs(during - 2.00) < 1e-9, `promo: expected $2.00, got $${during}`)
+    assert.ok(Math.abs(after  - 3.00) < 1e-9, `post-promo: expected $3.00, got $${after}`)
+  })
+
+  test('a historical call keeps its ORIGINAL rate no matter when it is read', () => {
+    // The whole point of gating on the CALL's timestamp rather than on today's date. A session
+    // recorded during the promo cost $2/MTok and must report $2/MTok forever — the same reason
+    // `claude-opus-4-7-fast` is retained at its old premium rates. A table that only knows
+    // "the current rate" rewrites history on every rate change.
+    const asRecorded = calcTokenCostUsd(1_000_000, 0, 0, 0, 'claude-sonnet-5', 0, '2026-07-01T00:00:00Z')
+    assert.ok(Math.abs(asRecorded - 2.00) < 1e-9, `Expected the promo rate $2.00, got $${asRecorded}`)
+  })
+
+  test('an unparseable timestamp falls back to today, never to the pre-change rate', () => {
+    // Date.parse() returns NaN, and every NaN comparison is false — so a naive `when >= effective`
+    // would pin a garbage timestamp to the OLD rate permanently, which is precisely the silent
+    // wrong number this mechanism exists to prevent. It must resolve like an absent timestamp.
+    const garbage = lookupRates('claude-sonnet-5', 'not-a-date')
+    const absent  = lookupRates('claude-sonnet-5')
+    assert.strictEqual(garbage!.inputPerMTok, absent!.inputPerMTok)
+  })
+
+  test('a model with no scheduled change is unaffected by a timestamp', () => {
+    const a = lookupRates('claude-sonnet-4-5', '2026-01-01T00:00:00Z')
+    const b = lookupRates('claude-sonnet-4-5', '2027-01-01T00:00:00Z')
+    assert.strictEqual(a!.inputPerMTok, b!.inputPerMTok)
+    assert.strictEqual(a!.outputPerMTok, b!.outputPerMTok)
+  })
 })

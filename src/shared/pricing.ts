@@ -38,6 +38,17 @@ export interface ModelRates {
   outputAbove200kPerMTok?: number
   cacheReadAbove200kPerMTok?: number
   cacheWriteAbove200kPerMTok?: number
+  // An ANNOUNCED future rate change, applied by lookupRates once the CALL's own timestamp reaches
+  // `from` (an ISO date, UTC). This exists because a promotional rate with a published end date is
+  // the one pricing error that arrives on a schedule with no code change and no signal: the number
+  // simply goes quiet-wrong overnight. A comment saying "flip this after <date>" (which is what
+  // claude-sonnet-5 carried) only works if a human happens to read it that morning.
+  //
+  // Gating on the CALL's timestamp, not on today's date, is the load-bearing part: a session
+  // recorded during the promo must keep pricing at what it ACTUALLY cost forever, the same reason
+  // `claude-opus-4-7-fast` is retained at its old premium rates. A single "current rate" table
+  // silently rewrites history every time a rate changes.
+  scheduledChange?: { from: string; rates: Partial<ModelRates>; note: string }
 }
 
 // Keyed by normalized model ID (lowercase, no date suffix).
@@ -78,10 +89,15 @@ const RATES: Record<string, ModelRates> = {
   'claude-sonnet-4-5':  { inputPerMTok:  3.00, cacheReadPerMTok: 0.30,  cacheWritePerMTok:  3.75, outputPerMTok: 15.00, contextWindowTokens: 1_000_000, multiplier: 1,    multiplierAnnualPostJun1: 6 },
   'claude-sonnet-4-6':  { inputPerMTok:  3.00, cacheReadPerMTok: 0.30,  cacheWritePerMTok:  3.75, outputPerMTok: 15.00, contextWindowTokens: 1_000_000, multiplier: 1,    multiplierAnnualPostJun1: 9 },
   // Sonnet 5 INTRODUCTORY pricing ($2/$10 per MTok, cache 0.1x/1.25x of input) bills through
-  // 2026-08-31; sticker is $3/$15. Flip to 3.00/0.30/3.75/15.00 after that date. Was MISSING
-  // entirely until 2026-07-07 — lookupRates returned null and 14 real sessions silently
-  // billed $0 (the exact failure the unpriced flag now surfaces). Not yet in Copilot billing docs.
-  'claude-sonnet-5':    { inputPerMTok:  2.00, cacheReadPerMTok: 0.20,  cacheWritePerMTok:  2.50, outputPerMTok: 10.00, contextWindowTokens: 1_000_000, multiplier: 0,    multiplierAnnualPostJun1: 0 },
+  // 2026-08-31; sticker is $3/$15. The flip is now DATA (`scheduledChange`), not a comment asking a
+  // future human to hand-edit these four numbers on the right morning — that comment was here, was
+  // correct, and would still have under-reported every sonnet-5 call by 50% from 2026-09-01 because
+  // nothing fires on a date. Was MISSING entirely until 2026-07-07 — lookupRates returned null and
+  // 14 real sessions silently billed $0 (the exact failure the unpriced flag now surfaces). Not yet
+  // in Copilot billing docs.
+  'claude-sonnet-5':    { inputPerMTok:  2.00, cacheReadPerMTok: 0.20,  cacheWritePerMTok:  2.50, outputPerMTok: 10.00, contextWindowTokens: 1_000_000, multiplier: 0,    multiplierAnnualPostJun1: 0,
+                          scheduledChange: { from: '2026-09-01', note: 'introductory pricing ends 2026-08-31; reverts to $3/$15 sticker',
+                                             rates: { inputPerMTok: 3.00, cacheReadPerMTok: 0.30, cacheWritePerMTok: 3.75, outputPerMTok: 15.00 } } },
   // Mythos 5 (Project Glasswing) — same pricing/limits as Fable 5. Not yet in Copilot billing docs.
   'claude-mythos-5':    { inputPerMTok: 10.00, cacheReadPerMTok: 1.00,  cacheWritePerMTok: 12.50, outputPerMTok:  50.00, contextWindowTokens: 1_000_000, multiplier: 0,   multiplierAnnualPostJun1: 0 },
   'claude-opus-4-5':    { inputPerMTok:  5.00, cacheReadPerMTok: 0.50,  cacheWritePerMTok:  6.25, outputPerMTok: 25.00, contextWindowTokens: 1_000_000, multiplier: 3,    multiplierAnnualPostJun1: 15 },
@@ -131,10 +147,28 @@ function normalizeModelId(modelId: string): string {
     .trim()
 }
 
-export function lookupRates(modelId: string): ModelRates | null {
+/** Resolve a scheduled rate change against the timestamp of the call being priced.
+ *
+ *  `atIso` is the CALL's own timestamp, not the current time. Omitting it means "price at today's
+ *  rate", which is the right answer for a caller that has no timestamp (a live estimate, a
+ *  what-does-this-cost question) but the WRONG one for historical data — so every call site that
+ *  knows when the call happened must pass it. An unparseable value is treated as absent rather than
+ *  as epoch 0, because NaN comparisons are false and would silently pin such a call to the pre-change
+ *  rate forever — the exact silent-wrong-number failure this whole mechanism exists to prevent. */
+function applyScheduledChange(rates: ModelRates, atIso?: string): ModelRates {
+  const change = rates.scheduledChange
+  if (!change) return rates
+  const at = atIso === undefined ? Date.now() : Date.parse(atIso)
+  const effective = Date.parse(change.from)
+  if (!Number.isFinite(effective)) return rates
+  const when = Number.isFinite(at) ? at : Date.now()
+  return when >= effective ? { ...rates, ...change.rates } : rates
+}
+
+export function lookupRates(modelId: string, atIso?: string): ModelRates | null {
   if (!modelId) return null
   const normalized = normalizeModelId(modelId)
-  if (RATES[normalized]) return RATES[normalized]
+  if (RATES[normalized]) return applyScheduledChange(RATES[normalized], atIso)
   // Prefix match for versioned/aliased IDs that are LONGER than a family key (e.g. an un-stripped alias
   // of `claude-sonnet-5`). ONLY this direction is valid. The reverse — `key.startsWith(normalized)`,
   // matching when the query is SHORTER than a key — mapped a bare id onto an arbitrary longer key's
@@ -146,7 +180,7 @@ export function lookupRates(modelId: string): ModelRates | null {
   for (const key of Object.keys(RATES)) {
     if (normalized.startsWith(key) && (best === null || key.length > best.length)) best = key
   }
-  return best ? RATES[best] : null
+  return best ? applyScheduledChange(RATES[best], atIso) : null
 }
 
 // Applies two-tier pricing: tokens up to the threshold at baseRate, remainder at aboveRate.
@@ -191,8 +225,12 @@ export function calcTokenCostUsd(
   outputTokens: number,
   modelId: string,
   cacheWrite1hTokens = 0,
+  // The call's own timestamp, used only to resolve an announced rate change (see `scheduledChange`).
+  // Omitted = price at today's rate. Pass it wherever the call's time is known so historical data
+  // keeps billing at what it actually cost.
+  atIso?: string,
 ): number {
-  const rates = lookupRates(modelId)
+  const rates = lookupRates(modelId, atIso)
   if (!rates) return 0
   // Clamp: the 1h portion cannot exceed the total, and a caller passing a bogus negative must not
   // produce a credit. Whatever is left over is the 5-minute tier.
