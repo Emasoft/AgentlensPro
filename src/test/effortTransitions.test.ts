@@ -8,7 +8,7 @@
 // Every test below pins a way the differencing could invent a transition that never happened —
 // which is the only real risk here, since a false cache-break cause is worse than none.
 import * as assert from 'assert'
-import { effortObservation, effortTransitionsOf, scanEffortTransitions } from '../effortTransitions'
+import { effortObservation, effortTransitionAsRiskCommand, effortTransitionsOf, scanEffortTransitions } from '../effortTransitions'
 
 interface RawEntry {
   type?: unknown
@@ -157,6 +157,39 @@ suite('effortTransitionsOf — a change, and never anything else', () => {
       { type: 'assistant', timestamp: at('02'), sessionId: 's1', effort: 'low', message: { model: 'claude-sonnet-5' } },
     ]))
     assert.strictEqual(got[0].model, 'claude-sonnet-5')
+  })
+})
+
+suite('effortTransitionAsRiskCommand — a transition presented as a priceable event', () => {
+  const t = { ts: 1_700_000_000_000, session: 's1', from: 'xhigh', to: 'low', sidechain: false }
+
+  test('maps onto the EXISTING EFFORT_CHANGED vocabulary, not a new kind', () => {
+    // If this ever needs a new kind, shared/cacheRiskKinds is the single source and check-mirrors
+    // guards it — a locally-invented string would render as an unstyled unknown in the dashboard.
+    assert.strictEqual(effortTransitionAsRiskCommand(t).kind, 'EFFORT_CHANGED')
+  })
+
+  test("mutation is 'certain' — stronger than the /effort COMMAND it complements", () => {
+    // The command is 'ambiguous' because re-selecting the same value changes nothing. A transition
+    // IS the observed change, so it carries the certainty the command cannot.
+    assert.strictEqual(effortTransitionAsRiskCommand(t).mutation, 'certain')
+  })
+
+  test('the command label is synthetic and cannot be mistaken for a typed command', () => {
+    const c = effortTransitionAsRiskCommand(t)
+    assert.strictEqual(c.command, '(effort xhigh→low)')
+    assert.ok(!c.command.startsWith('/'), 'must not read like something greppable in a transcript')
+  })
+
+  test('timestamp and session pass through unchanged — they are the join keys', () => {
+    const c = effortTransitionAsRiskCommand(t)
+    assert.strictEqual(c.ts, t.ts)
+    assert.strictEqual(c.session, 's1')
+  })
+
+  test('the model rides along in args when known, and is absent when not', () => {
+    assert.strictEqual(effortTransitionAsRiskCommand({ ...t, model: 'claude-opus-5' }).args, 'claude-opus-5')
+    assert.strictEqual(effortTransitionAsRiskCommand(t).args, undefined)
   })
 })
 

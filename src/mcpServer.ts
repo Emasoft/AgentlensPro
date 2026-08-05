@@ -38,6 +38,7 @@ import type { HookEventRecord } from './hookEventStore'
 import { readHookEvents } from './hookEventStore'
 import { extractLifecycleEvents, type LifecycleKind } from './lifecycleEvents'
 import { scanCacheRiskCommands, type CacheRiskCommand, type CacheRiskKind } from './cacheRiskCommands'
+import { scanEffortTransitions, effortTransitionAsRiskCommand } from './effortTransitions'
 import { buildAttributionReport } from './skillAttribution'
 import { buildLoadedVersionsReport } from './loadedPluginVersions'
 import * as fs from 'fs'
@@ -2558,8 +2559,19 @@ async function handleGetCacheRiskCosts(
     sinceMs,
     kinds: args.kinds?.length ? (args.kinds as CacheRiskKind[]) : undefined,
   })
+  // TWO SOURCES, because a typed command is not the only way a prefix breaks (TRDD-A4BA8IU5 gap B).
+  // An effort change needs no command at all — a /model switch or the automatic safety-classifier
+  // fallback moves it with no user action — and MEASURED corpus-wide, all 12 real effort transitions
+  // occurred in sessions containing ZERO /effort commands. Reading only commands scored 0 of 12 on a
+  // cause that genuinely invalidates the prefix. The transition is also the STRONGER signal of the
+  // two: `/effort` is 'ambiguous' because it may re-select the same value, while a transition is the
+  // observed change.
+  const wantEffort = !args.kinds?.length || args.kinds.includes('EFFORT_CHANGED')
+  const effortEvents = wantEffort
+    ? scanEffortTransitions({ sinceMs }).map(effortTransitionAsRiskCommand)
+    : []
   const bySession = new Map<string, CacheRiskCommand[]>()
-  for (const c of commands) {
+  for (const c of [...commands, ...effortEvents]) {
     if (!c.session) continue
     const list = bySession.get(c.session)
     if (list) list.push(c); else bySession.set(c.session, [c])
