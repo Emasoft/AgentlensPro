@@ -18,6 +18,7 @@ import {
   fmtMb, init, mcpEndpoint, parseWhen, resolveTool, sleep, ToolInfo, ToolSchema,
 } from './cliCore'
 import { EXIT, UsageError } from './cliErrors'
+import { strArg } from './argHelpers'
 import { installHooks, installOtel, installSkills, installStatusline } from './hookInstall'
 import { ensureServer, openDashboard, showStatus, stopServer } from './serverControl'
 
@@ -537,17 +538,6 @@ export function writeOut(file: string, result: unknown): void {
   fs.writeFileSync(file, JSON.stringify(result, null, 2))
 }
 
-/** The value that follows a flag. A value that is ITSELF a flag is a caller mistake, never a value:
- *  `--out --json` wrote a file literally named "--json" in the cwd AND silently swallowed the
- *  `--json` the caller had asked for, so the request was misread twice and reported as success
- *  (measured — exit 0, junk file created). ctxmapCli guards its own flag values this way; this is
- *  that guard for the ops flags, which are the ones that create files and directories. */
-function takeValue(argv: string[], i: number, flag: string, what: string): string {
-  const v = argv[i]
-  if (v === undefined || v.startsWith('--')) throw new UsageError(`${flag} needs ${what}`)
-  return v
-}
-
 /** A pre-rendered, human-facing payload: `{ format: <non-json>, text: string }`. `format: 'json'`
  *  never takes this path — a caller who asked for JSON gets JSON. */
 function isRenderedText(v: unknown): v is { format: string; text: string } & Record<string, unknown> {
@@ -583,9 +573,11 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
     else if (argv[i] === '--stop-server') ops.stop = true
     else if (argv[i] === '--purge-db') ops.purgeDb = true
     else if (argv[i] === '--purge-bodies') ops.purgeBodies = true
-    else if (argv[i] === '--export-bodies') ops.exportBodies = takeValue(argv, ++i, '--export-bodies', 'a destination directory')
-    else if (argv[i] === '--since') ops.since = takeValue(argv, ++i, '--since', 'a value (ISO timestamp or hours)')
-    else if (argv[i] === '--until') ops.until = takeValue(argv, ++i, '--until', 'a value (ISO timestamp)')
+    // strArg, not a local copy: it already refuses a flag-shaped value, and argHelpers' own header
+    // records that a second copy of a validator is how one of them quietly stops rejecting.
+    else if (argv[i] === '--export-bodies') ops.exportBodies = strArg(argv[++i], '--export-bodies', 'a destination directory')
+    else if (argv[i] === '--since') ops.since = strArg(argv[++i], '--since', 'an ISO timestamp or a number of hours')
+    else if (argv[i] === '--until') ops.until = strArg(argv[++i], '--until', 'an ISO timestamp')
     else if (argv[i] === '--install-skill') ops.installSkill = true
     else if (argv[i] === '--guard') {
       ops.guard = true
@@ -603,7 +595,7 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
     else if (argv[i] === '--uninstall-otel') otelOp = 'uninstall'
     else if (argv[i] === '--install-statusline') statuslineOp = 'install'
     else if (argv[i] === '--uninstall-statusline') statuslineOp = 'uninstall'
-    else if (argv[i] === '--out') globals.out = takeValue(argv, ++i, '--out', 'a path')
+    else if (argv[i] === '--out') globals.out = strArg(argv[++i], '--out', 'a path')
     else rest.push(argv[i])
   }
 
