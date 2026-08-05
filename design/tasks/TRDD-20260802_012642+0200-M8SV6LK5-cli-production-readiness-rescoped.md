@@ -3,7 +3,7 @@ trdd-id: M8SV6LK5
 title: CLI sources production-readiness review — re-scoped against today's src/cli
 column: dev
 created: 2026-08-02T01:26:42+0200
-updated: 2026-08-05T02:58:00+0200
+updated: 2026-08-05T03:15:20+0200
 current-owner: session
 task-type: audit
 supersedes: K7PQ2M4V
@@ -18,10 +18,12 @@ eht: []
 
 **IN PROGRESS.**
 
-> **`updated:` was wrong and is corrected — it now reads 02:58, EARLIER than the 04:55 a previous
-> edit wrote.** Three edits during this session set it from memory instead of from `date`, landing up
-> to two hours in the future. The board sorts on this field, so a fabricated future stamp parks a
-> card at the top of every view until the clock catches up. Read the clock; never type a timestamp.
+> **`updated:` went BACKWARDS once, on purpose.** Three edits during this session typed it from
+> memory instead of reading `date`, landing up to two hours in the future (a `04:55` while the clock
+> said `02:58`). The board sorts on this field, so a fabricated future stamp parks a card at the top
+> of every view until the clock catches up. It is now stamped from `date` on every edit. If the git
+> log shows this field decreasing around 2026-08-05T03:00+0200, that is the correction, not a bug —
+> do not "fix" it forward. **Read the clock; never type a timestamp.**
 
 1. **Starting condition confirmed** — `reports/cli-revision/` was empty, exactly as this card
    predicted. Bundle current (2.23.0, rebuilt + deployed this session).
@@ -227,10 +229,36 @@ eht: []
     **The lesson that generalises: TWO of these were found by the verification step, not the read.**
     Running the fixed command on PATH is not a formality — it is a second, independent detector.
 
+12. **`statuslineCapture.ts` REVIEWED — 2 defects (`a9b983a`), and shape 6 swept with a NEGATIVE
+    result.** The file states three contracts in its header; it breaks the second in the degraded
+    case, which is the case that contract exists for.
+
+    - **A wedged server froze the render.** Contract 2 says "a hung socket must not hold the status
+      line hostage — a dropped sample is invisible, a frozen status line is not", and the wrapper
+      then awaited the capture outright after the child. MEASURED on PATH: **102 ms healthy, 787 ms**
+      against an endpoint that DROPS — past Claude Code's 300 ms debounce, every render. **A closed
+      port refuses instantly, so a suite that only tested "server down" could never see this** — the
+      same blind spot that hid the 75 s hot-path stall. Now a residual budget after the child:
+      **157 ms** wedged, healthy unchanged. Not hypothetical: `TRDD-2YP3DB9Y`'s OOM put the server in
+      exactly that state tonight.
+    - **`--inner --subagent` ran the flag as the command.** `sh -c "--subagent"` exits non-zero and
+      contract 1 is that a non-zero exit BLANKS the user's status line. The falsification pass proved
+      it by leaking `zsh: no such option: subagent` into the test output. Treated as absent now —
+      deliberately NOT an error, since an error exits non-zero too and would cause what it diagnosed.
+
+    6 tests, falsified (3/3, the timing one failing at exactly 705 ms). `runStatuslineCommand` takes
+    its input stream as a parameter: `process.stdin` yields one EOF per process, so a suite asserting
+    two invocations hangs on the second. Suite 2,122.
+
+    **Shape 6 swept across `src/cli` + its consumed modules — NO second instance.** `etaReason`
+    (5 members) is produced and consumed only inside `windowEta.ts`, with all five branched and
+    tested; `accountVerified` is fully branched; `AuthRegime`/`TtlSource` have no CLI consumer.
+    Recording the negative result because a sweep that lists only hits cannot be trusted later.
+
 **NEXT ACTION:** take the next per-file surface by hand. Shapes 3 and 4 are SWEPT across all of
 `src/cli` — but shape 3 now has TWO faces (accept-as-value and discard-the-flag), and the sweep that
 found the first would have missed the second, so **re-read the shape list below before trusting the
-sweep**. Shapes 1, 2 and 5 still need a read; none is greppable. Unreviewed and largest first:
+sweep**. Shapes 1, 2 and 5 still need a read; none is greppable. Shape 6 is SWEPT (no second instance). Unreviewed and largest first:
 `setup.ts` (994, but it already has two dedicated test suites), `hookInstall.ts` (594, partially
 covered by the TOCTOU work), `ctxvisCli.ts` (463), `statuslineCapture.ts` (167). Whatever produces the
 findings, they are a HYPOTHESIS list: verify each against the source before any edit.

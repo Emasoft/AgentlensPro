@@ -8,6 +8,20 @@ All notable changes to AgentlensPro are documented here.
 
 ### Fixed
 
+- **A wedged server froze the status line it was only supposed to observe.** The capture wrapper is
+  documented as fire-and-forget — "a hung socket must not hold the status line hostage" — but it
+  awaited the capture outright once the inner command had finished, so a server that *accepts* the
+  connection and never answers cost the capture's whole 700 ms timeout on the render path. Measured
+  through the installed command: **102 ms healthy vs 787 ms** against an endpoint that drops, past
+  Claude Code's own 300 ms debounce, on every render. (A closed port refuses instantly and looks
+  fine, which is why a suite that only tested "server down" never saw it.) The capture now gets a
+  small residual budget after the child — it has already had the child's entire runtime to finish a
+  ~5 ms localhost POST — so the healthy path is unchanged and the wedged path is now **157 ms**. With
+  no inner command the capture is still awaited in full: there is no render to hold up.
+- **`statusline --inner --subagent` ran the flag as the command.** `sh -c "--subagent"` exits
+  non-zero, and a non-zero exit *blanks the user's status line* — the worst outcome this wrapper has.
+  A flag where the command belongs is now treated as absent (capture-only, exit 0); deliberately not
+  an error, because an error exits non-zero too and would cause the very thing it diagnosed.
 - **`budget` could run its projection on one rate-limit window and its account cross-check on
   another.** `bindingWindow` has three values (`5h` / `7d` / `none`), and `none` — "neither window is
   projected to exhaust" — is truthy, so it slipped past the `|| '5h'` fallback and became the window
