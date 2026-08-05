@@ -143,8 +143,13 @@ const GENERATION_NEEDLES = ['spy-agentlens', LEGACY_HOOK_BIN, LEGACY_GATE_BIN, H
 function removalNeedle(command: string): string | null {
   const known = GENERATION_NEEDLES.find(n => command.includes(n))
   if (known) return known
-  // eslint-disable-next-line no-control-regex
-  return /["\\ -]/.test(command) ? null : command
+  // The class MUST be spelled with escapes, never the literal bytes. Written raw, the 0x00 made
+  // file(1) report this whole file as "data", and ugrep then classified it binary and printed
+  // NOTHING for every search — exit 1, empty stdout, EMPTY stderr, indistinguishable from "no
+  // matches". Every code sweep over these 594 lines silently measured nothing (TRDD-M8SV6LK5).
+  // Escaped it is identical to the regex engine (verified over all 256 byte values) and, as a
+  // bonus, no longer trips no-control-regex — which is why there is no eslint-disable here.
+  return /["\\\x00-\x1f]/.test(command) ? null : command
 }
 
 /** The ops for ONE event. Exported because the TOCTOU property is a property of the OP LIST, not of
