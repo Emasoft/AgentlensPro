@@ -33,6 +33,29 @@ export function strArg(v: string | undefined, flag: string, what = 'a value'): s
   return v
 }
 
+/** A named flag's value, looked up by name rather than consumed positionally.
+ *
+ *  An ABSENT flag returns undefined — legal, and what an optional flag means. A flag that IS PRESENT
+ *  with a missing or flag-shaped value is a UsageError, because returning undefined there is a silent
+ *  DROP: the command runs as if the flag had never been typed and reports success.
+ *
+ *  That is the more dangerous half of what strArg guards, and it was live in two views.
+ *  MEASURED: `statusline-history sessions --session --json` discarded the filter and returned **14
+ *  sessions instead of 1** with exit 0 — a WRONG ANSWER, not a missing file — and `ctxmap --list
+ *  --limit --json` silently fell back to the default 20. Both had a local helper that mapped a
+ *  flag-shaped value to undefined specifically to avoid writing a file named "--json"; avoiding the
+ *  junk file was right, and discarding the caller's intent to do it was not.
+ *
+ *  `bareOk` is for a flag that is legally valueless — `--project` alone means "the directory I am
+ *  in", so `--project --json` is the documented spelling, not a mistake, and must not be refused. */
+export function flagValue(argv: string[], name: string, what = 'a value', bareOk = false): string | undefined {
+  const i = argv.indexOf(name)
+  if (i < 0) return undefined
+  const v = argv[i + 1]
+  if (bareOk && (v === undefined || v.startsWith('--'))) return undefined
+  return strArg(v, name, what)
+}
+
 export function clamp(v: number, lo: number, hi: number): number {
   if (!Number.isFinite(v)) return lo
   return Math.min(hi, Math.max(lo, v))

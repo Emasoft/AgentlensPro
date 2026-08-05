@@ -35,7 +35,8 @@ import {
 } from '../exactTokens'
 import { openCountCache, type CountCache } from '../countCache'
 import { readBody, readBodyText, PREFIX_STUB, type ContentBlock, type Message, type ToolDef, type RequestBody, type Usage, type ResponseBody } from '../capturedBody'
-import { EXIT } from './cliErrors'
+import { EXIT, UsageError } from './cliErrors'
+import { flagValue } from './argHelpers'
 
 export type { ContentBlock, Message, ToolDef, RequestBody, Usage, ResponseBody }
 export { PREFIX_STUB }
@@ -871,14 +872,13 @@ export async function runCtxmapCli(argv: string[]): Promise<number> {
     console.log(CTXMAP_USAGE)
     return argv.length === 0 ? EXIT.USAGE : 0
   }
-  const flag = (name: string): string | undefined => {
-    const i = argv.indexOf(name)
-    const v = i >= 0 ? argv[i + 1] : undefined
-    // `--out --json` must not resolve to a file literally named "--json".
-    return v?.startsWith('--') ? undefined : v
-  }
-  const topN = Number(flag('--top')) || 20
-  const outFile = flag('--out')
+  // flagValue, not a local helper: the local one mapped a flag-shaped value to undefined so that
+  // `--out --json` could not write a file named "--json". Avoiding the junk file was right; doing it
+  // by DISCARDING the flag was not — `--limit --json` then silently used the default 20 and reported
+  // success. A present flag with a bad value is now a refusal.
+  const flag = (name: string, what = 'a value'): string | undefined => flagValue(argv, name, what)
+  const topN = Number(flag('--top', 'a number')) || 20
+  const outFile = flag('--out', 'a path')
   const asJson = argv.includes('--json')
 
   const emit = (text: string, digest: string): number => {
@@ -894,7 +894,7 @@ export async function runCtxmapCli(argv: string[]): Promise<number> {
 
   try {
     if (argv[0] === '--list') {
-      const files = listRequests(Number(flag('--limit')) || 20)
+      const files = listRequests(Number(flag('--limit', 'a number')) || 20)
       if (files.length === 0) {
         // NOT EXIT.USAGE. The command line was correct; there is simply nothing captured yet, which
         // is the state of every healthy machine before capture is wired — and EX_USAGE is documented
@@ -978,6 +978,11 @@ export async function runCtxmapCli(argv: string[]): Promise<number> {
   } catch (e) {
     const err = e as Error & { exitCode?: number }
     console.error(`ctxmap: ${err.message}`)
+    // A UsageError is a CALLER mistake and must read as 64, not 1 — cliErrors.ts reserves 1 as the
+    // watchers' ABORT signal, so a mistyped flag returning 1 would kill a guarded batch and send the
+    // operator looking for a burn that never happened. This branch was latent until flag values
+    // started raising UsageError: every throw here previously carried its own `exitCode`.
+    if (e instanceof UsageError) return EXIT.USAGE
     return err.exitCode ?? 1
   }
 }
