@@ -755,29 +755,50 @@ const stepServer: StepDef = {
   name: 'server',
   async run(ctx) {
     const pre = await serverStats(ctx)
+    // A failed stats probe is NOT proof the server is down — a busy server (GC-thrashing at
+    // multi-GB rss) can miss the 5s HTTP window while very much owning the data directory.
+    // Measured live: `setup --dry-run` printed "not running" against a server that `server
+    // status` showed RUNNING, because its stats answer was slow. Collapsing that timeout into
+    // "not running" is worse than cosmetic: the real-run remedy for "not running" is SPAWNING,
+    // which slams into the single-owner data-dir guard and reports a confusing failure. So when
+    // HTTP says nothing, consult the pidfile under ctx.dataDir (kill(pid, 0) = liveness): an
+    // alive owner means "unresponsive — restart", never "absent — start".
+    let stalePid: number | null = null
+    if (pre === null) {
+      try {
+        const pid = Number(fs.readFileSync(path.join(ctx.dataDir, 'server.pid'), 'utf-8').trim())
+        if (Number.isFinite(pid) && pid > 0) { process.kill(pid, 0); stalePid = pid }
+      } catch { /* no pidfile or the pid is dead — genuinely not running */ }
+    }
     const preSpanCount = pre?.spans?.store?.totalSpans ?? storeSpanCount(ctx.dataDir)
     const healthy = pre !== null
       && path.resolve(pre.dataDir) === path.resolve(ctx.dataDir)
       && pre.ports.ui === ctx.uiPort && pre.ports.mcp === ctx.mcpPort && pre.ports.otlp === ctx.otlpPort
     const found = pre
       ? `running pid=${pre.pid} (dataDir ${pre.dataDir === ctx.dataDir ? 'matches' : 'MISMATCH'})`
-      : 'not running'
+      : stalePid !== null
+        ? `unresponsive (pid ${stalePid} alive, stats probe got no answer in 5s)`
+        : 'not running'
 
     if (ctx.dryRun) {
-      return { result: { step: this.name, found, action: healthy ? 'none' : (pre ? 'would: graceful restart from this install' : 'would: start server'), verify: 'SKIP', detail: 'dry-run' }, acted: false }
+      return { result: { step: this.name, found, action: healthy ? 'none' : (pre !== null || stalePid !== null ? 'would: graceful restart from this install' : 'would: start server'), verify: 'SKIP', detail: 'dry-run' }, acted: false }
     }
     if (healthy) {
       ctx.serverPid = pre.pid
       return { result: { step: this.name, found, action: 'none', verify: 'PASS', detail: `dashboard+MCP+OTLP already serving ${preSpanCount} span(s)` }, acted: false }
     }
 
-    // ACT — graceful stop of a mismatched/old server (SIGTERM = span-flush), then start
-    // from THIS install's bundle.
-    if (pre) {
-      try { process.kill(pre.pid, 'SIGTERM') } catch { /* already gone */ }
-      for (let i = 0; i < 40 && (await serverStats(ctx)) !== null; i++) await sleep(250)
-      if ((await serverStats(ctx)) !== null) {
-        return { result: { step: this.name, found, action: 'stop old server', verify: 'FAIL', detail: `pid ${pre.pid} did not stop within 10s` }, acted: true }
+    // ACT — graceful stop of a mismatched/old/unresponsive server (SIGTERM = span-flush), then
+    // start from THIS install's bundle. The unresponsive case uses the pidfile pid: skipping the
+    // stop and going straight to spawn would hit the single-owner guard.
+    const stopPid = pre?.pid ?? stalePid
+    if (stopPid !== null && stopPid !== undefined) {
+      try { process.kill(stopPid, 'SIGTERM') } catch { /* already gone */ }
+      const gone = async (): Promise<boolean> =>
+        (await serverStats(ctx)) === null && (() => { try { process.kill(stopPid, 0); return false } catch { return true } })()
+      for (let i = 0; i < 40 && !(await gone()); i++) await sleep(250)
+      if (!(await gone())) {
+        return { result: { step: this.name, found, action: 'stop old server', verify: 'FAIL', detail: `pid ${stopPid} did not stop within 10s` }, acted: true }
       }
     }
     // The kill-switch gates EVERY spawn path, including setup (TRDD-K3WDPR7M): this was the one

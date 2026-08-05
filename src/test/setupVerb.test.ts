@@ -369,3 +369,57 @@ suite('setup — CLI wiring (spawned single executable)', () => {
     } finally { f.cleanup() }
   })
 })
+
+suite('setup — server probe distinguishes DOWN from UNRESPONSIVE (single-owner guard safety)', () => {
+  // Measured live: `setup --dry-run` printed "not running" against a server that `server status`
+  // showed RUNNING pid 55573 — its stats answer outran the 5s HTTP window while GC-thrashing at
+  // 1.9GB rss. The real-run remedy for "not running" is SPAWNING, which slams into the
+  // single-owner data-dir guard. An alive pid in <dataDir>/server.pid must therefore read as
+  // "unresponsive → restart", never "absent → start".
+
+  test('alive pidfile + no HTTP answer ⇒ unresponsive + would-restart (dry-run)', async function () {
+    this.timeout(60_000)
+    const f = makeFixture()
+    try {
+      fs.mkdirSync(f.dataDir, { recursive: true })
+      // process.pid is alive by construction, and no server listens on the ephemeral port.
+      fs.writeFileSync(path.join(f.dataDir, 'server.pid'), String(process.pid))
+      const ports = { ui: await freePort(), mcp: await freePort(), otlp: await freePort() }
+      const o = await runSetup(setupOpts(f, ports, { dryRun: true }))
+      const s = stepOf(o, 'server')
+      assert.match(s.found, /unresponsive \(pid \d+ alive/, `found was: ${s.found}`)
+      assert.strictEqual(s.action, 'would: graceful restart from this install',
+        'an alive owner must be restarted, never started-over (single-owner guard)')
+    } finally { f.cleanup() }
+  })
+
+  test('no pidfile ⇒ genuinely not running + would-start (the regression guard)', async function () {
+    this.timeout(60_000)
+    const f = makeFixture()
+    try {
+      fs.mkdirSync(f.dataDir, { recursive: true })
+      const ports = { ui: await freePort(), mcp: await freePort(), otlp: await freePort() }
+      const o = await runSetup(setupOpts(f, ports, { dryRun: true }))
+      const s = stepOf(o, 'server')
+      assert.strictEqual(s.found, 'not running')
+      assert.strictEqual(s.action, 'would: start server')
+    } finally { f.cleanup() }
+  })
+
+  test('a DEAD pid in the pidfile is not an owner — still would-start', async function () {
+    this.timeout(60_000)
+    const f = makeFixture()
+    try {
+      fs.mkdirSync(f.dataDir, { recursive: true })
+      // A pid that is certainly dead: spawn a child that exits, then use its pid.
+      const child = spawn(process.execPath, ['-e', 'process.exit(0)'])
+      await new Promise<void>(r => child.on('exit', () => r()))
+      fs.writeFileSync(path.join(f.dataDir, 'server.pid'), String(child.pid))
+      const ports = { ui: await freePort(), mcp: await freePort(), otlp: await freePort() }
+      const o = await runSetup(setupOpts(f, ports, { dryRun: true }))
+      const s = stepOf(o, 'server')
+      assert.strictEqual(s.found, 'not running', 'a dead pidfile owner must not block a fresh start')
+      assert.strictEqual(s.action, 'would: start server')
+    } finally { f.cleanup() }
+  })
+})
