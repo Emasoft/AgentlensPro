@@ -174,6 +174,11 @@ Python, so it must be DATA (a substring, never a regex or a callback); and a nee
 quote will never match its own raw text, and a caller that cannot express a removal must say so and
 fall back loudly rather than emit a filter that strips nothing while reporting success.
 
+
+^ATOM-9B2N-KU2R [desc:"CLI help is TOTAL since 2.23.0: --help/-h anywhere in argv routes to help and dispatches NOTHING — before that, disable --help EXECUTED the disable", keywords: help_flag_executed_the_command disable_--help_disarmed_everything --help_ran_the_verb help_must_dispatch_nothing MANAGEMENT_VERBS help-total_contract, type: project, ocd: 2026-08-05, lmd: 2026-08-05]
+
+Since v2.23.0 the CLI help contract is TOTAL (git/npm style): `--help`/`-h` ANYWHERE in argv routes to help and dispatches NOTHING — enforced by an intercept in `cliMain` (src/cli/main.ts) BEFORE the dispatch switch, with a `MANAGEMENT_VERBS` set gating network-free help for management verbs. WHY it must be this way: on 2026-08-05 `agentlenspro disable --help` EXECUTED the disable — it armed the DISABLED flag, stopped the server, and disarmed every hook machine-wide, because the old dispatcher matched the verb first and passed `--help` through as an ordinary arg. Any new verb added to the CLI inherits the intercept automatically; never add a verb-local `--help` handler that runs after side effects. Falsified tests: src/test/cliDispatch.test.ts ("help is TOTAL", 4 tests that failed 0/4 against the pre-fix bundle).
+
 ## Notes and lessons learned
 
 [^1]: [id:ATOM-SETTINGS-WIPE-GUARDRAIL, status:valid, keywords:"config_file_wiped_or_corrupted_after_edit settings.json_wiped safeConfigEdit_guard start_fresh_on_parse_failure_removed", ocd:2026-07-11, lmd:2026-07-11] promoted from the old-repo LOCAL note
