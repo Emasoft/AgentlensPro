@@ -87,8 +87,11 @@ function mergeInteractionSlices(claudeSessionId: string, slices: SessionSummaryC
     for (const f of s.filesSearched) { filesSearched.add(f) }
     for (const f of s.filesChanged) { filesChanged.add(f) }
     for (const f of s.filesWritten) { filesWritten.add(f) }
-    timeline.push(...s.timeline)
-    backgroundSpans.push(...s.backgroundSpans)
+    // Loops, not `push(...arr)`: a spread passes every element as an ARGUMENT, so past V8's
+    // max-arguments limit (~125k) it throws RangeError — and a merged session's timeline is
+    // unbounded. Same defect that was crashing buildCodexSessions every 4s (TRDD-2YP3DB9Y).
+    for (const t of s.timeline) { timeline.push(t) }
+    for (const b of s.backgroundSpans) { backgroundSpans.push(b) }
     const st = startMsOf(s)
     if (st !== Number.MAX_SAFE_INTEGER) {
       if (st < minStartMs) { minStartMs = st }

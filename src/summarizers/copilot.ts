@@ -215,7 +215,9 @@ function collectDescendants(rootSpanId: string, childrenOf: Record<string, Span[
     if (!span || seen.has(span.spanId)) { continue }
     seen.add(span.spanId)
     result.push(span)
-    stack.push(...(childrenOf[span.spanId] || []))
+    // Loop, not a spread: same V8 max-arguments hazard as the other two summarizers. A single
+    // span's child list is usually small, but "usually" is what the codex site relied on too.
+    for (const c of childrenOf[span.spanId] || []) { stack.push(c) }
   }
 
   return result
