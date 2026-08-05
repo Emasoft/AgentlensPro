@@ -3,7 +3,7 @@ trdd-id: M8SV6LK5
 title: CLI sources production-readiness review — re-scoped against today's src/cli
 column: dev
 created: 2026-08-02T01:26:42+0200
-updated: 2026-08-05T02:05:00+0200
+updated: 2026-08-05T03:10:00+0200
 current-owner: session
 task-type: audit
 supersedes: K7PQ2M4V
@@ -111,12 +111,38 @@ eht: []
    endpoint at a port that refuses instantly, so a regression fails an assertion instead of exporting
    the archive into the working tree. Re-verified by re-removing the guard: fails, creates nothing.
 
+8. **The pattern list PAID OFF — shape 3 swept across all remaining files in one grep (`a48c0ce`).**
+   This is the method working as intended: no file was read end-to-end, the grep named the
+   candidates, and each was verified against the source before any edit.
+
+   - **`envCli.ts` had NO validator at all** and failed in both directions, silently: `env --out` as
+     the last token dropped the request and printed to stdout with **exit 0** (shape 2 — a request
+     not fulfilled, reported as success), `env --out --json` wrote a file named `--json` and never
+     applied `--json`, and `--out=` empty was the same drop. All measured on the installed command.
+   - **`budgetCli.ts` and `watchCli.ts` are CLEAN** — they route through `argHelpers.strArg`/`numArg`.
+     `strArg` already rejects a flag-shaped value; `numArg` gets it for free (`Number('--x')` is NaN).
+   - **`ctxvisCli.ts:445`'s unpaired `writeFileSync` is NOT shape 4** — it is a best-effort
+     `--reuse-last` cache inside a try/catch with a comment saying so. Checked, not assumed.
+
+   **The real finding is the duplication, not the third instance.** `strArg` has implemented this
+   check all along, and `argHelpers`' own header warns that *a second copy of a validator is how one
+   of them quietly stops rejecting*. Three surfaces never routed through it — and `takeValue`, which
+   I added to `diagnosticsCli` in item 7, was itself that second copy. It is gone; both files now
+   call `strArg`, which gained an optional `what` so a caller can say "a path" (default unchanged, so
+   `watchCli`'s existing message assertion still holds). 9 tests, falsified, PATH-verified. Suite
+   2,084.
+
+   That suite also chdirs to a throwaway directory, for the reason item 7 records: **these cases
+   WRITE the junk file when the guard is absent**, which is the state a falsification pass creates.
+
 **NEXT ACTION:** take the next per-file surface by hand — route (c) is working, so (b) is no longer
-blocking (it stays an option if the remaining surface proves slow). Unreviewed and largest first:
-`setup.ts` (994, but it already has two dedicated test suites), `statuslineHistoryCli.ts` (686 — note
-its STORE was hardened separately, see Out of scope; the CLI view was not), `watchCli.ts` (529),
-`hookInstall.ts` (594, partially covered by the TOCTOU work). Whatever produces the findings, they
-are a HYPOTHESIS list: verify each against the source before any edit.
+blocking (it stays an option if the remaining surface proves slow). Shapes 3 and 4 are now SWEPT
+across all of `src/cli`; shapes 1 and 2 still need a read, because neither is greppable. Unreviewed
+and largest first: `setup.ts` (994, but it already has two dedicated test suites),
+`statuslineHistoryCli.ts` (686 — note its STORE was hardened separately, see Out of scope; the CLI
+view was not), `watchCli.ts` (529), `hookInstall.ts` (594, partially covered by the TOCTOU work).
+Whatever produces the findings, they are a HYPOTHESIS list: verify each against the source before any
+edit.
 
 **The pattern to look for, now that it has SIX instances across two files** — it is the productive
 hypothesis, not a summary: *the command reports success while having misread the request or thrown

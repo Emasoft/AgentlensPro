@@ -8,6 +8,14 @@ All notable changes to AgentlensPro are documented here.
 
 ### Fixed
 
+- **`env --out` silently did nothing when given no path, and wrote a file named after the next flag
+  when given one.** `agentlenspro env --out` printed the report to stdout and exited 0 — the caller
+  asked for a file, got none, and was told everything was fine; `env --out --json` wrote a file
+  literally named `--json` and never applied `--json`; `--out=` with an empty value was the same
+  silent drop. All three now exit 64 with the reason. The underlying finding is that
+  `argHelpers.strArg` had always implemented exactly this check for `watch` and `budget`, and three
+  surfaces simply did not route through it — so the fix consolidates on that one validator (which
+  gains an optional named expectation, e.g. "expects a path") rather than adding a fourth copy.
 - **`--export-bodies --json` exported your whole raw-body archive into a directory named
   `--json`.** The ops flags took the next token as their value without checking that it was one, so a
   flag written where a value belongs was read as the value and the request was misread twice —
