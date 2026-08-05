@@ -377,19 +377,40 @@ suite('setup — server probe distinguishes DOWN from UNRESPONSIVE (single-owner
   // single-owner data-dir guard. An alive pid in <dataDir>/server.pid must therefore read as
   // "unresponsive → restart", never "absent → start".
 
-  test('alive pidfile + no HTTP answer ⇒ unresponsive + would-restart (dry-run)', async function () {
+  test('alive SERVER-shaped pidfile + no HTTP answer ⇒ unresponsive + would-restart (dry-run)', async function () {
     this.timeout(60_000)
     const f = makeFixture()
+    let owner: ReturnType<typeof spawn> | null = null
     try {
       fs.mkdirSync(f.dataDir, { recursive: true })
-      // process.pid is alive by construction, and no server listens on the ephemeral port.
-      fs.writeFileSync(path.join(f.dataDir, 'server.pid'), String(process.pid))
+      // An alive process whose command line matches the server signature (the trailing marker arg
+      // is inert to node but visible to ps) — process.pid would no longer qualify, by design: the
+      // PID-reuse guard demands the cmdline look like OUR server before the pid is claimed.
+      owner = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1 << 30)', 'standalone/server.js'])
+      fs.writeFileSync(path.join(f.dataDir, 'server.pid'), String(owner.pid))
       const ports = { ui: await freePort(), mcp: await freePort(), otlp: await freePort() }
       const o = await runSetup(setupOpts(f, ports, { dryRun: true }))
       const s = stepOf(o, 'server')
       assert.match(s.found, /unresponsive \(pid \d+ alive/, `found was: ${s.found}`)
       assert.strictEqual(s.action, 'would: graceful restart from this install',
         'an alive owner must be restarted, never started-over (single-owner guard)')
+    } finally { owner?.kill('SIGKILL'); f.cleanup() }
+  })
+
+  test('an alive but NON-server pid (OS pid reuse) ⇒ not running — never a SIGTERM target', async function () {
+    this.timeout(60_000)
+    // PR-15 review P1: kill(pid, 0) proves some process lives, not that it is ours. A reused pid
+    // must read as a stale pidfile, or the real-run stop path SIGTERMs an unrelated process.
+    const f = makeFixture()
+    try {
+      fs.mkdirSync(f.dataDir, { recursive: true })
+      // This mocha process is alive and is NOT an AgentlensPro server.
+      fs.writeFileSync(path.join(f.dataDir, 'server.pid'), String(process.pid))
+      const ports = { ui: await freePort(), mcp: await freePort(), otlp: await freePort() }
+      const o = await runSetup(setupOpts(f, ports, { dryRun: true }))
+      const s = stepOf(o, 'server')
+      assert.strictEqual(s.found, 'not running', `a reused pid must not be claimed — found: ${s.found}`)
+      assert.strictEqual(s.action, 'would: start server')
     } finally { f.cleanup() }
   })
 

@@ -92,6 +92,17 @@ export const HOT_PATH_BUDGET_MS: Readonly<Record<string, number>> = {
   'last-compact': 1_500,
 }
 
+// Every verb the dispatch switch below owns (i.e. NOT a server-side diagnostics tool), plus the
+// listing verb. The help intercept keys on this: `<verb> --help` for these prints the static
+// USAGE with zero network I/O, while an unknown name is presumed a diagnostics tool whose real
+// help lives in the server's schema. Keep in lockstep with the switch — a verb added there but
+// not here still gets safe help (USAGE covers it), just after one wasted server probe.
+const MANAGEMENT_VERBS: ReadonlySet<string> = new Set([
+  'hook', 'gate', 'statusline', 'statusline-history', 'get_account_status', 'disable', 'enable',
+  'telemetry', 'setup', 'server', 'daemon', 'dashboard', 'cache-expired', 'last-compact',
+  'budget', 'watch', 'heartbeat-cost', 'config', 'spool', 'env', 'ctxmap', 'ctxvis', 'list',
+])
+
 export const LATENCY_EXEMPT: Readonly<Record<string, string>> = {
   'statusline-history': 'an investigation verb a human or agent invokes deliberately; it may legitimately scan a large sample store',
   get_account_status: '--all is file-backed and fast, but the singular form proxies to the server BY DESIGN (it needs live session accessors); a rotator calls it out of band, never per render',
@@ -132,10 +143,15 @@ export async function cliMain(argv: string[], startServer: () => Promise<unknown
   // stripped the telemetry env. "Every verb parses its own flags before acting" is a property no
   // dispatcher can guarantee verb-by-verb (any new verb can regress it), so the guarantee lives
   // HERE, before any dispatch — the git/npm contract: `git commit --help` never commits.
-  // A diagnostics tool gets its real schema help when the server is up; anything else (or a down
-  // server) gets the global USAGE, which documents every management verb.
+  //
+  // Management verbs answer from USAGE without touching ANY socket (PR-15 review): the first cut
+  // routed every `X --help` through the diagnostics help path, which initializes the MCP client —
+  // so `disable --help` against an accept-then-hang server waited on the network to print static
+  // text. Only a name that is NOT a management verb (i.e. a diagnostics tool) tries the schema
+  // help, and only because that help genuinely lives in the server's live schema; a down or slow
+  // server falls back to USAGE via the client's own connect deadline.
   if (argv.some(a => a === '--help' || a === '-h')) {
-    if (cmd && !cmd.startsWith('-')) {
+    if (cmd && !cmd.startsWith('-') && !MANAGEMENT_VERBS.has(cmd)) {
       try {
         await runDiagnosticsCli(['help', cmd])
         return 0

@@ -767,8 +767,19 @@ const stepServer: StepDef = {
     if (pre === null) {
       try {
         const pid = Number(fs.readFileSync(path.join(ctx.dataDir, 'server.pid'), 'utf-8').trim())
-        if (Number.isFinite(pid) && pid > 0) { process.kill(pid, 0); stalePid = pid }
-      } catch { /* no pidfile or the pid is dead — genuinely not running */ }
+        if (Number.isFinite(pid) && pid > 0) {
+          process.kill(pid, 0)
+          // PID-REUSE GUARD (PR-15 review): kill(pid, 0) proves SOME process is alive, not that
+          // it is OUR server — the OS reuses pids, and the real-run path SIGTERMs this number.
+          // Only claim the pid when its command line looks like an AgentlensPro server; anything
+          // else means the pidfile is stale and the honest classification is "not running" (a
+          // wrongly-spared real server is still protected by its own single-owner boot guard,
+          // which refuses the duplicate spawn cleanly — the safe failure direction).
+          const cmd = execFileSync('ps', ['-p', String(pid), '-o', 'command='],
+            { encoding: 'utf-8', timeout: 5_000 }).trim()
+          if (/standalone[/\\]server\.js|agentlenspro/.test(cmd)) stalePid = pid
+        }
+      } catch { /* no pidfile, a dead pid, or ps failed — genuinely not running */ }
     }
     const preSpanCount = pre?.spans?.store?.totalSpans ?? storeSpanCount(ctx.dataDir)
     const healthy = pre !== null
