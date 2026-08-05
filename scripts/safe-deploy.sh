@@ -87,10 +87,28 @@ BUILD_CMD="${BUILD_CMD:-node esbuild.js}"
 SMOKE_CMD="${SMOKE_CMD:-__default_smoke__}"
 RESTART_CMD="${RESTART_CMD:-agentlenspro server restart}"
 
+# Tracks how far the run actually got, so the abort message can STATE THE TRUE BUNDLE STATE rather
+# than assert one. It used to hardcode "ABORTED before building … UNTOUCHED" for every failure — but
+# fail() is also called AFTER the build (esbuild itself, and the restart), so a restart failure
+# printed "the live bundle is UNTOUCHED" while a freshly-built bundle was sitting on disk. That is
+# the one question this script exists to answer ("did my change ship?"), answered wrong, in the
+# direction that makes you stop looking. Observed live 2026-08-05.
+STAGE=pre-build   # pre-build → building → built
+
 fail() {
   echo ""
   echo "❌ RED — '$1' failed."
-  echo "   ABORTED before building. The live bundle is UNTOUCHED (the last known-good build stays deployed)."
+  case "$STAGE" in
+    pre-build)
+      echo "   ABORTED before building. The live bundle is UNTOUCHED (the last known-good build stays deployed)." ;;
+    building)
+      echo "   FAILED DURING THE BUILD. The on-disk bundle may be PARTIALLY WRITTEN — do not trust it;"
+      echo "   re-run this script, and until it goes green treat the deployed bundle as unknown." ;;
+    built)
+      echo "   The build SUCCEEDED and the new bundle IS on disk — this failed afterwards, so the code"
+      echo "   is deployed but the server may still be running the OLD bundle. Check with"
+      echo "   'agentlenspro server status' and restart before trusting a measurement." ;;
+  esac
   exit 1
 }
 step() { echo ""; echo "▶ $1"; }
@@ -128,7 +146,9 @@ if [ "$DRYRUN" -eq 1 ]; then
 fi
 
 step "build — writing the live bundle (node esbuild.js)"
-eval "$BUILD_CMD" || fail "esbuild (WARNING: the on-disk bundle may be partially written — inspect before use)"
+STAGE=building
+eval "$BUILD_CMD" || fail "esbuild"
+STAGE=built
 
 # Smoke: the freshly-written bundle must LOAD and report the expected version before we make it live.
 # esbuild-fails-after-tsc-green is rare, but a partial/broken bundle here must NOT trigger a restart.

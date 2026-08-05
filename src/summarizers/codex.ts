@@ -9,6 +9,31 @@ import {
 } from './helpers'
 import { codexPromptSessionId } from '../codexSessionNormalizer'
 
+/** The largest value, or `fallback` when there is none — WITHOUT spreading the array into a call.
+ *
+ *  `Math.max(...xs)` passes every element as an ARGUMENT, and past V8's max-arguments limit
+ *  (~125k) that throws `RangeError: Maximum call stack size exceeded`. This site sat inside
+ *  buildCodexSessions' per-trace map, so the array was one trace group's spans — unbounded, and
+ *  largest during exactly the high-volume period the dashboard is most needed.
+ *
+ *  MEASURED on this machine: 4,156 of these RangeErrors in one server log, thrown every 4s from the
+ *  dashboard push (tickBurn → pushUpdate → summarizeSpans → buildCodexSessions), and TWO fatal
+ *  heap-exhaustion crashes. The store held 532,283 spans in memory at the time. See TRDD-2YP3DB9Y.
+ *
+ *  `capacityCalibration.ts` had already learned this and says so in a comment ("reduce, not
+ *  Math.min(...spread)… can hit V8's max-arguments limit → RangeError"). That lesson simply never
+ *  reached here — which is why this is a shared, named function now rather than a fourth inline loop.
+ *
+ *  Semantics are the ORIGINAL's, deliberately: the fallback applies only to an EMPTY array, so a max
+ *  that happens to be smaller than the fallback is still returned (a negative duration downstream is
+ *  a pre-existing question, and silently changing it here would hide it). */
+export function maxOrDefault(xs: number[], fallback: number): number {
+  if (xs.length === 0) { return fallback }
+  let best = xs[0]
+  for (const x of xs) { if (x > best) { best = x } }
+  return best
+}
+
 export function buildCodexSessions(spans: Span[]): SessionSummaryCard[] {
   const toMs = (s: Span) => nanoToMs(s.startTime) || s.receivedAt || 0
   const codexBySession = groupCodexSpansBySession(spans)
@@ -261,7 +286,7 @@ export function buildCodexSessions(spans: Span[]): SessionSummaryCard[] {
     const cacheHitRate = totalContext > 0 ? cacheReadTokens / totalContext : 0
 
     const allEndTimes = traceSpans.map(s => nanoToMs(s.endTime) || s.receivedAt || 0).filter(t => t > 0)
-    const endMs = allEndTimes.length > 0 ? Math.max(...allEndTimes) : startMs
+    const endMs = maxOrDefault(allEndTimes, startMs)
     const durationMs = endMs - startMs
 
     return {

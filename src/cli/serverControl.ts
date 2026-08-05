@@ -94,12 +94,33 @@ export async function ensureServer(): Promise<void> {
   // process dies with a raw stack trace instead of the actionable message below.
   let spawnError: Error | null = null
   child.on('error', (err) => { spawnError = err })
+  // Startup is O(store): opening the DB and running the first scan takes longer on the machines that
+  // have used AgentlensPro the most. A FIXED 20 s budget therefore failed precisely there — observed
+  // 2026-08-01 on a store of 2.89M spans, where the server came up and served correctly and the CLI
+  // still announced "did not become ready", which reads as a failure. The operator then re-runs
+  // `server start`, the single-owner guard correctly refuses it, and now the machine looks wedged.
+  // So the wait is bounded by LIVENESS rather than by a guessed constant: keep waiting while the
+  // process we started is alive, and give up IMMEDIATELY when it is not.
+  let childExited = false
+  child.on('exit', () => { childExited = true })
   child.unref()
   if (typeof outFd === 'number') fs.closeSync(outFd)
-  for (let i = 0; i < 80; i++) { // up to 20s — DB open + first scan can be slow
+  const deadline = Date.now() + readyTimeoutMs()
+  while (Date.now() < deadline) {
     await sleep(250)
     if (spawnError) throw new Error(`failed to spawn the server: ${(spawnError as Error).message}`)
-    try { await init() } catch { continue } // not ready yet — keep polling
+    let answered = true
+    try { await init() } catch { answered = false }
+    if (!answered) {
+      // findServerPid() is only consulted when our child is GONE: our spawn also exits, correctly,
+      // whenever another server won the single-instance race — and that case is a success, not a death.
+      const anotherServing = childExited ? await findServerPid().catch(() => null) !== null : false
+      const verdict = startupVerdict({ answered, childExited, anotherServing, deadlinePassed: Date.now() >= deadline })
+      if (verdict === 'died') {
+        throw new Error(`the server exited during startup — it never answered.${logProblem}\n${logTail()}`)
+      }
+      continue // 'keep-waiting' — alive and still starting; 'timed-out' falls out of the loop below
+    }
     // Report the pid that is actually SERVING, not the child we spawned. The two differ whenever
     // another process (a hook's ensureServer, a concurrent CLI) wins the single-instance race: our
     // child refuses the data dir and exits, and init() then succeeds against THEIRS. Printing
@@ -113,7 +134,53 @@ export async function ensureServer(): Promise<void> {
     console.log(`server started (${who}) — logs: ${serverLogPath()}`)
     return
   }
-  throw new Error(`server did not become ready within 20s — check ${serverLogPath()}${logProblem}`)
+  // The budget is spent and the process is still alive: say exactly that. "Did not become ready"
+  // reads as "it failed"; the truthful claim is that it has not answered YET, and the difference
+  // decides whether the operator re-runs a start that will be refused or simply waits.
+  const still = childExited ? 'the process we started has exited' : 'the server process is still alive'
+  throw new Error(
+    `the server has not answered within ${Math.round(readyTimeoutMs() / 1000)}s — ${still}. ` +
+    'A large span store makes the first open slow; raise AGENTLENS_SERVER_READY_TIMEOUT_MS, or run ' +
+    `\`agentlenspro server status\` in a moment to see whether it came up on its own.${logProblem}\n${logTail()}`,
+  )
+}
+
+/** What a start attempt should DO next, as a pure decision over the four things we can observe.
+ *
+ *  It is a named function because the original defect was a DECISION, not a duration: the code
+ *  treated "has not answered within a fixed 20 s" as "failed", and on a large store that sentence is
+ *  simply false — the server was up and serving. Naming the verdict makes the four cases testable and
+ *  keeps them from drifting back into an implicit `for` bound.
+ *
+ *  `died` deliberately outranks `keep-waiting`: when our child is gone and nothing else is serving,
+ *  the remaining budget can only delay a diagnosis the log already contains. */
+export type StartupVerdict = 'ready' | 'died' | 'keep-waiting' | 'timed-out'
+export function startupVerdict(o: {
+  answered: boolean; childExited: boolean; anotherServing: boolean; deadlinePassed: boolean
+}): StartupVerdict {
+  if (o.answered) return 'ready'
+  if (o.childExited && !o.anotherServing) return 'died'
+  return o.deadlinePassed ? 'timed-out' : 'keep-waiting'
+}
+
+/** How long to wait for a freshly-spawned server to answer. Generous by default because the wait is
+ *  ALSO bounded by liveness (a dead child fails immediately), so a long ceiling costs nothing on the
+ *  failure path — it only stops a slow-but-healthy start from being reported as a failure. */
+export function readyTimeoutMs(): number {
+  const raw = Number(process.env.AGENTLENS_SERVER_READY_TIMEOUT_MS)
+  return Number.isFinite(raw) && raw >= 1_000 ? raw : 180_000
+}
+
+/** The tail of the server log — the reason a boot failure happened is already written there, and an
+ *  error that says "check the log" without showing it makes the reader do the tool's job. */
+export function logTail(lines = 8): string {
+  try {
+    const raw = fs.readFileSync(serverLogPath(), 'utf8')
+    const tail = raw.split('\n').filter(Boolean).slice(-lines)
+    return tail.length ? `--- ${serverLogPath()} (last ${tail.length} line(s)) ---\n${tail.join('\n')}` : `(${serverLogPath()} is empty)`
+  } catch (e) {
+    return `(could not read ${serverLogPath()}: ${(e as Error).message})`
+  }
 }
 
 /** The server's PID, through a fallback chain that also covers builds predating

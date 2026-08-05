@@ -11,7 +11,7 @@
 // injected as a LAZY loader, executed ONLY on the bare no-args path, and marked external in
 // esbuild.js — cli.js requires the sibling server.js bundle at runtime instead of inlining a
 // second copy of the whole server.
-import { cliMain } from '../src/cli/main'
+import { cliMain, exitNow } from '../src/cli/main'
 import { EXIT, UsageError } from '../src/cli/cliErrors'
 
 cliMain(process.argv.slice(2), () => import('./server'))
@@ -25,5 +25,12 @@ cliMain(process.argv.slice(2), () => import('./server'))
     // EX_USAGE for a caller mistake, 1 only for a runtime failure: 1 doubles as the watchers'
     // ABORT signal, so a typo'd tool name or flag must never read as a legitimate abort — and
     // the tool help has promised "64 = bad command line" since issue #9.
-    process.exit(e instanceof UsageError ? EXIT.USAGE : 1)
+    //
+    // exitNow, NOT process.exit: a command can have written a large payload to stdout and THEN
+    // failed (a report streamed out, an error on the way to finishing), and `process.exit()`
+    // DISCARDS a queued pipe write past the ~64 KiB buffer — measured, 262,144 written and 65,536
+    // received. A consumer would then get a truncated payload alongside a non-zero exit, which
+    // reads as a corrupt result rather than a clean failure. exitNow flushes first and BOUNDS the
+    // flush, so a reader that never drains cannot turn this into a hang (TRDD-E8XIC2PM).
+    void exitNow(e instanceof UsageError ? EXIT.USAGE : 1)
   })

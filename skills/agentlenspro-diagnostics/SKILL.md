@@ -641,9 +641,11 @@ when the file being read is an image and the session context is already ≥`imgW
 An image block is RESIDENT — it rides forward in the prefix and is re-billed on every later turn
 until a compaction evicts it — so the reason names the cheaper paths: delegate the look to a
 subagent, batch every image into ONE turn, write the verdict down instead of re-reading. It is
-warn-only on purpose: the 14 measured `CacheBreakCause` values do NOT include an image read, so
-the popular "an image invalidates the whole message cache" claim is not corroborated here and must
-not become a deny on a hot-path tool. `Read` is also the only non-rare tool in the matcher, and its
+warn-only on purpose, and MEASUREMENT has since settled the question in that direction: reading
+eight full-size images one per turn produced seven consecutive appends with zero invalidations
+(`cache_creation` flat at the image's own size, `cache_read` growing by exactly that much), so the
+popular "an image invalidates the whole message cache" claim is false for an APPEND and must not
+become a deny on a hot-path tool. `Read` is also the only non-rare tool in the matcher, and its
 cost is bounded on the CLI side — a NON-image read is answered locally with one JSON parse and no
 network call. Switch it off alone with `--hooks cacheguard=off` or `AGENTLENS_CACHE_GUARD=off`;
 the agent-launch gate stays armed. Deeper discipline: the `agentlenspro-cache-guard` skill.
@@ -899,6 +901,27 @@ suffix writing. Only a **full-prefix-sized** creation spike is a real cold rewri
 ≠ TTL expiry: model/effort/fast-mode switch, MCP connect/disconnect, bare-tool deny, compaction, CC
 upgrade. Use `get_cache_break_gap_report` to separate TTL-expiry from a real prefix change, and
 `trace_expensive_writes` for the biggest single writes + their contents.
+
+**Zero cache activity is its OWN answer, not a quiet timeline.** When a turn reports
+`cache_read: 0` AND `cache_creation: 0`, nothing was cached — and `get_cache_break_causes` /
+`get_cache_break_timeline` name why instead of dropping the turn under the cache_creation floor:
+`CACHING_DISABLED` when the request carried no `cache_control` marker at all (a
+`DISABLE_PROMPT_CACHING*` env var — or a caller that deliberately does not cache a class of calls,
+like Claude Code's small Haiku utility calls), and `BELOW_MIN_CACHEABLE` when markers WERE present
+but the prompt is under that model's minimum cacheable length (512 → 4,096 tokens depending on the
+model — an 8× spread, so never reason from one model's threshold). Both fail SILENTLY at the API:
+no error, just full input rate on every call. A third, `LOOKBACK_OVERFLOW`, covers the opposite
+shape — an unchanged prefix that still read nothing because ≥20 blocks were appended since the last
+write and the 20-block lookback window walked past the entry.
+
+**Two request parameters change the prefix without changing a byte of content**, and the classifier
+reports them as `THINKING_CONFIG_CHANGED` / `EFFORT_PARAM_CHANGED` / `TOOL_CHOICE_CHANGED`. It names
+them **only between two different EXPLICIT values**: setting a parameter explicitly to the model
+default is a documented no-op, the per-model defaults are not published, so an absent→explicit
+transition is undecidable and is left unnamed rather than guessed. `WORKING_DIR_CHANGED` and
+`GIT_STATE_CHANGED` are the same idea one layer up — the environment block and the startup git
+snapshot ride inside the cached system prompt, which is why a second worktree of one repo never
+shares a cache and why two sessions share a prefix only when their startup git snapshot matches.
 
 **One-liner recipes.**
 ```bash

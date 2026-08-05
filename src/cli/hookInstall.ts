@@ -63,7 +63,13 @@ export const LEGACY_GATE_BIN = 'agentlenspro-gate'
 
 export interface HookCommandEntry { type: string; command: string; timeout?: number; async?: boolean }
 export interface HookMatcher { matcher?: string; hooks: HookCommandEntry[] }
-export interface RebuildResult { rebuilt: HookMatcher[]; removedOurs: number; removedSpyglass: number; installed: boolean }
+export interface RebuildResult {
+  rebuilt: HookMatcher[]; removedOurs: number; removedSpyglass: number; installed: boolean
+  /** The command string of every entry this rebuild dropped. The strip is committed as a FILTER
+   *  evaluated inside the transaction lock (TRDD-T0CT9U4X), and the filter's needles are derived
+   *  from these — the rebuilt array itself must never be sent as a whole-array replace. */
+  removedCommands: string[]
+}
 
 /** Every generation of AgentlensPro hook registration this project ever wrote:
  *  v0 absolute-path spy scripts, v1 PATH-bin wrappers, v2 `agentlenspro hook|gate`
@@ -105,11 +111,11 @@ export function gateMatcher(gateCmd: string): HookMatcher {
 export function rebuildEventMatchers(
   matchers: HookMatcher[], ev: string, uninstall: boolean, cmd: string, gateCmd: string
 ): RebuildResult {
-  const out: RebuildResult = { rebuilt: [], removedOurs: 0, removedSpyglass: 0, installed: false }
+  const out: RebuildResult = { rebuilt: [], removedOurs: 0, removedSpyglass: 0, installed: false, removedCommands: [] }
   for (const m of matchers) {
     const kept = (Array.isArray(m.hooks) ? m.hooks : []).filter(h => {
-      if (isOurHookCommand(h?.command)) { out.removedOurs++; return false }
-      if (!uninstall && isSpyglass(h)) { out.removedSpyglass++; return false }
+      if (isOurHookCommand(h?.command)) { out.removedOurs++; out.removedCommands.push(String(h.command)); return false }
+      if (!uninstall && isSpyglass(h)) { out.removedSpyglass++; out.removedCommands.push(String(h.command)); return false }
       return true
     })
     if (kept.length > 0) out.rebuilt.push({ ...m, hooks: kept }) // a matcher left empty is dropped
@@ -123,6 +129,67 @@ export function rebuildEventMatchers(
     out.installed = true
   }
   return out
+}
+
+// ── The strip, expressed as a FILTER instead of a result (TRDD-T0CT9U4X) ────────────────────────
+// Every generation this project ever registered, as a plain literal. A needle is matched against
+// json.dumps(element) inside the lock, so it must be a literal JSON cannot escape — all of these are.
+const GENERATION_NEEDLES = ['spy-agentlens', LEGACY_HOOK_BIN, LEGACY_GATE_BIN, HOOK_CMD, GATE_CMD, 'spyglass-collect.sh']
+
+/** A needle that identifies this command inside the transaction, or null when none can. The known
+ *  generation literals come first (one op removes every entry of that generation); an unrecognised
+ *  shape — `isOurHookCommand`'s matcher is a REGEX, so `agentlenspro<TAB>hook` is ours while
+ *  containing no literal — falls back to its own text, but ONLY when JSON would not escape it. */
+function removalNeedle(command: string): string | null {
+  const known = GENERATION_NEEDLES.find(n => command.includes(n))
+  if (known) return known
+  // The class MUST be spelled with escapes, never the literal bytes. Written raw, the 0x00 made
+  // file(1) report this whole file as "data", and ugrep then classified it binary and printed
+  // NOTHING for every search — exit 1, empty stdout, EMPTY stderr, indistinguishable from "no
+  // matches". Every code sweep over these 594 lines silently measured nothing (TRDD-M8SV6LK5).
+  // Escaped it is identical to the regex engine (verified over all 256 byte values) and, as a
+  // bonus, no longer trips no-control-regex — which is why there is no eslint-disable here.
+  return /["\\\x00-\x1f]/.test(command) ? null : command
+}
+
+/** The ops for ONE event. Exported because the TOCTOU property is a property of the OP LIST, not of
+ *  a file: the ops are computed from a pre-lock read and applied to whatever the file holds at
+ *  commit time, so the test applies them to a tree carrying an entry they never saw. */
+export function buildEventOps(
+  ev: string, matchers: HookMatcher[], uninstall: boolean, cmd = HOOK_CMD, gateCmd = GATE_CMD
+): SafeEditOp[] {
+  const r = rebuildEventMatchers(matchers, ev, uninstall, cmd, gateCmd)
+  if (JSON.stringify(r.rebuilt) === JSON.stringify(matchers)) return []
+
+  const ops: SafeEditOp[] = []
+  if (r.removedCommands.length > 0) {
+    const needles = new Set<string>()
+    for (const c of r.removedCommands) {
+      const needle = removalNeedle(c)
+      if (needle === null) {
+        // Inexpressible as a filter. Emitting one anyway would strip NOTHING while reporting a
+        // removal, so this event alone keeps the pre-existing whole-array replace — narrower than
+        // before (one exotic event instead of every strip), and loud in the code rather than silent.
+        return r.rebuilt.length === 0
+          ? [{ op: 'delete', path: ['hooks', ev] }]
+          : [{ op: 'set', path: ['hooks', ev], value: r.rebuilt }]
+      }
+      needles.add(needle)
+    }
+    // Sorted for a deterministic op list (two runs on the same input must produce the same spec).
+    for (const substring of [...needles].sort()) {
+      ops.push({ op: 'remove_by_substring', path: ['hooks', ev], substring, nested_key: 'hooks', prune_empty: true })
+    }
+  }
+  // Re-add ours AFTER the removals (ops apply in order, so the append is evaluated against the
+  // filtered array — which is also what makes append_unique's idempotency check correct here).
+  if (!uninstall && HOOK_EVENTS.includes(ev)) {
+    ops.push({ op: 'append_unique', path: ['hooks', ev], value: lifecycleMatcher(cmd), unique_by_substring: cmd })
+  }
+  if (!uninstall && GATE_EVENTS.includes(ev)) {
+    ops.push({ op: 'append_unique', path: ['hooks', ev], value: gateMatcher(gateCmd), unique_by_substring: gateCmd })
+  }
+  return ops
 }
 
 /** PATH resolution mirror of what the hook runner's shell will do — used to REFUSE an
@@ -199,26 +266,13 @@ export async function installHooks(uninstall: boolean, opts: InstallHooksOptions
     removedOurs += r.removedOurs
     removedSpyglass += r.removedSpyglass
     if (r.installed) added++
-    if (r.rebuilt.length === 0) {
-      ops.push({ op: 'delete', path: ['hooks', ev] })
-    } else if (uninstall || r.removedOurs > 0 || r.removedSpyglass > 0) {
-      // A strip (migrating a previous generation / removing dead spyglass entries) can only be
-      // expressed as a whole-array replace — the rare, deliberate path.
-      ops.push({ op: 'set', path: ['hooks', ev], value: r.rebuilt })
-    } else {
-      // PURE ADD (nothing to strip): append our matcher(s) with append_unique instead of a whole-array
-      // `set`. The `set` value is computed from THIS function's earlier read of settings.json, so a
-      // hook another tool appends to the same event between that read and the transaction would be
-      // clobbered by the stale snapshot (S3-F5 TOCTOU). append_unique is idempotent and is evaluated
-      // against the FRESH array inside safe_config_edit's lock, so a concurrent foreign entry survives.
-      // Both paths build the matcher from the SAME factory, so they cannot drift apart.
-      if (HOOK_EVENTS.includes(ev)) {
-        ops.push({ op: 'append_unique', path: ['hooks', ev], value: lifecycleMatcher(HOOK_CMD), unique_by_substring: HOOK_CMD })
-      }
-      if (GATE_EVENTS.includes(ev)) {
-        ops.push({ op: 'append_unique', path: ['hooks', ev], value: gateMatcher(GATE_CMD), unique_by_substring: GATE_CMD })
-      }
-    }
+    // EVERY path is now a predicate the transaction evaluates on the FRESH array inside its lock —
+    // append_unique to add, remove_by_substring (+prune_empty) to strip. The value this function
+    // computed from its own pre-lock read is never committed as a whole-array `set`, because a hook
+    // another tool appends between that read and the commit would be silently deleted from the
+    // user's own settings.json (S3-F5 TOCTOU, TRDD-T0CT9U4X). The one exception is an entry no
+    // literal needle can express; buildEventOps says so explicitly rather than stripping nothing.
+    ops.push(...buildEventOps(ev, matchers, uninstall, HOOK_CMD, GATE_CMD))
   }
   // env.SPYGLASS_DIR only feeds the spyglass hook commands — dead once those are removed.
   const env = settings.env as Record<string, unknown> | undefined

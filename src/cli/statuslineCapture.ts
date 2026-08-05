@@ -73,6 +73,26 @@ function captureTimeoutMs(): number {
   return Math.max(100, Number(process.env.AGENTLENS_STATUSLINE_TIMEOUT_MS) || 700)
 }
 
+/** How long the wrapper will wait for the capture AFTER the inner command has finished.
+ *
+ *  The capture already had the child's entire runtime (140-530ms) to complete, and a localhost POST
+ *  costs ~5ms — so in the healthy case it is long done and this budget is never spent. It exists for
+ *  the case contract 2 is written about: a server that ACCEPTS the connection and never answers.
+ *  There the capture runs to its full timeout, and awaiting it unconditionally is what turns a wedged
+ *  server into a frozen status line.
+ *
+ *  MEASURED: `statusline --inner 'echo hi'` took 102ms against a healthy server and **787ms** against
+ *  an endpoint that drops — past Claude Code's own 300ms debounce, on every render. Tonight's server
+ *  OOM produced exactly that state (accepting, not answering) before the process died.
+ *
+ *  A sample lost here is invisible and the next tick is ~3s away; a status line that stalls is not. */
+function residualCaptureMs(): number {
+  return Math.max(0, Number(process.env.AGENTLENS_STATUSLINE_RESIDUAL_MS) || 50)
+}
+
+/** Local, not cliCore's: this file runs on the render path and has deliberately narrow imports. */
+const delay = (ms: number): Promise<void> => new Promise(r => { const t = setTimeout(r, ms); t.unref?.() })
+
 /** Stamp the payload with which stream it came from, leaving every other field verbatim.
  *  Exported so a test can pin that no field is dropped or rewritten on the way through.
  *
@@ -123,8 +143,16 @@ export function parseStatuslineArgs(argv: string[]): { inner: string | null; sub
   let inner: string | null = null
   let subagent = false
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--inner') inner = argv[i + 1] ?? null
-    else if (argv[i] === '--subagent') subagent = true
+    if (argv[i] === '--inner') {
+      // A flag where the command should be means the wrapper was installed wrong (`--inner
+      // --subagent` would otherwise run `sh -c "--subagent"`). Treat it as ABSENT rather than
+      // throwing or running it: both of those exit non-zero, and contract 1 is that a non-zero exit
+      // BLANKS the user's status line. Capture-only is a real, documented mode; a blank status line
+      // is the worst outcome this file has. Nothing is reported because contract 3 forbids writing
+      // anywhere the user would see.
+      const v = argv[i + 1]
+      inner = v === undefined || v.startsWith('--') ? null : v
+    } else if (argv[i] === '--subagent') subagent = true
   }
   return { inner, subagent }
 }
@@ -149,16 +177,28 @@ function runInner(inner: string, payload: Buffer): Promise<number> {
   })
 }
 
-/** Process entry for `agentlenspro statusline`. */
-export async function runStatuslineCommand(argv: string[]): Promise<number> {
+/** Process entry for `agentlenspro statusline`.
+ *
+ *  `stdin` is a parameter purely so the wrapper's own contracts can be tested: `process.stdin` yields
+ *  exactly one EOF per process, so a suite asserting more than one invocation hangs on the second.
+ *  Production passes nothing and gets `process.stdin`. */
+export async function runStatuslineCommand(
+  argv: string[], stdin: NodeJS.ReadableStream = process.stdin,
+): Promise<number> {
   const { inner, subagent } = parseStatuslineArgs(argv)
-  const payload = await readStdin(process.stdin)
+  const payload = await readStdin(stdin)
 
   // Both started before either is awaited: the capture rides alongside the child instead of being
   // serialized in front of (or behind) the render.
   const captured = captureStatusline(payload, subagent ? SUBAGENT_STATUSLINE_EV : STATUSLINE_EV)
   const code = inner ? await runInner(inner, payload) : 0
-  await captured
+  // Bound the wait to a RESIDUAL budget once the render is done. Awaiting the capture outright made
+  // a wedged server cost 787ms per render (102ms healthy) — the capture's own timeout, paid on the
+  // render path, which is the exact hostage-taking contract 2 forbids.
+  //
+  // With NO inner command there is no render to hold up (a capture-only surface writes nothing), so
+  // the capture is allowed to finish: the reason to cut it short does not exist there.
+  await (inner ? Promise.race([captured, delay(residualCaptureMs())]) : captured)
 
   // We report the INNER command's exit code, and 0 when there is no inner command or it could not
   // be spawned. Never our own failure: a non-zero exit blanks the status line, so a broken capture

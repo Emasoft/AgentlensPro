@@ -1,6 +1,6 @@
 ---
 name: cumulative-vs-per-turn-fields
-description: "is total_cost_usd per turn or cumulative / my burn number is hundreds of times too high / the cost jumped after a server restart / d cost looks like one expensive turn / which statusline fields are lifetime totals / how do I difference a cumulative field safely / a cost and a token count that cannot both be true"
+description: "is total_cost_usd per turn or cumulative / my burn number is hundreds of times too high / the cost jumped after a server restart / d cost looks like one expensive turn / which statusline fields are lifetime totals / how do I difference a cumulative field safely / a cost and a token count that cannot both be true / burn looks wrong only for one model / a new model shipped and the cost numbers went strange / the fix is in the other file so this one is fine, right"
 ocd: 2026-08-01
 lmd: 2026-08-01
 metadata:
@@ -46,4 +46,34 @@ internal contradiction, visible without knowing which number was wrong. Cheaper 
 See [[statusline-capture-and-store]] (the store and its own traps), [[cache-ttl-model]] (the rates a
 recomputed cost must use), [[agentlens-burn-token-model]].
 
+
+^ATOM-JQC5-5V9K [desc:"the third instance of the cumulative-delta bug is a COMPOSITION gap: two files each cite the other as the one handling it, and neither states the residue", keywords: each_file_assumes_the_other_handles_the_gap the_fallback_branch_is_gap-unaware unpriced_model_silently_returns_zero_cost a_new_model_ships_and_burn_quietly_overstates lookupRates_miss_returns_0_not_an_error cumulative_delta_survives_in_a_fallback composition_gap_between_two_correct_files burn_spikes_only_for_models_missing_from_pricing, type: project, ocd: 2026-08-05, lmd: 2026-08-05]
+
+**The audit found the third instance, and it is not a missing check — it is a check that lives in
+the OTHER file.** (TRDD-H693VQLU, 2026-08-05. Full site table:
+`reports/cumulative-delta-audit/20260805_043236+0200-differencing-sites.md`.)
+
+Only THREE sites in the whole codebase difference a genuinely cumulative observation; almost every
+`totalCostUsd`-shaped identifier is one of our own aggregates, which is safe by construction. Two of
+the three pass both rules. The third — `burnMonitor.statuslineCostUsd` — passes only on its main
+path.
+
+`statuslineUsage.ts` justifies suppressing its first delta by saying burnMonitor re-prices each turn
+from its own buckets "and falls back to this delta only otherwise". burnMonitor's fallback does
+exactly that: `return be.deltaCostUsd` when the model is unknown, and again when
+`calcTokenCostUsd` yields 0 — which `pricing.ts` returns for **any model id not in the table**
+(`if (!rates) return 0`, not an error). On that branch the cumulative delta is used as a turn cost,
+gap-unaware, with nothing on either side marking it.
+
+**Why it matters more than "a narrow branch" suggests:** it fires exactly when a NEW MODEL SHIPS and
+is not yet priced — the moment people watch burn hardest — and it fails silently, upward.
+
+**How to apply.** When one file's correctness comment CITES another file as the mitigation, that is
+a claim to verify, not to trust: read the cited function's fallback branches specifically. A
+mitigation with a fallback is a mitigation with a hole, and the hole inherits none of the comment's
+confidence. Where a delta is unavoidable, carry the sampling interval WITH it (the `peaks` view's
+`gap_s` column is the working shape) so a consumer can label an interval total instead of guessing. [^1]
+
 ## Notes and lessons learned
+
+[^1]: [id:ATOM-3JIQ-T518, status:valid, desc:"the memory-scope-leak detector flags this page as a high-entropy secret; verified 2026-08-05 to be our own camelCase identifiers", keywords:"memory-scope-leak_flags_this_page high-entropy_secret_false_positive is_there_a_secret_in_project_memory detector_says_demote_to_LOCAL_but_page_is_clean camelCase_identifier_looks_like_a_secret memgrep_keywords_underscore_phrases_flagged", ocd:2026-08-05, lmd:2026-08-05] DO NOT act on this page's `memory-scope-leak` finding by demoting it to LOCAL, BECAUSE it is a FALSE POSITIVE and the page is portable: verified 2026-08-05 with an exhaustive scan — zero home paths, usernames, emails or hostnames, and zero secret shapes (`sk-`, `ghp_`, `Bearer`, base64 blobs, uuids). The only strings long enough to trip a high-entropy heuristic are OUR OWN camelCase identifiers (`statuslineCostUsd`, `calcTokenCostUsd`) and kebab-case wiki-link slugs. DO verify the specific match before moving anything, and note that this is now the THIRD PROJECT page carrying the same false positive — `agentlenspro-ops-lessons` records the same verdict for the word "hostname" appearing inside the scope-routing rule that page QUOTES. Two structural sources, both inherent to the memory FORMAT: a page that explains the leak rule contains the rule's own trigger words, and every atom's mandatory `keywords:` field is underscore_joined English that scans as high-entropy. The detector lives in the janitor plugin, a DIFFERENT project — so the fix there is an issue filed upstream, never an edit from here.

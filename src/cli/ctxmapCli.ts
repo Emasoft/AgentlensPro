@@ -35,7 +35,8 @@ import {
 } from '../exactTokens'
 import { openCountCache, type CountCache } from '../countCache'
 import { readBody, readBodyText, PREFIX_STUB, type ContentBlock, type Message, type ToolDef, type RequestBody, type Usage, type ResponseBody } from '../capturedBody'
-import { EXIT } from './cliErrors'
+import { EXIT, UsageError } from './cliErrors'
+import { flagValue } from './argHelpers'
 
 export type { ContentBlock, Message, ToolDef, RequestBody, Usage, ResponseBody }
 export { PREFIX_STUB }
@@ -156,9 +157,12 @@ function safeReaddir(d: string): string[] {
 /** Dirs that may hold captured bodies. NEVER hardcode `<dataDir>/otel-bodies`: a configured spool
  *  moves the live traffic elsewhere and the legacy dir then reads as "no traffic" (ATOM-INVB-BLIND
  *  — the same defect once blinded investigate_burn). */
-function bodyDirs(): string[] {
+function bodyScope(): ReturnType<typeof resolveBodiesReadScope> {
   const { dir } = resolveDataDir()
-  return resolveBodiesReadScope(dir, process.env).dirs
+  return resolveBodiesReadScope(dir, process.env)
+}
+function bodyDirs(): string[] {
+  return bodyScope().dirs
 }
 
 const isFile = (p: string): boolean => {
@@ -705,7 +709,12 @@ export function renderDiff(a: CtxReport, b: CtxReport): string {
 function listRequests(limit: number): string[] {
   const rows: { p: string; m: number }[] = []
   for (const d of bodyDirs()) {
-    for (const f of fs.readdirSync(d)) {
+    // safeReaddir, like every other scan in this file. A dir that exists but denies the LISTING (a
+    // spool whose mount permissions changed) passes the isDirectory() check in the read scope and
+    // then throws EACCES here — out of `--list`, which would report nothing at all about the dirs
+    // that ARE readable. That is precisely the failure safeReaddir was introduced for; this was the
+    // one scan still bypassing it.
+    for (const f of safeReaddir(d)) {
       if (!f.endsWith('.request.json')) continue
       const p = path.join(d, f)
       try { rows.push({ p, m: fs.statSync(p).mtimeMs }) } catch { /* raced away */ }
@@ -863,14 +872,13 @@ export async function runCtxmapCli(argv: string[]): Promise<number> {
     console.log(CTXMAP_USAGE)
     return argv.length === 0 ? EXIT.USAGE : 0
   }
-  const flag = (name: string): string | undefined => {
-    const i = argv.indexOf(name)
-    const v = i >= 0 ? argv[i + 1] : undefined
-    // `--out --json` must not resolve to a file literally named "--json".
-    return v?.startsWith('--') ? undefined : v
-  }
-  const topN = Number(flag('--top')) || 20
-  const outFile = flag('--out')
+  // flagValue, not a local helper: the local one mapped a flag-shaped value to undefined so that
+  // `--out --json` could not write a file named "--json". Avoiding the junk file was right; doing it
+  // by DISCARDING the flag was not — `--limit --json` then silently used the default 20 and reported
+  // success. A present flag with a bad value is now a refusal.
+  const flag = (name: string, what = 'a value'): string | undefined => flagValue(argv, name, what)
+  const topN = Number(flag('--top', 'a number')) || 20
+  const outFile = flag('--out', 'a path')
   const asJson = argv.includes('--json')
 
   const emit = (text: string, digest: string): number => {
@@ -886,10 +894,17 @@ export async function runCtxmapCli(argv: string[]): Promise<number> {
 
   try {
     if (argv[0] === '--list') {
-      const files = listRequests(Number(flag('--limit')) || 20)
+      const files = listRequests(Number(flag('--limit', 'a number')) || 20)
       if (files.length === 0) {
-        console.error(`no captured requests found in: ${bodyDirs().join(', ') || '(no readable body dirs)'}`)
-        return EXIT.USAGE
+        // NOT EXIT.USAGE. The command line was correct; there is simply nothing captured yet, which
+        // is the state of every healthy machine before capture is wired — and EX_USAGE is documented
+        // in cliErrors.ts as "never emitted by a healthy invocation", so a harness that reads 64 goes
+        // hunting for a bug in its own call. EXIT.UNKNOWN is that enum's own "no value in the feed".
+        const scope = bodyScope()
+        console.error(`no captured requests found in: ${scope.dirs.join(', ') || '(no readable body dirs)'}`
+          + (scope.captureOn ? '' : ' — raw-body capture is OFF, so nothing is being written'
+            + ' (agentlenspro --install-otel wires it)'))
+        return EXIT.UNKNOWN
       }
       return emit(files.map(f => path.basename(f)).join('\n'), `${files.length} request(s)`)
     }
@@ -923,9 +938,17 @@ export async function runCtxmapCli(argv: string[]): Promise<number> {
           // system prompt is the exact misconception this tool exists to correct: CLAUDE.md and the
           // rules arrive as messages[0], so a system-only --find could not locate the single
           // biggest thing in the context (measured: 52k of 226k tokens at msg[0].0).
-          const where = JSON.stringify(body.system ?? '').includes(needle) ? 'system'
-            : JSON.stringify(body.messages ?? '').includes(needle) ? 'messages'
-              : JSON.stringify(body.tools ?? '').includes(needle) ? 'tools' : ''
+          // BOTH spellings here too — and THIS is the stage that decides, so a single-spelling test
+          // here undoes the prefilter's care entirely. Re-serialising the parsed body re-escapes
+          // quotes and backslashes, so a needle like `say "hi"` passes the prefilter via its escaped
+          // form and then matches nothing literally: the file is silently dropped and the answer is
+          // "(no match)" for text that is demonstrably in the request. A false negative is the one
+          // answer this tool must never give, because it reads exactly like "not in your context".
+          const has = (v: unknown): boolean => {
+            const s = JSON.stringify(v ?? '')
+            return s.includes(needle) || s.includes(escaped)
+          }
+          const where = has(body.system) ? 'system' : has(body.messages) ? 'messages' : has(body.tools) ? 'tools' : ''
           if (!where) continue
           hits.push(`${f}  in=${where} model=${body.model ?? '?'} msgs=${(body.messages ?? []).length} tools=${(body.tools ?? []).length}`)
         }
@@ -955,6 +978,11 @@ export async function runCtxmapCli(argv: string[]): Promise<number> {
   } catch (e) {
     const err = e as Error & { exitCode?: number }
     console.error(`ctxmap: ${err.message}`)
+    // A UsageError is a CALLER mistake and must read as 64, not 1 — cliErrors.ts reserves 1 as the
+    // watchers' ABORT signal, so a mistyped flag returning 1 would kill a guarded batch and send the
+    // operator looking for a burn that never happened. This branch was latent until flag values
+    // started raising UsageError: every throw here previously carried its own `exitCode`.
+    if (e instanceof UsageError) return EXIT.USAGE
     return err.exitCode ?? 1
   }
 }

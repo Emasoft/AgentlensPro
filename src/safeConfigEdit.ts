@@ -21,6 +21,14 @@ export type SafeEditOp =
   | { op: 'set'; path: string[]; value: unknown }
   | { op: 'delete'; path: string[] }
   | { op: 'append_unique'; path: string[]; value: unknown; unique_by_substring: string }
+  /** The counterpart of append_unique, and it exists for the same reason: a caller that REMOVES
+   *  entries by computing the surviving array and sending `set` computes it from a read taken
+   *  BEFORE the lock, so an entry another tool appended in between is clobbered. This op carries the
+   *  PREDICATE instead of the result, so the filter runs on the fresh array inside the lock.
+   *  `nested_key` filters inside each element's sub-array (hook matchers hold their entries under
+   *  `hooks`); `prune_empty` deletes the key when nothing survives — a decision that must also be
+   *  made inside the lock, which is exactly what a `delete` op cannot do. */
+  | { op: 'remove_by_substring'; path: string[]; substring: string; nested_key?: string; prune_empty?: boolean }
   | { op: 'ensure_line_in_section'; section: string; key_prefix: string; line: string }
 
 export interface SafeEditResult {

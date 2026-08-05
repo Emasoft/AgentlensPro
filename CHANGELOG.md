@@ -4,6 +4,210 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.23.0] - 2026-08-05
+
+### Fixed
+
+- **`claude-sonnet-5` would have silently under-billed by 50% from 1 September.** Its table row
+  carried the introductory $2/$10 rate with only a comment asking a future human to flip four
+  numbers when the promo ends 2026-08-31 — and nothing fires on a date. The flip is now data
+  (`ModelRates.scheduledChange`), resolved by `lookupRates` against the **call's own timestamp**,
+  so a session recorded during the promo keeps reporting what it actually cost forever (the same
+  reason `claude-opus-4-7-fast` is retained at its old premium rates) while a September call bills
+  at the $3/$15 sticker. An unparseable timestamp resolves like an absent one — never to the
+  pre-change rate, which a naive NaN comparison would have pinned it to.
+- **`ctxvis` presented partially-measured turns as fully measured.** Its usage text promises "every
+  number that says measured came from count_tokens; nothing is estimated" — but an element whose
+  prefix could not be counted keeps its estimated value and is still summed into the turn total, and
+  the warning fired only when *every* element failed. Ten estimated elements out of five hundred went
+  out silently as a measured figure, into the persisted baseline store that later runs compare
+  against. Any measurement failure is now named, and a partial one says so.
+- **`ctxvis` dropped flags whose value was missing, and reported every failure as exit 64.**
+  `--subject --json` left no agent marked as the subject (so the environment fingerprint that
+  validates cached baselines came from an arbitrary one), `--baselines --json` wrote the baseline
+  store to its default path while the caller believed they had redirected it, and `--html --json`
+  produced no report — all exiting 0. Separately, every thrown error returned 64, so an unreadable
+  baseline store or a corrupt capture told a caller its command line was wrong. `--html` is also
+  validated up front now rather than after the run has already spent its `count_tokens` calls.
+- **A wedged server froze the status line it was only supposed to observe.** The capture wrapper is
+  documented as fire-and-forget — "a hung socket must not hold the status line hostage" — but it
+  awaited the capture outright once the inner command had finished, so a server that *accepts* the
+  connection and never answers cost the capture's whole 700 ms timeout on the render path. Measured
+  through the installed command: **102 ms healthy vs 787 ms** against an endpoint that drops, past
+  Claude Code's own 300 ms debounce, on every render. (A closed port refuses instantly and looks
+  fine, which is why a suite that only tested "server down" never saw it.) The capture now gets a
+  small residual budget after the child — it has already had the child's entire runtime to finish a
+  ~5 ms localhost POST — so the healthy path is unchanged and the wedged path is now **157 ms**. With
+  no inner command the capture is still awaited in full: there is no render to hold up.
+- **`statusline --inner --subagent` ran the flag as the command.** `sh -c "--subagent"` exits
+  non-zero, and a non-zero exit *blanks the user's status line* — the worst outcome this wrapper has.
+  A flag where the command belongs is now treated as absent (capture-only, exit 0); deliberately not
+  an error, because an error exits non-zero too and would cause the very thing it diagnosed.
+- **`budget` could run its projection on one rate-limit window and its account cross-check on
+  another.** `bindingWindow` has three values (`5h` / `7d` / `none`), and `none` — "neither window is
+  projected to exhaust" — is truthy, so it slipped past the `|| '5h'` fallback and became the window
+  key. Two consumers then resolved that key differently: the projection read the **5h** window while
+  the account cross-check read the **7d** buckets, and `none` was printed as if it were a window
+  name. Measured live: `bindingWindow: none`, 5h at **81%**, 7d at 31% — the "downgrade at ≥80%" rule
+  was handed 31 and never fired, so `budget` answered **GO** with the 5h window at 81%.
+- **`budget --with-risks` failed silently.** A dead risk endpoint produced zero `[burn-guard]` lines
+  and no indication the feed was down — which reads as "no burn risks", the one conclusion the
+  silence cannot support. Now reported once per outage, and once on recovery.
+- **`budget --watch` overran the run window** by up to one poll interval before reporting completion,
+  and reported the requested duration rather than the actual: 33 s for a 15 s window, printed as
+  "(0m)". Now trimmed to the deadline (15 s), with both figures stated.
+- **`budget` explained a rejected usage reading with a cause that had not fired.** Staleness has two
+  causes — too old, or a window that has already reset — and every stale reading was rendered as an
+  age in whole hours, so one dropped for the *reset* reason printed `NOT USABLE — the cached reading
+  is 0h old (fresh)`. Every part of that contradicts the rejection, on the line whose job is
+  justifying it. The cause is now named, sub-hour ages render in minutes, and the fetch reason is
+  labelled `fetched:` (it describes how the reading was obtained, not why it was rejected).
+- **`watch --metric tokens-per-min` reported a blind feed as a quiet machine.** The reader summed
+  `fiveMinTokensPerMin || 0` across the account windows, which guarded an empty array but not an
+  array of windows that carry no rate — those summed to a measured **0**, and a `NaN` did too.
+  For a burn watcher `0/min` reads as "nothing is burning", so a threshold watch sat silent while
+  blind, and the loop's own `blind` transition line (which exists to announce exactly that) fires
+  only on `null` and so never could. It now sums the windows that carry a number and answers `null`
+  when none do; a partially-reporting feed still sums what it has, and a genuine idle `0` is still
+  `0`.
+- **`watch --for N` was not a deadline.** The window was only checked at the top of the poll loop
+  while the sleep was always a full interval, so the watch overshot by up to one interval and took
+  one more sample — alerts included — after the window had closed, then reported the *requested*
+  duration. Measured: `--for 1 --interval 900` ran ~15 minutes and printed "watch window elapsed
+  (1m)". The sleep is now trimmed to whatever is left of the window, and the stop line states the
+  actual elapsed time beside the requested one — verified end to end at **68 s** for that same
+  command.
+- **`statusline-history --session --json` answered about every session instead of the one you
+  asked for.** `ctxmap` and `statusline-history` each looked flag values up through a private helper
+  that mapped a flag-shaped value to `undefined` — deliberately, so `--out --json` could not create a
+  file named `--json`. Avoiding the junk file was right; doing it by discarding the flag was not, and
+  the command then ran as though the flag had never been typed. Measured: `--session --json` returned
+  **14 sessions instead of 1** with exit 0, and the `--json` output reported no session filter at all;
+  `ctxmap --list --limit --json` silently fell back to the default 20; both `--out --json` wrote no
+  file and exited 0. A missing file is a nuisance — an unfiltered answer presented as a filtered one
+  is a wrong answer with nothing in the output to say so. All of these now exit 64. Bare `--project`
+  is unaffected: it is the documented spelling for "the directory I am in". Two latent issues
+  surfaced in the process and are also fixed — `statusline-history` read its flag values inside the
+  `try` meant for the time parser (so one flag would have reported a caller mistake as a return code
+  while its siblings threw), and `ctxmap`'s catch had no `UsageError` branch, so a mistyped flag would
+  have returned **1** — the code this project reserves as the watchers' ABORT signal.
+- **`env --out` silently did nothing when given no path, and wrote a file named after the next flag
+  when given one.** `agentlenspro env --out` printed the report to stdout and exited 0 — the caller
+  asked for a file, got none, and was told everything was fine; `env --out --json` wrote a file
+  literally named `--json` and never applied `--json`; `--out=` with an empty value was the same
+  silent drop. All three now exit 64 with the reason. The underlying finding is that
+  `argHelpers.strArg` had always implemented exactly this check for `watch` and `budget`, and three
+  surfaces simply did not route through it — so the fix consolidates on that one validator (which
+  gains an optional named expectation, e.g. "expects a path") rather than adding a fourth copy.
+- **`--export-bodies --json` exported your whole raw-body archive into a directory named
+  `--json`.** The ops flags took the next token as their value without checking that it was one, so a
+  flag written where a value belongs was read as the value and the request was misread twice —
+  silently, and reported as success. Measured: **345 MB / 542 captured request bodies** written into
+  a directory named `--json` in the current working directory, untracked and un-gitignored, i.e. raw
+  API payloads one careless `git add -A` from being published. Exiting the CLI does not stop it: the
+  export runs server-side. `--out --json` was the same defect in miniature — exit 0, a file literally
+  named `--json`, and the `--json` the caller asked for silently dropped. `--out`,
+  `--export-bodies`, `--since` and `--until` now refuse a flag as their value (exit 64).
+- **`--out` threw away the answer when its directory did not exist.** The tool call succeeded, the
+  server did the work, and the very last statement failed with `ENOENT` — exit 1, payload gone,
+  nothing to retry from but the whole call. `ctxmap`'s equivalent had always created the parent
+  directory; the diagnostics path now does too, where the discarded work is most expensive.
+- **The burn guard printed its advice line for the first episode only, then never again for the
+  life of the process** — a guard meant to be armed for days. Its state Set held risk codes *and*
+  two control sentinels, so `size > 0` (the test for "is an episode running") stayed true forever
+  once the advice flag was added, the "episode over" branch never ran, and the flag was never
+  cleared. The two flags are now their own fields, and the transition logic is a pure exported
+  function: it went unverified because it lived inside an infinite polling loop with no seam to test.
+- **`ctxmap --find` reported `(no match)` for text that was in the request.** Captures are JSON on
+  disk, so a needle containing a quote or a backslash matches only its escaped form. The raw
+  prefilter knew that and accepted either spelling; the stage that actually decides re-serialised the
+  parsed body (escaping those characters again) and tested only the literal needle — so the file
+  passed the first stage and was dropped by the second. In a tool whose job is answering "is X in my
+  context", a false negative is indistinguishable from a true one.
+- **`ctxmap --list` reported nothing when any one body directory was unreadable**, instead of
+  reporting the ones that were: it was the last scan still calling `readdirSync` unguarded, and the
+  configured spool is scanned first, so a single `EACCES` suppressed every capture. It also returned
+  `EX_USAGE` (64) for an empty spool — a healthy machine that has captured nothing yet — which sends
+  a harness looking for a bug in its own call; it now returns 2 and says when capture is simply off.
+
+- **Every CLI verb on the MCP transport hung for ~75 seconds against an unreachable-but-not-refusing
+  address.** `rpc()` (and its REST sibling) called `http.request` with no bound at all, so a
+  black-holed connect waited out the OS timeout. Measured: `agentlenspro cache-expired` took
+  **75,103 ms** — a verb documented to answer with the server DOWN — where the stall that motivated
+  the hot-path work was 10.6 s. The earlier fix bounded `hook`/`gate`/`statusline`, which use a
+  different transport; everything on this one was still unbounded. There is now a **connect
+  deadline** (`AGENTLENS_CONNECT_TIMEOUT_MS`, default 800 ms) that bounds the CONNECT and
+  deliberately not the response — a legitimate call can be slow server-side (`ctxvis` spawns an
+  agent and measures two of its turns), while an unanswered connect is never anything but a dead
+  endpoint. Same five commands now: 1,432 / 1,225 / 931 / 1,018 / 1,006 ms.
+- **Nothing stopped the next hot-path command from shipping without that guard**, which is how this
+  one existed at all. Every dispatched subcommand is now classified beside the dispatch — a
+  wall-clock ceiling (`HOT_PATH_BUDGET_MS`) or an exemption **with a written reason**
+  (`LATENCY_EXEMPT`) — and a table-driven test derives the command set from the source, so adding a
+  `case` without classifying it fails rather than joining the untested set silently. It runs against
+  an address that **DROPS**, never a closed port: a closed port refuses instantly, which is exactly
+  why a thorough "server down" suite stayed green while the stall was live, and the test SKIPS loudly
+  where the sandbox refuses instead of blackholing rather than banking a meaningless pass. The
+  paired invariant (a write past the ~64 KiB pipe buffer must not be discarded by exiting early) is
+  asserted on `exitNow` itself, so it covers commands added later too.
+
+- **`--install-hooks` / `--uninstall-hooks` could delete another tool's hook from your
+  `settings.json`.** Adding was already safe (`append_unique`, evaluated inside the transaction
+  lock); *stripping* — migrating a previous-generation entry, or clearing dead spyglass ones — still
+  committed the surviving array computed from the read taken BEFORE the lock, so a hook another tool
+  appended in between was silently replaced away. Same for the now-empty case, which issued a
+  `delete` on the same stale conclusion. Both are now predicates the transaction evaluates on the
+  fresh array (`remove_by_substring`, with a new `prune_empty` for the empty case), so a concurrent
+  foreign entry survives. One narrow exception is stated rather than hidden: a registration whose
+  command no literal needle can express (the ours-matcher is a regex) keeps the whole-array replace
+  for that event alone, because emitting a filter that matches nothing would report a strip that
+  removed nothing.
+
+- **The report named a perpetrator for a break that never happened.** `msg[0]` carries the
+  CONVERSATION's identity — its `usertext` segment is the caller's own opening words, which are
+  immutable within one conversation — but the block diff treated a divergence there as a changed
+  block and filed it as `UNCLASSIFIED`. Measured over 2,003 consecutive real turn-pairs: **397
+  diverge first exactly there, and every sampled one is a different sub-agent TASK PROMPT** sharing
+  the parent's session id (sub-agent calls carry it). Nothing broke — each stream keeps its own cache
+  — yet `get_cache_break_causes` crowned that segment *"Dominant AVOIDABLE perpetrator, 23.2%"*, i.e.
+  told the operator to fix something that never happened. The existing A→B→A signature cannot catch
+  these: it keys on model + tool catalog, and two sub-agents of the same type share both. Such pairs
+  are now `SUBAGENT_INTERLEAVE` (an EXPECTED cause, excluded from the avoidable ranking).
+  On the same 24 h window `UNCLASSIFIED` fell from **29.1% to 5.7%** (39 events → 4), the verdict
+  moved to a real actionable cause (a mid-session model switch), and `MEMORY_FILE_CHANGED` — a
+  genuinely avoidable 251k-token break — surfaced from underneath the noise. The discriminator is the
+  segment KIND on BOTH sides: CLAUDE.md, the rules and the memory index are injected INTO `msg[0]`
+  and DO change mid-conversation (a memory rewrite alone was 19% of classified break tokens here),
+  so they keep their own kinds and their own causes; a compaction rewrite stays `COMPACTION`.
+
+### Added
+
+- **The cache-break classifier now models the documented causes it was missing** (TRDD-B9ERTBZ9), each
+  detectable from raw request bodies we already capture — a documented cause we could NOT detect was
+  deliberately left out, because an enum value nothing can emit implies coverage that does not exist.
+  - `CACHING_DISABLED` / `BELOW_MIN_CACHEABLE` — the two ways to get **no cache at all, with no
+    error**: a request with no `cache_control` marker anywhere, and a prompt under the model's minimum
+    cacheable length. Both report `cache_read: 0` *and* `cache_creation: 0`, so the cache_creation
+    floor used to drop exactly the turns that pay full input rate on every call; they are now admitted
+    through it. The minimum is read from a **per-model table** (512 → 4,096 tokens, an 8× spread) and
+    an unknown model yields no verdict rather than a borrowed threshold.
+  - `LOOKBACK_OVERFLOW` — an unchanged prefix that still read nothing because ≥20 blocks were appended
+    since the last write and the 20-block lookback window walked past the entry. Claimed only when
+    `cache_read` is 0, which is what separates it from ordinary growth (growth finds its entry and
+    reads it).
+  - `WORKING_DIR_CHANGED` / `GIT_STATE_CHANGED` — the environment block and the startup git snapshot
+    ride inside one large system block, so the positional block diff could only ever report "that
+    block changed" and filed both under `UNCLASSIFIED`. Extracted as their own regions, hashed
+    pointer-only (a cwd is an absolute home path and must never reach a report), and guarded so a
+    region differing only by a timestamp is still named `SYSTEM_TIMESTAMP`.
+  - `THINKING_CONFIG_CHANGED` / `EFFORT_PARAM_CHANGED` / `TOOL_CHOICE_CHANGED` — the request
+    parameters rendered into the prompt, split out of the old blended `EFFORT_SWITCH` signature (which
+    now covers only `speed`/fast mode). `output_config.effort` is present on **every** sampled request
+    and was not captured at all, so an effort change simply landed in `UNCLASSIFIED`. Each fires only
+    between two different EXPLICIT values: setting a parameter explicitly to the model default is a
+    documented no-op and the per-model defaults are unpublished, so an absent→explicit transition is
+    undecidable and stays unnamed rather than guessed.
+
 ## [2.22.0] - 2026-08-04
 
 ### Fixed

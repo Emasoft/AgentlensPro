@@ -68,6 +68,19 @@ export type CacheBreakTimelineCause =
   | 'NORMAL_GROWTH'             // append-only growth: the NEW tail cached for the first time (expected incremental write, NOT a break)
   | 'MESSAGE_TRIMMED'           // a cached message block was REMOVED (harness context-editing / tool-result clearing)
   | 'ATTACHMENT_CHANGED'        // a non-text block (image / tool_use input) inside the cached prefix changed
+  // ── TRDD-B9ERTBZ9 (2026-08-04): documented causes the taxonomy lacked. Each one is detectable from
+  //    the raw request bodies we ALREADY capture; a documented cause we cannot emit from captured data
+  //    was deliberately left out, because an enum value nothing can ever produce implies coverage that
+  //    does not exist. (That list — plan-mode toggles, citations/web-search, workspace isolation,
+  //    gateway breakpoint rejection — is TIER 2 of the TRDD, doc knowledge only.)
+  | 'WORKING_DIR_CHANGED'       // the environment block (cwd/platform/shell/OS) differs — the cache is scoped to one directory, worktrees included
+  | 'GIT_STATE_CHANGED'         // the startup git snapshot (branch / status / recent commits) carried in the system prefix differs
+  | 'THINKING_CONFIG_CHANGED'   // body.thinking differs — it is rendered into the prompt, so message blocks always miss
+  | 'EFFORT_PARAM_CHANGED'      // body.output_config.effort differs between two EXPLICIT values
+  | 'TOOL_CHOICE_CHANGED'       // body.tool_choice differs — invalidates the message blocks only
+  | 'LOOKBACK_OVERFLOW'         // unchanged prefix, zero cache_read: ≥20 blocks appended since the last write overran the 20-block lookback window
+  | 'BELOW_MIN_CACHEABLE'       // the prompt is under this model's minimum cacheable length — silently never cached, no error
+  | 'CACHING_DISABLED'          // the request carried no cache_control marker at all — nothing was ever offered to the cache
   | 'UNCLASSIFIED'              // a break with no localizable structural cause (raw diff summary attached)
 
 // Causes that are EXPECTED cache behavior (unavoidable / not a misconfiguration): a cold warm, a
@@ -81,7 +94,10 @@ export const EXPECTED_CAUSES: ReadonlySet<CacheBreakTimelineCause> = new Set<Cac
 // TTL tier a timing-driven break landed in (mirrors buildCacheBreakGapReport's gap buckets).
 export type TtlTier = '5m' | '1h' | 'none'
 
-const REMEDIATION: Record<CacheBreakTimelineCause, string> = {
+/** Exported for tests: every cause must carry a remediation that states the CONDITION it fires
+ *  under. Commit c6802f0 shipped reload/MCP text asserting an UNCONDITIONAL reset the docs
+ *  contradict, and an absolute remediation is how that error gets re-shipped. */
+export const CACHE_BREAK_REMEDIATION: Record<CacheBreakTimelineCause, string> = {
   TOOLSET_CHANGED:            'A tool was added/removed/redefined mid-session. Keep the tool catalog byte-identical: use defer-loading stubs + tool-search rather than mutating the live tool set.',
   TOOLS_REORDERED:            'The tool set is the same but its ORDER shuffled. Emit tools in a stable sorted order so the catalog bytes never move.',
   TOOL_SEARCH_DEFERRED:       'A deferred tool keeps loading mid-session (tool-search). Pre-load the tools you know you need at session start, or accept the one-time load cost.',
@@ -102,11 +118,76 @@ const REMEDIATION: Record<CacheBreakTimelineCause, string> = {
   TTL_EXPIRY:                 'No prefix change — the cache entry simply expired between turns. A heartbeat within the TTL (5m/1h) would convert these writes back to cache_read.',
   COLD_START:                 'A cold cache warm (first turn / resume / no prior cached prefix). Expected once per session; not an avoidable per-turn break.',
   COMPACTION:                 'Conversation compaction rebuilt the message layer. Expected once per compaction; avoid compacting more than necessary.',
-  SUBAGENT_INTERLEAVE:        'A sub-agent stream interleaves with the parent under the SAME session id (A→B→A pattern) — each stream keeps its OWN cache, so nothing actually broke; the child bills its own (smaller) prefix. Pin the sub-agent\'s tools + model in its frontmatter to shrink that footprint.',
+  SUBAGENT_INTERLEAVE:        'Two requests grouped under one session id belong to DIFFERENT streams — sub-agent calls carry the parent\'s session id. Claimed on either of two signatures: the A→B→A pattern (this request matches turn-2\'s tool catalog + model, not turn-1\'s), or a different msg[0] prompt (the conversation\'s own opening words, immutable within one conversation). Each stream keeps its OWN cache, so nothing actually broke and there is nothing to fix; the child bills its own (smaller) prefix. Pin the sub-agent\'s tools + model in its frontmatter to shrink that footprint.',
   NORMAL_GROWTH:              'Not a break — append-only growth: this turn\'s NEW content was cached for the first time (expected incremental write). Reduce it only by producing/ingesting less content per turn.',
   MESSAGE_TRIMMED:            'A block was REMOVED from the cached message prefix (harness context-editing / tool-result clearing / message deletion) — everything after the removal point re-writes. Prefer compaction or a fresh session over mid-session trimming of a huge transcript.',
   ATTACHMENT_CHANGED:         'A non-text block (image / tool_use input) inside the cached prefix changed or moved. Past attachments should be immutable; an image riding in the prefix re-bills the tail on any change.',
+  WORKING_DIR_CHANGED:        'The environment block (working directory / platform / shell / OS) differs between these two turns, and it sits inside the cached system prefix — so a cache entry is scoped to ONE directory, and a second worktree of the same repository is a different prefix. This fires only ACROSS directories, never within one: `/cd` is engineered cache-safe (the new directory\'s CLAUDE.md is appended as a message instead of rebuilding the system prompt). Keep long-running work in one directory, or accept one cold warm per directory.',
+  GIT_STATE_CHANGED:          'The startup git snapshot (branch, status, recent commits) carried in the system prefix differs. It is captured ONCE at session start and never updates during a session, so this can only fire between turns that started from different snapshots — a resume, or a second stream sharing this session id. Sequential sessions share a prefix only when that snapshot matches, so branch/commit churn between sessions costs one cold warm each; nothing to fix mid-session.',
+  THINKING_CONFIG_CHANGED:    'The thinking configuration changed (type or budget_tokens). It is rendered into the prompt itself, so message-level breakpoints ALWAYS miss; tools and system miss only on models that render the configuration ahead of them, and the docs do not enumerate which. Fix the thinking config once at session start.',
+  EFFORT_PARAM_CHANGED:       'output_config.effort changed between two EXPLICIT values. Message blocks always miss; the effect on tools/system is model-specific. Setting effort explicitly to the model default is a documented no-op, so this never fires on an absent↔present transition — only on two different explicit values. Pick one effort level per conversation.',
+  TOOL_CHOICE_CHANGED:        'tool_choice changed between two explicit values. Per the docs this invalidates MESSAGE blocks only — tools and system stay cached — so the write is bounded by the message layer rather than the whole prefix. Keep tool_choice constant for the lifetime of a cached conversation.',
+  LOOKBACK_OVERFLOW:          'No block changed, yet the cache found nothing to read: at least 20 blocks were appended since the last cache WRITE, and the lookback window is 20 blocks, so it walked past the last entry. This is claimed only when cache_read is 0 with an unchanged prefix — ordinary growth still reads. Add a second breakpoint closer to the growing tail so a write accumulates there before the window overruns.',
+  BELOW_MIN_CACHEABLE:        'Both usage counters are 0 while the request DID carry cache_control markers, and the prompt is under this model\'s minimum cacheable length — a below-minimum prompt is silently not cached, with no error. The minimum is per model (512 to 4,096 tokens, an 8x spread), so this fires only when the estimate is under THIS model\'s threshold. Expand the cached content to reach it, or accept the full input rate on these calls.',
+  CACHING_DISABLED:           'The request carried NO cache_control marker anywhere, so nothing was offered to the cache and both counters are 0 by construction. That happens when DISABLE_PROMPT_CACHING (or its per-model variant) is set, and also when the caller deliberately does not cache a class of calls — Claude Code\'s small Haiku utility calls do not. Unset the environment variable only if this was not intended.',
   UNCLASSIFIED:               'A break whose cause could not be localised from the prefix diff. Inspect the attached raw diff summary and the raw bodies around this turn.',
+}
+
+// ── Minimum cacheable prompt length, per model ───────────────────────────────────
+// A prompt below its model's minimum is NOT cached and NO error is raised: both usage counters come
+// back 0 and the call silently pays the full input rate. The spread is 8x (512 -> 4,096), so a
+// threshold keyed on one model id is wrong for every other model — hence a table, and hence an
+// UNKNOWN model yields NO verdict rather than a borrowed number.
+// Source: the API "Cache limitations" section, quoted verbatim in
+// reports/cache-invalidation-research/20260804_142700+0200-prompt-caching-docs.md §2.5. That report
+// also records (§4.1) that two fetches of the SAME page returned two different lists — §2.5's is the
+// one taken from the verbatim section and is the one used here. Re-verify against the live page
+// before trusting a row for a model not measured on this machine.
+const MIN_CACHEABLE_TOKENS: ReadonlyArray<{ match: RegExp; min: number }> = [
+  { match: /opus-5|fable-5|mythos-5/, min: 512 },
+  { match: /opus-4[-.]8|sonnet-5|sonnet-4[-.]6|sonnet-4[-.]5|opus-4[-.]1|opus-4(?![-.\d])|sonnet-4(?![-.\d])/, min: 1024 },
+  { match: /opus-4[-.]7|mythos-preview|3[-.]5-haiku|haiku-3[-.]5/, min: 2048 },
+  { match: /opus-4[-.]6|opus-4[-.]5|haiku-4[-.]5/, min: 4096 },
+]
+
+/** The model's documented minimum cacheable prompt length, or undefined when we have no row for it.
+ *  Undefined means "no claim" — never a default: a borrowed threshold would make BELOW_MIN_CACHEABLE
+ *  fire on models whose real minimum is up to 8x away. */
+export function minCacheableTokensFor(model: string): number | undefined {
+  const m = model.toLowerCase()
+  for (const row of MIN_CACHEABLE_TOKENS) if (row.match.test(m)) return row.min
+  return undefined
+}
+
+// ── Environment / git-snapshot regions of the system prompt ──────────────────────
+// Both live INSIDE one big system block (measured across the live spool, 2026-08-04: sys[2] for
+// SDK/sub-agent requests, sys[3] for the CLI), so the positional block diff can only ever say "that
+// block changed" and would file two documented causes under UNCLASSIFIED. Extracting the two regions
+// by hand is what lets the classifier name them. POINTER-ONLY: only a hash of the region is kept —
+// the cwd is an absolute home path and must never reach a report.
+const ENV_SDK_RE = /<env>[\s\S]*?<\/env>/
+// The CLI spelling has no closing delimiter; it runs to the next markdown heading of the prompt
+// (`# Scratchpad Directory`, …). Anchored on the heading + its lead-in sentence so a stray
+// "# Environment" inside quoted prose does not start a region.
+const ENV_CLI_RE = /# Environment\nYou have been invoked in the following environment:[\s\S]*?(?=\n# |$)/
+
+function extractEnvRegion(systemText: string): string {
+  return ENV_SDK_RE.exec(systemText)?.[0] ?? ENV_CLI_RE.exec(systemText)?.[0] ?? ''
+}
+
+/** The git snapshot: from `gitStatus:` through the end of the `Recent commits:` list. It STOPS at the
+ *  blank line that ends that list, because harness prose follows it in the CLI spelling and blaming a
+ *  harness-upgrade wording change on "git state changed" would be a confident lie. */
+function extractGitRegion(systemText: string): string {
+  const start = systemText.indexOf('gitStatus:')
+  if (start < 0) return ''
+  const commits = systemText.indexOf('Recent commits:', start)
+  // No commit list (a repo with no commits, or a truncated block): keep the region to the end rather
+  // than guess a boundary — an over-wide region can only make the detector fire on prose that in
+  // practice only changes with the harness, which is already visible as a model/metadata change.
+  if (commits < 0) return systemText.slice(start)
+  const end = systemText.indexOf('\n\n', commits)
+  return end < 0 ? systemText.slice(start) : systemText.slice(start, end)
 }
 
 // ── Stable fingerprint + volatile normalization ──────────────────────────────────
@@ -190,8 +271,11 @@ function causeForContentKind(kind: BlockContentKind): CacheBreakTimelineCause {
 // Code concatenates CLAUDE.md + every rule + memory + the skills list into ONE giant system-reminder,
 // so segmenting lets the diff pinpoint the CLAUDE.md segment vs a rule vs the skills list vs a date,
 // instead of blaming the whole mega-block. Fail-soft: a block with no boundary markers is one segment.
-interface Segment { kind: BlockContentKind; label: string; text: string }
-function segmentInjected(text: string, blockLabel: string): Segment[] {
+export interface Segment { kind: BlockContentKind; label: string; text: string }
+/** Exported for tests and for offline forensics on real bodies: the SEGMENTATION is what decides
+ *  which culprit a break can be pinned to, so a segment nothing classifies is how a real perpetrator
+ *  ends up as UNCLASSIFIED (TRDD-00NOBU9W). */
+export function segmentInjected(text: string, blockLabel: string): Segment[] {
   const boundary = /Contents of ([^\n(]+?\.[A-Za-z0-9_]+)/g
   const marks: { idx: number; label: string }[] = []
   let m: RegExpExecArray | null
@@ -294,7 +378,24 @@ export interface PrefixBlock {
 }
 export interface TurnPrefix {
   model: string
-  effort: string    // normalized extended-thinking / speed signature
+  // Request parameters rendered into the prompt. Kept SEPARATE (they were one blended `effort`
+  // signature until TRDD-B9ERTBZ9) because the docs give each a different blast radius and a
+  // different remedy, and a blended signature could only ever report the generic EFFORT_SWITCH.
+  // '' means the parameter was ABSENT — which is NOT the same as any explicit value, see
+  // classifyCacheBreak step 3.
+  thinking: string      // body.thinking
+  effortParam: string   // body.output_config.effort
+  toolChoice: string    // body.tool_choice
+  speed: string         // body.speed (fast mode) — the residual, no specific cause of its own
+  // The environment / git-snapshot regions of the system prompt, hashed. `norm` is the same region
+  // with timestamps normalized away, so a region that differs ONLY by a clock is left to the block
+  // diff (which names SYSTEM_TIMESTAMP) instead of being blamed on a directory change.
+  envFp: string; envNorm: string
+  gitFp: string; gitNorm: string
+  // Whole-request signals for the no-cache-activity diagnosis (CACHING_DISABLED/BELOW_MIN_CACHEABLE).
+  hasCacheControl: boolean
+  promptTokensApprox: number   // estimated, over EVERY message + system + tools (not just the prefix)
+  messageCount: number         // messages.length — the conservative unit for the 20-block lookback
   tools: PrefixTool[]
   systemBlocks: PrefixBlock[]
   messageBlocks: PrefixBlock[]  // cached message-prefix injected blocks (up to the last message cache_control)
@@ -308,6 +409,9 @@ export interface RawRequestForBreak {
   model?: unknown
   thinking?: unknown
   speed?: unknown
+  /** Present on EVERY request sampled from the live spool (`{"effort":"high"|"xhigh"|…}`), and
+   *  invisible to the classifier until TRDD-B9ERTBZ9 — an effort change simply landed in UNCLASSIFIED. */
+  output_config?: unknown
   tool_choice?: unknown
   system?: string | RawSystemLike[]
   tools?: RawToolLike[]
@@ -316,17 +420,30 @@ export interface RawRequestForBreak {
   diagnostics?: { previous_message_id?: unknown }
 }
 
-function effortSignature(body: RawRequestForBreak): string {
-  const t = body.thinking
-  let thinking = 'none'
-  if (t && typeof t === 'object') {
-    const o = t as { type?: unknown; budget_tokens?: unknown }
-    thinking = `${typeof o.type === 'string' ? o.type : '?'}:${typeof o.budget_tokens === 'number' ? o.budget_tokens : ''}`
+/** A stable signature for one request parameter. Returns '' for ABSENT — the distinction is
+ *  load-bearing: the docs say "setting a parameter explicitly to its default value is equivalent to
+ *  omitting it", so absent↔present cannot be judged without a per-model defaults table that no
+ *  documentation page provides. Only two different EXPLICIT values are decidable. */
+function paramSignature(v: unknown): string {
+  if (v === undefined || v === null) return ''
+  if (typeof v === 'object') {
+    const o = v as { type?: unknown; budget_tokens?: unknown; name?: unknown }
+    // thinking / tool_choice both key on `type` (+ budget / tool name) — stringify those explicitly
+    // so key-order churn in the raw JSON can never read as a parameter change.
+    if (typeof o.type === 'string') {
+      const extra = typeof o.budget_tokens === 'number' ? `:${o.budget_tokens}` : typeof o.name === 'string' ? `:${o.name}` : ''
+      return `${o.type}${extra}`
+    }
+    return JSON.stringify(v)
   }
-  const speed = typeof body.speed === 'string' ? body.speed : 'std'
-  const toolChoice = body.tool_choice && typeof body.tool_choice === 'object'
-    ? JSON.stringify(body.tool_choice) : String(body.tool_choice ?? 'auto')
-  return `${thinking}|${speed}|${toolChoice}`
+  return String(v)
+}
+
+function effortParamOf(body: RawRequestForBreak): string {
+  const oc = body.output_config
+  if (!oc || typeof oc !== 'object') return ''
+  const e = (oc as { effort?: unknown }).effort
+  return typeof e === 'string' ? e : ''
 }
 
 function toPrefixBlock(layer: 'system' | 'message', kind: BlockContentKind, label: string, text: string): PrefixBlock {
@@ -358,6 +475,26 @@ function attachmentPrefixBlock(b: RawBlockLike & { name?: string; input?: unknow
 // Flatten the injected TEXT of a message content block (string, {type:text}, tool_result text). We
 // deliberately ignore tool_use inputs and base64 image data — the former is stable history, the latter
 // is never touched (pointer-only). Returns '' for a non-text block (skipped from the diff).
+/** The BYTE length of what messageBlockText would return, without building the string. The prompt
+ *  total is needed for EVERY message of EVERY scanned body, and materializing a whole conversation's
+ *  tool_result text per body — for one integer — measurably slowed the bounded scan. */
+function messageBlockTextBytes(b: RawBlockLike): number {
+  if (b.type === 'text' && typeof b.text === 'string') return Buffer.byteLength(b.text)
+  if (b.type === 'tool_result') {
+    const c = b.content
+    if (typeof c === 'string') return Buffer.byteLength(c)
+    if (Array.isArray(c)) {
+      let n = 0
+      for (const x of c) {
+        const t = x && typeof x === 'object' ? (x as { text?: string }).text : undefined
+        n += (typeof t === 'string' ? Buffer.byteLength(t) : 0) + 1   // +1 for the '\n' the join adds
+      }
+      return n > 0 ? n - 1 : 0
+    }
+  }
+  return 0
+}
+
 function messageBlockText(b: RawBlockLike): string {
   if (b.type === 'text' && typeof b.text === 'string') return b.text
   if (b.type === 'tool_result') {
@@ -376,6 +513,12 @@ export function extractTurnPrefix(body: RawRequestForBreak | null): TurnPrefix |
   if (!body || typeof body !== 'object') return null
   const model = typeof body.model === 'string' ? body.model : ''
 
+  // Whole-request counters for the no-cache-activity diagnosis (CACHING_DISABLED /
+  // BELOW_MIN_CACHEABLE). Accumulated during the passes we already make — a separate walk would
+  // re-traverse a multi-MB body for two integers.
+  let ccMarkers = 0
+  let promptBytes = 0
+
   const tools: PrefixTool[] = (Array.isArray(body.tools) ? body.tools : []).map(t => {
     const name = typeof t.name === 'string' ? t.name : '?'
     // NUL (U+0000) as the fingerprint field separator (no description/schema can contain it) —
@@ -383,18 +526,26 @@ export function extractTurnPrefix(body: RawRequestForBreak | null): TurnPrefix |
     // grep/file/diff classify this whole file as binary (bitten 2026-07-16). Same for the
     // order-sensitive joins in diffTools below.
     const defBytes = `${typeof t.description === 'string' ? t.description : ''}\u0000${JSON.stringify(t.input_schema ?? {})}`
+    promptBytes += Buffer.byteLength(defBytes)
+    if (t.cache_control) ccMarkers += 1
     return { name, deferred: t.defer_loading === true, isMcp: name.startsWith('mcp__'), fp: fnv1a(defBytes) }
   })
 
   const systemBlocks: PrefixBlock[] = []
+  const systemTexts: string[] = []
   if (typeof body.system === 'string' && body.system) {
+    systemTexts.push(body.system)
+    promptBytes += Buffer.byteLength(body.system)
     for (const seg of segmentInjected(body.system, 'system prompt')) {
       systemBlocks.push(toPrefixBlock('system', seg.kind, seg.label, seg.text))
     }
   } else if (Array.isArray(body.system)) {
     body.system.forEach((s, i) => {
+      if (s?.cache_control) ccMarkers += 1
       const text = typeof s?.text === 'string' ? s.text : ''
       if (!text) return
+      systemTexts.push(text)
+      promptBytes += Buffer.byteLength(text)
       for (const seg of segmentInjected(text, `system[${i}]`)) {
         systemBlocks.push(toPrefixBlock('system', seg.kind, seg.label, seg.text))
       }
@@ -403,11 +554,22 @@ export function extractTurnPrefix(body: RawRequestForBreak | null): TurnPrefix |
 
   // Message cached prefix: find the LAST message index that carries (or whose content carries) a
   // cache_control marker — the cache breakpoint. Everything up to and including it is cached prefix.
+  // The SAME pass totals the prompt over EVERY message, not just the prefix: a request whose only
+  // breakpoint sits in system[] has an EMPTY message prefix, and sizing the prompt from that would
+  // report ~0 tokens for a huge conversation and fire BELOW_MIN_CACHEABLE on it.
   const messages = Array.isArray(body.messages) ? body.messages : []
   let lastBreakpoint = -1
   messages.forEach((mm, i) => {
     const c = mm?.content
-    const hasCC = Array.isArray(c) && c.some(b => b && typeof b === 'object' && (b as RawBlockLike).cache_control)
+    if (typeof c === 'string') { promptBytes += Buffer.byteLength(c); return }
+    if (!Array.isArray(c)) return
+    let hasCC = false
+    for (const b of c) {
+      if (!b || typeof b !== 'object') continue
+      const rb = b as RawBlockLike
+      if (rb.cache_control) { hasCC = true; ccMarkers += 1 }
+      promptBytes += messageBlockTextBytes(rb)
+    }
     if (hasCC) lastBreakpoint = i
   })
   const messageBlocks: PrefixBlock[] = []
@@ -440,7 +602,25 @@ export function extractTurnPrefix(body: RawRequestForBreak | null): TurnPrefix |
     }
   }
 
-  return { model, effort: effortSignature(body), tools, systemBlocks, messageBlocks }
+  const systemText = systemTexts.join('\n')
+  const envRegion = extractEnvRegion(systemText)
+  const gitRegion = extractGitRegion(systemText)
+
+  return {
+    model,
+    thinking: paramSignature(body.thinking),
+    effortParam: effortParamOf(body),
+    toolChoice: paramSignature(body.tool_choice),
+    speed: paramSignature(body.speed),
+    envFp: envRegion ? fnv1a(envRegion) : '',
+    envNorm: envRegion ? fnv1a(normalizeVolatile(envRegion)) : '',
+    gitFp: gitRegion ? fnv1a(gitRegion) : '',
+    gitNorm: gitRegion ? fnv1a(normalizeVolatile(gitRegion)) : '',
+    hasCacheControl: ccMarkers > 0,
+    promptTokensApprox: estimateTokensFromBytes(promptBytes),
+    messageCount: messages.length,
+    tools, systemBlocks, messageBlocks,
+  }
 }
 
 // ── The classifier ───────────────────────────────────────────────────────────────
@@ -460,10 +640,19 @@ export interface BreakTiming {
   cacheCreateTokens: number
   ephemeral5mTokens: number
   ephemeral1hTokens: number
+  /** Blocks appended since the last turn that actually WROTE to the cache — the distance the 20-block
+   *  lookback window has to cover. Undefined when no write has been observed yet in this stream.
+   *  Counted in MESSAGES, which is the conservative unit: a message contributes at least one content
+   *  block, so "≥20 messages" guarantees "≥20 blocks" and the detector can only fire LATE, never early. */
+  blocksAddedSinceLastWrite?: number
 }
 
 const FIVE_MIN = 5 * 60_000
 const ONE_HOUR = 60 * 60_000
+/** "The lookback window is 20 blocks. The system checks at most 20 positions per breakpoint, counting
+ *  the breakpoint itself as the first." — API prompt-caching docs, quoted in
+ *  reports/cache-invalidation-research/20260804_142700+0200-prompt-caching-docs.md (A-13). */
+const LOOKBACK_WINDOW_BLOCKS = 20
 
 // Diff the tools layer: added/removed by set, then order, then per-tool definition change. Returns the
 // most-specific tools cause, or null when the tool catalog is byte-identical.
@@ -552,6 +741,29 @@ function diffBlocks(prevBlocksRaw: PrefixBlock[], curBlocksRaw: PrefixBlock[], l
     // First divergence at position i. Classify most-specific-first.
     if (c.kind === 'postcompact' || p.kind === 'postcompact') return mkBlock('COMPACTION', layer, c, `conversation compaction rebuilt the ${layer} prefix at ${c.label}`)
     if (p.norm === c.norm) return mkBlock('SYSTEM_TIMESTAMP', layer, c, `moving date/clock in ${c.label}`)
+    // msg[0] carries the CONVERSATION'S IDENTITY, and its `usertext` segment is the caller's own
+    // opening words — which are immutable within one conversation. So a divergence THERE does not
+    // mean a block changed; it means these two requests are different conversations that happen to
+    // share a session id, which is the norm for sub-agents (their calls carry the PARENT's id).
+    // Nothing broke: each stream keeps its own cache entry.
+    //
+    // Measured over 2,003 consecutive real turn-pairs (TRDD-00NOBU9W): 397 diverge first exactly
+    // here, and every sampled one is a different sub-agent TASK PROMPT ("You are doing a CODE
+    // REVIEW of…", "You are auditing source files…"). They were landing in UNCLASSIFIED, which then
+    // ranked as the "Dominant AVOIDABLE perpetrator" at 23.2% — a report telling the operator to go
+    // fix something that never happened. The existing A→B→A signature cannot catch them: it keys on
+    // model + tool catalog, and two sub-agents of the same type share both.
+    //
+    // The KIND is the load-bearing part of the test. The harness injects CLAUDE.md, the rules and the
+    // memory index INTO msg[0], and those DO change mid-conversation — a memory rewrite alone was 19%
+    // of classified break tokens on this machine. Those segments carry their own kinds
+    // (claudemd/rule/memory/skillcatalog/hook/date), so requiring `usertext` on BOTH sides leaves
+    // every one of them exactly where it was. A compaction rewrite of msg[0] is `postcompact` and was
+    // already claimed above.
+    if (layer === 'message' && c.label.startsWith('msg[0]') && c.kind === 'usertext' && p.kind === 'usertext') {
+      return { cause: 'SUBAGENT_INTERLEAVE', culpritLayer: 'message', culpritId: 'interleave:root-differs',
+        culpritSummary: 'msg[0]\'s own prompt text differs — these two requests are DIFFERENT conversations sharing one session id (a sub-agent\'s calls carry the parent\'s session id), so neither one broke the other\'s cache' }
+    }
     // Same content, different position (this block existed earlier in prev, and prev's block still
     // exists later in cur) → a pure reorder, not a content change.
     if (prevFps.has(c.fp) && curFps.has(p.fp)) {
@@ -584,6 +796,32 @@ function diffBlocks(prevBlocksRaw: PrefixBlock[], curBlocksRaw: PrefixBlock[], l
   return null
 }
 
+/** The two causes that are NOT a break at all but a turn that was never cached in the first place —
+ *  both counters 0. Returns null the moment there is ANY cache activity, so it can never displace a
+ *  real break verdict. Shared by classifyCacheBreak (which names the cause) and classifyTurns (which
+ *  uses it to admit such a turn past the cache_creation floor — a 0-token turn is invisible to a
+ *  floor written for cache WRITES, yet "this call is never cached" is exactly what the operator needs
+ *  to see: it pays the full input rate on every single call). */
+function diagnoseNoCacheActivity(cur: TurnPrefix, timing: BreakTiming): CacheBreakVerdict | null {
+  if (timing.cacheCreateTokens !== 0 || timing.cacheReadTokens !== 0) return null
+  // No marker anywhere ⇒ nothing was ever offered to the cache. Checked FIRST: such a request is
+  // often also below the minimum, but "the prompt was too small" would name a condition that never
+  // got the chance to apply.
+  if (!cur.hasCacheControl) {
+    return { cause: 'CACHING_DISABLED', culpritLayer: 'timing', culpritId: 'config:no-cache-control',
+      culpritSummary: 'the request carried no cache_control marker anywhere — nothing was offered to the cache', ttlTier: 'none' }
+  }
+  // Markers present and STILL nothing cached: the documented silent failure. The counters are the
+  // load-bearing evidence (the harness asked for caching and got none); the size check is
+  // corroboration, and it is skipped entirely for a model we have no documented minimum for.
+  const min = minCacheableTokensFor(cur.model)
+  if (min !== undefined && cur.promptTokensApprox < min) {
+    return { cause: 'BELOW_MIN_CACHEABLE', culpritLayer: 'timing', culpritId: `config:below-min:${cur.model || '?'}`,
+      culpritSummary: `cache_control present but nothing cached: ~${cur.promptTokensApprox.toLocaleString()} est. tokens is under this model's ${min.toLocaleString()}-token minimum`, ttlTier: 'none' }
+  }
+  return null
+}
+
 function mkBlock(cause: CacheBreakTimelineCause, layer: 'system' | 'message', b: PrefixBlock, summary: string): CacheBreakVerdict {
   return { cause, culpritLayer: layer, culpritId: `${layer}:${cause}:${b.kind}:${b.label.slice(0, 48)}`, culpritSummary: summary }
 }
@@ -593,6 +831,12 @@ function mkBlock(cause: CacheBreakTimelineCause, layer: 'system' | 'message', b:
  *  prefix change ALWAYS beats a timing gap — the change is the real culprit. When the prefix is
  *  byte-identical, the break is timing (TTL expiry / cold start). */
 export function classifyCacheBreak(prev: TurnPrefix | null, cur: TurnPrefix, timing: BreakTiming, prev2?: TurnPrefix | null): CacheBreakVerdict {
+  // -1. NO cache activity at all (both counters 0). Checked before everything, including the
+  //     first-turn guard: calling a turn that was never eligible for caching a "cold warm" names a
+  //     cache event that did not happen. Measured on the live spool: 4 of 1,377 requests carry no
+  //     cache_control marker and 4 of 1,355 responses report 0/0 — same model, same count.
+  const noActivity = diagnoseNoCacheActivity(cur, timing)
+  if (noActivity) return noActivity
   if (!prev) {
     return { cause: 'COLD_START', culpritLayer: 'timing', culpritId: 'timing:COLD_START', culpritSummary: 'first observed turn for this session (cold cache warm)', ttlTier: 'none' }
   }
@@ -635,11 +879,43 @@ export function classifyCacheBreak(prev: TurnPrefix | null, cur: TurnPrefix, tim
       confidence: churn.length >= 3 ? 'high' : 'medium' }
   }
   if (toolsV) return toolsV
-  // 3. Effort / thinking / tool_choice — invalidates system + messages (bytes may be unchanged).
-  if (prev.effort !== cur.effort) {
-    return { cause: 'EFFORT_SWITCH', culpritLayer: 'effort', culpritId: 'effort', culpritSummary: `thinking/effort ${prev.effort} → ${cur.effort}` }
+  // 3. Request PARAMETERS rendered into the prompt (thinking / effort / tool_choice / speed). Each
+  //    fires ONLY when BOTH turns carry the parameter EXPLICITLY and the two values differ.
+  //    An absent↔present transition is UNDECIDABLE from captured data: the docs say "setting a
+  //    parameter explicitly to its default value is equivalent to omitting it", and no page
+  //    enumerates the per-model defaults — so absent→'high' is a real break if 'high' is not this
+  //    model's default and a documented NO-OP if it is. Two DIFFERENT explicit values cannot both be
+  //    the default, which is exactly the case that needs no defaults table. An unnamed break is
+  //    honest; a guessed one is the false positive this rule exists to prevent.
+  const paramChanged = (a: string, b: string) => a !== '' && b !== '' && a !== b
+  if (paramChanged(prev.thinking, cur.thinking)) {
+    return { cause: 'THINKING_CONFIG_CHANGED', culpritLayer: 'effort', culpritId: 'param:thinking', culpritSummary: `thinking ${prev.thinking} → ${cur.thinking}` }
   }
-  // 4. System blocks.
+  if (paramChanged(prev.effortParam, cur.effortParam)) {
+    return { cause: 'EFFORT_PARAM_CHANGED', culpritLayer: 'effort', culpritId: 'param:effort', culpritSummary: `output_config.effort ${prev.effortParam} → ${cur.effortParam}` }
+  }
+  if (paramChanged(prev.toolChoice, cur.toolChoice)) {
+    return { cause: 'TOOL_CHOICE_CHANGED', culpritLayer: 'effort', culpritId: 'param:tool_choice', culpritSummary: `tool_choice ${prev.toolChoice} → ${cur.toolChoice}` }
+  }
+  if (paramChanged(prev.speed, cur.speed)) {
+    return { cause: 'EFFORT_SWITCH', culpritLayer: 'effort', culpritId: 'param:speed', culpritSummary: `speed/fast-mode ${prev.speed} → ${cur.speed}` }
+  }
+  // 4. The environment and git-snapshot REGIONS of the system prompt, before the generic block diff.
+  //    Both sit inside one big system block, so the positional diff can only report "that block
+  //    changed" and would file two documented causes as UNCLASSIFIED. The `norm` guard runs the
+  //    other way: a region differing ONLY by a timestamp is left to the block diff, which names
+  //    SYSTEM_TIMESTAMP — so this pair can never steal a clock move.
+  if (prev.envFp !== cur.envFp && prev.envNorm !== cur.envNorm) {
+    const shape = !prev.envFp ? 'appeared' : !cur.envFp ? 'disappeared' : 'changed'
+    return { cause: 'WORKING_DIR_CHANGED', culpritLayer: 'system', culpritId: 'system:env-block',
+      culpritSummary: `the environment block (working directory / platform / shell / OS) ${shape} between these turns` }
+  }
+  if (prev.gitFp !== cur.gitFp && prev.gitNorm !== cur.gitNorm) {
+    const shape = !prev.gitFp ? 'appeared' : !cur.gitFp ? 'disappeared' : 'changed'
+    return { cause: 'GIT_STATE_CHANGED', culpritLayer: 'system', culpritId: 'system:git-snapshot',
+      culpritSummary: `the startup git snapshot (branch / status / recent commits) ${shape} between these turns` }
+  }
+  // 5. System blocks.
   const sysV = diffBlocks(prev.systemBlocks, cur.systemBlocks, 'system')
   if (sysV) return sysV
   // 5. Message cached-prefix blocks. Any structural change (even an unlocalised one) beats a timing
@@ -658,6 +934,17 @@ export function classifyCacheBreak(prev: TurnPrefix | null, cur: TurnPrefix, tim
     if (gap >= ONE_HOUR) return { cause: 'TTL_EXPIRY', culpritLayer: 'timing', culpritId: 'timing:TTL_EXPIRY:1h', culpritSummary: `no prefix change; ${(gap / 60000).toFixed(1)}m gap > 1h TTL`, ttlTier: '1h' }
     if (gap >= 4.5 * 60_000 && gap < 6 * 60_000) return { cause: 'TTL_EXPIRY', culpritLayer: 'timing', culpritId: 'timing:TTL_EXPIRY:5m', culpritSummary: `no prefix change; ${(gap / 60000).toFixed(1)}m gap ≈ 5m TTL`, ttlTier: '5m' }
     if (gap >= FIVE_MIN) return { cause: 'TTL_EXPIRY', culpritLayer: 'timing', culpritId: 'timing:TTL_EXPIRY:5m', culpritSummary: `no prefix change; ${(gap / 60000).toFixed(1)}m gap > 5m TTL`, ttlTier: '5m' }
+  }
+  // 6.4. LOOKBACK OVERFLOW — the prefix is byte-identical, yet the cache read NOTHING. The lookback
+  //      only finds entries earlier requests actually WROTE, and it checks at most 20 positions; a
+  //      conversation that grew ≥20 blocks past the last write pushes the entry outside that window.
+  //      `cacheRead === 0` is the discriminator against NORMAL_GROWTH, which finds its entry and reads
+  //      it — growth writes only the new tail, an overflow re-writes everything. Checked after the TTL
+  //      gaps: when both explanations fit, an elapsed TTL is the simpler one and stays named.
+  const grown = timing.blocksAddedSinceLastWrite
+  if (grown !== undefined && grown >= LOOKBACK_WINDOW_BLOCKS && timing.cacheReadTokens === 0 && timing.cacheCreateTokens > 0) {
+    return { cause: 'LOOKBACK_OVERFLOW', culpritLayer: 'message', culpritId: 'lookback:overflow',
+      culpritSummary: `unchanged prefix, zero cache_read: ${grown} block(s) appended since the last cache write > the ${LOOKBACK_WINDOW_BLOCKS}-block lookback window`, ttlTier: 'none' }
   }
   if (timing.cacheReadTokens === 0) {
     return { cause: 'COLD_START', culpritLayer: 'timing', culpritId: 'timing:COLD_START', culpritSummary: 'no cache_read this turn — nothing cached to break (cold warm)', ttlTier: 'none' }
@@ -1037,18 +1324,30 @@ function resolveTarget(
 // single-session timeline AND the cross-session cause aggregator so the classification lives in one place.
 function classifyTurns(turns: ScannedTurn[], respById: Map<string, ResponseUsage>, minTokens: number): CacheBreakEvent[] {
   const events: CacheBreakEvent[] = []
+  // The message count at the last turn that actually WROTE to the cache — the lookback window is
+  // measured from the last WRITE, not from the previous turn. Updated for EVERY turn with usage,
+  // including the ones the minTokens floor drops, or the distance would be measured from the last
+  // *reported* write instead of the last real one.
+  let lastWriteMessageCount: number | null = null
   for (let i = 0; i < turns.length; i++) {
     const usage = ccOfTurn(turns, i, respById)
-    if (!usage || usage.cacheCreate < minTokens) continue
+    const curPrefix = turns[i].prefix
+    if (!usage || !curPrefix) continue
+    const blocksAddedSinceLastWrite = lastWriteMessageCount === null ? undefined : curPrefix.messageCount - lastWriteMessageCount
+    const timing: BreakTiming = {
+      gapMs: i > 0 ? turns[i].mtimeMs - turns[i - 1].mtimeMs : undefined,
+      cacheReadTokens: usage.cacheRead, cacheCreateTokens: usage.cacheCreate,
+      ephemeral5mTokens: usage.ephemeral5m, ephemeral1hTokens: usage.ephemeral1h,
+      blocksAddedSinceLastWrite,
+    }
+    if (usage.cacheCreate > 0) lastWriteMessageCount = curPrefix.messageCount  // AFTER this turn's delta
+    // The floor is a cache_creation floor, so it drops every 0-token turn — including the ones whose
+    // whole finding is that they are never cached at all. Admit exactly those two diagnoses through it.
+    if (usage.cacheCreate < minTokens && !diagnoseNoCacheActivity(curPrefix, timing)) continue
     const prevPrefix = i > 0 ? turns[i - 1].prefix : null
     const prev2Prefix = i > 1 ? turns[i - 2].prefix : null   // for the A→B→A interleave signature
-    const curPrefix = turns[i].prefix
-    if (!curPrefix) continue
-    const gapMs = i > 0 ? turns[i].mtimeMs - turns[i - 1].mtimeMs : undefined
-    const verdict = classifyCacheBreak(prevPrefix, curPrefix, {
-      gapMs, cacheReadTokens: usage.cacheRead, cacheCreateTokens: usage.cacheCreate,
-      ephemeral5mTokens: usage.ephemeral5m, ephemeral1hTokens: usage.ephemeral1h,
-    }, prev2Prefix)
+    const gapMs = timing.gapMs
+    const verdict = classifyCacheBreak(prevPrefix, curPrefix, timing, prev2Prefix)
     const evModel = usage.model ?? curPrefix.model
     events.push({
       turn: i + 1,
@@ -1065,7 +1364,7 @@ function classifyTurns(turns: ScannedTurn[], respById: Map<string, ResponseUsage
       gapMinutes: gapMs !== undefined ? +(gapMs / 60000).toFixed(1) : undefined,
       ttlTier: verdict.ttlTier,
       model: evModel,
-      remediation: REMEDIATION[verdict.cause],
+      remediation: CACHE_BREAK_REMEDIATION[verdict.cause],
       rawDiffSummary: verdict.rawDiffSummary,
       confidence: verdict.confidence,
     })
@@ -1143,7 +1442,7 @@ function buildRepeatOffenders(events: CacheBreakEvent[], sessionCacheCreate: num
       totalCostUsd: +a.cost.toFixed(4),
       pctOfSessionCacheCreate: sessionCacheCreate > 0 ? +(100 * total / sessionCacheCreate).toFixed(1) : 0,
       firstTurn: a.first, lastTurn: a.last, systematic,
-      verdict: (systematic ? `SYSTEMATIC — ` : '') + `${a.cause}: ${a.culprit} broke the cache on ${occurrences} turn(s) (${total.toLocaleString()} cache_creation tokens). ${REMEDIATION[a.cause]}`,
+      verdict: (systematic ? `SYSTEMATIC — ` : '') + `${a.cause}: ${a.culprit} broke the cache on ${occurrences} turn(s) (${total.toLocaleString()} cache_creation tokens). ${CACHE_BREAK_REMEDIATION[a.cause]}`,
     }
   })
   // Rank by recurrence × wasted tokens (the chronic + costly first).
@@ -1358,10 +1657,10 @@ export async function buildCacheBreakCauses(opts: CacheBreakCausesOptions = {}):
 
   const pct = (n: number) => total > 0 ? +(100 * n / total).toFixed(1) : 0
   const causeRanking: CacheBreakCauseRow[] = [...causeMap.entries()]
-    .map(([cause, v]) => ({ cause, expected: EXPECTED_CAUSES.has(cause), events: v.events, sessionsAffected: v.sessions.size, cacheCreateTokens: v.cc, pct: pct(v.cc), remediation: REMEDIATION[cause] }))
+    .map(([cause, v]) => ({ cause, expected: EXPECTED_CAUSES.has(cause), events: v.events, sessionsAffected: v.sessions.size, cacheCreateTokens: v.cc, pct: pct(v.cc), remediation: CACHE_BREAK_REMEDIATION[cause] }))
     .sort((a, b) => b.cacheCreateTokens - a.cacheCreateTokens)
   const actorLeaderboard: CacheBreakActorRow[] = [...actorMap.entries()]
-    .map(([actorId, v]) => ({ actorId, cause: v.cause, expected: EXPECTED_CAUSES.has(v.cause), actor: v.actor, occurrences: v.occ, sessionsAffected: v.sessions.size, totalCacheCreateTokens: v.cc, totalCostUsd: +v.cost.toFixed(4), pct: pct(v.cc), remediation: REMEDIATION[v.cause] }))
+    .map(([actorId, v]) => ({ actorId, cause: v.cause, expected: EXPECTED_CAUSES.has(v.cause), actor: v.actor, occurrences: v.occ, sessionsAffected: v.sessions.size, totalCacheCreateTokens: v.cc, totalCostUsd: +v.cost.toFixed(4), pct: pct(v.cc), remediation: CACHE_BREAK_REMEDIATION[v.cause] }))
     .sort((a, b) => b.totalCacheCreateTokens - a.totalCacheCreateTokens)
     .slice(0, topN)
 

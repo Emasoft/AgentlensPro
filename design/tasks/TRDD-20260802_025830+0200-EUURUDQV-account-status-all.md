@@ -1,16 +1,44 @@
 ---
 trdd-id: EUURUDQV
 title: get_account_status --all — every observed account, honestly stamped
-column: ai_review
+column: human_review
 created: 2026-08-02T02:58:30+0200
-updated: 2026-08-02T04:20:00+0200
-current-owner: unassigned
+updated: 2026-08-04T23:41:00+0200
+current-owner: session
 task-type: feature
 npt: []
 eht: []
 ---
 
 # `get_account_status --all` — every observed account, honestly stamped
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-04T23:4x+0200
+
+**THE BLOCKER IS RESOLVED. The consumer's response arrived as GitHub issue #9** (filed by the janitor
+6 h after this card was last touched) — the body below still says "AWAITING ai-maestro's response on
+the payload shape", and that is now stale. #9 opens by naming the four properties it is relying on
+(`unreadable` as a ROW never an omission; `null` never presented as `0`; per-WINDOW freshness; the
+explanatory `reason` strings) and then asks for four contract changes. **All four are implemented and
+were VERIFIED LIVE today against the deployed 2.23.0 CLI** — behaviour, not help text:
+
+| #9 ask | shipped | measured today |
+|---|---|---|
+| §1 non-zero exit when the request cannot be answered | `21ad9a4`, `6c22bb3`, `764b235` | `get_agent_tokens --agentId nonexistent-xyz` → **exit 2**, stdout EMPTY, JSON reason on **stderr** |
+| §2 a machine-readable flag every tool honours | same | `--json` accepted on `get_agent_tokens`; `help <tool>` now prints `--full` / `--json` / `--out` **and** the exit contract |
+| §3 a structured `bound`, so the direction is not read out of English prose | `ed92c3c` | the whole lattice is live: `exact` (fresh) · `lower` (aged) · `inferred` (rolled, with `leftAt` set) · `unknown` (stale, `percent: null` + reason) |
+| §4 a corpus-level "is the archive still filling" signal | `ed92c3c` | `archive: {maintained, reason, lastObservedAt}` at top level, plus `blind` |
+
+One deliberate deviation worth telling the consumer: #9 proposed `null` for "no claim"; we ship the
+string **`"unknown"`**. A missing key and an explicit no-claim are then distinguishable, which is the
+same argument #9 makes for `unreadable` being a row rather than an omission.
+
+**NEXT ACTION:** reply on issues #8 and #9 with the verified table above so the two blocked consumers
+(ai-maestro's rotator, the janitor's rotator gate) can integrate — that is outward-facing, so it needs
+the owner's go-ahead. Then close both issues and take this card terminal.
+
+**Still open, and NOT blockers** (both are recorded at the end of this card): retention for the
+per-account archive (nothing purges it; correct for now, undecided), and the `has_extra_usage_enabled`
+lead, which must be verified on a team-org seat rather than "fixed" on another project's say-so.
 
 Implements GitHub issue **#8** (filed by ai-maestro). Design agreed in
 [issue #8 comment](https://github.com/Emasoft/AgentlensPro/issues/8#issuecomment-5154303297).
@@ -135,8 +163,9 @@ better window 1).
       phases, 14 mutations each confirmed to be caught.
 - [x] A real sample posted to issue #8 for ai-maestro to test the rotator against before the shape is
       frozen.
-- [ ] **AWAITING ai-maestro's response on the payload shape.** That is the only thing left; the shape
-      is deliberately not frozen until the rotator has run against it.
+- [x] **The response arrived as issue #9, and all four of its contract asks are implemented and
+      verified live** — see the STATE block at the top of this card for the measured table. The shape
+      is now frozen in that form. What remains is telling the consumers (a reply on #8 and #9).
 
 ## Still open
 

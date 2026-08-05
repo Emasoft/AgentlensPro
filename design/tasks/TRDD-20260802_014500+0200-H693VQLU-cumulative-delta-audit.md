@@ -1,10 +1,10 @@
 ---
 trdd-id: H693VQLU
 title: Audit every place a CUMULATIVE field is differenced — baseline and gap
-column: todo
+column: human_review
 created: 2026-08-02T01:45:00+0200
-updated: 2026-08-02T01:45:00+0200
-current-owner: unassigned
+updated: 2026-08-05T04:34:15+0200
+current-owner: session
 task-type: audit
 npt: []
 eht: []
@@ -38,11 +38,58 @@ result as one interval's activity. Known candidate surfaces (verify, do not assu
 
 ## Acceptance
 
-- [ ] A list of every differencing site with file:line, and for each: does it establish a BASELINE on
+- [x] A list of every differencing site with file:line, and for each: does it establish a BASELINE on
       first observation, and does it bound or surface the GAP?
 - [ ] Every site that fails either check is fixed or has a written reason it cannot be wrong.
 - [ ] Each fix carries a regression test **verified to fail** against the unfixed version.
-- [ ] `.claude/project/memory/cumulative-vs-per-turn-fields.md` updated with anything the audit adds.
+- [x] `.claude/project/memory/cumulative-vs-per-turn-fields.md` updated with anything the audit adds.
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-05
+
+**AUDIT DONE. ONE FINDING, NOT YET FIXED — the fix changes burn numbers, so it wants your call.**
+Full site table with every verdict:
+`reports/cumulative-delta-audit/20260805_043236+0200-differencing-sites.md`.
+
+**The surface is far smaller than the card assumed.** Almost every `totalCostUsd`-shaped identifier
+in this codebase is one of OUR OWN AGGREGATES (a sum over a scan), which is safe by construction.
+**Exactly three** sites difference a genuinely cumulative observation:
+
+| # | site | BASELINE | GAP | verdict |
+|---|---|---|---|---|
+| 1 | `src/statuslineUsage.ts:203-215` | **YES** (`firstSampleOfSession ? 0 : …`, plus a `Math.max(0, …)` clamp for a restart regression) | delegated downstream, documented | **PASS** |
+| 2 | `src/cli/statuslineHistoryCli.ts:419-423` (`peaks`) | N/A — SQL `lag()` is NULL on row 1, so no phantom baseline exists | **YES** — `gap_s`/`span` beside the delta | **PASS** |
+| 3 | `src/burnMonitor.ts:315-323` | inherited | **PARTIAL** | **FAILS on one branch** |
+
+**Four of the six named candidate surfaces are NEGATIVE, verified file by file, not assumed:**
+`subscriptionUsage.ts` and `accountStateTimeline.ts` subtract only TIMESTAMPS (durations — both
+observations are real, so neither rule applies), and `countCache.ts` / `exactTokens.ts` contain
+**zero** arithmetic subtractions. The dashboard (`media/src/**`) sums across DISTINCT sessions and
+takes one average; it computes no cross-time delta at all.
+
+**THE FINDING — it is not a missing check, it is a check that lives in the OTHER file.**
+`statuslineUsage.ts:200-202` justifies suppressing its first delta *because* "burnMonitor.
+statuslineCostUsd prices a turn from its own buckets whenever the model is known and falls back to
+this delta only otherwise." That `otherwise` is `burnMonitor.ts:315-323`, which returns the raw
+cumulative `be.deltaCostUsd` when the model is unknown **and** when `calcTokenCostUsd` yields 0.
+`pricing.ts:195-196` is `if (!rates) return 0` — **any model id not in the table returns 0, not an
+error**. So on that branch a cumulative delta is used as a turn cost, gap-unaware, unmarked. Using
+the cumulative delta is what spiked the rolling $/hr **~4×** (burnMonitor's own measurement).
+
+**It fires the day a NEW MODEL SHIPS** and is not yet in `pricing.ts` — exactly when burn is watched
+hardest — and it fails silently, upward.
+
+**NEXT ACTION — one decision from you, then I implement it immediately.** Carry the sampling
+interval on the event and have the fallback branches label the value an INTERVAL total rather than a
+turn cost. Site 2 already proves the shape (`gap_s` beside the delta), and it preserves "never lose
+cost", which is the stated reason the fallback exists. I did not apply it unreviewed because it
+changes burn numbers. The regression test ships with it and gets falsified against the unfixed code:
+one session, two samples straddling an idle gap, an unpriced model id — today the event's cost is
+the whole gap's spend presented as one turn.
+
+**Worth wiring in separately (the card's closing note, now concrete):** the contradiction detector is
+mechanical — any emitted `(costUsd, tokens)` pair implying a $/MTok outside the pricing table's
+range is wrong without knowing which figure is wrong. Dearest rate today is $25/MTok. That assertion
+would have caught the $2,097.68 bug at the source instead of by eye.
 
 ## Method
 

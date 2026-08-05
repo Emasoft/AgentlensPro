@@ -4,6 +4,7 @@
 
 import * as fs from 'fs'
 import * as path from 'path'
+import { strArg } from './argHelpers'
 import { FACETS, gatherAll, resolveFacet } from '../environment'
 import type { EnvFacet } from '../environment/types'
 
@@ -42,8 +43,13 @@ function parse(argv: string[]): ParsedArgs {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--json') p.json = true
-    else if (a === '--out') p.out = argv[++i] ?? null
-    else if (a.startsWith('--out=')) p.out = a.slice('--out='.length)
+    // Both spellings validate. `?? null` silently DROPPED the request twice over: `--out` as the last
+    // token wrote nothing and printed the report to stdout with exit 0 (a request not fulfilled,
+    // reported as success), and `--out --json` wrote a file literally named "--json" while swallowing
+    // the --json that was asked for. `--out=` with an empty value is the same silent drop; strArg
+    // rejects the empty string too. Both measured before this fix.
+    else if (a === '--out') p.out = strArg(argv[++i], '--out', 'a path')
+    else if (a.startsWith('--out=')) p.out = strArg(a.slice('--out='.length), '--out=', 'a path')
     else if (a === 'list' || a === '--list') p.list = true
     else if (!a.startsWith('-') && p.facet === null) p.facet = a
   }

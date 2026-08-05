@@ -586,7 +586,11 @@ suite('cacheCreationForensics — real machine data', () => {
   test('scans the REAL OTEL bodies directory without crashing and reports honest coverage', async function () {
     if (!fs.existsSync(defaultBodiesDir())) { this.skip(); return }
     this.timeout(60_000)
-    const report = await buildCacheCreationReport({ windowHours: 5 })
+    // scanCap bounds the cost: this directory is a LIVE capture that grows all day (measured
+    // 1,377 → 5,467 files in one evening), so an uncapped scan makes this test's runtime a
+    // function of the user's traffic — it passed for weeks, then blew its timeout with no code
+    // change. Coverage stays honest either way: the report says when it sampled.
+    const report = await buildCacheCreationReport({ windowHours: 5, scanCap: 300 })
     assert.ok(report.coverage.dirExists)
     assert.ok(report.coverage.note.length > 0)
     assert.ok(report.totalCacheCreateTokens >= 0)

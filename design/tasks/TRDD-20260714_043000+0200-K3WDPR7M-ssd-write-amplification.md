@@ -1,9 +1,9 @@
 ---
 trdd-id: K3WDPR7M
 title: SSD write amplification — raw OTEL bodies rewrite the whole conversation every turn; move the body store to a fileless-DuckDB to immutable-Parquet loop
-column: todo
+column: human_review
 created: 2026-07-14T04:30:00+0200
-updated: 2026-08-02T11:36:14+0200
+updated: 2026-08-05T06:48:15+0200
 current-owner: main
 task-type: bugfix
 severity: critical
@@ -12,7 +12,45 @@ npt: []
 eht: []
 ---
 
-## ⏵ STATE — 2026-07-16 17:26 — RECONCILIATION: Phase 6 RESOLVED by X2E6OSWK; Phase 3 premise DOWNGRADED; Phase 4 burn-half already landed
+## ⏵ STATE — 2026-08-05 06:48 — THE "DEAD PATH" IS LIVE AND SHIPPED. Item (1) is VOID; nothing here is pullable.
+
+**Supersedes the 2026-07-16 block below on ONE point, and it is the dangerous one.** That block's
+"genuinely open, in order" list opens with *"(1) forensics fold + loadSpawnMap (dead-path chores,
+low priority)"*, resting on `openForensicsDb has 0 prod callers — dead path`.
+
+**That is FALSE as of today, and acting on it would have DELETED LIVE, SHIPPED CODE.** Verified
+first-hand just now, not inferred:
+
+| check | result |
+|---|---|
+| `openForensicsDb` callers | `src/forensicsIndex.ts:522`, `:576` — production, not tests |
+| `loadSpawnMap` callers | `src/forensicsIndex.ts:526` — production |
+| who imports `forensicsIndex` | `src/mcpServer.ts:91` (`ensureFreshIndex`) |
+| is it CALLED, not just imported | yes — `src/mcpServer.ts:3764` and `:3773` |
+| in the shipped bundle | `standalone/server.js`: `openForensicsDb` ×3, `loadSpawnMap` ×2 |
+| does the path run | `~/.agentlens/forensics.db` exists, **20,525,056 bytes** |
+
+Whether the claim held on 2026-07-16 is unknowable and beside the point: `ensureFreshIndex` has been
+wired into `mcpServer` since, so **the card went stale and its stale part was an instruction to
+delete something**. This project's Step-0 rule is "Delete Before You Build", which makes a
+three-week-old "this is dead, remove it" note actively hazardous — the one class of stale claim that
+destroys work rather than merely wasting time. **A "dead code" assertion must be re-verified at the
+moment of deletion, never trusted from a card.**
+
+**What is actually left, and none of it is pullable:**
+- ~~(1) forensics fold + `loadSpawnMap`~~ — **VOID**, premise false (above).
+- (2) conditional RAM-disk spool — explicitly conditional ("only if capture-on is ever recommended"),
+  so there is no work until that condition holds.
+- (3) **USER-GATED**: disposal of `store.old-v0` (270 MB) + `spans.json.bak*` (182 MB), and branch
+  pushes. RULE-0 territory and the user's call, not an agent's.
+
+Column moved `todo` → `human_review` accordingly: `todo` advertises work an agent can pick up, and
+after voiding (1) there is none. Same correction applied to 06Q5AXYN, CXPLAT01 and A4BA8IU5 today.
+
+(Superseded 2026-07-16 block, kept for lineage — its Phase 3/4/6 findings stand; only the dead-path
+claim is retracted:)
+
+## ⏵ STATE (superseded on the dead-path point) — 2026-07-16 17:26 — RECONCILIATION: Phase 6 RESOLVED by X2E6OSWK; Phase 3 premise DOWNGRADED; Phase 4 burn-half already landed
 
 **Supersedes the ~21:40 block's NEXT-ACTIONS list below (items c/e resolved; a re-scoped).**
 

@@ -4,7 +4,8 @@ import * as os from 'os'
 import * as path from 'path'
 import {
   extractTurnPrefix, classifyCacheBreak, buildCacheBreakTimeline, buildCauseCostPeakReport, formatTimeline,
-  defaultBodiesDir, type RawRequestForBreak, type BreakTiming,
+  defaultBodiesDir, CACHE_BREAK_REMEDIATION, EXPECTED_CAUSES,
+  type RawRequestForBreak, type BreakTiming,
 } from '../cacheBreakTimeline'
 
 // TRDD-6TQ2FBUR — REAL tests for the cache-break ROOT-CAUSE timeline. The classifier tests build a
@@ -58,10 +59,9 @@ suite('cacheBreakTimeline — classifyCacheBreak (one synthetic before/after per
     assert.strictEqual(v.culpritLayer, 'model')
   })
 
-  test('EFFORT_SWITCH — extended-thinking setting changed', () => {
-    const v = classify(reqBody({ thinking: { type: 'adaptive' } }), reqBody({ thinking: { type: 'enabled', budget_tokens: 10000 } }))
-    assert.strictEqual(v.cause, 'EFFORT_SWITCH')
-  })
+  // The extended-thinking case moved to its own documented cause (THINKING_CONFIG_CHANGED) in
+  // TRDD-B9ERTBZ9 — see that suite. EFFORT_SWITCH is now the residual for a request parameter with
+  // no specific detector (today: `speed` / fast mode), so it is tested there too.
 
   test('TOOLSET_CHANGED — a non-deferred non-MCP tool added', () => {
     const prev = reqBody({ tools: [{ name: 'Bash' }, { name: 'Read' }] })
@@ -209,6 +209,200 @@ suite('cacheBreakTimeline — classifyCacheBreak (one synthetic before/after per
     const cur = reqBody({ tools: [{ name: 'Bash' }, { name: 'Write' }] })
     const v = classify(prev, cur, { gapMs: 5 * 60_000, cacheReadTokens: 10_000, cacheCreateTokens: 200_000, ephemeral5mTokens: 200_000, ephemeral1hTokens: 0 })
     assert.strictEqual(v.cause, 'TOOLSET_CHANGED')
+  })
+})
+
+// ── TRDD-B9ERTBZ9 — the documented causes the classifier used to lack ─────────────────────────────
+// Every fixture below reproduces a shape MEASURED in the machine's real captured bodies on
+// 2026-08-04 (1,377 requests in the live spool), with the identity-bearing values replaced by
+// placeholders: the two environment-block spellings (`<env>` for SDK/sub-agent requests,
+// `# Environment` for the CLI), the `gitStatus:` snapshot with its trailing prose, the real
+// `output_config: {effort}` param (present on every sampled request, and invisible to the old
+// classifier), and the 4-of-1,377 requests that carry NO cache_control marker at all.
+// Synthetic-only fixtures were what hid BOTH method errors behind TRDD-V8YOWHVT, so the shapes are
+// real even though the values are not.
+const ENV_SDK = (cwd: string) =>
+  `<env>\nWorking directory: ${cwd}\nIs directory a git repo: Yes\nAdditional working directories: /tmp\nPlatform: darwin\nShell: zsh\nOS Version: Darwin 25.6.0\n</env>\nYou are powered by the model named Opus 5.`
+const ENV_CLI = (cwd: string) =>
+  `# Environment\nYou have been invoked in the following environment: \n - Primary working directory: ${cwd}\n - Is a git repository: true\n - Additional working directories:\n  - /tmp\n - Platform: darwin\n - Shell: zsh\n - OS Version: Darwin 25.6.0\n\n# Scratchpad Directory\n\nIMPORTANT: use the scratchpad.`
+const GIT_BLOCK = (branch: string, sha: string) =>
+  `gitStatus: This is the git status at the start of the conversation. Note that this status is a snapshot in time, and will not update during the conversation.\n\nCurrent branch: ${branch}\n\nMain branch (you will usually use this for PRs): main\n\nGit user: tester\n\nStatus:\n(clean)\n\nRecent commits:\n${sha} feat: the most recent commit subject\n`
+const TRAILING_PROSE = '\nIf you intend to call multiple tools, make all of the independent calls in the same block.'
+
+/** A request whose ONE cache-controlled system block carries the harness prose we are varying. */
+function sysReq(text: string, extra: Partial<RawRequestForBreak> = {}): RawRequestForBreak {
+  return { ...reqBody({ system: [{ text, cache_control: CC }] }), ...extra }
+}
+
+suite('cacheBreakTimeline — TRDD-B9ERTBZ9 documented causes (env / git / params / lookback / minimum)', () => {
+  test('WORKING_DIR_CHANGED — the <env> working directory differs (SDK spelling)', () => {
+    const v = classify(sysReq(ENV_SDK('/Users/tester/proj-alpha')), sysReq(ENV_SDK('/Users/tester/proj-beta')))
+    assert.strictEqual(v.cause, 'WORKING_DIR_CHANGED')
+    assert.strictEqual(v.culpritLayer, 'system')
+  })
+
+  test('WORKING_DIR_CHANGED — the same detector reads the CLI `# Environment` spelling', () => {
+    const v = classify(sysReq(ENV_CLI('/Users/tester/proj-alpha')), sysReq(ENV_CLI('/Users/tester/proj-alpha/.claude/worktrees/wt1')))
+    assert.strictEqual(v.cause, 'WORKING_DIR_CHANGED')
+  })
+
+  test('the env detector does NOT steal a pure timestamp move (SYSTEM_TIMESTAMP still wins)', () => {
+    const a = sysReq(ENV_SDK('/Users/tester/proj-alpha') + "\nToday's date is 2026-08-03")
+    const b = sysReq(ENV_SDK('/Users/tester/proj-alpha') + "\nToday's date is 2026-08-04")
+    assert.strictEqual(classify(a, b).cause, 'SYSTEM_TIMESTAMP')
+  })
+
+  test('GIT_STATE_CHANGED — the startup git snapshot differs (branch + head commit)', () => {
+    const a = sysReq(ENV_SDK('/Users/tester/proj-alpha') + '\n' + GIT_BLOCK('main', 'aaaaaaa'))
+    const b = sysReq(ENV_SDK('/Users/tester/proj-alpha') + '\n' + GIT_BLOCK('feat/x', 'bbbbbbb'))
+    const v = classify(a, b)
+    assert.strictEqual(v.cause, 'GIT_STATE_CHANGED')
+  })
+
+  test('the git region STOPS at the commit list — trailing harness prose is not blamed on git', () => {
+    const git = GIT_BLOCK('main', 'aaaaaaa')
+    const a = sysReq(git + TRAILING_PROSE)
+    const b = sysReq(git + TRAILING_PROSE.replace('multiple tools', 'several tools'))
+    assert.notStrictEqual(classify(a, b).cause, 'GIT_STATE_CHANGED')
+  })
+
+  test('THINKING_CONFIG_CHANGED — two explicit thinking configs differ', () => {
+    const v = classify(reqBody({ thinking: { type: 'adaptive' } }), reqBody({ thinking: { type: 'enabled', budget_tokens: 10000 } }))
+    assert.strictEqual(v.cause, 'THINKING_CONFIG_CHANGED')
+    assert.strictEqual(v.culpritLayer, 'effort')
+  })
+
+  test('EFFORT_PARAM_CHANGED — two explicit output_config.effort values differ', () => {
+    const v = classify(sysReq('stable system prose', { output_config: { effort: 'high' } }),
+      sysReq('stable system prose', { output_config: { effort: 'xhigh' } }))
+    assert.strictEqual(v.cause, 'EFFORT_PARAM_CHANGED')
+  })
+
+  test('EFFORT_PARAM_CHANGED does NOT fire when effort goes absent→explicit (the documented no-op)', () => {
+    // "Setting effort explicitly to the model's default is equivalent to omitting it and does not
+    // invalidate." No page enumerates the per-model defaults, so absent→'high' is UNDECIDABLE — and a
+    // guess here is exactly the false positive this criterion exists to prevent.
+    const v = classify(sysReq('stable system prose'), sysReq('stable system prose', { output_config: { effort: 'high' } }))
+    assert.notStrictEqual(v.cause, 'EFFORT_PARAM_CHANGED')
+  })
+
+  test('TOOL_CHOICE_CHANGED — two explicit tool_choice values differ', () => {
+    const v = classify(sysReq('stable system prose', { tool_choice: { type: 'auto' } }),
+      sysReq('stable system prose', { tool_choice: { type: 'any' } }))
+    assert.strictEqual(v.cause, 'TOOL_CHOICE_CHANGED')
+  })
+
+  test('LOOKBACK_OVERFLOW — unchanged prefix, zero cache_read, ≥20 blocks since the last write', () => {
+    const v = classify(reqBody(), reqBody(), {
+      gapMs: 30_000, cacheReadTokens: 0, cacheCreateTokens: 300_000,
+      ephemeral5mTokens: 300_000, ephemeral1hTokens: 0, blocksAddedSinceLastWrite: 24,
+    })
+    assert.strictEqual(v.cause, 'LOOKBACK_OVERFLOW')
+  })
+
+  test('LOOKBACK_OVERFLOW does NOT replace the honest verdict below the 20-block window', () => {
+    const v = classify(reqBody(), reqBody(), {
+      gapMs: 30_000, cacheReadTokens: 0, cacheCreateTokens: 300_000,
+      ephemeral5mTokens: 300_000, ephemeral1hTokens: 0, blocksAddedSinceLastWrite: 19,
+    })
+    assert.strictEqual(v.cause, 'COLD_START')
+  })
+
+  test('BELOW_MIN_CACHEABLE — markers present, both counters 0, prompt under the model minimum', () => {
+    const cur = extractTurnPrefix(reqBody({ model: 'claude-opus-5' }))
+    assert.ok(cur)
+    const v = classifyCacheBreak(null, cur!, { gapMs: 1000, cacheReadTokens: 0, cacheCreateTokens: 0, ephemeral5mTokens: 0, ephemeral1hTokens: 0 })
+    assert.strictEqual(v.cause, 'BELOW_MIN_CACHEABLE')
+  })
+
+  test('BELOW_MIN_CACHEABLE reads a PER-MODEL minimum — the same prompt is over 512 and under 4,096', () => {
+    // ~2,000 estimated tokens: above Opus 5's 512-token minimum, below Haiku 4.5's 4,096.
+    const filler = 'x'.repeat(8000)
+    const timing = { gapMs: 1000, cacheReadTokens: 0, cacheCreateTokens: 0, ephemeral5mTokens: 0, ephemeral1hTokens: 0 }
+    const opus = extractTurnPrefix(reqBody({ model: 'claude-opus-5', system: [{ text: filler, cache_control: CC }] }))
+    const haiku = extractTurnPrefix(reqBody({ model: 'claude-haiku-4-5-20251001', system: [{ text: filler, cache_control: CC }] }))
+    assert.ok(opus && haiku)
+    assert.notStrictEqual(classifyCacheBreak(null, opus!, timing).cause, 'BELOW_MIN_CACHEABLE')
+    assert.strictEqual(classifyCacheBreak(null, haiku!, timing).cause, 'BELOW_MIN_CACHEABLE')
+  })
+
+  test('CACHING_DISABLED — no cache_control marker anywhere, and no cache activity to show for it', () => {
+    const bare: RawRequestForBreak = {
+      model: 'claude-haiku-4-5-20251001',
+      thinking: { type: 'adaptive' },
+      tools: [],
+      system: [{ type: 'text', text: 'You are a helpful assistant.' }],
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'summarize this' }] }],
+      metadata: { user_id: JSON.stringify({ device_id: 'dev-1', account_uuid: 'acct-1', session_id: 'sess-1' }) },
+    }
+    const cur = extractTurnPrefix(bare)
+    assert.ok(cur)
+    const v = classifyCacheBreak(null, cur!, { cacheReadTokens: 0, cacheCreateTokens: 0, ephemeral5mTokens: 0, ephemeral1hTokens: 0 })
+    // A marker-less request is CACHING_DISABLED even when it is also below the minimum: nothing was
+    // ever offered to the cache, so "the prompt was too small" would name a condition that never applied.
+    assert.strictEqual(v.cause, 'CACHING_DISABLED')
+  })
+
+  // ── TRDD-00NOBU9W — msg[0] is the CONVERSATION's identity, not a mutable block ────────────────
+  // Measured over 2,003 consecutive real turn-pairs: 397 of them diverge FIRST at a `usertext`
+  // segment of msg[0], and every one is a different SUB-AGENT TASK PROMPT ("You are doing a CODE
+  // REVIEW of…", "You are auditing source files…") sharing the parent's session id. Nothing broke —
+  // each stream keeps its own cache — yet the block diff filed them as UNCLASSIFIED and the report
+  // crowned that segment "Dominant AVOIDABLE perpetrator, 23.2%", i.e. told the operator to go fix
+  // something that never happened. The user's own first words are immutable within a conversation;
+  // the FILES injected around them are not, which is why the discriminator is the segment KIND.
+  const AGENT_A = 'You are doing a CODE REVIEW of a diff in the repo /w/proj (a plugin; Rust crate at scripts/x). Get your review scope with: git diff'
+  const AGENT_B = 'You are auditing source files in /w/proj for REAL BUGS. Read each file COMPLETELY (offset/limit chunks for files >2000 lines).'
+
+  test('a DIFFERENT msg[0] task prompt is a different conversation — not an avoidable break', () => {
+    const v = classify(reqBody({ messages: injectedMsg(AGENT_A) }), reqBody({ messages: injectedMsg(AGENT_B) }))
+    assert.strictEqual(v.cause, 'SUBAGENT_INTERLEAVE')
+    assert.ok(EXPECTED_CAUSES.has(v.cause), 'a stream switch must rank as EXPECTED, never as a perpetrator')
+  })
+
+  test('an injected MEMORY file inside msg[0] is still MEMORY_FILE_CHANGED (the 19% cause survives)', () => {
+    const mem = (body: string) => `Contents of /w/.claude/projects/p/memory/MEMORY.md (user's auto-memory, persists across conversations):\n${body}`
+    const v = classify(reqBody({ messages: injectedMsg(mem('- [a](a.md) — one line')) }),
+      reqBody({ messages: injectedMsg(mem('- [a](a.md) — one line\n- [b](b.md) — another')) }))
+    assert.strictEqual(v.cause, 'MEMORY_FILE_CHANGED')
+  })
+
+  test('an injected CLAUDE.md inside msg[0] is still CLAUDE_MD_CHANGED', () => {
+    const md = (body: string) => `Contents of /w/CLAUDE.md (project instructions):\n${body}`
+    const v = classify(reqBody({ messages: injectedMsg(md('rule alpha')) }), reqBody({ messages: injectedMsg(md('rule beta')) }))
+    assert.strictEqual(v.cause, 'CLAUDE_MD_CHANGED')
+  })
+
+  test('a compaction that rewrites msg[0] is still COMPACTION, not a stream switch', () => {
+    const v = classify(reqBody({ messages: injectedMsg(AGENT_A) }),
+      reqBody({ messages: injectedMsg('This session is being continued from a previous conversation that ran out of context. Summary: …') }))
+    assert.strictEqual(v.cause, 'COMPACTION')
+  })
+
+  test('a usertext change at a LATER message is NOT a stream switch — only msg[0] carries identity', () => {
+    const tail = { type: 'text' as const, text: 'stable tail block', cache_control: CC }
+    const msgs = (mid: string): RawRequestForBreak['messages'] => [
+      { role: 'user', content: [{ type: 'text', text: AGENT_A }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'ok' }] },
+      { role: 'user', content: [{ type: 'text', text: mid }, tail] },
+    ]
+    const v = classify(reqBody({ messages: msgs('first follow-up') }), reqBody({ messages: msgs('a different follow-up') }))
+    assert.notStrictEqual(v.cause, 'SUBAGENT_INTERLEAVE')
+  })
+
+  test('every new cause carries a remediation stating its CONDITION, never an absolute', () => {
+    // The lesson from c6802f0: the reload/MCP remediation asserted an unconditional reset that the
+    // docs contradict. A remediation that names no condition is how that error gets re-shipped.
+    const added = [
+      'WORKING_DIR_CHANGED', 'GIT_STATE_CHANGED', 'THINKING_CONFIG_CHANGED', 'EFFORT_PARAM_CHANGED',
+      'TOOL_CHOICE_CHANGED', 'LOOKBACK_OVERFLOW', 'BELOW_MIN_CACHEABLE', 'CACHING_DISABLED',
+    ] as const
+    for (const cause of added) {
+      const text = CACHE_BREAK_REMEDIATION[cause]
+      assert.ok(text && text.length > 40, `${cause} needs a real remediation`)
+      assert.ok(/\bonly\b|\bwhen\b|\bunless\b|\bnever fires\b/i.test(text),
+        `${cause} remediation must state the CONDITION it fires under, not an absolute: ${text}`)
+    }
   })
 })
 
@@ -430,7 +624,11 @@ suite('cacheBreakTimeline — buildCauseCostPeakReport (cross-session cause cost
   test('builds a cause cost-peak report from the REAL OTEL bodies without crashing', async function () {
     if (!fs.existsSync(defaultBodiesDir())) { this.skip(); return }
     this.timeout(120_000)
-    const report = await buildCauseCostPeakReport({ windowHours: 5, minTokens: 50_000 })
+    // scanCap is not decoration: this reads a LIVE capture directory that grows all day (measured
+    // 1,377 → 5,467 files in one evening on this machine), so an uncapped scan is a test whose
+    // runtime is set by how busy the user was — it passed for weeks and then blew a 120 s timeout
+    // with no code change. The cap makes the cost of this test a constant.
+    const report = await buildCauseCostPeakReport({ windowHours: 5, minTokens: 50_000, scanCap: 300 })
     assert.ok(report.coverage.note.length > 0)
     assert.strictEqual(report.groupBy, 'cause')
     for (const g of report.groups) assert.ok(g.key.length > 0)
@@ -510,18 +708,56 @@ suite('cacheBreakTimeline — agent-* child sessions resolve via the subagents t
 suite('cacheBreakTimeline — real machine data', () => {
   // 🐌 slow — scans the real ~/.agentlens/otel-bodies directory (thousands of files). Skips when the
   // directory is absent (CI / a machine that never enabled OTEL_LOG_RAW_API_BODIES).
-  test('builds a timeline from the REAL OTEL bodies without crashing and reports honest coverage', async function () {
+  test('🐌 builds a timeline from the REAL OTEL bodies without crashing and reports honest coverage', async function () {
     if (!fs.existsSync(defaultBodiesDir())) { this.skip(); return }
-    this.timeout(120_000)
-    const report = await buildCacheBreakTimeline({ windowHours: 5, minTokens: 50_000 })
+    // 4 minutes, not 2: this scans every captured body in the window, and on a machine with a live
+    // capture spool it shares the run with the second real-corpus test below. It timed out at 120s
+    // in a full-suite run while passing in 58s alone — a harness bound, not a product property.
+    this.timeout(240_000)
+    // Capped for the same reason as the cost-peak test above: the capture directory is live and
+    // grows all day, so an uncapped scan makes this test's runtime a function of the user's traffic.
+    const report = await buildCacheBreakTimeline({ windowHours: 5, minTokens: 50_000, scanCap: 300 })
     assert.ok(report.coverage.dirExists)
     assert.ok(report.coverage.note.length > 0)
     assert.ok(report.turnsClassified >= 0)
-    // Every event names a cause and its wasted tokens meet the floor.
+    // Every event names a cause and its wasted tokens meet the floor — EXCEPT the two diagnoses whose
+    // whole finding is that the turn was never cached at all (TRDD-B9ERTBZ9). Those carry 0
+    // cache_creation by construction, so a cache_creation floor would drop exactly the turns that pay
+    // the full input rate on every call; they are admitted deliberately.
+    const NO_CACHE_ACTIVITY = new Set(['CACHING_DISABLED', 'BELOW_MIN_CACHEABLE'])
     for (const e of report.events) {
       assert.ok(e.cause.length > 0)
-      assert.ok(e.cacheCreateTokens >= 50_000)
+      if (NO_CACHE_ACTIVITY.has(e.cause)) assert.strictEqual(e.cacheCreateTokens, 0)
+      else assert.ok(e.cacheCreateTokens >= 50_000)
     }
+  })
+
+  // The acceptance criterion that produced TRDD-V8YOWHVT: both method errors there were invisible to
+  // synthetic fixtures. This drives the two region extractors over the machine's REAL captured bodies
+  // and asserts they find the shapes they claim to — a regex that silently matches nothing would keep
+  // every other test green while WORKING_DIR_CHANGED / GIT_STATE_CHANGED became unemittable.
+  test('🐌 the env + git region extractors actually match the REAL captured system prompts', async function () {
+    const dir = defaultBodiesDir()
+    if (!fs.existsSync(dir)) { this.skip(); return }
+    this.timeout(120_000)
+    const files = fs.readdirSync(dir).filter(f => f.endsWith('.request.json')).slice(0, 200)
+    if (files.length === 0) { this.skip(); return }
+    let withEnv = 0, withGit = 0, parsed = 0
+    for (const f of files) {
+      let body: RawRequestForBreak
+      try { body = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf-8')) as RawRequestForBreak } catch { continue }
+      const p = extractTurnPrefix(body)
+      if (!p) continue
+      parsed += 1
+      if (p.envFp) withEnv += 1
+      if (p.gitFp) withGit += 1
+      // POINTER-ONLY: the regions carry an absolute home path and a branch name; only hashes may exist.
+      assert.strictEqual(p.envFp.length === 0 || p.envFp.length === 8, true, 'env region must be kept as a hash')
+      assert.strictEqual(p.gitFp.length === 0 || p.gitFp.length === 8, true, 'git region must be kept as a hash')
+    }
+    assert.ok(parsed > 0, 'no real request body parsed')
+    assert.ok(withEnv > 0, `the environment-block extractor matched none of ${parsed} real requests`)
+    assert.ok(withGit > 0, `the git-snapshot extractor matched none of ${parsed} real requests`)
   })
 })
 

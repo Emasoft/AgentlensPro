@@ -19,6 +19,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { dataDir } from './cliCore'
 import { EXIT as CLI_EXIT } from './cliErrors'
+import { flagValue } from './argHelpers'
 import { queryStatusline, type StatuslineStream } from '../statuslineStore'
 import { calcTokenCostUsd, lookupRates } from '../shared/pricing'
 
@@ -568,12 +569,13 @@ export async function runStatuslineHistoryCli(argv: string[]): Promise<number> {
     console.log(STATUSLINE_HISTORY_USAGE)
     return EXIT.OK
   }
-  const flag = (name: string): string | undefined => {
-    const i = argv.indexOf(name)
-    const v = i >= 0 ? argv[i + 1] : undefined
-    // `--out --json` must not resolve to a file literally named "--json".
-    return v?.startsWith('--') ? undefined : v
-  }
+  // flagValue, not a local helper. The local one returned undefined for a flag-shaped value so that
+  // `--out --json` could not write a file named "--json" — right about the junk file, wrong about how:
+  // it discarded the flag and ran as if it had never been typed. MEASURED: `--session --json` dropped
+  // the filter and returned 14 sessions instead of 1, exit 0, with the JSON reporting no session
+  // filter at all. A missing file is a nuisance; a silently unfiltered answer is a wrong answer.
+  const flag = (name: string, what = 'a value', bareOk = false): string | undefined =>
+    flagValue(argv, name, what, bareOk)
   let viewName = 'sessions'
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
@@ -586,17 +588,23 @@ export async function runStatuslineHistoryCli(argv: string[]): Promise<number> {
     return EXIT.USAGE
   }
 
+  // Read the flag VALUES outside the try: the catch below exists for parseWhenArg's "unparseable
+  // time" and must not also swallow a UsageError from flagValue, or one flag surface would report a
+  // caller mistake as a return code while its siblings throw. Every flag-value refusal here is a
+  // UsageError, which the shim maps to 64 uniformly.
+  const sinceArg = flag('--since', 'an ISO timestamp or a number of hours')
+  const untilArg = flag('--until', 'an ISO timestamp')
   let sinceMs: number | undefined
   let untilMs: number | undefined
   try {
-    sinceMs = parseWhenArg(flag('--since') ?? '24')
-    untilMs = parseWhenArg(flag('--until'))
+    sinceMs = parseWhenArg(sinceArg ?? '24')
+    untilMs = parseWhenArg(untilArg)
   } catch (e) {
     console.error(String((e as Error).message))
     return EXIT.USAGE
   }
-  const limit = Math.max(1, Math.min(Number(flag('--limit')) || 40, 2000))
-  const outFile = flag('--out')
+  const limit = Math.max(1, Math.min(Number(flag('--limit', 'a number')) || 40, 2000))
+  const outFile = flag('--out', 'a path')
   const asJson = argv.includes('--json')
   const root = statuslineRoot()
 
@@ -604,7 +612,7 @@ export async function runStatuslineHistoryCli(argv: string[]): Promise<number> {
   // flag for a caller like the janitor, which runs inside a repo and wants its own picture without
   // knowing a path. Resolved to an absolute real path so a relative arg, a trailing slash, or a
   // symlinked checkout all match the absolute dirs the payload records.
-  const filters: Filters = { session: flag('--session') }
+  const filters: Filters = { session: flag('--session', 'a session id') }
   const wantsProject = argv.includes('--project')
   // The `project` view IMPLIES its own scope — the name is the contract, and a caller running
   // `statusline-history project` from inside a repo means "this repo". Skipped when --session
@@ -612,7 +620,9 @@ export async function runStatuslineHistoryCli(argv: string[]): Promise<number> {
   // an unrequested project predicate on top could return zero rows for a session that exists.
   const impliedProject = viewName === 'project' && !wantsProject && !filters.session
   if (wantsProject || impliedProject) {
-    const given = wantsProject ? flag('--project') : undefined
+    // bareOk: `--project` alone is the DOCUMENTED spelling for "the directory I am in", so
+    // `--project --json` is correct usage and must not be refused the way `--session --json` is.
+    const given = wantsProject ? flag('--project', 'a directory', true) : undefined
     try { filters.project = fs.realpathSync(path.resolve(given ?? process.cwd())) } catch {
       console.error(`no such project directory: ${given ?? process.cwd()}`)
       return EXIT.USAGE

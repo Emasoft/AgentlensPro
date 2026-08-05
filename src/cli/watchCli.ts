@@ -29,7 +29,9 @@
 // earlier shape had the gate allow `--metric cost --mode since --since <past>` while the
 // reconstruction path threw on it — validation and capability must not be able to disagree.
 
-import { init, callTool, sleep } from './cliCore'
+// nextSleepMs lives in cliCore beside `sleep`: `budget` needs the identical deadline arithmetic and
+// got it wrong the identical way, and two copies of that is how one of them stops trimming.
+import { init, callTool, sleep, nextSleepMs } from './cliCore'
 import { LineLog, clampFlushMs, DEFAULT_FLUSH_MS } from './lineLog'
 import { numArg, strArg, clamp } from './argHelpers'
 import { UsageError, EXIT } from './cliErrors'
@@ -98,7 +100,19 @@ export const METRICS: MetricDef[] = [
   { name: 'cost-per-min', scope: 'account', unit: 'usd', isRate: true, describe: 'account burn in USD/min', read: p => n(p.fiveHour?.costPerMin) },
   {
     name: 'tokens-per-min', scope: 'machine', unit: 'tokens', isRate: true, describe: 'machine-wide live burn in tokens/min',
-    read: p => (p.accountWindows?.length ? p.accountWindows.reduce((a, w) => a + (w.fiveMinTokensPerMin || 0), 0) : null),
+    // Sum only the windows that actually CARRY a number, and answer null when none do.
+    //
+    // The previous `reduce((a, w) => a + (w.fiveMinTokensPerMin || 0), 0)` guarded the empty ARRAY
+    // but not an array of windows carrying no rate: those summed to a measured **0**, and a NaN did
+    // too (`NaN || 0` is 0). MEASURED: read({accountWindows: [{}, {}]}) returned 0.
+    //
+    // That is the one thing `n()` above exists to prevent, and it matters most here: for a burn
+    // watcher 0/min reads as "nothing is burning", so a blind feed looked QUIET — and the watch
+    // loop's `blind` transition line, which exists to say precisely that, could never fire.
+    read: p => {
+      const vals = (p.accountWindows ?? []).map(w => n(w.fiveMinTokensPerMin)).filter((v): v is number => v !== null)
+      return vals.length ? vals.reduce((a, b) => a + b, 0) : null
+    },
   },
   { name: 'active-sessions', scope: 'machine', unit: 'count', describe: 'sessions receiving turns right now', read: p => n(p.activeSessions) },
 ]
@@ -429,11 +443,15 @@ export async function runWatchLoop(o: WatchOptions, emit: Emit): Promise<number>
   const deadline = o.forMinutes > 0 ? t0 + o.forMinutes * 60_000 : Infinity
   for (;;) {
     if (Date.now() >= deadline) {
-      emit(`[watch] watch window elapsed (${o.forMinutes}m) — stopping`,
-        { event: 'elapsed', metric: m.name, forMinutes: o.forMinutes })
+      // Report the ACTUAL elapsed time next to the requested one. They now agree to within a tick,
+      // but printing only the request is what let a 15-minute run describe itself as a 1-minute one,
+      // and a reader has no other way to tell the two apart.
+      const elapsedMs = Date.now() - t0
+      emit(`[watch] watch window elapsed (${o.forMinutes}m requested, ${fmtDur(elapsedMs)} actual) — stopping`,
+        { event: 'elapsed', metric: m.name, forMinutes: o.forMinutes, elapsedMs })
       return EXIT.OK
     }
-    await sleep(o.intervalSec * 1000)
+    await sleep(nextSleepMs(Date.now(), deadline, o.intervalSec * 1000))
 
     let value: number | null
     try {

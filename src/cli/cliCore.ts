@@ -43,11 +43,65 @@ export function claudeSettingsPath(): string {
 
 export const sleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms))
 
+/** How long a polling loop should sleep before its next tick: the poll interval, or whatever is left
+ *  until its deadline when that is shorter.
+ *
+ *  Lives beside `sleep` because BOTH long-lived watchers got this wrong in the same way. Sleeping the
+ *  full interval unconditionally means the loop can only notice its deadline on an interval boundary,
+ *  so it overruns by up to one whole interval — and both then reported the REQUESTED duration, which
+ *  is what made the overrun invisible. MEASURED: `watch --for 1 --interval 900` ran ~15 minutes and
+ *  printed "elapsed (1m)"; `budget --minutes 0.25 --watch 30` took 33 s for a 15 s window.
+ *
+ *  A deadline that is not a deadline is worse than none, because a harness sizes its own timeout
+ *  around it. `deadlineMs` is Infinity when no deadline was set, which yields the plain interval. */
+export function nextSleepMs(nowMs: number, deadlineMs: number, intervalMs: number): number {
+  return Math.max(0, Math.min(intervalMs, deadlineMs - nowMs))
+}
+
 export const fmtGb = (b: number): string => `${(b / 1024 ** 3).toFixed(2)}GB`
 export const fmtMb = (b: number): string => `${(b / 1048576).toFixed(1)}MB`
 
 interface JsonRpcError { code?: number; message?: string }
 interface JsonRpcResponse { error?: JsonRpcError; result?: unknown }
+
+/** How long to wait for the TCP CONNECT before giving up. Deliberately bounds the CONNECT and not
+ *  the response: a legitimate call can take a long time SERVER-side (`ctxvis` spawns an agent and
+ *  measures two of its turns), so an idle-socket timeout would kill correct work, while an
+ *  unanswered connect is never anything but a dead endpoint.
+ *
+ *  MEASURED, and this is why it exists: with no bound at all, `agentlenspro cache-expired` took
+ *  **75 seconds** against an address that DROPS — the OS connect timeout — on a verb documented to
+ *  answer with the server down. The hand-fix that bounded `hook`/`gate`/`statusline` (TRDD-E8XIC2PM)
+ *  covered a different transport; everything on this one was still unbounded, which the latency
+ *  guard caught on its first run. A closed port REFUSES instantly and hides this completely. */
+const CONNECT_TIMEOUT_MS = Math.max(200, Number(process.env.AGENTLENS_CONNECT_TIMEOUT_MS) || 800)
+
+/** Arm a connect deadline on an in-flight request. Cleared the moment the socket connects or the
+ *  response starts; on expiry the request is destroyed with a precise reason, so the caller gets a
+ *  fail-fast error instead of a process that looks wedged. Returns the clear function. */
+function armConnectDeadline(req: http.ClientRequest, endpoint: string): () => void {
+  const timer = setTimeout(() => {
+    req.destroy(new Error(
+      `no connection to ${endpoint} within ${CONNECT_TIMEOUT_MS}ms — the address is not answering ` +
+      '(a DROP, not a refusal); raise AGENTLENS_CONNECT_TIMEOUT_MS if this endpoint is simply slow to accept'
+    ))
+  }, CONNECT_TIMEOUT_MS)
+  timer.unref?.()
+  const clear = () => clearTimeout(timer)
+  req.on('socket', s => {
+    // `connecting` is the ONLY reliable test. Waiting for the 'connect' event alone silently turns
+    // this into a RESPONSE deadline — the very thing this must not be — because a socket that is
+    // already established (agent pool reuse, or one assigned after connecting) never emits it.
+    // MEASURED when it was wrong: TCP connect to a live, listening server took 1 ms and the request
+    // was still destroyed at 800 ms, because the loaded server took longer than that to REPLY. Every
+    // diagnostics verb would have failed against a busy-but-healthy server.
+    if (!s.connecting) { clear(); return }
+    s.once('connect', clear)
+  })
+  req.on('response', clear)
+  req.on('error', clear)
+  return clear
+}
 
 /** One JSON-RPC call over the server's Streamable-HTTP MCP transport. */
 export function rpc(method: string, params: unknown): Promise<unknown> {
@@ -85,6 +139,7 @@ export function rpc(method: string, params: unknown): Promise<unknown> {
         }
       })
     })
+    armConnectDeadline(req, mcpEndpoint())
     req.on('error', e => reject(new Error(`cannot reach ${mcpEndpoint()}: ${e.message}`)))
     req.write(body)
     req.end()
@@ -176,6 +231,8 @@ export function apiRequest(method: string, apiPath: string, payload?: unknown): 
         } catch { reject(new Error(`bad response (${res.statusCode}): ${raw.slice(0, 200)}`)) }
       })
     })
+    // Same unbounded-connect exposure as rpc() above — same bound, for the same reason.
+    armConnectDeadline(req, uiBaseUrl())
     req.on('error', e => reject(new Error(`server unreachable at ${uiBaseUrl()}: ${e.message}`)))
     if (body) req.write(body)
     req.end()
