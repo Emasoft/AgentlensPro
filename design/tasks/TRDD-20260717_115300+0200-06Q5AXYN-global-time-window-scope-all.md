@@ -1,9 +1,9 @@
 ---
 trdd-id: 06Q5AXYN
 title: Global time-window — scope every list, stat, and chart to the picker
-column: todo
+column: human_review
 created: 2026-07-17T11:53:00+0200
-updated: 2026-08-02T11:36:14+0200
+updated: 2026-08-05T06:03:10+0200
 current-owner: main
 task-type: feature
 relevant-rules: []
@@ -106,3 +106,18 @@ presets.
   working the card right now, and that was false for 16 days — an untrue column hides the stall
   from the only view anyone checks, so the card is queued honestly instead. No work was undone and
   no scope changed; pick it up from the STATE block's phase list.
+- 2026-08-05 — Column `todo` → `human_review`, **and the entry above is CORRECTED, not removed.**
+  Its premise was false: "phases 4-5 are real remaining work that nobody has touched" — but **phase 4
+  was already committed as `3c2a757` on 2026-07-17**, sixteen days BEFORE that audit, and phase 5 is
+  explicitly folded into the per-phase gates by the STATE block. Verified first-hand just now rather
+  than taken from either text: all four cited commits resolve (`a0d0eaf` P1, `5f9b2f5` P2, `3c2a757`
+  P4, `aed5642` P3) and both `sessionInWindow` and `entryBeforeWindow` are present in
+  `src/shared/timeWindow.ts`. The STATE block was right and the audit entry was wrong; the TRDD rule
+  that the STATE block wins on disagreement is what resolved it.
+
+  **Consequence for the board:** this card has **no pullable work**. Its only open item is a decision
+  that is the USER's by construction — whether to restore the dead `Cost()` tab's 30-day/lifetime
+  cost history as a live, windowed view, or leave it absent. `todo` advertises work an agent can pick
+  up, so it was untrue in the opposite direction: the previous audit moved the card out of a column
+  that overstated activity into one that overstated availability. Nothing was implemented or reverted
+  here — only the column and this record.
