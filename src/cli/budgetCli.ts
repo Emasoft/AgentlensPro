@@ -12,8 +12,7 @@
 // weighted ~0.1x), so a token-based projection is wrong. That arithmetic lives in the
 // get_window_eta tool; this command only decides and reports.
 
-import { init, callTool } from './cliCore'
-import { sleep } from './cliCore'
+import { init, callTool, sleep, nextSleepMs } from './cliCore'
 import { getSubscriptionUsage, type SubscriptionUsage } from '../subscriptionUsage'
 import { fetchBurnRisk } from './diagnosticsCli'
 import { LineLog, clampFlushMs, DEFAULT_FLUSH_MS } from './lineLog'
@@ -152,8 +151,14 @@ export function applyOfficial(
 }
 
 /** The line printed alongside every verdict: what Anthropic says, for WHICH account, and how much
- *  that statement can be trusted. Never silently omitted — an absent line would read as agreement. */
-export function officialLine(u: SubscriptionUsage | null, windowKey: string): string {
+ *  that statement can be trusted. Never silently omitted — an absent line would read as agreement.
+ *
+ *  `windowKey` is OPTIONAL because at arm time the binding window is not known yet: it comes from the
+ *  ETA payload, which the first poll fetches. The arm line used to pass a hardcoded '7d' for
+ *  `--window binding`, so it announced "binding for 7d" while every verdict line that followed could
+ *  be about 5h. Omitting the note is the honest form — the buckets are all still listed, and the
+ *  per-verdict lines name the one that binds once it IS resolved. */
+export function officialLine(u: SubscriptionUsage | null, windowKey?: string): string {
   if (!u) return '[budget] official usage: UNAVAILABLE (no readable credential) — verdict rests on the local projection alone'
   const who = u.accountLabel ?? u.accountUuid?.slice(0, 8) ?? 'unidentified account'
   if (u.stale || u.accountVerified !== 'yes') {
@@ -167,7 +172,7 @@ export function officialLine(u: SubscriptionUsage | null, windowKey: string): st
   // the verdict is never left for the reader to infer.
   const all = [...officialBuckets(u, '5h'), ...officialBuckets(u, '7d')]
   const shown = all.length ? all.map(b => `${b.label} ${b.pct}%`).join(' · ') : 'no buckets reported'
-  const bind = officialBinding(u, windowKey)
+  const bind = windowKey ? officialBinding(u, windowKey) : null
   const bindNote = bind ? ` — binding for ${windowKey}: ${bind.label} ${bind.pct}%` : ''
   return `[budget] official usage (${who}): ${shown}${bindNote} [Anthropic's own numbers, live]`
 }
@@ -180,10 +185,30 @@ export function fmtMin(min: number): string {
 
 /** Resolve which window binds. `binding` follows the payload's own choice, which is the string
  *  "5h" | "7d" — NOT an object; reading it as one silently yields undefined and would make every
- *  run look unprojectable. */
-export function pickWindow(p: EtaPayload, want: string): { key: string; win: EtaWindow | undefined } {
-  const key = want === 'binding' ? (p.bindingWindow || '5h') : want
-  return { key, win: key === '7d' ? p.sevenDay : p.fiveHour }
+ *  run look unprojectable.
+ *
+ *  THE KEY MUST ALWAYS NAME A REAL WINDOW, and that is not a style point. `bindingWindow` has a
+ *  THIRD documented value — `'none'`, meaning neither window is projected to exhaust (src/windowEta.ts
+ *  types it `'5h' | '7d' | 'none'`) — and `'none'` is truthy, so it sailed past the `|| '5h'` fallback
+ *  and became the key. Two consumers then resolved that same key by DIFFERENT rules:
+ *    - here, `key === '7d' ? sevenDay : fiveHour` → the projection read the **5h** window;
+ *    - officialBuckets(), whose test is `key === '5h' ? session : startsWith('weekly')` → the
+ *      account cross-check read the **7d** buckets.
+ *  One verdict, two windows, and "none" printed to the operator as if it were a window name.
+ *
+ *  MEASURED on this machine: 5h at 81% and 7d at 31%. The projection ran on 5h, applyOfficial was
+ *  handed 31%, and the `pct >= 80 → TIGHT` downgrade therefore never fired — the exact shape of the
+ *  incident this file's officialBuckets comment was written about, one layer down.
+ *
+ *  `note` is returned rather than swallowed: "nothing is projected to exhaust" is real information,
+ *  and defaulting to 5h silently would hide that the choice was ours and not the payload's. */
+export function pickWindow(p: EtaPayload, want: string): { key: string; win: EtaWindow | undefined; note?: string } {
+  if (want !== 'binding') return { key: want, win: want === '7d' ? p.sevenDay : p.fiveHour }
+  const b = p.bindingWindow
+  if (b === '5h' || b === '7d') return { key: b, win: b === '7d' ? p.sevenDay : p.fiveHour }
+  // 'none', absent, or anything unrecognised. 5h is the conservative default: it is the faster-moving
+  // window, so it is the one that can turn a GO into a NO-GO inside a single run.
+  return { key: '5h', win: p.fiveHour, note: 'no window is projected to exhaust; checking 5h' }
 }
 
 export interface BudgetOptions {
@@ -322,14 +347,20 @@ async function runWatch(o: BudgetOptions, say: Say): Promise<number> {
   const t0 = Date.now()
   const deadline = t0 + o.minutes * 60_000
   say(`[budget] armed — ${fmtMin(o.minutes)} run vs the ${o.window} window, margin ${o.margin}x, polling every ${o.intervalSec}s (silent unless the verdict changes)`)
-  say(officialLine(await fetchOfficial(), o.window === 'binding' ? '7d' : o.window))
+  // No window key at arm time: with `--window binding` it is not resolved until the first poll reads
+  // the ETA payload, and asserting one here announced a binding window that later lines contradicted.
+  say(officialLine(await fetchOfficial(), o.window === 'binding' ? undefined : o.window))
   let lastVerdict: BudgetVerdict | null = null
   let down = false
   const riskActive = new Set<string>()
+  const riskState = { down: false }
   for (;;) {
     const remainingMin = (deadline - Date.now()) / 60_000
     if (remainingMin <= 0) {
-      say(`[budget] run window elapsed (${fmtMin(o.minutes)}) — watch complete, never went NO-GO`)
+      // The ACTUAL elapsed time beside the requested one. They now agree to within a tick, but
+      // printing only the request is what let a 33 s run describe itself as a 15 s one.
+      const elapsedMin = (Date.now() - t0) / 60_000
+      say(`[budget] run window elapsed (${fmtMin(o.minutes)} requested, ${fmtMin(elapsedMin)} actual) — watch complete, never went NO-GO`)
       return BUDGET_EXIT.GO
     }
     try {
@@ -358,22 +389,35 @@ async function runWatch(o: BudgetOptions, say: Say): Promise<number> {
     } catch (e) {
       if (!down) { say(`[budget] server unreachable: ${(e as Error).message} — still watching, NOT aborting`); down = true }
     }
-    if (o.withRisks) await emitRiskTransitions(riskActive, say)
-    await sleep(o.intervalSec * 1000)
+    if (o.withRisks) await emitRiskTransitions(riskActive, say, riskState)
+    // Trimmed to the run's own deadline: a full interval here meant the watch outlived the run by up
+    // to 15 minutes before reporting completion, and a harness waiting on this child waits with it.
+    await sleep(nextSleepMs(Date.now(), deadline, o.intervalSec * 1000))
   }
 }
 
 /** Fold the realtime burn guard into the same stdout stream so one Monitor covers both. Same
  *  transition-only contract as `--guard`; a risk feed failure is swallowed because the budget
  *  verdict is the load-bearing signal here and must not be lost to a risk-endpoint hiccup. */
-async function emitRiskTransitions(active: Set<string>, say: Say): Promise<void> {
+export async function emitRiskTransitions(active: Set<string>, say: Say, st: { down: boolean }): Promise<void> {
   try {
     const rep = await fetchBurnRisk()
+    if (st.down) { say('[burn-guard] risk feed back — resuming'); st.down = false }
     for (const r of rep.risks || []) {
       if (r.active && !active.has(r.code)) { say(`[burn-guard] ${r.code}: ${r.detail}`); active.add(r.code) }
       else if (!r.active && active.has(r.code)) { say(`[burn-guard] ${r.code} cleared`); active.delete(r.code) }
     }
-  } catch { /* risk feed is advisory here — the budget verdict above is the signal that matters */ }
+  } catch (e) {
+    // Swallowing the failure entirely was wrong in the way this whole file warns about: a caller
+    // who passed --with-risks and gets NOTHING reads it as "no burn risks", which is the one
+    // conclusion the silence cannot support. MEASURED against a dead risk endpoint: zero
+    // [burn-guard] lines over a full watch and no indication the feed had failed at all.
+    //
+    // Reported ONCE per outage, exactly like the budget feed's own `down` flag — the verdict is
+    // still the load-bearing signal and must not be lost to a risk-endpoint hiccup, but "I cannot
+    // see" and "there is nothing to see" must never render identically.
+    if (!st.down) { say(`[burn-guard] risk feed unavailable: ${(e as Error).message} — budget verdicts continue`); st.down = true }
+  }
 }
 
 export async function runBudgetCli(argv: string[]): Promise<number> {

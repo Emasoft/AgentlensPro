@@ -29,7 +29,9 @@
 // earlier shape had the gate allow `--metric cost --mode since --since <past>` while the
 // reconstruction path threw on it — validation and capability must not be able to disagree.
 
-import { init, callTool, sleep } from './cliCore'
+// nextSleepMs lives in cliCore beside `sleep`: `budget` needs the identical deadline arithmetic and
+// got it wrong the identical way, and two copies of that is how one of them stops trimming.
+import { init, callTool, sleep, nextSleepMs } from './cliCore'
 import { LineLog, clampFlushMs, DEFAULT_FLUSH_MS } from './lineLog'
 import { numArg, strArg, clamp } from './argHelpers'
 import { UsageError, EXIT } from './cliErrors'
@@ -397,20 +399,6 @@ export function projectSample(
   const minutes = (nowMs - prev.at) / 60_000
   if (minutes <= 0) return 0               // two samples at the same instant carry no rate
   return (value - prev.v) / minutes
-}
-
-/** How long to sleep before the next poll: the poll interval, or whatever is left of the `--for`
- *  window when that is shorter.
- *
- *  Sleeping the full interval unconditionally made `--for` overshoot by up to one whole interval AND
- *  take one more sample — with its alerts — after the window had closed, while the stop line reported
- *  the REQUESTED duration. `--for 1 --interval 900` therefore ran for 15 minutes and printed
- *  "watch window elapsed (1m)". A deadline that is not a deadline is worse than no deadline, because
- *  a harness sizes its own timeout around it.
- *
- *  `deadlineMs` is Infinity when --for was not given, which yields the plain interval. */
-export function nextSleepMs(nowMs: number, deadlineMs: number, intervalMs: number): number {
-  return Math.max(0, Math.min(intervalMs, deadlineMs - nowMs))
 }
 
 export async function runWatchLoop(o: WatchOptions, emit: Emit): Promise<number> {

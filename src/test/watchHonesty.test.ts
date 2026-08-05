@@ -1,5 +1,7 @@
 import * as assert from 'assert'
-import { findMetric, nextSleepMs, DEFAULT_INTERVAL_SEC } from '../cli/watchCli'
+import { findMetric, DEFAULT_INTERVAL_SEC } from '../cli/watchCli'
+// nextSleepMs moved to cliCore once `budget` needed the identical arithmetic — one copy, two loops.
+import { nextSleepMs } from '../cli/cliCore'
 
 // TRDD-M8SV6LK5 — two claims watchCli made that it had not established.
 //

@@ -43,6 +43,21 @@ export function claudeSettingsPath(): string {
 
 export const sleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms))
 
+/** How long a polling loop should sleep before its next tick: the poll interval, or whatever is left
+ *  until its deadline when that is shorter.
+ *
+ *  Lives beside `sleep` because BOTH long-lived watchers got this wrong in the same way. Sleeping the
+ *  full interval unconditionally means the loop can only notice its deadline on an interval boundary,
+ *  so it overruns by up to one whole interval — and both then reported the REQUESTED duration, which
+ *  is what made the overrun invisible. MEASURED: `watch --for 1 --interval 900` ran ~15 minutes and
+ *  printed "elapsed (1m)"; `budget --minutes 0.25 --watch 30` took 33 s for a 15 s window.
+ *
+ *  A deadline that is not a deadline is worse than none, because a harness sizes its own timeout
+ *  around it. `deadlineMs` is Infinity when no deadline was set, which yields the plain interval. */
+export function nextSleepMs(nowMs: number, deadlineMs: number, intervalMs: number): number {
+  return Math.max(0, Math.min(intervalMs, deadlineMs - nowMs))
+}
+
 export const fmtGb = (b: number): string => `${(b / 1024 ** 3).toFixed(2)}GB`
 export const fmtMb = (b: number): string => `${(b / 1048576).toFixed(1)}MB`
 
