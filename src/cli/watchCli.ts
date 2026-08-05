@@ -98,7 +98,19 @@ export const METRICS: MetricDef[] = [
   { name: 'cost-per-min', scope: 'account', unit: 'usd', isRate: true, describe: 'account burn in USD/min', read: p => n(p.fiveHour?.costPerMin) },
   {
     name: 'tokens-per-min', scope: 'machine', unit: 'tokens', isRate: true, describe: 'machine-wide live burn in tokens/min',
-    read: p => (p.accountWindows?.length ? p.accountWindows.reduce((a, w) => a + (w.fiveMinTokensPerMin || 0), 0) : null),
+    // Sum only the windows that actually CARRY a number, and answer null when none do.
+    //
+    // The previous `reduce((a, w) => a + (w.fiveMinTokensPerMin || 0), 0)` guarded the empty ARRAY
+    // but not an array of windows carrying no rate: those summed to a measured **0**, and a NaN did
+    // too (`NaN || 0` is 0). MEASURED: read({accountWindows: [{}, {}]}) returned 0.
+    //
+    // That is the one thing `n()` above exists to prevent, and it matters most here: for a burn
+    // watcher 0/min reads as "nothing is burning", so a blind feed looked QUIET — and the watch
+    // loop's `blind` transition line, which exists to say precisely that, could never fire.
+    read: p => {
+      const vals = (p.accountWindows ?? []).map(w => n(w.fiveMinTokensPerMin)).filter((v): v is number => v !== null)
+      return vals.length ? vals.reduce((a, b) => a + b, 0) : null
+    },
   },
   { name: 'active-sessions', scope: 'machine', unit: 'count', describe: 'sessions receiving turns right now', read: p => n(p.activeSessions) },
 ]
@@ -387,6 +399,20 @@ export function projectSample(
   return (value - prev.v) / minutes
 }
 
+/** How long to sleep before the next poll: the poll interval, or whatever is left of the `--for`
+ *  window when that is shorter.
+ *
+ *  Sleeping the full interval unconditionally made `--for` overshoot by up to one whole interval AND
+ *  take one more sample — with its alerts — after the window had closed, while the stop line reported
+ *  the REQUESTED duration. `--for 1 --interval 900` therefore ran for 15 minutes and printed
+ *  "watch window elapsed (1m)". A deadline that is not a deadline is worse than no deadline, because
+ *  a harness sizes its own timeout around it.
+ *
+ *  `deadlineMs` is Infinity when --for was not given, which yields the plain interval. */
+export function nextSleepMs(nowMs: number, deadlineMs: number, intervalMs: number): number {
+  return Math.max(0, Math.min(intervalMs, deadlineMs - nowMs))
+}
+
 export async function runWatchLoop(o: WatchOptions, emit: Emit): Promise<number> {
   await init()
   const m = o.metric
@@ -429,11 +455,15 @@ export async function runWatchLoop(o: WatchOptions, emit: Emit): Promise<number>
   const deadline = o.forMinutes > 0 ? t0 + o.forMinutes * 60_000 : Infinity
   for (;;) {
     if (Date.now() >= deadline) {
-      emit(`[watch] watch window elapsed (${o.forMinutes}m) — stopping`,
-        { event: 'elapsed', metric: m.name, forMinutes: o.forMinutes })
+      // Report the ACTUAL elapsed time next to the requested one. They now agree to within a tick,
+      // but printing only the request is what let a 15-minute run describe itself as a 1-minute one,
+      // and a reader has no other way to tell the two apart.
+      const elapsedMs = Date.now() - t0
+      emit(`[watch] watch window elapsed (${o.forMinutes}m requested, ${fmtDur(elapsedMs)} actual) — stopping`,
+        { event: 'elapsed', metric: m.name, forMinutes: o.forMinutes, elapsedMs })
       return EXIT.OK
     }
-    await sleep(o.intervalSec * 1000)
+    await sleep(nextSleepMs(Date.now(), deadline, o.intervalSec * 1000))
 
     let value: number | null
     try {
