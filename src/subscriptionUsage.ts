@@ -539,12 +539,28 @@ export function listObservedAccountUsage(): SubscriptionUsage[] {
  *  failed here: a snapshot of the weekly window that rolled on 2026-07-28 was still being served,
  *  and reported as the CURRENT 96%, four days after that window ceased to exist. */
 export function deriveStale(u: SubscriptionUsage, now: number): boolean {
-  if (now - u.fetchedAt > TTL_MS * 3) return true
-  return u.limits.some(l => {
+  return staleReason(u, now) !== null
+}
+
+/** WHICH of the two made it obsolete — because a consumer that reports the wrong one is worse than
+ *  one that reports none.
+ *
+ *  `budget` rendered every stale reading as "is Nh old", so a snapshot rejected for the SECOND
+ *  reason printed `NOT USABLE — the cached reading is 0h old (fresh)`: a stated cause that refutes
+ *  itself, on the line whose whole job is explaining why the authoritative number was dropped. A
+ *  reader concludes the tool is broken rather than that a correct rejection happened. MEASURED on
+ *  this machine: ageSeconds 306, accountVerified yes, a bucket already past its resetsAt.
+ *
+ *  `deriveStale` delegates here rather than repeating the predicates, so the boolean and the
+ *  explanation can never disagree about what counts as stale. */
+export function staleReason(u: SubscriptionUsage, now: number): 'too-old' | 'window-reset' | null {
+  if (now - u.fetchedAt > TTL_MS * 3) return 'too-old'
+  const rolled = u.limits.some(l => {
     if (l.resetsAt === null) return false
     const t = Date.parse(l.resetsAt)
     return !isNaN(t) && t <= now
   })
+  return rolled ? 'window-reset' : null
 }
 
 /** The ONLY way this module may serve a cached reading.

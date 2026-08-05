@@ -13,7 +13,7 @@
 // get_window_eta tool; this command only decides and reports.
 
 import { init, callTool, sleep, nextSleepMs } from './cliCore'
-import { getSubscriptionUsage, type SubscriptionUsage } from '../subscriptionUsage'
+import { getSubscriptionUsage, staleReason, type SubscriptionUsage } from '../subscriptionUsage'
 import { fetchBurnRisk } from './diagnosticsCli'
 import { LineLog, clampFlushMs, DEFAULT_FLUSH_MS } from './lineLog'
 import { numArg, strArg, clamp } from './argHelpers'
@@ -162,10 +162,20 @@ export function officialLine(u: SubscriptionUsage | null, windowKey?: string): s
   if (!u) return '[budget] official usage: UNAVAILABLE (no readable credential) — verdict rests on the local projection alone'
   const who = u.accountLabel ?? u.accountUuid?.slice(0, 8) ?? 'unidentified account'
   if (u.stale || u.accountVerified !== 'yes') {
+    // Name the cause that ACTUALLY fired. Staleness has two causes and this rendered both as an age,
+    // in whole hours: a reading dropped because its WINDOW HAD RESET printed "is 0h old", which
+    // refutes itself on the one line that exists to justify discarding the authoritative number.
+    // MEASURED: ageSeconds 306, accountVerified yes, one bucket already past its resetsAt — the line
+    // read "NOT USABLE — the cached reading is 0h old (fresh)".
     const why = u.accountVerified === 'no' ? 'belongs to a DIFFERENT account'
       : u.accountVerified === 'unknown' ? 'could not be attributed to the current account'
-        : `is ${Math.round(u.ageSeconds / 3600)}h old`
-    return `[budget] official usage: NOT USABLE — the cached reading ${why} (${u.reason}); ignoring it for the verdict`
+        : staleReason(u, Date.now()) === 'window-reset'
+          ? 'describes a rate-limit window that has since RESET, so its percentages are of a window that no longer exists'
+          : `is ${fmtMin(u.ageSeconds / 60)} old`
+    // `u.reason` describes how the reading was OBTAINED (fresh | cooldown | 429 | …), not why it is
+    // being rejected. Parenthesised straight after the rejection it read as the justification —
+    // "(fresh)" beside NOT USABLE — so it is labelled.
+    return `[budget] official usage: NOT USABLE — the cached reading ${why} (fetched: ${u.reason}); ignoring it for the verdict`
   }
   // EVERY bucket, each named, because a model-scoped cap is its own window and can be the binding
   // one while the overall week is nearly empty. Then say which one binds, so the number that drives

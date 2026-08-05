@@ -93,6 +93,45 @@ suite('budget: the arm line must not name a binding window it has not resolved',
   })
 })
 
+suite('budget: a rejected reading must name the reason that actually fired', () => {
+  /** Stale for the SECOND reason: recently fetched, but a bucket's window has already reset. */
+  function rolledOver(): SubscriptionUsage {
+    return {
+      limits: [{ kind: 'session', percent: 81, scopeLabel: null, resetsAt: new Date(Date.now() - 60_000).toISOString() }],
+      stale: true,
+      accountVerified: 'yes',
+      ageSeconds: 306,
+      fetchedAt: Date.now() - 306_000,
+      reason: 'fresh',
+      accountLabel: 'test-account',
+    } as unknown as SubscriptionUsage
+  }
+
+  test('a window that has RESET says so, instead of claiming an age', () => {
+    // MEASURED before the fix: "NOT USABLE — the cached reading is 0h old (fresh)". Both halves of
+    // that contradict the rejection — a reader concludes the tool is broken, not that a correct
+    // rejection happened, and the authoritative number is dropped with no usable explanation.
+    const line = officialLine(rolledOver(), '5h')
+    assert.ok(/NOT USABLE/.test(line), line)
+    assert.ok(/window that has since RESET/.test(line), `must name the cause that fired: ${line}`)
+    assert.ok(!/0h old/.test(line), `must not claim an age that refutes the rejection: ${line}`)
+  })
+
+  test('the fetch reason is LABELLED, so "(fresh)" cannot read as the justification', () => {
+    assert.ok(/fetched: fresh/.test(officialLine(rolledOver(), '5h')))
+  })
+
+  test('a genuinely OLD reading still reports its age, and in readable units', () => {
+    const old = { ...rolledOver(), fetchedAt: Date.now() - 40 * 60_000, ageSeconds: 2400, limits: [] } as unknown as SubscriptionUsage
+    const line = officialLine(old, '5h')
+    assert.ok(/is 40m old/.test(line), `sub-hour ages must not round to "0h": ${line}`)
+  })
+
+  test('a usable reading is still reported as usable — the guard must not over-reject', () => {
+    assert.ok(/Anthropic's own numbers, live/.test(officialLine(usage(81, 31), '5h')))
+  })
+})
+
 suite('budget --with-risks: "cannot see" must not render as "nothing to see"', () => {
   test('a dead risk feed is reported ONCE, not swallowed', async function () {
     this.timeout(30_000)
