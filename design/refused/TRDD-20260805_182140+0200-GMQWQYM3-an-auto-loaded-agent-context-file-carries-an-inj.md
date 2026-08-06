@@ -1,16 +1,17 @@
 ---
-trdd-id: C0XC8DMK
+trdd-id: GMQWQYM3
 title: an auto-loaded agent-context file carries an injection pattern — .claude/project/memory/agentlenspro-publish-pipeline.md
-column: planned
+column: refused
+approved: false
 created: 2026-08-05T18:21:40+0200
-updated: 2026-08-06T14:04:38+0200
+updated: 2026-08-06T22:41:00+0200
 current-owner: janitor
 task-type: security
 severity: critical
 ticket-kind: security-workflow
 ticket-severity: critical
 ticket-evidence: [.claude/project/memory/agentlenspro-publish-pipeline.md]
-ticket-dedupe-key: AICTX-003:.claude/project/memory/agentlenspro-publish-pipeline.md:3
+ticket-dedupe-key: AICTX-003:.claude/project/memory/agentlenspro-publish-pipeline.md:30
 ticket-origin: agent-context-integrity
 ---
 
@@ -18,13 +19,13 @@ ticket-origin: agent-context-integrity
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-05
 
-**APPROVED — support ticket `T-BNQ6X0EL` is queued for dispatch.**
+**APPROVED — support ticket `T-ZHJEIXLJ` is queued for dispatch.**
 
 The janitor detected this in code the **USER owns**, so it may only propose. It has NOT touched
 anything and will not, until a human or the main Claude approves by running:
 
 ```
-/janitor-support-open-ticket TRDD-C0XC8DMK
+/janitor-support-open-ticket TRDD-GMQWQYM3
 ```
 
 That command opens a support ticket, promotes this TRDD `proposal → planned`, and the janitor's
