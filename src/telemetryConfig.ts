@@ -100,13 +100,17 @@ function resolveOptions(options: TelemetryConfigOptions): {
   // Resolved from the durable knob (env > config.json > OFF) unless the caller pins it. This is
   // the whole point of TRDD-BKF5NZD3: capture is a DECISION, not wiring we force-converge.
   const captureRawBodies = options.captureRawBodies ?? rawBodyCaptureEnabled(dataDir, process.env)
+  // Resolved ONCE and reused by both `bodiesDir` and `ownedBodyValues`. Duplicating the expression
+  // is how the two silently diverge, and a divergence here re-opens exactly the bug this file was
+  // fixed for: the delete guard stops recognising a value we ourselves wrote.
+  const resolvedBodiesDir = options.bodiesDir ?? effectiveBodiesDir(dataDir, captureRawBodies)
   return {
     settingsPath: options.settingsPath ?? path.join(home, '.claude', 'settings.json'),
     markerPath:   options.markerPath   ?? path.join(home, '.agentlens', 'telemetry-managed.json'),
     // Default through the ONE bodies-dir resolution (spool when capture is on) — a legacy-only
     // default here made every spool-blind caller (server boot, --install-otel) overwrite the CLI's
     // spool value on the next converge, re-pointing Claude Code's write firehose at the SSD.
-    bodiesDir:    options.bodiesDir    ?? effectiveBodiesDir(dataDir, captureRawBodies),
+    bodiesDir:    resolvedBodiesDir,
     otlpPort:     options.otlpPort     ?? 4318,
     captureRawBodies,
     // BOTH dirs this installer ever writes, because the capture-OFF delete guard must recognise a
@@ -117,9 +121,9 @@ function resolveOptions(options: TelemetryConfigOptions): {
     // outlived every repair attempt. See the delete guard in ensureTelemetryConfig.
     ownedBodyValues: [
       ...new Set([
-        options.bodiesDir ?? effectiveBodiesDir(dataDir, captureRawBodies),
-        effectiveBodiesDir(dataDir, false),
-        spoolDirConfigured(dataDir),
+        resolvedBodiesDir,
+        effectiveBodiesDir(dataDir, false),   // the legacy dir — what capture-OFF resolves to
+        spoolDirConfigured(dataDir),          // the spool — what capture-ON writes; may be undefined
       ].filter((d): d is string => typeof d === 'string' && d.length > 0)),
     ].map(d => `file:${d}`),
   }

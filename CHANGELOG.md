@@ -4,6 +4,28 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.23.1] - 2026-08-06
+
+### Fixed
+
+- **Turning raw-body capture OFF left the sink wired, and the repairer could never close it.** The
+  capture-OFF delete guard compared `OTEL_LOG_RAW_API_BODIES` against `file:${bodiesDir}`, where
+  `bodiesDir` came from `effectiveBodiesDir(dataDir, captureRawBodies)`. At delete time capture is
+  false by definition and that resolver only consults the spool when capture is ON — so it returned
+  the LEGACY dir and could never equal a key holding the SPOOL path. That is the ordinary lifecycle
+  (capture ON writes the spool value; capture OFF then fails to recognise its own write), so the key
+  outlived every `setup` run. Measured on one machine: `disable` set `rawBodies: false`, the server
+  consequently stopped draining and size-capping the spool, while Claude Code kept honouring the
+  stale key and writing — filling a 2 GB RAM spool to 100%, at which point capture died silently
+  (332 zero-byte files) and 23 hours of raw bodies were never captured. The two halves of the
+  mechanism also disagreed: `cli/setup.ts` already tested PRESENCE, so `setup` reported drift,
+  reported "wired", verified, and FAILED — a repairer that could not repair, on every run.
+  `resolveOptions` now returns `ownedBodyValues` (the resolved bodies dir, the legacy dir, and the
+  configured spool) and the guard deletes when the live value is any of them. A value we never wrote
+  is still left alone, because silently deleting a user's own sink would be real overreach.
+  Two regression tests, both watched to fail against the unfixed code: the spool-dir delete, and the
+  foreign-key counter-case that keeps the widening honest.
+
 ## [2.23.0] - 2026-08-05
 
 ### Fixed
