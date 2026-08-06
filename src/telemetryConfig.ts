@@ -23,7 +23,7 @@ import * as path from 'path'
 import * as os from 'os'
 import * as fs from 'fs/promises'
 import { safeConfigEdit, SafeEditOp } from './safeConfigEdit'
-import { rawBodyCaptureEnabled, effectiveBodiesDir, RAW_BODIES_KEY } from './captureConfig'
+import { rawBodyCaptureEnabled, effectiveBodiesDir, spoolDirConfigured, RAW_BODIES_KEY } from './captureConfig'
 
 export interface TelemetryConfigOptions {
   /** settings.json to manage. Default: ~/.claude/settings.json */
@@ -92,6 +92,8 @@ export interface StatusResult {
 
 function resolveOptions(options: TelemetryConfigOptions): {
   settingsPath: string; markerPath: string; bodiesDir: string; otlpPort: number; captureRawBodies: boolean
+  /** Every `file:` value this installer could have written, for the capture-OFF delete guard. */
+  ownedBodyValues: string[]
 } {
   const home = os.homedir()
   const dataDir = options.dataDir ?? path.join(home, '.agentlens')
@@ -107,6 +109,19 @@ function resolveOptions(options: TelemetryConfigOptions): {
     bodiesDir:    options.bodiesDir    ?? effectiveBodiesDir(dataDir, captureRawBodies),
     otlpPort:     options.otlpPort     ?? 4318,
     captureRawBodies,
+    // BOTH dirs this installer ever writes, because the capture-OFF delete guard must recognise a
+    // key written while capture was ON. `effectiveBodiesDir(dataDir, false)` returns the LEGACY dir
+    // by construction (it only consults the spool when captureOn), so resolving the "value we would
+    // have written" at delete time — when capture is by definition off — could never match a key
+    // holding the SPOOL path. That is the ordinary lifecycle (on → spool, off → legacy), so the key
+    // outlived every repair attempt. See the delete guard in ensureTelemetryConfig.
+    ownedBodyValues: [
+      ...new Set([
+        options.bodiesDir ?? effectiveBodiesDir(dataDir, captureRawBodies),
+        effectiveBodiesDir(dataDir, false),
+        spoolDirConfigured(dataDir),
+      ].filter((d): d is string => typeof d === 'string' && d.length > 0)),
+    ].map(d => `file:${d}`),
   }
 }
 
@@ -237,7 +252,7 @@ async function readMarker(markerPath: string): Promise<TelemetryMarker | null> {
  * so a later uninstall can restore it exactly.
  */
 export async function ensureTelemetryConfig(options: TelemetryConfigOptions = {}): Promise<EnsureResult> {
-  const { settingsPath, markerPath, bodiesDir, otlpPort, captureRawBodies } = resolveOptions(options)
+  const { settingsPath, markerPath, bodiesDir, otlpPort, captureRawBodies, ownedBodyValues } = resolveOptions(options)
   const owned = ownedKeys(bodiesDir, otlpPort, captureRawBodies)
 
   const { settings } = await readSettingsOrThrow(settingsPath)
@@ -269,10 +284,18 @@ export async function ensureTelemetryConfig(options: TelemetryConfigOptions = {}
   // sit there forever and Claude Code would keep dumping every conversation to disk. This delete is
   // what makes "off" mean off (TRDD-BKF5NZD3).
   //
-  // Guard: delete ONLY the value WE would have written (`file:${bodiesDir}`). A user who points the
-  // sink at their own directory made that choice deliberately and owns its cost — silently deleting
-  // a config we never wrote would be the same overreach that force-converging was.
-  if (!captureRawBodies && env[RAW_BODIES_KEY] === `file:${bodiesDir}`) {
+  // Guard: delete ONLY a value WE would have written. A user who points the sink at their own
+  // directory made that choice deliberately and owns its cost — silently deleting a config we never
+  // wrote would be the same overreach that force-converging was.
+  //
+  // `ownedBodyValues` is that set, and it must contain BOTH the legacy dir and the configured spool.
+  // Comparing against `file:${bodiesDir}` alone was the 2026-08-06 outage: at delete time capture is
+  // off by definition, so `bodiesDir` had resolved to the LEGACY dir and could never equal a key
+  // holding the SPOOL path — which is exactly what capture-ON writes. The key therefore survived
+  // every repair, Claude Code kept honouring it, and it filled the 2 GB RAM spool to 100% until
+  // capture died silently. Meanwhile the detector in cli/setup.ts tests PRESENCE, so setup reported
+  // drift, "wired" it, verified, and FAILED forever — the two halves disagreed on "a key we wrote".
+  if (!captureRawBodies && ownedBodyValues.includes(String(env[RAW_BODIES_KEY] ?? ''))) {
     ops.push({ op: 'delete', path: ['env', RAW_BODIES_KEY] })
     removed.push(RAW_BODIES_KEY)
     changed = true

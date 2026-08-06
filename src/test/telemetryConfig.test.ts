@@ -127,6 +127,43 @@ suite('telemetryConfig', () => {
     assert.strictEqual((await readEnv())?.OTEL_LOG_RAW_API_BODIES, `file:${opts.bodiesDir}`)
   })
 
+  test('capture OFF removes a key we wrote at the SPOOL dir, not just the legacy dir', async () => {
+    // THE OUTAGE THIS PINS (2026-08-06): the delete guard compared the live key against
+    // `file:${effectiveBodiesDir(dataDir, /*captureOn*/ false)}` — which ignores the spool by
+    // construction. So the ordinary lifecycle (capture ON writes the SPOOL path → capture OFF
+    // resolves the LEGACY path) left the key behind: Claude Code kept honouring it and kept
+    // dumping bodies until the 2 GB RAM disk hit 100% full, at which point capture silently died
+    // (332 zero-byte files). Meanwhile the DETECTOR tests PRESENCE, so `setup` reported drift,
+    // "wired" it, verified, and FAILED — a repairer that could not repair, forever.
+    // Both halves must agree on what "a key we wrote" means: legacy dir OR configured spool.
+    const spoolDir = path.join(dir, 'spool-otel-bodies')
+    await fs.writeFile(
+      path.join(dir, 'config.json'),
+      JSON.stringify({ capture: { rawBodies: false, spoolDir } }, null, 2),
+      'utf-8',
+    )
+    await writeSettings({ env: { OTEL_LOG_RAW_API_BODIES: `file:${spoolDir}` } })
+
+    await ensureTelemetryConfig({ ...opts, captureRawBodies: false })
+
+    assert.strictEqual(
+      (await readEnv())?.OTEL_LOG_RAW_API_BODIES, undefined,
+      'capture is off, so the spool key we wrote must be DELETED — leaving it is the ~35 GB/day burn',
+    )
+  })
+
+  test('capture OFF leaves a raw-body key pointing somewhere we never wrote', async () => {
+    // The counter-case that keeps the fix honest: widening the delete must not become
+    // "delete any OTEL_LOG_RAW_API_BODIES". A user who points the sink at their OWN directory
+    // made that choice deliberately; silently deleting a value we never wrote is overreach.
+    const foreign = 'file:/somewhere/the/user/chose'
+    await writeSettings({ env: { OTEL_LOG_RAW_API_BODIES: foreign } })
+
+    await ensureTelemetryConfig({ ...opts, captureRawBodies: false })
+
+    assert.strictEqual((await readEnv())?.OTEL_LOG_RAW_API_BODIES, foreign, 'not ours — leave it')
+  })
+
   test('status reports managed / user / absent per key', async () => {
     await writeSettings({ env: { OTEL_TRACES_EXPORTER: 'console' } })
 
