@@ -146,8 +146,10 @@ def verify_diff(original_tree, new_tree, ops):
             + (f"leaves ADDED outside op paths: {[list(p) for p in invented]}" if invented else "")
         )
 
-    # Each op must have done exactly what it declared.
-    for op in ops:
+    # Each op must have done exactly what it declared. `op_index` is needed because a
+    # postcondition may legitimately be undone by a LATER op in the same transaction
+    # (see remove_by_substring below), so an op can only be judged against the ops after it.
+    for op_index, op in enumerate(ops):
         kind = op["op"]
         if kind == "set":
             node = new_tree
@@ -188,7 +190,30 @@ def verify_diff(original_tree, new_tree, ops):
                     ]
                 else:
                     survivors = node
-                if any(needle in json.dumps(el, ensure_ascii=False) for el in survivors):
+                # A LATER op in the SAME transaction may deliberately re-add the needle, and that
+                # is precisely what a re-registration is: strip every generation of our command,
+                # then append the current one. Ops apply IN ORDER, so the removal really happened
+                # -- but this check runs against the FINAL tree, where the append has legitimately
+                # put the needle back. Asserting there rejected the correct result and made hook
+                # re-registration structurally impossible (`setup` aborted, fail-fast, every run).
+                # An op's postcondition is about ITS OWN effect; exempt exactly the values later
+                # ops on the same path re-introduced, and nothing else.
+                readded = []
+                for later in ops[op_index + 1:]:
+                    if later.get("path") != op["path"] or "value" not in later:
+                        continue
+                    val = later["value"]
+                    if nested and isinstance(val, dict) and isinstance(val.get(nested), list):
+                        readded.extend(val[nested])
+                    else:
+                        readded.append(val)
+                readded_keys = {json.dumps(x, ensure_ascii=False, sort_keys=True) for x in readded}
+                offenders = [
+                    el for el in survivors
+                    if needle in json.dumps(el, ensure_ascii=False)
+                    and json.dumps(el, ensure_ascii=False, sort_keys=True) not in readded_keys
+                ]
+                if offenders:
                     raise VerifyFailed(
                         f"remove_by_substring at {op['path']}: "
                         f"{needle!r} still present after apply"

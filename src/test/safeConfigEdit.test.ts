@@ -178,6 +178,44 @@ suite('safe_config_edit.py — transactional config editor', () => {
     assert.strictEqual(after.env.EXISTING_KEY, 'user-value')
   })
 
+  test('remove_by_substring then append_unique RE-ADDING the same needle verifies (re-registration)', () => {
+    // THE BUG THIS PINS (2026-08-06): every hook re-registration is exactly this transaction —
+    // strip every generation of our command, then append the current one back. The removal's
+    // postcondition was asserted against the FINAL tree, i.e. AFTER the append had legitimately
+    // put the needle back, so the assertion could never hold and `agentlenspro setup` aborted
+    // with "still present after apply". It stayed hidden because the ops are only emitted when a
+    // converge is actually required; every "registrations current" run emitted none.
+    // An op's postcondition is about ITS OWN effect — a later op in the same transaction undoing
+    // it is the transaction working, not a violation.
+    fs.writeFileSync(file, JSON.stringify(withHooks([{ matcher: 'Bash', hooks: [FOREIGN, OURS] }]), null, 2))
+    const r = runEditor(file, {
+      ops: [
+        { op: 'remove_by_substring', path: ['hooks', 'PostToolUse'], substring: 'gh_register_hook.py', nested_key: 'hooks', prune_empty: true },
+        { op: 'append_unique', path: ['hooks', 'PostToolUse'], value: { matcher: 'Bash', hooks: [OURS] }, unique_by_substring: 'gh_register_hook.py' },
+      ],
+    })
+    assert.strictEqual(r.status, 0, `re-registration must verify, got: ${r.stderr}`)
+    const post = postToolUse()
+    const flat = post.flatMap(m => m.hooks.map(h => h.command))
+    assert.strictEqual(flat.filter(c => c.includes('gh_register_hook.py')).length, 1, 'ours re-added exactly once')
+    assert.ok(flat.includes(FOREIGN.command), 'the foreign sibling survived')
+  })
+
+  test('remove_by_substring still FAILS when a survivor was not re-added by a later op', () => {
+    // The counter-case that keeps the exemption honest: widening the postcondition must not
+    // become "never assert". A needle left behind that no later op re-added is still a defect.
+    fs.writeFileSync(file, JSON.stringify(withHooks([{ matcher: 'Bash', hooks: [FOREIGN, OURS] }]), null, 2))
+    const r = runEditor(file, {
+      // A removal whose needle does not match OURS leaves it in place; nothing re-adds it, so the
+      // op's own promise ("no survivor carries this needle") must still be enforced.
+      ops: [{ op: 'remove_by_substring', path: ['hooks', 'PostToolUse'], substring: 'vendor/tool.py', nested_key: 'hooks' }],
+    })
+    assert.strictEqual(r.status, 0, r.stderr)
+    const flat = postToolUse().flatMap(m => m.hooks.map(h => h.command))
+    assert.ok(!flat.some(c => c.includes('vendor/tool.py')), 'the targeted needle really was removed')
+    assert.ok(flat.some(c => c.includes('gh_register_hook.py')), 'the untargeted entry was left alone')
+  })
+
   test('remove_by_substring drops a matcher left empty, and a foreign matcher present at lock time survives (S3-F5)', () => {
     // The spec names ONLY the substring — it never carries the surviving array —
     // so an entry another tool added is filtered against the FILE, not a stale snapshot.
