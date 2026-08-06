@@ -179,6 +179,18 @@ fall back loudly rather than emit a filter that strips nothing while reporting s
 
 Since v2.23.0 the CLI help contract is TOTAL (git/npm style): `--help`/`-h` ANYWHERE in argv routes to help and dispatches NOTHING — enforced by an intercept in `cliMain` (src/cli/main.ts) BEFORE the dispatch switch, with a `MANAGEMENT_VERBS` set gating network-free help for management verbs. WHY it must be this way: on 2026-08-05 `agentlenspro disable --help` EXECUTED the disable — it armed the DISABLED flag, stopped the server, and disarmed every hook machine-wide, because the old dispatcher matched the verb first and passed `--help` through as an ordinary arg. Any new verb added to the CLI inherits the intercept automatically; never add a verb-local `--help` handler that runs after side effects. Falsified tests: src/test/cliDispatch.test.ts ("help is TOTAL", 4 tests that failed 0/4 against the pre-fix bundle).
 
+
+^ATOM-LSGO-AIXS [desc:"Two 2026-08-06 bugs, one shape: the DETECTOR and the REPAIRER disagreed about the same condition, so setup reported drift forever and the repair could never land", keywords: setup_reports_drift_every_run_but_never_fixes_it repairer_detects_but_cannot_repair remove_by_substring_still_present_after_apply hook_re-registration_fails detector_and_writer_disagree a_converge_path_that_is_never_exercised setup_aborted_fail-fast_on_hooks, type: project, ocd: 2026-08-06, lmd: 2026-08-06]
+
+**A detector and its repairer must agree on the condition, or `setup` reports drift forever and never fixes it.** Hit TWICE on 2026-08-06, in unrelated code, with the identical signature — `setup` names a problem, claims to act, verifies, and FAILS, on every run.
+
+1. **Raw-body key (`telemetryConfig.ts`).** `cli/setup.ts` tested key PRESENCE; the writer's delete guard tested a VALUE match against `file:${bodiesDir}` resolved with capture OFF — which is the LEGACY dir by construction and can never equal a key holding the SPOOL path. Fixed by `ownedBodyValues` (every `file:` value the installer could have written).
+2. **Hook re-registration (`scripts/safe_config_edit.py`).** Re-registration IS `remove_by_substring(<cmd>)` then `append_unique(<cmd>)`. `verify_diff` asserted the removal's postcondition against the FINAL tree — after the append had legitimately re-added the needle — so it could never hold (`'agentlenspro gate' still present after apply`), and fail-fast then skipped skill/otel-env/server/final-test. Fixed by exempting exactly the values LATER ops on the same path re-add.
+
+**Why both stayed invisible for so long: the broken path only runs when the condition is TRUE.** A converge is only attempted when something has actually drifted, so every healthy run ("registrations current", "telemetry env current") emitted no ops and exercised nothing. The repair path was dark until the day it was needed — which is the day it must work. A green `setup` on a converged machine proves the DETECTOR works; it proves nothing about the REPAIRER. To test a repairer you must first break something.
+
+**Corollary for reviews:** when detection and repair live in different files (or different languages — TS detector, Python writer), pin their shared predicate with a test that runs the repair against a genuinely drifted fixture. Both fixes here ship exactly that, plus a counter-case so the widened predicate cannot degrade into "never assert".
+
 ## Notes and lessons learned
 
 [^1]: [id:ATOM-SETTINGS-WIPE-GUARDRAIL, status:valid, keywords:"config_file_wiped_or_corrupted_after_edit settings.json_wiped safeConfigEdit_guard start_fresh_on_parse_failure_removed", ocd:2026-07-11, lmd:2026-07-11] promoted from the old-repo LOCAL note
