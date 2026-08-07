@@ -38,6 +38,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { claudeProjectsDirs } from './logReader'
+import { resolveProjectSlugs } from './projectSlug'
 import { lookupRates } from './shared/pricing'
 import {
   median, robustBaseline, modifiedZ, modifiedZScores, normalSf, negBinomSF, fisherCombine,
@@ -101,8 +102,12 @@ export function resolveSeismicFiles(o: ResolveSeismicOptions): string[] {
   const wantDirs: string[] = []
   if (o.scope === 'workspace') {
     if (!o.workspace) return []
-    const slug = o.workspace.replace(/[^A-Za-z0-9]/g, '-')
-    for (const base of bases) wantDirs.push(path.join(base, slug))
+    // Resolved against disk, not derived: a workspace path long enough for Claude Code to truncate
+    // and hash its slug yields a directory name no derivation can predict, and the naive one matches
+    // nothing — so this scanned zero transcripts and reported no seismic activity at all.
+    for (const slug of resolveProjectSlugs(o.workspace, bases)) {
+      for (const base of bases) wantDirs.push(path.join(base, slug))
+    }
   }
   const walk = (dir: string, allowSub: boolean): void => {
     let entries: fs.Dirent[]

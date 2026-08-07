@@ -28,6 +28,7 @@ import {
   type CacheCreationScanCoverage,
 } from './cacheCreationForensics'
 import { scanOtelCallEvents } from './otelCallEvents'
+import { projectSlugOf, resolveProjectSlugs } from './projectSlug'
 import { calcTokenCostUsd, lookupRates } from './shared/pricing'
 
 /** One API call, normalized from EITHER source. The OTEL path is preferred: it carries `session.id`
@@ -77,15 +78,9 @@ export function writeScaleOf(cacheWriteTokens: number): number {
   return scale
 }
 
-/** Claude Code names a project's log directory after its absolute path with every non-alphanumeric
- *  character replaced by '-'. Accept EITHER form so `--project` works with a path the user can type
- *  from memory or the slug they copied out of a previous report. */
-export function projectSlugOf(pathOrSlug: string): string {
-  const value = pathOrSlug.trim()
-  if (!value) return ''
-  if (!value.includes('/') && !value.includes('\\')) return value
-  return value.replace(/[^a-zA-Z0-9]/g, '-')
-}
+// The slug rule lives in ./projectSlug — re-exported so this module's existing importers keep
+// working while there is only ONE definition of how Claude Code names a project directory.
+export { projectSlugOf }
 
 /** sessionId → project slug, from directory names only (readdir, no file is opened). This is the
  *  authoritative ownership fact: Claude Code writes a session's transcript into exactly one
@@ -296,7 +291,13 @@ export async function buildCacheEventLog(opts: CacheEventLogOptions = {}): Promi
   const envDir = process.env['CLAUDE_PROJECT_DIR']?.trim()
   const source: CacheEventLog['projectResolvedFrom'] =
     explicit ? 'argument' : envDir ? 'CLAUDE_PROJECT_DIR' : 'working directory'
-  const project = projectSlugOf(explicit || envDir || process.cwd())
+  // Resolved against the directories that actually exist, not derived and hoped for: `ownedBy` below
+  // comes from real directory names, so a path long enough for Claude Code to truncate-and-hash its
+  // slug would never equal a naive derivation — and EVERY call would be excluded as another
+  // project's. Normally one name; more than one only on a 200-char prefix collision, where owning
+  // any of them is owning this project.
+  const projects = resolveProjectSlugs(explicit || envDir || process.cwd())
+  const project = projects[0] ?? ''
 
   // includeZeroCacheCreate: a ledger that hides warm turns cannot show that the call before a cold
   // write was warm — which is the whole comparison that separates a TTL expiry from a prefix break.
@@ -331,7 +332,7 @@ export async function buildCacheEventLog(opts: CacheEventLogOptions = {}): Promi
   for (const e of calls) {
     const ownedBy = e.sessionId ? owner.get(e.sessionId) : undefined
     if (ownedBy === undefined) { unattributable += 1; continue }
-    if (ownedBy !== project || (opts.sessionId && e.sessionId !== opts.sessionId)) { otherProject += 1; continue }
+    if (!projects.includes(ownedBy) || (opts.sessionId && e.sessionId !== opts.sessionId)) { otherProject += 1; continue }
     mine.push(e)
   }
   mine.sort((a, b) => a.ts - b.ts)

@@ -62,6 +62,25 @@ All notable changes to AgentlensPro are documented here.
   watched to fail with the beta path disabled, and the no-downgrade guard watched to fail against a
   version that adds the inverse inference.
 
+- **A project path over ~200 characters made three different views silently report nothing.** Claude
+  Code names a project's log directory after its path with every non-alphanumeric character replaced
+  by `-`, and three places here re-derived that rule independently. It is no longer the whole rule:
+  measured against 2.1.224 by running a real session from a 237-character path, a slug longer than
+  200 characters is **truncated to exactly 200 and given a `-` plus a 6-character hash** (the
+  observed directory was 207 chars ending `-4gwysy`, its first 200 identical to the naive slug). So
+  all three derivations named a 245-character directory that cannot exist — and each failed
+  silently in its own way rather than erroring: `get_cache_event_log` compares its derived slug
+  against *real* directory names, so every call was excluded as "belonging to another project";
+  `burnSeismic` and the spawn-call attributor scanned a directory that isn't there and found no
+  transcripts, which is indistinguishable from a quiet machine.
+  There is now one definition (`src/projectSlug.ts`), and it resolves an over-long path by reading
+  what is **actually on disk** rather than computing a name. The hash is deliberately not
+  reproduced: it matched none of md5/sha1/sha256/sha512 over the path or the slug, in hex or base36,
+  from either end — so any formula written today would be a guess that resolves to a directory that
+  does not exist, which is the bug again with more steps. A short path still resolves without
+  touching the disk. Seven tests, three watched to fail against the old derivation (including the
+  `< 200` boundary, falsified by changing it to `<=`).
+
 - **A body the store already held was never reclaimed, so a fixed-size spool filled until capture
   died.** `ingestPass` took its `skipNames` set — seeded each boot from every `src_name` already in
   the Parquet store — and used it to filter candidates out of the pass entirely. The intent was to

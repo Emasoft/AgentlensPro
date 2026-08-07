@@ -21,6 +21,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { claudeProjectsDirs } from './logReader'
+import { resolveProjectSlugs } from './projectSlug'
 
 /** Tools whose call fans out / spawns work — the candidates behind a FORK_STORM / fan-out burst. */
 export const SPAWN_TOOLS = ['Task', 'Agent', 'Workflow', 'SendMessage'] as const
@@ -83,10 +84,6 @@ const MAX_OBJECT_SIZE = 268_435_456
 const MTIME_SLACK_MS = 3600_000
 const MAX_FILES = 8
 
-/** Claude names a workspace's project dir by replacing every non-alphanumeric char with '-'. */
-function slugForWorkspace(ws: string): string {
-  return ws.replace(/[^A-Za-z0-9]/g, '-')
-}
 
 /** Candidate transcript file(s) for this peak, most-recently-modified first (capped). */
 function resolveTranscripts(opts: CausingCallsOptions): string[] {
@@ -107,11 +104,14 @@ function resolveTranscripts(opts: CausingCallsOptions): string[] {
   }
 
   if (opts.workspace) {
-    const slug = slugForWorkspace(opts.workspace)
+    // Resolved against disk rather than derived: Claude Code truncates-and-hashes a slug past 200
+    // chars, so a deep workspace path produces a directory name no formula here can predict — and
+    // the naive derivation names a directory that cannot exist, finding no transcripts at all.
+    const slugs = resolveProjectSlugs(opts.workspace, bases)
     const lo = opts.atMs - (opts.windowMs ?? DEFAULT_WINDOW_MS) - MTIME_SLACK_MS
     const hi = opts.atMs + (opts.forwardSlackMs ?? DEFAULT_FORWARD_SLACK_MS) + MTIME_SLACK_MS
     const cand: { p: string; mtime: number }[] = []
-    for (const base of bases) {
+    for (const base of bases) for (const slug of slugs) {
       const dir = path.join(base, slug)
       let names: string[]
       try { names = fs.readdirSync(dir) } catch { continue }
