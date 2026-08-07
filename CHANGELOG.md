@@ -69,10 +69,13 @@ All notable changes to AgentlensPro are documented here.
   200 characters is **truncated to exactly 200 and given a `-` plus a 6-character hash** (the
   observed directory was 207 chars ending `-4gwysy`, its first 200 identical to the naive slug). So
   all three derivations named a 245-character directory that cannot exist — and each failed
-  silently in its own way rather than erroring: `get_cache_event_log` compares its derived slug
-  against *real* directory names, so every call was excluded as "belonging to another project";
-  `burnSeismic` and the spawn-call attributor scanned a directory that isn't there and found no
-  transcripts, which is indistinguishable from a quiet machine.
+  silently in its own way rather than erroring. Measured end-to-end from a real 237-character path:
+  `get_cache_event_log` compares its derived slug against *real* directory names, so it reported
+  **0 rows and "1283 call(s) excluded as belonging to another project"** — and labelled that
+  exclusion *"the scoping boundary working as intended"*, which is the failure describing itself as
+  correct. `burnSeismic` and the spawn-call attributor read a directory that isn't there and found
+  no transcripts, which is indistinguishable from a quiet machine. After the fix the same command
+  from the same directory resolves to the real `…-4gwysy` name and returns the call.
   There is now one definition (`src/projectSlug.ts`), and it resolves an over-long path by reading
   what is **actually on disk** rather than computing a name. The hash is deliberately not
   reproduced: it matched none of md5/sha1/sha256/sha512 over the path or the slug, in hex or base36,
