@@ -289,6 +289,33 @@ a separate branch a hundred lines away that no failing test will point you to. *
 `grep -n "'<CODE>'" src/agentGate.ts` and expect TWO hits before believing a change is complete —
 and remember the deny path renders through a third field again.
 
+
+^ATOM-GZJG-RS6I [desc:"Streaming the FILE fixed half of it — loadRange still held every span, so an unbounded query OOM'd the server at 4GB", keywords: server_died_on_a_tool_call socket_hang_up_pid_changed JavaScript_heap_out_of_memory Ineffective_mark-compacts get_cache_event_log_kills_the_server unbounded_query no_--window loadRange_materializes streaming_the_file_is_not_streaming_the_query, type: reference, ocd: 2026-08-07, lmd: 2026-08-07]
+
+**Reading incrementally while accumulating everything is still O(all).** [[ATOM-DMTT-DOCU]] made
+`segmentedSpanStore.loadRange` stream each segment through `ndjsonLines.ts` instead of one
+`readFileSync` — which fixed the >512 MB *string* limit and looked like "the store streams now". It
+did not: every in-window span was still pushed into ONE returned array. So on 2026-08-07
+`agentlenspro get_cache_event_log` with no `--window` (the default — `windowHours` is optional and
+`undefined` means all of history) materialized ~1M span objects to keep the `api_request` ones, and
+died with `FATAL ERROR: Ineffective mark-compacts near heap limit — JavaScript heap out of memory`
+at ~4 GB after 62 s. Memory tracked the WINDOW, not the answer: 1 h→19 MB, 24 h→478 MB, 168 h→dead,
+for a result that was 7 rows at every size. It degrades with store age rather than failing on day
+one, which is how it shipped.
+
+Fix: the store exposes `forEachInRange(since, until, visit)` and `loadRange` is a thin wrapper over
+it, so a selective reader's peak memory follows what it KEEPS. Measured after, across a 168× window
+range: 69/121/147/170 MB; the unbounded query now completes in 36 s over 184,212 calls.
+
+Three things worth carrying:
+- **The default was NOT capped.** A window cap hides an accumulation instead of removing it, and
+  turns a legitimate full-history question into a silently partial answer.
+- **One server owns the machine's data dir**, so a tool that OOMs stops ingestion for EVERY project
+  — a per-tool memory bug is a machine-wide outage.
+- **The silence was already solved.** `mcpServer.ts` logs `tool <name> start` precisely because a
+  wedged or aborted handler never logs a completion: the last start with no matching `done` IS the
+  culprit. An OOM is a fatal V8 abort, uncatchable, so nothing in-process could say more.
+
 ## Notes and lessons learned
 
 [^1]: [id:ATOM-SETTINGS-WIPE-GUARDRAIL, status:valid, keywords:"config_file_wiped_or_corrupted_after_edit settings.json_wiped safeConfigEdit_guard start_fresh_on_parse_failure_removed", ocd:2026-07-11, lmd:2026-07-11] promoted from the old-repo LOCAL note
