@@ -40,6 +40,16 @@ All notable changes to AgentlensPro are documented here.
 
 ### Fixed
 
+- **Every 1M-context model was scored against a 200k window, so `ctxmap` reported context ~5×
+  fuller than it was.** `windowSizeFor` inferred the window from a private regex that knew only
+  `fable` and an explicit `[1m]` tag, while `shared/pricing.ts` has declared `contextWindowTokens`
+  per model all along — two sources of truth for one fact, and the regex was the one that fell
+  behind. It stopped being an edge case when Claude Code 2.1.219 made `claude-opus-5` (1M native,
+  untagged) the default Opus: a 400k conversation on it read as 200% full. The inference now reads
+  the pricing table, and keeps the tag regex only as a fallback for an id the table does not carry —
+  so a long-context session on an unknown model still is not silently capped at 200k. Four tests,
+  watched to fail against the regex.
+
 - **A body the store already held was never reclaimed, so a fixed-size spool filled until capture
   died.** `ingestPass` took its `skipNames` set — seeded each boot from every `src_name` already in
   the Parquet store — and used it to filter candidates out of the pass entirely. The intent was to

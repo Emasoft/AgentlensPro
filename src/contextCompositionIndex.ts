@@ -23,7 +23,7 @@ import {
   buildCallContext, callBodyRegistry, IMAGE_BLOCK_LABEL_PREFIX,
 } from './rawBodyContext'
 import { calibrateTokens } from './tokenEstimator'
-import { calcTokenCostUsd } from './shared/pricing'
+import { calcTokenCostUsd, lookupRates } from './shared/pricing'
 import type { ContextBlock, ContextBlockKind, TokenSource } from './shared/summarizerTypes'
 
 // The composition taxonomy is a SUPERSET of the shared ContextBlockKind: images live in the 'other'
@@ -164,12 +164,24 @@ export interface RequestRef {
 }
 
 // ── Window-size inference ─────────────────────────────────────────────────────
-// The request body carries no context-window size (max_tokens is the OUTPUT cap). Infer from the model:
-// 1M for the long-context families (fable / an explicit [1m] tag), else the 200k default. Approximate —
-// contextPct is labeled as derived from this inference.
-function windowSizeFor(model?: string): number {
-  if (model && /fable|\[1m\]|-1m\b/i.test(model)) { return 1_000_000 }
-  return 200_000
+// The request body carries no context-window size (max_tokens is the OUTPUT cap), so it is inferred
+// from the model — but from the PRICING TABLE, which already declares `contextWindowTokens` per
+// model and is what `database/reader.ts` reads. This used to be a private regex knowing only
+// `fable` / an explicit `[1m]` tag, which made it a SECOND source of truth that silently fell
+// behind: every 1M-native model shipped since was scored against a 200k window and its context
+// reported ~5x fuller than it was. That stopped being an edge case when `claude-opus-5` — 1M
+// native — became the DEFAULT Opus in Claude Code 2.1.219.
+const DEFAULT_WINDOW_TOKENS = 200_000
+/** Exported for the regression test: the whole defect was that this disagreed with the pricing
+ *  table, which is only observable by asking it about a model directly. */
+export function windowSizeFor(model?: string): number {
+  if (!model) return DEFAULT_WINDOW_TOKENS
+  // `lookupRates` prefix-matches longer ids, so a `[1m]`-tagged variant resolves to its family row.
+  const known = lookupRates(model)?.contextWindowTokens
+  if (known) return known
+  // An id the table does not carry: an explicit long-context tag is still a signal worth honouring
+  // rather than silently defaulting a 1M session to 200k.
+  return /fable|\[1m\]|-1m\b/i.test(model) ? 1_000_000 : DEFAULT_WINDOW_TOKENS
 }
 
 // ── Response-usage reader (bounded, cheap — response bodies are small) ─────────
