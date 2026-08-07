@@ -194,6 +194,56 @@ Since v2.23.0 the CLI help contract is TOTAL (git/npm style): `--help`/`-h` ANYW
 
 **How to test one: break something first.** Run the repair against a genuinely drifted fixture, not a converged one. When detection and repair live in different files — or different languages, as here (a TypeScript detector and a Python writer) — pin their SHARED predicate with such a test, plus a counter-case, so a widened predicate cannot quietly degrade into "never assert". Both fixes ship exactly that pair.
 
+
+^ATOM-WOXQ-R1EO [desc:"A skip-optimization scoped to the wrong unit of work: skipping the re-ingest of an already-durable body also skipped its DELETE, so a fixed-size spool filled until capture died", keywords: spool_never_drains spool_100%_full raw_body_capture_stops_silently skipNames_strands_files file_ingested_but_never_deleted skip_optimization_skipped_the_delete_too ram_disk_fills_with_already_durable_files, type: project, ocd: 2026-08-07, lmd: 2026-08-07]
+
+`ingestPass` filtered `skipNames` out of the candidate list at the top of the pass. The set is
+seeded each boot from every `src_name` already in the Parquet store, and the intent was sound —
+do not re-read and re-hash a body the store already holds. But the candidate list is also what
+feeds the verify-then-DELETE gate, so the filter silently bought the read saving by giving up the
+reclaim: a durable body could never be deleted.
+
+On an unbounded disk that is invisible waste. On a fixed-size RAM spool it is terminal — the spool
+accumulates exactly the files the store already has, reaches 100%, and raw-body capture stops with
+no error anywhere. Measured 2026-08-06: 3,615 bodies stranded in a 2 GB spool, ~300 KB of headroom
+left, bodies being dropped. Fixed in `65207f4`: the skip applies to the INGEST only; an
+already-durable file still goes through the same gate (re-read, re-proven byte-identical plus its
+`(src_name, capture-ts)` row) before the unlink.
+
+**DO NOT** scope a skip-optimization to a whole pass when the pass does more than the work you meant
+to skip, BECAUSE the cheapest place to write the filter (one `.filter()` at the top) is also the
+place that silently drops every OTHER stage the candidate would have reached. **DO** apply the skip
+at the stage it names — here, guard the `ingestBody` call, not the candidate list — and assert the
+other stages still run on skipped items.
+
+
+^ATOM-2SUG-QGT8 [desc:"The bodies pass logged only when ingested > 0, so a pass that reclaimed thousands of files and ingested none printed nothing at all", keywords: pass_did_work_but_logged_nothing silent_success log_gate_on_the_wrong_counter ingested_0_so_nothing_printed reclaim_invisible_in_logs, type: project, ocd: 2026-08-07, lmd: 2026-08-07]
+
+`archiveOtelBodies` gated its whole report on `if (ingested > 0 || purged.length > 0)`. Once the
+reclaim path could run without ingesting anything, a pass that deleted thousands of files printed
+NOTHING — so the operator's only window onto the drain showed silence, which reads identically to
+"nothing to do". That is a large part of why the stranded-spool bug survived as long as it did.
+
+**DO NOT** gate a whole report on ONE of several counters, BECAUSE the counter you picked can be
+legitimately zero on a healthy path and then the report disappears exactly when the other work is
+happening. **DO** gate on the disjunction of every counter the report mentions (`ingested > 0 ||
+deleted > 0 || purged > 0`), and print each one so a zero is a stated fact rather than an absence.
+
+
+^ATOM-N4OI-OY30 [desc:"Reclaim runs ~1 file/s against ~0.8 files/s of arrivals, so a backlog clears over hours — judge a drain by deletions-from-a-snapshot, never by net file count", keywords: spool_still_full_after_the_fix did_the_deploy_work drain_rate net_file_count_hides_arrivals measure_deletions_not_totals backlog_takes_hours, type: project, ocd: 2026-08-07, lmd: 2026-08-07]
+
+Measured 2026-08-07 on the spool drain: 120 files deleted per 2 min against 94 arriving. The net
+count moved by only −26, and at one sample it moved UP — so "the file count is not falling" and
+"still 99% full" are both compatible with a drain that is working. Each reclaim reconstructs the
+body from DuckDB to prove it before unlinking, which is what caps throughput near 1 file/s; a
+multi-GB backlog therefore takes hours, and a pass in flight logs nothing until it finishes.
+
+**DO NOT** judge a drain (or any producer/consumer reclaim) by the total item count or free space
+minutes after a deploy, BECAUSE arrivals and deletions are superimposed in that one number and a
+healthy drain can look flat or negative. **DO** snapshot the item NAMES, re-snapshot later, and
+count the two directions separately (`comm -23` deleted vs `comm -13` arrived) — that is the only
+form that distinguishes "not draining" from "draining slower than it fills".
+
 ## Notes and lessons learned
 
 [^1]: [id:ATOM-SETTINGS-WIPE-GUARDRAIL, status:valid, keywords:"config_file_wiped_or_corrupted_after_edit settings.json_wiped safeConfigEdit_guard start_fresh_on_parse_failure_removed", ocd:2026-07-11, lmd:2026-07-11] promoted from the old-repo LOCAL note
