@@ -12,7 +12,7 @@
 // to the agent): each names the mechanism, the measured cost, and the concrete retry path.
 
 import * as fs from 'fs'
-import { fmtFatSenders, type ThrashReport } from './bodiesActivity'
+import { type ThrashReport } from './bodiesActivity'
 import {
   ASSUMED_TTL_REGIME, COLD_IDLE_SLACK_MS, DEFAULT_COLD_IDLE_MS,
   classifyTtlRegime, ttlPhrase, type TtlRegime,
@@ -110,13 +110,20 @@ export interface AgentGateState {
    *  a 7-min idle on a subscription MAIN session is NOT cold — its entry rides the 1h tier).
    *  Absent → ASSUMED_TTL_REGIME (the 5-min floor, honestly labeled 'assumed'). */
   ttl?: TtlRegime
+  /** WHO is asking, from the hook payload (session_id + cwd — both verified present on the gate's
+   *  PreToolUse AND PostToolUse payloads, 2026-08-07). Everything this module puts in front of a
+   *  MODEL must be about the caller's OWN project: another project's session id or directory is
+   *  something this agent can neither act on nor is owed, so it is noise and a leak at once. An
+   *  absent cwd means own-project cannot be PROVEN, and an unprovable match must never become a
+   *  claim — those messages stay quiet instead. */
+  caller?: { session: string | null; cwd: string | null }
   thresholds?: Partial<GateThresholds>
 }
 
 export interface AgentGateDecision {
   decision: 'allow' | 'warn' | 'deny'
   code:
-    | 'THRASH_ACTIVE' | 'THRASH_UNATTRIBUTED' | 'RUNAWAY_FANOUT' | 'COLD_RESUME_FANOUT' | 'FORK_STORM_FORMING'
+    | 'THRASH_ACTIVE' | 'RUNAWAY_FANOUT' | 'COLD_RESUME_FANOUT' | 'FORK_STORM_FORMING'
     | 'FORK_FAT_PARENT' | 'COLD_FORK' | 'FANOUT_HEADSUP' | 'COLD_RESUME_MESSAGE'
     | 'IMG_RESIDENT'
     | null
@@ -127,24 +134,50 @@ const k = (n: number): string => `${Math.round(n / 1000)}k`
 const shortSid = (s: string | null): string => (s ? `${s.slice(0, 8)}…` : '?')
 const dirName = (cwd: string | null): string => (cwd ? `…/${cwd.split('/').filter(Boolean).pop() ?? cwd}` : '')
 
-/** Concise WHO-is-fanning-out string: top-2 spawners + "+N more".
- *  e.g. `session 777b8f52… in …/agentlens (6: workflow-subagent×5, fork×1)` */
-function fmtSpawners(spawners: LaunchSpawner[] | undefined, cap = 2): string {
-  if (!spawners || spawners.length === 0) return ''
-  const parts = spawners.slice(0, cap).map(s => {
-    const where = s.cwd ? ` in ${dirName(s.cwd)}` : ''
-    const types = s.agentTypes.length > 0 ? `: ${s.agentTypes.join(', ')}` : ''
-    return `session ${shortSid(s.session)}${where} (${s.count}${types})`
-  })
-  const more = spawners.length > cap ? `; +${spawners.length - cap} more` : ''
-  return parts.join('; ') + more
+/** Same project as the caller? An unknown cwd on EITHER side answers NO — the point of this whole
+ *  gate is that a message may only claim what it can prove, and "probably yours" is not proof.
+ *  Exact match is deliberate: a subagent inherits its parent's cwd so same-project launches match
+ *  by construction, while a worktree really is a different project (different prefix, different
+ *  cache entry) and should not be folded in. */
+function isOwnProject(caller: AgentGateState['caller'], cwd: string | null): boolean {
+  return Boolean(caller?.cwd && cwd && cwd === caller.cwd)
 }
 
-/** "Likely source" clause for thrash messages — honest when attribution failed. */
+/** Launches in the window belonging to the CALLER'S OWN project. Returns 0 — never the
+ *  machine-wide count — when the caller cannot be identified, so an unattributable wave stays
+ *  silent rather than being blamed on whoever happened to ask next. */
+function ownLaunches(state: AgentGateState): number {
+  return (state.spawners ?? [])
+    .filter(s => isOwnProject(state.caller, s.cwd))
+    .reduce((n, s) => n + s.count, 0)
+}
+
+/** WHAT the caller's own project is spawning — agent kinds only, e.g. `workflow-subagent×5, fork×1`.
+ *  Carries NO session id and NO directory by design: those identify other people's work, which the
+ *  reader can neither act on nor is owed, while the agent KINDS are the part it can actually change. */
+function fmtOwnAgentTypes(state: AgentGateState): string {
+  return [...new Set(
+    (state.spawners ?? []).filter(s => isOwnProject(state.caller, s.cwd)).flatMap(s => s.agentTypes),
+  )].join(', ')
+}
+
+/** Where a rate-limit stall happened — named ONLY when it was the caller's own project. A stall in
+ *  a foreign session is still real and still justifies the deny (the caller's fan-out prefixes are
+ *  cold either way), but whose session it was is not this agent's business. */
+function fmtStallOrigin(state: AgentGateState): string {
+  const s = state.stall
+  if (!s || !isOwnProject(state.caller, s.cwd)) return ''
+  return ` (turn died in session ${shortSid(s.session)} in ${dirName(s.cwd)})`
+}
+
+/** "Likely source" clause for thrash messages. It names NOBODY: `FatRequestSender` carries no cwd,
+ *  so a suspect can never be shown to be the caller's own project, and a session id the reader
+ *  cannot place is noise. How much is being re-written is what it can act on; WHO is a question
+ *  for the CLI, answered on request. */
 function thrashSource(t: ThrashReport): string {
   return t.suspects.length > 0
-    ? `Likely source: ${fmtFatSenders(t.suspects)}.`
-    : 'Source not attributable from the fat requests — run investigate_burn --windowHours 1 to name it.'
+    ? `${t.suspects.length} sender(s) implicated — investigate_burn --windowHours 1 names them.`
+    : 'Source not attributable from the fat requests — investigate_burn --windowHours 1 to name it.'
 }
 
 /**
@@ -264,16 +297,16 @@ export function evaluateAgentGate(
     }
   }
   if (state.startsLast60s >= th.runaway60s) {
-    const who = fmtSpawners(state.spawners)
+    // The COUNT stays machine-wide — this deny protects the machine's cache, and scoping its
+    // trigger to one project would quietly weaken a safety gate. Only the IDENTITIES are dropped.
+    const kinds = fmtOwnAgentTypes(state)
     return deny('RUNAWAY_FANOUT',
       `AgentLens burn-gate: ${state.startsLast60s} subagent launches in the last 60s — runaway fan-out` +
-      `${who ? `. Spawners: ${who}` : ''}. Let the in-flight wave settle, then relaunch this agent ` +
+      `${kinds ? `. From this project: ${kinds}` : ''}. Let the in-flight wave settle, then relaunch this agent ` +
       `(retry in ~60s is usually enough). Override: AGENTLENS_GATE=off.`)
   }
   if (coldResume && state.startsLast2min >= 1) {
-    const stallWho = state.stall
-      ? ` (turn died in session ${shortSid(state.stall.session)}${state.stall.cwd ? ` in ${dirName(state.stall.cwd)}` : ''})`
-      : ''
+    const stallWho = fmtStallOrigin(state)
     // The TTL here is the SUBAGENT tier (module note above): the launches this rule holds back
     // are fresh agent conversations whose shared prefix entries ride the 5-min tier regardless
     // of the caller's regime — a 1h main-session entry does not warm a fan-out's agent prefixes.
@@ -285,10 +318,10 @@ export function evaluateAgentGate(
       `Retry this launch in ~60s. Override: AGENTLENS_GATE=off.`)
   }
   if (fork && fat && cold && state.startsLast2min >= 2) {
-    const who = fmtSpawners(state.spawners)
+    const kinds = fmtOwnAgentTypes(state)
     return deny('FORK_STORM_FORMING',
       `AgentLens burn-gate: fork of a ~${parentK}-token parent into a COLD cache (idle ${idleMin}min > its ` +
-      `${ttlPhrase(ttl)}) with ${state.startsLast2min} launches already in 2min${who ? ` (${who})` : ''} — a fork ` +
+      `${ttlPhrase(ttl)}) with ${state.startsLast2min} launches already in 2min${kinds ? ` (${kinds})` : ''} — a fork ` +
       `storm is forming; each fork re-pays the full parent prefix at the cache-WRITE rate. Warm the cache with ` +
       `ONE agent first, or compact the parent before fanning out. Retry in ~60s. Override: AGENTLENS_GATE=off.`)
   }
@@ -314,29 +347,23 @@ export function evaluateAgentGate(
         `Compact before large fan-outs to shrink what every fork re-reads.`,
     }
   }
-  // The unattributed big-write pool: possibly thrash whose requests could not be chained,
-  // possibly N fresh boots paying their one-time cost. It no longer denies (TRDD-THRGX41P) —
-  // it informs. The 3 mirrors the tracker's same-session repeat threshold.
-  if (!state.thrash?.active && (state.thrash?.unattributed.count ?? 0) >= 3) {
-    const t = state.thrash as ThrashReport
-    return {
-      decision: 'warn', code: 'THRASH_UNATTRIBUTED',
-      reason: `[agentlens] ${t.unattributed.count} big low-read prefix writes (~${k(t.unattributed.rebilledTokens)} tokens) ` +
-        `in ${Math.round(t.windowMs / 60_000)}min could not be attributed to any session — possible fan-out boots, ` +
-        `possible unreadable thrash. Run investigate_burn --windowHours 1 to name the source before widening fan-outs.`,
-    }
-  }
-  if (state.startsLast2min >= th.fanoutWarn2min) {
+  // THRASH_UNATTRIBUTED was retired from the model-facing channels (2026-08-07). By construction it
+  // reported writes that could NOT be tied to any session, so it could never be shown to be the
+  // caller's own work, and its only instruction was "go run investigate_burn" — a question for the
+  // CLI, not an interruption. The DETECTION is untouched: it still reaches the dashboard, --risk
+  // and investigate_burn, where it is answered on request.
+  const ownStarts = ownLaunches(state)
+  if (ownStarts >= th.fanoutWarn2min) {
     const premiumHint =
       state.premiumShare !== null && state.premiumShare > 0.5 && typeof input.model !== 'string'
         ? ` Recent traffic is on ${state.premiumModel ?? 'a premium model'} and this launch does not pin a model — ` +
           `fan-out agents inherit it; pin a cheaper one (model: 'sonnet' or 'haiku') for mechanical work.`
         : ''
-    const who = fmtSpawners(state.spawners)
+    const kinds = fmtOwnAgentTypes(state)
     return {
       decision: 'warn', code: 'FANOUT_HEADSUP',
-      reason: `[agentlens] ${state.startsLast2min} agent launches in the last 2min — fan-out in progress` +
-        `${who ? ` (${who})` : ''}.${premiumHint}`,
+      reason: `[agentlens] ${ownStarts} agent launches from this project in the last 2min — fan-out in progress` +
+        `${kinds ? ` (${kinds})` : ''}.${premiumHint}`,
     }
   }
 
@@ -417,9 +444,7 @@ export function evaluateSendMessageGate(state: AgentGateState): AgentGateDecisio
       `Override: AGENTLENS_GATE=off.`)
   }
   if (coldResume) {
-    const stallWho = state.stall
-      ? ` (turn died in session ${shortSid(state.stall.session)}${state.stall.cwd ? ` in ${dirName(state.stall.cwd)}` : ''})`
-      : ''
+    const stallWho = fmtStallOrigin(state)
     // A dead SendMessage target is a SUBAGENT conversation by construction ('main' resolves live
     // above), so the resume-cost premise uses the subagent tier — 5 min ALWAYS per the doc
     // matrix, whatever the caller's own regime is (TRDD-VY1IUVUM).
@@ -507,39 +532,26 @@ export function buildAdvisory(state: AgentGateState): { code: string; text: stri
         `Do NOT launch more agents until the source is fixed.`,
     }
   }
-  if (!state.thrash?.active && (state.thrash?.unattributed.count ?? 0) >= 3) {
-    const t = state.thrash as ThrashReport
-    return {
-      code: 'THRASH_UNATTRIBUTED',
-      text: `⚠ AgentlensPro: ${t.unattributed.count} big low-read prefix writes (~${k(t.unattributed.rebilledTokens)} tokens) ` +
-        `in the last ${Math.round(t.windowMs / 60_000)}min could not be attributed to any session — possible fan-out ` +
-        `cold starts, possible thrash with unreadable requests. investigate_burn --windowHours 1 names it.`,
-    }
-  }
-  if (state.startsLast2min >= th.fanoutWarn2min) {
+  // Only ONE other advisory survives, and only when it is the caller's OWN fan-out. Two were
+  // retired here on 2026-08-07 because they failed the bar this channel is held to — a message put
+  // in front of a model must be about its own project, actionable right now, and significant:
+  //   • THRASH_UNATTRIBUTED — writes that could not be tied to ANY session, so never provably the
+  //     reader's, and its only instruction was to go run a CLI command later.
+  //   • FAN_OUT_COLD_START — its own closing words were "No action needed", which is the
+  //     definition of a fact rather than an alert. It existed to stop a human mistaking a fan-out
+  //     for thrash while debugging; explaining is not the same as interrupting.
+  // Both DETECTIONS are untouched and still reach the dashboard, --risk and investigate_burn.
+  const ownStarts = ownLaunches(state)
+  if (ownStarts >= th.fanoutWarn2min) {
     const premium =
       state.premiumShare !== null && state.premiumShare > 0.5
         ? ` Most of that traffic is on ${state.premiumModel ?? 'a premium model'} — pin cheaper models on fan-out agents.`
         : ''
-    const who = fmtSpawners(state.spawners)
+    const kinds = fmtOwnAgentTypes(state)
     return {
       code: 'FANOUT_HEADSUP',
-      text: `⚠ AgentlensPro: ${state.startsLast2min} agent launches in the last 2min${who ? ` (${who})` : ''}.${premium} ` +
-        `Check headroom before widening the fan-out: agentlenspro-cli --risk.`,
-    }
-  }
-  // FAN_OUT_COLD_START (2026-07-11 field fix): N distinct sessions' one-time cold-start prefix
-  // writes are the EXPECTED cost of a fan-out, not thrash — say so explicitly so nobody (human
-  // or model) mistakes the burst for a cache-thrash and starts killing healthy agents. Advisory
-  // only, and only when real money moved (≥2 fresh sessions, big writes).
-  if (!state.thrash?.active && (state.thrash?.coldStartSessions ?? 0) >= 2) {
-    const t = state.thrash as ThrashReport
-    return {
-      code: 'FAN_OUT_COLD_START',
-      text: `AgentlensPro: ${t.coldStartSessions} freshly-spawned agent session(s) paid their one-time ` +
-        `cold-start prefix writes (~${k(t.coldStartRebilledTokens)} tokens total) in the last ` +
-        `${Math.round(t.windowMs / 60_000)}min — expected fan-out cost, NOT cache-thrash (no session ` +
-        `re-wrote its prefix repeatedly). No action needed unless the same sessions keep re-writing.`,
+      text: `⚠ AgentlensPro: ${ownStarts} agent launches from this project in the last 2min` +
+        `${kinds ? ` (${kinds})` : ''}.${premium} Check headroom before widening the fan-out: agentlenspro-cli --risk.`,
     }
   }
   return null

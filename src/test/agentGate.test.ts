@@ -15,6 +15,12 @@ import { classifyTtlRegime } from '../shared/cacheTtl'
 
 const NOW = Date.now()
 
+// Every model-facing message is scoped to the CALLER's own project (2026-08-07), so the default
+// state carries an identity and the fan-out cases carry spawners in that same cwd. A test that
+// wants the foreign-project path sets FOREIGN_CWD instead — that contrast IS the policy.
+const OWN_CWD = '/Users/x/Code/agentlens'
+const FOREIGN_CWD = '/Users/x/Code/ai-maestro-janitor'
+
 function state(over: Partial<AgentGateState> = {}): AgentGateState {
   return {
     now: NOW,
@@ -26,8 +32,17 @@ function state(over: Partial<AgentGateState> = {}): AgentGateState {
     thrash: null,
     premiumShare: null,
     premiumModel: null,
+    caller: { session: 'ca11e400-0000-0000-0000-000000000000', cwd: OWN_CWD },
     ...over,
   }
+}
+
+/** N launches attributed to one project — OWN by default, which is what a fan-out warning needs. */
+function spawnersIn(count: number, cwd = OWN_CWD): NonNullable<AgentGateState['spawners']> {
+  return [{
+    session: '777b8f52-aaaa-bbbb-cccc-000000000001',
+    cwd, count, agentTypes: [`workflow-subagent×${count}`],
+  }]
 }
 
 const thrashing: ThrashReport = {
@@ -49,8 +64,11 @@ suite('agentGate — evaluateAgentGate (TRDD-GOD0108C)', () => {
     assert.strictEqual(d.decision, 'deny')
     assert.strictEqual(d.code, 'THRASH_ACTIVE')
     assert.ok(d.reason?.includes('1200k'), d.reason ?? '')
-    assert.ok(d.reason?.includes('session 249c4216…'), `culprit must be named: ${d.reason ?? ''}`)
-    assert.ok(d.reason?.includes('13.9MB'), 'the magnitude must be stated')
+    // A suspect carries no cwd, so it can never be shown to be THIS caller's project — naming it
+    // would put another project's session id in an agent's context for no action it can take.
+    assert.ok(!d.reason?.includes('249c4216'), `suspect session must NOT be named: ${d.reason ?? ''}`)
+    assert.ok(d.reason?.includes('1 sender(s) implicated'), 'the count still tells them there IS a source')
+    assert.ok(d.reason?.includes('investigate_burn'), 'and where to get the identity on request')
   })
 
   test('active cache-thrash only WARNS a fresh non-fork launch — its own boot prefix multiplies nothing (TRDD-THRGX41P)', () => {
@@ -62,13 +80,14 @@ suite('agentGate — evaluateAgentGate (TRDD-GOD0108C)', () => {
     assert.ok(d.reason?.includes('1200k'), d.reason ?? '')
   })
 
-  test('a big unattributed write pool WARNS (THRASH_UNATTRIBUTED) instead of denying', () => {
+  test('a big UNATTRIBUTED write pool no longer interrupts the model — it is not provably theirs and names no action', () => {
+    // Retired 2026-08-07. By construction these writes could not be tied to ANY session, so the
+    // message could never be shown to be about the reader's own work, and its only instruction was
+    // "go run investigate_burn" — which is a CLI question, not a reason to interrupt. The
+    // DETECTION is untouched; only the unsolicited push is gone.
     const pool: ThrashReport = { ...thrashing, active: false, topSource: null, suspects: [], unattributed: { count: 5, rebilledTokens: 1_100_000 } }
     const d = evaluateAgentGate({ subagent_type: 'general-purpose' }, state({ thrash: pool }))
-    assert.strictEqual(d.decision, 'warn')
-    assert.strictEqual(d.code, 'THRASH_UNATTRIBUTED')
-    assert.ok(d.reason?.includes('investigate_burn'), d.reason ?? '')
-    assert.ok(d.reason?.includes('1100k'), d.reason ?? '')
+    assert.deepStrictEqual(d, { decision: 'allow', code: null, reason: null })
   })
 
   test('unattributable thrash says so honestly and points at investigate_burn', () => {
@@ -79,17 +98,34 @@ suite('agentGate — evaluateAgentGate (TRDD-GOD0108C)', () => {
     assert.ok(d.reason?.includes('investigate_burn'), d.reason ?? '')
   })
 
-  test('runaway fan-out (8 starts in 60s) denies naming the spawning session; 7 does not deny', () => {
-    assert.strictEqual(evaluateAgentGate({}, state({ startsLast60s: 7, startsLast2min: 7 })).decision, 'warn')
+  test('runaway fan-out (8 starts in 60s) still denies, naming agent KINDS but no session or path; 7 does not deny', () => {
+    assert.strictEqual(
+      evaluateAgentGate({}, state({ startsLast60s: 7, startsLast2min: 7, spawners: spawnersIn(7) })).decision,
+      'warn',
+    )
     const d = evaluateAgentGate({}, state({
       startsLast60s: 8, startsLast2min: 8,
-      spawners: [{ session: '777b8f52-aaaa-bbbb-cccc-000000000001', cwd: '/Users/x/Code/agentlens', count: 8, agentTypes: ['workflow-subagent×7', 'fork'] }],
+      spawners: [{ session: '777b8f52-aaaa-bbbb-cccc-000000000001', cwd: OWN_CWD, count: 8, agentTypes: ['workflow-subagent×7', 'fork'] }],
     }))
     assert.strictEqual(d.decision, 'deny')
     assert.strictEqual(d.code, 'RUNAWAY_FANOUT')
-    assert.ok(d.reason?.includes('session 777b8f52…'), d.reason ?? '')
-    assert.ok(d.reason?.includes('…/agentlens'), 'workspace must be named')
-    assert.ok(d.reason?.includes('workflow-subagent'), 'agent types must be named')
+    assert.ok(d.reason?.includes('workflow-subagent'), 'agent kinds are the actionable part')
+    // The COUNT stays machine-wide (this deny guards the machine's cache) but the IDENTITIES go:
+    // a session id and a directory are things the reader can neither act on nor is owed.
+    assert.ok(!d.reason?.includes('777b8f52'), `session must NOT be named: ${d.reason ?? ''}`)
+    assert.ok(!d.reason?.includes('…/agentlens'), `workspace must NOT be named: ${d.reason ?? ''}`)
+  })
+
+  test('a fan-out in ANOTHER project does not warn this caller — it is not theirs to stop', () => {
+    const d = evaluateAgentGate({}, state({ startsLast60s: 7, startsLast2min: 7, spawners: spawnersIn(7, FOREIGN_CWD) }))
+    assert.deepStrictEqual(d, { decision: 'allow', code: null, reason: null })
+  })
+
+  test('an unidentifiable caller is treated as NOT own-project — an unprovable match never becomes a claim', () => {
+    const d = evaluateAgentGate({}, state({
+      startsLast60s: 7, startsLast2min: 7, spawners: spawnersIn(7), caller: { session: null, cwd: null },
+    }))
+    assert.deepStrictEqual(d, { decision: 'allow', code: null, reason: null })
   })
 
   test('cold resume: the FIRST launch after a stall is allowed (it IS the warm-up), the second is denied naming the stalled session', () => {
@@ -103,8 +139,20 @@ suite('agentGate — evaluateAgentGate (TRDD-GOD0108C)', () => {
     assert.strictEqual(d.decision, 'deny')
     assert.strictEqual(d.code, 'COLD_RESUME_FANOUT')
     assert.ok(d.reason?.includes('warm-up'), d.reason ?? '')
-    assert.ok(d.reason?.includes('session c8a95d7e…'), `stalled session must be named: ${d.reason ?? ''}`)
-    assert.ok(d.reason?.includes('…/ai-maestro-janitor'), 'stalled workspace must be named')
+    // The stall was in ANOTHER project. The deny is still right — this caller's fan-out prefixes
+    // are cold either way — but whose session died is not this agent's business.
+    assert.ok(!d.reason?.includes('c8a95d7e'), `foreign stalled session must NOT be named: ${d.reason ?? ''}`)
+    assert.ok(!d.reason?.includes('ai-maestro-janitor'), `foreign workspace must NOT be named: ${d.reason ?? ''}`)
+  })
+
+  test('cold resume: a stall in the caller OWN project IS named — it is theirs, and knowing which session helps', () => {
+    const d = evaluateAgentGate({}, state({
+      lastStopFailureMs: NOW - 3 * 60_000, startsLast2min: 1,
+      stall: { session: 'c8a95d7e-048f-4c47-ae33-1dfacbcab3b1', cwd: OWN_CWD },
+    }))
+    assert.strictEqual(d.code, 'COLD_RESUME_FANOUT')
+    assert.ok(d.reason?.includes('session c8a95d7e…'), `own stalled session must be named: ${d.reason ?? ''}`)
+    assert.ok(d.reason?.includes('…/agentlens'), 'own workspace must be named')
   })
 
   test('a stall older than 10min disarms the cold-resume rule', () => {
@@ -138,7 +186,7 @@ suite('agentGate — evaluateAgentGate (TRDD-GOD0108C)', () => {
   })
 
   test('fan-out heads-up at 5 starts/2min adds the premium-model hint only when model is unpinned', () => {
-    const s = state({ startsLast2min: 5, premiumShare: 0.8, premiumModel: 'claude-fable-5' })
+    const s = state({ startsLast2min: 5, spawners: spawnersIn(5), premiumShare: 0.8, premiumModel: 'claude-fable-5' })
     const unpinned = evaluateAgentGate({}, s)
     assert.strictEqual(unpinned.code, 'FANOUT_HEADSUP')
     assert.ok(unpinned.reason?.includes('claude-fable-5'), unpinned.reason ?? '')
@@ -379,38 +427,56 @@ suite('agentGate — buildAdvisory (PostToolUse in-band warning)', () => {
     assert.strictEqual(buildAdvisory(state()), null)
   })
 
-  test('thrash advisory names tokens and the likely culprit; unattributed falls back to investigate_burn', () => {
+  test('thrash advisory states the magnitude but names NO session; identity is a question for the CLI', () => {
     const a = buildAdvisory(state({ thrash: thrashing }))
     assert.ok(a)
     assert.strictEqual(a?.code, 'THRASH_ACTIVE')
-    assert.ok(a?.text.includes('session 249c4216…'), a?.text)
+    assert.ok(a?.text.includes('1200k'), a?.text)
+    assert.ok(!a?.text.includes('249c4216'), `suspect must NOT be named: ${a?.text}`)
+    assert.ok(a?.text.includes('investigate_burn'), a?.text)
     const blind = buildAdvisory(state({ thrash: { ...thrashing, suspects: [] } }))
     assert.ok(blind?.text.includes('investigate_burn'), blind?.text)
   })
 
-  test('fan-out advisory carries the premium share hint', () => {
-    const a = buildAdvisory(state({ startsLast2min: 6, premiumShare: 0.9, premiumModel: 'claude-fable-5' }))
+  test('fan-out advisory carries the premium share hint, counting only the caller OWN launches', () => {
+    const a = buildAdvisory(state({ startsLast2min: 6, spawners: spawnersIn(6), premiumShare: 0.9, premiumModel: 'claude-fable-5' }))
     assert.strictEqual(a?.code, 'FANOUT_HEADSUP')
     assert.ok(a?.text.includes('claude-fable-5'), a?.text)
+    assert.ok(a?.text.includes('6 agent launches from this project'), a?.text)
   })
 
-  test('FAN_OUT_COLD_START: distinct fresh sessions\' one-time cold writes get an "expected, not thrash" advisory', () => {
-    // The measured 2026-07-11 false positive: 4 freshly-spawned agents' cold-start writes
-    // (~463k total) — must read as expected fan-out cost, never as cache-thrash.
+  test('a fan-out in ANOTHER project yields NO advisory, and no advisory ever carries a foreign id or path', () => {
+    // The measured 2026-08-07 leak: this channel printed `session f7385521… in …/EMASOFT-…;
+    // session 9e1dc393… in …/llm-externalizer` into an unrelated agent's context.
+    const foreign = buildAdvisory(state({ startsLast2min: 6, spawners: spawnersIn(6, FOREIGN_CWD), premiumShare: 0.9, premiumModel: 'claude-fable-5' }))
+    assert.strictEqual(foreign, null, `a foreign project's wave must not speak here: ${foreign?.text}`)
+    const mixed = buildAdvisory(state({
+      startsLast2min: 11,
+      spawners: [...spawnersIn(6), ...spawnersIn(5, FOREIGN_CWD)],
+      premiumShare: 0.9, premiumModel: 'claude-fable-5',
+    }))
+    assert.strictEqual(mixed?.code, 'FANOUT_HEADSUP', 'own launches still cross the threshold')
+    assert.ok(mixed?.text.includes('6 agent launches'), `only OWN launches are counted: ${mixed?.text}`)
+    assert.ok(!mixed?.text.includes(FOREIGN_CWD.split('/').pop() ?? 'x'), `foreign path leaked: ${mixed?.text}`)
+    assert.ok(!mixed?.text.includes('777b8f52'), `session id leaked: ${mixed?.text}`)
+  })
+
+  test('cold-start writes are EXPECTED fan-out cost and no longer interrupt — an advisory that says "no action needed" is a fact, not an alert', () => {
+    // Retired 2026-08-07. It was added on 2026-07-11 so a HUMAN debugging a burst would not
+    // mistake it for cache-thrash — a good explanation, but explaining is not interrupting, and
+    // its own closing words were "No action needed". The false-positive it guards against is now
+    // pinned where it belongs, in bodiesActivity.test.ts, and the count still reaches the
+    // dashboard, --risk and investigate_burn.
     const coldStarts: ThrashReport = {
       active: false, count: 4, rebilledTokens: 463_000, model: 'claude-fable-5', windowMs: 300_000,
       suspects: [], topSource: { session: 's1', count: 1, rebilledTokens: 120_000 },
       unattributed: { count: 0, rebilledTokens: 0 },
       coldStartSessions: 4, coldStartRebilledTokens: 463_000,
     }
-    const a = buildAdvisory(state({ thrash: coldStarts }))
-    assert.strictEqual(a?.code, 'FAN_OUT_COLD_START')
-    assert.ok(a?.text.includes('4 freshly-spawned'), a?.text)
-    assert.ok(a?.text.includes('NOT cache-thrash'), a?.text)
-    // Precedence: an ACTIVE thrash always outranks the cold-start explanation.
+    assert.strictEqual(buildAdvisory(state({ thrash: coldStarts })), null)
+    // Precedence unchanged: an ACTIVE thrash is a real anomaly the caller can act on, and still speaks.
     const active = buildAdvisory(state({ thrash: { ...coldStarts, active: true, topSource: { session: 's1', count: 4, rebilledTokens: 463_000 } } }))
     assert.strictEqual(active?.code, 'THRASH_ACTIVE')
-    // A single fresh session's cold start is unremarkable — no advisory.
     assert.strictEqual(buildAdvisory(state({ thrash: { ...coldStarts, coldStartSessions: 1 } })), null)
   })
 })

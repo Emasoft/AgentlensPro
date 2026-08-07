@@ -6,6 +6,34 @@ All notable changes to AgentlensPro are documented here.
 
 ## [2.23.1] - 2026-08-06
 
+### Changed
+
+- **The hooks stopped narrating other people's work into your agent's context.** AgentlensPro
+  injects text into every agent through its gate hooks, and three of the four PostToolUse
+  advisories had drifted into noise. Measured in one real session: `FANOUT_HEADSUP` printed
+  `session f7385521… in …/EMASOFT-ASSISTANT-MANAGER; session 9e1dc393… in …/llm-externalizer` into
+  an agent working on neither — other projects' session ids and directories, which the reader can
+  neither act on nor is owed. `FAN_OUT_COLD_START` ended with the words "No action needed", which
+  is the definition of a fact rather than an alert. `THRASH_UNATTRIBUTED` fired on writes that
+  "could not be attributed to any session" — never provably the reader's — and its only
+  instruction was to go run a CLI command later.
+  The drift had one shape: each was added to explain a real finding to a *human* mid-debugging,
+  and explaining is not interrupting. So the fix is a policy rather than four edits — text put in
+  front of a model must be about its **own project**, **actionable right now**, and
+  **significant**. The two non-actionable advisories are gone; the fan-out one now counts only the
+  caller's own launches and names agent *kinds* instead of sessions and paths; the two denies and
+  the stall messages keep firing (they stop the action, which is the whole point) but no longer
+  name a foreign session or workspace; and thrash suspects — whose records carry no cwd, so they
+  can never be shown to be yours — are counted rather than named.
+  **Nothing was deleted from the product, only from the interruption**: every one of these
+  detections still reaches the dashboard, `--risk`, `investigate_burn`, and the diagnostics skill,
+  which is where they are answered on request. Scoping is exact-cwd and fails *quiet*: a caller
+  whose project cannot be identified gets silence, because an unprovable match must never become a
+  claim. Verified first that `cwd` really is on both gate payloads before relying on it — an
+  earlier inference from 173 stale records said it was not, and acting on that would have deleted
+  a working advisory on a false premise. Ten tests, three watched to fail against the
+  reintroduced leak.
+
 ### Fixed
 
 - **A body the store already held was never reclaimed, so a fixed-size spool filled until capture

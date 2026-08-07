@@ -958,7 +958,7 @@ function resolveCallerTtlKind(sessionId: string | null, transcriptPath: string |
 function buildGateState(
   now: number,
   parent: { contextTokens: number | null; idleMs: number | null },
-  caller?: { sessionId: string | null; transcriptPath: string | null },
+  caller?: { sessionId: string | null; transcriptPath: string | null; cwd?: string | null },
 ): AgentGateState {
   let starts60 = 0
   let starts120 = 0
@@ -1023,6 +1023,9 @@ function buildGateState(
       resolveCallerTtlKind(caller?.sessionId ?? null, caller?.transcriptPath ?? null),
       currentTtlContext(),
     ),
+    // WHO is asking — the identity every model-facing message is scoped against, so a warning can
+    // only ever describe the caller's OWN project (see AgentGateState.caller).
+    caller: { session: caller?.sessionId ?? null, cwd: caller?.cwd ?? null },
     thresholds: gateThresholds,
   }
 }
@@ -3375,7 +3378,8 @@ const uiServer = http.createServer(async (req, res) => {
         const transcriptPath = typeof p.transcript_path === 'string' ? p.transcript_path : null
         // Real parent context (tokens from the transcript's last usage) + cache warmth (mtime).
         const parent = transcriptPath ? readTranscriptContext(transcriptPath, now) : { contextTokens: null, idleMs: null }
-        const state = buildGateState(now, parent, { sessionId, transcriptPath })
+        const cwd = typeof p.cwd === 'string' ? p.cwd : null
+        const state = buildGateState(now, parent, { sessionId, transcriptPath, cwd })
         persistStats.gateChecks++
 
         if (p.hook_event_name === 'PostToolUse') {
