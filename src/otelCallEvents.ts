@@ -113,10 +113,59 @@ export function scanOtelCallEvents(opts: OtelScanOptions = {}): {
   const until = opts.untilMs ?? now
   const since = opts.sinceMs ?? (opts.windowHours ? now - opts.windowHours * 3_600_000 : 0)
 
-  let spans: Span[] = []
+  // forEachInRange, NOT loadRange: this scan keeps only `api_request` and `compaction` spans, a
+  // small fraction of the window, but loadRange returns EVERY span in the window in one array —
+  // so an unbounded query (windowHours undefined ⇒ since 0 ⇒ the entire store) materialized ~1M
+  // span objects to discard almost all of them on the next line, and killed the server with a V8
+  // heap OOM at ~4 GB. With the visitor, peak memory follows what is KEPT, not the window
+  // (TRDD-QK3L5QAS).
+  const events: OtelCallEvent[] = []
+  const compactions: OtelCompactionEvent[] = []
+  // Counted rather than derived from an array's length: nothing holds the scanned spans any more,
+  // which is the entire point — so the coverage figure has to be tallied as they go past.
+  let spansScanned = 0
+
+  // The try must span BOTH the construction and the read. It used to, because the read was the
+  // `loadRange` call sitting inside it; `flush()` still runs on the read path and can throw, so
+  // wrapping only the constructor would turn a degradation (fall back to the raw-body scan) into a
+  // thrown error. On failure the partially-filled arrays are discarded with the fallback return,
+  // exactly as an aborted loadRange used to yield nothing.
   try {
-    spans = new SegmentedSpanStore(spansDir, () => { /* read-only: ingest errors are not ours */ })
-      .loadRange(since, until)
+    const store = new SegmentedSpanStore(spansDir, () => { /* read-only: ingest errors are not ours */ })
+    store.forEachInRange(since, until, (s: Span) => {
+      spansScanned += 1
+      if (s.name !== API_REQUEST_SPAN && s.name !== COMPACTION_SPAN) return
+      const a = attrMap(s.attributes)
+      const sessionId = str(a.get('session.id'))
+      if (!sessionId) return
+      const ts = eventTimeMs(s, a)
+      if (s.name === COMPACTION_SPAN) {
+        compactions.push({
+          ts, sessionId,
+          trigger: str(a.get('trigger')),
+          preTokens: a.has('pre_tokens') ? num(a.get('pre_tokens')) : undefined,
+          postTokens: a.has('post_tokens') ? num(a.get('post_tokens')) : undefined,
+        })
+        return
+      }
+      // cost_usd_micros is the precise integer form; prefer it and fall back to the float.
+      const micros = a.has('cost_usd_micros') ? num(a.get('cost_usd_micros')) : null
+      const costUsd = micros !== null ? micros / 1e6 : (a.has('cost_usd') ? num(a.get('cost_usd')) : null)
+      events.push({
+        ts, sessionId,
+        requestId: str(a.get('request_id')),
+        model: str(a.get('model')),
+        inputTokens: num(a.get('input_tokens')),
+        outputTokens: num(a.get('output_tokens')),
+        cacheReadTokens: num(a.get('cache_read_tokens')),
+        cacheCreateTokens: num(a.get('cache_creation_tokens')),
+        costUsd,
+        querySource: str(a.get('query_source')),
+        speed: str(a.get('speed')),
+        effort: str(a.get('effort')),
+        agentName: str(a.get('agent.name')),
+      })
+    })
   } catch {
     return {
       events: [], compactions: [],
@@ -127,41 +176,6 @@ export function scanOtelCallEvents(opts: OtelScanOptions = {}): {
     }
   }
 
-  const events: OtelCallEvent[] = []
-  const compactions: OtelCompactionEvent[] = []
-  for (const s of spans) {
-    if (s.name !== API_REQUEST_SPAN && s.name !== COMPACTION_SPAN) continue
-    const a = attrMap(s.attributes)
-    const sessionId = str(a.get('session.id'))
-    if (!sessionId) continue
-    const ts = eventTimeMs(s, a)
-    if (s.name === COMPACTION_SPAN) {
-      compactions.push({
-        ts, sessionId,
-        trigger: str(a.get('trigger')),
-        preTokens: a.has('pre_tokens') ? num(a.get('pre_tokens')) : undefined,
-        postTokens: a.has('post_tokens') ? num(a.get('post_tokens')) : undefined,
-      })
-      continue
-    }
-    // cost_usd_micros is the precise integer form; prefer it and fall back to the float.
-    const micros = a.has('cost_usd_micros') ? num(a.get('cost_usd_micros')) : null
-    const costUsd = micros !== null ? micros / 1e6 : (a.has('cost_usd') ? num(a.get('cost_usd')) : null)
-    events.push({
-      ts, sessionId,
-      requestId: str(a.get('request_id')),
-      model: str(a.get('model')),
-      inputTokens: num(a.get('input_tokens')),
-      outputTokens: num(a.get('output_tokens')),
-      cacheReadTokens: num(a.get('cache_read_tokens')),
-      cacheCreateTokens: num(a.get('cache_creation_tokens')),
-      costUsd,
-      querySource: str(a.get('query_source')),
-      speed: str(a.get('speed')),
-      effort: str(a.get('effort')),
-      agentName: str(a.get('agent.name')),
-    })
-  }
   events.sort((x, y) => x.ts - y.ts)
   compactions.sort((x, y) => x.ts - y.ts)
 
@@ -169,8 +183,8 @@ export function scanOtelCallEvents(opts: OtelScanOptions = {}): {
     events, compactions,
     coverage: {
       spansDir, windowHours: opts.windowHours,
-      spansScanned: spans.length, apiRequests: events.length, compactions: compactions.length,
-      note: `Scanned ${spans.length} span(s) from the OTEL store; ${events.length} api_request event(s) carry session.id + cost_usd directly (no previous_message_id chain needed).`,
+      spansScanned, apiRequests: events.length, compactions: compactions.length,
+      note: `Scanned ${spansScanned} span(s) from the OTEL store; ${events.length} api_request event(s) carry session.id + cost_usd directly (no previous_message_id chain needed).`,
     },
   }
 }

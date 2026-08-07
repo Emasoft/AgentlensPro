@@ -56,6 +56,29 @@ All notable changes to AgentlensPro are documented here.
 
 ### Fixed
 
+- **`get_cache_event_log` without `--window` killed the server, and with it every project's
+  ingestion.** The command returned `socket hang up` and the server's pid changed; the log's last
+  line was `tool get_cache_event_log start` and nothing after. Reproduced out-of-server, where the
+  cause the fatal abort could not print appeared: `FATAL ERROR: Ineffective mark-compacts near heap
+  limit — JavaScript heap out of memory`, at ~4 GB after 62 s. `windowHours` is optional, so the
+  default was `undefined` — read by the scan as *all of history* — and `SegmentedSpanStore.loadRange`
+  returns every span in the window in ONE array while the cache-ledger scan keeps only `api_request`
+  and `compaction` spans. About a million span objects were materialized to be discarded on the very
+  next line. Memory grew with the window, not with the answer: 1 h → 19 MB, 24 h → 478 MB, 168 h →
+  dead, for a result that was 7 rows either way. It degrades with age rather than failing on day
+  one, which is how it shipped.
+  The store now exposes `forEachInRange(since, until, visit)` and `loadRange` is a thin wrapper over
+  it, so the two cannot drift; the scan uses the visitor and holds only what it keeps. Measured
+  across a 168× window range afterwards: **69 MB / 121 MB / 147 MB / 170 MB** — the residual growth
+  is the retained events themselves, which any function returning them must hold. Live, the exact
+  command that killed the server now exits 0 in 36 s having processed **184,212 calls across the
+  whole store history**, with the pid unchanged; that query had never once completed. **The default
+  was deliberately NOT capped** — a window cap would have hidden the accumulation rather than
+  removing it, and made a legitimate full-history question silently partial. Wall time improved as a
+  side effect (warm, same store, 24 h: 28.7 s → 3.1–5.0 s). Seven new tests, including the first
+  ones this scan has ever had, falsified by deleting the `return` from the compaction branch — the
+  exact bug a loop→callback rewrite invites.
+
 - **Every 1M-context model was scored against a 200k window, so `ctxmap` reported context ~5×
   fuller than it was.** `windowSizeFor` inferred the window from a private regex that knew only
   `fable` and an explicit `[1m]` tag, while `shared/pricing.ts` has declared `contextWindowTokens`

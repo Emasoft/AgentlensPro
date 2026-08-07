@@ -427,4 +427,41 @@ suite('segmentedSpanStore — read-time attribute overlay (S3-F3b)', () => {
       assert.strictEqual(attrOf(store.loadRange(0, Infinity)[0], 'gen_ai.output.messages'), undefined, 'overlay cleared with the store')
     } finally { cleanup() }
   })
+
+  // forEachInRange is what a SELECTIVE reader must use — loadRange returns the whole window in one
+  // array, which is how an unbounded cache-ledger query OOM'd the server (TRDD-QK3L5QAS). loadRange
+  // is now a wrapper over it, so the two can only drift if the wrapper is wrong; these pin that.
+  test('forEachInRange visits exactly what loadRange returns, in the same order', () => {
+    const { dir, cleanup } = tmpDir()
+    try {
+      const store = new SegmentedSpanStore(dir, () => {})
+      for (const [i, at] of [D1, D1 + 1000, D2, D3].entries()) store.append(mkSpan(at, i))
+      store.flush()
+      for (const [lo, hi] of [[0, Infinity], [D1, D2], [D2 + 1, D3 - 1], [D3, D3]] as const) {
+        const visited: Span[] = []
+        store.forEachInRange(lo, hi, (s) => { visited.push(s) })
+        assert.deepStrictEqual(visited, store.loadRange(lo, hi), `window ${lo}..${hi}`)
+      }
+    } finally { cleanup() }
+  })
+
+  test('forEachInRange applies the overlay and tolerates a missing dir, exactly as loadRange does', () => {
+    const { dir, cleanup } = tmpDir()
+    try {
+      const store = new SegmentedSpanStore(dir, () => {})
+      store.append(mkSpan(D1, 1))
+      store.flush()
+      store.injectSpanAttribute('trace-1', 'span-1', 'gen_ai.output.messages', 'MERGED')
+      const seen: Span[] = []
+      store.forEachInRange(0, Infinity, (s) => { seen.push(s) })
+      assert.strictEqual(attrOf(seen[0], 'gen_ai.output.messages'), 'MERGED', 'the visitor path must not skip the overlay')
+    } finally { cleanup() }
+
+    const gone = path.join(os.tmpdir(), `al-seg-absent-${process.pid}-${seq++}`)
+    const store = new SegmentedSpanStore(gone, () => {})
+    fs.rmSync(gone, { recursive: true, force: true })
+    let calls = 0
+    store.forEachInRange(0, Infinity, () => { calls += 1 })
+    assert.strictEqual(calls, 0, 'no dir ⇒ no visits and no throw')
+  })
 })

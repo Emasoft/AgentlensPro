@@ -247,17 +247,31 @@ export class SegmentedSpanStore {
     return span
   }
 
-  /** Load only the spans whose timestamp falls in [sinceMs, untilMs] — reads exclusively the
-   *  segment files whose day/index range overlaps the window; every other segment is never
-   *  opened. This is how "queries load segments, not the whole store" is enforced. */
+  /** Load only the spans whose timestamp falls in [sinceMs, untilMs].
+   *
+   *  Prefer `forEachInRange` when the caller only wants SOME of them. This returns every span in
+   *  the window in ONE array, so its peak memory is the whole window regardless of how few spans
+   *  the caller keeps — which is how an unbounded query OOM'd the server (TRDD-QK3L5QAS): the
+   *  cache-ledger scan loaded ~1M span objects and discarded all but the `api_request` ones on the
+   *  very next line. */
   loadRange(sinceMs: number, untilMs: number): Span[] {
-    this.flush() // reads must see everything appended so far
     const out: Span[] = []
+    this.forEachInRange(sinceMs, untilMs, (span) => { out.push(span) })
+    return out
+  }
+
+  /** Visit each span in [sinceMs, untilMs] without ever holding them all at once — reads
+   *  exclusively the segment files whose day/index range overlaps the window; every other segment
+   *  is never opened. This is how "queries load segments, not the whole store" is enforced, and
+   *  the visitor is how a selective caller's peak memory stays proportional to what it KEEPS
+   *  rather than to the size of the window. */
+  forEachInRange(sinceMs: number, untilMs: number, visit: (span: Span) => void): void {
+    this.flush() // reads must see everything appended so far
     let names: string[]
     try {
       names = fs.readdirSync(this.dir).filter((f) => segmentDayMs(f) !== null).sort()
     } catch {
-      return out // no dir yet — empty store
+      return // no dir yet — empty store
     }
     for (const name of names) {
       const dayMs = segmentDayMs(name) as number
@@ -280,7 +294,7 @@ export class SegmentedSpanStore {
           try { span = JSON.parse(line) as Span } catch { skipped++; return } // truncated tail line
           const ts = spanTimestampMs(span)
           if (ts < sinceMs || ts > untilMs) return
-          out.push(this.applyOverlay(span))
+          visit(this.applyOverlay(span))
         })
       } catch (e) {
         readError = String(e)
@@ -290,7 +304,6 @@ export class SegmentedSpanStore {
       }
       if (skipped > 0) this.log(`[AgentLens] span store: skipped ${skipped} corrupt line(s) in ${name}`)
     }
-    return out
   }
 
   /** Delete whole EXPIRED segments only (day older than retentionDays). Partial segments are
