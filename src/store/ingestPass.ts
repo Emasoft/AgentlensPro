@@ -59,6 +59,10 @@ export interface IngestPassResult {
   /** Of `deleted`, how many needed no re-ingest because the store already held them. Distinct from
    *  `ingested` so a pass that only reclaims cannot be mistaken for a pass that did nothing. */
   reclaimedDurable: number
+  /** Source bytes actually UNLINKED. Distinct from `bytesIn` (bytes read): a pass that reads a
+   *  gigabyte and verifies none of it frees nothing, and reporting the read as "freed" would show
+   *  a healthy drain while the disk never moves. */
+  bytesFreed: number
   /** Files that could NOT be verified. They are NOT deleted, and they are named. */
   failed: string[]
   /** True when the byte budget stopped the pass early (more remains for the next one). */
@@ -100,7 +104,7 @@ export async function ingestPass(opts: IngestPassOptions): Promise<IngestPassRes
     skipNames,
   } = opts
 
-  const res: IngestPassResult = { ingested: 0, deleted: 0, reclaimedDurable: 0, bytesIn: 0, bytesStored: 0, failed: [], throttled: false }
+  const res: IngestPassResult = { ingested: 0, deleted: 0, reclaimedDurable: 0, bytesFreed: 0, bytesIn: 0, bytesStored: 0, failed: [], throttled: false }
   const cutoff = maxAgeMs > 0 ? Date.now() - maxAgeMs : Infinity
   // The AGE gate is the only filter here. `skipNames` must NOT filter at this level: a file whose name
   // is already durable still has to reach the verify+delete gate in settleBatch(). Excluding it from
@@ -128,15 +132,26 @@ export async function ingestPass(opts: IngestPassOptions): Promise<IngestPassRes
         const v = await verifyBodyInStore(store, b.name, onDisk, b.mtime)
         if (!v.ok) {
           res.failed.push(v.reason ?? b.name)
+          // A durable-NAMED file whose bytes no longer match is not durable, so drop the name from
+          // the skip-set: the next pass must re-INGEST the true bytes through the normal path.
+          // Without this it is skipped forever (never re-ingested) AND never deleted (verify keeps
+          // failing) — it occupies a fixed-size spool permanently, which is the exact
+          // fills-until-capture-dies failure this pass exists to prevent.
+          if (b.durable) skipNames?.delete(b.name)
           continue // NOT deleted
         }
         if (deleteAfter) {
           fs.unlinkSync(b.p) // (4) and only now
           res.deleted++
+          res.bytesFreed += b.size
           if (b.durable) res.reclaimedDurable++
         }
       } catch (e) {
-        // Any doubt at all ⇒ keep the file. A body we cannot prove we can return is a body we have
+        // A file that VANISHED mid-pass is not a verification failure — it is simply gone, and the
+        // ingest path has always treated that as fine. Reporting it would raise a "could NOT be
+        // verified and were KEPT on disk" alarm about a file that no longer exists.
+        if ((e as NodeJS.ErrnoException).code === 'ENOENT') continue
+        // Any other doubt ⇒ keep the file. A body we cannot prove we can return is a body we have
         // no right to delete.
         res.failed.push(`${b.name}: ${(e as Error).message}`)
       }

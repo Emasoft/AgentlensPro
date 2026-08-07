@@ -520,7 +520,7 @@ async function archiveOtelBodies(): Promise<void> {
     bodyStore ??= await openStore({ dir: path.join(DATA_DIR, 'store') })
     const skip = (ingestSkipNames ??= await seedIngestSkipNames(bodyStore))
 
-    let ingested = 0, deleted = 0, reclaimedDurable = 0, bytesIn = 0, bytesStored = 0, liveBytesTotal = 0, throttled = false
+    let ingested = 0, deleted = 0, reclaimedDurable = 0, bytesIn = 0, bytesFreed = 0, bytesStored = 0, liveBytesTotal = 0, throttled = false
     const failed: string[] = []
     for (const target of targets) {
       // The size cap is the emergency valve: over it, ingest EVERYTHING (age 0) rather than only what
@@ -540,7 +540,7 @@ async function archiveOtelBodies(): Promise<void> {
         deleteAfter: true,                          // safe: ingestPass verifies from the DURABLE store first
         skipNames: skip,                            // don't re-read+re-hash already-durable bodies
       })
-      ingested += r.ingested; deleted += r.deleted; reclaimedDurable += r.reclaimedDurable
+      ingested += r.ingested; deleted += r.deleted; reclaimedDurable += r.reclaimedDurable; bytesFreed += r.bytesFreed
       bytesIn += r.bytesIn; bytesStored += r.bytesStored
       throttled ||= r.throttled
       for (const f of r.failed) failed.push(f)
@@ -560,8 +560,11 @@ async function archiveOtelBodies(): Promise<void> {
       return v.ok
     })
     persistStats.bodiesLastPurge = {
-      at: Date.now(), removedFiles: deleted, freedBytes: bytesIn,
-      keptFiles: 0, keptBytes: Math.max(0, liveBytesTotal - bytesIn),
+      // freedBytes is what was UNLINKED, not what was read: a pass that reads a gigabyte and
+      // verifies none of it frees nothing, and reporting the read would show a healthy drain while
+      // the disk never moves.
+      at: Date.now(), removedFiles: deleted, freedBytes: bytesFreed,
+      keptFiles: 0, keptBytes: Math.max(0, liveBytesTotal - bytesFreed),
     }
     // `deleted > 0` is load-bearing in this gate: a pass that reclaims thousands of already-durable
     // files ingests NOTHING, so gating on `ingested` alone made the whole reclaim path silent.
@@ -972,7 +975,12 @@ function buildGateState(
       if (now - r.ts <= 60_000) starts60++
       if (now - r.ts <= 120_000) {
         starts120++
-        const sid = r.session ?? '?'
+        // Sessionless events are keyed by their CWD, not lumped under one '?' bucket. That bucket
+        // takes the FIRST cwd it sees and now drives an own-project TRIGGER rather than a display
+        // string, so merging two projects' sessionless launches would either credit all of them to
+        // whoever matched that cwd, or exclude all of them — both wrong, and both silent.
+        const cwdKey = typeof r.payload?.cwd === 'string' ? r.payload.cwd : 'unknown'
+        const sid = r.session ?? `?:${cwdKey}`
         const e = bySession.get(sid) ?? { cwd: null, types: new Map<string, number>(), count: 0 }
         e.count++
         const cwd = r.payload?.cwd
@@ -988,7 +996,9 @@ function buildGateState(
   const spawners: LaunchSpawner[] = [...bySession.entries()]
     .sort((a, b) => b[1].count - a[1].count)
     .map(([session, e]) => ({
-      session,
+      // A synthesized `?:<cwd>` key is NOT a session id — hand the gate `'?'` so its own-session
+      // match can never fire on it (cwd is the only honest signal for a sessionless launch).
+      session: session.startsWith('?:') ? '?' : session,
       cwd: e.cwd,
       count: e.count,
       agentTypes: [...e.types.entries()].sort((a, b) => b[1] - a[1]).map(([t, n]) => (n > 1 ? `${t}×${n}` : t)),

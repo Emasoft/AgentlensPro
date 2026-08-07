@@ -139,8 +139,15 @@ const dirName = (cwd: string | null): string => (cwd ? `…/${cwd.split('/').fil
  *  Exact match is deliberate: a subagent inherits its parent's cwd so same-project launches match
  *  by construction, while a worktree really is a different project (different prefix, different
  *  cache entry) and should not be folded in. */
-function isOwnProject(caller: AgentGateState['caller'], cwd: string | null): boolean {
-  return Boolean(caller?.cwd && cwd && cwd === caller.cwd)
+function isOwnProject(caller: AgentGateState['caller'], who: { session: string | null; cwd: string | null }): boolean {
+  // SESSION first, and it is not just an optimisation: a worktree-isolated fan-out runs each
+  // subagent in .claude/worktrees/<name>, so its cwd differs from the caller's by design. Matching
+  // on cwd alone made ownLaunches() return 0 however many launched, silencing the advisory for
+  // exactly the fan-out shape most likely to be expensive. A launch from the caller's OWN session
+  // is unambiguously the caller's doing, whatever directory it ends up in. `'?'` is the sentinel
+  // the server uses for a payload with no session id, so it must never match anything.
+  if (caller?.session && who.session && who.session !== '?' && who.session === caller.session) return true
+  return Boolean(caller?.cwd && who.cwd && who.cwd === caller.cwd)
 }
 
 /** Launches in the window belonging to the CALLER'S OWN project. Returns 0 — never the
@@ -148,16 +155,26 @@ function isOwnProject(caller: AgentGateState['caller'], cwd: string | null): boo
  *  silent rather than being blamed on whoever happened to ask next. */
 function ownLaunches(state: AgentGateState): number {
   return (state.spawners ?? [])
-    .filter(s => isOwnProject(state.caller, s.cwd))
+    .filter(s => isOwnProject(state.caller, s))
     .reduce((n, s) => n + s.count, 0)
 }
 
-/** WHAT the caller's own project is spawning — agent kinds only, e.g. `workflow-subagent×5, fork×1`.
+/** WHAT the caller's own project is spawning — distinct agent KINDS, e.g. `workflow-subagent, fork`.
  *  Carries NO session id and NO directory by design: those identify other people's work, which the
- *  reader can neither act on nor is owed, while the agent KINDS are the part it can actually change. */
+ *  reader can neither act on nor is owed, while the agent KINDS are the part it can actually change.
+ *
+ *  The per-session `×N` suffixes are STRIPPED rather than carried through. Each spawner arrives
+ *  pre-aggregated as `type×N` for ITS session, so two sessions each launching 3 `explore` both
+ *  render `explore×3` and a Set over the strings collapses them to one — printing `(explore×3)`
+ *  beside a total of 6 launches, a sentence that contradicts itself. The total is already stated by
+ *  the caller; this clause only has to say WHAT KIND. */
 function fmtOwnAgentTypes(state: AgentGateState): string {
   return [...new Set(
-    (state.spawners ?? []).filter(s => isOwnProject(state.caller, s.cwd)).flatMap(s => s.agentTypes),
+    (state.spawners ?? [])
+      .filter(s => isOwnProject(state.caller, s))
+      .flatMap(s => s.agentTypes)
+      .map(t => t.split('×')[0].trim())
+      .filter(t => t.length > 0),
   )].join(', ')
 }
 
@@ -166,7 +183,7 @@ function fmtOwnAgentTypes(state: AgentGateState): string {
  *  cold either way), but whose session it was is not this agent's business. */
 function fmtStallOrigin(state: AgentGateState): string {
   const s = state.stall
-  if (!s || !isOwnProject(state.caller, s.cwd)) return ''
+  if (!s || !isOwnProject(state.caller, s)) return ''
   return ` (turn died in session ${shortSid(s.session)} in ${dirName(s.cwd)})`
 }
 
@@ -321,7 +338,10 @@ export function evaluateAgentGate(
     const kinds = fmtOwnAgentTypes(state)
     return deny('FORK_STORM_FORMING',
       `AgentLens burn-gate: fork of a ~${parentK}-token parent into a COLD cache (idle ${idleMin}min > its ` +
-      `${ttlPhrase(ttl)}) with ${state.startsLast2min} launches already in 2min${kinds ? ` (${kinds})` : ''} — a fork ` +
+      // Same split as RUNAWAY_FANOUT: the COUNT is machine-wide (the cache this guards is shared),
+      // the KINDS are own-project only — so label the parenthetical, or the two read as one
+      // population and the message attributes other projects' launches to the caller.
+      `${ttlPhrase(ttl)}) with ${state.startsLast2min} launches already in 2min${kinds ? ` (from this project: ${kinds})` : ''} — a fork ` +
       `storm is forming; each fork re-pays the full parent prefix at the cache-WRITE rate. Warm the cache with ` +
       `ONE agent first, or compact the parent before fanning out. Retry in ~60s. Override: AGENTLENS_GATE=off.`)
   }
@@ -350,8 +370,10 @@ export function evaluateAgentGate(
   // THRASH_UNATTRIBUTED was retired from the model-facing channels (2026-08-07). By construction it
   // reported writes that could NOT be tied to any session, so it could never be shown to be the
   // caller's own work, and its only instruction was "go run investigate_burn" — a question for the
-  // CLI, not an interruption. The DETECTION is untouched: it still reaches the dashboard, --risk
-  // and investigate_burn, where it is answered on request.
+  // CLI, not an interruption. The DETECTION is untouched — `bodiesActivity` still computes
+  // `thrash.unattributed` on every report — but be precise about what that does and does not mean:
+  // this file was its ONLY consumer, so the number is currently surfaced NOWHERE. Wiring it into
+  // investigate_burn / --risk is open work, not something already true.
   const ownStarts = ownLaunches(state)
   if (ownStarts >= th.fanoutWarn2min) {
     const premiumHint =
@@ -540,7 +562,10 @@ export function buildAdvisory(state: AgentGateState): { code: string; text: stri
   //   • FAN_OUT_COLD_START — its own closing words were "No action needed", which is the
   //     definition of a fact rather than an alert. It existed to stop a human mistaking a fan-out
   //     for thrash while debugging; explaining is not the same as interrupting.
-  // Both DETECTIONS are untouched and still reach the dashboard, --risk and investigate_burn.
+  // Both DETECTIONS still run — `bodiesActivity` computes `unattributed` and `coldStartSessions` on
+  // every report — but this file was their ONLY consumer, so as of this change neither number is
+  // surfaced anywhere. That is a deliberate removal of an interruption, NOT a claim that the data
+  // is still visible elsewhere; giving them a home in investigate_burn / --risk is open work.
   const ownStarts = ownLaunches(state)
   if (ownStarts >= th.fanoutWarn2min) {
     const premium =

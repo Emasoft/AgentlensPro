@@ -121,6 +121,32 @@ suite('agentGate — evaluateAgentGate (TRDD-GOD0108C)', () => {
     assert.deepStrictEqual(d, { decision: 'allow', code: null, reason: null })
   })
 
+  test('a WORKTREE fan-out still counts as own — same session, different cwd by design', () => {
+    // Worktree-isolated subagents run in .claude/worktrees/<name>, so matching on cwd alone made
+    // ownLaunches() return 0 however many launched — silencing the advisory for exactly the
+    // fan-out shape most likely to be expensive, with nothing indicating it had been suppressed.
+    const mine = 'ca11e400-0000-0000-0000-000000000000'
+    const d = evaluateAgentGate({}, state({
+      startsLast60s: 7, startsLast2min: 7,
+      caller: { session: mine, cwd: OWN_CWD },
+      spawners: [{ session: mine, cwd: `${OWN_CWD}/.claude/worktrees/wt-1`, count: 7, agentTypes: ['fork×7'] }],
+    }))
+    assert.strictEqual(d.code, 'FANOUT_HEADSUP', `own-session launches must count wherever they run: ${d.reason ?? ''}`)
+    assert.ok(d.reason?.includes('7 agent launches'), d.reason ?? '')
+    assert.ok(!d.reason?.includes('worktrees'), 'but the path still must not be printed')
+  })
+
+  test('the sessionless sentinel never matches the caller by session', () => {
+    // The server keys sessionless launches by cwd and hands the gate '?'. If '?' matched a caller
+    // whose own session was also unknown, every sessionless launch on the machine would count.
+    const d = evaluateAgentGate({}, state({
+      startsLast60s: 7, startsLast2min: 7,
+      caller: { session: '?', cwd: null },
+      spawners: [{ session: '?', cwd: FOREIGN_CWD, count: 7, agentTypes: ['fork×7'] }],
+    }))
+    assert.deepStrictEqual(d, { decision: 'allow', code: null, reason: null })
+  })
+
   test('an unidentifiable caller is treated as NOT own-project — an unprovable match never becomes a claim', () => {
     const d = evaluateAgentGate({}, state({
       startsLast60s: 7, startsLast2min: 7, spawners: spawnersIn(7), caller: { session: null, cwd: null },

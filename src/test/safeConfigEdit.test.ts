@@ -201,13 +201,28 @@ suite('safe_config_edit.py — transactional config editor', () => {
     assert.ok(flat.includes(FOREIGN.command), 'the foreign sibling survived')
   })
 
-  test('remove_by_substring still FAILS when a survivor was not re-added by a later op', () => {
-    // The counter-case that keeps the exemption honest: widening the postcondition must not
-    // become "never assert". A needle left behind that no later op re-added is still a defect.
+  test('remove_by_substring REFUSES when the needle is back and the exemption does not cover it', () => {
+    // The counter-case that keeps the exemption honest — and it has to actually reach the
+    // `offenders` branch. The exemption is scoped to later ops on the SAME path, so a later op at
+    // a DIFFERENT path that puts the needle back is exactly the shape it must NOT forgive: the
+    // op's own promise ("no survivor carries this needle") is false in the final tree.
     fs.writeFileSync(file, JSON.stringify(withHooks([{ matcher: 'Bash', hooks: [FOREIGN, OURS] }]), null, 2))
     const r = runEditor(file, {
-      // A removal whose needle does not match OURS leaves it in place; nothing re-adds it, so the
-      // op's own promise ("no survivor carries this needle") must still be enforced.
+      ops: [
+        { op: 'remove_by_substring', path: ['hooks', 'PostToolUse'], substring: 'gh_register_hook.py', nested_key: 'hooks' },
+        // A different path ⇒ NOT exempt. This re-introduces OURS behind the removal's back.
+        { op: 'set', path: ['hooks', 'PostToolUse'], value: [{ matcher: 'Bash', hooks: [FOREIGN, OURS] }] },
+      ],
+    })
+    assert.notStrictEqual(r.status, 0, 'a needle the exemption does not cover must still be refused')
+    assert.ok(/still present after apply/.test(r.stderr), `expected the postcondition to name it, got: ${r.stderr}`)
+    // Refusal is atomic: the file must be untouched, both hooks intact.
+    assert.deepStrictEqual(postToolUse()[0].hooks, [FOREIGN, OURS], 'a refused transaction writes nothing')
+  })
+
+  test('remove_by_substring verifies when its own needle is genuinely gone', () => {
+    fs.writeFileSync(file, JSON.stringify(withHooks([{ matcher: 'Bash', hooks: [FOREIGN, OURS] }]), null, 2))
+    const r = runEditor(file, {
       ops: [{ op: 'remove_by_substring', path: ['hooks', 'PostToolUse'], substring: 'vendor/tool.py', nested_key: 'hooks' }],
     })
     assert.strictEqual(r.status, 0, r.stderr)
