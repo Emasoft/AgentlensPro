@@ -35,6 +35,17 @@ export const HOOK_EVENTS = [
   // re-test this. No hook observes a plugin reload — but the TRANSCRIPT does: Claude Code
   // persists the command itself, which src/cacheRiskCommands.ts reads exactly and retroactively.
   'ConfigChange',
+  // DirectoryAdded + CwdChanged (Claude Code 2.1.219) — the ONLY two signals that a session's
+  // working directory is not what it started as. That matters here more than anywhere: project
+  // attribution is keyed on cwd end to end (the agent gate's own-project check, the hard scoping
+  // boundary in get_cache_event_log, `--project`), and every one of those silently assumes ONE
+  // directory per session. `/add-dir` and `/cd` break that assumption, and nothing else records
+  // the moment they do — the transcript keeps the session id, and the OTEL bodies carry no cwd.
+  // Both are deliberate user actions, so they are rare, not per-turn: the overhead rule above holds.
+  // The three siblings in the same family are deliberately NOT here — FileChanged and MessageDisplay
+  // fire constantly (exactly the per-turn cost this list exists to avoid), and InstructionsLoaded
+  // duplicates what ctxmap already reads out of the captured request body.
+  'DirectoryAdded', 'CwdChanged',
 ]
 
 // The burn gate (TRDD-GOD0108C) is the ONE narrow exception to the no-PreToolUse rule: it is

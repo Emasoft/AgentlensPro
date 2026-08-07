@@ -38,6 +38,22 @@ All notable changes to AgentlensPro are documented here.
   a working advisory on a false premise. Ten tests, three watched to fail against the
   reintroduced leak.
 
+### Added
+
+- **The two events that say a session's working directory changed are now captured.** Claude Code
+  2.1.219 added a `DirectoryAdded` hook and ships a `CwdChanged` one alongside it; both are now
+  registered. They matter here more than they might elsewhere, because project attribution is keyed
+  on cwd from end to end — the agent gate's own-project check, the hard scoping boundary in
+  `get_cache_event_log`, `--project` — and all of it silently assumes one directory per session.
+  `/add-dir` and `/cd` break that assumption and nothing else records the moment they do: the
+  transcript keeps only the session id, and the OTEL bodies carry no cwd at all. Both are deliberate
+  user actions, so they are rare rather than per-turn, which is the bar this hook list has always
+  held to. The three siblings in the same family are deliberately left out — `FileChanged` and
+  `MessageDisplay` fire constantly, and `InstructionsLoaded` only duplicates what `ctxmap` already
+  reads out of the captured request body. The receiver needed no change (it accepts any
+  `hook_event_name`), and `agentlenspro setup` migrates an existing install; **a hook change needs a
+  Claude Code session restart to take effect.**
+
 ### Fixed
 
 - **Every 1M-context model was scored against a 200k window, so `ctxmap` reported context ~5×
