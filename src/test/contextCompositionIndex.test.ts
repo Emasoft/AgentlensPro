@@ -223,4 +223,24 @@ suite('contextCompositionIndex — windowSizeFor reads the pricing table, not a 
     assert.strictEqual(lookupRates('claude-haiku-3-5')?.contextWindowTokens, 200_000)
     assert.strictEqual(windowSizeFor('claude-haiku-3-5'), 200_000)
   })
+
+  test('the context-1m beta proves 1M even for a model the table calls 200k', () => {
+    // The `[1m]` a user selects is stripped before the call — every captured body says
+    // `claude-opus-5`, never `claude-opus-5[1m]` — so the beta is the only in-band evidence.
+    assert.strictEqual(windowSizeFor('some-unreleased-model', ['context-1m-2025-08-07']), 1_000_000)
+    assert.strictEqual(windowSizeFor('claude-haiku-3-5', ['context-1m-2025-08-07']), 1_000_000)
+  })
+
+  test('a later dated revision of the beta still counts, and unrelated betas do not', () => {
+    assert.strictEqual(windowSizeFor('claude-haiku-3-5', ['context-1m-2099-01-01']), 1_000_000)
+    assert.strictEqual(windowSizeFor('claude-haiku-3-5', ['oauth-2025-04-20', 'effort-2025-11-24']), 200_000)
+  })
+
+  test('ABSENCE of the beta never downgrades — the inverse inference is measurably false', () => {
+    // 137 captured claude-fable-5 requests carry no context-1m beta, and one of them reached
+    // 645,803 input tokens. Downgrading on absence would have reported that as 323% of 200k.
+    assert.strictEqual(windowSizeFor('claude-fable-5', []), 1_000_000)
+    assert.strictEqual(windowSizeFor('claude-fable-5', ['oauth-2025-04-20']), 1_000_000)
+    assert.strictEqual(windowSizeFor('claude-opus-5', undefined), 1_000_000)
+  })
 })

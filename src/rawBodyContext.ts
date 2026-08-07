@@ -186,6 +186,7 @@ interface RawSystemBlock { type?: string; text?: string }
 interface RawTool { name?: string; description?: string }
 interface RawRequestBody {
   model?: string
+  betas?: unknown
   system?: string | RawSystemBlock[]
   messages?: RawMessage[]
   tools?: RawTool[]
@@ -317,6 +318,10 @@ export function buildCallContextFromJson(body: RawRequestBody | null, opts?: { u
     sessionId: uid.sessionId ?? '',
     accountUuid: uid.accountUuid,
     model: typeof body.model === 'string' ? body.model : undefined,
+    // Kept verbatim (strings only) rather than pre-interpreted: `betas` is an open-ended list the API
+    // grows independently of us, so anything that needs to ask a question of it does so at the point
+    // of use. Absent/malformed stays undefined — an empty array would falsely assert "no betas sent".
+    betas: Array.isArray(body.betas) ? body.betas.filter((b): b is string => typeof b === 'string') : undefined,
     blocks,
     truncated,
   }

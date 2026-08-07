@@ -47,8 +47,20 @@ All notable changes to AgentlensPro are documented here.
   behind. It stopped being an edge case when Claude Code 2.1.219 made `claude-opus-5` (1M native,
   untagged) the default Opus: a 400k conversation on it read as 200% full. The inference now reads
   the pricing table, and keeps the tag regex only as a fallback for an id the table does not carry —
-  so a long-context session on an unknown model still is not silently capped at 200k. Four tests,
-  watched to fail against the regex.
+  so a long-context session on an unknown model still is not silently capped at 200k.
+  The request's `betas` list now refines that **upward only**, and the asymmetry is the finding. The
+  `[1m]` a user selects never reaches the wire — every captured body says `claude-opus-5`, never
+  `claude-opus-5[1m]` — so `context-1m-*` in `betas` is the only in-band proof a call opted into 1M,
+  and it is now honoured even for a model the table calls 200k. Its **absence proves nothing**, and
+  the tempting inverse is measurably false: across this machine's spool all 180 `claude-opus-5`
+  requests carried the beta while 137 `claude-fable-5` requests carried none — and fable still
+  reached 645,803 input tokens in a single call, which a downgrade-on-absence would have reported as
+  323% of a 200k window. The honest consequence is recorded rather than papered over:
+  `CLAUDE_CODE_DISABLE_1M_CONTEXT` is real (it is in the 2.1.224 binary), but under it Claude Code
+  simply omits the beta, which is indistinguishable from a model that never needed one — so it is not
+  detectable from a body, and a 1M-capable model still reads as 1M. Seven tests: the two proof cases
+  watched to fail with the beta path disabled, and the no-downgrade guard watched to fail against a
+  version that adds the inverse inference.
 
 - **A body the store already held was never reclaimed, so a fixed-size spool filled until capture
   died.** `ingestPass` took its `skipNames` set — seeded each boot from every `src_name` already in
