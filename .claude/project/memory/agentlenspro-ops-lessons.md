@@ -244,6 +244,47 @@ healthy drain can look flat or negative. **DO** snapshot the item NAMES, re-snap
 count the two directions separately (`comm -23` deleted vs `comm -13` arrived) — that is the only
 form that distinguishes "not draining" from "draining slower than it fills".
 
+
+^ATOM-2IIQ-XI6J [desc:"The bar every model-facing hook message must clear: own-project, actionable now, significant — anything else belongs in the CLI/dashboard, not an interruption", keywords: what_may_a_hook_say_to_an_agent advisory_got_removed why_doesn't_the_fan-out_warning_fire hook_noise_policy agent_context_injection_rules model-facing_text_bar, type: project, ocd: 2026-08-07, lmd: 2026-08-07]
+
+Ratified 2026-08-07 after an audit of what the gate hooks actually injected. Text AgentlensPro puts
+in front of a MODEL must clear all three:
+
+1. **OWN PROJECT** — scoped to the caller's own cwd. Never another project's session id, path, or
+   agent types. Scoping is exact-cwd and fails QUIET: an unidentifiable caller gets silence,
+   because an unprovable match must not become a claim.
+2. **ACTIONABLE NOW** — the caller can change what it is about to do. "Go run investigate_burn
+   later" is a CLI answer, not an interruption.
+3. **SIGNIFICANT** — a real anomaly, not the expected cost of normal work.
+
+Failing that bar cost two advisories outright (`FAN_OUT_COLD_START`, whose own text ended "No
+action needed"; `THRASH_UNATTRIBUTED`, about writes provably attributable to nobody) and stripped
+foreign identities from the denies, the stall messages, and the thrash suspects. Nothing left the
+PRODUCT — every detection still reaches the dashboard, `--risk`, `investigate_burn` and the skill.
+
+**DO NOT** add a hook message because it explains a real finding, BECAUSE each of the removed ones
+was added exactly that way — to help a HUMAN reading a debug session — and explaining is not
+interrupting; the reader in production is a busy agent that cannot act on it. **DO** ask the three
+questions above before adding any hook text, and put anything that fails them behind an explicit
+request instead.
+
+
+^ATOM-OLKB-N7AV [desc:"Every gate code has TWO model-facing emitters — buildAdvisory (PostToolUse) and evaluateAgentGate (PreToolUse warn) — so changing one leaves the other firing", keywords: removed_the_advisory_but_it_still_fires gate_code_emitted_twice PostToolUse_advisory_and_PreToolUse_warn_twin changed_buildAdvisory_but_the_warning_persists, type: project, ocd: 2026-08-07, lmd: 2026-08-07]
+
+`src/agentGate.ts` reaches a model through two independent paths that share the same code names:
+
+- `buildAdvisory(state)` → PostToolUse → `hookSpecificOutput.additionalContext`
+- `evaluateAgentGate(...)` → PreToolUse → `systemMessage` (warn) / `permissionDecisionReason` (deny)
+
+`THRASH_UNATTRIBUTED` and `FANOUT_HEADSUP` each existed in BOTH. Removing one branch leaves the
+other emitting the identical message, and the tests for the two live in different suites, so a
+green run proves nothing about the twin.
+
+**DO NOT** treat a gate code as fixed after editing `buildAdvisory`, BECAUSE the PreToolUse twin is
+a separate branch a hundred lines away that no failing test will point you to. **DO**
+`grep -n "'<CODE>'" src/agentGate.ts` and expect TWO hits before believing a change is complete —
+and remember the deny path renders through a third field again.
+
 ## Notes and lessons learned
 
 [^1]: [id:ATOM-SETTINGS-WIPE-GUARDRAIL, status:valid, keywords:"config_file_wiped_or_corrupted_after_edit settings.json_wiped safeConfigEdit_guard start_fresh_on_parse_failure_removed", ocd:2026-07-11, lmd:2026-07-11] promoted from the old-repo LOCAL note
