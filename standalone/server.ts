@@ -520,7 +520,7 @@ async function archiveOtelBodies(): Promise<void> {
     bodyStore ??= await openStore({ dir: path.join(DATA_DIR, 'store') })
     const skip = (ingestSkipNames ??= await seedIngestSkipNames(bodyStore))
 
-    let ingested = 0, deleted = 0, bytesIn = 0, bytesStored = 0, liveBytesTotal = 0, throttled = false
+    let ingested = 0, deleted = 0, reclaimedDurable = 0, bytesIn = 0, bytesStored = 0, liveBytesTotal = 0, throttled = false
     const failed: string[] = []
     for (const target of targets) {
       // The size cap is the emergency valve: over it, ingest EVERYTHING (age 0) rather than only what
@@ -540,7 +540,8 @@ async function archiveOtelBodies(): Promise<void> {
         deleteAfter: true,                          // safe: ingestPass verifies from the DURABLE store first
         skipNames: skip,                            // don't re-read+re-hash already-durable bodies
       })
-      ingested += r.ingested; deleted += r.deleted; bytesIn += r.bytesIn; bytesStored += r.bytesStored
+      ingested += r.ingested; deleted += r.deleted; reclaimedDurable += r.reclaimedDurable
+      bytesIn += r.bytesIn; bytesStored += r.bytesStored
       throttled ||= r.throttled
       for (const f of r.failed) failed.push(f)
     }
@@ -562,8 +563,11 @@ async function archiveOtelBodies(): Promise<void> {
       at: Date.now(), removedFiles: deleted, freedBytes: bytesIn,
       keptFiles: 0, keptBytes: Math.max(0, liveBytesTotal - bytesIn),
     }
-    if (ingested > 0 || purged.removed.length > 0) {
+    // `deleted > 0` is load-bearing in this gate: a pass that reclaims thousands of already-durable
+    // files ingests NOTHING, so gating on `ingested` alone made the whole reclaim path silent.
+    if (ingested > 0 || deleted > 0 || purged.removed.length > 0) {
       console.log(`[AgentLens] bodies → store: ingested ${ingested}, reclaimed ${deleted} file(s) ` +
+        `(${reclaimedDurable} already durable) ` +
         `(${(bytesIn / 1024 ** 3).toFixed(2)}GB read → ${(bytesStored / 1048576).toFixed(1)}MB new spans)` +
         `${SPOOL_MODE ? ' [spool]' : ''}${throttled ? ' [throttled — more next pass]' : ''}` +
         `${purged.removed.length > 0 ? `; purged legacy volume(s) ${purged.removed.join(', ')} (${(purged.freedBytes / 1024 ** 3).toFixed(2)}GB, verified in store first)` : ''}`)

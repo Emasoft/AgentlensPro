@@ -240,6 +240,48 @@ suite('ingestPass — skipNames avoids re-reading durable bodies', () => {
     const second = await ingestPass({ bodiesDir: dir, store, deleteAfter: false, skipNames: skip })
     assert.strictEqual(second.ingested, 0, 'every name is now in the skip-set')
   })
+
+  test('an already-durable body is RECLAIMED, not stranded — the skip is on the ingest, not the delete', async () => {
+    // The bug this pins: skipNames filtered candidates out of the pass entirely, so a body the store
+    // already held was never re-ingested (right) AND never deleted (wrong). On a fixed-size RAM spool
+    // that is fatal — it fills with files the store already has until capture silently dies. Measured
+    // on this machine: 3,615 bodies stranded in a 2 GB spool at 100%.
+    const { dir, names } = corpus(3)
+    const skip = new Set<string>()
+    const first = await ingestPass({ bodiesDir: dir, store, deleteAfter: false, skipNames: skip })
+    assert.strictEqual(first.ingested, 3)
+    assert.strictEqual(first.deleted, 0, 'deleteAfter:false must delete nothing')
+
+    const second = await ingestPass({ bodiesDir: dir, store, deleteAfter: true, skipNames: skip })
+    assert.strictEqual(second.ingested, 0, 'nothing to re-ingest — every name is durable')
+    assert.strictEqual(second.deleted, 3, 'but every durable file must still be reclaimed')
+    assert.strictEqual(second.reclaimedDurable, 3, 'and counted as having needed no re-ingest')
+    assert.deepStrictEqual(second.failed, [], 'a durable body has nothing to fail on')
+    for (const n of names) {
+      assert.strictEqual(fs.existsSync(path.join(dir, n)), false, `${n} must be gone from the spool`)
+    }
+  })
+
+  test('a durable NAME whose BYTES differ is KEPT and named — never deleted on the strength of its filename', async () => {
+    // The counter-case that keeps the widening honest: reclaiming by name alone would delete a body
+    // the store cannot return. The gate re-reads and re-proves, so this file survives.
+    const { dir, names } = corpus(2)
+    const skip = new Set<string>()
+    await ingestPass({ bodiesDir: dir, store, deleteAfter: false, skipNames: skip })
+
+    // Same name, same mtime, different bytes — so the ONLY thing that can fail the gate is the content.
+    const victim = path.join(dir, names[0])
+    const mtime = fs.statSync(victim).mtime
+    fs.writeFileSync(victim, JSON.stringify({ model: 'x', tools: [], messages: [{ role: 'user', content: 'tampered' }] }))
+    fs.utimesSync(victim, mtime, mtime)
+
+    const r = await ingestPass({ bodiesDir: dir, store, deleteAfter: true, skipNames: skip })
+    assert.strictEqual(fs.existsSync(victim), true, 'a body the store cannot return must survive')
+    assert.strictEqual(r.failed.length, 1, 'and it must be NAMED — a silent skip looks like success')
+    assert.ok(r.failed[0].includes(names[0]), `failed should name ${names[0]}, got: ${r.failed[0]}`)
+    assert.strictEqual(r.reclaimedDurable, 1, 'only the untampered sibling counts as reclaimed')
+    assert.strictEqual(fs.existsSync(path.join(dir, names[1])), false, 'the untampered sibling still reclaims')
+  })
 })
 
 // ── Real RAM disk (opt-in; macOS only) ──────────────────────────────────────────

@@ -8,6 +8,32 @@ All notable changes to AgentlensPro are documented here.
 
 ### Fixed
 
+- **A body the store already held was never reclaimed, so a fixed-size spool filled until capture
+  died.** `ingestPass` took its `skipNames` set — seeded each boot from every `src_name` already in
+  the Parquet store — and used it to filter candidates out of the pass entirely. The intent was to
+  skip the re-read and re-hash of something already durable, which is right; the effect was that such
+  a file was also never *deleted*, which is not. On a 2 GB RAM spool that is terminal rather than
+  merely wasteful: the spool accumulates files the store already has, hits 100%, and raw-body capture
+  stops silently. Measured on one machine: 3,615 bodies stranded, ~300 KB of headroom left, bodies
+  being dropped. The skip now applies to the ingest alone — an already-durable file goes straight to
+  the same verify-then-delete gate as everything else, so it is re-read, re-proven byte-identical
+  against the store (bytes *and* its `(src_name, capture-ts)` row), and only then unlinked. A file
+  whose name is durable but whose **bytes** are not is still kept and named in `failed`, because
+  reclaiming on the strength of a filename is exactly the mistake the gate exists to prevent. Both
+  regression tests were watched to fail against the unfixed filter, and the two pre-existing
+  skip-set tests still pass, which is what proves the optimization itself was not thrown away. The
+  server's pass log also gated on `ingested > 0`, so a pass that reclaimed thousands of files and
+  ingested none printed nothing at all — it now reports reclaims, and how many needed no re-ingest.
+
+- **`safe_config_edit` refused any transaction that removed a hook and re-added it.** The
+  `remove_by_substring` postcondition asserted that no surviving element still matched the needle,
+  but it was checked against the *final* document — after later ops in the same transaction had run.
+  Re-registration is exactly that shape (remove the old entry, append the current one), so the very
+  operation `agentlenspro setup` performs to repair a stale hook failed its own verification and
+  rolled back, leaving the drift it was invoked to fix. The check now ignores elements that a LATER
+  op in the same transaction re-added, and still fails when a survivor was never re-added. Two tests,
+  the first watched to fail with the production error.
+
 - **Turning raw-body capture OFF left the sink wired, and the repairer could never close it.** The
   capture-OFF delete guard compared `OTEL_LOG_RAW_API_BODIES` against `file:${bodiesDir}`, where
   `bodiesDir` came from `effectiveBodiesDir(dataDir, captureRawBodies)`. At delete time capture is
