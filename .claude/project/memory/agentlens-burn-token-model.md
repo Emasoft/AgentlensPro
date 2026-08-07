@@ -125,6 +125,13 @@ drift lesson — the "second router is a second truth" trap).
 
 Three tools answer "what is every sub-agent costing me", and they are not interchangeable. `get_subagent_tree --sessionId <any node in the tree>` is the FLEET view: every child with its spawn-KIND (fork = cache-warm; fresh/worktree/fleet = cache-cold), model (inherited vs override), spawning turn, rolled-up tokens and cost — plus `spawnRollup` with named antipatterns (FLEET-COLD = 3+ cold children re-billing the inherited prefix, WORKTREE-SCATTER, MODEL-MIX), each with its aggregate waste and a one-line remediation. The root resolves automatically from any node, so a child id is enough. `get_agent_tokens --agentId <id>` is the SINGLE-agent view: the four disjoint billing buckets, cost_usd, spawn metadata, and `lastTurnContextRead` — the live context-size proxy. Its `ccDisplayEquivalent` reconciles with Claude Code's per-agent down-arrow footer, which is VOLUME MOVED, not billing — quote cost_usd for spend, never the arrow. An async child with no transcript is flagged `asyncTokensUnknown` (unknown, NOT measured-free). `ctxmap` decomposes ONE agent's context at STARTUP; `ctxvis` measures whether its prefix SURVIVES into turn 2, which is the number that decides the recurring bill. Call the tree BEFORE a fan-out to pick the cheaper spawn shape, not only after to explain the invoice.
 
+## See also
+
+- [[claude-code-surface-inferences]] — what the captured request body and the on-disk project
+  directory can and cannot prove about a session (the window size, the owning project), and the
+  symmetric-looking inference each one invites that is false. Every cost figure here is priced
+  against a window that page is the authority on.
+
 ## Notes and lessons learned
 [^1]: [id:ATOM-STATUSLINE-BUCKET-SPLIT, status:valid, keywords:"statusline_breakdown_landed_in_unknown per_bucket_split_missing_no_otel_sessions StatuslineBillingEvent_commit", ocd:2026-07-08, lmd:2026-07-08] The statusline event path originally carried only a total
   (`deltaTokens`), so the per-bucket breakdown landed 100% in `unknown` for exactly the no-OTEL sessions
