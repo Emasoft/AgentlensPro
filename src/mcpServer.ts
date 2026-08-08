@@ -1573,7 +1573,13 @@ const TOOLS = [
         sessionId: { type: 'string', description: 'Narrow to one session inside the project (default: every session the project owns)' },
         context:   { type: 'number', description: 'How many calls to show before AND after the peak (default 3, max 25). mode=peak only.' },
         limit:     { type: 'number', description: 'How many recent calls to list (default 12, max 200). mode=recent only.' },
-        window:    { type: 'number', description: 'Only calls from the last N hours; omit for the bounded most-recent scan' },
+        // NOT "omit for the bounded most-recent scan" — that was false and pointed the reader at the
+        // one input that kills the server. Unlike the sibling tools here, this one reads the OTEL
+        // span store (cacheEventLog.ts → scanOtelCallEvents), where an absent window means since=0,
+        // i.e. ALL of history with no cap; the others go through scanCacheCreationEvents, which IS
+        // capped. Omitting it is under investigation as TRDD-34B9JAZK (OOM under server load), so
+        // the description says so rather than reassuring someone into it.
+        window:    { type: 'number', description: 'Only calls from the last N hours (e.g. 5 for the live rate-limit window). Omitting it scans ALL history and is NOT capped — on a large store that can exhaust the server heap; pass a window unless you specifically need everything' },
         format:    { type: 'string', description: 'table (default) | json | markdown' },
       },
     },
