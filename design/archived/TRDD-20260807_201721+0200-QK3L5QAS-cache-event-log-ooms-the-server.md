@@ -122,3 +122,18 @@ initially read 36.3 s and looked like a regression; it was a cold page cache aft
 - 2026-08-08T00:41:00+0200 — COMPLETED. Tier 0 (in-scope bugfix, own project, reversible, no
   release or governance surface). All four acceptance criteria met or shown already satisfied;
   2213 tests pass; verified live against the real server with the exact command that killed it.
+- 2026-08-08T15:30:00+0200 — **CLOSED PREMATURELY. The first acceptance criterion does not hold in
+  general.** A CLI audit re-ran `agentlenspro get_cache_event_log` (no `--window`) against the
+  FIXED bundle and the server died again: exit 1 `socket hang up` at 59.9 s, pid 83918 → 37104,
+  with `~/.agentlens/requests.log` showing heap 852 → 872 → 1768 MB, then a 68-second gap, then a
+  fresh process at 478 MB — an OOM-kill signature. Verified first-hand rather than taken on report:
+  the live pid IS 37104, started 15:14:10 (mid-audit), and the bundle it loaded carries
+  `forEachInRange` (mtime 00:12:20, well before). So the fix was live and the server still died.
+  What the fix DID achieve is real and still verified: out-of-process, `buildCacheEventLog({})` now
+  COMPLETES (90 s) where it previously aborted at ~4 GB. So the tool's own allocation is bounded;
+  what is not bounded is the call under the server's own concurrent load. **The mechanism for the
+  in-server death is NOT established** — 1.7 GB pre-call against a 6 GB cap does not by itself
+  explain reaching the limit, and guessing at it here would repeat the mistake that closed this
+  card. Residual tracked as its own TRDD; this one stays archived as the record of the first,
+  partial fix. The lesson: ONE passing live run is not a general claim — the earlier run was true
+  and insufficient, which is exactly how a premature close looks from the inside.

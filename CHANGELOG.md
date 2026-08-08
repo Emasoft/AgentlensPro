@@ -70,11 +70,18 @@ All notable changes to AgentlensPro are documented here.
   The store now exposes `forEachInRange(since, until, visit)` and `loadRange` is a thin wrapper over
   it, so the two cannot drift; the scan uses the visitor and holds only what it keeps. Measured
   across a 168× window range afterwards: **69 MB / 121 MB / 147 MB / 170 MB** — the residual growth
-  is the retained events themselves, which any function returning them must hold. Live, the exact
-  command that killed the server now exits 0 in 36 s having processed **184,212 calls across the
-  whole store history**, with the pid unchanged; that query had never once completed. **The default
-  was deliberately NOT capped** — a window cap would have hidden the accumulation rather than
-  removing it, and made a legitimate full-history question silently partial. Wall time improved as a
+  is the retained events themselves, which any function returning them must hold. Out-of-process the
+  call now COMPLETES where it previously aborted at ~4 GB, and one live run processed **184,212
+  calls across the whole store history** in 36 s with the server's pid unchanged — a query that had
+  never once finished. **The default was deliberately NOT capped** — a window cap would have hidden
+  the accumulation rather than removing it, and made a legitimate full-history question silently
+  partial.
+  **Partial fix, stated plainly:** a later CLI audit re-ran the same command against this same fixed
+  bundle and the server died again (pid 83918 → 37104, an OOM-kill signature in `requests.log`). So
+  the tool's own allocation is bounded and that is verified, but the call is still not safe under the
+  server's concurrent load, and the mechanism for the in-server death is not yet established. One
+  passing live run was true and insufficient; the residual is tracked separately. Until it is fixed,
+  pass `--window`. Wall time improved as a
   side effect (warm, same store, 24 h: 28.7 s → 3.1–5.0 s). Seven new tests, including the first
   ones this scan has ever had, falsified by deleting the `return` from the compaction branch — the
   exact bug a loop→callback rewrite invites.
