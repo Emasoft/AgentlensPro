@@ -6,6 +6,7 @@ import {
   scanCacheCreationEvents, buildCacheCreationReport, buildExpensiveWritesTrace, buildCacheBreakGapReport,
   formatExpensiveWrites, formatCostPeaks, defaultBodiesDir,
 } from '../cacheCreationForensics'
+import { loadScaledTimeout, skipIfUnmeasurable } from './loadAware'
 
 // TRDD-CCFORNSC — REAL tests for the cache_creation forensic diagnostics: no mocked bodies, no mocked
 // join. Every test writes real request/response JSON files to a tmp dir and drives the actual bounded
@@ -585,7 +586,8 @@ suite('cacheCreationForensics — real machine data', () => {
   // directory is absent (CI / a machine that never enabled OTEL_LOG_RAW_API_BODIES).
   test('scans the REAL OTEL bodies directory without crashing and reports honest coverage', async function () {
     if (!fs.existsSync(defaultBodiesDir())) { this.skip(); return }
-    this.timeout(60_000)
+    if (skipIfUnmeasurable(this)) return
+    this.timeout(loadScaledTimeout(60_000))
     // scanCap bounds the cost: this directory is a LIVE capture that grows all day (measured
     // 1,377 → 5,467 files in one evening), so an uncapped scan makes this test's runtime a
     // function of the user's traffic — it passed for weeks, then blew its timeout with no code

@@ -7,6 +7,7 @@ import {
   defaultBodiesDir, CACHE_BREAK_REMEDIATION, EXPECTED_CAUSES,
   type RawRequestForBreak, type BreakTiming,
 } from '../cacheBreakTimeline'
+import { loadScaledTimeout, skipIfUnmeasurable } from './loadAware'
 
 // TRDD-6TQ2FBUR — REAL tests for the cache-break ROOT-CAUSE timeline. The classifier tests build a
 // synthetic before/after request pair per cause code and prove the classifier names the right culprit.
@@ -623,7 +624,8 @@ suite('cacheBreakTimeline — buildCauseCostPeakReport (cross-session cause cost
   // directory is absent (CI / a machine that never enabled OTEL_LOG_RAW_API_BODIES).
   test('builds a cause cost-peak report from the REAL OTEL bodies without crashing', async function () {
     if (!fs.existsSync(defaultBodiesDir())) { this.skip(); return }
-    this.timeout(120_000)
+    if (skipIfUnmeasurable(this)) return
+    this.timeout(loadScaledTimeout(120_000))
     // scanCap is not decoration: this reads a LIVE capture directory that grows all day (measured
     // 1,377 → 5,467 files in one evening on this machine), so an uncapped scan is a test whose
     // runtime is set by how busy the user was — it passed for weeks and then blew a 120 s timeout
@@ -713,7 +715,8 @@ suite('cacheBreakTimeline — real machine data', () => {
     // 4 minutes, not 2: this scans every captured body in the window, and on a machine with a live
     // capture spool it shares the run with the second real-corpus test below. It timed out at 120s
     // in a full-suite run while passing in 58s alone — a harness bound, not a product property.
-    this.timeout(240_000)
+    if (skipIfUnmeasurable(this)) return
+    this.timeout(loadScaledTimeout(240_000))
     // Capped for the same reason as the cost-peak test above: the capture directory is live and
     // grows all day, so an uncapped scan makes this test's runtime a function of the user's traffic.
     const report = await buildCacheBreakTimeline({ windowHours: 5, minTokens: 50_000, scanCap: 300 })
@@ -739,7 +742,8 @@ suite('cacheBreakTimeline — real machine data', () => {
   test('🐌 the env + git region extractors actually match the REAL captured system prompts', async function () {
     const dir = defaultBodiesDir()
     if (!fs.existsSync(dir)) { this.skip(); return }
-    this.timeout(120_000)
+    if (skipIfUnmeasurable(this)) return
+    this.timeout(loadScaledTimeout(120_000))
     const files = fs.readdirSync(dir).filter(f => f.endsWith('.request.json')).slice(0, 200)
     if (files.length === 0) { this.skip(); return }
     let withEnv = 0, withGit = 0, parsed = 0

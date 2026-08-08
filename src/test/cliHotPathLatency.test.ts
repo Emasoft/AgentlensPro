@@ -5,6 +5,7 @@ import * as os from 'os'
 import * as path from 'path'
 import { spawn } from 'child_process'
 import { HOT_PATH_BUDGET_MS, LATENCY_EXEMPT } from '../cli/main'
+import { MAX_RATIO_ABSOLUTE_DEADLINE, oversubscription, skipIfUnmeasurable } from './loadAware'
 
 // TRDD-E8XIC2PM — a latency guard for every command a harness runs on its hot path.
 //
@@ -120,6 +121,20 @@ suite('CLI hot-path latency guard (TRDD-E8XIC2PM)', () => {
       this.skip()
       return
     }
+    // Same reasoning, second way the measurement can be void: a machine with no CPU headroom.
+    // These ceilings are ABSOLUTE and not ours to relax — Claude Code kills a lifecycle hook at 2 s
+    // and the gate at 3 s however busy the box is — so contention is gated at the MEASUREMENT, never
+    // by widening a budget. Measured on this machine at 10.8x oversubscription: hook 5688 ms, gate
+    // 2765 ms, statusline 2865 ms, all red, none of it a regression. A guard that reports the machine
+    // instead of the code teaches its reader to ignore it, which is worse than not running.
+    // Announced BEFORE the skip, because `ctx.skip()` throws — anything after it never runs, and a
+    // silent skip is indistinguishable from a pass in the runner's output.
+    const over = oversubscription()
+    if (over > MAX_RATIO_ABSOLUTE_DEADLINE) {
+      console.log(`[hot-path latency] SKIPPED: machine is ${over.toFixed(1)}x oversubscribed `
+        + `(limit ${MAX_RATIO_ABSOLUTE_DEADLINE}x) — this measurement would report the machine, not the code.`)
+    }
+    if (skipIfUnmeasurable(this, MAX_RATIO_ABSOLUTE_DEADLINE)) return
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'al-lat-'))
     try {
       const slow: string[] = []
