@@ -10,6 +10,7 @@ import * as path from 'path'
 import { apiRequest, dataDir, dashboardUrl, fmtGb, fmtMb, init, mcpEndpoint, sleep } from './cliCore'
 import { dataDirSource } from '../dataDir'
 import { agentlensDisabled, killSwitchPath } from './killSwitch'
+import { UsageError } from './cliErrors'
 
 /** Count of hook events durably spooled to disk but not yet reingested (server was down / shedding).
  *  Zero in the healthy case; a non-zero, non-shrinking value means the daemon isn't draining. */
@@ -448,7 +449,12 @@ export async function serverCommand(argv: string[]): Promise<void> {
       await showStatus()
       return
     default:
-      throw new Error(`server expects start|stop|restart|status (got "${verb ?? ''}") — e.g. agentlenspro server start [--supervise]`)
+      // UsageError, not Error: standalone/cli.ts maps the type to the exit code, and cliErrors.ts
+      // reserves 1 for the watchers' ABORT signal. A plain Error here made `agentlenspro server`
+      // (subcommand forgotten) indistinguishable from "the server code threw" — while every
+      // sibling verb with the identical missing-argument shape (budget, watch, ctxmap) already
+      // returned 64. Found by RUNNING the verb matrix, not by review: each site reads fine alone.
+      throw new UsageError(`server expects start|stop|restart|status (got "${verb ?? ''}") — e.g. agentlenspro server start [--supervise]`)
   }
 }
 

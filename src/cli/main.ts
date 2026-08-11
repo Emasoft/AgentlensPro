@@ -97,7 +97,7 @@ export const HOT_PATH_BUDGET_MS: Readonly<Record<string, number>> = {
 // USAGE with zero network I/O, while an unknown name is presumed a diagnostics tool whose real
 // help lives in the server's schema. Keep in lockstep with the switch — a verb added there but
 // not here still gets safe help (USAGE covers it), just after one wasted server probe.
-const MANAGEMENT_VERBS: ReadonlySet<string> = new Set([
+export const MANAGEMENT_VERBS: ReadonlySet<string> = new Set([
   'hook', 'gate', 'statusline', 'statusline-history', 'get_account_status', 'disable', 'enable',
   'telemetry', 'setup', 'server', 'daemon', 'dashboard', 'cache-expired', 'last-compact',
   'budget', 'watch', 'heartbeat-cost', 'config', 'spool', 'env', 'ctxmap', 'ctxvis', 'list',
@@ -157,6 +157,23 @@ export async function cliMain(argv: string[], startServer: () => Promise<unknown
         return 0
       } catch { /* not a known tool, or no server — the global usage below covers the verbs */ }
     }
+    console.log(USAGE)
+    return 0
+  }
+
+  // `help <verb>` is the SAME question as `<verb> --help`, so it must get the same answer. It did
+  // not: every management verb fell through to the diagnostics path, which resolves a name against
+  // the server's live TOOL schema, and failed with `unknown tool "budget" (agentlenspro list)`.
+  // The remedy that message names leads nowhere either — `list` enumerates diagnostics tools only,
+  // never CLI verbs — so the user is told to run the one command that cannot answer them. CLAUDE.md
+  // documents `agentlenspro help <tool>`, which makes generalizing it to a verb the natural move.
+  //
+  // Answered from static USAGE with no socket, exactly as the `--help` branch above does, so a down
+  // or wedged server cannot turn a help request into a wait. Only a KNOWN management verb
+  // short-circuits: an unrecognized name must keep falling through to the diagnostics lookup and
+  // fail loudly, or a typo would be answered with usage and a success code — which is worse than
+  // the dead-end it replaced, because nothing tells the user the name was wrong.
+  if (cmd === 'help' && argv[1] !== undefined && MANAGEMENT_VERBS.has(argv[1])) {
     console.log(USAGE)
     return 0
   }
