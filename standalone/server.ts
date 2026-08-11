@@ -69,7 +69,8 @@ import { openStore, allOf, type Store } from '../src/store/db'
 import { DEFAULT_MAX_BYTES_PER_PASS, ingestPass } from '../src/store/ingestPass'
 import { verifyVolumeInStore } from '../src/store/archiveVerify'
 import { rawBodyCaptureEnabled, spoolDirConfigured } from '../src/captureConfig'
-import { ensureRamDisk, ramDiskInfo, spoolSizeMb } from '../src/ramdisk'
+import { ensureRamDisk, ramDiskInfo, spoolSizeMb, SPOOL_MOUNT_POINT } from '../src/ramdisk'
+import { applySpoolBackpressure, checkSpoolCapacity, INITIAL_BACKPRESSURE_STATE, type BackpressureState } from '../src/spoolBackpressure'
 import { exportBodiesFromStore } from '../src/store/bodyStore'
 import {
   loadLogOffsets, loadPersistedCards,
@@ -351,6 +352,11 @@ const persistStats = {
   statuslineSamples: 0,
   gateChecks: 0, gateDenies: 0, gateWarns: 0, gateAdvisories: 0,
   bodiesLastPurge: { at: 0, removedFiles: 0, freedBytes: 0, keptFiles: 0, keptBytes: 0 },
+  // TRDD-KB17X5G2 Option 3: how many times the spool crossed into over-capacity and new sessions
+  // were redirected to the legacy SSD bodies dir instead of losing writes. Must stay visible
+  // wherever spool health is reported — a silent fallback would hide the same loss it prevents.
+  spoolBackpressureSpills: 0,
+  spoolBackpressureActive: false,
 }
 
 const spanStore = new SegmentedSpanStore(SPANS_DIR)
@@ -680,6 +686,28 @@ purgeStatusline()
 const BODIES_PASS_INTERVAL_MS = SPOOL_MODE ? 60_000 : 3600e3
 const bodiesPurgeTimer = setInterval(() => { void archiveOtelBodies() }, BODIES_PASS_INTERVAL_MS)
 bodiesPurgeTimer.unref()
+
+// ── Spool back-pressure (TRDD-KB17X5G2 Option 3) ──────────────────────────────────────────────
+// A single background subagent refilled the 2GB spool from 162MB to 1.4MB free in ~2 minutes —
+// at 100% free the spool cannot accept a write and Claude Code's own OTEL exporter drops the
+// body (see src/spoolBackpressure.ts's header for why the write itself is not ours to catch). A
+// 5s tick is fast enough to catch that burst mid-flight (the drain-tick cadence above is 60s —
+// too slow, that IS the incident) while cheap (one `df` call in spool mode only).
+let spoolBackpressureState: BackpressureState = INITIAL_BACKPRESSURE_STATE
+async function tickSpoolBackpressure(): Promise<void> {
+  if (!SPOOL_MODE) return
+  const check = checkSpoolCapacity(SPOOL_MOUNT_POINT)
+  spoolBackpressureState = await applySpoolBackpressure(check, spoolBackpressureState, {
+    redirectToLegacy: () => ensureTelemetryConfig({ otlpPort: OTLP_PORT, bodiesDir: LEGACY_BODIES_DIR }),
+    restoreToSpool: () => ensureTelemetryConfig({ otlpPort: OTLP_PORT, bodiesDir: PRIMARY_BODIES_DIR }),
+    onWarn: (m) => console.warn(`[AgentLens] ${m}`),
+    onInfo: (m) => console.log(`[AgentLens] ${m}`),
+  })
+  persistStats.spoolBackpressureSpills = spoolBackpressureState.spills
+  persistStats.spoolBackpressureActive = spoolBackpressureState.redirected
+}
+const spoolBackpressureTimer = setInterval(() => { void tickSpoolBackpressure() }, 5000)
+spoolBackpressureTimer.unref()
 const hookPurgeTimer = setInterval(() => { purgeHookEvents(); purgeLogEvents(); purgeStatusline() }, 3600e3)
 hookPurgeTimer.unref()
 // Adopt the single-file usage cache into the per-account archive (issue #8). A usage FETCH archives
@@ -3153,7 +3181,14 @@ const uiServer = http.createServer(async (req, res) => {
         // absent) number forever instead of the real delta-log footprint.
         files: { spans: spanStoreStats.totalBytes, offsets: offsetsLog.diskBytes(), cards: cardsLog.diskBytes() },
       },
-      bodies: { archive: archiveDiskUsage(BODIES_ARCHIVE_DIR), lastPass: p.bodiesLastPurge },
+      bodies: {
+        archive: archiveDiskUsage(BODIES_ARCHIVE_DIR), lastPass: p.bodiesLastPurge,
+        // TRDD-KB17X5G2 Option 3: spool health, including whether we are currently spilling new
+        // sessions' bodies to the SSD dir and how many times that has happened since boot.
+        spool: SPOOL_MODE
+          ? { mountPoint: SPOOL_MOUNT_POINT, sizeBytes: SPOOL_SIZE_BYTES, backpressureActive: p.spoolBackpressureActive, backpressureSpills: p.spoolBackpressureSpills }
+          : null,
+      },
       hookEvents: { ...hookEventsDiskUsage(HOOK_EVENTS_DIR), receivedSinceBoot: p.hookEventWrites, spooled: hookSpoolCount() },
       // Status-line samples: their own store, so `parts`/`partBytes` (sealed, compressed) are
       // reported apart from `walBytes` (raw and un-sealed) — a walBytes that keeps climbing while

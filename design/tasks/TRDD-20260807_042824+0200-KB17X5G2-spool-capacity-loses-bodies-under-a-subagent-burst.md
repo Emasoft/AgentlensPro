@@ -1,9 +1,9 @@
 ---
 trdd-id: KB17X5G2
 title: The RAM spool still loses raw bodies under a subagent burst — capacity and reclaim throughput
-column: todo
+column: human_review
 created: 2026-08-07T04:28:24+0200
-updated: 2026-08-07T04:28:24+0200
+updated: 2026-08-11T20:26:34+0200
 current-owner: main
 task-type: infra
 severity: high
@@ -13,12 +13,38 @@ severity: high
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-07
 
-Not started. Discovered while verifying `65207f4` (the reclaim fix). **`65207f4` is NOT in
-question — it works, and this card exists only because fixing it revealed the next constraint.**
+**Option 3 is implemented (2026-08-11). Read the next paragraph before believing the *Options*
+section below it — that section's central claim is now known to be FALSE.**
 
-**NEXT ACTION:** decide between the two levers under *Options* — they are not equivalent and the
-cheap one may be enough. Do NOT resize the RAM disk while it holds un-ingested bodies (that
-destroys them).
+**THE PREMISE WAS WRONG: we do not own the write.** *Options* says Option 3 "is the only one that
+makes loss impossible". That assumed the spool write happens in this codebase. It does not —
+Claude Code's own OTEL exporter writes the body file directly, keyed off the launch-time env
+`OTEL_LOG_RAW_API_BODIES=file:<dir>` (see `src/rawBodyContext.ts` and `src/bodyWriters.ts`). There
+is no `fs.writeFile` here to wrap, so there is no ENOSPC for us to catch and no way to spill at
+the moment of failure.
+
+What shipped is back-pressure at the one boundary we DO own — which directory a session is *told*
+to write into (`src/spoolBackpressure.ts` + a 5s tick in `standalone/server.ts` driving
+`ensureTelemetryConfig`, which goes through `safeConfigEdit`). It redirects on the over-capacity
+TRANSITION only, with 2x-floor hysteresis so it cannot flap, and fails OPEN when `df` fails.
+
+**EFFICACY LIMIT — it would NOT have prevented the incident recorded below.** The env is read once
+at a Claude session's own launch, so the redirect protects sessions that START after it fires. The
+incident here was *a background subagent of an already-running session*, which inherits its
+parent's launch-time env — so those bytes would still have been dropped. This is a real reduction
+in exposure, not elimination, and per this card's own Verification rule it must be described that
+way.
+
+**Therefore Options 1 and 2 are now MORE important, not less** — they are the only levers that
+help an in-flight burst. Option 1 (grow the spool) absorbs it; Option 2 (batch the DuckDB verify)
+drains faster so the spool is rarely near the floor.
+
+**NEXT ACTION:** decide Option 1 vs Option 2 with the owner. Option 1 is USER-GATED: resizing
+detaches the RAM disk and destroys every un-ingested body on it, so the spool must be fully
+drained first. Do NOT resize while it holds un-ingested bodies.
+
+`65207f4` (the reclaim fix) is NOT in question — it works; this card exists only because fixing it
+revealed the next constraint.
 
 ## What was proven, and what it exposed
 
