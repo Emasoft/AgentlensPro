@@ -475,13 +475,20 @@ const BODIES_DIR = PRIMARY_BODIES_DIR
 // Drain targets, each with its own emergency size-cap. In spool mode the spool's cap is min(configured
 // cap, 70% of the RAM disk) so a runaway producer can never fill volatile memory; the legacy dir is
 // ALSO drained (leftovers from pre-spool / stale sessions) at the normal cap.
-interface DrainTarget { dir: string; capBytes: number }
+interface DrainTarget {
+  dir: string
+  capBytes: number
+  /** True only for a target whose SOURCE files are already durable on their own (the legacy SSD dir)
+   *  — gates the fsync barrier in ingestPass (KB17X5G2-P0.5). The RAM spool is volatile by design, so
+   *  it never takes the barrier: there is nothing durable about the source to protect. */
+  durable: boolean
+}
 const drainTargets: DrainTarget[] = SPOOL_MODE
   ? [
-      { dir: PRIMARY_BODIES_DIR, capBytes: SPOOL_SIZE_BYTES > 0 ? Math.min(BODIES_MAX_BYTES, Math.floor(SPOOL_SIZE_BYTES * 0.7)) : BODIES_MAX_BYTES },
-      { dir: LEGACY_BODIES_DIR, capBytes: BODIES_MAX_BYTES },
+      { dir: PRIMARY_BODIES_DIR, capBytes: SPOOL_SIZE_BYTES > 0 ? Math.min(BODIES_MAX_BYTES, Math.floor(SPOOL_SIZE_BYTES * 0.7)) : BODIES_MAX_BYTES, durable: false },
+      { dir: LEGACY_BODIES_DIR, capBytes: BODIES_MAX_BYTES, durable: true },
     ]
-  : [{ dir: LEGACY_BODIES_DIR, capBytes: BODIES_MAX_BYTES }]
+  : [{ dir: LEGACY_BODIES_DIR, capBytes: BODIES_MAX_BYTES, durable: true }]
 
 // The bodies pass: ingest raw bodies into the content-addressed store, then reclaim their disk space
 // (TRDD-K3WDPR7M Phase 3). This REPLACES the old .wad archiver, which gzipped each body into a
@@ -544,6 +551,7 @@ async function archiveOtelBodies(): Promise<void> {
         maxAgeMs: overCap ? 0 : BODIES_MAX_AGE_MS,
         maxBytesPerPass: INGEST_MAX_BYTES_PER_PASS, // THE THROTTLE — never an unbounded boot pass again
         deleteAfter: true,                          // safe: ingestPass verifies from the DURABLE store first
+        durableSource: target.durable,              // fsync barrier only when the source was itself durable
         skipNames: skip,                            // don't re-read+re-hash already-durable bodies
       })
       ingested += r.ingested; deleted += r.deleted; reclaimedDurable += r.reclaimedDurable; bytesFreed += r.bytesFreed

@@ -6,10 +6,19 @@
 //   1. ingest   — sectioned, content-addressed; ingestBody() already refuses anything that does not
 //                 reconstruct byte-identically, so a body that cannot be restored is never stored.
 //   2. FLUSH    — the spans reach an immutable Parquet part on disk. Until this returns, everything
-//                 lives only in RAM.
+//                 lives only in RAM. When `durableSource` is set (the source itself was already
+//                 durable — the legacy SSD dir, never the volatile RAM spool), the part files and
+//                 their directories are also fsync'd here before anything is deleted — a flushed part
+//                 is "on disk" from the OS's point of view the moment write() returns; fsync is what
+//                 asks the OS to actually push it out of its buffers (KB17X5G2-P0.5). This is NOT a
+//                 guarantee against a drive with a volatile write cache losing power mid-write —
+//                 Node's fs.constants.F_FULLFSYNC is false, so it cannot force that — just a real step
+//                 up from never asking at all.
 //   3. re-verify— reconstruct each body FROM THE FLUSHED STORE and compare sha256 against the file's
 //                 own bytes. Step 1's check proves the sectioner is sound; only THIS proves the bytes
-//                 actually survived the round trip through DuckDB and Parquet.
+//                 actually survived the round trip through DuckDB and Parquet. Batched across the
+//                 whole settling group (verifyBodiesInStore) rather than one-round-trip-per-file — the
+//                 fix for the drain-rate inequality that dropped bodies (KB17X5G2-P0).
 //   4. delete   — and only now.
 //
 // A crash at any point loses at most the un-flushed batch, and the source files are still there.
@@ -20,9 +29,9 @@
 // event. A pass now has a hard byte budget and simply stops when it is spent.
 import * as fs from 'fs'
 import * as path from 'path'
-import { flush, Store } from './db'
+import { flushDetailed, Store } from './db'
 import { ingestBody } from './bodyStore'
-import { verifyBodyInStore } from './verifyInStore'
+import { verifyBodiesInStore } from './verifyInStore'
 
 export interface IngestPassOptions {
   bodiesDir: string
@@ -41,6 +50,18 @@ export interface IngestPassOptions {
    *  one that cannot otherwise be provoked (fs.readFileSync is a getter-only property in modern Node
    *  and cannot be stubbed). Defaults to the real read. */
   readFile?: (p: string) => string
+  /** Whether the SOURCE files this pass drains are already durable on their own (the legacy SSD dir)
+   *  as opposed to volatile (the RAM spool). When true, settleBatch fsyncs the flush's part files (and
+   *  their directories) BEFORE unlinking sources — otherwise the delete gate's "durable" claim rests
+   *  on a page-cache read-back, not a proof the bytes reached the drive (KB17X5G2-P0.5). RAM-spool
+   *  sources skip the barrier: the source was volatile anyway, so there is nothing extra to lose.
+   *  Default false (the safer default: no barrier is skipped only when the caller opts in). */
+  durableSource?: boolean
+  /** Seam for the fsync barrier. Same reason as `readFile`: `fs.fsyncSync` cannot be stubbed directly
+   *  (TS's `import * as fs` copies it onto the module namespace as a getter-only accessor, so
+   *  reassigning `fs.fsyncSync` throws "has only a getter" — verified). Defaults to the real
+   *  open+fsync+close on the given path. */
+  fsyncPath?: (p: string) => void
   /** Names whose bodies are ALREADY durable, so the pass skips the re-INGEST for them — never the
    *  reclaim (TRDD-K3WDPR7M Phase 3, item 5). The server seeds it once per boot from the store's
    *  already-ingested src_name set, so a spool drain every 60s does not re-read+re-hash what it has
@@ -101,6 +122,11 @@ export async function ingestPass(opts: IngestPassOptions): Promise<IngestPassRes
     batchSize = DEFAULT_BATCH,
     onProgress,
     readFile = (p: string) => fs.readFileSync(p, 'utf8'),
+    durableSource = false,
+    fsyncPath = (p: string) => {
+      const fd = fs.openSync(p, 'r')
+      try { fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
+    },
     skipNames,
   } = opts
 
@@ -117,19 +143,55 @@ export async function ingestPass(opts: IngestPassOptions): Promise<IngestPassRes
   // The batch currently in flight. The post-flush check re-reads the FILE, so the verification
   // compares the store against the source — not against something we derived from the same
   // in-memory object (which would prove nothing).
-  let batch: Array<{ p: string; name: string; mtime: number; size: number; durable?: boolean }> = []
+  type BatchItem = { p: string; name: string; mtime: number; size: number; durable?: boolean }
+  let batch: BatchItem[] = []
 
   const settleBatch = async () => {
     if (batch.length === 0) return
-    await flush(store) // (2) the spans are now in an immutable Parquet part — durable
+    const flushed = await flushDetailed(store) // (2) the spans are now in an immutable Parquet part
 
+    // (2.5) THE FSYNC BARRIER (KB17X5G2-P0.5, gated by source). A flushed part is only "durable" in
+    // the sense that PROVES the delete gate below is safe if the bytes actually reached the drive —
+    // otherwise the gate's read-back can be served from the page cache and a crash before the OS
+    // flushes it loses data the source held that the store never actually got. Only worth doing when
+    // the SOURCE itself was durable to begin with (the legacy SSD dir): a RAM-spool source was already
+    // volatile, so skipping costs nothing extra.
+    //
+    // NOTE — what this does NOT prove: Node's fs.constants.F_FULLFSYNC is `false` (verified), so this
+    // cannot force the drive's own write cache to media on macOS the way a real F_FULLFSYNC ioctl
+    // would. fsync(2) still asks the OS to flush its buffers to the device, which is a real
+    // improvement over "never asked at all" — just not a guarantee against a power-loss-mid-write on
+    // a drive with a volatile write cache. Document the gap; do not claim more than this buys.
+    if (durableSource && flushed.partPaths.length > 0) {
+      for (const p of flushed.partPaths) fsyncPath(p)
+      // The directory entries themselves (the part files are brand new) also need a sync, or a crash
+      // can leave the file's data on disk but the directory entry pointing at it lost.
+      for (const dir of new Set(flushed.partPaths.map((p) => path.dirname(p)))) fsyncPath(dir)
+    }
+
+    // Re-read every file's CURRENT bytes up front — same source-of-truth as before: the verify
+    // compares the store against a fresh read of the file, never something derived from the batch. A
+    // file that vanished mid-pass (ENOENT) is not a verification failure, exactly as before.
+    const items: Array<{ b: BatchItem; raw: string }> = []
     for (const b of batch) {
       try {
-        // (3) The universal delete gate (USER directive 2026-07-15): the DURABLE store must hold the
-        // source's exact bytes AND its (src_name, capture-ts) row. Byte-identity alone once passed a
-        // backfill that stamped 100k bodies with the wrong time — metadata is data too.
-        const onDisk = readFile(b.p)
-        const v = await verifyBodyInStore(store, b.name, onDisk, b.mtime)
+        items.push({ b, raw: readFile(b.p) })
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === 'ENOENT') continue
+        res.failed.push(`${b.name}: ${(e as Error).message}`)
+      }
+    }
+
+    // (3) The universal delete gate (USER directive 2026-07-15): the DURABLE store must hold the
+    // source's exact bytes AND its (src_name, capture-ts) row. Byte-identity alone once passed a
+    // backfill that stamped 100k bodies with the wrong time — metadata is data too. Batched
+    // (verifyBodiesInStore) instead of per-file: ~200 files/batch was ~400 DuckDB round trips and
+    // could not keep up with burst inflow — the throughput fix this pass exists for (KB17X5G2-P0).
+    const results = await verifyBodiesInStore(store, items.map(({ b, raw }) => ({ srcName: b.name, raw, tsMs: b.mtime })))
+
+    for (const { b } of items) {
+      const v = results.get(b.name) ?? { ok: false, reason: `${b.name}: missing verify result` }
+      try {
         if (!v.ok) {
           res.failed.push(v.reason ?? b.name)
           // A durable-NAMED file whose bytes no longer match is not durable, so drop the name from
@@ -147,9 +209,8 @@ export async function ingestPass(opts: IngestPassOptions): Promise<IngestPassRes
           if (b.durable) res.reclaimedDurable++
         }
       } catch (e) {
-        // A file that VANISHED mid-pass is not a verification failure — it is simply gone, and the
-        // ingest path has always treated that as fine. Reporting it would raise a "could NOT be
-        // verified and were KEPT on disk" alarm about a file that no longer exists.
+        // A file that VANISHED between the read above and this unlink is not a verification failure —
+        // it is simply gone, and the ingest path has always treated that as fine.
         if ((e as NodeJS.ErrnoException).code === 'ENOENT') continue
         // Any other doubt ⇒ keep the file. A body we cannot prove we can return is a body we have
         // no right to delete.

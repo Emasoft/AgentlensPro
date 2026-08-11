@@ -160,16 +160,28 @@ export async function openStore(opts: StoreOptions): Promise<Store> {
   }
 }
 
+export interface FlushResult {
+  /** Number of blob spans made durable (0 when nothing was staged — same meaning as flush()'s old
+   *  return value). */
+  n: number
+  /** Every part file this flush actually wrote (one per non-empty table: blob/body/part), so a caller
+   *  that needs a durability barrier (fsync) knows EXACTLY which files to sync — never a guess at the
+   *  name, which depends on partName()'s internal Date.now()+pid+seq. Empty when nothing was staged. */
+  partPaths: string[]
+}
+
 /**
  * Flush staging to a NEW immutable Parquet part per table, then clear staging (in RAM — free).
- * Parts are never rewritten: that immutability IS the fix. Returns the number of blobs made durable.
+ * Parts are never rewritten: that immutability IS the fix. Returns both the blob count (flush()'s
+ * historical contract) and the paths actually written (needed by the fsync barrier — ingestPass.ts).
  */
-export async function flush(store: Store): Promise<number> {
+export async function flushDetailed(store: Store): Promise<FlushResult> {
   const n = Number((await store.con.runAndReadAll('SELECT count(*) c FROM blob')).getRowObjects()[0].c)
   const bodies = Number((await store.con.runAndReadAll('SELECT count(*) c FROM body')).getRowObjects()[0].c)
-  if (n === 0 && bodies === 0) return 0
+  if (n === 0 && bodies === 0) return { n: 0, partPaths: [] }
 
   const tag = partName(store.nextPart++)
+  const partPaths: string[] = []
   const write = async (table: string, sub: string) => {
     const c = Number((await store.con.runAndReadAll(`SELECT count(*) c FROM ${table}`)).getRowObjects()[0].c)
     if (c === 0) return
@@ -179,11 +191,17 @@ export async function flush(store: Store): Promise<number> {
     if (fs.existsSync(out)) throw new Error(`refusing to overwrite existing part ${out} — part naming must be collision-free`)
     await store.con.run(`COPY ${table} TO ${q(out)} (FORMAT PARQUET, COMPRESSION ZSTD)`)
     await store.con.run(`DELETE FROM ${table}`) // in-memory only — costs no disk write
+    partPaths.push(out)
   }
   await write('blob', BLOBS_DIR)
   await write('body', BODIES_DIR)
   await write('part', PARTS_DIR)
-  return n
+  return { n, partPaths }
+}
+
+/** Back-compat wrapper: every existing caller only ever wanted the blob count. */
+export async function flush(store: Store): Promise<number> {
+  return (await flushDetailed(store)).n
 }
 
 /** A relation covering BOTH the durable Parquet parts and the not-yet-flushed staging table, so a read
