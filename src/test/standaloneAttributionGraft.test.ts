@@ -16,8 +16,8 @@ import * as http from 'http'
 import * as os from 'os'
 import * as fs from 'fs'
 import * as path from 'path'
-import { spawn, type ChildProcess } from 'child_process'
-import type { AddressInfo } from 'net'
+import type { ChildProcess } from 'child_process'
+import { freePort, spawnServerWithRetry } from './helpers/freePort'
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
@@ -44,16 +44,6 @@ function httpReq(port: number, method: string, urlPath: string, body?: unknown):
     req.on('error', reject)
     if (payload) req.write(payload)
     req.end()
-  })
-}
-
-function freePort(): Promise<number> {
-  return new Promise((resolve) => {
-    const s = http.createServer()
-    s.listen(0, '127.0.0.1', () => {
-      const port = (s.address() as AddressInfo).port
-      s.close(() => resolve(port))
-    })
   })
 }
 
@@ -106,13 +96,10 @@ suite('standalone server — OTEL api_request attribution grafts onto the served
   let uiPort = 0
   let otlpPort = 0
   let tmpDir = ''
-  let logBuf = ''
+  let getLog: () => string = () => ''
 
   suiteSetup(async function () {
     this.timeout(45_000)
-    const [otlp, ui, mcp] = [await freePort(), await freePort(), await freePort()]
-    uiPort = ui
-    otlpPort = otlp
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'al-graft-'))
     const home = path.join(tmpDir, 'home')
     const data = path.join(tmpDir, 'data')
@@ -123,37 +110,36 @@ suite('standalone server — OTEL api_request attribution grafts onto the served
     fs.writeFileSync(path.join(projects, `${SID}.jsonl`), transcriptBody(path.join(home, 'ws')))
 
     const serverJs = path.resolve(__dirname, '..', '..', '..', 'standalone', 'server.js')
-    const env = { ...process.env } as NodeJS.ProcessEnv
-    delete env.AGENTLENS_GATE
-    delete env.AGENTLENS_GATE_MODE
-    delete env.CLAUDE_CONFIG_DIR // the fixture lives under the private HOME, never the dev machine's
-    delete env.CODEX_HOME
-    delete env.OPENCODE_DATA_DIR
-    Object.assign(env, {
-      HOME: home,
-      DATA_DIR: data,
-      OTLP_PORT: String(otlp),
-      UI_PORT: String(ui),
-      MCP_PORT: String(mcp),
-      BIND_HOST: '127.0.0.1',
-      AGENTLENS_NO_TELEMETRY_CONFIG: '1',
-      AGENTLENS_OPEN_BROWSER: '0',
+    // TRDD-1QFP73WA: spawnServerWithRetry re-probes fresh ports and retries when the OS hands the
+    // ephemeral port to something else between our probe and the child's own listen().
+    const spawned = await spawnServerWithRetry({
+      serverJs,
+      buildEnv: async () => {
+        const [otlp, ui, mcp] = [await freePort(), await freePort(), await freePort()]
+        const env = { ...process.env } as NodeJS.ProcessEnv
+        delete env.AGENTLENS_GATE
+        delete env.AGENTLENS_GATE_MODE
+        delete env.CLAUDE_CONFIG_DIR // the fixture lives under the private HOME, never the dev machine's
+        delete env.CODEX_HOME
+        delete env.OPENCODE_DATA_DIR
+        Object.assign(env, {
+          HOME: home,
+          DATA_DIR: data,
+          OTLP_PORT: String(otlp),
+          UI_PORT: String(ui),
+          MCP_PORT: String(mcp),
+          BIND_HOST: '127.0.0.1',
+          AGENTLENS_NO_TELEMETRY_CONFIG: '1',
+          AGENTLENS_OPEN_BROWSER: '0',
+        })
+        return env
+      },
+      readyPort: (env) => Number(env.UI_PORT),
     })
-
-    child = spawn(process.execPath, [serverJs], { env, stdio: ['ignore', 'pipe', 'pipe'] })
-    child.stdout?.on('data', (d: Buffer) => { logBuf += d.toString() })
-    child.stderr?.on('data', (d: Buffer) => { logBuf += d.toString() })
-
-    const deadline = Date.now() + 30_000
-    for (;;) {
-      if (child.exitCode !== null) throw new Error(`server exited early (code=${child.exitCode})\n${logBuf.slice(-2000)}`)
-      try {
-        const r = await httpReq(ui, 'GET', '/api/server-stats')
-        if (r.status === 200) break
-      } catch { /* not listening yet */ }
-      if (Date.now() > deadline) throw new Error(`server not ready within 30s\n${logBuf.slice(-2000)}`)
-      await sleep(250)
-    }
+    child = spawned.child
+    uiPort = Number(spawned.env.UI_PORT)
+    otlpPort = Number(spawned.env.OTLP_PORT)
+    getLog = spawned.getLog
   })
 
   suiteTeardown(async function () {
@@ -194,7 +180,7 @@ suite('standalone server — OTEL api_request attribution grafts onto the served
     assert.ok(types.has('api_request'),
       `the OTEL api_request attribution entry must be grafted onto the served card ` +
       `(got types: ${JSON.stringify([...types])}) — its absence is the exact machine-wide ` +
-      `get_cost_by_cause=0 regression\n${logBuf.slice(-1500)}`)
+      `get_cost_by_cause=0 regression\n${getLog().slice(-1500)}`)
     assert.ok(types.has('user_input') || types.has('llm'),
       `transcript-derived entries must STILL be present (got types: ${JSON.stringify([...types])}) — ` +
       'the graft must compose, not replace: the log card stays the totals/timeline winner')

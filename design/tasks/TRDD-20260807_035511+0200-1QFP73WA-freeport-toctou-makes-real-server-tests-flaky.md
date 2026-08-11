@@ -1,22 +1,38 @@
 ---
 trdd-id: 1QFP73WA
 title: freePort has a TOCTOU race that makes every real-server test flaky in CI
-column: todo
+column: testing
 created: 2026-08-07T03:55:11+0200
-updated: 2026-08-07T03:55:11+0200
+updated: 2026-08-11T19:20:19+0200
 current-owner: main
 task-type: infra
 ---
 
 # freePort has a TOCTOU race that makes every real-server test flaky in CI
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-07
+## ⏵ STATE — 2026-08-11 19:20 — IMPLEMENTED AND LOCALLY GREEN; **CI IS THE OUTSTANDING GATE**
 
-Not started. Found while merging PR #17; queued rather than folded in, because it is a
-test-infra change unrelated to that PR's subject and would have doubled its blast radius.
+Both mitigations shipped in `src/test/helpers/freePort.ts`; the four duplicated copies are gone.
+Local suite 2221 passing / 12 pending / 0 failing, all five gates clean.
 
-**NEXT ACTION:** write the shared helper `src/test/helpers/freePort.ts` described under
-*Fix* below, then replace the four duplicated copies with an import.
+**NEXT ACTION:** this card CANNOT close on local green. Its own criterion below is the full suite
+green on **Node 20 and Node 22 across three consecutive CI runs** — one green run proves nothing
+about a race, and the whole defect was a run that passed on one matrix leg and failed on another
+at the identical commit. Push and watch three runs, then close.
+
+**Two files deliberately got mitigation 1 only** (the allocator), not the spawn-retry, and this is
+a decision, not an omission:
+- `serverSingleInstance.test.ts` asserts a second server on the same data dir MUST `exit(1)` with
+  "Refusing to start". A generic retry-on-early-exit would swallow the very refusal under test.
+- `setupVerb.test.ts` spawns inside `runSetup()` (`src/cli/setup.ts`), so there is no test-level
+  call site to wrap without changing that function's contract.
+
+**Load-bearing detail found in review, after the helper was written:** the first cut of
+`isPortRaceFailure` also matched a bare `exited early (code=1)`, making EVERY `exit(1)` retryable
+— so a genuine startup failure would burn three attempts and then be reported as port contention.
+Tightened to the port text only; both the server's own message and Node's raw `EADDRINUSE` contain
+"already in use", so no real port case is lost. Pinned by a test proving the permissive form
+retries 3× (measured: `buildEnv called 3x`).
 
 ## The defect
 

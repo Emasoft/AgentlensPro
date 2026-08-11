@@ -3,9 +3,9 @@ import * as http from 'http'
 import * as os from 'os'
 import * as fs from 'fs'
 import * as path from 'path'
-import { spawn, type ChildProcess } from 'child_process'
-import type { AddressInfo } from 'net'
+import type { ChildProcess } from 'child_process'
 import { forwardHookEvent } from '../cli/hookHandlers'
+import { freePort, spawnServerWithRetry } from './helpers/freePort'
 
 // ── D3K7QM2P/1a — hook durability: spool-on-failure + boot/periodic drain ────────────────────────
 // forwardHookEvent must NEVER lose a hook event a live Claude instance emitted. When the server is
@@ -85,20 +85,13 @@ function httpReq(port: number, method: string, urlPath: string, body?: unknown):
     req.end()
   })
 }
-function freePort(): Promise<number> {
-  return new Promise((resolve) => { const s = http.createServer(); s.listen(0, '127.0.0.1', () => { const p = (s.address() as AddressInfo).port; s.close(() => resolve(p)) }) })
-}
-
 suite('hook spool — real server drains it on boot (integration)', () => {
   let child: ChildProcess | undefined
   let uiPort = 0
   let tmpDir = ''
-  let logBuf = ''
 
   suiteSetup(async function () {
     this.timeout(45_000)
-    const [otlp, ui, mcp] = [await freePort(), await freePort(), await freePort()]
-    uiPort = ui
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'al-spool-boot-'))
     const home = path.join(tmpDir, 'home'); const data = path.join(tmpDir, 'data')
     fs.mkdirSync(home, { recursive: true }); fs.mkdirSync(data, { recursive: true })
@@ -109,19 +102,21 @@ suite('hook spool — real server drains it on boot (integration)', () => {
     fs.writeFileSync(path.join(spool, '3000-bad.json'), '{ this is not valid json')
 
     const serverJs = path.resolve(__dirname, '..', '..', '..', 'standalone', 'server.js')
-    const env = { ...process.env } as NodeJS.ProcessEnv
-    delete env.AGENTLENS_GATE; delete env.AGENTLENS_GATE_MODE; delete env.AGENTLENS_NO_REVIVE; delete env.DATA_DIR
-    Object.assign(env, { HOME: home, DATA_DIR: data, OTLP_PORT: String(otlp), UI_PORT: String(ui), MCP_PORT: String(mcp), BIND_HOST: '127.0.0.1', AGENTLENS_NO_TELEMETRY_CONFIG: '1', AGENTLENS_OPEN_BROWSER: '0' })
-    child = spawn(process.execPath, [serverJs], { env, stdio: ['ignore', 'pipe', 'pipe'] })
-    child.stdout?.on('data', (d: Buffer) => { logBuf += d.toString() })
-    child.stderr?.on('data', (d: Buffer) => { logBuf += d.toString() })
-    const deadline = Date.now() + 30_000
-    for (;;) {
-      if (child.exitCode !== null) throw new Error(`server exited early (code=${child.exitCode})\n${logBuf.slice(-2000)}`)
-      try { const r = await httpReq(ui, 'GET', '/api/server-stats'); if (r.status === 200) break } catch { /* not up yet */ }
-      if (Date.now() > deadline) throw new Error(`server not ready within 30s\n${logBuf.slice(-2000)}`)
-      await sleep(250)
-    }
+    // TRDD-1QFP73WA: spawnServerWithRetry re-probes fresh ports and retries when the OS hands the
+    // ephemeral port to something else between our probe and the child's own listen().
+    const spawned = await spawnServerWithRetry({
+      serverJs,
+      buildEnv: async () => {
+        const [otlp, ui, mcp] = [await freePort(), await freePort(), await freePort()]
+        const env = { ...process.env } as NodeJS.ProcessEnv
+        delete env.AGENTLENS_GATE; delete env.AGENTLENS_GATE_MODE; delete env.AGENTLENS_NO_REVIVE; delete env.DATA_DIR
+        Object.assign(env, { HOME: home, DATA_DIR: data, OTLP_PORT: String(otlp), UI_PORT: String(ui), MCP_PORT: String(mcp), BIND_HOST: '127.0.0.1', AGENTLENS_NO_TELEMETRY_CONFIG: '1', AGENTLENS_OPEN_BROWSER: '0' })
+        return env
+      },
+      readyPort: (env) => Number(env.UI_PORT),
+    })
+    child = spawned.child
+    uiPort = Number(spawned.env.UI_PORT)
     // The drain runs at boot; give the (synchronous) drain + the first read a beat.
     await sleep(500)
   })

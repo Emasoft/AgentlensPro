@@ -2,8 +2,8 @@ import * as assert from 'assert'
 import { spawn, type ChildProcess } from 'child_process'
 import * as fs from 'fs'
 import * as os from 'os'
-import * as net from 'net'
 import * as path from 'path'
+import { freePort } from './helpers/freePort'
 
 // EXACTLY ONE server may own a data directory. Real processes, real ports, real filesystem — no
 // mocks: the thing under test is what a second `node standalone/server.js` actually does.
@@ -18,17 +18,6 @@ import * as path from 'path'
 // dir is refused however different the ports, and a different data dir still starts freely.
 
 const SERVER = path.resolve(__dirname, '../../../standalone/server.js')
-
-async function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer()
-    srv.once('error', reject)
-    srv.listen(0, '127.0.0.1', () => {
-      const port = (srv.address() as net.AddressInfo).port
-      srv.close(() => resolve(port))
-    })
-  })
-}
 
 interface Started { proc: ChildProcess; stdout: string; stderr: string; exited: number | null }
 
