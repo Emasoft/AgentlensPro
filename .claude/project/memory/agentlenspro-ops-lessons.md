@@ -316,6 +316,11 @@ Three things worth carrying:
   wedged or aborted handler never logs a completion: the last start with no matching `done` IS the
   culprit. An OOM is a fatal V8 abort, uncatchable, so nothing in-process could say more.
 
+## See also
+
+- [[ssd-write-economics]] — what the drain is ultimately protecting: the SSD write budget, why the
+  RAM spool is the whole margin, and why batching is only the enabler of compression.
+
 ## Notes and lessons learned
 
 [^1]: [id:ATOM-SETTINGS-WIPE-GUARDRAIL, status:valid, keywords:"config_file_wiped_or_corrupted_after_edit settings.json_wiped safeConfigEdit_guard start_fresh_on_parse_failure_removed", ocd:2026-07-11, lmd:2026-07-11] promoted from the old-repo LOCAL note

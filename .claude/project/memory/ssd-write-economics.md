@@ -55,7 +55,11 @@ from every query. Any compression change MUST teach the reader the new extension
 edit; shipping the writer first is data loss by omission, and it would look like a retention bug
 rather than a format bug.
 
-Judge this work as a DISK-SPACE win (see [[ssd-write-economics]] for why it is not a longevity
-one).
+Judge this work as a DISK-SPACE win — the atom above is why it is not a longevity one.
+
+## See also
+
+- [[agentlenspro-ops-lessons]] — the drain/reclaim behaviour this page's budget depends on, including
+  the measured reclaim rate against arrival rate.
 
 ## Notes and lessons learned
