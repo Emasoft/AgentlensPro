@@ -395,15 +395,27 @@ real port case is lost. This is not hypothetical — `serverSingleInstance.test.
 DELIBERATE exit(1) ("Refusing to start") that such a retry would swallow, and it is one
 `spawnServerWithRetry` call away from being wrapped.
 
-**Also: `npx mocha <file>` does NOT isolate here.** `.mocharc` sets
-`spec: ['out/test/test/**/*.test.js']`, and a positional filename is ADDED to that glob rather than
-replacing it — so every "single-file" run is a full-suite run. **`--spec` does NOT fix it either** — measured
-2026-08-12: `npx mocha --spec out/test/test/serverLogTailScope.test.js` ran all 2239 tests, exactly
-like the positional form. **Only `--grep` narrows** (the same run via `--grep "scoped to THIS
-attempt"` executed 5 tests in 21 ms). An earlier version of this lesson recommended `--spec` as the
-remedy, which would have left a reader believing they had isolated a file while the whole suite ran
-— the very conclusion the lesson exists to prevent, so verify the count in the output rather than
-trusting the flag.
+**The mocha-isolation trap that bites while verifying this is its own atom — see ATOM-TEPQ-RXBX.**
+
+
+^ATOM-TEPQ-RXBX [desc:"npx mocha <file> AND --spec both run the full suite here; only --grep narrows, so verify the passing COUNT", keywords: mocha_isolate_single_file run_one_test_file npx_mocha_file_runs_whole_suite --spec_does_not_isolate --grep_narrows_mocha test_passes_in_isolation mocharc_spec_glob, ocd: 2026-08-12, lmd: 2026-08-12]
+
+**No mocha flag isolates a single test FILE in this repo — only `--grep` narrows, and you must
+verify the COUNT.** `.mocharc` sets `spec: ['out/test/test/**/*.test.js']`, and a positional
+filename is ADDED to that glob rather than replacing it, so `npx mocha <file>` silently runs the
+whole suite. Measured 2026-08-12: `--spec out/test/test/serverLogTailScope.test.js` ran all 2239
+tests too — identical to the positional form — while `--grep "scoped to THIS attempt"` ran 5 tests
+in 21 ms.
+
+**An earlier version of this lesson recommended `--spec` as the remedy.** That is worse than having
+no lesson: the reader believes they isolated a file, sees green, and concludes "it passes in
+isolation" — the exact false conclusion the lesson exists to prevent, now carrying the authority of
+a documented fix. So the durable instruction is not a flag at all: read the `N passing` line and
+check it against how many tests that file defines. A count is evidence; a flag is a hope.
+
+Practical consequence: a full-suite run is ~1 min here, so "isolation" is rarely worth chasing. Use
+`--grep` when you genuinely need one test (falsification runs, where an unrelated red would muddy
+the result), and otherwise just run the suite and read the delta against the known baseline.
 
 ## See also
 
