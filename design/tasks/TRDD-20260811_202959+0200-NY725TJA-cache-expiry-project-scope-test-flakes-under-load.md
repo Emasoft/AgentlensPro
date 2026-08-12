@@ -1,9 +1,9 @@
 ---
 trdd-id: NY725TJA
 title: The cacheExpiry project-scope test flakes under full-suite load and has never been root-caused
-column: todo
+column: human_review
 created: 2026-08-11T20:29:59+0200
-updated: 2026-08-11T20:29:59+0200
+updated: 2026-08-12T13:20:00+0200
 current-owner: main
 task-type: bugfix
 severity: medium
@@ -13,14 +13,44 @@ severity: medium
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-11
 
-Not started. Carded because it has now surfaced three separate times tonight and each time was
-waved off as "a known flake" — which is how a real defect becomes permanent furniture. Nobody has
-ever established the mechanism.
+**ROOT-CAUSED AND FIXED 2026-08-12.** The mechanism is established, the fix is one line in the
+fixture, and the full suite is green (2239 passing / 11 pending / **0 failing**) for the first time.
 
-**NEXT ACTION:** reproduce it deliberately under load and capture the ACTUAL assertion values (see
-*How to reproduce* below). Do not attempt a fix before the mechanism is known — a timing-looking
-failure with an unread assertion is exactly the shape that gets "fixed" by widening a timeout that
-was never the cause.
+**The title of this card is WRONG and is left standing as the record of a false lead.** "Under
+full-suite load" was the assumption every sighting inherited. Measured: the test fails **7 times in
+20 runs with that single test alone in the process** (`--grep`). Load raises the rate; it was never
+required. Had the investigation kept chasing cross-test pollution — the obvious reading of "under
+load" — it would have searched the one place the bug was not.
+
+**Mechanism (each reference verified first-hand, not taken from the report that proposed it):**
+`src/test/cacheExpiry.test.ts:143` built the shared timeline as `() => [apiRequestAt(iso(1))]`, so
+`iso(1)` — `new Date(Date.now() - 60_000)` — was re-evaluated on **every call**. `getTimeline` is
+called fresh per session (`src/mcpServer.ts:2013`), and `scanWithBudget` yields to the macrotask
+queue between items (`await new Promise(r => setImmediate(r))`, `src/mcpServer.ts:3053`). So the
+later-processed card gets a strictly newer millisecond, and the strict-greater tie-break
+`ms > newestMs` (`src/mcpServer.ts:2157`) crowns whichever card the scheduler reached second —
+`mine`, when the fixture says the answer is `foreign`.
+
+**The product code is correct and was NOT changed.** Strict-greater over millisecond timestamps with
+a real yield between items is right for real sessions. Reading the wall clock across that yield is
+what a fixture must not do — and the comment two lines above the defect already said so ("a per-card
+timestamp would let the precision ranking, not the scope filter, decide the winner"); the fixture
+created exactly the thing it warned against. The file had also already established the remedy: a
+frozen `NOW` at line 16, "fixed clock so tests are deterministic", which this one suite did not use.
+
+**Fix:** capture the timestamp once (`const activityAt = iso(1)`) and close over the value. The
+cards stay relative to the real clock, because their expiry is assessed against it — freezing the
+VALUE is the fix, not adopting the fixed epoch, which sits in 2027 and would put every card in the
+future.
+
+**Evidence:** 7/20 failures before, **0/20 after**, same command, same machine (p ≈ 0.0002 under the
+observed 35% base rate). Then the full suite green.
+
+**NEXT ACTION:** none — awaiting review/merge with the branch. The one open question deliberately
+NOT chased: the card notes the failure COUNT varied (1, then 2, then 0), implying a second exposed
+case in that suite. 20 isolated runs and a green full suite no longer reproduce any of it, so there
+is nothing left to diagnose; if a second case resurfaces, it gets its own card rather than reopening
+this one.
 
 ## The failure
 
