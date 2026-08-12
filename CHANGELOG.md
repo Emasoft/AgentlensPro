@@ -43,6 +43,22 @@ All notable changes to AgentlensPro are documented here.
   cannot force the drive's own write cache to media. `fsync(2)` asks the OS to flush its buffers
   to the device, which is a real improvement over never asking, and that is the entire claim.
 
+- **A failed `server start` quoted other processes' history as its own diagnosis.** When a start did
+  not answer, the error appended the last 8 lines of `server.log` — one append-only file shared by
+  every process that ever started a server for that data directory (every hook's `ensureServer`,
+  every concurrent CLI), carrying **no timestamps**. Measured on one machine: 29 accumulated
+  `Refusing to start` blocks naming four different owner pids, three lines per block, so a default
+  8-line tail straddled ~2.7 unrelated eras. The damage is an inversion, not mere noise — a refusal
+  names the pid that **won** (*"another server (pid N) already owns this data directory"*), so the
+  tail printed under a failed command reads as "N failed to start" when N is the healthy server you
+  are being protected by. That misreading costs a restart that was never needed, and on this machine
+  a restart interrupts every attached session. The tail is now scoped to the bytes appended since
+  our own spawn: an attempt that wrote nothing says so, a log rotated underneath is reported as
+  rotated rather than quoted from a stale offset, and the header states the scope, because "the last
+  8 lines" and "the last 8 lines we wrote" are different claims. The guard's message is **not**
+  silenced — a refusal your own child emits still prints in full, so a false alarm was not traded
+  for a silent one.
+
 - **A usage mistake exited 1, which is the watchers' abort signal.** `agentlenspro server` with the
   subcommand omitted exited 1, while `budget`, `watch` and `ctxmap` all exited **64** for the
   identical missing-argument shape. Exit 1 is reserved — `budget --watch` uses it to mean "stop the
@@ -59,6 +75,16 @@ All notable changes to AgentlensPro are documented here.
   would be worse than the dead end, because nothing would tell you the name was wrong.
 
 ### Added
+
+- **`requests.log` now records RSS beside heap.** Each line reads `heap=…MB rss=…MB`, from a single
+  `process.memoryUsage()` call so the two can never be sampled at different instants and report the
+  impossible `rss < heap`. This is diagnostic groundwork rather than a fix: an investigation into a
+  server death had stalled three times because heap alone cannot explain it. Heap sat at 1768 MB
+  against a 6144 MB cap right up to the kill, which looks perfectly healthy — while on a *healthy*
+  server heap measures 860 MB against an RSS of 2624 MB, so roughly two thirds of the real footprint
+  (DuckDB's native arena, buffers, the segment index) is off-heap and invisible to that number.
+  `--max-old-space-size` bounds V8's old space, never RSS, and an external kill acts on RSS. The
+  underlying crash is **not** fixed and its mechanism is still not established.
 
 - **The spool redirects to disk under pressure instead of dropping what it cannot hold.** When free
   space falls below a floor (64 MB), new bodies are written to the on-disk directory rather than
