@@ -292,7 +292,7 @@ and remember the deny path renders through a third field again.
 
 ^ATOM-GZJG-RS6I [desc:"Streaming the FILE fixed half of it — loadRange still held every span, so an unbounded query OOM'd the server at 4GB", keywords: server_died_on_a_tool_call socket_hang_up_pid_changed JavaScript_heap_out_of_memory Ineffective_mark-compacts get_cache_event_log_kills_the_server unbounded_query no_--window loadRange_materializes streaming_the_file_is_not_streaming_the_query, type: reference, ocd: 2026-08-07, lmd: 2026-08-07]
 
-**Reading incrementally while accumulating everything is still O(all).** [[ATOM-DMTT-DOCU]] made
+**Reading incrementally while accumulating everything is still O(all).** ATOM-DMTT-DOCU made
 `segmentedSpanStore.loadRange` stream each segment through `ndjsonLines.ts` instead of one
 `readFileSync` — which fixed the >512 MB *string* limit and looked like "the store streams now". It
 did not: every in-window span was still pushed into ONE returned array. So on 2026-08-07
@@ -332,7 +332,8 @@ while `budget`, `watch` and `ctxmap` all exited 64 for the identical missing-arg
 site reads fine alone; only the matrix makes the inconsistency visible.
 
 **`help <verb>` must answer for every management verb, from static USAGE, touching no socket** —
-the same doctrine as [[ATOM-9B2N-KU2R]]'s "help is TOTAL". It did not: every management verb fell
+the same doctrine as ATOM-9B2N-KU2R's "help is TOTAL" (recall it by id, not a wikilink — a `[[…]]`
+target is a page `name:`, and an atom id is not one). It did not: every management verb fell
 through to the diagnostics path, which resolves names against the SERVER'S live tool schema, and
 failed with `unknown tool "budget" (agentlenspro list)`. The remedy that message named leads
 nowhere — `list` enumerates diagnostics tools only, never CLI verbs — so the user was sent to the
