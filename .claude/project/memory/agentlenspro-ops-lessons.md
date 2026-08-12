@@ -341,6 +341,36 @@ one command that cannot answer them. An UNRECOGNISED name must still fall throug
 answering a typo with usage and exit 0 would be worse than the dead-end, because nothing would tell
 the user the name was wrong.
 
+
+^ATOM-PJAW-P8XT [desc:"The delete gate's read-back is served from the page cache, so it proved readability not durability; the fsync barrier is gated on whether the SOURCE was durable, and F_FULLFSYNC is unavailable in Node", keywords: is_the_parquet_part_actually_durable_before_we_delete_the_source verify_before_delete_page_cache does_fsync_guarantee_data_on_disk_macos F_FULLFSYNC_not_available_in_node reclaim_only_1_file_per_second duckdb_round_trips_per_file_in_the_delete_gate, type: project, ocd: 2026-08-12, lmd: 2026-08-12]
+
+**A read-back proves READABILITY, not DURABILITY — the page cache answers it.** The universal
+delete gate (`src/store/ingestPass.ts`) flushes Parquet, reconstructs each body FROM the store,
+compares sha256 against the source file's own bytes, and only then unlinks. That ordering is
+sound, but `flush()` never fsynced, and the comment above it called the part "durable". A read
+issued microseconds after a write is served from the OS page cache, so the gate could pass on
+bytes that had not reached the platter.
+
+**Severity depends ENTIRELY on whether the SOURCE was durable, which is why the barrier is gated
+rather than global.** Draining the RAM-disk spool: the source is volatile anyway, so a power loss
+takes it either way and the barrier buys ~nothing. Draining the LEGACY SSD bodies dir: the source
+was safely on disk, and deleting it after a non-durable flush can lose data that was already
+safe. The spool back-pressure valve redirects INTO that SSD dir under pressure, which is what
+turned this from latent to live.
+
+**`fs.constants.F_FULLFSYNC` is `false` in Node (verified empirically).** So on macOS pure Node
+cannot force the drive's own write cache to media — `fsync(2)` asks the OS to flush its buffers to
+the device, which is a real improvement over never asking, but not a guarantee against power loss
+on a drive with a volatile cache. Say that, do not claim more.
+
+**Throughput: the gate was ~2 DuckDB round trips PER FILE** (reconstruct, then the row/ts query),
+so a 200-file batch was ~400 round trips ⇒ ~1 file/s (~53 MB/min) against ~80 MB/min burst inflow.
+That inequality — not flush cadence, not spool size — is what dropped bodies. Batched to one bulk
+row/ts query plus chunked reconstruction (32/query, NOT unbounded: 200 × ~881 KB is ~176 MB of
+strings in one result set) ⇒ ~15 round trips. **What is proven did not change, only how it is
+executed** — and a body missing from the bulk result map must default to NOT-ok, so a silently
+dropped row can never authorize a delete.
+
 ## See also
 
 - [[ssd-write-economics]] — what the drain is ultimately protecting: the SSD write budget, why the
