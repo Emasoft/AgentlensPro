@@ -316,6 +316,30 @@ Three things worth carrying:
   wedged or aborted handler never logs a completion: the last start with no matching `done` IS the
   culprit. An OOM is a fatal V8 abort, uncatchable, so nothing in-process could say more.
 
+
+^ATOM-IALX-LKC6 [desc:"Exit 1 is the watchers' ABORT signal, so a caller mistake must exit 64 via UsageError; and 'help <verb>' must answer from static USAGE for every management verb", keywords: cli_returned_exit_1_for_a_typo why_did_my_batch_abort_on_a_bad_flag exit_code_64_EX_USAGE_convention agentlenspro_help_verb_says_unknown_tool agentlenspro_list_does_not_show_cli_verbs server_expects_start_stop_restart_status_exit_code, type: project, ocd: 2026-08-12, lmd: 2026-08-12]
+
+**Exit 1 is NOT the generic failure code — it is the watchers' ABORT signal** (`src/cli/cliErrors.ts`
+reserves it, and `budget --watch` uses it to mean "stop the run"). So a caller mistake must exit
+**64** (`EX_USAGE`) or a typo becomes indistinguishable from a legitimate abort: the batch stops,
+and the operator goes hunting for a burn that never happened. `standalone/cli.ts` maps the ERROR
+TYPE, not the site — `e instanceof UsageError ? EXIT.USAGE : 1` — so the fix for a verb with the
+wrong code is to throw `UsageError`, never to hardcode 64 at the throw site (that would drift the
+moment the mapping moves).
+
+Found by RUNNING every verb, not by review: `agentlenspro server` (subcommand omitted) exited 1
+while `budget`, `watch` and `ctxmap` all exited 64 for the identical missing-argument shape. Each
+site reads fine alone; only the matrix makes the inconsistency visible.
+
+**`help <verb>` must answer for every management verb, from static USAGE, touching no socket** —
+the same doctrine as [[ATOM-9B2N-KU2R]]'s "help is TOTAL". It did not: every management verb fell
+through to the diagnostics path, which resolves names against the SERVER'S live tool schema, and
+failed with `unknown tool "budget" (agentlenspro list)`. The remedy that message named leads
+nowhere — `list` enumerates diagnostics tools only, never CLI verbs — so the user was sent to the
+one command that cannot answer them. An UNRECOGNISED name must still fall through and fail loudly:
+answering a typo with usage and exit 0 would be worse than the dead-end, because nothing would tell
+the user the name was wrong.
+
 ## See also
 
 - [[ssd-write-economics]] — what the drain is ultimately protecting: the SSD write budget, why the
