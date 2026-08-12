@@ -371,6 +371,35 @@ strings in one result set) ⇒ ~15 round trips. **What is proven did not change,
 executed** — and a body missing from the bulk result map must default to NOT-ok, so a silently
 dropped row can never authorize a delete.
 
+
+^ATOM-OL89-HIFU [desc:"freePort is a TOCTOU claim; two mitigations are needed, the retry must match the PORT TEXT not a bare exit(1), and npx mocha <file> does not isolate because .mocharc adds a spec glob", keywords: port_already_in_use_in_CI_but_passes_on_rerun flaky_test_only_on_one_matrix_leg freePort_race_between_probe_and_listen retry_swallowed_a_real_startup_failure npx_mocha_single_file_still_runs_whole_suite mocharc_spec_glob_does_not_isolate, type: project, ocd: 2026-08-12, lmd: 2026-08-12]
+
+**A "free port" probe is a TOCTOU claim with a very short shelf life.** The classic helper —
+`listen(0)` → read the port → `close()` → resolve — proves the port was free AT PROBE TIME only.
+Between that close and the child's own `listen()`, the OS may hand the same ephemeral port to
+anything, including another test's server in the same run. Retrying the ASSERTION cannot help: the
+child already exited. Diagnosed from CI run 31139375893, where `build-and-test (20)` died on
+`Port 33097 (OTLP) already in use` while `(22)` passed **at the identical commit** — a leg passing
+is what distinguishes a race from a regression.
+
+Two mitigations, because neither alone closes the window: an in-process claimed-set (the only
+collision source we can see — mocha runs the whole suite in ONE process) and a bounded spawn-retry
+on a FRESH port (a claimant outside this process). Do NOT "fix" it with disjoint per-file port
+ranges: that trades a rare race for a permanent collision, and CI runners are not exclusive.
+
+**The retry matcher is where this gets dangerous, and it is subtle.** Matching a bare
+`exited early (code=1)` makes EVERY exit(1) retryable — so a genuine startup failure burns three
+attempts and is then reported as port contention, with the real reason buried. Match the PORT TEXT
+only: both the server's own message and Node's raw `EADDRINUSE` contain "already in use", so no
+real port case is lost. This is not hypothetical — `serverSingleInstance.test.ts` asserts a
+DELIBERATE exit(1) ("Refusing to start") that such a retry would swallow, and it is one
+`spawnServerWithRetry` call away from being wrapped.
+
+**Also: `npx mocha <file>` does NOT isolate here.** `.mocharc` sets
+`spec: ['out/test/test/**/*.test.js']`, and a positional filename is ADDED to that glob rather than
+replacing it — so every "single-file" run is a full-suite run. Use `--spec` or `--grep` when you
+actually mean one file, or a "this test passes in isolation" conclusion is measuring nothing.
+
 ## See also
 
 - [[ssd-write-economics]] — what the drain is ultimately protecting: the SSD write budget, why the
