@@ -397,8 +397,13 @@ DELIBERATE exit(1) ("Refusing to start") that such a retry would swallow, and it
 
 **Also: `npx mocha <file>` does NOT isolate here.** `.mocharc` sets
 `spec: ['out/test/test/**/*.test.js']`, and a positional filename is ADDED to that glob rather than
-replacing it — so every "single-file" run is a full-suite run. Use `--spec` or `--grep` when you
-actually mean one file, or a "this test passes in isolation" conclusion is measuring nothing.
+replacing it — so every "single-file" run is a full-suite run. **`--spec` does NOT fix it either** — measured
+2026-08-12: `npx mocha --spec out/test/test/serverLogTailScope.test.js` ran all 2239 tests, exactly
+like the positional form. **Only `--grep` narrows** (the same run via `--grep "scoped to THIS
+attempt"` executed 5 tests in 21 ms). An earlier version of this lesson recommended `--spec` as the
+remedy, which would have left a reader believing they had isolated a file while the whole suite ran
+— the very conclusion the lesson exists to prevent, so verify the count in the output rather than
+trusting the flag.
 
 ## See also
 
