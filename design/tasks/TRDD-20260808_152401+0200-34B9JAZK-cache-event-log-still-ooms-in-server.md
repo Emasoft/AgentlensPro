@@ -3,7 +3,7 @@ trdd-id: 34B9JAZK
 title: get_cache_event_log still OOMs the server under real load after the partial fix
 column: todo
 created: 2026-08-08T15:24:01+0200
-updated: 2026-08-08T15:24:01+0200
+updated: 2026-08-12T13:35:00+0200
 current-owner: agentlenspro-main
 task-type: bugfix
 severity: high
@@ -52,6 +52,50 @@ process start well after). So the fix was live and the server died anyway.
 - the server's resident state (≈70 k spans in memory, the segment index) plus concurrent ingestion
   leaving far less headroom than the 6 GB cap suggests;
 - the MCP response serialization of a large result.
+
+## 2026-08-12 — why it was never established, and the number that was missing
+
+**The mechanism is still NOT established. What follows narrows it and removes a false lead; it does
+not close the card.**
+
+Measured first-hand on the healthy live server (pid 40460, 41 min uptime):
+
+| | |
+|---|---|
+| heap | **860 MB** / 6240 MB cap |
+| RSS | **2624 MB** |
+| off-heap share | **~67 %** |
+
+Two consequences, both verified rather than reasoned-from-memory:
+
+1. **`--max-old-space-size=6144` bounds V8's old space, not RSS.** At steady state two thirds of this
+   process's footprint is native — DuckDB's arena, buffers, the segment index — and none of it is
+   visible to the heap number.
+2. **`requests.log` recorded heap ONLY** (`src/serverRuntime.ts:116`, and a sample line confirms:
+   `... 11b heap=920MB /api/statusline-samples`). So the incident evidence in this card — heap
+   852 → 872 → **1768** MB — was never evidence about the thing that kills a process. 1768 against a
+   6144 cap looks comfortable, which is precisely why three sightings produced no mechanism.
+
+**A false lead this removes:** "the server hit its heap limit" is not supported. A V8 heap OOM is
+self-announcing — the out-of-process run in the section above died with a visible
+`FATAL ERROR: Ineffective mark-compacts near heap limit`. The server instead went **silent for 68
+seconds and came back as a fresh pid**, which is the signature of an external `SIGKILL`, and an
+external kill acts on **RSS**. That shifts weight onto candidate 2 (resident state + concurrent
+ingestion leaving far less headroom than 6 GB suggests) and onto native allocation, and away from JS
+heap exhaustion. It does **not** prove it: nothing here rules out candidate 1, and no kernel-level
+kill record was recovered for pid 37104 (the sighting is four days old).
+
+**Done about it:** `RequestLogEntry` now carries `rssMb` and every logged line reads
+`heap=…MB rss=…MB` (one `process.memoryUsage()` call for both, so the pair can never be sampled at
+different instants and report the impossible `rss < heap`). Falsified on behaviour: with the `rss=`
+segment removed the new test fails on the actual line content.
+
+**NEXT ACTION (unchanged in spirit — reproduce, do not guess):** re-run
+`agentlenspro get_cache_event_log` with no `--window` against a **scratch `DATA_DIR` and `HOME`**,
+never this machine's live server, and read the `rss=` trend in the new log. That trend is now capable
+of showing the approach to the wall; the heap trend never was. If RSS climbs toward physical limits
+while heap stays flat, candidate 1's `scanCacheCreationEvents` over raw body files is the first place
+to look, because it is the one materialization the QK3L5QAS fix did not touch.
 
 Guessing here is what closed the parent card early. Instrument the running server (heap sampling
 across the call, or `--heapsnapshot-near-heap-limit`) and attribute the growth before changing code.

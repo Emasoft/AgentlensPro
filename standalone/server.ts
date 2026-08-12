@@ -2859,10 +2859,15 @@ function instrumentResponse(req: http.IncomingMessage, res: http.ServerResponse,
   const finish = (): void => {
     if (logged) return
     logged = true
+    // ONE memoryUsage() call for both figures: two calls would sample different instants and could
+    // report rss < heap, which is impossible and would discredit the very trace this exists to make
+    // trustworthy.
+    const mem = process.memoryUsage()
     requestLog.record({
       ts: new Date().toISOString(), method: req.method ?? 'GET', path: urlPath,
       status: res.statusCode, durationMs: Date.now() - t0, bytes,
-      heapUsedMb: process.memoryUsage().heapUsed / 1048576,
+      heapUsedMb: mem.heapUsed / 1048576,
+      rssMb: mem.rss / 1048576,
     })
   }
   res.on('finish', finish)

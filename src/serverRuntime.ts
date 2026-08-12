@@ -77,6 +77,15 @@ export interface RequestLogEntry {
   durationMs: number
   bytes: number       // response body bytes
   heapUsedMb: number  // heap at completion — so a growth trend is visible per request
+  /** RSS at completion. Recorded because heap ALONE cannot diagnose the death this log exists to
+   *  explain (TRDD-34B9JAZK). Measured on a healthy server: heap 860 MB against RSS 2624 MB — 67% of
+   *  the footprint is off-heap (DuckDB's native arena, buffers, the segment index), and
+   *  `--max-old-space-size` bounds only V8's old space, never RSS. So a log that records heap alone
+   *  shows a comfortable 1768/6144 MB right up to a kill that RSS would have predicted, and the
+   *  post-mortem stalls exactly where the last one did. A V8 heap OOM is also self-announcing
+   *  (`FATAL ERROR: Ineffective mark-compacts`); a silent gap followed by a fresh pid is the
+   *  signature of an external SIGKILL, which acts on RSS. */
+  rssMb: number
 }
 
 /**
@@ -113,7 +122,7 @@ export class RequestLog {
   }
 
   private appendToFile(e: RequestLogEntry): void {
-    const line = `${e.ts} ${e.method} ${e.status} ${e.durationMs}ms ${e.bytes}b heap=${e.heapUsedMb.toFixed(0)}MB ${e.path}\n`
+    const line = `${e.ts} ${e.method} ${e.status} ${e.durationMs}ms ${e.bytes}b heap=${e.heapUsedMb.toFixed(0)}MB rss=${e.rssMb.toFixed(0)}MB ${e.path}\n`
     try {
       // Rotate BEFORE the write when the file is already at/over the cap, so the active file stays
       // bounded. One backup generation is enough for post-mortem attribution.
