@@ -1,9 +1,9 @@
 ---
 trdd-id: 1QFP73WA
 title: freePort has a TOCTOU race that makes every real-server test flaky in CI
-column: testing
+column: human_review
 created: 2026-08-07T03:55:11+0200
-updated: 2026-08-11T19:20:19+0200
+updated: 2026-08-12T13:45:00+0200
 current-owner: main
 task-type: infra
 ---
@@ -19,6 +19,19 @@ Local suite 2221 passing / 12 pending / 0 failing, all five gates clean.
 green on **Node 20 and Node 22 across three consecutive CI runs** — one green run proves nothing
 about a race, and the whole defect was a run that passed on one matrix leg and failed on another
 at the identical commit. Push and watch three runs, then close.
+
+**Re-columned `testing` → `human_review` 2026-08-12.** Nothing about the work changed; the column
+was lying. `testing` asserts that someone is testing this right now, and nobody was — the only
+remaining step is a **push**, which is the owner's to authorize, and CI cannot run until it happens.
+A card parked in a work column is invisible as a stall precisely because the board's most-populated
+columns are the ones nobody re-reads, so it would have sat there indefinitely looking busy. The
+blocker is a USER action, which is what `human_review` means, and it is now consistent with the
+three other cards on this branch waiting on the same person.
+
+Local state is unchanged and still good: implemented, full suite green (2240 passing / 11 pending /
+0 failing as of 2026-08-12), all five gates green. **That is not the close criterion and must not be
+mistaken for it** — one machine's green says nothing about a race that manifested as one CI matrix
+leg passing while another failed at the identical commit.
 
 **Two files deliberately got mitigation 1 only** (the allocator), not the spawn-retry, and this is
 a decision, not an omission:
