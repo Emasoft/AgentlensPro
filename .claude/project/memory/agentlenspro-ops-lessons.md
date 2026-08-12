@@ -417,6 +417,74 @@ Practical consequence: a full-suite run is ~1 min here, so "isolation" is rarely
 `--grep` when you genuinely need one test (falsification runs, where an unrelated red would muddy
 the result), and otherwise just run the suite and read the delta against the known baseline.
 
+
+^ATOM-CVM9-3JPN [desc:"heap was the wrong number: 67% of the footprint is off-heap, and a silent kill means SIGKILL on RSS, not a V8 heap OOM", keywords: server_killed_silently server_OOM_not_heap rss_vs_heap_node max-old-space-size_does_not_bound_rss requests.log_heap_only ineffective_mark-compacts server_restarted_fresh_pid off-heap_duckdb_memory how_to_diagnose_a_process_kill, ocd: 2026-08-12, lmd: 2026-08-12]
+
+**Heap alone cannot diagnose this server's death — ~67% of its footprint is off-heap, and
+`--max-old-space-size` bounds neither that nor RSS.** Measured 2026-08-12 on a HEALTHY server: heap
+860 MB against RSS 2624 MB (DuckDB's native arena, buffers, the segment index). So the OOM
+post-mortem in TRDD-34B9JAZK stalled three separate times on a number that could not answer it —
+`requests.log` recorded heap ONLY, and heap sat at 1768 MB against a 6144 MB cap right up to the
+kill, which reads as perfectly healthy.
+
+**The discriminator is whether the death ANNOUNCES itself.** A V8 heap OOM prints `FATAL ERROR:
+Ineffective mark-compacts near heap limit` — the out-of-process run did exactly that at ~4 GB. The
+server instead went SILENT for 68 seconds and returned as a fresh pid, which is the signature of an
+external SIGKILL, and an external kill acts on RSS. So "the server hit its heap limit" was never
+supported by the evidence that was collected for it.
+
+Every logged line now carries `heap=…MB rss=…MB` from a SINGLE `process.memoryUsage()` call — two
+calls would sample different instants and could report `rss < heap`, which is impossible and would
+discredit the trace it exists to make trustworthy. The crash itself is NOT fixed; this is the
+instrumentation that makes the mechanism establishable. See ATOM-GZJG-RS6I for the earlier,
+genuinely-fixed half (loadRange materializing every span).
+
+
+^ATOM-E5VV-1E9P [desc:"a fixture re-reading Date.now() across the code's own setImmediate yield; and 'flaky under load' was a false premise — it failed 7/20 in isolation", keywords: flaky_test_under_load test_fails_intermittently_identical_code wall_clock_in_test_fixture Date.now_re-evaluated_per_call setImmediate_yield_changes_timestamp tie-break_picks_wrong_session isolate_the_test_and_count_failures mine_!==_foreign, ocd: 2026-08-12, lmd: 2026-08-12]
+
+**A test fixture that re-reads the wall clock is nondeterministic wherever the code under test
+yields.** `cacheExpiry.test.ts` built its shared timeline as `() => [apiRequestAt(iso(1))]`, so
+`Date.now()` was sampled fresh on EVERY call. `getTimeline` runs once per session
+(`mcpServer.ts:2013`) and `scanWithBudget` awaits `setImmediate` between items
+(`mcpServer.ts:3053`), so the later-processed card got a strictly newer millisecond and the
+strict-greater tie-break `ms > newestMs` (`mcpServer.ts:2157`) crowned whichever card the scheduler
+reached second. Fix: capture the value ONCE (`const activityAt = iso(1)`).
+
+**The PRODUCT code was correct and unchanged** — strict-greater over millisecond timestamps with a
+real yield is right for real sessions. Two independent signposts had already said so and both were
+walked past: the comment two lines above the defect warned that a per-card timestamp "would let the
+precision ranking, not the scope filter, decide the winner" (the fixture created exactly that), and
+the same file already defined a frozen `NOW` at line 16, "fixed clock so tests are deterministic",
+which this one suite did not use.
+
+**The card's premise was the expensive part, not the bug.** Every sighting called it a
+full-suite-LOAD flake, which points the search at cross-test pollution. Measured: 7 failures in 20
+runs with that ONE test alone in the process; load raises the rate, it was never required. Before
+accepting "flaky under load", run it ISOLATED n times and count — the isolated rate is what tells
+you whether the nondeterminism is inside the test or between tests. Evidence 7/20 → 0/20.
+
+
+^ATOM-C0VK-5JHE [desc:"an unscoped tail of the shared untimestamped server.log quotes foreign history, and a refusal names the pid that WON — so a healthy restart reads as a failure", keywords: refusing_to_start_but_server_is_running restart_looks_like_it_failed server.log_shows_another_pid log_tail_shows_old_errors shared_append-only_log_no_timestamps another_server_already_owns_this_data_directory diagnosis_quotes_foreign_process, ocd: 2026-08-12, lmd: 2026-08-12]
+
+**`server.log` is ONE append-only file shared by every process that ever started a server for a
+data dir, and it has NO timestamps — so an unscoped tail quotes other processes' history as if it
+diagnosed the command you just ran.** Measured 2026-08-12: 29 accumulated refusal blocks in a 15 MB
+log, naming FOUR different owner pids, three lines per block — so a default 8-line tail straddled
+~2.7 unrelated eras.
+
+**The inversion is the damage, not the noise.** A refusal names the pid that WON — "another server
+(pid N) already owns this data directory" — so a tail printed under a failed command reads as "N
+failed to start" when N is the healthy server protecting you. That misreading costs a restart that
+was never needed, and on a machine running many sessions a restart interrupts all of them. The
+original bug report drew exactly this wrong conclusion, and blamed a retry loop that does not exist
+(`ensureServer` spawns ONCE and already reports the SERVING pid, not the child).
+
+Fix: `logTail(lines, fromOffset)` reads only bytes appended since our own spawn (`logSizeNow()`
+captured immediately before `spawn`). An attempt that wrote nothing says so; a log rotated underneath
+is reported as rotated rather than quoted from a stale offset; the header states the scope, because
+"the last 8 lines" and "the last 8 lines WE wrote" are different claims. The guard's message is not
+silenced — trading a false alarm for a silent one would be worse.
+
 ## See also
 
 - [[ssd-write-economics]] — what the drain is ultimately protecting: the SSD write budget, why the
