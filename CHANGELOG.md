@@ -4,6 +4,72 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.24.0] - 2026-08-12
+
+### Fixed
+
+- **Captured bodies were being dropped, and the cause was a drain too slow to keep up rather than
+  a spool too small.** The RAM spool takes Claude Code's raw request bodies — about 21 MB/min,
+  ~30 GB/day — and the ingest pass drains them into compressed Parquet. That pass was reclaiming
+  roughly **1 file/s (~53 MB/min) against ~80 MB/min of burst inflow**, and `53 < 80` is the whole
+  incident: the spool filled, and what arrived after that had nowhere to go. No flush cadence and
+  no spool size appears anywhere in that inequality, which is why growing the spool would have
+  bought minutes and fixed nothing.
+  The delete gate is what cost the time. Before deleting a spooled file it reconstructs the body
+  *from the store* and compares sha256 against the source's own bytes — sound, and deliberately
+  kept — but it did that one file at a time, at **two DuckDB round trips each**, so a 200-file
+  batch spent ~400 round trips. The row/timestamp check is now one bulk query over the batch's
+  `(body_id, src_name)` pairs, and reconstruction runs in chunks of 32 rather than all at once
+  (200 × ~881 KB is ~176 MB of strings in a single result set — bulk reconstruction was the named
+  memory risk, so the chunking is load-bearing, not tidiness). ~400 round trips became ~15.
+  **What is proven did not change, only how it is executed.** A body missing from the bulk result
+  map defaults to *not* verified, so a silently dropped row can never authorize a delete — the
+  fail-closed direction matters more here than the speed. Measured on the live server after
+  deploying: drain **92.3 files/min against 24.9 arriving** (previously ~60), zero verification
+  failures, and the backlog fell 600→255 files in nine minutes. The measurement counts deletions
+  from a snapshot rather than net file count, because during recovery the net count *rises* while
+  the drain is winning — a net count would have read as a regression.
+
+- **The delete gate called a Parquet part "durable" before it was, and then deleted the source.**
+  `flush()` never fsynced, so the read-back that authorized the delete could be served from the OS
+  page cache — proving the bytes were *readable*, which is not the same claim. Severity depends
+  entirely on where the source lived, which is why the barrier is gated rather than global: when
+  draining the RAM spool the source is volatile anyway and a power loss takes it either way, but
+  when draining the legacy on-disk bodies directory the source was already safe, and deleting it
+  after a non-durable flush can lose data that was in no danger. The part files and their
+  directories are now fsynced before the unlinks **when, and only when, the source was durable**.
+  One honest limit, because overstating a durability guarantee is worse than not making one:
+  `fs.constants.F_FULLFSYNC` is `false` in Node (verified empirically), so on macOS pure Node
+  cannot force the drive's own write cache to media. `fsync(2)` asks the OS to flush its buffers
+  to the device, which is a real improvement over never asking, and that is the entire claim.
+
+- **A usage mistake exited 1, which is the watchers' abort signal.** `agentlenspro server` with the
+  subcommand omitted exited 1, while `budget`, `watch` and `ctxmap` all exited **64** for the
+  identical missing-argument shape. Exit 1 is reserved — `budget --watch` uses it to mean "stop the
+  run" — so a typo was indistinguishable from a legitimate abort: the batch stops and the operator
+  goes hunting for a burn that never happened. The fix throws `UsageError` and lets the existing
+  type-based mapping produce 64, rather than hardcoding the number at the throw site where it would
+  drift the moment the mapping moves. Found by running every verb and diffing the matrix; each site
+  reads fine on its own.
+  **`help <verb>` now answers for every management verb**, from the static usage text, touching no
+  socket. It used to fall through to the diagnostics path, which resolves names against the
+  server's live tool schema, and failed with `unknown tool "budget" (agentlenspro list)` — a remedy
+  that leads nowhere, since `list` enumerates diagnostics tools and never CLI verbs. An
+  unrecognised name still falls through and fails loudly: answering a typo with usage and exit 0
+  would be worse than the dead end, because nothing would tell you the name was wrong.
+
+### Added
+
+- **The spool redirects to disk under pressure instead of dropping what it cannot hold.** When free
+  space falls below a floor (64 MB), new bodies are written to the on-disk directory rather than
+  discarded, and the valve releases only after free space recovers past twice the floor, so a spool
+  hovering at the threshold cannot oscillate. It fires on transition rather than continuously, and
+  it **fails open** — if free space cannot be read at all, capture continues rather than silently
+  routing everything to disk on an unknown. This is a safety valve and is described as one: the
+  throughput fix above is what actually keeps the spool from filling, and back-pressure is what
+  happens when something else goes wrong. Its arrival is also what promoted the durability gap
+  above from latent to live, since the redirect makes the durable-source path the travelled one.
+
 ## [2.23.1] - 2026-08-06
 
 ### Changed
