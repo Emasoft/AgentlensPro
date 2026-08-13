@@ -3860,15 +3860,21 @@ export function createMcpServer(opts: McpServerOptions): Server {
  * Handles a single HTTP request as an MCP endpoint.
  * Mount this on a route (e.g. `/mcp`) in your existing HTTP server.
  *
- * Each request gets its own transport instance (stateless per-request for
- * Streamable HTTP). The server instance is reused across requests.
+ * Each request gets its own transport instance AND its own Server (Protocol) instance. The
+ * per-request Server is not optional: the SDK's Protocol tracks exactly ONE transport, so a
+ * shared Server whose connect() races a second client throws "Already connected to a transport"
+ * — and a client that holds its stream open wedges the shared instance PERMANENTLY, failing
+ * every later rpc with that error while the HTTP layer keeps logging 200s. Observed live
+ * 2026-08-13: all 10 acceptance runs + tools/list dead with `rpc error (undefined)` (the CLI's
+ * rendering of the 500 body) until restart. createMcpServer only builds handler closures — no
+ * I/O — so a fresh instance per request costs microseconds and removes the whole failure class.
  */
 // 4 MB matches the standalone server's JSON-tool POST routes — tool-call requests are small; only
 // hostile or broken clients exceed this.
 const MCP_BODY_MAX_BYTES = 4 * 1024 * 1024
 
 export function handleMcpRequest(
-  server: Server,
+  makeServer: () => Server,
   req: http.IncomingMessage,
   res: http.ServerResponse,
 ): void {
@@ -3916,11 +3922,16 @@ export function handleMcpRequest(
     }
 
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
-    // Close the transport when the RESPONSE is done, whatever path got it there. 'close' fires
-    // after a normal finish AND on client abort, and attaching it BEFORE handling fixes two leaks
-    // the previous shape had: on handleRequest rejection the transport was never closed, and on a
-    // fast response 'finish' could fire before the success-path .then() attached its listener.
-    res.once('close', () => { transport.close().catch(() => { /* already closed */ }) })
+    const server = makeServer()
+    // Close transport AND the per-request server when the RESPONSE is done, whatever path got it
+    // there. 'close' fires after a normal finish AND on client abort, and attaching it BEFORE
+    // handling fixes two leaks the previous shape had: on handleRequest rejection the transport
+    // was never closed, and on a fast response 'finish' could fire before the success-path
+    // .then() attached its listener.
+    res.once('close', () => {
+      transport.close().catch(() => { /* already closed */ })
+      server.close().catch(() => { /* already closed */ })
+    })
     server.connect(transport)
       .then(() => transport.handleRequest(req, res, parsedBody))
       .catch(err => {
@@ -3941,7 +3952,8 @@ export function startMcpHttpServer(
   port: number,
   bindHost = '127.0.0.1',
 ): http.Server {
-  const server = createMcpServer(opts)
+  // A FACTORY, not a shared instance — see handleMcpRequest's header for the wedge this prevents.
+  const makeServer = (): Server => createMcpServer(opts)
   const httpServer = http.createServer((req, res) => {
     // ACAO only for same-origin/loopback origins — never the wildcard. MCP responses carry the
     // user's session data (prompts, costs, project paths), so ACAO:* let ANY browsed page read
@@ -3965,7 +3977,7 @@ export function startMcpHttpServer(
       res.end(JSON.stringify({ error: 'cross-origin request refused' }))
       return
     }
-    handleMcpRequest(server, req, res)
+    handleMcpRequest(makeServer, req, res)
   })
   httpServer.on('error', (err: NodeJS.ErrnoException) => {
     if (err.code === 'EADDRINUSE') {
