@@ -27,7 +27,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import * as zlib from 'zlib'
 import { atomicWriteFileSync, rssPressure } from './serverRuntime'
-import { forEachNdjsonLineAuto } from './ndjsonLines'
+import { forEachNdjsonLineAuto, forEachGunzipChunkSync } from './ndjsonLines'
 import type { Span } from './shared/telemetryTypes'
 
 const DAY_MS = 86_400_000
@@ -105,18 +105,39 @@ function segmentDayMs(filename: string): number | null {
 
 /** Count NDJSON lines without loading the file into memory (a segment can be hundreds of MB;
  *  a split('\n') here could OOM the boot path this exists to protect). Transparent over a `.gz`
- *  segment: the compressed bytes are read whole (small — gzip -9 measured 19.5x) and gunzipped to
- *  a Buffer, then scanned for newline BYTES directly — never turned into one giant string, so the
- *  decompressed size never risks the V8 max-string-length ceiling this store already routes
- *  around for the plain-file path. */
+ *  segment: decompression is STREAMED (forEachGunzipChunkSync), so the newline scan only ever
+ *  holds one bounded chunk — a whole-day gunzipSync Buffer here (568 MB measured) was the
+ *  review-confirmed RSS spike on every boot index rebuild over compressed days. */
+/** Round-trip verify a written `.gz` against the plain bytes it was made from, STREAMED: the old
+ *  `gunzipSync(...).equals(plainBytes)` held plain + gz + a second decompressed-day Buffer at once
+ *  (>1 GB peak per big file — the allocator ratchet behind the boot-sweep RSS kill in
+ *  TRDD-34B9JAZK's trail). Comparing chunk-by-chunk keeps the peak at plain + gz + one chunk.
+ *  Throws on a gunzip error (callers log and keep both forms); returns false on a byte mismatch. */
+function gzVerifiesAgainst(gzFile: string, plainBytes: Buffer): boolean {
+  let off = 0
+  let mismatch = false
+  forEachGunzipChunkSync(gzFile, (chunk) => {
+    if (mismatch) return
+    if (off + chunk.length > plainBytes.length || !chunk.equals(plainBytes.subarray(off, off + chunk.length))) {
+      mismatch = true
+      return
+    }
+    off += chunk.length
+  })
+  return !mismatch && off === plainBytes.length
+}
+
 function countLinesStreaming(file: string): number {
   let count = 0
   let lastByte = 0x0a
   if (file.endsWith('.gz')) {
-    const decompressed = zlib.gunzipSync(fs.readFileSync(file))
-    if (decompressed.length === 0) return 0
-    for (let i = 0; i < decompressed.length; i++) if (decompressed[i] === 0x0a) count++
-    lastByte = decompressed[decompressed.length - 1]
+    let sawBytes = false
+    forEachGunzipChunkSync(file, (chunk) => {
+      sawBytes = true
+      for (let i = 0; i < chunk.length; i++) if (chunk[i] === 0x0a) count++
+      lastByte = chunk[chunk.length - 1]
+    })
+    if (!sawBytes) return 0
     if (lastByte !== 0x0a) count++
     return count
   }
@@ -443,23 +464,36 @@ export class SegmentedSpanStore {
     // very next heavy tool. The sweep is resumable BY DESIGN (an already-verified .gz finishes its
     // deferred delete next pass), so pausing costs one day of latency, never correctness.
     underPressure: () => boolean = () => rssPressure().over,
-  ): { compressed: string[]; bytesSaved: number; pausedForPressure: boolean } {
+    // Bounded-slice mode (review finding: the FULL boot sweep ran synchronously before the
+    // servers could listen — 3m40s of closed ports over a 31-segment backlog). A caller passes a
+    // small maxSegments and reschedules while `remaining > 0`, so a backlog drains one blocking
+    // slice at a time with the event loop breathing between slices instead of one multi-minute
+    // block. Infinity keeps the original single-call semantics for tests and small stores.
+    maxSegments: number = Infinity,
+  ): { compressed: string[]; bytesSaved: number; pausedForPressure: boolean; remaining: number } {
     const compressed: string[] = []
     let bytesSaved = 0
     let pausedForPressure = false
+    let touched = 0
+    let remaining = 0
     const todayKey = segmentKey(nowMs)
     let names: string[]
-    try { names = fs.readdirSync(this.dir) } catch { return { compressed, bytesSaved, pausedForPressure } }
+    try { names = fs.readdirSync(this.dir) } catch { return { compressed, bytesSaved, pausedForPressure, remaining } }
     let indexDirty = false
     for (const name of names) {
       if (!/^\d{4}-\d{2}-\d{2}\.ndjson$/.test(name)) continue // only plain, un-compressed segments
-      if (underPressure()) {
-        pausedForPressure = true
-        this.log(`[AgentLens] span store: compression sweep paused under RSS pressure after ${compressed.length} segment(s) — remaining sealed segments compress on the next sweep`)
-        break
-      }
       const key = name.slice(0, 10)
       if (key >= todayKey) continue // active/current-day segment — never compress
+      if (touched >= maxSegments) { remaining++; continue }
+      if (underPressure()) {
+        if (!pausedForPressure) { // log the pause ONCE, not once per remaining segment
+          this.log(`[AgentLens] span store: compression sweep paused under RSS pressure after ${compressed.length} segment(s) — remaining sealed segments compress on the next sweep`)
+        }
+        pausedForPressure = true
+        remaining++
+        continue // keep counting `remaining` so the caller knows work is left
+      }
+      touched++
       const plainFile = path.join(this.dir, name)
       const gzFile = `${plainFile}.gz`
       let plainBytes: Buffer
@@ -471,8 +505,7 @@ export class SegmentedSpanStore {
         // delete IF the existing .gz still verifies against the current plain bytes; otherwise
         // leave both forms alone rather than guess.
         try {
-          const roundTrip = zlib.gunzipSync(fs.readFileSync(gzFile))
-          if (roundTrip.equals(plainBytes)) {
+          if (gzVerifiesAgainst(gzFile, plainBytes)) {
             fs.unlinkSync(plainFile)
             const meta = this.index.segments[key]
             if (meta) { meta.bytes = fs.statSync(gzFile).size; indexDirty = true }
@@ -492,8 +525,7 @@ export class SegmentedSpanStore {
       }
       // Verify before delete: never remove the only-known-good copy on faith.
       try {
-        const roundTrip = zlib.gunzipSync(fs.readFileSync(gzFile))
-        if (!roundTrip.equals(plainBytes)) {
+        if (!gzVerifiesAgainst(gzFile, plainBytes)) {
           this.log(`[AgentLens] span store: ${name} compressed but did NOT verify byte-identical — leaving both forms, NOT deleting the plain copy`)
           continue
         }
@@ -515,7 +547,7 @@ export class SegmentedSpanStore {
       this.log(`[AgentLens] span store: compressed sealed segment ${name} → ${key}.ndjson.gz (${plainBytes.length}B → ${gz.length}B)`)
     }
     if (indexDirty) this.writeIndex()
-    return { compressed, bytesSaved, pausedForPressure }
+    return { compressed, bytesSaved, pausedForPressure, remaining }
   }
 
   /** Remove every segment + the index (the /api/clear + clearAll paths). Foreign files stay. */

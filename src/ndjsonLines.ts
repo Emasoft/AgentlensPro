@@ -27,41 +27,57 @@ const CHUNK_BYTES = 1 << 22 // 4 MiB — big enough that syscall overhead vanish
  *  because that is the unit V8's limit is expressed in and the unit `carry` is measured in. */
 const MAX_LINE_CHARS = 64 << 20 // ~64M chars
 
-/** The chunk-splitting core shared by the plain-file and gzip readers below: `readChunk()`
- *  returns the next Buffer of bytes (or null at EOF) from whatever source (a live fd, or an
- *  already-decompressed in-memory Buffer sliced piecewise). Splitting this out is what lets the
- *  gzip reader reuse the exact same line-assembly + corruption-guard logic instead of ever
- *  building one giant decompressed STRING (which would reintroduce the very V8 max-string-length
- *  ceiling this module exists to route around — see the module header). */
+/** The line-assembly core shared by the plain-file and gzip readers below, PUSH-shaped so both a
+ *  pull loop (a live fd) and a push producer (the streaming gunzip driver) can feed it. Sharing
+ *  this is what lets the gzip reader reuse the exact same line-assembly + corruption-guard logic
+ *  instead of ever building one giant decompressed STRING (which would reintroduce the very V8
+ *  max-string-length ceiling this module exists to route around — see the module header). */
+class NdjsonLineAssembler {
+  // StringDecoder, not buf.toString(): a UTF-8 sequence straddling a chunk boundary would
+  // otherwise decode to replacement characters on both sides and corrupt that span's JSON.
+  private decoder = new StringDecoder('utf8')
+  private carry = ''
+  constructor(
+    private readonly onLine: (line: string) => void,
+    private readonly maxLineChars: number,
+    private readonly file: string,
+  ) {}
+
+  push(chunk: Buffer | Uint8Array): void {
+    const text = this.carry + this.decoder.write(chunk as Buffer)
+    let start = 0
+    for (;;) {
+      const nl = text.indexOf('\n', start)
+      if (nl === -1) break
+      const line = text.slice(start, nl)
+      if (line) this.onLine(line)
+      start = nl + 1
+    }
+    this.carry = text.slice(start)
+    if (this.carry.length > this.maxLineChars) {
+      throw new Error(`${this.file}: a single line exceeds ${this.maxLineChars} characters — the file is not NDJSON`)
+    }
+  }
+
+  end(): void {
+    this.carry += this.decoder.end()
+    if (this.carry) this.onLine(this.carry)
+  }
+}
+
 function walkNdjsonChunks(
   readChunk: () => Buffer | Uint8Array | null,
   onLine: (line: string) => void,
   maxLineChars: number,
   file: string,
 ): void {
-  // StringDecoder, not buf.toString(): a UTF-8 sequence straddling a chunk boundary would
-  // otherwise decode to replacement characters on both sides and corrupt that span's JSON.
-  const decoder = new StringDecoder('utf8')
-  let carry = ''
+  const assembler = new NdjsonLineAssembler(onLine, maxLineChars, file)
   for (;;) {
     const chunk = readChunk()
     if (chunk === null) break
-    const text = carry + decoder.write(chunk as Buffer)
-    let start = 0
-    for (;;) {
-      const nl = text.indexOf('\n', start)
-      if (nl === -1) break
-      const line = text.slice(start, nl)
-      if (line) onLine(line)
-      start = nl + 1
-    }
-    carry = text.slice(start)
-    if (carry.length > maxLineChars) {
-      throw new Error(`${file}: a single line exceeds ${maxLineChars} characters — the file is not NDJSON`)
-    }
+    assembler.push(chunk)
   }
-  carry += decoder.end()
-  if (carry) onLine(carry)
+  assembler.end()
 }
 
 /**
@@ -91,28 +107,114 @@ export function forEachNdjsonLine(
   }
 }
 
+/** Compressed bytes fed to the inflate engine per call. Small on purpose: the engine returns that
+ *  call's ENTIRE decompressed output as one Buffer, so the input chunk bounds the output spike —
+ *  256 KiB compressed is ~5 MB out at the measured 19.5x segment ratio (pathological all-zeros
+ *  input tops out near the deflate format's own ~1000x ceiling, still only ~256 MB, once). */
+const GZ_IN_CHUNK_BYTES = 1 << 18
+
+/** Engine surface the sync streaming driver needs. `_processChunk` is Node's own internal
+ *  synchronous inflate step — see `forEachGunzipChunkSync` for why touching an underscore API is
+ *  the deliberate, tested choice here rather than an accident. */
+interface SyncZlibEngine {
+  _processChunk?: (chunk: Buffer, flushFlag: number) => Buffer | undefined
+  _handle?: { close: () => void } | null
+  close: () => void
+}
+
+/**
+ * Walk a gzip file's DECOMPRESSED bytes chunk-by-chunk, synchronously, without ever holding the
+ * whole decompressed day in memory.
+ *
+ * WHY THE INTERNAL API: public zlib has sync one-shot calls (`gunzipSync` — whole output in one
+ * Buffer, the exact unbounded allocation this helper exists to kill: a sealed day measured 568 MB
+ * decompressed, and repeated day-sized transients are what ratcheted RSS into the kill band in
+ * TRDD-34B9JAZK) and async streams (unusable: every caller of the segment readers is sync by
+ * design — see the module header). The ONLY sync streaming path Node has is
+ * `Gunzip.prototype._processChunk`, the internal step `gunzipSync` itself is built on; driving it
+ * chunk-by-chunk is exactly what minizlib does for node-tar's sync mode, so the mechanism is
+ * exercised by one of npm's most-installed packages on every Node release. Two guards keep this
+ * honest rather than hopeful: the engine shape is asserted up front (a Node that removes the API
+ * fails LOUDLY here, never silently mis-reads), and `ndjsonLines.test.ts` pins byte-equality
+ * against `gunzipSync` so an internal-behaviour change fails the suite, not production.
+ *
+ * The close-interception inside the loop mirrors minizlib: `_processChunk`'s sync path closes the
+ * native handle when it believes the one-shot convenience call is done, which would destroy the
+ * inflate dictionary state the NEXT chunk needs — so close is a no-op for the duration of each
+ * call and restored after. Single-member gzip only (what `compressSealedSegments` writes);
+ * trailing garbage after the member is ignored, as `gunzipSync` also ignores it.
+ */
+export function forEachGunzipChunkSync(
+  file: string,
+  onChunk: (chunk: Buffer) => void,
+  inChunkBytes: number = GZ_IN_CHUNK_BYTES,
+): void {
+  const engine = new zlib.Gunzip({ chunkSize: 1 << 20 }) as unknown as SyncZlibEngine
+  if (typeof engine._processChunk !== 'function' || !engine._handle) {
+    engine.close()
+    throw new Error(
+      'zlib.Gunzip no longer exposes the sync _processChunk engine on this Node version — ' +
+      'the streaming .gz segment reader cannot run (see forEachGunzipChunkSync in ndjsonLines.ts)',
+    )
+  }
+  const fd = fs.openSync(file, 'r')
+  const inBuf = Buffer.allocUnsafe(inChunkBytes)
+  try {
+    for (;;) {
+      const read = fs.readSync(fd, inBuf, 0, inChunkBytes, null)
+      // A regular file only short-reads at EOF, so a short read means this call carries the gzip
+      // trailer: hand the engine Z_FINISH. A TRUNCATED file is caught by zlib itself — inflate
+      // with Z_FINISH and no remaining stream raises "unexpected end of file", which propagates
+      // (pinned by the truncation case in ndjsonLines.test.ts, so this is a tested claim, not a
+      // hoped-for one).
+      const last = read < inChunkBytes
+      const input = read === 0 ? Buffer.alloc(0) : inBuf.subarray(0, read)
+      // Explicit annotation: the `engine._handle = handle` restore below would otherwise make
+      // this initializer circular for the inference (TS7022).
+      const handle: { close: () => void } | null | undefined = engine._handle
+      if (!handle) break // engine reached stream end on a previous chunk (trailer already seen)
+      const nativeClose = handle.close
+      const jsClose = engine.close
+      handle.close = () => {}
+      engine.close = () => {}
+      let out: Buffer | undefined
+      try {
+        out = engine._processChunk!(input, last ? zlib.constants.Z_FINISH : zlib.constants.Z_NO_FLUSH)
+      } finally {
+        // processChunkSync's internal _close() does TWO things: it calls handle.close() (noop'd
+        // above, so the native inflate state survives) AND it nulls engine._handle — which,
+        // un-restored, made this loop stop after ONE chunk and silently truncate the output
+        // (caught red by the byte-equality test). Restoring the reference is the second half of
+        // the minizlib interception; both halves are load-bearing.
+        engine._handle = handle
+        handle.close = nativeClose
+        engine.close = jsClose
+      }
+      if (out && out.length > 0) onChunk(out)
+      if (last) break
+    }
+  } finally {
+    fs.closeSync(fd)
+    try { engine.close() } catch { /* engine already closed itself at stream end */ }
+  }
+}
+
 /** Same contract as `forEachNdjsonLine`, for a gzip-compressed NDJSON file (a SEALED, compressed
- *  span segment — see segmentedSpanStore's `compressSealedSegments`). The compressed bytes are
- *  read whole (small: gzip -9 measured 19.5x on a real segment, so even a 500+MB sealed day is a
- *  ~25MB read) and `gunzipSync`'d to a single decompressed Buffer — Buffer has no 512MB *string*
- *  ceiling, only `walkNdjsonChunks` ever turns bytes into a string, and only CHUNK_BYTES at a
- *  time, so the V8 max-string-length limit this module was built to route around is never hit on
- *  the decompressed side either. */
+ *  span segment — see segmentedSpanStore's `compressSealedSegments`). Decompression is STREAMED
+ *  (`forEachGunzipChunkSync` above): only one bounded chunk of decompressed bytes exists at a
+ *  time, so neither the V8 max-string-length ceiling nor a decompressed-day-sized Buffer
+ *  allocation (568 MB measured — the review-confirmed RSS spike) is ever reachable from a read. */
 export function forEachNdjsonLineGz(
   file: string,
   onLine: (line: string) => void,
   chunkBytes: number = CHUNK_BYTES,
   maxLineChars: number = MAX_LINE_CHARS,
 ): void {
-  const decompressed = zlib.gunzipSync(fs.readFileSync(file))
-  let offset = 0
-  walkNdjsonChunks(() => {
-    if (offset >= decompressed.length) return null
-    const end = Math.min(offset + chunkBytes, decompressed.length)
-    const chunk = decompressed.subarray(offset, end)
-    offset = end
-    return chunk
-  }, onLine, maxLineChars, file)
+  const assembler = new NdjsonLineAssembler(onLine, maxLineChars, file)
+  // chunkBytes here bounds the compressed read per engine call; the test seam still exercises
+  // chunk-boundary line assembly because a smaller input chunk yields smaller output chunks.
+  forEachGunzipChunkSync(file, (chunk) => assembler.push(chunk), Math.min(chunkBytes, GZ_IN_CHUNK_BYTES))
+  assembler.end()
 }
 
 /** Dispatches to `forEachNdjsonLine` or `forEachNdjsonLineGz` by filename suffix — the one call

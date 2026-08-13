@@ -622,6 +622,7 @@ suite('segmentedSpanStore — compressSealedSegments (sealed-segment gzip)', () 
       const first = store.compressSealedSegments(Date.now(), () => calls++ >= 1)
       assert.strictEqual(first.compressed.length, 1, 'exactly one segment compressed before the pause')
       assert.strictEqual(first.pausedForPressure, true, 'the pause must be reported, not silent')
+      assert.strictEqual(first.remaining, 1, 'the deferred segment must be COUNTED so the caller knows to reschedule')
       const names = fs.readdirSync(dir)
       assert.strictEqual(names.filter(n => n.endsWith('.ndjson')).length, 1, 'the remaining sealed day is still plain')
 
@@ -629,7 +630,35 @@ suite('segmentedSpanStore — compressSealedSegments (sealed-segment gzip)', () 
       const second = store.compressSealedSegments(Date.now(), () => false)
       assert.strictEqual(second.compressed.length, 1, 'the deferred segment compresses on the next sweep')
       assert.strictEqual(second.pausedForPressure, false)
+      assert.strictEqual(second.remaining, 0)
       assert.strictEqual(fs.readdirSync(dir).filter(n => n.endsWith('.ndjson')).length, 0, 'every sealed day is now compressed')
+    } finally { cleanup() }
+  })
+
+  test('maxSegments bounds one call to a slice and reports the remainder — the boot-path contract', () => {
+    // WHY: the full sweep ran synchronously on the boot path and kept every port closed for
+    // 3m40s over a 31-segment backlog (review finding). The server now drains the backlog one
+    // segment per timer slice; this pins the slice contract it relies on.
+    const { dir, cleanup } = tmpDir()
+    try {
+      const store = new SegmentedSpanStore(dir, () => {})
+      store.append(mkSpan(D1 + 1000, 1))
+      store.append(mkSpan(D1 + 86_400_000 + 1000, 2))
+      store.append(mkSpan(D1 + 2 * 86_400_000 + 1000, 3)) // three sealed days
+      store.flush()
+
+      const s1 = store.compressSealedSegments(Date.now(), () => false, 1)
+      assert.strictEqual(s1.compressed.length, 1, 'a slice of 1 compresses exactly one segment')
+      assert.strictEqual(s1.remaining, 2, 'the untouched sealed segments are reported, never silently dropped')
+
+      const s2 = store.compressSealedSegments(Date.now(), () => false, 1)
+      assert.strictEqual(s2.compressed.length, 1)
+      assert.strictEqual(s2.remaining, 1)
+
+      const s3 = store.compressSealedSegments(Date.now(), () => false, 1)
+      assert.strictEqual(s3.compressed.length, 1)
+      assert.strictEqual(s3.remaining, 0, 'the chain terminates: remaining reaches 0 when the backlog is drained')
+      assert.strictEqual(fs.readdirSync(dir).filter(n => n.endsWith('.ndjson')).length, 0, 'all three sealed days compressed across three slices')
     } finally { cleanup() }
   })
 })
