@@ -531,6 +531,29 @@ Implementation + pinning tests: `src/ndjsonLines.ts::forEachGunzipChunkSync` +
 `ndjsonLines.test.ts` (byte-equality vs gunzipSync at many chunk sizes, truncation-throws,
 corrupt-throws). Landed ed501db.
 
+
+^ATOM-5PSZ-R2GD [desc:"zlib delivers an error TWICE (sync throw + async re-emit); _processChunk piles up error listeners per call, and dropping them ALL turns the re-emit into an uncaught crash — keep exactly ONE persistent", keywords: MaxListenersExceededWarning_Gunzip uncaught_unexpected_end_of_file zlib_error_twice removeAllListeners_uncaught _processChunk_error_listener, type: project, ocd: 2026-08-13, lmd: 2026-08-13]
+
+The sync streaming gunzip driver needs a THIRD interception beyond the two in ATOM-8309-X2EP:
+`_processChunk` registers a fresh 'error' listener per call (CI's MaxListenersExceededWarning at
+11 chunks), but zlib delivers an error TWICE — the sync throw our callers see, plus an async
+re-emit on a later tick that those accumulated stale listeners were silently absorbing. Removing
+them all (the naive fix) made the truncation test an UNCAUGHT crash. Correct shape: attach ONE
+persistent no-op 'error' absorber at engine creation and re-attach it after each per-call
+removeAllListeners — flat count, harmless re-emit. Pinned by a warning-capture test
+(ndjsonLines.test.ts); landed ed084ff.
+
+
+^ATOM-LWA9-09CW [desc:"CI red while local slices were green: changing a module's BEHAVIOR contract requires running the suites of its CALLERS, not just the suites of the files you edited (spansScanned flip, ed084ff)", keywords: CI_red_local_green slice_suite_passed_CI_failed forgot_to_run_callers_test_suite contract_test_broke_on_refactor, type: project, ocd: 2026-08-13, lmd: 2026-08-13]
+
+The 9NAUEUUR prefilter changed scanOtelCallEvents' observable contract (spansScanned stopped
+counting unparsed spans), and both the worker and the reviewer ran only the suites of the FILES
+EDITED (segmentedSpanStore, ndjsonLines) — otelCallEvents.test.ts, which PINNED the old contract,
+only ran on CI and went red there. Rule: before claiming green on a behavior change, run the test
+suite of every module whose exported function you touched AND of its direct callers (grep the
+import); a deliberate contract flip gets the old pin REWRITTEN as a recorded decision, in the same
+commit. Landed ed084ff.
+
 ## See also
 
 - [[ssd-write-economics]] — what the drain is ultimately protecting: the SSD write budget, why the
