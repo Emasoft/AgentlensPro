@@ -505,6 +505,32 @@ The MCP HTTP endpoint must build ONE SDK Server (Protocol) instance PER CONNECTI
 
 OWNER RULING (2026-08-13, verbatim: 'both the baseline-history-protect and the baseline-pr-and-check must be changed to allows mutations in history and direct pushing/merging by the owner'): on the AgentlensPro repo, baseline-history-protect carries a DELIBERATE deviation from the ratified pair — bypass_actors [{actor_id:5, RepositoryRole, always}] so the owner/admin may force-push and delete on main. Applied 2026-08-13T16:08:34+02:00 via PUT rulesets/18778596; verified current_user_can_bypass=always. baseline-pr-and-checks already carried the identical admin bypass (ratified shape) — no change was needed there. Any baseline-restore/drift pass MUST NOT strip this bypass back to the ratified empty list on this repo — that would revert a Tier-3 owner decision as if it were drift.
 
+
+^ATOM-R9AC-467C [desc:"A 'timeout under load' in cacheBreakTimeline/forensics tests can be a REAL-STORE scan: since the evidence rewire, storeDir defaults to the live ~/.agentlens store", keywords: test_timeout_under_load cacheBreakTimeline_timeout suite_hangs mocha_timeout scans_real_store storeDir_default non-hermetic_test, type: project, ocd: 2026-08-13, lmd: 2026-08-13]
+
+Since the evidence rewire, `buildCacheBreakTimeline` / `buildCauseCostPeakReport` /
+`scanApiCallEvents` default `storeDir` to `dataPath('store')` — the developer's REAL multi-GB
+Parquet store. Any test that does not pass a scratch (never-created) `storeDir` silently scans the
+live corpus: at machine load ~150 that read as 11 "environmental" timeouts (2026-08-13), and the
+tell that broke the environmental theory was an EMPTY-INPUT test ("absent bodies directory") also
+"timing out" — no load explains 60s on no data. Isolation pattern: a `noStore` never-created dir
+per suite (forensicsIndex.test.ts and cacheBreakTimeline.test.ts both carry it now; fix 4e442c4).
+Before blaming load for a red suite, ask: does every store-touching call pass a scratch storeDir?
+
+
+^ATOM-8309-X2EP [desc:"Sync streaming gunzip exists only via zlib's internal Gunzip._processChunk, and needs BOTH minizlib interceptions: noop handle.close AND restore engine._handle after each call", keywords: sync_streaming_gunzip gunzipSync_memory_spike _processChunk zlib_whole_file_buffer gz_segment_read minizlib, type: project, ocd: 2026-08-13, lmd: 2026-08-13]
+
+Node has NO public sync streaming gunzip — `gunzipSync` returns the whole output (a 568MB sealed
+day = the RSS-ratchet allocation). The only sync streaming path is `Gunzip.prototype._processChunk`
+(what gunzipSync itself is built on; the minizlib/node-tar mechanism), and it needs BOTH
+interceptions per call or it fails subtly: (1) noop `handle.close` for the call's duration (the
+sync path closes the native handle when it thinks the one-shot is done), AND (2) restore
+`engine._handle = handle` afterwards — the internal `_close()` NULLS it, and un-restored the read
+loop stops after ONE chunk, silently truncating output (caught red by the byte-equality test).
+Implementation + pinning tests: `src/ndjsonLines.ts::forEachGunzipChunkSync` +
+`ndjsonLines.test.ts` (byte-equality vs gunzipSync at many chunk sizes, truncation-throws,
+corrupt-throws). Landed ed501db.
+
 ## See also
 
 - [[ssd-write-economics]] — what the drain is ultimately protecting: the SSD write budget, why the
