@@ -481,6 +481,13 @@ function freshDir(): string {
   fs.mkdirSync(d, { recursive: true })
   return d
 }
+// NEVER created. Since the evidence rewire, buildCacheBreakTimeline/buildCauseCostPeakReport
+// default storeDir to dataPath('store') — the DEVELOPER'S REAL Parquet store. Every scratch test
+// below must pass this dir or it silently scans the live multi-GB corpus: under machine load that
+// turned each of these tests into a minutes-long real-store scan and 11 of them blew every
+// timeout (2026-08-13 — diagnosed as environmental until the absent-bodies test, which has no
+// data at all, also "timed out"). Same isolation discipline as forensicsIndex.test.ts's noStoreDir.
+const noStore = path.join(tmpBase, 'no-store-never-created')
 function writeAt(dir: string, name: string, body: unknown, mtimeMs: number): void {
   const p = path.join(dir, name)
   fs.writeFileSync(p, JSON.stringify(body))
@@ -510,7 +517,7 @@ suite('cacheBreakTimeline — buildCacheBreakTimeline (disk scan + previous_mess
       writeAt(dir, `resp${i}.response.json`, respBody(respIds[i], 200_000), base + i * 60_000 + 30_000)
     }
 
-    const report = await buildCacheBreakTimeline({ bodiesDir: dir, sessionId: sid, minTokens: 5000 })
+    const report = await buildCacheBreakTimeline({ bodiesDir: dir, sessionId: sid, minTokens: 5000, storeDir: noStore })
     assert.strictEqual(report.sessionId, sid)
     assert.ok(report.turnsInSession >= 5)
     // Turns 2,3,4 are HOOK_INJECTION (turn 1 is COLD_START; turn 5 has no following request → unpaired).
@@ -543,7 +550,7 @@ suite('cacheBreakTimeline — buildCacheBreakTimeline (disk scan + previous_mess
       writeAt(dir, `r${i}.request.json`, reqBody({ sessionId: sid, previousMessageId: prevId, tools: perTurnTools[i] }), base + i * 60_000)
       writeAt(dir, `resp${i}.response.json`, respBody(respIds[i], 150_000), base + i * 60_000 + 30_000)
     }
-    const report = await buildCacheBreakTimeline({ bodiesDir: dir, sessionId: sid, minTokens: 5000 })
+    const report = await buildCacheBreakTimeline({ bodiesDir: dir, sessionId: sid, minTokens: 5000, storeDir: noStore })
     const toolOff = report.repeatOffenders.find(o => o.cause === 'TOOLSET_CHANGED')
     assert.ok(toolOff, 'the single tool change is still recorded as an offender')
     assert.strictEqual(toolOff!.occurrences, 1)
@@ -552,7 +559,7 @@ suite('cacheBreakTimeline — buildCacheBreakTimeline (disk scan + previous_mess
 
   test('coverage reports honest scan bounds and an absent directory never throws', async () => {
     const missing = path.join(tmpBase, 'nope-' + Math.random().toString(36).slice(2))
-    const report = await buildCacheBreakTimeline({ bodiesDir: missing })
+    const report = await buildCacheBreakTimeline({ bodiesDir: missing, storeDir: noStore })
     assert.strictEqual(report.coverage.dirExists, false)
     assert.strictEqual(report.events.length, 0)
     assert.ok(report.coverage.note.includes('OTEL_LOG_RAW_API_BODIES'))
@@ -569,7 +576,7 @@ suite('cacheBreakTimeline — buildCacheBreakTimeline (disk scan + previous_mess
       writeAt(dir, `r${i}.request.json`, reqBody({ sessionId: sid, previousMessageId: prevId, messages: injectedMsg(`<system-reminder>heartbeat hook ${i}: ${secret}</system-reminder>`) }), base + i * 60_000)
       writeAt(dir, `resp${i}.response.json`, respBody(respIds[i], 120_000), base + i * 60_000 + 30_000)
     }
-    const report = await buildCacheBreakTimeline({ bodiesDir: dir, sessionId: sid, minTokens: 5000 })
+    const report = await buildCacheBreakTimeline({ bodiesDir: dir, sessionId: sid, minTokens: 5000, storeDir: noStore })
     const serialized = JSON.stringify(report)
     assert.ok(!serialized.includes(secret), 'raw injected block text must never cross the boundary')
     assert.ok(!serialized.includes('dev-1'), 'the device_id from metadata.user_id must never cross the boundary')
@@ -586,7 +593,7 @@ suite('cacheBreakTimeline — buildCacheBreakTimeline (disk scan + previous_mess
       writeAt(dir, `r${i}.request.json`, reqBody({ sessionId: sid, previousMessageId: prevId, messages: injectedMsg(`<system-reminder>hook heartbeat ${i}</system-reminder>`) }), base + i * 60_000)
       writeAt(dir, `resp${i}.response.json`, respBody(respIds[i], 100_000), base + i * 60_000 + 30_000)
     }
-    const report = await buildCacheBreakTimeline({ bodiesDir: dir, sessionId: sid, minTokens: 5000 })
+    const report = await buildCacheBreakTimeline({ bodiesDir: dir, sessionId: sid, minTokens: 5000, storeDir: noStore })
     assert.strictEqual(formatTimeline(report, 'json'), report)
     for (const fmt of ['markdown', 'table', 'timeline'] as const) {
       const out = formatTimeline(report, fmt) as { format: string; text: string }
@@ -625,7 +632,7 @@ suite('cacheBreakTimeline — buildCauseCostPeakReport (cross-session cause cost
     writeAt(dir, 'tlresp1.response.json', respBody('msg_tl1', 20_000), base + 90_000) // bills turn1's TOOLSET_CHANGED write
     writeAt(dir, 'tl2.request.json', reqBody({ sessionId: 'sess-tool', previousMessageId: 'msg_tl1', tools: toolsB }), base + 120_000)
 
-    const report = await buildCauseCostPeakReport({ bodiesDir: dir, minTokens: 5000 })
+    const report = await buildCauseCostPeakReport({ bodiesDir: dir, minTokens: 5000, storeDir: noStore })
     assert.strictEqual(report.groupBy, 'cause')
     assert.strictEqual(report.bucket, 'cache_creation')
 
@@ -663,10 +670,10 @@ suite('cacheBreakTimeline — buildCauseCostPeakReport (cross-session cause cost
     writeAt(dir, 'hkresp1.response.json', respBody('msg_hk21', 50_000, 50_000, 'claude-opus-4-8', 5), base + 90_000)
     writeAt(dir, 'hk2.request.json', reqBody({ sessionId: 'sess-hook2', previousMessageId: 'msg_hk21', messages: injectedMsg('<system-reminder>heartbeat hook: inbox 2</system-reminder>') }), base + 120_000)
 
-    const byCache = await buildCauseCostPeakReport({ bodiesDir: dir, minTokens: 5000 })
+    const byCache = await buildCauseCostPeakReport({ bodiesDir: dir, minTokens: 5000, storeDir: noStore })
     assert.strictEqual(byCache.groups[0].key, 'HOOK_INJECTION', '50000 cache_creation beats 1000 on the default bucket')
 
-    const byOutput = await buildCauseCostPeakReport({ bodiesDir: dir, minTokens: 5000, bucket: 'output' })
+    const byOutput = await buildCauseCostPeakReport({ bodiesDir: dir, minTokens: 5000, bucket: 'output', storeDir: noStore })
     assert.strictEqual(byOutput.bucket, 'output')
     assert.strictEqual(byOutput.groups[0].key, 'MODEL_SWITCH', '90000 output beats 5 on bucket=output')
     assert.strictEqual(byOutput.groups[0].bucketValue, 90_000)
@@ -677,7 +684,7 @@ suite('cacheBreakTimeline — buildCauseCostPeakReport (cross-session cause cost
 
   test('an absent bodies directory returns an empty report, never throwing', async () => {
     const missing = path.join(tmpBase, 'nope-causepeak-' + Math.random().toString(36).slice(2))
-    const report = await buildCauseCostPeakReport({ bodiesDir: missing })
+    const report = await buildCauseCostPeakReport({ bodiesDir: missing, storeDir: noStore })
     assert.strictEqual(report.groupBy, 'cause')
     assert.strictEqual(report.groups.length, 0)
     assert.strictEqual(report.coverage.dirExists, false)
@@ -746,7 +753,7 @@ suite('cacheBreakTimeline — agent-* child sessions resolve via the subagents t
     writeAt(bodies, 'cresp1.response.json', respBody('msg_c1', 150_000), base + 185_000)
     writeAt(bodies, 'c2.request.json', reqBody({ sessionId: PARENT, previousMessageId: 'msg_c1', messages: [childHead, hookBlock(2)] }), base + 300_000)
 
-    const report = await buildCacheBreakTimeline({ bodiesDir: bodies, sessionId: `agent-${CHILD_ID}`, minTokens: 5000, projectsDirs: [projects] })
+    const report = await buildCacheBreakTimeline({ bodiesDir: bodies, sessionId: `agent-${CHILD_ID}`, minTokens: 5000, projectsDirs: [projects], storeDir: noStore })
     assert.strictEqual(report.sessionId, `agent-${CHILD_ID}`)
     assert.strictEqual(report.turnsInSession, 3, 'exactly the child\'s 3 turns — the parent\'s 3 stay out')
     assert.strictEqual(report.turnsClassified, 2, 'c0 (measured via c1\'s chain link) + c1 (via c2\'s)')
@@ -756,7 +763,7 @@ suite('cacheBreakTimeline — agent-* child sessions resolve via the subagents t
     assert.ok(report.coverage.note.includes(PARENT), 'the parent linkage is disclosed')
 
     // The bare agentId (a spawn placeholder's id, no agent- prefix) resolves to the same stream.
-    const bare = await buildCacheBreakTimeline({ bodiesDir: bodies, sessionId: CHILD_ID, minTokens: 5000, projectsDirs: [projects] })
+    const bare = await buildCacheBreakTimeline({ bodiesDir: bodies, sessionId: CHILD_ID, minTokens: 5000, projectsDirs: [projects], storeDir: noStore })
     assert.strictEqual(bare.turnsInSession, 3)
   })
 
@@ -764,7 +771,7 @@ suite('cacheBreakTimeline — agent-* child sessions resolve via the subagents t
     const bodies = freshDir()
     const projects = freshDir()
     writeAt(bodies, 'x0.request.json', reqBody({ sessionId: PARENT }), Date.now() - 60_000)
-    const report = await buildCacheBreakTimeline({ bodiesDir: bodies, sessionId: 'agent-ffffffffffffffff0', minTokens: 5000, projectsDirs: [projects] })
+    const report = await buildCacheBreakTimeline({ bodiesDir: bodies, sessionId: 'agent-ffffffffffffffff0', minTokens: 5000, projectsDirs: [projects], storeDir: noStore })
     assert.strictEqual(report.turnsClassified, 0)
     assert.ok(report.coverage.note.includes('sub-agent child id'), report.coverage.note)
     assert.ok(report.coverage.note.includes('subagents'), report.coverage.note)
