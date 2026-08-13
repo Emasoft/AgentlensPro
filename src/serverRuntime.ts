@@ -83,14 +83,24 @@ export function heapPressure(): { heapUsedMb: number; limitMb: number; hwmMb: nu
  * is NOT a detected cap; it is `os.totalmem()`, reported only as context.
  *
  * The default high-water mark (`AGENTLENS_RSS_HWM_MB`, default 4096) is a fixed absolute constant,
- * not a fraction of total system memory: this machine has 64 GB of RAM, and the two confirmed kills
- * happened at an RSS in the 2.5-3 GB range while total-memory usage elsewhere was irrelevant to the
- * killer's decision — a percent-of-total default (e.g. 75%) would compute to ~48 GB and never fire.
- * 4096 MB leaves headroom below the lowest RSS actually observed just before a kill (2547 MB, logged
- * seconds into a fresh boot already mid-scan) while staying well above ordinary idle RSS (~600 MB
- * measured on a freshly booted scratch server). Override with `AGENTLENS_RSS_HWM_MB` (absolute) or
- * `AGENTLENS_RSS_HWM_PCT` (fraction of `os.totalmem()`, for a deployment where the kill mechanism
- * genuinely does scale with total RAM).
+ * not a fraction of total system memory: this machine has 64 GB of RAM, and the kill mechanism is
+ * macOS system memory pressure, whose decision ignores our share of total RAM — a percent-of-total
+ * default (e.g. 75%) would compute to ~48 GB and never fire.
+ *
+ * 4096 is a COMPROMISE between two measured regimes, not a line the killer respects (the review
+ * called out an earlier draft of this comment for claiming 4096 "leaves headroom below 2547" —
+ * arithmetically backwards; this is the corrected account). Measured on 2026-08-13: one kill
+ * struck with the request log's last reading at rss=2547 MB (same gate source), while later the
+ * same day the server SURVIVED a sweep that `ps` scored at 5.4 GB — the killer's threshold moves
+ * with system-wide load, so no fixed constant can sit "safely below" it. 4096 is chosen ABOVE the
+ * gate-rss peaks of real, healthy heavy scans (a 10-run no-window acceptance stayed under 4096 by
+ * this gate while `ps` read 4.5-4.8 GB — the two accountings differ by compressed/reclaimable
+ * pages, so tune ONLY against this gate's own number, i.e. the `rss=` field in requests.log,
+ * never against `ps`) and BELOW the 5.4 GB residency that preceded the one instrumented kill.
+ * Lower it and the gate sheds scans that demonstrably complete; raise it and it stops shedding
+ * before the only residency ever seen to precede a death. Override with `AGENTLENS_RSS_HWM_MB`
+ * (absolute) or `AGENTLENS_RSS_HWM_PCT` (fraction of `os.totalmem()`, for a deployment where the
+ * kill mechanism genuinely does scale with total RAM).
  */
 export function rssPressure(totalMemMb = os.totalmem() / MB): { rssMb: number; limitMb: number; hwmMb: number; over: boolean } {
   const rssMb = process.memoryUsage().rss / MB
