@@ -1,9 +1,9 @@
 ---
 trdd-id: 34B9JAZK
 title: get_cache_event_log still OOMs the server under real load after the partial fix
-column: human_review
+column: dev
 created: 2026-08-08T15:24:01+0200
-updated: 2026-08-13T13:05:00+0200
+updated: 2026-08-13T22:25:00+0200
 current-owner: agentlenspro-main
 task-type: bugfix
 severity: high
@@ -154,6 +154,31 @@ and the commit messages):
 reproduce them; the live 5.4GB instance was the sweep, now paused-under-pressure — whether a
 DIFFERENT multi-GB path remains is unproven). The protections are in place either way; if a kill
 recurs, the rss= trend plus the tool-start log line will name the call, and this card reopens.
+
+## 2026-08-13 ~22:09 — THIRD live recurrence DURING the delegated review; card REOPENED to dev
+
+The reopen clause fired. USER had delegated the human_review ("base your review of verified facts,
+not assumptions"); while verifying, the live server changed pids. Facts, all read off disk:
+
+- pid 65252 died at ~22:09:30+0200: its last logged request is 22:09:29.974 (`heap=1417 rss=2790`),
+  and `[AgentLens] tool get_cache_event_log start` sits 9 lines from server.log's end — died
+  EXECUTING the call, third instance, same external-kill signature (no V8 banner, no .ips report).
+- **The RSS shed never fired and could not have**: the last gate-rss reading is 2790MB, under the
+  4096 HWM. Whatever climbed, climbed inside ONE synchronous scan — and because that scan blocks
+  the event loop, requests.log cannot sample during it. **2790 is a floor, not a peak: the
+  instrumentation is structurally blind in exactly the fatal window.** This kills the "read the
+  rss= trend" plan as stated; the trend stops at the tool-start line every time.
+- Post-death, spawn refusals cite pids dead since midday (14576, 13448) — stale pidfile/lock
+  content read by racing hooks — and pid 77910 (the current server) started 22:08:22 while 65252
+  still answered at 22:09:29: a possible DOUBLE-OWNER window of ≥67s. Cross-ref TRDD-PIDFILEAT,
+  which this escalates from a cosmetic defect to a store-integrity risk.
+
+**NEXT ACTION (one step): make the blind window observable — in-scan RSS sampling.** Inside the
+cache-event-log scan path (the forEachInRange visitor / evidence-load chunk loop), log
+`process.memoryUsage().rss` every N units directly to server.log (bypassing the request path the
+scan blocks). Only then rerun a controlled no-window call; the sample trail either names the
+allocation site's neighborhood or exonerates the scan. Do NOT rerun the call before the sampling
+exists — a fourth silent kill teaches nothing new.
 
 ## Acceptance
 

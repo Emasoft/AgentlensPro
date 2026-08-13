@@ -1,9 +1,9 @@
 ---
 trdd-id: 861LC4VW
 title: server restart reports a failed start and NOT RUNNING on a restart that succeeded
-column: human_review
+column: complete
 created: 2026-08-12T12:42:07+0200
-updated: 2026-08-13T22:15:00+0200
+updated: 2026-08-13T22:25:00+0200
 current-owner: claude-agentlenspro
 task-type: bugfix
 approval-tier: 0
@@ -113,6 +113,18 @@ working.
       the ready deadline still bounds a winner that boots forever. The guard's message is untouched
       (per Do NOT), historical refusals stay invisible (offset-scoped, tested), and a genuine death
       with no refusal stays an immediate death.
+
+## Approval log
+
+- 2026-08-13T22:25:00+0200 — COMPLETED via delegated review. USER (verbatim, 2026-08-13): "you can
+  review them youself. just base your review of verified facts, not assumptions." Facts verified
+  first-hand at review time: guard string at standalone/server.ts:197 matches raceWinnerPid's regex
+  exactly; startupVerdict has exactly one production call site (serverControl.ts:132) carrying the
+  new raceWinnerAlive field; family suites 27 passing / 0 failing isolated; CI green on main at
+  92e9491; both halves' mechanisms were established from LIVE occurrences (2026-08-12 12:32 and
+  2026-08-13 19:23), not reproduction guesses. Residual noted, not blocking: on a timeout after a
+  lost race the message still says "the process we started has exited" — truthful, and the scoped
+  tail names the winner alongside it.
 
 ## Do NOT
 
