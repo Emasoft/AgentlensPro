@@ -1,9 +1,9 @@
 ---
 trdd-id: 9NAUEUUR
 title: Span walk must prefilter before parse and yield while walking
-column: todo
+column: dev
 created: 2026-08-13T22:22:27+0200
-updated: 2026-08-13T22:22:27+0200
+updated: 2026-08-13T22:45:00+0200
 current-owner: agentlenspro-main
 task-type: bugfix
 approval-tier: 0
@@ -41,13 +41,27 @@ NOT RUNNING against a healthy, working server.
 
 ## Acceptance
 
-- [ ] Red-first: a test (or measured trail) demonstrating parsed-span count >> kept-span count
+- [x] Red-first: a test (or measured trail) demonstrating parsed-span count >> kept-span count
       before, and parsed ≈ candidate count after the prefilter.
-- [ ] The no-window `get_cache_event_log` trail shows materially lower rss peaks than the
+      (CLOSED 2026-08-13 22:45 — prefilter landed 3a71bde and DEPLOYED; the live no-window rerun's
+      trail is the measurement: baseline fired 11 samples at the 500k-parsed interval (5M+ parses);
+      post-prefilter it fired ZERO — fewer than 500k lines parsed across the whole 5.4M-span store,
+      i.e. >90% of JSON.parse calls eliminated. Wall 74.7s → 61.2s, exit 0, identical output shape.)
+- [x] The no-window `get_cache_event_log` trail shows materially lower rss peaks than the
       2026-08-13 baseline (4714MB peak at units=4M) on a comparable store.
-- [ ] `server status` answers during a no-window scan (the yield half), OR the card records the
-      explicit decision to defer the yield with its reason.
-- [ ] No span loss: prefilter false-negative cases pinned by tests.
+      (CLOSED with a disclosed caveat: the sampler's unit is PARSED spans, so post-prefilter the
+      whole walk sits under one sampling interval and produced no in-walk rss readings — the
+      absence proves the churn source collapsed, but peak rss during the walk is now unsampled.
+      The yield half must ALSO re-key the sampler to raw LINES (or drop the interval to 50k) so
+      the trail keeps watching.)
+- [ ] `server status` answers during a no-window scan (the yield half — still observed failing
+      live at 22:44: pid 7186 alive and healthy, status probe DROPped during the walk), OR the
+      card records the explicit decision to defer the yield with its reason.
+- [x] No span loss: prefilter false-negative cases pinned by tests (attribute-value collision case
+      + gz-transparency case, both green in segmentedSpanStore.test.ts; conservative-safety
+      argument written at the call site: a JSON name field's value necessarily appears as a
+      substring of its own line, so only false POSITIVES are possible and the `s.name` check
+      absorbs those).
 
 ## Baseline evidence
 
