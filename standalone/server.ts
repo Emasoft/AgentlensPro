@@ -59,7 +59,7 @@ import { buildContextHistory } from '../src/contextHistory'
 import { buildConversation } from '../src/conversation'
 import { generateSuggestions } from '../src/instructionAdvisor'
 import { detectInstructionFiles, appendSuggestion } from '../src/instructionFiles'
-import { atomicWriteFileSync, heapPressure, RequestLog } from '../src/serverRuntime'
+import { atomicWriteFileSync, heapPressure, rssPressure, RequestLog } from '../src/serverRuntime'
 import { SegmentedSpanStore, migrateLegacySpansFile, spanTimestampMs } from '../src/segmentedSpanStore'
 // appendToArchive is GONE: bodies now go into the content-addressed store, not a gzip .wad lump
 // (TRDD-K3WDPR7M Phase 3). The read/purge helpers stay — the existing .wad volumes still hold real
@@ -382,7 +382,20 @@ try {
 
 // Retention: on boot + daily. Deletes whole EXPIRED segments only; each deletion is logged by
 // the store ("retention: deleted segment <name>, N spans, age Nd").
+//
+// Compression rides the SAME boot+daily tick rather than a new scheduler (docs_dev spec: "do not
+// invent a new scheduler") — it is the natural home because it shares retention's exact
+// precondition (a segment is safe to touch once its day has fully passed) and its exact cadence
+// (rare enough that gzipping a day's worth of spans is negligible next to the rest of a daily
+// tick). Ordered before retention so a segment compressed today can still be deleted by retention
+// today if it also happens to be expired, instead of compressing something about to be deleted.
 function runSpanRetention(): void {
+  try {
+    const c = spanStore.compressSealedSegments()
+    if (c.compressed.length > 0) {
+      console.log(`[AgentLens] span store: compressed ${c.compressed.length} sealed segment(s), saved ${c.bytesSaved} byte(s)`)
+    }
+  } catch (e) { console.warn('[AgentLens] span compression failed:', e) }
   try { spanStore.runRetention(SPANS_RETENTION_DAYS) } catch (e) { console.warn('[AgentLens] span retention failed:', e) }
 }
 runSpanRetention()
@@ -400,10 +413,15 @@ function flushSpanAppends(): void {
   }
   // Heap-pressure valve: halve the window (never below the 5-minute live floor) instead of the
   // old cap's silent oldest-span eviction. Loud by design, and disk keeps everything.
+  // TRDD-34B9JAZK: heapPressure ALONE is blind to the ~67% of this process's footprint that never
+  // touches V8's old space (DuckDB's arena, buffers, the segment index) — the server died twice
+  // with a comfortable heap reading and no V8 OOM banner. rssPressure is checked alongside it so the
+  // SAME valve fires on native/off-heap growth too, not only on JS heap growth.
   const hp = heapPressure()
-  if (hp.over && effectiveWindowMs > SUMMARY_WINDOW_FLOOR_MS) {
+  const rp = rssPressure()
+  if ((hp.over || rp.over) && effectiveWindowMs > SUMMARY_WINDOW_FLOOR_MS) {
     effectiveWindowMs = Math.max(SUMMARY_WINDOW_FLOOR_MS, Math.floor(effectiveWindowMs / 2))
-    console.warn(`[AgentLens] heap pressure (${Math.round(hp.heapUsedMb)}/${Math.round(hp.limitMb)}MB): summary window shrunk to ${Math.round(effectiveWindowMs / 60_000)}m — disk store unaffected, no spans lost`)
+    console.warn(`[AgentLens] ${rp.over ? 'rss' : 'heap'} pressure (heap ${Math.round(hp.heapUsedMb)}/${Math.round(hp.limitMb)}MB, rss ${Math.round(rp.rssMb)}/${Math.round(rp.hwmMb)}MB): summary window shrunk to ${Math.round(effectiveWindowMs / 60_000)}m — disk store unaffected, no spans lost`)
   }
   const cutoff = Date.now() - effectiveWindowMs
   // Live appends keep `spans` roughly time-ordered, so only filter when the head has aged out.
@@ -2909,12 +2927,20 @@ function instrumentResponse(req: http.IncomingMessage, res: http.ServerResponse,
 // via the request log + a stderr line, so heap-pressure sheds are visible in the crash.log-adjacent record.
 function heavyGuard(res: http.ServerResponse, urlPath: string, label: string): boolean {
   const p = heapPressure()
-  if (!p.over) return false
-  console.warn(`[AgentLens] heap-pressure shed: ${label} ${urlPath} — heap ${p.heapUsedMb.toFixed(0)}MB ≥ hwm ${p.hwmMb.toFixed(0)}MB (limit ${p.limitMb.toFixed(0)}MB)`)
+  // TRDD-34B9JAZK: check RSS alongside heap — see the rssPressure() doc comment in serverRuntime.ts
+  // for why heap alone cannot see the native/off-heap growth that has twice killed this process.
+  const r = rssPressure()
+  if (!p.over && !r.over) return false
+  if (r.over) {
+    console.warn(`[AgentLens] rss-pressure shed: ${label} ${urlPath} — rss ${r.rssMb.toFixed(0)}MB ≥ hwm ${r.hwmMb.toFixed(0)}MB (of ${r.limitMb.toFixed(0)}MB total)`)
+  } else {
+    console.warn(`[AgentLens] heap-pressure shed: ${label} ${urlPath} — heap ${p.heapUsedMb.toFixed(0)}MB ≥ hwm ${p.hwmMb.toFixed(0)}MB (limit ${p.limitMb.toFixed(0)}MB)`)
+  }
   res.writeHead(503, { 'Content-Type': 'application/json', 'Retry-After': '2' })
   res.end(JSON.stringify({
-    error: 'collector under heap pressure — request shed to stay alive',
+    error: `collector under ${r.over ? 'rss' : 'heap'} pressure — request shed to stay alive`,
     heapUsedMb: Math.round(p.heapUsedMb), hwmMb: Math.round(p.hwmMb), limitMb: Math.round(p.limitMb),
+    rssMb: Math.round(r.rssMb), rssHwmMb: Math.round(r.hwmMb),
   }))
   return true
 }
