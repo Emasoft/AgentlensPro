@@ -184,6 +184,26 @@ suite('ndjsonLines — sync streaming gunzip', () => {
     } finally { cleanup() }
   })
 
+  test('a many-chunk walk does not accumulate error listeners (CI MaxListenersExceededWarning)', function (done) {
+    // processChunkSync adds an 'error' listener per call; un-dropped, the 11th chunk fires
+    // MaxListenersExceededWarning (caught on CI, run 31741393697). 64-byte input chunks over this
+    // payload force well past 11 calls; any warning fails the test.
+    const plain = Buffer.from(Array.from({ length: 400 }, (_, i) => `{"s":"${i}-${'y'.repeat(i % 53)}"}`).join('\n'))
+    const { file, cleanup } = tmpGzFile(plain)
+    const onWarning = (w: Error): void => {
+      cleanup()
+      process.removeListener('warning', onWarning)
+      done(new Error(`process warning during chunked gz walk: ${w.name} ${w.message}`))
+    }
+    process.on('warning', onWarning)
+    try {
+      const streamed = gunzipStreamed(file, 64)
+      assert.ok(streamed.equals(zlib.gunzipSync(fs.readFileSync(file))))
+    } catch (e) { process.removeListener('warning', onWarning); cleanup(); done(e as Error); return }
+    // Warnings are emitted async (process.nextTick) — give them one macrotask to land.
+    setTimeout(() => { process.removeListener('warning', onWarning); cleanup(); done() }, 50)
+  })
+
   test('a corrupt (non-gzip) file throws — never silent zero output', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), `al-ndjson-gz-${process.pid}-${seq++}-`))
     const file = path.join(dir, 'segment.ndjson.gz')

@@ -201,7 +201,10 @@ export function scanOtelCallEvents(opts: OtelScanOptions = {}): {
     coverage: {
       spansDir, windowHours: opts.windowHours,
       spansScanned, apiRequests: events.length, compactions: compactions.length,
-      note: `Scanned ${spansScanned} span(s) from the OTEL store; ${events.length} api_request event(s) carry session.id + cost_usd directly (no previous_message_id chain needed).`,
+      // "Parsed N candidate(s)", NOT "scanned N span(s)": since the TRDD-9NAUEUUR prefilter,
+      // non-candidate lines are skipped BEFORE JSON.parse, so the total-in-window is deliberately
+      // unknowable (counting it would require the very parse the prefilter exists to avoid).
+      note: `Parsed ${spansScanned} candidate span line(s) (name-prefiltered before parse); ${events.length} api_request event(s) carry session.id + cost_usd directly (no previous_message_id chain needed).`,
     },
   }
 }

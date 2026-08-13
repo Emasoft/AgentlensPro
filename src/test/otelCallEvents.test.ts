@@ -93,9 +93,14 @@ suite('otelCallEvents — the visitor scan keeps only what it needs', () => {
     } finally { cleanup() }
   })
 
-  test('spansScanned counts EVERY span in the window, not just the kept ones', () => {
-    // It used to be `spans.length` on the materialized array. Nothing holds the spans now, so it is
-    // tallied as they pass — and a counter incremented in the wrong place is invisible in `events`.
+  test('spansScanned counts PARSED candidates only — non-candidate lines never reach JSON.parse', () => {
+    // CONTRACT FLIP, deliberate (TRDD-9NAUEUUR): this test used to pin "counts EVERY span in the
+    // window". That contract died with the line prefilter — parsing every span to count it was
+    // the ~2GB/GC transient churn that killed the live server three times, so non-candidate
+    // lines are now skipped BEFORE the parse and are deliberately uncountable. The two
+    // tool_decision spans below must therefore be INVISIBLE to the counter; only the
+    // api_request candidate is parsed. (CI caught the old pin going red on the prefilter
+    // commit — this is the recorded decision, not an accident.)
     const { dir, cleanup } = tmpDir()
     try {
       seed(dir, [
@@ -104,9 +109,9 @@ suite('otelCallEvents — the visitor scan keeps only what it needs', () => {
         span(API_REQUEST_SPAN, T0 + 2, { 'session.id': 'sess-a' }, 3),
       ])
       const r = scanOtelCallEvents({ spansDir: dir, sinceMs: 0, untilMs: Infinity })
-      assert.strictEqual(r.coverage.spansScanned, 3, 'all three were read')
-      assert.strictEqual(r.coverage.apiRequests, 1, 'only one was kept')
-      assert.match(r.coverage.note, /Scanned 3 span\(s\)/)
+      assert.strictEqual(r.coverage.spansScanned, 1, 'only the candidate line is parsed and counted')
+      assert.strictEqual(r.coverage.apiRequests, 1, 'and it was kept')
+      assert.match(r.coverage.note, /Parsed 1 candidate span line\(s\)/)
     } finally { cleanup() }
   })
 
@@ -133,7 +138,7 @@ suite('otelCallEvents — the visitor scan keeps only what it needs', () => {
     const r = scanOtelCallEvents({ spansDir: gone, sinceMs: 0, untilMs: Infinity })
     assert.deepStrictEqual(r.events, [])
     assert.strictEqual(r.coverage.spansScanned, 0)
-    assert.match(r.coverage.note, /Scanned 0 span\(s\)/)
+    assert.match(r.coverage.note, /Parsed 0 candidate span line\(s\)/)
   })
 
   test('a store path that cannot be a store returns empty rather than throwing', () => {

@@ -157,6 +157,15 @@ export function forEachGunzipChunkSync(
       'the streaming .gz segment reader cannot run (see forEachGunzipChunkSync in ndjsonLines.ts)',
     )
   }
+  // ONE persistent error absorber, attached for the engine's whole life. A zlib error is
+  // delivered TWICE: synchronously (processChunkSync catches its own listener's capture and
+  // THROWS — the error path our callers see) and again as an async 'error' EMIT on a later
+  // tick. With no listener at that moment the re-emit is an uncaught-exception crash — which
+  // the pre-fix accumulated stale listeners were silently absorbing (found when dropping them
+  // for CI's MaxListenersExceededWarning turned the truncation test into an uncaught crash).
+  // One deliberate absorber keeps the count flat AND keeps the re-emit harmless.
+  const absorbAsyncReEmit = (): void => { /* the sync throw already reported this error */ }
+  ;(engine as unknown as NodeJS.EventEmitter).on('error', absorbAsyncReEmit)
   const fd = fs.openSync(file, 'r')
   const inBuf = Buffer.allocUnsafe(inChunkBytes)
   try {
@@ -189,6 +198,15 @@ export function forEachGunzipChunkSync(
         engine._handle = handle
         handle.close = nativeClose
         engine.close = jsClose
+        // THIRD interception (caught by CI's MaxListenersExceededWarning): processChunkSync
+        // registers a fresh 'error' listener on the engine at EVERY call and, in one-shot use,
+        // discards the engine before it matters — reused across chunks, the listeners accumulate
+        // (11 by the 11th chunk). Its purpose for this call is done (a sync error THREW above),
+        // so drop everything and re-attach the ONE persistent absorber — never zero listeners,
+        // or the async error re-emit (see the absorber's comment) becomes an uncaught crash.
+        const em = engine as unknown as NodeJS.EventEmitter
+        em.removeAllListeners('error')
+        em.on('error', absorbAsyncReEmit)
       }
       if (out && out.length > 0) onChunk(out)
       if (last) break
