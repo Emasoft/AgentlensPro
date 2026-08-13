@@ -51,12 +51,14 @@ suite('checkSpoolCapacity — pure df-backed reading, no real spool needed', () 
 })
 
 suite('applySpoolBackpressure — the over-capacity spill and its counter', () => {
-  test('THE FIX: over-capacity redirects to the legacy SSD dir exactly once and counts the spill', async () => {
+  test('THE FIX: over-capacity redirects, counts the spill ONCE, and re-asserts every tick while over', async () => {
     let legacyCalls = 0
     let spoolCalls = 0
+    const warns: string[] = []
     const deps = {
       redirectToLegacy: () => { legacyCalls++ },
       restoreToSpool: () => { spoolCalls++ },
+      onWarn: (m: string) => { warns.push(m) },
     }
     let state: BackpressureState = INITIAL_BACKPRESSURE_STATE
 
@@ -66,10 +68,15 @@ suite('applySpoolBackpressure — the over-capacity spill and its counter', () =
     assert.strictEqual(state.redirected, true)
     assert.strictEqual(state.spills, 1, 'the spill must be counted so it is visible in spool health reporting')
 
-    // Tick 2: still over capacity — must NOT redirect again (already redirected; no repeat config churn).
+    // Tick 2: still over capacity — must RE-ASSERT the redirect (this controller is not the
+    // settings' sole writer: `agentlenspro setup` can "repair" the value back mid-outage, and a
+    // transition-only redirect would then let sessions write into a full spool while status
+    // claims protection — the 08e1c35 review finding). The callback is idempotent at the config
+    // layer, so re-calling costs a no-op; what must NOT repeat is the spill count and the warning.
     state = await applySpoolBackpressure({ overCapacity: true, freeBytes: 500_000, floorBytes: 64 * 1024 * 1024 }, state, deps)
-    assert.strictEqual(legacyCalls, 1, 'redirect must be idempotent while still over capacity')
-    assert.strictEqual(state.spills, 1)
+    assert.strictEqual(legacyCalls, 2, 'still-over-capacity must re-assert the redirect to heal an external config overwrite')
+    assert.strictEqual(state.spills, 1, 'a re-assert is not a new spill event')
+    assert.strictEqual(warns.length, 1, 'a re-assert must not repeat the warning — nothing NEW happened')
 
     // Tick 3: back under the floor but NOT past the hysteresis line (2x floor) — must stay redirected.
     state = await applySpoolBackpressure({ overCapacity: false, freeBytes: 70 * 1024 * 1024, floorBytes: 64 * 1024 * 1024 }, state, deps)
