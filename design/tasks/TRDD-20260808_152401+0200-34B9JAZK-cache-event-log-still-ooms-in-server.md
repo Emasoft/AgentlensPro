@@ -1,9 +1,9 @@
 ---
 trdd-id: 34B9JAZK
 title: get_cache_event_log still OOMs the server under real load after the partial fix
-column: todo
+column: human_review
 created: 2026-08-08T15:24:01+0200
-updated: 2026-08-12T13:35:00+0200
+updated: 2026-08-13T13:05:00+0200
 current-owner: agentlenspro-main
 task-type: bugfix
 severity: high
@@ -118,12 +118,53 @@ to look, because it is the one materialization the QK3L5QAS fix did not touch.
 Guessing here is what closed the parent card early. Instrument the running server (heap sampling
 across the call, or `--heapsnapshot-near-heap-limit`) and attribute the growth before changing code.
 
+## 2026-08-13 afternoon — the kill reproduced live, three fixes landed, acceptance CLOSED
+
+The full trail, in order (details in reports/lean-worker/20260813_120353+0200-rss-shed-34B9JAZK.md
+and the commit messages):
+
+1. **Scratch repro (worker, evidence-first):** 8.2GB synthetic corpus, full no-window scan —
+   +215MB peak, pid stable. Both named suspects (`scanCacheCreationEvents`,
+   `scanSessionsAndResponses`) ruled out AT TESTED VOLUMES; the multi-GB climb was not reproduced
+   in scratch. The verified structural gap instead: the MCP endpoint — where every heavy
+   diagnostic actually executes — had ZERO pressure protection (heavyGuard covers only 6 REST
+   routes). Fixed: `rssPressure()` (fixed 4096MB default HWM, env-overridable) wired into both
+   REST shed sites + a HEAVY_MCP_TOOLS shed at the MCP handler (f55ab34).
+2. **The kill reproduced ON THE LIVE SERVER, instrument present this time:** pid 15661 died
+   executing `get_cache_event_log` (the log's last line is the tool start; the client saw the
+   socket hang up), rss ≈5.4GB, NO V8 banner, NO .ips crash report — an external/system-pressure
+   kill, not a heap OOM. The 5.4GB residency was SELF-INFLICTED by the new boot compression
+   sweep (31 segments' gunzip-verify buffers ratcheting the allocator) — fixed: the sweep now
+   pauses under rssPressure() and resumes next pass (a98e7ae).
+3. **The `rpc error (undefined)` wedge root-caused:** the MCP endpoint shared ONE SDK Server
+   (Protocol) instance across connections; overlap threw "Already connected to a transport" and
+   wedged every later rpc until restart (raw-probe verbatim, recorded). Fixed per the SDK's own
+   prescription — a Server instance per connection (396d3bb). Falsification disclosed honestly:
+   the interleave could not be forced in-process; the red is the live probe.
+4. **Acceptance run (post-fixes):** 10 consecutive no-window `get_cache_event_log` completions
+   against the live server's real store, pid 13448 unchanged, zero sheds fired, rss 4543→4777MB
+   during (ps view) settling to 2158MB after.
+
+**Accounting gotcha for HWM tuning:** `ps` rss read 4543-4777MB while the gate's
+`process.memoryUsage().rss` stayed under the 4096 HWM (zero sheds) — the two accountings differ
+(compressed/reclaimable pages). Tune `AGENTLENS_RSS_HWM_MB` against the gate's own number (the
+`rss=` in requests.log uses the same source), never against `ps`.
+
+**Still honestly open:** the named allocation site of the multi-GB climbs (scratch could not
+reproduce them; the live 5.4GB instance was the sweep, now paused-under-pressure — whether a
+DIFFERENT multi-GB path remains is unproven). The protections are in place either way; if a kill
+recurs, the rss= trend plus the tool-start log line will name the call, and this card reopens.
+
 ## Acceptance
 
 - [ ] The mechanism is identified with evidence — a named allocation site, not a hypothesis.
-- [ ] `agentlenspro get_cache_event_log` (no `--window`) completes against the live server, on this
+      (2026-08-13: PARTIAL — the one live-reproduced instance was named with evidence: the boot
+      compression sweep's residency, fixed a98e7ae. Whether other multi-GB paths exist is open;
+      the two prior suspects are measured-ruled-out at 8.2GB scratch volumes.)
+- [x] `agentlenspro get_cache_event_log` (no `--window`) completes against the live server, on this
       machine's real store, **10 consecutive times**, with the pid unchanged. One passing run is
       what produced the premature close; the count is the point.
+      (CLOSED 2026-08-13 ~13:00 — pid 13448, 10/10, zero sheds, rss settling 2158MB after.)
 - [ ] Peak server heap during the call is measured and reported, not inferred.
 - [ ] A regression test that fails against the current code. If the honest shape is again a
       measurement rather than a unit test, say so explicitly rather than shipping a test that
