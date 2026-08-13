@@ -20,7 +20,7 @@
 
 import * as fs from 'fs'
 import {
-  buildCallContext, callBodyRegistry, IMAGE_BLOCK_LABEL_PREFIX,
+  buildCallContext, buildCallContextFromJson, callBodyRegistry, IMAGE_BLOCK_LABEL_PREFIX,
 } from './rawBodyContext'
 import { calibrateTokens } from './tokenEstimator'
 import { calcTokenCostUsd, lookupRates } from './shared/pricing'
@@ -263,16 +263,31 @@ const SYSTEM_KINDS = new Set<CompositionBlockKind>(['system', 'claudemd', 'rule'
 const TEXT_KINDS = new Set<CompositionBlockKind>(['userMsg', 'assistantMsg'])
 
 // ── One call → a CallComposition ──────────────────────────────────────────────
+// buildCallContextFromJson's own body parameter type is intentionally unexported (rawBodyContext.ts
+// keeps its raw-shape interfaces private) — JSON.parse's `any` return is structurally compatible
+// without needing to name it. A malformed rawText degrades to null (same as an unreadable file),
+// never throws into the caller.
+function parseRawTextSafely(rawText: string) {
+  try { return JSON.parse(rawText) } catch { return null }
+}
+
 /** Build one call's composition record from its request-body file (reuses buildCallContext — no
  *  re-parse of the body). When exact usage is supplied, the block estimates are calibrated to the exact
- *  prompt-side total and the call total is authoritative. Returns null when the body is unreadable. */
+ *  prompt-side total and the call total is authoritative. Returns null when the body is unreadable.
+ *
+ *  `opts.rawText`: when the caller ALREADY holds the body's text (e.g. forensicsIndex loaded it via
+ *  the store∪spool evidence base — bodyRef may then be a store-only srcName with no file on disk),
+ *  pass it here to skip buildCallContext's own disk read entirely. Parse failure degrades to null,
+ *  same contract as buildCallContext on an unreadable file — never throws. */
 export async function buildCallComposition(
   bodyRef: string,
   turn: number,
   ts: number,
-  opts: { projectHint?: string; exact?: CallExactUsage | null; modelHint?: string } = {},
+  opts: { projectHint?: string; exact?: CallExactUsage | null; modelHint?: string; rawText?: string } = {},
 ): Promise<CallComposition | null> {
-  const ctx = await buildCallContext(bodyRef)
+  const ctx = opts.rawText !== undefined
+    ? buildCallContextFromJson(parseRawTextSafely(opts.rawText))
+    : await buildCallContext(bodyRef)
   if (!ctx) { return null }
   const model = ctx.model ?? opts.modelHint
   const exact = opts.exact ?? null

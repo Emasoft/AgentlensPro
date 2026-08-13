@@ -15,6 +15,10 @@ const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'fal-p36-'))
 const bodiesDir = path.join(tmpRoot, 'otel-bodies')
 const forensicsDbPath = path.join(tmpRoot, 'forensics.db')
 const mainDbPath = path.join(tmpRoot, 'agentlens.db')
+// indexApiCalls now also reads a Parquet STORE (default dataPath('store') — this developer's real
+// ~/.agentlens/store). A never-created dir keeps this fixture's exact-count assertions isolated from
+// that real corpus (see forensicsIndex.test.ts's noStoreDir for the same rationale).
+const noStoreDir = path.join(tmpRoot, 'no-store')
 fs.mkdirSync(bodiesDir, { recursive: true })
 suiteTeardown(() => { try { fs.rmSync(tmpRoot, { recursive: true, force: true }) } catch { /* best effort */ } })
 
@@ -68,7 +72,7 @@ suite('FAL Phase 3/6 — indexed fixture setup', () => {
     for (let i = 0; i < 3; i++) { emitCall('sess-wt', 300000, { withImage: true }) }
     for (let i = 0; i < 3; i++) { emitCall('sess-root', 90000) }
     await buildMainDb()
-    const res = await indexApiCalls({ bodiesDir, forensicsDbPath, mainDbPath })
+    const res = await indexApiCalls({ bodiesDir, forensicsDbPath, mainDbPath, storeDir: noStoreDir })
     assert.equal(res.dbAvailable, true)
     assert.equal(res.inserted, 12)
   })

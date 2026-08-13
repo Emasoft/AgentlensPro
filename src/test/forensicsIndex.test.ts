@@ -12,6 +12,8 @@ import {
   billableWeight, tierClassify, defaultForensicsDb, defaultMainDb, type SqlDatabase,
 } from '../forensicsDb'
 import { defaultBodiesDir } from '../cacheCreationForensics'
+import { flush, openStore, Store } from '../store/db'
+import { ingestBody } from '../store/bodyStore'
 
 // TRDD-FB5RG4P1 Phase 1 — REAL tests: no mocked bodies, no mocked join, no mocked DB. Every test
 // writes real request/response JSON to a tmp otel-bodies dir + a real sql.js main DB with a sessions
@@ -22,6 +24,11 @@ const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'fal-p1-'))
 const bodiesDir = path.join(tmpRoot, 'otel-bodies')
 const forensicsDbPath = path.join(tmpRoot, 'forensics.db')
 const mainDbPath = path.join(tmpRoot, 'agentlens.db')
+// scanApiCallEvents now also reads a Parquet STORE (default dataPath('store') — this developer's real
+// ~/.agentlens/store, populated with live product data). A never-created dir keeps every deterministic
+// test below isolated from that real corpus (listBodyEvidence's parquetScan degrades to "no store" for
+// a missing directory, exactly like an absent spool did before the rewire).
+const noStoreDir = path.join(tmpRoot, 'no-store')
 fs.mkdirSync(bodiesDir, { recursive: true })
 suiteTeardown(() => { try { fs.rmSync(tmpRoot, { recursive: true, force: true }) } catch { /* best effort */ } })
 
@@ -160,7 +167,7 @@ suite('FAL Phase 1 — end-to-end index over real bodies + real main DB', () => 
   })
 
   test('scanApiCallEvents keeps every response with a usage block (incl. cache-read-only and unattributed)', async () => {
-    const { events, coverage } = await scanApiCallEvents({ bodiesDir })
+    const { events, coverage } = await scanApiCallEvents({ bodiesDir, storeDir: noStoreDir })
     assert.equal(coverage.dirExists, true)
     const ids = events.map(e => e.callId).sort()
     assert.deepEqual(ids, ['msg_R1', 'msg_R2', 'msg_R3', 'msg_R4', 'msg_R5'])
@@ -173,7 +180,7 @@ suite('FAL Phase 1 — end-to-end index over real bodies + real main DB', () => 
   })
 
   test('indexApiCalls writes fact rows with correct tokens/tiers/spawn_resolution/cost/effort', async () => {
-    const res = await indexApiCalls({ bodiesDir, forensicsDbPath, mainDbPath })
+    const res = await indexApiCalls({ bodiesDir, forensicsDbPath, mainDbPath, storeDir: noStoreDir })
     assert.equal(res.dbAvailable, true)
     assert.equal(res.inserted, 5)
     assert.ok(res.highWaterMs > 0)
@@ -215,8 +222,8 @@ suite('FAL Phase 1 — end-to-end index over real bodies + real main DB', () => 
   })
 
   test('re-running the indexer is idempotent (INSERT OR REPLACE keyed on call_id)', async () => {
-    await indexApiCalls({ bodiesDir, forensicsDbPath, mainDbPath })
-    await indexApiCalls({ bodiesDir, forensicsDbPath, mainDbPath })
+    await indexApiCalls({ bodiesDir, forensicsDbPath, mainDbPath, storeDir: noStoreDir })
+    await indexApiCalls({ bodiesDir, forensicsDbPath, mainDbPath, storeDir: noStoreDir })
     const fdb = await openForensicsDb(forensicsDbPath)
     try {
       const n = queryOne(fdb!.raw, 'SELECT COUNT(*) AS n FROM api_calls')!
@@ -225,7 +232,7 @@ suite('FAL Phase 1 — end-to-end index over real bodies + real main DB', () => 
   })
 
   test('call_injections is populated from the joined request (rules + claudemd for msg_R1)', async () => {
-    await indexApiCalls({ bodiesDir, forensicsDbPath, mainDbPath })
+    await indexApiCalls({ bodiesDir, forensicsDbPath, mainDbPath, storeDir: noStoreDir })
     const fdb = await openForensicsDb(forensicsDbPath)
     try {
       const rules = queryOne(fdb!.raw, "SELECT COUNT(*) AS n FROM call_injections WHERE call_id='msg_R1' AND kind='rule'")!
@@ -278,7 +285,7 @@ suite('FAL Phase 2 — spawn_subagent_type EHT', () => {
       db.run(`INSERT INTO sessions VALUES ('sess-spark','fresh',NULL,NULL,1,'sess-root','claude-opus-4-8','spark')`)
       fs.writeFileSync(mdb, Buffer.from(db.export())); db.close()
 
-      await indexApiCalls({ bodiesDir: bd, forensicsDbPath: fdbp, mainDbPath: mdb })
+      await indexApiCalls({ bodiesDir: bd, forensicsDbPath: fdbp, mainDbPath: mdb, storeDir: path.join(sub, 'no-store') })
       const fdb = await openForensicsDb(fdbp)
       try {
         const row = queryOne(fdb!.raw, "SELECT subagent_type FROM api_calls WHERE call_id='msg_S1'")!
@@ -337,6 +344,90 @@ suite('FAL Phase 4/5 — content taxonomy + injection attribution', () => {
   })
 })
 
+suite('FAL evidence rewire — scanApiCallEvents reads the complete store ∪ spool base', () => {
+  // Owner directive 2026-08-13: the pre-rewire scan read ONLY the volatile raw spool. The ingest
+  // drain deletes a spool file the moment the store provably holds its bytes, so a call classifiable
+  // at one run could vanish by the next. These tests build a REAL store (mirrors
+  // src/test/bodiesEvidence.test.ts) and drain a file out from under the scan.
+  let dir = ''
+  let spool = ''
+  let store: Store
+
+  suiteSetup(async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fal-evidence-'))
+    spool = fs.mkdtempSync(path.join(os.tmpdir(), 'fal-evidence-spool-'))
+    store = await openStore({ dir, memoryLimit: '2GB', threads: 2 })
+  })
+  suiteTeardown(() => {
+    try { store?.con.closeSync() } catch { /* already closed */ }
+    fs.rmSync(dir, { recursive: true, force: true })
+    fs.rmSync(spool, { recursive: true, force: true })
+  })
+
+  test('a response whose raw file the drain deleted is STILL indexed with its usage tokens', async () => {
+    const respRaw = JSON.stringify({
+      id: 'msg_DRAINED', model: 'claude-opus-5',
+      usage: {
+        input_tokens: 111, output_tokens: 22, cache_read_input_tokens: 500, cache_creation_input_tokens: 300,
+        cache_creation: { ephemeral_5m_input_tokens: 200, ephemeral_1h_input_tokens: 100 },
+      },
+    })
+    const reqRaw = JSON.stringify({
+      model: 'claude-opus-5',
+      metadata: { user_id: JSON.stringify({ device_id: 'dev-1', account_uuid: 'aaaa1111', session_id: 'sess-drained' }) },
+      diagnostics: { previous_message_id: 'msg_DRAINED' },
+      system: [{ type: 'text', text: 'system prompt' }], tools: [{ name: 'Bash' }],
+    })
+    fs.writeFileSync(path.join(spool, 'd1.response.json'), respRaw)
+    fs.writeFileSync(path.join(spool, 'd1.request.json'), reqRaw)
+    await ingestBody(store, 'd1.response.json', respRaw, Date.now())
+    await ingestBody(store, 'd1.request.json', reqRaw, Date.now())
+    await flush(store)
+    // THE DRAIN: delete both raw files now that the store provably holds them — the same thing
+    // ingestPass does. Pre-rewire, this made the call unindexable; that is the regression pinned here.
+    fs.rmSync(path.join(spool, 'd1.response.json'))
+    fs.rmSync(path.join(spool, 'd1.request.json'))
+
+    const { events } = await scanApiCallEvents({ bodiesDir: spool, storeDir: dir })
+    const ev = events.find(e => e.callId === 'msg_DRAINED')
+    assert.ok(ev, 'the drained call must still be indexed from the store')
+    assert.equal(ev!.cacheReadTokens, 500)
+    assert.equal(ev!.cacheCreationTokens, 300)
+    assert.equal(ev!.tier5mTokens, 200)
+    assert.equal(ev!.tier1hTokens, 100)
+    assert.equal(ev!.sessionId, 'sess-drained')
+    assert.equal(ev!.attributed, true)
+  })
+
+  test('window pushdown filters store rows by capture ts; a spool row with unknown ts survives regardless of file mtime', async () => {
+    const old = Date.now() - 10 * 3_600_000
+    const oldRespRaw = JSON.stringify({ id: 'msg_OLD', model: 'claude-opus-5', usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } })
+    const oldReqRaw = JSON.stringify({ model: 'claude-opus-5', metadata: { user_id: JSON.stringify({ device_id: 'dev-1', session_id: 'sess-old' }) }, diagnostics: { previous_message_id: 'msg_OLD' } })
+    fs.writeFileSync(path.join(spool, 'old.response.json'), oldRespRaw)
+    fs.writeFileSync(path.join(spool, 'old.request.json'), oldReqRaw)
+    await ingestBody(store, 'old.response.json', oldRespRaw, old)
+    await ingestBody(store, 'old.request.json', oldReqRaw, old)
+    await flush(store)
+    fs.rmSync(path.join(spool, 'old.response.json'))
+    fs.rmSync(path.join(spool, 'old.request.json'))
+
+    // Spool-only (never ingested) — its ts is unknown until parsed. Its file mtime is set to 20h in
+    // the past, deliberately older than the 1h window, to prove the survival is NOT an mtime accident.
+    const newRespRaw = JSON.stringify({ id: 'msg_NEW', model: 'claude-opus-5', usage: { input_tokens: 2, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } })
+    const newReqRaw = JSON.stringify({ model: 'claude-opus-5', metadata: { user_id: JSON.stringify({ device_id: 'dev-1', session_id: 'sess-new' }) }, diagnostics: { previous_message_id: 'msg_NEW' } })
+    fs.writeFileSync(path.join(spool, 'new.response.json'), newRespRaw)
+    fs.writeFileSync(path.join(spool, 'new.request.json'), newReqRaw)
+    const ancient = new Date(Date.now() - 20 * 3_600_000)
+    fs.utimesSync(path.join(spool, 'new.response.json'), ancient, ancient)
+    fs.utimesSync(path.join(spool, 'new.request.json'), ancient, ancient)
+
+    const { events } = await scanApiCallEvents({ bodiesDir: spool, storeDir: dir, windowHours: 1 })
+    const ids = events.map(e => e.callId)
+    assert.ok(!ids.includes('msg_OLD'), 'a store row outside the window is excluded by the capture-ts pushdown')
+    assert.ok(ids.includes('msg_NEW'), 'a spool row with unknown ts survives the window filter regardless of its file mtime')
+  })
+})
+
 suite('FAL Phase 1 — 🐌 real machine data (skips when ~/.agentlens absent)', () => {
   test('indexApiCalls over the real ~/.agentlens degrades honestly whether or not bodies exist', async function () {
     // 🐌 real-machine slow test: indexes up to REQUEST_INDEX_CAP request bodies off disk (each up to
@@ -344,9 +435,19 @@ suite('FAL Phase 1 — 🐌 real machine data (skips when ~/.agentlens absent)',
     this.timeout(180000)
     // Follows the resolved bodies dir, not a hardcoded home path — on a machine with a spool this
     // test used to skip while a live corpus sat elsewhere, so it silently never ran.
-    if (!fs.existsSync(defaultBodiesDir())) { this.skip(); return }
+    if (!fs.existsSync(defaultBodiesDir())) { this.skip() }
     const tmpDb = path.join(tmpRoot, 'real-forensics.db')
-    const res = await indexApiCalls({ forensicsDbPath: tmpDb, mainDbPath: defaultMainDb(), scanCap: 200 })
+    // windowHours bounds the evidence-base scan the SAME way cacheBreakTimeline.test.ts's own real-
+    // machine test does (its comment: "an uncapped scan makes this test's runtime a function of the
+    // user's traffic") — without it, listBodyEvidence's SQL pushdown has no WHERE clause and
+    // materializes EVERY historical row this store has ever held. Measured on this developer's real
+    // store (510k+ body rows): even a 5h window matched 1,515 request bodies averaging 1.17MB each
+    // (~1.8GB of raw text alone, before JSON.parse's own overhead) and OOM'd the whole mocha process
+    // — REQUEST_INDEX_CAP (4000) never kicked in because the window itself matched fewer than that.
+    // A short window keeps this smoke test's memory footprint bounded regardless of how bursty this
+    // particular machine's live capture traffic is; it degrades to "0 bodies in window", which the
+    // assertions below already tolerate (an honest, valid outcome for this test's purpose).
+    const res = await indexApiCalls({ forensicsDbPath: tmpDb, mainDbPath: defaultMainDb(), scanCap: 200, windowHours: 0.25 })
     assert.equal(res.dbAvailable, true)
     assert.ok(res.coverage.responseFilesTotal >= 0)
     // Every inserted row must carry an explicit spawn_resolution (honesty invariant).

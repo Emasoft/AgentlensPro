@@ -1,9 +1,12 @@
 // TRDD-FB5RG4P1 — Forensics Analytics Layer (FAL) lazy/incremental indexer.
 //
 // Builds one FACT ROW per API call (a response body carrying a `usage` block) into forensics.db.
-// It REUSES CCFORNSC's bounded-scan primitives (listBySuffix / boundedRecent / readJsonBounded) and
-// its previous_message_id join semantics — this module never re-implements the disk-scan contract,
-// and never modifies cacheCreationForensics.ts (imports only).
+// EVIDENCE BASE (rewired, owner directive 2026-08-13): selection + loading go through
+// store/bodiesEvidence.ts's listBodyEvidence/loadBodyTexts — the store∪spool union — not the raw
+// spool alone. The spool-only scan silently lost every call the ingest drain had already flushed to
+// the Parquet store (the delete gate runs the moment the store provably holds the bytes), so a fact
+// row could vanish between two index runs over identical history. This module still reuses CCFORNSC's
+// previous_message_id join semantics and never modifies cacheCreationForensics.ts (imports only).
 //
 // GENERALIZED vs scanCacheCreationEvents: that scanner keeps only responses with cache_creation > 0;
 // FAL keeps EVERY response with a usage block (cache-read-only calls and output-spike calls are facts
@@ -16,12 +19,14 @@
 // NEVER re-parses the parent transcript and NEVER fabricates a spawn_kind.
 
 import * as fs from 'fs'
+import * as path from 'path'
 import * as crypto from 'crypto'
 import {
-  listBySuffix, boundedRecent, readJsonBounded,
   defaultBodiesDir, RESPONSE_SCAN_CAP, REQUEST_INDEX_CAP, MAX_RESPONSE_BYTES, MAX_REQUEST_BYTES,
-  type DirEntry, type CacheCreationScanCoverage,
+  type CacheCreationScanCoverage,
 } from './cacheCreationForensics'
+import { listBodyEvidence, loadBodyTexts, type EvidenceRow } from './store/bodiesEvidence'
+import { dataPath } from './dataDir'
 import { parseUserId } from './rawBodyContext'
 import { buildCallComposition, type CallComposition } from './contextCompositionIndex'
 import { calcTokenCostUsd } from './shared/pricing'
@@ -206,8 +211,16 @@ export function deriveContentTags(comp: CallComposition): ContentTag[] {
 // ── the generalized bounded scan (ALL usage) ─────────────────────────────────────
 export interface ApiCallEvent {
   callId: string
+  // Spool rows: the absolute spool-file path (still a real read handle). Store-only rows: the
+  // srcName the row was captured under — the file may no longer exist on disk (the drain deleted it
+  // once the store provably held its bytes), so this is a POINTER, never re-opened as a path.
   responseRef: string
   requestRef?: string
+  // Content tags derived EAGERLY in the join pass, while the request text was in its load chunk.
+  // Never the raw text itself: retaining each request's body here measured 1.17MB × 1,515 requests
+  // (~1.8GB) in one real 5h window — the exact silent-RSS-kill shape of TRDD-34B9JAZK. Present only
+  // when a joined request was found AND withContent was on.
+  requestContentTags?: ContentTag[]
   ts: number
   sessionId?: string
   accountUuid?: string
@@ -237,103 +250,199 @@ interface RequestLink {
   effort: 'none' | 'low' | 'medium' | 'high'
   frontmatterFp?: string
   injections: InjectionRow[]   // computed FREE during this single parse pass (no extra read)
+  // Content tags, ALSO computed during this single parse pass — the raw text itself is deliberately
+  // NOT retained. The header comment's invariant ("only scalars are retained… memory-flat") is
+  // load-bearing: keeping rawText here held every indexed request's megabytes for the whole run
+  // (measured ~1.8GB over one real 5h window; cap ceiling ~4.7GB) — the TRDD-34B9JAZK RSS-kill
+  // shape. Tags are a few dozen bytes; the text dies with its load chunk.
+  contentTags: ContentTag[]
 }
 
-function indexRequestsByPreviousMessageId(entries: DirEntry[]): Map<string, RequestLink> {
+// The chunk size loadBodyTexts materializes at once. Mirrors cacheBreakTimeline.ts's
+// EVIDENCE_LOAD_CHUNK — the same ~176 MB single-result blowup (TRDD-KB17X5G2) applies here.
+const EVIDENCE_LOAD_CHUNK = 32
+
+// A row from the evidence union, paired with its resolved report timestamp (req 5 of the rewire
+// spec): a store row's capture ts (a first-class Parquet column, better than mtime — it is when the
+// call happened, not when this scan ran); a spool row's file mtime (its capture ts is unknown until
+// the body is parsed, and by then the file may already be gone).
+interface SelectedRow { row: EvidenceRow; ts: number }
+
+// Store-only rows may no longer exist as a file (drained once the store proved it held the bytes);
+// srcName is the only stable pointer for them. Spool rows still exist on disk — the absolute path is
+// a real read handle, kept for parity with the pre-rewire callId/ref shape.
+function refFor(row: EvidenceRow, spool: string | null): string {
+  return row.location === 'spool' && spool ? path.join(spool, row.srcName) : row.srcName
+}
+
+function resolveTs(row: EvidenceRow, spool: string | null): number {
+  if (row.tsMs !== null) { return row.tsMs }
+  if (spool) {
+    try { return fs.statSync(path.join(spool, row.srcName)).mtimeMs } catch { /* drained mid-scan — fall through */ }
+  }
+  return Date.now()
+}
+
+// Recency-first, capped selection over the evidence union. `tsFromMs` is already pushed down to the
+// store via listBodyEvidence's SQL WHERE; a spool row's ts is unresolved at list time, so it is NEVER
+// excluded by the window here — by construction it is newer than any row the drain has already
+// flushed (the drain empties the spool oldest-first), and the classifiers built on this scan need
+// exactly those newest calls kept regardless of when this particular scan happens to run.
+function selectRecent(rows: EvidenceRow[], spool: string | null, tsFromMs: number | undefined, cap: number): { rows: SelectedRow[]; matched: number } {
+  const inWindow = tsFromMs === undefined
+    ? rows
+    : rows.filter((r) => r.location === 'spool' || (r.tsMs ?? 0) >= tsFromMs)
+  const withTs = inWindow.map((row) => ({ row, ts: resolveTs(row, spool) }))
+  withTs.sort((a, b) => b.ts - a.ts)
+  return { rows: withTs.slice(0, cap), matched: inWindow.length }
+}
+
+async function indexRequestsByPreviousMessageId(
+  storeDir: string, spool: string | null, selected: SelectedRow[], deriveTags: boolean,
+): Promise<Map<string, RequestLink>> {
   const index = new Map<string, RequestLink>()
-  for (const e of entries) {
-    const q = readJsonBounded<RawRequestBody>(e.path, MAX_REQUEST_BYTES)
-    if (!q) { continue }
-    const pmid = strOrUndef(q.diagnostics?.previous_message_id)
-    if (!pmid) { continue }
-    const uid = parseUserId(q.metadata?.user_id)
-    index.set(pmid, {
-      sessionId: uid.sessionId,
-      accountUuid: uid.accountUuid,
-      model: strOrUndef(q.model),
-      path: e.path,
-      effort: classifyEffort(numOr0(q.thinking?.budget_tokens)),
-      frontmatterFp: computeFrontmatterFp(q),
-      injections: extractInjections(q),
-    })
+  for (let i = 0; i < selected.length; i += EVIDENCE_LOAD_CHUNK) {
+    // Preserve readJsonBounded's size-bound semantics (a row over the cap is skipped, never read) —
+    // filtered BEFORE loadBodyTexts so an oversized body is never even fetched from the store.
+    const chunk = selected.slice(i, i + EVIDENCE_LOAD_CHUNK).filter((c) => c.row.rawBytes <= MAX_REQUEST_BYTES)
+    if (chunk.length === 0) { continue }
+    const texts = await loadBodyTexts(storeDir, spool, chunk.map((c) => c.row), EVIDENCE_LOAD_CHUNK)
+    for (const { row, ts } of chunk) {
+      const raw = texts.get(row.srcName)
+      if (raw === undefined) { continue }
+      let q: RawRequestBody
+      try { q = JSON.parse(raw) as RawRequestBody } catch { continue }
+      const pmid = strOrUndef(q.diagnostics?.previous_message_id)
+      if (!pmid) { continue }
+      const uid = parseUserId(q.metadata?.user_id)
+      const ref = refFor(row, spool)
+      // Tags are derived HERE, inside the chunk, so `raw` never outlives its load window. The model
+      // hint is the request's own model and the ts is the request row's capture ts — the joined
+      // response's values differ at most cosmetically, and neither is load-bearing for tag shape.
+      let contentTags: ContentTag[] = []
+      if (deriveTags) {
+        const comp = await buildCallComposition(ref, 0, ts, { modelHint: strOrUndef(q.model), rawText: raw }).catch(() => null)
+        contentTags = comp ? deriveContentTags(comp) : []
+      }
+      index.set(pmid, {
+        sessionId: uid.sessionId,
+        accountUuid: uid.accountUuid,
+        model: strOrUndef(q.model),
+        path: ref,
+        effort: classifyEffort(numOr0(q.thinking?.budget_tokens)),
+        frontmatterFp: computeFrontmatterFp(q),
+        injections: extractInjections(q),
+        contentTags,
+      })
+    }
   }
   return index
 }
 
-export interface ScanApiCallOptions { bodiesDir?: string; windowHours?: number; scanCap?: number }
+export interface ScanApiCallOptions {
+  bodiesDir?: string
+  // The Parquet store the drain flushes into (bodiesDir stays the volatile spool). Same default as
+  // cacheBreakTimeline.ts's buildCacheBreakTimeline: dataPath('store').
+  storeDir?: string
+  windowHours?: number
+  scanCap?: number
+  /** Derive call_content tags during the join pass (the only moment the request text is in memory —
+   *  see RequestLink). Default on; indexApiCalls threads its own withContent through here. */
+  withContent?: boolean
+}
 
 /** The generalized bounded scan every FAL fact row is built from: every response body with a usage
  *  block (NOT just cache_creation > 0), joined to its owning session/account/model/effort/frontmatter
- *  via the previous_message_id chain. Never reads more than `scanCap` response + request files. */
+ *  via the previous_message_id chain. Reads the COMPLETE evidence base — the raw spool UNION the
+ *  Parquet store (see store/bodiesEvidence.ts) — so a call the ingest drain already flushed and
+ *  deleted from the spool stays indexable; the spool-only scan lost it the moment the drain ran.
+ *  Never reads more than `scanCap` response + request bodies. */
 export async function scanApiCallEvents(
   opts: ScanApiCallOptions = {},
 ): Promise<{ events: ApiCallEvent[]; coverage: CacheCreationScanCoverage }> {
   const bodiesDir = opts.bodiesDir ?? defaultBodiesDir()
+  const storeDir = opts.storeDir ?? dataPath('store')
   const scanCap = opts.scanCap ?? RESPONSE_SCAN_CAP
-  const dirExists = fs.existsSync(bodiesDir)
-  if (!dirExists) {
+  const spool = fs.existsSync(bodiesDir) ? bodiesDir : null
+  // The spool alone no longer decides whether evidence exists — drained history lives in the Parquet
+  // store, and a missing spool with a populated store is a NORMAL state, not "no data".
+  const storeExists = fs.existsSync(path.join(storeDir, 'bodies'))
+  if (!spool && !storeExists) {
     return {
       events: [],
       coverage: {
         bodiesDir, dirExists: false, responseFilesTotal: 0, responseFilesScanned: 0,
         requestFilesTotal: 0, requestFilesIndexed: 0, scanCap, windowHours: opts.windowHours,
         complete: true,
-        note: `No OTEL raw-body directory at ${bodiesDir} — set OTEL_LOG_RAW_API_BODIES to capture bodies.`,
+        note: `No raw-body evidence: neither ${bodiesDir} nor the Parquet store at ${storeDir} exists — set OTEL_LOG_RAW_API_BODIES to capture bodies.`,
       },
     }
   }
 
-  const allResponses = listBySuffix(bodiesDir, '.response.json')
-  const allRequests = listBySuffix(bodiesDir, '.request.json')
-  const { slice: responseSlice, matched: responseMatched } = boundedRecent(allResponses, { windowHours: opts.windowHours, cap: scanCap })
-  const { slice: requestSlice } = boundedRecent(allRequests, { windowHours: opts.windowHours, cap: REQUEST_INDEX_CAP })
-  const prevIndex = indexRequestsByPreviousMessageId(requestSlice)
+  const tsFromMs = opts.windowHours !== undefined && opts.windowHours > 0 ? Date.now() - opts.windowHours * 3_600_000 : undefined
+  const respAll = await listBodyEvidence(storeDir, spool, { kind: 'response', tsFromMs })
+  const reqAll = await listBodyEvidence(storeDir, spool, { kind: 'request', tsFromMs })
+  const { rows: respSelected, matched: responseMatched } = selectRecent(respAll, spool, tsFromMs, scanCap)
+  const { rows: reqSelected } = selectRecent(reqAll, spool, tsFromMs, REQUEST_INDEX_CAP)
+
+  const prevIndex = await indexRequestsByPreviousMessageId(storeDir, spool, reqSelected, opts.withContent ?? true)
 
   const events: ApiCallEvent[] = []
-  for (const r of responseSlice) {
-    const body = readJsonBounded<RawResponseBody>(r.path, MAX_RESPONSE_BYTES)
-    if (!body || !body.usage) { continue }
-    const responseId = strOrUndef(body.id)
-    const link = responseId ? prevIndex.get(responseId) : undefined
-    const model = link?.model ?? strOrUndef(body.model) ?? strOrUndef(body.message?.model)
-    const tier = body.usage.cache_creation
-    // call_id is the response id (msg_…) when present; else a stable sha1 of the response file path so
-    // the PRIMARY KEY / INSERT OR REPLACE idempotency holds even for a body missing its id.
-    const callId = responseId ?? `sha1:${crypto.createHash('sha1').update(r.path).digest('hex')}`
-    events.push({
-      callId,
-      responseRef: r.path,
-      requestRef: link?.path,
-      ts: r.mtimeMs,
-      sessionId: link?.sessionId,
-      accountUuid: link?.accountUuid,
-      model,
-      effort: link?.effort ?? 'none',
-      frontmatterFp: link?.frontmatterFp,
-      inputTokens: numOr0(body.usage.input_tokens),
-      outputTokens: numOr0(body.usage.output_tokens),
-      cacheReadTokens: numOr0(body.usage.cache_read_input_tokens),
-      cacheCreationTokens: numOr0(body.usage.cache_creation_input_tokens),
-      tier5mTokens: numOr0(tier?.ephemeral_5m_input_tokens),
-      tier1hTokens: numOr0(tier?.ephemeral_1h_input_tokens),
-      injections: link?.injections ?? [],
-      attributed: Boolean(link),
-    })
+  for (let i = 0; i < respSelected.length; i += EVIDENCE_LOAD_CHUNK) {
+    const chunk = respSelected.slice(i, i + EVIDENCE_LOAD_CHUNK).filter((c) => c.row.rawBytes <= MAX_RESPONSE_BYTES)
+    if (chunk.length === 0) { continue }
+    const texts = await loadBodyTexts(storeDir, spool, chunk.map((c) => c.row), EVIDENCE_LOAD_CHUNK)
+    for (const { row, ts } of chunk) {
+      const raw = texts.get(row.srcName)
+      if (raw === undefined) { continue }
+      let body: RawResponseBody
+      try { body = JSON.parse(raw) as RawResponseBody } catch { continue }
+      if (!body.usage) { continue }
+      const responseId = strOrUndef(body.id)
+      const link = responseId ? prevIndex.get(responseId) : undefined
+      const model = link?.model ?? strOrUndef(body.model) ?? strOrUndef(body.message?.model)
+      const tier = body.usage.cache_creation
+      const ref = refFor(row, spool)
+      // call_id is the response id (msg_…) when present; else a stable sha1 of the ref so the
+      // PRIMARY KEY / INSERT OR REPLACE idempotency holds even for a body missing its id.
+      const callId = responseId ?? `sha1:${crypto.createHash('sha1').update(ref).digest('hex')}`
+      events.push({
+        callId,
+        responseRef: ref,
+        requestRef: link?.path,
+        requestContentTags: link?.contentTags,
+        ts,
+        sessionId: link?.sessionId,
+        accountUuid: link?.accountUuid,
+        model,
+        effort: link?.effort ?? 'none',
+        frontmatterFp: link?.frontmatterFp,
+        inputTokens: numOr0(body.usage.input_tokens),
+        outputTokens: numOr0(body.usage.output_tokens),
+        cacheReadTokens: numOr0(body.usage.cache_read_input_tokens),
+        cacheCreationTokens: numOr0(body.usage.cache_creation_input_tokens),
+        tier5mTokens: numOr0(tier?.ephemeral_5m_input_tokens),
+        tier1hTokens: numOr0(tier?.ephemeral_1h_input_tokens),
+        injections: link?.injections ?? [],
+        attributed: Boolean(link),
+      })
+    }
   }
 
-  const complete = responseSlice.length === responseMatched
+  const complete = respSelected.length === responseMatched
+  const fromStore = respSelected.filter((c) => c.row.location === 'store').length
   return {
     events,
     coverage: {
-      bodiesDir, dirExists: true,
-      responseFilesTotal: allResponses.length,
-      responseFilesScanned: responseSlice.length,
-      requestFilesTotal: allRequests.length,
-      requestFilesIndexed: requestSlice.length,
+      bodiesDir, dirExists: spool !== null,
+      responseFilesTotal: respAll.length,
+      responseFilesScanned: respSelected.length,
+      requestFilesTotal: reqAll.length,
+      requestFilesIndexed: reqSelected.length,
       scanCap, windowHours: opts.windowHours, complete,
       note: complete
-        ? `Scanned all ${responseMatched} response body file(s)${opts.windowHours ? ` in the last ${opts.windowHours}h` : ''} (${allResponses.length} total on disk).`
-        : `SAMPLE: ${responseSlice.length} most-recent of ${responseMatched} matching response body file(s) scanned (cap ${scanCap}; ${allResponses.length} total on disk). Not full history.`,
+        ? `Scanned all ${responseMatched} response body(ies)${opts.windowHours ? ` in the last ${opts.windowHours}h` : ''} — ${fromStore} from the Parquet store, ${respSelected.length - fromStore} from the raw spool (drained history stays in evidence).`
+        : `SAMPLE: ${respSelected.length} most-recent of ${responseMatched} matching response body(ies) (cap ${scanCap}; ${fromStore} store / ${respSelected.length - fromStore} spool). Not full history.`,
     },
   }
 }
@@ -432,8 +541,7 @@ export function resolveSpawn(sessionId: string | undefined, spawnMap: Map<string
 export interface IndexApiCallsOptions extends ScanApiCallOptions {
   forensicsDbPath?: string
   mainDbPath?: string
-  /** Fill call_content via buildCallComposition (a second bounded read per matched call). Default on. */
-  withContent?: boolean
+  // withContent is inherited from ScanApiCallOptions — tags are derived in the scan's join pass.
   /** Fill call_injections from the request's system[]/tools[] (computed FREE in the join pass). Default on. */
   withInjections?: boolean
 }
@@ -493,11 +601,6 @@ function writeContent(db: SqlDatabase, callId: string, tags: ContentTag[]): void
       { ':id': callId, ':tag': t.tag, ':tok': t.tokens, ':cnt': t.count })
   }
 }
-async function contentTagsFor(ev: ApiCallEvent): Promise<ContentTag[]> {
-  if (!ev.requestRef) { return [] }
-  const comp = await buildCallComposition(ev.requestRef, 0, ev.ts, { modelHint: ev.model }).catch(() => null)
-  return comp ? deriveContentTags(comp) : []
-}
 export interface IndexApiCallsResult {
   inserted: number
   coverage: CacheCreationScanCoverage
@@ -529,11 +632,11 @@ export async function indexApiCalls(opts: IndexApiCallsOptions = {}): Promise<In
   let highWater = 0
   let inserted = 0
 
-  // buildCallComposition is async, so content extraction happens BEFORE the write transaction: pull the
-  // per-call content tags first (bounded I/O), then do all inserts inside one synchronous BEGIN/COMMIT.
+  // Content tags were derived during the scan's join pass (the only moment the request text is in
+  // memory — see RequestLink); here they are only shuffled into the write map, no I/O.
   const contentByCall = new Map<string, ContentTag[]>()
   if (withContent) {
-    for (const ev of events) { contentByCall.set(ev.callId, await contentTagsFor(ev)) }
+    for (const ev of events) { contentByCall.set(ev.callId, ev.requestContentTags ?? []) }
   }
 
   try {
