@@ -1094,7 +1094,8 @@ const TOOLS = [
       'CLAUDE_MD_CHANGED, AGENT_METADATA_CHANGED, SYSTEM_TIMESTAMP, CONTEXT_ORDER_CHANGED, TTL_EXPIRY, ' +
       'COLD_START, COMPACTION, SUBAGENT_INTERLEAVE (A→B→A stream artifact — sub-agent calls share the ' +
       'parent session id), NORMAL_GROWTH (append-only new-tail first-write — expected, not a break), ' +
-      'MESSAGE_TRIMMED (harness context-editing removed a cached block), ATTACHMENT_CHANGED (image / ' +
+      'MESSAGE_TRIMMED (harness context-editing removed a cached block), MESSAGE_SPLICED (a new block ' +
+      'inserted mid-prefix shifted everything after it), ATTACHMENT_CHANGED (image / ' +
       'tool_use fingerprint changed), UNCLASSIFIED. Emits a TIMELINE of break events (each naming the culprit ' +
       'element + tokens re-written) PLUS a REPEAT-OFFENDER rollup: break events grouped by (cause, the ' +
       'specific offending element) so the SAME element breaking the cache across many turns collapses ' +
@@ -1455,7 +1456,7 @@ const TOOLS = [
       '(tools/system/model) changes or a TTL expires. This tool runs the root-cause classifier across every ' +
       'session in the bounded scan and returns TWO ranked views: (1) `causeRanking` — the break causes ' +
       '(TOOL_SEARCH_DEFERRED, MCP_TOOLS_CHANGED, MODEL_SWITCH, HOOK_INJECTION, TTL_EXPIRY, COMPACTION, ' +
-      'MESSAGE_TRIMMED, ATTACHMENT_CHANGED, plus the EXPECTED ones — COLD_START, NORMAL_GROWTH, ' +
+      'MESSAGE_TRIMMED, MESSAGE_SPLICED, ATTACHMENT_CHANGED, plus the EXPECTED ones — COLD_START, NORMAL_GROWTH, ' +
       'SUBAGENT_INTERLEAVE — each row carrying an `expected` flag) ranked by wasted cache_creation, so ' +
       'you see the most common/expensive category; and (2) ' +
       '`actorLeaderboard` — the actual PERPETRATORS, backtraced from the enriched culprit id: the specific ' +

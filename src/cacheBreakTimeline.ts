@@ -67,6 +67,7 @@ export type CacheBreakTimelineCause =
   | 'SUBAGENT_INTERLEAVE'       // A→B→A: this request matches turn-2's stream, not turn-1's — a sub-agent's calls share the parent session id
   | 'NORMAL_GROWTH'             // append-only growth: the NEW tail cached for the first time (expected incremental write, NOT a break)
   | 'MESSAGE_TRIMMED'           // a cached message block was REMOVED (harness context-editing / tool-result clearing)
+  | 'MESSAGE_SPLICED'           // a NEW block was INSERTED mid-prefix, shifting every later block (harness re-homing an injection)
   | 'ATTACHMENT_CHANGED'        // a non-text block (image / tool_use input) inside the cached prefix changed
   // ── TRDD-B9ERTBZ9 (2026-08-04): documented causes the taxonomy lacked. Each one is detectable from
   //    the raw request bodies we ALREADY capture; a documented cause we cannot emit from captured data
@@ -121,6 +122,7 @@ export const CACHE_BREAK_REMEDIATION: Record<CacheBreakTimelineCause, string> = 
   SUBAGENT_INTERLEAVE:        'Two requests grouped under one session id belong to DIFFERENT streams — sub-agent calls carry the parent\'s session id. Claimed on either of two signatures: the A→B→A pattern (this request matches turn-2\'s tool catalog + model, not turn-1\'s), or a different msg[0] prompt (the conversation\'s own opening words, immutable within one conversation). Each stream keeps its OWN cache, so nothing actually broke and there is nothing to fix; the child bills its own (smaller) prefix. Pin the sub-agent\'s tools + model in its frontmatter to shrink that footprint.',
   NORMAL_GROWTH:              'Not a break — append-only growth: this turn\'s NEW content was cached for the first time (expected incremental write). Reduce it only by producing/ingesting less content per turn.',
   MESSAGE_TRIMMED:            'A block was REMOVED from the cached message prefix (harness context-editing / tool-result clearing / message deletion) — everything after the removal point re-writes. Prefer compaction or a fresh session over mid-session trimming of a huge transcript.',
+  MESSAGE_SPLICED:            'A NEW block was INSERTED into the middle of the cached prefix, shifting every later block — everything after the splice point re-writes. The actor is whatever injected the block (typically the harness re-homing a hook/system message), never the shifted bystanders after it.',
   ATTACHMENT_CHANGED:         'A non-text block (image / tool_use input) inside the cached prefix changed or moved. Past attachments should be immutable; an image riding in the prefix re-bills the tail on any change.',
   WORKING_DIR_CHANGED:        'The environment block (working directory / platform / shell / OS) differs between these two turns, and it sits inside the cached system prefix — so a cache entry is scoped to ONE directory, and a second worktree of the same repository is a different prefix. This fires only ACROSS directories, never within one: `/cd` is engineered cache-safe (the new directory\'s CLAUDE.md is appended as a message instead of rebuilding the system prompt). Keep long-running work in one directory, or accept one cold warm per directory.',
   GIT_STATE_CHANGED:          'The startup git snapshot (branch, status, recent commits) carried in the system prefix differs. It is captured ONCE at session start and never updates during a session, so this can only fire between turns that started from different snapshots — a resume, or a second stream sharing this session id. Sequential sessions share a prefix only when that snapshot matches, so branch/commit churn between sessions costs one cold warm each; nothing to fix mid-session.',
@@ -245,7 +247,13 @@ export function classifyContentKind(text: string): BlockContentKind {
   // UserPromptSubmit / PostToolUse hook context (<pss-skills>, [janitor-memory], …) and the harness
   // task-list nudge. These previously fell to 'usertext', hiding chronic per-turn mutators in
   // UNCLASSIFIED — naming them is the whole point of the perpetrator backtrace.
-  if (/<pss-skills>|\[janitor-memory\]|UserPromptSubmit hook additional context|PostToolUse:\S* hook additional context|task tools haven't been used recently/i.test(text)) return 'hook'
+  // `PreToolUse:` was missing from this alternation and cost $2.84 in one turn: the harness moved
+  // its token-spike warning into a standalone role:"system" message spliced mid-array
+  // (2026-08-13T01:08:10Z, 453,881 tokens), the block classified as usertext, and the break landed
+  // in UNCLASSIFIED with the actor unnamed. Match the header SHAPE (`<hookname> hook additional
+  // context`), never the message content — a matcher keyed on "Token spike" goes blind the moment
+  // the hook's wording changes, which is how this class of gap gets reintroduced.
+  if (/<pss-skills>|\[janitor-memory\]|UserPromptSubmit hook additional context|(?:Pre|Post)ToolUse:\S* hook additional context|task tools haven't been used recently/i.test(text)) return 'hook'
   if (/<system-reminder>/.test(text) && /hook|inbox|heartbeat|reminder/i.test(text)) return 'hook'
   if (/Today'?s date is|# *currentDate|Current date:/.test(text)) return 'date'
   if (/<system-reminder>/.test(text)) return 'system'
@@ -770,10 +778,30 @@ function diffBlocks(prevBlocksRaw: PrefixBlock[], curBlocksRaw: PrefixBlock[], l
       return { cause: 'CONTEXT_ORDER_CHANGED', culpritLayer: layer, culpritId: `${layer}:order`, culpritSummary: `${layer} blocks reordered at ${c.label} (identical content, different order)` }
     }
     // Skill-catalog specifics: a block whose kind prev never carried = a fresh injection; a shrink =
-    // a truncation; otherwise a content change.
+    // a truncation; otherwise a content change. Deliberately BEFORE the generic insertion detector —
+    // a spliced-in skill catalog is still SKILL_INJECTION (the more specific verdict), and running
+    // the generic branch first demoted it to SKILL_CHANGED, which an existing test caught.
     if (c.kind === 'skillcatalog') {
       if (!prevKinds.has('skillcatalog')) return mkBlock('SKILL_INJECTION', layer, c, `skill catalog injected at pos ${i}: ${c.label}`)
       if (p.kind === 'skillcatalog' && c.len < p.len * 0.9) return mkBlock('SKILL_DESCRIPTION_TRUNCATION', layer, c, `skill catalog shrank ${p.len}→${c.len} chars: ${c.label}`)
+    }
+    // An INSERTION, not a change: cur's block at this position is NEW (prev never carried it), and
+    // prev's block here still exists — it just moved down because something was spliced in front of
+    // it. Measured incident (2026-08-13T01:08:10Z, 453,881 tokens): the harness spliced a standalone
+    // role:"system" hook message into the middle of `messages`, shifting every later message +1.
+    // Reporting that as "<kind> block changed" misattributes the break to the SHIFTED bystander and
+    // — whenever the spliced content matches no kind matcher — manufactures an UNCLASSIFIED with the
+    // real actor unnamed. The cause is the INSERTED block's own kind; the culprit says "spliced",
+    // because the remediation differs (stop the splicer, not the block that moved). The one-sided
+    // test is deliberate: requiring only `!prevFps.has(c.fp) && curFps.has(p.fp)` keeps a genuine
+    // in-place rewrite (both sides new) on the "changed" path below.
+    if (!prevFps.has(c.fp) && curFps.has(p.fp)) {
+      const inserted = causeForContentKind(c.kind)
+      // A recognised kind keeps its own cause (the ACTOR is named: hook, memory, …); content no
+      // matcher knows still gets the STRUCTURE named — MESSAGE_SPLICED, never UNCLASSIFIED, and
+      // never CONTEXT_ORDER_CHANGED, whose "identical content" claim would be false here.
+      return mkBlock(inserted === 'UNCLASSIFIED' ? 'MESSAGE_SPLICED' : inserted, layer, c,
+        `${c.kind} block spliced in at pos ${i}: ${c.label} — later ${layer} blocks shifted, invalidating everything after the splice point`)
     }
     const changed = causeForContentKind(c.kind)
     return mkBlock(changed, layer, c, `${c.kind} block changed at pos ${i}: ${c.label}`)

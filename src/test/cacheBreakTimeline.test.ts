@@ -159,6 +159,45 @@ suite('cacheBreakTimeline — classifyCacheBreak (one synthetic before/after per
     assert.strictEqual(v.cause, 'HOOK_INJECTION')
   })
 
+  test('HOOK_INJECTION — the PreToolUse hook header is a hook, not usertext', () => {
+    // Measured incident (2026-08-13T01:08:10Z, 453,881 tokens, $2.84, report
+    // reports/cache-invalidation-research/20260813_040019+0200-unclassified-break-msg363.md):
+    // the harness moved its PreToolUse token-spike warning from an appended text block inside a
+    // user message to a standalone role:"system" message spliced mid-array. The content matcher
+    // covered `PostToolUse:` and `UserPromptSubmit` hook headers but NOT `PreToolUse:`, so the
+    // block classified as usertext and a $2.84 full-prefix rewrite landed in UNCLASSIFIED with the
+    // actor unnamed. The string below is the real injected header, verbatim from the raw body.
+    const HOOK = 'PreToolUse:Edit hook additional context: ⚠ Token spike: this turn output ~10k. Be terse, wrap up the step, or compact — long output is billed at full price.'
+    const prev = reqBody({ messages: injectedMsg(HOOK) })
+    const cur = reqBody({ messages: injectedMsg(HOOK.replace('~10k', '~20k')) })
+    const v = classify(prev, cur)
+    // Without the PreToolUse matcher both sides read as usertext, and a usertext↔usertext diff at
+    // msg[0] is (correctly) claimed by the SUBAGENT_INTERLEAVE guard — so the failure mode is not
+    // merely "UNCLASSIFIED", it is a confidently WRONG cause. The assertion is on the right one.
+    assert.strictEqual(v.cause, 'HOOK_INJECTION')
+  })
+
+  test('a message SPLICED mid-array is the actor — never the shifted bystander, never UNCLASSIFIED', () => {
+    // The structural half of the same incident: the harness inserted a standalone role:"system"
+    // message mid-array, shifting every later message +1. Position-wise diffing then blames the
+    // SHIFTED block ("changed at pos N") — a bystander — and unknown content lands UNCLASSIFIED.
+    const base = [
+      { role: 'user', content: [{ type: 'text', text: 'do the thing', cache_control: CC }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'done step one', cache_control: CC }] },
+      { role: 'user', content: [{ type: 'text', text: 'now step two', cache_control: CC }] },
+    ]
+    const spliced = [
+      base[0], base[1],
+      // Content deliberately matches NO kind matcher, so only the structural detector can name it.
+      { role: 'system', content: 'entirely novel injected content the matchers have never seen' },
+      base[2],
+    ]
+    const v = classify(reqBody({ messages: base as RawRequestForBreak['messages'] }),
+      reqBody({ messages: spliced as RawRequestForBreak['messages'] }))
+    assert.strictEqual(v.cause, 'MESSAGE_SPLICED')
+    assert.ok(/spliced/.test(v.culpritSummary), `culprit must say spliced, got: ${v.culpritSummary}`)
+  })
+
   test('INLINE_EXEC_RESULT_CHANGED — a skill `!`-operator shell result differs', () => {
     const prev = reqBody({ messages: injectedMsg('<local-command-stdout>branch main clean tree abc</local-command-stdout>') })
     const cur = reqBody({ messages: injectedMsg('<local-command-stdout>branch main dirty tree def</local-command-stdout>') })
