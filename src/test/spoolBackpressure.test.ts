@@ -78,9 +78,23 @@ suite('applySpoolBackpressure — the over-capacity spill and its counter', () =
     assert.strictEqual(state.spills, 1, 'a re-assert is not a new spill event')
     assert.strictEqual(warns.length, 1, 'a re-assert must not repeat the warning — nothing NEW happened')
 
-    // Tick 3: back under the floor but NOT past the hysteresis line (2x floor) — must stay redirected.
+    // Tick 3: back under the floor but NOT past the hysteresis line (2x floor) — must stay
+    // redirected AND still re-assert. The recovery band was the hole the second review round
+    // found: the first fix re-asserted only while overCapacity, so an external config repair
+    // landing in [floor, 2x floor] met NO branch and silently un-protected a spool one burst
+    // from full. While `redirected` is true, every non-restoring tick re-applies the redirect.
     state = await applySpoolBackpressure({ overCapacity: false, freeBytes: 70 * 1024 * 1024, floorBytes: 64 * 1024 * 1024 }, state, deps)
     assert.strictEqual(spoolCalls, 0, 'must not flap back to the spool without real recovery headroom')
+    assert.strictEqual(state.redirected, true)
+    assert.strictEqual(legacyCalls, 3, 'the recovery band must re-assert too — an external repair inside the band went unhealed before this fix')
+    assert.strictEqual(state.spills, 1, 'a band re-assert is not a new spill event')
+    assert.strictEqual(warns.length, 1, 'a band re-assert must not repeat the warning')
+
+    // Tick 3b: df unreadable (freeBytes null) while redirected — keep the redirect asserted; an
+    // unreadable reading is never treated as recovery.
+    state = await applySpoolBackpressure({ overCapacity: false, freeBytes: null, floorBytes: 64 * 1024 * 1024 }, state, deps)
+    assert.strictEqual(spoolCalls, 0, 'a null df reading must never restore')
+    assert.strictEqual(legacyCalls, 4, 'a null df reading while redirected still re-asserts')
     assert.strictEqual(state.redirected, true)
 
     // Tick 4: comfortably recovered (> 2x floor) — must restore, without incrementing spills again.
