@@ -500,6 +500,11 @@ The forensics fact DB (FAL, api_calls) and every raw-body diagnostic MUST source
 
 The MCP HTTP endpoint must build ONE SDK Server (Protocol) instance PER CONNECTION — never share one across requests. The SDK's Protocol tracks exactly one transport; a shared instance wedges on overlapping clients with 'Already connected to a transport' and then fails EVERY rpc (tools/list included) as 'rpc error (undefined)' (the CLI's rendering of the 500 body) while the HTTP layer keeps logging 200s — a permanent outage that only a restart clears. Fixed 396d3bb: handleMcpRequest takes a Server factory; each request closes transport + server on response close. createMcpServer is closure-only (no I/O), so per-request instances cost microseconds. Falsification note: the wedge interleave lives in the SDK's async machinery and could not be forced in-process (a sync block serializes the event loop); the recorded red is the live raw-JSON-RPC probe.
 
+
+^ATOM-57QU-GOU1 [desc:"force-push or history rewrite blocked on main / baseline restore reverted the admin bypass / who may bypass baseline-history-protect on AgentlensPro — owner-ordered deviation, do not restore", keywords: force_push_blocked_on_main cannot_rewrite_history_main non_fast_forward_denied baseline_restore_reverted_bypass history_protect_bypass_owner ruleset_drift_false_positive, ocd: 2026-08-13, lmd: 2026-08-13]
+
+OWNER RULING (2026-08-13, verbatim: 'both the baseline-history-protect and the baseline-pr-and-check must be changed to allows mutations in history and direct pushing/merging by the owner'): on the AgentlensPro repo, baseline-history-protect carries a DELIBERATE deviation from the ratified pair — bypass_actors [{actor_id:5, RepositoryRole, always}] so the owner/admin may force-push and delete on main. Applied 2026-08-13T16:08:34+02:00 via PUT rulesets/18778596; verified current_user_can_bypass=always. baseline-pr-and-checks already carried the identical admin bypass (ratified shape) — no change was needed there. Any baseline-restore/drift pass MUST NOT strip this bypass back to the ratified empty list on this repo — that would revert a Tier-3 owner decision as if it were drift.
+
 ## See also
 
 - [[ssd-write-economics]] — what the drain is ultimately protecting: the SSD write budget, why the
