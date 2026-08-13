@@ -29,9 +29,17 @@
 // event. A pass now has a hard byte budget and simply stops when it is spent.
 import * as fs from 'fs'
 import * as path from 'path'
-import { flushDetailed, Store } from './db'
+import { BLOBS_DIR, BODIES_DIR, PARTS_DIR, flushDetailed, Store } from './db'
 import { ingestBody } from './bodyStore'
 import { verifyBodiesInStore } from './verifyInStore'
+
+/** How many bodies are held in memory at once inside a settle. The batch itself may be 200 files,
+ *  but reading all of their raws up front is ~176 MB at the measured ~881 KB average — a per-settle
+ *  RSS spike that stacks on the off-heap DuckDB arena already implicated in the server's external
+ *  SIGKILLs (review finding: the chunking in verifyInStore bounded only the DuckDB result set,
+ *  never this source-side copy). 32 keeps the round-trip win (200/32 ≈ 7 verify calls ≈ 14 round
+ *  trips, vs ~400 pre-P0) at ~3% of the memory. */
+export const SETTLE_READ_CHUNK = 32
 
 export interface IngestPassOptions {
   bodiesDir: string
@@ -68,6 +76,22 @@ export interface IngestPassOptions {
    *  already stored. MUTATED in place: each name is added as it is ingested, so a later pass skips it
    *  too. */
   skipNames?: Set<string>
+  /** Names PERMANENTLY parked because the store's row disagrees with the file on capture-ts while
+   *  the BYTES are proven identical. Re-ingesting cannot repair that row (dedup on (bodyId,
+   *  srcName) is a no-op that never updates ts), so without this set the file oscillates forever:
+   *  verify-fail → drop from skipNames → re-ingest no-op → verify-fail — every 60 s, at full read
+   *  cost, spamming `failed` (review finding: the durable-reclaim livelock). A stranded name is
+   *  skipped with ZERO I/O and reported once via `strandedTs`; the file is deliberately KEPT — its
+   *  mtime is the only true capture record the wrong store row cannot replace. Pass a long-lived
+   *  set (the server does) or each process re-detects them once. */
+  strandedNames?: Set<string>
+  /** Part files already fsynced by this PROCESS. The durable barrier must cover every part that
+   *  holds a batch body's bytes — a reclaimed body's parts were flushed in an EARLIER settle (or an
+   *  earlier boot) and `flushed.partPaths` never names them (review finding: the barrier covered
+   *  only freshly-flushed parts, so durable sources were unlinked on a page-cache proof). With the
+   *  cache, each part file is fsynced once per process; without it, once per pass — correct either
+   *  way, just cheaper with. */
+  fsyncedPartsCache?: Set<string>
 }
 
 export interface IngestPassResult {
@@ -86,6 +110,10 @@ export interface IngestPassResult {
   bytesFreed: number
   /** Files that could NOT be verified. They are NOT deleted, and they are named. */
   failed: string[]
+  /** Names newly parked this pass because the store's ts row is wrong while the bytes are proven —
+   *  kept on disk, excluded from every future pass (see strandedNames). Reported so the condition
+   *  is visible instead of recurring silently or livelocking loudly. */
+  strandedTs: string[]
   /** True when the byte budget stopped the pass early (more remains for the next one). */
   throttled: boolean
 }
@@ -125,12 +153,26 @@ export async function ingestPass(opts: IngestPassOptions): Promise<IngestPassRes
     durableSource = false,
     fsyncPath = (p: string) => {
       const fd = fs.openSync(p, 'r')
-      try { fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
+      try {
+        fs.fsyncSync(fd)
+      } catch (e) {
+        // A DIRECTORY fsync is a POSIX durability nicety that Windows cannot do at all — fsync on a
+        // directory handle fails there (EISDIR/EPERM/EBADF depending on the layer), and treating
+        // that as fatal aborted every settle after the flush but before ANY delete, so reclaim
+        // never progressed (review finding). Swallow it for directories only: the FILE fsyncs are
+        // the durability claim and a failed one must still propagate — an unlink gated on an fsync
+        // that silently failed would be the page-cache hole reopened.
+        let isDir = false
+        try { isDir = fs.fstatSync(fd).isDirectory() } catch { /* the throw below stands */ }
+        if (!isDir) throw e
+      } finally { fs.closeSync(fd) }
     },
     skipNames,
+    strandedNames,
+    fsyncedPartsCache,
   } = opts
 
-  const res: IngestPassResult = { ingested: 0, deleted: 0, reclaimedDurable: 0, bytesFreed: 0, bytesIn: 0, bytesStored: 0, failed: [], throttled: false }
+  const res: IngestPassResult = { ingested: 0, deleted: 0, reclaimedDurable: 0, bytesFreed: 0, bytesIn: 0, bytesStored: 0, failed: [], strandedTs: [], throttled: false }
   const cutoff = maxAgeMs > 0 ? Date.now() - maxAgeMs : Infinity
   // The AGE gate is the only filter here. `skipNames` must NOT filter at this level: a file whose name
   // is already durable still has to reach the verify+delete gate in settleBatch(). Excluding it from
@@ -162,59 +204,110 @@ export async function ingestPass(opts: IngestPassOptions): Promise<IngestPassRes
     // would. fsync(2) still asks the OS to flush its buffers to the device, which is a real
     // improvement over "never asked at all" — just not a guarantee against a power-loss-mid-write on
     // a drive with a volatile write cache. Document the gap; do not claim more than this buys.
-    if (durableSource && flushed.partPaths.length > 0) {
-      for (const p of flushed.partPaths) fsyncPath(p)
-      // The directory entries themselves (the part files are brand new) also need a sync, or a crash
-      // can leave the file's data on disk but the directory entry pointing at it lost.
-      for (const dir of new Set(flushed.partPaths.map((p) => path.dirname(p)))) fsyncPath(dir)
-    }
-
-    // Re-read every file's CURRENT bytes up front — same source-of-truth as before: the verify
-    // compares the store against a fresh read of the file, never something derived from the batch. A
-    // file that vanished mid-pass (ENOENT) is not a verification failure, exactly as before.
-    const items: Array<{ b: BatchItem; raw: string }> = []
-    for (const b of batch) {
+    if (durableSource) {
+      // The barrier must cover EVERY part that can hold a batch body's bytes, not only this
+      // settle's fresh parts: a reclaimed already-durable body was flushed in an EARLIER settle (or
+      // an earlier boot), so `flushed.partPaths` never names its parts — and unlinking a durable
+      // source gated on a read-back of never-fsynced parts is the page-cache hole this barrier
+      // exists to close (review finding on KB17X5G2-P0.5). Walk all three part dirs; the process-
+      // lifetime cache makes the steady-state cost one fsync per NEW part file, and an fsync of an
+      // already-clean file is nearly free besides.
       try {
-        items.push({ b, raw: readFile(b.p) })
+        const dirs = new Set<string>()
+        for (const sub of [BLOBS_DIR, BODIES_DIR, PARTS_DIR]) {
+          const d = path.join(store.dir, sub)
+          let names: string[] = []
+          try { names = fs.readdirSync(d) } catch { continue }
+          let any = false
+          for (const n of names) {
+            if (!n.endsWith('.parquet')) continue
+            const p = path.join(d, n)
+            if (fsyncedPartsCache?.has(p)) continue
+            fsyncPath(p)
+            fsyncedPartsCache?.add(p)
+            any = true
+          }
+          // The directory entries themselves (new part files) also need a sync, or a crash can
+          // leave a file's data on disk but the directory entry pointing at it lost.
+          if (any || flushed.partPaths.some((p) => path.dirname(p) === d)) dirs.add(d)
+        }
+        for (const d of dirs) fsyncPath(d)
       } catch (e) {
-        if ((e as NodeJS.ErrnoException).code === 'ENOENT') continue
-        res.failed.push(`${b.name}: ${(e as Error).message}`)
+        // No proven barrier ⇒ no deletes for this batch — but the PASS continues (review finding:
+        // one thrown barrier error used to abort the entire pass before any reclaim). The files
+        // stay, named, and the next settle retries.
+        for (const b of batch) res.failed.push(`${b.name}: fsync barrier failed — kept (${(e as Error).message})`)
+        batch = []
+        return
       }
     }
 
     // (3) The universal delete gate (USER directive 2026-07-15): the DURABLE store must hold the
     // source's exact bytes AND its (src_name, capture-ts) row. Byte-identity alone once passed a
     // backfill that stamped 100k bodies with the wrong time — metadata is data too. Batched
-    // (verifyBodiesInStore) instead of per-file: ~200 files/batch was ~400 DuckDB round trips and
-    // could not keep up with burst inflow — the throughput fix this pass exists for (KB17X5G2-P0).
-    const results = await verifyBodiesInStore(store, items.map(({ b, raw }) => ({ srcName: b.name, raw, tsMs: b.mtime })))
+    // (verifyBodiesInStore) for the round-trip win (KB17X5G2-P0), but read+verified in CHUNKS of
+    // SETTLE_READ_CHUNK: reading all ~200 raws up front held ~176 MB of source copies for the whole
+    // settle (review finding), and a verify throw used to abort the entire pass — now it costs one
+    // chunk its verify, named, and the rest of the batch still settles.
+    for (let ci = 0; ci < batch.length; ci += SETTLE_READ_CHUNK) {
+      const chunkItems: Array<{ b: BatchItem; raw: string }> = []
+      for (const b of batch.slice(ci, ci + SETTLE_READ_CHUNK)) {
+        try {
+          chunkItems.push({ b, raw: readFile(b.p) })
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code === 'ENOENT') continue
+          res.failed.push(`${b.name}: ${(e as Error).message}`)
+        }
+      }
+      if (chunkItems.length === 0) continue
 
-    for (const { b } of items) {
-      const v = results.get(b.name) ?? { ok: false, reason: `${b.name}: missing verify result` }
+      let results: Awaited<ReturnType<typeof verifyBodiesInStore>>
       try {
-        if (!v.ok) {
-          res.failed.push(v.reason ?? b.name)
-          // A durable-NAMED file whose bytes no longer match is not durable, so drop the name from
-          // the skip-set: the next pass must re-INGEST the true bytes through the normal path.
-          // Without this it is skipped forever (never re-ingested) AND never deleted (verify keeps
-          // failing) — it occupies a fixed-size spool permanently, which is the exact
-          // fills-until-capture-dies failure this pass exists to prevent.
-          if (b.durable) skipNames?.delete(b.name)
-          continue // NOT deleted
-        }
-        if (deleteAfter) {
-          fs.unlinkSync(b.p) // (4) and only now
-          res.deleted++
-          res.bytesFreed += b.size
-          if (b.durable) res.reclaimedDurable++
-        }
+        results = await verifyBodiesInStore(store, chunkItems.map(({ b, raw }) => ({ srcName: b.name, raw, tsMs: b.mtime })))
       } catch (e) {
-        // A file that VANISHED between the read above and this unlink is not a verification failure —
-        // it is simply gone, and the ingest path has always treated that as fine.
-        if ((e as NodeJS.ErrnoException).code === 'ENOENT') continue
-        // Any other doubt ⇒ keep the file. A body we cannot prove we can return is a body we have
-        // no right to delete.
-        res.failed.push(`${b.name}: ${(e as Error).message}`)
+        // Per-chunk isolation: a store/query error costs THIS chunk its verify (files kept, named)
+        // — never the rest of the batch, never the rest of the pass (review finding: the old
+        // per-file catch was lost in the P0 batching, so one corrupt part aborted every drain).
+        for (const { b } of chunkItems) res.failed.push(`${b.name}: verify errored — kept (${(e as Error).message})`)
+        continue
+      }
+
+      for (const { b } of chunkItems) {
+        const v = results.get(b.name) ?? { ok: false, reason: `${b.name}: missing verify result` }
+        try {
+          if (!v.ok) {
+            const reason = v.reason ?? b.name
+            // A durable-named file failing ONLY on capture-ts is a livelock, not a repair case:
+            // the bytes are proven (same body_id), and re-ingesting is a dedup no-op that can never
+            // update the stored ts — so dropping the skip-name would re-read, re-hash and re-fail
+            // it every pass forever (review finding). Park it: zero I/O from the next pass on,
+            // reported once, file KEPT — its mtime is the only true capture record.
+            if (b.durable && /stored ts .* != capture time/.test(reason)) {
+              strandedNames?.add(b.name)
+              res.strandedTs.push(b.name)
+              res.failed.push(reason)
+              continue
+            }
+            res.failed.push(reason)
+            // A byte mismatch DOES converge through re-ingest (different bytes = different body_id
+            // = a genuinely new row with the correct ts), so that path keeps the original repair.
+            if (b.durable) skipNames?.delete(b.name)
+            continue // NOT deleted
+          }
+          if (deleteAfter) {
+            fs.unlinkSync(b.p) // (4) and only now
+            res.deleted++
+            res.bytesFreed += b.size
+            if (b.durable) res.reclaimedDurable++
+          }
+        } catch (e) {
+          // A file that VANISHED between the read above and this unlink is not a verification
+          // failure — it is simply gone, and the ingest path has always treated that as fine.
+          if ((e as NodeJS.ErrnoException).code === 'ENOENT') continue
+          // Any other doubt ⇒ keep the file. A body we cannot prove we can return is a body we
+          // have no right to delete.
+          res.failed.push(`${b.name}: ${(e as Error).message}`)
+        }
       }
     }
     batch = []
@@ -222,6 +315,10 @@ export async function ingestPass(opts: IngestPassOptions): Promise<IngestPassRes
 
   for (const f of all) {
     if (res.bytesIn + f.size > maxBytesPerPass && res.bytesIn > 0) { res.throttled = true; break }
+
+    // Parked by an earlier pass: the store's ts row is wrong while the bytes are proven, and no
+    // amount of re-ingesting can repair that row. Zero I/O — reading it again would be the livelock.
+    if (strandedNames?.has(f.name)) continue
 
     if (skipNames?.has(f.name)) {
       // Already durable: straight to the gate, no re-ingest and no re-hash — that is what the set is

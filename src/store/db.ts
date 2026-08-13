@@ -85,7 +85,7 @@ function q(p: string): string { return `'${p.replace(/'/g, "''")}'` }
 
 /** Every Parquet part in a sub-dir as a readable relation, or null when none exist yet (a bare glob
  *  over an empty dir is an ERROR in DuckDB, not an empty set — the classic first-run crash). */
-function parquetScan(dir: string, sub: string): string | null {
+export function parquetScan(dir: string, sub: string): string | null {
   const files = partFiles(dir, sub)
   if (files.length === 0) return null
   // `union_by_name := true` is LOAD-BEARING once parts span two schema generations (TRDD-219K7C1N).

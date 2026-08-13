@@ -88,6 +88,20 @@ export async function applySpoolBackpressure(
     )
     return { redirected: true, spills: state.spills + 1 }
   }
+  if (check.overCapacity && state.redirected) {
+    // RE-ASSERT while over capacity (review finding): this controller is NOT the settings' sole
+    // writer — `agentlenspro setup` / `--install-otel` "repair" the bodiesDir back to the expected
+    // spool value, and with the old transition-only branch above, a state that already said
+    // redirected could never re-apply the redirect: every new session then wrote into a 100%-full
+    // spool while status reported protection active. The redirect callback is IDEMPOTENT
+    // (ensureTelemetryConfig no-ops when the value already matches), so re-asserting each tick
+    // costs one no-op in the steady state, heals an external overwrite within one tick, and never
+    // flaps the config. No spill increment and no repeated warning — nothing NEW happened.
+    // Deliberately asymmetric: the healthy direction is NOT re-asserted, because fighting a user's
+    // deliberate config every 5s when nothing is at risk would make this controller the hijacker.
+    await deps.redirectToLegacy()
+    return state
+  }
   if (!check.overCapacity && state.redirected && check.freeBytes !== null && check.freeBytes > check.floorBytes * 2) {
     await deps.restoreToSpool()
     deps.onInfo?.(`spool recovered (${check.freeBytes} bytes free) — new sessions redirected back to the RAM-disk spool`)

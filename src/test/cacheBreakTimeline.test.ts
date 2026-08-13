@@ -198,6 +198,31 @@ suite('cacheBreakTimeline — classifyCacheBreak (one synthetic before/after per
     assert.ok(/spliced/.test(v.culpritSummary), `culprit must say spliced, got: ${v.culpritSummary}`)
   })
 
+  test('an in-place rewrite with a DUPLICATE of the old content elsewhere is NOT a splice (review finding 8)', () => {
+    // prevFps/curFps are content-only sets that collapse duplicates, so a rewrite of X→Y while a
+    // byte-identical copy of X survives elsewhere satisfied the old set-membership splice test. The
+    // discriminator is structural: an insertion CHANGES the block count; a rewrite keeps it.
+    const HOOK = '<system-reminder>heartbeat hook: inbox has 0 messages</system-reminder>'
+    const mk = (mid: string): RawRequestForBreak['messages'] => ([
+      { role: 'user', content: [{ type: 'text', text: HOOK, cache_control: CC }] },      // duplicate lives here
+      { role: 'user', content: [{ type: 'text', text: mid, cache_control: CC }] },        // this one is rewritten
+      { role: 'user', content: [{ type: 'text', text: HOOK, cache_control: CC }] },
+    ])
+    const v = classify(reqBody({ messages: mk(HOOK) }), reqBody({ messages: mk('<system-reminder>heartbeat hook: inbox has 2 messages</system-reminder>') }))
+    assert.notStrictEqual(v.cause, 'MESSAGE_SPLICED', 'equal block counts cannot be an insertion')
+    assert.ok(!/spliced/.test(v.culpritSummary), `no splice claim for a rewrite, got: ${v.culpritSummary}`)
+  })
+
+  test('a message REMOVED mid-array is MESSAGE_TRIMMED naming the removed block, not the shifted one (review finding 9)', () => {
+    const A = { role: 'user', content: [{ type: 'text', text: 'alpha content', cache_control: CC }] }
+    const B = { role: 'user', content: [{ type: 'text', text: 'bravo content — the one that gets trimmed', cache_control: CC }] }
+    const C = { role: 'user', content: [{ type: 'text', text: 'charlie content', cache_control: CC }] }
+    const v = classify(reqBody({ messages: [A, B, C] as RawRequestForBreak['messages'] }),
+      reqBody({ messages: [A, C] as RawRequestForBreak['messages'] }))
+    assert.strictEqual(v.cause, 'MESSAGE_TRIMMED')
+    assert.ok(/bravo|removed/.test(v.culpritSummary), `must name the REMOVED block, got: ${v.culpritSummary}`)
+  })
+
   test('INLINE_EXEC_RESULT_CHANGED — a skill `!`-operator shell result differs', () => {
     const prev = reqBody({ messages: injectedMsg('<local-command-stdout>branch main clean tree abc</local-command-stdout>') })
     const cur = reqBody({ messages: injectedMsg('<local-command-stdout>branch main dirty tree def</local-command-stdout>') })

@@ -512,6 +512,13 @@ let bodiesPassRunning = false
 // names are ingested — so a 60s spool drain never re-reads+re-hashes a body that is already durable
 // (TRDD-K3WDPR7M Phase 3, item 5).
 let ingestSkipNames: Set<string> | null = null
+// Long-lived companions to the skip set (review findings on ingestPass): names parked because the
+// store's ts row is wrong while the bytes are proven (re-ingest can never repair it — without this
+// they livelock at full read cost every pass), and part files this process already fsynced (the
+// durable barrier walks ALL parts, not just the fresh flush; the cache makes that one fsync per new
+// part instead of per pass).
+const ingestStrandedNames = new Set<string>()
+const ingestFsyncedParts = new Set<string>()
 
 async function seedIngestSkipNames(store: Store): Promise<Set<string>> {
   const set = new Set<string>()
@@ -553,11 +560,16 @@ async function archiveOtelBodies(): Promise<void> {
         deleteAfter: true,                          // safe: ingestPass verifies from the DURABLE store first
         durableSource: target.durable,              // fsync barrier only when the source was itself durable
         skipNames: skip,                            // don't re-read+re-hash already-durable bodies
+        strandedNames: ingestStrandedNames,         // ts-mismatch park — the livelock fix
+        fsyncedPartsCache: ingestFsyncedParts,      // barrier covers all parts, once each
       })
       ingested += r.ingested; deleted += r.deleted; reclaimedDurable += r.reclaimedDurable; bytesFreed += r.bytesFreed
       bytesIn += r.bytesIn; bytesStored += r.bytesStored
       throttled ||= r.throttled
       for (const f of r.failed) failed.push(f)
+      if (r.strandedTs.length) {
+        console.warn(`[AgentLens] ${r.strandedTs.length} body file(s) PARKED: store ts row disagrees with capture mtime while bytes are proven — kept on disk, excluded from future passes (first: ${r.strandedTs[0]})`)
+      }
     }
 
     // Retention ageing of archive volumes — GATED (TRDD-K3WDPR7M, 2026-07-15 USER directive): a
@@ -702,12 +714,28 @@ bodiesPurgeTimer.unref()
 // 5s tick is fast enough to catch that burst mid-flight (the drain-tick cadence above is 60s —
 // too slow, that IS the incident) while cheap (one `df` call in spool mode only).
 let spoolBackpressureState: BackpressureState = INITIAL_BACKPRESSURE_STATE
+let spoolBackpressureGateLogged = false
 async function tickSpoolBackpressure(): Promise<void> {
   if (!SPOOL_MODE) return
+  // THE SAME TWO GATES as applyTelemetryConfig, because this tick is a THIRD writer of the user's
+  // global settings.json and the gates' own comment records what an ungated writer does: an
+  // isolated test server on an ephemeral port silently repointed every agent's telemetry at itself
+  // (TRDD-W0RRL2FZ; review finding — this tick had zero gates, so AGENTLENS_NO_TELEMETRY_CONFIG=1
+  // users still had their settings rewritten the moment the spool crossed the floor). A gated
+  // instance gets NO config writes at all — back-pressure protection is honestly unavailable, said
+  // once, rather than silently exercised through a door the user closed.
+  const canonical = OTLP_PORT === 4318 || process.env.AGENTLENS_TELEMETRY_CONFIG === '1'
+  if (process.env.AGENTLENS_NO_TELEMETRY_CONFIG === '1' || !canonical) {
+    if (!spoolBackpressureGateLogged) {
+      spoolBackpressureGateLogged = true
+      console.log('[AgentLens] spool back-pressure DISABLED: telemetry-config writes are gated for this instance (opt-out env or non-default port), and back-pressure works by rewriting that config.')
+    }
+    return
+  }
   const check = checkSpoolCapacity(SPOOL_MOUNT_POINT)
   spoolBackpressureState = await applySpoolBackpressure(check, spoolBackpressureState, {
-    redirectToLegacy: () => ensureTelemetryConfig({ otlpPort: OTLP_PORT, bodiesDir: LEGACY_BODIES_DIR }),
-    restoreToSpool: () => ensureTelemetryConfig({ otlpPort: OTLP_PORT, bodiesDir: PRIMARY_BODIES_DIR }),
+    redirectToLegacy: async () => { await ensureTelemetryConfig({ otlpPort: OTLP_PORT, bodiesDir: LEGACY_BODIES_DIR }) },
+    restoreToSpool: async () => { await ensureTelemetryConfig({ otlpPort: OTLP_PORT, bodiesDir: PRIMARY_BODIES_DIR }) },
     onWarn: (m) => console.warn(`[AgentLens] ${m}`),
     onInfo: (m) => console.log(`[AgentLens] ${m}`),
   })
@@ -3880,7 +3908,14 @@ const uiServer = http.createServer(async (req, res) => {
     const traceId = q.get('traceId') ?? ''
     const spanId = q.get('spanId') ?? ''
     const key = q.get('key') || 'gen_ai.output.messages'
-    const span = spanStore.loadRange(0, Infinity).find(s => s.traceId === traceId && s.spanId === spanId)
+    // forEachInRange, never loadRange(0, Infinity): one hit on this debug endpoint materialized the
+    // whole 5M+ span store into a single array — the allocation shape that OOM'd the server in
+    // TRDD-QK3L5QAS, reachable by one HTTP request (review finding). The visitor keeps only the
+    // match; no early-exit support means worst case is still a full WALK, but never a full COPY.
+    let span: Span | undefined
+    spanStore.forEachInRange(0, Infinity, (s) => {
+      if (!span && s.traceId === traceId && s.spanId === spanId) span = s
+    })
     const attr = span?.attributes.find(a => a.key === key)
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ found: !!span, value: attr?.value.stringValue ?? null }))
