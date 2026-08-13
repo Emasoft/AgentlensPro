@@ -130,11 +130,31 @@ suite('FAL Phase 3 — compare_configs', () => {
 })
 
 suite('FAL Phase 6 — run_diagnostics_sql', () => {
-  test('no args lists all 16 presets', async () => {
+  test('no args lists all 18 presets', async () => {
     const r = await runDiagnosticsSql({})
     assert.equal(r.mode, 'list')
     assert.equal(r.presets!.length, Object.keys(PRESETS).length)
-    assert.equal(r.presets!.length, 16)
+    assert.equal(r.presets!.length, 18)
+  })
+
+  test('preset unclassified_events surfaces the unexplained cache-write spikes with drill-down refs', async () => {
+    // k:1 sets the spike threshold to the mean itself, so the fixture's heaviest call qualifies.
+    const r = await runDiagnosticsSql({ preset: 'unclassified_events', params: { k: 1 }, forensicsDbPath })
+    assert.equal(r.mode, 'preset')
+    const rows = r.rows ?? []
+    assert.ok(rows.length >= 1, 'the above-mean unexplained call must surface')
+    assert.equal(rows[0].break_cause, null, 'fixture carries no classified causes — every hit is unexplained')
+    assert.ok(typeof rows[0].response_ref === 'string' && (rows[0].response_ref as string).length > 0, 'each row must carry its evidence pointer')
+    const ccs = rows.map(row => Number(row.cache_creation_tokens))
+    assert.deepEqual(ccs, [...ccs].sort((a, b) => b - a), 'heaviest unexplained spike first')
+  })
+
+  test('preset schema lists the fact tables with their CREATE statements', async () => {
+    const r = await runDiagnosticsSql({ preset: 'schema', forensicsDbPath })
+    const names = (r.rows ?? []).map(row => row.table_name)
+    for (const t of ['api_calls', 'call_injections', 'call_content']) {
+      assert.ok(names.includes(t), `schema preset must list ${t}`)
+    }
   })
 
   test('preset fork_vs_fresh returns fork + fresh rows', async () => {
