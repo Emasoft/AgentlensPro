@@ -314,8 +314,18 @@ export class SegmentedSpanStore {
    *  exclusively the segment files whose day/index range overlaps the window; every other segment
    *  is never opened. This is how "queries load segments, not the whole store" is enforced, and
    *  the visitor is how a selective caller's peak memory stays proportional to what it KEEPS
-   *  rather than to the size of the window. */
-  forEachInRange(sinceMs: number, untilMs: number, visit: (span: Span) => void): void {
+   *  rather than to the size of the window.
+   *
+   *  `linePrefilter`, when given, is tested against the RAW line BEFORE `JSON.parse` — a line it
+   *  rejects is skipped without ever being parsed. This exists because a caller that keeps only a
+   *  couple of span names (e.g. scanOtelCallEvents) still paid a full JSON.parse + object-graph
+   *  allocation for every discarded span, which is the transient-heap churn measured in
+   *  TRDD-9NAUEUUR (~2GB/GC cycle, rss sawtoothing 2.6→4.7GB across a 5.4M-span walk). The
+   *  CALLER owns the correctness contract: `linePrefilter(line) === false` must be usable ONLY
+   *  when it is IMPOSSIBLE for that line's parsed span to be one the caller wants — a false
+   *  negative here is silent, unrecoverable data loss, not a discarded candidate. When omitted,
+   *  behavior is byte-identical to before this parameter existed (every line is parsed). */
+  forEachInRange(sinceMs: number, untilMs: number, visit: (span: Span) => void, linePrefilter?: (line: string) => boolean): void {
     this.flush() // reads must see everything appended so far
     let byKey: Map<string, string[]>
     try {
@@ -347,6 +357,9 @@ export class SegmentedSpanStore {
         // happens. Two live segments (568 MB, 531 MB) were being dropped this way.
         try {
           forEachNdjsonLineAuto(path.join(this.dir, name), (line) => {
+            // Cheap substring test BEFORE the parse — see the linePrefilter doc comment above.
+            // A rejected line is never even handed to JSON.parse, which is the whole saving.
+            if (linePrefilter && !linePrefilter(line)) return
             let span: Span
             try { span = JSON.parse(line) as Span } catch { skipped++; return } // truncated tail line
             if (seenIds) {

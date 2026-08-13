@@ -465,6 +465,70 @@ suite('segmentedSpanStore — read-time attribute overlay (S3-F3b)', () => {
     store.forEachInRange(0, Infinity, () => { calls += 1 })
     assert.strictEqual(calls, 0, 'no dir ⇒ no visits and no throw')
   })
+
+  // linePrefilter (TRDD-9NAUEUUR): a caller that only wants a couple of span names must be able
+  // to skip JSON.parse for the rest. The contract is conservative-safe — a substring test can
+  // only ever produce a false POSITIVE (parse a line it didn't need to), never a false NEGATIVE
+  // (skip a line it should have parsed) — so these pin both halves: no loss of wanted spans
+  // (including one whose ATTRIBUTE VALUE embeds the string of the OTHER wanted name, proving the
+  // prefilter alone is not the final filter — `visit` still does the real name check), and the
+  // unfiltered default stays byte-identical to visiting everything.
+  test('forEachInRange linePrefilter skips parse for rejected lines without losing any matching span', () => {
+    const { dir, cleanup } = tmpDir()
+    try {
+      const store = new SegmentedSpanStore(dir, () => {})
+      const wanted = (at: number, i: number, attrs: Span['attributes'] = []): Span =>
+        ({ ...mkSpan(at, i), name: 'wanted-span', attributes: attrs })
+      const other = (at: number, i: number): Span => ({ ...mkSpan(at, i), name: 'other-span' })
+      store.append(wanted(D1, 1))
+      store.append(other(D1 + 1, 2))
+      // A "wanted-span" whose ATTRIBUTE VALUE contains the literal string "other-span" — the
+      // prefilter test is a substring test over the WHOLE raw line, so this line also matches
+      // "other-span"; it must still be visited exactly once, as itself, not dropped or duplicated.
+      store.append(wanted(D1 + 2, 3, [{ key: 'note', value: { stringValue: 'refers to other-span here' } }]))
+      store.append(other(D1 + 3, 4))
+      store.flush()
+
+      const prefilter = (line: string): boolean => line.includes('wanted-span')
+      const visited: Span[] = []
+      store.forEachInRange(0, Infinity, (s) => { visited.push(s) }, prefilter)
+      assert.deepStrictEqual(visited.map((s) => s.spanId).sort(), ['span-1', 'span-3'],
+        'only the wanted-named spans are visited, including the one with the trap attribute value')
+      assert.ok(visited.every((s) => s.name === 'wanted-span'), 'no other-span leaked through despite the substring hit')
+
+      // Default (no prefilter) — unchanged behavior: every span is visited.
+      const all: Span[] = []
+      store.forEachInRange(0, Infinity, (s) => { all.push(s) })
+      assert.deepStrictEqual(all.map((s) => s.spanId).sort(), ['span-1', 'span-2', 'span-3', 'span-4'],
+        'omitting linePrefilter must visit every span, exactly as before this parameter existed')
+    } finally { cleanup() }
+  })
+
+  test('forEachInRange linePrefilter gives the same result over a compressed (.gz) segment', () => {
+    const { dir, cleanup } = tmpDir()
+    try {
+      const store = new SegmentedSpanStore(dir, () => {})
+      const wanted = (at: number, i: number): Span => ({ ...mkSpan(at, i), name: 'wanted-span' })
+      const other = (at: number, i: number): Span => ({ ...mkSpan(at, i), name: 'other-span' })
+      store.append(wanted(D1, 1))
+      store.append(other(D1 + 1, 2))
+      store.append(wanted(D1 + 2, 3))
+      store.flush()
+
+      const prefilter = (line: string): boolean => line.includes('wanted-span')
+      const beforeCompress: Span[] = []
+      store.forEachInRange(0, Infinity, (s) => { beforeCompress.push(s) }, prefilter)
+
+      const r = store.compressSealedSegments(Date.now())
+      assert.deepStrictEqual(r.compressed, ['2026-06-01.ndjson'], 'sanity: the segment was actually gzipped')
+
+      const afterCompress: Span[] = []
+      store.forEachInRange(0, Infinity, (s) => { afterCompress.push(s) }, prefilter)
+      assert.deepStrictEqual(afterCompress.map((s) => s.spanId).sort(), beforeCompress.map((s) => s.spanId).sort(),
+        'gz transparency: prefiltered walk over the .gz form finds the same wanted spans')
+      assert.deepStrictEqual(afterCompress.map((s) => s.spanId).sort(), ['span-1', 'span-3'])
+    } finally { cleanup() }
+  })
 })
 
 // ── compressSealedSegments (docs_dev/20260813_seal-compression-spec.md) ─────────────────────

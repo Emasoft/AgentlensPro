@@ -137,6 +137,17 @@ export function scanOtelCallEvents(opts: OtelScanOptions = {}): {
   const rssSample = makeRssSampler('otel-span-scan', 500_000)
   try {
     const store = new SegmentedSpanStore(spansDir, () => { /* read-only: ingest errors are not ours */ })
+    // Line prefilter (TRDD-9NAUEUUR): this scan only ever keeps API_REQUEST_SPAN/COMPACTION_SPAN
+    // spans out of millions, so parsing every discarded line was the dominant transient-heap
+    // churn (~2GB/GC, rss sawtoothing 2.6→4.7GB over a 5.4M-span walk). The substring test is
+    // CONSERVATIVE-SAFE, not a heuristic: any raw line whose JSON.parse would yield
+    // `name: "claude_code.api_request"` (or `.compaction`) necessarily contains that exact
+    // substring somewhere in the line, so this can only produce false POSITIVES (the span name
+    // string appears inside some OTHER field's value, e.g. an attribute), never a false negative
+    // — the `s.name !==` check right below still filters those out at zero cost beyond the one
+    // extra JSON.parse. No span this scan wants can ever be skipped by this line.
+    const linePrefilter = (line: string): boolean =>
+      line.includes(API_REQUEST_SPAN) || line.includes(COMPACTION_SPAN)
     store.forEachInRange(since, until, (s: Span) => {
       spansScanned += 1
       rssSample()
@@ -171,7 +182,7 @@ export function scanOtelCallEvents(opts: OtelScanOptions = {}): {
         effort: str(a.get('effort')),
         agentName: str(a.get('agent.name')),
       })
-    })
+    }, linePrefilter)
   } catch {
     return {
       events: [], compactions: [],
