@@ -26,7 +26,7 @@ import * as http from 'http'
 import * as os from 'os'
 import * as path from 'path'
 import { loadSqlJs } from '../forensicsDb'
-import { countNdjsonLines } from '../ndjsonLines'
+import { countNdjsonLinesAuto } from '../ndjsonLines'
 import { readFsMarkers } from '../environment/runtime'
 import { ensureTelemetryConfig, ownedTelemetryKeys } from '../telemetryConfig'
 import { rawBodyCaptureEnabled, effectiveBodiesDir, RAW_BODIES_KEY } from '../captureConfig'
@@ -431,11 +431,15 @@ function storeSpanCount(dataDir: string): number {
   let total = 0
   try {
     for (const f of fs.readdirSync(spansDir)) {
-      if (!f.endsWith('.ndjson')) continue
+      // A SEALED segment may be `<day>.ndjson.gz` (see segmentedSpanStore's
+      // compressSealedSegments) — matching only the plain suffix here would silently drop every
+      // compressed day from this count, which feeds the data-preservation assertion below and
+      // would misreport spans as lost on every restart after the first compress sweep.
+      if (!f.endsWith('.ndjson') && !f.endsWith('.ndjson.gz')) continue
       // Streamed, NOT readFileSync('utf8'): segments are uncapped, and a single day past
       // ~512 MB used to throw V8's max-string-length error here — which this function
       // rethrows, so the whole `setup` verb died on nothing worse than a busy machine.
-      total += countNdjsonLines(path.join(spansDir, f))
+      total += countNdjsonLinesAuto(path.join(spansDir, f))
     }
   } catch (e) {
     // ONLY "no store yet" may answer 0. This count feeds the data-preservation assertion

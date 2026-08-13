@@ -25,8 +25,9 @@
 
 import * as fs from 'fs'
 import * as path from 'path'
+import * as zlib from 'zlib'
 import { atomicWriteFileSync } from './serverRuntime'
-import { forEachNdjsonLine } from './ndjsonLines'
+import { forEachNdjsonLineAuto } from './ndjsonLines'
 import type { Span } from './shared/telemetryTypes'
 
 const DAY_MS = 86_400_000
@@ -87,8 +88,15 @@ function segmentKey(ts: number): string {
 // The shape regex alone is NOT enough: '2026-13-99.ndjson' matches \d{2}-\d{2} yet parses to NaN,
 // and NaN silently defeats both the range fast-path and the retention cutoff (an unpurgeable
 // file). Parse once, round-trip to reject calendar-invalid dates (same lesson as hookEventStore).
+//
+// The optional `.gz` suffix is a SEALED, compressed segment (see `compressSealedSegments` below).
+// The day token stays in the same leading 10 chars either way, so `name.slice(0, 10)` — the key
+// every call site already uses — is unchanged; only the shape check and the reader/writer paths
+// needed to learn the new suffix. This was the PARKED bug: a `.gz` segment failing this regex
+// silently disappears from every read/stats/retention path with no error (docs_dev spec, ATOM-
+// UNJH-PDX2) — fixing the regex is what makes a compressed segment visible again everywhere.
 function segmentDayMs(filename: string): number | null {
-  if (!/^\d{4}-\d{2}-\d{2}\.ndjson$/.test(filename)) return null
+  if (!/^\d{4}-\d{2}-\d{2}\.ndjson(\.gz)?$/.test(filename)) return null
   const day = filename.slice(0, 10)
   const ms = Date.parse(`${day}T00:00:00Z`)
   if (!Number.isFinite(ms) || new Date(ms).toISOString().slice(0, 10) !== day) return null
@@ -96,10 +104,22 @@ function segmentDayMs(filename: string): number | null {
 }
 
 /** Count NDJSON lines without loading the file into memory (a segment can be hundreds of MB;
- *  a split('\n') here could OOM the boot path this exists to protect). */
+ *  a split('\n') here could OOM the boot path this exists to protect). Transparent over a `.gz`
+ *  segment: the compressed bytes are read whole (small — gzip -9 measured 19.5x) and gunzipped to
+ *  a Buffer, then scanned for newline BYTES directly — never turned into one giant string, so the
+ *  decompressed size never risks the V8 max-string-length ceiling this store already routes
+ *  around for the plain-file path. */
 function countLinesStreaming(file: string): number {
   let count = 0
   let lastByte = 0x0a
+  if (file.endsWith('.gz')) {
+    const decompressed = zlib.gunzipSync(fs.readFileSync(file))
+    if (decompressed.length === 0) return 0
+    for (let i = 0; i < decompressed.length; i++) if (decompressed[i] === 0x0a) count++
+    lastByte = decompressed[decompressed.length - 1]
+    if (lastByte !== 0x0a) count++
+    return count
+  }
   const buf = Buffer.alloc(64 * 1024)
   const fd = fs.openSync(file, 'r')
   try {
@@ -187,6 +207,15 @@ export class SegmentedSpanStore {
     for (const [key, bucket] of [...this.pending.entries()]) {
       if (bucket.lines.length === 0) { this.pending.delete(key); continue }
       const chunk = `${bucket.lines.join('\n')}\n`
+      // A day is normally only ever appended to WHILE it is still today — compression only
+      // touches days strictly before today (see compressSealedSegments). A late-arriving span
+      // whose OWN timestamp names an already-compressed day is the one path where that invariant
+      // can still be crossed (a backfilled/replayed OTEL export). It is never silently dropped:
+      // the plain form is (re)created here, and every reader below merges both forms by span id
+      // rather than picking one — so this is loud, not lost.
+      if (fs.existsSync(path.join(this.dir, `${key}.ndjson.gz`))) {
+        this.log(`[AgentLens] span store: late span(s) appended to ${key} after it was already compressed to ${key}.ndjson.gz — both forms now exist and are merged on read`)
+      }
       try {
         fs.mkdirSync(this.dir, { recursive: true })
         fs.appendFileSync(path.join(this.dir, `${key}.ndjson`), chunk)
@@ -267,15 +296,15 @@ export class SegmentedSpanStore {
    *  rather than to the size of the window. */
   forEachInRange(sinceMs: number, untilMs: number, visit: (span: Span) => void): void {
     this.flush() // reads must see everything appended so far
-    let names: string[]
+    let byKey: Map<string, string[]>
     try {
-      names = fs.readdirSync(this.dir).filter((f) => segmentDayMs(f) !== null).sort()
+      byKey = this.listSegmentFiles()
     } catch {
       return // no dir yet — empty store
     }
-    for (const name of names) {
-      const dayMs = segmentDayMs(name) as number
-      const key = name.slice(0, 10)
+    for (const key of [...byKey.keys()].sort()) {
+      const files = byKey.get(key) as string[]
+      const dayMs = Date.parse(`${key}T00:00:00Z`)
       const meta = this.index.segments[key]
       // Segment-level window test: index min/max when known (tighter), else the day bounds.
       const lo = meta ? meta.minTs : dayMs
@@ -283,27 +312,78 @@ export class SegmentedSpanStore {
       if (lo > untilMs || hi < sinceMs) continue
       let skipped = 0
       let readError: string | null = null
-      // Streamed, and the failure is LOUD. This used to be a whole-file
-      // readFileSync('utf-8') inside `catch { continue }` — so any segment past V8's
-      // 512 MB max-string-length threw and that entire DAY vanished from the result with
-      // no log line, which is the exact silent loss this store's header promises never
-      // happens. Two live segments (568 MB, 531 MB) were being dropped this way.
-      try {
-        forEachNdjsonLine(path.join(this.dir, name), (line) => {
-          let span: Span
-          try { span = JSON.parse(line) as Span } catch { skipped++; return } // truncated tail line
-          const ts = spanTimestampMs(span)
-          if (ts < sinceMs || ts > untilMs) return
-          visit(this.applyOverlay(span))
-        })
-      } catch (e) {
-        readError = String(e)
+      // Almost always exactly one file backs a key. The rare >1 case (a compress crash-recovery
+      // leftover, or a late span appended after compression — see flush()'s warning above) is
+      // de-duplicated by (traceId, spanId) across the forms rather than picking one: picking the
+      // plain form would double-read a crash leftover, picking the .gz form would silently drop
+      // a genuinely late span — the exact silent-loss class this store exists to end.
+      const seenIds = files.length > 1 ? new Set<string>() : null
+      for (const name of files) {
+        // Streamed, and the failure is LOUD. This used to be a whole-file
+        // readFileSync('utf-8') inside `catch { continue }` — so any segment past V8's
+        // 512 MB max-string-length threw and that entire DAY vanished from the result with
+        // no log line, which is the exact silent loss this store's header promises never
+        // happens. Two live segments (568 MB, 531 MB) were being dropped this way.
+        try {
+          forEachNdjsonLineAuto(path.join(this.dir, name), (line) => {
+            let span: Span
+            try { span = JSON.parse(line) as Span } catch { skipped++; return } // truncated tail line
+            if (seenIds) {
+              const id = `${span.traceId}:${span.spanId}`
+              if (seenIds.has(id)) return
+              seenIds.add(id)
+            }
+            const ts = spanTimestampMs(span)
+            if (ts < sinceMs || ts > untilMs) return
+            visit(this.applyOverlay(span))
+          })
+        } catch (e) {
+          readError = readError ?? String(e)
+        }
       }
       if (readError !== null) {
-        this.log(`[AgentLens] span store: could NOT read ${name} (${readError}) — that segment is MISSING from this query's result`)
+        this.log(`[AgentLens] span store: could NOT read ${files.join('+')} (${readError}) — that segment is MISSING from this query's result`)
       }
-      if (skipped > 0) this.log(`[AgentLens] span store: skipped ${skipped} corrupt line(s) in ${name}`)
+      if (skipped > 0) this.log(`[AgentLens] span store: skipped ${skipped} corrupt line(s) in ${files.join('+')}`)
     }
+  }
+
+  /** One entry per calendar day, mapping to EVERY filename currently backing it (normally exactly
+   *  one — `<day>.ndjson` or, once sealed and compressed, `<day>.ndjson.gz`). More than one form
+   *  is a real but rare state (see the flush()/forEachInRange comments above); callers that only
+   *  want a single winner should still go through this so day-derivation stays in one place. */
+  private listSegmentFiles(): Map<string, string[]> {
+    const names = fs.readdirSync(this.dir)
+    const byKey = new Map<string, string[]>()
+    for (const name of names) {
+      if (segmentDayMs(name) === null) continue
+      const key = name.slice(0, 10)
+      const arr = byKey.get(key)
+      if (arr) arr.push(name); else byKey.set(key, [name])
+    }
+    return byKey
+  }
+
+  /** Span count for a day, de-duplicated by (traceId, spanId) when more than one file backs it.
+   *  Single-file case is the streamed byte-scan (countLinesStreaming); the >1 case must parse
+   *  lines to dedupe, but only ever happens for the rare both-forms-present day, never the common
+   *  path. */
+  private countSpansForKey(files: string[]): number {
+    if (files.length === 1) {
+      try { return countLinesStreaming(path.join(this.dir, files[0])) } catch { return 0 }
+    }
+    const seen = new Set<string>()
+    for (const name of files) {
+      try {
+        forEachNdjsonLineAuto(path.join(this.dir, name), (line) => {
+          try {
+            const p = JSON.parse(line) as { traceId?: string; spanId?: string }
+            seen.add(`${p.traceId ?? ''}:${p.spanId ?? ''}`)
+          } catch { /* corrupt line — forEachInRange already logs this case on read */ }
+        })
+      } catch { /* one form unreadable — best-effort count from the other */ }
+    }
+    return seen.size
   }
 
   /** Delete whole EXPIRED segments only (day older than retentionDays). Partial segments are
@@ -339,6 +419,88 @@ export class SegmentedSpanStore {
     }
     if (indexDirty) this.writeIndex()
     return deleted
+  }
+
+  /** Gzip every SEALED plain segment (any day strictly before today — an active/current-day
+   *  segment can still receive appends, so it is never touched here) into `<day>.ndjson.gz`.
+   *  Measured 19.5x on a real segment (project memory ATOM-UNJH-PDX2); every reader path above
+   *  (forEachInRange, retention's spanCount fallback, loadOrRebuildIndex) already treats `.gz`
+   *  transparently, so a compressed day stays fully visible.
+   *
+   *  Atomic, verify-before-delete: gzip to a sibling temp file via `atomicWriteFileSync` (fsync +
+   *  rename — the SAME primitive this file already uses for the index, so this is not a new
+   *  discipline), then gunzip the just-written `.gz` back and byte-compare it against the plain
+   *  bytes BEFORE deleting the plain file. A crash before the rename leaves only the (ignored,
+   *  regex-invisible) temp file and the plain file untouched; a crash after the rename but before
+   *  the delete leaves BOTH forms, which every reader above already tolerates (merge-by-id) and
+   *  which the "already compressed" branch below finishes cleaning up on the next sweep. */
+  compressSealedSegments(nowMs: number = Date.now()): { compressed: string[]; bytesSaved: number } {
+    const compressed: string[] = []
+    let bytesSaved = 0
+    const todayKey = segmentKey(nowMs)
+    let names: string[]
+    try { names = fs.readdirSync(this.dir) } catch { return { compressed, bytesSaved } }
+    let indexDirty = false
+    for (const name of names) {
+      if (!/^\d{4}-\d{2}-\d{2}\.ndjson$/.test(name)) continue // only plain, un-compressed segments
+      const key = name.slice(0, 10)
+      if (key >= todayKey) continue // active/current-day segment — never compress
+      const plainFile = path.join(this.dir, name)
+      const gzFile = `${plainFile}.gz`
+      let plainBytes: Buffer
+      try { plainBytes = fs.readFileSync(plainFile) } catch { continue } // vanished — retried next sweep
+      if (plainBytes.length === 0) continue // nothing to gain, nothing to compress
+
+      if (fs.existsSync(gzFile)) {
+        // Resume an interrupted compress (crash between the rename and the delete): finish the
+        // delete IF the existing .gz still verifies against the current plain bytes; otherwise
+        // leave both forms alone rather than guess.
+        try {
+          const roundTrip = zlib.gunzipSync(fs.readFileSync(gzFile))
+          if (roundTrip.equals(plainBytes)) {
+            fs.unlinkSync(plainFile)
+            const meta = this.index.segments[key]
+            if (meta) { meta.bytes = fs.statSync(gzFile).size; indexDirty = true }
+          }
+        } catch (e) {
+          this.log(`[AgentLens] span store: could not verify existing ${key}.ndjson.gz against ${name}: ${String(e)} — leaving both forms`)
+        }
+        continue
+      }
+
+      const gz = zlib.gzipSync(plainBytes)
+      try {
+        atomicWriteFileSync(gzFile, gz) // temp file + fsync + rename — never a half-written .gz
+      } catch (e) {
+        this.log(`[AgentLens] span store: could not compress ${name}: ${String(e)}`)
+        continue
+      }
+      // Verify before delete: never remove the only-known-good copy on faith.
+      try {
+        const roundTrip = zlib.gunzipSync(fs.readFileSync(gzFile))
+        if (!roundTrip.equals(plainBytes)) {
+          this.log(`[AgentLens] span store: ${name} compressed but did NOT verify byte-identical — leaving both forms, NOT deleting the plain copy`)
+          continue
+        }
+      } catch (e) {
+        this.log(`[AgentLens] span store: could not verify compressed ${name}: ${String(e)} — leaving both forms`)
+        continue
+      }
+      try {
+        fs.unlinkSync(plainFile)
+      } catch (e) {
+        // Not fatal — listSegmentFiles()/forEachInRange already read the .gz form correctly (and
+        // would merge-by-id if the delete keeps failing); this just wastes disk until retried.
+        this.log(`[AgentLens] span store: compressed ${name} but could not delete the plain copy: ${String(e)}`)
+      }
+      const meta = this.index.segments[key]
+      if (meta) { meta.bytes = gz.length; indexDirty = true }
+      compressed.push(name)
+      bytesSaved += plainBytes.length - gz.length
+      this.log(`[AgentLens] span store: compressed sealed segment ${name} → ${key}.ndjson.gz (${plainBytes.length}B → ${gz.length}B)`)
+    }
+    if (indexDirty) this.writeIndex()
+    return { compressed, bytesSaved }
   }
 
   /** Remove every segment + the index (the /api/clear + clearAll paths). Foreign files stay. */
@@ -390,21 +552,25 @@ export class SegmentedSpanStore {
     } catch { /* missing or corrupt — rebuilt below */ }
     this.index = parsed ?? { version: 1, segments: {} }
 
-    let names: string[] = []
-    try { names = fs.readdirSync(this.dir).filter((f) => segmentDayMs(f) !== null) } catch { return }
+    let byKey: Map<string, string[]>
+    try { byKey = this.listSegmentFiles() } catch { return }
     const onDisk = new Set<string>()
     let dirty = false
-    for (const name of names) {
-      const key = name.slice(0, 10)
+    for (const [key, files] of byKey) {
       onDisk.add(key)
-      const file = path.join(this.dir, name)
+      // Total on-disk bytes across every form backing this day — when both a plain and a `.gz`
+      // form are present (see forEachInRange), this is a real, if temporary, doubling of disk
+      // usage and stats() should say so rather than silently reporting only one form's size.
       let size = 0
-      try { size = fs.statSync(file).size } catch { continue }
+      let statOk = true
+      for (const name of files) {
+        try { size += fs.statSync(path.join(this.dir, name)).size } catch { statOk = false }
+      }
+      if (!statOk) continue
       const meta = this.index.segments[key]
       if (meta && meta.bytes === size) continue // index agrees with disk — trust it
-      const dayMs = segmentDayMs(name) as number
-      let count = 0
-      try { count = countLinesStreaming(file) } catch { /* unreadable — treat as empty */ }
+      const dayMs = Date.parse(`${key}T00:00:00Z`)
+      const count = this.countSpansForKey(files)
       // Day bounds as the (conservative, correct) time range — exact min/max would require a
       // full JSON parse of the segment, which the boot path must not pay.
       this.index.segments[key] = { count, minTs: dayMs, maxTs: dayMs + DAY_MS - 1, bytes: size }

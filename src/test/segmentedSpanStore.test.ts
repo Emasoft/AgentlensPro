@@ -2,6 +2,7 @@ import * as assert from 'assert'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
+import * as zlib from 'zlib'
 import { SegmentedSpanStore, migrateLegacySpansFile, spanTimestampMs } from '../segmentedSpanStore'
 import type { Span } from '../shared/telemetryTypes'
 
@@ -463,5 +464,146 @@ suite('segmentedSpanStore — read-time attribute overlay (S3-F3b)', () => {
     let calls = 0
     store.forEachInRange(0, Infinity, () => { calls += 1 })
     assert.strictEqual(calls, 0, 'no dir ⇒ no visits and no throw')
+  })
+})
+
+// ── compressSealedSegments (docs_dev/20260813_seal-compression-spec.md) ─────────────────────
+// Sealed span segments are plain NDJSON; gzip -9 measured 19.5x on a real segment (project
+// memory ATOM-UNJH-PDX2). The naive approach was PARKED because segmentDayMs — the gate every
+// reader path filters through — failed the regex on a `.gz` name and made the segment SILENTLY
+// INVISIBLE (dropped from reads, stats, retention — no error). These tests pin the non-naive fix.
+suite('segmentedSpanStore — compressSealedSegments (sealed-segment gzip)', () => {
+  test('a sealed segment compressed to .gz is STILL visible and byte-identically readable', () => {
+    const { dir, cleanup } = tmpDir()
+    try {
+      const store = new SegmentedSpanStore(dir, () => {})
+      for (let i = 0; i < 20; i++) store.append(mkSpan(D1 + i * 1000, i))
+      store.flush()
+      const before = store.loadRange(0, Infinity)
+      assert.strictEqual(before.length, 20, 'sanity: the plain segment is readable before compression')
+
+      // D1 is 2026-06-01 — always strictly before "now", so it is SEALED and eligible.
+      const r = store.compressSealedSegments(Date.now())
+      assert.deepStrictEqual(r.compressed, ['2026-06-01.ndjson'])
+      assert.ok(r.bytesSaved > 0, 'gzip must shrink a real NDJSON segment')
+      assert.ok(!fs.existsSync(path.join(dir, '2026-06-01.ndjson')), 'the plain copy is deleted after a verified compress')
+      assert.ok(fs.existsSync(path.join(dir, '2026-06-01.ndjson.gz')), 'the compressed form now exists')
+
+      const after = store.loadRange(0, Infinity)
+      assert.deepStrictEqual(after, before, 'reading through the store API is byte-identical before/after compression')
+
+      // Reopen (fresh instance — the boot path) to prove the index survives too, not just the
+      // live in-memory instance.
+      const reopened = new SegmentedSpanStore(dir, () => {})
+      assert.strictEqual(reopened.stats().totalSpans, 20, 'span count survives a restart over a compressed segment')
+      assert.deepStrictEqual(reopened.loadRange(0, Infinity), before, 'reopened store reads the compressed segment identically')
+    } finally { cleanup() }
+  })
+
+  test('compression is atomic — a .gz.tmp leftover is ignored and the plain file survives a crashed compress', () => {
+    const { dir, cleanup } = tmpDir()
+    try {
+      const store = new SegmentedSpanStore(dir, () => {})
+      store.append(mkSpan(D1, 1))
+      store.append(mkSpan(D1 + 1, 2))
+      store.flush()
+      const plainFile = path.join(dir, '2026-06-01.ndjson')
+      const plainBefore = fs.readFileSync(plainFile)
+
+      // Simulate a crash mid-compress: a stray temp file sitting next to the plain segment.
+      fs.writeFileSync(`${plainFile}.gz.tmp-99999-123`, 'garbage-partial-gzip-bytes')
+
+      const got = store.loadRange(0, Infinity)
+      assert.deepStrictEqual(got.map(s => s.spanId).sort(), ['span-1', 'span-2'],
+        'reads are unaffected by a crashed-compress temp leftover')
+      assert.ok(fs.readFileSync(plainFile).equals(plainBefore), 'the plain segment survives untouched')
+      assert.ok(fs.existsSync(`${plainFile}.gz.tmp-99999-123`), 'the temp leftover itself is untouched (not our job to clean up mid-test)')
+
+      // The real compress sweep then runs normally despite the leftover garbage temp file —
+      // it writes its OWN temp (atomicWriteFileSync uses a pid+timestamp-unique name) and the
+      // stray file is simply ignored by segmentDayMs (it matches neither `.ndjson` nor `.ndjson.gz`).
+      const r = store.compressSealedSegments(Date.now())
+      assert.deepStrictEqual(r.compressed, ['2026-06-01.ndjson'])
+      assert.deepStrictEqual(store.loadRange(0, Infinity).map(s => s.spanId).sort(), ['span-1', 'span-2'])
+    } finally { cleanup() }
+  })
+
+  test('active segments are never compressed', () => {
+    const { dir, cleanup } = tmpDir()
+    try {
+      const store = new SegmentedSpanStore(dir, () => {})
+      const now = Date.now()
+      store.append(mkSpan(now, 1)) // today — active/un-sealed
+      store.flush()
+      const todayName = `${new Date(now).toISOString().slice(0, 10)}.ndjson`
+
+      const r = store.compressSealedSegments(now)
+      assert.deepStrictEqual(r.compressed, [], 'nothing eligible — the only segment is today')
+      assert.ok(fs.existsSync(path.join(dir, todayName)), 'the active segment stays plain')
+      assert.ok(!fs.existsSync(path.join(dir, `${todayName}.gz`)), 'no compressed form was created')
+    } finally { cleanup() }
+  })
+
+  test('a sealed segment already fully compressed is left alone on a second sweep (idempotent, no re-work)', () => {
+    const { dir, cleanup } = tmpDir()
+    try {
+      const store = new SegmentedSpanStore(dir, () => {})
+      store.append(mkSpan(D1, 1))
+      store.flush()
+      const first = store.compressSealedSegments(Date.now())
+      assert.deepStrictEqual(first.compressed, ['2026-06-01.ndjson'])
+      const second = store.compressSealedSegments(Date.now())
+      assert.deepStrictEqual(second.compressed, [], 'nothing left to compress — the plain form is already gone')
+      assert.strictEqual(store.loadRange(0, Infinity).length, 1)
+    } finally { cleanup() }
+  })
+
+  test('retention deletes a compressed (.gz) expired segment exactly as it would the plain form', () => {
+    const { dir, cleanup } = tmpDir()
+    try {
+      const { lines, log } = logCollector()
+      const store = new SegmentedSpanStore(dir, log)
+      const now = Date.UTC(2026, 6, 10, 12, 0, 0) // 2026-07-10
+      store.append(mkSpan(D1, 1)) // 2026-06-01 — age 39d, expired at 30d retention
+      store.flush()
+      store.compressSealedSegments(now)
+      assert.ok(fs.existsSync(path.join(dir, '2026-06-01.ndjson.gz')), 'sanity: segment is compressed before retention runs')
+
+      const deleted = store.runRetention(30, now)
+      assert.strictEqual(deleted.length, 1)
+      assert.strictEqual(deleted[0].segment, '2026-06-01.ndjson.gz')
+      assert.strictEqual(deleted[0].spans, 1)
+      assert.ok(!fs.existsSync(path.join(dir, '2026-06-01.ndjson.gz')), 'the compressed segment is deleted like any other')
+      assert.ok(lines.some(l => l.includes('retention: deleted segment 2026-06-01.ndjson.gz, 1 spans, age 39d')))
+    } finally { cleanup() }
+  })
+
+  test('a segment for a DIFFERENT day is never mistaken for a match — the .gz suffix does not corrupt the day token', () => {
+    const { dir, cleanup } = tmpDir()
+    try {
+      const store = new SegmentedSpanStore(dir, () => {})
+      store.append(mkSpan(D1, 1))
+      store.append(mkSpan(D2, 2))
+      store.flush()
+      store.compressSealedSegments(Date.now())
+      const got = store.loadRange(D2 - 1000, D2 + 1000)
+      assert.deepStrictEqual(got.map(s => s.spanId), ['span-2'], 'day-scoped range query still isolates the compressed day correctly')
+    } finally { cleanup() }
+  })
+
+  test('setup.ts-style raw directory listing sees a compressed segment via .gz — a naive f.endsWith(".ndjson") filter would miss it', () => {
+    const { dir, cleanup } = tmpDir()
+    try {
+      const store = new SegmentedSpanStore(dir, () => {})
+      store.append(mkSpan(D1, 1))
+      store.flush()
+      store.compressSealedSegments(Date.now())
+      const names = fs.readdirSync(dir)
+      assert.ok(names.includes('2026-06-01.ndjson.gz'), 'the compressed segment is on disk')
+      assert.ok(!names.includes('2026-06-01.ndjson'), 'the plain form is gone — a naive .ndjson-only filter would silently count 0 spans for this day')
+      // Round-trip through zlib directly, mirroring what a raw consumer must now do.
+      const decompressed = zlib.gunzipSync(fs.readFileSync(path.join(dir, '2026-06-01.ndjson.gz')))
+      assert.strictEqual(decompressed.toString('utf-8').trim().split('\n').length, 1)
+    } finally { cleanup() }
   })
 })
