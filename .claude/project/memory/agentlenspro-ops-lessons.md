@@ -485,6 +485,11 @@ is reported as rotated rather than quoted from a stale offset; the header states
 "the last 8 lines" and "the last 8 lines WE wrote" are different claims. The guard's message is not
 silenced — trading a false alarm for a silent one would be worse.
 
+
+^ATOM-N8GX-ZQI3 [desc:"suite dies at exit 139 / SIGSEGV in duckdb.node / red tests move between runs — closing a shared DuckDB connection under an in-flight query", keywords: suite_dies_exit_139 mocha_runner_killed_SIGSEGV node_crash_report_duckdb.node test_suite_exit_code_139_no_assertion closeSync_segfault red_tests_move_between_runs duckdb_use_after_free connection_closed_while_query_running, ocd: 2026-08-13, lmd: 2026-08-13]
+
+A SHARED DuckDB connection must never be closeSync()'d while a query can still be in flight on the napi worker thread — the failure is a NATIVE SIGSEGV (ClientContext::Query -> pthread_mutex_lock on freed memory) or an indefinite process wedge, not a JS error. The reachable trigger: mocha's timeout abandons a test mid-await (the promise keeps running), teardown then calls store.close(). Fixed at a43251f: openStore wraps the connection in a Proxy that tracks in-flight calls and refuses post-close ones; close() = interrupt() + drain (Promise.allSettled) + closeSync, single-flight. Per-call instances (withDuck/openDuck) are safe by construction: their finally runs only after their own awaits settle. Pinned by src/test/storeCloseSafety.test.ts (red-first: 2 failing + an 11-minute wedge on unfixed code).
+
 ## See also
 
 - [[ssd-write-economics]] — what the drain is ultimately protecting: the SSD write budget, why the
