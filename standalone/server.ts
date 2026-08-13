@@ -383,23 +383,50 @@ try {
 // Retention: on boot + daily. Deletes whole EXPIRED segments only; each deletion is logged by
 // the store ("retention: deleted segment <name>, N spans, age Nd").
 //
-// Compression rides the SAME boot+daily tick rather than a new scheduler (docs_dev spec: "do not
-// invent a new scheduler") — it is the natural home because it shares retention's exact
-// precondition (a segment is safe to touch once its day has fully passed) and its exact cadence
-// (rare enough that gzipping a day's worth of spans is negligible next to the rest of a daily
-// tick). Ordered before retention so a segment compressed today can still be deleted by retention
-// today if it also happens to be expired, instead of compressing something about to be deleted.
 function runSpanRetention(): void {
-  try {
-    const c = spanStore.compressSealedSegments()
-    if (c.compressed.length > 0) {
-      console.log(`[AgentLens] span store: compressed ${c.compressed.length} sealed segment(s), saved ${c.bytesSaved} byte(s)`)
-    }
-  } catch (e) { console.warn('[AgentLens] span compression failed:', e) }
   try { spanStore.runRetention(SPANS_RETENTION_DAYS) } catch (e) { console.warn('[AgentLens] span retention failed:', e) }
 }
+
+// Compression rides the SAME boot+daily tick rather than a new scheduler (docs_dev spec: "do not
+// invent a new scheduler"), but NEVER as one synchronous block on the boot path: the first boot
+// over a 31-segment backlog ran 3m40s with every port still closed — exporters errored against
+// the closed OTLP port and dropped spans with no collector-gap recorded, and the restart health
+// check reported a false failure (review finding). Instead the sweep runs ONE sealed segment per
+// timer slice: each slice still blocks the loop for that one segment's gzip+verify (~seconds),
+// but the loop breathes between slices, so the server is degraded-not-dead during a backlog and
+// the steady state (one new sealed segment per day) is a single slice. Retention runs FIRST on
+// the shared tick — whole-file unlinks, cheap — so an expired segment is deleted, never
+// pointlessly compressed. A pressure pause retries on a longer gap (pressure clears in minutes,
+// not slices). `unref()`ed throughout: a pending slice must never hold the process open.
+const COMPRESSION_SLICE_GAP_MS = 5_000
+const COMPRESSION_PRESSURE_RETRY_MS = 60_000
+let compressionSliceTimer: NodeJS.Timeout | null = null
+function runCompressionSweepIncrementally(): void {
+  if (compressionSliceTimer) return // a catch-up chain is already draining the backlog
+  const slice = (): void => {
+    compressionSliceTimer = null
+    let gapMs = 0
+    try {
+      const c = spanStore.compressSealedSegments(Date.now(), undefined, 1)
+      if (c.compressed.length > 0) {
+        console.log(`[AgentLens] span store: compressed ${c.compressed.length} sealed segment(s), saved ${c.bytesSaved} byte(s)`)
+      }
+      if (c.remaining > 0 || c.pausedForPressure) {
+        gapMs = c.pausedForPressure ? COMPRESSION_PRESSURE_RETRY_MS : COMPRESSION_SLICE_GAP_MS
+      }
+    } catch (e) { console.warn('[AgentLens] span compression failed:', e) }
+    if (gapMs > 0) {
+      compressionSliceTimer = setTimeout(slice, gapMs)
+      compressionSliceTimer.unref()
+    }
+  }
+  compressionSliceTimer = setTimeout(slice, COMPRESSION_SLICE_GAP_MS)
+  compressionSliceTimer.unref()
+}
+
 runSpanRetention()
-const spanRetentionTimer = setInterval(runSpanRetention, 24 * 3600e3)
+runCompressionSweepIncrementally() // first slice fires after the servers below are listening
+const spanRetentionTimer = setInterval(() => { runSpanRetention(); runCompressionSweepIncrementally() }, 24 * 3600e3)
 spanRetentionTimer.unref()
 
 /** Flush buffered appends to their daily segments (O(pending), never a rewrite), then trim the
@@ -3930,6 +3957,7 @@ const uiServer = http.createServer(async (req, res) => {
   // content actually reaches the span on read (which /api/summary would fold away). Read-only, and the
   // server is localhost-only (same seam class as the other /api/debug/* endpoints).
   if (req.method === 'GET' && url?.startsWith('/api/debug/span-attr')) {
+    if (heavyGuard(res, url, 'span-attr')) return
     const q = new URLSearchParams((req.url ?? '').split('?')[1] ?? '')
     const traceId = q.get('traceId') ?? ''
     const spanId = q.get('spanId') ?? ''
@@ -3938,8 +3966,13 @@ const uiServer = http.createServer(async (req, res) => {
     // whole 5M+ span store into a single array — the allocation shape that OOM'd the server in
     // TRDD-QK3L5QAS, reachable by one HTTP request (review finding). The visitor keeps only the
     // match; no early-exit support means worst case is still a full WALK, but never a full COPY.
+    // The walk is WINDOWED (review finding #2 on this route): unbounded, one localhost GET streamed
+    // the entire multi-GB store — tens of seconds of stalled collector per request. The S3-F3b seam
+    // only ever looks up a span it just wrote, so it defaults to the last 24h; an explicit fromMs
+    // widens it when a debug session genuinely needs history.
+    const fromMs = Number(q.get('fromMs')) > 0 ? Number(q.get('fromMs')) : Date.now() - 24 * 3600e3
     let span: Span | undefined
-    spanStore.forEachInRange(0, Infinity, (s) => {
+    spanStore.forEachInRange(fromMs, Infinity, (s) => {
       if (!span && s.traceId === traceId && s.spanId === spanId) span = s
     })
     const attr = span?.attributes.find(a => a.key === key)
