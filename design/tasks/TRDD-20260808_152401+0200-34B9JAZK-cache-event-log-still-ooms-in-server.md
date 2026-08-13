@@ -10,6 +10,7 @@ severity: high
 scope: project
 project-id: agentlenspro
 parent-trdd: QK3L5QAS
+eht: [9NAUEUUR]
 labels: [server, stability, cache-ledger, duckdb]
 ---
 
@@ -180,17 +181,50 @@ scan blocks). Only then rerun a controlled no-window call; the sample trail eith
 allocation site's neighborhood or exonerates the scan. Do NOT rerun the call before the sampling
 exists — a fourth silent kill teaches nothing new.
 
+## 2026-08-13 ~23:00 — the trail DELIVERED: mechanism named with measured evidence
+
+In-scan sampling deployed (c622c76, pid 25527), then the controlled no-window rerun the card
+prescribed. The call COMPLETED (74.7s, status 200) and the trail names the site:
+
+```
+rss-sample raw-body-scan   units=100..500      rss=2687MB (flat — raw-body scan is NOT the climb)
+rss-sample otel-span-scan  units=500k  rss=2748MB heap=1287MB
+rss-sample otel-span-scan  units=1.0M  rss=3646MB heap=2227MB
+rss-sample otel-span-scan  units=2.5M  rss=4440MB heap=2997MB
+rss-sample otel-span-scan  units=4.0M  rss=4714MB heap=3340MB   ← peak, ABOVE the 4096 HWM
+rss-sample otel-span-scan  units=5.0M  rss=3367MB heap=2757MB
+```
+
+**Named mechanism:** `scanOtelCallEvents`' span walk over 5.4M spans generates ~2GB of TRANSIENT
+heap per GC cycle (every visited span is a JSON.parse'd object graph; heap sawtooths 1.1→3.3GB and
+rss follows GC timing, 2.6→4.7GB). The kills are a sawtooth PEAK coinciding with macOS memory
+pressure — which is why they were sporadic, why the last logged rss was always a between-peaks
+floor (2790), and why a shed keyed on rss AT CALL START can never catch it. Peak server heap
+during the call: **3340MB measured** (closes the heap acceptance box). The raw-body scan is
+exonerated: flat 2687MB across its window.
+
+**Also observed, third face of the same family:** during the run (and a concurrent session's
+`check_cache_expiry`), `server status` reported NOT RUNNING while pid 25527 was alive and working
+— the synchronous scan blocks ALL listeners, so the 800ms status probe DROPs. This is the
+mechanism behind every "NOT RUNNING on a healthy server" sighting, 861LC4VW's included.
+
+**Fix direction (derived EHT card TRDD-9NAUEUUR):** the walk must (a) prefilter lines by span name
+BEFORE JSON.parse (most spans are not api_request/compaction — the churn is mostly discarded
+objects) and (b) yield periodically so listeners breathe. Protections stay as-is meanwhile; this
+card cannot reach complete until 9NAUEUUR is terminal.
+
 ## Acceptance
 
-- [ ] The mechanism is identified with evidence — a named allocation site, not a hypothesis.
-      (2026-08-13: PARTIAL — the one live-reproduced instance was named with evidence: the boot
-      compression sweep's residency, fixed a98e7ae. Whether other multi-GB paths exist is open;
-      the two prior suspects are measured-ruled-out at 8.2GB scratch volumes.)
+- [x] The mechanism is identified with evidence — a named allocation site, not a hypothesis.
+      (CLOSED 2026-08-13 ~23:00: the in-scan trail names scanOtelCallEvents' span walk —
+      parse-then-discard transient churn, rss sawtooth 2.6→4.7GB over 5.4M spans; see the trail
+      section. The boot-sweep residency was a second, already-fixed instance, a98e7ae.)
 - [x] `agentlenspro get_cache_event_log` (no `--window`) completes against the live server, on this
       machine's real store, **10 consecutive times**, with the pid unchanged. One passing run is
       what produced the premature close; the count is the point.
       (CLOSED 2026-08-13 ~13:00 — pid 13448, 10/10, zero sheds, rss settling 2158MB after.)
-- [ ] Peak server heap during the call is measured and reported, not inferred.
+- [x] Peak server heap during the call is measured and reported, not inferred.
+      (CLOSED 2026-08-13: heap peak 3340MB / rss peak 4714MB, sampled from inside the scan.)
 - [ ] A regression test that fails against the current code. If the honest shape is again a
       measurement rather than a unit test, say so explicitly rather than shipping a test that
       cannot fail.

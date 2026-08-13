@@ -1,0 +1,55 @@
+---
+trdd-id: 9NAUEUUR
+title: Span walk must prefilter before parse and yield while walking
+column: todo
+created: 2026-08-13T22:22:27+0200
+updated: 2026-08-13T22:22:27+0200
+current-owner: agentlenspro-main
+task-type: bugfix
+approval-tier: 0
+scope: project
+project-id: agentlenspro
+parent-trdd: 34B9JAZK
+created-by: 34B9JAZK delegated review + in-scan trail experiment
+labels: [server, stability, span-store, performance]
+severity: high
+effort: medium
+---
+
+# Span walk must prefilter before parse and yield while walking
+
+Derived (EHT) from TRDD-34B9JAZK's named mechanism, measured 2026-08-13 ~23:00 with the in-scan
+rss trail (commit c622c76): `scanOtelCallEvents`' walk over 5.4M spans JSON.parses EVERY span line
+into an object graph and discards almost all of them (only `claude_code.api_request` /
+`claude_code.compaction` are kept) — ~2GB of transient heap per GC cycle, rss sawtoothing
+2.6→4.7GB, kills = a sawtooth peak meeting macOS memory pressure. The same synchronous walk blocks
+every listener for its whole duration (74.7s measured), which is what makes `server status` report
+NOT RUNNING against a healthy, working server.
+
+## The two changes
+
+1. **Prefilter before parse.** `forEachInRange` (or a name-filtered variant) gains a cheap
+   line-level prefilter: a substring test for the wanted span names BEFORE `JSON.parse`. The churn
+   is dominated by parsed-then-discarded objects; most spans are neither api_request nor
+   compaction, so the transient allocation drops by roughly the non-matching fraction. The
+   prefilter must be conservative (a substring FALSE NEGATIVE loses data — test with names
+   embedded in attribute values, escaped quotes, and both span kinds).
+2. **Yield while walking.** The walk must periodically let the event loop breathe (an async
+   variant driven segment-by-segment / N-lines-per-tick, or a worker thread). Decide the shape
+   against the sync-by-design constraint in ndjsonLines' header — the async ripple is exactly what
+   was avoided before, so this needs a deliberate design pass, not a drive-by `await`.
+
+## Acceptance
+
+- [ ] Red-first: a test (or measured trail) demonstrating parsed-span count >> kept-span count
+      before, and parsed ≈ candidate count after the prefilter.
+- [ ] The no-window `get_cache_event_log` trail shows materially lower rss peaks than the
+      2026-08-13 baseline (4714MB peak at units=4M) on a comparable store.
+- [ ] `server status` answers during a no-window scan (the yield half), OR the card records the
+      explicit decision to defer the yield with its reason.
+- [ ] No span loss: prefilter false-negative cases pinned by tests.
+
+## Baseline evidence
+
+TRDD-34B9JAZK "2026-08-13 ~23:00" section (the sampled trail, verbatim) and
+`~/.agentlens/server.log`'s rss-sample lines from that run.
