@@ -119,7 +119,40 @@ export async function openStore(opts: StoreOptions): Promise<Store> {
     memory_limit: memoryLimit(opts),
     threads: String(opts.threads ?? DEFAULT_THREADS),
   })
-  const con = await inst.connect()
+  const rawCon = await inst.connect()
+
+  // Track every in-flight native async call, and refuse new ones once close() has begun. WHY
+  // (2026-08-13, four consecutive suite runs dead at exit 139): this connection is SHARED across
+  // call chains, so when mocha's timeout abandoned a test mid-`await con.run(...)` and teardown
+  // then called close(), the bare closeSync() freed the duckdb connection WHILE the abandoned
+  // query was still executing on the napi worker thread — SIGSEGV in duckdb::ClientContext::Query
+  // (pthread_mutex_lock on a freed address; node-2026-08-13-05*.ips). No caller can guarantee
+  // quiescence of a shared connection, so close() itself must interrupt, DRAIN, and only then
+  // free. The per-call instances (bodiesEvidence's withDuck, statuslineStore's openDuck) are safe
+  // by construction — their finally runs only after their own awaits settle — which is why the
+  // guard lives here and not there. Appender/prepared-statement OPERATIONS are sync on the JS
+  // thread (never on the pool), so tracking their async creation is sufficient.
+  const pending = new Set<Promise<unknown>>()
+  let closed = false
+  const con = new Proxy(rawCon, {
+    get(target, prop) {
+      const val = Reflect.get(target, prop, target)
+      if (typeof val !== 'function') return val
+      return (...args: unknown[]) => {
+        if (closed) throw new Error(`store connection used after close() — ${String(prop)}() refused (touching the native binding here is the use-after-free the crash reports show)`)
+        const out = (val as (...a: unknown[]) => unknown).apply(target, args)
+        if (out instanceof Promise) {
+          pending.add(out)
+          const drop = () => { pending.delete(out) }
+          // Attaching handlers to the ORIGINAL promise also marks an abandoned rejection as
+          // handled, so a query interrupted out from under a timed-out caller cannot take the
+          // process down as an unhandled rejection.
+          out.then(drop, drop)
+        }
+        return out
+      }
+    },
+  })
   // No spill. An over-limit query must fail, not silently write gigabytes to the SSD.
   await con.run("SET temp_directory = ''")
   // We never rely on row order (every read is keyed by body_id/pos), so let DuckDB parallelize freely.
@@ -151,12 +184,26 @@ export async function openStore(opts: StoreOptions): Promise<Store> {
     for (const r of rows) known.add(String(r.sha))
   }
 
+  // Single-flight: concurrent or repeated close() calls all await the ONE drain-then-free pass.
+  // Without this, a test that closes in-test and again in teardown would double-free natively.
+  let closePromise: Promise<void> | null = null
   return {
     // nextPart starts at 0 per store instance: it only disambiguates flushes WITHIN this store —
     // cross-process uniqueness comes from the pid+timestamp in partName(). Deriving it from the
     // directory's file count (the first scheme) was the collision bug.
     con, dir: opts.dir, known, nextPart: 0,
-    async close() { con.closeSync(); inst.closeSync() },
+    close() {
+      closePromise ??= (async () => {
+        closed = true // refuse new queries from this tick on (the Proxy guard above)
+        // Interrupt whatever is running so the drain is bounded: an abandoned scan settles by
+        // rejection in milliseconds instead of running to completion first.
+        try { rawCon.interrupt() } catch { /* nothing running — fine */ }
+        await Promise.allSettled([...pending])
+        rawCon.closeSync()
+        inst.closeSync()
+      })()
+      return closePromise
+    },
   }
 }
 
