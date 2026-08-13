@@ -3,7 +3,7 @@ trdd-id: 861LC4VW
 title: server restart reports a failed start and NOT RUNNING on a restart that succeeded
 column: human_review
 created: 2026-08-12T12:42:07+0200
-updated: 2026-08-12T13:03:23+0200
+updated: 2026-08-13T22:15:00+0200
 current-owner: claude-agentlenspro
 task-type: bugfix
 approval-tier: 0
@@ -97,10 +97,22 @@ working.
       missing symbol: `logSizeNow` was left in place and only the offset arithmetic was neutered, so
       the two scoping tests failed on content (`'a refusal by another process must not appear'`,
       `'expected an explicit "wrote nothing"'`) with the other 2237 tests untouched.
-- [ ] **NOT DONE — the `NOT RUNNING` half is unestablished.** `showStatus()` does not call
-      `logTail` at all (verified), so the status line has a different cause that this card has not
-      identified. Do not assume the fix above addresses it. Reproduce it first, against a scratch
-      `DATA_DIR`, or split it into its own card.
+- [x] **The second half is now ESTABLISHED and fixed (2026-08-13).** It recurred live at 19:23
+      during a deploy, with the scoped tail already in place — so the evidence was clean: restart's
+      own child lost the single-owner race to a concurrent hook's spawn (winner pid 65252), the
+      winner spent its first seconds BOOTING (first DB open is O(store)) and answered nothing, and
+      `findServerPid()` — which only recognizes a server that already SERVES — returned null. So
+      `startupVerdict` had `childExited && !anotherServing` and declared `died`; restart printed
+      `FAIL: the server exited during startup` while the winner came up healthy 16s later (status
+      then showed RUNNING pid=65252). The same boot-window blindness explains the original
+      `NOT RUNNING` status line: `showStatus()` probed the winner mid-boot and got connection
+      refused — a follow-on status after a restart that WAITS no longer lands in that window.
+      Fix: `startupVerdict` gains `raceWinnerAlive` — read from OUR OWN attempt's scoped log bytes
+      (`raceWinnerPid(logStart)`: the guard's refusal line names the winner) + a signal-0 liveness
+      probe; a live winner is a start in progress (`keep-waiting`), a dead one stays `died`, and
+      the ready deadline still bounds a winner that boots forever. The guard's message is untouched
+      (per Do NOT), historical refusals stay invisible (offset-scoped, tested), and a genuine death
+      with no refusal stays an immediate death.
 
 ## Do NOT
 

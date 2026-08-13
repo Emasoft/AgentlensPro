@@ -120,7 +120,16 @@ export async function ensureServer(): Promise<void> {
       // findServerPid() is only consulted when our child is GONE: our spawn also exits, correctly,
       // whenever another server won the single-instance race — and that case is a success, not a death.
       const anotherServing = childExited ? await findServerPid().catch(() => null) !== null : false
-      const verdict = startupVerdict({ answered, childExited, anotherServing, deadlinePassed: Date.now() >= deadline })
+      // findServerPid alone is NOT enough to recognize a lost race (TRDD-861LC4VW, second half,
+      // observed live 2026-08-13 19:23): it only sees a server that already SERVES, but a race
+      // winner spends seconds-to-minutes BOOTING first (first DB open is O(store)), during which
+      // it answers nothing — so the loser's exit was declared 'died' and restart printed FAIL
+      // while the winner came up healthy moments later. Our own child's scoped log names the
+      // winner ("Refusing to start: another ... server (pid N) already owns"); a LIVE pid there
+      // means the race was lost to a booting server: keep waiting for it to answer.
+      const winner = childExited ? raceWinnerPid(logStart) : null
+      const raceWinnerAlive = winner !== null && processAlive(winner)
+      const verdict = startupVerdict({ answered, childExited, anotherServing, raceWinnerAlive, deadlinePassed: Date.now() >= deadline })
       if (verdict === 'died') {
         throw new Error(`the server exited during startup — it never answered.${logProblem}\n${logTail(8, logStart)}`)
       }
@@ -157,15 +166,51 @@ export async function ensureServer(): Promise<void> {
  *  simply false — the server was up and serving. Naming the verdict makes the four cases testable and
  *  keeps them from drifting back into an implicit `for` bound.
  *
- *  `died` deliberately outranks `keep-waiting`: when our child is gone and nothing else is serving,
- *  the remaining budget can only delay a diagnosis the log already contains. */
+ *  `died` deliberately outranks `keep-waiting`: when our child is gone, nothing is serving, AND no
+ *  live race winner is booting, the remaining budget can only delay a diagnosis the log already
+ *  contains. `raceWinnerAlive` exists because `anotherServing` cannot see a winner that is still
+ *  BOOTING (it probes the endpoint, and a first DB open is O(store)) — without it, losing the
+ *  single-owner race to a concurrent hook's spawn read as a death and restart printed FAIL on a
+ *  restart that was succeeding (TRDD-861LC4VW, observed live 2026-08-13). */
 export type StartupVerdict = 'ready' | 'died' | 'keep-waiting' | 'timed-out'
 export function startupVerdict(o: {
-  answered: boolean; childExited: boolean; anotherServing: boolean; deadlinePassed: boolean
+  answered: boolean; childExited: boolean; anotherServing: boolean; raceWinnerAlive: boolean; deadlinePassed: boolean
 }): StartupVerdict {
   if (o.answered) return 'ready'
-  if (o.childExited && !o.anotherServing) return 'died'
+  if (o.childExited && !o.anotherServing && !o.raceWinnerAlive) return 'died'
   return o.deadlinePassed ? 'timed-out' : 'keep-waiting'
+}
+
+/** The pid of the server that WON the single-owner race against our own spawn, read from the bytes
+ *  OUR attempt appended to server.log (the guard's refusal line names the winner: "Refusing to
+ *  start: another AgentlensPro server (pid N) already owns"). Scoped by `fromOffset` for the same
+ *  reason logTail is — the shared, timestampless log holds refusals from other eras, and quoting a
+ *  historical winner as this attempt's would resurrect the exact confusion TRDD-861LC4VW documents.
+ *  Null when our attempt wrote no refusal (a genuine death stays a death). */
+export function raceWinnerPid(fromOffset: number): number | null {
+  try {
+    const fd = fs.openSync(serverLogPath(), 'r')
+    try {
+      const size = fs.fstatSync(fd).size
+      if (fromOffset >= size) return null
+      const len = size - fromOffset
+      const buf = Buffer.allocUnsafe(len)
+      fs.readSync(fd, buf, 0, len, fromOffset)
+      const matches = [...buf.toString('utf8').matchAll(/Refusing to start: another AgentlensPro server \(pid (\d+)\) already owns/g)]
+      if (matches.length === 0) return null
+      const pid = Number(matches[matches.length - 1][1])
+      return Number.isFinite(pid) && pid > 0 ? pid : null
+    } finally {
+      fs.closeSync(fd)
+    }
+  } catch {
+    return null // no log ⇒ no refusal evidence; the verdict falls back to the other signals
+  }
+}
+
+/** Signal-0 liveness probe. EPERM would also mean alive, but every process here is same-user. */
+function processAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true } catch { return false }
 }
 
 /** How long to wait for a freshly-spawned server to answer. Generous by default because the wait is
