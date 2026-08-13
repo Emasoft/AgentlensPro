@@ -10,7 +10,15 @@
 //      (spec 6). Before this existed the crash logs showed only span-ingestion lines and the offending
 //      endpoint could not be identified.
 import * as fs from 'fs'
+import * as os from 'os'
 import * as v8 from 'v8'
+
+// TRDD-34B9JAZK — heapPressure() (below) is blind to ~67% of this process's real footprint: at
+// steady state 860 MB heap sits inside a 2624 MB RSS, because DuckDB's native arena, Buffers and the
+// segment index never touch V8's old space. The server has died twice from a silent external kill
+// (no V8 OOM banner — heap looked comfortable both times) while serving the raw-body-scan tool
+// family. An external kill acts on RSS, not on `--max-old-space-size`, so heapPressure alone cannot
+// see it coming. rssPressure() (below) is the RSS-aware sibling.
 
 // ── 1. Atomic file write ──────────────────────────────────────────────────────
 
@@ -65,6 +73,34 @@ export function heapPressure(): { heapUsedMb: number; limitMb: number; hwmMb: nu
     ? absOverride
     : limitMb * (pct > 0 && pct < 1 ? pct : 0.85)
   return { heapUsedMb, limitMb, hwmMb, over: heapUsedMb >= hwmMb }
+}
+
+/**
+ * Current RSS pressure vs a configurable high-water mark. Unlike `heapPressure()`, there is no
+ * runtime-reported "true ceiling" for RSS the way V8 reports `heap_size_limit` for old-space — RSS
+ * is bounded by whatever external mechanism kills the process (a supervisor's memory cap, a cgroup,
+ * OS memory pressure), and that ceiling is not discoverable from inside the process. So `limitMb`
+ * is NOT a detected cap; it is `os.totalmem()`, reported only as context.
+ *
+ * The default high-water mark (`AGENTLENS_RSS_HWM_MB`, default 4096) is a fixed absolute constant,
+ * not a fraction of total system memory: this machine has 64 GB of RAM, and the two confirmed kills
+ * happened at an RSS in the 2.5-3 GB range while total-memory usage elsewhere was irrelevant to the
+ * killer's decision — a percent-of-total default (e.g. 75%) would compute to ~48 GB and never fire.
+ * 4096 MB leaves headroom below the lowest RSS actually observed just before a kill (2547 MB, logged
+ * seconds into a fresh boot already mid-scan) while staying well above ordinary idle RSS (~600 MB
+ * measured on a freshly booted scratch server). Override with `AGENTLENS_RSS_HWM_MB` (absolute) or
+ * `AGENTLENS_RSS_HWM_PCT` (fraction of `os.totalmem()`, for a deployment where the kill mechanism
+ * genuinely does scale with total RAM).
+ */
+export function rssPressure(totalMemMb = os.totalmem() / MB): { rssMb: number; limitMb: number; hwmMb: number; over: boolean } {
+  const rssMb = process.memoryUsage().rss / MB
+  const absOverride = Number(process.env.AGENTLENS_RSS_HWM_MB)
+  const pct = Number(process.env.AGENTLENS_RSS_HWM_PCT)
+  const DEFAULT_HWM_MB = 4096
+  const hwmMb = absOverride > 0
+    ? absOverride
+    : (pct > 0 && pct < 1 ? totalMemMb * pct : DEFAULT_HWM_MB)
+  return { rssMb, limitMb: totalMemMb, hwmMb, over: rssMb >= hwmMb }
 }
 
 // ── 3. Request log (ring buffer + rotating file) ──────────────────────────────

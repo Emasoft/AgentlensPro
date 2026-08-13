@@ -21,6 +21,7 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
 import { isDisallowedCrossOrigin, setAllowedOriginCors } from './httpOrigin'
+import { heapPressure, rssPressure } from './serverRuntime'
 import { calcTokenCostUsd } from './shared/pricing'
 import { contextTokens } from './shared/tokenBuckets'
 import type {
@@ -3336,6 +3337,22 @@ export interface McpServerOptions {
   getConsumptionEvents?: () => ConsumptionEvent[]
 }
 
+// TRDD-34B9JAZK — the raw-body-scan tool family: every tool that runs scanCacheCreationEvents,
+// scanSessionsAndResponses, or an equivalent bounded-but-not-free materialization over the
+// bodies/store directory. This is the traffic shape observed immediately before both silent kills
+// (a burst of get_cache_break_timeline + get_session_detail + run_diagnostics_sql calls). Named here
+// once so the shed check above and any future caller-side accounting share one list.
+const HEAVY_MCP_TOOLS = new Set<string>([
+  'get_cache_event_log',
+  'get_cache_break_timeline',
+  'get_cache_creation_report',
+  'trace_expensive_writes',
+  'get_session_detail',
+  'get_context_composition',
+  'get_call_context',
+  'run_diagnostics_sql',
+])
+
 export function createMcpServer(opts: McpServerOptions): Server {
   const server = new Server(
     { name: 'agentlens', version: '1.0.0' },
@@ -3357,6 +3374,34 @@ export function createMcpServer(opts: McpServerOptions): Server {
     const getAccount = opts.getAccount ?? null
     const getTtlContext = opts.getTtlContext ?? null
     const getRateLimits = opts.getRateLimits ?? null
+
+    // TRDD-34B9JAZK: this MCP endpoint (unlike standalone/server.ts's REST routes) had NO
+    // heap/rss-pressure gate at all — verified by reading both http.createServer entry points; only
+    // the REST `/api/*` handlers called heavyGuard(). That is a real gap, not a hypothesis: the tool
+    // family named in the incident (raw-body scans over otel-bodies / the Parquet store) runs
+    // EXCLUSIVELY through this handler, so a heap/rss ceiling wired only into server.ts never sees
+    // the traffic that has twice preceded a silent kill. Shed loud (an MCP error result, not a
+    // process death) instead of letting a heavy scan tip an already-pressured process over.
+    if (HEAVY_MCP_TOOLS.has(req.params.name)) {
+      const hp = heapPressure()
+      const rp = rssPressure()
+      if (hp.over || rp.over) {
+        const cause = rp.over ? `rss ${rp.rssMb.toFixed(0)}MB ≥ hwm ${rp.hwmMb.toFixed(0)}MB (of ${rp.limitMb.toFixed(0)}MB total)` : `heap ${hp.heapUsedMb.toFixed(0)}MB ≥ hwm ${hp.hwmMb.toFixed(0)}MB (limit ${hp.limitMb.toFixed(0)}MB)`
+        console.warn(`[AgentLens] mcp ${rp.over ? 'rss' : 'heap'}-pressure shed: ${req.params.name} — ${cause}`)
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              error: `collector under ${rp.over ? 'rss' : 'heap'} pressure — request shed to stay alive`,
+              tool: req.params.name,
+              heapUsedMb: Math.round(hp.heapUsedMb), heapHwmMb: Math.round(hp.hwmMb), heapLimitMb: Math.round(hp.limitMb),
+              rssMb: Math.round(rp.rssMb), rssHwmMb: Math.round(rp.hwmMb),
+            }),
+          }],
+          isError: true,
+        }
+      }
+    }
 
     let result: unknown
     switch (req.params.name) {

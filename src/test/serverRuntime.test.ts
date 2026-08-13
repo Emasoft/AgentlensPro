@@ -3,7 +3,7 @@ import * as assert from 'assert'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { atomicWriteFileSync, heapPressure, RequestLog } from '../serverRuntime'
+import { atomicWriteFileSync, heapPressure, rssPressure, RequestLog } from '../serverRuntime'
 
 function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'agentlens-runtime-'))
@@ -56,6 +56,65 @@ suite('serverRuntime — heapPressure', () => {
       assert.ok(Math.abs(p.hwmMb - p.limitMb * 0.85) < 1)
       assert.strictEqual(p.over, false)  // a test process uses far less than 85% of the limit
     } finally { if (prev !== undefined) process.env.AGENTLENS_HEAP_HWM_MB = prev }
+  })
+})
+
+suite('serverRuntime — rssPressure', () => {
+  // TRDD-34B9JAZK: heapPressure alone missed both silent kills — heap read comfortably (1768MB,
+  // 1002MB) while RSS (off-heap: DuckDB's arena, buffers, the segment index) was the thing that
+  // actually got the process killed. rssPressure is the gate the fix wires into the shed sites.
+  test('an absolute HWM override below current RSS reports over=true', () => {
+    const prev = process.env.AGENTLENS_RSS_HWM_MB
+    process.env.AGENTLENS_RSS_HWM_MB = '1'  // 1MB HWM — always exceeded by a running node process
+    try {
+      const p = rssPressure()
+      assert.strictEqual(p.over, true)
+      assert.strictEqual(p.hwmMb, 1)
+      assert.ok(p.rssMb > 1)
+    } finally { if (prev === undefined) delete process.env.AGENTLENS_RSS_HWM_MB; else process.env.AGENTLENS_RSS_HWM_MB = prev }
+  })
+
+  test('an absolute HWM override above current RSS reports over=false', () => {
+    const prev = process.env.AGENTLENS_RSS_HWM_MB
+    process.env.AGENTLENS_RSS_HWM_MB = '1000000'  // ~977GB — never exceeded
+    try {
+      const p = rssPressure()
+      assert.strictEqual(p.over, false)
+      assert.strictEqual(p.hwmMb, 1000000)
+    } finally { if (prev === undefined) delete process.env.AGENTLENS_RSS_HWM_MB; else process.env.AGENTLENS_RSS_HWM_MB = prev }
+  })
+
+  test('default HWM is the fixed 4096MB constant, NOT a fraction of total system memory', () => {
+    // A percent-of-total default would be wrong here: this repo's own dev machine has 64GB of RAM,
+    // and the two confirmed kills happened at ~2.5-3GB RSS — a percent-of-total default (e.g. 75%)
+    // would compute to ~48GB and never fire. See the doc comment on rssPressure() for the full case.
+    const prev = process.env.AGENTLENS_RSS_HWM_MB
+    const prevPct = process.env.AGENTLENS_RSS_HWM_PCT
+    delete process.env.AGENTLENS_RSS_HWM_MB
+    delete process.env.AGENTLENS_RSS_HWM_PCT
+    try {
+      const p = rssPressure()
+      assert.strictEqual(p.hwmMb, 4096)
+      assert.strictEqual(p.over, false)  // a test process uses far less than 4096MB RSS
+    } finally {
+      if (prev !== undefined) process.env.AGENTLENS_RSS_HWM_MB = prev
+      if (prevPct !== undefined) process.env.AGENTLENS_RSS_HWM_PCT = prevPct
+    }
+  })
+
+  test('AGENTLENS_RSS_HWM_PCT scales the HWM off the supplied total, not the real machine', () => {
+    const prev = process.env.AGENTLENS_RSS_HWM_MB
+    const prevPct = process.env.AGENTLENS_RSS_HWM_PCT
+    delete process.env.AGENTLENS_RSS_HWM_MB
+    process.env.AGENTLENS_RSS_HWM_PCT = '0.5'
+    try {
+      const p = rssPressure(8000)  // a synthetic 8000MB "total" — 50% -> 4000MB HWM
+      assert.strictEqual(p.hwmMb, 4000)
+      assert.strictEqual(p.limitMb, 8000)
+    } finally {
+      if (prev !== undefined) process.env.AGENTLENS_RSS_HWM_MB = prev
+      if (prevPct !== undefined) process.env.AGENTLENS_RSS_HWM_PCT = prevPct; else delete process.env.AGENTLENS_RSS_HWM_PCT
+    }
   })
 })
 
