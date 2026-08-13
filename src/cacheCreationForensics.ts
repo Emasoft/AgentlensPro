@@ -32,6 +32,7 @@ import { buildCallComposition, type CallComposition } from './contextComposition
 import { calcTokenCostUsd } from './shared/pricing'
 import { resolveBodiesReadScope } from './captureConfig'
 import { dataDir as agentlensDataDir } from './dataDir'
+import { makeRssSampler } from './serverRuntime'
 
 /**
  * Where the raw bodies are, resolved AT CALL TIME — the shared default for every raw-body reader.
@@ -217,7 +218,11 @@ export async function scanCacheCreationEvents(
   const prevIndex = indexRequestsByPreviousMessageId(requestSlice)
 
   const events: CacheCreationEvent[] = []
+  // In-scan rss trail (TRDD-34B9JAZK): each iteration reads a raw body of up to 64MB inside a
+  // blocking loop the request log cannot observe; every 100 files, one line to server.log.
+  const rssSample = makeRssSampler('raw-body-scan', 100)
   for (const r of responseSlice) {
+    rssSample()
     const body = readJsonBounded<RawResponseBody>(r.path, MAX_RESPONSE_BYTES)
     if (!body || !body.usage) continue
     const cc = numOr0(body.usage.cache_creation_input_tokens)

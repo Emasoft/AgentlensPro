@@ -113,6 +113,26 @@ export function rssPressure(totalMemMb = os.totalmem() / MB): { rssMb: number; l
   return { rssMb, limitMb: totalMemMb, hwmMb, over: rssMb >= hwmMb }
 }
 
+/** RSS/heap sampling from INSIDE a synchronous scan loop, every `everyN` units.
+ *
+ *  WHY (TRDD-34B9JAZK, third silent kill 2026-08-13 22:09): requests.log samples rss only when the
+ *  event loop serves a request, and the heavy diagnostic scans are SYNCHRONOUS — so every fatal
+ *  memory climb happened inside a window the instrumentation structurally could not see. Three
+ *  times, the log's last line was the tool start and the final rss reading (2790MB, under the
+ *  4096 HWM) was a FLOOR from before the climb. This sampler is called per scan unit and logs from
+ *  within the blocking loop itself, so the next climb leaves a progressive trail that brackets the
+ *  allocation site instead of vanishing. `memoryUsage()` is only read on the every-N branch —
+ *  the per-unit cost is one increment and one modulo. */
+export function makeRssSampler(label: string, everyN: number, log: (m: string) => void = console.log): () => void {
+  let n = 0
+  return () => {
+    n += 1
+    if (n % everyN !== 0) return
+    const m = process.memoryUsage()
+    log(`[AgentLens] rss-sample ${label} units=${n} rss=${Math.round(m.rss / MB)}MB heap=${Math.round(m.heapUsed / MB)}MB`)
+  }
+}
+
 // ── 3. Request log (ring buffer + rotating file) ──────────────────────────────
 
 export interface RequestLogEntry {

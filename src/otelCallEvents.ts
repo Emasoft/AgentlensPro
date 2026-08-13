@@ -21,6 +21,7 @@
 
 import { SegmentedSpanStore } from './segmentedSpanStore'
 import { dataPath } from './dataDir'
+import { makeRssSampler } from './serverRuntime'
 import type { Span, SpanAttribute } from './shared/telemetryTypes'
 
 export const API_REQUEST_SPAN = 'claude_code.api_request'
@@ -130,10 +131,15 @@ export function scanOtelCallEvents(opts: OtelScanOptions = {}): {
   // wrapping only the constructor would turn a degradation (fall back to the raw-body scan) into a
   // thrown error. On failure the partially-filled arrays are discarded with the fallback return,
   // exactly as an aborted loadRange used to yield nothing.
+  // In-scan rss trail (TRDD-34B9JAZK): this walk visits millions of spans synchronously, so the
+  // request log cannot sample during it — every 500k spans, one line to server.log brackets a
+  // climb that would otherwise end in a silent kill with no trace past the tool-start line.
+  const rssSample = makeRssSampler('otel-span-scan', 500_000)
   try {
     const store = new SegmentedSpanStore(spansDir, () => { /* read-only: ingest errors are not ours */ })
     store.forEachInRange(since, until, (s: Span) => {
       spansScanned += 1
+      rssSample()
       if (s.name !== API_REQUEST_SPAN && s.name !== COMPACTION_SPAN) return
       const a = attrMap(s.attributes)
       const sessionId = str(a.get('session.id'))

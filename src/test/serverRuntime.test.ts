@@ -3,7 +3,7 @@ import * as assert from 'assert'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { atomicWriteFileSync, heapPressure, rssPressure, RequestLog } from '../serverRuntime'
+import { atomicWriteFileSync, heapPressure, rssPressure, RequestLog, makeRssSampler } from '../serverRuntime'
 
 function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'agentlens-runtime-'))
@@ -164,5 +164,29 @@ suite('serverRuntime — RequestLog', () => {
   test('record never throws when no file path is configured', () => {
     const log = new RequestLog(null)
     assert.doesNotThrow(() => log.record(entry('/x')))
+  })
+})
+
+suite('makeRssSampler — the in-scan trail for the blind window (TRDD-34B9JAZK)', () => {
+  // WHY: three silent kills happened inside synchronous scans the request log cannot observe —
+  // the log's last line was the tool start every time. The sampler logs from INSIDE the loop,
+  // so the next fatal climb leaves a progressive rss trail instead of a floor reading.
+  test('logs exactly every N units, with the label and real rss/heap figures', () => {
+    const lines: string[] = []
+    const sample = makeRssSampler('test-scan', 3, (m) => lines.push(m))
+    for (let i = 0; i < 10; i++) sample()
+    assert.strictEqual(lines.length, 3, '10 units at every-3 → samples at 3, 6, 9')
+    assert.ok(lines[0].includes('rss-sample test-scan units=3'), lines[0])
+    assert.ok(lines[2].includes('units=9'), lines[2])
+    const m = /rss=(\d+)MB heap=(\d+)MB/.exec(lines[0])
+    assert.ok(m, `expected rss=/heap= figures, got: ${lines[0]}`)
+    assert.ok(Number(m![1]) > 0 && Number(m![2]) > 0, 'real process figures, not zeros')
+  })
+
+  test('below the threshold it logs nothing — a short scan costs no log lines', () => {
+    const lines: string[] = []
+    const sample = makeRssSampler('short-scan', 1000, (m) => lines.push(m))
+    for (let i = 0; i < 999; i++) sample()
+    assert.strictEqual(lines.length, 0)
   })
 })
