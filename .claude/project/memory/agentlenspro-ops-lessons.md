@@ -179,6 +179,337 @@ fall back loudly rather than emit a filter that strips nothing while reporting s
 
 Since v2.23.0 the CLI help contract is TOTAL (git/npm style): `--help`/`-h` ANYWHERE in argv routes to help and dispatches NOTHING — enforced by an intercept in `cliMain` (src/cli/main.ts) BEFORE the dispatch switch, with a `MANAGEMENT_VERBS` set gating network-free help for management verbs. WHY it must be this way: on 2026-08-05 `agentlenspro disable --help` EXECUTED the disable — it armed the DISABLED flag, stopped the server, and disarmed every hook machine-wide, because the old dispatcher matched the verb first and passed `--help` through as an ordinary arg. Any new verb added to the CLI inherits the intercept automatically; never add a verb-local `--help` handler that runs after side effects. Falsified tests: src/test/cliDispatch.test.ts ("help is TOTAL", 4 tests that failed 0/4 against the pre-fix bundle).
 
+
+^ATOM-LSGO-AIXS [desc:"Two 2026-08-06 bugs, one shape: the DETECTOR and the REPAIRER disagreed about the same condition, so setup reported drift forever and the repair could never land", keywords: setup_reports_drift_every_run_but_never_fixes_it repairer_detects_but_cannot_repair remove_by_substring_still_present_after_apply hook_re-registration_fails detector_and_writer_disagree a_converge_path_that_is_never_exercised setup_aborted_fail-fast_on_hooks, type: project, ocd: 2026-08-06, lmd: 2026-08-06]
+
+**A detector and its repairer must agree on the condition, or `setup` reports drift forever and never fixes it.** Hit TWICE on 2026-08-06, in unrelated code, with the identical signature — `setup` names a problem, claims to act, verifies, and FAILS, on every run.
+
+1. **Raw-body key (`telemetryConfig.ts`).** `cli/setup.ts` tested key PRESENCE; the writer's delete guard tested a VALUE match against `file:${bodiesDir}` resolved with capture OFF — which is the LEGACY dir by construction and can never equal a key holding the SPOOL path. Fixed by `ownedBodyValues` (every `file:` value the installer could have written).
+2. **Hook re-registration (`scripts/safe_config_edit.py`).** Re-registration IS `remove_by_substring(<cmd>)` then `append_unique(<cmd>)`. `verify_diff` asserted the removal's postcondition against the FINAL tree — after the append had legitimately re-added the needle — so it could never hold (`'agentlenspro gate' still present after apply`), and fail-fast then skipped skill/otel-env/server/final-test. Fixed by exempting exactly the values LATER ops on the same path re-add.
+
+
+^ATOM-TMP3-BABT [desc:"A converge path only runs when something has actually drifted, so a green setup exercises the DETECTOR and none of the REPAIRER", keywords: why_did_the_broken_repair_path_go_unnoticed a_green_setup_proves_nothing_about_the_repairer how_do_I_test_a_self-repairing_installer converge_path_never_exercised detection_and_repair_in_different_languages, type: project, ocd: 2026-08-06, lmd: 2026-08-06]
+
+**A green `setup` on a healthy machine proves the DETECTOR works and proves NOTHING about the REPAIRER.** This is why both 2026-08-06 convergence bugs stayed invisible for so long: a converge is only attempted when something has genuinely drifted, so every healthy run ("registrations current", "telemetry env current") emitted no ops and exercised no repair code at all. The repair path was dark until the day it was needed — which is precisely the day it has to work.
+
+**How to test one: break something first.** Run the repair against a genuinely drifted fixture, not a converged one. When detection and repair live in different files — or different languages, as here (a TypeScript detector and a Python writer) — pin their SHARED predicate with such a test, plus a counter-case, so a widened predicate cannot quietly degrade into "never assert". Both fixes ship exactly that pair.
+
+
+^ATOM-WOXQ-R1EO [desc:"A skip-optimization scoped to the wrong unit of work: skipping the re-ingest of an already-durable body also skipped its DELETE, so a fixed-size spool filled until capture died", keywords: spool_never_drains spool_100%_full raw_body_capture_stops_silently skipNames_strands_files file_ingested_but_never_deleted skip_optimization_skipped_the_delete_too ram_disk_fills_with_already_durable_files, type: project, ocd: 2026-08-07, lmd: 2026-08-07]
+
+`ingestPass` filtered `skipNames` out of the candidate list at the top of the pass. The set is
+seeded each boot from every `src_name` already in the Parquet store, and the intent was sound —
+do not re-read and re-hash a body the store already holds. But the candidate list is also what
+feeds the verify-then-DELETE gate, so the filter silently bought the read saving by giving up the
+reclaim: a durable body could never be deleted.
+
+On an unbounded disk that is invisible waste. On a fixed-size RAM spool it is terminal — the spool
+accumulates exactly the files the store already has, reaches 100%, and raw-body capture stops with
+no error anywhere. Measured 2026-08-06: 3,615 bodies stranded in a 2 GB spool, ~300 KB of headroom
+left, bodies being dropped. Fixed in `65207f4`: the skip applies to the INGEST only; an
+already-durable file still goes through the same gate (re-read, re-proven byte-identical plus its
+`(src_name, capture-ts)` row) before the unlink.
+
+**DO NOT** scope a skip-optimization to a whole pass when the pass does more than the work you meant
+to skip, BECAUSE the cheapest place to write the filter (one `.filter()` at the top) is also the
+place that silently drops every OTHER stage the candidate would have reached. **DO** apply the skip
+at the stage it names — here, guard the `ingestBody` call, not the candidate list — and assert the
+other stages still run on skipped items.
+
+
+^ATOM-2SUG-QGT8 [desc:"The bodies pass logged only when ingested > 0, so a pass that reclaimed thousands of files and ingested none printed nothing at all", keywords: pass_did_work_but_logged_nothing silent_success log_gate_on_the_wrong_counter ingested_0_so_nothing_printed reclaim_invisible_in_logs, type: project, ocd: 2026-08-07, lmd: 2026-08-07]
+
+`archiveOtelBodies` gated its whole report on `if (ingested > 0 || purged.length > 0)`. Once the
+reclaim path could run without ingesting anything, a pass that deleted thousands of files printed
+NOTHING — so the operator's only window onto the drain showed silence, which reads identically to
+"nothing to do". That is a large part of why the stranded-spool bug survived as long as it did.
+
+**DO NOT** gate a whole report on ONE of several counters, BECAUSE the counter you picked can be
+legitimately zero on a healthy path and then the report disappears exactly when the other work is
+happening. **DO** gate on the disjunction of every counter the report mentions (`ingested > 0 ||
+deleted > 0 || purged > 0`), and print each one so a zero is a stated fact rather than an absence.
+
+
+^ATOM-N4OI-OY30 [desc:"Reclaim runs ~1 file/s against ~0.8 files/s of arrivals, so a backlog clears over hours — judge a drain by deletions-from-a-snapshot, never by net file count", keywords: spool_still_full_after_the_fix did_the_deploy_work drain_rate net_file_count_hides_arrivals measure_deletions_not_totals backlog_takes_hours, type: project, ocd: 2026-08-07, lmd: 2026-08-07]
+
+Measured 2026-08-07 on the spool drain: 120 files deleted per 2 min against 94 arriving. The net
+count moved by only −26, and at one sample it moved UP — so "the file count is not falling" and
+"still 99% full" are both compatible with a drain that is working. Each reclaim reconstructs the
+body from DuckDB to prove it before unlinking, which is what caps throughput near 1 file/s; a
+multi-GB backlog therefore takes hours, and a pass in flight logs nothing until it finishes.
+
+**DO NOT** judge a drain (or any producer/consumer reclaim) by the total item count or free space
+minutes after a deploy, BECAUSE arrivals and deletions are superimposed in that one number and a
+healthy drain can look flat or negative. **DO** snapshot the item NAMES, re-snapshot later, and
+count the two directions separately (`comm -23` deleted vs `comm -13` arrived) — that is the only
+form that distinguishes "not draining" from "draining slower than it fills".
+
+
+^ATOM-2IIQ-XI6J [desc:"The bar every model-facing hook message must clear: own-project, actionable now, significant — anything else belongs in the CLI/dashboard, not an interruption", keywords: what_may_a_hook_say_to_an_agent advisory_got_removed why_doesn't_the_fan-out_warning_fire hook_noise_policy agent_context_injection_rules model-facing_text_bar, type: project, ocd: 2026-08-07, lmd: 2026-08-07]
+
+Ratified 2026-08-07 after an audit of what the gate hooks actually injected. Text AgentlensPro puts
+in front of a MODEL must clear all three:
+
+1. **OWN PROJECT** — never another project's session id, path, or agent types. Scoping matches the
+   caller's own SESSION first and its cwd second: a worktree-isolated subagent runs in a different
+   directory by design, so cwd alone silenced the advisory for exactly the fan-out shape most
+   likely to be expensive. It fails QUIET — an unidentifiable caller gets silence, because an
+   unprovable match must not become a claim.
+2. **ACTIONABLE NOW** — the caller can change what it is about to do. "Go run investigate_burn
+   later" is a CLI answer, not an interruption.
+3. **SIGNIFICANT** — a real anomaly, not the expected cost of normal work.
+
+Failing that bar cost two advisories outright (`FAN_OUT_COLD_START`, whose own text ended "No
+action needed"; `THRASH_UNATTRIBUTED`, about writes provably attributable to nobody) and stripped
+foreign identities from the denies, the stall messages, and the thrash suspects. Nothing left the
+DETECTION — but be exact about what that does and does not mean, because the comfortable version of
+this sentence was wrong: `thrash.unattributed` and `coldStartSessions` had NO consumer outside the
+gate, so they are still computed and now surfaced NOWHERE. Giving them a home is open work.[^24]
+
+**DO NOT** add a hook message because it explains a real finding, BECAUSE each of the removed ones
+was added exactly that way — to help a HUMAN reading a debug session — and explaining is not
+interrupting; the reader in production is a busy agent that cannot act on it. **DO** ask the three
+questions above before adding any hook text, and put anything that fails them behind an explicit
+request instead. [^24]
+
+
+^ATOM-OLKB-N7AV [desc:"Every gate code has TWO model-facing emitters — buildAdvisory (PostToolUse) and evaluateAgentGate (PreToolUse warn) — so changing one leaves the other firing", keywords: removed_the_advisory_but_it_still_fires gate_code_emitted_twice PostToolUse_advisory_and_PreToolUse_warn_twin changed_buildAdvisory_but_the_warning_persists, type: project, ocd: 2026-08-07, lmd: 2026-08-07]
+
+`src/agentGate.ts` reaches a model through two independent paths that share the same code names:
+
+- `buildAdvisory(state)` → PostToolUse → `hookSpecificOutput.additionalContext`
+- `evaluateAgentGate(...)` → PreToolUse → `systemMessage` (warn) / `permissionDecisionReason` (deny)
+
+`THRASH_UNATTRIBUTED` and `FANOUT_HEADSUP` each existed in BOTH. Removing one branch leaves the
+other emitting the identical message, and the tests for the two live in different suites, so a
+green run proves nothing about the twin.
+
+**DO NOT** treat a gate code as fixed after editing `buildAdvisory`, BECAUSE the PreToolUse twin is
+a separate branch a hundred lines away that no failing test will point you to. **DO**
+`grep -n "'<CODE>'" src/agentGate.ts` and expect TWO hits before believing a change is complete —
+and remember the deny path renders through a third field again.
+
+
+^ATOM-GZJG-RS6I [desc:"Streaming the FILE fixed half of it — loadRange still held every span, so an unbounded query OOM'd the server at 4GB", keywords: server_died_on_a_tool_call socket_hang_up_pid_changed JavaScript_heap_out_of_memory Ineffective_mark-compacts get_cache_event_log_kills_the_server unbounded_query no_--window loadRange_materializes streaming_the_file_is_not_streaming_the_query, type: reference, ocd: 2026-08-07, lmd: 2026-08-07]
+
+**Reading incrementally while accumulating everything is still O(all).** ATOM-DMTT-DOCU made
+`segmentedSpanStore.loadRange` stream each segment through `ndjsonLines.ts` instead of one
+`readFileSync` — which fixed the >512 MB *string* limit and looked like "the store streams now". It
+did not: every in-window span was still pushed into ONE returned array. So on 2026-08-07
+`agentlenspro get_cache_event_log` with no `--window` (the default — `windowHours` is optional and
+`undefined` means all of history) materialized ~1M span objects to keep the `api_request` ones, and
+died with `FATAL ERROR: Ineffective mark-compacts near heap limit — JavaScript heap out of memory`
+at ~4 GB after 62 s. Memory tracked the WINDOW, not the answer: 1 h→19 MB, 24 h→478 MB, 168 h→dead,
+for a result that was 7 rows at every size. It degrades with store age rather than failing on day
+one, which is how it shipped.
+
+Fix: the store exposes `forEachInRange(since, until, visit)` and `loadRange` is a thin wrapper over
+it, so a selective reader's peak memory follows what it KEEPS. Measured after, across a 168× window
+range: 69/121/147/170 MB; the unbounded query now completes in 36 s over 184,212 calls.
+
+Three things worth carrying:
+- **The default was NOT capped.** A window cap hides an accumulation instead of removing it, and
+  turns a legitimate full-history question into a silently partial answer.
+- **One server owns the machine's data dir**, so a tool that OOMs stops ingestion for EVERY project
+  — a per-tool memory bug is a machine-wide outage.
+- **The silence was already solved.** `mcpServer.ts` logs `tool <name> start` precisely because a
+  wedged or aborted handler never logs a completion: the last start with no matching `done` IS the
+  culprit. An OOM is a fatal V8 abort, uncatchable, so nothing in-process could say more.
+
+
+^ATOM-IALX-LKC6 [desc:"Exit 1 is the watchers' ABORT signal, so a caller mistake must exit 64 via UsageError; and 'help <verb>' must answer from static USAGE for every management verb", keywords: cli_returned_exit_1_for_a_typo why_did_my_batch_abort_on_a_bad_flag exit_code_64_EX_USAGE_convention agentlenspro_help_verb_says_unknown_tool agentlenspro_list_does_not_show_cli_verbs server_expects_start_stop_restart_status_exit_code, type: project, ocd: 2026-08-12, lmd: 2026-08-12]
+
+**Exit 1 is NOT the generic failure code — it is the watchers' ABORT signal** (`src/cli/cliErrors.ts`
+reserves it, and `budget --watch` uses it to mean "stop the run"). So a caller mistake must exit
+**64** (`EX_USAGE`) or a typo becomes indistinguishable from a legitimate abort: the batch stops,
+and the operator goes hunting for a burn that never happened. `standalone/cli.ts` maps the ERROR
+TYPE, not the site — `e instanceof UsageError ? EXIT.USAGE : 1` — so the fix for a verb with the
+wrong code is to throw `UsageError`, never to hardcode 64 at the throw site (that would drift the
+moment the mapping moves).
+
+Found by RUNNING every verb, not by review: `agentlenspro server` (subcommand omitted) exited 1
+while `budget`, `watch` and `ctxmap` all exited 64 for the identical missing-argument shape. Each
+site reads fine alone; only the matrix makes the inconsistency visible.
+
+**`help <verb>` must answer for every management verb, from static USAGE, touching no socket** —
+the same doctrine as ATOM-9B2N-KU2R's "help is TOTAL" (recall it by id, not a wikilink — a `[[…]]`
+target is a page `name:`, and an atom id is not one). It did not: every management verb fell
+through to the diagnostics path, which resolves names against the SERVER'S live tool schema, and
+failed with `unknown tool "budget" (agentlenspro list)`. The remedy that message named leads
+nowhere — `list` enumerates diagnostics tools only, never CLI verbs — so the user was sent to the
+one command that cannot answer them. An UNRECOGNISED name must still fall through and fail loudly:
+answering a typo with usage and exit 0 would be worse than the dead-end, because nothing would tell
+the user the name was wrong.
+
+
+^ATOM-PJAW-P8XT [desc:"The delete gate's read-back is served from the page cache, so it proved readability not durability; the fsync barrier is gated on whether the SOURCE was durable, and F_FULLFSYNC is unavailable in Node", keywords: is_the_parquet_part_actually_durable_before_we_delete_the_source verify_before_delete_page_cache does_fsync_guarantee_data_on_disk_macos F_FULLFSYNC_not_available_in_node reclaim_only_1_file_per_second duckdb_round_trips_per_file_in_the_delete_gate, type: project, ocd: 2026-08-12, lmd: 2026-08-12]
+
+**A read-back proves READABILITY, not DURABILITY — the page cache answers it.** The universal
+delete gate (`src/store/ingestPass.ts`) flushes Parquet, reconstructs each body FROM the store,
+compares sha256 against the source file's own bytes, and only then unlinks. That ordering is
+sound, but `flush()` never fsynced, and the comment above it called the part "durable". A read
+issued microseconds after a write is served from the OS page cache, so the gate could pass on
+bytes that had not reached the platter.
+
+**Severity depends ENTIRELY on whether the SOURCE was durable, which is why the barrier is gated
+rather than global.** Draining the RAM-disk spool: the source is volatile anyway, so a power loss
+takes it either way and the barrier buys ~nothing. Draining the LEGACY SSD bodies dir: the source
+was safely on disk, and deleting it after a non-durable flush can lose data that was already
+safe. The spool back-pressure valve redirects INTO that SSD dir under pressure, which is what
+turned this from latent to live.
+
+**`fs.constants.F_FULLFSYNC` is `false` in Node (verified empirically).** So on macOS pure Node
+cannot force the drive's own write cache to media — `fsync(2)` asks the OS to flush its buffers to
+the device, which is a real improvement over never asking, but not a guarantee against power loss
+on a drive with a volatile cache. Say that, do not claim more.
+
+**Throughput: the gate was ~2 DuckDB round trips PER FILE** (reconstruct, then the row/ts query),
+so a 200-file batch was ~400 round trips ⇒ ~1 file/s (~53 MB/min) against ~80 MB/min burst inflow.
+That inequality — not flush cadence, not spool size — is what dropped bodies. Batched to one bulk
+row/ts query plus chunked reconstruction (32/query, NOT unbounded: 200 × ~881 KB is ~176 MB of
+strings in one result set) ⇒ ~15 round trips. **What is proven did not change, only how it is
+executed** — and a body missing from the bulk result map must default to NOT-ok, so a silently
+dropped row can never authorize a delete.
+
+
+^ATOM-OL89-HIFU [desc:"freePort is a TOCTOU claim; two mitigations are needed, the retry must match the PORT TEXT not a bare exit(1), and npx mocha <file> does not isolate because .mocharc adds a spec glob", keywords: port_already_in_use_in_CI_but_passes_on_rerun flaky_test_only_on_one_matrix_leg freePort_race_between_probe_and_listen retry_swallowed_a_real_startup_failure npx_mocha_single_file_still_runs_whole_suite mocharc_spec_glob_does_not_isolate, type: project, ocd: 2026-08-12, lmd: 2026-08-12]
+
+**A "free port" probe is a TOCTOU claim with a very short shelf life.** The classic helper —
+`listen(0)` → read the port → `close()` → resolve — proves the port was free AT PROBE TIME only.
+Between that close and the child's own `listen()`, the OS may hand the same ephemeral port to
+anything, including another test's server in the same run. Retrying the ASSERTION cannot help: the
+child already exited. Diagnosed from CI run 31139375893, where `build-and-test (20)` died on
+`Port 33097 (OTLP) already in use` while `(22)` passed **at the identical commit** — a leg passing
+is what distinguishes a race from a regression.
+
+Two mitigations, because neither alone closes the window: an in-process claimed-set (the only
+collision source we can see — mocha runs the whole suite in ONE process) and a bounded spawn-retry
+on a FRESH port (a claimant outside this process). Do NOT "fix" it with disjoint per-file port
+ranges: that trades a rare race for a permanent collision, and CI runners are not exclusive.
+
+**The retry matcher is where this gets dangerous, and it is subtle.** Matching a bare
+`exited early (code=1)` makes EVERY exit(1) retryable — so a genuine startup failure burns three
+attempts and is then reported as port contention, with the real reason buried. Match the PORT TEXT
+only: both the server's own message and Node's raw `EADDRINUSE` contain "already in use", so no
+real port case is lost. This is not hypothetical — `serverSingleInstance.test.ts` asserts a
+DELIBERATE exit(1) ("Refusing to start") that such a retry would swallow, and it is one
+`spawnServerWithRetry` call away from being wrapped.
+
+**The mocha-isolation trap that bites while verifying this is its own atom — see ATOM-TEPQ-RXBX.**
+
+
+^ATOM-TEPQ-RXBX [desc:"npx mocha <file> AND --spec both run the full suite here; only --grep narrows, so verify the passing COUNT", keywords: mocha_isolate_single_file run_one_test_file npx_mocha_file_runs_whole_suite --spec_does_not_isolate --grep_narrows_mocha test_passes_in_isolation mocharc_spec_glob, ocd: 2026-08-12, lmd: 2026-08-12]
+
+**No mocha flag isolates a single test FILE in this repo — only `--grep` narrows, and you must
+verify the COUNT.** `.mocharc` sets `spec: ['out/test/test/**/*.test.js']`, and a positional
+filename is ADDED to that glob rather than replacing it, so `npx mocha <file>` silently runs the
+whole suite. Measured 2026-08-12: `--spec out/test/test/serverLogTailScope.test.js` ran all 2239
+tests too — identical to the positional form — while `--grep "scoped to THIS attempt"` ran 5 tests
+in 21 ms.
+
+**An earlier version of this lesson recommended `--spec` as the remedy.** That is worse than having
+no lesson: the reader believes they isolated a file, sees green, and concludes "it passes in
+isolation" — the exact false conclusion the lesson exists to prevent, now carrying the authority of
+a documented fix. So the durable instruction is not a flag at all: read the `N passing` line and
+check it against how many tests that file defines. A count is evidence; a flag is a hope.
+
+Practical consequence: a full-suite run is ~1 min here, so "isolation" is rarely worth chasing. Use
+`--grep` when you genuinely need one test (falsification runs, where an unrelated red would muddy
+the result), and otherwise just run the suite and read the delta against the known baseline.
+
+
+^ATOM-CVM9-3JPN [desc:"heap was the wrong number: 67% of the footprint is off-heap, and a silent kill means SIGKILL on RSS, not a V8 heap OOM", keywords: server_killed_silently server_OOM_not_heap rss_vs_heap_node max-old-space-size_does_not_bound_rss requests.log_heap_only ineffective_mark-compacts server_restarted_fresh_pid off-heap_duckdb_memory how_to_diagnose_a_process_kill, ocd: 2026-08-12, lmd: 2026-08-12]
+
+**Heap alone cannot diagnose this server's death — ~67% of its footprint is off-heap, and
+`--max-old-space-size` bounds neither that nor RSS.** Measured 2026-08-12 on a HEALTHY server: heap
+860 MB against RSS 2624 MB (DuckDB's native arena, buffers, the segment index). So the OOM
+post-mortem in TRDD-34B9JAZK stalled three separate times on a number that could not answer it —
+`requests.log` recorded heap ONLY, and heap sat at 1768 MB against a 6144 MB cap right up to the
+kill, which reads as perfectly healthy.
+
+**The discriminator is whether the death ANNOUNCES itself.** A V8 heap OOM prints `FATAL ERROR:
+Ineffective mark-compacts near heap limit` — the out-of-process run did exactly that at ~4 GB. The
+server instead went SILENT for 68 seconds and returned as a fresh pid, which is the signature of an
+external SIGKILL, and an external kill acts on RSS. So "the server hit its heap limit" was never
+supported by the evidence that was collected for it.
+
+Every logged line now carries `heap=…MB rss=…MB` from a SINGLE `process.memoryUsage()` call — two
+calls would sample different instants and could report `rss < heap`, which is impossible and would
+discredit the trace it exists to make trustworthy. The crash itself is NOT fixed; this is the
+instrumentation that makes the mechanism establishable. See ATOM-GZJG-RS6I for the earlier,
+genuinely-fixed half (loadRange materializing every span).
+
+
+^ATOM-E5VV-1E9P [desc:"a fixture re-reading Date.now() across the code's own setImmediate yield; and 'flaky under load' was a false premise — it failed 7/20 in isolation", keywords: flaky_test_under_load test_fails_intermittently_identical_code wall_clock_in_test_fixture Date.now_re-evaluated_per_call setImmediate_yield_changes_timestamp tie-break_picks_wrong_session isolate_the_test_and_count_failures mine_!==_foreign, ocd: 2026-08-12, lmd: 2026-08-12]
+
+**A test fixture that re-reads the wall clock is nondeterministic wherever the code under test
+yields.** `cacheExpiry.test.ts` built its shared timeline as `() => [apiRequestAt(iso(1))]`, so
+`Date.now()` was sampled fresh on EVERY call. `getTimeline` runs once per session
+(`mcpServer.ts:2013`) and `scanWithBudget` awaits `setImmediate` between items
+(`mcpServer.ts:3053`), so the later-processed card got a strictly newer millisecond and the
+strict-greater tie-break `ms > newestMs` (`mcpServer.ts:2157`) crowned whichever card the scheduler
+reached second. Fix: capture the value ONCE (`const activityAt = iso(1)`).
+
+**The PRODUCT code was correct and unchanged** — strict-greater over millisecond timestamps with a
+real yield is right for real sessions. Two independent signposts had already said so and both were
+walked past: the comment two lines above the defect warned that a per-card timestamp "would let the
+precision ranking, not the scope filter, decide the winner" (the fixture created exactly that), and
+the same file already defined a frozen `NOW` at line 16, "fixed clock so tests are deterministic",
+which this one suite did not use.
+
+**The card's premise was the expensive part, not the bug.** Every sighting called it a
+full-suite-LOAD flake, which points the search at cross-test pollution. Measured: 7 failures in 20
+runs with that ONE test alone in the process; load raises the rate, it was never required. Before
+accepting "flaky under load", run it ISOLATED n times and count — the isolated rate is what tells
+you whether the nondeterminism is inside the test or between tests. Evidence 7/20 → 0/20.
+
+
+^ATOM-C0VK-5JHE [desc:"an unscoped tail of the shared untimestamped server.log quotes foreign history, and a refusal names the pid that WON — so a healthy restart reads as a failure", keywords: refusing_to_start_but_server_is_running restart_looks_like_it_failed server.log_shows_another_pid log_tail_shows_old_errors shared_append-only_log_no_timestamps another_server_already_owns_this_data_directory diagnosis_quotes_foreign_process, ocd: 2026-08-12, lmd: 2026-08-12]
+
+**`server.log` is ONE append-only file shared by every process that ever started a server for a
+data dir, and it has NO timestamps — so an unscoped tail quotes other processes' history as if it
+diagnosed the command you just ran.** Measured 2026-08-12: 29 accumulated refusal blocks in a 15 MB
+log, naming FOUR different owner pids, three lines per block — so a default 8-line tail straddled
+~2.7 unrelated eras.
+
+**The inversion is the damage, not the noise.** A refusal names the pid that WON — "another server
+(pid N) already owns this data directory" — so a tail printed under a failed command reads as "N
+failed to start" when N is the healthy server protecting you. That misreading costs a restart that
+was never needed, and on a machine running many sessions a restart interrupts all of them. The
+original bug report drew exactly this wrong conclusion, and blamed a retry loop that does not exist
+(`ensureServer` spawns ONCE and already reports the SERVING pid, not the child).
+
+Fix: `logTail(lines, fromOffset)` reads only bytes appended since our own spawn (`logSizeNow()`
+captured immediately before `spawn`). An attempt that wrote nothing says so; a log rotated underneath
+is reported as rotated rather than quoted from a stale offset; the header states the scope, because
+"the last 8 lines" and "the last 8 lines WE wrote" are different claims. The guard's message is not
+silenced — trading a false alarm for a silent one would be worse.
+
+
+^ATOM-N8GX-ZQI3 [desc:"suite dies at exit 139 / SIGSEGV in duckdb.node / red tests move between runs — closing a shared DuckDB connection under an in-flight query", keywords: suite_dies_exit_139 mocha_runner_killed_SIGSEGV node_crash_report_duckdb.node test_suite_exit_code_139_no_assertion closeSync_segfault red_tests_move_between_runs duckdb_use_after_free connection_closed_while_query_running, ocd: 2026-08-13, lmd: 2026-08-13]
+
+A SHARED DuckDB connection must never be closeSync()'d while a query can still be in flight on the napi worker thread — the failure is a NATIVE SIGSEGV (ClientContext::Query -> pthread_mutex_lock on freed memory) or an indefinite process wedge, not a JS error. The reachable trigger: mocha's timeout abandons a test mid-await (the promise keeps running), teardown then calls store.close(). Fixed at a43251f: openStore wraps the connection in a Proxy that tracks in-flight calls and refuses post-close ones; close() = interrupt() + drain (Promise.allSettled) + closeSync, single-flight. Per-call instances (withDuck/openDuck) are safe by construction: their finally runs only after their own awaits settle. Pinned by src/test/storeCloseSafety.test.ts (red-first: 2 failing + an 11-minute wedge on unfixed code).
+
+
+^ATOM-QIF6-MVG7 [desc:"diagnostics answers change between runs / session turn count shrinks / fact DB misses an event the classifier saw — any reader on the raw spool alone is wrong; use bodiesEvidence, memory-flat", keywords: turn_count_shrinks_between_runs fact_db_missing_event diagnostics_answer_changed spool_file_deleted_by_drain evidence_base_volatile indexer_reads_only_spool unclassified_events_preset forensics_db_coverage_gap, ocd: 2026-08-13, lmd: 2026-08-13]
+
+The forensics fact DB (FAL, api_calls) and every raw-body diagnostic MUST source from the store∪spool evidence base (src/store/bodiesEvidence.ts: listBodyEvidence + loadBodyTexts), never the raw spool alone — the ingest drain deletes spool files once Parquet provably holds them, so a spool-only reader's answers change with WHEN you ask (measured: classifier saw 01:08Z, fact DB covered 01:28-01:50; a session's turn count shrank 172→145 between identical queries). Landed c783091 (indexer) + 08e1c35 (cacheBreakTimeline). Two invariants ride along: (1) the union is complete BY CONSTRUCTION via the delete gate; (2) request processing must stay MEMORY-FLAT — derive content tags inside the load chunk and retain only scalars, never raw text (retaining rawText measured ~1.8GB/5h window, the TRDD-34B9JAZK RSS-kill shape). Presets unclassified_events + schema (56eddb0) are the drill-down entry points.
+
+
+^ATOM-LE8M-IRMJ [desc:"every CLI diagnostic returns rpc error (undefined) / MCP calls all fail but server logs 200s / Already connected to a transport — the shared Protocol instance wedge", keywords: rpc_error_undefined all_mcp_tools_fail already_connected_to_a_transport tools_list_fails cli_cannot_reach_mcp_but_server_up mcp_endpoint_wedged_until_restart one_server_instance_per_connection, ocd: 2026-08-13, lmd: 2026-08-13]
+
+The MCP HTTP endpoint must build ONE SDK Server (Protocol) instance PER CONNECTION — never share one across requests. The SDK's Protocol tracks exactly one transport; a shared instance wedges on overlapping clients with 'Already connected to a transport' and then fails EVERY rpc (tools/list included) as 'rpc error (undefined)' (the CLI's rendering of the 500 body) while the HTTP layer keeps logging 200s — a permanent outage that only a restart clears. Fixed 396d3bb: handleMcpRequest takes a Server factory; each request closes transport + server on response close. createMcpServer is closure-only (no I/O), so per-request instances cost microseconds. Falsification note: the wedge interleave lives in the SDK's async machinery and could not be forced in-process (a sync block serializes the event loop); the recorded red is the live raw-JSON-RPC probe.
+
+
+^ATOM-57QU-GOU1 [desc:"force-push or history rewrite blocked on main / baseline restore reverted the admin bypass / who may bypass baseline-history-protect on AgentlensPro — owner-ordered deviation, do not restore", keywords: force_push_blocked_on_main cannot_rewrite_history_main non_fast_forward_denied baseline_restore_reverted_bypass history_protect_bypass_owner ruleset_drift_false_positive, ocd: 2026-08-13, lmd: 2026-08-13]
+
+OWNER RULING (2026-08-13, verbatim: 'both the baseline-history-protect and the baseline-pr-and-check must be changed to allows mutations in history and direct pushing/merging by the owner'): on the AgentlensPro repo, baseline-history-protect carries a DELIBERATE deviation from the ratified pair — bypass_actors [{actor_id:5, RepositoryRole, always}] so the owner/admin may force-push and delete on main. Applied 2026-08-13T16:08:34+02:00 via PUT rulesets/18778596; verified current_user_can_bypass=always. baseline-pr-and-checks already carried the identical admin bypass (ratified shape) — no change was needed there. Any baseline-restore/drift pass MUST NOT strip this bypass back to the ratified empty list on this repo — that would revert a Tier-3 owner decision as if it were drift.
+
+## See also
+
+- [[ssd-write-economics]] — what the drain is ultimately protecting: the SSD write budget, why the
+  RAM spool is the whole margin, and why batching is only the enabler of compression.
+
 ## Notes and lessons learned
 
 [^1]: [id:ATOM-SETTINGS-WIPE-GUARDRAIL, status:valid, keywords:"config_file_wiped_or_corrupted_after_edit settings.json_wiped safeConfigEdit_guard start_fresh_on_parse_failure_removed", ocd:2026-07-11, lmd:2026-07-11] promoted from the old-repo LOCAL note
@@ -342,3 +673,4 @@ Since v2.23.0 the CLI help contract is TOTAL (git/npm style): `--help`/`-h` ANYW
 [^21]: [id:ATOM-SFJF-ZAN0, status:valid, desc:"Leak-shaped examples are leaks to a shape-based checker - even inside the note describing the incident", keywords:"identity_check_flags_memory_page home_path_example_in_note check-identities_scans_memory example_path_blocks_CI defang_examples_in_docs", ocd:2026-08-02, lmd:2026-08-02] DO NOT spell a home-path-shaped or email-shaped example literally in ANY tracked file — including PROJECT memory pages — BECAUSE check-identities is shape-based and scans everything tracked/shipped, so the example itself blocks CI (it did, twice today: a code comment, then the memory note DESCRIBING that incident). DO describe the shape in words (a home-path-shaped example) or use the documented placeholders.
 [^22]: [id:ATOM-QJAG-2CZ8, status:valid, desc:"A test that reads the LIVE capture dir must pass scanCap — uncapped, its runtime is set by the user's traffic", keywords:"test_suddenly_times_out_with_no_code_change test_scans_the_live_capture_directory suite_got_slower_overnight scanCap_in_tests flaky_slow_test_real_corpus", ocd:2026-08-04, lmd:2026-08-04] DO NOT let a test read the live capture directory (`~/.agentlens/otel-bodies` or the RAM-disk spool) without a `scanCap`, BECAUSE that directory grows with the machine's own activity — measured 1,377 → 5,467 files in a single evening — so the test's runtime is a function of how busy the user was, and it will blow its timeout one day with no code change behind it (two did, in the deploy gate, and the first instinct is to hunt a regression that does not exist). DO pass `scanCap` (300 is plenty) and let the report's own coverage block state that it sampled: 120 s+ timeouts became 2.1 s / 2.3 s / 5.5 s and the whole suite went 9 min → 52 s.
 [^23]: [id:ATOM-D1ML-AFSH, status:valid, desc:"the same pnpm 'safeguard disabled' proposal has now been refused TWICE — a refusal does not suppress the janitor's re-proposal", keywords:"janitor_proposes_the_pnpm_safeguard_is_disabled_again package-manager_safety_knob_disabled_ticket PKGPOL-001_keeps_coming_back I_already_refused_this_proposal_why_is_it_back dedupe_key_did_not_suppress_a_refused_ticket second_refusal_of_the_same_finding", ocd:2026-08-05, lmd:2026-08-05] DO NOT re-adjudicate this finding from scratch when the janitor proposes it AGAIN, and do not dispatch its agent on approval, BECAUSE it has now been refused TWICE on the same false premise — TRDD-JJFGDV3W, then TRDD-9COGK66W on 2026-08-05 — and `ticket-dedupe-key: PKGPOL-001:package-manager config` did NOT suppress the second one. A refusal records the verdict; it does not stop the detector. So the cost recurs every time unless someone recognises it, which is exactly what this lesson is for. DO run the ONE command that settles it — `pnpm config get minimumReleaseAge trustPolicy blockExoticSubdeps` — and refuse again if it reports 7200 / no-downgrade / true (it did on 2026-08-05). Note the trap that makes the proposal plausible: its body is mechanically CORRECT (pnpm ignores `package.json#pnpm`) and only its CONCLUSION is wrong, so skimming it reads as sound. Dispatching is worse than wasteful — the proposed fix edits `package.json#pnpm`, which the janitor's own `pkg-manager-guard` hook refuses, pitting a janitor agent against a janitor guard over a non-problem. The dedupe failure belongs upstream in the janitor plugin, never as an edit from here.
+[^24]: [id:ATOM-GERK-9WB1, status:valid, supersedes:ATOM-2IIQ-XI6J, desc:"The 'nothing was lost, it is still available over there' clause is a claim about a CONSUMER — grep for one before writing it", keywords:"claimed_the_data_is_still_visible_somewhere removed_a_consumer_and_said_nothing_was_lost nothing_was_lost_claim_unverified detection_still_runs_but_is_surfaced_nowhere", ocd:2026-08-07, lmd:2026-08-07] DO NOT write "the detection still reaches X" when removing the thing that displayed it, BECAUSE that sentence is a claim about a CONSUMER, not about the detector, and it is the single most comforting thing to assert and the least likely to have been checked — here the retired `thrash.unattributed` / `coldStartSessions` had NO consumer outside the file being edited, so removing the advisories left them computed and surfaced nowhere, and the false reassurance was copied verbatim into the code comment, the CHANGELOG, the commit message and this page before a review caught it. DO run the grep for a reader of the field FIRST (`grep -rn "<field>" src/ standalone/ media/ | grep -v <the file you are editing>`), and if it comes back empty, say so: "computed, currently surfaced nowhere — giving it a home is open work." SUPERSEDED BODY: Ratified 2026-08-07 after an audit of what the gate hooks actually injected. Text AgentlensPro puts in front of a MODEL must clear all three: 1. **OWN PROJECT** — scoped to the caller's own cwd. Never another project's session id, path, or agent types. Scoping is exact-cwd and fails QUIET: an unidentifiable caller gets silence, because an unprovable match must not become a claim. 2. **ACTIONABLE NOW** — the caller can change what it is about to do. "Go run investigate_burn later" is a CLI answer, not an interruption. 3. **SIGNIFICANT** — a real anomaly, not the expected cost of normal work. Failing that bar cost two advisories outright (`FAN_OUT_COLD_START`, whose own text ended "No action needed"; `THRASH_UNATTRIBUTED`, about writes provably attributable to nobody) and stripped foreign identities from the denies, the stall messages, and the thrash suspects. Nothing left the PRODUCT — every detection still reaches the dashboard, `--risk`, `investigate_burn` and the skill. **DO NOT** add a hook message because it explains a real finding, BECAUSE each of the removed ones was added exactly that way — to help a HUMAN reading a debug session — and explaining is not interrupting; the reader in production is a busy agent that cannot act on it. **DO** ask the three questions above before adding any hook text, and put anything that fails them behind an explicit request instead.

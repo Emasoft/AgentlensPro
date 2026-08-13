@@ -38,6 +38,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { claudeProjectsDirs } from './logReader'
+import { resolveProjectSlugs } from './projectSlug'
 import { lookupRates } from './shared/pricing'
 import {
   median, robustBaseline, modifiedZ, modifiedZScores, normalSf, negBinomSF, fisherCombine,
@@ -46,8 +47,8 @@ import {
   type RobustBaseline,
 } from './seismicStats'
 import { SPAWN_TOOLS, type SpawnCall } from './causingToolCall'
+import { transcriptReadSpec, tornLineSql } from './ndjsonDuck'
 
-const MAX_OBJECT_SIZE = 268_435_456
 const sqlStr = (s: string): string => `'${s.replace(/'/g, "''")}'`
 
 export type SeismicScope = 'fleet' | 'workspace' | 'session'
@@ -101,8 +102,12 @@ export function resolveSeismicFiles(o: ResolveSeismicOptions): string[] {
   const wantDirs: string[] = []
   if (o.scope === 'workspace') {
     if (!o.workspace) return []
-    const slug = o.workspace.replace(/[^A-Za-z0-9]/g, '-')
-    for (const base of bases) wantDirs.push(path.join(base, slug))
+    // Resolved against disk, not derived: a workspace path long enough for Claude Code to truncate
+    // and hash its slug yields a directory name no derivation can predict, and the naive one matches
+    // nothing — so this scanned zero transcripts and reported no seismic activity at all.
+    for (const slug of resolveProjectSlugs(o.workspace, bases)) {
+      for (const base of bases) wantDirs.push(path.join(base, slug))
+    }
   }
   const walk = (dir: string, allowSub: boolean): void => {
     let entries: fs.Dirent[]
@@ -476,10 +481,7 @@ export async function burnSeismic(opts: BurnSeismicOptions): Promise<BurnSeismic
   let duck: typeof import('@duckdb/node-api')
   try { duck = opts.duckdb ?? await import('@duckdb/node-api') } catch { return empty('duckdb-unavailable') }
 
-  const fileList = files.map(sqlStr).join(', ')
-  const readJson = `read_json([${fileList}], format='newline_delimited',
-      columns={timestamp:'VARCHAR', type:'VARCHAR', message:'JSON'},
-      maximum_object_size=${MAX_OBJECT_SIZE}, ignore_errors=true, filename=true)`
+  const readJson = transcriptReadSpec(files)
   const BK = `INTERVAL '${bucketMinutes} minute'`
 
   const inst = await duck.DuckDBInstance.create(':memory:')
@@ -514,6 +516,20 @@ export async function burnSeismic(opts: BurnSeismicOptions): Promise<BurnSeismic
       maxcc: numOf(r.maxcc), maxcr: numOf(r.maxcr),
     }))
     if (rawRows.length === 0) { con.closeSync(); inst.closeSync(); return empty('no-costed-turns') }
+
+    // Torn-line disclosure: only after the main query succeeded (one extra round-trip). A malformed
+    // line lands as an all-NULL row under ignore_errors, not a dropped one — count(*) alone would
+    // pass silently, so compare it against a column EVERY real record carries.
+    //
+    // That column is `type`, NOT `timestamp`. Measured over 482,993 real transcript records:
+    // `type` is missing from 0 of them, `timestamp` from 81,814 — 16.9%, because `attachment`,
+    // `queue-operation` and `last-prompt` records legitimately carry no timestamp. This probe reads
+    // the UNFILTERED scan (the `type='assistant'` filter belongs to the query above, not here), so
+    // keying on `timestamp` would have reported roughly a sixth of a healthy machine's records as
+    // "unparseable and excluded" — a disclosure that lies, which is worse than none at all.
+    const [{ total: tlTotal, withCol: tlWithCol }] = (await query(tornLineSql(readJson, 'type')))
+      .map(r => ({ total: numOf(r.total), withCol: numOf(r.withCol) }))
+    const tornLines = tlTotal - tlWithCol
 
     // Densify onto a continuous minute grid so quiet minutes count as the true zero baseline, and
     // keep the session-resolved view for attribution.
@@ -878,11 +894,12 @@ export async function burnSeismic(opts: BurnSeismicOptions): Promise<BurnSeismic
     const fanoutEvents = events.filter(e => e.cause === 'FANOUT_RATE').length
     const thrashEvents = events.filter(e => e.cause === 'FAT_TURN_THRASH').length
     const causeTail = `${thrashEvents} thrash spike(s), ${fanoutEvents} fan-out burst(s) among ${events.length} event(s).`
-    const verdict = dominantModeOverall === 'MARATHON_REREAD'
+    const verdict = (dominantModeOverall === 'MARATHON_REREAD'
       ? `MARATHON RE-READ dominates: ${rp}% of $ is sustained cache-READ across ${fatCount} fat (≥300k-prefix) sessions re-reading every turn; cold-WRITE adds ${wp}%. ${causeTail}`
       : dominantModeOverall === 'CACHE_THRASH'
         ? `CACHE_THRASH dominates: ${wp}% of $ is cold cache-WRITE (prefix cold-invalidation); sustained re-read is ${rp}%. ${causeTail}`
-        : `MIXED: cache-READ ${rp}% (re-read) vs cold-WRITE ${wp}% (thrash) are comparable. ${causeTail}`
+        : `MIXED: cache-READ ${rp}% (re-read) vs cold-WRITE ${wp}% (thrash) are comparable. ${causeTail}`)
+      + (tornLines > 0 ? ` ${tornLines} line(s) unparseable and excluded.` : '')
     return {
       windowSinceIso: sinceIso, bucketMinutes, filesAnalysed: files.length,
       totalUsd, totalWriteUsd, totalReadUsd, totalOutputUsd,

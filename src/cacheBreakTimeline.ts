@@ -32,13 +32,14 @@ import { estimateTokensFromBytes } from './tokenEstimator'
 import { calcTokenCostUsd } from './shared/pricing'
 import {
   defaultBodiesDir, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, RESPONSE_SCAN_CAP,
-  listBySuffix, boundedRecent, readJsonBounded,
   bucketValueOf, tokenCountsFullCost, tokenCountsTotal,
   type TokenCounts, type CacheCreationReport, type CacheCreationGroupRow,
   type CostBucket, type OutputSpike, type CacheCreationScanCoverage,
 } from './cacheCreationForensics'
 import * as fs from 'fs'
 import * as path from 'path'
+import { listBodyEvidence, loadBodyTexts, type EvidenceRow } from './store/bodiesEvidence'
+import { dataPath } from './dataDir'
 
 export { defaultBodiesDir }
 
@@ -67,6 +68,7 @@ export type CacheBreakTimelineCause =
   | 'SUBAGENT_INTERLEAVE'       // A→B→A: this request matches turn-2's stream, not turn-1's — a sub-agent's calls share the parent session id
   | 'NORMAL_GROWTH'             // append-only growth: the NEW tail cached for the first time (expected incremental write, NOT a break)
   | 'MESSAGE_TRIMMED'           // a cached message block was REMOVED (harness context-editing / tool-result clearing)
+  | 'MESSAGE_SPLICED'           // a NEW block was INSERTED mid-prefix, shifting every later block (harness re-homing an injection)
   | 'ATTACHMENT_CHANGED'        // a non-text block (image / tool_use input) inside the cached prefix changed
   // ── TRDD-B9ERTBZ9 (2026-08-04): documented causes the taxonomy lacked. Each one is detectable from
   //    the raw request bodies we ALREADY capture; a documented cause we cannot emit from captured data
@@ -121,6 +123,7 @@ export const CACHE_BREAK_REMEDIATION: Record<CacheBreakTimelineCause, string> = 
   SUBAGENT_INTERLEAVE:        'Two requests grouped under one session id belong to DIFFERENT streams — sub-agent calls carry the parent\'s session id. Claimed on either of two signatures: the A→B→A pattern (this request matches turn-2\'s tool catalog + model, not turn-1\'s), or a different msg[0] prompt (the conversation\'s own opening words, immutable within one conversation). Each stream keeps its OWN cache, so nothing actually broke and there is nothing to fix; the child bills its own (smaller) prefix. Pin the sub-agent\'s tools + model in its frontmatter to shrink that footprint.',
   NORMAL_GROWTH:              'Not a break — append-only growth: this turn\'s NEW content was cached for the first time (expected incremental write). Reduce it only by producing/ingesting less content per turn.',
   MESSAGE_TRIMMED:            'A block was REMOVED from the cached message prefix (harness context-editing / tool-result clearing / message deletion) — everything after the removal point re-writes. Prefer compaction or a fresh session over mid-session trimming of a huge transcript.',
+  MESSAGE_SPLICED:            'A NEW block was INSERTED into the middle of the cached prefix, shifting every later block — everything after the splice point re-writes. The actor is whatever injected the block (typically the harness re-homing a hook/system message), never the shifted bystanders after it.',
   ATTACHMENT_CHANGED:         'A non-text block (image / tool_use input) inside the cached prefix changed or moved. Past attachments should be immutable; an image riding in the prefix re-bills the tail on any change.',
   WORKING_DIR_CHANGED:        'The environment block (working directory / platform / shell / OS) differs between these two turns, and it sits inside the cached system prefix — so a cache entry is scoped to ONE directory, and a second worktree of the same repository is a different prefix. This fires only ACROSS directories, never within one: `/cd` is engineered cache-safe (the new directory\'s CLAUDE.md is appended as a message instead of rebuilding the system prompt). Keep long-running work in one directory, or accept one cold warm per directory.',
   GIT_STATE_CHANGED:          'The startup git snapshot (branch, status, recent commits) carried in the system prefix differs. It is captured ONCE at session start and never updates during a session, so this can only fire between turns that started from different snapshots — a resume, or a second stream sharing this session id. Sequential sessions share a prefix only when that snapshot matches, so branch/commit churn between sessions costs one cold warm each; nothing to fix mid-session.',
@@ -245,7 +248,13 @@ export function classifyContentKind(text: string): BlockContentKind {
   // UserPromptSubmit / PostToolUse hook context (<pss-skills>, [janitor-memory], …) and the harness
   // task-list nudge. These previously fell to 'usertext', hiding chronic per-turn mutators in
   // UNCLASSIFIED — naming them is the whole point of the perpetrator backtrace.
-  if (/<pss-skills>|\[janitor-memory\]|UserPromptSubmit hook additional context|PostToolUse:\S* hook additional context|task tools haven't been used recently/i.test(text)) return 'hook'
+  // `PreToolUse:` was missing from this alternation and cost $2.84 in one turn: the harness moved
+  // its token-spike warning into a standalone role:"system" message spliced mid-array
+  // (2026-08-13T01:08:10Z, 453,881 tokens), the block classified as usertext, and the break landed
+  // in UNCLASSIFIED with the actor unnamed. Match the header SHAPE (`<hookname> hook additional
+  // context`), never the message content — a matcher keyed on "Token spike" goes blind the moment
+  // the hook's wording changes, which is how this class of gap gets reintroduced.
+  if (/<pss-skills>|\[janitor-memory\]|UserPromptSubmit hook additional context|(?:Pre|Post)ToolUse:\S* hook additional context|task tools haven't been used recently/i.test(text)) return 'hook'
   if (/<system-reminder>/.test(text) && /hook|inbox|heartbeat|reminder/i.test(text)) return 'hook'
   if (/Today'?s date is|# *currentDate|Current date:/.test(text)) return 'date'
   if (/<system-reminder>/.test(text)) return 'system'
@@ -770,10 +779,42 @@ function diffBlocks(prevBlocksRaw: PrefixBlock[], curBlocksRaw: PrefixBlock[], l
       return { cause: 'CONTEXT_ORDER_CHANGED', culpritLayer: layer, culpritId: `${layer}:order`, culpritSummary: `${layer} blocks reordered at ${c.label} (identical content, different order)` }
     }
     // Skill-catalog specifics: a block whose kind prev never carried = a fresh injection; a shrink =
-    // a truncation; otherwise a content change.
+    // a truncation; otherwise a content change. Deliberately BEFORE the generic insertion detector —
+    // a spliced-in skill catalog is still SKILL_INJECTION (the more specific verdict), and running
+    // the generic branch first demoted it to SKILL_CHANGED, which an existing test caught.
     if (c.kind === 'skillcatalog') {
       if (!prevKinds.has('skillcatalog')) return mkBlock('SKILL_INJECTION', layer, c, `skill catalog injected at pos ${i}: ${c.label}`)
       if (p.kind === 'skillcatalog' && c.len < p.len * 0.9) return mkBlock('SKILL_DESCRIPTION_TRUNCATION', layer, c, `skill catalog shrank ${p.len}→${c.len} chars: ${c.label}`)
+    }
+    // An INSERTION, not a change: something was spliced in front of prev's block here, shifting it
+    // down. Measured incident (2026-08-13T01:08:10Z, 453,881 tokens): the harness spliced a
+    // standalone role:"system" hook message into the middle of `messages`, shifting every later
+    // message +1. Reporting that as "<kind> block changed" misattributes the break to the SHIFTED
+    // bystander and — whenever the spliced content matches no kind matcher — manufactures an
+    // UNCLASSIFIED with the real actor unnamed.
+    //
+    // TWO conditions, both load-bearing (review finding 8 killed the set-membership version): the
+    // count guard, because an insertion GROWS the block list while an in-place rewrite keeps it —
+    // and prevFps/curFps are content-only sets that collapse duplicates, so a rewrite of X→Y with a
+    // byte-identical copy of X elsewhere satisfied the old test and reported a splice for a turn
+    // where nothing shifted; and the POSITIONAL lookahead, because "the very next cur block is
+    // exactly prev's block at this position" is the shift itself, not an inference from membership.
+    if (curBlocks.length > prevBlocks.length && curBlocks[i + 1]?.fp === p.fp) {
+      const inserted = causeForContentKind(c.kind)
+      // A recognised kind keeps its own cause (the ACTOR is named: hook, memory, …); content no
+      // matcher knows still gets the STRUCTURE named — MESSAGE_SPLICED, never UNCLASSIFIED, and
+      // never CONTEXT_ORDER_CHANGED, whose "identical content" claim would be false here.
+      return mkBlock(inserted === 'UNCLASSIFIED' ? 'MESSAGE_SPLICED' : inserted, layer, c,
+        `${c.kind} block spliced in at pos ${i}: ${c.label} — later ${layer} blocks shifted, invalidating everything after the splice point`)
+    }
+    // The mirror image (review finding 9): prev's block here was REMOVED, shifting cur's up —
+    // cur[i] is exactly prev[i+1]. Without this branch a mid-array trim fell to the generic
+    // "changed" verdict blaming the shifted bystander; MESSAGE_TRIMMED's tail-shrink handler below
+    // never fires for it because the common-prefix walk diverges first. The culprit is the REMOVED
+    // block (p), never c — c is untouched content that merely moved.
+    if (curBlocks.length < prevBlocks.length && prevBlocks[i + 1]?.fp === c.fp) {
+      return mkBlock('MESSAGE_TRIMMED', layer, p,
+        `${p.kind} block removed at pos ${i}: ${p.label} — later ${layer} blocks shifted up (context-editing/trim), invalidating everything after the removal point`)
     }
     const changed = causeForContentKind(c.kind)
     return mkBlock(changed, layer, c, `${c.kind} block changed at pos ${i}: ${c.label}`)
@@ -981,6 +1022,8 @@ interface ResponseUsage { cacheCreate: number; cacheRead: number; ephemeral5m: n
 
 export interface CacheBreakTimelineOptions {
   bodiesDir?: string
+  /** The Parquet body store (default `<dataDir>/store`) — the durable half of the evidence union. */
+  storeDir?: string
   sessionId?: string
   scope?: string
   minTokens?: number
@@ -1089,59 +1132,112 @@ interface SessionScanResult {
 
 // Shared bounded scan: index every response by message id -> usage, and every request into ordered
 // per-session turns. Both buildCacheBreakTimeline (ONE target session) and buildCauseCostPeakReport
-// (EVERY session, for the cost-peak finder's groupBy=cause) build on this ONE scan so the disk-read
-// contract lives in exactly one place — caller must already have checked dirExists.
-function scanSessionsAndResponses(bodiesDir: string, windowHours: number | undefined, scanCap: number): SessionScanResult {
-  const allRequests = listBySuffix(bodiesDir, '.request.json')
-  const allResponses = listBySuffix(bodiesDir, '.response.json')
-  const { slice: reqSlice, matched: reqMatched } = boundedRecent(allRequests, { windowHours, cap: scanCap })
-  const { slice: respSlice } = boundedRecent(allResponses, { windowHours, cap: scanCap })
+// (EVERY session, for the cost-peak finder's groupBy=cause) build on this ONE scan so the
+// evidence-read contract lives in exactly one place.
+//
+// EVIDENCE = SPOOL ∪ PARQUET STORE (bodiesEvidence.ts), not raw files alone. The raw-files-only
+// version had a measured defect that is easy to re-introduce, so it is spelled out: the ingest
+// drain deletes a raw file the moment the store provably holds it, so this scan's history SHRANK as
+// the drain ran — the same session showed 172 turns at 01:40 and 145 at 02:00 on 2026-08-13, and a
+// $2.84 break event was classifiable in the first run and nonexistent in the second. Selection is a
+// column-pruned Parquet scan (session_id/ts are first-class columns — one scoped run measured
+// 13.5 s of JS file reads for what the pushdown answers in milliseconds); loading stays CHUNKED
+// (32 bodies at a time, parsed then dropped) because ~200 × ~881 KB bodies in one result set is the
+// ~176 MB memory spike this read path is suspected of killing the server with (TRDD-34B9JAZK).
+const EVIDENCE_LOAD_CHUNK = 32
 
-  // Index responses by message id → usage.
-  const respById = new Map<string, ResponseUsage>()
-  for (const e of respSlice) {
-    const body = readJsonBounded<RawResponseForBreak>(e.path, MAX_RESPONSE_BYTES)
-    const id = strOrUndef(body?.id)
-    if (!body?.usage || !id) continue
-    const tier = body.usage.cache_creation
-    respById.set(id, {
-      cacheCreate: numOr0(body.usage.cache_creation_input_tokens),
-      cacheRead: numOr0(body.usage.cache_read_input_tokens),
-      ephemeral5m: numOr0(tier?.ephemeral_5m_input_tokens),
-      ephemeral1h: numOr0(tier?.ephemeral_1h_input_tokens),
-      inputTokens: numOr0(body.usage.input_tokens),
-      outputTokens: numOr0(body.usage.output_tokens),
-      model: strOrUndef(body.model),
-      ts: e.mtimeMs,
-    })
+async function scanSessionsAndResponses(
+  bodiesDir: string, storeDir: string, windowHours: number | undefined, scanCap: number,
+): Promise<SessionScanResult> {
+  const spool = fs.existsSync(bodiesDir) ? bodiesDir : null
+  const tsFromMs = windowHours !== undefined && windowHours > 0 ? Date.now() - windowHours * 3_600_000 : undefined
+  const reqAll = await listBodyEvidence(storeDir, spool, { kind: 'request', tsFromMs })
+  const respAll = await listBodyEvidence(storeDir, spool, { kind: 'response', tsFromMs })
+
+  // Store rows carry the capture ts; a spool row's ts is unknown until parsed, so stamp its file
+  // mtime (the spool is small by construction — the drain keeps it at current inflow, never history).
+  // A row whose file vanished mid-scan (drained) keeps tsMs === null — NOT Date.now(), which
+  // FABRICATED a capture ts and pulled a stale drained call into live windows (review finding,
+  // same defect as forensicsIndex.resolveTs). Null rows are excluded from any window below (their
+  // bytes are in the store; the next pass sees them with the true ts) and sort last unwindowed.
+  const stamp = (rows: EvidenceRow[]): void => {
+    for (const r of rows) {
+      if (r.tsMs !== null || !spool) continue
+      try { r.tsMs = fs.statSync(path.join(spool, r.srcName)).mtimeMs } catch { /* drained mid-scan */ }
+    }
+  }
+  stamp(reqAll); stamp(respAll)
+  const inWindow = (rows: EvidenceRow[]): EvidenceRow[] =>
+    tsFromMs === undefined ? rows : rows.filter((r) => r.tsMs !== null && r.tsMs >= tsFromMs)
+  const recent = (rows: EvidenceRow[]): { slice: EvidenceRow[]; matched: number } => {
+    const m = inWindow(rows)
+    const sorted = [...m].sort((a, b) => (b.tsMs ?? 0) - (a.tsMs ?? 0))
+    return { slice: sorted.slice(0, scanCap), matched: m.length }
+  }
+  const { slice: reqSlice, matched: reqMatched } = recent(reqAll)
+  const { slice: respSlice } = recent(respAll)
+
+  const parseBounded = <T>(raw: string | undefined, maxBytes: number): T | null => {
+    if (raw === undefined || Buffer.byteLength(raw, 'utf8') > maxBytes) return null
+    try { return JSON.parse(raw) as T } catch { return null }
   }
 
-  // Parse requests → compact turns, grouped by session. Drop each raw body immediately (memory-bounded).
-  const bySession = new Map<string, ScannedTurn[]>()
-  for (const e of reqSlice) {
-    const body = readJsonBounded<RawRequestForBreak>(e.path, MAX_REQUEST_BYTES)
-    if (!body) continue
-    const uid = parseUserId(body.metadata?.user_id)
-    const sid = uid.sessionId ?? '(no-session)'
-    const turn: ScannedTurn = {
-      bodyRef: e.path, mtimeMs: e.mtimeMs,
-      previousMessageId: strOrUndef(body.diagnostics?.previous_message_id),
-      sessionId: uid.sessionId, accountUuid: uid.accountUuid,
-      prefix: extractTurnPrefix(body),
+  // Index responses by message id → usage. Chunked load: each chunk's texts are dropped before the
+  // next chunk is fetched, so peak memory is EVIDENCE_LOAD_CHUNK bodies, never the corpus.
+  const respById = new Map<string, ResponseUsage>()
+  for (let i = 0; i < respSlice.length; i += EVIDENCE_LOAD_CHUNK) {
+    const chunk = respSlice.slice(i, i + EVIDENCE_LOAD_CHUNK)
+    const texts = await loadBodyTexts(storeDir, spool, chunk, EVIDENCE_LOAD_CHUNK)
+    for (const row of chunk) {
+      const body = parseBounded<RawResponseForBreak>(texts.get(row.srcName), MAX_RESPONSE_BYTES)
+      const id = strOrUndef(body?.id)
+      if (!body?.usage || !id) continue
+      const tier = body.usage.cache_creation
+      respById.set(id, {
+        cacheCreate: numOr0(body.usage.cache_creation_input_tokens),
+        cacheRead: numOr0(body.usage.cache_read_input_tokens),
+        ephemeral5m: numOr0(tier?.ephemeral_5m_input_tokens),
+        ephemeral1h: numOr0(tier?.ephemeral_1h_input_tokens),
+        inputTokens: numOr0(body.usage.input_tokens),
+        outputTokens: numOr0(body.usage.output_tokens),
+        model: strOrUndef(body.model),
+        ts: row.tsMs ?? Date.now(),
+      })
     }
-    const list = bySession.get(sid)
-    if (list) list.push(turn); else bySession.set(sid, [turn])
+  }
+
+  // Parse requests → compact turns, grouped by session. Same chunk discipline.
+  const bySession = new Map<string, ScannedTurn[]>()
+  for (let i = 0; i < reqSlice.length; i += EVIDENCE_LOAD_CHUNK) {
+    const chunk = reqSlice.slice(i, i + EVIDENCE_LOAD_CHUNK)
+    const texts = await loadBodyTexts(storeDir, spool, chunk, EVIDENCE_LOAD_CHUNK)
+    for (const row of chunk) {
+      const body = parseBounded<RawRequestForBreak>(texts.get(row.srcName), MAX_REQUEST_BYTES)
+      if (!body) continue
+      const uid = parseUserId(body.metadata?.user_id)
+      const sid = uid.sessionId ?? '(no-session)'
+      const turn: ScannedTurn = {
+        bodyRef: row.location === 'spool' && spool ? path.join(spool, row.srcName) : `store:${row.bodyId ?? row.srcName}`,
+        mtimeMs: row.tsMs ?? Date.now(),
+        previousMessageId: strOrUndef(body.diagnostics?.previous_message_id),
+        sessionId: uid.sessionId, accountUuid: uid.accountUuid,
+        prefix: extractTurnPrefix(body),
+      }
+      const list = bySession.get(sid)
+      if (list) list.push(turn); else bySession.set(sid, [turn])
+    }
   }
 
   const complete = reqSlice.length === reqMatched
+  const fromStore = reqSlice.filter((r) => r.location === 'store').length
   const coverage: CacheBreakTimelineReport['coverage'] = {
-    bodiesDir, dirExists: true,
-    requestFilesTotal: allRequests.length, requestFilesScanned: reqSlice.length,
-    responseFilesTotal: allResponses.length, responseFilesScanned: respSlice.length,
+    bodiesDir, dirExists: spool !== null,
+    requestFilesTotal: reqAll.length, requestFilesScanned: reqSlice.length,
+    responseFilesTotal: respAll.length, responseFilesScanned: respSlice.length,
     sessionsFound: bySession.size, scanCap, windowHours, complete,
     note: complete
-      ? `Scanned all ${reqMatched} request body file(s)${windowHours ? ` in the last ${windowHours}h` : ''} across ${bySession.size} session(s).`
-      : `SAMPLE: ${reqSlice.length} most-recent of ${reqMatched} matching request body file(s) across ${bySession.size} session(s) (cap ${scanCap}). Not full history.`,
+      ? `Scanned all ${reqMatched} request body(ies)${windowHours ? ` in the last ${windowHours}h` : ''} across ${bySession.size} session(s) — ${fromStore} from the Parquet store, ${reqSlice.length - fromStore} from the raw spool (drained history stays in evidence).`
+      : `SAMPLE: ${reqSlice.length} most-recent of ${reqMatched} matching request body(ies) across ${bySession.size} session(s) (cap ${scanCap}; ${fromStore} store / ${reqSlice.length - fromStore} spool). Not full history.`,
   }
   return { bySession, respById, coverage }
 }
@@ -1249,11 +1345,14 @@ export async function buildCacheBreakTimeline(opts: CacheBreakTimelineOptions = 
     bodiesDir, dirExists, requestFilesTotal: 0, requestFilesScanned: 0, responseFilesTotal: 0,
     responseFilesScanned: 0, sessionsFound: 0, scanCap, windowHours: opts.windowHours, complete: true, note,
   })
-  if (!dirExists) {
-    return baseReport(minTokens, emptyCoverage(`No OTEL raw-body directory at ${bodiesDir} — set OTEL_LOG_RAW_API_BODIES to capture bodies.`))
+  // The raw dir alone no longer decides whether evidence exists — drained history lives in the
+  // Parquet store, and a missing spool with a populated store is a NORMAL state, not "no data".
+  const storeDir = opts.storeDir ?? dataPath('store')
+  if (!dirExists && !fs.existsSync(path.join(storeDir, 'bodies'))) {
+    return baseReport(minTokens, emptyCoverage(`No raw-body evidence: neither ${bodiesDir} nor the Parquet store at ${storeDir} exists — set OTEL_LOG_RAW_API_BODIES to capture bodies.`))
   }
 
-  const { bySession, respById, coverage } = scanSessionsAndResponses(bodiesDir, opts.windowHours, scanCap)
+  const { bySession, respById, coverage } = await scanSessionsAndResponses(bodiesDir, storeDir, opts.windowHours, scanCap)
 
   // Resolve the target session: exact sessionId > scope-prefix heaviest > overall heaviest by cache_creation.
   const target = resolveTarget(bySession, respById, opts)
@@ -1460,6 +1559,7 @@ function buildRepeatOffenders(events: CacheBreakEvent[], sessionCacheCreate: num
 // SAME formatCostPeaks, so callers see one uniform contract regardless of which builder ran.
 export interface CauseCostPeakOptions {
   bodiesDir?: string
+  storeDir?: string
   windowHours?: number
   scanCap?: number
   minTokens?: number         // floor: only classify turns whose cache_creation >= this (default DEFAULT_MIN_TOKENS)
@@ -1494,11 +1594,12 @@ export async function buildCauseCostPeakReport(opts: CauseCostPeakOptions = {}):
   const scanCap = opts.scanCap ?? RESPONSE_SCAN_CAP
   const bucket = opts.bucket ?? 'cache_creation'
   const topN = Math.min(opts.topN ?? 15, 50)
-  if (!fs.existsSync(bodiesDir)) {
+  const storeDir = opts.storeDir ?? dataPath('store')
+  if (!fs.existsSync(bodiesDir) && !fs.existsSync(path.join(storeDir, 'bodies'))) {
     return emptyCauseCostPeakReport(bucket, bodiesDir, scanCap, opts.windowHours)
   }
 
-  const { bySession, respById, coverage: timelineCoverage } = scanSessionsAndResponses(bodiesDir, opts.windowHours, scanCap)
+  const { bySession, respById, coverage: timelineCoverage } = await scanSessionsAndResponses(bodiesDir, storeDir, opts.windowHours, scanCap)
   // Adapt the timeline scan's coverage shape (sessionsFound/requestFilesScanned) into the cost-peak
   // finder's CacheCreationScanCoverage shape (responseFilesScanned/requestFilesIndexed) — same numbers,
   // different field names — so get_cache_creation_report's coverage contract is identical regardless
@@ -1608,6 +1709,7 @@ export interface CacheBreakCausesReport {
 
 export interface CacheBreakCausesOptions {
   bodiesDir?: string
+  storeDir?: string
   windowHours?: number
   scanCap?: number
   minTokens?: number
@@ -1630,11 +1732,12 @@ export async function buildCacheBreakCauses(opts: CacheBreakCausesOptions = {}):
     bodiesDir, dirExists, requestFilesTotal: 0, requestFilesScanned: 0, responseFilesTotal: 0,
     responseFilesScanned: 0, sessionsFound: 0, scanCap, windowHours: opts.windowHours, complete: true, note,
   })
-  if (!dirExists) {
-    return { minTokens, totalClassifiedEvents: 0, totalCacheCreateTokens: 0, causeRanking: [], actorLeaderboard: [], verdict: 'no data', coverage: emptyCoverage(`No OTEL raw-body directory at ${bodiesDir} — set OTEL_LOG_RAW_API_BODIES to capture bodies.`) }
+  const storeDir = opts.storeDir ?? dataPath('store')
+  if (!dirExists && !fs.existsSync(path.join(storeDir, 'bodies'))) {
+    return { minTokens, totalClassifiedEvents: 0, totalCacheCreateTokens: 0, causeRanking: [], actorLeaderboard: [], verdict: 'no data', coverage: emptyCoverage(`No raw-body evidence: neither ${bodiesDir} nor the Parquet store at ${storeDir} exists — set OTEL_LOG_RAW_API_BODIES to capture bodies.`) }
   }
 
-  const { bySession, respById, coverage } = scanSessionsAndResponses(bodiesDir, opts.windowHours, scanCap)
+  const { bySession, respById, coverage } = await scanSessionsAndResponses(bodiesDir, storeDir, opts.windowHours, scanCap)
 
   interface CauseAcc { events: number; cc: number; sessions: Set<string> }
   interface ActorAcc { cause: CacheBreakTimelineCause; actor: string; occ: number; cc: number; cost: number; sessions: Set<string> }

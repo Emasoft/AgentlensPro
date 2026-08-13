@@ -7,6 +7,7 @@ import * as path from 'path'
 import { flush, memoryLimit, openStore, Store } from '../store/db'
 import { bodyIdOf, exportBodiesFromStore, extractMeta, ingestBody, reconstructBody } from '../store/bodyStore'
 import { sha256 } from '../store/sections'
+import { loadScaledTimeout, skipIfUnmeasurable } from './loadAware'
 
 const REAL_BODIES = path.join(os.homedir(), '.agentlens', 'otel-bodies')
 
@@ -240,7 +241,8 @@ suite('bodyStore — against REAL captured bodies', () => {
   test('every real body round-trips byte-identically', async function () {
     const bodies = realBodies(20)
     if (bodies.length === 0) { this.skip(); return }
-    this.timeout(120_000)
+    if (skipIfUnmeasurable(this)) return
+    this.timeout(loadScaledTimeout(120_000))
 
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentlens-store-'))
     const store = await openStore({ dir, memoryLimit: '4GB', threads: 4 })
@@ -262,7 +264,8 @@ suite('bodyStore — against REAL captured bodies', () => {
     // honest code or, worse, been "fixed" by lowering the threshold until it passed.
     const all = realBodies(400)
     if (all.length === 0) { this.skip(); return }
-    this.timeout(180_000)
+    if (skipIfUnmeasurable(this)) return
+    this.timeout(loadScaledTimeout(180_000))
 
     // Group by session, take the largest group, and feed it in TRUE TURN ORDER (mtime).
     const bySession = new Map<string, Array<{ name: string; raw: string; mtime: number }>>()

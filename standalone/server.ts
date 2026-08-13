@@ -59,7 +59,7 @@ import { buildContextHistory } from '../src/contextHistory'
 import { buildConversation } from '../src/conversation'
 import { generateSuggestions } from '../src/instructionAdvisor'
 import { detectInstructionFiles, appendSuggestion } from '../src/instructionFiles'
-import { atomicWriteFileSync, heapPressure, RequestLog } from '../src/serverRuntime'
+import { atomicWriteFileSync, heapPressure, rssPressure, RequestLog } from '../src/serverRuntime'
 import { SegmentedSpanStore, migrateLegacySpansFile, spanTimestampMs } from '../src/segmentedSpanStore'
 // appendToArchive is GONE: bodies now go into the content-addressed store, not a gzip .wad lump
 // (TRDD-K3WDPR7M Phase 3). The read/purge helpers stay — the existing .wad volumes still hold real
@@ -69,7 +69,8 @@ import { openStore, allOf, type Store } from '../src/store/db'
 import { DEFAULT_MAX_BYTES_PER_PASS, ingestPass } from '../src/store/ingestPass'
 import { verifyVolumeInStore } from '../src/store/archiveVerify'
 import { rawBodyCaptureEnabled, spoolDirConfigured } from '../src/captureConfig'
-import { ensureRamDisk, ramDiskInfo, spoolSizeMb } from '../src/ramdisk'
+import { ensureRamDisk, ramDiskInfo, spoolSizeMb, SPOOL_MOUNT_POINT } from '../src/ramdisk'
+import { applySpoolBackpressure, checkSpoolCapacity, INITIAL_BACKPRESSURE_STATE, type BackpressureState } from '../src/spoolBackpressure'
 import { exportBodiesFromStore } from '../src/store/bodyStore'
 import {
   loadLogOffsets, loadPersistedCards,
@@ -351,6 +352,11 @@ const persistStats = {
   statuslineSamples: 0,
   gateChecks: 0, gateDenies: 0, gateWarns: 0, gateAdvisories: 0,
   bodiesLastPurge: { at: 0, removedFiles: 0, freedBytes: 0, keptFiles: 0, keptBytes: 0 },
+  // TRDD-KB17X5G2 Option 3: how many times the spool crossed into over-capacity and new sessions
+  // were redirected to the legacy SSD bodies dir instead of losing writes. Must stay visible
+  // wherever spool health is reported — a silent fallback would hide the same loss it prevents.
+  spoolBackpressureSpills: 0,
+  spoolBackpressureActive: false,
 }
 
 const spanStore = new SegmentedSpanStore(SPANS_DIR)
@@ -376,11 +382,51 @@ try {
 
 // Retention: on boot + daily. Deletes whole EXPIRED segments only; each deletion is logged by
 // the store ("retention: deleted segment <name>, N spans, age Nd").
+//
 function runSpanRetention(): void {
   try { spanStore.runRetention(SPANS_RETENTION_DAYS) } catch (e) { console.warn('[AgentLens] span retention failed:', e) }
 }
+
+// Compression rides the SAME boot+daily tick rather than a new scheduler (docs_dev spec: "do not
+// invent a new scheduler"), but NEVER as one synchronous block on the boot path: the first boot
+// over a 31-segment backlog ran 3m40s with every port still closed — exporters errored against
+// the closed OTLP port and dropped spans with no collector-gap recorded, and the restart health
+// check reported a false failure (review finding). Instead the sweep runs ONE sealed segment per
+// timer slice: each slice still blocks the loop for that one segment's gzip+verify (~seconds),
+// but the loop breathes between slices, so the server is degraded-not-dead during a backlog and
+// the steady state (one new sealed segment per day) is a single slice. Retention runs FIRST on
+// the shared tick — whole-file unlinks, cheap — so an expired segment is deleted, never
+// pointlessly compressed. A pressure pause retries on a longer gap (pressure clears in minutes,
+// not slices). `unref()`ed throughout: a pending slice must never hold the process open.
+const COMPRESSION_SLICE_GAP_MS = 5_000
+const COMPRESSION_PRESSURE_RETRY_MS = 60_000
+let compressionSliceTimer: NodeJS.Timeout | null = null
+function runCompressionSweepIncrementally(): void {
+  if (compressionSliceTimer) return // a catch-up chain is already draining the backlog
+  const slice = (): void => {
+    compressionSliceTimer = null
+    let gapMs = 0
+    try {
+      const c = spanStore.compressSealedSegments(Date.now(), undefined, 1)
+      if (c.compressed.length > 0) {
+        console.log(`[AgentLens] span store: compressed ${c.compressed.length} sealed segment(s), saved ${c.bytesSaved} byte(s)`)
+      }
+      if (c.remaining > 0 || c.pausedForPressure) {
+        gapMs = c.pausedForPressure ? COMPRESSION_PRESSURE_RETRY_MS : COMPRESSION_SLICE_GAP_MS
+      }
+    } catch (e) { console.warn('[AgentLens] span compression failed:', e) }
+    if (gapMs > 0) {
+      compressionSliceTimer = setTimeout(slice, gapMs)
+      compressionSliceTimer.unref()
+    }
+  }
+  compressionSliceTimer = setTimeout(slice, COMPRESSION_SLICE_GAP_MS)
+  compressionSliceTimer.unref()
+}
+
 runSpanRetention()
-const spanRetentionTimer = setInterval(runSpanRetention, 24 * 3600e3)
+runCompressionSweepIncrementally() // first slice fires after the servers below are listening
+const spanRetentionTimer = setInterval(() => { runSpanRetention(); runCompressionSweepIncrementally() }, 24 * 3600e3)
 spanRetentionTimer.unref()
 
 /** Flush buffered appends to their daily segments (O(pending), never a rewrite), then trim the
@@ -394,10 +440,15 @@ function flushSpanAppends(): void {
   }
   // Heap-pressure valve: halve the window (never below the 5-minute live floor) instead of the
   // old cap's silent oldest-span eviction. Loud by design, and disk keeps everything.
+  // TRDD-34B9JAZK: heapPressure ALONE is blind to the ~67% of this process's footprint that never
+  // touches V8's old space (DuckDB's arena, buffers, the segment index) — the server died twice
+  // with a comfortable heap reading and no V8 OOM banner. rssPressure is checked alongside it so the
+  // SAME valve fires on native/off-heap growth too, not only on JS heap growth.
   const hp = heapPressure()
-  if (hp.over && effectiveWindowMs > SUMMARY_WINDOW_FLOOR_MS) {
+  const rp = rssPressure()
+  if ((hp.over || rp.over) && effectiveWindowMs > SUMMARY_WINDOW_FLOOR_MS) {
     effectiveWindowMs = Math.max(SUMMARY_WINDOW_FLOOR_MS, Math.floor(effectiveWindowMs / 2))
-    console.warn(`[AgentLens] heap pressure (${Math.round(hp.heapUsedMb)}/${Math.round(hp.limitMb)}MB): summary window shrunk to ${Math.round(effectiveWindowMs / 60_000)}m — disk store unaffected, no spans lost`)
+    console.warn(`[AgentLens] ${rp.over ? 'rss' : 'heap'} pressure (heap ${Math.round(hp.heapUsedMb)}/${Math.round(hp.limitMb)}MB, rss ${Math.round(rp.rssMb)}/${Math.round(rp.hwmMb)}MB): summary window shrunk to ${Math.round(effectiveWindowMs / 60_000)}m — disk store unaffected, no spans lost`)
   }
   const cutoff = Date.now() - effectiveWindowMs
   // Live appends keep `spans` roughly time-ordered, so only filter when the head has aged out.
@@ -469,13 +520,20 @@ const BODIES_DIR = PRIMARY_BODIES_DIR
 // Drain targets, each with its own emergency size-cap. In spool mode the spool's cap is min(configured
 // cap, 70% of the RAM disk) so a runaway producer can never fill volatile memory; the legacy dir is
 // ALSO drained (leftovers from pre-spool / stale sessions) at the normal cap.
-interface DrainTarget { dir: string; capBytes: number }
+interface DrainTarget {
+  dir: string
+  capBytes: number
+  /** True only for a target whose SOURCE files are already durable on their own (the legacy SSD dir)
+   *  — gates the fsync barrier in ingestPass (KB17X5G2-P0.5). The RAM spool is volatile by design, so
+   *  it never takes the barrier: there is nothing durable about the source to protect. */
+  durable: boolean
+}
 const drainTargets: DrainTarget[] = SPOOL_MODE
   ? [
-      { dir: PRIMARY_BODIES_DIR, capBytes: SPOOL_SIZE_BYTES > 0 ? Math.min(BODIES_MAX_BYTES, Math.floor(SPOOL_SIZE_BYTES * 0.7)) : BODIES_MAX_BYTES },
-      { dir: LEGACY_BODIES_DIR, capBytes: BODIES_MAX_BYTES },
+      { dir: PRIMARY_BODIES_DIR, capBytes: SPOOL_SIZE_BYTES > 0 ? Math.min(BODIES_MAX_BYTES, Math.floor(SPOOL_SIZE_BYTES * 0.7)) : BODIES_MAX_BYTES, durable: false },
+      { dir: LEGACY_BODIES_DIR, capBytes: BODIES_MAX_BYTES, durable: true },
     ]
-  : [{ dir: LEGACY_BODIES_DIR, capBytes: BODIES_MAX_BYTES }]
+  : [{ dir: LEGACY_BODIES_DIR, capBytes: BODIES_MAX_BYTES, durable: true }]
 
 // The bodies pass: ingest raw bodies into the content-addressed store, then reclaim their disk space
 // (TRDD-K3WDPR7M Phase 3). This REPLACES the old .wad archiver, which gzipped each body into a
@@ -499,6 +557,13 @@ let bodiesPassRunning = false
 // names are ingested — so a 60s spool drain never re-reads+re-hashes a body that is already durable
 // (TRDD-K3WDPR7M Phase 3, item 5).
 let ingestSkipNames: Set<string> | null = null
+// Long-lived companions to the skip set (review findings on ingestPass): names parked because the
+// store's ts row is wrong while the bytes are proven (re-ingest can never repair it — without this
+// they livelock at full read cost every pass), and part files this process already fsynced (the
+// durable barrier walks ALL parts, not just the fresh flush; the cache makes that one fsync per new
+// part instead of per pass).
+const ingestStrandedNames = new Set<string>()
+const ingestFsyncedParts = new Set<string>()
 
 async function seedIngestSkipNames(store: Store): Promise<Set<string>> {
   const set = new Set<string>()
@@ -520,7 +585,7 @@ async function archiveOtelBodies(): Promise<void> {
     bodyStore ??= await openStore({ dir: path.join(DATA_DIR, 'store') })
     const skip = (ingestSkipNames ??= await seedIngestSkipNames(bodyStore))
 
-    let ingested = 0, deleted = 0, bytesIn = 0, bytesStored = 0, liveBytesTotal = 0, throttled = false
+    let ingested = 0, deleted = 0, reclaimedDurable = 0, bytesIn = 0, bytesFreed = 0, bytesStored = 0, liveBytesTotal = 0, throttled = false
     const failed: string[] = []
     for (const target of targets) {
       // The size cap is the emergency valve: over it, ingest EVERYTHING (age 0) rather than only what
@@ -538,11 +603,18 @@ async function archiveOtelBodies(): Promise<void> {
         maxAgeMs: overCap ? 0 : BODIES_MAX_AGE_MS,
         maxBytesPerPass: INGEST_MAX_BYTES_PER_PASS, // THE THROTTLE — never an unbounded boot pass again
         deleteAfter: true,                          // safe: ingestPass verifies from the DURABLE store first
+        durableSource: target.durable,              // fsync barrier only when the source was itself durable
         skipNames: skip,                            // don't re-read+re-hash already-durable bodies
+        strandedNames: ingestStrandedNames,         // ts-mismatch park — the livelock fix
+        fsyncedPartsCache: ingestFsyncedParts,      // barrier covers all parts, once each
       })
-      ingested += r.ingested; deleted += r.deleted; bytesIn += r.bytesIn; bytesStored += r.bytesStored
+      ingested += r.ingested; deleted += r.deleted; reclaimedDurable += r.reclaimedDurable; bytesFreed += r.bytesFreed
+      bytesIn += r.bytesIn; bytesStored += r.bytesStored
       throttled ||= r.throttled
       for (const f of r.failed) failed.push(f)
+      if (r.strandedTs.length) {
+        console.warn(`[AgentLens] ${r.strandedTs.length} body file(s) PARKED: store ts row disagrees with capture mtime while bytes are proven — kept on disk, excluded from future passes (first: ${r.strandedTs[0]})`)
+      }
     }
 
     // Retention ageing of archive volumes — GATED (TRDD-K3WDPR7M, 2026-07-15 USER directive): a
@@ -559,11 +631,17 @@ async function archiveOtelBodies(): Promise<void> {
       return v.ok
     })
     persistStats.bodiesLastPurge = {
-      at: Date.now(), removedFiles: deleted, freedBytes: bytesIn,
-      keptFiles: 0, keptBytes: Math.max(0, liveBytesTotal - bytesIn),
+      // freedBytes is what was UNLINKED, not what was read: a pass that reads a gigabyte and
+      // verifies none of it frees nothing, and reporting the read would show a healthy drain while
+      // the disk never moves.
+      at: Date.now(), removedFiles: deleted, freedBytes: bytesFreed,
+      keptFiles: 0, keptBytes: Math.max(0, liveBytesTotal - bytesFreed),
     }
-    if (ingested > 0 || purged.removed.length > 0) {
+    // `deleted > 0` is load-bearing in this gate: a pass that reclaims thousands of already-durable
+    // files ingests NOTHING, so gating on `ingested` alone made the whole reclaim path silent.
+    if (ingested > 0 || deleted > 0 || purged.removed.length > 0) {
       console.log(`[AgentLens] bodies → store: ingested ${ingested}, reclaimed ${deleted} file(s) ` +
+        `(${reclaimedDurable} already durable) ` +
         `(${(bytesIn / 1024 ** 3).toFixed(2)}GB read → ${(bytesStored / 1048576).toFixed(1)}MB new spans)` +
         `${SPOOL_MODE ? ' [spool]' : ''}${throttled ? ' [throttled — more next pass]' : ''}` +
         `${purged.removed.length > 0 ? `; purged legacy volume(s) ${purged.removed.join(', ')} (${(purged.freedBytes / 1024 ** 3).toFixed(2)}GB, verified in store first)` : ''}`)
@@ -673,6 +751,44 @@ purgeStatusline()
 const BODIES_PASS_INTERVAL_MS = SPOOL_MODE ? 60_000 : 3600e3
 const bodiesPurgeTimer = setInterval(() => { void archiveOtelBodies() }, BODIES_PASS_INTERVAL_MS)
 bodiesPurgeTimer.unref()
+
+// ── Spool back-pressure (TRDD-KB17X5G2 Option 3) ──────────────────────────────────────────────
+// A single background subagent refilled the 2GB spool from 162MB to 1.4MB free in ~2 minutes —
+// at 100% free the spool cannot accept a write and Claude Code's own OTEL exporter drops the
+// body (see src/spoolBackpressure.ts's header for why the write itself is not ours to catch). A
+// 5s tick is fast enough to catch that burst mid-flight (the drain-tick cadence above is 60s —
+// too slow, that IS the incident) while cheap (one `df` call in spool mode only).
+let spoolBackpressureState: BackpressureState = INITIAL_BACKPRESSURE_STATE
+let spoolBackpressureGateLogged = false
+async function tickSpoolBackpressure(): Promise<void> {
+  if (!SPOOL_MODE) return
+  // THE SAME TWO GATES as applyTelemetryConfig, because this tick is a THIRD writer of the user's
+  // global settings.json and the gates' own comment records what an ungated writer does: an
+  // isolated test server on an ephemeral port silently repointed every agent's telemetry at itself
+  // (TRDD-W0RRL2FZ; review finding — this tick had zero gates, so AGENTLENS_NO_TELEMETRY_CONFIG=1
+  // users still had their settings rewritten the moment the spool crossed the floor). A gated
+  // instance gets NO config writes at all — back-pressure protection is honestly unavailable, said
+  // once, rather than silently exercised through a door the user closed.
+  const canonical = OTLP_PORT === 4318 || process.env.AGENTLENS_TELEMETRY_CONFIG === '1'
+  if (process.env.AGENTLENS_NO_TELEMETRY_CONFIG === '1' || !canonical) {
+    if (!spoolBackpressureGateLogged) {
+      spoolBackpressureGateLogged = true
+      console.log('[AgentLens] spool back-pressure DISABLED: telemetry-config writes are gated for this instance (opt-out env or non-default port), and back-pressure works by rewriting that config.')
+    }
+    return
+  }
+  const check = checkSpoolCapacity(SPOOL_MOUNT_POINT)
+  spoolBackpressureState = await applySpoolBackpressure(check, spoolBackpressureState, {
+    redirectToLegacy: async () => { await ensureTelemetryConfig({ otlpPort: OTLP_PORT, bodiesDir: LEGACY_BODIES_DIR }) },
+    restoreToSpool: async () => { await ensureTelemetryConfig({ otlpPort: OTLP_PORT, bodiesDir: PRIMARY_BODIES_DIR }) },
+    onWarn: (m) => console.warn(`[AgentLens] ${m}`),
+    onInfo: (m) => console.log(`[AgentLens] ${m}`),
+  })
+  persistStats.spoolBackpressureSpills = spoolBackpressureState.spills
+  persistStats.spoolBackpressureActive = spoolBackpressureState.redirected
+}
+const spoolBackpressureTimer = setInterval(() => { void tickSpoolBackpressure() }, 5000)
+spoolBackpressureTimer.unref()
 const hookPurgeTimer = setInterval(() => { purgeHookEvents(); purgeLogEvents(); purgeStatusline() }, 3600e3)
 hookPurgeTimer.unref()
 // Adopt the single-file usage cache into the per-account archive (issue #8). A usage FETCH archives
@@ -954,7 +1070,7 @@ function resolveCallerTtlKind(sessionId: string | null, transcriptPath: string |
 function buildGateState(
   now: number,
   parent: { contextTokens: number | null; idleMs: number | null },
-  caller?: { sessionId: string | null; transcriptPath: string | null },
+  caller?: { sessionId: string | null; transcriptPath: string | null; cwd?: string | null },
 ): AgentGateState {
   let starts60 = 0
   let starts120 = 0
@@ -968,7 +1084,12 @@ function buildGateState(
       if (now - r.ts <= 60_000) starts60++
       if (now - r.ts <= 120_000) {
         starts120++
-        const sid = r.session ?? '?'
+        // Sessionless events are keyed by their CWD, not lumped under one '?' bucket. That bucket
+        // takes the FIRST cwd it sees and now drives an own-project TRIGGER rather than a display
+        // string, so merging two projects' sessionless launches would either credit all of them to
+        // whoever matched that cwd, or exclude all of them — both wrong, and both silent.
+        const cwdKey = typeof r.payload?.cwd === 'string' ? r.payload.cwd : 'unknown'
+        const sid = r.session ?? `?:${cwdKey}`
         const e = bySession.get(sid) ?? { cwd: null, types: new Map<string, number>(), count: 0 }
         e.count++
         const cwd = r.payload?.cwd
@@ -984,7 +1105,9 @@ function buildGateState(
   const spawners: LaunchSpawner[] = [...bySession.entries()]
     .sort((a, b) => b[1].count - a[1].count)
     .map(([session, e]) => ({
-      session,
+      // A synthesized `?:<cwd>` key is NOT a session id — hand the gate `'?'` so its own-session
+      // match can never fire on it (cwd is the only honest signal for a sessionless launch).
+      session: session.startsWith('?:') ? '?' : session,
       cwd: e.cwd,
       count: e.count,
       agentTypes: [...e.types.entries()].sort((a, b) => b[1] - a[1]).map(([t, n]) => (n > 1 ? `${t}×${n}` : t)),
@@ -1019,6 +1142,9 @@ function buildGateState(
       resolveCallerTtlKind(caller?.sessionId ?? null, caller?.transcriptPath ?? null),
       currentTtlContext(),
     ),
+    // WHO is asking — the identity every model-facing message is scoped against, so a warning can
+    // only ever describe the caller's OWN project (see AgentGateState.caller).
+    caller: { session: caller?.sessionId ?? null, cwd: caller?.cwd ?? null },
     thresholds: gateThresholds,
   }
 }
@@ -2806,10 +2932,15 @@ function instrumentResponse(req: http.IncomingMessage, res: http.ServerResponse,
   const finish = (): void => {
     if (logged) return
     logged = true
+    // ONE memoryUsage() call for both figures: two calls would sample different instants and could
+    // report rss < heap, which is impossible and would discredit the very trace this exists to make
+    // trustworthy.
+    const mem = process.memoryUsage()
     requestLog.record({
       ts: new Date().toISOString(), method: req.method ?? 'GET', path: urlPath,
       status: res.statusCode, durationMs: Date.now() - t0, bytes,
-      heapUsedMb: process.memoryUsage().heapUsed / 1048576,
+      heapUsedMb: mem.heapUsed / 1048576,
+      rssMb: mem.rss / 1048576,
     })
   }
   res.on('finish', finish)
@@ -2823,12 +2954,20 @@ function instrumentResponse(req: http.IncomingMessage, res: http.ServerResponse,
 // via the request log + a stderr line, so heap-pressure sheds are visible in the crash.log-adjacent record.
 function heavyGuard(res: http.ServerResponse, urlPath: string, label: string): boolean {
   const p = heapPressure()
-  if (!p.over) return false
-  console.warn(`[AgentLens] heap-pressure shed: ${label} ${urlPath} — heap ${p.heapUsedMb.toFixed(0)}MB ≥ hwm ${p.hwmMb.toFixed(0)}MB (limit ${p.limitMb.toFixed(0)}MB)`)
+  // TRDD-34B9JAZK: check RSS alongside heap — see the rssPressure() doc comment in serverRuntime.ts
+  // for why heap alone cannot see the native/off-heap growth that has twice killed this process.
+  const r = rssPressure()
+  if (!p.over && !r.over) return false
+  if (r.over) {
+    console.warn(`[AgentLens] rss-pressure shed: ${label} ${urlPath} — rss ${r.rssMb.toFixed(0)}MB ≥ hwm ${r.hwmMb.toFixed(0)}MB (of ${r.limitMb.toFixed(0)}MB total)`)
+  } else {
+    console.warn(`[AgentLens] heap-pressure shed: ${label} ${urlPath} — heap ${p.heapUsedMb.toFixed(0)}MB ≥ hwm ${p.hwmMb.toFixed(0)}MB (limit ${p.limitMb.toFixed(0)}MB)`)
+  }
   res.writeHead(503, { 'Content-Type': 'application/json', 'Retry-After': '2' })
   res.end(JSON.stringify({
-    error: 'collector under heap pressure — request shed to stay alive',
+    error: `collector under ${r.over ? 'rss' : 'heap'} pressure — request shed to stay alive`,
     heapUsedMb: Math.round(p.heapUsedMb), hwmMb: Math.round(p.hwmMb), limitMb: Math.round(p.limitMb),
+    rssMb: Math.round(r.rssMb), rssHwmMb: Math.round(r.hwmMb),
   }))
   return true
 }
@@ -3136,7 +3275,14 @@ const uiServer = http.createServer(async (req, res) => {
         // absent) number forever instead of the real delta-log footprint.
         files: { spans: spanStoreStats.totalBytes, offsets: offsetsLog.diskBytes(), cards: cardsLog.diskBytes() },
       },
-      bodies: { archive: archiveDiskUsage(BODIES_ARCHIVE_DIR), lastPass: p.bodiesLastPurge },
+      bodies: {
+        archive: archiveDiskUsage(BODIES_ARCHIVE_DIR), lastPass: p.bodiesLastPurge,
+        // TRDD-KB17X5G2 Option 3: spool health, including whether we are currently spilling new
+        // sessions' bodies to the SSD dir and how many times that has happened since boot.
+        spool: SPOOL_MODE
+          ? { mountPoint: SPOOL_MOUNT_POINT, sizeBytes: SPOOL_SIZE_BYTES, backpressureActive: p.spoolBackpressureActive, backpressureSpills: p.spoolBackpressureSpills }
+          : null,
+      },
       hookEvents: { ...hookEventsDiskUsage(HOOK_EVENTS_DIR), receivedSinceBoot: p.hookEventWrites, spooled: hookSpoolCount() },
       // Status-line samples: their own store, so `parts`/`partBytes` (sealed, compressed) are
       // reported apart from `walBytes` (raw and un-sealed) — a walBytes that keeps climbing while
@@ -3371,7 +3517,8 @@ const uiServer = http.createServer(async (req, res) => {
         const transcriptPath = typeof p.transcript_path === 'string' ? p.transcript_path : null
         // Real parent context (tokens from the transcript's last usage) + cache warmth (mtime).
         const parent = transcriptPath ? readTranscriptContext(transcriptPath, now) : { contextTokens: null, idleMs: null }
-        const state = buildGateState(now, parent, { sessionId, transcriptPath })
+        const cwd = typeof p.cwd === 'string' ? p.cwd : null
+        const state = buildGateState(now, parent, { sessionId, transcriptPath, cwd })
         persistStats.gateChecks++
 
         if (p.hook_event_name === 'PostToolUse') {
@@ -3810,11 +3957,24 @@ const uiServer = http.createServer(async (req, res) => {
   // content actually reaches the span on read (which /api/summary would fold away). Read-only, and the
   // server is localhost-only (same seam class as the other /api/debug/* endpoints).
   if (req.method === 'GET' && url?.startsWith('/api/debug/span-attr')) {
+    if (heavyGuard(res, url, 'span-attr')) return
     const q = new URLSearchParams((req.url ?? '').split('?')[1] ?? '')
     const traceId = q.get('traceId') ?? ''
     const spanId = q.get('spanId') ?? ''
     const key = q.get('key') || 'gen_ai.output.messages'
-    const span = spanStore.loadRange(0, Infinity).find(s => s.traceId === traceId && s.spanId === spanId)
+    // forEachInRange, never loadRange(0, Infinity): one hit on this debug endpoint materialized the
+    // whole 5M+ span store into a single array — the allocation shape that OOM'd the server in
+    // TRDD-QK3L5QAS, reachable by one HTTP request (review finding). The visitor keeps only the
+    // match; no early-exit support means worst case is still a full WALK, but never a full COPY.
+    // The walk is WINDOWED (review finding #2 on this route): unbounded, one localhost GET streamed
+    // the entire multi-GB store — tens of seconds of stalled collector per request. The S3-F3b seam
+    // only ever looks up a span it just wrote, so it defaults to the last 24h; an explicit fromMs
+    // widens it when a debug session genuinely needs history.
+    const fromMs = Number(q.get('fromMs')) > 0 ? Number(q.get('fromMs')) : Date.now() - 24 * 3600e3
+    let span: Span | undefined
+    spanStore.forEachInRange(fromMs, Infinity, (s) => {
+      if (!span && s.traceId === traceId && s.spanId === spanId) span = s
+    })
     const attr = span?.attributes.find(a => a.key === key)
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ found: !!span, value: attr?.value.stringValue ?? null }))

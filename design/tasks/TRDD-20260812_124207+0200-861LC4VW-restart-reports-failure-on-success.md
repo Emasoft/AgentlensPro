@@ -1,0 +1,115 @@
+---
+trdd-id: 861LC4VW
+title: server restart reports a failed start and NOT RUNNING on a restart that succeeded
+column: human_review
+created: 2026-08-12T12:42:07+0200
+updated: 2026-08-12T13:03:23+0200
+current-owner: claude-agentlenspro
+task-type: bugfix
+approval-tier: 0
+scope: project
+project-id: agentlenspro
+labels: [cli, observability, usability]
+severity: low
+effort: small
+npt: []
+eht: []
+---
+
+# server restart reports a failed start and NOT RUNNING on a restart that succeeded
+
+## Observed (verified first-hand, 2026-08-12 ~12:32)
+
+`agentlenspro server restart` printed **three** `Refusing to start` lines naming pids 57553 and
+40460, and the `status` line that followed said **NOT RUNNING**. It read as a failed restart and an
+outage.
+
+It was neither. Thirteen seconds later pid **40460** — one of the pids the output had just named as
+a refusal — was serving on 3000 and 4318, and it is the process still running now (verified from a
+`ps` snapshot: `Wed Aug 12 12:32:14 2026`, uptime consistent with `server status`). The restart had
+in fact succeeded at the moment it announced failure.
+
+## Why this is worth fixing even though it is cosmetic
+
+The output inverts the operator's conclusion at exactly the moment they are most likely to act on
+it. The documented remedy for a failed restart is to restart again — which, on a server that is
+already mid-startup, produces another round of the same refusals and can genuinely thrash a healthy
+process. Worse, this project's own doctrine says a restart interrupts ~20 concurrent Claude
+sessions, so a spurious "it failed" invites an expensive and needless second interruption.
+
+It also poisons diagnosis of a real card: TRDD-34B9JAZK (server OOM) will be investigated partly
+from restart-time output, and a startup path that cries failure on success is noise in exactly that
+signal.
+
+## ~~Suspected mechanism — INFERRED~~ → REFUTED 2026-08-12 by reading the code
+
+The guess recorded at filing was: *"the restart path retries the spawn, so the losing racers in its
+own retry loop each hit the guard and print `Refusing to start`."* **That is wrong.**
+`ensureServer()` (`src/cli/serverControl.ts:89`) spawns **exactly once** — there is no retry loop,
+so there are no self-inflicted racers. It already handles a lost race correctly and deliberately:
+lines 116-118 consult `findServerPid()` only when our own child is gone, treating another server
+winning as *"a success, not a death"*, and lines 131-135 report the pid that is actually **serving**
+rather than the child we spawned.
+
+Kept rather than deleted because the guess is the point: it was plausible, it was written down as
+INFERRED, and reading 130 lines refuted it in one pass.
+
+## Verified mechanism
+
+`Refusing to start` is emitted by the **server process** (`standalone/server.ts:197`), whose stdout
+and stderr are redirected into `server.log` (`serverControl.ts:84,92`). That log is **one
+append-only file shared by every process that ever started a server for this data dir** — every
+hook's `ensureServer`, every concurrent CLI — and, measured here, **it carries no timestamps at
+all**.
+
+Measured on this machine at the time of the incident:
+
+- **29** accumulated `Refusing to start` blocks in a 15 MB `server.log`.
+- They name **four different owner pids** (37104, 80877, 57553, 40460) — i.e. four unrelated eras.
+- **One refusal is three lines** (the refusal, "Only ONE server may run…", "Use `server status`…").
+  The "three lines" in the original report were therefore **one** refusal, not three.
+- `logTail(8)` prints the last 8 lines ⇒ ~2.7 blocks ⇒ which is exactly why the output showed both
+  57553 and 40460.
+
+The inversion is the dangerous part. A refusal names the pid that **won**: *"another server (pid
+40460) already owns this data directory"*. 40460 was the healthy owner being protected — but a
+reader scanning a tail printed under a failed command reads it as "40460 refused to start". That is
+precisely the wrong conclusion, and it is the one the original report drew.
+
+## Fixed
+
+`logTail(lines, fromOffset)` now reads only the bytes appended **since our own spawn**
+(`logSizeNow()` is captured immediately before `spawn`, and both error sites pass it). An attempt
+that wrote nothing says so explicitly rather than borrowing someone else's last 8 lines; a log
+rotated under us is reported as rotated instead of quoted from a stale offset; and the scope is
+stated in the header, because "the last 8 lines" and "the last 8 lines we wrote" are different
+claims that a reader acts on differently. The unscoped call is unchanged, so existing callers keep
+working.
+
+## Acceptance criteria
+
+- [x] Mechanism confirmed **or refuted** by reading the code, finding recorded here. It was
+      REFUTED, and the card was re-scoped to the real cause rather than patched to fit the guess.
+- [x] No foreign/historical refusal is quoted as this attempt's diagnosis. A refusal our own child
+      genuinely emits is still shown in full — the fix scopes the tail, it does not silence the
+      guard, so a false alarm was not traded for a silent one.
+- [x] Tests that FAIL against unfixed code and pass after. Falsified on **behaviour**, not on a
+      missing symbol: `logSizeNow` was left in place and only the offset arithmetic was neutered, so
+      the two scoping tests failed on content (`'a refusal by another process must not appear'`,
+      `'expected an explicit "wrote nothing"'`) with the other 2237 tests untouched.
+- [ ] **NOT DONE — the `NOT RUNNING` half is unestablished.** `showStatus()` does not call
+      `logTail` at all (verified), so the status line has a different cause that this card has not
+      identified. Do not assume the fix above addresses it. Reproduce it first, against a scratch
+      `DATA_DIR`, or split it into its own card.
+
+## Do NOT
+
+- Do not "fix" the remaining half by silencing the guard's message, or by having `status` retry
+  until it likes the answer. Both hide a real refusal.
+- Do not run a restart on this machine purely to reproduce it while ~20 Claude sessions are live.
+  Reproduce against a scratch `DATA_DIR` **and** `HOME`, the way every test in `src/test/` does —
+  changing ports alone does NOT isolate an instance, because both processes still share the data
+  directory.
+- Do not add timestamps to `server.log` as the fix for this card. It is a real improvement and a
+  much larger change (the lines come from the server's own `console.*`, not from a logger), and
+  scoping the tail solves the reported defect without it.

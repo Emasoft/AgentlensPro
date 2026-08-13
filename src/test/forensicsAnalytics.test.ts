@@ -15,6 +15,10 @@ const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'fal-p36-'))
 const bodiesDir = path.join(tmpRoot, 'otel-bodies')
 const forensicsDbPath = path.join(tmpRoot, 'forensics.db')
 const mainDbPath = path.join(tmpRoot, 'agentlens.db')
+// indexApiCalls now also reads a Parquet STORE (default dataPath('store') — this developer's real
+// ~/.agentlens/store). A never-created dir keeps this fixture's exact-count assertions isolated from
+// that real corpus (see forensicsIndex.test.ts's noStoreDir for the same rationale).
+const noStoreDir = path.join(tmpRoot, 'no-store')
 fs.mkdirSync(bodiesDir, { recursive: true })
 suiteTeardown(() => { try { fs.rmSync(tmpRoot, { recursive: true, force: true }) } catch { /* best effort */ } })
 
@@ -68,7 +72,7 @@ suite('FAL Phase 3/6 — indexed fixture setup', () => {
     for (let i = 0; i < 3; i++) { emitCall('sess-wt', 300000, { withImage: true }) }
     for (let i = 0; i < 3; i++) { emitCall('sess-root', 90000) }
     await buildMainDb()
-    const res = await indexApiCalls({ bodiesDir, forensicsDbPath, mainDbPath })
+    const res = await indexApiCalls({ bodiesDir, forensicsDbPath, mainDbPath, storeDir: noStoreDir })
     assert.equal(res.dbAvailable, true)
     assert.equal(res.inserted, 12)
   })
@@ -126,11 +130,31 @@ suite('FAL Phase 3 — compare_configs', () => {
 })
 
 suite('FAL Phase 6 — run_diagnostics_sql', () => {
-  test('no args lists all 16 presets', async () => {
+  test('no args lists all 18 presets', async () => {
     const r = await runDiagnosticsSql({})
     assert.equal(r.mode, 'list')
     assert.equal(r.presets!.length, Object.keys(PRESETS).length)
-    assert.equal(r.presets!.length, 16)
+    assert.equal(r.presets!.length, 18)
+  })
+
+  test('preset unclassified_events surfaces the unexplained cache-write spikes with drill-down refs', async () => {
+    // k:1 sets the spike threshold to the mean itself, so the fixture's heaviest call qualifies.
+    const r = await runDiagnosticsSql({ preset: 'unclassified_events', params: { k: 1 }, forensicsDbPath })
+    assert.equal(r.mode, 'preset')
+    const rows = r.rows ?? []
+    assert.ok(rows.length >= 1, 'the above-mean unexplained call must surface')
+    assert.equal(rows[0].break_cause, null, 'fixture carries no classified causes — every hit is unexplained')
+    assert.ok(typeof rows[0].response_ref === 'string' && (rows[0].response_ref as string).length > 0, 'each row must carry its evidence pointer')
+    const ccs = rows.map(row => Number(row.cache_creation_tokens))
+    assert.deepEqual(ccs, [...ccs].sort((a, b) => b - a), 'heaviest unexplained spike first')
+  })
+
+  test('preset schema lists the fact tables with their CREATE statements', async () => {
+    const r = await runDiagnosticsSql({ preset: 'schema', forensicsDbPath })
+    const names = (r.rows ?? []).map(row => row.table_name)
+    for (const t of ['api_calls', 'call_injections', 'call_content']) {
+      assert.ok(names.includes(t), `schema preset must list ${t}`)
+    }
   })
 
   test('preset fork_vs_fresh returns fork + fresh rows', async () => {

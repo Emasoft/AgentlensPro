@@ -3,9 +3,10 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import {
-  buildCallComposition, buildSessionComposition, readResponseUsage,
+  buildCallComposition, buildSessionComposition, readResponseUsage, windowSizeFor,
   ContextCompositionIndex, type RequestRef,
 } from '../contextCompositionIndex'
+import { lookupRates } from '../shared/pricing'
 import { callBodyRegistry } from '../rawBodyContext'
 import { estimateTokensFromBytes } from '../tokenEstimator'
 
@@ -191,5 +192,55 @@ suite('contextCompositionIndex — query engine via the registry (lazy path)', (
     assert.strictEqual(summary.peakCall, null)
     assert.strictEqual(summary.residentBlobs.length, 0)
     assert.ok(summary.coverageNote && summary.coverageNote.includes('No raw OTEL request bodies'))
+  })
+})
+
+// ── window-size inference (Claude Code 2.1.219: opus-5 is 1M AND the default) ───
+suite('contextCompositionIndex — windowSizeFor reads the pricing table, not a private regex', () => {
+  test('every 1M model in the pricing table gets a 1M window — the regex only knew fable/[1m]', () => {
+    // The defect: a private regex was a SECOND source of truth that fell behind the table. Once
+    // claude-opus-5 (1M native) became the DEFAULT Opus, every session on it was scored against a
+    // 200k window and reported ~5x fuller than it was. Falsified against the old regex: opus-5,
+    // opus-4-8 and sonnet-5 all returned 200000.
+    for (const id of ['claude-opus-5', 'claude-opus-4-8', 'claude-sonnet-5']) {
+      const declared = lookupRates(id)?.contextWindowTokens
+      assert.strictEqual(declared, 1_000_000, `fixture drift: ${id} is no longer 1M in the table`)
+      assert.strictEqual(windowSizeFor(id), declared, `${id} must inherit the table's window`)
+    }
+  })
+
+  test('a [1m]-tagged variant resolves through the table by prefix', () => {
+    assert.strictEqual(windowSizeFor('claude-opus-5[1m]'), 1_000_000)
+  })
+
+  test('an unknown id keeps the explicit long-context tag as a fallback signal, else 200k', () => {
+    assert.strictEqual(windowSizeFor('some-unreleased-model-1m'), 1_000_000)
+    assert.strictEqual(windowSizeFor('some-unreleased-model'), 200_000)
+    assert.strictEqual(windowSizeFor(undefined), 200_000)
+  })
+
+  test('a genuinely 200k model is still 200k — the widening must not become "always 1M"', () => {
+    assert.strictEqual(lookupRates('claude-haiku-3-5')?.contextWindowTokens, 200_000)
+    assert.strictEqual(windowSizeFor('claude-haiku-3-5'), 200_000)
+  })
+
+  test('the context-1m beta proves 1M even for a model the table calls 200k', () => {
+    // The `[1m]` a user selects is stripped before the call — every captured body says
+    // `claude-opus-5`, never `claude-opus-5[1m]` — so the beta is the only in-band evidence.
+    assert.strictEqual(windowSizeFor('some-unreleased-model', ['context-1m-2025-08-07']), 1_000_000)
+    assert.strictEqual(windowSizeFor('claude-haiku-3-5', ['context-1m-2025-08-07']), 1_000_000)
+  })
+
+  test('a later dated revision of the beta still counts, and unrelated betas do not', () => {
+    assert.strictEqual(windowSizeFor('claude-haiku-3-5', ['context-1m-2099-01-01']), 1_000_000)
+    assert.strictEqual(windowSizeFor('claude-haiku-3-5', ['oauth-2025-04-20', 'effort-2025-11-24']), 200_000)
+  })
+
+  test('ABSENCE of the beta never downgrades — the inverse inference is measurably false', () => {
+    // 137 captured claude-fable-5 requests carry no context-1m beta, and one of them reached
+    // 645,803 input tokens. Downgrading on absence would have reported that as 323% of 200k.
+    assert.strictEqual(windowSizeFor('claude-fable-5', []), 1_000_000)
+    assert.strictEqual(windowSizeFor('claude-fable-5', ['oauth-2025-04-20']), 1_000_000)
+    assert.strictEqual(windowSizeFor('claude-opus-5', undefined), 1_000_000)
   })
 })

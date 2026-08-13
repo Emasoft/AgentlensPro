@@ -381,6 +381,8 @@ export interface CallContext {
   sessionId: string
   accountUuid?: string        // parsed from metadata.user_id blob (identifier, not a secret; pointer-only)
   model?: string
+  betas?: string[]            // the request's `betas` list — the only in-band evidence of an opted-in
+                              // capability (e.g. `context-1m-2025-08-07`); see windowSizeFor
   blocks: ContextBlock[]
   truncated: boolean          // true if the file was oversized or any block text was capped
 }

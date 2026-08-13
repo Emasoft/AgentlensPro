@@ -10,6 +10,7 @@ import * as path from 'path'
 import { apiRequest, dataDir, dashboardUrl, fmtGb, fmtMb, init, mcpEndpoint, sleep } from './cliCore'
 import { dataDirSource } from '../dataDir'
 import { agentlensDisabled, killSwitchPath } from './killSwitch'
+import { UsageError } from './cliErrors'
 
 /** Count of hook events durably spooled to disk but not yet reingested (server was down / shedding).
  *  Zero in the healthy case; a non-zero, non-shrinking value means the daemon isn't draining. */
@@ -85,6 +86,10 @@ export async function ensureServer(): Promise<void> {
     outFd = 'ignore'
     logProblem = ` (server output is being DISCARDED — ${serverLogPath()} could not be opened: ${(e as Error).message})`
   }
+  // Where the shared log ends RIGHT NOW, before our child can append a byte. Everything after this
+  // offset is ours; everything before it belongs to other processes and other days, and the log has
+  // no timestamps to tell the reader which is which.
+  const logStart = logSizeNow()
   const child = spawn(process.execPath, [`--max-old-space-size=${DEFAULT_MAX_OLD_SPACE_MB}`, serverJs], {
     cwd: path.dirname(path.dirname(serverJs)),
     detached: true,
@@ -117,7 +122,7 @@ export async function ensureServer(): Promise<void> {
       const anotherServing = childExited ? await findServerPid().catch(() => null) !== null : false
       const verdict = startupVerdict({ answered, childExited, anotherServing, deadlinePassed: Date.now() >= deadline })
       if (verdict === 'died') {
-        throw new Error(`the server exited during startup — it never answered.${logProblem}\n${logTail()}`)
+        throw new Error(`the server exited during startup — it never answered.${logProblem}\n${logTail(8, logStart)}`)
       }
       continue // 'keep-waiting' — alive and still starting; 'timed-out' falls out of the loop below
     }
@@ -141,7 +146,7 @@ export async function ensureServer(): Promise<void> {
   throw new Error(
     `the server has not answered within ${Math.round(readyTimeoutMs() / 1000)}s — ${still}. ` +
     'A large span store makes the first open slow; raise AGENTLENS_SERVER_READY_TIMEOUT_MS, or run ' +
-    `\`agentlenspro server status\` in a moment to see whether it came up on its own.${logProblem}\n${logTail()}`,
+    `\`agentlenspro server status\` in a moment to see whether it came up on its own.${logProblem}\n${logTail(8, logStart)}`,
   )
 }
 
@@ -171,15 +176,49 @@ export function readyTimeoutMs(): number {
   return Number.isFinite(raw) && raw >= 1_000 ? raw : 180_000
 }
 
+/** Where the server log currently ends. Captured BEFORE a spawn so the tail we may print afterwards
+ *  can be scoped to what THAT attempt wrote. A missing log yields 0, which is the correct floor:
+ *  everything appended from then on is ours. */
+export function logSizeNow(): number {
+  try { return fs.statSync(serverLogPath()).size } catch { return 0 }
+}
+
 /** The tail of the server log — the reason a boot failure happened is already written there, and an
- *  error that says "check the log" without showing it makes the reader do the tool's job. */
-export function logTail(lines = 8): string {
+ *  error that says "check the log" without showing it makes the reader do the tool's job.
+ *
+ *  `fromOffset` is what keeps it HONEST, and it is not a micro-optimisation. server.log is ONE
+ *  append-only file shared by every process that ever started a server for this data dir — every
+ *  hook's ensureServer, every concurrent CLI — and it carries NO timestamps. So an unscoped tail
+ *  quotes lines that are true, old, and someone else's, with the authority of a diagnosis of the
+ *  command just run. Measured here: 29 accumulated "Refusing to start" blocks naming four different
+ *  owner pids, where the last 8 lines straddle two unrelated eras. The inversion is the dangerous
+ *  part — a refusal names the pid that WON ("another server (pid N) already owns this"), so a reader
+ *  scanning the tail concludes N failed when N is the healthy server they are being protected by.
+ *  Scoping to the bytes appended since our own spawn removes the entire class. */
+export function logTail(lines = 8, fromOffset = 0): string {
+  const p = serverLogPath()
+  let fd: number | null = null
   try {
-    const raw = fs.readFileSync(serverLogPath(), 'utf8')
-    const tail = raw.split('\n').filter(Boolean).slice(-lines)
-    return tail.length ? `--- ${serverLogPath()} (last ${tail.length} line(s)) ---\n${tail.join('\n')}` : `(${serverLogPath()} is empty)`
+    fd = fs.openSync(p, 'r')
+    const size = fs.fstatSync(fd).size
+    // A log that SHRANK was rotated or truncated under us, so our offset now points into unrelated
+    // bytes. Say that rather than quoting whatever happens to sit at that position.
+    if (fromOffset > size) return `(${p} was rotated or truncated during startup — no tail for this attempt)`
+    const nothing = fromOffset === 0 ? `(${p} is empty)` : `(this start attempt wrote nothing to ${p})`
+    const len = size - fromOffset
+    if (len === 0) return nothing
+    const buf = Buffer.allocUnsafe(len)
+    fs.readSync(fd, buf, 0, len, fromOffset)
+    const tail = buf.toString('utf8').split('\n').filter(Boolean).slice(-lines)
+    if (!tail.length) return nothing
+    // Label the scope, because "last 8 lines" of a shared log and "last 8 lines this attempt wrote"
+    // are different claims and the reader acts differently on each.
+    const scope = fromOffset === 0 ? '' : ', this attempt only'
+    return `--- ${p} (last ${tail.length} line(s)${scope}) ---\n${tail.join('\n')}`
   } catch (e) {
-    return `(could not read ${serverLogPath()}: ${(e as Error).message})`
+    return `(could not read ${p}: ${(e as Error).message})`
+  } finally {
+    if (fd !== null) { try { fs.closeSync(fd) } catch { /* nothing left to close */ } }
   }
 }
 
@@ -448,7 +487,12 @@ export async function serverCommand(argv: string[]): Promise<void> {
       await showStatus()
       return
     default:
-      throw new Error(`server expects start|stop|restart|status (got "${verb ?? ''}") — e.g. agentlenspro server start [--supervise]`)
+      // UsageError, not Error: standalone/cli.ts maps the type to the exit code, and cliErrors.ts
+      // reserves 1 for the watchers' ABORT signal. A plain Error here made `agentlenspro server`
+      // (subcommand forgotten) indistinguishable from "the server code threw" — while every
+      // sibling verb with the identical missing-argument shape (budget, watch, ctxmap) already
+      // returned 64. Found by RUNNING the verb matrix, not by review: each site reads fine alone.
+      throw new UsageError(`server expects start|stop|restart|status (got "${verb ?? ''}") — e.g. agentlenspro server start [--supervise]`)
   }
 }
 

@@ -21,6 +21,7 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
 import { isDisallowedCrossOrigin, setAllowedOriginCors } from './httpOrigin'
+import { heapPressure, rssPressure } from './serverRuntime'
 import { calcTokenCostUsd } from './shared/pricing'
 import { contextTokens } from './shared/tokenBuckets'
 import type {
@@ -1094,7 +1095,8 @@ const TOOLS = [
       'CLAUDE_MD_CHANGED, AGENT_METADATA_CHANGED, SYSTEM_TIMESTAMP, CONTEXT_ORDER_CHANGED, TTL_EXPIRY, ' +
       'COLD_START, COMPACTION, SUBAGENT_INTERLEAVE (A→B→A stream artifact — sub-agent calls share the ' +
       'parent session id), NORMAL_GROWTH (append-only new-tail first-write — expected, not a break), ' +
-      'MESSAGE_TRIMMED (harness context-editing removed a cached block), ATTACHMENT_CHANGED (image / ' +
+      'MESSAGE_TRIMMED (harness context-editing removed a cached block), MESSAGE_SPLICED (a new block ' +
+      'inserted mid-prefix shifted everything after it), ATTACHMENT_CHANGED (image / ' +
       'tool_use fingerprint changed), UNCLASSIFIED. Emits a TIMELINE of break events (each naming the culprit ' +
       'element + tokens re-written) PLUS a REPEAT-OFFENDER rollup: break events grouped by (cause, the ' +
       'specific offending element) so the SAME element breaking the cache across many turns collapses ' +
@@ -1455,7 +1457,7 @@ const TOOLS = [
       '(tools/system/model) changes or a TTL expires. This tool runs the root-cause classifier across every ' +
       'session in the bounded scan and returns TWO ranked views: (1) `causeRanking` — the break causes ' +
       '(TOOL_SEARCH_DEFERRED, MCP_TOOLS_CHANGED, MODEL_SWITCH, HOOK_INJECTION, TTL_EXPIRY, COMPACTION, ' +
-      'MESSAGE_TRIMMED, ATTACHMENT_CHANGED, plus the EXPECTED ones — COLD_START, NORMAL_GROWTH, ' +
+      'MESSAGE_TRIMMED, MESSAGE_SPLICED, ATTACHMENT_CHANGED, plus the EXPECTED ones — COLD_START, NORMAL_GROWTH, ' +
       'SUBAGENT_INTERLEAVE — each row carrying an `expected` flag) ranked by wasted cache_creation, so ' +
       'you see the most common/expensive category; and (2) ' +
       '`actorLeaderboard` — the actual PERPETRATORS, backtraced from the enriched culprit id: the specific ' +
@@ -1573,7 +1575,13 @@ const TOOLS = [
         sessionId: { type: 'string', description: 'Narrow to one session inside the project (default: every session the project owns)' },
         context:   { type: 'number', description: 'How many calls to show before AND after the peak (default 3, max 25). mode=peak only.' },
         limit:     { type: 'number', description: 'How many recent calls to list (default 12, max 200). mode=recent only.' },
-        window:    { type: 'number', description: 'Only calls from the last N hours; omit for the bounded most-recent scan' },
+        // NOT "omit for the bounded most-recent scan" — that was false and pointed the reader at the
+        // one input that kills the server. Unlike the sibling tools here, this one reads the OTEL
+        // span store (cacheEventLog.ts → scanOtelCallEvents), where an absent window means since=0,
+        // i.e. ALL of history with no cap; the others go through scanCacheCreationEvents, which IS
+        // capped. Omitting it is under investigation as TRDD-34B9JAZK (OOM under server load), so
+        // the description says so rather than reassuring someone into it.
+        window:    { type: 'number', description: 'Only calls from the last N hours (e.g. 5 for the live rate-limit window). Omitting it scans ALL history and is NOT capped — on a large store that can exhaust the server heap; pass a window unless you specifically need everything' },
         format:    { type: 'string', description: 'table (default) | json | markdown' },
       },
     },
@@ -3329,6 +3337,22 @@ export interface McpServerOptions {
   getConsumptionEvents?: () => ConsumptionEvent[]
 }
 
+// TRDD-34B9JAZK — the raw-body-scan tool family: every tool that runs scanCacheCreationEvents,
+// scanSessionsAndResponses, or an equivalent bounded-but-not-free materialization over the
+// bodies/store directory. This is the traffic shape observed immediately before both silent kills
+// (a burst of get_cache_break_timeline + get_session_detail + run_diagnostics_sql calls). Named here
+// once so the shed check above and any future caller-side accounting share one list.
+const HEAVY_MCP_TOOLS = new Set<string>([
+  'get_cache_event_log',
+  'get_cache_break_timeline',
+  'get_cache_creation_report',
+  'trace_expensive_writes',
+  'get_session_detail',
+  'get_context_composition',
+  'get_call_context',
+  'run_diagnostics_sql',
+])
+
 export function createMcpServer(opts: McpServerOptions): Server {
   const server = new Server(
     { name: 'agentlens', version: '1.0.0' },
@@ -3350,6 +3374,34 @@ export function createMcpServer(opts: McpServerOptions): Server {
     const getAccount = opts.getAccount ?? null
     const getTtlContext = opts.getTtlContext ?? null
     const getRateLimits = opts.getRateLimits ?? null
+
+    // TRDD-34B9JAZK: this MCP endpoint (unlike standalone/server.ts's REST routes) had NO
+    // heap/rss-pressure gate at all — verified by reading both http.createServer entry points; only
+    // the REST `/api/*` handlers called heavyGuard(). That is a real gap, not a hypothesis: the tool
+    // family named in the incident (raw-body scans over otel-bodies / the Parquet store) runs
+    // EXCLUSIVELY through this handler, so a heap/rss ceiling wired only into server.ts never sees
+    // the traffic that has twice preceded a silent kill. Shed loud (an MCP error result, not a
+    // process death) instead of letting a heavy scan tip an already-pressured process over.
+    if (HEAVY_MCP_TOOLS.has(req.params.name)) {
+      const hp = heapPressure()
+      const rp = rssPressure()
+      if (hp.over || rp.over) {
+        const cause = rp.over ? `rss ${rp.rssMb.toFixed(0)}MB ≥ hwm ${rp.hwmMb.toFixed(0)}MB (of ${rp.limitMb.toFixed(0)}MB total)` : `heap ${hp.heapUsedMb.toFixed(0)}MB ≥ hwm ${hp.hwmMb.toFixed(0)}MB (limit ${hp.limitMb.toFixed(0)}MB)`
+        console.warn(`[AgentLens] mcp ${rp.over ? 'rss' : 'heap'}-pressure shed: ${req.params.name} — ${cause}`)
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              error: `collector under ${rp.over ? 'rss' : 'heap'} pressure — request shed to stay alive`,
+              tool: req.params.name,
+              heapUsedMb: Math.round(hp.heapUsedMb), heapHwmMb: Math.round(hp.hwmMb), heapLimitMb: Math.round(hp.limitMb),
+              rssMb: Math.round(rp.rssMb), rssHwmMb: Math.round(rp.hwmMb),
+            }),
+          }],
+          isError: true,
+        }
+      }
+    }
 
     let result: unknown
     switch (req.params.name) {
@@ -3808,15 +3860,21 @@ export function createMcpServer(opts: McpServerOptions): Server {
  * Handles a single HTTP request as an MCP endpoint.
  * Mount this on a route (e.g. `/mcp`) in your existing HTTP server.
  *
- * Each request gets its own transport instance (stateless per-request for
- * Streamable HTTP). The server instance is reused across requests.
+ * Each request gets its own transport instance AND its own Server (Protocol) instance. The
+ * per-request Server is not optional: the SDK's Protocol tracks exactly ONE transport, so a
+ * shared Server whose connect() races a second client throws "Already connected to a transport"
+ * — and a client that holds its stream open wedges the shared instance PERMANENTLY, failing
+ * every later rpc with that error while the HTTP layer keeps logging 200s. Observed live
+ * 2026-08-13: all 10 acceptance runs + tools/list dead with `rpc error (undefined)` (the CLI's
+ * rendering of the 500 body) until restart. createMcpServer only builds handler closures — no
+ * I/O — so a fresh instance per request costs microseconds and removes the whole failure class.
  */
 // 4 MB matches the standalone server's JSON-tool POST routes — tool-call requests are small; only
 // hostile or broken clients exceed this.
 const MCP_BODY_MAX_BYTES = 4 * 1024 * 1024
 
 export function handleMcpRequest(
-  server: Server,
+  makeServer: () => Server,
   req: http.IncomingMessage,
   res: http.ServerResponse,
 ): void {
@@ -3864,11 +3922,16 @@ export function handleMcpRequest(
     }
 
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
-    // Close the transport when the RESPONSE is done, whatever path got it there. 'close' fires
-    // after a normal finish AND on client abort, and attaching it BEFORE handling fixes two leaks
-    // the previous shape had: on handleRequest rejection the transport was never closed, and on a
-    // fast response 'finish' could fire before the success-path .then() attached its listener.
-    res.once('close', () => { transport.close().catch(() => { /* already closed */ }) })
+    const server = makeServer()
+    // Close transport AND the per-request server when the RESPONSE is done, whatever path got it
+    // there. 'close' fires after a normal finish AND on client abort, and attaching it BEFORE
+    // handling fixes two leaks the previous shape had: on handleRequest rejection the transport
+    // was never closed, and on a fast response 'finish' could fire before the success-path
+    // .then() attached its listener.
+    res.once('close', () => {
+      transport.close().catch(() => { /* already closed */ })
+      server.close().catch(() => { /* already closed */ })
+    })
     server.connect(transport)
       .then(() => transport.handleRequest(req, res, parsedBody))
       .catch(err => {
@@ -3889,7 +3952,8 @@ export function startMcpHttpServer(
   port: number,
   bindHost = '127.0.0.1',
 ): http.Server {
-  const server = createMcpServer(opts)
+  // A FACTORY, not a shared instance — see handleMcpRequest's header for the wedge this prevents.
+  const makeServer = (): Server => createMcpServer(opts)
   const httpServer = http.createServer((req, res) => {
     // ACAO only for same-origin/loopback origins — never the wildcard. MCP responses carry the
     // user's session data (prompts, costs, project paths), so ACAO:* let ANY browsed page read
@@ -3913,7 +3977,7 @@ export function startMcpHttpServer(
       res.end(JSON.stringify({ error: 'cross-origin request refused' }))
       return
     }
-    handleMcpRequest(server, req, res)
+    handleMcpRequest(makeServer, req, res)
   })
   httpServer.on('error', (err: NodeJS.ErrnoException) => {
     if (err.code === 'EADDRINUSE') {

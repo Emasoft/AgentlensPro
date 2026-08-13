@@ -21,6 +21,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { claudeProjectsDirs } from './logReader'
 import { assertReadOnlySelect } from './forensicsSql'
+import { MAX_OBJECT_SIZE, tornLineSql } from './ndjsonDuck'
 
 export interface RunTranscriptSqlOptions {
   preset?: string
@@ -55,9 +56,6 @@ export interface RunTranscriptSqlResult {
 const HARD_MAX_ROWS = 2000
 const DEFAULT_ROWS = 50          // token-lean default, same rationale as run_diagnostics_sql
 const DEFAULT_WINDOW_HOURS = 24
-// 64 MB per JSON line — transcript lines reach multi-MB (one pasted tool result); the reader's
-// default cap would drop them as "errors" under ignore_errors, silently thinning the data.
-const MAX_OBJECT_SIZE = 67_108_864
 
 // Frozen preset library. The view already contains ONLY the bounded file set, so presets need no
 // :since windowing of their own. Sparse-schema discipline (union_by_name): always filter
@@ -193,12 +191,24 @@ export async function runTranscriptSql(opts: RunTranscriptSqlOptions = {}): Prom
     const rowsJson = reader.getRowObjectsJson() as Array<Record<string, unknown>>
     const capped = rowsJson.length > limit
     const rows = capped ? rowsJson.slice(0, limit) : rowsJson
+
+    // Torn-line disclosure: only after the main query succeeded (one extra round-trip). A malformed
+    // line lands as an all-NULL row under ignore_errors, not a dropped one — count(*) alone would
+    // pass silently, so compare against count(type) ('type' is written on every real record, unlike
+    // 'timestamp'/'message' which some record shapes omit).
+    const [{ total: tlTotal, withCol: tlWithCol }] =
+      (await con.runAndReadAll(tornLineSql('transcripts', 'type'))).getRowObjectsJson()
+        .map((r) => ({ total: Number((r as Record<string, unknown>).total ?? 0), withCol: Number((r as Record<string, unknown>).withCol ?? 0) }))
+    const tornLines = tlTotal - tlWithCol
+
     return {
       mode, ...(opts.preset ? { preset: opts.preset } : {}),
       columns: reader.columnNames(), rows, rowCount: rows.length,
       coverage: {
         ...coverage,
-        note: coverage.note + (capped ? ` Rows capped at ${limit} — pass a larger limit (max ${HARD_MAX_ROWS}).` : ''),
+        note: coverage.note
+          + (capped ? ` Rows capped at ${limit} — pass a larger limit (max ${HARD_MAX_ROWS}).` : '')
+          + (tornLines > 0 ? ` ${tornLines} line(s) unparseable and excluded.` : ''),
       },
     }
   } catch (e) {

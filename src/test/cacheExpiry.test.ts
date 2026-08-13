@@ -140,7 +140,19 @@ suite('handleCheckCacheExpiry — project scope (2026-08-04)', () => {
   const iso = (minAgo: number): string => new Date(Date.now() - minAgo * 60_000).toISOString()
   // Every card reports the same recent request: these tests pin WHICH session is selected, and a
   // per-card timestamp would let the precision ranking, not the scope filter, decide the winner.
-  const tl = (): unknown[] => [apiRequestAt(iso(1))]
+  //
+  // CAPTURED ONCE — this must not be `iso(1)` inside the closure. `getTimeline` is called fresh per
+  // session (mcpServer.ts:2013), and `scanWithBudget` yields to the macrotask queue between items
+  // (`await setImmediate`, mcpServer.ts:3053). So a per-call `Date.now()` gives the LATER-processed
+  // card a strictly newer millisecond, and the strict-greater tie-break `ms > newestMs`
+  // (mcpServer.ts:2157) then crowns whichever card the scheduler happened to reach second. That is
+  // precisely the per-card timestamp the comment above says must not exist — and it made this suite
+  // fail 7 times in 20 isolated runs, more often the busier the machine. The product code is right;
+  // reading the real clock across its yield is what was not. (The file's other suites already pin a
+  // frozen `NOW`, line 16; these cards stay relative to the real clock because their expiry is
+  // assessed against it, so freezing the VALUE once is the fix, not adopting the fixed epoch.)
+  const activityAt = iso(1)
+  const tl = (): unknown[] => [apiRequestAt(activityAt)]
 
   test('the default pick is the newest main OF THE NAMED PROJECT, not the busiest one on the machine', async () => {
     // The foreign session is strictly newer — under the old rule it won every time.

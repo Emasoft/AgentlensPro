@@ -20,10 +20,10 @@
 
 import * as fs from 'fs'
 import {
-  buildCallContext, callBodyRegistry, IMAGE_BLOCK_LABEL_PREFIX,
+  buildCallContext, buildCallContextFromJson, callBodyRegistry, IMAGE_BLOCK_LABEL_PREFIX,
 } from './rawBodyContext'
 import { calibrateTokens } from './tokenEstimator'
-import { calcTokenCostUsd } from './shared/pricing'
+import { calcTokenCostUsd, lookupRates } from './shared/pricing'
 import type { ContextBlock, ContextBlockKind, TokenSource } from './shared/summarizerTypes'
 
 // The composition taxonomy is a SUPERSET of the shared ContextBlockKind: images live in the 'other'
@@ -164,12 +164,46 @@ export interface RequestRef {
 }
 
 // ── Window-size inference ─────────────────────────────────────────────────────
-// The request body carries no context-window size (max_tokens is the OUTPUT cap). Infer from the model:
-// 1M for the long-context families (fable / an explicit [1m] tag), else the 200k default. Approximate —
-// contextPct is labeled as derived from this inference.
-function windowSizeFor(model?: string): number {
-  if (model && /fable|\[1m\]|-1m\b/i.test(model)) { return 1_000_000 }
-  return 200_000
+// The request body carries no context-window size (max_tokens is the OUTPUT cap), so it is inferred
+// from the model — but from the PRICING TABLE, which already declares `contextWindowTokens` per
+// model and is what `database/reader.ts` reads. This used to be a private regex knowing only
+// `fable` / an explicit `[1m]` tag, which made it a SECOND source of truth that silently fell
+// behind: every 1M-native model shipped since was scored against a 200k window and its context
+// reported ~5x fuller than it was. That stopped being an edge case when `claude-opus-5` — 1M
+// native — became the DEFAULT Opus in Claude Code 2.1.219.
+//
+// The `betas` list refines this UPWARD ONLY, and the asymmetry is the whole point. Presence of
+// `context-1m-*` is proof the call opted into 1M. Absence proves NOTHING, and the tempting inverse
+// ("no beta ⇒ 200k") is measurably FALSE: across this machine's captured spool, all 180
+// `claude-opus-5` requests carried the beta, while 137 `claude-fable-5` requests carried none — and
+// fable still reached 645,803 input tokens in one call. So the beta gates 1M for some models and not
+// others, and a downgrade on its absence would have reported a 645k context as 323% of a 200k window.
+// The consequence worth stating plainly: `CLAUDE_CODE_DISABLE_1M_CONTEXT` (real — it is in the 2.1.224
+// binary) is NOT detectable from a body. Under it Claude Code simply omits the beta, which is
+// indistinguishable from a model that never needed one, so a 1M-capable model still reads as 1M here.
+// Fixing that would need the user's Claude Code env, which lives in a different process than ours.
+const DEFAULT_WINDOW_TOKENS = 200_000
+const LONG_CONTEXT_BETA = 'context-1m'      // matches `context-1m-2025-08-07` and any later dated revision
+const LONG_CONTEXT_TOKENS = 1_000_000
+
+/** The request opted into a 1M window. This is PROOF, and it is the only in-band proof there is:
+ *  the `[1m]` a user selects is stripped before the call (every captured body says `claude-opus-5`,
+ *  never `claude-opus-5[1m]`), so the beta is what actually carries it. */
+function optedIntoLongContext(betas?: string[]): boolean {
+  return (betas ?? []).some(b => b.includes(LONG_CONTEXT_BETA))
+}
+
+/** Exported for the regression test: the whole defect was that this disagreed with the pricing
+ *  table, which is only observable by asking it about a model directly. */
+export function windowSizeFor(model?: string, betas?: string[]): number {
+  if (optedIntoLongContext(betas)) return LONG_CONTEXT_TOKENS
+  if (!model) return DEFAULT_WINDOW_TOKENS
+  // `lookupRates` prefix-matches longer ids, so a `[1m]`-tagged variant resolves to its family row.
+  const known = lookupRates(model)?.contextWindowTokens
+  if (known) return known
+  // An id the table does not carry: an explicit long-context tag is still a signal worth honouring
+  // rather than silently defaulting a 1M session to 200k.
+  return /fable|\[1m\]|-1m\b/i.test(model) ? LONG_CONTEXT_TOKENS : DEFAULT_WINDOW_TOKENS
 }
 
 // ── Response-usage reader (bounded, cheap — response bodies are small) ─────────
@@ -229,16 +263,31 @@ const SYSTEM_KINDS = new Set<CompositionBlockKind>(['system', 'claudemd', 'rule'
 const TEXT_KINDS = new Set<CompositionBlockKind>(['userMsg', 'assistantMsg'])
 
 // ── One call → a CallComposition ──────────────────────────────────────────────
+// buildCallContextFromJson's own body parameter type is intentionally unexported (rawBodyContext.ts
+// keeps its raw-shape interfaces private) — JSON.parse's `any` return is structurally compatible
+// without needing to name it. A malformed rawText degrades to null (same as an unreadable file),
+// never throws into the caller.
+function parseRawTextSafely(rawText: string) {
+  try { return JSON.parse(rawText) } catch { return null }
+}
+
 /** Build one call's composition record from its request-body file (reuses buildCallContext — no
  *  re-parse of the body). When exact usage is supplied, the block estimates are calibrated to the exact
- *  prompt-side total and the call total is authoritative. Returns null when the body is unreadable. */
+ *  prompt-side total and the call total is authoritative. Returns null when the body is unreadable.
+ *
+ *  `opts.rawText`: when the caller ALREADY holds the body's text (e.g. forensicsIndex loaded it via
+ *  the store∪spool evidence base — bodyRef may then be a store-only srcName with no file on disk),
+ *  pass it here to skip buildCallContext's own disk read entirely. Parse failure degrades to null,
+ *  same contract as buildCallContext on an unreadable file — never throws. */
 export async function buildCallComposition(
   bodyRef: string,
   turn: number,
   ts: number,
-  opts: { projectHint?: string; exact?: CallExactUsage | null; modelHint?: string } = {},
+  opts: { projectHint?: string; exact?: CallExactUsage | null; modelHint?: string; rawText?: string } = {},
 ): Promise<CallComposition | null> {
-  const ctx = await buildCallContext(bodyRef)
+  const ctx = opts.rawText !== undefined
+    ? buildCallContextFromJson(parseRawTextSafely(opts.rawText))
+    : await buildCallContext(bodyRef)
   if (!ctx) { return null }
   const model = ctx.model ?? opts.modelHint
   const exact = opts.exact ?? null
@@ -268,7 +317,7 @@ export async function buildCallComposition(
   const sumOf = (pred: (b: CompositionBlock) => boolean): number => blocks.filter(pred).reduce((n, b) => n + b.tokens, 0)
   const estTotal = blocks.reduce((n, b) => n + b.tokens, 0)
   const contextTokens = exactContext ?? estTotal
-  const windowSize = windowSizeFor(model)
+  const windowSize = windowSizeFor(model, ctx.betas)
 
   return {
     sessionId: ctx.sessionId,

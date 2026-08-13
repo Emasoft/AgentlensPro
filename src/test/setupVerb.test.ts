@@ -1,11 +1,10 @@
 import * as assert from 'assert'
 import * as crypto from 'crypto'
 import * as fs from 'fs'
-import * as http from 'http'
 import * as os from 'os'
 import * as path from 'path'
 import { spawn } from 'child_process'
-import type { AddressInfo } from 'net'
+import { freePort } from './helpers/freePort'
 import { runSetup, runSetupCli, SetupOutcome } from '../cli/setup'
 import { GATE_CMD, GATE_MATCHER, HOOK_CMD, HOOK_EVENTS } from '../cli/hookInstall'
 import { ownedTelemetryKeys } from '../telemetryConfig'
@@ -46,16 +45,6 @@ function makeFixture(): Fixture {
     pathEnv: `${binDir}${path.delimiter}${process.env.PATH ?? ''}`,
     cleanup: () => fs.rmSync(home, { recursive: true, force: true }),
   }
-}
-
-function freePort(): Promise<number> {
-  return new Promise((resolve) => {
-    const s = http.createServer()
-    s.listen(0, '127.0.0.1', () => {
-      const port = (s.address() as AddressInfo).port
-      s.close(() => resolve(port))
-    })
-  })
 }
 
 function setupOpts(f: Fixture, ports: { ui: number; mcp: number; otlp: number }, extra: Record<string, unknown> = {}) {

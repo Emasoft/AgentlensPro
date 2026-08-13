@@ -85,7 +85,7 @@ function q(p: string): string { return `'${p.replace(/'/g, "''")}'` }
 
 /** Every Parquet part in a sub-dir as a readable relation, or null when none exist yet (a bare glob
  *  over an empty dir is an ERROR in DuckDB, not an empty set — the classic first-run crash). */
-function parquetScan(dir: string, sub: string): string | null {
+export function parquetScan(dir: string, sub: string): string | null {
   const files = partFiles(dir, sub)
   if (files.length === 0) return null
   // `union_by_name := true` is LOAD-BEARING once parts span two schema generations (TRDD-219K7C1N).
@@ -119,7 +119,40 @@ export async function openStore(opts: StoreOptions): Promise<Store> {
     memory_limit: memoryLimit(opts),
     threads: String(opts.threads ?? DEFAULT_THREADS),
   })
-  const con = await inst.connect()
+  const rawCon = await inst.connect()
+
+  // Track every in-flight native async call, and refuse new ones once close() has begun. WHY
+  // (2026-08-13, four consecutive suite runs dead at exit 139): this connection is SHARED across
+  // call chains, so when mocha's timeout abandoned a test mid-`await con.run(...)` and teardown
+  // then called close(), the bare closeSync() freed the duckdb connection WHILE the abandoned
+  // query was still executing on the napi worker thread — SIGSEGV in duckdb::ClientContext::Query
+  // (pthread_mutex_lock on a freed address; node-2026-08-13-05*.ips). No caller can guarantee
+  // quiescence of a shared connection, so close() itself must interrupt, DRAIN, and only then
+  // free. The per-call instances (bodiesEvidence's withDuck, statuslineStore's openDuck) are safe
+  // by construction — their finally runs only after their own awaits settle — which is why the
+  // guard lives here and not there. Appender/prepared-statement OPERATIONS are sync on the JS
+  // thread (never on the pool), so tracking their async creation is sufficient.
+  const pending = new Set<Promise<unknown>>()
+  let closed = false
+  const con = new Proxy(rawCon, {
+    get(target, prop) {
+      const val = Reflect.get(target, prop, target)
+      if (typeof val !== 'function') return val
+      return (...args: unknown[]) => {
+        if (closed) throw new Error(`store connection used after close() — ${String(prop)}() refused (touching the native binding here is the use-after-free the crash reports show)`)
+        const out = (val as (...a: unknown[]) => unknown).apply(target, args)
+        if (out instanceof Promise) {
+          pending.add(out)
+          const drop = () => { pending.delete(out) }
+          // Attaching handlers to the ORIGINAL promise also marks an abandoned rejection as
+          // handled, so a query interrupted out from under a timed-out caller cannot take the
+          // process down as an unhandled rejection.
+          out.then(drop, drop)
+        }
+        return out
+      }
+    },
+  })
   // No spill. An over-limit query must fail, not silently write gigabytes to the SSD.
   await con.run("SET temp_directory = ''")
   // We never rely on row order (every read is keyed by body_id/pos), so let DuckDB parallelize freely.
@@ -151,25 +184,51 @@ export async function openStore(opts: StoreOptions): Promise<Store> {
     for (const r of rows) known.add(String(r.sha))
   }
 
+  // Single-flight: concurrent or repeated close() calls all await the ONE drain-then-free pass.
+  // Without this, a test that closes in-test and again in teardown would double-free natively.
+  let closePromise: Promise<void> | null = null
   return {
     // nextPart starts at 0 per store instance: it only disambiguates flushes WITHIN this store —
     // cross-process uniqueness comes from the pid+timestamp in partName(). Deriving it from the
     // directory's file count (the first scheme) was the collision bug.
     con, dir: opts.dir, known, nextPart: 0,
-    async close() { con.closeSync(); inst.closeSync() },
+    close() {
+      closePromise ??= (async () => {
+        closed = true // refuse new queries from this tick on (the Proxy guard above)
+        // Interrupt whatever is running so the drain is bounded: an abandoned scan settles by
+        // rejection in milliseconds instead of running to completion first.
+        try { rawCon.interrupt() } catch { /* nothing running — fine */ }
+        await Promise.allSettled([...pending])
+        rawCon.closeSync()
+        inst.closeSync()
+      })()
+      return closePromise
+    },
   }
+}
+
+export interface FlushResult {
+  /** Number of blob spans made durable (0 when nothing was staged — same meaning as flush()'s old
+   *  return value). */
+  n: number
+  /** Every part file this flush actually wrote (one per non-empty table: blob/body/part), so a caller
+   *  that needs a durability barrier (fsync) knows EXACTLY which files to sync — never a guess at the
+   *  name, which depends on partName()'s internal Date.now()+pid+seq. Empty when nothing was staged. */
+  partPaths: string[]
 }
 
 /**
  * Flush staging to a NEW immutable Parquet part per table, then clear staging (in RAM — free).
- * Parts are never rewritten: that immutability IS the fix. Returns the number of blobs made durable.
+ * Parts are never rewritten: that immutability IS the fix. Returns both the blob count (flush()'s
+ * historical contract) and the paths actually written (needed by the fsync barrier — ingestPass.ts).
  */
-export async function flush(store: Store): Promise<number> {
+export async function flushDetailed(store: Store): Promise<FlushResult> {
   const n = Number((await store.con.runAndReadAll('SELECT count(*) c FROM blob')).getRowObjects()[0].c)
   const bodies = Number((await store.con.runAndReadAll('SELECT count(*) c FROM body')).getRowObjects()[0].c)
-  if (n === 0 && bodies === 0) return 0
+  if (n === 0 && bodies === 0) return { n: 0, partPaths: [] }
 
   const tag = partName(store.nextPart++)
+  const partPaths: string[] = []
   const write = async (table: string, sub: string) => {
     const c = Number((await store.con.runAndReadAll(`SELECT count(*) c FROM ${table}`)).getRowObjects()[0].c)
     if (c === 0) return
@@ -179,11 +238,17 @@ export async function flush(store: Store): Promise<number> {
     if (fs.existsSync(out)) throw new Error(`refusing to overwrite existing part ${out} — part naming must be collision-free`)
     await store.con.run(`COPY ${table} TO ${q(out)} (FORMAT PARQUET, COMPRESSION ZSTD)`)
     await store.con.run(`DELETE FROM ${table}`) // in-memory only — costs no disk write
+    partPaths.push(out)
   }
   await write('blob', BLOBS_DIR)
   await write('body', BODIES_DIR)
   await write('part', PARTS_DIR)
-  return n
+  return { n, partPaths }
+}
+
+/** Back-compat wrapper: every existing caller only ever wanted the blob count. */
+export async function flush(store: Store): Promise<number> {
+  return (await flushDetailed(store)).n
 }
 
 /** A relation covering BOTH the durable Parquet parts and the not-yet-flushed staging table, so a read

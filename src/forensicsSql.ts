@@ -162,6 +162,25 @@ export const PRESETS: Record<string, { description: string; sql: string }> = {
       SUM(a.tier_5m_tokens) AS tier_5m, SUM(a.tier_1h_tokens) AS tier_1h
       FROM api_calls a WHERE ${TIME} GROUP BY a.spawn_kind ORDER BY (tier_5m + tier_1h) DESC`,
   },
+  unclassified_events: {
+    description: 'Cache-write spikes (≥ :mult× the mean) with NO classified break cause — the drill-down list an UNCLASSIFIED investigation starts from.',
+    // Born from a real investigation (2026-08-13): a spike the CLI reported as UNCLASSIFIED took
+    // minutes of ad-hoc scanning to even LIST. This is that list, one preset call: every expensive
+    // cache write nobody has named yet, newest evidence pointers included so the drill-down
+    // (get_cache_break_timeline on the session, then the response_ref body) starts immediately.
+    sql: `SELECT a.call_id, a.session_id, a.model, a.ts, a.cache_creation_tokens, a.tier_1h_tokens,
+      a.break_cause, a.response_ref
+      FROM api_calls a
+      WHERE (a.break_cause IS NULL OR a.break_cause = 'UNCLASSIFIED')
+        AND a.cache_creation_tokens >= :mult * (SELECT AVG(cache_creation_tokens) FROM api_calls)
+        AND ${TIME}
+      ORDER BY a.cache_creation_tokens DESC`,
+  },
+  schema: {
+    description: 'The fact DB tables and their CREATE statements — write raw `sql` mode queries against this instead of guessing columns.',
+    sql: `SELECT m.name AS table_name, m.sql AS create_sql
+      FROM sqlite_master m WHERE m.type = 'table' ORDER BY m.name`,
+  },
 }
 
 // ── param binding ────────────────────────────────────────────────────────────────

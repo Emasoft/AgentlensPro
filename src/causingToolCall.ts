@@ -21,6 +21,8 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { claudeProjectsDirs } from './logReader'
+import { resolveProjectSlugs } from './projectSlug'
+import { transcriptReadSpec, tornLineSql } from './ndjsonDuck'
 
 /** Tools whose call fans out / spawns work — the candidates behind a FORK_STORM / fan-out burst. */
 export const SPAWN_TOOLS = ['Task', 'Agent', 'Workflow', 'SendMessage'] as const
@@ -71,22 +73,18 @@ export interface CausingCallsResult {
   windowToIso: string
   /** Set when `calls` is empty — the honest reason, never a fabricated call. */
   reason?: CausingCallReason
+  /** Set only when the scanned transcript(s) contained unparseable (torn) NDJSON lines — the
+   *  human-readable disclosure that ignore_errors silently degraded rather than dropped them. */
+  note?: string
 }
 
 const DEFAULT_WINDOW_MS = 15 * 60_000
 const DEFAULT_FORWARD_SLACK_MS = 90_000
-// 256 MB: a single image-bloated turn (~100 MB base64) must SKIP under ignore_errors, not abort the
-// read. The largest object DuckDB will buffer for one line.
-const MAX_OBJECT_SIZE = 268_435_456
 // mtime is a coarse "this session was active near the peak" proxy — a session file spans time, so
 // widen the mtime gate by an hour on each side before the precise ts filter runs inside DuckDB.
 const MTIME_SLACK_MS = 3600_000
 const MAX_FILES = 8
 
-/** Claude names a workspace's project dir by replacing every non-alphanumeric char with '-'. */
-function slugForWorkspace(ws: string): string {
-  return ws.replace(/[^A-Za-z0-9]/g, '-')
-}
 
 /** Candidate transcript file(s) for this peak, most-recently-modified first (capped). */
 function resolveTranscripts(opts: CausingCallsOptions): string[] {
@@ -107,11 +105,14 @@ function resolveTranscripts(opts: CausingCallsOptions): string[] {
   }
 
   if (opts.workspace) {
-    const slug = slugForWorkspace(opts.workspace)
+    // Resolved against disk rather than derived: Claude Code truncates-and-hashes a slug past 200
+    // chars, so a deep workspace path produces a directory name no formula here can predict — and
+    // the naive derivation names a directory that cannot exist, finding no transcripts at all.
+    const slugs = resolveProjectSlugs(opts.workspace, bases)
     const lo = opts.atMs - (opts.windowMs ?? DEFAULT_WINDOW_MS) - MTIME_SLACK_MS
     const hi = opts.atMs + (opts.forwardSlackMs ?? DEFAULT_FORWARD_SLACK_MS) + MTIME_SLACK_MS
     const cand: { p: string; mtime: number }[] = []
-    for (const base of bases) {
+    for (const base of bases) for (const slug of slugs) {
       const dir = path.join(base, slug)
       let names: string[]
       try { names = fs.readdirSync(dir) } catch { continue }
@@ -157,17 +158,15 @@ export async function causingToolCalls(opts: CausingCallsOptions): Promise<Causi
 
   const tools = opts.tools ?? SPAWN_TOOLS
   const toolList = tools.map(sqlStr).join(', ')
-  const fileList = files.map(sqlStr).join(', ')
 
   // filename=true tags each row with its source file so a multi-session workspace scan knows WHICH
   // session issued each call. json_extract(... '$.content[*]') returns a LIST that UNNEST flattens to
   // one row per content block; ORDER BY ts ASC gives the numbered, oldest-first burst timeline.
+  const readJson = transcriptReadSpec(files)
   const sql = `
     WITH lines AS (
       SELECT filename, timestamp, type, message
-      FROM read_json([${fileList}], format='newline_delimited',
-             columns={timestamp:'VARCHAR', type:'VARCHAR', message:'JSON'},
-             maximum_object_size=${MAX_OBJECT_SIZE}, ignore_errors=true, filename=true)
+      FROM ${readJson}
       WHERE type='assistant' AND timestamp >= ${sqlStr(windowFromIso)} AND timestamp <= ${sqlStr(windowToIso)}
     ),
     blocks AS (
@@ -187,7 +186,24 @@ export async function causingToolCalls(opts: CausingCallsOptions): Promise<Causi
   const con = await inst.connect()
   try {
     const rows = (await con.runAndReadAll(sql)).getRowObjects()
-    if (rows.length === 0) return { calls: [], windowFromIso, windowToIso, reason: 'none-in-window' }
+
+    // Torn-line disclosure: only after the main query succeeded (one extra round-trip). A malformed
+    // line lands as an all-NULL row under ignore_errors, not a dropped one — count(*) alone would
+    // pass silently, so compare it against a column EVERY real record carries.
+    //
+    // That column is `type`, NOT `timestamp`. Measured over 482,993 real transcript records:
+    // `type` is missing from 0 of them, `timestamp` from 81,814 — 16.9%, because `attachment`,
+    // `queue-operation` and `last-prompt` records legitimately carry no timestamp. This probe reads
+    // the UNFILTERED scan (the `type='assistant'` filter belongs to the query above, not here), so
+    // keying on `timestamp` would have reported roughly a sixth of a healthy machine's records as
+    // "unparseable and excluded" — a disclosure that lies, which is worse than none at all.
+    const [{ total: tlTotal, withCol: tlWithCol }] =
+      (await con.runAndReadAll(tornLineSql(readJson, 'type'))).getRowObjects()
+        .map(r => ({ total: Number(r.total ?? 0), withCol: Number(r.withCol ?? 0) }))
+    const tornLines = tlTotal - tlWithCol
+    const note = tornLines > 0 ? `${tornLines} line(s) unparseable and excluded.` : undefined
+
+    if (rows.length === 0) return { calls: [], windowFromIso, windowToIso, reason: 'none-in-window', note }
     const calls: SpawnCall[] = rows.map((r, i) => ({
       n: i + 1,
       iso: String(r.ts),
@@ -197,7 +213,7 @@ export async function causingToolCalls(opts: CausingCallsOptions): Promise<Causi
       input: String(r.input),
       sessionId: opts.sessionId ?? path.basename(String(r.filename), '.jsonl'),
     }))
-    return { calls, windowFromIso, windowToIso }
+    return { calls, windowFromIso, windowToIso, note }
   } finally {
     con.closeSync()
     inst.closeSync()
@@ -218,8 +234,9 @@ export function composition(calls: SpawnCall[]): string {
  *  Full literal input per call (the user's explicit choice); an empty result renders its honest
  *  reason, never a guess. */
 export function renderCausingCalls(r: CausingCallsResult): string {
-  if (r.calls.length === 0) return `cause-calls: none (${r.reason ?? 'unknown'})`
-  const head = `cause-calls: ${r.calls.length} spawn call(s) in ${r.windowFromIso}→${r.windowToIso} — ${composition(r.calls)}`
+  const noteSuffix = r.note ? ` ${r.note}` : ''
+  if (r.calls.length === 0) return `cause-calls: none (${r.reason ?? 'unknown'})${noteSuffix}`
+  const head = `cause-calls: ${r.calls.length} spawn call(s) in ${r.windowFromIso}→${r.windowToIso} — ${composition(r.calls)}${noteSuffix}`
   const lines = r.calls.map(c => {
     const tag = [c.tool, c.subagentType && `subagent_type=${c.subagentType}`, c.model && `model=${c.model}`]
       .filter(Boolean).join(' ')

@@ -113,6 +113,61 @@ suite('ingestPass — it must never delete what it cannot give back', () => {
     assert.strictEqual(r.failed.length, 1)
     assert.ok(fs.existsSync(path.join(dir, 'a.request.json')), 'the file must survive')
   })
+
+  // KB17X5G2-P0 falsification: the SAME tamper scenario, but inside a multi-file batch, to prove the
+  // bulk verify (verifyBodiesInStore) does not let one bad body take its batch-mates down with it.
+  test('a batch with ONE tampered file still deletes its healthy batch-mates', async () => {
+    const { dir } = corpus(5)
+    const names = fs.readdirSync(dir).sort()
+    const victim = names[2] // tamper the middle file
+    let seen = 0
+    const r = await ingestPass({
+      bodiesDir: dir,
+      store,
+      batchSize: 5, // all 5 settle together — the batch IS the unit under test
+      readFile: (p) => {
+        const out = fs.readFileSync(p, 'utf8')
+        return p.endsWith(victim) && ++seen === 2 ? `${out} TAMPERED` : out
+      },
+    })
+    assert.strictEqual(r.deleted, 4, 'the 4 healthy files in the batch must still be reclaimed')
+    assert.strictEqual(r.failed.length, 1)
+    assert.ok(r.failed[0].startsWith(victim), r.failed[0])
+    assert.ok(fs.existsSync(path.join(dir, victim)), 'the tampered file must survive')
+    for (const n of names) {
+      if (n !== victim) assert.ok(!fs.existsSync(path.join(dir, n)), `${n} should have been reclaimed`)
+    }
+  })
+
+  // KB17X5G2-P0.5 falsification: the fsync barrier fires ONLY when the caller declares the source
+  // durable (the legacy SSD dir), never for a volatile RAM-spool source. Injected via the `fsyncPath`
+  // seam (not a direct fs.fsyncSync stub): TS's `import * as fs` copies fsyncSync onto the module
+  // namespace as a getter-only accessor, so reassigning it throws "has only a getter" — the same
+  // reason ingestPass already has a `readFile` seam instead of stubbing fs.readFileSync.
+  test('durableSource=true fsyncs the flushed parts before deleting; durableSource=false (default) does not', async () => {
+    let calls = 0
+    const fsyncPath = (p: string) => { calls++; const fd = fs.openSync(p, 'r'); try { fs.fsyncSync(fd) } finally { fs.closeSync(fd) } }
+    // corpus() names/contents are deterministic by turn count, so two calls with the SAME src_name +
+    // SAME content would dedup on the SECOND ingest (no new body row, nothing to flush, nothing to
+    // fsync) — a false negative that would prove nothing about the barrier. Distinct dirs alone are
+    // NOT enough: the store keys on src_name (the filename), not the source path. Use distinct file
+    // names per dir so each ingest actually writes a fresh body row.
+    const distinctCorpus = (tag: string): string => {
+      const dir = tmp()
+      for (let i = 1; i <= 2; i++) fs.writeFileSync(path.join(dir, `${tag}-${i}.request.json`), body(i))
+      return dir
+    }
+
+    const dirA = distinctCorpus('spool')
+    const rA = await ingestPass({ bodiesDir: dirA, store, durableSource: false, fsyncPath })
+    assert.strictEqual(rA.deleted, 2)
+    assert.strictEqual(calls, 0, 'a volatile (spool) source must never take the fsync barrier')
+
+    const dirB = distinctCorpus('ssd')
+    const rB = await ingestPass({ bodiesDir: dirB, store, durableSource: true, fsyncPath })
+    assert.strictEqual(rB.deleted, 2)
+    assert.ok(calls > 0, 'a durable (legacy SSD) source must fsync its flushed parts + directories')
+  })
 })
 
 suite('ingestPass — throttle and selection', () => {

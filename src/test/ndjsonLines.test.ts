@@ -2,7 +2,8 @@ import * as assert from 'assert'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { forEachNdjsonLine, countNdjsonLines } from '../ndjsonLines'
+import * as zlib from 'zlib'
+import { forEachNdjsonLine, countNdjsonLines, forEachNdjsonLineGz, forEachGunzipChunkSync, countNdjsonLinesAuto } from '../ndjsonLines'
 
 // ── Streaming NDJSON reader — real-filesystem tests ──────────────────────────
 // The reader exists because `readFileSync(f,'utf8')` THROWS past V8's ~512 MB max string
@@ -111,5 +112,84 @@ suite('ndjsonLines — streaming line reader', () => {
       // The re-read IS the proof: it succeeds only if the finally-block released the fd.
       assert.strictEqual(countNdjsonLines(file, 4), 2)
     } finally { cleanup() }
+  })
+})
+
+// ── Streaming SYNC gunzip driver — the tests forEachGunzipChunkSync's header promises ─────────
+// The driver rides Node's internal `Gunzip._processChunk` (the only sync streaming path Node
+// has — see the source comment). These tests are the pin that turns that internal dependency
+// from a hope into a checked contract: byte-equality against the PUBLIC gunzipSync on every
+// shape (multi-chunk, chunk-straddling UTF-8, empty), plus the truncation-throws claim.
+
+function tmpGzFile(plain: Buffer | string): { file: string; cleanup: () => void } {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `al-ndjson-gz-${process.pid}-${seq++}-`))
+  const file = path.join(dir, 'segment.ndjson.gz')
+  fs.writeFileSync(file, zlib.gzipSync(plain))
+  return { file, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) }
+}
+
+function gunzipStreamed(file: string, inChunkBytes: number): Buffer {
+  const chunks: Buffer[] = []
+  forEachGunzipChunkSync(file, (c) => chunks.push(Buffer.from(c)), inChunkBytes)
+  return Buffer.concat(chunks)
+}
+
+suite('ndjsonLines — sync streaming gunzip', () => {
+  test('streamed output is byte-identical to gunzipSync at every input chunk size', () => {
+    // Big enough that a 16-byte input chunk forces hundreds of engine calls, with content that
+    // does not compress away to nothing (varied lines), so the inflate dictionary must survive
+    // across calls — the exact property the close-interception exists to protect.
+    const plain = Buffer.from(
+      Array.from({ length: 500 }, (_, i) => `{"span":"s${i}","payload":"${'x'.repeat(i % 97)}"}`).join('\n') + '\n',
+    )
+    const { file, cleanup } = tmpGzFile(plain)
+    try {
+      const oneShot = zlib.gunzipSync(fs.readFileSync(file))
+      for (const size of [16, 64, 1024, 1 << 18]) {
+        assert.ok(gunzipStreamed(file, size).equals(oneShot), `input chunk ${size} diverged from gunzipSync`)
+      }
+    } finally { cleanup() }
+  })
+
+  test('gz line reader delivers the same lines as the plain reader, multibyte chars included', () => {
+    const lines = ['{"t":"café→ok"}', '{"t":"𝄞𝄞𝄞"}', `{"t":"${'ü'.repeat(300)}"}`]
+    const body = lines.join('\n') + '\n'
+    const { file, cleanup } = tmpGzFile(body)
+    const plainFixture = tmpFile(body)
+    try {
+      for (const size of [3, 16, 4096]) {
+        const seen: string[] = []
+        forEachNdjsonLineGz(file, (l) => seen.push(l), size)
+        assert.deepStrictEqual(seen, lines, `gz chunk size ${size}`)
+      }
+      assert.strictEqual(countNdjsonLinesAuto(file), countNdjsonLinesAuto(plainFixture.file))
+    } finally { cleanup(); plainFixture.cleanup() }
+  })
+
+  test('an empty gz member reads as zero bytes and zero lines', () => {
+    const { file, cleanup } = tmpGzFile('')
+    try {
+      assert.strictEqual(gunzipStreamed(file, 64).length, 0)
+      assert.strictEqual(countNdjsonLinesAuto(file), 0)
+    } finally { cleanup() }
+  })
+
+  test('a TRUNCATED gz file throws instead of returning partial data as if complete', () => {
+    const plain = Buffer.from(Array.from({ length: 200 }, (_, i) => `{"s":${i}}`).join('\n'))
+    const { file, cleanup } = tmpGzFile(plain)
+    try {
+      const whole = fs.readFileSync(file)
+      fs.writeFileSync(file, whole.subarray(0, whole.length - 12)) // cut into the deflate body + trailer
+      assert.throws(() => gunzipStreamed(file, 32), /unexpected end|invalid|truncated/i)
+    } finally { cleanup() }
+  })
+
+  test('a corrupt (non-gzip) file throws — never silent zero output', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), `al-ndjson-gz-${process.pid}-${seq++}-`))
+    const file = path.join(dir, 'segment.ndjson.gz')
+    fs.writeFileSync(file, 'this is not gzip data at all')
+    try {
+      assert.throws(() => gunzipStreamed(file, 32), /incorrect header|invalid/i)
+    } finally { fs.rmSync(dir, { recursive: true, force: true }) }
   })
 })

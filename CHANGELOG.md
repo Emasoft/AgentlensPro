@@ -4,6 +4,268 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.24.0] - 2026-08-12
+
+### Fixed
+
+- **Captured bodies were being dropped, and the cause was a drain too slow to keep up rather than
+  a spool too small.** The RAM spool takes Claude Code's raw request bodies — about 21 MB/min,
+  ~30 GB/day — and the ingest pass drains them into compressed Parquet. That pass was reclaiming
+  roughly **1 file/s (~53 MB/min) against ~80 MB/min of burst inflow**, and `53 < 80` is the whole
+  incident: the spool filled, and what arrived after that had nowhere to go. No flush cadence and
+  no spool size appears anywhere in that inequality, which is why growing the spool would have
+  bought minutes and fixed nothing.
+  The delete gate is what cost the time. Before deleting a spooled file it reconstructs the body
+  *from the store* and compares sha256 against the source's own bytes — sound, and deliberately
+  kept — but it did that one file at a time, at **two DuckDB round trips each**, so a 200-file
+  batch spent ~400 round trips. The row/timestamp check is now one bulk query over the batch's
+  `(body_id, src_name)` pairs, and reconstruction runs in chunks of 32 rather than all at once
+  (200 × ~881 KB is ~176 MB of strings in a single result set — bulk reconstruction was the named
+  memory risk, so the chunking is load-bearing, not tidiness). ~400 round trips became ~15.
+  **What is proven did not change, only how it is executed.** A body missing from the bulk result
+  map defaults to *not* verified, so a silently dropped row can never authorize a delete — the
+  fail-closed direction matters more here than the speed. Measured on the live server after
+  deploying: drain **92.3 files/min against 24.9 arriving** (previously ~60), zero verification
+  failures, and the backlog fell 600→255 files in nine minutes. The measurement counts deletions
+  from a snapshot rather than net file count, because during recovery the net count *rises* while
+  the drain is winning — a net count would have read as a regression.
+
+- **The delete gate called a Parquet part "durable" before it was, and then deleted the source.**
+  `flush()` never fsynced, so the read-back that authorized the delete could be served from the OS
+  page cache — proving the bytes were *readable*, which is not the same claim. Severity depends
+  entirely on where the source lived, which is why the barrier is gated rather than global: when
+  draining the RAM spool the source is volatile anyway and a power loss takes it either way, but
+  when draining the legacy on-disk bodies directory the source was already safe, and deleting it
+  after a non-durable flush can lose data that was in no danger. The part files and their
+  directories are now fsynced before the unlinks **when, and only when, the source was durable**.
+  One honest limit, because overstating a durability guarantee is worse than not making one:
+  `fs.constants.F_FULLFSYNC` is `false` in Node (verified empirically), so on macOS pure Node
+  cannot force the drive's own write cache to media. `fsync(2)` asks the OS to flush its buffers
+  to the device, which is a real improvement over never asking, and that is the entire claim.
+
+- **A failed `server start` quoted other processes' history as its own diagnosis.** When a start did
+  not answer, the error appended the last 8 lines of `server.log` — one append-only file shared by
+  every process that ever started a server for that data directory (every hook's `ensureServer`,
+  every concurrent CLI), carrying **no timestamps**. Measured on one machine: 29 accumulated
+  `Refusing to start` blocks naming four different owner pids, three lines per block, so a default
+  8-line tail straddled ~2.7 unrelated eras. The damage is an inversion, not mere noise — a refusal
+  names the pid that **won** (*"another server (pid N) already owns this data directory"*), so the
+  tail printed under a failed command reads as "N failed to start" when N is the healthy server you
+  are being protected by. That misreading costs a restart that was never needed, and on this machine
+  a restart interrupts every attached session. The tail is now scoped to the bytes appended since
+  our own spawn: an attempt that wrote nothing says so, a log rotated underneath is reported as
+  rotated rather than quoted from a stale offset, and the header states the scope, because "the last
+  8 lines" and "the last 8 lines we wrote" are different claims. The guard's message is **not**
+  silenced — a refusal your own child emits still prints in full, so a false alarm was not traded
+  for a silent one.
+
+- **A usage mistake exited 1, which is the watchers' abort signal.** `agentlenspro server` with the
+  subcommand omitted exited 1, while `budget`, `watch` and `ctxmap` all exited **64** for the
+  identical missing-argument shape. Exit 1 is reserved — `budget --watch` uses it to mean "stop the
+  run" — so a typo was indistinguishable from a legitimate abort: the batch stops and the operator
+  goes hunting for a burn that never happened. The fix throws `UsageError` and lets the existing
+  type-based mapping produce 64, rather than hardcoding the number at the throw site where it would
+  drift the moment the mapping moves. Found by running every verb and diffing the matrix; each site
+  reads fine on its own.
+  **`help <verb>` now answers for every management verb**, from the static usage text, touching no
+  socket. It used to fall through to the diagnostics path, which resolves names against the
+  server's live tool schema, and failed with `unknown tool "budget" (agentlenspro list)` — a remedy
+  that leads nowhere, since `list` enumerates diagnostics tools and never CLI verbs. An
+  unrecognised name still falls through and fails loudly: answering a typo with usage and exit 0
+  would be worse than the dead end, because nothing would tell you the name was wrong.
+
+### Added
+
+- **`requests.log` now records RSS beside heap.** Each line reads `heap=…MB rss=…MB`, from a single
+  `process.memoryUsage()` call so the two can never be sampled at different instants and report the
+  impossible `rss < heap`. This is diagnostic groundwork rather than a fix: an investigation into a
+  server death had stalled three times because heap alone cannot explain it. Heap sat at 1768 MB
+  against a 6144 MB cap right up to the kill, which looks perfectly healthy — while on a *healthy*
+  server heap measures 860 MB against an RSS of 2624 MB, so roughly two thirds of the real footprint
+  (DuckDB's native arena, buffers, the segment index) is off-heap and invisible to that number.
+  `--max-old-space-size` bounds V8's old space, never RSS, and an external kill acts on RSS. The
+  underlying crash is **not** fixed and its mechanism is still not established.
+
+- **The spool redirects to disk under pressure instead of dropping what it cannot hold.** When free
+  space falls below a floor (64 MB), new bodies are written to the on-disk directory rather than
+  discarded, and the valve releases only after free space recovers past twice the floor, so a spool
+  hovering at the threshold cannot oscillate. It fires on transition rather than continuously, and
+  it **fails open** — if free space cannot be read at all, capture continues rather than silently
+  routing everything to disk on an unknown. This is a safety valve and is described as one: the
+  throughput fix above is what actually keeps the spool from filling, and back-pressure is what
+  happens when something else goes wrong. Its arrival is also what promoted the durability gap
+  above from latent to live, since the redirect makes the durable-source path the travelled one.
+
+## [2.23.1] - 2026-08-06
+
+### Changed
+
+- **The hooks stopped narrating other people's work into your agent's context.** AgentlensPro
+  injects text into every agent through its gate hooks, and three of the four PostToolUse
+  advisories had drifted into noise. Measured in one real session: `FANOUT_HEADSUP` printed
+  `session f7385521… in …/EMASOFT-ASSISTANT-MANAGER; session 9e1dc393… in …/llm-externalizer` into
+  an agent working on neither — other projects' session ids and directories, which the reader can
+  neither act on nor is owed. `FAN_OUT_COLD_START` ended with the words "No action needed", which
+  is the definition of a fact rather than an alert. `THRASH_UNATTRIBUTED` fired on writes that
+  "could not be attributed to any session" — never provably the reader's — and its only
+  instruction was to go run a CLI command later.
+  The drift had one shape: each was added to explain a real finding to a *human* mid-debugging,
+  and explaining is not interrupting. So the fix is a policy rather than four edits — text put in
+  front of a model must be about its **own project**, **actionable right now**, and
+  **significant**. The two non-actionable advisories are gone; the fan-out one now counts only the
+  caller's own launches and names agent *kinds* instead of sessions and paths; the two denies and
+  the stall messages keep firing (they stop the action, which is the whole point) but no longer
+  name a foreign session or workspace; and thrash suspects — whose records carry no cwd, so they
+  can never be shown to be yours — are counted rather than named.
+  **Nothing was deleted from the detection, only from the interruption** — with one honest caveat:
+  the fan-out and thrash *magnitudes* remain available through `--risk`, `investigate_burn` and the
+  diagnostics skill, but `thrash.unattributed` and `thrash.coldStartSessions` had no consumer
+  outside the gate, so those two numbers are now computed and surfaced nowhere. Giving them a home
+  is open work; an earlier draft of this entry claimed they were still visible, which was wrong.
+  Scoping matches the caller's own session first and its cwd second (a worktree subagent runs in a
+  different directory but is still unambiguously the caller's launch) and fails *quiet*: a caller
+  that cannot be identified gets silence, because an unprovable match must never become a
+  claim. Verified first that `cwd` really is on both gate payloads before relying on it — an
+  earlier inference from 173 stale records said it was not, and acting on that would have deleted
+  a working advisory on a false premise. Ten tests, three watched to fail against the
+  reintroduced leak.
+
+### Added
+
+- **The two events that say a session's working directory changed are now captured.** Claude Code
+  2.1.219 added a `DirectoryAdded` hook and ships a `CwdChanged` one alongside it; both are now
+  registered. They matter here more than they might elsewhere, because project attribution is keyed
+  on cwd from end to end — the agent gate's own-project check, the hard scoping boundary in
+  `get_cache_event_log`, `--project` — and all of it silently assumes one directory per session.
+  `/add-dir` and `/cd` break that assumption and nothing else records the moment they do: the
+  transcript keeps only the session id, and the OTEL bodies carry no cwd at all. Both are deliberate
+  user actions, so they are rare rather than per-turn, which is the bar this hook list has always
+  held to. The three siblings in the same family are deliberately left out — `FileChanged` and
+  `MessageDisplay` fire constantly, and `InstructionsLoaded` only duplicates what `ctxmap` already
+  reads out of the captured request body. The receiver needed no change (it accepts any
+  `hook_event_name`), and `agentlenspro setup` migrates an existing install; **a hook change needs a
+  Claude Code session restart to take effect.**
+
+### Fixed
+
+- **`get_cache_event_log` without `--window` killed the server, and with it every project's
+  ingestion.** The command returned `socket hang up` and the server's pid changed; the log's last
+  line was `tool get_cache_event_log start` and nothing after. Reproduced out-of-server, where the
+  cause the fatal abort could not print appeared: `FATAL ERROR: Ineffective mark-compacts near heap
+  limit — JavaScript heap out of memory`, at ~4 GB after 62 s. `windowHours` is optional, so the
+  default was `undefined` — read by the scan as *all of history* — and `SegmentedSpanStore.loadRange`
+  returns every span in the window in ONE array while the cache-ledger scan keeps only `api_request`
+  and `compaction` spans. About a million span objects were materialized to be discarded on the very
+  next line. Memory grew with the window, not with the answer: 1 h → 19 MB, 24 h → 478 MB, 168 h →
+  dead, for a result that was 7 rows either way. It degrades with age rather than failing on day
+  one, which is how it shipped.
+  The store now exposes `forEachInRange(since, until, visit)` and `loadRange` is a thin wrapper over
+  it, so the two cannot drift; the scan uses the visitor and holds only what it keeps. Measured
+  across a 168× window range afterwards: **69 MB / 121 MB / 147 MB / 170 MB** — the residual growth
+  is the retained events themselves, which any function returning them must hold. Out-of-process the
+  call now COMPLETES where it previously aborted at ~4 GB, and one live run processed **184,212
+  calls across the whole store history** in 36 s with the server's pid unchanged — a query that had
+  never once finished. **The default was deliberately NOT capped** — a window cap would have hidden
+  the accumulation rather than removing it, and made a legitimate full-history question silently
+  partial.
+  **Partial fix, stated plainly:** a later CLI audit re-ran the same command against this same fixed
+  bundle and the server died again (pid 83918 → 37104, an OOM-kill signature in `requests.log`). So
+  the tool's own allocation is bounded and that is verified, but the call is still not safe under the
+  server's concurrent load, and the mechanism for the in-server death is not yet established. One
+  passing live run was true and insufficient; the residual is tracked separately. Until it is fixed,
+  pass `--window`. Wall time improved as a
+  side effect (warm, same store, 24 h: 28.7 s → 3.1–5.0 s). Seven new tests, including the first
+  ones this scan has ever had, falsified by deleting the `return` from the compaction branch — the
+  exact bug a loop→callback rewrite invites.
+
+- **Every 1M-context model was scored against a 200k window, so `ctxmap` reported context ~5×
+  fuller than it was.** `windowSizeFor` inferred the window from a private regex that knew only
+  `fable` and an explicit `[1m]` tag, while `shared/pricing.ts` has declared `contextWindowTokens`
+  per model all along — two sources of truth for one fact, and the regex was the one that fell
+  behind. It stopped being an edge case when Claude Code 2.1.219 made `claude-opus-5` (1M native,
+  untagged) the default Opus: a 400k conversation on it read as 200% full. The inference now reads
+  the pricing table, and keeps the tag regex only as a fallback for an id the table does not carry —
+  so a long-context session on an unknown model still is not silently capped at 200k.
+  The request's `betas` list now refines that **upward only**, and the asymmetry is the finding. The
+  `[1m]` a user selects never reaches the wire — every captured body says `claude-opus-5`, never
+  `claude-opus-5[1m]` — so `context-1m-*` in `betas` is the only in-band proof a call opted into 1M,
+  and it is now honoured even for a model the table calls 200k. Its **absence proves nothing**, and
+  the tempting inverse is measurably false: across this machine's spool all 180 `claude-opus-5`
+  requests carried the beta while 137 `claude-fable-5` requests carried none — and fable still
+  reached 645,803 input tokens in a single call, which a downgrade-on-absence would have reported as
+  323% of a 200k window. The honest consequence is recorded rather than papered over:
+  `CLAUDE_CODE_DISABLE_1M_CONTEXT` is real (it is in the 2.1.224 binary), but under it Claude Code
+  simply omits the beta, which is indistinguishable from a model that never needed one — so it is not
+  detectable from a body, and a 1M-capable model still reads as 1M. Seven tests: the two proof cases
+  watched to fail with the beta path disabled, and the no-downgrade guard watched to fail against a
+  version that adds the inverse inference.
+
+- **A project path over ~200 characters made three different views silently report nothing.** Claude
+  Code names a project's log directory after its path with every non-alphanumeric character replaced
+  by `-`, and three places here re-derived that rule independently. It is no longer the whole rule:
+  measured against 2.1.224 by running a real session from a 237-character path, a slug longer than
+  200 characters is **truncated to exactly 200 and given a `-` plus a 6-character hash** (the
+  observed directory was 207 chars ending `-4gwysy`, its first 200 identical to the naive slug). So
+  all three derivations named a 245-character directory that cannot exist — and each failed
+  silently in its own way rather than erroring. Measured end-to-end from a real 237-character path:
+  `get_cache_event_log` compares its derived slug against *real* directory names, so it reported
+  **0 rows and "1283 call(s) excluded as belonging to another project"** — and labelled that
+  exclusion *"the scoping boundary working as intended"*, which is the failure describing itself as
+  correct. `burnSeismic` and the spawn-call attributor read a directory that isn't there and found
+  no transcripts, which is indistinguishable from a quiet machine. After the fix the same command
+  from the same directory resolves to the real `…-4gwysy` name and returns the call.
+  There is now one definition (`src/projectSlug.ts`), and it resolves an over-long path by reading
+  what is **actually on disk** rather than computing a name. The hash is deliberately not
+  reproduced: it matched none of md5/sha1/sha256/sha512 over the path or the slug, in hex or base36,
+  from either end — so any formula written today would be a guess that resolves to a directory that
+  does not exist, which is the bug again with more steps. A short path still resolves without
+  touching the disk. Seven tests, three watched to fail against the old derivation (including the
+  `< 200` boundary, falsified by changing it to `<=`).
+
+- **A body the store already held was never reclaimed, so a fixed-size spool filled until capture
+  died.** `ingestPass` took its `skipNames` set — seeded each boot from every `src_name` already in
+  the Parquet store — and used it to filter candidates out of the pass entirely. The intent was to
+  skip the re-read and re-hash of something already durable, which is right; the effect was that such
+  a file was also never *deleted*, which is not. On a 2 GB RAM spool that is terminal rather than
+  merely wasteful: the spool accumulates files the store already has, hits 100%, and raw-body capture
+  stops silently. Measured on one machine: 3,615 bodies stranded, ~300 KB of headroom left, bodies
+  being dropped. The skip now applies to the ingest alone — an already-durable file goes straight to
+  the same verify-then-delete gate as everything else, so it is re-read, re-proven byte-identical
+  against the store (bytes *and* its `(src_name, capture-ts)` row), and only then unlinked. A file
+  whose name is durable but whose **bytes** are not is still kept and named in `failed`, because
+  reclaiming on the strength of a filename is exactly the mistake the gate exists to prevent. Both
+  regression tests were watched to fail against the unfixed filter, and the two pre-existing
+  skip-set tests still pass, which is what proves the optimization itself was not thrown away. The
+  server's pass log also gated on `ingested > 0`, so a pass that reclaimed thousands of files and
+  ingested none printed nothing at all — it now reports reclaims, and how many needed no re-ingest.
+
+- **`safe_config_edit` refused any transaction that removed a hook and re-added it.** The
+  `remove_by_substring` postcondition asserted that no surviving element still matched the needle,
+  but it was checked against the *final* document — after later ops in the same transaction had run.
+  Re-registration is exactly that shape (remove the old entry, append the current one), so the very
+  operation `agentlenspro setup` performs to repair a stale hook failed its own verification and
+  rolled back, leaving the drift it was invoked to fix. The check now ignores elements that a LATER
+  op in the same transaction re-added, and still fails when a survivor was never re-added. Two tests,
+  the first watched to fail with the production error.
+
+- **Turning raw-body capture OFF left the sink wired, and the repairer could never close it.** The
+  capture-OFF delete guard compared `OTEL_LOG_RAW_API_BODIES` against `file:${bodiesDir}`, where
+  `bodiesDir` came from `effectiveBodiesDir(dataDir, captureRawBodies)`. At delete time capture is
+  false by definition and that resolver only consults the spool when capture is ON — so it returned
+  the LEGACY dir and could never equal a key holding the SPOOL path. That is the ordinary lifecycle
+  (capture ON writes the spool value; capture OFF then fails to recognise its own write), so the key
+  outlived every `setup` run. Measured on one machine: `disable` set `rawBodies: false`, the server
+  consequently stopped draining and size-capping the spool, while Claude Code kept honouring the
+  stale key and writing — filling a 2 GB RAM spool to 100%, at which point capture died silently
+  (332 zero-byte files) and 23 hours of raw bodies were never captured. The two halves of the
+  mechanism also disagreed: `cli/setup.ts` already tested PRESENCE, so `setup` reported drift,
+  reported "wired", verified, and FAILED — a repairer that could not repair, on every run.
+  `resolveOptions` now returns `ownedBodyValues` (the resolved bodies dir, the legacy dir, and the
+  configured spool) and the guard deletes when the live value is any of them. A value we never wrote
+  is still left alone, because silently deleting a user's own sink would be real overreach.
+  Two regression tests, both watched to fail against the unfixed code: the spool-dir delete, and the
+  foreign-key counter-case that keeps the widening honest.
+
 ## [2.23.0] - 2026-08-05
 
 ### Fixed

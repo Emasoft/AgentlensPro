@@ -10,7 +10,15 @@
 //      (spec 6). Before this existed the crash logs showed only span-ingestion lines and the offending
 //      endpoint could not be identified.
 import * as fs from 'fs'
+import * as os from 'os'
 import * as v8 from 'v8'
+
+// TRDD-34B9JAZK — heapPressure() (below) is blind to ~67% of this process's real footprint: at
+// steady state 860 MB heap sits inside a 2624 MB RSS, because DuckDB's native arena, Buffers and the
+// segment index never touch V8's old space. The server has died twice from a silent external kill
+// (no V8 OOM banner — heap looked comfortable both times) while serving the raw-body-scan tool
+// family. An external kill acts on RSS, not on `--max-old-space-size`, so heapPressure alone cannot
+// see it coming. rssPressure() (below) is the RSS-aware sibling.
 
 // ── 1. Atomic file write ──────────────────────────────────────────────────────
 
@@ -67,6 +75,44 @@ export function heapPressure(): { heapUsedMb: number; limitMb: number; hwmMb: nu
   return { heapUsedMb, limitMb, hwmMb, over: heapUsedMb >= hwmMb }
 }
 
+/**
+ * Current RSS pressure vs a configurable high-water mark. Unlike `heapPressure()`, there is no
+ * runtime-reported "true ceiling" for RSS the way V8 reports `heap_size_limit` for old-space — RSS
+ * is bounded by whatever external mechanism kills the process (a supervisor's memory cap, a cgroup,
+ * OS memory pressure), and that ceiling is not discoverable from inside the process. So `limitMb`
+ * is NOT a detected cap; it is `os.totalmem()`, reported only as context.
+ *
+ * The default high-water mark (`AGENTLENS_RSS_HWM_MB`, default 4096) is a fixed absolute constant,
+ * not a fraction of total system memory: this machine has 64 GB of RAM, and the kill mechanism is
+ * macOS system memory pressure, whose decision ignores our share of total RAM — a percent-of-total
+ * default (e.g. 75%) would compute to ~48 GB and never fire.
+ *
+ * 4096 is a COMPROMISE between two measured regimes, not a line the killer respects (the review
+ * called out an earlier draft of this comment for claiming 4096 "leaves headroom below 2547" —
+ * arithmetically backwards; this is the corrected account). Measured on 2026-08-13: one kill
+ * struck with the request log's last reading at rss=2547 MB (same gate source), while later the
+ * same day the server SURVIVED a sweep that `ps` scored at 5.4 GB — the killer's threshold moves
+ * with system-wide load, so no fixed constant can sit "safely below" it. 4096 is chosen ABOVE the
+ * gate-rss peaks of real, healthy heavy scans (a 10-run no-window acceptance stayed under 4096 by
+ * this gate while `ps` read 4.5-4.8 GB — the two accountings differ by compressed/reclaimable
+ * pages, so tune ONLY against this gate's own number, i.e. the `rss=` field in requests.log,
+ * never against `ps`) and BELOW the 5.4 GB residency that preceded the one instrumented kill.
+ * Lower it and the gate sheds scans that demonstrably complete; raise it and it stops shedding
+ * before the only residency ever seen to precede a death. Override with `AGENTLENS_RSS_HWM_MB`
+ * (absolute) or `AGENTLENS_RSS_HWM_PCT` (fraction of `os.totalmem()`, for a deployment where the
+ * kill mechanism genuinely does scale with total RAM).
+ */
+export function rssPressure(totalMemMb = os.totalmem() / MB): { rssMb: number; limitMb: number; hwmMb: number; over: boolean } {
+  const rssMb = process.memoryUsage().rss / MB
+  const absOverride = Number(process.env.AGENTLENS_RSS_HWM_MB)
+  const pct = Number(process.env.AGENTLENS_RSS_HWM_PCT)
+  const DEFAULT_HWM_MB = 4096
+  const hwmMb = absOverride > 0
+    ? absOverride
+    : (pct > 0 && pct < 1 ? totalMemMb * pct : DEFAULT_HWM_MB)
+  return { rssMb, limitMb: totalMemMb, hwmMb, over: rssMb >= hwmMb }
+}
+
 // ── 3. Request log (ring buffer + rotating file) ──────────────────────────────
 
 export interface RequestLogEntry {
@@ -77,6 +123,15 @@ export interface RequestLogEntry {
   durationMs: number
   bytes: number       // response body bytes
   heapUsedMb: number  // heap at completion — so a growth trend is visible per request
+  /** RSS at completion. Recorded because heap ALONE cannot diagnose the death this log exists to
+   *  explain (TRDD-34B9JAZK). Measured on a healthy server: heap 860 MB against RSS 2624 MB — 67% of
+   *  the footprint is off-heap (DuckDB's native arena, buffers, the segment index), and
+   *  `--max-old-space-size` bounds only V8's old space, never RSS. So a log that records heap alone
+   *  shows a comfortable 1768/6144 MB right up to a kill that RSS would have predicted, and the
+   *  post-mortem stalls exactly where the last one did. A V8 heap OOM is also self-announcing
+   *  (`FATAL ERROR: Ineffective mark-compacts`); a silent gap followed by a fresh pid is the
+   *  signature of an external SIGKILL, which acts on RSS. */
+  rssMb: number
 }
 
 /**
@@ -113,7 +168,7 @@ export class RequestLog {
   }
 
   private appendToFile(e: RequestLogEntry): void {
-    const line = `${e.ts} ${e.method} ${e.status} ${e.durationMs}ms ${e.bytes}b heap=${e.heapUsedMb.toFixed(0)}MB ${e.path}\n`
+    const line = `${e.ts} ${e.method} ${e.status} ${e.durationMs}ms ${e.bytes}b heap=${e.heapUsedMb.toFixed(0)}MB rss=${e.rssMb.toFixed(0)}MB ${e.path}\n`
     try {
       // Rotate BEFORE the write when the file is already at/over the cap, so the active file stays
       // bounded. One backup generation is enough for post-mortem attribution.

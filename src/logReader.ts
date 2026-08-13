@@ -231,6 +231,30 @@ export class LogReader {
   // here), a TARGETED scan stats only the paths fs.watch actually named. If this keeps climbing by
   // thousands per scan in steady state, the incremental path has regressed back to a full sweep.
   private _filesStatted = 0
+  // TRDD-OCNHOHE9 — collectFileMeta() is a full recursive readdir+stat of EVERY session file on
+  // disk (12k+ files measured). reparseSession() called it fresh on every invocation, and
+  // handleCheckCacheExpiry's newest-session probe calls reparseSession up to EXPIRY_NEWEST_PROBE
+  // (12) times per request — 12 redundant full walks (~5-10s) to resolve at most 12 file paths.
+  // A short-TTL memoization (not a full explicit thread-through — that would force the shared
+  // `getTimeline: (id) => unknown[]` callback type used across a dozen mcpServer.ts handlers to
+  // carry a per-request cache, touching mcpServer.ts + server.ts + logReader.ts in a way that
+  // couples an unrelated shared type to one caller's optimization) collapses all N walks issued
+  // within one probe request into a single real walk, with IDENTICAL results.
+  //
+  // Staleness window (2s, chosen <= the 1500ms CLI budget so one request's own probes share a
+  // walk while a NEXT request still gets a fresh one): a session file created in the last 2s
+  // could be missing from a cache hit. Consequence is bounded and benign — reparseSession()
+  // would return null for that one session (same as today when a file genuinely doesn't exist
+  // yet), resolveSessionCard() falls back to the stripped card's empty timeline, and the
+  // cache-expiry probe treats it like any other session with no resolvable last-request time.
+  // No answer is ever WRONG, only briefly incomplete for a session that is at most 2s old — and
+  // the probe already re-runs on every request, so the next call (walk stale) picks it up.
+  private _fileMetaCache: Array<{ filePath: string; mtimeMs: number; agentKey: string }> | null = null
+  private _fileMetaCacheAt = 0
+  private static readonly FILE_META_CACHE_TTL_MS = 2000
+  // Test-only observability: counts actual walks (cache MISSES), not collectFileMeta() calls —
+  // this is what proves the memoization collapsed N calls into 1 walk.
+  private _fileMetaWalkCount = 0
 
   constructor(options: LogReaderOptions = {}) {
     this.log = options.log ?? (() => { /* silent */ })
@@ -244,6 +268,7 @@ export class LogReader {
   clearFileState(): void {
     this.fileState.clear()
     this.accumCache.clear()
+    this._fileMetaCache = null  // also drop the collectFileMeta() TTL cache — a forced rescan must see fresh files
   }
 
   /**
@@ -295,6 +320,11 @@ export class LogReader {
    * files in priority order without one big synchronous block.
    */
   collectFileMeta(): Array<{ filePath: string; mtimeMs: number; agentKey: string }> {
+    const now = Date.now()
+    if (this._fileMetaCache && (now - this._fileMetaCacheAt) < LogReader.FILE_META_CACHE_TTL_MS) {
+      return this._fileMetaCache
+    }
+    this._fileMetaWalkCount++
     const entries: Array<{ filePath: string; mtimeMs: number; agentKey: string }> = []
 
     // Claude
@@ -352,8 +382,17 @@ export class LogReader {
 
     // Newest first — caller processes in this order so recent sessions appear first.
     entries.sort((a, b) => b.mtimeMs - a.mtimeMs)
+    this._fileMetaCache = entries
+    this._fileMetaCacheAt = now
     return entries
   }
+
+  /**
+   * TRDD-OCNHOHE9 — test/diagnostic-only: how many times collectFileMeta() actually performed the
+   * full directory walk (cache misses), as opposed to how many times it was called. Proves the TTL
+   * memoization collapses repeated calls (e.g. reparseSession() in a probe loop) into one walk.
+   */
+  getFileMetaWalkCount(): number { return this._fileMetaWalkCount }
 
   /**
    * Parses a single file identified by collectFileMeta() and returns a result if

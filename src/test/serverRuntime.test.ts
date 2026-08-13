@@ -3,7 +3,7 @@ import * as assert from 'assert'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { atomicWriteFileSync, heapPressure, RequestLog } from '../serverRuntime'
+import { atomicWriteFileSync, heapPressure, rssPressure, RequestLog } from '../serverRuntime'
 
 function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'agentlens-runtime-'))
@@ -59,8 +59,69 @@ suite('serverRuntime — heapPressure', () => {
   })
 })
 
+suite('serverRuntime — rssPressure', () => {
+  // TRDD-34B9JAZK: heapPressure alone missed both silent kills — heap read comfortably (1768MB,
+  // 1002MB) while RSS (off-heap: DuckDB's arena, buffers, the segment index) was the thing that
+  // actually got the process killed. rssPressure is the gate the fix wires into the shed sites.
+  test('an absolute HWM override below current RSS reports over=true', () => {
+    const prev = process.env.AGENTLENS_RSS_HWM_MB
+    process.env.AGENTLENS_RSS_HWM_MB = '1'  // 1MB HWM — always exceeded by a running node process
+    try {
+      const p = rssPressure()
+      assert.strictEqual(p.over, true)
+      assert.strictEqual(p.hwmMb, 1)
+      assert.ok(p.rssMb > 1)
+    } finally { if (prev === undefined) delete process.env.AGENTLENS_RSS_HWM_MB; else process.env.AGENTLENS_RSS_HWM_MB = prev }
+  })
+
+  test('an absolute HWM override above current RSS reports over=false', () => {
+    const prev = process.env.AGENTLENS_RSS_HWM_MB
+    process.env.AGENTLENS_RSS_HWM_MB = '1000000'  // ~977GB — never exceeded
+    try {
+      const p = rssPressure()
+      assert.strictEqual(p.over, false)
+      assert.strictEqual(p.hwmMb, 1000000)
+    } finally { if (prev === undefined) delete process.env.AGENTLENS_RSS_HWM_MB; else process.env.AGENTLENS_RSS_HWM_MB = prev }
+  })
+
+  test('default HWM is the fixed 4096MB constant, NOT a fraction of total system memory', () => {
+    // A percent-of-total default would be wrong here: this repo's own dev machine has 64GB of RAM,
+    // and the two confirmed kills happened at ~2.5-3GB RSS — a percent-of-total default (e.g. 75%)
+    // would compute to ~48GB and never fire. See the doc comment on rssPressure() for the full case.
+    const prev = process.env.AGENTLENS_RSS_HWM_MB
+    const prevPct = process.env.AGENTLENS_RSS_HWM_PCT
+    delete process.env.AGENTLENS_RSS_HWM_MB
+    delete process.env.AGENTLENS_RSS_HWM_PCT
+    try {
+      const p = rssPressure()
+      assert.strictEqual(p.hwmMb, 4096)
+      assert.strictEqual(p.over, false)  // a test process uses far less than 4096MB RSS
+    } finally {
+      if (prev !== undefined) process.env.AGENTLENS_RSS_HWM_MB = prev
+      if (prevPct !== undefined) process.env.AGENTLENS_RSS_HWM_PCT = prevPct
+    }
+  })
+
+  test('AGENTLENS_RSS_HWM_PCT scales the HWM off the supplied total, not the real machine', () => {
+    const prev = process.env.AGENTLENS_RSS_HWM_MB
+    const prevPct = process.env.AGENTLENS_RSS_HWM_PCT
+    delete process.env.AGENTLENS_RSS_HWM_MB
+    process.env.AGENTLENS_RSS_HWM_PCT = '0.5'
+    try {
+      const p = rssPressure(8000)  // a synthetic 8000MB "total" — 50% -> 4000MB HWM
+      assert.strictEqual(p.hwmMb, 4000)
+      assert.strictEqual(p.limitMb, 8000)
+    } finally {
+      if (prev !== undefined) process.env.AGENTLENS_RSS_HWM_MB = prev
+      if (prevPct !== undefined) process.env.AGENTLENS_RSS_HWM_PCT = prevPct; else delete process.env.AGENTLENS_RSS_HWM_PCT
+    }
+  })
+})
+
 suite('serverRuntime — RequestLog', () => {
-  const entry = (path: string, status = 200) => ({ ts: new Date().toISOString(), method: 'GET', path, status, durationMs: 1, bytes: 10, heapUsedMb: 5 })
+  // rss > heap deliberately: that gap IS the diagnostic signal (a healthy server measured heap 860MB
+  // against RSS 2624MB), so a fixture with rss == heap would pass a formatter that dropped one.
+  const entry = (path: string, status = 200) => ({ ts: new Date().toISOString(), method: 'GET', path, status, durationMs: 1, bytes: 10, heapUsedMb: 5, rssMb: 42 })
 
   test('ring keeps only the most-recent N entries, oldest-first', () => {
     const log = new RequestLog(null, 3)
@@ -74,6 +135,20 @@ suite('serverRuntime — RequestLog', () => {
     const log = new RequestLog(null, 10)
     for (let i = 0; i < 6; i++) log.record(entry(`/p${i}`))
     assert.deepStrictEqual(log.recent(2).map(e => e.path), ['/p4', '/p5'])
+  })
+
+  test('the logged line carries RSS as well as heap — heap alone cannot explain an OOM kill', () => {
+    // TRDD-34B9JAZK: the previous post-mortem stalled because this log recorded heap only. Heap sat
+    // at 1768MB against a 6144MB cap right up to the death, which looks fine and is why the
+    // mechanism was never established — while ~67% of the real footprint (DuckDB's native arena,
+    // buffers, the segment index) is off-heap and invisible to that number. `--max-old-space-size`
+    // bounds V8's old space, never RSS, and an external SIGKILL acts on RSS.
+    const dir = tmpDir()
+    const f = path.join(dir, 'requests.log')
+    new RequestLog(f, 10, 8 * 1024 * 1024).record(entry('/api/thing'))
+    const line = fs.readFileSync(f, 'utf8')
+    assert.ok(/heap=5MB/.test(line), `heap must still be there, got: ${line}`)
+    assert.ok(/rss=42MB/.test(line), `RSS must be recorded, got: ${line}`)
   })
 
   test('appends one line per request to the file and rotates at the size cap', () => {

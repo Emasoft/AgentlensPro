@@ -7,6 +7,7 @@ import {
   defaultBodiesDir, CACHE_BREAK_REMEDIATION, EXPECTED_CAUSES,
   type RawRequestForBreak, type BreakTiming,
 } from '../cacheBreakTimeline'
+import { loadScaledTimeout, skipIfUnmeasurable } from './loadAware'
 
 // TRDD-6TQ2FBUR — REAL tests for the cache-break ROOT-CAUSE timeline. The classifier tests build a
 // synthetic before/after request pair per cause code and prove the classifier names the right culprit.
@@ -156,6 +157,70 @@ suite('cacheBreakTimeline — classifyCacheBreak (one synthetic before/after per
     const cur = reqBody({ messages: injectedMsg('<system-reminder>heartbeat hook: inbox has 2 messages</system-reminder>') })
     const v = classify(prev, cur)
     assert.strictEqual(v.cause, 'HOOK_INJECTION')
+  })
+
+  test('HOOK_INJECTION — the PreToolUse hook header is a hook, not usertext', () => {
+    // Measured incident (2026-08-13T01:08:10Z, 453,881 tokens, $2.84, report
+    // reports/cache-invalidation-research/20260813_040019+0200-unclassified-break-msg363.md):
+    // the harness moved its PreToolUse token-spike warning from an appended text block inside a
+    // user message to a standalone role:"system" message spliced mid-array. The content matcher
+    // covered `PostToolUse:` and `UserPromptSubmit` hook headers but NOT `PreToolUse:`, so the
+    // block classified as usertext and a $2.84 full-prefix rewrite landed in UNCLASSIFIED with the
+    // actor unnamed. The string below is the real injected header, verbatim from the raw body.
+    const HOOK = 'PreToolUse:Edit hook additional context: ⚠ Token spike: this turn output ~10k. Be terse, wrap up the step, or compact — long output is billed at full price.'
+    const prev = reqBody({ messages: injectedMsg(HOOK) })
+    const cur = reqBody({ messages: injectedMsg(HOOK.replace('~10k', '~20k')) })
+    const v = classify(prev, cur)
+    // Without the PreToolUse matcher both sides read as usertext, and a usertext↔usertext diff at
+    // msg[0] is (correctly) claimed by the SUBAGENT_INTERLEAVE guard — so the failure mode is not
+    // merely "UNCLASSIFIED", it is a confidently WRONG cause. The assertion is on the right one.
+    assert.strictEqual(v.cause, 'HOOK_INJECTION')
+  })
+
+  test('a message SPLICED mid-array is the actor — never the shifted bystander, never UNCLASSIFIED', () => {
+    // The structural half of the same incident: the harness inserted a standalone role:"system"
+    // message mid-array, shifting every later message +1. Position-wise diffing then blames the
+    // SHIFTED block ("changed at pos N") — a bystander — and unknown content lands UNCLASSIFIED.
+    const base = [
+      { role: 'user', content: [{ type: 'text', text: 'do the thing', cache_control: CC }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'done step one', cache_control: CC }] },
+      { role: 'user', content: [{ type: 'text', text: 'now step two', cache_control: CC }] },
+    ]
+    const spliced = [
+      base[0], base[1],
+      // Content deliberately matches NO kind matcher, so only the structural detector can name it.
+      { role: 'system', content: 'entirely novel injected content the matchers have never seen' },
+      base[2],
+    ]
+    const v = classify(reqBody({ messages: base as RawRequestForBreak['messages'] }),
+      reqBody({ messages: spliced as RawRequestForBreak['messages'] }))
+    assert.strictEqual(v.cause, 'MESSAGE_SPLICED')
+    assert.ok(/spliced/.test(v.culpritSummary), `culprit must say spliced, got: ${v.culpritSummary}`)
+  })
+
+  test('an in-place rewrite with a DUPLICATE of the old content elsewhere is NOT a splice (review finding 8)', () => {
+    // prevFps/curFps are content-only sets that collapse duplicates, so a rewrite of X→Y while a
+    // byte-identical copy of X survives elsewhere satisfied the old set-membership splice test. The
+    // discriminator is structural: an insertion CHANGES the block count; a rewrite keeps it.
+    const HOOK = '<system-reminder>heartbeat hook: inbox has 0 messages</system-reminder>'
+    const mk = (mid: string): RawRequestForBreak['messages'] => ([
+      { role: 'user', content: [{ type: 'text', text: HOOK, cache_control: CC }] },      // duplicate lives here
+      { role: 'user', content: [{ type: 'text', text: mid, cache_control: CC }] },        // this one is rewritten
+      { role: 'user', content: [{ type: 'text', text: HOOK, cache_control: CC }] },
+    ])
+    const v = classify(reqBody({ messages: mk(HOOK) }), reqBody({ messages: mk('<system-reminder>heartbeat hook: inbox has 2 messages</system-reminder>') }))
+    assert.notStrictEqual(v.cause, 'MESSAGE_SPLICED', 'equal block counts cannot be an insertion')
+    assert.ok(!/spliced/.test(v.culpritSummary), `no splice claim for a rewrite, got: ${v.culpritSummary}`)
+  })
+
+  test('a message REMOVED mid-array is MESSAGE_TRIMMED naming the removed block, not the shifted one (review finding 9)', () => {
+    const A = { role: 'user', content: [{ type: 'text', text: 'alpha content', cache_control: CC }] }
+    const B = { role: 'user', content: [{ type: 'text', text: 'bravo content — the one that gets trimmed', cache_control: CC }] }
+    const C = { role: 'user', content: [{ type: 'text', text: 'charlie content', cache_control: CC }] }
+    const v = classify(reqBody({ messages: [A, B, C] as RawRequestForBreak['messages'] }),
+      reqBody({ messages: [A, C] as RawRequestForBreak['messages'] }))
+    assert.strictEqual(v.cause, 'MESSAGE_TRIMMED')
+    assert.ok(/bravo|removed/.test(v.culpritSummary), `must name the REMOVED block, got: ${v.culpritSummary}`)
   })
 
   test('INLINE_EXEC_RESULT_CHANGED — a skill `!`-operator shell result differs', () => {
@@ -416,6 +481,13 @@ function freshDir(): string {
   fs.mkdirSync(d, { recursive: true })
   return d
 }
+// NEVER created. Since the evidence rewire, buildCacheBreakTimeline/buildCauseCostPeakReport
+// default storeDir to dataPath('store') — the DEVELOPER'S REAL Parquet store. Every scratch test
+// below must pass this dir or it silently scans the live multi-GB corpus: under machine load that
+// turned each of these tests into a minutes-long real-store scan and 11 of them blew every
+// timeout (2026-08-13 — diagnosed as environmental until the absent-bodies test, which has no
+// data at all, also "timed out"). Same isolation discipline as forensicsIndex.test.ts's noStoreDir.
+const noStore = path.join(tmpBase, 'no-store-never-created')
 function writeAt(dir: string, name: string, body: unknown, mtimeMs: number): void {
   const p = path.join(dir, name)
   fs.writeFileSync(p, JSON.stringify(body))
@@ -445,7 +517,7 @@ suite('cacheBreakTimeline — buildCacheBreakTimeline (disk scan + previous_mess
       writeAt(dir, `resp${i}.response.json`, respBody(respIds[i], 200_000), base + i * 60_000 + 30_000)
     }
 
-    const report = await buildCacheBreakTimeline({ bodiesDir: dir, sessionId: sid, minTokens: 5000 })
+    const report = await buildCacheBreakTimeline({ bodiesDir: dir, sessionId: sid, minTokens: 5000, storeDir: noStore })
     assert.strictEqual(report.sessionId, sid)
     assert.ok(report.turnsInSession >= 5)
     // Turns 2,3,4 are HOOK_INJECTION (turn 1 is COLD_START; turn 5 has no following request → unpaired).
@@ -478,7 +550,7 @@ suite('cacheBreakTimeline — buildCacheBreakTimeline (disk scan + previous_mess
       writeAt(dir, `r${i}.request.json`, reqBody({ sessionId: sid, previousMessageId: prevId, tools: perTurnTools[i] }), base + i * 60_000)
       writeAt(dir, `resp${i}.response.json`, respBody(respIds[i], 150_000), base + i * 60_000 + 30_000)
     }
-    const report = await buildCacheBreakTimeline({ bodiesDir: dir, sessionId: sid, minTokens: 5000 })
+    const report = await buildCacheBreakTimeline({ bodiesDir: dir, sessionId: sid, minTokens: 5000, storeDir: noStore })
     const toolOff = report.repeatOffenders.find(o => o.cause === 'TOOLSET_CHANGED')
     assert.ok(toolOff, 'the single tool change is still recorded as an offender')
     assert.strictEqual(toolOff!.occurrences, 1)
@@ -487,7 +559,7 @@ suite('cacheBreakTimeline — buildCacheBreakTimeline (disk scan + previous_mess
 
   test('coverage reports honest scan bounds and an absent directory never throws', async () => {
     const missing = path.join(tmpBase, 'nope-' + Math.random().toString(36).slice(2))
-    const report = await buildCacheBreakTimeline({ bodiesDir: missing })
+    const report = await buildCacheBreakTimeline({ bodiesDir: missing, storeDir: noStore })
     assert.strictEqual(report.coverage.dirExists, false)
     assert.strictEqual(report.events.length, 0)
     assert.ok(report.coverage.note.includes('OTEL_LOG_RAW_API_BODIES'))
@@ -504,7 +576,7 @@ suite('cacheBreakTimeline — buildCacheBreakTimeline (disk scan + previous_mess
       writeAt(dir, `r${i}.request.json`, reqBody({ sessionId: sid, previousMessageId: prevId, messages: injectedMsg(`<system-reminder>heartbeat hook ${i}: ${secret}</system-reminder>`) }), base + i * 60_000)
       writeAt(dir, `resp${i}.response.json`, respBody(respIds[i], 120_000), base + i * 60_000 + 30_000)
     }
-    const report = await buildCacheBreakTimeline({ bodiesDir: dir, sessionId: sid, minTokens: 5000 })
+    const report = await buildCacheBreakTimeline({ bodiesDir: dir, sessionId: sid, minTokens: 5000, storeDir: noStore })
     const serialized = JSON.stringify(report)
     assert.ok(!serialized.includes(secret), 'raw injected block text must never cross the boundary')
     assert.ok(!serialized.includes('dev-1'), 'the device_id from metadata.user_id must never cross the boundary')
@@ -521,7 +593,7 @@ suite('cacheBreakTimeline — buildCacheBreakTimeline (disk scan + previous_mess
       writeAt(dir, `r${i}.request.json`, reqBody({ sessionId: sid, previousMessageId: prevId, messages: injectedMsg(`<system-reminder>hook heartbeat ${i}</system-reminder>`) }), base + i * 60_000)
       writeAt(dir, `resp${i}.response.json`, respBody(respIds[i], 100_000), base + i * 60_000 + 30_000)
     }
-    const report = await buildCacheBreakTimeline({ bodiesDir: dir, sessionId: sid, minTokens: 5000 })
+    const report = await buildCacheBreakTimeline({ bodiesDir: dir, sessionId: sid, minTokens: 5000, storeDir: noStore })
     assert.strictEqual(formatTimeline(report, 'json'), report)
     for (const fmt of ['markdown', 'table', 'timeline'] as const) {
       const out = formatTimeline(report, fmt) as { format: string; text: string }
@@ -560,7 +632,7 @@ suite('cacheBreakTimeline — buildCauseCostPeakReport (cross-session cause cost
     writeAt(dir, 'tlresp1.response.json', respBody('msg_tl1', 20_000), base + 90_000) // bills turn1's TOOLSET_CHANGED write
     writeAt(dir, 'tl2.request.json', reqBody({ sessionId: 'sess-tool', previousMessageId: 'msg_tl1', tools: toolsB }), base + 120_000)
 
-    const report = await buildCauseCostPeakReport({ bodiesDir: dir, minTokens: 5000 })
+    const report = await buildCauseCostPeakReport({ bodiesDir: dir, minTokens: 5000, storeDir: noStore })
     assert.strictEqual(report.groupBy, 'cause')
     assert.strictEqual(report.bucket, 'cache_creation')
 
@@ -598,10 +670,10 @@ suite('cacheBreakTimeline — buildCauseCostPeakReport (cross-session cause cost
     writeAt(dir, 'hkresp1.response.json', respBody('msg_hk21', 50_000, 50_000, 'claude-opus-4-8', 5), base + 90_000)
     writeAt(dir, 'hk2.request.json', reqBody({ sessionId: 'sess-hook2', previousMessageId: 'msg_hk21', messages: injectedMsg('<system-reminder>heartbeat hook: inbox 2</system-reminder>') }), base + 120_000)
 
-    const byCache = await buildCauseCostPeakReport({ bodiesDir: dir, minTokens: 5000 })
+    const byCache = await buildCauseCostPeakReport({ bodiesDir: dir, minTokens: 5000, storeDir: noStore })
     assert.strictEqual(byCache.groups[0].key, 'HOOK_INJECTION', '50000 cache_creation beats 1000 on the default bucket')
 
-    const byOutput = await buildCauseCostPeakReport({ bodiesDir: dir, minTokens: 5000, bucket: 'output' })
+    const byOutput = await buildCauseCostPeakReport({ bodiesDir: dir, minTokens: 5000, bucket: 'output', storeDir: noStore })
     assert.strictEqual(byOutput.bucket, 'output')
     assert.strictEqual(byOutput.groups[0].key, 'MODEL_SWITCH', '90000 output beats 5 on bucket=output')
     assert.strictEqual(byOutput.groups[0].bucketValue, 90_000)
@@ -612,7 +684,7 @@ suite('cacheBreakTimeline — buildCauseCostPeakReport (cross-session cause cost
 
   test('an absent bodies directory returns an empty report, never throwing', async () => {
     const missing = path.join(tmpBase, 'nope-causepeak-' + Math.random().toString(36).slice(2))
-    const report = await buildCauseCostPeakReport({ bodiesDir: missing })
+    const report = await buildCauseCostPeakReport({ bodiesDir: missing, storeDir: noStore })
     assert.strictEqual(report.groupBy, 'cause')
     assert.strictEqual(report.groups.length, 0)
     assert.strictEqual(report.coverage.dirExists, false)
@@ -623,7 +695,8 @@ suite('cacheBreakTimeline — buildCauseCostPeakReport (cross-session cause cost
   // directory is absent (CI / a machine that never enabled OTEL_LOG_RAW_API_BODIES).
   test('builds a cause cost-peak report from the REAL OTEL bodies without crashing', async function () {
     if (!fs.existsSync(defaultBodiesDir())) { this.skip(); return }
-    this.timeout(120_000)
+    if (skipIfUnmeasurable(this)) return
+    this.timeout(loadScaledTimeout(120_000))
     // scanCap is not decoration: this reads a LIVE capture directory that grows all day (measured
     // 1,377 → 5,467 files in one evening on this machine), so an uncapped scan is a test whose
     // runtime is set by how busy the user was — it passed for weeks and then blew a 120 s timeout
@@ -680,7 +753,7 @@ suite('cacheBreakTimeline — agent-* child sessions resolve via the subagents t
     writeAt(bodies, 'cresp1.response.json', respBody('msg_c1', 150_000), base + 185_000)
     writeAt(bodies, 'c2.request.json', reqBody({ sessionId: PARENT, previousMessageId: 'msg_c1', messages: [childHead, hookBlock(2)] }), base + 300_000)
 
-    const report = await buildCacheBreakTimeline({ bodiesDir: bodies, sessionId: `agent-${CHILD_ID}`, minTokens: 5000, projectsDirs: [projects] })
+    const report = await buildCacheBreakTimeline({ bodiesDir: bodies, sessionId: `agent-${CHILD_ID}`, minTokens: 5000, projectsDirs: [projects], storeDir: noStore })
     assert.strictEqual(report.sessionId, `agent-${CHILD_ID}`)
     assert.strictEqual(report.turnsInSession, 3, 'exactly the child\'s 3 turns — the parent\'s 3 stay out')
     assert.strictEqual(report.turnsClassified, 2, 'c0 (measured via c1\'s chain link) + c1 (via c2\'s)')
@@ -690,7 +763,7 @@ suite('cacheBreakTimeline — agent-* child sessions resolve via the subagents t
     assert.ok(report.coverage.note.includes(PARENT), 'the parent linkage is disclosed')
 
     // The bare agentId (a spawn placeholder's id, no agent- prefix) resolves to the same stream.
-    const bare = await buildCacheBreakTimeline({ bodiesDir: bodies, sessionId: CHILD_ID, minTokens: 5000, projectsDirs: [projects] })
+    const bare = await buildCacheBreakTimeline({ bodiesDir: bodies, sessionId: CHILD_ID, minTokens: 5000, projectsDirs: [projects], storeDir: noStore })
     assert.strictEqual(bare.turnsInSession, 3)
   })
 
@@ -698,7 +771,7 @@ suite('cacheBreakTimeline — agent-* child sessions resolve via the subagents t
     const bodies = freshDir()
     const projects = freshDir()
     writeAt(bodies, 'x0.request.json', reqBody({ sessionId: PARENT }), Date.now() - 60_000)
-    const report = await buildCacheBreakTimeline({ bodiesDir: bodies, sessionId: 'agent-ffffffffffffffff0', minTokens: 5000, projectsDirs: [projects] })
+    const report = await buildCacheBreakTimeline({ bodiesDir: bodies, sessionId: 'agent-ffffffffffffffff0', minTokens: 5000, projectsDirs: [projects], storeDir: noStore })
     assert.strictEqual(report.turnsClassified, 0)
     assert.ok(report.coverage.note.includes('sub-agent child id'), report.coverage.note)
     assert.ok(report.coverage.note.includes('subagents'), report.coverage.note)
@@ -713,7 +786,8 @@ suite('cacheBreakTimeline — real machine data', () => {
     // 4 minutes, not 2: this scans every captured body in the window, and on a machine with a live
     // capture spool it shares the run with the second real-corpus test below. It timed out at 120s
     // in a full-suite run while passing in 58s alone — a harness bound, not a product property.
-    this.timeout(240_000)
+    if (skipIfUnmeasurable(this)) return
+    this.timeout(loadScaledTimeout(240_000))
     // Capped for the same reason as the cost-peak test above: the capture directory is live and
     // grows all day, so an uncapped scan makes this test's runtime a function of the user's traffic.
     const report = await buildCacheBreakTimeline({ windowHours: 5, minTokens: 50_000, scanCap: 300 })
@@ -739,7 +813,8 @@ suite('cacheBreakTimeline — real machine data', () => {
   test('🐌 the env + git region extractors actually match the REAL captured system prompts', async function () {
     const dir = defaultBodiesDir()
     if (!fs.existsSync(dir)) { this.skip(); return }
-    this.timeout(120_000)
+    if (skipIfUnmeasurable(this)) return
+    this.timeout(loadScaledTimeout(120_000))
     const files = fs.readdirSync(dir).filter(f => f.endsWith('.request.json')).slice(0, 200)
     if (files.length === 0) { this.skip(); return }
     let withEnv = 0, withGit = 0, parsed = 0
