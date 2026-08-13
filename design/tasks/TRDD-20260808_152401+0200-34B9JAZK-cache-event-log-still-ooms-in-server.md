@@ -90,6 +90,24 @@ kill record was recovered for pid 37104 (the sighting is four days old).
 different instants and report the impossible `rss < heap`). Falsified on behaviour: with the `rss=`
 segment removed the new test fails on the actual line content.
 
+## 2026-08-13 — SECOND live occurrence, and the owner's directive
+
+It happened again, observed in real time: pid 40460 served its last request at **01:51:26Z**
+(`heap=1002MB` of 6144 — looks perfectly healthy), then **silence, no V8 banner** (`server.log`
+mtime untouched), and a fresh pid (51370) spawned at 01:52:27Z. The load at the time was a burst of
+**diagnostic queries** — four `get_cache_break_timeline` raw-body scans, `get_session_detail`, four
+`run_diagnostics_sql` snapshot loads — i.e. exactly the read-path family this card suspects, not
+OTLP ingest. The `rss=` instrumentation from bd7b59f was **not deployed at the moment of death**
+(the deploy had been withheld), so once again the kill happened with the one decisive number
+unrecorded; it was deployed into the forced restart window at 01:54 (pid 60646) and every request
+line now carries `rss=` — first live readings: `heap=1350MB rss=2547MB` during the boot scan.
+
+**Owner directive (2026-08-13, verbatim intent):** "it should never happen that the server is
+stopped unexpectedly" — the fix is ordered, not optional. Planned shape (session task #16): a
+scratch-`DATA_DIR` repro driving the timeline/forensics query path while reading the `rss=` trend;
+an RSS-pressure gate for heavy handlers (`heapPressure()` exists but keys on heap, which is blind
+to the ~67% off-heap footprint); and a bound on the timeline's raw-body materialization.
+
 **NEXT ACTION (unchanged in spirit — reproduce, do not guess):** re-run
 `agentlenspro get_cache_event_log` with no `--window` against a **scratch `DATA_DIR` and `HOME`**,
 never this machine's live server, and read the `rss=` trend in the new log. That trend is now capable
