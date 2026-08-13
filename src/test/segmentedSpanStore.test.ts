@@ -606,4 +606,30 @@ suite('segmentedSpanStore — compressSealedSegments (sealed-segment gzip)', () 
       assert.strictEqual(decompressed.toString('utf-8').trim().split('\n').length, 1)
     } finally { cleanup() }
   })
+
+  test('the sweep PAUSES under RSS pressure and the next sweep finishes the remainder', () => {
+    // WHY: the first live boot sweep gunzip-verified 31 segments back-to-back, ratcheted RSS to
+    // 5.4GB, and the server was silently killed executing the next heavy tool (2026-08-13).
+    const { dir, cleanup } = tmpDir()
+    try {
+      const store = new SegmentedSpanStore(dir, () => {})
+      store.append(mkSpan(D1 + 1000, 1))
+      store.append(mkSpan(D1 + 86_400_000 + 1000, 2)) // a second sealed day
+      store.flush()
+
+      // Pressure trips after the first segment compresses: sweep must stop, not push through.
+      let calls = 0
+      const first = store.compressSealedSegments(Date.now(), () => calls++ >= 1)
+      assert.strictEqual(first.compressed.length, 1, 'exactly one segment compressed before the pause')
+      assert.strictEqual(first.pausedForPressure, true, 'the pause must be reported, not silent')
+      const names = fs.readdirSync(dir)
+      assert.strictEqual(names.filter(n => n.endsWith('.ndjson')).length, 1, 'the remaining sealed day is still plain')
+
+      // Pressure gone: the next sweep picks up where the last one stopped.
+      const second = store.compressSealedSegments(Date.now(), () => false)
+      assert.strictEqual(second.compressed.length, 1, 'the deferred segment compresses on the next sweep')
+      assert.strictEqual(second.pausedForPressure, false)
+      assert.strictEqual(fs.readdirSync(dir).filter(n => n.endsWith('.ndjson')).length, 0, 'every sealed day is now compressed')
+    } finally { cleanup() }
+  })
 })

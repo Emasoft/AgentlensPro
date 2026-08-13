@@ -26,7 +26,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import * as zlib from 'zlib'
-import { atomicWriteFileSync } from './serverRuntime'
+import { atomicWriteFileSync, rssPressure } from './serverRuntime'
 import { forEachNdjsonLineAuto } from './ndjsonLines'
 import type { Span } from './shared/telemetryTypes'
 
@@ -434,15 +434,30 @@ export class SegmentedSpanStore {
    *  regex-invisible) temp file and the plain file untouched; a crash after the rename but before
    *  the delete leaves BOTH forms, which every reader above already tolerates (merge-by-id) and
    *  which the "already compressed" branch below finishes cleaning up on the next sweep. */
-  compressSealedSegments(nowMs: number = Date.now()): { compressed: string[]; bytesSaved: number } {
+  compressSealedSegments(
+    nowMs: number = Date.now(),
+    // Pause the sweep under RSS pressure. WHY (2026-08-13, observed live): the first boot sweep
+    // gunzip-verified 31 segments back-to-back — each iteration holds plain + gz + round-trip
+    // buffers (a big day is ~568MB decompressed, so >1GB peak per file) and the allocator ratchets
+    // across files; post-sweep RSS sat at 5.4GB and the server was silently killed executing the
+    // very next heavy tool. The sweep is resumable BY DESIGN (an already-verified .gz finishes its
+    // deferred delete next pass), so pausing costs one day of latency, never correctness.
+    underPressure: () => boolean = () => rssPressure().over,
+  ): { compressed: string[]; bytesSaved: number; pausedForPressure: boolean } {
     const compressed: string[] = []
     let bytesSaved = 0
+    let pausedForPressure = false
     const todayKey = segmentKey(nowMs)
     let names: string[]
-    try { names = fs.readdirSync(this.dir) } catch { return { compressed, bytesSaved } }
+    try { names = fs.readdirSync(this.dir) } catch { return { compressed, bytesSaved, pausedForPressure } }
     let indexDirty = false
     for (const name of names) {
       if (!/^\d{4}-\d{2}-\d{2}\.ndjson$/.test(name)) continue // only plain, un-compressed segments
+      if (underPressure()) {
+        pausedForPressure = true
+        this.log(`[AgentLens] span store: compression sweep paused under RSS pressure after ${compressed.length} segment(s) — remaining sealed segments compress on the next sweep`)
+        break
+      }
       const key = name.slice(0, 10)
       if (key >= todayKey) continue // active/current-day segment — never compress
       const plainFile = path.join(this.dir, name)
@@ -500,7 +515,7 @@ export class SegmentedSpanStore {
       this.log(`[AgentLens] span store: compressed sealed segment ${name} → ${key}.ndjson.gz (${plainBytes.length}B → ${gz.length}B)`)
     }
     if (indexDirty) this.writeIndex()
-    return { compressed, bytesSaved }
+    return { compressed, bytesSaved, pausedForPressure }
   }
 
   /** Remove every segment + the index (the /api/clear + clearAll paths). Foreign files stay. */
