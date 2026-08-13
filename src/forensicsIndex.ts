@@ -275,26 +275,36 @@ function refFor(row: EvidenceRow, spool: string | null): string {
   return row.location === 'spool' && spool ? path.join(spool, row.srcName) : row.srcName
 }
 
-function resolveTs(row: EvidenceRow, spool: string | null): number {
+// null = the ts is UNKNOWABLE (a spool row drained between listing and stat, with no store row in
+// this snapshot). The earlier Date.now() fallback here FABRICATED a capture timestamp (review
+// finding): a stale call drained mid-scan was stamped "now", sorted first in recency selection,
+// and appeared inside live burn windows with wrong culprit attribution. A null row is dropped by
+// selectRecent — the drain put its bytes in the store, so the next pass indexes it with its TRUE
+// capture ts; skipping one pass is honest, back-dating history to the scan time is not.
+function resolveTs(row: EvidenceRow, spool: string | null): number | null {
   if (row.tsMs !== null) { return row.tsMs }
   if (spool) {
-    try { return fs.statSync(path.join(spool, row.srcName)).mtimeMs } catch { /* drained mid-scan — fall through */ }
+    try { return fs.statSync(path.join(spool, row.srcName)).mtimeMs } catch { /* drained mid-scan */ }
   }
-  return Date.now()
+  return null
 }
 
 // Recency-first, capped selection over the evidence union. `tsFromMs` is already pushed down to the
-// store via listBodyEvidence's SQL WHERE; a spool row's ts is unresolved at list time, so it is NEVER
-// excluded by the window here — by construction it is newer than any row the drain has already
-// flushed (the drain empties the spool oldest-first), and the classifiers built on this scan need
-// exactly those newest calls kept regardless of when this particular scan happens to run.
+// store via listBodyEvidence's SQL WHERE; a spool row's ts is unresolved at list time, so the window
+// is applied HERE, after resolving its file mtime. (An earlier shape exempted spool rows from the
+// window entirely on the assumption the drain keeps the spool young — false whenever the server is
+// stopped or a file repeatedly fails verify, so a windowHours=5 scan indexed days-old calls while
+// its coverage note claimed otherwise — review finding.) `matched` counts in-window rows pre-cap.
 function selectRecent(rows: EvidenceRow[], spool: string | null, tsFromMs: number | undefined, cap: number): { rows: SelectedRow[]; matched: number } {
-  const inWindow = tsFromMs === undefined
-    ? rows
-    : rows.filter((r) => r.location === 'spool' || (r.tsMs ?? 0) >= tsFromMs)
-  const withTs = inWindow.map((row) => ({ row, ts: resolveTs(row, spool) }))
+  const withTs: SelectedRow[] = []
+  for (const row of rows) {
+    const ts = resolveTs(row, spool)
+    if (ts === null) { continue } // unknowable — indexed from the store next pass (see resolveTs)
+    if (tsFromMs !== undefined && ts < tsFromMs) { continue }
+    withTs.push({ row, ts })
+  }
   withTs.sort((a, b) => b.ts - a.ts)
-  return { rows: withTs.slice(0, cap), matched: inWindow.length }
+  return { rows: withTs.slice(0, cap), matched: withTs.length }
 }
 
 async function indexRequestsByPreviousMessageId(
@@ -403,9 +413,12 @@ export async function scanApiCallEvents(
       const model = link?.model ?? strOrUndef(body.model) ?? strOrUndef(body.message?.model)
       const tier = body.usage.cache_creation
       const ref = refFor(row, spool)
-      // call_id is the response id (msg_…) when present; else a stable sha1 of the ref so the
-      // PRIMARY KEY / INSERT OR REPLACE idempotency holds even for a body missing its id.
-      const callId = responseId ?? `sha1:${crypto.createHash('sha1').update(ref).digest('hex')}`
+      // call_id is the response id (msg_…) when present; else a stable sha1 of the row's srcName —
+      // NEVER of `ref`, which is LOCATION-DEPENDENT (absolute spool path before the drain, bare
+      // srcName after): hashing ref gave one physical call two different primary keys across a
+      // drain, so INSERT OR REPLACE kept both rows and every aggregate double-counted its tokens
+      // and dollars (review finding). srcName survives the spool→store move unchanged.
+      const callId = responseId ?? `sha1:${crypto.createHash('sha1').update(row.srcName).digest('hex')}`
       events.push({
         callId,
         responseRef: ref,

@@ -399,7 +399,31 @@ suite('FAL evidence rewire — scanApiCallEvents reads the complete store ∪ sp
     assert.equal(ev!.attributed, true)
   })
 
-  test('window pushdown filters store rows by capture ts; a spool row with unknown ts survives regardless of file mtime', async () => {
+  test('an id-less response keeps the SAME callId before and after the drain — no double-count', async () => {
+    // Review finding: the fallback callId hashed refFor()'s output, which is the absolute spool
+    // path before the drain and the bare srcName after — one physical call, two primary keys, so
+    // INSERT OR REPLACE kept both rows and every aggregate double-counted. srcName is the only
+    // location-independent identity, so the hash must be over srcName.
+    const noIdRaw = JSON.stringify({ model: 'claude-opus-5', usage: { input_tokens: 7, output_tokens: 7, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } })
+    fs.writeFileSync(path.join(spool, 'noid.response.json'), noIdRaw)
+
+    const before = await scanApiCallEvents({ bodiesDir: spool, storeDir: dir })
+    const evBefore = before.events.find(e => e.callId.startsWith('sha1:') && e.inputTokens === 7)
+    assert.ok(evBefore, 'the id-less spool row must be indexed with a sha1 fallback callId')
+
+    // The drain: bytes proven in the store, file deleted.
+    await ingestBody(store, 'noid.response.json', noIdRaw, Date.now())
+    await flush(store)
+    fs.rmSync(path.join(spool, 'noid.response.json'))
+
+    const after = await scanApiCallEvents({ bodiesDir: spool, storeDir: dir })
+    const evAfter = after.events.find(e => e.callId.startsWith('sha1:') && e.inputTokens === 7)
+    assert.ok(evAfter, 'the drained id-less call must still be indexed from the store')
+    assert.strictEqual(evAfter!.callId, evBefore!.callId,
+      'the callId must survive the spool→store move unchanged — a location-dependent id is a double-count')
+  })
+
+  test('window pushdown filters store rows by capture ts; a spool row is windowed by its file mtime', async () => {
     const old = Date.now() - 10 * 3_600_000
     const oldRespRaw = JSON.stringify({ id: 'msg_OLD', model: 'claude-opus-5', usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } })
     const oldReqRaw = JSON.stringify({ model: 'claude-opus-5', metadata: { user_id: JSON.stringify({ device_id: 'dev-1', session_id: 'sess-old' }) }, diagnostics: { previous_message_id: 'msg_OLD' } })
@@ -411,20 +435,29 @@ suite('FAL evidence rewire — scanApiCallEvents reads the complete store ∪ sp
     fs.rmSync(path.join(spool, 'old.response.json'))
     fs.rmSync(path.join(spool, 'old.request.json'))
 
-    // Spool-only (never ingested) — its ts is unknown until parsed. Its file mtime is set to 20h in
-    // the past, deliberately older than the 1h window, to prove the survival is NOT an mtime accident.
-    const newRespRaw = JSON.stringify({ id: 'msg_NEW', model: 'claude-opus-5', usage: { input_tokens: 2, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } })
-    const newReqRaw = JSON.stringify({ model: 'claude-opus-5', metadata: { user_id: JSON.stringify({ device_id: 'dev-1', session_id: 'sess-new' }) }, diagnostics: { previous_message_id: 'msg_NEW' } })
-    fs.writeFileSync(path.join(spool, 'new.response.json'), newRespRaw)
-    fs.writeFileSync(path.join(spool, 'new.request.json'), newReqRaw)
+    // Spool-only rows (never ingested), one STALE and one FRESH. An earlier shape of this test
+    // pinned the OPPOSITE contract — "a spool row with unknown ts survives the window regardless
+    // of mtime", on the premise the drain keeps the spool young. The whole-codebase review
+    // CONFIRMED that premise false (a stopped server / a repeatedly-unverifiable file leaves
+    // days-old spool rows), so a windowHours=5 scan indexed days-old calls while its coverage
+    // note claimed otherwise. The contract now: a spool row's file mtime IS its window ts.
+    const staleRespRaw = JSON.stringify({ id: 'msg_STALE', model: 'claude-opus-5', usage: { input_tokens: 2, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } })
+    const staleReqRaw = JSON.stringify({ model: 'claude-opus-5', metadata: { user_id: JSON.stringify({ device_id: 'dev-1', session_id: 'sess-stale' }) }, diagnostics: { previous_message_id: 'msg_STALE' } })
+    fs.writeFileSync(path.join(spool, 'stale.response.json'), staleRespRaw)
+    fs.writeFileSync(path.join(spool, 'stale.request.json'), staleReqRaw)
     const ancient = new Date(Date.now() - 20 * 3_600_000)
-    fs.utimesSync(path.join(spool, 'new.response.json'), ancient, ancient)
-    fs.utimesSync(path.join(spool, 'new.request.json'), ancient, ancient)
+    fs.utimesSync(path.join(spool, 'stale.response.json'), ancient, ancient)
+    fs.utimesSync(path.join(spool, 'stale.request.json'), ancient, ancient)
+    const freshRespRaw = JSON.stringify({ id: 'msg_FRESH', model: 'claude-opus-5', usage: { input_tokens: 3, output_tokens: 3, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } })
+    const freshReqRaw = JSON.stringify({ model: 'claude-opus-5', metadata: { user_id: JSON.stringify({ device_id: 'dev-1', session_id: 'sess-fresh' }) }, diagnostics: { previous_message_id: 'msg_FRESH' } })
+    fs.writeFileSync(path.join(spool, 'fresh.response.json'), freshRespRaw)
+    fs.writeFileSync(path.join(spool, 'fresh.request.json'), freshReqRaw)
 
     const { events } = await scanApiCallEvents({ bodiesDir: spool, storeDir: dir, windowHours: 1 })
     const ids = events.map(e => e.callId)
     assert.ok(!ids.includes('msg_OLD'), 'a store row outside the window is excluded by the capture-ts pushdown')
-    assert.ok(ids.includes('msg_NEW'), 'a spool row with unknown ts survives the window filter regardless of its file mtime')
+    assert.ok(!ids.includes('msg_STALE'), 'a spool row whose mtime is outside the window is excluded — the drain-keeps-it-young premise is dead')
+    assert.ok(ids.includes('msg_FRESH'), 'a fresh spool row is inside the window by its mtime')
   })
 })
 

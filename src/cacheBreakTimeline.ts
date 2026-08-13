@@ -1156,15 +1156,19 @@ async function scanSessionsAndResponses(
 
   // Store rows carry the capture ts; a spool row's ts is unknown until parsed, so stamp its file
   // mtime (the spool is small by construction — the drain keeps it at current inflow, never history).
+  // A row whose file vanished mid-scan (drained) keeps tsMs === null — NOT Date.now(), which
+  // FABRICATED a capture ts and pulled a stale drained call into live windows (review finding,
+  // same defect as forensicsIndex.resolveTs). Null rows are excluded from any window below (their
+  // bytes are in the store; the next pass sees them with the true ts) and sort last unwindowed.
   const stamp = (rows: EvidenceRow[]): void => {
     for (const r of rows) {
       if (r.tsMs !== null || !spool) continue
-      try { r.tsMs = fs.statSync(path.join(spool, r.srcName)).mtimeMs } catch { r.tsMs = Date.now() }
+      try { r.tsMs = fs.statSync(path.join(spool, r.srcName)).mtimeMs } catch { /* drained mid-scan */ }
     }
   }
   stamp(reqAll); stamp(respAll)
   const inWindow = (rows: EvidenceRow[]): EvidenceRow[] =>
-    tsFromMs === undefined ? rows : rows.filter((r) => (r.tsMs ?? Date.now()) >= tsFromMs)
+    tsFromMs === undefined ? rows : rows.filter((r) => r.tsMs !== null && r.tsMs >= tsFromMs)
   const recent = (rows: EvidenceRow[]): { slice: EvidenceRow[]; matched: number } => {
     const m = inWindow(rows)
     const sorted = [...m].sort((a, b) => (b.tsMs ?? 0) - (a.tsMs ?? 0))
