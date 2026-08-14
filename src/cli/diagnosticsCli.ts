@@ -19,7 +19,7 @@ import {
 } from './cliCore'
 import { EXIT, UsageError } from './cliErrors'
 import { strArg } from './argHelpers'
-import { installHooks, installOtel, installSkills, installStatusline } from './hookInstall'
+import { installAgents, installHooks, installOtel, installSkills, installStatusline } from './hookInstall'
 import { ensureServer, openDashboard, showStatus, stopServer } from './serverControl'
 
 export const USAGE = `agentlenspro — AI-agent observability: server, dashboard, diagnostics, hooks, setup
@@ -611,8 +611,10 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
     return
   }
 
-  // Skill install is standalone too — pure file copy, no server, no settings mutation.
-  if (ops.installSkill) { installSkills(); return }
+  // Skill install is standalone too — pure file copy, no server, no settings mutation. The AGENT
+  // definitions install with them: a skill that dispatches `agentlens-tldr-worker` is broken on a
+  // machine where that agent file is absent, so shipping one without the other is a half install.
+  if (ops.installSkill) { installSkills(); installAgents(); return }
 
   // One-shot realtime culprit check — REST fast path, ~50ms end-to-end incl. node boot.
   if (ops.risk) { await runRisk(); return }

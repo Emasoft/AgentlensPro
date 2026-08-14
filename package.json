@@ -48,8 +48,7 @@
     "media/mascot.png",
     "media/help-mascot.png",
     "skills/",
-    ".claude/agents/",
-    ".claude/skills/"
+    "agents/"
   ],
   "scripts": {
     "prepublishOnly": "pnpm run package",

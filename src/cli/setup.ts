@@ -34,7 +34,7 @@ import { sleep } from './cliCore'
 import {
   CLI_BIN, GATE_CMD, GATE_EVENTS, GATE_MATCHER, HOOK_CMD, HOOK_EVENTS, HookMatcher,
   installHooks, installSkill, isOurHookCommand, rebuildEventMatchers, resolveOnPath,
-  sha256File, SKILL_NAMES, findPackageRoot,
+  sha256File, SKILL_NAMES, findPackageRoot, skillTreeHash, installAgents, AGENT_NAMES,
 } from './hookInstall'
 import { findServerJs } from './serverControl'
 import { parsePidLock } from '../serverRuntime'
@@ -48,6 +48,7 @@ export interface SetupOptions {
   dataDir?: string
   settingsPath?: string
   skillsDir?: string
+  agentsDir?: string
   repoRoot?: string
   uiPort?: number
   mcpPort?: number
@@ -81,6 +82,7 @@ interface Ctx {
   dataDir: string
   settingsPath: string
   skillsDir: string
+  agentsDir: string
   repoRoot: string
   uiPort: number
   mcpPort: number
@@ -101,6 +103,7 @@ function resolveCtx(opts: SetupOptions): Ctx {
     dataDir: opts.dataDir ?? process.env.DATA_DIR ?? path.join(home, '.agentlens'),
     settingsPath: opts.settingsPath ?? process.env.AGENTLENS_CLAUDE_SETTINGS ?? path.join(home, '.claude', 'settings.json'),
     skillsDir: opts.skillsDir ?? path.join(home, '.claude', 'skills'),
+    agentsDir: opts.agentsDir ?? path.join(home, '.claude', 'agents'),
     repoRoot,
     uiPort: opts.uiPort ?? Number(process.env.UI_PORT ?? 3000),
     mcpPort: opts.mcpPort ?? Number(process.env.MCP_PORT ?? 4316),
@@ -585,14 +588,17 @@ const stepSkill: StepDef = {
     // EVERY shipped skill, not just the first: a second skill that was shipped in the tarball but
     // never checked here would be installed once and then never repaired or refreshed, and setup's
     // whole contract is "detect → converge → verify" for the things it owns.
+    // Hash the whole skill TREE, not just SKILL.md: a skill ships templates/scripts/references
+    // alongside it, and a drift check that only reads SKILL.md would report "current" while the
+    // user runs a stale template.
     const skills = SKILL_NAMES.map(name => {
-      const src = path.join(ctx.repoRoot, 'skills', name, 'SKILL.md')
-      const dst = path.join(ctx.skillsDir, name, 'SKILL.md')
-      const srcExists = fs.existsSync(src)
+      const src = path.join(ctx.repoRoot, 'skills', name)
+      const dst = path.join(ctx.skillsDir, name)
+      const srcHash = skillTreeHash(src)
       return {
-        name, src, dst, srcExists,
-        srcHash: srcExists ? sha256File(src) : null,
-        dstHash: fs.existsSync(dst) ? sha256File(dst) : null,
+        name, src: path.join(src, 'SKILL.md'), dst, srcExists: srcHash !== null,
+        srcHash,
+        dstHash: skillTreeHash(dst),
       }
     })
     const missing = skills.filter(s => !s.srcExists)
@@ -634,17 +640,36 @@ const stepSkill: StepDef = {
         supersededNote = '; agentlens-diagnostics left untouched (content not recognisably ours)'
       }
     }
-    // VERIFY — hash compare on a FRESH read of both files (not the writer's buffer), for EVERY
-    // skill. One bad apple fails the step and is named, so "PASS" can never mean "the first one
-    // was fine and the rest were not looked at".
-    const bad = skills.filter(s => !(fs.existsSync(s.dst) && sha256File(s.dst) === sha256File(s.src)))
+    // The AGENT definitions converge with the skills, in this same step: a skill that dispatches
+    // `agentlens-tldr-worker` is inert on a machine without that agent file, so a run that
+    // refreshed the skills and skipped the agents would report PASS on a half-installed feature.
+    const agentsStale = AGENT_NAMES.filter(name => {
+      const src = path.join(ctx.repoRoot, 'agents', `${name}.md`)
+      const dst = path.join(ctx.agentsDir, `${name}.md`)
+      return fs.existsSync(src) && (!fs.existsSync(dst) || sha256File(dst) !== sha256File(src))
+    })
+    if (agentsStale.length > 0) {
+      installAgents({ repoRoot: ctx.repoRoot, agentsDir: ctx.agentsDir, log: ctx.log })
+      acted = true
+    }
+
+    // VERIFY — hash compare on a FRESH read of both trees (not the writer's buffer), for EVERY
+    // skill and agent. One bad apple fails the step and is named, so "PASS" can never mean "the
+    // first one was fine and the rest were not looked at".
+    const bad = skills.filter(s => skillTreeHash(s.dst) !== s.srcHash)
+    const badAgents = AGENT_NAMES.filter(name => {
+      const src = path.join(ctx.repoRoot, 'agents', `${name}.md`)
+      const dst = path.join(ctx.agentsDir, `${name}.md`)
+      return !(fs.existsSync(src) && fs.existsSync(dst) && sha256File(dst) === sha256File(src))
+    })
     return {
       result: {
-        step: this.name, found, action: acted ? 'installed/refreshed' : 'none',
-        verify: bad.length === 0 ? 'PASS' : 'FAIL',
-        detail: (bad.length === 0
-          ? `sha256 match on ${skills.length} skill(s)${supersededNote}`
-          : `installed hash differs from shipped hash: ${bad.map(s => s.name).join(', ')}`),
+        step: this.name, found: `${found}; agents ${AGENT_NAMES.length - agentsStale.length}/${AGENT_NAMES.length} current`,
+        action: acted ? 'installed/refreshed' : 'none',
+        verify: bad.length === 0 && badAgents.length === 0 ? 'PASS' : 'FAIL',
+        detail: (bad.length === 0 && badAgents.length === 0
+          ? `sha256 match on ${skills.length} skill tree(s) + ${AGENT_NAMES.length} agent(s)${supersededNote}`
+          : `installed hash differs from shipped hash: ${[...bad.map(s => s.name), ...badAgents].join(', ')}`),
       },
       acted,
     }

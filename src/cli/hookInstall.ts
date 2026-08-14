@@ -541,6 +541,8 @@ export interface InstallSkillOptions {
   repoRoot?: string
   /** Target skills dir. Default ~/.claude/skills */
   skillsDir?: string
+  /** Target agents dir (installAgents only). Default ~/.claude/agents */
+  agentsDir?: string
   log?: (line: string) => void
   /** Which shipped skill to install. Default SKILL_NAME. */
   name?: string
@@ -554,6 +556,7 @@ export const SKILL_NAME = 'agentlenspro-diagnostics'
  *  skill directory without adding it here would ship it in the tarball and never install it. */
 export const SKILL_NAMES: readonly string[] = [
   SKILL_NAME, 'agentlenspro-cache-guard', 'agentlenspro-visualize-context',
+  'agentlenspro-scan-and-fix', 'verification-before-completion',
 ]
 
 /** Walk up from a start dir to the first directory containing the shipped skill. The CLI
@@ -574,10 +577,54 @@ export function sha256File(file: string): string {
   return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')
 }
 
-/** (Re)install the agentlenspro-diagnostics skill into the user scope. The repo copy is the
- *  single source of truth; ~/.claude/skills/ is a managed installation target. Idempotent by
- *  content comparison — safe to run on every install / update, and the way to recover the
- *  skill if it was deleted. Returns what happened so `setup` can RECORD it. */
+/** Every file a skill directory ships, as paths relative to that directory, sorted so two walks
+ *  of the same tree compare positionally. `.DS_Store` is excluded because macOS writes one into
+ *  any browsed directory and it is not part of the skill. */
+export function skillFiles(dir: string): string[] {
+  const out: string[] = []
+  const walk = (rel: string): void => {
+    for (const entry of fs.readdirSync(path.join(dir, rel), { withFileTypes: true })) {
+      if (entry.name === '.DS_Store') continue
+      const child = rel ? path.join(rel, entry.name) : entry.name
+      if (entry.isDirectory()) walk(child)
+      else if (entry.isFile()) out.push(child)
+    }
+  }
+  walk('')
+  return out.sort()
+}
+
+/** One hash over a skill's WHOLE tree — every shipped file's relative path AND bytes. Returns
+ *  null when the directory has no SKILL.md (not installed / not shipped).
+ *
+ *  Hashing only SKILL.md would make setup's drift check blind to exactly the payload that makes
+ *  a multi-file skill worth shipping: a changed template or script would read as "current"
+ *  forever, and the user would keep running last release's template while setup reported green. */
+export function skillTreeHash(dir: string): string | null {
+  if (!fs.existsSync(path.join(dir, 'SKILL.md'))) return null
+  const h = crypto.createHash('sha256')
+  for (const rel of skillFiles(dir)) {
+    h.update(rel)         // a rename with identical bytes is still drift
+    h.update('\0')
+    h.update(fs.readFileSync(path.join(dir, rel)))
+  }
+  return h.digest('hex')
+}
+
+/** (Re)install one shipped skill into the user scope. The repo copy is the single source of
+ *  truth; ~/.claude/skills/ is a managed installation target. Idempotent by content comparison —
+ *  safe to run on every install / update, and the way to recover the skill if it was deleted.
+ *  Returns what happened so `setup` can RECORD it.
+ *
+ *  Copies the skill's WHOLE DIRECTORY, not just SKILL.md: a skill's payload is what makes it
+ *  useful — templates, scripts, reference docs, binaries — and a SKILL.md that references a
+ *  `templates/` file the installer never copied is a skill that documents a file the user does
+ *  not have. The file mode is carried across too, or a shipped executable would install
+ *  un-runnable.
+ *
+ *  Files present at the destination but NOT shipped by this version are LEFT IN PLACE and
+ *  reported, never deleted: this function cannot tell a stale file from one the user wrote, and
+ *  silently deleting the latter is not a trade an installer gets to make. */
 export function installSkill(opts: InstallSkillOptions = {}): 'installed' | 'updated' | 'current' {
   const log = opts.log ?? ((line: string) => console.log(line))
   const name = opts.name ?? SKILL_NAME
@@ -586,19 +633,82 @@ export function installSkill(opts: InstallSkillOptions = {}): 'installed' | 'upd
   // here means that anchor was not found — saying "no skills/<the-skill-being-installed>" would send
   // the reader looking for the wrong missing file.
   if (!root) throw new Error(`skill source missing — no skills/${SKILL_NAME}/SKILL.md (the package-root anchor) above ${__dirname}; wanted to install "${name}"`)
-  const src = path.join(root, 'skills', name, 'SKILL.md')
-  if (!fs.existsSync(src)) throw new Error(`skill source missing at ${src} — is the package intact?`)
-  const dst = path.join(opts.skillsDir ?? path.join(os.homedir(), '.claude', 'skills'), name, 'SKILL.md')
-  const content = fs.readFileSync(src, 'utf8')
-  const existed = fs.existsSync(dst)
-  if (existed && fs.readFileSync(dst, 'utf8') === content) {
-    log(`skill ${name}: already current (${dst})`)
+  const srcDir = path.join(root, 'skills', name)
+  if (!fs.existsSync(path.join(srcDir, 'SKILL.md'))) throw new Error(`skill source missing at ${path.join(srcDir, 'SKILL.md')} — is the package intact?`)
+  const dstDir = path.join(opts.skillsDir ?? path.join(os.homedir(), '.claude', 'skills'), name)
+  const existed = fs.existsSync(path.join(dstDir, 'SKILL.md'))
+
+  const shipped = skillFiles(srcDir)
+  let changed = 0
+  for (const rel of shipped) {
+    const src = path.join(srcDir, rel)
+    const dst = path.join(dstDir, rel)
+    const bytes = fs.readFileSync(src)
+    const mode = fs.statSync(src).mode & 0o777
+    const same = fs.existsSync(dst) && fs.readFileSync(dst).equals(bytes)
+    if (!same) {
+      fs.mkdirSync(path.dirname(dst), { recursive: true })
+      fs.writeFileSync(dst, bytes)
+      changed++
+    }
+    if ((fs.statSync(dst).mode & 0o777) !== mode) { fs.chmodSync(dst, mode); changed++ }
+  }
+
+  const extras = fs.existsSync(dstDir) ? skillFiles(dstDir).filter(rel => !shipped.includes(rel)) : []
+  if (extras.length > 0) {
+    log(`skill ${name}: ${extras.length} file(s) at ${dstDir} are not shipped by this version — left in place: ${extras.slice(0, 5).join(', ')}${extras.length > 5 ? ', …' : ''}`)
+  }
+  if (changed === 0) {
+    log(`skill ${name}: already current (${shipped.length} file(s) at ${dstDir})`)
     return 'current'
   }
-  fs.mkdirSync(path.dirname(dst), { recursive: true })
-  fs.writeFileSync(dst, content)
-  log(`skill ${name}: ${existed ? 'updated' : 'installed'} -> ${dst}`)
+  log(`skill ${name}: ${existed ? 'updated' : 'installed'} (${shipped.length} file(s)) -> ${dstDir}`)
   return existed ? 'updated' : 'installed'
+}
+
+/** Every agent definition this package ships into `~/.claude/agents/`. A skill can only ask for
+ *  a worker by NAME; if the definition is not on the machine the spawn fails, so the agents ride
+ *  along with the skills that dispatch them. */
+export const AGENT_NAMES: readonly string[] = [
+  'agentlens-tldr-worker', 'lean-worker', 'micro-worker',
+]
+
+/** (Re)install the shipped agent definitions at user scope, same discipline as the skills:
+ *  content-compared, idempotent, and it NEVER deletes.
+ *
+ *  Deliberately no "extras" report here, unlike installSkill: `~/.claude/agents/` is a SHARED
+ *  directory holding every agent the user has from every source, so listing the files we did not
+ *  ship would report the user's own library back to them as debris. We own our names, nothing
+ *  else. An existing file with one of our names IS overwritten — that is what makes an upgrade
+ *  work — so a user who wants to customize one should copy it under a different name. */
+export function installAgents(opts: InstallSkillOptions = {}): Array<{ name: string; outcome: string }> {
+  const log = opts.log ?? ((line: string) => console.log(line))
+  const root = opts.repoRoot ?? findPackageRoot(__dirname)
+  if (!root) throw new Error(`agent source missing — no skills/${SKILL_NAME}/SKILL.md (the package-root anchor) above ${__dirname}`)
+  const dstDir = opts.agentsDir ?? path.join(os.homedir(), '.claude', 'agents')
+  const results: Array<{ name: string; outcome: string }> = []
+  const failures: string[] = []
+  for (const name of AGENT_NAMES) {
+    try {
+      const src = path.join(root, 'agents', `${name}.md`)
+      if (!fs.existsSync(src)) throw new Error(`missing at ${src} — is the package intact?`)
+      const dst = path.join(dstDir, `${name}.md`)
+      const bytes = fs.readFileSync(src)
+      const existed = fs.existsSync(dst)
+      if (existed && fs.readFileSync(dst).equals(bytes)) {
+        results.push({ name, outcome: 'current' })
+        continue
+      }
+      fs.mkdirSync(dstDir, { recursive: true })
+      fs.writeFileSync(dst, bytes)
+      log(`agent ${name}: ${existed ? 'updated' : 'installed'} -> ${dst}`)
+      results.push({ name, outcome: existed ? 'updated' : 'installed' })
+    } catch (e) {
+      failures.push(`${name}: ${(e as Error).message}`)
+    }
+  }
+  if (failures.length > 0) throw new Error(`agent install failed — ${failures.join('; ')}`)
+  return results
 }
 
 /** Install EVERY shipped skill. One failure must not silently skip the rest — a partially
