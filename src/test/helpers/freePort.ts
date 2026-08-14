@@ -142,8 +142,13 @@ export async function spawnServerWithRetry(opts: SpawnServerRetryOptions): Promi
     const port = opts.readyPort(env)
     try {
       await waitUntilReady(child, port, readyPath, readyTimeoutMs, () => log)
-      combinedLog += log
-      return { child, env, getLog: () => combinedLog }
+      // getLog() must stay LIVE. Callers assert on lines the server prints LONG AFTER readiness
+      // — serverCalibration's rollover-guard assertions are the live proof — so concatenating
+      // into a frozen string here would hand back a boot-only snapshot and those assertions
+      // would fail against a log that never stopped growing. Capture the FAILED attempts'
+      // text, then append the running buffer on every call.
+      const priorAttempts = combinedLog
+      return { child, env, getLog: () => priorAttempts + log }
     } catch (err) {
       combinedLog += log
       lastErr = err instanceof Error ? err : new Error(String(err))

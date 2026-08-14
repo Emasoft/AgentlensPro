@@ -3,8 +3,8 @@ import * as http from 'http'
 import * as os from 'os'
 import * as fs from 'fs'
 import * as path from 'path'
-import { spawn, type ChildProcess } from 'child_process'
-import type { AddressInfo } from 'net'
+import { type ChildProcess } from 'child_process'
+import { freePort, spawnServerWithRetry } from './helpers/freePort'
 
 // ── P5 window auto-calibration — REAL end-to-end through the ingest path ───────
 // Boots the REAL built server (standalone/server.js) ONCE on isolated ports + an isolated
@@ -45,16 +45,6 @@ function httpReq(port: number, method: string, urlPath: string, body?: unknown):
     req.on('error', reject)
     if (payload) req.write(payload)
     req.end()
-  })
-}
-
-function freePort(): Promise<number> {
-  return new Promise((resolve) => {
-    const s = http.createServer()
-    s.listen(0, '127.0.0.1', () => {
-      const port = (s.address() as AddressInfo).port
-      s.close(() => resolve(port))
-    })
   })
 }
 
@@ -100,9 +90,9 @@ suite('standalone server — P5 window auto-calibration (real boot, real ingest 
   let child: ChildProcess | undefined
   let otlpPort = 0
   let uiPort = 0
-  let tmpDir = ''
   let home = ''
-  let logBuf = ''
+  let getLog: () => string = () => ''
+  const tmpDirs: string[] = []   // one per boot ATTEMPT — a retried attempt still left a dir behind
 
   const configPath = (): string => path.join(home, '.agentlens', 'burn-config.json')
   const readConfig = (): Record<string, unknown> => JSON.parse(fs.readFileSync(configPath(), 'utf8')) as Record<string, unknown>
@@ -134,55 +124,55 @@ suite('standalone server — P5 window auto-calibration (real boot, real ingest 
   }
 
   suiteSetup(async function () {
-    this.timeout(45_000)
-    const [otlp, ui, mcp] = [await freePort(), await freePort(), await freePort()]
-    otlpPort = otlp
-    uiPort = ui
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'al-cal-srv-'))
-    home = path.join(tmpDir, 'home')
-    const data = path.join(tmpDir, 'data')
-    fs.mkdirSync(home, { recursive: true })
-    fs.mkdirSync(data, { recursive: true })
-
+    // Ports come from the SHARED helper, not a local probe: it carries the in-process claimed-set
+    // and `spawnServerWithRetry` re-picks fresh ports on the "already in use" early-exit. That
+    // TOCTOU race (probe → close → the OS re-hands the port before the child binds) shed a CI run
+    // on 2026-08-14. Retries are bounded and any NON-port failure still throws on attempt 1, so a
+    // real server bug can never be masked as contention. (TRDD-1QFP73WA owns the helper.)
+    this.timeout(120_000)
     const serverJs = path.resolve(__dirname, '..', '..', '..', 'standalone', 'server.js')
-    const env = { ...process.env } as NodeJS.ProcessEnv
-    // Full isolation (the resident-server guardrail): private HOME + DATA_DIR, ephemeral ports.
-    // ALSO strip every manual-capacity env var — a cap inherited from the developer's shell would
-    // make the calibration (correctly) refuse to run and turn every test below into a false fail.
-    delete env.AGENTLENS_GATE
-    delete env.AGENTLENS_GATE_MODE
-    delete env.AGENTLENS_WINDOW_5H_TOKENS
-    delete env.AGENTLENS_WINDOW_7D_TOKENS
-    delete env.AGENTLENS_WINDOW_5H_COST_USD
-    delete env.AGENTLENS_WINDOW_7D_COST_USD
-    delete env.AGENTLENS_BURN_CONFIG
-    delete env.AGENTLENS_STATUSLINE_LOG
-    delete env.CLAUDE_CONFIG_DIR
-    Object.assign(env, {
-      HOME: home,
-      DATA_DIR: data,
-      OTLP_PORT: String(otlp),
-      UI_PORT: String(ui),
-      MCP_PORT: String(mcp),
-      BIND_HOST: '127.0.0.1',
-      AGENTLENS_NO_TELEMETRY_CONFIG: '1',
-      AGENTLENS_OPEN_BROWSER: '0',
+    const spawned = await spawnServerWithRetry({
+      serverJs,
+      readyPort: (env) => Number(env.UI_PORT),
+      buildEnv: async () => {
+        const [otlp, ui, mcp] = [await freePort(), await freePort(), await freePort()]
+        otlpPort = otlp
+        uiPort = ui
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'al-cal-srv-'))
+        tmpDirs.push(dir)
+        home = path.join(dir, 'home')
+        const data = path.join(dir, 'data')
+        fs.mkdirSync(home, { recursive: true })
+        fs.mkdirSync(data, { recursive: true })
+
+        const env = { ...process.env } as NodeJS.ProcessEnv
+        // Full isolation (the resident-server guardrail): private HOME + DATA_DIR, ephemeral ports.
+        // ALSO strip every manual-capacity env var — a cap inherited from the developer's shell would
+        // make the calibration (correctly) refuse to run and turn every test below into a false fail.
+        delete env.AGENTLENS_GATE
+        delete env.AGENTLENS_GATE_MODE
+        delete env.AGENTLENS_WINDOW_5H_TOKENS
+        delete env.AGENTLENS_WINDOW_7D_TOKENS
+        delete env.AGENTLENS_WINDOW_5H_COST_USD
+        delete env.AGENTLENS_WINDOW_7D_COST_USD
+        delete env.AGENTLENS_BURN_CONFIG
+        delete env.AGENTLENS_STATUSLINE_LOG
+        delete env.CLAUDE_CONFIG_DIR
+        Object.assign(env, {
+          HOME: home,
+          DATA_DIR: data,
+          OTLP_PORT: String(otlp),
+          UI_PORT: String(ui),
+          MCP_PORT: String(mcp),
+          BIND_HOST: '127.0.0.1',
+          AGENTLENS_NO_TELEMETRY_CONFIG: '1',
+          AGENTLENS_OPEN_BROWSER: '0',
+        })
+        return env
+      },
     })
-
-    child = spawn(process.execPath, [serverJs], { env, stdio: ['ignore', 'pipe', 'pipe'] })
-    child.stdout?.on('data', (d: Buffer) => { logBuf += d.toString() })
-    child.stderr?.on('data', (d: Buffer) => { logBuf += d.toString() })
-
-    const deadline = Date.now() + 30_000
-    for (;;) {
-      if (child.exitCode !== null) throw new Error(`server exited early (code=${child.exitCode})\n${logBuf.slice(-2000)}`)
-      try {
-        const r = await httpReq(ui, 'GET', '/api/server-stats')
-        if (r.status === 200) break
-      } catch { /* not listening yet */ }
-      if (Date.now() > deadline) throw new Error(`server not ready within 30s\n${logBuf.slice(-2000)}`)
-      await sleep(250)
-    }
+    child = spawned.child
+    getLog = spawned.getLog
   })
 
   suiteTeardown(async function () {
@@ -198,7 +188,7 @@ suite('standalone server — P5 window auto-calibration (real boot, real ingest 
         assert.ok(child.exitCode !== null || child.signalCode !== null, 'server child must have exited')
       }
     } finally {
-      try { if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true }) } catch { /* best effort */ }
+      for (const d of tmpDirs) { try { fs.rmSync(d, { recursive: true, force: true }) } catch { /* best effort */ } }
     }
   })
 
@@ -214,7 +204,7 @@ suite('standalone server — P5 window auto-calibration (real boot, real ingest 
     // Ingest is synchronous, but verify the budget sees the attributed consumption BEFORE the
     // stall — a failure here means the fixture broke, not the calibration.
     const before = await burnStatusAccount('acct-cal-a')
-    assert.ok(before, `account window must exist before the stall. accounts: ${logBuf.slice(-500)}`)
+    assert.ok(before, `account window must exist before the stall. accounts: ${getLog().slice(-500)}`)
     assert.strictEqual(before?.budget.fiveHour.consumedTokens, 300_000)
     assert.strictEqual(before?.budget.capacitySource, 'none', 'unconfigured machine starts at none')
 
@@ -223,7 +213,7 @@ suite('standalone server — P5 window auto-calibration (real boot, real ingest 
 
     // The calibration ran before the response was written — the file is already there.
     const obs = observedOf('acct-cal-a')
-    assert.ok(obs, `observed entry for acct-cal-a must exist. Config: ${fs.existsSync(configPath()) ? fs.readFileSync(configPath(), 'utf8') : '<missing>'}\nLog: ${logBuf.slice(-800)}`)
+    assert.ok(obs, `observed entry for acct-cal-a must exist. Config: ${fs.existsSync(configPath()) ? fs.readFileSync(configPath(), 'utf8') : '<missing>'}\nLog: ${getLog().slice(-800)}`)
     assert.strictEqual(obs?.window5hTokens, 300_000)
     assert.strictEqual(obs?.window7dTokens, 300_000)
     assert.strictEqual(typeof obs?.observedAt, 'string')
@@ -264,7 +254,7 @@ suite('standalone server — P5 window auto-calibration (real boot, real ingest 
     const r = await httpReq(uiPort, 'POST', '/api/hook-events', stopFailureFixture('sess-cal-b'))
     assert.ok(r.status >= 200 && r.status < 300)
     assert.strictEqual(observedOf('acct-cal-b'), undefined, 'a rolled window must not calibrate')
-    assert.ok(logBuf.includes('rolled'), `server log must name the rollover guard. Log tail: ${logBuf.slice(-600)}`)
+    assert.ok(getLog().includes('rolled'), `server log must name the rollover guard. Log tail: ${getLog().slice(-600)}`)
   })
 
   test('a non-rate-limit StopFailure does not calibrate', async function () {
@@ -287,6 +277,6 @@ suite('standalone server — P5 window auto-calibration (real boot, real ingest 
     const r = await httpReq(uiPort, 'POST', '/api/hook-events', stopFailureFixture('sess-cal-a'))
     assert.ok(r.status >= 200 && r.status < 300)
     assert.strictEqual(JSON.stringify(readConfig()), before, 'a user-configured config must be byte-identical after the stall')
-    assert.ok(logBuf.includes('user-configured'), `server log must name the veto. Log tail: ${logBuf.slice(-600)}`)
+    assert.ok(getLog().includes('user-configured'), `server log must name the veto. Log tail: ${getLog().slice(-600)}`)
   })
 })

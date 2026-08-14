@@ -3,8 +3,8 @@ import * as http from 'http'
 import * as os from 'os'
 import * as fs from 'fs'
 import * as path from 'path'
-import { spawn, type ChildProcess } from 'child_process'
-import type { AddressInfo } from 'net'
+import type { ChildProcess } from 'child_process'
+import { freePort, spawnServerWithRetry } from './helpers/freePort'
 
 // ── S3-F3b — the SHIPPED standalone injects gen_ai response content into its LLM span ────────────
 // gen_ai_latest_experimental (Codex/OpenAI) emits the assistant's RESPONSE TEXT as a SEPARATE log
@@ -41,16 +41,6 @@ function httpReq(port: number, method: string, urlPath: string, body?: unknown):
     req.on('error', reject)
     if (payload) req.write(payload)
     req.end()
-  })
-}
-
-function freePort(): Promise<number> {
-  return new Promise((resolve) => {
-    const s = http.createServer()
-    s.listen(0, '127.0.0.1', () => {
-      const port = (s.address() as AddressInfo).port
-      s.close(() => resolve(port))
-    })
   })
 }
 
@@ -100,49 +90,43 @@ suite('standalone server — gen_ai response content injected into the LLM span 
   let child: ChildProcess | undefined
   let uiPort = 0
   let otlpPort = 0
-  let tmpDir = ''
-  let logBuf = ''
+  const tmpDirs: string[] = [] // one per boot ATTEMPT — a retried attempt still left a dir behind
 
   suiteSetup(async function () {
     this.timeout(45_000)
-    const [otlp, ui, mcp] = [await freePort(), await freePort(), await freePort()]
-    uiPort = ui
-    otlpPort = otlp
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'al-genai-'))
-    const home = path.join(tmpDir, 'home')
-    const data = path.join(tmpDir, 'data')
-    fs.mkdirSync(home, { recursive: true })
-    fs.mkdirSync(data, { recursive: true })
 
     const serverJs = path.resolve(__dirname, '..', '..', '..', 'standalone', 'server.js')
-    const env = { ...process.env } as NodeJS.ProcessEnv
-    delete env.AGENTLENS_GATE
-    delete env.AGENTLENS_GATE_MODE
-    Object.assign(env, {
-      HOME: home,
-      DATA_DIR: data,
-      OTLP_PORT: String(otlp),
-      UI_PORT: String(ui),
-      MCP_PORT: String(mcp),
-      BIND_HOST: '127.0.0.1',
-      AGENTLENS_NO_TELEMETRY_CONFIG: '1',
-      AGENTLENS_OPEN_BROWSER: '0',
+    const spawned = await spawnServerWithRetry({
+      serverJs,
+      readyPort: (env) => Number(env.UI_PORT),
+      buildEnv: async () => {
+        const [otlp, ui, mcp] = [await freePort(), await freePort(), await freePort()]
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'al-genai-'))
+        tmpDirs.push(dir)
+        const home = path.join(dir, 'home')
+        const data = path.join(dir, 'data')
+        fs.mkdirSync(home, { recursive: true })
+        fs.mkdirSync(data, { recursive: true })
+
+        const env = { ...process.env } as NodeJS.ProcessEnv
+        delete env.AGENTLENS_GATE
+        delete env.AGENTLENS_GATE_MODE
+        Object.assign(env, {
+          HOME: home,
+          DATA_DIR: data,
+          OTLP_PORT: String(otlp),
+          UI_PORT: String(ui),
+          MCP_PORT: String(mcp),
+          BIND_HOST: '127.0.0.1',
+          AGENTLENS_NO_TELEMETRY_CONFIG: '1',
+          AGENTLENS_OPEN_BROWSER: '0',
+        })
+        otlpPort = otlp
+        uiPort = ui
+        return env
+      },
     })
-
-    child = spawn(process.execPath, [serverJs], { env, stdio: ['ignore', 'pipe', 'pipe'] })
-    child.stdout?.on('data', (d: Buffer) => { logBuf += d.toString() })
-    child.stderr?.on('data', (d: Buffer) => { logBuf += d.toString() })
-
-    const deadline = Date.now() + 30_000
-    for (;;) {
-      if (child.exitCode !== null) throw new Error(`server exited early (code=${child.exitCode})\n${logBuf.slice(-2000)}`)
-      try {
-        const r = await httpReq(ui, 'GET', '/api/server-stats')
-        if (r.status === 200) break
-      } catch { /* not listening yet */ }
-      if (Date.now() > deadline) throw new Error(`server not ready within 30s\n${logBuf.slice(-2000)}`)
-      await sleep(250)
-    }
+    child = spawned.child
   })
 
   suiteTeardown(async function () {
@@ -158,7 +142,7 @@ suite('standalone server — gen_ai response content injected into the LLM span 
         assert.ok(child.exitCode !== null || child.signalCode !== null, 'server child must have exited')
       }
     } finally {
-      try { if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true }) } catch { /* best effort */ }
+      for (const d of tmpDirs) { try { fs.rmSync(d, { recursive: true, force: true }) } catch { /* best effort */ } }
     }
   })
 
