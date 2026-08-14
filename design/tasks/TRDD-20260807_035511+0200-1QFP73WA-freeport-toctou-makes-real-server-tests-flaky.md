@@ -1,9 +1,9 @@
 ---
 trdd-id: 1QFP73WA
 title: freePort has a TOCTOU race that makes every real-server test flaky in CI
-column: human_review
+column: complete
 created: 2026-08-07T03:55:11+0200
-updated: 2026-08-12T13:45:00+0200
+updated: 2026-08-14T02:58:00+0200
 current-owner: main
 task-type: infra
 ---
@@ -113,5 +113,14 @@ bound, and assert the spawn helper retries and succeeds rather than propagating
 
 Then: the full suite green on both Node 20 and Node 22 across three consecutive CI runs. One
 green run proves nothing about a race.
+
+## Approval log
+
+- 2026-08-14T02:58:00+0200 — COMPLETED (human_review → complete). The card's own close criterion —
+  three consecutive green CI runs on main after the fix — is now met: ed084ff, 1828673, 17dc609
+  all success (the two 2026-08-13 20:3x failures that broke the earlier streak were an unrelated
+  spansScanned contract regression, fixed by ed084ff, with zero port-race signatures in their
+  logs). Implementation itself was fact-verified earlier:
+  reports/trdd-review/20260814_015508+0200-batch3-review.md.
 
 ## Notes and lessons learned

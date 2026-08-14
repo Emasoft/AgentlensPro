@@ -1,9 +1,9 @@
 ---
 trdd-id: PIDFILEAT
 title: server.pid can contain two interleaved pids under a respawn race
-column: backburner
+column: complete
 created: 2026-08-13T12:57:16+0200
-updated: 2026-08-13T22:27:00+0200
+updated: 2026-08-14T03:10:00+0200
 current-owner: agentlenspro-session
 task-type: bugfix
 severity: high
@@ -18,3 +18,18 @@ window of ≥67s**, i.e. two servers appending to the same store, the exact corr
 exists to prevent. This is no longer cosmetic (wrong pid in status output); a stale/corrupt lock
 that permits takeover from a LIVE owner is a store-integrity risk. Evidence recorded in
 TRDD-34B9JAZK's 22:09 recurrence section.
+
+## Approval log
+
+- 2026-08-14T03:10:00+0200 — COMPLETED (backburner → complete). Both halves implemented and
+  verified (reports/trdd-review/20260814_022223+0200-PIDFILEAT-fix.md): (1) the pidfile is now
+  published by `atomicExclusiveWriteFileSync` — full content staged + fsynced in a temp file, then
+  `link(2)`-published, which is atomic AND fails EEXIST (the interleaved "4676845598" shape is
+  structurally impossible; pinned by a two-racing-writers test) — with a re-read-after-write that
+  hard-exits on mismatch; (2) the lock carries the owner's `ps -o lstart=` start reference, and
+  `lockTakeoverVerdict` reclaims only on dead-takeover or recycled-takeover — an alive pid with a
+  matching start ref is a live owner, never taken over, closing the ≥67s double-owner window.
+  Legacy bare-numeric locks keep today's kill-0-only rule so running installs are not bricked. The
+  861LC4VW-coupled refusal string is byte-identical (grep-verified; serverStartupVerdict suite
+  green). 46 unit + 3 spawned-real-server integration tests green; deployed with the closing
+  commit.
