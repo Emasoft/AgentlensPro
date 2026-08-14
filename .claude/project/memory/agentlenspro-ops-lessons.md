@@ -574,6 +574,11 @@ DO NOT 'simplify' the server single-instance lock back to a bare wx write + kill
 
 DO NOT stop hunting a recurring RangeError 'Maximum call stack size exceeded' after fixing the spread sites in the named function's own files, BECAUSE the defect class (spread-into-CALL over an unbounded array — fn(...arr), Math.max(...arr), push(...arr)) recurs anywhere in the same push cycle: after the summarizers were fixed (9da7609) the error came back from computeAnalyticsData's Math.min/max(...times) in standalone/server.ts — same tickBurn→pushUpdate cycle, OUTSIDE the summarizeSpans try/catch. DO walk the ENTIRE call graph of the crashing CYCLE with a plain '\.\.\.'  sweep and review every hit; array-literal spread ([...a]) and object spread ({...o}) are iterator-based and SAFE — only spread into an argument list hits V8's ~125k-arg limit.
 
+
+^ATOM-KH8H-N8RH [desc:"tail-terminated pipelines look hung when a leaked child holds the pipe; green-on-CI/red-locally means hidden local-state dependency", keywords: background_test_run_empty_output_hang tail_no_output_until_exit pipe_held_open_by_leaked_child green_on_CI_fails_locally timeout_only_on_my_machine, type: project, ocd: 2026-08-14, lmd: 2026-08-14]
+
+DO NOT read a background pipeline's '20 minutes, empty output' as a hung test run when the pipeline ends in `| tail`: tail withholds EVERYTHING until EOF, and EOF never comes while ANY process keeps the pipe's write end open — a test-spawned child that outlived mocha held it here, so a suite that had finished looked permanently hung and nearly got misdiagnosed as a code regression. DO capture to a file (`cmd > f 2>&1`) and read the file; and when a test is 'green on CI but times out locally', suspect a hidden dependency on local state CI lacks (here: a builder's storeDir defaulting to the developer's real 18-month store).
+
 ## See also
 
 - [[ssd-write-economics]] — what the drain is ultimately protecting: the SSD write budget, why the

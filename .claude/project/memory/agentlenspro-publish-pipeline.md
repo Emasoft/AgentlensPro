@@ -79,6 +79,11 @@ dot-directories in `files` is not self-evident, so inclusion was verified with
 (`npm pack agentlenspro@2.20.0` + `tar -tzf` → 18 files, 992 KB, both `.claude` paths present, zero
 memory/settings entries). [^6] [^7]
 
+
+^ATOM-VF78-9FDW [desc:"A bump+changelog without a pushed tag publishes NOTHING — verify git tag + npm view before assuming a version shipped", keywords: changelog_says_released_but_npm_is_older version_bumped_but_not_published tag_never_pushed npm_latest_behind_package.json, type: project, ocd: 2026-08-14, lmd: 2026-08-14]
+
+DO NOT assume the latest CHANGELOG entry is published: 2.24.0 was version-bumped and changelogged on 2026-08-12 but the v2.24.0 TAG was never pushed, so the tag-driven publish never fired and npm latest silently stayed 2.23.0 for two days. DO verify before any release reasoning: `git tag -l 'v<ver>'` AND `npm view agentlenspro version` — the pair takes seconds and catches a bump-without-tag every time. The 2.25.0 release shipped the stranded content.
+
 ## Notes and lessons learned
 
 [^1]: [id:ATOM-PUBLISH-FILENAME-MISMATCH, status:valid, keywords:"npm_publish_fails_E404_Not_Found_PUT trusted_publisher_registered_filename_mismatch renamed_workflow_to_match", ocd:2026-07-11, lmd:2026-07-11] the user registered the trusted publisher as
