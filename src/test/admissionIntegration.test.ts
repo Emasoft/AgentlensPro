@@ -39,10 +39,15 @@ suite('admission control — wired into the real server, sheds at a hard wall (r
   let tmpDir = ''
   let logBuf = ''
 
-  suiteSetup(async function () {
-    this.timeout(45_000)
+  // One boot attempt: pick ports, spawn, wait ready. Returns false ONLY for the retryable
+  // failure — the server exited early because a picked port was taken. freePort()'s
+  // listen(0)-probe-then-close leaves a TOCTOU gap (three ports per boot) where another process
+  // can bind the port before the spawned server does; it killed a CI run on 2026-08-14
+  // ("Port ... already in use" → exit 1). Every other failure still throws immediately.
+  async function bootOnce(): Promise<boolean> {
     const [otlp, ui, mcp] = [await freePort(), await freePort(), await freePort()]
     uiPort = ui
+    logBuf = ''
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'al-admit-'))
     const home = path.join(tmpDir, 'home'); const data = path.join(tmpDir, 'data')
     fs.mkdirSync(home, { recursive: true }); fs.mkdirSync(data, { recursive: true })
@@ -60,12 +65,27 @@ suite('admission control — wired into the real server, sheds at a hard wall (r
     child.stderr?.on('data', (d: Buffer) => { logBuf += d.toString() })
     const deadline = Date.now() + 30_000
     for (;;) {
-      if (child.exitCode !== null) throw new Error(`server exited early (code=${child.exitCode})\n${logBuf.slice(-2000)}`)
+      if (child.exitCode !== null) {
+        if (/already in use/i.test(logBuf)) {
+          try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch { /* best effort */ }
+          return false
+        }
+        throw new Error(`server exited early (code=${child.exitCode})\n${logBuf.slice(-2000)}`)
+      }
       // Readiness is probed via the EXEMPT /api/server-stats — which must answer even though every
       // other endpoint sheds. If it didn't, the exemption would be broken and boot would time out.
-      try { const r = await httpReq(ui, 'GET', '/api/server-stats'); if (r.status === 200) break } catch { /* not up yet */ }
+      try { const r = await httpReq(ui, 'GET', '/api/server-stats'); if (r.status === 200) return true } catch { /* not up yet */ }
       if (Date.now() > deadline) throw new Error(`server not ready within 30s\n${logBuf.slice(-2000)}`)
       await sleep(250)
+    }
+  }
+
+  suiteSetup(async function () {
+    // 3 attempts at up to ~30s ready-wait each; the retry path itself is fast (early exit).
+    this.timeout(120_000)
+    for (let attempt = 1; ; attempt++) {
+      if (await bootOnce()) return
+      if (attempt >= 3) throw new Error(`server lost the port race ${attempt} times\n${logBuf.slice(-2000)}`)
     }
   })
 
