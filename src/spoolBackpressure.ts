@@ -32,6 +32,45 @@ export function spoolFloorBytes(env: NodeJS.ProcessEnv = process.env): number {
   return DEFAULT_SPOOL_FLOOR_BYTES
 }
 
+// ── Bodies flush law (TRDD-K3WDPR7M P1) ────────────────────────────────────────────────────────
+// WHY a byte threshold instead of the bare clock it replaces: `standalone/server.ts` used to drive
+// the bodies ingest/flush pass off nothing but a fixed interval, and a turn-count ratio (the
+// earlier idea) is a poor proxy because turn sizes vary by orders of magnitude — a fixed ratio
+// flushes 26MB one hour and 200KB the next. Bytes staged is the direct signal for "how much would
+// be lost on an unclean stop", which is the thing the pass exists to bound.
+//
+// WHY 12MB, the middle of the plan's named 8-16MB band: each flush writes THREE files (blob, body,
+// part — src/store/db.ts's COPY TO PARQUET), so any figure here undercounts small-write pressure by
+// 3x if read as "one file". 12MB keeps a flush's Parquet footer overhead amortized (P0's bake-off
+// measured the loop at ~15KB/turn against a ~14KB append-only floor) while firing well before the
+// legacy 60s backstop on a burst, without flushing so often that footer overhead dominates.
+export const BODIES_FLUSH_BYTES_THRESHOLD_BYTES = 12 * 1024 * 1024
+
+export interface FlushLawInput {
+  /** Bytes currently staged (unflushed) in the bodies dir(s) being drained. */
+  stagedBytes: number
+  /** Milliseconds since the last bodies pass was attempted. */
+  msSinceLastPass: number
+  /** Max latency backstop in ms — an idle machine must still settle within this window. */
+  backstopMs: number
+  /** True when the spool is over its back-pressure floor (checkSpoolCapacity/applySpoolBackpressure) —
+   *  the pass must not wait for bytes or time when the spool itself is the thing under pressure. */
+  underPressure: boolean
+}
+
+/** The flush law, in full: fire a bodies pass when staged bytes reach the threshold, OR the max-
+ *  latency backstop has elapsed, OR the spool is under back-pressure — whichever comes first. Pure
+ *  and side-effect-free so it is testable without a real filesystem, spool, or timer (TRDD-K3WDPR7M
+ *  P1). Deliberately NOT a controller: no ramping, no telemetry-derived ratio, no PID — one
+ *  threshold, one timer, one floor, per the plan's "explicitly NOT building" list. */
+export function shouldFlushBodies(input: FlushLawInput): boolean {
+  return (
+    input.underPressure ||
+    input.stagedBytes >= BODIES_FLUSH_BYTES_THRESHOLD_BYTES ||
+    input.msSinceLastPass >= input.backstopMs
+  )
+}
+
 export interface SpoolCapacityCheck {
   overCapacity: boolean
   freeBytes: number | null

@@ -70,7 +70,7 @@ import { DEFAULT_MAX_BYTES_PER_PASS, ingestPass } from '../src/store/ingestPass'
 import { verifyVolumeInStore } from '../src/store/archiveVerify'
 import { rawBodyCaptureEnabled, spoolDirConfigured } from '../src/captureConfig'
 import { ensureRamDisk, ramDiskInfo, spoolSizeMb, SPOOL_MOUNT_POINT } from '../src/ramdisk'
-import { applySpoolBackpressure, checkSpoolCapacity, INITIAL_BACKPRESSURE_STATE, type BackpressureState } from '../src/spoolBackpressure'
+import { applySpoolBackpressure, checkSpoolCapacity, shouldFlushBodies, INITIAL_BACKPRESSURE_STATE, type BackpressureState } from '../src/spoolBackpressure'
 import { exportBodiesFromStore } from '../src/store/bodyStore'
 import {
   loadLogOffsets, loadPersistedCards,
@@ -553,6 +553,10 @@ const INGEST_MAX_BYTES_PER_PASS = Math.max(
 )
 let bodyStore: Store | null = null
 let bodiesPassRunning = false
+// Clock for the flush law's max-latency backstop (TRDD-K3WDPR7M P1) — reset at the START of every
+// pass attempt (not on success/failure), so a pass that finds nothing to do still resets "how long
+// has it been" rather than leaving the backstop perpetually thinking a flush is overdue.
+let lastBodiesPassAt = Date.now()
 // Seeded ONCE per boot from the store's already-ingested src_name set, then MUTATED by ingestPass as
 // names are ingested — so a 60s spool drain never re-reads+re-hashes a body that is already durable
 // (TRDD-K3WDPR7M Phase 3, item 5).
@@ -576,9 +580,28 @@ async function seedIngestSkipNames(store: Store): Promise<Set<string>> {
   return set
 }
 
+/** Cheap poll of bytes currently staged (unflushed) across the drain targets — the same readdir+stat
+ *  the pass itself already does per-target (line ~594), reused here so the flush law's byte
+ *  threshold has a real signal without inventing new bookkeeping (TRDD-K3WDPR7M P1). Fails open per
+ *  target (a raced dir/file just contributes 0) — never throws, since it runs on a timer. */
+function stagedBodyBytes(): number {
+  let bytes = 0
+  for (const target of drainTargets) {
+    if (!fs.existsSync(target.dir)) continue
+    try {
+      for (const f of fs.readdirSync(target.dir)) {
+        if (!f.endsWith('.request.json') && !f.endsWith('.response.json')) continue
+        try { bytes += fs.statSync(path.join(target.dir, f)).size } catch { /* raced */ }
+      }
+    } catch { /* raced dir removal */ }
+  }
+  return bytes
+}
+
 async function archiveOtelBodies(): Promise<void> {
   if (bodiesPassRunning) return // a tick must never overlap a still-running pass
   bodiesPassRunning = true
+  lastBodiesPassAt = Date.now()
   try {
     const targets = drainTargets.filter((t) => fs.existsSync(t.dir))
     if (targets.length === 0) return
@@ -762,6 +785,21 @@ let spoolBackpressureState: BackpressureState = INITIAL_BACKPRESSURE_STATE
 let spoolBackpressureGateLogged = false
 async function tickSpoolBackpressure(): Promise<void> {
   if (!SPOOL_MODE) return
+  // Flush law (TRDD-K3WDPR7M P1): piggyback this existing 5s cadence rather than adding a second
+  // timer (plan's "explicitly NOT building" bars extra machinery). Byte threshold, max-latency
+  // backstop, and the spool pressure floor are combined in ONE pure decision
+  // (spoolBackpressure.ts's shouldFlushBodies) so each clause is unit-testable in isolation. The
+  // pressure reading uses the PRIOR tick's `spoolBackpressureState.redirected` (this tick's own
+  // check happens below) — a <=5s lag on the floor is the same cadence already judged fast enough
+  // to catch a burst (see this function's header comment on the 5s choice).
+  if (shouldFlushBodies({
+    stagedBytes: stagedBodyBytes(),
+    msSinceLastPass: Date.now() - lastBodiesPassAt,
+    backstopMs: BODIES_PASS_INTERVAL_MS,
+    underPressure: spoolBackpressureState.redirected,
+  })) {
+    void archiveOtelBodies() // no-ops via bodiesPassRunning if a pass is already in flight
+  }
   // THE SAME TWO GATES as applyTelemetryConfig, because this tick is a THIRD writer of the user's
   // global settings.json and the gates' own comment records what an ungated writer does: an
   // isolated test server on an ephemeral port silently repointed every agent's telemetry at itself
