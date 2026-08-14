@@ -564,6 +564,16 @@ DO NOT fix an event-loop-starving synchronous walk by forking a worker thread or
 
 DO NOT key an in-scan telemetry sampler on a FILTERED unit (parsed spans), BECAUSE the moment a prefilter improves, the counter stops reaching the sampling interval and the trail goes dark exactly where it was built to watch — a 5.4M-span walk produced ZERO rss samples after the TRDD-9NAUEUUR prefilter. DO key trails on the RAW unit (lines seen), which no optimization can shrink; re-keyed sampler fired 20 samples on the same walk.
 
+
+^ATOM-K1LU-FWB8 [desc:"Single-instance lock: link(2)-publish + start-time-verified takeover (TRDD-PIDFILEAT) — never bare wx + kill-0; refusal phrase is parsed, never reword", keywords: pidfile_corrupted_two_pids server.pid_garbage double_owner_two_servers_one_store stale_lock_takeover recycled_pid_kill-0 single_instance_race refusing_to_start_already_owns, type: project, ocd: 2026-08-14, lmd: 2026-08-14]
+
+DO NOT 'simplify' the server single-instance lock back to a bare wx write + kill-0 takeover, BECAUSE wx makes only the CREATE exclusive (the content write is a separate syscall — two racing starters produced the interleaved pidfile '4676845598'), and kill-0 lies for a RECYCLED pid under churn (a >=67s double-owner window was observed, two servers appending to one store). DO keep the TRDD-PIDFILEAT shape: stage+fsync a temp file then fs.linkSync-publish (link(2) is atomic AND fails EEXIST), lock content {pid, start: ps -o lstart=}, takeover only on dead or start-ref-mismatch (recycled); an alive pid with matching start ref is a LIVE owner. The refusal log phrase 'Refusing to start: another AgentlensPro server (pid N) already owns' is parsed by serverControl.raceWinnerPid — never reword it.
+
+
+^ATOM-Y4ZY-Z2V8 [desc:"Spread-into-call RangeError class: recurs across the whole push cycle — sweep the cycle's call graph, not the named file; literal spreads are safe", keywords: maximum_call_stack_size_exceeded_recurred spread_into_call_argument_limit Math.max_spread_large_array summarizeSpans_error_rangeerror fixed_it_but_it_came_back, type: project, ocd: 2026-08-14, lmd: 2026-08-14]
+
+DO NOT stop hunting a recurring RangeError 'Maximum call stack size exceeded' after fixing the spread sites in the named function's own files, BECAUSE the defect class (spread-into-CALL over an unbounded array — fn(...arr), Math.max(...arr), push(...arr)) recurs anywhere in the same push cycle: after the summarizers were fixed (9da7609) the error came back from computeAnalyticsData's Math.min/max(...times) in standalone/server.ts — same tickBurn→pushUpdate cycle, OUTSIDE the summarizeSpans try/catch. DO walk the ENTIRE call graph of the crashing CYCLE with a plain '\.\.\.'  sweep and review every hit; array-literal spread ([...a]) and object spread ({...o}) are iterator-based and SAFE — only spread into an argument list hits V8's ~125k-arg limit.
+
 ## See also
 
 - [[ssd-write-economics]] — what the drain is ultimately protecting: the SSD write budget, why the
