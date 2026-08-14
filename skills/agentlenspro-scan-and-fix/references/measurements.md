@@ -54,3 +54,33 @@ which is why the fix lane in the template is serial.
 still broken: `spawnServerWithRetry` froze its `getLog()` at readiness, so a suite asserting on
 lines the server prints *after* boot read a boot-only snapshot. Nothing found it until the suites
 were actually RUN. A pipeline whose verify step does not execute the code ships green failures.
+
+## Follow-up run (same day): the fixed tldr toolchain
+
+The Arm-C result had a confound: `tldr structure` could not see anonymous callbacks
+(`suiteSetup(…)`, `test('…', …)` blocks), so that worker's "map" missed exactly the regions the
+task edits, and it fell back to grep. The toolchain was forked and fixed
+(`Emasoft/tldr-code` `feat/map-anonymous-callbacks`: callback regions are now first-class
+`kind:"call"` entries, and `fastedit --replace suiteTeardown` splices at 0 tokens). One worker
+then ran the same migration on the held-back file — **508 lines, ~2.6× the baseline files** —
+with the fixed toolchain:
+
+| | file | tokens | tools | readLines |
+|---|---|---|---|---|
+| merged whole-read (baseline avg, 165–292 L) | small | 120,454 | 8–14 | whole file |
+| tldr-only, BROKEN toolchain (165 L) | small | 122,529 | 15 | ~240 |
+| tldr+fastedit, FIXED toolchain | **508 L** | 133,629 | 16 | ~250 |
+
+Read it carefully — it says three things, not one:
+
+1. **The fix works as a map**: the worker needed no grep fallback, and its reads stayed ~250
+   lines on a file 3× larger (the broken-toolchain worker read ~240 of a 165-line file — more
+   than the file itself, counting its detours).
+2. **The floor still dominates**: 133,629 on a 508-line file is +11% over the small-file
+   baseline for 3× the material. Extrapolating the whole-read approach to 508 lines (~+4-5k
+   tokens of body plus detours) lands in the same band. At this file size the toolchain roughly
+   breaks even; the projected win starts at 1,000+ line files, and remains UNMEASURED.
+3. **The write half went unexercised**: the worker reported `fastedit_replaces=0` — it used the
+   Edit tool everywhere despite the prompt offering `fastedit edit`. An instructed capability an
+   agent does not reach for under pressure is not yet a capability of the pipeline; wiring it
+   into the worker's procedure (not just its options) is open work.
