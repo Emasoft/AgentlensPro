@@ -74,6 +74,11 @@ See also: [[cumulative-vs-per-turn-fields]] — a recomputed per-turn cost must 
 come from a correctly-differenced field; getting the rate right and the delta wrong still yields a
 wrong number (measured: a 300x one).
 
+
+^ATOM-A6WK-Q4YG [desc:"why does a fan-out now show one cold write plus N reads / fork storm detector quiet on modern Claude Code", keywords: fork_storm_stopped_firing_on_new_claude_code workflow_fan_out_cheaper_than_expected why_only_one_cold_write_in_a_fan-out workflow_siblings_read_cached_prefix CLAUDE_CODE_WORKFLOW_PREFIX_STAGGER_MS subagent_fork_default_inherits_prompt_cache 200_subagent_cap_removed, type: project, ocd: 2026-08-14, lmd: 2026-08-14]
+
+The N-cold-writes fan-out cost is VERSION-CONDITIONAL since Claude Code 2.1.229/2.1.232: >=2.1.229 staggers WORKFLOW same-prefix siblings (first sibling pays the cache write, later ones read it; CLAUDE_CODE_WORKFLOW_PREFIX_STAGGER_MS=0 disables), and >=2.1.232 makes fork spawning the default with the fork inheriting the conversation AND its prompt cache (2.1.224 removed the 200-subagent cap). The N x full-prefix-write cost survives only for parallel Agent-tool forks issued in one message, a disabled stagger, or older CC. AgentlensPro detection (FORK_STORM / FORK_STORM_FORMING) keys on OBSERVED writes, so it goes quieter, never wrong (TRDD-0YG37FXM, commit 1a9fe56).
+
 ## Notes and lessons learned
 
 [^1]: [id:ATOM-TTL-IS-REGIME-NOT-CONSTANT, status:valid, keywords:"is_the_cache_ttl_5_minutes_or_1_hour treated_5min_ttl_as_universal subscription_main_session_1h_ttl classify_regime_before_classifying_turn", ocd:2026-07-11, lmd:2026-07-11] earlier this project treated the 5-min TTL as
