@@ -19,12 +19,15 @@ import * as fs from 'fs'
 import * as http from 'http'
 import * as os from 'os'
 import * as path from 'path'
-import { spawn, type ChildProcess } from 'child_process'
-import type { AddressInfo } from 'net'
+import { type ChildProcess } from 'child_process'
 // puppeteer-core ≥24 is ESM-only: this suite compiles to CommonJS (tsconfig.test.json,
 // module Node16), so the runtime module is loaded with a real dynamic import() in
 // suiteSetup and the types come in through a resolution-mode type-only import.
 import type { Browser, Page } from 'puppeteer-core' with { 'resolution-mode': 'import' }
+// Shared helper (TRDD-1QFP73WA): in-process claimed-port set + a bounded spawn-retry that
+// re-picks fresh ports on the "already in use" early-exit — closes the probe→close→re-hand
+// TOCTOU race a local probe-then-close freePort() cannot.
+import { freePort, spawnServerWithRetry } from '../helpers/freePort'
 
 const ENABLED = process.env['AGENTLENSPRO_BROWSER_TESTS'] === '1'
 
@@ -86,16 +89,6 @@ function httpReq(port: number, method: string, urlPath: string, body?: unknown):
     req.on('error', reject)
     if (payload) req.write(payload)
     req.end()
-  })
-}
-
-function freePort(): Promise<number> {
-  return new Promise((resolve) => {
-    const s = http.createServer()
-    s.listen(0, '127.0.0.1', () => {
-      const port = (s.address() as AddressInfo).port
-      s.close(() => resolve(port))
-    })
   })
 }
 
@@ -183,8 +176,8 @@ const TAB_CONTENT: Array<{ id: string; contentSel: string }> = [
   let browser: Browser | undefined
   const openPages: Page[] = []
   let uiPort = 0
-  let tmpDir = ''
-  let logBuf = ''
+  const tmpDirs: string[] = []   // one per boot ATTEMPT — a retried attempt still left a dir behind
+  let getServerLog: () => string = () => ''
   const shotStamp = new Date().toISOString().replace(/[:.]/g, '-')
 
   function attachErrorCollector(page: Page): string[] {
@@ -225,70 +218,74 @@ const TAB_CONTENT: Array<{ id: string; contentSel: string }> = [
       return
     }
 
+    assert.ok(fs.existsSync(SERVER_JS), `standalone/server.js missing — run \`node esbuild.js\` first (${SERVER_JS})`)
+
     // ── Isolated server workspace: temp HOME (log scan sees ONLY our fixtures),
     // temp DATA_DIR, ephemeral ports (non-4318 OTLP ⇒ non-canonical ⇒ no pidfile,
     // no global config writes — the resident real-data server is never touched).
-    const [otlp, ui, mcp] = [await ephemeralPort(), await ephemeralPort(), await ephemeralPort()]
-    uiPort = ui
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'al-browser-'))
-    const home = path.join(tmpDir, 'home')
-    const data = path.join(tmpDir, 'data')
-    const claudeProjects = path.join(home, '.claude', 'projects', 'p9-smoke-project')
-    const workspace = path.join(tmpDir, 'workspace')
-    fs.mkdirSync(claudeProjects, { recursive: true })
-    fs.mkdirSync(data, { recursive: true })
-    fs.mkdirSync(workspace, { recursive: true })
+    //
+    // Ports + boot come from the SHARED helper (TRDD-1QFP73WA), not a local probe: it carries
+    // the in-process claimed-set and re-picks fresh ports on the "already in use" early-exit —
+    // closing the probe→close→re-hand TOCTOU race a local probe-then-close freePort() cannot.
+    const spawned = await spawnServerWithRetry({
+      serverJs: SERVER_JS,
+      readyPort: (env) => Number(env.UI_PORT),
+      readyTimeoutMs: 60_000,
+      buildEnv: async () => {
+        const [otlp, ui, mcp] = [await ephemeralPort(), await ephemeralPort(), await ephemeralPort()]
+        uiPort = ui
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'al-browser-'))
+        tmpDirs.push(dir)
+        const home = path.join(dir, 'home')
+        const data = path.join(dir, 'data')
+        const claudeProjects = path.join(home, '.claude', 'projects', 'p9-smoke-project')
+        const workspace = path.join(dir, 'workspace')
+        fs.mkdirSync(claudeProjects, { recursive: true })
+        fs.mkdirSync(data, { recursive: true })
+        fs.mkdirSync(workspace, { recursive: true })
 
-    // Seed the fixture transcripts BEFORE boot so the first poll scan ingests them.
-    const now = Date.now()
-    FIXTURES.forEach((fx, i) => {
-      const baseMs = now - (i + 1) * 60_000  // one/two/three minutes ago — inside every time preset
-      fs.writeFileSync(path.join(claudeProjects, `${fx.sessionId}.jsonl`), claudeSessionJsonl(fx, workspace, baseMs, 100 + i * 50))
+        // Seed the fixture transcripts BEFORE boot so the first poll scan ingests them.
+        const now = Date.now()
+        FIXTURES.forEach((fx, i) => {
+          const baseMs = now - (i + 1) * 60_000  // one/two/three minutes ago — inside every time preset
+          fs.writeFileSync(path.join(claudeProjects, `${fx.sessionId}.jsonl`), claudeSessionJsonl(fx, workspace, baseMs, 100 + i * 50))
+        })
+
+        const env = { ...process.env } as NodeJS.ProcessEnv
+        // Kill inherited overrides that would point the log scan at REAL machine data.
+        delete env['AGENTLENS_GATE']
+        delete env['AGENTLENS_GATE_MODE']
+        delete env['XDG_CONFIG_HOME']
+        delete env['CODEX_HOME']
+        Object.assign(env, {
+          HOME: home,
+          // Explicit override (comma-list of Claude config dirs) beats any inherited value.
+          CLAUDE_CONFIG_DIR: path.join(home, '.claude'),
+          DATA_DIR: data,
+          OTLP_PORT: String(otlp),
+          UI_PORT: String(ui),
+          MCP_PORT: String(mcp),
+          BIND_HOST: '127.0.0.1',
+          AGENTLENS_NO_TELEMETRY_CONFIG: '1',
+          AGENTLENS_OPEN_BROWSER: '0',
+        })
+        return env
+      },
     })
+    child = spawned.child
+    getServerLog = spawned.getLog
 
-    const env = { ...process.env } as NodeJS.ProcessEnv
-    // Kill inherited overrides that would point the log scan at REAL machine data.
-    delete env['AGENTLENS_GATE']
-    delete env['AGENTLENS_GATE_MODE']
-    delete env['XDG_CONFIG_HOME']
-    delete env['CODEX_HOME']
-    Object.assign(env, {
-      HOME: home,
-      // Explicit override (comma-list of Claude config dirs) beats any inherited value.
-      CLAUDE_CONFIG_DIR: path.join(home, '.claude'),
-      DATA_DIR: data,
-      OTLP_PORT: String(otlp),
-      UI_PORT: String(ui),
-      MCP_PORT: String(mcp),
-      BIND_HOST: '127.0.0.1',
-      AGENTLENS_NO_TELEMETRY_CONFIG: '1',
-      AGENTLENS_OPEN_BROWSER: '0',
-    })
-
-    assert.ok(fs.existsSync(SERVER_JS), `standalone/server.js missing — run \`node esbuild.js\` first (${SERVER_JS})`)
-    child = spawn(process.execPath, [SERVER_JS], { env, stdio: ['ignore', 'pipe', 'pipe'] })
-    child.stdout?.on('data', (d: Buffer) => { logBuf += d.toString() })
-    child.stderr?.on('data', (d: Buffer) => { logBuf += d.toString() })
-
-    // Wait for the HTTP surface, then for the log scan to surface ALL fixture cards
-    // (poll cadence is 5s — the summary is the same payload the dashboard renders).
+    // HTTP readiness (server-stats 200) is already guaranteed by spawnServerWithRetry. This
+    // second wait is fixture-ingestion (poll cadence is 5s — the summary is the same payload
+    // the dashboard renders), not a port race, so it stays a plain poll loop.
     const deadline = Date.now() + 60_000
     for (;;) {
-      if (child.exitCode !== null) throw new Error(`server exited early (code=${child.exitCode})\n${logBuf.slice(-2000)}`)
-      try {
-        const r = await httpReq(ui, 'GET', '/api/server-stats')
-        if (r.status === 200) break
-      } catch { /* not listening yet */ }
-      if (Date.now() > deadline) throw new Error(`server not ready within 60s\n${logBuf.slice(-2000)}`)
-      await sleep(250)
-    }
-    for (;;) {
-      const r = await httpReq(ui, 'GET', '/api/summary')
+      const r = await httpReq(uiPort, 'GET', '/api/summary')
       const sessions = ((r.json as { sessions?: Array<{ sessionId?: string }> })?.sessions) ?? []
       const ids = new Set(sessions.map((s) => s.sessionId))
       if (FIXTURES.every((f) => ids.has(f.sessionId))) break
       if (Date.now() > deadline) {
-        throw new Error(`fixture sessions not ingested within 60s (have: ${[...ids].join(', ')})\n${logBuf.slice(-2000)}`)
+        throw new Error(`fixture sessions not ingested within 60s (have: ${[...ids].join(', ')})\n${getServerLog().slice(-2000)}`)
       }
       await sleep(500)
     }
@@ -328,7 +325,7 @@ const TAB_CONTENT: Array<{ id: string; contentSel: string }> = [
             assert.ok(child.exitCode !== null || child.signalCode !== null, 'server child must have exited')
           }
         } finally {
-          try { if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true }) } catch { /* best effort */ }
+          for (const d of tmpDirs) { try { fs.rmSync(d, { recursive: true, force: true }) } catch { /* best effort */ } }
         }
       }
     }
