@@ -1,5 +1,6 @@
 import * as assert from 'assert'
-import { maxOrDefault } from '../summarizers/codex'
+import { maxOrDefault, buildCodexSessions } from '../summarizers/codex'
+import type { Span } from '../shared/telemetryTypes'
 
 // TRDD-2YP3DB9Y — the server's stack overflow, root-caused.
 //
@@ -44,5 +45,52 @@ suite('summarizers: a large array must not be spread into a call', () => {
   test('a single element, and negatives, behave like Math.max', () => {
     assert.strictEqual(maxOrDefault([42], 0), 42)
     assert.strictEqual(maxOrDefault([-5, -2, -9], 0), -2)
+  })
+})
+
+// TRDD-SUMSPANRE — end-to-end regression: exercise the REAL call path (buildCodexSessions, not
+// maxOrDefault in isolation) with a single trace/group larger than V8's max-arguments limit. This is
+// what actually crashed in production (summarizeSpans -> buildCodexSessions -> the old
+// `Math.max(...allEndTimes)`); a unit test on maxOrDefault alone can't prove the call SITE was fixed,
+// only that the helper function itself is safe.
+suite('summarizers: buildCodexSessions survives a single oversized trace group', () => {
+  const N = 200_000
+
+  function makeSpan(spanId: string, name: string, traceId: string, startNs: number, endNs: number): Span {
+    return {
+      traceId,
+      spanId,
+      name,
+      startTime: String(startNs),
+      endTime: String(endNs),
+      attributes: [],
+    }
+  }
+
+  test('one codex trace with 200k spans does not throw and reports the true end time', () => {
+    const traceId = 'trdd-sumspanre-trace'
+    // A prompt span establishes the group (groupCodexSpansBySession attaches subsequent
+    // same-trace spans to the "active prompt group" — without one, ungrouped spans are dropped).
+    const spans: Span[] = [makeSpan('prompt', 'codex.user_prompt', traceId, 0, 1_000_000)]
+    const NS_PER_MS = 1_000_000
+    let maxEndNs = 2_000_000
+    for (let i = 0; i < N; i++) {
+      // endTime increases with i so the true max is deterministic and NOT the first/last element,
+      // ruling out a fix that accidentally only reads array[0] or array[length-1].
+      const endNs = (i + 2) * NS_PER_MS
+      if (endNs > maxEndNs) { maxEndNs = endNs }
+      spans.push(makeSpan(`s${i}`, 'codex.sse_event', traceId, i * NS_PER_MS, endNs))
+    }
+
+    let sessions: ReturnType<typeof buildCodexSessions> | undefined
+    assert.doesNotThrow(() => { sessions = buildCodexSessions(spans) },
+      'buildCodexSessions must not throw RangeError: Maximum call stack size exceeded on a large trace group')
+
+    assert.ok(sessions && sessions.length === 1, 'the 200k+1 spans must all group into ONE session')
+    const [session] = sessions!
+    const expectedEndMs = Math.floor(maxEndNs / NS_PER_MS)
+    const expectedDurationMs = expectedEndMs - 0 // startMs comes from the prompt span (startTime 0)
+    assert.strictEqual(session.durationMs, expectedDurationMs,
+      'durationMs must reflect the TRUE maximum end time across all 200k spans, not a truncated/wrong one')
   })
 })
