@@ -134,7 +134,14 @@ export function parsePidLock(content: string): PidLock | null {
  *  "definitely recycled". */
 export function processStartRef(pid: number): string | null {
   try {
-    const out = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8' }).trim()
+    // LC_ALL=C is LOAD-BEARING, not cosmetic: `lstart` renders via strftime, so its day/month
+    // names follow LC_TIME. Without pinning, a starter spawned under a different locale than the
+    // lock's owner (launchd vs terminal, a localized shell) reads a DIFFERENT string for the SAME
+    // live process, the comparison misjudges it 'recycled-takeover', and a live owner gets taken
+    // over — re-opening the exact double-owner window this reference exists to close.
+    const out = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
+      encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' },
+    }).trim()
     return out === '' ? null : out
   } catch {
     return null
