@@ -1,14 +1,22 @@
 ---
 trdd-id: 461M1HER
 title: Transparently gzip sealed span-store segments
-column: dev
+column: complete
 created: 2026-08-13T12:04:15+0200
-updated: 2026-08-13T12:04:15+0200
+updated: 2026-08-14T02:20:00+0200
 current-owner: lean-worker
 task-type: feature
 relevant-rules: []
 external-refs: [docs_dev/20260813_seal-compression-spec.md]
 ---
+
+## Approval log
+
+- 2026-08-14T02:20:00+0200 — COMPLETED (dev → complete). STATE's claims re-verified first-hand
+  during the TRDD-9NAUEUUR yield work, which refactored directly on top of this task's code:
+  `compressSealedSegments`, `forEachNdjsonLineAuto`, and the dual-form (traceId, spanId) merge all
+  present and load-bearing; the incremental sweep runs off `runSpanRetention()`; the compressed
+  store survived a live deployment and the CI-green run at ed084ff. check-types/lint green today.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-13T12:04:15+0200
 

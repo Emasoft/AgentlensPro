@@ -1,9 +1,9 @@
 ---
 trdd-id: NY725TJA
 title: The cacheExpiry project-scope test flakes under full-suite load and has never been root-caused
-column: human_review
+column: complete
 created: 2026-08-11T20:29:59+0200
-updated: 2026-08-12T13:20:00+0200
+updated: 2026-08-14T02:30:00+0200
 current-owner: main
 task-type: bugfix
 severity: medium
@@ -117,3 +117,11 @@ logic misbehaves under concurrency — which, if hypothesis 2 holds, is a PRODUC
 bug at all.
 
 ## Notes and lessons learned
+
+## Approval log
+
+- 2026-08-14T02:30:00+0200 — COMPLETED (human_review → complete). Reviewed under the owner's
+  standing delegation ("review them yourself... based on verified facts"): every load-bearing claim
+  verified first-hand against current code with file:line evidence — see
+  reports/trdd-review/20260814_015415+0200-batch2-review.md (this card's section). No contradiction
+  found; open residuals, where any, are recorded in that report and are non-blocking.

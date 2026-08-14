@@ -1,9 +1,9 @@
 ---
 trdd-id: 219K7C1N
 title: Apply the per-file schema-inference hardening to the OTHER DuckDB store
-column: human_review
+column: complete
 created: 2026-08-02T01:45:00+0200
-updated: 2026-08-05T04:51:11+0200
+updated: 2026-08-14T02:30:00+0200
 current-owner: session
 task-type: refactor
 implementation-commits: [db55b90]
@@ -118,3 +118,11 @@ server pid 2490 healthy, `union_by_name := true` present in `standalone/server.j
   data loss. Check what a failure was protecting before removing it.
 
 Reference: `.claude/project/memory/statusline-capture-and-store.md`, traps 1–5.
+
+## Approval log
+
+- 2026-08-14T02:30:00+0200 — COMPLETED (human_review → complete). Reviewed under the owner's
+  standing delegation ("review them yourself... based on verified facts"): every load-bearing claim
+  verified first-hand against current code with file:line evidence — see
+  reports/trdd-review/20260814_015415+0200-batch2-review.md (this card's section). No contradiction
+  found; open residuals, where any, are recorded in that report and are non-blocking.

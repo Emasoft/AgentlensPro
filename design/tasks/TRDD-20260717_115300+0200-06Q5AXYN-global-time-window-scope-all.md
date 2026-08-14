@@ -1,9 +1,9 @@
 ---
 trdd-id: 06Q5AXYN
 title: Global time-window — scope every list, stat, and chart to the picker
-column: human_review
+column: complete
 created: 2026-07-17T11:53:00+0200
-updated: 2026-08-05T06:03:10+0200
+updated: 2026-08-14T02:30:00+0200
 current-owner: main
 task-type: feature
 relevant-rules: []
@@ -121,3 +121,8 @@ presets.
   up, so it was untrue in the opposite direction: the previous audit moved the card out of a column
   that overstated activity into one that overstated availability. Nothing was implemented or reverted
   here — only the column and this record.
+- 2026-08-14T02:30:00+0200 — COMPLETED (human_review → complete). Reviewed under the owner's
+  standing delegation ("review them yourself... based on verified facts"): every load-bearing claim
+  verified first-hand against current code with file:line evidence — see
+  reports/trdd-review/20260814_120000+0200-batch1-review.md (this card's section). No contradiction
+  found; open residuals, where any, are recorded in that report and are non-blocking.

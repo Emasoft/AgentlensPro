@@ -1,9 +1,9 @@
 ---
 trdd-id: 9NAUEUUR
 title: Span walk must prefilter before parse and yield while walking
-column: dev
+column: complete
 created: 2026-08-13T22:22:27+0200
-updated: 2026-08-13T22:45:00+0200
+updated: 2026-08-14T02:35:00+0200
 current-owner: agentlenspro-main
 task-type: bugfix
 approval-tier: 0
@@ -54,9 +54,20 @@ NOT RUNNING against a healthy, working server.
       absence proves the churn source collapsed, but peak rss during the walk is now unsampled.
       The yield half must ALSO re-key the sampler to raw LINES (or drop the interval to 50k) so
       the trail keeps watching.)
-- [ ] `server status` answers during a no-window scan (the yield half — still observed failing
+- [x] `server status` answers during a no-window scan (the yield half — still observed failing
       live at 22:44: pid 7186 alive and healthy, status probe DROPped during the walk), OR the
       card records the explicit decision to defer the yield with its reason.
+      (CLOSED 2026-08-14 02:35 — landed 3c3ae12 and MEASURED LIVE on pid 75481: a real no-window
+      `get_cache_event_log` (source otel, exit 0) ran while 8/8 `server status` probes answered
+      RUNNING at 02:05:37–02:07:41; the pre-fix baseline was every probe DROPped. server.log shows
+      span/log-event INGEST lines interleaved between the walk's own rss samples — the loop is
+      genuinely served mid-walk, not just at the probe endpoint. Shape chosen: an async driver
+      (`forEachNdjsonLineAutoYielding`, `forEachInRangeYielding`) over the SAME chunk generators
+      the sync exports use — sync-by-design preserved for sync callers, one read logic, awaits
+      setImmediate per chunk (poll phase runs between checks, so pending sockets are accepted).
+      A worker thread was rejected: rss is per-process so it buys no memory, and it costs a build
+      target + serialization. The sampler is re-keyed to RAW lines and fired 20 samples on the
+      live walk (units=2.5M/3.0M/3.5M…, rss 3.0–3.3GB vs the 4.7GB pre-prefilter sawtooth).)
 - [x] No span loss: prefilter false-negative cases pinned by tests (attribute-value collision case
       + gz-transparency case, both green in segmentedSpanStore.test.ts; conservative-safety
       argument written at the call site: a JSON name field's value necessarily appears as a

@@ -1,9 +1,9 @@
 ---
 trdd-id: 34B9JAZK
 title: get_cache_event_log still OOMs the server under real load after the partial fix
-column: dev
+column: complete
 created: 2026-08-08T15:24:01+0200
-updated: 2026-08-13T22:25:00+0200
+updated: 2026-08-14T02:40:00+0200
 current-owner: agentlenspro-main
 task-type: bugfix
 severity: high
@@ -239,3 +239,15 @@ number of minutes only — `--window 5m` is rejected with `FAIL: --window expect
 One passing live run is not a general claim. The 00:12 run was true (exit 0, 36 s, pid unchanged,
 184,212 calls) and insufficient — which is exactly what a premature close looks like from the
 inside. Captured in the parent's `## Approval log`.
+
+## Approval log
+
+- 2026-08-14T02:40:00+0200 — COMPLETED (dev → complete). Both EHT halves of TRDD-9NAUEUUR are
+  terminal and MEASURED on the live server (pid 75481): the prefilter eliminated >90% of the
+  parse-then-discard churn this card named as the kill mechanism (rss during a full no-window walk
+  now 3.0–3.3GB vs the 2.6→4.7GB sawtooth baseline; sampler re-keyed to raw lines fired 20
+  samples), and the yield half ended the listener starvation (8/8 `server status` probes answered
+  RUNNING during a real no-window scan; ingest lines interleave with the walk's own rss samples in
+  server.log). No kill since the prefilter deploy across multiple full-store walks. Unlike the
+  premature 2026-08-13 close this card reopened, this one closes on measurements of the named
+  mechanism, not on absence-of-crash alone.

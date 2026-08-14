@@ -1,9 +1,9 @@
 ---
 trdd-id: 00NOBU9W
 title: Name the msg[0] segment that breaks the cache instead of filing it as usertext
-column: human_review
+column: complete
 created: 2026-08-04T22:48:22+0200
-updated: 2026-08-04T23:24:00+0200
+updated: 2026-08-14T02:30:00+0200
 current-owner: session
 task-type: feature
 relevant-rules: []
@@ -95,3 +95,13 @@ Claude Code injects, answerable only by reading real bodies.
 
 The measurement above, taken 2026-08-04 22:40 +0200 against the live spool immediately after
 commit `05497e8`. Parent context: TRDD-B9ERTBZ9 (STATE block), TRDD-V8YOWHVT.
+
+## Approval log
+
+- 2026-08-14T02:30:00+0200 — COMPLETED (human_review → complete). Reviewed under the owner's
+  standing delegation ("review them yourself... based on verified facts"): every load-bearing claim
+  verified first-hand against current code with file:line evidence — see
+  reports/trdd-review/20260814_015508+0200-batch3-review.md (this card's section); the "four
+  regression tests" count reads as 3 pinned SUBAGENT_INTERLEAVE references in
+  src/test/cacheBreakTimeline.test.ts — wording nit, core claims confirmed. No contradiction found;
+  open residuals, where any, are recorded in that report and are non-blocking.

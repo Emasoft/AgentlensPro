@@ -1,9 +1,9 @@
 ---
 trdd-id: E8XIC2PM
 title: A latency guard for every CLI command a harness runs on its hot path
-column: human_review
+column: complete
 created: 2026-08-02T01:45:00+0200
-updated: 2026-08-05T00:41:00+0200
+updated: 2026-08-14T02:30:00+0200
 current-owner: session
 implementation-commits: [cc5326c]
 task-type: infra
@@ -93,3 +93,11 @@ each assertion against its own wrong version. A test that passes against either 
 neither, which is how the truncation half was caught at all.
 
 Reference: `~/.claude/plugins/data/ai-maestro-janitor-ai-maestro-plugins/memory/timeout-bounds-the-request-not-the-process.md`.
+
+## Approval log
+
+- 2026-08-14T02:30:00+0200 — COMPLETED (human_review → complete). Reviewed under the owner's
+  standing delegation ("review them yourself... based on verified facts"): every load-bearing claim
+  verified first-hand against current code with file:line evidence — see
+  reports/trdd-review/20260814_120000+0200-batch1-review.md (this card's section). No contradiction
+  found; open residuals, where any, are recorded in that report and are non-blocking.

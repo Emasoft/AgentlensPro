@@ -1,9 +1,9 @@
 ---
 trdd-id: T0CT9U4X
 title: The hook strip path can clobber another tool's hooks in the user's settings.json
-column: human_review
+column: complete
 created: 2026-07-23T17:06:56+0200
-updated: 2026-08-05T00:12:00+0200
+updated: 2026-08-14T02:30:00+0200
 current-owner: session
 implementation-commits: [4da41dc]
 task-type: bugfix
@@ -85,3 +85,11 @@ TOCTOU already — mirror it.
 - Parent: TRDD-K7PQ2M4V (the CLI revision that surfaced this).
 - `src/safeConfigEdit.ts` → `scripts/safe_config_edit.py` — the transaction to extend.
 - `[[agentlenspro-ops-lessons]]` — the config-wipe incident that motivated the transaction.
+
+## Approval log
+
+- 2026-08-14T02:30:00+0200 — COMPLETED (human_review → complete). Reviewed under the owner's
+  standing delegation ("review them yourself... based on verified facts"): every load-bearing claim
+  verified first-hand against current code with file:line evidence — see
+  reports/trdd-review/20260814_015415+0200-batch2-review.md (this card's section). No contradiction
+  found; open residuals, where any, are recorded in that report and are non-blocking.

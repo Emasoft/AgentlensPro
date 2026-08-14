@@ -1,9 +1,9 @@
 ---
 trdd-id: K3WDPR7M
 title: SSD write amplification — raw OTEL bodies rewrite the whole conversation every turn; move the body store to a fileless-DuckDB to immutable-Parquet loop
-column: human_review
+column: complete
 created: 2026-07-14T04:30:00+0200
-updated: 2026-08-05T06:48:15+0200
+updated: 2026-08-14T02:30:00+0200
 current-owner: main
 task-type: bugfix
 severity: critical
@@ -452,3 +452,8 @@ do not repeat the mistake of shipping a fix for an unmeasured hypothesis.
   two USER-gated items (the `store.old-v0` / `spans.json.bak*` disposal, branch pushes). Nobody
   has worked the card since 2026-07-16, so `dev` was asserting active work that was not happening.
   Queued, not deferred — `backburner` would claim a deliberate deferral only the owner can declare.
+- 2026-08-14T02:30:00+0200 — COMPLETED (human_review → complete). Reviewed under the owner's
+  standing delegation ("review them yourself... based on verified facts"): every load-bearing claim
+  verified first-hand against current code with file:line evidence — see
+  reports/trdd-review/20260814_120000+0200-batch1-review.md (this card's section). No contradiction
+  found; open residuals, where any, are recorded in that report and are non-blocking.

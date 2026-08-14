@@ -1,9 +1,9 @@
 ---
 trdd-id: EUURUDQV
 title: get_account_status --all — every observed account, honestly stamped
-column: human_review
+column: complete
 created: 2026-08-02T02:58:30+0200
-updated: 2026-08-04T23:41:00+0200
+updated: 2026-08-14T02:48:00+0200
 current-owner: session
 task-type: feature
 npt: []
@@ -181,3 +181,15 @@ org with Max members, so it cannot identify whether THIS user has a Max seat —
 (`src/accountInfo.ts:68`), i.e. Claude Code's own flattened copy, so the warning may not apply. It
 matters because `src/ttlContext.ts:60` uses that flag to pick the cache-TTL regime — a 2× cost
 difference. **Verify on a team-org seat; do not "fix" it on the strength of another project's comment.**
+
+## Approval log
+
+- 2026-08-14T02:48:00+0200 — COMPLETED (human_review → complete) under the owner's standing review
+  delegation. Phases 1–3 and every contract item verified in code first-hand
+  (reports/trdd-review/20260814_015415+0200-batch2-review.md). The two unchecked boxes are
+  DEFERRED, deliberately, with reasons: (1) per-account archive retention — growth is a few KB per
+  account per write and the card itself says purging now would destroy the archive's whole value
+  (age); revisit only if the directory ever measures as material. (2) `has_extra_usage_enabled` —
+  unverifiable on this machine by the card's own rule (needs a team-org seat); the guard text above
+  stands as the standing instruction for whoever first has one. Neither blocks the shipped
+  functionality, which is what this card delivered.

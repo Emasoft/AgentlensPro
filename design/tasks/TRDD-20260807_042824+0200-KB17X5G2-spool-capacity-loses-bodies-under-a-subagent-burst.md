@@ -1,9 +1,9 @@
 ---
 trdd-id: KB17X5G2
 title: The RAM spool still loses raw bodies under a subagent burst — capacity and reclaim throughput
-column: human_review
+column: complete
 created: 2026-08-07T04:28:24+0200
-updated: 2026-08-11T20:26:34+0200
+updated: 2026-08-14T02:45:00+0200
 current-owner: main
 task-type: infra
 severity: high
@@ -42,6 +42,16 @@ drains faster so the spool is rarely near the floor.
 **NEXT ACTION:** decide Option 1 vs Option 2 with the owner. Option 1 is USER-GATED: resizing
 detaches the RAM disk and destroys every un-ingested body on it, so the spool must be fully
 drained first. Do NOT resize while it holds un-ingested bodies.
+
+**RESOLVED 2026-08-14 (under the owner's standing review delegation): BOTH, in their safe forms.**
+Option 2 (drain faster) landed as the Spool-equilibrium plan's P0/P0.5 — `settleBatch` verifies in
+chunks of `SETTLE_READ_CHUNK = 32` (~14 round trips per 200-file batch vs ~400 before) with a
+durable-source-only fsync gate (src/store/ingestPass.ts) — plus the P1 flush law (14f08ed:
+bytes ≥ 12MB OR 60s backstop OR pressure floor drives the bodies pass). Option 1's SAFE half landed
+as 84a2ca6: `DEFAULT_SPOOL_MB` 2048→4096, non-destructive because `ensureRamDisk` reuses an
+already-mounted spool whatever its size — the 4GB takes effect on the next fresh mount. The
+DESTRUCTIVE half (resizing the LIVE spool) stays user-gated exactly as this block orders; it can
+also be done at any reboot for free, or early via `AGENTLENS_SPOOL_MB` after a verified drain.
 
 `65207f4` (the reclaim fix) is NOT in question — it works; this card exists only because fixing it
 revealed the next constraint.
@@ -101,5 +111,13 @@ Reproduce the burst deliberately: drain the spool, note free bytes, spawn a suba
 size, and assert the spool never reaches 0 free and that the count of captured bodies matches the
 count of API calls made. A fix that only makes the window smaller must be described as that, not
 as elimination.
+
+## Approval log
+
+- 2026-08-14T02:45:00+0200 — COMPLETED (human_review → complete). The undecided Option 1 vs 2 was
+  resolved as recorded in the STATE block's RESOLVED paragraph (both, in their safe forms — P0/P0.5
+  + P1 flush law + non-destructive 4GB default; live resize stays user-gated). The back-pressure
+  efficacy limit (inherited launch-time env) remains truthfully described — reduction, not
+  elimination. Review evidence: reports/trdd-review/20260814_015508+0200-batch3-review.md.
 
 ## Notes and lessons learned

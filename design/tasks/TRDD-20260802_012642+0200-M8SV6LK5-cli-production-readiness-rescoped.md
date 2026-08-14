@@ -1,9 +1,9 @@
 ---
 trdd-id: M8SV6LK5
 title: CLI sources production-readiness review — re-scoped against today's src/cli
-column: human_review
+column: complete
 created: 2026-08-02T01:26:42+0200
-updated: 2026-08-05T04:03:22+0200
+updated: 2026-08-14T02:30:00+0200
 current-owner: session
 task-type: audit
 supersedes: K7PQ2M4V
@@ -484,3 +484,11 @@ The status-line capture/store subsystem (`statuslineCapture.ts`, `statuslineStor
 — seven defects found and fixed, each with a regression test verified to fail against the broken
 version. Re-auditing it here would duplicate that work. Its lessons live in
 `.claude/project/memory/statusline-capture-and-store.md`.
+
+## Approval log
+
+- 2026-08-14T02:30:00+0200 — COMPLETED (human_review → complete). Reviewed under the owner's
+  standing delegation ("review them yourself... based on verified facts"): every load-bearing claim
+  verified first-hand against current code with file:line evidence — see
+  reports/trdd-review/20260814_120000+0200-batch1-review.md (this card's section). No contradiction
+  found; open residuals, where any, are recorded in that report and are non-blocking.

@@ -1,9 +1,9 @@
 ---
 trdd-id: B9ERTBZ9
 title: Model the documented cache-break causes the classifier lacks
-column: human_review
+column: complete
 created: 2026-08-04T21:43:34+0200
-updated: 2026-08-04T22:47:03+0200
+updated: 2026-08-14T02:30:00+0200
 current-owner: session
 task-type: feature
 relevant-rules: []
@@ -119,3 +119,11 @@ gateway rejecting a breakpoint. **Adding these would be unemittable enum values.
 ## Evidence
 
 `reports/cache-invalidation-research/` (7 reports) · TRDD-V8YOWHVT · `ATOM-0CUW-IVP6`.
+
+## Approval log
+
+- 2026-08-14T02:30:00+0200 — COMPLETED (human_review → complete). Reviewed under the owner's
+  standing delegation ("review them yourself... based on verified facts"): every load-bearing claim
+  verified first-hand against current code with file:line evidence — see
+  reports/trdd-review/20260814_015415+0200-batch2-review.md (this card's section). No contradiction
+  found; open residuals, where any, are recorded in that report and are non-blocking.

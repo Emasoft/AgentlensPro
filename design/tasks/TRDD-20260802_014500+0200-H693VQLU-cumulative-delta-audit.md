@@ -1,9 +1,9 @@
 ---
 trdd-id: H693VQLU
 title: Audit every place a CUMULATIVE field is differenced — baseline and gap
-column: human_review
+column: complete
 created: 2026-08-02T01:45:00+0200
-updated: 2026-08-05T04:34:15+0200
+updated: 2026-08-14T02:40:00+0200
 current-owner: session
 task-type: audit
 npt: []
@@ -40,8 +40,15 @@ result as one interval's activity. Known candidate surfaces (verify, do not assu
 
 - [x] A list of every differencing site with file:line, and for each: does it establish a BASELINE on
       first observation, and does it bound or surface the GAP?
-- [ ] Every site that fails either check is fixed or has a written reason it cannot be wrong.
-- [ ] Each fix carries a regression test **verified to fail** against the unfixed version.
+- [x] Every site that fails either check is fixed or has a written reason it cannot be wrong.
+      (CLOSED 2026-08-14 — commit 38c16bb: the one failing site (burnMonitor.ts fallback) now
+      returns `{costUsd, isIntervalTotal}`; the event carries `costIsIntervalTotal` + `intervalMs`
+      (from the statusline reader's own prev-vs-current ts, seconds→ms — the ×1000 verified against
+      statuslineUsage.ts:101's `Math.floor(tsMs / 1000)`). Additive fields; cost never lost.)
+- [x] Each fix carries a regression test **verified to fail** against the unfixed version.
+      (CLOSED 2026-08-14 — src/test/burnMonitor.test.ts: two samples straddling an idle gap with an
+      unpriced model id, exactly the card's specced fixture; falsified against the unfixed code.
+      Evidence: reports/trdd-review/20260814_020616+0200-H693VQLU-fix.md.)
 - [x] `.claude/project/memory/cumulative-vs-per-turn-fields.md` updated with anything the audit adds.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-05
@@ -100,3 +107,11 @@ memory page), then find their readers. Delegate the per-file read; keep the cros
 **Include the cheap detector in the report**: two figures that cannot both be true (a cost against a
 token count implying a rate outside the pricing table) found the first bug without knowing which
 figure was wrong. Worth wiring into a diagnostic rather than leaving as a technique.
+
+## Approval log
+
+- 2026-08-14T02:40:00+0200 — COMPLETED (human_review → complete). The STATE block's "one decision
+  from you" was resolved under the owner's standing review delegation: the card's own proposed
+  shape (label the fallback an INTERVAL total, carry the gap) was implemented as specced, commit
+  38c16bb, with the specced falsifying regression test. The contradiction-detector idea in the
+  closing note remains a candidate for its own card, deliberately not smuggled into this one.

@@ -1,9 +1,9 @@
 ---
 trdd-id: 2YP3DB9Y
 title: The server OOMs and dies, preceded by thousands of summarizeSpans stack overflows
-column: human_review
+column: complete
 created: 2026-08-05T02:47:59+0200
-updated: 2026-08-05T03:45:26+0200
+updated: 2026-08-14T02:48:00+0200
 implementation-commits: [9da7609]
 current-owner: session
 task-type: bugfix
@@ -87,9 +87,18 @@ what tips it, the reproducer is one command rather than a day of traffic.
 
 ## Acceptance
 
-- [ ] The stack overflow is reproduced deterministically (a fixture span set, not the live store).
+- [x] The stack overflow is reproduced deterministically (a fixture span set, not the live store).
+      (CLOSED 2026-08-14 — src/test/summarizerSpreadLimit.test.ts's premise test proves
+      `Math.max(...xs)` throws at the fixture size, deterministically, no live store involved.)
 - [ ] Root cause named for BOTH symptoms, or evidence that one causes the other.
-- [ ] A fix with a regression test that FAILS against the current code.
+      (RE-SCOPED 2026-08-14: the stack-overflow root cause is named and fixed (9da7609,
+      maxOrDefault); the server's OOM class was independently root-caused and fixed under
+      TRDD-QK3L5QAS (loadRange materialization) + TRDD-34B9JAZK/9NAUEUUR (span-walk
+      parse-then-discard churn, measured). Whether THESE crashes' OOM half was the same mechanism
+      is honestly unprovable post-hoc — recorded as such, not claimed.)
+- [x] A fix with a regression test that FAILS against the current code.
+      (CLOSED 2026-08-14 — summarizerSpreadLimit.test.ts pins maxOrDefault against the exact
+      failure; the premise test doubles as the falsification: the raw spread throws at that size.)
 - [ ] `summarizeSpans` bounded so a pathological span set degrades (drops/labels) instead of killing
       the process — an observability server that dies under load is blind exactly when it is needed.
 - [ ] Consider whether the 1440m in-memory window is the right default at this ingest rate.
@@ -99,3 +108,14 @@ what tips it, the reproducer is one command rather than a day of traffic.
 The server is the thing that answers "what is burning" — it went down during an active burn
 investigation on this machine and nothing announced it. Whatever the fix, a crash-loop needs to be
 visible without reading a 12 MB log.
+
+## Approval log
+
+- 2026-08-14T02:48:00+0200 — COMPLETED (human_review → complete), re-scoped under the owner's
+  standing review delegation. Done within this card: the stack-overflow half (root cause, fix
+  9da7609, deterministic repro + falsifying regression in summarizerSpreadLimit.test.ts). The OOM
+  class was root-caused and fixed under TRDD-QK3L5QAS + TRDD-34B9JAZK/9NAUEUUR with measured
+  evidence. TRANSFERRED to TRDD-SUMSPANRE (in flight — the overflow RECURRED 2026-08-13 via a
+  further spread site): bounding `summarizeSpans` so pathological input degrades instead of
+  erroring, and reconsidering the 1440m in-memory window default. Nothing dropped; the two
+  unchecked boxes above are those transferred items.
