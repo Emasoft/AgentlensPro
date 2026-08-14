@@ -554,6 +554,16 @@ suite of every module whose exported function you touched AND of its direct call
 import); a deliberate contract flip gets the old pin REWRITTEN as a recorded decision, in the same
 commit. Landed ed084ff.
 
+
+^ATOM-JK8S-5TXQ [desc:"Fix a loop-starving sync walk with an async driver over the same chunk generators + setImmediate per chunk; never a worker thread (rss is per-process)", keywords: server_status_not_running_during_scan event_loop_starved_by_sync_walk status_probe_drop yield_to_event_loop setImmediate_vs_microtask worker_thread_does_not_reduce_rss, type: project, ocd: 2026-08-14, lmd: 2026-08-14]
+
+DO NOT fix an event-loop-starving synchronous walk by forking a worker thread or duplicating the read path, BECAUSE rss is per-process (a worker buys no memory relief) and a second read path drifts. DO add an async driver over the SAME chunk generators the sync exports consume (one read logic, two pump schedules) with await setImmediate between chunks — setImmediate specifically, since a resolved-promise await drains only microtasks and never reaches the poll phase where pending sockets are served. Proven live (TRDD-9NAUEUUR, commit 3c3ae12): 8/8 server-status probes answered RUNNING during a 60s+ no-window span walk whose baseline DROPped every probe.
+
+
+^ATOM-F0NR-2125 [desc:"Key in-scan samplers on RAW units, never filtered ones — a better filter silently kills a filtered-unit trail", keywords: rss_sampler_went_dark no_samples_during_scan sampler_interval_never_fires prefilter_broke_telemetry key_metrics_on_raw_units, type: project, ocd: 2026-08-14, lmd: 2026-08-14]
+
+DO NOT key an in-scan telemetry sampler on a FILTERED unit (parsed spans), BECAUSE the moment a prefilter improves, the counter stops reaching the sampling interval and the trail goes dark exactly where it was built to watch — a 5.4M-span walk produced ZERO rss samples after the TRDD-9NAUEUUR prefilter. DO key trails on the RAW unit (lines seen), which no optimization can shrink; re-keyed sampler fired 20 samples on the same walk.
+
 ## See also
 
 - [[ssd-write-economics]] — what the drain is ultimately protecting: the SSD write budget, why the
