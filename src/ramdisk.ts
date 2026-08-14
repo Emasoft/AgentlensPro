@@ -20,13 +20,15 @@ import * as path from 'path'
 export const SPOOL_VOLUME_NAME = 'AgentLensSpool'
 export const SPOOL_MOUNT_POINT = `/Volumes/${SPOOL_VOLUME_NAME}`
 
-/** Default spool size. 4 GB (owner-capped, plan "Spool equilibrium" P2 / TRDD-KB17X5G2): pure burst
- *  headroom over the ~21 MB/min steady firehose — a subagent burst measured ~80 MB/min inflow, and
- *  the redirect in spoolBackpressure.ts remains the only true safety valve. NON-destructive here:
- *  ensureRamDisk REUSES an already-mounted spool whatever its size, so this takes effect only on the
- *  next fresh mount (reboot / manual detach) — never as an implicit resize, which would destroy every
- *  un-ingested body. */
-export const DEFAULT_SPOOL_MB = 4096
+/** Default spool size. 2 GB — the owner's ruling (2026-08-14), REVERSING plan "Spool equilibrium"
+ *  P2's brief 4 GB default: with the drain-rate fixes landed (P0 chunked verify + P1 byte-triggered
+ *  flush law), 2 GB holds the measured ~80 MB/min subagent-burst inflow long enough for the drain,
+ *  and the owner prefers the 2 GB of RAM back over the extra margin. The back-pressure redirect
+ *  (spoolBackpressure.ts) remains the true safety valve for a burst heavier than measured; raise
+ *  capacity per-machine via AGENTLENS_SPOOL_MB, never by editing this constant for one box.
+ *  ensureRamDisk REUSES an already-mounted spool whatever its size, so a change here applies only
+ *  on the next fresh mount — never as an implicit resize, which would destroy un-ingested bodies. */
+export const DEFAULT_SPOOL_MB = 2048
 export const SPOOL_MB_ENV = 'AGENTLENS_SPOOL_MB'
 
 export interface RamDiskInfo {

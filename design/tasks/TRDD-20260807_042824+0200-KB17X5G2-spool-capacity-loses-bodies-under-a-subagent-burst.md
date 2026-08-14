@@ -119,5 +119,11 @@ as elimination.
   + P1 flush law + non-destructive 4GB default; live resize stays user-gated). The back-pressure
   efficacy limit (inherited launch-time env) remains truthfully described — reduction, not
   elimination. Review evidence: reports/trdd-review/20260814_015508+0200-batch3-review.md.
+- 2026-08-14 — OWNER RULING (Tier 3, direct instruction): the 4 GB default is REVERSED to 2 GB
+  ("resize it to 2gb") — with the P0/P1 drain fixes landed, the owner prefers the 2 GB of RAM back
+  over the burst margin. DEFAULT_SPOOL_MB is 2048 again; the mounted spool was never grown, so no
+  live resize occurred. AGENTLENS_SPOOL_MB stays as the per-machine override; the back-pressure
+  redirect remains the safety valve. Card stays complete — this changes the chosen constant, not
+  the resolved mechanism.
 
 ## Notes and lessons learned
