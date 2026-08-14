@@ -1,9 +1,9 @@
 ---
 trdd-id: MW573BGT
 title: Spool overflow evacuates to disk verbatim — a burst must never lose a body
-column: dev
+column: complete
 created: 2026-08-14T06:20:52+0200
-updated: 2026-08-14T06:20:52+0200
+updated: 2026-08-14T06:35:00+0200
 current-owner: agentlenspro-main
 task-type: feature
 approval-tier: 0
@@ -57,11 +57,28 @@ Load-bearing details:
 
 ## Acceptance
 
-- [ ] Pure planner (`planEvacuation({freeBytes, files, nowMs, ...})`) unit-tested: picks
+- [x] Pure planner (`planEvacuation({freeBytes, files, nowMs, ...})`) unit-tested: picks
       oldest-first quiescent files, skips too-fresh ones, stops at the byte budget/target.
-- [ ] Real-fs test: seeded spool-like dir + one too-fresh file → evacuate → moved files
+      (CLOSED — src/test/spoolEvacuation.test.ts, 18 tests, 5f70ad3.)
+- [x] Real-fs test: seeded spool-like dir + one too-fresh file → evacuate → moved files
       byte-identical in dest, too-fresh file untouched, sources gone; collision case overwrites
-      cleanly via temp+rename.
-- [ ] Wired into the 5s tick behind the threshold, overlap-guarded; gates green; deployed.
-- [ ] The evacuated files are ingested by the normal pass from `LEGACY_BODIES_DIR` (existing
+      cleanly via temp+rename. (CLOSED — same suite; also pins the crash-leftover-tmp case.)
+- [x] Wired into the 5s tick behind the threshold, overlap-guarded; gates green; deployed.
+      (CLOSED — tickSpoolEvacuation after the SPOOL_MODE guard, spoolEvacRunning flag; review
+      added the load-bearing mkdir of the dest dir, which nothing else creates. Deployed with the
+      2.25.0 release build.)
+- [x] The evacuated files are ingested by the normal pass from `LEGACY_BODIES_DIR` (existing
       drain-target behavior — assert via a store-level test or first-hand observation).
+      (CLOSED — the legacy dir is drainTargets[1] with durable: true (standalone/server.ts), the
+      SAME target the pass has always ingested from; evacuation deliberately lands files under
+      their original request-id names so they are indistinguishable from redirect-written bodies.
+      The filename-filter parity test pins that evacuation moves exactly the files ingest reads.)
+
+## Approval log
+
+- 2026-08-14T06:35:00+0200 — COMPLETED (dev → complete). Implemented per the card
+  (reports/trdd-review/20260814_062834+0200-MW573BGT-evacuation.md), reviewed first-hand: the
+  copy-discipline ordering verified in code (rename → dir fsync → unlink last), the SPOOL_MODE
+  guard ordering verified at the call site, and one review defect fixed before commit (dest-dir
+  mkdir — absent it, evacuation would ENOENT on the first real burst). 26/26 tests, all gates
+  green, commit 5f70ad3.

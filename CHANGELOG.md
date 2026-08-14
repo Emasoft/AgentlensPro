@@ -4,6 +4,61 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.25.0] - 2026-08-14
+
+### Added
+
+- **Spool overflow now evacuates to disk instead of ever losing a body.** The 2.24.0 redirect
+  protects only sessions that *start* after pressure hits — Claude Code's exporter reads its target
+  directory once at launch, so an in-flight subagent keeps writing into the spool and its bytes died
+  with an ENOSPC when the spool filled. Now, when free space drops under 256 MB
+  (`AGENTLENS_SPOOL_EVAC_MB`), the oldest quiescent files (mtime ≥ 3 s — never a file still being
+  written) are moved verbatim to the durable on-disk bodies dir: copy, fsync, rename, fsync the
+  directory, and only then delete the source — a crash at any point leaves either the source intact
+  or a durable complete copy, never neither. Compression to Parquet happens later on disk via the
+  normal ingest pass. SSD wear is paid only during rare bursts; losing data is not.
+- **The bodies pass is now driven by a flush law, not a bare clock:** it fires when staged bytes
+  reach 12 MB, OR the 60 s latency backstop elapses, OR the spool is under pressure — whichever
+  comes first. A fixed interval flushed 26 MB one hour and 200 KB the next; bytes are the direct
+  signal for "how much would be lost on an unclean stop".
+- **Sealed span-store segments are gzipped transparently** (measured 19.5× on a real day). Every
+  reader handles both forms; a rare day where both forms exist (compression crash-recovery, or a
+  late-arriving span) is merged by span identity rather than picking a winner, so neither a
+  double-count nor a silent drop is possible.
+- **Fallback burn costs are labeled for what they are.** When a model has no pricing entry (the day
+  a new model ships) the burn monitor falls back to the cumulative statusline delta — which can span
+  every turn since the previous sample and used to present a whole idle gap's spend as one turn,
+  spiking the rolling $/hr ~4× silently. The event now carries `costIsIntervalTotal` and
+  `intervalMs`, so consumers render "$X over Y ms" instead of a false per-turn cost. Cost is still
+  never lost.
+
+### Fixed
+
+- **`server status` answered NOT RUNNING against a healthy, working server** whenever a full-store
+  scan was in flight: the walk over millions of spans held the event loop for its whole 60 s+
+  duration, so every listener starved. Two halves, both measured live: a line prefilter skips
+  >90 % of `JSON.parse` calls (the parse-then-discard churn was also the mechanism behind the
+  server's silent memory kills — rss sawtoothed 2.6→4.7 GB before, 3.0–3.3 GB after), and the walk
+  now yields to the event loop between chunks, so status probes, ingest, and the dashboard are
+  served *during* a scan (8/8 probes RUNNING mid-scan vs. every probe dropped before).
+- **The single-instance lock could hand the store to two servers at once.** The pidfile write was
+  not atomic (a live file was observed holding two interleaved pids), and the stale-lock takeover
+  trusted `kill -0` — which lies for a recycled pid, with an observed ≥67 s window where two
+  servers appended to one store. The lock is now published atomically (staged, fsynced, then
+  `link(2)` — exclusive by construction) and records the owner's process start time (locale-pinned),
+  so takeover happens only from a dead or recycled pid; a live owner is never taken over. Old-format
+  locks keep the previous rule, so running installs are unaffected.
+- **A `server start` that lost the boot race to an already-starting server reported a death.** The
+  starter now recognizes the single-instance refusal in its own log window and reports the winner's
+  pid instead of a false failure.
+- **The analytics rollup could crash on large windows** — `Math.min/max(...times)` over one entry
+  per session blows V8's argument limit past ~125 k sessions, the same defect class fixed across
+  the summarizers; replaced with a bounded loop and pinned by a 200 k-span regression test.
+- **Capture-hook timeouts were sized for an idle machine.** At the load averages a busy box actually
+  runs (130+ observed), a cold CLI start alone exceeded the old 2 s budget, so hooks timed out and
+  capture events were silently dropped. Lifecycle hooks now get 5 s (async — never delays a turn)
+  and the gate 5 s; re-run `agentlenspro --install-hooks` and restart sessions to pick it up.
+
 ## [2.24.0] - 2026-08-12
 
 ### Fixed

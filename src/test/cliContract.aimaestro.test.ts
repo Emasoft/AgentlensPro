@@ -283,7 +283,12 @@ suite('CLI contract lock — ai-maestro consumed fields (AgentlensPro#3)', () =>
 
   test('get_cache_break_timeline (format=json, the default) serves the report shape + coverage honesty block', async () => {
     const dir = path.join(os.tmpdir(), `al-tl-contract-${Date.now()}-missing`)
-    const res = await buildCacheBreakTimeline({ bodiesDir: dir })
+    // storeDir must be pinned to a never-created path too: omitted, it defaults to the REAL
+    // ~/.agentlens store (dataPath('store')), and on a developer machine with months of data this
+    // hermetic-looking empty-dir test silently scans gigabytes — it timed out at 60s here while
+    // staying green on CI, which has no store (ATOM-R9AC-467C: real-store test scans masquerade
+    // as load timeouts). buildCacheBreakGapReport above needs no pin: its scan takes no storeDir.
+    const res = await buildCacheBreakTimeline({ bodiesDir: dir, storeDir: `${dir}-no-store` })
     assert.strictEqual(typeof res.minTokens, 'number', BREAK('get_cache_break_timeline.minTokens'))
     assert.strictEqual(typeof res.systematicThreshold, 'number', BREAK('get_cache_break_timeline.systematicThreshold'))
     assert.strictEqual(typeof res.turnsInSession, 'number', BREAK('get_cache_break_timeline.turnsInSession'))
