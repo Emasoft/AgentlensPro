@@ -52,6 +52,14 @@ export interface ConsumptionEvent {
   outputTokens?: number
   cacheReadTokens?: number
   cacheCreateTokens?: number  // per-call cache-creation tokens (also drives the cache-create-spike alert)
+  // TRDD-H693VQLU — set ONLY when `costUsd` came from statuslineCostUsd's fallback branch (raw
+  // `deltaCostUsd`, i.e. the cumulative delta between two statusline samples, not a per-turn priced
+  // cost). That delta can span every real turn since the PREVIOUS sample if sampling paused while the
+  // session was idle — so presenting it as one turn's cost silently inflates the rolling $/hr the same
+  // way the two bugs this TRDD audited did. `intervalMs` carries the gap it actually covers so a
+  // consumer can label it "$X over Yms" instead of "$X this turn". Never set on the priced branch.
+  costIsIntervalTotal?: boolean
+  intervalMs?: number
 }
 
 /** Per-input-token-equivalent weights from Anthropic's PUBLIC price ratios (model-independent: output is
@@ -78,6 +86,12 @@ export interface StatuslineBillingEvent {
   deltaOutput?: number
   deltaCacheRead?: number
   deltaCacheCreate?: number
+  // TRDD-H693VQLU — elapsed ms since the PREVIOUS statusline sample that updated this session's
+  // cumulative cost/ts baseline (undefined on the session's first sample, where deltaCostUsd is
+  // already forced to 0 and no gap is meaningful). This is the span `deltaCostUsd` actually accrued
+  // over — set by StatuslineUsageReader from its own prev-vs-current `ts`, so statuslineCostUsd's
+  // fallback branch can label the raw cumulative delta an INTERVAL total instead of a turn cost.
+  intervalMs?: number
 }
 
 // ── Config ─────────────────────────────────────────────────────────────────────
@@ -290,19 +304,22 @@ export function gatherConsumptionEvents(
     if (apiSessions.has(be.sessionId)) continue
     if (be.deltaTokens <= 0 && be.deltaCostUsd <= 0) continue
     const card = cardBy.get(be.sessionId)
+    // TRDD-BURNWDGT burn-rate fix: derive this turn's cost from ITS OWN per-turn buckets ×
+    // calcTokenCostUsd, NOT the cumulative `deltaCostUsd`. The statusline samples sparsely, so a
+    // single cumulative delta lumps several turns' spend onto one timestamp — spiking the rolling
+    // $/hr ~4× (the "pricing bug" that turned out to be a sparse-cumulative-delta artifact). A
+    // per-turn priced cost is consistent with that turn's own tokens. Fall back to deltaCostUsd only
+    // when buckets are absent or the model is unpriced (derived 0) so cost is never lost — but that
+    // fallback is a CUMULATIVE delta, not a turn cost, so it is labeled (TRDD-H693VQLU).
+    const priced = statuslineCostUsd(be, card?.model)
     events.push({
       ts: toMs(be.ts), sessionId: be.sessionId, workspace: be.workspace, accountUuid: card?.accountId,
-      // TRDD-BURNWDGT burn-rate fix: derive this turn's cost from ITS OWN per-turn buckets ×
-      // calcTokenCostUsd, NOT the cumulative `deltaCostUsd`. The statusline samples sparsely, so a
-      // single cumulative delta lumps several turns' spend onto one timestamp — spiking the rolling
-      // $/hr ~4× (the "pricing bug" that turned out to be a sparse-cumulative-delta artifact). A
-      // per-turn priced cost is consistent with that turn's own tokens. Fall back to deltaCostUsd only
-      // when buckets are absent or the model is unpriced (derived 0) so cost is never lost.
-      costUsd: statuslineCostUsd(be, card?.model),
+      costUsd: priced.costUsd,
       tokens: be.deltaTokens, source: 'statusline',
       // Per-bucket split from the statusline (when present) so the breakdown is accurate here too.
       inputTokens: be.deltaInput, outputTokens: be.deltaOutput,
       cacheReadTokens: be.deltaCacheRead, cacheCreateTokens: be.deltaCacheCreate,
+      ...(priced.isIntervalTotal ? { costIsIntervalTotal: true, intervalMs: be.intervalMs } : {}),
     })
   }
   return events.sort((a, b) => a.ts - b.ts)
@@ -311,14 +328,21 @@ export function gatherConsumptionEvents(
 /** Cost of ONE statusline turn from its own uncached buckets × the model rate. The statusline reports
  *  input/output as FRESH (uncached) per-turn tokens (separate from cache_read), so they map directly onto
  *  calcTokenCostUsd's (uncachedInput, cacheRead, cacheWrite, output). Falls back to the cumulative delta
- *  when no split is present or the model has no pricing entry (derived === 0) — never loses cost. */
-function statuslineCostUsd(be: StatuslineBillingEvent, model: string | undefined): number {
+ *  when no split is present or the model has no pricing entry (derived === 0) — never loses cost, but that
+ *  fallback value is `be.deltaCostUsd`, the RAW cumulative delta between two sparse samples: it may span
+ *  every turn since the previous sample, not just this one, so the caller MUST mark it `isIntervalTotal`
+ *  (TRDD-H693VQLU) rather than present it as a per-turn cost. */
+function statuslineCostUsd(
+  be: StatuslineBillingEvent, model: string | undefined,
+): { costUsd: number; isIntervalTotal: boolean } {
   const hasSplit = be.deltaInput !== undefined || be.deltaOutput !== undefined ||
     be.deltaCacheRead !== undefined || be.deltaCacheCreate !== undefined
-  if (!hasSplit || !model) { return be.deltaCostUsd }
+  if (!hasSplit || !model) { return { costUsd: be.deltaCostUsd, isIntervalTotal: true } }
   const derived = calcTokenCostUsd(
     be.deltaInput ?? 0, be.deltaCacheRead ?? 0, be.deltaCacheCreate ?? 0, be.deltaOutput ?? 0, model)
-  return derived > 0 ? derived : be.deltaCostUsd
+  return derived > 0
+    ? { costUsd: derived, isIntervalTotal: false }
+    : { costUsd: be.deltaCostUsd, isIntervalTotal: true }
 }
 
 // ── Rolling-window math ──────────────────────────────────────────────────────────

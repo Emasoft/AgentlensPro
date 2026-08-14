@@ -230,6 +230,52 @@ suite('burnMonitor — event gathering + dedup', () => {
     assert.strictEqual(b!.tokens, 800)
     assert.ok(b!.ts > 1e12, 'statusline seconds normalized to ms')
   })
+
+  // TRDD-H693VQLU regression: statuslineCostUsd's fallback branch (unpriced model → calcTokenCostUsd
+  // derives 0) returns the RAW cumulative delta between two sparse statusline samples — which may span
+  // every real turn since the previous sample, not just the one this event nominally represents. Before
+  // the fix that value was returned as a bare number and consumed as if it were one turn's cost,
+  // silently inflating the rolling $/hr (the card measured ~4x). `costIsIntervalTotal`/`intervalMs` did
+  // not exist pre-fix, so this test fails against the unfixed code purely by asserting on their presence
+  // — no revert needed to prove it (per the fix's own falsification requirement).
+  test('the fallback cumulative-delta branch labels its cost an INTERVAL total, not a turn cost, for an unpriced model spanning an idle gap', () => {
+    const sessions = [card({ sessionId: 'C', model: 'totally-unpriced-model-xyz-9000', timeline: [] })]
+    const sl: StatuslineBillingEvent[] = [
+      {
+        ts: NOW / 1000 - 10, sessionId: 'C', deltaCostUsd: 2.5, deltaTokens: 5000,
+        // A per-turn bucket split IS present (so the priced branch is attempted first) — it is the
+        // UNPRICED model, not a missing split, that forces the fallback here.
+        deltaInput: 100, deltaOutput: 50, deltaCacheRead: 10, deltaCacheCreate: 0,
+        // The two samples straddled a 10-minute idle gap — deltaCostUsd of $2.50 is that WHOLE gap's
+        // spend, not one turn's.
+        intervalMs: 600_000,
+      },
+    ]
+    const events = gatherConsumptionEvents(sessions, sl, NOW)
+    const c = events.find(e => e.sessionId === 'C')
+    assert.ok(c, 'the statusline event for session C must survive gathering')
+    // Cost is never lost — the fallback still reports the full $2.50.
+    assert.strictEqual(c!.costUsd, 2.5)
+    // But it MUST be labeled as covering the whole gap, not one turn.
+    assert.strictEqual(c!.costIsIntervalTotal, true)
+    assert.strictEqual(c!.intervalMs, 600_000)
+  })
+
+  test('the priced branch (known model, positive derived cost) never sets costIsIntervalTotal', () => {
+    const sessions = [card({ sessionId: 'D', model: 'claude-sonnet-4-5', timeline: [] })]
+    const sl: StatuslineBillingEvent[] = [
+      {
+        ts: NOW / 1000 - 10, sessionId: 'D', deltaCostUsd: 2.5, deltaTokens: 5000,
+        deltaInput: 1000, deltaOutput: 200, deltaCacheRead: 0, deltaCacheCreate: 0,
+        intervalMs: 600_000,
+      },
+    ]
+    const events = gatherConsumptionEvents(sessions, sl, NOW)
+    const d = events.find(e => e.sessionId === 'D')
+    assert.ok(d)
+    assert.strictEqual(d!.costIsIntervalTotal, undefined)
+    assert.strictEqual(d!.intervalMs, undefined)
+  })
 })
 
 suite('burnMonitor — session resolution + status', () => {

@@ -201,6 +201,11 @@ export class StatuslineUsageReader {
     // burnMonitor.statuslineCostUsd prices a turn from its own buckets whenever the model is known
     // and falls back to this delta only otherwise.
     const prevCost = a.totalCostUsd
+    // Read BEFORE the "latest-wins" block below updates it — same reasoning as prevCost: this is the
+    // ts of the sample that established prevCost, so (rec.ts - prevTs) is the real gap deltaCost
+    // accrued over. TRDD-H693VQLU: carried on the event so burnMonitor's fallback branch can label a
+    // raw cumulative delta an INTERVAL total instead of a single turn's cost.
+    const prevTs = a.lastTs
     const newCost = num(rec.total_cost_usd)
     // This turn's 4 usage buckets — carried individually so the burn breakdown can attribute the split
     // (cache-read is ~96% of the count on real workloads). deltaTokens is their sum, matching the
@@ -213,6 +218,9 @@ export class StatuslineUsageReader {
     // The token buckets ARE this turn's own figures and stay honest on the first sample; only the
     // cumulative-derived cost has to be suppressed.
     const deltaCost = firstSampleOfSession ? 0 : Math.max(0, newCost - prevCost)
+    // TRDD-H693VQLU: the gap `deltaCost` accrued over, in ms. Undefined on the first sample (deltaCost
+    // is already 0 there) and when prevTs was never set (same guard, belt-and-suspenders).
+    const intervalMs = firstSampleOfSession || prevTs <= 0 ? undefined : Math.max(0, (num(rec.ts) - prevTs) * 1000)
 
     // ONE EVENT PER TURN. These buckets are a SNAPSHOT of the last COMPLETED turn, and Claude Code
     // re-renders the status line every ~3 s whether or not a turn happened — so an idle session
@@ -236,7 +244,7 @@ export class StatuslineUsageReader {
     } else if (deltaTokens > 0 || deltaCost > 0) {
       const event: StatuslineBillingEvent = {
         ts: num(rec.ts), sessionId: sid, workspace: rec.project_dir || undefined,
-        deltaCostUsd: deltaCost, deltaTokens,
+        deltaCostUsd: deltaCost, deltaTokens, intervalMs,
         deltaInput: dInput, deltaOutput: dOutput, deltaCacheRead: dCacheRead, deltaCacheCreate: dCacheCreate,
       }
       this.billingEvents.push(event)
