@@ -726,3 +726,118 @@ suite('segmentedSpanStore — compressSealedSegments (sealed-segment gzip)', () 
     } finally { cleanup() }
   })
 })
+
+// ── forEachInRangeYielding (TRDD-9NAUEUUR) ───────────────────────────────────
+// Same contract as forEachInRange, plus an `await setImmediate` between chunks so a long walk no
+// longer starves the event loop for its whole duration (the measured failure: `server status`
+// DROPped its probe against a healthy server mid-scan). These pin: (a) it visits the identical set
+// in the identical order as the sync walk, plain and gz alike, (b) linePrefilter behaves
+// identically under the yielding driver, and (c) the ENOENT→.gz retry documented on the function
+// itself is exercised for real by racing compressSealedSegments against an in-flight walk.
+suite('segmentedSpanStore — forEachInRangeYielding (TRDD-9NAUEUUR)', () => {
+  test('visits exactly what forEachInRange visits, in the same order, across 2+ days', async () => {
+    const { dir, cleanup } = tmpDir()
+    try {
+      const store = new SegmentedSpanStore(dir, () => {})
+      for (const [i, at] of [D1, D1 + 1000, D2, D2 + 2000, D3].entries()) store.append(mkSpan(at, i))
+      store.flush()
+
+      const sync: Span[] = []
+      store.forEachInRange(0, Infinity, (s) => { sync.push(s) })
+
+      const yielded: Span[] = []
+      await store.forEachInRangeYielding(0, Infinity, (s) => { yielded.push(s) })
+
+      assert.deepStrictEqual(yielded, sync, 'the yielding walk must visit the same spans in the same order as the sync walk')
+    } finally { cleanup() }
+  })
+
+  test('gz transparency: same result as the sync walk once the sealed day is compressed', async () => {
+    const { dir, cleanup } = tmpDir()
+    try {
+      const store = new SegmentedSpanStore(dir, () => {})
+      store.append(mkSpan(D1, 1))
+      store.append(mkSpan(D1 + 1000, 2))
+      store.append(mkSpan(D1 + 2000, 3))
+      store.flush()
+
+      const r = store.compressSealedSegments(Date.now())
+      assert.deepStrictEqual(r.compressed, ['2026-06-01.ndjson'], 'sanity: the segment was actually gzipped')
+
+      const sync: Span[] = []
+      store.forEachInRange(0, Infinity, (s) => { sync.push(s) })
+
+      const yielded: Span[] = []
+      await store.forEachInRangeYielding(0, Infinity, (s) => { yielded.push(s) })
+
+      assert.deepStrictEqual(yielded.map((s) => s.spanId).sort(), sync.map((s) => s.spanId).sort(),
+        'the yielding walk reads the .gz form transparently, same spans as the sync walk')
+    } finally { cleanup() }
+  })
+
+  test('linePrefilter is respected exactly as under forEachInRange: rejects skip, accept-all changes nothing', async () => {
+    const { dir, cleanup } = tmpDir()
+    try {
+      const store = new SegmentedSpanStore(dir, () => {})
+      const wanted = (at: number, i: number): Span => ({ ...mkSpan(at, i), name: 'wanted-span' })
+      const other = (at: number, i: number): Span => ({ ...mkSpan(at, i), name: 'other-span' })
+      store.append(wanted(D1, 1))
+      store.append(other(D1 + 1, 2))
+      store.append(wanted(D1 + 2, 3))
+      store.flush()
+
+      const rejectOther = (line: string): boolean => line.includes('wanted-span')
+      const filtered: Span[] = []
+      await store.forEachInRangeYielding(0, Infinity, (s) => { filtered.push(s) }, rejectOther)
+      assert.deepStrictEqual(filtered.map((s) => s.spanId).sort(), ['span-1', 'span-3'],
+        'a rejecting prefilter must skip the non-matching span under the yielding walk too')
+
+      const acceptAll = (): boolean => true
+      const unfiltered: Span[] = []
+      await store.forEachInRangeYielding(0, Infinity, (s) => { unfiltered.push(s) }, acceptAll)
+      assert.deepStrictEqual(unfiltered.map((s) => s.spanId).sort(), ['span-1', 'span-2', 'span-3'],
+        'an accept-all prefilter must change nothing versus omitting it entirely')
+    } finally { cleanup() }
+  })
+
+  test('a mid-walk compressSealedSegments race delivers every seeded span exactly once (no loss, no double)', async () => {
+    // This pins the ENOENT→.gz retry / open-fd-survives-unlink safety documented on
+    // forEachInRangeYielding: day1 is sized past CHUNK_BYTES (4 MiB) so its walk needs a SECOND
+    // internal `await setImmediate` before reaching EOF — which leaves day1's fd open, mid-read,
+    // when the scheduled compress fires (the "already open, keeps reading after unlink" race).
+    // day2 is untouched at that same moment — the walk hasn't opened it yet — so compressing it
+    // swaps its plain file for `.gz` before the walk ever calls fs.openSync on the plain name,
+    // forcing the ENOENT→.gz retry path. A setImmediate scheduled right after starting the walk
+    // (before its own first internal yield has a chance to run) lands exactly in that window.
+    const { dir, cleanup } = tmpDir()
+    try {
+      const store = new SegmentedSpanStore(dir, () => {})
+      const day1Count = 30_000 // ~5.2 MB of NDJSON — past CHUNK_BYTES (4 MiB), forces 2 chunks
+      const expectedIds: string[] = []
+      for (let i = 0; i < day1Count; i++) {
+        store.append(mkSpan(D1 + i, i))
+        expectedIds.push(`span-${i}`)
+      }
+      for (let i = day1Count; i < day1Count + 5; i++) {
+        store.append(mkSpan(D2 + (i - day1Count), i))
+        expectedIds.push(`span-${i}`)
+      }
+      store.flush()
+      assert.strictEqual(fs.statSync(path.join(dir, '2026-06-01.ndjson')).size > (1 << 22), true,
+        'sanity: day1 must exceed CHUNK_BYTES or this test does not exercise a mid-file yield')
+
+      const visited: Span[] = []
+      const walkPromise = store.forEachInRangeYielding(0, Infinity, (s) => { visited.push(s) })
+      // Scheduled in the SAME synchronous tick as the call above, right after it — this queues
+      // behind the walk's own first `setImmediate(resolve)` (registered while forEachInRangeYielding
+      // ran synchronously up to its first await), so it fires on the very next check-phase pass,
+      // squarely inside the race window described above.
+      setImmediate(() => { store.compressSealedSegments(Date.now()) })
+      await walkPromise
+
+      assert.strictEqual(visited.length, expectedIds.length, 'no span lost and none delivered twice')
+      assert.deepStrictEqual(visited.map((s) => s.spanId).sort(), expectedIds.sort(),
+        'every seeded span across both days was delivered exactly once despite the compression race')
+    } finally { cleanup() }
+  })
+})

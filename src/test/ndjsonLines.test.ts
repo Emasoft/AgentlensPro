@@ -3,7 +3,7 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import * as zlib from 'zlib'
-import { forEachNdjsonLine, countNdjsonLines, forEachNdjsonLineGz, forEachGunzipChunkSync, countNdjsonLinesAuto } from '../ndjsonLines'
+import { forEachNdjsonLine, countNdjsonLines, forEachNdjsonLineGz, forEachGunzipChunkSync, countNdjsonLinesAuto, forEachNdjsonLineAutoYielding } from '../ndjsonLines'
 
 // ── Streaming NDJSON reader — real-filesystem tests ──────────────────────────
 // The reader exists because `readFileSync(f,'utf8')` THROWS past V8's ~512 MB max string
@@ -211,5 +211,86 @@ suite('ndjsonLines — sync streaming gunzip', () => {
     try {
       assert.throws(() => gunzipStreamed(file, 32), /incorrect header|invalid/i)
     } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+  })
+})
+
+// ── forEachNdjsonLineAutoYielding — the async driver (TRDD-9NAUEUUR) ─────────────────────────
+// Same generators, same assembler, same lines in the same order as the sync `*Auto` driver — the
+// only difference is an `await setImmediate` between chunks so a long walk stops starving every
+// other pending listener. These pin: byte-for-byte equivalence with the sync drivers (plain and
+// gz), THE DISCRIMINATOR that the loop genuinely breathes (proven against a sync control that
+// starves it), and that a throwing callback still releases the fd.
+
+async function collectYielding(file: string, chunkBytes: number): Promise<string[]> {
+  const seen: string[] = []
+  await forEachNdjsonLineAutoYielding(file, (l) => seen.push(l), chunkBytes)
+  return seen
+}
+
+suite('ndjsonLines — yielding async driver', () => {
+  test('plain file: identical lines to forEachNdjsonLine at every chunk size, multibyte included', async () => {
+    const lines = ['{"t":"café→ok"}', '{"t":"𝄞𝄞𝄞"}', '{"t":"ünïcödé"}']
+    const { file, cleanup } = tmpFile(lines.join('\n') + '\n')
+    try {
+      for (const size of [3, 16, 4096]) {
+        assert.deepStrictEqual(await collectYielding(file, size), lines, `chunk size ${size}`)
+        assert.deepStrictEqual(await collectYielding(file, size), collect(file, size), `matches sync driver at chunk size ${size}`)
+      }
+    } finally { cleanup() }
+  })
+
+  test('gz file: identical lines to forEachNdjsonLineGz on the same body', async () => {
+    const lines = ['{"t":"café→ok"}', '{"t":"𝄞𝄞𝄞"}', `{"t":"${'ü'.repeat(300)}"}`]
+    const body = lines.join('\n') + '\n'
+    const { file, cleanup } = tmpGzFile(body)
+    try {
+      for (const size of [3, 16, 4096]) {
+        const sync: string[] = []
+        forEachNdjsonLineGz(file, (l) => sync.push(l), size)
+        assert.deepStrictEqual(await collectYielding(file, size), sync, `gz chunk size ${size}`)
+        assert.deepStrictEqual(await collectYielding(file, size), lines, `gz chunk size ${size} vs source lines`)
+      }
+    } finally { cleanup() }
+  })
+
+  test('THE DISCRIMINATOR — the event loop breathes under the yielding driver, and only there', async () => {
+    // A sync control run FIRST proves the counter genuinely discriminates: the synchronous walk
+    // must starve the loop (ticks stay 0) or an assertion of "ticks > 0" for the yielding driver
+    // would prove nothing — it could just be ambient event-loop activity unrelated to this API.
+    const lines = Array.from({ length: 200 }, (_, i) => `{"i":${i},"pad":"${'x'.repeat(20)}"}`)
+    const { file, cleanup } = tmpFile(lines.join('\n') + '\n')
+    try {
+      let ticks = 0
+      let done = false
+      const pump = (): void => {
+        if (done) return
+        ticks++
+        setImmediate(pump)
+      }
+
+      ticks = 0
+      setImmediate(pump)
+      forEachNdjsonLine(file, () => { /* discard */ }, 16) // SYNC walk — must starve the pump
+      const ticksDuringSync = ticks
+      assert.strictEqual(ticksDuringSync, 0, 'the sync walk must starve the event loop — the control that makes the next assertion meaningful')
+
+      ticks = 0
+      await forEachNdjsonLineAutoYielding(file, () => { /* discard */ }, 16)
+      assert.ok(ticks > 0, 'the yielding walk must let at least one scheduled setImmediate run mid-walk')
+
+      done = true
+    } finally { cleanup() }
+  })
+
+  test('onLine throws → the fd is released (re-read of the same file afterwards succeeds)', async () => {
+    const { file, cleanup } = tmpFile('{"a":1}\n{"a":2}\n')
+    try {
+      await assert.rejects(
+        forEachNdjsonLineAutoYielding(file, () => { throw new Error('caller blew up') }, 4),
+        /caller blew up/,
+      )
+      // The re-read IS the proof: it succeeds only if the finally-block released the fd.
+      assert.strictEqual(countNdjsonLines(file, 4), 2)
+    } finally { cleanup() }
   })
 })

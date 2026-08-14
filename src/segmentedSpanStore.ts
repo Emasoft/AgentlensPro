@@ -27,7 +27,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import * as zlib from 'zlib'
 import { atomicWriteFileSync, rssPressure } from './serverRuntime'
-import { forEachNdjsonLineAuto, forEachGunzipChunkSync } from './ndjsonLines'
+import { forEachNdjsonLineAuto, forEachNdjsonLineAutoYielding, forEachGunzipChunkSync } from './ndjsonLines'
 import type { Span } from './shared/telemetryTypes'
 
 const DAY_MS = 86_400_000
@@ -326,13 +326,75 @@ export class SegmentedSpanStore {
    *  negative here is silent, unrecoverable data loss, not a discarded candidate. When omitted,
    *  behavior is byte-identical to before this parameter existed (every line is parsed). */
   forEachInRange(sinceMs: number, untilMs: number, visit: (span: Span) => void, linePrefilter?: (line: string) => boolean): void {
+    for (const { files } of this.plannedSegments(sinceMs, untilMs)) {
+      const v = this.makeSegmentVisitor(files, sinceMs, untilMs, visit, linePrefilter)
+      let readError: string | null = null
+      for (const name of files) {
+        // Streamed, and the failure is LOUD. This used to be a whole-file
+        // readFileSync('utf-8') inside `catch { continue }` — so any segment past V8's
+        // 512 MB max-string-length threw and that entire DAY vanished from the result with
+        // no log line, which is the exact silent loss this store's header promises never
+        // happens. Two live segments (568 MB, 531 MB) were being dropped this way.
+        try {
+          forEachNdjsonLineAuto(path.join(this.dir, name), v.onLine)
+        } catch (e) {
+          readError = readError ?? String(e)
+        }
+      }
+      v.finish(readError)
+    }
+  }
+
+  /** `forEachInRange` with an `await setImmediate` between chunks (TRDD-9NAUEUUR): identical
+   *  contract, identical spans in identical order — but the event loop is served once per chunk,
+   *  so a 60s no-window walk no longer blocks every listener for its whole duration (the measured
+   *  failure: `server status` DROPped its probe against a healthy server mid-scan). Segment
+   *  selection and the per-line visitor are the SAME private helpers the sync walk uses — the two
+   *  cannot drift.
+   *
+   *  Because the walk now interleaves with the rest of the server, `compressSealedSegments` can
+   *  seal a listed `.ndjson` into `.ndjson.gz` BETWEEN two of our chunks. Two shapes of that race,
+   *  both safe: a file already OPEN keeps reading after its unlink (POSIX semantics — the fd holds
+   *  the inode); a file not yet opened fails at open with ENOENT having delivered ZERO lines, and
+   *  is retried once under its `.gz` name. The zero-lines guarantee is what makes the retry a
+   *  clean swap rather than a double-read. */
+  async forEachInRangeYielding(sinceMs: number, untilMs: number, visit: (span: Span) => void, linePrefilter?: (line: string) => boolean): Promise<void> {
+    for (const { files } of this.plannedSegments(sinceMs, untilMs)) {
+      const v = this.makeSegmentVisitor(files, sinceMs, untilMs, visit, linePrefilter)
+      let readError: string | null = null
+      for (const name of files) {
+        try {
+          await forEachNdjsonLineAutoYielding(path.join(this.dir, name), v.onLine)
+        } catch (e) {
+          const gzTwin = `${name}.gz`
+          const swept = (e as NodeJS.ErrnoException).code === 'ENOENT' && !name.endsWith('.gz')
+            && fs.existsSync(path.join(this.dir, gzTwin))
+          if (!swept) {
+            readError = readError ?? String(e)
+            continue
+          }
+          try {
+            await forEachNdjsonLineAutoYielding(path.join(this.dir, gzTwin), v.onLine)
+          } catch (e2) {
+            readError = readError ?? String(e2)
+          }
+        }
+      }
+      v.finish(readError)
+    }
+  }
+
+  /** Flush, list, and window-test the segments a range read must visit — shared by the sync and
+   *  yielding walks so segment selection cannot drift between them. */
+  private plannedSegments(sinceMs: number, untilMs: number): Array<{ key: string; files: string[] }> {
     this.flush() // reads must see everything appended so far
     let byKey: Map<string, string[]>
     try {
       byKey = this.listSegmentFiles()
     } catch {
-      return // no dir yet — empty store
+      return [] // no dir yet — empty store
     }
+    const out: Array<{ key: string; files: string[] }> = []
     for (const key of [...byKey.keys()].sort()) {
       const files = byKey.get(key) as string[]
       const dayMs = Date.parse(`${key}T00:00:00Z`)
@@ -341,44 +403,50 @@ export class SegmentedSpanStore {
       const lo = meta ? meta.minTs : dayMs
       const hi = meta ? meta.maxTs : dayMs + DAY_MS
       if (lo > untilMs || hi < sinceMs) continue
-      let skipped = 0
-      let readError: string | null = null
-      // Almost always exactly one file backs a key. The rare >1 case (a compress crash-recovery
-      // leftover, or a late span appended after compression — see flush()'s warning above) is
-      // de-duplicated by (traceId, spanId) across the forms rather than picking one: picking the
-      // plain form would double-read a crash leftover, picking the .gz form would silently drop
-      // a genuinely late span — the exact silent-loss class this store exists to end.
-      const seenIds = files.length > 1 ? new Set<string>() : null
-      for (const name of files) {
-        // Streamed, and the failure is LOUD. This used to be a whole-file
-        // readFileSync('utf-8') inside `catch { continue }` — so any segment past V8's
-        // 512 MB max-string-length threw and that entire DAY vanished from the result with
-        // no log line, which is the exact silent loss this store's header promises never
-        // happens. Two live segments (568 MB, 531 MB) were being dropped this way.
-        try {
-          forEachNdjsonLineAuto(path.join(this.dir, name), (line) => {
-            // Cheap substring test BEFORE the parse — see the linePrefilter doc comment above.
-            // A rejected line is never even handed to JSON.parse, which is the whole saving.
-            if (linePrefilter && !linePrefilter(line)) return
-            let span: Span
-            try { span = JSON.parse(line) as Span } catch { skipped++; return } // truncated tail line
-            if (seenIds) {
-              const id = `${span.traceId}:${span.spanId}`
-              if (seenIds.has(id)) return
-              seenIds.add(id)
-            }
-            const ts = spanTimestampMs(span)
-            if (ts < sinceMs || ts > untilMs) return
-            visit(this.applyOverlay(span))
-          })
-        } catch (e) {
-          readError = readError ?? String(e)
+      out.push({ key, files })
+    }
+    return out
+  }
+
+  /** The per-segment line visitor shared by both walks: prefilter → parse → dual-form dedup →
+   *  window test → overlay → visit, plus the corrupt-line counter and the two end-of-segment log
+   *  lines. One closure per segment because the dedup set and counters are segment-scoped. */
+  private makeSegmentVisitor(
+    files: string[],
+    sinceMs: number,
+    untilMs: number,
+    visit: (span: Span) => void,
+    linePrefilter?: (line: string) => boolean,
+  ): { onLine: (line: string) => void; finish: (readError: string | null) => void } {
+    let skipped = 0
+    // Almost always exactly one file backs a key. The rare >1 case (a compress crash-recovery
+    // leftover, or a late span appended after compression — see flush()'s warning above) is
+    // de-duplicated by (traceId, spanId) across the forms rather than picking one: picking the
+    // plain form would double-read a crash leftover, picking the .gz form would silently drop
+    // a genuinely late span — the exact silent-loss class this store exists to end.
+    const seenIds = files.length > 1 ? new Set<string>() : null
+    return {
+      onLine: (line: string): void => {
+        // Cheap substring test BEFORE the parse — see the linePrefilter doc comment above.
+        // A rejected line is never even handed to JSON.parse, which is the whole saving.
+        if (linePrefilter && !linePrefilter(line)) return
+        let span: Span
+        try { span = JSON.parse(line) as Span } catch { skipped++; return } // truncated tail line
+        if (seenIds) {
+          const id = `${span.traceId}:${span.spanId}`
+          if (seenIds.has(id)) return
+          seenIds.add(id)
         }
-      }
-      if (readError !== null) {
-        this.log(`[AgentLens] span store: could NOT read ${files.join('+')} (${readError}) — that segment is MISSING from this query's result`)
-      }
-      if (skipped > 0) this.log(`[AgentLens] span store: skipped ${skipped} corrupt line(s) in ${files.join('+')}`)
+        const ts = spanTimestampMs(span)
+        if (ts < sinceMs || ts > untilMs) return
+        visit(this.applyOverlay(span))
+      },
+      finish: (readError: string | null): void => {
+        if (readError !== null) {
+          this.log(`[AgentLens] span store: could NOT read ${files.join('+')} (${readError}) — that segment is MISSING from this query's result`)
+        }
+        if (skipped > 0) this.log(`[AgentLens] span store: skipped ${skipped} corrupt line(s) in ${files.join('+')}`)
+      },
     }
   }
 

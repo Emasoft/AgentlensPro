@@ -43,7 +43,7 @@ function seed(dir: string, spans: Span[]): void {
 }
 
 suite('otelCallEvents — the visitor scan keeps only what it needs', () => {
-  test('an api_request span becomes one event with its attributes carried through', () => {
+  test('an api_request span becomes one event with its attributes carried through', async () => {
     const { dir, cleanup } = tmpDir()
     try {
       seed(dir, [span(API_REQUEST_SPAN, T0, {
@@ -51,7 +51,7 @@ suite('otelCallEvents — the visitor scan keeps only what it needs', () => {
         input_tokens: 11, output_tokens: 22, cache_read_tokens: 33, cache_creation_tokens: 44,
         cost_usd_micros: 2_500_000, query_source: 'repl_main_thread',
       }, 1)])
-      const { events } = scanOtelCallEvents({ spansDir: dir, sinceMs: 0, untilMs: Infinity })
+      const { events } = await scanOtelCallEvents({ spansDir: dir, sinceMs: 0, untilMs: Infinity })
       assert.strictEqual(events.length, 1)
       assert.strictEqual(events[0].sessionId, 'sess-a')
       assert.strictEqual(events[0].model, 'claude-opus-5')
@@ -61,7 +61,7 @@ suite('otelCallEvents — the visitor scan keeps only what it needs', () => {
     } finally { cleanup() }
   })
 
-  test('a compaction span lands in compactions and NOT in events', () => {
+  test('a compaction span lands in compactions and NOT in events', async () => {
     // This branch ended in `continue` before the rewrite; as a callback it must `return`, or the
     // compaction would fall through and be re-emitted as an api_request event too.
     const { dir, cleanup } = tmpDir()
@@ -69,7 +69,7 @@ suite('otelCallEvents — the visitor scan keeps only what it needs', () => {
       seed(dir, [span(COMPACTION_SPAN, T0, {
         'session.id': 'sess-a', trigger: 'auto', pre_tokens: 900, post_tokens: 100,
       }, 1)])
-      const r = scanOtelCallEvents({ spansDir: dir, sinceMs: 0, untilMs: Infinity })
+      const r = await scanOtelCallEvents({ spansDir: dir, sinceMs: 0, untilMs: Infinity })
       assert.strictEqual(r.events.length, 0, 'a compaction must never be counted as an api_request')
       assert.deepStrictEqual(
         r.compactions.map(c => [c.sessionId, c.trigger, c.preTokens, c.postTokens]),
@@ -78,7 +78,7 @@ suite('otelCallEvents — the visitor scan keeps only what it needs', () => {
     } finally { cleanup() }
   })
 
-  test('a skipped span does not stop the scan — the ones after it are still collected', () => {
+  test('a skipped span does not stop the scan — the ones after it are still collected', async () => {
     // The failure a continue→return conversion invites is a skip that behaves like a break. Two
     // skip reasons sit BEFORE a good record here: a foreign span name, and a missing session.id.
     const { dir, cleanup } = tmpDir()
@@ -88,12 +88,12 @@ suite('otelCallEvents — the visitor scan keeps only what it needs', () => {
         span(API_REQUEST_SPAN, T0 + 1, { model: 'no-session-id-here' }, 2),
         span(API_REQUEST_SPAN, T0 + 2, { 'session.id': 'sess-b', model: 'claude-sonnet-5' }, 3),
       ])
-      const { events } = scanOtelCallEvents({ spansDir: dir, sinceMs: 0, untilMs: Infinity })
+      const { events } = await scanOtelCallEvents({ spansDir: dir, sinceMs: 0, untilMs: Infinity })
       assert.deepStrictEqual(events.map(e => e.sessionId), ['sess-b'])
     } finally { cleanup() }
   })
 
-  test('spansScanned counts PARSED candidates only — non-candidate lines never reach JSON.parse', () => {
+  test('spansScanned counts PARSED candidates only — non-candidate lines never reach JSON.parse', async () => {
     // CONTRACT FLIP, deliberate (TRDD-9NAUEUUR): this test used to pin "counts EVERY span in the
     // window". That contract died with the line prefilter — parsing every span to count it was
     // the ~2GB/GC transient churn that killed the live server three times, so non-candidate
@@ -108,14 +108,14 @@ suite('otelCallEvents — the visitor scan keeps only what it needs', () => {
         span('claude_code.tool_decision', T0 + 1, {}, 2),
         span(API_REQUEST_SPAN, T0 + 2, { 'session.id': 'sess-a' }, 3),
       ])
-      const r = scanOtelCallEvents({ spansDir: dir, sinceMs: 0, untilMs: Infinity })
+      const r = await scanOtelCallEvents({ spansDir: dir, sinceMs: 0, untilMs: Infinity })
       assert.strictEqual(r.coverage.spansScanned, 1, 'only the candidate line is parsed and counted')
       assert.strictEqual(r.coverage.apiRequests, 1, 'and it was kept')
       assert.match(r.coverage.note, /Parsed 1 candidate span line\(s\)/)
     } finally { cleanup() }
   })
 
-  test('the window excludes what falls outside it, and events come back time-ordered', () => {
+  test('the window excludes what falls outside it, and events come back time-ordered', async () => {
     const { dir, cleanup } = tmpDir()
     try {
       seed(dir, [
@@ -124,24 +124,24 @@ suite('otelCallEvents — the visitor scan keeps only what it needs', () => {
         span(API_REQUEST_SPAN, T0 + 100, { 'session.id': 'first' }, 3),
         span(API_REQUEST_SPAN, T0 + 99_000, { 'session.id': 'too-late' }, 4),
       ])
-      const { events } = scanOtelCallEvents({ spansDir: dir, sinceMs: T0, untilMs: T0 + 1000 })
+      const { events } = await scanOtelCallEvents({ spansDir: dir, sinceMs: T0, untilMs: T0 + 1000 })
       assert.deepStrictEqual(events.map(e => e.sessionId), ['first', 'second'])
     } finally { cleanup() }
   })
 
-  test('a store directory that does not exist yet is an EMPTY scan, not an error', () => {
+  test('a store directory that does not exist yet is an EMPTY scan, not an error', async () => {
     // A fresh install has no spans dir. The store swallows that readdir failure itself, so this
     // reports the ordinary "Scanned 0" note — NOT the fallback note. Asserting the fallback here
     // is what this test originally did, and it was wrong: that path has never fired for a merely
     // absent directory, before the rewrite or after.
     const gone = path.join(os.tmpdir(), `al-otel-absent-${process.pid}-${seq++}`)
-    const r = scanOtelCallEvents({ spansDir: gone, sinceMs: 0, untilMs: Infinity })
+    const r = await scanOtelCallEvents({ spansDir: gone, sinceMs: 0, untilMs: Infinity })
     assert.deepStrictEqual(r.events, [])
     assert.strictEqual(r.coverage.spansScanned, 0)
     assert.match(r.coverage.note, /Parsed 0 candidate span line\(s\)/)
   })
 
-  test('a store path that cannot be a store returns empty rather than throwing', () => {
+  test('a store path that cannot be a store returns empty rather than throwing', async () => {
     // The documented contract is "never throws, so a caller can always fall back to the raw-body
     // scan" — that is what is asserted, and only that. The `falling back to the raw-body scan`
     // NOTE is deliberately NOT asserted: it needs the constructor or the index load to throw, and
@@ -152,7 +152,7 @@ suite('otelCallEvents — the visitor scan keeps only what it needs', () => {
     try {
       const notADir = path.join(dir, 'spans-but-actually-a-file')
       fs.writeFileSync(notADir, 'this is not a span store')
-      const r = scanOtelCallEvents({ spansDir: notADir, sinceMs: 0, untilMs: Infinity })
+      const r = await scanOtelCallEvents({ spansDir: notADir, sinceMs: 0, untilMs: Infinity })
       assert.deepStrictEqual(r.events, [])
       assert.deepStrictEqual(r.compactions, [])
       assert.strictEqual(r.coverage.spansScanned, 0)

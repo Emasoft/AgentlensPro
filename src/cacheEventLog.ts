@@ -312,7 +312,7 @@ export async function buildCacheEventLog(opts: CacheEventLogOptions = {}): Promi
   // unattributable bucket. Each is then enriched from its raw body via `request_id` (the body
   // filename stem) for the two things OTEL omits: the 5m/1h write split and cache_miss_reason.
   const bodiesDir = opts.bodiesDir ?? defaultBodiesDir()
-  const otel = scanOtelCallEvents({ spansDir: opts.spansDir, windowHours: opts.windowHours })
+  const otel = await scanOtelCallEvents({ spansDir: opts.spansDir, windowHours: opts.windowHours })
   const calls: NormalizedCall[] = otel.events.length > 0
     ? otel.events.map(e => ({
         ts: e.ts, sessionId: e.sessionId, model: e.model,

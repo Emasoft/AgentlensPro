@@ -11,9 +11,14 @@
 // to end. Streaming removes the ceiling and the peak memory with it: a segment is walked in
 // chunks, never materialized whole.
 //
-// Sync on purpose: both call sites are sync (a CLI probe and a store read), and making them
-// async would ripple through the server's read path for no gain — the cost here is disk I/O,
-// which readSync and a stream pay alike.
+// Sync on purpose for the sync callers (a CLI probe and the store's sync reads): making THOSE
+// async would ripple through call chains for no gain — the cost is disk I/O, which readSync and
+// a stream pay alike. The ONE deliberate exception is `forEachNdjsonLineAutoYielding`
+// (TRDD-9NAUEUUR): the server's long walks (a no-window scan is 60s+ over 5M+ spans) ran on the
+// main thread and starved EVERY listener for their whole duration — `server status` reported NOT
+// RUNNING against a healthy server. The yielding driver awaits setImmediate between chunks so
+// pending I/O events are served mid-walk. It is a thin async driver over the SAME chunk
+// generators the sync drivers use — one version of the read logic, two pump schedules.
 
 import * as fs from 'fs'
 import * as zlib from 'zlib'
@@ -65,19 +70,24 @@ class NdjsonLineAssembler {
   }
 }
 
-function walkNdjsonChunks(
-  readChunk: () => Buffer | Uint8Array | null,
-  onLine: (line: string) => void,
-  maxLineChars: number,
-  file: string,
-): void {
-  const assembler = new NdjsonLineAssembler(onLine, maxLineChars, file)
-  for (;;) {
-    const chunk = readChunk()
-    if (chunk === null) break
-    assembler.push(chunk)
+/** Raw file bytes as a chunk sequence. Each yielded chunk is a view over ONE reused buffer, so
+ *  it is valid only until the next `next()` call — every consumer below copies it immediately
+ *  (the assembler's StringDecoder copies on write). The generator shape is what lets one read
+ *  loop serve both pump schedules (sync drive-to-completion, and the yielding async drive);
+ *  `finally` releases the fd on completion, early exit, and throw alike, because for-of calls
+ *  `return()` on the generator in all three cases. */
+function* fileChunks(file: string, chunkBytes: number): Generator<Buffer> {
+  const fd = fs.openSync(file, 'r')
+  const buf = Buffer.allocUnsafe(chunkBytes)
+  try {
+    for (;;) {
+      const read = fs.readSync(fd, buf, 0, chunkBytes, null)
+      if (read === 0) return
+      yield buf.subarray(0, read)
+    }
+  } finally {
+    fs.closeSync(fd)
   }
-  assembler.end()
 }
 
 /**
@@ -95,16 +105,9 @@ export function forEachNdjsonLine(
   chunkBytes: number = CHUNK_BYTES,
   maxLineChars: number = MAX_LINE_CHARS,
 ): void {
-  const fd = fs.openSync(file, 'r')
-  const buf = Buffer.allocUnsafe(chunkBytes)
-  try {
-    walkNdjsonChunks(() => {
-      const read = fs.readSync(fd, buf, 0, chunkBytes, null)
-      return read === 0 ? null : buf.subarray(0, read)
-    }, onLine, maxLineChars, file)
-  } finally {
-    fs.closeSync(fd)
-  }
+  const assembler = new NdjsonLineAssembler(onLine, maxLineChars, file)
+  for (const chunk of fileChunks(file, chunkBytes)) assembler.push(chunk)
+  assembler.end()
 }
 
 /** Compressed bytes fed to the inflate engine per call. Small on purpose: the engine returns that
@@ -149,6 +152,16 @@ export function forEachGunzipChunkSync(
   onChunk: (chunk: Buffer) => void,
   inChunkBytes: number = GZ_IN_CHUNK_BYTES,
 ): void {
+  for (const chunk of gunzipChunks(file, inChunkBytes)) onChunk(chunk)
+}
+
+/** The engine loop behind `forEachGunzipChunkSync`, as a generator so the yielding async driver
+ *  can pump the same loop with awaits in between (see the module header). Every yielded chunk is
+ *  a FRESH Buffer from the engine (never a reused view), so holding one across `next()` is safe
+ *  here — unlike `fileChunks` above. All three `_processChunk` interceptions live in this one
+ *  place; the `finally` (fd close + engine close) runs on completion, early exit, and throw
+ *  alike via the generator `return()` protocol. */
+function* gunzipChunks(file: string, inChunkBytes: number): Generator<Buffer> {
   const engine = new zlib.Gunzip({ chunkSize: 1 << 20 }) as unknown as SyncZlibEngine
   if (typeof engine._processChunk !== 'function' || !engine._handle) {
     engine.close()
@@ -208,7 +221,7 @@ export function forEachGunzipChunkSync(
         em.removeAllListeners('error')
         em.on('error', absorbAsyncReEmit)
       }
-      if (out && out.length > 0) onChunk(out)
+      if (out && out.length > 0) yield out
       if (last) break
     }
   } finally {
@@ -246,6 +259,41 @@ export function forEachNdjsonLineAuto(
 ): void {
   if (file.endsWith('.gz')) forEachNdjsonLineGz(file, onLine, chunkBytes, maxLineChars)
   else forEachNdjsonLine(file, onLine, chunkBytes, maxLineChars)
+}
+
+/**
+ * `forEachNdjsonLineAuto` with an `await setImmediate` between chunks (TRDD-9NAUEUUR): the same
+ * generators, the same assembler, the same lines in the same order — but the event loop breathes
+ * once per chunk, so a 60s walk no longer starves every pending listener (the failure this fixes:
+ * `server status` reported NOT RUNNING against a healthy server because its 800ms probe could not
+ * be served while a synchronous no-window scan held the thread).
+ *
+ * setImmediate, not `Promise.resolve()`: a resolved-promise await only drains the microtask
+ * queue, which is still the SAME macrotask — pending socket I/O would keep waiting. setImmediate
+ * schedules after the poll phase, which is exactly where pending I/O callbacks run.
+ *
+ * The per-await gap is bounded by the chunk size (4 MiB plain; a 256 KiB compressed input chunk
+ * is ~5 MB decompressed at the measured segment ratio) — single-digit-ms of line assembly per
+ * chunk, far under any probe timeout.
+ */
+export async function forEachNdjsonLineAutoYielding(
+  file: string,
+  onLine: (line: string) => void,
+  chunkBytes: number = CHUNK_BYTES,
+  maxLineChars: number = MAX_LINE_CHARS,
+): Promise<void> {
+  const assembler = new NdjsonLineAssembler(onLine, maxLineChars, file)
+  const chunks = file.endsWith('.gz')
+    ? gunzipChunks(file, Math.min(chunkBytes, GZ_IN_CHUNK_BYTES))
+    : fileChunks(file, chunkBytes)
+  for (const chunk of chunks) {
+    // Push BEFORE the await: fileChunks yields a view over a reused buffer that is only valid
+    // until the next next() call, and the push copies it (StringDecoder) — so the await never
+    // holds a stale view.
+    assembler.push(chunk)
+    await new Promise<void>((resolve) => setImmediate(resolve))
+  }
+  assembler.end()
 }
 
 /** Non-empty line count, streamed. Same answer as the old

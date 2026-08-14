@@ -102,13 +102,15 @@ export interface OtelScanOptions {
 }
 
 /** Read every `claude_code.api_request` (and `claude_code.compaction`) event in the window.
- *  Returns [] with an explanatory coverage note when the span store is absent — never throws, so a
- *  caller can always fall back to the raw-body scan. */
-export function scanOtelCallEvents(opts: OtelScanOptions = {}): {
+ *  Returns [] with an explanatory coverage note when the span store is absent — never throws (a
+ *  rejection counts as throwing), so a caller can always fall back to the raw-body scan.
+ *  Async since TRDD-9NAUEUUR: the walk yields to the event loop between chunks, so a 60s
+ *  no-window scan no longer starves every listener (`server status` used to DROP mid-scan). */
+export async function scanOtelCallEvents(opts: OtelScanOptions = {}): Promise<{
   events: OtelCallEvent[]
   compactions: OtelCompactionEvent[]
   coverage: OtelScanCoverage
-} {
+}> {
   const spansDir = opts.spansDir ?? dataPath('spans')
   const now = opts.nowMs ?? Date.now()
   const until = opts.untilMs ?? now
@@ -131,9 +133,12 @@ export function scanOtelCallEvents(opts: OtelScanOptions = {}): {
   // wrapping only the constructor would turn a degradation (fall back to the raw-body scan) into a
   // thrown error. On failure the partially-filled arrays are discarded with the fallback return,
   // exactly as an aborted loadRange used to yield nothing.
-  // In-scan rss trail (TRDD-34B9JAZK): this walk visits millions of spans synchronously, so the
-  // request log cannot sample during it — every 500k spans, one line to server.log brackets a
-  // climb that would otherwise end in a silent kill with no trace past the tool-start line.
+  // In-scan rss trail (TRDD-34B9JAZK): during the walk the request log cannot sample, so this
+  // brackets a climb that would otherwise end in a silent kill with no trace past the tool-start
+  // line. Re-keyed to RAW lines (TRDD-9NAUEUUR): the old key was PARSED spans, and the prefilter
+  // cut parses so far below the interval that a whole 5.4M-span walk produced zero samples — the
+  // trail had gone dark exactly where it was built to watch. Every raw line ticks the sampler
+  // (inside linePrefilter below), so the cadence matches the pre-prefilter baseline again.
   const rssSample = makeRssSampler('otel-span-scan', 500_000)
   try {
     const store = new SegmentedSpanStore(spansDir, () => { /* read-only: ingest errors are not ours */ })
@@ -146,11 +151,15 @@ export function scanOtelCallEvents(opts: OtelScanOptions = {}): {
     // string appears inside some OTHER field's value, e.g. an attribute), never a false negative
     // — the `s.name !==` check right below still filters those out at zero cost beyond the one
     // extra JSON.parse. No span this scan wants can ever be skipped by this line.
-    const linePrefilter = (line: string): boolean =>
-      line.includes(API_REQUEST_SPAN) || line.includes(COMPACTION_SPAN)
-    store.forEachInRange(since, until, (s: Span) => {
+    const linePrefilter = (line: string): boolean => {
+      rssSample() // per RAW line — see the sampler's re-key comment above
+      return line.includes(API_REQUEST_SPAN) || line.includes(COMPACTION_SPAN)
+    }
+    // Yielding walk (TRDD-9NAUEUUR): identical spans to forEachInRange, but the event loop is
+    // served between chunks — the status probe, ingest, and every other listener stay live for
+    // the scan's whole duration instead of queueing behind it.
+    await store.forEachInRangeYielding(since, until, (s: Span) => {
       spansScanned += 1
-      rssSample()
       if (s.name !== API_REQUEST_SPAN && s.name !== COMPACTION_SPAN) return
       const a = attrMap(s.attributes)
       const sessionId = str(a.get('session.id'))
