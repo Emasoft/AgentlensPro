@@ -3,8 +3,12 @@
 // Turning raw-body capture ON makes Claude Code write ~21 MB/min of raw API bodies to disk. Even if the
 // server ingests and deletes them within seconds, the WRITE itself is SSD wear (~30 GB/day). A RAM disk
 // makes those writes land in volatile memory, so the drain reclaims RAM instead of burning the SSD. The
-// durable copy is the DuckDB store; a body not yet ingested when the RAM disk vanishes (reboot) is lost,
-// and that is acceptable — it is a few seconds' window (see TRDD-K3WDPR7M Phase 3, item 7).
+// durable copy is the DuckDB store; a body not yet ingested when the RAM disk vanishes (reboot) is
+// lost. That window is NOT "a few seconds" — it is the size of the un-ingested BACKLOG at the moment
+// of the reboot: under a subagent burst 3,271 files were measured queued (2026-08-13), which at the
+// pre-P0 ~1 file/s reclaim was ~54 minutes of exposure. The P0 chunked verify (src/store/ingestPass.ts,
+// SETTLE_READ_CHUNK) shrinks the backlog much faster, but the honest statement stays: reboot loss is
+// bounded by the backlog in files/bytes, never by a wall-clock constant.
 //
 // macOS-only by design: `hdiutil attach -nomount ram://<sectors>` allocates a raw ram device WITHOUT
 // sudo, and `diskutil erasevolume HFS+ <name> <dev>` formats + mounts it at /Volumes/<name>.
@@ -16,8 +20,13 @@ import * as path from 'path'
 export const SPOOL_VOLUME_NAME = 'AgentLensSpool'
 export const SPOOL_MOUNT_POINT = `/Volumes/${SPOOL_VOLUME_NAME}`
 
-/** Default spool size. 2 GB comfortably holds minutes of the ~21 MB/min firehose between 60s drains. */
-export const DEFAULT_SPOOL_MB = 2048
+/** Default spool size. 4 GB (owner-capped, plan "Spool equilibrium" P2 / TRDD-KB17X5G2): pure burst
+ *  headroom over the ~21 MB/min steady firehose — a subagent burst measured ~80 MB/min inflow, and
+ *  the redirect in spoolBackpressure.ts remains the only true safety valve. NON-destructive here:
+ *  ensureRamDisk REUSES an already-mounted spool whatever its size, so this takes effect only on the
+ *  next fresh mount (reboot / manual detach) — never as an implicit resize, which would destroy every
+ *  un-ingested body. */
+export const DEFAULT_SPOOL_MB = 4096
 export const SPOOL_MB_ENV = 'AGENTLENS_SPOOL_MB'
 
 export interface RamDiskInfo {
