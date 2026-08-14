@@ -132,7 +132,7 @@ export const CACHE_BREAK_REMEDIATION: Record<CacheBreakTimelineCause, string> = 
   TOOL_CHOICE_CHANGED:        'tool_choice changed between two explicit values. Per the docs this invalidates MESSAGE blocks only — tools and system stay cached — so the write is bounded by the message layer rather than the whole prefix. Keep tool_choice constant for the lifetime of a cached conversation.',
   LOOKBACK_OVERFLOW:          'No block changed, yet the cache found nothing to read: at least 20 blocks were appended since the last cache WRITE, and the lookback window is 20 blocks, so it walked past the last entry. This is claimed only when cache_read is 0 with an unchanged prefix — ordinary growth still reads. Add a second breakpoint closer to the growing tail so a write accumulates there before the window overruns.',
   BELOW_MIN_CACHEABLE:        'Both usage counters are 0 while the request DID carry cache_control markers, and the prompt is under this model\'s minimum cacheable length — a below-minimum prompt is silently not cached, with no error. The minimum is per model (512 to 4,096 tokens, an 8x spread), so this fires only when the estimate is under THIS model\'s threshold. Expand the cached content to reach it, or accept the full input rate on these calls.',
-  CACHING_DISABLED:           'The request carried NO cache_control marker anywhere, so nothing was offered to the cache and both counters are 0 by construction. That happens when DISABLE_PROMPT_CACHING (or its per-model variant) is set, and also when the caller deliberately does not cache a class of calls — Claude Code\'s small Haiku utility calls do not. Unset the environment variable only if this was not intended.',
+  CACHING_DISABLED:           'The request carried NO cache_control marker anywhere, so nothing was offered to the cache and both counters are 0 by construction. That happens when DISABLE_PROMPT_CACHING (or its per-model variant) is set, and also when the caller deliberately does not cache a class of calls — Claude Code\'s small Haiku utility calls historically did not (measured on CC ≤2.1.220; since 2.1.221 its auto-mode permission checks reuse the cached conversation prefix, so that class is shrinking). Unset the environment variable only if this was not intended.',
   UNCLASSIFIED:               'A break whose cause could not be localised from the prefix diff. Inspect the attached raw diff summary and the raw bodies around this turn.',
 }
 
@@ -876,6 +876,8 @@ export function classifyCacheBreak(prev: TurnPrefix | null, cur: TurnPrefix, tim
   //     first-turn guard: calling a turn that was never eligible for caching a "cold warm" names a
   //     cache event that did not happen. Measured on the live spool: 4 of 1,377 requests carry no
   //     cache_control marker and 4 of 1,355 responses report 0/0 — same model, same count.
+  //     (That measurement predates CC 2.1.221, which moved auto-mode permission checks onto the
+  //     cached conversation prefix — expect this population to shrink, not grow; TRDD-0YG37FXM.)
   const noActivity = diagnoseNoCacheActivity(cur, timing)
   if (noActivity) return noActivity
   if (!prev) {

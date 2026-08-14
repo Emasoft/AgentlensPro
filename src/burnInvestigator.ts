@@ -291,7 +291,12 @@ function detectStormsAndRewrites(
       },
     }
     if (c.spikes.length >= 3 && biggestFam >= 3 && c.coldSpikes >= 2) {
-      // Many simultaneous full writes of the SAME inherited transcript = a fork storm.
+      // Many simultaneous full writes of the SAME inherited transcript = a fork storm. Claude Code
+      // ≥2.1.229 staggers WORKFLOW same-prefix siblings (the first pays the write, the rest read it;
+      // CLAUDE_CODE_WORKFLOW_PREFIX_STAGGER_MS=0 disables), so on a current harness this pattern
+      // points at un-staggered spawns — parallel Agent-tool forks issued in one message, the stagger
+      // disabled, or an older CC. The classification keys on OBSERVED writes either way, so the
+      // harness change can only make storms rarer, never make this verdict wrong (TRDD-0YG37FXM).
       findings.push({
         ...base, cause: 'FORK_STORM', confidence: 'high',
         verdict: `${c.spikes.length} full-prefix cache writes (${c.coldSpikes} fully cold, largest ${fmtK(Math.max(...c.spikes.map(s => s.cc)))}) in ${mins(c.toTs - c.fromTs)} — ${biggestFam} requests share ONE inherited transcript: a fan-out forked a fat parent into a cold cache${postStall ? ', right after a rate-limit stall (TTL-expired cache)' : ''}.`,

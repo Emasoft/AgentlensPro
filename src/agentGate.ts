@@ -334,6 +334,11 @@ export function evaluateAgentGate(
       `Every further agent launched before it lands re-pays the full prefix at the write rate. ` +
       `Retry this launch in ~60s. Override: AGENTLENS_GATE=off.`)
   }
+  // CC ≥2.1.229 performs the "warm the cache with ONE agent first" remedy itself for WORKFLOW
+  // same-prefix siblings (stagger; CLAUDE_CODE_WORKFLOW_PREFIX_STAGGER_MS=0 disables). Staggered
+  // siblings arrive warm and never satisfy `cold`, so this deny keeps firing only on launches that
+  // still storm: parallel Agent-tool forks in one message, a disabled stagger, or an older CC
+  // (TRDD-0YG37FXM).
   if (fork && fat && cold && state.startsLast2min >= 2) {
     const kinds = fmtOwnAgentTypes(state)
     return deny('FORK_STORM_FORMING',

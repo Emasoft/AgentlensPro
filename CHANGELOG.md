@@ -4,6 +4,20 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [Unreleased]
+
+### Changed
+
+- **Doctrine aligned with Claude Code 2.1.217–2.1.232** (TRDD-0YG37FXM). The `CACHING_DISABLED`
+  cache-break explanation now dates its "Claude Code's small Haiku utility calls do not cache"
+  claim (measured on CC ≤2.1.220; 2.1.221 moved auto-mode permission checks onto the cached
+  conversation prefix), and the FORK_STORM / fork-cost doctrine is version-conditioned: CC ≥2.1.229
+  staggers Workflow same-prefix siblings (first sibling writes, the rest read —
+  `CLAUDE_CODE_WORKFLOW_PREFIX_STAGGER_MS=0` disables), and ≥2.1.232 makes cache-inheriting fork
+  spawning the default. Detection logic is unchanged — it keys on observed writes, so the harness
+  improvements only make storms rarer, never the verdicts wrong. Fable/Mythos pricing and
+  min-cacheable rows were verified already present.
+
 ## [2.25.0] - 2026-08-14
 
 ### Added

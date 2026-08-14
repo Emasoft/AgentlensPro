@@ -333,8 +333,10 @@ Opus 4.8 and the Sonnet 5 family, 2,048 for Opus 4.7 and Haiku 3.5, 4,096 for Op
 4.5. That is an **8× spread, so a threshold keyed on one model id is wrong for the rest**; below it,
 both usage counters come back 0 and the call quietly pays the full input rate. (b) The request carries
 **no `cache_control` marker at all** — `DISABLE_PROMPT_CACHING*`, or simply a caller that does not
-cache a class of calls (measured on this machine: 4 of 1,377 captured requests, all small Haiku
-utility calls). And one way to lose a cache you *did* write: **the lookback window is 20 blocks**, so a
+cache a class of calls (measured on this machine on CC ≤2.1.220: 4 of 1,377 captured requests, all
+small Haiku utility calls; CC 2.1.221 moved auto-mode permission checks onto the cached conversation
+prefix, so expect this class to shrink — evidence:
+`reports/cc-alignment/20260814_125212+0200-cc-2.1.217-232-gap-analysis.md`). And one way to lose a cache you *did* write: **the lookback window is 20 blocks**, so a
 conversation that grows ≥20 blocks past its last write walks past its own entry and re-writes
 everything with `cache_read: 0` — the discriminator against ordinary growth, which still reads.
 `agentlenspro` names these `BELOW_MIN_CACHEABLE`, `CACHING_DISABLED` and `LOOKBACK_OVERFLOW`
@@ -366,6 +368,12 @@ context and reads+renews the PARENT's cache entry → warm 0.1× reads. A **fres
 a NEW prefix → a cold WRITE (1.25×) up front, plus a 5m TTL. So when a fan-out needs the parent's
 context, **fork** it; spawning N fresh subagents off a fat parent pays the whole fat prefix as a
 cold write N times — this is the **FORK_STORM** burn pattern (the dominant real-world window-eater).
+Two CC-version conditions on that N× claim: **≥2.1.229 staggers WORKFLOW same-prefix siblings** so
+the first pays the write and the rest read it (`CLAUDE_CODE_WORKFLOW_PREFIX_STAGGER_MS=0` disables)
+— the N× cost survives only for parallel Agent-tool forks in one message, a disabled stagger, or an
+older CC; and **≥2.1.232 makes fork spawning the default**, a fork inheriting the conversation AND
+its prompt cache (2.1.224 also removed the 200-subagent-per-session cap — nothing here keys on it).
+Evidence: `reports/cc-alignment/20260814_125212+0200-cc-2.1.217-232-gap-analysis.md`.
 
 **6. Request SIZE ≠ billed COST — the exact trap to never repeat.** The request body always
 carries the full transcript, so a "fat" request (megabytes on the wire) is **cheap** if it's a

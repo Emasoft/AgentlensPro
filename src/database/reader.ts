@@ -489,6 +489,11 @@ export class DatabaseReader {
       return { burnRate, projection: null }
     }
 
+    // contextWindowTokens is the model's NATIVE window. Under CLAUDE_CODE_DISABLE_1M_CONTEXT
+    // (CC ≥2.1.223: every native-1M model is held to 200K via auto-compaction) the harness compacts
+    // long before fill reaches 100% — the env var is invisible in telemetry (see the window-inference
+    // note in contextCompositionIndex.ts), so runway/fill here is an upper bound, never an
+    // under-estimate (TRDD-0YG37FXM).
     const remainingTokens = Math.max(0, rates.contextWindowTokens - sessionTotalTokens)
     const remainingMinutes = remainingTokens / tokensPerMinute
     const projectedTotal = sessionTotalTokens + remainingTokens

@@ -182,6 +182,10 @@ export interface RequestRef {
 // binary) is NOT detectable from a body. Under it Claude Code simply omits the beta, which is
 // indistinguishable from a model that never needed one, so a 1M-capable model still reads as 1M here.
 // Fixing that would need the user's Claude Code env, which lives in a different process than ours.
+// CC 2.1.223 widened the env var to EVERY native-1M model (held to 200K via auto-compaction, not a
+// fixed list) — which changes nothing here: still body-invisible. The same release also auto-compacts
+// UNKNOWN model ids within CC's own assumed window, so the 200k default below now matches the
+// harness's behavior for ids the pricing table does not carry (TRDD-0YG37FXM).
 const DEFAULT_WINDOW_TOKENS = 200_000
 const LONG_CONTEXT_BETA = 'context-1m'      // matches `context-1m-2025-08-07` and any later dated revision
 const LONG_CONTEXT_TOKENS = 1_000_000
