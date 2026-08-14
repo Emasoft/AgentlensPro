@@ -28,7 +28,9 @@ suite('agentlenspro — rebuildEventMatchers (hook install/uninstall)', () => {
     const gate = r.rebuilt.find(m => m.matcher === GATE_MATCHER)
     if (!gate) return assert.fail('gate matcher entry must be present after install')
     assert.strictEqual(gate.hooks[0].command, GATE_CMD)
-    assert.strictEqual(gate.hooks[0].timeout, 3)
+    // 5s since the 2026-08-14 owner report (load-130+ made the old 3s fire routinely — see
+    // gateMatcher's WHY); the pin exists so a timeout change is a deliberate act, not drift.
+    assert.strictEqual(gate.hooks[0].timeout, 5)
     assert.ok(!('async' in gate.hooks[0]), 'gate hook must be SYNC — an async hook cannot deny')
   })
 

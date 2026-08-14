@@ -109,14 +109,23 @@ const isSpyglass = (h: HookCommandEntry): boolean =>
 // other registers a DIFFERENT hook depending on whether the install had anything to strip, which
 // is invisible until someone diffs two machines' settings.json.
 
-/** The lifecycle forwarder: async, so it cannot block a turn. */
+/** The lifecycle forwarder: async, so it cannot block a turn. Timeout 5s, raised from 2s on the
+ *  owner's report that the hooks "often" hit it: at the machine loads this box actually runs
+ *  (load-avg 130+ measured 2026-08-14, when even an 800ms TCP connect starved), a cold node CLI
+ *  start alone can exceed 2s — and every timeout is a silently dropped capture event plus a
+ *  warning in the user's terminal. Async means the extra allowance never delays a turn. */
 export function lifecycleMatcher(cmd: string): HookMatcher {
-  return { hooks: [{ type: 'command', command: cmd, timeout: 2, async: true }] }
+  return { hooks: [{ type: 'command', command: cmd, timeout: 5, async: true }] }
 }
 
-/** The burn gate: SYNC (an async hook cannot deny) and scoped to agent-launch tools only. */
+/** The burn gate: SYNC (an async hook cannot deny) and scoped to agent-launch tools only.
+ *  Timeout 5s (was 3s — same owner report / load measurement as the forwarder above). The
+ *  worst-case turn stall only occurs when the server is WEDGED and the call is an agent-launch or
+ *  an image Read (runGateCheck answers ordinary Reads locally, no network), so the common path
+ *  never pays it; a gate that times out FIRST under load fails open and misses the one disaster
+ *  it exists to deny. */
 export function gateMatcher(gateCmd: string): HookMatcher {
-  return { matcher: GATE_MATCHER, hooks: [{ type: 'command', command: gateCmd, timeout: 3 }] }
+  return { matcher: GATE_MATCHER, hooks: [{ type: 'command', command: gateCmd, timeout: 5 }] }
 }
 
 export function rebuildEventMatchers(
