@@ -37,6 +37,7 @@ import {
   sha256File, SKILL_NAMES, findPackageRoot,
 } from './hookInstall'
 import { findServerJs } from './serverControl'
+import { parsePidLock } from '../serverRuntime'
 
 export interface SetupOptions {
   dryRun?: boolean
@@ -770,8 +771,12 @@ const stepServer: StepDef = {
     let stalePid: number | null = null
     if (pre === null) {
       try {
-        const pid = Number(fs.readFileSync(path.join(ctx.dataDir, 'server.pid'), 'utf-8').trim())
-        if (Number.isFinite(pid) && pid > 0) {
+        // TRDD-PIDFILEAT: parsePidLock understands both the current JSON {pid,start} lock shape and
+        // the legacy bare-numeric one — a plain Number(...) on the JSON shape reads NaN and would
+        // silently misclassify every up-to-date install as "not running".
+        const lock = parsePidLock(fs.readFileSync(path.join(ctx.dataDir, 'server.pid'), 'utf-8'))
+        if (lock !== null) {
+          const pid = lock.pid
           process.kill(pid, 0)
           // PID-REUSE GUARD (PR-15 review): kill(pid, 0) proves SOME process is alive, not that
           // it is OUR server — the OS reuses pids, and the real-run path SIGTERMs this number.

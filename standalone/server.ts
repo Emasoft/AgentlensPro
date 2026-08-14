@@ -59,7 +59,10 @@ import { buildContextHistory } from '../src/contextHistory'
 import { buildConversation } from '../src/conversation'
 import { generateSuggestions } from '../src/instructionAdvisor'
 import { detectInstructionFiles, appendSuggestion } from '../src/instructionFiles'
-import { atomicWriteFileSync, heapPressure, rssPressure, RequestLog } from '../src/serverRuntime'
+import {
+  atomicWriteFileSync, atomicExclusiveWriteFileSync, heapPressure, rssPressure, RequestLog,
+  formatPidLock, parsePidLock, processStartRef, lockTakeoverVerdict,
+} from '../src/serverRuntime'
 import { SegmentedSpanStore, migrateLegacySpansFile, spanTimestampMs } from '../src/segmentedSpanStore'
 // appendToArchive is GONE: bodies now go into the content-addressed store, not a gzip .wad lump
 // (TRDD-K3WDPR7M Phase 3). The read/purge helpers stay — the existing .wad volumes still hold real
@@ -178,19 +181,48 @@ try { if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true }) 
 // loser has already written to the data dir it was refused, which is precisely the corruption the
 // lock exists to prevent. Do not move this below the sidecar/store initialisation.
 const PID_FILE = path.join(DATA_DIR, 'server.pid')
+/** Read + parse the current lock, tolerating both the JSON `{pid,start}` format this build writes
+ *  and the legacy bare-numeric format an older build (or an in-flight upgrade) may have left behind.
+ *  `null` covers "missing", "unreadable" and "unparseable" identically — all three mean "nothing to
+ *  trust", the same treatment a stale lock gets. */
+function readPidLock(): { pid: number; start: string | null } | null {
+  try { return parsePidLock(fs.readFileSync(PID_FILE, 'utf-8')) } catch { return null }
+}
 /** Release the lock, but ONLY when this process still holds it. An unconditional unlink would let a
  *  shutting-down server delete a lock that a successor had already taken over — handing a third
  *  process a free pass into a data dir that is once again occupied. */
 function releasePidFile(): void {
   try {
-    if (Number(fs.readFileSync(PID_FILE, 'utf-8').trim()) === process.pid) fs.unlinkSync(PID_FILE)
+    const lock = readPidLock()
+    if (lock !== null && lock.pid === process.pid) fs.unlinkSync(PID_FILE)
   } catch { /* already gone, unreadable, or not ours — nothing to release */ }
 }
 {
-  // `wx` = atomic create-if-absent. Two servers racing at the same instant cannot both win it, which
-  // a read-then-write check could not guarantee.
+  // TRDD-PIDFILEAT — the lock content is our own process-start reference (from `ps -o lstart=`)
+  // alongside the pid, not just the pid: a later starter that finds this pid dead-but-recycled (the
+  // OS reused it for an unrelated process) must be able to tell that apart from us still running.
+  // `myStart` is `null` only when `ps` itself is unavailable (sandboxed/containerised environments
+  // without it) — formatPidLock then falls back to the legacy bare-numeric shape so every existing
+  // reader still understands the file.
+  const myStart = processStartRef(process.pid)
+  const lockContent = formatPidLock(process.pid, myStart)
+  // atomicExclusiveWriteFileSync (temp file + link(2)) replaces the old bare `wx`-flagged
+  // writeFileSync: the CREATE was already exclusive, but the content write was a separate syscall
+  // with no atomicity guarantee against a concurrent reader of a REGULAR file — the mechanism behind
+  // the "4676845598" (two interleaved pids) corruption observed live 2026-08-13. This guarantees the
+  // file is always either fully absent, fully the previous holder's content, or fully ours.
   const claim = (): boolean => {
-    try { fs.writeFileSync(PID_FILE, String(process.pid), { flag: 'wx' }); return true } catch { return false }
+    if (!atomicExclusiveWriteFileSync(PID_FILE, lockContent)) return false
+    // Re-read-after-write: verify the bytes actually on disk are exactly what we intended to
+    // publish. Should be structurally impossible given the atomic-exclusive write above, but this
+    // lock is the single-owner guard's entire reason to exist — a silent mismatch here must fail
+    // loud rather than let two servers run against one data directory believing the guard passed.
+    const readBack = readPidLock()
+    if (readBack === null || readBack.pid !== process.pid || readBack.start !== myStart) {
+      console.error(`[AgentlensPro] pidfile verification failed after claim — refusing to trust a lock we cannot read back correctly (${PID_FILE}).`)
+      process.exit(1)
+    }
+    return true
   }
   const refuse = (holder: number): never => {
     console.error(
@@ -200,23 +232,37 @@ function releasePidFile(): void {
     process.exit(1)
   }
   if (!claim()) {
-    let prior = 0
-    try { prior = Number(fs.readFileSync(PID_FILE, 'utf-8').trim()) } catch { /* unreadable — treat as stale */ }
-    let holderAlive = false
-    if (prior > 0 && prior !== process.pid) {
-      try { process.kill(prior, 0); holderAlive = true } catch { /* gone — the lock is stale */ }
+    const prior = readPidLock()
+    let pidAlive = false
+    if (prior !== null && prior.pid !== process.pid) {
+      try { process.kill(prior.pid, 0); pidAlive = true } catch { /* gone — the lock is stale */ }
     }
-    if (holderAlive) refuse(prior)
-    // Stale lock (holder gone, or the file was unreadable). Take it over by UNLINK + re-`wx`, never by
-    // an unconditional overwrite: two servers booting onto the same stale lock would both see a dead
-    // holder and both overwrite it, and both would then run against one data dir — the exact outcome
-    // this guard exists to prevent. With unlink + re-claim exactly one wins the create; the loser
-    // finds a live holder and refuses.
+    // TRDD-PIDFILEAT — kill(pid,0) alone can LIE under heavy pid churn: a recycled pid answers
+    // "alive" for a process that is not the recorded owner at all (the 34B9JAZK ≥67s double-owner
+    // window). lockTakeoverVerdict adds the start-time cross-check; 'legacy-kill0-only' is the exact
+    // pre-fix behavior for an old-format lock or an environment where `ps` can't be consulted.
+    const verdict = prior === null
+      ? 'dead-takeover' as const // unreadable/missing lock — nothing to trust, treat as a dead holder
+      : lockTakeoverVerdict({
+          lockPid: prior.pid,
+          lockStartRef: prior.start,
+          pidAlive,
+          currentStartRef: pidAlive ? processStartRef(prior.pid) : null,
+        })
+    if (verdict === 'live-owner' || verdict === 'legacy-kill0-only') {
+      // Both branches only occur when `prior` is non-null and alive (lockTakeoverVerdict returns
+      // 'dead-takeover' whenever `pidAlive` is false), so `prior.pid` is always the live holder here.
+      refuse((prior as { pid: number }).pid)
+    }
+    // dead-takeover or recycled-takeover: take it over by UNLINK + re-claim, never by an
+    // unconditional overwrite — two servers booting onto the same stale/recycled lock would both
+    // reach this branch and both overwrite it, and both would then run against one data dir, the
+    // exact outcome this guard exists to prevent. With unlink + re-claim exactly one wins the
+    // create; the loser finds a live holder and refuses.
     try { fs.unlinkSync(PID_FILE) } catch { /* another starter removed it first — fine, re-claim below */ }
     if (!claim()) {
-      let winner = 0
-      try { winner = Number(fs.readFileSync(PID_FILE, 'utf-8').trim()) } catch { /* the dir is simply not writable */ }
-      if (winner > 0 && winner !== process.pid) refuse(winner)
+      const winner = readPidLock()
+      if (winner !== null && winner.pid !== process.pid) refuse(winner.pid)
       // No winner to name ⇒ the pidfile is unwritable (read-only/full data dir), not contended. That
       // has always been a warn-and-continue: the lock is an optimisation, not a licence to run.
       console.warn(`[AgentLens] Could not write pidfile at ${PID_FILE} — continuing without the single-instance lock`)
@@ -2200,13 +2246,25 @@ function computeAnalyticsData(sessions: ReturnType<typeof summarizeSpans>['sessi
   }
   const dailyStats = Object.entries(dayMap).map(([day, r]) => ({ day, ...r })).sort((a, b) => a.day.localeCompare(b.day))
   const totalTokens = sessions.reduce((s, sess) => s + sess.inputTokens + sess.outputTokens, 0)
-  const times = sessions.map(s => s.startTime ? new Date(s.startTime).getTime() : 0).filter(t => t > 0)
+  // Loop, never Math.min/max(...times): `times` is one entry per session in the live window (up to
+  // ~100k), and spreading a large array into a CALL blows V8's max-arguments limit — the exact
+  // RangeError class fixed across the summarizers in 9da7609 (TRDD-2YP3DB9Y). This site sits in the
+  // same tickBurn→pushUpdate cycle but OUTSIDE the summarizeSpans try/catch, so a throw here would
+  // be an uncaught exception, not a logged degradation (found by the TRDD-SUMSPANRE call-graph walk).
+  let oldestSessionMs = 0
+  let newestSessionMs = 0
+  for (const s of sessions) {
+    const t = s.startTime ? new Date(s.startTime).getTime() : 0
+    if (t <= 0) continue
+    if (oldestSessionMs === 0 || t < oldestSessionMs) oldestSessionMs = t
+    if (t > newestSessionMs) newestSessionMs = t
+  }
   const lifetimeStats = {
     totalSessions: sessions.length,
     totalTokens,
     totalCostUsd: 0,
-    oldestSessionMs: times.length > 0 ? Math.min(...times) : 0,
-    newestSessionMs: times.length > 0 ? Math.max(...times) : 0,
+    oldestSessionMs,
+    newestSessionMs,
   }
   return { dailyStats, lifetimeStats }
 }

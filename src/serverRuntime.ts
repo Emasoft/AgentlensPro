@@ -1,6 +1,6 @@
 // TRDD-PJC8N1HO — standalone-collector runtime resilience primitives.
 //
-// Three concerns, all pure Node (no VS Code), unit-testable in isolation:
+// Four concerns, all pure Node (no VS Code), unit-testable in isolation:
 //   1. atomicWriteFileSync  — crash-safe file write (temp + rename) so a crash mid-write can never
 //      leave a truncated spans.json / offset file (spec 4).
 //   2. heapPressure/guard   — a high-water-mark check on V8's old-space so a heavy request is SHED
@@ -9,9 +9,13 @@
 //      ring buffer + rotating file, so any future crash is attributable to the request that caused it
 //      (spec 6). Before this existed the crash logs showed only span-ingestion lines and the offending
 //      endpoint could not be identified.
+//   4. atomicExclusiveWriteFileSync + the pid-lock primitives (TRDD-PIDFILEAT) — the single-instance
+//      pidfile guard's write/verify/takeover logic, extracted so the decision is a pure, testable
+//      function instead of living inline in standalone/server.ts's module-init block.
 import * as fs from 'fs'
 import * as os from 'os'
 import * as v8 from 'v8'
+import { execFileSync } from 'child_process'
 
 // TRDD-34B9JAZK — heapPressure() (below) is blind to ~67% of this process's real footprint: at
 // steady state 860 MB heap sits inside a 2624 MB RSS, because DuckDB's native arena, Buffers and the
@@ -51,6 +55,116 @@ export function atomicWriteFileSync(file: string, data: string | Buffer, mode?: 
     try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp) } catch { /* ignore */ }
     throw e
   }
+}
+
+/**
+ * Write `data` to `file` ATOMICALLY *and* EXCLUSIVELY: the target is created only if it did not
+ * already exist, and readers only ever see the whole new content or the whole prior content —
+ * never a partial/interleaved write. Returns `true` on success, `false` if `file` already existed
+ * (the caller lost the race; nothing was touched).
+ *
+ * A bare `fs.writeFileSync(file, data, {flag:'wx'})` is *almost* this — O_CREAT|O_EXCL makes the
+ * CREATE exclusive, but the write of `data` itself is a separate write() syscall with no atomicity
+ * guarantee against a concurrent reader/writer of a REGULAR file (POSIX only guarantees that for
+ * pipes, up to PIPE_BUF). This helper removes that gap by writing the full content to a private
+ * temp file FIRST (so it's never partially visible to anyone) and then publishing it with a single
+ * `link(2)` — link() is atomic AND fails with EEXIST if the target already exists, which is exactly
+ * the exclusive-create semantics a single-instance lock needs. The temp file is always unlinked
+ * afterward (its job was only to stage the bytes for the link).
+ */
+export function atomicExclusiveWriteFileSync(file: string, data: string | Buffer, mode?: number): boolean {
+  const tmp = `${file}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  let fd: number | undefined
+  try {
+    fd = mode === undefined ? fs.openSync(tmp, 'w') : fs.openSync(tmp, 'w', mode)
+    fs.writeSync(fd, data as string)
+    try { fs.fsyncSync(fd) } catch { /* fsync unsupported on some FS — best effort */ }
+    fs.closeSync(fd)
+    fd = undefined
+    fs.linkSync(tmp, file) // atomic + exclusive: throws EEXIST if `file` is already there
+    return true
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e
+    return false
+  } finally {
+    if (fd !== undefined) { try { fs.closeSync(fd) } catch { /* ignore */ } }
+    try { fs.unlinkSync(tmp) } catch { /* already consumed by link(), or never created — fine either way */ }
+  }
+}
+
+// ── 1b. Pid-lock format + takeover decision (TRDD-PIDFILEAT) ─────────────────
+
+/** A parsed pidfile lock. `start` is the recorded process-start reference (see `processStartRef`)
+ *  used to detect a RECYCLED pid; `null` means the lock is in the legacy pid-only format. */
+export interface PidLock { pid: number; start: string | null }
+
+/** Serialize a pid lock. `start === null` deliberately produces the legacy bare-numeric format
+ *  (not `"pid:null"`) so a build that could not determine its own start reference still writes a
+ *  file every pre-PIDFILEAT reader/writer understands. */
+export function formatPidLock(pid: number, start: string | null): string {
+  return start === null ? String(pid) : JSON.stringify({ pid, start })
+}
+
+/** Parse a pidfile's content. Accepts both the new JSON `{"pid":N,"start":"..."}` shape and the
+ *  legacy bare-numeric shape (`start: null`). Returns `null` for anything unparseable/empty — the
+ *  caller treats that exactly like a stale/missing lock. */
+export function parsePidLock(content: string): PidLock | null {
+  const trimmed = content.trim()
+  if (trimmed === '') return null
+  if (/^\d+$/.test(trimmed)) {
+    const pid = Number(trimmed)
+    return pid > 0 ? { pid, start: null } : null
+  }
+  try {
+    const j = JSON.parse(trimmed) as { pid?: unknown; start?: unknown }
+    const pid = Number(j.pid)
+    const start = typeof j.start === 'string' ? j.start : null
+    return Number.isFinite(pid) && pid > 0 ? { pid, start } : null
+  } catch {
+    return null
+  }
+}
+
+/** The OS's own record of when `pid` started, as an opaque comparable string — used only to tell a
+ *  LIVE-BUT-RECYCLED pid apart from the process that actually claimed the lock. `ps -o lstart=` is
+ *  available on both macOS and Linux (unlike `/proc/<pid>` which is Linux-only), so this works on
+ *  every platform the server ships to. `null` means "could not determine" (process gone between the
+ *  liveness check and this call, `ps` unavailable, sandboxed environment, …) — callers MUST treat
+ *  that as "cannot verify" and fall back to the conservative legacy kill-0-only rule, never as
+ *  "definitely recycled". */
+export function processStartRef(pid: number): string | null {
+  try {
+    const out = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8' }).trim()
+    return out === '' ? null : out
+  } catch {
+    return null
+  }
+}
+
+/** The single-instance lock's takeover decision, as a pure function over what can be observed —
+ *  named and extracted (TRDD-PIDFILEAT) so the four cases are pinned by a unit test instead of
+ *  living inline in the takeover branch of standalone/server.ts's module-init block.
+ *
+ *  - `dead-takeover`       — the recorded pid answers no kill(pid,0): always safe to reclaim.
+ *  - `live-owner`          — the recorded pid is alive AND its current start reference matches the
+ *    one recorded in the lock: a genuine, still-running owner. NEVER take over.
+ *  - `recycled-takeover`   — the recorded pid is alive but its CURRENT start reference does not
+ *    match the recorded one: the OS reused the pid after the real owner exited. Safe to reclaim.
+ *  - `legacy-kill0-only`   — the lock carries no start reference (old-format lock, or the start
+ *    reference could not be determined for either side) — falls back to today's behavior:
+ *    kill(pid,0) alone decides, i.e. "alive" is trusted as a live owner. This keeps a pre-PIDFILEAT
+ *    lock file (or a `ps`-less environment) from being wrongly treated as recycled just because we
+ *    have no start reference to compare. */
+export type LockTakeoverVerdict = 'live-owner' | 'dead-takeover' | 'recycled-takeover' | 'legacy-kill0-only'
+export function lockTakeoverVerdict(o: {
+  lockPid: number
+  lockStartRef: string | null
+  pidAlive: boolean
+  currentStartRef: string | null
+}): LockTakeoverVerdict {
+  if (!o.pidAlive) return 'dead-takeover'
+  if (o.lockStartRef === null || o.currentStartRef === null) return 'legacy-kill0-only'
+  return o.currentStartRef === o.lockStartRef ? 'live-owner' : 'recycled-takeover'
 }
 
 // ── 2. Heap-pressure guard ────────────────────────────────────────────────────

@@ -4,6 +4,7 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { freePort } from './helpers/freePort'
+import { parsePidLock } from '../serverRuntime'
 
 // EXACTLY ONE server may own a data directory. Real processes, real ports, real filesystem — no
 // mocks: the thing under test is what a second `node standalone/server.js` actually does.
@@ -85,7 +86,7 @@ suite('standalone server — exactly one instance per data directory', function 
     await stop(second)
 
     // The refusal must not have stolen the running server's lock.
-    const holder = Number(fs.readFileSync(path.join(dataDir, 'server.pid'), 'utf-8').trim())
+    const holder = parsePidLock(fs.readFileSync(path.join(dataDir, 'server.pid'), 'utf-8'))?.pid
     assert.strictEqual(holder, first.proc.pid, 'the rejected server overwrote the live server’s lock')
   })
 
@@ -114,7 +115,7 @@ suite('standalone server — exactly one instance per data directory', function 
     })
     try {
       assert.strictEqual(s.exited, null, `a stale lock must not block startup; exited ${s.exited}. stderr: ${s.stderr.slice(0, 400)}`)
-      const holder = Number(fs.readFileSync(path.join(staleData, 'server.pid'), 'utf-8').trim())
+      const holder = parsePidLock(fs.readFileSync(path.join(staleData, 'server.pid'), 'utf-8'))?.pid
       assert.strictEqual(holder, s.proc.pid, 'the stale lock was not taken over')
     } finally { await stop(s) }
   })

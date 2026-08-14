@@ -11,6 +11,7 @@ import { apiRequest, dataDir, dashboardUrl, fmtGb, fmtMb, init, mcpEndpoint, sle
 import { dataDirSource } from '../dataDir'
 import { agentlensDisabled, killSwitchPath } from './killSwitch'
 import { UsageError } from './cliErrors'
+import { parsePidLock } from '../serverRuntime'
 
 /** Count of hook events durably spooled to disk but not yet reingested (server was down / shedding).
  *  Zero in the healthy case; a non-zero, non-shrinking value means the daemon isn't draining. */
@@ -280,8 +281,11 @@ export async function findServerPid(): Promise<number | null> {
   // Is anything answering MCP at all? If not, the server is genuinely down.
   try { await init() } catch { return null }
   try {
-    const pid = Number(fs.readFileSync(pidfilePath(), 'utf-8').trim())
-    if (pid > 0) { process.kill(pid, 0); return pid }
+    // TRDD-PIDFILEAT: parsePidLock understands both the current JSON {pid,start} lock shape and the
+    // legacy bare-numeric one — a plain Number(...) on the JSON shape would read NaN and silently
+    // fall through to lsof on every up-to-date install.
+    const lock = parsePidLock(fs.readFileSync(pidfilePath(), 'utf-8'))
+    if (lock !== null) { process.kill(lock.pid, 0); return lock.pid }
   } catch { /* no/stale pidfile (pre-pidfile build) — fall through to lsof */ }
   const port = new URL(mcpEndpoint()).port
   for (const lsof of ['lsof', '/usr/sbin/lsof']) { // /usr/sbin is often absent from a child PATH
@@ -350,9 +354,11 @@ export async function showStatus(): Promise<void> {
     console.log(`server: NOT RUNNING (${(e as Error).message})`)
     // The pidfile may still name a live process bound to different ports, or be stale.
     try {
-      const pid = Number(fs.readFileSync(pidfilePath(), 'utf-8').trim())
-      try { process.kill(pid, 0); console.log(`pidfile: ${pid} (process alive — a server may be up on non-default ports)`) }
-      catch { console.log(`pidfile: ${pid} (stale — process gone)`) }
+      const lock = parsePidLock(fs.readFileSync(pidfilePath(), 'utf-8'))
+      if (lock !== null) {
+        try { process.kill(lock.pid, 0); console.log(`pidfile: ${lock.pid} (process alive — a server may be up on non-default ports)`) }
+        catch { console.log(`pidfile: ${lock.pid} (stale — process gone)`) }
+      }
     } catch { /* no pidfile */ }
     return
   }
