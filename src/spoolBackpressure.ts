@@ -16,6 +16,8 @@
 // session writes in the same instant the spool crosses 100% (that window is unavoidable without
 // a write hook this process does not have). Say that plainly rather than claiming elimination —
 // this is the same discipline the parent TRDD applies to the "grow the spool" option.
+import * as fs from 'fs'
+import * as path from 'path'
 import { ramDiskInfo, SPOOL_MOUNT_POINT } from './ramdisk'
 
 /** Free-bytes floor under which the spool is treated as "at capacity". 64MB is comfortably above
@@ -152,4 +154,209 @@ export async function applySpoolBackpressure(
     return state
   }
   return state
+}
+
+// ── Spool evacuation (TRDD-MW573BGT) ───────────────────────────────────────────────────────────
+// The redirect above (`applySpoolBackpressure`) only protects sessions that START after it fires —
+// an already-running session's OTEL exporter keeps its launch-time env and keeps writing into the
+// spool. If the spool fills anyway, THOSE writes fail (ENOSPC) and the bytes are gone. We cannot
+// wrap that write (we do not own it), but we DO own the spool's contents: this evacuates the oldest
+// QUIESCENT body files verbatim to `LEGACY_BODIES_DIR` (already a durable drain target — the normal
+// ingest pass picks them up from SSD) to free space faster than a burst can fill it. No parsing, no
+// verify, no compression here — a raw copy is an order of magnitude faster than ingestion.
+//
+// Deliberately ABOVE the 64MB redirect floor (DEFAULT_SPOOL_FLOOR_BYTES): evacuation is the
+// innermost of the three protection layers and must engage with room still left in the spool, not
+// after the redirect has already had to fire.
+export const DEFAULT_SPOOL_EVAC_BYTES = 256 * 1024 * 1024
+export const SPOOL_EVAC_MB_ENV = 'AGENTLENS_SPOOL_EVAC_MB'
+/** A file younger than this is presumed still being written by the exporter — evacuating it would
+ *  copy a truncated body and then delete the source, the exact loss this feature forbids. */
+export const EVAC_QUIESCENCE_MS = 3000
+/** Per-tick byte bound so one tick never runs unbounded; the rest is picked up next tick. */
+export const EVAC_MAX_BYTES_PER_TICK = 256 * 1024 * 1024
+
+/** Threshold in bytes: env override `AGENTLENS_SPOOL_EVAC_MB` (any positive number), else the
+ *  256MB default. Mirrors `spoolFloorBytes`'s tolerant-parse shape. */
+export function spoolEvacThresholdBytes(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = Number(env[SPOOL_EVAC_MB_ENV])
+  if (Number.isFinite(raw) && raw > 0) return Math.floor(raw) * 1024 * 1024
+  return DEFAULT_SPOOL_EVAC_BYTES
+}
+
+export interface EvacCandidate {
+  name: string
+  mtime: number
+  size: number
+}
+
+export interface EvacuationPlanInput {
+  /** Current spool free bytes (a live reading — the planner does not re-check it per file). */
+  freeBytes: number
+  /** Stop selecting once `freeBytes + bytesPlanned` reaches this — the hysteresis target
+   *  (evacuation trigger's floor callers pass 2x threshold, same shape as the redirect's recovery
+   *  band) so a tick doesn't evacuate one byte more than needed to get comfortably clear. */
+  targetFreeBytes: number
+  files: EvacCandidate[]
+  nowMs: number
+  quiescenceMs?: number
+  maxBytesPerTick?: number
+}
+
+export interface EvacuationPlan {
+  /** Oldest-first, quiescent-only, within the byte budget. */
+  toEvacuate: EvacCandidate[]
+  bytesPlanned: number
+}
+
+/** Pure planner: given a free-bytes reading and the candidate files, pick which ones to move this
+ *  tick. Oldest first (mirrors `ingestPass.ts`'s `bodyFiles` ordering — also the true turn order),
+ *  skip anything not yet quiescent, stop at the byte budget OR once the projected free bytes would
+ *  reach the target — whichever comes first. Side-effect-free so it is testable without a real
+ *  filesystem (TRDD-MW573BGT acceptance box 1). */
+export function planEvacuation(input: EvacuationPlanInput): EvacuationPlan {
+  const quiescenceMs = input.quiescenceMs ?? EVAC_QUIESCENCE_MS
+  const maxBytesPerTick = input.maxBytesPerTick ?? EVAC_MAX_BYTES_PER_TICK
+  const quiescent = input.files
+    .filter((f) => input.nowMs - f.mtime >= quiescenceMs)
+    .slice()
+    .sort((a, b) => a.mtime - b.mtime)
+
+  const toEvacuate: EvacCandidate[] = []
+  let bytesPlanned = 0
+  for (const f of quiescent) {
+    if (bytesPlanned >= maxBytesPerTick) break
+    if (input.freeBytes + bytesPlanned >= input.targetFreeBytes) break
+    toEvacuate.push(f)
+    bytesPlanned += f.size
+  }
+  return { toEvacuate, bytesPlanned }
+}
+
+/** List evacuation candidates from a directory — mirrors `ingestPass.ts`'s `bodyFiles` filename
+ *  filter exactly (`.request.json` / `.response.json`) so evacuation moves precisely the files the
+ *  ingest pass would otherwise read, no more and no less. Fails open (raced dir/file → 0 rows),
+ *  since this runs on a timer and a transient race is not a reason to abort the tick. */
+export function listEvacuationCandidates(dir: string): EvacCandidate[] {
+  let names: string[]
+  try { names = fs.readdirSync(dir) } catch { return [] }
+  const out: EvacCandidate[] = []
+  for (const name of names) {
+    if (!name.endsWith('.request.json') && !name.endsWith('.response.json')) continue
+    const p = path.join(dir, name)
+    try {
+      const st = fs.statSync(p)
+      out.push({ name, mtime: st.mtimeMs, size: st.size })
+    } catch { /* raced with a writer — skip it, we'll get it next pass */ }
+  }
+  return out
+}
+
+/** fsync a path (file or directory) — same shape as `ingestPass.ts`'s default `fsyncPath`: a
+ *  directory fsync is a POSIX durability nicety Windows cannot do at all, so a failure is swallowed
+ *  ONLY when the fd is a directory; a failed FILE fsync must still propagate (an unlink gated on an
+ *  fsync that silently failed would reopen the exact page-cache hole the barrier exists to close). */
+function fsyncPathOrDir(p: string): void {
+  const fd = fs.openSync(p, 'r')
+  try {
+    fs.fsyncSync(fd)
+  } catch (e) {
+    let isDir = false
+    try { isDir = fs.fstatSync(fd).isDirectory() } catch { /* the throw below stands */ }
+    if (!isDir) throw e
+  } finally { fs.closeSync(fd) }
+}
+
+/** Move ONE body file from the spool to the destination, verbatim, with the crash-safe ordering
+ *  the card requires: copy to a `.evac.tmp` in the DEST (rename alone is impossible cross-device —
+ *  spool is a RAM disk, dest is SSD), fsync the tmp file's fd, rename to the final name (atomic
+ *  within the dest fs — this is also how a same-name collision is handled: the same request-id
+ *  keyed filename is the same body, and the store dedups by content anyway), fsync the dest
+ *  directory, and ONLY THEN unlink the source. A crash at any point during this sequence leaves
+ *  either the untouched source or a durable complete copy in dest — never neither. */
+export async function evacuateFile(spoolDir: string, destDir: string, name: string): Promise<void> {
+  const srcPath = path.join(spoolDir, name)
+  const tmpPath = path.join(destDir, `${name}.evac.tmp`)
+  const destPath = path.join(destDir, name)
+
+  const data = fs.readFileSync(srcPath)
+  const fd = fs.openSync(tmpPath, 'w')
+  try {
+    fs.writeSync(fd, data)
+    fs.fsyncSync(fd) // durability claim on the copy — a directory fsync is never enough on its own
+  } finally {
+    fs.closeSync(fd)
+  }
+  fs.renameSync(tmpPath, destPath) // atomic within the dest fs; also how a collision is resolved
+  fsyncPathOrDir(destDir) // the rename itself must be durable before we may delete the source
+  fs.unlinkSync(srcPath) // ONLY NOW — the copy is proven durable in dest
+}
+
+export interface EvacuationDeps {
+  spoolDir: string
+  destDir: string
+  freeBytes: number
+  thresholdBytes: number
+  nowMs?: number
+  quiescenceMs?: number
+  maxBytesPerTick?: number
+  listFiles?: (dir: string) => EvacCandidate[]
+  moveFile?: (spoolDir: string, destDir: string, name: string) => Promise<void>
+  onWarn?: (msg: string) => void
+}
+
+export interface EvacuationResult {
+  planned: number
+  moved: number
+  bytesMoved: number
+  failed: string[]
+}
+
+/** Run one evacuation batch: plan (pure), then move each planned file. A single bad file (raced
+ *  delete, permission error, disk full on the dest) is logged and skipped — it must NEVER abort the
+ *  rest of the batch, and it must NEVER unlink a source whose copy did not complete + fsync (that
+ *  ordering lives entirely inside `evacuateFile`, so a caught error here always means the source is
+ *  still intact). Injectable `listFiles`/`moveFile` seams keep this testable without a real
+ *  filesystem for the planning half and with a real one (temp dirs) for the move half. */
+export async function runSpoolEvacuation(deps: EvacuationDeps): Promise<EvacuationResult> {
+  const nowMs = deps.nowMs ?? Date.now()
+  const listFiles = deps.listFiles ?? listEvacuationCandidates
+  const moveFile = deps.moveFile ?? evacuateFile
+
+  // The dest dir is NOT guaranteed to exist: a machine that has always run in spool mode may never
+  // have had a legacy bodies dir, and nothing else creates it (the ingest pass SKIPS nonexistent
+  // drain targets, it never mkdirs them). Without this, every evacuateFile would fail at open with
+  // ENOENT — i.e. the evacuation would fail precisely on the first burst it exists for. Idempotent,
+  // once per run, before any planning cost is paid.
+  try { fs.mkdirSync(deps.destDir, { recursive: true }) } catch (e) {
+    deps.onWarn?.(`spool evacuation: cannot create dest dir ${deps.destDir}: ${String(e)}`)
+    return { planned: 0, moved: 0, bytesMoved: 0, failed: [] }
+  }
+
+  const files = listFiles(deps.spoolDir)
+  const targetFreeBytes = deps.thresholdBytes * 2 // same hysteresis shape as the redirect's recovery band
+  const plan = planEvacuation({
+    freeBytes: deps.freeBytes,
+    targetFreeBytes,
+    files,
+    nowMs,
+    quiescenceMs: deps.quiescenceMs,
+    maxBytesPerTick: deps.maxBytesPerTick,
+  })
+
+  let moved = 0
+  let bytesMoved = 0
+  const failed: string[] = []
+  for (const f of plan.toEvacuate) {
+    try {
+      await moveFile(deps.spoolDir, deps.destDir, f.name)
+      moved++
+      bytesMoved += f.size
+    } catch (e) {
+      const msg = `${f.name}: ${(e as Error).message}`
+      failed.push(msg)
+      deps.onWarn?.(`spool evacuation: failed to move ${msg} — source left in place`)
+    }
+  }
+  return { planned: plan.toEvacuate.length, moved, bytesMoved, failed }
 }

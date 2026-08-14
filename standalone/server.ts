@@ -73,7 +73,7 @@ import { DEFAULT_MAX_BYTES_PER_PASS, ingestPass } from '../src/store/ingestPass'
 import { verifyVolumeInStore } from '../src/store/archiveVerify'
 import { rawBodyCaptureEnabled, spoolDirConfigured } from '../src/captureConfig'
 import { ensureRamDisk, ramDiskInfo, spoolSizeMb, SPOOL_MOUNT_POINT } from '../src/ramdisk'
-import { applySpoolBackpressure, checkSpoolCapacity, shouldFlushBodies, INITIAL_BACKPRESSURE_STATE, type BackpressureState } from '../src/spoolBackpressure'
+import { applySpoolBackpressure, checkSpoolCapacity, shouldFlushBodies, INITIAL_BACKPRESSURE_STATE, type BackpressureState, spoolEvacThresholdBytes, runSpoolEvacuation } from '../src/spoolBackpressure'
 import { exportBodiesFromStore } from '../src/store/bodyStore'
 import {
   loadLogOffsets, loadPersistedCards,
@@ -829,8 +829,43 @@ bodiesPurgeTimer.unref()
 // too slow, that IS the incident) while cheap (one `df` call in spool mode only).
 let spoolBackpressureState: BackpressureState = INITIAL_BACKPRESSURE_STATE
 let spoolBackpressureGateLogged = false
+// ── Spool evacuation (TRDD-MW573BGT) ──────────────────────────────────────────────────────────
+// The redirect above protects only sessions that START after it fires; an already-running
+// session's exporter keeps writing into the spool regardless. `evacRunning` is a SEPARATE flag
+// from `bodiesPassRunning` (the ingest pass) — evacuation is a raw move, not an ingest, and must
+// never overlap ITSELF across ticks (a slow move on a loaded disk must not stack a second one on
+// top of it), independent of whatever the ingest pass is doing.
+let spoolEvacRunning = false
+async function tickSpoolEvacuation(): Promise<void> {
+  if (spoolEvacRunning) return
+  const evacCheck = checkSpoolCapacity(SPOOL_MOUNT_POINT, spoolEvacThresholdBytes())
+  if (!evacCheck.overCapacity || evacCheck.freeBytes === null) return
+  spoolEvacRunning = true
+  const freeBefore = evacCheck.freeBytes
+  try {
+    const r = await runSpoolEvacuation({
+      spoolDir: PRIMARY_BODIES_DIR,
+      destDir: LEGACY_BODIES_DIR,
+      freeBytes: freeBefore,
+      thresholdBytes: evacCheck.floorBytes,
+      onWarn: (m) => console.warn(`[AgentLens] ${m}`),
+    })
+    if (r.moved > 0 || r.failed.length > 0) {
+      const after = checkSpoolCapacity(SPOOL_MOUNT_POINT, spoolEvacThresholdBytes())
+      console.log(`[AgentLens] spool evacuation: moved ${r.moved}/${r.planned} file(s), ` +
+        `${(r.bytesMoved / 1048576).toFixed(1)}MB, free ${(freeBefore / 1048576).toFixed(0)}MB → ` +
+        `${after.freeBytes !== null ? (after.freeBytes / 1048576).toFixed(0) : 'unknown'}MB` +
+        `${r.failed.length > 0 ? `; ${r.failed.length} file(s) FAILED and were kept: ${r.failed.slice(0, 3).join('; ')}` : ''}`)
+    }
+  } catch (e) {
+    console.warn('[AgentLens] spool evacuation pass failed:', e)
+  } finally {
+    spoolEvacRunning = false
+  }
+}
 async function tickSpoolBackpressure(): Promise<void> {
   if (!SPOOL_MODE) return
+  void tickSpoolEvacuation() // no-ops via spoolEvacRunning if a move is still in flight; independent of the telemetry-config gates below (evacuation writes no config)
   // Flush law (TRDD-K3WDPR7M P1): piggyback this existing 5s cadence rather than adding a second
   // timer (plan's "explicitly NOT building" bars extra machinery). Byte threshold, max-latency
   // backstop, and the spool pressure floor are combined in ONE pure decision
