@@ -8,6 +8,7 @@ current-owner: agentlenspro-main-session
 task-type: feature
 approval-tier: 0
 relevant-rules: []
+implementation-commits: [6ff38e1]
 ---
 
 # Per-model headroom rotation query (USER-ordered 2026-08-15)
@@ -45,12 +46,13 @@ freshness/bound machinery. Additive changes only:
 
 ## Acceptance
 
-- [ ] modelWindows classified on every row with a usage reading
-- [ ] --model fable → matches / exhausted / undecidable partition, honest verdict
-- [ ] verdict none-with-headroom ONLY when every account is positively exhausted
-- [ ] --with-headroom (5h+7d both < threshold) works without --model
-- [ ] --json additive: prior consumers of --all --json see unchanged fields
-- [ ] unit tests for selection semantics + CLI flags; tsc + eslint clean
-- [ ] version bump + CHANGELOG (user-facing)
+- [x] modelWindows classified on every row with a usage reading
+- [x] --model fable → matches / exhausted / undecidable partition, honest verdict
+- [x] verdict none-with-headroom ONLY when every account is positively exhausted
+- [x] --with-headroom (5h+7d both < threshold) works without --model
+- [x] --json additive: prior consumers of --all --json see unchanged fields (verified live: selection block + all prior fields)
+- [x] unit tests for selection semantics + CLI flags (9 added, suite green); tsc + eslint + mirrors + identities clean (compile exit 0)
+- [x] version 2.26.0 + CHANGELOG entry
+- [x] verified through the BARE `agentlenspro` command on the real 3-account roster (verdict available; one spent-on-Fable exclusion; one undecidable) and via --json (selection.verdict/liveAccountId parse clean); server restarted so the MCP tool serves the enriched rows
 
 ## Approval log
