@@ -11,7 +11,10 @@
 
 import * as fs from 'fs'
 import * as path from 'path'
-import { listAllAccounts, type AccountStatusRow, type AccountWindow } from '../allAccounts'
+import {
+  listAllAccounts, selectAccountsWithHeadroom,
+  type AccountStatusRow, type AccountWindow, type HeadroomSelection,
+} from '../allAccounts'
 import { loadToken } from '../subscriptionUsage'
 import { EXIT as CLI_EXIT } from './cliErrors'
 
@@ -30,10 +33,25 @@ freshness, per window:
               and "this account has no headroom" are opposite signals
 
 flags:
-  --json       machine-readable output (every field, including the reasons)
-  --out FILE   write the full report to FILE; print only a one-line digest
+  --json            machine-readable output (every field, including the reasons)
+  --out FILE        write the full report to FILE; print only a one-line digest
+  --model NAME      rotation query: which accounts still have headroom for this model's OWN weekly
+                    window (e.g. --model fable; case-insensitive substring on the payload's model
+                    name) AND in both account-wide windows. Adds a three-way verdict:
+                      available            pick from the matches (best-first)
+                      none-with-headroom   EVERY account is positively spent — switch model
+                      indeterminate        no match but >=1 account unreadable — "cannot tell",
+                                           never reported as "none"
+  --with-headroom   rotation query without a model: accounts whose 5h AND 7d windows are both
+                    under the threshold. Same verdict vocabulary.
+  --threshold N     "used up" cut for the queries above, percent 1..100 (default 100 — only a
+                    window AT 100%+ counts as spent; lower it to demand a safety margin)
 
-exit: 0 = answered · 2 = BLIND (no account ever observed — "cannot see", NOT "no accounts") · 64 = bad command line`
+With --json the rotation queries ADD a 'selection' block (which also names the live account) to
+the unchanged full answer, so existing consumers of --all --json keep working.
+
+exit: 0 = answered (including an honest "none-with-headroom") · 2 = BLIND (no account ever
+observed — "cannot see", NOT "no accounts") · 64 = bad command line`
 
 /** The house contract (./cliErrors): BLIND is the "could not answer honestly" code (2), usage is
  *  EX_USAGE (64). BLIND was 1 during development; unified with the CLI-wide exit vocabulary before
@@ -67,10 +85,54 @@ function table(rows: string[][]): string {
   return [line(HEAD), line(w.map(n => '-'.repeat(Math.max(1, n)))), ...rows.map(line)].join('\n')
 }
 
+/** The rotation verdict for humans: the one line a rotator's operator needs, with the "none" and
+ *  "cannot tell" cases spelled out instead of implied by an empty table. */
+function selectionText(sel: HeadroomSelection): string {
+  const what = sel.query.model ? `'${sel.query.model}' headroom` : `headroom (5h AND 7d < ${sel.query.threshold}%)`
+  const lines: string[] = [
+    sel.liveAccountId
+      ? `live account: ${sel.liveAccountId.slice(0, 8)}`
+      : 'live account: unknown (no live account identified)',
+  ]
+  if (sel.verdict === 'available') {
+    lines.push(`HEADROOM AVAILABLE for ${what} — ${sel.matches.length} account(s), best first:`)
+    for (const m of sel.matches) {
+      const gates = m.gates.map(g => `${g.gate} ${g.window.percent}%`).join(', ')
+      lines.push(`  ${String(m.accountId ?? '-').slice(0, 8)}  ${m.email ?? '-'}${m.isLive ? '  (live)' : ''}  [${m.confidence}]  ${gates}`)
+    }
+  } else if (sel.verdict === 'none-with-headroom') {
+    lines.push(`NO ACCOUNT HAS HEADROOM for ${what} — every observed account is positively spent.`)
+    lines.push('Switch model (or wait for a reset), then re-query, e.g. with --with-headroom.')
+  } else {
+    lines.push(`INDETERMINATE for ${what} — no account qualifies, but not all could be read, so`)
+    lines.push('"none" cannot be honestly claimed. Unreadable/undecided accounts below.')
+  }
+  for (const e of sel.exhausted) lines.push(`  spent: ${String(e.accountId ?? '-').slice(0, 8)}  ${e.email ?? '-'} — ${e.why}`)
+  for (const u of sel.undecidable) lines.push(`  undecided: ${String(u.accountId ?? '-').slice(0, 8)}  ${u.email ?? '-'} — ${u.why}`)
+  return lines.join('\n')
+}
+
 export function runAllAccountsCli(argv: string[]): number {
   if (argv.includes('--help') || argv.includes('-h')) { console.log(ALL_ACCOUNTS_USAGE); return EXIT.OK }
   const outIdx = argv.indexOf('--out')
   const outFile = outIdx >= 0 && argv[outIdx + 1] && !argv[outIdx + 1].startsWith('--') ? argv[outIdx + 1] : undefined
+
+  // Rotation-query flags (TRDD-1UTH3B3V). A flag given without its value is a caller mistake and
+  // must exit 64, not silently degrade into the unfiltered report a script would then mis-parse.
+  const modelIdx = argv.indexOf('--model')
+  if (modelIdx >= 0 && (!argv[modelIdx + 1] || argv[modelIdx + 1].startsWith('--'))) {
+    console.error('--model needs a value (e.g. --model fable)'); return EXIT.USAGE
+  }
+  const model = modelIdx >= 0 ? argv[modelIdx + 1] : null
+  const thIdx = argv.indexOf('--threshold')
+  let threshold = 100
+  if (thIdx >= 0) {
+    threshold = Number(argv[thIdx + 1])
+    if (!Number.isFinite(threshold) || threshold < 1 || threshold > 100) {
+      console.error('--threshold needs a percent in 1..100'); return EXIT.USAGE
+    }
+  }
+  const wantSelection = model !== null || argv.includes('--with-headroom') || thIdx >= 0
 
   const answer = listAllAccounts()
   if (answer.blind) {
@@ -110,9 +172,13 @@ export function runAllAccountsCli(argv: string[]): number {
     ? ''
     : `\n\n⚠ these rows are NOT being refreshed — ${answer.archive.reason}`
 
+  const selection = wantSelection ? selectAccountsWithHeadroom(answer, { model, threshold }) : null
+
   const text = argv.includes('--json')
-    ? JSON.stringify(answer, null, 2)
-    : `${table(answer.accounts.map(row))}\n\n${answer.note}`
+    // Additive: the full answer keeps its exact prior shape; a rotation query only ADDS `selection`.
+    ? JSON.stringify(selection ? { ...answer, selection } : answer, null, 2)
+    : (selection ? `${selectionText(selection)}\n\n` : '')
+    + `${table(answer.accounts.map(row))}\n\n${answer.note}`
     + `\n\nReasons for every null are in --json; '*' marks the live account.${archiveLine}${diagnosis}`
 
   if (outFile) {

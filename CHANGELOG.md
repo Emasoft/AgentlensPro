@@ -4,6 +4,21 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.26.0] - 2026-08-15
+
+### Added
+
+- **Per-model headroom rotation query on `get_account_status --all`** (TRDD-1UTH3B3V, USER-ordered).
+  New flags `--model NAME` (which accounts still have headroom in that model's OWN weekly window —
+  e.g. Fable — AND in both account-wide windows), `--with-headroom` (5h AND 7d both under the cut),
+  and `--threshold N` (default 100 = "not used up"). The answer carries an explicit three-way
+  verdict — `available` / `none-with-headroom` (every account POSITIVELY spent: the switch-model
+  signal, never emitted on unknowns) / `indeterminate` — plus the live account, so a rotator never
+  infers a verdict from an empty list. `--json` ADDS a `selection` block to the unchanged full
+  answer (backward compatible), and every `AccountStatusRow` now also carries `modelWindows`: the
+  `weekly_scoped` buckets classified through the same freshness/bound machinery as the account-wide
+  windows (the verbatim `scopedWeekly` stays).
+
 ## [Unreleased]
 
 ### Changed

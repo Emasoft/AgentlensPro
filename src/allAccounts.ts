@@ -85,6 +85,16 @@ function mkWindow(
   return { percent, resetsAt, freshness, bound: BOUND[freshness], reason }
 }
 
+/** One per-model weekly bucket, CLASSIFIED through the same freshness machinery as the account-wide
+ *  windows (TRDD-1UTH3B3V). `scopedWeekly` below stays verbatim for backward compatibility; this is
+ *  the form a rotator can gate on — a raw percent without a freshness is exactly the trap the rest of
+ *  this module exists to prevent. */
+export interface ModelWindow extends AccountWindow {
+  /** The model the bucket applies to, as the payload named it (`scope.model.display_name`, e.g.
+   *  "Fable", "Opus"). Match case-insensitively — the display name's casing is the provider's. */
+  model: string
+}
+
 export interface AccountStatusRow {
   accountId: string | null
   email: string | null
@@ -104,6 +114,8 @@ export interface AccountStatusRow {
    *  per-model bucket does not block other models, so counting it toward "spent" reports an account
    *  with headroom as exhausted. */
   scopedWeekly: UsageLimit[]
+  /** The same buckets classified (freshness + bound), one per model — what `--model` queries gate on. */
+  modelWindows: ModelWindow[]
   usageCreditsEnabled: boolean | null
   /** The worst of the two account-wide windows — what a rotator should key on. */
   freshness: WindowFreshness
@@ -233,7 +245,7 @@ export function listAllAccounts(opts: { now?: number; liveAccountId?: string | n
       return {
         accountId: r.accountId, email: r.email, isLive, plan: r.plan, mode: r.mode,
         authRegime: r.authRegime, observedAt: null, staleSeconds: null, leftAt,
-        fiveHour: UNREADABLE(reason), sevenDay: UNREADABLE(reason), scopedWeekly: [],
+        fiveHour: UNREADABLE(reason), sevenDay: UNREADABLE(reason), scopedWeekly: [], modelWindows: [],
         usageCreditsEnabled: null, freshness: 'unreadable', accountLabelSuspect: false,
       }
     }
@@ -251,6 +263,12 @@ export function listAllAccounts(opts: { now?: number; liveAccountId?: string | n
       observedAt: u.fetchedAt, staleSeconds: Math.max(0, Math.round((now - u.fetchedAt) / 1000)), leftAt,
       fiveHour, sevenDay,
       scopedWeekly: u.limits.filter(l => l.kind === 'weekly_scoped'),
+      modelWindows: u.limits
+        .filter(l => l.kind === 'weekly_scoped' && l.scopeLabel !== null)
+        .map(l => ({
+          model: l.scopeLabel as string,
+          ...classifyWindow(l.percent, l.resetsAt, u.fetchedAt, leftAt, now, u.accountLabelSuspect),
+        })),
       usageCreditsEnabled: u.usageCreditsEnabled,
       freshness: SEVERITY[fiveHour.freshness] >= SEVERITY[sevenDay.freshness] ? fiveHour.freshness : sevenDay.freshness,
       accountLabelSuspect: u.accountLabelSuspect,
@@ -271,5 +289,142 @@ export function listAllAccounts(opts: { now?: number; liveAccountId?: string | n
     note: 'Every row is what was OBSERVED while that account was live — no credential is read to '
       + 'produce it. A `rolled` window is INFERRED from its resetsAt plus this machine having been off '
       + 'the account; check `leftAt` before acting on it.',
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Headroom selection (TRDD-1UTH3B3V) — "which account should the rotator move to".
+//
+// WHY A VERDICT AND NOT A FILTERED LIST. The rotator's failure mode is acting on silence: an empty
+// list is what it gets both when every account is POSITIVELY spent (switch model) and when the tool
+// simply cannot tell (do NOT conclude anything). Those demand opposite reactions, so the answer
+// carries an explicit three-way verdict instead of letting the consumer infer one from emptiness.
+
+/** How strongly a match's numbers support selecting it. Order matters: `measured` beats `inferred`
+ *  (a rolled ~0% rests on the leftAt precondition) beats `lowerBound` (the module's own doctrine —
+ *  "safe to EXCLUDE on, never to select" — so a lower-bound match is surfaced LAST and labeled). */
+export type MatchConfidence = 'measured' | 'inferred' | 'lowerBound'
+
+const CONFIDENCE_RANK: Record<MatchConfidence, number> = { measured: 0, inferred: 1, lowerBound: 2 }
+const BOUND_CONFIDENCE: Record<Exclude<WindowBound, 'unknown'>, MatchConfidence> = {
+  exact: 'measured', inferred: 'inferred', lower: 'lowerBound',
+}
+
+export interface HeadroomGate {
+  /** 'fiveHour' | 'sevenDay' | the model name for the scoped gate. */
+  gate: string
+  window: AccountWindow
+}
+
+export interface HeadroomMatch {
+  accountId: string | null
+  email: string | null
+  isLive: boolean
+  /** Weakest bound among the gates — what the whole selection is only as strong as. */
+  confidence: MatchConfidence
+  gates: HeadroomGate[]
+}
+
+export interface HeadroomExclusion {
+  accountId: string | null
+  email: string | null
+  isLive: boolean
+  /** Which gate decided, and why — a rotator log line, not a debugging hint. */
+  why: string
+}
+
+export interface HeadroomSelection {
+  query: { model: string | null; threshold: number }
+  /** The account this machine is on RIGHT NOW (USER ask 2026-08-15) — repeated here so a rotator
+   *  parsing only the selection block never has to correlate with the top-level answer to learn
+   *  whether the best match is the account it is already on. */
+  liveAccountId: string | null
+  /** `available` = pick from `matches` (best-first). `none-with-headroom` = every account is
+   *  POSITIVELY exhausted — the "switch model" signal, never emitted on unknowns. `indeterminate` =
+   *  no match, but at least one account could not be decided — treat as "cannot tell", not "none". */
+  verdict: 'available' | 'none-with-headroom' | 'indeterminate'
+  /** Convenience for shell rotators: `verdict === 'none-with-headroom'`. */
+  noHeadroom: boolean
+  matches: HeadroomMatch[]
+  exhausted: HeadroomExclusion[]
+  undecidable: HeadroomExclusion[]
+  note: string
+}
+
+/** Partition the observed accounts by whether they still have headroom — account-wide (5h AND 7d
+ *  both under `threshold`) and, when `model` is given, in that model's own weekly bucket too.
+ *
+ *  Gate semantics per window:
+ *  - percent >= threshold  ⇒ EXHAUSTED. Safe on a lower bound too — the true value is >= it.
+ *  - percent null          ⇒ UNDECIDABLE, never exhausted: "cannot read" and "no headroom" are
+ *                            opposite signals (the founding rule of this module).
+ *  - percent < threshold   ⇒ passes, at the strength of its bound.
+ *  A `--model` query against a reading with NO bucket for that model is UNDECIDABLE with the reason
+ *  stated: the payload not naming a window and the window being empty are different facts, and on
+ *  plans where the model has no separate window the account-wide gates are the real answer anyway. */
+export function selectAccountsWithHeadroom(
+  answer: AllAccountsAnswer,
+  query: { model?: string | null; threshold?: number } = {},
+): HeadroomSelection {
+  const model = query.model?.trim() ? query.model.trim() : null
+  const threshold = query.threshold ?? 100
+  const matches: HeadroomMatch[] = []
+  const exhausted: HeadroomExclusion[] = []
+  const undecidable: HeadroomExclusion[] = []
+
+  for (const a of answer.accounts) {
+    const gates: HeadroomGate[] = [
+      { gate: 'fiveHour', window: a.fiveHour },
+      { gate: 'sevenDay', window: a.sevenDay },
+    ]
+    let modelGateMissing: string | null = null
+    if (model !== null) {
+      const m = a.modelWindows.find(w => w.model.toLowerCase().includes(model.toLowerCase()))
+      if (m) gates.push({ gate: m.model, window: m })
+      else {
+        modelGateMissing = `no '${model}' bucket in this account's reading — either the model has no `
+          + 'separate window on this plan or the reading predates it; the payload not naming a window '
+          + 'is not the same fact as the window being empty'
+      }
+    }
+
+    const spent = gates.find(g => g.window.percent !== null && g.window.percent >= threshold)
+    if (spent) {
+      exhausted.push({
+        accountId: a.accountId, email: a.email, isLive: a.isLive,
+        why: `${spent.gate} at ${spent.window.percent}% (>= ${threshold}%, bound ${spent.window.bound})`,
+      })
+      continue
+    }
+    const unknown = gates.find(g => g.window.percent === null)
+    if (unknown || modelGateMissing) {
+      undecidable.push({
+        accountId: a.accountId, email: a.email, isLive: a.isLive,
+        why: modelGateMissing ?? `${unknown!.gate}: ${unknown!.window.reason ?? 'no usable reading'}`,
+      })
+      continue
+    }
+    const weakest = gates
+      .map(g => BOUND_CONFIDENCE[g.window.bound as Exclude<WindowBound, 'unknown'>])
+      .reduce((a, b) => (CONFIDENCE_RANK[a] >= CONFIDENCE_RANK[b] ? a : b))
+    matches.push({ accountId: a.accountId, email: a.email, isLive: a.isLive, confidence: weakest, gates })
+  }
+
+  matches.sort((x, y) => CONFIDENCE_RANK[x.confidence] - CONFIDENCE_RANK[y.confidence]
+    || (x.gates[0].window.percent ?? 100) - (y.gates[0].window.percent ?? 100))
+
+  const verdict: HeadroomSelection['verdict'] = matches.length > 0
+    ? 'available'
+    : undecidable.length > 0 ? 'indeterminate' : 'none-with-headroom'
+
+  return {
+    query: { model, threshold }, liveAccountId: answer.liveAccountId,
+    verdict, noHeadroom: verdict === 'none-with-headroom',
+    matches, exhausted, undecidable,
+    note: 'A match is only as strong as its weakest bound: `measured` gates were read inside the TTL; '
+      + '`inferred` rests on the rolled-window precondition (audit leftAt); `lowerBound` numbers can '
+      + 'only be trusted to EXCLUDE, so treat those matches as hints. `none-with-headroom` is emitted '
+      + 'ONLY when every account is positively exhausted — an undecidable account downgrades the '
+      + 'verdict to `indeterminate` instead of being counted as spent.',
   }
 }

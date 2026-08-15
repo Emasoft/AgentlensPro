@@ -9,7 +9,7 @@ import * as assert from 'assert'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { classifyWindow, listAllAccounts } from '../allAccounts'
+import { classifyWindow, listAllAccounts, selectAccountsWithHeadroom } from '../allAccounts'
 import { runAllAccountsCli } from '../cli/allAccountsCli'
 import { archiveAccountUsage, TTL_MS, type SubscriptionUsage } from '../subscriptionUsage'
 import type { AccountStateRecord } from '../accountStateTimeline'
@@ -288,6 +288,174 @@ suite('the --all CLI — answers with the server DOWN, and BLIND is not "no acco
       assert.ok(text.includes('a@x'))
       assert.ok(text.includes('unreadable'), 'an account with no reading must SHOW as unreadable')
       assert.ok(!/\b0%/.test(text), 'and never as 0%, which is the opposite signal')
+    })
+  })
+})
+
+// ── the rotation query (TRDD-1UTH3B3V) — "which account should the rotator move to" ────────────
+// The failure mode is acting on silence: an empty list means opposite things when every account is
+// POSITIVELY spent (switch model) and when the tool cannot tell (conclude nothing). The three-way
+// verdict exists so a rotator never has to infer one from emptiness.
+suite('selectAccountsWithHeadroom — per-model rotation query', () => {
+  function rec(uuid: string, email: string, ts: number): AccountStateRecord {
+    return {
+      ts, accountId: uuid, email, mode: 'subscription (within plan)', plan: 'Max 20x',
+      authRegime: 'subscription', ttlMinutes: 60, ttlSource: 'doc-matrix',
+    }
+  }
+  /** A reading with an explicit per-model split: `fablePct` for the Fable weekly bucket (null = the
+   *  payload named no Fable bucket at all), independent 5h/7d percents. */
+  function usageM(uuid: string, fetchedAt: number, fivePct: number | null, sevenPct: number | null,
+    fablePct: number | null): SubscriptionUsage {
+    const limits = [
+      { kind: 'session', group: 'session', percent: fivePct, severity: 'normal', resetsAt: iso(NOW + HOUR), isActive: true, scopeLabel: null as string | null, resetsInSeconds: 0 },
+      { kind: 'weekly_all', group: 'weekly', percent: sevenPct, severity: 'normal', resetsAt: iso(NOW + 48 * HOUR), isActive: true, scopeLabel: null, resetsInSeconds: 0 },
+    ]
+    if (fablePct !== null) {
+      limits.push({ kind: 'weekly_scoped', group: 'weekly', percent: fablePct, severity: 'normal', resetsAt: iso(NOW + 48 * HOUR), isActive: true, scopeLabel: 'Fable', resetsInSeconds: 0 })
+    }
+    return {
+      fetchedAt, ageSeconds: 0, stale: false, reason: 'ok',
+      accountFp: 'fp', accountUuid: uuid, accountLabel: null, accountTier: null,
+      localClaimedLabel: null, accountLabelSuspect: false, accountVerified: 'yes',
+      limits, fiveHourPercent: fivePct, sevenDayPercent: sevenPct,
+      usageCreditsEnabled: false, spendPercent: null, note: '',
+    } as unknown as SubscriptionUsage
+  }
+  function inSandbox<T>(timeline: AccountStateRecord[], fn: () => T): T {
+    const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'headroom-'))
+    const dir = path.join(sandbox, 'data')
+    fs.mkdirSync(dir)
+    const tl = path.join(dir, 'account-state.ndjson')
+    fs.writeFileSync(tl, timeline.map(r => JSON.stringify(r)).join('\n') + '\n')
+    const prevData = process.env.AGENTLENS_DATA_DIR
+    const prevLog = process.env.AGENTLENS_ACCOUNT_STATE_LOG
+    process.env.AGENTLENS_DATA_DIR = dir
+    process.env.AGENTLENS_ACCOUNT_STATE_LOG = tl
+    try { return fn() } finally {
+      if (prevData === undefined) delete process.env.AGENTLENS_DATA_DIR; else process.env.AGENTLENS_DATA_DIR = prevData
+      if (prevLog === undefined) delete process.env.AGENTLENS_ACCOUNT_STATE_LOG; else process.env.AGENTLENS_ACCOUNT_STATE_LOG = prevLog
+      fs.rmSync(sandbox, { recursive: true, force: true })
+    }
+  }
+  const ROSTER = [rec(A, 'a@x', NOW - 40 * HOUR), rec(B, 'b@x', NOW - 20 * HOUR), rec(C, 'c@x', NOW - 10 * HOUR)]
+
+  test('modelWindows carries each scoped bucket CLASSIFIED, so a rotator never gates on a raw percent', () => {
+    inSandbox(ROSTER, () => {
+      archiveAccountUsage(usageM(C, NOW - 60_000, 12, 30, 45))
+      const c = listAllAccounts({ now: NOW, liveAccountId: C }).accounts.find(x => x.accountId === C)!
+      assert.strictEqual(c.modelWindows.length, 1)
+      assert.strictEqual(c.modelWindows[0].model, 'Fable')
+      assert.strictEqual(c.modelWindows[0].percent, 45)
+      assert.strictEqual(c.modelWindows[0].freshness, 'fresh')
+      assert.strictEqual(c.modelWindows[0].bound, 'exact')
+    })
+  })
+
+  test('--model partitions by the MODEL bucket: a spent Fable window excludes an account whose 5h/7d are fine', () => {
+    inSandbox(ROSTER, () => {
+      archiveAccountUsage(usageM(A, NOW - 60_000, 10, 20, 100))  // Fable spent, account-wide fine
+      archiveAccountUsage(usageM(B, NOW - 60_000, 15, 25, 40))   // Fable headroom
+      archiveAccountUsage(usageM(C, NOW - 60_000, 99, 20, 5))    // Fable fine but 5h nearly spent
+      const sel = selectAccountsWithHeadroom(listAllAccounts({ now: NOW, liveAccountId: C }), { model: 'fable', threshold: 95 })
+      assert.strictEqual(sel.verdict, 'available')
+      assert.deepStrictEqual(sel.matches.map(m => m.accountId), [B], 'only B has headroom on ALL gates')
+      assert.strictEqual(sel.matches[0].confidence, 'measured')
+      assert.strictEqual(sel.exhausted.length, 2)
+      assert.ok(sel.exhausted.find(e => e.accountId === A)!.why.includes('Fable'), 'A is excluded BY the model gate')
+      assert.ok(sel.exhausted.find(e => e.accountId === C)!.why.includes('fiveHour'), 'C by the account-wide gate')
+    })
+  })
+
+  test('none-with-headroom fires ONLY when every account is positively spent', () => {
+    inSandbox(ROSTER.slice(0, 2), () => {
+      archiveAccountUsage(usageM(A, NOW - 60_000, 10, 20, 100))
+      archiveAccountUsage(usageM(B, NOW - 60_000, 15, 100, 40))
+      const sel = selectAccountsWithHeadroom(listAllAccounts({ now: NOW, liveAccountId: B }), { model: 'fable' })
+      assert.strictEqual(sel.verdict, 'none-with-headroom', 'A spent on Fable, B spent on 7d — POSITIVELY none')
+      assert.strictEqual(sel.noHeadroom, true)
+      assert.deepStrictEqual(sel.matches, [])
+    })
+  })
+
+  test('an unreadable account downgrades "none" to indeterminate — unknown is never counted as spent', () => {
+    inSandbox(ROSTER.slice(0, 2), () => {
+      archiveAccountUsage(usageM(A, NOW - 60_000, 10, 20, 100))  // spent on Fable; B has NO reading
+      const sel = selectAccountsWithHeadroom(listAllAccounts({ now: NOW, liveAccountId: A }), { model: 'fable' })
+      assert.strictEqual(sel.verdict, 'indeterminate')
+      assert.strictEqual(sel.noHeadroom, false, 'a rotator must not switch model on an unknown')
+      assert.strictEqual(sel.undecidable.length, 1)
+      assert.strictEqual(sel.undecidable[0].accountId, B)
+    })
+  })
+
+  test('a reading with NO bucket for the queried model is undecidable with the reason stated, never a silent pass', () => {
+    inSandbox(ROSTER.slice(0, 1), () => {
+      archiveAccountUsage(usageM(A, NOW - 60_000, 10, 20, null))
+      const sel = selectAccountsWithHeadroom(listAllAccounts({ now: NOW, liveAccountId: A }), { model: 'fable' })
+      assert.strictEqual(sel.verdict, 'indeterminate')
+      assert.ok(sel.undecidable[0].why.includes('no separate window'), 'the ambiguity travels with the row')
+    })
+  })
+
+  test('--with-headroom (no model) gates on 5h AND 7d only — a spent per-model bucket does not exclude', () => {
+    inSandbox(ROSTER.slice(0, 2), () => {
+      archiveAccountUsage(usageM(A, NOW - 60_000, 10, 20, 100))  // Fable spent, account-wide fine
+      archiveAccountUsage(usageM(B, NOW - 60_000, 15, 100, 40))  // 7d spent
+      const sel = selectAccountsWithHeadroom(listAllAccounts({ now: NOW, liveAccountId: B }), {})
+      assert.strictEqual(sel.verdict, 'available')
+      assert.deepStrictEqual(sel.matches.map(m => m.accountId), [A])
+      assert.strictEqual(sel.liveAccountId, B, 'the live account rides in the selection block (USER ask)')
+    })
+  })
+
+  test('the CLI adds a `selection` block to --json WITHOUT changing the existing answer shape', () => {
+    inSandbox(ROSTER.slice(0, 1), () => {
+      archiveAccountUsage(usageM(A, NOW - 60_000, 10, 20, 40))
+      const outs: string[] = []
+      const realLog = console.log
+      console.log = (...a: unknown[]): void => { outs.push(a.join(' ')) }
+      try {
+        assert.strictEqual(runAllAccountsCli(['--json', '--model', 'fable']), 0)
+      } finally { console.log = realLog }
+      const parsed = JSON.parse(outs.join('\n'))
+      assert.ok(Array.isArray(parsed.accounts), 'prior consumers keep their fields')
+      assert.ok(parsed.archive && typeof parsed.blind === 'boolean')
+      assert.strictEqual(parsed.selection.query.model, 'fable')
+      assert.ok(['available', 'none-with-headroom', 'indeterminate'].includes(parsed.selection.verdict))
+    })
+  })
+
+  test('a rotation flag with a bad value exits 64, never a silently unfiltered report a script would mis-parse', () => {
+    const errs: string[] = []
+    const realErr = console.error
+    console.error = (...a: unknown[]): void => { errs.push(a.join(' ')) }
+    try {
+      assert.strictEqual(runAllAccountsCli(['--model']), 64, '--model without a value')
+      assert.strictEqual(runAllAccountsCli(['--with-headroom', '--threshold', 'zesty']), 64, 'non-numeric threshold')
+      assert.strictEqual(runAllAccountsCli(['--with-headroom', '--threshold', '0']), 64, 'out-of-range threshold')
+    } finally { console.error = realErr }
+  })
+
+  test('the human verdict says NO ACCOUNT HAS HEADROOM in words, and names the live account', () => {
+    // The CLI runs on the REAL clock (it cannot inject `now`), so this fixture must be built
+    // relative to Date.now() — a window anchored on the frozen NOW has "already reset" by the time
+    // the test runs, which turns a positively-spent account into an undecidable one.
+    const real = Date.now()
+    const recNow = { ...rec(A, 'a@x', real - HOUR) }
+    inSandbox([recNow], () => {
+      const u = usageM(A, real - 60_000, 100, 20, 40)
+      u.limits.forEach(l => { l.resetsAt = iso(real + (l.group === 'session' ? 1 : 48) * HOUR) })
+      archiveAccountUsage(u)
+      const outs: string[] = []
+      const realLog = console.log
+      console.log = (...a: unknown[]): void => { outs.push(a.join(' ')) }
+      try {
+        assert.strictEqual(runAllAccountsCli(['--with-headroom']), 0, 'an honest "none" is an ANSWER, exit 0')
+      } finally { console.log = realLog }
+      const text = outs.join('\n')
+      assert.ok(text.includes('NO ACCOUNT HAS HEADROOM'), `verdict line missing in:\n${text}`)
+      assert.ok(text.includes('live account:'), 'the live account is always named (USER ask)')
     })
   })
 })
