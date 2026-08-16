@@ -1,9 +1,9 @@
 ---
 trdd-id: MFSUMOJ9
-title: the standalone server burns ~1.5 cores sustained while ingesting about one event per second
+title: the standalone server starves its event loop for 63s and is SIGKILL-respawned by its own watchdog
 column: backburner
 created: 2026-08-16T19:36:38+0200
-updated: 2026-08-16T21:48:18+0200
+updated: 2026-08-16T22:26:28+0200
 current-owner: AgentlensPro session
 task-type: spike
 approval-tier: 0
@@ -87,6 +87,37 @@ independent refutation of any cumulative/saturated model of that column.
 
 Memory remains healthy and is NOT the story: RSS 2179MB, heap 825/6240MB at 4h07m — lower than the
 2.4GB peak measured an hour earlier.
+
+## THE SYMPTOM IS EVENT-LOOP STARVATION, not merely "high CPU" (found 2026-08-16 ~22:30)
+
+The server restarted without anyone restarting it: **pid 26449 → 27917, PPID 1**. Not a mystery,
+and not inferred — it is in our own log, verbatim:
+
+```
+[AgentLens] loop watchdog: event loop starved for 63s — self-healing (SIGKILL + detached respawn)
+```
+
+Two such fires in `~/.agentlens/server.log` (lines 104544, 289540). Both immediately follow ordinary
+ingest lines ("Ingested 4 spans", "2 log events ingested") and are immediately followed by a boot
+sequence reloading the 24h window — i.e. the process died and came back.
+
+**This reframes the card, and sharpens it enormously.** ~1.2 cores sustained is a symptom; a
+**63-second event-loop stall** is a diagnosis-grade fact. Node's loop does not starve for 63s under
+merely "a lot of work" — that is a BLOCKING operation on the main thread, or a pathological GC/CPU
+loop that never yields. It also explains the throughput paradox directly: ~1 event/sec while burning
+a core is what a loop that cannot get back to its queue looks like from the outside.
+
+The rising lifetime ratio (96.1% → 100.3% → 109.7%) now reads as the approach to that stall rather
+than as an independent curiosity.
+
+**The self-heal is working as designed** — production keeps its watchdog, and this is exactly the
+case it exists for. That is not a reason to leave the stall in place: the watchdog is a seatbelt,
+not a fix, and every fire costs a full reload of the 24h window (the boot line after fire #2 reloads
+52,088 spans against a store of 4,383,202 across 30 segments).
+
+**NEXT ACTION is unchanged but now much better targeted:** profile for a blocking main-thread call,
+and grep the boot lines around each fire — `Loaded N span(s) (last 24h window)` — since the two
+fires bracket window loads of 142,308 and 52,088 spans against stores of 1.6M and 4.4M.
 
 ### A LEAD, explicitly a hypothesis and NOT a finding
 
