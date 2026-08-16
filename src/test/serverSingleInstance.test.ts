@@ -79,11 +79,17 @@ suite('standalone server — exactly one instance per data directory', function 
 
     // Different ports entirely — the old guard would have let this through.
     const second = await start(await envFor())
-    assert.strictEqual(second.exited, 1, `the SECOND server must exit(1); it exited ${second.exited}. stdout: ${second.stdout.slice(0, 300)}`)
-    assert.ok(/Refusing to start/.test(second.stderr), `expected a refusal, got: ${second.stderr.slice(0, 400)}`)
-    assert.ok(/only ONE server may run per data directory/i.test(second.stderr),
-      'the refusal must say WHY — a bare exit teaches the next person nothing')
-    await stop(second)
+    // try/finally, matching this file's other two tests: a bare `stop()` after the asserts leaks
+    // the process for the rest of the mocha run whenever an assert throws, and suiteTeardown only
+    // knows about `first`.
+    try {
+      assert.strictEqual(second.exited, 1, `the SECOND server must exit(1); it exited ${second.exited}. stdout: ${second.stdout.slice(0, 300)}`)
+      assert.ok(/Refusing to start/.test(second.stderr), `expected a refusal, got: ${second.stderr.slice(0, 400)}`)
+      assert.ok(/only ONE server may run per data directory/i.test(second.stderr),
+        'the refusal must say WHY — a bare exit teaches the next person nothing')
+    } finally {
+      await stop(second)
+    }
 
     // The refusal must not have stolen the running server's lock.
     const holder = parsePidLock(fs.readFileSync(path.join(dataDir, 'server.pid'), 'utf-8'))?.pid

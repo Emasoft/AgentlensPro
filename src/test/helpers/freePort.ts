@@ -133,7 +133,15 @@ export async function spawnServerWithRetry(opts: SpawnServerRetryOptions): Promi
   let combinedLog = '' // spans every attempt, not just the last one, so a caller can see WHY a retry happened
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const env = await opts.buildEnv()
+    // AGENTLENS_WATCHDOG=off is NOT optional here, and it is set at the one choke point every
+    // spawned test server routes through rather than in each caller. The watchdog's self-heal
+    // respawns the server `detached: true` + `unref()` (loopWatchdog.ts:85) — which reparents to
+    // PID 1 — and the respawned pid is created INSIDE the server, so no `stop()`/`finally` in test
+    // code has a handle on it. A suite that boots many real servers in parallel is exactly the
+    // CPU contention that starves an event loop past the 60s stall threshold, so the suite triggers
+    // the orphan it then cannot reap. Verified: one such orphan was found alive 54 minutes after a
+    // run, PPID 1, on that run's ephemeral ports (it inherits the test env, so it re-binds them).
+    const env = { ...(await opts.buildEnv()), AGENTLENS_WATCHDOG: 'off' }
     const child = spawn(process.execPath, [opts.serverJs], { env, stdio: ['ignore', 'pipe', 'pipe'], ...opts.spawnOptions })
     let log = ''
     child.stdout?.on('data', (d: Buffer) => { log += d.toString() })
