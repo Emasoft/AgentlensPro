@@ -78,10 +78,12 @@ agentlenspro --hooks                      # show/flip the runtime switches (inst
 
 **`server start` detaches, so the server is expected to show `PPID 1`, multi-day uptime, and a
 gigabyte-scale RSS** (it holds a rolling span window; the heap ceiling is `--max-old-space-size`).
-None of that is a runaway. `ps` `%CPU` is a *lifetime average*, not a live sample, so a long-lived
-server routinely reads as tens or hundreds of percent there while sampling near-idle — check
-`agentlenspro server status` (or a live `top -pid <pid>`) before concluding anything, and don't kill
-a process you don't own.
+None of that is a runaway on its own. A high `%CPU` **is** worth reading, though — just read it for
+what it measures. `ps` `%cpu` is a *decaying average over up to a minute* of recent real time
+(`man ps`), while `top -l 2 -pid <pid>` is a ~1-second delta; a bursty process legitimately reads
+high in the first and low in the second, and **neither is bogus**. To decide whether sustained CPU
+is expected, compare against the load: `agentlenspro server status` prints heap, the in-memory span
+window, and disk writes. Don't kill a process you don't own.
 
 Run it as an always-on login daemon (macOS launchd) so ingestion is up across reboots even with
 no Claude session open:
