@@ -3,7 +3,7 @@ trdd-id: MFSUMOJ9
 title: the standalone server burns ~1.5 cores sustained while ingesting about one event per second
 column: backburner
 created: 2026-08-16T19:36:38+0200
-updated: 2026-08-16T20:58:48+0200
+updated: 2026-08-16T21:48:18+0200
 current-owner: AgentlensPro session
 task-type: spike
 approval-tier: 0
@@ -69,6 +69,34 @@ entire life, not merely for tonight's window.
 Memory independently re-measured by a second session (2336.6 → 2219.7 MB over 75s, net **-117 MB**)
 matching this session's 709 → 858 → 909 → 753 MB heap sawtooth. **The memory dimension is closed;
 this card is CPU-only.**
+
+## It is RISING, not steady (measured 2026-08-16 ~21:45)
+
+The lifetime ratio is climbing, which means recent load sits above the running average and is
+pulling it up:
+
+| uptime | lifetime ratio | interval delta |
+|---|---|---|
+| 2h35m | 96.1% | 132% |
+| 3h16m | 100.3% | 116.8%, 188.4% |
+| 4h07m | **109.7%** | 158.8% |
+
+So "sustained >1 core is the steady state" was itself too generous — over ~50 minutes the average
+rose ~9 points. Reported `%cpu` in the same window swung 64.6 → 194.4 across 30s, which is a third
+independent refutation of any cumulative/saturated model of that column.
+
+Memory remains healthy and is NOT the story: RSS 2179MB, heap 825/6240MB at 4h07m — lower than the
+2.4GB peak measured an hour earlier.
+
+### A LEAD, explicitly a hypothesis and NOT a finding
+
+The in-memory span window grew 79,145 → 84,584 spans (+5,439) over the same ~50 minutes, against a
+1440m (24h) retention horizon it has not yet reached. **If** per-turn work scales with window
+occupancy, CPU would rise as the window fills and plateau when it saturates at 24h — which matches
+the shape above. That is a testable prediction, not a diagnosis: it is recorded here so the profile
+can confirm or kill it, and **it must not be treated as the cause until the profile says so.**
+Tonight's fleet-wide lesson was precisely that a plausible mechanism which explains the numbers gets
+believed without ever being tested.
 
 ## Load-bearing gotchas for whoever picks this up
 
