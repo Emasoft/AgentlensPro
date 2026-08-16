@@ -410,8 +410,13 @@ export function selectAccountsWithHeadroom(
     matches.push({ accountId: a.accountId, email: a.email, isLive: a.isLive, confidence: weakest, gates })
   }
 
+  // Tie-break on the FULLEST gate, not gates[0]: gates[0] is always fiveHour (the --model gate is
+  // pushed last), so ordering by it made `--model <m>` have zero influence on best-first — the
+  // rotator would pick an account whose model bucket is nearly spent over one that is empty.
+  const fullest = (m: HeadroomMatch): number =>
+    Math.max(...m.gates.map(g => g.window.percent ?? 100))
   matches.sort((x, y) => CONFIDENCE_RANK[x.confidence] - CONFIDENCE_RANK[y.confidence]
-    || (x.gates[0].window.percent ?? 100) - (y.gates[0].window.percent ?? 100))
+    || fullest(x) - fullest(y))
 
   const verdict: HeadroomSelection['verdict'] = matches.length > 0
     ? 'available'

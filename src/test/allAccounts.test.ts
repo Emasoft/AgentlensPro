@@ -409,6 +409,16 @@ suite('selectAccountsWithHeadroom — per-model rotation query', () => {
     })
   })
 
+  test('best-first ORDERS BY the model bucket too — the fullest gate breaks the tie, not always 5h', () => {
+    inSandbox(ROSTER.slice(0, 2), () => {
+      archiveAccountUsage(usageM(A, NOW - 60_000, 10, 20, 90))  // best 5h, nearly-spent Fable
+      archiveAccountUsage(usageM(B, NOW - 60_000, 30, 20, 5))   // worse 5h, empty Fable
+      const sel = selectAccountsWithHeadroom(listAllAccounts({ now: NOW, liveAccountId: A }), { model: 'fable' })
+      assert.deepStrictEqual(sel.matches.map(m => m.accountId), [B, A],
+        'B first: its fullest gate is 30% vs A 90% — ordering by gates[0] (5h) would have put A first')
+    })
+  })
+
   test('the CLI adds a `selection` block to --json WITHOUT changing the existing answer shape', () => {
     inSandbox(ROSTER.slice(0, 1), () => {
       archiveAccountUsage(usageM(A, NOW - 60_000, 10, 20, 40))

@@ -76,6 +76,13 @@ agentlenspro --install-skill              # (re)install every shipped skill into
 agentlenspro --hooks                      # show/flip the runtime switches (instant, no restart)
 ```
 
+**`server start` detaches, so the server is expected to show `PPID 1`, multi-day uptime, and a
+gigabyte-scale RSS** (it holds a rolling span window; the heap ceiling is `--max-old-space-size`).
+None of that is a runaway. `ps` `%CPU` is a *lifetime average*, not a live sample, so a long-lived
+server routinely reads as tens or hundreds of percent there while sampling near-idle — check
+`agentlenspro server status` (or a live `top -pid <pid>`) before concluding anything, and don't kill
+a process you don't own.
+
 Run it as an always-on login daemon (macOS launchd) so ingestion is up across reboots even with
 no Claude session open:
 
