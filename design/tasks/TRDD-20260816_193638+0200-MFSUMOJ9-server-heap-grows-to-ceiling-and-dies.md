@@ -3,7 +3,7 @@ trdd-id: MFSUMOJ9
 title: the standalone server grows its heap to the 6144MB ceiling and dies of GC thrash - OOM or watchdog SIGKILL
 column: backburner
 created: 2026-08-16T19:36:38+0200
-updated: 2026-08-16T22:36:33+0200
+updated: 2026-08-16T22:59:43+0200
 current-owner: AgentlensPro session
 task-type: spike
 approval-tier: 0
@@ -60,6 +60,13 @@ node --heapsnapshot-near-heap-limit=2 --max-old-space-size=6144 standalone/serve
 That writes a snapshot as the limit is approached — the growth phase this card kept failing to
 sample — and the retainer tree names the holder directly. `--cpu-prof` is secondary now: the CPU
 profile would just show GC, which the `mu = 0.042` figure already told us.
+
+**You do NOT need to wait hours for it. It reproduces from a cold start.** A freshly restarted pid
+was measured by another session at **249% of a core at 50 minutes uptime** (interval-differenced,
+10s window), against ~130% on the previous pid at 3h+. So the cost is present from the beginning
+rather than something that degrades with accumulated state — which means the whole investigation
+fits on a short-lived instance, and a reproduction does not require a multi-hour soak. Lower the
+cap (`--max-old-space-size=1024`) to reach the ceiling in minutes rather than hours.
 
 The plausible retainers are the in-memory span window and whatever indexes it, but **do not guess
 between them**: the snapshot answers it outright, and every guess made on this card so far has been
@@ -149,6 +156,18 @@ we could not see from inside: **three pids in ~90 minutes**, each returning with
 
 DO NOT re-close the memory dimension on another short-window sample. Close it only against the
 ceiling: watch the heap FLOOR across a full growth cycle, or read the log.
+
+**And the detail that should have ended this in the first ten minutes:** the janitor's alarm read
+`a process RAM/CPU runaway`. It named BOTH dimensions from the very first fire. Four sessions then
+spent an evening arguing about the CPU half — whether `ps %cpu` was a lifetime average, whether
+sustained meant pathological, whether it was a burst — while the RAM half, stated in the same alert
+string, was the disease. **When an alert names two dimensions, a debate that settles on one has not
+narrowed the problem, it has dropped half of it.** The alarm was correct the whole time; only its
+explanatory parenthetical was wrong, and that parenthetical is what captured the discussion.
+
+A later measurement made the sampling error unarguable: a session that reported `2628 → 2541 MB,
+falling` re-measured 15 minutes on and got **2732 MB** — above BOTH of its earlier samples. One
+descent, sampled inside a climb, read as the trend.
 
 ## THE OTHER FAILURE MODE: event-loop starvation and watchdog respawn (found 2026-08-16 ~22:30)
 
