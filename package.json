@@ -52,7 +52,7 @@
   ],
   "scripts": {
     "prepublishOnly": "pnpm run package",
-    "compile": "pnpm run check-types && pnpm run lint && pnpm run check-identities && pnpm run check-guards && node esbuild.js",
+    "compile": "pnpm run check-types && pnpm run lint && pnpm run check-mirrors && pnpm run check-identities && pnpm run check-guards && node esbuild.js",
     "local": "node esbuild.js && node --max-old-space-size=6144 standalone/server.js",
     "up": "node esbuild.js && node standalone/cli.js dashboard",
     "up:supervised": "node esbuild.js && node standalone/cli.js server start --supervise",
@@ -72,7 +72,7 @@
     "watch": "npm-run-all -p watch:*",
     "watch:esbuild": "node esbuild.js --watch",
     "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
-    "package": "pnpm run check-types && pnpm run lint && pnpm run check-identities && pnpm run check-guards && node esbuild.js --production",
+    "package": "pnpm run check-types && pnpm run lint && pnpm run check-mirrors && pnpm run check-identities && pnpm run check-guards && node esbuild.js --production",
     "deploy:safe": "bash scripts/safe-deploy.sh",
     "compile-tests": "tsc -p tsconfig.test.json",
     "watch-tests": "tsc -p tsconfig.test.json -w",
