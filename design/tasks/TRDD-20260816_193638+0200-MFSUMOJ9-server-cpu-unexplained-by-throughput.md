@@ -3,7 +3,7 @@ trdd-id: MFSUMOJ9
 title: the standalone server burns ~1.5 cores sustained while ingesting about one event per second
 column: backburner
 created: 2026-08-16T19:36:38+0200
-updated: 2026-08-16T19:36:38+0200
+updated: 2026-08-16T20:58:48+0200
 current-owner: AgentlensPro session
 task-type: spike
 approval-tier: 0
@@ -52,15 +52,53 @@ The plausible suspects are the in-memory span window (79k spans in the 1440m win
 on-disk store (5.6M spans / 31 segments), but **two status samples cannot separate them**, and
 guessing between them is precisely the failure this card exists to avoid.
 
+## Corroboration (four sessions, all by interval differencing)
+
+| observer | window | reading |
+|---|---|---|
+| this session | 20s × 3 | 116.8%, 188.4% |
+| this session, earlier | 157s | 159% |
+| llm-externalizer | 15s × 5 | 295.5 / 107.3 / 120.7 / 117.7 / 119.8 |
+| ai-maestro | 2s | 191% |
+| janitor | 10s | 286% |
+
+**Sustained ~1.2 cores with excursions to 2-3.** And at 3h16m uptime the lifetime ratio has crossed
+**100.5%** (11,866s CPU / 11,808s wall) — the server has averaged more than a full core for its
+entire life, not merely for tonight's window.
+
+Memory independently re-measured by a second session (2336.6 → 2219.7 MB over 75s, net **-117 MB**)
+matching this session's 709 → 858 → 909 → 753 MB heap sawtooth. **The memory dimension is closed;
+this card is CPU-only.**
+
 ## Load-bearing gotchas for whoever picks this up
 
-- **`ps %cpu` is NOT a lifetime average.** `man ps`: "a decaying average over up to a minute of
-  previous (real) time." A claim to the contrary circulated across six sessions on 2026-08-16, was
-  written into a shipped README (corrected in 92ff99e) and into another project's alert string and
-  passing test. Verify before repeating.
-- **The discriminator between sustained load and a burst** is comparing `TIME/ELAPSED` (lifetime)
-  against the reported `%cpu` and against a real CPU-time delta. Agreement across all three means
-  sustained.
+- **`ps %cpu` is NOT a lifetime average, and NOT cumulative.** `man ps`: "a decaying average over up
+  to a minute of previous (real) time." BOTH wrong models circulated on 2026-08-16 — "lifetime
+  average" reached six sessions, a shipped README (corrected in 92ff99e), and another project's
+  alert string plus a passing test; "cumulative and therefore saturated" reached three sessions
+  later the same night. Measured refutation on this very process, reported `%cpu` beside lifetime
+  from the same `ps` row, 20s apart:
+
+  ```
+  reported= 90.8   lifetime=100.32%
+  reported=122.2   lifetime=100.34%   delta=116.8%
+  reported= 95.5   lifetime=100.49%   delta=188.4%
+  ```
+
+  Lifetime moves 0.17 points while reported swings ±30 in the same 40 seconds. A cumulative figure
+  cannot do that, and the two columns would be equal if it were one.
+
+- **Interval differencing is THE measurement; nothing else is.** `ps -o time=,etime=` twice across a
+  known gap, subtract, divide. An earlier version of this card said "lifetime, reported and delta
+  AGREEING means sustained" — that is weak and is hereby corrected: past a few hours of uptime the
+  denominator saturates, so the lifetime ratio *cannot* disagree with much and its agreement is
+  nearly free. Treat it as corroboration, never as the measurement.
+
+- **A LOW reading is real information.** Under either wrong model above, a 90.8% reading gets waved
+  off as "pinned/stale." It is not — it means the process genuinely dropped to ~0.9 cores that
+  minute. Both false mechanisms invert how a low number is read, which is why they were worth
+  chasing down rather than shrugging at: the practical advice is the same either way, so a wrong
+  mechanism passes review unnoticed and then changes somebody's conclusion later.
 - **`agentlenspro server status` can print `NOT RUNNING` for a live server** (see the sibling
   finding below) — its 800ms connect timeout loses to a busy server. Do not read that as the
   process having died mid-profile.
