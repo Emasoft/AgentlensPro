@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-18T17:45:00+0200
+updated: 2026-08-18T20:00:00+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -117,15 +117,34 @@ release-via: publish
   reclaim, stranded-ts parking + relocation (mtime preserved) + 3-strike breaker, per-chunk
   verify isolation. `alstore pass` persists skip/stranded state in `<storeDir>/.pass-state.json`
   across invocations. 4 pass tests + 2 round-trip + 3 sectionizer + 2 TS cross-engine — all green.
-- **NEXT ACTION (one step):** P3d — opencode SQLite read via rusqlite (bundled): port
-  `_parseOpenCodeDb` (src/logReader.ts:1166, ~260 lines; also `_parseOpenCodeJsonFallback` at
-  1427) into agentlens-logscan as `opencode.rs` + an `allogscan --opencode <db>` mode. rusqlite
-  opens the LIVE db read-only with NATIVE WAL handling — it REPLACES the hand-rolled TS WAL
-  merge (`_mergeWal`, logReader.ts:2492) entirely, do not port that. Parity: TS parseFile(db,
-  'opencode')-equivalent vs Rust on the real ~/.local/share/opencode db if present, else fixture.
-  Then P4: HTTP/API + MCP in Rust behind the 4318/4316 listeners (axum or tiny-http; wire
-  agentlens-ingest + spanstore writer + store), CLI port, TS server retired. P4's parity law:
-  the /api/* + MCP wire shapes are frozen; the dashboard must work unmodified.
+- **P3d COMPLETE (commit e85f481) — every log source now parses in Rust.** `opencode.rs` in
+  agentlens-logscan via rusqlite (bundled): rusqlite opens the LIVE db read-only with NATIVE WAL
+  handling, REPLACING the TS byte-copy + hand-rolled `_mergeWal` on the Rust path (the TS
+  `_mergeWal` stays only inside the TS fallback engine). `allogscan --opencode <db>` emits one
+  NDJSON session line per root session; `rustParseOpenCodeSync` (rustLogScan.ts) + the
+  `_scanOpenCode` wiring use the same two opt-in channels (env unconditional; installed binary
+  only when OPENCODE_DATA_DIR is unset); a binary failure degrades through the SAME catch as a
+  TS db error (JSON fallback). TimelineEntry grew action/toolInput/errorMessage (+ turn is now
+  Option) with entryCost parity; `cap_timeline` ports TS capTimeline. `last_timestamp_ms` is
+  DELIBERATELY 0 on opencode transcripts — the TS opencode path applies no hot-age strip, and 0
+  disarms finishRustTranscript's boundary strip (parity law, do not "fix"). PARITY: fixture db
+  (root-filter, zero-token filter, model NULL, last-user-text wins, equal-ts llm-before-tool
+  stable order, callID-null spanId, ''-output truthiness, error parts, astral chars) AND the
+  REAL 160MB db — native WAL read deepStrictEqual to the TS merge; capTimeline eviction pinned.
+  GOTCHA (cost a debug cycle): the real-db TS parse must run in a CHILD process
+  (src/test/helpers/opencodeParseChild.ts) — sql.js WASM memory never shrinks, and in-process it
+  pushed mocha past the 4096MB rssPressure HWM, which flips compressSealedSegments into its
+  defensive skip and fails 8 UNRELATED tests (7 gz + the HWM default). Suite 2420 passing, 0
+  failing. Deployed: bundle rebuilt, `~/.agentlens/bin/allogscan` replaced, server restarted
+  (verified `rustParseOpenCodeSync` in the running bundle).
+- **NEXT ACTION (one step): P4 — the surface that retires the TS server.** HTTP/API + MCP in
+  Rust behind the 4318/4316 listeners (axum or tiny-http; wire agentlens-ingest + spanstore
+  writer + agentlens-store + the four allogscan parsers), CLI port, TS server retired. P4's
+  parity law: the /api/* + MCP wire shapes are FROZEN; the dashboard must work unmodified.
+  Start by inventorying the wire surface: every `/api/*` route in standalone/server.ts and every
+  MCP tool shape in src/mcpServer.ts — the freeze list IS the spec. Also fold in: wire
+  `alstore pass` in place of the TS in-process ingestPass as part of P4 (the Rust pass exists
+  as a CLI since P3c but the server still runs the TS pass).
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
