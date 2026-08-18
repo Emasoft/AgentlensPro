@@ -43,7 +43,7 @@ import {
   attachGeneratedFiles, scratchPathsInToolInput, scratchPathsInToolUseResult,
   type HarvestedGeneratedFile,
 } from './generatedFiles'
-import { allogscanBin, rustScanColdFilesSync } from './rustLogScan'
+import { allogscanBin, rustScanColdFilesSync, type RustColdScanItem } from './rustLogScan'
 
 // ── Cross-platform home resolution ────────────────────────────────────────────
 
@@ -596,29 +596,7 @@ export class LogReader {
       })
     }
     if (coldFiles.length > 0 && bin !== null) {
-      const items = rustScanColdFilesSync(bin, coldFiles)
-      const parsedBytes = new Map<string, number>()
-      for (const item of items) {
-        parsedBytes.set(item.file, item.fileSizeBytes)
-        results.push(item.result) // loop-push, never spread — TRDD-2YP3DB9Y
-      }
-      // Seed the change gate for EVERY cold file (parsed or skipped-as-empty), or the next scan
-      // would re-send the whole corpus to Rust. bytesRead is what Rust actually parsed; when the
-      // file grew between Rust's read and this stat, recording the STALE mtime forces the next
-      // scan to mismatch and reparse — the conservative-safe direction (never silently ahead).
-      for (const filePath of coldFiles) {
-        try {
-          const stat = fs.statSync(filePath)
-          const parsed = parsedBytes.get(filePath)
-          const bytesRead = parsed ?? stat.size
-          this.fileState.set(filePath, {
-            bytesRead,
-            mtimeMs: parsed !== undefined && parsed !== stat.size ? 0 : stat.mtimeMs,
-            ino: stat.ino,
-            size: stat.size,
-          })
-        } catch { /* vanished mid-scan — stays cold, retried next scan */ }
-      }
+      this._recordRustColdScan(rustScanColdFilesSync(bin, coldFiles), coldFiles, results)
     }
     return results
   }
@@ -686,14 +664,53 @@ export class LogReader {
   // ── Codex ───────────────────────────────────────────────────────────────────
 
   private _scanCodex(): LogSessionResult[] {
+    // TRDD-DMWOBWFH P2c: same cold-file fan-out to the Rust sidecar as _scanClaude (which owns
+    // the full rationale + the fileState seeding contract) — `--codex` selects that grammar.
+    const bin = process.env['CODEX_HOME']
+      ? (process.env['AGENTLENS_ALLOGSCAN']?.trim() || null)
+      : allogscanBin()
     const results: LogSessionResult[] = []
+    const coldFiles: string[] = []
     for (const sessionsDir of codexSessionsDirs()) {
       this._collectJsonlFiles(sessionsDir).forEach(filePath => {
+        if (bin !== null && !this.fileState.has(filePath)) {
+          coldFiles.push(filePath)
+          return
+        }
         const result = this._processFile(filePath, () => this._parseCodexFile(filePath, sessionsDir))
         if (result) results.push(result)
       })
     }
+    if (coldFiles.length > 0 && bin !== null) {
+      this._recordRustColdScan(rustScanColdFilesSync(bin, coldFiles, { codex: true }), coldFiles, results)
+    }
     return results
+  }
+
+  /** Shared tail of a Rust cold-file fan-out: collect results (loop-push, never spread —
+   *  TRDD-2YP3DB9Y) and seed the change gate for EVERY cold file, parsed or skipped-as-empty,
+   *  or the next scan would re-send the whole corpus. bytesRead is what Rust actually parsed;
+   *  when the file grew between Rust's read and this stat, the STALE mtime (0) forces the next
+   *  scan to mismatch and reparse — the conservative-safe direction (never silently ahead). */
+  private _recordRustColdScan(items: RustColdScanItem[], coldFiles: string[], results: LogSessionResult[]): void {
+    const parsedBytes = new Map<string, number>()
+    for (const item of items) {
+      parsedBytes.set(item.file, item.fileSizeBytes)
+      results.push(item.result)
+    }
+    for (const filePath of coldFiles) {
+      try {
+        const stat = fs.statSync(filePath)
+        const parsed = parsedBytes.get(filePath)
+        const bytesRead = parsed ?? stat.size
+        this.fileState.set(filePath, {
+          bytesRead,
+          mtimeMs: parsed !== undefined && parsed !== stat.size ? 0 : stat.mtimeMs,
+          ino: stat.ino,
+          size: stat.size,
+        })
+      } catch { /* vanished mid-scan — stays cold, retried next scan */ }
+    }
   }
 
   private _parseCodexFile(filePath: string, _sessionsDir: string): LogSessionResult | null {

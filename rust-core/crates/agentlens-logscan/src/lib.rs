@@ -30,6 +30,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+pub mod codex;
+
 use indexmap::{IndexMap, IndexSet};
 use serde::Serialize;
 use serde_json::Value;
@@ -64,12 +66,12 @@ fn utf16_slice(s: &str, n: usize) -> String {
 }
 
 /// JS-whitespace trim: char::is_whitespace plus U+FEFF (ES WhiteSpace includes the BOM).
-fn js_trim(s: &str) -> &str {
+pub(crate) fn js_trim(s: &str) -> &str {
     s.trim_matches(|c: char| c.is_whitespace() || c == '\u{FEFF}')
 }
 
 /// TS `snip`: truncate to maxChars UTF-16 units with no marker.
-fn snip(s: &str, max_chars: usize) -> String {
+pub(crate) fn snip(s: &str, max_chars: usize) -> String {
     if utf16_len(s) <= max_chars {
         s.to_owned()
     } else {
@@ -93,7 +95,7 @@ fn as_str(v: Option<&Value>) -> Option<&str> {
 }
 
 /// JS `String(v)` for the value shapes a transcript actually carries in path fields.
-fn js_string(v: &Value) -> String {
+pub(crate) fn js_string(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
         Value::Number(n) => n.to_string(),
@@ -117,7 +119,7 @@ fn coalesce_string(obj: &serde_json::Map<String, Value>, keys: &[&str]) -> Strin
 
 /// A usage figure: finite positive JSON number, else 0 (TS tokenBuckets clamp — a string "5" is
 /// NOT a number in JS `Number.isFinite` terms and collapses to 0).
-fn clamp_num(v: Option<&Value>) -> f64 {
+pub(crate) fn clamp_num(v: Option<&Value>) -> f64 {
     match v.and_then(Value::as_f64) {
         Some(n) if n.is_finite() && n > 0.0 => n,
         _ => 0.0,
@@ -1035,7 +1037,7 @@ pub struct GenFileRef {
     pub span_id: Option<String>,
 }
 
-fn parse_ts_ms(ts: &str) -> i64 {
+pub(crate) fn parse_ts_ms(ts: &str) -> i64 {
     if ts.is_empty() {
         return 0;
     }
@@ -1052,7 +1054,7 @@ fn parse_ts_ms(ts: &str) -> i64 {
 }
 
 /// `new Date(ms).toISOString()` — always `YYYY-MM-DDTHH:MM:SS.mmmZ`.
-fn iso_from_ms(ms: i64) -> String {
+pub(crate) fn iso_from_ms(ms: i64) -> String {
     let days = ms.div_euclid(86_400_000);
     let rem = ms.rem_euclid(86_400_000);
     let (y, mo, d) = agentlens_spanstore::civil_from_days(days);

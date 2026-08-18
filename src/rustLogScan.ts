@@ -94,7 +94,7 @@ export interface RustColdScanItem {
 /** Synchronous batch parse for the boot sweep — LogReader's scan path is synchronous, and the
  *  file list rides a temp file because a 13k-file boot batch exceeds ARG_MAX as argv.
  *  Throws on exec failure — opted-in means loud, never a silent fall-through to the TS loop. */
-export function rustScanColdFilesSync(bin: string, files: string[]): RustColdScanItem[] {
+export function rustScanColdFilesSync(bin: string, files: string[], opts: { codex?: boolean } = {}): RustColdScanItem[] {
   const listFile = path.join(os.tmpdir(), `allogscan-list-${process.pid}-${Date.now()}.txt`)
   fs.writeFileSync(listFile, files.join('\n') + '\n')
   // Cold cards older than the hot age lose their timeline INSIDE the binary — same parse-time
@@ -102,9 +102,11 @@ export function rustScanColdFilesSync(bin: string, files: string[]): RustColdSca
   // unstripped 12,928-card corpus measured 1.2GB (ENOBUFS on any sane maxBuffer); stripped it
   // is tens of MB. finishRustTranscript's own strip stays as the idempotent boundary catch.
   const cutoff = Date.now() - timelineHotAgeMs()
+  const argv = ['--files-from', listFile, '--strip-older-than-ms', String(cutoff)]
+  if (opts.codex) argv.push('--codex')
   let stdout: string
   try {
-    stdout = execFileSync(bin, ['--files-from', listFile, '--strip-older-than-ms', String(cutoff)], { maxBuffer: 1 << 30 }).toString()
+    stdout = execFileSync(bin, argv, { maxBuffer: 1 << 30 }).toString()
   } catch (err) {
     throw new Error(`allogscan failed (${bin}): ${err instanceof Error ? err.message : String(err)}`)
   } finally {

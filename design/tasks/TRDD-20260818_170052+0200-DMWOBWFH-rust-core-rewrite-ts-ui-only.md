@@ -66,10 +66,15 @@ release-via: publish
   engines. NOTE: ordinary server restarts take the "Fast restart — skipping cold rescan" path
   (persisted offsets import into fileState), so the Rust path fires exactly on the expensive
   case: true cold boots — fresh installs, offset-store loss, the original incident class.
-- **NEXT ACTION (one step):** P2c — port the codex/copilot/opencode parsers the same way (codex
-  is `_codexOnEntry` + lastTotalUsage, ~small; copilot is 3 file shapes; opencode is a SQLite DB
-  read — candidate for duckdb-rs in P3 instead). Then P3 (OTLP ingest + bodies→DuckDB, SQL-owned
-  aggregation), P4 (HTTP/MCP in Rust, TS server retired).
+- **P2c: CODEX PORTED AND PARITY-PROVEN.** `codex.rs` (openai-shaped buckets — cached ⊂ input
+  shed at construction; reasoning folds into output; lastTimestamp advances only on event_msg;
+  LATEST cumulative total_token_usage wins). `allogscan --codex` selects the grammar;
+  `_scanCodex` wired with the same cold-fan-out + `_recordRustColdScan` shared tail (one copy of
+  the fileState-seeding contract). Parity: fixture + **7/7 real codex transcripts** deepStrictEqual.
+- **NEXT ACTION (one step):** P2d — port the copilot parsers (3 file shapes:
+  `_parseCopilotFile`, `_parseCopilotVSCodeFile`, `_parseCopilotVSCodeJsonFile`, ~700 TS lines);
+  opencode (SQLite read) deliberately WAITS for P3's duckdb-rs. Then P3 (OTLP ingest +
+  bodies→DuckDB, SQL-owned aggregation), P4 (HTTP/MCP in Rust, TS server retired).
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the

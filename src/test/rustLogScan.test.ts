@@ -145,6 +145,38 @@ suite('rustLogScan — P2 cross-engine parity', () => {
   })
 })
 
+// ── Codex (P2c) ───────────────────────────────────────────────────────────────────
+const codexFixture = path.join(tmpDir, 'ffffffff-1111-2222-3333-444444444444.jsonl')
+fs.writeFileSync(codexFixture, [
+  JSON.stringify({ timestamp: iso(0), type: 'session_meta', payload: { cwd: '/Users/someone/codex-proj' } }),
+  JSON.stringify({ timestamp: iso(500), type: 'turn_context', payload: { model: 'gpt-5-codex' } }),
+  JSON.stringify({ timestamp: iso(1000), type: 'event_msg', payload: { type: 'user_message',
+    message: '# Context from my IDE setup:\n\n## Active file: x.ts\n\n## My request for Codex:\nfix the é bug' } }),
+  JSON.stringify({ timestamp: iso(2000), type: 'event_msg', payload: { type: 'token_count', info: {
+    total_token_usage: { input_tokens: 1000, cached_input_tokens: 400, output_tokens: 50, reasoning_output_tokens: 25 },
+    last_token_usage: { input_tokens: 1000 } } } }),
+  JSON.stringify({ timestamp: iso(3000), type: 'event_msg', payload: { type: 'token_count', info: {
+    model: 'gpt-5-codex-high',
+    total_token_usage: { input_tokens: 2500, cached_input_tokens: 900, output_tokens: 120, reasoning_output_tokens: 60 },
+    last_token_usage: { input_tokens: 1500 } } } }),
+].join('\n') + '\n')
+
+suite('rustLogScan — P2c codex parity', () => {
+  const parityTest = haveBin ? test : test.skip
+
+  parityTest('🐌 a codex transcript parses identically through both engines (openai-shaped buckets)', function () {
+    this.timeout(30_000)
+    const ts = normalize(new LogReader().parseFile(codexFixture, 'codex')) as { card: Record<string, unknown> }
+    const out = execFileSync(BIN, ['--codex', codexFixture], { maxBuffer: 1 << 28 }).toString()
+    const line = out.split('\n').filter(Boolean)[0]
+    const rust = normalize(finishRustTranscript(JSON.parse(line) as Parameters<typeof finishRustTranscript>[0])) as { card: Record<string, unknown> }
+    assert.strictEqual(rust.card.inputTokens, 1600, 'cached share shed from input (2500 - 900)')
+    assert.strictEqual(rust.card.outputTokens, 180, 'reasoning folds into output (120 + 60)')
+    assert.strictEqual(rust.card.userRequest, 'fix the é bug', 'the IDE preamble strips at the marker')
+    assert.deepStrictEqual(rust, ts)
+  })
+})
+
 suite('rustLogScan — P2b boot-sweep wiring', () => {
   const wiringTest = haveBin ? test : test.skip
 
