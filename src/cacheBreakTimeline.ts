@@ -40,6 +40,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { listBodyEvidence, loadBodyTexts, type EvidenceRow } from './store/bodiesEvidence'
 import { dataPath } from './dataDir'
+import { readHookEvents } from './hookEventStore'
 
 export { defaultBodiesDir }
 
@@ -1035,6 +1036,11 @@ export interface CacheBreakTimelineOptions {
   /** Claude projects roots searched for a sub-agent child's transcript (test override; defaults
    *  to claudeProjectsDirs() — the same roots the log reader ingests from). */
   projectsDirs?: string[]
+  /** TRDD-8ENYLEIO phase 3 — the lifecycle hook-event store (append-only NDJSON daily buckets).
+   *  Default `<dataDir>/hook-events`. PreCompact/PostCompact events turn the COMPACTION cause from
+   *  a text-shape inference into hook-corroborated evidence; a session with no hook coverage keeps
+   *  the heuristic, tagged 'inferred'. */
+  hookEventsDir?: string
 }
 
 function numOr0(v: unknown): number { return typeof v === 'number' && isFinite(v) ? v : 0 }
@@ -1069,6 +1075,11 @@ export interface CacheBreakEvent {
   remediation: string
   rawDiffSummary?: string
   confidence?: 'high' | 'medium' // set for PLUGINS_RELOADED: high = 3 catalogs churned, medium = 2
+  /** TRDD-8ENYLEIO phase 3 — set ONLY on COMPACTION events. 'hook' = a PreCompact/PostCompact
+   *  lifecycle hook event for this session corroborates the compaction (positive identification);
+   *  'inferred' = the prefix-diff/text-shape heuristic alone (sessions with no hook coverage).
+   *  Never present a hook-proven compaction and a lookalike as the same claim. */
+  causeEvidence?: 'hook' | 'inferred'
 }
 
 export interface RepeatOffender {
@@ -1355,18 +1366,19 @@ export async function buildCacheBreakTimeline(opts: CacheBreakTimelineOptions = 
   }
 
   const { bySession, respById, coverage } = await scanSessionsAndResponses(bodiesDir, storeDir, opts.windowHours, scanCap)
+  const hookInfo = loadCompactionHookInfo(opts.hookEventsDir ?? dataPath('hook-events'))
 
   // Resolve the target session: exact sessionId > scope-prefix heaviest > overall heaviest by cache_creation.
   const target = resolveTarget(bySession, respById, opts)
   if (target) {
-    return buildReportForSession(target.sid, target.turns, respById, minTokens, coverage, opts.topN)
+    return buildReportForSession(target.sid, target.turns, respById, minTokens, coverage, opts.topN, hookInfo.get(target.sid))
   }
   if (opts.sessionId) {
     // Not a metadata session id — try the sub-agent child path before giving up (2026-07-11 fix).
     const sub = resolveSubagentStream(opts.sessionId, bySession, opts.projectsDirs)
     if (sub) {
       return buildReportForSession(opts.sessionId, sub.turns, respById, minTokens,
-        { ...coverage, note: `${coverage.note} ${sub.note}` }, opts.topN)
+        { ...coverage, note: `${coverage.note} ${sub.note}` }, opts.topN, hookInfo.get(opts.sessionId))
     }
     if (opts.sessionId.startsWith('agent-')) {
       return baseReport(minTokens, {
@@ -1473,6 +1485,89 @@ function classifyTurns(turns: ScannedTurn[], respById: Map<string, ResponseUsage
   return events
 }
 
+// ── Compaction hook evidence (TRDD-8ENYLEIO phase 3) ─────────────────────────────
+// The COMPACTION cause was pure inference: a text-shape regex over msg[0] (classifyContentKind's
+// 'postcompact'). PreCompact/PostCompact lifecycle hook events STATE the compaction outright, so a
+// break they corroborate is evidence, not a lookalike. The heuristic stays as the fallback for
+// sessions with no hook coverage — tagged 'inferred', never dropped.
+
+/** Clock slack between the hook's server-receive ts and the API call's own timestamp. */
+const COMPACTION_HOOK_SLACK_MS = 60_000
+/** A PreCompact with no matching PostCompact closes after this long (the burnGuard
+ *  COMPACTION_REWRITE precedent: a compaction rewrite lands within ~5min of its PreCompact). */
+const COMPACTION_WINDOW_FALLBACK_MS = 5 * 60_000
+
+export interface CompactionHookInfo {
+  /** PreCompact receive times, ascending. Any one at or before an event corroborates a
+   *  COMPACTION-classified break (the rebuilt prefix may first be SENT minutes later — the first
+   *  post-compaction call — so corroboration is precedes-based, not window-based). */
+  preTimes: number[]
+  /** [PreCompact.ts, PostCompact.ts] pairs (fallback close after 5min). Only a break INSIDE a
+   *  window may be UPGRADED to COMPACTION — the compaction's own summarization call and the
+   *  immediate rewrite; anything later must earn the cause from its body shape. */
+  windows: Array<[number, number]>
+}
+
+/** Read PreCompact/PostCompact hook events and group them per session. Sessions without a
+ *  session_id in the payload are dropped — corroboration must never guess whose compaction it saw. */
+export function loadCompactionHookInfo(hookEventsDir: string): Map<string, CompactionHookInfo> {
+  const out = new Map<string, CompactionHookInfo>()
+  let pres: ReturnType<typeof readHookEvents>
+  let posts: ReturnType<typeof readHookEvents>
+  try {
+    pres = readHookEvents(hookEventsDir, { ev: 'PreCompact', limit: 1000 })   // 1000 = the reader's hard cap
+    posts = readHookEvents(hookEventsDir, { ev: 'PostCompact', limit: 1000 })
+  } catch {
+    return out // no hook store — every session falls back to 'inferred'
+  }
+  const bySession = (recs: typeof pres): Map<string, number[]> => {
+    const m = new Map<string, number[]>()
+    for (const r of recs) {
+      if (!r.session) continue
+      const arr = m.get(r.session) ?? []
+      arr.push(r.ts)
+      m.set(r.session, arr)
+    }
+    for (const arr of m.values()) arr.sort((a, b) => a - b)
+    return m
+  }
+  const preBy = bySession(pres)
+  const postBy = bySession(posts)
+  for (const [sid, preTimes] of preBy) {
+    const postTimes = postBy.get(sid) ?? []
+    const windows: Array<[number, number]> = preTimes.map((pre) => {
+      const post = postTimes.find((p) => p > pre)
+      return [pre, post ?? pre + COMPACTION_WINDOW_FALLBACK_MS]
+    })
+    out.set(sid, { preTimes, windows })
+  }
+  return out
+}
+
+/** Annotate one session's classified events with compaction hook evidence. Exported for tests. */
+export function applyCompactionHookEvidence(events: CacheBreakEvent[], info?: CompactionHookInfo): CacheBreakEvent[] {
+  for (const e of events) {
+    const ms = Date.parse(e.ts)
+    if (Number.isNaN(ms)) {
+      if (e.cause === 'COMPACTION') e.causeEvidence = 'inferred'
+      continue
+    }
+    if (e.cause === 'COMPACTION') {
+      e.causeEvidence = info?.preTimes.some((pre) => pre <= ms + COMPACTION_HOOK_SLACK_MS) ? 'hook' : 'inferred'
+    } else if (e.cause === 'UNCLASSIFIED' && info?.windows.some(([a, b]) => ms >= a - COMPACTION_HOOK_SLACK_MS && ms <= b + COMPACTION_HOOK_SLACK_MS)) {
+      // Positive identification the regex missed: an unlocalized break DURING a hook-attested
+      // compaction window IS the compaction (its summarization call / immediate rewrite). Only
+      // UNCLASSIFIED is upgraded — a named mechanical cause (MODEL_SWITCH, ...) during the window
+      // is still that cause, and overriding it would hide a real misconfiguration behind an
+      // expected one. rawDiffSummary is kept: the upgrade adds evidence, it does not erase any.
+      e.cause = 'COMPACTION'
+      e.causeEvidence = 'hook'
+      e.remediation = CACHE_BREAK_REMEDIATION.COMPACTION
+    }
+  }
+  return events
+}
+
 function buildReportForSession(
   sid: string,
   turns: ScannedTurn[],
@@ -1480,9 +1575,10 @@ function buildReportForSession(
   minTokens: number,
   coverage: CacheBreakTimelineReport['coverage'],
   topN?: number,
+  hookInfo?: CompactionHookInfo,
 ): CacheBreakTimelineReport {
   const sessionCC = sessionCacheCreate(turns, respById)
-  const events = classifyTurns(turns, respById, minTokens)
+  const events = applyCompactionHookEvidence(classifyTurns(turns, respById, minTokens), hookInfo)
   const accountUuid = turns.find(t => t.accountUuid)?.accountUuid
   const model = events.find(e => e.model)?.model
 
@@ -1567,6 +1663,8 @@ export interface CauseCostPeakOptions {
   minTokens?: number         // floor: only classify turns whose cache_creation >= this (default DEFAULT_MIN_TOKENS)
   bucket?: CostBucket
   topN?: number
+  /** See CacheBreakTimelineOptions.hookEventsDir (TRDD-8ENYLEIO phase 3). */
+  hookEventsDir?: string
 }
 
 function emptyCauseCostPeakReport(bucket: CostBucket, bodiesDir: string, scanCap: number, windowHours?: number): CacheCreationReport {
@@ -1617,12 +1715,13 @@ export async function buildCauseCostPeakReport(opts: CauseCostPeakOptions = {}):
   const groups = new Map<CacheBreakTimelineCause, CacheCreationGroupRow>()
   let totalCC = 0, totalCR = 0, totalIn = 0, totalOut = 0, totalCost = 0
   const outputEvents: OutputSpike[] = []
+  const hookInfo = loadCompactionHookInfo(opts.hookEventsDir ?? dataPath('hook-events'))
 
   for (const [sid, turnsRaw] of bySession) {
     if (sid === '(no-session)') continue
     const turns = [...turnsRaw].sort((a, b) => a.mtimeMs - b.mtimeMs)
     const accountUuid = turns.find(t => t.accountUuid)?.accountUuid
-    for (const e of classifyTurns(turns, respById, minTokens)) {
+    for (const e of applyCompactionHookEvidence(classifyTurns(turns, respById, minTokens), hookInfo.get(sid))) {
       const t: TokenCounts = { inputTokens: e.inputTokens, cacheReadTokens: e.cacheReadTokens, cacheCreateTokens: e.cacheCreateTokens, outputTokens: e.outputTokens, model: e.model }
       const fullCost = tokenCountsFullCost(t)
       totalCC += e.cacheCreateTokens; totalCR += e.cacheReadTokens; totalIn += e.inputTokens; totalOut += e.outputTokens; totalCost += fullCost
@@ -1717,6 +1816,8 @@ export interface CacheBreakCausesOptions {
   minTokens?: number
   scope?: string              // optional session-id prefix filter
   topN?: number               // cap on the actorLeaderboard (default 20, max 100)
+  /** See CacheBreakTimelineOptions.hookEventsDir (TRDD-8ENYLEIO phase 3). */
+  hookEventsDir?: string
 }
 
 /** Cross-session cause ranking + perpetrator backtrace. Scans EVERY session in the bounded window,
@@ -1747,11 +1848,12 @@ export async function buildCacheBreakCauses(opts: CacheBreakCausesOptions = {}):
   const actorMap = new Map<string, ActorAcc>()
   let total = 0, totalEvents = 0
 
+  const hookInfo = loadCompactionHookInfo(opts.hookEventsDir ?? dataPath('hook-events'))
   for (const [sid, turnsRaw] of bySession) {
     if (sid === '(no-session)') continue
     if (opts.scope && !sid.startsWith(opts.scope)) continue
     const turns = [...turnsRaw].sort((a, b) => a.mtimeMs - b.mtimeMs)
-    for (const e of classifyTurns(turns, respById, minTokens)) {
+    for (const e of applyCompactionHookEvidence(classifyTurns(turns, respById, minTokens), hookInfo.get(sid))) {
       total += e.cacheCreateTokens; totalEvents += 1
       const c = causeMap.get(e.cause) ?? { events: 0, cc: 0, sessions: new Set<string>() }
       c.events += 1; c.cc += e.cacheCreateTokens; c.sessions.add(sid); causeMap.set(e.cause, c)
