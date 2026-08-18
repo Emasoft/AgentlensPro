@@ -4,6 +4,34 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.28.0] - 2026-08-18
+
+### Fixed
+
+- **`cache-expired` cold probes are tail-read bounded — no more intermittent 20-40s calls**
+  (TRDD-CXPLAT01). The newest-session probe reparsed up to 12 transcripts synchronously (163.6MB
+  measured on a 6-session pool); it now ranks candidates by a bounded 256KB tail read of each
+  transcript, and the winner's verdict reuses the probed timestamp so the biggest transcript is not
+  reparsed either. Measured: cold probe after a full server restart 2.29s (was 20-40s); warm 0.05s.
+- **Codex telemetry auto-config no longer fails on configs that declare the exporter as a table**
+  (TRDD-CODXTOML1). `safeConfigEdit`'s TOML op now consults the parsed tree before inserting: a key
+  already present in ANY form — including a `[otel.exporter.otlp-http]` sub-table header the
+  line-scan could not see — is the user's explicit choice and is skipped, never re-declared (the
+  duplicate declaration made tomllib refuse the whole edit, leaving Codex silently unconfigured).
+- **Stranded ts-mismatch body files no longer pin RAM-spool capacity forever** (TRDD-P8JGIEOG).
+  Parked files are relocated once to the durable legacy bodies dir — destination proven
+  byte-identical and fsynced before the spool copy is unlinked, mtime (the only true capture
+  record) preserved — so a bulk wrong-ts event can no longer hold the fixed-size spool below the
+  backpressure floor indefinitely.
+
+### Added
+
+- **Compaction cache-break causes carry evidence, not just inference** (TRDD-8ENYLEIO phase 3).
+  The cache-break reports annotate COMPACTION events with `causeEvidence: 'hook' | 'inferred'`
+  from PreCompact/PostCompact lifecycle hook events; an unlocalizable break inside a
+  hook-attested compaction window is positively identified as COMPACTION. Sessions without hook
+  coverage keep the text-shape heuristic, explicitly tagged `'inferred'`.
+
 ## [2.27.0] - 2026-08-18
 
 ### Fixed

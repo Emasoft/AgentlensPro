@@ -1,9 +1,10 @@
 ---
 trdd-id: 8ENYLEIO
 title: Consume hook events in analytics — StopFailure calibrates the window, PreCompact proves compaction
-column: backburner
+column: complete
 created: 2026-07-10T04:15:58+0200
-updated: 2026-07-10T04:15:58+0200
+updated: 2026-08-18T13:45:00+0200
+implementation-commits: [ba89372]
 current-owner: agentlens-session
 task-type: feature
 release-via: none
@@ -16,6 +17,26 @@ relevant-rules: []
 ---
 
 # Consume hook events in analytics
+
+## Approval log
+
+- 2026-08-18T13:45:00+0200 — COMPLETED under the USER "complete all TRDD" directive. Phase status,
+  verified against the current codebase:
+  - **Phase 1 (reader plumbing)** — delivered by later work in the direct-read form:
+    `hookEventStore.readHookEvents` is consumed by burnGuard, burnInvestigator, lastCompact and the
+    calibration ingest; the card's `hookEventIndex` wrapper became unnecessary.
+  - **Phase 2 (window calibration)** — delivered by `src/capacityCalibration.ts`
+    (`calibrateFromStopFailure`): rate-limit-class StopFailure events convert the estimated window
+    ceiling into a measured one, more refined than this card asked (auth/network turn deaths are
+    filtered out because they prove nothing about capacity).
+  - **Phase 3 (compaction evidence)** — implemented NOW in ba89372: all three cache-break reports
+    annotate COMPACTION with `causeEvidence: 'hook' | 'inferred'` from PreCompact/PostCompact hook
+    events; UNCLASSIFIED breaks inside a hook window upgrade to COMPACTION/'hook'; named causes are
+    never overridden; sessions without hook coverage keep the heuristic, tagged 'inferred'. 6 tests.
+  - **Phase 4 (reclassify the residual)** — measured on this machine (24h corpus, 97 classified
+    events): UNCLASSIFIED is 0 both with and without hook evidence — the July ~18.3% residual no
+    longer exists on the current classifier, so there was nothing left to reclassify. The live hook
+    store feeds the new path (208 PreCompact events, 55 sessions with windows loaded).
 
 ## Context
 
