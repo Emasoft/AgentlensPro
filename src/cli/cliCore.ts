@@ -74,7 +74,9 @@ interface JsonRpcResponse { error?: JsonRpcError; result?: unknown }
  *  answer with the server down. The hand-fix that bounded `hook`/`gate`/`statusline` (TRDD-E8XIC2PM)
  *  covered a different transport; everything on this one was still unbounded, which the latency
  *  guard caught on its first run. A closed port REFUSES instantly and hides this completely. */
-const CONNECT_TIMEOUT_MS = Math.max(200, Number(process.env.AGENTLENS_CONNECT_TIMEOUT_MS) || 800)
+// Exported so a caller can name the ceiling in its own diagnosis rather than hardcoding "800ms" —
+// `serverControl.ts::showStatus` cites it when a probe times out against a server later proven alive.
+export const CONNECT_TIMEOUT_MS = Math.max(200, Number(process.env.AGENTLENS_CONNECT_TIMEOUT_MS) || 800)
 
 /** Arm a connect deadline on an in-flight request. Cleared the moment the socket connects or the
  *  response starts; on expiry the request is destroyed with a precise reason, so the caller gets a

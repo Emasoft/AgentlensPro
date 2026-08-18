@@ -60,3 +60,21 @@ export function clamp(v: number, lo: number, hi: number): number {
   if (!Number.isFinite(v)) return lo
   return Math.min(hi, Math.max(lo, v))
 }
+
+/** Refuse any `--flag`/`-x` token not in `known`. `valued` names the subset that consumes the
+ *  NEXT token as its value (skipped rather than checked against `known`) — everything else,
+ *  including bare positionals like a view or subcommand name, is the caller's own job to judge.
+ *
+ *  Extracted from `cacheExpiredCli.ts` and `lastCompactCli.ts`, which had each grown an
+ *  identical copy of this loop (TRDD-PIB6T4RU): a typo'd flag was silently ignored by every
+ *  OTHER command (`list --definitely-not-a-real-flag`, `server status --x`,
+ *  `statusline-history project --x` all exited 0), because nothing routed them through the one
+ *  place this was already enforced. One shared loop means a fix here fixes every caller instead
+ *  of the two that happened to have their own copy. */
+export function assertKnownFlags(argv: string[], known: ReadonlySet<string>, valued: ReadonlySet<string>, helpHint: string): void {
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]
+    if (valued.has(a)) { i++; continue }
+    if (a.startsWith('-') && !known.has(a)) throw new UsageError(`unknown flag "${a}" — see: ${helpHint}`)
+  }
+}

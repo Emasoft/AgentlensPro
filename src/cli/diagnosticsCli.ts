@@ -18,7 +18,7 @@ import {
   fmtMb, init, mcpEndpoint, parseWhen, resolveTool, sleep, ToolInfo, ToolSchema,
 } from './cliCore'
 import { EXIT, UsageError } from './cliErrors'
-import { strArg } from './argHelpers'
+import { strArg, assertKnownFlags } from './argHelpers'
 import { installAgents, installHooks, installOtel, installSkills, installStatusline } from './hookInstall'
 import { ensureServer, openDashboard, showStatus, stopServer } from './serverControl'
 
@@ -677,6 +677,10 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
   await init()
 
   if (cmd === 'list') {
+    // `list` takes exactly one flag. A typo (`--definitely-not-a-real-flag`) used to be silently
+    // ignored and exit 0 — TRDD-PIB6T4RU: every unrecognized rest[1..] token must be refused, not
+    // dropped, or a caller cannot tell "no tools matched" apart from "you misspelled --desc".
+    assertKnownFlags(rest.slice(1), new Set(['--desc']), new Set(), 'agentlenspro list --desc')
     const tools = await fetchTools()
     const withDesc = rest.includes('--desc')
     for (const t of tools) console.log(withDesc ? `${t.name} — ${firstSentence(t.description)}` : t.name)

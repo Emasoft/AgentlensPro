@@ -4,7 +4,7 @@
 
 import * as fs from 'fs'
 import * as path from 'path'
-import { strArg } from './argHelpers'
+import { strArg, assertKnownFlags } from './argHelpers'
 import { FACETS, gatherAll, resolveFacet } from '../environment'
 import type { EnvFacet } from '../environment/types'
 
@@ -38,7 +38,13 @@ interface ParsedArgs {
   list: boolean
 }
 
+const KNOWN_FLAGS = new Set(['--json', '--out', '--list'])
+const VALUED_FLAGS = new Set(['--out'])
+
 function parse(argv: string[]): ParsedArgs {
+  // `--out=path` is its own token shape (not caught by the VALUED skip-next-token rule), so it is
+  // stripped before validation rather than taught to assertKnownFlags as a one-off prefix case.
+  assertKnownFlags(argv.filter(a => !a.startsWith('--out=')), KNOWN_FLAGS, VALUED_FLAGS, 'agentlenspro env --help')
   const p: ParsedArgs = { facet: null, json: false, out: null, list: false }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]

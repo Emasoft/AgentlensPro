@@ -7,10 +7,11 @@ import { spawn, execFileSync } from 'child_process'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { apiRequest, dataDir, dashboardUrl, fmtGb, fmtMb, init, mcpEndpoint, sleep } from './cliCore'
+import { apiRequest, dataDir, dashboardUrl, fmtGb, fmtMb, init, mcpEndpoint, sleep, CONNECT_TIMEOUT_MS } from './cliCore'
 import { dataDirSource } from '../dataDir'
 import { agentlensDisabled, killSwitchPath } from './killSwitch'
 import { UsageError } from './cliErrors'
+import { assertKnownFlags } from './argHelpers'
 import { parsePidLock } from '../serverRuntime'
 
 /** Count of hook events durably spooled to disk but not yet reingested (server was down / shedding).
@@ -351,15 +352,26 @@ export async function showStatus(): Promise<void> {
       console.log(`server: RUNNING but does not serve /api/server-stats (older build?)${pid ? ` pid=${pid}` : ''} — restart it: agentlenspro server restart`)
       return
     }
-    console.log(`server: NOT RUNNING (${(e as Error).message})`)
-    // The pidfile may still name a live process bound to different ports, or be stale.
+    // The pidfile may still name a live process — and if it does, THAT outranks the probe timeout,
+    // not the other way round. MEASURED false negative: `server status` printed "NOT RUNNING" while
+    // the server was live and healthy on 3000/4316/4318, because the 800ms connect deadline
+    // (CONNECT_TIMEOUT_MS, cliCore.ts) can expire against a server that is simply busy/GC-thrashing
+    // and hasn't drained its TCP accept queue in time — that is not the same fact as a dead port, but
+    // the old code folded both into the identical "unreachable" wrapper message. The tell was that the
+    // very next line here read the pidfile and printed a LIVE pid right underneath "NOT RUNNING" —
+    // two consecutive lines contradicting each other. A verdict that lies about what a caller can
+    // trivially disprove one line later is worse than a slower, honest one, so the pid check now runs
+    // FIRST and — proven alive — overrides the probe's guess instead of merely footnoting it.
+    let livePid: number | null = null
     try {
       const lock = parsePidLock(fs.readFileSync(pidfilePath(), 'utf-8'))
-      if (lock !== null) {
-        try { process.kill(lock.pid, 0); console.log(`pidfile: ${lock.pid} (process alive — a server may be up on non-default ports)`) }
-        catch { console.log(`pidfile: ${lock.pid} (stale — process gone)`) }
-      }
-    } catch { /* no pidfile */ }
+      if (lock !== null && processAlive(lock.pid)) livePid = lock.pid
+    } catch { /* no/unreadable pidfile — a genuinely dead server still falls through below */ }
+    if (livePid !== null) {
+      console.log(`server: RUNNING pid=${livePid} — busy / not responding within ${CONNECT_TIMEOUT_MS}ms (${(e as Error).message})`)
+      return
+    }
+    console.log(`server: NOT RUNNING (${(e as Error).message})`)
     return
   }
   const up = s.uptimeSec
@@ -513,6 +525,10 @@ async function mcpServed(): Promise<boolean> {
 /** Dispatcher for `agentlenspro server <start|stop|restart|status> [--supervise]`. */
 export async function serverCommand(argv: string[]): Promise<void> {
   const verb = argv[0]
+  // `server status --x` used to be silently ignored and exit 0 (TRDD-PIB6T4RU) — the only flag any
+  // verb here understands is --supervise (start-only, but harmless to accept everywhere), so anything
+  // else flag-shaped is a typo, not a no-op.
+  assertKnownFlags(argv.slice(1), new Set(['--supervise']), new Set(), 'agentlenspro server start|stop|restart|status [--supervise]')
   const supervise = argv.includes('--supervise')
   switch (verb) {
     case 'start':
@@ -557,14 +573,21 @@ export async function serverCommand(argv: string[]): Promise<void> {
 export async function daemonCommand(argv: string[]): Promise<void> {
   const verb = argv[0] ?? 'status'
   if (verb === 'status') {
+    assertKnownFlags(argv.slice(1), new Set(), new Set(), 'agentlenspro daemon status')
     await showStatus()
     const spooled = hookSpoolDepth()
     console.log(`ingestion: always-on daemon = the standalone server (OTLP :4318 + JSONL scan + hook-spool drain).`)
     console.log(`hook-spool: ${spooled} event(s) awaiting drain${spooled > 0 ? ' — undelivered hooks are safe on disk and reingested on the next drain tick' : ''}`)
     return
   }
-  if (verb === 'install') { daemonInstall({ load: !argv.includes('--no-load') }); return }
-  if (verb === 'uninstall') { daemonUninstall(); return }
+  if (verb === 'install') {
+    assertKnownFlags(argv.slice(1), new Set(['--no-load']), new Set(), 'agentlenspro daemon install [--no-load]')
+    daemonInstall({ load: !argv.includes('--no-load') }); return
+  }
+  if (verb === 'uninstall') {
+    assertKnownFlags(argv.slice(1), new Set(), new Set(), 'agentlenspro daemon uninstall')
+    daemonUninstall(); return
+  }
   if (verb === 'start' || verb === 'stop' || verb === 'restart') {
     // The daemon and the server are one process — reuse the exact lifecycle (incl. --supervise).
     await serverCommand(argv)

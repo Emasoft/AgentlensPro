@@ -131,6 +131,16 @@ suite('agentlenspro — diagnostics dispatch parity (absorbed agentlens-cli.js s
     } finally { await stub.close(); fs.rmSync(home, { recursive: true, force: true }) }
   })
 
+  test('`list --definitely-not-a-real-flag` exits 64 instead of silently ignoring the typo (TRDD-PIB6T4RU)', async () => {
+    const home = mkHome()
+    const stub = await startMcpStub([{ name: 'get_burn_status', description: 'x' }], () => ({}))
+    try {
+      const r = await runCli(['list', '--definitely-not-a-real-flag'], isolatedEnv(home, { AGENTLENS_MCP_URL: stub.url }))
+      assert.strictEqual(r.code, 64, `stderr: ${r.stderr}`)
+      assert.ok(r.stderr.includes('--definitely-not-a-real-flag'), r.stderr)
+    } finally { await stub.close(); fs.rmSync(home, { recursive: true, force: true }) }
+  })
+
   test('a tool subcommand maps --flags by the live schema and prints the tool result JSON', async () => {
     // Flag coercion (number) + dispatch through tools/call with the parsed arguments.
     const home = mkHome()
@@ -304,6 +314,40 @@ suite('agentlenspro — diagnostics dispatch parity (absorbed agentlens-cli.js s
       }))
       assert.strictEqual(r.code, 0, `stderr: ${r.stderr}`)
       assert.ok(r.stdout.includes('NOT RUNNING'), r.stdout)
+    } finally { fs.rmSync(home, { recursive: true, force: true }) }
+  })
+
+  test('`server status` against a stalled probe with a LIVE pidfile reports RUNNING, never NOT RUNNING (TRDD-TABN063T)', async () => {
+    // MEASURED false negative: a busy/GC-thrashing server can lose the 800ms connect deadline even
+    // though the process is alive. Simulated here with a live pid (our own test runner) and a
+    // connect target that never answers (127.0.0.1:1 refuses instantly, so this proves the pid
+    // check alone is enough to flip the verdict, independent of which flavor of unreachable fired).
+    const home = mkHome()
+    const dataDir = path.join(home, '.agentlens')
+    fs.mkdirSync(dataDir, { recursive: true })
+    fs.writeFileSync(path.join(dataDir, 'server.pid'), JSON.stringify({ pid: process.pid, start: null }))
+    try {
+      const r = await runCli(['server', 'status'], isolatedEnv(home, {
+        AGENTLENS_UI_URL: 'http://127.0.0.1:1',
+        AGENTLENS_MCP_URL: 'http://127.0.0.1:1/mcp',
+        DATA_DIR: dataDir,
+      }))
+      assert.strictEqual(r.code, 0, `stderr: ${r.stderr}`)
+      assert.ok(r.stdout.includes('RUNNING'), r.stdout)
+      assert.ok(!r.stdout.includes('NOT RUNNING'), r.stdout)
+      assert.ok(r.stdout.includes(String(process.pid)), r.stdout)
+    } finally { fs.rmSync(home, { recursive: true, force: true }) }
+  })
+
+  test('`server status --x` exits 64 instead of silently ignoring the typo (TRDD-PIB6T4RU)', async () => {
+    const home = mkHome()
+    try {
+      const r = await runCli(['server', 'status', '--x'], isolatedEnv(home, {
+        AGENTLENS_UI_URL: 'http://127.0.0.1:1',
+        AGENTLENS_MCP_URL: 'http://127.0.0.1:1/mcp',
+        DATA_DIR: path.join(home, '.agentlens'),
+      }))
+      assert.strictEqual(r.code, 64, `stderr: ${r.stderr}`)
     } finally { fs.rmSync(home, { recursive: true, force: true }) }
   })
 

@@ -18,6 +18,7 @@
 
 import { callTool } from './cliCore'
 import { EXIT, UsageError } from './cliErrors'
+import { assertKnownFlags } from './argHelpers'
 
 export const CACHE_EXPIRED_USAGE = `agentlenspro cache-expired [flags]
 
@@ -80,11 +81,7 @@ export async function runCacheExpiredCli(argv: string[]): Promise<number> {
   }
   // An unknown flag must never be silently ignored here: a caller who typo'd `--treshold-minutes`
   // would otherwise get a confident boolean measured against the wrong cutoff.
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i]
-    if (VALUED.has(a)) { i++; continue }
-    if (!KNOWN.has(a)) throw new UsageError(`unknown flag "${a}" — see: agentlenspro cache-expired --help`)
-  }
+  assertKnownFlags(argv, KNOWN, VALUED, 'agentlenspro cache-expired --help')
 
   const quiet = argv.includes('--quiet') || argv.includes('-q')
   const asJson = argv.includes('--json')
