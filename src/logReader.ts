@@ -682,7 +682,7 @@ export class LogReader {
       })
     }
     if (coldFiles.length > 0 && bin !== null) {
-      this._recordRustColdScan(rustScanColdFilesSync(bin, coldFiles, { codex: true }), coldFiles, results)
+      this._recordRustColdScan(rustScanColdFilesSync(bin, coldFiles, { agent: 'codex' }), coldFiles, results)
     }
     return results
   }
@@ -767,12 +767,24 @@ export class LogReader {
       return results
     }
 
+    // TRDD-DMWOBWFH P2d: cold events.jsonl files fan to the Rust sidecar (same contract as
+    // _scanClaude, which owns the rationale). No fixture env override exists for this root, so
+    // the guard is just the standard two-channel opt-in.
+    const bin = allogscanBin()
+    const coldFiles: string[] = []
     for (const sessionDirName of sessionDirs) {
       const eventsFile = path.join(stateDir, sessionDirName, 'events.jsonl')
+      if (bin !== null && !this.fileState.has(eventsFile)) {
+        try { fs.statSync(eventsFile) } catch { continue } // absent events.jsonl — not a session
+        coldFiles.push(eventsFile)
+        continue
+      }
       const result = this._processFile(eventsFile, () => this._parseCopilotFile(eventsFile, sessionDirName))
       if (result) results.push(result)
     }
-
+    if (coldFiles.length > 0 && bin !== null) {
+      this._recordRustColdScan(rustScanColdFilesSync(bin, coldFiles, { agent: 'copilot-cli' }), coldFiles, results)
+    }
     return results
   }
 
@@ -896,6 +908,11 @@ export class LogReader {
 
   private _scanCopilotVSCode(): LogSessionResult[] {
     const results: LogSessionResult[] = []
+    // TRDD-DMWOBWFH P2d: two cold batches (the delta-log jsonl and the legacy json snapshot are
+    // different grammars → different --copilot-vscode* flags), same contract as _scanClaude.
+    const bin = allogscanBin()
+    const coldJsonl: string[] = []
+    const coldJson: string[] = []
     for (const root of vscodeFamilyWorkspaceStorageRoots()) {
       try {
         for (const hashDir of fs.readdirSync(root)) {
@@ -906,11 +923,13 @@ export class LogReader {
           for (const name of names) {
             if (name.endsWith('.jsonl')) {
               const filePath = path.join(chatDir, name)
+              if (bin !== null && !this.fileState.has(filePath)) { coldJsonl.push(filePath); continue }
               const sessionId = path.basename(filePath, '.jsonl')
               const result = this._processFile(filePath, () => this._parseCopilotVSCodeFile(filePath, sessionId))
               if (result) results.push(result)
             } else if (name.endsWith('.json') && !jsonlIds.has(name.slice(0, -5))) {
               const filePath = path.join(chatDir, name)
+              if (bin !== null && !this.fileState.has(filePath)) { coldJson.push(filePath); continue }
               const sessionId = path.basename(filePath, '.json')
               const result = this._processFile(filePath, () => this._parseCopilotVSCodeJsonFile(filePath, sessionId))
               if (result) results.push(result)
@@ -918,6 +937,14 @@ export class LogReader {
           }
         }
       } catch { /* root not accessible */ }
+    }
+    if (bin !== null) {
+      if (coldJsonl.length > 0) {
+        this._recordRustColdScan(rustScanColdFilesSync(bin, coldJsonl, { agent: 'copilot-vscode' }), coldJsonl, results)
+      }
+      if (coldJson.length > 0) {
+        this._recordRustColdScan(rustScanColdFilesSync(bin, coldJson, { agent: 'copilot-vscode-json' }), coldJson, results)
+      }
     }
     return results
   }

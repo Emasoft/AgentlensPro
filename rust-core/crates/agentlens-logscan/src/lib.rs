@@ -31,6 +31,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 pub mod codex;
+pub mod copilot;
 
 use indexmap::{IndexMap, IndexSet};
 use serde::Serialize;

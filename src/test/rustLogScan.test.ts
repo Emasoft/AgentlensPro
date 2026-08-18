@@ -177,6 +177,92 @@ suite('rustLogScan — P2c codex parity', () => {
   })
 })
 
+// ── Copilot (P2d) — three shapes ─────────────────────────────────────────────────
+const cpCliDir = path.join(tmpDir, 'copilot-state', 'abababab-1111-2222-3333-444444444444')
+fs.mkdirSync(cpCliDir, { recursive: true })
+const cpCliFixture = path.join(cpCliDir, 'events.jsonl')
+fs.writeFileSync(cpCliFixture, [
+  JSON.stringify({ timestamp: iso(0), type: 'session.start',
+    data: { sessionId: 'abababab', selectedModel: 'gpt-5', startTime: iso(0), context: { cwd: '/Users/someone/cp-proj' } } }),
+  JSON.stringify({ timestamp: iso(1000), type: 'user.message',
+    data: { transformedContent: '<current_datetime>now</current_datetime>\n<system_reminder>\nstuff\n</system_reminder>\nplease fix the parser' } }),
+  JSON.stringify({ timestamp: iso(2000), type: 'assistant.message',
+    data: { outputTokens: 40, model: 'gpt-5-mini',
+      toolRequests: [{ name: 'edit', arguments: { path: '/Users/someone/cp-proj/a.ts' } }, { name: 'bash', arguments: {} }] } }),
+  JSON.stringify({ timestamp: iso(3000), type: 'assistant.message', data: { outputTokens: 15 } }),
+  JSON.stringify({ timestamp: iso(4000), type: 'session.shutdown',
+    data: { currentTokens: 99999, modelMetrics: {
+      'gpt-5': { usage: { inputTokens: 500, cacheReadTokens: 200, cacheWriteTokens: 30 } },
+      'gpt-5-mini': { usage: { inputTokens: 100, cacheReadTokens: 0, cacheWriteTokens: 0 } } } } }),
+].join('\n') + '\n')
+
+const vsHashDir = path.join(tmpDir, 'workspaceStorage', 'hash1')
+const vsChatDir = path.join(vsHashDir, 'chatSessions')
+fs.mkdirSync(vsChatDir, { recursive: true })
+fs.writeFileSync(path.join(vsHashDir, 'workspace.json'),
+  JSON.stringify({ folder: 'file:///Users/someone/vs%20proj' }))
+const cpVsFixture = path.join(vsChatDir, 'acacacac-1111-2222-3333-444444444444.jsonl')
+fs.writeFileSync(cpVsFixture, [
+  JSON.stringify({ kind: 0, v: { creationDate: T0, sessionId: 'acacacac',
+    inputState: { selectedModel: { id: 'copilot/gpt-4.1', metadata: { family: 'gpt-4.1' } } } } }),
+  JSON.stringify({ kind: 2, k: ['requests'], v: [{ timestamp: T0 + 1000, message: { text: 'refactor the auth module' }, modelId: 'copilot/gpt-4.1' }] }),
+  JSON.stringify({ kind: 1, k: ['requests', 0, 'completionTokens'], v: 33 }),
+  JSON.stringify({ kind: 2, k: ['requests'], v: [{ timestamp: T0 + 2000, completionTokens: 21 }] }),
+  JSON.stringify({ kind: 1, k: ['requests', 1, 'result'], v: { usage: { completionTokens: 22, promptTokens: 400 } } }),
+].join('\n') + '\n')
+
+const cpJsonFixture = path.join(vsChatDir, 'adadadad-1111-2222-3333-444444444444.json')
+fs.writeFileSync(cpJsonFixture, JSON.stringify({
+  sessionId: 'adadadad-1111-2222-3333-444444444444',
+  creationDate: T0, lastMessageDate: T0 + 5000,
+  inputState: { selectedModel: { metadata: { family: 'gpt-4o' } } },
+  requests: [
+    { modelId: 'copilot/gpt-4o', message: { parts: [{ text: '<attachment>x</attachment>' }, { text: 'explain this stack trace' }] },
+      response: [{ kind: 'toolInvocationSerialized', toolId: 'readFile' }, { kind: 'text' }] },
+    { response: [{ kind: 'toolInvocationSerialized', toolId: 'readFile' }] },
+  ],
+}))
+
+suite('rustLogScan — P2d copilot parity', () => {
+  const parityTest = haveBin ? test : test.skip
+
+  function rustParseAs(flag: string, file: string): unknown {
+    const out = execFileSync(BIN, [flag, file], { maxBuffer: 1 << 28 }).toString()
+    const line = out.split('\n').filter(Boolean)[0]
+    assert.ok(line, `no NDJSON result for ${file}`)
+    return normalize(finishRustTranscript(JSON.parse(line) as Parameters<typeof finishRustTranscript>[0]))
+  }
+
+  parityTest('🐌 the CLI events.jsonl shape parses identically (shutdown metrics, XML-block strip)', function () {
+    this.timeout(30_000)
+    const ts = normalize(new LogReader().parseFile(cpCliFixture, 'copilot')) as { card: Record<string, unknown> }
+    const rust = rustParseAs('--copilot-cli', cpCliFixture) as { card: Record<string, unknown> }
+    assert.strictEqual(rust.card.userRequest, 'please fix the parser', 'injected XML blocks skip')
+    assert.strictEqual(rust.card.inputTokens, 600, 'shutdown metrics sum across models')
+    assert.strictEqual(rust.card.sessionId, 'abababab-1111-2222-3333-444444444444', 'session id is the DIRECTORY name')
+    assert.deepStrictEqual(rust, ts)
+  })
+
+  parityTest('🐌 the VS Code delta-log shape parses identically (3 completionTokens formats)', function () {
+    this.timeout(30_000)
+    const ts = normalize(new LogReader().parseFile(cpVsFixture, 'copilot_vscode')) as { card: Record<string, unknown> }
+    const rust = rustParseAs('--copilot-vscode', cpVsFixture) as { card: Record<string, unknown> }
+    assert.strictEqual(rust.card.outputTokens, 55, 'kind=1 (33) wins turn 0; result.usage (22) wins turn 1')
+    assert.strictEqual(rust.card.inputTokens, 400, 'Format C promptTokens')
+    assert.strictEqual(rust.card.workspace, '/Users/someone/vs proj', 'file:/// URI percent-decodes')
+    assert.deepStrictEqual(rust, ts)
+  })
+
+  parityTest('🐌 the legacy JSON snapshot shape parses identically (no token counts by design)', function () {
+    this.timeout(30_000)
+    const ts = normalize(new LogReader().parseFile(cpJsonFixture, 'copilot_vscode_json')) as { card: Record<string, unknown> }
+    const rust = rustParseAs('--copilot-vscode-json', cpJsonFixture) as { card: Record<string, unknown> }
+    assert.strictEqual(rust.card.userRequest, 'explain this stack trace', 'XML-shaped parts skip')
+    assert.deepStrictEqual((rust.card.toolCounts as Record<string, number>).readFile, 2)
+    assert.deepStrictEqual(rust, ts)
+  })
+})
+
 suite('rustLogScan — P2b boot-sweep wiring', () => {
   const wiringTest = haveBin ? test : test.skip
 

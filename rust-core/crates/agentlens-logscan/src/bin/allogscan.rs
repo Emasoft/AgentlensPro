@@ -44,8 +44,8 @@ fn main() {
     // here it is also what keeps the NDJSON stream pipeable (1.2GB unstripped, tens of MB
     // stripped, measured on the 12,928-card corpus). 0 = never strip.
     let mut strip_older_than_ms: i64 = 0;
-    // Parser selection: claude (default) or codex — different roots, different line grammar.
-    let mut codex = false;
+    // Parser selection: claude (default), codex, or one of the three copilot shapes.
+    let mut mode = "claude";
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -79,7 +79,10 @@ fn main() {
                     .and_then(|v| v.parse().ok())
                     .unwrap_or_else(|| usage("--max-bytes needs a number"));
             }
-            "--codex" => codex = true,
+            "--codex" => mode = "codex",
+            "--copilot-cli" => mode = "copilot-cli",
+            "--copilot-vscode" => mode = "copilot-vscode",
+            "--copilot-vscode-json" => mode = "copilot-vscode-json",
             "--strip-older-than-ms" => {
                 i += 1;
                 strip_older_than_ms = args
@@ -101,10 +104,12 @@ fn main() {
         .par_iter()
         .filter_map(|p| {
             let path = p.to_str()?;
-            let mut parsed = if codex {
-                agentlens_logscan::codex::parse_codex_transcript(path).ok()??
-            } else {
-                agentlens_logscan::parse_transcript(path, max_entries, max_bytes).ok()??
+            let mut parsed = match mode {
+                "codex" => agentlens_logscan::codex::parse_codex_transcript(path).ok()??,
+                "copilot-cli" => agentlens_logscan::copilot::parse_copilot_cli(path).ok()??,
+                "copilot-vscode" => agentlens_logscan::copilot::parse_copilot_vscode(path).ok()??,
+                "copilot-vscode-json" => agentlens_logscan::copilot::parse_copilot_vscode_json(path).ok()??,
+                _ => agentlens_logscan::parse_transcript(path, max_entries, max_bytes).ok()??,
             };
             // PARENT card only — TS strips only the parent in _parseClaudeFile; child cards
             // carry at most one tiny entry and keep it.

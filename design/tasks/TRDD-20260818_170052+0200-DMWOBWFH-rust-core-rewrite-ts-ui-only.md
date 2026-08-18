@@ -71,10 +71,19 @@ release-via: publish
   LATEST cumulative total_token_usage wins). `allogscan --codex` selects the grammar;
   `_scanCodex` wired with the same cold-fan-out + `_recordRustColdScan` shared tail (one copy of
   the fileState-seeding contract). Parity: fixture + **7/7 real codex transcripts** deepStrictEqual.
-- **NEXT ACTION (one step):** P2d — port the copilot parsers (3 file shapes:
-  `_parseCopilotFile`, `_parseCopilotVSCodeFile`, `_parseCopilotVSCodeJsonFile`, ~700 TS lines);
-  opencode (SQLite read) deliberately WAITS for P3's duckdb-rs. Then P3 (OTLP ingest +
-  bodies→DuckDB, SQL-owned aggregation), P4 (HTTP/MCP in Rust, TS server retired).
+- **P2d: COPILOT PORTED (all 3 shapes) — P2 log-scan phase COMPLETE except opencode.**
+  `copilot.rs`: CLI events.jsonl (session id = the DIRECTORY name; tokens from
+  session.shutdown modelMetrics, never currentTokens; XML-block user-text skipper), the VS Code
+  delta log (kind 0/1/2; three completionTokens formats, kind=1 wins; workspace via sibling
+  workspace.json file:/// percent-decode), and the legacy JSON snapshot (no tokens by design).
+  Flags `--copilot-cli|--copilot-vscode|--copilot-vscode-json`; all three scan paths wired with
+  the shared `_recordRustColdScan` contract. Parity: fixture deepStrictEqual on all 3 shapes
+  (this machine has zero real copilot sessions — 0 CLI, 0 chatSessions — so fixtures are the
+  available proof). **opencode (SQLite) deliberately WAITS for P3 duckdb-rs** — porting the
+  sql.js+WAL-merge reader twice would be waste when P3 gives a real DB engine.
+- **NEXT ACTION (one step):** P3 — OTLP ingest + bodies→DuckDB pipeline in Rust (duckdb-rs; SQL
+  owns aggregation — no JS-side materialization anywhere a GROUP BY can answer), absorbing the
+  opencode SQLite read. Then P4 (HTTP/API + MCP in Rust, CLI port, TS server retired).
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the

@@ -94,7 +94,9 @@ export interface RustColdScanItem {
 /** Synchronous batch parse for the boot sweep — LogReader's scan path is synchronous, and the
  *  file list rides a temp file because a 13k-file boot batch exceeds ARG_MAX as argv.
  *  Throws on exec failure — opted-in means loud, never a silent fall-through to the TS loop. */
-export function rustScanColdFilesSync(bin: string, files: string[], opts: { codex?: boolean } = {}): RustColdScanItem[] {
+export type RustLogAgent = 'claude' | 'codex' | 'copilot-cli' | 'copilot-vscode' | 'copilot-vscode-json'
+
+export function rustScanColdFilesSync(bin: string, files: string[], opts: { agent?: RustLogAgent } = {}): RustColdScanItem[] {
   const listFile = path.join(os.tmpdir(), `allogscan-list-${process.pid}-${Date.now()}.txt`)
   fs.writeFileSync(listFile, files.join('\n') + '\n')
   // Cold cards older than the hot age lose their timeline INSIDE the binary — same parse-time
@@ -103,7 +105,7 @@ export function rustScanColdFilesSync(bin: string, files: string[], opts: { code
   // is tens of MB. finishRustTranscript's own strip stays as the idempotent boundary catch.
   const cutoff = Date.now() - timelineHotAgeMs()
   const argv = ['--files-from', listFile, '--strip-older-than-ms', String(cutoff)]
-  if (opts.codex) argv.push('--codex')
+  if (opts.agent && opts.agent !== 'claude') argv.push(`--${opts.agent}`)
   let stdout: string
   try {
     stdout = execFileSync(bin, argv, { maxBuffer: 1 << 30 }).toString()
