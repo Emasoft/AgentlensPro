@@ -92,11 +92,20 @@ release-via: publish
   the gz+LOUD late-append with dedupe-on-read, today-never-compresses.
   NOTE for the ingest slice: a TS-side "reads a Rust-WRITTEN store" test lands with the P3
   ingest binary (the writer needs a CLI surface first; the format is the reader's own NDJSON).
-- **NEXT ACTION (one step):** P3b — port the OTLP transform (`otlpCollector.ts`: OTLP JSON →
-  Span objects incl. logs→span records + session keying) into an `agentlens-ingest` crate with
-  golden fixtures from real captured OTLP POST bodies; then P3c bodies→DuckDB via duckdb-rs
-  (schema parity with src/store/db.ts DDL, absorbing the opencode SQLite read); then P4
-  (HTTP/API + MCP in Rust, CLI port, TS server retired).
+- **P3b DONE — the OTLP transform is ported and cross-engine-identical.** `agentlens-ingest`:
+  processTraces/processLogs/processMetrics as PURE functions (side effects return as data:
+  account pairs, body pointers, dropped events; gen_ai injects via a caller callback so the
+  buffer's consume-on-inject stays exact), plus the CodexSessionNormalizer and gen_ai formatter
+  ports and the shared gate sets. `alingest` CLI for parity/debug. Parity: 3 TS cross-engine
+  tests drive the REAL OtlpCollector privates against a mock store and deepStrictEqual the
+  addSpan payloads — traces, the full logs gauntlet (rich session.id-first keying + re-prefix,
+  tool_result event.timestamp timing, codex per-prompt grouping + synthetic parent, drops,
+  body pointers, account harvest), and the gen_ai two-sided inject; 2 Rust unit tests pin the
+  stateful halves. Suite 2414 passing.
+- **NEXT ACTION (one step):** P3c — bodies→DuckDB via duckdb-rs: schema parity with
+  src/store/db.ts DDL + the ingestPass contract, absorbing the opencode SQLite read; then P4
+  (HTTP/API + MCP in Rust — wiring writer+ingest behind the 4318 listener — CLI port, TS server
+  retired).
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
