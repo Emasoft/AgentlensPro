@@ -676,6 +676,10 @@ async function archiveOtelBodies(): Promise<void> {
         durableSource: target.durable,              // fsync barrier only when the source was itself durable
         skipNames: skip,                            // don't re-read+re-hash already-durable bodies
         strandedNames: ingestStrandedNames,         // ts-mismatch park — the livelock fix
+        // TRDD-P8JGIEOG: parked files must not pin the fixed-size RAM spool forever — relocate
+        // them to the durable legacy dir (verify-before-unlink, mtime preserved). Durable targets
+        // get no destination: durable→durable relocation is churn, the park alone is correct there.
+        relocateStrandedTo: target.durable ? undefined : LEGACY_BODIES_DIR,
         fsyncedPartsCache: ingestFsyncedParts,      // barrier covers all parts, once each
       })
       ingested += r.ingested; deleted += r.deleted; reclaimedDurable += r.reclaimedDurable; bytesFreed += r.bytesFreed
@@ -684,6 +688,9 @@ async function archiveOtelBodies(): Promise<void> {
       for (const f of r.failed) failed.push(f)
       if (r.strandedTs.length) {
         console.warn(`[AgentLens] ${r.strandedTs.length} body file(s) PARKED: store ts row disagrees with capture mtime while bytes are proven — kept on disk, excluded from future passes (first: ${r.strandedTs[0]})`)
+      }
+      if (r.strandedRelocated > 0) {
+        console.warn(`[AgentLens] ${r.strandedRelocated} parked body file(s) relocated off the RAM spool to ${LEGACY_BODIES_DIR} (verified byte-identical, mtime preserved) — spool capacity reclaimed`)
       }
     }
 
