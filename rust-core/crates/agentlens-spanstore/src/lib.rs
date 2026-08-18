@@ -19,6 +19,8 @@ use std::fs;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 
+pub mod writer;
+
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 

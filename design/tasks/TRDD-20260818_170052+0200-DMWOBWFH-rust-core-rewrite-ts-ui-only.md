@@ -81,9 +81,22 @@ release-via: publish
   (this machine has zero real copilot sessions — 0 CLI, 0 chatSessions — so fixtures are the
   available proof). **opencode (SQLite) deliberately WAITS for P3 duckdb-rs** — porting the
   sql.js+WAL-merge reader twice would be waste when P3 gives a real DB engine.
-- **NEXT ACTION (one step):** P3 — OTLP ingest + bodies→DuckDB pipeline in Rust (duckdb-rs; SQL
-  owns aggregation — no JS-side materialization anywhere a GROUP BY can answer), absorbing the
-  opencode SQLite read. Then P4 (HTTP/API + MCP in Rust, CLI port, TS server retired).
+- **P3 STARTED — the span-store WRITER is ported and round-trip-proven.**
+  `agentlens-spanstore::writer::SpanStoreWriter`: day-keyed buffered appends (100k disk-failure
+  failsafe, loud oldest-drop), one appendFile per touched day at flush, `index.json` kept
+  atomically (tmp+fsync+rename), loadOrRebuildIndex reconciliation (byte-size disagreement →
+  streamed recount; adopted/vanished segments), and compressSealedSegments with the FULL
+  verify-before-delete contract — resume-an-interrupted-compress included. Verification is
+  engine-agnostic (streamed gunzip-compare), so flate2-vs-zlib output differences cannot break
+  it. 4 round-trip tests: written→scanned back time-ordered, crash-index reconcile, seal+read
+  the gz+LOUD late-append with dedupe-on-read, today-never-compresses.
+  NOTE for the ingest slice: a TS-side "reads a Rust-WRITTEN store" test lands with the P3
+  ingest binary (the writer needs a CLI surface first; the format is the reader's own NDJSON).
+- **NEXT ACTION (one step):** P3b — port the OTLP transform (`otlpCollector.ts`: OTLP JSON →
+  Span objects incl. logs→span records + session keying) into an `agentlens-ingest` crate with
+  golden fixtures from real captured OTLP POST bodies; then P3c bodies→DuckDB via duckdb-rs
+  (schema parity with src/store/db.ts DDL, absorbing the opencode SQLite read); then P4
+  (HTTP/API + MCP in Rust, CLI port, TS server retired).
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
