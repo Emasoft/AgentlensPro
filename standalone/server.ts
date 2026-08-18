@@ -676,6 +676,10 @@ async function archiveOtelBodies(): Promise<void> {
         durableSource: target.durable,              // fsync barrier only when the source was itself durable
         skipNames: skip,                            // don't re-read+re-hash already-durable bodies
         strandedNames: ingestStrandedNames,         // ts-mismatch park — the livelock fix
+        // TRDD-P8JGIEOG: parked files must not pin the fixed-size RAM spool forever — relocate
+        // them to the durable legacy dir (verify-before-unlink, mtime preserved). Durable targets
+        // get no destination: durable→durable relocation is churn, the park alone is correct there.
+        relocateStrandedTo: target.durable ? undefined : LEGACY_BODIES_DIR,
         fsyncedPartsCache: ingestFsyncedParts,      // barrier covers all parts, once each
       })
       ingested += r.ingested; deleted += r.deleted; reclaimedDurable += r.reclaimedDurable; bytesFreed += r.bytesFreed
@@ -684,6 +688,9 @@ async function archiveOtelBodies(): Promise<void> {
       for (const f of r.failed) failed.push(f)
       if (r.strandedTs.length) {
         console.warn(`[AgentLens] ${r.strandedTs.length} body file(s) PARKED: store ts row disagrees with capture mtime while bytes are proven — kept on disk, excluded from future passes (first: ${r.strandedTs[0]})`)
+      }
+      if (r.strandedRelocated > 0) {
+        console.warn(`[AgentLens] ${r.strandedRelocated} parked body file(s) relocated off the RAM spool to ${LEGACY_BODIES_DIR} (verified byte-identical, mtime preserved) — spool capacity reclaimed`)
       }
     }
 
@@ -1498,6 +1505,15 @@ startMcpHttpServer({
   // path /api/timeline uses). Without this the MCP tools fell back to the card's empty inline
   // timeline, so check_cache_expiry could not find the last api_request ts and returned 'unknown'.
   getTimeline: (id) => resolveSessionCard(id)?.timeline ?? [],
+  // TRDD-CXPLAT01: bounded last-request resolver for the cache-expiry probe — one stat + one 256KB
+  // tail read instead of a full transcript reparse per candidate (measured on this machine: a cold
+  // probe read 163.6MB of JSONL synchronously; the tails total ~1.5MB). null = tail had no usage
+  // entry; the handler then ranks by cheap card metadata and reparses at most the one winner.
+  getLastRequestMs: (id) => {
+    const p = logReader.transcriptPathFor(id)
+    if (!p) return null
+    return readTranscriptContext(p, Date.now()).lastRequestAtMs ?? null
+  },
   // The standalone cards already carry their inline timeline (log-parsed), so the MCP diagnostics
   // read per-turn tokens off the card; composition is reconstructed on demand from the raw .jsonl —
   // the same route /api/composition/:id serves the browser. This makes the P4 inflation / cache-break

@@ -5,6 +5,7 @@ import * as path from 'path'
 import {
   extractTurnPrefix, classifyCacheBreak, buildCacheBreakTimeline, buildCauseCostPeakReport, formatTimeline,
   defaultBodiesDir, CACHE_BREAK_REMEDIATION, EXPECTED_CAUSES,
+  loadCompactionHookInfo, applyCompactionHookEvidence, type CacheBreakEvent,
   type RawRequestForBreak, type BreakTiming,
 } from '../cacheBreakTimeline'
 import { loadScaledTimeout, skipIfUnmeasurable } from './loadAware'
@@ -867,5 +868,80 @@ suite('cacheBreakTimeline — PLUGINS_RELOADED (TRDD-EYA3X5MQ — cross-layer ca
     const v = classify(prev, cur)
     assert.notStrictEqual(v.cause, 'PLUGINS_RELOADED')
     assert.strictEqual(v.confidence, undefined)
+  })
+})
+
+// ── Compaction hook evidence (TRDD-8ENYLEIO phase 3) ─────────────────────────────
+// COMPACTION was pure inference (a text-shape regex). PreCompact/PostCompact lifecycle hook events
+// STATE the compaction, so a corroborated break is evidence and a lookalike stays 'inferred'.
+suite('compaction hook evidence (TRDD-8ENYLEIO)', () => {
+  const T0 = Date.parse('2026-08-18T10:00:00.000Z')
+
+  function hookDirWith(records: Array<{ ts: number; ev: string; session?: string }>): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentlens-hooks-'))
+    const day = new Date(T0).toISOString().slice(0, 10)
+    fs.writeFileSync(path.join(dir, `${day}.ndjsonl`),
+      records.map((r) => JSON.stringify({ ts: r.ts, ev: r.ev, session: r.session, payload: {} })).join('\n') + '\n')
+    return dir
+  }
+
+  function ev(cause: CacheBreakEvent['cause'], atMs: number): CacheBreakEvent {
+    return {
+      turn: 1, ts: new Date(atMs).toISOString(), cause, culpritLayer: 'messages', culpritId: 'x',
+      culprit: 'x', cacheCreateTokens: 10_000, cacheReadTokens: 0, inputTokens: 0, outputTokens: 0,
+      costUsd: 0, remediation: CACHE_BREAK_REMEDIATION[cause],
+    }
+  }
+
+  test('loadCompactionHookInfo groups per session, pairs Pre->Post, and never guesses a session', () => {
+    const dir = hookDirWith([
+      { ts: T0, ev: 'PreCompact', session: 's1' },
+      { ts: T0 + 30_000, ev: 'PostCompact', session: 's1' },
+      { ts: T0 + 60_000, ev: 'PreCompact', session: 's2' },   // no PostCompact → 5min fallback close
+      { ts: T0 + 90_000, ev: 'PreCompact' },                   // no session id → dropped, never guessed
+    ])
+    const info = loadCompactionHookInfo(dir)
+    assert.deepStrictEqual([...info.keys()].sort(), ['s1', 's2'])
+    assert.deepStrictEqual(info.get('s1')!.windows, [[T0, T0 + 30_000]])
+    assert.deepStrictEqual(info.get('s2')!.windows, [[T0 + 60_000, T0 + 60_000 + 5 * 60_000]])
+  })
+
+  test('a missing hook store yields an empty map — every session falls back to inferred', () => {
+    const info = loadCompactionHookInfo(path.join(os.tmpdir(), 'agentlens-hooks-nonexistent-zz'))
+    assert.strictEqual(info.size, 0)
+    const events = applyCompactionHookEvidence([ev('COMPACTION', T0)], info.get('s1'))
+    assert.strictEqual(events[0].causeEvidence, 'inferred')
+  })
+
+  test('a COMPACTION break AFTER a PreCompact hook is corroborated: evidence hook', () => {
+    // The rebuilt prefix may first be SENT minutes after PostCompact (the first post-compaction
+    // call) — corroboration is precedes-based, not window-based.
+    const info = { preTimes: [T0], windows: [[T0, T0 + 30_000]] as Array<[number, number]> }
+    const late = applyCompactionHookEvidence([ev('COMPACTION', T0 + 25 * 60_000)], info)
+    assert.strictEqual(late[0].causeEvidence, 'hook')
+  })
+
+  test('a COMPACTION-shaped break with NO preceding hook stays inferred (the lookalike)', () => {
+    const info = { preTimes: [T0 + 10 * 60_000], windows: [[T0 + 10 * 60_000, T0 + 11 * 60_000]] as Array<[number, number]> }
+    const events = applyCompactionHookEvidence([ev('COMPACTION', T0)], info)
+    assert.strictEqual(events[0].causeEvidence, 'inferred', 'a hook that fires only LATER proves nothing about this break')
+  })
+
+  test('an UNCLASSIFIED break INSIDE a hook window is upgraded to COMPACTION with evidence hook', () => {
+    const info = { preTimes: [T0], windows: [[T0, T0 + 30_000]] as Array<[number, number]> }
+    const events = applyCompactionHookEvidence([ev('UNCLASSIFIED', T0 + 10_000)], info)
+    assert.strictEqual(events[0].cause, 'COMPACTION')
+    assert.strictEqual(events[0].causeEvidence, 'hook')
+    assert.strictEqual(events[0].remediation, CACHE_BREAK_REMEDIATION.COMPACTION)
+  })
+
+  test('an UNCLASSIFIED break OUTSIDE every window is untouched, and a NAMED cause is never overridden', () => {
+    const info = { preTimes: [T0], windows: [[T0, T0 + 30_000]] as Array<[number, number]> }
+    const outside = applyCompactionHookEvidence([ev('UNCLASSIFIED', T0 + 20 * 60_000)], info)
+    assert.strictEqual(outside[0].cause, 'UNCLASSIFIED')
+    assert.strictEqual(outside[0].causeEvidence, undefined)
+    const named = applyCompactionHookEvidence([ev('MODEL_SWITCH', T0 + 10_000)], info)
+    assert.strictEqual(named[0].cause, 'MODEL_SWITCH', 'a real misconfiguration during the window must stay visible')
+    assert.strictEqual(named[0].causeEvidence, undefined)
   })
 })

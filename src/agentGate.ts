@@ -63,6 +63,10 @@ export interface ParentContext {
   contextTokens: number | null
   /** ms since the transcript was last written — null when the file is unreadable. */
   idleMs: number | null
+  /** Epoch ms of the usage-carrying entry contextTokens came from — the session's last billed
+   *  LLM request, resolved from the same bounded tail read (TRDD-CXPLAT01). null/absent when the
+   *  tail holds no usage entry or the entry carries no parseable timestamp. */
+  lastRequestAtMs?: number | null
 }
 
 /** WHO is fanning out — one spawning session, from the SubagentStart hook events (exact). */
@@ -212,6 +216,7 @@ export function readTranscriptContext(transcriptPath: string, now: number, tailB
   }
   const idleMs = Math.max(0, now - st.mtimeMs)
   let contextTokens: number | null = null
+  let lastRequestAtMs: number | null = null
   let fd: number | null = null
   try {
     fd = fs.openSync(transcriptPath, 'r')
@@ -225,11 +230,16 @@ export function readTranscriptContext(transcriptPath: string, now: number, tailB
       const l = lines[i]
       if (!l.includes('"usage"')) continue
       try {
-        const e = JSON.parse(l) as { message?: { usage?: Record<string, unknown> } }
+        const e = JSON.parse(l) as { timestamp?: string; message?: { usage?: Record<string, unknown> } }
         const u = e.message?.usage
         if (!u) continue
         const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
         contextTokens = n(u.input_tokens) + n(u.cache_read_input_tokens) + n(u.cache_creation_input_tokens)
+        // TRDD-CXPLAT01: this entry IS the last billed request — its timestamp answers "when was
+        // the last LLM request" from the same 256KB read, which is what lets the cache-expiry
+        // probe skip a full-transcript reparse per candidate.
+        const ts = typeof e.timestamp === 'string' ? Date.parse(e.timestamp) : NaN
+        lastRequestAtMs = Number.isNaN(ts) ? null : ts
         break
       } catch {
         continue // corrupt/partial line — keep walking back
@@ -240,7 +250,7 @@ export function readTranscriptContext(transcriptPath: string, now: number, tailB
   } finally {
     if (fd !== null) try { fs.closeSync(fd) } catch { /* already closed */ }
   }
-  return { contextTokens, idleMs }
+  return { contextTokens, idleMs, lastRequestAtMs }
 }
 
 /** USER ORDER (2026-07-11, highest priority): a keep-warm pinger launch is NEVER denied. The

@@ -1,7 +1,11 @@
 import * as assert from 'assert'
+import * as fs from 'fs'
+import * as os from 'os'
+import * as path from 'path'
 import { TTL_5M_MS, TTL_1H_MS, type TtlContext } from '../shared/cacheTtl'
 import { assessCacheExpiry, formatIdle } from '../cacheExpiry'
-import { handleCheckCacheExpiry, EXPIRY_NEWEST_PROBE } from '../mcpServer'
+import { handleCheckCacheExpiry, EXPIRY_NEWEST_PROBE, DRILL_SCAN_TIME_BUDGET_MS } from '../mcpServer'
+import { readTranscriptContext } from '../agentGate'
 import type { SessionSummaryCard, TimelineEntry } from '../shared/summarizerTypes'
 
 // ── Cache-expiry probe (TRDD-OCNHOHE9) ────────────────────────────────────────
@@ -255,5 +259,87 @@ suite('handleCheckCacheExpiry — bounded scans (TRDD-X2E6OSWK)', () => {
     assert.strictEqual(r.sessions.length, 2)
     assert.strictEqual(r.coverage!.stoppedEarly, false)
     assert.ok(/Complete coverage/.test(r.coverage!.note))
+  })
+})
+
+// ── Default-path probe is reparse-free with a tail resolver (TRDD-CXPLAT01) ───
+// scanWithBudget checks its deadline BETWEEN items, never during one, so the old probe (a full
+// transcript reparse per candidate) was unbounded exactly on pathological transcripts: measured
+// 20-40s cold calls, 163.6MB read for a 6-session pool. The fix ranks candidates by a bounded
+// tail read (getLastRequestMs) and reuses the winner's tail timestamp in the final verdict.
+suite('handleCheckCacheExpiry — tail-resolver probe (TRDD-CXPLAT01)', () => {
+  const CTX: TtlContext = { auth: 'subscription', force5m: false, enable1h: false }
+  const REPARSE_SPIN_MS = 300 // stands in for the unbounded per-item reparse the fix removes
+
+  test('a wired resolver makes the default probe reparse-free AND wall-clock bounded', async () => {
+    const now = Date.now()
+    const iso = (minAgo: number): string => new Date(now - minAgo * 60_000).toISOString()
+    const cards = Array.from({ length: 6 }, (_, i) => expiryCard(`m${i}`, iso(i)))
+    const reparsed: string[] = []
+    // Pre-fix this ran once per candidate (6 × 300ms ≥ 1.8s) and the elapsed assertion below fails.
+    const getTimeline = (id: string): unknown[] => {
+      reparsed.push(id)
+      const until = Date.now() + REPARSE_SPIN_MS
+      while (Date.now() < until) { /* synchronous spin — the pathological reparse */ }
+      return [apiRequestAt(iso(Number(id.slice(1))))]
+    }
+    // m2 carries the newest tail timestamp, so precision ranking must pick it over rank-1 m0.
+    const getLast = (id: string): number | null => now - (id === 'm2' ? 0 : (Number(id.slice(1)) + 1) * 60_000)
+    const t0 = Date.now()
+    const r = await handleCheckCacheExpiry(cards, getTimeline, CTX, {}, DRILL_SCAN_TIME_BUDGET_MS, getLast)
+    assert.deepStrictEqual(reparsed, [], 'with a tail resolver, no candidate may be reparsed — not even the winner')
+    assert.strictEqual(r.sessions.length, 1)
+    assert.strictEqual(r.sessions[0].sessionId, 'm2')
+    assert.strictEqual(r.sessions[0].lastRequestAt, new Date(now).toISOString(), 'the verdict must reuse the probed tail timestamp')
+    assert.ok(Date.now() - t0 < REPARSE_SPIN_MS * cards.length, 'the probe must not pay the per-item reparse cost')
+  })
+
+  test('a tail miss ranks by cheap activity metadata; only the chosen winner falls back to ONE reparse', async () => {
+    const now = Date.now()
+    const iso = (minAgo: number): string => new Date(now - minAgo * 60_000).toISOString()
+    const cards = Array.from({ length: 5 }, (_, i) => expiryCard(`m${i}`, iso(i)))
+    const reparsed: string[] = []
+    const getTimeline = (id: string): unknown[] => {
+      reparsed.push(id)
+      return [apiRequestAt(iso(0))]
+    }
+    const r = await handleCheckCacheExpiry(cards, getTimeline, CTX, {}, DRILL_SCAN_TIME_BUDGET_MS, () => null)
+    // All tails missed → activity ranking (startTime here) picks m0; the single fallback reparse
+    // is the winner's verdict, never a probe-loop cost.
+    assert.strictEqual(r.sessions.length, 1)
+    assert.strictEqual(r.sessions[0].sessionId, 'm0')
+    assert.deepStrictEqual(reparsed, ['m0'], 'exactly one reparse — the winner only')
+  })
+
+  test('readTranscriptContext surfaces lastRequestAtMs from the LAST usage entry in the tail', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cxplat01-'))
+    const f = path.join(dir, 's.jsonl')
+    try {
+      const t1 = '2026-08-18T10:00:00.000Z'
+      const t2 = '2026-08-18T10:05:00.000Z'
+      fs.writeFileSync(f, [
+        JSON.stringify({ timestamp: t1, message: { usage: { input_tokens: 10 } } }),
+        JSON.stringify({ timestamp: t2, message: { usage: { input_tokens: 20, cache_read_input_tokens: 5 } } }),
+        JSON.stringify({ type: 'tool_result', timestamp: '2026-08-18T10:06:00.000Z' }),
+      ].join('\n'))
+      const ctx = readTranscriptContext(f, Date.now())
+      assert.strictEqual(ctx.lastRequestAtMs, Date.parse(t2))
+      assert.strictEqual(ctx.contextTokens, 25)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('readTranscriptContext reports a null lastRequestAtMs when the tail holds no usage entry', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cxplat01-'))
+    const f = path.join(dir, 's.jsonl')
+    try {
+      fs.writeFileSync(f, JSON.stringify({ type: 'tool_result', timestamp: '2026-08-18T10:06:00.000Z' }))
+      const ctx = readTranscriptContext(f, Date.now())
+      assert.strictEqual(ctx.lastRequestAtMs, null)
+      assert.strictEqual(ctx.contextTokens, null)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

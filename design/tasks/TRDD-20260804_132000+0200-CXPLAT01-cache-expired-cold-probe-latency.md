@@ -1,9 +1,10 @@
 ---
 trdd-id: CXPLAT01
 title: cache-expired intermittently takes 20-40s because the newest-session probe reparses the biggest transcript
-column: human_review
+column: complete
 created: 2026-08-04T13:20:00+0200
-updated: 2026-08-05T06:05:40+0200
+updated: 2026-08-18T13:05:00+0200
+implementation-commits: [cd4f86f]
 current-owner: claude-code
 task-type: bugfix
 severity: MEDIUM
@@ -139,3 +140,11 @@ Approval log below reserves for a human. This section only makes that decision b
   correction applied to TRDD-06Q5AXYN in this session, for the same reason and by the same standard:
   a column that overstates AVAILABILITY hides a card awaiting a human just as effectively as `dev`
   hides a stall. The evidence the decision needs was added earlier today and is unchanged.
+- 2026-08-18T13:05:00+0200 — APPROVED by USER (batch "complete all TRDD" directive — the owner
+  gate above is thereby released) and IMPLEMENTED in cd4f86f. Steps 1+2 shipped as designed: the
+  probe ranks by a bounded 256KB tail read (`readTranscriptContext.lastRequestAtMs` +
+  `LogReader.transcriptPathFor`), a tail miss ranks by card activity metadata, and the winner's
+  verdict reuses the probed timestamp — at most ONE fallback reparse per call. Step 3's test was
+  written with the fix and FALSIFIED against the resolver-less path (7 reparses/2100ms pre-fix vs
+  0/14ms). Live after a full server restart: cold probe 2.29s (was 20-40s), warm 0.05s. Column →
+  complete; rides the next publish (release-via: publish).

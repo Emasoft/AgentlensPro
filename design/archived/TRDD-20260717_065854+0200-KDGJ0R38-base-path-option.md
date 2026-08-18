@@ -1,9 +1,9 @@
 ---
 trdd-id: KDGJ0R38
 title: Base-path option — serve the dashboard and /api under a prefix so ai-maestro can mount it same-origin (AgentlensPro#4)
-column: backburner
+column: completed
 created: 2026-07-17T06:58:54+0200
-updated: 2026-07-17T06:58:54+0200
+updated: 2026-08-18T13:35:00+0200
 current-owner: main
 task-type: feature
 severity: minor
@@ -11,7 +11,7 @@ scope: project
 npt: []
 eht: []
 labels: [ai-maestro, dashboard, embed]
-implementation-commits: []
+implementation-commits: [ad86dc5]
 test-requirements: [unit, typecheck, lint]
 ---
 
@@ -41,3 +41,13 @@ their CSP rewrite disappears. Explicitly "no rush" on their side — the PORT+1 
 - With the env set: document + every asset + every /api call resolve under the prefix
   (live curl + iframe proof); without it: no behavior change (full suite green).
 - Contract note posted on AgentlensPro#4 when shipped.
+
+## Approval log
+
+- 2026-08-18T13:35:00+0200 — CLOSED as ALREADY DONE during the USER "complete all TRDD" sweep. The
+  deliverable shipped in ad86dc5 ("feat: AGENTLENS_BASE_PATH (#4)", released v2.19.0) with exactly
+  this card's design: `normalizeBasePath(process.env.AGENTLENS_BASE_PATH)` in standalone/server.ts,
+  prefixed asset URLs + the `window.__AGENTLENS_BASE__` boot global, and media/src/apiBase.ts as
+  the ONE webview fetch wrapper. Pinned by src/test/basePath.test.ts; the changelog entry closed
+  issue #4 (f8668dc). The card simply was never closed when the work landed. Column → completed,
+  archived.

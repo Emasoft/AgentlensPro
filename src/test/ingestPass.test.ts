@@ -214,6 +214,67 @@ suite('ingestPass — throttle and selection', () => {
     assert.strictEqual((await ingestPass({ bodiesDir: '/nope/nothing/here', store })).ingested, 0)
   })
 
+  test('a parked (stranded) file is relocated to the durable dir: verified, mtime preserved, spool freed (TRDD-P8JGIEOG)', async () => {
+    const { dir, names } = corpus(2)
+    const durableDir = tmp()
+    const parked = names[0]
+    const parkedPath = path.join(dir, parked)
+    const parkedRaw = fs.readFileSync(parkedPath, 'utf8')
+    const parkedSize = fs.statSync(parkedPath).size
+    const captureSec = Math.floor((Date.now() - 3_600_000) / 1000) // 1h ago — the "true capture record"
+    fs.utimesSync(parkedPath, captureSec, captureSec)
+    const stranded = new Set([parked])
+
+    const r = await ingestPass({ bodiesDir: dir, store, strandedNames: stranded, relocateStrandedTo: durableDir })
+
+    assert.strictEqual(r.strandedRelocated, 1)
+    assert.ok(!fs.existsSync(parkedPath), 'the spool copy is unlinked — capacity reclaimed')
+    const dst = path.join(durableDir, parked)
+    assert.strictEqual(fs.readFileSync(dst, 'utf8'), parkedRaw, 'destination byte-identical')
+    assert.strictEqual(Math.floor(fs.statSync(dst).mtimeMs / 1000), captureSec, 'mtime (the capture record) preserved')
+    assert.ok(r.bytesFreed >= parkedSize, 'the freed bytes include the relocated spool copy')
+    assert.ok(stranded.has(parked), 'the park SURVIVES the move — the livelock fix must not reopen')
+    assert.strictEqual(r.ingested, 1, 'the non-parked sibling still ingests normally')
+
+    // Zero I/O from the next pass on: the file left the spool listing, so nothing reads it again.
+    let readsOfParked = 0
+    const countingRead = (p: string): string => { if (p.endsWith(parked)) readsOfParked++; return fs.readFileSync(p, 'utf8') }
+    const r2 = await ingestPass({ bodiesDir: dir, store, strandedNames: stranded, relocateStrandedTo: durableDir, readFile: countingRead })
+    assert.strictEqual(r2.strandedRelocated, 0)
+    assert.strictEqual(readsOfParked, 0, 'a relocated park costs zero I/O on later passes')
+  })
+
+  test('a relocation that cannot be PROVEN keeps the spool copy (different-bytes collision) (TRDD-P8JGIEOG)', async () => {
+    const { dir, names } = corpus(1)
+    const durableDir = tmp()
+    const parked = names[0]
+    fs.writeFileSync(path.join(durableDir, parked), 'entirely different bytes')
+    const stranded = new Set([parked])
+
+    const r = await ingestPass({ bodiesDir: dir, store, strandedNames: stranded, relocateStrandedTo: durableDir })
+
+    assert.strictEqual(r.strandedRelocated, 0)
+    assert.ok(fs.existsSync(path.join(dir, parked)), 'the spool copy is KEPT — never delete unproven bytes')
+    assert.strictEqual(fs.readFileSync(path.join(durableDir, parked), 'utf8'), 'entirely different bytes', 'the colliding durable file is never overwritten')
+    assert.ok(r.failed.some((m) => m.includes(parked) && m.includes('relocate failed')), 'the failure is NAMED, not silent')
+    assert.ok(stranded.has(parked), 'the park survives a failed relocation')
+  })
+
+  test('a byte-identical destination already present frees the spool copy without rewriting (TRDD-P8JGIEOG)', async () => {
+    const { dir, names } = corpus(1)
+    const durableDir = tmp()
+    const parked = names[0]
+    const raw = fs.readFileSync(path.join(dir, parked), 'utf8')
+    fs.writeFileSync(path.join(durableDir, parked), raw)
+    const stranded = new Set([parked])
+
+    const r = await ingestPass({ bodiesDir: dir, store, strandedNames: stranded, relocateStrandedTo: durableDir })
+
+    assert.strictEqual(r.strandedRelocated, 1)
+    assert.ok(!fs.existsSync(path.join(dir, parked)))
+    assert.strictEqual(fs.readFileSync(path.join(durableDir, parked), 'utf8'), raw)
+  })
+
   test('the default budget is bounded — an unbounded default is how the 694 MB/min happened', () => {
     assert.ok(DEFAULT_MAX_BYTES_PER_PASS > 0 && DEFAULT_MAX_BYTES_PER_PASS <= 1024 ** 3)
   })

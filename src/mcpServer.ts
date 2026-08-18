@@ -2046,8 +2046,14 @@ function assessOneSession(
   ctx: TtlContext | null,
   nowMs: number,
   thresholdMs?: number,
+  precomputedLastMs?: number,
 ): CacheExpiryRow {
-  const lastMs = lastLlmRequestMs(asTimeline(getTimeline, card.sessionId, card))
+  // TRDD-CXPLAT01: a caller that already resolved the last-request time (the probe's bounded tail
+  // read) passes it here so the verdict does not re-trigger the full-transcript reparse the probe
+  // just avoided — the chosen card is, by construction, the busiest (biggest) transcript.
+  const lastMs = precomputedLastMs !== undefined
+    ? precomputedLastMs
+    : lastLlmRequestMs(asTimeline(getTimeline, card.sessionId, card))
   const kind = sessionTtlKindOf(card)
   const verdict = assessCacheExpiry({ lastRequestAtMs: lastMs, nowMs, kind, ctx, thresholdMs })
   return {
@@ -2085,6 +2091,7 @@ export async function handleCheckCacheExpiry(
   ctx: TtlContext | null,
   args: { sessionId?: string; all?: boolean; project?: string; thresholdMinutes?: number },
   timeBudgetMs: number = DRILL_SCAN_TIME_BUDGET_MS,
+  getLastRequestMs: ((sessionId: string) => number | null) | null = null,
 ): Promise<{
   sessions: CacheExpiryRow[]
   scope?: { project: string | null; sessionsInScope: number }
@@ -2149,21 +2156,33 @@ export async function handleCheckCacheExpiry(
   const pool = (mains.length > 0 ? mains : sessions)
     .sort((a, b) => lastActivityMs(b) - lastActivityMs(a))
     .slice(0, EXPIRY_NEWEST_PROBE)
-  const { results, stoppedEarly } = await scanWithBudget(pool, timeBudgetMs, s => ({
-    s,
-    ms: lastLlmRequestMs(asTimeline(getTimeline, s.sessionId, s)) ?? Date.parse(s.startTime),
-  }))
+  // TRDD-CXPLAT01: scanWithBudget checks its deadline BETWEEN items, never during one — so a probe
+  // that reparses per item is unbounded exactly when a transcript is pathological (measured 20-40s
+  // on a 64MB file). With a tail resolver wired, each candidate costs one bounded 256KB read and a
+  // tail miss ranks by the card's cheap activity metadata instead of reparsing; the ONE winner then
+  // reuses its tail timestamp (assessOneSession precomputedLastMs), falling back to a single full
+  // reparse only when its tail held no usage entry. Without a resolver (tests, older embedders) the
+  // previous reparse-per-candidate behavior is preserved unchanged.
+  const { results, stoppedEarly } = await scanWithBudget(pool, timeBudgetMs, s => {
+    if (getLastRequestMs) {
+      const tailMs = getLastRequestMs(s.sessionId)
+      return { s, tailMs, ms: tailMs ?? lastActivityMs(s) }
+    }
+    return { s, tailMs: null, ms: lastLlmRequestMs(asTimeline(getTimeline, s.sessionId, s)) ?? Date.parse(s.startTime) }
+  })
   let newest: SessionSummaryCard | null = null
   let newestMs = -1
-  for (const { s, ms } of results) {
+  let newestTailMs: number | null = null
+  for (const { s, tailMs, ms } of results) {
     if (!Number.isNaN(ms) && ms > newestMs) {
       newestMs = ms
       newest = s
+      newestTailMs = tailMs
     }
   }
   const targets = newest ? [newest] : []
   return {
-    sessions: targets.map(c => assessOneSession(c, getTimeline, ctx, nowMs, thresholdMs)),
+    sessions: targets.map(c => assessOneSession(c, getTimeline, ctx, nowMs, thresholdMs, newestTailMs ?? undefined)),
     scope,
     // Honest pick: a budget-stopped probe chose from a subset — say so instead of presenting the
     // pick as the corpus-wide newest.
@@ -3335,6 +3354,11 @@ export interface McpServerOptions {
   /** TRDD-1XM0YSWQ — the burn monitor's deduped consumption-event stream (api_request events +
    *  statusline deltas). get_account_burners scopes it by account segment × window and ranks. */
   getConsumptionEvents?: () => ConsumptionEvent[]
+  /** TRDD-CXPLAT01 — bounded last-LLM-request time for a session (one stat + one 256KB tail read
+   *  of its transcript). Lets check_cache_expiry's newest-session probe rank candidates without a
+   *  full reparse per item. Return null when the tail cannot answer — the handler then falls back
+   *  to cheap activity metadata for ranking and at most ONE reparse for the chosen winner. */
+  getLastRequestMs?: (sessionId: string) => number | null
 }
 
 // TRDD-34B9JAZK — the raw-body-scan tool family: every tool that runs scanCacheCreationEvents,
@@ -3577,6 +3601,7 @@ export function createMcpServer(opts: McpServerOptions): Server {
         result = await handleCheckCacheExpiry(
           sessions, getTimeline, getTtlContext?.() ?? null,
           args as { sessionId?: string; all?: boolean; project?: string; thresholdMinutes?: number },
+          DRILL_SCAN_TIME_BUDGET_MS, opts.getLastRequestMs ?? null,
         )
         break
       case 'get_account_state_at':

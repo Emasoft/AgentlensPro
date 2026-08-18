@@ -85,6 +85,12 @@ export interface IngestPassOptions {
    *  mtime is the only true capture record the wrong store row cannot replace. Pass a long-lived
    *  set (the server does) or each process re-detects them once. */
   strandedNames?: Set<string>
+  /** TRDD-P8JGIEOG: durable directory to RELOCATE parked (stranded) files into. A parked file is
+   *  correct to skip but wrong to leave on the RAM spool forever — a bulk wrong-ts event pins the
+   *  fixed-size spool below the backpressure floor with no reclaim path, and RAM capture silently
+   *  dies. Set this on VOLATILE-source passes only (the server points it at the legacy SSD bodies
+   *  dir); leave unset when the source is already durable — relocating durable→durable is churn. */
+  relocateStrandedTo?: string
   /** Part files already fsynced by this PROCESS. The durable barrier must cover every part that
    *  holds a batch body's bytes — a reclaimed body's parts were flushed in an EARLIER settle (or an
    *  earlier boot) and `flushed.partPaths` never names them (review finding: the barrier covered
@@ -114,12 +120,48 @@ export interface IngestPassResult {
    *  kept on disk, excluded from every future pass (see strandedNames). Reported so the condition
    *  is visible instead of recurring silently or livelocking loudly. */
   strandedTs: string[]
+  /** Of the ALREADY-parked names, how many this pass relocated off the volatile spool into
+   *  `relocateStrandedTo` (destination proven byte-identical + fsynced BEFORE the spool copy was
+   *  unlinked; name and mtime preserved). Their bytes count in bytesFreed — spool capacity is
+   *  what the relocation exists to reclaim (TRDD-P8JGIEOG). */
+  strandedRelocated: number
   /** True when the byte budget stopped the pass early (more remains for the next one). */
   throttled: boolean
 }
 
 export const DEFAULT_MAX_BYTES_PER_PASS = 512 * 1024 * 1024 // 512 MB
 export const DEFAULT_BATCH = 200
+
+/** TRDD-P8JGIEOG: move one parked file to the durable dir. Verify-before-unlink, mtime preserved.
+ *  Throws on anything unprovable; the caller keeps the spool copy in that case. */
+function relocateStrandedFile(
+  f: { p: string; name: string; mtime: number },
+  destDir: string,
+  readFile: (p: string) => string,
+  fsyncPath: (p: string) => void,
+): void {
+  const dst = path.join(destDir, f.name)
+  const raw = readFile(f.p)
+  if (fs.existsSync(dst)) {
+    // Same name already durable: only proven-identical bytes may stand in for the spool copy.
+    // Different bytes = a genuine collision — keep both, never overwrite either.
+    if (readFile(dst) !== raw) throw new Error('destination exists with different bytes')
+  } else {
+    fs.mkdirSync(destDir, { recursive: true })
+    const tmp = `${dst}.reloc.tmp`
+    fs.writeFileSync(tmp, raw)
+    // The mtime IS the capture record (the store's ts row being wrong is WHY the file is parked) —
+    // it must survive the move byte-for-byte and second-for-second.
+    fs.utimesSync(tmp, f.mtime / 1000, f.mtime / 1000)
+    fs.renameSync(tmp, dst)
+    if (readFile(dst) !== raw) {
+      try { fs.unlinkSync(dst) } catch { /* keep the spool copy either way */ }
+      throw new Error('destination verify mismatch after copy')
+    }
+    fsyncPath(dst) // prove the bytes reached the drive before the volatile copy goes away
+  }
+  fs.unlinkSync(f.p)
+}
 
 function bodyFiles(dir: string): Array<{ p: string; name: string; mtime: number; size: number }> {
   let names: string[]
@@ -169,10 +211,16 @@ export async function ingestPass(opts: IngestPassOptions): Promise<IngestPassRes
     },
     skipNames,
     strandedNames,
+    relocateStrandedTo,
     fsyncedPartsCache,
   } = opts
 
-  const res: IngestPassResult = { ingested: 0, deleted: 0, reclaimedDurable: 0, bytesFreed: 0, bytesIn: 0, bytesStored: 0, failed: [], strandedTs: [], throttled: false }
+  const res: IngestPassResult = { ingested: 0, deleted: 0, reclaimedDurable: 0, bytesFreed: 0, bytesIn: 0, bytesStored: 0, failed: [], strandedTs: [], strandedRelocated: 0, throttled: false }
+  // ponytail: per-pass circuit breaker on stranded relocation. A directory-level failure (dest
+  // unwritable, disk full) would otherwise retry a COPY per parked file per pass — on a bulk park
+  // that is the read-cost livelock reappearing in a new shape. 3 strikes → stop for this pass;
+  // the next pass retries (a transient failure heals, a permanent one costs 3 attempts/pass).
+  let relocateFailures = 0
   const cutoff = maxAgeMs > 0 ? Date.now() - maxAgeMs : Infinity
   // The AGE gate is the only filter here. `skipNames` must NOT filter at this level: a file whose name
   // is already durable still has to reach the verify+delete gate in settleBatch(). Excluding it from
@@ -318,7 +366,26 @@ export async function ingestPass(opts: IngestPassOptions): Promise<IngestPassRes
 
     // Parked by an earlier pass: the store's ts row is wrong while the bytes are proven, and no
     // amount of re-ingesting can repair that row. Zero I/O — reading it again would be the livelock.
-    if (strandedNames?.has(f.name)) continue
+    // TRDD-P8JGIEOG: when the pass has a durable relocation target, move the parked file there
+    // ONCE — name + mtime preserved (the mtime is the only true capture record), destination proven
+    // byte-identical and fsynced BEFORE the spool copy is unlinked (the settleBatch delete-gate
+    // discipline: never delete unproven bytes). After the move the file leaves this dir's listing,
+    // so every later pass is back to zero I/O here, and the SHARED strandedNames set keeps the
+    // legacy-dir drain skipping it at its new home. A failed relocation keeps the spool copy and
+    // the park — the livelock fix must survive the move failing.
+    if (strandedNames?.has(f.name)) {
+      if (relocateStrandedTo && relocateFailures < 3) {
+        try {
+          relocateStrandedFile(f, relocateStrandedTo, readFile, fsyncPath)
+          res.strandedRelocated++
+          res.bytesFreed += f.size
+        } catch (e) {
+          relocateFailures++
+          res.failed.push(`${f.name}: stranded relocate failed — kept on spool (${(e as Error).message})`)
+        }
+      }
+      continue
+    }
 
     if (skipNames?.has(f.name)) {
       // Already durable: straight to the gate, no re-ingest and no re-hash — that is what the set is

@@ -442,6 +442,20 @@ export class LogReader {
     return null
   }
 
+  /**
+   * TRDD-CXPLAT01 — the file backing `sessionId`, WITHOUT parsing it. Same lookup reparseSession
+   * uses (and the same memoized walk), split out so callers that only need a bounded read of the
+   * file (the cache-expiry probe's 256KB tail resolver) never pay the full parse of a 60MB+
+   * transcript. null when no single file backs the id (OTEL-only session, OpenCode, deleted log).
+   */
+  transcriptPathFor(sessionId: string): string | null {
+    for (const f of this.collectFileMeta()) {
+      if (f.agentKey === 'opencode') continue
+      if (this._sessionIdForFile(f.filePath, f.agentKey) === sessionId) return f.filePath
+    }
+    return null
+  }
+
   /** Returns all directories that should be watched for file changes. */
   getWatchDirs(): string[] {
     return [

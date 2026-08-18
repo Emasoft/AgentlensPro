@@ -508,9 +508,21 @@ def transact_toml(target, ops, create_if_missing, do_backup):
     changed = False
     for op in ops:
         section, prefix, line = op["section"], op["key_prefix"], op["line"]
+        # TRDD-CODXTOML1: the key may already exist as an explicit sub-table header
+        # ([otel.exporter.otlp-http]) rather than an inline line in the section body. The line
+        # scan below cannot see that form — a header line TERMINATES the body range — and
+        # inserting the inline twin makes tomllib refuse the whole edit ("Cannot declare
+        # ('otel', 'exporter', 'otlp-http') twice"; observed live 2026-08-13, leaving Codex
+        # auto-config permanently unconfigured on such configs). An existing key in ANY parsed
+        # form is the user's explicit choice: skip it, never fight or rewrite it. Consulted only
+        # when the inline line scan finds nothing, so inline lines keep replace semantics.
+        sec_tree = original_tree.get(section)
+        key_in_tree = isinstance(sec_tree, dict) and any(k.startswith(prefix) for k in sec_tree)
         header = f"[{section}]"
         idx = next((i for i, l in enumerate(lines) if l.strip() == header), -1)
         if idx == -1:
+            if key_in_tree:
+                continue  # section exists only via sub-table headers and already carries the key
             if lines and lines[-1].strip():
                 lines.append("")
             lines.extend([header, line])
@@ -529,6 +541,8 @@ def transact_toml(target, ops, create_if_missing, do_backup):
                 lines[existing] = line
                 changed = True
         else:
+            if key_in_tree:
+                continue  # present as a sub-table form the line scan cannot express — skip
             lines.insert(idx + 1, line)
             changed = True
 
