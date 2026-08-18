@@ -38,10 +38,26 @@ release-via: publish
 - **PARITY PROVEN on the real store (17:08):** key-normalized diff of 240,482 co-visible events —
   zero real divergence (23 only-ts were post-run live growth). Diff trap: serde_json alphabetizes
   keys vs JSON.stringify insertion order — always key-normalize both sides before comm.
-- **NEXT ACTION (one step):** P2 — port the log-session boot scan (LogReader's 21k-file walk) to
-  Rust: parallel parse of claude/codex/copilot/opencode session files, same SessionSummaryCard
-  JSON out, exec'd the same sidecar way. Then P3 (OTLP ingest + bodies→DuckDB, SQL-owned
-  aggregation), P4 (HTTP/MCP in Rust, TS server retired).
+- **P2 IN PROGRESS — the Claude transcript parser is PORTED and PARITY-PROVEN.** Crate
+  `agentlens-logscan` (+ `allogscan` bin): faithful port of `_claudeOnEntry`/`_buildCard`/
+  `_buildSubAgentCards`/timelineRetention — usage dedup per message.id, UTF-16 length parity in
+  the retention accounting (JS .length is UTF-16 units, NOT bytes — utf16_len/utf16_slice, never
+  str::len), bounded collections with insertion-order eviction (IndexMap.shift_remove), Rc-shared
+  timeline entries so late tool_results mutate evicted entries harmlessly, `<synthetic>` model
+  guard, single-tool_result toolUseResult attribution gate, worktree/subagents parent linkage.
+  ONE-SOURCE-OF-TRUTH SPLIT (deliberate, keep it): Rust emits `blendTurns`/`genFiles`/
+  `lastTimestampMs`; the TS wrapper `src/rustLogScan.ts::finishRustTranscript` owns accountId
+  (live registry), speedBlendedCostUsd (pricing.ts is the ONE table — never grow a Rust rates
+  mirror), attachGeneratedFiles (fs heuristics), hot-age strip (Date.now).
+  **PARITY: fixture tests (mixed-speed, caveat/api, async Agent + sync Task, astral chars) AND a
+  99/99 real-corpus sweep — 3 newest transcripts of EVERY project on this machine, deepStrictEqual
+  on the JSON wire shape, zero mismatches.** Boot-scan measure: 13,110 files → 12,928 cards in
+  5.6s at 462% CPU (`allogscan --dir ~/.claude/projects`).
+- **NEXT ACTION (one step):** P2b — wire the boot sweep: when `allogscanBin()` resolves, the
+  server's cold Claude scan fans to `rustParseTranscripts` (batch, one exec) instead of the
+  per-file TS parse; fileState stays TS-owned (a session that turns active rebuilds its accum
+  from 0 exactly as accum eviction already does). Then codex/copilot/opencode ports, then P3
+  (OTLP ingest + bodies→DuckDB, SQL-owned aggregation), P4 (HTTP/MCP in Rust, TS server retired).
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the

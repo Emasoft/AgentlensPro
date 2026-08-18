@@ -159,8 +159,8 @@ fn event_time_ms(span: &RawSpan, attrs: &Attrs) -> i64 {
 
 /// Minimal RFC3339/ISO-8601 (UTC or offset) → epoch ms. No chrono dependency: the harness writes
 /// `YYYY-MM-DDTHH:MM:SS(.fff)?(Z|±HH:MM)`; anything else returns None and falls through, exactly
-/// like the TS `Date.parse` NaN path.
-fn parse_iso_ms(s: &str) -> Option<i64> {
+/// like the TS `Date.parse` NaN path. Pub: agentlens-logscan reuses it (one date impl, not two).
+pub fn parse_iso_ms(s: &str) -> Option<i64> {
     let b = s.as_bytes();
     if b.len() < 20 || b[4] != b'-' || b[7] != b'-' || b[10] != b'T' {
         return None;
@@ -239,7 +239,7 @@ pub fn segment_day_ms(filename: &str) -> Option<i64> {
     Some(ms)
 }
 
-fn civil_from_days(z: i64) -> (i64, i64, i64) {
+pub fn civil_from_days(z: i64) -> (i64, i64, i64) {
     let z = z + 719468;
     let era = if z >= 0 { z } else { z - 146096 } / 146097;
     let doe = z - era * 146097;
