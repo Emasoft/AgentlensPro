@@ -1,9 +1,9 @@
 ---
 trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
-column: todo
+column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-18T17:00:52+0200
+updated: 2026-08-18T17:45:00+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -17,28 +17,38 @@ release-via: publish
 
 # Rust core rewrite — GOAL SET BY THE USER (2026-08-18)
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-18
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-18 (v2)
 
-- **P1 STARTED and already proving the thesis.** `rust-core/` workspace exists; crate
-  `agentlens-spanstore` reads the real segment format (.ndjson + .ndjson.gz, day-key validation,
-  line prefilter, TS-parity attr extraction incl. `event.timestamp` ISO parsing) with a rayon
-  parallel walk; `alscan` CLI (summary/--json/--parity-json; unknown flags exit 64).
-- **Measured on the real 5.5M-span store (31 segments): 2.1s on 14 threads vs 32.7s
-  single-core TS — 15.6× wall.** 240,465 api_requests + 660 compactions extracted. 2 lib tests.
-- **PARITY PROVEN on the real store (2026-08-18T17:08):** key-normalized diff of 240,482
-  co-visible events — only-rust 0, only-ts 23 and ALL 23 timestamped in the minutes AFTER the
-  Rust run (live-segment growth between the two scans), i.e. zero real divergence. (Diff trap
-  hit + solved: serde_json alphabetizes keys, JSON.stringify preserves insertion order — always
-  key-normalize both sides before comm.)
-- **NEXT ACTION (one step):** fixtures-based `tests/parity.rs` pinning the extraction against
-  golden lines (incl. string-int OTLP values, gz segment, corrupt tail line), then wire alscan
-  as the P1 sidecar the TS server execs for scans; benchmark table into the card; then P2
-  (log-session boot scan port).
-- Gotchas already encoded: OTLP intValue arrives as number OR string (`Attrs::n` handles both);
-  dedupe covers a day present as both .ndjson and .gz mid-compression; corrupt tail lines skip.
-- Companion mitigations SHIPPED separately ([[TRDD-7I5805QM]], commit 82fb745, merged 1f288da):
-  call-events sidecar index (all-history 32.7s/call → 3.9s), get_cache_event_log default 24h,
-  DuckDB threads machine-scaled (4 → 12 here).
+- **P1 COMPLETE and LIVE.** `agentlens-spanstore` reads the real segment format with a rayon
+  parallel walk; `alscan` CLI; the TS server EXECS it for every call-events scan on this machine.
+- **Wiring (src/rustScan.ts + otelCallIndex.ts head):** two explicit opt-in channels — env
+  `AGENTLENS_ALSCAN=/path` (per-process, wins, routes unconditionally) and the durable install
+  `~/.agentlens/bin/alscan` (`dataPath('bin','alscan')` — presence IS the opt-in; applies ONLY
+  when spansDir is not overridden, so fixture-driven tests keep testing the TS path on machines
+  that have the binary). A failed exec THROWS — no silent TS fallback once opted in. Deployed:
+  binary installed, bundle rebuilt, server restarted, and the live server was OBSERVED exec'ing
+  `~/.agentlens/bin/alscan ~/.agentlens/spans --since 0 --until … --json` (child of the server pid).
+- **Tests:** `rust-core/…/tests/parity.rs` (4 golden fixtures: string-int OTLP values incl.
+  full attr set query_source/speed/effort/agent.name, time precedence, gz≡plain, mid-compression
+  dedupe, windowing, corrupt tail) + `src/test/rustScan.test.ts` (cross-engine deepStrictEqual
+  vs the TS scan on a fixture store — field-for-field, and the routing test; 🐌-gated on the
+  local cargo build, PENDING on CI which has no Rust). Suite 2403 passing.
+- **Benchmarks (real 5.5M-span store, 31 segments, 240,729 events)** — table in the body below.
+  Headline: 32.7s single-core TS → 1.1s at 667% CPU (14 threads) ≈ 29× wall.
+- **PARITY PROVEN on the real store (17:08):** key-normalized diff of 240,482 co-visible events —
+  zero real divergence (23 only-ts were post-run live growth). Diff trap: serde_json alphabetizes
+  keys vs JSON.stringify insertion order — always key-normalize both sides before comm.
+- **NEXT ACTION (one step):** P2 — port the log-session boot scan (LogReader's 21k-file walk) to
+  Rust: parallel parse of claude/codex/copilot/opencode session files, same SessionSummaryCard
+  JSON out, exec'd the same sidecar way. Then P3 (OTLP ingest + bodies→DuckDB, SQL-owned
+  aggregation), P4 (HTTP/MCP in Rust, TS server retired).
+- Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
+  segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
+  a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
+  cross-engine deepStrictEqual test does).
+- Companion mitigations SHIPPED separately ([[TRDD-7I5805QM]], v2.29.0): call-events sidecar
+  index (still the no-binary path), get_cache_event_log default 24h, DuckDB threads
+  machine-scaled (4 → 12 here).
 
 USER directive, verbatim intent: "Goal set: rewrite all in optimized rust and sql. I need the
 agentlenspro server to be blazing fast. Leave typescript only for the ui." Tier-3 approval is the
@@ -77,6 +87,16 @@ was on 4 threads (fixed — now machine-scaled).
   benchmark table (cold/warm, 1-thread vs N), full existing unit-suite green against the mixed
   engine, deployed + soaked on this machine before the next phase starts.
 - Per the standing phased-execution rule: report at each phase boundary before starting the next.
+
+## P1 benchmark table (real store: 5.5M spans, 31 segments, 240,729 api_requests — 2026-08-18)
+
+| Path | Wall | CPU | Notes |
+| --- | --- | --- | --- |
+| TS scan, all history (pre-index, the incident) | 32.7s | ~100% one core | per call, minutes of pegged core under load |
+| TS + sidecar index, all history ([[TRDD-7I5805QM]]) | 3.9s | one core | sealed days cached, live day parsed per call |
+| **Rust `alscan`, all history** | **1.1s** | **667% (14 threads)** | whole store, cold sidecar-free |
+| End-to-end `get_cache_event_log` window 0 (live server → alscan) | 3.5s | — | includes bodies scan + MCP round-trip |
+| End-to-end `get_cache_event_log` default 24h | 0.69s | — | segment day-selection skips sealed history |
 
 ## Acceptance (whole card)
 

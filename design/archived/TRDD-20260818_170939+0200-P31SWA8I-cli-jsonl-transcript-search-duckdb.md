@@ -1,9 +1,9 @@
 ---
 trdd-id: P31SWA8I
 title: CLI transcript search — query a session's jsonl (tool outputs, agent responses) via DuckDB read_ndjson
-column: complete
+column: published
 created: 2026-08-18T17:09:39+0200
-updated: 2026-08-18T17:35:00+0200
+updated: 2026-08-18T17:46:00+0200
 current-owner: AgentlensPro session
 task-type: feature
 severity: MEDIUM
@@ -59,5 +59,7 @@ last-compact, budget, watch, hooks); nothing reads session `.jsonl` CONTENT.
   `src/cli/main.ts` (MANAGEMENT_VERBS/dispatch/LATENCY_EXEMPT) and the global USAGE. Full suite
   2399 passing; verified through the bare `agentlenspro` on PATH (npm link → this repo's bundle,
   symbol grep confirmed). Rides the v2.29.0 publish together with [[TRDD-7I5805QM]].
+- 2026-08-18T17:46:00+0200 — PUBLISHED in v2.29.0 (OIDC trusted publish; `_npmUser` = GitHub
+  Actions, SLSA attestations verified). Archived as published.
 
 ## Notes and lessons learned

@@ -43,6 +43,12 @@ pub struct CallEvent {
     pub cost_usd: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub query_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speed: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -296,6 +302,9 @@ fn extract_line(line: &str, out: &mut ScanResult, since: i64, until: i64) {
         cache_create_tokens: attrs.n0("cache_creation_tokens"),
         cost_usd,
         query_source: attrs.s("query_source"),
+        speed: attrs.s("speed"),
+        effort: attrs.s("effort"),
+        agent_name: attrs.s("agent.name"),
     });
 }
 

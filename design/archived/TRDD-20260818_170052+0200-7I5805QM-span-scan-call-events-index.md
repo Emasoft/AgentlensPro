@@ -1,9 +1,9 @@
 ---
 trdd-id: 7I5805QM
 title: cache-event-log rescanned the whole span store per call — incremental sealed-segment index
-column: complete
+column: published
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-18T17:00:52+0200
+updated: 2026-08-18T17:46:00+0200
 implementation-commits: [82fb745]
 current-owner: AgentlensPro session
 task-type: bugfix
@@ -46,5 +46,7 @@ data was re-parsed every time. Agents omitted the window in practice despite the
   ("the server is too slow... write better sql functions"); the observed burner was the
   single-threaded TypeScript span walk, which this removes. Successor goal: [[TRDD-DMWOBWFH]]
   (Rust+SQL core rewrite). Rides the next publish.
+- 2026-08-18T17:46:00+0200 — PUBLISHED in v2.29.0 (OIDC trusted publish; `_npmUser` = GitHub
+  Actions, SLSA attestations verified). Archived as published.
 
 ## Notes and lessons learned

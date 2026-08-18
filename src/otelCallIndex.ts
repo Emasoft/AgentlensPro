@@ -36,6 +36,7 @@ import {
   scanOtelCallEvents,
   type OtelCallEvent, type OtelCompactionEvent, type OtelScanCoverage, type OtelScanOptions,
 } from './otelCallEvents'
+import { alscanBin, rustScanCallEvents } from './rustScan'
 import { dataPath } from './dataDir'
 
 const DAY_MS = 86_400_000
@@ -107,6 +108,24 @@ export async function scanOtelCallEventsIndexed(opts: IndexedScanOptions = {}): 
   const until = opts.untilMs ?? now
   const since = opts.sinceMs ?? (opts.windowHours ? now - opts.windowHours * 3_600_000 : 0)
   const todayStart = dayStartMs(utcDayKey(now))
+
+  // TRDD-DMWOBWFH P1: with the Rust engine opted in (AGENTLENS_ALSCAN=/path/to/alscan, or the
+  // binary installed at <dataDir>/bin/alscan), the whole window is answered by ONE multi-core
+  // exec — no sidecars, no per-day TS parsing. Measured on the real 5.5M-span store: 2.1s
+  // full-history on 14 threads vs 32.7s single-core TS. A failed exec throws (deliberate: the
+  // operator opted in, so a broken binary must be loud, not silently absorbed by a TS fallback).
+  // The INSTALLED channel applies only to the real store (spansDir not overridden): a caller
+  // pinning a fixture spansDir is exercising the TS path's own mechanics, and a machine that
+  // happens to have the binary installed must not change what those tests test. The env var,
+  // being per-process and explicit, routes unconditionally.
+  const rustBin = opts.spansDir === undefined
+    ? alscanBin()
+    : (process.env.AGENTLENS_ALSCAN?.trim() || null)
+  if (rustBin !== null) {
+    return rustScanCallEvents(rustBin, {
+      spansDir, sinceMs: since, untilMs: until, windowHours: opts.windowHours,
+    })
+  }
 
   let names: string[]
   try {
