@@ -1575,13 +1575,11 @@ const TOOLS = [
         sessionId: { type: 'string', description: 'Narrow to one session inside the project (default: every session the project owns)' },
         context:   { type: 'number', description: 'How many calls to show before AND after the peak (default 3, max 25). mode=peak only.' },
         limit:     { type: 'number', description: 'How many recent calls to list (default 12, max 200). mode=recent only.' },
-        // NOT "omit for the bounded most-recent scan" — that was false and pointed the reader at the
-        // one input that kills the server. Unlike the sibling tools here, this one reads the OTEL
-        // span store (cacheEventLog.ts → scanOtelCallEvents), where an absent window means since=0,
-        // i.e. ALL of history with no cap; the others go through scanCacheCreationEvents, which IS
-        // capped. Omitting it is under investigation as TRDD-34B9JAZK (OOM under server load), so
-        // the description says so rather than reassuring someone into it.
-        window:    { type: 'number', description: 'Only calls from the last N hours (e.g. 5 for the live rate-limit window). Omitting it scans ALL history and is NOT capped — on a large store that can exhaust the server heap; pass a window unless you specifically need everything' },
+        // TRDD-7I5805QM: the span-store read is served by the incremental call-events index
+        // (sealed days from sidecars, only today's live segment parsed per call), so all-history
+        // is no longer an O(every span ever) walk. The default is still BOUNDED to 24h — callers
+        // of this tool overwhelmingly mean "recent calls", and an explicit 0 opts into everything.
+        window:    { type: 'number', description: 'Only calls from the last N hours (e.g. 5 for the live rate-limit window). Default 24. Pass 0 for ALL history (served from the call-events index; the first all-history call after new sealed days extracts them once).' },
         format:    { type: 'string', description: 'table (default) | json | markdown' },
       },
     },
@@ -3678,9 +3676,13 @@ export function createMcpServer(opts: McpServerOptions): Server {
           mode?: CacheEventMode; project?: string; sessionId?: string
           context?: number; limit?: number; window?: number; format?: CacheEventFormat
         }
+        // Default 24h, explicit 0 = all history (TRDD-7I5805QM). An ABSENT window used to mean
+        // since=0 — the one input that walked the whole 5.5M-span store on one core; agents omitted
+        // it in practice despite the schema warning, so the fail-safe default does what they meant.
+        const windowHours = a.window === 0 ? undefined : (a.window ?? 24)
         const log = await buildCacheEventLog({
           mode: a.mode, project: a.project, sessionId: a.sessionId,
-          contextEvents: a.context, limit: a.limit, windowHours: a.window,
+          contextEvents: a.context, limit: a.limit, windowHours,
         })
         result = formatCacheEventLog(log, a.format ?? 'table')
         break

@@ -2,7 +2,7 @@
 name: image-resident-cost-guard
 description: "why did reading a screenshot make the session expensive / does an image break the prompt cache / does an image invalidate the message cache / claude-cache-guard 700x overhead claim / why does cost keep climbing after I looked at a picture / what does the Read cache-guard warning mean / how do I turn off the image warning / is Read really in the burn-gate matcher"
 ocd: 2026-07-28
-lmd: 2026-07-28
+lmd: 2026-08-18
 metadata:
   node_type: memory
   type: project
@@ -85,7 +85,8 @@ describes MUTATING or REMOVING an image already inside the prefix, not appending
 with Anthropic's own `cache_miss_reason` enum, which carries no image cause and defines
 `messages_changed` as an earlier entry "altered, reordered, or removed RATHER THAN APPENDED TO".
 The shipped guard needs no change: warn-only, priced on resident cost, unit-test-pinned never to
-assert invalidation. Every one of those choices survives the measurement.
+assert invalidation. Every one of those choices survives the measurement. This settles the
+imported-mechanism doubt this page originally flagged before it was measured[^1].
 Evidence: `reports/image-cache-test/20260804_144500+0200-image-append-cache-measurement.md`. [^2]
 
 ## Notes and lessons learned

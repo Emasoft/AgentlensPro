@@ -21,6 +21,7 @@
 // which is also the fail-fast contract this project holds everywhere else.)
 import type { DuckDBConnection } from '@duckdb/node-api'
 import * as fs from 'fs'
+import * as os from 'os'
 import * as path from 'path'
 
 export interface StoreOptions {
@@ -60,12 +61,23 @@ function partName(seq: number): string {
 }
 
 export const DEFAULT_MEMORY_LIMIT = '8GB'
-export const DEFAULT_THREADS = 4
+// TRDD-7I5805QM: was a flat 4 — on a 16-core machine every DuckDB query (forensics SQL, verify
+// scans, run_diagnostics_sql) ran on a quarter of the cores while the user watched one Node core
+// peg. Scale to the machine, leave 2 cores for Node's own event loop + the OS; floor 4 so a small
+// box never regresses below the old default. Tests that pass `threads:` explicitly are unaffected.
+export const DEFAULT_THREADS = Math.max(4, (os.availableParallelism?.() ?? os.cpus().length) - 2)
 
 /** Resolve the memory ceiling: env > option > default. Generous by design — see the spill note above. */
 export function memoryLimit(opts: StoreOptions, env: NodeJS.ProcessEnv = process.env): string {
   const raw = env.AGENTLENS_DUCKDB_MEMORY_LIMIT?.trim()
   return raw && raw.length > 0 ? raw : (opts.memoryLimit ?? DEFAULT_MEMORY_LIMIT)
+}
+
+/** Resolve the DuckDB thread count: env > option > machine-scaled default (mirrors memoryLimit). */
+export function threadCount(opts: StoreOptions, env: NodeJS.ProcessEnv = process.env): number {
+  const raw = Number(env.AGENTLENS_DUCKDB_THREADS?.trim())
+  if (Number.isFinite(raw) && raw >= 1) return Math.floor(raw)
+  return opts.threads ?? DEFAULT_THREADS
 }
 
 export const BLOBS_DIR = 'blobs'
@@ -117,7 +129,7 @@ export async function openStore(opts: StoreOptions): Promise<Store> {
   // ':memory:' — FILELESS. This is the single most important character in the file.
   const inst = await DuckDBInstance.create(':memory:', {
     memory_limit: memoryLimit(opts),
-    threads: String(opts.threads ?? DEFAULT_THREADS),
+    threads: String(threadCount(opts)),
   })
   const rawCon = await inst.connect()
 

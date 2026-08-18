@@ -27,7 +27,7 @@ import {
   type CacheCreationEvent,
   type CacheCreationScanCoverage,
 } from './cacheCreationForensics'
-import { scanOtelCallEvents } from './otelCallEvents'
+import { scanOtelCallEventsIndexed } from './otelCallIndex'
 import { projectSlugOf, resolveProjectSlugs } from './projectSlug'
 import { calcTokenCostUsd, lookupRates } from './shared/pricing'
 
@@ -312,7 +312,11 @@ export async function buildCacheEventLog(opts: CacheEventLogOptions = {}): Promi
   // unattributable bucket. Each is then enriched from its raw body via `request_id` (the body
   // filename stem) for the two things OTEL omits: the 5m/1h write split and cache_miss_reason.
   const bodiesDir = opts.bodiesDir ?? defaultBodiesDir()
-  const otel = await scanOtelCallEvents({ spansDir: opts.spansDir, windowHours: opts.windowHours })
+  // Indexed (TRDD-7I5805QM): sealed days come from per-day sidecars; only today's live segment is
+  // parsed per call. The direct scan re-walked the WHOLE store when windowHours was absent —
+  // minutes of one pegged core per call on a 5.5M-span store (the 2026-08-17 "server burns one
+  // core continuously" incident).
+  const otel = await scanOtelCallEventsIndexed({ spansDir: opts.spansDir, windowHours: opts.windowHours })
   const calls: NormalizedCall[] = otel.events.length > 0
     ? otel.events.map(e => ({
         ts: e.ts, sessionId: e.sessionId, model: e.model,

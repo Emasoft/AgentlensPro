@@ -2,7 +2,7 @@
 name: agentlenspro-publish-pipeline
 description: "how do I release / publish a new version of agentlenspro / npm publish fails E404 Not Found PUT / CI publish rejected / provenance badge missing / can I publish from local / how was the package bootstrapped on npm / zizmor flags the workflows / where are the SBOM and checksums for a release / my zizmor ignore comment is not working / I pushed the tag but no release workflow ran / a file I committed is missing from the published package / the agent or skill did not reach users after publishing / feature missing after npm install / the tarball does not match the repo / what does the files allowlist actually ship — the release pipeline, its laws, and the bootstrap history"
 ocd: 2026-07-11
-lmd: 2026-07-31
+lmd: 2026-08-18
 metadata:
   node_type: memory
   type: project
@@ -83,7 +83,7 @@ memory/settings entries). [^6] [^7]
 
 ^ATOM-VF78-9FDW [desc:"A bump+changelog without a pushed tag publishes NOTHING — verify git tag + npm view before assuming a version shipped", keywords: changelog_says_released_but_npm_is_older version_bumped_but_not_published tag_never_pushed npm_latest_behind_package.json, type: project, ocd: 2026-08-14, lmd: 2026-08-14]
 
-DO NOT assume the latest CHANGELOG entry is published: 2.24.0 was version-bumped and changelogged on 2026-08-12 but the v2.24.0 TAG was never pushed, so the tag-driven publish never fired and npm latest silently stayed 2.23.0 for two days. DO verify before any release reasoning: `git tag -l 'v<ver>'` AND `npm view agentlenspro version` — the pair takes seconds and catches a bump-without-tag every time. The 2.25.0 release shipped the stranded content.
+DO NOT assume the latest CHANGELOG entry is published: 2.24.0 was version-bumped and changelogged on 2026-08-12 but the v2.24.0 TAG was never pushed, so the tag-driven publish never fired and npm latest silently stayed 2.23.0 for two days. DO verify before any release reasoning: `git tag -l 'v<ver>'` AND `npm view agentlenspro version` — the pair takes seconds and catches a bump-without-tag every time. The 2.25.0 release shipped the stranded content. A pushed tag is not sufficient either — see the more-than-3-tags-in-one-push failure mode[^5].
 
 ## Notes and lessons learned
 
