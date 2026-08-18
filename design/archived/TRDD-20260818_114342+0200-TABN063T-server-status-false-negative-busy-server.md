@@ -1,9 +1,9 @@
 ---
 trdd-id: TABN063T
 title: server status must not print NOT RUNNING for a live but busy server
-column: complete
+column: published
 created: 2026-08-18T11:43:42+0200
-updated: 2026-08-18T12:28:36+0200
+updated: 2026-08-18T12:34:19+0200
 implementation-commits: [64c4d94]
 current-owner: AgentlensPro session
 task-type: bugfix
@@ -33,3 +33,4 @@ RUNNING (busy / not responding within Nms), never NOT RUNNING. Keep fail-fast se
 ## Approval log
 
 - 2026-08-18T12:28:36+0200 — APPROVED human_review → complete by USER (batch "approved."). Live re-verify at approval: `server status` → `RUNNING pid=5888 ... canonical=true` in one coherent verdict line. Ships in v2.27.0 (release-via: publish; → published on tag).
+- 2026-08-18T12:34:19+0200 — PUBLISHED as agentlenspro@2.27.0 (tag v2.27.0, workflow run 32127117865, OIDC trusted publisher, SLSA provenance verified on registry). Archived as published.

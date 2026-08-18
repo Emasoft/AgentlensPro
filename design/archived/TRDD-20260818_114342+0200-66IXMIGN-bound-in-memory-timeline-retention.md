@@ -1,9 +1,9 @@
 ---
 trdd-id: 66IXMIGN
 title: bound in-memory timeline retention so the server heap cannot grow with machine history
-column: complete
+column: published
 created: 2026-08-18T11:43:42+0200
-updated: 2026-08-18T12:28:36+0200
+updated: 2026-08-18T12:34:19+0200
 implementation-commits: [52f81cb]
 current-owner: AgentlensPro session
 task-type: bugfix
@@ -55,3 +55,4 @@ sizes would not help; the COUNT must be bounded).
 ## Approval log
 
 - 2026-08-18T12:28:36+0200 — APPROVED human_review → complete by USER (batch "approved."). Live re-verify at approval: server pid 5888 heap 391/6240MB after 11m uptime. Ships in v2.27.0 (release-via: publish; → published on tag).
+- 2026-08-18T12:34:19+0200 — PUBLISHED as agentlenspro@2.27.0 (tag v2.27.0, workflow run 32127117865, OIDC trusted publisher, SLSA provenance verified on registry). Archived as published.

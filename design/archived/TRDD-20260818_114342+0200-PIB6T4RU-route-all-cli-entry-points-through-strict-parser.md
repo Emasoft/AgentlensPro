@@ -1,9 +1,9 @@
 ---
 trdd-id: PIB6T4RU
 title: unknown flags must exit 64 on every CLI entry point
-column: complete
+column: published
 created: 2026-08-18T11:43:42+0200
-updated: 2026-08-18T12:28:36+0200
+updated: 2026-08-18T12:34:19+0200
 implementation-commits: [64c4d94]
 current-owner: AgentlensPro session
 task-type: bugfix
@@ -29,3 +29,4 @@ sampled in the audit). Fail-fast: unknown flag → usage line on stderr → exit
 ## Approval log
 
 - 2026-08-18T12:28:36+0200 — APPROVED human_review → complete by USER (batch "approved."). Behaviorally re-verified at approval through the linked binary: `list`, `server status`, `statusline-history project` each exit 64 on an unknown flag. Ships in v2.27.0 (release-via: publish; → published on tag).
+- 2026-08-18T12:34:19+0200 — PUBLISHED as agentlenspro@2.27.0 (tag v2.27.0, workflow run 32127117865, OIDC trusted publisher, SLSA provenance verified on registry). Archived as published.
