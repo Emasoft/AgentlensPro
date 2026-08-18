@@ -2,6 +2,8 @@
 out
 dist
 node_modules
+# Rust build artifacts (TRDD-DMWOBWFH)
+rust-core/target/
 .vscode-test/
 *.vsix
 standalone/server.js

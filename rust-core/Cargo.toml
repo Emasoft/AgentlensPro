@@ -1,0 +1,14 @@
+# TRDD-DMWOBWFH — the Rust server core (USER goal: "blazing fast, TypeScript only for the UI").
+# Phase 1: the span-store read path — the measured hottest single-core TS loop.
+[workspace]
+resolver = "2"
+members = ["crates/agentlens-spanstore"]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "MIT"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

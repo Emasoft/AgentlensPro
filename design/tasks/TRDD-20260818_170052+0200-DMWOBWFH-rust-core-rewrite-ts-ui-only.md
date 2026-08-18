@@ -17,6 +17,24 @@ release-via: publish
 
 # Rust core rewrite — GOAL SET BY THE USER (2026-08-18)
 
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-18
+
+- **P1 STARTED and already proving the thesis.** `rust-core/` workspace exists; crate
+  `agentlens-spanstore` reads the real segment format (.ndjson + .ndjson.gz, day-key validation,
+  line prefilter, TS-parity attr extraction incl. `event.timestamp` ISO parsing) with a rayon
+  parallel walk; `alscan` CLI (summary/--json/--parity-json; unknown flags exit 64).
+- **Measured on the real 5.5M-span store (31 segments): 2.1s on 14 threads vs 32.7s
+  single-core TS — 15.6× wall.** 240,465 api_requests + 660 compactions extracted. 2 lib tests.
+- **NEXT ACTION (one step):** parity test — `alscan --parity-json ~/.agentlens/spans` diffed
+  against the TS scan's (requestId, ts, sessionId) set over the same store; pin any divergence,
+  then a fixtures-based `tests/parity.rs`. After parity: wire as the P1 sidecar the TS server
+  can exec, benchmark table into the card, report the phase boundary to the USER.
+- Gotchas already encoded: OTLP intValue arrives as number OR string (`Attrs::n` handles both);
+  dedupe covers a day present as both .ndjson and .gz mid-compression; corrupt tail lines skip.
+- Companion mitigations SHIPPED separately ([[TRDD-7I5805QM]], commit 82fb745, merged 1f288da):
+  call-events sidecar index (all-history 32.7s/call → 3.9s), get_cache_event_log default 24h,
+  DuckDB threads machine-scaled (4 → 12 here).
+
 USER directive, verbatim intent: "Goal set: rewrite all in optimized rust and sql. I need the
 agentlenspro server to be blazing fast. Leave typescript only for the ui." Tier-3 approval is the
 directive itself; this card records the goal and the migration order. Not to be re-litigated.
