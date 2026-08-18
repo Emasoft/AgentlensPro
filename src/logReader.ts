@@ -43,7 +43,7 @@ import {
   attachGeneratedFiles, scratchPathsInToolInput, scratchPathsInToolUseResult,
   type HarvestedGeneratedFile,
 } from './generatedFiles'
-import { allogscanBin, rustScanColdFilesSync, type RustColdScanItem } from './rustLogScan'
+import { allogscanBin, rustParseOpenCodeSync, rustScanColdFilesSync, type RustColdScanItem } from './rustLogScan'
 
 // ── Cross-platform home resolution ────────────────────────────────────────────
 
@@ -1232,9 +1232,17 @@ export class LogReader {
         continue
       }
 
-      if (this.sqlFactory) {
+      // Same opt-in guard shape as the other log engines (P3d): the INSTALLED binary applies
+      // only to the real data dirs (no OPENCODE_DATA_DIR override), so fixture-driven tests keep
+      // testing the TS path on machines that have the binary; the env var routes unconditionally.
+      // The Rust engine reads the LIVE db via rusqlite's native WAL handling — it replaces the
+      // sql.js byte-copy + hand-rolled `_mergeWal` on this path.
+      const rustBin = process.env['OPENCODE_DATA_DIR']
+        ? (process.env['AGENTLENS_ALLOGSCAN']?.trim() || null)
+        : allogscanBin()
+      if (rustBin !== null || this.sqlFactory) {
         try {
-          results.push(...this._parseOpenCodeDb(dbPath))
+          results.push(...(rustBin !== null ? rustParseOpenCodeSync(rustBin, dbPath) : this._parseOpenCodeDb(dbPath)))
         } catch (err) {
           // Logged AND counted (P6): the JSON fallback targets an older on-disk format, so a
           // recurring DB error usually means OpenCode sessions are quietly not ingested at all.

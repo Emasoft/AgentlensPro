@@ -18,7 +18,7 @@ import type { LogSessionResult } from './logReader'
 import type { SessionSummaryCard } from './shared/summarizerTypes'
 import { calcTokenCostUsd } from './shared/pricing'
 import { attachGeneratedFiles, type HarvestedGeneratedFile } from './generatedFiles'
-import { stripTimeline, timelineHotAgeMs } from './timelineRetention'
+import { stripTimeline, timelineHotAgeMs, timelineMaxBytes, timelineMaxEntries } from './timelineRetention'
 import { callBodyRegistry } from './rawBodyContext'
 import { dataPath } from './dataDir'
 
@@ -124,6 +124,30 @@ export function rustScanColdFilesSync(bin: string, files: string[], opts: { agen
       fileSizeBytes: parsed.fileSizeBytes,
       result: finishRustTranscript(parsed, now),
     })
+  }
+  return out
+}
+
+/** Parse an OpenCode SQLite db through the Rust engine (P3d). rusqlite opens the LIVE db
+ *  read-only with NATIVE WAL handling — no byte copy, no hand-rolled `_mergeWal`. One db yields
+ *  MANY session lines. Throws on exec failure; the caller's existing catch routes that to the
+ *  same JSON fallback the TS db-error path takes (a corrupt db degrades identically on both
+ *  engines). The retention bounds ride argv so the binary sees the same env-driven limits the
+ *  TS parser reads. */
+export function rustParseOpenCodeSync(bin: string, dbPath: string): LogSessionResult[] {
+  const argv = ['--opencode', dbPath,
+    '--max-entries', String(timelineMaxEntries()), '--max-bytes', String(timelineMaxBytes())]
+  let stdout: string
+  try {
+    stdout = execFileSync(bin, argv, { maxBuffer: 1 << 30 }).toString()
+  } catch (err) {
+    throw new Error(`allogscan failed (${bin}): ${err instanceof Error ? err.message : String(err)}`)
+  }
+  const now = Date.now()
+  const out: LogSessionResult[] = []
+  for (const line of stdout.split('\n')) {
+    if (!line) continue
+    out.push(finishRustTranscript(JSON.parse(line) as RustParsedTranscript, now))
   }
   return out
 }

@@ -32,6 +32,7 @@ use std::rc::Rc;
 
 pub mod codex;
 pub mod copilot;
+pub mod opencode;
 
 use indexmap::{IndexMap, IndexSet};
 use serde::Serialize;
@@ -81,7 +82,7 @@ pub(crate) fn snip(s: &str, max_chars: usize) -> String {
 }
 
 /// TS `capText`: truncate with the retention marker naming what was cut.
-fn cap_text(s: &str, max_chars: usize) -> String {
+pub(crate) fn cap_text(s: &str, max_chars: usize) -> String {
     let len = utf16_len(s);
     if len <= max_chars {
         return s.to_owned();
@@ -155,7 +156,14 @@ pub struct TimelineEntry {
     pub entry_type: &'static str, // user_input | tool | llm
     pub span_id: String,
     pub label: String,
-    pub turn: u64,
+    // Option because the opencode entries carry NO turn field (TS never sets it there); every
+    // Claude-path constructor passes Some, so the existing wire shape is unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_input: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -168,6 +176,8 @@ pub struct TimelineEntry {
     pub cache_create_tokens: Option<f64>,
     pub duration_ms: f64,
     pub is_error: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
     pub timestamp: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_text: Option<String>,
@@ -177,13 +187,42 @@ pub struct TimelineEntry {
     pub full_result: Option<String>,
 }
 
-/// TS `entryCost` — the retained heavy fields, in UTF-16 units. Fields the log path never sets
-/// (thinking/toolInput/errorMessage) contribute 0, matching their TS `?? 0`.
+/// TS `entryCost` — the retained heavy fields, in UTF-16 units. `thinking` is the one TS field
+/// no Rust log path sets; it contributes 0, matching its TS `?? 0`.
 fn entry_cost(e: &TimelineEntry) -> i64 {
     (e.full_result.as_deref().map(utf16_len).unwrap_or(0)
         + e.response_text.as_deref().map(utf16_len).unwrap_or(0)
+        + e.tool_input.as_deref().map(utf16_len).unwrap_or(0)
         + e.result_summary.as_deref().map(utf16_len).unwrap_or(0)
+        + e.error_message.as_deref().map(utf16_len).unwrap_or(0)
         + utf16_len(&e.label)) as i64
+}
+
+/// TS `capTimeline` — a single tail-trim over an already-assembled timeline (the opencode path
+/// builds its Vec in one pass, so this is equivalent to per-push eviction, TRDD-66IXMIGN).
+/// Returns the number of evicted (oldest) entries.
+pub(crate) fn cap_timeline(timeline: &mut Vec<TimelineEntry>, max_entries: usize, max_bytes: i64) -> u64 {
+    let keep_start = timeline.len().saturating_sub(max_entries);
+    let mut bytes: i64 = 0;
+    let mut i = timeline.len() as i64 - 1;
+    let mut over_budget = false;
+    while i >= keep_start as i64 {
+        bytes += entry_cost(&timeline[i as usize]);
+        if bytes > max_bytes {
+            over_budget = true; // timeline[i] overflows the budget → keep only (i+1 .. end)
+            break;
+        }
+        i -= 1;
+    }
+    let mut start = if over_budget { (i + 1) as usize } else { keep_start };
+    // Keep at least the newest entry even if it alone busts the budget.
+    if !timeline.is_empty() && start >= timeline.len() {
+        start = timeline.len() - 1;
+    }
+    if start > 0 {
+        timeline.drain(0..start);
+    }
+    start as u64
 }
 
 type EntryRef = Rc<RefCell<TimelineEntry>>;
@@ -751,7 +790,10 @@ pub fn on_entry(a: &mut ClaudeAccum, entry: &serde_json::Map<String, Value>) {
             entry_type: "user_input",
             span_id: format!("log-u-{}", a.idx),
             label: "User".to_owned(),
-            turn: a.turns + 1,
+            turn: Some(a.turns + 1),
+            action: None,
+            tool_input: None,
+            error_message: None,
             model: None,
             input_tokens: None,
             output_tokens: None,
@@ -878,7 +920,10 @@ pub fn on_entry(a: &mut ClaudeAccum, entry: &serde_json::Map<String, Value>) {
             entry_type: if has_tool_call { "tool" } else { "llm" },
             span_id: format!("log-a-{}", a.idx),
             label: if has_tool_call { "Tool calls" } else { "Response" }.to_owned(),
-            turn: a.turns,
+            turn: Some(a.turns),
+            action: None,
+            tool_input: None,
+            error_message: None,
             model: if a.model.is_empty() { None } else { Some(a.model.clone()) },
             input_tokens: row_buckets.map(|b| b.input),
             output_tokens: row_buckets.map(|b| b.output),
@@ -1094,7 +1139,10 @@ fn build_sub_agent_cards(parent_session_id: &str, a: &ClaudeAccum) -> Vec<Card> 
                 entry_type: "llm",
                 span_id: format!("{sid}-out"),
                 label: "Sub-agent output".to_owned(),
-                turn: 1,
+                turn: Some(1),
+                action: None,
+                tool_input: None,
+                error_message: None,
                 model: None,
                 input_tokens: None,
                 output_tokens: None,

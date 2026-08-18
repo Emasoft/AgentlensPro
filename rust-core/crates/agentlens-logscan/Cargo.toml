@@ -11,6 +11,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 rayon = "1"
 indexmap = { version = "2", features = ["serde"] }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 
 [[bin]]
 name = "allogscan"

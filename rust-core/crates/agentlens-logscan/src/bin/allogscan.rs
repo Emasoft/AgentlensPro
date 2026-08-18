@@ -4,6 +4,8 @@
 //!   allogscan --dir <projectsRoot> [--max-entries N] [--max-bytes N]
 //!   allogscan --files-from <list.txt>     # newline-separated paths — a 13k-file boot batch
 //!                                         # exceeds ARG_MAX as argv, so the list rides a file
+//!   allogscan --opencode <opencode.db>... # OpenCode SQLite (rusqlite, native WAL read; one
+//!                                         # db yields MANY session lines)
 //!
 //! Output: NDJSON — one ParsedTranscript JSON object per successfully parsed file, in no
 //! guaranteed order (rayon). A file that cannot be read or yields no timestamps is skipped
@@ -83,6 +85,7 @@ fn main() {
             "--copilot-cli" => mode = "copilot-cli",
             "--copilot-vscode" => mode = "copilot-vscode",
             "--copilot-vscode-json" => mode = "copilot-vscode-json",
+            "--opencode" => mode = "opencode",
             "--strip-older-than-ms" => {
                 i += 1;
                 strip_older_than_ms = args
@@ -100,6 +103,40 @@ fn main() {
     }
 
     let t0 = Instant::now();
+
+    // OpenCode: one db → MANY session lines, and no hot-age strip (the TS opencode path never
+    // strips — inventing one here would break parity). Errors are LOUD (exit 1): the TS caller's
+    // catch routes them to its own JSON fallback, exactly like a TS-side db error.
+    if mode == "opencode" {
+        let mut lines: Vec<String> = Vec::new();
+        for p in &files {
+            let path = p.to_string_lossy();
+            match agentlens_logscan::opencode::parse_opencode_db(&path, max_entries, max_bytes) {
+                Ok(r) => {
+                    if r.schema_unsupported {
+                        eprintln!("allogscan: opencode schema unsupported ({path}): session table lacks model/tokens columns; skipping");
+                    }
+                    for t in r.results {
+                        if let Ok(s) = serde_json::to_string(&t) {
+                            lines.push(s);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("allogscan: opencode {path}: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        let stdout = std::io::stdout();
+        let mut lock = std::io::BufWriter::new(stdout.lock());
+        for line in &lines {
+            let _ = writeln!(lock, "{line}");
+        }
+        let _ = lock.flush();
+        eprintln!("files={} parsed={} elapsed_ms={} threads=1", files.len(), lines.len(), t0.elapsed().as_millis());
+        return;
+    }
     let results: Vec<String> = files
         .par_iter()
         .filter_map(|p| {
