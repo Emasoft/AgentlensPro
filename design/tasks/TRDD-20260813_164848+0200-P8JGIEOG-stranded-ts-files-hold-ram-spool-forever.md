@@ -1,9 +1,10 @@
 ---
 trdd-id: P8JGIEOG
 title: Stranded ts-mismatch files hold RAM-spool capacity forever with no reclaim path
-column: backburner
+column: complete
 created: 2026-08-13T16:48:48+0200
-updated: 2026-08-13T16:48:48+0200
+updated: 2026-08-18T13:30:00+0200
+implementation-commits: [4a597ef]
 current-owner: agentlenspro-main
 task-type: bugfix
 severity: medium
@@ -40,11 +41,25 @@ file, not a drive-by edit inside a 10-finding batch.
 
 ## Acceptance
 
-- [ ] A stranded file is relocated from the RAM spool to the legacy SSD dir with name + mtime
+- [x] A stranded file is relocated from the RAM spool to the legacy SSD dir with name + mtime
       preserved, destination verified byte-identical BEFORE the spool copy is unlinked.
-- [ ] `strandedNames` keeps parking it at its new location (zero I/O per pass — the livelock fix
-      must survive the move).
-- [ ] A red-first test: park a file, run the reclaim, assert spool freed + SSD copy verified +
-      still skipped by the next ingest pass.
-- [ ] The backpressure floor math is re-checked with the reclaim in place (the spool can no longer
-      be permanently pinned below the floor by parked files).
+      (`relocateStrandedFile`, tmp+rename+verify+fsync; mtime asserted to the second in the test.)
+- [x] `strandedNames` keeps parking it at its new location (zero I/O per pass — the livelock fix
+      must survive the move). (Shared set untouched by the move; second-pass test counts ZERO reads
+      of the relocated name via the readFile seam.)
+- [x] A red-first test: park a file, run the reclaim, assert spool freed + SSD copy verified +
+      still skipped by the next ingest pass. (3 tests in src/test/ingestPass.test.ts — happy path,
+      different-bytes collision keeps the spool copy + names the failure, identical-destination
+      frees without rewrite.)
+- [x] The backpressure floor math is re-checked with the reclaim in place: spool usage is measured
+      by SCANNING the dir (stagedBodyBytes / the per-target liveBytes readdir in
+      archiveOtelBodies), so a relocated file leaves the measurement the moment it leaves the
+      mount — no separate accounting to fix. bytesFreed reports the reclaimed spool bytes.
+
+## Approval log
+
+- 2026-08-18T13:30:00+0200 — APPROVED by USER (batch "complete all TRDD") and IMPLEMENTED in
+  4a597ef. Volatile-source passes get `relocateStrandedTo: LEGACY_BODIES_DIR`; durable targets
+  deliberately get none (durable→durable relocation is churn). Per-pass 3-strike breaker stops a
+  directory-level failure from becoming a copy-per-file livelock. Suite 2377 passing. Column →
+  complete; rides the next publish.
