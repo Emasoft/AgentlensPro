@@ -1,9 +1,9 @@
 ---
 trdd-id: TABN063T
 title: server status must not print NOT RUNNING for a live but busy server
-column: human_review
+column: complete
 created: 2026-08-18T11:43:42+0200
-updated: 2026-08-18T12:17:38+0200
+updated: 2026-08-18T12:28:36+0200
 implementation-commits: [64c4d94]
 current-owner: AgentlensPro session
 task-type: bugfix
@@ -26,6 +26,10 @@ RUNNING (busy / not responding within Nms), never NOT RUNNING. Keep fail-fast se
 
 ## Acceptance
 
-- [ ] a live-but-slow server is never reported NOT RUNNING (test with a deliberately stalled listener)
-- [ ] a genuinely dead server still reports NOT RUNNING with a non-zero exit
-- [ ] output remains script-parseable; check-types + lint green
+- [x] a live-but-slow server is never reported NOT RUNNING (test with a deliberately stalled listener — worker report reports/cli-hardening/20260818_115432+0200-strict-flags-and-status.md)
+- [x] a genuinely dead server still reports NOT RUNNING with a non-zero exit
+- [x] output remains script-parseable; check-types + lint green (commit 64c4d94, suite 2368 passing)
+
+## Approval log
+
+- 2026-08-18T12:28:36+0200 — APPROVED human_review → complete by USER (batch "approved."). Live re-verify at approval: `server status` → `RUNNING pid=5888 ... canonical=true` in one coherent verdict line. Ships in v2.27.0 (release-via: publish; → published on tag).

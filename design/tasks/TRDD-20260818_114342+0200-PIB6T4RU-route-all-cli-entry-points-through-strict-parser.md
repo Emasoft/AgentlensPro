@@ -1,9 +1,9 @@
 ---
 trdd-id: PIB6T4RU
 title: unknown flags must exit 64 on every CLI entry point
-column: human_review
+column: complete
 created: 2026-08-18T11:43:42+0200
-updated: 2026-08-18T12:17:38+0200
+updated: 2026-08-18T12:28:36+0200
 implementation-commits: [64c4d94]
 current-owner: AgentlensPro session
 task-type: bugfix
@@ -22,6 +22,10 @@ sampled in the audit). Fail-fast: unknown flag → usage line on stderr → exit
 
 ## Acceptance
 
-- [ ] every subcommand rejects an unknown flag with exit 64 (enumerated, not sampled)
-- [ ] known flags/behavior unchanged; `pnpm run check-types` + lint green
-- [ ] a test covers at least the previously-broken three
+- [x] every subcommand rejects an unknown flag with exit 64 (enumerated, not sampled — worker report reports/cli-hardening/20260818_115432+0200-strict-flags-and-status.md)
+- [x] known flags/behavior unchanged; `pnpm run check-types` + lint green (commit 64c4d94, suite 2368 passing)
+- [x] a test covers at least the previously-broken three (src/test/cliUsageContract.test.ts)
+
+## Approval log
+
+- 2026-08-18T12:28:36+0200 — APPROVED human_review → complete by USER (batch "approved."). Behaviorally re-verified at approval through the linked binary: `list`, `server status`, `statusline-history project` each exit 64 on an unknown flag. Ships in v2.27.0 (release-via: publish; → published on tag).

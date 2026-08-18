@@ -1,9 +1,9 @@
 ---
 trdd-id: 66IXMIGN
 title: bound in-memory timeline retention so the server heap cannot grow with machine history
-column: human_review
+column: complete
 created: 2026-08-18T11:43:42+0200
-updated: 2026-08-18T12:17:38+0200
+updated: 2026-08-18T12:28:36+0200
 implementation-commits: [52f81cb]
 current-owner: AgentlensPro session
 task-type: bugfix
@@ -51,3 +51,7 @@ sizes would not help; the COUNT must be bounded).
 4. Fleet-scale tier: parse-time cold-strip (`AGENTLENS_TIMELINE_HOT_AGE_HOURS`, 24h) because the
    scan's own results array defeats any post-scan bound at 12k files; server-side hot tier
    (`AGENTLENS_TIMELINE_HOT_CARDS`, 50) for what stays resident. Tests pin hot via setup.js.
+
+## Approval log
+
+- 2026-08-18T12:28:36+0200 — APPROVED human_review → complete by USER (batch "approved."). Live re-verify at approval: server pid 5888 heap 391/6240MB after 11m uptime. Ships in v2.27.0 (release-via: publish; → published on tag).
