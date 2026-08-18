@@ -11,6 +11,42 @@ approval-tier: 0
 
 # The heap grows to the 6144MB ceiling; GC thrash then kills the process
 
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-18
+
+**ROOT CAUSE FOUND — by heap snapshot, not inference. The span window was NOT the retainer.**
+
+Repro (33 seconds, cold start): `node --max-old-space-size=1024 --heapsnapshot-near-heap-limit=2
+standalone/server.js` with an EMPTY isolated `AGENTLENS_DATA_DIR`, alt ports, real HOME. Zero spans
+loaded, zero OTLP — the heap blew to 1.2GB and SIGABRT'd right after "Log ingestion enabled —
+scanning local session files". Two snapshots captured (547M/602M).
+
+**Snapshot verdict (near-death, streaming aggregation): 938.6 MB in 2,834,232 strings** (plus
+112.8MB in 1.12M objects holding them). The strings are transcript text — skill prompts, tool
+outputs, subagent review prompts. No single giant blob; millions of ~330-byte message fragments.
+
+**The retaining structure (code, cited):** the in-memory `SessionSummaryCard.timeline` retains
+FULL message text inline for EVERY session file on the machine:
+- `src/logReader.ts:2094` — every user message pushed with `responseText: text` (full body)
+- `src/logReader.ts:1951` — every tool entry gets `fullResult = full` (complete tool output)
+- `src/shared/summarizerTypes.ts` `TimelineEntry.hasBlob` comment states the contract explicitly:
+  blob-stripping happens only on DB-loaded rows; "live/in-memory sessions (their entries carry
+  fullResult inline already)". `putLogSession` (standalone/server.ts) keeps one such card per
+  session — hundreds of sessions × full-text timelines = the multi-GB heap.
+
+This explains every prior observation: cold-start reproduction (boot scan re-inhales everything),
+growth-then-OOM at any cap, CPU rising as GC cost climbs, respawn loop (each new pid rebuilds the
+same cards). The "span window" LEAD in the body is DEAD — measured 0 spans in the repro.
+
+**NEXT ACTION (fix, own TRDD):** apply the blob-strip contract to in-memory cards too — persist
+`fullResult`/`responseText`/`thinking`/`toolInput` to the existing blob store at parse time, set
+`hasBlob`, keep only bounded summaries in the retained timeline; `loadBlob` lazy-fetch already
+exists for the webview. One source of truth: the DB path already does exactly this.
+
+**SUPERSEDED — do NOT carry forward:** the span-window/index hypothesis; any plan to profile CPU.
+
+Artifacts: snapshots + `heapagg.js` (streaming analyzer) in the session scratchpad
+(`mfsumoj9-repro/`); repro log shows the 33s timeline.
+
 > **READ THE "MEMORY *IS* THE STORY" SECTION FIRST.** The sections above it are kept in the order
 > they were discovered, because the sequence is itself the lesson — but two of them were RETRACTED
 > and are struck through. The card opened as "CPU unexplained by throughput"; the CPU was the
