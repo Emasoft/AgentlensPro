@@ -1,0 +1,16 @@
+# agentlens-store — the bodies→DuckDB pipeline (TRDD-DMWOBWFH P3c).
+[package]
+name = "agentlens-store"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+duckdb = { version = "1.10505.0", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+
+[[bin]]
+name = "alstore"
+path = "src/bin/alstore.rs"

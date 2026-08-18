@@ -2,7 +2,7 @@
 # Phase 1: the span-store read path — the measured hottest single-core TS loop.
 [workspace]
 resolver = "2"
-members = ["crates/agentlens-spanstore", "crates/agentlens-logscan", "crates/agentlens-ingest"]
+members = ["crates/agentlens-spanstore", "crates/agentlens-logscan", "crates/agentlens-ingest", "crates/agentlens-store"]
 
 [workspace.package]
 edition = "2021"

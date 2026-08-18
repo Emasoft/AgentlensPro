@@ -102,10 +102,24 @@ release-via: publish
   tool_result event.timestamp timing, codex per-prompt grouping + synthetic parent, drops,
   body pointers, account harvest), and the gen_ai two-sided inject; 2 Rust unit tests pin the
   stateful halves. Suite 2414 passing.
-- **NEXT ACTION (one step):** P3c — bodies→DuckDB via duckdb-rs: schema parity with
-  src/store/db.ts DDL + the ingestPass contract, absorbing the opencode SQLite read; then P4
-  (HTTP/API + MCP in Rust — wiring writer+ingest behind the 4318 listener — CLI port, TS server
-  retired).
+- **P3c CORE DONE — the bodies→DuckDB store is ported (duckdb-rs bundled) and CROSS-ENGINE
+  compatible.** `agentlens-store`: sections.rs (byte-exact sectionizer — Rust scans BYTES so
+  UTF-8 identity is by construction), db (fileless :memory: instance, same DDL, temp_directory=''
+  fail-loud, immutable zstd Parquet parts with collision-free epoch+pid+seq names +
+  refuse-to-overwrite, union_by_name + UNION ALL BY NAME), ingest_body (GATE 1 reconstruct-
+  before-write, GATE 2 dedup via the known-sha reload), reconstruct_body (end-to-end sha proof),
+  verify_bodies_in_store (bytes/row/ts±2000ms bulk gate). `alstore ingest|reconstruct|verify`
+  CLI. **PROVEN: a TS-written store reconstructs byte-identically through Rust AND vice versa,
+  on a REAL captured body; Rust verify gate passes on the TS-written store.** 5 Rust tests +
+  2 TS cross-engine tests.
+- **P3c REMAINING:** the ingestPass orchestration (throttle/batch/settle/fsync-barrier/relocate
+  — port of ingestPass.ts, ~mechanical now that ingest+verify exist) and the opencode SQLite
+  read (rusqlite handles WAL natively, replacing the hand-rolled TS WAL merge over sql.js).
+- **NEXT ACTION (one step):** port ingestPass.ts into agentlens-store (pass module + `alstore
+  pass <bodiesDir> <storeDir>` subcommand, with the 512MB throttle, batch 200, settle order
+  ingest→flush→fsync-barrier→verify→delete, stranded parking + relocation + 3-strike breaker);
+  then opencode via rusqlite; then P4 (HTTP/API + MCP in Rust behind the 4318 listener, CLI
+  port, TS server retired).
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
