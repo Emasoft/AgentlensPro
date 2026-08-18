@@ -17,6 +17,7 @@
 //!   re-ingesting the same bytes writes nothing (the `known` sha set reloads from durable
 //!   parts at open).
 
+pub mod pass;
 pub mod sections;
 
 use std::collections::HashSet;

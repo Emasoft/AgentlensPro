@@ -3,6 +3,9 @@
 //!   alstore ingest <storeDir> <body.json>... [--ts-ms N]   ingest + flush, report JSON
 //!   alstore reconstruct <storeDir> <bodyId>                print the exact original bytes
 //!   alstore verify <storeDir> <src_name> <body.json> [--ts-ms N]
+//!   alstore pass <storeDir> <bodiesDir> [--no-delete] [--durable-source]
+//!       [--max-bytes N] [--relocate-to DIR]   one throttled ingest pass; skip/stranded
+//!       state persists in <storeDir>/.pass-state.json across invocations
 //!
 //! The parity tests drive these against the TS store on the same files/directories: the
 //! Parquet parts are the compatibility boundary (both engines are DuckDB).
@@ -20,6 +23,10 @@ fn main() {
     let Some(cmd) = args.first() else { usage("command required") };
     let Some(store_dir) = args.get(1) else { usage("storeDir required") };
     let mut ts_ms: i64 = 0;
+    let mut no_delete = false;
+    let mut durable_source = false;
+    let mut max_bytes: u64 = agentlens_store::pass::DEFAULT_MAX_BYTES_PER_PASS;
+    let mut relocate_to: Option<String> = None;
     let mut rest: Vec<String> = Vec::new();
     let mut i = 2;
     while i < args.len() {
@@ -27,6 +34,16 @@ fn main() {
             "--ts-ms" => {
                 i += 1;
                 ts_ms = args.get(i).and_then(|v| v.parse().ok()).unwrap_or_else(|| usage("--ts-ms needs ms"));
+            }
+            "--no-delete" => no_delete = true,
+            "--durable-source" => durable_source = true,
+            "--max-bytes" => {
+                i += 1;
+                max_bytes = args.get(i).and_then(|v| v.parse().ok()).unwrap_or_else(|| usage("--max-bytes needs bytes"));
+            }
+            "--relocate-to" => {
+                i += 1;
+                relocate_to = Some(args.get(i).cloned().unwrap_or_else(|| usage("--relocate-to needs a dir")));
             }
             f if f.starts_with('-') => usage(&format!("unknown flag {f}")),
             f => rest.push(f.to_owned()),
@@ -110,6 +127,50 @@ fn main() {
                 }
             }
         }
+        "pass" => {
+            let Some(bodies_dir) = rest.first() else { usage("bodiesDir required") };
+            // Skip/stranded state persists across invocations (the TS server holds these in
+            // memory for its process lifetime; a CLI's process is one pass, so the state rides
+            // a file). fsyncedParts stays per-invocation — correct either way, cheaper with.
+            let state_file = std::path::Path::new(store_dir).join(".pass-state.json");
+            let (mut skip, mut stranded) = load_state(&state_file);
+            let mut fsynced = std::collections::HashSet::new();
+            let opts = agentlens_store::pass::PassOptions {
+                bodies_dir: std::path::PathBuf::from(bodies_dir),
+                delete_after: !no_delete,
+                durable_source,
+                max_bytes_per_pass: max_bytes,
+                relocate_stranded_to: relocate_to.map(std::path::PathBuf::from),
+                ..Default::default()
+            };
+            let res = agentlens_store::pass::ingest_pass(&mut store, &opts, &mut skip, &mut stranded, &mut fsynced);
+            save_state(&state_file, &skip, &stranded);
+            println!("{}", serde_json::to_string(&res).expect("serializable"));
+        }
         other => usage(&format!("unknown command {other}")),
+    }
+}
+
+fn load_state(p: &std::path::Path) -> (std::collections::HashSet<String>, std::collections::HashSet<String>) {
+    let Ok(raw) = std::fs::read_to_string(p) else { return (Default::default(), Default::default()) };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else { return (Default::default(), Default::default()) };
+    let set = |k: &str| {
+        v.get(k)
+            .and_then(|a| a.as_array())
+            .map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_owned)).collect())
+            .unwrap_or_default()
+    };
+    (set("skipNames"), set("strandedNames"))
+}
+
+fn save_state(p: &std::path::Path, skip: &std::collections::HashSet<String>, stranded: &std::collections::HashSet<String>) {
+    let mut skip_v: Vec<&String> = skip.iter().collect();
+    let mut str_v: Vec<&String> = stranded.iter().collect();
+    skip_v.sort();
+    str_v.sort();
+    let json = serde_json::json!({ "skipNames": skip_v, "strandedNames": str_v });
+    let tmp = p.with_extension("json.tmp");
+    if std::fs::write(&tmp, json.to_string()).is_ok() {
+        let _ = std::fs::rename(&tmp, p);
     }
 }
