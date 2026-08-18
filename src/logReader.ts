@@ -43,6 +43,7 @@ import {
   attachGeneratedFiles, scratchPathsInToolInput, scratchPathsInToolUseResult,
   type HarvestedGeneratedFile,
 } from './generatedFiles'
+import { allogscanBin, rustScanColdFilesSync } from './rustLogScan'
 
 // ── Cross-platform home resolution ────────────────────────────────────────────
 
@@ -571,12 +572,53 @@ export class LogReader {
   // ── Claude Code ─────────────────────────────────────────────────────────────
 
   private _scanClaude(): LogSessionResult[] {
+    // TRDD-DMWOBWFH P2: files never seen before (no fileState) are COLD — the boot-scan case —
+    // and fan out to the Rust `allogscan` sidecar in ONE multi-core exec when the engine is
+    // opted in (13,110 files → 5.6s at 462% CPU vs the minutes-long single-core TS walk).
+    // Files WITH fileState are live tails and stay on the TS incremental path, whose accumulator
+    // state Rust cannot share. Same opt-in guard shape as the P1 span engine: the INSTALLED
+    // binary applies only to the real store (no CLAUDE_CONFIG_DIR override), so fixture-driven
+    // tests keep testing the TS path on machines that have the binary; the env var, being
+    // per-process and explicit, routes unconditionally.
+    const bin = process.env['CLAUDE_CONFIG_DIR']
+      ? (process.env['AGENTLENS_ALLOGSCAN']?.trim() || null)
+      : allogscanBin()
     const results: LogSessionResult[] = []
+    const coldFiles: string[] = []
     for (const projectsDir of claudeProjectsDirs()) {
       this._collectJsonlFiles(projectsDir).forEach(filePath => {
+        if (bin !== null && !this.fileState.has(filePath)) {
+          coldFiles.push(filePath)
+          return
+        }
         const result = this._processFile(filePath, () => this._parseClaudeFile(filePath))
         if (result) results.push(result)
       })
+    }
+    if (coldFiles.length > 0 && bin !== null) {
+      const items = rustScanColdFilesSync(bin, coldFiles)
+      const parsedBytes = new Map<string, number>()
+      for (const item of items) {
+        parsedBytes.set(item.file, item.fileSizeBytes)
+        results.push(item.result) // loop-push, never spread — TRDD-2YP3DB9Y
+      }
+      // Seed the change gate for EVERY cold file (parsed or skipped-as-empty), or the next scan
+      // would re-send the whole corpus to Rust. bytesRead is what Rust actually parsed; when the
+      // file grew between Rust's read and this stat, recording the STALE mtime forces the next
+      // scan to mismatch and reparse — the conservative-safe direction (never silently ahead).
+      for (const filePath of coldFiles) {
+        try {
+          const stat = fs.statSync(filePath)
+          const parsed = parsedBytes.get(filePath)
+          const bytesRead = parsed ?? stat.size
+          this.fileState.set(filePath, {
+            bytesRead,
+            mtimeMs: parsed !== undefined && parsed !== stat.size ? 0 : stat.mtimeMs,
+            ino: stat.ino,
+            size: stat.size,
+          })
+        } catch { /* vanished mid-scan — stays cold, retried next scan */ }
+      }
     }
     return results
   }

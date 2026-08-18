@@ -10,8 +10,10 @@
 //   - generated files → attachGeneratedFiles (fs heuristics live in src/generatedFiles.ts)
 //   - hot-age strip   → stripTimeline (Date.now-dependent, same clock as the TS parser)
 
-import { execFile } from 'child_process'
+import { execFile, execFileSync } from 'child_process'
 import * as fs from 'fs'
+import * as os from 'os'
+import * as path from 'path'
 import type { LogSessionResult } from './logReader'
 import type { SessionSummaryCard } from './shared/summarizerTypes'
 import { calcTokenCostUsd } from './shared/pricing'
@@ -37,6 +39,7 @@ interface RustParsedTranscript {
   genFiles?: Array<{ path: string; spanId?: string }>
   blendTurns?: RustBlendTurn[]
   lastTimestampMs: number
+  fileSizeBytes: number
 }
 
 /** The opted-in binary path, or null when the Rust log engine is off. Same two explicit channels
@@ -78,6 +81,47 @@ export function finishRustTranscript(r: RustParsedTranscript, nowMs = Date.now()
     card,
     childCards: r.childCards && r.childCards.length > 0 ? r.childCards : undefined,
   }
+}
+
+/** One cold-scanned file's outcome, with the byte length the Rust engine actually parsed so the
+ *  caller can seed its fileState gate (LogReader owns that map; this module never touches it). */
+export interface RustColdScanItem {
+  file: string
+  fileSizeBytes: number
+  result: LogSessionResult
+}
+
+/** Synchronous batch parse for the boot sweep — LogReader's scan path is synchronous, and the
+ *  file list rides a temp file because a 13k-file boot batch exceeds ARG_MAX as argv.
+ *  Throws on exec failure — opted-in means loud, never a silent fall-through to the TS loop. */
+export function rustScanColdFilesSync(bin: string, files: string[]): RustColdScanItem[] {
+  const listFile = path.join(os.tmpdir(), `allogscan-list-${process.pid}-${Date.now()}.txt`)
+  fs.writeFileSync(listFile, files.join('\n') + '\n')
+  // Cold cards older than the hot age lose their timeline INSIDE the binary — same parse-time
+  // strip the TS parser applies (TRDD-66IXMIGN), and what keeps the NDJSON pipeable: the
+  // unstripped 12,928-card corpus measured 1.2GB (ENOBUFS on any sane maxBuffer); stripped it
+  // is tens of MB. finishRustTranscript's own strip stays as the idempotent boundary catch.
+  const cutoff = Date.now() - timelineHotAgeMs()
+  let stdout: string
+  try {
+    stdout = execFileSync(bin, ['--files-from', listFile, '--strip-older-than-ms', String(cutoff)], { maxBuffer: 1 << 30 }).toString()
+  } catch (err) {
+    throw new Error(`allogscan failed (${bin}): ${err instanceof Error ? err.message : String(err)}`)
+  } finally {
+    try { fs.unlinkSync(listFile) } catch { /* tmp file; best-effort */ }
+  }
+  const now = Date.now()
+  const out: RustColdScanItem[] = []
+  for (const line of stdout.split('\n')) {
+    if (!line) continue
+    const parsed = JSON.parse(line) as RustParsedTranscript
+    out.push({
+      file: parsed.file,
+      fileSizeBytes: parsed.fileSizeBytes,
+      result: finishRustTranscript(parsed, now),
+    })
+  }
+  return out
 }
 
 /** Parse transcripts through the Rust engine. Throws on any exec failure — opted-in means loud. */

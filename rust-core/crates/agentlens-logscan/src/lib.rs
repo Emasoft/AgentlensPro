@@ -978,10 +978,31 @@ pub struct Card {
     pub errors: u64,
     pub outcome: &'static str,
     pub timeline: Vec<TimelineEntry>,
+    /// Present (as 0) ONLY on a hot-age-stripped card — exactly the field shape TS
+    /// `stripTimeline` leaves behind (it assigns timelineRetainedBytes = 0 on the card).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeline_retained_bytes: Option<u64>,
     pub background_spans: Vec<Value>,
     pub loop_signals: Vec<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub peak_context_per_turn: Option<f64>,
+}
+
+impl Card {
+    /// TS `stripTimeline`: cold sessions must leave the parser WITHOUT a timeline — on a
+    /// 12k-file boot scan the results array itself holds every card (TRDD-66IXMIGN fifth
+    /// repro), and here the NDJSON stream additionally balloons past pipe buffers (measured:
+    /// 1.2GB unstripped vs tens of MB stripped). Early-return on empty keeps it idempotent
+    /// with the TS wrapper's own strip.
+    pub fn strip_timeline(&mut self) {
+        if self.timeline.is_empty() {
+            return;
+        }
+        self.timeline_truncated_count =
+            Some(self.timeline_truncated_count.unwrap_or(0) + self.timeline.len() as u64);
+        self.timeline.clear();
+        self.timeline_retained_bytes = Some(0);
+    }
 }
 
 /// One parsed transcript, as the TS wrapper consumes it. `blend_turns` is present only for a
@@ -1000,6 +1021,10 @@ pub struct ParsedTranscript {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub blend_turns: Option<Vec<BlendTurn>>,
     pub last_timestamp_ms: i64,
+    /// Bytes actually parsed — the TS caller records this as the fileState tail offset so its
+    /// next scan resumes/skips correctly (growth after our read mismatches and reparses, which
+    /// is the conservative-safe direction).
+    pub file_size_bytes: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -1135,6 +1160,7 @@ fn build_sub_agent_cards(parent_session_id: &str, a: &ClaudeAccum) -> Vec<Card> 
                 "text_response"
             },
             timeline,
+            timeline_retained_bytes: None,
             background_spans: Vec::new(),
             loop_signals: Vec::new(),
             peak_context_per_turn: None,
@@ -1211,6 +1237,7 @@ pub fn build_result(file_path: &str, a: ClaudeAccum) -> Option<ParsedTranscript>
         errors: 0,
         outcome: if a.total_tool_calls > 0 { "tool_calls" } else { "text_response" },
         timeline: a.timeline.entries.iter().map(|e| e.borrow().clone()).collect(),
+        timeline_retained_bytes: None,
         background_spans: Vec::new(),
         loop_signals: Vec::new(),
         peak_context_per_turn: if a.turns > 1 { Some(a.peak_context_per_turn) } else { None },
@@ -1247,6 +1274,7 @@ pub fn build_result(file_path: &str, a: ClaudeAccum) -> Option<ParsedTranscript>
             .collect(),
         blend_turns: if mixed_speed { Some(a.blend_turns) } else { None },
         last_timestamp_ms: last_ms,
+        file_size_bytes: 0, // stamped by parse_transcript, which knows the read length
     })
 }
 
@@ -1263,7 +1291,10 @@ pub fn parse_transcript(file_path: &str, max_entries: usize, max_bytes: usize) -
             on_entry(&mut a, &entry);
         }
     }
-    Ok(build_result(file_path, a))
+    Ok(build_result(file_path, a).map(|mut r| {
+        r.file_size_bytes = bytes.len() as u64;
+        r
+    }))
 }
 
 #[cfg(test)]

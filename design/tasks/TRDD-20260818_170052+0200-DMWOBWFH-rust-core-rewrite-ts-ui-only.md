@@ -53,11 +53,23 @@ release-via: publish
   99/99 real-corpus sweep — 3 newest transcripts of EVERY project on this machine, deepStrictEqual
   on the JSON wire shape, zero mismatches.** Boot-scan measure: 13,110 files → 12,928 cards in
   5.6s at 462% CPU (`allogscan --dir ~/.claude/projects`).
-- **NEXT ACTION (one step):** P2b — wire the boot sweep: when `allogscanBin()` resolves, the
-  server's cold Claude scan fans to `rustParseTranscripts` (batch, one exec) instead of the
-  per-file TS parse; fileState stays TS-owned (a session that turns active rebuilds its accum
-  from 0 exactly as accum eviction already does). Then codex/copilot/opencode ports, then P3
-  (OTLP ingest + bodies→DuckDB, SQL-owned aggregation), P4 (HTTP/MCP in Rust, TS server retired).
+- **P2b WIRED AND MEASURED.** `_scanClaude` fans never-seen (cold) files to ONE `allogscan
+  --files-from` exec (argv would exceed ARG_MAX at 13k paths); live tails stay TS-incremental;
+  fileState seeded from the binary's `fileSizeBytes` with a stale-mtime poison when the file grew
+  mid-scan (conservative-safe: mismatch → reparse). The binary hot-age-strips cold parent
+  timelines itself (`--strip-older-than-ms`) — the unstripped corpus NDJSON measured **1.2GB**
+  (ENOBUFS through any pipe); stripped it pipes fine, and it is the same TRDD-66IXMIGN parse-time
+  strip the TS parser applies (child cards keep their ≤1-entry timelines, parent only, and the
+  stripped card carries `timelineRetainedBytes: 0` exactly as TS stripTimeline leaves it).
+  Real-corpus cold boot through the REAL `_scanClaude`: **12,932 sessions + 4,241 child cards in
+  6.7s** (binary 4.1s on 14 threads) vs **27.0s single-core TS** — identical result counts both
+  engines. NOTE: ordinary server restarts take the "Fast restart — skipping cold rescan" path
+  (persisted offsets import into fileState), so the Rust path fires exactly on the expensive
+  case: true cold boots — fresh installs, offset-store loss, the original incident class.
+- **NEXT ACTION (one step):** P2c — port the codex/copilot/opencode parsers the same way (codex
+  is `_codexOnEntry` + lastTotalUsage, ~small; copilot is 3 file shapes; opencode is a SQLite DB
+  read — candidate for duckdb-rs in P3 instead). Then P3 (OTLP ingest + bodies→DuckDB, SQL-owned
+  aggregation), P4 (HTTP/MCP in Rust, TS server retired).
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the

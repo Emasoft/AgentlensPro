@@ -2,6 +2,8 @@
 //!
 //!   allogscan [--max-entries N] [--max-bytes N] <file.jsonl>...
 //!   allogscan --dir <projectsRoot> [--max-entries N] [--max-bytes N]
+//!   allogscan --files-from <list.txt>     # newline-separated paths — a 13k-file boot batch
+//!                                         # exceeds ARG_MAX as argv, so the list rides a file
 //!
 //! Output: NDJSON — one ParsedTranscript JSON object per successfully parsed file, in no
 //! guaranteed order (rayon). A file that cannot be read or yields no timestamps is skipped
@@ -37,6 +39,11 @@ fn main() {
     let mut files: Vec<PathBuf> = Vec::new();
     let mut max_entries = agentlens_logscan::DEFAULT_TIMELINE_MAX_ENTRIES;
     let mut max_bytes = agentlens_logscan::DEFAULT_TIMELINE_MAX_BYTES;
+    // Hot-age strip cutoff (epoch ms): parent cards whose last timestamp is OLDER lose their
+    // timeline AT EMIT TIME — same parse-time rationale as the TS parser (TRDD-66IXMIGN), and
+    // here it is also what keeps the NDJSON stream pipeable (1.2GB unstripped, tens of MB
+    // stripped, measured on the 12,928-card corpus). 0 = never strip.
+    let mut strip_older_than_ms: i64 = 0;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -44,6 +51,17 @@ fn main() {
                 i += 1;
                 let root = args.get(i).unwrap_or_else(|| usage("--dir needs a path"));
                 collect_jsonl(&PathBuf::from(root), &mut files);
+            }
+            "--files-from" => {
+                i += 1;
+                let list = args.get(i).unwrap_or_else(|| usage("--files-from needs a path"));
+                let body = std::fs::read_to_string(list)
+                    .unwrap_or_else(|e| usage(&format!("cannot read {list}: {e}")));
+                for line in body.lines() {
+                    if !line.is_empty() {
+                        files.push(PathBuf::from(line));
+                    }
+                }
             }
             "--max-entries" => {
                 i += 1;
@@ -59,6 +77,13 @@ fn main() {
                     .and_then(|v| v.parse().ok())
                     .unwrap_or_else(|| usage("--max-bytes needs a number"));
             }
+            "--strip-older-than-ms" => {
+                i += 1;
+                strip_older_than_ms = args
+                    .get(i)
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or_else(|| usage("--strip-older-than-ms needs epoch ms"));
+            }
             f if f.starts_with('-') => usage(&format!("unknown flag {f}")),
             f => files.push(PathBuf::from(f)),
         }
@@ -73,7 +98,12 @@ fn main() {
         .par_iter()
         .filter_map(|p| {
             let path = p.to_str()?;
-            let parsed = agentlens_logscan::parse_transcript(path, max_entries, max_bytes).ok()??;
+            let mut parsed = agentlens_logscan::parse_transcript(path, max_entries, max_bytes).ok()??;
+            // PARENT card only — TS strips only the parent in _parseClaudeFile; child cards
+            // carry at most one tiny entry and keep it.
+            if strip_older_than_ms > 0 && parsed.last_timestamp_ms < strip_older_than_ms {
+                parsed.card.strip_timeline();
+            }
             serde_json::to_string(&parsed).ok()
         })
         .collect();

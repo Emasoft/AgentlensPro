@@ -15,8 +15,11 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { execFileSync } from 'child_process'
-import { LogReader } from '../logReader'
+import { LogReader, type LogSessionResult } from '../logReader'
 import { finishRustTranscript } from '../rustLogScan'
+
+type ClaudeScanner = { _scanClaude(): LogSessionResult[] }
+const scanClaude = (r: LogReader): LogSessionResult[] => (r as unknown as ClaudeScanner)._scanClaude()
 
 const BIN = path.join(__dirname, '..', '..', '..', 'rust-core', 'target', 'release', 'allogscan')
 const haveBin = fs.existsSync(BIN)
@@ -139,5 +142,54 @@ suite('rustLogScan — P2 cross-engine parity', () => {
     } catch { /* dir absent on other machines */ }
     if (!candidate) this.skip()
     assert.deepStrictEqual(rustParse(candidate!), tsParse(candidate!))
+  })
+})
+
+suite('rustLogScan — P2b boot-sweep wiring', () => {
+  const wiringTest = haveBin ? test : test.skip
+
+  wiringTest('🐌 cold files fan to Rust once, the gate then holds, and a later append tails in TS', function () {
+    this.timeout(30_000)
+    const cfgDir = fs.mkdtempSync(path.join(os.tmpdir(), 'al-cfg-'))
+    const projDir = path.join(cfgDir, 'projects', 'proj-x')
+    fs.mkdirSync(projDir, { recursive: true })
+    const transcript = path.join(projDir, 'eeeeeeee-1111-2222-3333-444444444444.jsonl')
+    fs.copyFileSync(fixture, transcript)
+
+    const prevCfg = process.env.CLAUDE_CONFIG_DIR
+    const prevBin = process.env.AGENTLENS_ALLOGSCAN
+    process.env.CLAUDE_CONFIG_DIR = cfgDir
+    process.env.AGENTLENS_ALLOGSCAN = BIN
+    try {
+      const reader = new LogReader()
+      const first = scanClaude(reader)
+      assert.strictEqual(first.length, 1, 'the cold boot sweep must return the session (via Rust)')
+      // The Rust-scanned card must equal what the TS parser says about the same bytes.
+      process.env.AGENTLENS_ALLOGSCAN = ''
+      const ts = normalize(new LogReader().parseFile(transcript, 'claude'))
+      process.env.AGENTLENS_ALLOGSCAN = BIN
+      assert.deepStrictEqual(normalize(first[0]), ts)
+
+      const second = scanClaude(reader)
+      assert.deepStrictEqual(second, [], 'an unchanged file must not re-scan (fileState gate seeded)')
+
+      fs.appendFileSync(transcript, JSON.stringify({
+        type: 'assistant', timestamp: new Date().toISOString(),
+        message: { id: 'msg_tail', model: 'claude-opus-5',
+          usage: { input_tokens: 7, output_tokens: 7, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+          content: [{ type: 'text', text: 'tail turn' }] },
+      }) + '\n')
+      const third = scanClaude(reader)
+      assert.strictEqual(third.length, 1, 'an appended file must re-emerge through the TS tail path')
+      // Rust seeded bytesRead at the pre-append size, so the TS reparse (accum absent → from 0)
+      // must count ALL turns: the fixture's 3 priced messages (msg_1 deduped across two rows,
+      // msg_2, msg_4 — msg_3 is usage-less) plus the appended one.
+      assert.strictEqual(third[0].card.turns, 4, 'the tailed card must include the appended turn')
+    } finally {
+      if (prevCfg === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = prevCfg
+      if (prevBin === undefined) delete process.env.AGENTLENS_ALLOGSCAN
+      else process.env.AGENTLENS_ALLOGSCAN = prevBin
+    }
   })
 })
