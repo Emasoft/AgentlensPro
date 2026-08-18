@@ -112,14 +112,20 @@ release-via: publish
   CLI. **PROVEN: a TS-written store reconstructs byte-identically through Rust AND vice versa,
   on a REAL captured body; Rust verify gate passes on the TS-written store.** 5 Rust tests +
   2 TS cross-engine tests.
-- **P3c REMAINING:** the ingestPass orchestration (throttle/batch/settle/fsync-barrier/relocate
-  — port of ingestPass.ts, ~mechanical now that ingest+verify exist) and the opencode SQLite
-  read (rusqlite handles WAL natively, replacing the hand-rolled TS WAL merge over sql.js).
-- **NEXT ACTION (one step):** port ingestPass.ts into agentlens-store (pass module + `alstore
-  pass <bodiesDir> <storeDir>` subcommand, with the 512MB throttle, batch 200, settle order
-  ingest→flush→fsync-barrier→verify→delete, stranded parking + relocation + 3-strike breaker);
-  then opencode via rusqlite; then P4 (HTTP/API + MCP in Rust behind the 4318 listener, CLI
-  port, TS server retired).
+- **P3c COMPLETE (commit 9190dc4).** `pass.rs` ports ingestPass.ts with the full delete-gate
+  ordering (ingest→FLUSH→fsync barrier→chunked verify→delete), the 512MB throttle, skip-name
+  reclaim, stranded-ts parking + relocation (mtime preserved) + 3-strike breaker, per-chunk
+  verify isolation. `alstore pass` persists skip/stranded state in `<storeDir>/.pass-state.json`
+  across invocations. 4 pass tests + 2 round-trip + 3 sectionizer + 2 TS cross-engine — all green.
+- **NEXT ACTION (one step):** P3d — opencode SQLite read via rusqlite (bundled): port
+  `_parseOpenCodeDb` (src/logReader.ts:1166, ~260 lines; also `_parseOpenCodeJsonFallback` at
+  1427) into agentlens-logscan as `opencode.rs` + an `allogscan --opencode <db>` mode. rusqlite
+  opens the LIVE db read-only with NATIVE WAL handling — it REPLACES the hand-rolled TS WAL
+  merge (`_mergeWal`, logReader.ts:2492) entirely, do not port that. Parity: TS parseFile(db,
+  'opencode')-equivalent vs Rust on the real ~/.local/share/opencode db if present, else fixture.
+  Then P4: HTTP/API + MCP in Rust behind the 4318/4316 listeners (axum or tiny-http; wire
+  agentlens-ingest + spanstore writer + store), CLI port, TS server retired. P4's parity law:
+  the /api/* + MCP wire shapes are frozen; the dashboard must work unmodified.
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
