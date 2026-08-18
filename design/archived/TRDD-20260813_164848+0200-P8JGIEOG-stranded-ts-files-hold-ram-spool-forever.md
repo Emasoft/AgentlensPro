@@ -1,9 +1,9 @@
 ---
 trdd-id: P8JGIEOG
 title: Stranded ts-mismatch files hold RAM-spool capacity forever with no reclaim path
-column: complete
+column: completed
 created: 2026-08-13T16:48:48+0200
-updated: 2026-08-18T13:30:00+0200
+updated: 2026-08-18T16:25:43+0200
 implementation-commits: [4a597ef]
 current-owner: agentlenspro-main
 task-type: bugfix
@@ -63,3 +63,5 @@ file, not a drive-by edit inside a 10-finding batch.
   deliberately get none (durable→durable relocation is churn). Per-pass 3-strike breaker stops a
   directory-level failure from becoming a copy-per-file livelock. Suite 2377 passing. Column →
   complete; rides the next publish.
+- 2026-08-18T16:25:43+0200 — ARCHIVED as completed; shipped in agentlenspro@2.28.0. Release
+  decision delegated by USER ("decide by yourself").

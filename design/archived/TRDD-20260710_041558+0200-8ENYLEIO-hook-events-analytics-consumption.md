@@ -1,9 +1,9 @@
 ---
 trdd-id: 8ENYLEIO
 title: Consume hook events in analytics — StopFailure calibrates the window, PreCompact proves compaction
-column: complete
+column: completed
 created: 2026-07-10T04:15:58+0200
-updated: 2026-08-18T13:45:00+0200
+updated: 2026-08-18T16:25:43+0200
 implementation-commits: [ba89372]
 current-owner: agentlens-session
 task-type: feature
@@ -37,6 +37,8 @@ relevant-rules: []
     events): UNCLASSIFIED is 0 both with and without hook evidence — the July ~18.3% residual no
     longer exists on the current classifier, so there was nothing left to reclassify. The live hook
     store feeds the new path (208 PreCompact events, 55 sessions with windows loaded).
+- 2026-08-18T16:25:43+0200 — ARCHIVED as completed (release-via: none; the code additionally
+  shipped in agentlenspro@2.28.0). Release decision delegated by USER ("decide by yourself").
 
 ## Context
 

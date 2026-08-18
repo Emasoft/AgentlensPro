@@ -1,9 +1,9 @@
 ---
 trdd-id: CODXTOML1
 title: Codex auto-configure writes a duplicate otel exporter table and the edit is refused
-column: complete
+column: completed
 created: 2026-08-13T12:57:16+0200
-updated: 2026-08-18T13:15:00+0200
+updated: 2026-08-18T16:25:43+0200
 implementation-commits: [240189b]
 current-owner: agentlenspro-session
 task-type: bugfix
@@ -20,3 +20,5 @@ Observed live 2026-08-13 (server.log): "Could not auto-configure Codex: edited T
   user's explicit config is never fought). Two red-first tests (sub-table with and without the
   bare [otel] header) fail 2/2 pre-fix, pass 2/2 post-fix. Column → complete; rides the next
   publish.
+- 2026-08-18T16:25:43+0200 — ARCHIVED as completed; shipped in agentlenspro@2.28.0. Release
+  decision delegated by USER ("decide by yourself").

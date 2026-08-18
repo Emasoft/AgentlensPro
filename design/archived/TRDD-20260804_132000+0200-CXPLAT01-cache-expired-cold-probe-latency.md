@@ -1,9 +1,9 @@
 ---
 trdd-id: CXPLAT01
 title: cache-expired intermittently takes 20-40s because the newest-session probe reparses the biggest transcript
-column: complete
+column: published
 created: 2026-08-04T13:20:00+0200
-updated: 2026-08-18T13:05:00+0200
+updated: 2026-08-18T16:25:43+0200
 implementation-commits: [cd4f86f]
 current-owner: claude-code
 task-type: bugfix
@@ -148,3 +148,6 @@ Approval log below reserves for a human. This section only makes that decision b
   written with the fix and FALSIFIED against the resolver-less path (7 reparses/2100ms pre-fix vs
   0/14ms). Live after a full server restart: cold probe 2.29s (was 20-40s), warm 0.05s. Column →
   complete; rides the next publish (release-via: publish).
+- 2026-08-18T16:25:43+0200 — PUBLISHED as agentlenspro@2.28.0 (tag v2.28.0, run 32147873962, OIDC
+  trusted publisher + SLSA provenance verified on the registry). Release decision delegated by
+  USER ("decide by yourself"). Archived as published.
