@@ -1,9 +1,10 @@
 ---
 trdd-id: PIB6T4RU
 title: unknown flags must exit 64 on every CLI entry point
-column: dev
+column: human_review
 created: 2026-08-18T11:43:42+0200
-updated: 2026-08-18T11:43:42+0200
+updated: 2026-08-18T12:17:38+0200
+implementation-commits: [64c4d94]
 current-owner: AgentlensPro session
 task-type: bugfix
 severity: MEDIUM

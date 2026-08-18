@@ -1,9 +1,10 @@
 ---
 trdd-id: TABN063T
 title: server status must not print NOT RUNNING for a live but busy server
-column: dev
+column: human_review
 created: 2026-08-18T11:43:42+0200
-updated: 2026-08-18T11:43:42+0200
+updated: 2026-08-18T12:17:38+0200
+implementation-commits: [64c4d94]
 current-owner: AgentlensPro session
 task-type: bugfix
 severity: MEDIUM
