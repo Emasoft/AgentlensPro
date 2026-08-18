@@ -1,9 +1,9 @@
 ---
 trdd-id: P31SWA8I
 title: CLI transcript search — query a session's jsonl (tool outputs, agent responses) via DuckDB read_ndjson
-column: todo
+column: complete
 created: 2026-08-18T17:09:39+0200
-updated: 2026-08-18T17:09:39+0200
+updated: 2026-08-18T17:35:00+0200
 current-owner: AgentlensPro session
 task-type: feature
 severity: MEDIUM
@@ -38,15 +38,26 @@ last-compact, budget, watch, hooks); nothing reads session `.jsonl` CONTENT.
 
 ## Acceptance
 
-- [ ] search by pattern within one session id (main AND subagent transcripts resolvable)
-- [ ] filter by role/type; bounded output with honest truncation note
-- [ ] a 60MB transcript searches in seconds (DuckDB, not a JS line loop) — measured in the card
-- [ ] tests: fixture transcript + at least 4 query shapes; unknown-flag exit 64
+- [x] search by pattern within one session id (main AND subagent transcripts resolvable —
+      `LogReader.transcriptPathFor` exact id, plus unique >=6-char prefix over `collectFileMeta`)
+- [x] filter by role/type; bounded output with honest truncation note (`--limit` bounds hits,
+      `total` on stderr/`--json` always reports the full match count)
+- [x] a 60MB transcript searches in seconds — MEASURED far past the bar: **147.6MB transcript,
+      20,792 matches, 365ms** (and 4.2MB in 43ms). DuckDB `read_ndjson_objects` streaming; line
+      numbering, filters, excerpt windows and the total all computed in SQL, nothing enters V8.
+- [x] tests: fixture transcript + 6 query shapes (`src/test/searchCli.test.ts` — literal
+      case-insensitive, role/type filters, regex, limit-vs-total, quote escaping, MB-scale line)
+      + 3 usage-contract tests; unknown flag exits 64 (verified through the bare command:
+      exit 64 bad flag, exit 2 not-found with stdout empty, exit 0 with matches)
 
 ## Approval log
 
 - 2026-08-18T17:09:39+0200 — Card authored at `todo` under the USER's standing directive "write a
   TRDD every time I say something about a change". The original verbal order predates today and
   was missed — recorded now so it cannot be lost again.
+- 2026-08-18T17:35:00+0200 — COMPLETE. `src/cli/searchCli.ts` (engine + verb), registered in
+  `src/cli/main.ts` (MANAGEMENT_VERBS/dispatch/LATENCY_EXEMPT) and the global USAGE. Full suite
+  2399 passing; verified through the bare `agentlenspro` on PATH (npm link → this repo's bundle,
+  symbol grep confirmed). Rides the v2.29.0 publish together with [[TRDD-7I5805QM]].
 
 ## Notes and lessons learned

@@ -59,6 +59,12 @@ usage:
                                               from the PreCompact hook, off disk (server may be
                                               down). No compaction on record = exit 2, stdout EMPTY
                                               (never "0s ago", which is the opposite claim)
+  agentlenspro search <pattern> --session ID [--role R] [--type T] [--regex] [--limit N] [--json]
+                                              search one session's transcript .jsonl (tool outputs,
+                                              agent responses, prompts) with DuckDB's streaming NDJSON
+                                              reader — fast on 60MB+ transcripts, works with the
+                                              server down. --session takes an exact id or a unique
+                                              >=6-char prefix; matches on stdout, coverage on stderr
   agentlenspro budget --minutes N [--watch [SEC]] [--with-risks] [--window 5h|7d|binding]
                                               will the rate-limit window OUTLAST a timed run? Preflight
                                               once, or --watch the whole batch: the minutes still to go

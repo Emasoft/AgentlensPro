@@ -34,6 +34,7 @@ import { runStatuslineHistoryCli } from './statuslineHistoryCli'
 import { runAllAccountsCli } from './allAccountsCli'
 import { runCacheExpiredCli } from './cacheExpiredCli'
 import { runLastCompactCli } from './lastCompactCli'
+import { runSearchCli } from './searchCli'
 
 /** CLI entry. `startServer` lazily imports standalone/server (injected by the shim — src/
  *  cannot import standalone/ without inverting the build layering). Returns the exit code. */
@@ -101,6 +102,7 @@ export const MANAGEMENT_VERBS: ReadonlySet<string> = new Set([
   'hook', 'gate', 'statusline', 'statusline-history', 'get_account_status', 'disable', 'enable',
   'telemetry', 'setup', 'server', 'daemon', 'dashboard', 'cache-expired', 'last-compact',
   'budget', 'watch', 'heartbeat-cost', 'config', 'spool', 'env', 'ctxmap', 'ctxvis', 'list',
+  'search',
 ])
 
 export const LATENCY_EXEMPT: Readonly<Record<string, string>> = {
@@ -121,6 +123,7 @@ export const LATENCY_EXEMPT: Readonly<Record<string, string>> = {
   env: 'environment detection report; a diagnostic a human reads',
   ctxmap: 'decomposes captured request bodies with real token counting — inherently slow, and asked once',
   ctxvis: 'SPAWNS an agent and measures two of its turns; it is the slowest verb we ship, deliberately',
+  search: 'an investigation verb a human or agent invokes deliberately; DuckDB streams a possibly-60MB transcript',
 }
 
 export async function cliMain(argv: string[], startServer: () => Promise<unknown>): Promise<number> {
@@ -239,6 +242,10 @@ export async function cliMain(argv: string[], startServer: () => Promise<unknown
       // cache-expired: the delta on stdout, the WHICH on stderr, and a never-compacted project
       // exits 2 with stdout empty rather than reporting an age of zero.
       return runLastCompactCli(argv.slice(1))
+    case 'search':
+      // Grep a session's transcript jsonl (tool outputs, agent responses) via DuckDB's streaming
+      // NDJSON reader (TRDD-P31SWA8I). Disk-only — works with the server down, like its siblings.
+      return runSearchCli(argv.slice(1))
     case 'budget':
       // "Will the rate-limit window outlast this run?" — the preflight + self-updating abort
       // watch for any timed batch. Its exit code IS the interface (0 go / 1 abort / 2 cannot

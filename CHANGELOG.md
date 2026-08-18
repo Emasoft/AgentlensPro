@@ -4,6 +4,28 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.29.0] - 2026-08-18
+
+### Added
+
+- **`agentlenspro search` — transcript jsonl search via DuckDB** (TRDD-P31SWA8I). Search one
+  session's transcript (tool outputs, agent responses, prompts) by literal substring
+  (case-insensitive) or `--regex`, with `--role`/`--type` filters, `--limit`, and `--json`.
+  `--session` takes an exact id or a unique >=6-char prefix. The whole query — line numbering,
+  filtering, match-windowed excerpts, the honest total — runs in DuckDB's streaming NDJSON reader,
+  so MB-sized tool_result lines never enter V8. Measured: a 147.6MB transcript, 20,792 matches,
+  365ms. Disk-only (works with the server down); matches on stdout, coverage on stderr; exit 2
+  when the transcript is not found (stdout empty), 64 on bad usage.
+
+### Performance
+
+- **`get_cache_event_log` no longer rescans the whole span store per call** (TRDD-7I5805QM).
+  Sealed UTC-day segments are extracted once into a sidecar index; only today's live segment is
+  parsed per call. Measured: 32.7s per all-history call → 3.9s (2.0s for the default 24h window,
+  which the tool now uses unless `window: 0` asks for everything).
+- **DuckDB thread pool is machine-scaled** (TRDD-7I5805QM): `availableParallelism - 2` (floor 4,
+  `AGENTLENS_DUCKDB_THREADS` override) instead of a hardcoded 4 — 12 threads on this machine.
+
 ## [2.28.0] - 2026-08-18
 
 ### Fixed
