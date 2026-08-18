@@ -1,16 +1,16 @@
 ---
-trdd-id: 8VVC5AFY
+trdd-id: TECWQ6RR
 title: an auto-loaded agent-context file carries an injection pattern — CLAUDE.md
-column: proposal
+column: refused
 created: 2026-08-18T16:29:45+0200
-updated: 2026-08-18T16:29:45+0200
+updated: 2026-08-18T16:45:00+0200
 current-owner: janitor
 task-type: security
 severity: high
 ticket-kind: security-workflow
 ticket-severity: high
 ticket-evidence: [CLAUDE.md]
-ticket-dedupe-key: AICTX-003:CLAUDE.md:310
+ticket-dedupe-key: AICTX-003:CLAUDE.md:343
 ticket-origin: agent-context-integrity
 ---
 
@@ -18,13 +18,13 @@ ticket-origin: agent-context-integrity
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-18
 
-**PROPOSED BY THE JANITOR — awaiting approval. NOT authorized to execute.**
+**REFUSED 2026-08-18 — exact DUPLICATE of an already-adjudicated false positive. See Approval log.**
 
 The janitor detected this in code the **USER owns**, so it may only propose. It has NOT touched
 anything and will not, until a human or the main Claude approves by running:
 
 ```
-/janitor-support-open-ticket TRDD-8VVC5AFY
+/janitor-support-open-ticket TRDD-TECWQ6RR
 ```
 
 That command opens a support ticket, promotes this TRDD `proposal → planned`, and the janitor's
@@ -51,5 +51,14 @@ scheduler dispatches **janitor-security-agent** to fix it at the next free heart
 The dispatched agent is fail-safe: it fixes what is safe and FLAGS what needs a human (it never
 rotates credentials, never force-pushes, never pushes to `main`). It returns one line plus a report
 path, and closes the ticket with an explicit status.
+
+## Approval log
+
+- 2026-08-18T16:45:00+0200 — REFUSED by main session under the USER's delegated authority
+  ("decide by yourself"). Exact duplicate: `ticket-dedupe-key: AICTX-003:CLAUDE.md:343` is the
+  SAME finding as TRDD-27E9ECMJ, adjudicated FALSE POSITIVE this morning (2026-08-18T12:28) —
+  CLAUDE.md:343 is owner-authored cache doctrine (git blame 05497e80, Emasoft, 2026-08-04); the
+  archived predecessor carries the full provenance record. The detector re-fired because the
+  prior ticket left the pending pool on archival; no new evidence, no change to CLAUDE.md.
 
 ## Notes and lessons learned
