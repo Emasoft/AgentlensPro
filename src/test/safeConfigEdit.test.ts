@@ -345,6 +345,46 @@ suite('safe_config_edit.py — transactional config editor', () => {
     assert.match(after, /\[profile\]\nname = "user"/, 'unrelated section preserved verbatim')
   })
 
+  test('TOML mode: an existing sub-table form of the key is SKIPPED, never re-declared (TRDD-CODXTOML1)', function () {
+    const ver = execFileSync('python3', ['-c', 'import sys; print(sys.version_info >= (3, 11))'], { encoding: 'utf-8' }).trim()
+    if (ver !== 'True') { this.skip() }
+    // The live 2026-08-13 shape: the user's config declares the exporter as an explicit table.
+    // Pre-fix the editor inserted the inline twin into [otel] and tomllib refused the whole edit
+    // ("Cannot declare ('otel', 'exporter', 'otlp-http') twice"), so Codex stayed unconfigured.
+    const toml = path.join(dir, 'config.toml')
+    fs.writeFileSync(toml, '[otel]\nlog_user_prompt = true\n\n[otel.exporter.otlp-http]\nendpoint = "http://localhost:9999"\nprotocol = "json"\n')
+    const r = runEditor(toml, {
+      ops: [
+        { op: 'ensure_line_in_section', section: 'otel', key_prefix: 'log_user_prompt', line: 'log_user_prompt = true' },
+        { op: 'ensure_line_in_section', section: 'otel', key_prefix: 'exporter', line: 'exporter = { otlp-http = { endpoint = "http://localhost:4318", protocol = "json" } }' },
+        { op: 'ensure_line_in_section', section: 'otel', key_prefix: 'trace_exporter', line: 'trace_exporter = { otlp-http = { endpoint = "http://localhost:4318", protocol = "json" } }' },
+      ],
+    }, ['--format', 'toml'])
+    assert.strictEqual(r.status, 0, r.stderr)
+    const after = fs.readFileSync(toml, 'utf-8')
+    assert.match(after, /localhost:9999/, "the user's explicit exporter table must survive untouched")
+    assert.ok(!/^exporter = /m.test(after), 'the inline twin of an existing sub-table must NOT be inserted')
+    assert.match(after, /^trace_exporter = /m, 'a genuinely missing key is still added')
+  })
+
+  test('TOML mode: a sub-table without its [section] header still counts as present (TRDD-CODXTOML1)', function () {
+    const ver = execFileSync('python3', ['-c', 'import sys; print(sys.version_info >= (3, 11))'], { encoding: 'utf-8' }).trim()
+    if (ver !== 'True') { this.skip() }
+    const toml = path.join(dir, 'config.toml')
+    fs.writeFileSync(toml, '[otel.exporter.otlp-http]\nendpoint = "http://localhost:9999"\n')
+    const r = runEditor(toml, {
+      ops: [
+        { op: 'ensure_line_in_section', section: 'otel', key_prefix: 'exporter', line: 'exporter = { otlp-http = { endpoint = "http://localhost:4318", protocol = "json" } }' },
+        { op: 'ensure_line_in_section', section: 'otel', key_prefix: 'log_user_prompt', line: 'log_user_prompt = true' },
+      ],
+    }, ['--format', 'toml'])
+    assert.strictEqual(r.status, 0, r.stderr)
+    const after = fs.readFileSync(toml, 'utf-8')
+    assert.match(after, /localhost:9999/)
+    assert.ok(!/^exporter = /m.test(after))
+    assert.match(after, /log_user_prompt = true/, 'the missing key lands under a freshly appended [otel] header')
+  })
+
   test('corrupt TOML is refused untouched', function () {
     const ver = execFileSync('python3', ['-c', 'import sys; print(sys.version_info >= (3, 11))'], { encoding: 'utf-8' }).trim()
     if (ver !== 'True') { this.skip() }
