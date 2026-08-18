@@ -1498,6 +1498,15 @@ startMcpHttpServer({
   // path /api/timeline uses). Without this the MCP tools fell back to the card's empty inline
   // timeline, so check_cache_expiry could not find the last api_request ts and returned 'unknown'.
   getTimeline: (id) => resolveSessionCard(id)?.timeline ?? [],
+  // TRDD-CXPLAT01: bounded last-request resolver for the cache-expiry probe — one stat + one 256KB
+  // tail read instead of a full transcript reparse per candidate (measured on this machine: a cold
+  // probe read 163.6MB of JSONL synchronously; the tails total ~1.5MB). null = tail had no usage
+  // entry; the handler then ranks by cheap card metadata and reparses at most the one winner.
+  getLastRequestMs: (id) => {
+    const p = logReader.transcriptPathFor(id)
+    if (!p) return null
+    return readTranscriptContext(p, Date.now()).lastRequestAtMs ?? null
+  },
   // The standalone cards already carry their inline timeline (log-parsed), so the MCP diagnostics
   // read per-turn tokens off the card; composition is reconstructed on demand from the raw .jsonl —
   // the same route /api/composition/:id serves the browser. This makes the P4 inflation / cache-break
