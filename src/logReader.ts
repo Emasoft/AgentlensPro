@@ -37,6 +37,7 @@ import { disjointBuckets, contextTokens, type TokenBuckets } from './shared/toke
 import { calcTokenCostUsd } from './shared/pricing'
 import { countFallback } from './shared/fallbackCounters'
 import { callBodyRegistry } from './rawBodyContext'
+import { pushBounded, capTimeline, capText, snip, attachFullResult, stripTimeline, timelineMaxEntries, timelineHotAgeMs } from './timelineRetention'
 import { VSCODE_FAMILY_IDE_NAMES } from './vscodeFamilyIdes'
 import {
   attachGeneratedFiles, scratchPathsInToolInput, scratchPathsInToolUseResult,
@@ -612,6 +613,17 @@ export class LogReader {
     // tree (Phase B → the "generated files" group). Runs only when the jsonl grew (_processFile skips
     // unchanged files), so it naturally scopes to active sessions and reuses the existing scan cadence.
     attachGeneratedFiles(card, a.genFiles)
+    // Cold sessions leave the parser WITHOUT a timeline (TRDD-66IXMIGN, fifth repro): on a
+    // 12k-file boot scan the results array itself holds every card, so any bound applied after
+    // the scan is too late. The accumulator keeps its own (bounded) timeline, so a session that
+    // turns hot again rebuilds its view from the accum or a from-0 reparse. NOTE the card's
+    // timeline array must be REPLACED, not spliced — the accum shares the reference.
+    const lastMs = Date.parse(a.lastTimestamp || a.firstTimestamp)
+    if (Number.isFinite(lastMs) && Date.now() - lastMs > timelineHotAgeMs()) {
+      const stripped: SessionSummaryCard = { ...card }
+      stripTimeline(stripped)
+      return { workspace: a.workspace, card: stripped, childCards: childCards.length > 0 ? childCards : undefined }
+    }
     return { workspace: a.workspace, card, childCards: childCards.length > 0 ? childCards : undefined }
   }
 
@@ -789,7 +801,7 @@ export class LogReader {
         filesChanged,
         filesWritten: new Set(),
         filesSearched: new Set(),
-        userRequest: userRequest.slice(0, 500),
+        userRequest: snip(userRequest, 500),
         timeline: [],
         initiator: 'user',
       }, workspace),
@@ -981,7 +993,7 @@ export class LogReader {
         filesChanged: new Set(),
         filesWritten: new Set(),
         filesSearched: new Set(),
-        userRequest: userRequest.slice(0, 500),
+        userRequest: snip(userRequest, 500),
         timeline: [],
         initiator: 'user',
       }, workspace),
@@ -1080,7 +1092,7 @@ export class LogReader {
         totalToolCalls,
         toolCounts,
         filesRead: new Set(), filesChanged: new Set(), filesWritten: new Set(), filesSearched: new Set(),
-        userRequest: userRequest.slice(0, 500),
+        userRequest: snip(userRequest, 500),
         timeline: [], initiator: 'user',
       }, workspace),
     }
@@ -1286,10 +1298,10 @@ export class LogReader {
         // User request: last user-typed text (parts are ordered ASC, so last wins).
         // OpenCode sessions are multi-turn; the most recent prompt best identifies current work.
         // Falls back to AI-generated session title if no user text parts exist.
-        let userRequest = title.slice(0, 500)
+        let userRequest = snip(title, 500)
         for (const p of parts) {
           if (p.msgRole === 'user' && p.type === 'text' && p.text) {
-            userRequest = p.text.slice(0, 500)
+            userRequest = snip(p.text, 500)
           }
         }
 
@@ -1358,8 +1370,8 @@ export class LogReader {
               label,
               action: p.toolName,
               toolInput: p.toolInputJson ?? undefined,
-              resultSummary: p.toolOutput ? p.toolOutput.slice(0, 200) : undefined,
-              fullResult: p.toolOutput ?? undefined,
+              resultSummary: p.toolOutput ? snip(p.toolOutput, 200) : undefined,
+              fullResult: p.toolOutput ? capText(p.toolOutput) : undefined,
               durationMs: 0,
               isError,
               errorMessage: isError ? (p.toolOutput ?? undefined) : undefined,
@@ -1371,6 +1383,9 @@ export class LogReader {
         // Merge LLM and tool events in chronological order
         const allEvents = [...llmEvents, ...toolEvents].sort((a, b) => a.ts - b.ts)
         const timeline: TimelineEntry[] = allEvents.map(e => e.entry)
+        // Same retention bound as the Claude path (TRDD-66IXMIGN): assembled once, so a single
+        // tail-trim here is equivalent to per-push eviction.
+        const ocEvicted = capTimeline(timeline, timelineMaxEntries())
 
         const endTs = lastCompleted > 0 ? new Date(lastCompleted).toISOString() : startTs
 
@@ -1383,6 +1398,7 @@ export class LogReader {
             turns: msgs.length, totalToolCalls, toolCounts,
             filesRead, filesChanged, filesWritten, filesSearched: new Set(),
             userRequest, timeline, initiator: 'user',
+            ...(ocEvicted > 0 ? { timelineTruncatedCount: ocEvicted } : {}),
           },
           workspace,
         )
@@ -1679,6 +1695,27 @@ export class LogReader {
 
 // ── Shared card builder ───────────────────────────────────────────────────────
 
+// Accum-side collection bound (TRDD-66IXMIGN, fourth repro). The pending/dedup collections grow
+// one record per EVENT for the accumulator's whole life: a transcript whose tool_results never
+// correlate leaves every tool entry pinned in pendingToolResults (33k+ live entries measured in
+// one Map's table on the third OOM snapshot — each holding its capped text even after timeline
+// eviction), and seenMessageIds accretes one id per message forever. Insertion-order eviction is
+// safe for all four users: results/ids correlate within adjacent rows, never thousands of events
+// later, so evicting the oldest record only ever drops correlations that were already dead.
+const ACCUM_COLLECTION_MAX = 4096
+function _boundedSet<K, V>(map: Map<K, V>, key: K, value: V): void {
+  if (!map.has(key) && map.size >= ACCUM_COLLECTION_MAX) {
+    map.delete(map.keys().next().value as K)
+  }
+  map.set(key, value)
+}
+function _boundedAdd<K>(set: Set<K>, key: K): void {
+  if (!set.has(key) && set.size >= ACCUM_COLLECTION_MAX) {
+    set.delete(set.values().next().value as K)
+  }
+  set.add(key)
+}
+
 interface CardAccum {
   totalInput: number
   totalOutput: number
@@ -1695,6 +1732,8 @@ interface CardAccum {
   fileOps?: Map<string, FileOpAccum>
   userRequest: string
   timeline: TimelineEntry[]
+  // Evicted-entry counter for the bounded timeline (TRDD-66IXMIGN); flows onto the card.
+  timelineTruncatedCount?: number
   initiator: 'user' | 'agent' | 'api'
   // Transcript-signal enrichment (TRDD-B22NYTOY P4): latest `ai-title` record → title; first
   // top-level `entrypoint` field → entrypoint. Only the Claude path populates these today.
@@ -1838,12 +1877,12 @@ const MAX_TOOL_RESULT_CHARS = 500_000
 
 // The FULL text of a tool_result: content is either a string or an array of {text} blocks.
 function _toolResultText(content: unknown): string {
-  if (typeof content === 'string') return content.slice(0, MAX_TOOL_RESULT_CHARS)
+  if (typeof content === 'string') return snip(content, MAX_TOOL_RESULT_CHARS)
   if (Array.isArray(content)) {
     const joined = (content as Array<Record<string, unknown>>)
       .map(b => (typeof b['text'] === 'string' ? (b['text'] as string) : ''))
       .join('')
-    return joined.slice(0, MAX_TOOL_RESULT_CHARS)
+    return snip(joined, MAX_TOOL_RESULT_CHARS)
   }
   return ''
 }
@@ -1874,10 +1913,12 @@ function _recordSubAgentSpawn(a: ClaudeAccum, block: Record<string, unknown>, in
   else if (subagentType === 'fork') spawnKind = 'fork'
   else if (isolation === 'worktree') spawnKind = 'worktree'
   else spawnKind = 'fresh'
-  a.subAgents.set(tid, {
+  _boundedSet(a.subAgents, tid, {
     toolUseId: tid, spawnTurn: a.card.turns, spawnTs: ts ?? '',
     requestedType: (subagentType ?? inp['description']) as string | undefined,
-    prompt: typeof inp['prompt'] === 'string' ? inp['prompt'] : undefined,
+    // capText: sub-agent prompts run to hundreds of KB (audit/review fan-outs) and are retained
+    // per spawn for the session's whole life — uncapped they were among the top heap strings.
+    prompt: typeof inp['prompt'] === 'string' ? capText(inp['prompt']) : undefined,
     spawnKind, spawnModelOverride: modelOverride, spawnIsolation: isolation,
     input: 0, output: 0, cacheRead: 0, cacheCreate: 0,
     totalTokens: 0, toolUseCount: 0, durationMs: 0, done: false,
@@ -1927,7 +1968,10 @@ function _completeSubAgent(sub: SubAgentRec, tur: Record<string, unknown>, resul
   sub.agentType    = (tur['agentType'] ?? sub.requestedType) as string | undefined
   sub.model        = tur['resolvedModel'] as string | undefined
   sub.toolStats    = tur['toolStats'] as Record<string, number> | undefined
-  sub.finalText    = _extractTextContent(resultContent)?.slice(0, 4000)
+  // snip, not .slice: a slice would retain the ENTIRE result text via V8's SlicedString parent
+  // pointer (TRDD-66IXMIGN third repro — same defect as resultSummary/userRequest).
+  const finalFull = _extractTextContent(resultContent)
+  sub.finalText    = finalFull === undefined ? undefined : snip(finalFull, 4000)
   sub.done = true
 }
 
@@ -1948,8 +1992,11 @@ function _resolveToolResult(a: ClaudeAccum, id: string, block: Record<string, un
     a.pendingToolResults.delete(id)
     const full = _toolResultText(block['content'])
     if (full) {
-      toolEntry.fullResult = full
-      if (!toolEntry.resultSummary) toolEntry.resultSummary = full.slice(0, 200)
+      // attachFullResult (not a bare assignment) so the card's retained-bytes accounting stays
+      // true and the field is capped — an uncapped 1MB tool output in the retained tail is
+      // exactly what re-OOMed the count-capped build (TRDD-66IXMIGN, second repro).
+      attachFullResult(a.card, toolEntry, full)
+      if (!toolEntry.resultSummary) toolEntry.resultSummary = snip(full, 200)
     }
   }
   // Output-file harvest (TRDD-ZS1GDXVY): a Task/Agent completion or background-task notification
@@ -2007,7 +2054,7 @@ function _buildSubAgentCards(parentSessionId: string, a: ClaudeAccum): SessionSu
       spawnSubagentType: sub.requestedType,
       spawnAsync: sub.async || undefined,
       workspace: a.workspace,
-      userRequest: (sub.prompt ?? sub.agentType ?? 'sub-agent').slice(0, 500),
+      userRequest: snip(sub.prompt ?? sub.agentType ?? 'sub-agent', 500),
       model: sub.model || a.model || 'claude',
       turns: 1,
       // RAW uncached input — FOUR DISJOINT BUCKETS is the schema invariant on every card (the
@@ -2091,7 +2138,7 @@ function _claudeOnEntry(a: ClaudeAccum, entry: Record<string, unknown>): void {
     // A user message precedes the assistant turn it triggers, so it belongs to the NEXT turn
     // (turns is incremented only when the assistant message arrives). turns is still the count
     // of assistant turns seen so far, so +1 is the turn this user input opens.
-    a.card.timeline.push({ type: 'user_input', spanId: `log-u-${a.idx}`, label: 'User', turn: a.card.turns + 1, durationMs: 0, isError: false, timestamp: ts ?? '', responseText: text })
+    pushBounded(a.card, { type: 'user_input', spanId: `log-u-${a.idx}`, label: 'User', turn: a.card.turns + 1, durationMs: 0, isError: false, timestamp: ts ?? '', responseText: capText(text) }, timelineMaxEntries())
     a.idx++
   }
 
@@ -2113,7 +2160,7 @@ function _claudeOnEntry(a: ClaudeAccum, entry: Record<string, unknown>): void {
     // 1018-row session that held only 407 real messages → 2.4–4.5× over-count before this fix.)
     const messageId = msg?.['id'] as string | undefined
     const isFirstRowOfMessage = !messageId || !a.seenMessageIds.has(messageId)
-    if (messageId) a.seenMessageIds.add(messageId)
+    if (messageId) _boundedAdd(a.seenMessageIds, messageId)
     const rawUsage = msg?.['usage'] as Record<string, unknown> | undefined
     if (rawUsage?.['speed'] === 'fast') a.hasFastMode = true
     const usage = rawUsage as Record<string, number> | undefined
@@ -2168,7 +2215,7 @@ function _claudeOnEntry(a: ClaudeAccum, entry: Record<string, unknown>): void {
             // A Read's byte volume is in the matching tool_result; record the tool_use id
             // now and resolve it to read-bytes when that result arrives (see the user branch).
             const id = block['id'] as string | undefined
-            if (id) a.pendingReads.set(id, fp)
+            if (id) _boundedSet(a.pendingReads, id, fp)
           } else if (['Edit', 'MultiEdit', 'replace_string_in_file', 'NotebookEdit'].includes(name)) {
             a.card.filesChanged.add(fp)
             _addFileOp(a.card, fp, 'edit', _editInputBytes(inp))
@@ -2186,7 +2233,7 @@ function _claudeOnEntry(a: ClaudeAccum, entry: Record<string, unknown>): void {
     // backbone the trace tree groups on. The 5 token buckets (input/output/cacheRead/cacheCreate)
     // are attached ONCE (first row) so the per-turn diff and its cache-read/cache-created split are
     // renderable without double counting.
-    a.card.timeline.push({
+    pushBounded(a.card, {
       type: hasToolCall ? 'tool' : 'llm', spanId: `log-a-${a.idx}`,
       label: hasToolCall ? 'Tool calls' : 'Response', turn: a.card.turns,
       model: a.model || undefined,
@@ -2196,15 +2243,16 @@ function _claudeOnEntry(a: ClaudeAccum, entry: Record<string, unknown>): void {
       outputTokens: rowBuckets?.outputTokens,
       cacheReadTokens: rowBuckets?.cacheReadTokens,
       cacheCreateTokens: rowBuckets?.cacheCreateTokens,
-      durationMs: 0, isError: false, timestamp: ts ?? '', responseText,
-    })
+      durationMs: 0, isError: false, timestamp: ts ?? '',
+      responseText: responseText === undefined ? undefined : capText(responseText),
+    }, timelineMaxEntries())
     // Map this row's tool_use ids to the entry just pushed so the matching tool_result (in a later
     // user row) can attach its full output. Claude writes one tool_use per row, so ids share this
     // entry only in the rare multi-tool_use row — then the last result wins on fullResult, which is
     // acceptable for the composition view.
     if (rowToolUseIds.length > 0) {
       const toolEntry = a.card.timeline[a.card.timeline.length - 1]
-      for (const tid of rowToolUseIds) a.pendingToolResults.set(tid, toolEntry)
+      for (const tid of rowToolUseIds) _boundedSet(a.pendingToolResults, tid, toolEntry)
     }
     if (rowGenPaths.length > 0) {
       const spanId = a.card.timeline[a.card.timeline.length - 1]?.spanId
@@ -2305,9 +2353,11 @@ function _buildCard(
     workspace,
     // Spread-conditionally so cards without the transcript signals stay field-free (exact-shape
     // assertions elsewhere compare with deepStrictEqual; an explicit undefined would break them).
-    ...(acc.title ? { title: acc.title.slice(0, 200) } : {}),
+    ...(acc.title ? { title: snip(acc.title, 200) } : {}),
     ...(acc.entrypoint ? { entrypoint: acc.entrypoint } : {}),
-    userRequest: acc.userRequest.slice(0, 500),
+    // Spread-conditional for the same exact-shape reason as title/entrypoint above.
+    ...(acc.timelineTruncatedCount ? { timelineTruncatedCount: acc.timelineTruncatedCount } : {}),
+    userRequest: snip(acc.userRequest, 500),
     model,
     turns: acc.turns,
     // inputTokens is the RAW uncached input only (NEW tokens billed at the input rate).

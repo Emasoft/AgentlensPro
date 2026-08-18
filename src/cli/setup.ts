@@ -22,6 +22,7 @@ import { spawn, spawnSync, execFileSync } from 'child_process'
 import * as crypto from 'crypto'
 import * as fs from 'fs'
 import { agentlensDisabled } from './killSwitch'
+import { UsageError } from './cliErrors'
 import * as http from 'http'
 import * as os from 'os'
 import * as path from 'path'
@@ -1054,7 +1055,9 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupOutcome> {
 export async function runSetupCli(argv: string[]): Promise<number> {
   const known = new Set(['--dry-run', '--yes'])
   const unknown = argv.filter(a => !known.has(a))
-  if (unknown.length) throw new Error(`setup does not understand: ${unknown.join(' ')} (flags: --dry-run --yes)`)
+  // UsageError, not Error: a plain Error maps to exit 1 (the watchers' ABORT signal), and a typo'd
+  // flag must read as 64 (bad command line) like every other management verb — TRDD-PIB6T4RU.
+  if (unknown.length) throw new UsageError(`setup does not understand: ${unknown.join(' ')} (flags: --dry-run --yes)`)
   const outcome = await runSetup({ dryRun: argv.includes('--dry-run'), yes: argv.includes('--yes') })
   return outcome.exitCode
 }

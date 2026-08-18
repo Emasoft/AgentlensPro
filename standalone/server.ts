@@ -18,6 +18,7 @@ import { dataDir as agentlensDataDir } from '../src/dataDir'
 import { normalizeBasePath, stripBasePath } from '../src/basePath'
 import { VersionedCache } from '../src/derivedCache'
 import { startLoopWatchdog } from '../src/loopWatchdog'
+import { capTimeline, timelineMaxEntries } from '../src/timelineRetention'
 import { mergeOtelAndLogSessions, linkSubagentTranscripts, graftOtelAttribution } from '../src/feedMergePolicy'
 import { calcTokenCostUsd } from '../src/shared/pricing'
 import { contextTokens } from '../src/shared/tokenBuckets'
@@ -1300,6 +1301,37 @@ function putLogSession(card: SessionSummaryCard): void {
   markDataChanged()
 }
 
+// ── Global timeline tier (TRDD-66IXMIGN, fifth repro) ────────────────────────
+// Per-card bounds are necessary but NOT sufficient: this machine holds ~12k session files, and
+// hundreds of parsed cards × a per-card byte budget rebuilt the ~1GB heap with every per-card cap
+// in place (measured — repro5 died identically to repro2). Only a GLOBAL bound closes it: the K
+// most-recently-active cards keep their timelines in RAM (the drill view is instant for exactly
+// the sessions a user drills); every colder card keeps headers only. A demoted card's timeline is
+// rebuilt from its transcript by the existing from-0 reparse path if it turns hot again.
+const TIMELINE_HOT_CARDS = (() => {
+  const raw = process.env['AGENTLENS_TIMELINE_HOT_CARDS']?.trim()
+  if (!raw) return 50
+  const n = Number(raw)
+  if (!Number.isInteger(n) || n <= 0) throw new Error(`AGENTLENS_TIMELINE_HOT_CARDS=${JSON.stringify(raw)} is not a positive integer`)
+  return n
+})()
+
+function demoteColdTimelines(): void {
+  if (logSessions.size <= TIMELINE_HOT_CARDS) return
+  const cards = [...logSessions.values()]
+  const lastActive = (c: SessionSummaryCard): number => {
+    const start = Date.parse(c.startTime)
+    return (Number.isFinite(start) ? start : 0) + (c.durationMs > 0 ? c.durationMs : 0)
+  }
+  cards.sort((a, b) => lastActive(b) - lastActive(a))
+  for (const card of cards.slice(TIMELINE_HOT_CARDS)) {
+    if (card.timeline.length === 0) continue
+    card.timelineTruncatedCount = (card.timelineTruncatedCount ?? 0) + card.timeline.length
+    card.timeline = []
+    card.timelineRetainedBytes = 0
+  }
+}
+
 function clearLogSessions(): void {
   logSessions.clear()
   markDataChanged()
@@ -1645,6 +1677,7 @@ function runLogScan(mode: 'full' | 'targeted' = 'full') {
     for (const child of childCards ?? []) { putLogSession(child); changedCards.push(child) }
   }
   if (changedCards.length > 0) {
+    demoteColdTimelines()              // TRDD-66IXMIGN: global tier — only the hottest K cards keep timelines
     pushSessionChanged(changedCards)   // TRDD-U0UYC38A: targeted, immediate — sub-second drill refresh
     schedulePushUpdate()               // authoritative full refresh (sidebar/analytics, OTEL-wins) — coalesced
     scheduleDurableSave()              // TRDD-PJC8N1HO spec 3: persist offsets + cards so a restart resumes
@@ -1741,7 +1774,15 @@ async function startLogIngestion() {
 
   let restoredFromDisk = false
   if (deltaCurrent && cardsMap.size > 0) {
-    for (const card of cardsMap.values()) putLogSession(card)
+    // Normalize on restore (TRDD-66IXMIGN): the delta log may hold giant cards written before the
+    // retention cap existed; loading them uncapped would rebuild the exact heap the cap prevents.
+    const tlMax = timelineMaxEntries()
+    for (const card of cardsMap.values()) {
+      const evicted = capTimeline(card.timeline, tlMax)
+      if (evicted > 0) card.timelineTruncatedCount = (card.timelineTruncatedCount ?? 0) + evicted
+      putLogSession(card)
+    }
+    demoteColdTimelines()   // TRDD-66IXMIGN: the restored corpus obeys the global tier too
     restoredFromDisk = true
   }
   if (deltaCurrent && offsetsMap.size > 0) {

@@ -19,7 +19,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { dataDir } from './cliCore'
 import { EXIT as CLI_EXIT } from './cliErrors'
-import { flagValue } from './argHelpers'
+import { flagValue, assertKnownFlags } from './argHelpers'
 import { queryStatusline, type StatuslineStream } from '../statuslineStore'
 import { calcTokenCostUsd, lookupRates } from '../shared/pricing'
 
@@ -66,6 +66,7 @@ exit: 0 = answered · 2 = BLIND (cannot see — NOT "no burn") · 64 = bad comma
 export const EXIT = { OK: CLI_EXIT.OK, BLIND: CLI_EXIT.UNKNOWN, USAGE: CLI_EXIT.USAGE } as const
 
 const VALUED_FLAGS = new Set(['--session', '--since', '--until', '--limit', '--out', '--project'])
+const KNOWN_FLAGS = new Set([...VALUED_FLAGS, '--json', '--help', '-h'])
 
 /** ISO timestamp, or a bare number meaning "that many hours ago". Returns undefined for absent. */
 export function parseWhenArg(v: string | undefined, nowMs: number = Date.now()): number | undefined {
@@ -569,6 +570,11 @@ export async function runStatuslineHistoryCli(argv: string[]): Promise<number> {
     console.log(STATUSLINE_HISTORY_USAGE)
     return EXIT.OK
   }
+  // A typo'd flag (`statusline-history project --x`) used to be silently ignored and exit 0
+  // (TRDD-PIB6T4RU) — nothing here ever checked a token against a KNOWN set, only against VALUED to
+  // decide whether to skip its value. The view name itself is a bare positional, so it never trips
+  // this (only tokens starting with '-' are checked).
+  assertKnownFlags(argv, KNOWN_FLAGS, VALUED_FLAGS, 'agentlenspro statusline-history --help')
   // flagValue, not a local helper. The local one returned undefined for a flag-shaped value so that
   // `--out --json` could not write a file named "--json" — right about the junk file, wrong about how:
   // it discarded the flag and ran as if it had never been typed. MEASURED: `--session --json` dropped

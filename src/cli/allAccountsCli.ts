@@ -17,6 +17,10 @@ import {
 } from '../allAccounts'
 import { loadToken } from '../subscriptionUsage'
 import { EXIT as CLI_EXIT } from './cliErrors'
+import { assertKnownFlags } from './argHelpers'
+
+const KNOWN_FLAGS = new Set(['--help', '-h', '--out', '--model', '--threshold', '--with-headroom', '--json'])
+const VALUED_FLAGS = new Set(['--out', '--model', '--threshold'])
 
 export const ALL_ACCOUNTS_USAGE = `agentlenspro get_account_status --all [flags]
 
@@ -114,6 +118,8 @@ function selectionText(sel: HeadroomSelection): string {
 
 export function runAllAccountsCli(argv: string[]): number {
   if (argv.includes('--help') || argv.includes('-h')) { console.log(ALL_ACCOUNTS_USAGE); return EXIT.OK }
+  // A typo'd flag used to be silently ignored and exit 0 (TRDD-PIB6T4RU).
+  assertKnownFlags(argv, KNOWN_FLAGS, VALUED_FLAGS, 'agentlenspro get_account_status --all --help')
   const outIdx = argv.indexOf('--out')
   const outFile = outIdx >= 0 && argv[outIdx + 1] && !argv[outIdx + 1].startsWith('--') ? argv[outIdx + 1] : undefined
 

@@ -15,8 +15,9 @@ import * as path from 'path'
 import { StatuslineStore, queryStatusline } from '../statuslineStore'
 import {
   VIEWS, parseWhenArg, table, jsonSafe, projectPredicate, whereOf,
-  tzLabel, coverageLine, storeFreshness,
+  tzLabel, coverageLine, storeFreshness, runStatuslineHistoryCli,
 } from '../cli/statuslineHistoryCli'
+import { UsageError } from '../cli/cliErrors'
 
 // UUID-SHAPED on purpose. DuckDB's JSON reader auto-detects a UUID-shaped string as the UUID type and
 // the node client returns it as {hugeint:"..."} — the exact bug that shipped. A placeholder like
@@ -333,6 +334,13 @@ suite('statusline-history — argument parsing and rendering', () => {
     assert.strictEqual(jsonSafe(BigInt(Number.MAX_SAFE_INTEGER) + 10n), '9007199254741001',
       'silently rounding past 2^53 would corrupt a token count rather than flag it')
     assert.deepStrictEqual(jsonSafe({ a: [1n, { b: 2n }] }), { a: [1, { b: 2 }] })
+  })
+
+  test('`project --x` is refused as a UsageError (64) instead of silently ignored (TRDD-PIB6T4RU)', async () => {
+    await assert.rejects(
+      () => runStatuslineHistoryCli(['project', '--x']),
+      (e: unknown) => e instanceof UsageError && /unknown flag "--x"/.test((e as Error).message),
+    )
   })
 
   test('the table pads columns and never crashes on a missing key', () => {

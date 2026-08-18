@@ -18,6 +18,7 @@ import * as path from 'path'
 import { dataDir } from '../dataDir'
 import { findLastCompact, DEFAULT_COMPACT_WINDOW_DAYS, type CompactTrigger } from '../lastCompact'
 import { EXIT, UsageError } from './cliErrors'
+import { assertKnownFlags } from './argHelpers'
 
 export const LAST_COMPACT_USAGE = `agentlenspro last-compact [flags]
 
@@ -62,11 +63,7 @@ export function runLastCompactCli(argv: string[]): number {
     console.log(LAST_COMPACT_USAGE)
     return EXIT.OK
   }
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i]
-    if (VALUED.has(a)) { i++; continue }
-    if (!KNOWN.has(a)) throw new UsageError(`unknown flag "${a}" — see: agentlenspro last-compact --help`)
-  }
+  assertKnownFlags(argv, KNOWN, VALUED, 'agentlenspro last-compact --help')
 
   const asJson = argv.includes('--json')
   const asSeconds = argv.includes('--seconds')

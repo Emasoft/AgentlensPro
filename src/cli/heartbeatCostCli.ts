@@ -16,6 +16,10 @@
 // found. No silent fallback.
 
 import { init, rpc, textOf } from './cliCore'
+import { assertKnownFlags } from './argHelpers'
+
+const KNOWN_FLAGS = new Set(['--oneline', '--json', '--fire', '--marker', '--session', '--window', '--help', '-h'])
+const VALUED_FLAGS = new Set(['--fire', '--marker', '--session', '--window'])
 
 function arg(argv: string[], name: string, dflt: string | null): string | null {
   const i = argv.indexOf(`--${name}`)
@@ -49,6 +53,8 @@ export async function runHeartbeatCost(argv: string[]): Promise<void> {
     console.log('usage: agentlenspro heartbeat-cost [--oneline|--json] [--fire last-complete|current] [--marker M] [--session ID] [--window H]')
     return
   }
+  // A typo'd flag used to be silently ignored and exit 0 (TRDD-PIB6T4RU).
+  assertKnownFlags(argv, KNOWN_FLAGS, VALUED_FLAGS, 'agentlenspro heartbeat-cost --help')
   await init()
 
   const a: Record<string, unknown> = {

@@ -1,9 +1,9 @@
 ---
 trdd-id: MFSUMOJ9
 title: the standalone server grows its heap to the 6144MB ceiling and dies of GC thrash - OOM or watchdog SIGKILL
-column: dev
+column: complete
 created: 2026-08-16T19:36:38+0200
-updated: 2026-08-18T11:45:00+0200
+updated: 2026-08-18T12:17:38+0200
 current-owner: AgentlensPro session
 task-type: spike
 approval-tier: 0
@@ -46,6 +46,13 @@ exists for the webview. One source of truth: the DB path already does exactly th
 
 Artifacts: snapshots + `heapagg.js` (streaming analyzer) in the session scratchpad
 (`mfsumoj9-repro/`); repro log shows the 33s timeline.
+
+**CLOSED 2026-08-18 — spike complete.** The diagnosis above was only the FIRST layer: three more
+retainers surfaced when each fix was re-measured against the repro (V8 sliced-string parents
+pinned by truncating `.slice()` calls; unbounded accum pending maps; per-card bounds collapsing
+at 12k-file fleet scale). All four layers are fixed and repro-verified in TRDD-66IXMIGN
+(implementation-commit 52f81cb): the repro that OOM'd in 33-45s under a 1GB cap now settles at
+~350-530MB RSS. The full lesson lives in 66IXMIGN and the timelineRetention module docstring.
 
 > **READ THE "MEMORY *IS* THE STORY" SECTION FIRST.** The sections above it are kept in the order
 > they were discovered, because the sequence is itself the lesson — but two of them were RETRACTED

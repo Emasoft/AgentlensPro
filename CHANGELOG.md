@@ -4,6 +4,26 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.27.0] - 2026-08-18
+
+### Fixed
+
+- **The standalone server no longer grows its heap to the ceiling and dies** (TRDD-MFSUMOJ9 /
+  TRDD-66IXMIGN). Four measured layers, each pinned by a heap snapshot on a cold-start OOM repro:
+  per-card timeline entry + byte bounds; flattened truncations (a V8 `slice()` retains its whole
+  parent string — a 200-char `resultSummary` was pinning a 352KB tool output); bounded accumulator
+  pending maps; and a hot-tier policy — only sessions active within `AGENTLENS_TIMELINE_HOT_AGE_HOURS`
+  (24h) carry timelines out of the parser, and only the `AGENTLENS_TIMELINE_HOT_CARDS` (50) most
+  recent keep them resident. The repro that OOM'd in 45s under a 1GB cap now settles at ~350-530MB RSS.
+  Cards report evictions via `timelineTruncatedCount`. Knobs: `AGENTLENS_TIMELINE_MAX_ENTRIES`,
+  `AGENTLENS_TIMELINE_MAX_BYTES`, `AGENTLENS_TIMELINE_HOT_AGE_HOURS`, `AGENTLENS_TIMELINE_HOT_CARDS`.
+- **Unknown flags now exit 64 on every CLI entry point** (TRDD-PIB6T4RU). `list`, `server status`,
+  `statusline-history`, and every other subcommand reject unrecognized flags with usage on stderr
+  instead of silently ignoring them.
+- **`server status` no longer reports NOT RUNNING for a live but busy server** (TRDD-TABN063T).
+  A pidfile-alive pid outranks a timed-out 800ms HTTP probe; the verdict is RUNNING (busy). A dead
+  pid still reports NOT RUNNING with a non-zero exit.
+
 ## [2.26.0] - 2026-08-15
 
 ### Added

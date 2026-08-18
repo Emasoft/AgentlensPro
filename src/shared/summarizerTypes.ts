@@ -87,6 +87,12 @@ export interface SessionSummaryCard {
   errors: number
   outcome: 'text_response' | 'tool_calls' | 'unknown'
   timeline: TimelineEntry[]
+  // Entries evicted from the retained timeline by the in-memory cap (TRDD-66IXMIGN). The card's
+  // aggregate fields (tokens/costs/counts) are accumulated during parse and are NOT affected by
+  // eviction; this counter is what lets the trace view say "N older entries not retained".
+  timelineTruncatedCount?: number
+  // Running cost of the retained entries' heavy text fields (maintained by timelineRetention).
+  timelineRetainedBytes?: number
   backgroundSpans: BackgroundSpanSummary[]
   loopSignals: LoopSignal[]
   peakContextPerTurn?: number   // max single-turn (input + cacheRead + cacheCreate); undefined for single-turn sessions
