@@ -1,9 +1,9 @@
 ---
 trdd-id: MFSUMOJ9
 title: the standalone server grows its heap to the 6144MB ceiling and dies of GC thrash - OOM or watchdog SIGKILL
-column: backburner
+column: dev
 created: 2026-08-16T19:36:38+0200
-updated: 2026-08-16T22:59:43+0200
+updated: 2026-08-18T11:45:00+0200
 current-owner: AgentlensPro session
 task-type: spike
 approval-tier: 0
