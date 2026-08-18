@@ -7,6 +7,7 @@ metadata:
   node_type: memory
   type: project
   tier: component
+publish-globally: false
 ---
 
 Reading an image into a large session is expensive — but **not for the reason the popular write-up

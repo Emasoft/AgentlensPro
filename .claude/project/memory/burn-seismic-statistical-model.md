@@ -7,6 +7,7 @@ metadata:
   node_type: memory
   type: project
   tier: component
+publish-globally: false
 ---
 
 # burn_seismic — the statistical model of the burn anomaly detector (v2)

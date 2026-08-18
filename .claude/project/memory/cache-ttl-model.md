@@ -7,6 +7,7 @@ metadata:
   node_type: memory
   type: project
   tier: component
+publish-globally: false
 ---
 
 The prompt-cache TTL depends on session kind AND auth regime (source:

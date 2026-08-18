@@ -8,6 +8,7 @@ metadata:
   type: project
   tier: hub
   globs: [".github/workflows/publish.yml", "package.json"]
+publish-globally: false
 ---
 
 Releasing agentlenspro = **push a `vX.Y.Z` tag**. `.github/workflows/publish.yml` builds,

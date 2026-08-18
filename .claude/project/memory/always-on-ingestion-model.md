@@ -8,6 +8,7 @@ metadata:
   type: project
   tier: hub
   globs: ["src/cli/hookHandlers.ts", "src/cli/serverControl.ts", "src/resourceMonitor.ts", "src/admissionController.ts", "standalone/server.ts"]
+publish-globally: false
 ---
 
 AgentlensPro's ingestion is **always-on and loss-less whenever any Claude instance is active**, and

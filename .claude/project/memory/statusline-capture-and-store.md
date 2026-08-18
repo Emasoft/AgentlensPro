@@ -7,6 +7,7 @@ metadata:
   node_type: memory
   type: project
   tier: component
+publish-globally: false
 ---
 
 Claude Code hands the status line a JSON payload richer than anything else on this machine exposes

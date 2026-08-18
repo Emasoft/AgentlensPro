@@ -7,6 +7,7 @@ metadata:
   node_type: memory
   type: project
   tier: component
+publish-globally: false
 ---
 
 # Agent-fleet cache economics — measured (2026-07-24, this repo's transcripts as instruments)
@@ -45,7 +46,8 @@ bounded retries, lean worker + cheap model, prime-then-pipeline, schema outputs,
 content. For fan-outs that need the PARENT's context, fork (inherits + renews the parent's
 cache) instead of fresh spawns.
 
-See also: [[image-resident-cost-guard]] (the delegate-to-a-subagent remedy for image reads —
+See also: [[cache-risk-command-detection]] (the FANOUT/spawn-shape risk codes that police these
+economics at launch time), [[image-resident-cost-guard]] (the delegate-to-a-subagent remedy for image reads —
 priced by these same fleet economics), [[cache-ttl-model]] (the TTL regimes behind the 5-min subagent window),
 [[agentlens-burn-token-model]] (the cost/weight doctrine), [[burn-seismic-statistical-model]]
 (FANOUT_RATE — the detector that catches fleets violating these rules),

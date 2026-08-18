@@ -8,6 +8,7 @@ metadata:
   tier: component
   type: project
   globs: ["src/burnMonitor.ts"]
+publish-globally: false
 ---
 
 # AgentLens per-account window budget + account/plan awareness (planned)

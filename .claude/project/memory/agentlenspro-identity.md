@@ -7,6 +7,7 @@ metadata:
   node_type: memory
   type: project
   tier: hub
+publish-globally: false
 ---
 
 **AgentlensPro** is an independent project born 2026-07-10 as a fork of

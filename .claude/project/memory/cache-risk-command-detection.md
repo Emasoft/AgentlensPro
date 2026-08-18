@@ -7,6 +7,7 @@ metadata:
   node_type: memory
   type: project
   tier: component
+publish-globally: false
 ---
 
 AgentlensPro names the slash commands that break the prompt cache by reading them out of the

@@ -7,6 +7,7 @@ metadata:
   node_type: memory
   tier: component
   type: project
+publish-globally: false
 ---
 
 The dashboard has **no `Traces` tab, no `Flow` tab, and no `Cost` tab**. `App.tsx` `TABS` +

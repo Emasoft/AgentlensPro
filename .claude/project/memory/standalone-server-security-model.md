@@ -8,6 +8,7 @@ metadata:
   tier: component
   type: project
   globs: ["standalone/server.ts"]
+publish-globally: false
 ---
 
 The standalone server exposes a UI/API server (`UI_PORT`, default 3000) and an OTLP

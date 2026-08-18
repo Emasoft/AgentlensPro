@@ -7,6 +7,7 @@ metadata:
   node_type: memory
   type: project
   tier: component
+publish-globally: false
 ---
 
 A Claude Code session loads a plugin's hooks and skills ONCE and keeps running that code until its

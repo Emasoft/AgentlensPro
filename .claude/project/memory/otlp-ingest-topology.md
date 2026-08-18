@@ -8,6 +8,7 @@ metadata:
   tier: hub
   type: project
   globs: ["standalone/server.ts", "src/otlpCollector.ts", "src/otlpParser.ts", "src/codexSessionNormalizer.ts", "src/summarizers/codex.ts"]
+publish-globally: false
 ---
 
 AgentlensPro parses the OTLP wire format in **more than one place**, and only ONE is

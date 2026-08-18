@@ -8,6 +8,7 @@ metadata:
   tier: hub
   type: project
   globs: ["src/burnMonitor.ts", "src/statuslineUsage.ts", "media/src/tabs/Alerts.tsx"]
+publish-globally: false
 ---
 
 # AgentLens burn / token-consumption model
@@ -131,6 +132,8 @@ Three tools answer "what is every sub-agent costing me", and they are not interc
   directory can and cannot prove about a session (the window size, the owning project), and the
   symmetric-looking inference each one invites that is false. Every cost figure here is priced
   against a window that page is the authority on.
+- [[cumulative-vs-per-turn-fields]] — which captured fields are lifetime counters vs per-turn
+  deltas; misreading one as the other corrupts every cost this model prices.
 
 ## Notes and lessons learned
 [^1]: [id:ATOM-STATUSLINE-BUCKET-SPLIT, status:valid, keywords:"statusline_breakdown_landed_in_unknown per_bucket_split_missing_no_otel_sessions StatuslineBillingEvent_commit", ocd:2026-07-08, lmd:2026-07-08] The statusline event path originally carried only a total
