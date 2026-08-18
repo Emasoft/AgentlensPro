@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-18T20:00:00+0200
+updated: 2026-08-18T20:12:00+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -137,14 +137,23 @@ release-via: publish
   defensive skip and fails 8 UNRELATED tests (7 gz + the HWM default). Suite 2420 passing, 0
   failing. Deployed: bundle rebuilt, `~/.agentlens/bin/allogscan` replaced, server restarted
   (verified `rustParseOpenCodeSync` in the running bundle).
-- **NEXT ACTION (one step): P4 — the surface that retires the TS server.** HTTP/API + MCP in
-  Rust behind the 4318/4316 listeners (axum or tiny-http; wire agentlens-ingest + spanstore
-  writer + agentlens-store + the four allogscan parsers), CLI port, TS server retired. P4's
-  parity law: the /api/* + MCP wire shapes are FROZEN; the dashboard must work unmodified.
-  Start by inventorying the wire surface: every `/api/*` route in standalone/server.ts and every
-  MCP tool shape in src/mcpServer.ts — the freeze list IS the spec. Also fold in: wire
-  `alstore pass` in place of the TS in-process ingestPass as part of P4 (the Rust pass exists
-  as a CLI since P3c but the server still runs the TS pass).
+- **P4a DONE — the wire surface is FROZEN and inventoried.** Report (gitignored):
+  `reports/p4-wire-freeze/20260818_200921+0200-frozen-wire-surface.md` — 46 HTTP routes
+  (40 UI + 3 OTLP + 3 MCP), 53 MCP tools, the per-request preamble ORDER (base-path strip →
+  CORS → CSRF gate → viewer-role → admission), heavyGuard's 7 routes, the SSE frame shapes, the
+  `/api/server-stats` key order, the OTLP always-200 contract, the data-dir lock takeover
+  matrix, shutdown/watchdog observables. Anchors spot-verified first-hand: line counts exact
+  (server.ts 4669 / mcpServer.ts 4018), TOOLS@410, IS_CANONICAL@1292, otlpServer@4413,
+  pid lock@184; the 54th `name:` grep hit is serverInfo@3380, so 53 tools is correct.
+  The freeze list IS the P4 spec — P4 parity law: /api/* + MCP wire shapes FROZEN, dashboard
+  works unmodified.
+- **NEXT ACTION (one step): P4b — wire `alstore pass` in place of the TS in-process ingestPass**
+  (the Rust pass exists as a CLI since P3c but the server still runs the TS pass). Follow the
+  established sidecar pattern (rustScan.ts / rustLogScan.ts): two opt-in channels — env
+  unconditional, installed `~/.agentlens/bin/alstore` presence = opt-in only when the store dir
+  is not test-overridden; a failed exec THROWS once opted in. After P4b: P4c = `agentlens-core`
+  server crate scaffold starting with the OTLP listener, the smallest frozen surface (always-200
+  contract, 64MB cap, JSON-only classify, `/agentlens/standalone` probe — report §2).
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
