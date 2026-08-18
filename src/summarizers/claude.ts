@@ -7,6 +7,7 @@ import {
   commonPathPrefix, findProjectRoot,
 } from './helpers'
 import { callBodyRegistry } from '../rawBodyContext'
+import { capTimeline, timelineMaxEntries } from '../timelineRetention'
 
 function strOrUndef(v: unknown): string | undefined {
   if (v === null || v === undefined || v === '') { return undefined }
@@ -103,6 +104,11 @@ function mergeInteractionSlices(claudeSessionId: string, slices: SessionSummaryC
   // interactions can overlap (background/sidechain turns) — re-sort globally with the same
   // stable comparator a single card uses.
   timeline.sort((a, b) => timelineTsKey(a) - timelineTsKey(b))
+  // Retention bound (TRDD-66IXMIGN): a merged card's timeline is the concatenation of every
+  // slice, so it must obey the same cap the per-card ingest paths enforce. Trim AFTER the sort so
+  // the evicted entries are the chronologically oldest, and carry forward the slices' own counters.
+  const mergedTruncated = ordered.reduce((n, s) => n + (s.timelineTruncatedCount ?? 0), 0)
+    + capTimeline(timeline, timelineMaxEntries())
 
   // Most-informative slice = the one with the richest timeline; per-field fallback scans the
   // group in time order so a placeholder never shadows a real value carried by another slice.
@@ -154,6 +160,7 @@ function mergeInteractionSlices(claudeSessionId: string, slices: SessionSummaryC
     errors,
     outcome: 'unknown' as const,
     timeline,
+    ...(mergedTruncated > 0 ? { timelineTruncatedCount: mergedTruncated } : {}),
     backgroundSpans,
     loopSignals: [],
   }
