@@ -242,9 +242,13 @@ release-via: publish
   pinned: activePromptTraceId is Option<String> (JS undefined===undefined must MATCH the next
   traceId-less span); group key becomes the card's traceId; the shell-command file regex spells
   JS \w as ASCII classes (Rust \w is Unicode).
-  Remaining port order: loopDetector (309, pulled ahead — summarizeSpans calls
-  detectLoopSignals, so it must exist first) → summarizer+synth (283) → sessionStore window
-  (187). End-to-end harness after the builders:
+  **P4d.5 DONE (commit b754cfe): loop_detector.rs ported (all 5 detectors + inferTaskComplexity),
+  TS-oracle parity EXACT; workspace 46/46.** Every user-facing string is pinned by the fixture;
+  toLocaleString = en-US grouping (a different ICU default fails the fixture loudly);
+  request lengths in UTF-16 units.
+  Remaining port order: summarizer+synth (283 — summarizeSpans: grouping, the two synth-root
+  passes, background-span association, the efficiency report) → sessionStore window (187).
+  End-to-end harness after the builders:
   replay a REAL span window through TS summarizeSpans and a Rust `alsummarize` bin.
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
