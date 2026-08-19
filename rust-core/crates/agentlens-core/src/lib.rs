@@ -37,6 +37,7 @@ pub mod hook_events;
 pub mod import_card;
 pub mod log_reader;
 pub mod pricing;
+pub mod request_log;
 pub mod retention_config;
 pub mod server_stats;
 pub mod span_window;
@@ -114,6 +115,8 @@ pub struct CoreState {
     /// The shared CallBodyRegistry's account half: fed by the logs ingest, read when a log card
     /// is built (accountId, TRDD-BURNWDGT).
     pub accounts: account_registry::AccountRegistry,
+    /// serverRuntime.ts requestLog — one row per UI/API request (ring + `requests.log`).
+    pub requests: request_log::RequestLog,
 }
 
 impl CoreState {
@@ -233,6 +236,7 @@ impl CoreState {
             summary_cache: derived_cache::VersionedCache::default(),
             stripped_cache: derived_cache::VersionedCache::default(),
             accounts: account_registry::AccountRegistry::default(),
+            requests: request_log::RequestLog::new(Some(data_dir.join("requests.log"))),
         }
     }
 

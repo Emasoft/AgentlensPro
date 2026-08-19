@@ -273,6 +273,7 @@ async fn handle(
     state: Arc<Mutex<CoreState>>,
     hub: Arc<SseHub>,
 ) -> Result<Response<SseBody>, String> {
+    let t0 = std::time::Instant::now();
     let path = req.uri().path().to_owned();
     let origin = req.headers().get("origin").and_then(|v| v.to_str().ok()).map(str::to_owned);
     let host = req.headers().get("host").and_then(|v| v.to_str().ok()).map(str::to_owned);
@@ -545,6 +546,18 @@ async fn handle(
             // The TS wraps the whole handler in one try → 500 {error} (a parse error included).
             Err(e) => json_response(StatusCode::INTERNAL_SERVER_ERROR, error_json(&e)),
         }
+    } else if method == Method::GET && path == "/api/debug/requests" {
+        // Row 26: the recent-request ring + heap pressure. No V8 ⇒ the heap object is honest
+        // zeros (over: false), as /api/server-stats reports; rssMb per row carries the story.
+        let body = {
+            let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+            serde_json::json!({
+                "heap": { "heapUsedMb": 0, "limitMb": 0, "hwmMb": 0, "over": false },
+                "requests": st.requests.recent(200),
+            })
+            .to_string()
+        };
+        json_response(StatusCode::OK, body)
     } else if method == Method::GET && path == "/api/debug/log-scan-stats" {
         let body = {
             let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
@@ -583,6 +596,17 @@ async fn handle(
                 resp.headers_mut().insert("Access-Control-Allow-Origin", v);
                 resp.headers_mut().insert("Vary", hyper::header::HeaderValue::from_static("Origin"));
             }
+        }
+    }
+    // serverRuntime.ts requestLog — one row per request, recorded at response construction (the
+    // TS records at socket finish; for a full body the two agree, for the SSE stream this counts
+    // the connect frame rather than the lifetime bytes — a debug diagnostic, noted, not frozen).
+    {
+        use hyper::body::Body;
+        let bytes = resp.body().size_hint().exact().unwrap_or(0);
+        if let Ok(mut st) = state.lock() {
+            let dur = t0.elapsed().as_millis() as i64;
+            st.requests.record(method.as_str(), &path, resp.status().as_u16(), dur, bytes, crate::now_ms());
         }
     }
     Ok(resp)

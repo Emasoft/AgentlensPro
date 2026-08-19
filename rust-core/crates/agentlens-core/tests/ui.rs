@@ -558,3 +558,27 @@ fn write_prompts_file_and_branch_dump() {
     assert!(r.starts_with("HTTP/1.1 500"), "{r}");
     std::env::remove_var("CLAUDE_CONFIG_DIR");
 }
+
+/// Freeze row 26 — /api/debug/requests: the ring records every request (itself included on the
+/// NEXT read), rows carry the frozen fields, rssMb is real, heap is the honest no-V8 zeros.
+#[test]
+fn debug_requests_serves_the_ring() {
+    let (_otlp, ui, _state) = start_servers();
+    get(ui, "/api/summary", "");
+    get(ui, "/api/summary?x=1", "");
+    get(ui, "/no-such-route", "");
+    let r = get(ui, "/api/debug/requests", "");
+    assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+    let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
+    assert_eq!(v["heap"], serde_json::json!({ "heapUsedMb": 0, "limitMb": 0, "hwmMb": 0, "over": false }));
+    let rows = v["requests"].as_array().unwrap();
+    assert_eq!(rows.len(), 3, "the serving request itself is not yet in its own answer");
+    let keys: Vec<&str> = rows[0].as_object().unwrap().keys().map(String::as_str).collect();
+    assert_eq!(keys, ["ts", "method", "path", "status", "durationMs", "bytes", "heapUsedMb", "rssMb"]);
+    assert_eq!((rows[0]["method"].as_str(), rows[0]["path"].as_str(), rows[0]["status"].as_u64()), (Some("GET"), Some("/api/summary"), Some(200)));
+    assert_eq!(rows[1]["path"], "/api/summary", "query-stripped");
+    assert_eq!(rows[2]["status"], 404);
+    assert!(rows[0]["bytes"].as_u64().unwrap() > 0);
+    assert!(rows[0]["rssMb"].as_f64().unwrap() > 0.0);
+    assert!(rows[0]["ts"].as_str().unwrap().ends_with('Z'));
+}
