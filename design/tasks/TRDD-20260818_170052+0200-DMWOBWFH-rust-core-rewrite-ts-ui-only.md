@@ -264,9 +264,20 @@ release-via: publish
   divergence" is not accepted until a real-corpus replay agrees. Gates: cargo 48/48, both e2e
   tests green, tsc + eslint clean. The full-suite bodyStore dedup-ratio failure is the
   pre-existing data-drift flake, carded as [[TRDD-R2VF2I53]].
-- **NEXT ACTION (one step): P4e — wire the summarizer into alcore's /api/summary** behind the
-  frozen wire contract (report §2): SessionStore fed by the OTLP listener's spans, GET
-  /api/summary returning the summarizeSpans shape, socket-level tests against the freeze.
+- **P4e DONE (commit 6e2f8de) — alcore's UI listener serves `GET /api/summary`.** `ui.rs`:
+  `alcore serve --ui-port` (default 3001; 3000 stays TS until cutover), CoreState carries the
+  SessionStore fed by every ingested span; the route returns summarize_spans(window) through
+  strip_session_detail. Preamble reproduced: CORS echo (same-origin/loopback only, never `*`),
+  CSRF 403, viewer-role gate (no embed key loaded ⇒ any present header is `invalid` → 403 — the
+  embedAuth "key is null" rule verbatim; HMAC roles land with the embed-key slice), bare 404.
+  4 socket tests + live curl verification. Workspace 52/52. **Scope on record:** OTEL-only
+  summary (log-session merge = feedMergePolicy + spawn collapse pending the log-scan wiring);
+  admission control + base-path strip deferred, documented in the module head.
+- **NEXT ACTION (one step): P4f — the SSE `/events` stream** (report §1.3 frame shapes: `:\n\n`
+  preamble then `data: <update payload>\n\n`; the update payload = buildUpdatePayload's
+  `{type:'update', buildId, summary:{toolCalls:{}}, sessionSummary:<stripped>, sidebar,
+  analyticsData, collectorGaps, …sidebarLive}` — read §1.3 first; sidebar/analytics computations
+  are their own ports (src/sidebarData.ts, src/analyticsData.ts) and may gate this slice).
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
