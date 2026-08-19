@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T01:21:43+0200
+updated: 2026-08-20T01:30:26+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -471,10 +471,26 @@ release-via: publish
   home without racing the process env. NOT PORTED: statuslineReader.overlay on the reparsed
   card (statusline store, P4m note); the lifecycleCorrupt fallback counter. 91/91 (85 + 3
   lifecycle unit + 3 socket tests), clippy delta zero, live-curl'd both routes on a scratch dir.
-- **NEXT ACTION (one step): P4r — the burn subsystem (freeze rows 12–13 + 24; big, its own
-  slice).** Read the freeze report rows first, then src/burnInvestigator.ts and the server.ts
-  handlers those rows anchor; port behind the frozen wire shapes with a TS-oracle fixture where
-  a builder is portable. Then bodies rows 14–15, instruction rows 19–21, statusline row 5.
+- **P4r SIZED (2026-08-20): the burn subsystem fans wider than its 3 routes.** Row 24
+  /api/burn-status = enrichBurnStatus(computeBurnStatus(gatherBurn(), burnConfig, now,
+  currentTtlContext())): burnMonitor.ts 1093 (pure) + gatherBurn/consumption plumbing
+  (server.ts:1472–1680) + ttlContext.ts 118 (reads accountInfo + env) + labelBurnStatusAccounts
+  (mcpServer.ts) + residentBlobs (compositionIndex — its OWN subsystem, defer/nullable). Row 12
+  /api/burn-risk = burnGuard.ts 302 + bodiesActivity.ts 377 + causingToolCall.ts 246 +
+  lastBurnStatus (the 4s tick cache). Row 13 /api/agent-gate = agentGate.ts 598 +
+  shared/imageReads 25. Sub-slicing like P4d.
+  **P4r.1 DONE (commit 8e5d231): burn/cache_ttl.rs + burn/keep_warm.rs, TS-oracle parity EXACT**
+  (gen-keepwarm-expected.mjs, 16 cases + 5 kind cards — all regime branches, cold/warm/neither,
+  the falsifier incl. off-matrix >1h survival, unsorted timelines, dropped bad timestamps).
+  Reports emit as Value literals; regime is a typed struct with to_value(). 92/92.
+- **NEXT ACTION (one step): P4r.2 — burn/monitor.rs: port src/burnMonitor.ts (computeBurnStatus
+  + gatherConsumptionEvents + loadBurnConfig + computeSessionStatus; pure, 1093 lines).** Read
+  the WHOLE file first; TS-oracle harness over crafted cards/events fixtures (the compiled
+  out/test/burnMonitor.js is the oracle). residentBlobs/account labels stay OUT (enrich layer,
+  later sub-slice). Then P4r.3 ttlContext + gatherBurn plumbing + the /api/burn-status route
+  (enrich with honest nulls where TS reads live account state), P4r.4 bodiesActivity +
+  causingToolCall + burn-risk, P4r.5 agentGate. Then bodies rows 14–15, instruction rows 19–21,
+  statusline row 5.
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
