@@ -27,6 +27,7 @@ use serde_json::Value;
 use agentlens_ingest::IngestState;
 use agentlens_spanstore::writer::SpanStoreWriter;
 
+pub mod pricing;
 pub mod session_store;
 pub mod summarize;
 pub mod ui;

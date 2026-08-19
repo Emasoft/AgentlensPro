@@ -52,7 +52,11 @@ export interface ModelRates {
 }
 
 // Keyed by normalized model ID (lowercase, no date suffix).
-const RATES: Record<string, ModelRates> = {
+// Exported ONLY for scripts/export-pricing.js, which derives rust-core's embedded pricing.json
+// from this table (TRDD-DMWOBWFH): the Rust core must never carry a hand-maintained rates
+// mirror, so it consumes a generated artifact that `pnpm run check-pricing-export` keeps in
+// lockstep. Code paths keep using lookupRates/calcTokenCostUsd — never read RATES directly.
+export const RATES: Record<string, ModelRates> = {
   // ── OpenAI ─────────────────────────────────────────────────────────────────
   // included models: 0× pre-Jun1 AND $0 in token mode (included in Copilot subscription per footnote 1)
   'gpt-4.1':            { inputPerMTok: 0,     cacheReadPerMTok: 0,      cacheWritePerMTok: 0, outputPerMTok: 0,     contextWindowTokens: 1_000_000, multiplier: 0,    multiplierAnnualPostJun1: 1 },

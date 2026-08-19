@@ -1,0 +1,415 @@
+{
+ "lastUpdated": "2026-07-07",
+ "rates": {
+  "gpt-4.1": {
+   "inputPerMTok": 0,
+   "cacheReadPerMTok": 0,
+   "cacheWritePerMTok": 0,
+   "outputPerMTok": 0,
+   "contextWindowTokens": 1000000,
+   "multiplier": 0,
+   "multiplierAnnualPostJun1": 1
+  },
+  "gpt-5-mini": {
+   "inputPerMTok": 0,
+   "cacheReadPerMTok": 0,
+   "cacheWritePerMTok": 0,
+   "outputPerMTok": 0,
+   "contextWindowTokens": 200000,
+   "multiplier": 0,
+   "multiplierAnnualPostJun1": 0.33
+  },
+  "gpt-5 mini": {
+   "inputPerMTok": 0,
+   "cacheReadPerMTok": 0,
+   "cacheWritePerMTok": 0,
+   "outputPerMTok": 0,
+   "contextWindowTokens": 200000,
+   "multiplier": 0,
+   "multiplierAnnualPostJun1": 0.33
+  },
+  "gpt-4o": {
+   "inputPerMTok": 2.5,
+   "cacheReadPerMTok": 1.25,
+   "cacheWritePerMTok": 0,
+   "outputPerMTok": 10,
+   "contextWindowTokens": 128000,
+   "multiplier": 0,
+   "multiplierAnnualPostJun1": 0.33
+  },
+  "gpt-4o-mini": {
+   "inputPerMTok": 0.15,
+   "cacheReadPerMTok": 0.075,
+   "cacheWritePerMTok": 0,
+   "outputPerMTok": 0.6,
+   "contextWindowTokens": 128000,
+   "multiplier": 0,
+   "multiplierAnnualPostJun1": 0.33
+  },
+  "gpt-5.1": {
+   "inputPerMTok": 1.75,
+   "cacheReadPerMTok": 0.175,
+   "cacheWritePerMTok": 0,
+   "outputPerMTok": 14,
+   "contextWindowTokens": 256000,
+   "multiplier": 1,
+   "multiplierAnnualPostJun1": 3
+  },
+  "gpt-5.1-codex": {
+   "inputPerMTok": 1.75,
+   "cacheReadPerMTok": 0.175,
+   "cacheWritePerMTok": 0,
+   "outputPerMTok": 14,
+   "contextWindowTokens": 256000,
+   "multiplier": 1,
+   "multiplierAnnualPostJun1": 3
+  },
+  "gpt-5.1-codex-mini": {
+   "inputPerMTok": 0.75,
+   "cacheReadPerMTok": 0.075,
+   "cacheWritePerMTok": 0,
+   "outputPerMTok": 4.5,
+   "contextWindowTokens": 256000,
+   "multiplier": 0.33,
+   "multiplierAnnualPostJun1": 0.33
+  },
+  "gpt-5.1-codex-max": {
+   "inputPerMTok": 1.75,
+   "cacheReadPerMTok": 0.175,
+   "cacheWritePerMTok": 0,
+   "outputPerMTok": 14,
+   "contextWindowTokens": 256000,
+   "multiplier": 1,
+   "multiplierAnnualPostJun1": 3
+  },
+  "gpt-5.2": {
+   "inputPerMTok": 1.75,
+   "cacheReadPerMTok": 0.175,
+   "cacheWritePerMTok": 0,
+   "outputPerMTok": 14,
+   "contextWindowTokens": 256000,
+   "multiplier": 1,
+   "multiplierAnnualPostJun1": 3
+  },
+  "gpt-5.2-codex": {
+   "inputPerMTok": 1.75,
+   "cacheReadPerMTok": 0.175,
+   "cacheWritePerMTok": 0,
+   "outputPerMTok": 14,
+   "contextWindowTokens": 256000,
+   "multiplier": 1,
+   "multiplierAnnualPostJun1": 3
+  },
+  "gpt-5.3-codex": {
+   "inputPerMTok": 1.75,
+   "cacheReadPerMTok": 0.175,
+   "cacheWritePerMTok": 0,
+   "outputPerMTok": 14,
+   "contextWindowTokens": 256000,
+   "multiplier": 1,
+   "multiplierAnnualPostJun1": 6
+  },
+  "gpt-5.4": {
+   "inputPerMTok": 2.5,
+   "cacheReadPerMTok": 0.25,
+   "cacheWritePerMTok": 0,
+   "outputPerMTok": 15,
+   "contextWindowTokens": 272000,
+   "multiplier": 1,
+   "multiplierAnnualPostJun1": 6
+  },
+  "gpt-5.4-mini": {
+   "inputPerMTok": 0.75,
+   "cacheReadPerMTok": 0.075,
+   "cacheWritePerMTok": 0,
+   "outputPerMTok": 4.5,
+   "contextWindowTokens": 200000,
+   "multiplier": 0.33,
+   "multiplierAnnualPostJun1": 6
+  },
+  "gpt-5.4-nano": {
+   "inputPerMTok": 0.2,
+   "cacheReadPerMTok": 0.02,
+   "cacheWritePerMTok": 0,
+   "outputPerMTok": 1.25,
+   "contextWindowTokens": 128000,
+   "multiplier": 0.25,
+   "multiplierAnnualPostJun1": 0.25
+  },
+  "gpt-5.5": {
+   "inputPerMTok": 5,
+   "cacheReadPerMTok": 0.5,
+   "cacheWritePerMTok": 0,
+   "outputPerMTok": 30,
+   "contextWindowTokens": 256000,
+   "multiplier": 7.5,
+   "multiplierAnnualPostJun1": 7.5
+  },
+  "codex-mini-latest": {
+   "inputPerMTok": 1.5,
+   "cacheReadPerMTok": 0.375,
+   "cacheWritePerMTok": 0,
+   "outputPerMTok": 6,
+   "contextWindowTokens": 200000,
+   "multiplier": 0,
+   "multiplierAnnualPostJun1": 0
+  },
+  "claude-opus-4": {
+   "inputPerMTok": 15,
+   "cacheReadPerMTok": 1.5,
+   "cacheWritePerMTok": 18.75,
+   "outputPerMTok": 75,
+   "contextWindowTokens": 200000,
+   "multiplier": 0,
+   "multiplierAnnualPostJun1": 0
+  },
+  "claude-opus-4-1": {
+   "inputPerMTok": 15,
+   "cacheReadPerMTok": 1.5,
+   "cacheWritePerMTok": 18.75,
+   "outputPerMTok": 75,
+   "contextWindowTokens": 200000,
+   "multiplier": 0,
+   "multiplierAnnualPostJun1": 0
+  },
+  "claude-haiku-3-5": {
+   "inputPerMTok": 0.8,
+   "cacheReadPerMTok": 0.08,
+   "cacheWritePerMTok": 1,
+   "outputPerMTok": 4,
+   "contextWindowTokens": 200000,
+   "multiplier": 0,
+   "multiplierAnnualPostJun1": 0
+  },
+  "claude-haiku-4-5": {
+   "inputPerMTok": 1,
+   "cacheReadPerMTok": 0.1,
+   "cacheWritePerMTok": 1.25,
+   "outputPerMTok": 5,
+   "contextWindowTokens": 200000,
+   "multiplier": 0.33,
+   "multiplierAnnualPostJun1": 0.33
+  },
+  "claude-sonnet-4": {
+   "inputPerMTok": 3,
+   "cacheReadPerMTok": 0.3,
+   "cacheWritePerMTok": 3.75,
+   "outputPerMTok": 15,
+   "contextWindowTokens": 1000000,
+   "multiplier": 1,
+   "multiplierAnnualPostJun1": 1,
+   "inputAbove200kPerMTok": 6,
+   "outputAbove200kPerMTok": 22.5,
+   "cacheReadAbove200kPerMTok": 0.6,
+   "cacheWriteAbove200kPerMTok": 7.5
+  },
+  "claude-sonnet-4-5": {
+   "inputPerMTok": 3,
+   "cacheReadPerMTok": 0.3,
+   "cacheWritePerMTok": 3.75,
+   "outputPerMTok": 15,
+   "contextWindowTokens": 1000000,
+   "multiplier": 1,
+   "multiplierAnnualPostJun1": 6
+  },
+  "claude-sonnet-4-6": {
+   "inputPerMTok": 3,
+   "cacheReadPerMTok": 0.3,
+   "cacheWritePerMTok": 3.75,
+   "outputPerMTok": 15,
+   "contextWindowTokens": 1000000,
+   "multiplier": 1,
+   "multiplierAnnualPostJun1": 9
+  },
+  "claude-sonnet-5": {
+   "inputPerMTok": 2,
+   "cacheReadPerMTok": 0.2,
+   "cacheWritePerMTok": 2.5,
+   "outputPerMTok": 10,
+   "contextWindowTokens": 1000000,
+   "multiplier": 0,
+   "multiplierAnnualPostJun1": 0,
+   "scheduledChange": {
+    "from": "2026-09-01",
+    "note": "introductory pricing ends 2026-08-31; reverts to $3/$15 sticker",
+    "rates": {
+     "inputPerMTok": 3,
+     "cacheReadPerMTok": 0.3,
+     "cacheWritePerMTok": 3.75,
+     "outputPerMTok": 15
+    }
+   }
+  },
+  "claude-mythos-5": {
+   "inputPerMTok": 10,
+   "cacheReadPerMTok": 1,
+   "cacheWritePerMTok": 12.5,
+   "outputPerMTok": 50,
+   "contextWindowTokens": 1000000,
+   "multiplier": 0,
+   "multiplierAnnualPostJun1": 0
+  },
+  "claude-opus-4-5": {
+   "inputPerMTok": 5,
+   "cacheReadPerMTok": 0.5,
+   "cacheWritePerMTok": 6.25,
+   "outputPerMTok": 25,
+   "contextWindowTokens": 1000000,
+   "multiplier": 3,
+   "multiplierAnnualPostJun1": 15
+  },
+  "claude-opus-4-6": {
+   "inputPerMTok": 5,
+   "cacheReadPerMTok": 0.5,
+   "cacheWritePerMTok": 6.25,
+   "outputPerMTok": 25,
+   "contextWindowTokens": 1000000,
+   "multiplier": 3,
+   "multiplierAnnualPostJun1": 27
+  },
+  "claude-opus-4-7": {
+   "inputPerMTok": 5,
+   "cacheReadPerMTok": 0.5,
+   "cacheWritePerMTok": 6.25,
+   "outputPerMTok": 25,
+   "contextWindowTokens": 1000000,
+   "multiplier": 15,
+   "multiplierAnnualPostJun1": 27
+  },
+  "claude-opus-4-8": {
+   "inputPerMTok": 5,
+   "cacheReadPerMTok": 0.5,
+   "cacheWritePerMTok": 6.25,
+   "outputPerMTok": 25,
+   "contextWindowTokens": 1000000,
+   "multiplier": 15,
+   "multiplierAnnualPostJun1": 27
+  },
+  "claude-opus-5": {
+   "inputPerMTok": 5,
+   "cacheReadPerMTok": 0.5,
+   "cacheWritePerMTok": 6.25,
+   "outputPerMTok": 25,
+   "contextWindowTokens": 1000000,
+   "multiplier": 0,
+   "multiplierAnnualPostJun1": 0
+  },
+  "claude-opus-4-6-fast": {
+   "inputPerMTok": 5,
+   "cacheReadPerMTok": 0.5,
+   "cacheWritePerMTok": 6.25,
+   "outputPerMTok": 25,
+   "contextWindowTokens": 1000000,
+   "multiplier": 30,
+   "multiplierAnnualPostJun1": 30
+  },
+  "claude-opus-4-7-fast": {
+   "inputPerMTok": 30,
+   "cacheReadPerMTok": 3,
+   "cacheWritePerMTok": 37.5,
+   "outputPerMTok": 150,
+   "contextWindowTokens": 1000000,
+   "multiplier": 30,
+   "multiplierAnnualPostJun1": 30
+  },
+  "claude-opus-4-8-fast": {
+   "inputPerMTok": 10,
+   "cacheReadPerMTok": 1,
+   "cacheWritePerMTok": 12.5,
+   "outputPerMTok": 50,
+   "contextWindowTokens": 1000000,
+   "multiplier": 30,
+   "multiplierAnnualPostJun1": 30
+  },
+  "claude-opus-5-fast": {
+   "inputPerMTok": 10,
+   "cacheReadPerMTok": 1,
+   "cacheWritePerMTok": 12.5,
+   "outputPerMTok": 50,
+   "contextWindowTokens": 1000000,
+   "multiplier": 0,
+   "multiplierAnnualPostJun1": 0
+  },
+  "claude-fable-5": {
+   "inputPerMTok": 10,
+   "cacheReadPerMTok": 1,
+   "cacheWritePerMTok": 12.5,
+   "outputPerMTok": 50,
+   "contextWindowTokens": 1000000,
+   "multiplier": 0,
+   "multiplierAnnualPostJun1": 0
+  },
+  "gemini-2.5-pro": {
+   "inputPerMTok": 1.25,
+   "cacheReadPerMTok": 0.125,
+   "cacheWritePerMTok": 0,
+   "outputPerMTok": 10,
+   "contextWindowTokens": 1000000,
+   "multiplier": 1,
+   "multiplierAnnualPostJun1": 1
+  },
+  "gemini-3-flash": {
+   "inputPerMTok": 0.5,
+   "cacheReadPerMTok": 0.05,
+   "cacheWritePerMTok": 0,
+   "outputPerMTok": 3,
+   "contextWindowTokens": 1000000,
+   "multiplier": 0.33,
+   "multiplierAnnualPostJun1": 0.33
+  },
+  "gemini-3-pro": {
+   "inputPerMTok": 2,
+   "cacheReadPerMTok": 0.2,
+   "cacheWritePerMTok": 0,
+   "outputPerMTok": 12,
+   "contextWindowTokens": 1000000,
+   "multiplier": 1,
+   "multiplierAnnualPostJun1": 6
+  },
+  "gemini-3.1-pro": {
+   "inputPerMTok": 2,
+   "cacheReadPerMTok": 0.2,
+   "cacheWritePerMTok": 0,
+   "outputPerMTok": 12,
+   "contextWindowTokens": 1000000,
+   "multiplier": 1,
+   "multiplierAnnualPostJun1": 6
+  },
+  "gemini-3.5-flash": {
+   "inputPerMTok": 1.5,
+   "cacheReadPerMTok": 0.15,
+   "cacheWritePerMTok": 0,
+   "outputPerMTok": 9,
+   "contextWindowTokens": 1000000,
+   "multiplier": 14,
+   "multiplierAnnualPostJun1": 14
+  },
+  "raptor-mini": {
+   "inputPerMTok": 0,
+   "cacheReadPerMTok": 0,
+   "cacheWritePerMTok": 0,
+   "outputPerMTok": 0,
+   "contextWindowTokens": 0,
+   "multiplier": 0,
+   "multiplierAnnualPostJun1": 0.33
+  },
+  "goldeneye": {
+   "inputPerMTok": 1.25,
+   "cacheReadPerMTok": 0.125,
+   "cacheWritePerMTok": 0,
+   "outputPerMTok": 10,
+   "contextWindowTokens": 0,
+   "multiplier": 0,
+   "multiplierAnnualPostJun1": 0
+  },
+  "big-pickle": {
+   "inputPerMTok": 0,
+   "cacheReadPerMTok": 0,
+   "cacheWritePerMTok": 0,
+   "outputPerMTok": 0,
+   "contextWindowTokens": 200000,
+   "multiplier": 0,
+   "multiplierAnnualPostJun1": 0
+  }
+ }
+}
