@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T01:30:26+0200
+updated: 2026-08-20T01:50:42+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -483,14 +483,24 @@ release-via: publish
   (gen-keepwarm-expected.mjs, 16 cases + 5 kind cards — all regime branches, cold/warm/neither,
   the falsifier incl. off-matrix >1h survival, unsorted timelines, dropped bad timestamps).
   Reports emit as Value literals; regime is a typed struct with to_value(). 92/92.
-- **NEXT ACTION (one step): P4r.2 — burn/monitor.rs: port src/burnMonitor.ts (computeBurnStatus
-  + gatherConsumptionEvents + loadBurnConfig + computeSessionStatus; pure, 1093 lines).** Read
-  the WHOLE file first; TS-oracle harness over crafted cards/events fixtures (the compiled
-  out/test/burnMonitor.js is the oracle). residentBlobs/account labels stay OUT (enrich layer,
-  later sub-slice). Then P4r.3 ttlContext + gatherBurn plumbing + the /api/burn-status route
-  (enrich with honest nulls where TS reads live account state), P4r.4 bodiesActivity +
-  causingToolCall + burn-risk, P4r.5 agentGate. Then bodies rows 14–15, instruction rows 19–21,
-  statusline row 5.
+- **P4r.2 DONE (commit 0233a4b): burn/monitor.rs ports the WHOLE burnMonitor.ts, TS-oracle
+  parity EXACT** (gen-burnmonitor-expected.mjs: 6 config cases, the 8-event merged stream, two
+  full computeBurnStatus runs — all 4 alert rules + pooled-observed suppression + cost-based
+  capacityExceeded — 5 session-status selectors, premature-end snapshot; deep-diff test names
+  the first diverging path). TWO HELPER LAWS pinned the hard way: **js_to_fixed_num is exact
+  toFixed via m×2^e integer rounding** — the ×10^f float shortcut misrounds (1.86805@4) and
+  Rust {:.f} breaks ties to EVEN where JS goes AWAY (0.125@2); and **js_math_round =
+  (x+0.5).floor()**, not f64::round (negative halves). to_locale_en moved to helpers (shared
+  with loop_detector). 93/93.
+- **NEXT ACTION (one step): P4r.3 — ttlContext + the burn plumbing + GET /api/burn-status (row
+  24).** Read src/ttlContext.ts (118) + the server.ts gatherBurn/enrichBurnStatus block
+  (1472–1680) + mcpServer.ts labelBurnStatusAccounts first. CoreState grows burn_config (loaded
+  at open) + the 4s tick's lastBurnStatus; the route serves
+  enrich(compute_burn_status(gathered)) with HONEST NULLS where TS reads live machine state not
+  yet ported (currentAccount → null, residentBlobs → [], statusline events → empty — each with
+  a NOT PORTED note; accountWindows labels absent like the TS I/O-free layer). Then P4r.4
+  bodiesActivity + causingToolCall + burn-risk (row 12), P4r.5 agentGate (row 13). Then bodies
+  rows 14–15, instruction rows 19–21, statusline row 5.
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
