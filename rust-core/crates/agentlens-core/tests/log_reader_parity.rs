@@ -7,7 +7,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use agentlens_core::log_reader::{cold_scan, LogTailer, ScannedFile};
+use agentlens_core::delta_log::DeltaLog;
+use agentlens_core::log_reader::{cold_scan, DurableState, LogTailer, ScannedFile, LOG_INGEST_VERSION};
 use agentlens_core::CoreState;
 use agentlens_logscan::discovery::{Env, Platform};
 use serde_json::Value;
@@ -260,4 +261,95 @@ fn demote_cold_timelines_keeps_only_the_k_most_recently_active() {
     // Idempotent: a second pass finds nothing to strip and does not double-count.
     st.demote_cold_timelines(1);
     assert_eq!(st.log_sessions["old"]["timelineTruncatedCount"], 3);
+}
+
+// ── Durable state (P5e) ──────────────────────────────────────────────────────────────────────
+
+#[test]
+fn log_ingest_version_is_in_lockstep_with_the_ts_constant() {
+    // Until the cutover retires the TS engine both read each other's delta logs, so the
+    // semantics stamp must be ONE number. src/collectorState.ts is the TS source of truth.
+    let ts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../src/collectorState.ts");
+    let src = std::fs::read_to_string(&ts).unwrap_or_else(|e| panic!("{}: {e}", ts.display()));
+    let line = src.lines().find(|l| l.starts_with("export const LOG_INGEST_VERSION")).expect("TS LOG_INGEST_VERSION line");
+    let n: u64 = line.rsplit('=').next().unwrap().trim().trim_end_matches(';').parse().unwrap();
+    assert_eq!(n, LOG_INGEST_VERSION, "bump rust-core's LOG_INGEST_VERSION with the TS one");
+}
+
+#[test]
+fn durable_state_round_trips_offsets_and_stripped_cards_and_skips_the_cold_rescan() {
+    let home = scratch_home("durable");
+    let env = Env { home: home.clone(), platform: Platform::Darwin, vars: HashMap::new() };
+    let data = std::env::temp_dir().join(format!("al-durable-data-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&data);
+    std::fs::create_dir_all(&data).unwrap();
+    let now = 1_785_578_400_000 + 600_000;
+
+    // Run 1: a cold boot, then a forced save (what a graceful stop does).
+    let state = std::sync::Mutex::new(CoreState::open(&data.join("spans")));
+    let mut tailer = LogTailer::default();
+    let mut durable = DurableState::open(&data);
+    assert_eq!(durable.restore(&mut tailer, &mut state.lock().unwrap()).unwrap(), (0, 0, 0), "nothing persisted yet");
+    let (scanned, s) = tailer.sweep(&env, now);
+    assert_eq!(s.full_reads, 5);
+    state.lock().unwrap().ingest_scanned(scanned);
+    durable.mark_dirty();
+    durable.tick(&tailer, &state, true);
+    assert!(data.join("log-offsets.delta.ndjson").exists() && data.join("log-sessions.delta.ndjson").exists());
+    assert_eq!(std::fs::read_to_string(data.join("log-delta-version.json")).unwrap(), format!("{{\"v\":{LOG_INGEST_VERSION}}}"));
+    // The persisted card is the stripped shape: no timeline/fileOps/backgroundSpans/generatedFiles.
+    let cards = DeltaLog::new(&data, "log-sessions").load().unwrap();
+    assert_eq!(cards.len(), 7);
+    let parent = &cards["cccccccc-1111-2222-3333-444444444444"];
+    assert_eq!(parent["timeline"].as_array().unwrap().len(), 0);
+    assert!(parent.get("fileOps").is_none());
+    assert_eq!(parent["backgroundSpans"], Value::Array(vec![]));
+    assert_eq!(parent["turns"], state.lock().unwrap().log_sessions["cccccccc-1111-2222-3333-444444444444"]["turns"]);
+    assert_eq!(DeltaLog::new(&data, "log-offsets").load().unwrap().len(), 5);
+
+    // Between the runs one transcript grows.
+    append(&home.join(CLAUDE_REL), &turn_line(9, "2026-08-01T10:00:08.000Z"));
+
+    // Run 2: restore → the 7 cards are back, 5 offsets import, and the boot sweep touches ONLY
+    // the grown file (from 0 — the accumulator is not persisted), never the other four.
+    let state2 = std::sync::Mutex::new(CoreState::open(&data.join("spans")));
+    let mut tailer2 = LogTailer::default();
+    let mut durable2 = DurableState::open(&data);
+    let (restored, imported, skipped) = durable2.restore(&mut tailer2, &mut state2.lock().unwrap()).unwrap();
+    assert_eq!((restored, imported, skipped), (7, 5, 0));
+    assert_eq!(state2.lock().unwrap().log_sessions.len(), 7);
+    let (scanned, s) = tailer2.sweep(&env, now);
+    assert_eq!((s.files, s.changed, s.parsed, s.incremental_reads, s.full_reads), (5, 1, 1, 0, 1));
+    assert_eq!(parent_card(&scanned)["turns"].as_u64().unwrap(), parent["turns"].as_u64().unwrap() + 1);
+    state2.lock().unwrap().ingest_scanned(scanned);
+    // Nothing else moved: the next sweep is a pure stat pass.
+    let (scanned, s) = tailer2.sweep(&env, now);
+    assert!(scanned.is_empty() && s.changed == 0);
+    // An unchanged save costs zero bytes; the grown card costs one record.
+    durable2.mark_dirty();
+    let before = DeltaLog::new(&data, "log-sessions").disk_bytes();
+    durable2.tick(&tailer2, &state2, true);
+    let after = DeltaLog::new(&data, "log-sessions").disk_bytes();
+    assert!(after > before);
+    assert_eq!(DeltaLog::new(&data, "log-sessions").load().unwrap().len(), 7);
+
+    // A rotated file (new inode at the same path) and a truncated one are NOT resumed.
+    let codex = home.join(".codex/sessions/2026/08/01/ffffffff-1111-2222-3333-444444444444.jsonl");
+    let body = std::fs::read(&codex).unwrap();
+    std::fs::remove_file(&codex).unwrap();
+    std::fs::write(&codex, &body).unwrap(); // same bytes, new inode
+    let cp = home.join(".copilot/session-state/abababab-1111-2222-3333-444444444444/events.jsonl");
+    let cp_body = std::fs::read_to_string(&cp).unwrap();
+    std::fs::write(&cp, cp_body.lines().next().unwrap().to_owned() + "\n").unwrap(); // shrunk
+    let mut tailer3 = LogTailer::default();
+    let mut durable3 = DurableState::open(&data);
+    let (_, imported, skipped) = durable3.restore(&mut tailer3, &mut CoreState::open(&data.join("spans"))).unwrap();
+    assert_eq!((imported, skipped), (3, 2));
+
+    // A version-stale stamp restores NOTHING (cold rescan), whatever the logs hold.
+    std::fs::write(data.join("log-delta-version.json"), "{\"v\":1}").unwrap();
+    let mut tailer4 = LogTailer::default();
+    let mut st4 = CoreState::open(&data.join("spans"));
+    assert_eq!(DurableState::open(&data).restore(&mut tailer4, &mut st4).unwrap(), (0, 0, 0));
+    assert!(st4.log_sessions.is_empty() && tailer4.file_state.is_empty());
 }

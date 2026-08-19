@@ -52,11 +52,15 @@ pub struct FileState {
 
 fn stat(path: &Path) -> Option<(f64, u64, u64)> {
     let m = std::fs::metadata(path).ok()?;
+    // Node's `stats.mtimeMs` is `sec * 1e3 + nsec / 1e6` (lib/internal/fs/utils.js
+    // msFromTimeSpec) — reproduce that exact float, not `as_secs_f64() * 1000`: the two round
+    // differently in the last ulp, and a persisted TS offset then fails the equality gate for
+    // ~25% of unchanged files (measured: 3,345 of 13,528 re-parsed on a cross-engine restore).
     let mtime_ms = m
         .modified()
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map_or(0.0, |d| d.as_secs_f64() * 1000.0);
+        .map_or(0.0, |d| d.as_secs() as f64 * 1000.0 + d.subsec_nanos() as f64 / 1e6);
     #[cfg(unix)]
     let ino = { use std::os::unix::fs::MetadataExt; m.ino() };
     #[cfg(not(unix))]
@@ -395,34 +399,292 @@ fn read_lines_from(path: &Path, from: u64) -> std::io::Result<(Vec<Vec<u8>>, u64
     Ok((lines, from + last_nl as u64 + 1))
 }
 
-/// The log reader's thread: the boot sweep (returned once ingested, so the caller can bind its
-/// listeners with the card map already populated — the TS server's synchronous boot batch), then
-/// a sweep every `interval` forever (TS falls back to a 5s full poll when fs.watch is
-/// unavailable; a notify-based watcher with the 60s backstop is a later slice). The tailer is
-/// `!Send`, so it is created ON this thread and never leaves it.
+// ── Durable state (P5e — server.ts TRDD-PJC8N1HO + the delta logs of TRDD-K3WDPR7M) ────────────
+
+/// src/collectorState.ts LOG_INGEST_VERSION — the semantics stamp of the persisted cards/offsets.
+/// A restart trusts the delta logs ONLY when `log-delta-version.json` carries this value; a bump
+/// forces the cold rescan. Kept in lockstep with the TS constant by a test that reads the TS
+/// source (tests/log_reader_parity.rs) until the cutover retires the TS side.
+pub const LOG_INGEST_VERSION: u64 = 7;
+
+/// TS `PersistedFileState` — the offset record as it sits in `log-offsets.*.ndjson`.
+fn file_state_record(s: &FileState) -> Value {
+    serde_json::json!({ "bytesRead": s.bytes_read, "mtimeMs": s.mtime_ms, "ino": s.ino, "size": s.size })
+}
+
+impl LogTailer {
+    /// exportFileState — the offset map as delta-log records keyed by path.
+    pub fn export_file_state(&self) -> IndexMap<String, Value> {
+        self.file_state.iter().map(|(p, s)| (p.to_string_lossy().into_owned(), file_state_record(s))).collect()
+    }
+
+    /// importFileState — seed the gate from persisted records so the first sweep SKIPS every
+    /// unchanged file. Each record is identity-checked against the file on disk (FAIL-FAST): a
+    /// malformed record, a missing file, a different inode (rotated) or a size below the offset
+    /// (truncated) is skipped → that file cold-reads. The accumulator is NOT restored, so a file
+    /// that grew across the restart re-reads from 0 (complete card); the win is that thousands of
+    /// unchanged files are never touched. Returns (imported, skipped).
+    pub fn import_file_state(&mut self, records: &IndexMap<String, Value>) -> (usize, usize) {
+        let (mut imported, mut skipped) = (0usize, 0usize);
+        for (path, rec) in records {
+            let (Some(bytes_read), Some(mtime_ms)) = (rec.get("bytesRead").and_then(Value::as_u64), rec.get("mtimeMs").and_then(Value::as_f64)) else {
+                skipped += 1;
+                continue;
+            };
+            let p = PathBuf::from(path);
+            let Some((_, ino, size)) = stat(&p) else {
+                skipped += 1;
+                continue;
+            };
+            let rec_ino = rec.get("ino").and_then(Value::as_u64);
+            if rec_ino.is_some_and(|i| i != 0 && i != ino) || size < bytes_read {
+                skipped += 1;
+                continue;
+            }
+            self.file_state.insert(
+                p,
+                FileState { bytes_read, mtime_ms, ino: rec_ino.unwrap_or(0), size: rec.get("size").and_then(Value::as_u64).unwrap_or(size) },
+            );
+            imported += 1;
+        }
+        (imported, skipped)
+    }
+}
+
+/// stripCardForPersist — the persisted card keeps headers only: no timeline, no fileOps, no
+/// background spans, no generated files (all rebuilt from the transcript on demand).
+pub fn strip_card_for_persist(card: &Value) -> Value {
+    let mut c = card.as_object().cloned().unwrap_or_default();
+    c.insert("timeline".into(), Value::Array(Vec::new()));
+    c.shift_remove("fileOps");
+    c.insert("backgroundSpans".into(), Value::Array(Vec::new()));
+    c.shift_remove("generatedFiles");
+    c.shift_remove("generatedFilesTruncated");
+    Value::Object(c)
+}
+
+/// The durable-state sidecars under the data dir, the save cadence, and the restore.
+pub struct DurableState {
+    cards: crate::delta_log::DeltaLog,
+    offsets: crate::delta_log::DeltaLog,
+    version_file: PathBuf,
+    offsets_save: std::time::Duration,
+    cards_save: std::time::Duration,
+    /// The TS durable-save timer fires every offsets_save; both cadences are measured from it.
+    last_timer: Instant,
+    last_cards_save: Instant,
+    offsets_dirty: bool,
+    cards_dirty: bool,
+}
+
+fn env_ms(key: &str, default: u64, floor: u64) -> std::time::Duration {
+    let v = std::env::var(key).ok().and_then(|s| s.trim().parse::<u64>().ok()).unwrap_or(default);
+    std::time::Duration::from_millis(v.max(floor))
+}
+
+impl DurableState {
+    /// server.ts: `log-sessions` + `log-offsets` delta logs, `log-delta-version.json`, offsets
+    /// every AGENTLENS_OFFSETS_SAVE_MS (default 60s, floor 10s), cards every
+    /// AGENTLENS_CARDS_SAVE_MS (default 5min, floor 30s) — cadence, not debounce, is the lever
+    /// against SSD wear.
+    pub fn open(data_dir: &Path) -> DurableState {
+        let now = Instant::now();
+        DurableState {
+            cards: crate::delta_log::DeltaLog::new(data_dir, "log-sessions"),
+            offsets: crate::delta_log::DeltaLog::new(data_dir, "log-offsets"),
+            version_file: data_dir.join("log-delta-version.json"),
+            offsets_save: env_ms("AGENTLENS_OFFSETS_SAVE_MS", 60_000, 10_000),
+            cards_save: env_ms("AGENTLENS_CARDS_SAVE_MS", 300_000, 30_000),
+            last_timer: now,
+            last_cards_save: now,
+            offsets_dirty: false,
+            cards_dirty: false,
+        }
+    }
+
+    fn version_is_current(&self) -> bool {
+        std::fs::read_to_string(&self.version_file)
+            .ok()
+            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+            .and_then(|v| v.get("v").and_then(Value::as_u64))
+            == Some(LOG_INGEST_VERSION)
+    }
+
+    fn stamp_version(&self) {
+        let tmp = PathBuf::from(format!("{}.tmp", self.version_file.display()));
+        if std::fs::write(&tmp, format!("{{\"v\":{LOG_INGEST_VERSION}}}")).is_ok() {
+            let _ = std::fs::rename(&tmp, &self.version_file);
+        }
+    }
+
+    /// The restore (server.ts startup): when the delta logs are CURRENT, restored cards go into
+    /// the map (timelines capped, then the global tier) and the offsets seed the tailer's gate.
+    /// Returns (restored cards, imported offsets, skipped offsets); version-stale logs restore
+    /// nothing and are tombstoned by the next save.
+    pub fn restore(&mut self, tailer: &mut LogTailer, state: &mut crate::CoreState) -> Result<(usize, usize, usize), String> {
+        let cards = self.cards.load()?;
+        let offsets = self.offsets.load()?;
+        if !self.version_is_current() {
+            if !cards.is_empty() || !offsets.is_empty() {
+                eprintln!("alcore: log-ingest semantics changed (v{LOG_INGEST_VERSION}) — cold-rescanning; stale delta-log entries are tombstoned on the next durable save");
+            }
+            return Ok((0, 0, 0));
+        }
+        let restored = cards.len();
+        if restored > 0 {
+            let (max_entries, max_bytes) = (timeline_max_entries(), timeline_max_bytes());
+            for (_, mut card) in cards {
+                // Normalize on restore (TRDD-66IXMIGN): a log written before the cap may hold giant
+                // timelines; loading them uncapped rebuilds the very heap the cap prevents.
+                if let Some(obj) = card.as_object_mut() {
+                    if let Some(Value::Array(tl)) = obj.get_mut("timeline") {
+                        let evicted = crate::summarize::retention::cap_timeline(tl, max_entries, max_bytes);
+                        if evicted > 0 {
+                            let prev = obj.get("timelineTruncatedCount").and_then(Value::as_u64).unwrap_or(0);
+                            obj.insert("timelineTruncatedCount".into(), Value::from(prev + evicted as u64));
+                        }
+                    }
+                }
+                state.put_log_session(card);
+            }
+            state.demote_cold_timelines(crate::summarize::retention::timeline_hot_cards());
+        }
+        let (imported, skipped) = tailer.import_file_state(&offsets);
+        Ok((restored, imported, skipped))
+    }
+
+    /// scheduleDurableSave — a sweep produced cards: both sidecars are dirty.
+    pub fn mark_dirty(&mut self) {
+        self.offsets_dirty = true;
+        self.cards_dirty = true;
+    }
+
+    fn save_offsets(&mut self, tailer: &LogTailer) {
+        match self.offsets.save(&tailer.export_file_state()) {
+            Ok(r) if r.bytes > 0 => self.stamp_version(),
+            Ok(_) => {}
+            Err(e) => eprintln!("alcore: could not save log offsets: {e}"),
+        }
+    }
+
+    fn save_cards(&mut self, state: &std::sync::Mutex<crate::CoreState>) {
+        let records: IndexMap<String, Value> = {
+            let st = state.lock().expect("core state");
+            st.log_sessions.iter().map(|(id, c)| (id.clone(), strip_card_for_persist(c))).collect()
+        };
+        match self.cards.save(&records) {
+            Ok(r) if r.bytes > 0 => self.stamp_version(),
+            Ok(_) => {}
+            Err(e) => eprintln!("alcore: could not save log cards: {e}"),
+        }
+        self.last_cards_save = Instant::now();
+    }
+
+    /// The durable-save timer (server.ts): every offsets_save — offsets when dirty, cards when
+    /// dirty AND their own (slower) cadence elapsed. `force` (shutdown) flushes both now — a
+    /// graceful stop loses nothing; an unchanged save costs zero bytes either way.
+    pub fn tick(&mut self, tailer: &LogTailer, state: &std::sync::Mutex<crate::CoreState>, force: bool) {
+        if force {
+            self.save_offsets(tailer);
+            self.save_cards(state);
+            self.offsets_dirty = false;
+            self.cards_dirty = false;
+            return;
+        }
+        let now = Instant::now();
+        if now.duration_since(self.last_timer) < self.offsets_save {
+            return;
+        }
+        self.last_timer = now;
+        if self.offsets_dirty {
+            self.offsets_dirty = false;
+            self.save_offsets(tailer);
+        }
+        if self.cards_dirty && now.duration_since(self.last_cards_save) >= self.cards_save {
+            self.cards_dirty = false;
+            self.save_cards(state);
+        }
+    }
+}
+
+/// What the sweeper thread reports once the boot sequence has run.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BootReport {
+    pub restored_cards: usize,
+    pub offsets_imported: usize,
+    pub offsets_skipped: usize,
+    pub sweep: SweepStats,
+}
+
+/// A handle to stop the sweeper: `stop()` wakes the thread, which flushes the durable state and
+/// exits; the join makes the flush complete before the process does.
+pub struct SweeperHandle {
+    stop: std::sync::mpsc::Sender<()>,
+    join: Option<std::thread::JoinHandle<()>>,
+}
+
+impl SweeperHandle {
+    pub fn stop(mut self) {
+        let _ = self.stop.send(());
+        if let Some(j) = self.join.take() {
+            let _ = j.join();
+        }
+    }
+}
+
+/// The log reader's thread: restore the durable state, run the boot sweep (reported once
+/// ingested, so the caller binds its listeners with the card map already populated — the TS
+/// server's synchronous boot batch), then a sweep every `interval` until stopped (TS falls back
+/// to a 5s full poll when fs.watch is unavailable; a notify-based watcher with the 60s backstop
+/// is a later slice), saving offsets/cards on their cadences. The tailer is `!Send`, so it is
+/// created ON this thread and never leaves it.
 pub fn start_sweeper(
     state: std::sync::Arc<std::sync::Mutex<crate::CoreState>>,
     env: Env,
+    data_dir: PathBuf,
     interval: std::time::Duration,
-) -> Result<SweepStats, String> {
-    let (tx, rx) = std::sync::mpsc::channel::<SweepStats>();
-    std::thread::Builder::new()
+) -> Result<(BootReport, SweeperHandle), String> {
+    let (boot_tx, boot_rx) = std::sync::mpsc::channel::<Result<BootReport, String>>();
+    let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
+    let join = std::thread::Builder::new()
         .name("log-sweeper".into())
         .spawn(move || {
             let mut tailer = LogTailer::default();
-            let (scanned, stats) = tailer.sweep(&env, crate::now_ms());
+            let mut durable = DurableState::open(&data_dir);
+            let restored = {
+                let mut st = state.lock().expect("core state");
+                durable.restore(&mut tailer, &mut st)
+            };
+            let (restored_cards, offsets_imported, offsets_skipped) = match restored {
+                Ok(r) => r,
+                Err(e) => {
+                    let _ = boot_tx.send(Err(e));
+                    return;
+                }
+            };
+            let (scanned, sweep) = tailer.sweep(&env, crate::now_ms());
+            if !scanned.is_empty() {
+                durable.mark_dirty();
+            }
             state.lock().expect("core state").ingest_scanned(scanned);
-            let _ = tx.send(stats);
+            let _ = boot_tx.send(Ok(BootReport { restored_cards, offsets_imported, offsets_skipped, sweep }));
             loop {
-                std::thread::sleep(interval);
+                // recv_timeout doubles as the sleep: a stop request wakes the loop immediately.
+                if stop_rx.recv_timeout(interval).is_ok() {
+                    durable.tick(&tailer, &state, true);
+                    return;
+                }
                 let (scanned, _) = tailer.sweep(&env, crate::now_ms());
                 if !scanned.is_empty() {
+                    durable.mark_dirty();
                     state.lock().expect("core state").ingest_scanned(scanned);
                 }
+                durable.tick(&tailer, &state, false);
             }
         })
         .map_err(|e| format!("log-sweeper thread: {e}"))?;
-    rx.recv().map_err(|_| "log-sweeper died during the boot sweep".to_owned())
+    let report = boot_rx.recv().map_err(|_| "log-sweeper died during the boot sweep".to_owned())??;
+    Ok((report, SweeperHandle { stop: stop_tx, join: Some(join) }))
 }
 
 /// A card's last-active instant for the global timeline tier: Date.parse(startTime) + durationMs

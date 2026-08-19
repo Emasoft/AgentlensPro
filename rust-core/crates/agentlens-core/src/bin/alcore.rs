@@ -69,20 +69,32 @@ fn main() {
     }
     let state = Arc::new(Mutex::new(agentlens_core::CoreState::open(&spans_dir)));
 
+    let mut sweeper: Option<agentlens_core::log_reader::SweeperHandle> = None;
     if log_scan {
         // The boot sweep is synchronous (the card map is populated before the listeners bind);
         // the same thread then re-sweeps every LOG_SWEEP_INTERVAL, touching only files whose
         // stat moved (P5d tail + offset gate).
         let env = agentlens_logscan::discovery::Env::from_process();
-        match agentlens_core::log_reader::start_sweeper(state.clone(), env, LOG_SWEEP_INTERVAL) {
-            Ok(stats) => println!(
-                "alcore: log scan files={} parsed={} cards={} elapsed_ms={} threads={}",
-                stats.files,
-                stats.parsed,
-                stats.cards,
-                stats.elapsed_ms,
-                rayon::current_num_threads()
-            ),
+        match agentlens_core::log_reader::start_sweeper(state.clone(), env, std::path::PathBuf::from(&data_dir), LOG_SWEEP_INTERVAL) {
+            Ok((boot, handle)) => {
+                if boot.restored_cards > 0 || boot.offsets_imported > 0 {
+                    println!(
+                        "alcore: resumed {} log tail offsets ({} invalid/rotated → cold read); restored {} session cards",
+                        boot.offsets_imported, boot.offsets_skipped, boot.restored_cards
+                    );
+                }
+                let s = boot.sweep;
+                println!(
+                    "alcore: log scan files={} changed={} parsed={} cards={} elapsed_ms={} threads={}",
+                    s.files,
+                    s.changed,
+                    s.parsed,
+                    s.cards,
+                    s.elapsed_ms,
+                    rayon::current_num_threads()
+                );
+                sweeper = Some(handle);
+            }
             Err(e) => {
                 eprintln!("alcore: {e}");
                 exit(1);
@@ -136,7 +148,11 @@ fn main() {
         }
     });
     // Flush on the way out — the writer buffers, and losing the tail on SIGINT would be a
-    // silent hole the store cannot detect.
+    // silent hole the store cannot detect. The sweeper flushes the durable state (offsets +
+    // cards) the same way: a graceful stop loses nothing.
+    if let Some(h) = sweeper.take() {
+        h.stop();
+    }
     if let Ok(mut st) = state.lock() {
         st.writer.flush();
     };

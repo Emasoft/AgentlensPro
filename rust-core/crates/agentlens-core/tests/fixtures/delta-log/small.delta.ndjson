@@ -1,0 +1,6 @@
+{"k":"a","v":{"sessionId":"a","inputTokens":10,"title":"só 𝄞 unicode","nested":{"x":[1,2.5,null],"y":false}}}
+{"k":"b","v":{"sessionId":"b","inputTokens":0.1,"startTime":"2026-08-01T10:00:00.000Z"}}
+{"k":"c","v":{"sessionId":"c","inputTokens":1e+21,"big":9007199254740992}}
+{"k":"a","v":{"sessionId":"a","inputTokens":11,"title":"só 𝄞 unicode","nested":{"x":[1,2.5,null],"y":false}}}
+{"k":"b","d":1}
+{"k":"torn","v":{"half

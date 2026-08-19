@@ -28,6 +28,7 @@ use serde_json::Value;
 use agentlens_ingest::IngestState;
 use agentlens_spanstore::writer::SpanStoreWriter;
 
+pub mod delta_log;
 pub mod feed_merge;
 pub mod log_reader;
 pub mod pricing;
