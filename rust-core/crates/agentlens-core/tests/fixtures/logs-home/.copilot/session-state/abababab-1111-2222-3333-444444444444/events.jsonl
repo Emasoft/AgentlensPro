@@ -1,0 +1,5 @@
+{"timestamp":"2026-08-01T10:00:00.000Z","type":"session.start","data":{"sessionId":"abababab","selectedModel":"gpt-5","startTime":"2026-08-01T10:00:00.000Z","context":{"cwd":"/Users/someone/cp-proj"}}}
+{"timestamp":"2026-08-01T10:00:01.000Z","type":"user.message","data":{"transformedContent":"<current_datetime>now</current_datetime>\n<system_reminder>\nstuff\n</system_reminder>\nplease fix the parser"}}
+{"timestamp":"2026-08-01T10:00:02.000Z","type":"assistant.message","data":{"outputTokens":40,"model":"gpt-5-mini","toolRequests":[{"name":"edit","arguments":{"path":"/Users/someone/cp-proj/a.ts"}},{"name":"bash","arguments":{}}]}}
+{"timestamp":"2026-08-01T10:00:03.000Z","type":"assistant.message","data":{"outputTokens":15}}
+{"timestamp":"2026-08-01T10:00:04.000Z","type":"session.shutdown","data":{"currentTokens":99999,"modelMetrics":{"gpt-5":{"usage":{"inputTokens":500,"cacheReadTokens":200,"cacheWriteTokens":30}},"gpt-5-mini":{"usage":{"inputTokens":100,"cacheReadTokens":0,"cacheWriteTokens":0}}}}}

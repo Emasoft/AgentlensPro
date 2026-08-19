@@ -1,9 +1,13 @@
 //! alcore — the Rust server binary (TRDD-DMWOBWFH P4). P4c: OTLP listener; P4e: the UI/API
 //! listener (`GET /api/summary` over the live span window).
 //!
-//!   alcore serve --data-dir DIR [--otlp-port N] [--ui-port N] [--bind HOST]
+//!   alcore serve --data-dir DIR [--otlp-port N] [--ui-port N] [--bind HOST] [--no-log-scan]
 //!
 //! Spans land in `<data-dir>/spans` (the same segmented NDJSON store both engines read).
+//! P5b: on start the local session logs (Claude/Codex/Copilot/OpenCode) are discovered and
+//! parsed in parallel INTO the card map before the listeners bind — the TS server does the same
+//! synchronously so the first page load is never blank. `--no-log-scan` keeps the window empty
+//! (socket tests, a pure-OTLP deployment).
 //! Default ports are 4319/3001 — NOT 4318/3000: the TS server still owns the canonical ports
 //! until the P4 cutover, and 4318 doubles as the canonicality key (server.ts IS_CANONICAL).
 
@@ -12,7 +16,7 @@ use std::sync::{Arc, Mutex};
 
 fn usage(msg: &str) -> ! {
     eprintln!("alcore: {msg}");
-    eprintln!("usage: alcore serve --data-dir DIR [--otlp-port N] [--ui-port N] [--bind HOST]");
+    eprintln!("usage: alcore serve --data-dir DIR [--otlp-port N] [--ui-port N] [--bind HOST] [--no-log-scan]");
     exit(64);
 }
 
@@ -25,9 +29,11 @@ fn main() {
     let mut port: u16 = 4319;
     let mut ui_port: u16 = 3001;
     let mut bind = "127.0.0.1".to_owned();
+    let mut log_scan = true;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
+            "--no-log-scan" => log_scan = false,
             "--data-dir" => {
                 i += 1;
                 data_dir = args.get(i).cloned().unwrap_or_else(|| usage("--data-dir needs a path"));
@@ -57,6 +63,19 @@ fn main() {
         exit(1);
     }
     let state = Arc::new(Mutex::new(agentlens_core::CoreState::open(&spans_dir)));
+
+    if log_scan {
+        let env = agentlens_logscan::discovery::Env::from_process();
+        let stats = state.lock().expect("state").run_cold_log_scan(&env);
+        println!(
+            "alcore: log scan files={} parsed={} cards={} elapsed_ms={} threads={}",
+            stats.files,
+            stats.parsed,
+            stats.cards,
+            stats.elapsed_ms,
+            rayon::current_num_threads()
+        );
+    }
 
     let rt = tokio::runtime::Runtime::new().unwrap_or_else(|e| {
         eprintln!("alcore: runtime: {e}");

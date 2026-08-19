@@ -39,6 +39,20 @@ pub fn timeline_max_bytes() -> usize {
     *V.get_or_init(|| resolve_positive_int("AGENTLENS_TIMELINE_MAX_BYTES", DEFAULT_TIMELINE_MAX_BYTES, MIN_BYTES_FLOOR))
 }
 
+/// AGENTLENS_TIMELINE_HOT_AGE_HOURS → default 24h, floor 1h, as epoch-delta ms. Memoized. A card
+/// whose last activity is older than this leaves the log reader WITHOUT a timeline (P5b strip).
+pub fn timeline_hot_age_ms() -> i64 {
+    static V: OnceLock<i64> = OnceLock::new();
+    *V.get_or_init(|| resolve_positive_int("AGENTLENS_TIMELINE_HOT_AGE_HOURS", 24, 1) as i64 * 3_600_000)
+}
+
+/// AGENTLENS_TIMELINE_HOT_CARDS → default 50, floor 1 (server.ts TIMELINE_HOT_CARDS): the GLOBAL
+/// tier — only the K most-recently-active log cards keep timelines in RAM. Memoized.
+pub fn timeline_hot_cards() -> usize {
+    static V: OnceLock<usize> = OnceLock::new();
+    *V.get_or_init(|| resolve_positive_int("AGENTLENS_TIMELINE_HOT_CARDS", 50, 1))
+}
+
 fn utf16_len(s: &str) -> usize {
     s.chars().map(char::len_utf16).sum()
 }

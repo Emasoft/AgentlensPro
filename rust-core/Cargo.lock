@@ -13,12 +13,15 @@ name = "agentlens-core"
 version = "0.1.0"
 dependencies = [
  "agentlens-ingest",
+ "agentlens-logscan",
  "agentlens-spanstore",
  "bytes",
  "futures-core",
  "http-body-util",
  "hyper",
  "hyper-util",
+ "indexmap",
+ "rayon",
  "regex",
  "serde_json",
  "tokio",

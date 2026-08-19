@@ -1,0 +1,5 @@
+{"kind":0,"v":{"creationDate":1785578400000,"sessionId":"acacacac","inputState":{"selectedModel":{"id":"copilot/gpt-4.1","metadata":{"family":"gpt-4.1"}}}}}
+{"kind":2,"k":["requests"],"v":[{"timestamp":1785578401000,"message":{"text":"refactor the auth module"},"modelId":"copilot/gpt-4.1"}]}
+{"kind":1,"k":["requests",0,"completionTokens"],"v":33}
+{"kind":2,"k":["requests"],"v":[{"timestamp":1785578402000,"completionTokens":21}]}
+{"kind":1,"k":["requests",1,"result"],"v":{"usage":{"completionTokens":22,"promptTokens":400}}}

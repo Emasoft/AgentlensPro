@@ -22,12 +22,14 @@ use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response};
+use indexmap::IndexMap;
 use serde_json::Value;
 
 use agentlens_ingest::IngestState;
 use agentlens_spanstore::writer::SpanStoreWriter;
 
 pub mod feed_merge;
+pub mod log_reader;
 pub mod pricing;
 pub mod session_store;
 pub mod summarize;
@@ -75,20 +77,50 @@ pub struct CoreState {
     /// bundle mtimes there; here the process start, the same "changes on restart" contract).
     pub build_id: String,
     /// Log-derived session cards keyed by sessionId (server.ts `logSessions`), merged into the
-    /// served summary under the feed-collision doctrine (feed_merge.rs). Fed by the log-reader
-    /// slice; `put_log_session` is the one write path and bumps data_version.
-    pub log_sessions: Vec<(String, Value)>,
+    /// served summary under the feed-collision doctrine (feed_merge.rs). Fed by the log reader
+    /// (log_reader.rs); `put_log_session` is the one write path and bumps data_version. An
+    /// IndexMap: insertion order kept like the JS Map, O(1) upsert (a 13k-card boot would be
+    /// quadratic on a Vec).
+    pub log_sessions: IndexMap<String, Value>,
 }
 
 impl CoreState {
-    /// putLogSession — upsert by sessionId (insertion order kept, as a JS Map does).
+    /// putLogSession — upsert by sessionId.
     pub fn put_log_session(&mut self, card: Value) {
         let id = card.get("sessionId").and_then(Value::as_str).unwrap_or("").to_owned();
-        match self.log_sessions.iter_mut().find(|(k, _)| *k == id) {
-            Some((_, v)) => *v = card,
-            None => self.log_sessions.push((id, card)),
-        }
+        self.log_sessions.insert(id, card);
         self.data_version += 1;
+    }
+
+    /// demoteColdTimelines (server.ts, TRDD-66IXMIGN fifth repro): per-card bounds are not
+    /// sufficient on a ~13k-session machine — only the `hot_cards` most-recently-active cards
+    /// keep their timelines in RAM; every colder card keeps headers only.
+    pub fn demote_cold_timelines(&mut self, hot_cards: usize) {
+        if self.log_sessions.len() <= hot_cards {
+            return;
+        }
+        let mut order: Vec<(f64, usize)> =
+            self.log_sessions.values().enumerate().map(|(i, c)| (log_reader::last_active_ms(c), i)).collect();
+        // Newest first; a stable sort keeps insertion order among ties, as the JS sort does.
+        order.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        for (_, i) in order.into_iter().skip(hot_cards) {
+            if let Some(obj) = self.log_sessions.get_index_mut(i).and_then(|(_, c)| c.as_object_mut()) {
+                log_reader::strip_timeline_value(obj);
+            }
+        }
+    }
+
+    /// The cold boot scan into the card map: every finished card through put_log_session, then
+    /// the global timeline tier. Returns the scan stats for the startup log line.
+    pub fn run_cold_log_scan(&mut self, env: &agentlens_logscan::discovery::Env) -> log_reader::ScanStats {
+        let (scanned, stats) = log_reader::cold_scan(env, now_ms());
+        for s in scanned {
+            for card in s.cards {
+                self.put_log_session(card);
+            }
+        }
+        self.demote_cold_timelines(summarize::retention::timeline_hot_cards());
+        stats
     }
 
     /// computeSessionSummary (server.ts:2240) — summarizeSpans over the live window, then, when
@@ -124,7 +156,7 @@ impl CoreState {
             store: session_store::SessionStore::new(now as f64),
             data_version: 0,
             build_id: now.to_string(),
-            log_sessions: Vec::new(),
+            log_sessions: IndexMap::new(),
         }
     }
 }

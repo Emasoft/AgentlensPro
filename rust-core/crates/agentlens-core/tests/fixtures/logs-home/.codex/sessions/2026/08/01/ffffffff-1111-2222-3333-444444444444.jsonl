@@ -1,0 +1,5 @@
+{"timestamp":"2026-08-01T10:00:00.000Z","type":"session_meta","payload":{"cwd":"/Users/someone/codex-proj"}}
+{"timestamp":"2026-08-01T10:00:00.500Z","type":"turn_context","payload":{"model":"gpt-5-codex"}}
+{"timestamp":"2026-08-01T10:00:01.000Z","type":"event_msg","payload":{"type":"user_message","message":"# Context from my IDE setup:\n\n## Active file: x.ts\n\n## My request for Codex:\nfix the é bug"}}
+{"timestamp":"2026-08-01T10:00:02.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":400,"output_tokens":50,"reasoning_output_tokens":25},"last_token_usage":{"input_tokens":1000}}}}
+{"timestamp":"2026-08-01T10:00:03.000Z","type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5-codex-high","total_token_usage":{"input_tokens":2500,"cached_input_tokens":900,"output_tokens":120,"reasoning_output_tokens":60},"last_token_usage":{"input_tokens":1500}}}}

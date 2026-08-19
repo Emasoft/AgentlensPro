@@ -8,6 +8,11 @@ license.workspace = true
 [dependencies]
 agentlens-ingest = { path = "../agentlens-ingest" }
 agentlens-spanstore = { path = "../agentlens-spanstore" }
+# P5b: the log reader is a LIBRARY call into the logscan crate (discovery + the per-source
+# parsers), not an exec of allogscan — no NDJSON pipe, no second process, cards land directly.
+agentlens-logscan = { path = "../agentlens-logscan" }
+rayon = "1"
+indexmap = "2"
 # preserve_order: wire objects keep TS insertion order (feature-unified workspace-wide anyway,
 # but stated here so a lone build of this crate cannot silently lose it).
 # float_roundtrip: serde_json's DEFAULT float parse is best-effort and read the codex fixture's
