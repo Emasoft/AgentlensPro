@@ -332,15 +332,24 @@ release-via: publish
   where parity on that surface lives. Deferred in the finish step, each with a note in
   log_reader.rs head: accountId, generated-files attach, statusline overlay, OpenCode JSON
   fallback on db error.
-- **NEXT ACTION (one step): P5d — incremental tail + the fileState/offset gate**: keep a
-  per-file `{bytes_read, mtime_ms}` map in CoreState (TS `fileState`), a periodic rescan
-  (server.ts full-sweep timer + the fs.watch-hinted targeted scan — a notify-based watcher
-  can come later; start with the timer) that re-parses ONLY files whose size/mtime moved,
-  feeding `put_log_session` so the SSE push carries growth; the P2 TS incremental parser
-  keeps an accumulator per file — port that (`_incrementalParse` + accumCache) or, if the
-  per-file parse is fast enough, re-parse the whole grown file (measure on the largest
-  transcript first). OpenCode's 2-stat gate (db + -wal mtime). Then P5c (accountId registry,
-  generated-files attach), P5e persisted offsets + cards, `/api/server-stats`.
+- **P5d DONE (commit 97d2c95) — incremental tail + the fileState/offset gate.**
+  `log_reader::LogTailer` (= LogReader.fileState + accumCache + _incrementalParse): per-file
+  `{bytes_read, mtime_ms, ino, size}`, stat-gated sweep, Claude/Codex through the accumulator
+  path (resume iff cached accumulator + same inode + not shrunk, else from 0 which caches it),
+  Copilot whole re-read (256MB cap), OpenCode db+wal 2-stat gate, partial trailing line never
+  consumed, LRU 24 accumulators. `start_sweeper` = ONE thread (the accumulators hold Rc
+  entries → !Send): boot sweep synchronous, then every 5s (TS's no-watcher fallback cadence).
+  Tests: tailed card Value-equal to a from-0 parse after every growth step, read-kind counters
+  pin tail vs from-0, partial-line carry, shrink → from 0. Live: this session's card advanced
+  within one sweep. 66/66.
+- **NEXT ACTION (one step): P5e — persisted offsets + cards for a fast restart** (server.ts
+  TRDD-PJC8N1HO: `exportFileState`/`importFileState` + the persisted-card file, the
+  `restoredFromDisk` branch that SKIPS the cold rescan, `stripCardForPersist`, the 30s durable
+  save + the save-on-scan). Read the TS persistence format first (the file under the data dir
+  and its ino/size validation on import) and write the SAME format so a cutover restart reads
+  either engine's file. Then P5c (accountId registry, generated-files attach), a notify-based
+  watcher (60s backstop), `/api/server-stats`, and the perf notes under P5b (skip timeline
+  retention for cold files; memoize the stripped summary by data_version).
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
