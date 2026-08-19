@@ -281,17 +281,26 @@ release-via: publish
   scheduled change on the CALL's timestamp, 1h-rate derivation, >200K tiering). Parity: 321
   oracle cases BIT-EXACT. Workspace 54/54. DISCIPLINE: after ANY pricing.ts edit run
   `node scripts/export-pricing.js` then regenerate pricing-expected.json.
-- **NEXT ACTION (one step): P4f.2 — the SSE `/events` stream** (report §1.3): `:\n\n` preamble
-  then `data: <update payload>\n\n` on connect + the 4 s coalesced push; update payload =
-  `{type:'update', buildId, summary:{toolCalls:{}}, sessionSummary:<stripped>, sidebar
-  (computeSidebarData, server.ts:2302), analyticsData (computeAnalyticsData, 2349),
-  collectorGaps:[], …computeSidebarPayload (2227, top-level isActive/lastActivityMs/
-  sessionCount/agentSources/currentSession/burnRate/avgInputTokens/avgOutputTokens)}`. All three
-  computations are pure functions of (summary, spans, now) and live INLINE in server.ts — port
-  them into a `ui/update_payload.rs` with a TS oracle (they are not exported: the generator must
-  drive them through the compiled server module or a small extracted test seam — prefer adding
-  `export` to the three functions, like RATES). burnStatus/sessionChanged/alert frames are later
-  slices (they need the burn investigator / log-scan wiring).
+- **P4f.2 DONE (commit de3055f) — SSE `/events` live on alcore with the 4 s coalesced update
+  push.** The three inline payload derivations moved VERBATIM out of server.ts into
+  `src/updatePayload.ts` (the oracle seam; server.ts imports them) and are ported in
+  `update_payload.rs` + buildUpdatePayload frame assembly; `ui.rs` gained the SseHub
+  (tokio broadcast → per-client queue), `run_push_loop` (tick every PUSH_COALESCE_MS, rebuild
+  only when `CoreState.data_version` moved), and the `/events` route (ANY method, chunked like
+  Node). Parity: update_payload_parity (fixture + crafted summary pinning burnRate/priced
+  costUsd/multi-day/''-startTime + empty literals) and a real-socket SSE test (ping → connect
+  frame → OTLP POST → pushed frame in-window). Workspace 56/56; tsc/eslint/esbuild green.
+  GOTCHA: both engines stream `Transfer-Encoding: chunked`; the freeze's "first bytes `:\n\n`"
+  is the DECODED stream — raw-socket tests must de-chunk.
+  Not in this slice (later, need other subsystems): sessionChanged (log-scan wiring), burnStatus
+  (burn investigator), alert frames, collectorGaps (collector lifecycle), admission 503s.
+- **NEXT ACTION (one step): P4g — `/api/server-stats`** (report §1.4, EXACT key order; needs
+  the store index + memory figures; `canonical` keys on OTLP_PORT===4318) — OR re-prioritize to
+  the log-scan wiring so `/api/summary` + `/events` carry the log-session merge (feedMergePolicy)
+  and stop being OTEL-only. Recommend the log-scan wiring first: it is what makes the Rust
+  `/api/summary` content-complete for the dashboard, and P2's allogscan already parses every
+  source — the missing piece is `mergeOtelAndLogSessions` (server.ts:2417+) + the in-process
+  log reader loop. Read server.ts:2389-2470 first.
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
