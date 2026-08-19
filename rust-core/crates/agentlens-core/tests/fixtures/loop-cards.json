@@ -1,0 +1,58 @@
+[
+  {
+    "userRequest": "hello",
+    "totalLlmCalls": 1, "totalToolCalls": 1,
+    "filesRead": [], "filesChanged": [], "filesSearched": [],
+    "timeline": [
+      { "type": "tool", "label": "Read a", "isError": false }
+    ]
+  },
+  {
+    "userRequest": "implement the parser",
+    "totalLlmCalls": 2, "totalToolCalls": 8,
+    "filesRead": [], "filesChanged": [], "filesSearched": [],
+    "timeline": [
+      { "type": "tool", "label": "Read util.ts", "isError": false },
+      { "type": "tool", "label": "Read util.ts", "isError": false },
+      { "type": "tool", "label": "Read util.ts", "isError": false },
+      { "type": "tool", "label": "Read util.ts", "isError": false },
+      { "type": "tool", "label": "Read util.ts", "isError": false },
+      { "type": "tool", "label": "Bash a1", "isError": true, "errorMessage": "ENOENT: no such file or directory" },
+      { "type": "tool", "label": "Bash a2", "isError": true, "errorMessage": "ENOENT: no such file or directory" },
+      { "type": "tool", "label": "Bash a3", "isError": true, "errorMessage": "ENOENT: no such file or directory" }
+    ]
+  },
+  {
+    "userRequest": "rename the variable",
+    "totalLlmCalls": 1, "totalToolCalls": 3,
+    "filesRead": [], "filesChanged": [], "filesSearched": [],
+    "timeline": [
+      { "type": "tool", "label": "Edit b.ts", "isError": false,
+        "editDetails": [ { "filePath": "/a/b.ts", "oldString": "X", "newString": "Y" } ] },
+      { "type": "tool", "label": "Edit b.ts again", "isError": false,
+        "editDetails": [
+          { "filePath": "/a/b.ts", "oldString": "Y", "newString": "X" },
+          { "filePath": "/a/c.ts", "oldString": "1", "newString": "2" }
+        ] },
+      { "type": "tool", "label": "Edit c.ts", "isError": false,
+        "editDetails": [ { "filePath": "/a/c.ts", "oldString": "2", "newString": "3" } ] }
+    ]
+  },
+  {
+    "userRequest": "fix typo in readme",
+    "totalLlmCalls": 30, "totalToolCalls": 40,
+    "filesRead": [], "filesChanged": [], "filesSearched": [],
+    "timeline": [
+      { "type": "llm", "label": "m", "inputTokens": 1000, "outputTokens": 500, "isError": false },
+      { "type": "llm", "label": "m", "inputTokens": 5000, "outputTokens": 300, "isError": false },
+      { "type": "llm", "label": "m", "inputTokens": 12000, "outputTokens": 100, "isError": false },
+      { "type": "llm", "label": "m", "inputTokens": 17000, "outputTokens": 20, "isError": false }
+    ]
+  },
+  {
+    "userRequest": "polish",
+    "totalLlmCalls": 45, "totalToolCalls": 40,
+    "filesRead": ["a", "b", "c"], "filesChanged": ["d", "e", "f"], "filesSearched": ["g", "h", "c"],
+    "timeline": []
+  }
+]

@@ -1,0 +1,82 @@
+[
+ [],
+ [
+  {
+   "type": "exact_tool_repeat",
+   "severity": "critical",
+   "evidence": "1 tool call(s) executed identically 3+ times",
+   "count": 5,
+   "examples": [
+    "\"Read util.ts\" ×5"
+   ],
+   "patternName": "Tool Call Deadlock",
+   "action": "The agent is calling the same tool with identical arguments repeatedly, usually because it isn't using or retaining the result. Add explicit context-retention instructions: \"After reading a file, do not re-read it unless you have made changes.\" Or scope the task more narrowly so the agent can complete it without re-querying the same resource."
+  },
+  {
+   "type": "error_recurrence",
+   "severity": "warning",
+   "evidence": "1 error(s) recurring 3+ times",
+   "count": 3,
+   "examples": [
+    "\"ENOENT: no such file or directory\" ×3"
+   ],
+   "patternName": "Hallucination Amplification Loop",
+   "action": "The same error is repeating, which means the agent's fix attempts are not resolving the root cause. This often happens with missing packages, wrong file paths, or hallucinated API names. Verify the package/function exists before asking the agent to use it. If the error persists after 2 attempts, intervene manually rather than asking the agent to retry."
+  }
+ ],
+ [
+  {
+   "type": "edit_revert_cycle",
+   "severity": "critical",
+   "evidence": "1 file(s) were edited then reverted to a prior state",
+   "count": 1,
+   "examples": [
+    "b.ts"
+   ],
+   "patternName": "State Corruption Spiral",
+   "action": "The agent is oscillating between two file states — a sign it is trying to reconcile conflicting constraints. Clarify success criteria upfront: provide the exact final state you want, not iterative instructions. If you are using \"make it pass the tests\", ensure the tests are deterministic and not themselves the source of the conflict."
+  }
+ ],
+ [
+  {
+   "type": "runaway_steps",
+   "severity": "critical",
+   "evidence": "70 steps for a simple task (threshold: 15)",
+   "count": 70,
+   "examples": [
+    "30 LLM calls",
+    "40 tool calls",
+    "\"fix typo in readme\""
+   ],
+   "patternName": "Ambiguous Success / Escalating Scope",
+   "action": "The session used far more steps than expected for this type of task — a sign of unclear success criteria, escalating scope, or a loop. Break the task into smaller, explicitly scoped subtasks with clear completion conditions. Avoid open-ended instructions like \"fix all the bugs\" or \"clean up the code\" with no stopping condition."
+  },
+  {
+   "type": "token_runaway",
+   "severity": "warning",
+   "evidence": "Input grew 16,000 tokens across 4 LLM calls while output ratio collapsed (50.0% → 0.1%)",
+   "count": 4,
+   "examples": [
+    "First call: 1,000 in → 500 out",
+    "Last call:  17,000 in → 20 out"
+   ],
+   "patternName": "Infinite Loop — Context Accumulation",
+   "action": "Input context is growing rapidly while useful output is declining — the agent is accumulating context without making forward progress. This pattern often accompanies tool-call loops or repeated failed fixes. Start a fresh session with a focused prompt, or explicitly tell the agent what it has already tried and what to do differently."
+  }
+ ],
+ [
+  {
+   "type": "runaway_steps",
+   "severity": "warning",
+   "evidence": "85 steps for a complex task (threshold: 80)",
+   "count": 85,
+   "examples": [
+    "45 LLM calls",
+    "40 tool calls",
+    "\"polish\""
+   ],
+   "patternName": "Ambiguous Success / Escalating Scope",
+   "action": "The session used far more steps than expected for this type of task — a sign of unclear success criteria, escalating scope, or a loop. Break the task into smaller, explicitly scoped subtasks with clear completion conditions. Avoid open-ended instructions like \"fix all the bugs\" or \"clean up the code\" with no stopping condition."
+  }
+ ]
+]
