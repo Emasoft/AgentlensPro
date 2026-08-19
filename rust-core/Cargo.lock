@@ -21,6 +21,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "indexmap",
+ "libc",
  "rayon",
  "regex",
  "serde_json",

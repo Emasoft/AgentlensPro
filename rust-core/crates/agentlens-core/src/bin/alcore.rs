@@ -69,7 +69,11 @@ fn main() {
     }
     let state = Arc::new(Mutex::new(agentlens_core::CoreState::open(std::path::Path::new(&data_dir))));
     {
-        let st = state.lock().expect("state");
+        let mut st = state.lock().expect("state");
+        // What /api/server-stats reports as `ports` — the listeners this process binds (mcp stays
+        // the configured TS default: no MCP listener in the core yet).
+        st.ports.ui = ui_port;
+        st.ports.otlp = port;
         let (segments, total_spans, _) = st.writer.stats();
         println!(
             "alcore: loaded {} span(s) (last {}h window) from {} — store holds {total_spans} span(s) across {segments} segment(s), nothing evicted",
@@ -127,7 +131,7 @@ fn main() {
             tick.tick().await;
             if let Ok(mut st) = flush_state.lock() {
                 if st.writer.pending_appends() > 0 {
-                    st.writer.flush();
+                    st.flush_spans();
                 }
                 st.prune_window(agentlens_core::now_ms());
             }
@@ -166,6 +170,6 @@ fn main() {
         h.stop();
     }
     if let Ok(mut st) = state.lock() {
-        st.writer.flush();
+        st.flush_spans();
     };
 }

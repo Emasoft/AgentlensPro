@@ -559,9 +559,16 @@ impl DurableState {
         self.cards_dirty = true;
     }
 
-    fn save_offsets(&mut self, tailer: &LogTailer) {
+    /// saveOffsetsNow — a save that wrote bytes counts as one write (persistStats.offsetsWrites).
+    fn save_offsets(&mut self, tailer: &LogTailer, state: &std::sync::Mutex<crate::CoreState>) {
         match self.offsets.save(&tailer.export_file_state()) {
-            Ok(r) if r.bytes > 0 => self.stamp_version(),
+            Ok(r) if r.bytes > 0 => {
+                self.stamp_version();
+                if let Ok(mut st) = state.lock() {
+                    st.persist.offsets_writes += 1;
+                    st.persist.offsets_bytes += r.bytes;
+                }
+            }
             Ok(_) => {}
             Err(e) => eprintln!("alcore: could not save log offsets: {e}"),
         }
@@ -573,7 +580,13 @@ impl DurableState {
             st.log_sessions.iter().map(|(id, c)| (id.clone(), strip_card_for_persist(c))).collect()
         };
         match self.cards.save(&records) {
-            Ok(r) if r.bytes > 0 => self.stamp_version(),
+            Ok(r) if r.bytes > 0 => {
+                self.stamp_version();
+                if let Ok(mut st) = state.lock() {
+                    st.persist.cards_writes += 1;
+                    st.persist.cards_bytes += r.bytes;
+                }
+            }
             Ok(_) => {}
             Err(e) => eprintln!("alcore: could not save log cards: {e}"),
         }
@@ -585,7 +598,7 @@ impl DurableState {
     /// graceful stop loses nothing; an unchanged save costs zero bytes either way.
     pub fn tick(&mut self, tailer: &LogTailer, state: &std::sync::Mutex<crate::CoreState>, force: bool) {
         if force {
-            self.save_offsets(tailer);
+            self.save_offsets(tailer, state);
             self.save_cards(state);
             self.offsets_dirty = false;
             self.cards_dirty = false;
@@ -598,7 +611,7 @@ impl DurableState {
         self.last_timer = now;
         if self.offsets_dirty {
             self.offsets_dirty = false;
-            self.save_offsets(tailer);
+            self.save_offsets(tailer, state);
         }
         if self.cards_dirty && now.duration_since(self.last_cards_save) >= self.cards_save {
             self.cards_dirty = false;

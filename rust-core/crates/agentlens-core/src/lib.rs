@@ -32,6 +32,8 @@ pub mod delta_log;
 pub mod feed_merge;
 pub mod log_reader;
 pub mod pricing;
+pub mod retention_config;
+pub mod server_stats;
 pub mod session_store;
 pub mod span_window;
 pub mod summarize;
@@ -85,6 +87,15 @@ pub struct CoreState {
     /// IndexMap: insertion order kept like the JS Map, O(1) upsert (a 13k-card boot would be
     /// quadratic on a Vec).
     pub log_sessions: IndexMap<String, Value>,
+    /// The data dir this process owns (server.ts DATA_DIR) — the sidecar paths `/api/server-stats`
+    /// measures hang off it.
+    pub data_dir: std::path::PathBuf,
+    /// server.ts SERVER_STARTED_AT.
+    pub started_at_ms: i64,
+    /// The bound listeners; alcore overwrites the defaults with what it actually bound.
+    pub ports: server_stats::Ports,
+    /// server.ts persistStats — every byte this process writes, counted where it is written.
+    pub persist: server_stats::PersistStats,
 }
 
 impl CoreState {
@@ -167,6 +178,10 @@ impl CoreState {
             data_version: 0,
             build_id: now.to_string(),
             log_sessions: IndexMap::new(),
+            data_dir: data_dir.to_path_buf(),
+            started_at_ms: now,
+            ports: server_stats::Ports::default(),
+            persist: server_stats::PersistStats::default(),
         }
     }
 
@@ -175,6 +190,17 @@ impl CoreState {
     pub fn prune_window(&mut self, now_ms: i64) {
         if self.window.prune(now_ms) {
             self.data_version += 1;
+        }
+    }
+
+    /// The ONE span flush path (server.ts flushSpanAppends): a flush that appended counts as one
+    /// write of that many bytes — the persistence row `/api/server-stats` reports. Every flush
+    /// site (per payload, the 5s tick, shutdown) goes through here so the counter cannot miss one.
+    pub fn flush_spans(&mut self) {
+        let r = self.writer.flush();
+        if r.appended_spans > 0 {
+            self.persist.span_append_writes += 1;
+            self.persist.span_append_bytes += r.appended_bytes;
         }
     }
 }
@@ -236,7 +262,7 @@ pub fn ingest_post(state: &mut CoreState, path: &str, body: &[u8]) {
     if state.writer.pending_appends() > 0 {
         // Flush per payload for now: durable and deterministic for tests; batching cadence is
         // internal (not wire-frozen) and can move to a timer when rates justify it.
-        state.writer.flush();
+        state.flush_spans();
     }
 }
 

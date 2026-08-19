@@ -230,6 +230,12 @@ async fn handle(
             strip_session_detail(&st.session_summary(crate::now_ms() as f64)).to_string()
         };
         json_response(StatusCode::OK, body)
+    } else if method == Method::GET && path == "/api/server-stats" {
+        let body = {
+            let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+            crate::server_stats::server_stats(&st, crate::now_ms()).to_string()
+        };
+        json_response(StatusCode::OK, body)
     } else {
         let mut r = Response::new(boxed_full(Bytes::from_static(b"Not found")));
         *r.status_mut() = StatusCode::NOT_FOUND;

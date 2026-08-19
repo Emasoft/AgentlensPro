@@ -18,15 +18,10 @@ use serde_json::Value;
 /// server.ts SUMMARY_WINDOW_FLOOR_MS.
 pub const SUMMARY_WINDOW_FLOOR_MS: i64 = 5 * 60_000;
 
-/// src/retentionConfig.ts `summaryWindowHours`: env AGENTLENS_SUMMARY_WINDOW_HOURS > the data
-/// dir's `config.json` `retention.summaryWindowHours` > 24; min 1 hour; then the 5-minute floor.
+/// server.ts SUMMARY_WINDOW_MS: the `summaryWindowHours` knob (retention_config.rs — env > the
+/// data dir's `config.json` > 24, min 1 hour) in ms, then the 5-minute floor.
 pub fn summary_window_ms(data_dir: &Path) -> i64 {
-    let env = std::env::var("AGENTLENS_SUMMARY_WINDOW_HOURS").ok().and_then(|s| if s.is_empty() { None } else { s.trim().parse::<f64>().ok() });
-    let file = std::fs::read_to_string(data_dir.join("config.json"))
-        .ok()
-        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-        .and_then(|v| v.get("retention")?.get("summaryWindowHours")?.as_f64());
-    let hours = env.or(file).unwrap_or(24.0).max(1.0);
+    let hours = crate::retention_config::resolve_knob(data_dir, &crate::retention_config::SUMMARY_WINDOW_HOURS);
     ((hours * 3_600_000.0) as i64).max(SUMMARY_WINDOW_FLOOR_MS)
 }
 

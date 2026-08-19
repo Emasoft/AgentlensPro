@@ -26,6 +26,9 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 bytes = "1"
 futures-core = "0.3"
+# /api/server-stats resources (src/resourceMonitor.ts): rss, loadavg, statvfs — already in the
+# lock via tokio; a direct dep so the calls are ours, not a transitive accident.
+libc = "0.2"
 
 [[bin]]
 name = "alcore"
