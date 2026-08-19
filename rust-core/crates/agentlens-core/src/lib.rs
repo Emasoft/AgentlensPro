@@ -29,6 +29,7 @@ use agentlens_ingest::IngestState;
 use agentlens_spanstore::writer::SpanStoreWriter;
 
 pub mod delta_log;
+pub mod derived_cache;
 pub mod feed_merge;
 pub mod import_card;
 pub mod log_reader;
@@ -104,6 +105,10 @@ pub struct CoreState {
     /// The sweeper's control channel (set by `start_sweeper`): /api/clear wipes the tail state
     /// and requests the full re-scan through it.
     pub sweeper: Option<log_reader::SweeperControl>,
+    /// server.ts summaryCache / strippedCache — the merged summary and its stripped form,
+    /// memoized by data_version (derived_cache.rs).
+    pub summary_cache: derived_cache::VersionedCache<Value>,
+    pub stripped_cache: derived_cache::VersionedCache<Value>,
 }
 
 impl CoreState {
@@ -150,11 +155,15 @@ impl CoreState {
     /// computeSessionSummary (server.ts:2240) — summarizeSpans over the live window, then, when
     /// any log session exists, the feed-collision merge + the subagent link, sorted newest-first.
     pub fn session_summary(&self, now_ms: f64) -> Value {
+        Self::summary_over(&self.window, &self.log_sessions, now_ms)
+    }
+
+    fn summary_over(window: &span_window::SpanWindow, log_sessions: &IndexMap<String, Value>, now_ms: f64) -> Value {
         let _ = now_ms;
-        let mut summary = summarize::summarizer::summarize_spans(&self.window.spans, &|_| None);
-        if !self.log_sessions.is_empty() {
+        let mut summary = summarize::summarizer::summarize_spans(&window.spans, &|_| None);
+        if !log_sessions.is_empty() {
             let otel: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
-            let logs: Vec<Value> = self.log_sessions.iter().map(|(_, c)| c.clone()).collect();
+            let logs: Vec<Value> = log_sessions.iter().map(|(_, c)| c.clone()).collect();
             let mut merged = feed_merge::link_subagent_transcripts(feed_merge::merge_otel_and_log_sessions(otel, logs));
             // Date.parse(b.startTime || '0') - Date.parse(a.startTime || '0'), newest first.
             merged.sort_by(|a, b| {
@@ -167,6 +176,19 @@ impl CoreState {
             summary.as_object_mut().expect("summary object").insert("sessions".into(), Value::Array(merged));
         }
         summary
+    }
+
+    /// buildSessionSummary — the merged summary, rebuilt only when data_version moved.
+    pub fn build_session_summary(&mut self, now_ms: f64) -> std::sync::Arc<Value> {
+        // Disjoint field borrows: the cache is written, the inputs are read.
+        let Self { summary_cache, window, log_sessions, data_version, .. } = self;
+        summary_cache.get(*data_version, || Self::summary_over(window, log_sessions, now_ms))
+    }
+
+    /// buildStrippedSummary — `/api/summary`'s body, memoized the same way.
+    pub fn build_stripped_summary(&mut self, now_ms: f64) -> std::sync::Arc<Value> {
+        let summary = self.build_session_summary(now_ms);
+        self.stripped_cache.get(self.data_version, || ui::strip_session_detail(&summary))
     }
 }
 
@@ -193,6 +215,8 @@ impl CoreState {
             hook_runtime: server_stats::hook_runtime_config(data_dir),
             log_scan: log_reader::LogScanStats::default(),
             sweeper: None,
+            summary_cache: derived_cache::VersionedCache::default(),
+            stripped_cache: derived_cache::VersionedCache::default(),
         }
     }
 

@@ -1339,21 +1339,43 @@ pub fn build_result(file_path: &str, a: ClaudeAccum) -> Option<ParsedTranscript>
 
 /// Parse one transcript file cold (whole file). Corrupt/partial lines skip, never fail the file.
 pub fn parse_transcript(file_path: &str, max_entries: usize, max_bytes: usize) -> std::io::Result<Option<ParsedTranscript>> {
-    let bytes = std::fs::read(file_path)?;
     let mut a = ClaudeAccum::new(max_entries, max_bytes);
-    for line in bytes.split(|b| *b == b'\n') {
-        if line.is_empty() {
-            continue;
-        }
-        let Ok(v) = serde_json::from_slice::<Value>(line) else { continue };
-        if let Value::Object(entry) = v {
-            on_entry(&mut a, &entry);
-        }
-    }
+    let size = for_each_json_line(file_path, |entry| on_entry(&mut a, entry))?;
     Ok(build_result(file_path, a).map(|mut r| {
-        r.file_size_bytes = bytes.len() as u64;
+        r.file_size_bytes = size;
         r
     }))
+}
+
+/// STREAM a JSONL file line by line into `f` (blank lines skipped, a corrupt line skipped,
+/// non-object values skipped — the TS `split('\n')` + `JSON.parse`-in-try contract), returning
+/// the bytes consumed (= the file size at read time). One reusable line buffer: the whole file
+/// is never resident. Measured on the real tree (13.5k files, 30 of them over 50MB, 4.4GB of
+/// those): the `fs::read`-whole-file version peaked at 4.1GB RSS across 14 workers because each
+/// worker held its entire file; streaming holds one line per worker (TRDD-DMWOBWFH P5b).
+pub(crate) fn for_each_json_line(file_path: &str, mut f: impl FnMut(&serde_json::Map<String, Value>)) -> std::io::Result<u64> {
+    use std::io::BufRead;
+    let file = std::fs::File::open(file_path)?;
+    let mut reader = std::io::BufReader::with_capacity(256 * 1024, file);
+    let mut line: Vec<u8> = Vec::new();
+    let mut consumed: u64 = 0;
+    loop {
+        line.clear();
+        let n = reader.read_until(b'\n', &mut line)?;
+        if n == 0 {
+            break;
+        }
+        consumed += n as u64;
+        let body = line.strip_suffix(b"\n").unwrap_or(&line);
+        if body.is_empty() {
+            continue;
+        }
+        let Ok(v) = serde_json::from_slice::<Value>(body) else { continue };
+        if let Value::Object(entry) = v {
+            f(&entry);
+        }
+    }
+    Ok(consumed)
 }
 
 #[cfg(test)]

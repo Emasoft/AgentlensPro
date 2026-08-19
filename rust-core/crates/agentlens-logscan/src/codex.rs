@@ -184,19 +184,10 @@ pub fn build_result(file_path: &str, a: CodexAccum) -> Option<ParsedTranscript> 
 
 /// Parse one Codex transcript cold. Same skip-corrupt-lines contract as the Claude path.
 pub fn parse_codex_transcript(file_path: &str) -> std::io::Result<Option<ParsedTranscript>> {
-    let bytes = std::fs::read(file_path)?;
     let mut a = CodexAccum::default();
-    for line in bytes.split(|b| *b == b'\n') {
-        if line.is_empty() {
-            continue;
-        }
-        let Ok(v) = serde_json::from_slice::<Value>(line) else { continue };
-        if let Value::Object(entry) = v {
-            on_entry(&mut a, &entry);
-        }
-    }
+    let size = crate::for_each_json_line(file_path, |entry| on_entry(&mut a, entry))?;
     Ok(build_result(file_path, a).map(|mut r| {
-        r.file_size_bytes = bytes.len() as u64;
+        r.file_size_bytes = size;
         r
     }))
 }

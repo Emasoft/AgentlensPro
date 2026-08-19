@@ -297,12 +297,27 @@ fn small_routes_embed_status_hook_config_clear_action_and_log_scan_stats() {
     assert!(r.starts_with("HTTP/1.1 400"), "{r}");
     assert!(body_of(&r).starts_with(r#"{"error":"#));
 
-    // Row 25: the reader counters + dataVersion (no sweeper in this harness → zeros).
+    // Row 25: the reader counters + dataVersion (no sweeper in this harness → zeros) and the
+    // derived-cache counters: two /api/summary reads with nothing changed = ONE rebuild + one
+    // hit; a data change + a read = a second rebuild (server.ts strippedCache by dataVersion).
+    get(ui, "/api/summary", "");
+    get(ui, "/api/summary", "");
     let r = get(ui, "/api/debug/log-scan-stats", "");
     let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
     assert_eq!(v["incrementalReads"], 0);
-    assert_eq!(v["derivedCaches"]["summary"], serde_json::json!({ "hits": 0, "misses": 0 }));
+    assert_eq!(v["derivedCaches"]["stripped"], serde_json::json!({ "hits": 1, "misses": 1 }));
+    assert_eq!(v["derivedCaches"]["sidebar"], serde_json::json!({ "hits": 0, "misses": 0 }));
     assert!(v["dataVersion"].is_u64());
+    state.lock().unwrap().put_log_session(serde_json::json!({ "sessionId": "bump", "source": "codex", "timeline": [] }));
+    get(ui, "/api/summary", "");
+    let r = get(ui, "/api/debug/log-scan-stats", "");
+    let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
+    assert_eq!(v["derivedCaches"]["stripped"], serde_json::json!({ "hits": 1, "misses": 2 }));
+    {
+        let mut st = state.lock().unwrap();
+        st.log_sessions.clear();
+        st.data_version += 1;
+    }
 
     // Rows 22 + 16: ingest a span and a log card, then clear. /action clearAll drops the spans
     // (window + the on-disk store) and keeps the cards; /api/clear drops both. Both answer 200

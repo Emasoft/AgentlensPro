@@ -78,11 +78,11 @@ pub fn push_update(state: &Arc<Mutex<CoreState>>, hub: &SseHub, now_ms: f64) {
         return;
     }
     let payload = {
-        let st = match state.lock() {
+        let mut st = match state.lock() {
             Ok(s) => s,
             Err(_) => return,
         };
-        let summary = st.session_summary(now_ms);
+        let summary = st.build_session_summary(now_ms);
         build_update_payload(&summary, &st.window.spans, &st.build_id, Vec::new(), now_ms).to_string()
     };
     hub.broadcast(sse_frame(&payload));
@@ -185,8 +185,8 @@ fn json_response(status: StatusCode, body: String) -> Response<SseBody> {
 fn sse_response(state: &Arc<Mutex<CoreState>>, hub: &SseHub, now_ms: f64) -> Result<Response<SseBody>, String> {
     use http_body_util::BodyExt;
     let first = {
-        let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
-        let summary = st.session_summary(now_ms);
+        let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+        let summary = st.build_session_summary(now_ms);
         build_update_payload(&summary, &st.window.spans, &st.build_id, Vec::new(), now_ms).to_string()
     };
     let mut rx = hub.subscribe();
@@ -259,8 +259,8 @@ async fn handle(
         sse_response(&state, &hub, crate::now_ms() as f64)?
     } else if method == Method::GET && path == "/api/summary" {
         let body = {
-            let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
-            strip_session_detail(&st.session_summary(crate::now_ms() as f64)).to_string()
+            let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+            st.build_stripped_summary(crate::now_ms() as f64).to_string()
         };
         json_response(StatusCode::OK, body)
     } else if method == Method::GET && path == "/api/server-stats" {
@@ -363,16 +363,18 @@ async fn handle(
         let body = {
             let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
             let s = st.log_scan;
-            // NOT PORTED: the derived caches (summary/stripped/sidebar/analytics memoization) and
-            // the scratch-listing indexer — their idle stats, all zero.
+            let (sh, sm) = st.summary_cache.stats();
+            let (th, tm) = st.stripped_cache.stats();
+            // NOT PORTED: the sidebar/analytics caches (those views are built inside the update
+            // payload here, not as separate routes) and the scratch-listing indexer — idle zeros.
             serde_json::json!({
                 "incrementalReads": s.incremental_reads,
                 "fullReads": s.full_reads,
                 "filesStatted": s.files_statted,
                 "dataVersion": st.data_version,
                 "derivedCaches": {
-                    "summary": { "hits": 0, "misses": 0 },
-                    "stripped": { "hits": 0, "misses": 0 },
+                    "summary": { "hits": sh, "misses": sm },
+                    "stripped": { "hits": th, "misses": tm },
                     "sidebar": { "hits": 0, "misses": 0 },
                     "analytics": { "hits": 0, "misses": 0 },
                 },
