@@ -300,16 +300,23 @@ release-via: publish
   `put_log_session` (bumps data_version) + `session_summary()` (= computeSessionSummary:
   merge → link → newest-first) now feed /api/summary, the SSE connect frame and the coalesced
   push. Parity: every branch on crafted cards + a socket test of the merged wire. 58/58.
-- **NEXT ACTION (one step): P5 — the in-process LOG READER that fills `log_sessions`.** Scope
-  (read src/logReader.ts first — it is large; port in sub-slices): (a) file discovery per
-  source (claude ~/.claude/projects/**/*.jsonl incl. subagents/, codex, copilot CLI/VS Code,
-  opencode db), (b) cold boot scan via the agentlens-logscan crate AS A LIBRARY (rayon, the
-  allogscan parse fns — no exec), (c) the TS-wrapper finish step in Rust: accountId (registry
-  — pending), speedBlendedCostUsd (blendTurns × the P4f.1 pricing table), hot-age strip
-  (timeline retention), generated-files attach (fs heuristics), (d) the incremental tail on
-  growth with the fileState/offset gate, (e) persisted offsets so restarts take the fast path.
-  Each sub-slice with a TS-oracle or real-corpus parity pin as before (the P2 99/99 sweep
-  pattern). `/api/server-stats` (§1.4) stays queued after P5.
+- **P5a DONE (commit 79141b5) — log-file discovery per source** in
+  `agentlens_logscan::discovery` (Env-parameterized roots, every override shape incl. the
+  OPENCODE_DATA_DIR filtered/unfiltered asymmetry, sibling + stat gates, TS scan order). 4
+  fixture-tree tests; real-machine census 13,504 claude / 7 codex / 0 copilot / 1 opencode =
+  identical to a TS-equivalent walk (`cargo run -p agentlens-logscan --example disc_census`).
+- **NEXT ACTION (one step): P5b — the cold boot scan in alcore as a LIBRARY call**: on
+  `alcore serve` start, `discover_all(Env::from_process())` → rayon parse via the logscan
+  crate's parse fns (claude `parse_transcript`, `codex::parse_codex_transcript`,
+  `copilot::parse_copilot_cli/vscode/vscode_json`, `opencode::parse_opencode_db`) → for each
+  ParsedTranscript apply the Rust finish step (P5c can land together if small: hot-age strip
+  via retention::timeline_hot_age; speedBlendedCostUsd = Σ calc_token_cost_usd over blendTurns;
+  accountId + generated-files attach DEFERRED with a note) → `put_log_session(card)` (+ child
+  cards). Gate on `--log-scan` flag (default on) so tests can disable. Parity: the P2 99/99
+  real-corpus pattern — compare the Rust-wired log_sessions against `allogscan` JSON for the
+  same files (same library ⇒ trivially equal) and spot-check 3 cards vs the TS LogReader via
+  the compiled out/test/logReader.js. Remaining after: P5d incremental tail + offset gate, P5e
+  persisted offsets, then `/api/server-stats`.
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
