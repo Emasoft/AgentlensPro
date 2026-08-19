@@ -256,7 +256,7 @@ pub fn compute_analytics_data(sessions: &[Value]) -> Value {
 }
 
 /// buildUpdatePayload — the `update` SSE frame body. `collector_gaps` is the lifecycle-derived
-/// downtime list (empty until the collector-lifecycle slice lands).
+/// downtime list (collector_lifecycle::compute_gaps — both frame sites pass it).
 pub fn build_update_payload(summary: &Value, all_spans: &[Value], build_id: &str, collector_gaps: Vec<Value>, now_ms: f64) -> Value {
     let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
     let mut p = Map::new();

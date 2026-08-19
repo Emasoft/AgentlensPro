@@ -29,6 +29,7 @@ use agentlens_ingest::IngestState;
 use agentlens_spanstore::writer::SpanStoreWriter;
 
 pub mod account_registry;
+pub mod collector_lifecycle;
 pub mod delta_log;
 pub mod derived_cache;
 pub mod feed_merge;
@@ -117,6 +118,18 @@ pub struct CoreState {
     pub accounts: account_registry::AccountRegistry,
     /// serverRuntime.ts requestLog — one row per UI/API request (ring + `requests.log`).
     pub requests: request_log::RequestLog,
+    /// server.ts `otelAttributionBySession` (TRDD-5GFSFX0Q): sessionId → the OTEL card's
+    /// `api_request` timeline entries, captured BEFORE the feed merge drops the OTEL twin.
+    /// Rebuilt together with the memoized summary (same data_version), so it can never go stale
+    /// relative to the cards it serves; read only by the `/api/timeline` graft.
+    pub otel_attribution: IndexMap<String, Vec<Value>>,
+    /// server.ts `lifecycle` (TRDD-PJC8N1HO spec 2) — the run log behind /api/collector-gaps
+    /// and the SSE frames' collectorGaps. `open` appends this boot's start marker.
+    pub lifecycle: collector_lifecycle::LifecycleStore,
+    /// The discovery environment `/api/timeline`'s reparse-on-demand resolves files against —
+    /// a FIELD (not Env::from_process at the call site) so tests can point it at a fixture
+    /// home without racing the process environment.
+    pub log_env: agentlens_logscan::discovery::Env,
 }
 
 impl CoreState {
@@ -173,12 +186,31 @@ impl CoreState {
     /// computeSessionSummary (server.ts:2240) — summarizeSpans over the live window, then, when
     /// any log session exists, the feed-collision merge + the subagent link, sorted newest-first.
     pub fn session_summary(&self, now_ms: f64) -> Value {
-        Self::summary_over(&self.window, &self.log_sessions, now_ms)
+        Self::summary_over(&self.window, &self.log_sessions, now_ms).0
     }
 
-    fn summary_over(window: &span_window::SpanWindow, log_sessions: &IndexMap<String, Value>, now_ms: f64) -> Value {
+    /// Returns the merged summary AND `otelAttributionBySession` (server.ts:2245) — the OTEL
+    /// api_request entries per claude_code session, captured off the PRE-merge sessions so the
+    /// `/api/timeline` graft still has them after the merge displaces the OTEL twin.
+    fn summary_over(window: &span_window::SpanWindow, log_sessions: &IndexMap<String, Value>, now_ms: f64) -> (Value, IndexMap<String, Vec<Value>>) {
         let _ = now_ms;
         let mut summary = summarize::summarizer::summarize_spans(&window.spans, &|_| None);
+        let mut attribution: IndexMap<String, Vec<Value>> = IndexMap::new();
+        for s in summary.get("sessions").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]) {
+            if s.get("source").and_then(Value::as_str) != Some("claude_code") {
+                continue;
+            }
+            let entries: Vec<Value> = s
+                .get("timeline")
+                .and_then(Value::as_array)
+                .map(|t| t.iter().filter(|e| e.get("type").and_then(Value::as_str) == Some("api_request")).cloned().collect())
+                .unwrap_or_default();
+            if !entries.is_empty() {
+                if let Some(id) = s.get("sessionId").and_then(Value::as_str) {
+                    attribution.insert(id.to_owned(), entries);
+                }
+            }
+        }
         if !log_sessions.is_empty() {
             let otel: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
             let logs: Vec<Value> = log_sessions.iter().map(|(_, c)| c.clone()).collect();
@@ -193,14 +225,20 @@ impl CoreState {
             });
             summary.as_object_mut().expect("summary object").insert("sessions".into(), Value::Array(merged));
         }
-        summary
+        (summary, attribution)
     }
 
-    /// buildSessionSummary — the merged summary, rebuilt only when data_version moved.
+    /// buildSessionSummary — the merged summary, rebuilt only when data_version moved. The
+    /// attribution side-map is replaced in the same compute (the TS rebuilds the module-level
+    /// Map inside the memoized computeSessionSummary), so map and summary always share a version.
     pub fn build_session_summary(&mut self, now_ms: f64) -> std::sync::Arc<Value> {
-        // Disjoint field borrows: the cache is written, the inputs are read.
-        let Self { summary_cache, window, log_sessions, data_version, .. } = self;
-        summary_cache.get(*data_version, || Self::summary_over(window, log_sessions, now_ms))
+        // Disjoint field borrows: the cache + side-map are written, the inputs are read.
+        let Self { summary_cache, window, log_sessions, data_version, otel_attribution, .. } = self;
+        summary_cache.get(*data_version, || {
+            let (summary, attribution) = Self::summary_over(window, log_sessions, now_ms);
+            *otel_attribution = attribution;
+            summary
+        })
     }
 
     /// buildStrippedSummary — `/api/summary`'s body, memoized the same way.
@@ -237,6 +275,9 @@ impl CoreState {
             stripped_cache: derived_cache::VersionedCache::default(),
             accounts: account_registry::AccountRegistry::default(),
             requests: request_log::RequestLog::new(Some(data_dir.join("requests.log"))),
+            otel_attribution: IndexMap::new(),
+            lifecycle: collector_lifecycle::record_start(&collector_lifecycle::lifecycle_file(data_dir), now),
+            log_env: agentlens_logscan::discovery::Env::from_process(),
         }
     }
 

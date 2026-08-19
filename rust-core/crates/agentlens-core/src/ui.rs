@@ -83,7 +83,8 @@ pub fn push_update(state: &Arc<Mutex<CoreState>>, hub: &SseHub, now_ms: f64) {
             Err(_) => return,
         };
         let summary = st.build_session_summary(now_ms);
-        build_update_payload(&summary, &st.window.spans, &st.build_id, Vec::new(), now_ms).to_string()
+        let gaps = crate::collector_lifecycle::compute_gaps(&st.lifecycle, crate::collector_lifecycle::MIN_GAP_MS);
+        build_update_payload(&summary, &st.window.spans, &st.build_id, gaps, now_ms).to_string()
     };
     hub.broadcast(sse_frame(&payload));
 }
@@ -148,25 +149,31 @@ fn query_of<T>(req: &Request<T>) -> std::collections::HashMap<String, String> {
     let Some(q) = req.uri().query() else { return out };
     for pair in q.split('&') {
         let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
-        let dec = |s: &str| {
-            // percent-decode + '+' → space (the subset URLSearchParams applies).
-            let s = s.replace('+', " ");
-            let mut bytes = Vec::with_capacity(s.len());
-            let mut it = s.bytes();
-            while let Some(b) = it.next() {
-                if b == b'%' {
-                    let h = [it.next().unwrap_or(0), it.next().unwrap_or(0)];
-                    let hex = std::str::from_utf8(&h).ok().and_then(|h| u8::from_str_radix(h, 16).ok());
-                    bytes.push(hex.unwrap_or(b'%'));
-                } else {
-                    bytes.push(b);
-                }
-            }
-            String::from_utf8_lossy(&bytes).into_owned()
-        };
+        // percent-decode + '+' → space (the subset URLSearchParams applies).
+        let dec = |s: &str| percent_decode(&s.replace('+', " "));
         out.entry(dec(k)).or_insert_with(|| dec(v));
     }
     out
+}
+
+/// Lossy percent-decode — shared by query_of and the `/api/timeline/:id` path segment. The TS
+/// path segment goes through decodeURIComponent, which THROWS a URIError on a malformed escape;
+/// the freeze pins the always-200 response shape, so a malformed escape decodes lossily here
+/// (the literal byte survives) rather than reproducing V8's exception path. NO '+' handling —
+/// decodeURIComponent has none; the URLSearchParams '+' → space belongs to query_of alone.
+fn percent_decode(s: &str) -> String {
+    let mut bytes = Vec::with_capacity(s.len());
+    let mut it = s.bytes();
+    while let Some(b) = it.next() {
+        if b == b'%' {
+            let h = [it.next().unwrap_or(0), it.next().unwrap_or(0)];
+            let hex = std::str::from_utf8(&h).ok().and_then(|h| u8::from_str_radix(h, 16).ok());
+            bytes.push(hex.unwrap_or(b'%'));
+        } else {
+            bytes.push(b);
+        }
+    }
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 /// server.ts readBodyCapped — the whole body, or None once it exceeds `max` (the TS destroys the
@@ -216,7 +223,8 @@ fn sse_response(state: &Arc<Mutex<CoreState>>, hub: &SseHub, now_ms: f64) -> Res
     let first = {
         let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
         let summary = st.build_session_summary(now_ms);
-        build_update_payload(&summary, &st.window.spans, &st.build_id, Vec::new(), now_ms).to_string()
+        let gaps = crate::collector_lifecycle::compute_gaps(&st.lifecycle, crate::collector_lifecycle::MIN_GAP_MS);
+        build_update_payload(&summary, &st.window.spans, &st.build_id, gaps, now_ms).to_string()
     };
     let mut rx = hub.subscribe();
     let (tx, frames) = tokio::sync::mpsc::unbounded_channel::<Bytes>();
@@ -627,6 +635,84 @@ async fn handle(
                     "analytics": { "hits": 0, "misses": 0 },
                 },
                 "scratchListing": { "readdirs": readdirs, "hits": lhits, "cached": cached },
+            })
+            .to_string()
+        };
+        json_response(StatusCode::OK, body)
+    } else if method == Method::GET && path == "/api/collector-gaps" {
+        // Row 29 (server.ts:4038, TRDD-PJC8N1HO spec 2): the lifecycle-derived downtime windows.
+        // The TS wraps computeCollectorGaps in a catch → []; the Rust compute cannot throw.
+        let body = {
+            let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+            serde_json::json!({ "collectorGaps": crate::collector_lifecycle::compute_gaps(&st.lifecycle, crate::collector_lifecycle::MIN_GAP_MS) })
+                .to_string()
+        };
+        json_response(StatusCode::OK, body)
+    } else if method == Method::GET && path.starts_with("/api/timeline/") {
+        // Row 30 (server.ts:4044): the lazy per-session detail — resolveSessionCard's
+        // reparse-on-demand for a disk-restored stripped card, plus the TRDD-5GFSFX0Q graft of
+        // the OTEL api_request attribution a log-winning Claude card lacks. Always 200; an
+        // unknown id serves the empty shape. generatedFiles rides THIS payload only —
+        // strip_session_detail drops it from /api/summary (TRDD-ZS1GDXVY).
+        let session_id = percent_decode(&path["/api/timeline/".len()..]);
+        let now = crate::now_ms();
+        let body = {
+            let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+            let summary = st.build_session_summary(now as f64);
+            let mut session: Option<Value> = summary
+                .get("sessions")
+                .and_then(Value::as_array)
+                .and_then(|ss| ss.iter().find(|s| s.get("sessionId").and_then(Value::as_str) == Some(session_id.as_str())))
+                .cloned();
+            // resolveSessionCard: an empty (or absent) timeline on a session a log file backs ⇒
+            // one fresh full parse of that file, re-stored (put_log_session bumps data_version,
+            // as the TS putLogSession does). NOT PORTED: statuslineReader.overlay on the
+            // reparsed card (the statusline store is unported — the P4m note).
+            let timeline_empty = session
+                .as_ref()
+                .is_some_and(|s| s.get("timeline").and_then(Value::as_array).is_none_or(Vec::is_empty));
+            if timeline_empty && st.log_sessions.contains_key(&session_id) {
+                if let Some(scanned) = crate::log_reader::reparse_session(&st.log_env, &session_id, now) {
+                    if let Some(mut card) = scanned.cards.into_iter().next() {
+                        // ingest_scanned's accountId stamp — the TS parser stamps it natively
+                        // inside _buildCard, so the reparsed card must carry it here too.
+                        if let Some(obj) = card.as_object_mut() {
+                            let acct =
+                                obj.get("sessionId").and_then(Value::as_str).and_then(|sid| st.accounts.account_for(sid)).map(str::to_owned);
+                            if let Some(a) = acct {
+                                obj.insert("accountId".into(), Value::from(a));
+                            }
+                        }
+                        st.put_log_session(card.clone());
+                        session = Some(card);
+                    }
+                }
+            }
+            // TRDD-5GFSFX0Q: graft the displaced OTEL twin's api_request entries onto the
+            // SERVED copy only — the graft runs AFTER put_log_session, so the stored card stays
+            // pure (the TS grafts onto a shallow copy for the same reason).
+            if let Some(s) = session.as_mut() {
+                let claude_log = s.get("source").and_then(Value::as_str) == Some("claude_code")
+                    && s.get("dataSource").and_then(Value::as_str) == Some("log");
+                if claude_log {
+                    if let Some(entries) = st.otel_attribution.get(&session_id).filter(|e| !e.is_empty()) {
+                        let log_tl: Vec<Value> = s.get("timeline").and_then(Value::as_array).cloned().unwrap_or_default();
+                        let grafted = crate::feed_merge::graft_otel_attribution(&log_tl, Some(entries));
+                        if let Some(obj) = s.as_object_mut() {
+                            obj.insert("timeline".into(), Value::Array(grafted));
+                        }
+                    }
+                }
+            }
+            // `session?.<k> ?? <default>` — nullish: an explicit null falls back too.
+            let field = |k: &str, default: Value| {
+                session.as_ref().and_then(|s| s.get(k)).filter(|v| !v.is_null()).cloned().unwrap_or(default)
+            };
+            serde_json::json!({
+                "timeline": field("timeline", Value::Array(Vec::new())),
+                "fileOps": field("fileOps", Value::Array(Vec::new())),
+                "generatedFiles": field("generatedFiles", Value::Array(Vec::new())),
+                "generatedFilesTruncated": field("generatedFilesTruncated", Value::Bool(false)),
             })
             .to_string()
         };

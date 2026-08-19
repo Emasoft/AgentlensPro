@@ -623,3 +623,138 @@ fn debug_seams_codex_groups_and_span_attr() {
     assert_eq!(body_of(&r), r#"{"found":false,"value":null}"#);
     let _ = state;
 }
+
+#[test]
+fn collector_gaps_route_serves_lifecycle_downtime_windows() {
+    let (_otlp, ui, state) = start_servers();
+    {
+        // CoreState::open = recordCollectorStart: the boot run marker exists in memory AND on disk.
+        let st = state.lock().unwrap();
+        assert_eq!(st.lifecycle.runs.len(), 1, "the boot run marker");
+        assert!(st.data_dir.join("collector-lifecycle.json").exists());
+    }
+    // A single run has no inter-run gap.
+    let r = get(ui, "/api/collector-gaps", "");
+    assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+    assert_eq!(body_of(&r), r#"{"collectorGaps":[]}"#);
+    // Crafted history: a clean 30s gap (shutdown), a crash 20s gap, a 5s gap under the floor.
+    state.lock().unwrap().lifecycle.runs = vec![
+        serde_json::json!({"startedAt":"2026-08-20T10:00:00.000Z","lastHeartbeat":"2026-08-20T10:00:30.000Z","stoppedAt":"2026-08-20T10:00:30.000Z"}),
+        serde_json::json!({"startedAt":"2026-08-20T10:01:00.000Z","lastHeartbeat":"2026-08-20T10:02:00.000Z"}),
+        serde_json::json!({"startedAt":"2026-08-20T10:02:20.000Z","lastHeartbeat":"2026-08-20T10:02:25.000Z"}),
+        serde_json::json!({"startedAt":"2026-08-20T10:02:30.000Z","lastHeartbeat":"2026-08-20T10:02:35.000Z"}),
+    ];
+    let r = get(ui, "/api/collector-gaps", "");
+    let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
+    assert_eq!(
+        v["collectorGaps"],
+        serde_json::json!([
+            { "startedAt": "2026-08-20T10:00:30.000Z", "endedAt": "2026-08-20T10:01:00.000Z", "durationMs": 30000, "reason": "shutdown" },
+            { "startedAt": "2026-08-20T10:02:00.000Z", "endedAt": "2026-08-20T10:02:20.000Z", "durationMs": 20000, "reason": "crash" },
+        ]),
+        "{v}"
+    );
+}
+
+#[test]
+fn timeline_route_serves_the_lazy_detail_with_the_otel_graft() {
+    let (otlp, ui, state) = start_servers();
+    // Unknown id → the frozen empty shape, still 200 (freeze row 30).
+    let r = get(ui, "/api/timeline/nope", "");
+    assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+    assert_eq!(body_of(&r), r#"{"timeline":[],"fileOps":[],"generatedFiles":[],"generatedFilesTruncated":false}"#);
+
+    // An OTEL claude trace whose session ALSO carries an api_request span; a log card with the
+    // same id then displaces the OTEL twin (feed doctrine) — the drill grafts the attribution
+    // back onto the served copy only (TRDD-5GFSFX0Q).
+    let payload = serde_json::json!({
+        "resourceSpans": [{ "scopeSpans": [{ "spans": [
+            {
+                "name": "claude_code.interaction",
+                "traceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "spanId": "aaaaaaaaaaaaaaaa",
+                "startTimeUnixNano": "1755600000000000000", "endTimeUnixNano": "1755600010000000000",
+                "attributes": [ { "key": "session.id", "value": { "stringValue": "sess-ui-1" } },
+                                { "key": "user_prompt", "value": { "stringValue": "Fix the bug" } } ]
+            },
+            {
+                "name": "claude_code.api_request",
+                "traceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "spanId": "cccccccccccccccc", "parentSpanId": "aaaaaaaaaaaaaaaa",
+                "startTimeUnixNano": "1755600001000000000", "endTimeUnixNano": "1755600002000000000",
+                "attributes": [ { "key": "session.id", "value": { "stringValue": "sess-ui-1" } },
+                                { "key": "gen_ai.request.model", "value": { "stringValue": "claude-opus-5" } },
+                                { "key": "input_tokens", "value": { "intValue": "70" } } ]
+            }
+        ] }] }]
+    })
+    .to_string();
+    let r = request(otlp, &format!("POST /v1/traces HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}", payload.len()));
+    assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+    state.lock().unwrap().put_log_session(serde_json::json!({
+        "sessionId": "sess-ui-1", "source": "claude_code", "dataSource": "log", "startTime": "2025-08-19T10:40:00.000Z",
+        "timeline": [{"type":"llm","timestamp":"2025-08-19T10:40:00.500Z"}],
+        "fileOps": [{"file":"loader.ts","edits":1}],
+        "generatedFiles": [{"path":"/tmp/scratch/report.md"}], "generatedFilesTruncated": true
+    }));
+    let r = get(ui, "/api/timeline/sess-ui-1", "");
+    let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
+    let tl = v["timeline"].as_array().unwrap();
+    assert_eq!(tl.len(), 2, "the transcript entry + the grafted OTEL api_request: {v}");
+    assert_eq!(tl[0]["type"], "llm");
+    assert_eq!(tl[1]["type"], "api_request");
+    assert_eq!(tl[1]["spanId"], "cccccccccccccccc");
+    // The lazy payload carries the detail /api/summary strips (TRDD-ZS1GDXVY).
+    assert_eq!(v["fileOps"], serde_json::json!([{"file":"loader.ts","edits":1}]));
+    assert_eq!(v["generatedFiles"], serde_json::json!([{"path":"/tmp/scratch/report.md"}]));
+    assert_eq!(v["generatedFilesTruncated"], true);
+    // The STORED card stays pure — the graft lands on the served copy only.
+    let st = state.lock().unwrap();
+    assert_eq!(st.log_sessions["sess-ui-1"]["timeline"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn timeline_route_reparses_a_stripped_card_from_disk() {
+    let (_otlp, ui, state) = start_servers();
+    // A fixture home with ONE Claude transcript. Timestamps must be FRESH: the reparse applies
+    // the same parse-time hot-age strip as TS, so a cold transcript reparses to a stripped card.
+    let home = std::env::temp_dir().join(format!("al-ui-reparse-home-{}", std::process::id()));
+    let proj = home.join(".claude").join("projects").join("-x-proj");
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(&proj).unwrap();
+    let sid = "dddddddd-1111-2222-3333-444444444444";
+    let now = agentlens_core::now_ms();
+    let iso = |off_ms: i64| agentlens_core::summarize::helpers::iso_from_ms((now - off_ms) as f64);
+    let transcript = format!(
+        "{}\n{}\n",
+        serde_json::json!({"type":"user","timestamp":iso(10_000),"cwd":"/x/proj","message":{"role":"user","content":"drill me"}}),
+        serde_json::json!({"type":"assistant","timestamp":iso(9_000),"message":{"id":"msg_1","model":"claude-opus-5",
+            "usage":{"input_tokens":10,"output_tokens":2,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},
+            "content":[{"type":"text","text":"done"}]}}),
+    );
+    std::fs::write(proj.join(format!("{sid}.jsonl")), transcript).unwrap();
+    {
+        let mut st = state.lock().unwrap();
+        // Point discovery at the fixture home (no process-env race), and store the card as the
+        // durable restore would: STRIPPED — the offset resume never re-read its file.
+        st.log_env = agentlens_logscan::discovery::Env {
+            home: home.clone(),
+            platform: agentlens_logscan::discovery::Platform::Other,
+            vars: std::collections::HashMap::new(),
+        };
+        st.put_log_session(serde_json::json!({
+            "sessionId": sid, "source": "claude_code", "dataSource": "log",
+            "startTime": iso(10_000), "timeline": []
+        }));
+    }
+    let r = get(ui, &format!("/api/timeline/{sid}"), "");
+    assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+    let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
+    let tl = v["timeline"].as_array().unwrap();
+    assert!(!tl.is_empty(), "reparsed from disk: {v}");
+    assert!(tl.iter().any(|e| e["type"] == "llm"), "the assistant turn's llm entry: {v}");
+    // resolveSessionCard re-stores the reparsed card (putLogSession) — the map now holds the
+    // full timeline, not the stripped one.
+    let st = state.lock().unwrap();
+    assert!(!st.log_sessions[sid]["timeline"].as_array().unwrap().is_empty());
+    drop(st);
+    let _ = std::fs::remove_dir_all(&home);
+}

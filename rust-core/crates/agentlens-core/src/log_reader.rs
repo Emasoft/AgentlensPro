@@ -178,6 +178,43 @@ pub fn cold_scan(env: &Env, now_ms: i64) -> (Vec<ScannedFile>, ScanStats) {
     (out, stats)
 }
 
+/// _sessionIdForFile (logReader.ts:418) — the per-agent filename/dirname stem convention. Like
+/// `path.basename(p, ext)`, the extension strips only when present.
+pub fn session_id_for_file(path: &Path, source: &LogSource) -> String {
+    fn stem(p: &Path, ext: &str) -> String {
+        let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        name.strip_suffix(ext).map(str::to_owned).unwrap_or(name)
+    }
+    match source {
+        // The CLI's directory name is the session UUID.
+        LogSource::CopilotCli => path.parent().and_then(|d| d.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+        LogSource::CopilotVscodeJson => stem(path, ".json"),
+        _ => stem(path, ".jsonl"),
+    }
+}
+
+/// reparseSession (logReader.ts:434, TRDD-PJC8N1HO) — a fresh FULL parse of the single file
+/// backing `session_id`, the lazy timeline rebuild for a card RESTORED stripped from the
+/// persisted-card log. None when nothing backs the id (an OTEL-only session, OpenCode — a
+/// multi-session db, not one card per file — or a deleted log). Bounded: one file, on demand.
+/// The parse-time hot-age strip applies here exactly as in TS: a session idle past
+/// AGENTLENS_TIMELINE_HOT_AGE_HOURS reparses to a stripped card in BOTH engines.
+///
+/// The TS also drops the reader's cached offset/accumulator for the file; the Rust tailer lives
+/// on the sweeper thread (Rc accumulators, !Send) and is deliberately NOT touched — benign: its
+/// state describes the same fully-consumed file, and the file's next growth re-parses through
+/// the accumulator or from 0, either of which rebuilds the same card.
+pub fn reparse_session(env: &Env, session_id: &str, now_ms: i64) -> Option<ScannedFile> {
+    let f = discover_all(env)
+        .into_iter()
+        .filter(|f| f.source != LogSource::OpenCodeDb)
+        .find(|f| session_id_for_file(&f.path, &f.source) == session_id)?;
+    let st = stat(&f.path)?;
+    let p = parse_one(&f)?;
+    let state = state_after(&p, st);
+    Some(finish_transcript(p, now_ms, state))
+}
+
 /// OpenCode: one db → MANY cards, each ScannedFile carrying the db's state. Errors are logged
 /// and the db skipped (TS routes a db error to its per-message JSON fallback, an older on-disk
 /// format, and counts `logReader.opencodeDbFallback`; that parser is not ported — deferred).

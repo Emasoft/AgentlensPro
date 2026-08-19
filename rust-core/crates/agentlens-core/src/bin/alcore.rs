@@ -155,6 +155,22 @@ fn main() {
             }
         }
     });
+    let hb_state = state.clone();
+    rt.spawn(async move {
+        // server.ts:1730 — the 30s lifecycle heartbeat: a crash then leaves lastHeartbeat as a
+        // truthful downtime-gap boundary (TRDD-PJC8N1HO spec 2). The TS pairs this timer with
+        // scheduleDurableSave; the Rust durable cadences live on the sweeper thread (P5e), so
+        // only the heartbeat lives here.
+        let mut tick = tokio::time::interval(Duration::from_secs(30));
+        tick.tick().await; // the first tick fires immediately — boot just wrote the start marker
+        loop {
+            tick.tick().await;
+            if let Ok(mut st) = hb_state.lock() {
+                let file = agentlens_core::collector_lifecycle::lifecycle_file(&st.data_dir);
+                agentlens_core::collector_lifecycle::record_heartbeat(&file, &mut st.lifecycle, agentlens_core::now_ms());
+            }
+        }
+    });
     let ui_addr: std::net::SocketAddr = format!("{bind}:{ui_port}").parse().unwrap_or_else(|_| usage("bad bind/ui-port"));
     let serve = agentlens_core::serve_otlp(addr, state.clone(), |bound| {
         println!("alcore: OTLP listening on http://{bound}");
@@ -189,5 +205,9 @@ fn main() {
     }
     if let Ok(mut st) = state.lock() {
         st.flush_spans();
+        // server.ts:4499 recordCollectorStop — a graceful exit marks the run stopped, so the
+        // next boot's gap (if any) classifies as "shutdown", not "crash".
+        let file = agentlens_core::collector_lifecycle::lifecycle_file(&st.data_dir);
+        agentlens_core::collector_lifecycle::record_stop(&file, &mut st.lifecycle, agentlens_core::now_ms());
     };
 }
