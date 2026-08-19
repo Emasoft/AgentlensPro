@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-19T21:40:00+0200
+updated: 2026-08-19T22:05:00+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -410,17 +410,25 @@ release-via: publish
   server.ts builder transcribed key for key (no executable oracle — it is not exported; the
   expected card is a literal in `tests/ui.rs`), the drop/skip/import accounting, both 400
   shapes, 64MB cap. 79/79.
-- **NEXT ACTION (one step): the perf notes under P5b, in ONE slice** — (a) memoize the stripped
-  summary by `data_version` (server.ts strippedCache: `/api/summary` and the SSE payload rebuild
-  only when data_version moved — at 13.5k cards `session_summary` is ~1s per request today);
-  (b) skip timeline retention for COLD files in the boot scan (the parse engine's 3GB peak RSS:
-  a file whose last activity is older than `timeline_hot_age_ms()` gets its timeline stripped
-  at finish time on the worker, not after the join — same cards, a fraction of the peak). Prove
-  (a) with a test counting rebuilds across unchanged requests and (b) with the live 13.5k boot
-  (peak RSS before/after via `/usr/bin/time -l`). Then P5c (accountId registry, generated-files
-  attach), and the remaining frozen routes (hook-events ingest rows 5–8 — hookEventStore +
-  statuslineStore; burn-risk row 12; agent-gate row 13; bodies rows 14–15; prompts/branch-dump
-  rows 17–18; instruction rows 19–21; burn-status row 24; debug/requests row 26).
+- **P5g DONE (commit ba1053e) — the P5b perf notes.** (a) `derived_cache.rs` (VersionedCache,
+  Arc-shared) behind `build_session_summary`/`build_stripped_summary`; `/api/summary`, the SSE
+  connect frame and the push all memoized by data_version; log-scan-stats derivedCaches real.
+  (b) **CORRECTION of the P5b perf note:** the boot-scan peak was the WHOLE-FILE `fs::read` in
+  the parsers (14 workers × their entire file; 30 files >50MB on this machine), not the
+  timelines — measured 4.13GB default vs 3.04GB with minimal caps. `for_each_json_line` streams
+  (one line buffer): allogscan 4.13GB → 1.77GB peak, same wall time; alcore boot peak 1.30GB,
+  post-boot RSS 651MB (was 1.5GB); card-by-card diff of the live snapshot vs the pre-change one
+  = growth + hot-tier churn only. **SUPERSEDED — do NOT carry forward:** "skip timeline
+  retention for cold files" (~25% at best, derivation-parity risk; dropped). 79/79.
+- **NEXT ACTION (one step): P5c — the accountId registry + generated-files attach** (the two
+  deferred card fields from P5b): read server.ts/src for `accountId` on log cards (the call-body
+  registry that maps a session to its account label — where it is built, what the card carries)
+  and `src/generatedFiles.ts` (the fs heuristics that attach generated files to a card); port
+  whichever is self-contained first, TS-oracle fixture per field. Then the remaining frozen
+  routes (hook-events ingest rows 5–8 — hookEventStore + statuslineStore; burn-risk row 12;
+  agent-gate row 13; bodies rows 14–15; prompts/branch-dump rows 17–18; instruction rows 19–21;
+  burn-status row 24; debug/requests row 26), then `session_store.rs` deletion once confirmed
+  unused, and the store OVERLAY (applyOverlay/injectSpanAttribute).
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
