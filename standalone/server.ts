@@ -71,6 +71,7 @@ import { SegmentedSpanStore, migrateLegacySpansFile, spanTimestampMs } from '../
 import { purgeArchiveVolumes, archiveDiskUsage, extractArchive } from '../src/bodyArchive'
 import { openStore, allOf, type Store } from '../src/store/db'
 import { DEFAULT_MAX_BYTES_PER_PASS, ingestPass } from '../src/store/ingestPass'
+import { alstoreBin, rustIngestPass } from '../src/rustStorePass'
 import { verifyVolumeInStore } from '../src/store/archiveVerify'
 import { rawBodyCaptureEnabled, spoolDirConfigured } from '../src/captureConfig'
 import { ensureRamDisk, ramDiskInfo, spoolSizeMb, SPOOL_MOUNT_POINT } from '../src/ramdisk'
@@ -653,7 +654,13 @@ async function archiveOtelBodies(): Promise<void> {
     const targets = drainTargets.filter((t) => fs.existsSync(t.dir))
     if (targets.length === 0) return
     bodyStore ??= await openStore({ dir: path.join(DATA_DIR, 'store') })
-    const skip = (ingestSkipNames ??= await seedIngestSkipNames(bodyStore))
+    // Rust pass engine (TRDD-DMWOBWFH P4b): opted in, the binary owns the whole ingest pass and
+    // its skip/stranded state (`<storeDir>/.pass-state.json`), so the TS skip-set seed (a DB
+    // query) is skipped — it belongs to the TS engine only. bodyStore stays open regardless: the
+    // purge gate and the read endpoints still run here, and every store query re-lists the parts
+    // dir, so Rust-written parts are visible without a reopen.
+    const alstore = alstoreBin()
+    const skip = alstore ? new Set<string>() : (ingestSkipNames ??= await seedIngestSkipNames(bodyStore))
 
     let ingested = 0, deleted = 0, reclaimedDurable = 0, bytesIn = 0, bytesFreed = 0, bytesStored = 0, liveBytesTotal = 0, throttled = false
     const failed: string[] = []
@@ -667,21 +674,39 @@ async function archiveOtelBodies(): Promise<void> {
       }
       liveBytesTotal += liveBytes
       const overCap = liveBytes > target.capBytes
-      const r = await ingestPass({
-        bodiesDir: target.dir,
-        store: bodyStore,
-        maxAgeMs: overCap ? 0 : BODIES_MAX_AGE_MS,
-        maxBytesPerPass: INGEST_MAX_BYTES_PER_PASS, // THE THROTTLE — never an unbounded boot pass again
-        deleteAfter: true,                          // safe: ingestPass verifies from the DURABLE store first
-        durableSource: target.durable,              // fsync barrier only when the source was itself durable
-        skipNames: skip,                            // don't re-read+re-hash already-durable bodies
-        strandedNames: ingestStrandedNames,         // ts-mismatch park — the livelock fix
-        // TRDD-P8JGIEOG: parked files must not pin the fixed-size RAM spool forever — relocate
-        // them to the durable legacy dir (verify-before-unlink, mtime preserved). Durable targets
-        // get no destination: durable→durable relocation is churn, the park alone is correct there.
-        relocateStrandedTo: target.durable ? undefined : LEGACY_BODIES_DIR,
-        fsyncedPartsCache: ingestFsyncedParts,      // barrier covers all parts, once each
-      })
+      // Both engines take the same throttle, the same over-cap valve, the same delete-gate
+      // ordering and the same stranded-relocation policy; the Rust exec THROWS on failure (never
+      // a silent TS fallback), landing in this function's catch — loud on every tick. The one
+      // null return: another pass (an orphan of a killed server) holds the store's kernel flock
+      // — skip the tick exactly as bodiesPassRunning would have.
+      const r = alstore
+        ? await rustIngestPass(alstore, {
+            storeDir: path.join(DATA_DIR, 'store'),
+            bodiesDir: target.dir,
+            maxAgeMs: overCap ? 0 : BODIES_MAX_AGE_MS,
+            maxBytesPerPass: INGEST_MAX_BYTES_PER_PASS,
+            durableSource: target.durable,
+            relocateStrandedTo: target.durable ? undefined : LEGACY_BODIES_DIR,
+          })
+        : await ingestPass({
+            bodiesDir: target.dir,
+            store: bodyStore,
+            maxAgeMs: overCap ? 0 : BODIES_MAX_AGE_MS,
+            maxBytesPerPass: INGEST_MAX_BYTES_PER_PASS, // THE THROTTLE — never an unbounded boot pass again
+            deleteAfter: true,                          // safe: ingestPass verifies from the DURABLE store first
+            durableSource: target.durable,              // fsync barrier only when the source was itself durable
+            skipNames: skip,                            // don't re-read+re-hash already-durable bodies
+            strandedNames: ingestStrandedNames,         // ts-mismatch park — the livelock fix
+            // TRDD-P8JGIEOG: parked files must not pin the fixed-size RAM spool forever — relocate
+            // them to the durable legacy dir (verify-before-unlink, mtime preserved). Durable targets
+            // get no destination: durable→durable relocation is churn, the park alone is correct there.
+            relocateStrandedTo: target.durable ? undefined : LEGACY_BODIES_DIR,
+            fsyncedPartsCache: ingestFsyncedParts,      // barrier covers all parts, once each
+          })
+      if (r === null) {
+        console.log('[AgentLens] bodies pass skipped this tick — another alstore pass owns the store (flock)')
+        continue
+      }
       ingested += r.ingested; deleted += r.deleted; reclaimedDurable += r.reclaimedDurable; bytesFreed += r.bytesFreed
       bytesIn += r.bytesIn; bytesStored += r.bytesStored
       throttled ||= r.throttled
