@@ -245,3 +245,79 @@ pub fn discover_all(env: &Env) -> Vec<DiscoveredFile> {
     }
     out
 }
+
+/// The OpenCode databases alone (the targeted scan always re-checks them: ONE multi-session
+/// SQLite DB whose writes land on the `-wal` sibling, so a path-level filter would miss them).
+pub fn discover_opencode(env: &Env) -> Vec<DiscoveredFile> {
+    opencode_data_dirs(env)
+        .into_iter()
+        .map(|d| d.join("opencode.db"))
+        .filter(|db| std::fs::metadata(db).is_ok())
+        .map(|path| DiscoveredFile { source: LogSource::OpenCodeDb, path })
+        .collect()
+}
+
+/// LogReader.getWatchDirs — every root a recursive watcher attaches to.
+pub fn watch_dirs(env: &Env) -> Vec<PathBuf> {
+    let mut out = claude_projects_dirs(env);
+    out.extend(codex_sessions_dirs(env));
+    out.extend(copilot_session_state_dir(env));
+    out.extend(vscode_family_workspace_storage_roots(env));
+    out.extend(opencode_data_dirs(env));
+    out
+}
+
+/// LogReader._logRoots — the roots resolved ONCE per targeted scan (each resolver stats its
+/// candidates, so never call them per path).
+pub struct LogRoots {
+    pub claude: Vec<PathBuf>,
+    pub codex: Vec<PathBuf>,
+    pub copilot: Option<PathBuf>,
+    pub vscode: Vec<PathBuf>,
+}
+
+impl LogRoots {
+    pub fn resolve(env: &Env) -> LogRoots {
+        LogRoots {
+            claude: claude_projects_dirs(env),
+            codex: codex_sessions_dirs(env),
+            copilot: copilot_session_state_dir(env),
+            vscode: vscode_family_workspace_storage_roots(env),
+        }
+    }
+
+    /// LogReader._agentKeyForPath — which agent owns an absolute path, or None for anything no
+    /// agent claims (a recursive watcher reports EVERY write under the roots: lock files, `.tmp`
+    /// siblings, directories). The rules mirror `discover_all` exactly, so the two modes cannot
+    /// disagree about which file backs which session.
+    pub fn classify(&self, path: &Path) -> Option<LogSource> {
+        let under = |root: &Path| path == root || path.starts_with(root);
+        let in_chat_sessions = || path.parent().and_then(Path::file_name).is_some_and(|n| n == "chatSessions");
+        let name = path.file_name()?.to_str()?;
+        if name.ends_with(".jsonl") {
+            if self.claude.iter().any(|d| under(d)) {
+                return Some(LogSource::Claude);
+            }
+            if self.codex.iter().any(|d| under(d)) {
+                return Some(LogSource::Codex);
+            }
+            if let Some(c) = &self.copilot {
+                if under(c) {
+                    // Copilot CLI: only <uuid>/events.jsonl is a session.
+                    return (name == "events.jsonl").then_some(LogSource::CopilotCli);
+                }
+            }
+            if self.vscode.iter().any(|r| under(r)) && in_chat_sessions() {
+                return Some(LogSource::CopilotVscode);
+            }
+            return None;
+        }
+        if name.ends_with(".json") && self.vscode.iter().any(|r| under(r)) && in_chat_sessions() {
+            // discover_all prefers the newer <uuid>.jsonl delta log and SKIPS the .json snapshot
+            // when both exist; a touched snapshot must not overwrite the delta log's newer card.
+            let sibling = path.with_extension("jsonl");
+            return (std::fs::metadata(sibling).is_err()).then_some(LogSource::CopilotVscodeJson);
+        }
+        None
+    }
+}

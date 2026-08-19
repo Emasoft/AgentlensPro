@@ -13,6 +13,9 @@ agentlens-spanstore = { path = "../agentlens-spanstore" }
 agentlens-logscan = { path = "../agentlens-logscan" }
 rayon = "1"
 indexmap = "2"
+# P5f: the log watcher (server.ts fs.watch recursive on every log root) — FSEvents/inotify/
+# ReadDirectoryChanges behind one API; the 60s full sweep stays the correctness backstop.
+notify = "8"
 # preserve_order: wire objects keep TS insertion order (feature-unified workspace-wide anyway,
 # but stated here so a lone build of this crate cannot silently lose it).
 # float_roundtrip: serde_json's DEFAULT float parse is best-effort and read the codex fixture's

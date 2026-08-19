@@ -353,3 +353,45 @@ fn durable_state_round_trips_offsets_and_stripped_cards_and_skips_the_cold_resca
     assert_eq!(DurableState::open(&data).restore(&mut tailer4, &mut st4).unwrap(), (0, 0, 0));
     assert!(st4.log_sessions.is_empty() && tailer4.file_state.is_empty());
 }
+
+/// P5f: the watcher names a changed file and the debounced TARGETED sweep advances its card long
+/// before the 60s backstop would — and the sweep touched ONE file, not the whole tree.
+#[test]
+fn watcher_advances_a_card_on_growth_without_waiting_for_the_backstop() {
+    use agentlens_core::log_reader::{start_sweeper, FULL_RESCAN};
+    let home = scratch_home("watch");
+    let env = Env { home: home.clone(), platform: Platform::Darwin, vars: HashMap::new() };
+    let data = std::env::temp_dir().join(format!("al-watch-data-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&data);
+    std::fs::create_dir_all(&data).unwrap();
+    let claude = home.join(CLAUDE_REL);
+    let sid = "cccccccc-1111-2222-3333-444444444444";
+
+    let state = std::sync::Arc::new(std::sync::Mutex::new(CoreState::open(&data)));
+    // poll_interval is the NO-watcher fallback cadence; with a watcher attached the backstop is
+    // FULL_RESCAN (60s), so a card advancing within seconds can only be the targeted path.
+    let (boot, handle) = start_sweeper(state.clone(), env, data.clone(), std::time::Duration::from_secs(3600)).unwrap();
+    assert!(boot.watch_attached >= 1, "the fixture's claude projects root is watchable: {boot:?}");
+    assert!(FULL_RESCAN.as_secs() >= 60);
+    let turns0 = state.lock().unwrap().log_sessions[sid]["turns"].as_u64().unwrap();
+    let version0 = state.lock().unwrap().data_version;
+
+    // FSEvents latency + the 300ms debounce: poll the card map, bounded well under the backstop.
+    append(&claude, &turn_line(9, "2026-08-01T10:00:09.000Z"));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut turns = turns0;
+    while std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        turns = state.lock().unwrap().log_sessions[sid]["turns"].as_u64().unwrap();
+        if turns > turns0 {
+            break;
+        }
+    }
+    assert_eq!(turns, turns0 + 1, "the watcher + targeted sweep advanced the card");
+    assert!(state.lock().unwrap().data_version > version0);
+
+    // A graceful stop flushes the durable state (offsets for the file that grew).
+    handle.stop();
+    let offsets = DeltaLog::new(&data, "log-offsets").load().unwrap();
+    assert_eq!(offsets[claude.to_str().unwrap()]["bytesRead"], std::fs::metadata(&claude).unwrap().len());
+}

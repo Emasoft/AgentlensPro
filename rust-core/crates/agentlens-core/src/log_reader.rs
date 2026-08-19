@@ -275,63 +275,95 @@ impl LogTailer {
         let mut out: Vec<ScannedFile> = Vec::new();
         let mut stats = SweepStats { files: files.len(), ..SweepStats::default() };
         for f in &files {
-            match f.source {
-                LogSource::OpenCodeDb => {
-                    let Some(st) = opencode_state(&f.path) else { continue };
-                    if self.file_state.get(&f.path).is_some_and(|p| p.mtime_ms == st.mtime_ms && p.bytes_read == st.size) {
-                        continue;
-                    }
-                    stats.changed += 1;
-                    self.file_state.insert(f.path.clone(), st);
-                    if let Some((_, scanned)) = parse_opencode(&f.path, now_ms) {
-                        stats.full_reads += 1;
-                        stats.parsed += scanned.len();
-                        out.extend(scanned);
-                    }
-                }
-                LogSource::Claude | LogSource::Codex => {
-                    let Some(st) = stat(&f.path) else { continue };
-                    if Self::unchanged(self.file_state.get(&f.path), st) {
-                        continue;
-                    }
-                    stats.changed += 1;
-                    match self.tail_one(f, st, now_ms) {
-                        Some((resumed, scanned)) => {
-                            if resumed { stats.incremental_reads += 1 } else { stats.full_reads += 1 }
-                            if let Some(s) = scanned {
-                                stats.parsed += 1;
-                                out.push(s);
-                            }
-                        }
-                        None => {}
-                    }
-                }
-                _ => {
-                    // Copilot logs are small: whole-file re-read on change (TS _readNewLines).
-                    let Some(st) = stat(&f.path) else { continue };
-                    if Self::unchanged(self.file_state.get(&f.path), st) {
-                        continue;
-                    }
-                    stats.changed += 1;
-                    if st.2 > MAX_ARRAY_READ_BYTES {
-                        // Recorded so the next sweep skips it instead of re-logging every pass.
-                        self.file_state.insert(f.path.clone(), FileState { bytes_read: st.2, mtime_ms: st.0, ino: st.1, size: st.2 });
-                        eprintln!("alcore: skipping oversized non-incremental log {} ({}MB)", f.path.display(), st.2 / 1_048_576);
-                        continue;
-                    }
-                    stats.full_reads += 1;
-                    let state = FileState { bytes_read: st.2, mtime_ms: st.0, ino: st.1, size: st.2 };
-                    self.file_state.insert(f.path.clone(), state);
-                    if let Some(p) = parse_one(f) {
-                        stats.parsed += 1;
-                        out.push(finish_transcript(p, now_ms, state));
-                    }
-                }
-            }
+            self.process_file(f, now_ms, &mut stats, &mut out);
         }
         stats.cards = out.iter().map(|s| s.cards.len()).sum();
         stats.elapsed_ms = t0.elapsed().as_millis();
         (out, stats)
+    }
+
+    /// The TARGETED sweep (LogReader._scanPaths, TRDD-X2E6OSWK): stat + parse ONLY the paths a
+    /// watcher named — one stat per changed file instead of one per discovered file. Same
+    /// per-file gate as the full sweep (`process_file`), so the two modes can never double-read a
+    /// byte: the offsets are the single source of truth for "what has been read", not the mode.
+    /// The OpenCode DBs are always re-checked (their writes land on the `-wal` sibling). NOT a
+    /// correctness substitute for the full sweep — a watcher coalesces and can drop events.
+    pub fn sweep_paths(&mut self, env: &Env, paths: &[PathBuf], now_ms: i64) -> (Vec<ScannedFile>, SweepStats) {
+        let t0 = Instant::now();
+        let roots = agentlens_logscan::discovery::LogRoots::resolve(env);
+        let mut seen: std::collections::HashSet<&PathBuf> = std::collections::HashSet::new();
+        let mut out: Vec<ScannedFile> = Vec::new();
+        let mut stats = SweepStats::default();
+        for path in paths {
+            if !seen.insert(path) {
+                continue; // a watch burst names the same file many times
+            }
+            let Some(source) = roots.classify(path) else { continue };
+            stats.files += 1;
+            let f = DiscoveredFile { source, path: path.clone() };
+            self.process_file(&f, now_ms, &mut stats, &mut out);
+        }
+        for f in agentlens_logscan::discovery::discover_opencode(env) {
+            stats.files += 1;
+            self.process_file(&f, now_ms, &mut stats, &mut out);
+        }
+        stats.cards = out.iter().map(|s| s.cards.len()).sum();
+        stats.elapsed_ms = t0.elapsed().as_millis();
+        (out, stats)
+    }
+
+    /// LogReader._processFile — the ONE per-file change gate both sweep modes go through.
+    fn process_file(&mut self, f: &DiscoveredFile, now_ms: i64, stats: &mut SweepStats, out: &mut Vec<ScannedFile>) {
+        match f.source {
+            LogSource::OpenCodeDb => {
+                let Some(st) = opencode_state(&f.path) else { return };
+                if self.file_state.get(&f.path).is_some_and(|p| p.mtime_ms == st.mtime_ms && p.bytes_read == st.size) {
+                    return;
+                }
+                stats.changed += 1;
+                self.file_state.insert(f.path.clone(), st);
+                if let Some((_, scanned)) = parse_opencode(&f.path, now_ms) {
+                    stats.full_reads += 1;
+                    stats.parsed += scanned.len();
+                    out.extend(scanned);
+                }
+            }
+            LogSource::Claude | LogSource::Codex => {
+                let Some(st) = stat(&f.path) else { return };
+                if Self::unchanged(self.file_state.get(&f.path), st) {
+                    return;
+                }
+                stats.changed += 1;
+                if let Some((resumed, scanned)) = self.tail_one(f, st, now_ms) {
+                    if resumed { stats.incremental_reads += 1 } else { stats.full_reads += 1 }
+                    if let Some(s) = scanned {
+                        stats.parsed += 1;
+                        out.push(s);
+                    }
+                }
+            }
+            _ => {
+                // Copilot logs are small: whole-file re-read on change (TS _readNewLines).
+                let Some(st) = stat(&f.path) else { return };
+                if Self::unchanged(self.file_state.get(&f.path), st) {
+                    return;
+                }
+                stats.changed += 1;
+                if st.2 > MAX_ARRAY_READ_BYTES {
+                    // Recorded so the next sweep skips it instead of re-logging every pass.
+                    self.file_state.insert(f.path.clone(), FileState { bytes_read: st.2, mtime_ms: st.0, ino: st.1, size: st.2 });
+                    eprintln!("alcore: skipping oversized non-incremental log {} ({}MB)", f.path.display(), st.2 / 1_048_576);
+                    return;
+                }
+                stats.full_reads += 1;
+                let state = FileState { bytes_read: st.2, mtime_ms: st.0, ino: st.1, size: st.2 };
+                self.file_state.insert(f.path.clone(), state);
+                if let Some(p) = parse_one(f) {
+                    stats.parsed += 1;
+                    out.push(finish_transcript(p, now_ms, state));
+                }
+            }
+        }
     }
 
     /// _incrementalParse for one Claude/Codex file. Returns (resumed?, the finished file or None
@@ -627,38 +659,107 @@ pub struct BootReport {
     pub offsets_imported: usize,
     pub offsets_skipped: usize,
     pub sweep: SweepStats,
+    /// setupLogWatcher: how many log roots got a recursive watcher, and how many did not (they
+    /// refresh only on the backstop sweep). 0 attached ⇒ the backstop runs at the fast cadence.
+    pub watch_attached: usize,
+    pub watch_failed: usize,
+}
+
+/// server.ts FULL_RESCAN_MS — the correctness backstop behind the watcher: a recursive watcher
+/// coalesces (and, on macOS FSEvents, can drop) events, and a root that did not exist at boot
+/// never got a watcher, so a periodic full sweep is the only guarantee no file is missed.
+pub const FULL_RESCAN: std::time::Duration = std::time::Duration::from_secs(60);
+/// server.ts scheduleWatchScan — events arrive in bursts (one JSONL append emits several); the
+/// debounce collapses a burst into ONE targeted sweep over the union of the paths it named.
+pub const WATCH_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(300);
+
+enum Msg {
+    Stop,
+    /// Paths a watch event named (absolute).
+    Changed(Vec<PathBuf>),
+    /// An event with NO path (the platform coalesced it away): the next sweep is promoted to a
+    /// full one — guessing would silently drop a session's new lines.
+    Unnamed,
 }
 
 /// A handle to stop the sweeper: `stop()` wakes the thread, which flushes the durable state and
 /// exits; the join makes the flush complete before the process does.
 pub struct SweeperHandle {
-    stop: std::sync::mpsc::Sender<()>,
+    stop: std::sync::mpsc::Sender<Msg>,
     join: Option<std::thread::JoinHandle<()>>,
 }
 
 impl SweeperHandle {
     pub fn stop(mut self) {
-        let _ = self.stop.send(());
+        let _ = self.stop.send(Msg::Stop);
         if let Some(j) = self.join.take() {
             let _ = j.join();
         }
     }
 }
 
+/// setupLogWatcher: one recursive watcher per log root, events forwarded to the sweeper thread.
+/// A root that cannot be watched (typically: does not exist yet) is reported, not fatal — the
+/// backstop sweep still covers it. The watcher is returned so it lives as long as the thread.
+fn attach_watchers(env: &Env, tx: std::sync::mpsc::Sender<Msg>) -> (Option<notify::RecommendedWatcher>, usize, Vec<PathBuf>) {
+    use notify::Watcher;
+    let dirs = agentlens_logscan::discovery::watch_dirs(env);
+    // FSEvents (and a symlinked root anywhere) reports the CANONICAL path (`/private/var/…` for
+    // a `/var/…` root), while discovery — and so every file_state key — spells the root as
+    // configured. Rebase each event path onto the configured spelling, or the classifier would
+    // disown it and a matching file would be tracked twice under two keys. (fs.watch hands the TS
+    // a root-relative name, which it resolves against the configured root — same outcome.)
+    let rebase: Vec<(PathBuf, PathBuf)> = dirs
+        .iter()
+        .filter_map(|d| std::fs::canonicalize(d).ok().filter(|c| c != d).map(|c| (c, d.clone())))
+        .collect();
+    let mut watcher = match notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
+        let msg = match res {
+            Ok(ev) if ev.paths.is_empty() => Msg::Unnamed,
+            Ok(ev) => Msg::Changed(
+                ev.paths
+                    .into_iter()
+                    .map(|p| match rebase.iter().find(|(c, _)| p.starts_with(c)) {
+                        Some((c, root)) => root.join(p.strip_prefix(c).unwrap_or(&p)),
+                        None => p,
+                    })
+                    .collect(),
+            ),
+            // A watcher error (queue overflow, a root vanishing) is the same ignorance as an
+            // unnamed event: only a full sweep is safe.
+            Err(_) => Msg::Unnamed,
+        };
+        let _ = tx.send(msg);
+    }) {
+        Ok(w) => w,
+        Err(_) => return (None, 0, dirs),
+    };
+    let (mut attached, mut failed) = (0usize, Vec::new());
+    for dir in dirs {
+        match watcher.watch(&dir, notify::RecursiveMode::Recursive) {
+            Ok(()) => attached += 1,
+            Err(_) => failed.push(dir),
+        }
+    }
+    (Some(watcher), attached, failed)
+}
+
 /// The log reader's thread: restore the durable state, run the boot sweep (reported once
 /// ingested, so the caller binds its listeners with the card map already populated — the TS
-/// server's synchronous boot batch), then a sweep every `interval` until stopped (TS falls back
-/// to a 5s full poll when fs.watch is unavailable; a notify-based watcher with the 60s backstop
-/// is a later slice), saving offsets/cards on their cadences. The tailer is `!Send`, so it is
-/// created ON this thread and never leaves it.
+/// server's synchronous boot batch), then steady state: a recursive watcher names the changed
+/// paths and a debounced TARGETED sweep stats only those (TRDD-X2E6OSWK), while a FULL sweep
+/// every `FULL_RESCAN` is the correctness backstop — or every `poll_interval` when not one
+/// watcher attached (server.ts's 5s full-poll fallback). Offsets/cards save on their cadences.
+/// The tailer is `!Send`, so it is created ON this thread and never leaves it.
 pub fn start_sweeper(
     state: std::sync::Arc<std::sync::Mutex<crate::CoreState>>,
     env: Env,
     data_dir: PathBuf,
-    interval: std::time::Duration,
+    poll_interval: std::time::Duration,
 ) -> Result<(BootReport, SweeperHandle), String> {
     let (boot_tx, boot_rx) = std::sync::mpsc::channel::<Result<BootReport, String>>();
-    let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
+    let (tx, rx) = std::sync::mpsc::channel::<Msg>();
+    let stop_tx = tx.clone();
     let join = std::thread::Builder::new()
         .name("log-sweeper".into())
         .spawn(move || {
@@ -675,19 +776,67 @@ pub fn start_sweeper(
                     return;
                 }
             };
+            // Attach BEFORE the boot sweep: a write landing during the sweep is then named by an
+            // event instead of waiting for the backstop (its stat gate makes a double-visit free).
+            let (_watcher, watch_attached, watch_failed) = attach_watchers(&env, tx);
             let (scanned, sweep) = tailer.sweep(&env, crate::now_ms());
             if !scanned.is_empty() {
                 durable.mark_dirty();
             }
             state.lock().expect("core state").ingest_scanned(scanned);
-            let _ = boot_tx.send(Ok(BootReport { restored_cards, offsets_imported, offsets_skipped, sweep }));
+            let _ = boot_tx.send(Ok(BootReport {
+                restored_cards,
+                offsets_imported,
+                offsets_skipped,
+                sweep,
+                watch_attached,
+                watch_failed: watch_failed.len(),
+            }));
+
+            let backstop = if watch_attached > 0 { FULL_RESCAN } else { poll_interval };
+            let mut next_full = Instant::now() + backstop;
+            let mut pending: Vec<PathBuf> = Vec::new();
+            let mut needs_full = false;
             loop {
-                // recv_timeout doubles as the sleep: a stop request wakes the loop immediately.
-                if stop_rx.recv_timeout(interval).is_ok() {
-                    durable.tick(&tailer, &state, true);
-                    return;
+                // recv_timeout doubles as the sleep: an event or a stop wakes the loop at once.
+                let wait = next_full.saturating_duration_since(Instant::now());
+                let first = rx.recv_timeout(wait);
+                match first {
+                    Ok(Msg::Stop) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        durable.tick(&tailer, &state, true);
+                        return;
+                    }
+                    Ok(Msg::Changed(p)) => pending.extend(p),
+                    Ok(Msg::Unnamed) => needs_full = true,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => needs_full = true,
                 }
-                let (scanned, _) = tailer.sweep(&env, crate::now_ms());
+                // Debounce: keep draining until the burst has been quiet for WATCH_DEBOUNCE.
+                if !needs_full {
+                    loop {
+                        match rx.recv_timeout(WATCH_DEBOUNCE) {
+                            Ok(Msg::Stop) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                                durable.tick(&tailer, &state, true);
+                                return;
+                            }
+                            Ok(Msg::Changed(p)) => pending.extend(p),
+                            Ok(Msg::Unnamed) => {
+                                needs_full = true;
+                                break;
+                            }
+                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
+                        }
+                    }
+                }
+                let (scanned, _) = if needs_full {
+                    // A full sweep subsumes every pending hint and re-arms the backstop.
+                    pending.clear();
+                    needs_full = false;
+                    next_full = Instant::now() + backstop;
+                    tailer.sweep(&env, crate::now_ms())
+                } else {
+                    let paths = std::mem::take(&mut pending);
+                    tailer.sweep_paths(&env, &paths, crate::now_ms())
+                };
                 if !scanned.is_empty() {
                     durable.mark_dirty();
                     state.lock().expect("core state").ingest_scanned(scanned);

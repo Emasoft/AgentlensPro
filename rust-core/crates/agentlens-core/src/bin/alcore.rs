@@ -15,8 +15,8 @@ use std::process::exit;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// server.ts falls back to a 5s full poll when fs.watch is unavailable; until the notify-based
-/// watcher lands, the Rust sweeper IS that fallback (13.5k stats per sweep ≈ tens of ms).
+/// server.ts falls back to a 5s full poll when fs.watch attaches to NO log dir; with watchers
+/// the steady state is the targeted sweep + the 60s backstop (log_reader::FULL_RESCAN).
 const LOG_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
 
 fn usage(msg: &str) -> ! {
@@ -107,6 +107,24 @@ fn main() {
                     s.elapsed_ms,
                     rayon::current_num_threads()
                 );
+                // server.ts startLogIngestion's two warnings: roots without a watcher refresh only
+                // on the backstop; no watcher at all ⇒ the fast full poll (higher CPU).
+                if boot.watch_failed > 0 {
+                    eprintln!(
+                        "alcore: no watcher on {} log dir(s) — they refresh only on the {}s backstop sweep",
+                        boot.watch_failed,
+                        agentlens_core::log_reader::FULL_RESCAN.as_secs()
+                    );
+                }
+                if boot.watch_attached == 0 {
+                    eprintln!("alcore: file watching unavailable on every log dir — falling back to a {}s full poll (higher CPU)", LOG_SWEEP_INTERVAL.as_secs());
+                } else {
+                    println!(
+                        "alcore: watching {} log dir(s); full backstop sweep every {}s",
+                        boot.watch_attached,
+                        agentlens_core::log_reader::FULL_RESCAN.as_secs()
+                    );
+                }
                 sweeper = Some(handle);
             }
             Err(e) => {
