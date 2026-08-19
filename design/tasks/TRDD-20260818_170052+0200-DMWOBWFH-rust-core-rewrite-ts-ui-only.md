@@ -196,6 +196,16 @@ release-via: publish
   /api/summary, the SSE update frames, AND the gen_ai injection target — the prerequisite for
   every UI-surface route. Cross-engine parity: deepStrictEqual the summarizer output on a real
   captured span window vs the TS engine.
+  SIZED (2026-08-19): the true surface is ~3,350 lines — sessionStore.ts 187 (trivial: window
+  trim, coarse counters, injectSpanAttribute = the gen_ai target) + spanSummarizer.ts 283
+  (synth-root logic for in-progress Claude/Copilot traces, bg-span mapping, efficiency rollup)
+  fan into summarizers/claude.ts 620, codex.ts 506, copilot.ts 289, helpers.ts 340,
+  loopDetector.ts 309, shared/summarizerTypes.ts 729 (the WIRE shape — serde must match
+  field-for-field incl. optional-field omission), shared/tokenBuckets.ts 81. Port order:
+  helpers → types (serde, camelCase, skip_serializing_if) → copilot → claude → codex →
+  summarizer+synth → loopDetector → sessionStore window. Parity harness first: capture a real
+  5-min window via /events or store.export(), replay through both engines, key-normalized
+  deepStrictEqual (P1's lesson: serde alphabetizes vs JSON.stringify insertion order).
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
