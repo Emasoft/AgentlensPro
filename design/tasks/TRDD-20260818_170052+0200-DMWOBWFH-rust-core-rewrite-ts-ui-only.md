@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-19T20:36:00+0200
+updated: 2026-08-19T20:48:00+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -355,6 +355,22 @@ release-via: publish
   NOT ported (cutover-irrelevant or later): the legacy whole-file `log-sessions.json` /
   `log-offsets.json` migration (this machine migrated long ago; a fresh install has none), the
   `persistStats` counters (land with `/api/server-stats`), the collector-lifecycle file.
+- **P4h DONE (commit 41eda20) — CORRECTION: the served summary window is the standalone
+  server's 24h `spans` array, not the 5-minute SessionStore.** `sessionStore.ts` (P4d.7's
+  port) is the VS-Code-era otlpCollector's window — the standalone server never uses it;
+  server.ts summarizes over `spans` = `spanStore.loadRange(now − summaryWindowHours, ∞)` at
+  boot (default 24h, config.json/env, 5-min floor), appended by ingest, pruned by the span's
+  own timestamp on the 5s flush tick. Ported as `SpanStoreWriter::load_range` (+`stats`) and
+  `span_window::SpanWindow`; `CoreState::open(data_dir)` boot-loads it; `prune_window` on the
+  tick. Live over a copy of the real store: 55,830 spans / 24h → 123 OTEL sessions; the 2
+  comparable TS OTEL cards identical. 74/74. **SUPERSEDED — do NOT carry forward:** "P4d —
+  SessionStore 5-min rolling window is the engine behind /api/summary" (P4d STATE entry above)
+  — true of the collector class, false of the served surface. `session_store.rs` is now unused
+  by CoreState (kept for its parity test; delete it when the TS VS-Code path goes, or sooner if
+  nothing ports `injectSpanAttribute` through it — the standalone gen_ai injection is the
+  store OVERLAY, segmentedSpanStore.applyOverlay, which is NOT ported yet). NOT ported: the
+  V8 heap/rss-pressure halving of effectiveWindowMs (a Rust-native guard belongs with the
+  resource monitor).
 - **NEXT ACTION (one step): `/api/server-stats` behind the frozen §1.4 key order** (the freeze
   report `reports/p4-wire-freeze/20260818_200921+0200-frozen-wire-surface.md` §1.4): port the
   server.ts handler's derivations over CoreState (span counts, log-scan stats incl. the sweep
