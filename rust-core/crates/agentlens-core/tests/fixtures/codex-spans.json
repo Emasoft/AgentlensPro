@@ -1,0 +1,136 @@
+[
+  {
+    "traceId": "ct1", "spanId": "cp1", "name": "codex.user_prompt",
+    "startTime": "1755591001000000000", "endTime": "1755591001000000000",
+    "attributes": [
+      { "key": "conversation.id", "value": { "stringValue": "conversation-12345" } },
+      { "key": "user_prompt", "value": { "stringValue": "Refactor the parser" } },
+      { "key": "cwd", "value": { "stringValue": "/work/codex-proj" } }
+    ]
+  },
+  {
+    "traceId": "ct1", "spanId": "tt1", "name": "codex.turn_ttft",
+    "startTime": "1755591002000000000", "endTime": "1755591002000000000",
+    "attributes": [
+      { "key": "duration_ms", "value": { "intValue": 350 } }
+    ]
+  },
+  {
+    "traceId": "ct1", "spanId": "dec1", "name": "codex.tool_decision",
+    "startTime": "1755591003000000000", "endTime": "1755591003000000000",
+    "attributes": [
+      { "key": "call_id", "value": { "stringValue": "c1" } },
+      { "key": "tool_name", "value": { "stringValue": "shell" } }
+    ]
+  },
+  {
+    "traceId": "ct1", "spanId": "call1", "name": "codex.tool.call",
+    "startTime": "1755591004000000000", "endTime": "1755591004000000000",
+    "attributes": [
+      { "key": "call_id", "value": { "stringValue": "c1" } },
+      { "key": "arguments", "value": { "stringValue": "{\"command\":\"cat src/main.rs && grep -n foo lib/util.py\"}" } }
+    ]
+  },
+  {
+    "traceId": "ct1", "spanId": "res1", "name": "codex.tool_result",
+    "startTime": "1755591005000000000", "endTime": "1755591005000000000",
+    "attributes": [
+      { "key": "call_id", "value": { "stringValue": "c1" } },
+      { "key": "duration_ms", "value": { "intValue": 420 } },
+      { "key": "output", "value": { "stringValue": "diff applied cleanly across both files; twelve lines changed in total." } }
+    ]
+  },
+  {
+    "traceId": "ct1", "spanId": "sse1", "name": "codex.sse_event",
+    "startTime": "1755591006000000000", "endTime": "1755591007000000000",
+    "attributes": [
+      { "key": "event.kind", "value": { "stringValue": "response.completed" } },
+      { "key": "gen_ai.request.model", "value": { "stringValue": "gpt-5-codex" } },
+      { "key": "input_tokens", "value": { "intValue": 1000 } },
+      { "key": "cached_token_count", "value": { "intValue": 800 } },
+      { "key": "output_tokens", "value": { "intValue": 180 } },
+      { "key": "reasoning_token_count", "value": { "intValue": 20 } },
+      { "key": "output_text", "value": { "stringValue": "Done refactoring." } }
+    ]
+  },
+  {
+    "traceId": "ct1", "spanId": "hr1", "name": "codex.turn",
+    "startTime": "1755591008000000000", "endTime": "1755591008000000000",
+    "attributes": [
+      { "key": "input_tokens", "value": { "intValue": 1000 } },
+      { "key": "cached_token_count", "value": { "intValue": 800 } },
+      { "key": "output_tokens", "value": { "intValue": 200 } }
+    ]
+  },
+  {
+    "traceId": "ct1", "spanId": "sse2", "name": "codex.sse_event",
+    "startTime": "1755591009000000000", "endTime": "1755591009000000000",
+    "attributes": [
+      { "key": "event.kind", "value": { "stringValue": "response.output_text.delta" } }
+    ]
+  },
+  {
+    "traceId": "ct2", "spanId": "st1", "name": "session_task.turn",
+    "startTime": "0", "endTime": "0", "receivedAt": 1755592000000,
+    "attributes": [
+      { "key": "thread.id", "value": { "stringValue": "threadconv-99887" } },
+      { "key": "turn.id", "value": { "stringValue": "turn-7" } },
+      { "key": "gen_ai.request.model", "value": { "stringValue": "gpt-5" } },
+      { "key": "input_tokens", "value": { "intValue": 500 } },
+      { "key": "cached_token_count", "value": { "intValue": 100 } },
+      { "key": "output_tokens", "value": { "intValue": 60 } }
+    ]
+  },
+  {
+    "traceId": "ct2", "spanId": "tool2", "name": "codex.tool",
+    "startTime": "1755592002000000000", "endTime": "1755592003000000000",
+    "attributes": [
+      { "key": "tool_name", "value": { "stringValue": "patch" } },
+      { "key": "tool_input", "value": { "stringValue": "{\"filePath\":\"lib/x.py\"}" } }
+    ]
+  },
+  {
+    "traceId": "ct2", "spanId": "rf2", "name": "codex.tool_result",
+    "startTime": "1755592004000000000", "endTime": "1755592004200000000",
+    "attributes": [
+      { "key": "tool_name", "value": { "stringValue": "read_file" } },
+      { "key": "tool_input", "value": { "stringValue": "{\"path\":\"/abs/deep/file.txt\"}" } },
+      { "key": "output", "value": { "stringValue": "ok" } },
+      { "key": "duration_ms", "value": { "intValue": 15 } }
+    ]
+  },
+  {
+    "traceId": "ct2", "spanId": "cmp2", "name": "codex.completion",
+    "startTime": "1755592005000000000", "endTime": "1755592006000000000",
+    "attributes": [
+      { "key": "success", "value": { "stringValue": "false" } },
+      { "key": "input_tokens", "value": { "intValue": 50 } },
+      { "key": "output_tokens", "value": { "intValue": 10 } }
+    ]
+  },
+  {
+    "traceId": "ct2", "spanId": "str2", "name": "codex.stream_event",
+    "startTime": "1755592007000000000", "endTime": "1755592007500000000",
+    "attributes": [
+      { "key": "event.kind", "value": { "stringValue": "turn.cancelled" } }
+    ]
+  },
+  {
+    "traceId": "ct3", "spanId": "cp3", "name": "codex.prompt",
+    "startTime": "1755593000000000000", "endTime": "1755593000000000000",
+    "attributes": [
+      { "key": "conversation.id", "value": { "stringValue": "conv3" } },
+      { "key": "prompt_length", "value": { "intValue": 300 } }
+    ]
+  },
+  {
+    "traceId": "ct3", "spanId": "sse3", "name": "codex.sse_event",
+    "startTime": "1755593001000000000", "endTime": "1755593001000000000",
+    "attributes": []
+  },
+  {
+    "traceId": "tX", "spanId": "nx", "name": "claude_code.interaction",
+    "startTime": "1755594000000000000", "endTime": "1755594001000000000",
+    "attributes": []
+  }
+]

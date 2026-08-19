@@ -7,3 +7,4 @@ pub mod buckets;
 pub mod retention;
 pub mod copilot;
 pub mod claude;
+pub mod codex;

@@ -10,7 +10,10 @@ agentlens-ingest = { path = "../agentlens-ingest" }
 agentlens-spanstore = { path = "../agentlens-spanstore" }
 # preserve_order: wire objects keep TS insertion order (feature-unified workspace-wide anyway,
 # but stated here so a lone build of this crate cannot silently lose it).
-serde_json = { version = "1", features = ["preserve_order"] }
+# float_roundtrip: serde_json's DEFAULT float parse is best-effort and read the codex fixture's
+# 0.18181818181818182 one ulp off, failing an exact-parity test against a correct port — every
+# TS-oracle comparison depends on fixture floats parsing to the exact double JS printed.
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 regex = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "time", "signal"] }
 hyper = { version = "1", features = ["server", "http1"] }

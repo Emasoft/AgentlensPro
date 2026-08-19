@@ -92,6 +92,32 @@ pub fn put_span_id(obj: &mut Map<String, Value>, span: &Value) {
     }
 }
 
+/// Insertion-ordered mirror of a JS `Set<any>`: dedup by the JSON serialization, which matches
+/// SameValueZero for the strings and numbers real tool args carry (a string "5" serializes as
+/// `"5"`, the number 5 as `5` — distinct, exactly as in JS).
+#[derive(Default)]
+pub struct JsSet {
+    seen: std::collections::HashSet<String>,
+    items: Vec<Value>,
+}
+
+impl JsSet {
+    pub fn add(&mut self, v: Value) {
+        if self.seen.insert(v.to_string()) {
+            self.items.push(v);
+        }
+    }
+    pub fn add_str(&mut self, s: String) {
+        self.add(Value::String(s));
+    }
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+    pub fn into_value(self) -> Value {
+        Value::Array(self.items)
+    }
+}
+
 fn attrs(span: &Value) -> &[Value] {
     span.get("attributes").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[])
 }
@@ -375,11 +401,24 @@ pub fn is_codex_llm_span_name(name: &str) -> bool {
         || name.contains("response")
 }
 
-/// isCodexPromptEventName — single-sourced in TS's codexSessionNormalizer; the Rust single
-/// source is the ingest crate's normalizer. Mirrored here as a name check to avoid a crate
-/// dependency cycle; pinned against the TS list by the parity tests.
+/// isCodexPromptSpanName — TS re-exports isCodexPromptEventName from codexSessionNormalizer;
+/// the Rust single source is the ingest crate's normalizer, delegated to directly (this crate
+/// already depends on it — the earlier hand-mirrored list had silently drifted from the TS one,
+/// which is exactly the failure mode single-sourcing exists to prevent).
 pub fn is_codex_prompt_span_name(name: &str) -> bool {
-    name == "codex.user_prompt" || name == "codex.prompt" || name == "codex.turn" || name == "codex.user_turn"
+    agentlens_ingest::is_codex_prompt_event_name(name)
+}
+
+pub fn is_codex_tool_decision_span(name: &str) -> bool {
+    name == "codex.tool_decision"
+}
+
+pub fn is_codex_tool_call_span(name: &str) -> bool {
+    name == "codex.tool.call"
+}
+
+pub fn is_codex_tool_result_span(name: &str) -> bool {
+    name == "codex.tool_result"
 }
 
 /// extractTokenCounts — the `||` chains are FIRST-NON-ZERO, and output falls back to the sum of
@@ -391,7 +430,7 @@ pub struct TokenCounts {
     pub cache_create: f64,
 }
 
-fn first_nonzero(span: &Value, keys: &[&str]) -> f64 {
+pub fn first_nonzero(span: &Value, keys: &[&str]) -> f64 {
     for k in keys {
         let v = get_attr_num(span, k);
         if v != 0.0 {

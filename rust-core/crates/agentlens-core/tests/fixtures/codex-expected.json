@@ -1,0 +1,212 @@
+[
+ {
+  "sessionId": "cp1",
+  "traceId": "codex:conversation-12345:prompt-1",
+  "source": "codex",
+  "dataSource": "otel",
+  "conversationId": "conversation-12345",
+  "workspace": "/work/codex-proj",
+  "userRequest": "Refactor the parser",
+  "model": "gpt-5-codex",
+  "turns": 1,
+  "inputTokens": 200,
+  "outputTokens": 200,
+  "cacheReadTokens": 800,
+  "cacheCreateTokens": 0,
+  "cacheHitRate": 0.8,
+  "durationMs": 8000,
+  "startTime": "2025-08-19T08:10:01.000Z",
+  "filesRead": [],
+  "filesSearched": [],
+  "filesChanged": [
+   "src/main.rs",
+   "lib/util.py"
+  ],
+  "filesWritten": [],
+  "toolCounts": {
+   "shell": 1
+  },
+  "totalToolCalls": 1,
+  "totalLlmCalls": 1,
+  "errors": 0,
+  "outcome": "text_response",
+  "timeline": [
+   {
+    "type": "tool",
+    "spanId": "res1",
+    "label": "shell",
+    "durationMs": 420,
+    "toolInput": "{\"command\":\"cat src/main.rs && grep -n foo lib/util.py\"}",
+    "isError": false,
+    "resultSummary": "70 chars",
+    "fullResult": "diff applied cleanly across both files; twelve lines changed in total.",
+    "timestamp": "2025-08-19T08:10:05.000Z"
+   },
+   {
+    "type": "llm",
+    "spanId": "sse1",
+    "label": "gpt-5-codex",
+    "model": "gpt-5-codex",
+    "inputTokens": 200,
+    "outputTokens": 200,
+    "cacheReadTokens": 800,
+    "ttft": 350,
+    "action": "response.completed",
+    "responseText": "Done refactoring.",
+    "durationMs": 1000,
+    "isError": false,
+    "timestamp": "2025-08-19T08:10:06.000Z"
+   }
+  ],
+  "backgroundSpans": [
+   {
+    "name": "codex.turn_ttft",
+    "model": "",
+    "purpose": "codex.turn_ttft",
+    "inputTokens": 0,
+    "outputTokens": 0
+   },
+   {
+    "name": "codex.sse_event",
+    "model": "gpt-5-codex",
+    "purpose": "codex.sse_event",
+    "inputTokens": 0,
+    "outputTokens": 0
+   }
+  ],
+  "loopSignals": []
+ },
+ {
+  "sessionId": "codex-codex:threadconv-99887:turn-7",
+  "traceId": "codex:threadconv-99887:turn-7",
+  "source": "codex",
+  "dataSource": "otel",
+  "workspace": "",
+  "userRequest": "[session in progress]",
+  "model": "gpt-5",
+  "turns": 3,
+  "inputTokens": 450,
+  "outputTokens": 70,
+  "cacheReadTokens": 100,
+  "cacheCreateTokens": 0,
+  "cacheHitRate": 0.18181818181818182,
+  "durationMs": 7500,
+  "startTime": "2025-08-19T08:26:40.000Z",
+  "filesRead": [
+   "file.txt"
+  ],
+  "filesSearched": [],
+  "filesChanged": [
+   "lib/x.py"
+  ],
+  "filesWritten": [],
+  "toolCounts": {
+   "patch": 1,
+   "read_file": 1
+  },
+  "totalToolCalls": 2,
+  "totalLlmCalls": 3,
+  "errors": 1,
+  "outcome": "unknown",
+  "timeline": [
+   {
+    "type": "llm",
+    "spanId": "st1",
+    "label": "gpt-5",
+    "model": "gpt-5",
+    "inputTokens": 400,
+    "outputTokens": 60,
+    "cacheReadTokens": 100,
+    "durationMs": 0,
+    "isError": false,
+    "timestamp": ""
+   },
+   {
+    "type": "tool",
+    "spanId": "tool2",
+    "label": "patch",
+    "durationMs": 1000,
+    "toolInput": "{\"filePath\":\"lib/x.py\"}",
+    "isError": false,
+    "timestamp": "2025-08-19T08:26:42.000Z"
+   },
+   {
+    "type": "tool",
+    "spanId": "rf2",
+    "label": "read_file",
+    "durationMs": 15,
+    "toolInput": "{\"path\":\"/abs/deep/file.txt\"}",
+    "isError": false,
+    "resultSummary": "ok",
+    "fullResult": "ok",
+    "timestamp": "2025-08-19T08:26:44.000Z"
+   },
+   {
+    "type": "llm",
+    "spanId": "cmp2",
+    "label": "gpt-5",
+    "model": "gpt-5",
+    "inputTokens": 50,
+    "outputTokens": 10,
+    "durationMs": 1000,
+    "isError": true,
+    "timestamp": "2025-08-19T08:26:45.000Z"
+   },
+   {
+    "type": "llm",
+    "spanId": "str2",
+    "label": "gpt-5",
+    "model": "gpt-5",
+    "inputTokens": 0,
+    "outputTokens": 0,
+    "action": "turn.cancelled",
+    "durationMs": 500,
+    "isError": false,
+    "timestamp": "2025-08-19T08:26:47.000Z"
+   }
+  ],
+  "backgroundSpans": [],
+  "loopSignals": []
+ },
+ {
+  "sessionId": "cp3",
+  "traceId": "codex:conv3:prompt-1",
+  "source": "codex",
+  "dataSource": "otel",
+  "workspace": "",
+  "userRequest": "[~300 chars]",
+  "model": "",
+  "turns": 1,
+  "inputTokens": 0,
+  "outputTokens": 0,
+  "cacheReadTokens": 0,
+  "cacheCreateTokens": 0,
+  "cacheHitRate": 0,
+  "durationMs": 1000,
+  "startTime": "2025-08-19T08:43:20.000Z",
+  "filesRead": [],
+  "filesSearched": [],
+  "filesChanged": [],
+  "filesWritten": [],
+  "toolCounts": {},
+  "totalToolCalls": 0,
+  "totalLlmCalls": 1,
+  "errors": 0,
+  "outcome": "text_response",
+  "timeline": [
+   {
+    "type": "llm",
+    "spanId": "sse3",
+    "label": "Codex",
+    "model": "",
+    "inputTokens": 0,
+    "outputTokens": 0,
+    "durationMs": 0,
+    "isError": false,
+    "timestamp": "2025-08-19T08:43:21.000Z"
+   }
+  ],
+  "backgroundSpans": [],
+  "loopSignals": []
+ }
+]

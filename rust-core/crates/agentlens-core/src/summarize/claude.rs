@@ -18,36 +18,10 @@ use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
 
 use super::buckets::{context_tokens, disjoint_buckets, UsageShape};
-use super::helpers::{self as h, iso_from_ms, name_of, num, put_span_id, start_time, status_is_error, status_message, truthy};
+use super::helpers::{self as h, iso_from_ms, name_of, num, put_span_id, start_time, status_is_error, status_message, truthy, JsSet};
 use super::retention::{cap_timeline, timeline_max_entries, timeline_max_bytes};
 
 const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
-
-/// Insertion-ordered mirror of a JS `Set<any>`: dedup by the JSON serialization, which matches
-/// SameValueZero for the strings and numbers real tool args carry (a string "5" serializes as
-/// `"5"`, the number 5 as `5` — distinct, exactly as in JS).
-#[derive(Default)]
-struct JsSet {
-    seen: HashSet<String>,
-    items: Vec<Value>,
-}
-
-impl JsSet {
-    fn add(&mut self, v: Value) {
-        if self.seen.insert(v.to_string()) {
-            self.items.push(v);
-        }
-    }
-    fn add_str(&mut self, s: String) {
-        self.add(Value::String(s));
-    }
-    fn is_empty(&self) -> bool {
-        self.items.is_empty()
-    }
-    fn into_value(self) -> Value {
-        Value::Array(self.items)
-    }
-}
 
 /// `a || b`: the first operand when truthy, else the second (whatever it is).
 fn or2<'a>(a: Option<&'a Value>, b: Option<&'a Value>) -> Option<&'a Value> {
