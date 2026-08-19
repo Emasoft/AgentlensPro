@@ -35,7 +35,6 @@ use hyper::{Method, Request, Response, StatusCode};
 use serde_json::{Map, Value};
 use tokio::sync::broadcast;
 
-use crate::summarize::summarizer::summarize_spans;
 use crate::update_payload::build_update_payload;
 use crate::CoreState;
 
@@ -83,7 +82,7 @@ pub fn push_update(state: &Arc<Mutex<CoreState>>, hub: &SseHub, now_ms: f64) {
             Ok(s) => s,
             Err(_) => return,
         };
-        let summary = summarize_spans(st.store.spans(), &|_| None);
+        let summary = st.session_summary(now_ms);
         build_update_payload(&summary, st.store.spans(), &st.build_id, Vec::new(), now_ms).to_string()
     };
     hub.broadcast(sse_frame(&payload));
@@ -154,7 +153,7 @@ fn sse_response(state: &Arc<Mutex<CoreState>>, hub: &SseHub, now_ms: f64) -> Res
     use http_body_util::BodyExt;
     let first = {
         let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
-        let summary = summarize_spans(st.store.spans(), &|_| None);
+        let summary = st.session_summary(now_ms);
         build_update_payload(&summary, st.store.spans(), &st.build_id, Vec::new(), now_ms).to_string()
     };
     let mut rx = hub.subscribe();
@@ -228,7 +227,7 @@ async fn handle(
     } else if method == Method::GET && path == "/api/summary" {
         let body = {
             let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
-            strip_session_detail(&summarize_spans(st.store.spans(), &|_| None)).to_string()
+            strip_session_detail(&st.session_summary(crate::now_ms() as f64)).to_string()
         };
         json_response(StatusCode::OK, body)
     } else {

@@ -1,0 +1,564 @@
+{
+ "otel": [
+  {
+   "inputTokens": 5,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "timeline": [],
+   "sessionId": "claude-A",
+   "source": "claude_code",
+   "dataSource": "otel"
+  },
+  {
+   "inputTokens": 7,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "timeline": [],
+   "sessionId": "codex-B",
+   "source": "codex",
+   "dataSource": "otel"
+  },
+  {
+   "inputTokens": 0,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "timeline": [],
+   "sessionId": "otel-only",
+   "source": "copilot",
+   "dataSource": "otel"
+  },
+  {
+   "inputTokens": 1,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "timeline": [],
+   "sessionId": "claude-C",
+   "source": "claude_code",
+   "dataSource": "log"
+  }
+ ],
+ "log": [
+  {
+   "inputTokens": 900,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "timeline": [],
+   "sessionId": "claude-A",
+   "source": "claude_code",
+   "dataSource": "log",
+   "coverageNote": "stale-note"
+  },
+  {
+   "inputTokens": 3,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "timeline": [],
+   "sessionId": "codex-B",
+   "source": "codex",
+   "dataSource": "log"
+  },
+  {
+   "inputTokens": 0,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "timeline": [],
+   "sessionId": "log-only",
+   "source": "claude_code",
+   "dataSource": "log",
+   "tokensSource": "merged",
+   "coverageNote": "old"
+  }
+ ],
+ "merged": [
+  {
+   "inputTokens": 900,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "timeline": [],
+   "sessionId": "claude-A",
+   "source": "claude_code",
+   "dataSource": "log",
+   "coverageNote": "Token totals come from the log transcript; the colliding OTEL card for this session was displaced (OTEL is a lossy lower bound).",
+   "tokensSource": "log"
+  },
+  {
+   "inputTokens": 0,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "timeline": [],
+   "sessionId": "log-only",
+   "source": "claude_code",
+   "dataSource": "log",
+   "tokensSource": "log"
+  },
+  {
+   "inputTokens": 7,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "timeline": [],
+   "sessionId": "codex-B",
+   "source": "codex",
+   "dataSource": "otel",
+   "tokensSource": "otel"
+  },
+  {
+   "inputTokens": 0,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "timeline": [],
+   "sessionId": "otel-only",
+   "source": "copilot",
+   "dataSource": "otel",
+   "tokensSource": "otel"
+  },
+  {
+   "inputTokens": 1,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "timeline": [],
+   "sessionId": "claude-C",
+   "source": "claude_code",
+   "dataSource": "log",
+   "tokensSource": "otel"
+  }
+ ],
+ "mergedEmptyLog": [
+  {
+   "inputTokens": 5,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "timeline": [],
+   "sessionId": "claude-A",
+   "source": "claude_code",
+   "dataSource": "otel",
+   "tokensSource": "otel"
+  },
+  {
+   "inputTokens": 7,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "timeline": [],
+   "sessionId": "codex-B",
+   "source": "codex",
+   "dataSource": "otel",
+   "tokensSource": "otel"
+  },
+  {
+   "inputTokens": 0,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "timeline": [],
+   "sessionId": "otel-only",
+   "source": "copilot",
+   "dataSource": "otel",
+   "tokensSource": "otel"
+  },
+  {
+   "inputTokens": 1,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "timeline": [],
+   "sessionId": "claude-C",
+   "source": "claude_code",
+   "dataSource": "log",
+   "tokensSource": "otel"
+  }
+ ],
+ "linkInput": [
+  {
+   "inputTokens": 0,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "timeline": [],
+   "sessionId": "p1",
+   "source": "claude_code",
+   "dataSource": "log",
+   "parentSessionId": "parent-1",
+   "spawnAsync": true,
+   "spawnedByTurn": 3,
+   "spawnKind": "async",
+   "spawnSubagentType": "lean-worker",
+   "userRequest": "from placeholder",
+   "model": "claude-opus-5"
+  },
+  {
+   "inputTokens": 100,
+   "outputTokens": 20,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "timeline": [],
+   "sessionId": "agent-p1",
+   "source": "claude_code",
+   "dataSource": "log",
+   "parentSessionId": "parent-1",
+   "userRequest": "",
+   "model": "",
+   "workspace": "/w",
+   "mergedFrom": [
+    "agent-p1",
+    "old"
+   ],
+   "spawnKind": "transcript-says-sync",
+   "spawnIsolation": "worktree"
+  },
+  {
+   "inputTokens": 0,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "timeline": [],
+   "sessionId": "p2",
+   "source": "claude_code",
+   "dataSource": "log",
+   "parentSessionId": "parent-1",
+   "spawnAsync": true
+  },
+  {
+   "inputTokens": 0,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "timeline": [],
+   "sessionId": "agent-p2",
+   "source": "claude_code",
+   "dataSource": "log"
+  },
+  {
+   "inputTokens": 50,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "timeline": [],
+   "sessionId": "p3",
+   "source": "claude_code",
+   "dataSource": "log",
+   "parentSessionId": "parent-1"
+  },
+  {
+   "inputTokens": 0,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "timeline": [],
+   "sessionId": "agent-p3",
+   "source": "claude_code",
+   "dataSource": "log"
+  },
+  {
+   "inputTokens": 0,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "timeline": [],
+   "sessionId": "p4",
+   "source": "claude_code",
+   "dataSource": "log",
+   "parentSessionId": "parent-1"
+  },
+  {
+   "inputTokens": 9,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "timeline": [],
+   "sessionId": "agent-p4",
+   "source": "claude_code",
+   "dataSource": "log",
+   "parentSessionId": "parent-2"
+  },
+  {
+   "inputTokens": 0,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "timeline": [],
+   "sessionId": "p1",
+   "source": "claude_code",
+   "dataSource": "log",
+   "parentSessionId": "parent-1",
+   "spawnKind": "dup"
+  },
+  {
+   "inputTokens": 0,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "timeline": [],
+   "sessionId": "p5",
+   "source": "claude_code",
+   "dataSource": "log"
+  },
+  {
+   "inputTokens": 0,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "timeline": [],
+   "sessionId": "p6",
+   "source": "claude_code",
+   "dataSource": "otel",
+   "parentSessionId": "parent-1"
+  },
+  {
+   "inputTokens": 1,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "timeline": [],
+   "sessionId": "agent-p6",
+   "source": "claude_code",
+   "dataSource": "log"
+  }
+ ],
+ "linked": [
+  {
+   "inputTokens": 100,
+   "outputTokens": 20,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "timeline": [],
+   "sessionId": "agent-p1",
+   "source": "claude_code",
+   "dataSource": "log",
+   "parentSessionId": "parent-1",
+   "userRequest": "from placeholder",
+   "model": "claude-opus-5",
+   "workspace": "/w",
+   "mergedFrom": [
+    "old",
+    "p1"
+   ],
+   "spawnKind": "async",
+   "initiator": "agent",
+   "spawnedByTurn": 3,
+   "spawnSubagentType": "lean-worker"
+  },
+  {
+   "inputTokens": 0,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "timeline": [],
+   "sessionId": "agent-p2",
+   "source": "claude_code",
+   "dataSource": "log",
+   "parentSessionId": "parent-1",
+   "initiator": "agent",
+   "spawnAsync": true,
+   "mergedFrom": [
+    "p2"
+   ]
+  },
+  {
+   "inputTokens": 50,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "timeline": [],
+   "sessionId": "p3",
+   "source": "claude_code",
+   "dataSource": "log",
+   "parentSessionId": "parent-1"
+  },
+  {
+   "inputTokens": 0,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "timeline": [],
+   "sessionId": "agent-p3",
+   "source": "claude_code",
+   "dataSource": "log"
+  },
+  {
+   "inputTokens": 0,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "timeline": [],
+   "sessionId": "p4",
+   "source": "claude_code",
+   "dataSource": "log",
+   "parentSessionId": "parent-1"
+  },
+  {
+   "inputTokens": 9,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "timeline": [],
+   "sessionId": "agent-p4",
+   "source": "claude_code",
+   "dataSource": "log",
+   "parentSessionId": "parent-2"
+  },
+  {
+   "inputTokens": 0,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "timeline": [],
+   "sessionId": "p5",
+   "source": "claude_code",
+   "dataSource": "log"
+  },
+  {
+   "inputTokens": 0,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "timeline": [],
+   "sessionId": "p6",
+   "source": "claude_code",
+   "dataSource": "otel",
+   "parentSessionId": "parent-1"
+  },
+  {
+   "inputTokens": 1,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "timeline": [],
+   "sessionId": "agent-p6",
+   "source": "claude_code",
+   "dataSource": "log"
+  }
+ ],
+ "linkedNoop": [
+  {
+   "inputTokens": 0,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "timeline": [],
+   "sessionId": "x",
+   "source": "codex",
+   "dataSource": "otel"
+  }
+ ],
+ "logTl": [
+  {
+   "type": "llm",
+   "spanId": "l1",
+   "timestamp": "2025-08-19T10:00:01.000Z"
+  },
+  {
+   "type": "api_request",
+   "spanId": "r1",
+   "timestamp": "2025-08-19T10:00:02.000Z"
+  },
+  {
+   "type": "tool",
+   "spanId": "t1"
+  }
+ ],
+ "otelTl": [
+  {
+   "type": "api_request",
+   "spanId": "r1",
+   "timestamp": "2025-08-19T10:00:02.000Z"
+  },
+  {
+   "type": "api_request",
+   "spanId": "r2",
+   "timestamp": "2025-08-19T10:00:00.500Z"
+  },
+  {
+   "type": "llm",
+   "spanId": "l9",
+   "timestamp": "2025-08-19T09:00:00.000Z"
+  }
+ ],
+ "grafted": [
+  {
+   "type": "tool",
+   "spanId": "t1"
+  },
+  {
+   "type": "api_request",
+   "spanId": "r2",
+   "timestamp": "2025-08-19T10:00:00.500Z"
+  },
+  {
+   "type": "llm",
+   "spanId": "l1",
+   "timestamp": "2025-08-19T10:00:01.000Z"
+  },
+  {
+   "type": "api_request",
+   "spanId": "r1",
+   "timestamp": "2025-08-19T10:00:02.000Z"
+  }
+ ],
+ "graftedNone": [
+  {
+   "type": "llm",
+   "spanId": "l1",
+   "timestamp": "2025-08-19T10:00:01.000Z"
+  },
+  {
+   "type": "api_request",
+   "spanId": "r1",
+   "timestamp": "2025-08-19T10:00:02.000Z"
+  },
+  {
+   "type": "tool",
+   "spanId": "t1"
+  }
+ ],
+ "graftedUndef": [
+  {
+   "type": "llm",
+   "spanId": "l1",
+   "timestamp": "2025-08-19T10:00:01.000Z"
+  },
+  {
+   "type": "api_request",
+   "spanId": "r1",
+   "timestamp": "2025-08-19T10:00:02.000Z"
+  },
+  {
+   "type": "tool",
+   "spanId": "t1"
+  }
+ ],
+ "identityCross": {
+  "inputTokens": 0,
+  "outputTokens": 0,
+  "cacheReadTokens": 0,
+  "cacheCreateTokens": 0,
+  "timeline": [],
+  "sessionId": "w",
+  "dataSource": "otel",
+  "tokensSource": "merged",
+  "coverageNote": "Identity-merged across feeds: this otel card absorbed its log twin (identical token buckets in both feeds)."
+ },
+ "identitySame": {
+  "inputTokens": 0,
+  "outputTokens": 0,
+  "cacheReadTokens": 0,
+  "cacheCreateTokens": 0,
+  "timeline": [],
+  "sessionId": "w",
+  "dataSource": "log",
+  "tokensSource": "log",
+  "coverageNote": "keep"
+ }
+}

@@ -214,6 +214,40 @@ fn events_streams_the_ping_then_update_frames_on_connect_and_on_the_coalesced_pu
 }
 
 #[test]
+fn summary_merges_log_sessions_under_the_feed_doctrine() {
+    let (otlp, ui, state) = start_servers();
+    let payload = trace_payload();
+    let r = request(otlp, &format!("POST /v1/traces HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}", payload.len()));
+    assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+    // A log transcript card for the SAME Claude session (log wins) + a log-only codex card.
+    state.lock().unwrap().put_log_session(serde_json::json!({
+        "sessionId": "sess-ui-1", "source": "claude_code", "dataSource": "log", "startTime": "2025-08-19T10:40:00.000Z",
+        "inputTokens": 9999, "outputTokens": 1, "cacheReadTokens": 0, "cacheCreateTokens": 0, "timeline": [{"type":"llm"}],
+        "model": "claude-opus-5", "userRequest": "from the transcript", "totalLlmCalls": 4, "totalToolCalls": 0, "errors": 0,
+        "cacheHitRate": 0, "durationMs": 1, "filesChanged": [], "filesRead": [], "filesSearched": [], "filesWritten": [],
+        "toolCounts": {}, "outcome": "unknown", "backgroundSpans": [], "loopSignals": []
+    }));
+    state.lock().unwrap().put_log_session(serde_json::json!({
+        "sessionId": "codex-log-only", "source": "codex", "dataSource": "log", "startTime": "2025-08-19T11:00:00.000Z",
+        "inputTokens": 3, "outputTokens": 1, "cacheReadTokens": 0, "cacheCreateTokens": 0, "timeline": []
+    }));
+    let full = get(ui, "/api/summary", "");
+    let v: serde_json::Value = serde_json::from_str(body_of(&full)).unwrap();
+    let sessions = v["sessions"].as_array().unwrap();
+    assert_eq!(sessions.len(), 2, "OTEL twin displaced, codex log-only kept: {v}");
+    // Newest first.
+    assert_eq!(sessions[0]["sessionId"], "codex-log-only");
+    assert_eq!(sessions[0]["tokensSource"], "log");
+    let claude = &sessions[1];
+    assert_eq!(claude["sessionId"], "sess-ui-1");
+    assert_eq!(claude["dataSource"], "log", "the LOG card serves for Claude");
+    assert_eq!(claude["inputTokens"], 9999);
+    assert_eq!(claude["tokensSource"], "log");
+    assert!(claude["coverageNote"].as_str().unwrap().contains("displaced"), "{claude}");
+    assert_eq!(claude["timeline"], serde_json::json!([]), "still stripped on the wire");
+}
+
+#[test]
 fn unknown_routes_and_options_fall_through_to_the_bare_404() {
     let (_otlp, ui, _state) = start_servers();
     for raw in [

@@ -27,6 +27,7 @@ use serde_json::Value;
 use agentlens_ingest::IngestState;
 use agentlens_spanstore::writer::SpanStoreWriter;
 
+pub mod feed_merge;
 pub mod pricing;
 pub mod session_store;
 pub mod summarize;
@@ -73,6 +74,44 @@ pub struct CoreState {
     /// The dashboard live-reload fingerprint carried in every update frame (server.ts BUILD_ID —
     /// bundle mtimes there; here the process start, the same "changes on restart" contract).
     pub build_id: String,
+    /// Log-derived session cards keyed by sessionId (server.ts `logSessions`), merged into the
+    /// served summary under the feed-collision doctrine (feed_merge.rs). Fed by the log-reader
+    /// slice; `put_log_session` is the one write path and bumps data_version.
+    pub log_sessions: Vec<(String, Value)>,
+}
+
+impl CoreState {
+    /// putLogSession — upsert by sessionId (insertion order kept, as a JS Map does).
+    pub fn put_log_session(&mut self, card: Value) {
+        let id = card.get("sessionId").and_then(Value::as_str).unwrap_or("").to_owned();
+        match self.log_sessions.iter_mut().find(|(k, _)| *k == id) {
+            Some((_, v)) => *v = card,
+            None => self.log_sessions.push((id, card)),
+        }
+        self.data_version += 1;
+    }
+
+    /// computeSessionSummary (server.ts:2240) — summarizeSpans over the live window, then, when
+    /// any log session exists, the feed-collision merge + the subagent link, sorted newest-first.
+    pub fn session_summary(&self, now_ms: f64) -> Value {
+        let _ = now_ms;
+        let mut summary = summarize::summarizer::summarize_spans(self.store.spans(), &|_| None);
+        if !self.log_sessions.is_empty() {
+            let otel: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
+            let logs: Vec<Value> = self.log_sessions.iter().map(|(_, c)| c.clone()).collect();
+            let mut merged = feed_merge::link_subagent_transcripts(feed_merge::merge_otel_and_log_sessions(otel, logs));
+            // Date.parse(b.startTime || '0') - Date.parse(a.startTime || '0'), newest first.
+            merged.sort_by(|a, b| {
+                let k = |c: &Value| {
+                    let st = c.get("startTime").and_then(Value::as_str).unwrap_or("");
+                    if st.is_empty() { -62_167_219_200_000.0 } else { summarize::helpers::parse_iso_ms(st).unwrap_or(f64::NAN) }
+                };
+                k(b).partial_cmp(&k(a)).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            summary.as_object_mut().expect("summary object").insert("sessions".into(), Value::Array(merged));
+        }
+        summary
+    }
 }
 
 impl CoreState {
@@ -85,6 +124,7 @@ impl CoreState {
             store: session_store::SessionStore::new(now as f64),
             data_version: 0,
             build_id: now.to_string(),
+            log_sessions: Vec::new(),
         }
     }
 }
