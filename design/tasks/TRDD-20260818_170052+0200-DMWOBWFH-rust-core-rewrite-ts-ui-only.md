@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T01:25:00+0200
+updated: 2026-08-20T01:50:00+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -444,15 +444,18 @@ release-via: publish
   NOT PORTED (module header): the spool drain + durability verify, StopFailure calibration, the
   recent-events ring, the statusline STORE (routed:"statusline" answers frozen, sample drops).
   82/82.
-- **NEXT ACTION (one step): POST /api/write-prompts-file + POST /api/branch-dump (rows 17–18)**
-  — the two remaining self-contained write routes: read server.ts:3766 (write-prompts-file —
-  agent slug map, `agentlens-prompts-<slug>.md` in process.cwd(), the entry format, 200 empty
-  always even on error) and :3935 (branch-dump — ≤48MB `{slug,sessionId,dumps:[{id,name,
-  content}]}` under the Claude projects tree, `{dir,paths...}` — read the handler first), port +
-  socket tests. Then burn-status row 24 + debug/requests row 26 (may be stubs-with-real-parts —
-  decide after reading), burn-risk row 12 / agent-gate row 13 (the burn subsystem — big, its own
-  slice), bodies rows 14–15 (the body store — big, its own slice), instruction rows 19–21,
-  statusline row 5. Perf follow-ups parked: none — the P5b notes closed in P5g.
+- **P4n DONE (commit 767dfd9) — write-prompts-file + branch-dump (rows 17–18).** Fire-and-forget
+  journal (always 200 empty) + the gated dump writer (existing-project-dir gate, sanitized
+  single-segment names, resolved-parent assert, malformed ids skipped, whole-handler 500 on
+  parse). Gotcha caught in-flight: `ls <glob>` litter check lied (unmatched glob lists the CWD —
+  the standing rule); `find` proved zero litter. 83/83.
+- **NEXT ACTION (one step): GET /api/debug/requests (row 26) + the request ring** — read
+  server.ts:3989 + src/serverRuntime.ts (the ring buffer shape: `{heap:{heapUsedMb,limitMb,
+  hwmMb,over}, requests:[{ts,method,status,durationMs,bytes,heapUsedMb,rssMb,path}]}`): record
+  per-request rows in the UI handler (ts/method/status/duration/bytes are all measurable; the
+  heap fields are the no-V8 zeros as in server-stats), serve the route. Then the burn subsystem
+  (rows 12–13 + row 24 — big, its own slice: gatherBurn/computeBurnStatus/enrichBurnStatus +
+  the gate), bodies rows 14–15 (the body store), instruction rows 19–21, statusline row 5.
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
