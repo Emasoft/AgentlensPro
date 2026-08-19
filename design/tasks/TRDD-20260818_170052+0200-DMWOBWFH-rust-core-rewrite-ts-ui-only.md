@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-19T22:05:00+0200
+updated: 2026-08-20T00:20:00+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -420,15 +420,28 @@ release-via: publish
   post-boot RSS 651MB (was 1.5GB); card-by-card diff of the live snapshot vs the pre-change one
   = growth + hot-tier churn only. **SUPERSEDED — do NOT carry forward:** "skip timeline
   retention for cold files" (~25% at best, derivation-parity risk; dropped). 79/79.
-- **NEXT ACTION (one step): P5c — the accountId registry + generated-files attach** (the two
-  deferred card fields from P5b): read server.ts/src for `accountId` on log cards (the call-body
-  registry that maps a session to its account label — where it is built, what the card carries)
-  and `src/generatedFiles.ts` (the fs heuristics that attach generated files to a card); port
-  whichever is self-contained first, TS-oracle fixture per field. Then the remaining frozen
-  routes (hook-events ingest rows 5–8 — hookEventStore + statuslineStore; burn-risk row 12;
-  agent-gate row 13; bodies rows 14–15; prompts/branch-dump rows 17–18; instruction rows 19–21;
-  burn-status row 24; debug/requests row 26), then `session_store.rs` deletion once confirmed
-  unused, and the store OVERLAY (applyOverlay/injectSpanAttribute).
+- **P5c DONE (commit 87de364) — accountId registry + generated-files attach.**
+  `account_registry.rs` (CallBodyRegistry's account half, fed by process_logs account_pairs in
+  ingest_post; ingest_scanned stamps `accountId` LAST iff the sessionId is known) +
+  `generated_files.rs` (resolver, realpath-deduped tmp roots, bounded BFS indexer, mtime-gated
+  listing cache — scratchListing on log-scan-stats now real — and attachGeneratedFiles in
+  finish_transcript, parent only, after the hot-age strip ≡ TS order). The ORACLE now covers
+  generatedFiles (generator DEFERRED shrank to accountId; expected JSON regenerated, gains the
+  deterministic missing ref). NOT ported: the body-POINTER half (record/resolveRequest — the
+  call-context drill). 81/81.
+- **P5h DONE (commit 4371920) — session_store.rs deleted** (+ its parity test and 3 fixtures;
+  all recoverable at 03089ee). Zero references remain; 80/80.
+- **NEXT ACTION (one step): the store OVERLAY — segmentedSpanStore.applyOverlay +
+  injectSpanAttribute** (the standalone gen_ai injection path): read src/segmentedSpanStore.ts
+  applyOverlay/overlay Map + server.ts's injectSpanAttribute caller (the gen_ai buffer handoff
+  in process_logs' third argument — the Rust closure is currently `|_,_,_| false`), port the
+  overlay onto SpanStoreWriter (an in-memory spanId → attr patch applied at load_range/flush
+  read time, persisted how the TS persists it — read the TS first), wire the process_logs
+  injection closure to it, TS-oracle fixture: a gen_ai log event against a stored span →
+  identical served span both engines. Then the remaining frozen routes (hook-events ingest rows
+  5–8 — hookEventStore + statuslineStore; burn-risk row 12; agent-gate row 13; bodies rows
+  14–15; prompts/branch-dump rows 17–18; instruction rows 19–21; burn-status row 24;
+  debug/requests row 26).
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
