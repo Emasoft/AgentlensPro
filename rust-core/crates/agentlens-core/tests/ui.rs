@@ -421,3 +421,80 @@ fn import_builds_log_cards_with_the_ts_defaults_and_counts_exactly() {
     let r = post(ui, "/api/import", "{broken");
     assert!(r.starts_with("HTTP/1.1 400") && body_of(&r).starts_with(r#"{"error":"SyntaxError"#), "{r}");
 }
+
+/// Freeze rows 6–8 — the hook-event store: ingest taxonomy, newest-first bounded reads, the
+/// lifecycle mapping (STOP/SESSION_END excluded by default, kinds= opt-in), persistence counters.
+#[test]
+fn hook_events_ingest_read_and_lifecycle_mapping() {
+    let (_otlp, ui, state) = start_servers();
+    let data_dir = state.lock().unwrap().data_dir.clone();
+    let ev = |name: &str, extra: &str| format!(r#"{{"hook_event_name":"{name}","session_id":"sess-hooks"{extra}}}"#);
+
+    // Row 6: the four answer shapes.
+    let r = post(ui, "/api/hook-events", &ev("SessionStart", r#","source":"clear""#));
+    assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+    assert_eq!(body_of(&r), r#"{"ok":true}"#);
+    let r = post(ui, "/api/hook-events", &ev("StatusLineSample", ""));
+    assert_eq!(body_of(&r), r#"{"ok":true,"routed":"statusline"}"#);
+    let r = post(ui, "/api/hook-events", r#"{"no_name":1}"#);
+    assert!(r.starts_with("HTTP/1.1 400"), "{r}");
+    assert_eq!(body_of(&r), r#"{"error":"payload must be a JSON object with hook_event_name"}"#);
+    let r = post(ui, "/api/hook-events", "broken{");
+    assert!(r.starts_with("HTTP/1.1 400"), "{r}");
+    post(ui, "/api/hook-events", &ev("Stop", ""));
+    post(ui, "/api/hook-events", &ev("StopFailure", r#","error_type":"rate_limit"#).replace("rate_limit", r#"rate_limit""#));
+    post(ui, "/api/hook-events", &ev("PreCompact", r#","trigger":"manual""#));
+    post(ui, "/api/hook-events", r#"{"hook_event_name":"Notification"}"#);
+    // captureEnabled=false: accepted and DROPPED (a non-2xx would look like an outage).
+    post(ui, "/api/hook-config", r#"{"captureEnabled":false}"#);
+    let r = post(ui, "/api/hook-events", &ev("SessionEnd", r#","reason":"exit""#));
+    assert_eq!(body_of(&r), r#"{"ok":true,"dropped":"captureEnabled=false"}"#);
+    post(ui, "/api/hook-config", r#"{"captureEnabled":true}"#);
+
+    // The persisted records: verbatim payload, `session` lifted, one daily bucket.
+    let buckets: Vec<_> = std::fs::read_dir(data_dir.join("hook-events")).unwrap().flatten().collect();
+    assert_eq!(buckets.len(), 1, "one UTC day bucket");
+    let stats = get(ui, "/api/server-stats", "");
+    let v: serde_json::Value = serde_json::from_str(body_of(&stats)).unwrap();
+    assert_eq!(v["hookEvents"]["receivedSinceBoot"], 5, "the statusline route, the 400s and the drop never counted");
+    assert_eq!(v["hookEvents"]["files"], 1);
+    assert_eq!(v["persistence"]["hookEventWrites"], 5);
+    assert!(v["persistence"]["hookEventBytes"].as_u64().unwrap() > 0);
+
+    // Row 7: newest-first, filters, the frozen record shape.
+    let r = get(ui, "/api/hook-events", "");
+    let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
+    assert_eq!(v["count"], 5);
+    let events = v["events"].as_array().unwrap();
+    assert_eq!(events[0]["ev"], "Notification", "newest first");
+    assert_eq!(events[4]["ev"], "SessionStart");
+    assert_eq!(events[4]["session"], "sess-hooks");
+    assert_eq!(events[4]["payload"], serde_json::json!({ "hook_event_name": "SessionStart", "session_id": "sess-hooks", "source": "clear" }));
+    let keys: Vec<&str> = events[4].as_object().unwrap().keys().map(String::as_str).collect();
+    assert_eq!(keys, ["ts", "ev", "session", "payload"]);
+    let r = get(ui, "/api/hook-events?ev=PreCompact", "");
+    let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
+    assert_eq!(v["count"], 1);
+    let r = get(ui, "/api/hook-events?session=nope", "");
+    assert_eq!(serde_json::from_str::<serde_json::Value>(body_of(&r)).unwrap()["count"], 0);
+    let r = get(ui, "/api/hook-events?limit=2", "");
+    assert_eq!(serde_json::from_str::<serde_json::Value>(body_of(&r)).unwrap()["count"], 2);
+
+    // Row 8: STOP excluded by default; Notification never a lifecycle event; kinds= is exact;
+    // the event shape is {ts, session?, kind, detail?, ev}.
+    let r = get(ui, "/api/lifecycle-events", "");
+    let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
+    assert_eq!(v["dirExists"], true);
+    assert_eq!(v["hookEventsDir"], data_dir.join("hook-events").to_string_lossy().as_ref());
+    let kinds: Vec<&str> = v["events"].as_array().unwrap().iter().map(|e| e["kind"].as_str().unwrap()).collect();
+    assert_eq!(kinds, ["PRE_COMPACT", "STOP_FAILURE", "CLEAR"], "newest-first; STOP dropped; Notification unmapped");
+    let clear_ev = &v["events"][2];
+    assert_eq!(clear_ev["detail"], "clear");
+    assert_eq!(clear_ev["ev"], "SessionStart");
+    let keys: Vec<&str> = clear_ev.as_object().unwrap().keys().map(String::as_str).collect();
+    assert_eq!(keys, ["ts", "session", "kind", "detail", "ev"]);
+    let r = get(ui, "/api/lifecycle-events?kinds=STOP,SESSION_END", "");
+    let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
+    let kinds: Vec<&str> = v["events"].as_array().unwrap().iter().map(|e| e["kind"].as_str().unwrap()).collect();
+    assert_eq!(kinds, ["STOP"], "the SessionEnd was dropped at capture-off — kinds= re-admits what exists");
+}

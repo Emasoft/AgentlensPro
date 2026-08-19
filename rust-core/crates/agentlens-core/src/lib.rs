@@ -33,6 +33,7 @@ pub mod delta_log;
 pub mod derived_cache;
 pub mod feed_merge;
 pub mod generated_files;
+pub mod hook_events;
 pub mod import_card;
 pub mod log_reader;
 pub mod pricing;

@@ -140,6 +140,35 @@ pub fn strip_session_detail(summary: &Value) -> Value {
     Value::Object(out)
 }
 
+/// The query params of a request (the TS `new URLSearchParams(rawUrl.slice(qIdx + 1))` — last
+/// value wins for a repeated key, which URLSearchParams.get answers as FIRST; our handlers never
+/// send repeated keys, so the difference is unobservable on the frozen surface).
+fn query_of<T>(req: &Request<T>) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    let Some(q) = req.uri().query() else { return out };
+    for pair in q.split('&') {
+        let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+        let dec = |s: &str| {
+            // percent-decode + '+' → space (the subset URLSearchParams applies).
+            let s = s.replace('+', " ");
+            let mut bytes = Vec::with_capacity(s.len());
+            let mut it = s.bytes();
+            while let Some(b) = it.next() {
+                if b == b'%' {
+                    let h = [it.next().unwrap_or(0), it.next().unwrap_or(0)];
+                    let hex = std::str::from_utf8(&h).ok().and_then(|h| u8::from_str_radix(h, 16).ok());
+                    bytes.push(hex.unwrap_or(b'%'));
+                } else {
+                    bytes.push(b);
+                }
+            }
+            String::from_utf8_lossy(&bytes).into_owned()
+        };
+        out.entry(dec(k)).or_insert_with(|| dec(v));
+    }
+    out
+}
+
 /// server.ts readBodyCapped — the whole body, or None once it exceeds `max` (the TS destroys the
 /// socket and never answers; the caller turns None into an Err that drops the connection).
 async fn read_body_capped(mut body: hyper::body::Incoming, max: usize) -> Result<Option<Vec<u8>>, String> {
@@ -337,6 +366,58 @@ async fn handle(
             Err(e) => eprintln!("alcore: malformed /action body: {e}"),
         }
         Response::new(boxed_full(Bytes::new()))
+    } else if method == Method::POST && path == "/api/hook-events" {
+        // ≤512KB: overflow destroys the socket (no response); a malformed body is a 400; the
+        // rest is ingestHookEvent's frozen taxonomy (hook_events::ingest_hook_event).
+        let Some(buf) = read_body_capped(req.into_body(), crate::hook_events::HOOK_EVENT_MAX_BYTES).await? else {
+            return Err("/api/hook-events body over 512KB cap — connection aborted".to_owned());
+        };
+        match serde_json::from_slice::<Value>(&buf) {
+            Err(e) => json_response(StatusCode::BAD_REQUEST, error_json(&e.to_string())),
+            Ok(payload) => {
+                let (status, body) = {
+                    let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                    crate::hook_events::ingest_hook_event(&mut st, &payload, crate::now_ms())
+                };
+                json_response(StatusCode::from_u16(status).unwrap_or(StatusCode::OK), body.to_string())
+            }
+        }
+    } else if method == Method::GET && path == "/api/hook-events" {
+        let q = query_of(&req);
+        let num = |k: &str| q.get(k).filter(|v| !v.is_empty()).and_then(|v| v.parse::<i64>().ok());
+        let events = {
+            let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+            crate::hook_events::read_hook_events(
+                &st.data_dir.join("hook-events"),
+                &crate::hook_events::HookEventFilter {
+                    session: q.get("session").map(String::as_str),
+                    ev: q.get("ev").map(String::as_str),
+                    since_ms: num("since"),
+                    until_ms: num("until"),
+                    limit: num("limit"),
+                },
+            )
+        };
+        json_response(StatusCode::OK, serde_json::json!({ "count": events.len(), "events": events }).to_string())
+    } else if method == Method::GET && path == "/api/lifecycle-events" {
+        let q = query_of(&req);
+        let limit = q.get("limit").and_then(|v| v.parse::<i64>().ok()).filter(|n| *n > 0).unwrap_or(200) as usize;
+        let kinds: Option<Vec<String>> = q.get("kinds").map(|v| v.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).collect());
+        let session = q.get("session").map(String::as_str);
+        let (dir, records) = {
+            let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+            let dir = st.data_dir.join("hook-events");
+            let records = crate::hook_events::read_hook_events(&dir, &crate::hook_events::HookEventFilter { session, limit: Some(1000), ..Default::default() });
+            (dir, records)
+        };
+        let events = crate::hook_events::extract_lifecycle_events(&records, kinds.as_deref(), session, limit);
+        let body = serde_json::json!({
+            "hookEventsDir": dir.to_string_lossy(),
+            "dirExists": std::fs::metadata(&dir).is_ok(),
+            "count": events.len(),
+            "events": events,
+        });
+        json_response(StatusCode::OK, body.to_string())
     } else if method == Method::POST && path == "/api/import" {
         // readBodyCapped(64MB): overflow destroys the socket. Any parse failure is the TS
         // `String(e)` 400 (the message text is serde's, not V8's — the status and shape are the

@@ -30,6 +30,8 @@ pub struct PersistStats {
     pub offsets_bytes: u64,
     pub cards_writes: u64,
     pub cards_bytes: u64,
+    pub hook_event_writes: u64,
+    pub hook_event_bytes: u64,
 }
 
 /// The bound listeners (server.ts UI_PORT / MCP_PORT / OTLP_PORT). `mcp` is the configured
@@ -330,16 +332,16 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
             "spanAppendWrites": p.span_append_writes, "spanAppendBytes": p.span_append_bytes,
             "offsetsWrites": p.offsets_writes, "offsetsBytes": p.offsets_bytes,
             "cardsWrites": p.cards_writes, "cardsBytes": p.cards_bytes,
-            // NOT PORTED: hook-event / log-event / statusline sinks, the gate, the bodies purge,
-            // the spool — the TS boot values (all zero / false).
-            "hookEventWrites": 0, "hookEventBytes": 0,
+            "hookEventWrites": p.hook_event_writes, "hookEventBytes": p.hook_event_bytes,
+            // NOT PORTED: the log-event / statusline sinks, the gate, the bodies purge, the
+            // spool — the TS boot values (all zero / false).
             "logEventWrites": 0, "logEventBytes": 0,
             "statuslineSamples": 0,
             "gateChecks": 0, "gateDenies": 0, "gateWarns": 0, "gateAdvisories": 0,
             "bodiesLastPurge": { "at": 0, "removedFiles": 0, "freedBytes": 0, "keptFiles": 0, "keptBytes": 0 },
             "spoolBackpressureSpills": 0,
             "spoolBackpressureActive": false,
-            "totalBytesWritten": p.span_append_bytes + p.offsets_bytes + p.cards_bytes,
+            "totalBytesWritten": p.span_append_bytes + p.offsets_bytes + p.cards_bytes + p.hook_event_bytes,
             "files": { "spans": total_bytes, "offsets": offsets_bytes_on_disk, "cards": cards_bytes_on_disk },
         },
         "bodies": {
@@ -349,7 +351,7 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
             // reports on a machine without a spool mount.
             "spool": Value::Null,
         },
-        "hookEvents": { "files": hook_files, "bytes": hook_bytes, "receivedSinceBoot": 0, "spooled": hook_spooled },
+        "hookEvents": { "files": hook_files, "bytes": hook_bytes, "receivedSinceBoot": p.hook_event_writes, "spooled": hook_spooled },
         // NOT PORTED: the statusline store — its stats() idle shape, all zero.
         "statusline": { "parts": 0, "partBytes": 0, "walBytes": 0, "bufferedRows": 0, "sealedParts": 0, "droppedRows": 0, "corruptWals": 0,
                          "receivedSinceBoot": 0, "retentionDays": statusline_retention_days },
