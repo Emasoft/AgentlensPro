@@ -10,74 +10,13 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use super::buckets::{context_tokens, disjoint_buckets, UsageShape};
 use super::helpers as h;
-
-/// JS number → JSON value: integral prints bare (JSON.stringify(2) === "2").
-pub fn num(v: f64) -> Value {
-    if v.fract() == 0.0 && v.is_finite() && v.abs() < 9.007_199_254_740_992e15 {
-        Value::from(v as i64)
-    } else {
-        Value::from(v)
-    }
-}
-
-/// new Date(ms).toISOString() — always the .000Z millisecond form.
-pub fn iso_from_ms(ms: f64) -> String {
-    let ms = ms as i64;
-    let (days, mut rem) = (ms.div_euclid(86_400_000), ms.rem_euclid(86_400_000));
-    let (y, mo, d) = civil_from_days(days);
-    let h = rem / 3_600_000;
-    rem %= 3_600_000;
-    let mi = rem / 60_000;
-    rem %= 60_000;
-    let s = rem / 1000;
-    let msec = rem % 1000;
-    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}.{msec:03}Z")
-}
-
-fn civil_from_days(z: i64) -> (i64, i64, i64) {
-    let z = z + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    (if m <= 2 { y + 1 } else { y }, m, d)
-}
+use super::helpers::{iso_from_ms, name_of, num, put_span_id, start_time, status_is_error, status_message, truthy};
 
 fn usage_shape_for(model: &str) -> UsageShape {
     let m = model.as_bytes();
     let gpt = m.len() >= 4 && m[..4].eq_ignore_ascii_case(b"gpt-");
     let o_series = m.len() >= 2 && (m[0] == b'o' || m[0] == b'O') && m[1].is_ascii_digit();
     if gpt || o_series { UsageShape::OpenAi } else { UsageShape::Anthropic }
-}
-
-fn name_of<'a>(s: &'a Value) -> &'a str {
-    s.get("name").and_then(Value::as_str).unwrap_or("")
-}
-
-fn start_time<'a>(s: &'a Value) -> &'a str {
-    s.get("startTime").and_then(Value::as_str).unwrap_or("")
-}
-
-fn status_is_error(s: &Value) -> bool {
-    s.get("status").and_then(|st| st.get("code")).and_then(Value::as_i64) == Some(2)
-}
-
-fn status_message(s: &Value) -> Option<&str> {
-    s.get("status").and_then(|st| st.get("message")).and_then(Value::as_str).filter(|m| !m.is_empty())
-}
-
-/// Insert `spanId` only when the span carries one — TS writes the raw field and stringify drops
-/// an undefined.
-fn put_span_id(obj: &mut Map<String, Value>, span: &Value) {
-    if let Some(id) = span.get("spanId") {
-        if !id.is_null() {
-            obj.insert("spanId".into(), id.clone());
-        }
-    }
 }
 
 pub fn build_copilot_sessions(
@@ -443,16 +382,5 @@ fn extract_copilot_edit_details(tool_name: &str, args_str: &str) -> Option<Value
             if details.is_empty() { None } else { Some(Value::Array(details)) }
         }
         _ => None,
-    }
-}
-
-/// JS truthiness for the `if (args.filePath)` guards — '' and 0 and null are falsy.
-fn truthy(v: &Value) -> bool {
-    match v {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64().is_some_and(|f| f != 0.0),
-        Value::String(s) => !s.is_empty(),
-        _ => true,
     }
 }

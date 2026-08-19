@@ -8,7 +8,9 @@ license.workspace = true
 [dependencies]
 agentlens-ingest = { path = "../agentlens-ingest" }
 agentlens-spanstore = { path = "../agentlens-spanstore" }
-serde_json = "1"
+# preserve_order: wire objects keep TS insertion order (feature-unified workspace-wide anyway,
+# but stated here so a lone build of this crate cannot silently lose it).
+serde_json = { version = "1", features = ["preserve_order"] }
 regex = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "time", "signal"] }
 hyper = { version = "1", features = ["server", "http1"] }

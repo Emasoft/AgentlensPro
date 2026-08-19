@@ -1,0 +1,221 @@
+[
+  {
+    "traceId": "t1", "spanId": "i1", "name": "claude_code.interaction",
+    "startTime": "1755590000000000000", "endTime": "1755590060000000000",
+    "attributes": [
+      { "key": "session.id", "value": { "stringValue": "sess-uuid-1" } },
+      { "key": "user_prompt", "value": { "stringValue": "Fix the 🚀 parser bug <ide_selection>sel</ide_selection>" } }
+    ]
+  },
+  {
+    "traceId": "t1", "spanId": "r1", "parentSpanId": "i1", "name": "claude_code.api_request",
+    "startTime": "1755590002000000000", "endTime": "1755590002000000000",
+    "attributes": [
+      { "key": "gen_ai.request.model", "value": { "stringValue": "claude-opus-5" } },
+      { "key": "input_tokens", "value": { "intValue": 100 } },
+      { "key": "output_tokens", "value": { "intValue": 50 } },
+      { "key": "cache_read_tokens", "value": { "intValue": 2000 } },
+      { "key": "cache_creation_tokens", "value": { "intValue": 300 } },
+      { "key": "cost_usd", "value": { "stringValue": "0.0234" } },
+      { "key": "query_source", "value": { "stringValue": "user" } },
+      { "key": "request_id", "value": { "stringValue": "req_abc" } },
+      { "key": "duration_ms", "value": { "intValue": 1500 } },
+      { "key": "session.id", "value": { "stringValue": "sess-uuid-1" } }
+    ]
+  },
+  {
+    "traceId": "t1", "spanId": "l1", "parentSpanId": "i1", "name": "claude_code.llm_request",
+    "startTime": "1755590001000000000", "endTime": "1755590003000000000",
+    "attributes": [
+      { "key": "gen_ai.request.model", "value": { "stringValue": "claude-opus-5" } },
+      { "key": "input_tokens", "value": { "intValue": 100 } },
+      { "key": "output_tokens", "value": { "intValue": 50 } },
+      { "key": "cache_read_tokens", "value": { "intValue": "2000" } },
+      { "key": "cache_creation_tokens", "value": { "intValue": 300 } },
+      { "key": "ttft_ms", "value": { "intValue": 450 } },
+      { "key": "stop_reason", "value": { "stringValue": "tool_use" } },
+      { "key": "gen_ai.output.messages", "value": { "stringValue": "[{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Let me edit the file.\"},{\"type\":\"tool_use\",\"name\":\"Edit\",\"input\":{\"file_path\":\"/work/proj/src/app.ts\",\"old_string\":\"foo\",\"new_string\":\"bar\"}},{\"type\":\"tool_use\",\"name\":\"Read\",\"input\":{\"file_path\":\"/work/proj/README.md\"}},{\"type\":\"tool_use\",\"name\":\"Grep\",\"input\":{\"pattern\":\"TODO\",\"file_path\":\"/work/proj/src\"}},{\"type\":\"tool_use\",\"name\":\"Write\",\"input\":{\"file_path\":\"/work/proj/gen.txt\",\"content\":\"\"}}]}]" } }
+    ]
+  },
+  {
+    "traceId": "t1", "spanId": "tl1", "parentSpanId": "l1", "name": "claude_code.tool",
+    "startTime": "1755590004000000000", "endTime": "1755590005000000000",
+    "attributes": [
+      { "key": "tool_name", "value": { "stringValue": "Edit" } },
+      { "key": "tool_input", "value": { "stringValue": "{\"file_path\":\"/work/proj/src/app.ts\",\"old_string\":\"foo\",\"new_string\":\"bar\"}" } }
+    ]
+  },
+  {
+    "traceId": "t1", "spanId": "tb1", "parentSpanId": "l1", "name": "claude_code.tool",
+    "startTime": "1755590006000000000", "endTime": "1755590006500000000",
+    "attributes": [
+      { "key": "tool_name", "value": { "stringValue": "Bash" } },
+      { "key": "full_command", "value": { "stringValue": "cargo test --all" } }
+    ]
+  },
+  {
+    "traceId": "t1", "spanId": "bl1", "parentSpanId": "tb1", "name": "claude_code.tool.blocked_on_user",
+    "startTime": "1755590006100000000", "endTime": "1755590006400000000",
+    "attributes": [
+      { "key": "decision", "value": { "stringValue": "allow" } },
+      { "key": "duration_ms", "value": { "intValue": 300 } }
+    ]
+  },
+  {
+    "traceId": "t1", "spanId": "tl2", "parentSpanId": "l1", "name": "claude_code.tool",
+    "startTime": "1755590007000000000", "endTime": "1755590008000000000",
+    "status": { "code": 2, "message": "permission denied" },
+    "attributes": [
+      { "key": "tool_name", "value": { "stringValue": "Write" } },
+      { "key": "tool_input", "value": { "stringValue": "{\"file_path\":\"/work/proj/src/new.ts\",\"content\":\"hello\"}" } }
+    ]
+  },
+  {
+    "traceId": "t2", "spanId": "i2", "name": "claude_code.interaction",
+    "startTime": "1755590100000000000", "endTime": "1755590130000000000",
+    "attributes": [
+      { "key": "session.id", "value": { "stringValue": "sess-uuid-1" } },
+      { "key": "is_sidechain", "value": { "stringValue": "true" } },
+      { "key": "user.account_uuid", "value": { "stringValue": "acc-uuid-9" } },
+      { "key": "user_prompt", "value": { "stringValue": "" } }
+    ]
+  },
+  {
+    "traceId": "t2", "spanId": "l2a", "parentSpanId": "i2", "name": "claude_code.llm_request",
+    "startTime": "1755590101000000000", "endTime": "1755590102000000000",
+    "attributes": [
+      { "key": "input_tokens", "value": { "intValue": 10 } },
+      { "key": "output_tokens", "value": { "intValue": 5 } },
+      { "key": "stop_reason", "value": { "stringValue": "end_turn" } },
+      { "key": "gen_ai.output.messages", "value": { "stringValue": "[{\"role\":\"assistant\",\"content\":\"All done here.\"}]" } }
+    ]
+  },
+  {
+    "traceId": "t2", "spanId": "l2b", "parentSpanId": "i2", "name": "claude_code.llm_request",
+    "startTime": "1755590103000000000", "endTime": "1755590104000000000",
+    "attributes": [
+      { "key": "input_tokens", "value": { "intValue": 20 } },
+      { "key": "output_tokens", "value": { "intValue": 8 } }
+    ]
+  },
+  {
+    "traceId": "t2", "spanId": "t2r", "parentSpanId": "i2", "name": "claude_code.tool",
+    "startTime": "1755590105000000000", "endTime": "1755590105200000000",
+    "attributes": [
+      { "key": "tool_name", "value": { "stringValue": "Read" } },
+      { "key": "file_path", "value": { "stringValue": "/work/proj/lib/util.ts" } }
+    ]
+  },
+  {
+    "traceId": "t2", "spanId": "t2g", "parentSpanId": "i2", "name": "claude_code.tool",
+    "startTime": "1755590106000000000", "endTime": "1755590106100000000",
+    "attributes": [
+      { "key": "tool_name", "value": { "stringValue": "Glob" } },
+      { "key": "tool_input", "value": { "stringValue": "{\"file_path\":\"/work/proj\",\"pattern\":\"*.rs\"}" } }
+    ]
+  },
+  {
+    "traceId": "t2", "spanId": "t2m", "parentSpanId": "i2", "name": "claude_code.tool",
+    "startTime": "1755590107000000000", "endTime": "1755590107500000000",
+    "attributes": [
+      { "key": "tool_name", "value": { "stringValue": "MultiEdit" } },
+      { "key": "tool_input", "value": { "stringValue": "{\"edits\":[{\"file_path\":\"/work/proj/lib/one.ts\",\"old_string\":\"x\",\"new_string\":\"y\"},{\"filePath\":\"/work/proj/lib/two.ts\"}]}" } }
+    ]
+  },
+  {
+    "traceId": "t2", "spanId": "t2e", "parentSpanId": "i2", "name": "claude_code.api_error",
+    "startTime": "1755590108000000000", "endTime": "1755590108000000000",
+    "attributes": [
+      { "key": "gen_ai.request.model", "value": { "stringValue": "claude-opus-5" } },
+      { "key": "status_code", "value": { "stringValue": "429" } },
+      { "key": "attempt", "value": { "intValue": 3 } },
+      { "key": "error", "value": { "stringValue": "rate limited" } },
+      { "key": "duration_ms", "value": { "intValue": 50 } }
+    ]
+  },
+  {
+    "traceId": "t2", "spanId": "t2c", "parentSpanId": "i2", "name": "claude_code.compaction",
+    "startTime": "1755590109000000000", "endTime": "1755590109000000000",
+    "attributes": [
+      { "key": "trigger", "value": { "stringValue": "auto" } },
+      { "key": "pre_tokens", "value": { "intValue": 150000 } },
+      { "key": "post_tokens", "value": { "intValue": 8000 } },
+      { "key": "success", "value": { "stringValue": "false" } },
+      { "key": "duration_ms", "value": { "intValue": 2200 } }
+    ]
+  },
+  {
+    "traceId": "t2", "spanId": "t2tr1", "parentSpanId": "i2", "name": "claude_code.tool_result",
+    "startTime": "1755590110000000000", "endTime": "1755590110000000000",
+    "attributes": [
+      { "key": "tool.name", "value": { "stringValue": "MultiEdit" } },
+      { "key": "tool_input", "value": { "stringValue": "{\"edits\":[{\"file_path\":\"/work/proj/lib/three.ts\"}]}" } }
+    ]
+  },
+  {
+    "traceId": "t2", "spanId": "t2tr2", "parentSpanId": "i2", "name": "claude_code.tool_result",
+    "startTime": "1755590111000000000", "endTime": "1755590111000000000",
+    "attributes": [
+      { "key": "tool_name", "value": { "stringValue": "Read" } },
+      { "key": "input", "value": { "stringValue": "/work/proj/notes.txt" } }
+    ]
+  },
+  {
+    "traceId": "t2", "spanId": "t2x", "parentSpanId": "i2", "name": "claude_code.tool",
+    "startTime": "1755590112000000000", "endTime": "1755590112100000000",
+    "attributes": [
+      { "key": "tool_name", "value": { "stringValue": "Edit" } }
+    ]
+  },
+  {
+    "traceId": "t3", "spanId": "i3", "parentSpanId": "px", "name": "claude_code.interaction",
+    "startTime": "1755590200000000000", "endTime": "1755590230000000000",
+    "attributes": [
+      { "key": "user_prompt", "value": { "stringValue": "<userRequest> Do the thing </userRequest>" } },
+      { "key": "interaction.duration_ms", "value": { "intValue": 12345 } }
+    ]
+  },
+  {
+    "traceId": "t3", "spanId": "l3", "parentSpanId": "i3", "name": "claude_code.llm_request",
+    "startTime": "1755590201000000000", "endTime": "1755590202000000000",
+    "status": { "code": 2, "message": "overloaded_error" },
+    "attributes": [
+      { "key": "gen_ai.request.model", "value": { "stringValue": "claude-sonnet-5" } },
+      { "key": "input_tokens", "value": { "intValue": 40 } },
+      { "key": "output_tokens", "value": { "intValue": 0 } },
+      { "key": "stop_reason", "value": { "stringValue": "max_tokens" } }
+    ]
+  },
+  {
+    "traceId": "t3", "spanId": "w3", "parentSpanId": "i3", "name": "claude_code.tool",
+    "startTime": "1755590203000000000", "endTime": "1755590204000000000",
+    "attributes": [
+      { "key": "tool_name", "value": { "stringValue": "NotebookEdit" } }
+    ]
+  },
+  {
+    "traceId": "t3", "spanId": "z3", "parentSpanId": "i3", "name": "claude_code.tool",
+    "startTime": "0", "endTime": "0",
+    "attributes": [
+      { "key": "tool_name", "value": { "stringValue": "Bash" } },
+      { "key": "full_command", "value": { "stringValue": "ls" } },
+      { "key": "duration_ms", "value": { "intValue": 250 } }
+    ]
+  },
+  {
+    "traceId": "t3", "spanId": "re3", "parentSpanId": "i3", "name": "claude_code.api_retries_exhausted",
+    "startTime": "1755590205000000000", "endTime": "1755590205000000000",
+    "attributes": [
+      { "key": "total_attempts", "value": { "intValue": 5 } },
+      { "key": "error", "value": { "stringValue": "boom" } }
+    ]
+  },
+  {
+    "traceId": "t4", "spanId": "i4", "name": "claude_code.interaction",
+    "startTime": "1755590300000000000", "endTime": "1755590301000000000",
+    "attributes": [
+      { "key": "session.id", "value": { "stringValue": "sess-uuid-2" } },
+      { "key": "user_prompt", "value": { "stringValue": "hello" } }
+    ]
+  }
+]

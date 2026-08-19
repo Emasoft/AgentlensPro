@@ -1,0 +1,367 @@
+[
+ {
+  "sessionId": "i3",
+  "traceId": "t3",
+  "source": "claude_code",
+  "dataSource": "otel",
+  "initiator": "agent",
+  "workspace": "",
+  "userRequest": "Do the thing",
+  "model": "claude-sonnet-5",
+  "turns": 1,
+  "inputTokens": 40,
+  "outputTokens": 0,
+  "cacheReadTokens": 0,
+  "cacheCreateTokens": 0,
+  "cacheHitRate": 0,
+  "durationMs": 12345,
+  "startTime": "2025-08-19T07:56:40.000Z",
+  "filesRead": [],
+  "filesSearched": [],
+  "filesChanged": [],
+  "filesWritten": [],
+  "filesChangedNote": "Changed-file paths are unavailable for 1 write operation. Claude Code redacts tool arguments by default. Add OTEL_LOG_TOOL_DETAILS=1 to your Claude environment variables (alongside CLAUDE_CODE_ENABLE_TELEMETRY=1) and restart to enable path tracking.",
+  "toolCounts": {
+   "Bash": 1,
+   "NotebookEdit": 1
+  },
+  "totalToolCalls": 2,
+  "totalLlmCalls": 1,
+  "errors": 2,
+  "outcome": "unknown",
+  "timeline": [
+   {
+    "type": "llm",
+    "spanId": "l3",
+    "label": "claude-sonnet-5",
+    "turn": 1,
+    "model": "claude-sonnet-5",
+    "inputTokens": 40,
+    "outputTokens": 0,
+    "ttft": 0,
+    "durationMs": 1000,
+    "action": "max_tokens",
+    "isError": true,
+    "errorMessage": "overloaded_error",
+    "timestamp": "2025-08-19T07:56:41.000Z"
+   },
+   {
+    "type": "tool",
+    "spanId": "w3",
+    "label": "NotebookEdit",
+    "turn": 1,
+    "durationMs": 1000,
+    "isError": false,
+    "timestamp": "2025-08-19T07:56:43.000Z"
+   },
+   {
+    "type": "api_error",
+    "spanId": "re3",
+    "label": "api_retries_exhausted",
+    "attempts": 5,
+    "durationMs": 0,
+    "isError": true,
+    "errorMessage": "boom",
+    "timestamp": "2025-08-19T07:56:45.000Z"
+   },
+   {
+    "type": "tool",
+    "spanId": "z3",
+    "label": "Bash",
+    "turn": 1,
+    "durationMs": 250,
+    "toolInput": "ls",
+    "isError": false,
+    "timestamp": ""
+   }
+  ],
+  "backgroundSpans": [],
+  "loopSignals": []
+ },
+ {
+  "sessionId": "sess-uuid-1",
+  "traceId": "t1",
+  "source": "claude_code",
+  "dataSource": "otel",
+  "initiator": "user",
+  "accountId": "acc-uuid-9",
+  "workspace": "/work/proj",
+  "userRequest": "Fix the 🚀 parser bug",
+  "model": "claude-opus-5",
+  "turns": 3,
+  "inputTokens": 130,
+  "outputTokens": 63,
+  "cacheReadTokens": 2000,
+  "cacheCreateTokens": 300,
+  "cacheHitRate": 0.823045267489712,
+  "durationMs": 130000,
+  "startTime": "2025-08-19T07:53:20.000Z",
+  "filesRead": [
+   "README.md",
+   "util.ts",
+   "notes.txt"
+  ],
+  "filesSearched": [
+   "TODO",
+   "*.rs"
+  ],
+  "filesChanged": [
+   "/work/proj/src/app.ts",
+   "/work/proj/gen.txt",
+   "/work/proj/src/new.ts",
+   "/work/proj/lib/one.ts",
+   "/work/proj/lib/two.ts",
+   "/work/proj/lib/three.ts"
+  ],
+  "filesWritten": [
+   "/work/proj/gen.txt",
+   "/work/proj/src/new.ts"
+  ],
+  "toolCounts": {
+   "Edit": 2,
+   "Bash": 1,
+   "Write": 1,
+   "Read": 1,
+   "Glob": 1,
+   "MultiEdit": 1
+  },
+  "totalToolCalls": 7,
+  "totalLlmCalls": 3,
+  "errors": 2,
+  "outcome": "unknown",
+  "timeline": [
+   {
+    "type": "llm",
+    "spanId": "l1",
+    "label": "claude-opus-5",
+    "turn": 1,
+    "model": "claude-opus-5",
+    "inputTokens": 100,
+    "outputTokens": 50,
+    "cacheReadTokens": 2000,
+    "cacheCreateTokens": 300,
+    "ttft": 450,
+    "durationMs": 2000,
+    "action": "called tools",
+    "responseText": "Let me edit the file.",
+    "isError": false,
+    "timestamp": "2025-08-19T07:53:21.000Z",
+    "editDetails": [
+     {
+      "filePath": "/work/proj/src/app.ts",
+      "toolName": "Edit",
+      "oldString": "foo",
+      "newString": "bar"
+     },
+     {
+      "filePath": "/work/proj/gen.txt",
+      "toolName": "Write"
+     }
+    ]
+   },
+   {
+    "type": "api_request",
+    "spanId": "r1",
+    "label": "api_request",
+    "model": "claude-opus-5",
+    "inputTokens": 100,
+    "outputTokens": 50,
+    "cacheReadTokens": 2000,
+    "cacheCreateTokens": 300,
+    "costUsd": 0.0234,
+    "querySource": "user",
+    "requestId": "req_abc",
+    "durationMs": 1500,
+    "isError": false,
+    "timestamp": "2025-08-19T07:53:22.000Z"
+   },
+   {
+    "type": "tool",
+    "spanId": "tl1",
+    "label": "Edit",
+    "turn": 1,
+    "durationMs": 1000,
+    "toolInput": "{\"file_path\":\"/work/proj/src/app.ts\",\"old_string\":\"foo\",\"new_string\":\"bar\"}",
+    "isError": false,
+    "timestamp": "2025-08-19T07:53:24.000Z",
+    "editDetails": [
+     {
+      "filePath": "/work/proj/src/app.ts",
+      "oldString": "foo",
+      "newString": "bar"
+     }
+    ]
+   },
+   {
+    "type": "tool",
+    "spanId": "tb1",
+    "label": "Bash",
+    "turn": 1,
+    "durationMs": 500,
+    "toolInput": "cargo test --all",
+    "isError": false,
+    "timestamp": "2025-08-19T07:53:26.000Z"
+   },
+   {
+    "type": "user_input",
+    "spanId": "bl1",
+    "label": "Permission prompt",
+    "turn": 1,
+    "durationMs": 300,
+    "decision": "allow",
+    "isError": false,
+    "timestamp": "2025-08-19T07:53:26.100Z"
+   },
+   {
+    "type": "tool",
+    "spanId": "tl2",
+    "label": "Write",
+    "turn": 1,
+    "durationMs": 1000,
+    "toolInput": "{\"file_path\":\"/work/proj/src/new.ts\",\"content\":\"hello\"}",
+    "isError": true,
+    "errorMessage": "permission denied",
+    "timestamp": "2025-08-19T07:53:27.000Z",
+    "editDetails": [
+     {
+      "filePath": "/work/proj/src/new.ts",
+      "content": "hello"
+     }
+    ]
+   },
+   {
+    "type": "llm",
+    "spanId": "l2a",
+    "label": "LLM",
+    "turn": 1,
+    "model": "",
+    "inputTokens": 10,
+    "outputTokens": 5,
+    "ttft": 0,
+    "durationMs": 1000,
+    "action": "text response",
+    "responseText": "All done here.",
+    "isError": false,
+    "timestamp": "2025-08-19T07:55:01.000Z"
+   },
+   {
+    "type": "llm",
+    "spanId": "l2b",
+    "label": "LLM",
+    "turn": 2,
+    "model": "",
+    "inputTokens": 20,
+    "outputTokens": 8,
+    "ttft": 0,
+    "durationMs": 1000,
+    "action": "unknown",
+    "isError": false,
+    "timestamp": "2025-08-19T07:55:03.000Z"
+   },
+   {
+    "type": "tool",
+    "spanId": "t2r",
+    "label": "Read",
+    "turn": 2,
+    "durationMs": 200,
+    "toolInput": "/work/proj/lib/util.ts",
+    "isError": false,
+    "timestamp": "2025-08-19T07:55:05.000Z"
+   },
+   {
+    "type": "tool",
+    "spanId": "t2g",
+    "label": "Glob",
+    "turn": 2,
+    "durationMs": 100,
+    "toolInput": "{\"file_path\":\"/work/proj\",\"pattern\":\"*.rs\"}",
+    "isError": false,
+    "timestamp": "2025-08-19T07:55:06.000Z"
+   },
+   {
+    "type": "tool",
+    "spanId": "t2m",
+    "label": "MultiEdit",
+    "turn": 2,
+    "durationMs": 500,
+    "toolInput": "{\"edits\":[{\"file_path\":\"/work/proj/lib/one.ts\",\"old_string\":\"x\",\"new_string\":\"y\"},{\"filePath\":\"/work/proj/lib/two.ts\"}]}",
+    "isError": false,
+    "timestamp": "2025-08-19T07:55:07.000Z",
+    "editDetails": [
+     {
+      "filePath": "/work/proj/lib/one.ts",
+      "oldString": "x",
+      "newString": "y"
+     },
+     {
+      "filePath": "/work/proj/lib/two.ts"
+     }
+    ]
+   },
+   {
+    "type": "api_error",
+    "spanId": "t2e",
+    "label": "api_error",
+    "model": "claude-opus-5",
+    "statusCode": 429,
+    "attempts": 3,
+    "durationMs": 50,
+    "isError": true,
+    "errorMessage": "rate limited",
+    "timestamp": "2025-08-19T07:55:08.000Z"
+   },
+   {
+    "type": "compaction",
+    "spanId": "t2c",
+    "label": "compaction",
+    "compactionTrigger": "auto",
+    "preTokens": 150000,
+    "postTokens": 8000,
+    "durationMs": 2200,
+    "isError": true,
+    "timestamp": "2025-08-19T07:55:09.000Z"
+   },
+   {
+    "type": "tool",
+    "spanId": "t2x",
+    "label": "Edit",
+    "turn": 2,
+    "durationMs": 100,
+    "isError": false,
+    "timestamp": "2025-08-19T07:55:12.000Z"
+   }
+  ],
+  "backgroundSpans": [],
+  "loopSignals": []
+ },
+ {
+  "sessionId": "sess-uuid-2",
+  "traceId": "t4",
+  "source": "claude_code",
+  "dataSource": "otel",
+  "initiator": "user",
+  "workspace": "",
+  "userRequest": "hello",
+  "model": "",
+  "turns": 0,
+  "inputTokens": 0,
+  "outputTokens": 0,
+  "cacheReadTokens": 0,
+  "cacheCreateTokens": 0,
+  "cacheHitRate": 0,
+  "durationMs": 1000,
+  "startTime": "2025-08-19T07:58:20.000Z",
+  "filesRead": [],
+  "filesSearched": [],
+  "filesChanged": [],
+  "filesWritten": [],
+  "toolCounts": {},
+  "totalToolCalls": 0,
+  "totalLlmCalls": 0,
+  "errors": 0,
+  "outcome": "unknown",
+  "timeline": [],
+  "backgroundSpans": [],
+  "loopSignals": []
+ }
+]
