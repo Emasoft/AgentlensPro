@@ -62,7 +62,17 @@ pub struct SpanStoreWriter {
     pending: BTreeMap<String, PendingBucket>,
     pending_count: usize,
     pub dropped_on_failure: u64,
+    /// S3-F3b read-time attribute overlay (segmentedSpanStore.ts): `traceId:spanId` →
+    /// {attrKey: stringValue}, merged into a span WHEN IT IS READ (load_range) — never by
+    /// rewriting its persisted line. Order-independent (the gen_ai response content arrives as a
+    /// separate log event, before OR after the span, on a different request). In-memory only
+    /// (lost on restart — accepted for LOW-severity enrichment); insertion-ordered so the cap
+    /// evicts oldest-first and a never-arriving span cannot leak memory.
+    overlay: Vec<(String, Vec<(String, String)>)>,
 }
+
+/// segmentedSpanStore.ts OVERLAY_MAX.
+const OVERLAY_MAX: usize = 500;
 
 #[derive(Debug, Default)]
 pub struct FlushResult {
@@ -192,6 +202,7 @@ impl SpanStoreWriter {
             pending: BTreeMap::new(),
             pending_count: 0,
             dropped_on_failure: 0,
+            overlay: Vec::new(),
         };
         w.load_or_rebuild_index();
         w
@@ -329,6 +340,8 @@ impl SpanStoreWriter {
                     if ts < since_ms || ts > until_ms {
                         continue;
                     }
+                    let mut span = span;
+                    self.apply_overlay(&mut span);
                     out.push(span);
                 }
             }
@@ -340,6 +353,50 @@ impl SpanStoreWriter {
         self.pending_count
     }
 
+    /// injectSpanAttribute — record an attribute to merge into span `traceId:spanId` when it is
+    /// next read (load_range), WITHOUT rewriting any persisted segment. Always true (recorded
+    /// whether or not the span is in the store yet) — the boolean mirrors the legacy signature
+    /// so callers stay uniform. Cap-evicts oldest when OVERLAY_MAX is exceeded.
+    pub fn inject_span_attribute(&mut self, trace_id: &str, span_id: &str, key: &str, value: &str) -> bool {
+        let k = format!("{trace_id}:{span_id}");
+        match self.overlay.iter_mut().find(|(id, _)| *id == k) {
+            Some((_, rec)) => match rec.iter_mut().find(|(rk, _)| rk == key) {
+                Some((_, v)) => *v = value.to_owned(),
+                None => rec.push((key.to_owned(), value.to_owned())),
+            },
+            None => {
+                self.overlay.push((k, vec![(key.to_owned(), value.to_owned())]));
+                if self.overlay.len() > OVERLAY_MAX {
+                    self.overlay.remove(0);
+                }
+            }
+        }
+        true
+    }
+
+    /// applyOverlay — upsert the recorded attributes into a span read from disk (each read
+    /// re-parses the line, so mutating here never contaminates the persisted segment or another
+    /// read): an existing attribute of the same key is overwritten in place, else appended.
+    fn apply_overlay(&self, span: &mut Value) {
+        let Some(obj) = span.as_object() else { return };
+        let k = format!(
+            "{}:{}",
+            obj.get("traceId").and_then(Value::as_str).unwrap_or(""),
+            obj.get("spanId").and_then(Value::as_str).unwrap_or("")
+        );
+        let Some((_, rec)) = self.overlay.iter().find(|(id, _)| *id == k) else { return };
+        let Some(attrs) = span.as_object_mut().and_then(|o| o.get_mut("attributes")).and_then(Value::as_array_mut) else { return };
+        for (key, value) in rec {
+            let wrapped = serde_json::json!({ "stringValue": value });
+            match attrs.iter_mut().filter_map(Value::as_object_mut).find(|a| a.get("key").and_then(Value::as_str) == Some(key)) {
+                Some(existing) => {
+                    existing.insert("value".to_owned(), wrapped);
+                }
+                None => attrs.push(serde_json::json!({ "key": key, "value": wrapped })),
+            }
+        }
+    }
+
     /// TS `clear()` — the user's "clear all" (POST /api/clear, /action clearAll): drop the
     /// buffered appends and unlink every segment (plain or gz) and the index; nothing else in
     /// the dir is touched. Destructive BY CONTRACT — it is the one place the store forgets.
@@ -347,6 +404,7 @@ impl SpanStoreWriter {
         self.pending.clear();
         self.pending_count = 0;
         self.dropped_on_failure = 0;
+        self.overlay.clear();
         if let Ok(rd) = fs::read_dir(&self.dir) {
             for entry in rd.flatten() {
                 let name = entry.file_name();

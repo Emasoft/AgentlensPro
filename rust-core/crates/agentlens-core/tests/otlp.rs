@@ -160,3 +160,56 @@ fn a_body_over_the_cap_kills_the_connection_with_no_response() {
     assert!(out.is_empty(), "no response on overflow (got: {out:.60})");
     assert!(died || sent >= agentlens_core::MAX_BODY_BYTES, "the cap actually engaged");
 }
+
+/// S3-F3b: the gen_ai read-time overlay — the response content arrives as a SEPARATE log event
+/// (before OR after its span, different request) and reaches the span on load_range, never by
+/// rewriting a persisted segment. Mirrors server.ts processLogs' gen_ai branch +
+/// segmentedSpanStore.injectSpanAttribute/applyOverlay (observable in TS via /api/debug/span-attr).
+#[test]
+fn gen_ai_overlay_reaches_the_stored_span_on_read_in_either_arrival_order() {
+    let dir = tempdir::make().path;
+    let mut st = agentlens_core::CoreState::open(&dir);
+    let now = agentlens_core::now_ms();
+    let nano = |ms: i64| (ms as i128 * 1_000_000).to_string();
+    let span_body = |sid: &str| serde_json::json!({ "resourceSpans": [{ "scopeSpans": [{ "spans": [{
+        "name": "claude_code.llm_request", "traceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "spanId": sid,
+        "startTimeUnixNano": nano(now), "endTimeUnixNano": nano(now + 1000),
+        "attributes": [ { "key": "session.id", "value": { "stringValue": "sess-genai" } } ]
+    }] }] }] }).to_string();
+    let choice_body = |sid: &str| serde_json::json!({ "resourceLogs": [{ "scopeLogs": [{ "logRecords": [{
+        "timeUnixNano": nano(now), "traceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "spanId": sid,
+        "attributes": [ { "key": "event.name", "value": { "stringValue": "gen_ai.choice" } },
+                        { "key": "gen_ai.event.content", "value": { "stringValue": "{\"message\":{\"role\":\"assistant\",\"content\":\"hi there\"}}" } } ]
+    }] }] }] }).to_string();
+    let expected = r#"[{"role":"assistant","content":[{"type":"text","text":"hi there"}]}]"#;
+    let attr_of = |span: &serde_json::Value, key: &str| -> Option<String> {
+        span["attributes"].as_array()?.iter().find(|a| a["key"] == key).map(|a| a["value"]["stringValue"].as_str().unwrap_or("").to_owned())
+    };
+
+    // Span first, choice after (the dominant order).
+    agentlens_core::ingest_post(&mut st, "/v1/traces", span_body("00000000000000a1").as_bytes());
+    agentlens_core::ingest_post(&mut st, "/v1/logs", choice_body("00000000000000a1").as_bytes());
+    // Choice first, span after: the overlay was recorded before the span existed anywhere.
+    agentlens_core::ingest_post(&mut st, "/v1/logs", choice_body("00000000000000a2").as_bytes());
+    agentlens_core::ingest_post(&mut st, "/v1/traces", span_body("00000000000000a2").as_bytes());
+
+    let read = st.writer.load_range(now - 60_000, i64::MAX, now);
+    let by_id = |sid: &str| read.iter().find(|s| s["spanId"] == sid).expect("stored span").clone();
+    assert_eq!(attr_of(&by_id("00000000000000a1"), "gen_ai.output.messages").as_deref(), Some(expected));
+    let s2 = by_id("00000000000000a2");
+    assert_eq!(attr_of(&s2, "gen_ai.output.messages").as_deref(), Some(expected), "order-independent");
+    // The LIVE-window copy does NOT carry it — in BOTH engines: injectSpanAttribute on the
+    // segmented store always returns true, so the ingest buffer is consumed at the choice event
+    // and a span arriving later finds nothing to merge; the content is read-time-only (which is
+    // exactly why TS needed /api/debug/span-attr to observe it — /api/summary folds it away).
+    let live = st.window.spans.iter().find(|s| s["spanId"] == "00000000000000a2").unwrap();
+    assert_eq!(attr_of(live, "gen_ai.output.messages"), None, "live copies stay bare; the overlay is a read-time merge");
+    st.writer.flush();
+    let mut fresh = agentlens_spanstore::writer::SpanStoreWriter::open(&dir.join("spans"));
+    let bare = fresh.load_range(now - 60_000, i64::MAX, now);
+    let a1 = bare.iter().find(|s| s["spanId"] == "00000000000000a1").unwrap();
+    assert_eq!(attr_of(a1, "gen_ai.output.messages"), None, "the overlay never touched the persisted line");
+    // clear() drops the overlay with everything else.
+    st.writer.clear();
+    assert!(st.writer.load_range(0, i64::MAX, now).is_empty());
+}

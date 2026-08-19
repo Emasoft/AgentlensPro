@@ -307,8 +307,13 @@ pub fn ingest_post(state: &mut CoreState, path: &str, body: &[u8]) {
         }
         "logs" => {
             state.counters.logs_payloads += 1;
-            // gen_ai injection needs the live span window (a later P4 slice) — never inject here.
-            let r = state.ingest.process_logs(&payload, now, |_, _, _| false);
+            // server.ts processLogs' gen_ai branch: the response content lands as a read-time
+            // OVERLAY on the store (injectSpanAttribute — always true, so the ingest buffer is
+            // consumed immediately; the buffer's fallback still covers a span in the SAME payload).
+            let r = {
+                let CoreState { ingest, writer, .. } = state;
+                ingest.process_logs(&payload, now, |t, s, v| writer.inject_span_attribute(t, s, "gen_ai.output.messages", v))
+            };
             // server.ts processLogs: the body-pointer events' user.account_uuid → the registry.
             for (sid, acct) in &r.account_pairs {
                 state.accounts.record(sid, acct);
