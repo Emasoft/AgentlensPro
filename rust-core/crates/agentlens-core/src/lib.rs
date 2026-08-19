@@ -38,7 +38,6 @@ pub mod log_reader;
 pub mod pricing;
 pub mod retention_config;
 pub mod server_stats;
-pub mod session_store;
 pub mod span_window;
 pub mod summarize;
 pub mod ui;
