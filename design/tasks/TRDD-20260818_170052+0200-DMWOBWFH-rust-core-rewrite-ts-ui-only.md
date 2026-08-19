@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-19T21:30:00+0200
+updated: 2026-08-19T21:40:00+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -406,16 +406,21 @@ release-via: publish
   the sweeper via `SweeperControl`; tailer forgets, FULL sweep from 0), log-scan-stats
   (`CoreState.log_scan` cumulative counters; derived caches/scratch listing NOT PORTED → zeros).
   Tests over a real socket + the watcher test extended with clear→full-resweep. 78/78.
-- **NEXT ACTION (one step): `/api/import` (freeze row 3) — `buildImportCardStandalone`**
-  (server.ts ~1371): body ≤64MB `{sessions:[…]}`, each needs `sessionId` + `source ∈
-  {copilot,claude_code,codex,opencode}` → a card via the import builder → `put_log_session`;
-  `{imported,skipped,failed:0,total}`; bad body → `400 {"error":"sessions array required"}` /
-  `400 {"error":"<String(e)>"}`. Read the TS builder first (every default it fills); TS-oracle
-  fixture: a few import records through the compiled builder → expected cards, Value-equal.
-  Then P5c (accountId registry, generated-files attach), the remaining frozen routes (hook-events
-  ingest rows 5–8 are a subsystem — hookEventStore + statuslineStore; burn-risk row 12;
-  agent-gate row 13), and the perf notes under P5b (skip timeline retention for cold files;
-  memoize the stripped summary by data_version).
+- **P4k DONE (commit d7fc039) — `POST /api/import` (row 3).** `import_card.rs`: the private
+  server.ts builder transcribed key for key (no executable oracle — it is not exported; the
+  expected card is a literal in `tests/ui.rs`), the drop/skip/import accounting, both 400
+  shapes, 64MB cap. 79/79.
+- **NEXT ACTION (one step): the perf notes under P5b, in ONE slice** — (a) memoize the stripped
+  summary by `data_version` (server.ts strippedCache: `/api/summary` and the SSE payload rebuild
+  only when data_version moved — at 13.5k cards `session_summary` is ~1s per request today);
+  (b) skip timeline retention for COLD files in the boot scan (the parse engine's 3GB peak RSS:
+  a file whose last activity is older than `timeline_hot_age_ms()` gets its timeline stripped
+  at finish time on the worker, not after the join — same cards, a fraction of the peak). Prove
+  (a) with a test counting rebuilds across unchanged requests and (b) with the live 13.5k boot
+  (peak RSS before/after via `/usr/bin/time -l`). Then P5c (accountId registry, generated-files
+  attach), and the remaining frozen routes (hook-events ingest rows 5–8 — hookEventStore +
+  statuslineStore; burn-risk row 12; agent-gate row 13; bodies rows 14–15; prompts/branch-dump
+  rows 17–18; instruction rows 19–21; burn-status row 24; debug/requests row 26).
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
