@@ -337,6 +337,28 @@ async fn handle(
             Err(e) => eprintln!("alcore: malformed /action body: {e}"),
         }
         Response::new(boxed_full(Bytes::new()))
+    } else if method == Method::POST && path == "/api/import" {
+        // readBodyCapped(64MB): overflow destroys the socket. Any parse failure is the TS
+        // `String(e)` 400 (the message text is serde's, not V8's — the status and shape are the
+        // contract); a body without a `sessions` array is its own 400.
+        let Some(buf) = read_body_capped(req.into_body(), 64 * 1024 * 1024).await? else {
+            return Err("/api/import body over 64MB cap — connection aborted".to_owned());
+        };
+        match serde_json::from_slice::<Value>(&buf) {
+            Err(e) => json_response(StatusCode::BAD_REQUEST, error_json(&format!("SyntaxError: {e}"))),
+            Ok(body) => match body.get("sessions").and_then(Value::as_array) {
+                None => json_response(StatusCode::BAD_REQUEST, error_json("sessions array required")),
+                Some(sessions) => {
+                    let (imported, skipped) = {
+                        let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                        crate::import_card::import_sessions(&mut st, sessions, crate::now_ms())
+                    };
+                    push_update(&state, &hub, crate::now_ms() as f64);
+                    let out = serde_json::json!({ "imported": imported, "skipped": skipped, "failed": 0, "total": sessions.len() });
+                    json_response(StatusCode::OK, out.to_string())
+                }
+            },
+        }
     } else if method == Method::GET && path == "/api/debug/log-scan-stats" {
         let body = {
             let st = state.lock().map_err(|_| "state poisoned".to_owned())?;

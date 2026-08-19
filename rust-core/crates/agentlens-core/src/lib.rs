@@ -30,6 +30,7 @@ use agentlens_spanstore::writer::SpanStoreWriter;
 
 pub mod delta_log;
 pub mod feed_merge;
+pub mod import_card;
 pub mod log_reader;
 pub mod pricing;
 pub mod retention_config;

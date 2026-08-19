@@ -331,3 +331,78 @@ fn small_routes_embed_status_hook_config_clear_action_and_log_scan_stats() {
     assert!(r.starts_with("HTTP/1.1 200") && body_of(&r).is_empty(), "{r}");
     assert!(state.lock().unwrap().log_sessions.is_empty());
 }
+
+/// Freeze row 3 — POST /api/import: buildImportCardStandalone's defaults (transcribed from
+/// server.ts — the builder is private to that file, so there is no executable oracle), the
+/// dropped/skipped/imported accounting, and the two 400 shapes.
+#[test]
+fn import_builds_log_cards_with_the_ts_defaults_and_counts_exactly() {
+    use agentlens_core::import_card::build_import_card;
+    let now = 1_785_578_400_000i64;
+    // A minimal record: every default visible. startTime = new Date(now).toISOString().
+    let raw = serde_json::json!({ "sessionId": "imp-1", "source": "codex" });
+    let card = build_import_card(raw.as_object().unwrap(), now);
+    assert_eq!(card, serde_json::json!({
+        "sessionId": "imp-1", "traceId": "", "source": "codex", "dataSource": "log",
+        "workspace": "", "userRequest": "", "model": "",
+        "turns": 0, "totalLlmCalls": 0, "totalToolCalls": 0,
+        "inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 0, "cacheCreateTokens": 0, "cacheHitRate": 0,
+        "durationMs": 0, "startTime": "2026-08-01T10:00:00.000Z",
+        "filesRead": [], "filesChanged": [], "filesSearched": [], "filesWritten": [],
+        "toolCounts": {}, "errors": 0, "outcome": "unknown", "timeline": [], "backgroundSpans": [], "loopSignals": [],
+    }));
+    // Key order is the TS literal's (a consumer diffing exports sees the same shape).
+    let keys: Vec<&str> = card.as_object().unwrap().keys().map(String::as_str).collect();
+    assert_eq!(keys[0..4], ["sessionId", "traceId", "source", "dataSource"]);
+    assert_eq!(keys[keys.len() - 3..], ["timeline", "backgroundSpans", "loopSignals"]);
+    // A full record: numbers/strings pass, wrong types fall to defaults, arrays keep only
+    // strings, turns feeds totalLlmCalls, a valid tokensSource/coverageNote is carried,
+    // an invalid tokensSource is dropped, a non-null outcome passes through as-is.
+    let raw = serde_json::json!({
+        "sessionId": "imp-2", "source": "claude_code", "turns": 4, "totalToolCalls": "9", "inputTokens": 1.5,
+        "filesRead": ["a", 1, "b"], "toolCounts": { "Read": 2 }, "outcome": "success", "startTime": "2026-01-01T00:00:00.000Z",
+        "tokensSource": "merged", "coverageNote": "partial", "loopSignals": [{ "k": 1 }], "workspace": 7,
+    });
+    let card = build_import_card(raw.as_object().unwrap(), now);
+    assert_eq!(card["turns"], 4);
+    assert_eq!(card["totalLlmCalls"], 4);
+    assert_eq!(card["totalToolCalls"], 0, "a string is not a number");
+    assert_eq!(card["inputTokens"], 1.5);
+    assert_eq!(card["filesRead"], serde_json::json!(["a", "b"]));
+    assert_eq!(card["toolCounts"], serde_json::json!({ "Read": 2 }));
+    assert_eq!(card["outcome"], "success");
+    assert_eq!(card["startTime"], "2026-01-01T00:00:00.000Z");
+    assert_eq!(card["tokensSource"], "merged");
+    assert_eq!(card["coverageNote"], "partial");
+    assert_eq!(card["loopSignals"], serde_json::json!([{ "k": 1 }]));
+    assert_eq!(card["workspace"], "");
+    let raw = serde_json::json!({ "sessionId": "imp-3", "source": "opencode", "tokensSource": "guess" });
+    assert!(build_import_card(raw.as_object().unwrap(), now).get("tokensSource").is_none());
+
+    // The handler over the socket: 2 valid (one a duplicate of a card already present → skipped),
+    // 1 bad source + 1 non-object + 1 missing id dropped (counted in total only).
+    let (_otlp, ui, state) = start_servers();
+    state.lock().unwrap().put_log_session(serde_json::json!({ "sessionId": "dup", "source": "codex", "timeline": [] }));
+    let body = serde_json::json!({ "sessions": [
+        { "sessionId": "new-1", "source": "copilot", "turns": 2 },
+        { "sessionId": "dup", "source": "codex" },
+        { "sessionId": "bad", "source": "gemini" },
+        "not an object",
+        { "source": "codex" },
+    ] })
+    .to_string();
+    let r = post(ui, "/api/import", &body);
+    assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+    assert_eq!(body_of(&r), r#"{"imported":1,"skipped":1,"failed":0,"total":5}"#);
+    {
+        let st = state.lock().unwrap();
+        assert_eq!(st.log_sessions.len(), 2);
+        assert_eq!(st.log_sessions["new-1"]["totalLlmCalls"], 2);
+        assert_eq!(st.log_sessions["dup"]["source"], "codex", "the existing card is untouched");
+    }
+    let r = post(ui, "/api/import", r#"{"sessions":"nope"}"#);
+    assert!(r.starts_with("HTTP/1.1 400"), "{r}");
+    assert_eq!(body_of(&r), r#"{"error":"sessions array required"}"#);
+    let r = post(ui, "/api/import", "{broken");
+    assert!(r.starts_with("HTTP/1.1 400") && body_of(&r).starts_with(r#"{"error":"SyntaxError"#), "{r}");
+}
