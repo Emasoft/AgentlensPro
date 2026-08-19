@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-19T20:20:00+0200
+updated: 2026-08-19T20:36:00+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -342,14 +342,27 @@ release-via: publish
   Tests: tailed card Value-equal to a from-0 parse after every growth step, read-kind counters
   pin tail vs from-0, partial-line carry, shrink → from 0. Live: this session's card advanced
   within one sweep. 66/66.
-- **NEXT ACTION (one step): P5e — persisted offsets + cards for a fast restart** (server.ts
-  TRDD-PJC8N1HO: `exportFileState`/`importFileState` + the persisted-card file, the
-  `restoredFromDisk` branch that SKIPS the cold rescan, `stripCardForPersist`, the 30s durable
-  save + the save-on-scan). Read the TS persistence format first (the file under the data dir
-  and its ino/size validation on import) and write the SAME format so a cutover restart reads
-  either engine's file. Then P5c (accountId registry, generated-files attach), a notify-based
-  watcher (60s backstop), `/api/server-stats`, and the perf notes under P5b (skip timeline
-  retention for cold files; memoize the stripped summary by data_version).
+- **P5e DONE (commit eaec1b4) — persisted offsets + cards, byte-compatible with the TS delta
+  logs.** `delta_log.rs` (= src/store/deltaLog.ts: snapshot+delta NDJSON, zero-byte unchanged
+  save, verified compaction, torn-tail tolerance) + `log_reader::DurableState` (= the server.ts
+  restore/save: `log-sessions`/`log-offsets` logs + `log-delta-version.json`, stripped cards,
+  ino/size-checked offset import, 60s/5min cadences, flush on stop). LOG_INGEST_VERSION=7 is
+  pinned to src/collectorState.ts by a test that reads the TS source. Cross-engine PROVEN on
+  this machine: alcore booted on a copy of the live TS server's logs → 22,272 cards + 13,528
+  offsets restored, 7 changed files swept in 379ms; Rust→Rust restart 2 files in 167ms.
+  Gotcha that cost a cycle: `stat.mtimeMs` must be Node's exact `sec*1e3 + nsec/1e6` float —
+  `as_secs_f64()*1000` differs in the last ulp and re-parsed 3,345 unchanged files. 72/72.
+  NOT ported (cutover-irrelevant or later): the legacy whole-file `log-sessions.json` /
+  `log-offsets.json` migration (this machine migrated long ago; a fresh install has none), the
+  `persistStats` counters (land with `/api/server-stats`), the collector-lifecycle file.
+- **NEXT ACTION (one step): `/api/server-stats` behind the frozen §1.4 key order** (the freeze
+  report `reports/p4-wire-freeze/20260818_200921+0200-frozen-wire-surface.md` §1.4): port the
+  server.ts handler's derivations over CoreState (span counts, log-scan stats incl. the sweep
+  counters + persist stats, uptime, build id…) — read the TS handler first and list every key
+  with its source; keys whose subsystem is not ported yet carry the TS default value with a
+  note, never an invented one. Then the notify-based watcher (60s backstop), P5c (accountId
+  registry, generated-files attach), the remaining frozen routes, and the perf notes under P5b
+  (skip timeline retention for cold files; memoize the stripped summary by data_version).
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
