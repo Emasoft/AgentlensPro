@@ -83,7 +83,7 @@ pub fn push_update(state: &Arc<Mutex<CoreState>>, hub: &SseHub, now_ms: f64) {
             Err(_) => return,
         };
         let summary = st.session_summary(now_ms);
-        build_update_payload(&summary, st.store.spans(), &st.build_id, Vec::new(), now_ms).to_string()
+        build_update_payload(&summary, &st.window.spans, &st.build_id, Vec::new(), now_ms).to_string()
     };
     hub.broadcast(sse_frame(&payload));
 }
@@ -154,7 +154,7 @@ fn sse_response(state: &Arc<Mutex<CoreState>>, hub: &SseHub, now_ms: f64) -> Res
     let first = {
         let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
         let summary = st.session_summary(now_ms);
-        build_update_payload(&summary, st.store.spans(), &st.build_id, Vec::new(), now_ms).to_string()
+        build_update_payload(&summary, &st.window.spans, &st.build_id, Vec::new(), now_ms).to_string()
     };
     let mut rx = hub.subscribe();
     let (tx, frames) = tokio::sync::mpsc::unbounded_channel::<Bytes>();

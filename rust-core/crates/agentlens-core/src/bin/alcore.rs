@@ -67,7 +67,17 @@ fn main() {
         eprintln!("alcore: cannot create {}: {e}", spans_dir.display());
         exit(1);
     }
-    let state = Arc::new(Mutex::new(agentlens_core::CoreState::open(&spans_dir)));
+    let state = Arc::new(Mutex::new(agentlens_core::CoreState::open(std::path::Path::new(&data_dir))));
+    {
+        let st = state.lock().expect("state");
+        let (segments, total_spans, _) = st.writer.stats();
+        println!(
+            "alcore: loaded {} span(s) (last {}h window) from {} — store holds {total_spans} span(s) across {segments} segment(s), nothing evicted",
+            st.window.spans.len(),
+            st.window.configured_ms / 3_600_000,
+            spans_dir.display()
+        );
+    }
 
     let mut sweeper: Option<agentlens_core::log_reader::SweeperHandle> = None;
     if log_scan {
@@ -109,8 +119,9 @@ fn main() {
     let addr: std::net::SocketAddr = format!("{bind}:{port}").parse().unwrap_or_else(|_| usage("bad bind/port"));
     let flush_state = state.clone();
     rt.spawn(async move {
-        // Belt-and-braces flush: ingest_post already flushes per payload; this catches anything
-        // buffered by future batching changes so a quiet listener still settles.
+        // The flush tick (server.ts flushSpanAppends, SAVE_INTERVAL_MS=5s): settle anything still
+        // buffered (ingest_post already flushes per payload) and prune the summarization window
+        // by time — trimming memory is not data loss, every trimmed span is on disk.
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(5));
         loop {
             tick.tick().await;
@@ -118,6 +129,7 @@ fn main() {
                 if st.writer.pending_appends() > 0 {
                     st.writer.flush();
                 }
+                st.prune_window(agentlens_core::now_ms());
             }
         }
     });

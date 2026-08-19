@@ -33,6 +33,7 @@ pub mod feed_merge;
 pub mod log_reader;
 pub mod pricing;
 pub mod session_store;
+pub mod span_window;
 pub mod summarize;
 pub mod ui;
 pub mod update_payload;
@@ -68,9 +69,10 @@ pub struct CoreState {
     pub ingest: IngestState,
     pub writer: SpanStoreWriter,
     pub counters: Counters,
-    /// The 5-minute live window the UI summary is computed over (P4e) — fed by every ingested
-    /// span, exactly as the TS collector's addSpan feeds SessionStore.
-    pub store: session_store::SessionStore,
+    /// The summarization window (server.ts `spans` + `effectiveWindowMs`, P4h): loaded from the
+    /// span store for the last summaryWindowHours at boot, appended by every ingested span,
+    /// pruned by time on the flush tick. Every derived view is computed over it.
+    pub window: span_window::SpanWindow,
     /// Bumped on every data change; the coalesced SSE pusher rebuilds only when it moved
     /// (server.ts dataVersion).
     pub data_version: u64,
@@ -130,7 +132,7 @@ impl CoreState {
     /// any log session exists, the feed-collision merge + the subagent link, sorted newest-first.
     pub fn session_summary(&self, now_ms: f64) -> Value {
         let _ = now_ms;
-        let mut summary = summarize::summarizer::summarize_spans(self.store.spans(), &|_| None);
+        let mut summary = summarize::summarizer::summarize_spans(&self.window.spans, &|_| None);
         if !self.log_sessions.is_empty() {
             let otel: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
             let logs: Vec<Value> = self.log_sessions.iter().map(|(_, c)| c.clone()).collect();
@@ -150,16 +152,29 @@ impl CoreState {
 }
 
 impl CoreState {
-    pub fn open(spans_dir: &std::path::Path) -> CoreState {
+    /// Open the store under `<data_dir>/spans` and load the summary window from it — the TS boot
+    /// load (server.ts:422): only the segments overlapping the window, nothing evicted.
+    pub fn open(data_dir: &std::path::Path) -> CoreState {
         let now = now_ms();
+        let mut writer = SpanStoreWriter::open(&data_dir.join("spans"));
+        let mut window = span_window::SpanWindow::new(span_window::summary_window_ms(data_dir));
+        window.boot_load(&mut writer, now);
         CoreState {
             ingest: IngestState::default(),
-            writer: SpanStoreWriter::open(spans_dir),
+            writer,
             counters: Counters::default(),
-            store: session_store::SessionStore::new(now as f64),
+            window,
             data_version: 0,
             build_id: now.to_string(),
             log_sessions: IndexMap::new(),
+        }
+    }
+
+    /// The flush tick's prune (server.ts flushSpanAppends): the window shrank ⇒ every derived
+    /// view must be rebuilt.
+    pub fn prune_window(&mut self, now_ms: i64) {
+        if self.window.prune(now_ms) {
+            self.data_version += 1;
         }
     }
 }
@@ -216,7 +231,7 @@ pub fn ingest_post(state: &mut CoreState, path: &str, body: &[u8]) {
         state.data_version += 1;
     }
     for span in spans {
-        state.store.add_span(span, now as f64);
+        state.window.add(span, now);
     }
     if state.writer.pending_appends() > 0 {
         // Flush per payload for now: durable and deterministic for tests; batching cadence is

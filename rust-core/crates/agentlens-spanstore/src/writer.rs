@@ -19,7 +19,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -264,6 +264,76 @@ impl SpanStoreWriter {
         if let Ok(json) = serde_json::to_vec(&self.index) {
             let _ = atomic_write(&self.dir.join(INDEX_FILE), &json);
         }
+    }
+
+    /// TS `stats()` — (segments, totalSpans, totalBytes) from the index.
+    pub fn stats(&self) -> (usize, u64, u64) {
+        let total_spans = self.index.segments.values().map(|m| m.count).sum();
+        let total_bytes = self.index.segments.values().map(|m| m.bytes).sum();
+        (self.index.segments.len(), total_spans, total_bytes)
+    }
+
+    /// TS `loadRange(sinceMs, untilMs)` (TRDD-DMWOBWFH P4h — the standalone server's boot load
+    /// of the summary window): flush first (reads must see everything appended so far), visit
+    /// ONLY the segments whose index min/max (else the day bounds) overlap the window, in key
+    /// order; within a day, a rare dual-form key (`.ndjson` + `.ndjson.gz`) is de-duplicated by
+    /// traceId:spanId across the forms; each span is kept iff its own timestamp is inside
+    /// [since, until]. A corrupt tail line is skipped; an unreadable file is logged on stderr
+    /// and that segment is MISSING from the result (never silently).
+    pub fn load_range(&mut self, since_ms: i64, until_ms: i64, now_ms: i64) -> Vec<Value> {
+        self.flush();
+        let mut by_key: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let Ok(rd) = fs::read_dir(&self.dir) else { return Vec::new() };
+        for entry in rd.flatten() {
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else { continue };
+            if segment_day_ms(name).is_some() {
+                by_key.entry(name[..10].to_owned()).or_default().push(name.to_owned());
+            }
+        }
+        let mut out: Vec<Value> = Vec::new();
+        for (key, files) in &by_key {
+            let Some(day_ms) = segment_day_ms(&format!("{key}.ndjson")) else { continue };
+            let (lo, hi) = match self.index.segments.get(key) {
+                Some(m) => (m.min_ts as i64, m.max_ts as i64),
+                None => (day_ms, day_ms + DAY_MS),
+            };
+            if lo > until_ms || hi < since_ms {
+                continue;
+            }
+            let mut seen: Option<std::collections::HashSet<String>> = if files.len() > 1 { Some(Default::default()) } else { None };
+            let mut sorted = files.clone();
+            sorted.sort();
+            for name in &sorted {
+                let path = self.dir.join(name);
+                let Ok(f) = fs::File::open(&path) else {
+                    eprintln!("span store: could NOT read {name} — that segment is MISSING from this query's result");
+                    continue;
+                };
+                let reader: Box<dyn Read> = if name.ends_with(".gz") { Box::new(flate2::read::GzDecoder::new(f)) } else { Box::new(f) };
+                for line in std::io::BufReader::with_capacity(1 << 20, reader).lines() {
+                    let Ok(line) = line else { break };
+                    let Ok(span) = serde_json::from_str::<Value>(&line) else { continue };
+                    let Some(obj) = span.as_object() else { continue };
+                    if let Some(seen) = seen.as_mut() {
+                        let id = format!(
+                            "{}:{}",
+                            obj.get("traceId").and_then(Value::as_str).unwrap_or(""),
+                            obj.get("spanId").and_then(Value::as_str).unwrap_or("")
+                        );
+                        if !seen.insert(id) {
+                            continue;
+                        }
+                    }
+                    let ts = span_timestamp_ms(obj, now_ms);
+                    if ts < since_ms || ts > until_ms {
+                        continue;
+                    }
+                    out.push(span);
+                }
+            }
+        }
+        out
     }
 
     pub fn pending_appends(&self) -> usize {

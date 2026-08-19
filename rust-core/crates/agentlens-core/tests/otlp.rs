@@ -9,9 +9,7 @@ use std::sync::{Arc, Mutex};
 
 fn start_server() -> (std::net::SocketAddr, Arc<Mutex<agentlens_core::CoreState>>, tempdir::Dir) {
     let dir = tempdir::make();
-    let spans = dir.path.join("spans");
-    std::fs::create_dir_all(&spans).unwrap();
-    let state = Arc::new(Mutex::new(agentlens_core::CoreState::open(&spans)));
+    let state = Arc::new(Mutex::new(agentlens_core::CoreState::open(&dir.path)));
     let (tx, rx) = std::sync::mpsc::channel();
     let st = state.clone();
     std::thread::spawn(move || {

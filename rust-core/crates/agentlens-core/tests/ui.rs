@@ -11,9 +11,8 @@ fn start_servers() -> (std::net::SocketAddr, std::net::SocketAddr, Arc<Mutex<age
     let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!("al-core-ui-{}-{n}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    let spans = dir.join("spans");
-    std::fs::create_dir_all(&spans).unwrap();
-    let state = Arc::new(Mutex::new(agentlens_core::CoreState::open(&spans)));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = Arc::new(Mutex::new(agentlens_core::CoreState::open(&dir)));
     let (otx, orx) = std::sync::mpsc::channel();
     let (utx, urx) = std::sync::mpsc::channel();
     let (s1, s2, s3) = (state.clone(), state.clone(), state.clone());
