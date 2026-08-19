@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T02:35:00+0200
+updated: 2026-08-20T01:21:43+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -455,14 +455,26 @@ release-via: publish
   noted). 84/84.
 - **P4p DONE (commit df84cf8) — the debug seams** (codex-store-groups; span-attr `{found,value}`
   through a fresh windowed read — P4l's overlay observable over the wire). 85/85.
-- **NEXT ACTION (one step): GET /api/timeline/<sessionId> + GET /api/collector-gaps** — the two
-  small remaining GETs before the big subsystems: timeline (server.ts:4045 — read
-  resolveSessionCard first: the reparse-on-demand for a disk-restored stripped card;
-  `{timeline,fileOps,generatedFiles,generatedFilesTruncated}` — generatedFiles rides THIS lazy
-  payload, stripSessionDetail drops it from /api/summary) and collector-gaps (server.ts:4039 —
-  read getCollectorGaps; likely `{collectorGaps:[]}` idle if the lifecycle file is unported —
-  report the TS idle value with a note if so). Then the burn subsystem (rows 12–13 + 24; big,
-  its own slice), bodies rows 14–15, instruction rows 19–21, statusline row 5.
+- **P4q DONE (commit 1f59b9c) — GET /api/timeline/<id> + /api/collector-gaps (rows 29–30), and
+  the collector lifecycle is PORTED (not the idle-[] shortcut).** `collector_lifecycle.rs` =
+  collectorState.ts' lifecycle half (Value-kept runs — the TS loader preserves unknown keys and
+  filters per-run; typed serde would do neither); alcore boot start marker + 30s heartbeat +
+  graceful-stop marker; BOTH SSE frame sites now pass real gaps (build_update_payload always had
+  the field). Timeline = resolveSessionCard: summary lookup → reparse-on-demand
+  (`log_reader::reparse_session` — route-side fresh parse; the tailer is deliberately untouched:
+  sweeper-thread Rc/!Send, and its offset state stays valid for a fully-consumed file) → the
+  TRDD-5GFSFX0Q graft off the new `CoreState.otel_attribution` side-map (rebuilt inside the
+  memoized summary compute, same data_version; graft AFTER put_log_session so the stored card
+  stays pure). PARITY NOTE kept on record: the parse-time hot-age strip applies to the reparse
+  in BOTH engines — a >24h-idle session drills to an empty timeline in TS too; do not "fix" it
+  on the Rust side alone. `CoreState.log_env` is a field so tests point discovery at a fixture
+  home without racing the process env. NOT PORTED: statuslineReader.overlay on the reparsed
+  card (statusline store, P4m note); the lifecycleCorrupt fallback counter. 91/91 (85 + 3
+  lifecycle unit + 3 socket tests), clippy delta zero, live-curl'd both routes on a scratch dir.
+- **NEXT ACTION (one step): P4r — the burn subsystem (freeze rows 12–13 + 24; big, its own
+  slice).** Read the freeze report rows first, then src/burnInvestigator.ts and the server.ts
+  handlers those rows anchor; port behind the frozen wire shapes with a TS-oracle fixture where
+  a builder is portable. Then bodies rows 14–15, instruction rows 19–21, statusline row 5.
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
