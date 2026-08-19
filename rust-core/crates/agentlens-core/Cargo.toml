@@ -24,3 +24,7 @@ bytes = "1"
 [[bin]]
 name = "alcore"
 path = "src/bin/alcore.rs"
+
+[[bin]]
+name = "alsummarize"
+path = "src/bin/alsummarize.rs"

@@ -329,25 +329,14 @@ fn re(cell: &'static OnceLock<regex::Regex>, pattern: &str) -> &'static regex::R
 }
 
 /// extractUserRequest: the <userRequest> wrap, the Codex "## My request:" form, then IDE-tag
-/// stripping, each capped at 5000 chars (char-boundary-safe slicing; TS slices UTF-16 units,
-/// but a 5000-unit prefix of real prompts is ASCII-dominated — divergence only on a multi-byte
-/// char straddling the cap, accepted and documented).
+/// stripping, each capped at 5000 UTF-16 code units (js_slice — JS .slice semantics).
 pub fn extract_user_request(raw: &str) -> String {
     static USER_REQ: OnceLock<regex::Regex> = OnceLock::new();
     static CODEX: OnceLock<regex::Regex> = OnceLock::new();
     static CAVEAT: OnceLock<regex::Regex> = OnceLock::new();
     static IDE: OnceLock<regex::Regex> = OnceLock::new();
     let trimmed = raw.trim();
-    let cap = |s: &str| -> String {
-        let mut end = s.len().min(5000);
-        while end < s.len() && !s.is_char_boundary(end) {
-            end -= 1;
-        }
-        while !s.is_char_boundary(end) {
-            end -= 1;
-        }
-        s[..end].to_owned()
-    };
+    let cap = |s: &str| -> String { js_slice(s, 5000).to_owned() };
     if trimmed.contains("<userRequest>") {
         let r = re(&USER_REQ, r"(?s)<userRequest>\s*(.*?)\s*</userRequest>");
         if let Some(m) = r.captures(trimmed).and_then(|c| c.get(1)) {
@@ -596,14 +585,21 @@ fn str_or<'a>(v: Option<&'a Value>, default: &'a str) -> &'a str {
     v.and_then(Value::as_str).filter(|s| !s.is_empty()).unwrap_or(default)
 }
 
-/// UTF-16-ish .slice(0, n) — char-boundary-safe byte cap (documented divergence only when a
-/// multi-byte char straddles the cap).
+/// `.slice(0, n)` counting UTF-16 CODE UNITS exactly as JS `.length`/`.slice` do. The byte-cap
+/// shortcut this replaced diverged on EVERY long string containing an em-dash or smart quote —
+/// the P4d e2e real-window replay caught truncated userRequests immediately. The one remaining
+/// divergence: a cap landing mid-surrogate-pair keeps the whole char out (JS would keep a lone
+/// surrogate, which a Rust String cannot represent).
 pub fn js_slice(s: &str, n: usize) -> &str {
-    let mut end = s.len().min(n);
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
+    let mut units = 0usize;
+    for (i, c) in s.char_indices() {
+        let u = c.len_utf16();
+        if units + u > n {
+            return &s[..i];
+        }
+        units += u;
     }
-    &s[..end]
+    s
 }
 
 fn basename(p: &str) -> &str {
