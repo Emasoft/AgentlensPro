@@ -498,3 +498,63 @@ fn hook_events_ingest_read_and_lifecycle_mapping() {
     let kinds: Vec<&str> = v["events"].as_array().unwrap().iter().map(|e| e["kind"].as_str().unwrap()).collect();
     assert_eq!(kinds, ["STOP"], "the SessionEnd was dropped at capture-off — kinds= re-admits what exists");
 }
+
+/// Freeze rows 17–18 — POST /api/write-prompts-file (always 200 empty; the cwd markdown journal)
+/// and POST /api/branch-dump (slug gates, sanitized single-segment names, {dir,paths}).
+#[test]
+fn write_prompts_file_and_branch_dump() {
+    let (_otlp, ui, _state) = start_servers();
+
+    // write-prompts-file: first entry creates the header; a second appends; a malformed body is
+    // logged and STILL 200 empty. The file lands in the server's cwd.
+    let r = post(ui, "/api/write-prompts-file", r#"{"agent":"claude_code","label":"test label","prompt":"the prompt body"}"#);
+    assert!(r.starts_with("HTTP/1.1 200") && body_of(&r).is_empty(), "{r}");
+    let file = std::env::current_dir().unwrap().join("agentlens-prompts-claude.md");
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(text.starts_with("# AgentLens Prompts — Claude\n\n## "), "{text}");
+    assert!(text.contains(" — test label\n\nthe prompt body\n\n---\n\n"), "{text}");
+    let r = post(ui, "/api/write-prompts-file", r#"{"agent":"claude_code","label":"second","prompt":"p2"}"#);
+    assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+    let text2 = std::fs::read_to_string(&file).unwrap();
+    assert!(text2.starts_with(&text) && text2.contains(" — second\n\np2\n\n---\n\n"), "appended");
+    assert_eq!(text2.matches("# AgentLens Prompts").count(), 1, "header once");
+    let r = post(ui, "/api/write-prompts-file", "not json");
+    assert!(r.starts_with("HTTP/1.1 200") && body_of(&r).is_empty(), "fire-and-forget: {r}");
+    // The test wrote into the real cwd — stage it out of the tree, never leave repo litter.
+    let _ = std::fs::rename(&file, std::env::temp_dir().join("agentlens-prompts-claude.md"));
+
+    // branch-dump: a fixture HOME with one project dir; CLAUDE_CONFIG_DIR steers discovery.
+    let home = std::env::temp_dir().join(format!("al-branchdump-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    let proj = home.join("projects").join("-Users-someone-proj");
+    std::fs::create_dir_all(&proj).unwrap();
+    std::env::set_var("CLAUDE_CONFIG_DIR", &home);
+    let body = serde_json::json!({ "slug": "-Users-someone-proj", "sessionId": "sess/one:two",
+        "dumps": [ { "id": "dump_1", "name": "tool output", "content": "hello" },
+                   { "id": "bad/id", "name": "x", "content": "never written" },
+                   { "id": "dump_2", "content": "no name" } ] })
+    .to_string();
+    let r = post(ui, "/api/branch-dump", &body);
+    assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+    let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
+    let dump_root = proj.join("agentlens-branch-dumps");
+    assert_eq!(v["dir"], dump_root.to_string_lossy().as_ref());
+    let paths = v["paths"].as_object().unwrap();
+    assert_eq!(paths.len(), 2, "the malformed id was skipped: {v}");
+    let p1 = std::path::PathBuf::from(paths["dump_1"].as_str().unwrap());
+    assert_eq!(std::fs::read_to_string(&p1).unwrap(), "hello");
+    let n1 = p1.file_name().unwrap().to_str().unwrap();
+    assert!(n1.starts_with("sess-one-two-") && n1.ends_with("-tool-output-dump_1.txt"), "sanitized single segment: {n1}");
+    assert!(std::path::PathBuf::from(paths["dump_2"].as_str().unwrap()).file_name().unwrap().to_str().unwrap().ends_with("-output-dump_2.txt"), "name defaults to 'output'");
+    // The gates: a traversal-shaped slug is 400 invalid; a well-formed but non-existent one is
+    // 400 unknown; a parse failure is the TS's whole-handler 500.
+    let r = post(ui, "/api/branch-dump", r#"{"slug":"a/b","sessionId":"s","dumps":[]}"#);
+    assert!(r.starts_with("HTTP/1.1 400"), "{r}");
+    assert_eq!(body_of(&r), r#"{"error":"invalid project slug"}"#);
+    let r = post(ui, "/api/branch-dump", r#"{"slug":"no-such-project-dir","sessionId":"s","dumps":[]}"#);
+    assert!(r.starts_with("HTTP/1.1 400"), "{r}");
+    assert_eq!(body_of(&r), r#"{"error":"unknown project slug (no matching Claude project dir)"}"#);
+    let r = post(ui, "/api/branch-dump", "broken{");
+    assert!(r.starts_with("HTTP/1.1 500"), "{r}");
+    std::env::remove_var("CLAUDE_CONFIG_DIR");
+}

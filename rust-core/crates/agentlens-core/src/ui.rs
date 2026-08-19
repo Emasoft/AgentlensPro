@@ -440,6 +440,111 @@ async fn handle(
                 }
             },
         }
+    } else if method == Method::POST && path == "/api/write-prompts-file" {
+        // Row 17 (server.ts:3766): append the prompt to `agentlens-prompts-<slug>.md` in the
+        // server's cwd; errors are logged and the answer is ALWAYS 200 empty (fire-and-forget).
+        let Some(buf) = read_body_capped(req.into_body(), 4 * 1024 * 1024).await? else {
+            return Err("/api/write-prompts-file body over 4MB cap — connection aborted".to_owned());
+        };
+        let write = || -> Result<std::path::PathBuf, String> {
+            let v = serde_json::from_slice::<Value>(&buf).map_err(|e| e.to_string())?;
+            let s = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_owned();
+            let (agent, label, prompt) = (s("agent"), s("label"), s("prompt"));
+            let (slug, name) = match agent.as_str() {
+                "claude_code" => ("claude", "Claude"),
+                "codex" => ("codex", "Codex"),
+                _ => ("copilot", "Copilot"),
+            };
+            let file = std::env::current_dir().map_err(|e| e.to_string())?.join(format!("agentlens-prompts-{slug}.md"));
+            // new Date().toISOString().replace('T', ' ').slice(0, 19)
+            let ts = crate::summarize::helpers::iso_from_ms(crate::now_ms() as f64).replace('T', " ")[..19].to_owned();
+            let entry = format!("## {ts} — {label}\n\n{prompt}\n\n---\n\n");
+            let content = match std::fs::read_to_string(&file) {
+                Ok(existing) => existing + &entry,
+                Err(_) => format!("# AgentLens Prompts — {name}\n\n{entry}"),
+            };
+            std::fs::write(&file, content).map_err(|e| e.to_string())?;
+            Ok(file)
+        };
+        match write() {
+            Ok(file) => println!("alcore: prompt written to {}", file.display()),
+            Err(e) => eprintln!("alcore: write-prompts-file error: {e}"),
+        }
+        Response::new(boxed_full(Bytes::new()))
+    } else if method == Method::POST && path == "/api/branch-dump" {
+        // Row 18 (server.ts:3800, TRDD-4CH9QLAH): write over-threshold branch node outputs under
+        // the Claude projects tree. The slug must be separator-free AND name an EXISTING project
+        // dir — never mkdir an arbitrary tree for an attacker-chosen name; each file's sanitized
+        // single-segment name is asserted to resolve DIRECTLY under the dump root before writing.
+        let Some(buf) = read_body_capped(req.into_body(), 48 * 1024 * 1024).await? else {
+            return Err("/api/branch-dump body over 48MB cap — connection aborted".to_owned());
+        };
+        let run = || -> Result<Response<SseBody>, String> {
+            let v = serde_json::from_slice::<Value>(&buf).map_err(|e| e.to_string())?;
+            let slug = v.get("slug").and_then(Value::as_str).unwrap_or("");
+            let session_id = v.get("sessionId").and_then(Value::as_str).unwrap_or("");
+            let empty = Vec::new();
+            let dumps = v.get("dumps").and_then(Value::as_array).unwrap_or(&empty);
+            let slug_ok = !slug.is_empty() && slug.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-')) && !slug.contains("..");
+            if !slug_ok {
+                return Ok(json_response(StatusCode::BAD_REQUEST, error_json("invalid project slug")));
+            }
+            let env = agentlens_logscan::discovery::Env::from_process();
+            let proj_root = agentlens_logscan::discovery::claude_projects_dirs(&env)
+                .into_iter()
+                .map(|r| r.join(slug))
+                .find(|p| std::fs::metadata(p).is_ok_and(|m| m.is_dir()));
+            let Some(proj_root) = proj_root else {
+                return Ok(json_response(StatusCode::BAD_REQUEST, error_json("unknown project slug (no matching Claude project dir)")));
+            };
+            let dump_root = proj_root.join("agentlens-branch-dumps");
+            std::fs::create_dir_all(&dump_root).map_err(|e| e.to_string())?;
+            let dump_root_resolved = std::fs::canonicalize(&dump_root).map_err(|e| e.to_string())?;
+            let ts: String = crate::summarize::helpers::iso_from_ms(crate::now_ms() as f64)
+                .chars()
+                .map(|c| if c == ':' || c == '.' { '-' } else { c })
+                .collect();
+            let safe = |s: &str| -> String {
+                // s.replace(/[^A-Za-z0-9._-]+/g, '-').slice(0, 60) || 'x'
+                let mut out = String::new();
+                let mut in_run = false;
+                for c in s.chars() {
+                    if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                        out.push(c);
+                        in_run = false;
+                    } else if !in_run {
+                        out.push('-');
+                        in_run = true;
+                    }
+                }
+                let out: String = out.chars().take(60).collect();
+                if out.is_empty() { "x".to_owned() } else { out }
+            };
+            let mut paths = Map::new();
+            for d in dumps.iter().filter_map(Value::as_object) {
+                let id = d.get("id").and_then(Value::as_str).unwrap_or("");
+                if id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-')) {
+                    continue; // a malformed placeholder id cannot round-trip into text — skip
+                }
+                let name = d.get("name").and_then(Value::as_str).unwrap_or("output");
+                let file_name = format!("{}-{ts}-{}-{}.txt", safe(session_id), safe(name), safe(id));
+                let target = dump_root.join(&file_name);
+                if target.parent().and_then(|p| std::fs::canonicalize(p).ok()).as_deref() != Some(&dump_root_resolved) {
+                    continue;
+                }
+                let content = d.get("content").and_then(Value::as_str).unwrap_or("");
+                std::fs::write(&target, content).map_err(|e| e.to_string())?;
+                paths.insert(id.to_owned(), Value::from(target.to_string_lossy().into_owned()));
+            }
+            println!("alcore: branch-dump: {} file(s) → {}", paths.len(), dump_root.display());
+            let body = serde_json::json!({ "dir": dump_root.to_string_lossy(), "paths": paths });
+            Ok(json_response(StatusCode::OK, body.to_string()))
+        };
+        match run() {
+            Ok(resp) => resp,
+            // The TS wraps the whole handler in one try → 500 {error} (a parse error included).
+            Err(e) => json_response(StatusCode::INTERNAL_SERVER_ERROR, error_json(&e)),
+        }
     } else if method == Method::GET && path == "/api/debug/log-scan-stats" {
         let body = {
             let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
