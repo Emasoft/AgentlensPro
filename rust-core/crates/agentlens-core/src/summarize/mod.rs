@@ -9,3 +9,4 @@ pub mod copilot;
 pub mod claude;
 pub mod codex;
 pub mod loop_detector;
+pub mod summarizer;

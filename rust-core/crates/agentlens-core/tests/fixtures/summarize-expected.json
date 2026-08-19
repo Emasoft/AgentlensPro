@@ -1,0 +1,281 @@
+{
+ "empty": {
+  "sessions": [],
+  "backgroundSpans": [],
+  "efficiency": {
+   "totalInputTokens": 0,
+   "totalOutputTokens": 0,
+   "totalLlmCalls": 0,
+   "avgInputPerCall": 0,
+   "avgTtft": 0,
+   "cacheHitRate": 0,
+   "toolDefWaste": 0,
+   "sysInstructionWaste": 0,
+   "topTokenConsumers": []
+  }
+ },
+ "full": {
+  "sessions": [
+   {
+    "sessionId": "sessA",
+    "traceId": "t1",
+    "source": "claude_code",
+    "dataSource": "otel",
+    "initiator": "user",
+    "workspace": "",
+    "userRequest": "Fix the bug",
+    "model": "claude-opus-5",
+    "turns": 1,
+    "inputTokens": 100,
+    "outputTokens": 40,
+    "cacheReadTokens": 0,
+    "cacheCreateTokens": 0,
+    "cacheHitRate": 0,
+    "durationMs": 10000,
+    "startTime": "2025-08-19T10:40:00.000Z",
+    "filesRead": [],
+    "filesSearched": [],
+    "filesChanged": [],
+    "filesWritten": [],
+    "toolCounts": {},
+    "totalToolCalls": 0,
+    "totalLlmCalls": 1,
+    "errors": 0,
+    "outcome": "unknown",
+    "timeline": [
+     {
+      "type": "llm",
+      "spanId": "l1",
+      "label": "claude-opus-5",
+      "turn": 1,
+      "model": "claude-opus-5",
+      "inputTokens": 100,
+      "outputTokens": 40,
+      "ttft": 450,
+      "durationMs": 1000,
+      "action": "text response",
+      "isError": false,
+      "timestamp": "2025-08-19T10:40:01.000Z"
+     }
+    ],
+    "backgroundSpans": [],
+    "loopSignals": []
+   },
+   {
+    "sessionId": "sessB",
+    "traceId": "t9",
+    "source": "claude_code",
+    "dataSource": "otel",
+    "initiator": "user",
+    "workspace": "",
+    "userRequest": "[prompt redacted]",
+    "model": "claude-sonnet-5",
+    "turns": 1,
+    "inputTokens": 50,
+    "outputTokens": 20,
+    "cacheReadTokens": 500,
+    "cacheCreateTokens": 0,
+    "cacheHitRate": 0.9090909090909091,
+    "durationMs": 2000,
+    "startTime": "2025-08-19T10:41:40.000Z",
+    "filesRead": [],
+    "filesSearched": [],
+    "filesChanged": [],
+    "filesWritten": [],
+    "toolCounts": {},
+    "totalToolCalls": 0,
+    "totalLlmCalls": 1,
+    "errors": 0,
+    "outcome": "unknown",
+    "timeline": [
+     {
+      "type": "llm",
+      "spanId": "l9",
+      "label": "claude-sonnet-5",
+      "turn": 1,
+      "model": "claude-sonnet-5",
+      "inputTokens": 50,
+      "outputTokens": 20,
+      "cacheReadTokens": 500,
+      "ttft": 0,
+      "durationMs": 3000,
+      "action": "called tools",
+      "isError": false,
+      "timestamp": "2025-08-19T10:41:40.000Z"
+     },
+     {
+      "type": "api_request",
+      "spanId": "r9",
+      "label": "api_request",
+      "inputTokens": 50,
+      "outputTokens": 20,
+      "costUsd": 0.01,
+      "durationMs": 800,
+      "isError": false,
+      "timestamp": "2025-08-19T10:41:41.000Z"
+     }
+    ],
+    "backgroundSpans": [
+     {
+      "name": "notification",
+      "model": "claude-haiku",
+      "purpose": "Generate chat title",
+      "inputTokens": 5,
+      "outputTokens": 2
+     }
+    ],
+    "loopSignals": []
+   },
+   {
+    "sessionId": "missing-inv",
+    "traceId": "tc1",
+    "source": "copilot",
+    "dataSource": "otel",
+    "initiator": "agent",
+    "conversationId": "copconv-424242",
+    "workspace": "",
+    "userRequest": "[session in progress]",
+    "model": "gpt-5-copilot",
+    "turns": 0,
+    "inputTokens": 300,
+    "outputTokens": 30,
+    "cacheReadTokens": 0,
+    "cacheCreateTokens": 0,
+    "cacheHitRate": 0,
+    "durationMs": 2500,
+    "startTime": "2025-08-19T10:43:20.000Z",
+    "filesRead": [
+     "a.ts"
+    ],
+    "filesSearched": [],
+    "filesChanged": [],
+    "filesWritten": [],
+    "toolCounts": {
+     "read_file": 1
+    },
+    "totalToolCalls": 1,
+    "totalLlmCalls": 1,
+    "errors": 0,
+    "outcome": "text_response",
+    "timeline": [
+     {
+      "type": "llm",
+      "spanId": "ch1",
+      "label": "gpt-5-copilot",
+      "model": "gpt-5-copilot",
+      "inputTokens": 300,
+      "outputTokens": 30,
+      "ttft": 120,
+      "durationMs": 1000,
+      "action": "text response",
+      "responseText": "Hi.",
+      "isError": false,
+      "timestamp": "2025-08-19T10:43:20.000Z"
+     },
+     {
+      "type": "tool",
+      "spanId": "et1",
+      "label": "read_file a.ts L1-5",
+      "durationMs": 500,
+      "resultSummary": "short result",
+      "fullResult": "short result",
+      "toolInput": "{\"filePath\":\"/w/a.ts\",\"startLine\":1,\"endLine\":5}",
+      "isError": false,
+      "timestamp": "2025-08-19T10:43:22.000Z"
+     }
+    ],
+    "backgroundSpans": [],
+    "loopSignals": []
+   },
+   {
+    "sessionId": "cxp",
+    "traceId": "codex:conversation-777777:prompt-1",
+    "source": "codex",
+    "dataSource": "otel",
+    "conversationId": "conversation-777777",
+    "workspace": "",
+    "userRequest": "Sort the files",
+    "model": "gpt-5",
+    "turns": 1,
+    "inputTokens": 80,
+    "outputTokens": 8,
+    "cacheReadTokens": 0,
+    "cacheCreateTokens": 0,
+    "cacheHitRate": 0,
+    "durationMs": 2000,
+    "startTime": "2025-08-19T10:45:00.000Z",
+    "filesRead": [],
+    "filesSearched": [],
+    "filesChanged": [],
+    "filesWritten": [],
+    "toolCounts": {},
+    "totalToolCalls": 0,
+    "totalLlmCalls": 1,
+    "errors": 0,
+    "outcome": "text_response",
+    "timeline": [
+     {
+      "type": "llm",
+      "spanId": "cxs",
+      "label": "gpt-5",
+      "model": "gpt-5",
+      "inputTokens": 80,
+      "outputTokens": 8,
+      "action": "response.completed",
+      "durationMs": 1000,
+      "isError": false,
+      "timestamp": "2025-08-19T10:45:01.000Z"
+     }
+    ],
+    "backgroundSpans": [],
+    "loopSignals": []
+   }
+  ],
+  "backgroundSpans": [
+   {
+    "name": "notification",
+    "model": "claude-haiku",
+    "purpose": "Generate chat title",
+    "inputTokens": 5,
+    "outputTokens": 2
+   },
+   {
+    "name": "agentSpawn",
+    "model": "",
+    "purpose": "workflow: nightly-audit",
+    "inputTokens": 7,
+    "outputTokens": 3,
+    "workflowRunId": "wfrun-1",
+    "workflowName": "nightly-audit"
+   }
+  ],
+  "efficiency": {
+   "totalInputTokens": 530,
+   "totalOutputTokens": 98,
+   "totalLlmCalls": 4,
+   "avgInputPerCall": 133,
+   "avgTtft": 285,
+   "cacheHitRate": 0.4854368932038835,
+   "toolDefWaste": 0.024922118380062305,
+   "sysInstructionWaste": 0.037383177570093455,
+   "topTokenConsumers": [
+    {
+     "label": "[session in progress]",
+     "tokens": 330
+    },
+    {
+     "label": "Fix the bug",
+     "tokens": 140
+    },
+    {
+     "label": "Sort the files",
+     "tokens": 88
+    },
+    {
+     "label": "[prompt redacted]",
+     "tokens": 70
+    }
+   ]
+  }
+ }
+}

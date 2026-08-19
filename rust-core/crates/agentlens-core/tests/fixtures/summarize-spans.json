@@ -1,0 +1,110 @@
+[
+  {
+    "traceId": "t1", "spanId": "ci1", "name": "claude_code.interaction",
+    "startTime": "1755600000000000000", "endTime": "1755600010000000000",
+    "attributes": [
+      { "key": "session.id", "value": { "stringValue": "sessA" } },
+      { "key": "user_prompt", "value": { "stringValue": "Fix the bug" } }
+    ]
+  },
+  {
+    "traceId": "t1", "spanId": "l1", "parentSpanId": "ci1", "name": "claude_code.llm_request",
+    "startTime": "1755600001000000000", "endTime": "1755600002000000000",
+    "attributes": [
+      { "key": "gen_ai.request.model", "value": { "stringValue": "claude-opus-5" } },
+      { "key": "input_tokens", "value": { "intValue": 100 } },
+      { "key": "output_tokens", "value": { "intValue": 40 } },
+      { "key": "ttft_ms", "value": { "intValue": 450 } },
+      { "key": "stop_reason", "value": { "stringValue": "end_turn" } },
+      { "key": "gen_ai.system_instructions", "value": { "stringValue": "SYSPROMPTSYS" } },
+      { "key": "gen_ai.tool.definitions", "value": { "stringValue": "TOOLDEFS" } }
+    ]
+  },
+  {
+    "traceId": "t9", "spanId": "l9", "parentSpanId": "gone-root", "name": "claude_code.llm_request",
+    "startTime": "1755600100000000000", "endTime": "1755600103000000000",
+    "attributes": [
+      { "key": "session.id", "value": { "stringValue": "sessB" } },
+      { "key": "gen_ai.request.model", "value": { "stringValue": "claude-sonnet-5" } },
+      { "key": "input_tokens", "value": { "intValue": 50 } },
+      { "key": "output_tokens", "value": { "intValue": 20 } },
+      { "key": "cache_read_tokens", "value": { "intValue": 500 } },
+      { "key": "stop_reason", "value": { "stringValue": "tool_use" } }
+    ]
+  },
+  {
+    "traceId": "t9", "spanId": "r9", "parentSpanId": "gone-root", "name": "claude_code.api_request",
+    "startTime": "1755600101000000000", "endTime": "1755600101000000000",
+    "attributes": [
+      { "key": "session.id", "value": { "stringValue": "sessB" } },
+      { "key": "cost_usd", "value": { "stringValue": "0.01" } },
+      { "key": "input_tokens", "value": { "intValue": 50 } },
+      { "key": "output_tokens", "value": { "intValue": 20 } },
+      { "key": "duration_ms", "value": { "intValue": 800 } }
+    ]
+  },
+  {
+    "traceId": "t9", "spanId": "bg9", "name": "notification",
+    "startTime": "1755600102000000000", "endTime": "1755600102000000000",
+    "attributes": [
+      { "key": "gen_ai.agent.name", "value": { "stringValue": "title" } },
+      { "key": "gen_ai.request.model", "value": { "stringValue": "claude-haiku" } },
+      { "key": "gen_ai.usage.input_tokens", "value": { "intValue": 5 } },
+      { "key": "gen_ai.usage.output_tokens", "value": { "intValue": 2 } }
+    ]
+  },
+  {
+    "traceId": "twf", "spanId": "wf1", "name": "agentSpawn",
+    "startTime": "1755600150000000000", "endTime": "1755600151000000000",
+    "attributes": [
+      { "key": "workflow.run_id", "value": { "stringValue": "wfrun-1" } },
+      { "key": "workflow.name", "value": { "stringValue": "nightly-audit" } },
+      { "key": "gen_ai.usage.input_tokens", "value": { "intValue": 7 } },
+      { "key": "gen_ai.usage.output_tokens", "value": { "intValue": 3 } }
+    ]
+  },
+  {
+    "traceId": "ct5", "spanId": "cwx", "name": "codex.websocket_event",
+    "startTime": "1755600160000000000", "endTime": "1755600160000000000",
+    "attributes": []
+  },
+  {
+    "traceId": "tc1", "spanId": "ch1", "parentSpanId": "missing-inv", "name": "chat completions",
+    "startTime": "1755600200000000000", "endTime": "1755600201000000000",
+    "attributes": [
+      { "key": "gen_ai.usage.input_tokens", "value": { "intValue": 300 } },
+      { "key": "gen_ai.usage.output_tokens", "value": { "intValue": 30 } },
+      { "key": "gen_ai.request.model", "value": { "stringValue": "gpt-5-copilot" } },
+      { "key": "copilot_chat.time_to_first_token", "value": { "intValue": 120 } },
+      { "key": "gen_ai.conversation.id", "value": { "stringValue": "copconv-424242" } },
+      { "key": "gen_ai.output.messages", "value": { "stringValue": "[{\"role\":\"assistant\",\"content\":\"Hi.\"}]" } }
+    ]
+  },
+  {
+    "traceId": "tc1", "spanId": "et1", "parentSpanId": "missing-inv", "name": "execute_tool read_file",
+    "startTime": "1755600202000000000", "endTime": "1755600202500000000",
+    "attributes": [
+      { "key": "gen_ai.tool.name", "value": { "stringValue": "read_file" } },
+      { "key": "gen_ai.tool.call.arguments", "value": { "stringValue": "{\"filePath\":\"/w/a.ts\",\"startLine\":1,\"endLine\":5}" } },
+      { "key": "gen_ai.tool.call.result", "value": { "stringValue": "short result" } }
+    ]
+  },
+  {
+    "traceId": "cx1", "spanId": "cxp", "name": "codex.user_prompt",
+    "startTime": "1755600300000000000", "endTime": "1755600300000000000",
+    "attributes": [
+      { "key": "conversation.id", "value": { "stringValue": "conversation-777777" } },
+      { "key": "user_prompt", "value": { "stringValue": "Sort the files" } }
+    ]
+  },
+  {
+    "traceId": "cx1", "spanId": "cxs", "name": "codex.sse_event",
+    "startTime": "1755600301000000000", "endTime": "1755600302000000000",
+    "attributes": [
+      { "key": "event.kind", "value": { "stringValue": "response.completed" } },
+      { "key": "input_tokens", "value": { "intValue": 80 } },
+      { "key": "output_tokens", "value": { "intValue": 8 } },
+      { "key": "gen_ai.request.model", "value": { "stringValue": "gpt-5" } }
+    ]
+  }
+]
