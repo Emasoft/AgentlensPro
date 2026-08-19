@@ -210,10 +210,18 @@ release-via: publish
   construction: conditional keys mirror `...(x ? {x} : {})` inline, preserve_order keeps
   insertion order, and the cross-engine diff key-normalizes anyway. summarizerTypes.ts stays
   the documentation of the shape, not a Rust artifact.
-  Remaining port order: copilot.rs (289) → claude.rs (620) → codex.rs (506) → summarizer+synth
-  (283) → loopDetector (309) → sessionStore window (187) + tokenBuckets (81). Parity harness:
-  replay a real span window (read a live day segment or store.export()) through TS
-  summarizeSpans and a Rust `alsummarize` bin, key-normalized deepStrictEqual.
+  **P4d.2 DONE (commit 1c3be97): buckets.rs + copilot.rs ported, TS-oracle parity EXACT.**
+  THE HARNESS PATTERN TO REUSE FOR EVERY BUILDER: the parity oracle is the COMPILED TS builder
+  itself — a fixture runs through `out/test/summarizers/<x>.js` via a
+  `tests/fixtures/gen-<x>-expected.mjs` generator (JSON round-trip drops undefined exactly as
+  the wire does), and the Rust port must Value-equal the result (key-order-insensitive). It
+  caught `cacheHitRate: 0.0` vs JS's `0` on first run. Regenerate expectations after any TS
+  builder change: `pnpm run compile-tests && node <generator>`. Port mechanics that carry over:
+  `num()` (integral-bare JSON numbers), `truthy()` (JS if-guards), conditional key inserts
+  mirror `undefined` drops, Vec-backed insertion-order maps, `js_slice` byte caps.
+  Remaining port order: claude.rs (620) → codex.rs (506) → summarizer+synth (283) →
+  loopDetector (309) → sessionStore window (187). End-to-end harness after the builders:
+  replay a REAL span window through TS summarizeSpans and a Rust `alsummarize` bin.
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
