@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-18T20:12:00+0200
+updated: 2026-08-19T05:30:00+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -147,13 +147,38 @@ release-via: publish
   pid lock@184; the 54th `name:` grep hit is serverInfo@3380, so 53 tools is correct.
   The freeze list IS the P4 spec — P4 parity law: /api/* + MCP wire shapes FROZEN, dashboard
   works unmodified.
-- **NEXT ACTION (one step): P4b — wire `alstore pass` in place of the TS in-process ingestPass**
-  (the Rust pass exists as a CLI since P3c but the server still runs the TS pass). Follow the
-  established sidecar pattern (rustScan.ts / rustLogScan.ts): two opt-in channels — env
-  unconditional, installed `~/.agentlens/bin/alstore` presence = opt-in only when the store dir
-  is not test-overridden; a failed exec THROWS once opted in. After P4b: P4c = `agentlens-core`
-  server crate scaffold starting with the OTLP listener, the smallest frozen surface (always-200
-  contract, 64MB cap, JSON-only classify, `/agentlens/standalone` probe — report §2).
+- **P4b DONE, DEPLOYED and OBSERVED LIVE — the server execs `alstore pass`; the TS in-process
+  ingestPass remains only as the no-binary fallback branch.** `src/rustStorePass.ts` (same two
+  opt-in channels as alscan/allogscan; failed exec THROWS into archiveOtelBodies' catch; exit 75
+  = flock-busy → benign skip-tick) + the `archiveOtelBodies` branch in standalone/server.ts.
+  Live: spool backlog (thousands of files) drained to the live window, reclaimedDurable path
+  proven (1,234 skip-reclaims in one pass), `.pass-state.json` persisting.
+  **The first live deploy was a RUNAWAY (17min per 512MB pass at ~185% CPU) — three full-scan
+  classes, all fixed and each measured:** (1) per-body `body_exists`/named `count(*)` queries —
+  every `all_of` re-binds the full parquet file LIST (4,215 files, ~seconds/query) → in-memory
+  `body_ids`/`bodies_named` sets, seeded at open, mutated in append_body_row (the `known`
+  pattern); (2) verify's per-32-chunk reconstruct — each part/blob query decompresses an ENTIRE
+  parquet corpus (zone maps useless: insertion-ordered shas) → ONE part + ≤1 blob query per
+  verify CALL, a pass-scoped SpanCache (filled ONLY from store results — proof preserved), and
+  byte-bounded settle groups (SETTLE_GROUP_BYTES 128MB replaced SETTLE_READ_CHUNK 32); (3) the
+  bodies-corpus row query per chunk → native `body_durable` mirror: loaded at open, appended at
+  flush by READING BACK the just-written parquet (the read-back IS the encoding proof;
+  durability stays the fsync barrier), `all_of("body")` never touches parquet again.
+  **Measured: 1033s → 38s for the same 512MB/1,018-body workload (27×).** Profiled with
+  `/usr/bin/sample` — never theorize this again: the hot stacks were zstd decompress + file
+  opens, not query planning.
+  **Concurrency (observed, not hypothetical): a SIGKILLed/raced server ORPHANS its pass child
+  and the next server starts another — two live passes on one store on 2026-08-18.** Fix:
+  `acquire_pass_lock` (fs2 kernel flock on `<storeDir>/.pass.lock`, auto-released on ANY death,
+  taken BEFORE the store open; Busy≠Io — a fresh store dir must not read as "busy"). Data was
+  never at risk (delete gate verifies-from-durable-first), only CPU.
+  Tests: 5 Rust pass tests (incl. flock exclusivity) + rustStorePass.test.ts (routing,
+  fail-fast, cross-engine drain parity field-for-field, and the load-bearing claim that an OPEN
+  TS store handle sees Rust-written parts — parquetScan re-lists per query).
+- **NEXT ACTION (one step): P4c — `agentlens-core` server crate scaffold, starting with the
+  OTLP listener** — the smallest frozen surface (always-200 contract, 64MB cap, JSON-only
+  classify, `/agentlens/standalone` probe — wire-freeze report §2), wiring agentlens-ingest +
+  the spanstore writer behind port 4318.
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
