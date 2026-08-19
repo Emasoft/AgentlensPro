@@ -273,11 +273,25 @@ release-via: publish
   4 socket tests + live curl verification. Workspace 52/52. **Scope on record:** OTEL-only
   summary (log-session merge = feedMergePolicy + spawn collapse pending the log-scan wiring);
   admission control + base-path strip deferred, documented in the module head.
-- **NEXT ACTION (one step): P4f — the SSE `/events` stream** (report §1.3 frame shapes: `:\n\n`
-  preamble then `data: <update payload>\n\n`; the update payload = buildUpdatePayload's
-  `{type:'update', buildId, summary:{toolCalls:{}}, sessionSummary:<stripped>, sidebar,
-  analyticsData, collectorGaps, …sidebarLive}` — read §1.3 first; sidebar/analytics computations
-  are their own ports (src/sidebarData.ts, src/analyticsData.ts) and may gate this slice).
+- **P4f.1 DONE (commit 131c17f) — PRICING IS A GENERATED ARTIFACT, NOT A MIRROR.** The SSE
+  payload needs `currentSession.costUsd` = calcTokenCostUsd; the law "pricing.ts is the ONE
+  table" is honored by `scripts/export-pricing.js` → `rust-core/.../pricing.json` (embedded via
+  include_str!) + `pnpm run check-pricing-export` (wired into compile/package) failing the build
+  when stale. Only the LOGIC is ported (`pricing.rs`: normalize, exact→longest-prefix lookup,
+  scheduled change on the CALL's timestamp, 1h-rate derivation, >200K tiering). Parity: 321
+  oracle cases BIT-EXACT. Workspace 54/54. DISCIPLINE: after ANY pricing.ts edit run
+  `node scripts/export-pricing.js` then regenerate pricing-expected.json.
+- **NEXT ACTION (one step): P4f.2 — the SSE `/events` stream** (report §1.3): `:\n\n` preamble
+  then `data: <update payload>\n\n` on connect + the 4 s coalesced push; update payload =
+  `{type:'update', buildId, summary:{toolCalls:{}}, sessionSummary:<stripped>, sidebar
+  (computeSidebarData, server.ts:2302), analyticsData (computeAnalyticsData, 2349),
+  collectorGaps:[], …computeSidebarPayload (2227, top-level isActive/lastActivityMs/
+  sessionCount/agentSources/currentSession/burnRate/avgInputTokens/avgOutputTokens)}`. All three
+  computations are pure functions of (summary, spans, now) and live INLINE in server.ts — port
+  them into a `ui/update_payload.rs` with a TS oracle (they are not exported: the generator must
+  drive them through the compiled server module or a small extracted test seam — prefer adding
+  `export` to the three functions, like RATES). burnStatus/sessionChanged/alert frames are later
+  slices (they need the burn investigator / log-scan wiring).
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
