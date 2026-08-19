@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T00:55:00+0200
+updated: 2026-08-20T01:25:00+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -436,20 +436,23 @@ release-via: publish
   cleared by clear()); ingest_post's logs closure is real (was `|_,_,_| false`). Verified both
   arrival orders; the LIVE window copy stays bare in BOTH engines (read-time-only — the property
   behind TS's /api/debug/span-attr); persisted lines untouched. 81/81.
-- **NEXT ACTION (one step): the hook-events ingest subsystem (freeze rows 6–8) in ONE slice** —
-  the daily-bucket NDJSON store: port src/ndjsonBuckets.ts (append-only daily buckets — the
-  bucketsDiskUsage half already lives in server_stats.rs; add appendToBucket + readBuckets with
-  the calendar-real day gate) and src/hookEventStore.ts (ingestHookEvent at server.ts:1016 —
-  read it first: the statusline routing + captureEnabled drop + the verbatim payload contract),
-  then POST /api/hook-events (row 6: ≤512KB, needs hook_event_name, `{ok:true}` /
-  `{ok:true,routed:"statusline"}` / `{ok:true,dropped:"captureEnabled=false"}`), GET
-  /api/hook-events (row 7: session/ev/since/until/limit → `{count,events:[{ts,ev,session?,
-  payload}]}` newest-first), GET /api/lifecycle-events (row 8 — read
-  src/lifecycleEvents.ts:extractLifecycleEvents first). persistStats hookEventWrites/Bytes and
-  hookEvents.receivedSinceBoot go real. Statusline samples (row 5) stay NOT PORTED (their own
-  store) — route to a `{ok:true}` stub ONLY if the freeze demands the route; otherwise defer
-  whole. Then burn-risk row 12, agent-gate row 13, bodies rows 14–15, prompts/branch-dump rows
-  17–18, instruction rows 19–21, burn-status row 24, debug/requests row 26.
+- **P4m DONE (commit 5a042e8) — the hook-event store + lifecycle mapping (rows 6–8).**
+  `hook_events.rs` = ndjsonBuckets (append-only daily buckets) + hookEventStore (verbatim
+  records, newest-first bounded reads) + lifecycleEvents (the pure mapping; STOP/SESSION_END
+  default-excluded). POST/GET /api/hook-events + GET /api/lifecycle-events;
+  persistStats.hookEventWrites/Bytes + hookEvents.receivedSinceBoot + totalBytesWritten real.
+  NOT PORTED (module header): the spool drain + durability verify, StopFailure calibration, the
+  recent-events ring, the statusline STORE (routed:"statusline" answers frozen, sample drops).
+  82/82.
+- **NEXT ACTION (one step): POST /api/write-prompts-file + POST /api/branch-dump (rows 17–18)**
+  — the two remaining self-contained write routes: read server.ts:3766 (write-prompts-file —
+  agent slug map, `agentlens-prompts-<slug>.md` in process.cwd(), the entry format, 200 empty
+  always even on error) and :3935 (branch-dump — ≤48MB `{slug,sessionId,dumps:[{id,name,
+  content}]}` under the Claude projects tree, `{dir,paths...}` — read the handler first), port +
+  socket tests. Then burn-status row 24 + debug/requests row 26 (may be stubs-with-real-parts —
+  decide after reading), burn-risk row 12 / agent-gate row 13 (the burn subsystem — big, its own
+  slice), bodies rows 14–15 (the body store — big, its own slice), instruction rows 19–21,
+  statusline row 5. Perf follow-ups parked: none — the P5b notes closed in P5g.
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
