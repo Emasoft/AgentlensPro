@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-19T21:14:00+0200
+updated: 2026-08-19T21:30:00+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -398,17 +398,24 @@ release-via: publish
   spelling in `attach_watchers`, or the classifier disowns every event. Proof: parity test (card
   advances in ~0.9s with the backstop pinned at 1h) + live over 13,540 files: this session's
   card advanced within 4s of the write; steady-state CPU ≈1%. 77/77.
-- **NEXT ACTION (one step): the remaining small frozen routes in ONE slice** — `/api/hook-config`
-  GET+POST (rows 10–11; GET reuses `server_stats::hook_runtime_config` + `cacheGuardEnabled`;
-  POST = saveHookRuntimeConfig: body ≤8KB patch, unknown keys ignored, junk gateMode keeps the
-  current, atomic tmp+rename, `{config:{…},applied:true}`), `/api/embed-status` (row 1:
-  `{mode:"standalone",role:null,keyLoaded:false}` + `Vary: X-Agentlens-Viewer` — read
-  `src/embedAuth.ts` first), `/api/clear` + `/action` (rows 16, 22: in-process resets, 200 empty
-  body), `/api/debug/log-scan-stats` (row 25: SweepStats + dataVersion — keep the last sweep's
-  stats on CoreState). Read each TS handler first; exact status/headers/body per the freeze.
-  Then P5c (accountId registry, generated-files attach), `/api/import` (row 3), and the perf
-  notes under P5b (skip timeline retention for cold files; memoize the stripped summary by
-  data_version).
+- **P4j DONE (commit 8fdbd95) — small frozen routes: rows 1, 10, 11, 16, 22, 25.** embed-status
+  (keyless: standalone/null/false + Vary; embed key NOT PORTED), hook-config GET/POST (the TS
+  `hookRuntime` let is `CoreState.hook_runtime`; save = merge/coerce/junk-gateMode-keeps-current/
+  tmp+rename; server-stats `gate` reads it), `/action clearAll` (`CoreState::clear_spans` →
+  `SpanStoreWriter::clear` unlinks segments+index), `/api/clear` (`clear_all` → `Msg::Clear` to
+  the sweeper via `SweeperControl`; tailer forgets, FULL sweep from 0), log-scan-stats
+  (`CoreState.log_scan` cumulative counters; derived caches/scratch listing NOT PORTED → zeros).
+  Tests over a real socket + the watcher test extended with clear→full-resweep. 78/78.
+- **NEXT ACTION (one step): `/api/import` (freeze row 3) — `buildImportCardStandalone`**
+  (server.ts ~1371): body ≤64MB `{sessions:[…]}`, each needs `sessionId` + `source ∈
+  {copilot,claude_code,codex,opencode}` → a card via the import builder → `put_log_session`;
+  `{imported,skipped,failed:0,total}`; bad body → `400 {"error":"sessions array required"}` /
+  `400 {"error":"<String(e)>"}`. Read the TS builder first (every default it fills); TS-oracle
+  fixture: a few import records through the compiled builder → expected cards, Value-equal.
+  Then P5c (accountId registry, generated-files attach), the remaining frozen routes (hook-events
+  ingest rows 5–8 are a subsystem — hookEventStore + statuslineStore; burn-risk row 12;
+  agent-gate row 13), and the perf notes under P5b (skip timeline retention for cold files;
+  memoize the stripped summary by data_version).
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
