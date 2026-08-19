@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-19T20:48:00+0200
+updated: 2026-08-19T21:02:00+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -371,14 +371,31 @@ release-via: publish
   store OVERLAY, segmentedSpanStore.applyOverlay, which is NOT ported yet). NOT ported: the
   V8 heap/rss-pressure halving of effectiveWindowMs (a Rust-native guard belongs with the
   resource monitor).
-- **NEXT ACTION (one step): `/api/server-stats` behind the frozen §1.4 key order** (the freeze
-  report `reports/p4-wire-freeze/20260818_200921+0200-frozen-wire-surface.md` §1.4): port the
-  server.ts handler's derivations over CoreState (span counts, log-scan stats incl. the sweep
-  counters + persist stats, uptime, build id…) — read the TS handler first and list every key
-  with its source; keys whose subsystem is not ported yet carry the TS default value with a
-  note, never an invented one. Then the notify-based watcher (60s backstop), P5c (accountId
-  registry, generated-files attach), the remaining frozen routes, and the perf notes under P5b
-  (skip timeline retention for cold files; memoize the stripped summary by data_version).
+- **P4i DONE (commit 3109086) — `GET /api/server-stats` behind the frozen §1.4 key order.**
+  `server_stats.rs` (+ `retention_config.rs`: the ONE env > config.json > default knob resolver,
+  now also behind the summary window). Measured: pid, package.json version (compile-time embed),
+  startedAt/uptime, bound ports + canonical, dataDir, rss (proc_pidinfo / /proc), window + store
+  + pendingAppends, logSessions, persistence counters (span flushes via the ONE
+  `CoreState::flush_spans`; offsets/cards in DurableState saves), delta-log disk sizes,
+  hook-event/log-event bucket usage, body-archive usage, hook-spool count, hook runtime config
+  (`hook-config.json`), resource sample (loadavg/statvfs/cpus). **NOT PORTED (TS idle values,
+  each marked `NOT PORTED:` in the file):** V8 heap (0/0), hook/log-event/statusline sinks,
+  admission, gate counters, OTLP log-event gate map, fallback counters, spool (null).
+  `windowMs == configuredWindowMs` (no heap-pressure halving). Tests: `tests/server_stats.rs`
+  (§1.4 order transcribed literally, JS number shapes, fixtures, counters move). Live vs the
+  running TS server: ordered key shape identical for all 108 entries except the spool (TS has a
+  spool mount here; Rust null). 76/76. Gotcha: `loadavg`/`statvfs`/`proc_pidinfo` need the
+  direct `libc` dep (already in the lock via tokio).
+- **NEXT ACTION (one step): the notify-based log watcher with the 60s poll backstop** (server.ts
+  fs.watch on the discovered roots + the 5s→60s fallback): replace the 5s full-stat sweep in
+  `log_reader::start_sweeper` with `notify` events coalesced per path (debounce ≥250ms, as the
+  TS `scheduleFileScan`), keep the full sweep as a 60s backstop (a dropped event must never
+  strand a session), and prove it with a test that touches a fixture file and sees the card
+  advance without waiting for the backstop. Then P5c (accountId registry, generated-files
+  attach), the remaining frozen routes (`/api/hook-config` GET+POST reuse
+  `server_stats::hook_runtime_config`; `/api/embed-status`; `/api/clear` + `/action`;
+  `/api/import`; `/api/debug/log-scan-stats`), and the perf notes under P5b (skip timeline
+  retention for cold files; memoize the stripped summary by data_version).
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
