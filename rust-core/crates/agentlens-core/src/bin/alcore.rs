@@ -1,17 +1,18 @@
-//! alcore — the Rust server binary (TRDD-DMWOBWFH P4). P4c: OTLP listener only.
+//! alcore — the Rust server binary (TRDD-DMWOBWFH P4). P4c: OTLP listener; P4e: the UI/API
+//! listener (`GET /api/summary` over the live span window).
 //!
-//!   alcore serve --data-dir DIR [--otlp-port N] [--bind HOST]
+//!   alcore serve --data-dir DIR [--otlp-port N] [--ui-port N] [--bind HOST]
 //!
 //! Spans land in `<data-dir>/spans` (the same segmented NDJSON store both engines read).
-//! Default port is 4319 — NOT 4318: the TS server still owns the canonical port until the
-//! P4 cutover, and 4318 doubles as the canonicality key (server.ts IS_CANONICAL).
+//! Default ports are 4319/3001 — NOT 4318/3000: the TS server still owns the canonical ports
+//! until the P4 cutover, and 4318 doubles as the canonicality key (server.ts IS_CANONICAL).
 
 use std::process::exit;
 use std::sync::{Arc, Mutex};
 
 fn usage(msg: &str) -> ! {
     eprintln!("alcore: {msg}");
-    eprintln!("usage: alcore serve --data-dir DIR [--otlp-port N] [--bind HOST]");
+    eprintln!("usage: alcore serve --data-dir DIR [--otlp-port N] [--ui-port N] [--bind HOST]");
     exit(64);
 }
 
@@ -22,6 +23,7 @@ fn main() {
     }
     let mut data_dir = String::new();
     let mut port: u16 = 4319;
+    let mut ui_port: u16 = 3001;
     let mut bind = "127.0.0.1".to_owned();
     let mut i = 1;
     while i < args.len() {
@@ -33,6 +35,10 @@ fn main() {
             "--otlp-port" => {
                 i += 1;
                 port = args.get(i).and_then(|v| v.parse().ok()).unwrap_or_else(|| usage("--otlp-port needs a port"));
+            }
+            "--ui-port" => {
+                i += 1;
+                ui_port = args.get(i).and_then(|v| v.parse().ok()).unwrap_or_else(|| usage("--ui-port needs a port"));
             }
             "--bind" => {
                 i += 1;
@@ -71,14 +77,24 @@ fn main() {
             }
         }
     });
+    let ui_addr: std::net::SocketAddr = format!("{bind}:{ui_port}").parse().unwrap_or_else(|_| usage("bad bind/ui-port"));
     let serve = agentlens_core::serve_otlp(addr, state.clone(), |bound| {
         println!("alcore: OTLP listening on http://{bound}");
+    });
+    let serve_ui = agentlens_core::ui::serve_ui(ui_addr, state.clone(), |bound| {
+        println!("alcore: UI/API listening on http://{bound}");
     });
     rt.block_on(async move {
         tokio::select! {
             r = serve => {
                 if let Err(e) = r {
-                    eprintln!("alcore: listener failed: {e}");
+                    eprintln!("alcore: OTLP listener failed: {e}");
+                    exit(1);
+                }
+            }
+            r = serve_ui => {
+                if let Err(e) = r {
+                    eprintln!("alcore: UI listener failed: {e}");
                     exit(1);
                 }
             }

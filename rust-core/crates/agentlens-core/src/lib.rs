@@ -29,6 +29,7 @@ use agentlens_spanstore::writer::SpanStoreWriter;
 
 pub mod session_store;
 pub mod summarize;
+pub mod ui;
 
 pub const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
 
@@ -61,11 +62,19 @@ pub struct CoreState {
     pub ingest: IngestState,
     pub writer: SpanStoreWriter,
     pub counters: Counters,
+    /// The 5-minute live window the UI summary is computed over (P4e) — fed by every ingested
+    /// span, exactly as the TS collector's addSpan feeds SessionStore.
+    pub store: session_store::SessionStore,
 }
 
 impl CoreState {
     pub fn open(spans_dir: &std::path::Path) -> CoreState {
-        CoreState { ingest: IngestState::default(), writer: SpanStoreWriter::open(spans_dir), counters: Counters::default() }
+        CoreState {
+            ingest: IngestState::default(),
+            writer: SpanStoreWriter::open(spans_dir),
+            counters: Counters::default(),
+            store: session_store::SessionStore::new(now_ms() as f64),
+        }
     }
 }
 
@@ -116,6 +125,9 @@ pub fn ingest_post(state: &mut CoreState, path: &str, body: &[u8]) {
     for span in &spans {
         state.writer.append(span, now);
         state.counters.spans_appended += 1;
+    }
+    for span in spans {
+        state.store.add_span(span, now as f64);
     }
     if state.writer.pending_appends() > 0 {
         // Flush per payload for now: durable and deterministic for tests; batching cadence is
