@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use crate::{clamp_num, iso_from_ms, js_string, js_trim, parse_ts_ms, snip, Card, ParsedTranscript};
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct CodexAccum {
     workspace: String,
     model: String,

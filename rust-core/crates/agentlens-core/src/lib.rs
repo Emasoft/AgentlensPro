@@ -110,17 +110,19 @@ impl CoreState {
         }
     }
 
-    /// The cold boot scan into the card map: every finished card through put_log_session, then
-    /// the global timeline tier. Returns the scan stats for the startup log line.
-    pub fn run_cold_log_scan(&mut self, env: &agentlens_logscan::discovery::Env) -> log_reader::ScanStats {
-        let (scanned, stats) = log_reader::cold_scan(env, now_ms());
+    /// A sweep's output into the card map (server.ts runLogScan's loop): every card through
+    /// put_log_session, then the global timeline tier. The data_version bump is what the
+    /// coalesced SSE pusher watches.
+    pub fn ingest_scanned(&mut self, scanned: Vec<log_reader::ScannedFile>) {
+        if scanned.is_empty() {
+            return;
+        }
         for s in scanned {
             for card in s.cards {
                 self.put_log_session(card);
             }
         }
         self.demote_cold_timelines(summarize::retention::timeline_hot_cards());
-        stats
     }
 
     /// computeSessionSummary (server.ts:2240) — summarizeSpans over the live window, then, when

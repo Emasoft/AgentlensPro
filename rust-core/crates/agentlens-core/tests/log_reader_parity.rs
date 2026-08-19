@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use agentlens_core::log_reader::cold_scan;
+use agentlens_core::log_reader::{cold_scan, LogTailer, ScannedFile};
 use agentlens_core::CoreState;
 use agentlens_logscan::discovery::{Env, Platform};
 use serde_json::Value;
@@ -89,17 +89,150 @@ fn run_cold_log_scan_fills_the_card_map_and_the_summary_serves_it() {
     std::fs::create_dir_all(&tmp).unwrap();
     let mut st = CoreState::open(&tmp);
     let v0 = st.data_version;
-    let stats = st.run_cold_log_scan(&fixture_env());
+    let (scanned, stats) = cold_scan(&fixture_env(), agentlens_core::now_ms());
     assert_eq!(stats.cards, 7);
+    st.ingest_scanned(scanned);
     assert_eq!(st.log_sessions.len(), 7);
     assert!(st.data_version > v0, "put_log_session must bump data_version");
     let summary = st.session_summary(agentlens_core::now_ms() as f64);
     let ids: Vec<&str> = summary["sessions"].as_array().unwrap().iter().map(|c| c["sessionId"].as_str().unwrap()).collect();
     assert_eq!(ids.len(), 7, "{ids:?}");
     assert!(ids.contains(&"cccccccc-1111-2222-3333-444444444444") && ids.contains(&"ffffffff-1111-2222-3333-444444444444"));
-    // Re-scanning upserts (same ids, no growth).
-    st.run_cold_log_scan(&fixture_env());
+    // Re-ingesting upserts (same ids, no growth); an empty sweep is a no-op.
+    let v1 = st.data_version;
+    st.ingest_scanned(cold_scan(&fixture_env(), agentlens_core::now_ms()).0);
     assert_eq!(st.log_sessions.len(), 7);
+    assert!(st.data_version > v1);
+    let v2 = st.data_version;
+    st.ingest_scanned(Vec::new());
+    assert_eq!(st.data_version, v2, "an empty sweep must not bump data_version");
+}
+
+// ── The incremental tailer (P5d) ─────────────────────────────────────────────────────────────
+
+/// A private copy of the fixture tree the test can append to.
+fn scratch_home(name: &str) -> PathBuf {
+    let dst = std::env::temp_dir().join(format!("al-tail-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dst);
+    copy_tree(&fixtures().join("logs-home"), &dst);
+    dst
+}
+
+fn copy_tree(src: &Path, dst: &Path) {
+    std::fs::create_dir_all(dst).unwrap();
+    for e in std::fs::read_dir(src).unwrap().flatten() {
+        let p = e.path();
+        let to = dst.join(e.file_name());
+        if p.is_dir() { copy_tree(&p, &to) } else { std::fs::copy(&p, &to).unwrap(); }
+    }
+}
+
+const CLAUDE_REL: &str = ".claude/projects/-Users-someone-proj/cccccccc-1111-2222-3333-444444444444.jsonl";
+
+fn append(path: &Path, text: &str) {
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+    f.write_all(text.as_bytes()).unwrap();
+}
+
+fn turn_line(id: u32, ts: &str) -> String {
+    format!(
+        r#"{{"type":"assistant","timestamp":"{ts}","message":{{"id":"msg_x{id}","model":"claude-opus-5","usage":{{"input_tokens":7,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}},"content":[{{"type":"text","text":"more {id}"}}]}}}}"#
+    ) + "\n"
+}
+
+fn parent_card(scanned: &[ScannedFile]) -> &Value {
+    scanned.iter().flat_map(|s| &s.cards).find(|c| c["sessionId"] == "cccccccc-1111-2222-3333-444444444444").expect("parent card")
+}
+
+#[test]
+fn tailer_gates_on_stat_and_tails_growth_incrementally() {
+    let home = scratch_home("grow");
+    let env = Env { home: home.clone(), platform: Platform::Darwin, vars: HashMap::new() };
+    let claude = home.join(CLAUDE_REL);
+    let now = 1_785_578_400_000 + 600_000; // the fixture's HOT now
+    let mut t = LogTailer::default();
+
+    // Boot: the parallel cold path, every file from 0, state seeded.
+    let (scanned, s) = t.sweep(&env, now);
+    assert_eq!((s.files, s.changed, s.parsed, s.cards, s.incremental_reads, s.full_reads), (5, 5, 5, 7, 0, 5));
+    let turns0 = parent_card(&scanned)["turns"].as_u64().unwrap();
+    assert_eq!(t.file_state.len(), 5);
+    let st0 = t.file_state[&claude];
+    assert_eq!(st0.bytes_read, std::fs::metadata(&claude).unwrap().len());
+
+    // Nothing moved → nothing touched.
+    let (scanned, s) = t.sweep(&env, now);
+    assert!(scanned.is_empty());
+    assert_eq!((s.files, s.changed, s.parsed, s.incremental_reads, s.full_reads), (5, 0, 0, 0, 0));
+
+    // Growth after a cold parse: no accumulator is cached for it → ONE from-0 read (which caches
+    // the accumulator), only that file is re-parsed, and the card grew by one turn.
+    append(&claude, &turn_line(1, "2026-08-01T10:00:08.000Z"));
+    let (scanned, s) = t.sweep(&env, now);
+    assert_eq!((s.changed, s.parsed, s.incremental_reads, s.full_reads), (1, 1, 0, 1));
+    assert_eq!(scanned.len(), 1);
+    assert_eq!(parent_card(&scanned)["turns"], turns0 + 1);
+    assert_eq!(t.file_state[&claude].bytes_read, std::fs::metadata(&claude).unwrap().len());
+
+    // Growth again: the accumulator is cached → an INCREMENTAL read, and the tailed card equals
+    // a from-0 parse of the same bytes field for field.
+    append(&claude, &turn_line(2, "2026-08-01T10:00:09.000Z"));
+    let (scanned, s) = t.sweep(&env, now);
+    assert_eq!((s.changed, s.parsed, s.incremental_reads, s.full_reads), (1, 1, 1, 0));
+    let tailed = parent_card(&scanned).clone();
+    assert_eq!(tailed["turns"], turns0 + 2);
+    let (cold, _) = cold_scan(&env, now);
+    let from_zero = parent_card(&cold);
+    assert_eq!(&tailed, from_zero, "incremental tail diverged from a from-0 parse");
+
+    // A trailing PARTIAL line is not consumed: the offset stops before it, the entry is absent,
+    // and completing the line on the next sweep resumes from that offset and includes it.
+    let line = turn_line(3, "2026-08-01T10:00:10.000Z");
+    let (head, tail) = line.split_at(line.len() / 2);
+    append(&claude, head);
+    let (scanned, s) = t.sweep(&env, now);
+    assert_eq!((s.changed, s.incremental_reads), (1, 1));
+    assert_eq!(parent_card(&scanned)["turns"], turns0 + 2, "a partial line must not become an entry");
+    assert_eq!(t.file_state[&claude].bytes_read + head.len() as u64, std::fs::metadata(&claude).unwrap().len());
+    append(&claude, tail);
+    let (scanned, s) = t.sweep(&env, now);
+    assert_eq!((s.changed, s.incremental_reads), (1, 1));
+    assert_eq!(parent_card(&scanned)["turns"], turns0 + 3);
+
+    // A SHRUNK file (truncate/rotate) is never resumed from a stale offset: from 0 again.
+    let body = std::fs::read_to_string(&claude).unwrap();
+    let shorter: String = body.lines().take(6).map(|l| format!("{l}\n")).collect();
+    std::fs::write(&claude, shorter).unwrap();
+    let (scanned, s) = t.sweep(&env, now);
+    assert_eq!((s.changed, s.incremental_reads, s.full_reads), (1, 0, 1));
+    let (cold, _) = cold_scan(&env, now);
+    assert_eq!(parent_card(&scanned), parent_card(&cold));
+    assert!(parent_card(&scanned)["turns"].as_u64().unwrap() < turns0 + 3);
+
+    // Codex files take the same path; Copilot ones are whole-file re-reads on change.
+    let codex = home.join(".codex/sessions/2026/08/01/ffffffff-1111-2222-3333-444444444444.jsonl");
+    append(&codex, "{\"timestamp\":\"2026-08-01T10:00:04.000Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":3000,\"cached_input_tokens\":900,\"output_tokens\":130,\"reasoning_output_tokens\":60},\"last_token_usage\":{\"input_tokens\":500}}}}\n");
+    let cp = home.join(".copilot/session-state/abababab-1111-2222-3333-444444444444/events.jsonl");
+    append(&cp, "{\"timestamp\":\"2026-08-01T10:00:05.000Z\",\"type\":\"assistant.message\",\"data\":{\"outputTokens\":9}}\n");
+    let (scanned, s) = t.sweep(&env, now);
+    assert_eq!((s.changed, s.parsed, s.full_reads), (2, 2, 2));
+    let ids: Vec<&str> = scanned.iter().flat_map(|x| &x.cards).map(|c| c["sessionId"].as_str().unwrap()).collect();
+    assert_eq!(ids, vec!["ffffffff-1111-2222-3333-444444444444", "abababab-1111-2222-3333-444444444444"]);
+    let (cold, _) = cold_scan(&env, now);
+    for c in scanned.iter().flat_map(|x| &x.cards) {
+        let from_zero = cold.iter().flat_map(|x| &x.cards).find(|d| d["sessionId"] == c["sessionId"]).unwrap();
+        assert_eq!(c, from_zero);
+    }
+    // Codex now has a cached accumulator: the next growth tails.
+    append(&codex, "{\"timestamp\":\"2026-08-01T10:00:06.000Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":3100,\"cached_input_tokens\":900,\"output_tokens\":131,\"reasoning_output_tokens\":60},\"last_token_usage\":{\"input_tokens\":100}}}}\n");
+    let (scanned, s) = t.sweep(&env, now);
+    assert_eq!((s.changed, s.incremental_reads, s.full_reads), (1, 1, 0));
+    let (cold, _) = cold_scan(&env, now);
+    let codex_id = "ffffffff-1111-2222-3333-444444444444";
+    let got = scanned.iter().flat_map(|x| &x.cards).find(|c| c["sessionId"] == codex_id).unwrap();
+    let want = cold.iter().flat_map(|x| &x.cards).find(|c| c["sessionId"] == codex_id).unwrap();
+    assert_eq!(got, want);
 }
 
 #[test]

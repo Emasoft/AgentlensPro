@@ -13,6 +13,11 @@
 
 use std::process::exit;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+/// server.ts falls back to a 5s full poll when fs.watch is unavailable; until the notify-based
+/// watcher lands, the Rust sweeper IS that fallback (13.5k stats per sweep ≈ tens of ms).
+const LOG_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
 
 fn usage(msg: &str) -> ! {
     eprintln!("alcore: {msg}");
@@ -65,16 +70,24 @@ fn main() {
     let state = Arc::new(Mutex::new(agentlens_core::CoreState::open(&spans_dir)));
 
     if log_scan {
+        // The boot sweep is synchronous (the card map is populated before the listeners bind);
+        // the same thread then re-sweeps every LOG_SWEEP_INTERVAL, touching only files whose
+        // stat moved (P5d tail + offset gate).
         let env = agentlens_logscan::discovery::Env::from_process();
-        let stats = state.lock().expect("state").run_cold_log_scan(&env);
-        println!(
-            "alcore: log scan files={} parsed={} cards={} elapsed_ms={} threads={}",
-            stats.files,
-            stats.parsed,
-            stats.cards,
-            stats.elapsed_ms,
-            rayon::current_num_threads()
-        );
+        match agentlens_core::log_reader::start_sweeper(state.clone(), env, LOG_SWEEP_INTERVAL) {
+            Ok(stats) => println!(
+                "alcore: log scan files={} parsed={} cards={} elapsed_ms={} threads={}",
+                stats.files,
+                stats.parsed,
+                stats.cards,
+                stats.elapsed_ms,
+                rayon::current_num_threads()
+            ),
+            Err(e) => {
+                eprintln!("alcore: {e}");
+                exit(1);
+            }
+        }
     }
 
     let rt = tokio::runtime::Runtime::new().unwrap_or_else(|e| {

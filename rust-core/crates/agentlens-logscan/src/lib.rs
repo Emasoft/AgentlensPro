@@ -229,7 +229,10 @@ pub(crate) fn cap_timeline(timeline: &mut Vec<TimelineEntry>, max_entries: usize
 type EntryRef = Rc<RefCell<TimelineEntry>>;
 
 /// TimelineHolder: the bounded timeline + its byte/eviction accounting (timelineRetention.ts).
-#[derive(Default)]
+/// Clone is SHALLOW on the entries (Rc) — the incremental tailer (agentlens-core P5d) clones
+/// the accumulator only to hand the clone to `build_result`, which reads the entries and copies
+/// them into the Card; the live accumulator keeps mutating its own Rc cells afterwards.
+#[derive(Default, Clone)]
 pub struct Timeline {
     pub entries: Vec<EntryRef>,
     pub truncated_count: u64,
@@ -362,6 +365,10 @@ pub struct BlendTurn {
     pub cache_create: f64,
 }
 
+/// The per-file running state (TS ClaudeAccum) — held ACROSS scans by the incremental tailer,
+/// so a growing transcript is fed only its appended lines. `!Send` by construction (Rc entries):
+/// the tailer parses on one thread.
+#[derive(Clone)]
 pub struct ClaudeAccum {
     pub workspace: String,
     pub model: String,
