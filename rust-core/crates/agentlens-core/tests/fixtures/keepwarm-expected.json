@@ -1,0 +1,301 @@
+{
+ "kinds": [
+  "main",
+  "subagent",
+  "fork",
+  "main",
+  "subagent"
+ ],
+ "cases": [
+  {
+   "name": "empty timeline under the assumed regime",
+   "regime": {
+    "ttlMs": 300000,
+    "ttlAssumedMin": 5,
+    "ttlSource": "assumed",
+    "ttlBasis": "no kind/auth signals — conservative 5-min floor assumed"
+   },
+   "report": null
+  },
+  {
+   "name": "no api_request entries",
+   "regime": {
+    "ttlMs": 300000,
+    "ttlAssumedMin": 5,
+    "ttlSource": "assumed",
+    "ttlBasis": "no kind/auth signals — conservative 5-min floor assumed"
+   },
+   "report": null
+  },
+  {
+   "name": "api_request entries with unparseable timestamps only",
+   "regime": {
+    "ttlMs": 300000,
+    "ttlAssumedMin": 5,
+    "ttlSource": "assumed",
+    "ttlBasis": "no kind/auth signals — conservative 5-min floor assumed"
+   },
+   "report": null
+  },
+  {
+   "name": "warm cadence under the assumed 5m floor",
+   "regime": {
+    "ttlMs": 300000,
+    "ttlAssumedMin": 5,
+    "ttlSource": "assumed",
+    "ttlBasis": "no kind/auth signals — conservative 5-min floor assumed"
+   },
+   "report": {
+    "warmTurns": 2,
+    "coldTurns": 0,
+    "wastedWriteTokens": 0,
+    "worstGapMin": 1,
+    "ttlAssumedMin": 5,
+    "ttlSource": "assumed",
+    "ttlContradicted": false,
+    "measuredWarmGapMin": null,
+    "ttlBasis": "no kind/auth signals — conservative 5-min floor assumed"
+   }
+  },
+  {
+   "name": "cold turn with the re-write signature and counted waste",
+   "regime": {
+    "ttlMs": 300000,
+    "ttlAssumedMin": 5,
+    "ttlSource": "assumed",
+    "ttlBasis": "no kind/auth signals — conservative 5-min floor assumed"
+   },
+   "report": {
+    "warmTurns": 0,
+    "coldTurns": 1,
+    "wastedWriteTokens": 50000,
+    "worstGapMin": 10,
+    "ttlAssumedMin": 5,
+    "ttlSource": "assumed",
+    "ttlContradicted": false,
+    "measuredWarmGapMin": null,
+    "ttlBasis": "no kind/auth signals — conservative 5-min floor assumed"
+   }
+  },
+  {
+   "name": "over-TTL gap without the re-write signature lands in neither bucket",
+   "regime": {
+    "ttlMs": 300000,
+    "ttlAssumedMin": 5,
+    "ttlSource": "assumed",
+    "ttlBasis": "no kind/auth signals — conservative 5-min floor assumed"
+   },
+   "report": {
+    "warmTurns": 0,
+    "coldTurns": 0,
+    "wastedWriteTokens": 0,
+    "worstGapMin": 10,
+    "ttlAssumedMin": 5,
+    "ttlSource": "assumed",
+    "ttlContradicted": false,
+    "measuredWarmGapMin": null,
+    "ttlBasis": "no kind/auth signals — conservative 5-min floor assumed"
+   }
+  },
+  {
+   "name": "falsifier — a warm hit past the subagent 5m tier snaps the floor to 1h",
+   "regime": {
+    "ttlMs": 300000,
+    "ttlAssumedMin": 5,
+    "ttlSource": "doc-matrix",
+    "ttlBasis": "subagent — own conversation, own 5-min cache (the 1h auto applies only to the main conversation)"
+   },
+   "report": {
+    "warmTurns": 2,
+    "coldTurns": 0,
+    "wastedWriteTokens": 0,
+    "worstGapMin": 30,
+    "ttlAssumedMin": 60,
+    "ttlSource": "measured",
+    "ttlContradicted": true,
+    "measuredWarmGapMin": 30,
+    "ttlBasis": "assumed 5-min TTL (doc-matrix) CONTRADICTED: a cache hit landed 30min after the last call — the entry survived, so the measured floor (60min tier) was preferred"
+   }
+  },
+  {
+   "name": "subscription main rides the 1h tier — a 20min gap is warm",
+   "regime": {
+    "ttlMs": 3600000,
+    "ttlAssumedMin": 60,
+    "ttlSource": "doc-matrix",
+    "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+   },
+   "report": {
+    "warmTurns": 1,
+    "coldTurns": 0,
+    "wastedWriteTokens": 0,
+    "worstGapMin": 20,
+    "ttlAssumedMin": 60,
+    "ttlSource": "doc-matrix",
+    "ttlContradicted": false,
+    "measuredWarmGapMin": null,
+    "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+   }
+  },
+  {
+   "name": "usage-credits drops to 5m — the same 20min gap is cold",
+   "regime": {
+    "ttlMs": 300000,
+    "ttlAssumedMin": 5,
+    "ttlSource": "doc-matrix",
+    "ttlBasis": "main conversation on a subscription drawing USAGE CREDITS (over plan limit) — dropped to the 5-min tier"
+   },
+   "report": {
+    "warmTurns": 0,
+    "coldTurns": 1,
+    "wastedWriteTokens": 90000,
+    "worstGapMin": 20,
+    "ttlAssumedMin": 5,
+    "ttlSource": "doc-matrix",
+    "ttlContradicted": false,
+    "measuredWarmGapMin": null,
+    "ttlBasis": "main conversation on a subscription drawing USAGE CREDITS (over plan limit) — dropped to the 5-min tier"
+   }
+  },
+  {
+   "name": "api key opted into 1h via ENABLE_PROMPT_CACHING_1H",
+   "regime": {
+    "ttlMs": 3600000,
+    "ttlAssumedMin": 60,
+    "ttlSource": "config",
+    "ttlBasis": "main conversation on an API key with ENABLE_PROMPT_CACHING_1H=1 — opted into the 1-hour tier"
+   },
+   "report": {
+    "warmTurns": 1,
+    "coldTurns": 0,
+    "wastedWriteTokens": 0,
+    "worstGapMin": 30,
+    "ttlAssumedMin": 60,
+    "ttlSource": "config",
+    "ttlContradicted": false,
+    "measuredWarmGapMin": null,
+    "ttlBasis": "main conversation on an API key with ENABLE_PROMPT_CACHING_1H=1 — opted into the 1-hour tier"
+   }
+  },
+  {
+   "name": "fork on a bare api key — 5m with the fork label",
+   "regime": {
+    "ttlMs": 300000,
+    "ttlAssumedMin": 5,
+    "ttlSource": "doc-matrix",
+    "ttlBasis": "fork (reads the PARENT conversation's cache entry) on an API key / Bedrock / GCP / Foundry — 5-min default tier"
+   },
+   "report": {
+    "warmTurns": 0,
+    "coldTurns": 0,
+    "wastedWriteTokens": 0,
+    "worstGapMin": 0,
+    "ttlAssumedMin": 5,
+    "ttlSource": "doc-matrix",
+    "ttlContradicted": false,
+    "measuredWarmGapMin": null,
+    "ttlBasis": "fork (reads the PARENT conversation's cache entry) on an API key / Bedrock / GCP / Foundry — 5-min default tier"
+   }
+  },
+  {
+   "name": "FORCE_PROMPT_CACHING_5M wins over subscription auth",
+   "regime": {
+    "ttlMs": 300000,
+    "ttlAssumedMin": 5,
+    "ttlSource": "config",
+    "ttlBasis": "FORCE_PROMPT_CACHING_5M=1 detected — forces the 5-min tier regardless of auth"
+   },
+   "report": {
+    "warmTurns": 0,
+    "coldTurns": 0,
+    "wastedWriteTokens": 0,
+    "worstGapMin": 0,
+    "ttlAssumedMin": 5,
+    "ttlSource": "config",
+    "ttlContradicted": false,
+    "measuredWarmGapMin": null,
+    "ttlBasis": "FORCE_PROMPT_CACHING_5M=1 detected — forces the 5-min tier regardless of auth"
+   }
+  },
+  {
+   "name": "unknown auth falls back to the assumed floor",
+   "regime": {
+    "ttlMs": 300000,
+    "ttlAssumedMin": 5,
+    "ttlSource": "assumed",
+    "ttlBasis": "no kind/auth signals — conservative 5-min floor assumed"
+   },
+   "report": {
+    "warmTurns": 0,
+    "coldTurns": 0,
+    "wastedWriteTokens": 0,
+    "worstGapMin": 0,
+    "ttlAssumedMin": 5,
+    "ttlSource": "assumed",
+    "ttlContradicted": false,
+    "measuredWarmGapMin": null,
+    "ttlBasis": "no kind/auth signals — conservative 5-min floor assumed"
+   }
+  },
+  {
+   "name": "off-matrix >1h survival classifies against the observed gap itself",
+   "regime": {
+    "ttlMs": 300000,
+    "ttlAssumedMin": 5,
+    "ttlSource": "doc-matrix",
+    "ttlBasis": "subagent — own conversation, own 5-min cache (the 1h auto applies only to the main conversation)"
+   },
+   "report": {
+    "warmTurns": 2,
+    "coldTurns": 0,
+    "wastedWriteTokens": 0,
+    "worstGapMin": 90,
+    "ttlAssumedMin": 90,
+    "ttlSource": "measured",
+    "ttlContradicted": true,
+    "measuredWarmGapMin": 90,
+    "ttlBasis": "assumed 5-min TTL (doc-matrix) CONTRADICTED: a cache hit landed 90min after the last call — the entry survived, so the measured floor (90min tier) was preferred"
+   }
+  },
+  {
+   "name": "an interleaved timeline sorts before classification",
+   "regime": {
+    "ttlMs": 300000,
+    "ttlAssumedMin": 5,
+    "ttlSource": "doc-matrix",
+    "ttlBasis": "subagent — own conversation, own 5-min cache (the 1h auto applies only to the main conversation)"
+   },
+   "report": {
+    "warmTurns": 2,
+    "coldTurns": 0,
+    "wastedWriteTokens": 0,
+    "worstGapMin": 1,
+    "ttlAssumedMin": 5,
+    "ttlSource": "doc-matrix",
+    "ttlContradicted": false,
+    "measuredWarmGapMin": null,
+    "ttlBasis": "subagent — own conversation, own 5-min cache (the 1h auto applies only to the main conversation)"
+   }
+  },
+  {
+   "name": "an unparseable timestamp among valid ones is dropped, not defaulted",
+   "regime": {
+    "ttlMs": 300000,
+    "ttlAssumedMin": 5,
+    "ttlSource": "doc-matrix",
+    "ttlBasis": "subagent — own conversation, own 5-min cache (the 1h auto applies only to the main conversation)"
+   },
+   "report": {
+    "warmTurns": 1,
+    "coldTurns": 0,
+    "wastedWriteTokens": 0,
+    "worstGapMin": 1,
+    "ttlAssumedMin": 5,
+    "ttlSource": "doc-matrix",
+    "ttlContradicted": false,
+    "measuredWarmGapMin": null,
+    "ttlBasis": "subagent — own conversation, own 5-min cache (the 1h auto applies only to the main conversation)"
+   }
+  }
+ ]
+}

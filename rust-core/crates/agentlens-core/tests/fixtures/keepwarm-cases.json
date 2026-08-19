@@ -1,0 +1,68 @@
+{
+ "cards": [
+  {},
+  { "parentSessionId": "parent-1" },
+  { "spawnKind": "fork", "parentSessionId": "parent-1" },
+  { "parentSessionId": "" },
+  { "spawnKind": "task", "parentSessionId": "parent-1" }
+ ],
+ "cases": [
+  { "name": "empty timeline under the assumed regime", "kind": null, "ctx": null, "timeline": [] },
+  { "name": "no api_request entries", "kind": "main", "ctx": null, "timeline": [ { "type": "llm", "timestamp": "2026-08-19T10:00:00.000Z", "cacheReadTokens": 5000 } ] },
+  { "name": "api_request entries with unparseable timestamps only", "kind": "main", "ctx": null, "timeline": [ { "type": "api_request", "timestamp": "garbage" }, { "type": "api_request" } ] },
+  { "name": "warm cadence under the assumed 5m floor", "kind": null, "ctx": null, "timeline": [
+    { "type": "api_request", "timestamp": "2026-08-19T10:00:00.000Z", "cacheReadTokens": 0, "cacheCreateTokens": 30000 },
+    { "type": "api_request", "timestamp": "2026-08-19T10:01:00.000Z", "cacheReadTokens": 30000, "cacheCreateTokens": 400 },
+    { "type": "api_request", "timestamp": "2026-08-19T10:02:00.000Z", "cacheReadTokens": 30400, "cacheCreateTokens": 350 }
+   ] },
+  { "name": "cold turn with the re-write signature and counted waste", "kind": null, "ctx": null, "timeline": [
+    { "type": "api_request", "timestamp": "2026-08-19T10:00:00.000Z", "cacheReadTokens": 0, "cacheCreateTokens": 30000 },
+    { "type": "api_request", "timestamp": "2026-08-19T10:10:00.000Z", "cacheReadTokens": 100, "cacheCreateTokens": 50000 }
+   ] },
+  { "name": "over-TTL gap without the re-write signature lands in neither bucket", "kind": null, "ctx": null, "timeline": [
+    { "type": "api_request", "timestamp": "2026-08-19T10:00:00.000Z", "cacheReadTokens": 0, "cacheCreateTokens": 200 },
+    { "type": "api_request", "timestamp": "2026-08-19T10:10:00.000Z", "cacheReadTokens": 50, "cacheCreateTokens": 40 }
+   ] },
+  { "name": "falsifier — a warm hit past the subagent 5m tier snaps the floor to 1h", "kind": "subagent", "ctx": { "auth": "subscription", "force5m": false, "enable1h": false }, "timeline": [
+    { "type": "api_request", "timestamp": "2026-08-19T10:00:00.000Z", "cacheReadTokens": 0, "cacheCreateTokens": 80000 },
+    { "type": "api_request", "timestamp": "2026-08-19T10:20:00.000Z", "cacheReadTokens": 100000, "cacheCreateTokens": 500 },
+    { "type": "api_request", "timestamp": "2026-08-19T10:50:00.000Z", "cacheReadTokens": 100500, "cacheCreateTokens": 600 }
+   ] },
+  { "name": "subscription main rides the 1h tier — a 20min gap is warm", "kind": "main", "ctx": { "auth": "subscription", "force5m": false, "enable1h": false }, "timeline": [
+    { "type": "api_request", "timestamp": "2026-08-19T10:00:00.000Z", "cacheReadTokens": 0, "cacheCreateTokens": 40000 },
+    { "type": "api_request", "timestamp": "2026-08-19T10:20:00.000Z", "cacheReadTokens": 40000, "cacheCreateTokens": 300 }
+   ] },
+  { "name": "usage-credits drops to 5m — the same 20min gap is cold", "kind": "main", "ctx": { "auth": "usage-credits", "force5m": false, "enable1h": false }, "timeline": [
+    { "type": "api_request", "timestamp": "2026-08-19T10:00:00.000Z", "cacheReadTokens": 0, "cacheCreateTokens": 40000 },
+    { "type": "api_request", "timestamp": "2026-08-19T10:20:00.000Z", "cacheReadTokens": 1000, "cacheCreateTokens": 90000 }
+   ] },
+  { "name": "api key opted into 1h via ENABLE_PROMPT_CACHING_1H", "kind": "main", "ctx": { "auth": "api-key", "force5m": false, "enable1h": true }, "timeline": [
+    { "type": "api_request", "timestamp": "2026-08-19T10:00:00.000Z", "cacheReadTokens": 0, "cacheCreateTokens": 500 },
+    { "type": "api_request", "timestamp": "2026-08-19T10:30:00.000Z", "cacheReadTokens": 2000, "cacheCreateTokens": 100 }
+   ] },
+  { "name": "fork on a bare api key — 5m with the fork label", "kind": "fork", "ctx": { "auth": "api-key", "force5m": false, "enable1h": false }, "timeline": [
+    { "type": "api_request", "timestamp": "2026-08-19T10:00:00.000Z", "cacheReadTokens": 0, "cacheCreateTokens": 500 }
+   ] },
+  { "name": "FORCE_PROMPT_CACHING_5M wins over subscription auth", "kind": "main", "ctx": { "auth": "subscription", "force5m": true, "enable1h": false }, "timeline": [
+    { "type": "api_request", "timestamp": "2026-08-19T10:00:00.000Z", "cacheReadTokens": 0, "cacheCreateTokens": 500 }
+   ] },
+  { "name": "unknown auth falls back to the assumed floor", "kind": "main", "ctx": { "auth": "unknown", "force5m": false, "enable1h": false }, "timeline": [
+    { "type": "api_request", "timestamp": "2026-08-19T10:00:00.000Z", "cacheReadTokens": 0, "cacheCreateTokens": 500 }
+   ] },
+  { "name": "off-matrix >1h survival classifies against the observed gap itself", "kind": "subagent", "ctx": null, "timeline": [
+    { "type": "api_request", "timestamp": "2026-08-19T10:00:00.000Z", "cacheReadTokens": 0, "cacheCreateTokens": 100000 },
+    { "type": "api_request", "timestamp": "2026-08-19T11:30:00.000Z", "cacheReadTokens": 200000, "cacheCreateTokens": 100 },
+    { "type": "api_request", "timestamp": "2026-08-19T12:40:00.000Z", "cacheReadTokens": 1000, "cacheCreateTokens": 150000 }
+   ] },
+  { "name": "an interleaved timeline sorts before classification", "kind": "subagent", "ctx": null, "timeline": [
+    { "type": "api_request", "timestamp": "2026-08-19T10:02:00.000Z", "cacheReadTokens": 5000, "cacheCreateTokens": 100 },
+    { "type": "api_request", "timestamp": "2026-08-19T10:00:00.000Z", "cacheReadTokens": 0, "cacheCreateTokens": 5000 },
+    { "type": "api_request", "timestamp": "2026-08-19T10:01:00.000Z", "cacheReadTokens": 5000, "cacheCreateTokens": 90 }
+   ] },
+  { "name": "an unparseable timestamp among valid ones is dropped, not defaulted", "kind": "subagent", "ctx": null, "timeline": [
+    { "type": "api_request", "timestamp": "2026-08-19T10:00:00.000Z", "cacheReadTokens": 0, "cacheCreateTokens": 5000 },
+    { "type": "api_request", "timestamp": "not-a-date", "cacheReadTokens": 99999, "cacheCreateTokens": 99999 },
+    { "type": "api_request", "timestamp": "2026-08-19T10:01:00.000Z", "cacheReadTokens": 5000, "cacheCreateTokens": 90 }
+   ] }
+ ]
+}

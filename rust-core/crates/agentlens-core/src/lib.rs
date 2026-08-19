@@ -29,6 +29,7 @@ use agentlens_ingest::IngestState;
 use agentlens_spanstore::writer::SpanStoreWriter;
 
 pub mod account_registry;
+pub mod burn;
 pub mod collector_lifecycle;
 pub mod delta_log;
 pub mod derived_cache;
