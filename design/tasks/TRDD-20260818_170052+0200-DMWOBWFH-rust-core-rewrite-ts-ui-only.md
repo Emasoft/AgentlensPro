@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-19T05:50:00+0200
+updated: 2026-08-19T09:45:00+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -219,7 +219,19 @@ release-via: publish
   builder change: `pnpm run compile-tests && node <generator>`. Port mechanics that carry over:
   `num()` (integral-bare JSON numbers), `truthy()` (JS if-guards), conditional key inserts
   mirror `undefined` drops, Vec-backed insertion-order maps, `js_slice` byte caps.
-  Remaining port order: claude.rs (620) → codex.rs (506) → summarizer+synth (283) →
+  **P4d.3 DONE (commit 85e65d2): claude.rs ported (builder + session.id slice merge), TS-oracle
+  parity EXACT; workspace 44/44.** retention.rs carries the capTimeline/entryCost slice of
+  timelineRetention.ts (UTF-16 entryCost — JS .length is code units; env knobs fail-fast,
+  memoized); num/iso_from_ms/truthy + the span accessors moved copilot.rs → helpers.rs (shared,
+  no duplication). `callBodyRegistry.accountFor` is an `account_for` caller callback
+  (`&dyn Fn(&str) -> Option<String>`, the P3b precedent) — harness passes `|_| None` because the
+  oracle's fresh-Node registry is empty. Gotchas pinned by the fixture: the TOOL branch's
+  `filesSearched.add(args.pattern || …)` inserts the RAW value un-stringified (every other add
+  site String()s) — JsSet keys on JSON serialization to match SameValueZero; JSON.parse('null')
+  + property access THROWS in TS (its catch treats the raw string as the path) — the port guards
+  `is_null()` on every parsed-args site; the merged literal writes `accountId:`/`filesChangedNote:
+  undefined`, DELETING the base slice's key (shift_remove, not skip).
+  Remaining port order: codex.rs (506) → summarizer+synth (283) →
   loopDetector (309) → sessionStore window (187). End-to-end harness after the builders:
   replay a REAL span window through TS summarizeSpans and a Rust `alsummarize` bin.
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
