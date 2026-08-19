@@ -294,13 +294,22 @@ release-via: publish
   is the DECODED stream — raw-socket tests must de-chunk.
   Not in this slice (later, need other subsystems): sessionChanged (log-scan wiring), burnStatus
   (burn investigator), alert frames, collectorGaps (collector lifecycle), admission 503s.
-- **NEXT ACTION (one step): P4g — `/api/server-stats`** (report §1.4, EXACT key order; needs
-  the store index + memory figures; `canonical` keys on OTLP_PORT===4318) — OR re-prioritize to
-  the log-scan wiring so `/api/summary` + `/events` carry the log-session merge (feedMergePolicy)
-  and stop being OTEL-only. Recommend the log-scan wiring first: it is what makes the Rust
-  `/api/summary` content-complete for the dashboard, and P2's allogscan already parses every
-  source — the missing piece is `mergeOtelAndLogSessions` (server.ts:2417+) + the in-process
-  log reader loop. Read server.ts:2389-2470 first.
+- **P4g DONE (commit 33b0933) — the feed-collision doctrine is in Rust and every served surface
+  merges OTEL⊕log.** `feed_merge.rs` ports feedMergePolicy.ts (preferred source, P7 stamps,
+  api_request graft, P8 placeholder↔transcript link); `CoreState.log_sessions` +
+  `put_log_session` (bumps data_version) + `session_summary()` (= computeSessionSummary:
+  merge → link → newest-first) now feed /api/summary, the SSE connect frame and the coalesced
+  push. Parity: every branch on crafted cards + a socket test of the merged wire. 58/58.
+- **NEXT ACTION (one step): P5 — the in-process LOG READER that fills `log_sessions`.** Scope
+  (read src/logReader.ts first — it is large; port in sub-slices): (a) file discovery per
+  source (claude ~/.claude/projects/**/*.jsonl incl. subagents/, codex, copilot CLI/VS Code,
+  opencode db), (b) cold boot scan via the agentlens-logscan crate AS A LIBRARY (rayon, the
+  allogscan parse fns — no exec), (c) the TS-wrapper finish step in Rust: accountId (registry
+  — pending), speedBlendedCostUsd (blendTurns × the P4f.1 pricing table), hot-age strip
+  (timeline retention), generated-files attach (fs heuristics), (d) the incremental tail on
+  growth with the fileState/offset gate, (e) persisted offsets so restarts take the fast path.
+  Each sub-slice with a TS-oracle or real-corpus parity pin as before (the P2 99/99 sweep
+  pattern). `/api/server-stats` (§1.4) stays queued after P5.
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
