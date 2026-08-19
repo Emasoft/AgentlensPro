@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-19T09:45:00+0200
+updated: 2026-08-19T20:20:00+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -305,18 +305,42 @@ release-via: publish
   OPENCODE_DATA_DIR filtered/unfiltered asymmetry, sibling + stat gates, TS scan order). 4
   fixture-tree tests; real-machine census 13,504 claude / 7 codex / 0 copilot / 1 opencode =
   identical to a TS-equivalent walk (`cargo run -p agentlens-logscan --example disc_census`).
-- **NEXT ACTION (one step): P5b — the cold boot scan in alcore as a LIBRARY call**: on
-  `alcore serve` start, `discover_all(Env::from_process())` → rayon parse via the logscan
-  crate's parse fns (claude `parse_transcript`, `codex::parse_codex_transcript`,
-  `copilot::parse_copilot_cli/vscode/vscode_json`, `opencode::parse_opencode_db`) → for each
-  ParsedTranscript apply the Rust finish step (P5c can land together if small: hot-age strip
-  via retention::timeline_hot_age; speedBlendedCostUsd = Σ calc_token_cost_usd over blendTurns;
-  accountId + generated-files attach DEFERRED with a note) → `put_log_session(card)` (+ child
-  cards). Gate on `--log-scan` flag (default on) so tests can disable. Parity: the P2 99/99
-  real-corpus pattern — compare the Rust-wired log_sessions against `allogscan` JSON for the
-  same files (same library ⇒ trivially equal) and spot-check 3 cards vs the TS LogReader via
-  the compiled out/test/logReader.js. Remaining after: P5d incremental tail + offset gate, P5e
-  persisted offsets, then `/api/server-stats`.
+- **P5b DONE (commit d266b1c) — the cold boot log scan is a LIBRARY call inside alcore.**
+  `agentlens-core/src/log_reader.rs`: `cold_scan(&Env, now_ms)` = discover_all → rayon
+  parse (opencode dbs sequential) → `finish_transcript` (= finishRustTranscript: blended cost
+  over blend_turns as the LAST key, parent-only hot-age strip via the new
+  `retention::timeline_hot_age_ms()`, f64 counters → bare integers so one number shape is
+  served); `CoreState::run_cold_log_scan` puts every card + the global timeline tier
+  (`demote_cold_timelines`, AGENTLENS_TIMELINE_HOT_CARDS=50). `alcore serve` runs it before
+  the listeners bind; `--no-log-scan` opts out. `log_sessions` is an IndexMap now. Parity:
+  `tests/log_reader_parity.rs` — TS-oracle fixture (`gen-log-reader-expected.mjs` builds the
+  committed `fixtures/logs-home/` tree, parses it through allogscan, runs the compiled
+  `finishRustTranscript` at a HOT and a COLD now) → 7 cards from 5 files Value-equal, plus the
+  card-map wiring + tier tests. 65/65. Live: 13,519 files → 17,699 cards in 21.7s (14
+  threads); `/api/summary` 13,569 sessions in ~1s; vs the live TS server 13,486 log cards
+  field-identical on the 13 compared keys, 63 differ only by live growth between snapshots.
+  Measured and RECORDED, not fixed here: (a) the parse engine is the cost — allogscan on the
+  same 13.5k files is 23.9s with a 3GB peak RSS and only a 2.5× speedup on 14 threads (cold
+  files build a timeline that the strip then throws away — skip timeline retention when the
+  file mtime is already older than the hot age; alcore RSS 1.2GB after boot); (b)
+  `session_summary` re-clones/merges/sorts 13.5k cards per request (~1s) — TS memoizes the
+  derived views by dataVersion, the Rust side should too before cutover; (c) 28 agent-id
+  collisions on this machine (the same subagent id under TWO parents → two transcript files
+  → the sessionId-keyed map keeps whichever scan order puts last; TS has the same ambiguity
+  with mtime order); (d) the TS server carries 2,934 cards whose files no longer exist
+  (restored from its persisted card file) — a fresh-boot Rust scan cannot; P5e persistence is
+  where parity on that surface lives. Deferred in the finish step, each with a note in
+  log_reader.rs head: accountId, generated-files attach, statusline overlay, OpenCode JSON
+  fallback on db error.
+- **NEXT ACTION (one step): P5d — incremental tail + the fileState/offset gate**: keep a
+  per-file `{bytes_read, mtime_ms}` map in CoreState (TS `fileState`), a periodic rescan
+  (server.ts full-sweep timer + the fs.watch-hinted targeted scan — a notify-based watcher
+  can come later; start with the timer) that re-parses ONLY files whose size/mtime moved,
+  feeding `put_log_session` so the SSE push carries growth; the P2 TS incremental parser
+  keeps an accumulator per file — port that (`_incrementalParse` + accumCache) or, if the
+  per-file parse is fast enough, re-parse the whole grown file (measure on the largest
+  transcript first). OpenCode's 2-stat gate (db + -wal mtime). Then P5c (accountId registry,
+  generated-files attach), P5e persisted offsets + cards, `/api/server-stats`.
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
