@@ -259,3 +259,75 @@ fn unknown_routes_and_options_fall_through_to_the_bare_404() {
         assert_eq!(body_of(&r), "Not found");
     }
 }
+
+fn post(addr: std::net::SocketAddr, path: &str, body: &str) -> String {
+    request(addr, &format!("POST {path} HTTP/1.1\r\nHost: 127.0.0.1:3000\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()))
+}
+
+/// The small frozen routes (freeze §1 rows 1, 10, 11, 16, 22, 25): exact status, headers, bodies.
+#[test]
+fn small_routes_embed_status_hook_config_clear_action_and_log_scan_stats() {
+    let (otlp, ui, state) = start_servers();
+    let data_dir = state.lock().unwrap().data_dir.clone();
+
+    // Row 1: the wiring probe, standalone with no key, Vary on the viewer header.
+    let r = get(ui, "/api/embed-status", "");
+    assert!(r.starts_with("HTTP/1.1 200") && r.contains("vary: X-Agentlens-Viewer"), "{r}");
+    assert_eq!(body_of(&r), r#"{"mode":"standalone","role":null,"keyLoaded":false}"#);
+
+    // Row 10: defaults + the file path; row 11: a patch is merged, persisted (2-space JSON +
+    // newline, atomic), unknown keys ignored, a junk gateMode keeps the current one.
+    let r = get(ui, "/api/hook-config", "");
+    let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
+    assert_eq!(v["config"], serde_json::json!({ "captureEnabled": true, "gateEnabled": true, "gateMode": "enforce", "advisorEnabled": true, "cacheGuardEnabled": true }));
+    assert_eq!(v["file"], data_dir.join("hook-config.json").to_string_lossy().as_ref());
+    let r = post(ui, "/api/hook-config", r#"{"gateMode":"warn","advisorEnabled":false,"bogus":1}"#);
+    assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+    let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
+    assert_eq!(v["applied"], true);
+    assert_eq!(v["config"]["gateMode"], "warn");
+    assert_eq!(v["config"]["advisorEnabled"], false);
+    assert!(v["config"].get("bogus").is_none());
+    let on_disk = std::fs::read_to_string(data_dir.join("hook-config.json")).unwrap();
+    assert!(on_disk.starts_with("{\n  \"captureEnabled\": true,\n") && on_disk.ends_with("}\n"), "{on_disk}");
+    let r = post(ui, "/api/hook-config", r#"{"gateMode":"loud"}"#);
+    let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
+    assert_eq!(v["config"]["gateMode"], "warn", "junk gateMode keeps the current");
+    let r = post(ui, "/api/hook-config", "not json");
+    assert!(r.starts_with("HTTP/1.1 400"), "{r}");
+    assert!(body_of(&r).starts_with(r#"{"error":"#));
+
+    // Row 25: the reader counters + dataVersion (no sweeper in this harness → zeros).
+    let r = get(ui, "/api/debug/log-scan-stats", "");
+    let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
+    assert_eq!(v["incrementalReads"], 0);
+    assert_eq!(v["derivedCaches"]["summary"], serde_json::json!({ "hits": 0, "misses": 0 }));
+    assert!(v["dataVersion"].is_u64());
+
+    // Rows 22 + 16: ingest a span and a log card, then clear. /action clearAll drops the spans
+    // (window + the on-disk store) and keeps the cards; /api/clear drops both. Both answer 200
+    // with an empty body and no Content-Type.
+    let body = trace_payload();
+    request(otlp, &format!("POST /v1/traces HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()));
+    state.lock().unwrap().put_log_session(serde_json::json!({ "sessionId": "log-1", "source": "codex", "timeline": [] }));
+    {
+        let st = state.lock().unwrap();
+        assert_eq!(st.window.spans.len(), 2, "the payload's two spans");
+        assert_eq!(st.writer.stats().1, 2);
+        assert!(data_dir.join("spans").join("index.json").exists());
+    }
+    let r = post(ui, "/action", r#"{"type":"clearAll"}"#);
+    assert!(r.starts_with("HTTP/1.1 200") && !r.to_ascii_lowercase().contains("content-type") && body_of(&r).is_empty(), "{r}");
+    {
+        let st = state.lock().unwrap();
+        assert_eq!(st.window.spans.len(), 0);
+        assert_eq!(st.writer.stats(), (0, 0, 0));
+        assert!(!data_dir.join("spans").join("index.json").exists(), "the store forgot");
+        assert_eq!(st.log_sessions.len(), 1, "clearAll keeps the log cards");
+    }
+    let r = post(ui, "/action", "garbage");
+    assert!(r.starts_with("HTTP/1.1 200"), "malformed body is still 200: {r}");
+    let r = post(ui, "/api/clear", "");
+    assert!(r.starts_with("HTTP/1.1 200") && body_of(&r).is_empty(), "{r}");
+    assert!(state.lock().unwrap().log_sessions.is_empty());
+}

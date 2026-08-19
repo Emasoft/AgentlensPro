@@ -140,6 +140,39 @@ pub fn strip_session_detail(summary: &Value) -> Value {
     Value::Object(out)
 }
 
+/// server.ts readBodyCapped — the whole body, or None once it exceeds `max` (the TS destroys the
+/// socket and never answers; the caller turns None into an Err that drops the connection).
+async fn read_body_capped(mut body: hyper::body::Incoming, max: usize) -> Result<Option<Vec<u8>>, String> {
+    use http_body_util::BodyExt;
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(frame) = body.frame().await {
+        let frame = frame.map_err(|e| format!("body read: {e}"))?;
+        if let Some(data) = frame.data_ref() {
+            if buf.len() + data.len() > max {
+                return Ok(None);
+            }
+            buf.extend_from_slice(data);
+        }
+    }
+    Ok(Some(buf))
+}
+
+/// The POST /api/hook-config reader: chunks are kept only while the total so far is under
+/// `max` (the rest is read and dropped), and whatever was kept is what gets parsed.
+async fn read_body_keep_under(mut body: hyper::body::Incoming, max: usize) -> Result<Vec<u8>, String> {
+    use http_body_util::BodyExt;
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(frame) = body.frame().await {
+        let frame = frame.map_err(|e| format!("body read: {e}"))?;
+        if let Some(data) = frame.data_ref() {
+            if buf.len() < max {
+                buf.extend_from_slice(data);
+            }
+        }
+    }
+    Ok(buf)
+}
+
 fn json_response(status: StatusCode, body: String) -> Response<SseBody> {
     let mut resp = Response::new(boxed_full(Bytes::from(body)));
     *resp.status_mut() = status;
@@ -234,6 +267,96 @@ async fn handle(
         let body = {
             let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
             crate::server_stats::server_stats(&st, crate::now_ms()).to_string()
+        };
+        json_response(StatusCode::OK, body)
+    } else if method == Method::GET && path == "/api/embed-status" {
+        // The wiring probe (TRDD-1ZH1D5EG). NOT PORTED: the embed key (src/embedAuth.ts) — with
+        // no key loaded every viewer is `standalone` (a present header already 403'd above) and
+        // keyLoaded is false, exactly what the TS server reports on a machine without the key.
+        let mut r = json_response(StatusCode::OK, r#"{"mode":"standalone","role":null,"keyLoaded":false}"#.to_owned());
+        r.headers_mut().insert("Vary", hyper::header::HeaderValue::from_static("X-Agentlens-Viewer"));
+        r
+    } else if method == Method::GET && path == "/api/hook-config" {
+        let body = {
+            let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+            let mut m = Map::new();
+            m.insert("config".into(), st.hook_runtime.to_value());
+            m.insert("file".into(), crate::server_stats::hook_config_file(&st.data_dir).to_string_lossy().into_owned().into());
+            Value::Object(m).to_string()
+        };
+        json_response(StatusCode::OK, body)
+    } else if method == Method::POST && path == "/api/hook-config" {
+        // server.ts keeps chunks only while the total is under 8KB, then parses what it kept — an
+        // oversized patch is a parse error (400), never a silent apply of half of it.
+        let buf = read_body_keep_under(req.into_body(), 8192).await?;
+        let applied: Result<Value, String> = (|| {
+            let patch = serde_json::from_slice::<Value>(&buf).map_err(|e| e.to_string())?;
+            let patch = patch.as_object().cloned().ok_or_else(|| "patch must be a JSON object".to_owned())?;
+            let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+            let next = crate::server_stats::save_hook_runtime_config(&st.data_dir, st.hook_runtime, &patch)?;
+            st.hook_runtime = next;
+            println!(
+                "alcore: hook config updated: gate={} capture={} advisor={}",
+                if next.gate_enabled { next.gate_mode } else { "off" },
+                next.capture_enabled,
+                next.advisor_enabled
+            );
+            let mut m = Map::new();
+            m.insert("config".into(), next.to_value());
+            m.insert("applied".into(), Value::Bool(true));
+            Ok(Value::Object(m))
+        })();
+        match applied {
+            Ok(v) => json_response(StatusCode::OK, v.to_string()),
+            Err(e) => json_response(StatusCode::BAD_REQUEST, error_json(&e)),
+        }
+    } else if method == Method::POST && path == "/api/clear" {
+        // 200 with NO Content-Type and an empty body; the full re-scan runs on the sweeper
+        // thread after the clear, so the client sees the cleared state first.
+        {
+            let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+            st.clear_all();
+        }
+        push_update(&state, &hub, crate::now_ms() as f64);
+        Response::new(boxed_full(Bytes::new()))
+    } else if method == Method::POST && path == "/action" {
+        // readBodyCapped(256KB): overflow destroys the socket (no response); a malformed body is
+        // logged and still answered 200; only `{type:"clearAll"}` does anything.
+        let Some(buf) = read_body_capped(req.into_body(), 256 * 1024).await? else {
+            return Err("/action body over 256KB cap — connection aborted".to_owned());
+        };
+        match serde_json::from_slice::<Value>(&buf) {
+            Ok(v) if v.get("type").and_then(Value::as_str) == Some("clearAll") => {
+                {
+                    let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                    st.clear_spans();
+                }
+                push_update(&state, &hub, crate::now_ms() as f64);
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!("alcore: malformed /action body: {e}"),
+        }
+        Response::new(boxed_full(Bytes::new()))
+    } else if method == Method::GET && path == "/api/debug/log-scan-stats" {
+        let body = {
+            let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+            let s = st.log_scan;
+            // NOT PORTED: the derived caches (summary/stripped/sidebar/analytics memoization) and
+            // the scratch-listing indexer — their idle stats, all zero.
+            serde_json::json!({
+                "incrementalReads": s.incremental_reads,
+                "fullReads": s.full_reads,
+                "filesStatted": s.files_statted,
+                "dataVersion": st.data_version,
+                "derivedCaches": {
+                    "summary": { "hits": 0, "misses": 0 },
+                    "stripped": { "hits": 0, "misses": 0 },
+                    "sidebar": { "hits": 0, "misses": 0 },
+                    "analytics": { "hits": 0, "misses": 0 },
+                },
+                "scratchListing": { "readdirs": 0, "hits": 0, "cached": 0 },
+            })
+            .to_string()
         };
         json_response(StatusCode::OK, body)
     } else {

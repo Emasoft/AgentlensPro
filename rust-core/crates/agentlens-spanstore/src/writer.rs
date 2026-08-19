@@ -340,6 +340,26 @@ impl SpanStoreWriter {
         self.pending_count
     }
 
+    /// TS `clear()` — the user's "clear all" (POST /api/clear, /action clearAll): drop the
+    /// buffered appends and unlink every segment (plain or gz) and the index; nothing else in
+    /// the dir is touched. Destructive BY CONTRACT — it is the one place the store forgets.
+    pub fn clear(&mut self) {
+        self.pending.clear();
+        self.pending_count = 0;
+        self.dropped_on_failure = 0;
+        if let Ok(rd) = fs::read_dir(&self.dir) {
+            for entry in rd.flatten() {
+                let name = entry.file_name();
+                let Some(name) = name.to_str() else { continue };
+                if segment_day_ms(name).is_none() && name != INDEX_FILE {
+                    continue;
+                }
+                let _ = fs::remove_file(entry.path()); // raced — ignore, as in TS
+            }
+        }
+        self.index = SegmentIndex { version: 1, segments: BTreeMap::new() };
+    }
+
     /// Buffer one span for its daily segment. O(record) — disk is touched only by flush().
     pub fn append(&mut self, span: &Value, now_ms: i64) {
         let Some(obj) = span.as_object() else { return };

@@ -234,6 +234,13 @@ pub struct LogTailer {
 }
 
 impl LogTailer {
+    /// LogReader.clearFileState — every offset and accumulator forgotten; the next sweep is
+    /// the parallel cold path from byte 0.
+    pub fn clear(&mut self) {
+        self.file_state.clear();
+        self.accums.clear();
+    }
+
     fn lru_put(&mut self, path: PathBuf, accum: Accum) {
         self.accums.shift_remove(&path);
         self.accums.insert(path, accum);
@@ -680,6 +687,39 @@ enum Msg {
     /// An event with NO path (the platform coalesced it away): the next sweep is promoted to a
     /// full one — guessing would silently drop a session's new lines.
     Unnamed,
+    /// POST /api/clear: forget every tail offset + accumulator, then a FULL sweep from byte 0.
+    Clear,
+}
+
+/// LogReader.getLogScanStats — cumulative since boot; `/api/debug/log-scan-stats`. `files_statted`
+/// is the metric the watcher slice is judged on: a full sweep stats every log file on the
+/// machine, a targeted one only the paths the watcher named — a steady climb by thousands per
+/// sweep means the incremental path regressed to a full sweep.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LogScanStats {
+    pub incremental_reads: u64,
+    pub full_reads: u64,
+    pub files_statted: u64,
+}
+
+impl LogScanStats {
+    fn add(&mut self, s: &SweepStats) {
+        self.incremental_reads += s.incremental_reads;
+        self.full_reads += s.full_reads;
+        self.files_statted += s.files as u64;
+    }
+}
+
+/// The UI's handle on the sweeper thread (CoreState.sweeper).
+#[derive(Clone)]
+pub struct SweeperControl {
+    tx: std::sync::mpsc::Sender<Msg>,
+}
+
+impl SweeperControl {
+    pub fn clear_and_rescan(&self) {
+        let _ = self.tx.send(Msg::Clear);
+    }
 }
 
 /// A handle to stop the sweeper: `stop()` wakes the thread, which flushes the durable state and
@@ -778,12 +818,17 @@ pub fn start_sweeper(
             };
             // Attach BEFORE the boot sweep: a write landing during the sweep is then named by an
             // event instead of waiting for the backstop (its stat gate makes a double-visit free).
-            let (_watcher, watch_attached, watch_failed) = attach_watchers(&env, tx);
+            let (_watcher, watch_attached, watch_failed) = attach_watchers(&env, tx.clone());
             let (scanned, sweep) = tailer.sweep(&env, crate::now_ms());
             if !scanned.is_empty() {
                 durable.mark_dirty();
             }
-            state.lock().expect("core state").ingest_scanned(scanned);
+            {
+                let mut st = state.lock().expect("core state");
+                st.log_scan.add(&sweep);
+                st.ingest_scanned(scanned);
+                st.sweeper = Some(SweeperControl { tx });
+            }
             let _ = boot_tx.send(Ok(BootReport {
                 restored_cards,
                 offsets_imported,
@@ -808,6 +853,10 @@ pub fn start_sweeper(
                     }
                     Ok(Msg::Changed(p)) => pending.extend(p),
                     Ok(Msg::Unnamed) => needs_full = true,
+                    Ok(Msg::Clear) => {
+                        tailer.clear();
+                        needs_full = true;
+                    }
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => needs_full = true,
                 }
                 // Debounce: keep draining until the burst has been quiet for WATCH_DEBOUNCE.
@@ -823,11 +872,16 @@ pub fn start_sweeper(
                                 needs_full = true;
                                 break;
                             }
+                            Ok(Msg::Clear) => {
+                                tailer.clear();
+                                needs_full = true;
+                                break;
+                            }
                             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
                         }
                     }
                 }
-                let (scanned, _) = if needs_full {
+                let (scanned, sweep) = if needs_full {
                     // A full sweep subsumes every pending hint and re-arms the backstop.
                     pending.clear();
                     needs_full = false;
@@ -837,9 +891,13 @@ pub fn start_sweeper(
                     let paths = std::mem::take(&mut pending);
                     tailer.sweep_paths(&env, &paths, crate::now_ms())
                 };
-                if !scanned.is_empty() {
-                    durable.mark_dirty();
-                    state.lock().expect("core state").ingest_scanned(scanned);
+                {
+                    let mut st = state.lock().expect("core state");
+                    st.log_scan.add(&sweep);
+                    if !scanned.is_empty() {
+                        durable.mark_dirty();
+                        st.ingest_scanned(scanned);
+                    }
                 }
                 durable.tick(&tailer, &state, false);
             }

@@ -389,6 +389,21 @@ fn watcher_advances_a_card_on_growth_without_waiting_for_the_backstop() {
     }
     assert_eq!(turns, turns0 + 1, "the watcher + targeted sweep advanced the card");
     assert!(state.lock().unwrap().data_version > version0);
+    let statted_before = state.lock().unwrap().log_scan.files_statted;
+
+    // POST /api/clear's core: the cards go NOW, the sweeper forgets every offset and re-reads
+    // every file from 0 (a full sweep, all 5 fixture files statted again), and the map refills.
+    state.lock().unwrap().clear_all();
+    assert!(state.lock().unwrap().log_sessions.is_empty());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline && state.lock().unwrap().log_sessions.get(sid).is_none() {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    {
+        let st = state.lock().unwrap();
+        assert_eq!(st.log_sessions[sid]["turns"], turns0 + 1, "re-read from byte 0 sees the grown file");
+        assert_eq!(st.log_scan.files_statted, statted_before + 5, "the post-clear sweep was FULL");
+    }
 
     // A graceful stop flushes the durable state (offsets for the file that grew).
     handle.stop();

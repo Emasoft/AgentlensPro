@@ -96,6 +96,13 @@ pub struct CoreState {
     pub ports: server_stats::Ports,
     /// server.ts persistStats — every byte this process writes, counted where it is written.
     pub persist: server_stats::PersistStats,
+    /// server.ts `hookRuntime` — loaded at boot, replaced by POST /api/hook-config.
+    pub hook_runtime: server_stats::HookRuntime,
+    /// LogReader.getLogScanStats — cumulative reader counters, added after every sweep.
+    pub log_scan: log_reader::LogScanStats,
+    /// The sweeper's control channel (set by `start_sweeper`): /api/clear wipes the tail state
+    /// and requests the full re-scan through it.
+    pub sweeper: Option<log_reader::SweeperControl>,
 }
 
 impl CoreState {
@@ -182,6 +189,27 @@ impl CoreState {
             started_at_ms: now,
             ports: server_stats::Ports::default(),
             persist: server_stats::PersistStats::default(),
+            hook_runtime: server_stats::hook_runtime_config(data_dir),
+            log_scan: log_reader::LogScanStats::default(),
+            sweeper: None,
+        }
+    }
+
+    /// `/action {type:"clearAll"}` — the spans go (window + the whole on-disk store), the log
+    /// cards stay. Bumps data_version so the next push carries the cleared state.
+    pub fn clear_spans(&mut self) {
+        self.window.spans.clear();
+        self.writer.clear();
+        self.data_version += 1;
+    }
+
+    /// `POST /api/clear` — spans AND log cards AND the tail offsets go; the sweeper then re-reads
+    /// every file from 0 (a targeted scan would only see the paths the watcher happened to name).
+    pub fn clear_all(&mut self) {
+        self.clear_spans();
+        self.log_sessions.clear();
+        if let Some(s) = &self.sweeper {
+            s.clear_and_rescan();
         }
     }
 

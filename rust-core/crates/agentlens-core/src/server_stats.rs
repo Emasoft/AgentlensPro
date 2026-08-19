@@ -63,32 +63,93 @@ pub fn package_version() -> &'static str {
 
 /// src/hookRuntimeConfig.ts — `<data-dir>/hook-config.json`, precedence for gateMode: file >
 /// AGENTLENS_GATE_MODE env > 'enforce'; booleans file > default true. Absent/unparseable = defaults.
+/// Held on CoreState once loaded (the TS `hookRuntime` let): a POST /api/hook-config replaces it;
+/// an external edit of the file is NOT picked up until restart, as in TS.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HookRuntime {
     pub capture_enabled: bool,
     pub gate_enabled: bool,
     pub gate_mode: &'static str,
     pub advisor_enabled: bool,
+    pub cache_guard_enabled: bool,
 }
 
-pub fn hook_runtime_config(data_dir: &Path) -> HookRuntime {
-    let o = std::fs::read_to_string(data_dir.join("hook-config.json"))
-        .ok()
-        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-        .and_then(|v| v.as_object().cloned())
-        .unwrap_or_default();
+impl HookRuntime {
+    /// The wire object, in the TS `coerce` key order.
+    pub fn to_value(self) -> Value {
+        json!({
+            "captureEnabled": self.capture_enabled,
+            "gateEnabled": self.gate_enabled,
+            "gateMode": self.gate_mode,
+            "advisorEnabled": self.advisor_enabled,
+            "cacheGuardEnabled": self.cache_guard_enabled,
+        })
+    }
+}
+
+/// coerce(raw, envMode): booleans keep their default on a non-boolean; gateMode file > env >
+/// 'enforce'. `env_mode` None = ignore the env (the save path).
+fn coerce_hook_runtime(o: &Map<String, Value>, env_mode: Option<&str>) -> HookRuntime {
     let b = |k: &str| o.get(k).and_then(Value::as_bool).unwrap_or(true);
     let gate_mode = match o.get("gateMode").and_then(Value::as_str) {
         Some("warn") => "warn",
         Some("enforce") => "enforce",
         _ => {
-            if std::env::var("AGENTLENS_GATE_MODE").ok().as_deref() == Some("warn") {
+            if env_mode == Some("warn") {
                 "warn"
             } else {
                 "enforce"
             }
         }
     };
-    HookRuntime { capture_enabled: b("captureEnabled"), gate_enabled: b("gateEnabled"), gate_mode, advisor_enabled: b("advisorEnabled") }
+    HookRuntime {
+        capture_enabled: b("captureEnabled"),
+        gate_enabled: b("gateEnabled"),
+        gate_mode,
+        advisor_enabled: b("advisorEnabled"),
+        cache_guard_enabled: b("cacheGuardEnabled"),
+    }
+}
+
+pub fn hook_config_file(data_dir: &Path) -> std::path::PathBuf {
+    data_dir.join("hook-config.json")
+}
+
+/// loadHookRuntimeConfig — absent or unparseable: defaults (+ the env), never a crash.
+pub fn hook_runtime_config(data_dir: &Path) -> HookRuntime {
+    let o = std::fs::read_to_string(hook_config_file(data_dir))
+        .ok()
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default();
+    let env = std::env::var("AGENTLENS_GATE_MODE").ok();
+    coerce_hook_runtime(&o, env.as_deref())
+}
+
+/// saveHookRuntimeConfig — merge a partial update over the current config, persist atomically
+/// (tmp + rename, 2-space JSON + newline), return the applied config. Unknown keys are ignored
+/// (a typo must not brick the hooks); an invalid value falls back to the CURRENT one — coerce
+/// would turn a junk gateMode into 'enforce', so that case keeps the current mode explicitly.
+pub fn save_hook_runtime_config(data_dir: &Path, current: HookRuntime, patch: &Map<String, Value>) -> Result<HookRuntime, String> {
+    let mut merged_obj = current.to_value().as_object().cloned().unwrap_or_default();
+    for (k, v) in patch {
+        merged_obj.insert(k.clone(), v.clone());
+    }
+    let mut merged = coerce_hook_runtime(&merged_obj, None);
+    if let Some(gm) = patch.get("gateMode") {
+        if gm.as_str() != Some("warn") && gm.as_str() != Some("enforce") {
+            merged.gate_mode = current.gate_mode;
+        }
+    }
+    let file = hook_config_file(data_dir);
+    if let Some(parent) = file.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let tmp = file.with_file_name(format!("hook-config.json.tmp-{}", std::process::id()));
+    let text = format!("{}\n", serde_json::to_string_pretty(&merged.to_value()).map_err(|e| e.to_string())?);
+    std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &file).map_err(|e| e.to_string())?;
+    Ok(merged)
 }
 
 /// src/ndjsonBuckets.ts bucketsDiskUsage — `YYYY-MM-DD.ndjsonl` daily buckets only
@@ -235,7 +296,7 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
         .unwrap_or(0);
     let offsets_bytes_on_disk = crate::delta_log::DeltaLog::new(data_dir, "log-offsets").disk_bytes();
     let cards_bytes_on_disk = crate::delta_log::DeltaLog::new(data_dir, "log-sessions").disk_bytes();
-    let hook = hook_runtime_config(data_dir);
+    let hook = st.hook_runtime;
     // statusline retentionDays: src/statuslineStore.ts retentionDays() — env, else 90.
     let statusline_retention_days = num(
         std::env::var("AGENTLENS_STATUSLINE_RETENTION_DAYS")
