@@ -256,11 +256,17 @@ release-via: publish
   parity with a PINNED Date.now; workspace 48/48. THE WHOLE P4d PORT CHAIN IS NOW IN RUST:**
   helpers → buckets → retention → copilot/claude/codex builders → loop detector →
   summarizeSpans → SessionStore.
-- **NEXT ACTION (one step): the P4d end-to-end harness** — an `alsummarize` bin (read spans
-  NDJSON/JSON → summarize_spans → JSON out) plus a TS cross-engine test that replays a REAL
-  captured span window through TS summarizeSpans and deepStrictEqual's the Rust bin's output
-  (the same real-corpus pattern P2 used). After that: wire the summarizer into alcore's
-  /api/summary behind the frozen wire contract (P4e).
+- **P4d.8 DONE (commit 6ae68b2) — P4d COMPLETE, end-to-end proven on REAL data.** `alsummarize`
+  bin + src/test/rustSummarize.test.ts (fixture + a 20,000-span tail of the live store,
+  deepStrictEqual both engines; 🐌-gated). **The real-window replay immediately falsified the
+  P4d.1 byte-cap shortcut** — js_slice now counts UTF-16 code units exactly (every long
+  userRequest with an em-dash had truncated short); LESSON: a fixture-blessed "accepted
+  divergence" is not accepted until a real-corpus replay agrees. Gates: cargo 48/48, both e2e
+  tests green, tsc + eslint clean. The full-suite bodyStore dedup-ratio failure is the
+  pre-existing data-drift flake, carded as [[TRDD-R2VF2I53]].
+- **NEXT ACTION (one step): P4e — wire the summarizer into alcore's /api/summary** behind the
+  frozen wire contract (report §2): SessionStore fed by the OTLP listener's spans, GET
+  /api/summary returning the summarizeSpans shape, socket-level tests against the freeze.
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
