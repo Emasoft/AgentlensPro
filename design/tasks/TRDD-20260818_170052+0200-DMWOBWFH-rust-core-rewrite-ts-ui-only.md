@@ -251,9 +251,16 @@ release-via: publish
   empty literal AND a cross-source fixture; workspace 47/47.** Deviation on record: the synth
   passes' never-Equal string comparator would be a non-total order (Rust sort_by may panic) —
   str::cmp used; only equal-startTime tie order could differ.
-  Remaining: sessionStore window (187 — window trim, coarse counters, injectSpanAttribute = the
-  gen_ai target). End-to-end harness after that:
-  replay a REAL span window through TS summarizeSpans and a Rust `alsummarize` bin.
+  **P4d.7 DONE (commit 03089ee): session_store.rs ports the 5-min window + coarse summary +
+  injectSpanAttribute (the gen_ai attach target), clock as a `now_ms` parameter, TS-oracle
+  parity with a PINNED Date.now; workspace 48/48. THE WHOLE P4d PORT CHAIN IS NOW IN RUST:**
+  helpers → buckets → retention → copilot/claude/codex builders → loop detector →
+  summarizeSpans → SessionStore.
+- **NEXT ACTION (one step): the P4d end-to-end harness** — an `alsummarize` bin (read spans
+  NDJSON/JSON → summarize_spans → JSON out) plus a TS cross-engine test that replays a REAL
+  captured span window through TS summarizeSpans and deepStrictEqual's the Rust bin's output
+  (the same real-corpus pattern P2 used). After that: wire the summarizer into alcore's
+  /api/summary behind the frozen wire contract (P4e).
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
