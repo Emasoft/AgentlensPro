@@ -475,6 +475,66 @@ pub fn fmt_js_num(n: f64) -> String {
     }
 }
 
+/// `Number.prototype.toLocaleString()` under the en-US default — thousands grouping on
+/// integral counts (what Node on this machine produces; a different ICU default fails the
+/// pinning fixtures loudly). Shared by the loop detector and the burn monitor's alert text.
+pub fn to_locale_en(n: f64) -> String {
+    let neg = n < 0.0;
+    let mut i = n.abs().trunc() as u64;
+    let mut parts: Vec<String> = Vec::new();
+    loop {
+        if i < 1000 {
+            parts.push(i.to_string());
+            break;
+        }
+        parts.push(format!("{:03}", i % 1000));
+        i /= 1000;
+    }
+    parts.reverse();
+    format!("{}{}", if neg { "-" } else { "" }, parts.join(","))
+}
+
+/// `+x.toFixed(f)` — JS toFixed read back as a number. The spec rounds on the EXACT decimal
+/// expansion of the double (nearest n/10^f, ties to the LARGER n), which neither `(x*p).round()`
+/// nor Rust's `{:.f}` reproduces: the float product can land on the wrong side of the half
+/// (1.86805.toFixed(4) is "1.8680" — the double is just under the tie — while ×10⁴ rounds up),
+/// and Rust's formatter breaks exact ties to EVEN where JS goes AWAY (0.125 → "0.12" vs "0.13").
+/// So decompose the double as m×2^e and round m·10^f / 2^-e in integer arithmetic — exact.
+pub fn js_to_fixed_num(x: f64, digits: u32) -> f64 {
+    if !x.is_finite() {
+        return x;
+    }
+    let neg = x.is_sign_negative();
+    let ax = x.abs();
+    let bits = ax.to_bits();
+    let exp_field = ((bits >> 52) & 0x7ff) as i64;
+    let frac = bits & ((1u64 << 52) - 1);
+    let (m, e): (u64, i64) = if exp_field == 0 { (frac, -1074) } else { (frac | (1u64 << 52), exp_field - 1075) };
+    if e >= 0 {
+        // An integer-valued double: every fractional digit is 0, toFixed returns x itself.
+        return x;
+    }
+    let pow10 = 10u128.pow(digits);
+    let k = (-e) as u32;
+    let q: u128 = if k > 100 {
+        // x < 2^53 / 2^100 ≈ 7e-15 — rounds to 0 at every precision this codebase uses (≤6).
+        0
+    } else {
+        let n = (m as u128) * pow10; // ≤ 2^53 · 10^6 < 2^73 — exact in u128
+        let q = n >> k;
+        let r = n - (q << k);
+        if r >= (1u128 << (k - 1)) { q + 1 } else { q }
+    };
+    let v = q as f64 / pow10 as f64;
+    if neg { -v } else { v }
+}
+
+/// `Math.round` — half toward +∞ (Rust's `round` is half away from zero, which differs on
+/// negative halves: Math.round(-2.5) = -2).
+pub fn js_math_round(x: f64) -> f64 {
+    (x + 0.5).floor()
+}
+
 /// commonPathPrefix — including the trailing-file pop (a last segment containing a dot).
 pub fn common_path_prefix(paths: &[String]) -> String {
     let abs: Vec<Vec<&str>> = paths

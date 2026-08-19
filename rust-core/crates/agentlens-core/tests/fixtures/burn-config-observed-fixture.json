@@ -1,0 +1,10 @@
+{
+  "observed": {
+    "acct-1111": {
+      "window5hTokens": 400000,
+      "window7dTokens": 5000000,
+      "window5hCostUsd": 0.5,
+      "observedAt": "2026-08-10T12:00:00.000Z"
+    }
+  }
+}

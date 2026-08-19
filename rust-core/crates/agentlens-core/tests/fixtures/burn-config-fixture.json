@@ -1,0 +1,11 @@
+{
+  "window7dTokens": 900000000,
+  "window5hCostUsd": 40,
+  "notify": true,
+  "thresholds": { "costPerHour": 12, "cacheCreateSingleCall": 150000 },
+  "observed": {
+    "acct-1111": { "window5hTokens": 111111, "observedAt": "2026-08-01T00:00:00.000Z" },
+    "junk-all-null": { "window5hTokens": -5, "window7dTokens": 0, "observedAt": "2026-08-02T00:00:00.000Z" },
+    "": { "window5hTokens": 999 }
+  }
+}

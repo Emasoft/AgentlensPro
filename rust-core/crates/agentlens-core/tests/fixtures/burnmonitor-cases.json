@@ -1,0 +1,106 @@
+{
+ "now": 1755600000000,
+ "ttlCtx": { "auth": "subscription", "force5m": false, "enable1h": false },
+ "sessions": [
+  {
+   "sessionId": "hot-api", "source": "claude_code", "model": "claude-opus-5",
+   "workspace": "/Users/x/projA", "accountId": "acct-1111",
+   "userRequest": "Fix the flaky test suite in the loader and make it deterministic please",
+   "startTime": "2025-08-19T10:30:00.000Z",
+   "inputTokens": 1000, "outputTokens": 200, "cacheReadTokens": 500000, "cacheCreateTokens": 60000,
+   "cacheHitRate": 0.9, "totalLlmCalls": 4, "peakContextPerTurn": 180000, "tokensSource": "log",
+   "timeline": [
+    { "type": "llm", "timestamp": "2025-08-19T10:35:00.000Z", "inputTokens": 300, "outputTokens": 50 },
+    { "type": "api_request", "timestamp": "2025-08-19T10:36:00.000Z", "spanId": "s1", "costUsd": 0.5,
+      "inputTokens": 300, "outputTokens": 50, "cacheReadTokens": 100000, "cacheCreateTokens": 250000,
+      "agentName": "explorer" },
+    { "type": "api_request", "timestamp": "2025-08-19T10:39:00.000Z", "spanId": "s2", "costUsd": 0.4,
+      "inputTokens": 200, "outputTokens": 100, "cacheReadTokens": 200000, "cacheCreateTokens": 1000,
+      "querySource": "compact" },
+    { "type": "api_request", "timestamp": "2025-08-19T10:39:30.000Z", "spanId": "s3", "costUsd": 0.2,
+      "inputTokens": 100, "outputTokens": 20, "cacheReadTokens": 150000, "cacheCreateTokens": 500 }
+   ]
+  },
+  {
+   "sessionId": "sl-only", "source": "claude_code", "model": "claude-opus-5",
+   "workspace": "/Users/x/projB", "accountId": "acct-2222",
+   "userRequest": "[continuation]",
+   "startTime": "2025-08-19T10:20:00.000Z",
+   "inputTokens": 50, "outputTokens": 60, "cacheReadTokens": 70000, "cacheCreateTokens": 800,
+   "cacheHitRate": 0.8, "totalLlmCalls": 2,
+   "statusline": { "samples": 3, "totalCostUsd": 1.25, "lastTs": 1755599910,
+     "lastTotalInputTokens": 120000, "peakContextTokens": 150000, "contextWindowSize": 200000,
+     "usedPercentage": 60, "lastInputTokens": 5, "lastOutputTokens": 6, "lastCacheReadTokens": 7,
+     "lastCacheCreateTokens": 8 },
+   "timeline": []
+  },
+  {
+   "sessionId": "old-1", "source": "claude_code", "model": "claude-opus-5",
+   "workspace": "/Users/x/projA",
+   "startTime": "2025-08-18T09:00:00.000Z",
+   "inputTokens": 400, "outputTokens": 80, "cacheReadTokens": 90000, "cacheCreateTokens": 5000,
+   "cacheHitRate": 0.7, "totalLlmCalls": 3,
+   "statusline": { "samples": 2, "totalCostUsd": 2 },
+   "timeline": [ { "type": "llm", "timestamp": "2025-08-18T09:05:00.000Z" } ]
+  },
+  {
+   "sessionId": "agent-sub1", "source": "claude_code", "model": "claude-opus-5",
+   "workspace": "/Users/x/projA", "parentSessionId": "hot-api",
+   "startTime": "2025-08-19T10:28:00.000Z",
+   "inputTokens": 110, "outputTokens": 22, "cacheReadTokens": 300, "cacheCreateTokens": 170000,
+   "cacheHitRate": 0.1, "totalLlmCalls": 2,
+   "timeline": [
+    { "type": "api_request", "timestamp": "2025-08-19T10:28:00.000Z", "spanId": "a1", "costUsd": 0.1,
+      "inputTokens": 50, "outputTokens": 10, "cacheReadTokens": 100, "cacheCreateTokens": 80000 },
+    { "type": "api_request", "timestamp": "2025-08-19T10:38:00.000Z", "spanId": "a2", "costUsd": 0.15,
+      "inputTokens": 60, "outputTokens": 12, "cacheReadTokens": 200, "cacheCreateTokens": 90000 }
+   ]
+  }
+ ],
+ "statusline": [
+  { "ts": 1755599910, "sessionId": "sl-only", "workspace": "/Users/x/projB", "deltaCostUsd": 0.33,
+    "deltaTokens": 30430, "deltaInput": 10, "deltaOutput": 20, "deltaCacheRead": 30000, "deltaCacheCreate": 400,
+    "intervalMs": 45000 },
+  { "ts": 1755599800, "sessionId": "sl-only", "workspace": "/Users/x/projB", "deltaCostUsd": 0.5,
+    "deltaTokens": 12345, "intervalMs": 60000 },
+  { "ts": 1755599910, "sessionId": "hot-api", "workspace": "/Users/x/projA", "deltaCostUsd": 9.99,
+    "deltaTokens": 999999 },
+  { "ts": 1755599900000, "sessionId": "ghost-1", "deltaCostUsd": 0, "deltaTokens": 100,
+    "deltaInput": 40, "deltaOutput": 60 },
+  { "ts": 1755599990, "sessionId": "zero-1", "deltaCostUsd": 0, "deltaTokens": 0 }
+ ],
+ "statusEnv": {
+  "AGENTLENS_WINDOW_5H_TOKENS": "2000000",
+  "AGENTLENS_BURN_TOKENS_PER_MIN": "1000",
+  "AGENTLENS_BURN_COST_PER_HOUR": "1",
+  "AGENTLENS_BURN_WINDOW_PCT": "40",
+  "AGENTLENS_BURN_CACHE_CREATE": "200000"
+ },
+ "observedEnv": { "AGENTLENS_BURN_CONFIG": "@fixture:burn-config-observed-fixture.json" },
+ "envCases": [
+  { "name": "env caps + env thresholds", "env": {
+    "AGENTLENS_WINDOW_5H_TOKENS": "2000000", "AGENTLENS_BURN_TOKENS_PER_MIN": "1000",
+    "AGENTLENS_BURN_COST_PER_HOUR": "1", "AGENTLENS_BURN_WINDOW_PCT": "40",
+    "AGENTLENS_BURN_CACHE_CREATE": "200000", "AGENTLENS_NOTIFY": "1" } },
+  { "name": "file caps + partial thresholds + observed junk filtering", "env": {
+    "AGENTLENS_BURN_CONFIG": "@fixture:burn-config-fixture.json" } },
+  { "name": "missing file and no env — defaults, source none", "env": {
+    "AGENTLENS_BURN_CONFIG": "@fixture:burn-config-does-not-exist.json" } },
+  { "name": "observed-only file — source observed", "env": {
+    "AGENTLENS_BURN_CONFIG": "@fixture:burn-config-observed-fixture.json" } },
+  { "name": "env cap outranks file cap", "env": {
+    "AGENTLENS_WINDOW_7D_TOKENS": "77", "AGENTLENS_BURN_CONFIG": "@fixture:burn-config-fixture.json" } },
+  { "name": "blank and junk env values fall through", "env": {
+    "AGENTLENS_WINDOW_5H_TOKENS": "  ", "AGENTLENS_WINDOW_7D_TOKENS": "-4",
+    "AGENTLENS_BURN_TOKENS_PER_MIN": "abc",
+    "AGENTLENS_BURN_CONFIG": "@fixture:burn-config-does-not-exist.json" } }
+ ],
+ "selectors": [
+  { "sessionId": "hot-api" },
+  { "workspace": "/Users/x/projB" },
+  {},
+  { "sessionId": "missing" },
+  { "workspace": "/nope" }
+ ],
+ "prematureEnd": { "accountUuid": "acct-1111", "windowStartMs": 1755589200000, "windowEndMs": 1755600000000 }
+}

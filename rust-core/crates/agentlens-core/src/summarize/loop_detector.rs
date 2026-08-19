@@ -267,23 +267,9 @@ fn detect_runaway_steps(session: &Value, signals: &mut Vec<Value>) {
 
 // ── Detector 5: Token runaway ────────────────────────────────────────────────
 
-/// `Number.prototype.toLocaleString()` under the en-US default — thousands grouping on the
-/// integral token counts this detector formats.
-fn to_locale_en(n: f64) -> String {
-    let neg = n < 0.0;
-    let mut i = n.abs().trunc() as u64;
-    let mut parts: Vec<String> = Vec::new();
-    loop {
-        if i < 1000 {
-            parts.push(i.to_string());
-            break;
-        }
-        parts.push(format!("{:03}", i % 1000));
-        i /= 1000;
-    }
-    parts.reverse();
-    format!("{}{}", if neg { "-" } else { "" }, parts.join(","))
-}
+// `toLocaleString()` (en-US grouping) moved to helpers::to_locale_en (P4r.2 — the burn monitor
+// formats alert details with it too; one source, pinned by BOTH fixtures).
+use crate::summarize::helpers::to_locale_en;
 
 fn detect_token_runaway(session: &Value, signals: &mut Vec<Value>) {
     let llm_calls: Vec<&Value> = timeline(session)
