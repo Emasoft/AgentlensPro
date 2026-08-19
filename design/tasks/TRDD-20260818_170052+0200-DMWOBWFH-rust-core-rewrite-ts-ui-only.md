@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T00:20:00+0200
+updated: 2026-08-20T00:55:00+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -431,17 +431,25 @@ release-via: publish
   call-context drill). 81/81.
 - **P5h DONE (commit 4371920) — session_store.rs deleted** (+ its parity test and 3 fixtures;
   all recoverable at 03089ee). Zero references remain; 80/80.
-- **NEXT ACTION (one step): the store OVERLAY — segmentedSpanStore.applyOverlay +
-  injectSpanAttribute** (the standalone gen_ai injection path): read src/segmentedSpanStore.ts
-  applyOverlay/overlay Map + server.ts's injectSpanAttribute caller (the gen_ai buffer handoff
-  in process_logs' third argument — the Rust closure is currently `|_,_,_| false`), port the
-  overlay onto SpanStoreWriter (an in-memory spanId → attr patch applied at load_range/flush
-  read time, persisted how the TS persists it — read the TS first), wire the process_logs
-  injection closure to it, TS-oracle fixture: a gen_ai log event against a stored span →
-  identical served span both engines. Then the remaining frozen routes (hook-events ingest rows
-  5–8 — hookEventStore + statuslineStore; burn-risk row 12; agent-gate row 13; bodies rows
-  14–15; prompts/branch-dump rows 17–18; instruction rows 19–21; burn-status row 24;
-  debug/requests row 26).
+- **P4l DONE (commit 529b5c6) — the store's gen_ai read-time OVERLAY.** inject_span_attribute /
+  apply_overlay on SpanStoreWriter (always-true, cap 500, in-memory only, applied at load_range,
+  cleared by clear()); ingest_post's logs closure is real (was `|_,_,_| false`). Verified both
+  arrival orders; the LIVE window copy stays bare in BOTH engines (read-time-only — the property
+  behind TS's /api/debug/span-attr); persisted lines untouched. 81/81.
+- **NEXT ACTION (one step): the hook-events ingest subsystem (freeze rows 6–8) in ONE slice** —
+  the daily-bucket NDJSON store: port src/ndjsonBuckets.ts (append-only daily buckets — the
+  bucketsDiskUsage half already lives in server_stats.rs; add appendToBucket + readBuckets with
+  the calendar-real day gate) and src/hookEventStore.ts (ingestHookEvent at server.ts:1016 —
+  read it first: the statusline routing + captureEnabled drop + the verbatim payload contract),
+  then POST /api/hook-events (row 6: ≤512KB, needs hook_event_name, `{ok:true}` /
+  `{ok:true,routed:"statusline"}` / `{ok:true,dropped:"captureEnabled=false"}`), GET
+  /api/hook-events (row 7: session/ev/since/until/limit → `{count,events:[{ts,ev,session?,
+  payload}]}` newest-first), GET /api/lifecycle-events (row 8 — read
+  src/lifecycleEvents.ts:extractLifecycleEvents first). persistStats hookEventWrites/Bytes and
+  hookEvents.receivedSinceBoot go real. Statusline samples (row 5) stay NOT PORTED (their own
+  store) — route to a `{ok:true}` stub ONLY if the freeze demands the route; otherwise defer
+  whole. Then burn-risk row 12, agent-gate row 13, bodies rows 14–15, prompts/branch-dump rows
+  17–18, instruction rows 19–21, burn-status row 24, debug/requests row 26.
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
