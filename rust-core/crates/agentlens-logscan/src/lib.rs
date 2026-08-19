@@ -32,6 +32,7 @@ use std::rc::Rc;
 
 pub mod codex;
 pub mod copilot;
+pub mod discovery;
 pub mod opencode;
 
 use indexmap::{IndexMap, IndexSet};
