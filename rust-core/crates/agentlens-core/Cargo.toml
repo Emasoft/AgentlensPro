@@ -9,6 +9,7 @@ license.workspace = true
 agentlens-ingest = { path = "../agentlens-ingest" }
 agentlens-spanstore = { path = "../agentlens-spanstore" }
 serde_json = "1"
+regex = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "time", "signal"] }
 hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }

@@ -27,6 +27,8 @@ use serde_json::Value;
 use agentlens_ingest::IngestState;
 use agentlens_spanstore::writer::SpanStoreWriter;
 
+pub mod summarize;
+
 pub const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
 
 /// Port of src/otlpParser.ts::classifyOtlpPayload — the fallback discriminator when the POST

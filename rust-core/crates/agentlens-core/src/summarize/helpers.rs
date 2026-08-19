@@ -1,0 +1,608 @@
+//! Port of src/summarizers/helpers.ts (TRDD-DMWOBWFH P4d) — the shared attribute accessors and
+//! formatting utilities every session builder leans on. Parity is the law here, and the traps
+//! are all JS coercion semantics:
+//!   - `String(doubleValue)` prints integral doubles WITHOUT ".0" (String(2) === "2");
+//!   - `a || b` chains pick the first NON-ZERO/non-empty value, not the first present one;
+//!   - `BigInt(nanos) / 1_000_000n` truncates toward zero, and a non-digit string falls back to
+//!     `parseInt(...)/1e6` (prefix parse);
+//!   - `Date.parse` here only ever sees ISO strings in real spans — the strict ISO parser
+//!     matches the logscan/ingest precedent (exotic Date.parse forms are deliberately out).
+//!
+//! Spans are `serde_json::Value` objects (the same shape the store persists), not a typed
+//! struct: the builders read a handful of fields and the wire keeps whatever else is there.
+
+use serde_json::Value;
+use std::sync::OnceLock;
+
+pub const CLAUDE_WRITE_TOOLS: [&str; 4] = ["Edit", "Write", "MultiEdit", "NotebookEdit"];
+pub const FULL_WRITE_TOOLS: [&str; 2] = ["Write", "create_file"];
+
+fn attrs(span: &Value) -> &[Value] {
+    span.get("attributes").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[])
+}
+
+fn attr_value<'a>(span: &'a Value, key: &str) -> Option<&'a Value> {
+    attrs(span)
+        .iter()
+        .find(|a| a.get("key").and_then(Value::as_str) == Some(key))
+        .and_then(|a| a.get("value"))
+}
+
+/// `String(x)` for the JSON values an attribute can carry — the integral-double case must print
+/// "2", never "2.0", or every stringified numeric attr diverges from the TS wire.
+pub fn js_string(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                i.to_string()
+            } else if let Some(f) = n.as_f64() {
+                if f.fract() == 0.0 && f.is_finite() && f.abs() < 1e21 {
+                    format!("{}", f as i64)
+                } else {
+                    format!("{f}")
+                }
+            } else {
+                n.to_string()
+            }
+        }
+        Value::Bool(b) => b.to_string(),
+        Value::Null => "null".to_owned(),
+        other => other.to_string(),
+    }
+}
+
+/// `Number(x)` for the same values — NaN-producing inputs coerce to 0 at the call sites
+/// (`Number(...) || 0`), so this returns 0.0 where TS would produce NaN.
+pub fn js_number(v: &Value) -> f64 {
+    match v {
+        Value::Number(n) => n.as_f64().unwrap_or(0.0),
+        Value::String(s) => {
+            let t = s.trim();
+            if t.is_empty() {
+                0.0 // Number('') === 0
+            } else {
+                t.parse::<f64>().unwrap_or(0.0)
+            }
+        }
+        Value::Bool(true) => 1.0,
+        _ => 0.0,
+    }
+}
+
+/// getAttrStr: String(stringValue ?? intValue ?? doubleValue ?? '').
+pub fn get_attr_str(span: &Value, key: &str) -> String {
+    let Some(v) = attr_value(span, key) else { return String::new() };
+    for k in ["stringValue", "intValue", "doubleValue"] {
+        if let Some(x) = v.get(k) {
+            if !x.is_null() {
+                return js_string(x);
+            }
+        }
+    }
+    String::new()
+}
+
+/// getAttrInt: Number(intValue ?? doubleValue ?? stringValue ?? 0) || 0. Returns f64 because
+/// Number("1.5") is 1.5 in TS and the sum flows into the wire as-is.
+pub fn get_attr_num(span: &Value, key: &str) -> f64 {
+    let Some(v) = attr_value(span, key) else { return 0.0 };
+    for k in ["intValue", "doubleValue", "stringValue"] {
+        if let Some(x) = v.get(k) {
+            if !x.is_null() {
+                let n = js_number(x);
+                return if n.is_finite() { n } else { 0.0 };
+            }
+        }
+    }
+    0.0
+}
+
+/// getFirstAttr: first key whose getAttrStr is non-empty.
+pub fn get_first_attr(span: &Value, keys: &[&str]) -> String {
+    for key in keys {
+        let v = get_attr_str(span, key);
+        if !v.is_empty() {
+            return v;
+        }
+    }
+    String::new()
+}
+
+/// gen_ai.system → gen_ai.provider.name rename shim.
+pub fn get_gen_ai_system(span: &Value) -> String {
+    get_first_attr(span, &["gen_ai.system", "gen_ai.provider.name"])
+}
+
+pub fn get_gen_ai_model(span: &Value) -> String {
+    get_first_attr(span, &["gen_ai.request.model", "gen_ai.response.model", "model"])
+}
+
+/// nanoToMs: BigInt(s || '0') / 1_000_000n (truncation toward zero); non-digit input falls back
+/// to parseInt(s)/1e6 (prefix parse), else 0.
+pub fn nano_to_ms(nano: &str) -> f64 {
+    let s = if nano.is_empty() { "0" } else { nano };
+    let (neg, digits) = match s.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, s),
+    };
+    if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
+        if let Ok(n) = digits.parse::<i128>() {
+            let q = n / 1_000_000;
+            return if neg { -(q as f64) } else { q as f64 };
+        }
+    }
+    // parseInt: leading whitespace + optional sign + digit prefix.
+    let t = s.trim_start();
+    let (sign, rest) = match t.as_bytes().first() {
+        Some(b'-') => (-1.0, &t[1..]),
+        Some(b'+') => (1.0, &t[1..]),
+        _ => (1.0, t),
+    };
+    let end = rest.bytes().position(|b| !b.is_ascii_digit()).unwrap_or(rest.len());
+    if end == 0 {
+        return 0.0;
+    }
+    rest[..end].parse::<f64>().map(|n| sign * n / 1e6).unwrap_or(0.0)
+}
+
+/// Strict-ISO Date.parse subset — the only string form real spans carry. Same contract as the
+/// ingest/logscan parsers (which are pinned by their own parity tests).
+pub fn parse_iso_ms(s: &str) -> Option<f64> {
+    let b = s.as_bytes();
+    if b.len() < 10 || b[4] != b'-' || b[7] != b'-' {
+        return None;
+    }
+    let num = |r: std::ops::Range<usize>| -> Option<i64> { s.get(r).and_then(|x| x.parse().ok()) };
+    let (y, mo, d) = (num(0..4)?, num(5..7)?, num(8..10)?);
+    let (mut h, mut mi, mut sec, mut ms) = (0i64, 0i64, 0i64, 0i64);
+    let mut tz_offset_min = 0i64;
+    if b.len() > 10 {
+        if b[10] != b'T' && b[10] != b' ' {
+            return None;
+        }
+        h = num(11..13)?;
+        mi = num(14..16)?;
+        if b.len() >= 19 && b[16] == b':' {
+            sec = num(17..19)?;
+        }
+        let mut i = 19;
+        if b.len() > i && b[i] == b'.' {
+            let start = i + 1;
+            let mut end = start;
+            while end < b.len() && b[end].is_ascii_digit() {
+                end += 1;
+            }
+            let frac = &s[start..end];
+            let scaled = format!("{:0<3}", &frac[..frac.len().min(3)]);
+            ms = scaled.parse().ok()?;
+            i = end;
+        }
+        if b.len() > i {
+            match b[i] {
+                b'Z' | b'z' => {}
+                b'+' | b'-' => {
+                    let sign = if b[i] == b'+' { 1 } else { -1 };
+                    let hh: i64 = s.get(i + 1..i + 3)?.parse().ok()?;
+                    let rest = i + 3 + usize::from(b.get(i + 3) == Some(&b':'));
+                    let mm: i64 = s.get(rest..rest + 2)?.parse().ok()?;
+                    tz_offset_min = sign * (hh * 60 + mm);
+                }
+                _ => return None,
+            }
+        }
+    }
+    let days = days_from_civil(y, mo, d);
+    Some(((days * 86_400 + h * 3600 + mi * 60 + sec - tz_offset_min * 60) * 1000 + ms) as f64)
+}
+
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// timestampToMs: number → itself; all-digit string → nanoToMs; else Date.parse (ISO subset).
+pub fn timestamp_to_ms(value: Option<&Value>) -> f64 {
+    let Some(v) = value else { return 0.0 };
+    match v {
+        Value::Number(n) => n.as_f64().unwrap_or(0.0),
+        Value::String(s) if s.is_empty() => 0.0,
+        Value::String(s) => {
+            if s.bytes().all(|b| b.is_ascii_digit()) && !s.is_empty() {
+                nano_to_ms(s)
+            } else {
+                parse_iso_ms(s).unwrap_or(0.0)
+            }
+        }
+        _ => 0.0,
+    }
+}
+
+fn re(cell: &'static OnceLock<regex::Regex>, pattern: &str) -> &'static regex::Regex {
+    cell.get_or_init(|| regex::Regex::new(pattern).expect("static regex compiles"))
+}
+
+/// extractUserRequest: the <userRequest> wrap, the Codex "## My request:" form, then IDE-tag
+/// stripping, each capped at 5000 chars (char-boundary-safe slicing; TS slices UTF-16 units,
+/// but a 5000-unit prefix of real prompts is ASCII-dominated — divergence only on a multi-byte
+/// char straddling the cap, accepted and documented).
+pub fn extract_user_request(raw: &str) -> String {
+    static USER_REQ: OnceLock<regex::Regex> = OnceLock::new();
+    static CODEX: OnceLock<regex::Regex> = OnceLock::new();
+    static CAVEAT: OnceLock<regex::Regex> = OnceLock::new();
+    static IDE: OnceLock<regex::Regex> = OnceLock::new();
+    let trimmed = raw.trim();
+    let cap = |s: &str| -> String {
+        let mut end = s.len().min(5000);
+        while end < s.len() && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        while !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        s[..end].to_owned()
+    };
+    if trimmed.contains("<userRequest>") {
+        let r = re(&USER_REQ, r"(?s)<userRequest>\s*(.*?)\s*</userRequest>");
+        if let Some(m) = r.captures(trimmed).and_then(|c| c.get(1)) {
+            let t = m.as_str().trim();
+            if !t.is_empty() {
+                return t.to_owned();
+            }
+        }
+        return cap(trimmed);
+    }
+    let r = re(&CODEX, r"(?si)(?:^|\n)##\s+My request(?:\s+for\s+[^\n:]+)?:\s*\n(.*)$");
+    if let Some(m) = r.captures(trimmed).and_then(|c| c.get(1)) {
+        let t = m.as_str().trim();
+        if !t.is_empty() {
+            return cap(t);
+        }
+    }
+    let stripped = re(&CAVEAT, r"(?si)<local-command-caveat>.*?</local-command-caveat>\s*").replace_all(trimmed, "");
+    let stripped = re(&IDE, r"(?si)<ide_[^>]*>.*?</ide_[^>]*>").replace_all(&stripped, "");
+    let stripped = stripped.trim();
+    if !stripped.is_empty() {
+        return cap(stripped);
+    }
+    cap(trimmed)
+}
+
+pub fn is_codex_tool_span_name(name: &str) -> bool {
+    name == "codex.tool_result"
+        || name == "codex.tool"
+        || name == "codex.tool_decision"
+        || name == "codex.tool.call"
+        || name == "exec_command"
+        || name == "apply_patch"
+        || name.contains(".tool")
+}
+
+pub fn is_codex_tool_exec_span(span: &Value) -> bool {
+    if is_codex_tool_span_name(span.get("name").and_then(Value::as_str).unwrap_or("")) {
+        return true;
+    }
+    !get_attr_str(span, "call_id").is_empty() && !get_attr_str(span, "tool_name").is_empty()
+}
+
+pub fn is_codex_llm_span_name(name: &str) -> bool {
+    name == "codex.stream_event"
+        || name == "codex.completion"
+        || name == "codex.response"
+        || name == "codex.sse_event"
+        || name.contains("stream")
+        || name.contains("completion")
+        || name.contains("response")
+}
+
+/// isCodexPromptEventName — single-sourced in TS's codexSessionNormalizer; the Rust single
+/// source is the ingest crate's normalizer. Mirrored here as a name check to avoid a crate
+/// dependency cycle; pinned against the TS list by the parity tests.
+pub fn is_codex_prompt_span_name(name: &str) -> bool {
+    name == "codex.user_prompt" || name == "codex.prompt" || name == "codex.turn" || name == "codex.user_turn"
+}
+
+/// extractTokenCounts — the `||` chains are FIRST-NON-ZERO, and output falls back to the sum of
+/// Codex's split counters only when every standard key is zero.
+pub struct TokenCounts {
+    pub input: f64,
+    pub output: f64,
+    pub cache_read: f64,
+    pub cache_create: f64,
+}
+
+fn first_nonzero(span: &Value, keys: &[&str]) -> f64 {
+    for k in keys {
+        let v = get_attr_num(span, k);
+        if v != 0.0 {
+            return v;
+        }
+    }
+    0.0
+}
+
+pub fn extract_token_counts(span: &Value) -> TokenCounts {
+    let input = first_nonzero(span, &[
+        "gen_ai.usage.input_tokens", "input_tokens", "prompt_tokens", "input_token_count",
+        "codex.turn.token_usage.input_tokens",
+    ]);
+    let cache_read = first_nonzero(span, &[
+        "gen_ai.usage.cache_read.input_tokens", "cache_read_tokens", "cached_token_count",
+        "codex.turn.token_usage.cached_input_tokens",
+    ]);
+    let cache_create = first_nonzero(span, &["gen_ai.usage.cache_creation.input_tokens", "cache_creation_tokens"]);
+    let output_std = first_nonzero(span, &[
+        "gen_ai.usage.output_tokens", "output_tokens", "completion_tokens",
+        "codex.turn.token_usage.output_tokens",
+    ]);
+    let output = if output_std != 0.0 {
+        output_std
+    } else {
+        get_attr_num(span, "output_token_count") + get_attr_num(span, "reasoning_token_count")
+    };
+    TokenCounts { input, output, cache_read, cache_create }
+}
+
+/// normalizeUserRequest — redaction labels mirror the TS strings byte-for-byte.
+pub fn normalize_user_request(raw: &str, length: f64, fallback: &str, redaction_note: Option<&str>) -> String {
+    let is_redacted = raw.is_empty() || raw == "<REDACTED>" || raw == "[REDACTED]";
+    if !is_redacted {
+        return extract_user_request(raw);
+    }
+    if length > 0.0 {
+        return match redaction_note {
+            Some(note) => format!("[{} chars — {note}]", fmt_js_num(length)),
+            None => format!("[~{} chars]", fmt_js_num(length)),
+        };
+    }
+    fallback.to_owned()
+}
+
+/// JS number→string for interpolation (`${n}`): integral prints bare.
+pub fn fmt_js_num(n: f64) -> String {
+    if n.fract() == 0.0 && n.is_finite() && n.abs() < 1e21 {
+        format!("{}", n as i64)
+    } else {
+        format!("{n}")
+    }
+}
+
+/// commonPathPrefix — including the trailing-file pop (a last segment containing a dot).
+pub fn common_path_prefix(paths: &[String]) -> String {
+    let abs: Vec<Vec<&str>> = paths
+        .iter()
+        .filter(|p| p.starts_with('/'))
+        .map(|p| p.split('/').filter(|s| !s.is_empty()).collect())
+        .collect();
+    if abs.is_empty() {
+        return String::new();
+    }
+    let first = &abs[0];
+    let mut common = 0;
+    for i in 0..first.len() {
+        if abs.iter().all(|parts| parts.get(i) == Some(&first[i])) {
+            common = i + 1;
+        } else {
+            break;
+        }
+    }
+    if common == 0 {
+        return String::new();
+    }
+    let mut prefix: Vec<&str> = first[..common].to_vec();
+    if prefix.last().is_some_and(|s| s.contains('.')) {
+        prefix.pop();
+    }
+    if prefix.is_empty() {
+        String::new()
+    } else {
+        format!("/{}", prefix.join("/"))
+    }
+}
+
+/// findProjectRoot — walks up to the first dir holding .git or package.json.
+pub fn find_project_root(start_dir: &str) -> String {
+    if start_dir.is_empty() || !start_dir.starts_with('/') {
+        return start_dir.to_owned();
+    }
+    let mut dir = std::path::PathBuf::from(start_dir);
+    loop {
+        if dir.join(".git").exists() || dir.join("package.json").exists() {
+            return dir.to_string_lossy().into_owned();
+        }
+        match dir.parent() {
+            Some(p) if p != dir => dir = p.to_path_buf(),
+            _ => break,
+        }
+    }
+    start_dir.to_owned()
+}
+
+/// extractResponseText — first assistant message's text (string content or text parts).
+pub fn extract_response_text(output_messages: &str) -> Option<String> {
+    if output_messages.is_empty() {
+        return None;
+    }
+    let msgs: Value = serde_json::from_str(output_messages).ok()?;
+    for msg in msgs.as_array()? {
+        if msg.get("role").and_then(Value::as_str) == Some("assistant") {
+            if let Some(c) = msg.get("content").and_then(Value::as_str) {
+                if !c.trim().is_empty() {
+                    return Some(c.to_owned());
+                }
+            }
+            if let Some(parts) = msg.get("content").and_then(Value::as_array) {
+                let texts: Vec<&str> = parts
+                    .iter()
+                    .filter(|p| p.get("type").and_then(Value::as_str) == Some("text"))
+                    .filter_map(|p| p.get("text").and_then(Value::as_str))
+                    .filter(|t| !t.is_empty())
+                    .collect();
+                if !texts.is_empty() {
+                    return Some(texts.join("\n"));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// detectOutputAction — the tool-name scrape mirrors the TS global regex.
+pub fn detect_output_action(output_messages: &str) -> String {
+    static NAME: OnceLock<regex::Regex> = OnceLock::new();
+    if output_messages.is_empty() {
+        return "unknown".to_owned();
+    }
+    if output_messages.contains("\"tool_call\"") {
+        let r = re(&NAME, r#""name"\s*:\s*"([^"]+)""#);
+        let names: Vec<&str> = r.captures_iter(output_messages).filter_map(|c| c.get(1)).map(|m| m.as_str()).collect();
+        if !names.is_empty() {
+            return format!("called {}", names.join(", "));
+        }
+        return "tool_calls".to_owned();
+    }
+    "text response".to_owned()
+}
+
+/// `${x}` interpolation for possibly-absent JSON values — JS prints the literal "undefined",
+/// and read_file summaries really do render "Lundefined-undefined" when args lack the lines.
+fn interp(v: Option<&Value>) -> String {
+    match v {
+        None | Some(Value::Null) => "undefined".to_owned(),
+        Some(x) => js_string(x),
+    }
+}
+
+fn str_or<'a>(v: Option<&'a Value>, default: &'a str) -> &'a str {
+    v.and_then(Value::as_str).filter(|s| !s.is_empty()).unwrap_or(default)
+}
+
+/// UTF-16-ish .slice(0, n) — char-boundary-safe byte cap (documented divergence only when a
+/// multi-byte char straddles the cap).
+pub fn js_slice(s: &str, n: usize) -> &str {
+    let mut end = s.len().min(n);
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
+fn basename(p: &str) -> &str {
+    p.rsplit('/').next().unwrap_or(p)
+}
+
+/// summarizeToolArgs — port of the per-tool switch, JS-quirks included.
+pub fn summarize_tool_args(tool_name: &str, args_json: &str) -> String {
+    static PATCH_LINE: OnceLock<regex::Regex> = OnceLock::new();
+    let Ok(args) = serde_json::from_str::<Value>(args_json) else {
+        return js_slice(args_json, 80).to_owned();
+    };
+    match tool_name {
+        "read_file" => {
+            let fp = args.get("filePath").and_then(Value::as_str).unwrap_or("");
+            let file = basename(fp);
+            let file = if file.is_empty() { interp(args.get("filePath")) } else { file.to_owned() };
+            format!("{file} L{}-{}", interp(args.get("startLine")), interp(args.get("endLine")))
+        }
+        "file_search" => str_or(args.get("query"), js_slice(args_json, 80)).to_owned(),
+        "grep_search" => {
+            format!("\"{}\" in {}", str_or(args.get("query"), "?"), str_or(args.get("includePattern"), "*"))
+        }
+        "list_dir" => {
+            let p = args.get("path").and_then(Value::as_str).unwrap_or("");
+            let last = p.split('/').filter(|s| !s.is_empty()).next_back().unwrap_or(p);
+            last.to_owned()
+        }
+        "manage_todo_list" => {
+            let items = args.get("todoList").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]);
+            // Insertion-order status counts (Object key order in JS).
+            let mut counts: Vec<(String, u64)> = Vec::new();
+            for it in items {
+                let s = it.get("status").map(js_string).unwrap_or_else(|| "undefined".to_owned());
+                match counts.iter_mut().find(|(k, _)| *k == s) {
+                    Some((_, n)) => *n += 1,
+                    None => counts.push((s, 1)),
+                }
+            }
+            let parts: Vec<String> = counts.iter().map(|(s, n)| format!("{n} {s}")).collect();
+            format!("{} items ({})", items.len(), parts.join(", "))
+        }
+        "semantic_search" => format!("\"{}\"", js_slice(args.get("query").and_then(Value::as_str).unwrap_or(""), 60)),
+        "replace_string_in_file" | "multi_replace_string_in_file" => {
+            let f = basename(args.get("filePath").and_then(Value::as_str).unwrap_or(""));
+            if f.is_empty() { "edit".to_owned() } else { f.to_owned() }
+        }
+        "create_file" => {
+            let f = basename(args.get("filePath").and_then(Value::as_str).unwrap_or(""));
+            if f.is_empty() { "new file".to_owned() } else { f.to_owned() }
+        }
+        "apply_patch" => {
+            let content = ["command", "patch", "input"]
+                .iter()
+                .find_map(|k| args.get(*k).and_then(Value::as_str).filter(|s| !s.is_empty()))
+                .unwrap_or("");
+            let r = re(&PATCH_LINE, r"^\*\*\*\s+(?:Update File:|Add File:|Delete File:)?\s*(.+)");
+            let mut files: Vec<String> = Vec::new();
+            for line in content.split('\n') {
+                if let Some(m) = r.captures(line).and_then(|c| c.get(1)) {
+                    let fp = m.as_str().trim();
+                    if fp.contains('/') {
+                        files.push(basename(fp).to_owned());
+                    }
+                }
+            }
+            files.retain(|f| !f.is_empty());
+            if files.is_empty() { "patch".to_owned() } else { files.join(", ") }
+        }
+        "run_in_terminal" => js_slice(args.get("command").and_then(Value::as_str).unwrap_or(""), 80).to_owned(),
+        "vscode_askQuestions" => {
+            let n = args.get("questions").and_then(Value::as_array).map(Vec::len).unwrap_or(0);
+            format!("{n} question(s)")
+        }
+        "explore_subagent" | "runSubagent" => {
+            let d = ["description", "query"]
+                .iter()
+                .find_map(|k| args.get(*k).and_then(Value::as_str).filter(|s| !s.is_empty()))
+                .unwrap_or("");
+            js_slice(d, 60).to_owned()
+        }
+        _ => js_slice(args_json, 80).to_owned(),
+    }
+}
+
+/// summarizeToolResult — NOTE `${(len/1024).toFixed(1)}KB`: Rust's {:.1} rounds half-to-even
+/// where toFixed leans half-away; a real divergence needs len to land exactly on a 51.2-byte
+/// half-boundary, accepted and documented.
+pub fn summarize_tool_result(tool_name: &str, result: &str) -> String {
+    static GREP_N: OnceLock<regex::Regex> = OnceLock::new();
+    static FILE_N: OnceLock<regex::Regex> = OnceLock::new();
+    if result.is_empty() {
+        return "empty".to_owned();
+    }
+    if result == "No todo list found." {
+        return "no list".to_owned();
+    }
+    let len = result.chars().map(|c| c.len_utf16()).sum::<usize>();
+    if len < 50 {
+        return result.to_owned();
+    }
+    if tool_name == "grep_search" {
+        if let Some(m) = re(&GREP_N, r"(\d+)\s+match").captures(result).and_then(|c| c.get(1)) {
+            return format!("{} matches", m.as_str());
+        }
+    }
+    if tool_name == "file_search" {
+        if let Some(m) = re(&FILE_N, r"(\d+)\s+total result").captures(result).and_then(|c| c.get(1)) {
+            return format!("{} result(s)", m.as_str());
+        }
+    }
+    if len > 1000 {
+        return format!("{:.1}KB", len as f64 / 1024.0);
+    }
+    format!("{len} chars")
+}

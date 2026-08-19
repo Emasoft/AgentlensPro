@@ -18,6 +18,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "regex",
  "serde_json",
  "tokio",
 ]
