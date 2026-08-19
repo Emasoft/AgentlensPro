@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-19T05:30:00+0200
+updated: 2026-08-19T05:50:00+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -175,10 +175,27 @@ release-via: publish
   Tests: 5 Rust pass tests (incl. flock exclusivity) + rustStorePass.test.ts (routing,
   fail-fast, cross-engine drain parity field-for-field, and the load-bearing claim that an OPEN
   TS store handle sees Rust-written parts — parquetScan re-lists per query).
-- **NEXT ACTION (one step): P4c — `agentlens-core` server crate scaffold, starting with the
-  OTLP listener** — the smallest frozen surface (always-200 contract, 64MB cap, JSON-only
-  classify, `/agentlens/standalone` probe — wire-freeze report §2), wiring agentlens-ingest +
-  the spanstore writer behind port 4318.
+- **P4c DONE — `agentlens-core` crate + the OTLP listener behind the frozen contract.**
+  `alcore serve --data-dir D [--otlp-port N, default 4319 — 4318 stays TS until cutover
+  (IS_CANONICAL keys on it)]`. hyper+tokio (NOT axum: the freeze's overflow semantics are
+  "socket destroyed, NO response", which the raw service reproduces by returning Err — axum
+  must always produce a response). Contract per report §2, all socket-level-tested (raw
+  TcpStream clients, 6 tests): probe matches the RAW url exactly (query string falls through),
+  non-POST bare-200 without Content-Type, POST path-first routing + classify fallback,
+  parse-failure/protobuf still 200, metrics accepted+discarded, >64MB kills the connection
+  responseless. Wired: process_traces/process_logs → SpanStoreWriter, flush-per-payload
+  (internal cadence, not wire-frozen) + exit flush. Live-verified end to end (curl probe, POST,
+  span in `spans/<day>.ndjson`, SIGINT flush). Workspace 32/32.
+  Fixture gotcha that cost a cycle: process_traces GATES on traceId+spanId+name — a span
+  without ids silently yields []; and the writer day-keys on the span's own startTime
+  (1755504000000000000 ns = 2025-08-18, not the attr's ISO).
+  NOT in this slice (deliberate): admission-control 503s, the gen_ai two-sided inject (needs
+  the live span window — `|_,_,_| false` for now), account/body registries, dropped-event sink.
+- **NEXT ACTION (one step): P4d — port the in-memory span window + summarizer** (SessionStore
+  5-min rolling window + src/spanSummarizer.ts) into agentlens-core: it is the engine behind
+  /api/summary, the SSE update frames, AND the gen_ai injection target — the prerequisite for
+  every UI-surface route. Cross-engine parity: deepStrictEqual the summarizer output on a real
+  captured span window vs the TS engine.
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
