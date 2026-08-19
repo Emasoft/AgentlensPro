@@ -81,7 +81,9 @@ fn main() {
     let serve = agentlens_core::serve_otlp(addr, state.clone(), |bound| {
         println!("alcore: OTLP listening on http://{bound}");
     });
-    let serve_ui = agentlens_core::ui::serve_ui(ui_addr, state.clone(), |bound| {
+    let hub = Arc::new(agentlens_core::ui::SseHub::default());
+    rt.spawn(agentlens_core::ui::run_push_loop(state.clone(), hub.clone()));
+    let serve_ui = agentlens_core::ui::serve_ui(ui_addr, state.clone(), hub, |bound| {
         println!("alcore: UI/API listening on http://{bound}");
     });
     rt.block_on(async move {

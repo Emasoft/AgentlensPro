@@ -1,0 +1,666 @@
+{
+ "nowMs": 1755600305000,
+ "spans": [
+  {
+   "traceId": "t1",
+   "spanId": "ci1",
+   "name": "claude_code.interaction",
+   "startTime": "1755600000000000000",
+   "endTime": "1755600010000000000",
+   "attributes": [
+    {
+     "key": "session.id",
+     "value": {
+      "stringValue": "sessA"
+     }
+    },
+    {
+     "key": "user_prompt",
+     "value": {
+      "stringValue": "Fix the bug"
+     }
+    }
+   ]
+  },
+  {
+   "traceId": "t1",
+   "spanId": "l1",
+   "parentSpanId": "ci1",
+   "name": "claude_code.llm_request",
+   "startTime": "1755600001000000000",
+   "endTime": "1755600002000000000",
+   "attributes": [
+    {
+     "key": "gen_ai.request.model",
+     "value": {
+      "stringValue": "claude-opus-5"
+     }
+    },
+    {
+     "key": "input_tokens",
+     "value": {
+      "intValue": 100
+     }
+    },
+    {
+     "key": "output_tokens",
+     "value": {
+      "intValue": 40
+     }
+    },
+    {
+     "key": "ttft_ms",
+     "value": {
+      "intValue": 450
+     }
+    },
+    {
+     "key": "stop_reason",
+     "value": {
+      "stringValue": "end_turn"
+     }
+    },
+    {
+     "key": "gen_ai.system_instructions",
+     "value": {
+      "stringValue": "SYSPROMPTSYS"
+     }
+    },
+    {
+     "key": "gen_ai.tool.definitions",
+     "value": {
+      "stringValue": "TOOLDEFS"
+     }
+    }
+   ]
+  },
+  {
+   "traceId": "t9",
+   "spanId": "l9",
+   "parentSpanId": "gone-root",
+   "name": "claude_code.llm_request",
+   "startTime": "1755600100000000000",
+   "endTime": "1755600103000000000",
+   "attributes": [
+    {
+     "key": "session.id",
+     "value": {
+      "stringValue": "sessB"
+     }
+    },
+    {
+     "key": "gen_ai.request.model",
+     "value": {
+      "stringValue": "claude-sonnet-5"
+     }
+    },
+    {
+     "key": "input_tokens",
+     "value": {
+      "intValue": 50
+     }
+    },
+    {
+     "key": "output_tokens",
+     "value": {
+      "intValue": 20
+     }
+    },
+    {
+     "key": "cache_read_tokens",
+     "value": {
+      "intValue": 500
+     }
+    },
+    {
+     "key": "stop_reason",
+     "value": {
+      "stringValue": "tool_use"
+     }
+    }
+   ]
+  },
+  {
+   "traceId": "t9",
+   "spanId": "r9",
+   "parentSpanId": "gone-root",
+   "name": "claude_code.api_request",
+   "startTime": "1755600101000000000",
+   "endTime": "1755600101000000000",
+   "attributes": [
+    {
+     "key": "session.id",
+     "value": {
+      "stringValue": "sessB"
+     }
+    },
+    {
+     "key": "cost_usd",
+     "value": {
+      "stringValue": "0.01"
+     }
+    },
+    {
+     "key": "input_tokens",
+     "value": {
+      "intValue": 50
+     }
+    },
+    {
+     "key": "output_tokens",
+     "value": {
+      "intValue": 20
+     }
+    },
+    {
+     "key": "duration_ms",
+     "value": {
+      "intValue": 800
+     }
+    }
+   ]
+  },
+  {
+   "traceId": "t9",
+   "spanId": "bg9",
+   "name": "notification",
+   "startTime": "1755600102000000000",
+   "endTime": "1755600102000000000",
+   "attributes": [
+    {
+     "key": "gen_ai.agent.name",
+     "value": {
+      "stringValue": "title"
+     }
+    },
+    {
+     "key": "gen_ai.request.model",
+     "value": {
+      "stringValue": "claude-haiku"
+     }
+    },
+    {
+     "key": "gen_ai.usage.input_tokens",
+     "value": {
+      "intValue": 5
+     }
+    },
+    {
+     "key": "gen_ai.usage.output_tokens",
+     "value": {
+      "intValue": 2
+     }
+    }
+   ]
+  },
+  {
+   "traceId": "twf",
+   "spanId": "wf1",
+   "name": "agentSpawn",
+   "startTime": "1755600150000000000",
+   "endTime": "1755600151000000000",
+   "attributes": [
+    {
+     "key": "workflow.run_id",
+     "value": {
+      "stringValue": "wfrun-1"
+     }
+    },
+    {
+     "key": "workflow.name",
+     "value": {
+      "stringValue": "nightly-audit"
+     }
+    },
+    {
+     "key": "gen_ai.usage.input_tokens",
+     "value": {
+      "intValue": 7
+     }
+    },
+    {
+     "key": "gen_ai.usage.output_tokens",
+     "value": {
+      "intValue": 3
+     }
+    }
+   ]
+  },
+  {
+   "traceId": "ct5",
+   "spanId": "cwx",
+   "name": "codex.websocket_event",
+   "startTime": "1755600160000000000",
+   "endTime": "1755600160000000000",
+   "attributes": []
+  },
+  {
+   "traceId": "tc1",
+   "spanId": "ch1",
+   "parentSpanId": "missing-inv",
+   "name": "chat completions",
+   "startTime": "1755600200000000000",
+   "endTime": "1755600201000000000",
+   "attributes": [
+    {
+     "key": "gen_ai.usage.input_tokens",
+     "value": {
+      "intValue": 300
+     }
+    },
+    {
+     "key": "gen_ai.usage.output_tokens",
+     "value": {
+      "intValue": 30
+     }
+    },
+    {
+     "key": "gen_ai.request.model",
+     "value": {
+      "stringValue": "gpt-5-copilot"
+     }
+    },
+    {
+     "key": "copilot_chat.time_to_first_token",
+     "value": {
+      "intValue": 120
+     }
+    },
+    {
+     "key": "gen_ai.conversation.id",
+     "value": {
+      "stringValue": "copconv-424242"
+     }
+    },
+    {
+     "key": "gen_ai.output.messages",
+     "value": {
+      "stringValue": "[{\"role\":\"assistant\",\"content\":\"Hi.\"}]"
+     }
+    }
+   ]
+  },
+  {
+   "traceId": "tc1",
+   "spanId": "et1",
+   "parentSpanId": "missing-inv",
+   "name": "execute_tool read_file",
+   "startTime": "1755600202000000000",
+   "endTime": "1755600202500000000",
+   "attributes": [
+    {
+     "key": "gen_ai.tool.name",
+     "value": {
+      "stringValue": "read_file"
+     }
+    },
+    {
+     "key": "gen_ai.tool.call.arguments",
+     "value": {
+      "stringValue": "{\"filePath\":\"/w/a.ts\",\"startLine\":1,\"endLine\":5}"
+     }
+    },
+    {
+     "key": "gen_ai.tool.call.result",
+     "value": {
+      "stringValue": "short result"
+     }
+    }
+   ]
+  },
+  {
+   "traceId": "cx1",
+   "spanId": "cxp",
+   "name": "codex.user_prompt",
+   "startTime": "1755600300000000000",
+   "endTime": "1755600300000000000",
+   "attributes": [
+    {
+     "key": "conversation.id",
+     "value": {
+      "stringValue": "conversation-777777"
+     }
+    },
+    {
+     "key": "user_prompt",
+     "value": {
+      "stringValue": "Sort the files"
+     }
+    }
+   ]
+  },
+  {
+   "traceId": "cx1",
+   "spanId": "cxs",
+   "name": "codex.sse_event",
+   "startTime": "1755600301000000000",
+   "endTime": "1755600302000000000",
+   "attributes": [
+    {
+     "key": "event.kind",
+     "value": {
+      "stringValue": "response.completed"
+     }
+    },
+    {
+     "key": "input_tokens",
+     "value": {
+      "intValue": 80
+     }
+    },
+    {
+     "key": "output_tokens",
+     "value": {
+      "intValue": 8
+     }
+    },
+    {
+     "key": "gen_ai.request.model",
+     "value": {
+      "stringValue": "gpt-5"
+     }
+    }
+   ],
+   "receivedAt": 1755600300000
+  }
+ ],
+ "crafted": {
+  "summary": {
+   "sessions": [
+    {
+     "sessionId": "a",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "userRequest": "prompt A",
+     "totalLlmCalls": 3,
+     "totalToolCalls": 2,
+     "errors": 1,
+     "cacheHitRate": 0.5,
+     "durationMs": 65000,
+     "startTime": "2025-08-20T10:00:00.000Z",
+     "inputTokens": 1200,
+     "outputTokens": 800,
+     "cacheReadTokens": 30000,
+     "cacheCreateTokens": 4000,
+     "filesChanged": [
+      "/a.ts",
+      "/b.ts"
+     ],
+     "timeline": [
+      {
+       "type": "llm",
+       "inputTokens": 100,
+       "cacheReadTokens": 1000,
+       "cacheCreateTokens": 0
+      },
+      {
+       "type": "tool",
+       "inputTokens": 999
+      },
+      {
+       "type": "llm",
+       "inputTokens": 0,
+       "cacheReadTokens": 0
+      },
+      {
+       "type": "llm",
+       "inputTokens": 50,
+       "cacheCreateTokens": 25
+      }
+     ]
+    },
+    {
+     "sessionId": "b",
+     "source": "codex",
+     "model": "gpt-5.2",
+     "userRequest": "",
+     "totalLlmCalls": 1,
+     "totalToolCalls": 0,
+     "errors": 0,
+     "cacheHitRate": 0.25,
+     "durationMs": 1000,
+     "startTime": "2025-08-18T09:00:00.000Z",
+     "inputTokens": 10,
+     "outputTokens": 5,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "filesChanged": [
+      "/b.ts"
+     ],
+     "timeline": []
+    },
+    {
+     "sessionId": "c",
+     "source": "copilot",
+     "model": "",
+     "userRequest": "x",
+     "totalLlmCalls": 0,
+     "totalToolCalls": 0,
+     "errors": 0,
+     "cacheHitRate": 0,
+     "durationMs": 0,
+     "startTime": "",
+     "inputTokens": 0,
+     "outputTokens": 0,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "filesChanged": [],
+     "timeline": []
+    }
+   ]
+  },
+  "spans": [
+   {
+    "receivedAt": 1755600304000
+   },
+   {
+    "receivedAt": 5
+   },
+   {}
+  ],
+  "sidebarPayload": {
+   "isActive": true,
+   "lastActivityMs": 1755600304000,
+   "sessionCount": 3,
+   "agentSources": [
+    "copilot",
+    "claude_code",
+    "codex"
+   ],
+   "currentSession": {
+    "source": "claude_code",
+    "model": "claude-opus-5",
+    "userRequest": "prompt A",
+    "totalLlmCalls": 3,
+    "totalToolCalls": 2,
+    "errors": 1,
+    "cacheHitRate": 0.5,
+    "durationMs": 65000,
+    "startTime": "2025-08-20T10:00:00.000Z",
+    "turnInputTokens": [
+     1100,
+     75
+    ],
+    "inputTokens": 1200,
+    "outputTokens": 800,
+    "cacheReadTokens": 30000,
+    "cacheCreateTokens": 4000,
+    "costUsd": 0.066
+   },
+   "burnRate": {
+    "tokensPerMinute": 1846,
+    "costPerHour": 0
+   },
+   "avgInputTokens": 403.3333333333333,
+   "avgOutputTokens": 268.3333333333333
+  },
+  "sidebarData": {
+   "sessionCount": 3,
+   "turnCount": 4,
+   "totalInputTokens": 1210,
+   "totalOutputTokens": 805,
+   "filesChangedCount": 2,
+   "errors": 1,
+   "totalToolCalls": 2,
+   "cacheHitPct": 25,
+   "avgTurns": 1.3,
+   "agentSources": [
+    "copilot",
+    "claude_code",
+    "codex"
+   ],
+   "latestSession": {
+    "source": "copilot",
+    "model": "",
+    "totalLlmCalls": 0,
+    "totalToolCalls": 0,
+    "durationMs": 0,
+    "errors": 0,
+    "cacheHitRate": 0
+   }
+  },
+  "analyticsData": {
+   "dailyStats": [
+    {
+     "day": "2025-08-18",
+     "totalTokens": 10,
+     "outputTokens": 5,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "costUsd": 0,
+     "sessionCount": 1
+    },
+    {
+     "day": "2025-08-20",
+     "totalTokens": 1200,
+     "outputTokens": 800,
+     "cacheReadTokens": 30000,
+     "cacheCreateTokens": 4000,
+     "costUsd": 0,
+     "sessionCount": 1
+    }
+   ],
+   "lifetimeStats": {
+    "totalSessions": 3,
+    "totalTokens": 2015,
+    "totalCostUsd": 0,
+    "oldestSessionMs": 1755507600000,
+    "newestSessionMs": 1755684000000
+   }
+  }
+ },
+ "full": {
+  "sidebarPayload": {
+   "isActive": true,
+   "lastActivityMs": 1755600300000,
+   "sessionCount": 4,
+   "agentSources": [
+    "copilot",
+    "claude_code",
+    "codex"
+   ],
+   "currentSession": {
+    "source": "codex",
+    "model": "gpt-5",
+    "userRequest": "Sort the files",
+    "totalLlmCalls": 1,
+    "totalToolCalls": 0,
+    "errors": 0,
+    "cacheHitRate": 0,
+    "durationMs": 2000,
+    "startTime": "2025-08-19T10:45:00.000Z",
+    "turnInputTokens": [
+     80
+    ],
+    "inputTokens": 80,
+    "outputTokens": 8,
+    "cacheReadTokens": 0,
+    "cacheCreateTokens": 0,
+    "costUsd": 0
+   },
+   "burnRate": null,
+   "avgInputTokens": 132.5,
+   "avgOutputTokens": 24.5
+  },
+  "sidebarData": {
+   "sessionCount": 4,
+   "turnCount": 4,
+   "totalInputTokens": 530,
+   "totalOutputTokens": 98,
+   "filesChangedCount": 0,
+   "errors": 0,
+   "totalToolCalls": 1,
+   "cacheHitPct": 23,
+   "avgTurns": 1,
+   "agentSources": [
+    "copilot",
+    "claude_code",
+    "codex"
+   ],
+   "latestSession": {
+    "source": "codex",
+    "model": "gpt-5",
+    "totalLlmCalls": 1,
+    "totalToolCalls": 0,
+    "durationMs": 2000,
+    "errors": 0,
+    "cacheHitRate": 0
+   }
+  },
+  "analyticsData": {
+   "dailyStats": [
+    {
+     "day": "2025-08-19",
+     "totalTokens": 530,
+     "outputTokens": 98,
+     "cacheReadTokens": 500,
+     "cacheCreateTokens": 0,
+     "costUsd": 0,
+     "sessionCount": 4
+    }
+   ],
+   "lifetimeStats": {
+    "totalSessions": 4,
+    "totalTokens": 628,
+    "totalCostUsd": 0,
+    "oldestSessionMs": 1755600000000,
+    "newestSessionMs": 1755600300000
+   }
+  }
+ },
+ "empty": {
+  "sidebarPayload": {
+   "isActive": false,
+   "lastActivityMs": 0,
+   "sessionCount": 0,
+   "agentSources": [],
+   "currentSession": null,
+   "burnRate": null,
+   "avgInputTokens": 1,
+   "avgOutputTokens": 1
+  },
+  "sidebarData": {
+   "sessionCount": 0,
+   "turnCount": 0,
+   "totalInputTokens": 0,
+   "totalOutputTokens": 0,
+   "filesChangedCount": 0,
+   "errors": 0,
+   "totalToolCalls": 0,
+   "cacheHitPct": 0,
+   "avgTurns": 0,
+   "agentSources": [],
+   "latestSession": null
+  },
+  "analyticsData": {
+   "dailyStats": [],
+   "lifetimeStats": {
+    "totalSessions": 0,
+    "totalTokens": 0,
+    "totalCostUsd": 0,
+    "oldestSessionMs": 0,
+    "newestSessionMs": 0
+   }
+  }
+ }
+}

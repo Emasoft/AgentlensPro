@@ -15,6 +15,7 @@ dependencies = [
  "agentlens-ingest",
  "agentlens-spanstore",
  "bytes",
+ "futures-core",
  "http-body-util",
  "hyper",
  "hyper-util",

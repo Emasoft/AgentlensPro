@@ -16,12 +16,14 @@ fn start_servers() -> (std::net::SocketAddr, std::net::SocketAddr, Arc<Mutex<age
     let state = Arc::new(Mutex::new(agentlens_core::CoreState::open(&spans)));
     let (otx, orx) = std::sync::mpsc::channel();
     let (utx, urx) = std::sync::mpsc::channel();
-    let (s1, s2) = (state.clone(), state.clone());
+    let (s1, s2, s3) = (state.clone(), state.clone(), state.clone());
     std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
+            let hub = Arc::new(agentlens_core::ui::SseHub::default());
+            tokio::spawn(agentlens_core::ui::run_push_loop(s3, hub.clone()));
             let otlp = agentlens_core::serve_otlp("127.0.0.1:0".parse().unwrap(), s1, move |b| otx.send(b).unwrap());
-            let ui = agentlens_core::ui::serve_ui("127.0.0.1:0".parse().unwrap(), s2, move |b| utx.send(b).unwrap());
+            let ui = agentlens_core::ui::serve_ui("127.0.0.1:0".parse().unwrap(), s2, hub, move |b| utx.send(b).unwrap());
             let _ = tokio::join!(otlp, ui);
         });
     });
@@ -42,6 +44,25 @@ fn get(addr: std::net::SocketAddr, path: &str, extra_headers: &str) -> String {
 
 fn body_of(resp: &str) -> &str {
     resp.split_once("\r\n\r\n").map(|(_, b)| b).unwrap_or("")
+}
+
+/// Decode a (possibly partial) chunked transfer-encoded body into the raw byte stream — both
+/// engines stream SSE with `Transfer-Encoding: chunked` (Node's res.write without a
+/// Content-Length does the same), and the freeze describes the DECODED stream an EventSource
+/// sees.
+fn dechunk(body: &str) -> String {
+    let mut out = String::new();
+    let mut rest = body;
+    loop {
+        let Some((size_line, after)) = rest.split_once("\r\n") else { break };
+        let Ok(size) = usize::from_str_radix(size_line.trim(), 16) else { break };
+        if size == 0 || after.len() < size {
+            break;
+        }
+        out.push_str(&after[..size]);
+        rest = after[size..].strip_prefix("\r\n").unwrap_or("");
+    }
+    out
 }
 
 fn trace_payload() -> String {
@@ -134,6 +155,62 @@ fn csrf_gate_refuses_non_get_from_a_foreign_origin_and_viewer_header_is_unverifi
     let viewer = get(ui, "/api/summary", "x-agentlens-viewer: v1.deadbeef\r\n");
     assert!(viewer.starts_with("HTTP/1.1 403"), "{viewer}");
     assert_eq!(body_of(&viewer), r#"{"error":"unverifiable viewer assertion — rejected (AgentlensPro#4 §B5)"}"#);
+}
+
+#[test]
+fn events_streams_the_ping_then_update_frames_on_connect_and_on_the_coalesced_push() {
+    let (otlp, ui, _state) = start_servers();
+    let mut s = TcpStream::connect(ui).unwrap();
+    s.set_read_timeout(Some(std::time::Duration::from_secs(8))).unwrap();
+    // POST (no method check) also opens a stream — the frozen quirk.
+    s.write_all(b"POST /events HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
+    let mut buf = Vec::new();
+    let read_until = |s: &mut TcpStream, buf: &mut Vec<u8>, needle: &str| {
+        let mut chunk = [0u8; 65536];
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        while !String::from_utf8_lossy(buf).contains(needle) {
+            assert!(std::time::Instant::now() < deadline, "timed out waiting for {needle:?}: {}", String::from_utf8_lossy(buf));
+            let n = s.read(&mut chunk).unwrap();
+            assert!(n > 0, "stream closed before {needle:?}");
+            buf.extend_from_slice(&chunk[..n]);
+        }
+    };
+    read_until(&mut s, &mut buf, "\"type\":\"update\"");
+    let text = String::from_utf8_lossy(&buf).into_owned();
+    assert!(text.starts_with("HTTP/1.1 200"), "{text}");
+    let lower = text.to_lowercase();
+    assert!(lower.contains("content-type: text/event-stream"), "{text}");
+    assert!(lower.contains("cache-control: no-cache"), "{text}");
+    assert!(lower.contains("connection: keep-alive"), "{text}");
+    assert!(lower.contains("transfer-encoding: chunked"), "streamed like Node's res.write: {text}");
+    let body = dechunk(body_of(&text));
+    // First bytes: the ping, then the on-connect update frame — no event: names, no ids.
+    assert!(body.starts_with(":\n\ndata: {\"type\":\"update\""), "frame preamble: {body:?}");
+    let first = body.split("\n\n").nth(1).unwrap().strip_prefix("data: ").unwrap();
+    let v: serde_json::Value = serde_json::from_str(first).unwrap();
+    for k in ["buildId", "summary", "sessionSummary", "sidebar", "analyticsData", "collectorGaps",
+              "isActive", "lastActivityMs", "sessionCount", "agentSources", "currentSession", "burnRate",
+              "avgInputTokens", "avgOutputTokens"] {
+        assert!(v.get(k).is_some(), "update frame carries {k}: {first}");
+    }
+    assert_eq!(v["summary"], serde_json::json!({"toolCalls": {}}));
+    assert_eq!(v["sessionCount"], 0);
+
+    // Ingest → the coalesced push (≤ PUSH_COALESCE_MS later) broadcasts a second update frame
+    // that now carries the session.
+    let payload = trace_payload();
+    let r = request(otlp, &format!("POST /v1/traces HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}", payload.len()));
+    assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+    read_until(&mut s, &mut buf, "sess-ui-1");
+    let text = String::from_utf8_lossy(&buf).into_owned();
+    let decoded = dechunk(body_of(&text));
+    let frames: Vec<&str> = decoded.split("\n\n").filter(|f| f.starts_with("data: ")).collect();
+    assert!(frames.len() >= 2, "a pushed update frame followed the connect frame: {}", frames.len());
+    let last: serde_json::Value = serde_json::from_str(frames.last().unwrap().strip_prefix("data: ").unwrap()).unwrap();
+    assert_eq!(last["sessionCount"], 1);
+    assert_eq!(last["sessionSummary"]["sessions"][0]["sessionId"], "sess-ui-1");
+    assert_eq!(last["sessionSummary"]["sessions"][0]["timeline"], serde_json::json!([]), "stripped in the frame too");
+    assert_eq!(last["currentSession"]["model"], "claude-opus-5");
 }
 
 #[test]

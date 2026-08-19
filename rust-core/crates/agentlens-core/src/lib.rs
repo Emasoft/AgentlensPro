@@ -31,6 +31,7 @@ pub mod pricing;
 pub mod session_store;
 pub mod summarize;
 pub mod ui;
+pub mod update_payload;
 
 pub const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
 
@@ -66,20 +67,29 @@ pub struct CoreState {
     /// The 5-minute live window the UI summary is computed over (P4e) — fed by every ingested
     /// span, exactly as the TS collector's addSpan feeds SessionStore.
     pub store: session_store::SessionStore,
+    /// Bumped on every data change; the coalesced SSE pusher rebuilds only when it moved
+    /// (server.ts dataVersion).
+    pub data_version: u64,
+    /// The dashboard live-reload fingerprint carried in every update frame (server.ts BUILD_ID —
+    /// bundle mtimes there; here the process start, the same "changes on restart" contract).
+    pub build_id: String,
 }
 
 impl CoreState {
     pub fn open(spans_dir: &std::path::Path) -> CoreState {
+        let now = now_ms();
         CoreState {
             ingest: IngestState::default(),
             writer: SpanStoreWriter::open(spans_dir),
             counters: Counters::default(),
-            store: session_store::SessionStore::new(now_ms() as f64),
+            store: session_store::SessionStore::new(now as f64),
+            data_version: 0,
+            build_id: now.to_string(),
         }
     }
 }
 
-fn now_ms() -> i64 {
+pub fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
@@ -126,6 +136,9 @@ pub fn ingest_post(state: &mut CoreState, path: &str, body: &[u8]) {
     for span in &spans {
         state.writer.append(span, now);
         state.counters.spans_appended += 1;
+    }
+    if !spans.is_empty() {
+        state.data_version += 1;
     }
     for span in spans {
         state.store.add_span(span, now as f64);
