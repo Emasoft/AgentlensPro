@@ -127,7 +127,17 @@
      "isError": false,
      "timestamp": "2026-08-01T10:00:03.000Z",
      "resultSummary": "audit done: all clean",
-     "fullResult": "audit done: all clean"
+     "fullResult": "audit done: all clean",
+     "generatedFiles": [
+      {
+       "path": "/tmp/claude-501/scratch/report.md",
+       "sizeBytes": 0,
+       "mtimeMs": 0,
+       "tokenEstimate": 0,
+       "origin": "referenced",
+       "missing": true
+      }
+     ]
     },
     {
      "type": "user_input",

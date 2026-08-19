@@ -410,3 +410,56 @@ fn watcher_advances_a_card_on_growth_without_waiting_for_the_backstop() {
     let offsets = DeltaLog::new(&data, "log-offsets").load().unwrap();
     assert_eq!(offsets[claude.to_str().unwrap()]["bytesRead"], std::fs::metadata(&claude).unwrap().len());
 }
+
+/// P5c: the account registry — the logs ingest's body-pointer events feed session → account_uuid
+/// (bounded 200, MRU), and a log card built afterwards carries `accountId` iff its own sessionId
+/// is known (a subagent's id never is; an import card never is); the key lands LAST, as
+/// finishRustTranscript's `card.accountId = …` does.
+#[test]
+fn account_registry_is_fed_by_the_logs_ingest_and_stamps_log_cards_at_build_time() {
+    use agentlens_core::account_registry::MAX_SESSIONS;
+    use agentlens_core::log_reader::FileState;
+    let data = std::env::temp_dir().join(format!("al-acct-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&data);
+    std::fs::create_dir_all(&data).unwrap();
+    let mut st = CoreState::open(&data);
+
+    let logs = serde_json::json!({ "resourceLogs": [{
+        "resource": { "attributes": [ { "key": "user.account_uuid", "value": { "stringValue": "acct-aaaa" } } ] },
+        "scopeLogs": [{ "logRecords": [
+            { "timeUnixNano": "1755600000000000000", "spanId": "0123456789abcdef",
+              "attributes": [ { "key": "event.name", "value": { "stringValue": "claude_code.api_request_body" } },
+                              { "key": "session.id", "value": { "stringValue": "sess-known" } },
+                              { "key": "body_ref", "value": { "stringValue": "/tmp/body.json" } } ] },
+            { "timeUnixNano": "1755600001000000000",
+              "attributes": [ { "key": "event.name", "value": { "stringValue": "claude_code.user_prompt" } },
+                              { "key": "session.id", "value": { "stringValue": "sess-other" } } ] }
+        ] }]
+    }] });
+    agentlens_core::ingest_post(&mut st, "/v1/logs", logs.to_string().as_bytes());
+    assert_eq!(st.accounts.account_for("sess-known"), Some("acct-aaaa"), "the body-pointer event fed the registry");
+    assert_eq!(st.accounts.account_for("sess-other"), None, "a non-pointer event does not");
+
+    let mk = |sid: &str| serde_json::json!({ "sessionId": sid, "source": "claude_code", "startTime": "2026-08-01T10:00:00.000Z", "timeline": [] });
+    let state = FileState { bytes_read: 1, mtime_ms: 1.0, ino: 1, size: 1 };
+    st.ingest_scanned(vec![ScannedFile { file: "f".into(), file_size_bytes: 1, state, cards: vec![mk("sess-known"), mk("agent-child"), mk("sess-other")] }]);
+    let known = &st.log_sessions["sess-known"];
+    assert_eq!(known["accountId"], "acct-aaaa");
+    assert_eq!(known.as_object().unwrap().keys().next_back().map(String::as_str), Some("accountId"), "appended last");
+    assert!(st.log_sessions["agent-child"].get("accountId").is_none());
+    assert!(st.log_sessions["sess-other"].get("accountId").is_none());
+
+    // Bounded + MRU: the 201st distinct session evicts the OLDEST, and a re-recorded one survives.
+    for i in 0..MAX_SESSIONS {
+        st.accounts.record(&format!("s{i}"), "acct-bbbb");
+    }
+    assert_eq!(st.accounts.len(), MAX_SESSIONS);
+    assert_eq!(st.accounts.account_for("sess-known"), None, "the oldest entry was evicted");
+    st.accounts.record("s0", "acct-cccc");
+    st.accounts.record("s-new", "acct-dddd");
+    assert_eq!(st.accounts.account_for("s0"), Some("acct-cccc"), "re-recorded = most recent, survives");
+    assert_eq!(st.accounts.account_for("s1"), None, "s1 was the oldest after s0 moved");
+    st.accounts.record("", "acct-eeee");
+    st.accounts.record("x", "");
+    assert_eq!(st.accounts.len(), MAX_SESSIONS, "empty ids are ignored");
+}

@@ -28,9 +28,11 @@ use serde_json::Value;
 use agentlens_ingest::IngestState;
 use agentlens_spanstore::writer::SpanStoreWriter;
 
+pub mod account_registry;
 pub mod delta_log;
 pub mod derived_cache;
 pub mod feed_merge;
+pub mod generated_files;
 pub mod import_card;
 pub mod log_reader;
 pub mod pricing;
@@ -109,6 +111,9 @@ pub struct CoreState {
     /// memoized by data_version (derived_cache.rs).
     pub summary_cache: derived_cache::VersionedCache<Value>,
     pub stripped_cache: derived_cache::VersionedCache<Value>,
+    /// The shared CallBodyRegistry's account half: fed by the logs ingest, read when a log card
+    /// is built (accountId, TRDD-BURNWDGT).
+    pub accounts: account_registry::AccountRegistry,
 }
 
 impl CoreState {
@@ -145,7 +150,17 @@ impl CoreState {
             return;
         }
         for s in scanned {
-            for card in s.cards {
+            for mut card in s.cards {
+                // finishRustTranscript: `if (accountId) card.accountId = accountId` — the lookup is
+                // by the card's own sessionId (a log session's id IS the Claude Code session_id,
+                // the registry's key; a subagent's "agent-…" id never matches), stamped at BUILD
+                // time: an account learned later reaches the card on its next re-parse, as in TS.
+                if let Some(obj) = card.as_object_mut() {
+                    let acct = obj.get("sessionId").and_then(Value::as_str).and_then(|sid| self.accounts.account_for(sid)).map(str::to_owned);
+                    if let Some(a) = acct {
+                        obj.insert("accountId".into(), Value::from(a));
+                    }
+                }
                 self.put_log_session(card);
             }
         }
@@ -217,6 +232,7 @@ impl CoreState {
             sweeper: None,
             summary_cache: derived_cache::VersionedCache::default(),
             stripped_cache: derived_cache::VersionedCache::default(),
+            accounts: account_registry::AccountRegistry::default(),
         }
     }
 
@@ -293,7 +309,12 @@ pub fn ingest_post(state: &mut CoreState, path: &str, body: &[u8]) {
         "logs" => {
             state.counters.logs_payloads += 1;
             // gen_ai injection needs the live span window (a later P4 slice) — never inject here.
-            state.ingest.process_logs(&payload, now, |_, _, _| false).spans
+            let r = state.ingest.process_logs(&payload, now, |_, _, _| false);
+            // server.ts processLogs: the body-pointer events' user.account_uuid → the registry.
+            for (sid, acct) in &r.account_pairs {
+                state.accounts.record(sid, acct);
+            }
+            r.spans
         }
         "metrics" => {
             // Accepted and DISCARDED — the frozen behavior.

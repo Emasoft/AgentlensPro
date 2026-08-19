@@ -139,14 +139,17 @@ const parsed = [
   ...parse('copilot-vscode', cpVs), ...parse('copilot-vscode-json', cpJson),
 ]
 
-const DEFERRED = ['accountId', 'generatedFiles', 'generatedFilesTruncated']
+// accountId is fed by the live CallBodyRegistry (OTLP ingest) — absent in a pure-parse oracle on
+// both sides; the Rust registry has its own test. generatedFiles IS in the oracle (P5c): the
+// fixture's harvested path does not exist, so it resolves to a deterministic `missing:true` ref
+// on any machine, and the fixture sessions have no scratch tree under the temp roots.
+const DEFERRED = ['accountId']
 const finish = (nowMs) => {
   const out = {}
   for (const p of parsed) {
     const r = finishRustTranscript(structuredClone(p), nowMs)
     for (const card of [r.card, ...(r.childCards ?? [])]) {
       for (const k of DEFERRED) delete card[k]
-      for (const entry of card.timeline) delete entry.generatedFiles   // attachGeneratedFiles' per-span refs — deferred too
       out[card.sessionId] = JSON.parse(JSON.stringify(card))   // undefined fields drop, as on the wire
     }
   }

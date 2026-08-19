@@ -365,8 +365,9 @@ async fn handle(
             let s = st.log_scan;
             let (sh, sm) = st.summary_cache.stats();
             let (th, tm) = st.stripped_cache.stats();
+            let (readdirs, lhits, cached) = crate::generated_files::scratch_listing_stats();
             // NOT PORTED: the sidebar/analytics caches (those views are built inside the update
-            // payload here, not as separate routes) and the scratch-listing indexer — idle zeros.
+            // payload here, not as separate routes) — idle zeros.
             serde_json::json!({
                 "incrementalReads": s.incremental_reads,
                 "fullReads": s.full_reads,
@@ -378,7 +379,7 @@ async fn handle(
                     "sidebar": { "hits": 0, "misses": 0 },
                     "analytics": { "hits": 0, "misses": 0 },
                 },
-                "scratchListing": { "readdirs": 0, "hits": 0, "cached": 0 },
+                "scratchListing": { "readdirs": readdirs, "hits": lhits, "cached": cached },
             })
             .to_string()
         };

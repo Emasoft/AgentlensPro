@@ -91,8 +91,16 @@ pub fn finish_transcript(mut parsed: ParsedTranscript, now_ms: i64, state: FileS
     });
     let mut cards: Vec<Value> = Vec::with_capacity(1 + parsed.child_cards.len());
     let mut parent = card_value(&parsed.card);
-    if let (Some(cost), Some(obj)) = (blended, parent.as_object_mut()) {
-        obj.insert("speedBlendedCostUsd".to_owned(), helpers::num(cost));
+    if let Some(obj) = parent.as_object_mut() {
+        if let Some(cost) = blended {
+            obj.insert("speedBlendedCostUsd".to_owned(), helpers::num(cost));
+        }
+        // finishRustTranscript: the harvested scratch paths + the session's scratch tree onto the
+        // PARENT card (children untouched). Runs after the hot-age strip here where the TS runs it
+        // before — equivalent: the per-entry refs die with the stripped timeline either way, the
+        // card-level group survives.
+        let harvested: Vec<(String, Option<String>)> = parsed.gen_files.iter().map(|g| (g.path.clone(), g.span_id.clone())).collect();
+        crate::generated_files::attach_generated_files(obj, &harvested, None, crate::generated_files::SCRATCH_INDEX_MAX_FILES);
     }
     cards.push(parent);
     for child in &parsed.child_cards {
