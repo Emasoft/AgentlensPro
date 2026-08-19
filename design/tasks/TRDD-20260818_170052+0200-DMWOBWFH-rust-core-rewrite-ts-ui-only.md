@@ -200,12 +200,20 @@ release-via: publish
   trim, coarse counters, injectSpanAttribute = the gen_ai target) + spanSummarizer.ts 283
   (synth-root logic for in-progress Claude/Copilot traces, bg-span mapping, efficiency rollup)
   fan into summarizers/claude.ts 620, codex.ts 506, copilot.ts 289, helpers.ts 340,
-  loopDetector.ts 309, shared/summarizerTypes.ts 729 (the WIRE shape — serde must match
-  field-for-field incl. optional-field omission), shared/tokenBuckets.ts 81. Port order:
-  helpers → types (serde, camelCase, skip_serializing_if) → copilot → claude → codex →
-  summarizer+synth → loopDetector → sessionStore window. Parity harness first: capture a real
-  5-min window via /events or store.export(), replay through both engines, key-normalized
-  deepStrictEqual (P1's lesson: serde alphabetizes vs JSON.stringify insertion order).
+  loopDetector.ts 309, shared/summarizerTypes.ts 729 (the WIRE shape), shared/tokenBuckets.ts
+  81. **P4d.1 DONE (commit cdfa379): helpers.rs ported with Node-verified parity pins** — every
+  risky expectation (String/Number coercions, BigInt truncation + parseInt fallback, toFixed,
+  the literal "Lundefined-undefined") was computed in Node first, 7/7 pinned. Two documented
+  divergences: char-boundary byte caps (TS slices UTF-16 units) and {:.1} vs toFixed rounding.
+  **DESIGN DECISION (keep it): the builders emit `serde_json::Value` objects mirroring the TS
+  object literals directly — NO typed-struct port of summarizerTypes.ts.** Parity by
+  construction: conditional keys mirror `...(x ? {x} : {})` inline, preserve_order keeps
+  insertion order, and the cross-engine diff key-normalizes anyway. summarizerTypes.ts stays
+  the documentation of the shape, not a Rust artifact.
+  Remaining port order: copilot.rs (289) → claude.rs (620) → codex.rs (506) → summarizer+synth
+  (283) → loopDetector (309) → sessionStore window (187) + tokenBuckets (81). Parity harness:
+  replay a real span window (read a live day segment or store.export()) through TS
+  summarizeSpans and a Rust `alsummarize` bin, key-normalized deepStrictEqual.
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
