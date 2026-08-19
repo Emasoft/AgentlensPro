@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T02:15:00+0200
+updated: 2026-08-20T02:35:00+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -453,14 +453,16 @@ release-via: publish
   `request_log.rs` (500-row ring + rotating `requests.log`, rssMb real per row, heap the honest
   no-V8 zeros); every UI/API response recorded at construction (SSE row = the connect frame,
   noted). 84/84.
-- **NEXT ACTION (one step): the debug seams — GET /api/debug/codex-store-groups (server.ts:4000:
-  `{codexTraceIds}` — DISTINCT sorted traceIds of the window's codex.* spans) and GET
-  /api/debug/span-attr (server.ts:4012: query traceId/spanId/key default gen_ai.output.messages,
-  through a FRESH visitor over the store so the overlay is observable — mirror with load_range,
-  bounded to the query ids).** Small, and they make P4l's overlay + the codex grouping
-  observable over the wire in BOTH engines. Then the burn subsystem (rows 12–13 + row 24 —
-  gatherBurn/computeBurnStatus/enrichBurnStatus + the gate; big, its own slice), bodies rows
-  14–15 (the body store), instruction rows 19–21, statusline row 5.
+- **P4p DONE (commit df84cf8) — the debug seams** (codex-store-groups; span-attr `{found,value}`
+  through a fresh windowed read — P4l's overlay observable over the wire). 85/85.
+- **NEXT ACTION (one step): GET /api/timeline/<sessionId> + GET /api/collector-gaps** — the two
+  small remaining GETs before the big subsystems: timeline (server.ts:4045 — read
+  resolveSessionCard first: the reparse-on-demand for a disk-restored stripped card;
+  `{timeline,fileOps,generatedFiles,generatedFilesTruncated}` — generatedFiles rides THIS lazy
+  payload, stripSessionDetail drops it from /api/summary) and collector-gaps (server.ts:4039 —
+  read getCollectorGaps; likely `{collectorGaps:[]}` idle if the lifecycle file is unported —
+  report the TS idle value with a note if so). Then the burn subsystem (rows 12–13 + 24; big,
+  its own slice), bodies rows 14–15, instruction rows 19–21, statusline row 5.
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
