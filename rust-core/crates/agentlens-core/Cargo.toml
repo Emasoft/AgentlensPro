@@ -1,0 +1,20 @@
+# agentlens-core — the Rust server surface (TRDD-DMWOBWFH P4). P4c slice: the OTLP listener.
+[package]
+name = "agentlens-core"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+agentlens-ingest = { path = "../agentlens-ingest" }
+agentlens-spanstore = { path = "../agentlens-spanstore" }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "time", "signal"] }
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+
+[[bin]]
+name = "alcore"
+path = "src/bin/alcore.rs"
