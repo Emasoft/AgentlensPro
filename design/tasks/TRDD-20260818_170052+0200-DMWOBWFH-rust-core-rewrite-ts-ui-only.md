@@ -246,9 +246,13 @@ release-via: publish
   TS-oracle parity EXACT; workspace 46/46.** Every user-facing string is pinned by the fixture;
   toLocaleString = en-US grouping (a different ICU default fails the fixture loudly);
   request lengths in UTF-16 units.
-  Remaining port order: summarizer+synth (283 — summarizeSpans: grouping, the two synth-root
-  passes, background-span association, the efficiency report) → sessionStore window (187).
-  End-to-end harness after the builders:
+  **P4d.6 DONE (commit ab9cd4a): summarizer.rs ports summarizeSpans (grouping, both synth-root
+  passes, builders, loop signals, bg association, efficiency), TS-oracle parity EXACT on the
+  empty literal AND a cross-source fixture; workspace 47/47.** Deviation on record: the synth
+  passes' never-Equal string comparator would be a non-total order (Rust sort_by may panic) —
+  str::cmp used; only equal-startTime tie order could differ.
+  Remaining: sessionStore window (187 — window trim, coarse counters, injectSpanAttribute = the
+  gen_ai target). End-to-end harness after that:
   replay a REAL span window through TS summarizeSpans and a Rust `alsummarize` bin.
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
