@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-19T21:02:00+0200
+updated: 2026-08-19T21:14:00+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -386,16 +386,29 @@ release-via: publish
   running TS server: ordered key shape identical for all 108 entries except the spool (TS has a
   spool mount here; Rust null). 76/76. Gotcha: `loadavg`/`statvfs`/`proc_pidinfo` need the
   direct `libc` dep (already in the lock via tokio).
-- **NEXT ACTION (one step): the notify-based log watcher with the 60s poll backstop** (server.ts
-  fs.watch on the discovered roots + the 5s→60s fallback): replace the 5s full-stat sweep in
-  `log_reader::start_sweeper` with `notify` events coalesced per path (debounce ≥250ms, as the
-  TS `scheduleFileScan`), keep the full sweep as a 60s backstop (a dropped event must never
-  strand a session), and prove it with a test that touches a fixture file and sees the card
-  advance without waiting for the backstop. Then P5c (accountId registry, generated-files
-  attach), the remaining frozen routes (`/api/hook-config` GET+POST reuse
-  `server_stats::hook_runtime_config`; `/api/embed-status`; `/api/clear` + `/action`;
-  `/api/import`; `/api/debug/log-scan-stats`), and the perf notes under P5b (skip timeline
-  retention for cold files; memoize the stripped summary by data_version).
+- **P5f DONE (commit 5d1451f) — the notify-based log watcher + debounced targeted sweep, 60s
+  full backstop.** `discovery::watch_dirs` (getWatchDirs), `discovery::LogRoots::classify`
+  (_agentKeyForPath), `discover_opencode`; `LogTailer::sweep_paths` (_scanPaths) and the ONE
+  per-file gate `process_file` shared with the full sweep; `start_sweeper` attaches one
+  recursive `notify` watcher per root BEFORE the boot sweep, coalesces events per 300ms burst,
+  runs the targeted sweep, and the full sweep every `FULL_RESCAN` (60s) — or every 5s when 0
+  watchers attached (TS fallback). Unnamed event / watcher error ⇒ next sweep promoted to full.
+  **Gotcha (cost a failing test):** FSEvents reports the CANONICAL path (`/private/var/…`) while
+  discovery spells the configured root (`/var/…`) — events are rebased onto the configured
+  spelling in `attach_watchers`, or the classifier disowns every event. Proof: parity test (card
+  advances in ~0.9s with the backstop pinned at 1h) + live over 13,540 files: this session's
+  card advanced within 4s of the write; steady-state CPU ≈1%. 77/77.
+- **NEXT ACTION (one step): the remaining small frozen routes in ONE slice** — `/api/hook-config`
+  GET+POST (rows 10–11; GET reuses `server_stats::hook_runtime_config` + `cacheGuardEnabled`;
+  POST = saveHookRuntimeConfig: body ≤8KB patch, unknown keys ignored, junk gateMode keeps the
+  current, atomic tmp+rename, `{config:{…},applied:true}`), `/api/embed-status` (row 1:
+  `{mode:"standalone",role:null,keyLoaded:false}` + `Vary: X-Agentlens-Viewer` — read
+  `src/embedAuth.ts` first), `/api/clear` + `/action` (rows 16, 22: in-process resets, 200 empty
+  body), `/api/debug/log-scan-stats` (row 25: SweepStats + dataVersion — keep the last sweep's
+  stats on CoreState). Read each TS handler first; exact status/headers/body per the freeze.
+  Then P5c (accountId registry, generated-files attach), `/api/import` (row 3), and the perf
+  notes under P5b (skip timeline retention for cold files; memoize the stripped summary by
+  data_version).
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
