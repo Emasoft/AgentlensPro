@@ -32,7 +32,6 @@ pub const BODIES_DIR: &str = "bodies";
 pub const PARTS_DIR: &str = "parts";
 pub const DEFAULT_MEMORY_LIMIT: &str = "8GB";
 pub const TS_TOLERANCE_MS: i64 = 2000;
-pub const RECONSTRUCT_CHUNK: usize = 32;
 
 pub struct Store {
     pub con: Connection,
@@ -40,7 +39,20 @@ pub struct Store {
     /// sha256 of every span already durable — the cross-part dedup set (Parquet has no
     /// cross-file content addressing, so the dedup is OURS).
     pub known: HashSet<String>,
+    /// Every body_id with at least one row, and every (body_id, src_name) pair — the same
+    /// seed-once-then-mutate design as `known`, and for the same measured reason: an
+    /// `all_of("body")` query re-binds the full parquet file LIST (4,215 files on the real
+    /// store, ~seconds per query), so per-body existence probes made a 1,300-file pass take
+    /// an hour instead of a minute (2026-08-18 live runaway, TRDD-DMWOBWFH P4b).
+    body_ids: HashSet<String>,
+    bodies_named: HashSet<String>,
     next_part: u64,
+}
+
+/// Key for `bodies_named` — 0x1F separator: cannot appear in a hex body_id and no writer of
+/// ours puts control chars in a body filename.
+fn named_key(body_id: &str, src_name: &str) -> String {
+    format!("{body_id}\u{1f}{src_name}")
 }
 
 fn q(s: &str) -> String {
@@ -78,6 +90,11 @@ pub fn parquet_scan(dir: &Path, sub: &str) -> Option<String> {
 
 /// Durable parts + staging as one relation — `UNION ALL BY NAME` (see module doc).
 pub fn all_of(store: &Store, table: &str) -> String {
+    if table == "body" {
+        // The bodies corpus lives in the native `body_durable` mirror (open-time load +
+        // flush read-back appends), so its full view never touches parquet — see open_store.
+        return "(SELECT * FROM body_durable UNION ALL BY NAME SELECT * FROM body)".to_owned();
+    }
     let sub = match table {
         "blob" => BLOBS_DIR,
         "body" => BODIES_DIR,
@@ -118,7 +135,27 @@ pub fn open_store(dir: &Path, memory_limit: &str, threads: usize) -> duckdb::Res
             known.insert(r);
         }
     }
-    Ok(Store { con, dir: dir.to_path_buf(), known, next_part: 0 })
+    // `body_durable` — a native mirror of the bodies parquet corpus, loaded ONCE here and kept
+    // current by flush's read-back append. Body rows are small metadata, so this is the cheap
+    // trade that lets all_of("body") skip the parquet corpus on every later query (a full-scan
+    // class of the 2026-08-18 17-minute pass). Cloned from the staging schema, then loaded
+    // BY NAME so parts from an older schema generation fill absent columns with NULL
+    // (TRDD-219K7C1N: BY NAME, never positional).
+    con.execute_batch("CREATE TABLE body_durable AS SELECT * FROM body WHERE 1=0;")?;
+    if let Some(scan) = parquet_scan(dir, BODIES_DIR) {
+        con.execute_batch(&format!("INSERT INTO body_durable BY NAME SELECT * FROM {scan};"))?;
+    }
+    let mut body_ids = HashSet::new();
+    let mut bodies_named = HashSet::new();
+    {
+        let mut stmt = con.prepare("SELECT DISTINCT body_id, src_name FROM body_durable")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        for (id, name) in rows.flatten() {
+            bodies_named.insert(named_key(&id, &name));
+            body_ids.insert(id);
+        }
+    }
+    Ok(Store { con, dir: dir.to_path_buf(), known, body_ids, bodies_named, next_part: 0 })
 }
 
 #[derive(Debug, Default)]
@@ -159,10 +196,24 @@ pub fn flush_detailed(store: &mut Store) -> Result<FlushResult, String> {
             return Err(format!("refusing to overwrite existing part {} — part naming must be collision-free", out.display()));
         }
         let out_str = out.to_str().ok_or("non-utf8 store path")?;
+        // The body table is additionally MIRRORED into the native `body_durable` by READING BACK
+        // the parquet just written — the read-back is the encoding proof (the flushed part
+        // parses to rows), durability stays the fsync barrier's job, and all_of("body") never
+        // has to scan the parquet corpus again (the third full-scan class of the 2026-08-18
+        // 17-minute pass). Mirror BEFORE the staging DELETE so a read-back failure leaves the
+        // staging rows in place and fails the flush loudly.
+        let mirror = if table == "body" {
+            format!(
+                "INSERT INTO body_durable BY NAME SELECT * FROM read_parquet([{}], union_by_name := true); ",
+                q(out_str)
+            )
+        } else {
+            String::new()
+        };
         store
             .con
             .execute_batch(&format!(
-                "COPY {table} TO {} (FORMAT PARQUET, COMPRESSION ZSTD); DELETE FROM {table};",
+                "COPY {table} TO {} (FORMAT PARQUET, COMPRESSION ZSTD); {mirror}DELETE FROM {table};",
                 q(out_str)
             ))
             .map_err(|e| e.to_string())?;
@@ -203,19 +254,7 @@ fn extract_meta(raw: &str, src_name: &str) -> (Option<String>, Option<String>, &
     (session_id, model, kind)
 }
 
-fn body_exists(store: &Store, body_id: &str) -> Result<bool, String> {
-    store
-        .con
-        .query_row(
-            &format!("SELECT count(*) FROM {} WHERE body_id = {}", all_of(store, "body"), q(body_id)),
-            [],
-            |r| r.get::<_, i64>(0),
-        )
-        .map(|c| c > 0)
-        .map_err(|e| e.to_string())
-}
-
-fn append_body_row(store: &Store, body_id: &str, src_name: &str, raw: &str, raw_bytes: u64, ts_ms: i64) -> Result<(), String> {
+fn append_body_row(store: &mut Store, body_id: &str, src_name: &str, raw: &str, raw_bytes: u64, ts_ms: i64) -> Result<(), String> {
     let (session_id, model, kind) = extract_meta(raw, src_name);
     let sql = format!(
         "INSERT INTO body VALUES ({}, {}, {}, {}, make_timestamp({}), {}, {}, {})",
@@ -228,7 +267,12 @@ fn append_body_row(store: &Store, body_id: &str, src_name: &str, raw: &str, raw_
         raw_bytes,
         q(body_id),
     );
-    store.con.execute_batch(&sql).map_err(|e| e.to_string())
+    store.con.execute_batch(&sql).map_err(|e| e.to_string())?;
+    // The in-memory sets are the ONLY existence probes ingest uses (never an all_of query —
+    // see the field doc), so a row and its set entries must be written together, here.
+    store.body_ids.insert(body_id.to_owned());
+    store.bodies_named.insert(named_key(body_id, src_name));
+    Ok(())
 }
 
 /// ingestBody: idempotent, and GATE 1 — refuses anything that does not reconstruct
@@ -237,22 +281,9 @@ pub fn ingest_body(store: &mut Store, src_name: &str, raw: &str, ts_ms: i64) -> 
     let body_id = body_id_of(raw);
     let raw_bytes = raw.len() as u64;
 
-    if body_exists(store, &body_id)? {
+    if store.body_ids.contains(&body_id) {
         // Content dedup — but each capture event still gets its own (src_name, ts) body row.
-        let named: i64 = store
-            .con
-            .query_row(
-                &format!(
-                    "SELECT count(*) FROM {} WHERE body_id = {} AND src_name = {}",
-                    all_of(store, "body"),
-                    q(&body_id),
-                    q(src_name)
-                ),
-                [],
-                |r| r.get(0),
-            )
-            .map_err(|e| e.to_string())?;
-        if named == 0 {
+        if !store.bodies_named.contains(&named_key(&body_id, src_name)) {
             append_body_row(store, &body_id, src_name, raw, raw_bytes, ts_ms)?;
         }
         return Ok(IngestResult { body_id, raw_bytes, new_blobs: 0, new_bytes: 0, existed: true });
@@ -370,6 +401,91 @@ pub fn reconstruct_body(store: &Store, body_id: &str) -> Result<String, String> 
     Ok(raw)
 }
 
+/// Bulk reconstruction for the verify gate: ONE part query + ONE blob query per chunk. WHY:
+/// every all_of query re-binds the full parquet file LIST (~seconds each at 4,215 parts), so
+/// the per-body form cost 2 queries × N bodies — the verify half of the 2026-08-18 pass
+/// runaway (TRDD-DMWOBWFH P4b). Same rows, same reassembly, same per-body sha gate as
+/// reconstruct_body; only the fetch is batched.
+/// Pass-scoped sha→span cache for the verify gate. Intrinsically bounded: distinct spans are
+/// substrings of the bodies being verified, so the cache never exceeds the pass throttle's
+/// bytes (512MB default, typically far less — the cross-turn overlap is the point).
+pub type SpanCache = std::collections::HashMap<String, String>;
+
+fn reconstruct_chunk(
+    store: &Store,
+    ids: &[&String],
+    span_cache: &mut SpanCache,
+) -> Result<std::collections::HashMap<String, Result<String, String>>, String> {
+    let list = ids.iter().map(|s| q(s)).collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "SELECT body_id, kind, lit, sha FROM {} WHERE body_id IN ({list}) ORDER BY body_id, pos",
+        all_of(store, "part")
+    );
+    let mut stmt = store.con.prepare(&sql).map_err(|e| e.to_string())?;
+    let rows: Vec<(String, String, Option<String>, Option<String>)> = stmt
+        .query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, Option<String>>(3)?))
+        })
+        .map_err(|e| e.to_string())?
+        .flatten()
+        .collect();
+    // Fetch ONLY cache-miss shas, and SKIP the blob query outright when there are none. The blob
+    // query is the pass's dominant cost: `WHERE sha IN (…)` gets no zone-map pruning (parts are
+    // insertion-ordered, so every row group's sha range spans everything) and therefore
+    // decompresses the ENTIRE blob corpus per query. Consecutive turns dedup against each other,
+    // so without the cache each chunk re-paid that full scan for mostly the SAME spans — the
+    // second half of the 2026-08-18 17-minute pass. The cache is filled ONLY from store query
+    // results (never from ingest RAM), so the delete gate's proof stands: every sha used in a
+    // verify was returned by the DURABLE store at least once this pass, and parts are immutable.
+    let shas: Vec<String> = {
+        let mut seen = HashSet::new();
+        rows.iter()
+            .filter_map(|(_, _, _, sha)| sha.clone())
+            .filter(|s| !span_cache.contains_key(s))
+            .filter(|s| seen.insert(s.clone()))
+            .collect()
+    };
+    if !shas.is_empty() {
+        let list = shas.iter().map(|s| q(s)).collect::<Vec<_>>().join(",");
+        let sql = format!("SELECT sha, data FROM {} WHERE sha IN ({list})", all_of(store, "blob"));
+        let mut stmt = store.con.prepare(&sql).map_err(|e| e.to_string())?;
+        let got = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .map_err(|e| e.to_string())?;
+        for g in got.flatten() {
+            span_cache.insert(g.0, g.1);
+        }
+    }
+    let spans = &*span_cache;
+    let mut out = std::collections::HashMap::new();
+    for id in ids {
+        let parts: Vec<Part> = rows
+            .iter()
+            .filter(|(b, _, _, _)| b == *id)
+            .map(|(_, kind, lit, sha)| {
+                if kind == "lit" {
+                    Part::Lit { text: lit.clone().unwrap_or_default() }
+                } else {
+                    Part::Blob { sha: sha.clone().unwrap_or_default(), n: 0, path: String::new(), idx: -1 }
+                }
+            })
+            .collect();
+        if parts.is_empty() {
+            out.insert((*id).clone(), Err(format!("unknown body {id}")));
+            continue;
+        }
+        let r = reassemble(&parts, |sha| spans.get(sha).cloned()).and_then(|raw| {
+            if sha256_hex(&raw) != **id {
+                Err(format!("RECONSTRUCTION MISMATCH for {id} — the store cannot return what it was given"))
+            } else {
+                Ok(raw)
+            }
+        });
+        out.insert((*id).clone(), r);
+    }
+    Ok(out)
+}
+
 // ── verifyInStore.ts (the bulk delete gate) ───────────────────────────────────────
 
 #[derive(Debug)]
@@ -386,6 +502,17 @@ pub struct VerifyItem {
 
 /// The batched delete gate: bytes + row + ts for a whole batch in a handful of round trips.
 pub fn verify_bodies_in_store(store: &Store, items: &[VerifyItem]) -> Result<std::collections::HashMap<String, VerifyResult>, String> {
+    verify_bodies_in_store_cached(store, items, &mut SpanCache::new())
+}
+
+/// Same gate with a CALLER-scoped span cache — the pass threads one cache across all its settle
+/// chunks so the full-blob-corpus scan runs once per novel span set, not once per chunk (the
+/// reconstruct_chunk doc has the measured WHY). One-shot callers use verify_bodies_in_store.
+pub fn verify_bodies_in_store_cached(
+    store: &Store,
+    items: &[VerifyItem],
+    span_cache: &mut SpanCache,
+) -> Result<std::collections::HashMap<String, VerifyResult>, String> {
     let mut results = std::collections::HashMap::new();
     if items.is_empty() {
         return Ok(results);
@@ -415,19 +542,25 @@ pub fn verify_bodies_in_store(store: &Store, items: &[VerifyItem]) -> Result<std
         }
     }
 
-    for chunk in with_ids.chunks(RECONSTRUCT_CHUNK) {
-        for (it, body_id) in chunk {
-            // Reconstruction per body (the TS bulk-reconstruct optimization matters at 200-file
-            // batches through node's async round trips; in-process duckdb-rs round trips are
-            // orders cheaper, so per-body here keeps the code simple at equal correctness —
-            // revisit only if a measured pass says otherwise).
-            match reconstruct_body(store, body_id) {
+    // ONE part query + at most ONE blob query for the WHOLE call (reconstruct_chunk doc has the
+    // measured WHY — each of those queries decompresses entire parquet corpora, so their count,
+    // not their row volume, is the pass's cost). The caller bounds memory by bounding the bytes
+    // it passes per call; dedupe ids — one body_id can appear under several src_names.
+    let ids: Vec<&String> = {
+        let mut seen = HashSet::new();
+        with_ids.iter().filter(|(_, id)| seen.insert(id.as_str())).map(|(_, id)| id).collect()
+    };
+    let rebuilt = reconstruct_chunk(store, &ids, span_cache)?;
+    {
+        let chunk = &with_ids;
+        for (it, body_id) in chunk.iter() {
+            match rebuilt.get(body_id).expect("reconstruct_chunk answers every id it was given") {
                 Err(e) => {
                     results.insert(it.src_name.clone(), VerifyResult { ok: false, reason: Some(format!("{}: {e}", it.src_name)) });
                     continue;
                 }
                 Ok(back) => {
-                    if sha256_hex(&back) != sha256_hex(&it.raw) {
+                    if sha256_hex(back) != sha256_hex(&it.raw) {
                         results.insert(
                             it.src_name.clone(),
                             VerifyResult { ok: false, reason: Some(format!("{}: reconstruction != source bytes", it.src_name)) },
@@ -460,3 +593,4 @@ pub fn verify_bodies_in_store(store: &Store, items: &[VerifyItem]) -> Result<std
     }
     Ok(results)
 }
+

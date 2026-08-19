@@ -106,3 +106,19 @@ fn stranded_names_relocate_off_the_spool_with_mtime_preserved() {
     let d = after.duration_since(before).unwrap_or_else(|e| e.duration());
     assert!(d.as_millis() < 1500, "the mtime IS the capture record and must survive");
 }
+
+#[test]
+fn pass_lock_is_exclusive_and_dies_with_its_holder() {
+    // One pass per store, machine-wide: a second acquire on the SAME store must refuse while the
+    // first is held (BSD flock is per-open-file, so two opens conflict even in one process), and
+    // releasing the first (what the kernel does on ANY process death, SIGKILL included) must let
+    // the next acquire through — no stale-lock state exists to repair.
+    let dir = std::env::temp_dir().join(format!("al-passlock-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let held = agentlens_store::pass::acquire_pass_lock(&dir).expect("first acquire owns the store");
+    let refused = agentlens_store::pass::acquire_pass_lock(&dir);
+    assert!(refused.is_err(), "a concurrent pass must be refused while the lock is held");
+    drop(held);
+    agentlens_store::pass::acquire_pass_lock(&dir).expect("released lock is immediately reusable");
+}

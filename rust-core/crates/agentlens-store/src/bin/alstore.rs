@@ -4,8 +4,8 @@
 //!   alstore reconstruct <storeDir> <bodyId>                print the exact original bytes
 //!   alstore verify <storeDir> <src_name> <body.json> [--ts-ms N]
 //!   alstore pass <storeDir> <bodiesDir> [--no-delete] [--durable-source]
-//!       [--max-bytes N] [--relocate-to DIR]   one throttled ingest pass; skip/stranded
-//!       state persists in <storeDir>/.pass-state.json across invocations
+//!       [--max-bytes N] [--max-age-ms N] [--relocate-to DIR]   one throttled ingest pass;
+//!       skip/stranded state persists in <storeDir>/.pass-state.json across invocations
 //!
 //! The parity tests drive these against the TS store on the same files/directories: the
 //! Parquet parts are the compatibility boundary (both engines are DuckDB).
@@ -26,6 +26,8 @@ fn main() {
     let mut no_delete = false;
     let mut durable_source = false;
     let mut max_bytes: u64 = agentlens_store::pass::DEFAULT_MAX_BYTES_PER_PASS;
+    // 0 = ingest regardless of age — matches PassOptions::default and the TS caller's over-cap mode.
+    let mut max_age_ms: i64 = 0;
     let mut relocate_to: Option<String> = None;
     let mut rest: Vec<String> = Vec::new();
     let mut i = 2;
@@ -41,6 +43,10 @@ fn main() {
                 i += 1;
                 max_bytes = args.get(i).and_then(|v| v.parse().ok()).unwrap_or_else(|| usage("--max-bytes needs bytes"));
             }
+            "--max-age-ms" => {
+                i += 1;
+                max_age_ms = args.get(i).and_then(|v| v.parse().ok()).unwrap_or_else(|| usage("--max-age-ms needs ms"));
+            }
             "--relocate-to" => {
                 i += 1;
                 relocate_to = Some(args.get(i).cloned().unwrap_or_else(|| usage("--relocate-to needs a dir")));
@@ -50,6 +56,26 @@ fn main() {
         }
         i += 1;
     }
+
+    // One pass per store, machine-wide (see acquire_pass_lock) — taken BEFORE the store open so
+    // a locked-out tick exits in milliseconds instead of paying the parts-scan open first.
+    // Exit 75 = EX_TEMPFAIL: the TS wrapper treats it as "skip this tick", the cross-process
+    // twin of its own bodiesPassRunning guard — every other failure stays loud.
+    let _pass_lock = if cmd == "pass" {
+        match agentlens_store::pass::acquire_pass_lock(std::path::Path::new(store_dir)) {
+            Ok(f) => Some(f),
+            Err(agentlens_store::pass::PassLockErr::Busy) => {
+                eprintln!("alstore: another alstore pass owns this store");
+                exit(75);
+            }
+            Err(agentlens_store::pass::PassLockErr::Io(e)) => {
+                eprintln!("alstore: {e}");
+                exit(1);
+            }
+        }
+    } else {
+        None
+    };
 
     let threads = std::thread::available_parallelism().map(|n| n.get().saturating_sub(2).max(4)).unwrap_or(4);
     let mut store = agentlens_store::open_store(std::path::Path::new(store_dir), agentlens_store::DEFAULT_MEMORY_LIMIT, threads)
@@ -140,6 +166,7 @@ fn main() {
                 delete_after: !no_delete,
                 durable_source,
                 max_bytes_per_pass: max_bytes,
+                max_age_ms,
                 relocate_stranded_to: relocate_to.map(std::path::PathBuf::from),
                 ..Default::default()
             };

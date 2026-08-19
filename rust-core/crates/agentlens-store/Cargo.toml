@@ -10,6 +10,9 @@ duckdb = { version = "1.10505.0", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"
+# Kernel flock for the single-pass-per-store lock: auto-released on ANY process death
+# (SIGKILL included), so an orphaned pass can never leave a stale lock behind.
+fs2 = "0.4"
 
 [[bin]]
 name = "alstore"

@@ -19,11 +19,45 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::{flush_detailed, ingest_body, verify_bodies_in_store, Store, VerifyItem, BLOBS_DIR, BODIES_DIR, PARTS_DIR};
+use crate::{flush_detailed, ingest_body, Store, VerifyItem, BLOBS_DIR, BODIES_DIR, PARTS_DIR};
 
 pub const DEFAULT_MAX_BYTES_PER_PASS: u64 = 512 * 1024 * 1024;
 pub const DEFAULT_BATCH: usize = 200;
-pub const SETTLE_READ_CHUNK: usize = 32;
+/// Settle-group ceiling in SOURCE bytes: bounds peak memory (raw + rebuilt strings ≈ 2× this)
+/// while keeping the corpus-priced verify queries to a handful per batch.
+pub const SETTLE_GROUP_BYTES: u64 = 128 * 1024 * 1024;
+
+/// Why a pass could not take the store's lock: Busy is the benign skip-this-tick case; Io is a
+/// real failure that must stay LOUD (conflating them made a fresh store dir look "busy").
+#[derive(Debug)]
+pub enum PassLockErr {
+    Busy,
+    Io(String),
+}
+
+/// EXACTLY ONE pass per store dir, machine-wide. The in-process `bodiesPassRunning` guard the
+/// TS server uses cannot span processes, and the exec-sidecar model creates real multi-process
+/// exposure: a SIGKILLed server (the loop watchdog kills with SIGKILL) leaves its pass child
+/// running as an orphan while the respawned server starts its own — observed live 2026-08-18,
+/// two concurrent passes on one store. flock is the correct primitive: the kernel releases it
+/// on ANY process death, so there is no stale-lock state to repair. Hold the returned File for
+/// the whole pass; Busy means another pass owns the store RIGHT NOW (a benign skip-this-tick,
+/// not a broken deployment).
+pub fn acquire_pass_lock(store_dir: &Path) -> Result<fs::File, PassLockErr> {
+    use fs2::FileExt;
+    // The lock is taken BEFORE open_store (so a locked-out tick never pays the open), which
+    // means on a brand-new store THIS is the first touch — create the dir or a fresh store
+    // would report its own absence as "busy".
+    fs::create_dir_all(store_dir).map_err(|e| PassLockErr::Io(format!("cannot create store dir: {e}")))?;
+    let f = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(store_dir.join(".pass.lock"))
+        .map_err(|e| PassLockErr::Io(format!("cannot open pass lock: {e}")))?;
+    f.try_lock_exclusive().map_err(|_| PassLockErr::Busy)?;
+    Ok(f)
+}
 
 pub struct PassOptions {
     pub bodies_dir: PathBuf,
@@ -162,6 +196,11 @@ pub fn ingest_pass(
 ) -> PassResult {
     let mut res = PassResult::default();
     let mut relocate_failures = 0u32;
+    // One span cache for the WHOLE pass — later settle chunks mostly re-reference the spans
+    // earlier chunks already store-proved (consecutive turns dedup against each other), so this
+    // turns the per-chunk full-blob-corpus scan into a handful per pass (measured 17min → see
+    // reconstruct_chunk's doc). Bounded by the pass throttle bytes by construction.
+    let mut span_cache = crate::SpanCache::new();
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
@@ -228,7 +267,26 @@ pub fn ingest_pass(
                             }
                         }
                         if barrier_ok {
-                            for chunk in batch.chunks(SETTLE_READ_CHUNK) {
+                            // Group by BYTES, not file count: every verify call costs a fixed
+                            // number of corpus-priced queries however many files it carries, so
+                            // the group should be as large as memory allows (raw + rebuilt
+                            // strings ≈ 2× group bytes). 32-file groups made a 1,251-file pass
+                            // issue ~40× the queries for the same proof (2026-08-18).
+                            let mut groups: Vec<&[BatchItem]> = Vec::new();
+                            {
+                                let mut start = 0usize;
+                                let mut bytes = 0u64;
+                                for (i, b) in batch.iter().enumerate() {
+                                    if i > start && bytes + b.size > SETTLE_GROUP_BYTES {
+                                        groups.push(&batch[start..i]);
+                                        start = i;
+                                        bytes = 0;
+                                    }
+                                    bytes += b.size;
+                                }
+                                groups.push(&batch[start..]);
+                            }
+                            for chunk in groups {
                                 let mut items: Vec<(&BatchItem, String)> = Vec::new();
                                 for b in chunk {
                                     match fs::read_to_string(&b.p) {
@@ -244,7 +302,7 @@ pub fn ingest_pass(
                                     .iter()
                                     .map(|(b, raw)| VerifyItem { src_name: b.name.clone(), raw: raw.clone(), ts_ms: Some(b.mtime_ms) })
                                     .collect();
-                                let results = match verify_bodies_in_store(store, &verify_items) {
+                                let results = match crate::verify_bodies_in_store_cached(store, &verify_items, &mut span_cache) {
                                     Ok(r) => r,
                                     Err(e) => {
                                         // Per-chunk isolation: a store error costs THIS chunk its
