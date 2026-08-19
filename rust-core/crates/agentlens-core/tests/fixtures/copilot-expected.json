@@ -1,0 +1,164 @@
+[
+ {
+  "sessionId": "root-1",
+  "traceId": "trace-cop-1",
+  "source": "copilot",
+  "dataSource": "otel",
+  "initiator": "agent",
+  "workspace": "",
+  "userRequest": "refactor the parser",
+  "model": "gpt-5",
+  "turns": 3,
+  "inputTokens": 600,
+  "outputTokens": 250,
+  "cacheReadTokens": 400,
+  "cacheCreateTokens": 0,
+  "cacheHitRate": 0.4,
+  "durationMs": 60000,
+  "startTime": "2025-08-18T08:00:00.000Z",
+  "filesRead": [
+   "parser.ts"
+  ],
+  "filesSearched": [],
+  "filesChanged": [
+   "/proj/a.ts",
+   "/proj/b.ts",
+   "/proj/c.rs"
+  ],
+  "filesWritten": [],
+  "toolCounts": {
+   "read_file": 1,
+   "multi_replace_string_in_file": 1,
+   "apply_patch": 1
+  },
+  "totalToolCalls": 3,
+  "totalLlmCalls": 2,
+  "errors": 1,
+  "outcome": "text_response",
+  "timeline": [
+   {
+    "type": "llm",
+    "spanId": "chat-1",
+    "label": "gpt-5",
+    "model": "gpt-5",
+    "thinking": "thinking about the parser structure and how to refactor it",
+    "inputTokens": 400,
+    "outputTokens": 40,
+    "cacheReadTokens": 200,
+    "ttft": 350,
+    "durationMs": 3000,
+    "action": "called read_file, read_file",
+    "isError": false,
+    "timestamp": "2025-08-18T08:00:01.000Z"
+   },
+   {
+    "type": "tool",
+    "spanId": "tool-1",
+    "label": "read_file parser.ts L10-40",
+    "durationMs": 500,
+    "resultSummary": "70 chars",
+    "fullResult": "the file contents are long enough to exceed fifty utf16 units for sure",
+    "toolInput": "{\"filePath\":\"/proj/src/parser.ts\",\"startLine\":10,\"endLine\":40}",
+    "isError": false,
+    "timestamp": "2025-08-18T08:00:05.000Z"
+   },
+   {
+    "type": "tool",
+    "spanId": "tool-2",
+    "label": "multi_replace_string_in_file edit",
+    "durationMs": 1000,
+    "resultSummary": "empty",
+    "toolInput": "{\"replacements\":[{\"filePath\":\"/proj/a.ts\",\"oldString\":\"x\",\"newString\":\"y\"},{\"filePath\":\"/proj/b.ts\",\"oldString\":\"p\",\"newString\":\"q\"}]}",
+    "isError": true,
+    "errorMessage": "edit refused",
+    "timestamp": "2025-08-18T08:00:06.000Z",
+    "editDetails": [
+     {
+      "filePath": "/proj/a.ts",
+      "oldString": "x",
+      "newString": "y"
+     },
+     {
+      "filePath": "/proj/b.ts",
+      "oldString": "p",
+      "newString": "q"
+     }
+    ]
+   },
+   {
+    "type": "tool",
+    "spanId": "tool-3",
+    "label": "apply_patch c.rs",
+    "durationMs": 1000,
+    "resultSummary": "Done",
+    "fullResult": "Done",
+    "toolInput": "{\"patch\":\"*** Begin Patch\\n*** Update File: /proj/c.rs\\n@@ fn main @@\\n-old line\\n+new line\\n*** End Patch\"}",
+    "isError": false,
+    "timestamp": "2025-08-18T08:00:08.000Z",
+    "editDetails": [
+     {
+      "filePath": "/proj/c.rs",
+      "oldString": "old line",
+      "newString": "new line"
+     }
+    ]
+   },
+   {
+    "type": "llm",
+    "spanId": "chat-2",
+    "label": "claude-opus-5",
+    "model": "claude-opus-5",
+    "inputTokens": 50,
+    "outputTokens": 80,
+    "cacheReadTokens": 9000,
+    "cacheCreateTokens": 120,
+    "ttft": 0,
+    "durationMs": 2000,
+    "action": "text response",
+    "responseText": "All done.",
+    "isError": false,
+    "timestamp": "2025-08-18T08:00:10.000Z"
+   },
+   {
+    "type": "background",
+    "spanId": "bg-1",
+    "label": "embedding_index",
+    "durationMs": 100,
+    "isError": false,
+    "timestamp": "2025-08-18T08:00:13.000Z"
+   }
+  ],
+  "backgroundSpans": [],
+  "loopSignals": []
+ },
+ {
+  "sessionId": "root-2",
+  "traceId": "trace-cop-2",
+  "source": "copilot",
+  "dataSource": "otel",
+  "initiator": "agent",
+  "workspace": "",
+  "userRequest": "[Copilot session]",
+  "model": "",
+  "turns": 0,
+  "inputTokens": 0,
+  "outputTokens": 0,
+  "cacheReadTokens": 0,
+  "cacheCreateTokens": 0,
+  "cacheHitRate": 0,
+  "durationMs": 1000,
+  "startTime": "2025-08-18T08:01:40.000Z",
+  "filesRead": [],
+  "filesSearched": [],
+  "filesChanged": [],
+  "filesWritten": [],
+  "toolCounts": {},
+  "totalToolCalls": 0,
+  "totalLlmCalls": 0,
+  "errors": 0,
+  "outcome": "unknown",
+  "timeline": [],
+  "backgroundSpans": [],
+  "loopSignals": []
+ }
+]

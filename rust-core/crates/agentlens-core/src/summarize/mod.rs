@@ -3,3 +3,5 @@
 //! pins and end-to-end by the cross-engine harness.
 
 pub mod helpers;
+pub mod buckets;
+pub mod copilot;

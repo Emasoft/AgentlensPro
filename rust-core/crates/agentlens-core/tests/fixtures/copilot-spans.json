@@ -1,0 +1,78 @@
+[
+  {
+    "traceId": "trace-cop-1", "spanId": "root-1", "name": "invoke_agent copilot",
+    "startTime": "1755504000000000000", "endTime": "1755504060000000000",
+    "attributes": [
+      { "key": "copilot_chat.user_request", "value": { "stringValue": "  <userRequest> refactor the parser </userRequest> extra" } },
+      { "key": "gen_ai.request.model", "value": { "stringValue": "gpt-5" } },
+      { "key": "copilot_chat.turn_count", "value": { "intValue": "3" } },
+      { "key": "gen_ai.usage.input_tokens", "value": { "intValue": "1000" } },
+      { "key": "gen_ai.usage.cache_read.input_tokens", "value": { "intValue": "400" } },
+      { "key": "gen_ai.usage.output_tokens", "value": { "intValue": 250 } }
+    ]
+  },
+  {
+    "traceId": "trace-cop-1", "spanId": "chat-1", "parentSpanId": "root-1", "name": "chat gpt-5",
+    "startTime": "1755504001000000000", "endTime": "1755504004000000000",
+    "attributes": [
+      { "key": "gen_ai.request.model", "value": { "stringValue": "gpt-5" } },
+      { "key": "gen_ai.usage.input_tokens", "value": { "intValue": "600" } },
+      { "key": "gen_ai.usage.cache_read.input_tokens", "value": { "intValue": "200" } },
+      { "key": "gen_ai.usage.output_tokens", "value": { "intValue": "40" } },
+      { "key": "copilot_chat.time_to_first_token", "value": { "intValue": "350" } },
+      { "key": "copilot_chat.reasoning_content", "value": { "stringValue": "thinking about the parser structure and how to refactor it" } },
+      { "key": "gen_ai.output.messages", "value": { "stringValue": "[{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_call\",\"name\":\"read_file\"}],\"name\":\"read_file\"}]" } }
+    ]
+  },
+  {
+    "traceId": "trace-cop-1", "spanId": "tool-1", "parentSpanId": "chat-1", "name": "execute_tool read_file",
+    "startTime": "1755504005000000000", "endTime": "1755504005500000000",
+    "attributes": [
+      { "key": "gen_ai.tool.name", "value": { "stringValue": "read_file" } },
+      { "key": "gen_ai.tool.call.arguments", "value": { "stringValue": "{\"filePath\":\"/proj/src/parser.ts\",\"startLine\":10,\"endLine\":40}" } },
+      { "key": "gen_ai.tool.call.result", "value": { "stringValue": "the file contents are long enough to exceed fifty utf16 units for sure" } }
+    ]
+  },
+  {
+    "traceId": "trace-cop-1", "spanId": "tool-2", "parentSpanId": "chat-1", "name": "execute_tool edit",
+    "startTime": "1755504006000000000", "endTime": "1755504007000000000",
+    "status": { "code": 2, "message": "edit refused" },
+    "attributes": [
+      { "key": "gen_ai.tool.name", "value": { "stringValue": "multi_replace_string_in_file" } },
+      { "key": "gen_ai.tool.call.arguments", "value": { "stringValue": "{\"replacements\":[{\"filePath\":\"/proj/a.ts\",\"oldString\":\"x\",\"newString\":\"y\"},{\"filePath\":\"/proj/b.ts\",\"oldString\":\"p\",\"newString\":\"q\"}]}" } },
+      { "key": "gen_ai.tool.call.result", "value": { "stringValue": "" } }
+    ]
+  },
+  {
+    "traceId": "trace-cop-1", "spanId": "tool-3", "parentSpanId": "root-1", "name": "execute_tool patch",
+    "startTime": "1755504008000000000", "endTime": "1755504009000000000",
+    "attributes": [
+      { "key": "gen_ai.tool.name", "value": { "stringValue": "apply_patch" } },
+      { "key": "gen_ai.tool.call.arguments", "value": { "stringValue": "{\"patch\":\"*** Begin Patch\\n*** Update File: /proj/c.rs\\n@@ fn main @@\\n-old line\\n+new line\\n*** End Patch\"}" } },
+      { "key": "gen_ai.tool.call.result", "value": { "stringValue": "Done" } }
+    ]
+  },
+  {
+    "traceId": "trace-cop-1", "spanId": "chat-2", "parentSpanId": "root-1", "name": "chat claude",
+    "startTime": "1755504010000000000", "endTime": "1755504012000000000",
+    "attributes": [
+      { "key": "gen_ai.request.model", "value": { "stringValue": "claude-opus-5" } },
+      { "key": "gen_ai.usage.input_tokens", "value": { "intValue": "50" } },
+      { "key": "gen_ai.usage.cache_read.input_tokens", "value": { "intValue": "9000" } },
+      { "key": "gen_ai.usage.cache_creation.input_tokens", "value": { "intValue": "120" } },
+      { "key": "gen_ai.usage.output_tokens", "value": { "intValue": "80" } },
+      { "key": "gen_ai.conversation.id", "value": { "stringValue": "conv-77" } },
+      { "key": "gen_ai.output.messages", "value": { "stringValue": "[{\"role\":\"assistant\",\"content\":\"All done.\"}]" } }
+    ]
+  },
+  {
+    "traceId": "trace-cop-1", "spanId": "bg-1", "parentSpanId": "root-1", "name": "embedding_index",
+    "startTime": "1755504013000000000", "endTime": "1755504013100000000",
+    "attributes": []
+  },
+  {
+    "traceId": "trace-cop-2", "spanId": "root-2", "name": "invoke_agent",
+    "startTime": "1755504100000000000", "endTime": "1755504101000000000",
+    "attributes": []
+  }
+]
