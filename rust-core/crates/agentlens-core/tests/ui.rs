@@ -582,3 +582,44 @@ fn debug_requests_serves_the_ring() {
     assert!(rows[0]["rssMb"].as_f64().unwrap() > 0.0);
     assert!(rows[0]["ts"].as_str().unwrap().ends_with('Z'));
 }
+
+/// The two debug seams: codex-store-groups (the STORE-level codex grouping) and span-attr (the
+/// gen_ai overlay observable over the wire — the whole point of P4l's read-time merge).
+#[test]
+fn debug_seams_codex_groups_and_span_attr() {
+    let (otlp, ui, state) = start_servers();
+    let now = agentlens_core::now_ms();
+    let nano = |ms: i64| (ms as i128 * 1_000_000).to_string();
+
+    // Two codex spans on one trace + one on another + a claude span (never listed).
+    let mk = |name: &str, trace: &str, span: &str| serde_json::json!({
+        "name": name, "traceId": trace, "spanId": span,
+        "startTimeUnixNano": nano(now), "attributes": [] });
+    let payload = serde_json::json!({ "resourceSpans": [{ "scopeSpans": [{ "spans": [
+        mk("codex.turn", "codex-b", "0000000000000001"),
+        mk("codex.turn", "codex-a", "0000000000000002"),
+        mk("codex.tool", "codex-b", "0000000000000003"),
+        mk("claude_code.api_request", "not-codex", "0000000000000004"),
+    ] }] }] }).to_string();
+    request(otlp, &format!("POST /v1/traces HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}", payload.len()));
+    let r = get(ui, "/api/debug/codex-store-groups", "");
+    assert_eq!(body_of(&r), r#"{"codexTraceIds":["codex-a","codex-b"]}"#, "distinct, sorted, codex.* only");
+
+    // span-attr: the overlay lands via a gen_ai.choice log event; the fresh read shows it.
+    let choice = serde_json::json!({ "resourceLogs": [{ "scopeLogs": [{ "logRecords": [{
+        "timeUnixNano": nano(now), "traceId": "codex-a", "spanId": "0000000000000002",
+        "attributes": [ { "key": "event.name", "value": { "stringValue": "gen_ai.choice" } },
+                        { "key": "gen_ai.event.content", "value": { "stringValue": "{\"content\":\"ok\"}" } } ]
+    }] }] }] }).to_string();
+    request(otlp, &format!("POST /v1/logs HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{choice}", choice.len()));
+    let r = get(ui, "/api/debug/span-attr?traceId=codex-a&spanId=0000000000000002", "");
+    let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
+    assert_eq!(v["found"], true);
+    assert_eq!(v["value"], r#"[{"role":"assistant","content":[{"type":"text","text":"ok"}]}]"#);
+    // An explicit key, a missing attribute on a found span, and a span outside the window.
+    let r = get(ui, "/api/debug/span-attr?traceId=codex-a&spanId=0000000000000002&key=nope", "");
+    assert_eq!(body_of(&r), r#"{"found":true,"value":null}"#);
+    let r = get(ui, "/api/debug/span-attr?traceId=zzz&spanId=zzz", "");
+    assert_eq!(body_of(&r), r#"{"found":false,"value":null}"#);
+    let _ = state;
+}

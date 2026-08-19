@@ -546,6 +546,54 @@ async fn handle(
             // The TS wraps the whole handler in one try → 500 {error} (a parse error included).
             Err(e) => json_response(StatusCode::INTERNAL_SERVER_ERROR, error_json(&e)),
         }
+    } else if method == Method::GET && path == "/api/debug/codex-store-groups" {
+        // server.ts:4000 — the DISTINCT sorted traceIds of the window's codex.* spans: the ONLY
+        // place the STORE-level Codex grouping is directly observable (the summarizer re-groups
+        // downstream, so /api/summary would mask a per-prompt vs per-conversation regression).
+        let body = {
+            let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+            let mut ids: Vec<&str> = st
+                .window
+                .spans
+                .iter()
+                .filter_map(Value::as_object)
+                .filter(|s| s.get("name").and_then(Value::as_str).is_some_and(|n| n.starts_with("codex.")))
+                .filter_map(|s| s.get("traceId").and_then(Value::as_str))
+                .collect();
+            ids.sort_unstable();
+            ids.dedup();
+            serde_json::json!({ "codexTraceIds": ids }).to_string()
+        };
+        json_response(StatusCode::OK, body)
+    } else if method == Method::GET && path == "/api/debug/span-attr" {
+        // server.ts:4012 (S3-F3b) — read one attribute off ONE stored span through a FRESH read,
+        // the only place the store's gen_ai read-time overlay is directly observable. Windowed to
+        // 24h unless fromMs widens it (an unbounded read once streamed the whole multi-GB store).
+        let q = query_of(&req);
+        let trace_id = q.get("traceId").cloned().unwrap_or_default();
+        let span_id = q.get("spanId").cloned().unwrap_or_default();
+        let key = q.get("key").filter(|k| !k.is_empty()).cloned().unwrap_or_else(|| "gen_ai.output.messages".to_owned());
+        let now = crate::now_ms();
+        let from_ms = q.get("fromMs").and_then(|v| v.parse::<i64>().ok()).filter(|v| *v > 0).unwrap_or(now - 24 * 3_600_000);
+        let body = {
+            let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+            let span = st
+                .writer
+                .load_range(from_ms, i64::MAX, now)
+                .into_iter()
+                .find(|s| s.get("traceId").and_then(Value::as_str) == Some(&trace_id) && s.get("spanId").and_then(Value::as_str) == Some(&span_id));
+            let value = span.as_ref().and_then(|s| {
+                s.get("attributes")?
+                    .as_array()?
+                    .iter()
+                    .find(|a| a.get("key").and_then(Value::as_str) == Some(&key))?
+                    .get("value")?
+                    .get("stringValue")
+                    .cloned()
+            });
+            serde_json::json!({ "found": span.is_some(), "value": value.unwrap_or(Value::Null) }).to_string()
+        };
+        json_response(StatusCode::OK, body)
     } else if method == Method::GET && path == "/api/debug/requests" {
         // Row 26: the recent-request ring + heap pressure. No V8 ⇒ the heap object is honest
         // zeros (over: false), as /api/server-stats reports; rssMb per row carries the story.
