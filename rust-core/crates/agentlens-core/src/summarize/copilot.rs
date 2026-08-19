@@ -292,8 +292,8 @@ fn collect_descendants<'a>(root_span_id: &str, children_of: &HashMap<String, Vec
 }
 
 /// The `^\*\*\*\s+(?:Update File:|Add File:|Delete File:)?\s*(.+)` line match, shared with the
-/// helpers' apply_patch summary.
-fn patch_file_line(line: &str) -> Option<&str> {
+/// helpers' apply_patch summary and the session-store file tracker.
+pub(crate) fn patch_file_line(line: &str) -> Option<&str> {
     static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let r = RE.get_or_init(|| regex::Regex::new(r"^\*\*\*\s+(?:Update File:|Add File:|Delete File:)?\s*(.+)").expect("static regex"));
     r.captures(line).and_then(|c| c.get(1)).map(|m| m.as_str().trim()).filter(|s| !s.is_empty())

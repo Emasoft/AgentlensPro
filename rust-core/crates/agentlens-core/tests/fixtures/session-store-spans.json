@@ -1,0 +1,46 @@
+[
+  {
+    "traceId": "t1", "spanId": "s1", "name": "old span",
+    "startTime": "1755609000000000000", "endTime": "1755609000000000000",
+    "receivedAt": 1755609000000,
+    "attributes": [
+      { "key": "input_tokens", "value": { "intValue": 10 } }
+    ]
+  },
+  {
+    "traceId": "t2", "spanId": "s2", "name": "claude_code.tool",
+    "startTime": "1755609990000000000", "endTime": "1755609991000000000",
+    "status": { "code": 2, "message": "boom" },
+    "attributes": [
+      { "key": "tool_name", "value": { "stringValue": "Edit" } },
+      { "key": "tool_input", "value": { "stringValue": "{\"file_path\":\"/p/a.ts\",\"old_string\":\"x\",\"new_string\":\"y\"}" } },
+      { "key": "input_tokens", "value": { "intValue": 100 } },
+      { "key": "gen_ai.usage.input_tokens", "value": { "intValue": 999 } },
+      { "key": "output_tokens", "value": { "intValue": 40 } }
+    ]
+  },
+  {
+    "traceId": "t3", "spanId": "s3", "name": "invoke_agent session",
+    "startTime": "1755609995000000000", "endTime": "1755609996000000000",
+    "attributes": [
+      { "key": "gen_ai.usage.input_tokens", "value": { "stringValue": "1500" } },
+      { "key": "gen_ai.usage.cache_read.input_tokens", "value": { "intValue": 200 } }
+    ]
+  },
+  {
+    "traceId": "t4", "spanId": "s4", "name": "tool/apply_patch",
+    "startTime": "1755609997000000000", "endTime": "1755609997000000000",
+    "attributes": [
+      { "key": "tool_name", "value": { "stringValue": "apply_patch" } },
+      { "key": "tool_input", "value": { "stringValue": "{\"patch\":\"*** Update File: /w/p1.ts\\n+x\\n*** Begin Patch\\n*** /w/p2.ts\"}" } }
+    ]
+  },
+  {
+    "traceId": "t5", "spanId": "s5", "name": "claude_code.tool",
+    "startTime": "1755609998000000000", "endTime": "1755609998000000000",
+    "attributes": [
+      { "key": "tool_name", "value": { "stringValue": "MultiEdit" } },
+      { "key": "tool_input", "value": { "stringValue": "{\"edits\":[{\"file_path\":\"/p/a.ts\"},{\"filePath\":\"/p/b.ts\"}],\"replacements\":[{\"filePath\":\"/p/c.ts\"}]}" } }
+    ]
+  }
+]
