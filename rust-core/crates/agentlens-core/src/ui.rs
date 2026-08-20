@@ -1746,6 +1746,100 @@ async fn handle(
                         .map_err(|e| format!("body-writers scan join failed: {e}"))?;
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
+                    "get_cache_creation_report" => {
+                        // A bounded pass over the raw-body dir (stat every file, parse the capped
+                        // slice), so it runs on spawn_blocking with the state lock released.
+                        let now = crate::now_ms() as f64;
+                        let dir = {
+                            let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                            crate::burn::guard::default_bodies_dir(&st.data_dir)
+                        };
+                        let group_by = args.get("groupBy").and_then(Value::as_str).unwrap_or("session").to_owned();
+                        let payload = if group_by == "cause" {
+                            // The TS routes groupBy='cause' to buildCauseCostPeakReport
+                            // (cacheBreakTimeline.ts), which needs the full prefix-diff classifier —
+                            // not yet ported. Naming the gap is the only honest answer: silently
+                            // falling back to 'session' would return a DIFFERENT report under the
+                            // label the caller asked for, and every number in it would look right.
+                            crate::mcp_tools::error_payload(
+                                "groupBy='cause' is served by buildCauseCostPeakReport (cacheBreakTimeline), which the Rust core has not ported yet. session|account|model|time are available.",
+                            )
+                        } else {
+                            let bucket = args.get("bucket").and_then(Value::as_str).unwrap_or("cache_creation").to_owned();
+                            let top_n = args.get("topN").and_then(Value::as_f64);
+                            let format = args.get("format").and_then(Value::as_str).unwrap_or("json").to_owned();
+                            let opts = crate::cache_creation_forensics::ScanOptions {
+                                window_hours: args.get("window").and_then(Value::as_f64),
+                                ..Default::default()
+                            };
+                            tokio::task::spawn_blocking(move || {
+                                let report = crate::cache_creation_forensics::build_cache_creation_report(
+                                    &dir, &opts, &group_by, &bucket, top_n, now,
+                                );
+                                crate::cache_creation_forensics::format_cost_peaks(&report, &format)
+                            })
+                            .await
+                            .map_err(|e| format!("cache-creation report scan join failed: {e}"))?
+                        };
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
+                    }
+                    "trace_expensive_writes" => {
+                        // Heavier than the report: with chainDepth > 0 it fully parses a second
+                        // bounded request slice AND builds a call composition per turn.
+                        let now = crate::now_ms() as f64;
+                        let dir = {
+                            let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                            crate::burn::guard::default_bodies_dir(&st.data_dir)
+                        };
+                        let s = |k: &str| args.get(k).and_then(Value::as_str).map(str::to_owned);
+                        let n = |k: &str| args.get(k).and_then(Value::as_f64);
+                        let filters = crate::cache_creation_forensics::TraceFilters {
+                            session_id: s("sessionId"),
+                            account_uuid: s("accountUuid"),
+                            model: s("model"),
+                            min_cache_create: n("minCacheCreate"),
+                            min_output_tokens: n("minOutputTokens"),
+                            turn_from: n("turnFrom"),
+                            turn_to: n("turnTo"),
+                            // The wire names drop the Iso suffix the engine field carries.
+                            time_from_iso: s("timeFrom"),
+                            time_to_iso: s("timeTo"),
+                            top_n: n("topN"),
+                            chain_depth: n("chainDepth"),
+                        };
+                        let opts = crate::cache_creation_forensics::ScanOptions {
+                            window_hours: n("window"),
+                            ..Default::default()
+                        };
+                        let format = args.get("format").and_then(Value::as_str).unwrap_or("json").to_owned();
+                        let payload = tokio::task::spawn_blocking(move || {
+                            let trace = crate::cache_creation_forensics::build_expensive_writes_trace(&dir, &opts, &filters, now);
+                            crate::cache_creation_forensics::format_expensive_writes(&trace, &format)
+                        })
+                        .await
+                        .map_err(|e| format!("expensive-writes trace join failed: {e}"))?;
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
+                    }
+                    "get_cache_break_gap_report" => {
+                        let now = crate::now_ms() as f64;
+                        let dir = {
+                            let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                            crate::burn::guard::default_bodies_dir(&st.data_dir)
+                        };
+                        let opts = crate::cache_creation_forensics::ScanOptions {
+                            window_hours: args.get("window").and_then(Value::as_f64),
+                            ..Default::default()
+                        };
+                        // `?? DEFAULT_BIG_CACHE_CREATE` is NULLISH, so an explicit 0 means "classify
+                        // every write", not "fall back to 100k".
+                        let min_cc = args.get("minCacheCreate").and_then(Value::as_f64);
+                        let payload = tokio::task::spawn_blocking(move || {
+                            crate::cache_creation_forensics::build_cache_break_gap_report(&dir, &opts, min_cc, now)
+                        })
+                        .await
+                        .map_err(|e| format!("cache-break gap report join failed: {e}"))?;
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
+                    }
                     "get_window_eta" => {
                         // Same shape as get_account_burners — the two tools SHARE their attribution
                         // rule and capacity resolver by design, so they read the same timeline, the

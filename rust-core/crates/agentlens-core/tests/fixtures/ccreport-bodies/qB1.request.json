@@ -1,0 +1,1 @@
+{"model":"claude-sonnet-5","metadata":{"user_id":"{\"session_id\":\"bbbb2222-3333-3333-3333-333333333333\"}"},"diagnostics":{"previous_message_id":"msg_b1"},"system":"Short system.","tools":[{"name":"tool_0","description":"does thing 0"}],"messages":[{"role":"user","content":[{"type":"text","text":"summarize the log"}]}]}

@@ -15,7 +15,7 @@ use indexmap::IndexMap;
 use serde_json::{Map, Value};
 
 use crate::burn::monitor::{W_CACHE_CREATE, W_CACHE_READ, W_INPUT, W_OUTPUT, W_UNKNOWN};
-use crate::summarize::helpers::{fmt_js_num, iso_from_ms, js_to_fixed_str, num, parse_iso_ms};
+use crate::summarize::helpers::{fmt_js_num, iso_from_ms, js_to_fixed_str, num, pad_start, parse_iso_ms};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct AccountSegment {
@@ -608,16 +608,6 @@ fn section_value(s: &Section) -> Value {
     m.insert("capacity".into(), s.capacity.to_value());
     m.insert("fillPct".into(), s.fill_pct.map(num).unwrap_or(Value::Null));
     Value::Object(m)
-}
-
-/// `String.prototype.padStart` — pads to a length in UTF-16 units. Every value padded here is
-/// ASCII (formatted numbers), so char count and code-unit count coincide.
-fn pad_start(s: &str, width: usize) -> String {
-    let len = s.chars().count();
-    if len >= width {
-        return s.to_owned();
-    }
-    format!("{}{}", " ".repeat(width - len), s)
 }
 
 fn cap_src(s: &Section) -> String {

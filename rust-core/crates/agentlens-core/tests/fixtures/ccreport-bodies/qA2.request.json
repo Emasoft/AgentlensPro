@@ -1,0 +1,1 @@
+{"model":"claude-opus-5","metadata":{"user_id":"{\"session_id\":\"aaaaaaaa-1111-1111-1111-111111111111\",\"account_uuid\":\"acct1111-2222-2222-2222-222222222222\"}"},"diagnostics":{"previous_message_id":"msg_a2"},"system":"You are a helpful assistant working in a repository.","messages":[{"role":"user","content":"why is it slow"}]}

@@ -475,23 +475,109 @@ pub fn fmt_js_num(n: f64) -> String {
     }
 }
 
-/// `Number.prototype.toLocaleString()` under the en-US default — thousands grouping on
-/// integral counts (what Node on this machine produces; a different ICU default fails the
-/// pinning fixtures loudly). Shared by the loop detector and the burn monitor's alert text.
+/// `Number.prototype.toLocaleString()` under the en-US default — thousands grouping, and AT MOST
+/// THREE fraction digits (`Intl.NumberFormat`'s `maximumFractionDigits` default), rounded half away
+/// from zero. What Node on this machine produces; a different ICU default fails the pinning
+/// fixtures loudly.
+///
+/// The fraction half is load-bearing, not decoration: `formatCostPeaks` renders `bucketValue`
+/// through this, and under `bucket=billable_weighted` that value is a USD cost — 4.5585 must read
+/// "4.559". Truncating instead (which this did while every caller happened to pass an integer)
+/// silently prints "4" for a $4.56 group.
+///
+/// Intl rounds the double's SHORTEST decimal representation — the same digits `toString` emits —
+/// so `fmt_js_num` is the right source string, and comparing the FOURTH fraction digit against '5'
+/// reproduces halfExpand exactly (a trailing "4999…" rounds down, an exact "…5" rounds up).
 pub fn to_locale_en(n: f64) -> String {
-    let neg = n < 0.0;
-    let mut i = n.abs().trunc() as u64;
-    let mut parts: Vec<String> = Vec::new();
-    loop {
-        if i < 1000 {
-            parts.push(i.to_string());
-            break;
-        }
-        parts.push(format!("{:03}", i % 1000));
-        i /= 1000;
+    if n.is_nan() {
+        return "NaN".to_owned();
     }
-    parts.reverse();
-    format!("{}{}", if neg { "-" } else { "" }, parts.join(","))
+    if n.is_infinite() {
+        return if n < 0.0 { "-∞".to_owned() } else { "∞".to_owned() };
+    }
+    let neg = n < 0.0;
+    let s = fmt_js_num(n.abs());
+    let (int_s, frac_s) = match s.split_once('.') {
+        Some((i, f)) => (i.to_owned(), f.to_owned()),
+        None => (s, String::new()),
+    };
+    let (int_s, frac_s) = round_fraction(&int_s, &frac_s, 3);
+
+    let mut grouped = String::new();
+    let bytes = int_s.as_bytes();
+    for (i, b) in bytes.iter().enumerate() {
+        if i > 0 && (bytes.len() - i) % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(*b as char);
+    }
+    let sign = if neg && !(grouped == "0" && frac_s.is_empty()) { "-" } else { "" };
+    if frac_s.is_empty() {
+        format!("{sign}{grouped}")
+    } else {
+        format!("{sign}{grouped}.{frac_s}")
+    }
+}
+
+/// Round a decimal already split into integer/fraction DIGIT STRINGS to `digits` fraction places,
+/// half away from zero, carrying into the integer part. Trailing zeros are dropped afterwards
+/// because Intl's `minimumFractionDigits` default is 0.
+fn round_fraction(int_s: &str, frac_s: &str, digits: usize) -> (String, String) {
+    if frac_s.len() <= digits {
+        return (int_s.to_owned(), frac_s.trim_end_matches('0').to_owned());
+    }
+    let mut kept: Vec<u8> = frac_s.as_bytes()[..digits].to_vec();
+    let round_up = frac_s.as_bytes()[digits] >= b'5';
+    let mut int_digits: Vec<u8> = int_s.as_bytes().to_vec();
+    if round_up {
+        let mut carry = true;
+        for d in kept.iter_mut().rev() {
+            if !carry {
+                break;
+            }
+            if *d == b'9' {
+                *d = b'0';
+            } else {
+                *d += 1;
+                carry = false;
+            }
+        }
+        if carry {
+            for d in int_digits.iter_mut().rev() {
+                if *d == b'9' {
+                    *d = b'0';
+                } else {
+                    *d += 1;
+                    carry = false;
+                    break;
+                }
+            }
+            if carry {
+                int_digits.insert(0, b'1');
+            }
+        }
+    }
+    let kept = String::from_utf8(kept).unwrap_or_default();
+    (String::from_utf8(int_digits).unwrap_or_default(), kept.trim_end_matches('0').to_owned())
+}
+
+/// `String.prototype.padStart` — pads to a length in UTF-16 units. Every value padded through here
+/// is ASCII (formatted numbers, ids), so char count and code-unit count coincide.
+pub fn pad_start(s: &str, width: usize) -> String {
+    let len = s.chars().count();
+    if len >= width {
+        return s.to_owned();
+    }
+    format!("{}{}", " ".repeat(width - len), s)
+}
+
+/// `String.prototype.padEnd` — the same contract, padding on the right.
+pub fn pad_end(s: &str, width: usize) -> String {
+    let len = s.chars().count();
+    if len >= width {
+        return s.to_owned();
+    }
+    format!("{}{}", s, " ".repeat(width - len))
 }
 
 /// `x.toFixed(d)` as a STRING — which is NOT `fmt_js_num(js_to_fixed_num(..))`: toFixed PADS
