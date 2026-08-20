@@ -1433,9 +1433,12 @@ fn mcp_endpoint_serves_the_frozen_tool_schemas_and_names_unported_tools() {
     );
 
     // A REAL tool with no Rust implementation yet: an explicit error naming the tool.
-    let called = rpc("tools/call", r#"{"name":"get_recent_sessions","arguments":{}}"#);
+    // NB: this name has to be swapped each time the named tool gets ported — it named
+    // `get_recent_sessions` until that landed, and the failure looked like a broken endpoint rather
+    // than a stale test. Pick one from the BOTTOM of the remaining list.
+    let called = rpc("tools/call", r#"{"name":"run_transcript_sql","arguments":{}}"#);
     let msg = called["error"]["message"].as_str().unwrap_or("");
-    assert!(msg.contains("get_recent_sessions") && msg.contains("not yet implemented"), "{called}");
+    assert!(msg.contains("run_transcript_sql") && msg.contains("not yet implemented"), "{called}");
 
     // A tool that does not exist at all is a DIFFERENT error — the caller must be able to tell
     // "you typo'd" from "we have not ported that yet".
@@ -1891,4 +1894,45 @@ fn mcp_scoped_composition_tools_resolve_the_project_and_report_coverage() {
     assert_eq!(none["totalImageSessions"], 0, "{none}");
     assert_eq!(none["coverage"]["sessionsMatched"], 0, "{none}");
     assert_eq!(none["scope"], "no-such-project", "the scope is echoed so the caller sees what was asked: {none}");
+}
+
+/// `get_recent_sessions` is WRAPPED with the collector's downtime gaps (TRDD-PJC8N1HO). The shape
+/// was a bare array before, and the bare form is what made telemetry loss invisible: a gap reads as
+/// a quiet period unless the payload says a gap was there. The test asserts the wrapper, because
+/// unwrapping it back to an array is the obvious "simplification".
+#[test]
+fn mcp_get_recent_sessions_wraps_the_list_with_collector_gaps() {
+    let (_otlp, ui, state) = start_servers();
+    let now = agentlens_core::now_ms();
+    let iso = |off: i64| agentlens_core::summarize::helpers::iso_from_ms((now - off) as f64);
+    {
+        let mut st = state.lock().unwrap();
+        st.put_log_session(serde_json::json!({
+            "sessionId": "recent-1", "source": "claude_code", "dataSource": "log",
+            "startTime": iso(120_000), "workspace": "/ws/recent", "model": "claude-opus-5",
+            "totalLlmCalls": 3, "inputTokens": 100, "outputTokens": 20,
+            "cacheReadTokens": 2000, "cacheCreateTokens": 100, "cacheHitRate": 0.9,
+            "toolCounts": { "Bash": 3, "Read": 1 },
+        }));
+    }
+    let call = |tool: &str, args: &str| -> serde_json::Value {
+        let body = format!(
+            r#"{{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{{"name":"{tool}","arguments":{args}}}}}"#
+        );
+        let env: serde_json::Value = serde_json::from_str(body_of(&post(ui, "/mcp", &body))).unwrap();
+        let text = env["result"]["content"][0]["text"].as_str().unwrap_or_else(|| panic!("{env}"));
+        serde_json::from_str(text).unwrap()
+    };
+
+    let r = call("get_recent_sessions", r#"{"verbosity":"full"}"#);
+    assert!(r["sessions"].is_array(), "the list is WRAPPED, not returned bare: {r}");
+    assert!(r["collectorGaps"].is_array(), "and the downtime gaps ride with it: {r}");
+    assert_eq!(r["sessions"][0]["sessionId"], "recent-1", "{r}");
+    assert_eq!(r["sessions"][0]["agent"], "claude_code", "the field is `agent`, not `source`: {r}");
+
+    let p = call("get_workspace_patterns", r#"{"verbosity":"full"}"#);
+    assert_eq!(p["sessionCount"], 1, "{p}");
+    assert_eq!(p["cacheMeasuredSessions"], 1, "a real session backs the SLI: {p}");
+    assert!(p["avgCacheHitRate"].as_str().unwrap().ends_with('%'), "the rate is a STRING with a %: {p}");
+    assert_eq!(p["topTools"][0]["tool"], "Bash", "{p}");
 }

@@ -1,0 +1,1145 @@
+{
+ "nowMs": 1760000000000,
+ "sessions": [
+  {
+   "sessionId": "stale-start-live-now",
+   "source": "claude_code",
+   "model": "claude-opus-5",
+   "startTime": "2025-10-09T06:53:20.000Z",
+   "durationMs": 7190000,
+   "inputTokens": 1000,
+   "outputTokens": 200,
+   "cacheReadTokens": 500000,
+   "cacheCreateTokens": 60000,
+   "cacheHitRate": 0.91,
+   "totalLlmCalls": 40,
+   "errors": 0,
+   "userRequest": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "toolCounts": {
+    "Bash": 30,
+    "Read": 20,
+    "Edit": 9,
+    "Grep": 4,
+    "Glob": 1
+   },
+   "loopSignals": [
+    {
+     "type": "repeated_tool"
+    },
+    {
+     "type": "no_progress"
+    }
+   ],
+   "filesRead": [
+    "a.ts",
+    "b.ts"
+   ],
+   "filesChanged": [
+    "a.ts",
+    "c.ts",
+    "d.ts",
+    "e.ts",
+    "f.ts",
+    "g.ts"
+   ],
+   "tokensSource": "log",
+   "title": "Long run",
+   "entrypoint": "cli",
+   "outcome": "ok"
+  },
+  {
+   "sessionId": "fresh-but-idle",
+   "source": "claude_code",
+   "model": "claude-opus-5",
+   "startTime": "2025-10-09T08:23:20.000Z",
+   "durationMs": 60000,
+   "inputTokens": 500,
+   "outputTokens": 100,
+   "cacheReadTokens": 20000,
+   "cacheCreateTokens": 5000,
+   "cacheHitRate": 0.62,
+   "totalLlmCalls": 6,
+   "errors": 2,
+   "userRequest": "short prompt",
+   "toolCounts": {
+    "Read": 5,
+    "Bash": 2
+   },
+   "filesRead": [
+    "a.ts"
+   ],
+   "filesChanged": [
+    "h.ts"
+   ],
+   "tokensSource": "otel",
+   "coverageNote": "partial capture",
+   "outcome": "ok"
+  },
+  {
+   "sessionId": "junk-zero",
+   "source": "codex",
+   "model": "",
+   "startTime": "2025-10-09T08:43:20.000Z",
+   "durationMs": 0,
+   "inputTokens": 0,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "cacheHitRate": 0,
+   "totalLlmCalls": 0,
+   "errors": 0,
+   "outcome": "ok"
+  },
+  {
+   "sessionId": "old-week",
+   "source": "copilot",
+   "model": "claude-sonnet-5",
+   "startTime": "2025-10-01T08:53:20.000Z",
+   "durationMs": 120000,
+   "inputTokens": 300,
+   "outputTokens": 50,
+   "cacheReadTokens": 9000,
+   "cacheCreateTokens": 0,
+   "cacheHitRate": 0.4,
+   "totalLlmCalls": 3,
+   "errors": 0,
+   "toolCounts": {
+    "Read": 3
+   },
+   "loopSignals": [
+    {
+     "type": "repeated_tool"
+    }
+   ],
+   "filesRead": [
+    "a.ts"
+   ],
+   "outcome": "ok"
+  },
+  {
+   "sessionId": "bad-date",
+   "source": "claude_code",
+   "model": "claude-opus-5",
+   "startTime": "not-a-date",
+   "durationMs": 0,
+   "inputTokens": 10,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "cacheHitRate": 0,
+   "totalLlmCalls": 1,
+   "errors": 0,
+   "outcome": "ok"
+  }
+ ],
+ "recentCases": [
+  {
+   "name": "defaults",
+   "args": {}
+  },
+  {
+   "name": "limit-2",
+   "args": {
+    "limit": 2
+   }
+  },
+  {
+   "name": "limit-over-cap",
+   "args": {
+    "limit": 999
+   }
+  },
+  {
+   "name": "limit-negative-drops-the-tail",
+   "args": {
+    "limit": -1
+   }
+  },
+  {
+   "name": "limit-zero",
+   "args": {
+    "limit": 0
+   }
+  },
+  {
+   "name": "agent-filter",
+   "args": {
+    "agent": "copilot"
+   }
+  },
+  {
+   "name": "workspace-substring-on-id-or-prompt",
+   "args": {
+    "workspace": "idle"
+   }
+  },
+  {
+   "name": "workspace-matches-nothing",
+   "args": {
+    "workspace": "zzz"
+   }
+  }
+ ],
+ "recentResults": [
+  [
+   {
+    "sessionId": "stale-start-live-now",
+    "date": "2025-10-09 06:53",
+    "lastActive": "2025-10-09 08:53",
+    "active": true,
+    "title": "Long run",
+    "entrypoint": "cli",
+    "agent": "claude_code",
+    "model": "claude-opus-5",
+    "prompt": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…",
+    "turns": 40,
+    "cost_usd": 0.635,
+    "durationMin": 119.8,
+    "errors": 0,
+    "tokensSource": "log",
+    "topTools": [
+     "Bash×30",
+     "Read×20",
+     "Edit×9",
+     "Grep×4"
+    ],
+    "loopSignals": [
+     "repeated_tool",
+     "no_progress"
+    ],
+    "filesChanged": [
+     "a.ts",
+     "c.ts",
+     "d.ts",
+     "e.ts",
+     "f.ts"
+    ]
+   },
+   {
+    "sessionId": "junk-zero",
+    "date": "2025-10-09 08:43",
+    "lastActive": "2025-10-09 08:43",
+    "agent": "codex",
+    "model": "",
+    "prompt": null,
+    "turns": 0,
+    "cost_usd": 0,
+    "durationMin": 0,
+    "errors": 0,
+    "tokensSource": null,
+    "topTools": [],
+    "loopSignals": [],
+    "filesChanged": []
+   },
+   {
+    "sessionId": "fresh-but-idle",
+    "date": "2025-10-09 08:23",
+    "lastActive": "2025-10-09 08:24",
+    "agent": "claude_code",
+    "model": "claude-opus-5",
+    "prompt": "short prompt",
+    "turns": 6,
+    "cost_usd": 0.0462,
+    "durationMin": 1,
+    "errors": 2,
+    "tokensSource": "otel",
+    "coverageNote": "partial capture",
+    "topTools": [
+     "Read×5",
+     "Bash×2"
+    ],
+    "loopSignals": [],
+    "filesChanged": [
+     "h.ts"
+    ]
+   },
+   {
+    "sessionId": "old-week",
+    "date": "2025-10-01 08:53",
+    "lastActive": "2025-10-01 08:55",
+    "agent": "copilot",
+    "model": "claude-sonnet-5",
+    "prompt": null,
+    "turns": 3,
+    "cost_usd": 0.0029,
+    "durationMin": 2,
+    "errors": 0,
+    "tokensSource": null,
+    "topTools": [
+     "Read×3"
+    ],
+    "loopSignals": [
+     "repeated_tool"
+    ],
+    "filesChanged": []
+   },
+   {
+    "sessionId": "bad-date",
+    "date": "not-a-date",
+    "lastActive": "1970-01-01 00:00",
+    "agent": "claude_code",
+    "model": "claude-opus-5",
+    "prompt": null,
+    "turns": 1,
+    "cost_usd": 0.0001,
+    "durationMin": 0,
+    "errors": 0,
+    "tokensSource": null,
+    "topTools": [],
+    "loopSignals": [],
+    "filesChanged": []
+   }
+  ],
+  [
+   {
+    "sessionId": "stale-start-live-now",
+    "date": "2025-10-09 06:53",
+    "lastActive": "2025-10-09 08:53",
+    "active": true,
+    "title": "Long run",
+    "entrypoint": "cli",
+    "agent": "claude_code",
+    "model": "claude-opus-5",
+    "prompt": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…",
+    "turns": 40,
+    "cost_usd": 0.635,
+    "durationMin": 119.8,
+    "errors": 0,
+    "tokensSource": "log",
+    "topTools": [
+     "Bash×30",
+     "Read×20",
+     "Edit×9",
+     "Grep×4"
+    ],
+    "loopSignals": [
+     "repeated_tool",
+     "no_progress"
+    ],
+    "filesChanged": [
+     "a.ts",
+     "c.ts",
+     "d.ts",
+     "e.ts",
+     "f.ts"
+    ]
+   },
+   {
+    "sessionId": "junk-zero",
+    "date": "2025-10-09 08:43",
+    "lastActive": "2025-10-09 08:43",
+    "agent": "codex",
+    "model": "",
+    "prompt": null,
+    "turns": 0,
+    "cost_usd": 0,
+    "durationMin": 0,
+    "errors": 0,
+    "tokensSource": null,
+    "topTools": [],
+    "loopSignals": [],
+    "filesChanged": []
+   }
+  ],
+  [
+   {
+    "sessionId": "stale-start-live-now",
+    "date": "2025-10-09 06:53",
+    "lastActive": "2025-10-09 08:53",
+    "active": true,
+    "title": "Long run",
+    "entrypoint": "cli",
+    "agent": "claude_code",
+    "model": "claude-opus-5",
+    "prompt": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…",
+    "turns": 40,
+    "cost_usd": 0.635,
+    "durationMin": 119.8,
+    "errors": 0,
+    "tokensSource": "log",
+    "topTools": [
+     "Bash×30",
+     "Read×20",
+     "Edit×9",
+     "Grep×4"
+    ],
+    "loopSignals": [
+     "repeated_tool",
+     "no_progress"
+    ],
+    "filesChanged": [
+     "a.ts",
+     "c.ts",
+     "d.ts",
+     "e.ts",
+     "f.ts"
+    ]
+   },
+   {
+    "sessionId": "junk-zero",
+    "date": "2025-10-09 08:43",
+    "lastActive": "2025-10-09 08:43",
+    "agent": "codex",
+    "model": "",
+    "prompt": null,
+    "turns": 0,
+    "cost_usd": 0,
+    "durationMin": 0,
+    "errors": 0,
+    "tokensSource": null,
+    "topTools": [],
+    "loopSignals": [],
+    "filesChanged": []
+   },
+   {
+    "sessionId": "fresh-but-idle",
+    "date": "2025-10-09 08:23",
+    "lastActive": "2025-10-09 08:24",
+    "agent": "claude_code",
+    "model": "claude-opus-5",
+    "prompt": "short prompt",
+    "turns": 6,
+    "cost_usd": 0.0462,
+    "durationMin": 1,
+    "errors": 2,
+    "tokensSource": "otel",
+    "coverageNote": "partial capture",
+    "topTools": [
+     "Read×5",
+     "Bash×2"
+    ],
+    "loopSignals": [],
+    "filesChanged": [
+     "h.ts"
+    ]
+   },
+   {
+    "sessionId": "old-week",
+    "date": "2025-10-01 08:53",
+    "lastActive": "2025-10-01 08:55",
+    "agent": "copilot",
+    "model": "claude-sonnet-5",
+    "prompt": null,
+    "turns": 3,
+    "cost_usd": 0.0029,
+    "durationMin": 2,
+    "errors": 0,
+    "tokensSource": null,
+    "topTools": [
+     "Read×3"
+    ],
+    "loopSignals": [
+     "repeated_tool"
+    ],
+    "filesChanged": []
+   },
+   {
+    "sessionId": "bad-date",
+    "date": "not-a-date",
+    "lastActive": "1970-01-01 00:00",
+    "agent": "claude_code",
+    "model": "claude-opus-5",
+    "prompt": null,
+    "turns": 1,
+    "cost_usd": 0.0001,
+    "durationMin": 0,
+    "errors": 0,
+    "tokensSource": null,
+    "topTools": [],
+    "loopSignals": [],
+    "filesChanged": []
+   }
+  ],
+  [
+   {
+    "sessionId": "stale-start-live-now",
+    "date": "2025-10-09 06:53",
+    "lastActive": "2025-10-09 08:53",
+    "active": true,
+    "title": "Long run",
+    "entrypoint": "cli",
+    "agent": "claude_code",
+    "model": "claude-opus-5",
+    "prompt": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…",
+    "turns": 40,
+    "cost_usd": 0.635,
+    "durationMin": 119.8,
+    "errors": 0,
+    "tokensSource": "log",
+    "topTools": [
+     "Bash×30",
+     "Read×20",
+     "Edit×9",
+     "Grep×4"
+    ],
+    "loopSignals": [
+     "repeated_tool",
+     "no_progress"
+    ],
+    "filesChanged": [
+     "a.ts",
+     "c.ts",
+     "d.ts",
+     "e.ts",
+     "f.ts"
+    ]
+   },
+   {
+    "sessionId": "junk-zero",
+    "date": "2025-10-09 08:43",
+    "lastActive": "2025-10-09 08:43",
+    "agent": "codex",
+    "model": "",
+    "prompt": null,
+    "turns": 0,
+    "cost_usd": 0,
+    "durationMin": 0,
+    "errors": 0,
+    "tokensSource": null,
+    "topTools": [],
+    "loopSignals": [],
+    "filesChanged": []
+   },
+   {
+    "sessionId": "fresh-but-idle",
+    "date": "2025-10-09 08:23",
+    "lastActive": "2025-10-09 08:24",
+    "agent": "claude_code",
+    "model": "claude-opus-5",
+    "prompt": "short prompt",
+    "turns": 6,
+    "cost_usd": 0.0462,
+    "durationMin": 1,
+    "errors": 2,
+    "tokensSource": "otel",
+    "coverageNote": "partial capture",
+    "topTools": [
+     "Read×5",
+     "Bash×2"
+    ],
+    "loopSignals": [],
+    "filesChanged": [
+     "h.ts"
+    ]
+   },
+   {
+    "sessionId": "old-week",
+    "date": "2025-10-01 08:53",
+    "lastActive": "2025-10-01 08:55",
+    "agent": "copilot",
+    "model": "claude-sonnet-5",
+    "prompt": null,
+    "turns": 3,
+    "cost_usd": 0.0029,
+    "durationMin": 2,
+    "errors": 0,
+    "tokensSource": null,
+    "topTools": [
+     "Read×3"
+    ],
+    "loopSignals": [
+     "repeated_tool"
+    ],
+    "filesChanged": []
+   }
+  ],
+  [],
+  [
+   {
+    "sessionId": "old-week",
+    "date": "2025-10-01 08:53",
+    "lastActive": "2025-10-01 08:55",
+    "agent": "copilot",
+    "model": "claude-sonnet-5",
+    "prompt": null,
+    "turns": 3,
+    "cost_usd": 0.0029,
+    "durationMin": 2,
+    "errors": 0,
+    "tokensSource": null,
+    "topTools": [
+     "Read×3"
+    ],
+    "loopSignals": [
+     "repeated_tool"
+    ],
+    "filesChanged": []
+   }
+  ],
+  [
+   {
+    "sessionId": "fresh-but-idle",
+    "date": "2025-10-09 08:23",
+    "lastActive": "2025-10-09 08:24",
+    "agent": "claude_code",
+    "model": "claude-opus-5",
+    "prompt": "short prompt",
+    "turns": 6,
+    "cost_usd": 0.0462,
+    "durationMin": 1,
+    "errors": 2,
+    "tokensSource": "otel",
+    "coverageNote": "partial capture",
+    "topTools": [
+     "Read×5",
+     "Bash×2"
+    ],
+    "loopSignals": [],
+    "filesChanged": [
+     "h.ts"
+    ]
+   }
+  ],
+  []
+ ],
+ "patternCases": [
+  {
+   "name": "all",
+   "args": {}
+  },
+  {
+   "name": "days-1",
+   "args": {
+    "days": 1
+   }
+  },
+  {
+   "name": "days-30",
+   "args": {
+    "days": 30
+   }
+  },
+  {
+   "name": "days-0-is-falsy-so-unfiltered",
+   "args": {
+    "days": 0
+   }
+  },
+  {
+   "name": "workspace-arg-is-ignored",
+   "args": {
+    "workspace": "/nope"
+   }
+  },
+  {
+   "name": "days-filters-everything-out",
+   "args": {
+    "days": 0.0001
+   }
+  }
+ ],
+ "patternResults": [
+  {
+   "sessionCount": 5,
+   "avgCostUsd": 0.1368,
+   "avgTurns": 10,
+   "avgCacheHitRate": "48%",
+   "cacheMeasuredSessions": 4,
+   "cacheExcludedJunkSessions": 1,
+   "errorRate": "20%",
+   "hotFiles": [
+    {
+     "file": "a.ts",
+     "sessions": 4,
+     "pct": 80
+    },
+    {
+     "file": "b.ts",
+     "sessions": 1,
+     "pct": 20
+    },
+    {
+     "file": "c.ts",
+     "sessions": 1,
+     "pct": 20
+    },
+    {
+     "file": "d.ts",
+     "sessions": 1,
+     "pct": 20
+    },
+    {
+     "file": "e.ts",
+     "sessions": 1,
+     "pct": 20
+    },
+    {
+     "file": "f.ts",
+     "sessions": 1,
+     "pct": 20
+    },
+    {
+     "file": "g.ts",
+     "sessions": 1,
+     "pct": 20
+    },
+    {
+     "file": "h.ts",
+     "sessions": 1,
+     "pct": 20
+    }
+   ],
+   "topTools": [
+    {
+     "tool": "Bash",
+     "total": 32
+    },
+    {
+     "tool": "Read",
+     "total": 28
+    },
+    {
+     "tool": "Edit",
+     "total": 9
+    },
+    {
+     "tool": "Grep",
+     "total": 4
+    },
+    {
+     "tool": "Glob",
+     "total": 1
+    }
+   ],
+   "loopSignals": [
+    {
+     "type": "repeated_tool",
+     "count": 2
+    },
+    {
+     "type": "no_progress",
+     "count": 1
+    }
+   ],
+   "agentBreakdown": [
+    {
+     "agentModel": "claude_code/claude-opus-5",
+     "sessions": 3,
+     "avgCost": 0.2271,
+     "avgTurns": 15.7
+    },
+    {
+     "agentModel": "codex/",
+     "sessions": 1,
+     "avgCost": 0,
+     "avgTurns": 0
+    },
+    {
+     "agentModel": "copilot/claude-sonnet-5",
+     "sessions": 1,
+     "avgCost": 0.0029,
+     "avgTurns": 3
+    }
+   ]
+  },
+  {
+   "sessionCount": 3,
+   "avgCostUsd": 0.2271,
+   "avgTurns": 15.3,
+   "avgCacheHitRate": "77%",
+   "cacheMeasuredSessions": 2,
+   "cacheExcludedJunkSessions": 1,
+   "errorRate": "33%",
+   "hotFiles": [
+    {
+     "file": "a.ts",
+     "sessions": 3,
+     "pct": 100
+    },
+    {
+     "file": "b.ts",
+     "sessions": 1,
+     "pct": 33
+    },
+    {
+     "file": "c.ts",
+     "sessions": 1,
+     "pct": 33
+    },
+    {
+     "file": "d.ts",
+     "sessions": 1,
+     "pct": 33
+    },
+    {
+     "file": "e.ts",
+     "sessions": 1,
+     "pct": 33
+    },
+    {
+     "file": "f.ts",
+     "sessions": 1,
+     "pct": 33
+    },
+    {
+     "file": "g.ts",
+     "sessions": 1,
+     "pct": 33
+    },
+    {
+     "file": "h.ts",
+     "sessions": 1,
+     "pct": 33
+    }
+   ],
+   "topTools": [
+    {
+     "tool": "Bash",
+     "total": 32
+    },
+    {
+     "tool": "Read",
+     "total": 25
+    },
+    {
+     "tool": "Edit",
+     "total": 9
+    },
+    {
+     "tool": "Grep",
+     "total": 4
+    },
+    {
+     "tool": "Glob",
+     "total": 1
+    }
+   ],
+   "loopSignals": [
+    {
+     "type": "repeated_tool",
+     "count": 1
+    },
+    {
+     "type": "no_progress",
+     "count": 1
+    }
+   ],
+   "agentBreakdown": [
+    {
+     "agentModel": "claude_code/claude-opus-5",
+     "sessions": 2,
+     "avgCost": 0.3406,
+     "avgTurns": 23
+    },
+    {
+     "agentModel": "codex/",
+     "sessions": 1,
+     "avgCost": 0,
+     "avgTurns": 0
+    }
+   ]
+  },
+  {
+   "sessionCount": 4,
+   "avgCostUsd": 0.171,
+   "avgTurns": 12.3,
+   "avgCacheHitRate": "64%",
+   "cacheMeasuredSessions": 3,
+   "cacheExcludedJunkSessions": 1,
+   "errorRate": "25%",
+   "hotFiles": [
+    {
+     "file": "a.ts",
+     "sessions": 4,
+     "pct": 100
+    },
+    {
+     "file": "b.ts",
+     "sessions": 1,
+     "pct": 25
+    },
+    {
+     "file": "c.ts",
+     "sessions": 1,
+     "pct": 25
+    },
+    {
+     "file": "d.ts",
+     "sessions": 1,
+     "pct": 25
+    },
+    {
+     "file": "e.ts",
+     "sessions": 1,
+     "pct": 25
+    },
+    {
+     "file": "f.ts",
+     "sessions": 1,
+     "pct": 25
+    },
+    {
+     "file": "g.ts",
+     "sessions": 1,
+     "pct": 25
+    },
+    {
+     "file": "h.ts",
+     "sessions": 1,
+     "pct": 25
+    }
+   ],
+   "topTools": [
+    {
+     "tool": "Bash",
+     "total": 32
+    },
+    {
+     "tool": "Read",
+     "total": 28
+    },
+    {
+     "tool": "Edit",
+     "total": 9
+    },
+    {
+     "tool": "Grep",
+     "total": 4
+    },
+    {
+     "tool": "Glob",
+     "total": 1
+    }
+   ],
+   "loopSignals": [
+    {
+     "type": "repeated_tool",
+     "count": 2
+    },
+    {
+     "type": "no_progress",
+     "count": 1
+    }
+   ],
+   "agentBreakdown": [
+    {
+     "agentModel": "claude_code/claude-opus-5",
+     "sessions": 2,
+     "avgCost": 0.3406,
+     "avgTurns": 23
+    },
+    {
+     "agentModel": "codex/",
+     "sessions": 1,
+     "avgCost": 0,
+     "avgTurns": 0
+    },
+    {
+     "agentModel": "copilot/claude-sonnet-5",
+     "sessions": 1,
+     "avgCost": 0.0029,
+     "avgTurns": 3
+    }
+   ]
+  },
+  {
+   "sessionCount": 5,
+   "avgCostUsd": 0.1368,
+   "avgTurns": 10,
+   "avgCacheHitRate": "48%",
+   "cacheMeasuredSessions": 4,
+   "cacheExcludedJunkSessions": 1,
+   "errorRate": "20%",
+   "hotFiles": [
+    {
+     "file": "a.ts",
+     "sessions": 4,
+     "pct": 80
+    },
+    {
+     "file": "b.ts",
+     "sessions": 1,
+     "pct": 20
+    },
+    {
+     "file": "c.ts",
+     "sessions": 1,
+     "pct": 20
+    },
+    {
+     "file": "d.ts",
+     "sessions": 1,
+     "pct": 20
+    },
+    {
+     "file": "e.ts",
+     "sessions": 1,
+     "pct": 20
+    },
+    {
+     "file": "f.ts",
+     "sessions": 1,
+     "pct": 20
+    },
+    {
+     "file": "g.ts",
+     "sessions": 1,
+     "pct": 20
+    },
+    {
+     "file": "h.ts",
+     "sessions": 1,
+     "pct": 20
+    }
+   ],
+   "topTools": [
+    {
+     "tool": "Bash",
+     "total": 32
+    },
+    {
+     "tool": "Read",
+     "total": 28
+    },
+    {
+     "tool": "Edit",
+     "total": 9
+    },
+    {
+     "tool": "Grep",
+     "total": 4
+    },
+    {
+     "tool": "Glob",
+     "total": 1
+    }
+   ],
+   "loopSignals": [
+    {
+     "type": "repeated_tool",
+     "count": 2
+    },
+    {
+     "type": "no_progress",
+     "count": 1
+    }
+   ],
+   "agentBreakdown": [
+    {
+     "agentModel": "claude_code/claude-opus-5",
+     "sessions": 3,
+     "avgCost": 0.2271,
+     "avgTurns": 15.7
+    },
+    {
+     "agentModel": "codex/",
+     "sessions": 1,
+     "avgCost": 0,
+     "avgTurns": 0
+    },
+    {
+     "agentModel": "copilot/claude-sonnet-5",
+     "sessions": 1,
+     "avgCost": 0.0029,
+     "avgTurns": 3
+    }
+   ]
+  },
+  {
+   "sessionCount": 5,
+   "avgCostUsd": 0.1368,
+   "avgTurns": 10,
+   "avgCacheHitRate": "48%",
+   "cacheMeasuredSessions": 4,
+   "cacheExcludedJunkSessions": 1,
+   "errorRate": "20%",
+   "hotFiles": [
+    {
+     "file": "a.ts",
+     "sessions": 4,
+     "pct": 80
+    },
+    {
+     "file": "b.ts",
+     "sessions": 1,
+     "pct": 20
+    },
+    {
+     "file": "c.ts",
+     "sessions": 1,
+     "pct": 20
+    },
+    {
+     "file": "d.ts",
+     "sessions": 1,
+     "pct": 20
+    },
+    {
+     "file": "e.ts",
+     "sessions": 1,
+     "pct": 20
+    },
+    {
+     "file": "f.ts",
+     "sessions": 1,
+     "pct": 20
+    },
+    {
+     "file": "g.ts",
+     "sessions": 1,
+     "pct": 20
+    },
+    {
+     "file": "h.ts",
+     "sessions": 1,
+     "pct": 20
+    }
+   ],
+   "topTools": [
+    {
+     "tool": "Bash",
+     "total": 32
+    },
+    {
+     "tool": "Read",
+     "total": 28
+    },
+    {
+     "tool": "Edit",
+     "total": 9
+    },
+    {
+     "tool": "Grep",
+     "total": 4
+    },
+    {
+     "tool": "Glob",
+     "total": 1
+    }
+   ],
+   "loopSignals": [
+    {
+     "type": "repeated_tool",
+     "count": 2
+    },
+    {
+     "type": "no_progress",
+     "count": 1
+    }
+   ],
+   "agentBreakdown": [
+    {
+     "agentModel": "claude_code/claude-opus-5",
+     "sessions": 3,
+     "avgCost": 0.2271,
+     "avgTurns": 15.7
+    },
+    {
+     "agentModel": "codex/",
+     "sessions": 1,
+     "avgCost": 0,
+     "avgTurns": 0
+    },
+    {
+     "agentModel": "copilot/claude-sonnet-5",
+     "sessions": 1,
+     "avgCost": 0.0029,
+     "avgTurns": 3
+    }
+   ]
+  },
+  {
+   "message": "No sessions found matching the filters."
+  }
+ ]
+}

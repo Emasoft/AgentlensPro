@@ -8,7 +8,12 @@
 
 use serde_json::{Map, Value};
 
-use crate::summarize::helpers::num;
+use crate::summarize::helpers::{fmt_js_num, js_slice, js_to_fixed_num, num, truthy};
+
+/// JS `String.prototype.length` — UTF-16 code units, never bytes and never chars.
+fn utf16_len(s: &str) -> usize {
+    s.chars().map(char::len_utf16).sum()
+}
 
 /// `get_call_context` — the full literal context of ONE llm call.
 ///
@@ -688,5 +693,299 @@ pub fn get_account_status(
     if let Some(n) = note {
         m.insert("note".into(), n.into());
     }
+    Value::Object(m)
+}
+
+/// `sessionCost` — the four token buckets are DISJOINT, so each bills at its own rate and nothing is
+/// subtracted anywhere. `inputTokens` is RAW uncached input on every card; the read-time
+/// "inputTokens < cache means it includes cache" heuristic that used to live here was structurally
+/// unsound (a raw-convention card whose input happened to exceed its cache total was misclassified
+/// and silently under-counted) and was retired when the convention moved to the ingestion sites.
+fn session_cost(s: &Value, now_ms: f64) -> f64 {
+    crate::pricing::calc_token_cost_usd(
+        f(s, "inputTokens"),
+        f(s, "cacheReadTokens"),
+        f(s, "cacheCreateTokens"),
+        f(s, "outputTokens"),
+        s.get("model").and_then(Value::as_str).unwrap_or(""),
+        0.0,
+        None,
+        now_ms,
+    )
+}
+
+/// A session counts toward cache-health SLIs only when it actually EXERCISED the cache. Junk rows
+/// (synthetic empties, zero-token cards) all carry `cacheHitRate: 0`, so averaging them in drags the
+/// SLI toward 0 with no billing behind it — the average would describe the junk, not the cache.
+fn is_cache_measured(s: &Value) -> bool {
+    let traffic = f(s, "inputTokens") + f(s, "outputTokens") + f(s, "cacheReadTokens") + f(s, "cacheCreateTokens");
+    f(s, "totalLlmCalls") > 0.0 && traffic > 0.0
+}
+
+const ACTIVE_WINDOW_MS: f64 = 5.0 * 60_000.0;
+
+/// `Array.prototype.slice(0, n)` — a NEGATIVE `n` counts back from the end and drops the last |n|
+/// elements. `take()` would silently return everything instead. Reachable here: the limit is
+/// `Math.min(args.limit ?? 10, 50)`, which passes a caller's negative through unclamped.
+fn js_head(v: &[Value], n: i64) -> Vec<Value> {
+    let end = if n < 0 { (v.len() as i64 + n).max(0) } else { n.min(v.len() as i64) } as usize;
+    v[..end].to_vec()
+}
+
+/// `get_recent_sessions` — "recent" means recently ACTIVE, not recently STARTED.
+///
+/// The caller's list is start-date ordered, which buries a long-running session still emitting spans
+/// NOW beneath fresh idle ones — live-confirmed as 4 actively-emitting sessions missing from the
+/// default top-10. So the rank is recomputed here on start + duration, and the caller's order is
+/// never trusted. This is the one place it matters.
+pub fn get_recent_sessions(sessions: &[Value], agent: Option<&str>, workspace: Option<&str>, limit: Option<f64>, now_ms: f64) -> Value {
+    let filtered: Vec<&Value> = sessions
+        .iter()
+        .filter(|s| agent.is_none_or(|a| s.get("source").and_then(Value::as_str) == Some(a)))
+        .filter(|s| {
+            workspace.is_none_or(|w| {
+                s.get("sessionId").and_then(Value::as_str).unwrap_or("").contains(w)
+                    || s.get("userRequest").and_then(Value::as_str).unwrap_or("").contains(w)
+            })
+        })
+        .collect();
+    let last_active = |s: &Value| -> f64 {
+        // `Date.parse(...) || 0` — an UNPARSEABLE date is 0, not NaN, so such a card sorts last
+        // instead of poisoning the comparator.
+        let started = s.get("startTime").and_then(Value::as_str).and_then(crate::summarize::helpers::parse_iso_ms).unwrap_or(0.0);
+        started + f(s, "durationMs")
+    };
+    let limit = limit.unwrap_or(10.0).min(50.0) as i64;
+    let mut ranked: Vec<&Value> = filtered.clone();
+    // Stable, like Array.prototype.sort — equal-activity cards keep the caller's relative order.
+    ranked.sort_by(|a, b| last_active(b).partial_cmp(&last_active(a)).unwrap_or(std::cmp::Ordering::Equal));
+    let ranked: Vec<Value> = ranked.into_iter().cloned().collect();
+    let rows: Vec<Value> = js_head(&ranked, limit)
+        .iter()
+        .map(|s| {
+            let la = last_active(s);
+            let start = s.get("startTime").and_then(Value::as_str).unwrap_or("");
+            let mut m = Map::new();
+            m.insert("sessionId".into(), s.get("sessionId").cloned().unwrap_or(Value::Null));
+            m.insert("date".into(), Value::String(js_slice(start, 16).replacen('T', " ", 1)));
+            m.insert(
+                "lastActive".into(),
+                Value::String(js_slice(&crate::summarize::helpers::iso_from_ms(la), 16).replacen('T', " ", 1)),
+            );
+            // Rides only on LIVE sessions — absent means idle, never a `false`. A false would read
+            // as a measurement ("we checked, it is not active") on cards where nothing was checked.
+            if now_ms - la < ACTIVE_WINDOW_MS {
+                m.insert("active".into(), Value::Bool(true));
+            }
+            for k in ["title", "entrypoint"] {
+                if let Some(v) = s.get(k).filter(|v| truthy(v)) {
+                    m.insert(k.into(), v.clone());
+                }
+            }
+            m.insert("agent".into(), s.get("source").cloned().unwrap_or(Value::Null));
+            m.insert("model".into(), s.get("model").cloned().unwrap_or(Value::Null));
+            let prompt = s.get("userRequest").and_then(Value::as_str).filter(|p| !p.is_empty());
+            m.insert(
+                "prompt".into(),
+                match prompt {
+                    Some(p) => Value::String(format!("{}{}", js_slice(p, 120), if utf16_len(p) > 120 { "…" } else { "" })),
+                    None => Value::Null,
+                },
+            );
+            m.insert("turns".into(), s.get("totalLlmCalls").cloned().unwrap_or(Value::Null));
+            m.insert("cost_usd".into(), num(js_to_fixed_num(session_cost(s, now_ms), 4)));
+            m.insert("durationMin".into(), num(js_to_fixed_num(f(s, "durationMs") / 60_000.0, 1)));
+            m.insert("errors".into(), s.get("errors").cloned().unwrap_or(Value::Null));
+            // P7 provenance: which feed backs this row's numbers. `null` = a pre-P7 card, which is
+            // "unknown" — never a backfilled guess.
+            m.insert("tokensSource".into(), s.get("tokensSource").cloned().unwrap_or(Value::Null));
+            if let Some(v) = s.get("coverageNote").filter(|v| truthy(v)) {
+                m.insert("coverageNote".into(), v.clone());
+            }
+            m.insert("topTools".into(), Value::Array(top_counts(s.get("toolCounts"), 4, |t, n| format!("{t}×{}", fmt_js_num(n)))));
+            m.insert(
+                "loopSignals".into(),
+                Value::Array(
+                    s.get("loopSignals")
+                        .and_then(Value::as_array)
+                        .map(|a| a.iter().map(|l| l.get("type").cloned().unwrap_or(Value::Null)).collect())
+                        .unwrap_or_default(),
+                ),
+            );
+            m.insert(
+                "filesChanged".into(),
+                Value::Array(s.get("filesChanged").and_then(Value::as_array).map(|a| a.iter().take(5).cloned().collect()).unwrap_or_default()),
+            );
+            Value::Object(m)
+        })
+        .collect();
+    Value::Array(rows)
+}
+
+/// The top-N entries of a `{key: count}` object, highest first, rendered by `render`.
+/// IndexMap semantics: JS builds these with `Object.entries` (insertion order) and a STABLE sort, so
+/// equal counts keep their original order on both engines.
+fn top_counts(counts: Option<&Value>, n: usize, render: impl Fn(&str, f64) -> String) -> Vec<Value> {
+    let Some(o) = counts.and_then(Value::as_object) else { return Vec::new() };
+    let mut entries: Vec<(&String, f64)> = o.iter().map(|(k, v)| (k, v.as_f64().unwrap_or(0.0))).collect();
+    entries.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    entries.iter().take(n).map(|(k, v)| Value::String(render(k, *v))).collect()
+}
+
+/// A `{key: count}` frequency table, insertion-ordered so a stable sort ties the same way JS does.
+fn freq_entries(map: &indexmap::IndexMap<String, f64>) -> Vec<(String, f64)> {
+    let mut v: Vec<(String, f64)> = map.iter().map(|(k, n)| (k.clone(), *n)).collect();
+    v.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    v
+}
+
+/// `get_workspace_patterns` — hot files, top tools, loop signals and per-agent averages.
+///
+/// NOTE: the TS accepts a `workspace` arg and NEVER USES IT (only `days` filters). Mirrored rather
+/// than "fixed": the frozen schema advertises the parameter, so honouring it here would make the
+/// Rust core answer a narrower question than the TS for the same call — a silent behaviour fork,
+/// which is worse than a parameter that visibly does nothing.
+///
+/// The cache-hit SLI averages ONLY cache-measured sessions, and the exclusion is LABELLED in the
+/// payload rather than silent: junk rows all read 0% and would drag the average toward 0 with no
+/// billing behind it, so a reader must be able to see how many sessions actually back the number.
+pub fn get_workspace_patterns(sessions: &[Value], days: Option<f64>, now_ms: f64) -> Value {
+    let filtered: Vec<&Value> = match days.filter(|d| *d != 0.0) {
+        Some(d) => {
+            let cutoff = now_ms - d * 86_400_000.0;
+            sessions
+                .iter()
+                .filter(|s| {
+                    // `Date.parse(x) >= cutoff` — an UNPARSEABLE date is NaN and NaN >= x is FALSE,
+                    // so such a card is excluded. `unwrap_or(0.0)` would let it through when the
+                    // cutoff is negative; the explicit `is_none_or(false)` keeps the JS semantics.
+                    s.get("startTime")
+                        .and_then(Value::as_str)
+                        .and_then(crate::summarize::helpers::parse_iso_ms)
+                        .is_some_and(|t| t >= cutoff)
+                })
+                .collect()
+        }
+        None => sessions.iter().collect(),
+    };
+    if filtered.is_empty() {
+        let mut m = Map::new();
+        m.insert("message".into(), "No sessions found matching the filters.".into());
+        return Value::Object(m);
+    }
+    let n = filtered.len() as f64;
+
+    let mut file_freq: indexmap::IndexMap<String, f64> = indexmap::IndexMap::new();
+    let mut tool_freq: indexmap::IndexMap<String, f64> = indexmap::IndexMap::new();
+    let mut signal_freq: indexmap::IndexMap<String, f64> = indexmap::IndexMap::new();
+    let mut agent_map: indexmap::IndexMap<String, (f64, f64, f64)> = indexmap::IndexMap::new();
+    let (mut total_cost, mut total_turns, mut error_sessions) = (0.0, 0.0, 0.0);
+    let (mut total_cache, mut cache_measured) = (0.0, 0.0);
+    for s in &filtered {
+        for key in ["filesRead", "filesChanged"] {
+            for file in s.get(key).and_then(Value::as_array).unwrap_or(&Vec::new()) {
+                if let Some(f) = file.as_str() {
+                    *file_freq.entry(f.to_owned()).or_insert(0.0) += 1.0;
+                }
+            }
+        }
+        if let Some(o) = s.get("toolCounts").and_then(Value::as_object) {
+            for (t, c) in o {
+                *tool_freq.entry(t.clone()).or_insert(0.0) += c.as_f64().unwrap_or(0.0);
+            }
+        }
+        for sig in s.get("loopSignals").and_then(Value::as_array).unwrap_or(&Vec::new()) {
+            if let Some(t) = sig.get("type").and_then(Value::as_str) {
+                *signal_freq.entry(t.to_owned()).or_insert(0.0) += 1.0;
+            }
+        }
+        let cost = session_cost(s, now_ms);
+        total_cost += cost;
+        total_turns += f(s, "totalLlmCalls");
+        if f(s, "errors") > 0.0 {
+            error_sessions += 1.0;
+        }
+        if is_cache_measured(s) {
+            cache_measured += 1.0;
+            total_cache += f(s, "cacheHitRate");
+        }
+        let key = format!(
+            "{}/{}",
+            crate::summarize::helpers::js_string(s.get("source").unwrap_or(&Value::Null)),
+            crate::summarize::helpers::js_string(s.get("model").unwrap_or(&Value::Null))
+        );
+        let e = agent_map.entry(key).or_insert((0.0, 0.0, 0.0));
+        e.0 += 1.0;
+        e.1 += cost;
+        e.2 += f(s, "totalLlmCalls");
+    }
+
+    let hot_files: Vec<Value> = freq_entries(&file_freq)
+        .iter()
+        .take(15)
+        .map(|(file, count)| {
+            let mut m = Map::new();
+            m.insert("file".into(), Value::String(file.clone()));
+            m.insert("sessions".into(), num(*count));
+            m.insert("pct".into(), num(crate::summarize::helpers::js_math_round(count / n * 100.0)));
+            Value::Object(m)
+        })
+        .collect();
+    let top_tools: Vec<Value> = freq_entries(&tool_freq)
+        .iter()
+        .take(8)
+        .map(|(tool, total)| {
+            let mut m = Map::new();
+            m.insert("tool".into(), Value::String(tool.clone()));
+            m.insert("total".into(), num(*total));
+            Value::Object(m)
+        })
+        .collect();
+    // No slice on this one — every distinct loop signal is reported.
+    let loop_signals: Vec<Value> = freq_entries(&signal_freq)
+        .iter()
+        .map(|(t, count)| {
+            let mut m = Map::new();
+            m.insert("type".into(), Value::String(t.clone()));
+            m.insert("count".into(), num(*count));
+            Value::Object(m)
+        })
+        .collect();
+    let mut agents: Vec<(&String, &(f64, f64, f64))> = agent_map.iter().collect();
+    agents.sort_by(|a, b| b.1 .0.partial_cmp(&a.1 .0).unwrap_or(std::cmp::Ordering::Equal));
+    let agent_breakdown: Vec<Value> = agents
+        .iter()
+        .take(6)
+        .map(|(key, v)| {
+            let mut m = Map::new();
+            m.insert("agentModel".into(), Value::String((*key).clone()));
+            m.insert("sessions".into(), num(v.0));
+            m.insert("avgCost".into(), num(js_to_fixed_num(v.1 / v.0, 4)));
+            m.insert("avgTurns".into(), num(js_to_fixed_num(v.2 / v.0, 1)));
+            Value::Object(m)
+        })
+        .collect();
+
+    let mut m = Map::new();
+    m.insert("sessionCount".into(), num(n));
+    m.insert("avgCostUsd".into(), num(js_to_fixed_num(total_cost / n, 4)));
+    m.insert("avgTurns".into(), num(js_to_fixed_num(total_turns / n, 1)));
+    // A STRING with a '%' — `+x.toFixed(0) + '%'` in the TS, so the number is rounded first and
+    // then concatenated. 'n/a' when nothing backs it, never a 0% that reads as a measurement.
+    m.insert(
+        "avgCacheHitRate".into(),
+        Value::String(if cache_measured > 0.0 {
+            format!("{}%", fmt_js_num(js_to_fixed_num(total_cache / cache_measured * 100.0, 0)))
+        } else {
+            "n/a".to_owned()
+        }),
+    );
+    m.insert("cacheMeasuredSessions".into(), num(cache_measured));
+    m.insert("cacheExcludedJunkSessions".into(), num(n - cache_measured));
+    m.insert("errorRate".into(), Value::String(format!("{}%", fmt_js_num(crate::summarize::helpers::js_math_round(error_sessions / n * 100.0)))));
+    m.insert("hotFiles".into(), Value::Array(hot_files));
+    m.insert("topTools".into(), Value::Array(top_tools));
+    m.insert("loopSignals".into(), Value::Array(loop_signals));
+    m.insert("agentBreakdown".into(), Value::Array(agent_breakdown));
     Value::Object(m)
 }

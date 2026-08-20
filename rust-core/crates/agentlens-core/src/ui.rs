@@ -1223,6 +1223,35 @@ async fn handle(
                         let payload = crate::mcp_tools::get_window_budget(Some(&status), Some(&account), s("accountId").as_deref());
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
+                    "get_recent_sessions" | "get_workspace_patterns" => {
+                        let now = crate::now_ms() as f64;
+                        let (sessions, gaps) = {
+                            let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                            let summary = st.build_session_summary(now);
+                            let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
+                            drop(summary);
+                            let gaps = crate::collector_lifecycle::compute_gaps(&st.lifecycle, crate::collector_lifecycle::MIN_GAP_MS);
+                            (sessions, gaps)
+                        };
+                        let payload = if name == "get_recent_sessions" {
+                            // TRDD-PJC8N1HO: the session list is WRAPPED with the collector's
+                            // downtime gaps, so a caller sees where telemetry was lost rather than
+                            // reading a gap as a quiet period. The shape is `{sessions,
+                            // collectorGaps}` — it was a bare array before, and the bare form is
+                            // what made the loss invisible.
+                            let rows = crate::mcp_tools::get_recent_sessions(
+                                &sessions,
+                                s("agent").as_deref(),
+                                s("workspace").as_deref(),
+                                args.get("limit").and_then(Value::as_f64),
+                                now,
+                            );
+                            serde_json::json!({ "sessions": rows, "collectorGaps": gaps })
+                        } else {
+                            crate::mcp_tools::get_workspace_patterns(&sessions, args.get("days").and_then(Value::as_f64), now)
+                        };
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
+                    }
                     "get_image_report" | "find_resident_blobs" | "query_context_blocks" => {
                         let now = crate::now_ms() as f64;
                         let n = |k: &str| args.get(k).and_then(Value::as_f64);
