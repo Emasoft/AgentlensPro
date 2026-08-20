@@ -1,0 +1,267 @@
+{
+ "countCases": [
+  "",
+  "hello world",
+  "a",
+  "abcd",
+  "abcdefgh",
+  "1234567890",
+  "7",
+  "=>();===",
+  "    indented",
+  "  short",
+  "line1\nline2\r\nline3",
+  "\n\n\n",
+  "日本語のテキストです",
+  "안녕하세요",
+  "Ωμέγα Кириллица",
+  "café naïve",
+  "🎉🎉",
+  "a🎉b",
+  "const x = {a: 1, b: [2, 3]};\n  return x;\n",
+  "mixed123abc!!!   \n\ttabbed"
+ ],
+ "counts": [
+  0,
+  2,
+  1,
+  1,
+  2,
+  4,
+  1,
+  4,
+  3,
+  1,
+  9,
+  3,
+  10,
+  5,
+  3,
+  2,
+  2,
+  3,
+  21,
+  7
+ ],
+ "calibrateCases": [
+  {
+   "raw": [],
+   "exact": 100,
+   "opts": {}
+  },
+  {
+   "raw": [
+    10,
+    20,
+    30
+   ],
+   "opts": {}
+  },
+  {
+   "raw": [
+    10,
+    20,
+    30
+   ],
+   "exact": 0,
+   "opts": {}
+  },
+  {
+   "raw": [
+    0,
+    0
+   ],
+   "exact": 100,
+   "opts": {}
+  },
+  {
+   "raw": [
+    10,
+    20,
+    30
+   ],
+   "exact": 120,
+   "opts": {}
+  },
+  {
+   "raw": [
+    10,
+    20,
+    30
+   ],
+   "exact": 61,
+   "opts": {}
+  },
+  {
+   "raw": [
+    33,
+    33,
+    34
+   ],
+   "exact": 101,
+   "opts": {}
+  },
+  {
+   "raw": [
+    10,
+    20,
+    30
+   ],
+   "exact": 6,
+   "opts": {
+    "minScale": 0.2,
+    "maxScale": 5
+   }
+  },
+  {
+   "raw": [
+    10,
+    20,
+    30
+   ],
+   "exact": 600,
+   "opts": {
+    "minScale": 0.2,
+    "maxScale": 5
+   }
+  },
+  {
+   "raw": [
+    10,
+    20,
+    30
+   ],
+   "exact": 300,
+   "opts": {
+    "minScale": 0.2,
+    "maxScale": 5
+   }
+  },
+  {
+   "raw": [
+    10,
+    20,
+    30
+   ],
+   "exact": 12,
+   "opts": {
+    "minScale": 0.2,
+    "maxScale": 5
+   }
+  },
+  {
+   "raw": [
+    1,
+    1,
+    1
+   ],
+   "exact": 1,
+   "opts": {
+    "minScale": 0.2,
+    "maxScale": 5
+   }
+  }
+ ],
+ "calibrations": [
+  {
+   "tokens": [],
+   "source": "estimated"
+  },
+  {
+   "tokens": [
+    10,
+    20,
+    30
+   ],
+   "source": "estimated"
+  },
+  {
+   "tokens": [
+    10,
+    20,
+    30
+   ],
+   "source": "estimated"
+  },
+  {
+   "tokens": [
+    0,
+    0
+   ],
+   "source": "estimated"
+  },
+  {
+   "tokens": [
+    20,
+    40,
+    60
+   ],
+   "source": "calibrated"
+  },
+  {
+   "tokens": [
+    10,
+    20,
+    31
+   ],
+   "source": "calibrated"
+  },
+  {
+   "tokens": [
+    33,
+    33,
+    35
+   ],
+   "source": "calibrated"
+  },
+  {
+   "tokens": [
+    10,
+    20,
+    30
+   ],
+   "source": "estimated"
+  },
+  {
+   "tokens": [
+    10,
+    20,
+    30
+   ],
+   "source": "estimated"
+  },
+  {
+   "tokens": [
+    50,
+    100,
+    150
+   ],
+   "source": "calibrated"
+  },
+  {
+   "tokens": [
+    2,
+    4,
+    6
+   ],
+   "source": "calibrated"
+  },
+  {
+   "tokens": [
+    1,
+    0,
+    0
+   ],
+   "source": "calibrated"
+  }
+ ],
+ "bytes": [
+  0,
+  0,
+  1,
+  1,
+  1,
+  2,
+  1024
+ ]
+}

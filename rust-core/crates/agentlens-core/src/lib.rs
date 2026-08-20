@@ -50,6 +50,7 @@ pub mod server_stats;
 pub mod span_window;
 pub mod statusline_store;
 pub mod summarize;
+pub mod token_estimator;
 pub mod ui;
 pub mod update_payload;
 
