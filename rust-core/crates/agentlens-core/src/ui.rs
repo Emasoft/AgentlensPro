@@ -1694,6 +1694,60 @@ async fn handle(
                         .await?;
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
+                    "get_cache_break_report" => {
+                        // Up to 20 pooled sessions, each one a transcript REPARSE plus a
+                        // composition rebuild, so the whole scan goes on spawn_blocking with the
+                        // state lock released and re-locked PER SESSION inside `timeline_of` — the
+                        // P4s rule.
+                        //
+                        // The accessor is always Some here: unlike the TS embedder, which may be
+                        // constructed with a null accessor, the Rust side always has the log env. A
+                        // session with no reconstructable transcript still answers None one level
+                        // down, which is the same signal — reported as
+                        // `sessionsWithLog`/`sessionsAnalyzed`, not as a whole-tool error.
+                        let now = crate::now_ms();
+                        let (sessions, env) = {
+                            let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                            let summary = st.build_session_summary(now as f64);
+                            let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
+                            drop(summary);
+                            (sessions, st.log_env.clone())
+                        };
+                        let (a, st2) = (args.clone(), state.clone());
+                        let payload = tokio::task::spawn_blocking(move || {
+                            let file_ids = crate::context_composition::list_session_file_ids(&env);
+                            let parent_of = |sid: &str| -> Option<String> {
+                                sessions
+                                    .iter()
+                                    .find(|s| s.get("sessionId").and_then(Value::as_str) == Some(sid))
+                                    .and_then(|s| s.get("parentSessionId").and_then(Value::as_str))
+                                    .map(str::to_owned)
+                            };
+                            let get_comp = |sid: &str| {
+                                let ancestor = crate::context_composition::resolve_logged_ancestor(&env, sid, &parent_of).or_else(|| parent_of(sid));
+                                crate::context_composition::build_context_composition(&env, sid, ancestor.as_deref())
+                            };
+                            let timeline_of = |c: &Value| -> Vec<Value> {
+                                let Some(sid) = c.get("sessionId").and_then(Value::as_str) else { return Vec::new() };
+                                let Ok(mut st) = st2.lock() else { return Vec::new() };
+                                resolve_session_card(&mut st, sid, now)
+                                    .and_then(|c| c.get("timeline").and_then(Value::as_array).cloned())
+                                    .unwrap_or_default()
+                            };
+                            crate::mcp_tools::get_cache_break_report(
+                                &sessions,
+                                &file_ids,
+                                &a,
+                                Some(&get_comp),
+                                &timeline_of,
+                                now as f64,
+                                20_000.0,
+                            )
+                        })
+                        .await
+                        .map_err(|e| format!("cache-break scan join failed: {e}"))?;
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
+                    }
                     "check_cache_expiry" => {
                         // Every probed candidate can reparse a multi-MB transcript, so the whole
                         // scan runs on spawn_blocking with the state lock released and re-locked

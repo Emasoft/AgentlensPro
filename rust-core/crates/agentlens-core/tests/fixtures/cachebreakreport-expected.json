@@ -1,0 +1,457 @@
+{
+  "sessions": [
+    {
+      "sessionId": "comp-many",
+      "workspace": "/w/alpha",
+      "model": "claude-opus-5",
+      "inputTokens": 10,
+      "outputTokens": 5,
+      "cacheReadTokens": 0,
+      "cacheCreateTokens": 0,
+      "turns": 1,
+      "startTime": "2026-08-01T10:00:00.000Z"
+    },
+    {
+      "sessionId": "comp-own",
+      "workspace": "/w/alpha",
+      "model": "claude-opus-5",
+      "inputTokens": 10,
+      "outputTokens": 5,
+      "cacheReadTokens": 0,
+      "cacheCreateTokens": 0,
+      "turns": 1,
+      "startTime": "2026-08-01T10:00:00.000Z"
+    },
+    {
+      "sessionId": "conv-main",
+      "workspace": "/w/alpha",
+      "model": "claude-opus-5",
+      "inputTokens": 10,
+      "outputTokens": 5,
+      "cacheReadTokens": 0,
+      "cacheCreateTokens": 0,
+      "turns": 1,
+      "startTime": "2026-08-01T10:00:00.000Z"
+    },
+    {
+      "sessionId": "comp-parent",
+      "workspace": "/w/beta",
+      "model": "claude-sonnet-5",
+      "inputTokens": 10,
+      "outputTokens": 5,
+      "cacheReadTokens": 0,
+      "cacheCreateTokens": 0,
+      "turns": 1,
+      "startTime": "2026-08-01T10:00:00.000Z"
+    },
+    {
+      "sessionId": "no-log-here",
+      "workspace": "/w/alpha",
+      "model": "claude-opus-5",
+      "inputTokens": 10,
+      "outputTokens": 5,
+      "cacheReadTokens": 0,
+      "cacheCreateTokens": 0,
+      "turns": 1,
+      "startTime": "2026-08-01T10:00:00.000Z"
+    }
+  ],
+  "timelines": {
+    "comp-many": [
+      {
+        "type": "llm",
+        "turn": 1,
+        "cacheReadTokens": 0,
+        "cacheCreateTokens": 5000,
+        "inputTokens": 5,
+        "model": "claude-opus-5",
+        "timestamp": "2026-08-01T11:00:00.000Z"
+      },
+      {
+        "type": "llm",
+        "turn": 2,
+        "cacheReadTokens": 1000,
+        "cacheCreateTokens": 9000,
+        "inputTokens": 5,
+        "model": "claude-opus-5",
+        "timestamp": "2026-08-01T11:01:00.000Z"
+      },
+      {
+        "type": "llm",
+        "turn": 3,
+        "cacheReadTokens": 2000,
+        "cacheCreateTokens": 40000,
+        "inputTokens": 5,
+        "model": "claude-opus-5",
+        "timestamp": "2026-08-01T11:02:00.000Z"
+      },
+      {
+        "type": "llm",
+        "turn": 4,
+        "cacheReadTokens": 50000,
+        "cacheCreateTokens": 100,
+        "inputTokens": 5,
+        "model": "claude-opus-5",
+        "timestamp": "2026-08-01T11:03:00.000Z"
+      }
+    ],
+    "comp-own": [
+      {
+        "type": "llm",
+        "turn": 1,
+        "cacheReadTokens": 0,
+        "cacheCreateTokens": 5000,
+        "inputTokens": 5,
+        "model": "claude-opus-5",
+        "timestamp": "2026-08-01T11:00:00.000Z"
+      }
+    ],
+    "conv-main": [
+      {
+        "type": "llm",
+        "turn": 1,
+        "cacheReadTokens": 0,
+        "cacheCreateTokens": 5000,
+        "inputTokens": 5,
+        "model": "claude-opus-5",
+        "timestamp": "2026-08-01T11:00:00.000Z"
+      },
+      {
+        "type": "llm",
+        "turn": 2,
+        "cacheReadTokens": 100,
+        "cacheCreateTokens": 6000,
+        "inputTokens": 5,
+        "model": "claude-opus-5",
+        "timestamp": "2026-08-01T11:01:00.000Z"
+      }
+    ],
+    "comp-parent": [
+      {
+        "type": "llm",
+        "turn": 1,
+        "cacheReadTokens": 0,
+        "cacheCreateTokens": 4000,
+        "inputTokens": 5,
+        "model": "claude-sonnet-5",
+        "timestamp": "2026-08-01T11:00:00.000Z"
+      },
+      {
+        "type": "llm",
+        "turn": 2,
+        "cacheReadTokens": 500,
+        "cacheCreateTokens": 7000,
+        "inputTokens": 5,
+        "model": "claude-sonnet-5",
+        "timestamp": "2026-08-01T11:01:00.000Z"
+      }
+    ]
+  },
+  "compositions": {
+    "comp-many": {
+      "sessionId": "comp-many",
+      "estimated": true,
+      "truncated": false,
+      "turns": [
+        {
+          "turn": 1,
+          "sources": [
+            {
+              "label": "CLAUDE.md",
+              "kind": "file",
+              "tokens": 5000,
+              "bytes": 20000,
+              "count": 1
+            },
+            {
+              "label": "tools",
+              "kind": "toolCatalog",
+              "tokens": 800,
+              "bytes": 3200,
+              "count": 1
+            },
+            {
+              "label": "agents",
+              "kind": "agentCatalog",
+              "tokens": 600,
+              "bytes": 2400,
+              "count": 1
+            }
+          ]
+        },
+        {
+          "turn": 2,
+          "sources": [
+            {
+              "label": "CLAUDE.md",
+              "kind": "file",
+              "tokens": 9000,
+              "bytes": 36000,
+              "count": 1
+            },
+            {
+              "label": "tools",
+              "kind": "toolCatalog",
+              "tokens": 800,
+              "bytes": 3200,
+              "count": 1
+            },
+            {
+              "label": "agents",
+              "kind": "agentCatalog",
+              "tokens": 600,
+              "bytes": 2400,
+              "count": 1
+            }
+          ]
+        },
+        {
+          "turn": 3,
+          "sources": [
+            {
+              "label": "CLAUDE.md",
+              "kind": "file",
+              "tokens": 9000,
+              "bytes": 36000,
+              "count": 1
+            },
+            {
+              "label": "tools",
+              "kind": "toolCatalog",
+              "tokens": 801,
+              "bytes": 3204,
+              "count": 1
+            },
+            {
+              "label": "agents",
+              "kind": "agentCatalog",
+              "tokens": 601,
+              "bytes": 2404,
+              "count": 1
+            }
+          ]
+        },
+        {
+          "turn": 4,
+          "sources": [
+            {
+              "label": "CLAUDE.md",
+              "kind": "file",
+              "tokens": 9000,
+              "bytes": 36000,
+              "count": 1
+            },
+            {
+              "label": "tools",
+              "kind": "toolCatalog",
+              "tokens": 801,
+              "bytes": 3204,
+              "count": 1
+            },
+            {
+              "label": "agents",
+              "kind": "agentCatalog",
+              "tokens": 601,
+              "bytes": 2404,
+              "count": 1
+            }
+          ]
+        }
+      ]
+    },
+    "comp-own": {
+      "sessionId": "comp-own",
+      "estimated": true,
+      "truncated": false,
+      "turns": [
+        {
+          "turn": 1,
+          "sources": [
+            {
+              "label": "CLAUDE.md",
+              "kind": "file",
+              "tokens": 4000,
+              "bytes": 16000,
+              "count": 1
+            }
+          ]
+        }
+      ]
+    },
+    "comp-parent": {
+      "sessionId": "comp-parent",
+      "estimated": true,
+      "truncated": false,
+      "turns": [
+        {
+          "turn": 1,
+          "sources": [
+            {
+              "label": "CLAUDE.md",
+              "kind": "file",
+              "tokens": 3000,
+              "bytes": 12000,
+              "count": 1
+            }
+          ]
+        },
+        {
+          "turn": 2,
+          "sources": [
+            {
+              "label": "CLAUDE.md",
+              "kind": "file",
+              "tokens": 7000,
+              "bytes": 28000,
+              "count": 1
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "noAccessor": {
+    "error": "Composition accessor unavailable — cache-break analysis needs local Claude logs."
+  },
+  "bySession": {
+    "sessionId": "comp-many",
+    "model": "claude-opus-5",
+    "cacheHitRatePct": 49,
+    "totalWastedTokens": 49000,
+    "totalWastedCostUsd": 0.2818,
+    "breakCount": 2,
+    "breaks": [
+      {
+        "turn": 2,
+        "cause": "INJECTED_BLOCK_CHANGED",
+        "block": "CLAUDE.md",
+        "wastedTokens": 9000,
+        "wastedCostUsd": 0.0517,
+        "remediation": "Move this volatile injected block (hook/file/rule/memory) into the message suffix, after the last cache breakpoint."
+      },
+      {
+        "turn": 3,
+        "cause": "PLUGINS_RELOADED",
+        "block": "2 catalogs churned (agentCatalog, toolCatalog)",
+        "wastedTokens": 40000,
+        "wastedCostUsd": 0.23,
+        "remediation": "A /reload-plugins churned 2+ catalogs in one turn. It resets the prefix ONLY when a reloaded plugin supplies an MCP server whose tools load into the prefix — per the docs, \"skills, commands, agents, hooks, LSP servers, monitors, and themes never invalidate the cache\". Since v2.1.163 the command warns and skips such a reload unless --force, so check whether --force was passed before blaming the reload."
+      }
+    ],
+    "topOffenders": [
+      {
+        "label": "2 catalogs churned (agentCatalog, toolCatalog)",
+        "kind": "catalog",
+        "cause": "PLUGINS_RELOADED",
+        "occurrences": 1,
+        "wastedTokens": 40000,
+        "wastedCostUsd": 0.23
+      },
+      {
+        "label": "CLAUDE.md",
+        "kind": "file",
+        "cause": "INJECTED_BLOCK_CHANGED",
+        "occurrences": 1,
+        "wastedTokens": 9000,
+        "wastedCostUsd": 0.0517
+      }
+    ]
+  },
+  "bySessionMissing": {
+    "error": "Session nope not found."
+  },
+  "bySessionNoComposition": {
+    "sessionId": "conv-main",
+    "message": "Not enough data to diff (no local composition, or a single-turn session)."
+  },
+  "bySessionSingleTurn": {
+    "sessionId": "comp-own",
+    "message": "Not enough data to diff (no local composition, or a single-turn session)."
+  },
+  "all": {
+    "scope": "all",
+    "sessionsConsidered": 5,
+    "sessionsWithLog": 4,
+    "sessionsAnalyzed": 2,
+    "topOffenders": [
+      {
+        "label": "2 catalogs churned (agentCatalog, toolCatalog)",
+        "kind": "catalog",
+        "cause": "PLUGINS_RELOADED",
+        "occurrences": 1,
+        "wastedTokens": 40000,
+        "wastedCostUsd": 0.23
+      },
+      {
+        "label": "CLAUDE.md",
+        "kind": "file",
+        "cause": "INJECTED_BLOCK_CHANGED",
+        "occurrences": 2,
+        "wastedTokens": 16000,
+        "wastedCostUsd": 0.0678
+      }
+    ]
+  },
+  "scoped": {
+    "scope": "/w/alpha",
+    "sessionsConsidered": 4,
+    "sessionsWithLog": 3,
+    "sessionsAnalyzed": 1,
+    "topOffenders": [
+      {
+        "label": "2 catalogs churned (agentCatalog, toolCatalog)",
+        "kind": "catalog",
+        "cause": "PLUGINS_RELOADED",
+        "occurrences": 1,
+        "wastedTokens": 40000,
+        "wastedCostUsd": 0.23
+      },
+      {
+        "label": "CLAUDE.md",
+        "kind": "file",
+        "cause": "INJECTED_BLOCK_CHANGED",
+        "occurrences": 1,
+        "wastedTokens": 9000,
+        "wastedCostUsd": 0.0517
+      }
+    ]
+  },
+  "blankScope": {
+    "scope": "",
+    "sessionsConsidered": 5,
+    "sessionsWithLog": 4,
+    "sessionsAnalyzed": 2,
+    "topOffenders": [
+      {
+        "label": "2 catalogs churned (agentCatalog, toolCatalog)",
+        "kind": "catalog",
+        "cause": "PLUGINS_RELOADED",
+        "occurrences": 1,
+        "wastedTokens": 40000,
+        "wastedCostUsd": 0.23
+      },
+      {
+        "label": "CLAUDE.md",
+        "kind": "file",
+        "cause": "INJECTED_BLOCK_CHANGED",
+        "occurrences": 2,
+        "wastedTokens": 16000,
+        "wastedCostUsd": 0.0678
+      }
+    ]
+  },
+  "noMatch": {
+    "scope": "/w/nowhere",
+    "sessionsConsidered": 0,
+    "sessionsWithLog": 0,
+    "sessionsAnalyzed": 0,
+    "topOffenders": []
+  },
+  "byIdFragment": {
+    "scope": "comp-many",
+    "sessionsConsidered": 0,
+    "sessionsWithLog": 0,
+    "sessionsAnalyzed": 0,
+    "topOffenders": []
+  }
+}

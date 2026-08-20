@@ -2693,6 +2693,190 @@ pub fn get_context_inflation_report(
     Value::Object(m)
 }
 
+/// `{...o, wastedCostUsd: +o.wastedCostUsd.toFixed(4)}` — a spread whose OVERWRITE of an existing
+/// key keeps that key's ORIGINAL position, so the offender stays `label, kind, cause, occurrences,
+/// wastedTokens, wastedCostUsd`. Re-inserting at the end would reorder the wire object; IndexMap's
+/// `insert` on a present key preserves position for the same reason JS does.
+fn offender_rounded(o: &Value) -> Value {
+    let mut m = o.as_object().cloned().unwrap_or_default();
+    let usd = o.get("wastedCostUsd").and_then(Value::as_f64).unwrap_or(0.0);
+    m.insert("wastedCostUsd".into(), num(js_to_fixed_num(usd, 4)));
+    Value::Object(m)
+}
+
+/// `get_cache_break_report` (mcpServer.ts handleGetCacheBreakReport) — per-session break verdicts,
+/// or a cross-session offender leaderboard. The engine is `crate::cache_break`.
+///
+/// `get_composition` is a CLOSURE (the TS accessor is async and per-session) and `report_for` runs
+/// one transcript reparse per pooled session, so the caller must run this on a blocking thread with
+/// the state lock released — the P4s rule.
+///
+/// `scan_deadline_ms` is the absolute wall-clock deadline, already resolved by the caller, so this
+/// function stays pure: `scanWithBudget` checks its deadline BETWEEN items, never during one.
+/// The TS `CompositionAccessor | null` — per-session, fallible, and NULLABLE, which is a distinct
+/// state from "the accessor exists but this session has no transcript".
+pub type CompositionAccessor<'a> = Option<&'a dyn Fn(&str) -> Option<Value>>;
+
+/// `get_composition` is an `Option` rather than a separate `has_accessor` flag so the TS's
+/// `if (!getComposition)` guard has exactly one representation — a bool beside the closure would
+/// let the two disagree, and it pushed the signature past clippy's argument limit for nothing.
+pub fn get_cache_break_report(
+    sessions: &[Value],
+    file_ids: &std::collections::HashSet<String>,
+    args: &Value,
+    get_composition: CompositionAccessor<'_>,
+    timeline_of: &dyn Fn(&Value) -> Vec<Value>,
+    now_ms: f64,
+    time_budget_ms: f64,
+) -> Value {
+    let Some(get_composition) = get_composition else {
+        return err("Composition accessor unavailable — cache-break analysis needs local Claude logs.".to_owned());
+    };
+    let model_of = |s: &Value| s.get("model").and_then(Value::as_str).unwrap_or_default().to_owned();
+    let report_for = |s: &Value| -> Option<Value> {
+        let sid = s.get("sessionId").and_then(Value::as_str).unwrap_or_default();
+        crate::cache_break::build_cache_break_report(sid, &timeline_of(s), get_composition(sid).as_ref(), &model_of(s), now_ms)
+    };
+
+    if let Some(sid) = args.get("sessionId").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+        let Some(s) = sessions.iter().find(|x| x.get("sessionId").and_then(Value::as_str) == Some(sid)) else {
+            return err(format!("Session {sid} not found."));
+        };
+        let Some(report) = report_for(s) else {
+            let mut m = Map::new();
+            m.insert("sessionId".into(), Value::String(sid.to_owned()));
+            m.insert(
+                "message".into(),
+                Value::String("Not enough data to diff (no local composition, or a single-turn session).".into()),
+            );
+            return Value::Object(m);
+        };
+        let empty: Vec<Value> = Vec::new();
+        let broken: Vec<&Value> =
+            report.get("turns").and_then(Value::as_array).unwrap_or(&empty).iter().filter(|t| truthy(&t["broke"])).collect();
+        let mut m = Map::new();
+        m.insert("sessionId".into(), report["sessionId"].clone());
+        m.insert("model".into(), Value::String(model_of(s)));
+        m.insert(
+            "cacheHitRatePct".into(),
+            num(crate::summarize::helpers::js_math_round(report.get("cacheHitRate").and_then(Value::as_f64).unwrap_or(0.0) * 100.0)),
+        );
+        m.insert("totalWastedTokens".into(), report["totalWastedTokens"].clone());
+        m.insert(
+            "totalWastedCostUsd".into(),
+            num(js_to_fixed_num(report.get("totalWastedCostUsd").and_then(Value::as_f64).unwrap_or(0.0), 4)),
+        );
+        m.insert("breakCount".into(), num(broken.len() as f64));
+        let breaks: Vec<Value> = broken
+            .iter()
+            .take(40)
+            .map(|t| {
+                let mut b = Map::new();
+                b.insert("turn".into(), t["turn"].clone());
+                b.insert("cause".into(), t["cause"].clone());
+                // `?? null` KEEPS the key as null — unlike the engine's own `breakSourceLabel`,
+                // which is DROPPED when absent. Same datum, two different wire contracts.
+                b.insert("block".into(), t.get("breakSourceLabel").cloned().unwrap_or(Value::Null));
+                b.insert("wastedTokens".into(), t["wastedTokens"].clone());
+                b.insert("wastedCostUsd".into(), num(js_to_fixed_num(t.get("wastedCostUsd").and_then(Value::as_f64).unwrap_or(0.0), 4)));
+                copy_opt(&mut b, t, "remediation");
+                Value::Object(b)
+            })
+            .collect();
+        m.insert("breaks".into(), Value::Array(breaks));
+        let offenders = report.get("offenders").and_then(Value::as_array).unwrap_or(&empty);
+        m.insert("topOffenders".into(), Value::Array(offenders.iter().take(10).map(offender_rounded).collect()));
+        return Value::Object(m);
+    }
+
+    // TRIMMED under a truthy guard for the filter, and the ECHO is `scope ?? 'all'` on that same
+    // TRIMMED value — so a whitespace workspace filters nothing and echoes `""`, not `"all"`. This
+    // is the find_context_hogs variant; get_context_inflation_report echoes the RAW arg instead.
+    // Three call sites, three answers for one input — assert each, never generalize.
+    // ABSENT and PRESENT-BUT-BLANK are DIFFERENT: `args.workspace?.trim()` is `undefined` only when
+    // the arg is missing (or null), so `?? 'all'` reads "all" there while a whitespace arg keeps its
+    // trimmed `""`. Collapsing both to `""` up front loses that distinction and echoes `""` for an
+    // absent arg — which is what this first failed on.
+    let scope: Option<&str> = args.get("workspace").and_then(Value::as_str).map(str::trim);
+    // Prefix ONLY and capped at 20 — NOT find_context_hogs' sessionId-substring rule at 25.
+    let (pool, considered, with_log) = file_backed_pool(sessions, file_ids, scope.filter(|s| !s.is_empty()), 20, false);
+
+    // Unconditional deadline, exactly as `scanWithBudget` computes it — a `> 0` guard would turn a
+    // non-positive budget into "no budget" instead of "already elapsed".
+    let deadline = crate::now_ms() as f64 + time_budget_ms;
+    let mut merged: indexmap::IndexMap<String, (Value, Value, String, f64, f64, f64)> = indexmap::IndexMap::new();
+    let mut analyzed = 0.0_f64;
+    let mut scanned = 0usize;
+    let mut stopped_early = false;
+    let empty: Vec<Value> = Vec::new();
+    for s in &pool {
+        if crate::now_ms() as f64 > deadline {
+            stopped_early = true;
+            break;
+        }
+        let report = report_for(s);
+        scanned += 1;
+        let Some(report) = report else { continue };
+        analyzed += 1.0;
+        for o in report.get("offenders").and_then(Value::as_array).unwrap_or(&empty) {
+            let cause = o.get("cause").and_then(Value::as_str).unwrap_or_default().to_owned();
+            let kind = o.get("kind").cloned().unwrap_or(Value::Null);
+            let label = o.get("label").cloned().unwrap_or(Value::Null);
+            let key = format!("{}::{}::{}", cause, crate::summarize::helpers::js_string(&kind), crate::summarize::helpers::js_string(&label));
+            let e = merged.entry(key).or_insert((label, kind, cause, 0.0, 0.0, 0.0));
+            e.3 += o.get("occurrences").and_then(Value::as_f64).unwrap_or(0.0);
+            e.4 += o.get("wastedTokens").and_then(Value::as_f64).unwrap_or(0.0);
+            e.5 += o.get("wastedCostUsd").and_then(Value::as_f64).unwrap_or(0.0);
+        }
+    }
+    let mut ranked: Vec<(Value, Value, String, f64, f64, f64)> = merged.into_values().collect();
+    ranked.sort_by(|a, b| {
+        let d = b.5 - a.5;
+        if d != 0.0 && !d.is_nan() {
+            return d.partial_cmp(&0.0).unwrap_or(std::cmp::Ordering::Equal);
+        }
+        (b.4 - a.4).partial_cmp(&0.0).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let mut m = Map::new();
+    m.insert("scope".into(), Value::String(scope.unwrap_or("all").to_owned()));
+    m.insert("sessionsConsidered".into(), num(considered));
+    m.insert("sessionsWithLog".into(), num(with_log));
+    m.insert("sessionsAnalyzed".into(), num(analyzed));
+    if stopped_early {
+        m.insert("scanStoppedEarly".into(), Value::Bool(true));
+        m.insert(
+            "scanNote".into(),
+            Value::String(format!(
+                "SAMPLE: the {}s scan budget stopped after {} of {} pooled sessions — retry to widen (reparsed timelines are cached).",
+                fmt_js_num(time_budget_ms / 1000.0),
+                scanned,
+                pool.len()
+            )),
+        );
+    }
+    m.insert(
+        "topOffenders".into(),
+        Value::Array(
+            ranked
+                .iter()
+                .take(15)
+                .map(|(label, kind, cause, occ, tok, usd)| {
+                    let mut o = Map::new();
+                    o.insert("label".into(), label.clone());
+                    o.insert("kind".into(), kind.clone());
+                    o.insert("cause".into(), Value::String(cause.clone()));
+                    o.insert("occurrences".into(), num(*occ));
+                    o.insert("wastedTokens".into(), num(*tok));
+                    o.insert("wastedCostUsd".into(), num(js_to_fixed_num(*usd, 4)));
+                    Value::Object(o)
+                })
+                .collect(),
+        ),
+    );
+    Value::Object(m)
+}
+
 // ── check_cache_expiry (TRDD-OCNHOHE9 / mcpServer.ts handleCheckCacheExpiry) ──────────────────
 // Is a session past its prompt-cache TTL? Finds each target's last LLM-request time, classifies
 // its per-session TTL regime (crate::burn::cache_ttl), and reports fresh/expired/unknown.
