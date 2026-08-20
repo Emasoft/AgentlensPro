@@ -1707,3 +1707,54 @@ fn mcp_get_lifecycle_events_distinguishes_quiet_from_uninstalled() {
     assert_eq!(quiet["count"], missing["count"], "both empty — the count cannot be the discriminator");
     assert!(quiet.get("note").is_none(), "an installed-but-quiet store explains nothing: {quiet}");
 }
+
+/// `get_account_status` over the wire, and — the part worth a socket test — the two places it
+/// refuses to guess. `all: true` is a DIFFERENT question (the on-disk roster, which works with the
+/// server cold) and is not ported, so it says so by name instead of quietly answering the singular
+/// one. And with the statusline reader unported there is no `cc-rate-limits` source available, so
+/// `windowSource` must report `calibrated`/`none` rather than claiming an authority it lacks.
+#[test]
+fn mcp_get_account_status_answers_and_refuses_to_guess() {
+    let (_otlp, ui, state) = start_servers();
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let now = agentlens_core::now_ms();
+    let iso = |off: i64| agentlens_core::summarize::helpers::iso_from_ms((now - off) as f64);
+    {
+        let mut st = state.lock().unwrap();
+        st.burn.vars.clear();
+        st.burn.set_home_dir(fixtures.join("ttl-home-a"));
+        st.put_log_session(serde_json::json!({
+            "sessionId": "acct-status-1", "source": "claude_code", "dataSource": "log",
+            "startTime": iso(120_000), "accountId": "acct-aaaa",
+            "timeline": [{ "type": "api_request", "timestamp": iso(30_000), "spanId": "a1",
+                "costUsd": 0.2, "inputTokens": 100, "outputTokens": 20,
+                "cacheReadTokens": 1000, "cacheCreateTokens": 50 }]
+        }));
+    }
+    let raw = |args: &str| -> serde_json::Value {
+        let body = format!(
+            r#"{{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{{"name":"get_account_status","arguments":{args}}}}}"#
+        );
+        serde_json::from_str(body_of(&post(ui, "/mcp", &body))).unwrap()
+    };
+    let call = |args: &str| -> serde_json::Value {
+        let env = raw(args);
+        let text = env["result"]["content"][0]["text"].as_str().unwrap_or_else(|| panic!("{env}"));
+        serde_json::from_str(text).unwrap()
+    };
+
+    let st = call(r#"{"verbosity":"full"}"#);
+    assert!(st["summary"].as_str().is_some_and(|s| s.contains("cache TTL")), "the one-line digest: {st}");
+    assert!(st["cacheTtl"]["minutes"].is_number(), "{st}");
+    let src = st["usageWindows"]["windowSource"].as_str().unwrap_or_else(|| panic!("{st}"));
+    assert!(
+        src == "calibrated" || src == "calibrated-exceeded" || src == "none",
+        "with the statusline reader unported there is no cc-rate-limits authority to claim, got {src}: {st}"
+    );
+
+    // `all: true` is not ported — an ERROR that names it, never the singular answer in disguise.
+    let all = raw(r#"{"all":true}"#);
+    assert!(all["error"].is_object(), "{all}");
+    let msg = all["error"]["message"].as_str().unwrap();
+    assert!(msg.contains("all: true"), "the error names WHICH form is missing: {msg}");
+}

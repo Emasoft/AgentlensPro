@@ -517,3 +517,176 @@ pub fn tool_ok_lean(id: &Value, payload: &Value, args: &Value) -> Value {
     let max_tokens = args.get("maxTokens").and_then(Value::as_f64);
     crate::mcp::tool_ok(id, &crate::lean_response::leanify(payload, full, max_tokens))
 }
+
+/// `windowFillPct` — COST first, raw tokens only as a fallback.
+///
+/// The plan's windows are metered by cost-equivalent, not token count (a cache read bills at 0.1×),
+/// so with ~96% of volume being cache reads the raw-token percentage systematically OVERSTATES the
+/// fill: a pooled 7d window read 171.51% by tokens while the cost figure for the same window read
+/// 64.49%. And a capacity the consumption has already passed yields NULL, because the denominator is
+/// then proven wrong and any percentage off it is noise wearing a number's clothes.
+pub fn window_fill_pct(w: &Value) -> Value {
+    if w.get("capacityExceeded") == Some(&Value::Bool(true)) {
+        return Value::Null;
+    }
+    match w.get("pctConsumedCost") {
+        Some(v) if !v.is_null() => v.clone(),
+        _ => w.get("pctConsumed").cloned().unwrap_or(Value::Null),
+    }
+}
+
+/// `get_account_status` — the current account (identity + plan), how much of ITS window is left, its
+/// billing MODE, and the machine's cache-TTL regime. The OAuth token is never touched; only the plan
+/// string.
+///
+/// `rate_limits` is Claude Code's OWN utilisation, which is authoritative when present and is
+/// preferred over our calibrated figure. **It is None in this core: the statusline reader
+/// (`StatuslineUsageAgg`) is NOT PORTED — the same gap `live_burn_status` already documents.** The
+/// consequence is visible rather than silent: `windowSource` reports `calibrated` / `none` instead
+/// of `cc-rate-limits`, so a reader can tell which number they are looking at.
+///
+/// `windowSource` distinguishes `calibrated-exceeded` from `calibrated` on purpose: a calibrated
+/// capacity that consumption has already passed yields a null pct, and a bare `calibrated` + null is
+/// indistinguishable from "we have no data" — a different, and much less urgent, situation.
+pub fn get_account_status(
+    account: Option<&crate::burn::account_info::AccountInfo>,
+    burn: Option<&Value>,
+    ttl_ctx: Option<&crate::burn::cache_ttl::TtlContext>,
+    rate_limits: Option<&Value>,
+) -> Value {
+    // NB: the window match uses the RAW account, not the source-filtered one. Only the payload's
+    // `account`/`plan` fields consult `source !== 'none'`; narrowing here too would silently stop
+    // matching a window for an account whose identity file is missing but whose uuid is known.
+    let uuid = account.and_then(|a| a.account_uuid.as_deref());
+    let win = burn
+        .and_then(|b| b.get("accountWindows"))
+        .and_then(Value::as_array)
+        .and_then(|ws| ws.iter().find(|w| w.get("accountUuid").and_then(Value::as_str) == uuid));
+
+    let auth_regime = crate::account_state_timeline::resolve_auth_regime_label(account, ttl_ctx);
+    // Always 'main' — get_account_status IS a main-conversation tool. A null ctx yields the honest
+    // 'assumed' 5-minute floor rather than a confident guess.
+    let ttl_regime = crate::burn::cache_ttl::classify_ttl_regime(Some(crate::burn::cache_ttl::SessionTtlKind::Main), ttl_ctx);
+
+    let mut usage_windows = Map::new();
+    let cc = rate_limits.filter(|r| {
+        !r.get("fiveHourUtilization").unwrap_or(&Value::Null).is_null()
+            || !r.get("sevenDayUtilization").unwrap_or(&Value::Null).is_null()
+    });
+    if let Some(r) = cc {
+        usage_windows.insert("fiveHourPct".into(), r.get("fiveHourUtilization").cloned().unwrap_or(Value::Null));
+        usage_windows.insert("sevenDayPct".into(), r.get("sevenDayUtilization").cloned().unwrap_or(Value::Null));
+        usage_windows.insert("windowSource".into(), "cc-rate-limits".into());
+    } else if let Some(b) = win.map(|w| &w["budget"]).filter(|b| b.get("capacityConfigured") == Some(&Value::Bool(true))) {
+        let exceeded = |k: &str| b[k].get("capacityExceeded") == Some(&Value::Bool(true));
+        usage_windows.insert("fiveHourPct".into(), window_fill_pct(&b["fiveHour"]));
+        usage_windows.insert("sevenDayPct".into(), window_fill_pct(&b["sevenDay"]));
+        usage_windows.insert(
+            "windowSource".into(),
+            if exceeded("fiveHour") || exceeded("sevenDay") { "calibrated-exceeded" } else { "calibrated" }.into(),
+        );
+    } else {
+        usage_windows.insert("fiveHourPct".into(), Value::Null);
+        usage_windows.insert("sevenDayPct".into(), Value::Null);
+        usage_windows.insert("windowSource".into(), "none".into());
+    }
+
+    let resolved = account.filter(|a| a.source != "none");
+    let plan = resolved.map_or_else(
+        || "unknown".to_owned(),
+        |a| crate::account_state_timeline::describe_plan(a.plan_type.as_deref(), a.rate_limit_tier.as_deref()),
+    );
+    let mode = crate::account_state_timeline::describe_account_mode(auth_regime.as_deref());
+    let mut cache_ttl = Map::new();
+    cache_ttl.insert("minutes".into(), num(ttl_regime.ttl_assumed_min));
+    cache_ttl.insert("regime".into(), auth_regime.clone().unwrap_or_else(|| "unknown".to_owned()).into());
+    cache_ttl.insert("ttlSource".into(), ttl_regime.ttl_source.into());
+    cache_ttl.insert("basis".into(), ttl_regime.ttl_basis.clone().into());
+
+    // The one-line human digest, so a reader gets the gist without parsing the object.
+    // `email ?? label ?? '…'` is NULLISH, not falsy: an EMPTY label is kept, it does not fall
+    // through to "account unresolved". Only an absent account does.
+    let email_str = account
+        .and_then(|a| a.email.clone().or_else(|| Some(a.label.clone())))
+        .unwrap_or_else(|| "account unresolved".to_owned());
+    let pct = |v: &Value| match v.as_f64() {
+        Some(n) => format!("{}%", crate::summarize::helpers::js_math_round(n)),
+        None => "n/a".to_owned(),
+    };
+    let summary = format!(
+        "{email_str} · {plan} · {mode} · 5h {} / 7d {} ({}) · cache TTL {}min ({})",
+        pct(&usage_windows["fiveHourPct"]),
+        pct(&usage_windows["sevenDayPct"]),
+        usage_windows["windowSource"].as_str().unwrap_or(""),
+        crate::summarize::helpers::fmt_js_num(ttl_regime.ttl_assumed_min),
+        ttl_regime.ttl_source,
+    );
+
+    let os = |v: &Option<String>| v.clone().map_or(Value::Null, Value::from);
+    let account_obj = match resolved {
+        Some(a) => {
+            let mut m = Map::new();
+            m.insert("accountId".into(), os(&a.account_uuid));
+            m.insert("label".into(), a.label.clone().into());
+            m.insert("email".into(), os(&a.email));
+            m.insert("organizationName".into(), os(&a.organization_name));
+            m.insert("planType".into(), os(&a.plan_type));
+            m.insert("billingType".into(), os(&a.billing_type));
+            m.insert("hasExtraUsageEnabled".into(), Value::Bool(a.has_extra_usage_enabled));
+            m.insert("rateLimitTier".into(), os(&a.rate_limit_tier));
+            Value::Object(m)
+        }
+        None => {
+            let mut m = Map::new();
+            m.insert("planType".into(), account.map_or(Value::Null, |a| os(&a.plan_type)));
+            m.insert("note".into(), "No ~/.claude.json oauthAccount found — identity unresolved.".into());
+            Value::Object(m)
+        }
+    };
+
+    let window_obj = match win {
+        Some(w) => {
+            let b = &w["budget"];
+            let g = |win_key: &str, k: &str| b[win_key].get(k).cloned().unwrap_or(Value::Null);
+            let mut m = Map::new();
+            m.insert("fiveHourPctConsumed".into(), g("fiveHour", "pctConsumed"));
+            m.insert("fiveHourPctConsumedCost".into(), g("fiveHour", "pctConsumedCost"));
+            m.insert("sevenDayPctConsumed".into(), g("sevenDay", "pctConsumed"));
+            m.insert("sevenDayPctConsumedCost".into(), g("sevenDay", "pctConsumedCost"));
+            m.insert("fiveHourMinutesToExhaustion".into(), g("fiveHour", "minutesToExhaustion"));
+            m.insert("sevenDayMinutesToExhaustion".into(), g("sevenDay", "minutesToExhaustion"));
+            m.insert("consumedTokens5h".into(), g("fiveHour", "consumedTokens"));
+            m.insert("consumedCostUsd5h".into(), g("fiveHour", "consumedCostUsd"));
+            m.insert("capacityConfigured".into(), b.get("capacityConfigured").cloned().unwrap_or(Value::Null));
+            m.insert("capacitySource".into(), b.get("capacitySource").cloned().unwrap_or(Value::Null));
+            m.insert("capacityObservedAt".into(), b.get("capacityObservedAt").cloned().unwrap_or(Value::Null));
+            Value::Object(m)
+        }
+        None => Value::Null,
+    };
+
+    let mut m = Map::new();
+    m.insert("summary".into(), summary.into());
+    m.insert("plan".into(), plan.into());
+    m.insert("mode".into(), mode.into());
+    m.insert("cacheTtl".into(), Value::Object(cache_ttl));
+    m.insert("usageWindows".into(), Value::Object(usage_windows));
+    m.insert("account".into(), account_obj);
+    m.insert("window".into(), window_obj);
+    // Three DIFFERENT causes of a missing percentage, named apart: no account id at all, an account
+    // with no consumption yet, and consumption with no capacity to measure it against. The fourth
+    // case — everything is fine — is `undefined`, so the key is OMITTED.
+    let note = if uuid.is_none() {
+        Some("Current account id is unresolved, so no per-account window could be matched. Enable OTEL raw bodies / metrics so sessions attribute to an account.")
+    } else if win.is_none() {
+        Some("No consumption recorded yet for the current account in the rolling windows.")
+    } else if win.unwrap()["budget"].get("capacityConfigured") == Some(&Value::Bool(true)) {
+        None
+    } else {
+        Some("Window % is null until a capacity is configured (AGENTLENS_WINDOW_5H_TOKENS / _COST_USD or ~/.agentlens/burn-config.json) — or until AgentlensPro auto-calibrates one from the next rate-limit hit (P5).")
+    };
+    if let Some(n) = note {
+        m.insert("note".into(), n.into());
+    }
+    Value::Object(m)
+}

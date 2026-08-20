@@ -271,3 +271,76 @@ fn get_lifecycle_events_reproduces_the_ts_oracle_exactly() {
     assert_eq!(quiet["count"], missing["count"], "both are empty — so the COUNT cannot be the discriminator");
     assert!(quiet.get("note").is_none() && missing.get("note").is_some(), "the note is: {quiet} vs {missing}");
 }
+
+fn ttl_of(v: &Value) -> Option<agentlens_core::burn::cache_ttl::TtlContext> {
+    use agentlens_core::burn::cache_ttl::{AuthRegime, TtlContext};
+    let o = v.as_object()?;
+    Some(TtlContext {
+        auth: match o.get("auth").and_then(Value::as_str) {
+            Some("subscription") => AuthRegime::Subscription,
+            Some("usage-credits") => AuthRegime::UsageCredits,
+            Some("api-key") => AuthRegime::ApiKey,
+            _ => AuthRegime::Unknown,
+        },
+        force5m: o.get("force5m").and_then(Value::as_bool).unwrap_or(false),
+        enable1h: o.get("enable1h").and_then(Value::as_bool).unwrap_or(false),
+    })
+}
+
+#[test]
+fn get_account_status_reproduces_the_ts_oracle_exactly() {
+    let o = oracle();
+    for (case, exp) in o["asCases"].as_array().unwrap().iter().zip(o["asResults"].as_array().unwrap()) {
+        let name = case["name"].as_str().unwrap();
+        let acct = case["account"].as_object().map(|_| oracle_account(&case["account"]));
+        // `source` is part of the fixture, not always "claude.json" — the unresolved-identity case
+        // turns on exactly that field, so it must survive the rebuild.
+        let acct = acct.map(|mut a| {
+            a.source = if case["account"]["source"] == "none" { "none" } else { "claude.json" };
+            a
+        });
+        let got = agentlens_core::mcp_tools::get_account_status(
+            acct.as_ref(),
+            case["burn"].as_object().map(|_| &case["burn"]),
+            ttl_of(&case["ttl"]).as_ref(),
+            case["rl"].as_object().map(|_| &case["rl"]),
+        );
+        assert_eq!(keys(&got), keys(exp), "{name}: key set/ORDER differs (the note must be OMITTED when absent)");
+        for (k, ev) in exp.as_object().unwrap() {
+            assert_eq!(&got[k], ev, "{name}.{k}");
+        }
+    }
+}
+
+/// `describePlan` / `describeAccountMode` are SHARED with the account-state sampler, so one
+/// implementation must serve both or the plan string in a stored state record silently disagrees
+/// with the one the tool reports. The `x` in the multiplier suffix is asserted by the table: writing
+/// `Max 5` instead of `Max 5x` is the obvious off-by-one-character slip.
+#[test]
+fn the_shared_plan_and_mode_strings_match_the_ts() {
+    let o = oracle();
+    for (case, exp) in o["planCases"].as_array().unwrap().iter().zip(o["planResults"].as_array().unwrap()) {
+        let got = agentlens_core::account_state_timeline::describe_plan(case[0].as_str(), case[1].as_str());
+        assert_eq!(Value::String(got), *exp, "describePlan({case})");
+    }
+    for (case, exp) in o["modeCases"].as_array().unwrap().iter().zip(o["modeResults"].as_array().unwrap()) {
+        let got = agentlens_core::account_state_timeline::describe_account_mode(case.as_str());
+        assert_eq!(Value::String(got.to_owned()), *exp, "describeAccountMode({case})");
+    }
+}
+
+/// `windowFillPct` is COST-first and NULL when the capacity was already passed. Both rules are the
+/// difference between a number and a wrong number: raw tokens overstate the fill (~96% of volume is
+/// cache reads billing at 0.1x), which is how one 7d window read 171.51% by tokens and 64.49% by
+/// cost — and a percentage off a denominator that is proven wrong is noise wearing a number's
+/// clothes, so it is reported as absent rather than as a figure.
+#[test]
+fn window_fill_pct_prefers_cost_and_nulls_a_passed_capacity() {
+    let o = oracle();
+    for (case, exp) in o["fillCases"].as_array().unwrap().iter().zip(o["fillResults"].as_array().unwrap()) {
+        assert_eq!(agentlens_core::mcp_tools::window_fill_pct(case), *exp, "windowFillPct({case})");
+    }
+    // Named explicitly so a regression reads as what it is, not as an anonymous table row.
+    let overstating = &o["fillCases"][2];
+    assert_eq!(agentlens_core::mcp_tools::window_fill_pct(overstating), Value::from(64.49), "cost, not the 171.51 token figure");
+}

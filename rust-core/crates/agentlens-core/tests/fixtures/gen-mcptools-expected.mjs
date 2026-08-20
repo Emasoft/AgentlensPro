@@ -17,6 +17,8 @@ import { readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
 const require = createRequire(import.meta.url)
 const { handleGetCallContext, handleGetContextComposition, handleGetContextHistory, handleGetConversation, handleGetWindowBudget, handleGetLifecycleEvents } = require('../../../../../out/test/mcpServer.js')
+const { handleGetAccountStatus, windowFillPct } = require('../../../../../out/test/mcpServer.js')
+const { describePlan, describeAccountMode } = require('../../../../../out/test/accountStateTimeline.js')
 const { loadBurnConfig, gatherConsumptionEvents, computeBurnStatus } = require('../../../../../out/test/burnMonitor.js')
 const { buildCallContextFromJson } = require('../../../../../out/test/rawBodyContext.js')
 const { buildContextComposition } = require('../../../../../out/test/contextComposition.js')
@@ -116,6 +118,50 @@ const burnStatus = computeBurnStatus(burnEvents, bmCases.sessions, burnCfg, bmCa
 // SECOND arm of accountLabelFor's `||` chain and keeping an address-shaped literal out of a
 // tracked file (the identity guard is shape-based, and a fixture is not worth arguing with it).
 const acct = { source: 'claude.json', accountUuid: 'acct-1111', label: 'Display A', email: null, organizationName: 'Org A', organizationUuid: null, displayName: 'Display A', planType: 'max', billingType: 'stripe_subscription', hasExtraUsageEnabled: false, organizationRateLimitTier: null, userRateLimitTier: null, rateLimitTier: null }
+// ── P4x.2c: get_account_status ────────────────────────────────────────────────────────────────
+// Driven over the SAME real burn status as get_window_budget, so `window` and `usageWindows` are
+// computed from data an engine actually produced.
+//
+// Discriminators:
+//  - `usageWindows` prefers Claude Code's OWN rate_limits when present; the Rust core has none
+//    (statusline reader NOT PORTED), so the cc-rate-limits case is generated here to pin the shape
+//    for when it lands, and the calibrated/none cases are what ship today.
+//  - `calibrated-exceeded` is a DISTINCT source from `calibrated`: a passed capacity yields a null
+//    pct, and bare `calibrated` + null is indistinguishable from "no data".
+//  - the `note` names THREE different causes of a missing percentage apart, and is OMITTED on the
+//    happy path (undefined, never null, never '').
+//  - windowFillPct is COST-first: raw tokens overstate the fill (~96% of volume is cache reads at
+//    0.1x), which is how a 7d window once read 171.51% by tokens and 64.49% by cost.
+const acctNoId = { ...acct, accountUuid: null, source: 'claude.json' }
+const acctUnresolved = { ...acct, source: 'none' }
+const ttlSub = { auth: 'subscription', force5m: false, enable1h: false }
+const asCases = [
+  { name: 'resolved-account-with-a-window', account: acct, burn: burnStatus, ttl: ttlSub, rl: null },
+  { name: 'no-ttl-context-falls-to-billingType', account: acct, burn: burnStatus, ttl: null, rl: null },
+  { name: 'unresolved-identity', account: acctUnresolved, burn: burnStatus, ttl: ttlSub, rl: null },
+  { name: 'no-account-id-names-that-cause', account: acctNoId, burn: burnStatus, ttl: ttlSub, rl: null },
+  { name: 'account-with-no-consumption', account: { ...acct, accountUuid: 'acct-ghost' }, burn: burnStatus, ttl: ttlSub, rl: null },
+  { name: 'no-burn-monitor', account: acct, burn: null, ttl: ttlSub, rl: null },
+  { name: 'cc-rate-limits-win-over-calibrated', account: acct, burn: burnStatus, ttl: ttlSub, rl: { fiveHourUtilization: 41.5, sevenDayUtilization: null } },
+  { name: 'cc-rate-limits-all-null-is-not-preferred', account: acct, burn: burnStatus, ttl: ttlSub, rl: { fiveHourUtilization: null, sevenDayUtilization: null } },
+  { name: 'null-account-entirely', account: null, burn: burnStatus, ttl: ttlSub, rl: null },
+]
+// describePlan / describeAccountMode / windowFillPct get their own table — they are shared with the
+// account-state sampler, so one implementation must serve both.
+const planCases = [
+  ['max', 'default_claude_max_5x'], ['max', null], ['pro', 'anything'], ['team', null], ['enterprise', null],
+  ['free', null], [null, 'default_claude_max_20x'], [null, null], ['', 'tier_5x'], ['some_future_plan', 'tier_5x'],
+  ['MAX', 'DEFAULT_CLAUDE_MAX_5X'], [null, 'no_multiplier_here'],
+]
+const modeCases = ['subscription', 'usage-credits', 'api-key', 'unknown', null]
+const fillCases = [
+  { pctConsumed: 80, pctConsumedCost: 40, capacityExceeded: false },
+  { pctConsumed: 80, pctConsumedCost: null, capacityExceeded: false },
+  { pctConsumed: 171.51, pctConsumedCost: 64.49, capacityExceeded: false },
+  { pctConsumed: 80, pctConsumedCost: 40, capacityExceeded: true },
+  { pctConsumed: null, pctConsumedCost: null, capacityExceeded: false },
+]
+
 // ── P4x.2c: get_lifecycle_events — the note is the whole reason this has a shaper at all ──────
 // Both branches are generated so the note TEXT stays byte-identical across the two engines; the
 // happy path proves the key is OMITTED (not null, not '').
@@ -143,6 +189,14 @@ writeFileSync(join(dir, 'mcptools-expected.json'), JSON.stringify({
   wbResults: wbCases.map(c => J(handleGetWindowBudget(burnStatus, acct, c.args))),
   lcCases: J(lcCases),
   lcResults: lcCases.map(c => J(handleGetLifecycleEvents(c.dir, c.dirExists, c.events))),
+  asCases: J(asCases),
+  asResults: asCases.map(c => J(handleGetAccountStatus(c.account, c.burn, c.ttl, c.rl))),
+  planCases: J(planCases),
+  planResults: planCases.map(([p, t]) => describePlan(p, t)),
+  modeCases: J(modeCases),
+  modeResults: modeCases.map(m => describeAccountMode(m)),
+  fillCases: J(fillCases),
+  fillResults: fillCases.map(w => J(windowFillPct(w))),
   cases: J(cases),
   results: cases.map(c => J(handleGetCallContext(c.ctx, c.args))),
   compCases: J(compCases),

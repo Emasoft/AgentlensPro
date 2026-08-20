@@ -1101,6 +1101,27 @@ async fn handle(
                         let payload = crate::mcp_tools::get_window_budget(Some(&status), Some(&account), s("accountId").as_deref());
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
+                    "get_account_status" => {
+                        // The TS `all: true` form calls listAllAccounts() — the on-disk roster +
+                        // per-account usage archive, which needs NONE of the live accessors and so
+                        // works with the server cold. NOT PORTED, so it says so by name rather
+                        // than quietly answering the singular question instead.
+                        if args.get("all") == Some(&Value::Bool(true)) {
+                            crate::mcp::not_implemented(&id, "get_account_status(all: true)")
+                        } else {
+                            let now = crate::now_ms() as f64;
+                            let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                            let status = st.live_burn_status(now);
+                            let account = st.burn.current_account(now);
+                            let ttl = st.burn.ttl_context(now);
+                            drop(st);
+                            // rate_limits is None: the statusline reader is NOT PORTED (the same
+                            // gap live_burn_status documents), so `windowSource` reports
+                            // calibrated/none instead of cc-rate-limits — visible, not silent.
+                            let payload = crate::mcp_tools::get_account_status(Some(&account), Some(&status), Some(&ttl), None);
+                            crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
+                        }
+                    }
                     "check_burn_risk" => {
                         // Pass-through: the risk report IS the payload. The two threshold args are
                         // the ONLY place they are caller-settable; `check_burn_risk` floors both
