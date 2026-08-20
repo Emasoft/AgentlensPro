@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T08:41:44+0200
+updated: 2026-08-20T08:56:13+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -535,15 +535,30 @@ release-via: publish
   denies forks / warns fresh (TRDD-THRGX41P); SendMessage denies need positive DEAD evidence;
   own-project matches session BEFORE cwd (worktree fan-outs). 98/98, zero new clippy, live
   alcore smoke (204/204/200-deny + counters).
-- **NEXT ACTION (one step): the bodies admin routes — rows 14–15.** `POST /api/bodies/export`
-  (server.ts:3799 — body ≤1MB `{destDir(abs, not inside archive), sinceMs?, untilMs?}` →
-  `{files,bytes,fromArchive,fromStore,failed[],destDir}`, the two 400 shapes + 500) and
-  `POST /api/bodies/purge` (3846 — no body → `{removed[],kept[{volume,verified,entries,
-  failedSample[]}],freedBytes}`, 500). Sources: src/bodyArchive.ts + src/store/bodyStore.ts +
-  src/store/archiveVerify.ts — read them IN FULL first; the store half already exists in Rust
-  (agentlens-store P3c) so expect a THIN wrapper, not a re-port: export reads archive tars +
-  the DuckDB store, purge is verify-before-delete (never delete an unverified volume). Then
-  instruction rows 19–21, statusline row 5.
+- **P4s DONE (commit 77cd818): the bodies admin routes — rows 14–15.** `body_archive.rs` ports
+  the WAD READER half (index load w/ torn-tail skip, random-access gunzip, windowed extract
+  with restored mtimes) + exportBodiesFromStore + verifyVolumeInStore; the WRITER stays
+  TS-owned (one WAD implementation is the format's own law). Purge = the TRDD-K3WDPR7M gate
+  through agentlens-store's bulk verify, chunked at 128MB raw with ONE SpanCache across chunks;
+  failure-reason TEXT follows the Rust store's wording (the /api/import precedent — status and
+  shape are the contract, diagnostic text is not). Routes run on the blocking pool, never under
+  the state lock; agentlens-core now DEPENDS ON agentlens-store (the endpoints ARE store
+  operations; the pass alone stays an alstore exec). Parity cross-engine by construction: the
+  committed fixture volumes are WRITTEN by the compiled bodyArchive.js, the Rust reader must
+  reproduce listing+extract byte-identically (bodyarchive_parity.rs); the socket test drives
+  export (combined shape, skip-existing, three 400 guards) and purge (proven July volume
+  removed + .idx retained; unproven August kept, failures named). 100/100, zero new clippy,
+  live smoke incl. fail-safe purge on an empty store (nothing deleted, every lump named).
+- **NEXT ACTION (one step): the instruction routes — rows 19–21.** `GET
+  /api/instruction-suggestions?workspace=` (server.ts:3852 — sessions filtered by workspace
+  prefix → generateSuggestions over readAllInstructionContent; bare ARRAY body; 400 when
+  workspace missing), `GET /api/instruction-files?workspace=` (bare array from
+  detectInstructionFiles; same 400), `POST /api/instructions/apply` (≤4MB
+  `{workspace,targetFile,appliedText,id}`; targetFile whitelist {CLAUDE.md, .claude/CLAUDE.md,
+  .github/copilot-instructions.md, AGENTS.md}; path-escape guards; `{ok:true}` / 400 / 500).
+  Read src/instructionAdvisor.ts + src/instructionFiles.ts IN FULL first — the advisor is a
+  pure heuristic over session cards (TS-oracle-able), the files half is fs probing + an
+  append-only writer whose escape guards must port exactly. Then statusline row 5.
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
