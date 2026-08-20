@@ -1182,3 +1182,83 @@ fn cache_risk_commands_and_generated_file_routes() {
     let _ = std::fs::remove_dir_all(&home);
     let _ = std::fs::remove_dir_all(scratch.parent().unwrap().parent().unwrap());
 }
+
+/// Rows 36-37 over a real socket: the composition summary and the block drill.
+///
+/// The empty-session case is the one that matters most in practice — a session with no captured
+/// raw bodies must serve an HONEST empty summary with a coverageNote, never an error and never a
+/// spinner, because "lazy" means historical bodies legitimately are not indexed.
+#[test]
+fn composition_index_and_block_content_routes() {
+    let (_otlp, ui, state) = start_servers();
+    let bodies = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bodies");
+    {
+        let mut st = state.lock().unwrap();
+        st.bodies.record(
+            "ui-comp",
+            agentlens_core::call_body_registry::CallBodyPointer {
+                kind: "request",
+                body_ref: Some(bodies.join("comp.request.json").to_string_lossy().into_owned()),
+                inline_body: None,
+                request_id: None,
+                span_id: Some("sp1".into()),
+                model: None,
+                query_source: None,
+                ts: 1000,
+            },
+        );
+    }
+
+    // 36 — a session WITH bodies.
+    let body = body_of(&get(ui, "/api/composition-index/ui-comp", "")).to_owned();
+    let v: serde_json::Value = serde_json::from_str(&body).expect("composition-index must be JSON");
+    let s = &v["summary"];
+    assert_eq!(s["sessionId"], "ui-comp");
+    assert_eq!(s["callsTotal"], 1, "one recorded request pointer = one ref");
+    assert!(s["peakCall"]["contextTokens"].as_f64().unwrap() > 0.0, "peak call must be populated: {s}");
+    assert!(s.get("coverageNote").is_none(), "a session WITH bodies must carry no coverageNote: {s}");
+
+    // 36 — an unknown session: honest empty summary, still 200.
+    let body = body_of(&get(ui, "/api/composition-index/nobody-here", "")).to_owned();
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["summary"]["callsTotal"], 0);
+    assert!(
+        v["summary"]["coverageNote"].as_str().is_some_and(|n| n.contains("OTEL_LOG_RAW_API_BODIES")),
+        "the empty state must SAY why it is empty and how to fix it: {v}"
+    );
+
+    // 37 — drill a real block.
+    let body = body_of(&get(ui, "/api/block-content/ui-comp/1/0", "")).to_owned();
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["block"]["sessionId"], "ui-comp");
+    assert_eq!(v["block"]["turn"], 1);
+    assert_eq!(v["block"]["index"], 0);
+    assert!(v["block"]["text"].is_string(), "a text block carries its content: {v}");
+
+    // 37 — the IMAGE block: metadata + ref, and NO text key. Pointer-only is a privacy contract.
+    let img = (0..12)
+        .map(|i| {
+            let b = body_of(&get(ui, &format!("/api/block-content/ui-comp/1/{i}"), "")).to_owned();
+            serde_json::from_str::<serde_json::Value>(&b).unwrap()
+        })
+        .find(|v| v["block"]["isImage"] == serde_json::Value::Bool(true))
+        .expect("the fixture body carries an image block");
+    assert!(img["block"].get("text").is_none(), "image drill must NEVER carry text: {img}");
+    assert!(img["block"]["bodyRef"].is_string(), "image drill still carries its ref: {img}");
+
+    // 37 — the two DISTINCT not-found shapes, both 200 so a caller can tell them apart.
+    let resp = get(ui, "/api/block-content/ui-comp/99/0", "");
+    assert!(resp.starts_with("HTTP/1.1 200"), "a missing turn is 200, not an error: {resp}");
+    let v: serde_json::Value = serde_json::from_str(body_of(&resp)).unwrap();
+    assert!(v["block"]["message"].as_str().unwrap().contains("No raw body for call/turn 99"), "{v}");
+    assert!(v["block"].get("blockIndex").is_none(), "the no-pointer shape carries NO blockIndex: {v}");
+
+    let v: serde_json::Value = serde_json::from_str(body_of(&get(ui, "/api/block-content/ui-comp/1/999", ""))).unwrap();
+    assert_eq!(v["block"]["blockIndex"], 999, "the no-block shape DOES carry blockIndex: {v}");
+    assert!(v["block"]["message"].as_str().unwrap().contains("No block 999 at turn 1"), "{v}");
+
+    // 37 — a non-numeric turn is the ONLY 400 here.
+    let resp = get(ui, "/api/block-content/ui-comp/abc/0", "");
+    assert!(resp.starts_with("HTTP/1.1 400"), "a non-numeric turn must 400: {resp}");
+    assert!(body_of(&resp).contains("bad sessionId/turn/blockIndex"));
+}

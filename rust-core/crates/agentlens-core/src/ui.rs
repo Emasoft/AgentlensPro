@@ -948,6 +948,116 @@ async fn handle(
                 .to_string()
         };
         json_response(StatusCode::OK, body)
+    } else if method == Method::GET && path.starts_with("/api/composition-index/") {
+        // Row 36 (server.ts:4193). Per-session composition summary, parsed on demand from the live
+        // registry (never a background sweep) and LRU-cached. A session with no captured raw bodies
+        // returns an HONEST empty summary carrying a coverageNote — never a spinner, never an error.
+        //
+        // NOT PORTED: the TS `heavyGuard` admission deferral. It exists to keep concurrent heavy
+        // parses from blowing the V8 heap; this core has no V8 heap to guard, and the work is
+        // already off the executor via spawn_blocking.
+        //
+        // LOCK CHOREOGRAPHY (the P4s rule, and the whole reason this route is shaped this way):
+        // resolve refs UNDER the lock (cheap, in-memory), then RELEASE it before parsing body
+        // files, then re-take it only to store the result. Parsing a multi-MB body while holding
+        // CoreState would stall every other request on the server.
+        let session_id = percent_decode(&path["/api/composition-index/".len()..]);
+        let now = crate::now_ms() as f64;
+        let cached = {
+            let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+            st.composition.get_cached(&session_id)
+        };
+        let comp = match cached {
+            Some(c) => c,
+            None => {
+                let refs = {
+                    let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                    crate::context_composition_index::resolve_refs(&st.bodies, &session_id)
+                };
+                let sid = session_id.clone();
+                let built = tokio::task::spawn_blocking(move || {
+                    crate::context_composition_index::build_session_composition(&sid, &refs, None, now)
+                })
+                .await
+                .map_err(|e| format!("composition build join failed: {e}"))?;
+                let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                st.composition.put(&session_id, built.clone());
+                built
+            }
+        };
+        let summary = crate::context_composition_index::session_composition_summary(&comp);
+        json_response(StatusCode::OK, serde_json::json!({ "summary": summary }).to_string())
+    } else if method == Method::GET && path.starts_with("/api/block-content/") {
+        // Row 37 (server.ts:4212): drill ONE block to its real content. An IMAGE returns metadata
+        // + a body-file ref ONLY — never the base64 bytes (pointer-only).
+        let parts: Vec<&str> = path["/api/block-content/".len()..].split('/').collect();
+        let session_id = percent_decode(parts.first().unwrap_or(&""));
+        // `Number(parts[i])`: a MISSING segment is NaN → 400, but an EMPTY one is 0 and passes,
+        // because `Number('') === 0`. Mirrored deliberately — `"".parse()` would reject it and
+        // turn a request the TS answers 200 into a 400.
+        let js_number = |s: Option<&&str>| -> Option<f64> {
+            match s {
+                None => None,
+                Some(v) if v.trim().is_empty() => Some(0.0),
+                Some(v) => v.trim().parse::<f64>().ok().filter(|n| n.is_finite()),
+            }
+        };
+        let turn = js_number(parts.get(1));
+        let block_index = js_number(parts.get(2));
+        let full = query_of(&req).get("full").map(String::as_str) == Some("1");
+        match (session_id.is_empty(), turn, block_index) {
+            (false, Some(t), Some(bi)) => {
+                let pointer = {
+                    let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                    // requestPointers(session)[turn - 1] — 1-based turns.
+                    let ptrs = st.bodies.request_pointers(&session_id);
+                    let idx = t - 1.0;
+                    if idx < 0.0 { None } else { ptrs.get(idx as usize).and_then(|p| p.body_ref.clone()) }
+                };
+                let block = match pointer.filter(|b| !b.is_empty()) {
+                    // Two DISTINCT error shapes, both 200 (not an error status): the caller must be
+                    // able to tell "no body captured for that turn" from "that block does not exist".
+                    None => serde_json::json!({
+                        "sessionId": session_id,
+                        "turn": crate::summarize::helpers::num(t),
+                        "message": format!("No raw body for call/turn {} of session {session_id} in the live registry (lazy — historical bodies are not indexed).", crate::summarize::helpers::fmt_js_num(t)),
+                    }),
+                    Some(body_ref) => {
+                        let read = tokio::task::spawn_blocking(move || {
+                            crate::context_composition_index::read_block_content(&body_ref, bi as i64, full)
+                        })
+                        .await
+                        .map_err(|e| format!("block-content join failed: {e}"))?;
+                        match read {
+                            None => serde_json::json!({
+                                "sessionId": session_id,
+                                "turn": crate::summarize::helpers::num(t),
+                                "blockIndex": crate::summarize::helpers::num(bi),
+                                "message": format!("No block {} at turn {}.", crate::summarize::helpers::fmt_js_num(bi), crate::summarize::helpers::fmt_js_num(t)),
+                            }),
+                            Some(b) => {
+                                // `{ sessionId, turn, ...block }` — the spread puts the block's own
+                                // keys AFTER these two, in the block's order.
+                                let mut m = serde_json::Map::new();
+                                m.insert("sessionId".into(), Value::String(session_id.clone()));
+                                m.insert("turn".into(), crate::summarize::helpers::num(t));
+                                if let Some(o) = b.as_object() {
+                                    for (k, v) in o {
+                                        m.insert(k.clone(), v.clone());
+                                    }
+                                }
+                                Value::Object(m)
+                            }
+                        }
+                    }
+                };
+                json_response(StatusCode::OK, serde_json::json!({ "block": block }).to_string())
+            }
+            _ => json_response(
+                StatusCode::BAD_REQUEST,
+                serde_json::json!({ "block": Value::Null, "error": "bad sessionId/turn/blockIndex" }).to_string(),
+            ),
+        }
     } else if method == Method::GET && path.starts_with("/api/timeline/") {
         // Row 30 (server.ts:4044): the lazy per-session detail — resolveSessionCard's
         // reparse-on-demand for a disk-restored stripped card, plus the TRDD-5GFSFX0Q graft of

@@ -130,6 +130,10 @@ pub struct CoreState {
     /// addresses per session, fed by the logs ingest. The spine the per-session drill-down
     /// routes (freeze rows 32–37) resolve a call to its body file through.
     pub bodies: call_body_registry::CallBodyRegistry,
+    /// The composition index's LRU cache (P4w.1c) — per-session composition summaries, built
+    /// lazily. Only the CACHE lives here; building a composition parses body files, which must
+    /// happen OFF this lock (resolve refs under it, parse on spawn_blocking, re-lock to store).
+    pub composition: context_composition_index::ContextCompositionIndex,
     /// serverRuntime.ts requestLog — one row per UI/API request (ring + `requests.log`).
     pub requests: request_log::RequestLog,
     /// server.ts `otelAttributionBySession` (TRDD-5GFSFX0Q): sessionId → the OTEL card's
@@ -345,6 +349,7 @@ impl CoreState {
             stripped_cache: derived_cache::VersionedCache::default(),
             accounts: account_registry::AccountRegistry::default(),
             bodies: call_body_registry::CallBodyRegistry::default(),
+            composition: context_composition_index::ContextCompositionIndex::default(),
             requests: request_log::RequestLog::new(Some(data_dir.join("requests.log"))),
             otel_attribution: IndexMap::new(),
             lifecycle: collector_lifecycle::record_start(&collector_lifecycle::lifecycle_file(data_dir), now),
