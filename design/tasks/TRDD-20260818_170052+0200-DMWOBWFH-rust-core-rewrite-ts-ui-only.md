@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T08:09:43+0200
+updated: 2026-08-20T08:41:44+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -519,12 +519,30 @@ release-via: publish
   tree both engines read; Rust deep-equals tracker report, warm-since, sender formatting, usage
   extraction, the 6-active risk report, causing calls, composition, slugs. 96/96, zero new
   clippy, burn-risk curl'd live.
-- **NEXT ACTION (one step): P4r.5 — POST /api/agent-gate (row 13).** Read src/agentGate.ts (598)
-  + shared/imageReads.ts (25) + the server.ts row-13 handler (3553–3660) IN FULL first. THE
-  CONTRACT IS FAIL-OPEN: allow → 204 empty; PostToolUse advisory / deny / warn → the three 200
-  hookSpecificOutput shapes; **every error path → 204**, because a gate that can error a launch
-  is worse than no gate. The gate consumes bodies_activity.session_warm_since (ported) for the
-  COLD_RESUME disarm and the hook-event ring for caller lineage. Then bodies rows 14–15,
+- **P4r.5 DONE (commit ea4ee58): POST /api/agent-gate (row 13) — the burn subsystem is
+  COMPLETE.** `burn/agent_gate.rs` ports agentGate.ts + imageReads.ts + the server glue
+  (env thresholds, resolveCallerTtlKind, buildGateState, the advisory dedupe map); the route in
+  ui.rs is FAIL-OPEN verbatim (allow → 204; the three 200 hookSpecificOutput shapes; every
+  error → 204; 1MB overflow destroys the socket). **Port design worth reusing: the gate STATE
+  is a serde_json Value mirroring the TS literal, evaluators read it with JS access semantics —
+  so ONE committed 60-case list (agentgate-expected.json) drives BOTH engines, reason strings
+  byte-exact.** Transcript fixtures carry PINNED mtimes in the JSON (git clobbers mtimes; the
+  Rust test re-pins via std FileTimes before reading). Landed with it: the in-memory
+  recentHookEvents ring (boot-seeded, 600→500 cap), real gate counters on PersistStats (both
+  server-stats sites — were hardcoded 0), the bodies poll folded into the 4s burn tick
+  (buildGateState stays read-only on the hot path — TRDD-9CNHP8CN), advisory_issued + prune on
+  CoreState. Kept verbatim: keep-warm pinger NEVER denied (USER order 2026-07-11); THRASH
+  denies forks / warns fresh (TRDD-THRGX41P); SendMessage denies need positive DEAD evidence;
+  own-project matches session BEFORE cwd (worktree fan-outs). 98/98, zero new clippy, live
+  alcore smoke (204/204/200-deny + counters).
+- **NEXT ACTION (one step): the bodies admin routes — rows 14–15.** `POST /api/bodies/export`
+  (server.ts:3799 — body ≤1MB `{destDir(abs, not inside archive), sinceMs?, untilMs?}` →
+  `{files,bytes,fromArchive,fromStore,failed[],destDir}`, the two 400 shapes + 500) and
+  `POST /api/bodies/purge` (3846 — no body → `{removed[],kept[{volume,verified,entries,
+  failedSample[]}],freedBytes}`, 500). Sources: src/bodyArchive.ts + src/store/bodyStore.ts +
+  src/store/archiveVerify.ts — read them IN FULL first; the store half already exists in Rust
+  (agentlens-store P3c) so expect a THIN wrapper, not a re-port: export reads archive tars +
+  the DuckDB store, purge is verify-before-delete (never delete an unverified volume). Then
   instruction rows 19–21, statusline row 5.
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
