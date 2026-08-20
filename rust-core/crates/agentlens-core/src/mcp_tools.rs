@@ -2377,3 +2377,121 @@ pub fn get_agent_tokens(sessions: &[Value], timeline_of: &dyn Fn(&Value) -> Vec<
     }
     Value::Object(m)
 }
+
+/// mcpServer.ts CAUSE_SCAN_CAP — how many recently-ACTIVE Claude Code sessions one leaderboard scan
+/// will reparse.
+pub const CAUSE_SCAN_CAP: usize = 50;
+
+/// Session usage ground truth for the by-cause reconciliation: uncached input + cacheRead +
+/// cacheCreate + output. `inputTokens` is RAW on every card (the 2026-07-10 normalization), so the
+/// total is a plain sum of the four DISJOINT buckets — no subtraction, no double count.
+fn normalized_session_total_tokens(s: &Value) -> f64 {
+    f(s, "inputTokens") + f(s, "cacheReadTokens") + f(s, "cacheCreateTokens") + f(s, "outputTokens")
+}
+
+/// `get_cost_by_cause` (mcpServer.ts handleGetCostByCause) — "which skill/plugin/subagent costs me
+/// the most?", for ONE session or as a cross-session leaderboard.
+///
+/// THE WINDOW AND THE RANKING ARE BY LAST ACTIVITY, NOT startTime, and that is not a preference.
+/// On a busy fleet the newest-STARTED cards are ephemeral subagents and heartbeats carrying no
+/// attribution, while the heavy long-lived sessions (started days ago, still burning NOW) never make
+/// a startTime-ranked pool at all — measured 2026-07-16: 13,241 CC cards, the active flagship
+/// session ranked #446 by startTime, and the machine-wide leaderboard read 0 attributed calls while
+/// that same session's own drill showed 1,155. startTime also silently DROPS an old-started-but-
+/// active session from the WINDOW itself, so the bug is invisible in the coverage counters.
+pub fn get_cost_by_cause(
+    sessions: &[Value],
+    timeline_of: &dyn Fn(&Value) -> Vec<Value>,
+    args: &Value,
+    now_ms: f64,
+    time_budget_ms: f64,
+) -> Value {
+    if let Some(id) = args.get("sessionId").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+        let Some(card) = sessions.iter().find(|x| x.get("sessionId").and_then(Value::as_str) == Some(id)) else {
+            return err(format!("Session {id} not found."));
+        };
+        return crate::tokens_by_cause::build_tokens_by_cause(
+            &timeline_of(card),
+            Some(id),
+            None,
+            Some(normalized_session_total_tokens(card)),
+        );
+    }
+
+    // `Math.min(Math.max(days ?? 7, 1), 90)` — clamped at BOTH ends, unlike find_context_hogs' topN.
+    let days = args.get("days").and_then(Value::as_f64).unwrap_or(7.0).clamp(1.0, 90.0);
+    let cutoff = now_ms - days * 24.0 * 60.0 * 60.0 * 1000.0;
+    let in_window: Vec<&Value> = sessions.iter().filter(|s| crate::burn::monitor::last_activity_ms(s) >= cutoff).collect();
+    // Only claude_code sessions can carry api_request events (the rich events are CC-specific), so
+    // other agents are EXCLUDED from the scan but still counted in `considered` — otherwise the
+    // coverage numbers would quietly redefine "all sessions" as "the ones we can read".
+    let mut candidates: Vec<&Value> = in_window.iter().copied().filter(|s| s.get("source").and_then(Value::as_str) == Some("claude_code")).collect();
+    candidates.sort_by(|a, b| {
+        crate::burn::monitor::last_activity_ms(b).partial_cmp(&crate::burn::monitor::last_activity_ms(a)).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let scan_pool: Vec<&Value> = candidates.iter().copied().take(CAUSE_SCAN_CAP).collect();
+
+    // scanWithBudget: a stripped card's timeline is reparsed from its WHOLE transcript, so the scan
+    // is deadline-checked per session. The deadline is read from the real clock exactly as the TS
+    // does (`Date.now() > deadline`) — hardcoding stoppedEarly:false would be cheaper but would
+    // silently delete one of the three coverage-note branches, so the shaper takes a real budget.
+    // A budget of 0 or less means "no budget" (the TS callers always pass a positive one).
+    let deadline = (time_budget_ms > 0.0).then(|| crate::now_ms() as f64 + time_budget_ms);
+    let (mut merged, mut scanned): (Vec<Value>, Vec<&Value>) = (Vec::new(), Vec::new());
+    let mut stopped_early = false;
+    for s in &scan_pool {
+        if deadline.is_some_and(|d| crate::now_ms() as f64 > d) {
+            stopped_early = true;
+            break;
+        }
+        merged.extend(timeline_of(s));
+        scanned.push(s);
+    }
+    // Window ground truth = Σ normalized per-session totals over the SCANNED pool ONLY, so the
+    // reconciliation remainder compares like with like (scanned traffic vs scanned api_requests).
+    let scan_pool = scanned;
+    let window_total: f64 = scan_pool.iter().map(|s| normalized_session_total_tokens(s)).sum();
+    let report = crate::tokens_by_cause::build_tokens_by_cause(&merged, None, Some(scan_pool.len() as f64), Some(window_total));
+
+    let skipped = candidates.len() - scan_pool.len();
+    // THREE branches, three different facts: complete, stopped-by-BUDGET (retry widens it, because
+    // reparsed timelines are cached on their cards), and capped-by-POOL-SIZE (retrying changes
+    // nothing). Collapsing the middle one would tell a user to accept a sample they could fix.
+    let note = if skipped == 0 {
+        format!(
+            "Complete coverage: all {} Claude Code sessions in the last {}d were scanned ({} total sessions considered).",
+            candidates.len(),
+            fmt_js_num(days),
+            in_window.len()
+        )
+    } else if stopped_early {
+        format!(
+            "SAMPLE, not full coverage: the {}s scan time budget stopped the scan after {} of {} Claude Code sessions (transcript reparses are expensive right after a server restart). Totals reflect the scanned sample only — retry for wider coverage as reparsed timelines are cached on their cards.",
+            fmt_js_num(time_budget_ms / 1000.0),
+            scan_pool.len(),
+            candidates.len()
+        )
+    } else {
+        format!(
+            "SAMPLE, not full coverage: the {} most-recently-ACTIVE Claude Code sessions scanned (cap {CAUSE_SCAN_CAP}); {skipped} of {} active in the {}d window were NOT scanned. Totals reflect the scanned sample only.",
+            scan_pool.len(),
+            candidates.len(),
+            fmt_js_num(days)
+        )
+    };
+    let mut cov = Map::new();
+    cov.insert("sessionsConsidered".into(), num(in_window.len() as f64));
+    cov.insert("claudeCodeSessions".into(), num(candidates.len() as f64));
+    cov.insert("sessionsScanned".into(), num(scan_pool.len() as f64));
+    cov.insert("sessionsSkipped".into(), num(skipped as f64));
+    cov.insert("scanCap".into(), num(CAUSE_SCAN_CAP as f64));
+    cov.insert("stoppedEarly".into(), Value::Bool(stopped_early));
+    cov.insert("complete".into(), Value::Bool(skipped == 0));
+    cov.insert("note".into(), Value::String(note));
+
+    // `{...report, days, coverage}` — the spread first, so `days` and `coverage` append at the END.
+    let mut m = report.as_object().cloned().unwrap_or_default();
+    m.insert("days".into(), num(days));
+    m.insert("coverage".into(), Value::Object(cov));
+    Value::Object(m)
+}

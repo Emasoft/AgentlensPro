@@ -1,0 +1,3165 @@
+{
+  "nowMs": 1785585600000,
+  "dimensions": [
+    "querySource",
+    "agent",
+    "skill",
+    "plugin",
+    "mcpServer",
+    "mcpTool"
+  ],
+  "timeline": [
+    {
+      "type": "assistant",
+      "timestamp": "2026-08-01T11:00:00.000Z",
+      "inputTokens": 999999,
+      "outputTokens": 999999
+    },
+    {
+      "type": "api_request",
+      "timestamp": "2026-08-01T11:00:00.000Z",
+      "inputTokens": 100,
+      "outputTokens": 200,
+      "cacheReadTokens": 50000,
+      "cacheCreateTokens": 5000,
+      "costUsd": 0.1234,
+      "querySource": "repl_main_thread",
+      "skillName": "ponytail",
+      "pluginName": "ponytail"
+    },
+    {
+      "type": "api_request",
+      "timestamp": "2026-08-01T11:00:00.000Z",
+      "inputTokens": 50,
+      "outputTokens": 100,
+      "cacheReadTokens": 40000,
+      "cacheCreateTokens": 0,
+      "costUsd": 0.05,
+      "querySource": "repl_main_thread",
+      "skillName": "ponytail",
+      "pluginName": "ponytail"
+    },
+    {
+      "type": "api_request",
+      "timestamp": "2026-08-01T11:00:00.000Z",
+      "inputTokens": 10,
+      "outputTokens": 30,
+      "cacheReadTokens": 8000,
+      "cacheCreateTokens": 0,
+      "costUsd": 0.01,
+      "querySource": "agent",
+      "agentName": "explore",
+      "skillName": "tldr-code",
+      "pluginName": "tldr"
+    },
+    {
+      "type": "api_request",
+      "timestamp": "2026-08-01T11:00:00.000Z",
+      "inputTokens": 5,
+      "outputTokens": 5,
+      "cacheReadTokens": 1000,
+      "cacheCreateTokens": 0,
+      "costUsd": 0.002,
+      "querySource": "agent",
+      "mcpServerName": "srv-a",
+      "mcpToolName": "search"
+    },
+    {
+      "type": "api_request",
+      "timestamp": "2026-08-01T11:00:00.000Z",
+      "inputTokens": 5,
+      "outputTokens": 5,
+      "cacheReadTokens": 1000,
+      "cacheCreateTokens": 0,
+      "costUsd": 0.002,
+      "querySource": "agent",
+      "mcpServerName": "srv-b",
+      "mcpToolName": "search"
+    },
+    {
+      "type": "api_request",
+      "timestamp": "2026-08-01T11:00:00.000Z",
+      "inputTokens": 3,
+      "outputTokens": 3,
+      "cacheReadTokens": 500,
+      "cacheCreateTokens": 0,
+      "costUsd": 0.001,
+      "querySource": "agent",
+      "mcpToolName": "orphan"
+    },
+    {
+      "type": "api_request",
+      "timestamp": "2026-08-01T11:00:00.000Z",
+      "inputTokens": 900,
+      "outputTokens": 1200,
+      "cacheReadTokens": 700000,
+      "cacheCreateTokens": 40000,
+      "costUsd": 4.5678
+    },
+    {
+      "type": "api_request",
+      "timestamp": "2026-08-01T11:00:00.000Z",
+      "inputTokens": 20,
+      "outputTokens": 40,
+      "cacheReadTokens": 3000,
+      "cacheCreateTokens": 0,
+      "querySource": "compact"
+    }
+  ],
+  "sessions": [
+    {
+      "sessionId": "stale-start",
+      "model": "claude-opus-5",
+      "workspace": "/w/alpha",
+      "source": "claude_code",
+      "inputTokens": 1088,
+      "outputTokens": 1583,
+      "cacheReadTokens": 803500,
+      "cacheCreateTokens": 45000,
+      "totalLlmCalls": 1,
+      "startTime": "2026-07-02T00:00:00.000Z",
+      "durationMs": 0,
+      "lastActivity": "2026-08-01T11:59:00.000Z",
+      "timeline": [
+        {
+          "type": "assistant",
+          "timestamp": "2026-08-01T11:00:00.000Z",
+          "inputTokens": 999999,
+          "outputTokens": 999999
+        },
+        {
+          "type": "api_request",
+          "timestamp": "2026-08-01T11:00:00.000Z",
+          "inputTokens": 100,
+          "outputTokens": 200,
+          "cacheReadTokens": 50000,
+          "cacheCreateTokens": 5000,
+          "costUsd": 0.1234,
+          "querySource": "repl_main_thread",
+          "skillName": "ponytail",
+          "pluginName": "ponytail"
+        },
+        {
+          "type": "api_request",
+          "timestamp": "2026-08-01T11:00:00.000Z",
+          "inputTokens": 50,
+          "outputTokens": 100,
+          "cacheReadTokens": 40000,
+          "cacheCreateTokens": 0,
+          "costUsd": 0.05,
+          "querySource": "repl_main_thread",
+          "skillName": "ponytail",
+          "pluginName": "ponytail"
+        },
+        {
+          "type": "api_request",
+          "timestamp": "2026-08-01T11:00:00.000Z",
+          "inputTokens": 10,
+          "outputTokens": 30,
+          "cacheReadTokens": 8000,
+          "cacheCreateTokens": 0,
+          "costUsd": 0.01,
+          "querySource": "agent",
+          "agentName": "explore",
+          "skillName": "tldr-code",
+          "pluginName": "tldr"
+        },
+        {
+          "type": "api_request",
+          "timestamp": "2026-08-01T11:00:00.000Z",
+          "inputTokens": 5,
+          "outputTokens": 5,
+          "cacheReadTokens": 1000,
+          "cacheCreateTokens": 0,
+          "costUsd": 0.002,
+          "querySource": "agent",
+          "mcpServerName": "srv-a",
+          "mcpToolName": "search"
+        },
+        {
+          "type": "api_request",
+          "timestamp": "2026-08-01T11:00:00.000Z",
+          "inputTokens": 5,
+          "outputTokens": 5,
+          "cacheReadTokens": 1000,
+          "cacheCreateTokens": 0,
+          "costUsd": 0.002,
+          "querySource": "agent",
+          "mcpServerName": "srv-b",
+          "mcpToolName": "search"
+        },
+        {
+          "type": "api_request",
+          "timestamp": "2026-08-01T11:00:00.000Z",
+          "inputTokens": 3,
+          "outputTokens": 3,
+          "cacheReadTokens": 500,
+          "cacheCreateTokens": 0,
+          "costUsd": 0.001,
+          "querySource": "agent",
+          "mcpToolName": "orphan"
+        },
+        {
+          "type": "api_request",
+          "timestamp": "2026-08-01T11:00:00.000Z",
+          "inputTokens": 900,
+          "outputTokens": 1200,
+          "cacheReadTokens": 700000,
+          "cacheCreateTokens": 40000,
+          "costUsd": 4.5678
+        },
+        {
+          "type": "api_request",
+          "timestamp": "2026-08-01T11:00:00.000Z",
+          "inputTokens": 20,
+          "outputTokens": 40,
+          "cacheReadTokens": 3000,
+          "cacheCreateTokens": 0,
+          "querySource": "compact"
+        }
+      ]
+    },
+    {
+      "sessionId": "fresh-start",
+      "model": "claude-opus-5",
+      "workspace": "/w/alpha",
+      "source": "claude_code",
+      "inputTokens": 10,
+      "outputTokens": 5,
+      "cacheReadTokens": 20,
+      "cacheCreateTokens": 0,
+      "totalLlmCalls": 1,
+      "startTime": "2026-08-01T11:00:00.000Z",
+      "durationMs": 0,
+      "lastActivity": "2026-07-12T00:00:00.000Z",
+      "timeline": []
+    },
+    {
+      "sessionId": "not-cc",
+      "model": "claude-opus-5",
+      "workspace": "/w/alpha",
+      "source": "codex",
+      "inputTokens": 7,
+      "outputTokens": 2,
+      "cacheReadTokens": 0,
+      "cacheCreateTokens": 0,
+      "totalLlmCalls": 1,
+      "startTime": "2026-08-01T11:30:00.000Z",
+      "durationMs": 0,
+      "lastActivity": "2026-08-01T11:55:00.000Z",
+      "timeline": []
+    }
+  ],
+  "engineFull": {
+    "sessionId": "stale-start",
+    "apiRequestCalls": 8,
+    "hasAttribution": true,
+    "dimensions": [
+      {
+        "dimension": "querySource",
+        "rows": [
+          {
+            "dimension": "querySource",
+            "key": "repl_main_thread",
+            "unattributed": false,
+            "calls": 2,
+            "inputTokens": 150,
+            "outputTokens": 300,
+            "cacheReadTokens": 90000,
+            "cacheCreateTokens": 5000,
+            "totalTokens": 95450,
+            "costUsd": 0.1734,
+            "costKnown": true
+          },
+          {
+            "dimension": "querySource",
+            "key": "agent",
+            "unattributed": false,
+            "calls": 4,
+            "inputTokens": 23,
+            "outputTokens": 43,
+            "cacheReadTokens": 10500,
+            "cacheCreateTokens": 0,
+            "totalTokens": 10566,
+            "costUsd": 0.015,
+            "costKnown": true
+          },
+          {
+            "dimension": "querySource",
+            "key": "compact",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 20,
+            "outputTokens": 40,
+            "cacheReadTokens": 3000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 3060,
+            "costUsd": 0,
+            "costKnown": false
+          },
+          {
+            "dimension": "querySource",
+            "key": "(unattributed)",
+            "unattributed": true,
+            "calls": 1,
+            "inputTokens": 900,
+            "outputTokens": 1200,
+            "cacheReadTokens": 700000,
+            "cacheCreateTokens": 40000,
+            "totalTokens": 742100,
+            "costUsd": 4.5678,
+            "costKnown": true
+          }
+        ],
+        "attributedCalls": 7,
+        "unattributedCalls": 1
+      },
+      {
+        "dimension": "agent",
+        "rows": [
+          {
+            "dimension": "agent",
+            "key": "explore",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 10,
+            "outputTokens": 30,
+            "cacheReadTokens": 8000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 8040,
+            "costUsd": 0.01,
+            "costKnown": true
+          },
+          {
+            "dimension": "agent",
+            "key": "(no agent)",
+            "unattributed": true,
+            "calls": 7,
+            "inputTokens": 1083,
+            "outputTokens": 1553,
+            "cacheReadTokens": 795500,
+            "cacheCreateTokens": 45000,
+            "totalTokens": 843136,
+            "costUsd": 4.7462,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 1,
+        "unattributedCalls": 7
+      },
+      {
+        "dimension": "skill",
+        "rows": [
+          {
+            "dimension": "skill",
+            "key": "ponytail",
+            "unattributed": false,
+            "calls": 2,
+            "inputTokens": 150,
+            "outputTokens": 300,
+            "cacheReadTokens": 90000,
+            "cacheCreateTokens": 5000,
+            "totalTokens": 95450,
+            "costUsd": 0.1734,
+            "costKnown": true
+          },
+          {
+            "dimension": "skill",
+            "key": "tldr-code",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 10,
+            "outputTokens": 30,
+            "cacheReadTokens": 8000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 8040,
+            "costUsd": 0.01,
+            "costKnown": true
+          },
+          {
+            "dimension": "skill",
+            "key": "(no skill)",
+            "unattributed": true,
+            "calls": 5,
+            "inputTokens": 933,
+            "outputTokens": 1253,
+            "cacheReadTokens": 705500,
+            "cacheCreateTokens": 40000,
+            "totalTokens": 747686,
+            "costUsd": 4.5728,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 3,
+        "unattributedCalls": 5
+      },
+      {
+        "dimension": "plugin",
+        "rows": [
+          {
+            "dimension": "plugin",
+            "key": "ponytail",
+            "unattributed": false,
+            "calls": 2,
+            "inputTokens": 150,
+            "outputTokens": 300,
+            "cacheReadTokens": 90000,
+            "cacheCreateTokens": 5000,
+            "totalTokens": 95450,
+            "costUsd": 0.1734,
+            "costKnown": true
+          },
+          {
+            "dimension": "plugin",
+            "key": "tldr",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 10,
+            "outputTokens": 30,
+            "cacheReadTokens": 8000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 8040,
+            "costUsd": 0.01,
+            "costKnown": true
+          },
+          {
+            "dimension": "plugin",
+            "key": "(no plugin)",
+            "unattributed": true,
+            "calls": 5,
+            "inputTokens": 933,
+            "outputTokens": 1253,
+            "cacheReadTokens": 705500,
+            "cacheCreateTokens": 40000,
+            "totalTokens": 747686,
+            "costUsd": 4.5728,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 3,
+        "unattributedCalls": 5
+      },
+      {
+        "dimension": "mcpServer",
+        "rows": [
+          {
+            "dimension": "mcpServer",
+            "key": "srv-a",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 5,
+            "outputTokens": 5,
+            "cacheReadTokens": 1000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 1010,
+            "costUsd": 0.002,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpServer",
+            "key": "srv-b",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 5,
+            "outputTokens": 5,
+            "cacheReadTokens": 1000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 1010,
+            "costUsd": 0.002,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpServer",
+            "key": "(no MCP server)",
+            "unattributed": true,
+            "calls": 6,
+            "inputTokens": 1083,
+            "outputTokens": 1573,
+            "cacheReadTokens": 801500,
+            "cacheCreateTokens": 45000,
+            "totalTokens": 849156,
+            "costUsd": 4.7522,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 2,
+        "unattributedCalls": 6
+      },
+      {
+        "dimension": "mcpTool",
+        "rows": [
+          {
+            "dimension": "mcpTool",
+            "key": "srv-a/search",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 5,
+            "outputTokens": 5,
+            "cacheReadTokens": 1000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 1010,
+            "costUsd": 0.002,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpTool",
+            "key": "srv-b/search",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 5,
+            "outputTokens": 5,
+            "cacheReadTokens": 1000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 1010,
+            "costUsd": 0.002,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpTool",
+            "key": "?/orphan",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 3,
+            "outputTokens": 3,
+            "cacheReadTokens": 500,
+            "cacheCreateTokens": 0,
+            "totalTokens": 506,
+            "costUsd": 0.001,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpTool",
+            "key": "(no MCP tool)",
+            "unattributed": true,
+            "calls": 5,
+            "inputTokens": 1080,
+            "outputTokens": 1570,
+            "cacheReadTokens": 801000,
+            "cacheCreateTokens": 45000,
+            "totalTokens": 848650,
+            "costUsd": 4.7512,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 3,
+        "unattributedCalls": 5
+      }
+    ],
+    "reconciliation": {
+      "apiRequestCalls": 8,
+      "attributedInputTokens": 1093,
+      "attributedOutputTokens": 1583,
+      "attributedCacheReadTokens": 803500,
+      "attributedCacheCreateTokens": 45000,
+      "attributedTotalTokens": 851176,
+      "attributedCostUsd": 4.7562,
+      "costComplete": false,
+      "costCalls": 7,
+      "sessionTotalTokens": 851171,
+      "unattributedTotalTokens": -5,
+      "note": "Signed remainder: -5 tokens of the usage-bucket total were NOT covered by any api_request event (calls recorded before rich OTEL logging, or span/log ingestion drift). Negative = api_request events exceed the session usage totals."
+    },
+    "estimated": false,
+    "note": "Grouped from the per-call api_request ground truth (exact usage buckets + cost_usd per call). Calls carrying no value for a dimension are in that dimension's pinned unattributed bucket — counted, never dropped."
+  },
+  "engineNegative": {
+    "sessionId": "stale-start",
+    "apiRequestCalls": 8,
+    "hasAttribution": true,
+    "dimensions": [
+      {
+        "dimension": "querySource",
+        "rows": [
+          {
+            "dimension": "querySource",
+            "key": "repl_main_thread",
+            "unattributed": false,
+            "calls": 2,
+            "inputTokens": 150,
+            "outputTokens": 300,
+            "cacheReadTokens": 90000,
+            "cacheCreateTokens": 5000,
+            "totalTokens": 95450,
+            "costUsd": 0.1734,
+            "costKnown": true
+          },
+          {
+            "dimension": "querySource",
+            "key": "agent",
+            "unattributed": false,
+            "calls": 4,
+            "inputTokens": 23,
+            "outputTokens": 43,
+            "cacheReadTokens": 10500,
+            "cacheCreateTokens": 0,
+            "totalTokens": 10566,
+            "costUsd": 0.015,
+            "costKnown": true
+          },
+          {
+            "dimension": "querySource",
+            "key": "compact",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 20,
+            "outputTokens": 40,
+            "cacheReadTokens": 3000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 3060,
+            "costUsd": 0,
+            "costKnown": false
+          },
+          {
+            "dimension": "querySource",
+            "key": "(unattributed)",
+            "unattributed": true,
+            "calls": 1,
+            "inputTokens": 900,
+            "outputTokens": 1200,
+            "cacheReadTokens": 700000,
+            "cacheCreateTokens": 40000,
+            "totalTokens": 742100,
+            "costUsd": 4.5678,
+            "costKnown": true
+          }
+        ],
+        "attributedCalls": 7,
+        "unattributedCalls": 1
+      },
+      {
+        "dimension": "agent",
+        "rows": [
+          {
+            "dimension": "agent",
+            "key": "explore",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 10,
+            "outputTokens": 30,
+            "cacheReadTokens": 8000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 8040,
+            "costUsd": 0.01,
+            "costKnown": true
+          },
+          {
+            "dimension": "agent",
+            "key": "(no agent)",
+            "unattributed": true,
+            "calls": 7,
+            "inputTokens": 1083,
+            "outputTokens": 1553,
+            "cacheReadTokens": 795500,
+            "cacheCreateTokens": 45000,
+            "totalTokens": 843136,
+            "costUsd": 4.7462,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 1,
+        "unattributedCalls": 7
+      },
+      {
+        "dimension": "skill",
+        "rows": [
+          {
+            "dimension": "skill",
+            "key": "ponytail",
+            "unattributed": false,
+            "calls": 2,
+            "inputTokens": 150,
+            "outputTokens": 300,
+            "cacheReadTokens": 90000,
+            "cacheCreateTokens": 5000,
+            "totalTokens": 95450,
+            "costUsd": 0.1734,
+            "costKnown": true
+          },
+          {
+            "dimension": "skill",
+            "key": "tldr-code",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 10,
+            "outputTokens": 30,
+            "cacheReadTokens": 8000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 8040,
+            "costUsd": 0.01,
+            "costKnown": true
+          },
+          {
+            "dimension": "skill",
+            "key": "(no skill)",
+            "unattributed": true,
+            "calls": 5,
+            "inputTokens": 933,
+            "outputTokens": 1253,
+            "cacheReadTokens": 705500,
+            "cacheCreateTokens": 40000,
+            "totalTokens": 747686,
+            "costUsd": 4.5728,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 3,
+        "unattributedCalls": 5
+      },
+      {
+        "dimension": "plugin",
+        "rows": [
+          {
+            "dimension": "plugin",
+            "key": "ponytail",
+            "unattributed": false,
+            "calls": 2,
+            "inputTokens": 150,
+            "outputTokens": 300,
+            "cacheReadTokens": 90000,
+            "cacheCreateTokens": 5000,
+            "totalTokens": 95450,
+            "costUsd": 0.1734,
+            "costKnown": true
+          },
+          {
+            "dimension": "plugin",
+            "key": "tldr",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 10,
+            "outputTokens": 30,
+            "cacheReadTokens": 8000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 8040,
+            "costUsd": 0.01,
+            "costKnown": true
+          },
+          {
+            "dimension": "plugin",
+            "key": "(no plugin)",
+            "unattributed": true,
+            "calls": 5,
+            "inputTokens": 933,
+            "outputTokens": 1253,
+            "cacheReadTokens": 705500,
+            "cacheCreateTokens": 40000,
+            "totalTokens": 747686,
+            "costUsd": 4.5728,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 3,
+        "unattributedCalls": 5
+      },
+      {
+        "dimension": "mcpServer",
+        "rows": [
+          {
+            "dimension": "mcpServer",
+            "key": "srv-a",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 5,
+            "outputTokens": 5,
+            "cacheReadTokens": 1000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 1010,
+            "costUsd": 0.002,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpServer",
+            "key": "srv-b",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 5,
+            "outputTokens": 5,
+            "cacheReadTokens": 1000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 1010,
+            "costUsd": 0.002,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpServer",
+            "key": "(no MCP server)",
+            "unattributed": true,
+            "calls": 6,
+            "inputTokens": 1083,
+            "outputTokens": 1573,
+            "cacheReadTokens": 801500,
+            "cacheCreateTokens": 45000,
+            "totalTokens": 849156,
+            "costUsd": 4.7522,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 2,
+        "unattributedCalls": 6
+      },
+      {
+        "dimension": "mcpTool",
+        "rows": [
+          {
+            "dimension": "mcpTool",
+            "key": "srv-a/search",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 5,
+            "outputTokens": 5,
+            "cacheReadTokens": 1000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 1010,
+            "costUsd": 0.002,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpTool",
+            "key": "srv-b/search",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 5,
+            "outputTokens": 5,
+            "cacheReadTokens": 1000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 1010,
+            "costUsd": 0.002,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpTool",
+            "key": "?/orphan",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 3,
+            "outputTokens": 3,
+            "cacheReadTokens": 500,
+            "cacheCreateTokens": 0,
+            "totalTokens": 506,
+            "costUsd": 0.001,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpTool",
+            "key": "(no MCP tool)",
+            "unattributed": true,
+            "calls": 5,
+            "inputTokens": 1080,
+            "outputTokens": 1570,
+            "cacheReadTokens": 801000,
+            "cacheCreateTokens": 45000,
+            "totalTokens": 848650,
+            "costUsd": 4.7512,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 3,
+        "unattributedCalls": 5
+      }
+    ],
+    "reconciliation": {
+      "apiRequestCalls": 8,
+      "attributedInputTokens": 1093,
+      "attributedOutputTokens": 1583,
+      "attributedCacheReadTokens": 803500,
+      "attributedCacheCreateTokens": 45000,
+      "attributedTotalTokens": 851176,
+      "attributedCostUsd": 4.7562,
+      "costComplete": false,
+      "costCalls": 7,
+      "sessionTotalTokens": 1000,
+      "unattributedTotalTokens": -850176,
+      "note": "Signed remainder: -850,176 tokens of the usage-bucket total were NOT covered by any api_request event (calls recorded before rich OTEL logging, or span/log ingestion drift). Negative = api_request events exceed the session usage totals."
+    },
+    "estimated": false,
+    "note": "Grouped from the per-call api_request ground truth (exact usage buckets + cost_usd per call). Calls carrying no value for a dimension are in that dimension's pinned unattributed bucket — counted, never dropped."
+  },
+  "engineNoTotal": {
+    "apiRequestCalls": 8,
+    "hasAttribution": true,
+    "dimensions": [
+      {
+        "dimension": "querySource",
+        "rows": [
+          {
+            "dimension": "querySource",
+            "key": "repl_main_thread",
+            "unattributed": false,
+            "calls": 2,
+            "inputTokens": 150,
+            "outputTokens": 300,
+            "cacheReadTokens": 90000,
+            "cacheCreateTokens": 5000,
+            "totalTokens": 95450,
+            "costUsd": 0.1734,
+            "costKnown": true
+          },
+          {
+            "dimension": "querySource",
+            "key": "agent",
+            "unattributed": false,
+            "calls": 4,
+            "inputTokens": 23,
+            "outputTokens": 43,
+            "cacheReadTokens": 10500,
+            "cacheCreateTokens": 0,
+            "totalTokens": 10566,
+            "costUsd": 0.015,
+            "costKnown": true
+          },
+          {
+            "dimension": "querySource",
+            "key": "compact",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 20,
+            "outputTokens": 40,
+            "cacheReadTokens": 3000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 3060,
+            "costUsd": 0,
+            "costKnown": false
+          },
+          {
+            "dimension": "querySource",
+            "key": "(unattributed)",
+            "unattributed": true,
+            "calls": 1,
+            "inputTokens": 900,
+            "outputTokens": 1200,
+            "cacheReadTokens": 700000,
+            "cacheCreateTokens": 40000,
+            "totalTokens": 742100,
+            "costUsd": 4.5678,
+            "costKnown": true
+          }
+        ],
+        "attributedCalls": 7,
+        "unattributedCalls": 1
+      },
+      {
+        "dimension": "agent",
+        "rows": [
+          {
+            "dimension": "agent",
+            "key": "explore",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 10,
+            "outputTokens": 30,
+            "cacheReadTokens": 8000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 8040,
+            "costUsd": 0.01,
+            "costKnown": true
+          },
+          {
+            "dimension": "agent",
+            "key": "(no agent)",
+            "unattributed": true,
+            "calls": 7,
+            "inputTokens": 1083,
+            "outputTokens": 1553,
+            "cacheReadTokens": 795500,
+            "cacheCreateTokens": 45000,
+            "totalTokens": 843136,
+            "costUsd": 4.7462,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 1,
+        "unattributedCalls": 7
+      },
+      {
+        "dimension": "skill",
+        "rows": [
+          {
+            "dimension": "skill",
+            "key": "ponytail",
+            "unattributed": false,
+            "calls": 2,
+            "inputTokens": 150,
+            "outputTokens": 300,
+            "cacheReadTokens": 90000,
+            "cacheCreateTokens": 5000,
+            "totalTokens": 95450,
+            "costUsd": 0.1734,
+            "costKnown": true
+          },
+          {
+            "dimension": "skill",
+            "key": "tldr-code",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 10,
+            "outputTokens": 30,
+            "cacheReadTokens": 8000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 8040,
+            "costUsd": 0.01,
+            "costKnown": true
+          },
+          {
+            "dimension": "skill",
+            "key": "(no skill)",
+            "unattributed": true,
+            "calls": 5,
+            "inputTokens": 933,
+            "outputTokens": 1253,
+            "cacheReadTokens": 705500,
+            "cacheCreateTokens": 40000,
+            "totalTokens": 747686,
+            "costUsd": 4.5728,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 3,
+        "unattributedCalls": 5
+      },
+      {
+        "dimension": "plugin",
+        "rows": [
+          {
+            "dimension": "plugin",
+            "key": "ponytail",
+            "unattributed": false,
+            "calls": 2,
+            "inputTokens": 150,
+            "outputTokens": 300,
+            "cacheReadTokens": 90000,
+            "cacheCreateTokens": 5000,
+            "totalTokens": 95450,
+            "costUsd": 0.1734,
+            "costKnown": true
+          },
+          {
+            "dimension": "plugin",
+            "key": "tldr",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 10,
+            "outputTokens": 30,
+            "cacheReadTokens": 8000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 8040,
+            "costUsd": 0.01,
+            "costKnown": true
+          },
+          {
+            "dimension": "plugin",
+            "key": "(no plugin)",
+            "unattributed": true,
+            "calls": 5,
+            "inputTokens": 933,
+            "outputTokens": 1253,
+            "cacheReadTokens": 705500,
+            "cacheCreateTokens": 40000,
+            "totalTokens": 747686,
+            "costUsd": 4.5728,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 3,
+        "unattributedCalls": 5
+      },
+      {
+        "dimension": "mcpServer",
+        "rows": [
+          {
+            "dimension": "mcpServer",
+            "key": "srv-a",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 5,
+            "outputTokens": 5,
+            "cacheReadTokens": 1000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 1010,
+            "costUsd": 0.002,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpServer",
+            "key": "srv-b",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 5,
+            "outputTokens": 5,
+            "cacheReadTokens": 1000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 1010,
+            "costUsd": 0.002,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpServer",
+            "key": "(no MCP server)",
+            "unattributed": true,
+            "calls": 6,
+            "inputTokens": 1083,
+            "outputTokens": 1573,
+            "cacheReadTokens": 801500,
+            "cacheCreateTokens": 45000,
+            "totalTokens": 849156,
+            "costUsd": 4.7522,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 2,
+        "unattributedCalls": 6
+      },
+      {
+        "dimension": "mcpTool",
+        "rows": [
+          {
+            "dimension": "mcpTool",
+            "key": "srv-a/search",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 5,
+            "outputTokens": 5,
+            "cacheReadTokens": 1000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 1010,
+            "costUsd": 0.002,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpTool",
+            "key": "srv-b/search",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 5,
+            "outputTokens": 5,
+            "cacheReadTokens": 1000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 1010,
+            "costUsd": 0.002,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpTool",
+            "key": "?/orphan",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 3,
+            "outputTokens": 3,
+            "cacheReadTokens": 500,
+            "cacheCreateTokens": 0,
+            "totalTokens": 506,
+            "costUsd": 0.001,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpTool",
+            "key": "(no MCP tool)",
+            "unattributed": true,
+            "calls": 5,
+            "inputTokens": 1080,
+            "outputTokens": 1570,
+            "cacheReadTokens": 801000,
+            "cacheCreateTokens": 45000,
+            "totalTokens": 848650,
+            "costUsd": 4.7512,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 3,
+        "unattributedCalls": 5
+      }
+    ],
+    "reconciliation": {
+      "apiRequestCalls": 8,
+      "attributedInputTokens": 1093,
+      "attributedOutputTokens": 1583,
+      "attributedCacheReadTokens": 803500,
+      "attributedCacheCreateTokens": 45000,
+      "attributedTotalTokens": 851176,
+      "attributedCostUsd": 4.7562,
+      "costComplete": false,
+      "costCalls": 7,
+      "sessionTotalTokens": null,
+      "unattributedTotalTokens": null,
+      "note": "No usage-bucket ground truth supplied for this scope, so the unattributed remainder cannot be computed (reported null, never fabricated)."
+    },
+    "estimated": false,
+    "note": "Grouped from the per-call api_request ground truth (exact usage buckets + cost_usd per call). Calls carrying no value for a dimension are in that dimension's pinned unattributed bucket — counted, never dropped."
+  },
+  "engineEmpty": {
+    "sessionsScanned": 0,
+    "apiRequestCalls": 0,
+    "hasAttribution": false,
+    "dimensions": [
+      {
+        "dimension": "querySource",
+        "rows": [],
+        "attributedCalls": 0,
+        "unattributedCalls": 0
+      },
+      {
+        "dimension": "agent",
+        "rows": [],
+        "attributedCalls": 0,
+        "unattributedCalls": 0
+      },
+      {
+        "dimension": "skill",
+        "rows": [],
+        "attributedCalls": 0,
+        "unattributedCalls": 0
+      },
+      {
+        "dimension": "plugin",
+        "rows": [],
+        "attributedCalls": 0,
+        "unattributedCalls": 0
+      },
+      {
+        "dimension": "mcpServer",
+        "rows": [],
+        "attributedCalls": 0,
+        "unattributedCalls": 0
+      },
+      {
+        "dimension": "mcpTool",
+        "rows": [],
+        "attributedCalls": 0,
+        "unattributedCalls": 0
+      }
+    ],
+    "reconciliation": {
+      "apiRequestCalls": 0,
+      "attributedInputTokens": 0,
+      "attributedOutputTokens": 0,
+      "attributedCacheReadTokens": 0,
+      "attributedCacheCreateTokens": 0,
+      "attributedTotalTokens": 0,
+      "attributedCostUsd": 0,
+      "costComplete": true,
+      "costCalls": 0,
+      "sessionTotalTokens": 0,
+      "unattributedTotalTokens": 0,
+      "note": "The api_request events fully reconcile with the usage-bucket totals."
+    },
+    "estimated": false,
+    "note": "No claude_code.api_request events in this scope — per-cause attribution needs the rich OTEL log events (CLAUDE_CODE_ENABLE_TELEMETRY=1 with logs exported), or this is not a Claude Code session."
+  },
+  "engineExact": {
+    "apiRequestCalls": 8,
+    "hasAttribution": true,
+    "dimensions": [
+      {
+        "dimension": "querySource",
+        "rows": [
+          {
+            "dimension": "querySource",
+            "key": "repl_main_thread",
+            "unattributed": false,
+            "calls": 2,
+            "inputTokens": 150,
+            "outputTokens": 300,
+            "cacheReadTokens": 90000,
+            "cacheCreateTokens": 5000,
+            "totalTokens": 95450,
+            "costUsd": 0.1734,
+            "costKnown": true
+          },
+          {
+            "dimension": "querySource",
+            "key": "agent",
+            "unattributed": false,
+            "calls": 4,
+            "inputTokens": 23,
+            "outputTokens": 43,
+            "cacheReadTokens": 10500,
+            "cacheCreateTokens": 0,
+            "totalTokens": 10566,
+            "costUsd": 0.015,
+            "costKnown": true
+          },
+          {
+            "dimension": "querySource",
+            "key": "compact",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 20,
+            "outputTokens": 40,
+            "cacheReadTokens": 3000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 3060,
+            "costUsd": 0,
+            "costKnown": false
+          },
+          {
+            "dimension": "querySource",
+            "key": "(unattributed)",
+            "unattributed": true,
+            "calls": 1,
+            "inputTokens": 900,
+            "outputTokens": 1200,
+            "cacheReadTokens": 700000,
+            "cacheCreateTokens": 40000,
+            "totalTokens": 742100,
+            "costUsd": 4.5678,
+            "costKnown": true
+          }
+        ],
+        "attributedCalls": 7,
+        "unattributedCalls": 1
+      },
+      {
+        "dimension": "agent",
+        "rows": [
+          {
+            "dimension": "agent",
+            "key": "explore",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 10,
+            "outputTokens": 30,
+            "cacheReadTokens": 8000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 8040,
+            "costUsd": 0.01,
+            "costKnown": true
+          },
+          {
+            "dimension": "agent",
+            "key": "(no agent)",
+            "unattributed": true,
+            "calls": 7,
+            "inputTokens": 1083,
+            "outputTokens": 1553,
+            "cacheReadTokens": 795500,
+            "cacheCreateTokens": 45000,
+            "totalTokens": 843136,
+            "costUsd": 4.7462,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 1,
+        "unattributedCalls": 7
+      },
+      {
+        "dimension": "skill",
+        "rows": [
+          {
+            "dimension": "skill",
+            "key": "ponytail",
+            "unattributed": false,
+            "calls": 2,
+            "inputTokens": 150,
+            "outputTokens": 300,
+            "cacheReadTokens": 90000,
+            "cacheCreateTokens": 5000,
+            "totalTokens": 95450,
+            "costUsd": 0.1734,
+            "costKnown": true
+          },
+          {
+            "dimension": "skill",
+            "key": "tldr-code",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 10,
+            "outputTokens": 30,
+            "cacheReadTokens": 8000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 8040,
+            "costUsd": 0.01,
+            "costKnown": true
+          },
+          {
+            "dimension": "skill",
+            "key": "(no skill)",
+            "unattributed": true,
+            "calls": 5,
+            "inputTokens": 933,
+            "outputTokens": 1253,
+            "cacheReadTokens": 705500,
+            "cacheCreateTokens": 40000,
+            "totalTokens": 747686,
+            "costUsd": 4.5728,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 3,
+        "unattributedCalls": 5
+      },
+      {
+        "dimension": "plugin",
+        "rows": [
+          {
+            "dimension": "plugin",
+            "key": "ponytail",
+            "unattributed": false,
+            "calls": 2,
+            "inputTokens": 150,
+            "outputTokens": 300,
+            "cacheReadTokens": 90000,
+            "cacheCreateTokens": 5000,
+            "totalTokens": 95450,
+            "costUsd": 0.1734,
+            "costKnown": true
+          },
+          {
+            "dimension": "plugin",
+            "key": "tldr",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 10,
+            "outputTokens": 30,
+            "cacheReadTokens": 8000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 8040,
+            "costUsd": 0.01,
+            "costKnown": true
+          },
+          {
+            "dimension": "plugin",
+            "key": "(no plugin)",
+            "unattributed": true,
+            "calls": 5,
+            "inputTokens": 933,
+            "outputTokens": 1253,
+            "cacheReadTokens": 705500,
+            "cacheCreateTokens": 40000,
+            "totalTokens": 747686,
+            "costUsd": 4.5728,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 3,
+        "unattributedCalls": 5
+      },
+      {
+        "dimension": "mcpServer",
+        "rows": [
+          {
+            "dimension": "mcpServer",
+            "key": "srv-a",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 5,
+            "outputTokens": 5,
+            "cacheReadTokens": 1000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 1010,
+            "costUsd": 0.002,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpServer",
+            "key": "srv-b",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 5,
+            "outputTokens": 5,
+            "cacheReadTokens": 1000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 1010,
+            "costUsd": 0.002,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpServer",
+            "key": "(no MCP server)",
+            "unattributed": true,
+            "calls": 6,
+            "inputTokens": 1083,
+            "outputTokens": 1573,
+            "cacheReadTokens": 801500,
+            "cacheCreateTokens": 45000,
+            "totalTokens": 849156,
+            "costUsd": 4.7522,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 2,
+        "unattributedCalls": 6
+      },
+      {
+        "dimension": "mcpTool",
+        "rows": [
+          {
+            "dimension": "mcpTool",
+            "key": "srv-a/search",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 5,
+            "outputTokens": 5,
+            "cacheReadTokens": 1000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 1010,
+            "costUsd": 0.002,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpTool",
+            "key": "srv-b/search",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 5,
+            "outputTokens": 5,
+            "cacheReadTokens": 1000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 1010,
+            "costUsd": 0.002,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpTool",
+            "key": "?/orphan",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 3,
+            "outputTokens": 3,
+            "cacheReadTokens": 500,
+            "cacheCreateTokens": 0,
+            "totalTokens": 506,
+            "costUsd": 0.001,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpTool",
+            "key": "(no MCP tool)",
+            "unattributed": true,
+            "calls": 5,
+            "inputTokens": 1080,
+            "outputTokens": 1570,
+            "cacheReadTokens": 801000,
+            "cacheCreateTokens": 45000,
+            "totalTokens": 848650,
+            "costUsd": 4.7512,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 3,
+        "unattributedCalls": 5
+      }
+    ],
+    "reconciliation": {
+      "apiRequestCalls": 8,
+      "attributedInputTokens": 1093,
+      "attributedOutputTokens": 1583,
+      "attributedCacheReadTokens": 803500,
+      "attributedCacheCreateTokens": 45000,
+      "attributedTotalTokens": 851176,
+      "attributedCostUsd": 4.7562,
+      "costComplete": false,
+      "costCalls": 7,
+      "sessionTotalTokens": 851176,
+      "unattributedTotalTokens": 0,
+      "note": "The api_request events fully reconcile with the usage-bucket totals."
+    },
+    "estimated": false,
+    "note": "Grouped from the per-call api_request ground truth (exact usage buckets + cost_usd per call). Calls carrying no value for a dimension are in that dimension's pinned unattributed bucket — counted, never dropped."
+  },
+  "toolOne": {
+    "sessionId": "stale-start",
+    "apiRequestCalls": 8,
+    "hasAttribution": true,
+    "dimensions": [
+      {
+        "dimension": "querySource",
+        "rows": [
+          {
+            "dimension": "querySource",
+            "key": "repl_main_thread",
+            "unattributed": false,
+            "calls": 2,
+            "inputTokens": 150,
+            "outputTokens": 300,
+            "cacheReadTokens": 90000,
+            "cacheCreateTokens": 5000,
+            "totalTokens": 95450,
+            "costUsd": 0.1734,
+            "costKnown": true
+          },
+          {
+            "dimension": "querySource",
+            "key": "agent",
+            "unattributed": false,
+            "calls": 4,
+            "inputTokens": 23,
+            "outputTokens": 43,
+            "cacheReadTokens": 10500,
+            "cacheCreateTokens": 0,
+            "totalTokens": 10566,
+            "costUsd": 0.015,
+            "costKnown": true
+          },
+          {
+            "dimension": "querySource",
+            "key": "compact",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 20,
+            "outputTokens": 40,
+            "cacheReadTokens": 3000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 3060,
+            "costUsd": 0,
+            "costKnown": false
+          },
+          {
+            "dimension": "querySource",
+            "key": "(unattributed)",
+            "unattributed": true,
+            "calls": 1,
+            "inputTokens": 900,
+            "outputTokens": 1200,
+            "cacheReadTokens": 700000,
+            "cacheCreateTokens": 40000,
+            "totalTokens": 742100,
+            "costUsd": 4.5678,
+            "costKnown": true
+          }
+        ],
+        "attributedCalls": 7,
+        "unattributedCalls": 1
+      },
+      {
+        "dimension": "agent",
+        "rows": [
+          {
+            "dimension": "agent",
+            "key": "explore",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 10,
+            "outputTokens": 30,
+            "cacheReadTokens": 8000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 8040,
+            "costUsd": 0.01,
+            "costKnown": true
+          },
+          {
+            "dimension": "agent",
+            "key": "(no agent)",
+            "unattributed": true,
+            "calls": 7,
+            "inputTokens": 1083,
+            "outputTokens": 1553,
+            "cacheReadTokens": 795500,
+            "cacheCreateTokens": 45000,
+            "totalTokens": 843136,
+            "costUsd": 4.7462,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 1,
+        "unattributedCalls": 7
+      },
+      {
+        "dimension": "skill",
+        "rows": [
+          {
+            "dimension": "skill",
+            "key": "ponytail",
+            "unattributed": false,
+            "calls": 2,
+            "inputTokens": 150,
+            "outputTokens": 300,
+            "cacheReadTokens": 90000,
+            "cacheCreateTokens": 5000,
+            "totalTokens": 95450,
+            "costUsd": 0.1734,
+            "costKnown": true
+          },
+          {
+            "dimension": "skill",
+            "key": "tldr-code",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 10,
+            "outputTokens": 30,
+            "cacheReadTokens": 8000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 8040,
+            "costUsd": 0.01,
+            "costKnown": true
+          },
+          {
+            "dimension": "skill",
+            "key": "(no skill)",
+            "unattributed": true,
+            "calls": 5,
+            "inputTokens": 933,
+            "outputTokens": 1253,
+            "cacheReadTokens": 705500,
+            "cacheCreateTokens": 40000,
+            "totalTokens": 747686,
+            "costUsd": 4.5728,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 3,
+        "unattributedCalls": 5
+      },
+      {
+        "dimension": "plugin",
+        "rows": [
+          {
+            "dimension": "plugin",
+            "key": "ponytail",
+            "unattributed": false,
+            "calls": 2,
+            "inputTokens": 150,
+            "outputTokens": 300,
+            "cacheReadTokens": 90000,
+            "cacheCreateTokens": 5000,
+            "totalTokens": 95450,
+            "costUsd": 0.1734,
+            "costKnown": true
+          },
+          {
+            "dimension": "plugin",
+            "key": "tldr",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 10,
+            "outputTokens": 30,
+            "cacheReadTokens": 8000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 8040,
+            "costUsd": 0.01,
+            "costKnown": true
+          },
+          {
+            "dimension": "plugin",
+            "key": "(no plugin)",
+            "unattributed": true,
+            "calls": 5,
+            "inputTokens": 933,
+            "outputTokens": 1253,
+            "cacheReadTokens": 705500,
+            "cacheCreateTokens": 40000,
+            "totalTokens": 747686,
+            "costUsd": 4.5728,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 3,
+        "unattributedCalls": 5
+      },
+      {
+        "dimension": "mcpServer",
+        "rows": [
+          {
+            "dimension": "mcpServer",
+            "key": "srv-a",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 5,
+            "outputTokens": 5,
+            "cacheReadTokens": 1000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 1010,
+            "costUsd": 0.002,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpServer",
+            "key": "srv-b",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 5,
+            "outputTokens": 5,
+            "cacheReadTokens": 1000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 1010,
+            "costUsd": 0.002,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpServer",
+            "key": "(no MCP server)",
+            "unattributed": true,
+            "calls": 6,
+            "inputTokens": 1083,
+            "outputTokens": 1573,
+            "cacheReadTokens": 801500,
+            "cacheCreateTokens": 45000,
+            "totalTokens": 849156,
+            "costUsd": 4.7522,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 2,
+        "unattributedCalls": 6
+      },
+      {
+        "dimension": "mcpTool",
+        "rows": [
+          {
+            "dimension": "mcpTool",
+            "key": "srv-a/search",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 5,
+            "outputTokens": 5,
+            "cacheReadTokens": 1000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 1010,
+            "costUsd": 0.002,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpTool",
+            "key": "srv-b/search",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 5,
+            "outputTokens": 5,
+            "cacheReadTokens": 1000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 1010,
+            "costUsd": 0.002,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpTool",
+            "key": "?/orphan",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 3,
+            "outputTokens": 3,
+            "cacheReadTokens": 500,
+            "cacheCreateTokens": 0,
+            "totalTokens": 506,
+            "costUsd": 0.001,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpTool",
+            "key": "(no MCP tool)",
+            "unattributed": true,
+            "calls": 5,
+            "inputTokens": 1080,
+            "outputTokens": 1570,
+            "cacheReadTokens": 801000,
+            "cacheCreateTokens": 45000,
+            "totalTokens": 848650,
+            "costUsd": 4.7512,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 3,
+        "unattributedCalls": 5
+      }
+    ],
+    "reconciliation": {
+      "apiRequestCalls": 8,
+      "attributedInputTokens": 1093,
+      "attributedOutputTokens": 1583,
+      "attributedCacheReadTokens": 803500,
+      "attributedCacheCreateTokens": 45000,
+      "attributedTotalTokens": 851176,
+      "attributedCostUsd": 4.7562,
+      "costComplete": false,
+      "costCalls": 7,
+      "sessionTotalTokens": 851171,
+      "unattributedTotalTokens": -5,
+      "note": "Signed remainder: -5 tokens of the usage-bucket total were NOT covered by any api_request event (calls recorded before rich OTEL logging, or span/log ingestion drift). Negative = api_request events exceed the session usage totals."
+    },
+    "estimated": false,
+    "note": "Grouped from the per-call api_request ground truth (exact usage buckets + cost_usd per call). Calls carrying no value for a dimension are in that dimension's pinned unattributed bucket — counted, never dropped."
+  },
+  "toolMissing": {
+    "error": "Session nope not found."
+  },
+  "toolWindow": {
+    "sessionsScanned": 2,
+    "apiRequestCalls": 8,
+    "hasAttribution": true,
+    "dimensions": [
+      {
+        "dimension": "querySource",
+        "rows": [
+          {
+            "dimension": "querySource",
+            "key": "repl_main_thread",
+            "unattributed": false,
+            "calls": 2,
+            "inputTokens": 150,
+            "outputTokens": 300,
+            "cacheReadTokens": 90000,
+            "cacheCreateTokens": 5000,
+            "totalTokens": 95450,
+            "costUsd": 0.1734,
+            "costKnown": true
+          },
+          {
+            "dimension": "querySource",
+            "key": "agent",
+            "unattributed": false,
+            "calls": 4,
+            "inputTokens": 23,
+            "outputTokens": 43,
+            "cacheReadTokens": 10500,
+            "cacheCreateTokens": 0,
+            "totalTokens": 10566,
+            "costUsd": 0.015,
+            "costKnown": true
+          },
+          {
+            "dimension": "querySource",
+            "key": "compact",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 20,
+            "outputTokens": 40,
+            "cacheReadTokens": 3000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 3060,
+            "costUsd": 0,
+            "costKnown": false
+          },
+          {
+            "dimension": "querySource",
+            "key": "(unattributed)",
+            "unattributed": true,
+            "calls": 1,
+            "inputTokens": 900,
+            "outputTokens": 1200,
+            "cacheReadTokens": 700000,
+            "cacheCreateTokens": 40000,
+            "totalTokens": 742100,
+            "costUsd": 4.5678,
+            "costKnown": true
+          }
+        ],
+        "attributedCalls": 7,
+        "unattributedCalls": 1
+      },
+      {
+        "dimension": "agent",
+        "rows": [
+          {
+            "dimension": "agent",
+            "key": "explore",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 10,
+            "outputTokens": 30,
+            "cacheReadTokens": 8000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 8040,
+            "costUsd": 0.01,
+            "costKnown": true
+          },
+          {
+            "dimension": "agent",
+            "key": "(no agent)",
+            "unattributed": true,
+            "calls": 7,
+            "inputTokens": 1083,
+            "outputTokens": 1553,
+            "cacheReadTokens": 795500,
+            "cacheCreateTokens": 45000,
+            "totalTokens": 843136,
+            "costUsd": 4.7462,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 1,
+        "unattributedCalls": 7
+      },
+      {
+        "dimension": "skill",
+        "rows": [
+          {
+            "dimension": "skill",
+            "key": "ponytail",
+            "unattributed": false,
+            "calls": 2,
+            "inputTokens": 150,
+            "outputTokens": 300,
+            "cacheReadTokens": 90000,
+            "cacheCreateTokens": 5000,
+            "totalTokens": 95450,
+            "costUsd": 0.1734,
+            "costKnown": true
+          },
+          {
+            "dimension": "skill",
+            "key": "tldr-code",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 10,
+            "outputTokens": 30,
+            "cacheReadTokens": 8000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 8040,
+            "costUsd": 0.01,
+            "costKnown": true
+          },
+          {
+            "dimension": "skill",
+            "key": "(no skill)",
+            "unattributed": true,
+            "calls": 5,
+            "inputTokens": 933,
+            "outputTokens": 1253,
+            "cacheReadTokens": 705500,
+            "cacheCreateTokens": 40000,
+            "totalTokens": 747686,
+            "costUsd": 4.5728,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 3,
+        "unattributedCalls": 5
+      },
+      {
+        "dimension": "plugin",
+        "rows": [
+          {
+            "dimension": "plugin",
+            "key": "ponytail",
+            "unattributed": false,
+            "calls": 2,
+            "inputTokens": 150,
+            "outputTokens": 300,
+            "cacheReadTokens": 90000,
+            "cacheCreateTokens": 5000,
+            "totalTokens": 95450,
+            "costUsd": 0.1734,
+            "costKnown": true
+          },
+          {
+            "dimension": "plugin",
+            "key": "tldr",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 10,
+            "outputTokens": 30,
+            "cacheReadTokens": 8000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 8040,
+            "costUsd": 0.01,
+            "costKnown": true
+          },
+          {
+            "dimension": "plugin",
+            "key": "(no plugin)",
+            "unattributed": true,
+            "calls": 5,
+            "inputTokens": 933,
+            "outputTokens": 1253,
+            "cacheReadTokens": 705500,
+            "cacheCreateTokens": 40000,
+            "totalTokens": 747686,
+            "costUsd": 4.5728,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 3,
+        "unattributedCalls": 5
+      },
+      {
+        "dimension": "mcpServer",
+        "rows": [
+          {
+            "dimension": "mcpServer",
+            "key": "srv-a",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 5,
+            "outputTokens": 5,
+            "cacheReadTokens": 1000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 1010,
+            "costUsd": 0.002,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpServer",
+            "key": "srv-b",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 5,
+            "outputTokens": 5,
+            "cacheReadTokens": 1000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 1010,
+            "costUsd": 0.002,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpServer",
+            "key": "(no MCP server)",
+            "unattributed": true,
+            "calls": 6,
+            "inputTokens": 1083,
+            "outputTokens": 1573,
+            "cacheReadTokens": 801500,
+            "cacheCreateTokens": 45000,
+            "totalTokens": 849156,
+            "costUsd": 4.7522,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 2,
+        "unattributedCalls": 6
+      },
+      {
+        "dimension": "mcpTool",
+        "rows": [
+          {
+            "dimension": "mcpTool",
+            "key": "srv-a/search",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 5,
+            "outputTokens": 5,
+            "cacheReadTokens": 1000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 1010,
+            "costUsd": 0.002,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpTool",
+            "key": "srv-b/search",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 5,
+            "outputTokens": 5,
+            "cacheReadTokens": 1000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 1010,
+            "costUsd": 0.002,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpTool",
+            "key": "?/orphan",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 3,
+            "outputTokens": 3,
+            "cacheReadTokens": 500,
+            "cacheCreateTokens": 0,
+            "totalTokens": 506,
+            "costUsd": 0.001,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpTool",
+            "key": "(no MCP tool)",
+            "unattributed": true,
+            "calls": 5,
+            "inputTokens": 1080,
+            "outputTokens": 1570,
+            "cacheReadTokens": 801000,
+            "cacheCreateTokens": 45000,
+            "totalTokens": 848650,
+            "costUsd": 4.7512,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 3,
+        "unattributedCalls": 5
+      }
+    ],
+    "reconciliation": {
+      "apiRequestCalls": 8,
+      "attributedInputTokens": 1093,
+      "attributedOutputTokens": 1583,
+      "attributedCacheReadTokens": 803500,
+      "attributedCacheCreateTokens": 45000,
+      "attributedTotalTokens": 851176,
+      "attributedCostUsd": 4.7562,
+      "costComplete": false,
+      "costCalls": 7,
+      "sessionTotalTokens": 851206,
+      "unattributedTotalTokens": 30,
+      "note": "Signed remainder: 30 tokens of the usage-bucket total were NOT covered by any api_request event (calls recorded before rich OTEL logging, or span/log ingestion drift). Negative = api_request events exceed the session usage totals."
+    },
+    "estimated": false,
+    "note": "Grouped from the per-call api_request ground truth (exact usage buckets + cost_usd per call). Calls carrying no value for a dimension are in that dimension's pinned unattributed bucket — counted, never dropped.",
+    "days": 7,
+    "coverage": {
+      "sessionsConsidered": 3,
+      "claudeCodeSessions": 2,
+      "sessionsScanned": 2,
+      "sessionsSkipped": 0,
+      "scanCap": 50,
+      "stoppedEarly": false,
+      "complete": true,
+      "note": "Complete coverage: all 2 Claude Code sessions in the last 7d were scanned (3 total sessions considered)."
+    }
+  },
+  "toolWindow90": {
+    "sessionsScanned": 2,
+    "apiRequestCalls": 8,
+    "hasAttribution": true,
+    "dimensions": [
+      {
+        "dimension": "querySource",
+        "rows": [
+          {
+            "dimension": "querySource",
+            "key": "repl_main_thread",
+            "unattributed": false,
+            "calls": 2,
+            "inputTokens": 150,
+            "outputTokens": 300,
+            "cacheReadTokens": 90000,
+            "cacheCreateTokens": 5000,
+            "totalTokens": 95450,
+            "costUsd": 0.1734,
+            "costKnown": true
+          },
+          {
+            "dimension": "querySource",
+            "key": "agent",
+            "unattributed": false,
+            "calls": 4,
+            "inputTokens": 23,
+            "outputTokens": 43,
+            "cacheReadTokens": 10500,
+            "cacheCreateTokens": 0,
+            "totalTokens": 10566,
+            "costUsd": 0.015,
+            "costKnown": true
+          },
+          {
+            "dimension": "querySource",
+            "key": "compact",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 20,
+            "outputTokens": 40,
+            "cacheReadTokens": 3000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 3060,
+            "costUsd": 0,
+            "costKnown": false
+          },
+          {
+            "dimension": "querySource",
+            "key": "(unattributed)",
+            "unattributed": true,
+            "calls": 1,
+            "inputTokens": 900,
+            "outputTokens": 1200,
+            "cacheReadTokens": 700000,
+            "cacheCreateTokens": 40000,
+            "totalTokens": 742100,
+            "costUsd": 4.5678,
+            "costKnown": true
+          }
+        ],
+        "attributedCalls": 7,
+        "unattributedCalls": 1
+      },
+      {
+        "dimension": "agent",
+        "rows": [
+          {
+            "dimension": "agent",
+            "key": "explore",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 10,
+            "outputTokens": 30,
+            "cacheReadTokens": 8000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 8040,
+            "costUsd": 0.01,
+            "costKnown": true
+          },
+          {
+            "dimension": "agent",
+            "key": "(no agent)",
+            "unattributed": true,
+            "calls": 7,
+            "inputTokens": 1083,
+            "outputTokens": 1553,
+            "cacheReadTokens": 795500,
+            "cacheCreateTokens": 45000,
+            "totalTokens": 843136,
+            "costUsd": 4.7462,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 1,
+        "unattributedCalls": 7
+      },
+      {
+        "dimension": "skill",
+        "rows": [
+          {
+            "dimension": "skill",
+            "key": "ponytail",
+            "unattributed": false,
+            "calls": 2,
+            "inputTokens": 150,
+            "outputTokens": 300,
+            "cacheReadTokens": 90000,
+            "cacheCreateTokens": 5000,
+            "totalTokens": 95450,
+            "costUsd": 0.1734,
+            "costKnown": true
+          },
+          {
+            "dimension": "skill",
+            "key": "tldr-code",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 10,
+            "outputTokens": 30,
+            "cacheReadTokens": 8000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 8040,
+            "costUsd": 0.01,
+            "costKnown": true
+          },
+          {
+            "dimension": "skill",
+            "key": "(no skill)",
+            "unattributed": true,
+            "calls": 5,
+            "inputTokens": 933,
+            "outputTokens": 1253,
+            "cacheReadTokens": 705500,
+            "cacheCreateTokens": 40000,
+            "totalTokens": 747686,
+            "costUsd": 4.5728,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 3,
+        "unattributedCalls": 5
+      },
+      {
+        "dimension": "plugin",
+        "rows": [
+          {
+            "dimension": "plugin",
+            "key": "ponytail",
+            "unattributed": false,
+            "calls": 2,
+            "inputTokens": 150,
+            "outputTokens": 300,
+            "cacheReadTokens": 90000,
+            "cacheCreateTokens": 5000,
+            "totalTokens": 95450,
+            "costUsd": 0.1734,
+            "costKnown": true
+          },
+          {
+            "dimension": "plugin",
+            "key": "tldr",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 10,
+            "outputTokens": 30,
+            "cacheReadTokens": 8000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 8040,
+            "costUsd": 0.01,
+            "costKnown": true
+          },
+          {
+            "dimension": "plugin",
+            "key": "(no plugin)",
+            "unattributed": true,
+            "calls": 5,
+            "inputTokens": 933,
+            "outputTokens": 1253,
+            "cacheReadTokens": 705500,
+            "cacheCreateTokens": 40000,
+            "totalTokens": 747686,
+            "costUsd": 4.5728,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 3,
+        "unattributedCalls": 5
+      },
+      {
+        "dimension": "mcpServer",
+        "rows": [
+          {
+            "dimension": "mcpServer",
+            "key": "srv-a",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 5,
+            "outputTokens": 5,
+            "cacheReadTokens": 1000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 1010,
+            "costUsd": 0.002,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpServer",
+            "key": "srv-b",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 5,
+            "outputTokens": 5,
+            "cacheReadTokens": 1000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 1010,
+            "costUsd": 0.002,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpServer",
+            "key": "(no MCP server)",
+            "unattributed": true,
+            "calls": 6,
+            "inputTokens": 1083,
+            "outputTokens": 1573,
+            "cacheReadTokens": 801500,
+            "cacheCreateTokens": 45000,
+            "totalTokens": 849156,
+            "costUsd": 4.7522,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 2,
+        "unattributedCalls": 6
+      },
+      {
+        "dimension": "mcpTool",
+        "rows": [
+          {
+            "dimension": "mcpTool",
+            "key": "srv-a/search",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 5,
+            "outputTokens": 5,
+            "cacheReadTokens": 1000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 1010,
+            "costUsd": 0.002,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpTool",
+            "key": "srv-b/search",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 5,
+            "outputTokens": 5,
+            "cacheReadTokens": 1000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 1010,
+            "costUsd": 0.002,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpTool",
+            "key": "?/orphan",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 3,
+            "outputTokens": 3,
+            "cacheReadTokens": 500,
+            "cacheCreateTokens": 0,
+            "totalTokens": 506,
+            "costUsd": 0.001,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpTool",
+            "key": "(no MCP tool)",
+            "unattributed": true,
+            "calls": 5,
+            "inputTokens": 1080,
+            "outputTokens": 1570,
+            "cacheReadTokens": 801000,
+            "cacheCreateTokens": 45000,
+            "totalTokens": 848650,
+            "costUsd": 4.7512,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 3,
+        "unattributedCalls": 5
+      }
+    ],
+    "reconciliation": {
+      "apiRequestCalls": 8,
+      "attributedInputTokens": 1093,
+      "attributedOutputTokens": 1583,
+      "attributedCacheReadTokens": 803500,
+      "attributedCacheCreateTokens": 45000,
+      "attributedTotalTokens": 851176,
+      "attributedCostUsd": 4.7562,
+      "costComplete": false,
+      "costCalls": 7,
+      "sessionTotalTokens": 851206,
+      "unattributedTotalTokens": 30,
+      "note": "Signed remainder: 30 tokens of the usage-bucket total were NOT covered by any api_request event (calls recorded before rich OTEL logging, or span/log ingestion drift). Negative = api_request events exceed the session usage totals."
+    },
+    "estimated": false,
+    "note": "Grouped from the per-call api_request ground truth (exact usage buckets + cost_usd per call). Calls carrying no value for a dimension are in that dimension's pinned unattributed bucket — counted, never dropped.",
+    "days": 90,
+    "coverage": {
+      "sessionsConsidered": 3,
+      "claudeCodeSessions": 2,
+      "sessionsScanned": 2,
+      "sessionsSkipped": 0,
+      "scanCap": 50,
+      "stoppedEarly": false,
+      "complete": true,
+      "note": "Complete coverage: all 2 Claude Code sessions in the last 90d were scanned (3 total sessions considered)."
+    }
+  },
+  "toolDays0": {
+    "sessionsScanned": 2,
+    "apiRequestCalls": 8,
+    "hasAttribution": true,
+    "dimensions": [
+      {
+        "dimension": "querySource",
+        "rows": [
+          {
+            "dimension": "querySource",
+            "key": "repl_main_thread",
+            "unattributed": false,
+            "calls": 2,
+            "inputTokens": 150,
+            "outputTokens": 300,
+            "cacheReadTokens": 90000,
+            "cacheCreateTokens": 5000,
+            "totalTokens": 95450,
+            "costUsd": 0.1734,
+            "costKnown": true
+          },
+          {
+            "dimension": "querySource",
+            "key": "agent",
+            "unattributed": false,
+            "calls": 4,
+            "inputTokens": 23,
+            "outputTokens": 43,
+            "cacheReadTokens": 10500,
+            "cacheCreateTokens": 0,
+            "totalTokens": 10566,
+            "costUsd": 0.015,
+            "costKnown": true
+          },
+          {
+            "dimension": "querySource",
+            "key": "compact",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 20,
+            "outputTokens": 40,
+            "cacheReadTokens": 3000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 3060,
+            "costUsd": 0,
+            "costKnown": false
+          },
+          {
+            "dimension": "querySource",
+            "key": "(unattributed)",
+            "unattributed": true,
+            "calls": 1,
+            "inputTokens": 900,
+            "outputTokens": 1200,
+            "cacheReadTokens": 700000,
+            "cacheCreateTokens": 40000,
+            "totalTokens": 742100,
+            "costUsd": 4.5678,
+            "costKnown": true
+          }
+        ],
+        "attributedCalls": 7,
+        "unattributedCalls": 1
+      },
+      {
+        "dimension": "agent",
+        "rows": [
+          {
+            "dimension": "agent",
+            "key": "explore",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 10,
+            "outputTokens": 30,
+            "cacheReadTokens": 8000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 8040,
+            "costUsd": 0.01,
+            "costKnown": true
+          },
+          {
+            "dimension": "agent",
+            "key": "(no agent)",
+            "unattributed": true,
+            "calls": 7,
+            "inputTokens": 1083,
+            "outputTokens": 1553,
+            "cacheReadTokens": 795500,
+            "cacheCreateTokens": 45000,
+            "totalTokens": 843136,
+            "costUsd": 4.7462,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 1,
+        "unattributedCalls": 7
+      },
+      {
+        "dimension": "skill",
+        "rows": [
+          {
+            "dimension": "skill",
+            "key": "ponytail",
+            "unattributed": false,
+            "calls": 2,
+            "inputTokens": 150,
+            "outputTokens": 300,
+            "cacheReadTokens": 90000,
+            "cacheCreateTokens": 5000,
+            "totalTokens": 95450,
+            "costUsd": 0.1734,
+            "costKnown": true
+          },
+          {
+            "dimension": "skill",
+            "key": "tldr-code",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 10,
+            "outputTokens": 30,
+            "cacheReadTokens": 8000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 8040,
+            "costUsd": 0.01,
+            "costKnown": true
+          },
+          {
+            "dimension": "skill",
+            "key": "(no skill)",
+            "unattributed": true,
+            "calls": 5,
+            "inputTokens": 933,
+            "outputTokens": 1253,
+            "cacheReadTokens": 705500,
+            "cacheCreateTokens": 40000,
+            "totalTokens": 747686,
+            "costUsd": 4.5728,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 3,
+        "unattributedCalls": 5
+      },
+      {
+        "dimension": "plugin",
+        "rows": [
+          {
+            "dimension": "plugin",
+            "key": "ponytail",
+            "unattributed": false,
+            "calls": 2,
+            "inputTokens": 150,
+            "outputTokens": 300,
+            "cacheReadTokens": 90000,
+            "cacheCreateTokens": 5000,
+            "totalTokens": 95450,
+            "costUsd": 0.1734,
+            "costKnown": true
+          },
+          {
+            "dimension": "plugin",
+            "key": "tldr",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 10,
+            "outputTokens": 30,
+            "cacheReadTokens": 8000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 8040,
+            "costUsd": 0.01,
+            "costKnown": true
+          },
+          {
+            "dimension": "plugin",
+            "key": "(no plugin)",
+            "unattributed": true,
+            "calls": 5,
+            "inputTokens": 933,
+            "outputTokens": 1253,
+            "cacheReadTokens": 705500,
+            "cacheCreateTokens": 40000,
+            "totalTokens": 747686,
+            "costUsd": 4.5728,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 3,
+        "unattributedCalls": 5
+      },
+      {
+        "dimension": "mcpServer",
+        "rows": [
+          {
+            "dimension": "mcpServer",
+            "key": "srv-a",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 5,
+            "outputTokens": 5,
+            "cacheReadTokens": 1000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 1010,
+            "costUsd": 0.002,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpServer",
+            "key": "srv-b",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 5,
+            "outputTokens": 5,
+            "cacheReadTokens": 1000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 1010,
+            "costUsd": 0.002,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpServer",
+            "key": "(no MCP server)",
+            "unattributed": true,
+            "calls": 6,
+            "inputTokens": 1083,
+            "outputTokens": 1573,
+            "cacheReadTokens": 801500,
+            "cacheCreateTokens": 45000,
+            "totalTokens": 849156,
+            "costUsd": 4.7522,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 2,
+        "unattributedCalls": 6
+      },
+      {
+        "dimension": "mcpTool",
+        "rows": [
+          {
+            "dimension": "mcpTool",
+            "key": "srv-a/search",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 5,
+            "outputTokens": 5,
+            "cacheReadTokens": 1000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 1010,
+            "costUsd": 0.002,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpTool",
+            "key": "srv-b/search",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 5,
+            "outputTokens": 5,
+            "cacheReadTokens": 1000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 1010,
+            "costUsd": 0.002,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpTool",
+            "key": "?/orphan",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 3,
+            "outputTokens": 3,
+            "cacheReadTokens": 500,
+            "cacheCreateTokens": 0,
+            "totalTokens": 506,
+            "costUsd": 0.001,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpTool",
+            "key": "(no MCP tool)",
+            "unattributed": true,
+            "calls": 5,
+            "inputTokens": 1080,
+            "outputTokens": 1570,
+            "cacheReadTokens": 801000,
+            "cacheCreateTokens": 45000,
+            "totalTokens": 848650,
+            "costUsd": 4.7512,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 3,
+        "unattributedCalls": 5
+      }
+    ],
+    "reconciliation": {
+      "apiRequestCalls": 8,
+      "attributedInputTokens": 1093,
+      "attributedOutputTokens": 1583,
+      "attributedCacheReadTokens": 803500,
+      "attributedCacheCreateTokens": 45000,
+      "attributedTotalTokens": 851176,
+      "attributedCostUsd": 4.7562,
+      "costComplete": false,
+      "costCalls": 7,
+      "sessionTotalTokens": 851206,
+      "unattributedTotalTokens": 30,
+      "note": "Signed remainder: 30 tokens of the usage-bucket total were NOT covered by any api_request event (calls recorded before rich OTEL logging, or span/log ingestion drift). Negative = api_request events exceed the session usage totals."
+    },
+    "estimated": false,
+    "note": "Grouped from the per-call api_request ground truth (exact usage buckets + cost_usd per call). Calls carrying no value for a dimension are in that dimension's pinned unattributed bucket — counted, never dropped.",
+    "days": 1,
+    "coverage": {
+      "sessionsConsidered": 3,
+      "claudeCodeSessions": 2,
+      "sessionsScanned": 2,
+      "sessionsSkipped": 0,
+      "scanCap": 50,
+      "stoppedEarly": false,
+      "complete": true,
+      "note": "Complete coverage: all 2 Claude Code sessions in the last 1d were scanned (3 total sessions considered)."
+    }
+  },
+  "toolDays999": {
+    "sessionsScanned": 2,
+    "apiRequestCalls": 8,
+    "hasAttribution": true,
+    "dimensions": [
+      {
+        "dimension": "querySource",
+        "rows": [
+          {
+            "dimension": "querySource",
+            "key": "repl_main_thread",
+            "unattributed": false,
+            "calls": 2,
+            "inputTokens": 150,
+            "outputTokens": 300,
+            "cacheReadTokens": 90000,
+            "cacheCreateTokens": 5000,
+            "totalTokens": 95450,
+            "costUsd": 0.1734,
+            "costKnown": true
+          },
+          {
+            "dimension": "querySource",
+            "key": "agent",
+            "unattributed": false,
+            "calls": 4,
+            "inputTokens": 23,
+            "outputTokens": 43,
+            "cacheReadTokens": 10500,
+            "cacheCreateTokens": 0,
+            "totalTokens": 10566,
+            "costUsd": 0.015,
+            "costKnown": true
+          },
+          {
+            "dimension": "querySource",
+            "key": "compact",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 20,
+            "outputTokens": 40,
+            "cacheReadTokens": 3000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 3060,
+            "costUsd": 0,
+            "costKnown": false
+          },
+          {
+            "dimension": "querySource",
+            "key": "(unattributed)",
+            "unattributed": true,
+            "calls": 1,
+            "inputTokens": 900,
+            "outputTokens": 1200,
+            "cacheReadTokens": 700000,
+            "cacheCreateTokens": 40000,
+            "totalTokens": 742100,
+            "costUsd": 4.5678,
+            "costKnown": true
+          }
+        ],
+        "attributedCalls": 7,
+        "unattributedCalls": 1
+      },
+      {
+        "dimension": "agent",
+        "rows": [
+          {
+            "dimension": "agent",
+            "key": "explore",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 10,
+            "outputTokens": 30,
+            "cacheReadTokens": 8000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 8040,
+            "costUsd": 0.01,
+            "costKnown": true
+          },
+          {
+            "dimension": "agent",
+            "key": "(no agent)",
+            "unattributed": true,
+            "calls": 7,
+            "inputTokens": 1083,
+            "outputTokens": 1553,
+            "cacheReadTokens": 795500,
+            "cacheCreateTokens": 45000,
+            "totalTokens": 843136,
+            "costUsd": 4.7462,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 1,
+        "unattributedCalls": 7
+      },
+      {
+        "dimension": "skill",
+        "rows": [
+          {
+            "dimension": "skill",
+            "key": "ponytail",
+            "unattributed": false,
+            "calls": 2,
+            "inputTokens": 150,
+            "outputTokens": 300,
+            "cacheReadTokens": 90000,
+            "cacheCreateTokens": 5000,
+            "totalTokens": 95450,
+            "costUsd": 0.1734,
+            "costKnown": true
+          },
+          {
+            "dimension": "skill",
+            "key": "tldr-code",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 10,
+            "outputTokens": 30,
+            "cacheReadTokens": 8000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 8040,
+            "costUsd": 0.01,
+            "costKnown": true
+          },
+          {
+            "dimension": "skill",
+            "key": "(no skill)",
+            "unattributed": true,
+            "calls": 5,
+            "inputTokens": 933,
+            "outputTokens": 1253,
+            "cacheReadTokens": 705500,
+            "cacheCreateTokens": 40000,
+            "totalTokens": 747686,
+            "costUsd": 4.5728,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 3,
+        "unattributedCalls": 5
+      },
+      {
+        "dimension": "plugin",
+        "rows": [
+          {
+            "dimension": "plugin",
+            "key": "ponytail",
+            "unattributed": false,
+            "calls": 2,
+            "inputTokens": 150,
+            "outputTokens": 300,
+            "cacheReadTokens": 90000,
+            "cacheCreateTokens": 5000,
+            "totalTokens": 95450,
+            "costUsd": 0.1734,
+            "costKnown": true
+          },
+          {
+            "dimension": "plugin",
+            "key": "tldr",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 10,
+            "outputTokens": 30,
+            "cacheReadTokens": 8000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 8040,
+            "costUsd": 0.01,
+            "costKnown": true
+          },
+          {
+            "dimension": "plugin",
+            "key": "(no plugin)",
+            "unattributed": true,
+            "calls": 5,
+            "inputTokens": 933,
+            "outputTokens": 1253,
+            "cacheReadTokens": 705500,
+            "cacheCreateTokens": 40000,
+            "totalTokens": 747686,
+            "costUsd": 4.5728,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 3,
+        "unattributedCalls": 5
+      },
+      {
+        "dimension": "mcpServer",
+        "rows": [
+          {
+            "dimension": "mcpServer",
+            "key": "srv-a",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 5,
+            "outputTokens": 5,
+            "cacheReadTokens": 1000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 1010,
+            "costUsd": 0.002,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpServer",
+            "key": "srv-b",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 5,
+            "outputTokens": 5,
+            "cacheReadTokens": 1000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 1010,
+            "costUsd": 0.002,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpServer",
+            "key": "(no MCP server)",
+            "unattributed": true,
+            "calls": 6,
+            "inputTokens": 1083,
+            "outputTokens": 1573,
+            "cacheReadTokens": 801500,
+            "cacheCreateTokens": 45000,
+            "totalTokens": 849156,
+            "costUsd": 4.7522,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 2,
+        "unattributedCalls": 6
+      },
+      {
+        "dimension": "mcpTool",
+        "rows": [
+          {
+            "dimension": "mcpTool",
+            "key": "srv-a/search",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 5,
+            "outputTokens": 5,
+            "cacheReadTokens": 1000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 1010,
+            "costUsd": 0.002,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpTool",
+            "key": "srv-b/search",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 5,
+            "outputTokens": 5,
+            "cacheReadTokens": 1000,
+            "cacheCreateTokens": 0,
+            "totalTokens": 1010,
+            "costUsd": 0.002,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpTool",
+            "key": "?/orphan",
+            "unattributed": false,
+            "calls": 1,
+            "inputTokens": 3,
+            "outputTokens": 3,
+            "cacheReadTokens": 500,
+            "cacheCreateTokens": 0,
+            "totalTokens": 506,
+            "costUsd": 0.001,
+            "costKnown": true
+          },
+          {
+            "dimension": "mcpTool",
+            "key": "(no MCP tool)",
+            "unattributed": true,
+            "calls": 5,
+            "inputTokens": 1080,
+            "outputTokens": 1570,
+            "cacheReadTokens": 801000,
+            "cacheCreateTokens": 45000,
+            "totalTokens": 848650,
+            "costUsd": 4.7512,
+            "costKnown": false
+          }
+        ],
+        "attributedCalls": 3,
+        "unattributedCalls": 5
+      }
+    ],
+    "reconciliation": {
+      "apiRequestCalls": 8,
+      "attributedInputTokens": 1093,
+      "attributedOutputTokens": 1583,
+      "attributedCacheReadTokens": 803500,
+      "attributedCacheCreateTokens": 45000,
+      "attributedTotalTokens": 851176,
+      "attributedCostUsd": 4.7562,
+      "costComplete": false,
+      "costCalls": 7,
+      "sessionTotalTokens": 851206,
+      "unattributedTotalTokens": 30,
+      "note": "Signed remainder: 30 tokens of the usage-bucket total were NOT covered by any api_request event (calls recorded before rich OTEL logging, or span/log ingestion drift). Negative = api_request events exceed the session usage totals."
+    },
+    "estimated": false,
+    "note": "Grouped from the per-call api_request ground truth (exact usage buckets + cost_usd per call). Calls carrying no value for a dimension are in that dimension's pinned unattributed bucket — counted, never dropped.",
+    "days": 90,
+    "coverage": {
+      "sessionsConsidered": 3,
+      "claudeCodeSessions": 2,
+      "sessionsScanned": 2,
+      "sessionsSkipped": 0,
+      "scanCap": 50,
+      "stoppedEarly": false,
+      "complete": true,
+      "note": "Complete coverage: all 2 Claude Code sessions in the last 90d were scanned (3 total sessions considered)."
+    }
+  }
+}

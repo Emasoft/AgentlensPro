@@ -64,6 +64,7 @@ pub mod spawn_rollup;
 pub mod statusline_store;
 pub mod summarize;
 pub mod token_estimator;
+pub mod tokens_by_cause;
 pub mod ui;
 pub mod update_payload;
 

@@ -1398,6 +1398,35 @@ async fn handle(
                         .map_err(|e| format!("skill attribution join failed: {e}"))?;
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
+                    "get_cost_by_cause" => {
+                        // Up to CAUSE_SCAN_CAP transcript reparses, so the whole scan goes on
+                        // spawn_blocking with the lock released — and the shaper carries the same
+                        // 20s budget the TS uses, so a post-restart cold pool degrades to a labelled
+                        // SAMPLE instead of stalling the request.
+                        let now = crate::now_ms();
+                        let sessions = {
+                            let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                            let summary = st.build_session_summary(now as f64);
+                            summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default()
+                        };
+                        let (a, st2) = (args.clone(), state.clone());
+                        let payload = tokio::task::spawn_blocking(move || {
+                            let timeline_of = |c: &Value| -> Vec<Value> {
+                                let Some(sid) = c.get("sessionId").and_then(Value::as_str) else { return Vec::new() };
+                                // Re-locked PER SESSION, never held across the pool: resolution can
+                                // reparse a multi-MB transcript and one held lock would stall every
+                                // other request for the whole scan.
+                                let Ok(mut st) = st2.lock() else { return Vec::new() };
+                                resolve_session_card(&mut st, sid, now)
+                                    .and_then(|c| c.get("timeline").and_then(Value::as_array).cloned())
+                                    .unwrap_or_default()
+                            };
+                            crate::mcp_tools::get_cost_by_cause(&sessions, &timeline_of, &a, now as f64, 20_000.0)
+                        })
+                        .await
+                        .map_err(|e| format!("cost-by-cause scan join failed: {e}"))?;
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
+                    }
                     "get_agent_tokens" => {
                         // The timeline is resolved LAZILY, per matched card: resolution can reparse
                         // a multi-MB transcript, and every early return here (not found, ambiguous,
