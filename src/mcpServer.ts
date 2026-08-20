@@ -407,7 +407,11 @@ export function buildScanCoverage(considered: number, withLog: number, scanned: 
 
 // ── Tool definitions ──────────────────────────────────────────────────────────
 
-const TOOLS = [
+// EXPORTED so the Rust port's `tools/list` can be GENERATED from this one source rather than
+// hand-transcribed (TRDD-DMWOBWFH P4x). ~1,200 lines of pure schema data is exactly the kind of
+// thing a manual port gets subtly wrong, and the schemas are a FROZEN wire surface the CLI reads
+// live. Export only — no behaviour change.
+export const TOOLS = [
   {
     name: 'get_recent_sessions',
     description:

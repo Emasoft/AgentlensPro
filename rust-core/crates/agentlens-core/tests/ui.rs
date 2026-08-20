@@ -1405,3 +1405,43 @@ fn callcontext_route_resolves_a_body_and_backfills_the_account() {
     assert!(resp.starts_with("HTTP/1.1 200"), "{resp}");
     assert!(serde_json::from_str::<serde_json::Value>(body_of(&resp)).unwrap()["callContext"].is_null());
 }
+
+/// P4x — the MCP endpoint. tools/list must serve all 53 FROZEN schemas byte-identically to the TS
+/// (they are generated from it, not transcribed), and an unimplemented tool must SAY SO rather
+/// than answering emptily, which would read as a working tool that found nothing.
+#[test]
+fn mcp_endpoint_serves_the_frozen_tool_schemas_and_names_unported_tools() {
+    let (_otlp, ui, _state) = start_servers();
+    let rpc = |method: &str, params: &str| -> serde_json::Value {
+        let body = format!(r#"{{"jsonrpc":"2.0","id":1,"method":"{method}","params":{params}}}"#);
+        serde_json::from_str(body_of(&post(ui, "/mcp", &body))).expect("mcp must answer JSON")
+    };
+
+    let init = rpc("initialize", "{}");
+    assert_eq!(init["result"]["protocolVersion"], "2024-11-05", "{init}");
+
+    let listed = rpc("tools/list", "{}");
+    let tools = listed["result"]["tools"].as_array().expect("tools array");
+    assert_eq!(tools.len(), 53, "the frozen surface is 53 tools");
+    // Compare against the generated asset itself: the schemas must cross the wire unchanged.
+    let asset: serde_json::Value =
+        serde_json::from_str(include_str!("../assets/mcp-tools.json")).unwrap();
+    assert_eq!(&listed["result"], &asset, "tools/list must serve the generated asset VERBATIM");
+    assert!(
+        tools.iter().all(|t| t.get("name").is_some() && t.get("inputSchema").is_some()),
+        "every tool carries a name and an inputSchema"
+    );
+
+    // A REAL tool with no Rust implementation yet: an explicit error naming the tool.
+    let called = rpc("tools/call", r#"{"name":"get_recent_sessions","arguments":{}}"#);
+    let msg = called["error"]["message"].as_str().unwrap_or("");
+    assert!(msg.contains("get_recent_sessions") && msg.contains("not yet implemented"), "{called}");
+
+    // A tool that does not exist at all is a DIFFERENT error — the caller must be able to tell
+    // "you typo'd" from "we have not ported that yet".
+    let bogus = rpc("tools/call", r#"{"name":"no_such_tool","arguments":{}}"#);
+    assert!(bogus["error"]["message"].as_str().unwrap_or("").contains("unknown tool"), "{bogus}");
+
+    let bad = rpc("nope/nope", "{}");
+    assert_eq!(bad["error"]["code"], -32601, "{bad}");
+}

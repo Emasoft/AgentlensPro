@@ -1,0 +1,1255 @@
+{
+ "tools": [
+  {
+   "name": "get_recent_sessions",
+   "description": "Returns { sessions, collectorGaps }: recent AgentlensPro session summaries — cost, turns, model, prompt excerpt, top tools used, loop signals — plus collectorGaps, any windows where the collector was offline and telemetry was lost. Ranked by LAST ACTIVITY (not start date), so long-running sessions still emitting rank first; rows carry lastActive and active:true when live within the last 5 minutes. Use this to orient yourself to recent work (and to know if coverage has gaps) before starting a new task.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "limit": {
+      "type": "number",
+      "description": "Max sessions to return (default 10, max 50)"
+     },
+     "agent": {
+      "type": "string",
+      "description": "Filter by agent: copilot | claude_code | codex"
+     },
+     "workspace": {
+      "type": "string",
+      "description": "Filter by workspace path prefix"
+     }
+    }
+   }
+  },
+  {
+   "name": "get_workspace_patterns",
+   "description": "Returns aggregate patterns across all sessions: most-accessed files, average cost and turn count, common efficiency problems, top tools. Use this to understand the codebase context before starting work.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "workspace": {
+      "type": "string",
+      "description": "Filter by workspace path prefix"
+     },
+     "days": {
+      "type": "number",
+      "description": "Only include sessions from the last N days (default: all)"
+     }
+    }
+   }
+  },
+  {
+   "name": "get_window_eta",
+   "description": "HOW LONG until the account exhausts its rate-limit windows, projected on the current COST rate (Anthropic meters the 5h/7d windows by cost, not raw tokens — cache-read is weighted ~0.1×, so a token projection is wrong). Returns both windows with consumed $ vs the calibrated $ cap, %% used, the account's current $/min (over `rate_window_min`, default 30), an ETA in h/m and an ISO exhaustion time, and marks which window EXHAUSTS FIRST. The rate is THIS account's own burn (rate limits are per OAuth account); capacity is the account's observed calibration, else a same-plan account's as a labeled proxy, else the verdict says no ETA can be projected (never guessed). Default account is `current`. Result includes a preformatted `text`.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "account": {
+      "type": "string",
+      "description": "`current` (default) | `previous` | an account_uuid prefix | an email"
+     },
+     "rate_window_min": {
+      "type": "number",
+      "description": "Minutes of recent history the $/min rate is measured over (default 30). Smaller = more reactive, larger = smoother"
+     }
+    }
+   }
+  },
+  {
+   "name": "get_account_burners",
+   "description": "WHO exhausted a given OAuth account's rate-limit windows — BOTH the 5h and the 7d window in one call, each as a PROJECT/agent table (sessions grouped by workspace, so a restarted agent stays one row) with share%, billable-weighted equiv, cost, explicit cache-created and cache-read token columns, session count and top model; per-session rows are in the JSON too. The window nearer/over its calibrated capacity at the rotation moment is marked MOST LIKELY EXHAUSTED (the rotation trigger) — capacity comes from the account's own observed calibration, else a same-plan account's as a labeled proxy, else the verdict says undetermined. Default account is `previous` (the one rotated away from), windows end at its rotation-out moment. Attribution is TIME-based against the machine account-state timeline, so a session alive across a rotation splits correctly between accounts. Coverage gaps are disclosed. Result includes a preformatted `text` with both tables.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "account": {
+      "type": "string",
+      "description": "`previous` (default) | `current` | an account_uuid prefix | an email"
+     },
+     "interval": {
+      "type": "string",
+      "description": "Window end: `last` (default — the account's rotation-out moment, the window it last filled) | `current` (ongoing, ends now) | an ISO-8601 date (the window ending at/including that instant)"
+     },
+     "limit": {
+      "type": "number",
+      "description": "Max ranked rows per table (default 15)"
+     }
+    }
+   }
+  },
+  {
+   "name": "get_body_writers",
+   "description": "Identifies WHICH sessions are writing raw OTEL API bodies (OTEL_LOG_RAW_API_BODIES) and ranks them by recent write rate, then total written. A session keeps its launch-time env until restarted, so the `active` rows are the terminals still burning disk RIGHT NOW. Attribution unit is the request body (responses carry no session metadata and are aggregated separately). Totals are the exact union of the ingested store history and not-yet-ingested live files — never double-counted. Result includes a preformatted `text` table.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "window_min": {
+      "type": "number",
+      "description": "Rate window in minutes (default 30)"
+     },
+     "active_min": {
+      "type": "number",
+      "description": "A session writing within this many minutes is flagged active (default 10)"
+     },
+     "limit": {
+      "type": "number",
+      "description": "Max ranked writers returned (default 20)"
+     }
+    }
+   }
+  },
+  {
+   "name": "get_session_detail",
+   "description": "Returns the full timeline (LLM calls, tool calls, file edits) for one session. Use this to learn from a specific past session in detail.",
+   "inputSchema": {
+    "type": "object",
+    "required": [
+     "sessionId"
+    ],
+    "properties": {
+     "sessionId": {
+      "type": "string",
+      "description": "Session ID from get_recent_sessions"
+     }
+    }
+   }
+  },
+  {
+   "name": "find_relevant_context",
+   "description": "Given a task description, keyword-matches against past session prompts and returns files accessed in similar sessions, estimated cost/turns, and known traps. Reliable for established workflows (e.g. \"add auth\", \"fix sidebar tests\"); unreliable for novel tasks where keyword overlap is weak — file suggestions may pull in unrelated sessions. Treat results as a sanity check, not a reading list.",
+   "inputSchema": {
+    "type": "object",
+    "required": [
+     "task"
+    ],
+    "properties": {
+     "task": {
+      "type": "string",
+      "description": "Short description of the task you are about to start"
+     },
+     "workspace": {
+      "type": "string",
+      "description": "Filter sessions by workspace path prefix"
+     }
+    }
+   }
+  },
+  {
+   "name": "get_efficiency_report",
+   "description": "Returns efficiency trends: are sessions getting more or less expensive? Which agent/model combinations are most efficient? What are the recurring loop signals and efficiency insights? Use this to understand systemic patterns.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "workspace": {
+      "type": "string",
+      "description": "Filter by workspace path prefix"
+     },
+     "days": {
+      "type": "number",
+      "description": "Analyse sessions from last N days (default 30)"
+     }
+    }
+   }
+  },
+  {
+   "name": "get_instruction_suggestions",
+   "description": "Returns pending suggestions for improving the agent instruction file (CLAUDE.md, AGENTS.md, etc.) for the specified workspace. Suggestions are derived from patterns in past sessions and include ready-to-paste text. Use this at the start of a session to check for improvements before beginning work. workspace is REQUIRED — cross-workspace suggestions are not meaningful.",
+   "inputSchema": {
+    "type": "object",
+    "required": [
+     "workspace"
+    ],
+    "properties": {
+     "workspace": {
+      "type": "string",
+      "description": "Absolute path of the workspace root (required)"
+     }
+    }
+   }
+  },
+  {
+   "name": "get_context_composition",
+   "description": "Returns WHAT occupies the context window per turn for one session — the injected blocks (hook injections, skill/tool/agent/mcp catalogs, file reads, task reminders) ranked by approximate token weight. Reconstructed on demand from the local Claude .jsonl; token figures are tokenizer estimates (labeled estimated). Pass a turn to drill into a single turn. Use this to answer \"why is this turn's prompt so big / what is inflating my context\".",
+   "inputSchema": {
+    "type": "object",
+    "required": [
+     "sessionId"
+    ],
+    "properties": {
+     "sessionId": {
+      "type": "string",
+      "description": "Session ID from get_recent_sessions"
+     },
+     "turn": {
+      "type": "number",
+      "description": "Optional 1-based turn to isolate; omit for all turns"
+     }
+    }
+   }
+  },
+  {
+   "name": "get_context_history",
+   "description": "Reconstructs the FULL per-step context history of a session from the raw Claude .jsonl — every content block drillable to its ACTUAL text: system prompt, CLAUDE.md, rules, tool/skill/agent/mcp catalogs, loaded files, tool inputs AND outputs, bash in/out, hook injections, skill/agent prompts, user & assistant messages, reasoning, post-compact summaries, sub-agent outputs, harness/cron injections. Each block carries its own token count + taxonomy (kind) + role; each step carries the usage buckets (input/output/cache-read/cache-creation) + cost + a DIFF vs the previous step (added/changed/removed blocks; firstChangeBlockId = the cache-break point). Progressive: omit turn for per-step summaries; pass turn=N for that step's blocks WITH full text; pass turn=N + blockId for one block's full text. Reconstructs a fork/sub-agent from its parent transcript. This is THE tool to answer \"reconstruct exactly what content consumed the tokens at each call\".",
+   "inputSchema": {
+    "type": "object",
+    "required": [
+     "sessionId"
+    ],
+    "properties": {
+     "sessionId": {
+      "type": "string",
+      "description": "Session ID from get_recent_sessions"
+     },
+     "turn": {
+      "type": "number",
+      "description": "Optional 1-based step/turn to drill into (returns its blocks WITH full text)"
+     },
+     "blockId": {
+      "type": "string",
+      "description": "Optional block id (with turn) to return just that one block's full text"
+     }
+    }
+   }
+  },
+  {
+   "name": "get_conversation",
+   "description": "The NARRATIVE per-turn reader of a session (TRDD-B22NYTOY) — the session as a readable conversation, reconstructed verbatim from its .jsonl: each user prompt, the assistant's thinking and reply text, every tool call with its input AND its paired output, subagent (sidechain) turns labeled, compaction boundaries with exact pre/post/dropped tokens, per-turn wall duration and usage incl. the cache-TTL tier split (5m/1h). Ordered blocks — never merged (use get_context_history for the composition/cost lens instead). Progressive: omit turn for the header + per-turn summaries (role, preview, tools, usage); pass turn=N for that turn VERBATIM (full text); pass turnFrom/turnTo for a bounded verbatim range. Reconstructs a fork/sub-agent from its parent transcript. This is THE tool to answer \"show me what was actually said and done\".",
+   "inputSchema": {
+    "type": "object",
+    "required": [
+     "sessionId"
+    ],
+    "properties": {
+     "sessionId": {
+      "type": "string",
+      "description": "Session ID from get_recent_sessions"
+     },
+     "turn": {
+      "type": "number",
+      "description": "Optional 1-based turn to return VERBATIM (all blocks, full text)"
+     },
+     "turnFrom": {
+      "type": "number",
+      "description": "Optional range start (verbatim, capped to 20 turns per call)"
+     },
+     "turnTo": {
+      "type": "number",
+      "description": "Optional range end (inclusive, with turnFrom)"
+     }
+    }
+   }
+  },
+  {
+   "name": "get_context_growth",
+   "description": "Returns the cumulative context-size trajectory per turn for one session: prompt size, the cache-READ vs cache-CREATED split, new (uncached) input, and the per-turn cache-hit rate. This is the \"why did this turn balloon\" view — a turn with a large cache-CREATED figure re-wrote the prefix instead of reading it. Use get_cache_break_report to name the cause.",
+   "inputSchema": {
+    "type": "object",
+    "required": [
+     "sessionId"
+    ],
+    "properties": {
+     "sessionId": {
+      "type": "string",
+      "description": "Session ID from get_recent_sessions"
+     }
+    }
+   }
+  },
+  {
+   "name": "get_cache_break_report",
+   "description": "Diagnoses prompt-cache breaks. The prompt cache is a PREFIX cache: turn N reuses turn N-1 only up to the first byte that differs; everything after is re-billed as cache_creation at full write rate. For one session (sessionId): per-turn break points, the classified CAUSE (TOOLS_CHANGED, MODEL_SWITCHED, INJECTED_BLOCK_CHANGED, IDLE_TTL_EXPIRY, …), the offending block, wasted tokens/cost, and a remediation hint. For a workspace: the top avoidable-break offenders aggregated across a bounded set of recent sessions.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sessionId": {
+      "type": "string",
+      "description": "One session to diagnose"
+     },
+     "workspace": {
+      "type": "string",
+      "description": "Aggregate offenders across sessions under this workspace prefix instead"
+     }
+    }
+   }
+  },
+  {
+   "name": "get_context_inflation_report",
+   "description": "Ranks the biggest cumulative context contributors (turns × per-turn weight) for a session or workspace, and flags RUNAWAY sources — a block re-injected across many turns (a tool output re-read every turn, a huge injected file, a per-turn hook) that, if it sits in the cached prefix, forces repeated cache-creation. With a sessionId it ALSO itemizes the whole transcript by RESIDENT COST (tokens × turns-resident, compaction-aware): every block — post-compaction summaries, tool outputs riding forward, pasted files, repeated hook/cron injections, messages — ranked with first/last turn, occurrences, a per-kind remediation hint, and a drill pointer into get_context_history; reconciled against the exact per-step usage totals so the unattributed remainder is explicit. Use this to find the structural token sinks.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sessionId": {
+      "type": "string",
+      "description": "One session to analyze"
+     },
+     "workspace": {
+      "type": "string",
+      "description": "Aggregate across sessions under this workspace prefix instead"
+     }
+    }
+   }
+  },
+  {
+   "name": "find_context_hogs",
+   "description": "Returns the top context-consuming sources (files, tool outputs, rules, memories, hook injections, catalogs) ranked by cumulative token cost across a BOUNDED window of sessions. Optional scope filters by workspace path prefix. The cross-session \"what is costing me the most context everywhere\" leaderboard. The scan is a SAMPLE (most-recent log-backed sessions, capped) — read the `coverage` block in the response for exactly what was scanned vs skipped; never treat the totals as full-history figures unless coverage.complete is true.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "scope": {
+      "type": "string",
+      "description": "Optional workspace path prefix to scope the scan"
+     },
+     "topN": {
+      "type": "number",
+      "description": "How many hogs to return (default 15, max 50)"
+     }
+    }
+   }
+  },
+  {
+   "name": "get_subagent_tree",
+   "description": "Returns the sub-agent spawn tree for a session: the parent plus every sub-agent child with its spawn-KIND (fork = cache-warm; fresh / worktree / fleet = cache-cold), model (inherited vs override), the spawning turn, rolled-up total tokens, and cost. Also returns spawnRollup: the fan-out aggregate (child count, total cache-create/cache-read/output, cost, spawn-kind mix) PLUS antipattern detections — FLEET-COLD (≥3 cold children re-billing the inherited prefix), WORKTREE-SCATTER (worktree-isolated cache-heavy children), MODEL-MIX (children on a different model than the parent) — each with its aggregate waste (tokens + $) and a one-line remediation. Pass any node in the tree — the root is resolved automatically. Call this BEFORE fanning out to self-audit the cheaper spawn shape, or after to see fleet cost and cold-start waste.",
+   "inputSchema": {
+    "type": "object",
+    "required": [
+     "sessionId"
+    ],
+    "properties": {
+     "sessionId": {
+      "type": "string",
+      "description": "Any session in the tree (parent or child)"
+     }
+    }
+   }
+  },
+  {
+   "name": "get_agent_tokens",
+   "description": "EXACT tokens + cost for ONE agent. Accepts a bare agent id, its agent-<id> transcript form, or a full sessionId (all case-insensitive); optional parentSessionId scopes the lookup. An ambiguous id returns an error LISTING the candidates — never a silent guess. Returns the four disjoint billing buckets (input / output / cacheRead / cacheCreation), totalTokens (input+output — the same convention as get_subagent_tree children), cost_usd (same pricing tables), spawn metadata (spawnKind / warm / model / parentSessionId / spawnedByTurn), and ccDisplayEquivalent to reconcile with Claude Code's per-agent ↓ footer display: CC's ↓ ≈ cumulativeInputSideTokens (cumulative input + cacheRead + cacheCreation across ALL the agent's turns, launch turn INCLUDED — a fork's turn-1 inherited-prefix cache read dominates it; output is excluded or below CC's 0.1k display rounding). The ↓ figure is VOLUME MOVED, not billing — use cost_usd for spend. lastTurnContextRead is the live context-size proxy (the last turn's input-side buckets). tokensSource/coverageNote carry the log-vs-otel provenance; zero buckets on an async child with no transcript are flagged asyncTokensUnknown (unknown, not measured-free).",
+   "inputSchema": {
+    "type": "object",
+    "required": [
+     "agentId"
+    ],
+    "properties": {
+     "agentId": {
+      "type": "string",
+      "description": "Bare agent id (e.g. a1b2c3…), agent-<id>, or a full sessionId — case-insensitive"
+     },
+     "parentSessionId": {
+      "type": "string",
+      "description": "Optional spawning session id — scopes the lookup when the same agent id matches multiple cards"
+     }
+    }
+   }
+  },
+  {
+   "name": "get_call_context",
+   "description": "Returns the FULL literal context of ONE llm API call, reconstructed from Claude Code's raw OTEL request body ({system, messages[], tools[]}) captured via OTEL_LOG_RAW_API_BODIES. Every element — system prompt (CLAUDE.md/rules tagged), each user/assistant message, tool inputs AND outputs, bash in/out, MCP calls, thinking, the tool catalog — is an ORDERED block drillable to its ACTUAL text with per-block token count (tokenizer estimate, calibrated to usage when possible; see tokenSource) + taxonomy (kind) + role. Identify the call by sessionId + requestId (from the api_request event / an llm_request span) or by spanId. Works for OTEL-only sessions with no local .jsonl. This is THE tool to answer \"show me the exact whole context at THIS specific call\". Returns a clear message (never a spinner) when the raw body was not captured for that call.",
+   "inputSchema": {
+    "type": "object",
+    "required": [
+     "sessionId"
+    ],
+    "properties": {
+     "sessionId": {
+      "type": "string",
+      "description": "Session ID from get_recent_sessions"
+     },
+     "requestId": {
+      "type": "string",
+      "description": "request_id of the call (from the api_request event / llm_request span); omit to use spanId or the latest call"
+     },
+     "spanId": {
+      "type": "string",
+      "description": "spanId of the call's llm_request span (alternative to requestId)"
+     }
+    }
+   }
+  },
+  {
+   "name": "get_cost_by_cause",
+   "description": "Tokens-by-CAUSE attribution rollup — WHO spent the tokens. Groups every claude_code.api_request event by cause dimension (query source → agent → skill → plugin → MCP server → MCP tool) and sums the 4 usage buckets + the EXACT per-call cost_usd, ranked heaviest-first per dimension. Figures are ground truth (per-call usage + cost), not estimates; works for OTEL-only sessions (no .jsonl needed). Complements find_context_hogs (which ranks CONTEXT sources; this ranks per-call CAUSES). Pass sessionId for one session (reconciled against the session usage totals — the unattributed remainder is explicit, never dropped), or omit it for the cross-session leaderboard over the last `days` (default 7) — read the `coverage` block for exactly what was scanned; calls carrying no value for a dimension land in that dimension's pinned \"(no <dim>)\" bucket.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sessionId": {
+      "type": "string",
+      "description": "One session to roll up; omit for the cross-session leaderboard"
+     },
+     "days": {
+      "type": "number",
+      "description": "Leaderboard window in days (default 7, max 90); ignored when sessionId is set"
+     }
+    }
+   }
+  },
+  {
+   "name": "get_burn_status",
+   "description": "Realtime token-burn \"smoke detector\" across ALL live sessions on this machine: rolling tokens/min and $/min (1-min + 5-min windows, global + per hottest session), the rate-limit WINDOW BUDGET (rolling 5h + 7d consumption vs a user-configured capacity, % consumed, and a time-to-exhaustion PROJECTION at the current rate — capacity/pct/projection are null when the capacity is unconfigured, never invented), and any active threshold ALERTS (each naming the session + dominant cause: agent/skill/plugin/mcp/compaction). Each top session also carries its keepWarm cache-gap diagnostic (warm/cold turns vs the ~5-min prompt-cache TTL + wasted write tokens; null without api_request data). Use this to self-throttle before you hit the provider rate-limit wall.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "get_session_status",
+   "description": "One-call self-diagnostic for YOUR session (agents rarely know their own sessionId — pass your workspace path and it resolves the newest LIVE session under that prefix, else the newest overall labeled live:false). Returns current + peak context usage, the 4 usage buckets (last turn), the avg-per-call 5 values, cache-hit rate, last-LLM-call cost, session-total cost, tokens/min rate, the keepWarm cache-gap diagnostic (warm/cold turns vs the ~5-min prompt-cache TTL + the cache-write tokens cold turns wasted; null without api_request data), remaining 5h + 7d rate-limit-window %, and a compact comparison to your previous sessions in the same workspace (cost/turns/cache-hit deltas). For the per-turn context DIFF and composition drill-down, follow up with get_context_history / get_context_composition.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sessionId": {
+      "type": "string",
+      "description": "Your session id if known (exact match)"
+     },
+     "workspace": {
+      "type": "string",
+      "description": "Your workspace path prefix — resolves the newest live session under it"
+     }
+    }
+   }
+  },
+  {
+   "name": "check_cache_expiry",
+   "description": "Has a session's prompt cache EXPIRED? Measures idle time since the session's last LLM (api_request) call and compares it to that session's TTL — 1h for a subscription main conversation, 5min for a subagent (ALWAYS) or a usage-credits/API session — so \"expired\" means the cached prefix was likely evicted and the next request pays a full cache-creation write (~1.25× the prefix). Returns per session: `verdict` (fresh|expired|unknown), `idleHuman` (e.g. \"1h 12m\"), `ttlMin`+`ttlSource`+`ttlBasis` (the TTL and WHY that number — never a bare guess; unknown auth surfaces an \"assumed\" 5-min floor), `lastRequestAt`, and `reason`. Default target = the newest MAIN session OF THE CALLING PROJECT (you rarely know your own id, and a machine-wide pick would silently answer about someone else's repo); pass `all:true` for every session, `sessionId` for one, `project` to name another repo (or `\"\"` for machine-wide), or `thresholdMinutes` to override the TTL with an explicit cutoff (e.g. 60 to probe \"more than 1h idle\"). A `verdict:\"unknown\"` means no LLM request was recorded. For a plain true/false a shell can branch on, use the CLI verb `agentlenspro cache-expired` instead of parsing this payload.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sessionId": {
+      "type": "string",
+      "description": "Check one session by exact id (default: newest main session)"
+     },
+     "all": {
+      "type": "boolean",
+      "description": "Check every known session instead of just the newest main one"
+     },
+     "project": {
+      "type": "string",
+      "description": "Absolute project path — restrict to sessions whose workspace is at or under it. Defaults to the calling working directory; pass \"\" for machine-wide"
+     },
+     "thresholdMinutes": {
+      "type": "number",
+      "description": "Explicit idle cutoff in minutes; overrides the per-session TTL (e.g. 60 = \"> 1h idle\")"
+     }
+    }
+   }
+  },
+  {
+   "name": "get_account_status",
+   "description": "WHICH OAuth account you are on right now + its PLAN, billing MODE, cache-TTL regime, and how much of ITS rate-limit window is left — with a one-line human `summary`. Rate limits are PER ACCOUNT — rotating to a second email does NOT reset the first. Returns: the current account (email/org label, account id); `plan` (e.g. \"Max 5x\"/\"Max 20x\"/\"Pro\" from planType + rateLimitTier); `mode` (subscription-within-plan vs drawing-usage-credits vs API pay-per-token); `cacheTtl` {minutes, regime, ttlSource} — the prompt-cache TTL your MAIN session actually rides (1h on a subscription, 5min on usage-credits/API), so a warm gap is not misread as cold; and `usageWindows` {fiveHourPct, sevenDayPct, windowSource} — Claude Code's own rate_limits utilization when available (windowSource \"cc-rate-limits\"), else AgentlensPro's calibrated pct (\"calibrated\"; \"calibrated-exceeded\" = consumption has passed the auto-observed LOWER BOUND, so the pct is null because the denominator is proven stale — not because it is unknown), else null (\"none\") — a null is NEVER presented as 0. The OAuth token is NEVER read or returned. Use this after a rotation, or before a long run, to know the ACCOUNT you will actually burn. PASS `all: true` FOR EVERY ACCOUNT this machine has ever been on, not just the live one — the answer a ROTATOR needs, since deciding whether to switch requires the headroom of the accounts you are NOT on. Still no credential is read: each row is what was OBSERVED while that account was live, with `observedAt`/`staleSeconds` and a per-window `freshness` — `fresh` (measured), `aged` (past the TTL but the window has NOT reset, so a LOWER bound), `rolled` (the window reset AND this machine left the account before the reading, so INFERRED ~0% — audit via `leftAt`), `stale` (reset but activity since cannot be excluded → null with a reason), `unreadable` (never observed → null with a reason, NEVER an absent row: \"cannot read this account\" and \"this account has no headroom\" are opposite signals). Per-model weekly buckets are reported separately and NOT folded into the verdict — a spent per-model bucket does not block other models.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "all": {
+      "type": "boolean",
+      "description": "Report every observed account instead of only the live one."
+     }
+    }
+   }
+  },
+  {
+   "name": "get_account_state_at",
+   "description": "The subscription STATE that was active at a PAST instant — which account, billing mode, plan, and cache-TTL regime you were on when a given request/span happened. Resolved by binary-searching the change-detected account-state timeline (written only when the discrete state changes, so it costs a few disk writes/hour, never per-request). Pass `ts` (ms epoch) OR `iso` (ISO-8601). Use it to attribute a past burn/request to the mode+plan+TTL in force at that time (e.g. \"was I on Max 5x or drawing usage credits when THIS span ran?\"). Returns the matching state record + its start timestamp, or null when the timeline does not reach that far back (never a fabricated state).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "ts": {
+      "type": "number",
+      "description": "Instant to resolve, milliseconds since the Unix epoch"
+     },
+     "iso": {
+      "type": "string",
+      "description": "Instant to resolve as an ISO-8601 timestamp (alternative to ts)"
+     }
+    }
+   }
+  },
+  {
+   "name": "get_window_budget",
+   "description": "The rate-limit WINDOW budget split PER OAuth account (5h + 7d consumed tokens/cost + % of a configured capacity + a time-to-exhaustion projection), so a rotated account never pools with the first. Pass an accountId to get just that account; omit for every account (heaviest first, the unattributed bucket last) plus the machine-wide pooled total. When a COST capacity is configured, a cost-based % is returned too (the truthful fill metric when the plan bills by cost — cache-read at 0.1× barely counts there even though it dominates the raw token count). With no manual capacity, AgentlensPro AUTO-CALIBRATES per account from real rate-limit hits (a premature 5h window end IS a capacity measurement): capacitySource \"observed\" + capacityObservedAt carry the calibration date, and the figure is a proven lower bound that only ever ratchets up.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "accountId": {
+      "type": "string",
+      "description": "An account_uuid to filter to; omit for all accounts + the pooled total"
+     }
+    }
+   }
+  },
+  {
+   "name": "get_image_report",
+   "description": "How many IMAGES a session (or project/all) sent into the context, and what re-reading them cost. Reconstructed LAZILY from Claude Code's raw OTEL request bodies (the exact per-call context). Per session: image count, per-call image token weight, the first turn they appeared, how many turns they stayed resident (the Anthropic API is stateless → the whole transcript incl. images is re-sent every call), and the CUMULATIVE cache-read cost of those re-reads. This is the tool that surfaces the \"8 screenshots stuck for 400 turns = 525k tokens re-read every turn = ~$425\" pattern. Scope by sessionId or a project path prefix; omit for a bounded most-recent scan (read `coverage`). Only sessions with raw bodies in the live registry are scanned (lazy — no full-disk sweep).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "scope": {
+      "type": "string",
+      "description": "A sessionId, a project path prefix, or omit for a bounded most-recent scan"
+     }
+    }
+   }
+  },
+  {
+   "name": "find_resident_blobs",
+   "description": "THE eviction-candidate finder: context blocks (images, tool_results, pasted files, bash output, text) that stay RESIDENT across many turns, ranked by wasted CUMULATIVE cache-read cost — because a block riding forward is re-read (cache-read billed) on every turn until compaction evicts it. Use this to decide what to compact, move to a sub-agent (isolated context), or stop retaining. Filter by block kind (image | toolOutput | bashOutput | file | userMsg | …), a minimum per-block token size, and a minimum resident-turn count. Scope by sessionId / project prefix / omit (bounded lazy scan — read `coverage`).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "scope": {
+      "type": "string",
+      "description": "A sessionId, a project path prefix, or omit for a bounded most-recent scan"
+     },
+     "kind": {
+      "type": "string",
+      "description": "Optional block-kind filter (image, toolOutput, bashOutput, file, userMsg, assistantMsg, reasoning, mcp, …)"
+     },
+     "minTokens": {
+      "type": "number",
+      "description": "Only blocks whose peak single-occurrence tokens ≥ this (default 0)"
+     },
+     "minResidentTurns": {
+      "type": "number",
+      "description": "Only blocks resident across ≥ this many turns (default 2)"
+     },
+     "topN": {
+      "type": "number",
+      "description": "How many ranked blobs to return (default 20, max 100)"
+     }
+    }
+   }
+  },
+  {
+   "name": "query_context_blocks",
+   "description": "The GENERIC composition query engine — \"all possible queries\" over the raw-body context blocks in one tool. FILTER by any of {project, sessionId, kind, model, minTokens, turnFrom, turnTo} and GROUP-BY any of {kind, session, project, model, turn}; returns each group's Σ tokens, block count, and estimated cache-read cost, heaviest-first. Reconstructed lazily from the OTEL request bodies (token figures calibrated to the paired response body's exact usage when available, else estimated). Read `coverage` for what was scanned. Examples: kind=image groupBy=session → biggest image sessions; groupBy=kind for one session → its block-type breakdown.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "project": {
+      "type": "string",
+      "description": "Filter by project path prefix"
+     },
+     "sessionId": {
+      "type": "string",
+      "description": "Filter to one session"
+     },
+     "kind": {
+      "type": "string",
+      "description": "Filter by block kind (image, toolOutput, file, system, claudemd, rule, toolCatalog, mcp, reasoning, …)"
+     },
+     "model": {
+      "type": "string",
+      "description": "Filter by model (substring match)"
+     },
+     "minTokens": {
+      "type": "number",
+      "description": "Only blocks with ≥ this many tokens"
+     },
+     "turnFrom": {
+      "type": "number",
+      "description": "Only calls at turn ≥ this"
+     },
+     "turnTo": {
+      "type": "number",
+      "description": "Only calls at turn ≤ this"
+     },
+     "groupBy": {
+      "type": "string",
+      "description": "Group-by dimension: kind | session | project | model | turn (default kind)"
+     },
+     "topN": {
+      "type": "number",
+      "description": "How many ranked groups to return (default 20, max 100)"
+     }
+    }
+   }
+  },
+  {
+   "name": "get_block_content",
+   "description": "Drill into ONE context block of a specific call and return its ACTUAL text — the on-demand content fetch for the composition tools. Identify it by sessionId + turn (1-based call index) + blockIndex (from query_context_blocks / a composition record). An IMAGE block returns metadata + a body-file ref, never the base64 bytes (pointer-only). Pass full=true to lift the per-block text cap for a single deep read.",
+   "inputSchema": {
+    "type": "object",
+    "required": [
+     "sessionId",
+     "turn",
+     "blockIndex"
+    ],
+    "properties": {
+     "sessionId": {
+      "type": "string",
+      "description": "Session ID"
+     },
+     "turn": {
+      "type": "number",
+      "description": "1-based call index within the session"
+     },
+     "blockIndex": {
+      "type": "number",
+      "description": "Block position within that call"
+     },
+     "full": {
+      "type": "boolean",
+      "description": "Lift the per-block text cap for this single block (default false)"
+     }
+    }
+   }
+  },
+  {
+   "name": "get_cache_creation_report",
+   "description": "The COST-PEAK finder: ranks WHO/WHAT is burning the most of a chosen cost BUCKET — cache_creation (the ~1.25x/2x prefix WRITE, default), output (billed ~5x — sometimes the real culprit, NOT the cache write), input, total tokens, or billable_weighted (the real USD cost across all buckets). Scans the raw OTEL bodies on disk, joins each write to its owning session via the previous_message_id chain, and aggregates heaviest-first by session, account, model, hourly time-window, or cause (the cache-break ROOT-CAUSE code from get_cache_break_timeline's classifier — \"which misconfiguration is burning the most money\", not just \"which session\"). Always includes an explicit `unattributed` bucket (last-turn / still-in-flight responses with no following request to join against — groupBy=cause has none, since only classified turns are counted) and a top-5 `outputSpikes` list surfacing the biggest single OUTPUT-token events even when ranking by a different bucket. The scan is a bounded, most-recent-first SAMPLE (never a full 15k+-file sweep) — read `coverage` for exactly what was scanned.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "window": {
+      "type": "number",
+      "description": "Only include writes from the last N hours (e.g. 5 for the live rate-limit window); omit for the bounded most-recent scan across all history"
+     },
+     "groupBy": {
+      "type": "string",
+      "description": "Aggregation dimension: session | account | model | time | cause (default session)"
+     },
+     "bucket": {
+      "type": "string",
+      "description": "Cost bucket to rank by: cache_creation | output | input | total | billable_weighted (default cache_creation)"
+     },
+     "topN": {
+      "type": "number",
+      "description": "How many ranked groups to return (default 15, max 50)"
+     },
+     "format": {
+      "type": "string",
+      "description": "Output format: json (default) | table | markdown | timeline"
+     }
+    }
+   }
+  },
+  {
+   "name": "trace_expensive_writes",
+   "description": "For the biggest single cache_creation write events, resolves session/account via the previous_message_id chain and summarizes WHAT content made the write so expensive — image / tool_result / text / system / thinking token shares plus the tool-catalog size — from the request body that produced it. POINTER-ONLY: never returns base64 image bytes, raw block text, or the metadata.user_id token; only derived identifiers (session_id, account_uuid) and token counts. Complements get_cache_creation_report's \"who\" with the \"what's inside the huge writes\" view — the composition field is null when the owning request body could not be resolved (e.g. the write was unattributed). Rich filters {sessionId, accountUuid, model, minCacheCreate, minOutputTokens, turnRange, timeRange} narrow the events; chainDepth attaches each event's backward CONTEXT CHAIN (the ordered turns leading up to it) so you see HOW the context ramped to the write. Read `coverage` for the bounded scan scope.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sessionId": {
+      "type": "string",
+      "description": "Only writes from this session"
+     },
+     "accountUuid": {
+      "type": "string",
+      "description": "Only writes from this OAuth account"
+     },
+     "model": {
+      "type": "string",
+      "description": "Only writes on a model matching this substring"
+     },
+     "minCacheCreate": {
+      "type": "number",
+      "description": "Only events with at least this many cache_creation tokens (default 0 — no floor)"
+     },
+     "minOutputTokens": {
+      "type": "number",
+      "description": "Only events with at least this many OUTPUT tokens (find output-token spikes, billed ~5x)"
+     },
+     "turnFrom": {
+      "type": "number",
+      "description": "Only writes at/after this per-session cache_creation-event turn index (1-based)"
+     },
+     "turnTo": {
+      "type": "number",
+      "description": "Only writes at/before this per-session cache_creation-event turn index"
+     },
+     "timeFrom": {
+      "type": "string",
+      "description": "Only writes at/after this ISO timestamp"
+     },
+     "timeTo": {
+      "type": "string",
+      "description": "Only writes at/before this ISO timestamp"
+     },
+     "topN": {
+      "type": "number",
+      "description": "How many top events to trace (default 6, max 25)"
+     },
+     "chainDepth": {
+      "type": "number",
+      "description": "Attach each event's N preceding turns as its backward context chain (default 0 = off, max 20)"
+     },
+     "window": {
+      "type": "number",
+      "description": "Only include writes from the last N hours; omit for the bounded most-recent scan across all history"
+     },
+     "format": {
+      "type": "string",
+      "description": "Output format: json (default) | table | markdown | timeline"
+     }
+    }
+   }
+  },
+  {
+   "name": "get_cache_break_gap_report",
+   "description": "Tells apart 5-min TTL EXPIRY from a genuine cache BREAK as the cause of expensive cache_creation writes — the two look identical in raw totals but have opposite fixes (a heartbeat prevents TTL expiry; nothing about a heartbeat stops a prefix from actually changing). Returns: (1) the TIER SPLIT of all scanned cache_creation into the 5-min vs 1-hour ephemeral-cache buckets (from usage.cache_creation) — a mostly-1h-tier total means a <5min heartbeat is irrelevant; (2) for every BIG (>= minCacheCreate, default 100k tokens) single write, the TIME GAP since the previous call in the SAME session (via the previous_message_id chain), bucketed into first-call / <4.5m / 4.5-6m (the 5-min TTL window) / 6-15m / 15-65m / >65m (the 1h TTL window). Mass in the 4.5-6m bucket means a heartbeat would help; mass in <4.5m means something upstream is breaking the cache prefix and no heartbeat can fix it. Read `coverage` for the bounded scan scope.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "minCacheCreate": {
+      "type": "number",
+      "description": "Only classify writes with at least this many cache_creation tokens (default 100000)"
+     },
+     "window": {
+      "type": "number",
+      "description": "Only include writes from the last N hours; omit for the bounded most-recent scan across all history"
+     }
+    }
+   }
+  },
+  {
+   "name": "get_cache_break_timeline",
+   "description": "The ROOT-CAUSE timeline: for ONE session, reconstructs its ordered turns from the raw OTEL bodies (via the previous_message_id chain) and, for every turn with a significant cache_creation write, DIFFS its cached prefix against the previous turn in the docs hierarchy order (model → tools → effort → system → message-prefix), finds the FIRST divergent element = the break point, and CLASSIFIES the definitive culprit into a cause code: TOOLSET_CHANGED, TOOLS_REORDERED, TOOL_SEARCH_DEFERRED, MCP_TOOLS_CHANGED, PLUGINS_RELOADED (≥2 of tool/skill/agent catalogs churned together = /reload-plugins — see get_cache_risk_costs / `reload-cost`), MODEL_SWITCH, EFFORT_SWITCH, HOOK_INJECTION, SKILL_INJECTION, SKILL_DESCRIPTION_TRUNCATION, SKILL_CHANGED, INLINE_EXEC_RESULT_CHANGED, CLAUDE_MD_CHANGED, AGENT_METADATA_CHANGED, SYSTEM_TIMESTAMP, CONTEXT_ORDER_CHANGED, TTL_EXPIRY, COLD_START, COMPACTION, SUBAGENT_INTERLEAVE (A→B→A stream artifact — sub-agent calls share the parent session id), NORMAL_GROWTH (append-only new-tail first-write — expected, not a break), MESSAGE_TRIMMED (harness context-editing removed a cached block), MESSAGE_SPLICED (a new block inserted mid-prefix shifted everything after it), ATTACHMENT_CHANGED (image / tool_use fingerprint changed), UNCLASSIFIED. Emits a TIMELINE of break events (each naming the culprit element + tokens re-written) PLUS a REPEAT-OFFENDER rollup: break events grouped by (cause, the specific offending element) so the SAME element breaking the cache across many turns collapses into ONE chronic offender — flagged SYSTEMATIC at ≥3 turns with a plain-language verdict naming the exact misconfigured hook/skill/tool and its fix. POINTER-ONLY (stable fingerprints, never raw block text / base64 / the user_id token). The per-turn `events` log is bounded to the most recent topN (default 25, max 100) — `repeatOffenders`/`causeHistogram` always summarize the FULL session, never truncated, so the chronic-offender verdict is exact even when the raw log is capped. Read `coverage` for the bounded scan scope.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sessionId": {
+      "type": "string",
+      "description": "The session to reconstruct (exact match from get_cache_creation_report / get_recent_sessions). agent-<agentId> child sessions are supported: their turns are carved out of the parent stream via the child transcript's message-id chain."
+     },
+     "scope": {
+      "type": "string",
+      "description": "A session-id prefix — resolves to the heaviest matching session; omit to pick the heaviest session overall in the scan"
+     },
+     "minTokens": {
+      "type": "number",
+      "description": "Only classify turns whose cache_creation ≥ this (default 5000)"
+     },
+     "window": {
+      "type": "number",
+      "description": "Only scan bodies from the last N hours; omit for the bounded most-recent scan across all history"
+     },
+     "topN": {
+      "type": "number",
+      "description": "Cap on the returned per-turn events log, most-recent-first (default 25, max 100). repeatOffenders/causeHistogram are always computed over ALL classified turns regardless."
+     },
+     "format": {
+      "type": "string",
+      "description": "Output format: json (default, full object) | table | markdown | timeline"
+     }
+    }
+   }
+  },
+  {
+   "name": "get_cache_risk_costs",
+   "description": "THE CACHE-BREAKING-COMMAND COST SHORTCUT — CLI alias `reload-cost` (TRDD-EYA3X5MQ). Lists the most recent prefix-breaking slash commands with the cache-write cost each caused (cache_creation tokens + USD): /reload-plugins, /reload-skills, a mutating /plugin (install|uninstall|enable|disable|update|marketplace), /login and /logout (a credential swap makes the previous cache entry unreachable), /mcp and /model. The causes are EXACT, not inferred — Claude Code persists every built-in command it runs as a transcript entry, so this is read off disk retroactively with no hook, no restart and no OTEL-body capture. The cost comes from the same composition path get_cache_break_report uses, joined on the turn wall-clock: a command at time T is billed on the FIRST turn at or after T, because the local command makes no API call and its changed prefix rides the NEXT model request. Menu commands (bare /plugin, /mcp, /model) are marked mutation=ambiguous and charged 0 when the following turn did not actually break. Read byKind for the per-command totals, eventsPriced vs commandsFoundInTranscripts for coverage, and unexplainedReloadTurns for reload-shaped turns no command explains (co-churn INFERENCE, listed separately and never summed in).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "window": {
+      "type": "number",
+      "description": "Only consider commands from the last N hours; omit for all history"
+     },
+     "minTokens": {
+      "type": "number",
+      "description": "Skip events whose billed cache_creation is below this"
+     },
+     "topN": {
+      "type": "number",
+      "description": "Cap on the returned events list, most-recent-first (default 25, max 200)"
+     },
+     "workspace": {
+      "type": "string",
+      "description": "Only sessions whose workspace path starts with this"
+     },
+     "kinds": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "Filter to these kinds: PLUGINS_RELOADED, SKILLS_RELOADED, PLUGIN_CHANGED, ACCOUNT_SWITCHED, MCP_SERVER_TOGGLE, MODEL_SWITCHED, COMPACTION, CLEAR"
+     }
+    }
+   }
+  },
+  {
+   "name": "get_skill_attribution",
+   "description": "WHICH SKILL OR PLUGIN IS SPENDING MY MONEY — CLI alias `skill-cost` (TRDD-A4BA8IU5). Rolls up tokens and USD per skill and per plugin from the `attributionSkill` / `attributionPlugin` stamps Claude Code writes on assistant records. Exact and retroactive over the whole history: read off disk, no hook, no schema, no OTEL capture required. Usage is counted ONCE per message id — Claude Code writes one message as many content-block rows and repeats the full usage on each, so a naive sum over-counts 2-5x (duplicateRowsSkipped reports what was collapsed). Each rollup: messages, input/cacheRead/cacheWrite/output tokens, costUsd (priced per message with that message's own model), models seen, first/last timestamp. Sorted most-expensive-first, which is the point — this is how you find the skill behind a burn. Read pricedMessages vs attributedMessages for coverage.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "window": {
+      "type": "number",
+      "description": "Only count messages from the last N hours; omit for all history"
+     },
+     "topN": {
+      "type": "number",
+      "description": "Cap each list (by cost, highest first); totals are unaffected"
+     }
+    }
+   }
+  },
+  {
+   "name": "get_loaded_plugin_versions",
+   "description": "WHICH PLUGIN VERSION IS EACH SESSION ACTUALLY RUNNING — CLI alias `plugin-versions` (AgentlensPro#5). A plugin update lands machine-wide, but hooks and skills are SESSION-LOADED: a running session keeps executing the OLD cached code until its own /reload-plugins, so a fleet rollout leaves invisible old-behavior ghosts that look exactly like \"the fix does not work\". Read off disk from the harness-emitted skill-load attachment (which carries the versioned plugin-cache path), compared against the newest version in ~/.claude/plugins/cache. loadedVersion is the MAX version observed in the session, deliberately NOT the latest-by-timestamp one: a compaction replays earlier skill invocations as fresh records carrying their ORIGINAL older content, so 18 of 19 multi-version sessions measured are non-monotone in time. stale is TRI-STATE — true (behind the cache), false (current), or 'unknown' when a reload happened after our last evidence, because a fabricated verdict is worse than an honest gap. There is no pid: read lastActivityTs (transcript mtime) with activeMinutes for liveness, and sessionsScanned vs sessionsWithSkillEvidence for the blind spot — a session that invoked no plugin skill is absent from rows, NOT current.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "plugin": {
+      "type": "string",
+      "description": "Only this plugin, bare name (e.g. ai-maestro-janitor)"
+     },
+     "activeMinutes": {
+      "type": "number",
+      "description": "Only sessions whose transcript was touched in the last N minutes"
+     },
+     "staleOnly": {
+      "type": "boolean",
+      "description": "Only sessions behind the cache (keeps unknown, drops current)"
+     }
+    }
+   }
+  },
+  {
+   "name": "get_lifecycle_events",
+   "description": "The session-LIFECYCLE timeline (TRDD-EYA3X5MQ): /clear, /compact, resume, fork, startup, session-end, turn-death (StopFailure), and Pre/PostCompact — the harness events that bound and RESET a session — read from the lifecycle hook-event store (needs --install-hooks). Most notably /clear (SessionStart source=clear), the cost REMEDY that resets the transcript floor. Each row: ts, session, kind, detail (the source/reason/trigger/error_type discriminator), ev (raw hook name). Per-turn Stop events are excluded by default (noise); pass `kinds` to select an exact set. Says honestly when the hook store is absent (dirExists:false).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "session": {
+      "type": "string",
+      "description": "Only this session id"
+     },
+     "kinds": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "Keep only these lifecycle kinds (e.g. [\"CLEAR\",\"STOP_FAILURE\",\"COMPACT\"]); default = all except the per-turn STOP"
+     },
+     "window": {
+      "type": "number",
+      "description": "Only events from the last N hours"
+     },
+     "limit": {
+      "type": "number",
+      "description": "Cap the returned events, most-recent-first (default 100)"
+     }
+    }
+   }
+  },
+  {
+   "name": "check_burn_risk",
+   "description": "REALTIME early-warning against token explosions — the guard half of investigate_burn (which explains a drain AFTER the fact; this warns AS it starts). One cheap in-memory call returns 6 risk flags: FANOUT_BURST (≥5 SubagentStart hook events in 2min — a fan-out is launching NOW), COLD_RESUME_RISK (a StopFailure ≤10min ago — the stall likely outlived the 5-min cache TTL; resuming a fan-out into it is the measured worst case), COMPACTION_REWRITE (PreCompact ≤5min — full-prefix rewrite in progress), HUGE_REQUEST_BURST (≥3 requests >1MB in 90s — a fat-context fan-out IN FLIGHT), BURN_SPIKE (live 5-min tokens/min above threshold), CACHE_THRASH (≥3 responses in 5min with big cache_creation and ~zero cache_read — the prefix is being INVALIDATED every turn instead of read from cache; exact Anthropic usage numbers, the measured lean-ctx-class disaster). Hook-event risks need --install-hooks; the sources block says honestly which feeds are absent. Poll every 10-30s, or use `agentlenspro-cli --guard [seconds]` which polls for you and prints one line per risk TRANSITION — designed to be armed via a background monitor so the agent is interrupted the moment a risk fires.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "fanoutThreshold": {
+      "type": "number",
+      "description": "SubagentStarts in 2min that trip FANOUT_BURST (default 5)"
+     },
+     "spikeTokensPerMin": {
+      "type": "number",
+      "description": "5-min tokens/min that trips BURN_SPIKE (default 250000)"
+     }
+    }
+   }
+  },
+  {
+   "name": "get_cost_rollup",
+   "description": "Interval cost/usage ROLLUP with the 5-value breakdown (input, output, cache_read, cache_creation, cost USD) + tokens-and-$ PER HOUR, grouped your way: groupBy project (each workspace), all (one combined row), session, model, or subagent (every spawned sub-agent ranked — spawn kind/type and parent included). Filters: windowHours or sinceIso/untilIso (spawn-time interval), subagentsOnly, parentSessionId (sub-agents of one main session), liveOnly (still receiving turns — the \"what are my currently running subagents burning\" view). sortBy any of the 5 values or total. Honest by construction: sessions count when they OVERLAP the window (token totals are whole-session — cards are session-granular, disclosed in coverage); unpriced-model sessions are excluded from $ and counted, never silent $0. Answers: project cost in an interval, all projects combined, subagent leaderboards, live-fleet burn.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "groupBy": {
+      "type": "string",
+      "description": "project (default) | all | session | model | subagent"
+     },
+     "windowHours": {
+      "type": "number",
+      "description": "Window ending now (default 24; ignored when sinceIso is set)"
+     },
+     "sinceIso": {
+      "type": "string",
+      "description": "Window start (ISO datetime)"
+     },
+     "untilIso": {
+      "type": "string",
+      "description": "Window end (ISO datetime, default now)"
+     },
+     "subagentsOnly": {
+      "type": "boolean",
+      "description": "Only sessions spawned by a parent (sub-agents)"
+     },
+     "parentSessionId": {
+      "type": "string",
+      "description": "Only sub-agents of this parent session"
+     },
+     "liveOnly": {
+      "type": "boolean",
+      "description": "Only sessions active in the last 3min"
+     },
+     "sortBy": {
+      "type": "string",
+      "description": "cost (default) | input | output | cacheRead | cacheCreation | total"
+     },
+     "topN": {
+      "type": "number",
+      "description": "Max groups returned (default 20, max 100)"
+     }
+    }
+   }
+  },
+  {
+   "name": "predict_session_cost",
+   "description": "PREDICT what a planned session/sub-agent run will cost BEFORE launching it (code reviews, ultracode workflows, big refactors): matches past sessions by task keywords + sub-agent type + a soft file-size band, and returns the DISTRIBUTION (p25/p50/p75) of their 5 values (input, output, cache_read, cache_creation, cost USD) + turns, with the matched precedents listed (similarity, model, cost) so the estimate is auditable. p50 = central estimate, p75 = budget-safe. Honest by construction: no matching precedent → no prediction, never a fabricated point guess.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "task": {
+      "type": "string",
+      "description": "Describe the planned work in a sentence (matched against past first-requests)"
+     },
+     "subagentType": {
+      "type": "string",
+      "description": "Prefer precedents of this spawn type (fork, general-purpose, ...)"
+     },
+     "fileBytes": {
+      "type": "number",
+      "description": "Approx bytes of input files the task will read (soft 10x comparability band)"
+     },
+     "topK": {
+      "type": "number",
+      "description": "Max precedents used (default 12, max 50)"
+     }
+    }
+   }
+  },
+  {
+   "name": "get_runtime_inventory",
+   "description": "Every Claude Code INSTANCE running on this machine with its TOTAL memory footprint — the claude process plus EVERYTHING it spawned (subshells, worktree/subagent processes, forks, plugin crons, MCP servers, headless browsers, background tasks), computed from one ps snapshot via process-tree rollup (nested claude processes fold into their root instance). Ranked by total tree RSS; each instance shows its project dir (lsof cwd), process count, uptime, and its 5 heaviest descendants. Also reports the Claude Code client version. Join an instance to its live model/burn via workspace in get_burn_status / get_cost_rollup --liveOnly. POSIX (macOS/Linux/WSL) — says so on native Windows.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "get_rate_limit_report",
+   "description": "RATE-LIMIT forensics: every StopFailure (rate-limit/API turn death) in the window, grouped into stall EPISODES (events ≤10min apart = one incident) with the affected sessions, workspaces, and the verbatim error head — plus, for the NEWEST episode, the exact billed usage of the 5h window that ENDED at the stall (Anthropic's own response-body numbers — \"the combined requests that triggered the limit\", measured not estimated) with investigate_burn's ranked culprit findings and verdict. Needs lifecycle hook capture (--install-hooks) for the events; says so honestly when absent. For an older episode, run investigate_burn with untilIso = that episode's startIso.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "windowHours": {
+      "type": "number",
+      "description": "Look-back for stall events (default 24, max 336)"
+     },
+     "maxEpisodes": {
+      "type": "number",
+      "description": "Episodes returned, newest first (default 5)"
+     },
+     "maxFiles": {
+      "type": "number",
+      "description": "Body-scan cap for the deep attribution (default 400)"
+     }
+    }
+   }
+  },
+  {
+   "name": "investigate_burn",
+   "description": "ONE-COMMAND window-burn investigation — \"my 5h window drained: what burned it and WHO?\" answered in a single call, culprits named and ranked with evidence, no follow-up commands required (TRDD-TW14MO7A; born from an incident where root-causing took 15 manual calls and the first attribution was wrong). Scans the raw OTEL bodies for the window: billed usage comes EXACTLY from the response bodies (cache_creation/cache_read/output — Anthropic's own numbers, never estimated); attribution comes from the request bodies (workspace via deep Environment-block search — it sits AFTER the messages in fat transcripts, so shallow scans misattribute; model; first-message fingerprint to group fork families; base64-image sampling). Detects the measured burn taxonomy: FORK_STORM (fan-out forked a fat parent into a cold cache — clustered full-prefix writes with cache_read≈0 sharing ONE inherited transcript), SUBAGENT_BOOT_TAX (fresh agents each re-paying the CLAUDE.md+tools base), PREMIUM_MODEL_FANOUT (fan-out burst on a top-price model, e.g. after a /model default switch), FAT_SESSION_REWRITES (compaction/model-switch/TTL-gap full rewrites of one big session), IDLE_FLEET_KEEPWARM (background sessions kept cache-warm by periodic heartbeats), IMAGE_BLOB_RESIDENT (images riding forward every turn), RATE_LIMIT_COLD_RESUME (fan-out resumed into a TTL-expired cache right after a StopFailure — correlated with the lifecycle hook-event store when installed). Returns { window, coverage (files scanned vs present — cap hits are DISCLOSED), totals (byHour, byModel, est $), attribution (workspace×model×interactive/subagent), findings (ranked, each with equivTokens, share, confidence, evidence numbers), verdict (2-4 plain sentences naming the culprits — including how much of the window the detectors could NOT attribute). Drill deeper afterwards with get_session_burn_profile / get_cache_break_report / run_diagnostics_sql.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "windowHours": {
+      "type": "number",
+      "description": "Hours to look back (default 5 — one rate-limit window; max 48)"
+     },
+     "untilIso": {
+      "type": "string",
+      "description": "End of the window (ISO); default now. Use to investigate a past drain."
+     },
+     "maxFiles": {
+      "type": "number",
+      "description": "Scan cap per body kind (default 8000; largest-first so the burn is never the part dropped)"
+     }
+    }
+   }
+  },
+  {
+   "name": "burn_seismic",
+   "description": "PROVEN statistical (seismology-style) anomaly analysis of a token burn — a reproducible MEASUREMENT with named, textbook methods, not a heuristic verdict. Reconstructs a per-minute COST series ($/min) from each turn's message.usage (cache_creation=cold WRITE, cache_read, output) × the real per-model rates (the single pricing source), streamed from the raw session JSONL by DuckDB (works with OTEL capture OFF; image-bloated lines skip, never abort). The NULL MODEL is the series' true generative structure — a MARKED POINT PROCESS: cost/min = (Poisson turn count) × (lognormal per-turn cost) — measured against a LOCAL background: a CFAR reference window (Finn–Johnson 1968; trimmed-mean variant Gandhi–Kassam 1988) estimates every bucket's baseline from its own neighbourhood minus a guard band, so a day/night regime is not mistaken for an anomaly (one global background measured a 13.5% false-alarm share against a 5% target). Each factor gets its CORRECT tail: an exact Poisson RATE test (trimmed LOCAL background λ̂ₜ) and a robust lognormal INTENSITY test (log per-turn cost, local median, active buckets only), combined by Fisher's method (χ²₄ closed form; independent by Poisson thinning) — and that decomposition IS the root cause: FANOUT_RATE (many-turns burst = spawn storm), FAT_TURN_THRASH (cold-write dominated = prefix cold-invalidation), FAT_TURN_MARATHON (read dominated = fat-prefix re-read), COMPOUND. Significance: Benjamini–Hochberg FDR (PRDS-valid; Benjamini–Yekutieli 2001) or the arbitrary-dependence BY variant, with a CALIBRATION self-check on the background buckets. Events = PELT changepoint segments (Killick 2012, exact penalized) containing FDR-significant buckets, ranked by EXCESS $ over baseline (not raw totals); STA/LTA (Allen 1978) + CUSUM (Page 1954) ride as diagnostics. Distribution tails come from the `stochastic` DuckDB community extension when available (independent engine, cross-checked to Δ≤2e-16; disclosed), else the unit-tested internal core. Per event: per-session EXCESS attribution with COLD_REWRITE / MODEL_SWITCH cause tags, plus every SPAWN call inside the mainshock verbatim. Returns the structured result AND a rendered report; a window with no significant event says so, never fabricates one.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "scope": {
+      "type": "string",
+      "description": "'fleet' (default; all recent sessions), 'workspace' (one project), or 'session'"
+     },
+     "workspace": {
+      "type": "string",
+      "description": "For scope='workspace': the project path (e.g. ~/Code/foo)"
+     },
+     "sessionId": {
+      "type": "string",
+      "description": "For scope='session': the session id or a unique prefix"
+     },
+     "windowHours": {
+      "type": "number",
+      "description": "Hours to look back (default 8; max 72)"
+     },
+     "bucketMinutes": {
+      "type": "number",
+      "description": "Time-bin width in minutes (default 1)"
+     },
+     "includeSubagents": {
+      "type": "boolean",
+      "description": "fleet/workspace: also scan subagent transcripts (default false — the spawners)"
+     },
+     "fdrAlpha": {
+      "type": "number",
+      "description": "False-discovery level for the combined test (default 0.01)"
+     },
+     "fdrMethod": {
+      "type": "string",
+      "description": "'bh' (default; Benjamini–Hochberg, PRDS-valid) or 'by' (Benjamini–Yekutieli — guaranteed under arbitrary dependence, ~ln(m) conservative)"
+     },
+     "pvalueEngine": {
+      "type": "string",
+      "description": "'auto' (default; use the stochastic extension if it loads), 'stochastic' (require it), 'internal' (TS core)"
+     },
+     "rateLaw": {
+      "type": "string",
+      "description": "Count law for the RATE test: 'auto' (default — negative binomial where the local background is over-dispersed, exact Poisson elsewhere) or 'poisson' (FORCE variance ≡ mean; reproduces the pre-NB false-alarm rate — a falsifier, not a tuning knob)"
+     },
+     "cfarReference": {
+      "type": "number",
+      "description": "LOCAL-background reference cells per side (default 120 = ±2h at 1-min buckets). 0 = one GLOBAL stationary background (v2.13 behaviour) — set it to A/B the effect"
+     },
+     "cfarGuard": {
+      "type": "number",
+      "description": "Guard cells per side excluded from each local background so an event cannot set its own baseline (default 15)"
+     },
+     "cfarTrim": {
+      "type": "number",
+      "description": "Trim fraction per tail of the local reference sample (default 0.25) — an interfering burst under that share is trimmed out of the background"
+     },
+     "cfarMinReference": {
+      "type": "number",
+      "description": "Minimum reference cells before a local estimate is trusted; below it that bucket falls back to global (default 30, disclosed as localBaseline.fallbackShare)"
+     },
+     "maxFiles": {
+      "type": "number",
+      "description": "Cap on transcripts scanned, most-recent first (default 300)"
+     }
+    }
+   }
+  },
+  {
+   "name": "get_heartbeat_cost",
+   "description": "The EXACT token + dollar cost of ONE janitor heartbeat fire, end to end — built for the janitor to call after each fire. \"The fire\" = every API call in the heartbeat's session from the moment the cron injected its prompt until the next fire, so it INCLUDES everything the heartbeat causes: the dispatcher-stub turn, hook/security injections, skills it loads, logs it reads, and the SUB-AGENTS it spawns (sub-agent calls carry the parent session_id, so they are captured automatically; they also show up as a distinct tool-count in callsByToolSurface, and Agent/Task spawns are counted). Returns the four buckets separately — input, output, cache_read, cache_write (+ ephemeral 5m/1h) — with per-bucket dollars that sum to the total, plus per-model rows. IMPORTANT — the default `fire: \"last-complete\"` is a hard constraint, not a preference: a request body carries NO request_id, so a call's usage is only knowable once the NEXT call is written (chain: response(i).id == request(i+1).previous_message_id). A command running INSIDE the heartbeat's own turn therefore cannot see that turn's final response. So it reports the last fire whose calls have all settled (at a 5-min cadence: fire N reports exactly what fire N-1 cost) and discloses any unsettled calls under `inFlight` rather than silently under-counting. Calls from OTHER sessions overlapping the fire are reported under `concurrent`, never folded in. POINTER-ONLY.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "marker": {
+      "type": "string",
+      "description": "Prompt prefix that identifies a fire (default \"[janitor-heartbeat]\") — the first call of a fire is the one whose LAST user message starts with it"
+     },
+     "sessionId": {
+      "type": "string",
+      "description": "Restrict to one session (full id or prefix); omit to use whichever session most recently fired the marker"
+     },
+     "window": {
+      "type": "number",
+      "description": "Only scan bodies from the last N hours (default 3)"
+     },
+     "fire": {
+      "type": "string",
+      "description": "\"last-complete\" (default, exact) | \"current\" (newest fire; its tail may be unsettled and excluded — see inFlight)"
+     }
+    }
+   }
+  },
+  {
+   "name": "get_session_burn_profile",
+   "description": "ONE-CALL diagnosis of \"why is THIS session burning my window?\" — replaces the four ad-hoc probes (call sequence, gap histogram, tool-surface breakdown, is-it-still-running) with a single server-side answer, because each probe would otherwise cost an agent turn (and a turn re-reads the whole transcript). Measures the cost model cost ≈ turns × context_size and separates the two independently-fixable sub-terms: (1) the TOOL SURFACE — every tool definition sits at the TOP of the cached prefix and is re-sent every turn, broken down by SOURCE (built-in vs each MCP server, with tok/turn and how many are `deferred`) so you know exactly which server to remove; and (2) the TRANSCRIPT — everything else, shrinkable only by compaction / a fresh session. Returns turns, turns-per-hour, a gap histogram (a loop shows as mass under 30s), Σ cache_read / Σ cache_create, avg context re-read per turn, COLD-call % (cacheRead=0 → the cache never warms → a trigger firing past the TTL), cost, top tool_use frequency (what it is doing), whether it is STILL ACTIVE, plus a one-line `verdict` and an ordered `remediation` list ranked by what actually dominates the cost (never by what is merely easy to change). Bounded + memory-safe (mtime window + size cap; exactly ONE body fully parsed). POINTER-ONLY: tool names, sizes, token counts — never schemas or message text.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sessionId": {
+      "type": "string",
+      "description": "Full session id or a unique prefix (e.g. \"28e3a88d\") — from get_burn_status / get_recent_sessions"
+     },
+     "window": {
+      "type": "number",
+      "description": "Only scan bodies from the last N hours (default 6)"
+     }
+    },
+    "required": [
+     "sessionId"
+    ]
+   }
+  },
+  {
+   "name": "get_cache_break_causes",
+   "description": "The cross-session PERPETRATOR backtrace — answers \"what keeps breaking my cache, and WHO causes it?\" over ALL sessions at once (get_cache_break_timeline is ONE session). The prompt-cache transcript is only ever the VICTIM: it re-writes as cache_creation whenever something ABOVE it in the prefix (tools/system/model) changes or a TTL expires. This tool runs the root-cause classifier across every session in the bounded scan and returns TWO ranked views: (1) `causeRanking` — the break causes (TOOL_SEARCH_DEFERRED, MCP_TOOLS_CHANGED, MODEL_SWITCH, HOOK_INJECTION, TTL_EXPIRY, COMPACTION, MESSAGE_TRIMMED, MESSAGE_SPLICED, ATTACHMENT_CHANGED, plus the EXPECTED ones — COLD_START, NORMAL_GROWTH, SUBAGENT_INTERLEAVE — each row carrying an `expected` flag) ranked by wasted cache_creation, so you see the most common/expensive category; and (2) `actorLeaderboard` — the actual PERPETRATORS, backtraced from the enriched culprit id: the specific MCP server that toggled (chrome-devtools/lean-ctx/…), the specific hook that injected (pss-skills / janitor-memory / token-guard / …), the sub-agent MODEL that interleaved, or the harness ToolSearch churning its deferred built-ins — each with occurrences, sessionsAffected, cache_creation, cost, and a remediation. A one-line `verdict` names the dominant AVOIDABLE perpetrator (expected causes — cold warms, compaction, incremental growth, the interleave artifact — never win the verdict). POINTER-ONLY. Read `coverage` for the bounded scan scope.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "scope": {
+      "type": "string",
+      "description": "Optional session-id prefix to restrict the scan to one session family; omit for all sessions"
+     },
+     "minTokens": {
+      "type": "number",
+      "description": "Only classify turns whose cache_creation ≥ this (default 5000)"
+     },
+     "window": {
+      "type": "number",
+      "description": "Only scan bodies from the last N hours; omit for the bounded most-recent scan across all history"
+     },
+     "topN": {
+      "type": "number",
+      "description": "Cap on the actorLeaderboard (default 20, max 100); causeRanking is never truncated"
+     }
+    }
+   }
+  },
+  {
+   "name": "compare_configs",
+   "description": "Comparative cost/cache analytics across CONFIGURATIONS. Groups every API call (from the forensics fact DB, one row/call) by a config dimension and ranks the groups worst→best on a chosen metric, with per-group min/max/avg/median/p95/count/sum and a share of the total. Answers questions the per-session timeline can't: do FORKED agents consume less cache_creation than FRESH subagents? do WORKTREE agents cost more? which model/effort/isolation/subagent_type breaks the cache least on average? which injected skill/mcp/rule co-occurs with the biggest writes? Reads a bounded, incrementally-indexed fact table — read `coverage` for scope and note the explicit `unresolved` spawn group (calls whose spawn config could not be resolved — never hidden). Correlation ≠ causation; drill a finding via trace_expensive_writes / get_cache_break_timeline / get_call_context on the shared session_id + request/response refs.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "groupBy": {
+      "type": "string",
+      "description": "Config dimension: spawn_kind | model | effort | isolation | subagent_type | frontmatter | skill | mcp | rule | content_tag | break_cause | account | session (default spawn_kind)"
+     },
+     "metric": {
+      "type": "string",
+      "description": "cache_creation | cache_read | output_tokens | input_tokens | breaks | total | billable_weighted (default cache_creation)"
+     },
+     "agg": {
+      "type": "string",
+      "description": "Primary SORT aggregate: sum | avg | median | min | max | p95 | count (default avg). All of min/max/avg/median/p95/count/sum are ALWAYS returned per group; this only picks the sort key."
+     },
+     "filter": {
+      "type": "object",
+      "description": "Optional narrowing: { window (hours), model, spawnKind, subagentType, effort, isolation, accountUuid, sessionId, minCacheCreate, minOutputTokens, breakCause, spawnResolution, hasContentTag:[…], hasSkill:[…], hasMcp:[…], hasRule:[…] }"
+     },
+     "rankOrder": {
+      "type": "string",
+      "description": "worst-first (highest metric first, default) | best-first"
+     },
+     "topN": {
+      "type": "number",
+      "description": "How many ranked groups to return (default 20, max 100)"
+     }
+    }
+   }
+  },
+  {
+   "name": "run_diagnostics_sql",
+   "description": "Runs analytics over the forensics fact DB (one row/API call, plus content-tag and injection junction tables). Two modes: (1) `preset` — a curated, parameterized read-only query from the built-in library (worst configs, fork-vs-fresh, worktree cost delta, chronic offenders, output peaks by skill, cache lift by skill/mcp/rule, content-tag ranking, image burn, model×effort matrix, break-cause ranking, root-cause leaderboard, unresolved audit, session hotlist, tier split by config); (2) `sql` — RAW read-only SELECT/WITH with cost-aware custom functions billable_weight(), tier_classify(), cost_usd(), spike(). READ-ONLY & SANDBOXED: single SELECT/WITH only; INSERT/UPDATE/DELETE/DDL/ATTACH/PRAGMA rejected; runs on a fresh in-memory snapshot (source data untouchable); row-capped. Use it to pivot from an aggregate finding to the exact culprit calls (whose response_ref/request_ref feed trace_expensive_writes / get_call_context).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "preset": {
+      "type": "string",
+      "description": "Name of a built-in preset (mutually exclusive with sql). Omit both to list the preset library."
+     },
+     "sql": {
+      "type": "string",
+      "description": "Raw read-only SQL (single SELECT or WITH…SELECT). Custom fns: billable_weight(cc5m,cc1h,cread,out,input,model), tier_classify(gap_minutes), cost_usd(input,cread,cwrite,out,model), spike(value,median,mult)."
+     },
+     "params": {
+      "type": "object",
+      "description": "Named params bound safely into a preset or sql (e.g. window, sessionId, model, k). Never string-concatenated."
+     },
+     "format": {
+      "type": "string",
+      "description": "json (default, includes raw rows) | table (unicode-bordered, no raw rows) | markdown (no raw rows) — table/markdown carry the same data as one compact rendered string instead of doubling it"
+     },
+     "limit": {
+      "type": "number",
+      "description": "Row cap (default 50, hard max 2000). Wide TEXT/JSON cells are truncated at 500 chars with a marker; raise limit explicitly for a bigger pull."
+     }
+    }
+   }
+  },
+  {
+   "name": "run_transcript_sql",
+   "description": "Ad-hoc SQL (DuckDB) DIRECTLY over the Claude session .jsonl transcripts — answers cost/cause/content questions no hand-written drill covers, e.g. \"which records carry usage.cache_creation over N\", \"what record types exist\", \"group output tokens by model\". The bounded file set (sessionId fast path, else an mtime window, default 24h) is exposed as ONE relation named `transcripts` (union_by_name over heterogeneous records; live still-growing files tolerated; `filename` column identifies the source). Two modes: `preset` (frozen library — omit both preset and sql to list it) or `sql` (read-only single SELECT/WITH; DDL/DML/ATTACH/PRAGMA rejected). Every result carries a coverage block naming exactly which files were queried. NOT a replacement for the session cards/drills — an analysis surface beside them.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "preset": {
+      "type": "string",
+      "description": "Name of a built-in preset (mutually exclusive with sql). Omit both to list the library."
+     },
+     "sql": {
+      "type": "string",
+      "description": "Raw read-only SQL over the `transcripts` view (single SELECT or WITH…SELECT). Quote camelCase columns: \"sessionId\", \"timestamp\"."
+     },
+     "sessionId": {
+      "type": "string",
+      "description": "Query exactly this session transcript (fast path — one file; the window does not apply)."
+     },
+     "window": {
+      "type": "number",
+      "description": "Only transcripts modified in the last N hours feed the view (default 24). Ignored with sessionId."
+     },
+     "limit": {
+      "type": "number",
+      "description": "Row cap (default 50, hard max 2000). A hit cap is reported in coverage, never silent."
+     }
+    }
+   }
+  },
+  {
+   "name": "get_cache_event_log",
+   "description": "The per-call CACHE LEDGER for ONE project — answers \"did that compaction / command / turn burn tokens on a cache miss?\" in a single call. One row per API call with every bucket spelled out (input tokens, cache write, cache read, output tokens), its cache-write TTL tier (1-hour = main conversation on a subscription; 5-minute = a subagent or a usage-credits session), the cost-weighted size in INPUT-EQUIVALENT tokens, and the exact USD. Cache writes are flagged with a 🔥 marker repeated 1-5 times by order of magnitude (1+ / 10k+ / 50k+ / 150k+ / 400k+), so a full-prefix rewrite never looks like a routine suffix write. mode=peak (default) centres the costliest call in the window and shows the `context` calls BEFORE and AFTER it — a cold write is only interpretable next to the warm turns around it; mode=recent lists the last `limit` calls regardless of cost. SCOPED TO ONE PROJECT BY DEFAULT: rows are emitted only for sessions this project owns (resolved via ~/.claude/projects/<slug>/<sessionId>.jsonl); calls belonging to any other project, or not attributable to a session, are counted in `excluded` and never printed. Pass `project` (an absolute path or a project slug) to read a different project. Reads the OTEL response bodies, not the session transcript — a compaction's own summarization call exists ONLY there, so from the transcript a compaction looks free.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "mode": {
+      "type": "string",
+      "description": "peak (default) = the costliest call in the window plus its surrounding calls | recent = the last `limit` calls regardless of cost"
+     },
+     "project": {
+      "type": "string",
+      "description": "Absolute project path or Claude project slug. Defaults to the calling working directory — NEVER to all projects."
+     },
+     "sessionId": {
+      "type": "string",
+      "description": "Narrow to one session inside the project (default: every session the project owns)"
+     },
+     "context": {
+      "type": "number",
+      "description": "How many calls to show before AND after the peak (default 3, max 25). mode=peak only."
+     },
+     "limit": {
+      "type": "number",
+      "description": "How many recent calls to list (default 12, max 200). mode=recent only."
+     },
+     "window": {
+      "type": "number",
+      "description": "Only calls from the last N hours (e.g. 5 for the live rate-limit window). Default 24. Pass 0 for ALL history (served from the call-events index; the first all-history call after new sealed days extracts them once)."
+     },
+     "format": {
+      "type": "string",
+      "description": "table (default) | json | markdown"
+     }
+    }
+   }
+  },
+  {
+   "name": "get_subscription_usage",
+   "description": "The AUTHORITATIVE 5-hour and 7-day rate-limit window utilization — Anthropic's own numbers, the same ones `/usage` renders, not a local projection. Every other window tool here INFERS the cap (capacityCalibration derives a lower bound from observed rate-limit hits, and reports no ETA at all when uncalibrated); this reads the real percentage. Returns the generic `limits[]` array — `{kind, group, percent, severity, resetsAt, isActive, scopeLabel}` with kinds `session` / `weekly_all` / `weekly_scoped` (a per-model bucket) — rather than only the two named windows, because the payload already carries buckets that named-field parsing drops. Also reports `usageCreditsEnabled`, which is the live oracle for the prompt-cache TTL regime: credits OFF = the automatic 1-hour TTL (so main-conversation cache writes bill at 2x base input); credits ON = the TTL drops to 5 minutes (1.25x). Reads the OAuth token Claude Code already stores — the credentials file first, then the macOS keychain, and the keychain path is OPT-IN via AGENTLENS_READ_KEYCHAIN_USAGE=1 because an un-ACL'd read pops a password prompt. The endpoint is UNDOCUMENTED and community-reverse-engineered, and it 429s hard — results are cached for 10 minutes and a 429 arms an escalating back-off, so `force` is for a deliberate one-off refresh, never a loop. Every failure degrades to the last known reading with an explicit `reason` (cooldown / no_token / opt_in_required / lock_contended / http_error), and a stale reading suppresses its reset countdowns rather than rendering a rolled window as live.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "force": {
+      "type": "boolean",
+      "description": "Bypass the 10-minute cache and refetch now. Respects an active 429 back-off."
+     },
+     "format": {
+      "type": "string",
+      "description": "table (default) | json"
+     }
+    }
+   }
+  }
+ ]
+}

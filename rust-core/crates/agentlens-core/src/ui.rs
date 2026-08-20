@@ -987,6 +987,23 @@ async fn handle(
         .await
         .map_err(|e| format!("history build join failed: {e}"))?;
         json_response(StatusCode::OK, serde_json::json!({ "history": history.unwrap_or(Value::Null) }).to_string())
+    } else if method == Method::POST && path == "/mcp" {
+        // P4x — the MCP JSON-RPC endpoint. Served on THIS listener for now; the dedicated
+        // :4316 listener the CLI defaults to is a separate wiring step (point it here meanwhile
+        // with AGENTLENS_MCP_URL). See mcp.rs for why plain JSON is sufficient for our CLI and
+        // where that stops being true.
+        // The TS caps the MCP body and DESTROYS the socket on overflow (no response at all), so a
+        // client cannot mistake a too-large request for a rejected one.
+        let Some(buf) = read_body_capped(req.into_body(), 8 * 1024 * 1024).await? else {
+            return Err("/mcp body over 8MB cap — connection aborted".to_owned());
+        };
+        // An unparseable body becomes Null, which handle_rpc answers with a proper JSON-RPC error
+        // rather than a transport failure.
+        let parsed: Value = serde_json::from_slice(&buf).unwrap_or(Value::Null);
+        // No tool is implemented in the Rust core yet, so every tools/call reports that
+        // explicitly rather than pretending to answer.
+        let reply = crate::mcp::handle_rpc(&parsed, &|_name, _args| None);
+        json_response(StatusCode::OK, reply.to_string())
     } else if method == Method::GET && path.starts_with("/api/callcontext/") {
         // Row 35 (server.ts:4161) — the LAST HTTP row. The full literal context of ONE llm call,
         // rebuilt from the raw OTEL request body. `callContext: null` means no body was captured
