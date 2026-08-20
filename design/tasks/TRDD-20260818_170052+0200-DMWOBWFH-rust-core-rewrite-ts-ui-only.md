@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T14:03:00+0200
+updated: 2026-08-20T14:11:22+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -744,13 +744,30 @@ release-via: publish
   distinguishable from NaN (absent → omitted, explicit null → 0 and EMITTED); a turn past MAX_TURNS
   is returned but not kept, yet its toolUse blocks still count toward `totals.toolCalls`.
   142/142, clippy 28, identities green, live alcore serves rows 32/33/34.
-- **P4w.2 COMPLETE.** Rows 32, 33, 34, 36, 37 are LIVE. **NEXT: P4w.3 row 35** — the LAST HTTP row.
-  `resolveCallContext` contract is captured below (four post-assignments; `requestId` lands AFTER
-  `truncated`, so a resolved context's key order differs from a freshly-built one — assert it
-  explicitly, since a test that only exercises freshly-built contexts will not see it). Its shape
-  MUST be: lock → `resolve_request` → CLONE the pointer → UNLOCK → blocking read/parse →
-  RE-LOCK → account backfill via `account_registry`. After row 35 the HTTP §1 table is COMPLETE and
-  the remaining P4 work is the MCP surface (53 tools), for which the composition query engine
+- **P4w.3 DONE (commit 82281c1): FREEZE ROW 35 LIVE — the HTTP §1 TABLE IS COMPLETE.**
+  **VERIFIED, not assumed:** all **36/36** §1 rows are present in `ui.rs` (parsed the freeze table
+  and matched each path, `*` prefix-notation stripped). Note this proves each row is WIRED, not that
+  every row is parity-tested.
+  **THE ORACLE FALSIFIED A PREDICTION RECORDED IN THIS VERY BLOCK.** I expected an absent `model` to
+  be APPENDED by `if (!ctx.model) ctx.model = ptr.model`, landing after `requestId`. **It does not.**
+  The TS object literal always DEFINES `model` — as `undefined` when the body named none — so the
+  property already exists at its LITERAL position and assignment keeps it there, before `blocks`.
+  JSON hides an undefined value; it does not remove the slot. "An absent key appends" is right for
+  JS in general and WRONG for a key the literal declared. Our builder omits the key, so the port
+  restores it with `shift_insert` at the literal position. `requestId` is genuinely NOT in the
+  literal, so it really does land last — the two keys differ for a reason.
+  Three model outcomes, ONE code path: real model stays put; EMPTY-STRING model replaced IN PLACE
+  (FALSY test, not nullish); no model → slot restored before `blocks`; falsy model + no pointer
+  model → key DROPPED (not null, not ""). 145/145, clippy 28, identities green.
+- **(superseded prediction — do NOT carry forward)** the earlier note in this block implying the
+  resolved `model` key lands after `requestId`. It is wrong; see above.
+- **NEXT: the MCP surface (53 tools).** The HTTP work is done. Still unported from the composition
+  layer: `imageReport` / `findResidentBlobs` / `queryBlocks` — MCP-only, and purely ADDITIVE since
+  they reuse the core landed in P4w.1c(ii)a/b.
+- **(historical) P4w.2 COMPLETE.** Rows 32, 33, 34, 36, 37 went live before row 35. Row 35's
+  contract and its lock choreography (lock → `resolve_request` → CLONE the pointer → UNLOCK →
+  blocking read/parse → RE-LOCK → account backfill via `account_registry`) are IMPLEMENTED as of
+  82281c1 — this bullet is a record, not a pending instruction. The composition query engine
   (`imageReport` / `findResidentBlobs` / `queryBlocks`) is still unported but purely additive.
 - **THEN P4w.3 row 35**
   (`resolveCallContext`, contract two bullets below). After those the HTTP §1 table is complete.
