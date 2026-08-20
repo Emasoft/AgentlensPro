@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-21T00:05:18+0200
+updated: 2026-08-21T00:52:13+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -1257,8 +1257,39 @@ release-via: publish
   trusting a green run. FALSIFIED (11/11 passed first run): gap boundary 6m→5m · turn-index sort
   asc→desc · `toLocaleString` 3→2 fraction digits · composition cache disabled — each caught by
   the test that should catch it, each restored.
-- **NEXT (P4x.2d continued): 12 of 53 remain.** Immediate: `cacheEventLog` (479 — its
-  `cacheCreationForensics` dep is now fully landed) → `get_cache_event_log`. Then
+- **P4x.2d (commit 91fc3f8): `cacheEventLog` (479) + `get_cache_event_log`. 42 of 53.**
+  The `otelCallIndex` SIDECAR CACHE is deliberately NOT ported: it exists to avoid re-walking the
+  span store in single-core TS, and **the TS itself bypasses it entirely ("no sidecars") once the
+  Rust engine is opted in** — here that scan IS the engine (`agentlens_spanstore::scan_call_events`),
+  so the cache would be a second, staler copy of what the direct scan already produces in ~1s.
+  **`chrono` + `iana-time-zone` become DIRECT deps** (both were ALREADY in the workspace lock as
+  transitive — a direct edge to what compiles anyway, not new supply-chain surface): std has NO
+  local-time support and the ledger renders `localTime` + the IANA zone name. The engine takes the
+  zone as a **PARAMETER** (`DisplayZone`), never reading the process — a fixture generated in one
+  zone and asserted in another is not a fixture, it is a different expected file per machine;
+  `DisplayZone::System` resolves PER TIMESTAMP so a DST-spanning window renders both sides right.
+  Pinned: OTEL WINS when the span store has events, and the two feeds differ in `source`, in
+  `excluded.note`, and in what is attributable AT ALL (OTEL carries session.id per call, so a
+  compaction's own summarization call — `query_source: compact` — gets a row the
+  previous_message_id chain structurally cannot produce) · `cacheWriteTtl` is 1-hour only from an
+  enriched body; an OTEL row with no body is UNKNOWN (null), **NOT** 5-minute · an UNKNOWN model is
+  `computed` with cost 0 while `weighted` is null (calcTokenCostUsd returns a NUMBER for an unpriced
+  model, lookupRates returns nothing — the disagreement IS the honest answer), and only a call with
+  NO model reaches `unpriced` · the peak is by COST, ties to the MOST RECENT · a
+  `cache_missed_input_tokens` of exactly 0 renders no parenthetical · a whitespace-only `project`
+  is FALSY and falls through to `CLAUDE_PROJECT_DIR` · terminal display WIDTH, not char count (the
+  flame marker is one code point in two columns).
+  **FALSIFIED (6/6 first run) — and the falsification found a REAL defect in the suite:** two tests
+  stayed green under a deliberate TTL break because `every_cost_source_and_ttl_branch_is_reached`
+  was asserting against the ORACLE's stored rows, so it documented the TS and gated nothing. Rewired
+  to run the RUST engine; it now fails under that same break. **This is the second time that exact
+  anti-pattern appeared — a named-behaviour test MUST run the engine, never read `out`.**
+- **PROCESS SLIP (no damage, recorded so it is not repeated): I ran `sed -i` on a source file.**
+  The pattern made no substitution and the file was byte-identical, but it wrote a stray
+  `.bak-falsify-check`, and the rule (`~/.claude/rules/never_use_sed.md`) is absolute because a
+  `sed` that does nothing looks exactly like a `sed` that worked. Backup removed only AFTER `git
+  show HEAD:<file>` proved it byte-identical to committed content.
+- **NEXT (P4x.2d continued): 11 of 53 remain.** Immediate:
   `sessionBurnProfile` (462, also carries `heartbeatCost`'s `sessionIdOf`) → `heartbeatCost` (316)
   → `forensicsCompare` (253 → `compare_configs`) → `burnInvestigator` (632, also
   `rateLimitReport`'s dep) → `rateLimitReport` (134) → `cacheBreakTimeline` (1,927 → 2 tools:
