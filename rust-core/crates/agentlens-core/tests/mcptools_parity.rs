@@ -57,3 +57,107 @@ fn the_block_projection_drops_token_source_and_keeps_its_own_order() {
     let sum: f64 = ctx["blocks"].as_array().unwrap().iter().map(|b| b["tokens"].as_f64().unwrap()).sum();
     assert_eq!(got["totalTokens"].as_f64().unwrap(), sum, "{got}");
 }
+
+fn cmp_deep(got: &Value, exp: &Value, ctx: &str) {
+    if exp.is_object() {
+        assert_eq!(keys(got), keys(exp), "{ctx}: key set/ORDER differs (an undefined field must be OMITTED, never null)");
+        for (k, ev) in exp.as_object().unwrap() {
+            cmp_deep(&got[k], ev, &format!("{ctx}.{k}"));
+        }
+        return;
+    }
+    if let (Some(ga), Some(ea)) = (got.as_array(), exp.as_array()) {
+        assert_eq!(ga.len(), ea.len(), "{ctx}: array length differs\n  got: {got}\n  exp: {exp}");
+        for (i, (g, e)) in ga.iter().zip(ea).enumerate() {
+            cmp_deep(g, e, &format!("{ctx}[{i}]"));
+        }
+        return;
+    }
+    assert_eq!(got, exp, "{ctx}");
+}
+
+/// The oracle pins `now` only through priced fields; the fixture models have no scheduled rate
+/// change, so any stable clock reproduces them. Using the generation instant would be better still,
+/// but this oracle predates that field — noted rather than silently assumed away.
+const NOW_MS: f64 = 1_787_000_000_000.0;
+
+#[test]
+fn get_context_composition_reproduces_the_ts_oracle_exactly() {
+    let o = oracle();
+    for (case, exp) in o["compCases"].as_array().unwrap().iter().zip(o["compResults"].as_array().unwrap()) {
+        let name = case["name"].as_str().unwrap();
+        let args = &case["args"];
+        let got = agentlens_core::mcp_tools::get_context_composition(
+            Some(&case["comp"]),
+            args["sessionId"].as_str().unwrap(),
+            args.get("turn").and_then(Value::as_f64),
+        );
+        cmp_deep(&got, exp, &format!("get_context_composition[{name}]"));
+    }
+}
+
+#[test]
+fn get_context_history_reproduces_the_ts_oracle_exactly() {
+    let o = oracle();
+    for (case, exp) in o["histCases"].as_array().unwrap().iter().zip(o["histResults"].as_array().unwrap()) {
+        let name = case["name"].as_str().unwrap();
+        let args = &case["args"];
+        let got = agentlens_core::mcp_tools::get_context_history(
+            Some(&case["hist"]),
+            case.get("cardModel").and_then(Value::as_str),
+            args["sessionId"].as_str().unwrap(),
+            args.get("turn").and_then(Value::as_f64),
+            args.get("blockId").and_then(Value::as_str),
+            NOW_MS,
+        );
+        cmp_deep(&got, exp, &format!("get_context_history[{name}]"));
+    }
+}
+
+#[test]
+fn get_conversation_reproduces_the_ts_oracle_exactly() {
+    let o = oracle();
+    for (case, exp) in o["convCases"].as_array().unwrap().iter().zip(o["convResults"].as_array().unwrap()) {
+        let name = case["name"].as_str().unwrap();
+        let args = &case["args"];
+        let got = agentlens_core::mcp_tools::get_conversation(
+            Some(&case["conv"]),
+            args["sessionId"].as_str().unwrap(),
+            args.get("turn").and_then(Value::as_f64),
+            args.get("turnFrom").and_then(Value::as_f64),
+            args.get("turnTo").and_then(Value::as_f64),
+        );
+        cmp_deep(&got, exp, &format!("get_conversation[{name}]"));
+    }
+}
+
+/// Three bounding rules that a later "cleanup" would plausibly break, each asserted by name.
+#[test]
+fn the_drill_bounding_rules_hold() {
+    let o = oracle();
+    let case = |set: &str, name: &str| -> Value {
+        o[set].as_array().unwrap().iter().find(|c| c["name"] == name).expect("case present").clone()
+    };
+
+    // 1. composition turnCount is the UNFILTERED total — it answers "how many turns does this
+    //    session have", not "how many did you get back".
+    let c = case("compCases", "one-turn-keeps-unfiltered-turnCount");
+    let got = agentlens_core::mcp_tools::get_context_composition(Some(&c["comp"]), "comp-own", Some(2.0));
+    assert_eq!(got["turnCount"], 3, "turnCount must not follow the filter: {got}");
+    assert_eq!(got["turns"].as_array().unwrap().len(), 1, "{got}");
+
+    // 2. the conversation range is CLAMPED to from+cap-1 — a caller cannot widen the window.
+    let c = case("convCases", "range-clamped-to-cap");
+    let got = agentlens_core::mcp_tools::get_conversation(Some(&c["conv"]), "conv-main", None, Some(1.0), Some(9999.0));
+    assert_eq!(got["turnTo"], 20, "turnTo must clamp to the cap, not honour 9999: {got}");
+    assert_eq!(got["rangeCap"], 20);
+
+    // 3. the block drill spreads VERBATIM (keeps tokenSource) while the step projection DROPS it.
+    let c = case("histCases", "one-block-verbatim");
+    let drill = agentlens_core::mcp_tools::get_context_history(
+        Some(&c["hist"]), Some("claude-opus-5"), "hist-main", Some(1.0), Some("userMsg:user"), NOW_MS);
+    assert!(drill["block"]["tokenSource"].is_string(), "the block drill is verbatim: {drill}");
+    let step = agentlens_core::mcp_tools::get_context_history(
+        Some(&c["hist"]), Some("claude-opus-5"), "hist-main", Some(1.0), None, NOW_MS);
+    assert!(step["blocks"][0].get("tokenSource").is_none(), "the step projection drops it: {step}");
+}

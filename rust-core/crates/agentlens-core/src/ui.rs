@@ -1061,6 +1061,60 @@ async fn handle(
                         );
                         crate::mcp::tool_ok(&id, &payload)
                     }
+                    "get_context_composition" | "get_context_history" | "get_conversation" => {
+                        let session_id = s("sessionId").unwrap_or_default();
+                        let n = |k: &str| args.get(k).and_then(Value::as_f64);
+                        // The card's model is needed ONLY by get_context_history, and only for its
+                        // costUsd — see step_cost: the TS prices from the CARD's model, never the
+                        // step's.
+                        let (env, card_model) = {
+                            let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                            let model = if name == "get_context_history" {
+                                st.build_session_summary(crate::now_ms() as f64)
+                                    .get("sessions")
+                                    .and_then(Value::as_array)
+                                    .and_then(|ss| ss.iter().find(|c| c.get("sessionId").and_then(Value::as_str) == Some(session_id.as_str())))
+                                    .and_then(|c| c.get("model").and_then(Value::as_str))
+                                    .map(str::to_owned)
+                            } else {
+                                None
+                            };
+                            (st.log_env.clone(), model)
+                        };
+                        let sid = session_id.clone();
+                        let tool = name.clone();
+                        // Streaming a transcript is blocking, multi-GB-capable work — off the
+                        // executor and never under the lock.
+                        let engine = tokio::task::spawn_blocking(move || match tool.as_str() {
+                            "get_context_composition" => crate::context_composition::build_context_composition(&env, &sid, None),
+                            "get_context_history" => crate::context_history::build_context_history(&env, &sid, None),
+                            _ => crate::conversation::build_conversation(&env, &sid, None),
+                        })
+                        .await
+                        .map_err(|e| format!("{name} build join failed: {e}"))?
+                        .unwrap_or(Value::Null);
+                        let payload = match name.as_str() {
+                            "get_context_composition" => {
+                                crate::mcp_tools::get_context_composition(Some(&engine), &session_id, n("turn"))
+                            }
+                            "get_context_history" => crate::mcp_tools::get_context_history(
+                                Some(&engine),
+                                card_model.as_deref(),
+                                &session_id,
+                                n("turn"),
+                                s("blockId").as_deref(),
+                                crate::now_ms() as f64,
+                            ),
+                            _ => crate::mcp_tools::get_conversation(
+                                Some(&engine),
+                                &session_id,
+                                n("turn"),
+                                n("turnFrom"),
+                                n("turnTo"),
+                            ),
+                        };
+                        crate::mcp::tool_ok(&id, &payload)
+                    }
                     // Every other frozen tool is still served by the TypeScript MCP server, and
                     // says so by name rather than answering emptily.
                     other => crate::mcp::not_implemented(&id, other),

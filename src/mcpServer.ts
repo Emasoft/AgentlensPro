@@ -2325,7 +2325,8 @@ export function handleGetCallContext(ctx: CallContext | null, args: { sessionId:
   }
 }
 
-function handleGetContextHistory(
+// EXPORTED for the Rust port's parity oracle (TRDD-DMWOBWFH P4x.2b) — export only, no behaviour change.
+export function handleGetContextHistory(
   history: ContextHistory | null,
   card: SessionSummaryCard | undefined,
   args: { sessionId: string; turn?: number; blockId?: string },
@@ -2391,7 +2392,8 @@ function verbatimTurn(t: ConversationTurn) {
   }
 }
 
-function handleGetConversation(
+// EXPORTED for the Rust port's parity oracle (TRDD-DMWOBWFH P4x.2b) — export only, no behaviour change.
+export function handleGetConversation(
   conv: Conversation | null,
   args: { sessionId: string; turn?: number; turnFrom?: number; turnTo?: number },
 ) {
@@ -2438,7 +2440,8 @@ function handleGetConversation(
   }
 }
 
-function handleGetContextComposition(composition: ContextComposition | null, args: { sessionId: string; turn?: number }) {
+// EXPORTED for the Rust port's parity oracle (TRDD-DMWOBWFH P4x.2b) — export only, no behaviour change.
+export function handleGetContextComposition(composition: ContextComposition | null, args: { sessionId: string; turn?: number }) {
   if (!composition) return { sessionId: args.sessionId, message: 'No local Claude log composition available for this session (OTEL-only or not a Claude session).' }
   let turns = composition.turns
   if (args.turn !== undefined) turns = turns.filter(t => t.turn === args.turn)

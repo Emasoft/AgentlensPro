@@ -271,5 +271,5066 @@
     }
    ]
   }
+ ],
+ "compCases": [
+  {
+   "name": "whole",
+   "comp": {
+    "sessionId": "comp-own",
+    "turns": [
+     {
+      "turn": 1,
+      "sources": [
+       {
+        "label": "skill catalog",
+        "kind": "skill",
+        "bytes": 18,
+        "tokens": 3,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "skill catalog text"
+       }
+      ]
+     },
+     {
+      "turn": 2,
+      "sources": [
+       {
+        "label": "file: ",
+        "kind": "file",
+        "bytes": 46,
+        "tokens": 11,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "empty displayPath is USED (nullish, not falsy)"
+       },
+       {
+        "label": "file: report.md",
+        "kind": "file",
+        "bytes": 27,
+        "tokens": 7,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "file contents é multi-byte"
+       },
+       {
+        "label": "mcp instructions",
+        "kind": "mcp",
+        "bytes": 10,
+        "tokens": 6,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "srv-1\nsrv-2"
+       },
+       {
+        "label": "hook: PreToolUse",
+        "kind": "hook",
+        "bytes": 23,
+        "tokens": 5,
+        "tokenSource": "estimated",
+        "count": 2,
+        "excerpt": "hook body"
+       },
+       {
+        "label": "tool catalog",
+        "kind": "toolCatalog",
+        "bytes": 12,
+        "tokens": 5,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "tool a\ntool b"
+       },
+       {
+        "label": "task reminder",
+        "kind": "reminder",
+        "bytes": 18,
+        "tokens": 4,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "remember the thing"
+       },
+       {
+        "label": "invoked skills",
+        "kind": "skill",
+        "bytes": 14,
+        "tokens": 4,
+        "tokenSource": "estimated",
+        "count": 2,
+        "excerpt": "skill a"
+       },
+       {
+        "label": "file: fallback.txt",
+        "kind": "file",
+        "bytes": 12,
+        "tokens": 3,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "via filename"
+       },
+       {
+        "label": "hook: unknown",
+        "kind": "hook",
+        "bytes": 6,
+        "tokens": 2,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "out"
+       },
+       {
+        "label": "agent catalog",
+        "kind": "agentCatalog",
+        "bytes": 7,
+        "tokens": 2,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "agent x"
+       },
+       {
+        "label": "file: third.txt",
+        "kind": "file",
+        "bytes": 8,
+        "tokens": 2,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "via path"
+       }
+      ]
+     },
+     {
+      "turn": 3,
+      "sources": [
+       {
+        "label": "task reminder",
+        "kind": "reminder",
+        "bytes": 15,
+        "tokens": 4,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "turn 3 reminder"
+       }
+      ]
+     }
+    ],
+    "estimated": true,
+    "truncated": false
+   },
+   "args": {
+    "sessionId": "comp-own"
+   }
+  },
+  {
+   "name": "one-turn-keeps-unfiltered-turnCount",
+   "comp": {
+    "sessionId": "comp-own",
+    "turns": [
+     {
+      "turn": 1,
+      "sources": [
+       {
+        "label": "skill catalog",
+        "kind": "skill",
+        "bytes": 18,
+        "tokens": 3,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "skill catalog text"
+       }
+      ]
+     },
+     {
+      "turn": 2,
+      "sources": [
+       {
+        "label": "file: ",
+        "kind": "file",
+        "bytes": 46,
+        "tokens": 11,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "empty displayPath is USED (nullish, not falsy)"
+       },
+       {
+        "label": "file: report.md",
+        "kind": "file",
+        "bytes": 27,
+        "tokens": 7,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "file contents é multi-byte"
+       },
+       {
+        "label": "mcp instructions",
+        "kind": "mcp",
+        "bytes": 10,
+        "tokens": 6,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "srv-1\nsrv-2"
+       },
+       {
+        "label": "hook: PreToolUse",
+        "kind": "hook",
+        "bytes": 23,
+        "tokens": 5,
+        "tokenSource": "estimated",
+        "count": 2,
+        "excerpt": "hook body"
+       },
+       {
+        "label": "tool catalog",
+        "kind": "toolCatalog",
+        "bytes": 12,
+        "tokens": 5,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "tool a\ntool b"
+       },
+       {
+        "label": "task reminder",
+        "kind": "reminder",
+        "bytes": 18,
+        "tokens": 4,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "remember the thing"
+       },
+       {
+        "label": "invoked skills",
+        "kind": "skill",
+        "bytes": 14,
+        "tokens": 4,
+        "tokenSource": "estimated",
+        "count": 2,
+        "excerpt": "skill a"
+       },
+       {
+        "label": "file: fallback.txt",
+        "kind": "file",
+        "bytes": 12,
+        "tokens": 3,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "via filename"
+       },
+       {
+        "label": "hook: unknown",
+        "kind": "hook",
+        "bytes": 6,
+        "tokens": 2,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "out"
+       },
+       {
+        "label": "agent catalog",
+        "kind": "agentCatalog",
+        "bytes": 7,
+        "tokens": 2,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "agent x"
+       },
+       {
+        "label": "file: third.txt",
+        "kind": "file",
+        "bytes": 8,
+        "tokens": 2,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "via path"
+       }
+      ]
+     },
+     {
+      "turn": 3,
+      "sources": [
+       {
+        "label": "task reminder",
+        "kind": "reminder",
+        "bytes": 15,
+        "tokens": 4,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "turn 3 reminder"
+       }
+      ]
+     }
+    ],
+    "estimated": true,
+    "truncated": false
+   },
+   "args": {
+    "sessionId": "comp-own",
+    "turn": 2
+   }
+  },
+  {
+   "name": "missing-turn",
+   "comp": {
+    "sessionId": "comp-own",
+    "turns": [
+     {
+      "turn": 1,
+      "sources": [
+       {
+        "label": "skill catalog",
+        "kind": "skill",
+        "bytes": 18,
+        "tokens": 3,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "skill catalog text"
+       }
+      ]
+     },
+     {
+      "turn": 2,
+      "sources": [
+       {
+        "label": "file: ",
+        "kind": "file",
+        "bytes": 46,
+        "tokens": 11,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "empty displayPath is USED (nullish, not falsy)"
+       },
+       {
+        "label": "file: report.md",
+        "kind": "file",
+        "bytes": 27,
+        "tokens": 7,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "file contents é multi-byte"
+       },
+       {
+        "label": "mcp instructions",
+        "kind": "mcp",
+        "bytes": 10,
+        "tokens": 6,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "srv-1\nsrv-2"
+       },
+       {
+        "label": "hook: PreToolUse",
+        "kind": "hook",
+        "bytes": 23,
+        "tokens": 5,
+        "tokenSource": "estimated",
+        "count": 2,
+        "excerpt": "hook body"
+       },
+       {
+        "label": "tool catalog",
+        "kind": "toolCatalog",
+        "bytes": 12,
+        "tokens": 5,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "tool a\ntool b"
+       },
+       {
+        "label": "task reminder",
+        "kind": "reminder",
+        "bytes": 18,
+        "tokens": 4,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "remember the thing"
+       },
+       {
+        "label": "invoked skills",
+        "kind": "skill",
+        "bytes": 14,
+        "tokens": 4,
+        "tokenSource": "estimated",
+        "count": 2,
+        "excerpt": "skill a"
+       },
+       {
+        "label": "file: fallback.txt",
+        "kind": "file",
+        "bytes": 12,
+        "tokens": 3,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "via filename"
+       },
+       {
+        "label": "hook: unknown",
+        "kind": "hook",
+        "bytes": 6,
+        "tokens": 2,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "out"
+       },
+       {
+        "label": "agent catalog",
+        "kind": "agentCatalog",
+        "bytes": 7,
+        "tokens": 2,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "agent x"
+       },
+       {
+        "label": "file: third.txt",
+        "kind": "file",
+        "bytes": 8,
+        "tokens": 2,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "via path"
+       }
+      ]
+     },
+     {
+      "turn": 3,
+      "sources": [
+       {
+        "label": "task reminder",
+        "kind": "reminder",
+        "bytes": 15,
+        "tokens": 4,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "turn 3 reminder"
+       }
+      ]
+     }
+    ],
+    "estimated": true,
+    "truncated": false
+   },
+   "args": {
+    "sessionId": "comp-own",
+    "turn": 999
+   }
+  },
+  {
+   "name": "null",
+   "comp": null,
+   "args": {
+    "sessionId": "ghost"
+   }
+  }
+ ],
+ "compResults": [
+  {
+   "sessionId": "comp-own",
+   "estimated": true,
+   "truncated": false,
+   "turnCount": 3,
+   "turns": [
+    {
+     "turn": 1,
+     "totalTokens": 3,
+     "sources": [
+      {
+       "label": "skill catalog",
+       "kind": "skill",
+       "tokens": 3,
+       "count": 1
+      }
+     ]
+    },
+    {
+     "turn": 2,
+     "totalTokens": 51,
+     "sources": [
+      {
+       "label": "file: ",
+       "kind": "file",
+       "tokens": 11,
+       "count": 1
+      },
+      {
+       "label": "file: report.md",
+       "kind": "file",
+       "tokens": 7,
+       "count": 1
+      },
+      {
+       "label": "mcp instructions",
+       "kind": "mcp",
+       "tokens": 6,
+       "count": 1
+      },
+      {
+       "label": "hook: PreToolUse",
+       "kind": "hook",
+       "tokens": 5,
+       "count": 2
+      },
+      {
+       "label": "tool catalog",
+       "kind": "toolCatalog",
+       "tokens": 5,
+       "count": 1
+      },
+      {
+       "label": "task reminder",
+       "kind": "reminder",
+       "tokens": 4,
+       "count": 1
+      },
+      {
+       "label": "invoked skills",
+       "kind": "skill",
+       "tokens": 4,
+       "count": 2
+      },
+      {
+       "label": "file: fallback.txt",
+       "kind": "file",
+       "tokens": 3,
+       "count": 1
+      },
+      {
+       "label": "hook: unknown",
+       "kind": "hook",
+       "tokens": 2,
+       "count": 1
+      },
+      {
+       "label": "agent catalog",
+       "kind": "agentCatalog",
+       "tokens": 2,
+       "count": 1
+      },
+      {
+       "label": "file: third.txt",
+       "kind": "file",
+       "tokens": 2,
+       "count": 1
+      }
+     ]
+    },
+    {
+     "turn": 3,
+     "totalTokens": 4,
+     "sources": [
+      {
+       "label": "task reminder",
+       "kind": "reminder",
+       "tokens": 4,
+       "count": 1
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "sessionId": "comp-own",
+   "estimated": true,
+   "truncated": false,
+   "turnCount": 3,
+   "turns": [
+    {
+     "turn": 2,
+     "totalTokens": 51,
+     "sources": [
+      {
+       "label": "file: ",
+       "kind": "file",
+       "tokens": 11,
+       "count": 1
+      },
+      {
+       "label": "file: report.md",
+       "kind": "file",
+       "tokens": 7,
+       "count": 1
+      },
+      {
+       "label": "mcp instructions",
+       "kind": "mcp",
+       "tokens": 6,
+       "count": 1
+      },
+      {
+       "label": "hook: PreToolUse",
+       "kind": "hook",
+       "tokens": 5,
+       "count": 2
+      },
+      {
+       "label": "tool catalog",
+       "kind": "toolCatalog",
+       "tokens": 5,
+       "count": 1
+      },
+      {
+       "label": "task reminder",
+       "kind": "reminder",
+       "tokens": 4,
+       "count": 1
+      },
+      {
+       "label": "invoked skills",
+       "kind": "skill",
+       "tokens": 4,
+       "count": 2
+      },
+      {
+       "label": "file: fallback.txt",
+       "kind": "file",
+       "tokens": 3,
+       "count": 1
+      },
+      {
+       "label": "hook: unknown",
+       "kind": "hook",
+       "tokens": 2,
+       "count": 1
+      },
+      {
+       "label": "agent catalog",
+       "kind": "agentCatalog",
+       "tokens": 2,
+       "count": 1
+      },
+      {
+       "label": "file: third.txt",
+       "kind": "file",
+       "tokens": 2,
+       "count": 1
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "sessionId": "comp-own",
+   "estimated": true,
+   "truncated": false,
+   "turnCount": 3,
+   "turns": []
+  },
+  {
+   "sessionId": "ghost",
+   "message": "No local Claude log composition available for this session (OTEL-only or not a Claude session)."
+  }
+ ],
+ "histCases": [
+  {
+   "name": "whole",
+   "hist": {
+    "sessionId": "hist-main",
+    "steps": [
+     {
+      "turn": 1,
+      "timestamp": "2026-08-01T10:00:05Z",
+      "model": "claude-opus-5",
+      "usage": {
+       "input": 40,
+       "output": 25,
+       "cacheRead": 9000,
+       "cacheCreate": 10
+      },
+      "blocks": [
+       {
+        "id": "userMsg:user",
+        "kind": "userMsg",
+        "label": "user",
+        "tokens": 4,
+        "tokenSource": "estimated",
+        "bytes": 19,
+        "text": "please do the thing",
+        "role": "input"
+       },
+       {
+        "id": "harness:system-reminder",
+        "kind": "harness",
+        "label": "system-reminder",
+        "tokens": 15,
+        "tokenSource": "estimated",
+        "bytes": 51,
+        "text": "context <system-reminder>injected</system-reminder>",
+        "role": "input"
+       },
+       {
+        "id": "file:file: read.md",
+        "kind": "file",
+        "label": "file: read.md",
+        "tokens": 3,
+        "tokenSource": "estimated",
+        "bytes": 14,
+        "text": "file body here",
+        "role": "input"
+       },
+       {
+        "id": "reasoning:thinking",
+        "kind": "reasoning",
+        "label": "thinking",
+        "tokens": 4,
+        "tokenSource": "calibrated",
+        "bytes": 33,
+        "text": "let me think about this carefully",
+        "role": "output"
+       },
+       {
+        "id": "assistantMsg:assistant",
+        "kind": "assistantMsg",
+        "label": "assistant",
+        "tokens": 4,
+        "tokenSource": "calibrated",
+        "bytes": 31,
+        "text": "here is the answer\nappended text",
+        "role": "output"
+       },
+       {
+        "id": "bashInput:Bash",
+        "kind": "bashInput",
+        "label": "Bash",
+        "tokens": 3,
+        "tokenSource": "calibrated",
+        "bytes": 11,
+        "text": "ls -la /tmp",
+        "role": "output",
+        "toolName": "Bash"
+       },
+       {
+        "id": "toolInput:Task",
+        "kind": "toolInput",
+        "label": "Task",
+        "tokens": 6,
+        "tokenSource": "calibrated",
+        "bytes": 26,
+        "text": "{\"prompt\":\"go do a thing\"}",
+        "role": "output",
+        "toolName": "Task"
+       },
+       {
+        "id": "toolInput:Read",
+        "kind": "toolInput",
+        "label": "Read",
+        "tokens": 8,
+        "tokenSource": "calibrated",
+        "bytes": 24,
+        "text": "{\"file_path\":\"/a/b.txt\"}",
+        "role": "output",
+        "toolName": "Read"
+       }
+      ],
+      "diff": {
+       "added": [
+        "userMsg:user",
+        "harness:system-reminder",
+        "file:file: read.md",
+        "reasoning:thinking",
+        "assistantMsg:assistant",
+        "bashInput:Bash",
+        "toolInput:Task",
+        "toolInput:Read"
+       ],
+       "removed": [],
+       "changed": [],
+       "firstChangeBlockId": "userMsg:user"
+      }
+     },
+     {
+      "turn": 2,
+      "timestamp": "2026-08-01T10:01:00Z",
+      "model": "claude-opus-5",
+      "usage": {
+       "input": 500,
+       "output": 12,
+       "cacheRead": 20000,
+       "cacheCreate": 100
+      },
+      "blocks": [
+       {
+        "id": "bashOutput:Bash",
+        "kind": "bashOutput",
+        "label": "Bash",
+        "tokens": 8,
+        "tokenSource": "estimated",
+        "bytes": 18,
+        "text": "total 0\ndrwxr-xr-x",
+        "role": "input",
+        "toolName": "Bash"
+       },
+       {
+        "id": "subagentOutput:Task",
+        "kind": "subagentOutput",
+        "label": "Task",
+        "tokens": 4,
+        "tokenSource": "estimated",
+        "bytes": 16,
+        "text": "subagent said hi",
+        "role": "input",
+        "toolName": "Task"
+       },
+       {
+        "id": "toolOutput:tool",
+        "kind": "toolOutput",
+        "label": "tool",
+        "tokens": 2,
+        "tokenSource": "estimated",
+        "bytes": 13,
+        "text": "orphan result",
+        "role": "input"
+       },
+       {
+        "id": "userMsg:user",
+        "kind": "userMsg",
+        "label": "user",
+        "tokens": 5,
+        "tokenSource": "estimated",
+        "bytes": 15,
+        "text": "and a follow-up",
+        "role": "input"
+       },
+       {
+        "id": "other:image",
+        "kind": "other",
+        "label": "image",
+        "tokens": 0,
+        "tokenSource": "estimated",
+        "bytes": 0,
+        "text": "",
+        "role": "input"
+       },
+       {
+        "id": "cron:scheduled task: nightly-report",
+        "kind": "cron",
+        "label": "scheduled task: nightly-report",
+        "tokens": 11,
+        "tokenSource": "estimated",
+        "bytes": 41,
+        "text": "[nightly-report]\nthe scheduled task fired",
+        "role": "input"
+       },
+       {
+        "id": "cron:local-command caveat",
+        "kind": "cron",
+        "label": "local-command caveat",
+        "tokens": 17,
+        "tokenSource": "estimated",
+        "bytes": 64,
+        "text": "wrapper <local-command-caveat>caveat text</local-command-caveat>",
+        "role": "input"
+       },
+       {
+        "id": "harness:meta",
+        "kind": "harness",
+        "label": "meta",
+        "tokens": 8,
+        "tokenSource": "estimated",
+        "bytes": 44,
+        "text": "some other harness meta\nfallthrough meta text",
+        "role": "input"
+       },
+       {
+        "id": "assistantMsg:assistant",
+        "kind": "assistantMsg",
+        "label": "assistant",
+        "tokens": 12,
+        "tokenSource": "calibrated",
+        "bytes": 18,
+        "text": "here is the answer",
+        "role": "output"
+       }
+      ],
+      "diff": {
+       "added": [
+        "bashOutput:Bash",
+        "subagentOutput:Task",
+        "toolOutput:tool",
+        "other:image",
+        "cron:scheduled task: nightly-report",
+        "cron:local-command caveat",
+        "harness:meta"
+       ],
+       "removed": [
+        "harness:system-reminder",
+        "file:file: read.md",
+        "reasoning:thinking",
+        "bashInput:Bash",
+        "toolInput:Task",
+        "toolInput:Read"
+       ],
+       "changed": [
+        "userMsg:user",
+        "assistantMsg:assistant"
+       ],
+       "firstChangeBlockId": "bashOutput:Bash"
+      }
+     },
+     {
+      "turn": 3,
+      "blocks": [
+       {
+        "id": "postCompact:compact summary",
+        "kind": "postCompact",
+        "label": "compact summary",
+        "tokens": 10,
+        "tokenSource": "estimated",
+        "bytes": 52,
+        "text": "this session was compacted here\na bare summary record",
+        "role": "input"
+       },
+       {
+        "id": "assistantMsg:assistant",
+        "kind": "assistantMsg",
+        "label": "assistant",
+        "tokens": 4,
+        "tokenSource": "estimated",
+        "bytes": 18,
+        "text": "post-compact reply",
+        "role": "output"
+       }
+      ],
+      "diff": {
+       "added": [
+        "postCompact:compact summary"
+       ],
+       "removed": [
+        "bashOutput:Bash",
+        "subagentOutput:Task",
+        "toolOutput:tool",
+        "userMsg:user",
+        "other:image",
+        "cron:scheduled task: nightly-report",
+        "cron:local-command caveat",
+        "harness:meta"
+       ],
+       "changed": [
+        "assistantMsg:assistant"
+       ],
+       "firstChangeBlockId": "postCompact:compact summary"
+      }
+     }
+    ],
+    "estimated": true,
+    "truncated": false
+   },
+   "cardModel": "claude-opus-5",
+   "args": {
+    "sessionId": "hist-main"
+   }
+  },
+  {
+   "name": "whole-no-card-model",
+   "hist": {
+    "sessionId": "hist-main",
+    "steps": [
+     {
+      "turn": 1,
+      "timestamp": "2026-08-01T10:00:05Z",
+      "model": "claude-opus-5",
+      "usage": {
+       "input": 40,
+       "output": 25,
+       "cacheRead": 9000,
+       "cacheCreate": 10
+      },
+      "blocks": [
+       {
+        "id": "userMsg:user",
+        "kind": "userMsg",
+        "label": "user",
+        "tokens": 4,
+        "tokenSource": "estimated",
+        "bytes": 19,
+        "text": "please do the thing",
+        "role": "input"
+       },
+       {
+        "id": "harness:system-reminder",
+        "kind": "harness",
+        "label": "system-reminder",
+        "tokens": 15,
+        "tokenSource": "estimated",
+        "bytes": 51,
+        "text": "context <system-reminder>injected</system-reminder>",
+        "role": "input"
+       },
+       {
+        "id": "file:file: read.md",
+        "kind": "file",
+        "label": "file: read.md",
+        "tokens": 3,
+        "tokenSource": "estimated",
+        "bytes": 14,
+        "text": "file body here",
+        "role": "input"
+       },
+       {
+        "id": "reasoning:thinking",
+        "kind": "reasoning",
+        "label": "thinking",
+        "tokens": 4,
+        "tokenSource": "calibrated",
+        "bytes": 33,
+        "text": "let me think about this carefully",
+        "role": "output"
+       },
+       {
+        "id": "assistantMsg:assistant",
+        "kind": "assistantMsg",
+        "label": "assistant",
+        "tokens": 4,
+        "tokenSource": "calibrated",
+        "bytes": 31,
+        "text": "here is the answer\nappended text",
+        "role": "output"
+       },
+       {
+        "id": "bashInput:Bash",
+        "kind": "bashInput",
+        "label": "Bash",
+        "tokens": 3,
+        "tokenSource": "calibrated",
+        "bytes": 11,
+        "text": "ls -la /tmp",
+        "role": "output",
+        "toolName": "Bash"
+       },
+       {
+        "id": "toolInput:Task",
+        "kind": "toolInput",
+        "label": "Task",
+        "tokens": 6,
+        "tokenSource": "calibrated",
+        "bytes": 26,
+        "text": "{\"prompt\":\"go do a thing\"}",
+        "role": "output",
+        "toolName": "Task"
+       },
+       {
+        "id": "toolInput:Read",
+        "kind": "toolInput",
+        "label": "Read",
+        "tokens": 8,
+        "tokenSource": "calibrated",
+        "bytes": 24,
+        "text": "{\"file_path\":\"/a/b.txt\"}",
+        "role": "output",
+        "toolName": "Read"
+       }
+      ],
+      "diff": {
+       "added": [
+        "userMsg:user",
+        "harness:system-reminder",
+        "file:file: read.md",
+        "reasoning:thinking",
+        "assistantMsg:assistant",
+        "bashInput:Bash",
+        "toolInput:Task",
+        "toolInput:Read"
+       ],
+       "removed": [],
+       "changed": [],
+       "firstChangeBlockId": "userMsg:user"
+      }
+     },
+     {
+      "turn": 2,
+      "timestamp": "2026-08-01T10:01:00Z",
+      "model": "claude-opus-5",
+      "usage": {
+       "input": 500,
+       "output": 12,
+       "cacheRead": 20000,
+       "cacheCreate": 100
+      },
+      "blocks": [
+       {
+        "id": "bashOutput:Bash",
+        "kind": "bashOutput",
+        "label": "Bash",
+        "tokens": 8,
+        "tokenSource": "estimated",
+        "bytes": 18,
+        "text": "total 0\ndrwxr-xr-x",
+        "role": "input",
+        "toolName": "Bash"
+       },
+       {
+        "id": "subagentOutput:Task",
+        "kind": "subagentOutput",
+        "label": "Task",
+        "tokens": 4,
+        "tokenSource": "estimated",
+        "bytes": 16,
+        "text": "subagent said hi",
+        "role": "input",
+        "toolName": "Task"
+       },
+       {
+        "id": "toolOutput:tool",
+        "kind": "toolOutput",
+        "label": "tool",
+        "tokens": 2,
+        "tokenSource": "estimated",
+        "bytes": 13,
+        "text": "orphan result",
+        "role": "input"
+       },
+       {
+        "id": "userMsg:user",
+        "kind": "userMsg",
+        "label": "user",
+        "tokens": 5,
+        "tokenSource": "estimated",
+        "bytes": 15,
+        "text": "and a follow-up",
+        "role": "input"
+       },
+       {
+        "id": "other:image",
+        "kind": "other",
+        "label": "image",
+        "tokens": 0,
+        "tokenSource": "estimated",
+        "bytes": 0,
+        "text": "",
+        "role": "input"
+       },
+       {
+        "id": "cron:scheduled task: nightly-report",
+        "kind": "cron",
+        "label": "scheduled task: nightly-report",
+        "tokens": 11,
+        "tokenSource": "estimated",
+        "bytes": 41,
+        "text": "[nightly-report]\nthe scheduled task fired",
+        "role": "input"
+       },
+       {
+        "id": "cron:local-command caveat",
+        "kind": "cron",
+        "label": "local-command caveat",
+        "tokens": 17,
+        "tokenSource": "estimated",
+        "bytes": 64,
+        "text": "wrapper <local-command-caveat>caveat text</local-command-caveat>",
+        "role": "input"
+       },
+       {
+        "id": "harness:meta",
+        "kind": "harness",
+        "label": "meta",
+        "tokens": 8,
+        "tokenSource": "estimated",
+        "bytes": 44,
+        "text": "some other harness meta\nfallthrough meta text",
+        "role": "input"
+       },
+       {
+        "id": "assistantMsg:assistant",
+        "kind": "assistantMsg",
+        "label": "assistant",
+        "tokens": 12,
+        "tokenSource": "calibrated",
+        "bytes": 18,
+        "text": "here is the answer",
+        "role": "output"
+       }
+      ],
+      "diff": {
+       "added": [
+        "bashOutput:Bash",
+        "subagentOutput:Task",
+        "toolOutput:tool",
+        "other:image",
+        "cron:scheduled task: nightly-report",
+        "cron:local-command caveat",
+        "harness:meta"
+       ],
+       "removed": [
+        "harness:system-reminder",
+        "file:file: read.md",
+        "reasoning:thinking",
+        "bashInput:Bash",
+        "toolInput:Task",
+        "toolInput:Read"
+       ],
+       "changed": [
+        "userMsg:user",
+        "assistantMsg:assistant"
+       ],
+       "firstChangeBlockId": "bashOutput:Bash"
+      }
+     },
+     {
+      "turn": 3,
+      "blocks": [
+       {
+        "id": "postCompact:compact summary",
+        "kind": "postCompact",
+        "label": "compact summary",
+        "tokens": 10,
+        "tokenSource": "estimated",
+        "bytes": 52,
+        "text": "this session was compacted here\na bare summary record",
+        "role": "input"
+       },
+       {
+        "id": "assistantMsg:assistant",
+        "kind": "assistantMsg",
+        "label": "assistant",
+        "tokens": 4,
+        "tokenSource": "estimated",
+        "bytes": 18,
+        "text": "post-compact reply",
+        "role": "output"
+       }
+      ],
+      "diff": {
+       "added": [
+        "postCompact:compact summary"
+       ],
+       "removed": [
+        "bashOutput:Bash",
+        "subagentOutput:Task",
+        "toolOutput:tool",
+        "userMsg:user",
+        "other:image",
+        "cron:scheduled task: nightly-report",
+        "cron:local-command caveat",
+        "harness:meta"
+       ],
+       "changed": [
+        "assistantMsg:assistant"
+       ],
+       "firstChangeBlockId": "postCompact:compact summary"
+      }
+     }
+    ],
+    "estimated": true,
+    "truncated": false
+   },
+   "args": {
+    "sessionId": "hist-main"
+   }
+  },
+  {
+   "name": "one-step",
+   "hist": {
+    "sessionId": "hist-main",
+    "steps": [
+     {
+      "turn": 1,
+      "timestamp": "2026-08-01T10:00:05Z",
+      "model": "claude-opus-5",
+      "usage": {
+       "input": 40,
+       "output": 25,
+       "cacheRead": 9000,
+       "cacheCreate": 10
+      },
+      "blocks": [
+       {
+        "id": "userMsg:user",
+        "kind": "userMsg",
+        "label": "user",
+        "tokens": 4,
+        "tokenSource": "estimated",
+        "bytes": 19,
+        "text": "please do the thing",
+        "role": "input"
+       },
+       {
+        "id": "harness:system-reminder",
+        "kind": "harness",
+        "label": "system-reminder",
+        "tokens": 15,
+        "tokenSource": "estimated",
+        "bytes": 51,
+        "text": "context <system-reminder>injected</system-reminder>",
+        "role": "input"
+       },
+       {
+        "id": "file:file: read.md",
+        "kind": "file",
+        "label": "file: read.md",
+        "tokens": 3,
+        "tokenSource": "estimated",
+        "bytes": 14,
+        "text": "file body here",
+        "role": "input"
+       },
+       {
+        "id": "reasoning:thinking",
+        "kind": "reasoning",
+        "label": "thinking",
+        "tokens": 4,
+        "tokenSource": "calibrated",
+        "bytes": 33,
+        "text": "let me think about this carefully",
+        "role": "output"
+       },
+       {
+        "id": "assistantMsg:assistant",
+        "kind": "assistantMsg",
+        "label": "assistant",
+        "tokens": 4,
+        "tokenSource": "calibrated",
+        "bytes": 31,
+        "text": "here is the answer\nappended text",
+        "role": "output"
+       },
+       {
+        "id": "bashInput:Bash",
+        "kind": "bashInput",
+        "label": "Bash",
+        "tokens": 3,
+        "tokenSource": "calibrated",
+        "bytes": 11,
+        "text": "ls -la /tmp",
+        "role": "output",
+        "toolName": "Bash"
+       },
+       {
+        "id": "toolInput:Task",
+        "kind": "toolInput",
+        "label": "Task",
+        "tokens": 6,
+        "tokenSource": "calibrated",
+        "bytes": 26,
+        "text": "{\"prompt\":\"go do a thing\"}",
+        "role": "output",
+        "toolName": "Task"
+       },
+       {
+        "id": "toolInput:Read",
+        "kind": "toolInput",
+        "label": "Read",
+        "tokens": 8,
+        "tokenSource": "calibrated",
+        "bytes": 24,
+        "text": "{\"file_path\":\"/a/b.txt\"}",
+        "role": "output",
+        "toolName": "Read"
+       }
+      ],
+      "diff": {
+       "added": [
+        "userMsg:user",
+        "harness:system-reminder",
+        "file:file: read.md",
+        "reasoning:thinking",
+        "assistantMsg:assistant",
+        "bashInput:Bash",
+        "toolInput:Task",
+        "toolInput:Read"
+       ],
+       "removed": [],
+       "changed": [],
+       "firstChangeBlockId": "userMsg:user"
+      }
+     },
+     {
+      "turn": 2,
+      "timestamp": "2026-08-01T10:01:00Z",
+      "model": "claude-opus-5",
+      "usage": {
+       "input": 500,
+       "output": 12,
+       "cacheRead": 20000,
+       "cacheCreate": 100
+      },
+      "blocks": [
+       {
+        "id": "bashOutput:Bash",
+        "kind": "bashOutput",
+        "label": "Bash",
+        "tokens": 8,
+        "tokenSource": "estimated",
+        "bytes": 18,
+        "text": "total 0\ndrwxr-xr-x",
+        "role": "input",
+        "toolName": "Bash"
+       },
+       {
+        "id": "subagentOutput:Task",
+        "kind": "subagentOutput",
+        "label": "Task",
+        "tokens": 4,
+        "tokenSource": "estimated",
+        "bytes": 16,
+        "text": "subagent said hi",
+        "role": "input",
+        "toolName": "Task"
+       },
+       {
+        "id": "toolOutput:tool",
+        "kind": "toolOutput",
+        "label": "tool",
+        "tokens": 2,
+        "tokenSource": "estimated",
+        "bytes": 13,
+        "text": "orphan result",
+        "role": "input"
+       },
+       {
+        "id": "userMsg:user",
+        "kind": "userMsg",
+        "label": "user",
+        "tokens": 5,
+        "tokenSource": "estimated",
+        "bytes": 15,
+        "text": "and a follow-up",
+        "role": "input"
+       },
+       {
+        "id": "other:image",
+        "kind": "other",
+        "label": "image",
+        "tokens": 0,
+        "tokenSource": "estimated",
+        "bytes": 0,
+        "text": "",
+        "role": "input"
+       },
+       {
+        "id": "cron:scheduled task: nightly-report",
+        "kind": "cron",
+        "label": "scheduled task: nightly-report",
+        "tokens": 11,
+        "tokenSource": "estimated",
+        "bytes": 41,
+        "text": "[nightly-report]\nthe scheduled task fired",
+        "role": "input"
+       },
+       {
+        "id": "cron:local-command caveat",
+        "kind": "cron",
+        "label": "local-command caveat",
+        "tokens": 17,
+        "tokenSource": "estimated",
+        "bytes": 64,
+        "text": "wrapper <local-command-caveat>caveat text</local-command-caveat>",
+        "role": "input"
+       },
+       {
+        "id": "harness:meta",
+        "kind": "harness",
+        "label": "meta",
+        "tokens": 8,
+        "tokenSource": "estimated",
+        "bytes": 44,
+        "text": "some other harness meta\nfallthrough meta text",
+        "role": "input"
+       },
+       {
+        "id": "assistantMsg:assistant",
+        "kind": "assistantMsg",
+        "label": "assistant",
+        "tokens": 12,
+        "tokenSource": "calibrated",
+        "bytes": 18,
+        "text": "here is the answer",
+        "role": "output"
+       }
+      ],
+      "diff": {
+       "added": [
+        "bashOutput:Bash",
+        "subagentOutput:Task",
+        "toolOutput:tool",
+        "other:image",
+        "cron:scheduled task: nightly-report",
+        "cron:local-command caveat",
+        "harness:meta"
+       ],
+       "removed": [
+        "harness:system-reminder",
+        "file:file: read.md",
+        "reasoning:thinking",
+        "bashInput:Bash",
+        "toolInput:Task",
+        "toolInput:Read"
+       ],
+       "changed": [
+        "userMsg:user",
+        "assistantMsg:assistant"
+       ],
+       "firstChangeBlockId": "bashOutput:Bash"
+      }
+     },
+     {
+      "turn": 3,
+      "blocks": [
+       {
+        "id": "postCompact:compact summary",
+        "kind": "postCompact",
+        "label": "compact summary",
+        "tokens": 10,
+        "tokenSource": "estimated",
+        "bytes": 52,
+        "text": "this session was compacted here\na bare summary record",
+        "role": "input"
+       },
+       {
+        "id": "assistantMsg:assistant",
+        "kind": "assistantMsg",
+        "label": "assistant",
+        "tokens": 4,
+        "tokenSource": "estimated",
+        "bytes": 18,
+        "text": "post-compact reply",
+        "role": "output"
+       }
+      ],
+      "diff": {
+       "added": [
+        "postCompact:compact summary"
+       ],
+       "removed": [
+        "bashOutput:Bash",
+        "subagentOutput:Task",
+        "toolOutput:tool",
+        "userMsg:user",
+        "other:image",
+        "cron:scheduled task: nightly-report",
+        "cron:local-command caveat",
+        "harness:meta"
+       ],
+       "changed": [
+        "assistantMsg:assistant"
+       ],
+       "firstChangeBlockId": "postCompact:compact summary"
+      }
+     }
+    ],
+    "estimated": true,
+    "truncated": false
+   },
+   "cardModel": "claude-opus-5",
+   "args": {
+    "sessionId": "hist-main",
+    "turn": 1
+   }
+  },
+  {
+   "name": "one-block-verbatim",
+   "hist": {
+    "sessionId": "hist-main",
+    "steps": [
+     {
+      "turn": 1,
+      "timestamp": "2026-08-01T10:00:05Z",
+      "model": "claude-opus-5",
+      "usage": {
+       "input": 40,
+       "output": 25,
+       "cacheRead": 9000,
+       "cacheCreate": 10
+      },
+      "blocks": [
+       {
+        "id": "userMsg:user",
+        "kind": "userMsg",
+        "label": "user",
+        "tokens": 4,
+        "tokenSource": "estimated",
+        "bytes": 19,
+        "text": "please do the thing",
+        "role": "input"
+       },
+       {
+        "id": "harness:system-reminder",
+        "kind": "harness",
+        "label": "system-reminder",
+        "tokens": 15,
+        "tokenSource": "estimated",
+        "bytes": 51,
+        "text": "context <system-reminder>injected</system-reminder>",
+        "role": "input"
+       },
+       {
+        "id": "file:file: read.md",
+        "kind": "file",
+        "label": "file: read.md",
+        "tokens": 3,
+        "tokenSource": "estimated",
+        "bytes": 14,
+        "text": "file body here",
+        "role": "input"
+       },
+       {
+        "id": "reasoning:thinking",
+        "kind": "reasoning",
+        "label": "thinking",
+        "tokens": 4,
+        "tokenSource": "calibrated",
+        "bytes": 33,
+        "text": "let me think about this carefully",
+        "role": "output"
+       },
+       {
+        "id": "assistantMsg:assistant",
+        "kind": "assistantMsg",
+        "label": "assistant",
+        "tokens": 4,
+        "tokenSource": "calibrated",
+        "bytes": 31,
+        "text": "here is the answer\nappended text",
+        "role": "output"
+       },
+       {
+        "id": "bashInput:Bash",
+        "kind": "bashInput",
+        "label": "Bash",
+        "tokens": 3,
+        "tokenSource": "calibrated",
+        "bytes": 11,
+        "text": "ls -la /tmp",
+        "role": "output",
+        "toolName": "Bash"
+       },
+       {
+        "id": "toolInput:Task",
+        "kind": "toolInput",
+        "label": "Task",
+        "tokens": 6,
+        "tokenSource": "calibrated",
+        "bytes": 26,
+        "text": "{\"prompt\":\"go do a thing\"}",
+        "role": "output",
+        "toolName": "Task"
+       },
+       {
+        "id": "toolInput:Read",
+        "kind": "toolInput",
+        "label": "Read",
+        "tokens": 8,
+        "tokenSource": "calibrated",
+        "bytes": 24,
+        "text": "{\"file_path\":\"/a/b.txt\"}",
+        "role": "output",
+        "toolName": "Read"
+       }
+      ],
+      "diff": {
+       "added": [
+        "userMsg:user",
+        "harness:system-reminder",
+        "file:file: read.md",
+        "reasoning:thinking",
+        "assistantMsg:assistant",
+        "bashInput:Bash",
+        "toolInput:Task",
+        "toolInput:Read"
+       ],
+       "removed": [],
+       "changed": [],
+       "firstChangeBlockId": "userMsg:user"
+      }
+     },
+     {
+      "turn": 2,
+      "timestamp": "2026-08-01T10:01:00Z",
+      "model": "claude-opus-5",
+      "usage": {
+       "input": 500,
+       "output": 12,
+       "cacheRead": 20000,
+       "cacheCreate": 100
+      },
+      "blocks": [
+       {
+        "id": "bashOutput:Bash",
+        "kind": "bashOutput",
+        "label": "Bash",
+        "tokens": 8,
+        "tokenSource": "estimated",
+        "bytes": 18,
+        "text": "total 0\ndrwxr-xr-x",
+        "role": "input",
+        "toolName": "Bash"
+       },
+       {
+        "id": "subagentOutput:Task",
+        "kind": "subagentOutput",
+        "label": "Task",
+        "tokens": 4,
+        "tokenSource": "estimated",
+        "bytes": 16,
+        "text": "subagent said hi",
+        "role": "input",
+        "toolName": "Task"
+       },
+       {
+        "id": "toolOutput:tool",
+        "kind": "toolOutput",
+        "label": "tool",
+        "tokens": 2,
+        "tokenSource": "estimated",
+        "bytes": 13,
+        "text": "orphan result",
+        "role": "input"
+       },
+       {
+        "id": "userMsg:user",
+        "kind": "userMsg",
+        "label": "user",
+        "tokens": 5,
+        "tokenSource": "estimated",
+        "bytes": 15,
+        "text": "and a follow-up",
+        "role": "input"
+       },
+       {
+        "id": "other:image",
+        "kind": "other",
+        "label": "image",
+        "tokens": 0,
+        "tokenSource": "estimated",
+        "bytes": 0,
+        "text": "",
+        "role": "input"
+       },
+       {
+        "id": "cron:scheduled task: nightly-report",
+        "kind": "cron",
+        "label": "scheduled task: nightly-report",
+        "tokens": 11,
+        "tokenSource": "estimated",
+        "bytes": 41,
+        "text": "[nightly-report]\nthe scheduled task fired",
+        "role": "input"
+       },
+       {
+        "id": "cron:local-command caveat",
+        "kind": "cron",
+        "label": "local-command caveat",
+        "tokens": 17,
+        "tokenSource": "estimated",
+        "bytes": 64,
+        "text": "wrapper <local-command-caveat>caveat text</local-command-caveat>",
+        "role": "input"
+       },
+       {
+        "id": "harness:meta",
+        "kind": "harness",
+        "label": "meta",
+        "tokens": 8,
+        "tokenSource": "estimated",
+        "bytes": 44,
+        "text": "some other harness meta\nfallthrough meta text",
+        "role": "input"
+       },
+       {
+        "id": "assistantMsg:assistant",
+        "kind": "assistantMsg",
+        "label": "assistant",
+        "tokens": 12,
+        "tokenSource": "calibrated",
+        "bytes": 18,
+        "text": "here is the answer",
+        "role": "output"
+       }
+      ],
+      "diff": {
+       "added": [
+        "bashOutput:Bash",
+        "subagentOutput:Task",
+        "toolOutput:tool",
+        "other:image",
+        "cron:scheduled task: nightly-report",
+        "cron:local-command caveat",
+        "harness:meta"
+       ],
+       "removed": [
+        "harness:system-reminder",
+        "file:file: read.md",
+        "reasoning:thinking",
+        "bashInput:Bash",
+        "toolInput:Task",
+        "toolInput:Read"
+       ],
+       "changed": [
+        "userMsg:user",
+        "assistantMsg:assistant"
+       ],
+       "firstChangeBlockId": "bashOutput:Bash"
+      }
+     },
+     {
+      "turn": 3,
+      "blocks": [
+       {
+        "id": "postCompact:compact summary",
+        "kind": "postCompact",
+        "label": "compact summary",
+        "tokens": 10,
+        "tokenSource": "estimated",
+        "bytes": 52,
+        "text": "this session was compacted here\na bare summary record",
+        "role": "input"
+       },
+       {
+        "id": "assistantMsg:assistant",
+        "kind": "assistantMsg",
+        "label": "assistant",
+        "tokens": 4,
+        "tokenSource": "estimated",
+        "bytes": 18,
+        "text": "post-compact reply",
+        "role": "output"
+       }
+      ],
+      "diff": {
+       "added": [
+        "postCompact:compact summary"
+       ],
+       "removed": [
+        "bashOutput:Bash",
+        "subagentOutput:Task",
+        "toolOutput:tool",
+        "userMsg:user",
+        "other:image",
+        "cron:scheduled task: nightly-report",
+        "cron:local-command caveat",
+        "harness:meta"
+       ],
+       "changed": [
+        "assistantMsg:assistant"
+       ],
+       "firstChangeBlockId": "postCompact:compact summary"
+      }
+     }
+    ],
+    "estimated": true,
+    "truncated": false
+   },
+   "cardModel": "claude-opus-5",
+   "args": {
+    "sessionId": "hist-main",
+    "turn": 1,
+    "blockId": "userMsg:user"
+   }
+  },
+  {
+   "name": "missing-block",
+   "hist": {
+    "sessionId": "hist-main",
+    "steps": [
+     {
+      "turn": 1,
+      "timestamp": "2026-08-01T10:00:05Z",
+      "model": "claude-opus-5",
+      "usage": {
+       "input": 40,
+       "output": 25,
+       "cacheRead": 9000,
+       "cacheCreate": 10
+      },
+      "blocks": [
+       {
+        "id": "userMsg:user",
+        "kind": "userMsg",
+        "label": "user",
+        "tokens": 4,
+        "tokenSource": "estimated",
+        "bytes": 19,
+        "text": "please do the thing",
+        "role": "input"
+       },
+       {
+        "id": "harness:system-reminder",
+        "kind": "harness",
+        "label": "system-reminder",
+        "tokens": 15,
+        "tokenSource": "estimated",
+        "bytes": 51,
+        "text": "context <system-reminder>injected</system-reminder>",
+        "role": "input"
+       },
+       {
+        "id": "file:file: read.md",
+        "kind": "file",
+        "label": "file: read.md",
+        "tokens": 3,
+        "tokenSource": "estimated",
+        "bytes": 14,
+        "text": "file body here",
+        "role": "input"
+       },
+       {
+        "id": "reasoning:thinking",
+        "kind": "reasoning",
+        "label": "thinking",
+        "tokens": 4,
+        "tokenSource": "calibrated",
+        "bytes": 33,
+        "text": "let me think about this carefully",
+        "role": "output"
+       },
+       {
+        "id": "assistantMsg:assistant",
+        "kind": "assistantMsg",
+        "label": "assistant",
+        "tokens": 4,
+        "tokenSource": "calibrated",
+        "bytes": 31,
+        "text": "here is the answer\nappended text",
+        "role": "output"
+       },
+       {
+        "id": "bashInput:Bash",
+        "kind": "bashInput",
+        "label": "Bash",
+        "tokens": 3,
+        "tokenSource": "calibrated",
+        "bytes": 11,
+        "text": "ls -la /tmp",
+        "role": "output",
+        "toolName": "Bash"
+       },
+       {
+        "id": "toolInput:Task",
+        "kind": "toolInput",
+        "label": "Task",
+        "tokens": 6,
+        "tokenSource": "calibrated",
+        "bytes": 26,
+        "text": "{\"prompt\":\"go do a thing\"}",
+        "role": "output",
+        "toolName": "Task"
+       },
+       {
+        "id": "toolInput:Read",
+        "kind": "toolInput",
+        "label": "Read",
+        "tokens": 8,
+        "tokenSource": "calibrated",
+        "bytes": 24,
+        "text": "{\"file_path\":\"/a/b.txt\"}",
+        "role": "output",
+        "toolName": "Read"
+       }
+      ],
+      "diff": {
+       "added": [
+        "userMsg:user",
+        "harness:system-reminder",
+        "file:file: read.md",
+        "reasoning:thinking",
+        "assistantMsg:assistant",
+        "bashInput:Bash",
+        "toolInput:Task",
+        "toolInput:Read"
+       ],
+       "removed": [],
+       "changed": [],
+       "firstChangeBlockId": "userMsg:user"
+      }
+     },
+     {
+      "turn": 2,
+      "timestamp": "2026-08-01T10:01:00Z",
+      "model": "claude-opus-5",
+      "usage": {
+       "input": 500,
+       "output": 12,
+       "cacheRead": 20000,
+       "cacheCreate": 100
+      },
+      "blocks": [
+       {
+        "id": "bashOutput:Bash",
+        "kind": "bashOutput",
+        "label": "Bash",
+        "tokens": 8,
+        "tokenSource": "estimated",
+        "bytes": 18,
+        "text": "total 0\ndrwxr-xr-x",
+        "role": "input",
+        "toolName": "Bash"
+       },
+       {
+        "id": "subagentOutput:Task",
+        "kind": "subagentOutput",
+        "label": "Task",
+        "tokens": 4,
+        "tokenSource": "estimated",
+        "bytes": 16,
+        "text": "subagent said hi",
+        "role": "input",
+        "toolName": "Task"
+       },
+       {
+        "id": "toolOutput:tool",
+        "kind": "toolOutput",
+        "label": "tool",
+        "tokens": 2,
+        "tokenSource": "estimated",
+        "bytes": 13,
+        "text": "orphan result",
+        "role": "input"
+       },
+       {
+        "id": "userMsg:user",
+        "kind": "userMsg",
+        "label": "user",
+        "tokens": 5,
+        "tokenSource": "estimated",
+        "bytes": 15,
+        "text": "and a follow-up",
+        "role": "input"
+       },
+       {
+        "id": "other:image",
+        "kind": "other",
+        "label": "image",
+        "tokens": 0,
+        "tokenSource": "estimated",
+        "bytes": 0,
+        "text": "",
+        "role": "input"
+       },
+       {
+        "id": "cron:scheduled task: nightly-report",
+        "kind": "cron",
+        "label": "scheduled task: nightly-report",
+        "tokens": 11,
+        "tokenSource": "estimated",
+        "bytes": 41,
+        "text": "[nightly-report]\nthe scheduled task fired",
+        "role": "input"
+       },
+       {
+        "id": "cron:local-command caveat",
+        "kind": "cron",
+        "label": "local-command caveat",
+        "tokens": 17,
+        "tokenSource": "estimated",
+        "bytes": 64,
+        "text": "wrapper <local-command-caveat>caveat text</local-command-caveat>",
+        "role": "input"
+       },
+       {
+        "id": "harness:meta",
+        "kind": "harness",
+        "label": "meta",
+        "tokens": 8,
+        "tokenSource": "estimated",
+        "bytes": 44,
+        "text": "some other harness meta\nfallthrough meta text",
+        "role": "input"
+       },
+       {
+        "id": "assistantMsg:assistant",
+        "kind": "assistantMsg",
+        "label": "assistant",
+        "tokens": 12,
+        "tokenSource": "calibrated",
+        "bytes": 18,
+        "text": "here is the answer",
+        "role": "output"
+       }
+      ],
+      "diff": {
+       "added": [
+        "bashOutput:Bash",
+        "subagentOutput:Task",
+        "toolOutput:tool",
+        "other:image",
+        "cron:scheduled task: nightly-report",
+        "cron:local-command caveat",
+        "harness:meta"
+       ],
+       "removed": [
+        "harness:system-reminder",
+        "file:file: read.md",
+        "reasoning:thinking",
+        "bashInput:Bash",
+        "toolInput:Task",
+        "toolInput:Read"
+       ],
+       "changed": [
+        "userMsg:user",
+        "assistantMsg:assistant"
+       ],
+       "firstChangeBlockId": "bashOutput:Bash"
+      }
+     },
+     {
+      "turn": 3,
+      "blocks": [
+       {
+        "id": "postCompact:compact summary",
+        "kind": "postCompact",
+        "label": "compact summary",
+        "tokens": 10,
+        "tokenSource": "estimated",
+        "bytes": 52,
+        "text": "this session was compacted here\na bare summary record",
+        "role": "input"
+       },
+       {
+        "id": "assistantMsg:assistant",
+        "kind": "assistantMsg",
+        "label": "assistant",
+        "tokens": 4,
+        "tokenSource": "estimated",
+        "bytes": 18,
+        "text": "post-compact reply",
+        "role": "output"
+       }
+      ],
+      "diff": {
+       "added": [
+        "postCompact:compact summary"
+       ],
+       "removed": [
+        "bashOutput:Bash",
+        "subagentOutput:Task",
+        "toolOutput:tool",
+        "userMsg:user",
+        "other:image",
+        "cron:scheduled task: nightly-report",
+        "cron:local-command caveat",
+        "harness:meta"
+       ],
+       "changed": [
+        "assistantMsg:assistant"
+       ],
+       "firstChangeBlockId": "postCompact:compact summary"
+      }
+     }
+    ],
+    "estimated": true,
+    "truncated": false
+   },
+   "cardModel": "claude-opus-5",
+   "args": {
+    "sessionId": "hist-main",
+    "turn": 1,
+    "blockId": "nope:nope"
+   }
+  },
+  {
+   "name": "missing-step",
+   "hist": {
+    "sessionId": "hist-main",
+    "steps": [
+     {
+      "turn": 1,
+      "timestamp": "2026-08-01T10:00:05Z",
+      "model": "claude-opus-5",
+      "usage": {
+       "input": 40,
+       "output": 25,
+       "cacheRead": 9000,
+       "cacheCreate": 10
+      },
+      "blocks": [
+       {
+        "id": "userMsg:user",
+        "kind": "userMsg",
+        "label": "user",
+        "tokens": 4,
+        "tokenSource": "estimated",
+        "bytes": 19,
+        "text": "please do the thing",
+        "role": "input"
+       },
+       {
+        "id": "harness:system-reminder",
+        "kind": "harness",
+        "label": "system-reminder",
+        "tokens": 15,
+        "tokenSource": "estimated",
+        "bytes": 51,
+        "text": "context <system-reminder>injected</system-reminder>",
+        "role": "input"
+       },
+       {
+        "id": "file:file: read.md",
+        "kind": "file",
+        "label": "file: read.md",
+        "tokens": 3,
+        "tokenSource": "estimated",
+        "bytes": 14,
+        "text": "file body here",
+        "role": "input"
+       },
+       {
+        "id": "reasoning:thinking",
+        "kind": "reasoning",
+        "label": "thinking",
+        "tokens": 4,
+        "tokenSource": "calibrated",
+        "bytes": 33,
+        "text": "let me think about this carefully",
+        "role": "output"
+       },
+       {
+        "id": "assistantMsg:assistant",
+        "kind": "assistantMsg",
+        "label": "assistant",
+        "tokens": 4,
+        "tokenSource": "calibrated",
+        "bytes": 31,
+        "text": "here is the answer\nappended text",
+        "role": "output"
+       },
+       {
+        "id": "bashInput:Bash",
+        "kind": "bashInput",
+        "label": "Bash",
+        "tokens": 3,
+        "tokenSource": "calibrated",
+        "bytes": 11,
+        "text": "ls -la /tmp",
+        "role": "output",
+        "toolName": "Bash"
+       },
+       {
+        "id": "toolInput:Task",
+        "kind": "toolInput",
+        "label": "Task",
+        "tokens": 6,
+        "tokenSource": "calibrated",
+        "bytes": 26,
+        "text": "{\"prompt\":\"go do a thing\"}",
+        "role": "output",
+        "toolName": "Task"
+       },
+       {
+        "id": "toolInput:Read",
+        "kind": "toolInput",
+        "label": "Read",
+        "tokens": 8,
+        "tokenSource": "calibrated",
+        "bytes": 24,
+        "text": "{\"file_path\":\"/a/b.txt\"}",
+        "role": "output",
+        "toolName": "Read"
+       }
+      ],
+      "diff": {
+       "added": [
+        "userMsg:user",
+        "harness:system-reminder",
+        "file:file: read.md",
+        "reasoning:thinking",
+        "assistantMsg:assistant",
+        "bashInput:Bash",
+        "toolInput:Task",
+        "toolInput:Read"
+       ],
+       "removed": [],
+       "changed": [],
+       "firstChangeBlockId": "userMsg:user"
+      }
+     },
+     {
+      "turn": 2,
+      "timestamp": "2026-08-01T10:01:00Z",
+      "model": "claude-opus-5",
+      "usage": {
+       "input": 500,
+       "output": 12,
+       "cacheRead": 20000,
+       "cacheCreate": 100
+      },
+      "blocks": [
+       {
+        "id": "bashOutput:Bash",
+        "kind": "bashOutput",
+        "label": "Bash",
+        "tokens": 8,
+        "tokenSource": "estimated",
+        "bytes": 18,
+        "text": "total 0\ndrwxr-xr-x",
+        "role": "input",
+        "toolName": "Bash"
+       },
+       {
+        "id": "subagentOutput:Task",
+        "kind": "subagentOutput",
+        "label": "Task",
+        "tokens": 4,
+        "tokenSource": "estimated",
+        "bytes": 16,
+        "text": "subagent said hi",
+        "role": "input",
+        "toolName": "Task"
+       },
+       {
+        "id": "toolOutput:tool",
+        "kind": "toolOutput",
+        "label": "tool",
+        "tokens": 2,
+        "tokenSource": "estimated",
+        "bytes": 13,
+        "text": "orphan result",
+        "role": "input"
+       },
+       {
+        "id": "userMsg:user",
+        "kind": "userMsg",
+        "label": "user",
+        "tokens": 5,
+        "tokenSource": "estimated",
+        "bytes": 15,
+        "text": "and a follow-up",
+        "role": "input"
+       },
+       {
+        "id": "other:image",
+        "kind": "other",
+        "label": "image",
+        "tokens": 0,
+        "tokenSource": "estimated",
+        "bytes": 0,
+        "text": "",
+        "role": "input"
+       },
+       {
+        "id": "cron:scheduled task: nightly-report",
+        "kind": "cron",
+        "label": "scheduled task: nightly-report",
+        "tokens": 11,
+        "tokenSource": "estimated",
+        "bytes": 41,
+        "text": "[nightly-report]\nthe scheduled task fired",
+        "role": "input"
+       },
+       {
+        "id": "cron:local-command caveat",
+        "kind": "cron",
+        "label": "local-command caveat",
+        "tokens": 17,
+        "tokenSource": "estimated",
+        "bytes": 64,
+        "text": "wrapper <local-command-caveat>caveat text</local-command-caveat>",
+        "role": "input"
+       },
+       {
+        "id": "harness:meta",
+        "kind": "harness",
+        "label": "meta",
+        "tokens": 8,
+        "tokenSource": "estimated",
+        "bytes": 44,
+        "text": "some other harness meta\nfallthrough meta text",
+        "role": "input"
+       },
+       {
+        "id": "assistantMsg:assistant",
+        "kind": "assistantMsg",
+        "label": "assistant",
+        "tokens": 12,
+        "tokenSource": "calibrated",
+        "bytes": 18,
+        "text": "here is the answer",
+        "role": "output"
+       }
+      ],
+      "diff": {
+       "added": [
+        "bashOutput:Bash",
+        "subagentOutput:Task",
+        "toolOutput:tool",
+        "other:image",
+        "cron:scheduled task: nightly-report",
+        "cron:local-command caveat",
+        "harness:meta"
+       ],
+       "removed": [
+        "harness:system-reminder",
+        "file:file: read.md",
+        "reasoning:thinking",
+        "bashInput:Bash",
+        "toolInput:Task",
+        "toolInput:Read"
+       ],
+       "changed": [
+        "userMsg:user",
+        "assistantMsg:assistant"
+       ],
+       "firstChangeBlockId": "bashOutput:Bash"
+      }
+     },
+     {
+      "turn": 3,
+      "blocks": [
+       {
+        "id": "postCompact:compact summary",
+        "kind": "postCompact",
+        "label": "compact summary",
+        "tokens": 10,
+        "tokenSource": "estimated",
+        "bytes": 52,
+        "text": "this session was compacted here\na bare summary record",
+        "role": "input"
+       },
+       {
+        "id": "assistantMsg:assistant",
+        "kind": "assistantMsg",
+        "label": "assistant",
+        "tokens": 4,
+        "tokenSource": "estimated",
+        "bytes": 18,
+        "text": "post-compact reply",
+        "role": "output"
+       }
+      ],
+      "diff": {
+       "added": [
+        "postCompact:compact summary"
+       ],
+       "removed": [
+        "bashOutput:Bash",
+        "subagentOutput:Task",
+        "toolOutput:tool",
+        "userMsg:user",
+        "other:image",
+        "cron:scheduled task: nightly-report",
+        "cron:local-command caveat",
+        "harness:meta"
+       ],
+       "changed": [
+        "assistantMsg:assistant"
+       ],
+       "firstChangeBlockId": "postCompact:compact summary"
+      }
+     }
+    ],
+    "estimated": true,
+    "truncated": false
+   },
+   "cardModel": "claude-opus-5",
+   "args": {
+    "sessionId": "hist-main",
+    "turn": 999
+   }
+  },
+  {
+   "name": "null",
+   "hist": null,
+   "args": {
+    "sessionId": "ghost"
+   }
+  }
+ ],
+ "histResults": [
+  {
+   "sessionId": "hist-main",
+   "estimated": true,
+   "truncated": false,
+   "stepCount": 3,
+   "steps": [
+    {
+     "turn": 1,
+     "timestamp": "2026-08-01T10:00:05Z",
+     "model": "claude-opus-5",
+     "usage": {
+      "input": 40,
+      "output": 25,
+      "cacheRead": 9000,
+      "cacheCreate": 10
+     },
+     "costUsd": 0.0052,
+     "blockCount": 8,
+     "totalTokens": 47,
+     "diff": {
+      "added": 8,
+      "changed": 0,
+      "removed": 0,
+      "firstChangeBlockId": "userMsg:user"
+     },
+     "blocks": [
+      {
+       "id": "userMsg:user",
+       "kind": "userMsg",
+       "label": "user",
+       "tokens": 4,
+       "role": "input"
+      },
+      {
+       "id": "harness:system-reminder",
+       "kind": "harness",
+       "label": "system-reminder",
+       "tokens": 15,
+       "role": "input"
+      },
+      {
+       "id": "file:file: read.md",
+       "kind": "file",
+       "label": "file: read.md",
+       "tokens": 3,
+       "role": "input"
+      },
+      {
+       "id": "reasoning:thinking",
+       "kind": "reasoning",
+       "label": "thinking",
+       "tokens": 4,
+       "role": "output"
+      },
+      {
+       "id": "assistantMsg:assistant",
+       "kind": "assistantMsg",
+       "label": "assistant",
+       "tokens": 4,
+       "role": "output"
+      },
+      {
+       "id": "bashInput:Bash",
+       "kind": "bashInput",
+       "label": "Bash",
+       "tokens": 3,
+       "role": "output"
+      },
+      {
+       "id": "toolInput:Task",
+       "kind": "toolInput",
+       "label": "Task",
+       "tokens": 6,
+       "role": "output"
+      },
+      {
+       "id": "toolInput:Read",
+       "kind": "toolInput",
+       "label": "Read",
+       "tokens": 8,
+       "role": "output"
+      }
+     ]
+    },
+    {
+     "turn": 2,
+     "timestamp": "2026-08-01T10:01:00Z",
+     "model": "claude-opus-5",
+     "usage": {
+      "input": 500,
+      "output": 12,
+      "cacheRead": 20000,
+      "cacheCreate": 100
+     },
+     "costUsd": 0.0109,
+     "blockCount": 9,
+     "totalTokens": 67,
+     "diff": {
+      "added": 7,
+      "changed": 2,
+      "removed": 6,
+      "firstChangeBlockId": "bashOutput:Bash"
+     },
+     "blocks": [
+      {
+       "id": "bashOutput:Bash",
+       "kind": "bashOutput",
+       "label": "Bash",
+       "tokens": 8,
+       "role": "input"
+      },
+      {
+       "id": "subagentOutput:Task",
+       "kind": "subagentOutput",
+       "label": "Task",
+       "tokens": 4,
+       "role": "input"
+      },
+      {
+       "id": "toolOutput:tool",
+       "kind": "toolOutput",
+       "label": "tool",
+       "tokens": 2,
+       "role": "input"
+      },
+      {
+       "id": "userMsg:user",
+       "kind": "userMsg",
+       "label": "user",
+       "tokens": 5,
+       "role": "input"
+      },
+      {
+       "id": "other:image",
+       "kind": "other",
+       "label": "image",
+       "tokens": 0,
+       "role": "input"
+      },
+      {
+       "id": "cron:scheduled task: nightly-report",
+       "kind": "cron",
+       "label": "scheduled task: nightly-report",
+       "tokens": 11,
+       "role": "input"
+      },
+      {
+       "id": "cron:local-command caveat",
+       "kind": "cron",
+       "label": "local-command caveat",
+       "tokens": 17,
+       "role": "input"
+      },
+      {
+       "id": "harness:meta",
+       "kind": "harness",
+       "label": "meta",
+       "tokens": 8,
+       "role": "input"
+      },
+      {
+       "id": "assistantMsg:assistant",
+       "kind": "assistantMsg",
+       "label": "assistant",
+       "tokens": 12,
+       "role": "output"
+      }
+     ]
+    },
+    {
+     "turn": 3,
+     "model": "claude-opus-5",
+     "blockCount": 2,
+     "totalTokens": 14,
+     "diff": {
+      "added": 1,
+      "changed": 1,
+      "removed": 8,
+      "firstChangeBlockId": "postCompact:compact summary"
+     },
+     "blocks": [
+      {
+       "id": "postCompact:compact summary",
+       "kind": "postCompact",
+       "label": "compact summary",
+       "tokens": 10,
+       "role": "input"
+      },
+      {
+       "id": "assistantMsg:assistant",
+       "kind": "assistantMsg",
+       "label": "assistant",
+       "tokens": 4,
+       "role": "output"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "sessionId": "hist-main",
+   "estimated": true,
+   "truncated": false,
+   "stepCount": 3,
+   "steps": [
+    {
+     "turn": 1,
+     "timestamp": "2026-08-01T10:00:05Z",
+     "model": "claude-opus-5",
+     "usage": {
+      "input": 40,
+      "output": 25,
+      "cacheRead": 9000,
+      "cacheCreate": 10
+     },
+     "blockCount": 8,
+     "totalTokens": 47,
+     "diff": {
+      "added": 8,
+      "changed": 0,
+      "removed": 0,
+      "firstChangeBlockId": "userMsg:user"
+     },
+     "blocks": [
+      {
+       "id": "userMsg:user",
+       "kind": "userMsg",
+       "label": "user",
+       "tokens": 4,
+       "role": "input"
+      },
+      {
+       "id": "harness:system-reminder",
+       "kind": "harness",
+       "label": "system-reminder",
+       "tokens": 15,
+       "role": "input"
+      },
+      {
+       "id": "file:file: read.md",
+       "kind": "file",
+       "label": "file: read.md",
+       "tokens": 3,
+       "role": "input"
+      },
+      {
+       "id": "reasoning:thinking",
+       "kind": "reasoning",
+       "label": "thinking",
+       "tokens": 4,
+       "role": "output"
+      },
+      {
+       "id": "assistantMsg:assistant",
+       "kind": "assistantMsg",
+       "label": "assistant",
+       "tokens": 4,
+       "role": "output"
+      },
+      {
+       "id": "bashInput:Bash",
+       "kind": "bashInput",
+       "label": "Bash",
+       "tokens": 3,
+       "role": "output"
+      },
+      {
+       "id": "toolInput:Task",
+       "kind": "toolInput",
+       "label": "Task",
+       "tokens": 6,
+       "role": "output"
+      },
+      {
+       "id": "toolInput:Read",
+       "kind": "toolInput",
+       "label": "Read",
+       "tokens": 8,
+       "role": "output"
+      }
+     ]
+    },
+    {
+     "turn": 2,
+     "timestamp": "2026-08-01T10:01:00Z",
+     "model": "claude-opus-5",
+     "usage": {
+      "input": 500,
+      "output": 12,
+      "cacheRead": 20000,
+      "cacheCreate": 100
+     },
+     "blockCount": 9,
+     "totalTokens": 67,
+     "diff": {
+      "added": 7,
+      "changed": 2,
+      "removed": 6,
+      "firstChangeBlockId": "bashOutput:Bash"
+     },
+     "blocks": [
+      {
+       "id": "bashOutput:Bash",
+       "kind": "bashOutput",
+       "label": "Bash",
+       "tokens": 8,
+       "role": "input"
+      },
+      {
+       "id": "subagentOutput:Task",
+       "kind": "subagentOutput",
+       "label": "Task",
+       "tokens": 4,
+       "role": "input"
+      },
+      {
+       "id": "toolOutput:tool",
+       "kind": "toolOutput",
+       "label": "tool",
+       "tokens": 2,
+       "role": "input"
+      },
+      {
+       "id": "userMsg:user",
+       "kind": "userMsg",
+       "label": "user",
+       "tokens": 5,
+       "role": "input"
+      },
+      {
+       "id": "other:image",
+       "kind": "other",
+       "label": "image",
+       "tokens": 0,
+       "role": "input"
+      },
+      {
+       "id": "cron:scheduled task: nightly-report",
+       "kind": "cron",
+       "label": "scheduled task: nightly-report",
+       "tokens": 11,
+       "role": "input"
+      },
+      {
+       "id": "cron:local-command caveat",
+       "kind": "cron",
+       "label": "local-command caveat",
+       "tokens": 17,
+       "role": "input"
+      },
+      {
+       "id": "harness:meta",
+       "kind": "harness",
+       "label": "meta",
+       "tokens": 8,
+       "role": "input"
+      },
+      {
+       "id": "assistantMsg:assistant",
+       "kind": "assistantMsg",
+       "label": "assistant",
+       "tokens": 12,
+       "role": "output"
+      }
+     ]
+    },
+    {
+     "turn": 3,
+     "blockCount": 2,
+     "totalTokens": 14,
+     "diff": {
+      "added": 1,
+      "changed": 1,
+      "removed": 8,
+      "firstChangeBlockId": "postCompact:compact summary"
+     },
+     "blocks": [
+      {
+       "id": "postCompact:compact summary",
+       "kind": "postCompact",
+       "label": "compact summary",
+       "tokens": 10,
+       "role": "input"
+      },
+      {
+       "id": "assistantMsg:assistant",
+       "kind": "assistantMsg",
+       "label": "assistant",
+       "tokens": 4,
+       "role": "output"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "sessionId": "hist-main",
+   "turn": 1,
+   "timestamp": "2026-08-01T10:00:05Z",
+   "model": "claude-opus-5",
+   "usage": {
+    "input": 40,
+    "output": 25,
+    "cacheRead": 9000,
+    "cacheCreate": 10
+   },
+   "costUsd": 0.0052,
+   "diff": {
+    "added": [
+     "userMsg:user",
+     "harness:system-reminder",
+     "file:file: read.md",
+     "reasoning:thinking",
+     "assistantMsg:assistant",
+     "bashInput:Bash",
+     "toolInput:Task",
+     "toolInput:Read"
+    ],
+    "removed": [],
+    "changed": [],
+    "firstChangeBlockId": "userMsg:user"
+   },
+   "blocks": [
+    {
+     "id": "userMsg:user",
+     "kind": "userMsg",
+     "label": "user",
+     "tokens": 4,
+     "bytes": 19,
+     "role": "input",
+     "text": "please do the thing"
+    },
+    {
+     "id": "harness:system-reminder",
+     "kind": "harness",
+     "label": "system-reminder",
+     "tokens": 15,
+     "bytes": 51,
+     "role": "input",
+     "text": "context <system-reminder>injected</system-reminder>"
+    },
+    {
+     "id": "file:file: read.md",
+     "kind": "file",
+     "label": "file: read.md",
+     "tokens": 3,
+     "bytes": 14,
+     "role": "input",
+     "text": "file body here"
+    },
+    {
+     "id": "reasoning:thinking",
+     "kind": "reasoning",
+     "label": "thinking",
+     "tokens": 4,
+     "bytes": 33,
+     "role": "output",
+     "text": "let me think about this carefully"
+    },
+    {
+     "id": "assistantMsg:assistant",
+     "kind": "assistantMsg",
+     "label": "assistant",
+     "tokens": 4,
+     "bytes": 31,
+     "role": "output",
+     "text": "here is the answer\nappended text"
+    },
+    {
+     "id": "bashInput:Bash",
+     "kind": "bashInput",
+     "label": "Bash",
+     "tokens": 3,
+     "bytes": 11,
+     "role": "output",
+     "toolName": "Bash",
+     "text": "ls -la /tmp"
+    },
+    {
+     "id": "toolInput:Task",
+     "kind": "toolInput",
+     "label": "Task",
+     "tokens": 6,
+     "bytes": 26,
+     "role": "output",
+     "toolName": "Task",
+     "text": "{\"prompt\":\"go do a thing\"}"
+    },
+    {
+     "id": "toolInput:Read",
+     "kind": "toolInput",
+     "label": "Read",
+     "tokens": 8,
+     "bytes": 24,
+     "role": "output",
+     "toolName": "Read",
+     "text": "{\"file_path\":\"/a/b.txt\"}"
+    }
+   ]
+  },
+  {
+   "sessionId": "hist-main",
+   "turn": 1,
+   "block": {
+    "id": "userMsg:user",
+    "kind": "userMsg",
+    "label": "user",
+    "tokens": 4,
+    "tokenSource": "estimated",
+    "bytes": 19,
+    "text": "please do the thing",
+    "role": "input"
+   }
+  },
+  {
+   "sessionId": "hist-main",
+   "turn": 1,
+   "message": "No block nope:nope at turn 1."
+  },
+  {
+   "sessionId": "hist-main",
+   "turn": 999,
+   "message": "No step at turn 999."
+  },
+  {
+   "sessionId": "ghost",
+   "message": "No local Claude log to reconstruct (OTEL-only session, or its transcript is not on disk)."
+  }
+ ],
+ "convCases": [
+  {
+   "name": "whole",
+   "conv": {
+    "sessionId": "conv-main",
+    "title": "final title",
+    "agentName": "the-agent",
+    "entrypoint": "cli",
+    "cwd": "/repo/here",
+    "model": "claude-opus-5",
+    "turns": [
+     {
+      "turn": 1,
+      "role": "user",
+      "blocks": [
+       {
+        "kind": "userText",
+        "text": "do the thing",
+        "tokens": 3
+       }
+      ],
+      "ts": "2026-08-01T10:00:00Z"
+     },
+     {
+      "turn": 2,
+      "role": "assistant",
+      "blocks": [
+       {
+        "kind": "attachment",
+        "text": "injected context",
+        "tokens": 3,
+        "meta": {
+         "label": "file: ctx.md",
+         "attachmentKind": "file",
+         "bytes": 16
+        }
+       },
+       {
+        "kind": "thinking",
+        "text": "considering the options",
+        "tokens": 4
+       },
+       {
+        "kind": "assistantText",
+        "text": "doing it now",
+        "tokens": 3
+       },
+       {
+        "kind": "toolUse",
+        "text": "echo hi",
+        "tokens": 2,
+        "toolName": "Bash",
+        "toolUseId": "tu1"
+       },
+       {
+        "kind": "toolUse",
+        "text": "{\"file_path\":\"/x.txt\"}",
+        "tokens": 10,
+        "toolName": "Read",
+        "toolUseId": "tu2"
+       },
+       {
+        "kind": "assistantText",
+        "text": "and a continuation",
+        "tokens": 5
+       },
+       {
+        "kind": "toolResult",
+        "text": "hi",
+        "tokens": 1,
+        "toolName": "Bash",
+        "toolUseId": "tu1"
+       },
+       {
+        "kind": "toolResult",
+        "text": "file body",
+        "tokens": 2,
+        "toolName": "Read",
+        "toolUseId": "tu2"
+       },
+       {
+        "kind": "toolResult",
+        "text": "second result",
+        "tokens": 2,
+        "toolName": "Bash",
+        "toolUseId": "tu1"
+       }
+      ],
+      "messageId": "m1",
+      "model": "claude-opus-5",
+      "ts": "2026-08-01T10:00:05Z",
+      "sidechain": true,
+      "usage": {
+       "input": 30,
+       "output": 12,
+       "cacheRead": 900,
+       "cacheCreate": 40,
+       "tier5m": 10,
+       "tier1h": 30
+      },
+      "durationMs": 4200
+     },
+     {
+      "turn": 3,
+      "role": "user",
+      "blocks": [
+       {
+        "kind": "toolResult",
+        "text": "orphan output",
+        "tokens": 2,
+        "toolUseId": "nope"
+       }
+      ]
+     },
+     {
+      "turn": 4,
+      "role": "user",
+      "blocks": [
+       {
+        "kind": "userText",
+        "text": "follow-up",
+        "tokens": 3
+       },
+       {
+        "kind": "image",
+        "meta": {
+         "note": "image content (not stored)"
+        }
+       }
+      ]
+     },
+     {
+      "turn": 5,
+      "role": "system",
+      "blocks": [
+       {
+        "kind": "systemNote",
+        "text": "a harness meta note",
+        "tokens": 4,
+        "meta": {
+         "subtype": "meta"
+        }
+       }
+      ]
+     },
+     {
+      "turn": 6,
+      "role": "system",
+      "blocks": [
+       {
+        "kind": "systemNote",
+        "text": "the compaction summary",
+        "tokens": 4,
+        "meta": {
+         "subtype": "compact-summary"
+        }
+       }
+      ]
+     },
+     {
+      "turn": 7,
+      "role": "assistant",
+      "blocks": [
+       {
+        "kind": "assistantText",
+        "text": "real synthetic work",
+        "tokens": 4
+       }
+      ],
+      "messageId": "s2",
+      "usage": {
+       "input": 5,
+       "output": 1,
+       "cacheRead": 0,
+       "cacheCreate": 0,
+       "tier5m": 0,
+       "tier1h": 0
+      }
+     },
+     {
+      "turn": 8,
+      "role": "assistant",
+      "blocks": [
+       {
+        "kind": "assistantText",
+        "text": "  "
+       }
+      ],
+      "messageId": "m2"
+     }
+    ],
+    "compactions": [
+     {
+      "afterTurn": 6,
+      "trigger": "auto",
+      "preTokens": 120000,
+      "postTokens": 30000,
+      "droppedTokens": 90000
+     },
+     {
+      "afterTurn": 6,
+      "preTokens": 0
+     },
+     {
+      "afterTurn": 6
+     }
+    ],
+    "otherRecords": {
+     "attachment": 1,
+     "system/some_other_thing": 1,
+     "mode": 1,
+     "(untyped)": 1,
+     "queue-operation": 1
+    },
+    "totals": {
+     "turns": 8,
+     "toolCalls": 2,
+     "durationMs": 4200,
+     "usage": {
+      "input": 35,
+      "output": 13,
+      "cacheRead": 900,
+      "cacheCreate": 40,
+      "tier5m": 10,
+      "tier1h": 30
+     }
+    },
+    "truncated": false
+   },
+   "args": {
+    "sessionId": "conv-main"
+   }
+  },
+  {
+   "name": "one-turn-verbatim",
+   "conv": {
+    "sessionId": "conv-main",
+    "title": "final title",
+    "agentName": "the-agent",
+    "entrypoint": "cli",
+    "cwd": "/repo/here",
+    "model": "claude-opus-5",
+    "turns": [
+     {
+      "turn": 1,
+      "role": "user",
+      "blocks": [
+       {
+        "kind": "userText",
+        "text": "do the thing",
+        "tokens": 3
+       }
+      ],
+      "ts": "2026-08-01T10:00:00Z"
+     },
+     {
+      "turn": 2,
+      "role": "assistant",
+      "blocks": [
+       {
+        "kind": "attachment",
+        "text": "injected context",
+        "tokens": 3,
+        "meta": {
+         "label": "file: ctx.md",
+         "attachmentKind": "file",
+         "bytes": 16
+        }
+       },
+       {
+        "kind": "thinking",
+        "text": "considering the options",
+        "tokens": 4
+       },
+       {
+        "kind": "assistantText",
+        "text": "doing it now",
+        "tokens": 3
+       },
+       {
+        "kind": "toolUse",
+        "text": "echo hi",
+        "tokens": 2,
+        "toolName": "Bash",
+        "toolUseId": "tu1"
+       },
+       {
+        "kind": "toolUse",
+        "text": "{\"file_path\":\"/x.txt\"}",
+        "tokens": 10,
+        "toolName": "Read",
+        "toolUseId": "tu2"
+       },
+       {
+        "kind": "assistantText",
+        "text": "and a continuation",
+        "tokens": 5
+       },
+       {
+        "kind": "toolResult",
+        "text": "hi",
+        "tokens": 1,
+        "toolName": "Bash",
+        "toolUseId": "tu1"
+       },
+       {
+        "kind": "toolResult",
+        "text": "file body",
+        "tokens": 2,
+        "toolName": "Read",
+        "toolUseId": "tu2"
+       },
+       {
+        "kind": "toolResult",
+        "text": "second result",
+        "tokens": 2,
+        "toolName": "Bash",
+        "toolUseId": "tu1"
+       }
+      ],
+      "messageId": "m1",
+      "model": "claude-opus-5",
+      "ts": "2026-08-01T10:00:05Z",
+      "sidechain": true,
+      "usage": {
+       "input": 30,
+       "output": 12,
+       "cacheRead": 900,
+       "cacheCreate": 40,
+       "tier5m": 10,
+       "tier1h": 30
+      },
+      "durationMs": 4200
+     },
+     {
+      "turn": 3,
+      "role": "user",
+      "blocks": [
+       {
+        "kind": "toolResult",
+        "text": "orphan output",
+        "tokens": 2,
+        "toolUseId": "nope"
+       }
+      ]
+     },
+     {
+      "turn": 4,
+      "role": "user",
+      "blocks": [
+       {
+        "kind": "userText",
+        "text": "follow-up",
+        "tokens": 3
+       },
+       {
+        "kind": "image",
+        "meta": {
+         "note": "image content (not stored)"
+        }
+       }
+      ]
+     },
+     {
+      "turn": 5,
+      "role": "system",
+      "blocks": [
+       {
+        "kind": "systemNote",
+        "text": "a harness meta note",
+        "tokens": 4,
+        "meta": {
+         "subtype": "meta"
+        }
+       }
+      ]
+     },
+     {
+      "turn": 6,
+      "role": "system",
+      "blocks": [
+       {
+        "kind": "systemNote",
+        "text": "the compaction summary",
+        "tokens": 4,
+        "meta": {
+         "subtype": "compact-summary"
+        }
+       }
+      ]
+     },
+     {
+      "turn": 7,
+      "role": "assistant",
+      "blocks": [
+       {
+        "kind": "assistantText",
+        "text": "real synthetic work",
+        "tokens": 4
+       }
+      ],
+      "messageId": "s2",
+      "usage": {
+       "input": 5,
+       "output": 1,
+       "cacheRead": 0,
+       "cacheCreate": 0,
+       "tier5m": 0,
+       "tier1h": 0
+      }
+     },
+     {
+      "turn": 8,
+      "role": "assistant",
+      "blocks": [
+       {
+        "kind": "assistantText",
+        "text": "  "
+       }
+      ],
+      "messageId": "m2"
+     }
+    ],
+    "compactions": [
+     {
+      "afterTurn": 6,
+      "trigger": "auto",
+      "preTokens": 120000,
+      "postTokens": 30000,
+      "droppedTokens": 90000
+     },
+     {
+      "afterTurn": 6,
+      "preTokens": 0
+     },
+     {
+      "afterTurn": 6
+     }
+    ],
+    "otherRecords": {
+     "attachment": 1,
+     "system/some_other_thing": 1,
+     "mode": 1,
+     "(untyped)": 1,
+     "queue-operation": 1
+    },
+    "totals": {
+     "turns": 8,
+     "toolCalls": 2,
+     "durationMs": 4200,
+     "usage": {
+      "input": 35,
+      "output": 13,
+      "cacheRead": 900,
+      "cacheCreate": 40,
+      "tier5m": 10,
+      "tier1h": 30
+     }
+    },
+    "truncated": false
+   },
+   "args": {
+    "sessionId": "conv-main",
+    "turn": 2
+   }
+  },
+  {
+   "name": "missing-turn",
+   "conv": {
+    "sessionId": "conv-main",
+    "title": "final title",
+    "agentName": "the-agent",
+    "entrypoint": "cli",
+    "cwd": "/repo/here",
+    "model": "claude-opus-5",
+    "turns": [
+     {
+      "turn": 1,
+      "role": "user",
+      "blocks": [
+       {
+        "kind": "userText",
+        "text": "do the thing",
+        "tokens": 3
+       }
+      ],
+      "ts": "2026-08-01T10:00:00Z"
+     },
+     {
+      "turn": 2,
+      "role": "assistant",
+      "blocks": [
+       {
+        "kind": "attachment",
+        "text": "injected context",
+        "tokens": 3,
+        "meta": {
+         "label": "file: ctx.md",
+         "attachmentKind": "file",
+         "bytes": 16
+        }
+       },
+       {
+        "kind": "thinking",
+        "text": "considering the options",
+        "tokens": 4
+       },
+       {
+        "kind": "assistantText",
+        "text": "doing it now",
+        "tokens": 3
+       },
+       {
+        "kind": "toolUse",
+        "text": "echo hi",
+        "tokens": 2,
+        "toolName": "Bash",
+        "toolUseId": "tu1"
+       },
+       {
+        "kind": "toolUse",
+        "text": "{\"file_path\":\"/x.txt\"}",
+        "tokens": 10,
+        "toolName": "Read",
+        "toolUseId": "tu2"
+       },
+       {
+        "kind": "assistantText",
+        "text": "and a continuation",
+        "tokens": 5
+       },
+       {
+        "kind": "toolResult",
+        "text": "hi",
+        "tokens": 1,
+        "toolName": "Bash",
+        "toolUseId": "tu1"
+       },
+       {
+        "kind": "toolResult",
+        "text": "file body",
+        "tokens": 2,
+        "toolName": "Read",
+        "toolUseId": "tu2"
+       },
+       {
+        "kind": "toolResult",
+        "text": "second result",
+        "tokens": 2,
+        "toolName": "Bash",
+        "toolUseId": "tu1"
+       }
+      ],
+      "messageId": "m1",
+      "model": "claude-opus-5",
+      "ts": "2026-08-01T10:00:05Z",
+      "sidechain": true,
+      "usage": {
+       "input": 30,
+       "output": 12,
+       "cacheRead": 900,
+       "cacheCreate": 40,
+       "tier5m": 10,
+       "tier1h": 30
+      },
+      "durationMs": 4200
+     },
+     {
+      "turn": 3,
+      "role": "user",
+      "blocks": [
+       {
+        "kind": "toolResult",
+        "text": "orphan output",
+        "tokens": 2,
+        "toolUseId": "nope"
+       }
+      ]
+     },
+     {
+      "turn": 4,
+      "role": "user",
+      "blocks": [
+       {
+        "kind": "userText",
+        "text": "follow-up",
+        "tokens": 3
+       },
+       {
+        "kind": "image",
+        "meta": {
+         "note": "image content (not stored)"
+        }
+       }
+      ]
+     },
+     {
+      "turn": 5,
+      "role": "system",
+      "blocks": [
+       {
+        "kind": "systemNote",
+        "text": "a harness meta note",
+        "tokens": 4,
+        "meta": {
+         "subtype": "meta"
+        }
+       }
+      ]
+     },
+     {
+      "turn": 6,
+      "role": "system",
+      "blocks": [
+       {
+        "kind": "systemNote",
+        "text": "the compaction summary",
+        "tokens": 4,
+        "meta": {
+         "subtype": "compact-summary"
+        }
+       }
+      ]
+     },
+     {
+      "turn": 7,
+      "role": "assistant",
+      "blocks": [
+       {
+        "kind": "assistantText",
+        "text": "real synthetic work",
+        "tokens": 4
+       }
+      ],
+      "messageId": "s2",
+      "usage": {
+       "input": 5,
+       "output": 1,
+       "cacheRead": 0,
+       "cacheCreate": 0,
+       "tier5m": 0,
+       "tier1h": 0
+      }
+     },
+     {
+      "turn": 8,
+      "role": "assistant",
+      "blocks": [
+       {
+        "kind": "assistantText",
+        "text": "  "
+       }
+      ],
+      "messageId": "m2"
+     }
+    ],
+    "compactions": [
+     {
+      "afterTurn": 6,
+      "trigger": "auto",
+      "preTokens": 120000,
+      "postTokens": 30000,
+      "droppedTokens": 90000
+     },
+     {
+      "afterTurn": 6,
+      "preTokens": 0
+     },
+     {
+      "afterTurn": 6
+     }
+    ],
+    "otherRecords": {
+     "attachment": 1,
+     "system/some_other_thing": 1,
+     "mode": 1,
+     "(untyped)": 1,
+     "queue-operation": 1
+    },
+    "totals": {
+     "turns": 8,
+     "toolCalls": 2,
+     "durationMs": 4200,
+     "usage": {
+      "input": 35,
+      "output": 13,
+      "cacheRead": 900,
+      "cacheCreate": 40,
+      "tier5m": 10,
+      "tier1h": 30
+     }
+    },
+    "truncated": false
+   },
+   "args": {
+    "sessionId": "conv-main",
+    "turn": 999
+   }
+  },
+  {
+   "name": "range",
+   "conv": {
+    "sessionId": "conv-main",
+    "title": "final title",
+    "agentName": "the-agent",
+    "entrypoint": "cli",
+    "cwd": "/repo/here",
+    "model": "claude-opus-5",
+    "turns": [
+     {
+      "turn": 1,
+      "role": "user",
+      "blocks": [
+       {
+        "kind": "userText",
+        "text": "do the thing",
+        "tokens": 3
+       }
+      ],
+      "ts": "2026-08-01T10:00:00Z"
+     },
+     {
+      "turn": 2,
+      "role": "assistant",
+      "blocks": [
+       {
+        "kind": "attachment",
+        "text": "injected context",
+        "tokens": 3,
+        "meta": {
+         "label": "file: ctx.md",
+         "attachmentKind": "file",
+         "bytes": 16
+        }
+       },
+       {
+        "kind": "thinking",
+        "text": "considering the options",
+        "tokens": 4
+       },
+       {
+        "kind": "assistantText",
+        "text": "doing it now",
+        "tokens": 3
+       },
+       {
+        "kind": "toolUse",
+        "text": "echo hi",
+        "tokens": 2,
+        "toolName": "Bash",
+        "toolUseId": "tu1"
+       },
+       {
+        "kind": "toolUse",
+        "text": "{\"file_path\":\"/x.txt\"}",
+        "tokens": 10,
+        "toolName": "Read",
+        "toolUseId": "tu2"
+       },
+       {
+        "kind": "assistantText",
+        "text": "and a continuation",
+        "tokens": 5
+       },
+       {
+        "kind": "toolResult",
+        "text": "hi",
+        "tokens": 1,
+        "toolName": "Bash",
+        "toolUseId": "tu1"
+       },
+       {
+        "kind": "toolResult",
+        "text": "file body",
+        "tokens": 2,
+        "toolName": "Read",
+        "toolUseId": "tu2"
+       },
+       {
+        "kind": "toolResult",
+        "text": "second result",
+        "tokens": 2,
+        "toolName": "Bash",
+        "toolUseId": "tu1"
+       }
+      ],
+      "messageId": "m1",
+      "model": "claude-opus-5",
+      "ts": "2026-08-01T10:00:05Z",
+      "sidechain": true,
+      "usage": {
+       "input": 30,
+       "output": 12,
+       "cacheRead": 900,
+       "cacheCreate": 40,
+       "tier5m": 10,
+       "tier1h": 30
+      },
+      "durationMs": 4200
+     },
+     {
+      "turn": 3,
+      "role": "user",
+      "blocks": [
+       {
+        "kind": "toolResult",
+        "text": "orphan output",
+        "tokens": 2,
+        "toolUseId": "nope"
+       }
+      ]
+     },
+     {
+      "turn": 4,
+      "role": "user",
+      "blocks": [
+       {
+        "kind": "userText",
+        "text": "follow-up",
+        "tokens": 3
+       },
+       {
+        "kind": "image",
+        "meta": {
+         "note": "image content (not stored)"
+        }
+       }
+      ]
+     },
+     {
+      "turn": 5,
+      "role": "system",
+      "blocks": [
+       {
+        "kind": "systemNote",
+        "text": "a harness meta note",
+        "tokens": 4,
+        "meta": {
+         "subtype": "meta"
+        }
+       }
+      ]
+     },
+     {
+      "turn": 6,
+      "role": "system",
+      "blocks": [
+       {
+        "kind": "systemNote",
+        "text": "the compaction summary",
+        "tokens": 4,
+        "meta": {
+         "subtype": "compact-summary"
+        }
+       }
+      ]
+     },
+     {
+      "turn": 7,
+      "role": "assistant",
+      "blocks": [
+       {
+        "kind": "assistantText",
+        "text": "real synthetic work",
+        "tokens": 4
+       }
+      ],
+      "messageId": "s2",
+      "usage": {
+       "input": 5,
+       "output": 1,
+       "cacheRead": 0,
+       "cacheCreate": 0,
+       "tier5m": 0,
+       "tier1h": 0
+      }
+     },
+     {
+      "turn": 8,
+      "role": "assistant",
+      "blocks": [
+       {
+        "kind": "assistantText",
+        "text": "  "
+       }
+      ],
+      "messageId": "m2"
+     }
+    ],
+    "compactions": [
+     {
+      "afterTurn": 6,
+      "trigger": "auto",
+      "preTokens": 120000,
+      "postTokens": 30000,
+      "droppedTokens": 90000
+     },
+     {
+      "afterTurn": 6,
+      "preTokens": 0
+     },
+     {
+      "afterTurn": 6
+     }
+    ],
+    "otherRecords": {
+     "attachment": 1,
+     "system/some_other_thing": 1,
+     "mode": 1,
+     "(untyped)": 1,
+     "queue-operation": 1
+    },
+    "totals": {
+     "turns": 8,
+     "toolCalls": 2,
+     "durationMs": 4200,
+     "usage": {
+      "input": 35,
+      "output": 13,
+      "cacheRead": 900,
+      "cacheCreate": 40,
+      "tier5m": 10,
+      "tier1h": 30
+     }
+    },
+    "truncated": false
+   },
+   "args": {
+    "sessionId": "conv-main",
+    "turnFrom": 1,
+    "turnTo": 3
+   }
+  },
+  {
+   "name": "range-clamped-to-cap",
+   "conv": {
+    "sessionId": "conv-main",
+    "title": "final title",
+    "agentName": "the-agent",
+    "entrypoint": "cli",
+    "cwd": "/repo/here",
+    "model": "claude-opus-5",
+    "turns": [
+     {
+      "turn": 1,
+      "role": "user",
+      "blocks": [
+       {
+        "kind": "userText",
+        "text": "do the thing",
+        "tokens": 3
+       }
+      ],
+      "ts": "2026-08-01T10:00:00Z"
+     },
+     {
+      "turn": 2,
+      "role": "assistant",
+      "blocks": [
+       {
+        "kind": "attachment",
+        "text": "injected context",
+        "tokens": 3,
+        "meta": {
+         "label": "file: ctx.md",
+         "attachmentKind": "file",
+         "bytes": 16
+        }
+       },
+       {
+        "kind": "thinking",
+        "text": "considering the options",
+        "tokens": 4
+       },
+       {
+        "kind": "assistantText",
+        "text": "doing it now",
+        "tokens": 3
+       },
+       {
+        "kind": "toolUse",
+        "text": "echo hi",
+        "tokens": 2,
+        "toolName": "Bash",
+        "toolUseId": "tu1"
+       },
+       {
+        "kind": "toolUse",
+        "text": "{\"file_path\":\"/x.txt\"}",
+        "tokens": 10,
+        "toolName": "Read",
+        "toolUseId": "tu2"
+       },
+       {
+        "kind": "assistantText",
+        "text": "and a continuation",
+        "tokens": 5
+       },
+       {
+        "kind": "toolResult",
+        "text": "hi",
+        "tokens": 1,
+        "toolName": "Bash",
+        "toolUseId": "tu1"
+       },
+       {
+        "kind": "toolResult",
+        "text": "file body",
+        "tokens": 2,
+        "toolName": "Read",
+        "toolUseId": "tu2"
+       },
+       {
+        "kind": "toolResult",
+        "text": "second result",
+        "tokens": 2,
+        "toolName": "Bash",
+        "toolUseId": "tu1"
+       }
+      ],
+      "messageId": "m1",
+      "model": "claude-opus-5",
+      "ts": "2026-08-01T10:00:05Z",
+      "sidechain": true,
+      "usage": {
+       "input": 30,
+       "output": 12,
+       "cacheRead": 900,
+       "cacheCreate": 40,
+       "tier5m": 10,
+       "tier1h": 30
+      },
+      "durationMs": 4200
+     },
+     {
+      "turn": 3,
+      "role": "user",
+      "blocks": [
+       {
+        "kind": "toolResult",
+        "text": "orphan output",
+        "tokens": 2,
+        "toolUseId": "nope"
+       }
+      ]
+     },
+     {
+      "turn": 4,
+      "role": "user",
+      "blocks": [
+       {
+        "kind": "userText",
+        "text": "follow-up",
+        "tokens": 3
+       },
+       {
+        "kind": "image",
+        "meta": {
+         "note": "image content (not stored)"
+        }
+       }
+      ]
+     },
+     {
+      "turn": 5,
+      "role": "system",
+      "blocks": [
+       {
+        "kind": "systemNote",
+        "text": "a harness meta note",
+        "tokens": 4,
+        "meta": {
+         "subtype": "meta"
+        }
+       }
+      ]
+     },
+     {
+      "turn": 6,
+      "role": "system",
+      "blocks": [
+       {
+        "kind": "systemNote",
+        "text": "the compaction summary",
+        "tokens": 4,
+        "meta": {
+         "subtype": "compact-summary"
+        }
+       }
+      ]
+     },
+     {
+      "turn": 7,
+      "role": "assistant",
+      "blocks": [
+       {
+        "kind": "assistantText",
+        "text": "real synthetic work",
+        "tokens": 4
+       }
+      ],
+      "messageId": "s2",
+      "usage": {
+       "input": 5,
+       "output": 1,
+       "cacheRead": 0,
+       "cacheCreate": 0,
+       "tier5m": 0,
+       "tier1h": 0
+      }
+     },
+     {
+      "turn": 8,
+      "role": "assistant",
+      "blocks": [
+       {
+        "kind": "assistantText",
+        "text": "  "
+       }
+      ],
+      "messageId": "m2"
+     }
+    ],
+    "compactions": [
+     {
+      "afterTurn": 6,
+      "trigger": "auto",
+      "preTokens": 120000,
+      "postTokens": 30000,
+      "droppedTokens": 90000
+     },
+     {
+      "afterTurn": 6,
+      "preTokens": 0
+     },
+     {
+      "afterTurn": 6
+     }
+    ],
+    "otherRecords": {
+     "attachment": 1,
+     "system/some_other_thing": 1,
+     "mode": 1,
+     "(untyped)": 1,
+     "queue-operation": 1
+    },
+    "totals": {
+     "turns": 8,
+     "toolCalls": 2,
+     "durationMs": 4200,
+     "usage": {
+      "input": 35,
+      "output": 13,
+      "cacheRead": 900,
+      "cacheCreate": 40,
+      "tier5m": 10,
+      "tier1h": 30
+     }
+    },
+    "truncated": false
+   },
+   "args": {
+    "sessionId": "conv-main",
+    "turnFrom": 1,
+    "turnTo": 9999
+   }
+  },
+  {
+   "name": "range-from-only",
+   "conv": {
+    "sessionId": "conv-main",
+    "title": "final title",
+    "agentName": "the-agent",
+    "entrypoint": "cli",
+    "cwd": "/repo/here",
+    "model": "claude-opus-5",
+    "turns": [
+     {
+      "turn": 1,
+      "role": "user",
+      "blocks": [
+       {
+        "kind": "userText",
+        "text": "do the thing",
+        "tokens": 3
+       }
+      ],
+      "ts": "2026-08-01T10:00:00Z"
+     },
+     {
+      "turn": 2,
+      "role": "assistant",
+      "blocks": [
+       {
+        "kind": "attachment",
+        "text": "injected context",
+        "tokens": 3,
+        "meta": {
+         "label": "file: ctx.md",
+         "attachmentKind": "file",
+         "bytes": 16
+        }
+       },
+       {
+        "kind": "thinking",
+        "text": "considering the options",
+        "tokens": 4
+       },
+       {
+        "kind": "assistantText",
+        "text": "doing it now",
+        "tokens": 3
+       },
+       {
+        "kind": "toolUse",
+        "text": "echo hi",
+        "tokens": 2,
+        "toolName": "Bash",
+        "toolUseId": "tu1"
+       },
+       {
+        "kind": "toolUse",
+        "text": "{\"file_path\":\"/x.txt\"}",
+        "tokens": 10,
+        "toolName": "Read",
+        "toolUseId": "tu2"
+       },
+       {
+        "kind": "assistantText",
+        "text": "and a continuation",
+        "tokens": 5
+       },
+       {
+        "kind": "toolResult",
+        "text": "hi",
+        "tokens": 1,
+        "toolName": "Bash",
+        "toolUseId": "tu1"
+       },
+       {
+        "kind": "toolResult",
+        "text": "file body",
+        "tokens": 2,
+        "toolName": "Read",
+        "toolUseId": "tu2"
+       },
+       {
+        "kind": "toolResult",
+        "text": "second result",
+        "tokens": 2,
+        "toolName": "Bash",
+        "toolUseId": "tu1"
+       }
+      ],
+      "messageId": "m1",
+      "model": "claude-opus-5",
+      "ts": "2026-08-01T10:00:05Z",
+      "sidechain": true,
+      "usage": {
+       "input": 30,
+       "output": 12,
+       "cacheRead": 900,
+       "cacheCreate": 40,
+       "tier5m": 10,
+       "tier1h": 30
+      },
+      "durationMs": 4200
+     },
+     {
+      "turn": 3,
+      "role": "user",
+      "blocks": [
+       {
+        "kind": "toolResult",
+        "text": "orphan output",
+        "tokens": 2,
+        "toolUseId": "nope"
+       }
+      ]
+     },
+     {
+      "turn": 4,
+      "role": "user",
+      "blocks": [
+       {
+        "kind": "userText",
+        "text": "follow-up",
+        "tokens": 3
+       },
+       {
+        "kind": "image",
+        "meta": {
+         "note": "image content (not stored)"
+        }
+       }
+      ]
+     },
+     {
+      "turn": 5,
+      "role": "system",
+      "blocks": [
+       {
+        "kind": "systemNote",
+        "text": "a harness meta note",
+        "tokens": 4,
+        "meta": {
+         "subtype": "meta"
+        }
+       }
+      ]
+     },
+     {
+      "turn": 6,
+      "role": "system",
+      "blocks": [
+       {
+        "kind": "systemNote",
+        "text": "the compaction summary",
+        "tokens": 4,
+        "meta": {
+         "subtype": "compact-summary"
+        }
+       }
+      ]
+     },
+     {
+      "turn": 7,
+      "role": "assistant",
+      "blocks": [
+       {
+        "kind": "assistantText",
+        "text": "real synthetic work",
+        "tokens": 4
+       }
+      ],
+      "messageId": "s2",
+      "usage": {
+       "input": 5,
+       "output": 1,
+       "cacheRead": 0,
+       "cacheCreate": 0,
+       "tier5m": 0,
+       "tier1h": 0
+      }
+     },
+     {
+      "turn": 8,
+      "role": "assistant",
+      "blocks": [
+       {
+        "kind": "assistantText",
+        "text": "  "
+       }
+      ],
+      "messageId": "m2"
+     }
+    ],
+    "compactions": [
+     {
+      "afterTurn": 6,
+      "trigger": "auto",
+      "preTokens": 120000,
+      "postTokens": 30000,
+      "droppedTokens": 90000
+     },
+     {
+      "afterTurn": 6,
+      "preTokens": 0
+     },
+     {
+      "afterTurn": 6
+     }
+    ],
+    "otherRecords": {
+     "attachment": 1,
+     "system/some_other_thing": 1,
+     "mode": 1,
+     "(untyped)": 1,
+     "queue-operation": 1
+    },
+    "totals": {
+     "turns": 8,
+     "toolCalls": 2,
+     "durationMs": 4200,
+     "usage": {
+      "input": 35,
+      "output": 13,
+      "cacheRead": 900,
+      "cacheCreate": 40,
+      "tier5m": 10,
+      "tier1h": 30
+     }
+    },
+    "truncated": false
+   },
+   "args": {
+    "sessionId": "conv-main",
+    "turnFrom": 2
+   }
+  },
+  {
+   "name": "null",
+   "conv": null,
+   "args": {
+    "sessionId": "ghost"
+   }
+  }
+ ],
+ "convResults": [
+  {
+   "sessionId": "conv-main",
+   "title": "final title",
+   "agentName": "the-agent",
+   "entrypoint": "cli",
+   "cwd": "/repo/here",
+   "model": "claude-opus-5",
+   "totals": {
+    "turns": 8,
+    "toolCalls": 2,
+    "durationMs": 4200,
+    "usage": {
+     "input": 35,
+     "output": 13,
+     "cacheRead": 900,
+     "cacheCreate": 40,
+     "tier5m": 10,
+     "tier1h": 30
+    }
+   },
+   "compactions": [
+    {
+     "afterTurn": 6,
+     "trigger": "auto",
+     "preTokens": 120000,
+     "postTokens": 30000,
+     "droppedTokens": 90000
+    },
+    {
+     "afterTurn": 6,
+     "preTokens": 0
+    },
+    {
+     "afterTurn": 6
+    }
+   ],
+   "otherRecords": {
+    "attachment": 1,
+    "system/some_other_thing": 1,
+    "mode": 1,
+    "(untyped)": 1,
+    "queue-operation": 1
+   },
+   "truncated": false,
+   "turnCount": 8,
+   "turns": [
+    {
+     "turn": 1,
+     "role": "user",
+     "ts": "2026-08-01T10:00:00Z",
+     "blockCount": 1,
+     "preview": "do the thing"
+    },
+    {
+     "turn": 2,
+     "role": "assistant",
+     "ts": "2026-08-01T10:00:05Z",
+     "sidechain": true,
+     "durationMs": 4200,
+     "usage": {
+      "input": 30,
+      "output": 12,
+      "cacheRead": 900,
+      "cacheCreate": 40,
+      "tier5m": 10,
+      "tier1h": 30
+     },
+     "blockCount": 9,
+     "tools": [
+      "Bash",
+      "Read"
+     ],
+     "preview": "doing it now"
+    },
+    {
+     "turn": 3,
+     "role": "user",
+     "blockCount": 1,
+     "preview": ""
+    },
+    {
+     "turn": 4,
+     "role": "user",
+     "blockCount": 2,
+     "preview": "follow-up"
+    },
+    {
+     "turn": 5,
+     "role": "system",
+     "blockCount": 1,
+     "preview": "a harness meta note"
+    },
+    {
+     "turn": 6,
+     "role": "system",
+     "blockCount": 1,
+     "preview": "the compaction summary"
+    },
+    {
+     "turn": 7,
+     "role": "assistant",
+     "usage": {
+      "input": 5,
+      "output": 1,
+      "cacheRead": 0,
+      "cacheCreate": 0,
+      "tier5m": 0,
+      "tier1h": 0
+     },
+     "blockCount": 1,
+     "preview": "real synthetic work"
+    },
+    {
+     "turn": 8,
+     "role": "assistant",
+     "blockCount": 1,
+     "preview": "  "
+    }
+   ]
+  },
+  {
+   "sessionId": "conv-main",
+   "turn": 2,
+   "role": "assistant",
+   "ts": "2026-08-01T10:00:05Z",
+   "model": "claude-opus-5",
+   "sidechain": true,
+   "durationMs": 4200,
+   "usage": {
+    "input": 30,
+    "output": 12,
+    "cacheRead": 900,
+    "cacheCreate": 40,
+    "tier5m": 10,
+    "tier1h": 30
+   },
+   "blocks": [
+    {
+     "kind": "attachment",
+     "tokens": 3,
+     "meta": {
+      "label": "file: ctx.md",
+      "attachmentKind": "file",
+      "bytes": 16
+     },
+     "text": "injected context"
+    },
+    {
+     "kind": "thinking",
+     "tokens": 4,
+     "text": "considering the options"
+    },
+    {
+     "kind": "assistantText",
+     "tokens": 3,
+     "text": "doing it now"
+    },
+    {
+     "kind": "toolUse",
+     "toolName": "Bash",
+     "toolUseId": "tu1",
+     "tokens": 2,
+     "text": "echo hi"
+    },
+    {
+     "kind": "toolUse",
+     "toolName": "Read",
+     "toolUseId": "tu2",
+     "tokens": 10,
+     "text": "{\"file_path\":\"/x.txt\"}"
+    },
+    {
+     "kind": "assistantText",
+     "tokens": 5,
+     "text": "and a continuation"
+    },
+    {
+     "kind": "toolResult",
+     "toolName": "Bash",
+     "toolUseId": "tu1",
+     "tokens": 1,
+     "text": "hi"
+    },
+    {
+     "kind": "toolResult",
+     "toolName": "Read",
+     "toolUseId": "tu2",
+     "tokens": 2,
+     "text": "file body"
+    },
+    {
+     "kind": "toolResult",
+     "toolName": "Bash",
+     "toolUseId": "tu1",
+     "tokens": 2,
+     "text": "second result"
+    }
+   ]
+  },
+  {
+   "sessionId": "conv-main",
+   "turn": 999,
+   "message": "No turn 999 (session has 8)."
+  },
+  {
+   "sessionId": "conv-main",
+   "turnFrom": 1,
+   "turnTo": 3,
+   "rangeCap": 20,
+   "turns": [
+    {
+     "turn": 1,
+     "role": "user",
+     "ts": "2026-08-01T10:00:00Z",
+     "blocks": [
+      {
+       "kind": "userText",
+       "tokens": 3,
+       "text": "do the thing"
+      }
+     ]
+    },
+    {
+     "turn": 2,
+     "role": "assistant",
+     "ts": "2026-08-01T10:00:05Z",
+     "model": "claude-opus-5",
+     "sidechain": true,
+     "durationMs": 4200,
+     "usage": {
+      "input": 30,
+      "output": 12,
+      "cacheRead": 900,
+      "cacheCreate": 40,
+      "tier5m": 10,
+      "tier1h": 30
+     },
+     "blocks": [
+      {
+       "kind": "attachment",
+       "tokens": 3,
+       "meta": {
+        "label": "file: ctx.md",
+        "attachmentKind": "file",
+        "bytes": 16
+       },
+       "text": "injected context"
+      },
+      {
+       "kind": "thinking",
+       "tokens": 4,
+       "text": "considering the options"
+      },
+      {
+       "kind": "assistantText",
+       "tokens": 3,
+       "text": "doing it now"
+      },
+      {
+       "kind": "toolUse",
+       "toolName": "Bash",
+       "toolUseId": "tu1",
+       "tokens": 2,
+       "text": "echo hi"
+      },
+      {
+       "kind": "toolUse",
+       "toolName": "Read",
+       "toolUseId": "tu2",
+       "tokens": 10,
+       "text": "{\"file_path\":\"/x.txt\"}"
+      },
+      {
+       "kind": "assistantText",
+       "tokens": 5,
+       "text": "and a continuation"
+      },
+      {
+       "kind": "toolResult",
+       "toolName": "Bash",
+       "toolUseId": "tu1",
+       "tokens": 1,
+       "text": "hi"
+      },
+      {
+       "kind": "toolResult",
+       "toolName": "Read",
+       "toolUseId": "tu2",
+       "tokens": 2,
+       "text": "file body"
+      },
+      {
+       "kind": "toolResult",
+       "toolName": "Bash",
+       "toolUseId": "tu1",
+       "tokens": 2,
+       "text": "second result"
+      }
+     ]
+    },
+    {
+     "turn": 3,
+     "role": "user",
+     "blocks": [
+      {
+       "kind": "toolResult",
+       "toolUseId": "nope",
+       "tokens": 2,
+       "text": "orphan output"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "sessionId": "conv-main",
+   "turnFrom": 1,
+   "turnTo": 20,
+   "rangeCap": 20,
+   "turns": [
+    {
+     "turn": 1,
+     "role": "user",
+     "ts": "2026-08-01T10:00:00Z",
+     "blocks": [
+      {
+       "kind": "userText",
+       "tokens": 3,
+       "text": "do the thing"
+      }
+     ]
+    },
+    {
+     "turn": 2,
+     "role": "assistant",
+     "ts": "2026-08-01T10:00:05Z",
+     "model": "claude-opus-5",
+     "sidechain": true,
+     "durationMs": 4200,
+     "usage": {
+      "input": 30,
+      "output": 12,
+      "cacheRead": 900,
+      "cacheCreate": 40,
+      "tier5m": 10,
+      "tier1h": 30
+     },
+     "blocks": [
+      {
+       "kind": "attachment",
+       "tokens": 3,
+       "meta": {
+        "label": "file: ctx.md",
+        "attachmentKind": "file",
+        "bytes": 16
+       },
+       "text": "injected context"
+      },
+      {
+       "kind": "thinking",
+       "tokens": 4,
+       "text": "considering the options"
+      },
+      {
+       "kind": "assistantText",
+       "tokens": 3,
+       "text": "doing it now"
+      },
+      {
+       "kind": "toolUse",
+       "toolName": "Bash",
+       "toolUseId": "tu1",
+       "tokens": 2,
+       "text": "echo hi"
+      },
+      {
+       "kind": "toolUse",
+       "toolName": "Read",
+       "toolUseId": "tu2",
+       "tokens": 10,
+       "text": "{\"file_path\":\"/x.txt\"}"
+      },
+      {
+       "kind": "assistantText",
+       "tokens": 5,
+       "text": "and a continuation"
+      },
+      {
+       "kind": "toolResult",
+       "toolName": "Bash",
+       "toolUseId": "tu1",
+       "tokens": 1,
+       "text": "hi"
+      },
+      {
+       "kind": "toolResult",
+       "toolName": "Read",
+       "toolUseId": "tu2",
+       "tokens": 2,
+       "text": "file body"
+      },
+      {
+       "kind": "toolResult",
+       "toolName": "Bash",
+       "toolUseId": "tu1",
+       "tokens": 2,
+       "text": "second result"
+      }
+     ]
+    },
+    {
+     "turn": 3,
+     "role": "user",
+     "blocks": [
+      {
+       "kind": "toolResult",
+       "toolUseId": "nope",
+       "tokens": 2,
+       "text": "orphan output"
+      }
+     ]
+    },
+    {
+     "turn": 4,
+     "role": "user",
+     "blocks": [
+      {
+       "kind": "userText",
+       "tokens": 3,
+       "text": "follow-up"
+      },
+      {
+       "kind": "image",
+       "meta": {
+        "note": "image content (not stored)"
+       },
+       "text": ""
+      }
+     ]
+    },
+    {
+     "turn": 5,
+     "role": "system",
+     "blocks": [
+      {
+       "kind": "systemNote",
+       "tokens": 4,
+       "meta": {
+        "subtype": "meta"
+       },
+       "text": "a harness meta note"
+      }
+     ]
+    },
+    {
+     "turn": 6,
+     "role": "system",
+     "blocks": [
+      {
+       "kind": "systemNote",
+       "tokens": 4,
+       "meta": {
+        "subtype": "compact-summary"
+       },
+       "text": "the compaction summary"
+      }
+     ]
+    },
+    {
+     "turn": 7,
+     "role": "assistant",
+     "usage": {
+      "input": 5,
+      "output": 1,
+      "cacheRead": 0,
+      "cacheCreate": 0,
+      "tier5m": 0,
+      "tier1h": 0
+     },
+     "blocks": [
+      {
+       "kind": "assistantText",
+       "tokens": 4,
+       "text": "real synthetic work"
+      }
+     ]
+    },
+    {
+     "turn": 8,
+     "role": "assistant",
+     "blocks": [
+      {
+       "kind": "assistantText",
+       "text": "  "
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "sessionId": "conv-main",
+   "turnFrom": 2,
+   "turnTo": 21,
+   "rangeCap": 20,
+   "turns": [
+    {
+     "turn": 2,
+     "role": "assistant",
+     "ts": "2026-08-01T10:00:05Z",
+     "model": "claude-opus-5",
+     "sidechain": true,
+     "durationMs": 4200,
+     "usage": {
+      "input": 30,
+      "output": 12,
+      "cacheRead": 900,
+      "cacheCreate": 40,
+      "tier5m": 10,
+      "tier1h": 30
+     },
+     "blocks": [
+      {
+       "kind": "attachment",
+       "tokens": 3,
+       "meta": {
+        "label": "file: ctx.md",
+        "attachmentKind": "file",
+        "bytes": 16
+       },
+       "text": "injected context"
+      },
+      {
+       "kind": "thinking",
+       "tokens": 4,
+       "text": "considering the options"
+      },
+      {
+       "kind": "assistantText",
+       "tokens": 3,
+       "text": "doing it now"
+      },
+      {
+       "kind": "toolUse",
+       "toolName": "Bash",
+       "toolUseId": "tu1",
+       "tokens": 2,
+       "text": "echo hi"
+      },
+      {
+       "kind": "toolUse",
+       "toolName": "Read",
+       "toolUseId": "tu2",
+       "tokens": 10,
+       "text": "{\"file_path\":\"/x.txt\"}"
+      },
+      {
+       "kind": "assistantText",
+       "tokens": 5,
+       "text": "and a continuation"
+      },
+      {
+       "kind": "toolResult",
+       "toolName": "Bash",
+       "toolUseId": "tu1",
+       "tokens": 1,
+       "text": "hi"
+      },
+      {
+       "kind": "toolResult",
+       "toolName": "Read",
+       "toolUseId": "tu2",
+       "tokens": 2,
+       "text": "file body"
+      },
+      {
+       "kind": "toolResult",
+       "toolName": "Bash",
+       "toolUseId": "tu1",
+       "tokens": 2,
+       "text": "second result"
+      }
+     ]
+    },
+    {
+     "turn": 3,
+     "role": "user",
+     "blocks": [
+      {
+       "kind": "toolResult",
+       "toolUseId": "nope",
+       "tokens": 2,
+       "text": "orphan output"
+      }
+     ]
+    },
+    {
+     "turn": 4,
+     "role": "user",
+     "blocks": [
+      {
+       "kind": "userText",
+       "tokens": 3,
+       "text": "follow-up"
+      },
+      {
+       "kind": "image",
+       "meta": {
+        "note": "image content (not stored)"
+       },
+       "text": ""
+      }
+     ]
+    },
+    {
+     "turn": 5,
+     "role": "system",
+     "blocks": [
+      {
+       "kind": "systemNote",
+       "tokens": 4,
+       "meta": {
+        "subtype": "meta"
+       },
+       "text": "a harness meta note"
+      }
+     ]
+    },
+    {
+     "turn": 6,
+     "role": "system",
+     "blocks": [
+      {
+       "kind": "systemNote",
+       "tokens": 4,
+       "meta": {
+        "subtype": "compact-summary"
+       },
+       "text": "the compaction summary"
+      }
+     ]
+    },
+    {
+     "turn": 7,
+     "role": "assistant",
+     "usage": {
+      "input": 5,
+      "output": 1,
+      "cacheRead": 0,
+      "cacheCreate": 0,
+      "tier5m": 0,
+      "tier1h": 0
+     },
+     "blocks": [
+      {
+       "kind": "assistantText",
+       "tokens": 4,
+       "text": "real synthetic work"
+      }
+     ]
+    },
+    {
+     "turn": 8,
+     "role": "assistant",
+     "blocks": [
+      {
+       "kind": "assistantText",
+       "text": "  "
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "sessionId": "ghost",
+   "message": "No local Claude log to reconstruct (OTEL-only session, or its transcript is not on disk)."
+  }
  ]
 }
