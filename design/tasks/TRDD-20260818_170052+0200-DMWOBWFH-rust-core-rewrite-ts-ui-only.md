@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T09:44:38+0200
+updated: 2026-08-20T12:34:29+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -617,6 +617,26 @@ release-via: publish
   rows + findSample) and the two routes. The five query/report methods (imageReport,
   findResidentBlobs, queryBlocks, getSession, getBlockContent) also back MCP tools — port
   them with the index, the routes only need summary + block-content.
+- **P4w.1a DONE (commit 3f357ba): `call_body_registry.rs` + THE INGEST EDGE.** The pointer half
+  of CallBodyRegistry (IndexMap for the JS-Map-insertion-order LRU; `shift_remove` never
+  `swap_remove`; account half deliberately NOT re-ported — `account_registry` already owns it).
+  **The real defect fixed: `ingest_post` consumed only `account_pairs` and DROPPED
+  `body_pointers` on the floor, so every drill-down would have resolved an empty registry and
+  reported "no bodies" — indistinguishable from the honest empty state.** Parity oracle: one
+  scripted op/query sequence, caps 3×4 so both eviction paths INTERACT (three answers are the
+  resolveRequest fallback because eviction removed the obvious match — a hand-written
+  expectation gets those wrong); plus a second test driving the REAL `ingest_post` to prove the
+  edge is live. 111/111, clippy 28 (baseline), identities green.
+- **NEXT (P4w.1b): `raw_body_context.rs`** — `buildCallContextFromJson` (PURE over parsed JSON:
+  block order system → toolCatalog → messages; `classifySystem` regexes for claudemd/rule;
+  `flattenResultContent`; tool_result inherits toolName from an earlier tool_use via an id map;
+  `IMAGE_BLOCK_LABEL_PREFIX = "image"` so the composition index re-classifies images WITHOUT a
+  re-parse; `BLOCK_TEXT_CAP = 20000` with tokens counted on the FULL text pre-cap, `uncap`
+  lifting it for a single-block drill; `MAX_RAW_BODY_BYTES = 64MB` size gate) + `parseUserId`.
+  **READ FIRST, not yet read: `src/tokenEstimator.ts`** — `countTokens` and `calibrateTokens`
+  (the latter called as `calibrateTokens(raw, exactContext, {minScale:0.2, maxScale:5})`) are
+  its exports and the composition index's calibration depends on them exactly; `rawBodyContext.ts`
+  lines ~270-378 (the messages-loop tail + `resolveCallContext`) are also still unread.
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
