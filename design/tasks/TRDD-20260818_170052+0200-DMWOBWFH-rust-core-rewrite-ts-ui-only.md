@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T16:46:13+0200
+updated: 2026-08-20T16:53:16+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -910,14 +910,17 @@ release-via: publish
   `g.workspace = s.workspace` DROPS the key when undefined while `g.parentSessionId = x ?? null`
   KEEPS it as null — the two assignment shapes in one literal serialise differently, and the oracle
   caught nulls where keys should have dropped.
-- **NEXT (P4x.2d): port ENGINES.** ~32 tools remain, most needing a real engine. SIZE FIRST, and
-  check for in-module functions before assuming a missing file means a missing engine
-  (predict_session_cost's matcher is ALSO in mcpServer.ts ~140-235 — likely another thin one).
-  Candidate order: `subscriptionUsage.ts` (797 ln; get_subscription_usage — also the TTL-regime
-  oracle), `cacheEventLog.ts` (479 ln), `runtimeInventory.ts` (176 ln), `skillAttribution.ts`
-  (180 ln), `loadedPluginVersions.ts` (274 ln). Heavyweights (forensics / timeline / investigator /
-  sql) last. **Every new arm must end in `tool_ok_lean`, never `mcp::tool_ok`.** The dispatch cases
-  are
+- **P4x.2c (commit a52b1f1): `predict_session_cost`. 22 of 53.** In-module thin one. Pinned: the
+  percentile pick is a MEMBER of the sample, not an interpolation; the type bonus RERANKS (proved by
+  comparing rankings); the 10x band DOWN-WEIGHTS to 0.2, never excludes; matched:0 carries NO
+  numbers and names the active type filter; zero-traffic cards excluded from every ranking; the
+  headline estimates are FLAT duplicates so they survive the lean shaper.
+- **NEXT (P4x.2d): port ENGINES.** 31 tools remain, all needing a real engine. SIZE FIRST.
+  Candidate order: `runtimeInventory.ts` (176 ln), `skillAttribution.ts` (180 ln),
+  `loadedPluginVersions.ts` (274 ln), `cacheEventLog.ts` (479 ln), `subscriptionUsage.ts` (797 ln —
+  also the TTL-regime oracle; NETWORK: calls Anthropic's usage endpoint, so the oracle must stub).
+  Heavyweights (forensics / timeline / investigator / sql) last. **Every new arm must end in
+  `tool_ok_lean`, never `mcp::tool_ok`.** The dispatch cases are
   `src/mcpServer.ts` ~3434-3890 and most shapers sit at 1617-3390 (largely UNREAD).
   `get_context_composition` (2438), `get_context_history` (2325), `get_conversation` (2391) — all
   three shapers are in `src/mcpServer.ts` and UNREAD except their heads; each has `turn` / range
