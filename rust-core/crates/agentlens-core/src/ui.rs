@@ -1377,6 +1377,27 @@ async fn handle(
                         .map_err(|e| format!("runtime inventory join failed: {e}"))?;
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
+                    "get_skill_attribution" => {
+                        // P4s lock choreography: resolve the transcript roots UNDER the lock, clone
+                        // them out, UNLOCK, then do the multi-file disk scan on spawn_blocking. A
+                        // full-history attribution walk reads thousands of files; holding the state
+                        // lock across it would stall every other request for its duration.
+                        let now = crate::now_ms() as f64;
+                        let dirs = {
+                            let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                            agentlens_logscan::discovery::claude_projects_dirs(&st.log_env)
+                        };
+                        // Non-finite is treated as ABSENT: in the TS a NaN window is falsy (so no
+                        // sinceMs) and serializes to null (so no windowHours) — the same shape.
+                        let f = |k: &str| args.get(k).and_then(Value::as_f64).filter(|v| v.is_finite());
+                        let (window, top_n) = (f("window"), f("topN"));
+                        let payload = tokio::task::spawn_blocking(move || {
+                            crate::skill_attribution::get_skill_attribution(&dirs, window, top_n, now)
+                        })
+                        .await
+                        .map_err(|e| format!("skill attribution join failed: {e}"))?;
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
+                    }
                     "get_cost_rollup" | "predict_session_cost" => {
                         let now = crate::now_ms() as f64;
                         let sessions = {

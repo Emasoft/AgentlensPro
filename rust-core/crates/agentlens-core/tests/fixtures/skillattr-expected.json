@@ -1,0 +1,657 @@
+{
+  "nowMs": 1785589200000,
+  "report": {
+    "attributedMessages": 10,
+    "pricedMessages": 7,
+    "totalCostUsd": 0.0509,
+    "bySkill": [
+      {
+        "name": "pack:alpha",
+        "messages": 4,
+        "inputTokens": 1700,
+        "cacheReadTokens": 14000,
+        "cacheWriteTokens": 2100,
+        "outputTokens": 650,
+        "costUsd": 0.0411,
+        "models": [
+          "claude-opus-5",
+          "claude-sonnet-5"
+        ],
+        "firstTs": 1785578400000,
+        "lastTs": 1785579300000
+      },
+      {
+        "name": "other:beta",
+        "messages": 2,
+        "inputTokens": 3040,
+        "cacheReadTokens": 20000,
+        "cacheWriteTokens": 500,
+        "outputTokens": 804,
+        "costUsd": 0.0097,
+        "models": [
+          "claude-haiku-4-5"
+        ],
+        "firstTs": 1785585600000,
+        "lastTs": 1785585600000
+      },
+      {
+        "name": "other:gamma",
+        "messages": 1,
+        "inputTokens": 0,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "outputTokens": 0,
+        "costUsd": 0,
+        "models": [
+          "claude-haiku-4-5"
+        ],
+        "firstTs": 1785586200000,
+        "lastTs": 1785586200000
+      },
+      {
+        "name": "other:delta",
+        "messages": 1,
+        "inputTokens": 0,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "outputTokens": 0,
+        "costUsd": 0,
+        "models": [],
+        "firstTs": 1785586500000,
+        "lastTs": 1785586500000
+      },
+      {
+        "name": "other:epsilon",
+        "messages": 1,
+        "inputTokens": 0,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "outputTokens": 0,
+        "costUsd": 0,
+        "models": [
+          "claude-haiku-4-5"
+        ]
+      }
+    ],
+    "byPlugin": [
+      {
+        "name": "pack",
+        "messages": 4,
+        "inputTokens": 1700,
+        "cacheReadTokens": 14000,
+        "cacheWriteTokens": 2100,
+        "outputTokens": 650,
+        "costUsd": 0.0411,
+        "models": [
+          "claude-opus-5",
+          "claude-sonnet-5"
+        ],
+        "firstTs": 1785578400000,
+        "lastTs": 1785579300000
+      },
+      {
+        "name": "other",
+        "messages": 6,
+        "inputTokens": 3140,
+        "cacheReadTokens": 20000,
+        "cacheWriteTokens": 500,
+        "outputTokens": 814,
+        "costUsd": 0.0098,
+        "models": [
+          "claude-haiku-4-5"
+        ],
+        "firstTs": 1785585600000,
+        "lastTs": 1785586500000
+      }
+    ],
+    "duplicateRowsSkipped": 2,
+    "windowHours": null
+  },
+  "windowed": {
+    "attributedMessages": 6,
+    "pricedMessages": 4,
+    "totalCostUsd": 0.0123,
+    "bySkill": [
+      {
+        "name": "other:beta",
+        "messages": 1,
+        "inputTokens": 3000,
+        "cacheReadTokens": 20000,
+        "cacheWriteTokens": 500,
+        "outputTokens": 800,
+        "costUsd": 0.0096,
+        "models": [
+          "claude-haiku-4-5"
+        ],
+        "firstTs": 1785585600000,
+        "lastTs": 1785585600000
+      },
+      {
+        "name": "pack:alpha",
+        "messages": 2,
+        "inputTokens": 500,
+        "cacheReadTokens": 4000,
+        "cacheWriteTokens": 100,
+        "outputTokens": 50,
+        "costUsd": 0.0025,
+        "models": [
+          "claude-sonnet-5",
+          "claude-opus-5"
+        ],
+        "firstTs": 1785579000000,
+        "lastTs": 1785579300000
+      },
+      {
+        "name": "other:gamma",
+        "messages": 1,
+        "inputTokens": 0,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "outputTokens": 0,
+        "costUsd": 0,
+        "models": [
+          "claude-haiku-4-5"
+        ],
+        "firstTs": 1785586200000,
+        "lastTs": 1785586200000
+      },
+      {
+        "name": "other:delta",
+        "messages": 1,
+        "inputTokens": 0,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "outputTokens": 0,
+        "costUsd": 0,
+        "models": [],
+        "firstTs": 1785586500000,
+        "lastTs": 1785586500000
+      }
+    ],
+    "byPlugin": [
+      {
+        "name": "other",
+        "messages": 4,
+        "inputTokens": 3100,
+        "cacheReadTokens": 20000,
+        "cacheWriteTokens": 500,
+        "outputTokens": 810,
+        "costUsd": 0.0098,
+        "models": [
+          "claude-haiku-4-5"
+        ],
+        "firstTs": 1785585600000,
+        "lastTs": 1785586500000
+      },
+      {
+        "name": "pack",
+        "messages": 2,
+        "inputTokens": 500,
+        "cacheReadTokens": 4000,
+        "cacheWriteTokens": 100,
+        "outputTokens": 50,
+        "costUsd": 0.0025,
+        "models": [
+          "claude-sonnet-5",
+          "claude-opus-5"
+        ],
+        "firstTs": 1785579000000,
+        "lastTs": 1785579300000
+      }
+    ],
+    "duplicateRowsSkipped": 0,
+    "windowHours": null
+  },
+  "capped1": {
+    "attributedMessages": 10,
+    "pricedMessages": 7,
+    "totalCostUsd": 0.0509,
+    "bySkill": [
+      {
+        "name": "pack:alpha",
+        "messages": 4,
+        "inputTokens": 1700,
+        "cacheReadTokens": 14000,
+        "cacheWriteTokens": 2100,
+        "outputTokens": 650,
+        "costUsd": 0.0411,
+        "models": [
+          "claude-opus-5",
+          "claude-sonnet-5"
+        ],
+        "firstTs": 1785578400000,
+        "lastTs": 1785579300000
+      }
+    ],
+    "byPlugin": [
+      {
+        "name": "pack",
+        "messages": 4,
+        "inputTokens": 1700,
+        "cacheReadTokens": 14000,
+        "cacheWriteTokens": 2100,
+        "outputTokens": 650,
+        "costUsd": 0.0411,
+        "models": [
+          "claude-opus-5",
+          "claude-sonnet-5"
+        ],
+        "firstTs": 1785578400000,
+        "lastTs": 1785579300000
+      }
+    ],
+    "duplicateRowsSkipped": 2,
+    "windowHours": null
+  },
+  "capped0": {
+    "attributedMessages": 10,
+    "pricedMessages": 7,
+    "totalCostUsd": 0.0509,
+    "bySkill": [
+      {
+        "name": "pack:alpha",
+        "messages": 4,
+        "inputTokens": 1700,
+        "cacheReadTokens": 14000,
+        "cacheWriteTokens": 2100,
+        "outputTokens": 650,
+        "costUsd": 0.0411,
+        "models": [
+          "claude-opus-5",
+          "claude-sonnet-5"
+        ],
+        "firstTs": 1785578400000,
+        "lastTs": 1785579300000
+      }
+    ],
+    "byPlugin": [
+      {
+        "name": "pack",
+        "messages": 4,
+        "inputTokens": 1700,
+        "cacheReadTokens": 14000,
+        "cacheWriteTokens": 2100,
+        "outputTokens": 650,
+        "costUsd": 0.0411,
+        "models": [
+          "claude-opus-5",
+          "claude-sonnet-5"
+        ],
+        "firstTs": 1785578400000,
+        "lastTs": 1785579300000
+      }
+    ],
+    "duplicateRowsSkipped": 2,
+    "windowHours": null
+  },
+  "cappedNeg": {
+    "attributedMessages": 10,
+    "pricedMessages": 7,
+    "totalCostUsd": 0.0509,
+    "bySkill": [
+      {
+        "name": "pack:alpha",
+        "messages": 4,
+        "inputTokens": 1700,
+        "cacheReadTokens": 14000,
+        "cacheWriteTokens": 2100,
+        "outputTokens": 650,
+        "costUsd": 0.0411,
+        "models": [
+          "claude-opus-5",
+          "claude-sonnet-5"
+        ],
+        "firstTs": 1785578400000,
+        "lastTs": 1785579300000
+      }
+    ],
+    "byPlugin": [
+      {
+        "name": "pack",
+        "messages": 4,
+        "inputTokens": 1700,
+        "cacheReadTokens": 14000,
+        "cacheWriteTokens": 2100,
+        "outputTokens": 650,
+        "costUsd": 0.0411,
+        "models": [
+          "claude-opus-5",
+          "claude-sonnet-5"
+        ],
+        "firstTs": 1785578400000,
+        "lastTs": 1785579300000
+      }
+    ],
+    "duplicateRowsSkipped": 2,
+    "windowHours": null
+  },
+  "missingRoot": {
+    "attributedMessages": 0,
+    "pricedMessages": 0,
+    "totalCostUsd": 0,
+    "bySkill": [],
+    "byPlugin": [],
+    "duplicateRowsSkipped": 0,
+    "windowHours": null
+  },
+  "toolFull": {
+    "attributedMessages": 10,
+    "pricedMessages": 7,
+    "totalCostUsd": 0.0509,
+    "bySkill": [
+      {
+        "name": "pack:alpha",
+        "messages": 4,
+        "inputTokens": 1700,
+        "cacheReadTokens": 14000,
+        "cacheWriteTokens": 2100,
+        "outputTokens": 650,
+        "costUsd": 0.0411,
+        "models": [
+          "claude-opus-5",
+          "claude-sonnet-5"
+        ],
+        "firstTs": 1785578400000,
+        "lastTs": 1785579300000
+      },
+      {
+        "name": "other:beta",
+        "messages": 2,
+        "inputTokens": 3040,
+        "cacheReadTokens": 20000,
+        "cacheWriteTokens": 500,
+        "outputTokens": 804,
+        "costUsd": 0.0097,
+        "models": [
+          "claude-haiku-4-5"
+        ],
+        "firstTs": 1785585600000,
+        "lastTs": 1785585600000
+      },
+      {
+        "name": "other:gamma",
+        "messages": 1,
+        "inputTokens": 0,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "outputTokens": 0,
+        "costUsd": 0,
+        "models": [
+          "claude-haiku-4-5"
+        ],
+        "firstTs": 1785586200000,
+        "lastTs": 1785586200000
+      },
+      {
+        "name": "other:delta",
+        "messages": 1,
+        "inputTokens": 0,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "outputTokens": 0,
+        "costUsd": 0,
+        "models": [],
+        "firstTs": 1785586500000,
+        "lastTs": 1785586500000
+      },
+      {
+        "name": "other:epsilon",
+        "messages": 1,
+        "inputTokens": 0,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "outputTokens": 0,
+        "costUsd": 0,
+        "models": [
+          "claude-haiku-4-5"
+        ]
+      }
+    ],
+    "byPlugin": [
+      {
+        "name": "pack",
+        "messages": 4,
+        "inputTokens": 1700,
+        "cacheReadTokens": 14000,
+        "cacheWriteTokens": 2100,
+        "outputTokens": 650,
+        "costUsd": 0.0411,
+        "models": [
+          "claude-opus-5",
+          "claude-sonnet-5"
+        ],
+        "firstTs": 1785578400000,
+        "lastTs": 1785579300000
+      },
+      {
+        "name": "other",
+        "messages": 6,
+        "inputTokens": 3140,
+        "cacheReadTokens": 20000,
+        "cacheWriteTokens": 500,
+        "outputTokens": 814,
+        "costUsd": 0.0098,
+        "models": [
+          "claude-haiku-4-5"
+        ],
+        "firstTs": 1785585600000,
+        "lastTs": 1785586500000
+      }
+    ],
+    "duplicateRowsSkipped": 2,
+    "windowHours": null
+  },
+  "toolWindow1h": {
+    "attributedMessages": 4,
+    "pricedMessages": 3,
+    "totalCostUsd": 0.0098,
+    "bySkill": [
+      {
+        "name": "other:beta",
+        "messages": 1,
+        "inputTokens": 3000,
+        "cacheReadTokens": 20000,
+        "cacheWriteTokens": 500,
+        "outputTokens": 800,
+        "costUsd": 0.0096,
+        "models": [
+          "claude-haiku-4-5"
+        ],
+        "firstTs": 1785585600000,
+        "lastTs": 1785585600000
+      },
+      {
+        "name": "other:gamma",
+        "messages": 1,
+        "inputTokens": 0,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "outputTokens": 0,
+        "costUsd": 0,
+        "models": [
+          "claude-haiku-4-5"
+        ],
+        "firstTs": 1785586200000,
+        "lastTs": 1785586200000
+      },
+      {
+        "name": "other:delta",
+        "messages": 1,
+        "inputTokens": 0,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "outputTokens": 0,
+        "costUsd": 0,
+        "models": [],
+        "firstTs": 1785586500000,
+        "lastTs": 1785586500000
+      }
+    ],
+    "byPlugin": [
+      {
+        "name": "other",
+        "messages": 4,
+        "inputTokens": 3100,
+        "cacheReadTokens": 20000,
+        "cacheWriteTokens": 500,
+        "outputTokens": 810,
+        "costUsd": 0.0098,
+        "models": [
+          "claude-haiku-4-5"
+        ],
+        "firstTs": 1785585600000,
+        "lastTs": 1785586500000
+      }
+    ],
+    "duplicateRowsSkipped": 0,
+    "windowHours": 1
+  },
+  "toolZeroWindow": {
+    "attributedMessages": 10,
+    "pricedMessages": 7,
+    "totalCostUsd": 0.0509,
+    "bySkill": [
+      {
+        "name": "pack:alpha",
+        "messages": 4,
+        "inputTokens": 1700,
+        "cacheReadTokens": 14000,
+        "cacheWriteTokens": 2100,
+        "outputTokens": 650,
+        "costUsd": 0.0411,
+        "models": [
+          "claude-opus-5",
+          "claude-sonnet-5"
+        ],
+        "firstTs": 1785578400000,
+        "lastTs": 1785579300000
+      },
+      {
+        "name": "other:beta",
+        "messages": 2,
+        "inputTokens": 3040,
+        "cacheReadTokens": 20000,
+        "cacheWriteTokens": 500,
+        "outputTokens": 804,
+        "costUsd": 0.0097,
+        "models": [
+          "claude-haiku-4-5"
+        ],
+        "firstTs": 1785585600000,
+        "lastTs": 1785585600000
+      },
+      {
+        "name": "other:gamma",
+        "messages": 1,
+        "inputTokens": 0,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "outputTokens": 0,
+        "costUsd": 0,
+        "models": [
+          "claude-haiku-4-5"
+        ],
+        "firstTs": 1785586200000,
+        "lastTs": 1785586200000
+      },
+      {
+        "name": "other:delta",
+        "messages": 1,
+        "inputTokens": 0,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "outputTokens": 0,
+        "costUsd": 0,
+        "models": [],
+        "firstTs": 1785586500000,
+        "lastTs": 1785586500000
+      },
+      {
+        "name": "other:epsilon",
+        "messages": 1,
+        "inputTokens": 0,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "outputTokens": 0,
+        "costUsd": 0,
+        "models": [
+          "claude-haiku-4-5"
+        ]
+      }
+    ],
+    "byPlugin": [
+      {
+        "name": "pack",
+        "messages": 4,
+        "inputTokens": 1700,
+        "cacheReadTokens": 14000,
+        "cacheWriteTokens": 2100,
+        "outputTokens": 650,
+        "costUsd": 0.0411,
+        "models": [
+          "claude-opus-5",
+          "claude-sonnet-5"
+        ],
+        "firstTs": 1785578400000,
+        "lastTs": 1785579300000
+      },
+      {
+        "name": "other",
+        "messages": 6,
+        "inputTokens": 3140,
+        "cacheReadTokens": 20000,
+        "cacheWriteTokens": 500,
+        "outputTokens": 814,
+        "costUsd": 0.0098,
+        "models": [
+          "claude-haiku-4-5"
+        ],
+        "firstTs": 1785585600000,
+        "lastTs": 1785586500000
+      }
+    ],
+    "duplicateRowsSkipped": 2,
+    "windowHours": 0
+  },
+  "toolTop1": {
+    "attributedMessages": 10,
+    "pricedMessages": 7,
+    "totalCostUsd": 0.0509,
+    "bySkill": [
+      {
+        "name": "pack:alpha",
+        "messages": 4,
+        "inputTokens": 1700,
+        "cacheReadTokens": 14000,
+        "cacheWriteTokens": 2100,
+        "outputTokens": 650,
+        "costUsd": 0.0411,
+        "models": [
+          "claude-opus-5",
+          "claude-sonnet-5"
+        ],
+        "firstTs": 1785578400000,
+        "lastTs": 1785579300000
+      }
+    ],
+    "byPlugin": [
+      {
+        "name": "pack",
+        "messages": 4,
+        "inputTokens": 1700,
+        "cacheReadTokens": 14000,
+        "cacheWriteTokens": 2100,
+        "outputTokens": 650,
+        "costUsd": 0.0411,
+        "models": [
+          "claude-opus-5",
+          "claude-sonnet-5"
+        ],
+        "firstTs": 1785578400000,
+        "lastTs": 1785579300000
+      }
+    ],
+    "duplicateRowsSkipped": 2,
+    "windowHours": null
+  }
+}

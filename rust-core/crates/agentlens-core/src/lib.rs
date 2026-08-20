@@ -57,6 +57,7 @@ pub mod request_log;
 pub mod retention_config;
 pub mod runtime_inventory;
 pub mod server_stats;
+pub mod skill_attribution;
 pub mod span_window;
 pub mod statusline_store;
 pub mod summarize;

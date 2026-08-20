@@ -1,0 +1,6 @@
+{"type":"assistant","attributionSkill":"other:beta","attributionPlugin":"other","timestamp":"2026-08-01T12:00:00.000Z","message":{"id":"msg_cccc1111","model":"claude-haiku-4-5","usage":{"input_tokens":3000,"cache_read_input_tokens":20000,"cache_creation_input_tokens":500,"output_tokens":800}}}
+{"type":"assistant","attributionSkill":"","attributionPlugin":"other","timestamp":"2026-08-01T12:05:00.000Z","message":{"id":"msg_cccc2222","model":"claude-haiku-4-5","usage":{"input_tokens":100,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":10}}}
+{"type":"assistant","attributionSkill":"other:beta","attributionPlugin":"other","message":{"id":"msg_cccc3333","model":"claude-haiku-4-5","usage":{"input_tokens":40,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":4}}}
+{"type":"assistant","attributionSkill":"other:gamma","attributionPlugin":"other","timestamp":"2026-08-01T12:10:00.000Z","message":{"id":"msg_cccc4444","model":"claude-haiku-4-5","usage":5}}
+{"type":"assistant","attributionSkill":"other:delta","attributionPlugin":"other","timestamp":"2026-08-01T12:15:00.000Z"}
+{"type":"assistant","attributionSkill":"other:epsilon","attributionPlugin":"other","timestamp":"not-a-date","message":{"id":"msg_eeee1111","model":"claude-haiku-4-5"}}
