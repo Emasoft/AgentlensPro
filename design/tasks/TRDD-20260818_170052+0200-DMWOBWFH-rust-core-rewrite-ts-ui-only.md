@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T23:13:40+0200
+updated: 2026-08-21T00:05:18+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -1225,28 +1225,56 @@ release-via: publish
   `<MISSING>`) and the parity tests apply the same substitution — which also deleted a special case
   that copied `got.dir` into the expectation to dodge the mismatch, so `dir` is now actually
   compared. **check-identities is the only gate whose failure mode is a LEAK rather than a red test.**
-- **NEXT (P4x.2d continued): 15 of 53 remain.** Immediate: the cacheCreationForensics REPORT half
-  (`buildCacheCreationReport` → `get_cache_creation_report`, `buildExpensiveWritesTrace` →
-  `trace_expensive_writes`, `buildCacheBreakGapReport` → `get_cache_break_gap_report`) — the scan is
-  landed, so those three are handler-shaped now. Then `cacheEventLog` (479, its dep is landed too).
-  Deferred: `subscriptionUsage.ts` (797 + 90 `keychainConsent`;
-  **NETWORK** — the oracle MUST stub the Anthropic usage endpoint; it is also the live TTL-regime
-  oracle). Then the heavyweights, engine-first: `cacheCreationForensics` (800 — unblocks
-  `cacheEventLog` 479), `cacheBreakTimeline` (1,927), `burnInvestigator` (632), and the 2 sql
-  tools. **SIZE BY ENGINE: before starting any handler, grep its imports for a module with no
-  `.rs` counterpart** — that check is what caught `effortTransitions` and `residentCost`, and
-  skipping it is what mis-sized this queue three times.
-  
-  (90 + 135 `residentCost` = **225**) · `handleCheckCacheExpiry` (110 + in-module helpers) ·
-  then the two that SHARE `cacheBreak.ts` (383) and should be done together —
-  `handleGetCacheBreakReport` (81 + 383 = **464**) and `handleGetCacheRiskCosts` (138 + 383 = **521**).
-  Superseded ordering note — the old line named `handleGetCacheBreakReport` (81), `handleGetCostByCause` (82, needs `buildTokensByCause`),
-  `handleGetContextInflationReport` (90, needs `buildResidentCostReport`), `handleGetAgentTokens`
-  (102), `handleCheckCacheExpiry` (110), `handleGetCacheRiskCosts` (138). THEN
-  `subscriptionUsage.ts` (797 + 90 keychainConsent; NETWORK — the oracle must stub). Heavyweights
-  (`cacheCreationForensics` 800 → unblocks `cacheEventLog`; `cacheBreakTimeline` 1,927;
-  `burnInvestigator` 632; the two sql tools) LAST. Old order kept for reference:
-  `cacheEventLog.ts` (479 ln),
+- **P4x.2d (commit 38fd0c5): `cacheCreationForensics` REPORT HALF + 3 tools. 41 of 53.**
+  `buildCacheCreationReport` → `get_cache_creation_report`, `buildExpensiveWritesTrace` →
+  `trace_expensive_writes`, `buildCacheBreakGapReport` → `get_cache_break_gap_report`. The builders
+  return `Value` rather than structs with `to_value()` **on purpose**: the formatters read the
+  report back field by field exactly as the TS does, so a second in-memory representation would
+  only be a place for the two halves to disagree.
+  `groupBy='cause'` returns an EXPLICIT error payload naming `buildCauseCostPeakReport`
+  (cacheBreakTimeline, unported) — falling back to `'session'` would return a DIFFERENT report
+  under the label the caller asked for, and every number in it would look right.
+  **`to_locale_en` grew a fraction half, and that is a real bug this slice found:** it claimed to
+  be `Number.prototype.toLocaleString` but TRUNCATED, invisible only because every existing caller
+  passed an integer. `formatCostPeaks` renders `bucketValue` through it, and under
+  `bucket=billable_weighted` that is a USD cost — 4.5585 must read "4.559", not "4". Intl rounds
+  the double's SHORTEST decimal repr to ≤3 fraction digits half-away-from-zero, so `fmt_js_num` is
+  the right source string and testing the 4th digit against '5' reproduces halfExpand exactly.
+  `pad_start` moved to the same shared helpers (it was private to `account_burners`).
+  Pinned: `toFixed(4)` runs BEFORE the group sort, so the ranking compares ROUNDED values and
+  near-ties keep first-seen order · the per-session turn index is assigned BEFORE `turnFrom`/
+  `turnTo` run, so an excluded event still consumes its number (that is what makes `turnFrom` mean
+  the same thing across two calls) · `i === 0` in the gap classifier is POSITIONAL within the
+  session, NOT "the previous BIG event" (fixture rC1/rC2 exists solely to pin that) · the
+  composition cache is keyed on `bodyRef` ALONE, so a request reached first WITH exact usage and
+  later as a chain turn reuses the first, differently-calibrated summary · an unrecognized bucket
+  falls through to `cache_creation`, not 0 · an unparseable `timeFrom` yields NaN and excludes
+  EVERYTHING (not "no filter") · `slice(0, n)` with a NEGATIVE n counts back from the end.
+  Oracle: `gen-ccreport-expected.mjs` generates BOTH the `ccreport-bodies/` fixture and the
+  expected JSON (one source for the bodies and the mtime table that gives them meaning), in its
+  OWN dir — adding files to `forensics-bodies/` would shift every count in the pinned scan oracle.
+  All 6 gap buckets fire at the DEFAULT 100k threshold and the test asserts it rather than
+  trusting a green run. FALSIFIED (11/11 passed first run): gap boundary 6m→5m · turn-index sort
+  asc→desc · `toLocaleString` 3→2 fraction digits · composition cache disabled — each caught by
+  the test that should catch it, each restored.
+- **NEXT (P4x.2d continued): 12 of 53 remain.** Immediate: `cacheEventLog` (479 — its
+  `cacheCreationForensics` dep is now fully landed) → `get_cache_event_log`. Then
+  `sessionBurnProfile` (462, also carries `heartbeatCost`'s `sessionIdOf`) → `heartbeatCost` (316)
+  → `forensicsCompare` (253 → `compare_configs`) → `burnInvestigator` (632, also
+  `rateLimitReport`'s dep) → `rateLimitReport` (134) → `cacheBreakTimeline` (1,927 → 2 tools:
+  `get_cache_break_timeline` + `get_cache_break_causes`, and it also unblocks the `groupBy='cause'`
+  branch above) → `subscriptionUsage` (976, **NETWORK** — the oracle MUST stub the Anthropic usage
+  endpoint; it is also the live TTL-regime oracle) → the 2 sql tools (`run_diagnostics_sql`,
+  `run_transcript_sql`). `burn_seismic` rides `burnInvestigator`.
+  **SIZE BY ENGINE: before starting any handler, grep its imports for a module with no `.rs`
+  counterpart** — that check caught `effortTransitions` and `residentCost`, and skipping it
+  mis-sized this queue three times.
+  **SUPERSEDED — do NOT carry forward:** every earlier "next up" ordering in this block (the
+  handler-line-count orderings that named `handleGetCacheBreakReport` 81 / `handleGetCostByCause`
+  82 / `handleGetContextInflationReport` 90 / `handleGetAgentTokens` 102 / `handleCheckCacheExpiry`
+  110 / `handleGetCacheRiskCosts` 138, and the "heavyweights last" plan that listed
+  `cacheCreationForensics` as unstarted). All of those are LANDED; the list above is the only live
+  queue.
   `subscriptionUsage.ts` (797 ln — also the TTL-regime oracle; NETWORK: calls Anthropic's usage
   endpoint, so the oracle must stub). Heavyweights (forensics / timeline / investigator / sql)
   last. **Every new arm must end in `tool_ok_lean`, never `mcp::tool_ok`.** The dispatch cases are
