@@ -1367,14 +1367,18 @@ async fn handle(
                         };
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
-                    "get_cost_rollup" => {
+                    "get_cost_rollup" | "predict_session_cost" => {
                         let now = crate::now_ms() as f64;
                         let sessions = {
                             let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
                             let summary = st.build_session_summary(now);
                             summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default()
                         };
-                        let payload = crate::mcp_tools::get_cost_rollup(&sessions, &args, now);
+                        let payload = if name == "get_cost_rollup" {
+                            crate::mcp_tools::get_cost_rollup(&sessions, &args, now)
+                        } else {
+                            crate::mcp_tools::predict_session_cost(&sessions, &args, now)
+                        };
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
                     "get_session_detail" => {

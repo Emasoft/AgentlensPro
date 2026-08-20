@@ -4903,5 +4903,488 @@
     "note": "sessions count when they OVERLAP the window; token totals are whole-session (cards are session-granular). unpricedSessions are excluded from costUsd, never silent $0. tokensPerHour/costUsdPerHour divide by the window length."
    }
   }
+ ],
+ "predictSessions": [
+  {
+   "sessionId": "pred-close-match",
+   "source": "claude_code",
+   "model": "claude-opus-5",
+   "startTime": "2025-10-09T07:53:20.000Z",
+   "durationMs": 300000,
+   "inputTokens": 2000,
+   "outputTokens": 400,
+   "cacheReadTokens": 80000,
+   "cacheCreateTokens": 30000,
+   "cacheHitRate": 0.7,
+   "totalLlmCalls": 15,
+   "errors": 0,
+   "userRequest": "review the parser module for correctness bugs",
+   "outcome": "ok",
+   "fileOps": [
+    {
+     "readBytes": 40000
+    },
+    {
+     "readBytes": 10000
+    }
+   ],
+   "turns": 15
+  },
+  {
+   "sessionId": "pred-typed-match",
+   "source": "claude_code",
+   "model": "claude-opus-5",
+   "startTime": "2025-10-09T06:53:20.000Z",
+   "durationMs": 600000,
+   "inputTokens": 4000,
+   "outputTokens": 900,
+   "cacheReadTokens": 200000,
+   "cacheCreateTokens": 90000,
+   "cacheHitRate": 0.6,
+   "totalLlmCalls": 30,
+   "errors": 0,
+   "userRequest": "review the loader and report bugs",
+   "outcome": "ok",
+   "spawnSubagentType": "code-reviewer",
+   "turns": 30
+  },
+  {
+   "sessionId": "pred-outside-band",
+   "source": "claude_code",
+   "model": "claude-opus-5",
+   "startTime": "2025-10-09T05:53:20.000Z",
+   "durationMs": 900000,
+   "inputTokens": 9000,
+   "outputTokens": 2000,
+   "cacheReadTokens": 900000,
+   "cacheCreateTokens": 200000,
+   "cacheHitRate": 0.5,
+   "totalLlmCalls": 60,
+   "errors": 0,
+   "userRequest": "review everything in the whole parser codebase",
+   "outcome": "ok",
+   "fileOps": [
+    {
+     "readBytes": 9000000
+    }
+   ],
+   "turns": 60
+  },
+  {
+   "sessionId": "pred-junk",
+   "source": "claude_code",
+   "model": "claude-opus-5",
+   "startTime": "2025-10-09T08:36:40.000Z",
+   "durationMs": 0,
+   "inputTokens": 0,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "cacheHitRate": 0,
+   "totalLlmCalls": 0,
+   "errors": 0,
+   "outcome": "ok",
+   "turns": 0
+  },
+  {
+   "sessionId": "pred-unrelated",
+   "source": "claude_code",
+   "model": "claude-opus-5",
+   "startTime": "2025-10-09T08:20:00.000Z",
+   "durationMs": 100000,
+   "inputTokens": 100,
+   "outputTokens": 10,
+   "cacheReadTokens": 1000,
+   "cacheCreateTokens": 0,
+   "cacheHitRate": 0.9,
+   "totalLlmCalls": 2,
+   "errors": 0,
+   "userRequest": "write documentation for the deploy pipeline",
+   "outcome": "ok",
+   "turns": 2
+  }
+ ],
+ "predictCases": [
+  {
+   "name": "keyword-match",
+   "args": {
+    "task": "review the parser for bugs"
+   }
+  },
+  {
+   "name": "type-bonus-reranks",
+   "args": {
+    "task": "review the parser for bugs",
+    "subagentType": "code-reviewer"
+   }
+  },
+  {
+   "name": "size-band-downweights",
+   "args": {
+    "task": "review the parser for bugs",
+    "fileBytes": 50000
+   }
+  },
+  {
+   "name": "no-task-is-an-error",
+   "args": {
+    "task": ""
+   }
+  },
+  {
+   "name": "short-task-is-an-error",
+   "args": {
+    "task": "ab"
+   }
+  },
+  {
+   "name": "no-keywords-is-an-error",
+   "args": {
+    "task": "a b c !!"
+   }
+  },
+  {
+   "name": "no-precedent-is-matched-0",
+   "args": {
+    "task": "quantum harmonics entanglement"
+   }
+  },
+  {
+   "name": "no-precedent-names-the-type-filter",
+   "args": {
+    "task": "quantum harmonics",
+    "subagentType": "ghost-type"
+   }
+  },
+  {
+   "name": "topK-floors-at-3",
+   "args": {
+    "task": "review the parser for bugs",
+    "topK": 1
+   }
+  }
+ ],
+ "predictResults": [
+  {
+   "matched": 3,
+   "keywords": [
+    "review",
+    "parser",
+    "bugs"
+   ],
+   "estCostUsdP50": 0.705,
+   "estCostUsdP75": 1.795,
+   "estTurnsP50": 30,
+   "prediction": {
+    "input": {
+     "p25": 2000,
+     "p50": 4000,
+     "p75": 9000
+    },
+    "output": {
+     "p25": 400,
+     "p50": 900,
+     "p75": 2000
+    },
+    "cacheRead": {
+     "p25": 80000,
+     "p50": 200000,
+     "p75": 900000
+    },
+    "cacheCreation": {
+     "p25": 30000,
+     "p50": 90000,
+     "p75": 200000
+    },
+    "costUsd": {
+     "p25": 0.2475,
+     "p50": 0.705,
+     "p75": 1.795
+    },
+    "turns": {
+     "p25": 15,
+     "p50": 30,
+     "p75": 60
+    }
+   },
+   "precedents": [
+    {
+     "sessionId": "pred-close-match",
+     "model": "claude-opus-5",
+     "subagentType": null,
+     "similarity": 1,
+     "costUsd": 0.2475,
+     "turns": 15,
+     "readBytes": 50000,
+     "request": "review the parser module for correctness bugs"
+    },
+    {
+     "sessionId": "pred-typed-match",
+     "model": "claude-opus-5",
+     "subagentType": "code-reviewer",
+     "similarity": 0.67,
+     "costUsd": 0.705,
+     "turns": 30,
+     "readBytes": null,
+     "request": "review the loader and report bugs"
+    },
+    {
+     "sessionId": "pred-outside-band",
+     "model": "claude-opus-5",
+     "subagentType": null,
+     "similarity": 0.67,
+     "costUsd": 1.795,
+     "turns": 60,
+     "readBytes": 9000000,
+     "request": "review everything in the whole parser codebase"
+    }
+   ],
+   "note": "a DISTRIBUTION over real matched precedents (keyword + type + size-band similarity), not a point guess. p50 is the central estimate; p75 the budget-safe one. Model changes shift costs — check the precedents' models against the model you will run."
+  },
+  {
+   "matched": 3,
+   "keywords": [
+    "review",
+    "parser",
+    "bugs"
+   ],
+   "estCostUsdP50": 0.705,
+   "estCostUsdP75": 1.795,
+   "estTurnsP50": 30,
+   "prediction": {
+    "input": {
+     "p25": 2000,
+     "p50": 4000,
+     "p75": 9000
+    },
+    "output": {
+     "p25": 400,
+     "p50": 900,
+     "p75": 2000
+    },
+    "cacheRead": {
+     "p25": 80000,
+     "p50": 200000,
+     "p75": 900000
+    },
+    "cacheCreation": {
+     "p25": 30000,
+     "p50": 90000,
+     "p75": 200000
+    },
+    "costUsd": {
+     "p25": 0.2475,
+     "p50": 0.705,
+     "p75": 1.795
+    },
+    "turns": {
+     "p25": 15,
+     "p50": 30,
+     "p75": 60
+    }
+   },
+   "precedents": [
+    {
+     "sessionId": "pred-typed-match",
+     "model": "claude-opus-5",
+     "subagentType": "code-reviewer",
+     "similarity": 1.17,
+     "costUsd": 0.705,
+     "turns": 30,
+     "readBytes": null,
+     "request": "review the loader and report bugs"
+    },
+    {
+     "sessionId": "pred-close-match",
+     "model": "claude-opus-5",
+     "subagentType": null,
+     "similarity": 1,
+     "costUsd": 0.2475,
+     "turns": 15,
+     "readBytes": 50000,
+     "request": "review the parser module for correctness bugs"
+    },
+    {
+     "sessionId": "pred-outside-band",
+     "model": "claude-opus-5",
+     "subagentType": null,
+     "similarity": 0.67,
+     "costUsd": 1.795,
+     "turns": 60,
+     "readBytes": 9000000,
+     "request": "review everything in the whole parser codebase"
+    }
+   ],
+   "note": "a DISTRIBUTION over real matched precedents (keyword + type + size-band similarity), not a point guess. p50 is the central estimate; p75 the budget-safe one. Model changes shift costs — check the precedents' models against the model you will run."
+  },
+  {
+   "matched": 3,
+   "keywords": [
+    "review",
+    "parser",
+    "bugs"
+   ],
+   "estCostUsdP50": 0.705,
+   "estCostUsdP75": 1.795,
+   "estTurnsP50": 30,
+   "prediction": {
+    "input": {
+     "p25": 2000,
+     "p50": 4000,
+     "p75": 9000
+    },
+    "output": {
+     "p25": 400,
+     "p50": 900,
+     "p75": 2000
+    },
+    "cacheRead": {
+     "p25": 80000,
+     "p50": 200000,
+     "p75": 900000
+    },
+    "cacheCreation": {
+     "p25": 30000,
+     "p50": 90000,
+     "p75": 200000
+    },
+    "costUsd": {
+     "p25": 0.2475,
+     "p50": 0.705,
+     "p75": 1.795
+    },
+    "turns": {
+     "p25": 15,
+     "p50": 30,
+     "p75": 60
+    }
+   },
+   "precedents": [
+    {
+     "sessionId": "pred-close-match",
+     "model": "claude-opus-5",
+     "subagentType": null,
+     "similarity": 1,
+     "costUsd": 0.2475,
+     "turns": 15,
+     "readBytes": 50000,
+     "request": "review the parser module for correctness bugs"
+    },
+    {
+     "sessionId": "pred-typed-match",
+     "model": "claude-opus-5",
+     "subagentType": "code-reviewer",
+     "similarity": 0.67,
+     "costUsd": 0.705,
+     "turns": 30,
+     "readBytes": null,
+     "request": "review the loader and report bugs"
+    },
+    {
+     "sessionId": "pred-outside-band",
+     "model": "claude-opus-5",
+     "subagentType": null,
+     "similarity": 0.2,
+     "costUsd": 1.795,
+     "turns": 60,
+     "readBytes": 9000000,
+     "request": "review everything in the whole parser codebase"
+    }
+   ],
+   "note": "a DISTRIBUTION over real matched precedents (keyword + type + size-band similarity), not a point guess. p50 is the central estimate; p75 the budget-safe one. Model changes shift costs — check the precedents' models against the model you will run."
+  },
+  {
+   "error": "task (a description of the planned work) is required"
+  },
+  {
+   "error": "task (a description of the planned work) is required"
+  },
+  {
+   "error": "task yielded no matchable keywords — describe the work in a sentence"
+  },
+  {
+   "matched": 0,
+   "note": "no past session matched the task keywords — no precedent, no prediction. Broaden the task description or drop the type filter."
+  },
+  {
+   "matched": 0,
+   "note": "no past session matched the task keywords (subagentType ghost-type) — no precedent, no prediction. Broaden the task description or drop the type filter."
+  },
+  {
+   "matched": 3,
+   "keywords": [
+    "review",
+    "parser",
+    "bugs"
+   ],
+   "estCostUsdP50": 0.705,
+   "estCostUsdP75": 1.795,
+   "estTurnsP50": 30,
+   "prediction": {
+    "input": {
+     "p25": 2000,
+     "p50": 4000,
+     "p75": 9000
+    },
+    "output": {
+     "p25": 400,
+     "p50": 900,
+     "p75": 2000
+    },
+    "cacheRead": {
+     "p25": 80000,
+     "p50": 200000,
+     "p75": 900000
+    },
+    "cacheCreation": {
+     "p25": 30000,
+     "p50": 90000,
+     "p75": 200000
+    },
+    "costUsd": {
+     "p25": 0.2475,
+     "p50": 0.705,
+     "p75": 1.795
+    },
+    "turns": {
+     "p25": 15,
+     "p50": 30,
+     "p75": 60
+    }
+   },
+   "precedents": [
+    {
+     "sessionId": "pred-close-match",
+     "model": "claude-opus-5",
+     "subagentType": null,
+     "similarity": 1,
+     "costUsd": 0.2475,
+     "turns": 15,
+     "readBytes": 50000,
+     "request": "review the parser module for correctness bugs"
+    },
+    {
+     "sessionId": "pred-typed-match",
+     "model": "claude-opus-5",
+     "subagentType": "code-reviewer",
+     "similarity": 0.67,
+     "costUsd": 0.705,
+     "turns": 30,
+     "readBytes": null,
+     "request": "review the loader and report bugs"
+    },
+    {
+     "sessionId": "pred-outside-band",
+     "model": "claude-opus-5",
+     "subagentType": null,
+     "similarity": 0.67,
+     "costUsd": 1.795,
+     "turns": 60,
+     "readBytes": 9000000,
+     "request": "review everything in the whole parser codebase"
+    }
+   ],
+   "note": "a DISTRIBUTION over real matched precedents (keyword + type + size-band similarity), not a point guess. p50 is the central estimate; p75 the budget-safe one. Model changes shift costs — check the precedents' models against the model you will run."
+  }
  ]
 }

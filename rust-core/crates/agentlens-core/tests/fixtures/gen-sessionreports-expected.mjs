@@ -22,7 +22,7 @@ import { createRequire } from 'module'
 import { writeFileSync } from 'fs'
 import { join } from 'path'
 const require = createRequire(import.meta.url)
-const { handleGetRecentSessions, handleGetWorkspacePatterns, handleFindRelevantContext, handleGetEfficiencyReport, handleGetInstructionSuggestions, handleGetSessionDetail, buildCostRollup } = require('../../../../../out/test/mcpServer.js')
+const { handleGetRecentSessions, handleGetWorkspacePatterns, handleFindRelevantContext, handleGetEfficiencyReport, handleGetInstructionSuggestions, handleGetSessionDetail, buildCostRollup, predictSessionCost } = require('../../../../../out/test/mcpServer.js')
 const dir = new URL('.', import.meta.url).pathname
 
 const NOW = 1_760_000_000_000
@@ -205,6 +205,39 @@ const rollupCases = [
   { name: 'sort-by-total-top-1', args: { sortBy: 'total', topN: 1 } },
 ]
 
+// predict_session_cost: the distribution over precedents, the 10x size band, the +0.5 type bonus,
+// and the zero-precedent honesty. Cards need fileOps for the band and turns for the dist.
+const predictSessions = [
+  card({ sessionId: 'pred-close-match', startTime: iso(NOW - 3_600_000), durationMs: 300_000,
+    inputTokens: 2_000, outputTokens: 400, cacheReadTokens: 80_000, cacheCreateTokens: 30_000,
+    cacheHitRate: 0.7, totalLlmCalls: 15, userRequest: 'review the parser module for correctness bugs' }),
+  card({ sessionId: 'pred-typed-match', startTime: iso(NOW - 7_200_000), durationMs: 600_000,
+    inputTokens: 4_000, outputTokens: 900, cacheReadTokens: 200_000, cacheCreateTokens: 90_000,
+    cacheHitRate: 0.6, totalLlmCalls: 30, userRequest: 'review the loader and report bugs' }),
+  card({ sessionId: 'pred-outside-band', startTime: iso(NOW - 10_800_000), durationMs: 900_000,
+    inputTokens: 9_000, outputTokens: 2_000, cacheReadTokens: 900_000, cacheCreateTokens: 200_000,
+    cacheHitRate: 0.5, totalLlmCalls: 60, userRequest: 'review everything in the whole parser codebase' }),
+  card({ sessionId: 'pred-junk', startTime: iso(NOW - 1_000_000), durationMs: 0 }),  // zero traffic — excluded
+  card({ sessionId: 'pred-unrelated', startTime: iso(NOW - 2_000_000), durationMs: 100_000,
+    inputTokens: 100, outputTokens: 10, cacheReadTokens: 1_000, cacheHitRate: 0.9, totalLlmCalls: 2,
+    userRequest: 'write documentation for the deploy pipeline' }),
+]
+predictSessions[1].spawnSubagentType = 'code-reviewer'
+predictSessions[0].fileOps = [{ readBytes: 40_000 }, { readBytes: 10_000 }]
+predictSessions[2].fileOps = [{ readBytes: 9_000_000 }]   // 180x the asked size — outside the band
+for (const s of predictSessions) { s.turns = s.totalLlmCalls }
+const predictCases = [
+  { name: 'keyword-match', args: { task: 'review the parser for bugs' } },
+  { name: 'type-bonus-reranks', args: { task: 'review the parser for bugs', subagentType: 'code-reviewer' } },
+  { name: 'size-band-downweights', args: { task: 'review the parser for bugs', fileBytes: 50_000 } },
+  { name: 'no-task-is-an-error', args: { task: '' } },
+  { name: 'short-task-is-an-error', args: { task: 'ab' } },
+  { name: 'no-keywords-is-an-error', args: { task: 'a b c !!' } },
+  { name: 'no-precedent-is-matched-0', args: { task: 'quantum harmonics entanglement' } },
+  { name: 'no-precedent-names-the-type-filter', args: { task: 'quantum harmonics', subagentType: 'ghost-type' } },
+  { name: 'topK-floors-at-3', args: { task: 'review the parser for bugs', topK: 1 } },
+]
+
 const patternCases = [
   { name: 'all', args: {} },
   { name: 'days-1', args: { days: 1 } },
@@ -237,6 +270,9 @@ try {
     rollupSessions: J(rollSessions),
     rollupCases: J(rollupCases),
     rollupResults: rollupCases.map(c => J(buildCostRollup(rollSessions, c.args, NOW))),
+    predictSessions: J(predictSessions),
+    predictCases: J(predictCases),
+    predictResults: predictCases.map(c => J(predictSessionCost(predictSessions, c.args))),
   }, null, 1) + '\n')
 } finally {
   Date.now = realNow

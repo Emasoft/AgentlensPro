@@ -1758,3 +1758,143 @@ pub fn get_cost_rollup(sessions: &[Value], args: &Value, now_ms: f64) -> Value {
     out.insert("coverage".into(), Value::Object(cov));
     Value::Object(out)
 }
+
+/// The JS percentile pick: `sorted[min(len-1, floor(p/100 * len))]`. Not an interpolation — a
+/// MEMBER of the sample, so the reported p50 is a cost a real session actually incurred.
+fn pct_of(sorted: &[f64], p: f64) -> f64 {
+    if sorted.is_empty() {
+        return 0.0;
+    }
+    let idx = ((p / 100.0) * sorted.len() as f64).floor() as usize;
+    sorted[idx.min(sorted.len() - 1)]
+}
+
+/// `predict_session_cost` — "what will a session like THIS cost?", answered as a DISTRIBUTION
+/// (p25/p50/p75) over real matched precedents, never a point guess.
+///
+/// Zero-precedent honesty: no match returns `{matched: 0, note}` and NO numbers — a prediction
+/// with no precedent behind it would be a guess wearing percentile clothes. And zero-traffic cards
+/// are excluded up front, because they would drag every percentile toward 0.
+pub fn predict_session_cost(sessions: &[Value], args: &Value, now_ms: f64) -> Value {
+    let err = |text: &str| {
+        let mut m = Map::new();
+        m.insert("error".into(), text.into());
+        Value::Object(m)
+    };
+    let task = args.get("task").and_then(Value::as_str).unwrap_or("");
+    if task.trim().chars().count() < 3 {
+        return err("task (a description of the planned work) is required");
+    }
+    // `[...new Set(...)]` — split on runs of non-[a-z0-9], length > 3, DEDUPED, insertion order.
+    let lowered = task.to_lowercase();
+    let mut keywords: indexmap::IndexSet<String> = indexmap::IndexSet::new();
+    for w in lowered.split(|c: char| !c.is_ascii_lowercase() && !c.is_ascii_digit()) {
+        if utf16_len(w) > 3 {
+            keywords.insert(w.to_owned());
+        }
+    }
+    if keywords.is_empty() {
+        return err("task yielded no matchable keywords — describe the work in a sentence");
+    }
+    let subagent_type = args.get("subagentType").and_then(Value::as_str).filter(|t| !t.is_empty());
+    let file_bytes = args.get("fileBytes").and_then(Value::as_f64).filter(|b| *b != 0.0);
+
+    let read_bytes_of = |s: &Value| -> Option<f64> {
+        let ops = s.get("fileOps").and_then(Value::as_array).filter(|a| !a.is_empty())?;
+        let n: f64 = ops.iter().map(|o| f(o, "readBytes")).sum();
+        (n > 0.0).then_some(n)
+    };
+
+    let mut scored: Vec<(&Value, f64, Option<f64>)> = sessions
+        .iter()
+        .filter(|s| is_cache_measured(s))
+        .filter_map(|s| {
+            let text = s.get("userRequest").and_then(Value::as_str).unwrap_or("").to_lowercase();
+            let hits = keywords.iter().filter(|k| text.contains(k.as_str())).count() as f64;
+            let mut score = hits / keywords.len() as f64;
+            if subagent_type.is_some() && s.get("spawnSubagentType").and_then(Value::as_str) == subagent_type {
+                score += 0.5;
+            }
+            // Soft comparability band: when BOTH sides know the input size, a session outside a
+            // 10x band is a poor precedent for cost extrapolation — down-weighted, not excluded.
+            let rb = read_bytes_of(s);
+            if let (Some(fb), Some(r)) = (file_bytes, rb) {
+                if r > fb * 10.0 || r < fb / 10.0 {
+                    score *= 0.3;
+                }
+            }
+            (score > 0.0).then_some((s, score, rb))
+        })
+        .collect();
+    // Stable descending, as Array.prototype.sort — equal scores keep card order.
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    let top_k = args.get("topK").and_then(Value::as_f64).unwrap_or(12.0).clamp(3.0, 50.0) as usize;
+    let picked: Vec<&(&Value, f64, Option<f64>)> = scored.iter().take(top_k).collect();
+    if picked.is_empty() {
+        let mut m = Map::new();
+        m.insert("matched".into(), num(0.0));
+        m.insert(
+            "note".into(),
+            Value::String(format!(
+                "no past session matched the task keywords{} — no precedent, no prediction. Broaden the task description or drop the type filter.",
+                subagent_type.map_or(String::new(), |t| format!(" (subagentType {t})"))
+            )),
+        );
+        return Value::Object(m);
+    }
+
+    let dist = |get: &dyn Fn(&Value) -> f64| -> Value {
+        let mut v: Vec<f64> = picked.iter().map(|(s, _, _)| get(s)).collect();
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let mut m = Map::new();
+        m.insert("p25".into(), num(pct_of(&v, 25.0)));
+        m.insert("p50".into(), num(pct_of(&v, 50.0)));
+        m.insert("p75".into(), num(pct_of(&v, 75.0)));
+        Value::Object(m)
+    };
+    let cost_fn = |s: &Value| js_to_fixed_num(session_cost(s, now_ms), 4);
+    let cost = dist(&cost_fn);
+
+    let mut m = Map::new();
+    m.insert("matched".into(), num(picked.len() as f64));
+    m.insert("keywords".into(), Value::Array(keywords.iter().map(|k| Value::String(k.clone())).collect()));
+    // FLAT headline estimates — the lean shaper prunes deep nesting from the default view, and
+    // "what will it cost" must survive it (p50 central, p75 budget-safe).
+    m.insert("estCostUsdP50".into(), cost.get("p50").cloned().unwrap_or(Value::Null));
+    m.insert("estCostUsdP75".into(), cost.get("p75").cloned().unwrap_or(Value::Null));
+    m.insert("estTurnsP50".into(), dist(&|s| f(s, "turns")).get("p50").cloned().unwrap_or(Value::Null));
+    let mut pred = Map::new();
+    pred.insert("input".into(), dist(&|s| f(s, "inputTokens")));
+    pred.insert("output".into(), dist(&|s| f(s, "outputTokens")));
+    pred.insert("cacheRead".into(), dist(&|s| f(s, "cacheReadTokens")));
+    pred.insert("cacheCreation".into(), dist(&|s| f(s, "cacheCreateTokens")));
+    pred.insert("costUsd".into(), cost);
+    pred.insert("turns".into(), dist(&|s| f(s, "turns")));
+    m.insert("prediction".into(), Value::Object(pred));
+    m.insert(
+        "precedents".into(),
+        Value::Array(
+            picked
+                .iter()
+                .take(8)
+                .map(|(s, score, rb)| {
+                    let mut p = Map::new();
+                    p.insert("sessionId".into(), s.get("sessionId").cloned().unwrap_or(Value::Null));
+                    // `workspace: x.s.workspace` — undefined DROPS the key (the rollup lesson).
+                    copy_opt(&mut p, s, "workspace");
+                    copy_opt(&mut p, s, "model");
+                    p.insert("subagentType".into(), s.get("spawnSubagentType").filter(|v| !v.is_null()).cloned().unwrap_or(Value::Null));
+                    p.insert("similarity".into(), num(js_to_fixed_num(*score, 2)));
+                    p.insert("costUsd".into(), num(cost_fn(s)));
+                    p.insert("turns".into(), s.get("turns").cloned().unwrap_or(Value::Null));
+                    p.insert("readBytes".into(), rb.map_or(Value::Null, num));
+                    p.insert("request".into(), Value::String(js_slice(s.get("userRequest").and_then(Value::as_str).unwrap_or(""), 100).to_owned()));
+                    Value::Object(p)
+                })
+                .collect(),
+        ),
+    );
+    m.insert("note".into(), "a DISTRIBUTION over real matched precedents (keyword + type + size-band similarity), not a point guess. p50 is the central estimate; p75 the budget-safe one. Model changes shift costs — check the precedents' models against the model you will run.".into());
+    Value::Object(m)
+}

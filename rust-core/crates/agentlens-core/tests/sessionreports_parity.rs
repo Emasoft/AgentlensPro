@@ -389,3 +389,51 @@ fn the_rollup_honesty_rules_hold() {
     assert!(with_unpriced > day2["totals"]["input"].as_f64().unwrap(), "unpriced tokens still count: {day} vs {day2}");
     assert_eq!(day["totals"]["costUsd"], day2["totals"]["costUsd"], "but its COST contributes nothing");
 }
+
+#[test]
+fn predict_session_cost_reproduces_the_ts_oracle_exactly() {
+    let o = oracle();
+    let (sessions, now) = (o["predictSessions"].as_array().unwrap(), o["nowMs"].as_f64().unwrap());
+    for (case, exp) in o["predictCases"].as_array().unwrap().iter().zip(o["predictResults"].as_array().unwrap()) {
+        let name = case["name"].as_str().unwrap();
+        let got = agentlens_core::mcp_tools::predict_session_cost(sessions, &case["args"], now);
+        assert_eq!(keys(&got), keys(exp), "{name}: key set/ORDER differs");
+        for (k, ev) in exp.as_object().unwrap() {
+            assert_eq!(&got[k], ev, "{name}.{k}");
+        }
+    }
+}
+
+/// The three scoring levers, each proven to MOVE something rather than merely exist:
+///  - the +0.5 subagentType bonus RERANKS — the typed session leads only when the type is asked for.
+///  - the 10x size band DOWN-WEIGHTS (x0.3), never excludes: the outside-band session stays a
+///    precedent at similarity 0.2, because a weak precedent still beats none.
+///  - matched: 0 carries NO numbers — a prediction without precedent would be a guess wearing
+///    percentile clothes, so the empty case is a note, not a zeroed distribution.
+#[test]
+fn the_prediction_levers_move_and_the_empty_case_stays_honest() {
+    let o = oracle();
+    let (sessions, now) = (o["predictSessions"].as_array().unwrap(), o["nowMs"].as_f64().unwrap());
+    let call = |args: Value| agentlens_core::mcp_tools::predict_session_cost(sessions, &args, now);
+
+    let plain = call(serde_json::json!({"task": "review the parser for bugs"}));
+    let typed = call(serde_json::json!({"task": "review the parser for bugs", "subagentType": "code-reviewer"}));
+    assert_eq!(plain["precedents"][0]["sessionId"], "pred-close-match", "{plain}");
+    assert_eq!(typed["precedents"][0]["sessionId"], "pred-typed-match", "the type bonus reranks: {typed}");
+
+    let banded = call(serde_json::json!({"task": "review the parser for bugs", "fileBytes": 50000}));
+    let outside = banded["precedents"].as_array().unwrap().iter().find(|p| p["sessionId"] == "pred-outside-band").unwrap();
+    assert_eq!(outside["similarity"], 0.2, "down-weighted, not excluded: {outside}");
+
+    let none = call(serde_json::json!({"task": "quantum harmonics entanglement"}));
+    assert_eq!(none["matched"], 0, "{none}");
+    assert!(none.get("prediction").is_none() && none.get("estCostUsdP50").is_none(), "no numbers without precedent: {none}");
+
+    // The junk (zero-traffic) card can never be a precedent, whatever the keywords.
+    for r in [&plain, &typed, &banded] {
+        assert!(
+            !r["precedents"].as_array().unwrap().iter().any(|p| p["sessionId"] == "pred-junk"),
+            "zero-traffic cards would drag every percentile to 0: {r}"
+        );
+    }
+}
