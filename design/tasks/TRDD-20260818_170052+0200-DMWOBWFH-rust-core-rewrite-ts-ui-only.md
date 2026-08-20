@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T19:58:54+0200
+updated: 2026-08-20T20:51:33+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -1071,7 +1071,49 @@ release-via: publish
   `peakTokens` folds MAX while cumulative/turnsPresent SUM (the runaway threshold reads peak);
   `considered`/`withLog` default to 1; `residentCost` session-scoped only with an explicit
   `{message}` for no-transcript; `itemizedPct` NULL at zero denominator; `{...b, drill}` appends last.
+- **P4x.2d (commit 8e08209): `check_cache_expiry` + its MCP arm. 33 of 53.** DELEGATED to a
+  lean-worker, and **verifying it first-hand found a defect its own oracle could not see**: the port
+  gated the scan deadline behind `time_budget_ms > 0.0`. `scanWithBudget` computes
+  `deadline = Date.now() + timeBudgetMs` **unconditionally**, so a non-positive budget is a deadline
+  already in the past — scan nothing, `stoppedEarly: true`. The Option-gated version reads the same
+  input as "no budget" and walks the WHOLE corpus: the opposite answer, and the expensive one, on
+  the path whose entire purpose is to stay bounded. Every existing case used a generous 20s budget,
+  so all of them passed either way. Now pinned by `toolAllElapsedBudget` /
+  `toolDefaultElapsedBudget`, using **-1 not 0** (a zero budget is millisecond-nondeterministic —
+  however many items fit in the current ms). **Rule: a bounded-scan port must carry a case with an
+  ALREADY-ELAPSED budget; a generous-budget-only oracle cannot distinguish "bounded" from
+  "unbounded".** The tail resolver (TRDD-CXPLAT01 `getLastRequestMs`) is NOT ported — the arm passes
+  None and takes the TS's own documented reparse-per-candidate fallback rather than a different
+  answer.
+- **P4x.2d (commit e2c8e5f): `shared/cacheBreak` engine (383 ln). Not a tool — the shared engine
+  behind the next two.** Ported IN THE MAIN CONTEXT (see the burn note below). Taxonomy is a Rust
+  **enum**, not `&str`: the TS types all three tables as `Record<CacheBreakCause, string>`, so the
+  compiler is what forces a remediation + label per cause; a `_` arm would ship an empty string for
+  a cause added later and the parity test would not notice, because it iterates the causes it knows.
+  Pinned: MODEL_SWITCHED is TRUTHY on BOTH sides (an empty model is "unknown", not "switched" —
+  `is_some()` fires wrongly); `diffTurnSources`' two branches are ASYMMETRIC (`prevTokens: p?.tokens
+  ?? 0` in the cur branch vs RAW `s.tokens` + literal `curTokens: 0` in the removed branch, and an
+  undefined `excerpt` DROPS its key); the **two "no break" objects have different shapes** (turn 1
+  has no `idleGapMs` key at all, the step-5 fallthrough has it) — invisible to a value-only compare;
+  the reload check runs BEFORE the first-divergence pick AND requires the kind to have existed in
+  prev (else turn-2 warmup is mislabeled a reload); offenders sort cost→tokens under a STABLE sort
+  so full ties keep turn order.
+  **HARNESS FALSIFICATION, and it caught a real weakness:** 11/11 passed on the first run, so the
+  reload threshold was deliberately broken to 3 — only the BULK comparison failed. Every test that
+  merely read the oracle's stored `out` stayed green while documenting semantics the port no longer
+  had. All named-behaviour tests now run the RUST engine. **Rule: a test that cannot fail on a
+  broken port is documentation, not a gate — falsify any suite that passes first try.**
+- **BURN CORRECTION, measured and acted on.** Delegating engine ports to lean-workers to reduce
+  burn was WRONG for build-heavy work: `investigate_burn --windowHours 1` named those very calls —
+  PREMIUM_MODEL_FANOUT 2.7M equiv (49%), FORK_STORM 1.5M (28%), 3 fully-cold full-prefix writes,
+  ~$21 in one hour. Mechanism: a fresh subagent gets a **5-minute** TTL and `cargo test --workspace`
+  between turns blows it, so every turn is a cold full-prefix rewrite. The fat main conversation
+  (1h TTL, 0.1× warm re-reads) is CHEAPER for anything with long tool gaps. Delegate only pure
+  authoring with no long gaps, or batch all builds into one final turn.
 - **NEXT (P4x.2d continued): remaining IN-MODULE handlers, with their REAL (engine-inclusive) cost.**
+  `cache_break.rs` is LANDED, so the next two are now handler-only:
+  `handleGetCacheBreakReport` (**81**) and `handleGetCacheRiskCosts` (**138**, also needs
+  `src/cacheRiskCommands.ts`) — do them TOGETHER, they share the engine.
   
   (90 + 135 `residentCost` = **225**) · `handleCheckCacheExpiry` (110 + in-module helpers) ·
   then the two that SHARE `cacheBreak.ts` (383) and should be done together —
