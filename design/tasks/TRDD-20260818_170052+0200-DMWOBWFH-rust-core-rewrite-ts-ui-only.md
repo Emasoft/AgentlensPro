@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T13:06:10+0200
+updated: 2026-08-20T13:11:40+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -661,18 +661,33 @@ release-via: publish
   trap applies to EVERY parity test in this port, not just this one.
   Non-vacuity PROVEN: mutating fix (a) back out fails at `case[24].blocks[2].bytes`.
   116/116 (+2), clippy 28 = baseline, identities green, alcore boots clean.
-- **NEXT (P4w.1c): the file wrapper + rows 36-37.** Two thin pieces of rawBodyContext.ts remain,
-  both already read: `buildCallContext(path, opts)` — `stat` → reject non-file or
-  `size > MAX_RAW_BODY_BYTES` (64MB) → read utf8 → `JSON.parse` → delegate; EVERY failure
-  returns null, never throws. And `resolveCallContext(sessionId, sel)` (freeze row 35) —
+- **P4w.1c(i) DONE (commit f1d30c1): `build_call_context` — the FILE wrapper.** 64MB gate, every
+  failure soft-returns None. **Node's `readFile(path,'utf8')` decodes LOSSILY** (invalid bytes →
+  U+FFFD, parse still succeeds), so the port uses `from_utf8_lossy`; `read_to_string` would return
+  None exactly where the TS returns a context, and NO fixture of valid JSON would ever catch it.
+  Oracle drives both engines over the same committed fixture files under `tests/fixtures/bodies/`
+  (absent / a directory / truncated mid-write / valid-JSON-but-not-an-object). The 64MB gate is
+  asserted as a CONSTANT on both sides — a >64MB fixture costs more than the one `>` it proves.
+  118/118, clippy 28, identities green.
+- **NEXT (P4w.1c(ii)): `context_composition_index.rs` + routes 36-37**
+  (`/api/composition-index/:id`, `/api/block-content/:id/:turn/:idx`). `src/contextComposition
+  Index.ts` is 716 lines and must be re-read (it was read pre-compaction; that copy is gone).
+  It consumes THREE things already landed: `call_body_registry` (`session_ids` /
+  `request_pointers` — the LAZY contract, never a full-disk sweep of the 20k+ body files),
+  `build_call_context`, and `IMAGE_BLOCK_LABEL_PREFIX` (image re-classification keys on that
+  label prefix — load-bearing, do not "clean it up" into a real kind).
+- **THEN (P4w.3, freeze row 35): `resolveCallContext`.** Deliberately NOT ported with the wrapper
+  — it is route-level ORCHESTRATION, and doing it in the pure module would force file I/O under
+  the CoreState lock (the P4s rule). Its shape must be: lock → `resolve_request` → CLONE the
+  pointer → UNLOCK → blocking read/parse off the executor → RE-LOCK → account backfill. Contract:
   `registry.resolveRequest` → `bodyRef` ? file : `inlineBody` ? parse : null, then FOUR
   post-assignments on the result: `ctx.sessionId = sessionId` (overwrite), `ctx.requestId =
   sel.requestId ?? ptr.requestId ?? ctx.requestId`, `if (!ctx.model) ctx.model = ptr.model`
   (falsy, not nullish), and `if (ctx.accountUuid) registry.recordAccount(...)` — the
   TRDD-BURNWDGT backfill that makes account attribution work for sessions whose OTEL events
   never carried the attribute. NOTE those add `requestId` to the wire object AFTER `truncated`,
-  so the key order of a resolved context differs from a freshly-built one. Then
-  `context_composition_index.rs` + routes 36-37.
+  so the key order of a resolved context differs from a freshly-built one — a parity test that
+  only ever exercises freshly-built contexts will not see that, so assert it explicitly.
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
