@@ -480,3 +480,28 @@ pub fn get_window_budget(burn: Option<&Value>, account: Option<&crate::burn::acc
     }
     Value::Object(m)
 }
+
+/// `get_lifecycle_events` — the hook-event lifecycle slice, plus an HONEST account of whether the
+/// store even exists.
+///
+/// `dirExists` and the `note` are the whole point of the shape. Without them an empty `events` list
+/// is ambiguous: it reads identically whether nothing happened or the hooks were never installed,
+/// and a caller can only conclude "quiet" from the first. The note therefore names the DIRECTORY
+/// and the exact command that creates it, rather than saying "no events found".
+///
+/// The note is `undefined` on the happy path — so the key is OMITTED, never null and never an
+/// empty string. The HTTP `/api/lifecycle-events` route carries no note at all: the dashboard has
+/// its own empty state, an MCP caller has only this payload.
+pub fn get_lifecycle_events(hook_events_dir: &str, dir_exists: bool, events: Vec<Value>) -> Value {
+    let mut m = Map::new();
+    m.insert("hookEventsDir".into(), Value::String(hook_events_dir.to_owned()));
+    m.insert("dirExists".into(), Value::Bool(dir_exists));
+    m.insert("count".into(), Value::from(events.len()));
+    m.insert("events".into(), Value::Array(events));
+    if !dir_exists {
+        m.insert("note".into(), Value::String(format!(
+            "No lifecycle hook-event store at {hook_events_dir} — run 'agentlenspro --install-hooks' then restart the session to capture /clear and other lifecycle events."
+        )));
+    }
+    Value::Object(m)
+}

@@ -724,7 +724,7 @@ async fn handle(
         // Rust compute cannot throw); every feed absence is reported in `sources`, not as an error.
         let body = {
             let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
-            st.burn_risk_report(crate::now_ms() as f64).to_string()
+            st.burn_risk_report(crate::now_ms() as f64, None, None).to_string()
         };
         json_response(StatusCode::OK, body)
     } else if method == Method::POST && path == "/api/agent-gate" {
@@ -1099,6 +1099,47 @@ async fn handle(
                         let account = st.burn.current_account(now);
                         drop(st);
                         let payload = crate::mcp_tools::get_window_budget(Some(&status), Some(&account), s("accountId").as_deref());
+                        crate::mcp::tool_ok(&id, &payload)
+                    }
+                    "check_burn_risk" => {
+                        // Pass-through: the risk report IS the payload. The two threshold args are
+                        // the ONLY place they are caller-settable; `check_burn_risk` floors both
+                        // (2 / 10k) so a caller cannot switch a risk row off by asking.
+                        let now = crate::now_ms() as f64;
+                        let n = |k: &str| args.get(k).and_then(Value::as_f64);
+                        let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                        let payload = st.burn_risk_report(now, n("fanoutThreshold"), n("spikeTokensPerMin"));
+                        drop(st);
+                        crate::mcp::tool_ok(&id, &payload)
+                    }
+                    "get_lifecycle_events" => {
+                        let n = |k: &str| args.get(k).and_then(Value::as_f64);
+                        let limit = n("limit").filter(|v| *v > 0.0).unwrap_or(100.0) as usize;
+                        let kinds: Option<Vec<String>> = args
+                            .get("kinds")
+                            .and_then(Value::as_array)
+                            .map(|a| a.iter().filter_map(Value::as_str).map(str::to_owned).collect());
+                        let session = s("session");
+                        // `window` is HOURS back; absent means no lower bound at all, NOT zero —
+                        // `since_ms: Some(0.0)` would read the same records but claim a bound.
+                        let since_ms = n("window").map(|h| crate::now_ms() - (h * 3_600_000.0) as i64);
+                        let (dir, records) = {
+                            let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                            let dir = st.data_dir.join("hook-events");
+                            let records = crate::hook_events::read_hook_events(
+                                &dir,
+                                &crate::hook_events::HookEventFilter {
+                                    session: session.as_deref(),
+                                    since_ms,
+                                    limit: Some(1000),
+                                    ..Default::default()
+                                },
+                            );
+                            (dir, records)
+                        };
+                        let dir_exists = std::fs::metadata(&dir).is_ok();
+                        let events = crate::hook_events::extract_lifecycle_events(&records, kinds.as_deref(), session.as_deref(), limit);
+                        let payload = crate::mcp_tools::get_lifecycle_events(&dir.to_string_lossy(), dir_exists, events);
                         crate::mcp::tool_ok(&id, &payload)
                     }
                     "get_context_composition" | "get_context_history" | "get_conversation" => {

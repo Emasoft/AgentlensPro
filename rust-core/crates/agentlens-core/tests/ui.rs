@@ -1618,3 +1618,67 @@ fn mcp_get_window_budget_labels_accounts_and_keeps_the_pooled_window() {
     assert!(ghost["accounts"].as_array().unwrap().is_empty(), "{ghost}");
     assert!(ghost["message"].as_str().unwrap().contains("acct-ghost"), "{ghost}");
 }
+
+/// `check_burn_risk` is a pass-through of the six-row risk report, and the two threshold args are
+/// the only place they are caller-settable. The FLOOR is what is asserted: `checkBurnRisk` clamps
+/// fanout to >=2 and the spike to >=10k, so a caller cannot switch a row off by passing 0 — which
+/// is exactly what a "let me quiet this alert" argument would try.
+#[test]
+fn mcp_check_burn_risk_serves_the_report_and_floors_the_thresholds() {
+    let (_otlp, ui, _state) = start_servers();
+    let call = |args: &str| -> serde_json::Value {
+        let body = format!(
+            r#"{{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{{"name":"check_burn_risk","arguments":{args}}}}}"#
+        );
+        let env: serde_json::Value = serde_json::from_str(body_of(&post(ui, "/mcp", &body))).unwrap();
+        let text = env["result"]["content"][0]["text"].as_str().unwrap_or_else(|| panic!("{env}"));
+        serde_json::from_str(text).unwrap()
+    };
+
+    let dflt = call("{}");
+    assert!(dflt["risks"].is_array(), "the report IS the payload: {dflt}");
+    let fanout = |r: &serde_json::Value| -> f64 {
+        r["risks"].as_array().unwrap().iter()
+            .find(|x| x["code"] == "FANOUT_BURST")
+            .and_then(|x| x["evidence"]["threshold"].as_f64())
+            .unwrap_or_else(|| panic!("no FANOUT_BURST row: {r}"))
+    };
+    assert_eq!(fanout(&dflt), 5.0, "the TS default");
+    assert_eq!(fanout(&call(r#"{"fanoutThreshold":12}"#)), 12.0, "a caller may RAISE it");
+    assert_eq!(fanout(&call(r#"{"fanoutThreshold":0}"#)), 2.0, "but 0 floors to 2 — a row cannot be switched off");
+
+    // Every row is present whether or not it fired: an inactive row states the quiet measurement,
+    // so "no risk" is never confused with "no feed".
+    assert_eq!(dflt["risks"].as_array().unwrap().len(), 6, "{dflt}");
+}
+
+/// `get_lifecycle_events` must make "quiet" and "hooks never installed" TELLABLE APART over the
+/// wire — a bare empty list reads the same for both, and only one of them means nothing happened.
+#[test]
+fn mcp_get_lifecycle_events_distinguishes_quiet_from_uninstalled() {
+    let (_otlp, ui, state) = start_servers();
+    let dir = {
+        let st = state.lock().unwrap();
+        st.data_dir.join("hook-events")
+    };
+    let call = || -> serde_json::Value {
+        let body = r#"{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"get_lifecycle_events","arguments":{}}}"#;
+        let env: serde_json::Value = serde_json::from_str(body_of(&post(ui, "/mcp", body))).unwrap();
+        let text = env["result"]["content"][0]["text"].as_str().unwrap_or_else(|| panic!("{env}"));
+        serde_json::from_str(text).unwrap()
+    };
+
+    // No store yet: the note names the directory and the command that creates it.
+    let missing = call();
+    assert_eq!(missing["dirExists"], false, "{missing}");
+    let note = missing["note"].as_str().unwrap_or_else(|| panic!("{missing}"));
+    assert!(note.contains(&dir.to_string_lossy().to_string()), "the note names the dir: {note}");
+    assert!(note.contains("--install-hooks"), "and the command that fixes it: {note}");
+
+    // Store present but empty: same empty list, NO note.
+    std::fs::create_dir_all(&dir).unwrap();
+    let quiet = call();
+    assert_eq!(quiet["dirExists"], true, "{quiet}");
+    assert_eq!(quiet["count"], missing["count"], "both empty — the count cannot be the discriminator");
+    assert!(quiet.get("note").is_none(), "an installed-but-quiet store explains nothing: {quiet}");
+}

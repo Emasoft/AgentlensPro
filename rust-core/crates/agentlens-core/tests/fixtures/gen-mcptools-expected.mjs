@@ -16,7 +16,7 @@ import { createRequire } from 'module'
 import { readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
 const require = createRequire(import.meta.url)
-const { handleGetCallContext, handleGetContextComposition, handleGetContextHistory, handleGetConversation, handleGetWindowBudget } = require('../../../../../out/test/mcpServer.js')
+const { handleGetCallContext, handleGetContextComposition, handleGetContextHistory, handleGetConversation, handleGetWindowBudget, handleGetLifecycleEvents } = require('../../../../../out/test/mcpServer.js')
 const { loadBurnConfig, gatherConsumptionEvents, computeBurnStatus } = require('../../../../../out/test/burnMonitor.js')
 const { buildCallContextFromJson } = require('../../../../../out/test/rawBodyContext.js')
 const { buildContextComposition } = require('../../../../../out/test/contextComposition.js')
@@ -116,6 +116,15 @@ const burnStatus = computeBurnStatus(burnEvents, bmCases.sessions, burnCfg, bmCa
 // SECOND arm of accountLabelFor's `||` chain and keeping an address-shaped literal out of a
 // tracked file (the identity guard is shape-based, and a fixture is not worth arguing with it).
 const acct = { source: 'claude.json', accountUuid: 'acct-1111', label: 'Display A', email: null, organizationName: 'Org A', organizationUuid: null, displayName: 'Display A', planType: 'max', billingType: 'stripe_subscription', hasExtraUsageEnabled: false, organizationRateLimitTier: null, userRateLimitTier: null, rateLimitTier: null }
+// ── P4x.2c: get_lifecycle_events — the note is the whole reason this has a shaper at all ──────
+// Both branches are generated so the note TEXT stays byte-identical across the two engines; the
+// happy path proves the key is OMITTED (not null, not '').
+const lcEvents = [{ ts: 1, ev: 'SessionStart', kind: 'session_start', session: 'lc-1' }]
+const lcCases = [
+  { name: 'store-missing-carries-the-note', dir: '/nope/hook-events', dirExists: false, events: lcEvents },
+  { name: 'store-present-omits-the-note', dir: '/data/hook-events', dirExists: true, events: lcEvents },
+  { name: 'store-present-but-quiet', dir: '/data/hook-events', dirExists: true, events: [] },
+]
 const wbCases = [
   { name: 'all-accounts', args: {} },
   { name: 'filtered-to-current', args: { accountId: 'acct-1111' } },
@@ -132,6 +141,8 @@ writeFileSync(join(dir, 'mcptools-expected.json'), JSON.stringify({
   windowBudget: { account: J(acct), status: J(burnStatus) },
   wbCases: J(wbCases),
   wbResults: wbCases.map(c => J(handleGetWindowBudget(burnStatus, acct, c.args))),
+  lcCases: J(lcCases),
+  lcResults: lcCases.map(c => J(handleGetLifecycleEvents(c.dir, c.dirExists, c.events))),
   cases: J(cases),
   results: cases.map(c => J(handleGetCallContext(c.ctx, c.args))),
   compCases: J(compCases),

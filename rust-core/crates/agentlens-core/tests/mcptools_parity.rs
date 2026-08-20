@@ -245,3 +245,29 @@ fn the_empty_result_message_is_scoped_to_an_actual_filter() {
     let none = agentlens_core::mcp_tools::get_window_budget(None, Some(&account), None);
     assert_eq!(keys(&none), vec!["message"], "{none}");
 }
+
+/// `get_lifecycle_events` exists as a shaper for ONE reason: the note. An empty `events` list is
+/// ambiguous on its own — it reads identically whether nothing happened or the hooks were never
+/// installed — so the payload must say which, and the note text is a wire contract shared with the
+/// TS. Both branches are driven so the text cannot drift on one side only.
+#[test]
+fn get_lifecycle_events_reproduces_the_ts_oracle_exactly() {
+    let o = oracle();
+    for (case, exp) in o["lcCases"].as_array().unwrap().iter().zip(o["lcResults"].as_array().unwrap()) {
+        let name = case["name"].as_str().unwrap();
+        let got = agentlens_core::mcp_tools::get_lifecycle_events(
+            case["dir"].as_str().unwrap(),
+            case["dirExists"].as_bool().unwrap(),
+            case["events"].as_array().unwrap().clone(),
+        );
+        assert_eq!(keys(&got), keys(exp), "{name}: key set/ORDER differs — the note must be OMITTED, never null");
+        for (k, ev) in exp.as_object().unwrap() {
+            assert_eq!(&got[k], ev, "{name}.{k}");
+        }
+    }
+    // "quiet" and "not installed" must be TELLABLE APART — that is the whole point of the field.
+    let quiet = agentlens_core::mcp_tools::get_lifecycle_events("/data/hook-events", true, vec![]);
+    let missing = agentlens_core::mcp_tools::get_lifecycle_events("/data/hook-events", false, vec![]);
+    assert_eq!(quiet["count"], missing["count"], "both are empty — so the COUNT cannot be the discriminator");
+    assert!(quiet.get("note").is_none() && missing.get("note").is_some(), "the note is: {quiet} vs {missing}");
+}

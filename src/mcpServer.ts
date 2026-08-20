@@ -3280,6 +3280,19 @@ export function handleGetAccountStatus(
 // mode / plan / cache-TTL regime) that was active at an arbitrary past instant, resolved by binary-
 // searching the change-detected account-state timeline (~/.agentlens/account-state.ndjson). Accepts a
 // ms-epoch `ts` OR an ISO-8601 `iso`. Reads the ndjson off disk directly — no server state needed.
+// Exported for unit tests (and as the Rust port's parity oracle). get_lifecycle_events: the events
+// plus an HONEST account of whether the store even exists — without `dirExists` and the note, an
+// empty list reads identically whether nothing happened or the hooks were never installed, and only
+// the first of those means "quiet". The note names the DIRECTORY and the exact command that creates
+// it. On the happy path it is `undefined`, so the key is OMITTED — never null, never empty string.
+export function handleGetLifecycleEvents(dir: string, dirExists: boolean, events: unknown[]) {
+  return {
+    hookEventsDir: dir, dirExists, count: events.length, events,
+    note: dirExists ? undefined
+      : `No lifecycle hook-event store at ${dir} — run 'agentlenspro --install-hooks' then restart the session to capture /clear and other lifecycle events.`,
+  }
+}
+
 export function handleGetAccountStateAt(args: { ts?: number; iso?: string }) {
   const t = typeof args.ts === 'number' ? args.ts : (args.iso ? Date.parse(args.iso) : NaN)
   if (!Number.isFinite(t)) {
@@ -3732,11 +3745,7 @@ export function createMcpServer(opts: McpServerOptions): Server {
         const events = extractLifecycleEvents(records, {
           session: a.session, kinds: a.kinds as LifecycleKind[] | undefined, limit: a.limit ?? 100,
         })
-        result = {
-          hookEventsDir: dir, dirExists, count: events.length, events,
-          note: dirExists ? undefined
-            : `No lifecycle hook-event store at ${dir} — run 'agentlenspro --install-hooks' then restart the session to capture /clear and other lifecycle events.`,
-        }
+        result = handleGetLifecycleEvents(dir, dirExists, events)
         break
       }
       case 'check_burn_risk': {

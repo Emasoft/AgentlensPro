@@ -318,7 +318,11 @@ impl CoreState {
     /// `last_status` is filled inline when the 4s tick has not run yet (freshly booted server),
     /// exactly as the TS route does. NOT PORTED: the in-memory hook-event ring (P4m note) — the
     /// guard reads the NDJSON buckets, so the answer is the same, off disk.
-    pub fn burn_risk_report(&mut self, now_ms: f64) -> Value {
+    ///
+    /// `fanout_threshold` / `spike_tokens_per_min` are the TS `checkBurnRisk` defaults when None —
+    /// only the MCP tool exposes them, and `check_burn_risk` floors both anyway (2 / 10k), so a
+    /// caller cannot disable a risk row by passing an absurdly low threshold.
+    pub fn burn_risk_report(&mut self, now_ms: f64, fanout_threshold: Option<f64>, spike_tokens_per_min: Option<f64>) -> Value {
         if self.burn.last_status.is_none() {
             let s = self.live_burn_status(now_ms);
             self.burn.last_status = Some(s);
@@ -329,8 +333,8 @@ impl CoreState {
             now: now_ms,
             bodies_dir: burn::guard::default_bodies_dir(&self.data_dir),
             hook_events_dir: self.data_dir.join("hook-events"),
-            fanout_threshold: 5.0,
-            spike_tokens_per_min: 250_000.0,
+            fanout_threshold: fanout_threshold.unwrap_or(5.0),
+            spike_tokens_per_min: spike_tokens_per_min.unwrap_or(250_000.0),
             recent_events: None,
             bodies_activity: Some(&bodies),
             burn_status: self.burn.last_status.as_ref(),

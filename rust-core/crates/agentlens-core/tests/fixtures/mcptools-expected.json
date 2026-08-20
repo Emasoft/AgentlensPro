@@ -1204,6 +1204,75 @@
    "capacityObservedAt": null
   }
  ],
+ "lcCases": [
+  {
+   "name": "store-missing-carries-the-note",
+   "dir": "/nope/hook-events",
+   "dirExists": false,
+   "events": [
+    {
+     "ts": 1,
+     "ev": "SessionStart",
+     "kind": "session_start",
+     "session": "lc-1"
+    }
+   ]
+  },
+  {
+   "name": "store-present-omits-the-note",
+   "dir": "/data/hook-events",
+   "dirExists": true,
+   "events": [
+    {
+     "ts": 1,
+     "ev": "SessionStart",
+     "kind": "session_start",
+     "session": "lc-1"
+    }
+   ]
+  },
+  {
+   "name": "store-present-but-quiet",
+   "dir": "/data/hook-events",
+   "dirExists": true,
+   "events": []
+  }
+ ],
+ "lcResults": [
+  {
+   "hookEventsDir": "/nope/hook-events",
+   "dirExists": false,
+   "count": 1,
+   "events": [
+    {
+     "ts": 1,
+     "ev": "SessionStart",
+     "kind": "session_start",
+     "session": "lc-1"
+    }
+   ],
+   "note": "No lifecycle hook-event store at /nope/hook-events — run 'agentlenspro --install-hooks' then restart the session to capture /clear and other lifecycle events."
+  },
+  {
+   "hookEventsDir": "/data/hook-events",
+   "dirExists": true,
+   "count": 1,
+   "events": [
+    {
+     "ts": 1,
+     "ev": "SessionStart",
+     "kind": "session_start",
+     "session": "lc-1"
+    }
+   ]
+  },
+  {
+   "hookEventsDir": "/data/hook-events",
+   "dirExists": true,
+   "count": 0,
+   "events": []
+  }
+ ],
  "cases": [
   {
    "name": "null-context-with-both-ids",
