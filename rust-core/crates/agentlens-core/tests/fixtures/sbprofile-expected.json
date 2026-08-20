@@ -1,0 +1,647 @@
+{
+  "nowMs": 1787054400000,
+  "mtimes": {
+    "r1.request.json": 1787050200000,
+    "r2.request.json": 1787050800000,
+    "r3.request.json": 1787050920000,
+    "r4.request.json": 1787050965000,
+    "r5.request.json": 1787050985000,
+    "r6.request.json": 1787050990000,
+    "r7.request.json": 1787054340000,
+    "m1.response.json": 1787050200000,
+    "m2.response.json": 1787050800000,
+    "m3.response.json": 1787050920000,
+    "m4.response.json": 1787050965000,
+    "m5.response.json": 1787050985000,
+    "m6.response.json": 1787050990000,
+    "b1.request.json": 1787052600000,
+    "old.request.json": 1787018400000,
+    "notes.txt": 1787054100000
+  },
+  "sessions": {
+    "a": "aaaaaaaa-1111-1111-1111-111111111111",
+    "b": "bbbb2222-3333-3333-3333-333333333333",
+    "other": "cccc3333-4444-4444-4444-444444444444"
+  },
+  "extractToolNames": {
+    "withBracketsInString": [
+      "A",
+      "B"
+    ],
+    "nested": [
+      "A",
+      "nested"
+    ],
+    "noToolsKey": [],
+    "emptyArray": [],
+    "unterminated": []
+  },
+  "sessionIdOf": {
+    "ok": "aaaaaaaa-1111-1111-1111-111111111111",
+    "textMention": "aaaaaaaa-1111-1111-1111-111111111111",
+    "noUserId": null,
+    "badBlob": null,
+    "noSessionField": null
+  },
+  "profileDefault": {
+    "sessionId": "aaaaaaaa-1111-1111-1111-111111111111",
+    "windowHours": 6,
+    "requests": 7,
+    "spanMinutes": 69,
+    "turnsPerHour": 6.1,
+    "gapHistogram": {
+      "under10s": 1,
+      "s10to30": 1,
+      "s30to60": 1,
+      "m1to5": 1,
+      "over5m": 2
+    },
+    "cacheReadTotal": 860000,
+    "cacheCreateTotal": 241700,
+    "avgContextTokens": 143333,
+    "coldCalls": 2,
+    "coldPct": 33.3,
+    "costUsd": 1.94,
+    "cacheCreateMedian": 14000,
+    "cacheCreateP90": 150000,
+    "turnsWithLargeCreate": 3,
+    "createConcentrationPct": 97.2,
+    "weighted": {
+      "readWeighted": 86000,
+      "createWeighted": 302125,
+      "dominantTerm": "prefix-rewrite"
+    },
+    "transcriptMessages": 3,
+    "toolSurface": {
+      "total": 4,
+      "deferred": 1,
+      "tokensPerTurn": 70,
+      "pctOfContext": 0,
+      "bySource": [
+        {
+          "source": "built-in",
+          "tools": 2,
+          "tokensPerTurn": 40,
+          "examples": [
+            "Bash",
+            "Read"
+          ]
+        },
+        {
+          "source": "built-in (deferred)",
+          "tools": 1,
+          "tokensPerTurn": 20,
+          "examples": [
+            "Write"
+          ]
+        },
+        {
+          "source": "MCP: srv",
+          "tools": 1,
+          "tokensPerTurn": 10,
+          "examples": [
+            "mcp__srv__alpha"
+          ]
+        }
+      ]
+    },
+    "toolStability": {
+      "turnsCompared": 6,
+      "turnsChanged": 4,
+      "changePct": 66.7,
+      "culpritSources": [
+        {
+          "source": "MCP: srv",
+          "turns": 2
+        },
+        {
+          "source": "(reorder — same set, different order)",
+          "turns": 1
+        },
+        {
+          "source": "built-in",
+          "turns": 1
+        }
+      ],
+      "changes": [
+        {
+          "turn": 3,
+          "added": [
+            "mcp__srv__beta"
+          ],
+          "removed": [],
+          "sources": [
+            "MCP: srv"
+          ]
+        },
+        {
+          "turn": 4,
+          "added": [],
+          "removed": [
+            "mcp__srv__beta"
+          ],
+          "sources": [
+            "MCP: srv"
+          ]
+        },
+        {
+          "turn": 5,
+          "added": [],
+          "removed": [],
+          "sources": [
+            "(reorder — same set, different order)"
+          ]
+        },
+        {
+          "turn": 7,
+          "added": [
+            "Write"
+          ],
+          "removed": [],
+          "sources": [
+            "built-in"
+          ]
+        }
+      ],
+      "verdict": "tools[] changed on 4/6 turns (66.7%) — each change invalidates the ENTIRE prefix. Sources: MCP: srv×2, (reorder — same set, different order)×1, built-in×1."
+    },
+    "topToolUse": [
+      {
+        "name": "Bash",
+        "count": 3
+      },
+      {
+        "name": "Read",
+        "count": 2
+      },
+      {
+        "name": "mcp__srv__alpha",
+        "count": 1
+      }
+    ],
+    "lastCallMinutesAgo": 1,
+    "active": true,
+    "verdict": "7 turns, ~143k avg context. DOMINANT COST = prefix-rewrite (0.3M weighted vs 0.1M for re-reads). 0.9M cache_read + 0.2M cache_create ≈ $1.94 in 69 min; median create 14,000, p90 150,000, 3 big-write turns holding 97.2% of all writes. tools[] changed on 4/6 turns (66.7%) — each change invalidates the ENTIRE prefix. Sources: MCP: srv×2, (reorder — same set, different order)×1, built-in×1. 2 of 6 gaps under 30s. STILL ACTIVE.",
+    "remediation": [
+      "MAKE tools[] FIXED — it changed on 4/6 turns (66.7%), and a tool change invalidates the ENTIRE prefix. Sources: MCP: srv×2, (reorder — same set, different order)×1, built-in×1.",
+      "Pin those MCP servers so their tool set never moves: keep them connected for the WHOLE session (a disconnect/reconnect or lazy start adds/removes their tools), do not run /reload-plugins mid-session, and do not toggle them. Affected: srv.",
+      "Pin `tools:` in every sub-agent frontmatter — an agent with no `tools:` inherits the LIVE tool set, so its catalog drifts whenever any server connects or disconnects.",
+      "Keep tool-search/deferral OFF: a defer/undefer re-load also mutates tools[]. Resident-but-stable beats deferred-but-churning."
+    ],
+    "coverage": {
+      "bodiesDir": "<BODIES>",
+      "dirExists": true,
+      "filesScanned": 14,
+      "windowHours": 6,
+      "complete": true,
+      "note": "Scanned 14 body file(s) modified in the last 6h (files >8.388608MB skipped)."
+    }
+  },
+  "profileByPrefix": {
+    "sessionId": "aaaaaaaa",
+    "windowHours": 6,
+    "requests": 7,
+    "spanMinutes": 69,
+    "turnsPerHour": 6.1,
+    "gapHistogram": {
+      "under10s": 1,
+      "s10to30": 1,
+      "s30to60": 1,
+      "m1to5": 1,
+      "over5m": 2
+    },
+    "cacheReadTotal": 860000,
+    "cacheCreateTotal": 241700,
+    "avgContextTokens": 143333,
+    "coldCalls": 2,
+    "coldPct": 33.3,
+    "costUsd": 1.94,
+    "cacheCreateMedian": 14000,
+    "cacheCreateP90": 150000,
+    "turnsWithLargeCreate": 3,
+    "createConcentrationPct": 97.2,
+    "weighted": {
+      "readWeighted": 86000,
+      "createWeighted": 302125,
+      "dominantTerm": "prefix-rewrite"
+    },
+    "transcriptMessages": 3,
+    "toolSurface": {
+      "total": 4,
+      "deferred": 1,
+      "tokensPerTurn": 70,
+      "pctOfContext": 0,
+      "bySource": [
+        {
+          "source": "built-in",
+          "tools": 2,
+          "tokensPerTurn": 40,
+          "examples": [
+            "Bash",
+            "Read"
+          ]
+        },
+        {
+          "source": "built-in (deferred)",
+          "tools": 1,
+          "tokensPerTurn": 20,
+          "examples": [
+            "Write"
+          ]
+        },
+        {
+          "source": "MCP: srv",
+          "tools": 1,
+          "tokensPerTurn": 10,
+          "examples": [
+            "mcp__srv__alpha"
+          ]
+        }
+      ]
+    },
+    "toolStability": {
+      "turnsCompared": 6,
+      "turnsChanged": 4,
+      "changePct": 66.7,
+      "culpritSources": [
+        {
+          "source": "MCP: srv",
+          "turns": 2
+        },
+        {
+          "source": "(reorder — same set, different order)",
+          "turns": 1
+        },
+        {
+          "source": "built-in",
+          "turns": 1
+        }
+      ],
+      "changes": [
+        {
+          "turn": 3,
+          "added": [
+            "mcp__srv__beta"
+          ],
+          "removed": [],
+          "sources": [
+            "MCP: srv"
+          ]
+        },
+        {
+          "turn": 4,
+          "added": [],
+          "removed": [
+            "mcp__srv__beta"
+          ],
+          "sources": [
+            "MCP: srv"
+          ]
+        },
+        {
+          "turn": 5,
+          "added": [],
+          "removed": [],
+          "sources": [
+            "(reorder — same set, different order)"
+          ]
+        },
+        {
+          "turn": 7,
+          "added": [
+            "Write"
+          ],
+          "removed": [],
+          "sources": [
+            "built-in"
+          ]
+        }
+      ],
+      "verdict": "tools[] changed on 4/6 turns (66.7%) — each change invalidates the ENTIRE prefix. Sources: MCP: srv×2, (reorder — same set, different order)×1, built-in×1."
+    },
+    "topToolUse": [
+      {
+        "name": "Bash",
+        "count": 3
+      },
+      {
+        "name": "Read",
+        "count": 2
+      },
+      {
+        "name": "mcp__srv__alpha",
+        "count": 1
+      }
+    ],
+    "lastCallMinutesAgo": 1,
+    "active": true,
+    "verdict": "7 turns, ~143k avg context. DOMINANT COST = prefix-rewrite (0.3M weighted vs 0.1M for re-reads). 0.9M cache_read + 0.2M cache_create ≈ $1.94 in 69 min; median create 14,000, p90 150,000, 3 big-write turns holding 97.2% of all writes. tools[] changed on 4/6 turns (66.7%) — each change invalidates the ENTIRE prefix. Sources: MCP: srv×2, (reorder — same set, different order)×1, built-in×1. 2 of 6 gaps under 30s. STILL ACTIVE.",
+    "remediation": [
+      "MAKE tools[] FIXED — it changed on 4/6 turns (66.7%), and a tool change invalidates the ENTIRE prefix. Sources: MCP: srv×2, (reorder — same set, different order)×1, built-in×1.",
+      "Pin those MCP servers so their tool set never moves: keep them connected for the WHOLE session (a disconnect/reconnect or lazy start adds/removes their tools), do not run /reload-plugins mid-session, and do not toggle them. Affected: srv.",
+      "Pin `tools:` in every sub-agent frontmatter — an agent with no `tools:` inherits the LIVE tool set, so its catalog drifts whenever any server connects or disconnects.",
+      "Keep tool-search/deferral OFF: a defer/undefer re-load also mutates tools[]. Resident-but-stable beats deferred-but-churning."
+    ],
+    "coverage": {
+      "bodiesDir": "<BODIES>",
+      "dirExists": true,
+      "filesScanned": 14,
+      "windowHours": 6,
+      "complete": true,
+      "note": "Scanned 14 body file(s) modified in the last 6h (files >8.388608MB skipped)."
+    }
+  },
+  "profileSessionB": {
+    "sessionId": "bbbb2222-3333-3333-3333-333333333333",
+    "windowHours": 6,
+    "requests": 1,
+    "spanMinutes": 0,
+    "turnsPerHour": 0,
+    "gapHistogram": {
+      "under10s": 0,
+      "s10to30": 0,
+      "s30to60": 0,
+      "m1to5": 0,
+      "over5m": 0
+    },
+    "cacheReadTotal": 0,
+    "cacheCreateTotal": 0,
+    "avgContextTokens": 0,
+    "coldCalls": 0,
+    "coldPct": 0,
+    "costUsd": 0,
+    "cacheCreateMedian": 0,
+    "cacheCreateP90": 0,
+    "turnsWithLargeCreate": 0,
+    "createConcentrationPct": 0,
+    "weighted": {
+      "readWeighted": 0,
+      "createWeighted": 0,
+      "dominantTerm": "transcript-reread"
+    },
+    "transcriptMessages": 1,
+    "toolSurface": {
+      "total": 3,
+      "deferred": 0,
+      "tokensPerTurn": 50,
+      "pctOfContext": 0,
+      "bySource": [
+        {
+          "source": "built-in",
+          "tools": 2,
+          "tokensPerTurn": 40,
+          "examples": [
+            "Bash",
+            "Read"
+          ]
+        },
+        {
+          "source": "MCP: srv",
+          "tools": 1,
+          "tokensPerTurn": 10,
+          "examples": [
+            "mcp__srv__alpha"
+          ]
+        }
+      ]
+    },
+    "toolStability": {
+      "turnsCompared": 0,
+      "turnsChanged": 0,
+      "changePct": 0,
+      "culpritSources": [],
+      "changes": [],
+      "verdict": "tools[] is BYTE-STABLE across every turn — the tool catalog is NOT breaking this session's cache."
+    },
+    "topToolUse": [],
+    "lastCallMinutesAgo": 30,
+    "active": false,
+    "verdict": "1 turns, ~0k avg context. DOMINANT COST = transcript re-read (0.0M weighted vs 0.0M for rewrites). 0.0M cache_read + 0.0M cache_create ≈ $0.00 in 0 min; median create 0, p90 0, 0 big-write turns holding 0% of all writes. tools[] is BYTE-STABLE across every turn — the tool catalog is NOT breaking this session's cache. 0 of 0 gaps under 30s. idle 30 min.",
+    "remediation": [
+      "tools[] is stable (0% of turns changed) — the tool catalog is NOT the culprit here; its 50 tok/turn are cached and re-READ, not re-written."
+    ],
+    "coverage": {
+      "bodiesDir": "<BODIES>",
+      "dirExists": true,
+      "filesScanned": 14,
+      "windowHours": 6,
+      "complete": true,
+      "note": "Scanned 14 body file(s) modified in the last 6h (files >8.388608MB skipped)."
+    }
+  },
+  "profileNarrowWindow": {
+    "sessionId": "aaaaaaaa-1111-1111-1111-111111111111",
+    "windowHours": 0.5,
+    "requests": 1,
+    "spanMinutes": 0,
+    "turnsPerHour": 0,
+    "gapHistogram": {
+      "under10s": 0,
+      "s10to30": 0,
+      "s30to60": 0,
+      "m1to5": 0,
+      "over5m": 0
+    },
+    "cacheReadTotal": 0,
+    "cacheCreateTotal": 0,
+    "avgContextTokens": 0,
+    "coldCalls": 0,
+    "coldPct": 0,
+    "costUsd": 0,
+    "cacheCreateMedian": 0,
+    "cacheCreateP90": 0,
+    "turnsWithLargeCreate": 0,
+    "createConcentrationPct": 0,
+    "weighted": {
+      "readWeighted": 0,
+      "createWeighted": 0,
+      "dominantTerm": "transcript-reread"
+    },
+    "transcriptMessages": 3,
+    "toolSurface": {
+      "total": 4,
+      "deferred": 1,
+      "tokensPerTurn": 70,
+      "pctOfContext": 0,
+      "bySource": [
+        {
+          "source": "built-in",
+          "tools": 2,
+          "tokensPerTurn": 40,
+          "examples": [
+            "Bash",
+            "Read"
+          ]
+        },
+        {
+          "source": "built-in (deferred)",
+          "tools": 1,
+          "tokensPerTurn": 20,
+          "examples": [
+            "Write"
+          ]
+        },
+        {
+          "source": "MCP: srv",
+          "tools": 1,
+          "tokensPerTurn": 10,
+          "examples": [
+            "mcp__srv__alpha"
+          ]
+        }
+      ]
+    },
+    "toolStability": {
+      "turnsCompared": 0,
+      "turnsChanged": 0,
+      "changePct": 0,
+      "culpritSources": [],
+      "changes": [],
+      "verdict": "tools[] is BYTE-STABLE across every turn — the tool catalog is NOT breaking this session's cache."
+    },
+    "topToolUse": [
+      {
+        "name": "Bash",
+        "count": 3
+      },
+      {
+        "name": "Read",
+        "count": 2
+      },
+      {
+        "name": "mcp__srv__alpha",
+        "count": 1
+      }
+    ],
+    "lastCallMinutesAgo": 1,
+    "active": true,
+    "verdict": "1 turns, ~0k avg context. DOMINANT COST = transcript re-read (0.0M weighted vs 0.0M for rewrites). 0.0M cache_read + 0.0M cache_create ≈ $0.00 in 0 min; median create 0, p90 0, 0 big-write turns holding 0% of all writes. tools[] is BYTE-STABLE across every turn — the tool catalog is NOT breaking this session's cache. 0 of 0 gaps under 30s. STILL ACTIVE.",
+    "remediation": [
+      "tools[] is stable (0% of turns changed) — the tool catalog is NOT the culprit here; its 70 tok/turn are cached and re-READ, not re-written."
+    ],
+    "coverage": {
+      "bodiesDir": "<BODIES>",
+      "dirExists": true,
+      "filesScanned": 2,
+      "windowHours": 0.5,
+      "complete": true,
+      "note": "Scanned 2 body file(s) modified in the last 0.5h (files >8.388608MB skipped)."
+    }
+  },
+  "profileUnknownSession": {
+    "sessionId": "no-such-session",
+    "windowHours": 6,
+    "requests": 0,
+    "spanMinutes": 0,
+    "turnsPerHour": 0,
+    "gapHistogram": {
+      "under10s": 0,
+      "s10to30": 0,
+      "s30to60": 0,
+      "m1to5": 0,
+      "over5m": 0
+    },
+    "cacheReadTotal": 0,
+    "cacheCreateTotal": 0,
+    "avgContextTokens": 0,
+    "coldCalls": 0,
+    "coldPct": 0,
+    "costUsd": 0,
+    "cacheCreateMedian": 0,
+    "cacheCreateP90": 0,
+    "turnsWithLargeCreate": 0,
+    "createConcentrationPct": 0,
+    "weighted": {
+      "readWeighted": 0,
+      "createWeighted": 0,
+      "dominantTerm": "transcript-reread"
+    },
+    "transcriptMessages": 0,
+    "toolSurface": {
+      "total": 0,
+      "deferred": 0,
+      "tokensPerTurn": 0,
+      "pctOfContext": 0,
+      "bySource": []
+    },
+    "toolStability": {
+      "turnsCompared": 0,
+      "turnsChanged": 0,
+      "changePct": 0,
+      "culpritSources": [],
+      "changes": [],
+      "verdict": "no data"
+    },
+    "topToolUse": [],
+    "lastCallMinutesAgo": null,
+    "active": false,
+    "verdict": "No requests found for this session in the scanned window.",
+    "remediation": [],
+    "coverage": {
+      "bodiesDir": "<BODIES>",
+      "dirExists": true,
+      "filesScanned": 0,
+      "windowHours": 6,
+      "complete": true,
+      "note": "Scanned 14 body file(s) modified in the last 6h (files >8.388608MB skipped)."
+    }
+  },
+  "profileMissingDir": {
+    "sessionId": "aaaaaaaa-1111-1111-1111-111111111111",
+    "windowHours": 6,
+    "requests": 0,
+    "spanMinutes": 0,
+    "turnsPerHour": 0,
+    "gapHistogram": {
+      "under10s": 0,
+      "s10to30": 0,
+      "s30to60": 0,
+      "m1to5": 0,
+      "over5m": 0
+    },
+    "cacheReadTotal": 0,
+    "cacheCreateTotal": 0,
+    "avgContextTokens": 0,
+    "coldCalls": 0,
+    "coldPct": 0,
+    "costUsd": 0,
+    "cacheCreateMedian": 0,
+    "cacheCreateP90": 0,
+    "turnsWithLargeCreate": 0,
+    "createConcentrationPct": 0,
+    "weighted": {
+      "readWeighted": 0,
+      "createWeighted": 0,
+      "dominantTerm": "transcript-reread"
+    },
+    "transcriptMessages": 0,
+    "toolSurface": {
+      "total": 0,
+      "deferred": 0,
+      "tokensPerTurn": 0,
+      "pctOfContext": 0,
+      "bySource": []
+    },
+    "toolStability": {
+      "turnsCompared": 0,
+      "turnsChanged": 0,
+      "changePct": 0,
+      "culpritSources": [],
+      "changes": [],
+      "verdict": "no data"
+    },
+    "topToolUse": [],
+    "lastCallMinutesAgo": null,
+    "active": false,
+    "verdict": "No requests found for this session in the scanned window.",
+    "remediation": [],
+    "coverage": {
+      "bodiesDir": "<MISSING>",
+      "dirExists": false,
+      "filesScanned": 0,
+      "windowHours": 6,
+      "complete": true,
+      "note": "No OTEL raw-body directory at <MISSING> — set OTEL_LOG_RAW_API_BODIES to capture bodies."
+    }
+  }
+}

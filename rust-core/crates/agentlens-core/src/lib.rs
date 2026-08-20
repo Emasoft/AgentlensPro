@@ -37,6 +37,7 @@ pub mod burn;
 pub mod cache_break;
 pub mod cache_creation_forensics;
 pub mod cache_event_log;
+pub mod session_burn_profile;
 pub mod cache_risk_commands;
 pub mod call_body_registry;
 pub mod collector_lifecycle;

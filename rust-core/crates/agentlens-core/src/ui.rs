@@ -1820,6 +1820,63 @@ async fn handle(
                         .map_err(|e| format!("expensive-writes trace join failed: {e}"))?;
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
+                    "get_session_burn_profile" => {
+                        // Reads every body file in the window (regex over raw text, one full parse
+                        // for the newest), so it goes on spawn_blocking with the lock released.
+                        let now = crate::now_ms() as f64;
+                        let session_id = args.get("sessionId").and_then(Value::as_str).unwrap_or("").to_owned();
+                        let payload = if session_id.is_empty() {
+                            crate::mcp_tools::error_payload("get_session_burn_profile requires sessionId")
+                        } else {
+                            let (bodies_dir, sessions) = {
+                                let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                                let dir = crate::burn::guard::default_bodies_dir(&st.data_dir);
+                                let summary = st.build_session_summary(now);
+                                let sessions: Vec<Value> =
+                                    summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
+                                (dir, sessions)
+                            };
+                            let opts = crate::session_burn_profile::SessionBurnProfileOptions {
+                                session_id: session_id.clone(),
+                                window_hours: args.get("window").and_then(Value::as_f64),
+                            };
+                            tokio::task::spawn_blocking(move || {
+                                let mut profile =
+                                    crate::session_burn_profile::build_session_burn_profile(&bodies_dir, &opts, now);
+                                // P7 provenance: the profile itself is body-scan derived, so the
+                                // served card carries which feed backs the session's token figures.
+                                // Exact id first, then the same unique-PREFIX match the tool accepts
+                                // — otherwise a prefix query gets a profile with no provenance.
+                                fn sid_of(s: &Value) -> &str {
+                                    s.get("sessionId").and_then(Value::as_str).unwrap_or("")
+                                }
+                                let card = sessions
+                                    .iter()
+                                    .find(|s| sid_of(s) == session_id)
+                                    .or_else(|| sessions.iter().find(|s| sid_of(s).starts_with(&session_id)));
+                                if let Some(obj) = profile.as_object_mut() {
+                                    // `?? null` KEEPS the key — a missing card is "unknown", never
+                                    // a silently absent field.
+                                    obj.insert(
+                                        "tokensSource".into(),
+                                        card.and_then(|c| c.get("tokensSource")).cloned().unwrap_or(Value::Null),
+                                    );
+                                    // `...(card?.coverageNote ? {…} : {})` is TRUTHY — an absent OR
+                                    // empty note DROPS the key entirely.
+                                    if let Some(note) = card
+                                        .and_then(|c| c.get("coverageNote"))
+                                        .filter(|v| crate::summarize::helpers::truthy(v))
+                                    {
+                                        obj.insert("coverageNote".into(), note.clone());
+                                    }
+                                }
+                                profile
+                            })
+                            .await
+                            .map_err(|e| format!("session burn profile join failed: {e}"))?
+                        };
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
+                    }
                     "get_cache_event_log" => {
                         // A bounded body scan PLUS a span-store walk, so it goes on spawn_blocking
                         // with the state lock released.
