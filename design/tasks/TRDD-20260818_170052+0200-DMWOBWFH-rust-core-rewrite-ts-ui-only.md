@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-21T01:23:52+0200
+updated: 2026-08-21T01:41:23+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -1318,8 +1318,33 @@ release-via: publish
   `tools[]` fingerprint → set comparison · the deferred `bySource` bucket removed. Both profile
   tests went red; the three primitive/empty-path tests correctly stayed green (none touches those
   rules) — a falsification that reddens EVERY test is not evidence the tests are targeted.
-- **NEXT (P4x.2d continued): 10 of 53 remain.** Immediate: `heartbeatCost` (316)
-  → `forensicsCompare` (253 → `compare_configs`) → `burnInvestigator` (632, also
+- **P4x.2d (commit dc0f30f): `heartbeatCost` (316) + `get_heartbeat_cost`. 44 of 53.**
+  THE TWO TRAPS this tool exists because of: **`raw.includes(marker)` is WRONG** — the marker
+  persists in the transcript history of every later call and appears in any conversation that
+  merely discusses the janitor (measured on the real spool: **1412** bodies contained it, **ZERO**
+  were fires) — and **the LAST message is NOT the user's** (Claude Code appends hook output after
+  it, so a naive last-message check never matches a real fire; the walk goes BACKWARDS past
+  injected context and stops at the first assistant message). Both are pinned by fixture files
+  built for exactly that shape.
+  Also pinned: Agent/Task spawns come from the **LAST message only** · `u.model = r.model` when the
+  response carried none is a **MUTATION** of the stored entry (a clone-first port diverges on that
+  shape, so the port takes `get_mut`) · **without** a sessionId filter another session's call inside
+  the fire's index range is counted as one of the fire's `apiCalls` AND disclosed under
+  `concurrent` — `candidates` is session-filtered only when asked, and the test asserts the two
+  runs differ by exactly ONE call · an unsettled tail is EXCLUDED and disclosed, never zero-filled ·
+  `totalTokens` deliberately EXCLUDES the ephemeral 5m/1h split (a breakdown OF the write; adding
+  it double-counts).
+  **PINNED AS-IS, NOT "CORRECTED":** on the no-fire report `coverage.filesScanned` is **0** while
+  its own note says "Scanned 11 body file(s)" — `emptyReport` hardcodes the count and threads only
+  the note, so two fields of one object disagree. My first test asserted the count would be real
+  and it failed against a port that was already byte-exact: **the parity comparison was right and
+  my assertion was wrong.** Recorded so nobody smooths it into a divergence on the field a caller
+  uses to judge whether the answer is trustworthy.
+  **FALSIFIED (5/5 first run):** assistant early-return → `continue` · the UserPromptSubmit
+  injected-context branch disabled · Agent/Task counted over ALL messages · the model adoption
+  removed. Three tests red; the two that stayed green cover paths none of those rules reach.
+- **NEXT (P4x.2d continued): 9 of 53 remain.** Immediate:
+  `forensicsCompare` (253 → `compare_configs`) → `burnInvestigator` (632, also
   `rateLimitReport`'s dep) → `rateLimitReport` (134) → `cacheBreakTimeline` (1,927 → 2 tools:
   `get_cache_break_timeline` + `get_cache_break_causes`, and it also unblocks the `groupBy='cause'`
   branch above) → `subscriptionUsage` (976, **NETWORK** — the oracle MUST stub the Anthropic usage
