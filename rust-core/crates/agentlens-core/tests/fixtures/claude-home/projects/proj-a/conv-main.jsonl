@@ -1,0 +1,25 @@
+{"type":"ai-title","aiTitle":"first title"}
+{"type":"ai-title","aiTitle":"final title"}
+{"type":"agent-name","agentName":"the-agent"}
+{"type":"user","uuid":"u1","cwd":"/repo/here","entrypoint":"cli","message":{"content":"do the thing"},"timestamp":"2026-08-01T10:00:00Z"}
+{"type":"user","uuid":"u1","message":{"content":"do the thing"}}
+{"type":"attachment","attachment":{"type":"file","displayPath":"/a/ctx.md","content":"injected context"}}
+{"type":"attachment","attachment":{"type":"file","displayPath":"/a/empty.md"}}
+{"type":"assistant","timestamp":"2026-08-01T10:00:05Z","isSidechain":true,"message":{"id":"m1","model":"claude-opus-5","usage":{"input_tokens":30,"output_tokens":12,"cache_read_input_tokens":900,"cache_creation_input_tokens":40,"cache_creation":{"ephemeral_5m_input_tokens":10,"ephemeral_1h_input_tokens":30}},"content":[{"type":"thinking","thinking":"considering the options"},{"type":"text","text":"doing it now"},{"type":"tool_use","id":"tu1","name":"Bash","input":{"command":"echo hi"}},{"type":"tool_use","id":"tu2","name":"Read","input":{"file_path":"/x.txt"}}]}}
+{"type":"assistant","message":{"id":"m1","model":"claude-opus-5","usage":{"input_tokens":30,"output_tokens":12,"cache_read_input_tokens":900,"cache_creation_input_tokens":40},"content":[{"type":"text","text":"doing it now"},{"type":"text","text":"and a continuation"}]}}
+{"type":"system","subtype":"turn_duration","durationMs":4200}
+{"type":"user","uuid":"u2","message":{"content":[{"type":"tool_result","tool_use_id":"tu1","content":"hi"},{"type":"tool_result","tool_use_id":"tu2","content":[{"type":"text","text":"file body"}]},{"type":"tool_result","tool_use_id":"nope","content":"orphan output"}]}}
+{"type":"user","uuid":"u3","message":{"content":[{"type":"tool_result","tool_use_id":"tu1","content":"second result"}]}}
+{"type":"user","uuid":"u4","message":{"content":[{"type":"text","text":"follow-up"},{"type":"image"}]}}
+{"type":"user","uuid":"u5","isMeta":true,"message":{"content":"a harness meta note"}}
+{"type":"user","uuid":"u6","isCompactSummary":true,"summary":"the compaction summary"}
+{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"auto","preTokens":120000,"postTokens":30000,"cumulativeDroppedTokens":90000}}
+{"type":"system","subtype":"compact_boundary","compactMetadata":{"preTokens":null}}
+{"type":"system","subtype":"compact_boundary"}
+{"type":"system","subtype":"some_other_thing"}
+{"type":"assistant","message":{"id":"s1","model":"<synthetic>","usage":{"input_tokens":0,"output_tokens":0},"content":[{"type":"text","text":"title noise"}]}}
+{"type":"assistant","message":{"id":"s2","model":"<synthetic>","usage":{"input_tokens":5,"output_tokens":1},"content":[{"type":"text","text":"real synthetic work"}]}}
+{"type":"assistant","message":{"id":"m2","content":[{"type":"text","text":"  "}]}}
+{"type":"mode","mode":"something"}
+{"someField":1}
+{"type":"queue-operation","op":"x"}

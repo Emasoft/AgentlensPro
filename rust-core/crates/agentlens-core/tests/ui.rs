@@ -1329,3 +1329,32 @@ fn history_route_serves_steps_with_diffs_and_the_parent_fallback() {
     assert!(resp.starts_with("HTTP/1.1 200"), "a null history is still 200: {resp}");
     assert!(serde_json::from_str::<serde_json::Value>(body_of(&resp)).unwrap()["history"].is_null());
 }
+
+/// Row 34 over a real socket: the narrative view, its tier split, and the parent fallback.
+#[test]
+fn conversation_route_serves_the_narrative_with_the_ttl_tier_split() {
+    let (_otlp, ui, state) = start_servers();
+    let home = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/claude-home");
+    {
+        let mut st = state.lock().unwrap();
+        st.log_env.vars.clear();
+        st.log_env.vars.insert("CLAUDE_CONFIG_DIR".into(), home.to_string_lossy().into_owned());
+    }
+
+    let v: serde_json::Value = serde_json::from_str(body_of(&get(ui, "/api/conversation/conv-main", ""))).unwrap();
+    let c = &v["conversation"];
+    assert_eq!(c["sessionId"], "conv-main");
+    assert_eq!(c["title"], "final title", "the LATEST ai-title wins: {c}");
+    // The ephemeral 5m/1h split is the signal this parser exists for — 5m and 1h writes bill at
+    // different rates, so losing the split makes cost attribution wrong, not just less detailed.
+    assert_eq!(c["totals"]["usage"]["tier5m"], 10, "{}", c["totals"]);
+    assert_eq!(c["totals"]["usage"]["tier1h"], 30, "{}", c["totals"]);
+    assert!(!c["compactions"].as_array().unwrap().is_empty(), "compact_boundary records are harvested: {c}");
+
+    let v: serde_json::Value = serde_json::from_str(body_of(&get(ui, "/api/conversation/forked?parent=conv-main", ""))).unwrap();
+    assert_eq!(v["conversation"]["reconstructedFrom"], "conv-main");
+
+    let resp = get(ui, "/api/conversation/nothing-here", "");
+    assert!(resp.starts_with("HTTP/1.1 200"), "a null conversation is still 200: {resp}");
+    assert!(serde_json::from_str::<serde_json::Value>(body_of(&resp)).unwrap()["conversation"].is_null());
+}

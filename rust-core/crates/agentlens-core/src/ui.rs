@@ -987,6 +987,24 @@ async fn handle(
         .await
         .map_err(|e| format!("history build join failed: {e}"))?;
         json_response(StatusCode::OK, serde_json::json!({ "history": history.unwrap_or(Value::Null) }).to_string())
+    } else if method == Method::GET && path.starts_with("/api/conversation/") {
+        // Row 34 (server.ts:4271). The narrative reconstruction — same streaming discipline and
+        // same `{x: null}`-is-a-valid-200 contract as rows 32-33.
+        let session_id = percent_decode(&path["/api/conversation/".len()..]);
+        let parent = query_of(&req).get("parent").map(|s| s.to_owned()).filter(|s| !s.is_empty());
+        let env = {
+            let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+            st.log_env.clone()
+        };
+        let conversation = tokio::task::spawn_blocking(move || {
+            crate::conversation::build_conversation(&env, &session_id, parent.as_deref())
+        })
+        .await
+        .map_err(|e| format!("conversation build join failed: {e}"))?;
+        json_response(
+            StatusCode::OK,
+            serde_json::json!({ "conversation": conversation.unwrap_or(Value::Null) }).to_string(),
+        )
     } else if method == Method::GET && path.starts_with("/api/composition-index/") {
         // Row 36 (server.ts:4193). Per-session composition summary, parsed on demand from the live
         // registry (never a background sweep) and LRU-cached. A session with no captured raw bodies

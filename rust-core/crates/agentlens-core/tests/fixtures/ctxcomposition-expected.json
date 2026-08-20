@@ -685,6 +685,7 @@
   "comp-many",
   "comp-own",
   "comp-parent",
+  "conv-main",
   "hist-main",
   "hist-nousage"
  ]

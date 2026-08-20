@@ -36,6 +36,7 @@ pub mod call_body_registry;
 pub mod collector_lifecycle;
 pub mod context_composition;
 pub mod context_history;
+pub mod conversation;
 pub mod context_composition_index;
 pub mod delta_log;
 pub mod derived_cache;
