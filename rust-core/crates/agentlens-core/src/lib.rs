@@ -55,6 +55,7 @@ pub mod mcp_tools;
 pub mod pricing;
 pub mod raw_body_context;
 pub mod request_log;
+pub mod resident_cost;
 pub mod retention_config;
 pub mod runtime_inventory;
 pub mod server_stats;
