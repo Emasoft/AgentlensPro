@@ -1223,7 +1223,8 @@ async fn handle(
                         let payload = crate::mcp_tools::get_window_budget(Some(&status), Some(&account), s("accountId").as_deref());
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
-                    "get_recent_sessions" | "get_workspace_patterns" | "find_relevant_context" | "get_efficiency_report" => {
+                    "get_recent_sessions" | "get_workspace_patterns" | "find_relevant_context" | "get_efficiency_report"
+                    | "get_instruction_suggestions" => {
                         let now = crate::now_ms() as f64;
                         let (sessions, gaps) = {
                             let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
@@ -1251,8 +1252,19 @@ async fn handle(
                             crate::mcp_tools::get_workspace_patterns(&sessions, args.get("days").and_then(Value::as_f64), now)
                         } else if name == "find_relevant_context" {
                             crate::mcp_tools::find_relevant_context(&sessions, s("task").as_deref().unwrap_or(""), now)
-                        } else {
+                        } else if name == "get_efficiency_report" {
                             crate::mcp_tools::get_efficiency_report(&sessions, args.get("days").and_then(Value::as_f64), now)
+                        } else {
+                            // The instruction FILES are read from disk, so the read happens with
+                            // the lock already released (the sessions were cloned out above).
+                            let ws = s("workspace");
+                            let existing = ws
+                                .as_deref()
+                                .map(str::trim)
+                                .filter(|w| !w.is_empty())
+                                .map(crate::instruction_files::read_all_instruction_content)
+                                .unwrap_or_default();
+                            crate::mcp_tools::get_instruction_suggestions(&sessions, ws.as_deref(), &existing)
                         };
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }

@@ -1228,3 +1228,68 @@ pub fn get_efficiency_report(sessions: &[Value], days: Option<f64>, now_ms: f64)
     m.insert("agentRanking".into(), Value::Array(ranked));
     Value::Object(m)
 }
+
+/// `get_instruction_suggestions` — project-scoped, so a missing workspace is an ERROR rather than a
+/// machine-wide answer: instructions that fit one project are usually wrong for another.
+///
+/// THREE DIFFERENT TOP-LEVEL SHAPES, and that is deliberate: `{error}` when the caller gave no
+/// workspace, `{message, suggestions: []}` when there is history but not enough of it, and a BARE
+/// ARRAY on success. The middle one is the one worth keeping — "not enough history yet" is a
+/// different fact from "nothing to suggest", and an empty array alone cannot say which.
+///
+/// The re-projection is not cosmetic: the advisor's suggestion objects carry more fields than the
+/// tool's contract, so passing them through would ship whatever the advisor happens to add next.
+pub fn get_instruction_suggestions(sessions: &[Value], workspace: Option<&str>, existing: &str) -> Value {
+    let Some(ws) = workspace.map(str::trim).filter(|w| !w.is_empty()) else {
+        let mut m = Map::new();
+        m.insert("error".into(), "workspace is required — instruction suggestions are project-scoped.".into());
+        return Value::Object(m);
+    };
+    let filtered: Vec<Value> = sessions
+        .iter()
+        .filter(|s| {
+            let w = s.get("workspace").and_then(Value::as_str);
+            w.unwrap_or("") == ws || w.is_some_and(|w| w.starts_with(ws))
+        })
+        .cloned()
+        .collect();
+    if filtered.len() < 5 {
+        let mut m = Map::new();
+        m.insert(
+            "message".into(),
+            Value::String(format!("Not enough history for workspace \"{ws}\" ({} sessions, need 5).", filtered.len())),
+        );
+        m.insert("suggestions".into(), Value::Array(Vec::new()));
+        return Value::Object(m);
+    }
+    let mut out: Vec<Value> = crate::instruction_advisor::generate_suggestions(&filtered, existing)
+        .iter()
+        .map(|s| project(s, &["id", "category", "title", "evidence", "suggestedText", "targetAgents", "priority"], &[]))
+        .collect();
+
+    // A data-driven cache suggestion when the workspace's prompt cache is under-used: a low hit
+    // rate means the prefix is re-billed as cache_creation at FULL write rate every turn, and the
+    // fix is instruction-level (no mid-session tool/model churn, no volatile per-turn injections).
+    //
+    // Same junk-row exclusion as the efficiency SLI, and it needs >= 5 MEASURED sessions — so a
+    // handful of real sessions among a pile of synthetic empties can neither trigger it nor
+    // suppress it. `avgHit` defaults to 1 with nothing measured, which is the quiet direction.
+    let measured: Vec<&Value> = filtered.iter().filter(|s| is_cache_measured(s)).collect();
+    let avg_hit = if measured.is_empty() { 1.0 } else { measured.iter().map(|s| f(s, "cacheHitRate")).sum::<f64>() / measured.len() as f64 };
+    if measured.len() >= 5 && avg_hit < 0.8 {
+        let mut m = Map::new();
+        m.insert("id".into(), "cache-efficiency".into());
+        m.insert("category".into(), "behavior".into());
+        m.insert("title".into(), "Improve prompt-cache hit rate".into());
+        m.insert("evidence".into(), Value::String(format!(
+            "Average cache-hit rate across {} cache-measured sessions is {}% (target ≥ 80%). A low hit rate re-bills the prompt prefix as cache_creation at full write rate.",
+            measured.len(),
+            fmt_js_num(crate::summarize::helpers::js_math_round(avg_hit * 100.0))
+        )));
+        m.insert("suggestedText".into(), "Avoid mid-session tool-set changes, model switches, and volatile per-turn injections (they break the prefix cache). Run get_cache_break_report for the specific offending blocks and remediations.".into());
+        m.insert("targetAgents".into(), Value::Array(Vec::new()));
+        m.insert("priority".into(), "medium".into());
+        out.push(Value::Object(m));
+    }
+    Value::Array(out)
+}

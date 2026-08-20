@@ -1965,7 +1965,8 @@ export function handleGetEfficiencyReport(
   }
 }
 
-function handleGetInstructionSuggestions(
+// Exported as the Rust port's parity oracle (TRDD-DMWOBWFH P4x.2c).
+export function handleGetInstructionSuggestions(
   sessions: SessionSummaryCard[],
   args: { workspace?: string },
 ) {

@@ -22,7 +22,7 @@ import { createRequire } from 'module'
 import { writeFileSync } from 'fs'
 import { join } from 'path'
 const require = createRequire(import.meta.url)
-const { handleGetRecentSessions, handleGetWorkspacePatterns, handleFindRelevantContext, handleGetEfficiencyReport } = require('../../../../../out/test/mcpServer.js')
+const { handleGetRecentSessions, handleGetWorkspacePatterns, handleFindRelevantContext, handleGetEfficiencyReport, handleGetInstructionSuggestions } = require('../../../../../out/test/mcpServer.js')
 const dir = new URL('.', import.meta.url).pathname
 
 const NOW = 1_760_000_000_000
@@ -104,6 +104,30 @@ const efficiencyCases = [
   { name: 'days-0-is-not-nullish-so-it-filters', args: { days: 0 } },
   { name: 'window-with-nothing-in-it', args: { days: 0.0001 } },
 ]
+// get_instruction_suggestions needs its OWN session set — a workspace with >= 5 sessions — and it
+// must NOT perturb the tables above, so it is a separate array rather than extra cards in `sessions`.
+// The workspace is a path that does not exist, so `readAllInstructionContent` returns '' on BOTH
+// engines and the oracle tests the advisor + the shaper rather than this machine's files.
+const INSTR_WS = '/ws/instructions-fixture-does-not-exist'
+const instrSessions = Array.from({ length: 6 }, (_, i) => card({
+  sessionId: `instr-${i}`, startTime: iso(NOW - (i + 1) * 3_600_000), durationMs: 120_000,
+  workspace: INSTR_WS, model: 'claude-opus-5',
+  inputTokens: 500, outputTokens: 100, cacheReadTokens: 10_000, cacheCreateTokens: 40_000,
+  // Deliberately BELOW the 0.8 target on every card, so the appended cache-efficiency suggestion
+  // fires — it is the one suggestion this shaper adds itself rather than getting from the advisor.
+  cacheHitRate: 0.2, totalLlmCalls: 8, errors: i % 2, userRequest: `task number ${i} in the fixture workspace`,
+  toolCounts: { Bash: 20, Read: 15 }, filesRead: ['x.ts'], filesChanged: ['x.ts'],
+  loopSignals: i < 4 ? [{ type: 'repeated_tool' }] : undefined,
+}))
+const instrCases = [
+  { name: 'no-workspace-is-an-error', sessions: instrSessions, args: {} },
+  { name: 'blank-workspace-is-an-error', sessions: instrSessions, args: { workspace: '   ' } },
+  { name: 'too-little-history', sessions: instrSessions.slice(0, 3), args: { workspace: INSTR_WS } },
+  { name: 'enough-history', sessions: instrSessions, args: { workspace: INSTR_WS } },
+  { name: 'prefix-match-on-workspace', sessions: instrSessions, args: { workspace: '/ws/instructions' } },
+  { name: 'unknown-workspace', sessions: instrSessions, args: { workspace: '/ws/nope' } },
+]
+
 const patternCases = [
   { name: 'all', args: {} },
   { name: 'days-1', args: { days: 1 } },
@@ -129,6 +153,8 @@ try {
     relevantResults: relevantCases.map(c => J(handleFindRelevantContext(sessions, c.args))),
     efficiencyCases: J(efficiencyCases),
     efficiencyResults: efficiencyCases.map(c => J(handleGetEfficiencyReport(sessions, c.args))),
+    instrCases: J(instrCases),
+    instrResults: instrCases.map(c => J(handleGetInstructionSuggestions(c.sessions, c.args))),
   }, null, 1) + '\n')
 } finally {
   Date.now = realNow

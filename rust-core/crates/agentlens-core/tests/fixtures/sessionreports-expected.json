@@ -1671,5 +1671,1121 @@
   {
    "message": "No sessions in the last 0.0001 days."
   }
+ ],
+ "instrCases": [
+  {
+   "name": "no-workspace-is-an-error",
+   "sessions": [
+    {
+     "sessionId": "instr-0",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T07:53:20.000Z",
+     "durationMs": 120000,
+     "inputTokens": 500,
+     "outputTokens": 100,
+     "cacheReadTokens": 10000,
+     "cacheCreateTokens": 40000,
+     "cacheHitRate": 0.2,
+     "totalLlmCalls": 8,
+     "errors": 0,
+     "userRequest": "task number 0 in the fixture workspace",
+     "workspace": "/ws/instructions-fixture-does-not-exist",
+     "toolCounts": {
+      "Bash": 20,
+      "Read": 15
+     },
+     "loopSignals": [
+      {
+       "type": "repeated_tool"
+      }
+     ],
+     "filesRead": [
+      "x.ts"
+     ],
+     "filesChanged": [
+      "x.ts"
+     ],
+     "outcome": "ok"
+    },
+    {
+     "sessionId": "instr-1",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T06:53:20.000Z",
+     "durationMs": 120000,
+     "inputTokens": 500,
+     "outputTokens": 100,
+     "cacheReadTokens": 10000,
+     "cacheCreateTokens": 40000,
+     "cacheHitRate": 0.2,
+     "totalLlmCalls": 8,
+     "errors": 1,
+     "userRequest": "task number 1 in the fixture workspace",
+     "workspace": "/ws/instructions-fixture-does-not-exist",
+     "toolCounts": {
+      "Bash": 20,
+      "Read": 15
+     },
+     "loopSignals": [
+      {
+       "type": "repeated_tool"
+      }
+     ],
+     "filesRead": [
+      "x.ts"
+     ],
+     "filesChanged": [
+      "x.ts"
+     ],
+     "outcome": "ok"
+    },
+    {
+     "sessionId": "instr-2",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T05:53:20.000Z",
+     "durationMs": 120000,
+     "inputTokens": 500,
+     "outputTokens": 100,
+     "cacheReadTokens": 10000,
+     "cacheCreateTokens": 40000,
+     "cacheHitRate": 0.2,
+     "totalLlmCalls": 8,
+     "errors": 0,
+     "userRequest": "task number 2 in the fixture workspace",
+     "workspace": "/ws/instructions-fixture-does-not-exist",
+     "toolCounts": {
+      "Bash": 20,
+      "Read": 15
+     },
+     "loopSignals": [
+      {
+       "type": "repeated_tool"
+      }
+     ],
+     "filesRead": [
+      "x.ts"
+     ],
+     "filesChanged": [
+      "x.ts"
+     ],
+     "outcome": "ok"
+    },
+    {
+     "sessionId": "instr-3",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T04:53:20.000Z",
+     "durationMs": 120000,
+     "inputTokens": 500,
+     "outputTokens": 100,
+     "cacheReadTokens": 10000,
+     "cacheCreateTokens": 40000,
+     "cacheHitRate": 0.2,
+     "totalLlmCalls": 8,
+     "errors": 1,
+     "userRequest": "task number 3 in the fixture workspace",
+     "workspace": "/ws/instructions-fixture-does-not-exist",
+     "toolCounts": {
+      "Bash": 20,
+      "Read": 15
+     },
+     "loopSignals": [
+      {
+       "type": "repeated_tool"
+      }
+     ],
+     "filesRead": [
+      "x.ts"
+     ],
+     "filesChanged": [
+      "x.ts"
+     ],
+     "outcome": "ok"
+    },
+    {
+     "sessionId": "instr-4",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T03:53:20.000Z",
+     "durationMs": 120000,
+     "inputTokens": 500,
+     "outputTokens": 100,
+     "cacheReadTokens": 10000,
+     "cacheCreateTokens": 40000,
+     "cacheHitRate": 0.2,
+     "totalLlmCalls": 8,
+     "errors": 0,
+     "userRequest": "task number 4 in the fixture workspace",
+     "workspace": "/ws/instructions-fixture-does-not-exist",
+     "toolCounts": {
+      "Bash": 20,
+      "Read": 15
+     },
+     "filesRead": [
+      "x.ts"
+     ],
+     "filesChanged": [
+      "x.ts"
+     ],
+     "outcome": "ok"
+    },
+    {
+     "sessionId": "instr-5",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T02:53:20.000Z",
+     "durationMs": 120000,
+     "inputTokens": 500,
+     "outputTokens": 100,
+     "cacheReadTokens": 10000,
+     "cacheCreateTokens": 40000,
+     "cacheHitRate": 0.2,
+     "totalLlmCalls": 8,
+     "errors": 1,
+     "userRequest": "task number 5 in the fixture workspace",
+     "workspace": "/ws/instructions-fixture-does-not-exist",
+     "toolCounts": {
+      "Bash": 20,
+      "Read": 15
+     },
+     "filesRead": [
+      "x.ts"
+     ],
+     "filesChanged": [
+      "x.ts"
+     ],
+     "outcome": "ok"
+    }
+   ],
+   "args": {}
+  },
+  {
+   "name": "blank-workspace-is-an-error",
+   "sessions": [
+    {
+     "sessionId": "instr-0",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T07:53:20.000Z",
+     "durationMs": 120000,
+     "inputTokens": 500,
+     "outputTokens": 100,
+     "cacheReadTokens": 10000,
+     "cacheCreateTokens": 40000,
+     "cacheHitRate": 0.2,
+     "totalLlmCalls": 8,
+     "errors": 0,
+     "userRequest": "task number 0 in the fixture workspace",
+     "workspace": "/ws/instructions-fixture-does-not-exist",
+     "toolCounts": {
+      "Bash": 20,
+      "Read": 15
+     },
+     "loopSignals": [
+      {
+       "type": "repeated_tool"
+      }
+     ],
+     "filesRead": [
+      "x.ts"
+     ],
+     "filesChanged": [
+      "x.ts"
+     ],
+     "outcome": "ok"
+    },
+    {
+     "sessionId": "instr-1",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T06:53:20.000Z",
+     "durationMs": 120000,
+     "inputTokens": 500,
+     "outputTokens": 100,
+     "cacheReadTokens": 10000,
+     "cacheCreateTokens": 40000,
+     "cacheHitRate": 0.2,
+     "totalLlmCalls": 8,
+     "errors": 1,
+     "userRequest": "task number 1 in the fixture workspace",
+     "workspace": "/ws/instructions-fixture-does-not-exist",
+     "toolCounts": {
+      "Bash": 20,
+      "Read": 15
+     },
+     "loopSignals": [
+      {
+       "type": "repeated_tool"
+      }
+     ],
+     "filesRead": [
+      "x.ts"
+     ],
+     "filesChanged": [
+      "x.ts"
+     ],
+     "outcome": "ok"
+    },
+    {
+     "sessionId": "instr-2",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T05:53:20.000Z",
+     "durationMs": 120000,
+     "inputTokens": 500,
+     "outputTokens": 100,
+     "cacheReadTokens": 10000,
+     "cacheCreateTokens": 40000,
+     "cacheHitRate": 0.2,
+     "totalLlmCalls": 8,
+     "errors": 0,
+     "userRequest": "task number 2 in the fixture workspace",
+     "workspace": "/ws/instructions-fixture-does-not-exist",
+     "toolCounts": {
+      "Bash": 20,
+      "Read": 15
+     },
+     "loopSignals": [
+      {
+       "type": "repeated_tool"
+      }
+     ],
+     "filesRead": [
+      "x.ts"
+     ],
+     "filesChanged": [
+      "x.ts"
+     ],
+     "outcome": "ok"
+    },
+    {
+     "sessionId": "instr-3",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T04:53:20.000Z",
+     "durationMs": 120000,
+     "inputTokens": 500,
+     "outputTokens": 100,
+     "cacheReadTokens": 10000,
+     "cacheCreateTokens": 40000,
+     "cacheHitRate": 0.2,
+     "totalLlmCalls": 8,
+     "errors": 1,
+     "userRequest": "task number 3 in the fixture workspace",
+     "workspace": "/ws/instructions-fixture-does-not-exist",
+     "toolCounts": {
+      "Bash": 20,
+      "Read": 15
+     },
+     "loopSignals": [
+      {
+       "type": "repeated_tool"
+      }
+     ],
+     "filesRead": [
+      "x.ts"
+     ],
+     "filesChanged": [
+      "x.ts"
+     ],
+     "outcome": "ok"
+    },
+    {
+     "sessionId": "instr-4",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T03:53:20.000Z",
+     "durationMs": 120000,
+     "inputTokens": 500,
+     "outputTokens": 100,
+     "cacheReadTokens": 10000,
+     "cacheCreateTokens": 40000,
+     "cacheHitRate": 0.2,
+     "totalLlmCalls": 8,
+     "errors": 0,
+     "userRequest": "task number 4 in the fixture workspace",
+     "workspace": "/ws/instructions-fixture-does-not-exist",
+     "toolCounts": {
+      "Bash": 20,
+      "Read": 15
+     },
+     "filesRead": [
+      "x.ts"
+     ],
+     "filesChanged": [
+      "x.ts"
+     ],
+     "outcome": "ok"
+    },
+    {
+     "sessionId": "instr-5",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T02:53:20.000Z",
+     "durationMs": 120000,
+     "inputTokens": 500,
+     "outputTokens": 100,
+     "cacheReadTokens": 10000,
+     "cacheCreateTokens": 40000,
+     "cacheHitRate": 0.2,
+     "totalLlmCalls": 8,
+     "errors": 1,
+     "userRequest": "task number 5 in the fixture workspace",
+     "workspace": "/ws/instructions-fixture-does-not-exist",
+     "toolCounts": {
+      "Bash": 20,
+      "Read": 15
+     },
+     "filesRead": [
+      "x.ts"
+     ],
+     "filesChanged": [
+      "x.ts"
+     ],
+     "outcome": "ok"
+    }
+   ],
+   "args": {
+    "workspace": "   "
+   }
+  },
+  {
+   "name": "too-little-history",
+   "sessions": [
+    {
+     "sessionId": "instr-0",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T07:53:20.000Z",
+     "durationMs": 120000,
+     "inputTokens": 500,
+     "outputTokens": 100,
+     "cacheReadTokens": 10000,
+     "cacheCreateTokens": 40000,
+     "cacheHitRate": 0.2,
+     "totalLlmCalls": 8,
+     "errors": 0,
+     "userRequest": "task number 0 in the fixture workspace",
+     "workspace": "/ws/instructions-fixture-does-not-exist",
+     "toolCounts": {
+      "Bash": 20,
+      "Read": 15
+     },
+     "loopSignals": [
+      {
+       "type": "repeated_tool"
+      }
+     ],
+     "filesRead": [
+      "x.ts"
+     ],
+     "filesChanged": [
+      "x.ts"
+     ],
+     "outcome": "ok"
+    },
+    {
+     "sessionId": "instr-1",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T06:53:20.000Z",
+     "durationMs": 120000,
+     "inputTokens": 500,
+     "outputTokens": 100,
+     "cacheReadTokens": 10000,
+     "cacheCreateTokens": 40000,
+     "cacheHitRate": 0.2,
+     "totalLlmCalls": 8,
+     "errors": 1,
+     "userRequest": "task number 1 in the fixture workspace",
+     "workspace": "/ws/instructions-fixture-does-not-exist",
+     "toolCounts": {
+      "Bash": 20,
+      "Read": 15
+     },
+     "loopSignals": [
+      {
+       "type": "repeated_tool"
+      }
+     ],
+     "filesRead": [
+      "x.ts"
+     ],
+     "filesChanged": [
+      "x.ts"
+     ],
+     "outcome": "ok"
+    },
+    {
+     "sessionId": "instr-2",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T05:53:20.000Z",
+     "durationMs": 120000,
+     "inputTokens": 500,
+     "outputTokens": 100,
+     "cacheReadTokens": 10000,
+     "cacheCreateTokens": 40000,
+     "cacheHitRate": 0.2,
+     "totalLlmCalls": 8,
+     "errors": 0,
+     "userRequest": "task number 2 in the fixture workspace",
+     "workspace": "/ws/instructions-fixture-does-not-exist",
+     "toolCounts": {
+      "Bash": 20,
+      "Read": 15
+     },
+     "loopSignals": [
+      {
+       "type": "repeated_tool"
+      }
+     ],
+     "filesRead": [
+      "x.ts"
+     ],
+     "filesChanged": [
+      "x.ts"
+     ],
+     "outcome": "ok"
+    }
+   ],
+   "args": {
+    "workspace": "/ws/instructions-fixture-does-not-exist"
+   }
+  },
+  {
+   "name": "enough-history",
+   "sessions": [
+    {
+     "sessionId": "instr-0",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T07:53:20.000Z",
+     "durationMs": 120000,
+     "inputTokens": 500,
+     "outputTokens": 100,
+     "cacheReadTokens": 10000,
+     "cacheCreateTokens": 40000,
+     "cacheHitRate": 0.2,
+     "totalLlmCalls": 8,
+     "errors": 0,
+     "userRequest": "task number 0 in the fixture workspace",
+     "workspace": "/ws/instructions-fixture-does-not-exist",
+     "toolCounts": {
+      "Bash": 20,
+      "Read": 15
+     },
+     "loopSignals": [
+      {
+       "type": "repeated_tool"
+      }
+     ],
+     "filesRead": [
+      "x.ts"
+     ],
+     "filesChanged": [
+      "x.ts"
+     ],
+     "outcome": "ok"
+    },
+    {
+     "sessionId": "instr-1",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T06:53:20.000Z",
+     "durationMs": 120000,
+     "inputTokens": 500,
+     "outputTokens": 100,
+     "cacheReadTokens": 10000,
+     "cacheCreateTokens": 40000,
+     "cacheHitRate": 0.2,
+     "totalLlmCalls": 8,
+     "errors": 1,
+     "userRequest": "task number 1 in the fixture workspace",
+     "workspace": "/ws/instructions-fixture-does-not-exist",
+     "toolCounts": {
+      "Bash": 20,
+      "Read": 15
+     },
+     "loopSignals": [
+      {
+       "type": "repeated_tool"
+      }
+     ],
+     "filesRead": [
+      "x.ts"
+     ],
+     "filesChanged": [
+      "x.ts"
+     ],
+     "outcome": "ok"
+    },
+    {
+     "sessionId": "instr-2",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T05:53:20.000Z",
+     "durationMs": 120000,
+     "inputTokens": 500,
+     "outputTokens": 100,
+     "cacheReadTokens": 10000,
+     "cacheCreateTokens": 40000,
+     "cacheHitRate": 0.2,
+     "totalLlmCalls": 8,
+     "errors": 0,
+     "userRequest": "task number 2 in the fixture workspace",
+     "workspace": "/ws/instructions-fixture-does-not-exist",
+     "toolCounts": {
+      "Bash": 20,
+      "Read": 15
+     },
+     "loopSignals": [
+      {
+       "type": "repeated_tool"
+      }
+     ],
+     "filesRead": [
+      "x.ts"
+     ],
+     "filesChanged": [
+      "x.ts"
+     ],
+     "outcome": "ok"
+    },
+    {
+     "sessionId": "instr-3",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T04:53:20.000Z",
+     "durationMs": 120000,
+     "inputTokens": 500,
+     "outputTokens": 100,
+     "cacheReadTokens": 10000,
+     "cacheCreateTokens": 40000,
+     "cacheHitRate": 0.2,
+     "totalLlmCalls": 8,
+     "errors": 1,
+     "userRequest": "task number 3 in the fixture workspace",
+     "workspace": "/ws/instructions-fixture-does-not-exist",
+     "toolCounts": {
+      "Bash": 20,
+      "Read": 15
+     },
+     "loopSignals": [
+      {
+       "type": "repeated_tool"
+      }
+     ],
+     "filesRead": [
+      "x.ts"
+     ],
+     "filesChanged": [
+      "x.ts"
+     ],
+     "outcome": "ok"
+    },
+    {
+     "sessionId": "instr-4",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T03:53:20.000Z",
+     "durationMs": 120000,
+     "inputTokens": 500,
+     "outputTokens": 100,
+     "cacheReadTokens": 10000,
+     "cacheCreateTokens": 40000,
+     "cacheHitRate": 0.2,
+     "totalLlmCalls": 8,
+     "errors": 0,
+     "userRequest": "task number 4 in the fixture workspace",
+     "workspace": "/ws/instructions-fixture-does-not-exist",
+     "toolCounts": {
+      "Bash": 20,
+      "Read": 15
+     },
+     "filesRead": [
+      "x.ts"
+     ],
+     "filesChanged": [
+      "x.ts"
+     ],
+     "outcome": "ok"
+    },
+    {
+     "sessionId": "instr-5",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T02:53:20.000Z",
+     "durationMs": 120000,
+     "inputTokens": 500,
+     "outputTokens": 100,
+     "cacheReadTokens": 10000,
+     "cacheCreateTokens": 40000,
+     "cacheHitRate": 0.2,
+     "totalLlmCalls": 8,
+     "errors": 1,
+     "userRequest": "task number 5 in the fixture workspace",
+     "workspace": "/ws/instructions-fixture-does-not-exist",
+     "toolCounts": {
+      "Bash": 20,
+      "Read": 15
+     },
+     "filesRead": [
+      "x.ts"
+     ],
+     "filesChanged": [
+      "x.ts"
+     ],
+     "outcome": "ok"
+    }
+   ],
+   "args": {
+    "workspace": "/ws/instructions-fixture-does-not-exist"
+   }
+  },
+  {
+   "name": "prefix-match-on-workspace",
+   "sessions": [
+    {
+     "sessionId": "instr-0",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T07:53:20.000Z",
+     "durationMs": 120000,
+     "inputTokens": 500,
+     "outputTokens": 100,
+     "cacheReadTokens": 10000,
+     "cacheCreateTokens": 40000,
+     "cacheHitRate": 0.2,
+     "totalLlmCalls": 8,
+     "errors": 0,
+     "userRequest": "task number 0 in the fixture workspace",
+     "workspace": "/ws/instructions-fixture-does-not-exist",
+     "toolCounts": {
+      "Bash": 20,
+      "Read": 15
+     },
+     "loopSignals": [
+      {
+       "type": "repeated_tool"
+      }
+     ],
+     "filesRead": [
+      "x.ts"
+     ],
+     "filesChanged": [
+      "x.ts"
+     ],
+     "outcome": "ok"
+    },
+    {
+     "sessionId": "instr-1",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T06:53:20.000Z",
+     "durationMs": 120000,
+     "inputTokens": 500,
+     "outputTokens": 100,
+     "cacheReadTokens": 10000,
+     "cacheCreateTokens": 40000,
+     "cacheHitRate": 0.2,
+     "totalLlmCalls": 8,
+     "errors": 1,
+     "userRequest": "task number 1 in the fixture workspace",
+     "workspace": "/ws/instructions-fixture-does-not-exist",
+     "toolCounts": {
+      "Bash": 20,
+      "Read": 15
+     },
+     "loopSignals": [
+      {
+       "type": "repeated_tool"
+      }
+     ],
+     "filesRead": [
+      "x.ts"
+     ],
+     "filesChanged": [
+      "x.ts"
+     ],
+     "outcome": "ok"
+    },
+    {
+     "sessionId": "instr-2",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T05:53:20.000Z",
+     "durationMs": 120000,
+     "inputTokens": 500,
+     "outputTokens": 100,
+     "cacheReadTokens": 10000,
+     "cacheCreateTokens": 40000,
+     "cacheHitRate": 0.2,
+     "totalLlmCalls": 8,
+     "errors": 0,
+     "userRequest": "task number 2 in the fixture workspace",
+     "workspace": "/ws/instructions-fixture-does-not-exist",
+     "toolCounts": {
+      "Bash": 20,
+      "Read": 15
+     },
+     "loopSignals": [
+      {
+       "type": "repeated_tool"
+      }
+     ],
+     "filesRead": [
+      "x.ts"
+     ],
+     "filesChanged": [
+      "x.ts"
+     ],
+     "outcome": "ok"
+    },
+    {
+     "sessionId": "instr-3",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T04:53:20.000Z",
+     "durationMs": 120000,
+     "inputTokens": 500,
+     "outputTokens": 100,
+     "cacheReadTokens": 10000,
+     "cacheCreateTokens": 40000,
+     "cacheHitRate": 0.2,
+     "totalLlmCalls": 8,
+     "errors": 1,
+     "userRequest": "task number 3 in the fixture workspace",
+     "workspace": "/ws/instructions-fixture-does-not-exist",
+     "toolCounts": {
+      "Bash": 20,
+      "Read": 15
+     },
+     "loopSignals": [
+      {
+       "type": "repeated_tool"
+      }
+     ],
+     "filesRead": [
+      "x.ts"
+     ],
+     "filesChanged": [
+      "x.ts"
+     ],
+     "outcome": "ok"
+    },
+    {
+     "sessionId": "instr-4",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T03:53:20.000Z",
+     "durationMs": 120000,
+     "inputTokens": 500,
+     "outputTokens": 100,
+     "cacheReadTokens": 10000,
+     "cacheCreateTokens": 40000,
+     "cacheHitRate": 0.2,
+     "totalLlmCalls": 8,
+     "errors": 0,
+     "userRequest": "task number 4 in the fixture workspace",
+     "workspace": "/ws/instructions-fixture-does-not-exist",
+     "toolCounts": {
+      "Bash": 20,
+      "Read": 15
+     },
+     "filesRead": [
+      "x.ts"
+     ],
+     "filesChanged": [
+      "x.ts"
+     ],
+     "outcome": "ok"
+    },
+    {
+     "sessionId": "instr-5",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T02:53:20.000Z",
+     "durationMs": 120000,
+     "inputTokens": 500,
+     "outputTokens": 100,
+     "cacheReadTokens": 10000,
+     "cacheCreateTokens": 40000,
+     "cacheHitRate": 0.2,
+     "totalLlmCalls": 8,
+     "errors": 1,
+     "userRequest": "task number 5 in the fixture workspace",
+     "workspace": "/ws/instructions-fixture-does-not-exist",
+     "toolCounts": {
+      "Bash": 20,
+      "Read": 15
+     },
+     "filesRead": [
+      "x.ts"
+     ],
+     "filesChanged": [
+      "x.ts"
+     ],
+     "outcome": "ok"
+    }
+   ],
+   "args": {
+    "workspace": "/ws/instructions"
+   }
+  },
+  {
+   "name": "unknown-workspace",
+   "sessions": [
+    {
+     "sessionId": "instr-0",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T07:53:20.000Z",
+     "durationMs": 120000,
+     "inputTokens": 500,
+     "outputTokens": 100,
+     "cacheReadTokens": 10000,
+     "cacheCreateTokens": 40000,
+     "cacheHitRate": 0.2,
+     "totalLlmCalls": 8,
+     "errors": 0,
+     "userRequest": "task number 0 in the fixture workspace",
+     "workspace": "/ws/instructions-fixture-does-not-exist",
+     "toolCounts": {
+      "Bash": 20,
+      "Read": 15
+     },
+     "loopSignals": [
+      {
+       "type": "repeated_tool"
+      }
+     ],
+     "filesRead": [
+      "x.ts"
+     ],
+     "filesChanged": [
+      "x.ts"
+     ],
+     "outcome": "ok"
+    },
+    {
+     "sessionId": "instr-1",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T06:53:20.000Z",
+     "durationMs": 120000,
+     "inputTokens": 500,
+     "outputTokens": 100,
+     "cacheReadTokens": 10000,
+     "cacheCreateTokens": 40000,
+     "cacheHitRate": 0.2,
+     "totalLlmCalls": 8,
+     "errors": 1,
+     "userRequest": "task number 1 in the fixture workspace",
+     "workspace": "/ws/instructions-fixture-does-not-exist",
+     "toolCounts": {
+      "Bash": 20,
+      "Read": 15
+     },
+     "loopSignals": [
+      {
+       "type": "repeated_tool"
+      }
+     ],
+     "filesRead": [
+      "x.ts"
+     ],
+     "filesChanged": [
+      "x.ts"
+     ],
+     "outcome": "ok"
+    },
+    {
+     "sessionId": "instr-2",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T05:53:20.000Z",
+     "durationMs": 120000,
+     "inputTokens": 500,
+     "outputTokens": 100,
+     "cacheReadTokens": 10000,
+     "cacheCreateTokens": 40000,
+     "cacheHitRate": 0.2,
+     "totalLlmCalls": 8,
+     "errors": 0,
+     "userRequest": "task number 2 in the fixture workspace",
+     "workspace": "/ws/instructions-fixture-does-not-exist",
+     "toolCounts": {
+      "Bash": 20,
+      "Read": 15
+     },
+     "loopSignals": [
+      {
+       "type": "repeated_tool"
+      }
+     ],
+     "filesRead": [
+      "x.ts"
+     ],
+     "filesChanged": [
+      "x.ts"
+     ],
+     "outcome": "ok"
+    },
+    {
+     "sessionId": "instr-3",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T04:53:20.000Z",
+     "durationMs": 120000,
+     "inputTokens": 500,
+     "outputTokens": 100,
+     "cacheReadTokens": 10000,
+     "cacheCreateTokens": 40000,
+     "cacheHitRate": 0.2,
+     "totalLlmCalls": 8,
+     "errors": 1,
+     "userRequest": "task number 3 in the fixture workspace",
+     "workspace": "/ws/instructions-fixture-does-not-exist",
+     "toolCounts": {
+      "Bash": 20,
+      "Read": 15
+     },
+     "loopSignals": [
+      {
+       "type": "repeated_tool"
+      }
+     ],
+     "filesRead": [
+      "x.ts"
+     ],
+     "filesChanged": [
+      "x.ts"
+     ],
+     "outcome": "ok"
+    },
+    {
+     "sessionId": "instr-4",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T03:53:20.000Z",
+     "durationMs": 120000,
+     "inputTokens": 500,
+     "outputTokens": 100,
+     "cacheReadTokens": 10000,
+     "cacheCreateTokens": 40000,
+     "cacheHitRate": 0.2,
+     "totalLlmCalls": 8,
+     "errors": 0,
+     "userRequest": "task number 4 in the fixture workspace",
+     "workspace": "/ws/instructions-fixture-does-not-exist",
+     "toolCounts": {
+      "Bash": 20,
+      "Read": 15
+     },
+     "filesRead": [
+      "x.ts"
+     ],
+     "filesChanged": [
+      "x.ts"
+     ],
+     "outcome": "ok"
+    },
+    {
+     "sessionId": "instr-5",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T02:53:20.000Z",
+     "durationMs": 120000,
+     "inputTokens": 500,
+     "outputTokens": 100,
+     "cacheReadTokens": 10000,
+     "cacheCreateTokens": 40000,
+     "cacheHitRate": 0.2,
+     "totalLlmCalls": 8,
+     "errors": 1,
+     "userRequest": "task number 5 in the fixture workspace",
+     "workspace": "/ws/instructions-fixture-does-not-exist",
+     "toolCounts": {
+      "Bash": 20,
+      "Read": 15
+     },
+     "filesRead": [
+      "x.ts"
+     ],
+     "filesChanged": [
+      "x.ts"
+     ],
+     "outcome": "ok"
+    }
+   ],
+   "args": {
+    "workspace": "/ws/nope"
+   }
+  }
+ ],
+ "instrResults": [
+  {
+   "error": "workspace is required — instruction suggestions are project-scoped."
+  },
+  {
+   "error": "workspace is required — instruction suggestions are project-scoped."
+  },
+  {
+   "message": "Not enough history for workspace \"/ws/instructions-fixture-does-not-exist\" (3 sessions, need 5).",
+   "suggestions": []
+  },
+  [
+   {
+    "id": "hot_file:x_ts",
+    "category": "context",
+    "title": "Add x.ts to instruction file",
+    "evidence": "Read in 6 of 6 sessions (100%). Each agent discovery adds ~2–3 turns.",
+    "suggestedText": "Always read `x.ts` before editing this area — it contains x definitions.",
+    "targetAgents": [
+     "claude_code",
+     "codex"
+    ],
+    "priority": "high"
+   },
+   {
+    "id": "cache-efficiency",
+    "category": "behavior",
+    "title": "Improve prompt-cache hit rate",
+    "evidence": "Average cache-hit rate across 6 cache-measured sessions is 20% (target ≥ 80%). A low hit rate re-bills the prompt prefix as cache_creation at full write rate.",
+    "suggestedText": "Avoid mid-session tool-set changes, model switches, and volatile per-turn injections (they break the prefix cache). Run get_cache_break_report for the specific offending blocks and remediations.",
+    "targetAgents": [],
+    "priority": "medium"
+   }
+  ],
+  [
+   {
+    "id": "hot_file:x_ts",
+    "category": "context",
+    "title": "Add x.ts to instruction file",
+    "evidence": "Read in 6 of 6 sessions (100%). Each agent discovery adds ~2–3 turns.",
+    "suggestedText": "Always read `x.ts` before editing this area — it contains x definitions.",
+    "targetAgents": [
+     "claude_code",
+     "codex"
+    ],
+    "priority": "high"
+   },
+   {
+    "id": "cache-efficiency",
+    "category": "behavior",
+    "title": "Improve prompt-cache hit rate",
+    "evidence": "Average cache-hit rate across 6 cache-measured sessions is 20% (target ≥ 80%). A low hit rate re-bills the prompt prefix as cache_creation at full write rate.",
+    "suggestedText": "Avoid mid-session tool-set changes, model switches, and volatile per-turn injections (they break the prefix cache). Run get_cache_break_report for the specific offending blocks and remediations.",
+    "targetAgents": [],
+    "priority": "medium"
+   }
+  ],
+  {
+   "message": "Not enough history for workspace \"/ws/nope\" (0 sessions, need 5).",
+   "suggestions": []
+  }
  ]
 }

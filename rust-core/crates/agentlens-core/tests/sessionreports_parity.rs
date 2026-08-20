@@ -217,3 +217,70 @@ fn the_agent_ranking_needs_two_sessions_and_ranks_cheapest_first() {
     // The fixture must actually contain a pair that ranks, or this proves nothing.
     assert!(!ranking.is_empty(), "{got}");
 }
+
+#[test]
+fn get_instruction_suggestions_reproduces_the_ts_oracle_exactly() {
+    let o = oracle();
+    for (case, exp) in o["instrCases"].as_array().unwrap().iter().zip(o["instrResults"].as_array().unwrap()) {
+        let name = case["name"].as_str().unwrap();
+        let sessions = case["sessions"].as_array().unwrap();
+        let ws = case["args"].get("workspace").and_then(Value::as_str);
+        // The fixture workspace does not exist, so both engines read '' — the oracle tests the
+        // advisor and the shaper, not this machine's instruction files.
+        let existing = ws
+            .map(str::trim)
+            .filter(|w| !w.is_empty())
+            .map(agentlens_core::instruction_files::read_all_instruction_content)
+            .unwrap_or_default();
+        let got = agentlens_core::mcp_tools::get_instruction_suggestions(sessions, ws, &existing);
+        match (got.as_array(), exp.as_array()) {
+            (Some(g), Some(e)) => {
+                assert_eq!(g.len(), e.len(), "{name}: suggestion count");
+                for (i, (gv, ev)) in g.iter().zip(e).enumerate() {
+                    assert_eq!(keys(gv), keys(ev), "{name}[{i}]: key set/ORDER differs");
+                    assert_eq!(gv, ev, "{name}[{i}]");
+                }
+            }
+            _ => {
+                assert_eq!(keys(&got), keys(exp), "{name}: key set/ORDER differs");
+                assert_eq!(got, *exp, "{name}");
+            }
+        }
+    }
+}
+
+/// THREE different top-level SHAPES, and each says something the others cannot. `{error}` means the
+/// caller gave no workspace (suggestions are project-scoped — machine-wide advice is usually wrong
+/// advice). `{message, suggestions: []}` means there IS a workspace but not enough history yet — a
+/// different fact from "nothing to suggest", which a bare empty array cannot distinguish. A bare
+/// ARRAY means real suggestions.
+#[test]
+fn the_three_instruction_shapes_stay_tellable_apart() {
+    let o = oracle();
+    let cases = o["instrCases"].as_array().unwrap();
+    let pick = |n: &str| -> &Value { cases.iter().find(|c| c["name"] == n).unwrap() };
+    let run = |c: &Value| {
+        let ws = c["args"].get("workspace").and_then(Value::as_str);
+        agentlens_core::mcp_tools::get_instruction_suggestions(c["sessions"].as_array().unwrap(), ws, "")
+    };
+    let no_ws = run(pick("no-workspace-is-an-error"));
+    assert!(no_ws.get("error").is_some(), "{no_ws}");
+    let thin = run(pick("too-little-history"));
+    assert!(thin.get("message").is_some() && thin["suggestions"].as_array().unwrap().is_empty(), "{thin}");
+    assert!(thin.get("error").is_none(), "not enough history is not an error: {thin}");
+    let ok = run(pick("enough-history"));
+    assert!(ok.is_array(), "success is a BARE array: {ok}");
+
+    // The appended cache-efficiency suggestion is the shaper's own, not the advisor's — and it
+    // needs >= 5 CACHE-MEASURED sessions, so a pile of junk rows can neither trigger nor suppress
+    // it. The fixture is all below the 0.8 target, so it must be present.
+    let ids: Vec<&str> = ok.as_array().unwrap().iter().filter_map(|s| s["id"].as_str()).collect();
+    assert!(ids.contains(&"cache-efficiency"), "{ids:?}");
+    for s in ok.as_array().unwrap() {
+        assert_eq!(
+            keys(s),
+            vec!["id", "category", "title", "evidence", "suggestedText", "targetAgents", "priority"],
+            "every suggestion is RE-PROJECTED to the tool's own 7 fields: {s}"
+        );
+    }
+}
