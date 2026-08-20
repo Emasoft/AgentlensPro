@@ -28,6 +28,7 @@ use serde_json::Value;
 use agentlens_ingest::IngestState;
 use agentlens_spanstore::writer::SpanStoreWriter;
 
+pub mod account_burners;
 pub mod account_registry;
 pub mod account_state_timeline;
 pub mod body_archive;

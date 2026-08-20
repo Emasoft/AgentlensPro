@@ -1,0 +1,8 @@
+{"ts":1754035200000,"accountId":"aaaaaaaa-1111-1111-1111-111111111111","email":"one@example.test","plan":"Max 20x"}
+{"ts":1754038800000,"accountId":"aaaaaaaa-1111-1111-1111-111111111111","email":"one@example.test","plan":"Max 20x"}
+{"ts":1754042400000,"accountId":"bbbbbbbb-2222-2222-2222-222222222222","email":"two@example.test","plan":"Max 20x"}
+{"ts":1754046000000,"accountId":null}
+{"ts":1754049600000,"accountId":"aaaaaaaa-1111-1111-1111-111111111111","email":"","plan":"Max 20x"}
+not json at all
+{"ts":"not-a-number","accountId":"cccccccc-3333-3333-3333-333333333333"}
+{"accountId":"dddddddd-4444-4444-4444-444444444444"}

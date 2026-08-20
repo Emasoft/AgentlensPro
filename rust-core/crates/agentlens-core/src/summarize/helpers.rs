@@ -494,6 +494,18 @@ pub fn to_locale_en(n: f64) -> String {
     format!("{}{}", if neg { "-" } else { "" }, parts.join(","))
 }
 
+/// `x.toFixed(d)` as a STRING — which is NOT `fmt_js_num(js_to_fixed_num(..))`: toFixed PADS
+/// trailing zeros, so `(1.5).toFixed(2)` is "1.50" while the numeric round-trip prints "1.5".
+/// `js_to_fixed_num` does the (exact, tie-aware) rounding; `{:.d}` only renders the already-rounded
+/// value. The `-0` guard is load-bearing: JS `(-0).toFixed(2)` is "0.00" while Rust's formatter
+/// prints "-0.00", and a share/fill percentage that rounds down to zero from a tiny negative is
+/// exactly where that shows up.
+pub fn js_to_fixed_str(x: f64, digits: usize) -> String {
+    let v = js_to_fixed_num(x, digits as u32);
+    let v = if v == 0.0 { 0.0 } else { v };
+    format!("{:.*}", digits, v)
+}
+
 /// `+x.toFixed(f)` — JS toFixed read back as a number. The spec rounds on the EXACT decimal
 /// expansion of the double (nearest n/10^f, ties to the LARGER n), which neither `(x*p).round()`
 /// nor Rust's `{:.f}` reproduces: the float product can land on the wrong side of the half

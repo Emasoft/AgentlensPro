@@ -49,14 +49,7 @@ fn is_cold_child(c: &Value) -> bool {
     f(c, "cacheCreateTokens") >= COLD_CACHE_CREATE_MIN && f(c, "cacheReadTokens") <= f(c, "cacheCreateTokens") * NEAR_ZERO_READ_RATIO
 }
 
-/// `x.toFixed(d)` as a STRING — which is NOT `fmt_js_num(js_to_fixed_num(..))`: toFixed PADS
-/// trailing zeros, so `(1.5).toFixed(2)` is "1.50" while the numeric round-trip prints "1.5".
-/// `js_to_fixed_num` does the (exact, tie-aware) rounding; `{:.d}` only renders the already-rounded
-/// value. Local because only these two formatters need it — and both are called on strictly
-/// positive values, so JS's `(-0).toFixed(2) === "0.00"` (Rust would print "-0.00") is unreachable.
-fn js_to_fixed_str(x: f64, digits: usize) -> String {
-    format!("{:.*}", digits, js_to_fixed_num(x, digits as u32))
-}
+use crate::summarize::helpers::js_to_fixed_str;
 
 fn fmt_tokens(n: f64) -> String {
     if n >= 1_000_000.0 {

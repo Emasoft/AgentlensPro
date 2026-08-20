@@ -1,0 +1,2178 @@
+{
+  "nowMs": 1754056800000,
+  "segmentCases": {
+    "nullClosesTheOpenSegment": {
+      "records": [
+        {
+          "ts": 1754035200000,
+          "accountId": "a",
+          "email": "a@example.test",
+          "plan": "P"
+        },
+        {
+          "ts": 1754038800000,
+          "accountId": null
+        },
+        {
+          "ts": 1754042400000,
+          "accountId": "b",
+          "email": "b@example.test",
+          "plan": "P"
+        }
+      ],
+      "out": [
+        {
+          "accountId": "a",
+          "email": "a@example.test",
+          "plan": "P",
+          "startMs": 1754035200000,
+          "endMs": 1754038800000
+        },
+        {
+          "accountId": "b",
+          "email": "b@example.test",
+          "plan": "P",
+          "startMs": 1754042400000,
+          "endMs": null
+        }
+      ]
+    },
+    "sameAccountReRecorded": {
+      "records": [
+        {
+          "ts": 1754035200000,
+          "accountId": "a",
+          "plan": "P"
+        },
+        {
+          "ts": 1754038800000,
+          "accountId": "a",
+          "plan": "Q"
+        },
+        {
+          "ts": 1754042400000,
+          "accountId": "b"
+        }
+      ],
+      "out": [
+        {
+          "accountId": "a",
+          "email": null,
+          "plan": "P",
+          "startMs": 1754035200000,
+          "endMs": 1754042400000
+        },
+        {
+          "accountId": "b",
+          "email": null,
+          "plan": null,
+          "startMs": 1754042400000,
+          "endMs": null
+        }
+      ]
+    },
+    "outOfOrder": {
+      "records": [
+        {
+          "ts": 1754042400000,
+          "accountId": "b"
+        },
+        {
+          "ts": 1754035200000,
+          "accountId": "a"
+        },
+        {
+          "ts": 1754038800000,
+          "accountId": null
+        }
+      ],
+      "out": [
+        {
+          "accountId": "a",
+          "email": null,
+          "plan": null,
+          "startMs": 1754035200000,
+          "endMs": 1754038800000
+        },
+        {
+          "accountId": "b",
+          "email": null,
+          "plan": null,
+          "startMs": 1754042400000,
+          "endMs": null
+        }
+      ]
+    },
+    "empty": {
+      "records": [],
+      "out": []
+    },
+    "onlyOne": {
+      "records": [
+        {
+          "ts": 1754035200000,
+          "accountId": "a",
+          "email": "a@example.test",
+          "plan": "P"
+        }
+      ],
+      "out": [
+        {
+          "accountId": "a",
+          "email": "a@example.test",
+          "plan": "P",
+          "startMs": 1754035200000,
+          "endMs": null
+        }
+      ]
+    }
+  },
+  "readSegments": [
+    {
+      "accountId": "aaaaaaaa-1111-1111-1111-111111111111",
+      "email": "one@example.test",
+      "plan": "Max 20x",
+      "startMs": 1754035200000,
+      "endMs": 1754042400000
+    },
+    {
+      "accountId": "bbbbbbbb-2222-2222-2222-222222222222",
+      "email": "two@example.test",
+      "plan": "Max 20x",
+      "startMs": 1754042400000,
+      "endMs": 1754046000000
+    },
+    {
+      "accountId": "aaaaaaaa-1111-1111-1111-111111111111",
+      "email": "",
+      "plan": "Max 20x",
+      "startMs": 1754049600000,
+      "endMs": null
+    }
+  ],
+  "readMissingFile": [],
+  "targets": {
+    "current": {
+      "accountId": "aaaaaaaa-1111-1111-1111-111111111111",
+      "email": "one@example.test",
+      "plan": "Max 20x",
+      "segments": [
+        {
+          "accountId": "aaaaaaaa-1111-1111-1111-111111111111",
+          "email": "one@example.test",
+          "plan": "Max 20x",
+          "startMs": 1754035200000,
+          "endMs": 1754042400000
+        },
+        {
+          "accountId": "aaaaaaaa-1111-1111-1111-111111111111",
+          "email": "",
+          "plan": "Max 20x",
+          "startMs": 1754049600000,
+          "endMs": null
+        }
+      ],
+      "lastActiveMs": 1754056800000,
+      "isCurrent": true
+    },
+    "previous": {
+      "accountId": "bbbbbbbb-2222-2222-2222-222222222222",
+      "email": "two@example.test",
+      "plan": "Max 20x",
+      "segments": [
+        {
+          "accountId": "bbbbbbbb-2222-2222-2222-222222222222",
+          "email": "two@example.test",
+          "plan": "Max 20x",
+          "startMs": 1754042400000,
+          "endMs": 1754046000000
+        }
+      ],
+      "lastActiveMs": 1754046000000,
+      "isCurrent": false
+    },
+    "aaaaaaaa": {
+      "accountId": "aaaaaaaa-1111-1111-1111-111111111111",
+      "email": "one@example.test",
+      "plan": "Max 20x",
+      "segments": [
+        {
+          "accountId": "aaaaaaaa-1111-1111-1111-111111111111",
+          "email": "one@example.test",
+          "plan": "Max 20x",
+          "startMs": 1754035200000,
+          "endMs": 1754042400000
+        },
+        {
+          "accountId": "aaaaaaaa-1111-1111-1111-111111111111",
+          "email": "",
+          "plan": "Max 20x",
+          "startMs": 1754049600000,
+          "endMs": null
+        }
+      ],
+      "lastActiveMs": 1754056800000,
+      "isCurrent": true
+    },
+    "two@example.test": {
+      "accountId": "bbbbbbbb-2222-2222-2222-222222222222",
+      "email": "two@example.test",
+      "plan": "Max 20x",
+      "segments": [
+        {
+          "accountId": "bbbbbbbb-2222-2222-2222-222222222222",
+          "email": "two@example.test",
+          "plan": "Max 20x",
+          "startMs": 1754042400000,
+          "endMs": 1754046000000
+        }
+      ],
+      "lastActiveMs": 1754046000000,
+      "isCurrent": false
+    },
+    "TWO@EXAMPLE.TEST": {
+      "accountId": "bbbbbbbb-2222-2222-2222-222222222222",
+      "email": "two@example.test",
+      "plan": "Max 20x",
+      "segments": [
+        {
+          "accountId": "bbbbbbbb-2222-2222-2222-222222222222",
+          "email": "two@example.test",
+          "plan": "Max 20x",
+          "startMs": 1754042400000,
+          "endMs": 1754046000000
+        }
+      ],
+      "lastActiveMs": 1754046000000,
+      "isCurrent": false
+    },
+    "nope": null,
+    "  CURRENT  ": {
+      "accountId": "aaaaaaaa-1111-1111-1111-111111111111",
+      "email": "one@example.test",
+      "plan": "Max 20x",
+      "segments": [
+        {
+          "accountId": "aaaaaaaa-1111-1111-1111-111111111111",
+          "email": "one@example.test",
+          "plan": "Max 20x",
+          "startMs": 1754035200000,
+          "endMs": 1754042400000
+        },
+        {
+          "accountId": "aaaaaaaa-1111-1111-1111-111111111111",
+          "email": "",
+          "plan": "Max 20x",
+          "startMs": 1754049600000,
+          "endMs": null
+        }
+      ],
+      "lastActiveMs": 1754056800000,
+      "isCurrent": true
+    }
+  },
+  "intervals": {
+    "last": {
+      "untilMs": 1754056800000
+    },
+    "current": {
+      "untilMs": 1754056800000
+    },
+    "now": {
+      "untilMs": 1754056800000
+    },
+    "  LAST  ": {
+      "untilMs": 1754056800000
+    },
+    "2026-08-01T11:00:00.000Z": {
+      "untilMs": 1785582000000
+    },
+    "not-a-date": {
+      "untilMs": 1754056800000,
+      "error": "Unparseable interval 'not-a-date' — expected 'last', 'current', or an ISO-8601 date."
+    },
+    "": {
+      "untilMs": 1754056800000,
+      "error": "Unparseable interval '' — expected 'last', 'current', or an ISO-8601 date."
+    }
+  },
+  "knownAccounts": "aaaaaaaa (one@example.test), bbbbbbbb (two@example.test), aaaaaaaa ()",
+  "events": [
+    {
+      "ts": 1754035800000,
+      "sessionId": "s1",
+      "tokens": 120000,
+      "costUsd": 3.5,
+      "inputTokens": 1000,
+      "outputTokens": 500,
+      "cacheReadTokens": 100000,
+      "cacheCreateTokens": 18500,
+      "workspace": "/h/user/Code/alpha",
+      "attribution": "main"
+    },
+    {
+      "ts": 1754040600000,
+      "sessionId": "s1",
+      "tokens": 60000,
+      "costUsd": 1.25,
+      "inputTokens": 500,
+      "outputTokens": 200,
+      "cacheReadTokens": 50000,
+      "cacheCreateTokens": 9300,
+      "workspace": "/h/user/Code/alpha",
+      "attribution": "agent:worker"
+    },
+    {
+      "ts": 1754041500000,
+      "sessionId": "s2",
+      "tokens": 40000,
+      "costUsd": 0.9,
+      "inputTokens": 200,
+      "outputTokens": 100,
+      "cacheReadTokens": 35000,
+      "cacheCreateTokens": 4700,
+      "workspace": "/w/beta"
+    },
+    {
+      "ts": 1754043300000,
+      "sessionId": "s3",
+      "tokens": 90000,
+      "costUsd": 2.1,
+      "inputTokens": 400,
+      "outputTokens": 0,
+      "cacheReadTokens": 80000,
+      "cacheCreateTokens": 9600,
+      "workspace": "/h/user/Code/alpha"
+    },
+    {
+      "ts": 1754047200000,
+      "sessionId": "s4",
+      "tokens": 55000,
+      "costUsd": 1.1,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "cacheReadTokens": 50000,
+      "cacheCreateTokens": 5000,
+      "workspace": "/w/gamma"
+    },
+    {
+      "ts": 1754051400000,
+      "sessionId": "s1",
+      "tokens": 30000,
+      "costUsd": 0.75,
+      "inputTokens": 300,
+      "outputTokens": 150,
+      "cacheReadTokens": 25000,
+      "cacheCreateTokens": 4550,
+      "workspace": "/h/user/Code/alpha",
+      "attribution": "skill:ponytail"
+    },
+    {
+      "ts": 1754053200000,
+      "sessionId": "s5",
+      "tokens": 12000,
+      "costUsd": 0.3,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "cacheReadTokens": 10000,
+      "cacheCreateTokens": 2000
+    },
+    {
+      "ts": 1754055000000,
+      "sessionId": "s6",
+      "tokens": 100000,
+      "costUsd": 0.4,
+      "inputTokens": 1000,
+      "outputTokens": 0,
+      "cacheReadTokens": 0,
+      "cacheCreateTokens": 0,
+      "workspace": "/w/beta"
+    }
+  ],
+  "cards": [
+    {
+      "sessionId": "s1",
+      "workspace": "/h/user/Code/alpha",
+      "source": "claude_code",
+      "model": "claude-opus-5"
+    },
+    {
+      "sessionId": "s2",
+      "workspace": "/w/beta",
+      "source": "claude_code",
+      "model": "claude-sonnet-5"
+    },
+    {
+      "sessionId": "s3",
+      "workspace": "/h/user/Code/alpha",
+      "source": "claude_code",
+      "model": "claude-opus-5"
+    },
+    {
+      "sessionId": "s4",
+      "workspace": "/w/gamma",
+      "source": "claude_code"
+    },
+    {
+      "sessionId": "s6",
+      "workspace": "/w/beta",
+      "source": "claude_code",
+      "model": "claude-opus-5"
+    }
+  ],
+  "weights": [
+    36625,
+    18125,
+    10075,
+    20400,
+    11250,
+    9237.5,
+    3500,
+    100000
+  ],
+  "fmtTok": [
+    [
+      0,
+      "0k"
+    ],
+    [
+      1,
+      "0k"
+    ],
+    [
+      500,
+      "1k"
+    ],
+    [
+      999,
+      "1k"
+    ],
+    [
+      1000,
+      "1k"
+    ],
+    [
+      1500,
+      "2k"
+    ],
+    [
+      999999,
+      "1000k"
+    ],
+    [
+      1000000,
+      "1.0M"
+    ],
+    [
+      12345678,
+      "12.3M"
+    ],
+    [
+      1200000000,
+      "1.20B"
+    ]
+  ],
+  "windowEvents": [
+    1754035800000,
+    1754040600000,
+    1754041500000,
+    1754051400000,
+    1754053200000,
+    1754055000000
+  ],
+  "capacityOwn": {
+    "tokens": 5000000,
+    "costUsd": 40,
+    "source": "observed",
+    "proxyAccountId": null,
+    "observedAt": "2026-07-30T00:00:00.000Z"
+  },
+  "capacityProxy": {
+    "tokens": 2000000,
+    "costUsd": 20,
+    "source": "same-plan-proxy",
+    "proxyAccountId": "cccccccc-3333-3333-3333-333333333333",
+    "observedAt": "2026-07-29T00:00:00.000Z"
+  },
+  "capacityNone": {
+    "tokens": null,
+    "costUsd": null,
+    "source": null,
+    "proxyAccountId": null,
+    "observedAt": null
+  },
+  "observedOwn": {
+    "aaaaaaaa-1111-1111-1111-111111111111": {
+      "window5hTokens": 5000000,
+      "window7dTokens": 40000000,
+      "window5hCostUsd": 40,
+      "window7dCostUsd": 300,
+      "observedAt": "2026-07-30T00:00:00.000Z"
+    }
+  },
+  "observedProxy": {
+    "bbbbbbbb-2222-2222-2222-222222222222": {
+      "window5hTokens": 1000000,
+      "window7dTokens": 9000000,
+      "window5hCostUsd": 10,
+      "window7dCostUsd": 90,
+      "observedAt": "2026-07-01T00:00:00.000Z"
+    },
+    "cccccccc-3333-3333-3333-333333333333": {
+      "window5hTokens": 2000000,
+      "window7dTokens": 8000000,
+      "window5hCostUsd": 20,
+      "window7dCostUsd": 80,
+      "observedAt": "2026-07-29T00:00:00.000Z"
+    }
+  },
+  "observedTokensOnly": {
+    "aaaaaaaa-1111-1111-1111-111111111111": {
+      "window5hTokens": 500000,
+      "window7dTokens": 4000000,
+      "window5hCostUsd": null,
+      "window7dCostUsd": null,
+      "observedAt": "2026-07-30T00:00:00.000Z"
+    }
+  },
+  "proxySegments": [
+    {
+      "accountId": "aaaaaaaa-1111-1111-1111-111111111111",
+      "email": "one@example.test",
+      "plan": "Max 20x",
+      "startMs": 1754035200000,
+      "endMs": 1754042400000
+    },
+    {
+      "accountId": "bbbbbbbb-2222-2222-2222-222222222222",
+      "email": "two@example.test",
+      "plan": "Max 20x",
+      "startMs": 1754042400000,
+      "endMs": 1754046000000
+    },
+    {
+      "accountId": "aaaaaaaa-1111-1111-1111-111111111111",
+      "email": "",
+      "plan": "Max 20x",
+      "startMs": 1754049600000,
+      "endMs": null
+    },
+    {
+      "accountId": "cccccccc-3333-3333-3333-333333333333",
+      "email": "three@example.test",
+      "plan": "Max 20x",
+      "startMs": 1753999200000,
+      "endMs": 1754002800000
+    }
+  ],
+  "reportOwn": {
+    "account": {
+      "accountId": "aaaaaaaa-1111-1111-1111-111111111111",
+      "email": "one@example.test",
+      "plan": "Max 20x",
+      "isCurrent": true
+    },
+    "untilIso": "2025-08-01T14:00:00.000Z",
+    "fiveHour": {
+      "label": "5h",
+      "windowHours": 5,
+      "window": {
+        "fromIso": "2025-08-01T09:00:00.000Z",
+        "untilIso": "2025-08-01T14:00:00.000Z"
+      },
+      "totals": {
+        "events": 5,
+        "tokens": 242000,
+        "costUsd": 3.5999999999999996,
+        "billableWeighted": 140937.5,
+        "input": 2000,
+        "output": 450,
+        "cacheRead": 120000,
+        "cacheCreate": 20550
+      },
+      "projects": [
+        {
+          "workspace": "/w/beta",
+          "sessions": 2,
+          "events": 2,
+          "tokens": 140000,
+          "costUsd": 1.3,
+          "input": 1200,
+          "output": 100,
+          "cacheRead": 35000,
+          "cacheCreate": 4700,
+          "billableWeighted": 110075,
+          "shareOfWindowPct": 78.10199556541019,
+          "topModel": "claude-opus-5"
+        },
+        {
+          "workspace": "/h/user/Code/alpha",
+          "sessions": 1,
+          "events": 2,
+          "tokens": 90000,
+          "costUsd": 2,
+          "input": 800,
+          "output": 350,
+          "cacheRead": 75000,
+          "cacheCreate": 13850,
+          "billableWeighted": 27362.5,
+          "shareOfWindowPct": 19.414634146341463,
+          "topModel": "claude-opus-5"
+        },
+        {
+          "workspace": null,
+          "sessions": 1,
+          "events": 1,
+          "tokens": 12000,
+          "costUsd": 0.3,
+          "input": 0,
+          "output": 0,
+          "cacheRead": 10000,
+          "cacheCreate": 2000,
+          "billableWeighted": 3500,
+          "shareOfWindowPct": 2.483370288248337,
+          "topModel": null
+        }
+      ],
+      "burners": [
+        {
+          "sessionId": "s6",
+          "workspace": "/w/beta",
+          "source": "claude_code",
+          "model": "claude-opus-5",
+          "events": 1,
+          "tokens": 100000,
+          "costUsd": 0.4,
+          "input": 1000,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheCreate": 0,
+          "billableWeighted": 100000,
+          "shareOfWindowPct": 70.95343680709534,
+          "topAttribution": null,
+          "firstMs": 1754055000000,
+          "lastMs": 1754055000000
+        },
+        {
+          "sessionId": "s1",
+          "workspace": "/h/user/Code/alpha",
+          "source": "claude_code",
+          "model": "claude-opus-5",
+          "events": 2,
+          "tokens": 90000,
+          "costUsd": 2,
+          "input": 800,
+          "output": 350,
+          "cacheRead": 75000,
+          "cacheCreate": 13850,
+          "billableWeighted": 27362.5,
+          "shareOfWindowPct": 19.414634146341463,
+          "topAttribution": "agent:worker",
+          "firstMs": 1754040600000,
+          "lastMs": 1754051400000
+        },
+        {
+          "sessionId": "s2",
+          "workspace": "/w/beta",
+          "source": "claude_code",
+          "model": "claude-sonnet-5",
+          "events": 1,
+          "tokens": 40000,
+          "costUsd": 0.9,
+          "input": 200,
+          "output": 100,
+          "cacheRead": 35000,
+          "cacheCreate": 4700,
+          "billableWeighted": 10075,
+          "shareOfWindowPct": 7.148558758314856,
+          "topAttribution": null,
+          "firstMs": 1754041500000,
+          "lastMs": 1754041500000
+        },
+        {
+          "sessionId": "s5",
+          "workspace": null,
+          "source": null,
+          "model": null,
+          "events": 1,
+          "tokens": 12000,
+          "costUsd": 0.3,
+          "input": 0,
+          "output": 0,
+          "cacheRead": 10000,
+          "cacheCreate": 2000,
+          "billableWeighted": 3500,
+          "shareOfWindowPct": 2.483370288248337,
+          "topAttribution": null,
+          "firstMs": 1754053200000,
+          "lastMs": 1754053200000
+        }
+      ],
+      "totalProjects": 3,
+      "totalBurners": 4,
+      "capacity": {
+        "tokens": 5000000,
+        "costUsd": 40,
+        "source": "observed",
+        "proxyAccountId": null,
+        "observedAt": "2026-07-30T00:00:00.000Z"
+      },
+      "fillPct": 9
+    },
+    "sevenDay": {
+      "label": "7d",
+      "windowHours": 168,
+      "window": {
+        "fromIso": "2025-07-25T14:00:00.000Z",
+        "untilIso": "2025-08-01T14:00:00.000Z"
+      },
+      "totals": {
+        "events": 6,
+        "tokens": 362000,
+        "costUsd": 7.1000000000000005,
+        "billableWeighted": 177562.5,
+        "input": 3000,
+        "output": 950,
+        "cacheRead": 220000,
+        "cacheCreate": 39050
+      },
+      "projects": [
+        {
+          "workspace": "/w/beta",
+          "sessions": 2,
+          "events": 2,
+          "tokens": 140000,
+          "costUsd": 1.3,
+          "input": 1200,
+          "output": 100,
+          "cacheRead": 35000,
+          "cacheCreate": 4700,
+          "billableWeighted": 110075,
+          "shareOfWindowPct": 61.99225624780007,
+          "topModel": "claude-opus-5"
+        },
+        {
+          "workspace": "/h/user/Code/alpha",
+          "sessions": 1,
+          "events": 3,
+          "tokens": 210000,
+          "costUsd": 5.5,
+          "input": 1800,
+          "output": 850,
+          "cacheRead": 175000,
+          "cacheCreate": 32350,
+          "billableWeighted": 63987.5,
+          "shareOfWindowPct": 36.03660682858148,
+          "topModel": "claude-opus-5"
+        },
+        {
+          "workspace": null,
+          "sessions": 1,
+          "events": 1,
+          "tokens": 12000,
+          "costUsd": 0.3,
+          "input": 0,
+          "output": 0,
+          "cacheRead": 10000,
+          "cacheCreate": 2000,
+          "billableWeighted": 3500,
+          "shareOfWindowPct": 1.9711369236184444,
+          "topModel": null
+        }
+      ],
+      "burners": [
+        {
+          "sessionId": "s6",
+          "workspace": "/w/beta",
+          "source": "claude_code",
+          "model": "claude-opus-5",
+          "events": 1,
+          "tokens": 100000,
+          "costUsd": 0.4,
+          "input": 1000,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheCreate": 0,
+          "billableWeighted": 100000,
+          "shareOfWindowPct": 56.318197817669834,
+          "topAttribution": null,
+          "firstMs": 1754055000000,
+          "lastMs": 1754055000000
+        },
+        {
+          "sessionId": "s1",
+          "workspace": "/h/user/Code/alpha",
+          "source": "claude_code",
+          "model": "claude-opus-5",
+          "events": 3,
+          "tokens": 210000,
+          "costUsd": 5.5,
+          "input": 1800,
+          "output": 850,
+          "cacheRead": 175000,
+          "cacheCreate": 32350,
+          "billableWeighted": 63987.5,
+          "shareOfWindowPct": 36.03660682858148,
+          "topAttribution": "main",
+          "firstMs": 1754035800000,
+          "lastMs": 1754051400000
+        },
+        {
+          "sessionId": "s2",
+          "workspace": "/w/beta",
+          "source": "claude_code",
+          "model": "claude-sonnet-5",
+          "events": 1,
+          "tokens": 40000,
+          "costUsd": 0.9,
+          "input": 200,
+          "output": 100,
+          "cacheRead": 35000,
+          "cacheCreate": 4700,
+          "billableWeighted": 10075,
+          "shareOfWindowPct": 5.674058430130236,
+          "topAttribution": null,
+          "firstMs": 1754041500000,
+          "lastMs": 1754041500000
+        },
+        {
+          "sessionId": "s5",
+          "workspace": null,
+          "source": null,
+          "model": null,
+          "events": 1,
+          "tokens": 12000,
+          "costUsd": 0.3,
+          "input": 0,
+          "output": 0,
+          "cacheRead": 10000,
+          "cacheCreate": 2000,
+          "billableWeighted": 3500,
+          "shareOfWindowPct": 1.9711369236184444,
+          "topAttribution": null,
+          "firstMs": 1754053200000,
+          "lastMs": 1754053200000
+        }
+      ],
+      "totalProjects": 3,
+      "totalBurners": 4,
+      "capacity": {
+        "tokens": 40000000,
+        "costUsd": 300,
+        "source": "observed",
+        "proxyAccountId": null,
+        "observedAt": "2026-07-30T00:00:00.000Z"
+      },
+      "fillPct": 2.366666666666667
+    },
+    "mostLikelyExhausted": "5h",
+    "exhaustionReason": "5h at 9% vs 7d at 2% of capacity (observed) at the rotation moment.",
+    "coverage": {
+      "oldestEventIso": "2025-08-01T08:10:00.000Z",
+      "coversWindow": false
+    },
+    "verdict": "Most likely exhausted: the 5h window — 5h at 9% vs 7d at 2% of capacity (observed) at the rotation moment. Top 5h projects: beta (78%, $1); alpha (19%, $2); (unattributed) (2%, $0). Top 7d projects: beta (62%, $1); alpha (36%, $6); (unattributed) (2%, $0).",
+    "note": "Attribution is TIME-based (the machine-wide account-state timeline decides which account each event burned), so sessions alive across a rotation split correctly between accounts. Projects group sessions by workspace. share/equiv rank by billable weight (input×1 + output×5 + cacheRead×0.1 + cacheCreate×1.25); cache columns are raw token counts. ⚠ COVERAGE GAP: the oldest available event is younger than the 7d window start — 7d totals are a LOWER BOUND.",
+    "text": "━━ 5h window of one@example.test (CURRENT) ending 2025-08-01T14:00:00.000Z · 5 calls · 141k equiv · $3.60 · fill 9% of observed capacity  ◀ MOST LIKELY EXHAUSTED (forced the rotation)\n  share   equiv     cost   cache-created  cache-read   raw     sess  model / project\n   78.1%     110k  $    1.30            5k         35k     140k     2  claude-opus-5  /w/beta\n   19.4%      27k  $    2.00           14k         75k      90k     1  claude-opus-5  ~/Code/alpha\n    2.5%       4k  $    0.30            2k         10k      12k     1  ?  (unattributed)\n━━ 7d window of one@example.test (CURRENT) ending 2025-08-01T14:00:00.000Z · 6 calls · 178k equiv · $7.10 · fill 2% of observed capacity\n  share   equiv     cost   cache-created  cache-read   raw     sess  model / project\n   62.0%     110k  $    1.30            5k         35k     140k     2  claude-opus-5  /w/beta\n   36.0%      64k  $    5.50           32k        175k     210k     1  claude-opus-5  ~/Code/alpha\n    2.0%       4k  $    0.30            2k         10k      12k     1  ?  (unattributed)\nMost likely exhausted: the 5h window — 5h at 9% vs 7d at 2% of capacity (observed) at the rotation moment. Top 5h projects: beta (78%, $1); alpha (19%, $2); (unattributed) (2%, $0). Top 7d projects: beta (62%, $1); alpha (36%, $6); (unattributed) (2%, $0).\n⚠ coverage: oldest event 2025-08-01T08:10:00.000Z is inside the 7d window — 7d is a lower bound."
+  },
+  "reportProxy": {
+    "account": {
+      "accountId": "aaaaaaaa-1111-1111-1111-111111111111",
+      "email": "one@example.test",
+      "plan": "Max 20x",
+      "isCurrent": true
+    },
+    "untilIso": "2025-08-01T14:00:00.000Z",
+    "fiveHour": {
+      "label": "5h",
+      "windowHours": 5,
+      "window": {
+        "fromIso": "2025-08-01T09:00:00.000Z",
+        "untilIso": "2025-08-01T14:00:00.000Z"
+      },
+      "totals": {
+        "events": 5,
+        "tokens": 242000,
+        "costUsd": 3.5999999999999996,
+        "billableWeighted": 140937.5,
+        "input": 2000,
+        "output": 450,
+        "cacheRead": 120000,
+        "cacheCreate": 20550
+      },
+      "projects": [
+        {
+          "workspace": "/w/beta",
+          "sessions": 2,
+          "events": 2,
+          "tokens": 140000,
+          "costUsd": 1.3,
+          "input": 1200,
+          "output": 100,
+          "cacheRead": 35000,
+          "cacheCreate": 4700,
+          "billableWeighted": 110075,
+          "shareOfWindowPct": 78.10199556541019,
+          "topModel": "claude-opus-5"
+        },
+        {
+          "workspace": "/h/user/Code/alpha",
+          "sessions": 1,
+          "events": 2,
+          "tokens": 90000,
+          "costUsd": 2,
+          "input": 800,
+          "output": 350,
+          "cacheRead": 75000,
+          "cacheCreate": 13850,
+          "billableWeighted": 27362.5,
+          "shareOfWindowPct": 19.414634146341463,
+          "topModel": "claude-opus-5"
+        },
+        {
+          "workspace": null,
+          "sessions": 1,
+          "events": 1,
+          "tokens": 12000,
+          "costUsd": 0.3,
+          "input": 0,
+          "output": 0,
+          "cacheRead": 10000,
+          "cacheCreate": 2000,
+          "billableWeighted": 3500,
+          "shareOfWindowPct": 2.483370288248337,
+          "topModel": null
+        }
+      ],
+      "burners": [
+        {
+          "sessionId": "s6",
+          "workspace": "/w/beta",
+          "source": "claude_code",
+          "model": "claude-opus-5",
+          "events": 1,
+          "tokens": 100000,
+          "costUsd": 0.4,
+          "input": 1000,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheCreate": 0,
+          "billableWeighted": 100000,
+          "shareOfWindowPct": 70.95343680709534,
+          "topAttribution": null,
+          "firstMs": 1754055000000,
+          "lastMs": 1754055000000
+        },
+        {
+          "sessionId": "s1",
+          "workspace": "/h/user/Code/alpha",
+          "source": "claude_code",
+          "model": "claude-opus-5",
+          "events": 2,
+          "tokens": 90000,
+          "costUsd": 2,
+          "input": 800,
+          "output": 350,
+          "cacheRead": 75000,
+          "cacheCreate": 13850,
+          "billableWeighted": 27362.5,
+          "shareOfWindowPct": 19.414634146341463,
+          "topAttribution": "agent:worker",
+          "firstMs": 1754040600000,
+          "lastMs": 1754051400000
+        },
+        {
+          "sessionId": "s2",
+          "workspace": "/w/beta",
+          "source": "claude_code",
+          "model": "claude-sonnet-5",
+          "events": 1,
+          "tokens": 40000,
+          "costUsd": 0.9,
+          "input": 200,
+          "output": 100,
+          "cacheRead": 35000,
+          "cacheCreate": 4700,
+          "billableWeighted": 10075,
+          "shareOfWindowPct": 7.148558758314856,
+          "topAttribution": null,
+          "firstMs": 1754041500000,
+          "lastMs": 1754041500000
+        },
+        {
+          "sessionId": "s5",
+          "workspace": null,
+          "source": null,
+          "model": null,
+          "events": 1,
+          "tokens": 12000,
+          "costUsd": 0.3,
+          "input": 0,
+          "output": 0,
+          "cacheRead": 10000,
+          "cacheCreate": 2000,
+          "billableWeighted": 3500,
+          "shareOfWindowPct": 2.483370288248337,
+          "topAttribution": null,
+          "firstMs": 1754053200000,
+          "lastMs": 1754053200000
+        }
+      ],
+      "totalProjects": 3,
+      "totalBurners": 4,
+      "capacity": {
+        "tokens": 2000000,
+        "costUsd": 20,
+        "source": "same-plan-proxy",
+        "proxyAccountId": "cccccccc-3333-3333-3333-333333333333",
+        "observedAt": "2026-07-29T00:00:00.000Z"
+      },
+      "fillPct": 18
+    },
+    "sevenDay": {
+      "label": "7d",
+      "windowHours": 168,
+      "window": {
+        "fromIso": "2025-07-25T14:00:00.000Z",
+        "untilIso": "2025-08-01T14:00:00.000Z"
+      },
+      "totals": {
+        "events": 6,
+        "tokens": 362000,
+        "costUsd": 7.1000000000000005,
+        "billableWeighted": 177562.5,
+        "input": 3000,
+        "output": 950,
+        "cacheRead": 220000,
+        "cacheCreate": 39050
+      },
+      "projects": [
+        {
+          "workspace": "/w/beta",
+          "sessions": 2,
+          "events": 2,
+          "tokens": 140000,
+          "costUsd": 1.3,
+          "input": 1200,
+          "output": 100,
+          "cacheRead": 35000,
+          "cacheCreate": 4700,
+          "billableWeighted": 110075,
+          "shareOfWindowPct": 61.99225624780007,
+          "topModel": "claude-opus-5"
+        },
+        {
+          "workspace": "/h/user/Code/alpha",
+          "sessions": 1,
+          "events": 3,
+          "tokens": 210000,
+          "costUsd": 5.5,
+          "input": 1800,
+          "output": 850,
+          "cacheRead": 175000,
+          "cacheCreate": 32350,
+          "billableWeighted": 63987.5,
+          "shareOfWindowPct": 36.03660682858148,
+          "topModel": "claude-opus-5"
+        },
+        {
+          "workspace": null,
+          "sessions": 1,
+          "events": 1,
+          "tokens": 12000,
+          "costUsd": 0.3,
+          "input": 0,
+          "output": 0,
+          "cacheRead": 10000,
+          "cacheCreate": 2000,
+          "billableWeighted": 3500,
+          "shareOfWindowPct": 1.9711369236184444,
+          "topModel": null
+        }
+      ],
+      "burners": [
+        {
+          "sessionId": "s6",
+          "workspace": "/w/beta",
+          "source": "claude_code",
+          "model": "claude-opus-5",
+          "events": 1,
+          "tokens": 100000,
+          "costUsd": 0.4,
+          "input": 1000,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheCreate": 0,
+          "billableWeighted": 100000,
+          "shareOfWindowPct": 56.318197817669834,
+          "topAttribution": null,
+          "firstMs": 1754055000000,
+          "lastMs": 1754055000000
+        },
+        {
+          "sessionId": "s1",
+          "workspace": "/h/user/Code/alpha",
+          "source": "claude_code",
+          "model": "claude-opus-5",
+          "events": 3,
+          "tokens": 210000,
+          "costUsd": 5.5,
+          "input": 1800,
+          "output": 850,
+          "cacheRead": 175000,
+          "cacheCreate": 32350,
+          "billableWeighted": 63987.5,
+          "shareOfWindowPct": 36.03660682858148,
+          "topAttribution": "main",
+          "firstMs": 1754035800000,
+          "lastMs": 1754051400000
+        },
+        {
+          "sessionId": "s2",
+          "workspace": "/w/beta",
+          "source": "claude_code",
+          "model": "claude-sonnet-5",
+          "events": 1,
+          "tokens": 40000,
+          "costUsd": 0.9,
+          "input": 200,
+          "output": 100,
+          "cacheRead": 35000,
+          "cacheCreate": 4700,
+          "billableWeighted": 10075,
+          "shareOfWindowPct": 5.674058430130236,
+          "topAttribution": null,
+          "firstMs": 1754041500000,
+          "lastMs": 1754041500000
+        },
+        {
+          "sessionId": "s5",
+          "workspace": null,
+          "source": null,
+          "model": null,
+          "events": 1,
+          "tokens": 12000,
+          "costUsd": 0.3,
+          "input": 0,
+          "output": 0,
+          "cacheRead": 10000,
+          "cacheCreate": 2000,
+          "billableWeighted": 3500,
+          "shareOfWindowPct": 1.9711369236184444,
+          "topAttribution": null,
+          "firstMs": 1754053200000,
+          "lastMs": 1754053200000
+        }
+      ],
+      "totalProjects": 3,
+      "totalBurners": 4,
+      "capacity": {
+        "tokens": 8000000,
+        "costUsd": 80,
+        "source": "same-plan-proxy",
+        "proxyAccountId": "cccccccc-3333-3333-3333-333333333333",
+        "observedAt": "2026-07-29T00:00:00.000Z"
+      },
+      "fillPct": 8.875000000000002
+    },
+    "mostLikelyExhausted": "5h",
+    "exhaustionReason": "5h at 18% vs 7d at 9% of capacity (same-plan proxy cccccccc) at the rotation moment.",
+    "coverage": {
+      "oldestEventIso": "2025-08-01T08:10:00.000Z",
+      "coversWindow": false
+    },
+    "verdict": "Most likely exhausted: the 5h window — 5h at 18% vs 7d at 9% of capacity (same-plan proxy cccccccc) at the rotation moment. Top 5h projects: beta (78%, $1); alpha (19%, $2); (unattributed) (2%, $0). Top 7d projects: beta (62%, $1); alpha (36%, $6); (unattributed) (2%, $0).",
+    "note": "Attribution is TIME-based (the machine-wide account-state timeline decides which account each event burned), so sessions alive across a rotation split correctly between accounts. Projects group sessions by workspace. share/equiv rank by billable weight (input×1 + output×5 + cacheRead×0.1 + cacheCreate×1.25); cache columns are raw token counts. ⚠ COVERAGE GAP: the oldest available event is younger than the 7d window start — 7d totals are a LOWER BOUND.",
+    "text": "━━ 5h window of one@example.test (CURRENT) ending 2025-08-01T14:00:00.000Z · 5 calls · 141k equiv · $3.60 · fill 18% of same-plan proxy cccccccc capacity  ◀ MOST LIKELY EXHAUSTED (forced the rotation)\n  share   equiv     cost   cache-created  cache-read   raw     sess  model / project\n   78.1%     110k  $    1.30            5k         35k     140k     2  claude-opus-5  /w/beta\n   19.4%      27k  $    2.00           14k         75k      90k     1  claude-opus-5  ~/Code/alpha\n    2.5%       4k  $    0.30            2k         10k      12k     1  ?  (unattributed)\n━━ 7d window of one@example.test (CURRENT) ending 2025-08-01T14:00:00.000Z · 6 calls · 178k equiv · $7.10 · fill 9% of same-plan proxy cccccccc capacity\n  share   equiv     cost   cache-created  cache-read   raw     sess  model / project\n   62.0%     110k  $    1.30            5k         35k     140k     2  claude-opus-5  /w/beta\n   36.0%      64k  $    5.50           32k        175k     210k     1  claude-opus-5  ~/Code/alpha\n    2.0%       4k  $    0.30            2k         10k      12k     1  ?  (unattributed)\nMost likely exhausted: the 5h window — 5h at 18% vs 7d at 9% of capacity (same-plan proxy cccccccc) at the rotation moment. Top 5h projects: beta (78%, $1); alpha (19%, $2); (unattributed) (2%, $0). Top 7d projects: beta (62%, $1); alpha (36%, $6); (unattributed) (2%, $0).\n⚠ coverage: oldest event 2025-08-01T08:10:00.000Z is inside the 7d window — 7d is a lower bound."
+  },
+  "reportNoCapacity": {
+    "account": {
+      "accountId": "aaaaaaaa-1111-1111-1111-111111111111",
+      "email": "one@example.test",
+      "plan": "Max 20x",
+      "isCurrent": true
+    },
+    "untilIso": "2025-08-01T14:00:00.000Z",
+    "fiveHour": {
+      "label": "5h",
+      "windowHours": 5,
+      "window": {
+        "fromIso": "2025-08-01T09:00:00.000Z",
+        "untilIso": "2025-08-01T14:00:00.000Z"
+      },
+      "totals": {
+        "events": 5,
+        "tokens": 242000,
+        "costUsd": 3.5999999999999996,
+        "billableWeighted": 140937.5,
+        "input": 2000,
+        "output": 450,
+        "cacheRead": 120000,
+        "cacheCreate": 20550
+      },
+      "projects": [
+        {
+          "workspace": "/w/beta",
+          "sessions": 2,
+          "events": 2,
+          "tokens": 140000,
+          "costUsd": 1.3,
+          "input": 1200,
+          "output": 100,
+          "cacheRead": 35000,
+          "cacheCreate": 4700,
+          "billableWeighted": 110075,
+          "shareOfWindowPct": 78.10199556541019,
+          "topModel": "claude-opus-5"
+        },
+        {
+          "workspace": "/h/user/Code/alpha",
+          "sessions": 1,
+          "events": 2,
+          "tokens": 90000,
+          "costUsd": 2,
+          "input": 800,
+          "output": 350,
+          "cacheRead": 75000,
+          "cacheCreate": 13850,
+          "billableWeighted": 27362.5,
+          "shareOfWindowPct": 19.414634146341463,
+          "topModel": "claude-opus-5"
+        },
+        {
+          "workspace": null,
+          "sessions": 1,
+          "events": 1,
+          "tokens": 12000,
+          "costUsd": 0.3,
+          "input": 0,
+          "output": 0,
+          "cacheRead": 10000,
+          "cacheCreate": 2000,
+          "billableWeighted": 3500,
+          "shareOfWindowPct": 2.483370288248337,
+          "topModel": null
+        }
+      ],
+      "burners": [
+        {
+          "sessionId": "s6",
+          "workspace": "/w/beta",
+          "source": "claude_code",
+          "model": "claude-opus-5",
+          "events": 1,
+          "tokens": 100000,
+          "costUsd": 0.4,
+          "input": 1000,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheCreate": 0,
+          "billableWeighted": 100000,
+          "shareOfWindowPct": 70.95343680709534,
+          "topAttribution": null,
+          "firstMs": 1754055000000,
+          "lastMs": 1754055000000
+        },
+        {
+          "sessionId": "s1",
+          "workspace": "/h/user/Code/alpha",
+          "source": "claude_code",
+          "model": "claude-opus-5",
+          "events": 2,
+          "tokens": 90000,
+          "costUsd": 2,
+          "input": 800,
+          "output": 350,
+          "cacheRead": 75000,
+          "cacheCreate": 13850,
+          "billableWeighted": 27362.5,
+          "shareOfWindowPct": 19.414634146341463,
+          "topAttribution": "agent:worker",
+          "firstMs": 1754040600000,
+          "lastMs": 1754051400000
+        },
+        {
+          "sessionId": "s2",
+          "workspace": "/w/beta",
+          "source": "claude_code",
+          "model": "claude-sonnet-5",
+          "events": 1,
+          "tokens": 40000,
+          "costUsd": 0.9,
+          "input": 200,
+          "output": 100,
+          "cacheRead": 35000,
+          "cacheCreate": 4700,
+          "billableWeighted": 10075,
+          "shareOfWindowPct": 7.148558758314856,
+          "topAttribution": null,
+          "firstMs": 1754041500000,
+          "lastMs": 1754041500000
+        },
+        {
+          "sessionId": "s5",
+          "workspace": null,
+          "source": null,
+          "model": null,
+          "events": 1,
+          "tokens": 12000,
+          "costUsd": 0.3,
+          "input": 0,
+          "output": 0,
+          "cacheRead": 10000,
+          "cacheCreate": 2000,
+          "billableWeighted": 3500,
+          "shareOfWindowPct": 2.483370288248337,
+          "topAttribution": null,
+          "firstMs": 1754053200000,
+          "lastMs": 1754053200000
+        }
+      ],
+      "totalProjects": 3,
+      "totalBurners": 4,
+      "capacity": {
+        "tokens": null,
+        "costUsd": null,
+        "source": null,
+        "proxyAccountId": null,
+        "observedAt": null
+      },
+      "fillPct": null
+    },
+    "sevenDay": {
+      "label": "7d",
+      "windowHours": 168,
+      "window": {
+        "fromIso": "2025-07-25T14:00:00.000Z",
+        "untilIso": "2025-08-01T14:00:00.000Z"
+      },
+      "totals": {
+        "events": 6,
+        "tokens": 362000,
+        "costUsd": 7.1000000000000005,
+        "billableWeighted": 177562.5,
+        "input": 3000,
+        "output": 950,
+        "cacheRead": 220000,
+        "cacheCreate": 39050
+      },
+      "projects": [
+        {
+          "workspace": "/w/beta",
+          "sessions": 2,
+          "events": 2,
+          "tokens": 140000,
+          "costUsd": 1.3,
+          "input": 1200,
+          "output": 100,
+          "cacheRead": 35000,
+          "cacheCreate": 4700,
+          "billableWeighted": 110075,
+          "shareOfWindowPct": 61.99225624780007,
+          "topModel": "claude-opus-5"
+        },
+        {
+          "workspace": "/h/user/Code/alpha",
+          "sessions": 1,
+          "events": 3,
+          "tokens": 210000,
+          "costUsd": 5.5,
+          "input": 1800,
+          "output": 850,
+          "cacheRead": 175000,
+          "cacheCreate": 32350,
+          "billableWeighted": 63987.5,
+          "shareOfWindowPct": 36.03660682858148,
+          "topModel": "claude-opus-5"
+        },
+        {
+          "workspace": null,
+          "sessions": 1,
+          "events": 1,
+          "tokens": 12000,
+          "costUsd": 0.3,
+          "input": 0,
+          "output": 0,
+          "cacheRead": 10000,
+          "cacheCreate": 2000,
+          "billableWeighted": 3500,
+          "shareOfWindowPct": 1.9711369236184444,
+          "topModel": null
+        }
+      ],
+      "burners": [
+        {
+          "sessionId": "s6",
+          "workspace": "/w/beta",
+          "source": "claude_code",
+          "model": "claude-opus-5",
+          "events": 1,
+          "tokens": 100000,
+          "costUsd": 0.4,
+          "input": 1000,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheCreate": 0,
+          "billableWeighted": 100000,
+          "shareOfWindowPct": 56.318197817669834,
+          "topAttribution": null,
+          "firstMs": 1754055000000,
+          "lastMs": 1754055000000
+        },
+        {
+          "sessionId": "s1",
+          "workspace": "/h/user/Code/alpha",
+          "source": "claude_code",
+          "model": "claude-opus-5",
+          "events": 3,
+          "tokens": 210000,
+          "costUsd": 5.5,
+          "input": 1800,
+          "output": 850,
+          "cacheRead": 175000,
+          "cacheCreate": 32350,
+          "billableWeighted": 63987.5,
+          "shareOfWindowPct": 36.03660682858148,
+          "topAttribution": "main",
+          "firstMs": 1754035800000,
+          "lastMs": 1754051400000
+        },
+        {
+          "sessionId": "s2",
+          "workspace": "/w/beta",
+          "source": "claude_code",
+          "model": "claude-sonnet-5",
+          "events": 1,
+          "tokens": 40000,
+          "costUsd": 0.9,
+          "input": 200,
+          "output": 100,
+          "cacheRead": 35000,
+          "cacheCreate": 4700,
+          "billableWeighted": 10075,
+          "shareOfWindowPct": 5.674058430130236,
+          "topAttribution": null,
+          "firstMs": 1754041500000,
+          "lastMs": 1754041500000
+        },
+        {
+          "sessionId": "s5",
+          "workspace": null,
+          "source": null,
+          "model": null,
+          "events": 1,
+          "tokens": 12000,
+          "costUsd": 0.3,
+          "input": 0,
+          "output": 0,
+          "cacheRead": 10000,
+          "cacheCreate": 2000,
+          "billableWeighted": 3500,
+          "shareOfWindowPct": 1.9711369236184444,
+          "topAttribution": null,
+          "firstMs": 1754053200000,
+          "lastMs": 1754053200000
+        }
+      ],
+      "totalProjects": 3,
+      "totalBurners": 4,
+      "capacity": {
+        "tokens": null,
+        "costUsd": null,
+        "source": null,
+        "proxyAccountId": null,
+        "observedAt": null
+      },
+      "fillPct": null
+    },
+    "mostLikelyExhausted": "undetermined",
+    "exhaustionReason": "No calibrated capacity for this account or a same-plan account — cannot tell which window hit its limit. A future rate-limit hit auto-calibrates it.",
+    "coverage": {
+      "oldestEventIso": "2025-08-01T08:10:00.000Z",
+      "coversWindow": false
+    },
+    "verdict": "Most likely exhausted: undetermined — No calibrated capacity for this account or a same-plan account — cannot tell which window hit its limit. A future rate-limit hit auto-calibrates it. Top 5h projects: beta (78%, $1); alpha (19%, $2); (unattributed) (2%, $0). Top 7d projects: beta (62%, $1); alpha (36%, $6); (unattributed) (2%, $0).",
+    "note": "Attribution is TIME-based (the machine-wide account-state timeline decides which account each event burned), so sessions alive across a rotation split correctly between accounts. Projects group sessions by workspace. share/equiv rank by billable weight (input×1 + output×5 + cacheRead×0.1 + cacheCreate×1.25); cache columns are raw token counts. ⚠ COVERAGE GAP: the oldest available event is younger than the 7d window start — 7d totals are a LOWER BOUND.",
+    "text": "━━ 5h window of one@example.test (CURRENT) ending 2025-08-01T14:00:00.000Z · 5 calls · 141k equiv · $3.60 · fill unknown (no capacity)\n  share   equiv     cost   cache-created  cache-read   raw     sess  model / project\n   78.1%     110k  $    1.30            5k         35k     140k     2  claude-opus-5  /w/beta\n   19.4%      27k  $    2.00           14k         75k      90k     1  claude-opus-5  ~/Code/alpha\n    2.5%       4k  $    0.30            2k         10k      12k     1  ?  (unattributed)\n━━ 7d window of one@example.test (CURRENT) ending 2025-08-01T14:00:00.000Z · 6 calls · 178k equiv · $7.10 · fill unknown (no capacity)\n  share   equiv     cost   cache-created  cache-read   raw     sess  model / project\n   62.0%     110k  $    1.30            5k         35k     140k     2  claude-opus-5  /w/beta\n   36.0%      64k  $    5.50           32k        175k     210k     1  claude-opus-5  ~/Code/alpha\n    2.0%       4k  $    0.30            2k         10k      12k     1  ?  (unattributed)\nMost likely exhausted: undetermined — No calibrated capacity for this account or a same-plan account — cannot tell which window hit its limit. A future rate-limit hit auto-calibrates it. Top 5h projects: beta (78%, $1); alpha (19%, $2); (unattributed) (2%, $0). Top 7d projects: beta (62%, $1); alpha (36%, $6); (unattributed) (2%, $0).\n⚠ coverage: oldest event 2025-08-01T08:10:00.000Z is inside the 7d window — 7d is a lower bound."
+  },
+  "reportTokensOnlyCapacity": {
+    "account": {
+      "accountId": "aaaaaaaa-1111-1111-1111-111111111111",
+      "email": "one@example.test",
+      "plan": "Max 20x",
+      "isCurrent": true
+    },
+    "untilIso": "2025-08-01T14:00:00.000Z",
+    "fiveHour": {
+      "label": "5h",
+      "windowHours": 5,
+      "window": {
+        "fromIso": "2025-08-01T09:00:00.000Z",
+        "untilIso": "2025-08-01T14:00:00.000Z"
+      },
+      "totals": {
+        "events": 5,
+        "tokens": 242000,
+        "costUsd": 3.5999999999999996,
+        "billableWeighted": 140937.5,
+        "input": 2000,
+        "output": 450,
+        "cacheRead": 120000,
+        "cacheCreate": 20550
+      },
+      "projects": [
+        {
+          "workspace": "/w/beta",
+          "sessions": 2,
+          "events": 2,
+          "tokens": 140000,
+          "costUsd": 1.3,
+          "input": 1200,
+          "output": 100,
+          "cacheRead": 35000,
+          "cacheCreate": 4700,
+          "billableWeighted": 110075,
+          "shareOfWindowPct": 78.10199556541019,
+          "topModel": "claude-opus-5"
+        },
+        {
+          "workspace": "/h/user/Code/alpha",
+          "sessions": 1,
+          "events": 2,
+          "tokens": 90000,
+          "costUsd": 2,
+          "input": 800,
+          "output": 350,
+          "cacheRead": 75000,
+          "cacheCreate": 13850,
+          "billableWeighted": 27362.5,
+          "shareOfWindowPct": 19.414634146341463,
+          "topModel": "claude-opus-5"
+        },
+        {
+          "workspace": null,
+          "sessions": 1,
+          "events": 1,
+          "tokens": 12000,
+          "costUsd": 0.3,
+          "input": 0,
+          "output": 0,
+          "cacheRead": 10000,
+          "cacheCreate": 2000,
+          "billableWeighted": 3500,
+          "shareOfWindowPct": 2.483370288248337,
+          "topModel": null
+        }
+      ],
+      "burners": [
+        {
+          "sessionId": "s6",
+          "workspace": "/w/beta",
+          "source": "claude_code",
+          "model": "claude-opus-5",
+          "events": 1,
+          "tokens": 100000,
+          "costUsd": 0.4,
+          "input": 1000,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheCreate": 0,
+          "billableWeighted": 100000,
+          "shareOfWindowPct": 70.95343680709534,
+          "topAttribution": null,
+          "firstMs": 1754055000000,
+          "lastMs": 1754055000000
+        },
+        {
+          "sessionId": "s1",
+          "workspace": "/h/user/Code/alpha",
+          "source": "claude_code",
+          "model": "claude-opus-5",
+          "events": 2,
+          "tokens": 90000,
+          "costUsd": 2,
+          "input": 800,
+          "output": 350,
+          "cacheRead": 75000,
+          "cacheCreate": 13850,
+          "billableWeighted": 27362.5,
+          "shareOfWindowPct": 19.414634146341463,
+          "topAttribution": "agent:worker",
+          "firstMs": 1754040600000,
+          "lastMs": 1754051400000
+        },
+        {
+          "sessionId": "s2",
+          "workspace": "/w/beta",
+          "source": "claude_code",
+          "model": "claude-sonnet-5",
+          "events": 1,
+          "tokens": 40000,
+          "costUsd": 0.9,
+          "input": 200,
+          "output": 100,
+          "cacheRead": 35000,
+          "cacheCreate": 4700,
+          "billableWeighted": 10075,
+          "shareOfWindowPct": 7.148558758314856,
+          "topAttribution": null,
+          "firstMs": 1754041500000,
+          "lastMs": 1754041500000
+        },
+        {
+          "sessionId": "s5",
+          "workspace": null,
+          "source": null,
+          "model": null,
+          "events": 1,
+          "tokens": 12000,
+          "costUsd": 0.3,
+          "input": 0,
+          "output": 0,
+          "cacheRead": 10000,
+          "cacheCreate": 2000,
+          "billableWeighted": 3500,
+          "shareOfWindowPct": 2.483370288248337,
+          "topAttribution": null,
+          "firstMs": 1754053200000,
+          "lastMs": 1754053200000
+        }
+      ],
+      "totalProjects": 3,
+      "totalBurners": 4,
+      "capacity": {
+        "tokens": 500000,
+        "costUsd": null,
+        "source": "observed",
+        "proxyAccountId": null,
+        "observedAt": "2026-07-30T00:00:00.000Z"
+      },
+      "fillPct": 48.4
+    },
+    "sevenDay": {
+      "label": "7d",
+      "windowHours": 168,
+      "window": {
+        "fromIso": "2025-07-25T14:00:00.000Z",
+        "untilIso": "2025-08-01T14:00:00.000Z"
+      },
+      "totals": {
+        "events": 6,
+        "tokens": 362000,
+        "costUsd": 7.1000000000000005,
+        "billableWeighted": 177562.5,
+        "input": 3000,
+        "output": 950,
+        "cacheRead": 220000,
+        "cacheCreate": 39050
+      },
+      "projects": [
+        {
+          "workspace": "/w/beta",
+          "sessions": 2,
+          "events": 2,
+          "tokens": 140000,
+          "costUsd": 1.3,
+          "input": 1200,
+          "output": 100,
+          "cacheRead": 35000,
+          "cacheCreate": 4700,
+          "billableWeighted": 110075,
+          "shareOfWindowPct": 61.99225624780007,
+          "topModel": "claude-opus-5"
+        },
+        {
+          "workspace": "/h/user/Code/alpha",
+          "sessions": 1,
+          "events": 3,
+          "tokens": 210000,
+          "costUsd": 5.5,
+          "input": 1800,
+          "output": 850,
+          "cacheRead": 175000,
+          "cacheCreate": 32350,
+          "billableWeighted": 63987.5,
+          "shareOfWindowPct": 36.03660682858148,
+          "topModel": "claude-opus-5"
+        },
+        {
+          "workspace": null,
+          "sessions": 1,
+          "events": 1,
+          "tokens": 12000,
+          "costUsd": 0.3,
+          "input": 0,
+          "output": 0,
+          "cacheRead": 10000,
+          "cacheCreate": 2000,
+          "billableWeighted": 3500,
+          "shareOfWindowPct": 1.9711369236184444,
+          "topModel": null
+        }
+      ],
+      "burners": [
+        {
+          "sessionId": "s6",
+          "workspace": "/w/beta",
+          "source": "claude_code",
+          "model": "claude-opus-5",
+          "events": 1,
+          "tokens": 100000,
+          "costUsd": 0.4,
+          "input": 1000,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheCreate": 0,
+          "billableWeighted": 100000,
+          "shareOfWindowPct": 56.318197817669834,
+          "topAttribution": null,
+          "firstMs": 1754055000000,
+          "lastMs": 1754055000000
+        },
+        {
+          "sessionId": "s1",
+          "workspace": "/h/user/Code/alpha",
+          "source": "claude_code",
+          "model": "claude-opus-5",
+          "events": 3,
+          "tokens": 210000,
+          "costUsd": 5.5,
+          "input": 1800,
+          "output": 850,
+          "cacheRead": 175000,
+          "cacheCreate": 32350,
+          "billableWeighted": 63987.5,
+          "shareOfWindowPct": 36.03660682858148,
+          "topAttribution": "main",
+          "firstMs": 1754035800000,
+          "lastMs": 1754051400000
+        },
+        {
+          "sessionId": "s2",
+          "workspace": "/w/beta",
+          "source": "claude_code",
+          "model": "claude-sonnet-5",
+          "events": 1,
+          "tokens": 40000,
+          "costUsd": 0.9,
+          "input": 200,
+          "output": 100,
+          "cacheRead": 35000,
+          "cacheCreate": 4700,
+          "billableWeighted": 10075,
+          "shareOfWindowPct": 5.674058430130236,
+          "topAttribution": null,
+          "firstMs": 1754041500000,
+          "lastMs": 1754041500000
+        },
+        {
+          "sessionId": "s5",
+          "workspace": null,
+          "source": null,
+          "model": null,
+          "events": 1,
+          "tokens": 12000,
+          "costUsd": 0.3,
+          "input": 0,
+          "output": 0,
+          "cacheRead": 10000,
+          "cacheCreate": 2000,
+          "billableWeighted": 3500,
+          "shareOfWindowPct": 1.9711369236184444,
+          "topAttribution": null,
+          "firstMs": 1754053200000,
+          "lastMs": 1754053200000
+        }
+      ],
+      "totalProjects": 3,
+      "totalBurners": 4,
+      "capacity": {
+        "tokens": 4000000,
+        "costUsd": null,
+        "source": "observed",
+        "proxyAccountId": null,
+        "observedAt": "2026-07-30T00:00:00.000Z"
+      },
+      "fillPct": 9.049999999999999
+    },
+    "mostLikelyExhausted": "5h",
+    "exhaustionReason": "5h at 48% vs 7d at 9% of capacity (observed) at the rotation moment.",
+    "coverage": {
+      "oldestEventIso": "2025-08-01T08:10:00.000Z",
+      "coversWindow": false
+    },
+    "verdict": "Most likely exhausted: the 5h window — 5h at 48% vs 7d at 9% of capacity (observed) at the rotation moment. Top 5h projects: beta (78%, $1); alpha (19%, $2); (unattributed) (2%, $0). Top 7d projects: beta (62%, $1); alpha (36%, $6); (unattributed) (2%, $0).",
+    "note": "Attribution is TIME-based (the machine-wide account-state timeline decides which account each event burned), so sessions alive across a rotation split correctly between accounts. Projects group sessions by workspace. share/equiv rank by billable weight (input×1 + output×5 + cacheRead×0.1 + cacheCreate×1.25); cache columns are raw token counts. ⚠ COVERAGE GAP: the oldest available event is younger than the 7d window start — 7d totals are a LOWER BOUND.",
+    "text": "━━ 5h window of one@example.test (CURRENT) ending 2025-08-01T14:00:00.000Z · 5 calls · 141k equiv · $3.60 · fill 48% of observed capacity  ◀ MOST LIKELY EXHAUSTED (forced the rotation)\n  share   equiv     cost   cache-created  cache-read   raw     sess  model / project\n   78.1%     110k  $    1.30            5k         35k     140k     2  claude-opus-5  /w/beta\n   19.4%      27k  $    2.00           14k         75k      90k     1  claude-opus-5  ~/Code/alpha\n    2.5%       4k  $    0.30            2k         10k      12k     1  ?  (unattributed)\n━━ 7d window of one@example.test (CURRENT) ending 2025-08-01T14:00:00.000Z · 6 calls · 178k equiv · $7.10 · fill 9% of observed capacity\n  share   equiv     cost   cache-created  cache-read   raw     sess  model / project\n   62.0%     110k  $    1.30            5k         35k     140k     2  claude-opus-5  /w/beta\n   36.0%      64k  $    5.50           32k        175k     210k     1  claude-opus-5  ~/Code/alpha\n    2.0%       4k  $    0.30            2k         10k      12k     1  ?  (unattributed)\nMost likely exhausted: the 5h window — 5h at 48% vs 7d at 9% of capacity (observed) at the rotation moment. Top 5h projects: beta (78%, $1); alpha (19%, $2); (unattributed) (2%, $0). Top 7d projects: beta (62%, $1); alpha (36%, $6); (unattributed) (2%, $0).\n⚠ coverage: oldest event 2025-08-01T08:10:00.000Z is inside the 7d window — 7d is a lower bound."
+  },
+  "reportPrevious": {
+    "account": {
+      "accountId": "bbbbbbbb-2222-2222-2222-222222222222",
+      "email": "two@example.test",
+      "plan": "Max 20x",
+      "isCurrent": false
+    },
+    "untilIso": "2025-08-01T14:00:00.000Z",
+    "fiveHour": {
+      "label": "5h",
+      "windowHours": 5,
+      "window": {
+        "fromIso": "2025-08-01T09:00:00.000Z",
+        "untilIso": "2025-08-01T14:00:00.000Z"
+      },
+      "totals": {
+        "events": 1,
+        "tokens": 90000,
+        "costUsd": 2.1,
+        "billableWeighted": 20400,
+        "input": 400,
+        "output": 0,
+        "cacheRead": 80000,
+        "cacheCreate": 9600
+      },
+      "projects": [
+        {
+          "workspace": "/h/user/Code/alpha",
+          "sessions": 1,
+          "events": 1,
+          "tokens": 90000,
+          "costUsd": 2.1,
+          "input": 400,
+          "output": 0,
+          "cacheRead": 80000,
+          "cacheCreate": 9600,
+          "billableWeighted": 20400,
+          "shareOfWindowPct": 100,
+          "topModel": "claude-opus-5"
+        }
+      ],
+      "burners": [
+        {
+          "sessionId": "s3",
+          "workspace": "/h/user/Code/alpha",
+          "source": "claude_code",
+          "model": "claude-opus-5",
+          "events": 1,
+          "tokens": 90000,
+          "costUsd": 2.1,
+          "input": 400,
+          "output": 0,
+          "cacheRead": 80000,
+          "cacheCreate": 9600,
+          "billableWeighted": 20400,
+          "shareOfWindowPct": 100,
+          "topAttribution": null,
+          "firstMs": 1754043300000,
+          "lastMs": 1754043300000
+        }
+      ],
+      "totalProjects": 1,
+      "totalBurners": 1,
+      "capacity": {
+        "tokens": 5000000,
+        "costUsd": 40,
+        "source": "same-plan-proxy",
+        "proxyAccountId": "aaaaaaaa-1111-1111-1111-111111111111",
+        "observedAt": "2026-07-30T00:00:00.000Z"
+      },
+      "fillPct": 5.250000000000001
+    },
+    "sevenDay": {
+      "label": "7d",
+      "windowHours": 168,
+      "window": {
+        "fromIso": "2025-07-25T14:00:00.000Z",
+        "untilIso": "2025-08-01T14:00:00.000Z"
+      },
+      "totals": {
+        "events": 1,
+        "tokens": 90000,
+        "costUsd": 2.1,
+        "billableWeighted": 20400,
+        "input": 400,
+        "output": 0,
+        "cacheRead": 80000,
+        "cacheCreate": 9600
+      },
+      "projects": [
+        {
+          "workspace": "/h/user/Code/alpha",
+          "sessions": 1,
+          "events": 1,
+          "tokens": 90000,
+          "costUsd": 2.1,
+          "input": 400,
+          "output": 0,
+          "cacheRead": 80000,
+          "cacheCreate": 9600,
+          "billableWeighted": 20400,
+          "shareOfWindowPct": 100,
+          "topModel": "claude-opus-5"
+        }
+      ],
+      "burners": [
+        {
+          "sessionId": "s3",
+          "workspace": "/h/user/Code/alpha",
+          "source": "claude_code",
+          "model": "claude-opus-5",
+          "events": 1,
+          "tokens": 90000,
+          "costUsd": 2.1,
+          "input": 400,
+          "output": 0,
+          "cacheRead": 80000,
+          "cacheCreate": 9600,
+          "billableWeighted": 20400,
+          "shareOfWindowPct": 100,
+          "topAttribution": null,
+          "firstMs": 1754043300000,
+          "lastMs": 1754043300000
+        }
+      ],
+      "totalProjects": 1,
+      "totalBurners": 1,
+      "capacity": {
+        "tokens": 40000000,
+        "costUsd": 300,
+        "source": "same-plan-proxy",
+        "proxyAccountId": "aaaaaaaa-1111-1111-1111-111111111111",
+        "observedAt": "2026-07-30T00:00:00.000Z"
+      },
+      "fillPct": 0.7000000000000001
+    },
+    "mostLikelyExhausted": "5h",
+    "exhaustionReason": "5h at 5% vs 7d at 1% of capacity (same-plan proxy aaaaaaaa) at the rotation moment.",
+    "coverage": {
+      "oldestEventIso": "2025-08-01T08:10:00.000Z",
+      "coversWindow": false
+    },
+    "verdict": "Most likely exhausted: the 5h window — 5h at 5% vs 7d at 1% of capacity (same-plan proxy aaaaaaaa) at the rotation moment. Top 5h projects: alpha (100%, $2). Top 7d projects: alpha (100%, $2).",
+    "note": "Attribution is TIME-based (the machine-wide account-state timeline decides which account each event burned), so sessions alive across a rotation split correctly between accounts. Projects group sessions by workspace. share/equiv rank by billable weight (input×1 + output×5 + cacheRead×0.1 + cacheCreate×1.25); cache columns are raw token counts. ⚠ COVERAGE GAP: the oldest available event is younger than the 7d window start — 7d totals are a LOWER BOUND.",
+    "text": "━━ 5h window of two@example.test (rotated out) ending 2025-08-01T14:00:00.000Z · 1 calls · 20k equiv · $2.10 · fill 5% of same-plan proxy aaaaaaaa capacity  ◀ MOST LIKELY EXHAUSTED (forced the rotation)\n  share   equiv     cost   cache-created  cache-read   raw     sess  model / project\n  100.0%      20k  $    2.10           10k         80k      90k     1  claude-opus-5  ~/Code/alpha\n━━ 7d window of two@example.test (rotated out) ending 2025-08-01T14:00:00.000Z · 1 calls · 20k equiv · $2.10 · fill 1% of same-plan proxy aaaaaaaa capacity\n  share   equiv     cost   cache-created  cache-read   raw     sess  model / project\n  100.0%      20k  $    2.10           10k         80k      90k     1  claude-opus-5  ~/Code/alpha\nMost likely exhausted: the 5h window — 5h at 5% vs 7d at 1% of capacity (same-plan proxy aaaaaaaa) at the rotation moment. Top 5h projects: alpha (100%, $2). Top 7d projects: alpha (100%, $2).\n⚠ coverage: oldest event 2025-08-01T08:10:00.000Z is inside the 7d window — 7d is a lower bound."
+  },
+  "reportLimitOne": {
+    "account": {
+      "accountId": "aaaaaaaa-1111-1111-1111-111111111111",
+      "email": "one@example.test",
+      "plan": "Max 20x",
+      "isCurrent": true
+    },
+    "untilIso": "2025-08-01T14:00:00.000Z",
+    "fiveHour": {
+      "label": "5h",
+      "windowHours": 5,
+      "window": {
+        "fromIso": "2025-08-01T09:00:00.000Z",
+        "untilIso": "2025-08-01T14:00:00.000Z"
+      },
+      "totals": {
+        "events": 5,
+        "tokens": 242000,
+        "costUsd": 3.5999999999999996,
+        "billableWeighted": 140937.5,
+        "input": 2000,
+        "output": 450,
+        "cacheRead": 120000,
+        "cacheCreate": 20550
+      },
+      "projects": [
+        {
+          "workspace": "/w/beta",
+          "sessions": 2,
+          "events": 2,
+          "tokens": 140000,
+          "costUsd": 1.3,
+          "input": 1200,
+          "output": 100,
+          "cacheRead": 35000,
+          "cacheCreate": 4700,
+          "billableWeighted": 110075,
+          "shareOfWindowPct": 78.10199556541019,
+          "topModel": "claude-opus-5"
+        }
+      ],
+      "burners": [
+        {
+          "sessionId": "s6",
+          "workspace": "/w/beta",
+          "source": "claude_code",
+          "model": "claude-opus-5",
+          "events": 1,
+          "tokens": 100000,
+          "costUsd": 0.4,
+          "input": 1000,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheCreate": 0,
+          "billableWeighted": 100000,
+          "shareOfWindowPct": 70.95343680709534,
+          "topAttribution": null,
+          "firstMs": 1754055000000,
+          "lastMs": 1754055000000
+        }
+      ],
+      "totalProjects": 3,
+      "totalBurners": 4,
+      "capacity": {
+        "tokens": 5000000,
+        "costUsd": 40,
+        "source": "observed",
+        "proxyAccountId": null,
+        "observedAt": "2026-07-30T00:00:00.000Z"
+      },
+      "fillPct": 9
+    },
+    "sevenDay": {
+      "label": "7d",
+      "windowHours": 168,
+      "window": {
+        "fromIso": "2025-07-25T14:00:00.000Z",
+        "untilIso": "2025-08-01T14:00:00.000Z"
+      },
+      "totals": {
+        "events": 6,
+        "tokens": 362000,
+        "costUsd": 7.1000000000000005,
+        "billableWeighted": 177562.5,
+        "input": 3000,
+        "output": 950,
+        "cacheRead": 220000,
+        "cacheCreate": 39050
+      },
+      "projects": [
+        {
+          "workspace": "/w/beta",
+          "sessions": 2,
+          "events": 2,
+          "tokens": 140000,
+          "costUsd": 1.3,
+          "input": 1200,
+          "output": 100,
+          "cacheRead": 35000,
+          "cacheCreate": 4700,
+          "billableWeighted": 110075,
+          "shareOfWindowPct": 61.99225624780007,
+          "topModel": "claude-opus-5"
+        }
+      ],
+      "burners": [
+        {
+          "sessionId": "s6",
+          "workspace": "/w/beta",
+          "source": "claude_code",
+          "model": "claude-opus-5",
+          "events": 1,
+          "tokens": 100000,
+          "costUsd": 0.4,
+          "input": 1000,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheCreate": 0,
+          "billableWeighted": 100000,
+          "shareOfWindowPct": 56.318197817669834,
+          "topAttribution": null,
+          "firstMs": 1754055000000,
+          "lastMs": 1754055000000
+        }
+      ],
+      "totalProjects": 3,
+      "totalBurners": 4,
+      "capacity": {
+        "tokens": 40000000,
+        "costUsd": 300,
+        "source": "observed",
+        "proxyAccountId": null,
+        "observedAt": "2026-07-30T00:00:00.000Z"
+      },
+      "fillPct": 2.366666666666667
+    },
+    "mostLikelyExhausted": "5h",
+    "exhaustionReason": "5h at 9% vs 7d at 2% of capacity (observed) at the rotation moment.",
+    "coverage": {
+      "oldestEventIso": "2025-08-01T08:10:00.000Z",
+      "coversWindow": false
+    },
+    "verdict": "Most likely exhausted: the 5h window — 5h at 9% vs 7d at 2% of capacity (observed) at the rotation moment. Top 5h projects: beta (78%, $1). Top 7d projects: beta (62%, $1).",
+    "note": "Attribution is TIME-based (the machine-wide account-state timeline decides which account each event burned), so sessions alive across a rotation split correctly between accounts. Projects group sessions by workspace. share/equiv rank by billable weight (input×1 + output×5 + cacheRead×0.1 + cacheCreate×1.25); cache columns are raw token counts. ⚠ COVERAGE GAP: the oldest available event is younger than the 7d window start — 7d totals are a LOWER BOUND.",
+    "text": "━━ 5h window of one@example.test (CURRENT) ending 2025-08-01T14:00:00.000Z · 5 calls · 141k equiv · $3.60 · fill 9% of observed capacity  ◀ MOST LIKELY EXHAUSTED (forced the rotation)\n  share   equiv     cost   cache-created  cache-read   raw     sess  model / project\n   78.1%     110k  $    1.30            5k         35k     140k     2  claude-opus-5  /w/beta\n━━ 7d window of one@example.test (CURRENT) ending 2025-08-01T14:00:00.000Z · 6 calls · 178k equiv · $7.10 · fill 2% of observed capacity\n  share   equiv     cost   cache-created  cache-read   raw     sess  model / project\n   62.0%     110k  $    1.30            5k         35k     140k     2  claude-opus-5  /w/beta\nMost likely exhausted: the 5h window — 5h at 9% vs 7d at 2% of capacity (observed) at the rotation moment. Top 5h projects: beta (78%, $1). Top 7d projects: beta (62%, $1).\n⚠ coverage: oldest event 2025-08-01T08:10:00.000Z is inside the 7d window — 7d is a lower bound."
+  },
+  "reportEmptyWindow": {
+    "account": {
+      "accountId": "aaaaaaaa-1111-1111-1111-111111111111",
+      "email": "one@example.test",
+      "plan": "Max 20x",
+      "isCurrent": true
+    },
+    "untilIso": "2025-07-28T04:00:00.000Z",
+    "fiveHour": {
+      "label": "5h",
+      "windowHours": 5,
+      "window": {
+        "fromIso": "2025-07-27T23:00:00.000Z",
+        "untilIso": "2025-07-28T04:00:00.000Z"
+      },
+      "totals": {
+        "events": 0,
+        "tokens": 0,
+        "costUsd": 0,
+        "billableWeighted": 0,
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheCreate": 0
+      },
+      "projects": [],
+      "burners": [],
+      "totalProjects": 0,
+      "totalBurners": 0,
+      "capacity": {
+        "tokens": 5000000,
+        "costUsd": 40,
+        "source": "observed",
+        "proxyAccountId": null,
+        "observedAt": "2026-07-30T00:00:00.000Z"
+      },
+      "fillPct": 0
+    },
+    "sevenDay": {
+      "label": "7d",
+      "windowHours": 168,
+      "window": {
+        "fromIso": "2025-07-21T04:00:00.000Z",
+        "untilIso": "2025-07-28T04:00:00.000Z"
+      },
+      "totals": {
+        "events": 0,
+        "tokens": 0,
+        "costUsd": 0,
+        "billableWeighted": 0,
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheCreate": 0
+      },
+      "projects": [],
+      "burners": [],
+      "totalProjects": 0,
+      "totalBurners": 0,
+      "capacity": {
+        "tokens": 40000000,
+        "costUsd": 300,
+        "source": "observed",
+        "proxyAccountId": null,
+        "observedAt": "2026-07-30T00:00:00.000Z"
+      },
+      "fillPct": 0
+    },
+    "mostLikelyExhausted": "5h",
+    "exhaustionReason": "5h at 0% vs 7d at 0% of capacity (observed) at the rotation moment.",
+    "coverage": {
+      "oldestEventIso": "2025-08-01T08:10:00.000Z",
+      "coversWindow": false
+    },
+    "verdict": "No consumption events attribute to one@example.test in either window — they may predate the event sources' retention (see coverage).",
+    "note": "Attribution is TIME-based (the machine-wide account-state timeline decides which account each event burned), so sessions alive across a rotation split correctly between accounts. Projects group sessions by workspace. share/equiv rank by billable weight (input×1 + output×5 + cacheRead×0.1 + cacheCreate×1.25); cache columns are raw token counts. ⚠ COVERAGE GAP: the oldest available event is younger than the 7d window start — 7d totals are a LOWER BOUND.",
+    "text": "━━ 5h window of one@example.test (CURRENT) ending 2025-07-28T04:00:00.000Z · 0 calls · 0k equiv · $0.00 · fill 0% of observed capacity  ◀ MOST LIKELY EXHAUSTED (forced the rotation)\n  share   equiv     cost   cache-created  cache-read   raw     sess  model / project\n━━ 7d window of one@example.test (CURRENT) ending 2025-07-28T04:00:00.000Z · 0 calls · 0k equiv · $0.00 · fill 0% of observed capacity\n  share   equiv     cost   cache-created  cache-read   raw     sess  model / project\nNo consumption events attribute to one@example.test in either window — they may predate the event sources' retention (see coverage).\n⚠ coverage: oldest event 2025-08-01T08:10:00.000Z is inside the 7d window — 7d is a lower bound."
+  }
+}

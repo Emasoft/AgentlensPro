@@ -2260,6 +2260,12 @@ fn cc_display_equivalent(c: &Value, timeline: &[Value]) -> Value {
     Value::Object(m)
 }
 
+/// The `{error: "…"}` payload shape, for routes that build their own early returns. Same literal
+/// as the in-module `err`, exported so an arm cannot accidentally invent a second error shape.
+pub fn error_payload(msg: &str) -> Value {
+    err(msg.to_owned())
+}
+
 fn err(msg: String) -> Value {
     let mut m = Map::new();
     m.insert("error".into(), Value::String(msg));

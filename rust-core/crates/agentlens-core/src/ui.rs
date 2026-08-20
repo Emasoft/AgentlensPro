@@ -1694,6 +1694,80 @@ async fn handle(
                         .await?;
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
+                    "get_account_burners" => {
+                        // Pure once the inputs are gathered (no transcript reparse), so it runs
+                        // under the lock like the other burn routes rather than on spawn_blocking.
+                        //
+                        // Every early return is an ERROR THAT NAMES ITSELF: an empty timeline and
+                        // an unmatched account produce different messages, and the unmatched one
+                        // lists the accounts it DOES know — a bare null would send the caller
+                        // hunting for a bug in the tool instead of fixing the argument.
+                        let now = crate::now_ms() as f64;
+                        let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                        let timeline_path = crate::account_state_timeline::account_state_timeline_path(&st.data_dir);
+                        let segments = crate::account_burners::read_account_segments(&timeline_path);
+                        let payload = if segments.is_empty() {
+                            crate::mcp_tools::error_payload(
+                                "No account-state timeline yet (~/.agentlens/account-state.ndjson) — the server records it on account changes; nothing to attribute against.",
+                            )
+                        } else {
+                            let spec = args.get("account").and_then(Value::as_str).unwrap_or("previous");
+                            match crate::account_burners::resolve_target_account(&segments, spec, now) {
+                                None => crate::mcp_tools::error_payload(&format!(
+                                    "No account matches '{spec}' in the timeline. Known: {}",
+                                    crate::account_burners::known_accounts(&segments)
+                                )),
+                                Some(target) => {
+                                    let interval = args.get("interval").and_then(Value::as_str).unwrap_or("last");
+                                    let (until_ms, err) = crate::account_burners::resolve_window_until(interval, &target, now);
+                                    match err {
+                                        Some(e) => crate::mcp_tools::error_payload(&e),
+                                        None => {
+                                            let summary = st.build_session_summary(now);
+                                            let sessions: Vec<Value> =
+                                                summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
+                                            drop(summary);
+                                            let events = crate::burn::monitor::gather_consumption_events(&sessions, &[], now);
+                                            // The TS hands only these four card fields through, and
+                                            // passing the whole card instead would let a future field
+                                            // shadow an event's own workspace.
+                                            let cards: Vec<Value> = sessions
+                                                .iter()
+                                                .map(|s| {
+                                                    let mut m = serde_json::Map::new();
+                                                    for k in ["sessionId", "workspace", "source", "model"] {
+                                                        if let Some(v) = s.get(k) {
+                                                            m.insert(k.to_owned(), v.clone());
+                                                        }
+                                                    }
+                                                    Value::Object(m)
+                                                })
+                                                .collect();
+                                            let limit = args.get("limit").and_then(Value::as_f64).unwrap_or(15.0).max(1.0);
+                                            // `process.env.HOME ?? ''` — the burn runtime already
+                                            // resolves the machine's home, so the table's `~/…`
+                                            // abbreviation matches every other burn surface.
+                                            let home = st.burn.home_dir.to_string_lossy().into_owned();
+                                            let observed = st.burn.config.observed.clone();
+                                            crate::account_burners::build_account_burners_report(&crate::account_burners::AccountBurnersOpts {
+                                                events: &events,
+                                                target: &target,
+                                                all_segments: &segments,
+                                                cards: &cards,
+                                                until_ms,
+                                                now_ms: now,
+                                                limit,
+                                                observed: &observed,
+                                                home: &home,
+                                            })
+                                        }
+                                    }
+                                }
+                            }
+                        };
+                        drop(st);
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
+                    }
                     "get_cache_risk_costs" => {
                         // Two transcript SCANS (slash commands + effort transitions) over the whole
                         // history, then up to 40 pooled sessions each costing a reparse plus a
