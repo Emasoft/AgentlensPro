@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T18:02:41+0200
+updated: 2026-08-20T18:34:12+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -948,8 +948,29 @@ release-via: publish
   unobservable by construction (a file it skips has no attributed rows anyway), and the mtime skip
   cannot come from a committed fixture because git does not preserve mtimes — asserted as a Rust
   property test instead. Mutation-proved: no-dedupe fails 5 tests, `is_object()` fails 4.
-- **NEXT (P4x.2d continued): port ENGINES.** 29 tools remain. SIZE FIRST. Order:
-  `loadedPluginVersions.ts` (274 ln), `cacheEventLog.ts` (479 ln),
+- **P4x.2d (commit 8e1f8cc): `loadedPluginVersions` ported + `get_loaded_plugin_versions`. 25 of
+  53.** CORE CLAIM: `loadedVersion` is the MAX observed, NOT the latest-by-timestamp — a compaction
+  REPLAYS old invocations as fresh records, so record order is not chronological (18/19 measured
+  non-monotone) and a latest-ts port libels a current session as a ghost. Mutation-proved: the swap
+  fails 5 tests.
+  **TWO MORE TRUTHINESS/PRESENCE TRAPS** (same class as the skillAttribution three): `opts.plugin &&`
+  is TRUTHY at both use sites so an EMPTY filter means NO filter — `Some("")` matches nothing and
+  reports a confidently empty fleet, the failure that looks like good news; and
+  `opts.activeMinutes !== undefined` is a PRESENCE test so `0` is a real now-anchored window, while
+  an explicit JSON `null` coerces to 0 — reproduced, not "fixed".
+  Also pinned: ONLY the harness `invoked_skills` attachment is evidence (decoys in prose + a
+  wrong-typed attachment); `stale:"unknown"` is not a softer `true`; scanned−evidence IS the blind
+  spot; the cache's `/^\d/` filter (`walkthrough` sorts ABOVE `3.4.0`); numeric compare (1.0.9 vs
+  1.0.10); four row fields assigned AFTER the literal serialize at the END.
+  **MTIME PATTERN, reusable:** `lastActivityTs` is a transcript mtime and git does not preserve it —
+  the generator STAMPS a fixed table and PUBLISHES it in the oracle; the Rust test stamps the same
+  table READ FROM THE ORACLE (`touch -d @<epoch>`; no crate has a set-mtime API here). A second
+  hardcoded copy drifts silently and the suite compares two worlds while passing.
+  NAMED not faked: `compare_versions`' non-numeric branch is a BYTE compare vs the TS's ICU
+  `localeCompare` — they agree on lowercase-ASCII tails, diverge on mixed case/non-ASCII.
+  **Live smoke found a REAL ghost: this session runs janitor 3.3.18 while 3.3.20 is cached.**
+- **NEXT (P4x.2d continued): port ENGINES.** 28 tools remain. SIZE FIRST. Order:
+  `cacheEventLog.ts` (479 ln),
   `subscriptionUsage.ts` (797 ln — also the TTL-regime oracle; NETWORK: calls Anthropic's usage
   endpoint, so the oracle must stub). Heavyweights (forensics / timeline / investigator / sql)
   last. **Every new arm must end in `tool_ok_lean`, never `mcp::tool_ok`.** The dispatch cases are
