@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T12:34:29+0200
+updated: 2026-08-20T12:52:10+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -637,6 +637,20 @@ release-via: publish
   (the latter called as `calibrateTokens(raw, exactContext, {minScale:0.2, maxScale:5})`) are
   its exports and the composition index's calibration depends on them exactly; `rawBodyContext.ts`
   lines ~270-378 (the messages-loop tail + `resolveCallContext`) are also still unread.
+- **P4w.1b(i) DONE (commit 4c62695): `token_estimator.rs`.** countTokens + calibrateTokens
+  ported; tokenEstimator.ts is now fully read and needs no revisit. **UTF-16 LAW pinned by the
+  oracle** (`'a🎉b'` = 3 — an astral char is TWO code units, both `Other`; `chars()` diverges).
+  calibrate's refuse-band and fold-into-FIRST-largest residual are verbatim.
+  `estimate_tokens_from_bytes` is RE-EXPORTED from generated_files (layout divergence from the
+  TS, stated in the module head) rather than redefined. 114/114, clippy 28, identities green.
+- **NEXT (P4w.1b(ii)): `raw_body_context.rs`.** STILL UNREAD and must be read first:
+  `src/rawBodyContext.ts` lines ~266-378 — the tail of the messages loop in
+  `buildCallContextFromJson` (the content-array branch: text / tool_use / tool_result / thinking
+  / image blocks, and where `IMAGE_BLOCK_LABEL_PREFIX` is applied) plus `buildCallContext` (the
+  file-reading wrapper with the 64MB `MAX_RAW_BODY_BYTES` gate and the `uncap` option) and
+  `resolveCallContext` (freeze row 35's engine). Lines 1-266 ARE read and their contract is
+  captured above. Port target: pure `build_call_context_from_json` over a parsed Value +
+  `parse_user_id`, then the file wrapper, then rows 36-37.
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
