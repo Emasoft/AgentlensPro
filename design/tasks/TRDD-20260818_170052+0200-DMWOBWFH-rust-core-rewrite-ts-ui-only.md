@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T02:01:22+0200
+updated: 2026-08-20T08:09:43+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -505,12 +505,27 @@ release-via: publish
   gen-ttlaccount-expected.mjs + a socket test on a scrubbed env + fixture home (labels,
   currentAccount, residentBlobs [], no token-shaped field). Live: route + a burnStatus SSE
   frame within one tick. 95/95.
-- **NEXT ACTION (one step): P4r.4 — bodiesActivity + causingToolCall + GET /api/burn-risk (row
-  12).** Read src/bodiesActivity.ts (377) + src/causingToolCall.ts (246) + src/burnGuard.ts
-  (302) + the server.ts row-12 handler (3519) IN FULL first. checkBurnRisk reads the hook-event
-  ring (hook_events is ported — the recent-events RING is not, P4m note), bodies activity (the
-  captured raw-bodies dir), causing tool calls, and lastBurnStatus (now real). Then P4r.5
-  agentGate (row 13). Then bodies rows 14–15, instruction rows 19–21, statusline row 5.
+- **P4r.4 DONE (commit 58e64ed): bodiesActivity + causingToolCall + GET /api/burn-risk (row
+  12).** `burn/bodies_activity.rs` (write-once names make readdir-only-unseen EXACT; the bounded
+  6KB head/tail attribution via hand scanners; the previous_message_id chain; the per-SOURCE
+  thrash rule with BOTH field-fix invariants — the unattributed pool can never flip `active`
+  (TRDD-THRGX41P), and a different-model suspect is filtered while unknown-model stays).
+  `burn/causing_tool_call.rs` — **DELIBERATE ENGINE DIVERGENCE, documented in the module head:
+  the TS needs DuckDB only because JS cannot parse ~2GB transcripts; Rust streams NDJSON
+  natively, so `duckdb-unavailable` ceases to exist as a reason.** Torn-line disclosure kept and
+  keyed on `type` not `timestamp` (the TS measurement: timestamp missing from 16.9% of 482,993
+  real records). `burn/guard.rs` = checkBurnRisk (6 rows, each stating its quiet measurement) +
+  attachRiskCausingCalls + defaultBodiesDir (spool-first). Oracle BUILDS a committed fixture
+  tree both engines read; Rust deep-equals tracker report, warm-since, sender formatting, usage
+  extraction, the 6-active risk report, causing calls, composition, slugs. 96/96, zero new
+  clippy, burn-risk curl'd live.
+- **NEXT ACTION (one step): P4r.5 — POST /api/agent-gate (row 13).** Read src/agentGate.ts (598)
+  + shared/imageReads.ts (25) + the server.ts row-13 handler (3553–3660) IN FULL first. THE
+  CONTRACT IS FAIL-OPEN: allow → 204 empty; PostToolUse advisory / deny / warn → the three 200
+  hookSpecificOutput shapes; **every error path → 204**, because a gate that can error a launch
+  is worse than no gate. The gate consumes bodies_activity.session_warm_since (ported) for the
+  COLD_RESUME disarm and the hook-event ring for caller lineage. Then bodies rows 14–15,
+  instruction rows 19–21, statusline row 5.
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
