@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T14:19:04+0200
+updated: 2026-08-20T14:26:30+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -777,10 +777,28 @@ release-via: publish
   An unimplemented tool returns an explicit error NAMING it, kept DISTINCT from the unknown-tool
   error — an empty result would read as a working tool that found nothing, the worst failure mode
   for a diagnostic. 146/146, clippy 28, identities green, check-types OK.
-- **NEXT (P4x.2): the tool HANDLERS, in batches.** Wire them through the `call` hook in
-  `mcp::handle_rpc` (currently `|_,_| None`). Start with the tools that are thin re-exposures of
-  ALREADY-PORTED engines (session summary, burn, cache-risk, composition, history, conversation,
-  callcontext, statusline) before the ones needing new work. Still unported and MCP-only:
+- **P4x.2a DONE (commit 8d166f6): the FIRST MCP tool end-to-end — `get_call_context`.** Proves the
+  whole chain (schema → dispatch → engine → shaper → content envelope → the CLI's own unwrap)
+  before batching the other 52. **FIXED A P4x.1 DESIGN FLAW FIRST:** that slice's tool hook was
+  SYNCHRONOUS, but every real tool needs blocking I/O + the CoreState lock — a sync hook could only
+  satisfy both by dragging the lock across the I/O (the P4s violation). `route_rpc` now returns
+  `Dispatch::Tool` as WORK; mcp.rs is protocol-only and the ROUTE owns async + locking. Paying that
+  at one call site beat threading it through 53.
+  **THE HANDLER PATTERN, now established — follow it for the rest:** the TS dispatch case is always
+  `handleGetX(engineResult, args)` where the engine is injected and the shaper is PURE. So each tool
+  = (a) an engine call the route makes, (b) a pure shaper in `mcp_tools.rs`, (c) an oracle driving
+  the TS shaper DIRECTLY (export it — `TOOLS` and `handleGetCallContext` are exported already;
+  export-only, no behaviour change, check-types green). Driving the pure shaper beats round-tripping
+  a live MCP server.
+  `resolve_call_context` is EXTRACTED in ui.rs and shared by the HTTP route AND the tool — the TS
+  has ONE `resolveCallContext` behind both. Shapers RE-PROJECT (get_call_context drops
+  `tokenSource` and imposes its own key order); never pass an engine object through unchanged.
+  149/149, clippy 28, identities green, check-types OK.
+- **NEXT (P4x.2b): the next handler batch.** Thin re-exposures of ported engines first:
+  `get_context_composition` (2438), `get_context_history` (2325), `get_conversation` (2391) — all
+  three shapers are in `src/mcpServer.ts` and UNREAD except their heads; each has `turn` / range
+  filtering and caps (`CONVERSATION_RANGE_CAP`, `CONVERSATION_SUMMARY_TURN_CAP`) plus a
+  `verbatimTurn` helper. Then burn / cache-risk / statusline. Still unported and MCP-only:
   `imageReport` / `findResidentBlobs` / `queryBlocks` in contextCompositionIndex.ts — purely
   ADDITIVE, they reuse the core landed in P4w.1c(ii)a/b.
 - **ALSO PENDING (not blocking P4x): the dedicated MCP listener.** `/mcp` is served on the UI
