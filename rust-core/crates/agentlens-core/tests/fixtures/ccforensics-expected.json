@@ -1,0 +1,590 @@
+{
+  "nowMs": 1785585600000,
+  "mtimes": {
+    "s1.response.json": 1785582000000,
+    "s2.response.json": 1785578400000,
+    "s3.response.json": 1785574800000,
+    "s4.response.json": 1785571200000,
+    "s5.response.json": 1785567600000,
+    "s6.response.json": 1785564000000,
+    "s7.response.json": 1785477600000,
+    "s8.response.json": 1785441600000,
+    "q1.request.json": 1785582000000,
+    "q2.request.json": 1785578400000,
+    "q3.request.json": 1785567600000,
+    "q4.request.json": 1785564000000,
+    "q5.request.json": 1785405600000,
+    "notes.txt": 1785582000000
+  },
+  "caps": {
+    "RESPONSE_SCAN_CAP": 4000,
+    "REQUEST_INDEX_CAP": 4000
+  },
+  "listResponses": [
+    {
+      "name": "s1.response.json",
+      "mtimeMs": 1785582000000
+    },
+    {
+      "name": "s2.response.json",
+      "mtimeMs": 1785578400000
+    },
+    {
+      "name": "s3.response.json",
+      "mtimeMs": 1785574800000
+    },
+    {
+      "name": "s4.response.json",
+      "mtimeMs": 1785571200000
+    },
+    {
+      "name": "s5.response.json",
+      "mtimeMs": 1785567600000
+    },
+    {
+      "name": "s6.response.json",
+      "mtimeMs": 1785564000000
+    },
+    {
+      "name": "s7.response.json",
+      "mtimeMs": 1785477600000
+    },
+    {
+      "name": "s8.response.json",
+      "mtimeMs": 1785441600000
+    }
+  ],
+  "listRequests": [
+    {
+      "name": "q1.request.json",
+      "mtimeMs": 1785582000000
+    },
+    {
+      "name": "q2.request.json",
+      "mtimeMs": 1785578400000
+    },
+    {
+      "name": "q3.request.json",
+      "mtimeMs": 1785567600000
+    },
+    {
+      "name": "q4.request.json",
+      "mtimeMs": 1785564000000
+    },
+    {
+      "name": "q5.request.json",
+      "mtimeMs": 1785405600000
+    }
+  ],
+  "listMissingDir": [],
+  "boundedAll": {
+    "slice": [
+      {
+        "name": "s1.response.json",
+        "mtimeMs": 1785582000000
+      },
+      {
+        "name": "s2.response.json",
+        "mtimeMs": 1785578400000
+      },
+      {
+        "name": "s3.response.json",
+        "mtimeMs": 1785574800000
+      },
+      {
+        "name": "s4.response.json",
+        "mtimeMs": 1785571200000
+      },
+      {
+        "name": "s5.response.json",
+        "mtimeMs": 1785567600000
+      },
+      {
+        "name": "s6.response.json",
+        "mtimeMs": 1785564000000
+      },
+      {
+        "name": "s7.response.json",
+        "mtimeMs": 1785477600000
+      },
+      {
+        "name": "s8.response.json",
+        "mtimeMs": 1785441600000
+      }
+    ],
+    "matched": 8
+  },
+  "boundedCapped": {
+    "slice": [
+      {
+        "name": "s1.response.json",
+        "mtimeMs": 1785582000000
+      },
+      {
+        "name": "s2.response.json",
+        "mtimeMs": 1785578400000
+      },
+      {
+        "name": "s3.response.json",
+        "mtimeMs": 1785574800000
+      }
+    ],
+    "matched": 8
+  },
+  "boundedWindowed": {
+    "slice": [
+      {
+        "name": "s1.response.json",
+        "mtimeMs": 1785582000000
+      },
+      {
+        "name": "s2.response.json",
+        "mtimeMs": 1785578400000
+      },
+      {
+        "name": "s3.response.json",
+        "mtimeMs": 1785574800000
+      },
+      {
+        "name": "s4.response.json",
+        "mtimeMs": 1785571200000
+      },
+      {
+        "name": "s5.response.json",
+        "mtimeMs": 1785567600000
+      },
+      {
+        "name": "s6.response.json",
+        "mtimeMs": 1785564000000
+      }
+    ],
+    "matched": 6
+  },
+  "boundedZeroWindow": {
+    "slice": [
+      {
+        "name": "s1.response.json",
+        "mtimeMs": 1785582000000
+      },
+      {
+        "name": "s2.response.json",
+        "mtimeMs": 1785578400000
+      },
+      {
+        "name": "s3.response.json",
+        "mtimeMs": 1785574800000
+      },
+      {
+        "name": "s4.response.json",
+        "mtimeMs": 1785571200000
+      },
+      {
+        "name": "s5.response.json",
+        "mtimeMs": 1785567600000
+      },
+      {
+        "name": "s6.response.json",
+        "mtimeMs": 1785564000000
+      },
+      {
+        "name": "s7.response.json",
+        "mtimeMs": 1785477600000
+      },
+      {
+        "name": "s8.response.json",
+        "mtimeMs": 1785441600000
+      }
+    ],
+    "matched": 8
+  },
+  "readOk": {
+    "id": "msg_resp0002",
+    "model": "claude-haiku-4-5",
+    "usage": {
+      "input_tokens": 10,
+      "output_tokens": 40,
+      "cache_read_input_tokens": 1000,
+      "cache_creation_input_tokens": 9000
+    }
+  },
+  "readTooBig": null,
+  "readMalformed": null,
+  "readMissing": null,
+  "scanDefault": {
+    "events": [
+      {
+        "cacheCreateTokens": 32000,
+        "cacheReadTokens": 50000,
+        "inputTokens": 120,
+        "outputTokens": 800,
+        "costUsd": 0.2,
+        "cacheCreation5mTokens": 2000,
+        "cacheCreation1hTokens": 30000,
+        "model": "claude-opus-5",
+        "responseId": "msg_resp0001",
+        "ts": 1785582000000,
+        "responseRef": "<BODIES>/s1.response.json",
+        "requestRef": "<BODIES>/q1.request.json",
+        "sessionId": "aaaaaaaa-1111-1111-1111-111111111111",
+        "accountUuid": "acct1111-2222-2222-2222-222222222222",
+        "attributed": true
+      },
+      {
+        "cacheCreateTokens": 9000,
+        "cacheReadTokens": 1000,
+        "inputTokens": 10,
+        "outputTokens": 40,
+        "costUsd": 0.0225,
+        "cacheCreation5mTokens": 0,
+        "cacheCreation1hTokens": 0,
+        "model": "claude-sonnet-5",
+        "responseId": "msg_resp0002",
+        "ts": 1785578400000,
+        "responseRef": "<BODIES>/s2.response.json",
+        "requestRef": "<BODIES>/q2.request.json",
+        "sessionId": "bbbb2222-3333-3333-3333-333333333333",
+        "attributed": true
+      },
+      {
+        "cacheCreateTokens": 4000,
+        "cacheReadTokens": 300,
+        "inputTokens": 5,
+        "outputTokens": 20,
+        "costUsd": 0.01,
+        "cacheCreation5mTokens": 4000,
+        "cacheCreation1hTokens": 0,
+        "model": "claude-sonnet-5",
+        "responseId": "msg_resp0003",
+        "ts": 1785574800000,
+        "responseRef": "<BODIES>/s3.response.json",
+        "attributed": false
+      },
+      {
+        "cacheCreateTokens": 1500,
+        "cacheReadTokens": 900,
+        "inputTokens": 7,
+        "outputTokens": 11,
+        "costUsd": 0,
+        "cacheCreation5mTokens": 0,
+        "cacheCreation1hTokens": 0,
+        "responseId": "msg_resp0004",
+        "ts": 1785571200000,
+        "responseRef": "<BODIES>/s4.response.json",
+        "attributed": false
+      },
+      {
+        "cacheCreateTokens": 600,
+        "cacheReadTokens": 10,
+        "inputTokens": 1,
+        "outputTokens": 2,
+        "costUsd": 0.00375,
+        "cacheCreation5mTokens": 0,
+        "cacheCreation1hTokens": 0,
+        "model": "claude-opus-5",
+        "ts": 1785441600000,
+        "responseRef": "<BODIES>/s8.response.json",
+        "attributed": false
+      }
+    ],
+    "coverage": {
+      "bodiesDir": "<BODIES>",
+      "dirExists": true,
+      "responseFilesTotal": 8,
+      "responseFilesScanned": 8,
+      "requestFilesTotal": 5,
+      "requestFilesIndexed": 5,
+      "scanCap": 4000,
+      "complete": true,
+      "note": "Scanned all 8 response body file(s) (8 total on disk)."
+    }
+  },
+  "scanWithZeros": {
+    "events": [
+      {
+        "cacheCreateTokens": 32000,
+        "cacheReadTokens": 50000,
+        "inputTokens": 120,
+        "outputTokens": 800,
+        "costUsd": 0.2,
+        "cacheCreation5mTokens": 2000,
+        "cacheCreation1hTokens": 30000,
+        "model": "claude-opus-5",
+        "responseId": "msg_resp0001",
+        "ts": 1785582000000,
+        "responseRef": "<BODIES>/s1.response.json",
+        "requestRef": "<BODIES>/q1.request.json",
+        "sessionId": "aaaaaaaa-1111-1111-1111-111111111111",
+        "accountUuid": "acct1111-2222-2222-2222-222222222222",
+        "attributed": true
+      },
+      {
+        "cacheCreateTokens": 9000,
+        "cacheReadTokens": 1000,
+        "inputTokens": 10,
+        "outputTokens": 40,
+        "costUsd": 0.0225,
+        "cacheCreation5mTokens": 0,
+        "cacheCreation1hTokens": 0,
+        "model": "claude-sonnet-5",
+        "responseId": "msg_resp0002",
+        "ts": 1785578400000,
+        "responseRef": "<BODIES>/s2.response.json",
+        "requestRef": "<BODIES>/q2.request.json",
+        "sessionId": "bbbb2222-3333-3333-3333-333333333333",
+        "attributed": true
+      },
+      {
+        "cacheCreateTokens": 4000,
+        "cacheReadTokens": 300,
+        "inputTokens": 5,
+        "outputTokens": 20,
+        "costUsd": 0.01,
+        "cacheCreation5mTokens": 4000,
+        "cacheCreation1hTokens": 0,
+        "model": "claude-sonnet-5",
+        "responseId": "msg_resp0003",
+        "ts": 1785574800000,
+        "responseRef": "<BODIES>/s3.response.json",
+        "attributed": false
+      },
+      {
+        "cacheCreateTokens": 1500,
+        "cacheReadTokens": 900,
+        "inputTokens": 7,
+        "outputTokens": 11,
+        "costUsd": 0,
+        "cacheCreation5mTokens": 0,
+        "cacheCreation1hTokens": 0,
+        "responseId": "msg_resp0004",
+        "ts": 1785571200000,
+        "responseRef": "<BODIES>/s4.response.json",
+        "attributed": false
+      },
+      {
+        "cacheCreateTokens": 0,
+        "cacheReadTokens": 77000,
+        "inputTokens": 3,
+        "outputTokens": 9,
+        "costUsd": 0,
+        "cacheCreation5mTokens": 0,
+        "cacheCreation1hTokens": 0,
+        "model": "claude-opus-5",
+        "responseId": "msg_resp0005",
+        "ts": 1785567600000,
+        "responseRef": "<BODIES>/s5.response.json",
+        "requestRef": "<BODIES>/q3.request.json",
+        "attributed": true
+      },
+      {
+        "cacheCreateTokens": 600,
+        "cacheReadTokens": 10,
+        "inputTokens": 1,
+        "outputTokens": 2,
+        "costUsd": 0.00375,
+        "cacheCreation5mTokens": 0,
+        "cacheCreation1hTokens": 0,
+        "model": "claude-opus-5",
+        "ts": 1785441600000,
+        "responseRef": "<BODIES>/s8.response.json",
+        "attributed": false
+      }
+    ],
+    "coverage": {
+      "bodiesDir": "<BODIES>",
+      "dirExists": true,
+      "responseFilesTotal": 8,
+      "responseFilesScanned": 8,
+      "requestFilesTotal": 5,
+      "requestFilesIndexed": 5,
+      "scanCap": 4000,
+      "complete": true,
+      "note": "Scanned all 8 response body file(s) (8 total on disk)."
+    }
+  },
+  "scanWindowed": {
+    "events": [
+      {
+        "cacheCreateTokens": 32000,
+        "cacheReadTokens": 50000,
+        "inputTokens": 120,
+        "outputTokens": 800,
+        "costUsd": 0.2,
+        "cacheCreation5mTokens": 2000,
+        "cacheCreation1hTokens": 30000,
+        "model": "claude-opus-5",
+        "responseId": "msg_resp0001",
+        "ts": 1785582000000,
+        "responseRef": "<BODIES>/s1.response.json",
+        "requestRef": "<BODIES>/q1.request.json",
+        "sessionId": "aaaaaaaa-1111-1111-1111-111111111111",
+        "accountUuid": "acct1111-2222-2222-2222-222222222222",
+        "attributed": true
+      },
+      {
+        "cacheCreateTokens": 9000,
+        "cacheReadTokens": 1000,
+        "inputTokens": 10,
+        "outputTokens": 40,
+        "costUsd": 0.0225,
+        "cacheCreation5mTokens": 0,
+        "cacheCreation1hTokens": 0,
+        "model": "claude-sonnet-5",
+        "responseId": "msg_resp0002",
+        "ts": 1785578400000,
+        "responseRef": "<BODIES>/s2.response.json",
+        "requestRef": "<BODIES>/q2.request.json",
+        "sessionId": "bbbb2222-3333-3333-3333-333333333333",
+        "attributed": true
+      },
+      {
+        "cacheCreateTokens": 4000,
+        "cacheReadTokens": 300,
+        "inputTokens": 5,
+        "outputTokens": 20,
+        "costUsd": 0.01,
+        "cacheCreation5mTokens": 4000,
+        "cacheCreation1hTokens": 0,
+        "model": "claude-sonnet-5",
+        "responseId": "msg_resp0003",
+        "ts": 1785574800000,
+        "responseRef": "<BODIES>/s3.response.json",
+        "attributed": false
+      },
+      {
+        "cacheCreateTokens": 1500,
+        "cacheReadTokens": 900,
+        "inputTokens": 7,
+        "outputTokens": 11,
+        "costUsd": 0,
+        "cacheCreation5mTokens": 0,
+        "cacheCreation1hTokens": 0,
+        "responseId": "msg_resp0004",
+        "ts": 1785571200000,
+        "responseRef": "<BODIES>/s4.response.json",
+        "attributed": false
+      }
+    ],
+    "coverage": {
+      "bodiesDir": "<BODIES>",
+      "dirExists": true,
+      "responseFilesTotal": 8,
+      "responseFilesScanned": 6,
+      "requestFilesTotal": 5,
+      "requestFilesIndexed": 4,
+      "scanCap": 4000,
+      "windowHours": 6,
+      "complete": true,
+      "note": "Scanned all 6 response body file(s) in the last 6h (8 total on disk)."
+    }
+  },
+  "scanCapped": {
+    "events": [
+      {
+        "cacheCreateTokens": 32000,
+        "cacheReadTokens": 50000,
+        "inputTokens": 120,
+        "outputTokens": 800,
+        "costUsd": 0.2,
+        "cacheCreation5mTokens": 2000,
+        "cacheCreation1hTokens": 30000,
+        "model": "claude-opus-5",
+        "responseId": "msg_resp0001",
+        "ts": 1785582000000,
+        "responseRef": "<BODIES>/s1.response.json",
+        "requestRef": "<BODIES>/q1.request.json",
+        "sessionId": "aaaaaaaa-1111-1111-1111-111111111111",
+        "accountUuid": "acct1111-2222-2222-2222-222222222222",
+        "attributed": true
+      },
+      {
+        "cacheCreateTokens": 9000,
+        "cacheReadTokens": 1000,
+        "inputTokens": 10,
+        "outputTokens": 40,
+        "costUsd": 0.0225,
+        "cacheCreation5mTokens": 0,
+        "cacheCreation1hTokens": 0,
+        "model": "claude-sonnet-5",
+        "responseId": "msg_resp0002",
+        "ts": 1785578400000,
+        "responseRef": "<BODIES>/s2.response.json",
+        "requestRef": "<BODIES>/q2.request.json",
+        "sessionId": "bbbb2222-3333-3333-3333-333333333333",
+        "attributed": true
+      }
+    ],
+    "coverage": {
+      "bodiesDir": "<BODIES>",
+      "dirExists": true,
+      "responseFilesTotal": 8,
+      "responseFilesScanned": 2,
+      "requestFilesTotal": 5,
+      "requestFilesIndexed": 5,
+      "scanCap": 2,
+      "complete": false,
+      "note": "SAMPLE: 2 most-recent of 8 matching response body file(s) scanned (cap 2; 8 total on disk). Not full history."
+    }
+  },
+  "scanCappedWithZeros": {
+    "events": [
+      {
+        "cacheCreateTokens": 32000,
+        "cacheReadTokens": 50000,
+        "inputTokens": 120,
+        "outputTokens": 800,
+        "costUsd": 0.2,
+        "cacheCreation5mTokens": 2000,
+        "cacheCreation1hTokens": 30000,
+        "model": "claude-opus-5",
+        "responseId": "msg_resp0001",
+        "ts": 1785582000000,
+        "responseRef": "<BODIES>/s1.response.json",
+        "requestRef": "<BODIES>/q1.request.json",
+        "sessionId": "aaaaaaaa-1111-1111-1111-111111111111",
+        "accountUuid": "acct1111-2222-2222-2222-222222222222",
+        "attributed": true
+      },
+      {
+        "cacheCreateTokens": 9000,
+        "cacheReadTokens": 1000,
+        "inputTokens": 10,
+        "outputTokens": 40,
+        "costUsd": 0.0225,
+        "cacheCreation5mTokens": 0,
+        "cacheCreation1hTokens": 0,
+        "model": "claude-sonnet-5",
+        "responseId": "msg_resp0002",
+        "ts": 1785578400000,
+        "responseRef": "<BODIES>/s2.response.json",
+        "requestRef": "<BODIES>/q2.request.json",
+        "sessionId": "bbbb2222-3333-3333-3333-333333333333",
+        "attributed": true
+      }
+    ],
+    "coverage": {
+      "bodiesDir": "<BODIES>",
+      "dirExists": true,
+      "responseFilesTotal": 8,
+      "responseFilesScanned": 2,
+      "requestFilesTotal": 5,
+      "requestFilesIndexed": 5,
+      "scanCap": 2,
+      "complete": false,
+      "note": "SAMPLE: 2 most-recent of 8 matching response body file(s) scanned (cap 2; 8 total on disk). Not full history."
+    }
+  },
+  "scanMissingDir": {
+    "events": [],
+    "coverage": {
+      "bodiesDir": "<MISSING>",
+      "dirExists": false,
+      "responseFilesTotal": 0,
+      "responseFilesScanned": 0,
+      "requestFilesTotal": 0,
+      "requestFilesIndexed": 0,
+      "scanCap": 4000,
+      "complete": true,
+      "note": "No OTEL raw-body directory at <MISSING> — set OTEL_LOG_RAW_API_BODIES to capture bodies."
+    }
+  }
+}

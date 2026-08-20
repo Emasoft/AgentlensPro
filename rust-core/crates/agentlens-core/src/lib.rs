@@ -35,6 +35,7 @@ pub mod body_archive;
 pub mod body_writers;
 pub mod burn;
 pub mod cache_break;
+pub mod cache_creation_forensics;
 pub mod cache_risk_commands;
 pub mod call_body_registry;
 pub mod collector_lifecycle;
