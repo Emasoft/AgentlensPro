@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T13:34:34+0200
+updated: 2026-08-20T13:43:05+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -705,7 +705,25 @@ release-via: publish
   carries NO `blockIndex` key; no-block DOES) because the UI must tell them apart. `heavyGuard`
   NOT ported (V8-heap admission deferral; no V8 heap here, work already off the executor).
   127/127, clippy 28, identities green, live alcore serves both routes with no panics.
-- **NEXT (P4w.2): rows 32-34** — composition / history / conversation. Then **P4w.3 row 35**
+- **P4w.2a DONE (commit 736127e): `context_composition.rs` + FREEZE ROW 32 LIVE.**
+  `src/contextComposition.ts` READ IN FULL. Streams the session `.jsonl` (multi-GB routine) on
+  `spawn_blocking`, Env cloned out from under the lock. **The oracle caught a REAL divergence:
+  Node's `path.basename` is PLATFORM-DEPENDENT — on POSIX it splits `/` ONLY, so a Windows-style
+  path comes back WHOLE.** Splitting both separators looks more correct and silently relabels every
+  such source; only Windows cuts backslashes. Other pinned coercions: assistant DEDUP (a re-emitted
+  `message.id` must NOT advance the turn; a NO-id entry always does), `hookName ? :` is TRUTHY so an
+  empty one → `hook: unknown`, the file-name chain is NULLISH so an empty `displayPath` IS used
+  (the `file: ` label is correct), `addedBlocks || addedNames` falls through on empty, a 0-byte
+  attachment is dropped, and the excerpt budget `max(1, Number(env) || 16)` treats ZERO as unset.
+  `sources` is an IndexMap (stable-sort tie order); the `+N more sources` fold carries NO excerpt.
+  132/132, clippy 28, identities green.
+- **NEXT (P4w.2b/2c): rows 33-34** — `src/contextHistory.ts` (383) and `src/conversation.ts` (354),
+  both STILL UNREAD. Both import THREE things from contextComposition that are already ported and
+  must NOT be re-implemented: `classify_attachment` (the ONE taxonomy — TRDD-B22NYTOY de-duped an
+  identical private copy that had lived in contextHistory), `find_session_file`, and
+  `resolve_logged_ancestor`. Same route shape as row 32: `?parent=`, `{<name>: obj|null}`, always
+  200. Fixtures + the CLAUDE_CONFIG_DIR harness are in place and reusable.
+- **THEN P4w.3 row 35**
   (`resolveCallContext`, contract two bullets below). After those the HTTP §1 table is complete.
   `imageReport` / `findResidentBlobs` / `queryBlocks` remain unported — MCP-surface only, and the
   MCP surface is a separate frozen contract (53 tools); they reuse the core that landed in
