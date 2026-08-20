@@ -651,6 +651,15 @@ async fn handle(
             crate::burn::runtime::enrich_burn_status(&status, &account).to_string()
         };
         json_response(StatusCode::OK, body)
+    } else if method == Method::GET && path == "/api/burn-risk" {
+        // Row 12 (server.ts:3519): checkBurnRisk over the three feeds + the verbatim spawning
+        // calls behind an active fan-out. The TS 500-on-throw path is unreachable here (the
+        // Rust compute cannot throw); every feed absence is reported in `sources`, not as an error.
+        let body = {
+            let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+            st.burn_risk_report(crate::now_ms() as f64).to_string()
+        };
+        json_response(StatusCode::OK, body)
     } else if method == Method::GET && path == "/api/collector-gaps" {
         // Row 29 (server.ts:4038, TRDD-PJC8N1HO spec 2): the lifecycle-derived downtime windows.
         // The TS wraps computeCollectorGaps in a catch → []; the Rust compute cannot throw.

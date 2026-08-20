@@ -264,6 +264,33 @@ impl CoreState {
         let ttl = self.burn.ttl_context(now_ms);
         burn::monitor::compute_burn_status(&events, &sessions, &self.burn.config, now_ms, Some(&ttl))
     }
+
+    /// The `/api/burn-risk` body (freeze row 12): poll the bodies watcher, then checkBurnRisk
+    /// over the three feeds, then attach the verbatim spawning calls behind an active fan-out.
+    /// `last_status` is filled inline when the 4s tick has not run yet (freshly booted server),
+    /// exactly as the TS route does. NOT PORTED: the in-memory hook-event ring (P4m note) — the
+    /// guard reads the NDJSON buckets, so the answer is the same, off disk.
+    pub fn burn_risk_report(&mut self, now_ms: f64) -> Value {
+        if self.burn.last_status.is_none() {
+            let s = self.live_burn_status(now_ms);
+            self.burn.last_status = Some(s);
+        }
+        self.burn.bodies.poll(now_ms);
+        let bodies = self.burn.bodies.report(now_ms);
+        let mut report = burn::guard::check_burn_risk(&burn::guard::BurnGuardOptions {
+            now: now_ms,
+            bodies_dir: burn::guard::default_bodies_dir(&self.data_dir),
+            hook_events_dir: self.data_dir.join("hook-events"),
+            fanout_threshold: 5.0,
+            spike_tokens_per_min: 250_000.0,
+            recent_events: None,
+            bodies_activity: Some(&bodies),
+            burn_status: self.burn.last_status.as_ref(),
+        });
+        let dirs = agentlens_logscan::discovery::claude_projects_dirs(&self.log_env);
+        burn::guard::attach_risk_causing_calls(&mut report, &dirs);
+        report
+    }
 }
 
 impl CoreState {
@@ -298,7 +325,7 @@ impl CoreState {
             log_env: agentlens_logscan::discovery::Env::from_process(),
             burn: {
                 let env = agentlens_logscan::discovery::Env::from_process();
-                burn::runtime::BurnRuntime::new(env.home, std::env::vars().collect())
+                burn::runtime::BurnRuntime::new(env.home, std::env::vars().collect(), data_dir)
             },
         }
     }

@@ -38,13 +38,20 @@ pub struct BurnRuntime {
     /// server.ts `lastBurnStatus` — the tick's latest computed status, reused by hot request
     /// paths and by the TTL resolver's usage-credit signal (a ≤4s-stale pct is fine).
     pub last_status: Option<Value>,
+    /// server.ts bodiesActivityReport() — the incremental raw-bodies watcher behind
+    /// HUGE_REQUEST_BURST + CACHE_THRASH. Polled on the burn tick (O(new files) per poll).
+    pub bodies: super::bodies_activity::BodiesActivityTracker,
     slow: Option<Slow>,
 }
 
 impl BurnRuntime {
-    pub fn new(home_dir: PathBuf, vars: HashMap<String, String>) -> BurnRuntime {
+    pub fn new(home_dir: PathBuf, vars: HashMap<String, String>, data_dir: &std::path::Path) -> BurnRuntime {
         let config = load_burn_config(&vars, &home_dir);
-        BurnRuntime { home_dir, vars, config, last_status: None, slow: None }
+        let bodies = super::bodies_activity::BodiesActivityTracker::new(
+            super::guard::default_bodies_dir(data_dir),
+            super::bodies_activity::BodiesActivityOptions::default(),
+        );
+        BurnRuntime { home_dir, vars, config, last_status: None, bodies, slow: None }
     }
 
     /// Point the runtime at a different home (tests) — clears every cached slow signal and

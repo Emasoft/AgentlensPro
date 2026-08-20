@@ -1,0 +1,8 @@
+{"ts":1786999940000,"ev":"SubagentStart","session":"spawner-1111","payload":{"session_id":"spawner-1111","cwd":"/tmp/wsA","agent_type":"explorer"}}
+{"ts":1786999941000,"ev":"SubagentStart","session":"spawner-1111","payload":{"session_id":"spawner-1111","cwd":"/tmp/wsA","agent_type":"fixer"}}
+{"ts":1786999942000,"ev":"SubagentStart","session":"spawner-1111","payload":{"session_id":"spawner-1111","cwd":"/tmp/wsA","agent_type":"explorer"}}
+{"ts":1786999943000,"ev":"SubagentStart","session":"spawner-1111","payload":{"session_id":"spawner-1111","cwd":"/tmp/wsA","agent_type":"fixer"}}
+{"ts":1786999944000,"ev":"SubagentStart","session":"spawner-2222","payload":{"session_id":"spawner-2222","cwd":"/tmp/wsA","agent_type":"explorer"}}
+{"ts":1786999945000,"ev":"SubagentStart","session":"spawner-2222","payload":{"session_id":"spawner-2222","cwd":"/tmp/wsA","agent_type":"fixer"}}
+{"ts":1786999700000,"ev":"StopFailure","session":"spawner-1111","payload":{"session_id":"spawner-1111"}}
+{"ts":1786999880000,"ev":"PreCompact","session":"spawner-1111","payload":{"session_id":"spawner-1111","trigger":"auto"}}

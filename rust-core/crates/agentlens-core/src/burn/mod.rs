@@ -8,7 +8,10 @@
 //! (checkBurnRisk), the gate (agentGate), and their server plumbing.
 
 pub mod account_info;
+pub mod bodies_activity;
 pub mod cache_ttl;
+pub mod causing_tool_call;
+pub mod guard;
 pub mod keep_warm;
 pub mod monitor;
 pub mod runtime;

@@ -1,0 +1,6 @@
+{"type":"assistant","timestamp":"2026-08-17T20:51:50.000Z","message":{"content":[{"type":"tool_use","name":"Agent","input":{"subagent_type":"general-purpose","model":"sonnet","prompt":"go"}}]}}
+{"type":"assistant","timestamp":"2026-08-17T20:52:00.000Z","message":{"content":[{"type":"tool_use","name":"Workflow","input":{"script":"x"}},{"type":"tool_use","name":"Agent","input":{"subagent_type":"general-purpose","model":"sonnet"}}]}}
+{"type":"assistant","timestamp":"2026-08-17T20:52:10.000Z","message":{"content":[{"type":"text","text":"not a tool_use"}]}}
+{"type":"assistant","timestamp":"2026-08-17T20:33:20.000Z","message":{"content":[{"type":"tool_use","name":"Agent","input":{"subagent_type":"too-old"}}]}}
+{torn line
+{"type":"user","timestamp":"2026-08-17T20:52:05.000Z"}

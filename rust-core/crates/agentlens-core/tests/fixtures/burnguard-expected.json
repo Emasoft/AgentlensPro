@@ -1,0 +1,201 @@
+{
+ "report": {
+  "available": true,
+  "hugeRequests90s": {
+   "count": 3,
+   "bytes": 3300627,
+   "senders": [
+    {
+     "session": "11111111-aaaa-bbbb-cccc-000000000001",
+     "model": "claude-fable-5",
+     "count": 3,
+     "bytes": 3300627
+    }
+   ]
+  },
+  "thrash": {
+   "active": true,
+   "count": 3,
+   "rebilledTokens": 770000,
+   "model": "claude-fable-5",
+   "windowMs": 300000,
+   "suspects": [
+    {
+     "session": "11111111-aaaa-bbbb-cccc-000000000001",
+     "model": "claude-fable-5",
+     "count": 3,
+     "bytes": 3300627
+    }
+   ],
+   "topSource": {
+    "session": "11111111-aaaa-bbbb-cccc-000000000001",
+    "count": 3,
+    "rebilledTokens": 770000
+   },
+   "unattributed": {
+    "count": 0,
+    "rebilledTokens": 0
+   },
+   "coldStartSessions": 0,
+   "coldStartRebilledTokens": 0
+  },
+  "premium": {
+   "share": 1,
+   "sampled": 4,
+   "lastModel": "claude-opus-5"
+  }
+ },
+ "warmSince": {
+  "s1": false,
+  "s2": true
+ },
+ "fmtSenders": [
+  "no fat-request sender attributable",
+  "session 11111111… (claude-fable-5, 3 fat requests ~3.3MB)",
+  "session 11111111… (claude-fable-5, 3 fat requests ~3.3MB)"
+ ],
+ "usage": [
+  {
+   "model": "m",
+   "cc": 1,
+   "cr": 2,
+   "id": "msg_x"
+  },
+  {
+   "model": "m2",
+   "cc": 5,
+   "cr": 0,
+   "id": "r"
+  },
+  null,
+  null
+ ],
+ "risk": {
+  "checkedAtIso": "2026-08-17T20:53:20.000Z",
+  "activeCount": 6,
+  "risks": [
+   {
+    "code": "FANOUT_BURST",
+    "active": true,
+    "detail": "6 subagents launched in the last 2min (threshold 5) — a fan-out is starting NOW. Spawners: session spawner-… in …/wsA (4: fixer×2, explorer×2); session spawner-… in …/wsA (2: fixer, explorer). If the parent session is large, every fork re-pays its prefix; if the cache is cold (>5min idle or a stall just ended), each pays it at the WRITE rate.",
+    "evidence": {
+     "subagentStarts2min": 6,
+     "threshold": 5,
+     "spawnAtMs": 1786999945000,
+     "spawnWorkspace": "/tmp/wsA"
+    }
+   },
+   {
+    "code": "COLD_RESUME_RISK",
+    "active": true,
+    "detail": "a StopFailure (rate-limit/API turn death) fired 5min ago — the stall likely outlived the 5-min cache TTL. Do NOT resume a fan-out yet: check get_account_status headroom, then warm the cache with ONE agent before launching the rest.",
+    "evidence": {
+     "stopFailures10min": 1,
+     "lastAtIso": "2026-08-17T20:48:20.000Z"
+    }
+   },
+   {
+    "code": "COMPACTION_REWRITE",
+    "active": true,
+    "detail": "PreCompact fired 2min ago (trigger: auto) — the next turn rewrites the full prefix at the write rate. Avoid launching fan-outs or model switches until the new prefix is warm.",
+    "evidence": {
+     "preCompacts5min": 1
+    }
+   },
+   {
+    "code": "HUGE_REQUEST_BURST",
+    "active": true,
+    "detail": "3 requests >1MB (3MB ≈ 825k tokens) sent in the last 90s — a fat-context fan-out is IN FLIGHT. Senders: session 11111111… (claude-fable-5, 3 fat requests ~3.3MB). Stop spawning further agents; let this wave settle before adding load.",
+    "evidence": {
+     "hugeRequests90s": 3,
+     "bytes": 3300627,
+     "senders": [
+      {
+       "session": "11111111-aaaa-bbbb-cccc-000000000001",
+       "model": "claude-fable-5",
+       "count": 3,
+       "bytes": 3300627
+      }
+     ]
+    }
+   },
+   {
+    "code": "CACHE_THRASH",
+    "active": true,
+    "detail": "3 calls in the last 5min re-WROTE ~770k tokens of prefix instead of reading cache (model claude-fable-5) — the context cache is being invalidated every turn. Likely source: session 11111111… (claude-fable-5, 3 fat requests ~3.3MB). STOP launching agents and fix the prefix mutator (get_cache_break_causes shows the mechanism).",
+    "evidence": {
+     "misses": 3,
+     "rebilledTokens": 770000,
+     "model": "claude-fable-5",
+     "windowMs": 300000,
+     "suspects": [
+      {
+       "session": "11111111-aaaa-bbbb-cccc-000000000001",
+       "model": "claude-fable-5",
+       "count": 3,
+       "bytes": 3300627
+      }
+     ]
+    }
+   },
+   {
+    "code": "BURN_SPIKE",
+    "active": true,
+    "detail": "live burn is 400k tokens/min on the 5-min window (threshold 250k). At the current rate the 5h window fills in ~42min, the 7d in ~2.0h (account a@example.com). Identify the source NOW: agentlenspro-cli --risk names the senders; investigate_burn --windowHours 1 for depth.",
+    "evidence": {
+     "fiveMinTokensPerMin": 400000,
+     "threshold": 250000
+    }
+   }
+  ],
+  "sources": {
+   "hookEvents": true,
+   "bodies": true,
+   "burnStatus": true
+  },
+  "advice": "PAUSE before spawning more agents: let in-flight waves settle, warm a cold cache with ONE agent first, and prefer cheap models for fan-out work. At the current rate the 5h window fills in ~42min, the 7d in ~2.0h (account a@example.com)."
+ },
+ "causing": {
+  "calls": [
+   {
+    "n": 1,
+    "iso": "2026-08-17T20:51:50.000Z",
+    "tool": "Agent",
+    "subagentType": "general-purpose",
+    "model": "sonnet",
+    "input": "{\"subagent_type\":\"general-purpose\",\"model\":\"sonnet\",\"prompt\":\"go\"}",
+    "sessionId": "spawner-1111"
+   },
+   {
+    "n": 2,
+    "iso": "2026-08-17T20:52:00.000Z",
+    "tool": "Workflow",
+    "subagentType": null,
+    "model": null,
+    "input": "{\"script\":\"x\"}",
+    "sessionId": "spawner-1111"
+   },
+   {
+    "n": 3,
+    "iso": "2026-08-17T20:52:00.000Z",
+    "tool": "Agent",
+    "subagentType": "general-purpose",
+    "model": "sonnet",
+    "input": "{\"subagent_type\":\"general-purpose\",\"model\":\"sonnet\"}",
+    "sessionId": "spawner-1111"
+   }
+  ],
+  "windowFromIso": "2026-08-17T20:37:20.000Z",
+  "windowToIso": "2026-08-17T20:53:50.000Z",
+  "note": "1 line(s) unparseable and excluded."
+ },
+ "composition": "Agent/general-purpose/sonnet×2, Workflow×1",
+ "slugs": [
+  "-tmp-wsA",
+  "already-a-slug",
+  "",
+  [
+   "-tmp-wsA"
+  ]
+ ]
+}
