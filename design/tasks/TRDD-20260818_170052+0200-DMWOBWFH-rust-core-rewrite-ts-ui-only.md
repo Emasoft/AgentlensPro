@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T09:05:33+0200
+updated: 2026-08-20T09:30:19+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -560,16 +560,34 @@ release-via: publish
   execution). Oracle: 4 committed cases (rich set trips every generator, 7 suggestions)
   Value-equal first run; the socket test closes the whole loop (seed → suggest → apply →
   absorbed → detected). 103/103, zero new clippy, live smoke green.
-- **NEXT ACTION (one step): statusline row 5 — POST /api/statusline-samples.** server.ts:3506:
-  body ≤512KB (HOOK_EVENT_MAX_BYTES; overflow destroys the socket, no response), JSON object →
-  `{ok:true}`, parse error → 400 `{error}`; `statusline_stream:"subagent"` selects the
-  subagent stream else main. Source: src/statuslineStore.ts — read IN FULL first and SIZE it
-  before porting: the store is a parquet/WAL subsystem (seal timer, retention) that several
-  NOT-PORTED notes already point at (hook_events' routed-drop, burn's getBillingEvents, the
-  timeline overlay, server-stats' statusline zeros) — decide whether row 5 lands as the full
-  store port or an append-only WAL slice with the read half deferred, and record which in the
-  commit. After it: the remaining freeze rows are the MCP tool surface (§3) and the
-  admission/base-path preamble deferrals — re-derive the next slice from the freeze table.
+- **P4u DONE (commit 27d2e49): the statusline store + POST /api/statusline-samples (row 5) —
+  the FULL store port, not just the append slice.** `statusline_store.rs`: WAL-then-seal,
+  flatten-with-arrays-kept, one-fsync-per-batch + front-re-buffer, live-WAL rotation,
+  verify-before-delete, the inference-collapse refusal, the per-file VARCHAR session_id
+  repair, guaranteed-columns template, partition slack, malformed-name purge gate, and the
+  READ half (query_statusline). DuckDB via agentlens-store's new `pub use duckdb` re-export
+  (one bundled build; JSON extension probe-verified). Non-ports recorded: walRows (write-only
+  in TS — dead), the sealing latch (one 60s task), StatuslineUsageAgg. Wiring: flush on the 4s
+  tick; SEALING on alcore's own 60s blocking-pool task sharing only Arc'd counters — never the
+  state lock; boot purge; exit flush. The legacy hook-events divert now LANDS samples; the
+  server-stats statusline section + statuslineSamples counter are real. Parity: the committed
+  fixture store is TS-written AND TS-sealed — the Rust reader answers identical rows over the
+  parquet+WAL union (UUID repair + guaranteed-NULL columns exercised); round-trip + collapse
+  + purge tests; socket test. 107/107, zero new clippy, live smoke green.
+- **HTTP route audit (2026-08-20, grep of freeze §1 vs ui.rs): 8 of 36 rows remain** — row 9
+  `/api/cache-risk-commands`, row 31 `/api/generated-file`, and the six per-session drill-downs
+  rows 32–37 (`composition|history|conversation|callcontext|composition-index|block-content`,
+  all heavyGuard, all riding src/contextComposition*/contextHistory/conversation/
+  rawBodyContext — ONE subsystem cluster over transcripts + raw bodies). Everything else in §1
+  is live in alcore.
+- **NEXT ACTION (one step): rows 9 + 31 — the two small independent routes.** `GET
+  /api/cache-risk-commands` (server.ts:3600 — the risky-command scan over hook events;
+  `{windowHours,total,count,truncated,byKind,commands[]}`) and `GET /api/generated-file`
+  (4199 — readScratchFile with the 200KB cap; `{exists,...}` shapes). Read their sources IN
+  FULL first (the cache-risk scan's kind/mutation classifier is the port's substance;
+  generated-file's path containment guard must port exactly). Then size the rows 32–37
+  drill-down cluster as its own phase (P4w) — read contextCompositionIndex.ts first, it is
+  the spine the other four lean on.
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
