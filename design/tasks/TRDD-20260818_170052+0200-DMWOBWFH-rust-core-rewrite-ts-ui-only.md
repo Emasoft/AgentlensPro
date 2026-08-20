@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T18:14:40+0200
+updated: 2026-08-20T18:29:46+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -988,9 +988,28 @@ release-via: publish
   buckets every detector reads — passing it silently disables the advisor).
   Live: a real 138-turn session, peak 269,265 prompt tokens, 98% hit rate, computed peak == the
   independently persisted `peakContextPerTurn`.
-- **NEXT (P4x.2d continued): the 8 remaining IN-MODULE handlers first — cheapest by ENGINE.**
-  `handleGetAccountStateAt` (13 ln, needs `resolveStateAt` — currently NOT ported),
-  `handleFindContextHogs` (43, `aggregate_composition` ✅ + `fileBackedPool`/`buildScanCoverage`),
+- **P4x.2d (commit 8bd0ca1): `find_context_hogs` + `get_account_state_at` + `buildScanCoverage` /
+  `fileBackedPool` / `readTimeline` / `resolveStateAt`. 29 of 53.** First slice off the re-sized
+  queue. **THE ORACLE CAUGHT A REAL DIVERGENCE — the first this session found by a FAILING TEST
+  rather than by reading.** `scope` is guarded TWICE with DIFFERENT operators that disagree on the
+  whitespace case: `fileBackedPool(…, scope ? … : null, …)` is TRUTHY (`""` = no scope) while
+  `scope: scope ?? 'all'` is NULLISH (`""` survives as `""`). So an all-whitespace scope filters
+  NOTHING yet echoes `""` — only an ABSENT scope reads `"all"`. Collapsing the two guards into one
+  `Option` (either way) is wrong. **8th truthiness/nullish divergence in 4 slices; the reading pass
+  missed this one, which is why the oracle must exercise the ODD inputs, not just the happy path.**
+  Also pinned: THREE counts are THREE FACTS (considered / withLog / scanned — fixture 4/3/2; a card
+  with no local log is NOT a card checked and found clean); `buildScanCoverage` emits three
+  DIFFERENT notes (nothing-to-scan / complete / SAMPLE — collapsing them lets an empty result read
+  as a clean bill of health); a scope matches a workspace PREFIX *or* a sessionId SUBSTRING;
+  `Math.min(topN ?? 15, 50)` is an UPPER clamp ONLY so 0 returns nothing — **the OPPOSITE convention
+  from `loadedPluginVersions`' `Math.max(1, topN)`, so each must be asserted, never assumed**; a
+  source is summed ACROSS TURNS so `sessions` ≠ `occurrences` (2 vs 5 — a single-turn fixture would
+  hide it); `readTimeline` drops a torn line and a non-numeric `ts` INDIVIDUALLY and a missing file
+  is EMPTY not an error; `resolveStateAt`'s boundary is INCLUSIVE; a pre-timeline query is
+  `state: null` + a note (a GAP, never an error, never "no account"); `ts` beats `iso`.
+  Live on the real corpus: **13,802 considered / 1,286 with log / 25 scanned** — the sampling gap
+  working, with the SAMPLE note carried in the payload.
+- **NEXT (P4x.2d continued): the 6 remaining IN-MODULE handlers — cheapest by ENGINE.**
   `handleGetCacheBreakReport` (81), `handleGetCostByCause` (82, needs `buildTokensByCause`),
   `handleGetContextInflationReport` (90, needs `buildResidentCostReport`), `handleGetAgentTokens`
   (102), `handleCheckCacheExpiry` (110), `handleGetCacheRiskCosts` (138). THEN
