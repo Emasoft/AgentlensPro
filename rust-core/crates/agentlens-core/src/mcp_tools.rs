@@ -2054,6 +2054,26 @@ pub fn build_scan_coverage(considered: f64, with_log: f64, scanned: f64, scan_ca
 /// `get_cache_break_report` match the workspace prefix ONLY, with a cap of 20. Hardcoding the first
 /// caller's rule silently over-matches for the others — a session would be scanned because its id
 /// happened to contain the workspace string.
+/// `fileBackedPool` with the TS's own `scopeMatch` predicate. The scope-string callers go through
+/// `file_backed_pool`; `get_cache_risk_costs` needs a predicate that is not a workspace prefix at
+/// all (it filters on "a command was typed in this session"), so the general form is the one that
+/// actually matches the TS signature and the string form delegates to it.
+fn file_backed_pool_with<'a>(
+    sessions: &'a [Value],
+    file_ids: &std::collections::HashSet<String>,
+    scope_match: Option<&dyn Fn(&Value) -> bool>,
+    limit: usize,
+) -> (Vec<&'a Value>, f64, f64) {
+    let scoped: Vec<&Value> = match scope_match {
+        Some(f) => sessions.iter().filter(|s| f(s)).collect(),
+        None => sessions.iter().collect(),
+    };
+    let backed: Vec<&Value> =
+        scoped.iter().copied().filter(|s| file_ids.contains(s.get("sessionId").and_then(Value::as_str).unwrap_or(""))).collect();
+    let (considered, with_log) = (scoped.len() as f64, backed.len() as f64);
+    (backed.into_iter().take(limit).collect(), considered, with_log)
+}
+
 fn file_backed_pool<'a>(
     sessions: &'a [Value],
     file_ids: &std::collections::HashSet<String>,
@@ -2061,20 +2081,16 @@ fn file_backed_pool<'a>(
     limit: usize,
     match_session_id: bool,
 ) -> (Vec<&'a Value>, f64, f64) {
-    let scoped: Vec<&Value> = match scope {
-        Some(sc) => sessions
-            .iter()
-            .filter(|s| {
+    match scope {
+        Some(sc) => {
+            let f = |s: &Value| {
                 s.get("workspace").and_then(Value::as_str).unwrap_or("").starts_with(sc)
                     || (match_session_id && s.get("sessionId").and_then(Value::as_str).unwrap_or("").contains(sc))
-            })
-            .collect(),
-        None => sessions.iter().collect(),
-    };
-    let backed: Vec<&Value> =
-        scoped.iter().copied().filter(|s| file_ids.contains(s.get("sessionId").and_then(Value::as_str).unwrap_or(""))).collect();
-    let (considered, with_log) = (scoped.len() as f64, backed.len() as f64);
-    (backed.into_iter().take(limit).collect(), considered, with_log)
+            };
+            file_backed_pool_with(sessions, file_ids, Some(&f), limit)
+        }
+        None => file_backed_pool_with(sessions, file_ids, None, limit),
+    }
 }
 
 /// `find_context_hogs` (mcpServer.ts handleFindContextHogs) — which injected sources cost the most
@@ -2874,6 +2890,322 @@ pub fn get_cache_break_report(
                 .collect(),
         ),
     );
+    Value::Object(m)
+}
+
+/// Everything `get_cache_risk_costs` needs from its caller. A struct rather than six more
+/// parameters: the signature would otherwise be 8 wide, and these six travel together — they are
+/// the "where do I read from, and what clock/budget am I on" context, not per-call options.
+pub struct CacheRiskCtx<'a> {
+    pub file_ids: &'a std::collections::HashSet<String>,
+    /// Transcript roots — `claudeProjectsDirs()` in the TS, injectable so the oracle can point at
+    /// fixtures instead of the real `~/.claude`.
+    pub dirs: &'a [std::path::PathBuf],
+    pub get_composition: CompositionAccessor<'a>,
+    pub timeline_of: &'a dyn Fn(&Value) -> Vec<Value>,
+    pub now_ms: f64,
+    pub time_budget_ms: f64,
+}
+
+/// `get_cache_risk_costs` / `reload-cost` (mcpServer.ts handleGetCacheRiskCosts, TRDD-EYA3X5MQ) —
+/// "what did each cache-breaking command cost me?". EXACT, not inferred: Claude Code persists every
+/// built-in slash command it runs as a transcript entry, so /reload-plugins, /reload-skills, a
+/// mutating /plugin, /login|/logout, /mcp and /model are read straight off disk with their real
+/// wall-clock. The COST comes from the same composition path `get_cache_break_report` uses, joined
+/// on `CacheBreakTurn.tsMs`: a command at time T is billed on the FIRST turn at or after T, because
+/// the local command makes no API call of its own and its changed prefix rides the NEXT request.
+///
+/// The join is also what settles the ambiguous commands. Bare /plugin, /mcp and /model open a
+/// picker the user may simply close — so an invocation is only charged when the turn that followed
+/// it actually broke. No break after it ⇒ cost 0, STATED as such, never quietly dropped.
+///
+/// The old co-churn heuristic survives ONLY as a labeled residue: reload-shaped turns that no
+/// command explains. It over-counted badly (102 vs 69 actual) so it must never be summed into the
+/// exact rows — but discarding it would hide real breaks in sessions whose transcript was rotated.
+pub fn get_cache_risk_costs(sessions: &[Value], args: &Value, ctx: &CacheRiskCtx<'_>) -> Value {
+    let Some(get_composition) = ctx.get_composition else {
+        return err("Composition accessor unavailable — reload-cost needs local Claude logs.".to_owned());
+    };
+    let n = |k: &str| args.get(k).and_then(Value::as_f64);
+    let cap = n("topN").unwrap_or(25.0).clamp(1.0, 200.0) as usize;
+    // ABSENT vs PRESENT-BUT-BLANK again: `?.trim()` is undefined only when the arg is missing.
+    let scope: Option<&str> = args.get("workspace").and_then(Value::as_str).map(str::trim);
+    // TRUTHY on `args.window`, so `window: 0` means NO time filter — while `windowHours` below is
+    // `args.window ?? null`, which reports the 0. The two guards disagree on purpose and a port
+    // that unifies them either loses the echo or silently applies a zero-hour window.
+    let since_ms = n("window").filter(|w| *w != 0.0).map(|w| ctx.now_ms - w * 3_600_000.0);
+    let min_tokens = n("minTokens").unwrap_or(0.0).max(0.0);
+
+    let kinds: Option<Vec<String>> = args
+        .get("kinds")
+        .and_then(Value::as_array)
+        .filter(|a| !a.is_empty())
+        .map(|a| a.iter().filter_map(Value::as_str).map(str::to_owned).collect());
+
+    // 1. The exact causes, off disk. Machine-wide and retroactive — no hook, no restart, no capture.
+    let commands = crate::cache_risk_commands::scan_cache_risk_commands(ctx.dirs, since_ms, kinds.as_deref(), None);
+    // TWO SOURCES, because a typed command is not the only way a prefix breaks. An effort change
+    // needs no command at all, and MEASURED corpus-wide all 12 real effort transitions occurred in
+    // sessions containing ZERO /effort commands — reading only commands scored 0 of 12 on a cause
+    // that genuinely invalidates the prefix.
+    let want_effort = kinds.as_ref().is_none_or(|k| k.iter().any(|x| x == "EFFORT_CHANGED"));
+    let effort_events: Vec<Value> = if want_effort {
+        crate::effort_transitions::scan_effort_transitions(ctx.dirs, since_ms, None, false)
+            .iter()
+            .map(crate::effort_transitions::effort_transition_as_risk_command)
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    let mut by_session: indexmap::IndexMap<String, Vec<Value>> = indexmap::IndexMap::new();
+    for c in commands.iter().chain(effort_events.iter()) {
+        // TRUTHY: an empty session string is no session at all.
+        let Some(sid) = c.get("session").and_then(Value::as_str).filter(|s| !s.is_empty()) else { continue };
+        by_session.entry(sid.to_owned()).or_default().push(c.clone());
+    }
+
+    // 2. Price them. Analysing a session is the expensive half, so spend the bounded pool ONLY on
+    //    sessions a command was actually typed in — otherwise the budget goes to sessions that can
+    //    contribute nothing to this report.
+    let pred = |s: &Value| {
+        let sid = s.get("sessionId").and_then(Value::as_str).unwrap_or("");
+        if !by_session.contains_key(sid) {
+            return false;
+        }
+        if let Some(sc) = scope.filter(|x| !x.is_empty()) {
+            if !s.get("workspace").and_then(Value::as_str).unwrap_or("").starts_with(sc) {
+                return false;
+            }
+        }
+        if let Some(since) = since_ms {
+            // `Date.parse(...) < sinceMs` is FALSE for NaN, so an unparseable startTime KEEPS the
+            // session rather than dropping it — the JS comparison, not a `.unwrap_or(0.0)` that
+            // would drop every card with a bad timestamp.
+            let started = crate::summarize::helpers::parse_iso_ms(s.get("startTime").and_then(Value::as_str).unwrap_or(""));
+            if started.is_some_and(|t| t < since) {
+                return false;
+            }
+        }
+        true
+    };
+    let (pool, considered, with_log) = file_backed_pool_with(sessions, ctx.file_ids, Some(&pred), 40);
+
+    let deadline = crate::now_ms() as f64 + ctx.time_budget_ms;
+    let empty: Vec<Value> = Vec::new();
+    let mut rows: Vec<Value> = Vec::new();
+    let mut residue: Vec<Value> = Vec::new();
+    let (mut total_cc, mut total_cost, mut analyzed, mut priced) = (0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64);
+    let mut scanned = 0usize;
+    let mut stopped_early = false;
+
+    for card in &pool {
+        if crate::now_ms() as f64 > deadline {
+            stopped_early = true;
+            break;
+        }
+        let sid = card.get("sessionId").and_then(Value::as_str).unwrap_or("");
+        let card_model = card.get("model").and_then(Value::as_str).map(str::to_owned);
+        let report = crate::cache_break::build_cache_break_report(
+            sid,
+            &(ctx.timeline_of)(card),
+            get_composition(sid).as_ref(),
+            card_model.as_deref().unwrap_or(""),
+            ctx.now_ms,
+        );
+        scanned += 1;
+        let Some(report) = report else { continue };
+        analyzed += 1.0;
+        let report_sid = report.get("sessionId").and_then(Value::as_str).unwrap_or("").to_owned();
+
+        let mut cmds: Vec<Value> = by_session.get(&report_sid).cloned().unwrap_or_default();
+        cmds.sort_by(|a, b| {
+            let (x, y) = (a.get("ts").and_then(Value::as_f64).unwrap_or(0.0), b.get("ts").and_then(Value::as_f64).unwrap_or(0.0));
+            x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let mut timed: Vec<&Value> =
+            report.get("turns").and_then(Value::as_array).unwrap_or(&empty).iter().filter(|t| t.get("tsMs").is_some()).collect();
+        timed.sort_by(|a, b| {
+            let (x, y) = (a.get("tsMs").and_then(Value::as_f64).unwrap_or(0.0), b.get("tsMs").and_then(Value::as_f64).unwrap_or(0.0));
+            x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        let mut explained: std::collections::HashSet<u64> = std::collections::HashSet::new();
+        // A turn's cache_creation is ONE cost. Several commands can land before the same next turn
+        // (two /login 18s apart, a /reload-plugins immediately followed by /reload-skills) — they
+        // broke the prefix once, TOGETHER, so only the EARLIEST is charged and the rest are listed
+        // at 0 with the reason. Charging each the full turn is exactly the double-count that made
+        // the old heuristic untrustworthy; `cmds` is sorted ascending so "earliest" is first seen.
+        let mut charged: std::collections::HashSet<u64> = std::collections::HashSet::new();
+        for c in &cmds {
+            let c_ts = c.get("ts").and_then(Value::as_f64).unwrap_or(0.0);
+            let billed = timed.iter().copied().find(|t| t.get("tsMs").and_then(Value::as_f64).unwrap_or(0.0) >= c_ts);
+            let billed_turn = billed.and_then(|t| t.get("turn").and_then(Value::as_f64)).map(f64::to_bits);
+            let already_charged = billed_turn.is_some_and(|t| charged.contains(&t));
+            let wasted = billed.and_then(|t| t.get("wastedTokens").and_then(Value::as_f64)).unwrap_or(0.0);
+            let broke = billed.is_some_and(|t| t.get("broke") == Some(&Value::Bool(true))) && wasted > 0.0 && !already_charged;
+            if let Some(t) = billed_turn {
+                explained.insert(t);
+            }
+            // The minTokens gate applies ONLY to a break: a non-breaking invocation is still LISTED
+            // (at 0) so "this changed nothing" stays visible instead of looking like no data.
+            if broke && wasted < min_tokens {
+                continue;
+            }
+            let cc = if broke { wasted } else { 0.0 };
+            let usd = if broke { billed.and_then(|t| t.get("wastedCostUsd").and_then(Value::as_f64)).unwrap_or(0.0) } else { 0.0 };
+            if broke {
+                if let Some(t) = billed_turn {
+                    charged.insert(t);
+                }
+            }
+            total_cc += cc;
+            total_cost += usd;
+            if cc > 0.0 {
+                priced += 1.0;
+            }
+            let mut row = Map::new();
+            row.insert("when".into(), Value::String(crate::summarize::helpers::iso_from_ms(c_ts)));
+            row.insert(
+                "sessionId".into(),
+                Value::String(c.get("session").and_then(Value::as_str).unwrap_or(&report_sid).to_owned()),
+            );
+            copy_opt(&mut row, c, "command");
+            copy_opt(&mut row, c, "kind");
+            copy_opt(&mut row, c, "mutation");
+            row.insert("turn".into(), billed.and_then(|t| t.get("turn").cloned()).unwrap_or(Value::Null));
+            row.insert("cacheCreateTokens".into(), num(cc));
+            row.insert("wastedCostUsd".into(), num(js_to_fixed_num(usd, 4)));
+            // `model: r.card.model` — an undefined property is OMITTED by JSON.stringify, so an
+            // unknown model drops the key without moving `evidence`.
+            if let Some(m) = &card_model {
+                row.insert("model".into(), Value::String(m.clone()));
+            }
+            row.insert("evidence".into(), Value::String("exact".into()));
+            if let Some(a) = c.get("args").filter(|v| truthy(v)) {
+                row.insert("args".into(), a.clone());
+            }
+            let turn_label = billed.and_then(|t| t.get("turn").and_then(Value::as_f64)).map(fmt_js_num).unwrap_or_default();
+            if billed.is_none() {
+                row.insert("note".into(), Value::String("no turn recorded at or after this command — cost unattributable".into()));
+            } else if already_charged {
+                row.insert(
+                    "note".into(),
+                    Value::String(format!(
+                        "turn {turn_label} was already charged to an earlier command — they broke the prefix once, together"
+                    )),
+                );
+            } else if !broke {
+                row.insert(
+                    "note".into(),
+                    Value::String("the next turn did not break — this invocation changed nothing (menu opened and closed)".into()),
+                );
+            }
+            rows.push(Value::Object(row));
+        }
+        // Reload-shaped turns nothing explains. Reported separately, NEVER summed with the exact
+        // rows — the heuristic over-counts, but dropping it would hide real breaks in sessions
+        // whose transcript has been rotated away.
+        for t in report.get("turns").and_then(Value::as_array).unwrap_or(&empty) {
+            let wasted = t.get("wastedTokens").and_then(Value::as_f64).unwrap_or(0.0);
+            let turn_bits = t.get("turn").and_then(Value::as_f64).map(f64::to_bits);
+            if t.get("cause").and_then(Value::as_str) != Some("PLUGINS_RELOADED")
+                || wasted <= 0.0
+                || turn_bits.is_some_and(|b| explained.contains(&b))
+            {
+                continue;
+            }
+            let mut r = Map::new();
+            r.insert("sessionId".into(), Value::String(report_sid.clone()));
+            r.insert("turn".into(), t.get("turn").cloned().unwrap_or(Value::Null));
+            r.insert("catalogs".into(), t.get("breakSourceLabel").cloned().unwrap_or(Value::Null));
+            r.insert("cacheCreateTokens".into(), num(wasted));
+            r.insert("wastedCostUsd".into(), num(js_to_fixed_num(t.get("wastedCostUsd").and_then(Value::as_f64).unwrap_or(0.0), 4)));
+            r.insert("evidence".into(), Value::String("inference".into()));
+            residue.push(Value::Object(r));
+        }
+    }
+
+    // Newest-first by the ISO string. A STABLE sort, so same-timestamp rows keep discovery order.
+    rows.sort_by(|a, b| b["when"].as_str().unwrap_or("").cmp(a["when"].as_str().unwrap_or("")));
+    let shown: Vec<Value> = rows.iter().take(cap).cloned().collect();
+
+    // `costUsd` is re-rounded to 4dp on EVERY accumulation, not once at the end — so the total is
+    // the sum of rounded partials, not the rounded sum. Rounding only at the end drifts.
+    let mut by_kind: indexmap::IndexMap<String, (f64, f64, f64)> = indexmap::IndexMap::new();
+    for r in &rows {
+        let k = r.get("kind").and_then(Value::as_str).unwrap_or("").to_owned();
+        let e = by_kind.entry(k).or_insert((0.0, 0.0, 0.0));
+        e.0 += 1.0;
+        e.1 += r.get("cacheCreateTokens").and_then(Value::as_f64).unwrap_or(0.0);
+        e.2 = js_to_fixed_num(e.2 + r.get("wastedCostUsd").and_then(Value::as_f64).unwrap_or(0.0), 4);
+    }
+
+    let mut m = Map::new();
+    // NULLISH on the RAW arg — so `window: 0` echoes 0 here while filtering nothing above.
+    m.insert("windowHours".into(), n("window").map(num).unwrap_or(Value::Null));
+    m.insert("scope".into(), Value::String(scope.unwrap_or("all").to_owned()));
+    m.insert("commandsFoundInTranscripts".into(), num(commands.len() as f64));
+    m.insert("sessionsWithCommands".into(), num(by_session.len() as f64));
+    m.insert("sessionsConsidered".into(), num(considered));
+    m.insert("sessionsWithLog".into(), num(with_log));
+    m.insert("sessionsAnalyzed".into(), num(analyzed));
+    m.insert("eventsPriced".into(), num(priced));
+    m.insert("eventsListed".into(), num(rows.len() as f64));
+    m.insert("totalCacheCreateTokens".into(), num(total_cc));
+    m.insert("totalCostUsd".into(), num(js_to_fixed_num(total_cost, 4)));
+    let mut bk = Map::new();
+    for (k, (events, cc, usd)) in &by_kind {
+        let mut e = Map::new();
+        e.insert("events".into(), num(*events));
+        e.insert("cacheCreateTokens".into(), num(*cc));
+        e.insert("costUsd".into(), num(*usd));
+        bk.insert(k.clone(), Value::Object(e));
+    }
+    m.insert("byKind".into(), Value::Object(bk));
+    if stopped_early {
+        m.insert("scanStoppedEarly".into(), Value::Bool(true));
+        m.insert(
+            "scanNote".into(),
+            Value::String(format!(
+                "SAMPLE: the {}s scan budget stopped after {} of {} pooled sessions — retry to widen (reparsed timelines are cached).",
+                fmt_js_num(ctx.time_budget_ms / 1000.0),
+                scanned,
+                pool.len()
+            )),
+        );
+    }
+    m.insert("events".into(), Value::Array(shown.clone()));
+    if rows.len() > cap {
+        m.insert(
+            "eventsNote".into(),
+            Value::String(format!("Showing the most recent {} of {} (raise topN, max 200).", shown.len(), rows.len())),
+        );
+    }
+    if !residue.is_empty() {
+        m.insert("unexplainedReloadTurns".into(), Value::Array(residue.iter().take(cap).cloned().collect()));
+        m.insert(
+            "unexplainedNote".into(),
+            Value::String(format!(
+                "{} reload-shaped turn(s) had no matching command in the transcript (co-churn INFERENCE — historically over-counts; listed separately and NOT included in the totals above).",
+                residue.len()
+            )),
+        );
+    }
+    // NOTE the first branch counts SLASH COMMANDS ONLY: a window whose only cause was an effort
+    // transition reports 0 found and says so, even though `events` is non-empty. That is the TS's
+    // wording and the number it counts — not a bug to smooth over here.
+    if commands.is_empty() {
+        m.insert("note".into(), Value::String("No cache-risk commands found in the transcripts for this window/scope.".into()));
+    } else if rows.is_empty() {
+        m.insert(
+            "note".into(),
+            Value::String(format!(
+                "Found {} command(s) in the transcripts, but none of their sessions is in the analysable pool (needs local Claude logs + composition). Widen the window or drop the workspace filter.",
+                commands.len()
+            )),
+        );
+    }
     Value::Object(m)
 }
 

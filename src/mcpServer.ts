@@ -2580,7 +2580,9 @@ export async function handleGetCacheBreakReport(
 // explains. It over-counted badly (102 vs 69 actual on this machine) so it must never be summed into
 // the exact rows — but discarding it outright would hide real breaks in sessions whose transcript
 // has been rotated away.
-async function handleGetCacheRiskCosts(
+// EXPORTED so the Rust port's parity oracle can drive this handler directly (TRDD-DMWOBWFH P4x.2d).
+// Export-only: no behaviour change.
+export async function handleGetCacheRiskCosts(
   sessions: SessionSummaryCard[],
   getTimeline: ((id: string) => unknown[]) | null,
   getComposition: CompositionAccessor | null,
