@@ -1694,6 +1694,39 @@ async fn handle(
                         .await?;
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
+                    "check_cache_expiry" => {
+                        // Every probed candidate can reparse a multi-MB transcript, so the whole
+                        // scan runs on spawn_blocking with the state lock released and re-locked
+                        // PER SESSION inside `timeline_of` — the P4s rule.
+                        //
+                        // `get_last_request_ms` is None: the bounded tail resolver (TRDD-CXPLAT01)
+                        // is NOT PORTED, so this takes the TS's own documented fallback path —
+                        // "without a resolver the previous reparse-per-candidate behavior is
+                        // preserved unchanged" — rather than a different answer.
+                        let now = crate::now_ms();
+                        let (sessions, ttl) = {
+                            let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                            let summary = st.build_session_summary(now as f64);
+                            let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
+                            drop(summary);
+                            let ttl = st.burn.ttl_context(now as f64);
+                            (sessions, ttl)
+                        };
+                        let (a, st2) = (args.clone(), state.clone());
+                        let payload = tokio::task::spawn_blocking(move || {
+                            let timeline_of = |c: &Value| -> Vec<Value> {
+                                let Some(sid) = c.get("sessionId").and_then(Value::as_str) else { return Vec::new() };
+                                let Ok(mut st) = st2.lock() else { return Vec::new() };
+                                resolve_session_card(&mut st, sid, now)
+                                    .and_then(|c| c.get("timeline").and_then(Value::as_array).cloned())
+                                    .unwrap_or_default()
+                            };
+                            crate::mcp_tools::check_cache_expiry(&sessions, &timeline_of, Some(&ttl), &a, now as f64, 20_000.0, None)
+                        })
+                        .await
+                        .map_err(|e| format!("cache-expiry scan join failed: {e}"))?;
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
+                    }
                     "get_account_status" => {
                         // The TS `all: true` form calls listAllAccounts() — the on-disk roster +
                         // per-account usage archive, which needs NONE of the live accessors and so

@@ -2692,3 +2692,330 @@ pub fn get_context_inflation_report(
     m.insert("residentCost".into(), resident_cost);
     Value::Object(m)
 }
+
+// ── check_cache_expiry (TRDD-OCNHOHE9 / mcpServer.ts handleCheckCacheExpiry) ──────────────────
+// Is a session past its prompt-cache TTL? Finds each target's last LLM-request time, classifies
+// its per-session TTL regime (crate::burn::cache_ttl), and reports fresh/expired/unknown.
+
+/// `formatIdle` (src/cacheExpiry.ts) — "45s" · "1m 30s" · "1h 2m". Hours drop the seconds;
+/// negative durations clamp to 0s.
+pub fn format_idle(ms: f64) -> String {
+    let total_sec = (ms.max(0.0) / 1000.0).floor();
+    let h = (total_sec / 3600.0).floor();
+    let m = ((total_sec % 3600.0) / 60.0).floor();
+    let s = total_sec % 60.0;
+    if h > 0.0 {
+        format!("{}h {}m", h as i64, m as i64)
+    } else if m > 0.0 {
+        format!("{}m {}s", m as i64, s as i64)
+    } else {
+        format!("{}s", s as i64)
+    }
+}
+
+/// `assessCacheExpiry` (src/cacheExpiry.ts) — pure idle-vs-TTL verdict. Key order matches the TS
+/// object literal EXACTLY: both branches build `{verdict, idleMs, idleHuman, marginMs, reason,
+/// ...base}` where `base = {ttlMs, ttlMin, ttlSource, ttlBasis, usedThresholdOverride}` — the
+/// spread appends `base`'s fields at the END, not at their declared interface position.
+pub fn assess_cache_expiry(
+    last_request_at_ms: Option<f64>,
+    now_ms: f64,
+    kind: Option<crate::burn::cache_ttl::SessionTtlKind>,
+    ctx: Option<&crate::burn::cache_ttl::TtlContext>,
+    threshold_ms: Option<f64>,
+) -> Value {
+    let regime = crate::burn::cache_ttl::classify_ttl_regime(kind, ctx);
+    // A positive explicit threshold overrides the regime TTL AND its provenance — the user's
+    // cutoff decided the number, so ttlSource becomes 'config' regardless of what the regime said.
+    let override_ = threshold_ms.is_some_and(|t| t > 0.0);
+    let ttl_ms = if override_ { threshold_ms.unwrap() } else { regime.ttl_ms };
+    let ttl_min = crate::summarize::helpers::js_math_round(ttl_ms / 60_000.0);
+    let ttl_source: &str = if override_ { "config" } else { regime.ttl_source };
+    let ttl_basis = if override_ {
+        format!(
+            "explicit --threshold-minutes={} override (regime would use {}m)",
+            fmt_js_num(ttl_min),
+            fmt_js_num(regime.ttl_assumed_min)
+        )
+    } else {
+        regime.ttl_basis.clone()
+    };
+
+    let mut m = Map::new();
+    let Some(last_ms) = last_request_at_ms else {
+        m.insert("verdict".into(), "unknown".into());
+        m.insert("idleMs".into(), Value::Null);
+        m.insert("idleHuman".into(), Value::Null);
+        m.insert("marginMs".into(), Value::Null);
+        m.insert(
+            "reason".into(),
+            "no LLM request recorded for this session — cannot measure idle time or cache freshness".into(),
+        );
+        m.insert("ttlMs".into(), num(ttl_ms));
+        m.insert("ttlMin".into(), num(ttl_min));
+        m.insert("ttlSource".into(), ttl_source.into());
+        m.insert("ttlBasis".into(), ttl_basis.into());
+        m.insert("usedThresholdOverride".into(), Value::Bool(override_));
+        return Value::Object(m);
+    };
+
+    // Every cache HIT resets the inactivity timer, so idle is measured from the LAST request. A
+    // future timestamp (clock skew across machines) clamps to 0 rather than a negative idle.
+    let idle_ms = (now_ms - last_ms).max(0.0);
+    let expired = idle_ms > ttl_ms;
+    m.insert("verdict".into(), (if expired { "expired" } else { "fresh" }).into());
+    m.insert("idleMs".into(), num(idle_ms));
+    m.insert("idleHuman".into(), format_idle(idle_ms).into());
+    m.insert("marginMs".into(), num(ttl_ms - idle_ms));
+    m.insert(
+        "reason".into(),
+        if expired {
+            format!(
+                "idle {} exceeds the {}-min TTL — the cached prefix has likely been evicted; the next request pays a full cache-creation write (~1.25× the prefix)",
+                format_idle(idle_ms),
+                fmt_js_num(ttl_min)
+            )
+        } else {
+            format!(
+                "idle {} is within the {}-min TTL — the cached prefix is likely still warm",
+                format_idle(idle_ms),
+                fmt_js_num(ttl_min)
+            )
+        }
+        .into(),
+    );
+    m.insert("ttlMs".into(), num(ttl_ms));
+    m.insert("ttlMin".into(), num(ttl_min));
+    m.insert("ttlSource".into(), ttl_source.into());
+    m.insert("ttlBasis".into(), ttl_basis.into());
+    m.insert("usedThresholdOverride".into(), Value::Bool(override_));
+    Value::Object(m)
+}
+
+/// `lastLlmRequestMs` (src/mcpServer.ts) — the freshest billed call. `api_request` entries are
+/// the ground-truth LLM calls; `llm` spans are a fallback for OTEL-only cards that predate log
+/// correlation. NaN timestamps are skipped, not zeroed.
+fn last_llm_request_ms(timeline: &[Value]) -> Option<f64> {
+    let mut best: Option<f64> = None;
+    for e in timeline {
+        let ty = e.get("type").and_then(Value::as_str);
+        if ty != Some("api_request") && ty != Some("llm") {
+            continue;
+        }
+        let Some(ms) = crate::summarize::helpers::parse_iso_ms(e.get("timestamp").and_then(Value::as_str).unwrap_or("")) else {
+            continue;
+        };
+        if best.is_none_or(|b| ms > b) {
+            best = Some(ms);
+        }
+    }
+    best
+}
+
+/// `assessOneSession` (src/mcpServer.ts) — the TTL verdict for ONE card, projected into a
+/// `CacheExpiryRow`. Key order: `{...verdict, sessionId, workspace, kind, lastRequestAt}` — the
+/// verdict's own fields first (spread), then the four session-identifying fields appended.
+///
+/// `precomputed_last_ms`: `Some` = the caller already resolved the last-request time (a bounded
+/// tail read) and it must NOT be recomputed via a full-transcript reparse; `None` = fall back to
+/// `last_llm_request_ms` over `timeline_of(card)`.
+fn assess_one_session(
+    card: &Value,
+    timeline_of: &dyn Fn(&Value) -> Vec<Value>,
+    ttl_ctx: Option<&crate::burn::cache_ttl::TtlContext>,
+    now_ms: f64,
+    threshold_ms: Option<f64>,
+    precomputed_last_ms: Option<f64>,
+) -> Value {
+    let last_ms = precomputed_last_ms.or_else(|| last_llm_request_ms(&timeline_of(card)));
+    let kind = crate::burn::cache_ttl::session_ttl_kind_of(card);
+    let verdict = assess_cache_expiry(last_ms, now_ms, Some(kind), ttl_ctx, threshold_ms);
+    let mut m = verdict.as_object().cloned().unwrap_or_default();
+    m.insert("sessionId".into(), card.get("sessionId").cloned().unwrap_or(Value::Null));
+    m.insert("workspace".into(), card.get("workspace").cloned().unwrap_or(Value::Null));
+    m.insert("kind".into(), kind.as_str().into());
+    m.insert(
+        "lastRequestAt".into(),
+        match last_ms {
+            Some(ms) => Value::String(crate::summarize::helpers::iso_from_ms(ms)),
+            None => Value::Null,
+        },
+    );
+    Value::Object(m)
+}
+
+/// `EXPIRY_NEWEST_PROBE` (src/mcpServer.ts) — how many newest-by-activity candidates the DEFAULT
+/// path reparses to find the caller's active conversation.
+pub const EXPIRY_NEWEST_PROBE: usize = 12;
+
+/// `workspaceUnder` (src/mcpServer.ts) — is this card's workspace AT or UNDER `root`?
+/// Path-boundary aware on purpose: a bare `starts_with` would make `/x/y` match the sibling
+/// `/x/y-old`.
+fn workspace_under(workspace: Option<&str>, root: &str) -> bool {
+    let Some(w) = workspace.filter(|w| !w.is_empty()) else { return false };
+    let w = w.trim_end_matches('/');
+    let r = root.trim_end_matches('/');
+    w == r || w.starts_with(&format!("{r}/"))
+}
+
+/// `handleCheckCacheExpiry` (src/mcpServer.ts, exported for unit tests — X2E6OSWK) — is a
+/// session past its prompt-cache TTL?
+///
+/// `timeline_of` mirrors `asTimeline(getTimeline, id, card)`: the closure is the getTimeline
+/// accessor with the inline-timeline fallback already folded in by the caller.
+/// `now_ms` is injected (the TS reads `Date.now()` internally) so the assessment is pure and
+/// testable — the caller passes the real wall clock in production.
+/// `get_last_request_ms` mirrors the optional tail resolver: `Some(f)` = a bounded 256KB tail
+/// read; `None` = the TS's no-resolver path (full reparse per probed candidate, preserved
+/// unchanged for parity with tests/older embedders).
+#[allow(clippy::type_complexity)] // mirrors timeline_of's closure-injection shape, just optional
+pub fn check_cache_expiry(
+    sessions: &[Value],
+    timeline_of: &dyn Fn(&Value) -> Vec<Value>,
+    ttl_ctx: Option<&crate::burn::cache_ttl::TtlContext>,
+    args: &Value,
+    now_ms: f64,
+    time_budget_ms: f64,
+    get_last_request_ms: Option<&dyn Fn(&str) -> Option<f64>>,
+) -> Value {
+    let threshold_minutes = args.get("thresholdMinutes").and_then(Value::as_f64);
+    let threshold_ms = threshold_minutes.filter(|t| *t > 0.0).map(|t| t * 60_000.0);
+
+    if let Some(sid) = args.get("sessionId").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+        let targets: Vec<&Value> = sessions.iter().filter(|s| s.get("sessionId").and_then(Value::as_str) == Some(sid)).collect();
+        let rows: Vec<Value> =
+            targets.iter().map(|c| assess_one_session(c, timeline_of, ttl_ctx, now_ms, threshold_ms, None)).collect();
+        let mut m = Map::new();
+        m.insert("sessions".into(), Value::Array(rows));
+        return Value::Object(m);
+    }
+
+    // PROJECT SCOPE (a correctness fix, not a convenience): the default pick must be the newest
+    // session WITHIN the caller's project, never machine-wide. An explicit empty string is the
+    // documented opt-out (`project: ""` = machine-wide).
+    let project_root = args.get("project").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(|s| s.trim_end_matches('/').to_owned());
+    let in_scope: Vec<&Value> = match &project_root {
+        Some(root) => sessions
+            .iter()
+            .filter(|s| {
+                let ws = s.get("projectPath").and_then(Value::as_str).or_else(|| s.get("workspace").and_then(Value::as_str));
+                workspace_under(ws, root)
+            })
+            .collect(),
+        None => sessions.iter().collect(),
+    };
+    let mut scope = Map::new();
+    scope.insert("project".into(), project_root.clone().map(Value::String).unwrap_or(Value::Null));
+    scope.insert("sessionsInScope".into(), num(in_scope.len() as f64));
+    let scope = Value::Object(scope);
+    let sessions: Vec<&Value> = in_scope;
+
+    if truthy(args.get("all").unwrap_or(&Value::Null)) {
+        // Whole-corpus assessment, newest-activity first so the budget spends itself on the
+        // sessions a caller actually cares about.
+        let mut pool: Vec<&Value> = sessions.clone();
+        pool.sort_by(|a, b| crate::burn::monitor::last_activity_ms(b).partial_cmp(&crate::burn::monitor::last_activity_ms(a)).unwrap_or(std::cmp::Ordering::Equal));
+        // UNCONDITIONAL, exactly as `scanWithBudget` computes it: `Date.now() + timeBudgetMs`. A
+        // `> 0` guard here would INVERT the meaning of a zero/negative budget — the TS treats that
+        // as an already-elapsed deadline (stop immediately, `stoppedEarly: true`), while an
+        // Option-gated deadline reads it as "no budget" and scans the whole corpus.
+        let deadline = crate::now_ms() as f64 + time_budget_ms;
+        let mut results: Vec<Value> = Vec::new();
+        let mut scanned: Vec<&Value> = Vec::new();
+        let mut stopped_early = false;
+        for c in &pool {
+            if crate::now_ms() as f64 > deadline {
+                stopped_early = true;
+                break;
+            }
+            results.push(assess_one_session(c, timeline_of, ttl_ctx, now_ms, threshold_ms, None));
+            scanned.push(c);
+        }
+        let mut cov = Map::new();
+        cov.insert("sessionsConsidered".into(), num(pool.len() as f64));
+        cov.insert("sessionsScanned".into(), num(scanned.len() as f64));
+        cov.insert("stoppedEarly".into(), Value::Bool(stopped_early));
+        cov.insert(
+            "note".into(),
+            if stopped_early {
+                format!(
+                    "SAMPLE, not full coverage: the {}s scan budget stopped after {} of {} sessions (newest-activity first; reparsed timelines are cached on their cards, so a retry widens coverage).",
+                    fmt_js_num(time_budget_ms / 1000.0),
+                    scanned.len(),
+                    pool.len()
+                )
+            } else {
+                format!("Complete coverage: all {} sessions assessed.", pool.len())
+            }
+            .into(),
+        );
+        let mut m = Map::new();
+        m.insert("sessions".into(), Value::Array(results));
+        m.insert("scope".into(), scope);
+        m.insert("coverage".into(), Value::Object(cov));
+        return Value::Object(m);
+    }
+
+    // Default: the caller's active conversation — the newest MAIN session by its last LLM
+    // request. Fall back to any kind if there are no main cards. BOUNDED: rank by card-metadata
+    // lastActivityMs (cheap), reparse ONLY the top EXPIRY_NEWEST_PROBE candidates for the precise
+    // last-request time.
+    let mains: Vec<&Value> = sessions.iter().copied().filter(|s| crate::burn::cache_ttl::session_ttl_kind_of(s) == crate::burn::cache_ttl::SessionTtlKind::Main).collect();
+    let mut pool: Vec<&Value> = if !mains.is_empty() { mains } else { sessions.clone() };
+    pool.sort_by(|a, b| crate::burn::monitor::last_activity_ms(b).partial_cmp(&crate::burn::monitor::last_activity_ms(a)).unwrap_or(std::cmp::Ordering::Equal));
+    pool.truncate(EXPIRY_NEWEST_PROBE);
+
+    // Unconditional — see the `all` branch above for why a `> 0` guard inverts a zero/negative
+    // budget instead of honouring it.
+    let deadline = crate::now_ms() as f64 + time_budget_ms;
+    // Each probed candidate: (card, tailMs, ms) — ms is what ranks the pool; tailMs (if a tail
+    // resolver answered) is reused by the eventual winner so it does not trigger a second reparse.
+    let mut probed: Vec<(&Value, Option<f64>, f64)> = Vec::new();
+    let mut probe_stopped_early = false;
+    for s in &pool {
+        if crate::now_ms() as f64 > deadline {
+            probe_stopped_early = true;
+            break;
+        }
+        let (tail_ms, ms) = match get_last_request_ms {
+            Some(resolver) => {
+                let tail_ms = resolver(s.get("sessionId").and_then(Value::as_str).unwrap_or(""));
+                (tail_ms, tail_ms.unwrap_or_else(|| crate::burn::monitor::last_activity_ms(s)))
+            }
+            None => {
+                let ms = last_llm_request_ms(&timeline_of(s))
+                    .unwrap_or_else(|| crate::summarize::helpers::parse_iso_ms(s.get("startTime").and_then(Value::as_str).unwrap_or("")).unwrap_or(f64::NAN));
+                (None, ms)
+            }
+        };
+        probed.push((s, tail_ms, ms));
+    }
+
+    let mut newest: Option<&Value> = None;
+    let mut newest_ms = -1.0_f64;
+    let mut newest_tail_ms: Option<f64> = None;
+    for (s, tail_ms, ms) in &probed {
+        if !ms.is_nan() && *ms > newest_ms {
+            newest_ms = *ms;
+            newest = Some(s);
+            newest_tail_ms = *tail_ms;
+        }
+    }
+
+    let rows: Vec<Value> = match newest {
+        Some(c) => vec![assess_one_session(c, timeline_of, ttl_ctx, now_ms, threshold_ms, newest_tail_ms)],
+        None => Vec::new(),
+    };
+    let mut m = Map::new();
+    m.insert("sessions".into(), Value::Array(rows));
+    m.insert("scope".into(), scope);
+    // Honest pick: a budget-stopped probe chose from a subset — say so instead of presenting the
+    // pick as the corpus-wide newest.
+    if probe_stopped_early {
+        m.insert(
+            "note".into(),
+            "Newest-session probe stopped early on the scan time budget — the pick is from the probed subset only.".into(),
+        );
+    }
+    Value::Object(m)
+}

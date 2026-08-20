@@ -1,0 +1,514 @@
+{
+  "nowMs": 1785585600000,
+  "formatIdleSeconds": "45s",
+  "formatIdleMinutes": "1m 30s",
+  "formatIdleHours": "1h 2m",
+  "formatIdleNegative": "0s",
+  "verdictMainFresh": {
+    "verdict": "fresh",
+    "idleMs": 1800000,
+    "idleHuman": "30m 0s",
+    "marginMs": 1800000,
+    "reason": "idle 30m 0s is within the 60-min TTL — the cached prefix is likely still warm",
+    "ttlMs": 3600000,
+    "ttlMin": 60,
+    "ttlSource": "doc-matrix",
+    "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier",
+    "usedThresholdOverride": false
+  },
+  "verdictMainExpired": {
+    "verdict": "expired",
+    "idleMs": 5400000,
+    "idleHuman": "1h 30m",
+    "marginMs": -1800000,
+    "reason": "idle 1h 30m exceeds the 60-min TTL — the cached prefix has likely been evicted; the next request pays a full cache-creation write (~1.25× the prefix)",
+    "ttlMs": 3600000,
+    "ttlMin": 60,
+    "ttlSource": "doc-matrix",
+    "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier",
+    "usedThresholdOverride": false
+  },
+  "verdictSubagentExpired": {
+    "verdict": "expired",
+    "idleMs": 360000,
+    "idleHuman": "6m 0s",
+    "marginMs": -60000,
+    "reason": "idle 6m 0s exceeds the 5-min TTL — the cached prefix has likely been evicted; the next request pays a full cache-creation write (~1.25× the prefix)",
+    "ttlMs": 300000,
+    "ttlMin": 5,
+    "ttlSource": "doc-matrix",
+    "ttlBasis": "subagent — own conversation, own 5-min cache (the 1h auto applies only to the main conversation)",
+    "usedThresholdOverride": false
+  },
+  "verdictUnknown": {
+    "verdict": "unknown",
+    "idleMs": null,
+    "idleHuman": null,
+    "marginMs": null,
+    "reason": "no LLM request recorded for this session — cannot measure idle time or cache freshness",
+    "ttlMs": 3600000,
+    "ttlMin": 60,
+    "ttlSource": "doc-matrix",
+    "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier",
+    "usedThresholdOverride": false
+  },
+  "verdictClockSkew": {
+    "verdict": "fresh",
+    "idleMs": 0,
+    "idleHuman": "0s",
+    "marginMs": 3600000,
+    "reason": "idle 0s is within the 60-min TTL — the cached prefix is likely still warm",
+    "ttlMs": 3600000,
+    "ttlMin": 60,
+    "ttlSource": "doc-matrix",
+    "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier",
+    "usedThresholdOverride": false
+  },
+  "verdictThresholdOverride": {
+    "verdict": "expired",
+    "idleMs": 1800000,
+    "idleHuman": "30m 0s",
+    "marginMs": -900000,
+    "reason": "idle 30m 0s exceeds the 15-min TTL — the cached prefix has likely been evicted; the next request pays a full cache-creation write (~1.25× the prefix)",
+    "ttlMs": 900000,
+    "ttlMin": 15,
+    "ttlSource": "config",
+    "ttlBasis": "explicit --threshold-minutes=15 override (regime would use 60m)",
+    "usedThresholdOverride": true
+  },
+  "verdictThresholdIgnored": {
+    "verdict": "fresh",
+    "idleMs": 1800000,
+    "idleHuman": "30m 0s",
+    "marginMs": 1800000,
+    "reason": "idle 30m 0s is within the 60-min TTL — the cached prefix is likely still warm",
+    "ttlMs": 3600000,
+    "ttlMin": 60,
+    "ttlSource": "doc-matrix",
+    "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier",
+    "usedThresholdOverride": false
+  },
+  "verdictAssumedUnknownAuth": {
+    "verdict": "fresh",
+    "idleMs": 180000,
+    "idleHuman": "3m 0s",
+    "marginMs": 120000,
+    "reason": "idle 3m 0s is within the 5-min TTL — the cached prefix is likely still warm",
+    "ttlMs": 300000,
+    "ttlMin": 5,
+    "ttlSource": "assumed",
+    "ttlBasis": "no kind/auth signals — conservative 5-min floor assumed",
+    "usedThresholdOverride": false
+  },
+  "toolBySessionId": {
+    "sessions": [
+      {
+        "verdict": "fresh",
+        "idleMs": 600000,
+        "idleHuman": "10m 0s",
+        "marginMs": 3000000,
+        "reason": "idle 10m 0s is within the 60-min TTL — the cached prefix is likely still warm",
+        "ttlMs": 3600000,
+        "ttlMin": 60,
+        "ttlSource": "doc-matrix",
+        "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier",
+        "usedThresholdOverride": false,
+        "sessionId": "main-a",
+        "workspace": "/w/proj1",
+        "kind": "main",
+        "lastRequestAt": "2026-08-01T11:50:00.000Z"
+      }
+    ]
+  },
+  "toolBySessionIdMissing": {
+    "sessions": []
+  },
+  "toolBySessionIdOverridesProject": {
+    "sessions": [
+      {
+        "verdict": "expired",
+        "idleMs": 7200000,
+        "idleHuman": "2h 0m",
+        "marginMs": -3600000,
+        "reason": "idle 2h 0m exceeds the 60-min TTL — the cached prefix has likely been evicted; the next request pays a full cache-creation write (~1.25× the prefix)",
+        "ttlMs": 3600000,
+        "ttlMin": 60,
+        "ttlSource": "doc-matrix",
+        "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier",
+        "usedThresholdOverride": false,
+        "sessionId": "main-b",
+        "workspace": "/w/proj2",
+        "kind": "main",
+        "lastRequestAt": "2026-08-01T10:00:00.000Z"
+      }
+    ]
+  },
+  "toolForkUnknown": {
+    "sessions": [
+      {
+        "verdict": "unknown",
+        "idleMs": null,
+        "idleHuman": null,
+        "marginMs": null,
+        "reason": "no LLM request recorded for this session — cannot measure idle time or cache freshness",
+        "ttlMs": 3600000,
+        "ttlMin": 60,
+        "ttlSource": "doc-matrix",
+        "ttlBasis": "fork (reads the PARENT conversation's cache entry) on a Claude subscription within plan — automatic 1-hour tier",
+        "usedThresholdOverride": false,
+        "sessionId": "fork-a",
+        "workspace": "/w/proj1",
+        "kind": "fork",
+        "lastRequestAt": null
+      }
+    ]
+  },
+  "toolThresholdOverride": {
+    "sessions": [
+      {
+        "verdict": "expired",
+        "idleMs": 600000,
+        "idleHuman": "10m 0s",
+        "marginMs": -540000,
+        "reason": "idle 10m 0s exceeds the 1-min TTL — the cached prefix has likely been evicted; the next request pays a full cache-creation write (~1.25× the prefix)",
+        "ttlMs": 60000,
+        "ttlMin": 1,
+        "ttlSource": "config",
+        "ttlBasis": "explicit --threshold-minutes=1 override (regime would use 60m)",
+        "usedThresholdOverride": true,
+        "sessionId": "main-a",
+        "workspace": "/w/proj1",
+        "kind": "main",
+        "lastRequestAt": "2026-08-01T11:50:00.000Z"
+      }
+    ]
+  },
+  "toolProjectScopedDefault": {
+    "sessions": [
+      {
+        "verdict": "fresh",
+        "idleMs": 60000,
+        "idleHuman": "1m 0s",
+        "marginMs": 3540000,
+        "reason": "idle 1m 0s is within the 60-min TTL — the cached prefix is likely still warm",
+        "ttlMs": 3600000,
+        "ttlMin": 60,
+        "ttlSource": "doc-matrix",
+        "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier",
+        "usedThresholdOverride": false,
+        "sessionId": "main-c",
+        "workspace": "/w/proj1",
+        "kind": "main",
+        "lastRequestAt": "2026-08-01T11:59:00.000Z"
+      }
+    ],
+    "scope": {
+      "project": "/w/proj1",
+      "sessionsInScope": 4
+    }
+  },
+  "toolProjectScopedTrailingSlash": {
+    "sessions": [
+      {
+        "verdict": "fresh",
+        "idleMs": 60000,
+        "idleHuman": "1m 0s",
+        "marginMs": 3540000,
+        "reason": "idle 1m 0s is within the 60-min TTL — the cached prefix is likely still warm",
+        "ttlMs": 3600000,
+        "ttlMin": 60,
+        "ttlSource": "doc-matrix",
+        "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier",
+        "usedThresholdOverride": false,
+        "sessionId": "main-c",
+        "workspace": "/w/proj1",
+        "kind": "main",
+        "lastRequestAt": "2026-08-01T11:59:00.000Z"
+      }
+    ],
+    "scope": {
+      "project": "/w/proj1",
+      "sessionsInScope": 4
+    }
+  },
+  "toolMachineWideDefault": {
+    "sessions": [
+      {
+        "verdict": "fresh",
+        "idleMs": 30000,
+        "idleHuman": "30s",
+        "marginMs": 3570000,
+        "reason": "idle 30s is within the 60-min TTL — the cached prefix is likely still warm",
+        "ttlMs": 3600000,
+        "ttlMin": 60,
+        "ttlSource": "doc-matrix",
+        "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier",
+        "usedThresholdOverride": false,
+        "sessionId": "main-d",
+        "workspace": "/w/proj2",
+        "kind": "main",
+        "lastRequestAt": "2026-08-01T11:59:30.000Z"
+      }
+    ],
+    "scope": {
+      "project": null,
+      "sessionsInScope": 7
+    }
+  },
+  "toolSiblingPrefixNotInScope": {
+    "sessions": [],
+    "scope": {
+      "project": "/w/proj1",
+      "sessionsInScope": 0
+    }
+  },
+  "toolAllProj1": {
+    "sessions": [
+      {
+        "verdict": "fresh",
+        "idleMs": 60000,
+        "idleHuman": "1m 0s",
+        "marginMs": 3540000,
+        "reason": "idle 1m 0s is within the 60-min TTL — the cached prefix is likely still warm",
+        "ttlMs": 3600000,
+        "ttlMin": 60,
+        "ttlSource": "doc-matrix",
+        "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier",
+        "usedThresholdOverride": false,
+        "sessionId": "main-c",
+        "workspace": "/w/proj1",
+        "kind": "main",
+        "lastRequestAt": "2026-08-01T11:59:00.000Z"
+      },
+      {
+        "verdict": "fresh",
+        "idleMs": 600000,
+        "idleHuman": "10m 0s",
+        "marginMs": 3000000,
+        "reason": "idle 10m 0s is within the 60-min TTL — the cached prefix is likely still warm",
+        "ttlMs": 3600000,
+        "ttlMin": 60,
+        "ttlSource": "doc-matrix",
+        "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier",
+        "usedThresholdOverride": false,
+        "sessionId": "main-a",
+        "workspace": "/w/proj1",
+        "kind": "main",
+        "lastRequestAt": "2026-08-01T11:50:00.000Z"
+      },
+      {
+        "verdict": "expired",
+        "idleMs": 600000,
+        "idleHuman": "10m 0s",
+        "marginMs": -300000,
+        "reason": "idle 10m 0s exceeds the 5-min TTL — the cached prefix has likely been evicted; the next request pays a full cache-creation write (~1.25× the prefix)",
+        "ttlMs": 300000,
+        "ttlMin": 5,
+        "ttlSource": "doc-matrix",
+        "ttlBasis": "subagent — own conversation, own 5-min cache (the 1h auto applies only to the main conversation)",
+        "usedThresholdOverride": false,
+        "sessionId": "sub-a",
+        "workspace": "/w/proj1",
+        "kind": "subagent",
+        "lastRequestAt": "2026-08-01T11:50:00.000Z"
+      },
+      {
+        "verdict": "unknown",
+        "idleMs": null,
+        "idleHuman": null,
+        "marginMs": null,
+        "reason": "no LLM request recorded for this session — cannot measure idle time or cache freshness",
+        "ttlMs": 3600000,
+        "ttlMin": 60,
+        "ttlSource": "doc-matrix",
+        "ttlBasis": "fork (reads the PARENT conversation's cache entry) on a Claude subscription within plan — automatic 1-hour tier",
+        "usedThresholdOverride": false,
+        "sessionId": "fork-a",
+        "workspace": "/w/proj1",
+        "kind": "fork",
+        "lastRequestAt": null
+      }
+    ],
+    "scope": {
+      "project": "/w/proj1",
+      "sessionsInScope": 4
+    },
+    "coverage": {
+      "sessionsConsidered": 4,
+      "sessionsScanned": 4,
+      "stoppedEarly": false,
+      "note": "Complete coverage: all 4 sessions assessed."
+    }
+  },
+  "toolAllWide": {
+    "sessions": [
+      {
+        "verdict": "fresh",
+        "idleMs": 30000,
+        "idleHuman": "30s",
+        "marginMs": 3570000,
+        "reason": "idle 30s is within the 60-min TTL — the cached prefix is likely still warm",
+        "ttlMs": 3600000,
+        "ttlMin": 60,
+        "ttlSource": "doc-matrix",
+        "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier",
+        "usedThresholdOverride": false,
+        "sessionId": "main-d",
+        "workspace": "/w/proj2",
+        "kind": "main",
+        "lastRequestAt": "2026-08-01T11:59:30.000Z"
+      },
+      {
+        "verdict": "fresh",
+        "idleMs": 60000,
+        "idleHuman": "1m 0s",
+        "marginMs": 3540000,
+        "reason": "idle 1m 0s is within the 60-min TTL — the cached prefix is likely still warm",
+        "ttlMs": 3600000,
+        "ttlMin": 60,
+        "ttlSource": "doc-matrix",
+        "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier",
+        "usedThresholdOverride": false,
+        "sessionId": "main-c",
+        "workspace": "/w/proj1",
+        "kind": "main",
+        "lastRequestAt": "2026-08-01T11:59:00.000Z"
+      },
+      {
+        "verdict": "fresh",
+        "idleMs": 60000,
+        "idleHuman": "1m 0s",
+        "marginMs": 3540000,
+        "reason": "idle 1m 0s is within the 60-min TTL — the cached prefix is likely still warm",
+        "ttlMs": 3600000,
+        "ttlMin": 60,
+        "ttlSource": "doc-matrix",
+        "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier",
+        "usedThresholdOverride": false,
+        "sessionId": "sibling",
+        "workspace": "/w/proj1-old",
+        "kind": "main",
+        "lastRequestAt": "2026-08-01T11:59:00.000Z"
+      },
+      {
+        "verdict": "fresh",
+        "idleMs": 600000,
+        "idleHuman": "10m 0s",
+        "marginMs": 3000000,
+        "reason": "idle 10m 0s is within the 60-min TTL — the cached prefix is likely still warm",
+        "ttlMs": 3600000,
+        "ttlMin": 60,
+        "ttlSource": "doc-matrix",
+        "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier",
+        "usedThresholdOverride": false,
+        "sessionId": "main-a",
+        "workspace": "/w/proj1",
+        "kind": "main",
+        "lastRequestAt": "2026-08-01T11:50:00.000Z"
+      },
+      {
+        "verdict": "expired",
+        "idleMs": 600000,
+        "idleHuman": "10m 0s",
+        "marginMs": -300000,
+        "reason": "idle 10m 0s exceeds the 5-min TTL — the cached prefix has likely been evicted; the next request pays a full cache-creation write (~1.25× the prefix)",
+        "ttlMs": 300000,
+        "ttlMin": 5,
+        "ttlSource": "doc-matrix",
+        "ttlBasis": "subagent — own conversation, own 5-min cache (the 1h auto applies only to the main conversation)",
+        "usedThresholdOverride": false,
+        "sessionId": "sub-a",
+        "workspace": "/w/proj1",
+        "kind": "subagent",
+        "lastRequestAt": "2026-08-01T11:50:00.000Z"
+      },
+      {
+        "verdict": "unknown",
+        "idleMs": null,
+        "idleHuman": null,
+        "marginMs": null,
+        "reason": "no LLM request recorded for this session — cannot measure idle time or cache freshness",
+        "ttlMs": 3600000,
+        "ttlMin": 60,
+        "ttlSource": "doc-matrix",
+        "ttlBasis": "fork (reads the PARENT conversation's cache entry) on a Claude subscription within plan — automatic 1-hour tier",
+        "usedThresholdOverride": false,
+        "sessionId": "fork-a",
+        "workspace": "/w/proj1",
+        "kind": "fork",
+        "lastRequestAt": null
+      },
+      {
+        "verdict": "expired",
+        "idleMs": 7200000,
+        "idleHuman": "2h 0m",
+        "marginMs": -3600000,
+        "reason": "idle 2h 0m exceeds the 60-min TTL — the cached prefix has likely been evicted; the next request pays a full cache-creation write (~1.25× the prefix)",
+        "ttlMs": 3600000,
+        "ttlMin": 60,
+        "ttlSource": "doc-matrix",
+        "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier",
+        "usedThresholdOverride": false,
+        "sessionId": "main-b",
+        "workspace": "/w/proj2",
+        "kind": "main",
+        "lastRequestAt": "2026-08-01T10:00:00.000Z"
+      }
+    ],
+    "scope": {
+      "project": null,
+      "sessionsInScope": 7
+    },
+    "coverage": {
+      "sessionsConsidered": 7,
+      "sessionsScanned": 7,
+      "stoppedEarly": false,
+      "note": "Complete coverage: all 7 sessions assessed."
+    }
+  },
+  "toolDefaultWithResolver": {
+    "sessions": [
+      {
+        "verdict": "fresh",
+        "idleMs": 60000,
+        "idleHuman": "1m 0s",
+        "marginMs": 3540000,
+        "reason": "idle 1m 0s is within the 60-min TTL — the cached prefix is likely still warm",
+        "ttlMs": 3600000,
+        "ttlMin": 60,
+        "ttlSource": "doc-matrix",
+        "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier",
+        "usedThresholdOverride": false,
+        "sessionId": "main-c",
+        "workspace": "/w/proj1",
+        "kind": "main",
+        "lastRequestAt": "2026-08-01T11:59:00.000Z"
+      }
+    ],
+    "scope": {
+      "project": "/w/proj1",
+      "sessionsInScope": 4
+    }
+  },
+  "toolAllElapsedBudget": {
+    "sessions": [],
+    "scope": {
+      "project": null,
+      "sessionsInScope": 7
+    },
+    "coverage": {
+      "sessionsConsidered": 7,
+      "sessionsScanned": 0,
+      "stoppedEarly": true,
+      "note": "SAMPLE, not full coverage: the -0.001s scan budget stopped after 0 of 7 sessions (newest-activity first; reparsed timelines are cached on their cards, so a retry widens coverage)."
+    }
+  },
+  "toolDefaultElapsedBudget": {
+    "sessions": [],
+    "scope": {
+      "project": "/w/proj1",
+      "sessionsInScope": 4
+    },
+    "note": "Newest-session probe stopped early on the scan time budget — the pick is from the probed subset only."
+  }
+}
