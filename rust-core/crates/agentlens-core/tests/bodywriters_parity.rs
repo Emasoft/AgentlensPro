@@ -55,6 +55,14 @@ fn repin(o: &Value) -> std::path::PathBuf {
 
 const HOME: &str = "/h/user";
 
+/// The oracle REDACTS the absolute fixture path to `<FIXTURES>/` — `dir` echoes whatever the caller
+/// passed, and a committed fixture carrying a real home path both fails `check-identities` and pins
+/// one machine's layout into the suite. Apply the same substitution to the Rust side.
+fn strip(v: &Value) -> Value {
+    let prefix = format!("{}/", fixtures().to_string_lossy());
+    serde_json::from_str(&v.to_string().replace(&prefix, "<FIXTURES>/")).unwrap()
+}
+
 fn live_value(l: &LiveBodiesScan) -> Value {
     let files = |fs: &[FileRef]| {
         Value::Array(
@@ -186,11 +194,7 @@ fn scan_live_body_writers_reproduces_the_ts_oracle_exactly() {
     let o = oracle();
     let dir = repin(&o);
     let got = scan_live_body_writers(&dir, o["nowMs"].as_f64().unwrap(), o["windowMs"].as_f64().unwrap());
-    // The `dir` field echoes whatever path the caller passed, which differs between the generator
-    // (a trailing-slash-free URL path) and CARGO_MANIFEST_DIR — compare everything else.
-    let mut exp = o["live"].clone();
-    exp["dir"] = Value::String(got.dir.clone());
-    same(&live_value(&got), &exp, "live");
+    same(&strip(&live_value(&got)), &o["live"], "live");
 
     let missing = scan_live_body_writers(&fixtures().join("no-such-bodies-dir"), o["nowMs"].as_f64().unwrap(), o["windowMs"].as_f64().unwrap());
     assert!(!missing.available, "an absent dir reports available:false, never throws");
@@ -214,6 +218,8 @@ fn build_body_writers_report_reproduces_the_ts_oracle_exactly() {
     for (case, store_key, live_key, limit, cards_key) in cases {
         let cards = if cards_key == "__empty" { &empty } else { &o[cards_key] };
         let got = run(&o, Case { live: &o[live_key], store: store_key.map(|k| &o[k]), cards, limit });
+        // Already redacted on both sides — the live scan is rebuilt FROM the oracle here, so its
+        // `dir` is the placeholder and passes through unchanged.
         same(&got, &o[case], case);
     }
 }

@@ -68,10 +68,16 @@ const STORE_SESSIONS = [
 const storeNoOverlap = { sessions: STORE_SESSIONS, responses: { files: 12, bytes: 900_000 }, recentSrcNames: new Set() }
 const storeOverlap = { sessions: STORE_SESSIONS, responses: { files: 12, bytes: 900_000 }, recentSrcNames: new Set(['r1.request.json', 'x1.response.json']) }
 
-const run = (o) => buildBodyWritersReport({
+// REDACT the absolute fixture path. `LiveBodiesScan.dir` echoes whatever the caller passed, which
+// on a real machine is a home path — a committed fixture carrying one fails
+// `pnpm run check-identities` (it did, and the first version of this file shipped that way) and
+// pins one machine's layout into a test every contributor runs.
+const strip = (o) => JSON.parse(JSON.stringify(o).split(dir).join('<FIXTURES>/'))
+
+const run = (o) => strip(buildBodyWritersReport({
   live: o.live ?? live, store: o.store ?? null, cards: o.cards ?? CARDS,
   nowMs: NOW, windowMs: WINDOW_MS, activeMs: ACTIVE_MS, limit: o.limit ?? 20,
-})
+}))
 
 const setToArray = (s) => ({ ...s, recentSrcNames: [...s.recentSrcNames] })
 
@@ -81,8 +87,8 @@ writeFileSync(dir + 'bodywriters-expected.json', JSON.stringify({
   windowMs: WINDOW_MS,
   activeMs: ACTIVE_MS,
   cards: CARDS,
-  live,
-  liveMissingDir: missing,
+  live: strip(live),
+  liveMissingDir: strip(missing),
   storeNoOverlap: setToArray(storeNoOverlap),
   storeOverlap: setToArray(storeOverlap),
   // The branch the Rust route takes today: no durable store, so live bytes ARE the total.

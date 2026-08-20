@@ -25,7 +25,7 @@
   ],
   "live": {
     "available": true,
-    "dir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/bodies-dir",
+    "dir": "<FIXTURES>/bodies-dir",
     "scannedFiles": 6,
     "sessions": [
       {
@@ -96,7 +96,7 @@
   },
   "liveMissingDir": {
     "available": false,
-    "dir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/no-such-bodies-dir",
+    "dir": "<FIXTURES>/no-such-bodies-dir",
     "scannedFiles": 0,
     "sessions": [],
     "responses": {
@@ -161,7 +161,7 @@
   },
   "reportNoStore": {
     "available": true,
-    "dir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/bodies-dir",
+    "dir": "<FIXTURES>/bodies-dir",
     "scannedFiles": 6,
     "windowMin": 30,
     "activeMin": 10,
@@ -228,7 +228,7 @@
   },
   "reportStoreNoOverlap": {
     "available": true,
-    "dir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/bodies-dir",
+    "dir": "<FIXTURES>/bodies-dir",
     "scannedFiles": 6,
     "windowMin": 30,
     "activeMin": 10,
@@ -311,7 +311,7 @@
   },
   "reportStoreOverlap": {
     "available": true,
-    "dir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/bodies-dir",
+    "dir": "<FIXTURES>/bodies-dir",
     "scannedFiles": 6,
     "windowMin": 30,
     "activeMin": 10,
@@ -394,7 +394,7 @@
   },
   "reportLimitOne": {
     "available": true,
-    "dir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/bodies-dir",
+    "dir": "<FIXTURES>/bodies-dir",
     "scannedFiles": 6,
     "windowMin": 30,
     "activeMin": 10,
@@ -429,7 +429,7 @@
   },
   "reportNoDir": {
     "available": false,
-    "dir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/no-such-bodies-dir",
+    "dir": "<FIXTURES>/no-such-bodies-dir",
     "scannedFiles": 0,
     "windowMin": 30,
     "activeMin": 10,
@@ -447,7 +447,7 @@
   },
   "reportNoDirWithStore": {
     "available": true,
-    "dir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/no-such-bodies-dir",
+    "dir": "<FIXTURES>/no-such-bodies-dir",
     "scannedFiles": 0,
     "windowMin": 30,
     "activeMin": 10,
@@ -498,7 +498,7 @@
   },
   "reportNoCards": {
     "available": true,
-    "dir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/bodies-dir",
+    "dir": "<FIXTURES>/bodies-dir",
     "scannedFiles": 6,
     "windowMin": 30,
     "activeMin": 10,
