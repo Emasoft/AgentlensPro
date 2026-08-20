@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T08:56:13+0200
+updated: 2026-08-20T09:05:33+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -549,16 +549,27 @@ release-via: publish
   export (combined shape, skip-existing, three 400 guards) and purge (proven July volume
   removed + .idx retained; unproven August kept, failures named). 100/100, zero new clippy,
   live smoke incl. fail-safe purge on an empty store (nothing deleted, every lump named).
-- **NEXT ACTION (one step): the instruction routes — rows 19–21.** `GET
-  /api/instruction-suggestions?workspace=` (server.ts:3852 — sessions filtered by workspace
-  prefix → generateSuggestions over readAllInstructionContent; bare ARRAY body; 400 when
-  workspace missing), `GET /api/instruction-files?workspace=` (bare array from
-  detectInstructionFiles; same 400), `POST /api/instructions/apply` (≤4MB
-  `{workspace,targetFile,appliedText,id}`; targetFile whitelist {CLAUDE.md, .claude/CLAUDE.md,
-  .github/copilot-instructions.md, AGENTS.md}; path-escape guards; `{ok:true}` / 400 / 500).
-  Read src/instructionAdvisor.ts + src/instructionFiles.ts IN FULL first — the advisor is a
-  pure heuristic over session cards (TS-oracle-able), the files half is fs probing + an
-  append-only writer whose escape guards must port exactly. Then statusline row 5.
+- **P4t DONE (commit 6871ebf): the instruction routes — rows 19–21.** `instruction_advisor.rs`
+  (pure Value-card analysis, all five generators; scope patterns use `(?-u:\b)` — the ASCII
+  boundary a non-/u JS regex implies; the cost-ratio evidence rides the ported pricing table,
+  already proven equal by pricing_parity) + `instruction_files.rs` (detection with the
+  primary-then-alternate probe + create affordance, the dated-marker append, resolve_lexical
+  for the escape guard; removeSuggestion NOT PORTED — zero consumers, verified by grep).
+  Routes: both GETs PREFIX-match with the shared workspace 400 and BARE-array bodies; apply
+  keeps the allowlist + escape 400 verbatim (an append path outside it is ~/.zshrc-class code
+  execution). Oracle: 4 committed cases (rich set trips every generator, 7 suggestions)
+  Value-equal first run; the socket test closes the whole loop (seed → suggest → apply →
+  absorbed → detected). 103/103, zero new clippy, live smoke green.
+- **NEXT ACTION (one step): statusline row 5 — POST /api/statusline-samples.** server.ts:3506:
+  body ≤512KB (HOOK_EVENT_MAX_BYTES; overflow destroys the socket, no response), JSON object →
+  `{ok:true}`, parse error → 400 `{error}`; `statusline_stream:"subagent"` selects the
+  subagent stream else main. Source: src/statuslineStore.ts — read IN FULL first and SIZE it
+  before porting: the store is a parquet/WAL subsystem (seal timer, retention) that several
+  NOT-PORTED notes already point at (hook_events' routed-drop, burn's getBillingEvents, the
+  timeline overlay, server-stats' statusline zeros) — decide whether row 5 lands as the full
+  store port or an append-only WAL slice with the read half deferred, and record which in the
+  commit. After it: the remaining freeze rows are the MCP tool surface (§3) and the
+  admission/base-path preamble deferrals — re-derive the next slice from the freeze table.
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
