@@ -987,6 +987,65 @@ async fn handle(
         .await
         .map_err(|e| format!("history build join failed: {e}"))?;
         json_response(StatusCode::OK, serde_json::json!({ "history": history.unwrap_or(Value::Null) }).to_string())
+    } else if method == Method::GET && path.starts_with("/api/callcontext/") {
+        // Row 35 (server.ts:4161) — the LAST HTTP row. The full literal context of ONE llm call,
+        // rebuilt from the raw OTEL request body. `callContext: null` means no body was captured
+        // for that call; the client renders an honest "not captured" note, never a spinner.
+        //
+        // LOCK CHOREOGRAPHY (the P4s rule): the registry lookup is cheap and in-memory, so it runs
+        // UNDER the lock and the POINTER IS CLONED OUT. The multi-MB body read/parse then happens
+        // with the lock RELEASED, and the lock is re-taken only for the account backfill.
+        let rest = &path["/api/callcontext/".len()..];
+        let mut segs = rest.splitn(2, '/');
+        let session_id = percent_decode(segs.next().unwrap_or(""));
+        // `parts[1] ? decode(parts[1]) : undefined` — TRUTHY, so an EMPTY second segment is
+        // undefined, not "".
+        let request_id = segs.next().filter(|s| !s.is_empty()).map(percent_decode);
+        let span_id = query_of(&req).get("span").filter(|s| !s.is_empty()).cloned();
+
+        let ptr = {
+            let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+            st.bodies.resolve_request(&session_id, request_id.as_deref(), span_id.as_deref()).cloned()
+        };
+        let call_context = match ptr {
+            None => Value::Null,
+            Some(p) => {
+                let (body_ref, inline, ptr_request_id, ptr_model) =
+                    (p.body_ref.clone(), p.inline_body.clone(), p.request_id.clone(), p.model.clone());
+                let built = tokio::task::spawn_blocking(move || match body_ref {
+                    Some(r) if !r.is_empty() => crate::raw_body_context::build_call_context(&r, false),
+                    // An inline body is only present when Claude Code had no file sink configured;
+                    // a parse failure here is a null context, never an error.
+                    _ => inline
+                        .and_then(|b| serde_json::from_str::<Value>(&b).ok())
+                        .and_then(|v| crate::raw_body_context::build_call_context_from_json(&v, false)),
+                })
+                .await
+                .map_err(|e| format!("callcontext build join failed: {e}"))?;
+                match built {
+                    None => Value::Null,
+                    Some(ctx) => {
+                        let ctx = crate::raw_body_context::finalize_resolved_context(
+                            ctx,
+                            &session_id,
+                            request_id.as_deref(),
+                            ptr_request_id.as_deref(),
+                            ptr_model.as_deref(),
+                        );
+                        // TRDD-BURNWDGT backfill: this makes account attribution work even for
+                        // sessions whose OTEL events never carried the account attribute. In this
+                        // core the session→account map lives in account_registry, NOT the body
+                        // registry — the one deliberate divergence from the TS layout.
+                        if let Some(acct) = ctx.get("accountUuid").and_then(Value::as_str).filter(|a| !a.is_empty()) {
+                            let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                            st.accounts.record(&session_id, acct);
+                        }
+                        ctx
+                    }
+                }
+            }
+        };
+        json_response(StatusCode::OK, serde_json::json!({ "callContext": call_context }).to_string())
     } else if method == Method::GET && path.starts_with("/api/conversation/") {
         // Row 34 (server.ts:4271). The narrative reconstruction — same streaming discipline and
         // same `{x: null}`-is-a-valid-200 contract as rows 32-33.

@@ -364,3 +364,55 @@ pub fn build_call_context(body_file_path: &str, uncap: bool) -> Option<Value> {
     let parsed: Value = serde_json::from_str(&raw).ok()?;
     build_call_context_from_json(&parsed, uncap)
 }
+
+/// The four post-assignments `resolveCallContext` performs on a freshly-built context. Kept PURE
+/// (the registry reads and the account backfill are the route's job — see the module head), but
+/// the KEY-ORDER consequences are subtle enough to belong in one tested place:
+///
+///  - `ctx.sessionId = sessionId` overwrites an EXISTING key, so it keeps its position (first).
+///  - `ctx.requestId = sel ?? ptr ?? ctx.requestId` — a built context has NO requestId, so this
+///    APPENDS the key, landing it AFTER `truncated`. With all three undefined the assignment still
+///    creates the property, but JSON.stringify then omits it — so we simply do not insert.
+///  - `if (!ctx.model) ctx.model = ptr.model` is a FALSY test, not nullish: an EMPTY-STRING model
+///    is replaced. **It does NOT append.** The TS object literal always DEFINES `model` — as
+///    `undefined` when the body named none — so the property already exists at its literal
+///    position and assignment keeps it there, between `accountUuid` and `betas`/`blocks`. JSON
+///    merely hides an undefined value; it does not remove the slot. The first cut of this port
+///    appended instead, which the oracle caught: predicting "an absent key appends" is right for
+///    JS in general and wrong for a key the literal declared.
+///  - assigning `undefined` over an existing falsy model REMOVES it from the JSON entirely.
+pub fn finalize_resolved_context(
+    mut ctx: Value,
+    session_id: &str,
+    sel_request_id: Option<&str>,
+    ptr_request_id: Option<&str>,
+    ptr_model: Option<&str>,
+) -> Value {
+    let Some(o) = ctx.as_object_mut() else { return ctx };
+    o.insert("sessionId".into(), Value::String(session_id.to_owned()));
+    if let Some(r) = sel_request_id.or(ptr_request_id) {
+        o.insert("requestId".into(), Value::String(r.to_owned()));
+    }
+    let model_falsy = o.get("model").is_none_or(|v| !crate::summarize::helpers::truthy(v));
+    if model_falsy {
+        match ptr_model {
+            Some(m) => {
+                if o.contains_key("model") {
+                    // The slot exists (body named an empty-string model) — replacing keeps it there.
+                    o.insert("model".into(), Value::String(m.to_owned()));
+                } else {
+                    // The slot exists in the TS literal but our builder omitted it, so restore it at
+                    // the LITERAL position — immediately before `betas`/`blocks` — rather than
+                    // appending, which would put it after `requestId` and break the wire order.
+                    let at = o.keys().position(|k| k == "betas" || k == "blocks").unwrap_or(o.len());
+                    o.shift_insert(at, "model".into(), Value::String(m.to_owned()));
+                }
+            }
+            None => {
+                // `ctx.model = undefined` — the property exists but JSON.stringify drops it.
+                o.shift_remove("model");
+            }
+        }
+    }
+    ctx
+}

@@ -1358,3 +1358,50 @@ fn conversation_route_serves_the_narrative_with_the_ttl_tier_split() {
     assert!(resp.starts_with("HTTP/1.1 200"), "a null conversation is still 200: {resp}");
     assert!(serde_json::from_str::<serde_json::Value>(body_of(&resp)).unwrap()["conversation"].is_null());
 }
+
+/// Row 35 over a real socket — the LAST HTTP row. Also pins the TRDD-BURNWDGT account backfill,
+/// which is the reason this route writes to state at all.
+#[test]
+fn callcontext_route_resolves_a_body_and_backfills_the_account() {
+    let (_otlp, ui, state) = start_servers();
+    let bodies = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bodies");
+    {
+        let mut st = state.lock().unwrap();
+        st.bodies.record(
+            "cc-sess",
+            agentlens_core::call_body_registry::CallBodyPointer {
+                kind: "request",
+                body_ref: Some(bodies.join("cc-model.request.json").to_string_lossy().into_owned()),
+                inline_body: None,
+                request_id: Some("req-ptr".into()),
+                span_id: Some("sp-1".into()),
+                model: None,
+                query_source: None,
+                ts: 1,
+            },
+        );
+        assert!(st.accounts.account_for("cc-sess").is_none(), "account is unknown before the drill");
+    }
+
+    // /:sessionId/:requestId — the sel requestId wins over the pointer's.
+    let v: serde_json::Value = serde_json::from_str(body_of(&get(ui, "/api/callcontext/cc-sess/req-sel", ""))).unwrap();
+    let c = &v["callContext"];
+    assert_eq!(c["sessionId"], "cc-sess", "sessionId is OVERWRITTEN with the requested one: {c}");
+    assert_eq!(c["requestId"], "req-sel");
+    assert!(!c["blocks"].as_array().unwrap().is_empty(), "{c}");
+
+    // The backfill makes account attribution work for sessions whose OTEL events never carried it.
+    {
+        let st = state.lock().unwrap();
+        assert_eq!(st.accounts.account_for("cc-sess"), Some("cc-acct"), "the drill must backfill the account");
+    }
+
+    // ?span= selects the same pointer, and with no sel requestId the POINTER's is used.
+    let v: serde_json::Value = serde_json::from_str(body_of(&get(ui, "/api/callcontext/cc-sess?span=sp-1", ""))).unwrap();
+    assert_eq!(v["callContext"]["requestId"], "req-ptr");
+
+    // An unknown session is a null context on a 200 — "not captured" is an answer, not an error.
+    let resp = get(ui, "/api/callcontext/no-such-session", "");
+    assert!(resp.starts_with("HTTP/1.1 200"), "{resp}");
+    assert!(serde_json::from_str::<serde_json::Value>(body_of(&resp)).unwrap()["callContext"].is_null());
+}
