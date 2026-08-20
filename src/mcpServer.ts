@@ -2718,7 +2718,9 @@ async function handleGetCacheRiskCosts(
   }
 }
 
-async function handleGetContextInflationReport(
+// EXPORTED so the Rust port's parity oracle can drive this handler directly (TRDD-DMWOBWFH P4x.2d).
+// Export-only: no behaviour change.
+export async function handleGetContextInflationReport(
   sessions: SessionSummaryCard[],
   getComposition: CompositionAccessor | null,
   getHistory: HistoryAccessor | null,

@@ -1,0 +1,504 @@
+{
+  "sessions": [
+    {
+      "sessionId": "comp-many",
+      "workspace": "/w/alpha",
+      "model": "claude-opus-5",
+      "inputTokens": 10,
+      "outputTokens": 5,
+      "cacheReadTokens": 0,
+      "cacheCreateTokens": 0,
+      "turns": 1
+    },
+    {
+      "sessionId": "comp-own",
+      "workspace": "/w/alpha",
+      "model": "claude-opus-5",
+      "inputTokens": 10,
+      "outputTokens": 5,
+      "cacheReadTokens": 0,
+      "cacheCreateTokens": 0,
+      "turns": 1
+    },
+    {
+      "sessionId": "comp-parent",
+      "workspace": "/w/beta",
+      "model": "claude-opus-5",
+      "inputTokens": 10,
+      "outputTokens": 5,
+      "cacheReadTokens": 0,
+      "cacheCreateTokens": 0,
+      "turns": 1
+    },
+    {
+      "sessionId": "no-log-here",
+      "workspace": "/w/alpha",
+      "model": "claude-opus-5",
+      "inputTokens": 10,
+      "outputTokens": 5,
+      "cacheReadTokens": 0,
+      "cacheCreateTokens": 0,
+      "turns": 1
+    }
+  ],
+  "compositions": {
+    "comp-many": {
+      "turns": [
+        {
+          "turn": 1,
+          "sources": [
+            {
+              "kind": "file",
+              "label": "CLAUDE.md",
+              "tokens": 5000
+            },
+            {
+              "kind": "skill",
+              "label": "ponytail",
+              "tokens": 200
+            }
+          ]
+        },
+        {
+          "turn": 2,
+          "sources": [
+            {
+              "kind": "file",
+              "label": "CLAUDE.md",
+              "tokens": 5000
+            },
+            {
+              "kind": "skill",
+              "label": "ponytail",
+              "tokens": 200
+            }
+          ]
+        },
+        {
+          "turn": 3,
+          "sources": [
+            {
+              "kind": "file",
+              "label": "CLAUDE.md",
+              "tokens": 5000
+            },
+            {
+              "kind": "skill",
+              "label": "ponytail",
+              "tokens": 200
+            }
+          ]
+        },
+        {
+          "turn": 4,
+          "sources": [
+            {
+              "kind": "file",
+              "label": "CLAUDE.md",
+              "tokens": 9000
+            },
+            {
+              "kind": "skill",
+              "label": "ponytail",
+              "tokens": 200
+            }
+          ]
+        },
+        {
+          "turn": 5,
+          "sources": [
+            {
+              "kind": "file",
+              "label": "CLAUDE.md",
+              "tokens": 5000
+            },
+            {
+              "kind": "skill",
+              "label": "ponytail",
+              "tokens": 200
+            }
+          ]
+        },
+        {
+          "turn": 6,
+          "sources": [
+            {
+              "kind": "userMsg",
+              "label": "paste",
+              "tokens": 90000
+            },
+            {
+              "kind": "skill",
+              "label": "ponytail",
+              "tokens": 200
+            }
+          ]
+        }
+      ]
+    },
+    "comp-own": {
+      "turns": [
+        {
+          "turn": 1,
+          "sources": [
+            {
+              "kind": "file",
+              "label": "CLAUDE.md",
+              "tokens": 4000
+            }
+          ]
+        },
+        {
+          "turn": 2,
+          "sources": [
+            {
+              "kind": "tool",
+              "label": "Bash",
+              "tokens": 300
+            }
+          ]
+        }
+      ]
+    },
+    "comp-parent": null
+  },
+  "histories": {
+    "comp-many": {
+      "sessionId": "comp-many",
+      "truncated": false,
+      "steps": [
+        {
+          "turn": 1,
+          "blocks": [
+            {
+              "id": "b1",
+              "kind": "claudemd",
+              "label": "CLAUDE.md",
+              "tokens": 5000
+            }
+          ],
+          "usage": {
+            "input": 10,
+            "cacheRead": 6000,
+            "cacheCreate": 0
+          }
+        },
+        {
+          "turn": 2,
+          "blocks": [
+            {
+              "id": "b1",
+              "kind": "claudemd",
+              "label": "CLAUDE.md",
+              "tokens": 5000
+            },
+            {
+              "id": "b2",
+              "kind": "bashOutput",
+              "label": "ps snapshot",
+              "tokens": 900
+            }
+          ],
+          "usage": {
+            "input": 5,
+            "cacheRead": 12000,
+            "cacheCreate": 0
+          }
+        }
+      ]
+    },
+    "comp-own": {
+      "sessionId": "comp-own",
+      "truncated": false,
+      "steps": []
+    }
+  },
+  "all": {
+    "scope": "all",
+    "sessionsConsidered": 4,
+    "sessionsWithLog": 3,
+    "sessionsScanned": 2,
+    "topContributors": [
+      {
+        "label": "paste",
+        "kind": "userMsg",
+        "cumulativeTokens": 90000,
+        "turnsPresent": 1,
+        "peakTokens": 90000,
+        "sessions": 1
+      },
+      {
+        "label": "CLAUDE.md",
+        "kind": "file",
+        "cumulativeTokens": 33000,
+        "turnsPresent": 6,
+        "peakTokens": 9000,
+        "sessions": 2
+      },
+      {
+        "label": "ponytail",
+        "kind": "skill",
+        "cumulativeTokens": 1200,
+        "turnsPresent": 6,
+        "peakTokens": 200,
+        "sessions": 1
+      },
+      {
+        "label": "Bash",
+        "kind": "tool",
+        "cumulativeTokens": 300,
+        "turnsPresent": 1,
+        "peakTokens": 300,
+        "sessions": 1
+      }
+    ],
+    "runawaySources": [
+      {
+        "label": "CLAUDE.md",
+        "kind": "file",
+        "turnsPresent": 6,
+        "peakTokens": 9000,
+        "cumulativeTokens": 33000,
+        "hint": "Re-injected across many turns — if it sits in the cached prefix it forces repeated cache-creation; move it into the message suffix after the last breakpoint."
+      }
+    ],
+    "residentCost": null
+  },
+  "scoped": {
+    "scope": "/w/alpha",
+    "sessionsConsidered": 3,
+    "sessionsWithLog": 2,
+    "sessionsScanned": 2,
+    "topContributors": [
+      {
+        "label": "paste",
+        "kind": "userMsg",
+        "cumulativeTokens": 90000,
+        "turnsPresent": 1,
+        "peakTokens": 90000,
+        "sessions": 1
+      },
+      {
+        "label": "CLAUDE.md",
+        "kind": "file",
+        "cumulativeTokens": 33000,
+        "turnsPresent": 6,
+        "peakTokens": 9000,
+        "sessions": 2
+      },
+      {
+        "label": "ponytail",
+        "kind": "skill",
+        "cumulativeTokens": 1200,
+        "turnsPresent": 6,
+        "peakTokens": 200,
+        "sessions": 1
+      },
+      {
+        "label": "Bash",
+        "kind": "tool",
+        "cumulativeTokens": 300,
+        "turnsPresent": 1,
+        "peakTokens": 300,
+        "sessions": 1
+      }
+    ],
+    "runawaySources": [
+      {
+        "label": "CLAUDE.md",
+        "kind": "file",
+        "turnsPresent": 6,
+        "peakTokens": 9000,
+        "cumulativeTokens": 33000,
+        "hint": "Re-injected across many turns — if it sits in the cached prefix it forces repeated cache-creation; move it into the message suffix after the last breakpoint."
+      }
+    ],
+    "residentCost": null
+  },
+  "blankScope": {
+    "scope": "   ",
+    "sessionsConsidered": 4,
+    "sessionsWithLog": 3,
+    "sessionsScanned": 2,
+    "topContributors": [
+      {
+        "label": "paste",
+        "kind": "userMsg",
+        "cumulativeTokens": 90000,
+        "turnsPresent": 1,
+        "peakTokens": 90000,
+        "sessions": 1
+      },
+      {
+        "label": "CLAUDE.md",
+        "kind": "file",
+        "cumulativeTokens": 33000,
+        "turnsPresent": 6,
+        "peakTokens": 9000,
+        "sessions": 2
+      },
+      {
+        "label": "ponytail",
+        "kind": "skill",
+        "cumulativeTokens": 1200,
+        "turnsPresent": 6,
+        "peakTokens": 200,
+        "sessions": 1
+      },
+      {
+        "label": "Bash",
+        "kind": "tool",
+        "cumulativeTokens": 300,
+        "turnsPresent": 1,
+        "peakTokens": 300,
+        "sessions": 1
+      }
+    ],
+    "runawaySources": [
+      {
+        "label": "CLAUDE.md",
+        "kind": "file",
+        "turnsPresent": 6,
+        "peakTokens": 9000,
+        "cumulativeTokens": 33000,
+        "hint": "Re-injected across many turns — if it sits in the cached prefix it forces repeated cache-creation; move it into the message suffix after the last breakpoint."
+      }
+    ],
+    "residentCost": null
+  },
+  "noMatch": {
+    "scope": "/w/nowhere",
+    "sessionsConsidered": 0,
+    "sessionsWithLog": 0,
+    "sessionsScanned": 0,
+    "topContributors": [],
+    "runawaySources": [],
+    "residentCost": null
+  },
+  "oneSession": {
+    "scope": "session comp-many",
+    "sessionsConsidered": 1,
+    "sessionsWithLog": 1,
+    "sessionsScanned": 1,
+    "topContributors": [
+      {
+        "label": "paste",
+        "kind": "userMsg",
+        "cumulativeTokens": 90000,
+        "turnsPresent": 1,
+        "peakTokens": 90000,
+        "sessions": 1
+      },
+      {
+        "label": "CLAUDE.md",
+        "kind": "file",
+        "cumulativeTokens": 29000,
+        "turnsPresent": 5,
+        "peakTokens": 9000,
+        "sessions": 1
+      },
+      {
+        "label": "ponytail",
+        "kind": "skill",
+        "cumulativeTokens": 1200,
+        "turnsPresent": 6,
+        "peakTokens": 200,
+        "sessions": 1
+      }
+    ],
+    "runawaySources": [
+      {
+        "label": "CLAUDE.md",
+        "kind": "file",
+        "turnsPresent": 5,
+        "peakTokens": 9000,
+        "cumulativeTokens": 29000,
+        "hint": "Re-injected across many turns — if it sits in the cached prefix it forces repeated cache-creation; move it into the message suffix after the last breakpoint."
+      }
+    ],
+    "residentCost": {
+      "estimated": true,
+      "truncated": false,
+      "stepCount": 2,
+      "stepsWithUsage": 2,
+      "compactionTurns": [],
+      "totalContextTokens": 18015,
+      "itemizedResidentTokens": 15900,
+      "unattributedTokens": 2115,
+      "itemizedPct": 88.3,
+      "note": "unattributedTokens = exact per-step usage minus the itemized resident-cost. The positive part is context invisible to the transcript (system prompt + tool definitions ride every turn but are never logged) plus token-estimator drift; the residency model also approximates compaction (a few preserved anchor messages ride longer than modeled). A negative value means the estimates overshot the exact usage.",
+      "topBlocks": [
+        {
+          "id": "b1",
+          "kind": "claudemd",
+          "label": "CLAUDE.md",
+          "tokens": 10000,
+          "peakTokens": 5000,
+          "occurrences": 2,
+          "firstSeenTurn": 1,
+          "lastResidentTurn": 2,
+          "turnsResident": 2,
+          "residentCost": 15000,
+          "remediation": "CLAUDE.md is injected every turn — keep it lean and move detail into on-demand files.",
+          "drill": {
+            "tool": "get_context_history",
+            "sessionId": "comp-many",
+            "turn": 1,
+            "blockId": "b1"
+          }
+        },
+        {
+          "id": "b2",
+          "kind": "bashOutput",
+          "label": "ps snapshot",
+          "tokens": 900,
+          "peakTokens": 900,
+          "occurrences": 1,
+          "firstSeenTurn": 2,
+          "lastResidentTurn": 2,
+          "turnsResident": 1,
+          "residentCost": 900,
+          "remediation": "Command output rides forward every turn — pipe through head/grep so only the needed lines enter the transcript.",
+          "drill": {
+            "tool": "get_context_history",
+            "sessionId": "comp-many",
+            "turn": 2,
+            "blockId": "b2"
+          }
+        }
+      ]
+    }
+  },
+  "oneNoSteps": {
+    "scope": "session comp-own",
+    "sessionsConsidered": 1,
+    "sessionsWithLog": 1,
+    "sessionsScanned": 1,
+    "topContributors": [
+      {
+        "label": "CLAUDE.md",
+        "kind": "file",
+        "cumulativeTokens": 4000,
+        "turnsPresent": 1,
+        "peakTokens": 4000,
+        "sessions": 1
+      },
+      {
+        "label": "Bash",
+        "kind": "tool",
+        "cumulativeTokens": 300,
+        "turnsPresent": 1,
+        "peakTokens": 300,
+        "sessions": 1
+      }
+    ],
+    "runawaySources": [],
+    "residentCost": {
+      "message": "No local transcript to itemize (history accessor unavailable, or OTEL-only session with no .jsonl on disk)."
+    }
+  },
+  "oneNoComposition": {
+    "sessionId": "comp-parent",
+    "message": "No local composition available for this session."
+  }
+}

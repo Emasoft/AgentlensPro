@@ -2047,20 +2047,26 @@ pub fn build_scan_coverage(considered: f64, with_log: f64, scanned: f64, scan_ca
 /// `fileBackedPool` — the scoped sessions that actually have a transcript ON DISK, capped.
 /// `considered` counts the scope match and `withLog` the file-backed subset, so the two numbers
 /// together say whether a small pool means "narrow scope" or "most sessions have no local log".
+///
+/// THE SCOPE PREDICATE IS NOT UNIFORM ACROSS CALLERS, so it is a PARAMETER rather than a constant.
+/// `find_context_hogs` matches a workspace PREFIX **or** a sessionId SUBSTRING (so a bare id
+/// fragment works as a scope) with a cap of 25; `get_context_inflation_report` and
+/// `get_cache_break_report` match the workspace prefix ONLY, with a cap of 20. Hardcoding the first
+/// caller's rule silently over-matches for the others — a session would be scanned because its id
+/// happened to contain the workspace string.
 fn file_backed_pool<'a>(
     sessions: &'a [Value],
     file_ids: &std::collections::HashSet<String>,
     scope: Option<&str>,
     limit: usize,
+    match_session_id: bool,
 ) -> (Vec<&'a Value>, f64, f64) {
     let scoped: Vec<&Value> = match scope {
-        // `(s.workspace ?? '').startsWith(scope) || s.sessionId.includes(scope)` — a scope matches
-        // either a workspace PREFIX or a session-id SUBSTRING, so a bare id fragment works as a scope.
         Some(sc) => sessions
             .iter()
             .filter(|s| {
                 s.get("workspace").and_then(Value::as_str).unwrap_or("").starts_with(sc)
-                    || s.get("sessionId").and_then(Value::as_str).unwrap_or("").contains(sc)
+                    || (match_session_id && s.get("sessionId").and_then(Value::as_str).unwrap_or("").contains(sc))
             })
             .collect(),
         None => sessions.iter().collect(),
@@ -2094,7 +2100,7 @@ pub fn find_context_hogs(
     // `Math.min(topN ?? 15, 50)` — NULLISH default, and only an UPPER clamp: a 0 or negative topN
     // stays as given and returns nothing, which is what the TS does.
     let top_n = args.get("topN").and_then(Value::as_f64).unwrap_or(15.0).min(50.0);
-    let (pool, considered, with_log) = file_backed_pool(sessions, file_ids, scope, HOG_SCAN_CAP);
+    let (pool, considered, with_log) = file_backed_pool(sessions, file_ids, scope, HOG_SCAN_CAP, true);
 
     let mut by_key: indexmap::IndexMap<String, (String, String, f64, f64, f64)> = indexmap::IndexMap::new();
     let mut scanned = 0.0;
@@ -2493,5 +2499,196 @@ pub fn get_cost_by_cause(
     let mut m = report.as_object().cloned().unwrap_or_default();
     m.insert("days".into(), num(days));
     m.insert("coverage".into(), Value::Object(cov));
+    Value::Object(m)
+}
+
+/// mcpServer.ts INFLATION_SCAN_CAP — the workspace-scope pool for the inflation report. NOT
+/// HOG_SCAN_CAP: this scan also streams each pooled transcript's composition, so it is capped lower.
+pub const INFLATION_SCAN_CAP: usize = 20;
+
+/// `get_context_inflation_report` (mcpServer.ts handleGetContextInflationReport) — which injected
+/// sources inflate the context, and (single-session only) the itemized resident-cost reconciliation.
+///
+/// `get_history` is separate from `get_composition` because the itemization needs the FULL
+/// transcript history, not the composition summary — and it is single-session ONLY by design: the
+/// workspace path already streams every pooled transcript once for the composition, so a second
+/// full-history pass per pooled session would double the scan cost of one call for an aggregate the
+/// per-session drill answers better.
+pub fn get_context_inflation_report(
+    sessions: &[Value],
+    file_ids: &std::collections::HashSet<String>,
+    args: &Value,
+    get_composition: &dyn Fn(&str) -> Option<Value>,
+    get_history: &dyn Fn(&str) -> Option<Value>,
+) -> Value {
+    // key → (label, kind, cumulative, turnsPresent, peakTokens, sessions)
+    let mut agg: indexmap::IndexMap<String, (String, String, f64, f64, f64, f64)> = indexmap::IndexMap::new();
+    let mut fold = |c: &Value| {
+        for a in aggregate_composition(c) {
+            let (label, kind) = (
+                a.get("label").and_then(Value::as_str).unwrap_or("").to_owned(),
+                a.get("kind").and_then(Value::as_str).unwrap_or("").to_owned(),
+            );
+            let e = agg.entry(format!("{kind}::{label}")).or_insert((label, kind, 0.0, 0.0, 0.0, 0.0));
+            e.2 += f(&a, "cumulativeTokens");
+            e.3 += f(&a, "turnsPresent");
+            e.4 = e.4.max(f(&a, "peakTokens"));
+            e.5 += 1.0;
+        }
+    };
+
+    // `considered`/`withLog` DEFAULT TO 1, not 0 — a single-session drill reports 1/1 rather than
+    // claiming it considered nothing.
+    let (mut scanned, mut considered, mut with_log) = (0.0, 1.0, 1.0);
+    let session_id = args.get("sessionId").and_then(Value::as_str).filter(|s| !s.is_empty());
+    if let Some(sid) = session_id {
+        let Some(c) = get_composition(sid) else {
+            let mut m = Map::new();
+            m.insert("sessionId".into(), Value::String(sid.to_owned()));
+            m.insert("message".into(), "No local composition available for this session.".into());
+            return Value::Object(m);
+        };
+        fold(&c);
+        scanned = 1.0;
+    } else {
+        let scope = args.get("workspace").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty());
+        // Workspace PREFIX only (no sessionId substring) and cap 20 — see file_backed_pool's note.
+        let (pool, cons, wl) = file_backed_pool(sessions, file_ids, scope, INFLATION_SCAN_CAP, false);
+        considered = cons;
+        with_log = wl;
+        for s in &pool {
+            if let Some(c) = get_composition(s.get("sessionId").and_then(Value::as_str).unwrap_or("")) {
+                fold(&c);
+                scanned += 1.0;
+            }
+        }
+    }
+
+    let mut ranked: Vec<(String, String, f64, f64, f64, f64)> = agg.into_values().collect();
+    // Stable, so equal-cost sources keep first-seen order.
+    ranked.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+    // Runaway = re-injected across MANY turns AND heavy PER TURN. Both halves are required: a huge
+    // one-off paste is not a structural sink, and a tiny per-turn injection is not worth moving.
+    // This is the fixable one — if it lives in the cached prefix it forces repeated cache-creation.
+    let runaway: Vec<&(String, String, f64, f64, f64, f64)> = ranked.iter().filter(|a| a.3 >= 5.0 && a.4 >= 1000.0).collect();
+
+    let mut m = Map::new();
+    // `args.sessionId ? \`session ${id}\` : (args.workspace ?? 'all')` — the workspace echo is
+    // NULLISH and uses the RAW, UNTRIMMED arg, while the pool guard above uses the TRIMMED value
+    // under a truthy test. So `workspace: "   "` filters NOTHING and echoes "   " — not "all", and
+    // not "" either (that is find_context_hogs' shape). Three sites, three answers for one input.
+    m.insert(
+        "scope".into(),
+        Value::String(match session_id {
+            Some(sid) => format!("session {sid}"),
+            None => args.get("workspace").and_then(Value::as_str).unwrap_or("all").to_owned(),
+        }),
+    );
+    m.insert("sessionsConsidered".into(), num(considered));
+    m.insert("sessionsWithLog".into(), num(with_log));
+    m.insert("sessionsScanned".into(), num(scanned));
+    m.insert(
+        "topContributors".into(),
+        Value::Array(
+            ranked
+                .iter()
+                .take(15)
+                .map(|(label, kind, cum, turns, peak, sess)| {
+                    let mut r = Map::new();
+                    r.insert("label".into(), Value::String(label.clone()));
+                    r.insert("kind".into(), Value::String(kind.clone()));
+                    r.insert("cumulativeTokens".into(), num(*cum));
+                    r.insert("turnsPresent".into(), num(*turns));
+                    r.insert("peakTokens".into(), num(*peak));
+                    r.insert("sessions".into(), num(*sess));
+                    Value::Object(r)
+                })
+                .collect(),
+        ),
+    );
+    m.insert(
+        "runawaySources".into(),
+        Value::Array(
+            runaway
+                .iter()
+                .take(10)
+                .map(|(label, kind, cum, turns, peak, _)| {
+                    let mut r = Map::new();
+                    r.insert("label".into(), Value::String(label.clone()));
+                    r.insert("kind".into(), Value::String(kind.clone()));
+                    r.insert("turnsPresent".into(), num(*turns));
+                    r.insert("peakTokens".into(), num(*peak));
+                    r.insert("cumulativeTokens".into(), num(*cum));
+                    r.insert("hint".into(), "Re-injected across many turns — if it sits in the cached prefix it forces repeated cache-creation; move it into the message suffix after the last breakpoint.".into());
+                    Value::Object(r)
+                })
+                .collect(),
+        ),
+    );
+
+    // TRDD-W0RRL2FZ: the resident-cost itemization, SESSION-SCOPED ONLY (null on workspace scope,
+    // where it is deliberately not computed).
+    let resident_cost = match session_id {
+        None => Value::Null,
+        Some(sid) => {
+            // `.catch(() => null)` — a failed history read only omits the itemization.
+            let history = get_history(sid);
+            let steps = history.as_ref().and_then(|h| h.get("steps")).and_then(Value::as_array).map(Vec::len).unwrap_or(0);
+            match history {
+                Some(h) if steps > 0 => {
+                    let rc = crate::resident_cost::build_resident_cost_report(&h);
+                    let total = f(&rc, "totalContextTokens");
+                    let mut r = Map::new();
+                    r.insert("estimated".into(), rc.get("estimated").cloned().unwrap_or(Value::Bool(true)));
+                    r.insert("truncated".into(), rc.get("truncated").cloned().unwrap_or(Value::Bool(false)));
+                    r.insert("stepCount".into(), rc.get("stepCount").cloned().unwrap_or(Value::Null));
+                    r.insert("stepsWithUsage".into(), rc.get("stepsWithUsage").cloned().unwrap_or(Value::Null));
+                    r.insert("compactionTurns".into(), rc.get("compactionTurns").cloned().unwrap_or(Value::Null));
+                    r.insert("totalContextTokens".into(), rc.get("totalContextTokens").cloned().unwrap_or(Value::Null));
+                    r.insert("itemizedResidentTokens".into(), rc.get("itemizedResidentTokens").cloned().unwrap_or(Value::Null));
+                    r.insert("unattributedTokens".into(), rc.get("unattributedTokens").cloned().unwrap_or(Value::Null));
+                    // NULL when there is no ground truth to divide by — a 0% would read as "nothing
+                    // was itemized" rather than "the denominator is unknown".
+                    r.insert(
+                        "itemizedPct".into(),
+                        if total > 0.0 { num(js_to_fixed_num(f(&rc, "itemizedResidentTokens") / total * 100.0, 1)) } else { Value::Null },
+                    );
+                    r.insert("note".into(), rc.get("note").cloned().unwrap_or(Value::Null));
+                    r.insert(
+                        "topBlocks".into(),
+                        Value::Array(
+                            rc.get("blocks")
+                                .and_then(Value::as_array)
+                                .map(Vec::as_slice)
+                                .unwrap_or(&[])
+                                .iter()
+                                .take(10)
+                                .map(|b| {
+                                    // `{...b, drill}` — the spread first, so `drill` appends LAST.
+                                    let mut o = b.as_object().cloned().unwrap_or_default();
+                                    let mut d = Map::new();
+                                    d.insert("tool".into(), "get_context_history".into());
+                                    d.insert("sessionId".into(), Value::String(sid.to_owned()));
+                                    d.insert("turn".into(), b.get("firstSeenTurn").cloned().unwrap_or(Value::Null));
+                                    d.insert("blockId".into(), b.get("id").cloned().unwrap_or(Value::Null));
+                                    o.insert("drill".into(), Value::Object(d));
+                                    Value::Object(o)
+                                })
+                                .collect(),
+                        ),
+                    );
+                    Value::Object(r)
+                }
+                // HONEST ABSENCE: an OTEL-only session (or a missing accessor) cannot be itemized.
+                // Say so, rather than returning a silent null field that reads as "nothing resident".
+                _ => {
+                    let mut r = Map::new();
+                    r.insert("message".into(), "No local transcript to itemize (history accessor unavailable, or OTEL-only session with no .jsonl on disk).".into());
+                    Value::Object(r)
+                }
+            }
+        }
+    };
+    m.insert("residentCost".into(), resident_cost);
     Value::Object(m)
 }

@@ -1474,6 +1474,38 @@ async fn handle(
                         let payload = crate::mcp_tools::get_account_state_at(&args, &path);
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
+                    "get_context_inflation_report" => {
+                        // Composition AND (single-session only) full history — both are transcript
+                        // parses, so the whole thing runs on spawn_blocking with the lock released.
+                        let now = crate::now_ms() as f64;
+                        let (sessions, env) = {
+                            let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                            let summary = st.build_session_summary(now);
+                            let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
+                            drop(summary);
+                            (sessions, st.log_env.clone())
+                        };
+                        let a = args.clone();
+                        let payload = tokio::task::spawn_blocking(move || {
+                            let file_ids = crate::context_composition::list_session_file_ids(&env);
+                            let parent_of = |sid: &str| -> Option<String> {
+                                sessions
+                                    .iter()
+                                    .find(|s| s.get("sessionId").and_then(Value::as_str) == Some(sid))
+                                    .and_then(|s| s.get("parentSessionId").and_then(Value::as_str))
+                                    .map(str::to_owned)
+                            };
+                            let ancestor_of = |sid: &str| -> Option<String> {
+                                crate::context_composition::resolve_logged_ancestor(&env, sid, &parent_of).or_else(|| parent_of(sid))
+                            };
+                            let get_comp = |sid: &str| crate::context_composition::build_context_composition(&env, sid, ancestor_of(sid).as_deref());
+                            let get_hist = |sid: &str| crate::context_history::build_context_history(&env, sid, ancestor_of(sid).as_deref());
+                            crate::mcp_tools::get_context_inflation_report(&sessions, &file_ids, &a, &get_comp, &get_hist)
+                        })
+                        .await
+                        .map_err(|e| format!("inflation scan join failed: {e}"))?;
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
+                    }
                     "find_context_hogs" => {
                         // The pool is capped at 25 sessions but each one is a transcript REPARSE, so
                         // the whole scan goes on spawn_blocking with the state lock released — the
