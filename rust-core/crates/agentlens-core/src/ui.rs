@@ -1820,6 +1820,29 @@ async fn handle(
                         .map_err(|e| format!("expensive-writes trace join failed: {e}"))?;
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
+                    "get_heartbeat_cost" => {
+                        // Reads every body file in the window (regex over raw text, plus a full
+                        // parse per candidate for the fire-start walk), so it goes on
+                        // spawn_blocking with the state lock released.
+                        let now = crate::now_ms() as f64;
+                        let dir = {
+                            let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                            crate::burn::guard::default_bodies_dir(&st.data_dir)
+                        };
+                        let s = |k: &str| args.get(k).and_then(Value::as_str).map(str::to_owned);
+                        let opts = crate::heartbeat_cost::HeartbeatCostOptions {
+                            marker: s("marker"),
+                            session_id: s("sessionId"),
+                            window_hours: args.get("window").and_then(Value::as_f64),
+                            fire: s("fire"),
+                        };
+                        let payload = tokio::task::spawn_blocking(move || {
+                            crate::heartbeat_cost::build_heartbeat_cost(&dir, &opts, now)
+                        })
+                        .await
+                        .map_err(|e| format!("heartbeat cost join failed: {e}"))?;
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
+                    }
                     "get_session_burn_profile" => {
                         // Reads every body file in the window (regex over raw text, one full parse
                         // for the newest), so it goes on spawn_blocking with the lock released.

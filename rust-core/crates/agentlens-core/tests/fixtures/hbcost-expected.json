@@ -1,0 +1,476 @@
+{
+  "nowMs": 1787054400000,
+  "mtimes": {
+    "f1r1.request.json": 1787052000000,
+    "f1r2.request.json": 1787052060000,
+    "o1.request.json": 1787052090000,
+    "f1r3.request.json": 1787052120000,
+    "f2r1.request.json": 1787053800000,
+    "f2r2.request.json": 1787053860000,
+    "m_a1.response.json": 1787052005000,
+    "m_b1.response.json": 1787052065000,
+    "m_a2.response.json": 1787052095000,
+    "m_a3.response.json": 1787052125000,
+    "m_a4.response.json": 1787053805000,
+    "old.request.json": 1787036400000,
+    "notes.txt": 1787054300000
+  },
+  "marker": "[janitor-heartbeat]",
+  "sessions": {
+    "a": "aaaaaaaa-1111-1111-1111-111111111111",
+    "b": "bbbb2222-3333-3333-3333-333333333333"
+  },
+  "reportDefault": {
+    "marker": "[janitor-heartbeat]",
+    "sessionId": "aaaaaaaa-1111-1111-1111-111111111111",
+    "fireDetected": true,
+    "fireStartedAt": "2026-08-18T11:20:00.000Z",
+    "fireEndedAt": "2026-08-18T11:22:00.000Z",
+    "durationSeconds": 120,
+    "apiCalls": 4,
+    "agentSpawns": 2,
+    "callsByToolSurface": [
+      {
+        "tools": 5,
+        "calls": 3
+      },
+      {
+        "tools": 2,
+        "calls": 1
+      }
+    ],
+    "byModel": [
+      {
+        "model": "claude-opus-5",
+        "calls": 2,
+        "tokens": 87245,
+        "costUsd": 0.2713
+      },
+      {
+        "model": "claude-sonnet-5",
+        "calls": 1,
+        "tokens": 10050,
+        "costUsd": 0.0231
+      },
+      {
+        "model": "claude-haiku-4-5",
+        "calls": 1,
+        "tokens": 2418,
+        "costUsd": 0.002
+      }
+    ],
+    "tokens": {
+      "inputTokens": 142,
+      "outputTokens": 871,
+      "cacheReadTokens": 52200,
+      "cacheCreateTokens": 46500,
+      "ephemeral5mTokens": 16500,
+      "ephemeral1hTokens": 30000,
+      "totalTokens": 99713
+    },
+    "cost": {
+      "inputUsd": 0.0007,
+      "outputUsd": 0.021,
+      "cacheReadUsd": 0.0254,
+      "cacheWriteUsd": 0.2494,
+      "totalUsd": 0.2964
+    },
+    "inFlight": null,
+    "concurrent": {
+      "calls": 1,
+      "sessions": 1,
+      "note": "1 call(s) from 1 OTHER session(s) overlapped this fire's time span. They are NOT included in the totals (they are not the heartbeat's cost), but they did compete for the same rate-limit window."
+    },
+    "verdict": "The last heartbeat [2026-08-18T11:20:00.000Z] cost 99,713 tokens = $0.2964 — input 142 | output 871 | cache_read 52,200 | cache_write 46,500 (4 API calls, 2 agent spawns, 120.0s)",
+    "coverage": {
+      "bodiesDir": "<BODIES>",
+      "filesScanned": 11,
+      "windowHours": 3,
+      "complete": true,
+      "note": "Scanned 11 body file(s) modified in the last 3h (files >8.388608MB skipped)."
+    }
+  },
+  "reportBySession": {
+    "marker": "[janitor-heartbeat]",
+    "sessionId": "aaaaaaaa-1111-1111-1111-111111111111",
+    "fireDetected": true,
+    "fireStartedAt": "2026-08-18T11:20:00.000Z",
+    "fireEndedAt": "2026-08-18T11:22:00.000Z",
+    "durationSeconds": 120,
+    "apiCalls": 3,
+    "agentSpawns": 2,
+    "callsByToolSurface": [
+      {
+        "tools": 5,
+        "calls": 2
+      },
+      {
+        "tools": 2,
+        "calls": 1
+      }
+    ],
+    "byModel": [
+      {
+        "model": "claude-opus-5",
+        "calls": 2,
+        "tokens": 87245,
+        "costUsd": 0.2713
+      },
+      {
+        "model": "claude-haiku-4-5",
+        "calls": 1,
+        "tokens": 2418,
+        "costUsd": 0.002
+      }
+    ],
+    "tokens": {
+      "inputTokens": 132,
+      "outputTokens": 831,
+      "cacheReadTokens": 51200,
+      "cacheCreateTokens": 37500,
+      "ephemeral5mTokens": 7500,
+      "ephemeral1hTokens": 30000,
+      "totalTokens": 89663
+    },
+    "cost": {
+      "inputUsd": 0.0006,
+      "outputUsd": 0.0206,
+      "cacheReadUsd": 0.0252,
+      "cacheWriteUsd": 0.2269,
+      "totalUsd": 0.2733
+    },
+    "inFlight": null,
+    "concurrent": {
+      "calls": 1,
+      "sessions": 1,
+      "note": "1 call(s) from 1 OTHER session(s) overlapped this fire's time span. They are NOT included in the totals (they are not the heartbeat's cost), but they did compete for the same rate-limit window."
+    },
+    "verdict": "The last heartbeat [2026-08-18T11:20:00.000Z] cost 89,663 tokens = $0.2733 — input 132 | output 831 | cache_read 51,200 | cache_write 37,500 (3 API calls, 2 agent spawns, 120.0s)",
+    "coverage": {
+      "bodiesDir": "<BODIES>",
+      "filesScanned": 11,
+      "windowHours": 3,
+      "complete": true,
+      "note": "Scanned 11 body file(s) modified in the last 3h (files >8.388608MB skipped)."
+    }
+  },
+  "reportByPrefix": {
+    "marker": "[janitor-heartbeat]",
+    "sessionId": "aaaaaaaa-1111-1111-1111-111111111111",
+    "fireDetected": true,
+    "fireStartedAt": "2026-08-18T11:20:00.000Z",
+    "fireEndedAt": "2026-08-18T11:22:00.000Z",
+    "durationSeconds": 120,
+    "apiCalls": 3,
+    "agentSpawns": 2,
+    "callsByToolSurface": [
+      {
+        "tools": 5,
+        "calls": 2
+      },
+      {
+        "tools": 2,
+        "calls": 1
+      }
+    ],
+    "byModel": [
+      {
+        "model": "claude-opus-5",
+        "calls": 2,
+        "tokens": 87245,
+        "costUsd": 0.2713
+      },
+      {
+        "model": "claude-haiku-4-5",
+        "calls": 1,
+        "tokens": 2418,
+        "costUsd": 0.002
+      }
+    ],
+    "tokens": {
+      "inputTokens": 132,
+      "outputTokens": 831,
+      "cacheReadTokens": 51200,
+      "cacheCreateTokens": 37500,
+      "ephemeral5mTokens": 7500,
+      "ephemeral1hTokens": 30000,
+      "totalTokens": 89663
+    },
+    "cost": {
+      "inputUsd": 0.0006,
+      "outputUsd": 0.0206,
+      "cacheReadUsd": 0.0252,
+      "cacheWriteUsd": 0.2269,
+      "totalUsd": 0.2733
+    },
+    "inFlight": null,
+    "concurrent": {
+      "calls": 1,
+      "sessions": 1,
+      "note": "1 call(s) from 1 OTHER session(s) overlapped this fire's time span. They are NOT included in the totals (they are not the heartbeat's cost), but they did compete for the same rate-limit window."
+    },
+    "verdict": "The last heartbeat [2026-08-18T11:20:00.000Z] cost 89,663 tokens = $0.2733 — input 132 | output 831 | cache_read 51,200 | cache_write 37,500 (3 API calls, 2 agent spawns, 120.0s)",
+    "coverage": {
+      "bodiesDir": "<BODIES>",
+      "filesScanned": 11,
+      "windowHours": 3,
+      "complete": true,
+      "note": "Scanned 11 body file(s) modified in the last 3h (files >8.388608MB skipped)."
+    }
+  },
+  "reportCurrent": {
+    "marker": "[janitor-heartbeat]",
+    "sessionId": "aaaaaaaa-1111-1111-1111-111111111111",
+    "fireDetected": true,
+    "fireStartedAt": "2026-08-18T11:50:00.000Z",
+    "fireEndedAt": "2026-08-18T11:51:00.000Z",
+    "durationSeconds": 60,
+    "apiCalls": 2,
+    "agentSpawns": 0,
+    "callsByToolSurface": [
+      {
+        "tools": 5,
+        "calls": 2
+      }
+    ],
+    "byModel": [
+      {
+        "model": "claude-opus-5",
+        "calls": 1,
+        "tokens": 89012,
+        "costUsd": 0.1137
+      }
+    ],
+    "tokens": {
+      "inputTokens": 3,
+      "outputTokens": 9,
+      "cacheReadTokens": 77000,
+      "cacheCreateTokens": 12000,
+      "ephemeral5mTokens": 0,
+      "ephemeral1hTokens": 12000,
+      "totalTokens": 89012
+    },
+    "cost": {
+      "inputUsd": 0,
+      "outputUsd": 0.0002,
+      "cacheReadUsd": 0.0385,
+      "cacheWriteUsd": 0.075,
+      "totalUsd": 0.1137
+    },
+    "inFlight": {
+      "calls": 1,
+      "note": "A call's usage is only written once the NEXT call happens (requests carry no request_id; the only link is previous_message_id). These calls have not settled yet and are EXCLUDED from the totals above — re-run after the next fire for their exact cost."
+    },
+    "concurrent": {
+      "calls": 0,
+      "sessions": 0,
+      "note": "No other session made API calls during this fire."
+    },
+    "verdict": "Current heartbeat (in flight) [2026-08-18T11:50:00.000Z] cost 89,012 tokens = $0.1137 — input 3 | output 9 | cache_read 77,000 | cache_write 12,000 (2 API calls, 0 agent spawns, 60.0s) ⚠ 1 call(s) not yet settled — EXCLUDED",
+    "coverage": {
+      "bodiesDir": "<BODIES>",
+      "filesScanned": 11,
+      "windowHours": 3,
+      "complete": true,
+      "note": "Scanned 11 body file(s) modified in the last 3h (files >8.388608MB skipped)."
+    }
+  },
+  "reportCurrentBySession": {
+    "marker": "[janitor-heartbeat]",
+    "sessionId": "aaaaaaaa-1111-1111-1111-111111111111",
+    "fireDetected": true,
+    "fireStartedAt": "2026-08-18T11:50:00.000Z",
+    "fireEndedAt": "2026-08-18T11:51:00.000Z",
+    "durationSeconds": 60,
+    "apiCalls": 2,
+    "agentSpawns": 0,
+    "callsByToolSurface": [
+      {
+        "tools": 5,
+        "calls": 2
+      }
+    ],
+    "byModel": [
+      {
+        "model": "claude-opus-5",
+        "calls": 1,
+        "tokens": 89012,
+        "costUsd": 0.1137
+      }
+    ],
+    "tokens": {
+      "inputTokens": 3,
+      "outputTokens": 9,
+      "cacheReadTokens": 77000,
+      "cacheCreateTokens": 12000,
+      "ephemeral5mTokens": 0,
+      "ephemeral1hTokens": 12000,
+      "totalTokens": 89012
+    },
+    "cost": {
+      "inputUsd": 0,
+      "outputUsd": 0.0002,
+      "cacheReadUsd": 0.0385,
+      "cacheWriteUsd": 0.075,
+      "totalUsd": 0.1137
+    },
+    "inFlight": {
+      "calls": 1,
+      "note": "A call's usage is only written once the NEXT call happens (requests carry no request_id; the only link is previous_message_id). These calls have not settled yet and are EXCLUDED from the totals above — re-run after the next fire for their exact cost."
+    },
+    "concurrent": {
+      "calls": 0,
+      "sessions": 0,
+      "note": "No other session made API calls during this fire."
+    },
+    "verdict": "Current heartbeat (in flight) [2026-08-18T11:50:00.000Z] cost 89,012 tokens = $0.1137 — input 3 | output 9 | cache_read 77,000 | cache_write 12,000 (2 API calls, 0 agent spawns, 60.0s) ⚠ 1 call(s) not yet settled — EXCLUDED",
+    "coverage": {
+      "bodiesDir": "<BODIES>",
+      "filesScanned": 11,
+      "windowHours": 3,
+      "complete": true,
+      "note": "Scanned 11 body file(s) modified in the last 3h (files >8.388608MB skipped)."
+    }
+  },
+  "reportNarrowWindow": {
+    "marker": "[janitor-heartbeat]",
+    "sessionId": "aaaaaaaa-1111-1111-1111-111111111111",
+    "fireDetected": true,
+    "fireStartedAt": "2026-08-18T11:50:00.000Z",
+    "fireEndedAt": "2026-08-18T11:51:00.000Z",
+    "durationSeconds": 60,
+    "apiCalls": 2,
+    "agentSpawns": 0,
+    "callsByToolSurface": [
+      {
+        "tools": 5,
+        "calls": 2
+      }
+    ],
+    "byModel": [
+      {
+        "model": "claude-opus-5",
+        "calls": 1,
+        "tokens": 89012,
+        "costUsd": 0.1137
+      }
+    ],
+    "tokens": {
+      "inputTokens": 3,
+      "outputTokens": 9,
+      "cacheReadTokens": 77000,
+      "cacheCreateTokens": 12000,
+      "ephemeral5mTokens": 0,
+      "ephemeral1hTokens": 12000,
+      "totalTokens": 89012
+    },
+    "cost": {
+      "inputUsd": 0,
+      "outputUsd": 0.0002,
+      "cacheReadUsd": 0.0385,
+      "cacheWriteUsd": 0.075,
+      "totalUsd": 0.1137
+    },
+    "inFlight": {
+      "calls": 1,
+      "note": "A call's usage is only written once the NEXT call happens (requests carry no request_id; the only link is previous_message_id). These calls have not settled yet and are EXCLUDED from the totals above — re-run after the next fire for their exact cost."
+    },
+    "concurrent": {
+      "calls": 0,
+      "sessions": 0,
+      "note": "No other session made API calls during this fire."
+    },
+    "verdict": "The last heartbeat [2026-08-18T11:50:00.000Z] cost 89,012 tokens = $0.1137 — input 3 | output 9 | cache_read 77,000 | cache_write 12,000 (2 API calls, 0 agent spawns, 60.0s) ⚠ 1 call(s) not yet settled — EXCLUDED",
+    "coverage": {
+      "bodiesDir": "<BODIES>",
+      "filesScanned": 3,
+      "windowHours": 0.5,
+      "complete": true,
+      "note": "Scanned 3 body file(s) modified in the last 0.5h (files >8.388608MB skipped)."
+    }
+  },
+  "reportUnknownMarker": {
+    "marker": "[no-such-marker]",
+    "sessionId": null,
+    "fireDetected": false,
+    "fireStartedAt": null,
+    "fireEndedAt": null,
+    "durationSeconds": 0,
+    "apiCalls": 0,
+    "agentSpawns": 0,
+    "callsByToolSurface": [],
+    "byModel": [],
+    "tokens": {
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "cacheReadTokens": 0,
+      "cacheCreateTokens": 0,
+      "ephemeral5mTokens": 0,
+      "ephemeral1hTokens": 0,
+      "totalTokens": 0
+    },
+    "cost": {
+      "inputUsd": 0,
+      "outputUsd": 0,
+      "cacheReadUsd": 0,
+      "cacheWriteUsd": 0,
+      "totalUsd": 0
+    },
+    "inFlight": null,
+    "concurrent": {
+      "calls": 0,
+      "sessions": 0,
+      "note": "no data"
+    },
+    "verdict": "No [no-such-marker] fire found in the scanned window.",
+    "coverage": {
+      "bodiesDir": "<BODIES>",
+      "filesScanned": 0,
+      "windowHours": 3,
+      "complete": true,
+      "note": "Scanned 11 body file(s) modified in the last 3h (files >8.388608MB skipped)."
+    }
+  },
+  "reportMissingDir": {
+    "marker": "[janitor-heartbeat]",
+    "sessionId": null,
+    "fireDetected": false,
+    "fireStartedAt": null,
+    "fireEndedAt": null,
+    "durationSeconds": 0,
+    "apiCalls": 0,
+    "agentSpawns": 0,
+    "callsByToolSurface": [],
+    "byModel": [],
+    "tokens": {
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "cacheReadTokens": 0,
+      "cacheCreateTokens": 0,
+      "ephemeral5mTokens": 0,
+      "ephemeral1hTokens": 0,
+      "totalTokens": 0
+    },
+    "cost": {
+      "inputUsd": 0,
+      "outputUsd": 0,
+      "cacheReadUsd": 0,
+      "cacheWriteUsd": 0,
+      "totalUsd": 0
+    },
+    "inFlight": null,
+    "concurrent": {
+      "calls": 0,
+      "sessions": 0,
+      "note": "no data"
+    },
+    "verdict": "No [janitor-heartbeat] fire found in the scanned window.",
+    "coverage": {
+      "bodiesDir": "<MISSING>",
+      "filesScanned": 0,
+      "windowHours": 3,
+      "complete": true,
+      "note": "No OTEL raw-body directory at <MISSING> — set OTEL_LOG_RAW_API_BODIES to capture bodies."
+    }
+  }
+}
