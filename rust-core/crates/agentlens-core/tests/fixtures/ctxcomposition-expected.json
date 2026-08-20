@@ -1,0 +1,689 @@
+{
+ "classifyCases": [
+  {
+   "type": "hook_additional_context",
+   "hookName": "H",
+   "content": "c"
+  },
+  {
+   "type": "hook_success",
+   "hookName": "",
+   "stdout": "s"
+  },
+  {
+   "type": "hook_success",
+   "hookName": "H"
+  },
+  {
+   "type": "hook_non_blocking_error",
+   "response": "r"
+  },
+  {
+   "type": "async_hook_response",
+   "stderr": "e"
+  },
+  {
+   "type": "skill_listing",
+   "content": "sk"
+  },
+  {
+   "type": "skill_listing"
+  },
+  {
+   "type": "deferred_tools_delta",
+   "addedLines": "a single string"
+  },
+  {
+   "type": "deferred_tools_delta",
+   "addedLines": [
+    1,
+    "two",
+    null
+   ]
+  },
+  {
+   "type": "agent_listing_delta",
+   "addedLines": []
+  },
+  {
+   "type": "mcp_instructions_delta",
+   "addedBlocks": [
+    "b"
+   ],
+   "addedNames": [
+    "n"
+   ]
+  },
+  {
+   "type": "mcp_instructions_delta",
+   "addedNames": [
+    "only-names"
+   ]
+  },
+  {
+   "type": "file",
+   "displayPath": "/a/b/c.txt",
+   "content": "x"
+  },
+  {
+   "type": "file",
+   "displayPath": "C:\\win\\path.txt",
+   "content": "x"
+  },
+  {
+   "type": "file",
+   "content": "no name at all"
+  },
+  {
+   "type": "edited_text_file",
+   "filename": "e.txt",
+   "text": "t"
+  },
+  {
+   "type": "compact_file_reference",
+   "path": "c.txt",
+   "content": "c"
+  },
+  {
+   "type": "task_reminder",
+   "content": "tr"
+  },
+  {
+   "type": "invoked_skills",
+   "content": "is"
+  },
+  {
+   "type": "skill",
+   "content": "s"
+  },
+  {
+   "type": "nope"
+  },
+  {
+   "type": null
+  },
+  {}
+ ],
+ "classified": [
+  {
+   "label": "hook: H",
+   "kind": "hook",
+   "bytes": 1,
+   "text": "c"
+  },
+  {
+   "label": "hook: unknown",
+   "kind": "hook",
+   "bytes": 1,
+   "text": "s"
+  },
+  null,
+  {
+   "label": "hook: unknown",
+   "kind": "hook",
+   "bytes": 1,
+   "text": "r"
+  },
+  {
+   "label": "hook: unknown",
+   "kind": "hook",
+   "bytes": 1,
+   "text": "e"
+  },
+  {
+   "label": "skill catalog",
+   "kind": "skill",
+   "bytes": 2,
+   "text": "sk"
+  },
+  {
+   "label": "skill catalog",
+   "kind": "skill",
+   "bytes": 0,
+   "text": ""
+  },
+  {
+   "label": "tool catalog",
+   "kind": "toolCatalog",
+   "bytes": 15,
+   "text": "a single string"
+  },
+  {
+   "label": "tool catalog",
+   "kind": "toolCatalog",
+   "bytes": 3,
+   "text": "two"
+  },
+  {
+   "label": "agent catalog",
+   "kind": "agentCatalog",
+   "bytes": 0,
+   "text": ""
+  },
+  {
+   "label": "mcp instructions",
+   "kind": "mcp",
+   "bytes": 2,
+   "text": "b"
+  },
+  {
+   "label": "mcp instructions",
+   "kind": "mcp",
+   "bytes": 10,
+   "text": "only-names"
+  },
+  {
+   "label": "file: c.txt",
+   "kind": "file",
+   "bytes": 1,
+   "text": "x"
+  },
+  {
+   "label": "file: C:\\win\\path.txt",
+   "kind": "file",
+   "bytes": 1,
+   "text": "x"
+  },
+  {
+   "label": "file: file",
+   "kind": "file",
+   "bytes": 14,
+   "text": "no name at all"
+  },
+  {
+   "label": "file: e.txt",
+   "kind": "file",
+   "bytes": 1,
+   "text": "t"
+  },
+  {
+   "label": "file: c.txt",
+   "kind": "file",
+   "bytes": 1,
+   "text": "c"
+  },
+  {
+   "label": "task reminder",
+   "kind": "reminder",
+   "bytes": 2,
+   "text": "tr"
+  },
+  {
+   "label": "invoked skills",
+   "kind": "skill",
+   "bytes": 2,
+   "text": "is"
+  },
+  {
+   "label": "invoked skills",
+   "kind": "skill",
+   "bytes": 1,
+   "text": "s"
+  },
+  null,
+  null,
+  null
+ ],
+ "compCases": [
+  {
+   "sessionId": "comp-own"
+  },
+  {
+   "sessionId": "comp-many"
+  },
+  {
+   "sessionId": "comp-fork",
+   "parent": "comp-parent"
+  },
+  {
+   "sessionId": "comp-known-parent",
+   "parent": "no-such-parent"
+  },
+  {
+   "sessionId": "comp-orphan"
+  },
+  {
+   "sessionId": "comp-parent",
+   "parent": "comp-own"
+  }
+ ],
+ "comps": [
+  {
+   "sessionId": "comp-own",
+   "turns": [
+    {
+     "turn": 1,
+     "sources": [
+      {
+       "label": "skill catalog",
+       "kind": "skill",
+       "bytes": 18,
+       "tokens": 3,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "skill catalog text"
+      }
+     ]
+    },
+    {
+     "turn": 2,
+     "sources": [
+      {
+       "label": "file: ",
+       "kind": "file",
+       "bytes": 46,
+       "tokens": 11,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "empty displayPath is USED (nullish, not falsy)"
+      },
+      {
+       "label": "file: report.md",
+       "kind": "file",
+       "bytes": 27,
+       "tokens": 7,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "file contents é multi-byte"
+      },
+      {
+       "label": "mcp instructions",
+       "kind": "mcp",
+       "bytes": 10,
+       "tokens": 6,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "srv-1\nsrv-2"
+      },
+      {
+       "label": "hook: PreToolUse",
+       "kind": "hook",
+       "bytes": 23,
+       "tokens": 5,
+       "tokenSource": "estimated",
+       "count": 2,
+       "excerpt": "hook body"
+      },
+      {
+       "label": "tool catalog",
+       "kind": "toolCatalog",
+       "bytes": 12,
+       "tokens": 5,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "tool a\ntool b"
+      },
+      {
+       "label": "task reminder",
+       "kind": "reminder",
+       "bytes": 18,
+       "tokens": 4,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "remember the thing"
+      },
+      {
+       "label": "invoked skills",
+       "kind": "skill",
+       "bytes": 14,
+       "tokens": 4,
+       "tokenSource": "estimated",
+       "count": 2,
+       "excerpt": "skill a"
+      },
+      {
+       "label": "file: fallback.txt",
+       "kind": "file",
+       "bytes": 12,
+       "tokens": 3,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "via filename"
+      },
+      {
+       "label": "hook: unknown",
+       "kind": "hook",
+       "bytes": 6,
+       "tokens": 2,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "out"
+      },
+      {
+       "label": "agent catalog",
+       "kind": "agentCatalog",
+       "bytes": 7,
+       "tokens": 2,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "agent x"
+      },
+      {
+       "label": "file: third.txt",
+       "kind": "file",
+       "bytes": 8,
+       "tokens": 2,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "via path"
+      }
+     ]
+    },
+    {
+     "turn": 3,
+     "sources": [
+      {
+       "label": "task reminder",
+       "kind": "reminder",
+       "bytes": 15,
+       "tokens": 4,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "turn 3 reminder"
+      }
+     ]
+    }
+   ],
+   "estimated": true,
+   "truncated": false
+  },
+  {
+   "sessionId": "comp-many",
+   "turns": [
+    {
+     "turn": 1,
+     "sources": [
+      {
+       "label": "file: f00.txt",
+       "kind": "file",
+       "bytes": 300,
+       "tokens": 64,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      {
+       "label": "file: f01.txt",
+       "kind": "file",
+       "bytes": 295,
+       "tokens": 63,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      {
+       "label": "file: f02.txt",
+       "kind": "file",
+       "bytes": 290,
+       "tokens": 62,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      {
+       "label": "file: f03.txt",
+       "kind": "file",
+       "bytes": 285,
+       "tokens": 61,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      {
+       "label": "file: f04.txt",
+       "kind": "file",
+       "bytes": 280,
+       "tokens": 60,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      {
+       "label": "file: f05.txt",
+       "kind": "file",
+       "bytes": 275,
+       "tokens": 59,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      {
+       "label": "file: f06.txt",
+       "kind": "file",
+       "bytes": 270,
+       "tokens": 57,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      {
+       "label": "file: f07.txt",
+       "kind": "file",
+       "bytes": 265,
+       "tokens": 56,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      {
+       "label": "file: f08.txt",
+       "kind": "file",
+       "bytes": 260,
+       "tokens": 55,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      {
+       "label": "file: f09.txt",
+       "kind": "file",
+       "bytes": 255,
+       "tokens": 54,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      {
+       "label": "file: f10.txt",
+       "kind": "file",
+       "bytes": 250,
+       "tokens": 53,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      {
+       "label": "file: f11.txt",
+       "kind": "file",
+       "bytes": 245,
+       "tokens": 52,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      {
+       "label": "file: f12.txt",
+       "kind": "file",
+       "bytes": 240,
+       "tokens": 51,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      {
+       "label": "file: f13.txt",
+       "kind": "file",
+       "bytes": 235,
+       "tokens": 50,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      {
+       "label": "file: f14.txt",
+       "kind": "file",
+       "bytes": 230,
+       "tokens": 49,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      {
+       "label": "file: f15.txt",
+       "kind": "file",
+       "bytes": 225,
+       "tokens": 48,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      {
+       "label": "file: f16.txt",
+       "kind": "file",
+       "bytes": 220,
+       "tokens": 47,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      {
+       "label": "file: f17.txt",
+       "kind": "file",
+       "bytes": 215,
+       "tokens": 46,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      {
+       "label": "file: f18.txt",
+       "kind": "file",
+       "bytes": 210,
+       "tokens": 45,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      {
+       "label": "file: f19.txt",
+       "kind": "file",
+       "bytes": 205,
+       "tokens": 44,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      {
+       "label": "file: f20.txt",
+       "kind": "file",
+       "bytes": 200,
+       "tokens": 43,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      {
+       "label": "file: f21.txt",
+       "kind": "file",
+       "bytes": 195,
+       "tokens": 41,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      {
+       "label": "file: f22.txt",
+       "kind": "file",
+       "bytes": 190,
+       "tokens": 40,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      {
+       "label": "file: f23.txt",
+       "kind": "file",
+       "bytes": 185,
+       "tokens": 39,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      {
+       "label": "+6 more sources",
+       "kind": "other",
+       "bytes": 1005,
+       "tokens": 213,
+       "tokenSource": "estimated",
+       "count": 6
+      }
+     ]
+    }
+   ],
+   "estimated": true,
+   "truncated": false
+  },
+  {
+   "sessionId": "comp-fork",
+   "turns": [
+    {
+     "turn": 2,
+     "sources": [
+      {
+       "label": "task reminder",
+       "kind": "reminder",
+       "bytes": 15,
+       "tokens": 3,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "parent reminder"
+      }
+     ]
+    }
+   ],
+   "estimated": true,
+   "truncated": false,
+   "reconstructedFrom": "comp-parent"
+  },
+  {
+   "sessionId": "comp-known-parent",
+   "turns": [],
+   "estimated": true,
+   "truncated": false,
+   "reconstructedFrom": "no-such-parent"
+  },
+  null,
+  {
+   "sessionId": "comp-parent",
+   "turns": [
+    {
+     "turn": 2,
+     "sources": [
+      {
+       "label": "task reminder",
+       "kind": "reminder",
+       "bytes": 15,
+       "tokens": 3,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "parent reminder"
+      }
+     ]
+    }
+   ],
+   "estimated": true,
+   "truncated": false
+  }
+ ],
+ "found": [
+  true,
+  true,
+  true,
+  false
+ ],
+ "sessionFileIds": [
+  "comp-many",
+  "comp-own",
+  "comp-parent"
+ ]
+}

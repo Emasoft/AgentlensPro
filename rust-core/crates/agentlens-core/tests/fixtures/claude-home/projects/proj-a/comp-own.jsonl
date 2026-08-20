@@ -1,0 +1,23 @@
+{"type":"attachment","attachment":{"type":"skill_listing","content":"skill catalog text"}}
+{"type":"assistant","message":{"id":"m1"}}
+{"type":"assistant","message":{"id":"m1"}}
+{"type":"attachment","attachment":{"type":"hook_additional_context","hookName":"PreToolUse","content":"hook body"}}
+{"type":"attachment","attachment":{"type":"hook_success","hookName":"","stdout":"out","stderr":"err"}}
+{"type":"attachment","attachment":{"type":"hook_success","hookName":"PreToolUse","content":"more hook body"}}
+
+not json at all
+{"type":"attachment","attachment":{"type":"deferred_tools_delta","addedLines":["tool a","tool b"]}}
+{"type":"attachment","attachment":{"type":"agent_listing_delta","addedLines":["agent x"]}}
+{"type":"attachment","attachment":{"type":"mcp_instructions_delta","addedBlocks":[],"addedNames":["srv-1","srv-2"]}}
+{"type":"attachment","attachment":{"type":"file","displayPath":"/a/b/report.md","content":"file contents é multi-byte"}}
+{"type":"attachment","attachment":{"type":"file","filename":"/x/y/fallback.txt","text":"via filename"}}
+{"type":"attachment","attachment":{"type":"file","path":"/p/q/third.txt","content":"via path"}}
+{"type":"attachment","attachment":{"type":"file","displayPath":"","content":"empty displayPath is USED (nullish, not falsy)"}}
+{"type":"attachment","attachment":{"type":"file","displayPath":"/z/empty.txt"}}
+{"type":"attachment","attachment":{"type":"task_reminder","content":"remember the thing"}}
+{"type":"attachment","attachment":{"type":"invoked_skills","content":"skill a"}}
+{"type":"attachment","attachment":{"type":"skill","content":"skill b"}}
+{"type":"attachment","attachment":{"type":"totally_unknown_kind","content":"ignored"}}
+{"type":"attachment","attachment":{"type":"hook_success","hookName":"PostToolUse"}}
+{"type":"assistant","message":{}}
+{"type":"attachment","attachment":{"type":"task_reminder","content":"turn 3 reminder"}}

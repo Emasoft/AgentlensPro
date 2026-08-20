@@ -1262,3 +1262,36 @@ fn composition_index_and_block_content_routes() {
     assert!(resp.starts_with("HTTP/1.1 400"), "a non-numeric turn must 400: {resp}");
     assert!(body_of(&resp).contains("bad sessionId/turn/blockIndex"));
 }
+
+/// Row 32 over a real socket. The `?parent=` fallback is the point: a fork has no log of its own,
+/// and `{composition: null}` must stay a legitimate 200 answer rather than an error.
+#[test]
+fn composition_route_streams_the_transcript_and_honours_the_parent_fallback() {
+    let (_otlp, ui, state) = start_servers();
+    let home = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/claude-home");
+    {
+        // Clear the inherited env: this machine's real CLAUDE_CONFIG_DIR would otherwise point the
+        // route at the developer's own transcripts.
+        let mut st = state.lock().unwrap();
+        st.log_env.vars.clear();
+        st.log_env.vars.insert("CLAUDE_CONFIG_DIR".into(), home.to_string_lossy().into_owned());
+    }
+
+    let v: serde_json::Value = serde_json::from_str(body_of(&get(ui, "/api/composition/comp-own", ""))).unwrap();
+    let c = &v["composition"];
+    assert_eq!(c["sessionId"], "comp-own");
+    assert_eq!(c["estimated"], true);
+    assert!(c["turns"].as_array().unwrap().len() >= 3, "the fixture transcript has three turns: {c}");
+    assert!(c.get("reconstructedFrom").is_none(), "an own log is NOT tagged: {c}");
+
+    // A fork: no own log, reconstructed from the parent named in ?parent=.
+    let v: serde_json::Value = serde_json::from_str(body_of(&get(ui, "/api/composition/forky?parent=comp-parent", ""))).unwrap();
+    assert_eq!(v["composition"]["reconstructedFrom"], "comp-parent");
+    assert!(!v["composition"]["turns"].as_array().unwrap().is_empty());
+
+    // No log, no parent → null composition, still 200.
+    let resp = get(ui, "/api/composition/nothing-here", "");
+    assert!(resp.starts_with("HTTP/1.1 200"), "a null composition is still 200: {resp}");
+    let v: serde_json::Value = serde_json::from_str(body_of(&resp)).unwrap();
+    assert!(v["composition"].is_null(), "{v}");
+}

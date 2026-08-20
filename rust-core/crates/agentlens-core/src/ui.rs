@@ -948,6 +948,29 @@ async fn handle(
                 .to_string()
         };
         json_response(StatusCode::OK, body)
+    } else if method == Method::GET && path.starts_with("/api/composition/") {
+        // Row 32 (server.ts:4208). Reconstructs the per-turn composition by STREAMING the session's
+        // raw .jsonl — multi-GB files are routine, so this runs on spawn_blocking and the Env is
+        // cloned out from under the lock rather than held across the parse.
+        //
+        // Always 200: `{composition: null}` is a legitimate answer for a pure OTEL/synth card with
+        // no transcript and no known parent. `?parent=` supplies the fork's parent so a sub-agent
+        // session (which has no log of its own) reconstructs from the parent's transcript.
+        let session_id = percent_decode(&path["/api/composition/".len()..]);
+        let parent = query_of(&req).get("parent").map(|s| s.to_owned()).filter(|s| !s.is_empty());
+        let env = {
+            let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+            st.log_env.clone()
+        };
+        let composition = tokio::task::spawn_blocking(move || {
+            crate::context_composition::build_context_composition(&env, &session_id, parent.as_deref())
+        })
+        .await
+        .map_err(|e| format!("composition build join failed: {e}"))?;
+        json_response(
+            StatusCode::OK,
+            serde_json::json!({ "composition": composition.unwrap_or(Value::Null) }).to_string(),
+        )
     } else if method == Method::GET && path.starts_with("/api/composition-index/") {
         // Row 36 (server.ts:4193). Per-session composition summary, parsed on demand from the live
         // registry (never a background sweep) and LRU-cached. A session with no captured raw bodies
