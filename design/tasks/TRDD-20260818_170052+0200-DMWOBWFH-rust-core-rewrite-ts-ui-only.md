@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T13:20:24+0200
+updated: 2026-08-20T13:28:22+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -685,8 +685,25 @@ release-via: publish
   **Fixture paths are stripped to bare filenames on BOTH sides** — `bodyRef` is absolute and would
   bake a home dir into a committed fixture (check-identities fails on that, correctly).
   123/123, clippy 28, identities green.
-- **NEXT (P4w.1c(ii)b): session aggregation + the LRU index + routes 36-37.** Remaining from the
-  TS, all contracts captured here: `aggregateResidents` (signature = `` `${kind}|${label}` ``;
+- **P4w.1c(ii)b DONE (commit 49c85c2): session aggregation + the LRU index.** `aggregate_residents`,
+  `summarize_images`, `build_session_composition`, `session_composition_summary`, `resolve_refs`,
+  `ContextCompositionIndex` (LRU). Three claims PROVEN rather than asserted: (a) the IndexMap
+  tie-break is genuinely exercised — the fixture carries **3-way ties on both sort keys**, and
+  `sess-rich` vs `sess-gap` order their ties DIFFERENTLY, so a HashMap port fails (a tie-free
+  fixture would have proven nothing); (b) `callsTotal` counts REFS, `calls` holds only what parsed
+  — asserted directly (sess-gap: 3 refs → 2 calls) so nobody "fixes" the gap that IS the coverage
+  signal; (c) `model`/`accountUuid` are FIRST-wins — a last-wins mutation fails on both sess-rich
+  and reg-sess. The summary oracle drives the REAL lazy path (pointers recorded into the registry
+  → `request_pointers`/`response_for`), not hand-built refs. 126/126, clippy 28, identities green.
+- **NEXT (P4w.1c(ii)c): routes 36-37** — `/api/composition-index/:id` →
+  `session_composition_summary`, `/api/block-content/:id/:turn/:idx` → the drill. The choreography
+  is FIXED by the P4s rule and by what landed above: **lock → `resolve_refs` (pure, registry-only)
+  → UNLOCK → `build_session_composition` (blocking file I/O, on `spawn_blocking`) → RE-LOCK → cache
+  `put`**. Never parse a body under the CoreState lock. `get_block_content` needs the registry's
+  `request_pointers(session)[turn-1]` and has TWO distinct ERROR shapes, both **200** (not an error
+  status): `{sessionId,turn,message}` when there is no pointer for that turn, and
+  `{sessionId,turn,blockIndex,message}` when the block index does not exist.
+- **(landed above) the (ii)b contracts, kept for reference:** `aggregateResidents` (signature = `` `${kind}|${label}` ``;
   **`bySig` MUST be an IndexMap** — the pre-sort insertion order is the stable-sort tie-break
   beyond the two comparators, so a HashMap silently reorders equal-cost rows), `summarizeImages`
   (`firstSeenTurn === 0` is the sentinel; count/tokens are MAX across calls, cumulative is Σ),
