@@ -32,6 +32,7 @@ pub mod account_burners;
 pub mod account_registry;
 pub mod account_state_timeline;
 pub mod body_archive;
+pub mod body_writers;
 pub mod burn;
 pub mod cache_break;
 pub mod cache_risk_commands;

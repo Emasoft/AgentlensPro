@@ -1694,6 +1694,58 @@ async fn handle(
                         .await?;
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
+                    "get_body_writers" => {
+                        // A full pass over the bodies dir (stat every file, bounded-read every
+                        // request), so it goes on spawn_blocking with the lock released.
+                        //
+                        // `store: None` — the durable DuckDB store is not held by the Rust server,
+                        // so this takes the TS's OWN store-unavailable branch: totals cover the
+                        // live dir only, and the payload's `note` says "STORE UNAVAILABLE" rather
+                        // than presenting a partial total as a complete one.
+                        let now = crate::now_ms() as f64;
+                        let (sessions, dir, home) = {
+                            let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                            let summary = st.build_session_summary(now);
+                            let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
+                            drop(summary);
+                            let dir = crate::burn::guard::default_bodies_dir(&st.data_dir);
+                            let home = st.burn.home_dir.to_string_lossy().into_owned();
+                            (sessions, dir, home)
+                        };
+                        let n = |k: &str, d: f64| args.get(k).and_then(Value::as_f64).unwrap_or(d).max(1.0) * 60_000.0;
+                        let (window_ms, active_ms) = (n("window_min", 30.0), n("active_min", 10.0));
+                        let limit = args.get("limit").and_then(Value::as_f64).unwrap_or(20.0).max(1.0);
+                        let payload = tokio::task::spawn_blocking(move || {
+                            let live = crate::body_writers::scan_live_body_writers(&dir, now, window_ms);
+                            // Only these three card fields cross the boundary, as in the TS — a
+                            // whole card could let a future field shadow the body's own attribution.
+                            let cards: Vec<Value> = sessions
+                                .iter()
+                                .map(|s| {
+                                    let mut m = serde_json::Map::new();
+                                    for k in ["sessionId", "workspace", "source"] {
+                                        if let Some(v) = s.get(k) {
+                                            m.insert(k.to_owned(), v.clone());
+                                        }
+                                    }
+                                    Value::Object(m)
+                                })
+                                .collect();
+                            crate::body_writers::build_body_writers_report(&crate::body_writers::BodyWritersOpts {
+                                live: &live,
+                                store: None,
+                                cards: &cards,
+                                now_ms: now,
+                                window_ms,
+                                active_ms,
+                                limit,
+                                home: &home,
+                            })
+                        })
+                        .await
+                        .map_err(|e| format!("body-writers scan join failed: {e}"))?;
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
+                    }
                     "get_window_eta" => {
                         // Same shape as get_account_burners — the two tools SHARE their attribution
                         // rule and capacity resolver by design, so they read the same timeline, the

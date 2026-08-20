@@ -1,0 +1,566 @@
+{
+  "nowMs": 1785585600000,
+  "mtimes": {
+    "r1.request.json": 1785585480000,
+    "r2.request.json": 1785578400000,
+    "r3.request.json": 1785584400000,
+    "r4.request.json": 1785585300000,
+    "x1.response.json": 1785585420000,
+    "x2.response.json": 1785573600000,
+    "ignore.txt": 1785585540000
+  },
+  "windowMs": 1800000,
+  "activeMs": 600000,
+  "cards": [
+    {
+      "sessionId": "aaaaaaaa-1111-1111-1111-111111111111",
+      "workspace": "/h/user/Code/alpha",
+      "source": "claude_code"
+    },
+    {
+      "sessionId": "bbbb2222-3333-3333-3333-333333333333",
+      "workspace": "/w/beta",
+      "source": "claude_code"
+    }
+  ],
+  "live": {
+    "available": true,
+    "dir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/bodies-dir",
+    "scannedFiles": 6,
+    "sessions": [
+      {
+        "sessionId": "aaaaaaaa-1111-1111-1111-111111111111",
+        "files": [
+          {
+            "name": "r1.request.json",
+            "bytes": 505
+          },
+          {
+            "name": "r2.request.json",
+            "bytes": 321
+          }
+        ],
+        "bytes": 826,
+        "recentFiles": 1,
+        "recentBytes": 505,
+        "firstMs": 1785578400000,
+        "lastMs": 1785585480000,
+        "model": "claude-opus-5"
+      },
+      {
+        "sessionId": "bbbb2222-3333-3333-3333-333333333333",
+        "files": [
+          {
+            "name": "r3.request.json",
+            "bytes": 395
+          }
+        ],
+        "bytes": 395,
+        "recentFiles": 1,
+        "recentBytes": 395,
+        "firstMs": 1785584400000,
+        "lastMs": 1785584400000,
+        "model": "claude-sonnet-5"
+      },
+      {
+        "sessionId": null,
+        "files": [
+          {
+            "name": "r4.request.json",
+            "bytes": 169
+          }
+        ],
+        "bytes": 169,
+        "recentFiles": 1,
+        "recentBytes": 169,
+        "firstMs": 1785585300000,
+        "lastMs": 1785585300000,
+        "model": "claude-haiku-4-5"
+      }
+    ],
+    "responses": {
+      "files": [
+        {
+          "name": "x1.response.json",
+          "bytes": 123
+        },
+        {
+          "name": "x2.response.json",
+          "bytes": 117
+        }
+      ],
+      "bytes": 240,
+      "recentBytes": 123,
+      "lastMs": 1785585420000
+    }
+  },
+  "liveMissingDir": {
+    "available": false,
+    "dir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/no-such-bodies-dir",
+    "scannedFiles": 0,
+    "sessions": [],
+    "responses": {
+      "files": [],
+      "bytes": 0,
+      "recentBytes": 0,
+      "lastMs": 0
+    }
+  },
+  "storeNoOverlap": {
+    "sessions": [
+      {
+        "sessionId": "aaaaaaaa-1111-1111-1111-111111111111",
+        "files": 40,
+        "bytes": 4000000,
+        "firstMs": 1785531600000,
+        "lastMs": 1785579600000,
+        "model": "claude-opus-4-8"
+      },
+      {
+        "sessionId": "cccc3333-4444-4444-4444-444444444444",
+        "files": 5,
+        "bytes": 250000,
+        "firstMs": 1785537600000,
+        "lastMs": 1785543600000,
+        "model": "claude-sonnet-5"
+      }
+    ],
+    "responses": {
+      "files": 12,
+      "bytes": 900000
+    },
+    "recentSrcNames": []
+  },
+  "storeOverlap": {
+    "sessions": [
+      {
+        "sessionId": "aaaaaaaa-1111-1111-1111-111111111111",
+        "files": 40,
+        "bytes": 4000000,
+        "firstMs": 1785531600000,
+        "lastMs": 1785579600000,
+        "model": "claude-opus-4-8"
+      },
+      {
+        "sessionId": "cccc3333-4444-4444-4444-444444444444",
+        "files": 5,
+        "bytes": 250000,
+        "firstMs": 1785537600000,
+        "lastMs": 1785543600000,
+        "model": "claude-sonnet-5"
+      }
+    ],
+    "responses": {
+      "files": 12,
+      "bytes": 900000
+    },
+    "recentSrcNames": [
+      "r1.request.json",
+      "x1.response.json"
+    ]
+  },
+  "reportNoStore": {
+    "available": true,
+    "dir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/bodies-dir",
+    "scannedFiles": 6,
+    "windowMin": 30,
+    "activeMin": 10,
+    "writers": [
+      {
+        "sessionId": "aaaaaaaa-1111-1111-1111-111111111111",
+        "workspace": "/h/user/Code/alpha",
+        "source": "claude_code",
+        "model": "claude-opus-5",
+        "active": true,
+        "lastWriteMs": 1785585480000,
+        "recentFiles": 1,
+        "recentBytes": 505,
+        "rateMBmin": 0.000016833333333333334,
+        "liveFiles": 2,
+        "liveBytes": 826,
+        "storeFiles": 0,
+        "storeBytes": 0,
+        "totalBytes": 826
+      },
+      {
+        "sessionId": "bbbb2222-3333-3333-3333-333333333333",
+        "workspace": "/w/beta",
+        "source": "claude_code",
+        "model": "claude-sonnet-5",
+        "active": false,
+        "lastWriteMs": 1785584400000,
+        "recentFiles": 1,
+        "recentBytes": 395,
+        "rateMBmin": 0.000013166666666666667,
+        "liveFiles": 1,
+        "liveBytes": 395,
+        "storeFiles": 0,
+        "storeBytes": 0,
+        "totalBytes": 395
+      },
+      {
+        "sessionId": null,
+        "workspace": null,
+        "source": null,
+        "model": "claude-haiku-4-5",
+        "active": true,
+        "lastWriteMs": 1785585300000,
+        "recentFiles": 1,
+        "recentBytes": 169,
+        "rateMBmin": 0.000005633333333333333,
+        "liveFiles": 1,
+        "liveBytes": 169,
+        "storeFiles": 0,
+        "storeBytes": 0,
+        "totalBytes": 169
+      }
+    ],
+    "totalWriters": 3,
+    "responses": {
+      "liveFiles": 2,
+      "liveBytes": 240,
+      "storeFiles": 0,
+      "storeBytes": 0,
+      "totalBytes": 240
+    },
+    "note": "STORE UNAVAILABLE — totals cover only the live dir (≤72h retained). Attribution unit = request bodies (responses carry no session metadata and are aggregated below). active = wrote a request within 10m — that session's process still captures raw bodies until restarted.",
+    "text": "raw-body writers — rate over last 30m, ranked by rate then total (3 writer(s), showing 3)\n●ACTIVE aaaaaaaa…  0.00MB/min  recent 1KB/1  total 1KB/2  last 2m ago  claude-opus-5  ~/Code/alpha\n        bbbb2222…  0.00MB/min  recent 0KB/1  total 0KB/1  last 20m ago  claude-sonnet-5  /w/beta\n●ACTIVE unattributed  0.00MB/min  recent 0KB/1  total 0KB/1  last 5m ago  claude-haiku-4-5  ?\nresponses (unattributable by design): live 0KB/2, total 0KB\nSTORE UNAVAILABLE — totals cover only the live dir (≤72h retained). Attribution unit = request bodies (responses carry no session metadata and are aggregated below). active = wrote a request within 10m — that session's process still captures raw bodies until restarted."
+  },
+  "reportStoreNoOverlap": {
+    "available": true,
+    "dir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/bodies-dir",
+    "scannedFiles": 6,
+    "windowMin": 30,
+    "activeMin": 10,
+    "writers": [
+      {
+        "sessionId": "aaaaaaaa-1111-1111-1111-111111111111",
+        "workspace": "/h/user/Code/alpha",
+        "source": "claude_code",
+        "model": "claude-opus-5",
+        "active": true,
+        "lastWriteMs": 1785585480000,
+        "recentFiles": 1,
+        "recentBytes": 505,
+        "rateMBmin": 0.000016833333333333334,
+        "liveFiles": 2,
+        "liveBytes": 826,
+        "storeFiles": 40,
+        "storeBytes": 4000000,
+        "totalBytes": 4000826
+      },
+      {
+        "sessionId": "bbbb2222-3333-3333-3333-333333333333",
+        "workspace": "/w/beta",
+        "source": "claude_code",
+        "model": "claude-sonnet-5",
+        "active": false,
+        "lastWriteMs": 1785584400000,
+        "recentFiles": 1,
+        "recentBytes": 395,
+        "rateMBmin": 0.000013166666666666667,
+        "liveFiles": 1,
+        "liveBytes": 395,
+        "storeFiles": 0,
+        "storeBytes": 0,
+        "totalBytes": 395
+      },
+      {
+        "sessionId": null,
+        "workspace": null,
+        "source": null,
+        "model": "claude-haiku-4-5",
+        "active": true,
+        "lastWriteMs": 1785585300000,
+        "recentFiles": 1,
+        "recentBytes": 169,
+        "rateMBmin": 0.000005633333333333333,
+        "liveFiles": 1,
+        "liveBytes": 169,
+        "storeFiles": 0,
+        "storeBytes": 0,
+        "totalBytes": 169
+      },
+      {
+        "sessionId": "cccc3333-4444-4444-4444-444444444444",
+        "workspace": null,
+        "source": null,
+        "model": "claude-sonnet-5",
+        "active": false,
+        "lastWriteMs": 1785543600000,
+        "recentFiles": 0,
+        "recentBytes": 0,
+        "rateMBmin": 0,
+        "liveFiles": 0,
+        "liveBytes": 0,
+        "storeFiles": 5,
+        "storeBytes": 250000,
+        "totalBytes": 250000
+      }
+    ],
+    "totalWriters": 4,
+    "responses": {
+      "liveFiles": 2,
+      "liveBytes": 240,
+      "storeFiles": 12,
+      "storeBytes": 900000,
+      "totalBytes": 900240
+    },
+    "note": "totals = ingested store history + not-yet-ingested live files (exact union). Attribution unit = request bodies (responses carry no session metadata and are aggregated below). active = wrote a request within 10m — that session's process still captures raw bodies until restarted.",
+    "text": "raw-body writers — rate over last 30m, ranked by rate then total (4 writer(s), showing 4)\n●ACTIVE aaaaaaaa…  0.00MB/min  recent 1KB/1  total 4.0MB/42  last 2m ago  claude-opus-5  ~/Code/alpha\n        bbbb2222…  0.00MB/min  recent 0KB/1  total 0KB/1  last 20m ago  claude-sonnet-5  /w/beta\n●ACTIVE unattributed  0.00MB/min  recent 0KB/1  total 0KB/1  last 5m ago  claude-haiku-4-5  ?\n        cccc3333…  0.00MB/min  recent 0KB/0  total 250KB/5  last 700m ago  claude-sonnet-5  ?\nresponses (unattributable by design): live 0KB/2, total 900KB\ntotals = ingested store history + not-yet-ingested live files (exact union). Attribution unit = request bodies (responses carry no session metadata and are aggregated below). active = wrote a request within 10m — that session's process still captures raw bodies until restarted."
+  },
+  "reportStoreOverlap": {
+    "available": true,
+    "dir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/bodies-dir",
+    "scannedFiles": 6,
+    "windowMin": 30,
+    "activeMin": 10,
+    "writers": [
+      {
+        "sessionId": "aaaaaaaa-1111-1111-1111-111111111111",
+        "workspace": "/h/user/Code/alpha",
+        "source": "claude_code",
+        "model": "claude-opus-5",
+        "active": true,
+        "lastWriteMs": 1785585480000,
+        "recentFiles": 1,
+        "recentBytes": 505,
+        "rateMBmin": 0.000016833333333333334,
+        "liveFiles": 2,
+        "liveBytes": 826,
+        "storeFiles": 40,
+        "storeBytes": 4000000,
+        "totalBytes": 4000321
+      },
+      {
+        "sessionId": "bbbb2222-3333-3333-3333-333333333333",
+        "workspace": "/w/beta",
+        "source": "claude_code",
+        "model": "claude-sonnet-5",
+        "active": false,
+        "lastWriteMs": 1785584400000,
+        "recentFiles": 1,
+        "recentBytes": 395,
+        "rateMBmin": 0.000013166666666666667,
+        "liveFiles": 1,
+        "liveBytes": 395,
+        "storeFiles": 0,
+        "storeBytes": 0,
+        "totalBytes": 395
+      },
+      {
+        "sessionId": null,
+        "workspace": null,
+        "source": null,
+        "model": "claude-haiku-4-5",
+        "active": true,
+        "lastWriteMs": 1785585300000,
+        "recentFiles": 1,
+        "recentBytes": 169,
+        "rateMBmin": 0.000005633333333333333,
+        "liveFiles": 1,
+        "liveBytes": 169,
+        "storeFiles": 0,
+        "storeBytes": 0,
+        "totalBytes": 169
+      },
+      {
+        "sessionId": "cccc3333-4444-4444-4444-444444444444",
+        "workspace": null,
+        "source": null,
+        "model": "claude-sonnet-5",
+        "active": false,
+        "lastWriteMs": 1785543600000,
+        "recentFiles": 0,
+        "recentBytes": 0,
+        "rateMBmin": 0,
+        "liveFiles": 0,
+        "liveBytes": 0,
+        "storeFiles": 5,
+        "storeBytes": 250000,
+        "totalBytes": 250000
+      }
+    ],
+    "totalWriters": 4,
+    "responses": {
+      "liveFiles": 2,
+      "liveBytes": 240,
+      "storeFiles": 12,
+      "storeBytes": 900000,
+      "totalBytes": 900117
+    },
+    "note": "totals = ingested store history + not-yet-ingested live files (exact union). Attribution unit = request bodies (responses carry no session metadata and are aggregated below). active = wrote a request within 10m — that session's process still captures raw bodies until restarted.",
+    "text": "raw-body writers — rate over last 30m, ranked by rate then total (4 writer(s), showing 4)\n●ACTIVE aaaaaaaa…  0.00MB/min  recent 1KB/1  total 4.0MB/42  last 2m ago  claude-opus-5  ~/Code/alpha\n        bbbb2222…  0.00MB/min  recent 0KB/1  total 0KB/1  last 20m ago  claude-sonnet-5  /w/beta\n●ACTIVE unattributed  0.00MB/min  recent 0KB/1  total 0KB/1  last 5m ago  claude-haiku-4-5  ?\n        cccc3333…  0.00MB/min  recent 0KB/0  total 250KB/5  last 700m ago  claude-sonnet-5  ?\nresponses (unattributable by design): live 0KB/2, total 900KB\ntotals = ingested store history + not-yet-ingested live files (exact union). Attribution unit = request bodies (responses carry no session metadata and are aggregated below). active = wrote a request within 10m — that session's process still captures raw bodies until restarted."
+  },
+  "reportLimitOne": {
+    "available": true,
+    "dir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/bodies-dir",
+    "scannedFiles": 6,
+    "windowMin": 30,
+    "activeMin": 10,
+    "writers": [
+      {
+        "sessionId": "aaaaaaaa-1111-1111-1111-111111111111",
+        "workspace": "/h/user/Code/alpha",
+        "source": "claude_code",
+        "model": "claude-opus-5",
+        "active": true,
+        "lastWriteMs": 1785585480000,
+        "recentFiles": 1,
+        "recentBytes": 505,
+        "rateMBmin": 0.000016833333333333334,
+        "liveFiles": 2,
+        "liveBytes": 826,
+        "storeFiles": 0,
+        "storeBytes": 0,
+        "totalBytes": 826
+      }
+    ],
+    "totalWriters": 3,
+    "responses": {
+      "liveFiles": 2,
+      "liveBytes": 240,
+      "storeFiles": 0,
+      "storeBytes": 0,
+      "totalBytes": 240
+    },
+    "note": "STORE UNAVAILABLE — totals cover only the live dir (≤72h retained). Attribution unit = request bodies (responses carry no session metadata and are aggregated below). active = wrote a request within 10m — that session's process still captures raw bodies until restarted.",
+    "text": "raw-body writers — rate over last 30m, ranked by rate then total (3 writer(s), showing 1)\n●ACTIVE aaaaaaaa…  0.00MB/min  recent 1KB/1  total 1KB/2  last 2m ago  claude-opus-5  ~/Code/alpha\nresponses (unattributable by design): live 0KB/2, total 0KB\nSTORE UNAVAILABLE — totals cover only the live dir (≤72h retained). Attribution unit = request bodies (responses carry no session metadata and are aggregated below). active = wrote a request within 10m — that session's process still captures raw bodies until restarted."
+  },
+  "reportNoDir": {
+    "available": false,
+    "dir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/no-such-bodies-dir",
+    "scannedFiles": 0,
+    "windowMin": 30,
+    "activeMin": 10,
+    "writers": [],
+    "totalWriters": 0,
+    "responses": {
+      "liveFiles": 0,
+      "liveBytes": 0,
+      "storeFiles": 0,
+      "storeBytes": 0,
+      "totalBytes": 0
+    },
+    "note": "STORE UNAVAILABLE — totals cover only the live dir (≤72h retained). Attribution unit = request bodies (responses carry no session metadata and are aggregated below). active = wrote a request within 10m — that session's process still captures raw bodies until restarted.",
+    "text": "raw-body writers — rate over last 30m, ranked by rate then total (0 writer(s), showing 0)\nresponses (unattributable by design): live 0KB/0, total 0KB\nSTORE UNAVAILABLE — totals cover only the live dir (≤72h retained). Attribution unit = request bodies (responses carry no session metadata and are aggregated below). active = wrote a request within 10m — that session's process still captures raw bodies until restarted."
+  },
+  "reportNoDirWithStore": {
+    "available": true,
+    "dir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/no-such-bodies-dir",
+    "scannedFiles": 0,
+    "windowMin": 30,
+    "activeMin": 10,
+    "writers": [
+      {
+        "sessionId": "aaaaaaaa-1111-1111-1111-111111111111",
+        "workspace": "/h/user/Code/alpha",
+        "source": "claude_code",
+        "model": "claude-opus-4-8",
+        "active": false,
+        "lastWriteMs": 1785579600000,
+        "recentFiles": 0,
+        "recentBytes": 0,
+        "rateMBmin": 0,
+        "liveFiles": 0,
+        "liveBytes": 0,
+        "storeFiles": 40,
+        "storeBytes": 4000000,
+        "totalBytes": 4000000
+      },
+      {
+        "sessionId": "cccc3333-4444-4444-4444-444444444444",
+        "workspace": null,
+        "source": null,
+        "model": "claude-sonnet-5",
+        "active": false,
+        "lastWriteMs": 1785543600000,
+        "recentFiles": 0,
+        "recentBytes": 0,
+        "rateMBmin": 0,
+        "liveFiles": 0,
+        "liveBytes": 0,
+        "storeFiles": 5,
+        "storeBytes": 250000,
+        "totalBytes": 250000
+      }
+    ],
+    "totalWriters": 2,
+    "responses": {
+      "liveFiles": 0,
+      "liveBytes": 0,
+      "storeFiles": 12,
+      "storeBytes": 900000,
+      "totalBytes": 900000
+    },
+    "note": "totals = ingested store history + not-yet-ingested live files (exact union). Attribution unit = request bodies (responses carry no session metadata and are aggregated below). active = wrote a request within 10m — that session's process still captures raw bodies until restarted.",
+    "text": "raw-body writers — rate over last 30m, ranked by rate then total (2 writer(s), showing 2)\n        aaaaaaaa…  0.00MB/min  recent 0KB/0  total 4.0MB/40  last 100m ago  claude-opus-4-8  ~/Code/alpha\n        cccc3333…  0.00MB/min  recent 0KB/0  total 250KB/5  last 700m ago  claude-sonnet-5  ?\nresponses (unattributable by design): live 0KB/0, total 900KB\ntotals = ingested store history + not-yet-ingested live files (exact union). Attribution unit = request bodies (responses carry no session metadata and are aggregated below). active = wrote a request within 10m — that session's process still captures raw bodies until restarted."
+  },
+  "reportNoCards": {
+    "available": true,
+    "dir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/bodies-dir",
+    "scannedFiles": 6,
+    "windowMin": 30,
+    "activeMin": 10,
+    "writers": [
+      {
+        "sessionId": "aaaaaaaa-1111-1111-1111-111111111111",
+        "workspace": null,
+        "source": null,
+        "model": "claude-opus-5",
+        "active": true,
+        "lastWriteMs": 1785585480000,
+        "recentFiles": 1,
+        "recentBytes": 505,
+        "rateMBmin": 0.000016833333333333334,
+        "liveFiles": 2,
+        "liveBytes": 826,
+        "storeFiles": 0,
+        "storeBytes": 0,
+        "totalBytes": 826
+      },
+      {
+        "sessionId": "bbbb2222-3333-3333-3333-333333333333",
+        "workspace": null,
+        "source": null,
+        "model": "claude-sonnet-5",
+        "active": false,
+        "lastWriteMs": 1785584400000,
+        "recentFiles": 1,
+        "recentBytes": 395,
+        "rateMBmin": 0.000013166666666666667,
+        "liveFiles": 1,
+        "liveBytes": 395,
+        "storeFiles": 0,
+        "storeBytes": 0,
+        "totalBytes": 395
+      },
+      {
+        "sessionId": null,
+        "workspace": null,
+        "source": null,
+        "model": "claude-haiku-4-5",
+        "active": true,
+        "lastWriteMs": 1785585300000,
+        "recentFiles": 1,
+        "recentBytes": 169,
+        "rateMBmin": 0.000005633333333333333,
+        "liveFiles": 1,
+        "liveBytes": 169,
+        "storeFiles": 0,
+        "storeBytes": 0,
+        "totalBytes": 169
+      }
+    ],
+    "totalWriters": 3,
+    "responses": {
+      "liveFiles": 2,
+      "liveBytes": 240,
+      "storeFiles": 0,
+      "storeBytes": 0,
+      "totalBytes": 240
+    },
+    "note": "STORE UNAVAILABLE — totals cover only the live dir (≤72h retained). Attribution unit = request bodies (responses carry no session metadata and are aggregated below). active = wrote a request within 10m — that session's process still captures raw bodies until restarted.",
+    "text": "raw-body writers — rate over last 30m, ranked by rate then total (3 writer(s), showing 3)\n●ACTIVE aaaaaaaa…  0.00MB/min  recent 1KB/1  total 1KB/2  last 2m ago  claude-opus-5  ?\n        bbbb2222…  0.00MB/min  recent 0KB/1  total 0KB/1  last 20m ago  claude-sonnet-5  ?\n●ACTIVE unattributed  0.00MB/min  recent 0KB/1  total 0KB/1  last 5m ago  claude-haiku-4-5  ?\nresponses (unattributable by design): live 0KB/2, total 0KB\nSTORE UNAVAILABLE — totals cover only the live dir (≤72h retained). Attribution unit = request bodies (responses carry no session metadata and are aggregated below). active = wrote a request within 10m — that session's process still captures raw bodies until restarted."
+  }
+}
