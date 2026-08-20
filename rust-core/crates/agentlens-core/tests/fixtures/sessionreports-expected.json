@@ -14,7 +14,7 @@
    "cacheHitRate": 0.91,
    "totalLlmCalls": 40,
    "errors": 0,
-   "userRequest": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "userRequest": "refactor the loader so the deterministic tests stop flaking in src/logReader.ts xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
    "toolCounts": {
     "Bash": 30,
     "Read": 20,
@@ -60,7 +60,7 @@
    "cacheHitRate": 0.62,
    "totalLlmCalls": 6,
    "errors": 2,
-   "userRequest": "short prompt",
+   "userRequest": "parsing bug in src/logReader.ts loader",
    "toolCounts": {
     "Read": 5,
     "Bash": 2
@@ -130,6 +130,38 @@
    "totalLlmCalls": 1,
    "errors": 0,
    "outcome": "ok"
+  },
+  {
+   "sessionId": "first-half-20d",
+   "source": "claude_code",
+   "model": "claude-opus-5",
+   "startTime": "2025-09-19T08:53:20.000Z",
+   "durationMs": 300000,
+   "inputTokens": 2000,
+   "outputTokens": 400,
+   "cacheReadTokens": 100000,
+   "cacheCreateTokens": 200000,
+   "cacheHitRate": 0.33,
+   "totalLlmCalls": 12,
+   "errors": 1,
+   "userRequest": "earlier attempt at the loader refactor with deterministic tests",
+   "toolCounts": {
+    "Bash": 10,
+    "Read": 4
+   },
+   "loopSignals": [
+    {
+     "type": "repeated_tool"
+    }
+   ],
+   "filesRead": [
+    "a.ts"
+   ],
+   "filesChanged": [
+    "a.ts",
+    "b.ts"
+   ],
+   "outcome": "ok"
   }
  ],
  "recentCases": [
@@ -191,7 +223,7 @@
     "entrypoint": "cli",
     "agent": "claude_code",
     "model": "claude-opus-5",
-    "prompt": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…",
+    "prompt": "refactor the loader so the deterministic tests stop flaking in src/logReader.ts xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…",
     "turns": 40,
     "cost_usd": 0.635,
     "durationMin": 119.8,
@@ -237,7 +269,7 @@
     "lastActive": "2025-10-09 08:24",
     "agent": "claude_code",
     "model": "claude-opus-5",
-    "prompt": "short prompt",
+    "prompt": "parsing bug in src/logReader.ts loader",
     "turns": 6,
     "cost_usd": 0.0462,
     "durationMin": 1,
@@ -272,6 +304,30 @@
      "repeated_tool"
     ],
     "filesChanged": []
+   },
+   {
+    "sessionId": "first-half-20d",
+    "date": "2025-09-19 08:53",
+    "lastActive": "2025-09-19 08:58",
+    "agent": "claude_code",
+    "model": "claude-opus-5",
+    "prompt": "earlier attempt at the loader refactor with deterministic tests",
+    "turns": 12,
+    "cost_usd": 1.32,
+    "durationMin": 5,
+    "errors": 1,
+    "tokensSource": null,
+    "topTools": [
+     "Bash×10",
+     "Read×4"
+    ],
+    "loopSignals": [
+     "repeated_tool"
+    ],
+    "filesChanged": [
+     "a.ts",
+     "b.ts"
+    ]
    },
    {
     "sessionId": "bad-date",
@@ -300,7 +356,7 @@
     "entrypoint": "cli",
     "agent": "claude_code",
     "model": "claude-opus-5",
-    "prompt": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…",
+    "prompt": "refactor the loader so the deterministic tests stop flaking in src/logReader.ts xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…",
     "turns": 40,
     "cost_usd": 0.635,
     "durationMin": 119.8,
@@ -351,7 +407,7 @@
     "entrypoint": "cli",
     "agent": "claude_code",
     "model": "claude-opus-5",
-    "prompt": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…",
+    "prompt": "refactor the loader so the deterministic tests stop flaking in src/logReader.ts xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…",
     "turns": 40,
     "cost_usd": 0.635,
     "durationMin": 119.8,
@@ -397,7 +453,7 @@
     "lastActive": "2025-10-09 08:24",
     "agent": "claude_code",
     "model": "claude-opus-5",
-    "prompt": "short prompt",
+    "prompt": "parsing bug in src/logReader.ts loader",
     "turns": 6,
     "cost_usd": 0.0462,
     "durationMin": 1,
@@ -432,6 +488,30 @@
      "repeated_tool"
     ],
     "filesChanged": []
+   },
+   {
+    "sessionId": "first-half-20d",
+    "date": "2025-09-19 08:53",
+    "lastActive": "2025-09-19 08:58",
+    "agent": "claude_code",
+    "model": "claude-opus-5",
+    "prompt": "earlier attempt at the loader refactor with deterministic tests",
+    "turns": 12,
+    "cost_usd": 1.32,
+    "durationMin": 5,
+    "errors": 1,
+    "tokensSource": null,
+    "topTools": [
+     "Bash×10",
+     "Read×4"
+    ],
+    "loopSignals": [
+     "repeated_tool"
+    ],
+    "filesChanged": [
+     "a.ts",
+     "b.ts"
+    ]
    },
    {
     "sessionId": "bad-date",
@@ -460,7 +540,7 @@
     "entrypoint": "cli",
     "agent": "claude_code",
     "model": "claude-opus-5",
-    "prompt": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…",
+    "prompt": "refactor the loader so the deterministic tests stop flaking in src/logReader.ts xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…",
     "turns": 40,
     "cost_usd": 0.635,
     "durationMin": 119.8,
@@ -506,7 +586,7 @@
     "lastActive": "2025-10-09 08:24",
     "agent": "claude_code",
     "model": "claude-opus-5",
-    "prompt": "short prompt",
+    "prompt": "parsing bug in src/logReader.ts loader",
     "turns": 6,
     "cost_usd": 0.0462,
     "durationMin": 1,
@@ -541,6 +621,30 @@
      "repeated_tool"
     ],
     "filesChanged": []
+   },
+   {
+    "sessionId": "first-half-20d",
+    "date": "2025-09-19 08:53",
+    "lastActive": "2025-09-19 08:58",
+    "agent": "claude_code",
+    "model": "claude-opus-5",
+    "prompt": "earlier attempt at the loader refactor with deterministic tests",
+    "turns": 12,
+    "cost_usd": 1.32,
+    "durationMin": 5,
+    "errors": 1,
+    "tokensSource": null,
+    "topTools": [
+     "Bash×10",
+     "Read×4"
+    ],
+    "loopSignals": [
+     "repeated_tool"
+    ],
+    "filesChanged": [
+     "a.ts",
+     "b.ts"
+    ]
    }
   ],
   [],
@@ -573,7 +677,7 @@
     "lastActive": "2025-10-09 08:24",
     "agent": "claude_code",
     "model": "claude-opus-5",
-    "prompt": "short prompt",
+    "prompt": "parsing bug in src/logReader.ts loader",
     "turns": 6,
     "cost_usd": 0.0462,
     "durationMin": 1,
@@ -630,63 +734,63 @@
  ],
  "patternResults": [
   {
-   "sessionCount": 5,
-   "avgCostUsd": 0.1368,
-   "avgTurns": 10,
-   "avgCacheHitRate": "48%",
-   "cacheMeasuredSessions": 4,
+   "sessionCount": 6,
+   "avgCostUsd": 0.334,
+   "avgTurns": 10.3,
+   "avgCacheHitRate": "45%",
+   "cacheMeasuredSessions": 5,
    "cacheExcludedJunkSessions": 1,
-   "errorRate": "20%",
+   "errorRate": "33%",
    "hotFiles": [
     {
      "file": "a.ts",
-     "sessions": 4,
-     "pct": 80
+     "sessions": 6,
+     "pct": 100
     },
     {
      "file": "b.ts",
-     "sessions": 1,
-     "pct": 20
+     "sessions": 2,
+     "pct": 33
     },
     {
      "file": "c.ts",
      "sessions": 1,
-     "pct": 20
+     "pct": 17
     },
     {
      "file": "d.ts",
      "sessions": 1,
-     "pct": 20
+     "pct": 17
     },
     {
      "file": "e.ts",
      "sessions": 1,
-     "pct": 20
+     "pct": 17
     },
     {
      "file": "f.ts",
      "sessions": 1,
-     "pct": 20
+     "pct": 17
     },
     {
      "file": "g.ts",
      "sessions": 1,
-     "pct": 20
+     "pct": 17
     },
     {
      "file": "h.ts",
      "sessions": 1,
-     "pct": 20
+     "pct": 17
     }
    ],
    "topTools": [
     {
      "tool": "Bash",
-     "total": 32
+     "total": 42
     },
     {
      "tool": "Read",
-     "total": 28
+     "total": 32
     },
     {
      "tool": "Edit",
@@ -704,7 +808,7 @@
    "loopSignals": [
     {
      "type": "repeated_tool",
-     "count": 2
+     "count": 3
     },
     {
      "type": "no_progress",
@@ -714,9 +818,9 @@
    "agentBreakdown": [
     {
      "agentModel": "claude_code/claude-opus-5",
-     "sessions": 3,
-     "avgCost": 0.2271,
-     "avgTurns": 15.7
+     "sessions": 4,
+     "avgCost": 0.5003,
+     "avgTurns": 14.8
     },
     {
      "agentModel": "codex/",
@@ -830,166 +934,166 @@
    ]
   },
   {
-   "sessionCount": 4,
-   "avgCostUsd": 0.171,
-   "avgTurns": 12.3,
-   "avgCacheHitRate": "64%",
-   "cacheMeasuredSessions": 3,
+   "sessionCount": 5,
+   "avgCostUsd": 0.4008,
+   "avgTurns": 12.2,
+   "avgCacheHitRate": "57%",
+   "cacheMeasuredSessions": 4,
    "cacheExcludedJunkSessions": 1,
-   "errorRate": "25%",
+   "errorRate": "40%",
    "hotFiles": [
     {
      "file": "a.ts",
-     "sessions": 4,
+     "sessions": 6,
+     "pct": 120
+    },
+    {
+     "file": "b.ts",
+     "sessions": 2,
+     "pct": 40
+    },
+    {
+     "file": "c.ts",
+     "sessions": 1,
+     "pct": 20
+    },
+    {
+     "file": "d.ts",
+     "sessions": 1,
+     "pct": 20
+    },
+    {
+     "file": "e.ts",
+     "sessions": 1,
+     "pct": 20
+    },
+    {
+     "file": "f.ts",
+     "sessions": 1,
+     "pct": 20
+    },
+    {
+     "file": "g.ts",
+     "sessions": 1,
+     "pct": 20
+    },
+    {
+     "file": "h.ts",
+     "sessions": 1,
+     "pct": 20
+    }
+   ],
+   "topTools": [
+    {
+     "tool": "Bash",
+     "total": 42
+    },
+    {
+     "tool": "Read",
+     "total": 32
+    },
+    {
+     "tool": "Edit",
+     "total": 9
+    },
+    {
+     "tool": "Grep",
+     "total": 4
+    },
+    {
+     "tool": "Glob",
+     "total": 1
+    }
+   ],
+   "loopSignals": [
+    {
+     "type": "repeated_tool",
+     "count": 3
+    },
+    {
+     "type": "no_progress",
+     "count": 1
+    }
+   ],
+   "agentBreakdown": [
+    {
+     "agentModel": "claude_code/claude-opus-5",
+     "sessions": 3,
+     "avgCost": 0.6671,
+     "avgTurns": 19.3
+    },
+    {
+     "agentModel": "codex/",
+     "sessions": 1,
+     "avgCost": 0,
+     "avgTurns": 0
+    },
+    {
+     "agentModel": "copilot/claude-sonnet-5",
+     "sessions": 1,
+     "avgCost": 0.0029,
+     "avgTurns": 3
+    }
+   ]
+  },
+  {
+   "sessionCount": 6,
+   "avgCostUsd": 0.334,
+   "avgTurns": 10.3,
+   "avgCacheHitRate": "45%",
+   "cacheMeasuredSessions": 5,
+   "cacheExcludedJunkSessions": 1,
+   "errorRate": "33%",
+   "hotFiles": [
+    {
+     "file": "a.ts",
+     "sessions": 6,
      "pct": 100
     },
     {
      "file": "b.ts",
-     "sessions": 1,
-     "pct": 25
-    },
-    {
-     "file": "c.ts",
-     "sessions": 1,
-     "pct": 25
-    },
-    {
-     "file": "d.ts",
-     "sessions": 1,
-     "pct": 25
-    },
-    {
-     "file": "e.ts",
-     "sessions": 1,
-     "pct": 25
-    },
-    {
-     "file": "f.ts",
-     "sessions": 1,
-     "pct": 25
-    },
-    {
-     "file": "g.ts",
-     "sessions": 1,
-     "pct": 25
-    },
-    {
-     "file": "h.ts",
-     "sessions": 1,
-     "pct": 25
-    }
-   ],
-   "topTools": [
-    {
-     "tool": "Bash",
-     "total": 32
-    },
-    {
-     "tool": "Read",
-     "total": 28
-    },
-    {
-     "tool": "Edit",
-     "total": 9
-    },
-    {
-     "tool": "Grep",
-     "total": 4
-    },
-    {
-     "tool": "Glob",
-     "total": 1
-    }
-   ],
-   "loopSignals": [
-    {
-     "type": "repeated_tool",
-     "count": 2
-    },
-    {
-     "type": "no_progress",
-     "count": 1
-    }
-   ],
-   "agentBreakdown": [
-    {
-     "agentModel": "claude_code/claude-opus-5",
      "sessions": 2,
-     "avgCost": 0.3406,
-     "avgTurns": 23
-    },
-    {
-     "agentModel": "codex/",
-     "sessions": 1,
-     "avgCost": 0,
-     "avgTurns": 0
-    },
-    {
-     "agentModel": "copilot/claude-sonnet-5",
-     "sessions": 1,
-     "avgCost": 0.0029,
-     "avgTurns": 3
-    }
-   ]
-  },
-  {
-   "sessionCount": 5,
-   "avgCostUsd": 0.1368,
-   "avgTurns": 10,
-   "avgCacheHitRate": "48%",
-   "cacheMeasuredSessions": 4,
-   "cacheExcludedJunkSessions": 1,
-   "errorRate": "20%",
-   "hotFiles": [
-    {
-     "file": "a.ts",
-     "sessions": 4,
-     "pct": 80
-    },
-    {
-     "file": "b.ts",
-     "sessions": 1,
-     "pct": 20
+     "pct": 33
     },
     {
      "file": "c.ts",
      "sessions": 1,
-     "pct": 20
+     "pct": 17
     },
     {
      "file": "d.ts",
      "sessions": 1,
-     "pct": 20
+     "pct": 17
     },
     {
      "file": "e.ts",
      "sessions": 1,
-     "pct": 20
+     "pct": 17
     },
     {
      "file": "f.ts",
      "sessions": 1,
-     "pct": 20
+     "pct": 17
     },
     {
      "file": "g.ts",
      "sessions": 1,
-     "pct": 20
+     "pct": 17
     },
     {
      "file": "h.ts",
      "sessions": 1,
-     "pct": 20
+     "pct": 17
     }
    ],
    "topTools": [
     {
      "tool": "Bash",
-     "total": 32
+     "total": 42
     },
     {
      "tool": "Read",
-     "total": 28
+     "total": 32
     },
     {
      "tool": "Edit",
@@ -1007,7 +1111,7 @@
    "loopSignals": [
     {
      "type": "repeated_tool",
-     "count": 2
+     "count": 3
     },
     {
      "type": "no_progress",
@@ -1017,9 +1121,9 @@
    "agentBreakdown": [
     {
      "agentModel": "claude_code/claude-opus-5",
-     "sessions": 3,
-     "avgCost": 0.2271,
-     "avgTurns": 15.7
+     "sessions": 4,
+     "avgCost": 0.5003,
+     "avgTurns": 14.8
     },
     {
      "agentModel": "codex/",
@@ -1036,63 +1140,63 @@
    ]
   },
   {
-   "sessionCount": 5,
-   "avgCostUsd": 0.1368,
-   "avgTurns": 10,
-   "avgCacheHitRate": "48%",
-   "cacheMeasuredSessions": 4,
+   "sessionCount": 6,
+   "avgCostUsd": 0.334,
+   "avgTurns": 10.3,
+   "avgCacheHitRate": "45%",
+   "cacheMeasuredSessions": 5,
    "cacheExcludedJunkSessions": 1,
-   "errorRate": "20%",
+   "errorRate": "33%",
    "hotFiles": [
     {
      "file": "a.ts",
-     "sessions": 4,
-     "pct": 80
+     "sessions": 6,
+     "pct": 100
     },
     {
      "file": "b.ts",
-     "sessions": 1,
-     "pct": 20
+     "sessions": 2,
+     "pct": 33
     },
     {
      "file": "c.ts",
      "sessions": 1,
-     "pct": 20
+     "pct": 17
     },
     {
      "file": "d.ts",
      "sessions": 1,
-     "pct": 20
+     "pct": 17
     },
     {
      "file": "e.ts",
      "sessions": 1,
-     "pct": 20
+     "pct": 17
     },
     {
      "file": "f.ts",
      "sessions": 1,
-     "pct": 20
+     "pct": 17
     },
     {
      "file": "g.ts",
      "sessions": 1,
-     "pct": 20
+     "pct": 17
     },
     {
      "file": "h.ts",
      "sessions": 1,
-     "pct": 20
+     "pct": 17
     }
    ],
    "topTools": [
     {
      "tool": "Bash",
-     "total": 32
+     "total": 42
     },
     {
      "tool": "Read",
-     "total": 28
+     "total": 32
     },
     {
      "tool": "Edit",
@@ -1110,7 +1214,7 @@
    "loopSignals": [
     {
      "type": "repeated_tool",
-     "count": 2
+     "count": 3
     },
     {
      "type": "no_progress",
@@ -1120,9 +1224,9 @@
    "agentBreakdown": [
     {
      "agentModel": "claude_code/claude-opus-5",
-     "sessions": 3,
-     "avgCost": 0.2271,
-     "avgTurns": 15.7
+     "sessions": 4,
+     "avgCost": 0.5003,
+     "avgTurns": 14.8
     },
     {
      "agentModel": "codex/",
@@ -1140,6 +1244,432 @@
   },
   {
    "message": "No sessions found matching the filters."
+  }
+ ],
+ "relevantCases": [
+  {
+   "name": "matches-by-word-overlap",
+   "args": {
+    "task": "refactor the loader deterministic tests"
+   }
+  },
+  {
+   "name": "path-stays-one-word",
+   "args": {
+    "task": "fix src/logReader.ts parsing"
+   }
+  },
+  {
+   "name": "short-words-only-is-refused",
+   "args": {
+    "task": "do it now"
+   }
+  },
+  {
+   "name": "punctuation-is-blanked",
+   "args": {
+    "task": "refactor!!! the... loader???"
+   }
+  },
+  {
+   "name": "no-match-is-an-honest-message",
+   "args": {
+    "task": "quantum entanglement harmonics"
+   }
+  },
+  {
+   "name": "empty-task",
+   "args": {
+    "task": ""
+   }
+  }
+ ],
+ "relevantResults": [
+  {
+   "matchedSessions": 3,
+   "estimatedCostUsd": {
+    "min": 0.046,
+    "avg": 0.667,
+    "max": 1.32
+   },
+   "estimatedTurns": 19.3,
+   "relevantFiles": [
+    {
+     "file": "a.ts",
+     "appearsIn": 5,
+     "pct": 167
+    },
+    {
+     "file": "b.ts",
+     "appearsIn": 2,
+     "pct": 67
+    },
+    {
+     "file": "c.ts",
+     "appearsIn": 1,
+     "pct": 33
+    },
+    {
+     "file": "d.ts",
+     "appearsIn": 1,
+     "pct": 33
+    },
+    {
+     "file": "e.ts",
+     "appearsIn": 1,
+     "pct": 33
+    },
+    {
+     "file": "f.ts",
+     "appearsIn": 1,
+     "pct": 33
+    },
+    {
+     "file": "g.ts",
+     "appearsIn": 1,
+     "pct": 33
+    },
+    {
+     "file": "h.ts",
+     "appearsIn": 1,
+     "pct": 33
+    }
+   ],
+   "knownTraps": [
+    "repeated_tool (2/3 similar sessions)",
+    "no_progress (1/3 similar sessions)"
+   ],
+   "tip": "Consider mentioning these files upfront: a.ts, b.ts, c.ts"
+  },
+  {
+   "matchedSessions": 2,
+   "estimatedCostUsd": {
+    "min": 0.046,
+    "avg": 0.341,
+    "max": 0.635
+   },
+   "estimatedTurns": 23,
+   "relevantFiles": [
+    {
+     "file": "a.ts",
+     "appearsIn": 3,
+     "pct": 150
+    },
+    {
+     "file": "h.ts",
+     "appearsIn": 1,
+     "pct": 50
+    },
+    {
+     "file": "b.ts",
+     "appearsIn": 1,
+     "pct": 50
+    },
+    {
+     "file": "c.ts",
+     "appearsIn": 1,
+     "pct": 50
+    },
+    {
+     "file": "d.ts",
+     "appearsIn": 1,
+     "pct": 50
+    },
+    {
+     "file": "e.ts",
+     "appearsIn": 1,
+     "pct": 50
+    },
+    {
+     "file": "f.ts",
+     "appearsIn": 1,
+     "pct": 50
+    },
+    {
+     "file": "g.ts",
+     "appearsIn": 1,
+     "pct": 50
+    }
+   ],
+   "knownTraps": [
+    "repeated_tool (1/2 similar sessions)",
+    "no_progress (1/2 similar sessions)"
+   ],
+   "tip": "Consider mentioning these files upfront: a.ts, h.ts, b.ts"
+  },
+  {
+   "message": "Task description too short to match against history."
+  },
+  {
+   "matchedSessions": 3,
+   "estimatedCostUsd": {
+    "min": 0.046,
+    "avg": 0.667,
+    "max": 1.32
+   },
+   "estimatedTurns": 19.3,
+   "relevantFiles": [
+    {
+     "file": "a.ts",
+     "appearsIn": 5,
+     "pct": 167
+    },
+    {
+     "file": "b.ts",
+     "appearsIn": 2,
+     "pct": 67
+    },
+    {
+     "file": "c.ts",
+     "appearsIn": 1,
+     "pct": 33
+    },
+    {
+     "file": "d.ts",
+     "appearsIn": 1,
+     "pct": 33
+    },
+    {
+     "file": "e.ts",
+     "appearsIn": 1,
+     "pct": 33
+    },
+    {
+     "file": "f.ts",
+     "appearsIn": 1,
+     "pct": 33
+    },
+    {
+     "file": "g.ts",
+     "appearsIn": 1,
+     "pct": 33
+    },
+    {
+     "file": "h.ts",
+     "appearsIn": 1,
+     "pct": 33
+    }
+   ],
+   "knownTraps": [
+    "repeated_tool (2/3 similar sessions)",
+    "no_progress (1/3 similar sessions)"
+   ],
+   "tip": "Consider mentioning these files upfront: a.ts, b.ts, c.ts"
+  },
+  {
+   "message": "No past sessions closely match this task description. No history to draw from yet."
+  },
+  {
+   "message": "Task description too short to match against history."
+  }
+ ],
+ "efficiencyCases": [
+  {
+   "name": "default-30-days",
+   "args": {}
+  },
+  {
+   "name": "days-1",
+   "args": {
+    "days": 1
+   }
+  },
+  {
+   "name": "days-90",
+   "args": {
+    "days": 90
+   }
+  },
+  {
+   "name": "days-0-is-not-nullish-so-it-filters",
+   "args": {
+    "days": 0
+   }
+  },
+  {
+   "name": "window-with-nothing-in-it",
+   "args": {
+    "days": 0.0001
+   }
+  }
+ ],
+ "efficiencyResults": [
+  {
+   "period": "last 30 days",
+   "sessionCount": 5,
+   "costTrend": "decreasing ↓",
+   "avgCostUsd": 0.4008,
+   "avgTurns": 12.2,
+   "errorRate": "40%",
+   "cacheHealth": {
+    "avgCacheHitRatePct": 57,
+    "measuredSessions": 4,
+    "excludedJunkSessions": 1,
+    "sessionsBelow70pct": 3,
+    "worstSessions": [
+     {
+      "sessionId": "first-half-20d",
+      "model": "claude-opus-5",
+      "cacheHitRatePct": 33,
+      "cacheCreateTokens": 200000
+     },
+     {
+      "sessionId": "old-week",
+      "model": "claude-sonnet-5",
+      "cacheHitRatePct": 40,
+      "cacheCreateTokens": 0
+     },
+     {
+      "sessionId": "fresh-but-idle",
+      "model": "claude-opus-5",
+      "cacheHitRatePct": 62,
+      "cacheCreateTokens": 5000
+     },
+     {
+      "sessionId": "stale-start-live-now",
+      "model": "claude-opus-5",
+      "cacheHitRatePct": 91,
+      "cacheCreateTokens": 60000
+     }
+    ]
+   },
+   "topLoopSignals": [
+    {
+     "type": "repeated_tool",
+     "count": 3,
+     "rate": "60%"
+    },
+    {
+     "type": "no_progress",
+     "count": 1,
+     "rate": "20%"
+    }
+   ],
+   "agentRanking": [
+    {
+     "agentModel": "claude_code/claude-opus-5",
+     "sessions": 3,
+     "avgCostUsd": 0.6671,
+     "avgTurns": 19.3,
+     "errorRate": "100%"
+    }
+   ]
+  },
+  {
+   "period": "last 1 days",
+   "sessionCount": 3,
+   "costTrend": "no data",
+   "avgCostUsd": 0.2271,
+   "avgTurns": 15.3,
+   "errorRate": "33%",
+   "cacheHealth": {
+    "avgCacheHitRatePct": 77,
+    "measuredSessions": 2,
+    "excludedJunkSessions": 1,
+    "sessionsBelow70pct": 1,
+    "worstSessions": [
+     {
+      "sessionId": "fresh-but-idle",
+      "model": "claude-opus-5",
+      "cacheHitRatePct": 62,
+      "cacheCreateTokens": 5000
+     },
+     {
+      "sessionId": "stale-start-live-now",
+      "model": "claude-opus-5",
+      "cacheHitRatePct": 91,
+      "cacheCreateTokens": 60000
+     }
+    ]
+   },
+   "topLoopSignals": [
+    {
+     "type": "repeated_tool",
+     "count": 1,
+     "rate": "33%"
+    },
+    {
+     "type": "no_progress",
+     "count": 1,
+     "rate": "33%"
+    }
+   ],
+   "agentRanking": [
+    {
+     "agentModel": "claude_code/claude-opus-5",
+     "sessions": 2,
+     "avgCostUsd": 0.3406,
+     "avgTurns": 23,
+     "errorRate": "100%"
+    }
+   ]
+  },
+  {
+   "period": "last 90 days",
+   "sessionCount": 5,
+   "costTrend": "no data",
+   "avgCostUsd": 0.4008,
+   "avgTurns": 12.2,
+   "errorRate": "40%",
+   "cacheHealth": {
+    "avgCacheHitRatePct": 57,
+    "measuredSessions": 4,
+    "excludedJunkSessions": 1,
+    "sessionsBelow70pct": 3,
+    "worstSessions": [
+     {
+      "sessionId": "first-half-20d",
+      "model": "claude-opus-5",
+      "cacheHitRatePct": 33,
+      "cacheCreateTokens": 200000
+     },
+     {
+      "sessionId": "old-week",
+      "model": "claude-sonnet-5",
+      "cacheHitRatePct": 40,
+      "cacheCreateTokens": 0
+     },
+     {
+      "sessionId": "fresh-but-idle",
+      "model": "claude-opus-5",
+      "cacheHitRatePct": 62,
+      "cacheCreateTokens": 5000
+     },
+     {
+      "sessionId": "stale-start-live-now",
+      "model": "claude-opus-5",
+      "cacheHitRatePct": 91,
+      "cacheCreateTokens": 60000
+     }
+    ]
+   },
+   "topLoopSignals": [
+    {
+     "type": "repeated_tool",
+     "count": 3,
+     "rate": "60%"
+    },
+    {
+     "type": "no_progress",
+     "count": 1,
+     "rate": "20%"
+    }
+   ],
+   "agentRanking": [
+    {
+     "agentModel": "claude_code/claude-opus-5",
+     "sessions": 3,
+     "avgCostUsd": 0.6671,
+     "avgTurns": 19.3,
+     "errorRate": "100%"
+    }
+   ]
+  },
+  {
+   "message": "No sessions in the last 0 days."
+  },
+  {
+   "message": "No sessions in the last 0.0001 days."
   }
  ]
 }

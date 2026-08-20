@@ -1821,7 +1821,8 @@ function summarizeGeneratedFiles(s: SessionSummaryCard, timeline: TimelineEntry[
   }
 }
 
-function handleFindRelevantContext(
+// Exported as the Rust port's parity oracle (TRDD-DMWOBWFH P4x.2c).
+export function handleFindRelevantContext(
   sessions: SessionSummaryCard[],
   args: { task: string; workspace?: string },
 ) {

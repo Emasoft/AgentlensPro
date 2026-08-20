@@ -118,18 +118,102 @@ fn the_cache_sli_excludes_junk_rows_and_says_so() {
     let o = oracle();
     let (sessions, now) = (o["sessions"].as_array().unwrap(), o["nowMs"].as_f64().unwrap());
     let got = get_workspace_patterns(sessions, None, now);
-    assert_eq!(got["sessionCount"], 5, "every session is counted: {got}");
-    assert_eq!(got["cacheMeasuredSessions"], 4, "but only four back the SLI: {got}");
+    assert_eq!(got["sessionCount"], 6, "every session is counted: {got}");
+    assert_eq!(got["cacheMeasuredSessions"], 5, "but only five back the SLI: {got}");
     assert_eq!(got["cacheExcludedJunkSessions"], 1, "and the exclusion is named: {got}");
     // Recomputing over ALL rows would drag it down — prove the reported figure is not that.
     let measured_avg = got["avgCacheHitRate"].as_str().unwrap();
     assert_ne!(measured_avg, "n/a");
     let pct: f64 = measured_avg.trim_end_matches('%').parse().unwrap();
-    let naive = 4.0 / 5.0 * pct;
+    let naive = 5.0 / 6.0 * pct;
     assert!((pct - naive).abs() > 1.0, "the junk row would have moved it: reported {pct}, junk-diluted {naive}");
 
     // Nothing measured at all is 'n/a', never a 0% that reads as a measurement.
     let junk_only: Vec<Value> = sessions.iter().filter(|s| s["sessionId"] == "junk-zero").cloned().collect();
     let none = get_workspace_patterns(&junk_only, None, now);
     assert_eq!(none["avgCacheHitRate"], "n/a", "{none}");
+}
+
+#[test]
+fn find_relevant_context_reproduces_the_ts_oracle_exactly() {
+    let o = oracle();
+    let (sessions, now) = (o["sessions"].as_array().unwrap(), o["nowMs"].as_f64().unwrap());
+    for (case, exp) in o["relevantCases"].as_array().unwrap().iter().zip(o["relevantResults"].as_array().unwrap()) {
+        let name = case["name"].as_str().unwrap();
+        let got = agentlens_core::mcp_tools::find_relevant_context(sessions, case["args"]["task"].as_str().unwrap(), now);
+        assert_eq!(keys(&got), keys(exp), "{name}: key set/ORDER differs");
+        for (k, ev) in exp.as_object().unwrap() {
+            assert_eq!(&got[k], ev, "{name}.{k}");
+        }
+    }
+}
+
+/// The task tokeniser has two rules that decide whether the tool answers anything useful. Words of
+/// 3 characters or FEWER are dropped, because "the"/"for"/"and" match every session ever recorded
+/// and would make every task look similar to everything. And `/`, `_`, `.` SURVIVE the blanking, so
+/// `src/logReader.ts` stays ONE word — shattering it into `src`, `log`, `reader`, `ts` would match
+/// on the extension.
+#[test]
+fn the_task_tokeniser_drops_short_words_and_keeps_paths_whole() {
+    let o = oracle();
+    let (sessions, now) = (o["sessions"].as_array().unwrap(), o["nowMs"].as_f64().unwrap());
+    let short = agentlens_core::mcp_tools::find_relevant_context(sessions, "do it now", now);
+    assert!(short["message"].as_str().unwrap().contains("too short"), "{short}");
+    // A path matches the sessions that mention THAT path…
+    let path = agentlens_core::mcp_tools::find_relevant_context(sessions, "fix src/logReader.ts parsing", now);
+    assert_eq!(path["matchedSessions"], 2, "{path}");
+    // …and punctuation around real words is blanked rather than glued on.
+    let punct = agentlens_core::mcp_tools::find_relevant_context(sessions, "refactor!!! the... loader???", now);
+    let plain = agentlens_core::mcp_tools::find_relevant_context(sessions, "refactor the loader", now);
+    assert_eq!(punct["matchedSessions"], plain["matchedSessions"], "punctuation must not change the match: {punct} vs {plain}");
+}
+
+#[test]
+fn get_efficiency_report_reproduces_the_ts_oracle_exactly() {
+    let o = oracle();
+    let (sessions, now) = (o["sessions"].as_array().unwrap(), o["nowMs"].as_f64().unwrap());
+    for (case, exp) in o["efficiencyCases"].as_array().unwrap().iter().zip(o["efficiencyResults"].as_array().unwrap()) {
+        let name = case["name"].as_str().unwrap();
+        let got = agentlens_core::mcp_tools::get_efficiency_report(sessions, case["args"].get("days").and_then(Value::as_f64), now);
+        assert_eq!(keys(&got), keys(exp), "{name}: key set/ORDER differs");
+        for (k, ev) in exp.as_object().unwrap() {
+            assert_eq!(&got[k], ev, "{name}.{k}");
+        }
+    }
+}
+
+/// The cost trend has a ±15% DEAD BAND, and an empty first half is 'no data' rather than an
+/// infinite increase. Both matter for the same reason: a trend line that moves on ordinary variance,
+/// or that reports a rise when there was nothing to rise from, is noise a reader will act on.
+#[test]
+fn the_cost_trend_has_a_dead_band_and_refuses_to_divide_by_nothing() {
+    let o = oracle();
+    let (sessions, now) = (o["sessions"].as_array().unwrap(), o["nowMs"].as_f64().unwrap());
+    // 30 days: the fixture's 20-day-old session fills the first half, so a real comparison happens.
+    let real = agentlens_core::mcp_tools::get_efficiency_report(sessions, None, now);
+    assert_ne!(real["costTrend"], "no data", "the fixture must exercise a real comparison: {real}");
+    // 90 days: the midpoint moves to 45 days back, leaving the first half EMPTY.
+    let no_first_half = agentlens_core::mcp_tools::get_efficiency_report(sessions, Some(90.0), now);
+    assert_eq!(no_first_half["costTrend"], "no data", "no first half means no ratio: {no_first_half}");
+    assert_eq!(real["sessionCount"], no_first_half["sessionCount"], "and the same sessions are in BOTH windows — only the split moved");
+}
+
+/// `n >= 2` keeps a single session out of the ranking: one run is an anecdote, not a measurement.
+/// The order is ASCENDING by cost, because the question the ranking answers is "what should I use",
+/// not "what was most expensive".
+#[test]
+fn the_agent_ranking_needs_two_sessions_and_ranks_cheapest_first() {
+    let o = oracle();
+    let (sessions, now) = (o["sessions"].as_array().unwrap(), o["nowMs"].as_f64().unwrap());
+    let got = agentlens_core::mcp_tools::get_efficiency_report(sessions, None, now);
+    let ranking = got["agentRanking"].as_array().unwrap();
+    for row in ranking {
+        assert!(row["sessions"].as_f64().unwrap() >= 2.0, "a single-session pair must not rank: {row}");
+    }
+    let costs: Vec<f64> = ranking.iter().map(|r| r["avgCostUsd"].as_f64().unwrap()).collect();
+    let mut sorted = costs.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    assert_eq!(costs, sorted, "cheapest first: {ranking:?}");
+    // The fixture must actually contain a pair that ranks, or this proves nothing.
+    assert!(!ranking.is_empty(), "{got}");
 }

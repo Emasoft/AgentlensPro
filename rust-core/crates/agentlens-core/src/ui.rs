@@ -1223,7 +1223,7 @@ async fn handle(
                         let payload = crate::mcp_tools::get_window_budget(Some(&status), Some(&account), s("accountId").as_deref());
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
-                    "get_recent_sessions" | "get_workspace_patterns" => {
+                    "get_recent_sessions" | "get_workspace_patterns" | "find_relevant_context" | "get_efficiency_report" => {
                         let now = crate::now_ms() as f64;
                         let (sessions, gaps) = {
                             let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
@@ -1247,8 +1247,12 @@ async fn handle(
                                 now,
                             );
                             serde_json::json!({ "sessions": rows, "collectorGaps": gaps })
-                        } else {
+                        } else if name == "get_workspace_patterns" {
                             crate::mcp_tools::get_workspace_patterns(&sessions, args.get("days").and_then(Value::as_f64), now)
+                        } else if name == "find_relevant_context" {
+                            crate::mcp_tools::find_relevant_context(&sessions, s("task").as_deref().unwrap_or(""), now)
+                        } else {
+                            crate::mcp_tools::get_efficiency_report(&sessions, args.get("days").and_then(Value::as_f64), now)
                         };
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
