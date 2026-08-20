@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T12:52:10+0200
+updated: 2026-08-20T13:06:10+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -643,14 +643,36 @@ release-via: publish
   calibrate's refuse-band and fold-into-FIRST-largest residual are verbatim.
   `estimate_tokens_from_bytes` is RE-EXPORTED from generated_files (layout divergence from the
   TS, stated in the module head) rather than redefined. 114/114, clippy 28, identities green.
-- **NEXT (P4w.1b(ii)): `raw_body_context.rs`.** STILL UNREAD and must be read first:
-  `src/rawBodyContext.ts` lines ~266-378 — the tail of the messages loop in
-  `buildCallContextFromJson` (the content-array branch: text / tool_use / tool_result / thinking
-  / image blocks, and where `IMAGE_BLOCK_LABEL_PREFIX` is applied) plus `buildCallContext` (the
-  file-reading wrapper with the 64MB `MAX_RAW_BODY_BYTES` gate and the `uncap` option) and
-  `resolveCallContext` (freeze row 35's engine). Lines 1-266 ARE read and their contract is
-  captured above. Port target: pure `build_call_context_from_json` over a parsed Value +
-  `parse_user_id`, then the file wrapper, then rows 36-37.
+- **P4w.1b(ii) DONE (commit eeb9f31): `raw_body_context.rs`.** `buildCallContextFromJson` +
+  `parseUserId` ported. **`src/rawBodyContext.ts` is now READ IN FULL (all 378 lines)** — no
+  revisit needed for the remaining wrappers, whose contracts are captured in the next bullet.
+  Oracle `gen-rawbodyctx-expected.mjs` → 9 user_id + 38 body cases, all DISCRIMINATORS.
+  Three contract points a plain reading gets WRONG, each now pinned by the oracle:
+  (a) `JSON.stringify(tu.input ?? {})` is NULLISH — an explicit `"input": null` becomes `{}`,
+  NOT the string "null"; the first cut of the port passed Value::Null straight through, which
+  shifts that block's text+bytes+tokens. (b) `src?.media_type ?? 'unknown'` is nullish AND
+  template-interpolated, so a non-string media_type STRINGIFIES into the label —
+  `as_str().unwrap_or("unknown")` silently relabels it. (c) tokens counted on FULL text, cap
+  applied AFTER, cap counts UTF-16 CODE UNITS (oracle's 20050-char multi-byte case: tokens 4266
+  either way, bytes 40000 capped vs 40100 uncapped).
+  **Key order is asserted EXPLICITLY, never via `assert_eq!` on two Values** — under
+  `preserve_order` a `Value::Object` is an IndexMap whose `PartialEq` IGNORES order, so a value
+  comparison passes on a reordered wire object and leaves the ordering contract untested. That
+  trap applies to EVERY parity test in this port, not just this one.
+  Non-vacuity PROVEN: mutating fix (a) back out fails at `case[24].blocks[2].bytes`.
+  116/116 (+2), clippy 28 = baseline, identities green, alcore boots clean.
+- **NEXT (P4w.1c): the file wrapper + rows 36-37.** Two thin pieces of rawBodyContext.ts remain,
+  both already read: `buildCallContext(path, opts)` — `stat` → reject non-file or
+  `size > MAX_RAW_BODY_BYTES` (64MB) → read utf8 → `JSON.parse` → delegate; EVERY failure
+  returns null, never throws. And `resolveCallContext(sessionId, sel)` (freeze row 35) —
+  `registry.resolveRequest` → `bodyRef` ? file : `inlineBody` ? parse : null, then FOUR
+  post-assignments on the result: `ctx.sessionId = sessionId` (overwrite), `ctx.requestId =
+  sel.requestId ?? ptr.requestId ?? ctx.requestId`, `if (!ctx.model) ctx.model = ptr.model`
+  (falsy, not nullish), and `if (ctx.accountUuid) registry.recordAccount(...)` — the
+  TRDD-BURNWDGT backfill that makes account attribution work for sessions whose OTEL events
+  never carried the attribute. NOTE those add `requestId` to the wire object AFTER `truncated`,
+  so the key order of a resolved context differs from a freshly-built one. Then
+  `context_composition_index.rs` + routes 36-37.
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
