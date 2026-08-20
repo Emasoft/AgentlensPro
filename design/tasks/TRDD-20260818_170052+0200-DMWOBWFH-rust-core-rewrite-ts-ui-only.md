@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T16:53:16+0200
+updated: 2026-08-20T17:20:53+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -915,12 +915,24 @@ release-via: publish
   comparing rankings); the 10x band DOWN-WEIGHTS to 0.2, never excludes; matched:0 carries NO
   numbers and names the active type filter; zero-traffic cards excluded from every ranking; the
   headline estimates are FLAT duplicates so they survive the lean shaper.
-- **NEXT (P4x.2d): port ENGINES.** 31 tools remain, all needing a real engine. SIZE FIRST.
-  Candidate order: `runtimeInventory.ts` (176 ln), `skillAttribution.ts` (180 ln),
-  `loadedPluginVersions.ts` (274 ln), `cacheEventLog.ts` (479 ln), `subscriptionUsage.ts` (797 ln —
-  also the TTL-regime oracle; NETWORK: calls Anthropic's usage endpoint, so the oracle must stub).
-  Heavyweights (forensics / timeline / investigator / sql) last. **Every new arm must end in
-  `tool_ok_lean`, never `mcp::tool_ok`.** The dispatch cases are
+- **P4x.2d STARTED (commit 41a2bdc): `runtimeInventory` ported + `get_runtime_inventory`. 23 of
+  53.** First real ENGINE port. **A BUG I WROTE AND THE FIXTURE CAUGHT:** hand-rolling the ps row
+  parse as `splitn(5, char::is_whitespace)` to avoid a Regex — ps pads columns with RUNS of spaces,
+  so it split into empty fields and dropped EVERY row; the report would have returned zero
+  instances on any real machine while looking healthy. Use the TS regex verbatim.
+  Fixture exercises: argv0 BASENAME matching (every CC-launched process has `~/.claude/…` in its
+  args, so a whole-line match multiplies the apparent footprint); a NESTED claude FOLDING into its
+  parent; a ppid CYCLE (the hop cap + BFS seen-set — without them the test HANGS rather than
+  fails); an orphan with an absent parent; header/blank/torn lines. Empty snapshot = valid
+  zero-instance report, not an error.
+  **Oracle gotcha:** `checkedAtIso` uses `new Date()`, which reads the system clock DIRECTLY —
+  stubbing `Date.now` alone leaves it drifting. The generator replaces the whole `Date` constructor.
+  Live smoke on the REAL process table: 22 instances, 24.7 GB tree RSS, cwd via lsof, version found.
+- **NEXT (P4x.2d continued): port ENGINES.** 30 tools remain. SIZE FIRST. Order:
+  `skillAttribution.ts` (180 ln), `loadedPluginVersions.ts` (274 ln), `cacheEventLog.ts` (479 ln),
+  `subscriptionUsage.ts` (797 ln — also the TTL-regime oracle; NETWORK: calls Anthropic's usage
+  endpoint, so the oracle must stub). Heavyweights (forensics / timeline / investigator / sql)
+  last. **Every new arm must end in `tool_ok_lean`, never `mcp::tool_ok`.** The dispatch cases are
   `src/mcpServer.ts` ~3434-3890 and most shapers sit at 1617-3390 (largely UNREAD).
   `get_context_composition` (2438), `get_context_history` (2325), `get_conversation` (2391) — all
   three shapers are in `src/mcpServer.ts` and UNREAD except their heads; each has `turn` / range
