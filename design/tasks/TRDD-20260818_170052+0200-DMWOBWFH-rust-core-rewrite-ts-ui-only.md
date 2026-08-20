@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T13:43:05+0200
+updated: 2026-08-20T13:53:28+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -717,12 +717,27 @@ release-via: publish
   attachment is dropped, and the excerpt budget `max(1, Number(env) || 16)` treats ZERO as unset.
   `sources` is an IndexMap (stable-sort tie order); the `+N more sources` fold carries NO excerpt.
   132/132, clippy 28, identities green.
-- **NEXT (P4w.2b/2c): rows 33-34** — `src/contextHistory.ts` (383) and `src/conversation.ts` (354),
-  both STILL UNREAD. Both import THREE things from contextComposition that are already ported and
-  must NOT be re-implemented: `classify_attachment` (the ONE taxonomy — TRDD-B22NYTOY de-duped an
-  identical private copy that had lived in contextHistory), `find_session_file`, and
-  `resolve_logged_ancestor`. Same route shape as row 32: `?parent=`, `{<name>: obj|null}`, always
-  200. Fixtures + the CLAUDE_CONFIG_DIR harness are in place and reusable.
+- **P4w.2b DONE (commit 542b240): `context_history.rs` + FREEZE ROW 33 LIVE.**
+  `src/contextHistory.ts` READ IN FULL. **The CALIBRATION ASYMMETRY is the module's core decision:**
+  OUTPUT blocks fully account for the turn's output → calibrate at ANY scale; INPUT blocks are only
+  the NEW input, legitimately excluding the cached prefix and implicit system prompt → target is
+  `input + cacheCreate` (**never cacheRead**, the reused prefix) and only inside a **[0.5, 2]** band;
+  outside it they KEEP the raw estimate, because scaling would misattribute INVISIBLE tokens onto
+  visible blocks. **isMeta is NOT postCompact** — the old `isCompactSummary || isMeta` branch
+  mislabeled 300+ cron pings as one ~268k postCompact aggregate (TRDD-W0RRL2FZ). Also mirrored: an
+  EMPTY `isCompactSummary` summary FALLS THROUGH to the isMeta branch (no `continue`), `<synthetic>`
+  model ignored, duplicate `message.id` opens no new step, tool_result routes three ways.
+  `hash_text` ports the 32-bit JS arithmetic but only its EQUALITY behaviour is wire-observable —
+  the value never leaves the process. 136/136, clippy 28, identities green.
+- **FIXTURE COUPLING — read before adding any transcript.** `list_session_file_ids` indexes the
+  WHOLE shared `tests/fixtures/claude-home/` tree, so ANY slice that adds a `.jsonl` there changes
+  the row-32 oracle's expected set and fails `ctxcomposition_parity`. That is a STALE ORACLE, not a
+  port bug (the assertion message now says so). Fix: re-run `gen-ctxcomposition-expected.mjs`.
+- **NEXT (P4w.2c): row 34** — `src/conversation.ts` (354), STILL UNREAD. Imports the same three
+  already-ported helpers from `context_composition`; never re-implement them. Route shape identical
+  to rows 32-33: `?parent=`, `{conversation: obj|null}`, always 200, spawn_blocking, Env cloned from
+  under the lock. The CLAUDE_CONFIG_DIR harness and cmp/key-order test scaffolding are reusable
+  verbatim from `ctxhistory_parity.rs`.
 - **THEN P4w.3 row 35**
   (`resolveCallContext`, contract two bullets below). After those the HTTP §1 table is complete.
   `imageReport` / `findResidentBlobs` / `queryBlocks` remain unported — MCP-surface only, and the
