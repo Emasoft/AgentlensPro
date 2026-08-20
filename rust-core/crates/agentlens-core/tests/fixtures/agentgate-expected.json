@@ -1,0 +1,2489 @@
+{
+ "cases": [
+  {
+   "name": "quiet allow",
+   "fn": "evaluateAgentGate",
+   "toolInput": null,
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": null,
+     "idleMs": null
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 0,
+    "spawners": [],
+    "lastStopFailureMs": null,
+    "stall": null,
+    "stallRecovered": false,
+    "thrash": null,
+    "premiumShare": null,
+    "premiumModel": null,
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {}
+   }
+  },
+  {
+   "name": "thrash fork deny",
+   "fn": "evaluateAgentGate",
+   "toolInput": {
+    "subagent_type": "fork",
+    "prompt": "do x"
+   },
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": null,
+     "idleMs": null
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 0,
+    "spawners": [],
+    "lastStopFailureMs": null,
+    "stall": null,
+    "stallRecovered": false,
+    "thrash": {
+     "active": true,
+     "count": 6,
+     "rebilledTokens": 1800000,
+     "model": "claude-fable-5",
+     "windowMs": 300000,
+     "suspects": [
+      {
+       "file": "r1.request.json",
+       "bytes": 1100000,
+       "model": "claude-fable-5"
+      }
+     ],
+     "topSource": {
+      "session": "sess-caller-1",
+      "count": 6,
+      "rebilledTokens": 1800000
+     },
+     "unattributed": {
+      "count": 0,
+      "rebilledTokens": 0
+     },
+     "coldStartSessions": 0,
+     "coldStartRebilledTokens": 0
+    },
+    "premiumShare": null,
+    "premiumModel": null,
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {}
+   }
+  },
+  {
+   "name": "thrash fresh warn",
+   "fn": "evaluateAgentGate",
+   "toolInput": {
+    "subagent_type": "explore",
+    "prompt": "scan"
+   },
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": null,
+     "idleMs": null
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 0,
+    "spawners": [],
+    "lastStopFailureMs": null,
+    "stall": null,
+    "stallRecovered": false,
+    "thrash": {
+     "active": true,
+     "count": 6,
+     "rebilledTokens": 1800000,
+     "model": "claude-fable-5",
+     "windowMs": 300000,
+     "suspects": [
+      {
+       "file": "r1.request.json",
+       "bytes": 1100000,
+       "model": "claude-fable-5"
+      }
+     ],
+     "topSource": {
+      "session": "sess-caller-1",
+      "count": 6,
+      "rebilledTokens": 1800000
+     },
+     "unattributed": {
+      "count": 0,
+      "rebilledTokens": 0
+     },
+     "coldStartSessions": 0,
+     "coldStartRebilledTokens": 0
+    },
+    "premiumShare": null,
+    "premiumModel": null,
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {}
+   }
+  },
+  {
+   "name": "thrash keepwarm advisory",
+   "fn": "evaluateAgentGate",
+   "toolInput": {
+    "subagent_type": "fork",
+    "prompt": "keep-warm ping"
+   },
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": null,
+     "idleMs": null
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 0,
+    "spawners": [],
+    "lastStopFailureMs": null,
+    "stall": null,
+    "stallRecovered": false,
+    "thrash": {
+     "active": true,
+     "count": 6,
+     "rebilledTokens": 1800000,
+     "model": "claude-fable-5",
+     "windowMs": 300000,
+     "suspects": [
+      {
+       "file": "r1.request.json",
+       "bytes": 1100000,
+       "model": "claude-fable-5"
+      }
+     ],
+     "topSource": {
+      "session": "sess-caller-1",
+      "count": 6,
+      "rebilledTokens": 1800000
+     },
+     "unattributed": {
+      "count": 0,
+      "rebilledTokens": 0
+     },
+     "coldStartSessions": 0,
+     "coldStartRebilledTokens": 0
+    },
+    "premiumShare": null,
+    "premiumModel": null,
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {}
+   }
+  },
+  {
+   "name": "thrash no-model no-suspects",
+   "fn": "evaluateAgentGate",
+   "toolInput": {
+    "subagent_type": "fork"
+   },
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": null,
+     "idleMs": null
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 0,
+    "spawners": [],
+    "lastStopFailureMs": null,
+    "stall": null,
+    "stallRecovered": false,
+    "thrash": {
+     "active": true,
+     "count": 6,
+     "rebilledTokens": 1800000,
+     "model": null,
+     "windowMs": 300000,
+     "suspects": [],
+     "topSource": {
+      "session": "sess-caller-1",
+      "count": 6,
+      "rebilledTokens": 1800000
+     },
+     "unattributed": {
+      "count": 0,
+      "rebilledTokens": 0
+     },
+     "coldStartSessions": 0,
+     "coldStartRebilledTokens": 0
+    },
+    "premiumShare": null,
+    "premiumModel": null,
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {}
+   }
+  },
+  {
+   "name": "runaway deny",
+   "fn": "evaluateAgentGate",
+   "toolInput": {
+    "subagent_type": "explore"
+   },
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": null,
+     "idleMs": null
+    },
+    "startsLast60s": 9,
+    "startsLast2min": 9,
+    "spawners": [
+     {
+      "session": "sess-caller-1",
+      "cwd": "/tmp/projA",
+      "count": 6,
+      "agentTypes": [
+       "explore×3",
+       "fork"
+      ]
+     },
+     {
+      "session": "other-sess",
+      "cwd": "/tmp/other",
+      "count": 3,
+      "agentTypes": [
+       "explore×3"
+      ]
+     }
+    ],
+    "lastStopFailureMs": null,
+    "stall": null,
+    "stallRecovered": false,
+    "thrash": null,
+    "premiumShare": null,
+    "premiumModel": null,
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {}
+   }
+  },
+  {
+   "name": "runaway warn-mode downgrade",
+   "fn": "evaluateAgentGate",
+   "toolInput": {},
+   "state": {
+    "now": 1787000000000,
+    "mode": "warn",
+    "parent": {
+     "contextTokens": null,
+     "idleMs": null
+    },
+    "startsLast60s": 9,
+    "startsLast2min": 0,
+    "spawners": [
+     {
+      "session": "sess-caller-1",
+      "cwd": "/tmp/projA",
+      "count": 6,
+      "agentTypes": [
+       "explore×3",
+       "fork"
+      ]
+     },
+     {
+      "session": "other-sess",
+      "cwd": "/tmp/other",
+      "count": 3,
+      "agentTypes": [
+       "explore×3"
+      ]
+     }
+    ],
+    "lastStopFailureMs": null,
+    "stall": null,
+    "stallRecovered": false,
+    "thrash": null,
+    "premiumShare": null,
+    "premiumModel": null,
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {}
+   }
+  },
+  {
+   "name": "cold-resume fanout deny own stall",
+   "fn": "evaluateAgentGate",
+   "toolInput": {},
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": null,
+     "idleMs": null
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 1,
+    "spawners": [],
+    "lastStopFailureMs": 1786999880000,
+    "stall": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "stallRecovered": false,
+    "thrash": null,
+    "premiumShare": null,
+    "premiumModel": null,
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {}
+   }
+  },
+  {
+   "name": "cold-resume disarmed by warm evidence",
+   "fn": "evaluateAgentGate",
+   "toolInput": {},
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": null,
+     "idleMs": null
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 1,
+    "spawners": [],
+    "lastStopFailureMs": 1786999880000,
+    "stall": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "stallRecovered": true,
+    "thrash": null,
+    "premiumShare": null,
+    "premiumModel": null,
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {}
+   }
+  },
+  {
+   "name": "cold-resume foreign stall unnamed",
+   "fn": "evaluateAgentGate",
+   "toolInput": {},
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": null,
+     "idleMs": null
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 2,
+    "spawners": [],
+    "lastStopFailureMs": 1786999460000,
+    "stall": {
+     "session": "zzz-other",
+     "cwd": "/tmp/elsewhere"
+    },
+    "stallRecovered": false,
+    "thrash": null,
+    "premiumShare": null,
+    "premiumModel": null,
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {}
+   }
+  },
+  {
+   "name": "cold-resume stall via worktree session match",
+   "fn": "evaluateAgentGate",
+   "toolInput": {},
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": null,
+     "idleMs": null
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 1,
+    "spawners": [],
+    "lastStopFailureMs": 1786999940000,
+    "stall": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA/.claude/worktrees/x"
+    },
+    "stallRecovered": false,
+    "thrash": null,
+    "premiumShare": null,
+    "premiumModel": null,
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {}
+   }
+  },
+  {
+   "name": "fork storm 1h ttl",
+   "fn": "evaluateAgentGate",
+   "toolInput": {
+    "subagent_type": "fork"
+   },
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": 350000,
+     "idleMs": 4000000
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 3,
+    "spawners": [
+     {
+      "session": "sess-caller-1",
+      "cwd": "/tmp/projA",
+      "count": 6,
+      "agentTypes": [
+       "explore×3",
+       "fork"
+      ]
+     },
+     {
+      "session": "other-sess",
+      "cwd": "/tmp/other",
+      "count": 3,
+      "agentTypes": [
+       "explore×3"
+      ]
+     }
+    ],
+    "lastStopFailureMs": null,
+    "stall": null,
+    "stallRecovered": false,
+    "thrash": null,
+    "premiumShare": null,
+    "premiumModel": null,
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {}
+   }
+  },
+  {
+   "name": "warm 1h ttl is only fat",
+   "fn": "evaluateAgentGate",
+   "toolInput": {
+    "subagent_type": "fork"
+   },
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": 350000,
+     "idleMs": 400000
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 3,
+    "spawners": [],
+    "lastStopFailureMs": null,
+    "stall": null,
+    "stallRecovered": false,
+    "thrash": null,
+    "premiumShare": null,
+    "premiumModel": null,
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {}
+   }
+  },
+  {
+   "name": "explicit coldIdleMs override beats ttl",
+   "fn": "evaluateAgentGate",
+   "toolInput": {
+    "subagent_type": "fork"
+   },
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": 350000,
+     "idleMs": 400000
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 3,
+    "spawners": [],
+    "lastStopFailureMs": null,
+    "stall": null,
+    "stallRecovered": false,
+    "thrash": null,
+    "premiumShare": null,
+    "premiumModel": null,
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {
+     "coldIdleMs": 330000
+    }
+   }
+  },
+  {
+   "name": "cold fork single",
+   "fn": "evaluateAgentGate",
+   "toolInput": {
+    "subagent_type": "fork"
+   },
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": 350000,
+     "idleMs": 4000000
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 1,
+    "spawners": [],
+    "lastStopFailureMs": null,
+    "stall": null,
+    "stallRecovered": false,
+    "thrash": null,
+    "premiumShare": null,
+    "premiumModel": null,
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {}
+   }
+  },
+  {
+   "name": "fork fat parent warm",
+   "fn": "evaluateAgentGate",
+   "toolInput": {
+    "subagent_type": "fork"
+   },
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": 350000,
+     "idleMs": 10000
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 0,
+    "spawners": [],
+    "lastStopFailureMs": null,
+    "stall": null,
+    "stallRecovered": false,
+    "thrash": null,
+    "premiumShare": null,
+    "premiumModel": null,
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {}
+   }
+  },
+  {
+   "name": "fork fat via threshold override",
+   "fn": "evaluateAgentGate",
+   "toolInput": {
+    "subagent_type": "fork"
+   },
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": 150000,
+     "idleMs": 10000
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 0,
+    "spawners": [],
+    "lastStopFailureMs": null,
+    "stall": null,
+    "stallRecovered": false,
+    "thrash": null,
+    "premiumShare": null,
+    "premiumModel": null,
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {
+     "forkFatTokens": 100000
+    }
+   }
+  },
+  {
+   "name": "fanout headsup premium hint",
+   "fn": "evaluateAgentGate",
+   "toolInput": {
+    "subagent_type": "explore"
+   },
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": null,
+     "idleMs": null
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 6,
+    "spawners": [
+     {
+      "session": "sess-caller-1",
+      "cwd": "/tmp/projA",
+      "count": 6,
+      "agentTypes": [
+       "explore×3",
+       "fork"
+      ]
+     },
+     {
+      "session": "other-sess",
+      "cwd": "/tmp/other",
+      "count": 3,
+      "agentTypes": [
+       "explore×3"
+      ]
+     }
+    ],
+    "lastStopFailureMs": null,
+    "stall": null,
+    "stallRecovered": false,
+    "thrash": null,
+    "premiumShare": 0.8,
+    "premiumModel": "claude-opus-5",
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {}
+   }
+  },
+  {
+   "name": "fanout headsup model pinned",
+   "fn": "evaluateAgentGate",
+   "toolInput": {
+    "subagent_type": "explore",
+    "model": "sonnet"
+   },
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": null,
+     "idleMs": null
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 6,
+    "spawners": [
+     {
+      "session": "sess-caller-1",
+      "cwd": "/tmp/projA",
+      "count": 6,
+      "agentTypes": [
+       "explore×3",
+       "fork"
+      ]
+     },
+     {
+      "session": "other-sess",
+      "cwd": "/tmp/other",
+      "count": 3,
+      "agentTypes": [
+       "explore×3"
+      ]
+     }
+    ],
+    "lastStopFailureMs": null,
+    "stall": null,
+    "stallRecovered": false,
+    "thrash": null,
+    "premiumShare": 0.8,
+    "premiumModel": "claude-opus-5",
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {}
+   }
+  },
+  {
+   "name": "fanout unattributable stays silent",
+   "fn": "evaluateAgentGate",
+   "toolInput": {},
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": null,
+     "idleMs": null
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 9,
+    "spawners": [
+     {
+      "session": "sess-caller-1",
+      "cwd": "/tmp/projA",
+      "count": 6,
+      "agentTypes": [
+       "explore×3",
+       "fork"
+      ]
+     },
+     {
+      "session": "other-sess",
+      "cwd": "/tmp/other",
+      "count": 3,
+      "agentTypes": [
+       "explore×3"
+      ]
+     }
+    ],
+    "lastStopFailureMs": null,
+    "stall": null,
+    "stallRecovered": false,
+    "thrash": null,
+    "premiumShare": null,
+    "premiumModel": null,
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": null,
+     "cwd": null
+    },
+    "thresholds": {}
+   }
+  },
+  {
+   "name": "sessionless spawner never matches ? caller",
+   "fn": "evaluateAgentGate",
+   "toolInput": {},
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": null,
+     "idleMs": null
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 9,
+    "spawners": [
+     {
+      "session": "?",
+      "cwd": "/tmp/projB",
+      "count": 9,
+      "agentTypes": [
+       "explore"
+      ]
+     }
+    ],
+    "lastStopFailureMs": null,
+    "stall": null,
+    "stallRecovered": false,
+    "thrash": null,
+    "premiumShare": null,
+    "premiumModel": null,
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "?",
+     "cwd": null
+    },
+    "thresholds": {}
+   }
+  },
+  {
+   "name": "keepwarm skips warn tier",
+   "fn": "evaluateAgentGate",
+   "toolInput": {
+    "prompt": "keepwarm pinger"
+   },
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": 350000,
+     "idleMs": 4000000
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 0,
+    "spawners": [],
+    "lastStopFailureMs": null,
+    "stall": null,
+    "stallRecovered": false,
+    "thrash": null,
+    "premiumShare": null,
+    "premiumModel": null,
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {}
+   }
+  },
+  {
+   "name": "assumed ttl cold fork",
+   "fn": "evaluateAgentGate",
+   "toolInput": {
+    "subagent_type": "fork"
+   },
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": 350000,
+     "idleMs": 400000
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 0,
+    "spawners": [],
+    "lastStopFailureMs": null,
+    "stall": null,
+    "stallRecovered": false,
+    "thrash": null,
+    "premiumShare": null,
+    "premiumModel": null,
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {}
+   }
+  },
+  {
+   "name": "message live target always passes",
+   "fn": "evaluateSendMessageGate",
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": null,
+     "idleMs": null
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 0,
+    "spawners": [],
+    "lastStopFailureMs": null,
+    "stall": null,
+    "stallRecovered": false,
+    "thrash": {
+     "active": true,
+     "count": 6,
+     "rebilledTokens": 1800000,
+     "model": "claude-fable-5",
+     "windowMs": 300000,
+     "suspects": [
+      {
+       "file": "r1.request.json",
+       "bytes": 1100000,
+       "model": "claude-fable-5"
+      }
+     ],
+     "topSource": {
+      "session": "sess-caller-1",
+      "count": 6,
+      "rebilledTokens": 1800000
+     },
+     "unattributed": {
+      "count": 0,
+      "rebilledTokens": 0
+     },
+     "coldStartSessions": 0,
+     "coldStartRebilledTokens": 0
+    },
+    "premiumShare": null,
+    "premiumModel": null,
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {},
+    "messageTarget": "agent-abc123",
+    "targetLiveness": "live"
+   }
+  },
+  {
+   "name": "message dead thrash deny",
+   "fn": "evaluateSendMessageGate",
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": null,
+     "idleMs": null
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 0,
+    "spawners": [],
+    "lastStopFailureMs": null,
+    "stall": null,
+    "stallRecovered": false,
+    "thrash": {
+     "active": true,
+     "count": 6,
+     "rebilledTokens": 1800000,
+     "model": "claude-fable-5",
+     "windowMs": 300000,
+     "suspects": [
+      {
+       "file": "r1.request.json",
+       "bytes": 1100000,
+       "model": "claude-fable-5"
+      }
+     ],
+     "topSource": {
+      "session": "sess-caller-1",
+      "count": 6,
+      "rebilledTokens": 1800000
+     },
+     "unattributed": {
+      "count": 0,
+      "rebilledTokens": 0
+     },
+     "coldStartSessions": 0,
+     "coldStartRebilledTokens": 0
+    },
+    "premiumShare": null,
+    "premiumModel": null,
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {},
+    "messageTarget": "agent-abc123",
+    "targetLiveness": "dead"
+   }
+  },
+  {
+   "name": "message unknown thrash warn downgrade",
+   "fn": "evaluateSendMessageGate",
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": null,
+     "idleMs": null
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 0,
+    "spawners": [],
+    "lastStopFailureMs": null,
+    "stall": null,
+    "stallRecovered": false,
+    "thrash": {
+     "active": true,
+     "count": 6,
+     "rebilledTokens": 1800000,
+     "model": "claude-fable-5",
+     "windowMs": 300000,
+     "suspects": [
+      {
+       "file": "r1.request.json",
+       "bytes": 1100000,
+       "model": "claude-fable-5"
+      }
+     ],
+     "topSource": {
+      "session": "sess-caller-1",
+      "count": 6,
+      "rebilledTokens": 1800000
+     },
+     "unattributed": {
+      "count": 0,
+      "rebilledTokens": 0
+     },
+     "coldStartSessions": 0,
+     "coldStartRebilledTokens": 0
+    },
+    "premiumShare": null,
+    "premiumModel": null,
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {},
+    "messageTarget": "worker",
+    "targetLiveness": "unknown"
+   }
+  },
+  {
+   "name": "message dead cold-resume deny",
+   "fn": "evaluateSendMessageGate",
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": null,
+     "idleMs": null
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 0,
+    "spawners": [],
+    "lastStopFailureMs": 1786999760000,
+    "stall": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "stallRecovered": false,
+    "thrash": null,
+    "premiumShare": null,
+    "premiumModel": null,
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {},
+    "messageTarget": "agent-abc123",
+    "targetLiveness": "dead"
+   }
+  },
+  {
+   "name": "message quiet dead allow",
+   "fn": "evaluateSendMessageGate",
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": null,
+     "idleMs": null
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 0,
+    "spawners": [],
+    "lastStopFailureMs": null,
+    "stall": null,
+    "stallRecovered": false,
+    "thrash": null,
+    "premiumShare": null,
+    "premiumModel": null,
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {},
+    "messageTarget": "agent-abc123",
+    "targetLiveness": "dead"
+   }
+  },
+  {
+   "name": "message dead thrash warn-mode",
+   "fn": "evaluateSendMessageGate",
+   "state": {
+    "now": 1787000000000,
+    "mode": "warn",
+    "parent": {
+     "contextTokens": null,
+     "idleMs": null
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 0,
+    "spawners": [],
+    "lastStopFailureMs": null,
+    "stall": null,
+    "stallRecovered": false,
+    "thrash": {
+     "active": true,
+     "count": 6,
+     "rebilledTokens": 1800000,
+     "model": "claude-fable-5",
+     "windowMs": 300000,
+     "suspects": [
+      {
+       "file": "r1.request.json",
+       "bytes": 1100000,
+       "model": "claude-fable-5"
+      }
+     ],
+     "topSource": {
+      "session": "sess-caller-1",
+      "count": 6,
+      "rebilledTokens": 1800000
+     },
+     "unattributed": {
+      "count": 0,
+      "rebilledTokens": 0
+     },
+     "coldStartSessions": 0,
+     "coldStartRebilledTokens": 0
+    },
+    "premiumShare": null,
+    "premiumModel": null,
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {},
+    "messageTarget": "agent-abc123",
+    "targetLiveness": "dead"
+   }
+  },
+  {
+   "name": "message no target no liveness",
+   "fn": "evaluateSendMessageGate",
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": null,
+     "idleMs": null
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 0,
+    "spawners": [],
+    "lastStopFailureMs": null,
+    "stall": null,
+    "stallRecovered": false,
+    "thrash": {
+     "active": true,
+     "count": 6,
+     "rebilledTokens": 1800000,
+     "model": "claude-fable-5",
+     "windowMs": 300000,
+     "suspects": [
+      {
+       "file": "r1.request.json",
+       "bytes": 1100000,
+       "model": "claude-fable-5"
+      }
+     ],
+     "topSource": {
+      "session": "sess-caller-1",
+      "count": 6,
+      "rebilledTokens": 1800000
+     },
+     "unattributed": {
+      "count": 0,
+      "rebilledTokens": 0
+     },
+     "coldStartSessions": 0,
+     "coldStartRebilledTokens": 0
+    },
+    "premiumShare": null,
+    "premiumModel": null,
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {}
+   }
+  },
+  {
+   "name": "img non-image allow",
+   "fn": "evaluateImageReadGate",
+   "toolInput": {
+    "file_path": "/a/b.txt"
+   },
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": 400000,
+     "idleMs": 0
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 0,
+    "spawners": [],
+    "lastStopFailureMs": null,
+    "stall": null,
+    "stallRecovered": false,
+    "thrash": null,
+    "premiumShare": null,
+    "premiumModel": null,
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {}
+   }
+  },
+  {
+   "name": "img svg deliberately allowed",
+   "fn": "evaluateImageReadGate",
+   "toolInput": {
+    "file_path": "/a/diagram.svg"
+   },
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": 400000,
+     "idleMs": 0
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 0,
+    "spawners": [],
+    "lastStopFailureMs": null,
+    "stall": null,
+    "stallRecovered": false,
+    "thrash": null,
+    "premiumShare": null,
+    "premiumModel": null,
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {}
+   }
+  },
+  {
+   "name": "img small session allow",
+   "fn": "evaluateImageReadGate",
+   "toolInput": {
+    "file_path": "/a/b.png"
+   },
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": 30000,
+     "idleMs": 0
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 0,
+    "spawners": [],
+    "lastStopFailureMs": null,
+    "stall": null,
+    "stallRecovered": false,
+    "thrash": null,
+    "premiumShare": null,
+    "premiumModel": null,
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {}
+   }
+  },
+  {
+   "name": "img warn uppercase ext",
+   "fn": "evaluateImageReadGate",
+   "toolInput": {
+    "file_path": "/shots/Screen Shot.PNG"
+   },
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": 120000,
+     "idleMs": 0
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 0,
+    "spawners": [],
+    "lastStopFailureMs": null,
+    "stall": null,
+    "stallRecovered": false,
+    "thrash": null,
+    "premiumShare": null,
+    "premiumModel": null,
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {}
+   }
+  },
+  {
+   "name": "img dominating pdf",
+   "fn": "evaluateImageReadGate",
+   "toolInput": {
+    "file_path": "/x/y.pdf"
+   },
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": 350000,
+     "idleMs": 0
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 0,
+    "spawners": [],
+    "lastStopFailureMs": null,
+    "stall": null,
+    "stallRecovered": false,
+    "thrash": null,
+    "premiumShare": null,
+    "premiumModel": null,
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {}
+   }
+  },
+  {
+   "name": "img null ctx no claim",
+   "fn": "evaluateImageReadGate",
+   "toolInput": {
+    "file_path": "/a/b.png"
+   },
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": null,
+     "idleMs": null
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 0,
+    "spawners": [],
+    "lastStopFailureMs": null,
+    "stall": null,
+    "stallRecovered": false,
+    "thrash": null,
+    "premiumShare": null,
+    "premiumModel": null,
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {}
+   }
+  },
+  {
+   "name": "img no path allow",
+   "fn": "evaluateImageReadGate",
+   "toolInput": {},
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": 400000,
+     "idleMs": 0
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 0,
+    "spawners": [],
+    "lastStopFailureMs": null,
+    "stall": null,
+    "stallRecovered": false,
+    "thrash": null,
+    "premiumShare": null,
+    "premiumModel": null,
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {}
+   }
+  },
+  {
+   "name": "advisory thrash",
+   "fn": "buildAdvisory",
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": null,
+     "idleMs": null
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 0,
+    "spawners": [],
+    "lastStopFailureMs": null,
+    "stall": null,
+    "stallRecovered": false,
+    "thrash": {
+     "active": true,
+     "count": 6,
+     "rebilledTokens": 1800000,
+     "model": "claude-fable-5",
+     "windowMs": 300000,
+     "suspects": [
+      {
+       "file": "r1.request.json",
+       "bytes": 1100000,
+       "model": "claude-fable-5"
+      }
+     ],
+     "topSource": {
+      "session": "sess-caller-1",
+      "count": 6,
+      "rebilledTokens": 1800000
+     },
+     "unattributed": {
+      "count": 0,
+      "rebilledTokens": 0
+     },
+     "coldStartSessions": 0,
+     "coldStartRebilledTokens": 0
+    },
+    "premiumShare": null,
+    "premiumModel": null,
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {}
+   }
+  },
+  {
+   "name": "advisory fanout premium",
+   "fn": "buildAdvisory",
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": null,
+     "idleMs": null
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 6,
+    "spawners": [
+     {
+      "session": "sess-caller-1",
+      "cwd": "/tmp/projA",
+      "count": 6,
+      "agentTypes": [
+       "explore×3",
+       "fork"
+      ]
+     },
+     {
+      "session": "other-sess",
+      "cwd": "/tmp/other",
+      "count": 3,
+      "agentTypes": [
+       "explore×3"
+      ]
+     }
+    ],
+    "lastStopFailureMs": null,
+    "stall": null,
+    "stallRecovered": false,
+    "thrash": null,
+    "premiumShare": 0.8,
+    "premiumModel": "claude-opus-5",
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {}
+   }
+  },
+  {
+   "name": "advisory quiet null",
+   "fn": "buildAdvisory",
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": null,
+     "idleMs": null
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 0,
+    "spawners": [],
+    "lastStopFailureMs": null,
+    "stall": null,
+    "stallRecovered": false,
+    "thrash": null,
+    "premiumShare": null,
+    "premiumModel": null,
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {}
+   }
+  },
+  {
+   "name": "liveness main",
+   "fn": "resolveMessageTargetLiveness",
+   "target": "main",
+   "events": [
+    {
+     "ts": 1786999500000,
+     "ev": "SubagentStart",
+     "session": "s",
+     "payload": {
+      "agent_id": "abc123",
+      "agent_type": "fork"
+     }
+    },
+    {
+     "ts": 1786999600000,
+     "ev": "SubagentStop",
+     "session": "s",
+     "payload": {
+      "agent_id": "abc123"
+     }
+    },
+    {
+     "ts": 1786999700000,
+     "ev": "SubagentStart",
+     "session": "s",
+     "payload": {
+      "agent_id": "def456"
+     }
+    },
+    {
+     "ts": 1786999700000,
+     "ev": "SubagentStop",
+     "session": "s",
+     "payload": {
+      "agent_id": "tie789"
+     }
+    },
+    {
+     "ts": 1786999700000,
+     "ev": "SubagentStart",
+     "session": "s",
+     "payload": {
+      "agent_id": "tie789"
+     }
+    },
+    {
+     "ts": 1786999800000,
+     "ev": "Stop",
+     "session": "s",
+     "payload": {
+      "agent_id": "abc123"
+     }
+    }
+   ]
+  },
+  {
+   "name": "liveness dead after stop",
+   "fn": "resolveMessageTargetLiveness",
+   "target": "agent-abc123",
+   "events": [
+    {
+     "ts": 1786999500000,
+     "ev": "SubagentStart",
+     "session": "s",
+     "payload": {
+      "agent_id": "abc123",
+      "agent_type": "fork"
+     }
+    },
+    {
+     "ts": 1786999600000,
+     "ev": "SubagentStop",
+     "session": "s",
+     "payload": {
+      "agent_id": "abc123"
+     }
+    },
+    {
+     "ts": 1786999700000,
+     "ev": "SubagentStart",
+     "session": "s",
+     "payload": {
+      "agent_id": "def456"
+     }
+    },
+    {
+     "ts": 1786999700000,
+     "ev": "SubagentStop",
+     "session": "s",
+     "payload": {
+      "agent_id": "tie789"
+     }
+    },
+    {
+     "ts": 1786999700000,
+     "ev": "SubagentStart",
+     "session": "s",
+     "payload": {
+      "agent_id": "tie789"
+     }
+    },
+    {
+     "ts": 1786999800000,
+     "ev": "Stop",
+     "session": "s",
+     "payload": {
+      "agent_id": "abc123"
+     }
+    }
+   ]
+  },
+  {
+   "name": "liveness bare id live",
+   "fn": "resolveMessageTargetLiveness",
+   "target": "def456",
+   "events": [
+    {
+     "ts": 1786999500000,
+     "ev": "SubagentStart",
+     "session": "s",
+     "payload": {
+      "agent_id": "abc123",
+      "agent_type": "fork"
+     }
+    },
+    {
+     "ts": 1786999600000,
+     "ev": "SubagentStop",
+     "session": "s",
+     "payload": {
+      "agent_id": "abc123"
+     }
+    },
+    {
+     "ts": 1786999700000,
+     "ev": "SubagentStart",
+     "session": "s",
+     "payload": {
+      "agent_id": "def456"
+     }
+    },
+    {
+     "ts": 1786999700000,
+     "ev": "SubagentStop",
+     "session": "s",
+     "payload": {
+      "agent_id": "tie789"
+     }
+    },
+    {
+     "ts": 1786999700000,
+     "ev": "SubagentStart",
+     "session": "s",
+     "payload": {
+      "agent_id": "tie789"
+     }
+    },
+    {
+     "ts": 1786999800000,
+     "ev": "Stop",
+     "session": "s",
+     "payload": {
+      "agent_id": "abc123"
+     }
+    }
+   ]
+  },
+  {
+   "name": "liveness equal-ts later wins",
+   "fn": "resolveMessageTargetLiveness",
+   "target": "tie789",
+   "events": [
+    {
+     "ts": 1786999500000,
+     "ev": "SubagentStart",
+     "session": "s",
+     "payload": {
+      "agent_id": "abc123",
+      "agent_type": "fork"
+     }
+    },
+    {
+     "ts": 1786999600000,
+     "ev": "SubagentStop",
+     "session": "s",
+     "payload": {
+      "agent_id": "abc123"
+     }
+    },
+    {
+     "ts": 1786999700000,
+     "ev": "SubagentStart",
+     "session": "s",
+     "payload": {
+      "agent_id": "def456"
+     }
+    },
+    {
+     "ts": 1786999700000,
+     "ev": "SubagentStop",
+     "session": "s",
+     "payload": {
+      "agent_id": "tie789"
+     }
+    },
+    {
+     "ts": 1786999700000,
+     "ev": "SubagentStart",
+     "session": "s",
+     "payload": {
+      "agent_id": "tie789"
+     }
+    },
+    {
+     "ts": 1786999800000,
+     "ev": "Stop",
+     "session": "s",
+     "payload": {
+      "agent_id": "abc123"
+     }
+    }
+   ]
+  },
+  {
+   "name": "liveness name unknown",
+   "fn": "resolveMessageTargetLiveness",
+   "target": "worker",
+   "events": [
+    {
+     "ts": 1786999500000,
+     "ev": "SubagentStart",
+     "session": "s",
+     "payload": {
+      "agent_id": "abc123",
+      "agent_type": "fork"
+     }
+    },
+    {
+     "ts": 1786999600000,
+     "ev": "SubagentStop",
+     "session": "s",
+     "payload": {
+      "agent_id": "abc123"
+     }
+    },
+    {
+     "ts": 1786999700000,
+     "ev": "SubagentStart",
+     "session": "s",
+     "payload": {
+      "agent_id": "def456"
+     }
+    },
+    {
+     "ts": 1786999700000,
+     "ev": "SubagentStop",
+     "session": "s",
+     "payload": {
+      "agent_id": "tie789"
+     }
+    },
+    {
+     "ts": 1786999700000,
+     "ev": "SubagentStart",
+     "session": "s",
+     "payload": {
+      "agent_id": "tie789"
+     }
+    },
+    {
+     "ts": 1786999800000,
+     "ev": "Stop",
+     "session": "s",
+     "payload": {
+      "agent_id": "abc123"
+     }
+    }
+   ]
+  },
+  {
+   "name": "liveness non-string unknown",
+   "fn": "resolveMessageTargetLiveness",
+   "target": 42,
+   "events": [
+    {
+     "ts": 1786999500000,
+     "ev": "SubagentStart",
+     "session": "s",
+     "payload": {
+      "agent_id": "abc123",
+      "agent_type": "fork"
+     }
+    },
+    {
+     "ts": 1786999600000,
+     "ev": "SubagentStop",
+     "session": "s",
+     "payload": {
+      "agent_id": "abc123"
+     }
+    },
+    {
+     "ts": 1786999700000,
+     "ev": "SubagentStart",
+     "session": "s",
+     "payload": {
+      "agent_id": "def456"
+     }
+    },
+    {
+     "ts": 1786999700000,
+     "ev": "SubagentStop",
+     "session": "s",
+     "payload": {
+      "agent_id": "tie789"
+     }
+    },
+    {
+     "ts": 1786999700000,
+     "ev": "SubagentStart",
+     "session": "s",
+     "payload": {
+      "agent_id": "tie789"
+     }
+    },
+    {
+     "ts": 1786999800000,
+     "ev": "Stop",
+     "session": "s",
+     "payload": {
+      "agent_id": "abc123"
+     }
+    }
+   ]
+  },
+  {
+   "name": "liveness empty unknown",
+   "fn": "resolveMessageTargetLiveness",
+   "target": "",
+   "events": [
+    {
+     "ts": 1786999500000,
+     "ev": "SubagentStart",
+     "session": "s",
+     "payload": {
+      "agent_id": "abc123",
+      "agent_type": "fork"
+     }
+    },
+    {
+     "ts": 1786999600000,
+     "ev": "SubagentStop",
+     "session": "s",
+     "payload": {
+      "agent_id": "abc123"
+     }
+    },
+    {
+     "ts": 1786999700000,
+     "ev": "SubagentStart",
+     "session": "s",
+     "payload": {
+      "agent_id": "def456"
+     }
+    },
+    {
+     "ts": 1786999700000,
+     "ev": "SubagentStop",
+     "session": "s",
+     "payload": {
+      "agent_id": "tie789"
+     }
+    },
+    {
+     "ts": 1786999700000,
+     "ev": "SubagentStart",
+     "session": "s",
+     "payload": {
+      "agent_id": "tie789"
+     }
+    },
+    {
+     "ts": 1786999800000,
+     "ev": "Stop",
+     "session": "s",
+     "payload": {
+      "agent_id": "abc123"
+     }
+    }
+   ]
+  },
+  {
+   "name": "pinger plain",
+   "fn": "isKeepWarmPinger",
+   "input": {
+    "prompt": "keep warm please"
+   }
+  },
+  {
+   "name": "pinger fork",
+   "fn": "isKeepWarmPinger",
+   "input": {
+    "subagent_type": "fork",
+    "prompt": "the pinger"
+   }
+  },
+  {
+   "name": "pinger typed agent never",
+   "fn": "isKeepWarmPinger",
+   "input": {
+    "subagent_type": "explore",
+    "prompt": "keep-warm"
+   }
+  },
+  {
+   "name": "pinger dot matches any char",
+   "fn": "isKeepWarmPinger",
+   "input": {
+    "prompt": "keepXwarm"
+   }
+  },
+  {
+   "name": "pinger dot excludes newline",
+   "fn": "isKeepWarmPinger",
+   "input": {
+    "prompt": "keep\nwarm"
+   }
+  },
+  {
+   "name": "pinger empty type",
+   "fn": "isKeepWarmPinger",
+   "input": {
+    "subagent_type": "",
+    "prompt": "pinger"
+   }
+  },
+  {
+   "name": "pinger no prompt",
+   "fn": "isKeepWarmPinger",
+   "input": {
+    "subagent_type": "fork"
+   }
+  },
+  {
+   "name": "pinger case-insensitive",
+   "fn": "isKeepWarmPinger",
+   "input": {
+    "prompt": "KEEP-WARM"
+   }
+  },
+  {
+   "name": "transcript usage walk-back",
+   "fn": "readTranscriptContext",
+   "file": "t-usage.jsonl",
+   "now": 1787000000000,
+   "tailBytes": 262144
+  },
+  {
+   "name": "transcript no usage",
+   "fn": "readTranscriptContext",
+   "file": "t-nousage.jsonl",
+   "now": 1787000000000,
+   "tailBytes": 262144
+  },
+  {
+   "name": "transcript bad timestamp",
+   "fn": "readTranscriptContext",
+   "file": "t-badts.jsonl",
+   "now": 1787000000000,
+   "tailBytes": 262144
+  },
+  {
+   "name": "transcript bounded tail drops partial first line",
+   "fn": "readTranscriptContext",
+   "file": "t-tail.jsonl",
+   "now": 1787000000000,
+   "tailBytes": 256
+  },
+  {
+   "name": "transcript missing file",
+   "fn": "readTranscriptContext",
+   "file": "no-such.jsonl",
+   "now": 1787000000000,
+   "tailBytes": 262144
+  }
+ ],
+ "expected": [
+  {
+   "decision": "allow",
+   "code": null,
+   "reason": null
+  },
+  {
+   "decision": "deny",
+   "code": "THRASH_ACTIVE",
+   "reason": "AgentLens burn-gate: cache-thrash in progress — 6 calls in the last 5min re-WROTE ~1800k tokens of prefix instead of reading cache (model claude-fable-5), i.e. something mutates the context prefix on every call so the cache never hits. 1 sender(s) implicated — investigate_burn --windowHours 1 names them. A fork re-enters that prefix and multiplies the re-billing. Fix the source first. Override: AGENTLENS_GATE=off."
+  },
+  {
+   "decision": "warn",
+   "code": "THRASH_ACTIVE",
+   "reason": "[agentlens] AgentLens burn-gate: cache-thrash in progress — 6 calls in the last 5min re-WROTE ~1800k tokens of prefix instead of reading cache (model claude-fable-5), i.e. something mutates the context prefix on every call so the cache never hits. 1 sender(s) implicated — investigate_burn --windowHours 1 names them. This fresh launch pays only its own boot prefix (forks stay denied) — diagnose the source before widening fan-outs."
+  },
+  {
+   "decision": "warn",
+   "code": "THRASH_ACTIVE",
+   "reason": "[agentlens] keep-warm pinger allowed through THRASH_ACTIVE: the pinger is the cache warm-up this rule is protecting — denying it would cause the cold cache it prevents."
+  },
+  {
+   "decision": "deny",
+   "code": "THRASH_ACTIVE",
+   "reason": "AgentLens burn-gate: cache-thrash in progress — 6 calls in the last 5min re-WROTE ~1800k tokens of prefix instead of reading cache, i.e. something mutates the context prefix on every call so the cache never hits. Source not attributable from the fat requests — investigate_burn --windowHours 1 to name it. A fork re-enters that prefix and multiplies the re-billing. Fix the source first. Override: AGENTLENS_GATE=off."
+  },
+  {
+   "decision": "deny",
+   "code": "RUNAWAY_FANOUT",
+   "reason": "AgentLens burn-gate: 9 subagent launches in the last 60s — runaway fan-out. From this project: explore, fork. Let the in-flight wave settle, then relaunch this agent (retry in ~60s is usually enough). Override: AGENTLENS_GATE=off."
+  },
+  {
+   "decision": "warn",
+   "code": "RUNAWAY_FANOUT",
+   "reason": "[deny downgraded to warning: AGENTLENS_GATE_MODE=warn] AgentLens burn-gate: 9 subagent launches in the last 60s — runaway fan-out. From this project: explore, fork. Let the in-flight wave settle, then relaunch this agent (retry in ~60s is usually enough). Override: AGENTLENS_GATE=off."
+  },
+  {
+   "decision": "deny",
+   "code": "COLD_RESUME_FANOUT",
+   "reason": "AgentLens burn-gate: a rate-limit stall ended 2min ago (turn died in session sess-cal… in …/projA), so the fan-out's agent prefix caches are past their 5-min TTL (doc-matrix), and 1 agent(s) already launched since — that first launch IS the cache warm-up. Every further agent launched before it lands re-pays the full prefix at the write rate. Retry this launch in ~60s. Override: AGENTLENS_GATE=off."
+  },
+  {
+   "decision": "allow",
+   "code": null,
+   "reason": null
+  },
+  {
+   "decision": "deny",
+   "code": "COLD_RESUME_FANOUT",
+   "reason": "AgentLens burn-gate: a rate-limit stall ended 9min ago, so the fan-out's agent prefix caches are past their 5-min TTL (doc-matrix), and 2 agent(s) already launched since — that first launch IS the cache warm-up. Every further agent launched before it lands re-pays the full prefix at the write rate. Retry this launch in ~60s. Override: AGENTLENS_GATE=off."
+  },
+  {
+   "decision": "deny",
+   "code": "COLD_RESUME_FANOUT",
+   "reason": "AgentLens burn-gate: a rate-limit stall ended 1min ago (turn died in session sess-cal… in …/x), so the fan-out's agent prefix caches are past their 5-min TTL (doc-matrix), and 1 agent(s) already launched since — that first launch IS the cache warm-up. Every further agent launched before it lands re-pays the full prefix at the write rate. Retry this launch in ~60s. Override: AGENTLENS_GATE=off."
+  },
+  {
+   "decision": "deny",
+   "code": "FORK_STORM_FORMING",
+   "reason": "AgentLens burn-gate: fork of a ~350k-token parent into a COLD cache (idle 67min > its 60-min TTL (doc-matrix)) with 3 launches already in 2min (from this project: explore, fork) — a fork storm is forming; each fork re-pays the full parent prefix at the cache-WRITE rate. Warm the cache with ONE agent first, or compact the parent before fanning out. Retry in ~60s. Override: AGENTLENS_GATE=off."
+  },
+  {
+   "decision": "warn",
+   "code": "FORK_FAT_PARENT",
+   "reason": "[agentlens] fork inherits ~350k tokens of parent prefix (warm cache — read rate). Compact before large fan-outs to shrink what every fork re-reads."
+  },
+  {
+   "decision": "deny",
+   "code": "FORK_STORM_FORMING",
+   "reason": "AgentLens burn-gate: fork of a ~350k-token parent into a COLD cache (idle 7min > its 60-min TTL (doc-matrix)) with 3 launches already in 2min — a fork storm is forming; each fork re-pays the full parent prefix at the cache-WRITE rate. Warm the cache with ONE agent first, or compact the parent before fanning out. Retry in ~60s. Override: AGENTLENS_GATE=off."
+  },
+  {
+   "decision": "warn",
+   "code": "COLD_FORK",
+   "reason": "[agentlens] cache cold (idle 67min > the parent's 60-min TTL (doc-matrix)): this fork re-pays ~350k tokens of parent prefix at the write rate once. Let it warm the cache before launching further forks."
+  },
+  {
+   "decision": "warn",
+   "code": "FORK_FAT_PARENT",
+   "reason": "[agentlens] fork inherits ~350k tokens of parent prefix (warm cache — read rate). Compact before large fan-outs to shrink what every fork re-reads."
+  },
+  {
+   "decision": "warn",
+   "code": "FORK_FAT_PARENT",
+   "reason": "[agentlens] fork inherits ~150k tokens of parent prefix (warm cache — read rate). Compact before large fan-outs to shrink what every fork re-reads."
+  },
+  {
+   "decision": "warn",
+   "code": "FANOUT_HEADSUP",
+   "reason": "[agentlens] 6 agent launches from this project in the last 2min — fan-out in progress (explore, fork). Recent traffic is on claude-opus-5 and this launch does not pin a model — fan-out agents inherit it; pin a cheaper one (model: 'sonnet' or 'haiku') for mechanical work."
+  },
+  {
+   "decision": "warn",
+   "code": "FANOUT_HEADSUP",
+   "reason": "[agentlens] 6 agent launches from this project in the last 2min — fan-out in progress (explore, fork)."
+  },
+  {
+   "decision": "allow",
+   "code": null,
+   "reason": null
+  },
+  {
+   "decision": "allow",
+   "code": null,
+   "reason": null
+  },
+  {
+   "decision": "allow",
+   "code": null,
+   "reason": null
+  },
+  {
+   "decision": "warn",
+   "code": "COLD_FORK",
+   "reason": "[agentlens] cache cold (idle 7min > the parent's 5-min TTL (assumed)): this fork re-pays ~350k tokens of parent prefix at the write rate once. Let it warm the cache before launching further forks."
+  },
+  {
+   "decision": "allow",
+   "code": null,
+   "reason": null
+  },
+  {
+   "decision": "deny",
+   "code": "THRASH_ACTIVE",
+   "reason": "AgentLens burn-gate: cache-thrash in progress — 6 calls in the last 5min re-WROTE ~1800k tokens of prefix instead of reading cache (model claude-fable-5). 1 sender(s) implicated — investigate_burn --windowHours 1 names them. Resuming a dead agent 'agent-abc123' now re-runs its whole transcript into the thrashing prefix. Fix the source first. Override: AGENTLENS_GATE=off."
+  },
+  {
+   "decision": "warn",
+   "code": "THRASH_ACTIVE",
+   "reason": "[target 'worker' liveness unknown — deny downgraded to warning] AgentLens burn-gate: cache-thrash in progress — 6 calls in the last 5min re-WROTE ~1800k tokens of prefix instead of reading cache (model claude-fable-5). 1 sender(s) implicated — investigate_burn --windowHours 1 names them. Resuming a dead agent 'worker' now re-runs its whole transcript into the thrashing prefix. Fix the source first. Override: AGENTLENS_GATE=off."
+  },
+  {
+   "decision": "deny",
+   "code": "COLD_RESUME_MESSAGE",
+   "reason": "AgentLens burn-gate: a rate-limit stall ended 4min ago (turn died in session sess-cal… in …/projA) — messaging a dead agent 'agent-abc123' resumes it by RE-RUNNING the request that killed it, and with the agent's prompt cache past its 5-min TTL (doc-matrix) that resume re-pays its full prefix at the write rate. Wait ~60s for the wall to clear, then retry this message. Override: AGENTLENS_GATE=off."
+  },
+  {
+   "decision": "allow",
+   "code": null,
+   "reason": null
+  },
+  {
+   "decision": "warn",
+   "code": "THRASH_ACTIVE",
+   "reason": "[deny downgraded to warning: AGENTLENS_GATE_MODE=warn] AgentLens burn-gate: cache-thrash in progress — 6 calls in the last 5min re-WROTE ~1800k tokens of prefix instead of reading cache (model claude-fable-5). 1 sender(s) implicated — investigate_burn --windowHours 1 names them. Resuming a dead agent 'agent-abc123' now re-runs its whole transcript into the thrashing prefix. Fix the source first. Override: AGENTLENS_GATE=off."
+  },
+  {
+   "decision": "warn",
+   "code": "THRASH_ACTIVE",
+   "reason": "[target liveness unknown — deny downgraded to warning] AgentLens burn-gate: cache-thrash in progress — 6 calls in the last 5min re-WROTE ~1800k tokens of prefix instead of reading cache (model claude-fable-5). 1 sender(s) implicated — investigate_burn --windowHours 1 names them. Resuming a dead agent now re-runs its whole transcript into the thrashing prefix. Fix the source first. Override: AGENTLENS_GATE=off."
+  },
+  {
+   "decision": "allow",
+   "code": null,
+   "reason": null
+  },
+  {
+   "decision": "allow",
+   "code": null,
+   "reason": null
+  },
+  {
+   "decision": "allow",
+   "code": null,
+   "reason": null
+  },
+  {
+   "decision": "warn",
+   "code": "IMG_RESIDENT",
+   "reason": "[agentlens cache-guard] reading Screen Shot.PNG into a ~120k-token session. An image block is RESIDENT: it rides forward in the prefix and is re-billed on EVERY later turn until a compaction evicts it — the cost is not the one read, it is the read times every turn that follows. Cheapest first: (1) delegate the look to a subagent — it reads the image in ITS small context and returns a text verdict, so nothing lands here; (2) if you look here, read every image you need in ONE message and draw the conclusions in that same turn — batching costs no more than one; (3) write the verdict down and never re-read the file. Silence: AGENTLENS_CACHE_GUARD=off."
+  },
+  {
+   "decision": "warn",
+   "code": "IMG_RESIDENT",
+   "reason": "[agentlens cache-guard] reading y.pdf into a ~350k-token session. An image block is RESIDENT: it rides forward in the prefix and is re-billed on EVERY later turn until a compaction evicts it — the cost is not the one read, it is the read times every turn that follows. This session is already large enough that resident blocks dominate its per-turn cost. Cheapest first: (1) delegate the look to a subagent — it reads the image in ITS small context and returns a text verdict, so nothing lands here; (2) if you look here, read every image you need in ONE message and draw the conclusions in that same turn — batching costs no more than one; (3) write the verdict down and never re-read the file. Silence: AGENTLENS_CACHE_GUARD=off."
+  },
+  {
+   "decision": "allow",
+   "code": null,
+   "reason": null
+  },
+  {
+   "decision": "allow",
+   "code": null,
+   "reason": null
+  },
+  {
+   "code": "THRASH_ACTIVE",
+   "text": "⚠ AgentLens: cache-thrash detected while your agents ran — 6 calls re-wrote ~1800k tokens of prefix each turn instead of reading cache (model claude-fable-5). 1 sender(s) implicated — investigate_burn --windowHours 1 names them. Do NOT launch more agents until the source is fixed."
+  },
+  {
+   "code": "FANOUT_HEADSUP",
+   "text": "⚠ AgentlensPro: 6 agent launches from this project in the last 2min (explore, fork). Most of that traffic is on claude-opus-5 — pin cheaper models on fan-out agents. Check headroom before widening the fan-out: agentlenspro-cli --risk."
+  },
+  null,
+  "live",
+  "dead",
+  "live",
+  "live",
+  "unknown",
+  "unknown",
+  "unknown",
+  true,
+  true,
+  false,
+  true,
+  false,
+  true,
+  false,
+  true,
+  {
+   "contextTokens": 201520,
+   "idleMs": 300000,
+   "lastRequestAtMs": 1787133900000
+  },
+  {
+   "contextTokens": null,
+   "idleMs": 120000,
+   "lastRequestAtMs": null
+  },
+  {
+   "contextTokens": 27,
+   "idleMs": 60000,
+   "lastRequestAtMs": null
+  },
+  {
+   "contextTokens": 100,
+   "idleMs": 45000,
+   "lastRequestAtMs": 1787128200000
+  },
+  {
+   "contextTokens": null,
+   "idleMs": null
+  }
+ ],
+ "transcripts": {
+  "t-usage.jsonl": {
+   "mtimeMs": 1786999700000
+  },
+  "t-nousage.jsonl": {
+   "mtimeMs": 1786999880000
+  },
+  "t-badts.jsonl": {
+   "mtimeMs": 1786999940000
+  },
+  "t-tail.jsonl": {
+   "mtimeMs": 1786999955000
+  }
+ }
+}

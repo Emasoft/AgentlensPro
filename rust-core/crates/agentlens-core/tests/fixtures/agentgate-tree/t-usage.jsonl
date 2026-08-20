@@ -1,0 +1,5 @@
+{"type":"user","message":{"role":"user","content":"hi"},"timestamp":"2026-08-19T10:00:00.000Z"}
+{"type":"assistant","message":{"role":"assistant","usage":{"input_tokens":12,"cache_read_input_tokens":180000,"cache_creation_input_tokens":900,"output_tokens":50}},"timestamp":"2026-08-19T10:00:05.000Z"}
+{"type":"assistant","message":{"role":"assistant","usage":{"input_tokens":20,"cache_read_input_tokens":200000,"cache_creation_input_tokens":1500,"output_tokens":80}},"timestamp":"2026-08-19T10:05:00.000Z"}
+{"corrupt":"usage" broken json
+{"type":"progress","note":"nothing here"}

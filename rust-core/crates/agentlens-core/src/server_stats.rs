@@ -32,6 +32,12 @@ pub struct PersistStats {
     pub cards_bytes: u64,
     pub hook_event_writes: u64,
     pub hook_event_bytes: u64,
+    /// The burn gate's counters (P4r.5): every POST /api/agent-gate that built a state is a
+    /// check; denies/warns/advisories count what actually went back to a model.
+    pub gate_checks: u64,
+    pub gate_denies: u64,
+    pub gate_warns: u64,
+    pub gate_advisories: u64,
 }
 
 /// The bound listeners (server.ts UI_PORT / MCP_PORT / OTLP_PORT). `mcp` is the configured
@@ -333,11 +339,11 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
             "offsetsWrites": p.offsets_writes, "offsetsBytes": p.offsets_bytes,
             "cardsWrites": p.cards_writes, "cardsBytes": p.cards_bytes,
             "hookEventWrites": p.hook_event_writes, "hookEventBytes": p.hook_event_bytes,
-            // NOT PORTED: the log-event / statusline sinks, the gate, the bodies purge, the
-            // spool — the TS boot values (all zero / false).
+            // NOT PORTED: the log-event / statusline sinks, the bodies purge, the spool — the
+            // TS boot values (all zero / false).
             "logEventWrites": 0, "logEventBytes": 0,
             "statuslineSamples": 0,
-            "gateChecks": 0, "gateDenies": 0, "gateWarns": 0, "gateAdvisories": 0,
+            "gateChecks": p.gate_checks, "gateDenies": p.gate_denies, "gateWarns": p.gate_warns, "gateAdvisories": p.gate_advisories,
             "bodiesLastPurge": { "at": 0, "removedFiles": 0, "freedBytes": 0, "keptFiles": 0, "keptBytes": 0 },
             "spoolBackpressureSpills": 0,
             "spoolBackpressureActive": false,
@@ -362,7 +368,7 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
         "gate": {
             "mode": hook.gate_mode, "enabled": hook.gate_enabled,
             "captureEnabled": hook.capture_enabled, "advisorEnabled": hook.advisor_enabled,
-            "checks": 0, "denies": 0, "warns": 0, "advisories": 0,
+            "checks": p.gate_checks, "denies": p.gate_denies, "warns": p.gate_warns, "advisories": p.gate_advisories,
         },
         // NOT PORTED: the OTLP log-event ingest gate — nothing rejected yet ⇒ {}.
         "otlpDroppedLogEvents": Map::new(),

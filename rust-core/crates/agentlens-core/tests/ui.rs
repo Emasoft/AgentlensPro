@@ -799,3 +799,129 @@ fn timeline_route_reparses_a_stripped_card_from_disk() {
     drop(st);
     let _ = std::fs::remove_dir_all(&home);
 }
+
+/// Freeze row 13 (P4r.5) — POST /api/agent-gate over a real socket: the FAIL-OPEN contract
+/// (malformed body → 204; allow → 204 empty), a ring-fed RUNAWAY_FANOUT deny with its exact
+/// response shape, the realtime hook-config switches (mode downgrade, gate off, cache-guard
+/// off, advisor off), the IMG_RESIDENT + advisory per-session dedupes, and the counters both
+/// /api/server-stats sites serve.
+#[test]
+fn agent_gate_route_fail_open_deny_warn_advisory_and_dedupe() {
+    let (_otlp, ui, state) = start_servers();
+    {
+        let mut st = state.lock().unwrap();
+        // Never read THIS machine's account/config: scrub the env snapshot and point the burn
+        // runtime at the committed fixture home.
+        st.burn.vars.clear();
+        st.burn.set_home_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ttl-home-a"));
+    }
+    // Pin every runtime switch — the process env (AGENTLENS_GATE_MODE) must not steer the test.
+    let r = post(ui, "/api/hook-config", r#"{"gateEnabled":true,"gateMode":"enforce","advisorEnabled":true,"cacheGuardEnabled":true,"captureEnabled":true}"#);
+    assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+
+    // Malformed JSON → 204 empty (fail-open; the TS catch). Not counted as a check.
+    let r = post(ui, "/api/agent-gate", "{not json");
+    assert!(r.starts_with("HTTP/1.1 204"), "{r}");
+    assert_eq!(body_of(&r), "");
+
+    // A quiet PreToolUse launch → 204 (allow is silent).
+    let quiet = serde_json::json!({
+        "hook_event_name": "PreToolUse", "tool_name": "Agent", "session_id": "sess-gate-1",
+        "cwd": "/tmp/gate-proj", "tool_input": { "subagent_type": "explore", "prompt": "scan" }
+    })
+    .to_string();
+    let r = post(ui, "/api/agent-gate", &quiet);
+    assert!(r.starts_with("HTTP/1.1 204"), "{r}");
+
+    // Feed 8 SubagentStarts through the REAL ingest (disk bucket + in-memory ring) — the gate's
+    // runaway trigger AND its own-project attribution (same session_id + cwd as the caller).
+    for i in 0..8 {
+        let ev = serde_json::json!({
+            "hook_event_name": "SubagentStart", "session_id": "sess-gate-1", "cwd": "/tmp/gate-proj",
+            "agent_id": format!("ag-{i}"), "agent_type": "explore"
+        })
+        .to_string();
+        let r = post(ui, "/api/hook-events", &ev);
+        assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+    }
+    let r = post(ui, "/api/agent-gate", &quiet);
+    assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+    let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
+    assert_eq!(v["hookSpecificOutput"]["hookEventName"], "PreToolUse");
+    assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "deny");
+    let reason = v["hookSpecificOutput"]["permissionDecisionReason"].as_str().unwrap();
+    assert!(reason.contains("8 subagent launches in the last 60s"), "{reason}");
+    assert!(reason.contains("From this project: explore"), "{reason}");
+    assert!(v["systemMessage"].as_str().unwrap().contains("blocked an agent launch (RUNAWAY_FANOUT)"), "{v}");
+
+    // gateMode=warn downgrades the same deny — applied INSTANTLY via the hook-config route.
+    post(ui, "/api/hook-config", r#"{"gateMode":"warn"}"#);
+    let r = post(ui, "/api/agent-gate", &quiet);
+    assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+    let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
+    assert!(v.get("hookSpecificOutput").is_none(), "warn carries no permissionDecision: {v}");
+    assert!(v["systemMessage"].as_str().unwrap().starts_with("[deny downgraded to warning: AGENTLENS_GATE_MODE=warn]"), "{v}");
+
+    // Gate off → 204 even under the runaway state (the check still counts — the TS increments
+    // before the enabled branch).
+    post(ui, "/api/hook-config", r#"{"gateEnabled":false}"#);
+    let r = post(ui, "/api/agent-gate", &quiet);
+    assert!(r.starts_with("HTTP/1.1 204"), "{r}");
+    post(ui, "/api/hook-config", r#"{"gateEnabled":true,"gateMode":"enforce"}"#);
+
+    // The image cache-guard: a fat parent (transcript usage 120,100 tokens) + a .png read →
+    // the IMG_RESIDENT warning, then the per-session 10-min dedupe → 204, then the guard's own
+    // switch → 204.
+    let tdir = std::env::temp_dir().join(format!("al-gate-transcripts-{}", std::process::id()));
+    std::fs::create_dir_all(&tdir).unwrap();
+    let tpath = tdir.join("sess-img.jsonl");
+    std::fs::write(
+        &tpath,
+        "{\"type\":\"assistant\",\"message\":{\"usage\":{\"input_tokens\":100,\"cache_read_input_tokens\":120000,\"cache_creation_input_tokens\":0}}}\n",
+    )
+    .unwrap();
+    let img = serde_json::json!({
+        "hook_event_name": "PreToolUse", "tool_name": "Read", "session_id": "sess-img",
+        "transcript_path": tpath.to_string_lossy(), "tool_input": { "file_path": "/tmp/shot.png" }
+    })
+    .to_string();
+    let r = post(ui, "/api/agent-gate", &img);
+    assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+    let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
+    assert!(v["systemMessage"].as_str().unwrap().contains("reading shot.png into a ~120k-token session"), "{v}");
+    let r = post(ui, "/api/agent-gate", &img);
+    assert!(r.starts_with("HTTP/1.1 204"), "IMG_RESIDENT dedupe: {r}");
+    post(ui, "/api/hook-config", r#"{"cacheGuardEnabled":false}"#);
+    let r = post(ui, "/api/agent-gate", &img);
+    assert!(r.starts_with("HTTP/1.1 204"), "cache-guard off: {r}");
+
+    // PostToolUse advisory: 8 own launches ≥ fanoutWarn2min → ONE in-band injection, then the
+    // session+code dedupe → 204, then the advisor switch → 204.
+    let post_ev = serde_json::json!({
+        "hook_event_name": "PostToolUse", "tool_name": "Agent", "session_id": "sess-gate-1", "cwd": "/tmp/gate-proj"
+    })
+    .to_string();
+    let r = post(ui, "/api/agent-gate", &post_ev);
+    assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+    let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
+    assert_eq!(v["hookSpecificOutput"]["hookEventName"], "PostToolUse");
+    let ctx = v["hookSpecificOutput"]["additionalContext"].as_str().unwrap();
+    assert!(ctx.contains("8 agent launches from this project in the last 2min (explore)"), "{ctx}");
+    let r = post(ui, "/api/agent-gate", &post_ev);
+    assert!(r.starts_with("HTTP/1.1 204"), "advisory dedupe: {r}");
+    post(ui, "/api/hook-config", r#"{"advisorEnabled":false}"#);
+    let r = post(ui, "/api/agent-gate", &post_ev);
+    assert!(r.starts_with("HTTP/1.1 204"), "advisor off: {r}");
+
+    // The counters, on BOTH server-stats surfaces: 10 parsed checks (the malformed body never
+    // built a state), 1 deny, 2 warns (the downgraded deny + the image), 1 advisory.
+    let r = get(ui, "/api/server-stats", "");
+    let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
+    assert_eq!(v["gate"]["checks"], 10, "{}", v["gate"]);
+    assert_eq!(v["gate"]["denies"], 1);
+    assert_eq!(v["gate"]["warns"], 2);
+    assert_eq!(v["gate"]["advisories"], 1);
+    assert_eq!(v["persistence"]["gateChecks"], 10);
+    assert_eq!(v["persistence"]["gateDenies"], 1);
+    let _ = std::fs::remove_dir_all(&tdir);
+}

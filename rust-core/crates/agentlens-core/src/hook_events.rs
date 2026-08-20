@@ -10,8 +10,9 @@
 //! NOT PORTED (each has its own TS subsystem, deferred): the statusline sample stores that
 //! `routed:"statusline"` events divert into (the route answers the frozen body, the sample is
 //! DROPPED — recorded, not silent); the boot-time hook-spool drain + its byte-for-byte
-//! durability verification (TRDD-K3WDPR7M); the StopFailure capacity auto-calibration; the
-//! in-memory recent-events ring (feeds the burn gate, also unported).
+//! durability verification (TRDD-K3WDPR7M); the StopFailure capacity auto-calibration.
+//! The in-memory recent-events ring IS ported (P4r.5 — it feeds the burn gate): boot-seeded in
+//! CoreState::open, pushed on every ingest below.
 
 use std::path::{Path, PathBuf};
 
@@ -135,9 +136,9 @@ pub fn statusline_stream(ev: &str) -> Option<&'static str> {
     }
 }
 
-/// server.ts ingestHookEvent — validate → route/drop → append → stats. Returns the HTTP-shaped
-/// (status, body). NOT PORTED inside: the statusline store (the diverted sample is dropped
-/// after the frozen `routed` answer), the recent-events ring, the StopFailure calibration.
+/// server.ts ingestHookEvent — validate → route/drop → append → ring → stats. Returns the
+/// HTTP-shaped (status, body). NOT PORTED inside: the statusline store (the diverted sample is
+/// dropped after the frozen `routed` answer), the StopFailure calibration.
 pub fn ingest_hook_event(st: &mut crate::CoreState, payload: &Value, now_ms: i64) -> (u16, Value) {
     let Some(p) = payload.as_object() else {
         return (400, json!({ "error": "payload must be a JSON object with hook_event_name" }));
@@ -156,12 +157,25 @@ pub fn ingest_hook_event(st: &mut crate::CoreState, payload: &Value, now_ms: i64
         return (200, json!({ "ok": true, "dropped": "captureEnabled=false" }));
     }
     match append_hook_event(&st.data_dir.join("hook-events"), p, now_ms) {
-        Ok((_rec, bytes)) => {
+        Ok((rec, bytes)) => {
+            push_recent_hook_event(&mut st.recent_hook_events, rec);
             st.persist.hook_event_writes += 1;
             st.persist.hook_event_bytes += bytes;
             (200, json!({ "ok": true }))
         }
         Err(e) => (500, json!({ "error": e.to_string() })),
+    }
+}
+
+/// server.ts RECENT_EVENTS_CAP — the in-memory ring the gate + buildGateState read.
+pub const RECENT_EVENTS_CAP: usize = 600;
+
+/// server.ts pushRecentHookEvent — append; past the cap, keep the newest 500 (the TS splice).
+pub fn push_recent_hook_event(ring: &mut Vec<Value>, rec: Value) {
+    ring.push(rec);
+    if ring.len() > RECENT_EVENTS_CAP {
+        let drop = ring.len() - 500;
+        ring.drain(..drop);
     }
 }
 

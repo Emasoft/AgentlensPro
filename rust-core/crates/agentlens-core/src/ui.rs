@@ -660,6 +660,143 @@ async fn handle(
             st.burn_risk_report(crate::now_ms() as f64).to_string()
         };
         json_response(StatusCode::OK, body)
+    } else if method == Method::POST && path == "/api/agent-gate" {
+        // Row 13 (server.ts:3553, TRDD-GOD0108C) — THE CONTRACT IS FAIL-OPEN: allow → 204 empty;
+        // PostToolUse advisory / deny / warn → the three 200 hookSpecificOutput shapes; EVERY
+        // error path → 204, because a gate that can error a launch is worse than no gate. The
+        // 1MB overflow destroys the socket (the TS req.destroy() — no response at all).
+        let Some(buf) = read_body_capped(req.into_body(), crate::burn::agent_gate::GATE_BODY_MAX).await? else {
+            return Err("/api/agent-gate body over 1MB cap — connection aborted".to_owned());
+        };
+        let no_content = || {
+            let mut r = Response::new(boxed_full(Bytes::new()));
+            *r.status_mut() = StatusCode::NO_CONTENT;
+            r
+        };
+        // The SSE alert mirror (pushBurnSse) is computed under the lock, broadcast after it.
+        let mut alert: Option<String> = None;
+        let resp = (|| {
+            use crate::burn::agent_gate;
+            let Ok(p) = serde_json::from_slice::<Value>(&buf) else { return no_content() }; // the TS catch → 204
+            let now = crate::now_ms() as f64;
+            let session_id = p.get("session_id").and_then(Value::as_str).unwrap_or("unknown");
+            let transcript_path = p.get("transcript_path").and_then(Value::as_str);
+            let cwd = p.get("cwd").and_then(Value::as_str);
+            // Real parent context (tokens from the transcript's last usage) + cache warmth (mtime).
+            let parent = match transcript_path {
+                Some(tp) => agent_gate::read_transcript_context(std::path::Path::new(tp), now, agent_gate::TRANSCRIPT_TAIL_BYTES),
+                None => serde_json::json!({ "contextTokens": null, "idleMs": null }),
+            };
+            let Ok(mut st) = state.lock() else { return no_content() };
+            let mut gate_state = agent_gate::build_gate_state(&mut st, now, parent, session_id, transcript_path, cwd);
+            st.persist.gate_checks += 1;
+
+            if p.get("hook_event_name").and_then(Value::as_str) == Some("PostToolUse") {
+                if !st.hook_runtime.advisor_enabled {
+                    return no_content();
+                }
+                // In-band advisory to the MODEL after an agent wave — deduped per session+risk.
+                let adv = agent_gate::build_advisory(&gate_state);
+                if let Some(advo) = adv.as_object() {
+                    let code = advo.get("code").and_then(Value::as_str).unwrap_or("");
+                    let text = advo.get("text").cloned().unwrap_or(Value::Null);
+                    let key = format!("{session_id}:{code}");
+                    let last = st.advisory_issued.get(&key).copied().unwrap_or(0.0);
+                    if now - last > agent_gate::ADVISORY_DEDUPE_MS {
+                        st.advisory_issued.insert(key, now);
+                        agent_gate::prune_advisory_issued(&mut st.advisory_issued, now);
+                        st.persist.gate_advisories += 1;
+                        alert = Some(
+                            serde_json::json!({ "type": "alert", "label": format!("burn advisory ({code})"), "detail": text, "severity": "warning" })
+                                .to_string(),
+                        );
+                        return json_response(
+                            StatusCode::OK,
+                            serde_json::json!({ "hookSpecificOutput": { "hookEventName": "PostToolUse", "additionalContext": text } }).to_string(),
+                        );
+                    }
+                }
+                return no_content();
+            }
+
+            // PreToolUse (default): decide before the launch happens. SendMessage takes the
+            // NARROWER evaluator, and its deny further requires the TARGET to resolve dead.
+            if !st.hook_runtime.gate_enabled {
+                return no_content();
+            }
+            let tool_name = p.get("tool_name").and_then(Value::as_str);
+            let d = if tool_name == Some("Read") {
+                // Read is matched ONLY for the image cache-guard, which has its own runtime
+                // switch: it rides a hot path, so "the image warning annoys me" must never cost
+                // the user the agent-launch disaster gate. Warn-only by construction.
+                if !st.hook_runtime.cache_guard_enabled {
+                    return no_content();
+                }
+                agent_gate::evaluate_image_read_gate(p.get("tool_input"), &gate_state)
+            } else if tool_name == Some("SendMessage") {
+                let to = p.get("tool_input").and_then(|t| t.get("to"));
+                let target = to.and_then(Value::as_str).map(str::to_owned);
+                let liveness = agent_gate::resolve_message_target_liveness(to, &st.recent_hook_events);
+                if let Some(obj) = gate_state.as_object_mut() {
+                    obj.insert("messageTarget".into(), target.map_or(Value::Null, Value::from));
+                    obj.insert("targetLiveness".into(), Value::from(liveness));
+                }
+                agent_gate::evaluate_send_message_gate(&gate_state)
+            } else {
+                agent_gate::evaluate_agent_gate(p.get("tool_input"), &gate_state)
+            };
+            let decision = d.get("decision").and_then(Value::as_str).unwrap_or("");
+            let code = d.get("code").and_then(Value::as_str).unwrap_or("").to_owned();
+            // `detail: d.reason ?? ''` on the SSE mirror; the response bodies carry d.reason raw.
+            let reason_str = d.get("reason").and_then(Value::as_str).unwrap_or("").to_owned();
+            if decision == "deny" {
+                st.persist.gate_denies += 1;
+                // Mirror onto the dashboard's SSE alert channel — same surface as the burn alerts.
+                alert = Some(
+                    serde_json::json!({ "type": "alert", "label": format!("burn-gate DENY ({code})"), "detail": reason_str, "severity": "error" })
+                        .to_string(),
+                );
+                return json_response(
+                    StatusCode::OK,
+                    serde_json::json!({
+                        "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": d.get("reason").cloned().unwrap_or(Value::Null) },
+                        "systemMessage": format!("[agentlens burn-gate] blocked an agent launch ({code}). The reason went to the agent so it can adapt; disable/downgrade in realtime: agentlenspro-cli --hooks gate=off|warn."),
+                    })
+                    .to_string(),
+                );
+            }
+            if decision == "warn" {
+                // IMG_RESIDENT rides `Read`, so unlike every other rule it can fire many times
+                // in one turn — and its own advice is "read every image in ONE message", which
+                // would then earn one ~700-char systemMessage per image. Dedupe it per session
+                // on the advisory cadence; the rare agent-launch rules keep warning every time.
+                if code == "IMG_RESIDENT" {
+                    let key = format!("{session_id}:{code}");
+                    if now - st.advisory_issued.get(&key).copied().unwrap_or(0.0) <= agent_gate::ADVISORY_DEDUPE_MS {
+                        return no_content();
+                    }
+                    st.advisory_issued.insert(key, now);
+                    agent_gate::prune_advisory_issued(&mut st.advisory_issued, now);
+                }
+                st.persist.gate_warns += 1;
+                alert = Some(
+                    serde_json::json!({ "type": "alert", "label": format!("burn-gate warning ({code})"), "detail": reason_str, "severity": "warning" })
+                        .to_string(),
+                );
+                return json_response(
+                    StatusCode::OK,
+                    serde_json::json!({ "systemMessage": d.get("reason").cloned().unwrap_or(Value::Null) }).to_string(),
+                );
+            }
+            no_content()
+        })();
+        // pushBurnSse: no clients ⇒ no frame (the TS early return).
+        if let Some(a) = alert {
+            if hub.client_count() > 0 {
+                hub.broadcast(sse_frame(&a));
+            }
+        }
+        resp
     } else if method == Method::GET && path == "/api/collector-gaps" {
         // Row 29 (server.ts:4038, TRDD-PJC8N1HO spec 2): the lifecycle-derived downtime windows.
         // The TS wraps computeCollectorGaps in a catch → []; the Rust compute cannot throw.
@@ -802,6 +939,12 @@ pub async fn run_burn_tick(state: Arc<Mutex<CoreState>>, hub: Arc<SseHub>) {
         {
             let Ok(mut st) = state.lock() else { continue };
             let now = crate::now_ms() as f64;
+            // The bodies watcher's poll cadence (the TS runs a dedicated 5s timer; folding it
+            // into this 4s tick keeps the same ≤5s staleness with one fewer task). The gate's
+            // buildGateState reads the report WITHOUT polling — a poll landing on new multi-MB
+            // response files costs 100-400ms of parsing, the TRDD-9CNHP8CN request-latency
+            // outlier — so this tick is what keeps its snapshot fresh.
+            st.burn.bodies.poll(now);
             let status = st.live_burn_status(now);
             st.burn.last_status = Some(status.clone());
             let account = st.burn.current_account(now);

@@ -1,0 +1,2 @@
+{"type":"assistant","message":{"usage":{"input_tokens":5,"cache_read_input_tokens":10}},"timestamp":"2026-08-19T09:00:00.000Z"}
+{"type":"assistant","message":{"usage":{"input_tokens":7,"cache_read_input_tokens":20}},"timestamp":"not-a-date"}

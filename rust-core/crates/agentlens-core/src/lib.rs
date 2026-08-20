@@ -134,6 +134,13 @@ pub struct CoreState {
     /// The burn subsystem's stateful glue (P4r.3): config, the tick's lastBurnStatus, the 60s
     /// account/TTL-signal cache. Tests re-point it with set_home_dir.
     pub burn: burn::runtime::BurnRuntime,
+    /// server.ts `recentHookEvents` (P4r.5) — the in-memory ring the gate reads (the gate sits
+    /// behind a PreToolUse hook, so every read on its path must be in-memory). Boot-seeded from
+    /// the disk buckets, pushed on every /api/hook-events ingest, capped at 600 → trimmed to 500.
+    pub recent_hook_events: Vec<Value>,
+    /// server.ts `advisoryIssued` — the gate's per-session+code dedupe map (PostToolUse
+    /// advisories + the IMG_RESIDENT warning share it; disjoint codes keep the keys disjoint).
+    pub advisory_issued: std::collections::HashMap<String, f64>,
 }
 
 impl CoreState {
@@ -327,6 +334,17 @@ impl CoreState {
                 let env = agentlens_logscan::discovery::Env::from_process();
                 burn::runtime::BurnRuntime::new(env.home, std::env::vars().collect(), data_dir)
             },
+            // Boot-seed the ring from disk so a fresh server isn't blind to a stall/fan-out from
+            // 5 minutes ago (server.ts:1029 — last hour, ≤500, reversed to oldest-first).
+            recent_hook_events: {
+                let mut seed = hook_events::read_hook_events(
+                    &data_dir.join("hook-events"),
+                    &hook_events::HookEventFilter { since_ms: Some(now - 3_600_000), limit: Some(500), ..Default::default() },
+                );
+                seed.reverse();
+                seed
+            },
+            advisory_issued: std::collections::HashMap::new(),
         }
     }
 
