@@ -1,0 +1,11 @@
+{"type":"user","sessionId":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","timestamp":"2026-08-17T20:53:10.000Z","message":{"role":"user","content":"<command-name>/reload-plugins</command-name><command-args></command-args>"}}
+{"type":"user","sessionId":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","timestamp":"2026-08-17T20:53:00.000Z","message":{"role":"user","content":"  <local-command-caveat>Caveat: the messages below were generated\nduring a local command.</local-command-caveat>  <command-name>/model</command-name><command-args>opus</command-args>"}}
+{"type":"user","sessionId":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","timestamp":"2026-08-17T20:52:50.000Z","message":{"role":"user","content":"<command-name>/model</command-name>"}}
+{"type":"user","sessionId":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","timestamp":"2026-08-17T20:52:40.000Z","message":{"role":"user","content":"<command-name>/plugin</command-name><command-args>plugin update foo</command-args>"}}
+{"type":"user","sessionId":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","timestamp":"2026-08-17T20:52:30.000Z","message":{"role":"user","content":"<command-name>/plugin</command-name><command-args>browse around</command-args>"}}
+{"type":"user","sessionId":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","timestamp":"2026-08-17T20:52:20.000Z","message":{"role":"user","content":"<command-name>/plugin</command-name>"}}
+{"type":"user","sessionId":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","timestamp":"2026-08-17T20:52:10.000Z","message":{"role":"user","content":"<command-name>/help</command-name><command-args>x</command-args>"}}
+{"type":"assistant","timestamp":"2026-08-17T20:52:05.000Z","message":{"role":"assistant","content":"explaining <command-name>/reload-plugins</command-name>"}}
+{"type":"user","timestamp":"2026-08-17T20:52:04.000Z","message":{"role":"user","content":[{"type":"text","text":"<command-name>/compact</command-name>"}]}}
+{"type":"user","sessionId":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","timestamp":"not-a-date","message":{"role":"user","content":"<command-name>/clear</command-name>"}}
+{corrupt json line with <command-name> inside

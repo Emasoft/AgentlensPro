@@ -1119,3 +1119,66 @@ fn statusline_samples_route_and_legacy_divert() {
     assert_eq!(v["statusline"]["bufferedRows"], 0);
     assert!(v["statusline"]["walBytes"].as_u64().unwrap() > 0, "{}", v["statusline"]);
 }
+
+/// Freeze rows 9 + 31 — cache-risk commands over a fixture home, and the scratch-file leaf's
+/// realpath containment (the raw-string traversal MUST answer the containment refusal, never
+/// file bytes — the UI is browser-reachable).
+#[test]
+fn cache_risk_commands_and_generated_file_routes() {
+    let (_otlp, ui, state) = start_servers();
+    // A fixture home whose .claude/projects tree holds one fresh command transcript.
+    let home = std::env::temp_dir().join(format!("al-crc-home-{}", std::process::id()));
+    let proj = home.join(".claude/projects/slug-x");
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(&proj).unwrap();
+    let now = agentlens_core::now_ms();
+    let iso = agentlens_core::summarize::helpers::iso_from_ms((now - 60_000) as f64);
+    std::fs::write(
+        proj.join("t.jsonl"),
+        format!(
+            "{{\"type\":\"user\",\"sessionId\":\"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\",\"timestamp\":\"{iso}\",\"message\":{{\"role\":\"user\",\"content\":\"<command-name>/reload-plugins</command-name><command-args></command-args>\"}}}}\n"
+        ),
+    )
+    .unwrap();
+    {
+        let mut st = state.lock().unwrap();
+        st.log_env = agentlens_logscan::discovery::Env { home: home.clone(), ..agentlens_logscan::discovery::Env::from_process() };
+    }
+    let r = get(ui, "/api/cache-risk-commands", "");
+    assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+    let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
+    assert_eq!(v["windowHours"], 168, "{v}");
+    assert_eq!(v["total"], 1);
+    assert_eq!(v["truncated"], false);
+    assert_eq!(v["byKind"], serde_json::json!({ "PLUGINS_RELOADED": 1 }));
+    assert_eq!(v["commands"][0]["command"], "/reload-plugins");
+    assert_eq!(v["commands"][0]["mutation"], "certain");
+    assert!(v["commands"][0].get("args").is_none(), "empty args stays absent: {v}");
+    // kinds filter excludes it; window param survives.
+    let r = get(ui, "/api/cache-risk-commands?kinds=CLEAR&window=2", "");
+    let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
+    assert_eq!(v["windowHours"], 2);
+    assert_eq!(v["total"], 0);
+
+    // generated-file: a real scratch file under /tmp/claude-<x>/ answers content; the
+    // traversal-shaped path and a foreign path answer the containment refusal.
+    let scratch = std::path::Path::new("/tmp").join(format!("claude-tst{}", std::process::id())).join("proj/sess");
+    std::fs::create_dir_all(&scratch).unwrap();
+    std::fs::write(scratch.join("out.txt"), "generated!").unwrap();
+    let enc = |s: &str| s.replace('/', "%2F");
+    let r = get(ui, &format!("/api/generated-file?path={}", enc(&scratch.join("out.txt").to_string_lossy())), "");
+    let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
+    assert_eq!(v["exists"], true, "{v}");
+    assert_eq!(v["content"], "generated!");
+    assert_eq!(v["truncated"], false);
+    let traversal = format!("{}/../../../etc/hosts", scratch.to_string_lossy());
+    let r = get(ui, &format!("/api/generated-file?path={}", enc(&traversal)), "");
+    let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
+    assert_eq!(v["exists"], false, "realpath containment: {v}");
+    assert!(v.get("content").is_none());
+    let r = get(ui, "/api/generated-file?path=%2Fetc%2Fhosts", "");
+    let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
+    assert_eq!(v, serde_json::json!({ "exists": false, "error": "path not under a Claude scratch tree" }));
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(scratch.parent().unwrap().parent().unwrap());
+}

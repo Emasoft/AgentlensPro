@@ -31,6 +31,7 @@ use agentlens_spanstore::writer::SpanStoreWriter;
 pub mod account_registry;
 pub mod body_archive;
 pub mod burn;
+pub mod cache_risk_commands;
 pub mod collector_lifecycle;
 pub mod delta_log;
 pub mod derived_cache;

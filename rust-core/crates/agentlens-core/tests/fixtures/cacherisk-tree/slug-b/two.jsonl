@@ -1,0 +1,5 @@
+{"type":"user","sessionId":"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb","timestamp":"2026-08-17T20:53:05.000Z","message":{"role":"user","content":"<command-name>/compact</command-name>"}}
+{"type":"user","sessionId":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","timestamp":"2026-08-17T20:52:55.000Z","message":{"role":"user","content":"<command-name>/login</command-name>"}}
+{"type":"user","sessionId":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","timestamp":"2026-08-17T20:52:45.000Z","message":{"role":"user","content":"<command-name>/effort</command-name><command-args>high</command-args>"}}
+{"type":"user","sessionId":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","timestamp":"2026-08-17T20:52:35.000Z","message":{"role":"user","content":"<command-name>/mcp</command-name>"}}
+{"type":"user","timestamp":"2026-08-17T20:52:25.000Z","message":{"role":"user","content":"<command-name>/clear</command-name>"}}

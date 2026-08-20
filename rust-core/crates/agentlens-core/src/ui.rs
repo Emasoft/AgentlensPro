@@ -820,6 +820,32 @@ async fn handle(
             }
         }
         resp
+    } else if method == Method::GET && path == "/api/cache-risk-commands" {
+        // Row 9 (server.ts:3465): the transcript scan for prefix-mutating slash commands.
+        let q = query_of(&req);
+        let window_hours = q
+            .get("window")
+            .and_then(|v| v.parse::<f64>().ok())
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .unwrap_or(24.0 * 7.0);
+        let limit = q.get("limit").and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite() && *v > 0.0).map(|v| v as usize).unwrap_or(300);
+        let kinds: Option<Vec<String>> = q
+            .get("kinds")
+            .map(|v| v.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).collect::<Vec<_>>())
+            .filter(|v: &Vec<String>| !v.is_empty());
+        let body = {
+            let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+            let dirs = agentlens_logscan::discovery::claude_projects_dirs(&st.log_env);
+            crate::cache_risk_commands::cache_risk_commands_response(&dirs, crate::now_ms() as f64, window_hours, kinds.as_deref(), limit)
+                .to_string()
+        };
+        json_response(StatusCode::OK, body)
+    } else if method == Method::GET && path == "/api/generated-file" {
+        // Row 31 (server.ts:4064): the on-demand scratch-file leaf — always 200, the
+        // readScratchFile shapes carry existence/containment honestly.
+        let q = query_of(&req);
+        let file_path = q.get("path").map(String::as_str).unwrap_or("");
+        json_response(StatusCode::OK, crate::generated_files::read_scratch_file(file_path, 200 * 1024).to_string())
     } else if method == Method::GET && path.starts_with("/api/instruction-suggestions") {
         // Row 19 (server.ts:3852; PREFIX match, as the TS url.startsWith does). The advisor is
         // pure analysis over the workspace's sessions; the response is a BARE array.

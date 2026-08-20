@@ -1,0 +1,184 @@
+{
+ "all": [
+  {
+   "ts": 1786999990000,
+   "session": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+   "command": "/reload-plugins",
+   "kind": "PLUGINS_RELOADED",
+   "mutation": "certain"
+  },
+  {
+   "ts": 1786999985000,
+   "session": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+   "command": "/compact",
+   "kind": "COMPACTION",
+   "mutation": "certain"
+  },
+  {
+   "ts": 1786999980000,
+   "session": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+   "command": "/model",
+   "kind": "MODEL_SWITCHED",
+   "mutation": "certain",
+   "args": "opus"
+  },
+  {
+   "ts": 1786999975000,
+   "session": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+   "command": "/login",
+   "kind": "ACCOUNT_SWITCHED",
+   "mutation": "certain"
+  },
+  {
+   "ts": 1786999970000,
+   "session": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+   "command": "/model",
+   "kind": "MODEL_SWITCHED",
+   "mutation": "ambiguous"
+  },
+  {
+   "ts": 1786999965000,
+   "session": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+   "command": "/effort",
+   "kind": "EFFORT_CHANGED",
+   "mutation": "certain",
+   "args": "high"
+  },
+  {
+   "ts": 1786999960000,
+   "session": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+   "command": "/plugin",
+   "kind": "PLUGIN_CHANGED",
+   "mutation": "certain",
+   "args": "plugin update foo"
+  },
+  {
+   "ts": 1786999955000,
+   "session": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+   "command": "/mcp",
+   "kind": "MCP_SERVER_TOGGLE",
+   "mutation": "ambiguous"
+  },
+  {
+   "ts": 1786999945000,
+   "command": "/clear",
+   "kind": "CLEAR",
+   "mutation": "certain"
+  },
+  {
+   "ts": 1786999940000,
+   "session": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+   "command": "/plugin",
+   "kind": "PLUGIN_CHANGED",
+   "mutation": "ambiguous"
+  }
+ ],
+ "kinds": [
+  {
+   "ts": 1786999980000,
+   "session": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+   "command": "/model",
+   "kind": "MODEL_SWITCHED",
+   "mutation": "certain",
+   "args": "opus"
+  },
+  {
+   "ts": 1786999970000,
+   "session": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+   "command": "/model",
+   "kind": "MODEL_SWITCHED",
+   "mutation": "ambiguous"
+  },
+  {
+   "ts": 1786999945000,
+   "command": "/clear",
+   "kind": "CLEAR",
+   "mutation": "certain"
+  }
+ ],
+ "limited": [
+  {
+   "ts": 1786999990000,
+   "session": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+   "command": "/reload-plugins",
+   "kind": "PLUGINS_RELOADED",
+   "mutation": "certain"
+  },
+  {
+   "ts": 1786999985000,
+   "session": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+   "command": "/compact",
+   "kind": "COMPACTION",
+   "mutation": "certain"
+  },
+  {
+   "ts": 1786999980000,
+   "session": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+   "command": "/model",
+   "kind": "MODEL_SWITCHED",
+   "mutation": "certain",
+   "args": "opus"
+  }
+ ],
+ "tsWindow": [
+  {
+   "ts": 1786999990000,
+   "session": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+   "command": "/reload-plugins",
+   "kind": "PLUGINS_RELOADED",
+   "mutation": "certain"
+  },
+  {
+   "ts": 1786999985000,
+   "session": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+   "command": "/compact",
+   "kind": "COMPACTION",
+   "mutation": "certain"
+  },
+  {
+   "ts": 1786999980000,
+   "session": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+   "command": "/model",
+   "kind": "MODEL_SWITCHED",
+   "mutation": "certain",
+   "args": "opus"
+  },
+  {
+   "ts": 1786999975000,
+   "session": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+   "command": "/login",
+   "kind": "ACCOUNT_SWITCHED",
+   "mutation": "certain"
+  }
+ ],
+ "classify": [
+  {
+   "kind": "PLUGINS_RELOADED",
+   "mutation": "certain"
+  },
+  {
+   "kind": "PLUGIN_CHANGED",
+   "mutation": "certain"
+  },
+  {
+   "kind": "MODEL_SWITCHED",
+   "mutation": "ambiguous"
+  },
+  {
+   "kind": "EFFORT_CHANGED",
+   "mutation": "certain"
+  },
+  null
+ ],
+ "parse": [
+  {
+   "name": "/x"
+  },
+  null,
+  null,
+  {
+   "name": "/y"
+  }
+ ],
+ "now": 1787000000000
+}

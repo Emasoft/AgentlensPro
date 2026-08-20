@@ -31,6 +31,57 @@ struct ListingCache {
 
 static LISTING: LazyLock<Mutex<ListingCache>> = LazyLock::new(|| Mutex::new(ListingCache::default()));
 
+/// isClaudeScratchPath — the `claude-<x>` prefix must sit directly under a recognised temp
+/// root (/tmp, /private/tmp, or a macOS /var/folders/.../T), so an unrelated directory
+/// literally named "claude-foo" is NOT mistaken for scratch.
+pub fn is_claude_scratch_path(p: &str) -> bool {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| {
+        regex::Regex::new(r"(?:^|/)(?:private/tmp|tmp|var/folders/[^/]+/[^/]+/[A-Za-z])/claude-[^/]+/").expect("static regex")
+    });
+    !p.is_empty() && re.is_match(p)
+}
+
+/// readScratchFile (row 31) — one generated/output file's content for the on-demand "expand"
+/// leaf. SECURITY (path-traversal containment): the regex above only asserts the RAW string
+/// CONTAINS a scratch segment, so `/tmp/claude-x/../../etc/passwd` matches yet resolves
+/// outside — and the UI is browser-reachable, so a raw-string check would let any website read
+/// arbitrary local files. Hence realpath containment: canonicalize (symlinks + `..` resolved)
+/// and re-check the regex on THAT; all stat/read then use the canonical path, never the
+/// caller-supplied string. Content is capped (200KB default) with an explicit truncated flag;
+/// absence is `{exists:false}`, never a silent null.
+pub fn read_scratch_file(p: &str, max_bytes: usize) -> Value {
+    use serde_json::json;
+    if !is_claude_scratch_path(p) {
+        return json!({ "exists": false, "error": "path not under a Claude scratch tree" });
+    }
+    let Ok(real) = std::fs::canonicalize(p) else { return json!({ "exists": false }) };
+    if !is_claude_scratch_path(&real.to_string_lossy()) {
+        return json!({ "exists": false, "error": "path not under a Claude scratch tree" });
+    }
+    let Ok(st) = std::fs::metadata(&real) else { return json!({ "exists": false }) };
+    if !st.is_file() {
+        return json!({ "exists": false, "error": "not a file" });
+    }
+    let Ok(buf) = std::fs::read(&real) else { return json!({ "exists": false }) };
+    let mtime_ms = st
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs_f64() * 1000.0)
+        .unwrap_or(0.0);
+    json!({
+        "exists": true,
+        "sizeBytes": st.len(),
+        // Math.round(st.mtimeMs) — the JS away-from-zero round on the float ms.
+        "mtimeMs": crate::summarize::helpers::num(crate::summarize::helpers::js_math_round(mtime_ms)),
+        "truncated": buf.len() > max_bytes,
+        // buf.subarray(0, max).toString('utf8') — a cap landing mid-UTF-8-char yields the
+        // replacement char in both engines (lossy either way).
+        "content": String::from_utf8_lossy(&buf[..buf.len().min(max_bytes)]),
+    })
+}
+
 /// `{readdirs, hits, cached}` — /api/debug/log-scan-stats scratchListing; `readdirs` must stay
 /// ~flat while a session is appended to (that is the meter the cache is judged on).
 pub fn scratch_listing_stats() -> (u64, u64, usize) {
