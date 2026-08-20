@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T14:26:30+0200
+updated: 2026-08-20T14:33:51+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -794,7 +794,20 @@ release-via: publish
   has ONE `resolveCallContext` behind both. Shapers RE-PROJECT (get_call_context drops
   `tokenSource` and imposes its own key order); never pass an engine object through unchanged.
   149/149, clippy 28, identities green, check-types OK.
-- **NEXT (P4x.2b): the next handler batch.** Thin re-exposures of ported engines first:
+- **P4x.2b DONE (commit 5f6f1d2): 3 more tools — `get_context_composition` / `get_context_history` /
+  `get_conversation`. 4 of 53 served by Rust.** **THE ORACLE CAUGHT A REAL MISPRICING:** the TS
+  `cost` closure captures **`card?.model` ONLY**, while the emitted `model` FIELD is
+  `step.model ?? card.model`. Passing the merged model to the cost fn PRICES STEPS THE TS LEAVES
+  UNPRICED — invisible in any fixture whose card HAS a model, which is why the oracle carries an
+  explicit `whole-no-card-model` case. Three bounding rules now pinned by name: composition
+  `turnCount` is the UNFILTERED total (a filtered recount reports 1 for every drill); the
+  conversation range CLAMPS to `from+cap-1` (a caller cannot widen it by asking for 9999); history's
+  block drill is VERBATIM (keeps `tokenSource`) while the step projection DROPS it.
+  153/153, clippy 28, identities green, check-types OK.
+- **NEXT (P4x.2c): keep batching handlers.** 49 tools remain. Next-easiest are the ones over ported
+  engines: burn (`get_burn_status`, `get_session_status`, `get_account_status`), cache-risk,
+  statusline, `get_block_content` (composition index is ported). The dispatch cases are
+  `src/mcpServer.ts` ~3434-3890 and most shapers sit at 1617-3390 (largely UNREAD).
   `get_context_composition` (2438), `get_context_history` (2325), `get_conversation` (2391) — all
   three shapers are in `src/mcpServer.ts` and UNREAD except their heads; each has `turn` / range
   filtering and caps (`CONVERSATION_RANGE_CAP`, `CONVERSATION_SUMMARY_TURN_CAP`) plus a
