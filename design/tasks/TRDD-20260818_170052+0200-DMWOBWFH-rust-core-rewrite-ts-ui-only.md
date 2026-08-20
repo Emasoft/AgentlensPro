@@ -598,6 +598,25 @@ release-via: publish
   callcontext (row 35, rawBodyContext over the bodies dir). heavyGuard itself is a NOT-PORTED
   admission deferral (no V8 heap to guard) — record per route. After P4w the HTTP §1 table is
   COMPLETE; what remains of the freeze is the MCP tool surface (§3) + preamble deferrals.
+  **P4w.1 READ FINDINGS (contextCompositionIndex.ts + rawBodyContext.ts read IN FULL
+  2026-08-20, pre-compaction):** the LOAD-BEARING dependency is `callBodyRegistry` — the
+  in-memory pointer index (LRU 200 sessions × 400 ptrs; `record/resolveRequest/sessionIds/
+  requestPointers/responseFor` + the account half) fed by the OTLP logs ingest's
+  api_request_body / api_response_body events. The Rust core has ONLY its account half
+  (CoreState.accounts); agentlens-ingest's process_logs already RETURNS `body_pointers` as
+  data (P3b) but lib.rs::ingest_post currently uses only `account_pairs` — so P4w.1 step one
+  is a `call_body_registry.rs` port + wiring those returned pointers into it. Then
+  `raw_body_context.rs` (buildCallContextFromJson — pure over parsed JSON, block order
+  system → toolCatalog → messages, IMAGE_BLOCK_LABEL_PREFIX contract, BLOCK_TEXT_CAP 20000
+  with tokens counted on FULL text, tool_result inherits toolName via tool_use id map,
+  parseUserId), then tokenEstimator's countTokens/calibrateTokens (check what of it is
+  already in Rust — estimate_tokens_from_bytes exists in generated_files.rs), then the index
+  (LRU 64, scope cap 25, buildCallComposition + windowSizeFor — window from the PRICING
+  table + the context-1m beta UPWARD-ONLY refinement — readResponseUsage 8MB cap,
+  aggregateResidents, sessionCompositionSummary with peak-call breakdown + top-15 resident
+  rows + findSample) and the two routes. The five query/report methods (imageReport,
+  findResidentBlobs, queryBlocks, getSession, getBlockContent) also back MCP tools — port
+  them with the index, the routes only need summary + block-content.
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
