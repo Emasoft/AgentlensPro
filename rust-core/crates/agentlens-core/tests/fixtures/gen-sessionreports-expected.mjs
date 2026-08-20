@@ -22,7 +22,7 @@ import { createRequire } from 'module'
 import { writeFileSync } from 'fs'
 import { join } from 'path'
 const require = createRequire(import.meta.url)
-const { handleGetRecentSessions, handleGetWorkspacePatterns, handleFindRelevantContext, handleGetEfficiencyReport, handleGetInstructionSuggestions, handleGetSessionDetail } = require('../../../../../out/test/mcpServer.js')
+const { handleGetRecentSessions, handleGetWorkspacePatterns, handleFindRelevantContext, handleGetEfficiencyReport, handleGetInstructionSuggestions, handleGetSessionDetail, buildCostRollup } = require('../../../../../out/test/mcpServer.js')
 const dir = new URL('.', import.meta.url).pathname
 
 const NOW = 1_760_000_000_000
@@ -174,6 +174,37 @@ const detailCases = [
   { name: 'empty-timeline', sessions: detailSessions, timeline: [], composition: null, args: { sessionId: 'detail-parent' } },
 ]
 
+// get_cost_rollup: session-granular OVERLAP semantics, the undated exclusion, and the unpriced
+// exclusion. Cards reuse the detail set plus purpose-built ones.
+const unpricedCard = card({ sessionId: 'roll-unpriced', startTime: iso(NOW - 7_200_000), durationMs: 600_000,
+  inputTokens: 1_000, outputTokens: 200, totalLlmCalls: 3, workspace: '/ws/roll', model: 'mystery-model-x' })
+unpricedCard.unpriced = true
+unpricedCard.turns = 3
+const spanningCard = card({ sessionId: 'roll-spans-window-edge', startTime: iso(NOW - 30 * 3_600_000), durationMs: 8 * 3_600_000,
+  inputTokens: 5_000, outputTokens: 800, cacheReadTokens: 90_000, totalLlmCalls: 20, workspace: '/ws/roll', model: 'claude-opus-5' })
+spanningCard.turns = 20
+const rollSessions = [...detailSessions, unpricedCard, spanningCard,
+  card({ sessionId: 'roll-undated', startTime: 'garbage', inputTokens: 7 })]
+for (const s of rollSessions) { if (s.turns === undefined) s.turns = s.totalLlmCalls }
+const rollupCases = [
+  { name: 'default-24h-by-project', args: {} },
+  { name: 'by-model', args: { groupBy: 'model' } },
+  { name: 'by-session-carries-labels', args: { groupBy: 'session' } },
+  { name: 'by-subagent-implicitly-filters', args: { groupBy: 'subagent' } },
+  { name: 'by-all', args: { groupBy: 'all' } },
+  { name: 'window-48h-catches-the-spanning-card', args: { windowHours: 48 } },
+  // The spanning card STARTED 30h ago but RAN until 22h ago, so a 24h window still counts it —
+  // overlap, not start-time membership.
+  { name: 'overlap-not-start-membership', args: { windowHours: 24 } },
+  { name: 'explicit-iso-window', args: { sinceIso: iso(NOW - 4 * 3_600_000), untilIso: iso(NOW - 1_800_000) } },
+  { name: 'empty-window-is-an-error', args: { sinceIso: iso(NOW), untilIso: iso(NOW - 3_600_000) } },
+  { name: 'bad-iso-is-an-error', args: { sinceIso: 'not-a-date' } },
+  { name: 'subagents-only', args: { subagentsOnly: true } },
+  { name: 'parent-filter', args: { parentSessionId: 'detail-parent' } },
+  { name: 'live-only', args: { liveOnly: true } },
+  { name: 'sort-by-total-top-1', args: { sortBy: 'total', topN: 1 } },
+]
+
 const patternCases = [
   { name: 'all', args: {} },
   { name: 'days-1', args: { days: 1 } },
@@ -203,6 +234,9 @@ try {
     instrResults: instrCases.map(c => J(handleGetInstructionSuggestions(c.sessions, c.args))),
     detailCases: J(detailCases),
     detailResults: detailCases.map(c => J(handleGetSessionDetail(c.sessions, () => c.timeline, c.composition, c.args))),
+    rollupSessions: J(rollSessions),
+    rollupCases: J(rollupCases),
+    rollupResults: rollupCases.map(c => J(buildCostRollup(rollSessions, c.args, NOW))),
   }, null, 1) + '\n')
 } finally {
   Date.now = realNow

@@ -2829,7 +2829,8 @@
        "sizeBytes": 900,
        "tokenEstimate": 220
       }
-     ]
+     ],
+     "turns": 4
     },
     {
      "sessionId": "detail-fork",
@@ -2847,7 +2848,8 @@
      "outcome": "ok",
      "parentSessionId": "detail-parent",
      "spawnKind": "fork",
-     "spawnedByTurn": 2
+     "spawnedByTurn": 2,
+     "turns": 2
     },
     {
      "sessionId": "detail-async",
@@ -2867,7 +2869,8 @@
      "spawnKind": "fresh",
      "spawnAsync": true,
      "spawnModelOverride": "claude-sonnet-5",
-     "spawnIsolation": "worktree"
+     "spawnIsolation": "worktree",
+     "turns": 0
     }
    ],
    "timeline": [
@@ -3004,7 +3007,8 @@
        "sizeBytes": 900,
        "tokenEstimate": 220
       }
-     ]
+     ],
+     "turns": 4
     },
     {
      "sessionId": "detail-fork",
@@ -3022,7 +3026,8 @@
      "outcome": "ok",
      "parentSessionId": "detail-parent",
      "spawnKind": "fork",
-     "spawnedByTurn": 2
+     "spawnedByTurn": 2,
+     "turns": 2
     },
     {
      "sessionId": "detail-async",
@@ -3042,7 +3047,8 @@
      "spawnKind": "fresh",
      "spawnAsync": true,
      "spawnModelOverride": "claude-sonnet-5",
-     "spawnIsolation": "worktree"
+     "spawnIsolation": "worktree",
+     "turns": 0
     }
    ],
    "timeline": [
@@ -3141,7 +3147,8 @@
        "sizeBytes": 900,
        "tokenEstimate": 220
       }
-     ]
+     ],
+     "turns": 4
     }
    ],
    "timeline": [
@@ -3240,7 +3247,8 @@
        "sizeBytes": 900,
        "tokenEstimate": 220
       }
-     ]
+     ],
+     "turns": 4
     },
     {
      "sessionId": "detail-fork",
@@ -3258,7 +3266,8 @@
      "outcome": "ok",
      "parentSessionId": "detail-parent",
      "spawnKind": "fork",
-     "spawnedByTurn": 2
+     "spawnedByTurn": 2,
+     "turns": 2
     },
     {
      "sessionId": "detail-async",
@@ -3278,7 +3287,8 @@
      "spawnKind": "fresh",
      "spawnAsync": true,
      "spawnModelOverride": "claude-sonnet-5",
-     "spawnIsolation": "worktree"
+     "spawnIsolation": "worktree",
+     "turns": 0
     }
    ],
    "timeline": [],
@@ -3327,7 +3337,8 @@
        "sizeBytes": 900,
        "tokenEstimate": 220
       }
-     ]
+     ],
+     "turns": 4
     },
     {
      "sessionId": "detail-fork",
@@ -3345,7 +3356,8 @@
      "outcome": "ok",
      "parentSessionId": "detail-parent",
      "spawnKind": "fork",
-     "spawnedByTurn": 2
+     "spawnedByTurn": 2,
+     "turns": 2
     },
     {
      "sessionId": "detail-async",
@@ -3365,7 +3377,8 @@
      "spawnKind": "fresh",
      "spawnAsync": true,
      "spawnModelOverride": "claude-sonnet-5",
-     "spawnIsolation": "worktree"
+     "spawnIsolation": "worktree",
+     "turns": 0
     }
    ],
    "timeline": [],
@@ -3794,6 +3807,1101 @@
     ]
    },
    "timeline": []
+  }
+ ],
+ "rollupSessions": [
+  {
+   "sessionId": "detail-parent",
+   "source": "claude_code",
+   "model": "claude-opus-5",
+   "startTime": "2025-10-09T07:53:20.000Z",
+   "durationMs": 3500000,
+   "inputTokens": 800,
+   "outputTokens": 150,
+   "cacheReadTokens": 60000,
+   "cacheCreateTokens": 9000,
+   "cacheHitRate": 0.87,
+   "totalLlmCalls": 4,
+   "errors": 1,
+   "userRequest": "detail fixture prompt",
+   "workspace": "/ws/detail",
+   "toolCounts": {
+    "Bash": 3
+   },
+   "loopSignals": [
+    {
+     "type": "repeated_tool"
+    }
+   ],
+   "filesRead": [
+    "a.ts"
+   ],
+   "filesChanged": [
+    "b.ts"
+   ],
+   "outcome": "partial",
+   "peakContextPerTurn": 70000,
+   "generatedFiles": [
+    {
+     "path": "/out/report.md",
+     "sizeBytes": 900,
+     "tokenEstimate": 220
+    }
+   ],
+   "turns": 4
+  },
+  {
+   "sessionId": "detail-fork",
+   "source": "claude_code",
+   "model": "claude-opus-5",
+   "startTime": "2025-10-09T08:23:20.000Z",
+   "durationMs": 60000,
+   "inputTokens": 50,
+   "outputTokens": 10,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "cacheHitRate": 0,
+   "totalLlmCalls": 2,
+   "errors": 0,
+   "outcome": "ok",
+   "parentSessionId": "detail-parent",
+   "spawnKind": "fork",
+   "spawnedByTurn": 2,
+   "turns": 2
+  },
+  {
+   "sessionId": "detail-async",
+   "source": "claude_code",
+   "model": "claude-opus-5",
+   "startTime": "2025-10-09T08:25:00.000Z",
+   "durationMs": 0,
+   "inputTokens": 0,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "cacheHitRate": 0,
+   "totalLlmCalls": 0,
+   "errors": 0,
+   "outcome": "ok",
+   "parentSessionId": "detail-parent",
+   "spawnKind": "fresh",
+   "spawnAsync": true,
+   "spawnModelOverride": "claude-sonnet-5",
+   "spawnIsolation": "worktree",
+   "turns": 0
+  },
+  {
+   "sessionId": "roll-unpriced",
+   "source": "claude_code",
+   "model": "mystery-model-x",
+   "startTime": "2025-10-09T06:53:20.000Z",
+   "durationMs": 600000,
+   "inputTokens": 1000,
+   "outputTokens": 200,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "cacheHitRate": 0,
+   "totalLlmCalls": 3,
+   "errors": 0,
+   "workspace": "/ws/roll",
+   "outcome": "ok",
+   "unpriced": true,
+   "turns": 3
+  },
+  {
+   "sessionId": "roll-spans-window-edge",
+   "source": "claude_code",
+   "model": "claude-opus-5",
+   "startTime": "2025-10-08T02:53:20.000Z",
+   "durationMs": 28800000,
+   "inputTokens": 5000,
+   "outputTokens": 800,
+   "cacheReadTokens": 90000,
+   "cacheCreateTokens": 0,
+   "cacheHitRate": 0,
+   "totalLlmCalls": 20,
+   "errors": 0,
+   "workspace": "/ws/roll",
+   "outcome": "ok",
+   "turns": 20
+  },
+  {
+   "sessionId": "roll-undated",
+   "source": "claude_code",
+   "model": "claude-opus-5",
+   "startTime": "garbage",
+   "durationMs": 0,
+   "inputTokens": 7,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0,
+   "cacheHitRate": 0,
+   "totalLlmCalls": 0,
+   "errors": 0,
+   "outcome": "ok",
+   "turns": 0
+  }
+ ],
+ "rollupCases": [
+  {
+   "name": "default-24h-by-project",
+   "args": {}
+  },
+  {
+   "name": "by-model",
+   "args": {
+    "groupBy": "model"
+   }
+  },
+  {
+   "name": "by-session-carries-labels",
+   "args": {
+    "groupBy": "session"
+   }
+  },
+  {
+   "name": "by-subagent-implicitly-filters",
+   "args": {
+    "groupBy": "subagent"
+   }
+  },
+  {
+   "name": "by-all",
+   "args": {
+    "groupBy": "all"
+   }
+  },
+  {
+   "name": "window-48h-catches-the-spanning-card",
+   "args": {
+    "windowHours": 48
+   }
+  },
+  {
+   "name": "overlap-not-start-membership",
+   "args": {
+    "windowHours": 24
+   }
+  },
+  {
+   "name": "explicit-iso-window",
+   "args": {
+    "sinceIso": "2025-10-09T04:53:20.000Z",
+    "untilIso": "2025-10-09T08:23:20.000Z"
+   }
+  },
+  {
+   "name": "empty-window-is-an-error",
+   "args": {
+    "sinceIso": "2025-10-09T08:53:20.000Z",
+    "untilIso": "2025-10-09T07:53:20.000Z"
+   }
+  },
+  {
+   "name": "bad-iso-is-an-error",
+   "args": {
+    "sinceIso": "not-a-date"
+   }
+  },
+  {
+   "name": "subagents-only",
+   "args": {
+    "subagentsOnly": true
+   }
+  },
+  {
+   "name": "parent-filter",
+   "args": {
+    "parentSessionId": "detail-parent"
+   }
+  },
+  {
+   "name": "live-only",
+   "args": {
+    "liveOnly": true
+   }
+  },
+  {
+   "name": "sort-by-total-top-1",
+   "args": {
+    "sortBy": "total",
+    "topN": 1
+   }
+  }
+ ],
+ "rollupResults": [
+  {
+   "window": {
+    "sinceIso": "2025-10-08T08:53:20.000Z",
+    "untilIso": "2025-10-09T08:53:20.000Z",
+    "hours": 24
+   },
+   "groupBy": "project",
+   "filters": {
+    "subagentsOnly": false,
+    "parentSessionId": null,
+    "liveOnly": false,
+    "sortBy": "cost"
+   },
+   "totals": {
+    "sessions": 5,
+    "turns": 29,
+    "input": 6850,
+    "output": 1160,
+    "cacheRead": 150000,
+    "cacheCreation": 9000,
+    "costUsd": 0.1845,
+    "unpricedSessions": 1,
+    "totalTokens": 167010,
+    "tokensPerHour": 6959,
+    "costUsdPerHour": 0.0077
+   },
+   "groups": [
+    {
+     "key": "/ws/detail",
+     "sessions": 1,
+     "turns": 4,
+     "input": 800,
+     "output": 150,
+     "cacheRead": 60000,
+     "cacheCreation": 9000,
+     "costUsd": 0.094,
+     "unpricedSessions": 0,
+     "totalTokens": 69950,
+     "tokensPerHour": 2915,
+     "costUsdPerHour": 0.0039,
+     "costShare": 0.509
+    },
+    {
+     "key": "/ws/roll",
+     "sessions": 2,
+     "turns": 23,
+     "input": 6000,
+     "output": 1000,
+     "cacheRead": 90000,
+     "cacheCreation": 0,
+     "costUsd": 0.09000000000000001,
+     "unpricedSessions": 1,
+     "totalTokens": 97000,
+     "tokensPerHour": 4042,
+     "costUsdPerHour": 0.0038,
+     "costShare": 0.488
+    },
+    {
+     "key": "(unknown workspace)",
+     "sessions": 2,
+     "turns": 2,
+     "input": 50,
+     "output": 10,
+     "cacheRead": 0,
+     "cacheCreation": 0,
+     "costUsd": 0.0005,
+     "unpricedSessions": 0,
+     "totalTokens": 60,
+     "tokensPerHour": 3,
+     "costUsdPerHour": 0,
+     "costShare": 0.003
+    }
+   ],
+   "coverage": {
+    "sessionsInWindow": 5,
+    "undatedSessions": 1,
+    "groupsTotal": 3,
+    "groupsReturned": 3,
+    "note": "sessions count when they OVERLAP the window; token totals are whole-session (cards are session-granular). unpricedSessions are excluded from costUsd, never silent $0. tokensPerHour/costUsdPerHour divide by the window length."
+   }
+  },
+  {
+   "window": {
+    "sinceIso": "2025-10-08T08:53:20.000Z",
+    "untilIso": "2025-10-09T08:53:20.000Z",
+    "hours": 24
+   },
+   "groupBy": "model",
+   "filters": {
+    "subagentsOnly": false,
+    "parentSessionId": null,
+    "liveOnly": false,
+    "sortBy": "cost"
+   },
+   "totals": {
+    "sessions": 5,
+    "turns": 29,
+    "input": 6850,
+    "output": 1160,
+    "cacheRead": 150000,
+    "cacheCreation": 9000,
+    "costUsd": 0.1845,
+    "unpricedSessions": 1,
+    "totalTokens": 167010,
+    "tokensPerHour": 6959,
+    "costUsdPerHour": 0.0077
+   },
+   "groups": [
+    {
+     "key": "claude-opus-5",
+     "sessions": 4,
+     "turns": 26,
+     "input": 5850,
+     "output": 960,
+     "cacheRead": 150000,
+     "cacheCreation": 9000,
+     "costUsd": 0.1845,
+     "unpricedSessions": 0,
+     "totalTokens": 165810,
+     "tokensPerHour": 6909,
+     "costUsdPerHour": 0.0077,
+     "costShare": 1
+    },
+    {
+     "key": "mystery-model-x",
+     "sessions": 1,
+     "turns": 3,
+     "input": 1000,
+     "output": 200,
+     "cacheRead": 0,
+     "cacheCreation": 0,
+     "costUsd": 0,
+     "unpricedSessions": 1,
+     "totalTokens": 1200,
+     "tokensPerHour": 50,
+     "costUsdPerHour": 0,
+     "costShare": 0
+    }
+   ],
+   "coverage": {
+    "sessionsInWindow": 5,
+    "undatedSessions": 1,
+    "groupsTotal": 2,
+    "groupsReturned": 2,
+    "note": "sessions count when they OVERLAP the window; token totals are whole-session (cards are session-granular). unpricedSessions are excluded from costUsd, never silent $0. tokensPerHour/costUsdPerHour divide by the window length."
+   }
+  },
+  {
+   "window": {
+    "sinceIso": "2025-10-08T08:53:20.000Z",
+    "untilIso": "2025-10-09T08:53:20.000Z",
+    "hours": 24
+   },
+   "groupBy": "session",
+   "filters": {
+    "subagentsOnly": false,
+    "parentSessionId": null,
+    "liveOnly": false,
+    "sortBy": "cost"
+   },
+   "totals": {
+    "sessions": 5,
+    "turns": 29,
+    "input": 6850,
+    "output": 1160,
+    "cacheRead": 150000,
+    "cacheCreation": 9000,
+    "costUsd": 0.1845,
+    "unpricedSessions": 1,
+    "totalTokens": 167010,
+    "tokensPerHour": 6959,
+    "costUsdPerHour": 0.0077
+   },
+   "groups": [
+    {
+     "key": "detail-parent",
+     "sessions": 1,
+     "turns": 4,
+     "input": 800,
+     "output": 150,
+     "cacheRead": 60000,
+     "cacheCreation": 9000,
+     "costUsd": 0.094,
+     "unpricedSessions": 0,
+     "workspace": "/ws/detail",
+     "model": "claude-opus-5",
+     "parentSessionId": null,
+     "spawnKind": null,
+     "subagentType": null,
+     "startedAtIso": "2025-10-09T07:53:20.000Z",
+     "tokensSource": null,
+     "totalTokens": 69950,
+     "tokensPerHour": 2915,
+     "costUsdPerHour": 0.0039,
+     "costShare": 0.509
+    },
+    {
+     "key": "roll-spans-window-edge",
+     "sessions": 1,
+     "turns": 20,
+     "input": 5000,
+     "output": 800,
+     "cacheRead": 90000,
+     "cacheCreation": 0,
+     "costUsd": 0.09000000000000001,
+     "unpricedSessions": 0,
+     "workspace": "/ws/roll",
+     "model": "claude-opus-5",
+     "parentSessionId": null,
+     "spawnKind": null,
+     "subagentType": null,
+     "startedAtIso": "2025-10-08T02:53:20.000Z",
+     "tokensSource": null,
+     "totalTokens": 95800,
+     "tokensPerHour": 3992,
+     "costUsdPerHour": 0.0038,
+     "costShare": 0.488
+    },
+    {
+     "key": "detail-fork",
+     "sessions": 1,
+     "turns": 2,
+     "input": 50,
+     "output": 10,
+     "cacheRead": 0,
+     "cacheCreation": 0,
+     "costUsd": 0.0005,
+     "unpricedSessions": 0,
+     "model": "claude-opus-5",
+     "parentSessionId": "detail-parent",
+     "spawnKind": "fork",
+     "subagentType": null,
+     "startedAtIso": "2025-10-09T08:23:20.000Z",
+     "tokensSource": null,
+     "totalTokens": 60,
+     "tokensPerHour": 3,
+     "costUsdPerHour": 0,
+     "costShare": 0.003
+    },
+    {
+     "key": "detail-async",
+     "sessions": 1,
+     "turns": 0,
+     "input": 0,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheCreation": 0,
+     "costUsd": 0,
+     "unpricedSessions": 0,
+     "model": "claude-opus-5",
+     "parentSessionId": "detail-parent",
+     "spawnKind": "fresh",
+     "subagentType": null,
+     "startedAtIso": "2025-10-09T08:25:00.000Z",
+     "tokensSource": null,
+     "totalTokens": 0,
+     "tokensPerHour": 0,
+     "costUsdPerHour": 0,
+     "costShare": 0
+    },
+    {
+     "key": "roll-unpriced",
+     "sessions": 1,
+     "turns": 3,
+     "input": 1000,
+     "output": 200,
+     "cacheRead": 0,
+     "cacheCreation": 0,
+     "costUsd": 0,
+     "unpricedSessions": 1,
+     "workspace": "/ws/roll",
+     "model": "mystery-model-x",
+     "parentSessionId": null,
+     "spawnKind": null,
+     "subagentType": null,
+     "startedAtIso": "2025-10-09T06:53:20.000Z",
+     "tokensSource": null,
+     "totalTokens": 1200,
+     "tokensPerHour": 50,
+     "costUsdPerHour": 0,
+     "costShare": 0
+    }
+   ],
+   "coverage": {
+    "sessionsInWindow": 5,
+    "undatedSessions": 1,
+    "groupsTotal": 5,
+    "groupsReturned": 5,
+    "note": "sessions count when they OVERLAP the window; token totals are whole-session (cards are session-granular). unpricedSessions are excluded from costUsd, never silent $0. tokensPerHour/costUsdPerHour divide by the window length."
+   }
+  },
+  {
+   "window": {
+    "sinceIso": "2025-10-08T08:53:20.000Z",
+    "untilIso": "2025-10-09T08:53:20.000Z",
+    "hours": 24
+   },
+   "groupBy": "subagent",
+   "filters": {
+    "subagentsOnly": false,
+    "parentSessionId": null,
+    "liveOnly": false,
+    "sortBy": "cost"
+   },
+   "totals": {
+    "sessions": 2,
+    "turns": 2,
+    "input": 50,
+    "output": 10,
+    "cacheRead": 0,
+    "cacheCreation": 0,
+    "costUsd": 0.0005,
+    "unpricedSessions": 0,
+    "totalTokens": 60,
+    "tokensPerHour": 3,
+    "costUsdPerHour": 0
+   },
+   "groups": [
+    {
+     "key": "detail-fork",
+     "sessions": 1,
+     "turns": 2,
+     "input": 50,
+     "output": 10,
+     "cacheRead": 0,
+     "cacheCreation": 0,
+     "costUsd": 0.0005,
+     "unpricedSessions": 0,
+     "model": "claude-opus-5",
+     "parentSessionId": "detail-parent",
+     "spawnKind": "fork",
+     "subagentType": null,
+     "startedAtIso": "2025-10-09T08:23:20.000Z",
+     "tokensSource": null,
+     "totalTokens": 60,
+     "tokensPerHour": 3,
+     "costUsdPerHour": 0,
+     "costShare": 1
+    },
+    {
+     "key": "detail-async",
+     "sessions": 1,
+     "turns": 0,
+     "input": 0,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheCreation": 0,
+     "costUsd": 0,
+     "unpricedSessions": 0,
+     "model": "claude-opus-5",
+     "parentSessionId": "detail-parent",
+     "spawnKind": "fresh",
+     "subagentType": null,
+     "startedAtIso": "2025-10-09T08:25:00.000Z",
+     "tokensSource": null,
+     "totalTokens": 0,
+     "tokensPerHour": 0,
+     "costUsdPerHour": 0,
+     "costShare": 0
+    }
+   ],
+   "coverage": {
+    "sessionsInWindow": 2,
+    "undatedSessions": 1,
+    "groupsTotal": 2,
+    "groupsReturned": 2,
+    "note": "sessions count when they OVERLAP the window; token totals are whole-session (cards are session-granular). unpricedSessions are excluded from costUsd, never silent $0. tokensPerHour/costUsdPerHour divide by the window length."
+   }
+  },
+  {
+   "window": {
+    "sinceIso": "2025-10-08T08:53:20.000Z",
+    "untilIso": "2025-10-09T08:53:20.000Z",
+    "hours": 24
+   },
+   "groupBy": "all",
+   "filters": {
+    "subagentsOnly": false,
+    "parentSessionId": null,
+    "liveOnly": false,
+    "sortBy": "cost"
+   },
+   "totals": {
+    "sessions": 5,
+    "turns": 29,
+    "input": 6850,
+    "output": 1160,
+    "cacheRead": 150000,
+    "cacheCreation": 9000,
+    "costUsd": 0.1845,
+    "unpricedSessions": 1,
+    "totalTokens": 167010,
+    "tokensPerHour": 6959,
+    "costUsdPerHour": 0.0077
+   },
+   "groups": [
+    {
+     "key": "all",
+     "sessions": 5,
+     "turns": 29,
+     "input": 6850,
+     "output": 1160,
+     "cacheRead": 150000,
+     "cacheCreation": 9000,
+     "costUsd": 0.1845,
+     "unpricedSessions": 1,
+     "totalTokens": 167010,
+     "tokensPerHour": 6959,
+     "costUsdPerHour": 0.0077,
+     "costShare": 1
+    }
+   ],
+   "coverage": {
+    "sessionsInWindow": 5,
+    "undatedSessions": 1,
+    "groupsTotal": 1,
+    "groupsReturned": 1,
+    "note": "sessions count when they OVERLAP the window; token totals are whole-session (cards are session-granular). unpricedSessions are excluded from costUsd, never silent $0. tokensPerHour/costUsdPerHour divide by the window length."
+   }
+  },
+  {
+   "window": {
+    "sinceIso": "2025-10-07T08:53:20.000Z",
+    "untilIso": "2025-10-09T08:53:20.000Z",
+    "hours": 48
+   },
+   "groupBy": "project",
+   "filters": {
+    "subagentsOnly": false,
+    "parentSessionId": null,
+    "liveOnly": false,
+    "sortBy": "cost"
+   },
+   "totals": {
+    "sessions": 5,
+    "turns": 29,
+    "input": 6850,
+    "output": 1160,
+    "cacheRead": 150000,
+    "cacheCreation": 9000,
+    "costUsd": 0.1845,
+    "unpricedSessions": 1,
+    "totalTokens": 167010,
+    "tokensPerHour": 3479,
+    "costUsdPerHour": 0.0038
+   },
+   "groups": [
+    {
+     "key": "/ws/detail",
+     "sessions": 1,
+     "turns": 4,
+     "input": 800,
+     "output": 150,
+     "cacheRead": 60000,
+     "cacheCreation": 9000,
+     "costUsd": 0.094,
+     "unpricedSessions": 0,
+     "totalTokens": 69950,
+     "tokensPerHour": 1457,
+     "costUsdPerHour": 0.002,
+     "costShare": 0.509
+    },
+    {
+     "key": "/ws/roll",
+     "sessions": 2,
+     "turns": 23,
+     "input": 6000,
+     "output": 1000,
+     "cacheRead": 90000,
+     "cacheCreation": 0,
+     "costUsd": 0.09000000000000001,
+     "unpricedSessions": 1,
+     "totalTokens": 97000,
+     "tokensPerHour": 2021,
+     "costUsdPerHour": 0.0019,
+     "costShare": 0.488
+    },
+    {
+     "key": "(unknown workspace)",
+     "sessions": 2,
+     "turns": 2,
+     "input": 50,
+     "output": 10,
+     "cacheRead": 0,
+     "cacheCreation": 0,
+     "costUsd": 0.0005,
+     "unpricedSessions": 0,
+     "totalTokens": 60,
+     "tokensPerHour": 1,
+     "costUsdPerHour": 0,
+     "costShare": 0.003
+    }
+   ],
+   "coverage": {
+    "sessionsInWindow": 5,
+    "undatedSessions": 1,
+    "groupsTotal": 3,
+    "groupsReturned": 3,
+    "note": "sessions count when they OVERLAP the window; token totals are whole-session (cards are session-granular). unpricedSessions are excluded from costUsd, never silent $0. tokensPerHour/costUsdPerHour divide by the window length."
+   }
+  },
+  {
+   "window": {
+    "sinceIso": "2025-10-08T08:53:20.000Z",
+    "untilIso": "2025-10-09T08:53:20.000Z",
+    "hours": 24
+   },
+   "groupBy": "project",
+   "filters": {
+    "subagentsOnly": false,
+    "parentSessionId": null,
+    "liveOnly": false,
+    "sortBy": "cost"
+   },
+   "totals": {
+    "sessions": 5,
+    "turns": 29,
+    "input": 6850,
+    "output": 1160,
+    "cacheRead": 150000,
+    "cacheCreation": 9000,
+    "costUsd": 0.1845,
+    "unpricedSessions": 1,
+    "totalTokens": 167010,
+    "tokensPerHour": 6959,
+    "costUsdPerHour": 0.0077
+   },
+   "groups": [
+    {
+     "key": "/ws/detail",
+     "sessions": 1,
+     "turns": 4,
+     "input": 800,
+     "output": 150,
+     "cacheRead": 60000,
+     "cacheCreation": 9000,
+     "costUsd": 0.094,
+     "unpricedSessions": 0,
+     "totalTokens": 69950,
+     "tokensPerHour": 2915,
+     "costUsdPerHour": 0.0039,
+     "costShare": 0.509
+    },
+    {
+     "key": "/ws/roll",
+     "sessions": 2,
+     "turns": 23,
+     "input": 6000,
+     "output": 1000,
+     "cacheRead": 90000,
+     "cacheCreation": 0,
+     "costUsd": 0.09000000000000001,
+     "unpricedSessions": 1,
+     "totalTokens": 97000,
+     "tokensPerHour": 4042,
+     "costUsdPerHour": 0.0038,
+     "costShare": 0.488
+    },
+    {
+     "key": "(unknown workspace)",
+     "sessions": 2,
+     "turns": 2,
+     "input": 50,
+     "output": 10,
+     "cacheRead": 0,
+     "cacheCreation": 0,
+     "costUsd": 0.0005,
+     "unpricedSessions": 0,
+     "totalTokens": 60,
+     "tokensPerHour": 3,
+     "costUsdPerHour": 0,
+     "costShare": 0.003
+    }
+   ],
+   "coverage": {
+    "sessionsInWindow": 5,
+    "undatedSessions": 1,
+    "groupsTotal": 3,
+    "groupsReturned": 3,
+    "note": "sessions count when they OVERLAP the window; token totals are whole-session (cards are session-granular). unpricedSessions are excluded from costUsd, never silent $0. tokensPerHour/costUsdPerHour divide by the window length."
+   }
+  },
+  {
+   "window": {
+    "sinceIso": "2025-10-09T04:53:20.000Z",
+    "untilIso": "2025-10-09T08:23:20.000Z",
+    "hours": 3.5
+   },
+   "groupBy": "project",
+   "filters": {
+    "subagentsOnly": false,
+    "parentSessionId": null,
+    "liveOnly": false,
+    "sortBy": "cost"
+   },
+   "totals": {
+    "sessions": 3,
+    "turns": 9,
+    "input": 1850,
+    "output": 360,
+    "cacheRead": 60000,
+    "cacheCreation": 9000,
+    "costUsd": 0.0945,
+    "unpricedSessions": 1,
+    "totalTokens": 71210,
+    "tokensPerHour": 20346,
+    "costUsdPerHour": 0.027
+   },
+   "groups": [
+    {
+     "key": "/ws/detail",
+     "sessions": 1,
+     "turns": 4,
+     "input": 800,
+     "output": 150,
+     "cacheRead": 60000,
+     "cacheCreation": 9000,
+     "costUsd": 0.094,
+     "unpricedSessions": 0,
+     "totalTokens": 69950,
+     "tokensPerHour": 19986,
+     "costUsdPerHour": 0.0269,
+     "costShare": 0.995
+    },
+    {
+     "key": "(unknown workspace)",
+     "sessions": 1,
+     "turns": 2,
+     "input": 50,
+     "output": 10,
+     "cacheRead": 0,
+     "cacheCreation": 0,
+     "costUsd": 0.0005,
+     "unpricedSessions": 0,
+     "totalTokens": 60,
+     "tokensPerHour": 17,
+     "costUsdPerHour": 0.0001,
+     "costShare": 0.005
+    },
+    {
+     "key": "/ws/roll",
+     "sessions": 1,
+     "turns": 3,
+     "input": 1000,
+     "output": 200,
+     "cacheRead": 0,
+     "cacheCreation": 0,
+     "costUsd": 0,
+     "unpricedSessions": 1,
+     "totalTokens": 1200,
+     "tokensPerHour": 343,
+     "costUsdPerHour": 0,
+     "costShare": 0
+    }
+   ],
+   "coverage": {
+    "sessionsInWindow": 3,
+    "undatedSessions": 1,
+    "groupsTotal": 3,
+    "groupsReturned": 3,
+    "note": "sessions count when they OVERLAP the window; token totals are whole-session (cards are session-granular). unpricedSessions are excluded from costUsd, never silent $0. tokensPerHour/costUsdPerHour divide by the window length."
+   }
+  },
+  {
+   "error": "the window is empty (since >= until)"
+  },
+  {
+   "error": "sinceIso/untilIso must be valid ISO datetimes"
+  },
+  {
+   "window": {
+    "sinceIso": "2025-10-08T08:53:20.000Z",
+    "untilIso": "2025-10-09T08:53:20.000Z",
+    "hours": 24
+   },
+   "groupBy": "project",
+   "filters": {
+    "subagentsOnly": true,
+    "parentSessionId": null,
+    "liveOnly": false,
+    "sortBy": "cost"
+   },
+   "totals": {
+    "sessions": 2,
+    "turns": 2,
+    "input": 50,
+    "output": 10,
+    "cacheRead": 0,
+    "cacheCreation": 0,
+    "costUsd": 0.0005,
+    "unpricedSessions": 0,
+    "totalTokens": 60,
+    "tokensPerHour": 3,
+    "costUsdPerHour": 0
+   },
+   "groups": [
+    {
+     "key": "(unknown workspace)",
+     "sessions": 2,
+     "turns": 2,
+     "input": 50,
+     "output": 10,
+     "cacheRead": 0,
+     "cacheCreation": 0,
+     "costUsd": 0.0005,
+     "unpricedSessions": 0,
+     "totalTokens": 60,
+     "tokensPerHour": 3,
+     "costUsdPerHour": 0,
+     "costShare": 1
+    }
+   ],
+   "coverage": {
+    "sessionsInWindow": 2,
+    "undatedSessions": 1,
+    "groupsTotal": 1,
+    "groupsReturned": 1,
+    "note": "sessions count when they OVERLAP the window; token totals are whole-session (cards are session-granular). unpricedSessions are excluded from costUsd, never silent $0. tokensPerHour/costUsdPerHour divide by the window length."
+   }
+  },
+  {
+   "window": {
+    "sinceIso": "2025-10-08T08:53:20.000Z",
+    "untilIso": "2025-10-09T08:53:20.000Z",
+    "hours": 24
+   },
+   "groupBy": "project",
+   "filters": {
+    "subagentsOnly": false,
+    "parentSessionId": "detail-parent",
+    "liveOnly": false,
+    "sortBy": "cost"
+   },
+   "totals": {
+    "sessions": 2,
+    "turns": 2,
+    "input": 50,
+    "output": 10,
+    "cacheRead": 0,
+    "cacheCreation": 0,
+    "costUsd": 0.0005,
+    "unpricedSessions": 0,
+    "totalTokens": 60,
+    "tokensPerHour": 3,
+    "costUsdPerHour": 0
+   },
+   "groups": [
+    {
+     "key": "(unknown workspace)",
+     "sessions": 2,
+     "turns": 2,
+     "input": 50,
+     "output": 10,
+     "cacheRead": 0,
+     "cacheCreation": 0,
+     "costUsd": 0.0005,
+     "unpricedSessions": 0,
+     "totalTokens": 60,
+     "tokensPerHour": 3,
+     "costUsdPerHour": 0,
+     "costShare": 1
+    }
+   ],
+   "coverage": {
+    "sessionsInWindow": 2,
+    "undatedSessions": 1,
+    "groupsTotal": 1,
+    "groupsReturned": 1,
+    "note": "sessions count when they OVERLAP the window; token totals are whole-session (cards are session-granular). unpricedSessions are excluded from costUsd, never silent $0. tokensPerHour/costUsdPerHour divide by the window length."
+   }
+  },
+  {
+   "window": {
+    "sinceIso": "2025-10-08T08:53:20.000Z",
+    "untilIso": "2025-10-09T08:53:20.000Z",
+    "hours": 24
+   },
+   "groupBy": "project",
+   "filters": {
+    "subagentsOnly": false,
+    "parentSessionId": null,
+    "liveOnly": true,
+    "sortBy": "cost"
+   },
+   "totals": {
+    "sessions": 1,
+    "turns": 4,
+    "input": 800,
+    "output": 150,
+    "cacheRead": 60000,
+    "cacheCreation": 9000,
+    "costUsd": 0.094,
+    "unpricedSessions": 0,
+    "totalTokens": 69950,
+    "tokensPerHour": 2915,
+    "costUsdPerHour": 0.0039
+   },
+   "groups": [
+    {
+     "key": "/ws/detail",
+     "sessions": 1,
+     "turns": 4,
+     "input": 800,
+     "output": 150,
+     "cacheRead": 60000,
+     "cacheCreation": 9000,
+     "costUsd": 0.094,
+     "unpricedSessions": 0,
+     "totalTokens": 69950,
+     "tokensPerHour": 2915,
+     "costUsdPerHour": 0.0039,
+     "costShare": 1
+    }
+   ],
+   "coverage": {
+    "sessionsInWindow": 1,
+    "undatedSessions": 1,
+    "groupsTotal": 1,
+    "groupsReturned": 1,
+    "note": "sessions count when they OVERLAP the window; token totals are whole-session (cards are session-granular). unpricedSessions are excluded from costUsd, never silent $0. tokensPerHour/costUsdPerHour divide by the window length."
+   }
+  },
+  {
+   "window": {
+    "sinceIso": "2025-10-08T08:53:20.000Z",
+    "untilIso": "2025-10-09T08:53:20.000Z",
+    "hours": 24
+   },
+   "groupBy": "project",
+   "filters": {
+    "subagentsOnly": false,
+    "parentSessionId": null,
+    "liveOnly": false,
+    "sortBy": "total"
+   },
+   "totals": {
+    "sessions": 5,
+    "turns": 29,
+    "input": 6850,
+    "output": 1160,
+    "cacheRead": 150000,
+    "cacheCreation": 9000,
+    "costUsd": 0.1845,
+    "unpricedSessions": 1,
+    "totalTokens": 167010,
+    "tokensPerHour": 6959,
+    "costUsdPerHour": 0.0077
+   },
+   "groups": [
+    {
+     "key": "/ws/roll",
+     "sessions": 2,
+     "turns": 23,
+     "input": 6000,
+     "output": 1000,
+     "cacheRead": 90000,
+     "cacheCreation": 0,
+     "costUsd": 0.09000000000000001,
+     "unpricedSessions": 1,
+     "totalTokens": 97000,
+     "tokensPerHour": 4042,
+     "costUsdPerHour": 0.0038,
+     "costShare": 0.488
+    }
+   ],
+   "coverage": {
+    "sessionsInWindow": 5,
+    "undatedSessions": 1,
+    "groupsTotal": 3,
+    "groupsReturned": 1,
+    "note": "sessions count when they OVERLAP the window; token totals are whole-session (cards are session-granular). unpricedSessions are excluded from costUsd, never silent $0. tokensPerHour/costUsdPerHour divide by the window length."
+   }
   }
  ]
 }

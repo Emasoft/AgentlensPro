@@ -1527,3 +1527,234 @@ pub fn get_session_detail(sessions: &[Value], timeline: &[Value], composition: O
     );
     Value::Object(m)
 }
+
+/// One rollup bucket. `unpriced_sessions` counts cards whose model has no pricing entry — they are
+/// EXCLUDED from costUsd, never a silent $0 that reads as "measured free".
+#[derive(Clone, Default)]
+struct RollupBuckets {
+    sessions: f64,
+    turns: f64,
+    input: f64,
+    output: f64,
+    cache_read: f64,
+    cache_creation: f64,
+    cost_usd: f64,
+    unpriced_sessions: f64,
+}
+
+impl RollupBuckets {
+    fn add(&mut self, s: &Value, now_ms: f64) {
+        self.sessions += 1.0;
+        self.turns += f(s, "turns");
+        self.input += f(s, "inputTokens");
+        self.output += f(s, "outputTokens");
+        self.cache_read += f(s, "cacheReadTokens");
+        self.cache_creation += f(s, "cacheCreateTokens");
+        if truthy(s.get("unpriced").unwrap_or(&Value::Null)) {
+            self.unpriced_sessions += 1.0;
+        } else {
+            self.cost_usd += session_cost(s, now_ms);
+        }
+    }
+    fn total(&self) -> f64 {
+        self.input + self.output + self.cache_read + self.cache_creation
+    }
+    /// The bucket fields in the TS spread order (`{...zero()}`).
+    fn write(&self, m: &mut Map<String, Value>) {
+        m.insert("sessions".into(), num(self.sessions));
+        m.insert("turns".into(), num(self.turns));
+        m.insert("input".into(), num(self.input));
+        m.insert("output".into(), num(self.output));
+        m.insert("cacheRead".into(), num(self.cache_read));
+        m.insert("cacheCreation".into(), num(self.cache_creation));
+        m.insert("costUsd".into(), num(self.cost_usd));
+        m.insert("unpricedSessions".into(), num(self.unpriced_sessions));
+    }
+}
+
+const LIVE_WINDOW_MS: f64 = 3.0 * 60_000.0;
+
+/// `get_cost_rollup` — "what did project X / my subagents cost in interval Y, at what rate".
+///
+/// The HONESTY RULE this tool is built around: cards are SESSION-granular, so a session counts when
+/// it OVERLAPS the window and its token totals are WHOLE-SESSION — stated in coverage.note, never
+/// silently time-sliced (there is no per-turn slicing here, and pretending otherwise would
+/// attribute tokens to hours they were not spent in).
+pub fn get_cost_rollup(sessions: &[Value], args: &Value, now_ms: f64) -> Value {
+    let s_arg = |k: &str| args.get(k).and_then(Value::as_str).filter(|v| !v.is_empty());
+    let parse_iso = crate::summarize::helpers::parse_iso_ms;
+    let until = match s_arg("untilIso") {
+        Some(v) => parse_iso(v).unwrap_or(f64::NAN),
+        None => now_ms,
+    };
+    let hours = args.get("windowHours").and_then(Value::as_f64).unwrap_or(24.0).clamp(0.05, 24.0 * 45.0);
+    let since = match s_arg("sinceIso") {
+        Some(v) => parse_iso(v).unwrap_or(f64::NAN),
+        None => until - hours * 3_600_000.0,
+    };
+    let err = |text: &str| {
+        let mut m = Map::new();
+        m.insert("error".into(), text.into());
+        Value::Object(m)
+    };
+    if !until.is_finite() || !since.is_finite() {
+        return err("sinceIso/untilIso must be valid ISO datetimes");
+    }
+    if since >= until {
+        return err("the window is empty (since >= until)");
+    }
+    let window_h = (until - since) / 3_600_000.0;
+    let group_by = args.get("groupBy").and_then(Value::as_str).unwrap_or("project");
+
+    // Cards without a parseable startTime cannot be window-filtered — EXCLUDED and COUNTED, never
+    // silently mixed in or silently dropped.
+    let mut undated = 0.0;
+    let started = |s: &Value| s.get("startTime").and_then(Value::as_str).and_then(parse_iso);
+    let mut pool: Vec<&Value> = sessions
+        .iter()
+        .filter(|s| match started(s) {
+            None => {
+                undated += 1.0;
+                false
+            }
+            Some(start) => {
+                let end = start + f(s, "durationMs").max(0.0);
+                start <= until && end >= since
+            }
+        })
+        .collect();
+    let has_parent = |s: &Value| s.get("parentSessionId").and_then(Value::as_str).is_some_and(|p| !p.is_empty());
+    if truthy(args.get("subagentsOnly").unwrap_or(&Value::Null)) {
+        pool.retain(|s| has_parent(s));
+    }
+    if let Some(p) = s_arg("parentSessionId") {
+        pool.retain(|s| s.get("parentSessionId").and_then(Value::as_str) == Some(p));
+    }
+    if truthy(args.get("liveOnly").unwrap_or(&Value::Null)) {
+        pool.retain(|s| now_ms - (started(s).unwrap_or(0.0) + f(s, "durationMs").max(0.0)) <= LIVE_WINDOW_MS);
+    }
+    // groupBy:subagent IS the "rank my subagents" view — spawned sessions implicitly.
+    if group_by == "subagent" {
+        pool.retain(|s| has_parent(s));
+    }
+
+    let key_of = |s: &Value| -> String {
+        match group_by {
+            "all" => "all".to_owned(),
+            // `s.workspace || '(unknown workspace)'` — FALSY, an empty workspace falls through.
+            "project" => s.get("workspace").and_then(Value::as_str).filter(|w| !w.is_empty()).unwrap_or("(unknown workspace)").to_owned(),
+            "model" => s.get("model").and_then(Value::as_str).filter(|m| !m.is_empty()).unwrap_or("(unknown model)").to_owned(),
+            _ => s.get("sessionId").and_then(Value::as_str).unwrap_or("").to_owned(),
+        }
+    };
+
+    let mut totals = RollupBuckets::default();
+    // The group map carries (buckets, per-session labels): labels are set on the FIRST card of the
+    // group only, exactly as the TS `if (!g)` branch does.
+    type RollupGroup = (RollupBuckets, Option<Map<String, Value>>);
+    let mut groups: indexmap::IndexMap<String, RollupGroup> = indexmap::IndexMap::new();
+    for s in &pool {
+        totals.add(s, now_ms);
+        let key = key_of(s);
+        let entry = groups.entry(key).or_insert_with(|| {
+            let labels = if group_by == "session" || group_by == "subagent" {
+                let mut l = Map::new();
+                // Two assignment shapes in the TS literal, and they serialise differently:
+                // `g.workspace = s.workspace` keeps undefined UNDEFINED (the key DROPS), while
+                // `g.parentSessionId = s.parentSessionId ?? null` coalesces to an explicit null
+                // (the key SURVIVES). The oracle caught nulls where keys should have dropped.
+                copy_opt(&mut l, s, "workspace");
+                copy_opt(&mut l, s, "model");
+                l.insert("parentSessionId".into(), s.get("parentSessionId").filter(|v| !v.is_null()).cloned().unwrap_or(Value::Null));
+                l.insert("spawnKind".into(), s.get("spawnKind").filter(|v| !v.is_null()).cloned().unwrap_or(Value::Null));
+                l.insert("subagentType".into(), s.get("spawnSubagentType").filter(|v| !v.is_null()).cloned().unwrap_or(Value::Null));
+                copy_opt(&mut l, s, "startTime");
+                if let Some(v) = l.shift_remove("startTime") {
+                    l.insert("startedAtIso".into(), v);
+                }
+                l.insert("tokensSource".into(), s.get("tokensSource").filter(|v| !v.is_null()).cloned().unwrap_or(Value::Null));
+                if let Some(n) = s.get("coverageNote").filter(|v| truthy(v)) {
+                    l.insert("coverageNote".into(), n.clone());
+                }
+                Some(l)
+            } else {
+                None
+            };
+            (RollupBuckets::default(), labels)
+        });
+        entry.0.add(s, now_ms);
+    }
+
+    let sort_by = args.get("sortBy").and_then(Value::as_str).unwrap_or("cost");
+    let metric = |b: &RollupBuckets| -> f64 {
+        match sort_by {
+            "input" => b.input,
+            "output" => b.output,
+            "cacheRead" => b.cache_read,
+            "cacheCreation" => b.cache_creation,
+            "total" => b.total(),
+            _ => b.cost_usd,
+        }
+    };
+    let top_n = args.get("topN").and_then(Value::as_f64).unwrap_or(20.0).clamp(1.0, 100.0) as usize;
+    let mut ranked: Vec<(&String, &RollupGroup)> = groups.iter().collect();
+    ranked.sort_by(|a, b| metric(&b.1 .0).partial_cmp(&metric(&a.1 .0)).unwrap_or(std::cmp::Ordering::Equal));
+
+    // FLAT rate scalars, not a nested object: the lean shaper prunes nested objects from rows, and
+    // the hourly rate is a headline number that must survive the default (shaped) view.
+    let rate = |m: &mut Map<String, Value>, b: &RollupBuckets| {
+        m.insert("tokensPerHour".into(), num(crate::summarize::helpers::js_math_round(b.total() / window_h)));
+        m.insert("costUsdPerHour".into(), num(js_to_fixed_num(b.cost_usd / window_h, 4)));
+    };
+
+    let mut out = Map::new();
+    let mut window = Map::new();
+    window.insert("sinceIso".into(), Value::String(crate::summarize::helpers::iso_from_ms(since)));
+    window.insert("untilIso".into(), Value::String(crate::summarize::helpers::iso_from_ms(until)));
+    window.insert("hours".into(), num(js_to_fixed_num(window_h, 2)));
+    out.insert("window".into(), Value::Object(window));
+    out.insert("groupBy".into(), Value::String(group_by.to_owned()));
+    let mut filters = Map::new();
+    filters.insert("subagentsOnly".into(), Value::Bool(truthy(args.get("subagentsOnly").unwrap_or(&Value::Null))));
+    filters.insert("parentSessionId".into(), s_arg("parentSessionId").map_or(Value::Null, |p| Value::String(p.to_owned())));
+    filters.insert("liveOnly".into(), Value::Bool(truthy(args.get("liveOnly").unwrap_or(&Value::Null))));
+    filters.insert("sortBy".into(), Value::String(sort_by.to_owned()));
+    out.insert("filters".into(), Value::Object(filters));
+    let mut t = Map::new();
+    totals.write(&mut t);
+    t.insert("totalTokens".into(), num(totals.total()));
+    rate(&mut t, &totals);
+    out.insert("totals".into(), Value::Object(t));
+    let rows: Vec<Value> = ranked
+        .iter()
+        .take(top_n)
+        .map(|(key, (b, labels))| {
+            // `{...g, totalTokens, ...rateFields, costShare}` — key first, buckets, THEN the
+            // session labels (they were assigned after zero() in the literal), then the appends.
+            let mut m = Map::new();
+            m.insert("key".into(), Value::String((*key).clone()));
+            b.write(&mut m);
+            if let Some(l) = labels {
+                for (k, v) in l {
+                    m.insert(k.clone(), v.clone());
+                }
+            }
+            m.insert("totalTokens".into(), num(b.total()));
+            rate(&mut m, b);
+            m.insert(
+                "costShare".into(),
+                if totals.cost_usd > 0.0 { num(js_to_fixed_num(b.cost_usd / totals.cost_usd, 3)) } else { Value::Null },
+            );
+            Value::Object(m)
+        })
+        .collect();
+    out.insert("groups".into(), Value::Array(rows));
+    let mut cov = Map::new();
+    cov.insert("sessionsInWindow".into(), num(pool.len() as f64));
+    cov.insert("undatedSessions".into(), num(undated));
+    cov.insert("groupsTotal".into(), num(groups.len() as f64));
+    cov.insert("groupsReturned".into(), num(groups.len().min(top_n) as f64));
+    cov.insert("note".into(), "sessions count when they OVERLAP the window; token totals are whole-session (cards are session-granular). unpricedSessions are excluded from costUsd, never silent $0. tokensPerHour/costUsdPerHour divide by the window length.".into());
+    out.insert("coverage".into(), Value::Object(cov));
+    Value::Object(out)
+}

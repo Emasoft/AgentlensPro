@@ -340,3 +340,52 @@ fn the_detail_aggregations_do_not_lie() {
     // generatedFiles dedupe: /out/report.md appears in the card AND a tool leaf — first wins.
     assert_eq!(got["generatedFiles"]["count"], 2, "{got}");
 }
+
+#[test]
+fn get_cost_rollup_reproduces_the_ts_oracle_exactly() {
+    let o = oracle();
+    let (sessions, now) = (o["rollupSessions"].as_array().unwrap(), o["nowMs"].as_f64().unwrap());
+    for (case, exp) in o["rollupCases"].as_array().unwrap().iter().zip(o["rollupResults"].as_array().unwrap()) {
+        let name = case["name"].as_str().unwrap();
+        let got = agentlens_core::mcp_tools::get_cost_rollup(sessions, &case["args"], now);
+        assert_eq!(keys(&got), keys(exp), "{name}: key set/ORDER differs");
+        for (k, ev) in exp.as_object().unwrap() {
+            assert_eq!(&got[k], ev, "{name}.{k}");
+        }
+    }
+}
+
+/// The rollup's three honesty rules, each asserted against the construction that would break it:
+///  - OVERLAP membership, not start-time membership. The fixture's spanning card STARTED 30h ago
+///    and RAN until 22h ago, so a 24h window still counts it — a start-time filter would not.
+///  - an UNDATED card is excluded AND counted (`undatedSessions: 1`), never silently mixed in.
+///  - an UNPRICED card's tokens are counted but its cost is NOT — `unpricedSessions` names the
+///    exclusion instead of contributing a silent $0 that reads as "measured free".
+#[test]
+fn the_rollup_honesty_rules_hold() {
+    let o = oracle();
+    let (sessions, now) = (o["rollupSessions"].as_array().unwrap(), o["nowMs"].as_f64().unwrap());
+    let day = agentlens_core::mcp_tools::get_cost_rollup(sessions, &serde_json::json!({"windowHours": 24}), now);
+    let ids_of = |v: &Value| -> Vec<String> {
+        v["groups"].as_array().unwrap().iter().flat_map(|g| g["key"].as_str().map(str::to_owned)).collect()
+    };
+    // Overlap: the spanning card's project bucket is present in a 24h window…
+    let by_session = agentlens_core::mcp_tools::get_cost_rollup(sessions, &serde_json::json!({"groupBy": "session", "windowHours": 24}), now);
+    assert!(ids_of(&by_session).contains(&"roll-spans-window-edge".to_owned()), "OVERLAP counts it: {by_session}");
+    // …and a window that ends before its END excludes it (it stopped 22h ago).
+    let old_window = agentlens_core::mcp_tools::get_cost_rollup(
+        sessions,
+        &serde_json::json!({"groupBy": "session", "windowHours": 2}),
+        now,
+    );
+    assert!(!ids_of(&old_window).contains(&"roll-spans-window-edge".to_owned()), "{old_window}");
+
+    assert_eq!(day["coverage"]["undatedSessions"], 1, "the garbage-date card is excluded AND counted: {day}");
+    assert_eq!(day["totals"]["unpricedSessions"], 1, "{day}");
+    // The unpriced card's TOKENS are in the totals even though its cost is not.
+    let with_unpriced = day["totals"]["input"].as_f64().unwrap();
+    let without: Vec<Value> = sessions.iter().filter(|s| s["sessionId"] != "roll-unpriced").cloned().collect();
+    let day2 = agentlens_core::mcp_tools::get_cost_rollup(&without, &serde_json::json!({"windowHours": 24}), now);
+    assert!(with_unpriced > day2["totals"]["input"].as_f64().unwrap(), "unpriced tokens still count: {day} vs {day2}");
+    assert_eq!(day["totals"]["costUsd"], day2["totals"]["costUsd"], "but its COST contributes nothing");
+}
