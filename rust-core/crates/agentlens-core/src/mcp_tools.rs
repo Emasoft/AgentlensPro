@@ -1293,3 +1293,237 @@ pub fn get_instruction_suggestions(sessions: &[Value], workspace: Option<&str>, 
     }
     Value::Array(out)
 }
+
+/// computeTurnGrowth — per-turn token aggregation off the timeline, `background` entries skipped
+/// (they carry another agent's tokens and would inflate the parent's turns).
+fn compute_turn_growth(timeline: &[Value]) -> Vec<Value> {
+    let mut by_turn: indexmap::IndexMap<i64, (f64, f64, f64, f64)> = indexmap::IndexMap::new();
+    for e in timeline {
+        let Some(turn) = e.get("turn").and_then(Value::as_f64) else { continue };
+        if e.get("type").and_then(Value::as_str) == Some("background") {
+            continue;
+        }
+        let a = by_turn.entry(turn as i64).or_insert((0.0, 0.0, 0.0, 0.0));
+        a.0 += f(e, "inputTokens");
+        a.1 += f(e, "cacheReadTokens");
+        a.2 += f(e, "cacheCreateTokens");
+        a.3 += f(e, "outputTokens");
+    }
+    let mut entries: Vec<(i64, (f64, f64, f64, f64))> = by_turn.into_iter().collect();
+    entries.sort_by_key(|(turn, _)| *turn);
+    entries
+        .iter()
+        .map(|(turn, (input, read, create, output))| {
+            let denom = read + create;
+            let mut m = Map::new();
+            m.insert("turn".into(), num(*turn as f64));
+            m.insert("promptTokens".into(), num(input + read + create));
+            m.insert("cacheReadTokens".into(), num(*read));
+            m.insert("cacheCreateTokens".into(), num(*create));
+            m.insert("newInputTokens".into(), num(*input));
+            m.insert("outputTokens".into(), num(*output));
+            // 0 when nothing was cached that turn — this one IS a 0, not a null: the turn genuinely
+            // measured no cache traffic, which is a fact, unlike the SLI averages elsewhere.
+            m.insert("hitRatePct".into(), num(if denom > 0.0 { crate::summarize::helpers::js_math_round(read / denom * 100.0) } else { 0.0 }));
+            Value::Object(m)
+        })
+        .collect()
+}
+
+/// aggregateComposition — one injected source summed across the turns it appears in: the
+/// "turns × per-turn weight" inflation view, heaviest first.
+fn aggregate_composition(composition: &Value) -> Vec<Value> {
+    let empty: Vec<Value> = Vec::new();
+    let mut by_key: indexmap::IndexMap<String, (String, String, f64, f64, f64)> = indexmap::IndexMap::new();
+    for t in composition.get("turns").and_then(Value::as_array).unwrap_or(&empty) {
+        for s in t.get("sources").and_then(Value::as_array).unwrap_or(&empty) {
+            let label = s.get("label").and_then(Value::as_str).unwrap_or("").to_owned();
+            let kind = s.get("kind").and_then(Value::as_str).unwrap_or("").to_owned();
+            let tokens = f(s, "tokens");
+            // `${kind}::${label}` — BOTH halves, because the same label legitimately appears under
+            // two kinds (a file read as content and referenced in a tool result).
+            let e = by_key.entry(format!("{kind}::{label}")).or_insert((label, kind, 0.0, 0.0, 0.0));
+            e.2 += tokens;
+            e.3 += 1.0;
+            e.4 = e.4.max(tokens);
+        }
+    }
+    let mut rows: Vec<(String, String, f64, f64, f64)> = by_key.into_values().collect();
+    rows.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+    rows.iter()
+        .map(|(label, kind, cumulative, turns, peak)| {
+            let mut m = Map::new();
+            m.insert("label".into(), Value::String(label.clone()));
+            m.insert("kind".into(), Value::String(kind.clone()));
+            m.insert("cumulativeTokens".into(), num(*cumulative));
+            m.insert("turnsPresent".into(), num(*turns));
+            m.insert("peakTokens".into(), num(*peak));
+            Value::Object(m)
+        })
+        .collect()
+}
+
+/// subAgentChildren — direct children rolled up for the tree view. fork = cache-warm.
+fn sub_agent_children(sessions: &[Value], parent_id: &str, now_ms: f64) -> Vec<Value> {
+    sessions
+        .iter()
+        .filter(|s| s.get("parentSessionId").and_then(Value::as_str) == Some(parent_id))
+        .map(|c| {
+            let spawn_kind = c.get("spawnKind").and_then(Value::as_str);
+            let mut m = Map::new();
+            m.insert("sessionId".into(), c.get("sessionId").cloned().unwrap_or(Value::Null));
+            m.insert("spawnedByTurn".into(), c.get("spawnedByTurn").filter(|v| !v.is_null()).cloned().unwrap_or(Value::Null));
+            m.insert("spawnKind".into(), Value::String(spawn_kind.unwrap_or("fresh").to_owned()));
+            m.insert("warm".into(), Value::Bool(spawn_kind == Some("fork")));
+            // `spawnModelOverride || model` — FALSY-or, so an empty override falls through.
+            let model = c
+                .get("spawnModelOverride")
+                .and_then(Value::as_str)
+                .filter(|m| !m.is_empty())
+                .map_or_else(|| c.get("model").cloned().unwrap_or(Value::Null), |m| Value::String(m.to_owned()));
+            m.insert("model".into(), model);
+            m.insert("modelOverride".into(), c.get("spawnModelOverride").filter(|v| !v.is_null()).cloned().unwrap_or(Value::Null));
+            m.insert("isolation".into(), c.get("spawnIsolation").filter(|v| !v.is_null()).cloned().unwrap_or(Value::Null));
+            m.insert("totalTokens".into(), num(f(c, "inputTokens") + f(c, "outputTokens")));
+            m.insert("cost_usd".into(), num(js_to_fixed_num(session_cost(c, now_ms), 4)));
+            // Async launches never report tokens into the parent transcript — without this flag the
+            // zero totalTokens/cost above would read as "measured free" instead of "unknown".
+            // `undefined` when sync, so the key is OMITTED.
+            if truthy(c.get("spawnAsync").unwrap_or(&Value::Null)) {
+                m.insert("asyncTokensUnknown".into(), Value::Bool(true));
+            }
+            Value::Object(m)
+        })
+        .collect()
+}
+
+/// summarizeGeneratedFiles — count + top-5 by size. NULL when the session produced none.
+/// Dedupes across the session-level group + per-tool-call leaves, FIRST occurrence wins.
+fn summarize_generated_files(card: &Value, timeline: &[Value]) -> Value {
+    let empty: Vec<Value> = Vec::new();
+    let mut by_path: indexmap::IndexMap<String, Value> = indexmap::IndexMap::new();
+    let mut add = |gf: &Value| {
+        if let Some(p) = gf.get("path").and_then(Value::as_str) {
+            by_path.entry(p.to_owned()).or_insert_with(|| gf.clone());
+        }
+    };
+    for gf in card.get("generatedFiles").and_then(Value::as_array).unwrap_or(&empty) {
+        add(gf);
+    }
+    for e in timeline {
+        for gf in e.get("generatedFiles").and_then(Value::as_array).unwrap_or(&empty) {
+            add(gf);
+        }
+    }
+    if by_path.is_empty() {
+        return Value::Null;
+    }
+    let mut all: Vec<Value> = by_path.into_values().collect();
+    all.sort_by(|a, b| f(b, "sizeBytes").partial_cmp(&f(a, "sizeBytes")).unwrap_or(std::cmp::Ordering::Equal));
+    let mut m = Map::new();
+    m.insert("count".into(), num(all.len() as f64));
+    m.insert(
+        "top".into(),
+        Value::Array(all.iter().take(5).map(|gf| project(gf, &["path", "sizeBytes", "tokenEstimate"], &[])).collect()),
+    );
+    Value::Object(m)
+}
+
+/// `get_session_detail` — ONE session's full drill: identity, cost, cache accounting, per-turn
+/// growth, composition rollup, sub-agent children, generated files, and the timeline head.
+///
+/// Every array is CAPPED (60 growth rows, 12 composition rows, 80 timeline rows) because this
+/// payload rides in the caller's transcript; the caps predate leanResponse and stay because they
+/// are part of the frozen shape, not because the lean layer would not catch them.
+pub fn get_session_detail(sessions: &[Value], timeline: &[Value], composition: Option<&Value>, session_id: &str, now_ms: f64) -> Value {
+    let Some(card) = sessions.iter().find(|s| s.get("sessionId").and_then(Value::as_str) == Some(session_id)) else {
+        let mut m = Map::new();
+        m.insert("error".into(), Value::String(format!("Session {session_id} not found.")));
+        return Value::Object(m);
+    };
+    let growth = compute_turn_growth(timeline);
+    let children = sub_agent_children(sessions, session_id, now_ms);
+    let start = card.get("startTime").and_then(Value::as_str).unwrap_or("");
+    let mut m = Map::new();
+    m.insert("sessionId".into(), card.get("sessionId").cloned().unwrap_or(Value::Null));
+    m.insert("date".into(), Value::String(js_slice(start, 19).replacen('T', " ", 1)));
+    m.insert("agent".into(), card.get("source").cloned().unwrap_or(Value::Null));
+    m.insert("model".into(), card.get("model").cloned().unwrap_or(Value::Null));
+    // `userRequest || null` — FALSY, so '' becomes null (unlike get_recent_sessions' nullish read).
+    m.insert("prompt".into(), card.get("userRequest").filter(|v| truthy(v)).cloned().unwrap_or(Value::Null));
+    m.insert("cost_usd".into(), num(js_to_fixed_num(session_cost(card, now_ms), 4)));
+    m.insert("turns".into(), card.get("totalLlmCalls").cloned().unwrap_or(Value::Null));
+    m.insert("errors".into(), card.get("errors").cloned().unwrap_or(Value::Null));
+    m.insert("outcome".into(), card.get("outcome").cloned().unwrap_or(Value::Null));
+    m.insert("cacheReadTokens".into(), card.get("cacheReadTokens").cloned().unwrap_or(Value::Null));
+    m.insert("cacheCreateTokens".into(), card.get("cacheCreateTokens").cloned().unwrap_or(Value::Null));
+    m.insert("cacheHitRatePct".into(), num(crate::summarize::helpers::js_math_round(f(card, "cacheHitRate") * 100.0)));
+    m.insert("peakContextPerTurn".into(), card.get("peakContextPerTurn").filter(|v| !v.is_null()).cloned().unwrap_or(Value::Null));
+    // Per-turn cache-READ vs cache-CREATED split — a RE-PROJECTION with the tool's own key names
+    // (`prompt`, `cacheRead`, `cacheCreated`), not the growth rows verbatim.
+    m.insert(
+        "perTurnCacheSplit".into(),
+        Value::Array(
+            growth
+                .iter()
+                .take(60)
+                .map(|g| {
+                    let mut o = Map::new();
+                    o.insert("turn".into(), g.get("turn").cloned().unwrap_or(Value::Null));
+                    o.insert("prompt".into(), g.get("promptTokens").cloned().unwrap_or(Value::Null));
+                    o.insert("cacheRead".into(), g.get("cacheReadTokens").cloned().unwrap_or(Value::Null));
+                    o.insert("cacheCreated".into(), g.get("cacheCreateTokens").cloned().unwrap_or(Value::Null));
+                    o.insert("newInput".into(), g.get("newInputTokens").cloned().unwrap_or(Value::Null));
+                    o.insert("hitPct".into(), g.get("hitRatePct").cloned().unwrap_or(Value::Null));
+                    Value::Object(o)
+                })
+                .collect(),
+        ),
+    );
+    // NULL when no local composition — a pure-OTEL session genuinely has none to aggregate, and an
+    // empty array would read as "we looked and it was empty".
+    m.insert(
+        "compositionSummary".into(),
+        match composition.filter(|c| !c.is_null()) {
+            Some(c) => Value::Array(
+                aggregate_composition(c)
+                    .iter()
+                    .take(12)
+                    .map(|a| project(a, &["label", "kind", "cumulativeTokens", "turnsPresent"], &[]))
+                    .collect(),
+            ),
+            None => Value::Null,
+        },
+    );
+    // NULL when none, same reasoning.
+    m.insert("subAgents".into(), if children.is_empty() { Value::Null } else { Value::Array(children) });
+    m.insert("loopSignals".into(), card.get("loopSignals").filter(|v| !v.is_null()).cloned().unwrap_or(Value::Array(Vec::new())));
+    m.insert("filesRead".into(), card.get("filesRead").filter(|v| !v.is_null()).cloned().unwrap_or(Value::Array(Vec::new())));
+    m.insert("filesChanged".into(), card.get("filesChanged").filter(|v| !v.is_null()).cloned().unwrap_or(Value::Array(Vec::new())));
+    m.insert("toolCounts".into(), card.get("toolCounts").cloned().unwrap_or(Value::Null));
+    m.insert("generatedFiles".into(), summarize_generated_files(card, timeline));
+    m.insert(
+        "timeline".into(),
+        Value::Array(
+            timeline
+                .iter()
+                .take(80)
+                .map(|e| {
+                    let mut o = Map::new();
+                    o.insert("type".into(), e.get("type").cloned().unwrap_or(Value::Null));
+                    o.insert("label".into(), e.get("label").cloned().unwrap_or(Value::Null));
+                    // `ms: e.durationMs` — an ABSENT durationMs is undefined, so the KEY drops
+                    // from JSON; only a PRESENT one (null included) survives.
+                    copy_opt(&mut o, e, "durationMs");
+                    if let Some(v) = o.shift_remove("durationMs") {
+                        o.insert("ms".into(), v);
+                    }
+                    // `isError || false` — falsy, so an absent/null flag serialises as false.
+                    o.insert("error".into(), Value::Bool(truthy(e.get("isError").unwrap_or(&Value::Null))));
+                    Value::Object(o)
+                })
+                .collect(),
+        ),
+    );
+    Value::Object(m)
+}

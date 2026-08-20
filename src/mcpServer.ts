@@ -1750,7 +1750,8 @@ export function handleGetWorkspacePatterns(
   }
 }
 
-function handleGetSessionDetail(
+// Exported as the Rust port's parity oracle (TRDD-DMWOBWFH P4x.2c).
+export function handleGetSessionDetail(
   sessions: SessionSummaryCard[],
   getTimeline: ((id: string) => unknown[]) | null,
   composition: ContextComposition | null,

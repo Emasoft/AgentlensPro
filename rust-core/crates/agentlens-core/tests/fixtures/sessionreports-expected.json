@@ -2787,5 +2787,1013 @@
    "message": "Not enough history for workspace \"/ws/nope\" (0 sessions, need 5).",
    "suggestions": []
   }
+ ],
+ "detailCases": [
+  {
+   "name": "full",
+   "sessions": [
+    {
+     "sessionId": "detail-parent",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T07:53:20.000Z",
+     "durationMs": 3500000,
+     "inputTokens": 800,
+     "outputTokens": 150,
+     "cacheReadTokens": 60000,
+     "cacheCreateTokens": 9000,
+     "cacheHitRate": 0.87,
+     "totalLlmCalls": 4,
+     "errors": 1,
+     "userRequest": "detail fixture prompt",
+     "workspace": "/ws/detail",
+     "toolCounts": {
+      "Bash": 3
+     },
+     "loopSignals": [
+      {
+       "type": "repeated_tool"
+      }
+     ],
+     "filesRead": [
+      "a.ts"
+     ],
+     "filesChanged": [
+      "b.ts"
+     ],
+     "outcome": "partial",
+     "peakContextPerTurn": 70000,
+     "generatedFiles": [
+      {
+       "path": "/out/report.md",
+       "sizeBytes": 900,
+       "tokenEstimate": 220
+      }
+     ]
+    },
+    {
+     "sessionId": "detail-fork",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T08:23:20.000Z",
+     "durationMs": 60000,
+     "inputTokens": 50,
+     "outputTokens": 10,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "cacheHitRate": 0,
+     "totalLlmCalls": 2,
+     "errors": 0,
+     "outcome": "ok",
+     "parentSessionId": "detail-parent",
+     "spawnKind": "fork",
+     "spawnedByTurn": 2
+    },
+    {
+     "sessionId": "detail-async",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T08:25:00.000Z",
+     "durationMs": 0,
+     "inputTokens": 0,
+     "outputTokens": 0,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "cacheHitRate": 0,
+     "totalLlmCalls": 0,
+     "errors": 0,
+     "outcome": "ok",
+     "parentSessionId": "detail-parent",
+     "spawnKind": "fresh",
+     "spawnAsync": true,
+     "spawnModelOverride": "claude-sonnet-5",
+     "spawnIsolation": "worktree"
+    }
+   ],
+   "timeline": [
+    {
+     "type": "llm",
+     "label": "turn one",
+     "durationMs": 900,
+     "turn": 1,
+     "inputTokens": 100,
+     "cacheReadTokens": 10000,
+     "cacheCreateTokens": 4000,
+     "outputTokens": 40
+    },
+    {
+     "type": "tool",
+     "label": "Bash",
+     "durationMs": 120,
+     "turn": 1,
+     "isError": true,
+     "generatedFiles": [
+      {
+       "path": "/out/big.json",
+       "sizeBytes": 5000,
+       "tokenEstimate": 1200
+      },
+      {
+       "path": "/out/report.md",
+       "sizeBytes": 1,
+       "tokenEstimate": 1
+      }
+     ]
+    },
+    {
+     "type": "background",
+     "label": "child tokens must NOT count",
+     "turn": 1,
+     "inputTokens": 999999
+    },
+    {
+     "type": "llm",
+     "label": "turn two",
+     "durationMs": 700,
+     "turn": 2,
+     "inputTokens": 200,
+     "cacheReadTokens": 50000,
+     "cacheCreateTokens": 5000,
+     "outputTokens": 110
+    },
+    {
+     "type": "note",
+     "label": "no turn — skipped by growth, kept by the timeline head"
+    }
+   ],
+   "composition": {
+    "turns": [
+     {
+      "turn": 1,
+      "sources": [
+       {
+        "label": "CLAUDE.md",
+        "kind": "claude_md",
+        "tokens": 30000
+       },
+       {
+        "label": "a.ts",
+        "kind": "file",
+        "tokens": 4000
+       },
+       {
+        "label": "a.ts",
+        "kind": "tool_result",
+        "tokens": 500
+       }
+      ]
+     },
+     {
+      "turn": 2,
+      "sources": [
+       {
+        "label": "CLAUDE.md",
+        "kind": "claude_md",
+        "tokens": 30000
+       },
+       {
+        "label": "a.ts",
+        "kind": "file",
+        "tokens": 4100
+       }
+      ]
+     }
+    ]
+   },
+   "args": {
+    "sessionId": "detail-parent"
+   }
+  },
+  {
+   "name": "no-composition",
+   "sessions": [
+    {
+     "sessionId": "detail-parent",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T07:53:20.000Z",
+     "durationMs": 3500000,
+     "inputTokens": 800,
+     "outputTokens": 150,
+     "cacheReadTokens": 60000,
+     "cacheCreateTokens": 9000,
+     "cacheHitRate": 0.87,
+     "totalLlmCalls": 4,
+     "errors": 1,
+     "userRequest": "detail fixture prompt",
+     "workspace": "/ws/detail",
+     "toolCounts": {
+      "Bash": 3
+     },
+     "loopSignals": [
+      {
+       "type": "repeated_tool"
+      }
+     ],
+     "filesRead": [
+      "a.ts"
+     ],
+     "filesChanged": [
+      "b.ts"
+     ],
+     "outcome": "partial",
+     "peakContextPerTurn": 70000,
+     "generatedFiles": [
+      {
+       "path": "/out/report.md",
+       "sizeBytes": 900,
+       "tokenEstimate": 220
+      }
+     ]
+    },
+    {
+     "sessionId": "detail-fork",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T08:23:20.000Z",
+     "durationMs": 60000,
+     "inputTokens": 50,
+     "outputTokens": 10,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "cacheHitRate": 0,
+     "totalLlmCalls": 2,
+     "errors": 0,
+     "outcome": "ok",
+     "parentSessionId": "detail-parent",
+     "spawnKind": "fork",
+     "spawnedByTurn": 2
+    },
+    {
+     "sessionId": "detail-async",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T08:25:00.000Z",
+     "durationMs": 0,
+     "inputTokens": 0,
+     "outputTokens": 0,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "cacheHitRate": 0,
+     "totalLlmCalls": 0,
+     "errors": 0,
+     "outcome": "ok",
+     "parentSessionId": "detail-parent",
+     "spawnKind": "fresh",
+     "spawnAsync": true,
+     "spawnModelOverride": "claude-sonnet-5",
+     "spawnIsolation": "worktree"
+    }
+   ],
+   "timeline": [
+    {
+     "type": "llm",
+     "label": "turn one",
+     "durationMs": 900,
+     "turn": 1,
+     "inputTokens": 100,
+     "cacheReadTokens": 10000,
+     "cacheCreateTokens": 4000,
+     "outputTokens": 40
+    },
+    {
+     "type": "tool",
+     "label": "Bash",
+     "durationMs": 120,
+     "turn": 1,
+     "isError": true,
+     "generatedFiles": [
+      {
+       "path": "/out/big.json",
+       "sizeBytes": 5000,
+       "tokenEstimate": 1200
+      },
+      {
+       "path": "/out/report.md",
+       "sizeBytes": 1,
+       "tokenEstimate": 1
+      }
+     ]
+    },
+    {
+     "type": "background",
+     "label": "child tokens must NOT count",
+     "turn": 1,
+     "inputTokens": 999999
+    },
+    {
+     "type": "llm",
+     "label": "turn two",
+     "durationMs": 700,
+     "turn": 2,
+     "inputTokens": 200,
+     "cacheReadTokens": 50000,
+     "cacheCreateTokens": 5000,
+     "outputTokens": 110
+    },
+    {
+     "type": "note",
+     "label": "no turn — skipped by growth, kept by the timeline head"
+    }
+   ],
+   "composition": null,
+   "args": {
+    "sessionId": "detail-parent"
+   }
+  },
+  {
+   "name": "no-children",
+   "sessions": [
+    {
+     "sessionId": "detail-parent",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T07:53:20.000Z",
+     "durationMs": 3500000,
+     "inputTokens": 800,
+     "outputTokens": 150,
+     "cacheReadTokens": 60000,
+     "cacheCreateTokens": 9000,
+     "cacheHitRate": 0.87,
+     "totalLlmCalls": 4,
+     "errors": 1,
+     "userRequest": "detail fixture prompt",
+     "workspace": "/ws/detail",
+     "toolCounts": {
+      "Bash": 3
+     },
+     "loopSignals": [
+      {
+       "type": "repeated_tool"
+      }
+     ],
+     "filesRead": [
+      "a.ts"
+     ],
+     "filesChanged": [
+      "b.ts"
+     ],
+     "outcome": "partial",
+     "peakContextPerTurn": 70000,
+     "generatedFiles": [
+      {
+       "path": "/out/report.md",
+       "sizeBytes": 900,
+       "tokenEstimate": 220
+      }
+     ]
+    }
+   ],
+   "timeline": [
+    {
+     "type": "llm",
+     "label": "turn one",
+     "durationMs": 900,
+     "turn": 1,
+     "inputTokens": 100,
+     "cacheReadTokens": 10000,
+     "cacheCreateTokens": 4000,
+     "outputTokens": 40
+    },
+    {
+     "type": "tool",
+     "label": "Bash",
+     "durationMs": 120,
+     "turn": 1,
+     "isError": true,
+     "generatedFiles": [
+      {
+       "path": "/out/big.json",
+       "sizeBytes": 5000,
+       "tokenEstimate": 1200
+      },
+      {
+       "path": "/out/report.md",
+       "sizeBytes": 1,
+       "tokenEstimate": 1
+      }
+     ]
+    },
+    {
+     "type": "background",
+     "label": "child tokens must NOT count",
+     "turn": 1,
+     "inputTokens": 999999
+    },
+    {
+     "type": "llm",
+     "label": "turn two",
+     "durationMs": 700,
+     "turn": 2,
+     "inputTokens": 200,
+     "cacheReadTokens": 50000,
+     "cacheCreateTokens": 5000,
+     "outputTokens": 110
+    },
+    {
+     "type": "note",
+     "label": "no turn — skipped by growth, kept by the timeline head"
+    }
+   ],
+   "composition": null,
+   "args": {
+    "sessionId": "detail-parent"
+   }
+  },
+  {
+   "name": "unknown-session",
+   "sessions": [
+    {
+     "sessionId": "detail-parent",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T07:53:20.000Z",
+     "durationMs": 3500000,
+     "inputTokens": 800,
+     "outputTokens": 150,
+     "cacheReadTokens": 60000,
+     "cacheCreateTokens": 9000,
+     "cacheHitRate": 0.87,
+     "totalLlmCalls": 4,
+     "errors": 1,
+     "userRequest": "detail fixture prompt",
+     "workspace": "/ws/detail",
+     "toolCounts": {
+      "Bash": 3
+     },
+     "loopSignals": [
+      {
+       "type": "repeated_tool"
+      }
+     ],
+     "filesRead": [
+      "a.ts"
+     ],
+     "filesChanged": [
+      "b.ts"
+     ],
+     "outcome": "partial",
+     "peakContextPerTurn": 70000,
+     "generatedFiles": [
+      {
+       "path": "/out/report.md",
+       "sizeBytes": 900,
+       "tokenEstimate": 220
+      }
+     ]
+    },
+    {
+     "sessionId": "detail-fork",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T08:23:20.000Z",
+     "durationMs": 60000,
+     "inputTokens": 50,
+     "outputTokens": 10,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "cacheHitRate": 0,
+     "totalLlmCalls": 2,
+     "errors": 0,
+     "outcome": "ok",
+     "parentSessionId": "detail-parent",
+     "spawnKind": "fork",
+     "spawnedByTurn": 2
+    },
+    {
+     "sessionId": "detail-async",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T08:25:00.000Z",
+     "durationMs": 0,
+     "inputTokens": 0,
+     "outputTokens": 0,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "cacheHitRate": 0,
+     "totalLlmCalls": 0,
+     "errors": 0,
+     "outcome": "ok",
+     "parentSessionId": "detail-parent",
+     "spawnKind": "fresh",
+     "spawnAsync": true,
+     "spawnModelOverride": "claude-sonnet-5",
+     "spawnIsolation": "worktree"
+    }
+   ],
+   "timeline": [],
+   "composition": null,
+   "args": {
+    "sessionId": "ghost"
+   }
+  },
+  {
+   "name": "empty-timeline",
+   "sessions": [
+    {
+     "sessionId": "detail-parent",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T07:53:20.000Z",
+     "durationMs": 3500000,
+     "inputTokens": 800,
+     "outputTokens": 150,
+     "cacheReadTokens": 60000,
+     "cacheCreateTokens": 9000,
+     "cacheHitRate": 0.87,
+     "totalLlmCalls": 4,
+     "errors": 1,
+     "userRequest": "detail fixture prompt",
+     "workspace": "/ws/detail",
+     "toolCounts": {
+      "Bash": 3
+     },
+     "loopSignals": [
+      {
+       "type": "repeated_tool"
+      }
+     ],
+     "filesRead": [
+      "a.ts"
+     ],
+     "filesChanged": [
+      "b.ts"
+     ],
+     "outcome": "partial",
+     "peakContextPerTurn": 70000,
+     "generatedFiles": [
+      {
+       "path": "/out/report.md",
+       "sizeBytes": 900,
+       "tokenEstimate": 220
+      }
+     ]
+    },
+    {
+     "sessionId": "detail-fork",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T08:23:20.000Z",
+     "durationMs": 60000,
+     "inputTokens": 50,
+     "outputTokens": 10,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "cacheHitRate": 0,
+     "totalLlmCalls": 2,
+     "errors": 0,
+     "outcome": "ok",
+     "parentSessionId": "detail-parent",
+     "spawnKind": "fork",
+     "spawnedByTurn": 2
+    },
+    {
+     "sessionId": "detail-async",
+     "source": "claude_code",
+     "model": "claude-opus-5",
+     "startTime": "2025-10-09T08:25:00.000Z",
+     "durationMs": 0,
+     "inputTokens": 0,
+     "outputTokens": 0,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "cacheHitRate": 0,
+     "totalLlmCalls": 0,
+     "errors": 0,
+     "outcome": "ok",
+     "parentSessionId": "detail-parent",
+     "spawnKind": "fresh",
+     "spawnAsync": true,
+     "spawnModelOverride": "claude-sonnet-5",
+     "spawnIsolation": "worktree"
+    }
+   ],
+   "timeline": [],
+   "composition": null,
+   "args": {
+    "sessionId": "detail-parent"
+   }
+  }
+ ],
+ "detailResults": [
+  {
+   "sessionId": "detail-parent",
+   "date": "2025-10-09 07:53:20",
+   "agent": "claude_code",
+   "model": "claude-opus-5",
+   "prompt": "detail fixture prompt",
+   "cost_usd": 0.094,
+   "turns": 4,
+   "errors": 1,
+   "outcome": "partial",
+   "cacheReadTokens": 60000,
+   "cacheCreateTokens": 9000,
+   "cacheHitRatePct": 87,
+   "peakContextPerTurn": 70000,
+   "perTurnCacheSplit": [
+    {
+     "turn": 1,
+     "prompt": 14100,
+     "cacheRead": 10000,
+     "cacheCreated": 4000,
+     "newInput": 100,
+     "hitPct": 71
+    },
+    {
+     "turn": 2,
+     "prompt": 55200,
+     "cacheRead": 50000,
+     "cacheCreated": 5000,
+     "newInput": 200,
+     "hitPct": 91
+    }
+   ],
+   "compositionSummary": [
+    {
+     "label": "CLAUDE.md",
+     "kind": "claude_md",
+     "cumulativeTokens": 60000,
+     "turnsPresent": 2
+    },
+    {
+     "label": "a.ts",
+     "kind": "file",
+     "cumulativeTokens": 8100,
+     "turnsPresent": 2
+    },
+    {
+     "label": "a.ts",
+     "kind": "tool_result",
+     "cumulativeTokens": 500,
+     "turnsPresent": 1
+    }
+   ],
+   "subAgents": [
+    {
+     "sessionId": "detail-fork",
+     "spawnedByTurn": 2,
+     "spawnKind": "fork",
+     "warm": true,
+     "model": "claude-opus-5",
+     "modelOverride": null,
+     "isolation": null,
+     "totalTokens": 60,
+     "cost_usd": 0.0005
+    },
+    {
+     "sessionId": "detail-async",
+     "spawnedByTurn": null,
+     "spawnKind": "fresh",
+     "warm": false,
+     "model": "claude-sonnet-5",
+     "modelOverride": "claude-sonnet-5",
+     "isolation": "worktree",
+     "totalTokens": 0,
+     "cost_usd": 0,
+     "asyncTokensUnknown": true
+    }
+   ],
+   "loopSignals": [
+    {
+     "type": "repeated_tool"
+    }
+   ],
+   "filesRead": [
+    "a.ts"
+   ],
+   "filesChanged": [
+    "b.ts"
+   ],
+   "toolCounts": {
+    "Bash": 3
+   },
+   "generatedFiles": {
+    "count": 2,
+    "top": [
+     {
+      "path": "/out/big.json",
+      "sizeBytes": 5000,
+      "tokenEstimate": 1200
+     },
+     {
+      "path": "/out/report.md",
+      "sizeBytes": 900,
+      "tokenEstimate": 220
+     }
+    ]
+   },
+   "timeline": [
+    {
+     "type": "llm",
+     "label": "turn one",
+     "ms": 900,
+     "error": false
+    },
+    {
+     "type": "tool",
+     "label": "Bash",
+     "ms": 120,
+     "error": true
+    },
+    {
+     "type": "background",
+     "label": "child tokens must NOT count",
+     "error": false
+    },
+    {
+     "type": "llm",
+     "label": "turn two",
+     "ms": 700,
+     "error": false
+    },
+    {
+     "type": "note",
+     "label": "no turn — skipped by growth, kept by the timeline head",
+     "error": false
+    }
+   ]
+  },
+  {
+   "sessionId": "detail-parent",
+   "date": "2025-10-09 07:53:20",
+   "agent": "claude_code",
+   "model": "claude-opus-5",
+   "prompt": "detail fixture prompt",
+   "cost_usd": 0.094,
+   "turns": 4,
+   "errors": 1,
+   "outcome": "partial",
+   "cacheReadTokens": 60000,
+   "cacheCreateTokens": 9000,
+   "cacheHitRatePct": 87,
+   "peakContextPerTurn": 70000,
+   "perTurnCacheSplit": [
+    {
+     "turn": 1,
+     "prompt": 14100,
+     "cacheRead": 10000,
+     "cacheCreated": 4000,
+     "newInput": 100,
+     "hitPct": 71
+    },
+    {
+     "turn": 2,
+     "prompt": 55200,
+     "cacheRead": 50000,
+     "cacheCreated": 5000,
+     "newInput": 200,
+     "hitPct": 91
+    }
+   ],
+   "compositionSummary": null,
+   "subAgents": [
+    {
+     "sessionId": "detail-fork",
+     "spawnedByTurn": 2,
+     "spawnKind": "fork",
+     "warm": true,
+     "model": "claude-opus-5",
+     "modelOverride": null,
+     "isolation": null,
+     "totalTokens": 60,
+     "cost_usd": 0.0005
+    },
+    {
+     "sessionId": "detail-async",
+     "spawnedByTurn": null,
+     "spawnKind": "fresh",
+     "warm": false,
+     "model": "claude-sonnet-5",
+     "modelOverride": "claude-sonnet-5",
+     "isolation": "worktree",
+     "totalTokens": 0,
+     "cost_usd": 0,
+     "asyncTokensUnknown": true
+    }
+   ],
+   "loopSignals": [
+    {
+     "type": "repeated_tool"
+    }
+   ],
+   "filesRead": [
+    "a.ts"
+   ],
+   "filesChanged": [
+    "b.ts"
+   ],
+   "toolCounts": {
+    "Bash": 3
+   },
+   "generatedFiles": {
+    "count": 2,
+    "top": [
+     {
+      "path": "/out/big.json",
+      "sizeBytes": 5000,
+      "tokenEstimate": 1200
+     },
+     {
+      "path": "/out/report.md",
+      "sizeBytes": 900,
+      "tokenEstimate": 220
+     }
+    ]
+   },
+   "timeline": [
+    {
+     "type": "llm",
+     "label": "turn one",
+     "ms": 900,
+     "error": false
+    },
+    {
+     "type": "tool",
+     "label": "Bash",
+     "ms": 120,
+     "error": true
+    },
+    {
+     "type": "background",
+     "label": "child tokens must NOT count",
+     "error": false
+    },
+    {
+     "type": "llm",
+     "label": "turn two",
+     "ms": 700,
+     "error": false
+    },
+    {
+     "type": "note",
+     "label": "no turn — skipped by growth, kept by the timeline head",
+     "error": false
+    }
+   ]
+  },
+  {
+   "sessionId": "detail-parent",
+   "date": "2025-10-09 07:53:20",
+   "agent": "claude_code",
+   "model": "claude-opus-5",
+   "prompt": "detail fixture prompt",
+   "cost_usd": 0.094,
+   "turns": 4,
+   "errors": 1,
+   "outcome": "partial",
+   "cacheReadTokens": 60000,
+   "cacheCreateTokens": 9000,
+   "cacheHitRatePct": 87,
+   "peakContextPerTurn": 70000,
+   "perTurnCacheSplit": [
+    {
+     "turn": 1,
+     "prompt": 14100,
+     "cacheRead": 10000,
+     "cacheCreated": 4000,
+     "newInput": 100,
+     "hitPct": 71
+    },
+    {
+     "turn": 2,
+     "prompt": 55200,
+     "cacheRead": 50000,
+     "cacheCreated": 5000,
+     "newInput": 200,
+     "hitPct": 91
+    }
+   ],
+   "compositionSummary": null,
+   "subAgents": null,
+   "loopSignals": [
+    {
+     "type": "repeated_tool"
+    }
+   ],
+   "filesRead": [
+    "a.ts"
+   ],
+   "filesChanged": [
+    "b.ts"
+   ],
+   "toolCounts": {
+    "Bash": 3
+   },
+   "generatedFiles": {
+    "count": 2,
+    "top": [
+     {
+      "path": "/out/big.json",
+      "sizeBytes": 5000,
+      "tokenEstimate": 1200
+     },
+     {
+      "path": "/out/report.md",
+      "sizeBytes": 900,
+      "tokenEstimate": 220
+     }
+    ]
+   },
+   "timeline": [
+    {
+     "type": "llm",
+     "label": "turn one",
+     "ms": 900,
+     "error": false
+    },
+    {
+     "type": "tool",
+     "label": "Bash",
+     "ms": 120,
+     "error": true
+    },
+    {
+     "type": "background",
+     "label": "child tokens must NOT count",
+     "error": false
+    },
+    {
+     "type": "llm",
+     "label": "turn two",
+     "ms": 700,
+     "error": false
+    },
+    {
+     "type": "note",
+     "label": "no turn — skipped by growth, kept by the timeline head",
+     "error": false
+    }
+   ]
+  },
+  {
+   "error": "Session ghost not found."
+  },
+  {
+   "sessionId": "detail-parent",
+   "date": "2025-10-09 07:53:20",
+   "agent": "claude_code",
+   "model": "claude-opus-5",
+   "prompt": "detail fixture prompt",
+   "cost_usd": 0.094,
+   "turns": 4,
+   "errors": 1,
+   "outcome": "partial",
+   "cacheReadTokens": 60000,
+   "cacheCreateTokens": 9000,
+   "cacheHitRatePct": 87,
+   "peakContextPerTurn": 70000,
+   "perTurnCacheSplit": [],
+   "compositionSummary": null,
+   "subAgents": [
+    {
+     "sessionId": "detail-fork",
+     "spawnedByTurn": 2,
+     "spawnKind": "fork",
+     "warm": true,
+     "model": "claude-opus-5",
+     "modelOverride": null,
+     "isolation": null,
+     "totalTokens": 60,
+     "cost_usd": 0.0005
+    },
+    {
+     "sessionId": "detail-async",
+     "spawnedByTurn": null,
+     "spawnKind": "fresh",
+     "warm": false,
+     "model": "claude-sonnet-5",
+     "modelOverride": "claude-sonnet-5",
+     "isolation": "worktree",
+     "totalTokens": 0,
+     "cost_usd": 0,
+     "asyncTokensUnknown": true
+    }
+   ],
+   "loopSignals": [
+    {
+     "type": "repeated_tool"
+    }
+   ],
+   "filesRead": [
+    "a.ts"
+   ],
+   "filesChanged": [
+    "b.ts"
+   ],
+   "toolCounts": {
+    "Bash": 3
+   },
+   "generatedFiles": {
+    "count": 1,
+    "top": [
+     {
+      "path": "/out/report.md",
+      "sizeBytes": 900,
+      "tokenEstimate": 220
+     }
+    ]
+   },
+   "timeline": []
+  }
  ]
 }

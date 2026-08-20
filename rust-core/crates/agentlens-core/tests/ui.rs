@@ -1936,3 +1936,50 @@ fn mcp_get_recent_sessions_wraps_the_list_with_collector_gaps() {
     assert!(p["avgCacheHitRate"].as_str().unwrap().ends_with('%'), "the rate is a STRING with a %: {p}");
     assert_eq!(p["topTools"][0]["tool"], "Bash", "{p}");
 }
+
+/// `get_session_detail` over the wire, through the SHARED resolveSessionCard — the same
+/// reparse-on-demand + OTEL graft row 30 uses, extracted precisely so the tool and the route cannot
+/// serve two different timelines for one session.
+#[test]
+fn mcp_get_session_detail_serves_the_resolved_card() {
+    let (_otlp, ui, state) = start_servers();
+    let now = agentlens_core::now_ms();
+    let iso = |off: i64| agentlens_core::summarize::helpers::iso_from_ms((now - off) as f64);
+    {
+        let mut st = state.lock().unwrap();
+        st.put_log_session(serde_json::json!({
+            "sessionId": "detail-live", "source": "claude_code", "dataSource": "log",
+            "startTime": iso(600_000), "workspace": "/ws/detail", "model": "claude-opus-5",
+            "totalLlmCalls": 2, "inputTokens": 300, "outputTokens": 60,
+            "cacheReadTokens": 12_000, "cacheCreateTokens": 800, "cacheHitRate": 0.94,
+            "errors": 0, "outcome": "ok", "userRequest": "live detail",
+            "timeline": [
+                { "type": "llm", "label": "t1", "durationMs": 500, "turn": 1,
+                  "inputTokens": 100, "cacheReadTokens": 6000, "cacheCreateTokens": 400, "outputTokens": 30 },
+                { "type": "llm", "label": "t2", "durationMs": 400, "turn": 2,
+                  "inputTokens": 200, "cacheReadTokens": 6000, "cacheCreateTokens": 400, "outputTokens": 30 },
+            ],
+        }));
+    }
+    let call = |args: &str| -> serde_json::Value {
+        let body = format!(
+            r#"{{"jsonrpc":"2.0","id":15,"method":"tools/call","params":{{"name":"get_session_detail","arguments":{args}}}}}"#
+        );
+        let env: serde_json::Value = serde_json::from_str(body_of(&post(ui, "/mcp", &body))).unwrap();
+        let text = env["result"]["content"][0]["text"].as_str().unwrap_or_else(|| panic!("{env}"));
+        serde_json::from_str(text).unwrap()
+    };
+
+    let d = call(r#"{"verbosity":"full","sessionId":"detail-live"}"#);
+    assert_eq!(d["sessionId"], "detail-live", "{d}");
+    assert_eq!(d["perTurnCacheSplit"].as_array().unwrap().len(), 2, "{d}");
+    assert_eq!(d["perTurnCacheSplit"][0]["hitPct"], 94, "6000/(6000+400): {d}");
+    assert_eq!(d["timeline"].as_array().unwrap().len(), 2, "{d}");
+    // No transcript on disk → compositionSummary is NULL (not []) — an OTEL-only session genuinely
+    // has nothing to aggregate, and [] would read as "we looked and it was empty".
+    assert!(d["compositionSummary"].is_null(), "{d}");
+    assert!(d["subAgents"].is_null(), "no children: {d}");
+
+    let miss = call(r#"{"verbosity":"full","sessionId":"ghost"}"#);
+    assert!(miss["error"].as_str().unwrap().contains("ghost"), "{miss}");
+}

@@ -279,6 +279,60 @@ async fn compositions_in_scope(state: &Arc<Mutex<CoreState>>, scope: Option<&str
     Ok((comps, coverage))
 }
 
+/// resolveSessionCard (server.ts) — the summary card with its timeline made REAL. Shared by freeze
+/// row 30 and the `get_session_detail` MCP tool, which in the TS both go through the same accessor.
+///
+/// An empty (or absent) timeline on a session a log file backs ⇒ one fresh full parse of that file,
+/// re-stored (`put_log_session` bumps data_version, as the TS putLogSession does). Then
+/// TRDD-5GFSFX0Q: the displaced OTEL twin's api_request entries are grafted onto the SERVED copy
+/// only — the graft runs AFTER put_log_session, so the STORED card stays pure (the TS grafts onto a
+/// shallow copy for the same reason).
+///
+/// NOT PORTED: statuslineReader.overlay on the reparsed card (the statusline store is unported —
+/// the P4m note).
+fn resolve_session_card(st: &mut CoreState, session_id: &str, now: i64) -> Option<Value> {
+    let summary = st.build_session_summary(now as f64);
+    let mut session: Option<Value> = summary
+        .get("sessions")
+        .and_then(Value::as_array)
+        .and_then(|ss| ss.iter().find(|s| s.get("sessionId").and_then(Value::as_str) == Some(session_id)))
+        .cloned();
+    drop(summary);
+    let timeline_empty = session
+        .as_ref()
+        .is_some_and(|s| s.get("timeline").and_then(Value::as_array).is_none_or(Vec::is_empty));
+    if timeline_empty && st.log_sessions.contains_key(session_id) {
+        if let Some(scanned) = crate::log_reader::reparse_session(&st.log_env, session_id, now) {
+            if let Some(mut card) = scanned.cards.into_iter().next() {
+                // ingest_scanned's accountId stamp — the TS parser stamps it natively inside
+                // _buildCard, so the reparsed card must carry it here too.
+                if let Some(obj) = card.as_object_mut() {
+                    let acct = obj.get("sessionId").and_then(Value::as_str).and_then(|sid| st.accounts.account_for(sid)).map(str::to_owned);
+                    if let Some(a) = acct {
+                        obj.insert("accountId".into(), Value::from(a));
+                    }
+                }
+                st.put_log_session(card.clone());
+                session = Some(card);
+            }
+        }
+    }
+    if let Some(s) = session.as_mut() {
+        let claude_log = s.get("source").and_then(Value::as_str) == Some("claude_code")
+            && s.get("dataSource").and_then(Value::as_str) == Some("log");
+        if claude_log {
+            if let Some(entries) = st.otel_attribution.get(session_id).filter(|e| !e.is_empty()) {
+                let log_tl: Vec<Value> = s.get("timeline").and_then(Value::as_array).cloned().unwrap_or_default();
+                let grafted = crate::feed_merge::graft_otel_attribution(&log_tl, Some(entries));
+                if let Some(obj) = s.as_object_mut() {
+                    obj.insert("timeline".into(), Value::Array(grafted));
+                }
+            }
+        }
+    }
+    session
+}
+
 /// Drill ONE block to its real content (freeze row 37's engine + the `get_block_content` tool).
 /// Shared for the same reason `resolve_call_context` is: the TS has ONE `getBlockContent` behind
 /// both surfaces, and two copies of a payload this shape is a wire fork waiting to happen.
@@ -1313,6 +1367,49 @@ async fn handle(
                         };
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
+                    "get_session_detail" => {
+                        let now = crate::now_ms();
+                        let session_id = s("sessionId").unwrap_or_default();
+                        // Under ONE lock: the summary cards, the RESOLVED timeline (the same
+                        // resolveSessionCard row 30 uses — reparse-on-demand + OTEL graft), and the
+                        // fork-ancestor walk for the composition. The multi-GB transcript parse
+                        // then runs with the lock RELEASED.
+                        let (sessions, timeline, env, ancestor) = {
+                            let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                            let summary = st.build_session_summary(now as f64);
+                            let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
+                            drop(summary);
+                            let timeline: Vec<Value> = resolve_session_card(&mut st, &session_id, now)
+                                .and_then(|c| c.get("timeline").and_then(Value::as_array).cloned())
+                                .unwrap_or_default();
+                            let parent_of = |sid: &str| -> Option<String> {
+                                sessions
+                                    .iter()
+                                    .find(|s| s.get("sessionId").and_then(Value::as_str) == Some(sid))
+                                    .and_then(|s| s.get("parentSessionId").and_then(Value::as_str))
+                                    .map(str::to_owned)
+                            };
+                            let ancestor = crate::context_composition::resolve_logged_ancestor(&st.log_env, &session_id, &parent_of)
+                                .or_else(|| parent_of(&session_id));
+                            (sessions, timeline, st.log_env.clone(), ancestor)
+                        };
+                        let sid = session_id.clone();
+                        // Composition is OPTIONAL context — the TS wraps the accessor in
+                        // `.catch(() => null)`, so a failed reconstruction only omits the rollup.
+                        let composition = tokio::task::spawn_blocking(move || {
+                            crate::context_composition::build_context_composition(&env, &sid, ancestor.as_deref())
+                        })
+                        .await
+                        .unwrap_or(None);
+                        let payload = crate::mcp_tools::get_session_detail(
+                            &sessions,
+                            &timeline,
+                            composition.as_ref(),
+                            &session_id,
+                            now as f64,
+                        );
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
+                    }
                     "get_block_content" => {
                         // The MCP args are already JSON numbers, so there is no `Number('')===0`
                         // trap here — that one belongs to the HTTP path segments. An absent arg is
@@ -1545,52 +1642,7 @@ async fn handle(
         let now = crate::now_ms();
         let body = {
             let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
-            let summary = st.build_session_summary(now as f64);
-            let mut session: Option<Value> = summary
-                .get("sessions")
-                .and_then(Value::as_array)
-                .and_then(|ss| ss.iter().find(|s| s.get("sessionId").and_then(Value::as_str) == Some(session_id.as_str())))
-                .cloned();
-            // resolveSessionCard: an empty (or absent) timeline on a session a log file backs ⇒
-            // one fresh full parse of that file, re-stored (put_log_session bumps data_version,
-            // as the TS putLogSession does). NOT PORTED: statuslineReader.overlay on the
-            // reparsed card (the statusline store is unported — the P4m note).
-            let timeline_empty = session
-                .as_ref()
-                .is_some_and(|s| s.get("timeline").and_then(Value::as_array).is_none_or(Vec::is_empty));
-            if timeline_empty && st.log_sessions.contains_key(&session_id) {
-                if let Some(scanned) = crate::log_reader::reparse_session(&st.log_env, &session_id, now) {
-                    if let Some(mut card) = scanned.cards.into_iter().next() {
-                        // ingest_scanned's accountId stamp — the TS parser stamps it natively
-                        // inside _buildCard, so the reparsed card must carry it here too.
-                        if let Some(obj) = card.as_object_mut() {
-                            let acct =
-                                obj.get("sessionId").and_then(Value::as_str).and_then(|sid| st.accounts.account_for(sid)).map(str::to_owned);
-                            if let Some(a) = acct {
-                                obj.insert("accountId".into(), Value::from(a));
-                            }
-                        }
-                        st.put_log_session(card.clone());
-                        session = Some(card);
-                    }
-                }
-            }
-            // TRDD-5GFSFX0Q: graft the displaced OTEL twin's api_request entries onto the
-            // SERVED copy only — the graft runs AFTER put_log_session, so the stored card stays
-            // pure (the TS grafts onto a shallow copy for the same reason).
-            if let Some(s) = session.as_mut() {
-                let claude_log = s.get("source").and_then(Value::as_str) == Some("claude_code")
-                    && s.get("dataSource").and_then(Value::as_str) == Some("log");
-                if claude_log {
-                    if let Some(entries) = st.otel_attribution.get(&session_id).filter(|e| !e.is_empty()) {
-                        let log_tl: Vec<Value> = s.get("timeline").and_then(Value::as_array).cloned().unwrap_or_default();
-                        let grafted = crate::feed_merge::graft_otel_attribution(&log_tl, Some(entries));
-                        if let Some(obj) = s.as_object_mut() {
-                            obj.insert("timeline".into(), Value::Array(grafted));
-                        }
-                    }
-                }
-            }
+            let session = resolve_session_card(&mut st, &session_id, now);
             // `session?.<k> ?? <default>` — nullish: an explicit null falls back too.
             let field = |k: &str, default: Value| {
                 session.as_ref().and_then(|s| s.get(k)).filter(|v| !v.is_null()).cloned().unwrap_or(default)

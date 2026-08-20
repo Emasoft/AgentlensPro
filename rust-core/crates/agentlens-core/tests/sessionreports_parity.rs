@@ -284,3 +284,59 @@ fn the_three_instruction_shapes_stay_tellable_apart() {
         );
     }
 }
+
+#[test]
+fn get_session_detail_reproduces_the_ts_oracle_exactly() {
+    let o = oracle();
+    let now = o["nowMs"].as_f64().unwrap();
+    for (case, exp) in o["detailCases"].as_array().unwrap().iter().zip(o["detailResults"].as_array().unwrap()) {
+        let name = case["name"].as_str().unwrap();
+        let got = agentlens_core::mcp_tools::get_session_detail(
+            case["sessions"].as_array().unwrap(),
+            case["timeline"].as_array().unwrap(),
+            case["composition"].as_object().map(|_| &case["composition"]),
+            case["args"]["sessionId"].as_str().unwrap(),
+            now,
+        );
+        assert_eq!(keys(&got), keys(exp), "{name}: key set/ORDER differs");
+        for (k, ev) in exp.as_object().unwrap() {
+            assert_eq!(&got[k], ev, "{name}.{k}");
+        }
+    }
+}
+
+/// Three aggregation rules that decide whether the drill tells the truth, each visible in the
+/// fixture by construction:
+///  - `background` timeline entries are SKIPPED by the turn growth — they carry another agent's
+///    tokens, and the fixture's background row carries 999,999 input tokens precisely so counting
+///    it would be unmissable.
+///  - the composition key is `${kind}::${label}`, BOTH halves: the fixture has `a.ts` as a file AND
+///    as a tool_result, and collapsing them would merge two different injections into one row.
+///  - the sub-agent rollup marks fork=warm, and an ASYNC child carries `asyncTokensUnknown: true`
+///    (key OMITTED on sync children) — without it, its zero tokens/cost read as "measured free".
+#[test]
+fn the_detail_aggregations_do_not_lie() {
+    let o = oracle();
+    let now = o["nowMs"].as_f64().unwrap();
+    let case = o["detailCases"].as_array().unwrap().iter().find(|c| c["name"] == "full").unwrap();
+    let got = agentlens_core::mcp_tools::get_session_detail(
+        case["sessions"].as_array().unwrap(),
+        case["timeline"].as_array().unwrap(),
+        Some(&case["composition"]),
+        "detail-parent",
+        now,
+    );
+    let split = got["perTurnCacheSplit"].as_array().unwrap();
+    assert_eq!(split[0]["newInput"], 100, "the 999,999-token background row must not count: {split:?}");
+    let comp = got["compositionSummary"].as_array().unwrap();
+    let ats: Vec<&str> = comp.iter().filter(|r| r["label"] == "a.ts").map(|r| r["kind"].as_str().unwrap()).collect();
+    assert_eq!(ats, vec!["file", "tool_result"], "same label under two kinds is TWO rows: {comp:?}");
+    let subs = got["subAgents"].as_array().unwrap();
+    let fork = subs.iter().find(|s| s["sessionId"] == "detail-fork").unwrap();
+    assert_eq!(fork["warm"], true, "{fork}");
+    assert!(fork.get("asyncTokensUnknown").is_none(), "sync child OMITS the flag: {fork}");
+    let async_child = subs.iter().find(|s| s["sessionId"] == "detail-async").unwrap();
+    assert_eq!(async_child["asyncTokensUnknown"], true, "zero tokens on an async child are UNKNOWN, not free: {async_child}");
+    // generatedFiles dedupe: /out/report.md appears in the card AND a tool leaf — first wins.
+    assert_eq!(got["generatedFiles"]["count"], 2, "{got}");
+}

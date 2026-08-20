@@ -22,7 +22,7 @@ import { createRequire } from 'module'
 import { writeFileSync } from 'fs'
 import { join } from 'path'
 const require = createRequire(import.meta.url)
-const { handleGetRecentSessions, handleGetWorkspacePatterns, handleFindRelevantContext, handleGetEfficiencyReport, handleGetInstructionSuggestions } = require('../../../../../out/test/mcpServer.js')
+const { handleGetRecentSessions, handleGetWorkspacePatterns, handleFindRelevantContext, handleGetEfficiencyReport, handleGetInstructionSuggestions, handleGetSessionDetail } = require('../../../../../out/test/mcpServer.js')
 const dir = new URL('.', import.meta.url).pathname
 
 const NOW = 1_760_000_000_000
@@ -128,6 +128,52 @@ const instrCases = [
   { name: 'unknown-workspace', sessions: instrSessions, args: { workspace: '/ws/nope' } },
 ]
 
+// get_session_detail: driven with an explicit timeline + a synthetic composition, exercising the
+// per-turn aggregation (background entries skipped), the ${kind}::${label} composition key, the
+// sub-agent rollup (fork = warm; async = tokens unknown), and the generatedFiles dedupe.
+const DETAIL_PARENT = card({ sessionId: 'detail-parent', startTime: iso(NOW - 3_600_000), durationMs: 3_500_000,
+  inputTokens: 800, outputTokens: 150, cacheReadTokens: 60_000, cacheCreateTokens: 9_000,
+  cacheHitRate: 0.87, totalLlmCalls: 4, errors: 1, userRequest: 'detail fixture prompt',
+  workspace: '/ws/detail', toolCounts: { Bash: 3 }, filesRead: ['a.ts'], filesChanged: ['b.ts'],
+  loopSignals: [{ type: 'repeated_tool' }] })
+DETAIL_PARENT.outcome = 'partial'
+DETAIL_PARENT.peakContextPerTurn = 70_000
+DETAIL_PARENT.generatedFiles = [{ path: '/out/report.md', sizeBytes: 900, tokenEstimate: 220 }]
+const forkChild = card({ sessionId: 'detail-fork', startTime: iso(NOW - 1_800_000), durationMs: 60_000,
+  inputTokens: 50, outputTokens: 10, totalLlmCalls: 2 })
+forkChild.parentSessionId = 'detail-parent'; forkChild.spawnKind = 'fork'; forkChild.spawnedByTurn = 2
+const asyncChild = card({ sessionId: 'detail-async', startTime: iso(NOW - 1_700_000), durationMs: 0,
+  inputTokens: 0, outputTokens: 0, totalLlmCalls: 0 })
+asyncChild.parentSessionId = 'detail-parent'; asyncChild.spawnKind = 'fresh'; asyncChild.spawnAsync = true
+asyncChild.spawnModelOverride = 'claude-sonnet-5'; asyncChild.spawnIsolation = 'worktree'
+const detailSessions = [DETAIL_PARENT, forkChild, asyncChild]
+const detailTimeline = [
+  { type: 'llm', label: 'turn one', durationMs: 900, turn: 1, inputTokens: 100, cacheReadTokens: 10_000, cacheCreateTokens: 4_000, outputTokens: 40 },
+  { type: 'tool', label: 'Bash', durationMs: 120, turn: 1, isError: true,
+    generatedFiles: [{ path: '/out/big.json', sizeBytes: 5_000, tokenEstimate: 1_200 }, { path: '/out/report.md', sizeBytes: 1, tokenEstimate: 1 }] },
+  { type: 'background', label: 'child tokens must NOT count', turn: 1, inputTokens: 999_999 },
+  { type: 'llm', label: 'turn two', durationMs: 700, turn: 2, inputTokens: 200, cacheReadTokens: 50_000, cacheCreateTokens: 5_000, outputTokens: 110 },
+  { type: 'note', label: 'no turn — skipped by growth, kept by the timeline head' },
+]
+const detailComposition = { turns: [
+  { turn: 1, sources: [
+    { label: 'CLAUDE.md', kind: 'claude_md', tokens: 30_000 },
+    { label: 'a.ts', kind: 'file', tokens: 4_000 },
+    { label: 'a.ts', kind: 'tool_result', tokens: 500 },   // same label, DIFFERENT kind → own row
+  ] },
+  { turn: 2, sources: [
+    { label: 'CLAUDE.md', kind: 'claude_md', tokens: 30_000 },
+    { label: 'a.ts', kind: 'file', tokens: 4_100 },
+  ] },
+] }
+const detailCases = [
+  { name: 'full', sessions: detailSessions, timeline: detailTimeline, composition: detailComposition, args: { sessionId: 'detail-parent' } },
+  { name: 'no-composition', sessions: detailSessions, timeline: detailTimeline, composition: null, args: { sessionId: 'detail-parent' } },
+  { name: 'no-children', sessions: [DETAIL_PARENT], timeline: detailTimeline, composition: null, args: { sessionId: 'detail-parent' } },
+  { name: 'unknown-session', sessions: detailSessions, timeline: [], composition: null, args: { sessionId: 'ghost' } },
+  { name: 'empty-timeline', sessions: detailSessions, timeline: [], composition: null, args: { sessionId: 'detail-parent' } },
+]
+
 const patternCases = [
   { name: 'all', args: {} },
   { name: 'days-1', args: { days: 1 } },
@@ -155,6 +201,8 @@ try {
     efficiencyResults: efficiencyCases.map(c => J(handleGetEfficiencyReport(sessions, c.args))),
     instrCases: J(instrCases),
     instrResults: instrCases.map(c => J(handleGetInstructionSuggestions(c.sessions, c.args))),
+    detailCases: J(detailCases),
+    detailResults: detailCases.map(c => J(handleGetSessionDetail(c.sessions, () => c.timeline, c.composition, c.args))),
   }, null, 1) + '\n')
 } finally {
   Date.now = realNow
