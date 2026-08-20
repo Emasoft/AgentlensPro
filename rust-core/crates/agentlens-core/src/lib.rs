@@ -71,6 +71,7 @@ pub mod token_estimator;
 pub mod tokens_by_cause;
 pub mod ui;
 pub mod update_payload;
+pub mod window_eta;
 
 pub const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
 

@@ -1,0 +1,541 @@
+{
+  "nowMs": 1754056800000,
+  "humanEta": [
+    [
+      null,
+      "no-capacity",
+      "unknown (no cost capacity calibrated for this account or a same-plan one)"
+    ],
+    [
+      null,
+      "idle",
+      "not draining (no consumption in the rate window)"
+    ],
+    [
+      null,
+      "plateau",
+      "won't exhaust at the current rate (rolling window plateaus below the cap)"
+    ],
+    [
+      0,
+      "over-limit",
+      "already at/over the limit"
+    ],
+    [
+      0,
+      "projected",
+      "0m"
+    ],
+    [
+      0.4,
+      "projected",
+      "0m"
+    ],
+    [
+      30,
+      "projected",
+      "30m"
+    ],
+    [
+      59.5,
+      "projected",
+      "60m"
+    ],
+    [
+      60,
+      "projected",
+      "1h 0m"
+    ],
+    [
+      90,
+      "projected",
+      "1h 30m"
+    ],
+    [
+      1439.6,
+      "projected",
+      "23h 60m"
+    ],
+    [
+      null,
+      "projected",
+      "0m"
+    ]
+  ],
+  "noCapacity": {
+    "account": {
+      "accountId": "aaaaaaaa-1111-1111-1111-111111111111",
+      "email": "one@example.test",
+      "plan": "Max 20x",
+      "isCurrent": true
+    },
+    "nowIso": "2025-08-01T14:00:00.000Z",
+    "rateWindowMin": 30,
+    "fiveHour": {
+      "label": "5h",
+      "windowHours": 5,
+      "window": {
+        "fromIso": "2025-08-01T09:00:00.000Z",
+        "untilIso": "2025-08-01T14:00:00.000Z"
+      },
+      "consumedCostUsd": 3.6,
+      "consumedTokens": 242000,
+      "consumedBillableWeighted": 140938,
+      "capacity": {
+        "tokens": null,
+        "costUsd": null,
+        "source": null,
+        "proxyAccountId": null,
+        "observedAt": null
+      },
+      "fillPct": null,
+      "remainingCostUsd": null,
+      "costPerMin": 0.013333,
+      "steadyStateFillUsd": 4,
+      "willExhaustAtCurrentRate": false,
+      "etaMinutes": null,
+      "etaReason": "no-capacity",
+      "etaHuman": "unknown (no cost capacity calibrated for this account or a same-plan one)",
+      "exhaustionEtaIso": null
+    },
+    "sevenDay": {
+      "label": "7d",
+      "windowHours": 168,
+      "window": {
+        "fromIso": "2025-07-25T14:00:00.000Z",
+        "untilIso": "2025-08-01T14:00:00.000Z"
+      },
+      "consumedCostUsd": 7.1,
+      "consumedTokens": 362000,
+      "consumedBillableWeighted": 177563,
+      "capacity": {
+        "tokens": null,
+        "costUsd": null,
+        "source": null,
+        "proxyAccountId": null,
+        "observedAt": null
+      },
+      "fillPct": null,
+      "remainingCostUsd": null,
+      "costPerMin": 0.013333,
+      "steadyStateFillUsd": 134.4,
+      "willExhaustAtCurrentRate": false,
+      "etaMinutes": null,
+      "etaReason": "no-capacity",
+      "etaHuman": "unknown (no cost capacity calibrated for this account or a same-plan one)",
+      "exhaustionEtaIso": null
+    },
+    "bindingWindow": "none",
+    "verdict": "No cost capacity is calibrated for this account or a same-plan account, so no ETA can be projected. A future rate-limit hit auto-calibrates it; or set AGENTLENS_WINDOW_5H_COST_USD / _7D_COST_USD.",
+    "note": "ETA is COST-based (Anthropic meters the windows by cost, not raw tokens — cache-read is weighted ~0.1×). The rate is THIS account's own $/min (rate limits are per OAuth account); capacity is the account's observed calibration, else a same-plan account's as a labeled proxy, else undetermined. Consumption uses time-based attribution against the account-state timeline, so cross-rotation sessions split correctly.",
+    "text": "window ETA for one@example.test at $0.01/min (rate over last 30m) — as of 2025-08-01T14:00:00.000Z\n  5h: $4 consumed · no capacity · 242k raw tok · ETA unknown (no cost capacity calibrated for this account or a same-plan one)\n  7d: $7 consumed · no capacity · 362k raw tok · ETA unknown (no cost capacity calibrated for this account or a same-plan one)\nNo cost capacity is calibrated for this account or a same-plan account, so no ETA can be projected. A future rate-limit hit auto-calibrates it; or set AGENTLENS_WINDOW_5H_COST_USD / _7D_COST_USD."
+  },
+  "plateau": {
+    "account": {
+      "accountId": "aaaaaaaa-1111-1111-1111-111111111111",
+      "email": "one@example.test",
+      "plan": "Max 20x",
+      "isCurrent": true
+    },
+    "nowIso": "2025-08-01T14:00:00.000Z",
+    "rateWindowMin": 30,
+    "fiveHour": {
+      "label": "5h",
+      "windowHours": 5,
+      "window": {
+        "fromIso": "2025-08-01T09:00:00.000Z",
+        "untilIso": "2025-08-01T14:00:00.000Z"
+      },
+      "consumedCostUsd": 3.6,
+      "consumedTokens": 242000,
+      "consumedBillableWeighted": 140938,
+      "capacity": {
+        "tokens": 5000000,
+        "costUsd": 500,
+        "source": "observed",
+        "proxyAccountId": null,
+        "observedAt": "2026-07-30T00:00:00.000Z"
+      },
+      "fillPct": 0.7199999999999999,
+      "remainingCostUsd": 496.4,
+      "costPerMin": 0.013333,
+      "steadyStateFillUsd": 4,
+      "willExhaustAtCurrentRate": false,
+      "etaMinutes": null,
+      "etaReason": "plateau",
+      "etaHuman": "won't exhaust at the current rate (rolling window plateaus below the cap)",
+      "exhaustionEtaIso": null
+    },
+    "sevenDay": {
+      "label": "7d",
+      "windowHours": 168,
+      "window": {
+        "fromIso": "2025-07-25T14:00:00.000Z",
+        "untilIso": "2025-08-01T14:00:00.000Z"
+      },
+      "consumedCostUsd": 7.1,
+      "consumedTokens": 362000,
+      "consumedBillableWeighted": 177563,
+      "capacity": {
+        "tokens": 40000000,
+        "costUsd": 5000,
+        "source": "observed",
+        "proxyAccountId": null,
+        "observedAt": "2026-07-30T00:00:00.000Z"
+      },
+      "fillPct": 0.14200000000000002,
+      "remainingCostUsd": 4992.9,
+      "costPerMin": 0.013333,
+      "steadyStateFillUsd": 134.4,
+      "willExhaustAtCurrentRate": false,
+      "etaMinutes": null,
+      "etaReason": "plateau",
+      "etaHuman": "won't exhaust at the current rate (rolling window plateaus below the cap)",
+      "exhaustionEtaIso": null
+    },
+    "bindingWindow": "none",
+    "verdict": "At $0.01/min NEITHER window exhausts — a rolling window plateaus at rate×length. The 7d plateaus at ~$134 of its $5000 cap (3%). It would take a sustained higher burst (like the one that forced the last rotation) to exhaust a window.",
+    "note": "ETA is COST-based (Anthropic meters the windows by cost, not raw tokens — cache-read is weighted ~0.1×). The rate is THIS account's own $/min (rate limits are per OAuth account); capacity is the account's observed calibration, else a same-plan account's as a labeled proxy, else undetermined. Consumption uses time-based attribution against the account-state timeline, so cross-rotation sessions split correctly.",
+    "text": "window ETA for one@example.test at $0.01/min (rate over last 30m) — as of 2025-08-01T14:00:00.000Z\n  5h: $4 / $500 cap (1%, observed) · 242k raw tok · ETA won't exhaust at the current rate (rolling window plateaus below the cap)\n  7d: $7 / $5000 cap (0%, observed) · 362k raw tok · ETA won't exhaust at the current rate (rolling window plateaus below the cap)\nAt $0.01/min NEITHER window exhausts — a rolling window plateaus at rate×length. The 7d plateaus at ~$134 of its $5000 cap (3%). It would take a sustained higher burst (like the one that forced the last rotation) to exhaust a window."
+  },
+  "projected": {
+    "account": {
+      "accountId": "aaaaaaaa-1111-1111-1111-111111111111",
+      "email": "one@example.test",
+      "plan": "Max 20x",
+      "isCurrent": true
+    },
+    "nowIso": "2025-08-01T14:00:00.000Z",
+    "rateWindowMin": 30,
+    "fiveHour": {
+      "label": "5h",
+      "windowHours": 5,
+      "window": {
+        "fromIso": "2025-08-01T09:00:00.000Z",
+        "untilIso": "2025-08-01T14:00:00.000Z"
+      },
+      "consumedCostUsd": 3.6,
+      "consumedTokens": 242000,
+      "consumedBillableWeighted": 140938,
+      "capacity": {
+        "tokens": 5000000,
+        "costUsd": 4,
+        "source": "observed",
+        "proxyAccountId": null,
+        "observedAt": "2026-07-30T00:00:00.000Z"
+      },
+      "fillPct": 89.99999999999999,
+      "remainingCostUsd": 0.4,
+      "costPerMin": 0.013333,
+      "steadyStateFillUsd": 4,
+      "willExhaustAtCurrentRate": true,
+      "etaMinutes": 30,
+      "etaReason": "projected",
+      "etaHuman": "30m",
+      "exhaustionEtaIso": "2025-08-01T14:30:00.000Z"
+    },
+    "sevenDay": {
+      "label": "7d",
+      "windowHours": 168,
+      "window": {
+        "fromIso": "2025-07-25T14:00:00.000Z",
+        "untilIso": "2025-08-01T14:00:00.000Z"
+      },
+      "consumedCostUsd": 7.1,
+      "consumedTokens": 362000,
+      "consumedBillableWeighted": 177563,
+      "capacity": {
+        "tokens": 40000000,
+        "costUsd": 5000,
+        "source": "observed",
+        "proxyAccountId": null,
+        "observedAt": "2026-07-30T00:00:00.000Z"
+      },
+      "fillPct": 0.14200000000000002,
+      "remainingCostUsd": 4992.9,
+      "costPerMin": 0.013333,
+      "steadyStateFillUsd": 134.4,
+      "willExhaustAtCurrentRate": false,
+      "etaMinutes": null,
+      "etaReason": "plateau",
+      "etaHuman": "won't exhaust at the current rate (rolling window plateaus below the cap)",
+      "exhaustionEtaIso": null
+    },
+    "bindingWindow": "5h",
+    "verdict": "At $0.01/min the 5h window exhausts first in ~30m (4 of 4 $ cap, 90% used, capacity observed).",
+    "note": "ETA is COST-based (Anthropic meters the windows by cost, not raw tokens — cache-read is weighted ~0.1×). The rate is THIS account's own $/min (rate limits are per OAuth account); capacity is the account's observed calibration, else a same-plan account's as a labeled proxy, else undetermined. Consumption uses time-based attribution against the account-state timeline, so cross-rotation sessions split correctly.",
+    "text": "window ETA for one@example.test at $0.01/min (rate over last 30m) — as of 2025-08-01T14:00:00.000Z\n  5h: $4 / $4 cap (90%, observed) · 242k raw tok · ETA 30m (≈ 2025-08-01T14:30:00.000Z)  ◀ EXHAUSTS FIRST\n  7d: $7 / $5000 cap (0%, observed) · 362k raw tok · ETA won't exhaust at the current rate (rolling window plateaus below the cap)\nAt $0.01/min the 5h window exhausts first in ~30m (4 of 4 $ cap, 90% used, capacity observed)."
+  },
+  "overLimit": {
+    "account": {
+      "accountId": "aaaaaaaa-1111-1111-1111-111111111111",
+      "email": "one@example.test",
+      "plan": "Max 20x",
+      "isCurrent": true
+    },
+    "nowIso": "2025-08-01T14:00:00.000Z",
+    "rateWindowMin": 30,
+    "fiveHour": {
+      "label": "5h",
+      "windowHours": 5,
+      "window": {
+        "fromIso": "2025-08-01T09:00:00.000Z",
+        "untilIso": "2025-08-01T14:00:00.000Z"
+      },
+      "consumedCostUsd": 3.6,
+      "consumedTokens": 242000,
+      "consumedBillableWeighted": 140938,
+      "capacity": {
+        "tokens": 5000000,
+        "costUsd": 1,
+        "source": "observed",
+        "proxyAccountId": null,
+        "observedAt": "2026-07-30T00:00:00.000Z"
+      },
+      "fillPct": 359.99999999999994,
+      "remainingCostUsd": -2.6,
+      "costPerMin": 0.013333,
+      "steadyStateFillUsd": 4,
+      "willExhaustAtCurrentRate": true,
+      "etaMinutes": 0,
+      "etaReason": "over-limit",
+      "etaHuman": "already at/over the limit",
+      "exhaustionEtaIso": null
+    },
+    "sevenDay": {
+      "label": "7d",
+      "windowHours": 168,
+      "window": {
+        "fromIso": "2025-07-25T14:00:00.000Z",
+        "untilIso": "2025-08-01T14:00:00.000Z"
+      },
+      "consumedCostUsd": 7.1,
+      "consumedTokens": 362000,
+      "consumedBillableWeighted": 177563,
+      "capacity": {
+        "tokens": 40000000,
+        "costUsd": 5000,
+        "source": "observed",
+        "proxyAccountId": null,
+        "observedAt": "2026-07-30T00:00:00.000Z"
+      },
+      "fillPct": 0.14200000000000002,
+      "remainingCostUsd": 4992.9,
+      "costPerMin": 0.013333,
+      "steadyStateFillUsd": 134.4,
+      "willExhaustAtCurrentRate": false,
+      "etaMinutes": null,
+      "etaReason": "plateau",
+      "etaHuman": "won't exhaust at the current rate (rolling window plateaus below the cap)",
+      "exhaustionEtaIso": null
+    },
+    "bindingWindow": "5h",
+    "verdict": "The 5h window is ALREADY at/over its cost limit (4 of 1 $ cap) — a rotation is imminent or overdue.",
+    "note": "ETA is COST-based (Anthropic meters the windows by cost, not raw tokens — cache-read is weighted ~0.1×). The rate is THIS account's own $/min (rate limits are per OAuth account); capacity is the account's observed calibration, else a same-plan account's as a labeled proxy, else undetermined. Consumption uses time-based attribution against the account-state timeline, so cross-rotation sessions split correctly.",
+    "text": "window ETA for one@example.test at $0.01/min (rate over last 30m) — as of 2025-08-01T14:00:00.000Z\n  5h: $4 / $1 cap (360%, observed) · 242k raw tok · ETA already at/over the limit  ◀ EXHAUSTS FIRST\n  7d: $7 / $5000 cap (0%, observed) · 362k raw tok · ETA won't exhaust at the current rate (rolling window plateaus below the cap)\nThe 5h window is ALREADY at/over its cost limit (4 of 1 $ cap) — a rotation is imminent or overdue."
+  },
+  "idle": {
+    "account": {
+      "accountId": "aaaaaaaa-1111-1111-1111-111111111111",
+      "email": "one@example.test",
+      "plan": "Max 20x",
+      "isCurrent": true
+    },
+    "nowIso": "2025-08-01T14:00:00.000Z",
+    "rateWindowMin": 1,
+    "fiveHour": {
+      "label": "5h",
+      "windowHours": 5,
+      "window": {
+        "fromIso": "2025-08-01T09:00:00.000Z",
+        "untilIso": "2025-08-01T14:00:00.000Z"
+      },
+      "consumedCostUsd": 3.6,
+      "consumedTokens": 242000,
+      "consumedBillableWeighted": 140938,
+      "capacity": {
+        "tokens": 5000000,
+        "costUsd": 500,
+        "source": "observed",
+        "proxyAccountId": null,
+        "observedAt": "2026-07-30T00:00:00.000Z"
+      },
+      "fillPct": 0.7199999999999999,
+      "remainingCostUsd": 496.4,
+      "costPerMin": 0,
+      "steadyStateFillUsd": 0,
+      "willExhaustAtCurrentRate": false,
+      "etaMinutes": null,
+      "etaReason": "idle",
+      "etaHuman": "not draining (no consumption in the rate window)",
+      "exhaustionEtaIso": null
+    },
+    "sevenDay": {
+      "label": "7d",
+      "windowHours": 168,
+      "window": {
+        "fromIso": "2025-07-25T14:00:00.000Z",
+        "untilIso": "2025-08-01T14:00:00.000Z"
+      },
+      "consumedCostUsd": 7.1,
+      "consumedTokens": 362000,
+      "consumedBillableWeighted": 177563,
+      "capacity": {
+        "tokens": 40000000,
+        "costUsd": 5000,
+        "source": "observed",
+        "proxyAccountId": null,
+        "observedAt": "2026-07-30T00:00:00.000Z"
+      },
+      "fillPct": 0.14200000000000002,
+      "remainingCostUsd": 4992.9,
+      "costPerMin": 0,
+      "steadyStateFillUsd": 0,
+      "willExhaustAtCurrentRate": false,
+      "etaMinutes": null,
+      "etaReason": "idle",
+      "etaHuman": "not draining (no consumption in the rate window)",
+      "exhaustionEtaIso": null
+    },
+    "bindingWindow": "none",
+    "verdict": "Capacity is known but nothing is burning in the last 1m (rate $0/min) — the windows are not draining right now.",
+    "note": "ETA is COST-based (Anthropic meters the windows by cost, not raw tokens — cache-read is weighted ~0.1×). The rate is THIS account's own $/min (rate limits are per OAuth account); capacity is the account's observed calibration, else a same-plan account's as a labeled proxy, else undetermined. Consumption uses time-based attribution against the account-state timeline, so cross-rotation sessions split correctly.",
+    "text": "window ETA for one@example.test at $0.00/min (rate over last 1m) — as of 2025-08-01T14:00:00.000Z\n  5h: $4 / $500 cap (1%, observed) · 242k raw tok · ETA not draining (no consumption in the rate window)\n  7d: $7 / $5000 cap (0%, observed) · 362k raw tok · ETA not draining (no consumption in the rate window)\nCapacity is known but nothing is burning in the last 1m (rate $0/min) — the windows are not draining right now."
+  },
+  "zeroCap": {
+    "account": {
+      "accountId": "aaaaaaaa-1111-1111-1111-111111111111",
+      "email": "one@example.test",
+      "plan": "Max 20x",
+      "isCurrent": true
+    },
+    "nowIso": "2025-08-01T14:00:00.000Z",
+    "rateWindowMin": 30,
+    "fiveHour": {
+      "label": "5h",
+      "windowHours": 5,
+      "window": {
+        "fromIso": "2025-08-01T09:00:00.000Z",
+        "untilIso": "2025-08-01T14:00:00.000Z"
+      },
+      "consumedCostUsd": 3.6,
+      "consumedTokens": 242000,
+      "consumedBillableWeighted": 140938,
+      "capacity": {
+        "tokens": 5000000,
+        "costUsd": 0,
+        "source": "observed",
+        "proxyAccountId": null,
+        "observedAt": "2026-07-30T00:00:00.000Z"
+      },
+      "fillPct": null,
+      "remainingCostUsd": -3.6,
+      "costPerMin": 0.013333,
+      "steadyStateFillUsd": 4,
+      "willExhaustAtCurrentRate": true,
+      "etaMinutes": 0,
+      "etaReason": "over-limit",
+      "etaHuman": "already at/over the limit",
+      "exhaustionEtaIso": null
+    },
+    "sevenDay": {
+      "label": "7d",
+      "windowHours": 168,
+      "window": {
+        "fromIso": "2025-07-25T14:00:00.000Z",
+        "untilIso": "2025-08-01T14:00:00.000Z"
+      },
+      "consumedCostUsd": 7.1,
+      "consumedTokens": 362000,
+      "consumedBillableWeighted": 177563,
+      "capacity": {
+        "tokens": 40000000,
+        "costUsd": 5000,
+        "source": "observed",
+        "proxyAccountId": null,
+        "observedAt": "2026-07-30T00:00:00.000Z"
+      },
+      "fillPct": 0.14200000000000002,
+      "remainingCostUsd": 4992.9,
+      "costPerMin": 0.013333,
+      "steadyStateFillUsd": 134.4,
+      "willExhaustAtCurrentRate": false,
+      "etaMinutes": null,
+      "etaReason": "plateau",
+      "etaHuman": "won't exhaust at the current rate (rolling window plateaus below the cap)",
+      "exhaustionEtaIso": null
+    },
+    "bindingWindow": "5h",
+    "verdict": "The 5h window is ALREADY at/over its cost limit (4 of 0 $ cap) — a rotation is imminent or overdue.",
+    "note": "ETA is COST-based (Anthropic meters the windows by cost, not raw tokens — cache-read is weighted ~0.1×). The rate is THIS account's own $/min (rate limits are per OAuth account); capacity is the account's observed calibration, else a same-plan account's as a labeled proxy, else undetermined. Consumption uses time-based attribution against the account-state timeline, so cross-rotation sessions split correctly.",
+    "text": "window ETA for one@example.test at $0.01/min (rate over last 30m) — as of 2025-08-01T14:00:00.000Z\n  5h: $4 / $0 cap (undefined%, observed) · 242k raw tok · ETA already at/over the limit  ◀ EXHAUSTS FIRST\n  7d: $7 / $5000 cap (0%, observed) · 362k raw tok · ETA won't exhaust at the current rate (rolling window plateaus below the cap)\nThe 5h window is ALREADY at/over its cost limit (4 of 0 $ cap) — a rotation is imminent or overdue."
+  },
+  "bothProjected": {
+    "account": {
+      "accountId": "aaaaaaaa-1111-1111-1111-111111111111",
+      "email": "one@example.test",
+      "plan": "Max 20x",
+      "isCurrent": true
+    },
+    "nowIso": "2025-08-01T14:00:00.000Z",
+    "rateWindowMin": 30,
+    "fiveHour": {
+      "label": "5h",
+      "windowHours": 5,
+      "window": {
+        "fromIso": "2025-08-01T09:00:00.000Z",
+        "untilIso": "2025-08-01T14:00:00.000Z"
+      },
+      "consumedCostUsd": 3.6,
+      "consumedTokens": 242000,
+      "consumedBillableWeighted": 140938,
+      "capacity": {
+        "tokens": 5000000,
+        "costUsd": 4,
+        "source": "observed",
+        "proxyAccountId": null,
+        "observedAt": "2026-07-30T00:00:00.000Z"
+      },
+      "fillPct": 89.99999999999999,
+      "remainingCostUsd": 0.4,
+      "costPerMin": 0.013333,
+      "steadyStateFillUsd": 4,
+      "willExhaustAtCurrentRate": true,
+      "etaMinutes": 30,
+      "etaReason": "projected",
+      "etaHuman": "30m",
+      "exhaustionEtaIso": "2025-08-01T14:30:00.000Z"
+    },
+    "sevenDay": {
+      "label": "7d",
+      "windowHours": 168,
+      "window": {
+        "fromIso": "2025-07-25T14:00:00.000Z",
+        "untilIso": "2025-08-01T14:00:00.000Z"
+      },
+      "consumedCostUsd": 7.1,
+      "consumedTokens": 362000,
+      "consumedBillableWeighted": 177563,
+      "capacity": {
+        "tokens": 40000000,
+        "costUsd": 5,
+        "source": "observed",
+        "proxyAccountId": null,
+        "observedAt": "2026-07-30T00:00:00.000Z"
+      },
+      "fillPct": 142.00000000000003,
+      "remainingCostUsd": -2.1,
+      "costPerMin": 0.013333,
+      "steadyStateFillUsd": 134.4,
+      "willExhaustAtCurrentRate": true,
+      "etaMinutes": 0,
+      "etaReason": "over-limit",
+      "etaHuman": "already at/over the limit",
+      "exhaustionEtaIso": null
+    },
+    "bindingWindow": "7d",
+    "verdict": "The 7d window is ALREADY at/over its cost limit (7 of 5 $ cap) — a rotation is imminent or overdue.",
+    "note": "ETA is COST-based (Anthropic meters the windows by cost, not raw tokens — cache-read is weighted ~0.1×). The rate is THIS account's own $/min (rate limits are per OAuth account); capacity is the account's observed calibration, else a same-plan account's as a labeled proxy, else undetermined. Consumption uses time-based attribution against the account-state timeline, so cross-rotation sessions split correctly.",
+    "text": "window ETA for one@example.test at $0.01/min (rate over last 30m) — as of 2025-08-01T14:00:00.000Z\n  5h: $4 / $4 cap (90%, observed) · 242k raw tok · ETA 30m (≈ 2025-08-01T14:30:00.000Z)\n  7d: $7 / $5 cap (142%, observed) · 362k raw tok · ETA already at/over the limit  ◀ EXHAUSTS FIRST\nThe 7d window is ALREADY at/over its cost limit (7 of 5 $ cap) — a rotation is imminent or overdue."
+  }
+}

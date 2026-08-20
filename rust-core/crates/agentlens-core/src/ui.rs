@@ -1694,6 +1694,49 @@ async fn handle(
                         .await?;
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
+                    "get_window_eta" => {
+                        // Same shape as get_account_burners — the two tools SHARE their attribution
+                        // rule and capacity resolver by design, so they read the same timeline, the
+                        // same event stream and the same observed table. The default spec differs:
+                        // 'current' here (how long have I got?) vs 'previous' there (who burned it?).
+                        let now = crate::now_ms() as f64;
+                        let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                        let timeline_path = crate::account_state_timeline::account_state_timeline_path(&st.data_dir);
+                        let segments = crate::account_burners::read_account_segments(&timeline_path);
+                        let payload = if segments.is_empty() {
+                            crate::mcp_tools::error_payload(
+                                "No account-state timeline yet (~/.agentlens/account-state.ndjson) — nothing to project against.",
+                            )
+                        } else {
+                            let spec = args.get("account").and_then(Value::as_str).unwrap_or("current");
+                            match crate::account_burners::resolve_target_account(&segments, spec, now) {
+                                None => crate::mcp_tools::error_payload(&format!(
+                                    "No account matches '{spec}'. Known: {}",
+                                    crate::account_burners::known_accounts(&segments)
+                                )),
+                                Some(target) => {
+                                    let summary = st.build_session_summary(now);
+                                    let sessions: Vec<Value> =
+                                        summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
+                                    drop(summary);
+                                    let events = crate::burn::monitor::gather_consumption_events(&sessions, &[], now);
+                                    let rate_window_ms =
+                                        args.get("rate_window_min").and_then(Value::as_f64).unwrap_or(30.0).max(1.0) * 60_000.0;
+                                    let observed = st.burn.config.observed.clone();
+                                    crate::window_eta::build_window_eta_report(&crate::window_eta::WindowEtaOpts {
+                                        events: &events,
+                                        target: &target,
+                                        all_segments: &segments,
+                                        now_ms: now,
+                                        rate_window_ms,
+                                        observed: &observed,
+                                    })
+                                }
+                            }
+                        };
+                        drop(st);
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
+                    }
                     "get_account_burners" => {
                         // Pure once the inputs are gathered (no transcript reparse), so it runs
                         // under the lock like the other burn routes rather than on spawn_blocking.
