@@ -216,6 +216,65 @@ async fn read_body_keep_under(mut body: hyper::body::Incoming, max: usize) -> Re
 /// LOCK CHOREOGRAPHY (the P4s rule): the registry lookup is cheap and in-memory so it runs UNDER
 /// the lock with the POINTER CLONED OUT; the multi-MB body read happens with the lock RELEASED;
 /// the lock is re-taken only for the TRDD-BURNWDGT account backfill.
+/// Drill ONE block to its real content (freeze row 37's engine + the `get_block_content` tool).
+/// Shared for the same reason `resolve_call_context` is: the TS has ONE `getBlockContent` behind
+/// both surfaces, and two copies of a payload this shape is a wire fork waiting to happen.
+///
+/// The TWO message branches are DISTINCT on purpose, and both are a normal answer rather than an
+/// error: "no body captured for that turn" and "that block does not exist" are different facts, and
+/// collapsing them would leave a caller unable to tell a gap in capture from a bad index.
+///
+/// An IMAGE returns metadata + a body-file ref ONLY — never the base64 bytes (pointer-only), which
+/// is what keeps a drill from pasting a multi-MB blob into the caller's transcript.
+async fn resolve_block_content(
+    state: &Arc<Mutex<CoreState>>,
+    session_id: &str,
+    turn: f64,
+    block_index: f64,
+    full: bool,
+) -> Result<Value, String> {
+    let n = crate::summarize::helpers::num;
+    let fmt = crate::summarize::helpers::fmt_js_num;
+    let pointer = {
+        let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+        // requestPointers(session)[turn - 1] — 1-based turns.
+        let ptrs = st.bodies.request_pointers(session_id);
+        let idx = turn - 1.0;
+        if idx < 0.0 { None } else { ptrs.get(idx as usize).and_then(|p| p.body_ref.clone()) }
+    };
+    let Some(body_ref) = pointer.filter(|b| !b.is_empty()) else {
+        return Ok(serde_json::json!({
+            "sessionId": session_id,
+            "turn": n(turn),
+            "message": format!("No raw body for call/turn {} of session {session_id} in the live registry (lazy — historical bodies are not indexed).", fmt(turn)),
+        }));
+    };
+    let read = tokio::task::spawn_blocking(move || {
+        crate::context_composition_index::read_block_content(&body_ref, block_index as i64, full)
+    })
+    .await
+    .map_err(|e| format!("block-content join failed: {e}"))?;
+    let Some(b) = read else {
+        return Ok(serde_json::json!({
+            "sessionId": session_id,
+            "turn": n(turn),
+            "blockIndex": n(block_index),
+            "message": format!("No block {} at turn {}.", fmt(block_index), fmt(turn)),
+        }));
+    };
+    // `{ sessionId, turn, ...block }` — the spread puts the block's own keys AFTER these two, in
+    // the block's order.
+    let mut m = serde_json::Map::new();
+    m.insert("sessionId".into(), Value::String(session_id.to_owned()));
+    m.insert("turn".into(), n(turn));
+    if let Some(o) = b.as_object() {
+        for (k, v) in o {
+            m.insert(k.clone(), v.clone());
+        }
+    }
+    Ok(Value::Object(m))
+}
+
 async fn resolve_call_context(
     state: &Arc<Mutex<CoreState>>,
     session_id: &str,
@@ -1101,6 +1160,22 @@ async fn handle(
                         let payload = crate::mcp_tools::get_window_budget(Some(&status), Some(&account), s("accountId").as_deref());
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
+                    "get_block_content" => {
+                        // The MCP args are already JSON numbers, so there is no `Number('')===0`
+                        // trap here — that one belongs to the HTTP path segments. An absent arg is
+                        // 0, matching the TS's `undefined` arithmetic reaching the same pointer
+                        // lookup rather than throwing.
+                        let n = |k: &str| args.get(k).and_then(Value::as_f64).unwrap_or(0.0);
+                        let payload = resolve_block_content(
+                            &state,
+                            &s("sessionId").unwrap_or_default(),
+                            n("turn"),
+                            n("blockIndex"),
+                            args.get("full") == Some(&Value::Bool(true)),
+                        )
+                        .await?;
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
+                    }
                     "get_account_status" => {
                         // The TS `all: true` form calls listAllAccounts() — the on-disk roster +
                         // per-account usage archive, which needs NONE of the live accessors and so
@@ -1320,50 +1395,7 @@ async fn handle(
         let full = query_of(&req).get("full").map(String::as_str) == Some("1");
         match (session_id.is_empty(), turn, block_index) {
             (false, Some(t), Some(bi)) => {
-                let pointer = {
-                    let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
-                    // requestPointers(session)[turn - 1] — 1-based turns.
-                    let ptrs = st.bodies.request_pointers(&session_id);
-                    let idx = t - 1.0;
-                    if idx < 0.0 { None } else { ptrs.get(idx as usize).and_then(|p| p.body_ref.clone()) }
-                };
-                let block = match pointer.filter(|b| !b.is_empty()) {
-                    // Two DISTINCT error shapes, both 200 (not an error status): the caller must be
-                    // able to tell "no body captured for that turn" from "that block does not exist".
-                    None => serde_json::json!({
-                        "sessionId": session_id,
-                        "turn": crate::summarize::helpers::num(t),
-                        "message": format!("No raw body for call/turn {} of session {session_id} in the live registry (lazy — historical bodies are not indexed).", crate::summarize::helpers::fmt_js_num(t)),
-                    }),
-                    Some(body_ref) => {
-                        let read = tokio::task::spawn_blocking(move || {
-                            crate::context_composition_index::read_block_content(&body_ref, bi as i64, full)
-                        })
-                        .await
-                        .map_err(|e| format!("block-content join failed: {e}"))?;
-                        match read {
-                            None => serde_json::json!({
-                                "sessionId": session_id,
-                                "turn": crate::summarize::helpers::num(t),
-                                "blockIndex": crate::summarize::helpers::num(bi),
-                                "message": format!("No block {} at turn {}.", crate::summarize::helpers::fmt_js_num(bi), crate::summarize::helpers::fmt_js_num(t)),
-                            }),
-                            Some(b) => {
-                                // `{ sessionId, turn, ...block }` — the spread puts the block's own
-                                // keys AFTER these two, in the block's order.
-                                let mut m = serde_json::Map::new();
-                                m.insert("sessionId".into(), Value::String(session_id.clone()));
-                                m.insert("turn".into(), crate::summarize::helpers::num(t));
-                                if let Some(o) = b.as_object() {
-                                    for (k, v) in o {
-                                        m.insert(k.clone(), v.clone());
-                                    }
-                                }
-                                Value::Object(m)
-                            }
-                        }
-                    }
-                };
+                let block = resolve_block_content(&state, &session_id, t, bi, full).await?;
                 json_response(StatusCode::OK, serde_json::json!({ "block": block }).to_string())
             }
             _ => json_response(

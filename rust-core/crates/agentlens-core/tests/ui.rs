@@ -1758,3 +1758,66 @@ fn mcp_get_account_status_answers_and_refuses_to_guess() {
     let msg = all["error"]["message"].as_str().unwrap();
     assert!(msg.contains("all: true"), "the error names WHICH form is missing: {msg}");
 }
+
+/// `get_block_content` and `GET /api/block-content/` must be the SAME answer — they share one
+/// resolver precisely so they cannot fork. The test compares the two payloads field-for-field
+/// rather than asserting the MCP one in isolation, because "both are plausible" is exactly how two
+/// copies of a shaper drift apart.
+///
+/// The IMAGE case is the one with a contract behind it: metadata + a ref, NEVER the base64 bytes.
+/// A drill that pasted the blob would put a multi-MB image into the caller's transcript, re-sent on
+/// every later turn.
+#[test]
+fn mcp_get_block_content_matches_the_http_route_and_never_ships_image_bytes() {
+    let (_otlp, ui, state) = start_servers();
+    let bodies = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bodies");
+    {
+        let mut st = state.lock().unwrap();
+        st.bodies.record(
+            "blk-mcp",
+            agentlens_core::call_body_registry::CallBodyPointer {
+                kind: "request",
+                body_ref: Some(bodies.join("comp.request.json").to_string_lossy().into_owned()),
+                inline_body: None,
+                request_id: None,
+                span_id: Some("sp1".into()),
+                model: None,
+                query_source: None,
+                ts: 1000,
+            },
+        );
+    }
+    let call = |args: &str| -> serde_json::Value {
+        let body = format!(
+            r#"{{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{{"name":"get_block_content","arguments":{args}}}}}"#
+        );
+        let env: serde_json::Value = serde_json::from_str(body_of(&post(ui, "/mcp", &body))).unwrap();
+        let text = env["result"]["content"][0]["text"].as_str().unwrap_or_else(|| panic!("{env}"));
+        serde_json::from_str(text).unwrap()
+    };
+
+    let tool = call(r#"{"verbosity":"full","sessionId":"blk-mcp","turn":1,"blockIndex":0}"#);
+    let http: serde_json::Value = serde_json::from_str(body_of(&get(ui, "/api/block-content/blk-mcp/1/0", ""))).unwrap();
+    assert_eq!(tool, http["block"], "one resolver, one answer");
+    assert!(tool["text"].is_string(), "a text block carries its content: {tool}");
+
+    // The two message branches are DISTINCT facts and must stay tellable apart.
+    let no_body = call(r#"{"verbosity":"full","sessionId":"blk-mcp","turn":99,"blockIndex":0}"#);
+    assert!(no_body["message"].as_str().unwrap().contains("No raw body"), "{no_body}");
+    assert!(no_body.get("blockIndex").is_none(), "a missing TURN cannot name a block index: {no_body}");
+    let no_block = call(r#"{"verbosity":"full","sessionId":"blk-mcp","turn":1,"blockIndex":999}"#);
+    assert!(no_block["message"].as_str().unwrap().contains("No block 999"), "{no_block}");
+    assert_eq!(no_block["blockIndex"], 999, "a bad INDEX names the index: {no_block}");
+
+    // Pointer-only: find an image block and prove no base64 crosses the wire.
+    let mut saw_image = false;
+    for i in 0..12 {
+        let b = call(&format!(r#"{{"verbosity":"full","sessionId":"blk-mcp","turn":1,"blockIndex":{i}}}"#));
+        if b["kind"] == "image" {
+            saw_image = true;
+            assert!(b.get("text").is_none(), "an image never carries its bytes: {b}");
+            assert!(b["bodyRef"].is_string() || b["ref"].is_string(), "it carries a REF instead: {b}");
+        }
+    }
+    assert!(saw_image, "the fixture must contain an image block or this proves nothing");
+}
