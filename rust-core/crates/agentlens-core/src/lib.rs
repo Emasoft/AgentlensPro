@@ -32,6 +32,7 @@ pub mod account_registry;
 pub mod body_archive;
 pub mod burn;
 pub mod cache_risk_commands;
+pub mod call_body_registry;
 pub mod collector_lifecycle;
 pub mod delta_log;
 pub mod derived_cache;
@@ -122,6 +123,10 @@ pub struct CoreState {
     /// The shared CallBodyRegistry's account half: fed by the logs ingest, read when a log card
     /// is built (accountId, TRDD-BURNWDGT).
     pub accounts: account_registry::AccountRegistry,
+    /// The shared CallBodyRegistry's POINTER half (P4w.1) — raw request/response body
+    /// addresses per session, fed by the logs ingest. The spine the per-session drill-down
+    /// routes (freeze rows 32–37) resolve a call to its body file through.
+    pub bodies: call_body_registry::CallBodyRegistry,
     /// serverRuntime.ts requestLog — one row per UI/API request (ring + `requests.log`).
     pub requests: request_log::RequestLog,
     /// server.ts `otelAttributionBySession` (TRDD-5GFSFX0Q): sessionId → the OTEL card's
@@ -336,6 +341,7 @@ impl CoreState {
             summary_cache: derived_cache::VersionedCache::default(),
             stripped_cache: derived_cache::VersionedCache::default(),
             accounts: account_registry::AccountRegistry::default(),
+            bodies: call_body_registry::CallBodyRegistry::default(),
             requests: request_log::RequestLog::new(Some(data_dir.join("requests.log"))),
             otel_attribution: IndexMap::new(),
             lifecycle: collector_lifecycle::record_start(&collector_lifecycle::lifecycle_file(data_dir), now),
@@ -441,6 +447,12 @@ pub fn ingest_post(state: &mut CoreState, path: &str, body: &[u8]) {
             // server.ts processLogs: the body-pointer events' user.account_uuid → the registry.
             for (sid, acct) in &r.account_pairs {
                 state.accounts.record(sid, acct);
+            }
+            // …and the pointers themselves into the registry half (P4w.1). The transform has
+            // returned these as data since P3b; until now nothing consumed them, so every
+            // per-session drill-down would have resolved to an empty registry.
+            for p in r.body_pointers {
+                state.bodies.record_ingested(p);
             }
             r.spans
         }
