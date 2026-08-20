@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T18:29:46+0200
+updated: 2026-08-20T19:04:39+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -1009,8 +1009,30 @@ release-via: publish
   `state: null` + a note (a GAP, never an error, never "no account"); `ts` beats `iso`.
   Live on the real corpus: **13,802 considered / 1,286 with log / 25 scanned** — the sampling gap
   working, with the SAMPLE note carried in the payload.
-- **NEXT (P4x.2d continued): the 6 remaining IN-MODULE handlers — cheapest by ENGINE.**
-  `handleGetCacheBreakReport` (81), `handleGetCostByCause` (82, needs `buildTokensByCause`),
+- **P4x.2d (commit f20b293): `get_agent_tokens`. 30 of 53.** THE MATCH ORDER IS THE WHOLE
+  CORRECTNESS ARGUMENT: resolution starts from the NORMALIZED equivalence class (bare ↔ `agent-<id>`,
+  case-insensitive) and exact sessionId equality is only a TIE-BREAK, never blanket precedence — **a
+  spawn PLACEHOLDER's sessionId IS the bare agent id BY CONSTRUCTION**, so a bare-id query would
+  "exactly" match the ZERO-BUCKET placeholder and serve it over the real totals, reporting a real
+  agent's spend as free. The tie-break is trusted only when the query carries the distinguishing
+  `agent-<id>` form. Mutation-proved: dropping `qLower !== qBare` fails 2 tests.
+  **TWO BUGS I WROTE AND CAUGHT PRE-COMMIT, both invisible to a value comparison:** `warm` inserted
+  BEFORE `spawnKind` (inverting the TS literal — key order is a wire contract, and computing `warm`
+  first is the natural port mistake), and `cost_usd` reading the wall clock instead of an injectable
+  `now`. **Add a key-order check against the TS literal to the slice discipline.**
+  Also pinned: a card with NO parent has `spawnKind` NULL not `'fresh'` (never spawned ≠ spawned
+  fresh; a CHILD without a kind DOES default to fresh — the parent distinguishes them);
+  `ccDisplayEquivalent` derives `lastTurnContextRead` most→least authoritative and NEVER guesses
+  (statusline → last USAGE-CARRYING turn, skipping a trailing zero entry → single-turn cumulative →
+  NULL); a wrong parent SHOWS where the id does live; `lastSeenAt` from the card's own span, null on
+  an unparseable start, never a fabricated now(); `turns` null not 0 at zero calls.
+  Live: a real 1,166-turn session — 482.7M cache-read tokens, $294.84, lastTurnContextRead 459,848.
+- **NEXT (P4x.2d continued): remaining IN-MODULE handlers, with their REAL (engine-inclusive) cost.**
+  `handleGetCostByCause` (82 + 166 `tokensByCause` = **248**) · `handleGetContextInflationReport`
+  (90 + 135 `residentCost` = **225**) · `handleCheckCacheExpiry` (110 + in-module helpers) ·
+  then the two that SHARE `cacheBreak.ts` (383) and should be done together —
+  `handleGetCacheBreakReport` (81 + 383 = **464**) and `handleGetCacheRiskCosts` (138 + 383 = **521**).
+  Superseded ordering note — the old line named `handleGetCacheBreakReport` (81), `handleGetCostByCause` (82, needs `buildTokensByCause`),
   `handleGetContextInflationReport` (90, needs `buildResidentCostReport`), `handleGetAgentTokens`
   (102), `handleCheckCacheExpiry` (110), `handleGetCacheRiskCosts` (138). THEN
   `subscriptionUsage.ts` (797 + 90 keychainConsent; NETWORK — the oracle must stub). Heavyweights
