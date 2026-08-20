@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-21T00:52:13+0200
+updated: 2026-08-21T01:23:52+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -1289,8 +1289,36 @@ release-via: publish
   `.bak-falsify-check`, and the rule (`~/.claude/rules/never_use_sed.md`) is absolute because a
   `sed` that does nothing looks exactly like a `sed` that worked. Backup removed only AFTER `git
   show HEAD:<file>` proved it byte-identical to committed content.
-- **NEXT (P4x.2d continued): 11 of 53 remain.** Immediate:
-  `sessionBurnProfile` (462, also carries `heartbeatCost`'s `sessionIdOf`) → `heartbeatCost` (316)
+- **P4x.2d (commit cb1a66a): `sessionBurnProfile` (462) + `get_session_burn_profile`. 43 of 53.**
+  Also lands `sessionIdOf`, `heartbeatCost`'s dependency.
+  Pinned: **THE USAGE CHAIN IS OFF BY ONE BY DESIGN** — turn i's usage lives on the response whose
+  id equals turn **i+1**'s `previous_message_id`, so the LAST request is unusable by construction,
+  not by omission (fixture: 7 requests / 6 usable, asserted) · **`sessionIdOf` reads
+  `metadata.user_id` from the END, never message content** — a naive `/"session_id":"…"/` matched a
+  session id MENTIONED in conversation text and two different queries returned byte-identical
+  profiles; fixture r4 carries that exact shape · the `tools[]` fingerprint is **ORDER-SENSITIVE**
+  (`join('\x00')`): a pure REORDER of an identical set still invalidates the whole prefix, and
+  comparing SETS instead is the obvious "simplification" that silently drops the class · the
+  even-length **median** is `Math.round((a+b)/2)`, not the upper element — a median BELOW the 20k
+  floor with a p90 far above it is stable-and-appending with the cost concentrated in a few break
+  events, a completely different remediation from a per-turn rewrite (fixture: 14,000 / 150,000) ·
+  the weighted comparison names the dominant term (the fixture's raw reads outnumber writes 3.5:1
+  yet the WRITE term dominates at 1.25× vs 0.1×; ranking by raw tokens names the wrong culprit) ·
+  `inspectNewest` gives a deferred BUILT-IN its own `bySource` bucket, which `sourceOf` in the
+  stability diff deliberately does NOT — the two classifiers answer different questions · cold
+  calls below the 50% floor must NOT emit the cold-loop remediation (a list that fires on
+  everything is advice nobody reads) · `extractToolNames` scans BYTES where the TS scans UTF-16
+  units (every tested char is ASCII, so structure and slice boundaries are identical) and is a
+  FINGERPRINT, not a parser — an unterminated array yields NOTHING rather than a partial
+  fingerprint that would read as a tool-set change next turn · the empty profiles distinguish a
+  MISSING DIR from a missing SESSION, and `lastCallMinutesAgo` stays **null** (no last call ≠ "0
+  minutes ago"). The MCP arm reproduces the handler's P7 provenance graft, including the
+  unique-PREFIX card fallback so a prefix query is not left without provenance.
+  **FALSIFIED (5/5 first run):** prefix match → equality · even-length median → upper element ·
+  `tools[]` fingerprint → set comparison · the deferred `bySource` bucket removed. Both profile
+  tests went red; the three primitive/empty-path tests correctly stayed green (none touches those
+  rules) — a falsification that reddens EVERY test is not evidence the tests are targeted.
+- **NEXT (P4x.2d continued): 10 of 53 remain.** Immediate: `heartbeatCost` (316)
   → `forensicsCompare` (253 → `compare_configs`) → `burnInvestigator` (632, also
   `rateLimitReport`'s dep) → `rateLimitReport` (134) → `cacheBreakTimeline` (1,927 → 2 tools:
   `get_cache_break_timeline` + `get_cache_break_causes`, and it also unblocks the `groupBy='cause'`
