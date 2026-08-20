@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T19:34:06+0200
+updated: 2026-08-20T19:58:54+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -1048,8 +1048,31 @@ release-via: publish
   `find_context_hogs`' upper-only `topN`**.
   **Oracle lesson:** compute an expected total FROM THE ENGINE, never by hand — a guessed
   exact-reconcile total was off by 1,005 and silently left the `remainder===0` branch untested.
+- **P4x.2d (commits 860b2b6 + 6e84a1d): `shared/residentCost` engine + `get_context_inflation_report`.
+  32 of 53.** The engine was **DELEGATED to a lean-worker** — a response to a MEASUREMENT: the live
+  `get_burn_status` named this session the machine's hottest burner ($337/hr, 9.48M tok/min), and a
+  fresh small context is the documented lever (not `/compact`, itself a cold rewrite). **Verified
+  first-hand, not from its report** — 275/275, clippy 28, exactly 5 scoped files, field order checked
+  against the TS literal at report AND block level.
+  **THE PREDICATE WAS HARDCODED TO THE WRONG CALLER'S RULE.** `file_backed_pool` was written for
+  `find_context_hogs` (prefix OR sessionId-substring, cap 25); this handler and the unported
+  `get_cache_break_report` use **prefix ONLY, cap 20**. Left as-is a session gets scanned merely
+  because its id contains the workspace string. Now a PARAMETER. Found by reading ahead.
+  **THE DOUBLE-GUARD TRAP — all three sites now measured and ALL THREE DIFFER** for `"   "`:
+  this handler echoes `"   "` (RAW+untrimmed under `??`), `find_context_hogs` echoes `""` (TRIMMED),
+  an ABSENT arg echoes `"all"`. Assert every site; never generalize from one.
+  **VERIFYING THE DELEGATED WORK FOUND A BUG IN MY OWN FIXTURE, NOT THE PORT:** parity failed on
+  `totalContextTokens` (TS null vs Rust 0) because I wrote usage as `{inputTokens, cacheReadTokens}`
+  when the step shape is `{input, cacheRead, cacheCreate}` — the TS summed `undefined` into NaN
+  (→null) while the correct port read 0. Lesson: when a verification fails, suspect the FIXTURE
+  before the port.
+  Also pinned: `runawaySources` needs BOTH halves (a 90k ONE-turn paste and a 6-turn 200-token skill
+  are both decoys, and both remain CONTRIBUTORS — excluded from runaway, not from the report);
+  `peakTokens` folds MAX while cumulative/turnsPresent SUM (the runaway threshold reads peak);
+  `considered`/`withLog` default to 1; `residentCost` session-scoped only with an explicit
+  `{message}` for no-transcript; `itemizedPct` NULL at zero denominator; `{...b, drill}` appends last.
 - **NEXT (P4x.2d continued): remaining IN-MODULE handlers, with their REAL (engine-inclusive) cost.**
-  `handleGetContextInflationReport`
+  
   (90 + 135 `residentCost` = **225**) · `handleCheckCacheExpiry` (110 + in-module helpers) ·
   then the two that SHARE `cacheBreak.ts` (383) and should be done together —
   `handleGetCacheBreakReport` (81 + 383 = **464**) and `handleGetCacheRiskCosts` (138 + 383 = **521**).
