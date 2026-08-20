@@ -1,4 +1,1209 @@
 {
+ "windowBudget": {
+  "account": {
+   "source": "claude.json",
+   "accountUuid": "acct-1111",
+   "label": "Display A",
+   "email": null,
+   "organizationName": "Org A",
+   "organizationUuid": null,
+   "displayName": "Display A",
+   "planType": "max",
+   "billingType": "stripe_subscription",
+   "hasExtraUsageEnabled": false,
+   "organizationRateLimitTier": null,
+   "userRateLimitTier": null,
+   "rateLimitTier": null
+  },
+  "status": {
+   "now": 1755600000000,
+   "global": {
+    "oneMin": {
+     "windowMs": 60000,
+     "tokens": 351920,
+     "costUsd": 0.6,
+     "events": 2,
+     "tokensPerMin": 351920,
+     "costPerMin": 0.6,
+     "breakdown": {
+      "input": 300,
+      "output": 120,
+      "cacheRead": 350000,
+      "cacheCreate": 1500,
+      "unknown": 0
+     },
+     "billableWeightedPerMin": 37775
+    },
+    "fiveMin": {
+     "windowMs": 300000,
+     "tokens": 835417,
+     "costUsd": 1.76805,
+     "events": 7,
+     "tokensPerMin": 167083,
+     "costPerMin": 0.35361,
+     "breakdown": {
+      "input": 710,
+      "output": 262,
+      "cacheRead": 480200,
+      "cacheCreate": 341900,
+      "unknown": 12345
+     },
+     "billableWeightedPerMin": 97952
+    },
+    "costPerHour": 21.2166
+   },
+   "window": {
+    "fiveHour": {
+     "window": "5h",
+     "windowMs": 18000000,
+     "consumedTokens": 915577,
+     "consumedCostUsd": 1.868,
+     "consumedBillableWeighted": 589870,
+     "breakdown": {
+      "input": 760,
+      "output": 272,
+      "cacheRead": 480300,
+      "cacheCreate": 421900,
+      "unknown": 12345
+     },
+     "capacityTokens": 2000000,
+     "pctConsumed": 45.78,
+     "capacityCostUsd": null,
+     "pctConsumedCost": null,
+     "tokensPerMin": 167083,
+     "minutesToExhaustion": 6.5,
+     "capacityExceeded": false
+    },
+    "sevenDay": {
+     "window": "7d",
+     "windowMs": 604800000,
+     "consumedTokens": 915577,
+     "consumedCostUsd": 1.868,
+     "consumedBillableWeighted": 589870,
+     "breakdown": {
+      "input": 760,
+      "output": 272,
+      "cacheRead": 480300,
+      "cacheCreate": 421900,
+      "unknown": 12345
+     },
+     "capacityTokens": null,
+     "pctConsumed": null,
+     "capacityCostUsd": null,
+     "pctConsumedCost": null,
+     "tokensPerMin": 167083,
+     "minutesToExhaustion": null,
+     "capacityExceeded": false
+    },
+    "capacitySource": "env",
+    "capacityConfigured": true,
+    "capacityObservedAt": null
+   },
+   "accountWindows": [
+    {
+     "accountUuid": "acct-1111",
+     "budget": {
+      "fiveHour": {
+       "window": "5h",
+       "windowMs": 18000000,
+       "consumedTokens": 702270,
+       "consumedCostUsd": 1.1,
+       "consumedBillableWeighted": 360825,
+       "breakdown": {
+        "input": 600,
+        "output": 170,
+        "cacheRead": 450000,
+        "cacheCreate": 251500,
+        "unknown": 0
+       },
+       "capacityTokens": 2000000,
+       "pctConsumed": 35.11,
+       "capacityCostUsd": null,
+       "pctConsumedCost": null,
+       "tokensPerMin": 140454,
+       "minutesToExhaustion": 9.2,
+       "capacityExceeded": false
+      },
+      "sevenDay": {
+       "window": "7d",
+       "windowMs": 604800000,
+       "consumedTokens": 702270,
+       "consumedCostUsd": 1.1,
+       "consumedBillableWeighted": 360825,
+       "breakdown": {
+        "input": 600,
+        "output": 170,
+        "cacheRead": 450000,
+        "cacheCreate": 251500,
+        "unknown": 0
+       },
+       "capacityTokens": null,
+       "pctConsumed": null,
+       "capacityCostUsd": null,
+       "pctConsumedCost": null,
+       "tokensPerMin": 140454,
+       "minutesToExhaustion": null,
+       "capacityExceeded": false
+      },
+      "capacitySource": "env",
+      "capacityConfigured": true,
+      "capacityObservedAt": null
+     },
+     "fiveMinTokensPerMin": 140454,
+     "events": 3
+    },
+    {
+     "accountUuid": "acct-2222",
+     "budget": {
+      "fiveHour": {
+       "window": "5h",
+       "windowMs": 18000000,
+       "consumedTokens": 42775,
+       "consumedCostUsd": 0.5181,
+       "consumedBillableWeighted": 15955,
+       "breakdown": {
+        "input": 10,
+        "output": 20,
+        "cacheRead": 30000,
+        "cacheCreate": 400,
+        "unknown": 12345
+       },
+       "capacityTokens": 2000000,
+       "pctConsumed": 2.14,
+       "capacityCostUsd": null,
+       "pctConsumedCost": null,
+       "tokensPerMin": 8555,
+       "minutesToExhaustion": 228.8,
+       "capacityExceeded": false
+      },
+      "sevenDay": {
+       "window": "7d",
+       "windowMs": 604800000,
+       "consumedTokens": 42775,
+       "consumedCostUsd": 0.5181,
+       "consumedBillableWeighted": 15955,
+       "breakdown": {
+        "input": 10,
+        "output": 20,
+        "cacheRead": 30000,
+        "cacheCreate": 400,
+        "unknown": 12345
+       },
+       "capacityTokens": null,
+       "pctConsumed": null,
+       "capacityCostUsd": null,
+       "pctConsumedCost": null,
+       "tokensPerMin": 8555,
+       "minutesToExhaustion": null,
+       "capacityExceeded": false
+      },
+      "capacitySource": "env",
+      "capacityConfigured": true,
+      "capacityObservedAt": null
+     },
+     "fiveMinTokensPerMin": 8555,
+     "events": 2
+    },
+    {
+     "accountUuid": null,
+     "budget": {
+      "fiveHour": {
+       "window": "5h",
+       "windowMs": 18000000,
+       "consumedTokens": 170532,
+       "consumedCostUsd": 0.25,
+       "consumedBillableWeighted": 213090,
+       "breakdown": {
+        "input": 150,
+        "output": 82,
+        "cacheRead": 300,
+        "cacheCreate": 170000,
+        "unknown": 0
+       },
+       "capacityTokens": 2000000,
+       "pctConsumed": 8.53,
+       "capacityCostUsd": null,
+       "pctConsumedCost": null,
+       "tokensPerMin": 18074,
+       "minutesToExhaustion": 101.2,
+       "capacityExceeded": false
+      },
+      "sevenDay": {
+       "window": "7d",
+       "windowMs": 604800000,
+       "consumedTokens": 170532,
+       "consumedCostUsd": 0.25,
+       "consumedBillableWeighted": 213090,
+       "breakdown": {
+        "input": 150,
+        "output": 82,
+        "cacheRead": 300,
+        "cacheCreate": 170000,
+        "unknown": 0
+       },
+       "capacityTokens": null,
+       "pctConsumed": null,
+       "capacityCostUsd": null,
+       "pctConsumedCost": null,
+       "tokensPerMin": 18074,
+       "minutesToExhaustion": null,
+       "capacityExceeded": false
+      },
+      "capacitySource": "env",
+      "capacityConfigured": true,
+      "capacityObservedAt": null
+     },
+     "fiveMinTokensPerMin": 18074,
+     "events": 3
+    }
+   ],
+   "topSessions": [
+    {
+     "sessionId": "hot-api",
+     "workspace": "/Users/x/projA",
+     "oneMin": {
+      "windowMs": 60000,
+      "tokens": 351920,
+      "costUsd": 0.6,
+      "events": 2,
+      "tokensPerMin": 351920,
+      "costPerMin": 0.6,
+      "breakdown": {
+       "input": 300,
+       "output": 120,
+       "cacheRead": 350000,
+       "cacheCreate": 1500,
+       "unknown": 0
+      },
+      "billableWeightedPerMin": 37775
+     },
+     "fiveMin": {
+      "windowMs": 300000,
+      "tokens": 702270,
+      "costUsd": 1.1,
+      "events": 3,
+      "tokensPerMin": 140454,
+      "costPerMin": 0.22,
+      "breakdown": {
+       "input": 600,
+       "output": 170,
+       "cacheRead": 450000,
+       "cacheCreate": 251500,
+       "unknown": 0
+      },
+      "billableWeightedPerMin": 72165
+     },
+     "dominantCause": "agent:explorer",
+     "keepWarm": {
+      "warmTurns": 2,
+      "coldTurns": 0,
+      "wastedWriteTokens": 0,
+      "worstGapMin": 3,
+      "ttlAssumedMin": 60,
+      "ttlSource": "doc-matrix",
+      "ttlContradicted": false,
+      "measuredWarmGapMin": null,
+      "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+     }
+    },
+    {
+     "sessionId": "agent-sub1",
+     "workspace": "/Users/x/projA",
+     "oneMin": {
+      "windowMs": 60000,
+      "tokens": 0,
+      "costUsd": 0,
+      "events": 0,
+      "tokensPerMin": 0,
+      "costPerMin": 0,
+      "breakdown": {
+       "input": 0,
+       "output": 0,
+       "cacheRead": 0,
+       "cacheCreate": 0,
+       "unknown": 0
+      },
+      "billableWeightedPerMin": 0
+     },
+     "fiveMin": {
+      "windowMs": 300000,
+      "tokens": 90272,
+      "costUsd": 0.15,
+      "events": 1,
+      "tokensPerMin": 18054,
+      "costPerMin": 0.03,
+      "breakdown": {
+       "input": 60,
+       "output": 12,
+       "cacheRead": 200,
+       "cacheCreate": 90000,
+       "unknown": 0
+      },
+      "billableWeightedPerMin": 22528
+     },
+     "dominantCause": "main",
+     "keepWarm": {
+      "warmTurns": 0,
+      "coldTurns": 1,
+      "wastedWriteTokens": 90000,
+      "worstGapMin": 10,
+      "ttlAssumedMin": 5,
+      "ttlSource": "doc-matrix",
+      "ttlContradicted": false,
+      "measuredWarmGapMin": null,
+      "ttlBasis": "subagent — own conversation, own 5-min cache (the 1h auto applies only to the main conversation)"
+     }
+    },
+    {
+     "sessionId": "sl-only",
+     "workspace": "/Users/x/projB",
+     "oneMin": {
+      "windowMs": 60000,
+      "tokens": 0,
+      "costUsd": 0,
+      "events": 0,
+      "tokensPerMin": 0,
+      "costPerMin": 0,
+      "breakdown": {
+       "input": 0,
+       "output": 0,
+       "cacheRead": 0,
+       "cacheCreate": 0,
+       "unknown": 0
+      },
+      "billableWeightedPerMin": 0
+     },
+     "fiveMin": {
+      "windowMs": 300000,
+      "tokens": 42775,
+      "costUsd": 0.51805,
+      "events": 2,
+      "tokensPerMin": 8555,
+      "costPerMin": 0.10361,
+      "breakdown": {
+       "input": 10,
+       "output": 20,
+       "cacheRead": 30000,
+       "cacheCreate": 400,
+       "unknown": 12345
+      },
+      "billableWeightedPerMin": 3191
+     },
+     "dominantCause": null,
+     "keepWarm": null
+    },
+    {
+     "sessionId": "ghost-1",
+     "oneMin": {
+      "windowMs": 60000,
+      "tokens": 0,
+      "costUsd": 0,
+      "events": 0,
+      "tokensPerMin": 0,
+      "costPerMin": 0,
+      "breakdown": {
+       "input": 0,
+       "output": 0,
+       "cacheRead": 0,
+       "cacheCreate": 0,
+       "unknown": 0
+      },
+      "billableWeightedPerMin": 0
+     },
+     "fiveMin": {
+      "windowMs": 300000,
+      "tokens": 100,
+      "costUsd": 0,
+      "events": 1,
+      "tokensPerMin": 20,
+      "costPerMin": 0,
+      "breakdown": {
+       "input": 40,
+       "output": 60,
+       "cacheRead": 0,
+       "cacheCreate": 0,
+       "unknown": 0
+      },
+      "billableWeightedPerMin": 68
+     },
+     "dominantCause": null,
+     "keepWarm": null
+    }
+   ],
+   "alerts": [
+    {
+     "id": "tokens_per_min:hot-api",
+     "rule": "tokens_per_min",
+     "severity": "error",
+     "label": "Token burn rate high",
+     "detail": "351,920 tok/min (threshold 1,000). Hottest: hot-api (projA) — \"Fix the flaky test suite in the loader and make it determini\" · cause: agent:explorer",
+     "sessionId": "hot-api",
+     "cause": "agent:explorer",
+     "value": 351920,
+     "threshold": 1000,
+     "ts": 1755600000000
+    },
+    {
+     "id": "cost_per_hour:hot-api",
+     "rule": "cost_per_hour",
+     "severity": "warning",
+     "label": "Spend rate high",
+     "detail": "$21.22/hr (threshold $1). Hottest: hot-api (projA) — \"Fix the flaky test suite in the loader and make it determini\" · cause: agent:explorer",
+     "sessionId": "hot-api",
+     "cause": "agent:explorer",
+     "value": 21.22,
+     "threshold": 1,
+     "ts": 1755600000000
+    },
+    {
+     "id": "window_5h_pct:global",
+     "rule": "window_5h_pct",
+     "severity": "error",
+     "label": "5h rate-limit window 46% consumed",
+     "detail": "5h window 45.8% consumed (threshold 40%) · ~6.5min to exhaustion at current rate. Top consumer: hot-api (projA) — \"Fix the flaky test suite in the loader and make it determini\" · cause: agent:explorer",
+     "sessionId": "hot-api",
+     "cause": "agent:explorer",
+     "value": 45.78,
+     "threshold": 40,
+     "ts": 1755600000000
+    },
+    {
+     "id": "cache_create_spike:hot-api",
+     "rule": "cache_create_spike",
+     "severity": "warning",
+     "label": "Large cache-creation on a single call",
+     "detail": "One call wrote 250,000 cache-creation tokens (threshold 200,000). Session: hot-api (projA) — \"Fix the flaky test suite in the loader and make it determini\" · cause: agent:explorer",
+     "sessionId": "hot-api",
+     "cause": "agent:explorer",
+     "value": 250000,
+     "threshold": 200000,
+     "ts": 1755600000000
+    }
+   ],
+   "activeSessions": 4
+  }
+ },
+ "wbCases": [
+  {
+   "name": "all-accounts",
+   "args": {}
+  },
+  {
+   "name": "filtered-to-current",
+   "args": {
+    "accountId": "acct-1111"
+   }
+  },
+  {
+   "name": "filtered-to-rotated-away",
+   "args": {
+    "accountId": "acct-2222"
+   }
+  },
+  {
+   "name": "filtered-to-unknown-appends-message",
+   "args": {
+    "accountId": "acct-ghost"
+   }
+  },
+  {
+   "name": "empty-accountId-is-unfiltered",
+   "args": {
+    "accountId": ""
+   }
+  }
+ ],
+ "wbResults": [
+  {
+   "accounts": [
+    {
+     "accountUuid": "acct-1111",
+     "budget": {
+      "fiveHour": {
+       "window": "5h",
+       "windowMs": 18000000,
+       "consumedTokens": 702270,
+       "consumedCostUsd": 1.1,
+       "consumedBillableWeighted": 360825,
+       "breakdown": {
+        "input": 600,
+        "output": 170,
+        "cacheRead": 450000,
+        "cacheCreate": 251500,
+        "unknown": 0
+       },
+       "capacityTokens": 2000000,
+       "pctConsumed": 35.11,
+       "capacityCostUsd": null,
+       "pctConsumedCost": null,
+       "tokensPerMin": 140454,
+       "minutesToExhaustion": 9.2,
+       "capacityExceeded": false
+      },
+      "sevenDay": {
+       "window": "7d",
+       "windowMs": 604800000,
+       "consumedTokens": 702270,
+       "consumedCostUsd": 1.1,
+       "consumedBillableWeighted": 360825,
+       "breakdown": {
+        "input": 600,
+        "output": 170,
+        "cacheRead": 450000,
+        "cacheCreate": 251500,
+        "unknown": 0
+       },
+       "capacityTokens": null,
+       "pctConsumed": null,
+       "capacityCostUsd": null,
+       "pctConsumedCost": null,
+       "tokensPerMin": 140454,
+       "minutesToExhaustion": null,
+       "capacityExceeded": false
+      },
+      "capacitySource": "env",
+      "capacityConfigured": true,
+      "capacityObservedAt": null
+     },
+     "fiveMinTokensPerMin": 140454,
+     "events": 3,
+     "accountLabel": "Display A"
+    },
+    {
+     "accountUuid": "acct-2222",
+     "budget": {
+      "fiveHour": {
+       "window": "5h",
+       "windowMs": 18000000,
+       "consumedTokens": 42775,
+       "consumedCostUsd": 0.5181,
+       "consumedBillableWeighted": 15955,
+       "breakdown": {
+        "input": 10,
+        "output": 20,
+        "cacheRead": 30000,
+        "cacheCreate": 400,
+        "unknown": 12345
+       },
+       "capacityTokens": 2000000,
+       "pctConsumed": 2.14,
+       "capacityCostUsd": null,
+       "pctConsumedCost": null,
+       "tokensPerMin": 8555,
+       "minutesToExhaustion": 228.8,
+       "capacityExceeded": false
+      },
+      "sevenDay": {
+       "window": "7d",
+       "windowMs": 604800000,
+       "consumedTokens": 42775,
+       "consumedCostUsd": 0.5181,
+       "consumedBillableWeighted": 15955,
+       "breakdown": {
+        "input": 10,
+        "output": 20,
+        "cacheRead": 30000,
+        "cacheCreate": 400,
+        "unknown": 12345
+       },
+       "capacityTokens": null,
+       "pctConsumed": null,
+       "capacityCostUsd": null,
+       "pctConsumedCost": null,
+       "tokensPerMin": 8555,
+       "minutesToExhaustion": null,
+       "capacityExceeded": false
+      },
+      "capacitySource": "env",
+      "capacityConfigured": true,
+      "capacityObservedAt": null
+     },
+     "fiveMinTokensPerMin": 8555,
+     "events": 2,
+     "accountLabel": "acct-222"
+    },
+    {
+     "accountUuid": null,
+     "budget": {
+      "fiveHour": {
+       "window": "5h",
+       "windowMs": 18000000,
+       "consumedTokens": 170532,
+       "consumedCostUsd": 0.25,
+       "consumedBillableWeighted": 213090,
+       "breakdown": {
+        "input": 150,
+        "output": 82,
+        "cacheRead": 300,
+        "cacheCreate": 170000,
+        "unknown": 0
+       },
+       "capacityTokens": 2000000,
+       "pctConsumed": 8.53,
+       "capacityCostUsd": null,
+       "pctConsumedCost": null,
+       "tokensPerMin": 18074,
+       "minutesToExhaustion": 101.2,
+       "capacityExceeded": false
+      },
+      "sevenDay": {
+       "window": "7d",
+       "windowMs": 604800000,
+       "consumedTokens": 170532,
+       "consumedCostUsd": 0.25,
+       "consumedBillableWeighted": 213090,
+       "breakdown": {
+        "input": 150,
+        "output": 82,
+        "cacheRead": 300,
+        "cacheCreate": 170000,
+        "unknown": 0
+       },
+       "capacityTokens": null,
+       "pctConsumed": null,
+       "capacityCostUsd": null,
+       "pctConsumedCost": null,
+       "tokensPerMin": 18074,
+       "minutesToExhaustion": null,
+       "capacityExceeded": false
+      },
+      "capacitySource": "env",
+      "capacityConfigured": true,
+      "capacityObservedAt": null
+     },
+     "fiveMinTokensPerMin": 18074,
+     "events": 3,
+     "accountLabel": "Display A"
+    }
+   ],
+   "machineWide": {
+    "fiveHour": {
+     "window": "5h",
+     "windowMs": 18000000,
+     "consumedTokens": 915577,
+     "consumedCostUsd": 1.868,
+     "consumedBillableWeighted": 589870,
+     "breakdown": {
+      "input": 760,
+      "output": 272,
+      "cacheRead": 480300,
+      "cacheCreate": 421900,
+      "unknown": 12345
+     },
+     "capacityTokens": 2000000,
+     "pctConsumed": 45.78,
+     "capacityCostUsd": null,
+     "pctConsumedCost": null,
+     "tokensPerMin": 167083,
+     "minutesToExhaustion": 6.5,
+     "capacityExceeded": false
+    },
+    "sevenDay": {
+     "window": "7d",
+     "windowMs": 604800000,
+     "consumedTokens": 915577,
+     "consumedCostUsd": 1.868,
+     "consumedBillableWeighted": 589870,
+     "breakdown": {
+      "input": 760,
+      "output": 272,
+      "cacheRead": 480300,
+      "cacheCreate": 421900,
+      "unknown": 12345
+     },
+     "capacityTokens": null,
+     "pctConsumed": null,
+     "capacityCostUsd": null,
+     "pctConsumedCost": null,
+     "tokensPerMin": 167083,
+     "minutesToExhaustion": null,
+     "capacityExceeded": false
+    },
+    "capacitySource": "env",
+    "capacityConfigured": true,
+    "capacityObservedAt": null
+   },
+   "capacitySource": "env",
+   "capacityObservedAt": null
+  },
+  {
+   "accounts": [
+    {
+     "accountUuid": "acct-1111",
+     "budget": {
+      "fiveHour": {
+       "window": "5h",
+       "windowMs": 18000000,
+       "consumedTokens": 702270,
+       "consumedCostUsd": 1.1,
+       "consumedBillableWeighted": 360825,
+       "breakdown": {
+        "input": 600,
+        "output": 170,
+        "cacheRead": 450000,
+        "cacheCreate": 251500,
+        "unknown": 0
+       },
+       "capacityTokens": 2000000,
+       "pctConsumed": 35.11,
+       "capacityCostUsd": null,
+       "pctConsumedCost": null,
+       "tokensPerMin": 140454,
+       "minutesToExhaustion": 9.2,
+       "capacityExceeded": false
+      },
+      "sevenDay": {
+       "window": "7d",
+       "windowMs": 604800000,
+       "consumedTokens": 702270,
+       "consumedCostUsd": 1.1,
+       "consumedBillableWeighted": 360825,
+       "breakdown": {
+        "input": 600,
+        "output": 170,
+        "cacheRead": 450000,
+        "cacheCreate": 251500,
+        "unknown": 0
+       },
+       "capacityTokens": null,
+       "pctConsumed": null,
+       "capacityCostUsd": null,
+       "pctConsumedCost": null,
+       "tokensPerMin": 140454,
+       "minutesToExhaustion": null,
+       "capacityExceeded": false
+      },
+      "capacitySource": "env",
+      "capacityConfigured": true,
+      "capacityObservedAt": null
+     },
+     "fiveMinTokensPerMin": 140454,
+     "events": 3,
+     "accountLabel": "Display A"
+    }
+   ],
+   "machineWide": {
+    "fiveHour": {
+     "window": "5h",
+     "windowMs": 18000000,
+     "consumedTokens": 915577,
+     "consumedCostUsd": 1.868,
+     "consumedBillableWeighted": 589870,
+     "breakdown": {
+      "input": 760,
+      "output": 272,
+      "cacheRead": 480300,
+      "cacheCreate": 421900,
+      "unknown": 12345
+     },
+     "capacityTokens": 2000000,
+     "pctConsumed": 45.78,
+     "capacityCostUsd": null,
+     "pctConsumedCost": null,
+     "tokensPerMin": 167083,
+     "minutesToExhaustion": 6.5,
+     "capacityExceeded": false
+    },
+    "sevenDay": {
+     "window": "7d",
+     "windowMs": 604800000,
+     "consumedTokens": 915577,
+     "consumedCostUsd": 1.868,
+     "consumedBillableWeighted": 589870,
+     "breakdown": {
+      "input": 760,
+      "output": 272,
+      "cacheRead": 480300,
+      "cacheCreate": 421900,
+      "unknown": 12345
+     },
+     "capacityTokens": null,
+     "pctConsumed": null,
+     "capacityCostUsd": null,
+     "pctConsumedCost": null,
+     "tokensPerMin": 167083,
+     "minutesToExhaustion": null,
+     "capacityExceeded": false
+    },
+    "capacitySource": "env",
+    "capacityConfigured": true,
+    "capacityObservedAt": null
+   },
+   "capacitySource": "env",
+   "capacityObservedAt": null
+  },
+  {
+   "accounts": [
+    {
+     "accountUuid": "acct-2222",
+     "budget": {
+      "fiveHour": {
+       "window": "5h",
+       "windowMs": 18000000,
+       "consumedTokens": 42775,
+       "consumedCostUsd": 0.5181,
+       "consumedBillableWeighted": 15955,
+       "breakdown": {
+        "input": 10,
+        "output": 20,
+        "cacheRead": 30000,
+        "cacheCreate": 400,
+        "unknown": 12345
+       },
+       "capacityTokens": 2000000,
+       "pctConsumed": 2.14,
+       "capacityCostUsd": null,
+       "pctConsumedCost": null,
+       "tokensPerMin": 8555,
+       "minutesToExhaustion": 228.8,
+       "capacityExceeded": false
+      },
+      "sevenDay": {
+       "window": "7d",
+       "windowMs": 604800000,
+       "consumedTokens": 42775,
+       "consumedCostUsd": 0.5181,
+       "consumedBillableWeighted": 15955,
+       "breakdown": {
+        "input": 10,
+        "output": 20,
+        "cacheRead": 30000,
+        "cacheCreate": 400,
+        "unknown": 12345
+       },
+       "capacityTokens": null,
+       "pctConsumed": null,
+       "capacityCostUsd": null,
+       "pctConsumedCost": null,
+       "tokensPerMin": 8555,
+       "minutesToExhaustion": null,
+       "capacityExceeded": false
+      },
+      "capacitySource": "env",
+      "capacityConfigured": true,
+      "capacityObservedAt": null
+     },
+     "fiveMinTokensPerMin": 8555,
+     "events": 2,
+     "accountLabel": "acct-222"
+    }
+   ],
+   "machineWide": {
+    "fiveHour": {
+     "window": "5h",
+     "windowMs": 18000000,
+     "consumedTokens": 915577,
+     "consumedCostUsd": 1.868,
+     "consumedBillableWeighted": 589870,
+     "breakdown": {
+      "input": 760,
+      "output": 272,
+      "cacheRead": 480300,
+      "cacheCreate": 421900,
+      "unknown": 12345
+     },
+     "capacityTokens": 2000000,
+     "pctConsumed": 45.78,
+     "capacityCostUsd": null,
+     "pctConsumedCost": null,
+     "tokensPerMin": 167083,
+     "minutesToExhaustion": 6.5,
+     "capacityExceeded": false
+    },
+    "sevenDay": {
+     "window": "7d",
+     "windowMs": 604800000,
+     "consumedTokens": 915577,
+     "consumedCostUsd": 1.868,
+     "consumedBillableWeighted": 589870,
+     "breakdown": {
+      "input": 760,
+      "output": 272,
+      "cacheRead": 480300,
+      "cacheCreate": 421900,
+      "unknown": 12345
+     },
+     "capacityTokens": null,
+     "pctConsumed": null,
+     "capacityCostUsd": null,
+     "pctConsumedCost": null,
+     "tokensPerMin": 167083,
+     "minutesToExhaustion": null,
+     "capacityExceeded": false
+    },
+    "capacitySource": "env",
+    "capacityConfigured": true,
+    "capacityObservedAt": null
+   },
+   "capacitySource": "env",
+   "capacityObservedAt": null
+  },
+  {
+   "accounts": [],
+   "machineWide": {
+    "fiveHour": {
+     "window": "5h",
+     "windowMs": 18000000,
+     "consumedTokens": 915577,
+     "consumedCostUsd": 1.868,
+     "consumedBillableWeighted": 589870,
+     "breakdown": {
+      "input": 760,
+      "output": 272,
+      "cacheRead": 480300,
+      "cacheCreate": 421900,
+      "unknown": 12345
+     },
+     "capacityTokens": 2000000,
+     "pctConsumed": 45.78,
+     "capacityCostUsd": null,
+     "pctConsumedCost": null,
+     "tokensPerMin": 167083,
+     "minutesToExhaustion": 6.5,
+     "capacityExceeded": false
+    },
+    "sevenDay": {
+     "window": "7d",
+     "windowMs": 604800000,
+     "consumedTokens": 915577,
+     "consumedCostUsd": 1.868,
+     "consumedBillableWeighted": 589870,
+     "breakdown": {
+      "input": 760,
+      "output": 272,
+      "cacheRead": 480300,
+      "cacheCreate": 421900,
+      "unknown": 12345
+     },
+     "capacityTokens": null,
+     "pctConsumed": null,
+     "capacityCostUsd": null,
+     "pctConsumedCost": null,
+     "tokensPerMin": 167083,
+     "minutesToExhaustion": null,
+     "capacityExceeded": false
+    },
+    "capacitySource": "env",
+    "capacityConfigured": true,
+    "capacityObservedAt": null
+   },
+   "capacitySource": "env",
+   "capacityObservedAt": null,
+   "message": "No consumption recorded for account acct-ghost in the rolling windows."
+  },
+  {
+   "accounts": [
+    {
+     "accountUuid": "acct-1111",
+     "budget": {
+      "fiveHour": {
+       "window": "5h",
+       "windowMs": 18000000,
+       "consumedTokens": 702270,
+       "consumedCostUsd": 1.1,
+       "consumedBillableWeighted": 360825,
+       "breakdown": {
+        "input": 600,
+        "output": 170,
+        "cacheRead": 450000,
+        "cacheCreate": 251500,
+        "unknown": 0
+       },
+       "capacityTokens": 2000000,
+       "pctConsumed": 35.11,
+       "capacityCostUsd": null,
+       "pctConsumedCost": null,
+       "tokensPerMin": 140454,
+       "minutesToExhaustion": 9.2,
+       "capacityExceeded": false
+      },
+      "sevenDay": {
+       "window": "7d",
+       "windowMs": 604800000,
+       "consumedTokens": 702270,
+       "consumedCostUsd": 1.1,
+       "consumedBillableWeighted": 360825,
+       "breakdown": {
+        "input": 600,
+        "output": 170,
+        "cacheRead": 450000,
+        "cacheCreate": 251500,
+        "unknown": 0
+       },
+       "capacityTokens": null,
+       "pctConsumed": null,
+       "capacityCostUsd": null,
+       "pctConsumedCost": null,
+       "tokensPerMin": 140454,
+       "minutesToExhaustion": null,
+       "capacityExceeded": false
+      },
+      "capacitySource": "env",
+      "capacityConfigured": true,
+      "capacityObservedAt": null
+     },
+     "fiveMinTokensPerMin": 140454,
+     "events": 3,
+     "accountLabel": "Display A"
+    },
+    {
+     "accountUuid": "acct-2222",
+     "budget": {
+      "fiveHour": {
+       "window": "5h",
+       "windowMs": 18000000,
+       "consumedTokens": 42775,
+       "consumedCostUsd": 0.5181,
+       "consumedBillableWeighted": 15955,
+       "breakdown": {
+        "input": 10,
+        "output": 20,
+        "cacheRead": 30000,
+        "cacheCreate": 400,
+        "unknown": 12345
+       },
+       "capacityTokens": 2000000,
+       "pctConsumed": 2.14,
+       "capacityCostUsd": null,
+       "pctConsumedCost": null,
+       "tokensPerMin": 8555,
+       "minutesToExhaustion": 228.8,
+       "capacityExceeded": false
+      },
+      "sevenDay": {
+       "window": "7d",
+       "windowMs": 604800000,
+       "consumedTokens": 42775,
+       "consumedCostUsd": 0.5181,
+       "consumedBillableWeighted": 15955,
+       "breakdown": {
+        "input": 10,
+        "output": 20,
+        "cacheRead": 30000,
+        "cacheCreate": 400,
+        "unknown": 12345
+       },
+       "capacityTokens": null,
+       "pctConsumed": null,
+       "capacityCostUsd": null,
+       "pctConsumedCost": null,
+       "tokensPerMin": 8555,
+       "minutesToExhaustion": null,
+       "capacityExceeded": false
+      },
+      "capacitySource": "env",
+      "capacityConfigured": true,
+      "capacityObservedAt": null
+     },
+     "fiveMinTokensPerMin": 8555,
+     "events": 2,
+     "accountLabel": "acct-222"
+    },
+    {
+     "accountUuid": null,
+     "budget": {
+      "fiveHour": {
+       "window": "5h",
+       "windowMs": 18000000,
+       "consumedTokens": 170532,
+       "consumedCostUsd": 0.25,
+       "consumedBillableWeighted": 213090,
+       "breakdown": {
+        "input": 150,
+        "output": 82,
+        "cacheRead": 300,
+        "cacheCreate": 170000,
+        "unknown": 0
+       },
+       "capacityTokens": 2000000,
+       "pctConsumed": 8.53,
+       "capacityCostUsd": null,
+       "pctConsumedCost": null,
+       "tokensPerMin": 18074,
+       "minutesToExhaustion": 101.2,
+       "capacityExceeded": false
+      },
+      "sevenDay": {
+       "window": "7d",
+       "windowMs": 604800000,
+       "consumedTokens": 170532,
+       "consumedCostUsd": 0.25,
+       "consumedBillableWeighted": 213090,
+       "breakdown": {
+        "input": 150,
+        "output": 82,
+        "cacheRead": 300,
+        "cacheCreate": 170000,
+        "unknown": 0
+       },
+       "capacityTokens": null,
+       "pctConsumed": null,
+       "capacityCostUsd": null,
+       "pctConsumedCost": null,
+       "tokensPerMin": 18074,
+       "minutesToExhaustion": null,
+       "capacityExceeded": false
+      },
+      "capacitySource": "env",
+      "capacityConfigured": true,
+      "capacityObservedAt": null
+     },
+     "fiveMinTokensPerMin": 18074,
+     "events": 3,
+     "accountLabel": "Display A"
+    }
+   ],
+   "machineWide": {
+    "fiveHour": {
+     "window": "5h",
+     "windowMs": 18000000,
+     "consumedTokens": 915577,
+     "consumedCostUsd": 1.868,
+     "consumedBillableWeighted": 589870,
+     "breakdown": {
+      "input": 760,
+      "output": 272,
+      "cacheRead": 480300,
+      "cacheCreate": 421900,
+      "unknown": 12345
+     },
+     "capacityTokens": 2000000,
+     "pctConsumed": 45.78,
+     "capacityCostUsd": null,
+     "pctConsumedCost": null,
+     "tokensPerMin": 167083,
+     "minutesToExhaustion": 6.5,
+     "capacityExceeded": false
+    },
+    "sevenDay": {
+     "window": "7d",
+     "windowMs": 604800000,
+     "consumedTokens": 915577,
+     "consumedCostUsd": 1.868,
+     "consumedBillableWeighted": 589870,
+     "breakdown": {
+      "input": 760,
+      "output": 272,
+      "cacheRead": 480300,
+      "cacheCreate": 421900,
+      "unknown": 12345
+     },
+     "capacityTokens": null,
+     "pctConsumed": null,
+     "capacityCostUsd": null,
+     "pctConsumedCost": null,
+     "tokensPerMin": 167083,
+     "minutesToExhaustion": null,
+     "capacityExceeded": false
+    },
+    "capacitySource": "env",
+    "capacityConfigured": true,
+    "capacityObservedAt": null
+   },
+   "capacitySource": "env",
+   "capacityObservedAt": null
+  }
+ ],
  "cases": [
   {
    "name": "null-context-with-both-ids",

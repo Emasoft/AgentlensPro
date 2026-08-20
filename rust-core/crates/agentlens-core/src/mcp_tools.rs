@@ -434,3 +434,49 @@ pub fn get_conversation(
     m.insert("turns".into(), Value::Array(summaries));
     Value::Object(m)
 }
+
+/// `get_window_budget` — the per-account budgets (LABELLED) plus the pooled machine-wide window.
+///
+/// `machineWide` is `burn.window`: every account's consumption pooled, which is what the pre-
+/// per-account view showed. It is kept deliberately — the pooled number is the one that matches a
+/// human's mental model of "the machine's window", and dropping it would make the tool answer a
+/// different question than the one people ask it.
+///
+/// The `accountId` filter reuses the SAME labelling pass as the unfiltered form (labels first,
+/// filter second). Filtering first and labelling the survivors would be equivalent today but
+/// couples the label to the filter, and `account_label_for`'s null-bucket rule already depends on
+/// seeing the window's own uuid rather than the caller's.
+///
+/// The empty-filter `message` is SPREAD LAST in the TS literal, so it appends — and it appears only
+/// when an `accountId` was actually asked for. An unfiltered call that legitimately has no windows
+/// gets `accounts: []` with NO message, because nothing was asked for and nothing is missing.
+pub fn get_window_budget(burn: Option<&Value>, account: Option<&crate::burn::account_info::AccountInfo>, account_id: Option<&str>) -> Value {
+    let Some(burn) = burn.filter(|b| !b.is_null()) else {
+        let mut m = Map::new();
+        m.insert("message".into(), Value::String(
+            "Burn monitor unavailable in this runtime (no live session/statusline source wired).".into(),
+        ));
+        return Value::Object(m);
+    };
+    let labelled = crate::burn::runtime::label_burn_status_accounts(burn, account);
+    let empty: Vec<Value> = Vec::new();
+    let windows = labelled.get("accountWindows").and_then(Value::as_array).unwrap_or(&empty);
+    let accounts: Vec<Value> = match account_id.filter(|a| !a.is_empty()) {
+        Some(id) => windows.iter().filter(|w| w.get("accountUuid").and_then(Value::as_str) == Some(id)).cloned().collect(),
+        None => windows.clone(),
+    };
+    let machine_wide = burn.get("window").cloned().unwrap_or(Value::Null);
+    let cap_source = machine_wide.get("capacitySource").cloned().unwrap_or(Value::Null);
+    let cap_observed = machine_wide.get("capacityObservedAt").cloned().unwrap_or(Value::Null);
+    let mut m = Map::new();
+    m.insert("accounts".into(), Value::Array(accounts.clone()));
+    m.insert("machineWide".into(), machine_wide);
+    m.insert("capacitySource".into(), cap_source);
+    m.insert("capacityObservedAt".into(), cap_observed);
+    if let Some(id) = account_id.filter(|a| !a.is_empty()) {
+        if accounts.is_empty() {
+            m.insert("message".into(), Value::String(format!("No consumption recorded for account {id} in the rolling windows.")));
+        }
+    }
+    Value::Object(m)
+}

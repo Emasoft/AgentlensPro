@@ -299,6 +299,20 @@ impl CoreState {
         burn::monitor::compute_burn_status(&events, &sessions, &self.burn.config, now_ms, Some(&ttl))
     }
 
+    /// `getSessionStatus` (server.ts:1573) — the same gatherBurn stream as `live_burn_status`,
+    /// answered for ONE resolved session instead of the whole machine. Split out rather than
+    /// folded into `live_burn_status` because the two return different shapes from the same
+    /// inputs, and `compute_session_status` needs the SESSION CARDS as well as the events (it
+    /// compares the caller's session to its predecessors in the same workspace).
+    pub fn live_session_status(&mut self, session_id: Option<&str>, workspace: Option<&str>, now_ms: f64) -> Value {
+        let summary = self.build_session_summary(now_ms);
+        let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
+        drop(summary);
+        let events = burn::monitor::gather_consumption_events(&sessions, &[], now_ms);
+        let ttl = self.burn.ttl_context(now_ms);
+        burn::monitor::compute_session_status(&sessions, &events, &self.burn.config, session_id, workspace, now_ms, Some(&ttl))
+    }
+
     /// The `/api/burn-risk` body (freeze row 12): poll the bodies watcher, then checkBurnRisk
     /// over the three feeds, then attach the verbatim spawning calls behind an active fan-out.
     /// `last_status` is filled inline when the 4s tick has not run yet (freshly booted server),

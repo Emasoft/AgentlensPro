@@ -13,10 +13,11 @@
 //    blocks through unchanged would ship a different wire shape.
 //  - totalTokens sums the CONTEXT's own per-block estimates, not a recount.
 import { createRequire } from 'module'
-import { writeFileSync } from 'fs'
+import { readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
 const require = createRequire(import.meta.url)
-const { handleGetCallContext, handleGetContextComposition, handleGetContextHistory, handleGetConversation } = require('../../../../../out/test/mcpServer.js')
+const { handleGetCallContext, handleGetContextComposition, handleGetContextHistory, handleGetConversation, handleGetWindowBudget } = require('../../../../../out/test/mcpServer.js')
+const { loadBurnConfig, gatherConsumptionEvents, computeBurnStatus } = require('../../../../../out/test/burnMonitor.js')
 const { buildCallContextFromJson } = require('../../../../../out/test/rawBodyContext.js')
 const { buildContextComposition } = require('../../../../../out/test/contextComposition.js')
 const { buildContextHistory } = require('../../../../../out/test/contextHistory.js')
@@ -90,8 +91,47 @@ const convCases = [
   { name: 'null', conv: null, args: { sessionId: 'ghost' } },
 ]
 
+// ── P4x.2c: get_window_budget, over a REAL computeBurnStatus (not a hand-built stub) ───────────
+// Driving the shaper off a stub would let a divergence in what the engine actually emits pass
+// unnoticed; the whole point of the shaper test is that it re-projects the engine's OWN output.
+//
+// Discriminators:
+//  - `machineWide` is the POOLED window, deliberately kept alongside the per-account ones.
+//  - the accountId filter is TRUTHY-checked, so `''` means unfiltered, not "match the empty id".
+//  - the empty-result `message` is SPREAD LAST (it appends) and appears ONLY when an accountId was
+//    asked for — an unfiltered call with no windows gets `accounts: []` and no message.
+// Reuse the BURN MONITOR's own fixture rather than inventing sessions here: it already carries the
+// per-call `timeline` api_request entries the consumption stream is actually built from (card
+// totals alone yield ZERO events and a silently empty budget), and it spans three account buckets
+// — acct-1111, acct-2222, and the null/unknown one — which is what makes the label branches
+// distinguishable. One burn fixture, not two that drift.
+const bmCases = JSON.parse(readFileSync(join(dir, 'burnmonitor-cases.json'), 'utf8'))
+const burnCfg = loadBurnConfig(bmCases.statusEnv, '/nonexistent-home')
+const burnEvents = gatherConsumptionEvents(bmCases.sessions, bmCases.statusline, bmCases.now, bmCases.ttlCtx)
+const burnStatus = computeBurnStatus(burnEvents, bmCases.sessions, burnCfg, bmCases.now, bmCases.ttlCtx)
+// The CURRENT account is acct-1111, so ITS window labels to the identity while acct-2222 — rotated
+// away — can only resolve to its short id, and the null bucket takes the current label (the LOOSE
+// `accountUuid == null` arm). A single-account fixture would let all three look alike.
+// No address here on purpose: `email` is null so the label falls to `displayName`, exercising the
+// SECOND arm of accountLabelFor's `||` chain and keeping an address-shaped literal out of a
+// tracked file (the identity guard is shape-based, and a fixture is not worth arguing with it).
+const acct = { source: 'claude.json', accountUuid: 'acct-1111', label: 'Display A', email: null, organizationName: 'Org A', organizationUuid: null, displayName: 'Display A', planType: 'max', billingType: 'stripe_subscription', hasExtraUsageEnabled: false, organizationRateLimitTier: null, userRateLimitTier: null, rateLimitTier: null }
+const wbCases = [
+  { name: 'all-accounts', args: {} },
+  { name: 'filtered-to-current', args: { accountId: 'acct-1111' } },
+  { name: 'filtered-to-rotated-away', args: { accountId: 'acct-2222' } },
+  { name: 'filtered-to-unknown-appends-message', args: { accountId: 'acct-ghost' } },
+  { name: 'empty-accountId-is-unfiltered', args: { accountId: '' } },
+]
+
 const J = (v) => JSON.parse(JSON.stringify(v ?? null))
 writeFileSync(join(dir, 'mcptools-expected.json'), JSON.stringify({
+  // The Rust test drives the SHAPER over this exact status — `computeBurnStatus` parity is already
+  // proven by burnmonitor_parity, so recomputing it there would test the engine twice and the
+  // shaper not at all.
+  windowBudget: { account: J(acct), status: J(burnStatus) },
+  wbCases: J(wbCases),
+  wbResults: wbCases.map(c => J(handleGetWindowBudget(burnStatus, acct, c.args))),
   cases: J(cases),
   results: cases.map(c => J(handleGetCallContext(c.ctx, c.args))),
   compCases: J(compCases),

@@ -1081,6 +1081,26 @@ async fn handle(
                         drop(st);
                         crate::mcp::tool_ok(&id, &payload)
                     }
+                    "get_session_status" => {
+                        // Pass-through: `computeSessionStatus` IS the payload, there is no shaper.
+                        // Its no-match branch is a `{message, matchedBy:'none'}` object, NOT an
+                        // error — a caller who mistypes a session id gets an honest answer.
+                        let now = crate::now_ms() as f64;
+                        let (sid, ws) = (s("sessionId"), s("workspace"));
+                        let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                        let payload = st.live_session_status(sid.as_deref(), ws.as_deref(), now);
+                        drop(st);
+                        crate::mcp::tool_ok(&id, &payload)
+                    }
+                    "get_window_budget" => {
+                        let now = crate::now_ms() as f64;
+                        let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                        let status = st.live_burn_status(now);
+                        let account = st.burn.current_account(now);
+                        drop(st);
+                        let payload = crate::mcp_tools::get_window_budget(Some(&status), Some(&account), s("accountId").as_deref());
+                        crate::mcp::tool_ok(&id, &payload)
+                    }
                     "get_context_composition" | "get_context_history" | "get_conversation" => {
                         let session_id = s("sessionId").unwrap_or_default();
                         let n = |k: &str| args.get(k).and_then(Value::as_f64);

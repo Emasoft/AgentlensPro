@@ -1528,3 +1528,93 @@ fn mcp_get_burn_status_serves_the_labelled_not_the_enriched_status() {
     let http: serde_json::Value = serde_json::from_str(body_of(&get(ui, "/api/burn-status", ""))).unwrap();
     assert!(http.get("currentAccount").is_some(), "row 24 carries currentAccount: {http}");
 }
+
+/// `get_session_status` resolves ONE session and answers about it. Both selectors are exercised
+/// because they take different arms of `resolveSession`, and the no-match arm is asserted to be a
+/// `{message, matchedBy:'none'}` OBJECT — not a JSON-RPC error: a caller who mistypes a session id
+/// deserves an answer, and turning it into an error would make the tool unusable for probing.
+#[test]
+fn mcp_get_session_status_resolves_by_id_and_by_workspace() {
+    let (_otlp, ui, state) = start_servers();
+    let now = agentlens_core::now_ms();
+    let iso = |off: i64| agentlens_core::summarize::helpers::iso_from_ms((now - off) as f64);
+    {
+        let mut st = state.lock().unwrap();
+        st.put_log_session(serde_json::json!({
+            "sessionId": "sess-status-1", "source": "claude_code", "dataSource": "log",
+            "startTime": iso(120_000), "workspace": "/ws/status", "model": "claude-opus-5",
+            "timeline": [{ "type": "api_request", "timestamp": iso(30_000), "spanId": "s1",
+                "costUsd": 0.3, "inputTokens": 100, "outputTokens": 20,
+                "cacheReadTokens": 2000, "cacheCreateTokens": 100 }]
+        }));
+    }
+    let call = |args: &str| -> serde_json::Value {
+        let body = format!(
+            r#"{{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{{"name":"get_session_status","arguments":{args}}}}}"#
+        );
+        let env: serde_json::Value = serde_json::from_str(body_of(&post(ui, "/mcp", &body))).unwrap();
+        let text = env["result"]["content"][0]["text"].as_str().unwrap_or_else(|| panic!("{env}"));
+        serde_json::from_str(text).unwrap()
+    };
+
+    // `matchedBy` is asserted alongside the id: the two selectors must reach the session by
+    // DIFFERENT arms of resolveSession, and a workspace lookup that silently fell through to
+    // "newest session" would still return the right id here while answering the wrong question.
+    let by_id = call(r#"{"sessionId":"sess-status-1"}"#);
+    assert_eq!(by_id["resolved"]["sessionId"], "sess-status-1", "{by_id}");
+    assert_eq!(by_id["resolved"]["matchedBy"], "sessionId", "{by_id}");
+    let by_ws = call(r#"{"workspace":"/ws/status"}"#);
+    assert_eq!(by_ws["resolved"]["sessionId"], "sess-status-1", "{by_ws}");
+    assert_eq!(by_ws["resolved"]["matchedBy"], "workspace-recent", "{by_ws}");
+
+    let miss = call(r#"{"sessionId":"nope"}"#);
+    assert_eq!(miss["matchedBy"], "none", "a miss is an ANSWER, not an error: {miss}");
+    assert!(miss["message"].as_str().unwrap().contains("nope"), "the message names what was asked for: {miss}");
+}
+
+/// `get_window_budget` labels the per-account windows and keeps the POOLED `machineWide` beside
+/// them. The pooled view answers "how full is this machine's window", which is the question people
+/// actually ask; dropping it because the per-account windows look more precise would silently
+/// change what the tool reports.
+#[test]
+fn mcp_get_window_budget_labels_accounts_and_keeps_the_pooled_window() {
+    let (_otlp, ui, state) = start_servers();
+    let now = agentlens_core::now_ms();
+    let iso = |off: i64| agentlens_core::summarize::helpers::iso_from_ms((now - off) as f64);
+    {
+        let mut st = state.lock().unwrap();
+        st.burn.vars.clear();
+        for (sid, acct) in [("wb-a", "acct-aaaa1111"), ("wb-b", "acct-bbbb2222")] {
+            st.put_log_session(serde_json::json!({
+                "sessionId": sid, "source": "claude_code", "dataSource": "log",
+                "startTime": iso(120_000), "accountId": acct,
+                "timeline": [{ "type": "api_request", "timestamp": iso(30_000), "spanId": sid,
+                    "costUsd": 0.2, "inputTokens": 100, "outputTokens": 20,
+                    "cacheReadTokens": 1000, "cacheCreateTokens": 50 }]
+            }));
+        }
+    }
+    let call = |args: &str| -> serde_json::Value {
+        let body = format!(
+            r#"{{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{{"name":"get_window_budget","arguments":{args}}}}}"#
+        );
+        let env: serde_json::Value = serde_json::from_str(body_of(&post(ui, "/mcp", &body))).unwrap();
+        let text = env["result"]["content"][0]["text"].as_str().unwrap_or_else(|| panic!("{env}"));
+        serde_json::from_str(text).unwrap()
+    };
+
+    let all = call("{}");
+    let accounts = all["accounts"].as_array().unwrap();
+    assert_eq!(accounts.len(), 2, "{all}");
+    for w in accounts {
+        assert!(w["accountLabel"].is_string(), "every window is labelled: {w}");
+    }
+    assert!(all["machineWide"]["fiveHour"].is_object(), "the pooled window survives: {all}");
+    assert!(all.get("message").is_none(), "an unfiltered call is not an empty-match: {all}");
+
+    let one = call(r#"{"accountId":"acct-aaaa1111"}"#);
+    assert_eq!(one["accounts"].as_array().unwrap().len(), 1, "{one}");
+    let ghost = call(r#"{"accountId":"acct-ghost"}"#);
+    assert!(ghost["accounts"].as_array().unwrap().is_empty(), "{ghost}");
+    assert!(ghost["message"].as_str().unwrap().contains("acct-ghost"), "{ghost}");
+}

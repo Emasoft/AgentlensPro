@@ -161,3 +161,87 @@ fn the_drill_bounding_rules_hold() {
         Some(&c["hist"]), Some("claude-opus-5"), "hist-main", Some(1.0), None, NOW_MS);
     assert!(step["blocks"][0].get("tokenSource").is_none(), "the step projection drops it: {step}");
 }
+
+/// Rebuild the oracle's AccountInfo. Hand-built rather than parsed because `AccountInfo` is a Rust
+/// struct with no deserializer — and because writing the fields out makes it obvious when the
+/// fixture and the struct drift apart.
+fn oracle_account(v: &Value) -> agentlens_core::burn::account_info::AccountInfo {
+    let s = |k: &str| v.get(k).and_then(Value::as_str).map(str::to_owned);
+    agentlens_core::burn::account_info::AccountInfo {
+        account_uuid: s("accountUuid"),
+        email: s("email"),
+        organization_name: s("organizationName"),
+        organization_uuid: s("organizationUuid"),
+        billing_type: s("billingType"),
+        has_extra_usage_enabled: v.get("hasExtraUsageEnabled").and_then(Value::as_bool).unwrap_or(false),
+        organization_rate_limit_tier: s("organizationRateLimitTier"),
+        user_rate_limit_tier: s("userRateLimitTier"),
+        display_name: s("displayName"),
+        plan_type: s("planType"),
+        rate_limit_tier: s("rateLimitTier"),
+        label: v.get("label").and_then(Value::as_str).unwrap_or("").to_owned(),
+        source: "claude.json",
+    }
+}
+
+#[test]
+fn get_window_budget_reproduces_the_ts_oracle_exactly() {
+    let o = oracle();
+    let status = &o["windowBudget"]["status"];
+    let account = oracle_account(&o["windowBudget"]["account"]);
+    for (case, exp) in o["wbCases"].as_array().unwrap().iter().zip(o["wbResults"].as_array().unwrap()) {
+        let name = case["name"].as_str().unwrap();
+        let got = agentlens_core::mcp_tools::get_window_budget(
+            Some(status),
+            Some(&account),
+            case["args"].get("accountId").and_then(Value::as_str),
+        );
+        assert_eq!(keys(&got), keys(exp), "{name}: key set/ORDER differs");
+        for (k, ev) in exp.as_object().unwrap() {
+            assert_eq!(&got[k], ev, "{name}.{k}");
+        }
+    }
+}
+
+/// The three label branches must stay DISTINGUISHABLE. They collapse the moment someone
+/// "simplifies" accountLabelFor: the current account resolves to its identity, a rotated-away one
+/// only to its 8-char id, and the null (unknown) bucket takes the CURRENT label because the TS
+/// `accountUuid == null` check is LOOSE. A fixture with one account would pass either way.
+#[test]
+fn the_three_account_label_branches_stay_distinct() {
+    let o = oracle();
+    let got = agentlens_core::mcp_tools::get_window_budget(
+        Some(&o["windowBudget"]["status"]),
+        Some(&oracle_account(&o["windowBudget"]["account"])),
+        None,
+    );
+    let labels: Vec<(Option<&str>, &str)> = got["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| (w["accountUuid"].as_str(), w["accountLabel"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        labels,
+        vec![(Some("acct-1111"), "Display A"), (Some("acct-2222"), "acct-222"), (None, "Display A")],
+        "the current / rotated-away / unknown branches must not collapse into one another"
+    );
+}
+
+/// `message` appears ONLY when an accountId was asked for and matched nothing. An unfiltered call
+/// that legitimately has no windows is not an error and must not claim one — and the empty string
+/// is FALSY in the TS, so it means "unfiltered", not "match the empty id".
+#[test]
+fn the_empty_result_message_is_scoped_to_an_actual_filter() {
+    let o = oracle();
+    let status = &o["windowBudget"]["status"];
+    let account = oracle_account(&o["windowBudget"]["account"]);
+    let ghost = agentlens_core::mcp_tools::get_window_budget(Some(status), Some(&account), Some("acct-ghost"));
+    assert!(ghost.get("message").is_some(), "a filter that matched nothing explains itself: {ghost}");
+    let empty_filter = agentlens_core::mcp_tools::get_window_budget(Some(status), Some(&account), Some(""));
+    assert!(empty_filter.get("message").is_none(), "'' is falsy in the TS — unfiltered, not an empty match: {empty_filter}");
+    assert_eq!(empty_filter["accounts"].as_array().unwrap().len(), 3, "'' must not filter anything out");
+    // No burn monitor at all is a different answer again: a message and NOTHING else.
+    let none = agentlens_core::mcp_tools::get_window_budget(None, Some(&account), None);
+    assert_eq!(keys(&none), vec!["message"], "{none}");
+}
