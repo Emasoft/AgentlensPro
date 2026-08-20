@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T19:04:39+0200
+updated: 2026-08-20T19:34:06+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -1027,8 +1027,29 @@ release-via: publish
   NULL); a wrong parent SHOWS where the id does live; `lastSeenAt` from the card's own span, null on
   an unparseable start, never a fabricated now(); `turns` null not 0 at zero calls.
   Live: a real 1,166-turn session — 482.7M cache-read tokens, $294.84, lastTurnContextRead 459,848.
+- **P4x.2d (commit 0d04865): `tokensByCause` + `get_cost_by_cause`. 31 of 53.**
+  **⚠ I ALMOST SHIPPED A HARDCODED `stoppedEarly: false`**, reasoning the Rust path could not hit
+  the TS's `scanWithBudget` early-stop. That would have deleted one of THREE coverage-note branches
+  — and the live smoke landed on exactly it: **42 of 625 CC sessions, stopped by the 20s budget**.
+  With the shortcut the response would have blamed the POOL CAP for the truncation and told the user
+  a retry would not help, when it would. **NEVER hardcode a branch away because "the Rust path
+  cannot reach it" — implement it or measure that it cannot.**
+  Pinned: the unattributed bucket is PINNED LAST regardless of size (it is the BIGGEST row in every
+  fixture dimension — mutation-proved: sorting it in fails 4 tests); its LABEL differs by dimension
+  (`(unattributed)` = genuinely unknown vs `(no skill)` = not-caused-by-any-skill — one shared label
+  asserts ignorance where the data is definite); `mcpTool` keys as `server/tool` so same-named tools
+  on different servers never merge, and an unknown server keys `?/tool` rather than dropping a real
+  chargeable cause; a costless call makes rows a FLOOR (`costKnown:false`); the remainder is SIGNED
+  and never clamped and NULL when there is no ground truth ("cannot compute" ≠ "reconciles");
+  `sessionId`/`sessionsScanned` DROP when absent and are mutually exclusive; **the window and rank
+  are by LAST ACTIVITY not startTime** (fleet-measured: 13,241 cards, the active flagship ranked
+  #446 by startTime, leaderboard reading 0 while its own drill showed 1,155); non-CC sessions are
+  excluded from the scan but COUNTED as considered; `days` clamps at BOTH ends — **the OPPOSITE of
+  `find_context_hogs`' upper-only `topN`**.
+  **Oracle lesson:** compute an expected total FROM THE ENGINE, never by hand — a guessed
+  exact-reconcile total was off by 1,005 and silently left the `remainder===0` branch untested.
 - **NEXT (P4x.2d continued): remaining IN-MODULE handlers, with their REAL (engine-inclusive) cost.**
-  `handleGetCostByCause` (82 + 166 `tokensByCause` = **248**) · `handleGetContextInflationReport`
+  `handleGetContextInflationReport`
   (90 + 135 `residentCost` = **225**) · `handleCheckCacheExpiry` (110 + in-module helpers) ·
   then the two that SHARE `cacheBreak.ts` (383) and should be done together —
   `handleGetCacheBreakReport` (81 + 383 = **464**) and `handleGetCacheRiskCosts` (138 + 383 = **521**).
