@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T21:59:46+0200
+updated: 2026-08-20T22:54:27+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -1155,7 +1155,54 @@ release-via: publish
   totals rather than trusting the note; `byKind.costUsd` re-rounds on EVERY accumulation.
   `fileBackedPool` gained its general PREDICATE form (the TS signature all along) and the string
   form delegates to it; the 6 scan inputs travel in a `CacheRiskCtx` struct.
-- **NEXT (P4x.2d continued): 18 of 53 remain.** `subscriptionUsage.ts` (797 + 90 `keychainConsent`;
+- **QUEUE RE-ORDERED ON A MEASUREMENT (commits 7ed88d3, 670322c, b49bb5b) — 38 of 53.** The line
+  below said `subscriptionUsage` next. Sizing the remaining 18 BY ENGINE said otherwise:
+  subscriptionUsage is 797 + 90 `keychainConsent` + 89 `dataDir` = **976 lines of NETWORK code for
+  ONE tool**, while `accountBurners` (470) + `windowEta` (205) + `bodyWriters` (282) is **~957 for
+  THREE**, every dependency already ported (`accountStateTimeline`, `burnMonitor`,
+  `bodiesActivity`) and nothing to stub. Took the three. The enumeration itself is the reusable
+  step: `assets/mcp-tools.json` × a regex over `ui.rs`'s match arms gives the exact remaining set,
+  and `grep -n "^import"` on each handler's engine gives its real cost.
+- **P4x.2d (commit 7ed88d3): `accountBurners.ts` (470) + `get_account_burners`.** Pinned: a NULL
+  accountId CLOSES the open segment (consumption in an unresolved stretch belongs to NOBODY —
+  without this the gap is charged to the last known account, the exact misattribution this tool
+  exists to prevent); `readAccountSegments` DROPS a non-numeric `ts` rather than defaulting to 0
+  (which would open a segment at the epoch); the email/plan pick is `.filter(Boolean).pop()` — the
+  last TRUTHY value, and the fixture's newest segment carries an EMPTY email on purpose;
+  `previous` skips EVERY segment of the current account; `resolveWindowUntil` parses the RAW
+  interval and NAMES an unparseable one; `fmtTok` divides by 1e3 unconditionally below 1M so 500
+  renders "1k" (the columns are aligned to that); the same-plan capacity proxy is DETERMINISTIC
+  (newest observedAt, then larger cap — the test re-runs it with the table reversed); fill% is
+  COST-first with token fill as fallback and null ⇒ "undetermined", never guessed.
+  **The rendered `text` is compared BYTE-IDENTICAL, and that test was FALSIFIED:** narrowing one
+  padStart from 8 to 7 fails it while every field-by-field assertion still passes. A column drift
+  is precisely what a value comparison cannot see.
+  `js_to_fixed_str` moved from `spawn_rollup` (private) into `summarize::helpers` with the `-0`
+  guard JS needs (`(-0).toFixed(2)` is "0.00"; Rust prints "-0.00").
+- **P4x.2d (commit 670322c): `windowEta.ts` (205) + `get_window_eta`.** SHARES accountBurners'
+  attribution rule, capacity resolver AND parity fixture — the TS says the two tools must never
+  disagree, so a second fixture is exactly how they would drift.
+  **THE ROLLING-WINDOW PLATEAU is why this is not `remaining ÷ rate`:** a rolling window sheds
+  consumption older than its length, so at a steady rate r it plateaus at r × windowLength; below
+  the cap it can NEVER exhaust, and a naive projection prints a confident countdown for a window
+  that will never fill. Also pinned: the 5 etaReasons are DISTINCT outcomes (the test asserts all 5
+  reachable AND no two share a human string); `humanEta`/`exhaustionEtaIso` read the UNROUNDED
+  minutes while the reported field is `+toFixed(1)`; `Math.round(m % 60)` runs INDEPENDENTLY of
+  the hour so 59.5 → "60m" and 1439.6 → "23h 60m"; a cost cap of exactly 0 is over-limit with a
+  null fill (two guards reading the same number differently), not 'no-capacity'; an ALREADY-OVER
+  window binds outright over a smaller positive ETA.
+- **P4x.2d (commit b49bb5b): `bodyWriters.ts` (282) + `get_body_writers`.** `queryStoreWriterTotals`
+  is **NOT PORTED** — the durable DuckDB store is not held by the Rust server, so the arm passes
+  `store: None` and takes the TS's OWN store-unavailable branch; the payload's `note` says
+  "STORE UNAVAILABLE", a degradation stated in the answer rather than a silently different number.
+  Pinned: `active` and `recent` are DIFFERENT windows (the fixture's r3 is recent-but-not-active —
+  the row that says "already stopped"); the store merge is an EXACT union and the test asserts the
+  delta between the two store fixtures is exactly the ingested file's byte count; the unattributed
+  bucket never inherits a card (TRUTHY `sessionId ?`); `available` is the UNION of dir and store;
+  `lastWriteMs` of exactly 0 renders "never". The dir walk is SORTED (Node's `readdirSync` order is
+  filesystem-dependent, so the TS's own tie order is not reproducible — there is no correct order
+  to match); the fixture carries no rate ties.
+- **NEXT (P4x.2d continued): 15 of 53 remain.** `subscriptionUsage.ts` (797 + 90 `keychainConsent`;
   **NETWORK** — the oracle MUST stub the Anthropic usage endpoint; it is also the live TTL-regime
   oracle). Then the heavyweights, engine-first: `cacheCreationForensics` (800 — unblocks
   `cacheEventLog` 479), `cacheBreakTimeline` (1,927), `burnInvestigator` (632), and the 2 sql
