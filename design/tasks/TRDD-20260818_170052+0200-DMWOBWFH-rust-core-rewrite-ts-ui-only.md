@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T09:42:48+0200
+updated: 2026-08-20T09:44:38+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
