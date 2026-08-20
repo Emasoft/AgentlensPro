@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T14:11:22+0200
+updated: 2026-08-20T14:19:04+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -761,9 +761,31 @@ release-via: publish
   model → key DROPPED (not null, not ""). 145/145, clippy 28, identities green.
 - **(superseded prediction — do NOT carry forward)** the earlier note in this block implying the
   resolved `model` key lands after `requestId`. It is wrong; see above.
-- **NEXT: the MCP surface (53 tools).** The HTTP work is done. Still unported from the composition
-  layer: `imageReport` / `findResidentBlobs` / `queryBlocks` — MCP-only, and purely ADDITIVE since
-  they reuse the core landed in P4w.1c(ii)a/b.
+- **P4x SIZED + P4x.1 DONE (commit 9bb520d): the MCP endpoint.** `src/mcpServer.ts` is **4,018
+  lines / 53 tools**, and it decomposes as: **~1,200 lines of pure SCHEMA data** (`TOOLS`, lines
+  410-1616), ~2,270 lines of handlers (1617-3890), and a small transport at the tail.
+  **THE DECISIVE SIZING FINDING — the SDK transport does NOT need porting.** The TS wraps
+  `StreamableHTTPServerTransport`, but the only shipped consumer is our own CLI
+  (`src/cli/cliCore.ts`), which sends plain JSON-RPC, **explicitly accepts EITHER SSE or plain
+  JSON**, and uses exactly THREE methods (`initialize`, `tools/list`, `tools/call`). So P4x is
+  "53 handlers", not "reimplement Streamable-HTTP". Safe ONLY because the MCP server is deliberately
+  not registered with Claude Code — if that changes, the transport becomes insufficient.
+  **Schemas are GENERATED, never transcribed:** `assets/mcp-tools.json` is produced from the TS
+  `TOOLS` array (now `export`ed — the only TS change, no behaviour change) and embedded with
+  `include_str!`, so the frozen schema surface is byte-identical BY CONSTRUCTION. Regenerate with
+  `pnpm run compile-tests && node rust-core/crates/agentlens-core/assets/gen-mcp-tools.mjs`.
+  An unimplemented tool returns an explicit error NAMING it, kept DISTINCT from the unknown-tool
+  error — an empty result would read as a working tool that found nothing, the worst failure mode
+  for a diagnostic. 146/146, clippy 28, identities green, check-types OK.
+- **NEXT (P4x.2): the tool HANDLERS, in batches.** Wire them through the `call` hook in
+  `mcp::handle_rpc` (currently `|_,_| None`). Start with the tools that are thin re-exposures of
+  ALREADY-PORTED engines (session summary, burn, cache-risk, composition, history, conversation,
+  callcontext, statusline) before the ones needing new work. Still unported and MCP-only:
+  `imageReport` / `findResidentBlobs` / `queryBlocks` in contextCompositionIndex.ts — purely
+  ADDITIVE, they reuse the core landed in P4w.1c(ii)a/b.
+- **ALSO PENDING (not blocking P4x): the dedicated MCP listener.** `/mcp` is served on the UI
+  listener today; the CLI defaults to `http://localhost:4316/mcp` (`AGENTLENS_MCP_URL` repoints
+  it). `alcore serve` has no `--mcp-port` yet.
 - **(historical) P4w.2 COMPLETE.** Rows 32, 33, 34, 36, 37 went live before row 35. Row 35's
   contract and its lock choreography (lock → `resolve_request` → CLONE the pointer → UNLOCK →
   blocking read/parse → RE-LOCK → account backfill via `account_registry`) are IMPLEMENTED as of
