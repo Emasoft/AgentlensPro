@@ -50,6 +50,17 @@ pub enum AuthRegime {
     Unknown,
 }
 
+impl AuthRegime {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AuthRegime::Subscription => "subscription",
+            AuthRegime::UsageCredits => "usage-credits",
+            AuthRegime::ApiKey => "api-key",
+            AuthRegime::Unknown => "unknown",
+        }
+    }
+}
+
 /// Machine-level TTL signals, resolved by the caller and passed into this pure classifier.
 #[derive(Clone, Copy, Debug)]
 pub struct TtlContext {

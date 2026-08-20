@@ -639,6 +639,18 @@ async fn handle(
             .to_string()
         };
         json_response(StatusCode::OK, body)
+    } else if method == Method::GET && path == "/api/burn-status" {
+        // Row 24 (server.ts:3950): enrichBurnStatus(computeBurnStatus(gatherBurn())) — 200
+        // always. The TS catch answers {"error":…} at 200 for a V8 throw; the Rust compute
+        // cannot throw, so only the success shape is reachable.
+        let now = crate::now_ms() as f64;
+        let body = {
+            let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+            let status = st.live_burn_status(now);
+            let account = st.burn.current_account(now);
+            crate::burn::runtime::enrich_burn_status(&status, &account).to_string()
+        };
+        json_response(StatusCode::OK, body)
     } else if method == Method::GET && path == "/api/collector-gaps" {
         // Row 29 (server.ts:4038, TRDD-PJC8N1HO spec 2): the lifecycle-derived downtime windows.
         // The TS wraps computeCollectorGaps in a catch → []; the Rust compute cannot throw.
@@ -764,6 +776,49 @@ pub async fn serve_ui(
             let svc = service_fn(move |req| handle(req, state.clone(), hub.clone()));
             let _ = hyper::server::conn::http1::Builder::new().serve_connection(io, svc).await;
         });
+    }
+}
+
+/// The burn SSE tick (server.ts tickBurn, 4s cadence): compute the burn status, store it as
+/// `burn.last_status` (the TTL usage-credit signal + the P4r.4 burn-risk hot path read it),
+/// push a `burnStatus` frame, and push each NEW alert once until its condition clears
+/// (`firedBurnAlerts` dedupe). NOT PORTED: macNotify (opt-in osascript) and the
+/// account-state-timeline sampler (TRDD-YQZ9P8IL — its store is unported).
+pub async fn run_burn_tick(state: Arc<Mutex<CoreState>>, hub: Arc<SseHub>) {
+    let mut fired: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut tick = tokio::time::interval(std::time::Duration::from_secs(4));
+    loop {
+        tick.tick().await;
+        let mut frames: Vec<String> = Vec::new();
+        {
+            let Ok(mut st) = state.lock() else { continue };
+            let now = crate::now_ms() as f64;
+            let status = st.live_burn_status(now);
+            st.burn.last_status = Some(status.clone());
+            let account = st.burn.current_account(now);
+            let enriched = crate::burn::runtime::enrich_burn_status(&status, &account);
+            frames.push(serde_json::json!({ "type": "burnStatus", "burnStatus": enriched }).to_string());
+            let mut active: std::collections::HashSet<String> = std::collections::HashSet::new();
+            if let Some(alerts) = status.get("alerts").and_then(Value::as_array) {
+                for a in alerts {
+                    let id = a.get("id").and_then(Value::as_str).unwrap_or("").to_owned();
+                    active.insert(id.clone());
+                    if fired.insert(id) {
+                        frames.push(
+                            serde_json::json!({ "type": "alert", "label": a["label"], "detail": a["detail"], "severity": a["severity"] })
+                                .to_string(),
+                        );
+                    }
+                }
+            }
+            // Clear fired keys whose condition cleared so the alert can re-fire if it returns.
+            fired.retain(|id| active.contains(id));
+        }
+        if hub.client_count() > 0 {
+            for f in &frames {
+                hub.broadcast(sse_frame(f));
+            }
+        }
     }
 }
 

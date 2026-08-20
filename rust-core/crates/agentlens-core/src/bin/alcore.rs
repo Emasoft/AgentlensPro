@@ -177,6 +177,9 @@ fn main() {
     });
     let hub = Arc::new(agentlens_core::ui::SseHub::default());
     rt.spawn(agentlens_core::ui::run_push_loop(state.clone(), hub.clone()));
+    // The 4s burn tick (server.ts tickBurn): burnStatus SSE frames + once-per-condition alert
+    // frames, and the lastBurnStatus cache the TTL resolver + burn-risk read.
+    rt.spawn(agentlens_core::ui::run_burn_tick(state.clone(), hub.clone()));
     let serve_ui = agentlens_core::ui::serve_ui(ui_addr, state.clone(), hub, |bound| {
         println!("alcore: UI/API listening on http://{bound}");
     });

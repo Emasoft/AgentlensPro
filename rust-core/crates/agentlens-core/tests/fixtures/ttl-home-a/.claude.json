@@ -1,0 +1,13 @@
+{
+  "oauthAccount": {
+    "accountUuid": "acct-aaaa",
+    "emailAddress": "fixture-user@example.com",
+    "organizationName": "Fixture Org",
+    "organizationUuid": "org-bbbb",
+    "billingType": "stripe_subscription",
+    "hasExtraUsageEnabled": true,
+    "organizationRateLimitTier": "tier_alpha",
+    "userRateLimitTier": "tier_beta",
+    "displayName": "Fixture User"
+  }
+}

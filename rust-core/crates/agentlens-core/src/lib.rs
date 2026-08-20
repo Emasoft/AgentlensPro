@@ -131,6 +131,9 @@ pub struct CoreState {
     /// a FIELD (not Env::from_process at the call site) so tests can point it at a fixture
     /// home without racing the process environment.
     pub log_env: agentlens_logscan::discovery::Env,
+    /// The burn subsystem's stateful glue (P4r.3): config, the tick's lastBurnStatus, the 60s
+    /// account/TTL-signal cache. Tests re-point it with set_home_dir.
+    pub burn: burn::runtime::BurnRuntime,
 }
 
 impl CoreState {
@@ -247,6 +250,20 @@ impl CoreState {
         let summary = self.build_session_summary(now_ms);
         self.stripped_cache.get(self.data_version, || ui::strip_session_detail(&summary))
     }
+
+    /// gatherBurn (server.ts:1448) + computeBurnStatus in one step — shared by the 4s burn
+    /// tick, `GET /api/burn-status` and (P4r.4) the burn-risk fallback. Does NOT store into
+    /// `burn.last_status` — the TS route computes fresh without touching the tick cache.
+    /// NOT PORTED: statuslineReader.getBillingEvents (the statusline store) — the gathered
+    /// stream carries the api_request events only, statusline sessions contribute nothing yet.
+    pub fn live_burn_status(&mut self, now_ms: f64) -> Value {
+        let summary = self.build_session_summary(now_ms);
+        let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
+        drop(summary);
+        let events = burn::monitor::gather_consumption_events(&sessions, &[], now_ms);
+        let ttl = self.burn.ttl_context(now_ms);
+        burn::monitor::compute_burn_status(&events, &sessions, &self.burn.config, now_ms, Some(&ttl))
+    }
 }
 
 impl CoreState {
@@ -279,6 +296,10 @@ impl CoreState {
             otel_attribution: IndexMap::new(),
             lifecycle: collector_lifecycle::record_start(&collector_lifecycle::lifecycle_file(data_dir), now),
             log_env: agentlens_logscan::discovery::Env::from_process(),
+            burn: {
+                let env = agentlens_logscan::discovery::Env::from_process();
+                burn::runtime::BurnRuntime::new(env.home, std::env::vars().collect())
+            },
         }
     }
 

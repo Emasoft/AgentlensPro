@@ -1,0 +1,235 @@
+{
+ "auth": [
+  {
+   "name": "null account",
+   "regime": "unknown"
+  },
+  {
+   "name": "billingType null",
+   "regime": "unknown"
+  },
+  {
+   "name": "stripe_subscription within plan",
+   "regime": "subscription"
+  },
+  {
+   "name": "stripe_subscription drawing credits",
+   "regime": "usage-credits"
+  },
+  {
+   "name": "over plan without the opt-in stays subscription",
+   "regime": "subscription"
+  },
+  {
+   "name": "over plan with a null pct stays subscription",
+   "regime": "subscription"
+  },
+  {
+   "name": "api billing",
+   "regime": "api-key"
+  }
+ ],
+ "overrides": [
+  {
+   "name": "nothing set",
+   "out": {
+    "force5m": false,
+    "enable1h": false
+   }
+  },
+  {
+   "name": "process 1 / true",
+   "out": {
+    "force5m": true,
+    "enable1h": true
+   }
+  },
+  {
+   "name": "process 0 / false stay off",
+   "out": {
+    "force5m": false,
+    "enable1h": false
+   }
+  },
+  {
+   "name": "settings string, number and bool shapes",
+   "out": {
+    "force5m": true,
+    "enable1h": true
+   }
+  },
+  {
+   "name": "settings junk shapes stay off",
+   "out": {
+    "force5m": false,
+    "enable1h": false
+   }
+  }
+ ],
+ "labels": [
+  {
+   "name": "own label from email",
+   "label": "fixture-user@example.com"
+  },
+  {
+   "name": "null uuid takes the own label too (loose ==)",
+   "label": "fixture-user@example.com"
+  },
+  {
+   "name": "matching uuid",
+   "label": "fixture-user@example.com"
+  },
+  {
+   "name": "rotated-away uuid gets only its short id",
+   "label": "other-uu"
+  },
+  {
+   "name": "display name fallback",
+   "label": "Fixture User"
+  },
+  {
+   "name": "short-uuid fallback",
+   "label": "acct-aaa"
+  },
+  {
+   "name": "no id, uuid only",
+   "label": "zzzz-uui"
+  },
+  {
+   "name": "nothing at all",
+   "label": "unknown"
+  }
+ ],
+ "oauth": [
+  {
+   "accountUuid": "acct-aaaa",
+   "email": "fixture-user@example.com",
+   "organizationName": "Fixture Org",
+   "organizationUuid": "org-bbbb",
+   "billingType": "stripe_subscription",
+   "hasExtraUsageEnabled": true,
+   "organizationRateLimitTier": "tier_alpha",
+   "userRateLimitTier": "tier_beta",
+   "displayName": "Fixture User"
+  },
+  {
+   "accountUuid": null,
+   "email": "a@example.com",
+   "organizationName": null,
+   "organizationUuid": null,
+   "billingType": null,
+   "hasExtraUsageEnabled": false,
+   "organizationRateLimitTier": null,
+   "userRateLimitTier": null,
+   "displayName": null
+  },
+  null,
+  null
+ ],
+ "subs": [
+  "max",
+  "pro",
+  null,
+  null
+ ],
+ "currentAccounts": [
+  {
+   "name": "full fixture home + injected plan",
+   "account": {
+    "accountUuid": "acct-aaaa",
+    "email": "fixture-user@example.com",
+    "organizationName": "Fixture Org",
+    "organizationUuid": "org-bbbb",
+    "billingType": "stripe_subscription",
+    "hasExtraUsageEnabled": true,
+    "organizationRateLimitTier": "tier_alpha",
+    "userRateLimitTier": "tier_beta",
+    "displayName": "Fixture User",
+    "planType": "max",
+    "rateLimitTier": "tier_alpha",
+    "label": "fixture-user@example.com",
+    "source": "claude.json"
+   }
+  },
+  {
+   "name": "full fixture home, no plan",
+   "account": {
+    "accountUuid": "acct-aaaa",
+    "email": "fixture-user@example.com",
+    "organizationName": "Fixture Org",
+    "organizationUuid": "org-bbbb",
+    "billingType": "stripe_subscription",
+    "hasExtraUsageEnabled": true,
+    "organizationRateLimitTier": "tier_alpha",
+    "userRateLimitTier": "tier_beta",
+    "displayName": "Fixture User",
+    "planType": null,
+    "rateLimitTier": "tier_alpha",
+    "label": "fixture-user@example.com",
+    "source": "claude.json"
+   }
+  },
+  {
+   "name": "malformed claude.json → none shape",
+   "account": {
+    "accountUuid": null,
+    "email": null,
+    "organizationName": null,
+    "organizationUuid": null,
+    "billingType": null,
+    "hasExtraUsageEnabled": false,
+    "organizationRateLimitTier": null,
+    "userRateLimitTier": null,
+    "displayName": null,
+    "planType": "max",
+    "rateLimitTier": null,
+    "label": "unknown",
+    "source": "none"
+   }
+  },
+  {
+   "name": "missing claude.json → none shape",
+   "account": {
+    "accountUuid": null,
+    "email": null,
+    "organizationName": null,
+    "organizationUuid": null,
+    "billingType": null,
+    "hasExtraUsageEnabled": false,
+    "organizationRateLimitTier": null,
+    "userRateLimitTier": null,
+    "displayName": null,
+    "planType": null,
+    "rateLimitTier": null,
+    "label": "unknown",
+    "source": "none"
+   }
+  }
+ ],
+ "ttlContexts": [
+  {
+   "name": "settings env 1h + subscription account",
+   "ctx": {
+    "auth": "subscription",
+    "force5m": false,
+    "enable1h": true
+   }
+  },
+  {
+   "name": "process force5m + api account",
+   "ctx": {
+    "auth": "api-key",
+    "force5m": true,
+    "enable1h": false
+   }
+  },
+  {
+   "name": "null account → unknown auth",
+   "ctx": {
+    "auth": "unknown",
+    "force5m": false,
+    "enable1h": false
+   }
+  }
+ ]
+}

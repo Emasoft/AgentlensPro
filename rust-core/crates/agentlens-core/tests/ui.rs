@@ -712,6 +712,47 @@ fn timeline_route_serves_the_lazy_detail_with_the_otel_graft() {
 }
 
 #[test]
+fn burn_status_route_serves_the_enriched_monitor_output() {
+    let (_otlp, ui, state) = start_servers();
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let now = agentlens_core::now_ms();
+    let iso = |off_ms: i64| agentlens_core::summarize::helpers::iso_from_ms((now - off_ms) as f64);
+    {
+        let mut st = state.lock().unwrap();
+        // Never read THIS machine's account/config: scrub the env snapshot and point the burn
+        // runtime at the committed fixture home (a stripe_subscription account, acct-aaaa).
+        st.burn.vars.clear();
+        st.burn.set_home_dir(fixtures.join("ttl-home-a"));
+        st.put_log_session(serde_json::json!({
+            "sessionId": "burn-1", "source": "claude_code", "dataSource": "log",
+            "startTime": iso(60_000), "accountId": "acct-aaaa",
+            "timeline": [{ "type": "api_request", "timestamp": iso(30_000), "spanId": "b1",
+                "costUsd": 0.2, "inputTokens": 100, "outputTokens": 20,
+                "cacheReadTokens": 1000, "cacheCreateTokens": 50 }]
+        }));
+    }
+    let r = get(ui, "/api/burn-status", "");
+    assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+    let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
+    assert_eq!(v["activeSessions"], 1, "{v}");
+    assert_eq!(v["topSessions"][0]["sessionId"], "burn-1");
+    assert!(v["topSessions"][0].get("keepWarm").is_some(), "keepWarm decoration: {v}");
+    // No capacity configured on the scrubbed env → honest nulls, source none.
+    assert_eq!(v["window"]["capacitySource"], "none");
+    assert_eq!(v["window"]["fiveHour"]["pctConsumed"], serde_json::Value::Null);
+    // Enrichment: the fixture account labels its own window; residentBlobs is the unported-scan
+    // idle value; currentAccount is the fixture identity, token-free.
+    assert_eq!(v["accountWindows"][0]["accountUuid"], "acct-aaaa");
+    assert_eq!(v["accountWindows"][0]["accountLabel"], "fixture-user@example.com");
+    assert_eq!(v["residentBlobs"], serde_json::json!([]));
+    assert_eq!(v["currentAccount"]["email"], "fixture-user@example.com");
+    assert_eq!(v["currentAccount"]["billingType"], "stripe_subscription");
+    assert!(v["currentAccount"].get("accessToken").is_none() && !body_of(&r).contains("Token\":\""), "no secret-shaped fields");
+    // Alerts: default thresholds — this tiny session crosses none.
+    assert_eq!(v["alerts"], serde_json::json!([]));
+}
+
+#[test]
 fn timeline_route_reparses_a_stripped_card_from_disk() {
     let (_otlp, ui, state) = start_servers();
     // A fixture home with ONE Claude transcript. Timestamps must be FRESH: the reparse applies
