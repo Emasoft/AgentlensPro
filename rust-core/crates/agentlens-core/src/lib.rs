@@ -42,6 +42,7 @@ pub mod conversation;
 pub mod context_composition_index;
 pub mod delta_log;
 pub mod derived_cache;
+pub mod effort_transitions;
 pub mod feed_merge;
 pub mod generated_files;
 pub mod hook_events;

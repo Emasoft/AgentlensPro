@@ -1,0 +1,553 @@
+{
+  "mtimes": {
+    "sess-main.jsonl": 1785582000000,
+    "sess-resume.jsonl": 1785582000000,
+    "sess-edge.jsonl": 1785582000000,
+    "sess-noeffort.jsonl": 1785582000000,
+    "sess-old.jsonl": 1782864000000
+  },
+  "sinceMtimeSkip": 1784073600000,
+  "sincePostFilter": 1785578760000,
+  "observations": {
+    "ok": {
+      "entry": {
+        "type": "assistant",
+        "sessionId": "s",
+        "timestamp": "2026-08-01T10:00:00.000Z",
+        "effort": "xhigh",
+        "message": {
+          "model": "claude-opus-5"
+        }
+      },
+      "out": {
+        "ts": 1785578400000,
+        "effort": "xhigh",
+        "model": "claude-opus-5"
+      }
+    },
+    "okNoModel": {
+      "entry": {
+        "type": "assistant",
+        "sessionId": "s",
+        "timestamp": "2026-08-01T10:00:00.000Z",
+        "effort": "xhigh"
+      },
+      "out": {
+        "ts": 1785578400000,
+        "effort": "xhigh"
+      }
+    },
+    "okEmptyModel": {
+      "entry": {
+        "type": "assistant",
+        "sessionId": "s",
+        "timestamp": "2026-08-01T10:00:00.000Z",
+        "effort": "xhigh",
+        "message": {
+          "model": ""
+        }
+      },
+      "out": {
+        "ts": 1785578400000,
+        "effort": "xhigh"
+      }
+    },
+    "notAssistant": {
+      "entry": {
+        "type": "user",
+        "sessionId": "s",
+        "timestamp": "2026-08-01T10:00:00.000Z",
+        "effort": "xhigh"
+      },
+      "out": null
+    },
+    "effortAbsent": {
+      "entry": {
+        "type": "assistant",
+        "sessionId": "s",
+        "timestamp": "2026-08-01T10:00:00.000Z"
+      },
+      "out": null
+    },
+    "effortEmpty": {
+      "entry": {
+        "type": "assistant",
+        "sessionId": "s",
+        "timestamp": "2026-08-01T10:00:00.000Z",
+        "effort": ""
+      },
+      "out": null
+    },
+    "effortNotString": {
+      "entry": {
+        "type": "assistant",
+        "sessionId": "s",
+        "timestamp": "2026-08-01T10:00:00.000Z",
+        "effort": 3
+      },
+      "out": null
+    },
+    "tsAbsent": {
+      "entry": {
+        "type": "assistant",
+        "sessionId": "s",
+        "effort": "xhigh"
+      },
+      "out": null
+    },
+    "tsNotString": {
+      "entry": {
+        "type": "assistant",
+        "sessionId": "s",
+        "timestamp": 1754042400000,
+        "effort": "xhigh"
+      },
+      "out": null
+    },
+    "tsUnparseable": {
+      "entry": {
+        "type": "assistant",
+        "sessionId": "s",
+        "timestamp": "not-a-date",
+        "effort": "xhigh"
+      },
+      "out": null
+    }
+  },
+  "pure": {
+    "simple": {
+      "records": [
+        {
+          "type": "assistant",
+          "sessionId": "s1",
+          "timestamp": "2026-08-01T10:00:00.000Z",
+          "effort": "xhigh"
+        },
+        {
+          "type": "assistant",
+          "sessionId": "s1",
+          "timestamp": "2026-08-01T10:01:00.000Z",
+          "effort": "xhigh"
+        },
+        {
+          "type": "assistant",
+          "sessionId": "s1",
+          "timestamp": "2026-08-01T10:02:00.000Z",
+          "effort": "low"
+        },
+        {
+          "type": "assistant",
+          "sessionId": "s1",
+          "timestamp": "2026-08-01T10:03:00.000Z",
+          "effort": "xhigh"
+        }
+      ],
+      "out": [
+        {
+          "ts": 1785578580000,
+          "session": "s1",
+          "from": "low",
+          "to": "xhigh",
+          "sidechain": false
+        },
+        {
+          "ts": 1785578520000,
+          "session": "s1",
+          "from": "xhigh",
+          "to": "low",
+          "sidechain": false
+        }
+      ]
+    },
+    "sidechainPartitioned": {
+      "records": [
+        {
+          "type": "assistant",
+          "sessionId": "s1",
+          "timestamp": "2026-08-01T10:00:00.000Z",
+          "effort": "xhigh"
+        },
+        {
+          "type": "assistant",
+          "sessionId": "s1",
+          "timestamp": "2026-08-01T10:01:00.000Z",
+          "effort": "medium",
+          "isSidechain": true
+        },
+        {
+          "type": "assistant",
+          "sessionId": "s1",
+          "timestamp": "2026-08-01T10:02:00.000Z",
+          "effort": "high",
+          "isSidechain": true
+        },
+        {
+          "type": "assistant",
+          "sessionId": "s1",
+          "timestamp": "2026-08-01T10:03:00.000Z",
+          "effort": "xhigh"
+        }
+      ],
+      "out": [
+        {
+          "ts": 1785578520000,
+          "session": "s1",
+          "from": "medium",
+          "to": "high",
+          "sidechain": true
+        }
+      ]
+    },
+    "sidechainTruthyIsNotTrue": {
+      "records": [
+        {
+          "type": "assistant",
+          "sessionId": "s1",
+          "timestamp": "2026-08-01T10:00:00.000Z",
+          "effort": "xhigh"
+        },
+        {
+          "type": "assistant",
+          "sessionId": "s1",
+          "timestamp": "2026-08-01T10:01:00.000Z",
+          "effort": "low",
+          "isSidechain": 1
+        }
+      ],
+      "out": [
+        {
+          "ts": 1785578460000,
+          "session": "s1",
+          "from": "xhigh",
+          "to": "low",
+          "sidechain": false
+        }
+      ]
+    },
+    "noSession": {
+      "records": [
+        {
+          "type": "assistant",
+          "timestamp": "2026-08-01T10:00:00.000Z",
+          "effort": "xhigh"
+        },
+        {
+          "type": "assistant",
+          "sessionId": "s1",
+          "timestamp": "2026-08-01T10:01:00.000Z",
+          "effort": "low"
+        }
+      ],
+      "out": []
+    },
+    "outOfOrder": {
+      "records": [
+        {
+          "type": "assistant",
+          "sessionId": "s1",
+          "timestamp": "2026-08-01T10:05:00.000Z",
+          "effort": "low"
+        },
+        {
+          "type": "assistant",
+          "sessionId": "s1",
+          "timestamp": "2026-08-01T10:00:00.000Z",
+          "effort": "xhigh"
+        },
+        {
+          "type": "assistant",
+          "sessionId": "s1",
+          "timestamp": "2026-08-01T10:03:00.000Z",
+          "effort": "medium"
+        }
+      ],
+      "out": [
+        {
+          "ts": 1785578700000,
+          "session": "s1",
+          "from": "medium",
+          "to": "low",
+          "sidechain": false
+        },
+        {
+          "ts": 1785578580000,
+          "session": "s1",
+          "from": "xhigh",
+          "to": "medium",
+          "sidechain": false
+        }
+      ]
+    },
+    "twoSessions": {
+      "records": [
+        {
+          "type": "assistant",
+          "sessionId": "s1",
+          "timestamp": "2026-08-01T10:00:00.000Z",
+          "effort": "xhigh"
+        },
+        {
+          "type": "assistant",
+          "sessionId": "s2",
+          "timestamp": "2026-08-01T10:01:00.000Z",
+          "effort": "low"
+        },
+        {
+          "type": "assistant",
+          "sessionId": "s1",
+          "timestamp": "2026-08-01T10:02:00.000Z",
+          "effort": "low"
+        },
+        {
+          "type": "assistant",
+          "sessionId": "s2",
+          "timestamp": "2026-08-01T10:03:00.000Z",
+          "effort": "high"
+        }
+      ],
+      "out": [
+        {
+          "ts": 1785578580000,
+          "session": "s2",
+          "from": "low",
+          "to": "high",
+          "sidechain": false
+        },
+        {
+          "ts": 1785578520000,
+          "session": "s1",
+          "from": "xhigh",
+          "to": "low",
+          "sidechain": false
+        }
+      ]
+    },
+    "empty": {
+      "records": [],
+      "out": []
+    }
+  },
+  "asRiskCommand": {
+    "ts": 1,
+    "session": "s1",
+    "command": "(effort xhigh→low)",
+    "kind": "EFFORT_CHANGED",
+    "mutation": "certain",
+    "args": "claude-opus-5"
+  },
+  "asRiskCommandNoModel": {
+    "ts": 1,
+    "session": "s1",
+    "command": "(effort xhigh→low)",
+    "kind": "EFFORT_CHANGED",
+    "mutation": "certain"
+  },
+  "scanAll": [
+    {
+      "ts": 1785579000000,
+      "session": "sess-main",
+      "from": "low",
+      "to": "xhigh",
+      "sidechain": false
+    },
+    {
+      "ts": 1785578820000,
+      "session": "sess-edge",
+      "from": "low",
+      "to": "high",
+      "sidechain": false
+    },
+    {
+      "ts": 1785578760000,
+      "session": "sess-other",
+      "from": "low",
+      "to": "high",
+      "sidechain": false,
+      "model": "claude-opus-5"
+    },
+    {
+      "ts": 1785578700000,
+      "session": "sess-main",
+      "from": "medium",
+      "to": "low",
+      "sidechain": false,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "ts": 1785578640000,
+      "session": "sess-main",
+      "from": "xhigh",
+      "to": "medium",
+      "sidechain": false,
+      "model": "claude-opus-5"
+    },
+    {
+      "ts": 1782896700000,
+      "session": "sess-old",
+      "from": "low",
+      "to": "xhigh",
+      "sidechain": false,
+      "model": "claude-opus-5"
+    }
+  ],
+  "scanWithSidechain": [
+    {
+      "ts": 1785579000000,
+      "session": "sess-main",
+      "from": "low",
+      "to": "xhigh",
+      "sidechain": false
+    },
+    {
+      "ts": 1785578820000,
+      "session": "sess-edge",
+      "from": "low",
+      "to": "high",
+      "sidechain": false
+    },
+    {
+      "ts": 1785578760000,
+      "session": "sess-other",
+      "from": "low",
+      "to": "high",
+      "sidechain": false,
+      "model": "claude-opus-5"
+    },
+    {
+      "ts": 1785578700000,
+      "session": "sess-main",
+      "from": "medium",
+      "to": "low",
+      "sidechain": false,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "ts": 1785578670000,
+      "session": "sess-main",
+      "from": "medium",
+      "to": "high",
+      "sidechain": true,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "ts": 1785578640000,
+      "session": "sess-main",
+      "from": "xhigh",
+      "to": "medium",
+      "sidechain": false,
+      "model": "claude-opus-5"
+    },
+    {
+      "ts": 1782896700000,
+      "session": "sess-old",
+      "from": "low",
+      "to": "xhigh",
+      "sidechain": false,
+      "model": "claude-opus-5"
+    }
+  ],
+  "scanSinceMtimeSkip": [
+    {
+      "ts": 1785579000000,
+      "session": "sess-main",
+      "from": "low",
+      "to": "xhigh",
+      "sidechain": false
+    },
+    {
+      "ts": 1785578820000,
+      "session": "sess-edge",
+      "from": "low",
+      "to": "high",
+      "sidechain": false
+    },
+    {
+      "ts": 1785578760000,
+      "session": "sess-other",
+      "from": "low",
+      "to": "high",
+      "sidechain": false,
+      "model": "claude-opus-5"
+    },
+    {
+      "ts": 1785578700000,
+      "session": "sess-main",
+      "from": "medium",
+      "to": "low",
+      "sidechain": false,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "ts": 1785578640000,
+      "session": "sess-main",
+      "from": "xhigh",
+      "to": "medium",
+      "sidechain": false,
+      "model": "claude-opus-5"
+    }
+  ],
+  "scanSincePostFilter": [
+    {
+      "ts": 1785579000000,
+      "session": "sess-main",
+      "from": "low",
+      "to": "xhigh",
+      "sidechain": false
+    },
+    {
+      "ts": 1785578820000,
+      "session": "sess-edge",
+      "from": "low",
+      "to": "high",
+      "sidechain": false
+    },
+    {
+      "ts": 1785578760000,
+      "session": "sess-other",
+      "from": "low",
+      "to": "high",
+      "sidechain": false,
+      "model": "claude-opus-5"
+    }
+  ],
+  "scanLimited": [
+    {
+      "ts": 1785579000000,
+      "session": "sess-main",
+      "from": "low",
+      "to": "xhigh",
+      "sidechain": false
+    },
+    {
+      "ts": 1785578820000,
+      "session": "sess-edge",
+      "from": "low",
+      "to": "high",
+      "sidechain": false
+    }
+  ],
+  "scanSidechainAndLimit": [
+    {
+      "ts": 1785579000000,
+      "session": "sess-main",
+      "from": "low",
+      "to": "xhigh",
+      "sidechain": false
+    },
+    {
+      "ts": 1785578820000,
+      "session": "sess-edge",
+      "from": "low",
+      "to": "high",
+      "sidechain": false
+    },
+    {
+      "ts": 1785578760000,
+      "session": "sess-other",
+      "from": "low",
+      "to": "high",
+      "sidechain": false,
+      "model": "claude-opus-5"
+    }
+  ]
+}

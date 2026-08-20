@@ -1,0 +1,9 @@
+{"type":"user","sessionId":"sess-edge","timestamp":"2026-08-01T10:00:10.000Z","effort":"low"}
+{"type":"assistant","sessionId":"sess-edge","timestamp":"2026-08-01T10:00:20.000Z","effort":""}
+{"type":"assistant","sessionId":"sess-edge","timestamp":"2026-08-01T10:00:30.000Z","effort":123}
+{"type":"assistant","sessionId":"sess-edge","effort":"medium"}
+{"type":"assistant","sessionId":"sess-edge","timestamp":1754042400000,"effort":"medium"}
+{"type":"assistant","sessionId":"sess-edge","timestamp":"not-a-date","effort":"medium"}
+{"type":"assistant","timestamp":"2026-08-01T10:00:40.000Z","effort":"medium"}
+{"type":"assistant","sessionId":"sess-edge","timestamp":"2026-08-01T10:00:00.000Z","effort":"low","message":{"model":"claude-opus-5"}}
+{"type":"assistant","sessionId":"sess-edge","timestamp":"2026-08-01T10:07:00.000Z","effort":"high","message":{"model":123}}
