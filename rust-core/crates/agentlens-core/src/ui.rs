@@ -1367,6 +1367,16 @@ async fn handle(
                         };
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
+                    "get_runtime_inventory" => {
+                        // ps + lsof + claude --version are all SUBPROCESS calls — off the executor.
+                        let now = crate::now_ms() as f64;
+                        let payload = tokio::task::spawn_blocking(move || {
+                            crate::runtime_inventory::build_runtime_inventory(None, false, now)
+                        })
+                        .await
+                        .map_err(|e| format!("runtime inventory join failed: {e}"))?;
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
+                    }
                     "get_cost_rollup" | "predict_session_cost" => {
                         let now = crate::now_ms() as f64;
                         let sessions = {

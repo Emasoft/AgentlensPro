@@ -1,0 +1,222 @@
+{
+ "nowMs": 1760000000000,
+ "psText": "  PID  PPID   RSS ELAPSED COMMAND\n  100     1  250000  02:15:33 /usr/local/bin/claude\n  101   100   40000     15:02 /bin/zsh -c source /Users/x/.claude/shell-snapshots/snap.sh && eval git status\n  102   101   90000     14:58 node /Users/x/.claude/plugins/mcp/server.js --port 1234\n  103   100  120000     09:41 /usr/local/bin/claude --agent worker\n  104   103   30000     09:40 /bin/sh -c echo nested-child-of-nested-claude\n  200     1  180000  00:44:10 claude\n  201   200   10000     00:31 /usr/bin/rg --json pattern\n  300     1   70000     05:00 node /Users/x/.claude/hooks/watcher.js\n  400   999   50000     01:00 /bin/bash -c orphan-with-unknown-parent\n  500   501   11000     02:00 /bin/sh cycle-a\n  501   500   12000     02:00 /bin/sh cycle-b\ntorn-line-without-numbers\n",
+ "rows": [
+  {
+   "pid": 100,
+   "ppid": 1,
+   "rssKb": 250000,
+   "etime": "02:15:33",
+   "command": "/usr/local/bin/claude"
+  },
+  {
+   "pid": 101,
+   "ppid": 100,
+   "rssKb": 40000,
+   "etime": "15:02",
+   "command": "/bin/zsh -c source /Users/x/.claude/shell-snapshots/snap.sh && eval git status"
+  },
+  {
+   "pid": 102,
+   "ppid": 101,
+   "rssKb": 90000,
+   "etime": "14:58",
+   "command": "node /Users/x/.claude/plugins/mcp/server.js --port 1234"
+  },
+  {
+   "pid": 103,
+   "ppid": 100,
+   "rssKb": 120000,
+   "etime": "09:41",
+   "command": "/usr/local/bin/claude --agent worker"
+  },
+  {
+   "pid": 104,
+   "ppid": 103,
+   "rssKb": 30000,
+   "etime": "09:40",
+   "command": "/bin/sh -c echo nested-child-of-nested-claude"
+  },
+  {
+   "pid": 200,
+   "ppid": 1,
+   "rssKb": 180000,
+   "etime": "00:44:10",
+   "command": "claude"
+  },
+  {
+   "pid": 201,
+   "ppid": 200,
+   "rssKb": 10000,
+   "etime": "00:31",
+   "command": "/usr/bin/rg --json pattern"
+  },
+  {
+   "pid": 300,
+   "ppid": 1,
+   "rssKb": 70000,
+   "etime": "05:00",
+   "command": "node /Users/x/.claude/hooks/watcher.js"
+  },
+  {
+   "pid": 400,
+   "ppid": 999,
+   "rssKb": 50000,
+   "etime": "01:00",
+   "command": "/bin/bash -c orphan-with-unknown-parent"
+  },
+  {
+   "pid": 500,
+   "ppid": 501,
+   "rssKb": 11000,
+   "etime": "02:00",
+   "command": "/bin/sh cycle-a"
+  },
+  {
+   "pid": 501,
+   "ppid": 500,
+   "rssKb": 12000,
+   "etime": "02:00",
+   "command": "/bin/sh cycle-b"
+  }
+ ],
+ "rootCases": [
+  "/usr/local/bin/claude",
+  "claude",
+  "  claude --resume  ",
+  "node /Users/x/.claude/plugins/mcp/server.js",
+  "/usr/local/bin/claude-code",
+  "claudex",
+  "/opt/claude/bin/claude --agent worker",
+  ""
+ ],
+ "rootResults": [
+  true,
+  true,
+  true,
+  false,
+  false,
+  false,
+  true,
+  false
+ ],
+ "instances": [
+  {
+   "pid": 100,
+   "etime": "02:15:33",
+   "ownRssMb": 244.1,
+   "totalRssMb": 517.6,
+   "processCount": 5,
+   "topProcesses": [
+    {
+     "pid": 103,
+     "rssMb": 117.2,
+     "etime": "09:41",
+     "command": "/usr/local/bin/claude --agent worker"
+    },
+    {
+     "pid": 102,
+     "rssMb": 87.9,
+     "etime": "14:58",
+     "command": "node /Users/x/.claude/plugins/mcp/server.js --port 1234"
+    },
+    {
+     "pid": 101,
+     "rssMb": 39.1,
+     "etime": "15:02",
+     "command": "/bin/zsh -c source /Users/x/.claude/shell-snapshots/snap.sh && eval git status"
+    },
+    {
+     "pid": 104,
+     "rssMb": 29.3,
+     "etime": "09:40",
+     "command": "/bin/sh -c echo nested-child-of-nested-claude"
+    }
+   ],
+   "cwd": null
+  },
+  {
+   "pid": 200,
+   "etime": "00:44:10",
+   "ownRssMb": 175.8,
+   "totalRssMb": 185.5,
+   "processCount": 2,
+   "topProcesses": [
+    {
+     "pid": 201,
+     "rssMb": 9.8,
+     "etime": "00:31",
+     "command": "/usr/bin/rg --json pattern"
+    }
+   ],
+   "cwd": null
+  }
+ ],
+ "report": {
+  "checkedAtIso": "2025-10-09T08:53:20.000Z",
+  "claudeCodeVersion": null,
+  "instanceCount": 2,
+  "totalRssMb": 703,
+  "instances": [
+   {
+    "pid": 100,
+    "etime": "02:15:33",
+    "ownRssMb": 244.1,
+    "totalRssMb": 517.6,
+    "processCount": 5,
+    "topProcesses": [
+     {
+      "pid": 103,
+      "rssMb": 117.2,
+      "etime": "09:41",
+      "command": "/usr/local/bin/claude --agent worker"
+     },
+     {
+      "pid": 102,
+      "rssMb": 87.9,
+      "etime": "14:58",
+      "command": "node /Users/x/.claude/plugins/mcp/server.js --port 1234"
+     },
+     {
+      "pid": 101,
+      "rssMb": 39.1,
+      "etime": "15:02",
+      "command": "/bin/zsh -c source /Users/x/.claude/shell-snapshots/snap.sh && eval git status"
+     },
+     {
+      "pid": 104,
+      "rssMb": 29.3,
+      "etime": "09:40",
+      "command": "/bin/sh -c echo nested-child-of-nested-claude"
+     }
+    ],
+    "cwd": null
+   },
+   {
+    "pid": 200,
+    "etime": "00:44:10",
+    "ownRssMb": 175.8,
+    "totalRssMb": 185.5,
+    "processCount": 2,
+    "topProcesses": [
+     {
+      "pid": 201,
+      "rssMb": 9.8,
+      "etime": "00:31",
+      "command": "/usr/bin/rg --json pattern"
+     }
+    ],
+    "cwd": null
+   }
+  ],
+  "note": "instances ranked by total tree RSS. Each tree includes EVERYTHING the instance spawned (subshells, worktree/subagent processes, plugin crons, MCP servers, background tasks). cwd identifies the project (null when lsof is unavailable). For each instance's live MODEL and token burn, join on workspace via get_burn_status / get_cost_rollup --liveOnly."
+ },
+ "emptyReport": {
+  "checkedAtIso": "2025-10-09T08:53:20.000Z",
+  "claudeCodeVersion": null,
+  "instanceCount": 0,
+  "totalRssMb": 0,
+  "instances": [],
+  "note": "instances ranked by total tree RSS. Each tree includes EVERYTHING the instance spawned (subshells, worktree/subagent processes, plugin crons, MCP servers, background tasks). cwd identifies the project (null when lsof is unavailable). For each instance's live MODEL and token burn, join on workspace via get_burn_status / get_cost_rollup --liveOnly."
+ }
+}

@@ -55,6 +55,7 @@ pub mod pricing;
 pub mod raw_body_context;
 pub mod request_log;
 pub mod retention_config;
+pub mod runtime_inventory;
 pub mod server_stats;
 pub mod span_window;
 pub mod statusline_store;
