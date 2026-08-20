@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T14:41:34+0200
+updated: 2026-08-20T15:10:37+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -813,9 +813,36 @@ release-via: publish
   two payloads ever converge instead of passing because both happen to lack them. The TS's
   "Burn monitor unavailable in this runtime" branch is unreachable here (the monitor is always
   present) — noted in place rather than silently dropped. 154/154, clippy 28, identities green.
-- **NEXT (P4x.2c continued): keep batching handlers.** 48 tools remain. Next-easiest are the ones
-  over ported engines: burn (`get_session_status`, `get_account_status`), cache-risk,
-  statusline, `get_block_content` (composition index is ported). The dispatch cases are
+- **P4x.2c (commits 6bd7f32, 8bb327b): `get_session_status` + `get_window_budget` +
+  `check_burn_risk` + `get_lifecycle_events`. 9 of 53.** Pass-throughs need only a CoreState method
+  (`live_session_status`; `burn_risk_report` now takes the two thresholds as Options). Pinned by
+  name: the window-budget `accountId` filter is TRUTHY-checked so `''` means UNFILTERED; its
+  empty-result `message` appears ONLY when a filter was actually asked for; `check_burn_risk` FLOORS
+  its thresholds (2 / 10k) so a caller cannot switch a risk row off by passing 0; and
+  `get_lifecycle_events` carries `dirExists` + a note because an empty `events` list reads
+  identically for "quiet" and "hooks never installed" — `count` is 0 for both, so it can never be
+  the discriminator. The lifecycle note text was extracted into an exported TS
+  `handleGetLifecycleEvents` so the two engines share ONE copy of it.
+- **⚠ P4x.2c FOUND AND FIXED A DEFECT IN EVERY TOOL PORTED BEFORE IT (commit 14bc338).**
+  `mcpServer.ts` runs **`leanify(result, {verbosity, maxTokens})` at a single choke point AFTER the
+  dispatch switch** — invisible from any individual tool's case — so all NINE tools were returning
+  RAW engine output: a different, and materially more expensive, wire shape than the TS (a tool
+  result is re-sent on every later turn of the caller's conversation). `src/leanResponse.ts` is now
+  ported to `lean_response.rs` with a 26-case oracle, and the route calls
+  `mcp_tools::tool_ok_lean` — ONE function, so a tool added later cannot opt out by forgetting.
+  **THE LESSON: read the code AROUND the dispatch case, not just the case.** A per-tool oracle
+  cannot see a transform applied after the switch, and every one of the nine parity suites was
+  green throughout.
+  **A TS claim measured FALSE and left standing rather than asserted:** leanResponse's "a tool can
+  never blow the caller's context, no matter what the data looks like" — at a 60-token ceiling a
+  degraded payload settles at 89, because the DISCLOSURE TEXT is the floor and cannot shrink itself.
+  Rust reproduces it exactly, so it is a finding about the TS, not a port defect.
+- **NEXT (P4x.2c continued): keep batching handlers.** 44 tools remain. Next-easiest are the ones
+  over ported engines: `get_account_status` (bigger — needs `resolveAuthRegimeLabel` +
+  `windowFillPct`; `classify_ttl_regime` IS ported), `get_account_state_at` (needs
+  accountStateTimeline's `resolveStateAt` — NOT ported), cache-risk-commands and statusline (both
+  engines ported and already on HTTP routes), `get_block_content` (composition index is ported).
+  **Every new arm must end in `tool_ok_lean`, never `mcp::tool_ok`.** The dispatch cases are
   `src/mcpServer.ts` ~3434-3890 and most shapers sit at 1617-3390 (largely UNREAD).
   `get_context_composition` (2438), `get_context_history` (2325), `get_conversation` (2391) — all
   three shapers are in `src/mcpServer.ts` and UNREAD except their heads; each has `turn` / range
