@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T09:30:19+0200
+updated: 2026-08-20T09:42:48+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -580,14 +580,24 @@ release-via: publish
   all heavyGuard, all riding src/contextComposition*/contextHistory/conversation/
   rawBodyContext — ONE subsystem cluster over transcripts + raw bodies). Everything else in §1
   is live in alcore.
-- **NEXT ACTION (one step): rows 9 + 31 — the two small independent routes.** `GET
-  /api/cache-risk-commands` (server.ts:3600 — the risky-command scan over hook events;
-  `{windowHours,total,count,truncated,byKind,commands[]}`) and `GET /api/generated-file`
-  (4199 — readScratchFile with the 200KB cap; `{exists,...}` shapes). Read their sources IN
-  FULL first (the cache-risk scan's kind/mutation classifier is the port's substance;
-  generated-file's path containment guard must port exactly). Then size the rows 32–37
-  drill-down cluster as its own phase (P4w) — read contextCompositionIndex.ts first, it is
-  the spine the other four lean on.
+- **P4v DONE (commit 2c0f7f3): rows 9 + 31.** `cache_risk_commands.rs` (the transcript scan —
+  NOT hook events, that was this STATE's own mistake; ConfigChange is REFUTED as a reload
+  signal and the on-disk type:user command block is ground truth; string-content-only gate,
+  caveat parser, /plugin verb strip, true-total + full-window byKind) and
+  `generated_files::read_scratch_file` (realpath containment ported exactly — the raw-string
+  regex alone would be an arbitrary-file reader for any website on this browser-reachable UI).
+  Oracle: the committed transcript gauntlet Value-equal first run; socket tests incl. the
+  traversal refusal. 109/109, zero new clippy, live smoke green.
+- **NEXT ACTION (one step): P4w — the per-session drill-down cluster, rows 32–37.** Sized
+  2026-08-20: contextCompositionIndex.ts 716 (THE SPINE — read it first),
+  contextComposition.ts 276, contextHistory.ts 383, conversation.ts 354, rawBodyContext.ts
+  378; all six routes heavyGuard'd, all read transcripts + raw bodies. Slice it: P4w.1 the
+  index (rows 36–37, /api/composition-index/:id + /api/block-content/:id/:turn/:idx), P4w.2
+  the three transcript views (rows 32–34, composition/history/conversation — each
+  `{<name>:<obj>|null}`, null also on parse failure, still 200, ?parent= fallback), P4w.3
+  callcontext (row 35, rawBodyContext over the bodies dir). heavyGuard itself is a NOT-PORTED
+  admission deferral (no V8 heap to guard) — record per route. After P4w the HTTP §1 table is
+  COMPLETE; what remains of the freeze is the MCP tool surface (§3) + preamble deferrals.
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
