@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T16:28:32+0200
+updated: 2026-08-20T16:46:13+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -901,13 +901,23 @@ release-via: publish
   caught the null version); compositionSummary/subAgents are NULL when absent, never [];
   `prompt` is FALSY-coerced (`|| null`) unlike get_recent_sessions' nullish read — two tools, two
   coercions, mirrored not unified.
-- **NEXT (P4x.2d): port ENGINES.** Every remaining tool (33) needs an engine with zero Rust
-  counterpart. SIZE FIRST, then port with the slice discipline. Candidate order by value:
-  `subscriptionUsage.ts` (get_subscription_usage — also the TTL-regime oracle),
-  `cacheEventLog` (get_cache_event_log), `costRollup` (get_cost_rollup),
-  `runtimeInventory`, `loadedPluginVersions`, `skillAttribution`. The heavyweights
-  (cacheCreationForensics / cacheBreakTimeline / burnInvestigator / sql tools) last.
-  **Every new arm must end in `tool_ok_lean`, never `mcp::tool_ok`.** The dispatch cases are
+- **P4x.2c (commit cc8f5d1): `get_cost_rollup`. 21 of 53.** `buildCostRollup` lives IN mcpServer.ts
+  — the "costRollup has no Rust counterpart" grep looked for a FILE and missed the in-module
+  function; recheck the others the same way before declaring them engine-ports. Pinned: OVERLAP
+  membership (the spanning card started 30h ago, ran until 22h ago — 24h counts it, 2h does not);
+  undated cards excluded AND counted; unpriced cards' TOKENS count but COST does not (never a
+  silent $0). **The serialization trap of the day (second time — same class as detail's `ms`):**
+  `g.workspace = s.workspace` DROPS the key when undefined while `g.parentSessionId = x ?? null`
+  KEEPS it as null — the two assignment shapes in one literal serialise differently, and the oracle
+  caught nulls where keys should have dropped.
+- **NEXT (P4x.2d): port ENGINES.** ~32 tools remain, most needing a real engine. SIZE FIRST, and
+  check for in-module functions before assuming a missing file means a missing engine
+  (predict_session_cost's matcher is ALSO in mcpServer.ts ~140-235 — likely another thin one).
+  Candidate order: `subscriptionUsage.ts` (797 ln; get_subscription_usage — also the TTL-regime
+  oracle), `cacheEventLog.ts` (479 ln), `runtimeInventory.ts` (176 ln), `skillAttribution.ts`
+  (180 ln), `loadedPluginVersions.ts` (274 ln). Heavyweights (forensics / timeline / investigator /
+  sql) last. **Every new arm must end in `tool_ok_lean`, never `mcp::tool_ok`.** The dispatch cases
+  are
   `src/mcpServer.ts` ~3434-3890 and most shapers sit at 1617-3390 (largely UNREAD).
   `get_context_composition` (2438), `get_context_history` (2325), `get_conversation` (2391) — all
   three shapers are in `src/mcpServer.ts` and UNREAD except their heads; each has `turn` / range
