@@ -1398,6 +1398,49 @@ async fn handle(
                         .map_err(|e| format!("skill attribution join failed: {e}"))?;
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
+                    "get_loaded_plugin_versions" => {
+                        // Same P4s choreography as get_skill_attribution: roots under the lock,
+                        // then UNLOCK before the disk walk — this one reads every transcript AND
+                        // stats the whole plugin cache.
+                        let now = crate::now_ms() as f64;
+                        let (dirs, cache_root) = {
+                            let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                            (
+                                agentlens_logscan::discovery::claude_projects_dirs(&st.log_env),
+                                // The TS uses os.homedir() directly here, NOT the CLAUDE_CONFIG_DIR
+                                // override the projects dirs honour — so this must not "helpfully"
+                                // resolve differently from the paths the report compares against.
+                                st.log_env.home.join(".claude").join("plugins").join("cache"),
+                            )
+                        };
+                        let plugin = args.get("plugin").and_then(Value::as_str).map(str::to_owned);
+                        // `opts.activeMinutes !== undefined` is a PRESENCE test, not a truthy one, so
+                        // 0 is a real window (cutoff = now). An explicit `null` is present too and
+                        // coerces to 0 in `now - null * 60_000` — reproduced rather than "fixed",
+                        // because a silent divergence is a bug to re-derive later while an inherited
+                        // quirk stays fixable in one place. Any other non-number yields a NaN cutoff,
+                        // which compares false and is therefore inert — the same as no window.
+                        let active = match args.get("activeMinutes") {
+                            None => None,
+                            Some(Value::Null) => Some(0.0),
+                            Some(v) => v.as_f64().filter(|n| n.is_finite()),
+                        };
+                        // `opts.staleOnly &&` is a TRUTHY test, not a boolean read.
+                        let stale_only = args.get("staleOnly").is_some_and(crate::summarize::helpers::truthy);
+                        let payload = tokio::task::spawn_blocking(move || {
+                            crate::loaded_plugin_versions::build_loaded_versions_report(
+                                &dirs,
+                                &cache_root,
+                                plugin.as_deref(),
+                                active,
+                                stale_only,
+                                now,
+                            )
+                        })
+                        .await
+                        .map_err(|e| format!("loaded plugin versions join failed: {e}"))?;
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
+                    }
                     "get_cost_rollup" | "predict_session_cost" => {
                         let now = crate::now_ms() as f64;
                         let sessions = {

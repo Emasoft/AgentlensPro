@@ -1,0 +1,2 @@
+{"type":"attachment","timestamp":"2026-08-01T12:00:00.000Z","sessionId":"cccc3333-3333-3333-3333-333333333333","cwd":"/w/gamma","attachment":{"type":"invoked_skills","skills":[{"content":"Base directory for this skill: /Users/x/.claude/plugins/cache/mkt-one/ai-maestro-janitor/3.3.18/skills/janitor-arm"}]}}
+{"type":"user","timestamp":"2026-08-01T12:30:00.000Z","sessionId":"cccc3333-3333-3333-3333-333333333333","message":{"content":"<command-name>/reload-plugins</command-name>"}}

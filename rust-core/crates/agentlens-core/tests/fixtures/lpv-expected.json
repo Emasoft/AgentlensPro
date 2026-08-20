@@ -1,0 +1,410 @@
+{
+  "nowMs": 1785607200000,
+  "mtimes": {
+    "proj-b/sess-noskills.jsonl": 1785589200000,
+    "proj-b/sess-blind.jsonl": 1785592800000,
+    "proj-a/sess-ghost.jsonl": 1785596400000,
+    "proj-a/sess-replay.jsonl": 1785600000000,
+    "proj-b/sess-nosession.jsonl": 1785603600000
+  },
+  "compareCases": [
+    [
+      "1.0.10",
+      "1.0.9"
+    ],
+    [
+      "1.0.9",
+      "1.0.10"
+    ],
+    [
+      "3.4.0",
+      "3.3.18"
+    ],
+    [
+      "3.3.18",
+      "3.3.9"
+    ],
+    [
+      "1.2",
+      "1.2.0"
+    ],
+    [
+      "1.2.0",
+      "1.2"
+    ],
+    [
+      "2",
+      "10"
+    ],
+    [
+      "0.52.0",
+      "0.53.0"
+    ],
+    [
+      "1.0.0",
+      "1.0.0"
+    ],
+    [
+      "1.0.0-beta",
+      "1.0.0"
+    ],
+    [
+      "1.0.0",
+      "1.0.0-beta"
+    ],
+    [
+      "beta",
+      "alpha"
+    ],
+    [
+      "alpha",
+      "beta"
+    ],
+    [
+      "walkthrough",
+      "3.4.0"
+    ],
+    [
+      "3.4.0",
+      "walkthrough"
+    ]
+  ],
+  "compareSigns": [
+    1,
+    -1,
+    1,
+    1,
+    0,
+    0,
+    -1,
+    -1,
+    0,
+    0,
+    0,
+    1,
+    -1,
+    1,
+    -1
+  ],
+  "newestCached": {
+    "mkt-one/ai-maestro-janitor": "3.4.0",
+    "mkt-one/ponytail": "1.0.10",
+    "mkt-two/ai-maestro-janitor": "2.0.0"
+  },
+  "report": {
+    "rows": [
+      {
+        "session": "aaaa1111-1111-1111-1111-111111111111",
+        "marketplace": "mkt-one",
+        "plugin": "ai-maestro-janitor",
+        "loadedVersion": "3.3.18",
+        "versionsSeen": [
+          "3.3.9",
+          "3.3.18"
+        ],
+        "versionsSeenCount": 2,
+        "observations": 2,
+        "stale": true,
+        "lastObservationTs": 1785578700000,
+        "lastActivityTs": 1785596400000,
+        "project": "/w/alpha",
+        "newestCached": "3.4.0",
+        "ccVersion": "2.1.230"
+      },
+      {
+        "session": "cccc3333-3333-3333-3333-333333333333",
+        "marketplace": "mkt-one",
+        "plugin": "ai-maestro-janitor",
+        "loadedVersion": "3.3.18",
+        "versionsSeen": [
+          "3.3.18"
+        ],
+        "versionsSeenCount": 1,
+        "observations": 1,
+        "stale": "unknown",
+        "lastObservationTs": 1785585600000,
+        "lastActivityTs": 1785592800000,
+        "project": "/w/gamma",
+        "newestCached": "3.4.0",
+        "lastReloadTs": 1785587400000
+      },
+      {
+        "session": "sess-nosession",
+        "marketplace": "mkt-two",
+        "plugin": "ai-maestro-janitor",
+        "loadedVersion": "2.0.0",
+        "versionsSeen": [
+          "2.0.0"
+        ],
+        "versionsSeenCount": 1,
+        "observations": 1,
+        "stale": false,
+        "lastObservationTs": 1785592800000,
+        "lastActivityTs": 1785603600000,
+        "newestCached": "2.0.0"
+      },
+      {
+        "session": "bbbb2222-2222-2222-2222-222222222222",
+        "marketplace": "mkt-one",
+        "plugin": "ai-maestro-janitor",
+        "loadedVersion": "3.4.0",
+        "versionsSeen": [
+          "3.3.9",
+          "3.4.0"
+        ],
+        "versionsSeenCount": 2,
+        "observations": 2,
+        "stale": false,
+        "lastObservationTs": 1785582000000,
+        "lastActivityTs": 1785600000000,
+        "project": "/w/beta",
+        "newestCached": "3.4.0",
+        "ccVersion": "2.1.231"
+      },
+      {
+        "session": "aaaa1111-1111-1111-1111-111111111111",
+        "marketplace": "mkt-one",
+        "plugin": "ponytail",
+        "loadedVersion": "1.0.10",
+        "versionsSeen": [
+          "1.0.10"
+        ],
+        "versionsSeenCount": 1,
+        "observations": 1,
+        "stale": false,
+        "lastObservationTs": 1785578700000,
+        "lastActivityTs": 1785596400000,
+        "project": "/w/alpha",
+        "newestCached": "1.0.10",
+        "ccVersion": "2.1.230"
+      }
+    ],
+    "sessionsScanned": 5,
+    "sessionsWithSkillEvidence": 4,
+    "stale": 1,
+    "unknown": 1,
+    "newestCached": {
+      "mkt-one/ai-maestro-janitor": "3.4.0",
+      "mkt-one/ponytail": "1.0.10",
+      "mkt-two/ai-maestro-janitor": "2.0.0"
+    },
+    "activeMinutes": null,
+    "note": "No pid column: a session id cannot be mapped to an OS process from the transcript substrate, so lastActivityTs (transcript mtime) is the liveness proxy — use activeMinutes to scope it. sessionsScanned minus sessionsWithSkillEvidence is the blind spot: a session that invoked no plugin skill has no loaded-version evidence and is absent from rows, NOT current."
+  },
+  "filtered": {
+    "rows": [
+      {
+        "session": "aaaa1111-1111-1111-1111-111111111111",
+        "marketplace": "mkt-one",
+        "plugin": "ponytail",
+        "loadedVersion": "1.0.10",
+        "versionsSeen": [
+          "1.0.10"
+        ],
+        "versionsSeenCount": 1,
+        "observations": 1,
+        "stale": false,
+        "lastObservationTs": 1785578700000,
+        "lastActivityTs": 1785596400000,
+        "project": "/w/alpha",
+        "newestCached": "1.0.10",
+        "ccVersion": "2.1.230"
+      }
+    ],
+    "sessionsScanned": 5,
+    "sessionsWithSkillEvidence": 1,
+    "stale": 0,
+    "unknown": 0,
+    "newestCached": {
+      "mkt-one/ponytail": "1.0.10"
+    },
+    "activeMinutes": null,
+    "note": "No pid column: a session id cannot be mapped to an OS process from the transcript substrate, so lastActivityTs (transcript mtime) is the liveness proxy — use activeMinutes to scope it. sessionsScanned minus sessionsWithSkillEvidence is the blind spot: a session that invoked no plugin skill has no loaded-version evidence and is absent from rows, NOT current."
+  },
+  "filteredJanitor": {
+    "rows": [
+      {
+        "session": "aaaa1111-1111-1111-1111-111111111111",
+        "marketplace": "mkt-one",
+        "plugin": "ai-maestro-janitor",
+        "loadedVersion": "3.3.18",
+        "versionsSeen": [
+          "3.3.9",
+          "3.3.18"
+        ],
+        "versionsSeenCount": 2,
+        "observations": 2,
+        "stale": true,
+        "lastObservationTs": 1785578700000,
+        "lastActivityTs": 1785596400000,
+        "project": "/w/alpha",
+        "newestCached": "3.4.0",
+        "ccVersion": "2.1.230"
+      },
+      {
+        "session": "cccc3333-3333-3333-3333-333333333333",
+        "marketplace": "mkt-one",
+        "plugin": "ai-maestro-janitor",
+        "loadedVersion": "3.3.18",
+        "versionsSeen": [
+          "3.3.18"
+        ],
+        "versionsSeenCount": 1,
+        "observations": 1,
+        "stale": "unknown",
+        "lastObservationTs": 1785585600000,
+        "lastActivityTs": 1785592800000,
+        "project": "/w/gamma",
+        "newestCached": "3.4.0",
+        "lastReloadTs": 1785587400000
+      },
+      {
+        "session": "sess-nosession",
+        "marketplace": "mkt-two",
+        "plugin": "ai-maestro-janitor",
+        "loadedVersion": "2.0.0",
+        "versionsSeen": [
+          "2.0.0"
+        ],
+        "versionsSeenCount": 1,
+        "observations": 1,
+        "stale": false,
+        "lastObservationTs": 1785592800000,
+        "lastActivityTs": 1785603600000,
+        "newestCached": "2.0.0"
+      },
+      {
+        "session": "bbbb2222-2222-2222-2222-222222222222",
+        "marketplace": "mkt-one",
+        "plugin": "ai-maestro-janitor",
+        "loadedVersion": "3.4.0",
+        "versionsSeen": [
+          "3.3.9",
+          "3.4.0"
+        ],
+        "versionsSeenCount": 2,
+        "observations": 2,
+        "stale": false,
+        "lastObservationTs": 1785582000000,
+        "lastActivityTs": 1785600000000,
+        "project": "/w/beta",
+        "newestCached": "3.4.0",
+        "ccVersion": "2.1.231"
+      }
+    ],
+    "sessionsScanned": 5,
+    "sessionsWithSkillEvidence": 4,
+    "stale": 1,
+    "unknown": 1,
+    "newestCached": {
+      "mkt-one/ai-maestro-janitor": "3.4.0",
+      "mkt-two/ai-maestro-janitor": "2.0.0"
+    },
+    "activeMinutes": null,
+    "note": "No pid column: a session id cannot be mapped to an OS process from the transcript substrate, so lastActivityTs (transcript mtime) is the liveness proxy — use activeMinutes to scope it. sessionsScanned minus sessionsWithSkillEvidence is the blind spot: a session that invoked no plugin skill has no loaded-version evidence and is absent from rows, NOT current."
+  },
+  "staleOnly": {
+    "rows": [
+      {
+        "session": "aaaa1111-1111-1111-1111-111111111111",
+        "marketplace": "mkt-one",
+        "plugin": "ai-maestro-janitor",
+        "loadedVersion": "3.3.18",
+        "versionsSeen": [
+          "3.3.9",
+          "3.3.18"
+        ],
+        "versionsSeenCount": 2,
+        "observations": 2,
+        "stale": true,
+        "lastObservationTs": 1785578700000,
+        "lastActivityTs": 1785596400000,
+        "project": "/w/alpha",
+        "newestCached": "3.4.0",
+        "ccVersion": "2.1.230"
+      },
+      {
+        "session": "cccc3333-3333-3333-3333-333333333333",
+        "marketplace": "mkt-one",
+        "plugin": "ai-maestro-janitor",
+        "loadedVersion": "3.3.18",
+        "versionsSeen": [
+          "3.3.18"
+        ],
+        "versionsSeenCount": 1,
+        "observations": 1,
+        "stale": "unknown",
+        "lastObservationTs": 1785585600000,
+        "lastActivityTs": 1785592800000,
+        "project": "/w/gamma",
+        "newestCached": "3.4.0",
+        "lastReloadTs": 1785587400000
+      }
+    ],
+    "sessionsScanned": 5,
+    "sessionsWithSkillEvidence": 4,
+    "stale": 1,
+    "unknown": 1,
+    "newestCached": {
+      "mkt-one/ai-maestro-janitor": "3.4.0",
+      "mkt-one/ponytail": "1.0.10",
+      "mkt-two/ai-maestro-janitor": "2.0.0"
+    },
+    "activeMinutes": null,
+    "note": "No pid column: a session id cannot be mapped to an OS process from the transcript substrate, so lastActivityTs (transcript mtime) is the liveness proxy — use activeMinutes to scope it. sessionsScanned minus sessionsWithSkillEvidence is the blind spot: a session that invoked no plugin skill has no loaded-version evidence and is absent from rows, NOT current."
+  },
+  "active90": {
+    "rows": [
+      {
+        "session": "sess-nosession",
+        "marketplace": "mkt-two",
+        "plugin": "ai-maestro-janitor",
+        "loadedVersion": "2.0.0",
+        "versionsSeen": [
+          "2.0.0"
+        ],
+        "versionsSeenCount": 1,
+        "observations": 1,
+        "stale": false,
+        "lastObservationTs": 1785592800000,
+        "lastActivityTs": 1785603600000,
+        "newestCached": "2.0.0"
+      }
+    ],
+    "sessionsScanned": 1,
+    "sessionsWithSkillEvidence": 1,
+    "stale": 0,
+    "unknown": 0,
+    "newestCached": {
+      "mkt-one/ai-maestro-janitor": "3.4.0",
+      "mkt-one/ponytail": "1.0.10",
+      "mkt-two/ai-maestro-janitor": "2.0.0"
+    },
+    "activeMinutes": 90,
+    "note": "No pid column: a session id cannot be mapped to an OS process from the transcript substrate, so lastActivityTs (transcript mtime) is the liveness proxy — use activeMinutes to scope it. sessionsScanned minus sessionsWithSkillEvidence is the blind spot: a session that invoked no plugin skill has no loaded-version evidence and is absent from rows, NOT current."
+  },
+  "active0": {
+    "rows": [],
+    "sessionsScanned": 0,
+    "sessionsWithSkillEvidence": 0,
+    "stale": 0,
+    "unknown": 0,
+    "newestCached": {
+      "mkt-one/ai-maestro-janitor": "3.4.0",
+      "mkt-one/ponytail": "1.0.10",
+      "mkt-two/ai-maestro-janitor": "2.0.0"
+    },
+    "activeMinutes": 0,
+    "note": "No pid column: a session id cannot be mapped to an OS process from the transcript substrate, so lastActivityTs (transcript mtime) is the liveness proxy — use activeMinutes to scope it. sessionsScanned minus sessionsWithSkillEvidence is the blind spot: a session that invoked no plugin skill has no loaded-version evidence and is absent from rows, NOT current."
+  },
+  "filteredMissing": {
+    "rows": [],
+    "sessionsScanned": 5,
+    "sessionsWithSkillEvidence": 0,
+    "stale": 0,
+    "unknown": 0,
+    "newestCached": {},
+    "activeMinutes": null,
+    "note": "No pid column: a session id cannot be mapped to an OS process from the transcript substrate, so lastActivityTs (transcript mtime) is the liveness proxy — use activeMinutes to scope it. sessionsScanned minus sessionsWithSkillEvidence is the blind spot: a session that invoked no plugin skill has no loaded-version evidence and is absent from rows, NOT current."
+  }
+}
