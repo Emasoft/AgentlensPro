@@ -1898,3 +1898,108 @@ pub fn predict_session_cost(sessions: &[Value], args: &Value, now_ms: f64) -> Va
     m.insert("note".into(), "a DISTRIBUTION over real matched precedents (keyword + type + size-band similarity), not a point guess. p50 is the central estimate; p75 the budget-safe one. Model changes shift costs — check the precedents' models against the model you will run.".into());
     Value::Object(m)
 }
+
+/// `get_context_growth` (mcpServer.ts handleGetContextGrowth) — per-turn prompt growth for ONE
+/// session, plus the overall cache hit rate.
+///
+/// An EMPTY growth list returns a MESSAGE, not an empty report: a session with no turn indices (an
+/// OTEL session, or an empty timeline) is undiagnosable rather than measured-at-zero, and a report of
+/// zeros would read as the latter.
+pub fn get_context_growth(card: &Value, timeline: &[Value]) -> Value {
+    let growth = compute_turn_growth(timeline);
+    if growth.is_empty() {
+        let mut m = Map::new();
+        m.insert("sessionId".into(), card.get("sessionId").cloned().unwrap_or(Value::Null));
+        m.insert(
+            "message".into(),
+            "No per-turn token data (OTEL session without turn indices, or empty timeline).".into(),
+        );
+        return Value::Object(m);
+    }
+    let peak = growth.iter().map(|g| f(g, "promptTokens")).fold(0.0, f64::max);
+    let total_create: f64 = growth.iter().map(|g| f(g, "cacheCreateTokens")).sum();
+    let total_read: f64 = growth.iter().map(|g| f(g, "cacheReadTokens")).sum();
+    let denom = total_read + total_create;
+    let mut m = Map::new();
+    m.insert("sessionId".into(), card.get("sessionId").cloned().unwrap_or(Value::Null));
+    m.insert("model".into(), card.get("model").cloned().unwrap_or(Value::Null));
+    m.insert("turns".into(), num(growth.len() as f64));
+    m.insert("peakPromptTokens".into(), num(peak));
+    // `s.peakContextPerTurn ?? null` — NULLISH, so a persisted 0 survives as 0 rather than becoming
+    // null: "measured no growth" and "never persisted" are different facts.
+    m.insert("persistedPeakContextPerTurn".into(), card.get("peakContextPerTurn").filter(|v| !v.is_null()).cloned().unwrap_or(Value::Null));
+    m.insert(
+        "overallCacheHitRatePct".into(),
+        num(if denom > 0.0 { crate::summarize::helpers::js_math_round(total_read / denom * 100.0) } else { 0.0 }),
+    );
+    m.insert("totalCacheCreatedTokens".into(), num(total_create));
+    // `.slice(0, 300)` — a positive cap, so this is a plain take (unlike the negative-limit slice
+    // trap elsewhere in this file).
+    m.insert("perTurn".into(), Value::Array(growth.into_iter().take(300).collect()));
+    Value::Object(m)
+}
+
+/// `get_subagent_tree` (mcpServer.ts handleGetSubagentTree) — one session's fan-out, rolled up, with
+/// the spawn-cost advisor's antipattern detections.
+///
+/// The tree is always rooted at the PARENT: asking about a child answers about its whole family, so a
+/// fan-out's cost is never reported as just one sibling's. A parent id that is not itself in the card
+/// set falls back to the queried session (`?? s`) rather than erroring — a missing parent card is a
+/// coverage gap, not a bad request.
+pub fn get_subagent_tree(sessions: &[Value], session_id: &str, now_ms: f64) -> Value {
+    let Some(card) = sessions.iter().find(|x| x.get("sessionId").and_then(Value::as_str) == Some(session_id)) else {
+        let mut m = Map::new();
+        m.insert("error".into(), Value::String(format!("Session {session_id} not found.")));
+        return Value::Object(m);
+    };
+    let parent_id = card.get("parentSessionId").and_then(Value::as_str).filter(|p| !p.is_empty());
+    let root = match parent_id {
+        Some(p) => sessions.iter().find(|x| x.get("sessionId").and_then(Value::as_str) == Some(p)).unwrap_or(card),
+        None => card,
+    };
+    let root_id = root.get("sessionId").and_then(Value::as_str).unwrap_or("");
+    let children = sub_agent_children(sessions, root_id, now_ms);
+    let rolled_up_tokens = f(root, "inputTokens") + f(root, "outputTokens") + children.iter().map(|c| f(c, "totalTokens")).sum::<f64>();
+    let rolled_up_cost =
+        js_to_fixed_num(session_cost(root, now_ms) + children.iter().map(|c| f(c, "cost_usd")).sum::<f64>(), 4);
+
+    // TRDD-62E8UU41: the rollup + detections run over the FULL child CARDS, not the reduced `children`
+    // shape above — that shape lacks the cache buckets every detector reads, so passing it would make
+    // every child look cache-free and silently disable the advisor. `session_cost` is the same
+    // normalizing pricer used for rolledUpCost, so the two figures stay consistent.
+    let child_cards: Vec<Value> = sessions
+        .iter()
+        .filter(|c| {
+            c.get("parentSessionId").and_then(Value::as_str) == Some(root_id)
+                && c.get("sessionId").and_then(Value::as_str) != Some(root_id)
+        })
+        .cloned()
+        .collect();
+    let cost_of = |c: &Value| session_cost(c, now_ms);
+    let spawn_rollup = crate::spawn_rollup::build_spawn_rollup(
+        &child_cards,
+        root.get("model").and_then(Value::as_str).unwrap_or(""),
+        &cost_of,
+    );
+
+    let mut r = Map::new();
+    r.insert("sessionId".into(), root.get("sessionId").cloned().unwrap_or(Value::Null));
+    r.insert("model".into(), root.get("model").cloned().unwrap_or(Value::Null));
+    r.insert("ownTokens".into(), num(f(root, "inputTokens") + f(root, "outputTokens")));
+    r.insert("ownCost_usd".into(), num(js_to_fixed_num(session_cost(root, now_ms), 4)));
+
+    let mut m = Map::new();
+    m.insert("root".into(), Value::Object(r));
+    m.insert("childCount".into(), num(children.len() as f64));
+    let empty = children.is_empty();
+    m.insert("children".into(), Value::Array(children));
+    m.insert("rolledUpTokens".into(), num(rolled_up_tokens));
+    m.insert("rolledUpCost_usd".into(), num(rolled_up_cost));
+    m.insert("spawnRollup".into(), spawn_rollup);
+    // `note: cond ? '…' : undefined` — the key is DECLARED in the literal but DROPS when undefined,
+    // so a session WITH children carries no note at all.
+    if empty {
+        m.insert("note".into(), "No sub-agent children recorded for this session.".into());
+    }
+    Value::Object(m)
+}

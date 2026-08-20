@@ -1398,6 +1398,42 @@ async fn handle(
                         .map_err(|e| format!("skill attribution join failed: {e}"))?;
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
+                    "get_context_growth" => {
+                        let now = crate::now_ms();
+                        let session_id = s("sessionId").unwrap_or_default();
+                        // One lock: the cards AND the resolved timeline (the same reparse-on-demand
+                        // + OTEL graft path row 30 uses), then straight into the pure shaper.
+                        let (card, timeline) = {
+                            let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                            let summary = st.build_session_summary(now as f64);
+                            let card = summary
+                                .get("sessions")
+                                .and_then(Value::as_array)
+                                .and_then(|v| v.iter().find(|c| c.get("sessionId").and_then(Value::as_str) == Some(session_id.as_str())).cloned());
+                            drop(summary);
+                            let timeline: Vec<Value> = resolve_session_card(&mut st, &session_id, now)
+                                .and_then(|c| c.get("timeline").and_then(Value::as_array).cloned())
+                                .unwrap_or_default();
+                            (card, timeline)
+                        };
+                        let payload = match card {
+                            Some(c) => crate::mcp_tools::get_context_growth(&c, &timeline),
+                            // The TS builds this error in the DISPATCH case, not the handler — an
+                            // unknown session is a bad request, not an undiagnosable session.
+                            None => serde_json::json!({ "error": format!("Session {session_id} not found.") }),
+                        };
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
+                    }
+                    "get_subagent_tree" => {
+                        let now = crate::now_ms() as f64;
+                        let sessions = {
+                            let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                            let summary = st.build_session_summary(now);
+                            summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default()
+                        };
+                        let payload = crate::mcp_tools::get_subagent_tree(&sessions, &s("sessionId").unwrap_or_default(), now);
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
+                    }
                     "get_loaded_plugin_versions" => {
                         // Same P4s choreography as get_skill_attribution: roots under the lock,
                         // then UNLOCK before the disk walk — this one reads every transcript AND

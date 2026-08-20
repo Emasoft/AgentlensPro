@@ -60,6 +60,7 @@ pub mod runtime_inventory;
 pub mod server_stats;
 pub mod skill_attribution;
 pub mod span_window;
+pub mod spawn_rollup;
 pub mod statusline_store;
 pub mod summarize;
 pub mod token_estimator;

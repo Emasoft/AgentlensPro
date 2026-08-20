@@ -1,0 +1,602 @@
+{
+  "nowMs": 1785585600000,
+  "sessions": [
+    {
+      "sessionId": "parent-1",
+      "model": "claude-opus-5",
+      "workspace": "/w/alpha",
+      "inputTokens": 5000,
+      "outputTokens": 2000,
+      "cacheReadTokens": 400000,
+      "cacheCreateTokens": 20000,
+      "turns": 40,
+      "startTime": 1785582000000,
+      "lastActivity": 1785585600000
+    },
+    {
+      "sessionId": "c1",
+      "model": "claude-opus-5",
+      "workspace": "/w/alpha",
+      "inputTokens": 100,
+      "outputTokens": 50,
+      "cacheReadTokens": 0,
+      "cacheCreateTokens": 300000,
+      "turns": 1,
+      "startTime": 1785582000000,
+      "lastActivity": 1785585600000,
+      "parentSessionId": "parent-1",
+      "spawnKind": "fresh",
+      "spawnedByTurn": 12
+    },
+    {
+      "sessionId": "c2",
+      "model": "claude-opus-5",
+      "workspace": "/w/alpha",
+      "inputTokens": 100,
+      "outputTokens": 50,
+      "cacheReadTokens": 1000,
+      "cacheCreateTokens": 250000,
+      "turns": 1,
+      "startTime": 1785582000000,
+      "lastActivity": 1785585600000,
+      "parentSessionId": "parent-1",
+      "spawnKind": "worktree",
+      "spawnIsolation": "worktree",
+      "spawnedByTurn": 12
+    },
+    {
+      "sessionId": "c3",
+      "model": "claude-opus-5",
+      "workspace": "/w/alpha",
+      "inputTokens": 100,
+      "outputTokens": 50,
+      "cacheReadTokens": 5000,
+      "cacheCreateTokens": 300000,
+      "turns": 1,
+      "startTime": 1785582000000,
+      "lastActivity": 1785585600000,
+      "parentSessionId": "parent-1",
+      "spawnKind": "fork",
+      "spawnedByTurn": 12
+    },
+    {
+      "sessionId": "c4",
+      "model": "claude-opus-5",
+      "workspace": "/w/alpha",
+      "inputTokens": 100,
+      "outputTokens": 50,
+      "cacheReadTokens": 0,
+      "cacheCreateTokens": 180000,
+      "turns": 1,
+      "startTime": 1785582000000,
+      "lastActivity": 1785585600000,
+      "parentSessionId": "parent-1",
+      "spawnKind": "worktree",
+      "spawnIsolation": "worktree",
+      "spawnedByTurn": 13
+    },
+    {
+      "sessionId": "c5",
+      "model": "claude-opus-5",
+      "workspace": "/w/alpha",
+      "inputTokens": 100,
+      "outputTokens": 50,
+      "cacheReadTokens": 180000,
+      "cacheCreateTokens": 200000,
+      "turns": 1,
+      "startTime": 1785582000000,
+      "lastActivity": 1785585600000,
+      "parentSessionId": "parent-1",
+      "spawnKind": "fork",
+      "spawnedByTurn": 14
+    },
+    {
+      "sessionId": "c6",
+      "model": "claude-sonnet-5",
+      "workspace": "/w/alpha",
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "cacheReadTokens": 0,
+      "cacheCreateTokens": 0,
+      "turns": 1,
+      "startTime": 1785582000000,
+      "lastActivity": 1785585600000,
+      "parentSessionId": "parent-1",
+      "spawnAsync": true,
+      "spawnedByTurn": 15
+    },
+    {
+      "sessionId": "solo-1",
+      "model": "claude-opus-5",
+      "workspace": "/w/alpha",
+      "inputTokens": 10,
+      "outputTokens": 5,
+      "cacheReadTokens": 0,
+      "cacheCreateTokens": 0,
+      "turns": 2,
+      "startTime": 1785582000000,
+      "lastActivity": 1785585600000
+    }
+  ],
+  "mixed": [
+    {
+      "sessionId": "m1",
+      "model": "claude-sonnet-5",
+      "workspace": "/w/alpha",
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "cacheReadTokens": 0,
+      "cacheCreateTokens": 200000,
+      "turns": 1,
+      "startTime": 1785582000000,
+      "lastActivity": 1785585600000,
+      "spawnKind": "fresh"
+    },
+    {
+      "sessionId": "m2",
+      "model": "claude-opus-5",
+      "workspace": "/w/alpha",
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "cacheReadTokens": 0,
+      "cacheCreateTokens": 150000,
+      "turns": 1,
+      "startTime": 1785582000000,
+      "lastActivity": 1785585600000,
+      "spawnKind": "fresh",
+      "spawnModelOverride": "claude-haiku-4-5"
+    },
+    {
+      "sessionId": "m3",
+      "model": "claude-opus-5",
+      "workspace": "/w/alpha",
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "cacheReadTokens": 0,
+      "cacheCreateTokens": 150000,
+      "turns": 1,
+      "startTime": 1785582000000,
+      "lastActivity": 1785585600000,
+      "spawnKind": "fresh",
+      "spawnModelOverride": ""
+    }
+  ],
+  "timeline": [
+    {
+      "turn": 1,
+      "inputTokens": 100,
+      "cacheReadTokens": 0,
+      "cacheCreateTokens": 50000,
+      "outputTokens": 200
+    },
+    {
+      "turn": 1,
+      "inputTokens": 50,
+      "cacheReadTokens": 0,
+      "cacheCreateTokens": 0,
+      "outputTokens": 100
+    },
+    {
+      "turn": 2,
+      "inputTokens": 20,
+      "cacheReadTokens": 50000,
+      "cacheCreateTokens": 2000,
+      "outputTokens": 300
+    },
+    {
+      "turn": 2,
+      "type": "background",
+      "inputTokens": 999999,
+      "cacheReadTokens": 0,
+      "cacheCreateTokens": 0,
+      "outputTokens": 0
+    },
+    {
+      "inputTokens": 777,
+      "cacheReadTokens": 0,
+      "cacheCreateTokens": 0,
+      "outputTokens": 0
+    },
+    {
+      "turn": 3,
+      "inputTokens": 10,
+      "cacheReadTokens": 120000,
+      "cacheCreateTokens": 0,
+      "outputTokens": 50
+    }
+  ],
+  "rollup": {
+    "childCount": 6,
+    "totalInputTokens": 500,
+    "totalOutputTokens": 250,
+    "totalCacheReadTokens": 186000,
+    "totalCacheCreateTokens": 1230000,
+    "totalCostUsd": 7.7843,
+    "asyncUnreportedChildren": 1,
+    "kindMix": {
+      "fresh": 1,
+      "fork": 2,
+      "worktree": 2,
+      "fleet": 0,
+      "modelOverride": 0,
+      "unknown": 1
+    },
+    "detections": [
+      {
+        "code": "FLEET-COLD",
+        "severity": "HIGH",
+        "childCount": 4,
+        "wastedTokens": 1030000,
+        "wastedCostUsd": 6.4435,
+        "message": "4 cold children each re-billed a large inherited prefix (Σ 1.0M cache-create, $6.44) instead of reading the parent cache.",
+        "remediation": "Fork the children (subagent_type: \"fork\") so each reads the parent cache, or trim the inherited context before fanning out."
+      },
+      {
+        "code": "WORKTREE-SCATTER",
+        "severity": "MEDIUM",
+        "childCount": 2,
+        "wastedTokens": 430000,
+        "wastedCostUsd": 2.6895,
+        "message": "2 worktree-isolated children ran cache-heavy work (Σ 430k cache-create, $2.69); each worktree's own cwd is a separate cache scope that shares nothing with the parent.",
+        "remediation": "Run cache-heavy fan-out in the parent cwd (no worktree isolation) so children share the parent prefix; reserve worktrees for work that truly needs an isolated checkout."
+      }
+    ]
+  },
+  "rollupEmpty": {
+    "childCount": 0,
+    "totalInputTokens": 0,
+    "totalOutputTokens": 0,
+    "totalCacheReadTokens": 0,
+    "totalCacheCreateTokens": 0,
+    "totalCostUsd": 0,
+    "kindMix": {
+      "fresh": 0,
+      "fork": 0,
+      "worktree": 0,
+      "fleet": 0,
+      "modelOverride": 0,
+      "unknown": 0
+    },
+    "detections": []
+  },
+  "detectionsMixed": [
+    {
+      "code": "FLEET-COLD",
+      "severity": "HIGH",
+      "childCount": 3,
+      "wastedTokens": 500000,
+      "wastedCostUsd": 3.125,
+      "message": "3 cold children each re-billed a large inherited prefix (Σ 500k cache-create, $3.13) instead of reading the parent cache.",
+      "remediation": "Fork the children (subagent_type: \"fork\") so each reads the parent cache, or trim the inherited context before fanning out."
+    },
+    {
+      "code": "MODEL-MIX",
+      "severity": "MEDIUM",
+      "childCount": 2,
+      "wastedTokens": 350000,
+      "wastedCostUsd": 2.1875,
+      "message": "2 children ran on a different model than the parent (claude-opus-5) with large prefixes (Σ 350k cache-create, $2.19); caches are model-specific, so none reused the parent cache.",
+      "remediation": "Keep the fan-out on the parent model unless a child truly needs another model — a model override starts a separate cache the child must re-warm."
+    }
+  ],
+  "detectionsNoParentModel": [
+    {
+      "code": "FLEET-COLD",
+      "severity": "HIGH",
+      "childCount": 3,
+      "wastedTokens": 500000,
+      "wastedCostUsd": 3.125,
+      "message": "3 cold children each re-billed a large inherited prefix (Σ 500k cache-create, $3.13) instead of reading the parent cache.",
+      "remediation": "Fork the children (subagent_type: \"fork\") so each reads the parent cache, or trim the inherited context before fanning out."
+    }
+  ],
+  "tree": {
+    "root": {
+      "sessionId": "parent-1",
+      "model": "claude-opus-5",
+      "ownTokens": 7000,
+      "ownCost_usd": 0.4
+    },
+    "childCount": 6,
+    "children": [
+      {
+        "sessionId": "c1",
+        "spawnedByTurn": 12,
+        "spawnKind": "fresh",
+        "warm": false,
+        "model": "claude-opus-5",
+        "modelOverride": null,
+        "isolation": null,
+        "totalTokens": 150,
+        "cost_usd": 1.8767
+      },
+      {
+        "sessionId": "c2",
+        "spawnedByTurn": 12,
+        "spawnKind": "worktree",
+        "warm": false,
+        "model": "claude-opus-5",
+        "modelOverride": null,
+        "isolation": "worktree",
+        "totalTokens": 150,
+        "cost_usd": 1.5647
+      },
+      {
+        "sessionId": "c3",
+        "spawnedByTurn": 12,
+        "spawnKind": "fork",
+        "warm": true,
+        "model": "claude-opus-5",
+        "modelOverride": null,
+        "isolation": null,
+        "totalTokens": 150,
+        "cost_usd": 1.8792
+      },
+      {
+        "sessionId": "c4",
+        "spawnedByTurn": 13,
+        "spawnKind": "worktree",
+        "warm": false,
+        "model": "claude-opus-5",
+        "modelOverride": null,
+        "isolation": "worktree",
+        "totalTokens": 150,
+        "cost_usd": 1.1267
+      },
+      {
+        "sessionId": "c5",
+        "spawnedByTurn": 14,
+        "spawnKind": "fork",
+        "warm": true,
+        "model": "claude-opus-5",
+        "modelOverride": null,
+        "isolation": null,
+        "totalTokens": 150,
+        "cost_usd": 1.3417
+      },
+      {
+        "sessionId": "c6",
+        "spawnedByTurn": 15,
+        "spawnKind": "fresh",
+        "warm": false,
+        "model": "claude-sonnet-5",
+        "modelOverride": null,
+        "isolation": null,
+        "totalTokens": 0,
+        "cost_usd": 0,
+        "asyncTokensUnknown": true
+      }
+    ],
+    "rolledUpTokens": 7750,
+    "rolledUpCost_usd": 8.189,
+    "spawnRollup": {
+      "childCount": 6,
+      "totalInputTokens": 500,
+      "totalOutputTokens": 250,
+      "totalCacheReadTokens": 186000,
+      "totalCacheCreateTokens": 1230000,
+      "totalCostUsd": 7.7893,
+      "asyncUnreportedChildren": 1,
+      "kindMix": {
+        "fresh": 1,
+        "fork": 2,
+        "worktree": 2,
+        "fleet": 0,
+        "modelOverride": 0,
+        "unknown": 1
+      },
+      "detections": [
+        {
+          "code": "FLEET-COLD",
+          "severity": "HIGH",
+          "childCount": 4,
+          "wastedTokens": 1030000,
+          "wastedCostUsd": 6.4475,
+          "message": "4 cold children each re-billed a large inherited prefix (Σ 1.0M cache-create, $6.45) instead of reading the parent cache.",
+          "remediation": "Fork the children (subagent_type: \"fork\") so each reads the parent cache, or trim the inherited context before fanning out."
+        },
+        {
+          "code": "WORKTREE-SCATTER",
+          "severity": "MEDIUM",
+          "childCount": 2,
+          "wastedTokens": 430000,
+          "wastedCostUsd": 2.6915,
+          "message": "2 worktree-isolated children ran cache-heavy work (Σ 430k cache-create, $2.69); each worktree's own cwd is a separate cache scope that shares nothing with the parent.",
+          "remediation": "Run cache-heavy fan-out in the parent cwd (no worktree isolation) so children share the parent prefix; reserve worktrees for work that truly needs an isolated checkout."
+        }
+      ]
+    }
+  },
+  "treeFromChild": {
+    "root": {
+      "sessionId": "parent-1",
+      "model": "claude-opus-5",
+      "ownTokens": 7000,
+      "ownCost_usd": 0.4
+    },
+    "childCount": 6,
+    "children": [
+      {
+        "sessionId": "c1",
+        "spawnedByTurn": 12,
+        "spawnKind": "fresh",
+        "warm": false,
+        "model": "claude-opus-5",
+        "modelOverride": null,
+        "isolation": null,
+        "totalTokens": 150,
+        "cost_usd": 1.8767
+      },
+      {
+        "sessionId": "c2",
+        "spawnedByTurn": 12,
+        "spawnKind": "worktree",
+        "warm": false,
+        "model": "claude-opus-5",
+        "modelOverride": null,
+        "isolation": "worktree",
+        "totalTokens": 150,
+        "cost_usd": 1.5647
+      },
+      {
+        "sessionId": "c3",
+        "spawnedByTurn": 12,
+        "spawnKind": "fork",
+        "warm": true,
+        "model": "claude-opus-5",
+        "modelOverride": null,
+        "isolation": null,
+        "totalTokens": 150,
+        "cost_usd": 1.8792
+      },
+      {
+        "sessionId": "c4",
+        "spawnedByTurn": 13,
+        "spawnKind": "worktree",
+        "warm": false,
+        "model": "claude-opus-5",
+        "modelOverride": null,
+        "isolation": "worktree",
+        "totalTokens": 150,
+        "cost_usd": 1.1267
+      },
+      {
+        "sessionId": "c5",
+        "spawnedByTurn": 14,
+        "spawnKind": "fork",
+        "warm": true,
+        "model": "claude-opus-5",
+        "modelOverride": null,
+        "isolation": null,
+        "totalTokens": 150,
+        "cost_usd": 1.3417
+      },
+      {
+        "sessionId": "c6",
+        "spawnedByTurn": 15,
+        "spawnKind": "fresh",
+        "warm": false,
+        "model": "claude-sonnet-5",
+        "modelOverride": null,
+        "isolation": null,
+        "totalTokens": 0,
+        "cost_usd": 0,
+        "asyncTokensUnknown": true
+      }
+    ],
+    "rolledUpTokens": 7750,
+    "rolledUpCost_usd": 8.189,
+    "spawnRollup": {
+      "childCount": 6,
+      "totalInputTokens": 500,
+      "totalOutputTokens": 250,
+      "totalCacheReadTokens": 186000,
+      "totalCacheCreateTokens": 1230000,
+      "totalCostUsd": 7.7893,
+      "asyncUnreportedChildren": 1,
+      "kindMix": {
+        "fresh": 1,
+        "fork": 2,
+        "worktree": 2,
+        "fleet": 0,
+        "modelOverride": 0,
+        "unknown": 1
+      },
+      "detections": [
+        {
+          "code": "FLEET-COLD",
+          "severity": "HIGH",
+          "childCount": 4,
+          "wastedTokens": 1030000,
+          "wastedCostUsd": 6.4475,
+          "message": "4 cold children each re-billed a large inherited prefix (Σ 1.0M cache-create, $6.45) instead of reading the parent cache.",
+          "remediation": "Fork the children (subagent_type: \"fork\") so each reads the parent cache, or trim the inherited context before fanning out."
+        },
+        {
+          "code": "WORKTREE-SCATTER",
+          "severity": "MEDIUM",
+          "childCount": 2,
+          "wastedTokens": 430000,
+          "wastedCostUsd": 2.6915,
+          "message": "2 worktree-isolated children ran cache-heavy work (Σ 430k cache-create, $2.69); each worktree's own cwd is a separate cache scope that shares nothing with the parent.",
+          "remediation": "Run cache-heavy fan-out in the parent cwd (no worktree isolation) so children share the parent prefix; reserve worktrees for work that truly needs an isolated checkout."
+        }
+      ]
+    }
+  },
+  "treeSolo": {
+    "root": {
+      "sessionId": "solo-1",
+      "model": "claude-opus-5",
+      "ownTokens": 15,
+      "ownCost_usd": 0.0002
+    },
+    "childCount": 0,
+    "children": [],
+    "rolledUpTokens": 15,
+    "rolledUpCost_usd": 0.0002,
+    "spawnRollup": {
+      "childCount": 0,
+      "totalInputTokens": 0,
+      "totalOutputTokens": 0,
+      "totalCacheReadTokens": 0,
+      "totalCacheCreateTokens": 0,
+      "totalCostUsd": 0,
+      "kindMix": {
+        "fresh": 0,
+        "fork": 0,
+        "worktree": 0,
+        "fleet": 0,
+        "modelOverride": 0,
+        "unknown": 0
+      },
+      "detections": []
+    },
+    "note": "No sub-agent children recorded for this session."
+  },
+  "treeMissing": {
+    "error": "Session nope not found."
+  },
+  "growth": {
+    "sessionId": "parent-1",
+    "model": "claude-opus-5",
+    "turns": 3,
+    "peakPromptTokens": 120010,
+    "persistedPeakContextPerTurn": null,
+    "overallCacheHitRatePct": 77,
+    "totalCacheCreatedTokens": 52000,
+    "perTurn": [
+      {
+        "turn": 1,
+        "promptTokens": 50150,
+        "cacheReadTokens": 0,
+        "cacheCreateTokens": 50000,
+        "newInputTokens": 150,
+        "outputTokens": 300,
+        "hitRatePct": 0
+      },
+      {
+        "turn": 2,
+        "promptTokens": 52020,
+        "cacheReadTokens": 50000,
+        "cacheCreateTokens": 2000,
+        "newInputTokens": 20,
+        "outputTokens": 300,
+        "hitRatePct": 96
+      },
+      {
+        "turn": 3,
+        "promptTokens": 120010,
+        "cacheReadTokens": 120000,
+        "cacheCreateTokens": 0,
+        "newInputTokens": 10,
+        "outputTokens": 50,
+        "hitRatePct": 100
+      }
+    ]
+  },
+  "growthEmpty": {
+    "sessionId": "parent-1",
+    "message": "No per-turn token data (OTEL session without turn indices, or empty timeline)."
+  }
+}
