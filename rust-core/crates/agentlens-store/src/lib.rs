@@ -24,6 +24,10 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+// Re-exported so downstream crates (agentlens-core's statusline store) share ONE duckdb build —
+// a second `duckdb` dependency would compile the bundled engine twice and risk version skew.
+pub use duckdb;
+
 use duckdb::Connection;
 use sections::{reassemble, sectionize, sha256_hex, Part};
 

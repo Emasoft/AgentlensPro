@@ -171,6 +171,37 @@ fn main() {
             }
         }
     });
+    // The statusline store's disk-side chores (row 5). Purge once at boot (server.ts:852
+    // purgeStatusline), then a 60s seal task — sealing runs DuckDB over whole WALs, so it
+    // deliberately shares only the root path + the Arc'd counters with the store, NEVER the
+    // state lock (server.ts:1004 statuslineSealTimer).
+    let (sl_root, sl_counters) = {
+        let st = state.lock().expect("state");
+        (st.statusline.root.clone(), st.statusline.counters.clone())
+    };
+    let sl_vars: std::collections::HashMap<String, String> = std::env::vars().collect();
+    {
+        let (removed, freed) = agentlens_core::statusline_store::purge(
+            &sl_root,
+            agentlens_core::statusline_store::retention_days(&sl_vars),
+            agentlens_core::now_ms() as f64,
+        );
+        if !removed.is_empty() {
+            println!("alcore: statusline retention: purged {} partition(s), {:.1}MB", removed.len(), freed as f64 / 1048576.0);
+        }
+    }
+    rt.spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(60));
+        loop {
+            tick.tick().await;
+            let (root, counters, vars) = (sl_root.clone(), sl_counters.clone(), sl_vars.clone());
+            // On the blocking pool: a seal decompresses + re-encodes a whole WAL chunk.
+            let _ = tokio::task::spawn_blocking(move || {
+                agentlens_core::statusline_store::maybe_seal(&root, &counters, &vars, agentlens_core::now_ms() as f64)
+            })
+            .await;
+        }
+    });
     let ui_addr: std::net::SocketAddr = format!("{bind}:{ui_port}").parse().unwrap_or_else(|_| usage("bad bind/ui-port"));
     let serve = agentlens_core::serve_otlp(addr, state.clone(), |bound| {
         println!("alcore: OTLP listening on http://{bound}");
@@ -208,6 +239,9 @@ fn main() {
     }
     if let Ok(mut st) = state.lock() {
         st.flush_spans();
+        // StatuslineStore.stop(): flush the buffer to the WAL, deliberately NOT sealing — the
+        // WAL is fsynced and every read unions the WALs; the next boot's seal timer converts it.
+        st.statusline.flush(None);
         // server.ts:4499 recordCollectorStop — a graceful exit marks the run stopped, so the
         // next boot's gap (if any) classifies as "shutdown", not "crash".
         let file = agentlens_core::collector_lifecycle::lifecycle_file(&st.data_dir);

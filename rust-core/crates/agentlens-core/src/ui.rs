@@ -375,6 +375,29 @@ async fn handle(
             Err(e) => eprintln!("alcore: malformed /action body: {e}"),
         }
         Response::new(boxed_full(Bytes::new()))
+    } else if method == Method::POST && path == "/api/statusline-samples" {
+        // Row 5 (server.ts:3371): ≤512KB (overflow destroys the socket, no response); the
+        // payload must be a JSON OBJECT; `statusline_stream:"subagent"` selects the subagent
+        // stream else main; the answer is {ok:true} / 400 {error}.
+        let Some(buf) = read_body_capped(req.into_body(), crate::hook_events::HOOK_EVENT_MAX_BYTES).await? else {
+            return Err("/api/statusline-samples body over 512KB cap — connection aborted".to_owned());
+        };
+        match serde_json::from_slice::<Value>(&buf) {
+            // The TS 400 text is V8's parse message; serde's here — shape is the contract.
+            Err(e) => json_response(StatusCode::BAD_REQUEST, error_json(&e.to_string())),
+            Ok(v) => match v.as_object() {
+                None => json_response(StatusCode::BAD_REQUEST, error_json("payload must be a JSON object")),
+                Some(payload) => {
+                    let stream = if v.get("statusline_stream").and_then(Value::as_str) == Some("subagent") { "subagent" } else { "main" };
+                    {
+                        let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                        st.statusline.append(payload, stream, crate::now_ms() as f64);
+                        st.persist.statusline_samples += 1;
+                    }
+                    json_response(StatusCode::OK, r#"{"ok":true}"#.to_owned())
+                }
+            },
+        }
     } else if method == Method::POST && path == "/api/hook-events" {
         // ≤512KB: overflow destroys the socket (no response); a malformed body is a 400; the
         // rest is ingestHookEvent's frozen taxonomy (hook_events::ingest_hook_event).
@@ -1038,6 +1061,10 @@ pub async fn run_burn_tick(state: Arc<Mutex<CoreState>>, hub: Arc<SseHub>) {
             // response files costs 100-400ms of parsing, the TRDD-9CNHP8CN request-latency
             // outlier — so this tick is what keeps its snapshot fresh.
             st.burn.bodies.poll(now);
+            // The statusline WAL flush (the TS runs a dedicated 5s timer; this 4s tick gives
+            // the same ≤5s durability window with one fewer task). Sealing is NOT here — it
+            // runs DuckDB over whole WALs and lives on alcore's own 60s task, outside the lock.
+            st.statusline.flush(None);
             let status = st.live_burn_status(now);
             st.burn.last_status = Some(status.clone());
             let account = st.burn.current_account(now);

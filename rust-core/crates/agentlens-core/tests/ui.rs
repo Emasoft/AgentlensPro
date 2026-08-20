@@ -1080,3 +1080,42 @@ fn instruction_routes_suggestions_files_and_apply() {
     assert_eq!(files[2]["relativePath"], "AGENTS.md");
     let _ = std::fs::remove_dir_all(&ws);
 }
+
+/// Freeze row 5 — POST /api/statusline-samples over a real socket: the object-only 400s, the
+/// stream routing, the legacy hook-events divert landing in the SAME store, and the real
+/// counters on both server-stats surfaces.
+#[test]
+fn statusline_samples_route_and_legacy_divert() {
+    let (_otlp, ui, state) = start_servers();
+    // Parse failure and non-object payloads → 400 {error}.
+    let r = post(ui, "/api/statusline-samples", "{broken");
+    assert!(r.starts_with("HTTP/1.1 400"), "{r}");
+    let r = post(ui, "/api/statusline-samples", "[1,2]");
+    assert!(r.starts_with("HTTP/1.1 400"), "{r}");
+    assert!(body_of(&r).contains("payload must be a JSON object"));
+    // Main + subagent samples through the dedicated endpoint.
+    let r = post(ui, "/api/statusline-samples", r#"{"session_id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","model":{"id":"claude-opus-5"}}"#);
+    assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+    assert_eq!(body_of(&r), r#"{"ok":true}"#);
+    let r = post(ui, "/api/statusline-samples", r#"{"statusline_stream":"subagent","session_id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","tasks":[{"name":"x"}]}"#);
+    assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+    // The version-skew bridge: an older CLI posting the sample as a hook event must land in the
+    // SAME store (routed answer frozen), or a skew would split the history in two.
+    let r = post(ui, "/api/hook-events", r#"{"hook_event_name":"StatusLineSample","session_id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}"#);
+    assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+    assert!(body_of(&r).contains("\"routed\":\"statusline\""), "{r}");
+    let r = get(ui, "/api/server-stats", "");
+    let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
+    assert_eq!(v["persistence"]["statuslineSamples"], 3, "{}", v["persistence"]);
+    assert_eq!(v["statusline"]["bufferedRows"], 3, "{}", v["statusline"]);
+    assert_eq!(v["statusline"]["receivedSinceBoot"], 3);
+    // Flush drains the buffer into the day's WAL — visible as walBytes on the next stats read.
+    {
+        let mut st = state.lock().unwrap();
+        st.statusline.flush(None);
+    }
+    let r = get(ui, "/api/server-stats", "");
+    let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
+    assert_eq!(v["statusline"]["bufferedRows"], 0);
+    assert!(v["statusline"]["walBytes"].as_u64().unwrap() > 0, "{}", v["statusline"]);
+}

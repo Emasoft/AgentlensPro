@@ -7,12 +7,10 @@
 //! Append-only daily buckets ON PURPOSE: a per-event rewrite of a growing store is the exact
 //! pattern that destroyed 420GB of SSD in 4 hours — never reintroduce it here either.
 //!
-//! NOT PORTED (each has its own TS subsystem, deferred): the statusline sample stores that
-//! `routed:"statusline"` events divert into (the route answers the frozen body, the sample is
-//! DROPPED — recorded, not silent); the boot-time hook-spool drain + its byte-for-byte
-//! durability verification (TRDD-K3WDPR7M); the StopFailure capacity auto-calibration.
-//! The in-memory recent-events ring IS ported (P4r.5 — it feeds the burn gate): boot-seeded in
-//! CoreState::open, pushed on every ingest below.
+//! NOT PORTED (each has its own TS subsystem, deferred): the boot-time hook-spool drain + its
+//! byte-for-byte durability verification (TRDD-K3WDPR7M); the StopFailure capacity
+//! auto-calibration. The in-memory recent-events ring IS ported (P4r.5 — it feeds the burn
+//! gate), and the statusline divert now lands in the ported store (row 5) instead of dropping.
 
 use std::path::{Path, PathBuf};
 
@@ -136,9 +134,8 @@ pub fn statusline_stream(ev: &str) -> Option<&'static str> {
     }
 }
 
-/// server.ts ingestHookEvent — validate → route/drop → append → ring → stats. Returns the
-/// HTTP-shaped (status, body). NOT PORTED inside: the statusline store (the diverted sample is
-/// dropped after the frozen `routed` answer), the StopFailure calibration.
+/// server.ts ingestHookEvent — validate → route/divert → append → ring → stats. Returns the
+/// HTTP-shaped (status, body). NOT PORTED inside: the StopFailure calibration.
 pub fn ingest_hook_event(st: &mut crate::CoreState, payload: &Value, now_ms: i64) -> (u16, Value) {
     let Some(p) = payload.as_object() else {
         return (400, json!({ "error": "payload must be a JSON object with hook_event_name" }));
@@ -148,7 +145,10 @@ pub fn ingest_hook_event(st: &mut crate::CoreState, payload: &Value, now_ms: i64
         return (400, json!({ "error": "payload must be a JSON object with hook_event_name" }));
     }
     if let Some(stream) = statusline_stream(ev) {
-        let _ = stream; // the statusline store is not ported — the sample is dropped, the answer frozen
+        // The version-skew bridge lands in the SAME store as the dedicated endpoint (row 5) —
+        // both must, or a skew would split the history in two.
+        st.statusline.append(p, stream, now_ms as f64);
+        st.persist.statusline_samples += 1;
         return (200, json!({ "ok": true, "routed": "statusline" }));
     }
     if !st.hook_runtime.capture_enabled {

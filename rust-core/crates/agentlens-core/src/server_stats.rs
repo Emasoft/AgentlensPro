@@ -38,6 +38,9 @@ pub struct PersistStats {
     pub gate_denies: u64,
     pub gate_warns: u64,
     pub gate_advisories: u64,
+    /// Row 5: samples accepted into the statusline store (both routes — the dedicated endpoint
+    /// and the legacy hook-events divert).
+    pub statusline_samples: u64,
 }
 
 /// The bound listeners (server.ts UI_PORT / MCP_PORT / OTLP_PORT). `mcp` is the configured
@@ -303,6 +306,7 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
     let offsets_bytes_on_disk = crate::delta_log::DeltaLog::new(data_dir, "log-offsets").disk_bytes();
     let cards_bytes_on_disk = crate::delta_log::DeltaLog::new(data_dir, "log-sessions").disk_bytes();
     let hook = st.hook_runtime;
+    let sl = st.statusline.stats();
     // statusline retentionDays: src/statuslineStore.ts retentionDays() — env, else 90.
     let statusline_retention_days = num(
         std::env::var("AGENTLENS_STATUSLINE_RETENTION_DAYS")
@@ -337,10 +341,10 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
             "offsetsWrites": p.offsets_writes, "offsetsBytes": p.offsets_bytes,
             "cardsWrites": p.cards_writes, "cardsBytes": p.cards_bytes,
             "hookEventWrites": p.hook_event_writes, "hookEventBytes": p.hook_event_bytes,
-            // NOT PORTED: the log-event / statusline sinks, the bodies purge, the spool — the
-            // TS boot values (all zero / false).
+            // NOT PORTED: the log-event sink, the bodies purge, the spool — the TS boot
+            // values (all zero / false).
             "logEventWrites": 0, "logEventBytes": 0,
-            "statuslineSamples": 0,
+            "statuslineSamples": p.statusline_samples,
             "gateChecks": p.gate_checks, "gateDenies": p.gate_denies, "gateWarns": p.gate_warns, "gateAdvisories": p.gate_advisories,
             "bodiesLastPurge": { "at": 0, "removedFiles": 0, "freedBytes": 0, "keptFiles": 0, "keptBytes": 0 },
             "spoolBackpressureSpills": 0,
@@ -356,9 +360,12 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
             "spool": Value::Null,
         },
         "hookEvents": { "files": hook_files, "bytes": hook_bytes, "receivedSinceBoot": p.hook_event_writes, "spooled": hook_spooled },
-        // NOT PORTED: the statusline store — its stats() idle shape, all zero.
-        "statusline": { "parts": 0, "partBytes": 0, "walBytes": 0, "bufferedRows": 0, "sealedParts": 0, "droppedRows": 0, "corruptWals": 0,
-                         "receivedSinceBoot": 0, "retentionDays": statusline_retention_days },
+        "statusline": {
+            "parts": sl["parts"], "partBytes": sl["partBytes"], "walBytes": sl["walBytes"],
+            "bufferedRows": sl["bufferedRows"], "sealedParts": sl["sealedParts"],
+            "droppedRows": sl["droppedRows"], "corruptWals": sl["corruptWals"],
+            "receivedSinceBoot": p.statusline_samples, "retentionDays": statusline_retention_days,
+        },
         "logEvents": { "files": log_ev_files, "bytes": log_ev_bytes, "persistedSinceBoot": 0, "persistedBytesSinceBoot": 0, "retentionDays": log_events_retention_days },
         // NOT PORTED: the admission controller — idle stats.
         "admission": { "inflight": 0, "queued": 0, "admittedTotal": 0, "shedTotal": 0 },

@@ -1,0 +1,120 @@
+{
+ "flattenCases": [
+  {
+   "name": "nested objects to dotted keys",
+   "v": {
+    "a": 1,
+    "b": {
+     "c": 2,
+     "d": {
+      "e": "x"
+     }
+    }
+   }
+  },
+  {
+   "name": "arrays stay lists",
+   "v": {
+    "tasks": [
+     {
+      "id": "aa"
+     },
+     {
+      "id": "bb"
+     }
+    ],
+    "n": null,
+    "ok": true
+   }
+  },
+  {
+   "name": "empty object vanishes",
+   "v": {
+    "a": {},
+    "b": 1
+   }
+  },
+  {
+   "name": "null is a scalar not an object",
+   "v": {
+    "a": null,
+    "b": {
+     "c": null
+    }
+   }
+  }
+ ],
+ "pure": {
+  "flatten": [
+   {
+    "a": 1,
+    "b_c": 2,
+    "b_d_e": "x"
+   },
+   {
+    "tasks": [
+     {
+      "id": "aa"
+     },
+     {
+      "id": "bb"
+     }
+    ],
+    "n": null,
+    "ok": true
+   },
+   {
+    "b": 1
+   },
+   {
+    "a": null,
+    "b_c": null
+   }
+  ],
+  "dayKey": [
+   "2026-08-17",
+   "1970-01-01"
+  ]
+ },
+ "mainSql": "SELECT session_id, model_id, context_window_used_percentage, rate_limits_five_hour_used_percentage, ts FROM samples ORDER BY ts",
+ "subSql": "SELECT session_id, len(tasks) AS n_tasks, ts FROM samples ORDER BY ts",
+ "now": 1787000000000,
+ "queries": {
+  "main": [
+   {
+    "session_id": "not-a-uuid-id",
+    "model_id": "claude-opus-5",
+    "context_window_used_percentage": 41.5,
+    "rate_limits_five_hour_used_percentage": null,
+    "ts": 1786999940000
+   },
+   {
+    "session_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    "model_id": "claude-opus-5",
+    "context_window_used_percentage": 41.5,
+    "rate_limits_five_hour_used_percentage": 55,
+    "ts": 1786999950000
+   },
+   {
+    "session_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+    "model_id": "claude-opus-5",
+    "context_window_used_percentage": 41.5,
+    "rate_limits_five_hour_used_percentage": null,
+    "ts": 1786999970000
+   }
+  ],
+  "subagent": [
+   {
+    "session_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    "n_tasks": 2,
+    "ts": 1786999960000
+   }
+  ],
+  "windowed": [
+   {
+    "c": 2
+   }
+  ],
+  "blindStream": null
+ }
+}

@@ -46,6 +46,7 @@ pub mod request_log;
 pub mod retention_config;
 pub mod server_stats;
 pub mod span_window;
+pub mod statusline_store;
 pub mod summarize;
 pub mod ui;
 pub mod update_payload;
@@ -144,6 +145,11 @@ pub struct CoreState {
     /// server.ts `advisoryIssued` — the gate's per-session+code dedupe map (PostToolUse
     /// advisories + the IMG_RESIDENT warning share it; disjoint codes keep the keys disjoint).
     pub advisory_issued: std::collections::HashMap<String, f64>,
+    /// server.ts `statuslineStore` (row 5) — the high-frequency sample store's buffered half.
+    /// append/flush run under this lock (cheap pushes + one fsync per batch); SEALING runs on
+    /// alcore's own 60s task through the free `statusline_store::maybe_seal`, which shares only
+    /// the Arc'd counters — never this lock.
+    pub statusline: statusline_store::StatuslineStore,
 }
 
 impl CoreState {
@@ -348,6 +354,7 @@ impl CoreState {
                 seed
             },
             advisory_issued: std::collections::HashMap::new(),
+            statusline: statusline_store::StatuslineStore::new(data_dir.join("statusline")),
         }
     }
 
