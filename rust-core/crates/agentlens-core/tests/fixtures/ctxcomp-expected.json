@@ -1,0 +1,761 @@
+{
+ "generatedAtMs": 1787224616048,
+ "windowCases": [
+  {},
+  {
+   "model": "claude-opus-5"
+  },
+  {
+   "model": "claude-opus-5",
+   "betas": [
+    "context-1m-2025-08-07"
+   ]
+  },
+  {
+   "model": "claude-fable-5",
+   "betas": []
+  },
+  {
+   "model": "claude-sonnet-5"
+  },
+  {
+   "model": "claude-haiku-4-5-20251001"
+  },
+  {
+   "model": "totally-unknown-model"
+  },
+  {
+   "model": "totally-unknown-model[1m]"
+  },
+  {
+   "model": "some-fable-thing"
+  },
+  {
+   "model": "weird-1m"
+  },
+  {
+   "model": "weird-1mx"
+  },
+  {
+   "model": "",
+   "betas": [
+    "context-1m-2099-01-01"
+   ]
+  },
+  {
+   "model": "claude-opus-5",
+   "betas": [
+    "other-beta",
+    "context-1m-later"
+   ]
+  },
+  {
+   "model": "claude-opus-5",
+   "betas": [
+    "not-the-one"
+   ]
+  }
+ ],
+ "windows": [
+  200000,
+  1000000,
+  1000000,
+  1000000,
+  1000000,
+  200000,
+  200000,
+  1000000,
+  1000000,
+  1000000,
+  200000,
+  1000000,
+  1000000,
+  1000000
+ ],
+ "usageCases": [
+  "usage.response.json",
+  "usage-partial.response.json",
+  "usage-strings.response.json",
+  "usage-array.response.json",
+  "usage-scalar.response.json",
+  "usage-none.response.json",
+  "no-such.response.json",
+  "."
+ ],
+ "usages": [
+  {
+   "inputTokens": 120,
+   "outputTokens": 45,
+   "cacheReadTokens": 9000,
+   "cacheCreateTokens": 300,
+   "serviceTier": "standard",
+   "responseId": "msg_bbbb2222"
+  },
+  {
+   "inputTokens": 7,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0
+  },
+  {
+   "inputTokens": 0,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0
+  },
+  {
+   "inputTokens": 0,
+   "outputTokens": 0,
+   "cacheReadTokens": 0,
+   "cacheCreateTokens": 0
+  },
+  null,
+  null,
+  null,
+  null
+ ],
+ "compCases": [
+  {
+   "file": "comp.request.json",
+   "turn": 1,
+   "ts": 1000,
+   "opts": {}
+  },
+  {
+   "file": "comp.request.json",
+   "turn": 7,
+   "ts": 2000,
+   "opts": {
+    "projectHint": "/repo/x",
+    "exact": {
+     "inputTokens": 120,
+     "outputTokens": 45,
+     "cacheReadTokens": 9000,
+     "cacheCreateTokens": 300
+    }
+   }
+  },
+  {
+   "file": "comp.request.json",
+   "turn": 2,
+   "ts": 3000,
+   "opts": {
+    "exact": {
+     "inputTokens": 5000000,
+     "outputTokens": 0,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0
+    }
+   }
+  },
+  {
+   "file": "comp-plain.request.json",
+   "turn": 1,
+   "ts": 4000,
+   "opts": {}
+  },
+  {
+   "file": "comp-plain.request.json",
+   "turn": 1,
+   "ts": 4000,
+   "opts": {
+    "modelHint": "claude-opus-5"
+   }
+  },
+  {
+   "file": "no-such.request.json",
+   "turn": 1,
+   "ts": 5000,
+   "opts": {}
+  }
+ ],
+ "comps": [
+  {
+   "sessionId": "comp-sess",
+   "accountUuid": "comp-acct",
+   "project": "unknown",
+   "model": "claude-opus-5",
+   "turn": 1,
+   "ts": 1000,
+   "bodyRef": "comp.request.json",
+   "contextTokens": 121,
+   "contextPct": 0.000121,
+   "windowSize": 1000000,
+   "tokenSource": "estimated",
+   "blocks": [
+    {
+     "index": 0,
+     "kind": "claudemd",
+     "label": "system[0]",
+     "tokens": 9,
+     "tokenSource": "estimated",
+     "bytes": 24,
+     "role": "input",
+     "isImage": false
+    },
+    {
+     "index": 1,
+     "kind": "system",
+     "label": "system[1]",
+     "tokens": 2,
+     "tokenSource": "estimated",
+     "bytes": 12,
+     "role": "input",
+     "isImage": false
+    },
+    {
+     "index": 2,
+     "kind": "toolCatalog",
+     "label": "tool catalog (2 tools)",
+     "tokens": 9,
+     "tokenSource": "estimated",
+     "bytes": 24,
+     "role": "input",
+     "isImage": false
+    },
+    {
+     "index": 3,
+     "kind": "userMsg",
+     "label": "user",
+     "tokens": 3,
+     "tokenSource": "estimated",
+     "bytes": 12,
+     "role": "input",
+     "isImage": false
+    },
+    {
+     "index": 4,
+     "kind": "image",
+     "label": "image image/png",
+     "tokens": 64,
+     "tokenSource": "estimated",
+     "bytes": 256,
+     "role": "input",
+     "isImage": true,
+     "mediaType": "image/png"
+    },
+    {
+     "index": 5,
+     "kind": "reasoning",
+     "label": "thinking",
+     "tokens": 5,
+     "tokenSource": "estimated",
+     "bytes": 22,
+     "role": "output",
+     "isImage": false
+    },
+    {
+     "index": 6,
+     "kind": "bashInput",
+     "label": "Bash",
+     "tokens": 8,
+     "tokenSource": "estimated",
+     "bytes": 20,
+     "role": "input",
+     "toolName": "Bash",
+     "isImage": false
+    },
+    {
+     "index": 7,
+     "kind": "mcp",
+     "label": "mcp__srv__probe",
+     "tokens": 5,
+     "tokenSource": "estimated",
+     "bytes": 7,
+     "role": "input",
+     "toolName": "mcp__srv__probe",
+     "isImage": false
+    },
+    {
+     "index": 8,
+     "kind": "bashOutput",
+     "label": "Bash",
+     "tokens": 8,
+     "tokenSource": "estimated",
+     "bytes": 18,
+     "role": "output",
+     "toolName": "Bash",
+     "isImage": false
+    },
+    {
+     "index": 9,
+     "kind": "mcp",
+     "label": "mcp__srv__probe",
+     "tokens": 3,
+     "tokenSource": "estimated",
+     "bytes": 11,
+     "role": "output",
+     "toolName": "mcp__srv__probe",
+     "isImage": false
+    },
+    {
+     "index": 10,
+     "kind": "assistantMsg",
+     "label": "assistant",
+     "tokens": 5,
+     "tokenSource": "estimated",
+     "bytes": 20,
+     "role": "output",
+     "isImage": false
+    }
+   ],
+   "images": {
+    "count": 1,
+    "tokens": 64
+   },
+   "toolResultTokens": 11,
+   "textTokens": 8,
+   "thinkingTokens": 5,
+   "systemTokens": 11,
+   "toolCatalogTokens": 9,
+   "truncated": false
+  },
+  {
+   "sessionId": "comp-sess",
+   "accountUuid": "comp-acct",
+   "project": "/repo/x",
+   "model": "claude-opus-5",
+   "turn": 7,
+   "ts": 2000,
+   "bodyRef": "comp.request.json",
+   "contextTokens": 9420,
+   "contextPct": 0.00942,
+   "windowSize": 1000000,
+   "tokenSource": "exact",
+   "blocks": [
+    {
+     "index": 0,
+     "kind": "claudemd",
+     "label": "system[0]",
+     "tokens": 9,
+     "tokenSource": "estimated",
+     "bytes": 24,
+     "role": "input",
+     "isImage": false
+    },
+    {
+     "index": 1,
+     "kind": "system",
+     "label": "system[1]",
+     "tokens": 2,
+     "tokenSource": "estimated",
+     "bytes": 12,
+     "role": "input",
+     "isImage": false
+    },
+    {
+     "index": 2,
+     "kind": "toolCatalog",
+     "label": "tool catalog (2 tools)",
+     "tokens": 9,
+     "tokenSource": "estimated",
+     "bytes": 24,
+     "role": "input",
+     "isImage": false
+    },
+    {
+     "index": 3,
+     "kind": "userMsg",
+     "label": "user",
+     "tokens": 3,
+     "tokenSource": "estimated",
+     "bytes": 12,
+     "role": "input",
+     "isImage": false
+    },
+    {
+     "index": 4,
+     "kind": "image",
+     "label": "image image/png",
+     "tokens": 64,
+     "tokenSource": "estimated",
+     "bytes": 256,
+     "role": "input",
+     "isImage": true,
+     "mediaType": "image/png"
+    },
+    {
+     "index": 5,
+     "kind": "reasoning",
+     "label": "thinking",
+     "tokens": 5,
+     "tokenSource": "estimated",
+     "bytes": 22,
+     "role": "output",
+     "isImage": false
+    },
+    {
+     "index": 6,
+     "kind": "bashInput",
+     "label": "Bash",
+     "tokens": 8,
+     "tokenSource": "estimated",
+     "bytes": 20,
+     "role": "input",
+     "toolName": "Bash",
+     "isImage": false
+    },
+    {
+     "index": 7,
+     "kind": "mcp",
+     "label": "mcp__srv__probe",
+     "tokens": 5,
+     "tokenSource": "estimated",
+     "bytes": 7,
+     "role": "input",
+     "toolName": "mcp__srv__probe",
+     "isImage": false
+    },
+    {
+     "index": 8,
+     "kind": "bashOutput",
+     "label": "Bash",
+     "tokens": 8,
+     "tokenSource": "estimated",
+     "bytes": 18,
+     "role": "output",
+     "toolName": "Bash",
+     "isImage": false
+    },
+    {
+     "index": 9,
+     "kind": "mcp",
+     "label": "mcp__srv__probe",
+     "tokens": 3,
+     "tokenSource": "estimated",
+     "bytes": 11,
+     "role": "output",
+     "toolName": "mcp__srv__probe",
+     "isImage": false
+    },
+    {
+     "index": 10,
+     "kind": "assistantMsg",
+     "label": "assistant",
+     "tokens": 5,
+     "tokenSource": "estimated",
+     "bytes": 20,
+     "role": "output",
+     "isImage": false
+    }
+   ],
+   "images": {
+    "count": 1,
+    "tokens": 64
+   },
+   "toolResultTokens": 11,
+   "textTokens": 8,
+   "thinkingTokens": 5,
+   "systemTokens": 11,
+   "toolCatalogTokens": 9,
+   "exact": {
+    "inputTokens": 120,
+    "outputTokens": 45,
+    "cacheReadTokens": 9000,
+    "cacheCreateTokens": 300
+   },
+   "truncated": false
+  },
+  {
+   "sessionId": "comp-sess",
+   "accountUuid": "comp-acct",
+   "project": "unknown",
+   "model": "claude-opus-5",
+   "turn": 2,
+   "ts": 3000,
+   "bodyRef": "comp.request.json",
+   "contextTokens": 5000000,
+   "contextPct": 5,
+   "windowSize": 1000000,
+   "tokenSource": "exact",
+   "blocks": [
+    {
+     "index": 0,
+     "kind": "claudemd",
+     "label": "system[0]",
+     "tokens": 9,
+     "tokenSource": "estimated",
+     "bytes": 24,
+     "role": "input",
+     "isImage": false
+    },
+    {
+     "index": 1,
+     "kind": "system",
+     "label": "system[1]",
+     "tokens": 2,
+     "tokenSource": "estimated",
+     "bytes": 12,
+     "role": "input",
+     "isImage": false
+    },
+    {
+     "index": 2,
+     "kind": "toolCatalog",
+     "label": "tool catalog (2 tools)",
+     "tokens": 9,
+     "tokenSource": "estimated",
+     "bytes": 24,
+     "role": "input",
+     "isImage": false
+    },
+    {
+     "index": 3,
+     "kind": "userMsg",
+     "label": "user",
+     "tokens": 3,
+     "tokenSource": "estimated",
+     "bytes": 12,
+     "role": "input",
+     "isImage": false
+    },
+    {
+     "index": 4,
+     "kind": "image",
+     "label": "image image/png",
+     "tokens": 64,
+     "tokenSource": "estimated",
+     "bytes": 256,
+     "role": "input",
+     "isImage": true,
+     "mediaType": "image/png"
+    },
+    {
+     "index": 5,
+     "kind": "reasoning",
+     "label": "thinking",
+     "tokens": 5,
+     "tokenSource": "estimated",
+     "bytes": 22,
+     "role": "output",
+     "isImage": false
+    },
+    {
+     "index": 6,
+     "kind": "bashInput",
+     "label": "Bash",
+     "tokens": 8,
+     "tokenSource": "estimated",
+     "bytes": 20,
+     "role": "input",
+     "toolName": "Bash",
+     "isImage": false
+    },
+    {
+     "index": 7,
+     "kind": "mcp",
+     "label": "mcp__srv__probe",
+     "tokens": 5,
+     "tokenSource": "estimated",
+     "bytes": 7,
+     "role": "input",
+     "toolName": "mcp__srv__probe",
+     "isImage": false
+    },
+    {
+     "index": 8,
+     "kind": "bashOutput",
+     "label": "Bash",
+     "tokens": 8,
+     "tokenSource": "estimated",
+     "bytes": 18,
+     "role": "output",
+     "toolName": "Bash",
+     "isImage": false
+    },
+    {
+     "index": 9,
+     "kind": "mcp",
+     "label": "mcp__srv__probe",
+     "tokens": 3,
+     "tokenSource": "estimated",
+     "bytes": 11,
+     "role": "output",
+     "toolName": "mcp__srv__probe",
+     "isImage": false
+    },
+    {
+     "index": 10,
+     "kind": "assistantMsg",
+     "label": "assistant",
+     "tokens": 5,
+     "tokenSource": "estimated",
+     "bytes": 20,
+     "role": "output",
+     "isImage": false
+    }
+   ],
+   "images": {
+    "count": 1,
+    "tokens": 64
+   },
+   "toolResultTokens": 11,
+   "textTokens": 8,
+   "thinkingTokens": 5,
+   "systemTokens": 11,
+   "toolCatalogTokens": 9,
+   "exact": {
+    "inputTokens": 5000000,
+    "outputTokens": 0,
+    "cacheReadTokens": 0,
+    "cacheCreateTokens": 0
+   },
+   "truncated": false
+  },
+  {
+   "sessionId": "",
+   "project": "unknown",
+   "model": "totally-unknown-model",
+   "turn": 1,
+   "ts": 4000,
+   "bodyRef": "comp-plain.request.json",
+   "contextTokens": 2,
+   "contextPct": 0.00001,
+   "windowSize": 200000,
+   "tokenSource": "estimated",
+   "blocks": [
+    {
+     "index": 0,
+     "kind": "userMsg",
+     "label": "user",
+     "tokens": 2,
+     "tokenSource": "estimated",
+     "bytes": 9,
+     "role": "input",
+     "isImage": false
+    }
+   ],
+   "images": {
+    "count": 0,
+    "tokens": 0
+   },
+   "toolResultTokens": 0,
+   "textTokens": 2,
+   "thinkingTokens": 0,
+   "systemTokens": 0,
+   "toolCatalogTokens": 0,
+   "truncated": false
+  },
+  {
+   "sessionId": "",
+   "project": "unknown",
+   "model": "totally-unknown-model",
+   "turn": 1,
+   "ts": 4000,
+   "bodyRef": "comp-plain.request.json",
+   "contextTokens": 2,
+   "contextPct": 0.00001,
+   "windowSize": 200000,
+   "tokenSource": "estimated",
+   "blocks": [
+    {
+     "index": 0,
+     "kind": "userMsg",
+     "label": "user",
+     "tokens": 2,
+     "tokenSource": "estimated",
+     "bytes": 9,
+     "role": "input",
+     "isImage": false
+    }
+   ],
+   "images": {
+    "count": 0,
+    "tokens": 0
+   },
+   "toolResultTokens": 0,
+   "textTokens": 2,
+   "thinkingTokens": 0,
+   "systemTokens": 0,
+   "toolCatalogTokens": 0,
+   "truncated": false
+  },
+  null
+ ],
+ "blockCases": [
+  {
+   "file": "comp.request.json",
+   "index": 0,
+   "full": false
+  },
+  {
+   "file": "comp.request.json",
+   "index": 3,
+   "full": false
+  },
+  {
+   "file": "comp.request.json",
+   "index": 99,
+   "full": false
+  },
+  {
+   "file": "comp.request.json",
+   "index": -1,
+   "full": false
+  },
+  {
+   "file": "comp-plain.request.json",
+   "index": 0,
+   "full": true
+  },
+  {
+   "file": "no-such.request.json",
+   "index": 0,
+   "full": false
+  },
+  {
+   "file": "comp.request.json",
+   "index": 4,
+   "full": false
+  }
+ ],
+ "blocks": [
+  {
+   "index": 0,
+   "kind": "claudemd",
+   "label": "system[0]",
+   "tokens": 9,
+   "bytes": 24,
+   "role": "input",
+   "isImage": false,
+   "bodyRef": "comp.request.json",
+   "text": "Contents of /x/CLAUDE.md"
+  },
+  {
+   "index": 3,
+   "kind": "userMsg",
+   "label": "user",
+   "tokens": 3,
+   "bytes": 12,
+   "role": "input",
+   "isImage": false,
+   "bodyRef": "comp.request.json",
+   "text": "do the thing"
+  },
+  null,
+  null,
+  {
+   "index": 0,
+   "kind": "userMsg",
+   "label": "user",
+   "tokens": 2,
+   "bytes": 9,
+   "role": "input",
+   "isImage": false,
+   "bodyRef": "comp-plain.request.json",
+   "text": "just text"
+  },
+  null,
+  {
+   "index": 4,
+   "kind": "image",
+   "label": "image image/png",
+   "tokens": 64,
+   "bytes": 256,
+   "role": "input",
+   "isImage": true,
+   "mediaType": "image/png",
+   "bodyRef": "comp.request.json"
+  }
+ ]
+}
