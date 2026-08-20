@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T15:10:37+0200
+updated: 2026-08-20T15:37:49+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -837,12 +837,29 @@ release-via: publish
   never blow the caller's context, no matter what the data looks like" — at a 60-token ceiling a
   degraded payload settles at 89, because the DISCLOSURE TEXT is the floor and cannot shrink itself.
   Rust reproduces it exactly, so it is a finding about the TS, not a port defect.
-- **NEXT (P4x.2c continued): keep batching handlers.** 44 tools remain. Next-easiest are the ones
-  over ported engines: `get_account_status` (bigger — needs `resolveAuthRegimeLabel` +
-  `windowFillPct`; `classify_ttl_regime` IS ported), `get_account_state_at` (needs
-  accountStateTimeline's `resolveStateAt` — NOT ported), cache-risk-commands and statusline (both
-  engines ported and already on HTTP routes), `get_block_content` (composition index is ported).
-  **Every new arm must end in `tool_ok_lean`, never `mcp::tool_ok`.** The dispatch cases are
+- **P4x.2c (commits 2277df2, 1a58db5, 6400db4): `get_account_status`, `get_block_content`, and the
+  3 scoped composition tools (`get_image_report` / `find_resident_blobs` / `query_context_blocks`).
+  14 of 53.** New module `account_state_timeline.rs` holds `describe_plan` / `describe_account_mode`
+  / `resolve_auth_regime_label` — SHARED with the account-state sampler, so one implementation.
+  `resolve_block_content`, `composition_for` and `compositions_in_scope` were EXTRACTED from the
+  HTTP routes rather than copied, keeping the P4s lock choreography in one place.
+  **⚠ A SECOND DEFECT FOUND THE SAME WAY (fixed in 6400db4): the row-36 route built compositions
+  with NO project hint** while the TS passes `compositionProjectResolver()`. Every composition read
+  `project: "unknown"`, so once the scoped tools landed on top, every PROJECT-scoped query would
+  have matched nothing while answering 200 — a wrong answer shaped exactly like a correct empty one.
+  Pinned by name: `resolve_scope` checks the EXACT session id BEFORE the prefix (an id is a prefix
+  of itself, so reversing them widens a single-session drill silently — mutation-proved);
+  `topN` CLAMPS to [1,100] at BOTH ends (0 would return an empty list reading as "nothing
+  resident"); the model filter is a SUBSTRING match ("opus" is the obvious query and equality
+  returns nothing, successfully); `queryBlocks`'s `filter` is REBUILT from the named fields because
+  it is ECHOED BACK — handing it `args` would ship verbosity/maxTokens inside it.
+  **NOT PORTED, named rather than faked:** `get_account_status(all: true)` (listAllAccounts) and the
+  statusline reader, so `usageWindows.windowSource` reports calibrated/none, never `cc-rate-limits`.
+- **NEXT (P4x.2c continued): keep batching handlers.** 39 tools remain. Next-easiest over ported
+  engines: cache-risk-commands and statusline (both engines ported and already on HTTP routes),
+  `get_account_state_at` (needs accountStateTimeline's `resolveStateAt` — NOT ported),
+  `get_subscription_usage`, `get_cache_event_log`. **Every new arm must end in `tool_ok_lean`, never
+  `mcp::tool_ok`.** The dispatch cases are
   `src/mcpServer.ts` ~3434-3890 and most shapers sit at 1617-3390 (largely UNREAD).
   `get_context_composition` (2438), `get_context_history` (2325), `get_conversation` (2391) — all
   three shapers are in `src/mcpServer.ts` and UNREAD except their heads; each has `turn` / range
