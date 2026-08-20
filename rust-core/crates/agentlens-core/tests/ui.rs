@@ -925,3 +925,82 @@ fn agent_gate_route_fail_open_deny_warn_advisory_and_dedupe() {
     assert_eq!(v["persistence"]["gateDenies"], 1);
     let _ = std::fs::remove_dir_all(&tdir);
 }
+
+/// Freeze rows 14–15 — the bodies admin routes over a real socket: export's combined
+/// archive+store shape with skip-existing, its 400 guards, and purge's per-volume
+/// verify-before-delete (the proven volume removed, the unproven one KEPT with named
+/// failures, `.idx` sidecars always retained).
+#[test]
+fn bodies_export_and_purge_routes() {
+    let (_otlp, ui, state) = start_servers();
+    let data_dir = { state.lock().unwrap().data_dir.clone() };
+    // Copy the committed TS-written archive fixture into this server's data dir — purge
+    // DELETES volumes, so it must never point at the committed tree.
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bodyarchive-tree/otel-bodies-archive");
+    let arch = data_dir.join("otel-bodies-archive");
+    std::fs::create_dir_all(&arch).unwrap();
+    for e in std::fs::read_dir(&src).unwrap().flatten() {
+        std::fs::copy(e.path(), arch.join(e.file_name())).unwrap();
+    }
+    // Seed the store with the JULY lumps (exact bytes + capture ts) plus ONE store-only body,
+    // then FLUSH — the delete gate trusts only durable parquet. The AUGUST lump is deliberately
+    // NOT ingested: its volume must be KEPT by purge with its failure named.
+    let entries = agentlens_core::body_archive::list_archive_entries(&arch);
+    let mut store = agentlens_store::open_store(&data_dir.join("store"), agentlens_store::DEFAULT_MEMORY_LIMIT, 4).unwrap();
+    let mut july_ts = 0i64;
+    for e in &entries {
+        if !e.volume.to_string_lossy().ends_with("bodies-2026-07.wad") {
+            continue;
+        }
+        let raw = String::from_utf8_lossy(&agentlens_core::body_archive::read_archive_entry(e).unwrap()).into_owned();
+        july_ts = e.mtime_ms as i64;
+        agentlens_store::ingest_body(&mut store, &e.name, &raw, july_ts).unwrap();
+    }
+    agentlens_store::ingest_body(&mut store, "dddd4444.request.json", "{\"store\":\"only\",\"note\":\"never archived\"}", july_ts).unwrap();
+    agentlens_store::flush_detailed(&mut store).unwrap();
+    drop(store);
+
+    // Export guards: missing / relative destDir, and a destDir inside the archive.
+    let r = post(ui, "/api/bodies/export", r#"{"sinceMs":0}"#);
+    assert!(r.starts_with("HTTP/1.1 400"), "{r}");
+    assert!(body_of(&r).contains("destDir (absolute path) is required"));
+    let r = post(ui, "/api/bodies/export", r#"{"destDir":"relative/x"}"#);
+    assert!(r.starts_with("HTTP/1.1 400"), "{r}");
+    let inside = serde_json::json!({ "destDir": arch.join("sub").to_string_lossy() }).to_string();
+    let r = post(ui, "/api/bodies/export", &inside);
+    assert!(r.starts_with("HTTP/1.1 400"), "{r}");
+    assert!(body_of(&r).contains("must not be inside the archive itself"));
+
+    // The full export: 3 archive lumps + the 1 store-only body; the July bodies also live in
+    // the store but their files exist by the time the store half runs → skip-existing keeps
+    // fromStore at exactly 1.
+    let dest = std::env::temp_dir().join(format!("al-bodies-export-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dest);
+    let req = serde_json::json!({ "destDir": dest.to_string_lossy() }).to_string();
+    let r = post(ui, "/api/bodies/export", &req);
+    assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+    let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
+    assert_eq!(v["fromArchive"], 3, "{v}");
+    assert_eq!(v["fromStore"], 1, "{v}");
+    assert_eq!(v["files"], 4);
+    assert_eq!(v["failed"], serde_json::json!([]));
+    assert_eq!(v["destDir"].as_str().unwrap(), dest.to_string_lossy());
+    let store_only = std::fs::read_to_string(dest.join("dddd4444.request.json")).unwrap();
+    assert_eq!(store_only, "{\"store\":\"only\",\"note\":\"never archived\"}");
+    let _ = std::fs::remove_dir_all(&dest);
+
+    // Purge: July proven lump-by-lump → removed (bytes freed, .idx retained); August has no
+    // store rows → kept, failures named, nothing deleted.
+    let r = post(ui, "/api/bodies/purge", "");
+    assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+    let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
+    assert_eq!(v["removed"], serde_json::json!(["bodies-2026-07.wad"]), "{v}");
+    assert_eq!(v["kept"][0]["volume"], "bodies-2026-08.wad");
+    assert_eq!(v["kept"][0]["entries"], 1);
+    assert_eq!(v["kept"][0]["verified"], 0);
+    assert_eq!(v["kept"][0]["failedSample"].as_array().unwrap().len(), 1);
+    assert!(v["freedBytes"].as_u64().unwrap() > 0);
+    assert!(!arch.join("bodies-2026-07.wad").exists(), "verified volume deleted");
+    assert!(arch.join("bodies-2026-07.wad.idx").exists(), ".idx sidecar retained");
+    assert!(arch.join("bodies-2026-08.wad").exists(), "unproven volume kept");
+}

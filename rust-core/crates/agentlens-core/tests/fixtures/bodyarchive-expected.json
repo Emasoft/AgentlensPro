@@ -1,0 +1,46 @@
+{
+ "entries": [
+  {
+   "name": "aaaa1111.request.json",
+   "offset": 0,
+   "compressedLength": 91,
+   "size": 668,
+   "mtimeMs": 1783684800000,
+   "volume": "bodies-2026-07.wad"
+  },
+  {
+   "name": "bbbb2222.response.json",
+   "offset": 91,
+   "compressedLength": 86,
+   "size": 364,
+   "mtimeMs": 1784536200000,
+   "volume": "bodies-2026-07.wad"
+  },
+  {
+   "name": "cccc3333.request.json",
+   "offset": 0,
+   "compressedLength": 75,
+   "size": 255,
+   "mtimeMs": 1785748500000,
+   "volume": "bodies-2026-08.wad"
+  }
+ ],
+ "extractAll": {
+  "files": 3,
+  "bytes": 1287,
+  "contents": {
+   "aaaa1111.request.json": "{\"model\":\"claude-fable-5\",\"messages\":[{\"role\":\"user\",\"content\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}]}",
+   "bbbb2222.response.json": "{\"id\":\"msg_b\",\"usage\":{\"cache_read_input_tokens\":1000},\"pad\":\"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\"}",
+   "cccc3333.request.json": "{\"model\":\"claude-opus-5\",\"note\":\"august lump\",\"pad\":\"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\"}"
+  }
+ },
+ "extractWindow": {
+  "files": 1,
+  "bytes": 364,
+  "names": [
+   "bbbb2222.response.json"
+  ],
+  "since": 1784536199000,
+  "until": 1784536201000
+ }
+}

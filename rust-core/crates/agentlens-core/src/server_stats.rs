@@ -188,9 +188,7 @@ pub fn archive_disk_usage(dir: &Path) -> (u64, u64, u64) {
     for e in rd.flatten() {
         let name = e.file_name();
         let Some(name) = name.to_str() else { continue };
-        let Some(stem) = name.strip_prefix("bodies-").and_then(|s| s.strip_suffix(".wad")) else { continue };
-        let b = stem.as_bytes();
-        if b.len() != 7 || b[4] != b'-' || !b.iter().enumerate().all(|(i, c)| i == 4 || c.is_ascii_digit()) {
+        if !crate::body_archive::is_volume_name(name) {
             continue;
         }
         volumes += 1;

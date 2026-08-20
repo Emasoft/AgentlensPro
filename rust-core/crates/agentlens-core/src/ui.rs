@@ -797,6 +797,27 @@ async fn handle(
             }
         }
         resp
+    } else if method == Method::POST && path == "/api/bodies/export" {
+        // Row 14 (server.ts:3664): 1MB cap (overflow destroys the socket). The WAD reader + the
+        // store half run on the blocking pool and NOT under the state lock — an export walks
+        // gigabytes and every other route must stay responsive meanwhile (the store is its own
+        // read-only DuckDB open over immutable parquet, safe beside the alstore pass).
+        let Some(buf) = read_body_capped(req.into_body(), 1024 * 1024).await? else {
+            return Err("/api/bodies/export body over 1MB cap — connection aborted".to_owned());
+        };
+        let data_dir = { state.lock().map_err(|_| "state poisoned".to_owned())?.data_dir.clone() };
+        let (status, body) = tokio::task::spawn_blocking(move || crate::body_archive::bodies_export(&data_dir, &buf))
+            .await
+            .map_err(|e| e.to_string())?;
+        json_response(StatusCode::from_u16(status).unwrap_or(StatusCode::OK), body.to_string())
+    } else if method == Method::POST && path == "/api/bodies/purge" {
+        // Row 15 (server.ts:3711): the request body is never read (the TS handler does not
+        // consume it either); destruction is per-volume verify-before-delete (TRDD-K3WDPR7M).
+        let data_dir = { state.lock().map_err(|_| "state poisoned".to_owned())?.data_dir.clone() };
+        let (status, body) = tokio::task::spawn_blocking(move || crate::body_archive::bodies_purge(&data_dir))
+            .await
+            .map_err(|e| e.to_string())?;
+        json_response(StatusCode::from_u16(status).unwrap_or(StatusCode::OK), body.to_string())
     } else if method == Method::GET && path == "/api/collector-gaps" {
         // Row 29 (server.ts:4038, TRDD-PJC8N1HO spec 2): the lifecycle-derived downtime windows.
         // The TS wraps computeCollectorGaps in a catch → []; the Rust compute cannot throw.
