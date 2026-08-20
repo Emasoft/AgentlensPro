@@ -1820,6 +1820,58 @@ async fn handle(
                         .map_err(|e| format!("expensive-writes trace join failed: {e}"))?;
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
+                    "get_cache_event_log" => {
+                        // A bounded body scan PLUS a span-store walk, so it goes on spawn_blocking
+                        // with the state lock released.
+                        let now = crate::now_ms() as f64;
+                        let (bodies_dir, spans_dir) = {
+                            let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                            (crate::burn::guard::default_bodies_dir(&st.data_dir), st.data_dir.join("spans"))
+                        };
+                        let s = |k: &str| args.get(k).and_then(Value::as_str).map(str::to_owned);
+                        let n = |k: &str| args.get(k).and_then(Value::as_f64);
+                        // Default 24h; an EXPLICIT 0 means all history (TRDD-7I5805QM). An absent
+                        // window used to mean since=0 — the one input that walked the whole
+                        // 5.5M-span store, which agents supplied in practice despite the schema
+                        // warning, so the fail-safe default does what they meant.
+                        let window_hours = match n("window") {
+                            Some(0.0) => None,
+                            Some(w) => Some(w),
+                            None => Some(24.0),
+                        };
+                        let opts = crate::cache_event_log::CacheEventLogOptions {
+                            project: s("project"),
+                            session_id: s("sessionId"),
+                            mode: s("mode"),
+                            context_events: n("context"),
+                            limit: n("limit"),
+                            window_hours,
+                            scan_cap: None,
+                        };
+                        let format = args.get("format").and_then(Value::as_str).unwrap_or("table").to_owned();
+                        let projects_dirs = agentlens_logscan::discovery::claude_projects_dirs(
+                            &agentlens_logscan::discovery::Env::from_process(),
+                        );
+                        let project_env_dir = std::env::var("CLAUDE_PROJECT_DIR").ok();
+                        let cwd = std::env::current_dir().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+                        let payload = tokio::task::spawn_blocking(move || {
+                            let zone = crate::cache_event_log::DisplayZone::system();
+                            let env = crate::cache_event_log::LedgerEnv {
+                                bodies_dir: &bodies_dir,
+                                spans_dir: &spans_dir,
+                                projects_dirs: &projects_dirs,
+                                project_env_dir: project_env_dir.as_deref(),
+                                cwd: &cwd,
+                                zone: &zone,
+                                now_ms: now,
+                            };
+                            let log = crate::cache_event_log::build_cache_event_log(&opts, &env);
+                            crate::cache_event_log::format_cache_event_log(&log, &format)
+                        })
+                        .await
+                        .map_err(|e| format!("cache event log join failed: {e}"))?;
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
+                    }
                     "get_cache_break_gap_report" => {
                         let now = crate::now_ms() as f64;
                         let dir = {

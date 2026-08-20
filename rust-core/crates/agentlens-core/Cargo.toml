@@ -15,6 +15,12 @@ agentlens-logscan = { path = "../agentlens-logscan" }
 # verify-before-delete gate query the DuckDB body store IN-PROCESS (the endpoints ARE store
 # operations; the pass alone stays an alstore exec).
 agentlens-store = { path = "../agentlens-store" }
+# get_cache_event_log renders wall-clock LOCAL time and reports the IANA zone name
+# (toLocaleTimeString('en-GB') + Intl.DateTimeFormat().resolvedOptions().timeZone). std has NO
+# local-time support at all, and both crates were ALREADY in the workspace lock as transitive
+# deps — this adds a direct edge to what is compiled either way, not new supply-chain surface.
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+iana-time-zone = "0.1"
 # The WAD volume lumps are gzip members (bodyArchive.ts zlib.gunzipSync).
 flate2 = "1"
 rayon = "1"
