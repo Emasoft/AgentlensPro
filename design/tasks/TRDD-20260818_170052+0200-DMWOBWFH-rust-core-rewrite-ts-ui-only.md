@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-21T01:41:23+0200
+updated: 2026-08-21T01:44:28+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -1343,16 +1343,27 @@ release-via: publish
   **FALSIFIED (5/5 first run):** assistant early-return → `continue` · the UserPromptSubmit
   injected-context branch disabled · Agent/Task counted over ALL messages · the model adoption
   removed. Three tests red; the two that stayed green cover paths none of those rules reach.
-- **NEXT (P4x.2d continued): 9 of 53 remain.** Immediate:
-  `forensicsCompare` (253 → `compare_configs`) → `burnInvestigator` (632, also
-  `rateLimitReport`'s dep) → `rateLimitReport` (134) → `cacheBreakTimeline` (1,927 → 2 tools:
+- **QUEUE RE-ORDERED — `compare_configs` MOVES TO THE SQL GROUP (sized by engine, 4th time this
+  check has changed the queue).** `forensicsCompare.ts` looks like 253 lines; it imports
+  `./forensicsDb` (**261 ln, NO `.rs` counterpart**), which is a **sql.js reader over a
+  `forensics.db` SQLite snapshot** that also REGISTERS CUSTOM SQL FUNCTIONS (`billableWeight`,
+  `tierClassify`). So the real slice is **514 lines plus a SQLite binding agentlens-core does not
+  have** — the same infrastructure `run_diagnostics_sql` / `run_transcript_sql` need. Doing it
+  "next" would have meant discovering that mid-port. It belongs WITH the sql tools, at the end.
+- **NEXT (P4x.2d continued): 9 of 53 remain.** Immediate: `burnInvestigator` (632) — sized by
+  engine and CLEAR: `shared/pricing` → `pricing.rs` ✓, `hookEventStore` → `hook_events.rs` ✓,
+  `causingToolCall` (`causingToolCalls`/`composition`/`SpawnCall`) → `burn/causing_tool_call.rs` ✓;
+  only `captureConfig.resolveBodiesReadScope` + `dataDir` are unported, and both are the SAME
+  documented parameter pattern as `defaultBodiesDir` (the route resolves the dir once, so a second
+  resolver cannot disagree). It also unblocks `burn_seismic` and is
+  `rateLimitReport`'s dep → `rateLimitReport` (134) → `cacheBreakTimeline` (1,927 → 2 tools:
   `get_cache_break_timeline` + `get_cache_break_causes`, and it also unblocks the `groupBy='cause'`
   branch above) → `subscriptionUsage` (976, **NETWORK** — the oracle MUST stub the Anthropic usage
   endpoint; it is also the live TTL-regime oracle) → the 2 sql tools (`run_diagnostics_sql`,
-  `run_transcript_sql`). `burn_seismic` rides `burnInvestigator`.
+  `run_transcript_sql`) — and `compare_configs` NOW SITS WITH THEM, per the re-size above.
   **SIZE BY ENGINE: before starting any handler, grep its imports for a module with no `.rs`
-  counterpart** — that check caught `effortTransitions` and `residentCost`, and skipping it
-  mis-sized this queue three times.
+  counterpart** — that check caught `effortTransitions`, `residentCost`, and now
+  `forensicsDb`, and skipping it mis-sized this queue three times before that.
   **SUPERSEDED — do NOT carry forward:** every earlier "next up" ordering in this block (the
   handler-line-count orderings that named `handleGetCacheBreakReport` 81 / `handleGetCostByCause`
   82 / `handleGetContextInflationReport` 90 / `handleGetAgentTokens` 102 / `handleCheckCacheExpiry`
