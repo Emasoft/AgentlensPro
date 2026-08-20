@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T13:11:40+0200
+updated: 2026-08-20T13:20:24+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -669,13 +669,42 @@ release-via: publish
   (absent / a directory / truncated mid-write / valid-JSON-but-not-an-object). The 64MB gate is
   asserted as a CONSTANT on both sides — a >64MB fixture costs more than the one `>` it proves.
   118/118, clippy 28, identities green.
-- **NEXT (P4w.1c(ii)): `context_composition_index.rs` + routes 36-37**
-  (`/api/composition-index/:id`, `/api/block-content/:id/:turn/:idx`). `src/contextComposition
-  Index.ts` is 716 lines and must be re-read (it was read pre-compaction; that copy is gone).
-  It consumes THREE things already landed: `call_body_registry` (`session_ids` /
-  `request_pointers` — the LAZY contract, never a full-disk sweep of the 20k+ body files),
-  `build_call_context`, and `IMAGE_BLOCK_LABEL_PREFIX` (image re-classification keys on that
-  label prefix — load-bearing, do not "clean it up" into a real kind).
+- **P4w.1c(ii)a DONE (commit b1e1c04): the composition CORE.** `context_composition_index.rs` —
+  `window_size_for`, `read_response_usage`, `classify`, `build_call_composition`,
+  `read_block_content`, `cost_of_cache_read`. **`src/contextCompositionIndex.ts` is READ IN FULL
+  (716 lines)** — the remaining half needs no re-read, its contract is in the next bullet.
+  Three traps pinned by the oracle: (a) the 1M beta is PROOF but its ABSENCE proves NOTHING —
+  fable with `betas: []` is still 1M **from the pricing table**; an if/else here reported a 645k
+  context as 323% of 200k. (b) `typeof [] === 'object'`, so an ARRAY `usage` passes the TS guard
+  and yields an ALL-ZERO usage — rejecting it returns null, a different call total. (c) the call's
+  `tokenSource` is NOT `cal.source`: with exact usage but a refused calibration the blocks stay
+  `estimated` while the call is `exact`. Non-vacuity proven by mutation (fails at
+  `buildCallComposition[1].tokenSource`).
+  **Oracle PINS TIME** (`generatedAtMs` → Rust `now_ms`): TS resolves rates at "today's rate", so
+  an announced rate change would otherwise fail this test on a day nobody touched the code.
+  **Fixture paths are stripped to bare filenames on BOTH sides** — `bodyRef` is absolute and would
+  bake a home dir into a committed fixture (check-identities fails on that, correctly).
+  123/123, clippy 28, identities green.
+- **NEXT (P4w.1c(ii)b): session aggregation + the LRU index + routes 36-37.** Remaining from the
+  TS, all contracts captured here: `aggregateResidents` (signature = `` `${kind}|${label}` ``;
+  **`bySig` MUST be an IndexMap** — the pre-sort insertion order is the stable-sort tie-break
+  beyond the two comparators, so a HashMap silently reorders equal-cost rows), `summarizeImages`
+  (`firstSeenTurn === 0` is the sentinel; count/tokens are MAX across calls, cumulative is Σ),
+  `buildSessionComposition` (a null call is SKIPPED but `callsTotal` counts refs, not parsed
+  calls — that gap IS the coverage honesty), `ContextCompositionIndex` (`cache` is an
+  insertion-ordered LRU, re-insert on hit, evict oldest past `maxSessions=64`),
+  `sessionCompositionSummary` (peak = max contextTokens, `otherTokens` clamped ≥0,
+  `+(pct*100).toFixed(1)` → `js_to_fixed_num(x,1)`, `residentBlobs.slice(0,15)` + `findSample`),
+  and `getBlockContent` (two distinct ERROR shapes: `{sessionId,turn,message}` when no pointer,
+  `{sessionId,turn,blockIndex,message}` when no block — both 200, not an error status).
+  Deferred with it: `imageReport` / `findResidentBlobs` / `queryBlocks` are MCP-surface only, not
+  needed by rows 36-37. Note `+x.toFixed(4)` → `js_to_fixed_num(x,4)` throughout.
+- **Composition gotchas that outlive the slice.** The index consumes three already-landed pieces:
+  `call_body_registry` (`session_ids` / `request_pointers` — the LAZY contract, never a full-disk
+  sweep of the 20k+ body files), `build_call_context`, and `IMAGE_BLOCK_LABEL_PREFIX` — image
+  re-classification keys on that LABEL PREFIX, so do NOT "clean it up" into a real ContextBlockKind
+  (a dedicated shared kind ripples into the residentCost Record and the webview mirror; that is
+  why the TS parks images in the `other` bucket and re-detects them by label).
 - **THEN (P4w.3, freeze row 35): `resolveCallContext`.** Deliberately NOT ported with the wrapper
   — it is route-level ORCHESTRATION, and doing it in the pure module would force file I/O under
   the CoreState lock (the P4s rule). Its shape must be: lock → `resolve_request` → CLONE the
