@@ -216,6 +216,69 @@ async fn read_body_keep_under(mut body: hyper::body::Incoming, max: usize) -> Re
 /// LOCK CHOREOGRAPHY (the P4s rule): the registry lookup is cheap and in-memory so it runs UNDER
 /// the lock with the POINTER CLONED OUT; the multi-MB body read happens with the lock RELEASED;
 /// the lock is re-taken only for the TRDD-BURNWDGT account backfill.
+/// `ContextCompositionIndex.getSession` — one session's composition, LRU-cached, parsed on demand
+/// from the live registry (never a background sweep). Shared by freeze row 36 and the three scoped
+/// composition tools.
+///
+/// LOCK CHOREOGRAPHY (the P4s rule, and the whole reason this is shaped this way): resolve refs
+/// UNDER the lock (cheap, in-memory), RELEASE it before parsing body files, re-take it only to
+/// store. Parsing a multi-MB body while holding CoreState would stall every other request.
+///
+/// NOT PORTED: the TS `heavyGuard` admission deferral. It keeps concurrent heavy parses from
+/// blowing the V8 heap; this core has no V8 heap and the work is already off the executor.
+async fn composition_for(state: &Arc<Mutex<CoreState>>, session_id: &str, now: f64) -> Result<Value, String> {
+    let cached = {
+        let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+        st.composition.get_cached(session_id)
+    };
+    if let Some(c) = cached {
+        return Ok(c);
+    }
+    let (refs, project) = {
+        let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+        let refs = crate::context_composition_index::resolve_refs(&st.bodies, session_id);
+        // The project HINT is load-bearing, not decoration: it fills every composition's `project`
+        // and is what a `scope` string is matched against. Omitting it (as this route did until
+        // P4x.2c) makes every composition read `project: "unknown"` and every project-scoped query
+        // match nothing — while still answering 200.
+        let project = st.composition_project_map(now).get(session_id).cloned();
+        (refs, project)
+    };
+    let sid = session_id.to_owned();
+    let built = tokio::task::spawn_blocking(move || {
+        crate::context_composition_index::build_session_composition(&sid, &refs, project.as_deref(), now)
+    })
+    .await
+    .map_err(|e| format!("composition build join failed: {e}"))?;
+    let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+    st.composition.put(session_id, built.clone());
+    Ok(built)
+}
+
+/// `sessionsInScope` — the scoped set of compositions plus the coverage block that describes it.
+/// Sequential by design: each `composition_for` may parse multi-MB bodies, and the cap (25) is what
+/// bounds the work — fanning them out would just make the same bounded work concurrent while
+/// multiplying peak memory.
+async fn compositions_in_scope(state: &Arc<Mutex<CoreState>>, scope: Option<&str>, now: f64) -> Result<(Vec<Value>, Value), String> {
+    let (ids, coverage) = {
+        let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+        let projects = st.composition_project_map(now);
+        let ids: Vec<String> = st.bodies.session_ids().iter().map(|s| (*s).to_owned()).collect();
+        let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+        crate::context_composition_index::resolve_scope(
+            &refs,
+            scope,
+            &|id| projects.get(id).cloned(),
+            crate::context_composition_index::DEFAULT_SCOPE_CAP,
+        )
+    };
+    let mut comps = Vec::with_capacity(ids.len());
+    for id in ids {
+        comps.push(composition_for(state, &id, now).await?);
+    }
+    Ok((comps, coverage))
+}
+
 /// Drill ONE block to its real content (freeze row 37's engine + the `get_block_content` tool).
 /// Shared for the same reason `resolve_call_context` is: the TS has ONE `getBlockContent` behind
 /// both surfaces, and two copies of a payload this shape is a wire fork waiting to happen.
@@ -1160,6 +1223,51 @@ async fn handle(
                         let payload = crate::mcp_tools::get_window_budget(Some(&status), Some(&account), s("accountId").as_deref());
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
+                    "get_image_report" | "find_resident_blobs" | "query_context_blocks" => {
+                        let now = crate::now_ms() as f64;
+                        let n = |k: &str| args.get(k).and_then(Value::as_f64);
+                        // query_context_blocks scopes by `sessionId ?? project`; the other two take
+                        // an explicit `scope`. Same resolver, different door.
+                        let scope = if name == "query_context_blocks" {
+                            s("sessionId").or_else(|| s("project"))
+                        } else {
+                            s("scope")
+                        };
+                        let (comps, coverage) = compositions_in_scope(&state, scope.as_deref(), now).await?;
+                        let payload = match name.as_str() {
+                            "get_image_report" => crate::context_composition_index::image_report(&comps, scope.as_deref(), coverage),
+                            "find_resident_blobs" => crate::context_composition_index::find_resident_blobs(
+                                &comps,
+                                scope.as_deref(),
+                                coverage,
+                                s("kind").as_deref(),
+                                n("minTokens"),
+                                n("minResidentTurns"),
+                                n("topN"),
+                            ),
+                            _ => {
+                                // The filter is REBUILT from the named fields, not handed `args`
+                                // wholesale: it is ECHOED BACK in the payload, so passing the raw
+                                // arguments would ship `verbosity`/`maxTokens`/`groupBy` inside a
+                                // field that claims to describe the block filter. Key order is the
+                                // TS literal's, and an absent field is OMITTED, never null.
+                                let mut filter = serde_json::Map::new();
+                                for k in ["project", "sessionId", "kind", "model", "minTokens", "turnFrom", "turnTo", "topN"] {
+                                    if let Some(v) = args.get(k).filter(|v| !v.is_null()) {
+                                        filter.insert(k.to_owned(), v.clone());
+                                    }
+                                }
+                                crate::context_composition_index::query_blocks(
+                                    &comps,
+                                    &Value::Object(filter),
+                                    s("groupBy").as_deref().unwrap_or("kind"),
+                                    coverage,
+                                    now,
+                                )
+                            }
+                        };
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
+                    }
                     "get_block_content" => {
                         // The MCP args are already JSON numbers, so there is no `Number('')===0`
                         // trap here — that one belongs to the HTTP path segments. An absent arg is
@@ -1351,28 +1459,7 @@ async fn handle(
         // CoreState would stall every other request on the server.
         let session_id = percent_decode(&path["/api/composition-index/".len()..]);
         let now = crate::now_ms() as f64;
-        let cached = {
-            let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
-            st.composition.get_cached(&session_id)
-        };
-        let comp = match cached {
-            Some(c) => c,
-            None => {
-                let refs = {
-                    let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
-                    crate::context_composition_index::resolve_refs(&st.bodies, &session_id)
-                };
-                let sid = session_id.clone();
-                let built = tokio::task::spawn_blocking(move || {
-                    crate::context_composition_index::build_session_composition(&sid, &refs, None, now)
-                })
-                .await
-                .map_err(|e| format!("composition build join failed: {e}"))?;
-                let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
-                st.composition.put(&session_id, built.clone());
-                built
-            }
-        };
+        let comp = composition_for(&state, &session_id, now).await?;
         let summary = crate::context_composition_index::session_composition_summary(&comp);
         json_response(StatusCode::OK, serde_json::json!({ "summary": summary }).to_string())
     } else if method == Method::GET && path.starts_with("/api/block-content/") {

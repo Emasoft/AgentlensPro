@@ -15,7 +15,7 @@ use std::sync::OnceLock;
 
 use crate::pricing::{calc_token_cost_usd, lookup_rates};
 use crate::raw_body_context::{build_call_context, build_call_context_from_json, IMAGE_BLOCK_LABEL_PREFIX};
-use crate::summarize::helpers::{js_to_fixed_num, num};
+use crate::summarize::helpers::{fmt_js_num, js_to_fixed_num, num};
 use crate::token_estimator::calibrate_tokens;
 
 // ── Window-size inference ────────────────────────────────────────────────────
@@ -643,4 +643,251 @@ impl ContextCompositionIndex {
     pub fn is_empty(&self) -> bool {
         self.cache.is_empty()
     }
+}
+
+/// `DEFAULT_SCOPE_CAP` — the most-recent N sessions a scope query will parse.
+///
+/// The cap is a COVERAGE statement, not an optimisation: every scoped answer carries a `coverage`
+/// block saying how many sessions matched, how many were scanned, and whether that was all of them.
+/// A scoped tool that silently sampled would read as a complete answer.
+pub const DEFAULT_SCOPE_CAP: usize = 25;
+
+/// resolveScope — a bounded, most-recent set of session ids + the coverage note that describes it.
+///
+/// A scope that EXACTLY names a known session is a single-session scope, checked FIRST: a session id
+/// is also a valid `startsWith` prefix of itself, so without the exact check a drill into one
+/// session would silently widen to every session whose id shares its prefix.
+pub fn resolve_scope(session_ids: &[&str], scope: Option<&str>, project_for: &dyn Fn(&str) -> Option<String>, scope_cap: usize) -> (Vec<String>, Value) {
+    let mut cov = Map::new();
+    if let Some(s) = scope.filter(|s| !s.is_empty() && session_ids.contains(s)) {
+        cov.insert("sessionsMatched".into(), Value::from(1));
+        cov.insert("sessionsScanned".into(), Value::from(1));
+        cov.insert("scanCap".into(), Value::from(scope_cap));
+        cov.insert("complete".into(), Value::Bool(true));
+        cov.insert("note".into(), Value::String(format!("Single session {s}.")));
+        return (vec![s.to_owned()], Value::Object(cov));
+    }
+    let matched: Vec<String> = match scope.filter(|s| !s.is_empty()) {
+        Some(s) => session_ids
+            .iter()
+            .filter(|id| project_for(id).unwrap_or_default().starts_with(s) || id.starts_with(s))
+            .map(|id| (*id).to_owned())
+            .collect(),
+        None => session_ids.iter().map(|id| (*id).to_owned()).collect(),
+    };
+    let scanned: Vec<String> = matched.iter().take(scope_cap).cloned().collect();
+    let complete = scanned.len() == matched.len();
+    cov.insert("sessionsMatched".into(), Value::from(matched.len()));
+    cov.insert("sessionsScanned".into(), Value::from(scanned.len()));
+    cov.insert("scanCap".into(), Value::from(scope_cap));
+    cov.insert("complete".into(), Value::Bool(complete));
+    cov.insert(
+        "note".into(),
+        Value::String(if complete {
+            format!(
+                "Scanned all {} live-registry session(s) in scope{}. Historical sessions not in the live registry are not scanned (lazy).",
+                matched.len(),
+                scope.filter(|s| !s.is_empty()).map_or(String::new(), |s| format!(" \"{s}\""))
+            )
+        } else {
+            format!(
+                "SAMPLE: {} most-recent of {} in-scope sessions scanned (cap {scope_cap}). Lazy — no full-disk sweep; not full history.",
+                scanned.len(),
+                matched.len()
+            )
+        }),
+    );
+    (scanned, Value::Object(cov))
+}
+
+/// imageReport — "how many images were sent, when, and what did re-reading them cost".
+///
+/// The rank is cumulative READ cost, not image count: an image is expensive because it is RESIDENT
+/// and re-read every turn, so one image in a 200-turn session outranks ten in a 3-turn one.
+pub fn image_report(comps: &[Value], scope: Option<&str>, coverage: Value) -> Value {
+    let mut sessions: Vec<Value> = comps
+        .iter()
+        .filter(|c| f(&c["images"], "count") > 0.0)
+        .map(|c| {
+            let img = &c["images"];
+            let mut m = Map::new();
+            for (k, src) in [("sessionId", "sessionId"), ("project", "project"), ("model", "model"), ("accountUuid", "accountUuid")] {
+                m.insert(k.into(), c.get(src).cloned().unwrap_or(Value::Null));
+            }
+            m.insert("images".into(), num(f(img, "count")));
+            m.insert("perCallTokens".into(), num(f(img, "tokens")));
+            m.insert("firstSeenTurn".into(), img.get("firstSeenTurn").cloned().unwrap_or(Value::Null));
+            m.insert("residentTurns".into(), num(f(img, "residentTurns")));
+            m.insert("cumulativeReadTokens".into(), num(f(img, "cumulativeReadTokens")));
+            m.insert("cumulativeReadCostUsd".into(), num(js_to_fixed_num(f(img, "cumulativeReadCostUsd"), 4)));
+            m.insert("callsWithExactUsage".into(), c.get("callsWithExactUsage").cloned().unwrap_or(Value::Null));
+            m.insert("callsTotal".into(), c.get("callsTotal").cloned().unwrap_or(Value::Null));
+            Value::Object(m)
+        })
+        .collect();
+    // STABLE sort with the SAME tie-break as the TS (cost, then tokens) — Array.prototype.sort is
+    // stable, so an unstable sort here could reorder genuinely-equal rows.
+    sessions.sort_by(|a, b| {
+        f(b, "cumulativeReadCostUsd")
+            .partial_cmp(&f(a, "cumulativeReadCostUsd"))
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| f(b, "cumulativeReadTokens").partial_cmp(&f(a, "cumulativeReadTokens")).unwrap_or(std::cmp::Ordering::Equal))
+    });
+    let mut m = Map::new();
+    m.insert("scope".into(), Value::String(scope.filter(|s| !s.is_empty()).unwrap_or("all").to_owned()));
+    m.insert("totalImageSessions".into(), Value::from(sessions.len()));
+    m.insert("totalCumulativeReadTokens".into(), num(sessions.iter().map(|s| f(s, "cumulativeReadTokens")).sum()));
+    m.insert(
+        "totalCumulativeReadCostUsd".into(),
+        num(js_to_fixed_num(sessions.iter().map(|s| f(s, "cumulativeReadCostUsd")).sum(), 4)),
+    );
+    m.insert("coverage".into(), coverage);
+    m.insert("sessions".into(), Value::Array(sessions));
+    Value::Object(m)
+}
+
+/// findResidentBlobs — the "what should I compact / move to a sub-agent" list.
+///
+/// `topN` is CLAMPED to [1, 100] with a default of 20. The default is token-lean on purpose (it was
+/// a hardcoded 50), and the clamp is what stops a caller from pulling an unbounded list into their
+/// transcript by asking for one — the same cost the whole leanResponse layer exists to bound.
+pub fn find_resident_blobs(comps: &[Value], scope: Option<&str>, coverage: Value, kind: Option<&str>, min_tokens: Option<f64>, min_resident_turns: Option<f64>, top_n: Option<f64>) -> Value {
+    let min_resident = min_resident_turns.unwrap_or(2.0);
+    let min_tokens = min_tokens.unwrap_or(0.0);
+    let mut rows: Vec<Value> = Vec::new();
+    for c in comps {
+        for b in c["residentBlobs"].as_array().unwrap_or(&Vec::new()) {
+            if f(b, "residentTurns") < min_resident || f(b, "peakTokens") < min_tokens {
+                continue;
+            }
+            if kind.is_some_and(|k| b.get("kind").and_then(Value::as_str) != Some(k)) {
+                continue;
+            }
+            // `{ sessionId, project, model, ...b, cumulativeReadCostUsd }` — the spread puts the
+            // blob's own keys after these three, and the rounded cost OVERWRITES the blob's raw one
+            // IN PLACE (keeping its position), because the key already exists.
+            let mut m = Map::new();
+            m.insert("sessionId".into(), c.get("sessionId").cloned().unwrap_or(Value::Null));
+            m.insert("project".into(), c.get("project").cloned().unwrap_or(Value::Null));
+            m.insert("model".into(), c.get("model").cloned().unwrap_or(Value::Null));
+            if let Some(o) = b.as_object() {
+                for (k, v) in o {
+                    m.insert(k.clone(), v.clone());
+                }
+            }
+            m.insert("cumulativeReadCostUsd".into(), num(js_to_fixed_num(f(b, "cumulativeReadCostUsd"), 4)));
+            rows.push(Value::Object(m));
+        }
+    }
+    rows.sort_by(|a, b| {
+        f(b, "cumulativeReadCostUsd")
+            .partial_cmp(&f(a, "cumulativeReadCostUsd"))
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| f(b, "cumulativeReadTokens").partial_cmp(&f(a, "cumulativeReadTokens")).unwrap_or(std::cmp::Ordering::Equal))
+    });
+    let top = top_n.unwrap_or(20.0).clamp(1.0, 100.0) as usize;
+    let blobs: Vec<Value> = rows.iter().take(top).cloned().collect();
+    let mut m = Map::new();
+    m.insert("scope".into(), Value::String(scope.filter(|s| !s.is_empty()).unwrap_or("all").to_owned()));
+    m.insert("count".into(), Value::from(rows.len()));
+    m.insert("coverage".into(), coverage);
+    m.insert("blobs".into(), Value::Array(blobs.clone()));
+    // `note: undefined` drops from JSON — the key exists only when something was actually cut.
+    if rows.len() > blobs.len() {
+        m.insert(
+            "note".into(),
+            Value::String(format!(
+                "Showing top {} of {} by wasted cache-read cost; raise topN to see more (max 100).",
+                blobs.len(),
+                rows.len()
+            )),
+        );
+    }
+    Value::Object(m)
+}
+
+/// queryBlocks — filter every call's blocks by any dimension, group by any dimension.
+///
+/// `filter` is echoed back VERBATIM in the payload: a grouped aggregate is meaningless without the
+/// filter that produced it, and a caller comparing two runs needs to see which one they are holding.
+#[allow(clippy::too_many_arguments)] // mirrors the TS BlockFilter field-for-field (see push_block)
+pub fn query_blocks(comps: &[Value], filter: &Value, group_by: &str, coverage: Value, now_ms: f64) -> Value {
+    let s = |k: &str| filter.get(k).and_then(Value::as_str).filter(|v| !v.is_empty());
+    let n = |k: &str| filter.get(k).and_then(Value::as_f64);
+    // IndexMap, not HashMap: the TS builds a `Map` and iterates it in INSERTION order before
+    // sorting, so ties between equal-token groups resolve the same way on both engines.
+    let mut groups: indexmap::IndexMap<String, (f64, f64, f64)> = indexmap::IndexMap::new();
+    let mut matched_blocks = 0usize;
+    let empty: Vec<Value> = Vec::new();
+    for c in comps {
+        let project = c.get("project").and_then(Value::as_str).unwrap_or("");
+        let session_id = c.get("sessionId").and_then(Value::as_str).unwrap_or("");
+        let model = c.get("model").and_then(Value::as_str);
+        if s("project").is_some_and(|p| !project.starts_with(p)) {
+            continue;
+        }
+        if s("sessionId").is_some_and(|sid| session_id != sid) {
+            continue;
+        }
+        // `(c.model ?? '').includes(...)` — a SUBSTRING match, so "opus" selects every opus
+        // variant. An equality check would silently return nothing for the obvious query.
+        if s("model").is_some_and(|m| !model.unwrap_or("").contains(m)) {
+            continue;
+        }
+        for call in c["calls"].as_array().unwrap_or(&empty) {
+            let turn = f(call, "turn");
+            if n("turnFrom").is_some_and(|v| turn < v) || n("turnTo").is_some_and(|v| turn > v) {
+                continue;
+            }
+            for b in call["blocks"].as_array().unwrap_or(&empty) {
+                if s("kind").is_some_and(|k| b.get("kind").and_then(Value::as_str) != Some(k)) {
+                    continue;
+                }
+                let tokens = f(b, "tokens");
+                if n("minTokens").is_some_and(|v| tokens < v) {
+                    continue;
+                }
+                matched_blocks += 1;
+                let key = match group_by {
+                    "kind" => b.get("kind").and_then(Value::as_str).unwrap_or("").to_owned(),
+                    "session" => session_id.to_owned(),
+                    "project" => project.to_owned(),
+                    "model" => model.unwrap_or("unknown").to_owned(),
+                    _ => fmt_js_num(turn),
+                };
+                let g = groups.entry(key).or_insert((0.0, 0.0, 0.0));
+                g.0 += tokens;
+                g.1 += 1.0;
+                g.2 += cost_of_cache_read(tokens, model, now_ms);
+            }
+        }
+    }
+    let mut rows: Vec<Value> = groups
+        .iter()
+        .map(|(k, (tokens, count, cost))| {
+            let mut m = Map::new();
+            m.insert("key".into(), Value::String(k.clone()));
+            m.insert("tokens".into(), num(*tokens));
+            m.insert("count".into(), num(*count));
+            m.insert("estCostUsd".into(), num(js_to_fixed_num(*cost, 4)));
+            Value::Object(m)
+        })
+        .collect();
+    rows.sort_by(|a, b| f(b, "tokens").partial_cmp(&f(a, "tokens")).unwrap_or(std::cmp::Ordering::Equal));
+    let top = n("topN").unwrap_or(20.0).clamp(1.0, 100.0) as usize;
+    let shown: Vec<Value> = rows.iter().take(top).cloned().collect();
+    let mut m = Map::new();
+    m.insert("groupBy".into(), Value::String(group_by.to_owned()));
+    m.insert("filter".into(), filter.clone());
+    m.insert("matchedBlocks".into(), Value::from(matched_blocks));
+    m.insert("distinctGroups".into(), Value::from(rows.len()));
+    m.insert("coverage".into(), coverage);
+    m.insert("groups".into(), Value::Array(shown.clone()));
+    if rows.len() > shown.len() {
+        m.insert(
+            "note".into(),
+            Value::String(format!("Showing top {} of {} groups by tokens; raise topN to see more (max 100).", shown.len(), rows.len())),
+        );
+    }
+    Value::Object(m)
 }

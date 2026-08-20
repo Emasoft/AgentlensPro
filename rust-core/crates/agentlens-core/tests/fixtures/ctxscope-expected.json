@@ -1,0 +1,1174 @@
+{
+ "comps": [
+  {
+   "sessionId": "sess-alpha",
+   "project": "/ws/alpha",
+   "model": "claude-opus-5",
+   "accountUuid": "acct-1111",
+   "callsTotal": 2,
+   "callsWithExactUsage": 1,
+   "images": {
+    "count": 3,
+    "tokens": 4800,
+    "firstSeenTurn": 1,
+    "residentTurns": 9,
+    "cumulativeReadTokens": 43200,
+    "cumulativeReadCostUsd": 0.0216004
+   },
+   "residentBlobs": [
+    {
+     "id": "b1",
+     "kind": "image",
+     "label": "screenshot",
+     "peakTokens": 3252,
+     "residentTurns": 9,
+     "cumulativeReadTokens": 29268,
+     "cumulativeReadCostUsd": 0.01463411,
+     "sampleTurn": 1,
+     "sampleBlockIndex": 2
+    },
+    {
+     "id": "b2",
+     "kind": "text",
+     "label": "CLAUDE.md",
+     "peakTokens": 64868,
+     "residentTurns": 9,
+     "cumulativeReadTokens": 583812,
+     "cumulativeReadCostUsd": 0.29190611,
+     "sampleTurn": 1,
+     "sampleBlockIndex": 0
+    },
+    {
+     "id": "b3",
+     "kind": "tool_result",
+     "label": "small",
+     "peakTokens": 100,
+     "residentTurns": 2,
+     "cumulativeReadTokens": 200,
+     "cumulativeReadCostUsd": 0.0001,
+     "sampleTurn": 2,
+     "sampleBlockIndex": 5
+    }
+   ],
+   "calls": [
+    {
+     "turn": 1,
+     "blocks": [
+      {
+       "id": "b2",
+       "kind": "text",
+       "label": "b2",
+       "tokens": 64868,
+       "bytes": 259472,
+       "role": "user",
+       "tokenSource": "estimate"
+      },
+      {
+       "id": "b1",
+       "kind": "image",
+       "label": "b1",
+       "tokens": 3252,
+       "bytes": 13008,
+       "role": "user",
+       "tokenSource": "estimate"
+      }
+     ]
+    },
+    {
+     "turn": 2,
+     "blocks": [
+      {
+       "id": "b3",
+       "kind": "tool_result",
+       "label": "b3",
+       "tokens": 100,
+       "bytes": 400,
+       "role": "user",
+       "tokenSource": "estimate"
+      },
+      {
+       "id": "b4",
+       "kind": "text",
+       "label": "b4",
+       "tokens": 500,
+       "bytes": 2000,
+       "role": "user",
+       "tokenSource": "estimate"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "sessionId": "sess-beta",
+   "project": "/ws/beta",
+   "model": "claude-sonnet-5",
+   "accountUuid": "acct-2222",
+   "callsTotal": 2,
+   "callsWithExactUsage": 1,
+   "images": {
+    "count": 0,
+    "tokens": 0,
+    "firstSeenTurn": null,
+    "residentTurns": 0,
+    "cumulativeReadTokens": 0,
+    "cumulativeReadCostUsd": 0
+   },
+   "residentBlobs": [
+    {
+     "id": "c1",
+     "kind": "text",
+     "label": "notes",
+     "peakTokens": 900,
+     "residentTurns": 4,
+     "cumulativeReadTokens": 3600,
+     "cumulativeReadCostUsd": 0.0018,
+     "sampleTurn": 1,
+     "sampleBlockIndex": 1
+    }
+   ],
+   "calls": [
+    {
+     "turn": 1,
+     "blocks": [
+      {
+       "id": "c1",
+       "kind": "text",
+       "label": "c1",
+       "tokens": 900,
+       "bytes": 3600,
+       "role": "user",
+       "tokenSource": "estimate"
+      }
+     ]
+    },
+    {
+     "turn": 3,
+     "blocks": [
+      {
+       "id": "c2",
+       "kind": "tool_use",
+       "label": "c2",
+       "tokens": 250,
+       "bytes": 1000,
+       "role": "user",
+       "tokenSource": "estimate"
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "scopeCases": [
+  "sess-alpha",
+  "/ws/",
+  "/ws/beta",
+  "sess-",
+  "nomatch",
+  null
+ ],
+ "scopeResults": [
+  {
+   "ids": [
+    "sess-alpha"
+   ],
+   "coverage": {
+    "sessionsMatched": 1,
+    "sessionsScanned": 1,
+    "scanCap": 25,
+    "complete": true,
+    "note": "Single session sess-alpha."
+   }
+  },
+  {
+   "ids": [
+    "sess-alpha",
+    "sess-beta"
+   ],
+   "coverage": {
+    "sessionsMatched": 2,
+    "sessionsScanned": 2,
+    "scanCap": 25,
+    "complete": true,
+    "note": "Scanned all 2 live-registry session(s) in scope \"/ws/\". Historical sessions not in the live registry are not scanned (lazy)."
+   }
+  },
+  {
+   "ids": [
+    "sess-beta"
+   ],
+   "coverage": {
+    "sessionsMatched": 1,
+    "sessionsScanned": 1,
+    "scanCap": 25,
+    "complete": true,
+    "note": "Scanned all 1 live-registry session(s) in scope \"/ws/beta\". Historical sessions not in the live registry are not scanned (lazy)."
+   }
+  },
+  {
+   "ids": [
+    "sess-alpha",
+    "sess-beta"
+   ],
+   "coverage": {
+    "sessionsMatched": 2,
+    "sessionsScanned": 2,
+    "scanCap": 25,
+    "complete": true,
+    "note": "Scanned all 2 live-registry session(s) in scope \"sess-\". Historical sessions not in the live registry are not scanned (lazy)."
+   }
+  },
+  {
+   "ids": [],
+   "coverage": {
+    "sessionsMatched": 0,
+    "sessionsScanned": 0,
+    "scanCap": 25,
+    "complete": true,
+    "note": "Scanned all 0 live-registry session(s) in scope \"nomatch\". Historical sessions not in the live registry are not scanned (lazy)."
+   }
+  },
+  {
+   "ids": [
+    "sess-alpha",
+    "sess-beta"
+   ],
+   "coverage": {
+    "sessionsMatched": 2,
+    "sessionsScanned": 2,
+    "scanCap": 25,
+    "complete": true,
+    "note": "Scanned all 2 live-registry session(s) in scope. Historical sessions not in the live registry are not scanned (lazy)."
+   }
+  }
+ ],
+ "imageCases": [
+  {
+   "name": "all"
+  },
+  {
+   "name": "one-session",
+   "scope": "sess-alpha"
+  },
+  {
+   "name": "project",
+   "scope": "/ws/beta"
+  },
+  {
+   "name": "no-match",
+   "scope": "nomatch"
+  }
+ ],
+ "imageResults": [
+  {
+   "scope": "all",
+   "totalImageSessions": 1,
+   "totalCumulativeReadTokens": 43200,
+   "totalCumulativeReadCostUsd": 0.0216,
+   "coverage": {
+    "sessionsMatched": 2,
+    "sessionsScanned": 2,
+    "scanCap": 25,
+    "complete": true,
+    "note": "Scanned all 2 live-registry session(s) in scope. Historical sessions not in the live registry are not scanned (lazy)."
+   },
+   "sessions": [
+    {
+     "sessionId": "sess-alpha",
+     "project": "/ws/alpha",
+     "model": "claude-opus-5",
+     "accountUuid": "acct-1111",
+     "images": 3,
+     "perCallTokens": 4800,
+     "firstSeenTurn": 1,
+     "residentTurns": 9,
+     "cumulativeReadTokens": 43200,
+     "cumulativeReadCostUsd": 0.0216,
+     "callsWithExactUsage": 1,
+     "callsTotal": 2
+    }
+   ]
+  },
+  {
+   "scope": "sess-alpha",
+   "totalImageSessions": 1,
+   "totalCumulativeReadTokens": 43200,
+   "totalCumulativeReadCostUsd": 0.0216,
+   "coverage": {
+    "sessionsMatched": 1,
+    "sessionsScanned": 1,
+    "scanCap": 25,
+    "complete": true,
+    "note": "Single session sess-alpha."
+   },
+   "sessions": [
+    {
+     "sessionId": "sess-alpha",
+     "project": "/ws/alpha",
+     "model": "claude-opus-5",
+     "accountUuid": "acct-1111",
+     "images": 3,
+     "perCallTokens": 4800,
+     "firstSeenTurn": 1,
+     "residentTurns": 9,
+     "cumulativeReadTokens": 43200,
+     "cumulativeReadCostUsd": 0.0216,
+     "callsWithExactUsage": 1,
+     "callsTotal": 2
+    }
+   ]
+  },
+  {
+   "scope": "/ws/beta",
+   "totalImageSessions": 0,
+   "totalCumulativeReadTokens": 0,
+   "totalCumulativeReadCostUsd": 0,
+   "coverage": {
+    "sessionsMatched": 1,
+    "sessionsScanned": 1,
+    "scanCap": 25,
+    "complete": true,
+    "note": "Scanned all 1 live-registry session(s) in scope \"/ws/beta\". Historical sessions not in the live registry are not scanned (lazy)."
+   },
+   "sessions": []
+  },
+  {
+   "scope": "nomatch",
+   "totalImageSessions": 0,
+   "totalCumulativeReadTokens": 0,
+   "totalCumulativeReadCostUsd": 0,
+   "coverage": {
+    "sessionsMatched": 0,
+    "sessionsScanned": 0,
+    "scanCap": 25,
+    "complete": true,
+    "note": "Scanned all 0 live-registry session(s) in scope \"nomatch\". Historical sessions not in the live registry are not scanned (lazy)."
+   },
+   "sessions": []
+  }
+ ],
+ "blobCases": [
+  {
+   "name": "defaults",
+   "filters": {}
+  },
+  {
+   "name": "min-resident-4",
+   "filters": {
+    "minResidentTurns": 4
+   }
+  },
+  {
+   "name": "min-tokens",
+   "filters": {
+    "minTokens": 1000
+   }
+  },
+  {
+   "name": "kind-image",
+   "filters": {
+    "kind": "image"
+   }
+  },
+  {
+   "name": "topN-1-discloses-the-cut",
+   "filters": {
+    "topN": 1
+   }
+  },
+  {
+   "name": "topN-clamped-low",
+   "filters": {
+    "topN": 0
+   }
+  },
+  {
+   "name": "topN-clamped-high",
+   "filters": {
+    "topN": 9999
+   }
+  },
+  {
+   "name": "scoped-to-one-session",
+   "scope": "sess-beta",
+   "filters": {}
+  }
+ ],
+ "blobResults": [
+  {
+   "scope": "all",
+   "count": 4,
+   "coverage": {
+    "sessionsMatched": 2,
+    "sessionsScanned": 2,
+    "scanCap": 25,
+    "complete": true,
+    "note": "Scanned all 2 live-registry session(s) in scope. Historical sessions not in the live registry are not scanned (lazy)."
+   },
+   "blobs": [
+    {
+     "sessionId": "sess-alpha",
+     "project": "/ws/alpha",
+     "model": "claude-opus-5",
+     "id": "b2",
+     "kind": "text",
+     "label": "CLAUDE.md",
+     "peakTokens": 64868,
+     "residentTurns": 9,
+     "cumulativeReadTokens": 583812,
+     "cumulativeReadCostUsd": 0.2919,
+     "sampleTurn": 1,
+     "sampleBlockIndex": 0
+    },
+    {
+     "sessionId": "sess-alpha",
+     "project": "/ws/alpha",
+     "model": "claude-opus-5",
+     "id": "b1",
+     "kind": "image",
+     "label": "screenshot",
+     "peakTokens": 3252,
+     "residentTurns": 9,
+     "cumulativeReadTokens": 29268,
+     "cumulativeReadCostUsd": 0.0146,
+     "sampleTurn": 1,
+     "sampleBlockIndex": 2
+    },
+    {
+     "sessionId": "sess-beta",
+     "project": "/ws/beta",
+     "model": "claude-sonnet-5",
+     "id": "c1",
+     "kind": "text",
+     "label": "notes",
+     "peakTokens": 900,
+     "residentTurns": 4,
+     "cumulativeReadTokens": 3600,
+     "cumulativeReadCostUsd": 0.0018,
+     "sampleTurn": 1,
+     "sampleBlockIndex": 1
+    },
+    {
+     "sessionId": "sess-alpha",
+     "project": "/ws/alpha",
+     "model": "claude-opus-5",
+     "id": "b3",
+     "kind": "tool_result",
+     "label": "small",
+     "peakTokens": 100,
+     "residentTurns": 2,
+     "cumulativeReadTokens": 200,
+     "cumulativeReadCostUsd": 0.0001,
+     "sampleTurn": 2,
+     "sampleBlockIndex": 5
+    }
+   ]
+  },
+  {
+   "scope": "all",
+   "count": 3,
+   "coverage": {
+    "sessionsMatched": 2,
+    "sessionsScanned": 2,
+    "scanCap": 25,
+    "complete": true,
+    "note": "Scanned all 2 live-registry session(s) in scope. Historical sessions not in the live registry are not scanned (lazy)."
+   },
+   "blobs": [
+    {
+     "sessionId": "sess-alpha",
+     "project": "/ws/alpha",
+     "model": "claude-opus-5",
+     "id": "b2",
+     "kind": "text",
+     "label": "CLAUDE.md",
+     "peakTokens": 64868,
+     "residentTurns": 9,
+     "cumulativeReadTokens": 583812,
+     "cumulativeReadCostUsd": 0.2919,
+     "sampleTurn": 1,
+     "sampleBlockIndex": 0
+    },
+    {
+     "sessionId": "sess-alpha",
+     "project": "/ws/alpha",
+     "model": "claude-opus-5",
+     "id": "b1",
+     "kind": "image",
+     "label": "screenshot",
+     "peakTokens": 3252,
+     "residentTurns": 9,
+     "cumulativeReadTokens": 29268,
+     "cumulativeReadCostUsd": 0.0146,
+     "sampleTurn": 1,
+     "sampleBlockIndex": 2
+    },
+    {
+     "sessionId": "sess-beta",
+     "project": "/ws/beta",
+     "model": "claude-sonnet-5",
+     "id": "c1",
+     "kind": "text",
+     "label": "notes",
+     "peakTokens": 900,
+     "residentTurns": 4,
+     "cumulativeReadTokens": 3600,
+     "cumulativeReadCostUsd": 0.0018,
+     "sampleTurn": 1,
+     "sampleBlockIndex": 1
+    }
+   ]
+  },
+  {
+   "scope": "all",
+   "count": 2,
+   "coverage": {
+    "sessionsMatched": 2,
+    "sessionsScanned": 2,
+    "scanCap": 25,
+    "complete": true,
+    "note": "Scanned all 2 live-registry session(s) in scope. Historical sessions not in the live registry are not scanned (lazy)."
+   },
+   "blobs": [
+    {
+     "sessionId": "sess-alpha",
+     "project": "/ws/alpha",
+     "model": "claude-opus-5",
+     "id": "b2",
+     "kind": "text",
+     "label": "CLAUDE.md",
+     "peakTokens": 64868,
+     "residentTurns": 9,
+     "cumulativeReadTokens": 583812,
+     "cumulativeReadCostUsd": 0.2919,
+     "sampleTurn": 1,
+     "sampleBlockIndex": 0
+    },
+    {
+     "sessionId": "sess-alpha",
+     "project": "/ws/alpha",
+     "model": "claude-opus-5",
+     "id": "b1",
+     "kind": "image",
+     "label": "screenshot",
+     "peakTokens": 3252,
+     "residentTurns": 9,
+     "cumulativeReadTokens": 29268,
+     "cumulativeReadCostUsd": 0.0146,
+     "sampleTurn": 1,
+     "sampleBlockIndex": 2
+    }
+   ]
+  },
+  {
+   "scope": "all",
+   "count": 1,
+   "coverage": {
+    "sessionsMatched": 2,
+    "sessionsScanned": 2,
+    "scanCap": 25,
+    "complete": true,
+    "note": "Scanned all 2 live-registry session(s) in scope. Historical sessions not in the live registry are not scanned (lazy)."
+   },
+   "blobs": [
+    {
+     "sessionId": "sess-alpha",
+     "project": "/ws/alpha",
+     "model": "claude-opus-5",
+     "id": "b1",
+     "kind": "image",
+     "label": "screenshot",
+     "peakTokens": 3252,
+     "residentTurns": 9,
+     "cumulativeReadTokens": 29268,
+     "cumulativeReadCostUsd": 0.0146,
+     "sampleTurn": 1,
+     "sampleBlockIndex": 2
+    }
+   ]
+  },
+  {
+   "scope": "all",
+   "count": 4,
+   "coverage": {
+    "sessionsMatched": 2,
+    "sessionsScanned": 2,
+    "scanCap": 25,
+    "complete": true,
+    "note": "Scanned all 2 live-registry session(s) in scope. Historical sessions not in the live registry are not scanned (lazy)."
+   },
+   "blobs": [
+    {
+     "sessionId": "sess-alpha",
+     "project": "/ws/alpha",
+     "model": "claude-opus-5",
+     "id": "b2",
+     "kind": "text",
+     "label": "CLAUDE.md",
+     "peakTokens": 64868,
+     "residentTurns": 9,
+     "cumulativeReadTokens": 583812,
+     "cumulativeReadCostUsd": 0.2919,
+     "sampleTurn": 1,
+     "sampleBlockIndex": 0
+    }
+   ],
+   "note": "Showing top 1 of 4 by wasted cache-read cost; raise topN to see more (max 100)."
+  },
+  {
+   "scope": "all",
+   "count": 4,
+   "coverage": {
+    "sessionsMatched": 2,
+    "sessionsScanned": 2,
+    "scanCap": 25,
+    "complete": true,
+    "note": "Scanned all 2 live-registry session(s) in scope. Historical sessions not in the live registry are not scanned (lazy)."
+   },
+   "blobs": [
+    {
+     "sessionId": "sess-alpha",
+     "project": "/ws/alpha",
+     "model": "claude-opus-5",
+     "id": "b2",
+     "kind": "text",
+     "label": "CLAUDE.md",
+     "peakTokens": 64868,
+     "residentTurns": 9,
+     "cumulativeReadTokens": 583812,
+     "cumulativeReadCostUsd": 0.2919,
+     "sampleTurn": 1,
+     "sampleBlockIndex": 0
+    }
+   ],
+   "note": "Showing top 1 of 4 by wasted cache-read cost; raise topN to see more (max 100)."
+  },
+  {
+   "scope": "all",
+   "count": 4,
+   "coverage": {
+    "sessionsMatched": 2,
+    "sessionsScanned": 2,
+    "scanCap": 25,
+    "complete": true,
+    "note": "Scanned all 2 live-registry session(s) in scope. Historical sessions not in the live registry are not scanned (lazy)."
+   },
+   "blobs": [
+    {
+     "sessionId": "sess-alpha",
+     "project": "/ws/alpha",
+     "model": "claude-opus-5",
+     "id": "b2",
+     "kind": "text",
+     "label": "CLAUDE.md",
+     "peakTokens": 64868,
+     "residentTurns": 9,
+     "cumulativeReadTokens": 583812,
+     "cumulativeReadCostUsd": 0.2919,
+     "sampleTurn": 1,
+     "sampleBlockIndex": 0
+    },
+    {
+     "sessionId": "sess-alpha",
+     "project": "/ws/alpha",
+     "model": "claude-opus-5",
+     "id": "b1",
+     "kind": "image",
+     "label": "screenshot",
+     "peakTokens": 3252,
+     "residentTurns": 9,
+     "cumulativeReadTokens": 29268,
+     "cumulativeReadCostUsd": 0.0146,
+     "sampleTurn": 1,
+     "sampleBlockIndex": 2
+    },
+    {
+     "sessionId": "sess-beta",
+     "project": "/ws/beta",
+     "model": "claude-sonnet-5",
+     "id": "c1",
+     "kind": "text",
+     "label": "notes",
+     "peakTokens": 900,
+     "residentTurns": 4,
+     "cumulativeReadTokens": 3600,
+     "cumulativeReadCostUsd": 0.0018,
+     "sampleTurn": 1,
+     "sampleBlockIndex": 1
+    },
+    {
+     "sessionId": "sess-alpha",
+     "project": "/ws/alpha",
+     "model": "claude-opus-5",
+     "id": "b3",
+     "kind": "tool_result",
+     "label": "small",
+     "peakTokens": 100,
+     "residentTurns": 2,
+     "cumulativeReadTokens": 200,
+     "cumulativeReadCostUsd": 0.0001,
+     "sampleTurn": 2,
+     "sampleBlockIndex": 5
+    }
+   ]
+  },
+  {
+   "scope": "sess-beta",
+   "count": 1,
+   "coverage": {
+    "sessionsMatched": 1,
+    "sessionsScanned": 1,
+    "scanCap": 25,
+    "complete": true,
+    "note": "Single session sess-beta."
+   },
+   "blobs": [
+    {
+     "sessionId": "sess-beta",
+     "project": "/ws/beta",
+     "model": "claude-sonnet-5",
+     "id": "c1",
+     "kind": "text",
+     "label": "notes",
+     "peakTokens": 900,
+     "residentTurns": 4,
+     "cumulativeReadTokens": 3600,
+     "cumulativeReadCostUsd": 0.0018,
+     "sampleTurn": 1,
+     "sampleBlockIndex": 1
+    }
+   ]
+  }
+ ],
+ "queryCases": [
+  {
+   "name": "by-kind",
+   "filter": {},
+   "groupBy": "kind"
+  },
+  {
+   "name": "by-session",
+   "filter": {},
+   "groupBy": "session"
+  },
+  {
+   "name": "by-project",
+   "filter": {},
+   "groupBy": "project"
+  },
+  {
+   "name": "by-model",
+   "filter": {},
+   "groupBy": "model"
+  },
+  {
+   "name": "by-turn",
+   "filter": {},
+   "groupBy": "turn"
+  },
+  {
+   "name": "model-substring-match",
+   "filter": {
+    "model": "opus"
+   },
+   "groupBy": "session"
+  },
+  {
+   "name": "min-tokens",
+   "filter": {
+    "minTokens": 500
+   },
+   "groupBy": "kind"
+  },
+  {
+   "name": "turn-range",
+   "filter": {
+    "turnFrom": 2,
+    "turnTo": 3
+   },
+   "groupBy": "turn"
+  },
+  {
+   "name": "session-scope",
+   "filter": {
+    "sessionId": "sess-beta"
+   },
+   "groupBy": "kind"
+  },
+  {
+   "name": "project-scope",
+   "filter": {
+    "project": "/ws/alpha"
+   },
+   "groupBy": "kind"
+  },
+  {
+   "name": "kind-filter",
+   "filter": {
+    "kind": "text"
+   },
+   "groupBy": "session"
+  },
+  {
+   "name": "topN-1-discloses-the-cut",
+   "filter": {
+    "topN": 1
+   },
+   "groupBy": "kind"
+  }
+ ],
+ "queryResults": [
+  {
+   "groupBy": "kind",
+   "filter": {},
+   "matchedBlocks": 6,
+   "distinctGroups": 4,
+   "coverage": {
+    "sessionsMatched": 2,
+    "sessionsScanned": 2,
+    "scanCap": 25,
+    "complete": true,
+    "note": "Scanned all 2 live-registry session(s) in scope. Historical sessions not in the live registry are not scanned (lazy)."
+   },
+   "groups": [
+    {
+     "key": "text",
+     "tokens": 66268,
+     "count": 3,
+     "estCostUsd": 0.0329
+    },
+    {
+     "key": "image",
+     "tokens": 3252,
+     "count": 1,
+     "estCostUsd": 0.0016
+    },
+    {
+     "key": "tool_use",
+     "tokens": 250,
+     "count": 1,
+     "estCostUsd": 0.0001
+    },
+    {
+     "key": "tool_result",
+     "tokens": 100,
+     "count": 1,
+     "estCostUsd": 0.0001
+    }
+   ]
+  },
+  {
+   "groupBy": "session",
+   "filter": {},
+   "matchedBlocks": 6,
+   "distinctGroups": 2,
+   "coverage": {
+    "sessionsMatched": 2,
+    "sessionsScanned": 2,
+    "scanCap": 25,
+    "complete": true,
+    "note": "Scanned all 2 live-registry session(s) in scope. Historical sessions not in the live registry are not scanned (lazy)."
+   },
+   "groups": [
+    {
+     "key": "sess-alpha",
+     "tokens": 68720,
+     "count": 4,
+     "estCostUsd": 0.0344
+    },
+    {
+     "key": "sess-beta",
+     "tokens": 1150,
+     "count": 2,
+     "estCostUsd": 0.0002
+    }
+   ]
+  },
+  {
+   "groupBy": "project",
+   "filter": {},
+   "matchedBlocks": 6,
+   "distinctGroups": 2,
+   "coverage": {
+    "sessionsMatched": 2,
+    "sessionsScanned": 2,
+    "scanCap": 25,
+    "complete": true,
+    "note": "Scanned all 2 live-registry session(s) in scope. Historical sessions not in the live registry are not scanned (lazy)."
+   },
+   "groups": [
+    {
+     "key": "/ws/alpha",
+     "tokens": 68720,
+     "count": 4,
+     "estCostUsd": 0.0344
+    },
+    {
+     "key": "/ws/beta",
+     "tokens": 1150,
+     "count": 2,
+     "estCostUsd": 0.0002
+    }
+   ]
+  },
+  {
+   "groupBy": "model",
+   "filter": {},
+   "matchedBlocks": 6,
+   "distinctGroups": 2,
+   "coverage": {
+    "sessionsMatched": 2,
+    "sessionsScanned": 2,
+    "scanCap": 25,
+    "complete": true,
+    "note": "Scanned all 2 live-registry session(s) in scope. Historical sessions not in the live registry are not scanned (lazy)."
+   },
+   "groups": [
+    {
+     "key": "claude-opus-5",
+     "tokens": 68720,
+     "count": 4,
+     "estCostUsd": 0.0344
+    },
+    {
+     "key": "claude-sonnet-5",
+     "tokens": 1150,
+     "count": 2,
+     "estCostUsd": 0.0002
+    }
+   ]
+  },
+  {
+   "groupBy": "turn",
+   "filter": {},
+   "matchedBlocks": 6,
+   "distinctGroups": 3,
+   "coverage": {
+    "sessionsMatched": 2,
+    "sessionsScanned": 2,
+    "scanCap": 25,
+    "complete": true,
+    "note": "Scanned all 2 live-registry session(s) in scope. Historical sessions not in the live registry are not scanned (lazy)."
+   },
+   "groups": [
+    {
+     "key": "1",
+     "tokens": 69020,
+     "count": 3,
+     "estCostUsd": 0.0342
+    },
+    {
+     "key": "2",
+     "tokens": 600,
+     "count": 2,
+     "estCostUsd": 0.0003
+    },
+    {
+     "key": "3",
+     "tokens": 250,
+     "count": 1,
+     "estCostUsd": 0.0001
+    }
+   ]
+  },
+  {
+   "groupBy": "session",
+   "filter": {
+    "model": "opus"
+   },
+   "matchedBlocks": 4,
+   "distinctGroups": 1,
+   "coverage": {
+    "sessionsMatched": 2,
+    "sessionsScanned": 2,
+    "scanCap": 25,
+    "complete": true,
+    "note": "Scanned all 2 live-registry session(s) in scope. Historical sessions not in the live registry are not scanned (lazy)."
+   },
+   "groups": [
+    {
+     "key": "sess-alpha",
+     "tokens": 68720,
+     "count": 4,
+     "estCostUsd": 0.0344
+    }
+   ]
+  },
+  {
+   "groupBy": "kind",
+   "filter": {
+    "minTokens": 500
+   },
+   "matchedBlocks": 4,
+   "distinctGroups": 2,
+   "coverage": {
+    "sessionsMatched": 2,
+    "sessionsScanned": 2,
+    "scanCap": 25,
+    "complete": true,
+    "note": "Scanned all 2 live-registry session(s) in scope. Historical sessions not in the live registry are not scanned (lazy)."
+   },
+   "groups": [
+    {
+     "key": "text",
+     "tokens": 66268,
+     "count": 3,
+     "estCostUsd": 0.0329
+    },
+    {
+     "key": "image",
+     "tokens": 3252,
+     "count": 1,
+     "estCostUsd": 0.0016
+    }
+   ]
+  },
+  {
+   "groupBy": "turn",
+   "filter": {
+    "turnFrom": 2,
+    "turnTo": 3
+   },
+   "matchedBlocks": 3,
+   "distinctGroups": 2,
+   "coverage": {
+    "sessionsMatched": 2,
+    "sessionsScanned": 2,
+    "scanCap": 25,
+    "complete": true,
+    "note": "Scanned all 2 live-registry session(s) in scope. Historical sessions not in the live registry are not scanned (lazy)."
+   },
+   "groups": [
+    {
+     "key": "2",
+     "tokens": 600,
+     "count": 2,
+     "estCostUsd": 0.0003
+    },
+    {
+     "key": "3",
+     "tokens": 250,
+     "count": 1,
+     "estCostUsd": 0.0001
+    }
+   ]
+  },
+  {
+   "groupBy": "kind",
+   "filter": {
+    "sessionId": "sess-beta"
+   },
+   "matchedBlocks": 2,
+   "distinctGroups": 2,
+   "coverage": {
+    "sessionsMatched": 1,
+    "sessionsScanned": 1,
+    "scanCap": 25,
+    "complete": true,
+    "note": "Single session sess-beta."
+   },
+   "groups": [
+    {
+     "key": "text",
+     "tokens": 900,
+     "count": 1,
+     "estCostUsd": 0.0002
+    },
+    {
+     "key": "tool_use",
+     "tokens": 250,
+     "count": 1,
+     "estCostUsd": 0.0001
+    }
+   ]
+  },
+  {
+   "groupBy": "kind",
+   "filter": {
+    "project": "/ws/alpha"
+   },
+   "matchedBlocks": 4,
+   "distinctGroups": 3,
+   "coverage": {
+    "sessionsMatched": 1,
+    "sessionsScanned": 1,
+    "scanCap": 25,
+    "complete": true,
+    "note": "Scanned all 1 live-registry session(s) in scope \"/ws/alpha\". Historical sessions not in the live registry are not scanned (lazy)."
+   },
+   "groups": [
+    {
+     "key": "text",
+     "tokens": 65368,
+     "count": 2,
+     "estCostUsd": 0.0327
+    },
+    {
+     "key": "image",
+     "tokens": 3252,
+     "count": 1,
+     "estCostUsd": 0.0016
+    },
+    {
+     "key": "tool_result",
+     "tokens": 100,
+     "count": 1,
+     "estCostUsd": 0.0001
+    }
+   ]
+  },
+  {
+   "groupBy": "session",
+   "filter": {
+    "kind": "text"
+   },
+   "matchedBlocks": 3,
+   "distinctGroups": 2,
+   "coverage": {
+    "sessionsMatched": 2,
+    "sessionsScanned": 2,
+    "scanCap": 25,
+    "complete": true,
+    "note": "Scanned all 2 live-registry session(s) in scope. Historical sessions not in the live registry are not scanned (lazy)."
+   },
+   "groups": [
+    {
+     "key": "sess-alpha",
+     "tokens": 65368,
+     "count": 2,
+     "estCostUsd": 0.0327
+    },
+    {
+     "key": "sess-beta",
+     "tokens": 900,
+     "count": 1,
+     "estCostUsd": 0.0002
+    }
+   ]
+  },
+  {
+   "groupBy": "kind",
+   "filter": {
+    "topN": 1
+   },
+   "matchedBlocks": 6,
+   "distinctGroups": 4,
+   "coverage": {
+    "sessionsMatched": 2,
+    "sessionsScanned": 2,
+    "scanCap": 25,
+    "complete": true,
+    "note": "Scanned all 2 live-registry session(s) in scope. Historical sessions not in the live registry are not scanned (lazy)."
+   },
+   "groups": [
+    {
+     "key": "text",
+     "tokens": 66268,
+     "count": 3,
+     "estCostUsd": 0.0329
+    }
+   ],
+   "note": "Showing top 1 of 4 groups by tokens; raise topN to see more (max 100)."
+  }
+ ]
+}

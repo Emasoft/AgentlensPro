@@ -1821,3 +1821,74 @@ fn mcp_get_block_content_matches_the_http_route_and_never_ships_image_bytes() {
     }
     assert!(saw_image, "the fixture must contain an image block or this proves nothing");
 }
+
+/// The three SCOPED composition tools, plus the fix they exposed: the row-36 route was building
+/// compositions with NO project hint, so every `project` read "unknown" and every project-scoped
+/// query matched nothing while still answering 200. The test asserts the project is the session's
+/// real workspace, which is the only thing that makes the scope filter mean anything.
+#[test]
+fn mcp_scoped_composition_tools_resolve_the_project_and_report_coverage() {
+    let (_otlp, ui, state) = start_servers();
+    let bodies = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bodies");
+    let now = agentlens_core::now_ms();
+    {
+        let mut st = state.lock().unwrap();
+        st.bodies.record(
+            "scope-a",
+            agentlens_core::call_body_registry::CallBodyPointer {
+                kind: "request",
+                body_ref: Some(bodies.join("comp.request.json").to_string_lossy().into_owned()),
+                inline_body: None,
+                request_id: None,
+                span_id: Some("sp1".into()),
+                model: None,
+                query_source: None,
+                ts: 1000,
+            },
+        );
+        // The card is what carries the workspace — without it there is no project to resolve.
+        st.put_log_session(serde_json::json!({
+            "sessionId": "scope-a", "source": "claude_code", "dataSource": "log",
+            "startTime": agentlens_core::summarize::helpers::iso_from_ms((now - 60_000) as f64),
+            "workspace": "/ws/scoped",
+        }));
+    }
+    let call = |tool: &str, args: &str| -> serde_json::Value {
+        let body = format!(
+            r#"{{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{{"name":"{tool}","arguments":{args}}}}}"#
+        );
+        let env: serde_json::Value = serde_json::from_str(body_of(&post(ui, "/mcp", &body))).unwrap();
+        let text = env["result"]["content"][0]["text"].as_str().unwrap_or_else(|| panic!("{env}"));
+        serde_json::from_str(text).unwrap()
+    };
+
+    // THE FIX: the composition's project is the session's workspace, not "unknown".
+    let http: serde_json::Value = serde_json::from_str(body_of(&get(ui, "/api/composition-index/scope-a", ""))).unwrap();
+    assert_eq!(http["summary"]["project"], "/ws/scoped", "row 36 must resolve the project: {http}");
+
+    // …which is what makes a PROJECT-scoped query match at all.
+    let q = call("query_context_blocks", r#"{"verbosity":"full","project":"/ws/scoped","groupBy":"project"}"#);
+    assert_eq!(q["coverage"]["sessionsMatched"], 1, "the project scope matches by resolved project: {q}");
+    assert_eq!(q["groups"][0]["key"], "/ws/scoped", "{q}");
+    // The echoed `filter` describes the BLOCK filter — it must not carry the transport args.
+    assert!(q["filter"].get("verbosity").is_none(), "verbosity is not part of the filter: {q}");
+    assert!(q["filter"].get("groupBy").is_none(), "groupBy has its own field: {q}");
+    assert_eq!(q["filter"]["project"], "/ws/scoped");
+
+    // Coverage is present and honest on all three.
+    for (tool, args) in [
+        ("get_image_report", r#"{"verbosity":"full"}"#),
+        ("find_resident_blobs", r#"{"verbosity":"full"}"#),
+        ("query_context_blocks", r#"{"verbosity":"full"}"#),
+    ] {
+        let v = call(tool, args);
+        assert_eq!(v["coverage"]["complete"], true, "{tool}: {v}");
+        assert_eq!(v["coverage"]["scanCap"], 25, "{tool}: {v}");
+    }
+
+    // A scope that matches nothing is an EMPTY answer with honest coverage, never an error.
+    let none = call("get_image_report", r#"{"verbosity":"full","scope":"no-such-project"}"#);
+    assert_eq!(none["totalImageSessions"], 0, "{none}");
+    assert_eq!(none["coverage"]["sessionsMatched"], 0, "{none}");
+    assert_eq!(none["scope"], "no-such-project", "the scope is echoed so the caller sees what was asked: {none}");
+}
