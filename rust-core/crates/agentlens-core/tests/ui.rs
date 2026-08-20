@@ -1594,6 +1594,9 @@ fn mcp_get_window_budget_labels_accounts_and_keeps_the_pooled_window() {
             }));
         }
     }
+    // Two modes, because the wire has two: `verbosity:"full"` is the untouched payload, and the
+    // default is whatever `leanify` makes of it. Asserting structure against the default would be
+    // asserting the SHAPER's behaviour by accident.
     let call = |args: &str| -> serde_json::Value {
         let body = format!(
             r#"{{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{{"name":"get_window_budget","arguments":{args}}}}}"#
@@ -1602,8 +1605,13 @@ fn mcp_get_window_budget_labels_accounts_and_keeps_the_pooled_window() {
         let text = env["result"]["content"][0]["text"].as_str().unwrap_or_else(|| panic!("{env}"));
         serde_json::from_str(text).unwrap()
     };
+    let full = |args: &str| -> serde_json::Value {
+        let inner = args.trim_start_matches('{').trim_end_matches('}');
+        let sep = if inner.trim().is_empty() { "" } else { "," };
+        call(&format!(r#"{{"verbosity":"full"{sep}{inner}}}"#))
+    };
 
-    let all = call("{}");
+    let all = full("{}");
     let accounts = all["accounts"].as_array().unwrap();
     assert_eq!(accounts.len(), 2, "{all}");
     for w in accounts {
@@ -1612,11 +1620,18 @@ fn mcp_get_window_budget_labels_accounts_and_keeps_the_pooled_window() {
     assert!(all["machineWide"]["fiveHour"].is_object(), "the pooled window survives: {all}");
     assert!(all.get("message").is_none(), "an unfiltered call is not an empty-match: {all}");
 
-    let one = call(r#"{"accountId":"acct-aaaa1111"}"#);
+    let one = full(r#"{"accountId":"acct-aaaa1111"}"#);
     assert_eq!(one["accounts"].as_array().unwrap().len(), 1, "{one}");
-    let ghost = call(r#"{"accountId":"acct-ghost"}"#);
+    let ghost = full(r#"{"accountId":"acct-ghost"}"#);
     assert!(ghost["accounts"].as_array().unwrap().is_empty(), "{ghost}");
     assert!(ghost["message"].as_str().unwrap().contains("acct-ghost"), "{ghost}");
+
+    // In the DEFAULT (lean) mode an EMPTY array is dropped entirely — shapeGeneric skips
+    // zero-length arrays — so `accounts` vanishes and the message is the caller's only signal that
+    // the filter matched nothing. That is not a defect of the shaper; it is why the message exists.
+    let ghost_lean = call(r#"{"accountId":"acct-ghost"}"#);
+    assert!(ghost_lean.get("accounts").is_none(), "an empty array is dropped by the shaper: {ghost_lean}");
+    assert!(ghost_lean["message"].as_str().unwrap().contains("acct-ghost"), "so the message carries it: {ghost_lean}");
 }
 
 /// `check_burn_risk` is a pass-through of the six-row risk report, and the two threshold args are
@@ -1635,7 +1650,7 @@ fn mcp_check_burn_risk_serves_the_report_and_floors_the_thresholds() {
         serde_json::from_str(text).unwrap()
     };
 
-    let dflt = call("{}");
+    let dflt = call(r#"{"verbosity":"full"}"#);
     assert!(dflt["risks"].is_array(), "the report IS the payload: {dflt}");
     let fanout = |r: &serde_json::Value| -> f64 {
         r["risks"].as_array().unwrap().iter()
@@ -1644,12 +1659,22 @@ fn mcp_check_burn_risk_serves_the_report_and_floors_the_thresholds() {
             .unwrap_or_else(|| panic!("no FANOUT_BURST row: {r}"))
     };
     assert_eq!(fanout(&dflt), 5.0, "the TS default");
-    assert_eq!(fanout(&call(r#"{"fanoutThreshold":12}"#)), 12.0, "a caller may RAISE it");
-    assert_eq!(fanout(&call(r#"{"fanoutThreshold":0}"#)), 2.0, "but 0 floors to 2 — a row cannot be switched off");
+    assert_eq!(fanout(&call(r#"{"verbosity":"full","fanoutThreshold":12}"#)), 12.0, "a caller may RAISE it");
+    assert_eq!(fanout(&call(r#"{"verbosity":"full","fanoutThreshold":0}"#)), 2.0, "but 0 floors to 2 — a row cannot be switched off");
 
     // Every row is present whether or not it fired: an inactive row states the quiet measurement,
     // so "no risk" is never confused with "no feed".
     assert_eq!(dflt["risks"].as_array().unwrap().len(), 6, "{dflt}");
+
+    // And on the DEFAULT wire the token-economy shaper cuts the six rows to five — DISCLOSING it.
+    // This is what every MCP caller actually receives, so it is asserted here rather than assumed:
+    // the Rust core served these payloads raw until the choke point landed.
+    let lean = call("{}");
+    assert_eq!(lean["risks"].as_array().unwrap().len(), 5, "{lean}");
+    assert!(
+        lean["_truncated"].as_array().unwrap().iter().any(|n| n.as_str().is_some_and(|s| s.contains("showing top 5 of 6 risks"))),
+        "the cut is never silent: {lean}"
+    );
 }
 
 /// `get_lifecycle_events` must make "quiet" and "hooks never installed" TELLABLE APART over the

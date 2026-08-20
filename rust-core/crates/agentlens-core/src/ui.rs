@@ -1059,7 +1059,7 @@ async fn handle(
                             rid.as_deref(),
                             sid.as_deref(),
                         );
-                        crate::mcp::tool_ok(&id, &payload)
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
                     "get_burn_status" => {
                         // TRDD-BURNWDGT — label the per-account windows so the caller sees WHICH
@@ -1079,7 +1079,7 @@ async fn handle(
                         let account = st.burn.current_account(now);
                         let payload = crate::burn::runtime::label_burn_status_accounts(&status, Some(&account));
                         drop(st);
-                        crate::mcp::tool_ok(&id, &payload)
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
                     "get_session_status" => {
                         // Pass-through: `computeSessionStatus` IS the payload, there is no shaper.
@@ -1090,7 +1090,7 @@ async fn handle(
                         let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
                         let payload = st.live_session_status(sid.as_deref(), ws.as_deref(), now);
                         drop(st);
-                        crate::mcp::tool_ok(&id, &payload)
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
                     "get_window_budget" => {
                         let now = crate::now_ms() as f64;
@@ -1099,7 +1099,7 @@ async fn handle(
                         let account = st.burn.current_account(now);
                         drop(st);
                         let payload = crate::mcp_tools::get_window_budget(Some(&status), Some(&account), s("accountId").as_deref());
-                        crate::mcp::tool_ok(&id, &payload)
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
                     "check_burn_risk" => {
                         // Pass-through: the risk report IS the payload. The two threshold args are
@@ -1110,7 +1110,7 @@ async fn handle(
                         let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
                         let payload = st.burn_risk_report(now, n("fanoutThreshold"), n("spikeTokensPerMin"));
                         drop(st);
-                        crate::mcp::tool_ok(&id, &payload)
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
                     "get_lifecycle_events" => {
                         let n = |k: &str| args.get(k).and_then(Value::as_f64);
@@ -1140,7 +1140,7 @@ async fn handle(
                         let dir_exists = std::fs::metadata(&dir).is_ok();
                         let events = crate::hook_events::extract_lifecycle_events(&records, kinds.as_deref(), session.as_deref(), limit);
                         let payload = crate::mcp_tools::get_lifecycle_events(&dir.to_string_lossy(), dir_exists, events);
-                        crate::mcp::tool_ok(&id, &payload)
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
                     "get_context_composition" | "get_context_history" | "get_conversation" => {
                         let session_id = s("sessionId").unwrap_or_default();
@@ -1194,7 +1194,7 @@ async fn handle(
                                 n("turnTo"),
                             ),
                         };
-                        crate::mcp::tool_ok(&id, &payload)
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
                     // Every other frozen tool is still served by the TypeScript MCP server, and
                     // says so by name rather than answering emptily.

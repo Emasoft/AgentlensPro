@@ -46,6 +46,7 @@ pub mod hook_events;
 pub mod import_card;
 pub mod instruction_advisor;
 pub mod instruction_files;
+pub mod lean_response;
 pub mod log_reader;
 pub mod mcp;
 pub mod mcp_tools;

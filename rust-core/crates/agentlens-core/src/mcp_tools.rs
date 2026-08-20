@@ -505,3 +505,15 @@ pub fn get_lifecycle_events(hook_events_dir: &str, dir_exists: bool, events: Vec
     }
     Value::Object(m)
 }
+
+/// THE token-economy choke point (mcpServer.ts, just after the dispatch switch): every tool result
+/// is leanified before it leaves the server, with the caller's own `verbosity` / `maxTokens` args.
+///
+/// It lives here rather than in `mcp.rs` because it is POLICY, not protocol — `mcp.rs` stays a pure
+/// JSON-RPC transport. And it is ONE function rather than a call per arm on purpose: the TS made the
+/// same choice, and the reason is that a tool added later must not be able to opt out by forgetting.
+pub fn tool_ok_lean(id: &Value, payload: &Value, args: &Value) -> Value {
+    let full = args.get("verbosity").and_then(Value::as_str) == Some("full");
+    let max_tokens = args.get("maxTokens").and_then(Value::as_f64);
+    crate::mcp::tool_ok(id, &crate::lean_response::leanify(payload, full, max_tokens))
+}
