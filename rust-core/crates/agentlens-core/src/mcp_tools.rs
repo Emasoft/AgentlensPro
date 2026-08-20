@@ -2003,3 +2003,177 @@ pub fn get_subagent_tree(sessions: &[Value], session_id: &str, now_ms: f64) -> V
     }
     Value::Object(m)
 }
+
+/// mcpServer.ts HOG_SCAN_CAP — how many log-backed sessions one hog scan will open.
+pub const HOG_SCAN_CAP: usize = 25;
+
+/// `buildScanCoverage` — the honest-sampling contract (spec 4). It states EXPLICITLY what was
+/// scanned versus skipped, so a bounded total is never mistaken for full history. The note is three
+/// different sentences on purpose: "nothing to scan", "complete", and "SAMPLE" are three different
+/// facts, and collapsing them lets an empty result read as a clean bill of health.
+pub fn build_scan_coverage(considered: f64, with_log: f64, scanned: f64, scan_cap: f64) -> Value {
+    let skipped = with_log - scanned;
+    let complete = skipped == 0.0;
+    let note = if complete {
+        if with_log == 0.0 {
+            format!("No log-backed sessions to scan ({} considered, none with a local transcript on disk).", fmt_js_num(considered))
+        } else {
+            format!(
+                "Complete coverage: all {} log-backed sessions (of {} considered) were scanned.",
+                fmt_js_num(with_log),
+                fmt_js_num(considered)
+            )
+        }
+    } else {
+        format!(
+            "SAMPLE, not full coverage: {} most-recent log-backed sessions scanned (cap {}); {} of {} log-backed sessions were NOT scanned. Totals reflect the scanned sample only.",
+            fmt_js_num(scanned),
+            fmt_js_num(scan_cap),
+            fmt_js_num(skipped),
+            fmt_js_num(with_log)
+        )
+    };
+    let mut m = Map::new();
+    m.insert("sessionsConsidered".into(), num(considered));
+    m.insert("sessionsWithLog".into(), num(with_log));
+    m.insert("sessionsScanned".into(), num(scanned));
+    m.insert("sessionsSkipped".into(), num(skipped));
+    m.insert("scanCap".into(), num(scan_cap));
+    m.insert("complete".into(), Value::Bool(complete));
+    m.insert("note".into(), Value::String(note));
+    Value::Object(m)
+}
+
+/// `fileBackedPool` — the scoped sessions that actually have a transcript ON DISK, capped.
+/// `considered` counts the scope match and `withLog` the file-backed subset, so the two numbers
+/// together say whether a small pool means "narrow scope" or "most sessions have no local log".
+fn file_backed_pool<'a>(
+    sessions: &'a [Value],
+    file_ids: &std::collections::HashSet<String>,
+    scope: Option<&str>,
+    limit: usize,
+) -> (Vec<&'a Value>, f64, f64) {
+    let scoped: Vec<&Value> = match scope {
+        // `(s.workspace ?? '').startsWith(scope) || s.sessionId.includes(scope)` — a scope matches
+        // either a workspace PREFIX or a session-id SUBSTRING, so a bare id fragment works as a scope.
+        Some(sc) => sessions
+            .iter()
+            .filter(|s| {
+                s.get("workspace").and_then(Value::as_str).unwrap_or("").starts_with(sc)
+                    || s.get("sessionId").and_then(Value::as_str).unwrap_or("").contains(sc)
+            })
+            .collect(),
+        None => sessions.iter().collect(),
+    };
+    let backed: Vec<&Value> =
+        scoped.iter().copied().filter(|s| file_ids.contains(s.get("sessionId").and_then(Value::as_str).unwrap_or(""))).collect();
+    let (considered, with_log) = (scoped.len() as f64, backed.len() as f64);
+    (backed.into_iter().take(limit).collect(), considered, with_log)
+}
+
+/// `find_context_hogs` (mcpServer.ts handleFindContextHogs) — which injected sources cost the most
+/// across a project's sessions, summed over the turns they persist in.
+///
+/// `get_composition` is a CLOSURE because the TS accessor is async and per-session: the whole call
+/// is disk-bound and belongs on a blocking thread. A session whose composition cannot be
+/// reconstructed is NOT counted as scanned — that is what keeps `coverage` honest rather than
+/// letting an unreadable transcript inflate the sample.
+pub fn find_context_hogs(
+    sessions: &[Value],
+    file_ids: &std::collections::HashSet<String>,
+    args: &Value,
+    get_composition: &dyn Fn(&str) -> Option<Value>,
+) -> Value {
+    // `args.scope?.trim()` is guarded TWICE, with DIFFERENT operators, and the two disagree on the
+    // whitespace case: the pool filter is `scope ? … : null` (TRUTHY — "" is no scope at all) while
+    // the echo is `scope ?? 'all'` (NULLISH — "" survives as ""). So an all-whitespace scope filters
+    // nothing yet reports itself as `""`, not as `"all"`. Collapsing them to one `Option` (either
+    // way) is wrong; keep present-ness for the echo and emptiness for the filter.
+    let trimmed = args.get("scope").and_then(Value::as_str).map(str::trim);
+    let scope = trimmed.filter(|s| !s.is_empty());
+    // `Math.min(topN ?? 15, 50)` — NULLISH default, and only an UPPER clamp: a 0 or negative topN
+    // stays as given and returns nothing, which is what the TS does.
+    let top_n = args.get("topN").and_then(Value::as_f64).unwrap_or(15.0).min(50.0);
+    let (pool, considered, with_log) = file_backed_pool(sessions, file_ids, scope, HOG_SCAN_CAP);
+
+    let mut by_key: indexmap::IndexMap<String, (String, String, f64, f64, f64)> = indexmap::IndexMap::new();
+    let mut scanned = 0.0;
+    for s in &pool {
+        let Some(c) = get_composition(s.get("sessionId").and_then(Value::as_str).unwrap_or("")) else { continue };
+        scanned += 1.0;
+        for a in aggregate_composition(&c) {
+            let (label, kind) = (
+                a.get("label").and_then(Value::as_str).unwrap_or("").to_owned(),
+                a.get("kind").and_then(Value::as_str).unwrap_or("").to_owned(),
+            );
+            let e = by_key.entry(format!("{kind}::{label}")).or_insert((label, kind, 0.0, 0.0, 0.0));
+            e.2 += f(&a, "cumulativeTokens");
+            e.3 += 1.0;
+            e.4 += f(&a, "turnsPresent");
+        }
+    }
+    let distinct = by_key.len() as f64;
+    let mut hogs: Vec<(String, String, f64, f64, f64)> = by_key.into_values().collect();
+    // Stable, so equal-cost sources keep first-seen order rather than reshuffling between runs.
+    hogs.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+    let kept: Vec<Value> = hogs
+        .into_iter()
+        .take(top_n.max(0.0) as usize)
+        .map(|(label, kind, cumulative, sess, occ)| {
+            let mut m = Map::new();
+            m.insert("label".into(), Value::String(label));
+            m.insert("kind".into(), Value::String(kind));
+            m.insert("cumulativeTokens".into(), num(cumulative));
+            m.insert("sessions".into(), num(sess));
+            m.insert("occurrences".into(), num(occ));
+            Value::Object(m)
+        })
+        .collect();
+
+    let mut m = Map::new();
+    m.insert("scope".into(), Value::String(trimmed.unwrap_or("all").to_owned()));
+    // Legacy flat counters kept for existing consumers; `coverage` is the honest-sampling contract.
+    m.insert("sessionsConsidered".into(), num(considered));
+    m.insert("sessionsWithLog".into(), num(with_log));
+    m.insert("sessionsScanned".into(), num(scanned));
+    m.insert("coverage".into(), build_scan_coverage(considered, with_log, scanned, HOG_SCAN_CAP as f64));
+    // Top-N truncation is labeled too: how many distinct sources existed vs how many are returned.
+    m.insert("distinctSources".into(), num(distinct));
+    m.insert("returnedHogs".into(), num(kept.len() as f64));
+    m.insert("hogsTruncated".into(), Value::Bool(distinct > top_n));
+    m.insert("hogs".into(), Value::Array(kept));
+    Value::Object(m)
+}
+
+/// `get_account_state_at` (mcpServer.ts handleGetAccountStateAt) — which account/plan/TTL regime was
+/// in force at a given moment.
+///
+/// A timeline that does not reach back far enough returns `state: null` WITH a note, never an error:
+/// the record starts when the server first observed a state, so "before our history" is a coverage
+/// gap and must not read as "no account was active".
+pub fn get_account_state_at(args: &Value, path: &std::path::Path) -> Value {
+    // `typeof args.ts === 'number' ? args.ts : (args.iso ? Date.parse(args.iso) : NaN)` — `ts` wins,
+    // and only a TRUTHY `iso` is parsed (an empty string yields NaN either way).
+    let t = match args.get("ts").and_then(Value::as_f64) {
+        Some(n) => Some(n),
+        None => args.get("iso").and_then(Value::as_str).filter(|s| !s.is_empty()).and_then(crate::summarize::helpers::parse_iso_ms),
+    }
+    .filter(|n| n.is_finite());
+    let Some(t) = t else {
+        let mut m = Map::new();
+        m.insert("error".into(), "Provide `ts` (ms epoch) or `iso` (ISO-8601) — could not resolve a timestamp.".into());
+        return Value::Object(m);
+    };
+    let mut m = Map::new();
+    m.insert("at".into(), Value::String(crate::summarize::helpers::iso_from_ms(t)));
+    match crate::account_state_timeline::resolve_state_at(t, path) {
+        Some(state) => {
+            m.insert("state".into(), state);
+        }
+        None => {
+            m.insert("state".into(), Value::Null);
+            m.insert("note".into(), "No account-state record precedes this timestamp — the timeline may not extend that far back (it starts when the server first observed a state), or no state has been recorded yet.".into());
+        }
+    }
+    Value::Object(m)
+}

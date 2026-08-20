@@ -1,0 +1,7 @@
+{"ts":1785540000000,"accountId":"aaaaaaaa","email":null,"mode":"subscription within plan","plan":"Max 20x","authRegime":"subscription","ttlMinutes":60,"ttlSource":"doc-matrix"}
+{"ts":1785543600000,"accountId":"aaaaaaaa","email":null,"mode":"usage credits","plan":"Max 20x","authRegime":"usage-credits","ttlMinutes":5,"ttlSource":"config"}
+
+{"ts":1785547200000,"accountId":"bbbb2222","email":null,"mode":"subscription within plan","plan":"Pro","authRegime":"subscription","ttlMinutes":60,"ttlSource":"measured"}
+{"ts":"not-a-number","accountId":"cccc3333","mode":"bogus","plan":"x","authRegime":"unknown","ttlMinutes":0,"ttlSource":"assumed"}
+{ this line is torn
+{"ts":1785550800000,"accountId":"bbbb2222","email":null,"mode":"subscription within plan","plan":"Pro","authRegime":"subscription","ttlMinutes":60,"ttlSource":"doc-matrix"}

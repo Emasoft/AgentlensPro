@@ -1398,6 +1398,50 @@ async fn handle(
                         .map_err(|e| format!("skill attribution join failed: {e}"))?;
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
+                    "get_account_state_at" => {
+                        let path = {
+                            let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                            crate::account_state_timeline::account_state_timeline_path(&st.data_dir)
+                        };
+                        let payload = crate::mcp_tools::get_account_state_at(&args, &path);
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
+                    }
+                    "find_context_hogs" => {
+                        // The pool is capped at 25 sessions but each one is a transcript REPARSE, so
+                        // the whole scan goes on spawn_blocking with the state lock released — the
+                        // P4s rule, and the reason the composition accessor is a closure here rather
+                        // than a pre-built map.
+                        let now = crate::now_ms() as f64;
+                        let (sessions, env) = {
+                            let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                            let summary = st.build_session_summary(now);
+                            let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
+                            drop(summary);
+                            (sessions, st.log_env.clone())
+                        };
+                        let a = args.clone();
+                        let payload = tokio::task::spawn_blocking(move || {
+                            let file_ids = crate::context_composition::list_session_file_ids(&env);
+                            let parent_of = |sid: &str| -> Option<String> {
+                                sessions
+                                    .iter()
+                                    .find(|s| s.get("sessionId").and_then(Value::as_str) == Some(sid))
+                                    .and_then(|s| s.get("parentSessionId").and_then(Value::as_str))
+                                    .map(str::to_owned)
+                            };
+                            // The TS accessor is `.catch(() => null)`-wrapped: a session whose
+                            // composition cannot be reconstructed is SKIPPED, and — crucially — is
+                            // not counted as scanned, so `coverage` stays honest.
+                            let get_comp = |sid: &str| -> Option<Value> {
+                                let ancestor = crate::context_composition::resolve_logged_ancestor(&env, sid, &parent_of).or_else(|| parent_of(sid));
+                                crate::context_composition::build_context_composition(&env, sid, ancestor.as_deref())
+                            };
+                            crate::mcp_tools::find_context_hogs(&sessions, &file_ids, &a, &get_comp)
+                        })
+                        .await
+                        .map_err(|e| format!("context hog scan join failed: {e}"))?;
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
+                    }
                     "get_context_growth" => {
                         let now = crate::now_ms();
                         let session_id = s("sessionId").unwrap_or_default();

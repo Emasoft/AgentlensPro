@@ -1,0 +1,533 @@
+{
+  "sessions": [
+    {
+      "sessionId": "comp-many",
+      "workspace": "/w/alpha",
+      "model": "claude-opus-5",
+      "inputTokens": 10,
+      "outputTokens": 5,
+      "cacheReadTokens": 0,
+      "cacheCreateTokens": 0,
+      "turns": 1
+    },
+    {
+      "sessionId": "comp-own",
+      "workspace": "/w/alpha",
+      "model": "claude-opus-5",
+      "inputTokens": 10,
+      "outputTokens": 5,
+      "cacheReadTokens": 0,
+      "cacheCreateTokens": 0,
+      "turns": 1
+    },
+    {
+      "sessionId": "comp-parent",
+      "workspace": "/w/beta",
+      "model": "claude-opus-5",
+      "inputTokens": 10,
+      "outputTokens": 5,
+      "cacheReadTokens": 0,
+      "cacheCreateTokens": 0,
+      "turns": 1
+    },
+    {
+      "sessionId": "no-log-here",
+      "workspace": "/w/alpha",
+      "model": "claude-opus-5",
+      "inputTokens": 10,
+      "outputTokens": 5,
+      "cacheReadTokens": 0,
+      "cacheCreateTokens": 0,
+      "turns": 1
+    }
+  ],
+  "compositions": {
+    "comp-many": {
+      "turns": [
+        {
+          "turn": 1,
+          "sources": [
+            {
+              "kind": "skill",
+              "label": "ponytail",
+              "tokens": 1000
+            },
+            {
+              "kind": "file",
+              "label": "CLAUDE.md",
+              "tokens": 5000
+            }
+          ]
+        },
+        {
+          "turn": 2,
+          "sources": [
+            {
+              "kind": "file",
+              "label": "CLAUDE.md",
+              "tokens": 5000
+            }
+          ]
+        },
+        {
+          "turn": 3,
+          "sources": [
+            {
+              "kind": "skill",
+              "label": "ponytail",
+              "tokens": 1200
+            },
+            {
+              "kind": "file",
+              "label": "CLAUDE.md",
+              "tokens": 5000
+            }
+          ]
+        }
+      ]
+    },
+    "comp-own": {
+      "turns": [
+        {
+          "turn": 1,
+          "sources": [
+            {
+              "kind": "file",
+              "label": "CLAUDE.md",
+              "tokens": 5000
+            },
+            {
+              "kind": "tool",
+              "label": "Bash",
+              "tokens": 300
+            }
+          ]
+        },
+        {
+          "turn": 2,
+          "sources": [
+            {
+              "kind": "file",
+              "label": "CLAUDE.md",
+              "tokens": 5000
+            }
+          ]
+        }
+      ]
+    },
+    "comp-parent": null
+  },
+  "hogScanCap": 25,
+  "isoCases": {
+    "before": "2026-07-31T20:33:20.000Z",
+    "first": "2026-07-31T23:20:00.000Z",
+    "mid": "2026-08-01T00:43:20.000Z",
+    "last": "2026-08-01T02:20:00.000Z"
+  },
+  "timeline": [
+    {
+      "ts": 1785540000000,
+      "accountId": "aaaaaaaa",
+      "email": null,
+      "mode": "subscription within plan",
+      "plan": "Max 20x",
+      "authRegime": "subscription",
+      "ttlMinutes": 60,
+      "ttlSource": "doc-matrix"
+    },
+    {
+      "ts": 1785543600000,
+      "accountId": "aaaaaaaa",
+      "email": null,
+      "mode": "usage credits",
+      "plan": "Max 20x",
+      "authRegime": "usage-credits",
+      "ttlMinutes": 5,
+      "ttlSource": "config"
+    },
+    {
+      "ts": 1785547200000,
+      "accountId": "bbbb2222",
+      "email": null,
+      "mode": "subscription within plan",
+      "plan": "Pro",
+      "authRegime": "subscription",
+      "ttlMinutes": 60,
+      "ttlSource": "measured"
+    },
+    {
+      "ts": 1785550800000,
+      "accountId": "bbbb2222",
+      "email": null,
+      "mode": "subscription within plan",
+      "plan": "Pro",
+      "authRegime": "subscription",
+      "ttlMinutes": 60,
+      "ttlSource": "doc-matrix"
+    }
+  ],
+  "hogsAll": {
+    "scope": "all",
+    "sessionsConsidered": 4,
+    "sessionsWithLog": 3,
+    "sessionsScanned": 2,
+    "coverage": {
+      "sessionsConsidered": 4,
+      "sessionsWithLog": 3,
+      "sessionsScanned": 2,
+      "sessionsSkipped": 1,
+      "scanCap": 25,
+      "complete": false,
+      "note": "SAMPLE, not full coverage: 2 most-recent log-backed sessions scanned (cap 25); 1 of 3 log-backed sessions were NOT scanned. Totals reflect the scanned sample only."
+    },
+    "distinctSources": 3,
+    "returnedHogs": 3,
+    "hogsTruncated": false,
+    "hogs": [
+      {
+        "label": "CLAUDE.md",
+        "kind": "file",
+        "cumulativeTokens": 25000,
+        "sessions": 2,
+        "occurrences": 5
+      },
+      {
+        "label": "ponytail",
+        "kind": "skill",
+        "cumulativeTokens": 2200,
+        "sessions": 1,
+        "occurrences": 2
+      },
+      {
+        "label": "Bash",
+        "kind": "tool",
+        "cumulativeTokens": 300,
+        "sessions": 1,
+        "occurrences": 1
+      }
+    ]
+  },
+  "hogsScoped": {
+    "scope": "/w/alpha",
+    "sessionsConsidered": 3,
+    "sessionsWithLog": 2,
+    "sessionsScanned": 2,
+    "coverage": {
+      "sessionsConsidered": 3,
+      "sessionsWithLog": 2,
+      "sessionsScanned": 2,
+      "sessionsSkipped": 0,
+      "scanCap": 25,
+      "complete": true,
+      "note": "Complete coverage: all 2 log-backed sessions (of 3 considered) were scanned."
+    },
+    "distinctSources": 3,
+    "returnedHogs": 3,
+    "hogsTruncated": false,
+    "hogs": [
+      {
+        "label": "CLAUDE.md",
+        "kind": "file",
+        "cumulativeTokens": 25000,
+        "sessions": 2,
+        "occurrences": 5
+      },
+      {
+        "label": "ponytail",
+        "kind": "skill",
+        "cumulativeTokens": 2200,
+        "sessions": 1,
+        "occurrences": 2
+      },
+      {
+        "label": "Bash",
+        "kind": "tool",
+        "cumulativeTokens": 300,
+        "sessions": 1,
+        "occurrences": 1
+      }
+    ]
+  },
+  "hogsById": {
+    "scope": "comp-own",
+    "sessionsConsidered": 1,
+    "sessionsWithLog": 1,
+    "sessionsScanned": 1,
+    "coverage": {
+      "sessionsConsidered": 1,
+      "sessionsWithLog": 1,
+      "sessionsScanned": 1,
+      "sessionsSkipped": 0,
+      "scanCap": 25,
+      "complete": true,
+      "note": "Complete coverage: all 1 log-backed sessions (of 1 considered) were scanned."
+    },
+    "distinctSources": 2,
+    "returnedHogs": 2,
+    "hogsTruncated": false,
+    "hogs": [
+      {
+        "label": "CLAUDE.md",
+        "kind": "file",
+        "cumulativeTokens": 10000,
+        "sessions": 1,
+        "occurrences": 2
+      },
+      {
+        "label": "Bash",
+        "kind": "tool",
+        "cumulativeTokens": 300,
+        "sessions": 1,
+        "occurrences": 1
+      }
+    ]
+  },
+  "hogsBlankScope": {
+    "scope": "",
+    "sessionsConsidered": 4,
+    "sessionsWithLog": 3,
+    "sessionsScanned": 2,
+    "coverage": {
+      "sessionsConsidered": 4,
+      "sessionsWithLog": 3,
+      "sessionsScanned": 2,
+      "sessionsSkipped": 1,
+      "scanCap": 25,
+      "complete": false,
+      "note": "SAMPLE, not full coverage: 2 most-recent log-backed sessions scanned (cap 25); 1 of 3 log-backed sessions were NOT scanned. Totals reflect the scanned sample only."
+    },
+    "distinctSources": 3,
+    "returnedHogs": 3,
+    "hogsTruncated": false,
+    "hogs": [
+      {
+        "label": "CLAUDE.md",
+        "kind": "file",
+        "cumulativeTokens": 25000,
+        "sessions": 2,
+        "occurrences": 5
+      },
+      {
+        "label": "ponytail",
+        "kind": "skill",
+        "cumulativeTokens": 2200,
+        "sessions": 1,
+        "occurrences": 2
+      },
+      {
+        "label": "Bash",
+        "kind": "tool",
+        "cumulativeTokens": 300,
+        "sessions": 1,
+        "occurrences": 1
+      }
+    ]
+  },
+  "hogsTop1": {
+    "scope": "all",
+    "sessionsConsidered": 4,
+    "sessionsWithLog": 3,
+    "sessionsScanned": 2,
+    "coverage": {
+      "sessionsConsidered": 4,
+      "sessionsWithLog": 3,
+      "sessionsScanned": 2,
+      "sessionsSkipped": 1,
+      "scanCap": 25,
+      "complete": false,
+      "note": "SAMPLE, not full coverage: 2 most-recent log-backed sessions scanned (cap 25); 1 of 3 log-backed sessions were NOT scanned. Totals reflect the scanned sample only."
+    },
+    "distinctSources": 3,
+    "returnedHogs": 1,
+    "hogsTruncated": true,
+    "hogs": [
+      {
+        "label": "CLAUDE.md",
+        "kind": "file",
+        "cumulativeTokens": 25000,
+        "sessions": 2,
+        "occurrences": 5
+      }
+    ]
+  },
+  "hogsTop0": {
+    "scope": "all",
+    "sessionsConsidered": 4,
+    "sessionsWithLog": 3,
+    "sessionsScanned": 2,
+    "coverage": {
+      "sessionsConsidered": 4,
+      "sessionsWithLog": 3,
+      "sessionsScanned": 2,
+      "sessionsSkipped": 1,
+      "scanCap": 25,
+      "complete": false,
+      "note": "SAMPLE, not full coverage: 2 most-recent log-backed sessions scanned (cap 25); 1 of 3 log-backed sessions were NOT scanned. Totals reflect the scanned sample only."
+    },
+    "distinctSources": 3,
+    "returnedHogs": 0,
+    "hogsTruncated": true,
+    "hogs": []
+  },
+  "hogsTop999": {
+    "scope": "all",
+    "sessionsConsidered": 4,
+    "sessionsWithLog": 3,
+    "sessionsScanned": 2,
+    "coverage": {
+      "sessionsConsidered": 4,
+      "sessionsWithLog": 3,
+      "sessionsScanned": 2,
+      "sessionsSkipped": 1,
+      "scanCap": 25,
+      "complete": false,
+      "note": "SAMPLE, not full coverage: 2 most-recent log-backed sessions scanned (cap 25); 1 of 3 log-backed sessions were NOT scanned. Totals reflect the scanned sample only."
+    },
+    "distinctSources": 3,
+    "returnedHogs": 3,
+    "hogsTruncated": false,
+    "hogs": [
+      {
+        "label": "CLAUDE.md",
+        "kind": "file",
+        "cumulativeTokens": 25000,
+        "sessions": 2,
+        "occurrences": 5
+      },
+      {
+        "label": "ponytail",
+        "kind": "skill",
+        "cumulativeTokens": 2200,
+        "sessions": 1,
+        "occurrences": 2
+      },
+      {
+        "label": "Bash",
+        "kind": "tool",
+        "cumulativeTokens": 300,
+        "sessions": 1,
+        "occurrences": 1
+      }
+    ]
+  },
+  "hogsNoMatch": {
+    "scope": "/w/nowhere",
+    "sessionsConsidered": 0,
+    "sessionsWithLog": 0,
+    "sessionsScanned": 0,
+    "coverage": {
+      "sessionsConsidered": 0,
+      "sessionsWithLog": 0,
+      "sessionsScanned": 0,
+      "sessionsSkipped": 0,
+      "scanCap": 25,
+      "complete": true,
+      "note": "No log-backed sessions to scan (0 considered, none with a local transcript on disk)."
+    },
+    "distinctSources": 0,
+    "returnedHogs": 0,
+    "hogsTruncated": false,
+    "hogs": []
+  },
+  "coverageComplete": {
+    "sessionsConsidered": 3,
+    "sessionsWithLog": 3,
+    "sessionsScanned": 3,
+    "sessionsSkipped": 0,
+    "scanCap": 25,
+    "complete": true,
+    "note": "Complete coverage: all 3 log-backed sessions (of 3 considered) were scanned."
+  },
+  "coverageEmpty": {
+    "sessionsConsidered": 4,
+    "sessionsWithLog": 0,
+    "sessionsScanned": 0,
+    "sessionsSkipped": 0,
+    "scanCap": 25,
+    "complete": true,
+    "note": "No log-backed sessions to scan (4 considered, none with a local transcript on disk)."
+  },
+  "coverageSample": {
+    "sessionsConsidered": 40,
+    "sessionsWithLog": 30,
+    "sessionsScanned": 25,
+    "sessionsSkipped": 5,
+    "scanCap": 25,
+    "complete": false,
+    "note": "SAMPLE, not full coverage: 25 most-recent log-backed sessions scanned (cap 25); 5 of 30 log-backed sessions were NOT scanned. Totals reflect the scanned sample only."
+  },
+  "stateBefore": {
+    "at": "2026-07-31T20:33:20.000Z",
+    "state": null,
+    "note": "No account-state record precedes this timestamp — the timeline may not extend that far back (it starts when the server first observed a state), or no state has been recorded yet."
+  },
+  "stateFirst": {
+    "at": "2026-07-31T23:20:00.000Z",
+    "state": {
+      "ts": 1785540000000,
+      "accountId": "aaaaaaaa",
+      "email": null,
+      "mode": "subscription within plan",
+      "plan": "Max 20x",
+      "authRegime": "subscription",
+      "ttlMinutes": 60,
+      "ttlSource": "doc-matrix"
+    }
+  },
+  "stateMid": {
+    "at": "2026-08-01T00:43:20.000Z",
+    "state": {
+      "ts": 1785543600000,
+      "accountId": "aaaaaaaa",
+      "email": null,
+      "mode": "usage credits",
+      "plan": "Max 20x",
+      "authRegime": "usage-credits",
+      "ttlMinutes": 5,
+      "ttlSource": "config"
+    }
+  },
+  "stateLast": {
+    "at": "2026-08-01T02:20:00.000Z",
+    "state": {
+      "ts": 1785550800000,
+      "accountId": "bbbb2222",
+      "email": null,
+      "mode": "subscription within plan",
+      "plan": "Pro",
+      "authRegime": "subscription",
+      "ttlMinutes": 60,
+      "ttlSource": "doc-matrix"
+    }
+  },
+  "stateByTs": {
+    "at": "2026-08-01T01:20:00.000Z",
+    "state": {
+      "ts": 1785547200000,
+      "accountId": "bbbb2222",
+      "email": null,
+      "mode": "subscription within plan",
+      "plan": "Pro",
+      "authRegime": "subscription",
+      "ttlMinutes": 60,
+      "ttlSource": "measured"
+    }
+  },
+  "stateBadArgs": {
+    "error": "Provide `ts` (ms epoch) or `iso` (ISO-8601) — could not resolve a timestamp."
+  },
+  "stateBadIso": {
+    "error": "Provide `ts` (ms epoch) or `iso` (ISO-8601) — could not resolve a timestamp."
+  },
+  "resolveMid": {
+    "ts": 1785543600000,
+    "accountId": "aaaaaaaa",
+    "email": null,
+    "mode": "usage credits",
+    "plan": "Max 20x",
+    "authRegime": "usage-credits",
+    "ttlMinutes": 5,
+    "ttlSource": "config"
+  },
+  "resolveBefore": null
+}

@@ -71,3 +71,47 @@ pub fn resolve_auth_regime_label(account: Option<&AccountInfo>, ttl_ctx: Option<
     let billing = account?.billing_type.as_deref().filter(|b| !b.is_empty())?;
     Some(if billing.to_lowercase().contains("subscription") { "subscription" } else { "api-key" }.to_owned())
 }
+
+/// `AGENTLENS_ACCOUNT_STATE_LOG || dataPath('account-state.ndjson')` — a FALSY-or, so an empty
+/// override falls through to the data dir rather than resolving to the empty path.
+pub fn account_state_timeline_path(data_dir: &std::path::Path) -> std::path::PathBuf {
+    match std::env::var("AGENTLENS_ACCOUNT_STATE_LOG") {
+        Ok(v) if !v.is_empty() => std::path::PathBuf::from(v),
+        _ => data_dir.join("account-state.ndjson"),
+    }
+}
+
+/// The NDJSON state timeline, oldest first. A missing or unreadable file is an EMPTY timeline, never
+/// an error: "we have never observed an account" is a real answer, and throwing here would turn a
+/// first run into a failure. A torn line is skipped individually — one bad record must not discard
+/// the history around it — and a record without a numeric `ts` is dropped because the binary search
+/// below is only sound on an ordered, dated list.
+pub fn read_timeline(path: &std::path::Path) -> Vec<serde_json::Value> {
+    let Ok(text) = std::fs::read_to_string(path) else { return Vec::new() };
+    text.split('\n')
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|r| r.get("ts").and_then(serde_json::Value::as_f64).is_some())
+        .collect()
+}
+
+/// The newest record at or BEFORE `ts` — the account state in force at that moment.
+///
+/// Binary search over the append-ordered timeline: `records[mid].ts <= ts` moves the answer forward,
+/// so the result is the LAST record that does not postdate the query. `None` means the timeline does
+/// not reach back that far, which the caller must report as a gap rather than as "no account".
+pub fn resolve_state_at(ts: f64, path: &std::path::Path) -> Option<serde_json::Value> {
+    let records = read_timeline(path);
+    let t = |r: &serde_json::Value| r.get("ts").and_then(serde_json::Value::as_f64).unwrap_or(f64::NAN);
+    let (mut lo, mut hi, mut ans) = (0i64, records.len() as i64 - 1, -1i64);
+    while lo <= hi {
+        let mid = (lo + hi) >> 1;
+        if t(&records[mid as usize]) <= ts {
+            ans = mid;
+            lo = mid + 1;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    (ans >= 0).then(|| records[ans as usize].clone())
+}
