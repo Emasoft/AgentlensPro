@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T15:47:40+0200
+updated: 2026-08-20T15:59:41+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -869,11 +869,26 @@ release-via: publish
   **Watch out:** the frozen-schema test names one still-unported tool as its "not yet implemented"
   example. Porting that tool makes the endpoint look BROKEN rather than the test look OLD — swap the
   name (now `run_transcript_sql`) when it lands.
-- **NEXT (P4x.2c continued): keep batching handlers.** 37 tools remain. Next-easiest over ported
-  engines: cache-risk-commands and statusline (both engines ported and already on HTTP routes),
-  `get_account_state_at` (needs accountStateTimeline's `resolveStateAt` — NOT ported),
-  `get_subscription_usage`, `get_cache_event_log`, `get_session_detail`. **Every new arm must end in
-  `tool_ok_lean`, never `mcp::tool_ok`.** The dispatch cases are
+- **P4x.2c (commit 4c3a864): `find_relevant_context` + `get_efficiency_report`. 18 of 53.** Both are
+  pure over the session cards, so both landed on the EXISTING session-report oracle with the fixture
+  EXTENDED (real prompt text to match; a 20-day-old session so the efficiency report's FIRST half is
+  non-empty). Pinned: the task tokeniser drops words of ≤3 chars (else "the"/"for" match everything)
+  and KEEPS `/ _ .` so a path stays one word; `knownTraps` is an explicit NULL when empty; the cost
+  trend has a ±15% DEAD BAND and an EMPTY first half is 'no data', not an infinite increase (the
+  test forces both branches from the SAME sessions by moving only the window); the agent ranking
+  needs `n >= 2` and sorts ASCENDING by cost. **Deliberate non-unification:**
+  `get_efficiency_report` keys its agent map on `${source}/${model || 'unknown'}` while
+  `get_workspace_patterns` uses a bare `${model}` — mirrored, not unified, because unifying would
+  change one tool's output.
+- **⚠ MEASURED GAP: the remaining 35 tools mostly need ENGINES that are NOT PORTED.** Verified by
+  grep, not assumed: `subscriptionUsage`, `cacheEventLog`, `skillAttribution`,
+  `loadedPluginVersions`, `runtimeInventory`, `costRollup` have NO Rust counterpart. So P4x.2c's
+  cheap phase (a shaper over a ported engine) is essentially DONE — what remains is porting engines
+  first. Size each one before starting; do not assume the next tool is another thin slice.
+- **NEXT (P4x.2c continued):** the remaining thin ones are `get_instruction_suggestions` (the
+  advisor IS ported — `/api/instruction-suggestions` serves it) and `get_session_detail` (needs
+  `computeTurnGrowth` + `subAgentChildren`). After that, pick an ENGINE to port. **Every new arm
+  must end in `tool_ok_lean`, never `mcp::tool_ok`.** The dispatch cases are
   `src/mcpServer.ts` ~3434-3890 and most shapers sit at 1617-3390 (largely UNREAD).
   `get_context_composition` (2438), `get_context_history` (2325), `get_conversation` (2391) — all
   three shapers are in `src/mcpServer.ts` and UNREAD except their heads; each has `turn` / range
