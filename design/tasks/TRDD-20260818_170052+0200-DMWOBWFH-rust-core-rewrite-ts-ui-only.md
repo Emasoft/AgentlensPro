@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T13:28:22+0200
+updated: 2026-08-20T13:34:34+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -695,14 +695,21 @@ release-via: publish
   signal; (c) `model`/`accountUuid` are FIRST-wins — a last-wins mutation fails on both sess-rich
   and reg-sess. The summary oracle drives the REAL lazy path (pointers recorded into the registry
   → `request_pointers`/`response_for`), not hand-built refs. 126/126, clippy 28, identities green.
-- **NEXT (P4w.1c(ii)c): routes 36-37** — `/api/composition-index/:id` →
-  `session_composition_summary`, `/api/block-content/:id/:turn/:idx` → the drill. The choreography
-  is FIXED by the P4s rule and by what landed above: **lock → `resolve_refs` (pure, registry-only)
-  → UNLOCK → `build_session_composition` (blocking file I/O, on `spawn_blocking`) → RE-LOCK → cache
-  `put`**. Never parse a body under the CoreState lock. `get_block_content` needs the registry's
-  `request_pointers(session)[turn-1]` and has TWO distinct ERROR shapes, both **200** (not an error
-  status): `{sessionId,turn,message}` when there is no pointer for that turn, and
-  `{sessionId,turn,blockIndex,message}` when the block index does not exist.
+- **P4w.1c(ii)c DONE (commit 89a3734): FREEZE ROWS 36-37 LIVE.** `/api/composition-index/:id` +
+  `/api/block-content/:id/:turn/:idx`, plus `CoreState.composition` (the LRU). The lock
+  choreography is now STRUCTURALLY enforced by where the guards drop: resolve refs under the lock
+  → RELEASE → parse on `spawn_blocking` → re-lock only to `put`. **`Number(parts[i])` mirrored
+  quirk-and-all**: a MISSING segment is NaN → 400, but an EMPTY one is `0` and PASSES
+  (`Number('') === 0`) — `"".parse()` would 400 a request the TS answers 200, a silent wire break
+  on a frozen surface. The two not-found shapes stay DISTINCT and both stay **200** (no-pointer
+  carries NO `blockIndex` key; no-block DOES) because the UI must tell them apart. `heavyGuard`
+  NOT ported (V8-heap admission deferral; no V8 heap here, work already off the executor).
+  127/127, clippy 28, identities green, live alcore serves both routes with no panics.
+- **NEXT (P4w.2): rows 32-34** — composition / history / conversation. Then **P4w.3 row 35**
+  (`resolveCallContext`, contract two bullets below). After those the HTTP §1 table is complete.
+  `imageReport` / `findResidentBlobs` / `queryBlocks` remain unported — MCP-surface only, and the
+  MCP surface is a separate frozen contract (53 tools); they reuse the core that landed in
+  (ii)a/(ii)b, so they are additive, not a rewrite.
 - **(landed above) the (ii)b contracts, kept for reference:** `aggregateResidents` (signature = `` `${kind}|${label}` ``;
   **`bySig` MUST be an IndexMap** — the pre-sort insertion order is the stable-sort tie-break
   beyond the two comparators, so a HashMap silently reorders equal-cost rows), `summarizeImages`
