@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T01:50:42+0200
+updated: 2026-08-20T02:01:22+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -492,15 +492,25 @@ release-via: publish
   Rust {:.f} breaks ties to EVEN where JS goes AWAY (0.125@2); and **js_math_round =
   (x+0.5).floor()**, not f64::round (negative halves). to_locale_en moved to helpers (shared
   with loop_detector). 93/93.
-- **NEXT ACTION (one step): P4r.3 — ttlContext + the burn plumbing + GET /api/burn-status (row
-  24).** Read src/ttlContext.ts (118) + the server.ts gatherBurn/enrichBurnStatus block
-  (1472–1680) + mcpServer.ts labelBurnStatusAccounts first. CoreState grows burn_config (loaded
-  at open) + the 4s tick's lastBurnStatus; the route serves
-  enrich(compute_burn_status(gathered)) with HONEST NULLS where TS reads live machine state not
-  yet ported (currentAccount → null, residentBlobs → [], statusline events → empty — each with
-  a NOT PORTED note; accountWindows labels absent like the TS I/O-free layer). Then P4r.4
-  bodiesActivity + causingToolCall + burn-risk (row 12), P4r.5 agentGate (row 13). Then bodies
-  rows 14–15, instruction rows 19–21, statusline row 5.
+- **P4r.3 DONE (commit 162f153): ttlContext + accountInfo + GET /api/burn-status (row 24) +
+  the 4s burn tick.** `burn/ttl_context.rs` (stripe_subscription CONTAINS-match; usage-credits
+  = opt-in AND pct≥100; overrides from process env ⊕ settings.json env block),
+  `burn/account_info.rs` (identity from ~/.claude.json; keychain plan opt-in + once-per-process
+  OnceLock latch — the no-reprompt safety is process-global; parse_subscription_type the
+  token-free choke-point), `burn/runtime.rs` (BurnRuntime: config + lastBurnStatus + 60s slow
+  cache; enrich = labels ⊕ currentAccount ⊕ residentBlobs). PARITY QUIRK KEPT: accountLabelFor's
+  loose `== null` labels the unknown bucket with the CURRENT account. CoreState.live_burn_status
+  (statusline billing NOT PORTED — empty); ui.rs row-24 route (200 always) + run_burn_tick (4s;
+  macNotify + account-state sampler NOT PORTED); alcore spawns it. Oracle
+  gen-ttlaccount-expected.mjs + a socket test on a scrubbed env + fixture home (labels,
+  currentAccount, residentBlobs [], no token-shaped field). Live: route + a burnStatus SSE
+  frame within one tick. 95/95.
+- **NEXT ACTION (one step): P4r.4 — bodiesActivity + causingToolCall + GET /api/burn-risk (row
+  12).** Read src/bodiesActivity.ts (377) + src/causingToolCall.ts (246) + src/burnGuard.ts
+  (302) + the server.ts row-12 handler (3519) IN FULL first. checkBurnRisk reads the hook-event
+  ring (hook_events is ported — the recent-events RING is not, P4m note), bodies activity (the
+  captured raw-bodies dir), causing tool calls, and lastBurnStatus (now real). Then P4r.5
+  agentGate (row 13). Then bodies rows 14–15, instruction rows 19–21, statusline row 5.
 - Gotchas encoded: OTLP intValue arrives as number OR string; dedupe covers mid-compression dual
   segments; corrupt tail lines skip; the TS OtelCallEvent carries speed/effort/agentName —
   a --parity-json requestId/ts/sessionId diff does NOT prove full field parity (the
