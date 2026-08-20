@@ -1,0 +1,2553 @@
+{
+  "nowMs": 1785585600000,
+  "causeLabel": {
+    "TOOLS_CHANGED": "Tools changed",
+    "TOOLS_REORDERED": "Tools reordered",
+    "SYSTEM_PROMPT_TIMESTAMP": "System-prompt timestamp",
+    "MODEL_SWITCHED": "Model switched",
+    "EFFORT_CHANGED": "Effort changed",
+    "FAST_MODE": "Fast mode toggled",
+    "MCP_SERVER_TOGGLE": "MCP server toggled",
+    "PLUGINS_RELOADED": "Plugins reloaded",
+    "SKILLS_RELOADED": "Skills reloaded",
+    "PLUGIN_CHANGED": "Plugin changed",
+    "ACCOUNT_SWITCHED": "Account switched",
+    "TOOL_DENY": "Tool denied",
+    "INJECTED_BLOCK_CHANGED": "Injected block changed",
+    "COMPACTION": "Compaction",
+    "UPGRADE": "Upgrade",
+    "RESUME_AFTER_UPGRADE": "Resume after upgrade",
+    "IDLE_TTL_EXPIRY": "Idle TTL expiry",
+    "UNATTRIBUTABLE": "Unattributable cold write",
+    "UNKNOWN": "Unknown"
+  },
+  "diffs": {
+    "mixed": {
+      "prev": [
+        {
+          "label": "CLAUDE.md",
+          "kind": "file",
+          "tokens": 5000,
+          "bytes": 20000,
+          "count": 1,
+          "excerpt": "old md"
+        },
+        {
+          "label": "janitor",
+          "kind": "hook",
+          "tokens": 100,
+          "bytes": 400,
+          "count": 1
+        },
+        {
+          "label": "gone",
+          "kind": "skill",
+          "tokens": 42,
+          "bytes": 168,
+          "count": 1,
+          "excerpt": "bye"
+        }
+      ],
+      "cur": [
+        {
+          "label": "CLAUDE.md",
+          "kind": "file",
+          "tokens": 9000,
+          "bytes": 36000,
+          "count": 1,
+          "excerpt": "new md"
+        },
+        {
+          "label": "janitor",
+          "kind": "hook",
+          "tokens": 100,
+          "bytes": 400,
+          "count": 1
+        },
+        {
+          "label": "brand-new",
+          "kind": "mcp",
+          "tokens": 7,
+          "bytes": 28,
+          "count": 1
+        }
+      ],
+      "out": [
+        {
+          "key": "file::CLAUDE.md",
+          "label": "CLAUDE.md",
+          "kind": "file",
+          "status": "resized",
+          "prevTokens": 5000,
+          "curTokens": 9000,
+          "prevExcerpt": "old md",
+          "curExcerpt": "new md",
+          "isFirstDivergence": true
+        },
+        {
+          "key": "hook::janitor",
+          "label": "janitor",
+          "kind": "hook",
+          "status": "unchanged",
+          "prevTokens": 100,
+          "curTokens": 100,
+          "isFirstDivergence": false
+        },
+        {
+          "key": "mcp::brand-new",
+          "label": "brand-new",
+          "kind": "mcp",
+          "status": "added",
+          "prevTokens": 0,
+          "curTokens": 7,
+          "isFirstDivergence": false
+        },
+        {
+          "key": "skill::gone",
+          "label": "gone",
+          "kind": "skill",
+          "status": "removed",
+          "prevTokens": 42,
+          "curTokens": 0,
+          "prevExcerpt": "bye",
+          "isFirstDivergence": false
+        }
+      ]
+    },
+    "onlyDropped": {
+      "prev": [
+        {
+          "label": "a",
+          "kind": "file",
+          "tokens": 1,
+          "bytes": 4,
+          "count": 1
+        },
+        {
+          "label": "b",
+          "kind": "file",
+          "tokens": 2,
+          "bytes": 8,
+          "count": 1
+        }
+      ],
+      "cur": [
+        {
+          "label": "a",
+          "kind": "file",
+          "tokens": 1,
+          "bytes": 4,
+          "count": 1
+        }
+      ],
+      "out": [
+        {
+          "key": "file::a",
+          "label": "a",
+          "kind": "file",
+          "status": "unchanged",
+          "prevTokens": 1,
+          "curTokens": 1,
+          "isFirstDivergence": false
+        },
+        {
+          "key": "file::b",
+          "label": "b",
+          "kind": "file",
+          "status": "removed",
+          "prevTokens": 2,
+          "curTokens": 0,
+          "isFirstDivergence": true
+        }
+      ]
+    },
+    "duplicateKey": {
+      "prev": [
+        {
+          "label": "dup",
+          "kind": "file",
+          "tokens": 10,
+          "bytes": 40,
+          "count": 1
+        }
+      ],
+      "cur": [
+        {
+          "label": "dup",
+          "kind": "file",
+          "tokens": 99,
+          "bytes": 396,
+          "count": 1
+        },
+        {
+          "label": "dup",
+          "kind": "file",
+          "tokens": 99,
+          "bytes": 396,
+          "count": 1
+        }
+      ],
+      "out": [
+        {
+          "key": "file::dup",
+          "label": "dup",
+          "kind": "file",
+          "status": "resized",
+          "prevTokens": 10,
+          "curTokens": 99,
+          "isFirstDivergence": true
+        },
+        {
+          "key": "file::dup",
+          "label": "dup",
+          "kind": "file",
+          "status": "resized",
+          "prevTokens": 10,
+          "curTokens": 99,
+          "isFirstDivergence": false
+        }
+      ]
+    },
+    "identical": {
+      "prev": [
+        {
+          "label": "a",
+          "kind": "file",
+          "tokens": 1,
+          "bytes": 4,
+          "count": 1
+        },
+        {
+          "label": "h",
+          "kind": "hook",
+          "tokens": 2,
+          "bytes": 8,
+          "count": 1
+        }
+      ],
+      "cur": [
+        {
+          "label": "a",
+          "kind": "file",
+          "tokens": 1,
+          "bytes": 4,
+          "count": 1
+        },
+        {
+          "label": "h",
+          "kind": "hook",
+          "tokens": 2,
+          "bytes": 8,
+          "count": 1
+        }
+      ],
+      "out": [
+        {
+          "key": "file::a",
+          "label": "a",
+          "kind": "file",
+          "status": "unchanged",
+          "prevTokens": 1,
+          "curTokens": 1,
+          "isFirstDivergence": false
+        },
+        {
+          "key": "hook::h",
+          "label": "h",
+          "kind": "hook",
+          "status": "unchanged",
+          "prevTokens": 2,
+          "curTokens": 2,
+          "isFirstDivergence": false
+        }
+      ]
+    },
+    "coldStart": {
+      "prev": [],
+      "cur": [
+        {
+          "label": "tools",
+          "kind": "toolCatalog",
+          "tokens": 800,
+          "bytes": 3200,
+          "count": 1
+        },
+        {
+          "label": "agents",
+          "kind": "agentCatalog",
+          "tokens": 600,
+          "bytes": 2400,
+          "count": 1
+        }
+      ],
+      "out": [
+        {
+          "key": "toolCatalog::tools",
+          "label": "tools",
+          "kind": "toolCatalog",
+          "status": "added",
+          "prevTokens": 0,
+          "curTokens": 800,
+          "isFirstDivergence": true
+        },
+        {
+          "key": "agentCatalog::agents",
+          "label": "agents",
+          "kind": "agentCatalog",
+          "status": "added",
+          "prevTokens": 0,
+          "curTokens": 600,
+          "isFirstDivergence": false
+        }
+      ]
+    }
+  },
+  "analyze": {
+    "modelSwitch": {
+      "opts": {
+        "writeRateUsdPerMTok": 6.25,
+        "inputRateUsdPerMTok": 5,
+        "cacheReadRateUsdPerMTok": 0.5
+      },
+      "turns": [
+        {
+          "turn": 1,
+          "sources": [
+            {
+              "label": "a",
+              "kind": "file",
+              "tokens": 10,
+              "bytes": 40,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 0,
+          "cacheCreateTokens": 5000,
+          "inputTokens": 0,
+          "model": "claude-opus-5"
+        },
+        {
+          "turn": 2,
+          "sources": [
+            {
+              "label": "a",
+              "kind": "file",
+              "tokens": 99,
+              "bytes": 396,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 100,
+          "cacheCreateTokens": 5000,
+          "inputTokens": 0,
+          "model": "claude-sonnet-5"
+        }
+      ],
+      "out": {
+        "sessionId": "modelSwitch",
+        "turns": [
+          {
+            "turn": 1,
+            "broke": false,
+            "cause": "UNKNOWN",
+            "wastedTokens": 0,
+            "wastedCostUsd": 0
+          },
+          {
+            "turn": 2,
+            "broke": true,
+            "cause": "MODEL_SWITCHED",
+            "wastedTokens": 5000,
+            "wastedCostUsd": 0.02875,
+            "remediation": "Do not switch models mid-conversation — hand off to a sub-agent instead (caches are model-specific)."
+          }
+        ],
+        "offenders": [
+          {
+            "label": "(MODEL_SWITCHED)",
+            "kind": "-",
+            "cause": "MODEL_SWITCHED",
+            "occurrences": 1,
+            "wastedTokens": 5000,
+            "wastedCostUsd": 0.02875
+          }
+        ],
+        "totalWastedTokens": 5000,
+        "totalWastedCostUsd": 0.02875,
+        "cacheHitRate": 0.009900990099009901
+      }
+    },
+    "emptyModelIsNotASwitch": {
+      "opts": {
+        "writeRateUsdPerMTok": 6.25,
+        "inputRateUsdPerMTok": 5,
+        "cacheReadRateUsdPerMTok": 0.5
+      },
+      "turns": [
+        {
+          "turn": 1,
+          "sources": [
+            {
+              "label": "a",
+              "kind": "file",
+              "tokens": 10,
+              "bytes": 40,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 0,
+          "cacheCreateTokens": 0,
+          "inputTokens": 0,
+          "model": ""
+        },
+        {
+          "turn": 2,
+          "sources": [
+            {
+              "label": "a",
+              "kind": "file",
+              "tokens": 99,
+              "bytes": 396,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 10,
+          "cacheCreateTokens": 200,
+          "inputTokens": 0,
+          "model": "claude-opus-5"
+        }
+      ],
+      "out": {
+        "sessionId": "emptyModelIsNotASwitch",
+        "turns": [
+          {
+            "turn": 1,
+            "broke": false,
+            "cause": "UNKNOWN",
+            "wastedTokens": 0,
+            "wastedCostUsd": 0
+          },
+          {
+            "turn": 2,
+            "broke": true,
+            "cause": "INJECTED_BLOCK_CHANGED",
+            "breakSourceLabel": "a",
+            "breakSourceKind": "file",
+            "wastedTokens": 200,
+            "wastedCostUsd": 0.00115,
+            "remediation": "Move this volatile injected block (hook/file/rule/memory) into the message suffix, after the last cache breakpoint.",
+            "confidence": "low",
+            "attribution": "block-diff-only"
+          }
+        ],
+        "offenders": [
+          {
+            "label": "a",
+            "kind": "file",
+            "cause": "INJECTED_BLOCK_CHANGED",
+            "occurrences": 1,
+            "wastedTokens": 200,
+            "wastedCostUsd": 0.00115
+          }
+        ],
+        "totalWastedTokens": 200,
+        "totalWastedCostUsd": 0.00115,
+        "cacheHitRate": 0.047619047619047616
+      }
+    },
+    "fastMode": {
+      "opts": {
+        "writeRateUsdPerMTok": 6.25,
+        "inputRateUsdPerMTok": 5,
+        "cacheReadRateUsdPerMTok": 0.5
+      },
+      "turns": [
+        {
+          "turn": 1,
+          "sources": [
+            {
+              "label": "a",
+              "kind": "file",
+              "tokens": 10,
+              "bytes": 40,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 0,
+          "cacheCreateTokens": 0,
+          "inputTokens": 0,
+          "hasFastMode": false
+        },
+        {
+          "turn": 2,
+          "sources": [
+            {
+              "label": "a",
+              "kind": "file",
+              "tokens": 10,
+              "bytes": 40,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 10,
+          "cacheCreateTokens": 900,
+          "inputTokens": 0,
+          "hasFastMode": true
+        },
+        {
+          "turn": 3,
+          "sources": [
+            {
+              "label": "a",
+              "kind": "file",
+              "tokens": 10,
+              "bytes": 40,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 900,
+          "cacheCreateTokens": 10,
+          "inputTokens": 0,
+          "hasFastMode": true
+        }
+      ],
+      "out": {
+        "sessionId": "fastMode",
+        "turns": [
+          {
+            "turn": 1,
+            "broke": false,
+            "cause": "UNKNOWN",
+            "wastedTokens": 0,
+            "wastedCostUsd": 0
+          },
+          {
+            "turn": 2,
+            "broke": true,
+            "cause": "FAST_MODE",
+            "wastedTokens": 900,
+            "wastedCostUsd": 0.005175,
+            "remediation": "Toggling fast mode invalidates the cache — decide it once at session start."
+          },
+          {
+            "turn": 3,
+            "broke": false,
+            "cause": "UNKNOWN",
+            "wastedTokens": 0,
+            "wastedCostUsd": 0
+          }
+        ],
+        "offenders": [
+          {
+            "label": "(FAST_MODE)",
+            "kind": "-",
+            "cause": "FAST_MODE",
+            "occurrences": 1,
+            "wastedTokens": 900,
+            "wastedCostUsd": 0.005175
+          }
+        ],
+        "totalWastedTokens": 900,
+        "totalWastedCostUsd": 0.005175,
+        "cacheHitRate": 0.5
+      }
+    },
+    "reloadHigh": {
+      "opts": {
+        "writeRateUsdPerMTok": 6.25,
+        "inputRateUsdPerMTok": 5,
+        "cacheReadRateUsdPerMTok": 0.5
+      },
+      "turns": [
+        {
+          "turn": 1,
+          "sources": [
+            {
+              "label": "tools",
+              "kind": "toolCatalog",
+              "tokens": 800,
+              "bytes": 3200,
+              "count": 1
+            },
+            {
+              "label": "agents",
+              "kind": "agentCatalog",
+              "tokens": 600,
+              "bytes": 2400,
+              "count": 1
+            },
+            {
+              "label": "skills",
+              "kind": "skill",
+              "tokens": 400,
+              "bytes": 1600,
+              "count": 1
+            },
+            {
+              "label": "servers",
+              "kind": "mcp",
+              "tokens": 200,
+              "bytes": 800,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 0,
+          "cacheCreateTokens": 0,
+          "inputTokens": 0
+        },
+        {
+          "turn": 2,
+          "sources": [
+            {
+              "label": "tools",
+              "kind": "toolCatalog",
+              "tokens": 801,
+              "bytes": 3200,
+              "count": 1
+            },
+            {
+              "label": "agents",
+              "kind": "agentCatalog",
+              "tokens": 601,
+              "bytes": 2400,
+              "count": 1
+            },
+            {
+              "label": "skills",
+              "kind": "skill",
+              "tokens": 401,
+              "bytes": 1600,
+              "count": 1
+            },
+            {
+              "label": "servers",
+              "kind": "mcp",
+              "tokens": 201,
+              "bytes": 800,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 100,
+          "cacheCreateTokens": 40000,
+          "inputTokens": 0
+        }
+      ],
+      "out": {
+        "sessionId": "reloadHigh",
+        "turns": [
+          {
+            "turn": 1,
+            "broke": false,
+            "cause": "UNKNOWN",
+            "wastedTokens": 0,
+            "wastedCostUsd": 0
+          },
+          {
+            "turn": 2,
+            "broke": true,
+            "cause": "PLUGINS_RELOADED",
+            "breakSourceLabel": "4 catalogs churned (agentCatalog, mcp, skill, toolCatalog)",
+            "breakSourceKind": "catalog",
+            "wastedTokens": 40000,
+            "wastedCostUsd": 0.23,
+            "remediation": "A /reload-plugins churned 2+ catalogs in one turn. It resets the prefix ONLY when a reloaded plugin supplies an MCP server whose tools load into the prefix — per the docs, \"skills, commands, agents, hooks, LSP servers, monitors, and themes never invalidate the cache\". Since v2.1.163 the command warns and skips such a reload unless --force, so check whether --force was passed before blaming the reload.",
+            "confidence": "high"
+          }
+        ],
+        "offenders": [
+          {
+            "label": "4 catalogs churned (agentCatalog, mcp, skill, toolCatalog)",
+            "kind": "catalog",
+            "cause": "PLUGINS_RELOADED",
+            "occurrences": 1,
+            "wastedTokens": 40000,
+            "wastedCostUsd": 0.23
+          }
+        ],
+        "totalWastedTokens": 40000,
+        "totalWastedCostUsd": 0.23,
+        "cacheHitRate": 0.0024937655860349127
+      }
+    },
+    "reloadMedium": {
+      "opts": {
+        "writeRateUsdPerMTok": 6.25,
+        "inputRateUsdPerMTok": 5,
+        "cacheReadRateUsdPerMTok": 0.5
+      },
+      "turns": [
+        {
+          "turn": 1,
+          "sources": [
+            {
+              "label": "tools",
+              "kind": "toolCatalog",
+              "tokens": 800,
+              "bytes": 3200,
+              "count": 1
+            },
+            {
+              "label": "agents",
+              "kind": "agentCatalog",
+              "tokens": 600,
+              "bytes": 2400,
+              "count": 1
+            },
+            {
+              "label": "skills",
+              "kind": "skill",
+              "tokens": 400,
+              "bytes": 1600,
+              "count": 1
+            },
+            {
+              "label": "servers",
+              "kind": "mcp",
+              "tokens": 200,
+              "bytes": 800,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 0,
+          "cacheCreateTokens": 0,
+          "inputTokens": 0
+        },
+        {
+          "turn": 2,
+          "sources": [
+            {
+              "label": "tools",
+              "kind": "toolCatalog",
+              "tokens": 800,
+              "bytes": 3200,
+              "count": 1
+            },
+            {
+              "label": "agents",
+              "kind": "agentCatalog",
+              "tokens": 600,
+              "bytes": 2400,
+              "count": 1
+            },
+            {
+              "label": "skills",
+              "kind": "skill",
+              "tokens": 401,
+              "bytes": 1600,
+              "count": 1
+            },
+            {
+              "label": "servers",
+              "kind": "mcp",
+              "tokens": 201,
+              "bytes": 800,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 100,
+          "cacheCreateTokens": 9000,
+          "inputTokens": 0
+        }
+      ],
+      "out": {
+        "sessionId": "reloadMedium",
+        "turns": [
+          {
+            "turn": 1,
+            "broke": false,
+            "cause": "UNKNOWN",
+            "wastedTokens": 0,
+            "wastedCostUsd": 0
+          },
+          {
+            "turn": 2,
+            "broke": true,
+            "cause": "PLUGINS_RELOADED",
+            "breakSourceLabel": "2 catalogs churned (mcp, skill)",
+            "breakSourceKind": "catalog",
+            "wastedTokens": 9000,
+            "wastedCostUsd": 0.05175,
+            "remediation": "A /reload-plugins churned 2+ catalogs in one turn. It resets the prefix ONLY when a reloaded plugin supplies an MCP server whose tools load into the prefix — per the docs, \"skills, commands, agents, hooks, LSP servers, monitors, and themes never invalidate the cache\". Since v2.1.163 the command warns and skips such a reload unless --force, so check whether --force was passed before blaming the reload.",
+            "confidence": "medium"
+          }
+        ],
+        "offenders": [
+          {
+            "label": "2 catalogs churned (mcp, skill)",
+            "kind": "catalog",
+            "cause": "PLUGINS_RELOADED",
+            "occurrences": 1,
+            "wastedTokens": 9000,
+            "wastedCostUsd": 0.05175
+          }
+        ],
+        "totalWastedTokens": 9000,
+        "totalWastedCostUsd": 0.05175,
+        "cacheHitRate": 0.01098901098901099
+      }
+    },
+    "firstTimeCatalogsAreWarmup": {
+      "opts": {
+        "writeRateUsdPerMTok": 6.25,
+        "inputRateUsdPerMTok": 5,
+        "cacheReadRateUsdPerMTok": 0.5
+      },
+      "turns": [
+        {
+          "turn": 1,
+          "sources": [
+            {
+              "label": "a",
+              "kind": "file",
+              "tokens": 10,
+              "bytes": 40,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 0,
+          "cacheCreateTokens": 0,
+          "inputTokens": 0
+        },
+        {
+          "turn": 2,
+          "sources": [
+            {
+              "label": "a",
+              "kind": "file",
+              "tokens": 10,
+              "bytes": 40,
+              "count": 1
+            },
+            {
+              "label": "tools",
+              "kind": "toolCatalog",
+              "tokens": 800,
+              "bytes": 3200,
+              "count": 1
+            },
+            {
+              "label": "agents",
+              "kind": "agentCatalog",
+              "tokens": 600,
+              "bytes": 2400,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 10,
+          "cacheCreateTokens": 1400,
+          "inputTokens": 0
+        }
+      ],
+      "out": {
+        "sessionId": "firstTimeCatalogsAreWarmup",
+        "turns": [
+          {
+            "turn": 1,
+            "broke": false,
+            "cause": "UNKNOWN",
+            "wastedTokens": 0,
+            "wastedCostUsd": 0
+          },
+          {
+            "turn": 2,
+            "broke": true,
+            "cause": "TOOLS_CHANGED",
+            "breakSourceLabel": "tools",
+            "breakSourceKind": "toolCatalog",
+            "wastedTokens": 1400,
+            "wastedCostUsd": 0.00805,
+            "remediation": "Never remove tools mid-session; use defer-loading stubs + tool-search so the catalog stays byte-identical.",
+            "confidence": "low",
+            "attribution": "block-diff-only"
+          }
+        ],
+        "offenders": [
+          {
+            "label": "tools",
+            "kind": "toolCatalog",
+            "cause": "TOOLS_CHANGED",
+            "occurrences": 1,
+            "wastedTokens": 1400,
+            "wastedCostUsd": 0.00805
+          }
+        ],
+        "totalWastedTokens": 1400,
+        "totalWastedCostUsd": 0.00805,
+        "cacheHitRate": 0.0070921985815602835
+      }
+    },
+    "kindMapping": {
+      "opts": {
+        "writeRateUsdPerMTok": 6.25,
+        "inputRateUsdPerMTok": 5,
+        "cacheReadRateUsdPerMTok": 0.5
+      },
+      "turns": [
+        {
+          "turn": 1,
+          "sources": [
+            {
+              "label": "tools",
+              "kind": "toolCatalog",
+              "tokens": 800,
+              "bytes": 3200,
+              "count": 1
+            },
+            {
+              "label": "srv",
+              "kind": "mcp",
+              "tokens": 100,
+              "bytes": 400,
+              "count": 1
+            },
+            {
+              "label": "h",
+              "kind": "hook",
+              "tokens": 50,
+              "bytes": 200,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 0,
+          "cacheCreateTokens": 0,
+          "inputTokens": 0
+        },
+        {
+          "turn": 2,
+          "sources": [
+            {
+              "label": "tools",
+              "kind": "toolCatalog",
+              "tokens": 801,
+              "bytes": 3204,
+              "count": 1
+            },
+            {
+              "label": "srv",
+              "kind": "mcp",
+              "tokens": 100,
+              "bytes": 400,
+              "count": 1
+            },
+            {
+              "label": "h",
+              "kind": "hook",
+              "tokens": 50,
+              "bytes": 200,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 10,
+          "cacheCreateTokens": 900,
+          "inputTokens": 0
+        },
+        {
+          "turn": 3,
+          "sources": [
+            {
+              "label": "tools",
+              "kind": "toolCatalog",
+              "tokens": 801,
+              "bytes": 3204,
+              "count": 1
+            },
+            {
+              "label": "srv",
+              "kind": "mcp",
+              "tokens": 101,
+              "bytes": 404,
+              "count": 1
+            },
+            {
+              "label": "h",
+              "kind": "hook",
+              "tokens": 50,
+              "bytes": 200,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 10,
+          "cacheCreateTokens": 900,
+          "inputTokens": 0
+        },
+        {
+          "turn": 4,
+          "sources": [
+            {
+              "label": "tools",
+              "kind": "toolCatalog",
+              "tokens": 801,
+              "bytes": 3204,
+              "count": 1
+            },
+            {
+              "label": "srv",
+              "kind": "mcp",
+              "tokens": 101,
+              "bytes": 404,
+              "count": 1
+            },
+            {
+              "label": "h",
+              "kind": "hook",
+              "tokens": 51,
+              "bytes": 204,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 10,
+          "cacheCreateTokens": 900,
+          "inputTokens": 0
+        }
+      ],
+      "out": {
+        "sessionId": "kindMapping",
+        "turns": [
+          {
+            "turn": 1,
+            "broke": false,
+            "cause": "UNKNOWN",
+            "wastedTokens": 0,
+            "wastedCostUsd": 0
+          },
+          {
+            "turn": 2,
+            "broke": true,
+            "cause": "TOOLS_CHANGED",
+            "breakSourceLabel": "tools",
+            "breakSourceKind": "toolCatalog",
+            "wastedTokens": 900,
+            "wastedCostUsd": 0.005175,
+            "remediation": "Never remove tools mid-session; use defer-loading stubs + tool-search so the catalog stays byte-identical.",
+            "confidence": "low",
+            "attribution": "block-diff-only"
+          },
+          {
+            "turn": 3,
+            "broke": true,
+            "cause": "MCP_SERVER_TOGGLE",
+            "breakSourceLabel": "srv",
+            "breakSourceKind": "mcp",
+            "wastedTokens": 900,
+            "wastedCostUsd": 0.005175,
+            "remediation": "Keep MCP servers with non-deferred tools connected for the whole session, or make their tools deferred.",
+            "confidence": "low",
+            "attribution": "block-diff-only"
+          },
+          {
+            "turn": 4,
+            "broke": true,
+            "cause": "INJECTED_BLOCK_CHANGED",
+            "breakSourceLabel": "h",
+            "breakSourceKind": "hook",
+            "wastedTokens": 900,
+            "wastedCostUsd": 0.005175,
+            "remediation": "Move this volatile injected block (hook/file/rule/memory) into the message suffix, after the last cache breakpoint.",
+            "confidence": "low",
+            "attribution": "block-diff-only"
+          }
+        ],
+        "offenders": [
+          {
+            "label": "tools",
+            "kind": "toolCatalog",
+            "cause": "TOOLS_CHANGED",
+            "occurrences": 1,
+            "wastedTokens": 900,
+            "wastedCostUsd": 0.005175
+          },
+          {
+            "label": "srv",
+            "kind": "mcp",
+            "cause": "MCP_SERVER_TOGGLE",
+            "occurrences": 1,
+            "wastedTokens": 900,
+            "wastedCostUsd": 0.005175
+          },
+          {
+            "label": "h",
+            "kind": "hook",
+            "cause": "INJECTED_BLOCK_CHANGED",
+            "occurrences": 1,
+            "wastedTokens": 900,
+            "wastedCostUsd": 0.005175
+          }
+        ],
+        "totalWastedTokens": 2700,
+        "totalWastedCostUsd": 0.015525,
+        "cacheHitRate": 0.01098901098901099
+      }
+    },
+    "idleExpiry": {
+      "opts": {
+        "writeRateUsdPerMTok": 6.25,
+        "inputRateUsdPerMTok": 5,
+        "cacheReadRateUsdPerMTok": 0.5,
+        "idleTtlMs": 60000
+      },
+      "turns": [
+        {
+          "turn": 1,
+          "sources": [
+            {
+              "label": "a",
+              "kind": "file",
+              "tokens": 10,
+              "bytes": 40,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 0,
+          "cacheCreateTokens": 0,
+          "inputTokens": 0,
+          "timestampMs": 1000000
+        },
+        {
+          "turn": 2,
+          "sources": [
+            {
+              "label": "a",
+              "kind": "file",
+              "tokens": 10,
+              "bytes": 40,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 5,
+          "cacheCreateTokens": 3000,
+          "inputTokens": 0,
+          "timestampMs": 1120000
+        }
+      ],
+      "out": {
+        "sessionId": "idleExpiry",
+        "turns": [
+          {
+            "turn": 1,
+            "broke": false,
+            "cause": "UNKNOWN",
+            "wastedTokens": 0,
+            "wastedCostUsd": 0
+          },
+          {
+            "turn": 2,
+            "broke": true,
+            "cause": "IDLE_TTL_EXPIRY",
+            "wastedTokens": 3000,
+            "wastedCostUsd": 0.01725,
+            "idleGapMs": 120000,
+            "remediation": "A >5-min idle gap let the cache expire; keep turns within the TTL or accept the one-time re-warm.",
+            "tsMs": 1120000
+          }
+        ],
+        "offenders": [
+          {
+            "label": "(IDLE_TTL_EXPIRY)",
+            "kind": "-",
+            "cause": "IDLE_TTL_EXPIRY",
+            "occurrences": 1,
+            "wastedTokens": 3000,
+            "wastedCostUsd": 0.01725
+          }
+        ],
+        "totalWastedTokens": 3000,
+        "totalWastedCostUsd": 0.01725,
+        "cacheHitRate": 0.0016638935108153079
+      }
+    },
+    "idleGapWithoutWriteIsSilent": {
+      "opts": {
+        "writeRateUsdPerMTok": 6.25,
+        "inputRateUsdPerMTok": 5,
+        "cacheReadRateUsdPerMTok": 0.5,
+        "idleTtlMs": 60000
+      },
+      "turns": [
+        {
+          "turn": 1,
+          "sources": [
+            {
+              "label": "a",
+              "kind": "file",
+              "tokens": 10,
+              "bytes": 40,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 0,
+          "cacheCreateTokens": 0,
+          "inputTokens": 0,
+          "timestampMs": 1000000
+        },
+        {
+          "turn": 2,
+          "sources": [
+            {
+              "label": "a",
+              "kind": "file",
+              "tokens": 10,
+              "bytes": 40,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 5000,
+          "cacheCreateTokens": 0,
+          "inputTokens": 0,
+          "timestampMs": 1120000
+        }
+      ],
+      "out": {
+        "sessionId": "idleGapWithoutWriteIsSilent",
+        "turns": [
+          {
+            "turn": 1,
+            "broke": false,
+            "cause": "UNKNOWN",
+            "wastedTokens": 0,
+            "wastedCostUsd": 0
+          },
+          {
+            "turn": 2,
+            "broke": false,
+            "cause": "UNKNOWN",
+            "wastedTokens": 0,
+            "wastedCostUsd": 0,
+            "idleGapMs": 120000
+          }
+        ],
+        "offenders": [],
+        "totalWastedTokens": 0,
+        "totalWastedCostUsd": 0,
+        "cacheHitRate": 1
+      }
+    },
+    "unattributable": {
+      "opts": {
+        "writeRateUsdPerMTok": 6.25,
+        "inputRateUsdPerMTok": 5,
+        "cacheReadRateUsdPerMTok": 0.5
+      },
+      "turns": [
+        {
+          "turn": 1,
+          "sources": [
+            {
+              "label": "a",
+              "kind": "file",
+              "tokens": 10,
+              "bytes": 40,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 0,
+          "cacheCreateTokens": 0,
+          "inputTokens": 0
+        },
+        {
+          "turn": 2,
+          "sources": [
+            {
+              "label": "a",
+              "kind": "file",
+              "tokens": 10,
+              "bytes": 40,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 100,
+          "cacheCreateTokens": 5000,
+          "inputTokens": 0
+        },
+        {
+          "turn": 3,
+          "sources": [
+            {
+              "label": "a",
+              "kind": "file",
+              "tokens": 10,
+              "bytes": 40,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 900000,
+          "cacheCreateTokens": 9000,
+          "inputTokens": 0
+        }
+      ],
+      "out": {
+        "sessionId": "unattributable",
+        "turns": [
+          {
+            "turn": 1,
+            "broke": false,
+            "cause": "UNKNOWN",
+            "wastedTokens": 0,
+            "wastedCostUsd": 0
+          },
+          {
+            "turn": 2,
+            "broke": true,
+            "cause": "UNATTRIBUTABLE",
+            "wastedTokens": 5000,
+            "wastedCostUsd": 0.02875,
+            "remediation": "A real cold write (more written than read) with nothing in the block diff to blame. Do NOT guess a culprit from timing or plausibility — run get_cache_break_timeline, which diffs the raw request bodies against their actual cache_control breakpoints.",
+            "confidence": "low",
+            "attribution": "block-diff-only"
+          },
+          {
+            "turn": 3,
+            "broke": false,
+            "cause": "UNKNOWN",
+            "wastedTokens": 0,
+            "wastedCostUsd": 0
+          }
+        ],
+        "offenders": [
+          {
+            "label": "(UNATTRIBUTABLE)",
+            "kind": "-",
+            "cause": "UNATTRIBUTABLE",
+            "occurrences": 1,
+            "wastedTokens": 5000,
+            "wastedCostUsd": 0.02875
+          }
+        ],
+        "totalWastedTokens": 5000,
+        "totalWastedCostUsd": 0.02875,
+        "cacheHitRate": 0.984684389016519
+      }
+    },
+    "noRates": {
+      "opts": {},
+      "turns": [
+        {
+          "turn": 1,
+          "sources": [
+            {
+              "label": "a",
+              "kind": "file",
+              "tokens": 10,
+              "bytes": 40,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 0,
+          "cacheCreateTokens": 0,
+          "inputTokens": 0
+        },
+        {
+          "turn": 2,
+          "sources": [
+            {
+              "label": "a",
+              "kind": "file",
+              "tokens": 99,
+              "bytes": 396,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 10,
+          "cacheCreateTokens": 4000,
+          "inputTokens": 0
+        }
+      ],
+      "out": {
+        "sessionId": "noRates",
+        "turns": [
+          {
+            "turn": 1,
+            "broke": false,
+            "cause": "UNKNOWN",
+            "wastedTokens": 0,
+            "wastedCostUsd": 0
+          },
+          {
+            "turn": 2,
+            "broke": true,
+            "cause": "INJECTED_BLOCK_CHANGED",
+            "breakSourceLabel": "a",
+            "breakSourceKind": "file",
+            "wastedTokens": 4000,
+            "wastedCostUsd": 0,
+            "remediation": "Move this volatile injected block (hook/file/rule/memory) into the message suffix, after the last cache breakpoint.",
+            "confidence": "low",
+            "attribution": "block-diff-only"
+          }
+        ],
+        "offenders": [
+          {
+            "label": "a",
+            "kind": "file",
+            "cause": "INJECTED_BLOCK_CHANGED",
+            "occurrences": 1,
+            "wastedTokens": 4000,
+            "wastedCostUsd": 0
+          }
+        ],
+        "totalWastedTokens": 4000,
+        "totalWastedCostUsd": 0,
+        "cacheHitRate": 0.0024937655860349127
+      }
+    },
+    "defaultCacheReadRate": {
+      "opts": {
+        "writeRateUsdPerMTok": 6.25,
+        "inputRateUsdPerMTok": 5
+      },
+      "turns": [
+        {
+          "turn": 1,
+          "sources": [
+            {
+              "label": "a",
+              "kind": "file",
+              "tokens": 10,
+              "bytes": 40,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 0,
+          "cacheCreateTokens": 0,
+          "inputTokens": 0
+        },
+        {
+          "turn": 2,
+          "sources": [
+            {
+              "label": "a",
+              "kind": "file",
+              "tokens": 99,
+              "bytes": 396,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 10,
+          "cacheCreateTokens": 4000,
+          "inputTokens": 0
+        }
+      ],
+      "out": {
+        "sessionId": "defaultCacheReadRate",
+        "turns": [
+          {
+            "turn": 1,
+            "broke": false,
+            "cause": "UNKNOWN",
+            "wastedTokens": 0,
+            "wastedCostUsd": 0
+          },
+          {
+            "turn": 2,
+            "broke": true,
+            "cause": "INJECTED_BLOCK_CHANGED",
+            "breakSourceLabel": "a",
+            "breakSourceKind": "file",
+            "wastedTokens": 4000,
+            "wastedCostUsd": 0.023,
+            "remediation": "Move this volatile injected block (hook/file/rule/memory) into the message suffix, after the last cache breakpoint.",
+            "confidence": "low",
+            "attribution": "block-diff-only"
+          }
+        ],
+        "offenders": [
+          {
+            "label": "a",
+            "kind": "file",
+            "cause": "INJECTED_BLOCK_CHANGED",
+            "occurrences": 1,
+            "wastedTokens": 4000,
+            "wastedCostUsd": 0.023
+          }
+        ],
+        "totalWastedTokens": 4000,
+        "totalWastedCostUsd": 0.023,
+        "cacheHitRate": 0.0024937655860349127
+      }
+    },
+    "clampedNegativeSpread": {
+      "opts": {
+        "writeRateUsdPerMTok": 1,
+        "inputRateUsdPerMTok": 100
+      },
+      "turns": [
+        {
+          "turn": 1,
+          "sources": [
+            {
+              "label": "a",
+              "kind": "file",
+              "tokens": 10,
+              "bytes": 40,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 0,
+          "cacheCreateTokens": 0,
+          "inputTokens": 0
+        },
+        {
+          "turn": 2,
+          "sources": [
+            {
+              "label": "a",
+              "kind": "file",
+              "tokens": 99,
+              "bytes": 396,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 10,
+          "cacheCreateTokens": 4000,
+          "inputTokens": 0
+        }
+      ],
+      "out": {
+        "sessionId": "clampedNegativeSpread",
+        "turns": [
+          {
+            "turn": 1,
+            "broke": false,
+            "cause": "UNKNOWN",
+            "wastedTokens": 0,
+            "wastedCostUsd": 0
+          },
+          {
+            "turn": 2,
+            "broke": true,
+            "cause": "INJECTED_BLOCK_CHANGED",
+            "breakSourceLabel": "a",
+            "breakSourceKind": "file",
+            "wastedTokens": 4000,
+            "wastedCostUsd": 0,
+            "remediation": "Move this volatile injected block (hook/file/rule/memory) into the message suffix, after the last cache breakpoint.",
+            "confidence": "low",
+            "attribution": "block-diff-only"
+          }
+        ],
+        "offenders": [
+          {
+            "label": "a",
+            "kind": "file",
+            "cause": "INJECTED_BLOCK_CHANGED",
+            "occurrences": 1,
+            "wastedTokens": 4000,
+            "wastedCostUsd": 0
+          }
+        ],
+        "totalWastedTokens": 4000,
+        "totalWastedCostUsd": 0,
+        "cacheHitRate": 0.0024937655860349127
+      }
+    },
+    "offenders": {
+      "opts": {
+        "writeRateUsdPerMTok": 6.25,
+        "inputRateUsdPerMTok": 5,
+        "cacheReadRateUsdPerMTok": 0.5
+      },
+      "turns": [
+        {
+          "turn": 1,
+          "sources": [
+            {
+              "label": "heavy",
+              "kind": "file",
+              "tokens": 1,
+              "bytes": 4,
+              "count": 1
+            },
+            {
+              "label": "light",
+              "kind": "file",
+              "tokens": 1,
+              "bytes": 4,
+              "count": 1
+            },
+            {
+              "label": "tieA",
+              "kind": "file",
+              "tokens": 1,
+              "bytes": 4,
+              "count": 1
+            },
+            {
+              "label": "tieB",
+              "kind": "file",
+              "tokens": 1,
+              "bytes": 4,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 0,
+          "cacheCreateTokens": 0,
+          "inputTokens": 0,
+          "model": "claude-opus-5"
+        },
+        {
+          "turn": 2,
+          "sources": [
+            {
+              "label": "heavy",
+              "kind": "file",
+              "tokens": 2,
+              "bytes": 8,
+              "count": 1
+            },
+            {
+              "label": "light",
+              "kind": "file",
+              "tokens": 1,
+              "bytes": 4,
+              "count": 1
+            },
+            {
+              "label": "tieA",
+              "kind": "file",
+              "tokens": 1,
+              "bytes": 4,
+              "count": 1
+            },
+            {
+              "label": "tieB",
+              "kind": "file",
+              "tokens": 1,
+              "bytes": 4,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 10,
+          "cacheCreateTokens": 8000,
+          "inputTokens": 0,
+          "model": "claude-opus-5"
+        },
+        {
+          "turn": 3,
+          "sources": [
+            {
+              "label": "heavy",
+              "kind": "file",
+              "tokens": 3,
+              "bytes": 12,
+              "count": 1
+            },
+            {
+              "label": "light",
+              "kind": "file",
+              "tokens": 1,
+              "bytes": 4,
+              "count": 1
+            },
+            {
+              "label": "tieA",
+              "kind": "file",
+              "tokens": 1,
+              "bytes": 4,
+              "count": 1
+            },
+            {
+              "label": "tieB",
+              "kind": "file",
+              "tokens": 1,
+              "bytes": 4,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 10,
+          "cacheCreateTokens": 8000,
+          "inputTokens": 0,
+          "model": "claude-opus-5"
+        },
+        {
+          "turn": 4,
+          "sources": [
+            {
+              "label": "heavy",
+              "kind": "file",
+              "tokens": 3,
+              "bytes": 12,
+              "count": 1
+            },
+            {
+              "label": "light",
+              "kind": "file",
+              "tokens": 2,
+              "bytes": 8,
+              "count": 1
+            },
+            {
+              "label": "tieA",
+              "kind": "file",
+              "tokens": 1,
+              "bytes": 4,
+              "count": 1
+            },
+            {
+              "label": "tieB",
+              "kind": "file",
+              "tokens": 1,
+              "bytes": 4,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 10,
+          "cacheCreateTokens": 100,
+          "inputTokens": 0,
+          "model": "claude-opus-5"
+        },
+        {
+          "turn": 5,
+          "sources": [
+            {
+              "label": "heavy",
+              "kind": "file",
+              "tokens": 3,
+              "bytes": 12,
+              "count": 1
+            },
+            {
+              "label": "light",
+              "kind": "file",
+              "tokens": 2,
+              "bytes": 8,
+              "count": 1
+            },
+            {
+              "label": "tieA",
+              "kind": "file",
+              "tokens": 2,
+              "bytes": 8,
+              "count": 1
+            },
+            {
+              "label": "tieB",
+              "kind": "file",
+              "tokens": 1,
+              "bytes": 4,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 10,
+          "cacheCreateTokens": 500,
+          "inputTokens": 0,
+          "model": "claude-opus-5"
+        },
+        {
+          "turn": 6,
+          "sources": [
+            {
+              "label": "heavy",
+              "kind": "file",
+              "tokens": 3,
+              "bytes": 12,
+              "count": 1
+            },
+            {
+              "label": "light",
+              "kind": "file",
+              "tokens": 2,
+              "bytes": 8,
+              "count": 1
+            },
+            {
+              "label": "tieA",
+              "kind": "file",
+              "tokens": 2,
+              "bytes": 8,
+              "count": 1
+            },
+            {
+              "label": "tieB",
+              "kind": "file",
+              "tokens": 2,
+              "bytes": 8,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 10,
+          "cacheCreateTokens": 500,
+          "inputTokens": 0,
+          "model": "claude-opus-5"
+        },
+        {
+          "turn": 7,
+          "sources": [
+            {
+              "label": "heavy",
+              "kind": "file",
+              "tokens": 3,
+              "bytes": 12,
+              "count": 1
+            },
+            {
+              "label": "light",
+              "kind": "file",
+              "tokens": 2,
+              "bytes": 8,
+              "count": 1
+            },
+            {
+              "label": "tieA",
+              "kind": "file",
+              "tokens": 2,
+              "bytes": 8,
+              "count": 1
+            },
+            {
+              "label": "tieB",
+              "kind": "file",
+              "tokens": 2,
+              "bytes": 8,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 10,
+          "cacheCreateTokens": 7000,
+          "inputTokens": 0,
+          "model": "claude-sonnet-5"
+        }
+      ],
+      "out": {
+        "sessionId": "offenders",
+        "turns": [
+          {
+            "turn": 1,
+            "broke": false,
+            "cause": "UNKNOWN",
+            "wastedTokens": 0,
+            "wastedCostUsd": 0
+          },
+          {
+            "turn": 2,
+            "broke": true,
+            "cause": "INJECTED_BLOCK_CHANGED",
+            "breakSourceLabel": "heavy",
+            "breakSourceKind": "file",
+            "wastedTokens": 8000,
+            "wastedCostUsd": 0.046,
+            "remediation": "Move this volatile injected block (hook/file/rule/memory) into the message suffix, after the last cache breakpoint.",
+            "confidence": "low",
+            "attribution": "block-diff-only"
+          },
+          {
+            "turn": 3,
+            "broke": true,
+            "cause": "INJECTED_BLOCK_CHANGED",
+            "breakSourceLabel": "heavy",
+            "breakSourceKind": "file",
+            "wastedTokens": 8000,
+            "wastedCostUsd": 0.046,
+            "remediation": "Move this volatile injected block (hook/file/rule/memory) into the message suffix, after the last cache breakpoint.",
+            "confidence": "low",
+            "attribution": "block-diff-only"
+          },
+          {
+            "turn": 4,
+            "broke": true,
+            "cause": "INJECTED_BLOCK_CHANGED",
+            "breakSourceLabel": "light",
+            "breakSourceKind": "file",
+            "wastedTokens": 100,
+            "wastedCostUsd": 0.000575,
+            "remediation": "Move this volatile injected block (hook/file/rule/memory) into the message suffix, after the last cache breakpoint.",
+            "confidence": "low",
+            "attribution": "block-diff-only"
+          },
+          {
+            "turn": 5,
+            "broke": true,
+            "cause": "INJECTED_BLOCK_CHANGED",
+            "breakSourceLabel": "tieA",
+            "breakSourceKind": "file",
+            "wastedTokens": 500,
+            "wastedCostUsd": 0.002875,
+            "remediation": "Move this volatile injected block (hook/file/rule/memory) into the message suffix, after the last cache breakpoint.",
+            "confidence": "low",
+            "attribution": "block-diff-only"
+          },
+          {
+            "turn": 6,
+            "broke": true,
+            "cause": "INJECTED_BLOCK_CHANGED",
+            "breakSourceLabel": "tieB",
+            "breakSourceKind": "file",
+            "wastedTokens": 500,
+            "wastedCostUsd": 0.002875,
+            "remediation": "Move this volatile injected block (hook/file/rule/memory) into the message suffix, after the last cache breakpoint.",
+            "confidence": "low",
+            "attribution": "block-diff-only"
+          },
+          {
+            "turn": 7,
+            "broke": true,
+            "cause": "MODEL_SWITCHED",
+            "wastedTokens": 7000,
+            "wastedCostUsd": 0.04025,
+            "remediation": "Do not switch models mid-conversation — hand off to a sub-agent instead (caches are model-specific)."
+          }
+        ],
+        "offenders": [
+          {
+            "label": "heavy",
+            "kind": "file",
+            "cause": "INJECTED_BLOCK_CHANGED",
+            "occurrences": 2,
+            "wastedTokens": 16000,
+            "wastedCostUsd": 0.092
+          },
+          {
+            "label": "(MODEL_SWITCHED)",
+            "kind": "-",
+            "cause": "MODEL_SWITCHED",
+            "occurrences": 1,
+            "wastedTokens": 7000,
+            "wastedCostUsd": 0.04025
+          },
+          {
+            "label": "tieA",
+            "kind": "file",
+            "cause": "INJECTED_BLOCK_CHANGED",
+            "occurrences": 1,
+            "wastedTokens": 500,
+            "wastedCostUsd": 0.002875
+          },
+          {
+            "label": "tieB",
+            "kind": "file",
+            "cause": "INJECTED_BLOCK_CHANGED",
+            "occurrences": 1,
+            "wastedTokens": 500,
+            "wastedCostUsd": 0.002875
+          },
+          {
+            "label": "light",
+            "kind": "file",
+            "cause": "INJECTED_BLOCK_CHANGED",
+            "occurrences": 1,
+            "wastedTokens": 100,
+            "wastedCostUsd": 0.000575
+          }
+        ],
+        "totalWastedTokens": 24100,
+        "totalWastedCostUsd": 0.13857499999999998,
+        "cacheHitRate": 0.0024834437086092716
+      }
+    },
+    "singleTurn": {
+      "opts": {
+        "writeRateUsdPerMTok": 6.25,
+        "inputRateUsdPerMTok": 5,
+        "cacheReadRateUsdPerMTok": 0.5
+      },
+      "turns": [
+        {
+          "turn": 1,
+          "sources": [
+            {
+              "label": "a",
+              "kind": "file",
+              "tokens": 10,
+              "bytes": 40,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 900,
+          "cacheCreateTokens": 100,
+          "inputTokens": 0
+        }
+      ],
+      "out": {
+        "sessionId": "singleTurn",
+        "turns": [
+          {
+            "turn": 1,
+            "broke": false,
+            "cause": "UNKNOWN",
+            "wastedTokens": 0,
+            "wastedCostUsd": 0
+          }
+        ],
+        "offenders": [],
+        "totalWastedTokens": 0,
+        "totalWastedCostUsd": 0,
+        "cacheHitRate": 0.9
+      }
+    },
+    "empty": {
+      "opts": {
+        "writeRateUsdPerMTok": 6.25,
+        "inputRateUsdPerMTok": 5,
+        "cacheReadRateUsdPerMTok": 0.5
+      },
+      "turns": [],
+      "out": {
+        "sessionId": "empty",
+        "turns": [],
+        "offenders": [],
+        "totalWastedTokens": 0,
+        "totalWastedCostUsd": 0,
+        "cacheHitRate": 0
+      }
+    }
+  },
+  "build": {
+    "full": {
+      "timeline": [
+        {
+          "type": "llm",
+          "turn": 1,
+          "cacheReadTokens": 0,
+          "cacheCreateTokens": 5000,
+          "inputTokens": 0,
+          "model": "claude-opus-5",
+          "timestamp": "2026-08-01T11:00:00.000Z"
+        },
+        {
+          "type": "background",
+          "turn": 1,
+          "cacheReadTokens": 999999,
+          "cacheCreateTokens": 999999
+        },
+        {
+          "type": "llm",
+          "cacheReadTokens": 888888,
+          "model": "claude-haiku-4-5"
+        },
+        {
+          "type": "tool",
+          "turn": 2,
+          "cacheReadTokens": 100,
+          "cacheCreateTokens": 50,
+          "inputTokens": 0,
+          "model": "not-a-model"
+        },
+        {
+          "type": "llm",
+          "turn": 2,
+          "cacheReadTokens": 4000,
+          "cacheCreateTokens": 9000,
+          "inputTokens": 0,
+          "model": "claude-opus-5",
+          "timestamp": "2026-08-01T11:01:00.000Z"
+        },
+        {
+          "type": "llm",
+          "turn": 2,
+          "cacheReadTokens": 10,
+          "cacheCreateTokens": 10,
+          "inputTokens": 0,
+          "model": "claude-sonnet-5",
+          "timestamp": "2026-08-01T11:02:00.000Z"
+        },
+        {
+          "type": "llm",
+          "turn": 3,
+          "cacheReadTokens": 20000,
+          "cacheCreateTokens": 100,
+          "inputTokens": 0,
+          "model": "claude-opus-5",
+          "timestamp": "2026-08-01T11:30:00.000Z"
+        }
+      ],
+      "composition": {
+        "sessionId": "s1",
+        "estimated": true,
+        "truncated": false,
+        "turns": [
+          {
+            "turn": 1,
+            "sources": [
+              {
+                "label": "CLAUDE.md",
+                "kind": "file",
+                "tokens": 5000,
+                "bytes": 20000,
+                "count": 1
+              }
+            ]
+          },
+          {
+            "turn": 2,
+            "sources": [
+              {
+                "label": "CLAUDE.md",
+                "kind": "file",
+                "tokens": 9000,
+                "bytes": 36000,
+                "count": 1
+              }
+            ]
+          },
+          {
+            "turn": 3,
+            "sources": [
+              {
+                "label": "CLAUDE.md",
+                "kind": "file",
+                "tokens": 9000,
+                "bytes": 36000,
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "model": "claude-opus-5",
+      "out": {
+        "sessionId": "s1",
+        "turns": [
+          {
+            "turn": 1,
+            "broke": false,
+            "cause": "UNKNOWN",
+            "wastedTokens": 0,
+            "wastedCostUsd": 0
+          },
+          {
+            "turn": 2,
+            "broke": true,
+            "cause": "INJECTED_BLOCK_CHANGED",
+            "breakSourceLabel": "CLAUDE.md",
+            "breakSourceKind": "file",
+            "wastedTokens": 9060,
+            "wastedCostUsd": 0.052095,
+            "remediation": "Move this volatile injected block (hook/file/rule/memory) into the message suffix, after the last cache breakpoint.",
+            "confidence": "low",
+            "attribution": "block-diff-only",
+            "tsMs": 1785582060000
+          },
+          {
+            "turn": 3,
+            "broke": true,
+            "cause": "IDLE_TTL_EXPIRY",
+            "wastedTokens": 100,
+            "wastedCostUsd": 0.000575,
+            "idleGapMs": 1740000,
+            "remediation": "A >5-min idle gap let the cache expire; keep turns within the TTL or accept the one-time re-warm.",
+            "tsMs": 1785583800000
+          }
+        ],
+        "offenders": [
+          {
+            "label": "CLAUDE.md",
+            "kind": "file",
+            "cause": "INJECTED_BLOCK_CHANGED",
+            "occurrences": 1,
+            "wastedTokens": 9060,
+            "wastedCostUsd": 0.052095
+          },
+          {
+            "label": "(IDLE_TTL_EXPIRY)",
+            "kind": "-",
+            "cause": "IDLE_TTL_EXPIRY",
+            "occurrences": 1,
+            "wastedTokens": 100,
+            "wastedCostUsd": 0.000575
+          }
+        ],
+        "totalWastedTokens": 9160,
+        "totalWastedCostUsd": 0.05267,
+        "cacheHitRate": 0.6299973869871962
+      }
+    },
+    "noComposition": {
+      "timeline": [
+        {
+          "type": "llm",
+          "turn": 1,
+          "cacheReadTokens": 0,
+          "cacheCreateTokens": 5000,
+          "inputTokens": 0,
+          "model": "claude-opus-5",
+          "timestamp": "2026-08-01T11:00:00.000Z"
+        },
+        {
+          "type": "background",
+          "turn": 1,
+          "cacheReadTokens": 999999,
+          "cacheCreateTokens": 999999
+        },
+        {
+          "type": "llm",
+          "cacheReadTokens": 888888,
+          "model": "claude-haiku-4-5"
+        },
+        {
+          "type": "tool",
+          "turn": 2,
+          "cacheReadTokens": 100,
+          "cacheCreateTokens": 50,
+          "inputTokens": 0,
+          "model": "not-a-model"
+        },
+        {
+          "type": "llm",
+          "turn": 2,
+          "cacheReadTokens": 4000,
+          "cacheCreateTokens": 9000,
+          "inputTokens": 0,
+          "model": "claude-opus-5",
+          "timestamp": "2026-08-01T11:01:00.000Z"
+        },
+        {
+          "type": "llm",
+          "turn": 2,
+          "cacheReadTokens": 10,
+          "cacheCreateTokens": 10,
+          "inputTokens": 0,
+          "model": "claude-sonnet-5",
+          "timestamp": "2026-08-01T11:02:00.000Z"
+        },
+        {
+          "type": "llm",
+          "turn": 3,
+          "cacheReadTokens": 20000,
+          "cacheCreateTokens": 100,
+          "inputTokens": 0,
+          "model": "claude-opus-5",
+          "timestamp": "2026-08-01T11:30:00.000Z"
+        }
+      ],
+      "composition": null,
+      "model": "claude-opus-5",
+      "out": null
+    },
+    "oneTurn": {
+      "timeline": [
+        {
+          "type": "llm",
+          "turn": 1,
+          "cacheReadTokens": 0,
+          "cacheCreateTokens": 5000,
+          "inputTokens": 0,
+          "model": "claude-opus-5",
+          "timestamp": "2026-08-01T11:00:00.000Z"
+        }
+      ],
+      "composition": {
+        "sessionId": "s1",
+        "estimated": true,
+        "truncated": false,
+        "turns": [
+          {
+            "turn": 1,
+            "sources": [
+              {
+                "label": "CLAUDE.md",
+                "kind": "file",
+                "tokens": 5000,
+                "bytes": 20000,
+                "count": 1
+              }
+            ]
+          },
+          {
+            "turn": 2,
+            "sources": [
+              {
+                "label": "CLAUDE.md",
+                "kind": "file",
+                "tokens": 9000,
+                "bytes": 36000,
+                "count": 1
+              }
+            ]
+          },
+          {
+            "turn": 3,
+            "sources": [
+              {
+                "label": "CLAUDE.md",
+                "kind": "file",
+                "tokens": 9000,
+                "bytes": 36000,
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "model": "claude-opus-5",
+      "out": null
+    },
+    "compositionWithoutTheseTurns": {
+      "timeline": [
+        {
+          "type": "llm",
+          "turn": 1,
+          "cacheReadTokens": 0,
+          "cacheCreateTokens": 5000,
+          "inputTokens": 0,
+          "model": "claude-opus-5",
+          "timestamp": "2026-08-01T11:00:00.000Z"
+        },
+        {
+          "type": "background",
+          "turn": 1,
+          "cacheReadTokens": 999999,
+          "cacheCreateTokens": 999999
+        },
+        {
+          "type": "llm",
+          "cacheReadTokens": 888888,
+          "model": "claude-haiku-4-5"
+        },
+        {
+          "type": "tool",
+          "turn": 2,
+          "cacheReadTokens": 100,
+          "cacheCreateTokens": 50,
+          "inputTokens": 0,
+          "model": "not-a-model"
+        },
+        {
+          "type": "llm",
+          "turn": 2,
+          "cacheReadTokens": 4000,
+          "cacheCreateTokens": 9000,
+          "inputTokens": 0,
+          "model": "claude-opus-5",
+          "timestamp": "2026-08-01T11:01:00.000Z"
+        },
+        {
+          "type": "llm",
+          "turn": 2,
+          "cacheReadTokens": 10,
+          "cacheCreateTokens": 10,
+          "inputTokens": 0,
+          "model": "claude-sonnet-5",
+          "timestamp": "2026-08-01T11:02:00.000Z"
+        },
+        {
+          "type": "llm",
+          "turn": 3,
+          "cacheReadTokens": 20000,
+          "cacheCreateTokens": 100,
+          "inputTokens": 0,
+          "model": "claude-opus-5",
+          "timestamp": "2026-08-01T11:30:00.000Z"
+        }
+      ],
+      "composition": {
+        "sessionId": "s1",
+        "estimated": true,
+        "truncated": false,
+        "turns": []
+      },
+      "model": "claude-opus-5",
+      "out": {
+        "sessionId": "s1",
+        "turns": [
+          {
+            "turn": 1,
+            "broke": false,
+            "cause": "UNKNOWN",
+            "wastedTokens": 0,
+            "wastedCostUsd": 0
+          },
+          {
+            "turn": 2,
+            "broke": true,
+            "cause": "UNATTRIBUTABLE",
+            "wastedTokens": 9060,
+            "wastedCostUsd": 0.052095,
+            "idleGapMs": 60000,
+            "remediation": "A real cold write (more written than read) with nothing in the block diff to blame. Do NOT guess a culprit from timing or plausibility — run get_cache_break_timeline, which diffs the raw request bodies against their actual cache_control breakpoints.",
+            "confidence": "low",
+            "attribution": "block-diff-only",
+            "tsMs": 1785582060000
+          },
+          {
+            "turn": 3,
+            "broke": true,
+            "cause": "IDLE_TTL_EXPIRY",
+            "wastedTokens": 100,
+            "wastedCostUsd": 0.000575,
+            "idleGapMs": 1740000,
+            "remediation": "A >5-min idle gap let the cache expire; keep turns within the TTL or accept the one-time re-warm.",
+            "tsMs": 1785583800000
+          }
+        ],
+        "offenders": [
+          {
+            "label": "(UNATTRIBUTABLE)",
+            "kind": "-",
+            "cause": "UNATTRIBUTABLE",
+            "occurrences": 1,
+            "wastedTokens": 9060,
+            "wastedCostUsd": 0.052095
+          },
+          {
+            "label": "(IDLE_TTL_EXPIRY)",
+            "kind": "-",
+            "cause": "IDLE_TTL_EXPIRY",
+            "occurrences": 1,
+            "wastedTokens": 100,
+            "wastedCostUsd": 0.000575
+          }
+        ],
+        "totalWastedTokens": 9160,
+        "totalWastedCostUsd": 0.05267,
+        "cacheHitRate": 0.6299973869871962
+      }
+    },
+    "unpricedModel": {
+      "timeline": [
+        {
+          "type": "llm",
+          "turn": 1,
+          "cacheReadTokens": 0,
+          "cacheCreateTokens": 5000,
+          "inputTokens": 0,
+          "model": "claude-opus-5",
+          "timestamp": "2026-08-01T11:00:00.000Z"
+        },
+        {
+          "type": "background",
+          "turn": 1,
+          "cacheReadTokens": 999999,
+          "cacheCreateTokens": 999999
+        },
+        {
+          "type": "llm",
+          "cacheReadTokens": 888888,
+          "model": "claude-haiku-4-5"
+        },
+        {
+          "type": "tool",
+          "turn": 2,
+          "cacheReadTokens": 100,
+          "cacheCreateTokens": 50,
+          "inputTokens": 0,
+          "model": "not-a-model"
+        },
+        {
+          "type": "llm",
+          "turn": 2,
+          "cacheReadTokens": 4000,
+          "cacheCreateTokens": 9000,
+          "inputTokens": 0,
+          "model": "claude-opus-5",
+          "timestamp": "2026-08-01T11:01:00.000Z"
+        },
+        {
+          "type": "llm",
+          "turn": 2,
+          "cacheReadTokens": 10,
+          "cacheCreateTokens": 10,
+          "inputTokens": 0,
+          "model": "claude-sonnet-5",
+          "timestamp": "2026-08-01T11:02:00.000Z"
+        },
+        {
+          "type": "llm",
+          "turn": 3,
+          "cacheReadTokens": 20000,
+          "cacheCreateTokens": 100,
+          "inputTokens": 0,
+          "model": "claude-opus-5",
+          "timestamp": "2026-08-01T11:30:00.000Z"
+        }
+      ],
+      "composition": {
+        "sessionId": "s1",
+        "estimated": true,
+        "truncated": false,
+        "turns": [
+          {
+            "turn": 1,
+            "sources": [
+              {
+                "label": "CLAUDE.md",
+                "kind": "file",
+                "tokens": 5000,
+                "bytes": 20000,
+                "count": 1
+              }
+            ]
+          },
+          {
+            "turn": 2,
+            "sources": [
+              {
+                "label": "CLAUDE.md",
+                "kind": "file",
+                "tokens": 9000,
+                "bytes": 36000,
+                "count": 1
+              }
+            ]
+          },
+          {
+            "turn": 3,
+            "sources": [
+              {
+                "label": "CLAUDE.md",
+                "kind": "file",
+                "tokens": 9000,
+                "bytes": 36000,
+                "count": 1
+              }
+            ]
+          }
+        ]
+      },
+      "model": "totally-made-up-model",
+      "out": {
+        "sessionId": "s1",
+        "turns": [
+          {
+            "turn": 1,
+            "broke": false,
+            "cause": "UNKNOWN",
+            "wastedTokens": 0,
+            "wastedCostUsd": 0
+          },
+          {
+            "turn": 2,
+            "broke": true,
+            "cause": "INJECTED_BLOCK_CHANGED",
+            "breakSourceLabel": "CLAUDE.md",
+            "breakSourceKind": "file",
+            "wastedTokens": 9060,
+            "wastedCostUsd": 0,
+            "remediation": "Move this volatile injected block (hook/file/rule/memory) into the message suffix, after the last cache breakpoint.",
+            "confidence": "low",
+            "attribution": "block-diff-only",
+            "tsMs": 1785582060000
+          },
+          {
+            "turn": 3,
+            "broke": true,
+            "cause": "IDLE_TTL_EXPIRY",
+            "wastedTokens": 100,
+            "wastedCostUsd": 0,
+            "idleGapMs": 1740000,
+            "remediation": "A >5-min idle gap let the cache expire; keep turns within the TTL or accept the one-time re-warm.",
+            "tsMs": 1785583800000
+          }
+        ],
+        "offenders": [
+          {
+            "label": "CLAUDE.md",
+            "kind": "file",
+            "cause": "INJECTED_BLOCK_CHANGED",
+            "occurrences": 1,
+            "wastedTokens": 9060,
+            "wastedCostUsd": 0
+          },
+          {
+            "label": "(IDLE_TTL_EXPIRY)",
+            "kind": "-",
+            "cause": "IDLE_TTL_EXPIRY",
+            "occurrences": 1,
+            "wastedTokens": 100,
+            "wastedCostUsd": 0
+          }
+        ],
+        "totalWastedTokens": 9160,
+        "totalWastedCostUsd": 0,
+        "cacheHitRate": 0.6299973869871962
+      }
+    }
+  }
+}
