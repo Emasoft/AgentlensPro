@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T22:54:27+0200
+updated: 2026-08-20T23:13:40+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -1202,7 +1202,34 @@ release-via: publish
   `lastWriteMs` of exactly 0 renders "never". The dir walk is SORTED (Node's `readdirSync` order is
   filesystem-dependent, so the TS's own tie order is not reproducible — there is no correct order
   to match); the fixture carries no rate ties.
-- **NEXT (P4x.2d continued): 15 of 53 remain.** `subscriptionUsage.ts` (797 + 90 `keychainConsent`;
+- **P4x.2d (commit 5e3359b): `cacheCreationForensics` SCAN HALF.** Not a tool — the bounded scan
+  every cache-creation-forensic tool builds on, and `cacheEventLog`'s dependency. Two TS deps
+  deliberately NOT ported, neither changing an answer: `defaultBodiesDir()` (the bodies dir is a
+  REQUIRED param; the route already resolves it via `burn::guard::default_bodies_dir`, and a second
+  resolver inside the engine could disagree) and `makeRssSampler` (pure server.log diagnostics).
+  Pinned: the REQUEST's model WINS over the response's (s1's request says opus-5, its response
+  opus-4-8 — different rates, so the cost moves with it); an unknown model is priced ZERO and the
+  key is DROPPED (unpriced ≠ free; 5 event fields are optional and `?? null` would add 5 keys);
+  ATTRIBUTION and IDENTITY are separate (s5 joins through a request whose `user_id` is not JSON ⇒
+  `attributed: true` + `requestRef`, no sessionId); an absent `cache_creation` sub-object is 0/0 NOT
+  unknown (that split is what separates TTL expiry from a real break); a capped scan is
+  `complete:false` + SAMPLE while a MISSING dir is `complete:true` (nothing to sample is not a
+  partial view); the request index is capped by the CONSTANT `REQUEST_INDEX_CAP`, never `scan_cap`
+  — **the rule the suite was FALSIFIED against** (swapping it fails 2 tests).
+- **LEAK SHIPPED AND FIXED (b49bb5b → 6f6566a): run `check-identities` in the SAME gate batch as
+  tests and clippy, EVERY slice.** `bodywriters-expected.json` committed this machine's home path 8
+  times — `LiveBodiesScan.dir` echoes the caller's path and the generator handed it an absolute one.
+  I ran cargo test + clippy for that slice and NOT the identity gate, so it shipped. Beyond the red
+  guard: the fixture pinned one machine's layout into a test every contributor runs. Both that
+  generator and the new forensics one now REDACT absolute paths (`<FIXTURES>/`, `<BODIES>`,
+  `<MISSING>`) and the parity tests apply the same substitution — which also deleted a special case
+  that copied `got.dir` into the expectation to dodge the mismatch, so `dir` is now actually
+  compared. **check-identities is the only gate whose failure mode is a LEAK rather than a red test.**
+- **NEXT (P4x.2d continued): 15 of 53 remain.** Immediate: the cacheCreationForensics REPORT half
+  (`buildCacheCreationReport` → `get_cache_creation_report`, `buildExpensiveWritesTrace` →
+  `trace_expensive_writes`, `buildCacheBreakGapReport` → `get_cache_break_gap_report`) — the scan is
+  landed, so those three are handler-shaped now. Then `cacheEventLog` (479, its dep is landed too).
+  Deferred: `subscriptionUsage.ts` (797 + 90 `keychainConsent`;
   **NETWORK** — the oracle MUST stub the Anthropic usage endpoint; it is also the live TTL-regime
   oracle). Then the heavyweights, engine-first: `cacheCreationForensics` (800 — unblocks
   `cacheEventLog` 479), `cacheBreakTimeline` (1,927), `burnInvestigator` (632), and the 2 sql
