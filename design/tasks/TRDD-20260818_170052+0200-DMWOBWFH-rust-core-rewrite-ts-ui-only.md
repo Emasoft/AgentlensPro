@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T14:33:51+0200
+updated: 2026-08-20T14:41:34+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -804,8 +804,17 @@ release-via: publish
   conversation range CLAMPS to `from+cap-1` (a caller cannot widen it by asking for 9999); history's
   block drill is VERBATIM (keeps `tokenSource`) while the step projection DROPS it.
   153/153, clippy 28, identities green, check-types OK.
-- **NEXT (P4x.2c): keep batching handlers.** 49 tools remain. Next-easiest are the ones over ported
-  engines: burn (`get_burn_status`, `get_session_status`, `get_account_status`), cache-risk,
+- **P4x.2c STARTED (commit a80e38a): `get_burn_status`. 5 of 53.** No new shaper — P4r.3 had
+  already ported `labelBurnStatusAccounts`. **The trap this slice pinned by name:** the tool serves
+  `label_burn_status_accounts`, NOT `enrich_burn_status`. Enrich = label + `currentAccount` +
+  `residentBlobs`, and those two belong to the **HTTP row-24 payload only**; reaching for enrich
+  because it is "the burn status function" ships two fields the tool never had. The test asserts
+  their ABSENCE on the tool payload AND their PRESENCE on `/api/burn-status`, so it fails if the
+  two payloads ever converge instead of passing because both happen to lack them. The TS's
+  "Burn monitor unavailable in this runtime" branch is unreachable here (the monitor is always
+  present) — noted in place rather than silently dropped. 154/154, clippy 28, identities green.
+- **NEXT (P4x.2c continued): keep batching handlers.** 48 tools remain. Next-easiest are the ones
+  over ported engines: burn (`get_session_status`, `get_account_status`), cache-risk,
   statusline, `get_block_content` (composition index is ported). The dispatch cases are
   `src/mcpServer.ts` ~3434-3890 and most shapers sit at 1617-3390 (largely UNREAD).
   `get_context_composition` (2438), `get_context_history` (2325), `get_conversation` (2391) — all
