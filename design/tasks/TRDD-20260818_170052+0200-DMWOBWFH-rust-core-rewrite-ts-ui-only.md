@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T15:37:49+0200
+updated: 2026-08-20T15:47:40+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -855,11 +855,25 @@ release-via: publish
   it is ECHOED BACK — handing it `args` would ship verbosity/maxTokens inside it.
   **NOT PORTED, named rather than faked:** `get_account_status(all: true)` (listAllAccounts) and the
   statusline reader, so `usageWindows.windowSource` reports calibrated/none, never `cc-rate-limits`.
-- **NEXT (P4x.2c continued): keep batching handlers.** 39 tools remain. Next-easiest over ported
+- **P4x.2c (commit 3671d9c): `get_recent_sessions` + `get_workspace_patterns`. 16 of 53.** The two
+  tools CLAUDE.md tells every agent to call BEFORE starting work, so they get a deliberately awkward
+  fixture. Pinned: "recent" is recently ACTIVE not recently STARTED (the fixture's OLDEST-starting
+  session is still running and must rank first — and the test re-runs over a REVERSED input so it
+  cannot pass by accident); `active` is ABSENT when idle, never `false`; `limit` has NO low clamp so
+  a negative reaches `Array.slice(0,-n)` and drops the LAST n rows (`take()` returns everything,
+  `.max(0)` returns nothing — wrong in opposite directions, hence `js_head`); the cache SLI averages
+  ONLY cache-measured sessions and LABELS the exclusion; an unparseable `startTime` is `|| 0` when
+  RANKING but `NaN >= cutoff` = false when FILTERING — same field, two behaviours.
+  `get_workspace_patterns` accepts a `workspace` arg the TS NEVER USES — mirrored, not "fixed",
+  because a silent behaviour fork is worse than a visibly inert parameter.
+  **Watch out:** the frozen-schema test names one still-unported tool as its "not yet implemented"
+  example. Porting that tool makes the endpoint look BROKEN rather than the test look OLD — swap the
+  name (now `run_transcript_sql`) when it lands.
+- **NEXT (P4x.2c continued): keep batching handlers.** 37 tools remain. Next-easiest over ported
   engines: cache-risk-commands and statusline (both engines ported and already on HTTP routes),
   `get_account_state_at` (needs accountStateTimeline's `resolveStateAt` — NOT ported),
-  `get_subscription_usage`, `get_cache_event_log`. **Every new arm must end in `tool_ok_lean`, never
-  `mcp::tool_ok`.** The dispatch cases are
+  `get_subscription_usage`, `get_cache_event_log`, `get_session_detail`. **Every new arm must end in
+  `tool_ok_lean`, never `mcp::tool_ok`.** The dispatch cases are
   `src/mcpServer.ts` ~3434-3890 and most shapers sit at 1617-3390 (largely UNREAD).
   `get_context_composition` (2438), `get_context_history` (2325), `get_conversation` (2391) — all
   three shapers are in `src/mcpServer.ts` and UNREAD except their heads; each has `turn` / range
