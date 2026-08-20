@@ -2177,3 +2177,203 @@ pub fn get_account_state_at(args: &Value, path: &std::path::Path) -> Value {
     }
     Value::Object(m)
 }
+
+/// `agent-<id>` → `<id>`. The two forms are the SAME agent, and the report accepts either.
+fn strip_agent_prefix(session_id: &str) -> &str {
+    session_id.strip_prefix("agent-").unwrap_or(session_id)
+}
+
+/// Compact candidate line for the ambiguity error — enough to pick one (the full sessionId is the
+/// unambiguous re-query key), never the whole card.
+fn agent_candidate_summary(s: &Value) -> Value {
+    let mut m = Map::new();
+    m.insert("sessionId".into(), s.get("sessionId").cloned().unwrap_or(Value::Null));
+    m.insert("parentSessionId".into(), s.get("parentSessionId").filter(|v| !v.is_null()).cloned().unwrap_or(Value::Null));
+    // `spawnModelOverride || model` — FALSY-or, so an empty override falls through.
+    m.insert(
+        "model".into(),
+        s.get("spawnModelOverride")
+            .and_then(Value::as_str)
+            .filter(|v| !v.is_empty())
+            .map_or_else(|| s.get("model").cloned().unwrap_or(Value::Null), |v| Value::String(v.to_owned())),
+    );
+    m.insert("spawnKind".into(), s.get("spawnKind").filter(|v| !v.is_null()).cloned().unwrap_or(Value::Null));
+    m.insert("totalTokens".into(), num(f(s, "inputTokens") + f(s, "outputTokens")));
+    Value::Object(m)
+}
+
+/// `contextTokens` — the INPUT-SIDE volume: uncached input + cache read + cache creation. Output is
+/// excluded because this is what the model READ, not what it produced.
+fn context_tokens_of(b: &Value) -> f64 {
+    f(b, "inputTokens") + f(b, "cacheReadTokens") + f(b, "cacheCreateTokens")
+}
+
+/// The CC-footer ↓ reconciliation numbers (TRDD-9YT1UR2F addendum, empirically decoded by
+/// regressing a live fork's transcript against two footer readings).
+///
+/// `cumulativeInputSideTokens` is CC's per-agent ↓: input+cacheRead+cacheCreation across ALL turns
+/// INCLUDING the launch turn — a fork's turn 1 is the inherited-prefix cache read, ~99.5% of the
+/// figure. `lastTurnContextRead` is the context-SIZE proxy, derived most→least authoritative and
+/// NEVER guessed: (1) the statusline overlay, CC's own exact numbers; (2) the last usage-carrying
+/// timeline entry; (3) a single-turn card's cumulative figure (one turn ⇒ cumulative == last turn);
+/// (4) null — a multi-turn card with no per-turn data cannot honestly answer, and a fabricated
+/// number here would silently become someone's context-pressure verdict.
+fn cc_display_equivalent(c: &Value, timeline: &[Value]) -> Value {
+    let cumulative = context_tokens_of(c);
+    let last_turn: Option<f64> = match c.get("statusline").filter(|v| !v.is_null()) {
+        Some(sl) => sl.get("lastTotalInputTokens").and_then(Value::as_f64),
+        None => {
+            let found = timeline.iter().rev().map(context_tokens_of).find(|t| *t > 0.0);
+            match found {
+                Some(t) => Some(t),
+                None if f(c, "totalLlmCalls") <= 1.0 && cumulative > 0.0 => Some(cumulative),
+                None => None,
+            }
+        }
+    };
+    let mut m = Map::new();
+    m.insert("cumulativeInputSideTokens".into(), num(cumulative));
+    m.insert("lastTurnContextRead".into(), last_turn.map_or(Value::Null, num));
+    m.insert("note".into(), "CC's footer ↓ ≈ cumulativeInputSideTokens (cumulative input+cacheRead+cacheCreation across ALL turns, launch turn included; output excluded or below CC's 0.1k rounding). It is volume moved, not billing — use cost_usd for spend.".into());
+    Value::Object(m)
+}
+
+fn err(msg: String) -> Value {
+    let mut m = Map::new();
+    m.insert("error".into(), Value::String(msg));
+    Value::Object(m)
+}
+
+fn err_with_candidates(msg: String, matches: &[&Value]) -> Value {
+    let mut m = Map::new();
+    m.insert("error".into(), Value::String(msg));
+    m.insert("candidates".into(), Value::Array(matches.iter().map(|s| agent_candidate_summary(s)).collect()));
+    Value::Object(m)
+}
+
+/// `get_agent_tokens` (mcpServer.ts handleGetAgentTokens) — the exact per-agent buckets, resolved
+/// from a bare agent id, its `agent-<id>` transcript form, or a full sessionId.
+///
+/// THE MATCH ORDER IS THE WHOLE CORRECTNESS ARGUMENT. Resolution starts from the NORMALIZED
+/// equivalence class (bare id ↔ `agent-<id>`, case-insensitive) and exact sessionId equality is
+/// only a TIE-BREAK — never blanket precedence. A spawn PLACEHOLDER's sessionId IS the bare agent
+/// id by construction, so on an un-merged placeholder+transcript pair a bare-id query would
+/// "exactly" match the ZERO-BUCKET placeholder and serve it over the real totals: a guess dressed
+/// as precision. The tie-break is trusted only when the query carries the distinguishing
+/// `agent-<id>` form, which names exactly one card of the pair.
+pub fn get_agent_tokens(sessions: &[Value], timeline_of: &dyn Fn(&Value) -> Vec<Value>, args: &Value, now_ms: f64) -> Value {
+    // `(args.agentId ?? '').trim()` then a TRUTHY test — whitespace is no id.
+    let q = args.get("agentId").and_then(Value::as_str).unwrap_or("").trim();
+    if q.is_empty() {
+        return err("agentId is required — a bare agent id, its agent-<id> transcript form, or a full sessionId.".into());
+    }
+    let q_lower = q.to_lowercase();
+    let q_bare = strip_agent_prefix(&q_lower).to_owned();
+
+    let mut matches: Vec<&Value> =
+        sessions.iter().filter(|s| strip_agent_prefix(&s.get("sessionId").and_then(Value::as_str).unwrap_or("").to_lowercase()) == q_bare).collect();
+
+    let parent_arg = args.get("parentSessionId").and_then(Value::as_str).map(str::trim).filter(|p| !p.is_empty());
+    if let Some(p) = parent_arg {
+        if !matches.is_empty() {
+            let p = p.to_lowercase();
+            let scoped: Vec<&Value> =
+                matches.iter().copied().filter(|s| s.get("parentSessionId").and_then(Value::as_str).unwrap_or("").to_lowercase() == p).collect();
+            if scoped.is_empty() {
+                // The id EXISTS but not under that parent — say so and show where it DOES live,
+                // instead of a bare not-found that sends the caller hunting a typo in the agent id.
+                return err_with_candidates(
+                    format!("Agent \"{q}\" matched {} card(s), but none under parent {}.", matches.len(), parent_arg.unwrap()),
+                    &matches,
+                );
+            }
+            matches = scoped;
+        }
+    }
+
+    if matches.is_empty() {
+        return err(format!(
+            "Agent \"{q}\" not found. Accepted forms: bare agent id, agent-<id>, or a full sessionId (case-insensitive). Use get_subagent_tree on the spawning session to list its children."
+        ));
+    }
+    if matches.len() > 1 {
+        let exact: Vec<&Value> =
+            matches.iter().copied().filter(|s| s.get("sessionId").and_then(Value::as_str).unwrap_or("").to_lowercase() == q_lower).collect();
+        if exact.len() == 1 && q_lower != q_bare {
+            matches = exact;
+        } else {
+            // NEVER guess between conflicting cards: list the candidates and let the caller pin one.
+            return err_with_candidates(
+                format!(
+                    "Agent id \"{q}\" is ambiguous — {} cards match. Pass parentSessionId to scope the lookup, or the full sessionId of one candidate (the agent-<id> transcript form).",
+                    matches.len()
+                ),
+                &matches,
+            );
+        }
+    }
+
+    let c = matches[0];
+    // Same conventions as get_subagent_tree children — the cross-tool consistency contract. A card
+    // with NO parent (a full-sessionId query for a top-level session) carries no spawn taxonomy:
+    // null, NOT 'fresh', because it was never spawned at all.
+    let spawn_kind = match c.get("spawnKind").and_then(Value::as_str).filter(|k| !k.is_empty()) {
+        Some(k) => Value::String(k.to_owned()),
+        None if c.get("parentSessionId").and_then(Value::as_str).is_some_and(|p| !p.is_empty()) => Value::String("fresh".into()),
+        None => Value::Null,
+    };
+    let start_ms = c.get("startTime").and_then(Value::as_str).and_then(crate::summarize::helpers::parse_iso_ms);
+    let timeline = timeline_of(c);
+
+    let mut m = Map::new();
+    m.insert("agentId".into(), Value::String(strip_agent_prefix(c.get("sessionId").and_then(Value::as_str).unwrap_or("")).to_owned()));
+    m.insert("sessionId".into(), c.get("sessionId").cloned().unwrap_or(Value::Null));
+    m.insert("parentSessionId".into(), c.get("parentSessionId").filter(|v| !v.is_null()).cloned().unwrap_or(Value::Null));
+    m.insert("spawnedByTurn".into(), c.get("spawnedByTurn").filter(|v| !v.is_null()).cloned().unwrap_or(Value::Null));
+    // `spawnKind` BEFORE `warm` — the TS literal's order, and key order is a wire contract.
+    let warm = spawn_kind == Value::String("fork".into());
+    m.insert("spawnKind".into(), spawn_kind);
+    m.insert("warm".into(), Value::Bool(warm));
+    m.insert(
+        "model".into(),
+        c.get("spawnModelOverride")
+            .and_then(Value::as_str)
+            .filter(|v| !v.is_empty())
+            .map_or_else(|| c.get("model").cloned().unwrap_or(Value::Null), |v| Value::String(v.to_owned())),
+    );
+    m.insert("modelOverride".into(), c.get("spawnModelOverride").filter(|v| !v.is_null()).cloned().unwrap_or(Value::Null));
+    m.insert("isolation".into(), c.get("spawnIsolation").filter(|v| !v.is_null()).cloned().unwrap_or(Value::Null));
+    m.insert("subagentType".into(), c.get("spawnSubagentType").filter(|v| !v.is_null()).cloned().unwrap_or(Value::Null));
+    // `c.startTime || null` — FALSY-or, so an empty string becomes null rather than shipping "".
+    m.insert(
+        "startedAt".into(),
+        c.get("startTime").and_then(Value::as_str).filter(|s| !s.is_empty()).map_or(Value::Null, |s| Value::String(s.to_owned())),
+    );
+    // Derived from the card's OWN span (start + duration) — null when the card has no parseable
+    // start (an async placeholder before its transcript exists), never a fabricated now().
+    m.insert(
+        "lastSeenAt".into(),
+        start_ms.map_or(Value::Null, |s| Value::String(crate::summarize::helpers::iso_from_ms(s + f(c, "durationMs")))),
+    );
+    // `> 0 ? : null` — a zero-call card reports null, not 0: "no turns recorded" is not "0 turns".
+    m.insert("turns".into(), if f(c, "totalLlmCalls") > 0.0 { num(f(c, "totalLlmCalls")) } else { Value::Null });
+    m.insert("inputTokens".into(), num(f(c, "inputTokens")));
+    m.insert("outputTokens".into(), num(f(c, "outputTokens")));
+    m.insert("cacheReadTokens".into(), num(f(c, "cacheReadTokens")));
+    m.insert("cacheCreateTokens".into(), num(f(c, "cacheCreateTokens")));
+    m.insert("totalTokens".into(), num(f(c, "inputTokens") + f(c, "outputTokens")));
+    m.insert("cost_usd".into(), num(js_to_fixed_num(session_cost(c, now_ms), 4)));
+    // Async launches never report tokens into the parent transcript — without this flag the zero
+    // buckets above read as "measured free" instead of "unknown" (same flag as the tree).
+    if truthy(c.get("spawnAsync").unwrap_or(&Value::Null)) {
+        m.insert("asyncTokensUnknown".into(), Value::Bool(true));
+    }
+    m.insert("ccDisplayEquivalent".into(), cc_display_equivalent(c, &timeline));
+    // P7 provenance — which feed backs this card's token figures; null = a pre-P7 card ("unknown"),
+    // never a backfilled guess. coverageNote rides only when a decision set it.
+    m.insert("tokensSource".into(), c.get("tokensSource").filter(|v| !v.is_null()).cloned().unwrap_or(Value::Null));
+    if truthy(c.get("coverageNote").unwrap_or(&Value::Null)) {
+        m.insert("coverageNote".into(), c.get("coverageNote").cloned().unwrap_or(Value::Null));
+    }
+    Value::Object(m)
+}

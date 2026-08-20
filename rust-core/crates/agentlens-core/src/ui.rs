@@ -1398,6 +1398,45 @@ async fn handle(
                         .map_err(|e| format!("skill attribution join failed: {e}"))?;
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
+                    "get_agent_tokens" => {
+                        // The timeline is resolved LAZILY, per matched card: resolution can reparse
+                        // a multi-MB transcript, and every early return here (not found, ambiguous,
+                        // wrong parent) needs none of it.
+                        let now = crate::now_ms();
+                        let (sessions, timelines) = {
+                            let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                            let summary = st.build_session_summary(now as f64);
+                            let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
+                            drop(summary);
+                            // The matched card is not known until the shaper runs, so resolve only
+                            // the ONE id the query can possibly name — the normalized equivalence
+                            // class is a pure string test, so it is safe to precompute here.
+                            let q = args.get("agentId").and_then(Value::as_str).unwrap_or("").trim().to_lowercase();
+                            let q_bare = q.strip_prefix("agent-").unwrap_or(&q).to_owned();
+                            let mut timelines: std::collections::HashMap<String, Vec<Value>> = std::collections::HashMap::new();
+                            let ids: Vec<String> = sessions
+                                .iter()
+                                .filter_map(|s| s.get("sessionId").and_then(Value::as_str))
+                                .filter(|id| {
+                                    let lower = id.to_lowercase();
+                                    lower.strip_prefix("agent-").unwrap_or(&lower) == q_bare
+                                })
+                                .map(str::to_owned)
+                                .collect();
+                            for id in ids {
+                                let tl = resolve_session_card(&mut st, &id, now)
+                                    .and_then(|c| c.get("timeline").and_then(Value::as_array).cloned())
+                                    .unwrap_or_default();
+                                timelines.insert(id, tl);
+                            }
+                            (sessions, timelines)
+                        };
+                        let timeline_of = |c: &Value| -> Vec<Value> {
+                            timelines.get(c.get("sessionId").and_then(Value::as_str).unwrap_or("")).cloned().unwrap_or_default()
+                        };
+                        let payload = crate::mcp_tools::get_agent_tokens(&sessions, &timeline_of, &args, now as f64);
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
+                    }
                     "get_account_state_at" => {
                         let path = {
                             let st = state.lock().map_err(|_| "state poisoned".to_owned())?;

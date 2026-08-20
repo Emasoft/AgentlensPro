@@ -1,0 +1,409 @@
+{
+  "nowMs": 1785585600000,
+  "sessions": [
+    {
+      "sessionId": "root-1",
+      "model": "claude-opus-5",
+      "workspace": "/w/alpha",
+      "inputTokens": 5000,
+      "outputTokens": 2000,
+      "cacheReadTokens": 400000,
+      "cacheCreateTokens": 20000,
+      "totalLlmCalls": 40,
+      "startTime": "2026-08-01T10:00:00.000Z",
+      "durationMs": 60000,
+      "lastActivity": 1785585600000
+    },
+    {
+      "sessionId": "agent-fork-1",
+      "model": "claude-opus-5",
+      "workspace": "/w/alpha",
+      "inputTokens": 100,
+      "outputTokens": 50,
+      "cacheReadTokens": 180000,
+      "cacheCreateTokens": 2000,
+      "totalLlmCalls": 6,
+      "startTime": "2026-08-01T10:00:00.000Z",
+      "durationMs": 60000,
+      "lastActivity": 1785585600000,
+      "parentSessionId": "root-1",
+      "spawnKind": "fork",
+      "spawnedByTurn": 12,
+      "spawnSubagentType": "fork",
+      "tokensSource": "transcript"
+    },
+    {
+      "sessionId": "dup-1",
+      "model": "claude-opus-5",
+      "workspace": "/w/alpha",
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "cacheReadTokens": 0,
+      "cacheCreateTokens": 0,
+      "totalLlmCalls": 0,
+      "startTime": "",
+      "durationMs": 60000,
+      "lastActivity": 1785585600000,
+      "parentSessionId": "root-1",
+      "spawnAsync": true,
+      "spawnedByTurn": 20
+    },
+    {
+      "sessionId": "agent-dup-1",
+      "model": "claude-opus-5",
+      "workspace": "/w/alpha",
+      "inputTokens": 900,
+      "outputTokens": 400,
+      "cacheReadTokens": 250000,
+      "cacheCreateTokens": 90000,
+      "totalLlmCalls": 9,
+      "startTime": "2026-08-01T10:00:00.000Z",
+      "durationMs": 60000,
+      "lastActivity": 1785585600000,
+      "parentSessionId": "root-1",
+      "spawnKind": "fresh",
+      "spawnedByTurn": 20,
+      "coverageNote": "partial transcript"
+    },
+    {
+      "sessionId": "agent-multi",
+      "model": "claude-opus-5",
+      "workspace": "/w/alpha",
+      "inputTokens": 10,
+      "outputTokens": 5,
+      "cacheReadTokens": 0,
+      "cacheCreateTokens": 0,
+      "totalLlmCalls": 2,
+      "startTime": "2026-08-01T10:00:00.000Z",
+      "durationMs": 60000,
+      "lastActivity": 1785585600000,
+      "parentSessionId": "root-1",
+      "spawnKind": "fresh"
+    },
+    {
+      "sessionId": "multi",
+      "model": "claude-opus-5",
+      "workspace": "/w/alpha",
+      "inputTokens": 20,
+      "outputTokens": 7,
+      "cacheReadTokens": 0,
+      "cacheCreateTokens": 0,
+      "totalLlmCalls": 3,
+      "startTime": "2026-08-01T10:00:00.000Z",
+      "durationMs": 60000,
+      "lastActivity": 1785585600000,
+      "parentSessionId": "other-root",
+      "spawnKind": "worktree",
+      "spawnIsolation": "worktree",
+      "spawnModelOverride": "claude-sonnet-5"
+    },
+    {
+      "sessionId": "agent-sl-1",
+      "model": "claude-opus-5",
+      "workspace": "/w/alpha",
+      "inputTokens": 1,
+      "outputTokens": 1,
+      "cacheReadTokens": 5,
+      "cacheCreateTokens": 0,
+      "totalLlmCalls": 3,
+      "startTime": "2026-08-01T10:00:00.000Z",
+      "durationMs": 60000,
+      "lastActivity": 1785585600000,
+      "parentSessionId": "root-1",
+      "spawnKind": "fork",
+      "statusline": {
+        "lastTotalInputTokens": 123456
+      }
+    },
+    {
+      "sessionId": "agent-blind",
+      "model": "claude-opus-5",
+      "workspace": "/w/alpha",
+      "inputTokens": 7,
+      "outputTokens": 3,
+      "cacheReadTokens": 11,
+      "cacheCreateTokens": 0,
+      "totalLlmCalls": 5,
+      "startTime": "2026-08-01T10:00:00.000Z",
+      "durationMs": 60000,
+      "lastActivity": 1785585600000,
+      "parentSessionId": "root-1",
+      "spawnKind": "fresh"
+    }
+  ],
+  "timelines": {
+    "agent-fork-1": [
+      {
+        "turn": 1,
+        "inputTokens": 2,
+        "cacheReadTokens": 180000,
+        "cacheCreateTokens": 0,
+        "outputTokens": 10
+      },
+      {
+        "turn": 2,
+        "inputTokens": 0,
+        "cacheReadTokens": 0,
+        "cacheCreateTokens": 0,
+        "outputTokens": 0
+      }
+    ]
+  },
+  "fork": {
+    "agentId": "fork-1",
+    "sessionId": "agent-fork-1",
+    "parentSessionId": "root-1",
+    "spawnedByTurn": 12,
+    "spawnKind": "fork",
+    "warm": true,
+    "model": "claude-opus-5",
+    "modelOverride": null,
+    "isolation": null,
+    "subagentType": "fork",
+    "startedAt": "2026-08-01T10:00:00.000Z",
+    "lastSeenAt": "2026-08-01T10:01:00.000Z",
+    "turns": 6,
+    "inputTokens": 100,
+    "outputTokens": 50,
+    "cacheReadTokens": 180000,
+    "cacheCreateTokens": 2000,
+    "totalTokens": 150,
+    "cost_usd": 0.1042,
+    "ccDisplayEquivalent": {
+      "cumulativeInputSideTokens": 182100,
+      "lastTurnContextRead": 180002,
+      "note": "CC's footer ↓ ≈ cumulativeInputSideTokens (cumulative input+cacheRead+cacheCreation across ALL turns, launch turn included; output excluded or below CC's 0.1k rounding). It is volume moved, not billing — use cost_usd for spend."
+    },
+    "tokensSource": "transcript"
+  },
+  "forkPrefixed": {
+    "agentId": "fork-1",
+    "sessionId": "agent-fork-1",
+    "parentSessionId": "root-1",
+    "spawnedByTurn": 12,
+    "spawnKind": "fork",
+    "warm": true,
+    "model": "claude-opus-5",
+    "modelOverride": null,
+    "isolation": null,
+    "subagentType": "fork",
+    "startedAt": "2026-08-01T10:00:00.000Z",
+    "lastSeenAt": "2026-08-01T10:01:00.000Z",
+    "turns": 6,
+    "inputTokens": 100,
+    "outputTokens": 50,
+    "cacheReadTokens": 180000,
+    "cacheCreateTokens": 2000,
+    "totalTokens": 150,
+    "cost_usd": 0.1042,
+    "ccDisplayEquivalent": {
+      "cumulativeInputSideTokens": 182100,
+      "lastTurnContextRead": 180002,
+      "note": "CC's footer ↓ ≈ cumulativeInputSideTokens (cumulative input+cacheRead+cacheCreation across ALL turns, launch turn included; output excluded or below CC's 0.1k rounding). It is volume moved, not billing — use cost_usd for spend."
+    },
+    "tokensSource": "transcript"
+  },
+  "forkUpper": {
+    "agentId": "fork-1",
+    "sessionId": "agent-fork-1",
+    "parentSessionId": "root-1",
+    "spawnedByTurn": 12,
+    "spawnKind": "fork",
+    "warm": true,
+    "model": "claude-opus-5",
+    "modelOverride": null,
+    "isolation": null,
+    "subagentType": "fork",
+    "startedAt": "2026-08-01T10:00:00.000Z",
+    "lastSeenAt": "2026-08-01T10:01:00.000Z",
+    "turns": 6,
+    "inputTokens": 100,
+    "outputTokens": 50,
+    "cacheReadTokens": 180000,
+    "cacheCreateTokens": 2000,
+    "totalTokens": 150,
+    "cost_usd": 0.1042,
+    "ccDisplayEquivalent": {
+      "cumulativeInputSideTokens": 182100,
+      "lastTurnContextRead": 180002,
+      "note": "CC's footer ↓ ≈ cumulativeInputSideTokens (cumulative input+cacheRead+cacheCreation across ALL turns, launch turn included; output excluded or below CC's 0.1k rounding). It is volume moved, not billing — use cost_usd for spend."
+    },
+    "tokensSource": "transcript"
+  },
+  "root": {
+    "agentId": "root-1",
+    "sessionId": "root-1",
+    "parentSessionId": null,
+    "spawnedByTurn": null,
+    "spawnKind": null,
+    "warm": false,
+    "model": "claude-opus-5",
+    "modelOverride": null,
+    "isolation": null,
+    "subagentType": null,
+    "startedAt": "2026-08-01T10:00:00.000Z",
+    "lastSeenAt": "2026-08-01T10:01:00.000Z",
+    "turns": 40,
+    "inputTokens": 5000,
+    "outputTokens": 2000,
+    "cacheReadTokens": 400000,
+    "cacheCreateTokens": 20000,
+    "totalTokens": 7000,
+    "cost_usd": 0.4,
+    "ccDisplayEquivalent": {
+      "cumulativeInputSideTokens": 425000,
+      "lastTurnContextRead": null,
+      "note": "CC's footer ↓ ≈ cumulativeInputSideTokens (cumulative input+cacheRead+cacheCreation across ALL turns, launch turn included; output excluded or below CC's 0.1k rounding). It is volume moved, not billing — use cost_usd for spend."
+    },
+    "tokensSource": null
+  },
+  "dupBare": {
+    "error": "Agent id \"dup-1\" is ambiguous — 2 cards match. Pass parentSessionId to scope the lookup, or the full sessionId of one candidate (the agent-<id> transcript form).",
+    "candidates": [
+      {
+        "sessionId": "dup-1",
+        "parentSessionId": "root-1",
+        "model": "claude-opus-5",
+        "spawnKind": null,
+        "totalTokens": 0
+      },
+      {
+        "sessionId": "agent-dup-1",
+        "parentSessionId": "root-1",
+        "model": "claude-opus-5",
+        "spawnKind": "fresh",
+        "totalTokens": 1300
+      }
+    ]
+  },
+  "dupPrefixed": {
+    "agentId": "dup-1",
+    "sessionId": "agent-dup-1",
+    "parentSessionId": "root-1",
+    "spawnedByTurn": 20,
+    "spawnKind": "fresh",
+    "warm": false,
+    "model": "claude-opus-5",
+    "modelOverride": null,
+    "isolation": null,
+    "subagentType": null,
+    "startedAt": "2026-08-01T10:00:00.000Z",
+    "lastSeenAt": "2026-08-01T10:01:00.000Z",
+    "turns": 9,
+    "inputTokens": 900,
+    "outputTokens": 400,
+    "cacheReadTokens": 250000,
+    "cacheCreateTokens": 90000,
+    "totalTokens": 1300,
+    "cost_usd": 0.702,
+    "ccDisplayEquivalent": {
+      "cumulativeInputSideTokens": 340900,
+      "lastTurnContextRead": null,
+      "note": "CC's footer ↓ ≈ cumulativeInputSideTokens (cumulative input+cacheRead+cacheCreation across ALL turns, launch turn included; output excluded or below CC's 0.1k rounding). It is volume moved, not billing — use cost_usd for spend."
+    },
+    "tokensSource": null,
+    "coverageNote": "partial transcript"
+  },
+  "multiScoped": {
+    "agentId": "multi",
+    "sessionId": "multi",
+    "parentSessionId": "other-root",
+    "spawnedByTurn": null,
+    "spawnKind": "worktree",
+    "warm": false,
+    "model": "claude-sonnet-5",
+    "modelOverride": "claude-sonnet-5",
+    "isolation": "worktree",
+    "subagentType": null,
+    "startedAt": "2026-08-01T10:00:00.000Z",
+    "lastSeenAt": "2026-08-01T10:01:00.000Z",
+    "turns": 3,
+    "inputTokens": 20,
+    "outputTokens": 7,
+    "cacheReadTokens": 0,
+    "cacheCreateTokens": 0,
+    "totalTokens": 27,
+    "cost_usd": 0.0003,
+    "ccDisplayEquivalent": {
+      "cumulativeInputSideTokens": 20,
+      "lastTurnContextRead": null,
+      "note": "CC's footer ↓ ≈ cumulativeInputSideTokens (cumulative input+cacheRead+cacheCreation across ALL turns, launch turn included; output excluded or below CC's 0.1k rounding). It is volume moved, not billing — use cost_usd for spend."
+    },
+    "tokensSource": null
+  },
+  "multiWrongParent": {
+    "error": "Agent \"fork-1\" matched 1 card(s), but none under parent nobody.",
+    "candidates": [
+      {
+        "sessionId": "agent-fork-1",
+        "parentSessionId": "root-1",
+        "model": "claude-opus-5",
+        "spawnKind": "fork",
+        "totalTokens": 150
+      }
+    ]
+  },
+  "statusline": {
+    "agentId": "sl-1",
+    "sessionId": "agent-sl-1",
+    "parentSessionId": "root-1",
+    "spawnedByTurn": null,
+    "spawnKind": "fork",
+    "warm": true,
+    "model": "claude-opus-5",
+    "modelOverride": null,
+    "isolation": null,
+    "subagentType": null,
+    "startedAt": "2026-08-01T10:00:00.000Z",
+    "lastSeenAt": "2026-08-01T10:01:00.000Z",
+    "turns": 3,
+    "inputTokens": 1,
+    "outputTokens": 1,
+    "cacheReadTokens": 5,
+    "cacheCreateTokens": 0,
+    "totalTokens": 2,
+    "cost_usd": 0,
+    "ccDisplayEquivalent": {
+      "cumulativeInputSideTokens": 6,
+      "lastTurnContextRead": 123456,
+      "note": "CC's footer ↓ ≈ cumulativeInputSideTokens (cumulative input+cacheRead+cacheCreation across ALL turns, launch turn included; output excluded or below CC's 0.1k rounding). It is volume moved, not billing — use cost_usd for spend."
+    },
+    "tokensSource": null
+  },
+  "blind": {
+    "agentId": "blind",
+    "sessionId": "agent-blind",
+    "parentSessionId": "root-1",
+    "spawnedByTurn": null,
+    "spawnKind": "fresh",
+    "warm": false,
+    "model": "claude-opus-5",
+    "modelOverride": null,
+    "isolation": null,
+    "subagentType": null,
+    "startedAt": "2026-08-01T10:00:00.000Z",
+    "lastSeenAt": "2026-08-01T10:01:00.000Z",
+    "turns": 5,
+    "inputTokens": 7,
+    "outputTokens": 3,
+    "cacheReadTokens": 11,
+    "cacheCreateTokens": 0,
+    "totalTokens": 10,
+    "cost_usd": 0.0001,
+    "ccDisplayEquivalent": {
+      "cumulativeInputSideTokens": 18,
+      "lastTurnContextRead": null,
+      "note": "CC's footer ↓ ≈ cumulativeInputSideTokens (cumulative input+cacheRead+cacheCreation across ALL turns, launch turn included; output excluded or below CC's 0.1k rounding). It is volume moved, not billing — use cost_usd for spend."
+    },
+    "tokensSource": null
+  },
+  "missing": {
+    "error": "Agent \"nope\" not found. Accepted forms: bare agent id, agent-<id>, or a full sessionId (case-insensitive). Use get_subagent_tree on the spawning session to list its children."
+  },
+  "blank": {
+    "error": "agentId is required — a bare agent id, its agent-<id> transcript form, or a full sessionId."
+  },
+  "noArg": {
+    "error": "agentId is required — a bare agent id, its agent-<id> transcript form, or a full sessionId."
+  }
+}
