@@ -1445,3 +1445,46 @@ fn mcp_endpoint_serves_the_frozen_tool_schemas_and_names_unported_tools() {
     let bad = rpc("nope/nope", "{}");
     assert_eq!(bad["error"]["code"], -32601, "{bad}");
 }
+
+/// P4x.2 — the first real MCP tool end-to-end: schema → dispatch → engine → shaper → envelope.
+#[test]
+fn mcp_get_call_context_tool_answers_through_the_full_chain() {
+    let (_otlp, ui, state) = start_servers();
+    let bodies = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bodies");
+    {
+        let mut st = state.lock().unwrap();
+        st.bodies.record(
+            "mcp-sess",
+            agentlens_core::call_body_registry::CallBodyPointer {
+                kind: "request",
+                body_ref: Some(bodies.join("cc-model.request.json").to_string_lossy().into_owned()),
+                inline_body: None,
+                request_id: Some("req-ptr".into()),
+                span_id: None,
+                model: None,
+                query_source: None,
+                ts: 1,
+            },
+        );
+    }
+    let call = |args: &str| -> serde_json::Value {
+        let body = format!(r#"{{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{{"name":"get_call_context","arguments":{args}}}}}"#);
+        let env: serde_json::Value = serde_json::from_str(body_of(&post(ui, "/mcp", &body))).unwrap();
+        // The CLI unwraps content[0].text and JSON-parses it — do exactly that.
+        let text = env["result"]["content"][0]["text"].as_str().unwrap_or_else(|| panic!("no content text: {env}"));
+        serde_json::from_str(text).unwrap()
+    };
+
+    let p = call(r#"{"sessionId":"mcp-sess"}"#);
+    assert_eq!(p["sessionId"], "mcp-sess");
+    assert_eq!(p["requestId"], "req-ptr", "the pointer's requestId is used when none was asked for");
+    assert_eq!(p["estimated"], true);
+    assert!(p["blockCount"].as_u64().unwrap() > 0, "{p}");
+    assert!(p["blocks"][0].get("tokenSource").is_none(), "the tool projection drops tokenSource: {p}");
+
+    // A session with no captured body gets the HONEST message, not an error and not empty blocks.
+    let p = call(r#"{"sessionId":"ghost","requestId":"r9"}"#);
+    assert_eq!(p["requestId"], "r9", "the caller's own ids come back: {p}");
+    assert!(p["message"].as_str().unwrap_or("").contains("not captured"), "{p}");
+    assert!(p.get("blocks").is_none(), "the no-body shape carries no blocks at all: {p}");
+}

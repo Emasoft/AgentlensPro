@@ -209,6 +209,50 @@ async fn read_body_keep_under(mut body: hyper::body::Incoming, max: usize) -> Re
     Ok(buf)
 }
 
+/// Resolve one call to its full CallContext (freeze row 35's engine). Shared by the HTTP route and
+/// the `get_call_context` MCP tool — the TS has ONE `resolveCallContext` behind both, and a second
+/// copy here would be a wire-shape fork waiting to happen.
+///
+/// LOCK CHOREOGRAPHY (the P4s rule): the registry lookup is cheap and in-memory so it runs UNDER
+/// the lock with the POINTER CLONED OUT; the multi-MB body read happens with the lock RELEASED;
+/// the lock is re-taken only for the TRDD-BURNWDGT account backfill.
+async fn resolve_call_context(
+    state: &Arc<Mutex<CoreState>>,
+    session_id: &str,
+    request_id: Option<&str>,
+    span_id: Option<&str>,
+) -> Result<Value, String> {
+    let ptr = {
+        let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+        st.bodies.resolve_request(session_id, request_id, span_id).cloned()
+    };
+    let Some(p) = ptr else { return Ok(Value::Null) };
+    let (body_ref, inline) = (p.body_ref.clone(), p.inline_body.clone());
+    let built = tokio::task::spawn_blocking(move || match body_ref {
+        Some(r) if !r.is_empty() => crate::raw_body_context::build_call_context(&r, false),
+        // An inline body is only present when Claude Code had no file sink configured; a parse
+        // failure there is a null context, never an error.
+        _ => inline
+            .and_then(|b| serde_json::from_str::<Value>(&b).ok())
+            .and_then(|v| crate::raw_body_context::build_call_context_from_json(&v, false)),
+    })
+    .await
+    .map_err(|e| format!("callcontext build join failed: {e}"))?;
+    let Some(ctx) = built else { return Ok(Value::Null) };
+    let ctx = crate::raw_body_context::finalize_resolved_context(
+        ctx,
+        session_id,
+        request_id,
+        p.request_id.as_deref(),
+        p.model.as_deref(),
+    );
+    if let Some(acct) = ctx.get("accountUuid").and_then(Value::as_str).filter(|a| !a.is_empty()) {
+        let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+        st.accounts.record(session_id, acct);
+    }
+    Ok(ctx)
+}
+
 fn json_response(status: StatusCode, body: String) -> Response<SseBody> {
     let mut resp = Response::new(boxed_full(Bytes::from(body)));
     *resp.status_mut() = status;
@@ -1000,9 +1044,29 @@ async fn handle(
         // An unparseable body becomes Null, which handle_rpc answers with a proper JSON-RPC error
         // rather than a transport failure.
         let parsed: Value = serde_json::from_slice(&buf).unwrap_or(Value::Null);
-        // No tool is implemented in the Rust core yet, so every tools/call reports that
-        // explicitly rather than pretending to answer.
-        let reply = crate::mcp::handle_rpc(&parsed, &|_name, _args| None);
+        let reply = match crate::mcp::route_rpc(&parsed) {
+            crate::mcp::Dispatch::Reply(v) => v,
+            crate::mcp::Dispatch::Tool { id, name, args } => {
+                let s = |k: &str| args.get(k).and_then(Value::as_str).map(str::to_owned);
+                match name.as_str() {
+                    "get_call_context" => {
+                        let session_id = s("sessionId").unwrap_or_default();
+                        let (rid, sid) = (s("requestId"), s("spanId"));
+                        let ctx = resolve_call_context(&state, &session_id, rid.as_deref(), sid.as_deref()).await?;
+                        let payload = crate::mcp_tools::get_call_context(
+                            Some(&ctx),
+                            &session_id,
+                            rid.as_deref(),
+                            sid.as_deref(),
+                        );
+                        crate::mcp::tool_ok(&id, &payload)
+                    }
+                    // Every other frozen tool is still served by the TypeScript MCP server, and
+                    // says so by name rather than answering emptily.
+                    other => crate::mcp::not_implemented(&id, other),
+                }
+            }
+        };
         json_response(StatusCode::OK, reply.to_string())
     } else if method == Method::GET && path.starts_with("/api/callcontext/") {
         // Row 35 (server.ts:4161) — the LAST HTTP row. The full literal context of ONE llm call,
@@ -1020,48 +1084,8 @@ async fn handle(
         let request_id = segs.next().filter(|s| !s.is_empty()).map(percent_decode);
         let span_id = query_of(&req).get("span").filter(|s| !s.is_empty()).cloned();
 
-        let ptr = {
-            let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
-            st.bodies.resolve_request(&session_id, request_id.as_deref(), span_id.as_deref()).cloned()
-        };
-        let call_context = match ptr {
-            None => Value::Null,
-            Some(p) => {
-                let (body_ref, inline, ptr_request_id, ptr_model) =
-                    (p.body_ref.clone(), p.inline_body.clone(), p.request_id.clone(), p.model.clone());
-                let built = tokio::task::spawn_blocking(move || match body_ref {
-                    Some(r) if !r.is_empty() => crate::raw_body_context::build_call_context(&r, false),
-                    // An inline body is only present when Claude Code had no file sink configured;
-                    // a parse failure here is a null context, never an error.
-                    _ => inline
-                        .and_then(|b| serde_json::from_str::<Value>(&b).ok())
-                        .and_then(|v| crate::raw_body_context::build_call_context_from_json(&v, false)),
-                })
-                .await
-                .map_err(|e| format!("callcontext build join failed: {e}"))?;
-                match built {
-                    None => Value::Null,
-                    Some(ctx) => {
-                        let ctx = crate::raw_body_context::finalize_resolved_context(
-                            ctx,
-                            &session_id,
-                            request_id.as_deref(),
-                            ptr_request_id.as_deref(),
-                            ptr_model.as_deref(),
-                        );
-                        // TRDD-BURNWDGT backfill: this makes account attribution work even for
-                        // sessions whose OTEL events never carried the account attribute. In this
-                        // core the session→account map lives in account_registry, NOT the body
-                        // registry — the one deliberate divergence from the TS layout.
-                        if let Some(acct) = ctx.get("accountUuid").and_then(Value::as_str).filter(|a| !a.is_empty()) {
-                            let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
-                            st.accounts.record(&session_id, acct);
-                        }
-                        ctx
-                    }
-                }
-            }
-        };
+        let call_context =
+            resolve_call_context(&state, &session_id, request_id.as_deref(), span_id.as_deref()).await?;
         json_response(StatusCode::OK, serde_json::json!({ "callContext": call_context }).to_string())
     } else if method == Method::GET && path.starts_with("/api/conversation/") {
         // Row 34 (server.ts:4271). The narrative reconstruction — same streaming discipline and

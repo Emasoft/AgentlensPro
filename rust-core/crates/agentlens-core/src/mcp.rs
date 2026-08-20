@@ -75,8 +75,67 @@ pub fn tool_exists(name: &str) -> bool {
         .is_some_and(|ts| ts.iter().any(|t| t.get("name").and_then(Value::as_str) == Some(name)))
 }
 
-/// Dispatch one JSON-RPC request. `call` is the tool implementation hook: it returns the tool's
-/// payload, or None when that tool is not ported yet.
+/// What the caller must do next with a request.
+///
+/// `tools/call` is returned as WORK rather than executed here: every real tool needs blocking file
+/// I/O (transcripts, raw bodies) and the CoreState lock, and a synchronous hook inside this
+/// protocol module cannot do either without dragging the lock across the I/O — the exact shape P4s
+/// forbids. Keeping this module protocol-only means the route owns the async and the locking.
+pub enum Dispatch {
+    /// Answer with this JSON-RPC envelope as-is.
+    Reply(Value),
+    /// Run this tool, then wrap it with `tool_ok` / `tool_err`.
+    Tool { id: Value, name: String, args: Value },
+}
+
+/// Wrap a tool payload in the JSON-RPC + MCP content envelope the CLI unwraps.
+pub fn tool_ok(id: &Value, payload: &Value) -> Value {
+    result(Some(id), tool_text_result(payload))
+}
+
+pub fn tool_err(id: &Value, code: i64, message: &str) -> Value {
+    error(Some(id), code, message)
+}
+
+/// The standard "exists in the frozen schema, no Rust implementation yet" error. Distinct from
+/// unknown-tool so a caller can tell "you typo'd" from "not ported yet", and never an empty
+/// result — which would read as a working tool that found nothing.
+pub fn not_implemented(id: &Value, name: &str) -> Value {
+    tool_err(
+        id,
+        -32601,
+        &format!("tool {name} is not yet implemented in the Rust core (agentlens-core); it is still served by the TypeScript MCP server"),
+    )
+}
+
+/// Route one JSON-RPC request: answer the protocol methods directly, hand tool calls back as work.
+pub fn route_rpc(body: &Value) -> Dispatch {
+    let id = body.get("id").cloned().unwrap_or(Value::Null);
+    let Some(method) = body.get("method").and_then(Value::as_str) else {
+        return Dispatch::Reply(error(Some(&id), -32600, "invalid request: no method"));
+    };
+    match method {
+        "initialize" | "tools/list" => Dispatch::Reply(handle_rpc(body, &|_, _| None)),
+        "tools/call" => {
+            let params = body.get("params");
+            let Some(name) = params.and_then(|p| p.get("name")).and_then(Value::as_str) else {
+                return Dispatch::Reply(error(Some(&id), -32602, "invalid params: tools/call needs a tool name"));
+            };
+            if !tool_exists(name) {
+                return Dispatch::Reply(error(Some(&id), -32601, &format!("unknown tool: {name}")));
+            }
+            let args = params
+                .and_then(|p| p.get("arguments"))
+                .cloned()
+                .unwrap_or_else(|| Value::Object(Map::new()));
+            Dispatch::Tool { id, name: name.to_owned(), args }
+        }
+        other => Dispatch::Reply(error(Some(&id), -32601, &format!("unknown method: {other}"))),
+    }
+}
+
+/// Dispatch one JSON-RPC request with a SYNCHRONOUS tool hook. Retained for the protocol methods
+/// and for tests; real tool execution goes through `route_rpc` (see `Dispatch`).
 pub fn handle_rpc(body: &Value, call: &dyn Fn(&str, &Value) -> Option<Value>) -> Value {
     let id = body.get("id");
     let Some(method) = body.get("method").and_then(Value::as_str) else {

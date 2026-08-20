@@ -2301,7 +2301,10 @@ type AccountAccessor = () => AccountInfo
 //                       plus the diff's added/changed/removed counts + firstChangeBlockId).
 //   • turn=N         → that step's blocks WITH full text (bounded by the reconstruction's 20k/block cap).
 //   • turn=N,blockId → just that one block's full text (the deepest drill).
-function handleGetCallContext(ctx: CallContext | null, args: { sessionId: string; requestId?: string; spanId?: string }) {
+// EXPORTED for the Rust port's parity oracle (TRDD-DMWOBWFH P4x.2) — export only, no behaviour
+// change. The shaper is pure, so driving it directly is a far tighter test than round-tripping the
+// whole MCP server just to observe its output.
+export function handleGetCallContext(ctx: CallContext | null, args: { sessionId: string; requestId?: string; spanId?: string }) {
   // Honest fallback — a call with no raw body on disk (legacy OTEL-only, pre-config) returns a clear
   // message, never a perpetual spinner and never "check the previous turn" (TRDD-ICHAVFCS §6).
   if (!ctx) {

@@ -1,0 +1,275 @@
+{
+ "cases": [
+  {
+   "name": "null-context-with-both-ids",
+   "ctx": null,
+   "args": {
+    "sessionId": "s1",
+    "requestId": "r1",
+    "spanId": "sp1"
+   }
+  },
+  {
+   "name": "null-context-with-no-ids",
+   "ctx": null,
+   "args": {
+    "sessionId": "s1"
+   }
+  },
+  {
+   "name": "full-context",
+   "ctx": {
+    "sessionId": "tool-sess",
+    "accountUuid": "tool-acct",
+    "model": "claude-opus-5",
+    "blocks": [
+     {
+      "id": "system:0",
+      "kind": "system",
+      "label": "system prompt",
+      "tokens": 3,
+      "tokenSource": "estimated",
+      "bytes": 15,
+      "text": "a system prompt",
+      "role": "input"
+     },
+     {
+      "id": "toolCatalog:1",
+      "kind": "toolCatalog",
+      "label": "tool catalog (1 tools)",
+      "tokens": 4,
+      "tokenSource": "estimated",
+      "bytes": 11,
+      "text": "- Bash: run",
+      "role": "input"
+     },
+     {
+      "id": "userMsg:2",
+      "kind": "userMsg",
+      "label": "user",
+      "tokens": 2,
+      "tokenSource": "estimated",
+      "bytes": 5,
+      "text": "do it",
+      "role": "input"
+     },
+     {
+      "id": "other:3",
+      "kind": "other",
+      "label": "image image/png",
+      "tokens": 8,
+      "tokenSource": "estimated",
+      "bytes": 32,
+      "text": "[image image/png — 32 base64 bytes, not stored]",
+      "role": "input"
+     },
+     {
+      "id": "bashInput:4",
+      "kind": "bashInput",
+      "label": "Bash",
+      "tokens": 6,
+      "tokenSource": "estimated",
+      "bytes": 16,
+      "text": "{\"command\":\"ls\"}",
+      "role": "input",
+      "toolName": "Bash"
+     }
+    ],
+    "truncated": false,
+    "requestId": "req-1"
+   },
+   "args": {
+    "sessionId": "s1",
+    "requestId": "req-1"
+   }
+  },
+  {
+   "name": "context-without-requestId-or-model",
+   "ctx": {
+    "sessionId": "tool-sess",
+    "accountUuid": "tool-acct",
+    "blocks": [
+     {
+      "id": "system:0",
+      "kind": "system",
+      "label": "system prompt",
+      "tokens": 3,
+      "tokenSource": "estimated",
+      "bytes": 15,
+      "text": "a system prompt",
+      "role": "input"
+     },
+     {
+      "id": "toolCatalog:1",
+      "kind": "toolCatalog",
+      "label": "tool catalog (1 tools)",
+      "tokens": 4,
+      "tokenSource": "estimated",
+      "bytes": 11,
+      "text": "- Bash: run",
+      "role": "input"
+     },
+     {
+      "id": "userMsg:2",
+      "kind": "userMsg",
+      "label": "user",
+      "tokens": 2,
+      "tokenSource": "estimated",
+      "bytes": 5,
+      "text": "do it",
+      "role": "input"
+     },
+     {
+      "id": "other:3",
+      "kind": "other",
+      "label": "image image/png",
+      "tokens": 8,
+      "tokenSource": "estimated",
+      "bytes": 32,
+      "text": "[image image/png — 32 base64 bytes, not stored]",
+      "role": "input"
+     },
+     {
+      "id": "bashInput:4",
+      "kind": "bashInput",
+      "label": "Bash",
+      "tokens": 6,
+      "tokenSource": "estimated",
+      "bytes": 16,
+      "text": "{\"command\":\"ls\"}",
+      "role": "input",
+      "toolName": "Bash"
+     }
+    ],
+    "truncated": false
+   },
+   "args": {
+    "sessionId": "s1"
+   }
+  }
+ ],
+ "results": [
+  {
+   "sessionId": "s1",
+   "requestId": "r1",
+   "spanId": "sp1",
+   "message": "Raw API body not captured for this call (recorded before raw-body logging was enabled, or not a Claude Code session with OTEL_LOG_RAW_API_BODIES set)."
+  },
+  {
+   "sessionId": "s1",
+   "message": "Raw API body not captured for this call (recorded before raw-body logging was enabled, or not a Claude Code session with OTEL_LOG_RAW_API_BODIES set)."
+  },
+  {
+   "sessionId": "tool-sess",
+   "requestId": "req-1",
+   "model": "claude-opus-5",
+   "truncated": false,
+   "estimated": true,
+   "blockCount": 5,
+   "totalTokens": 23,
+   "blocks": [
+    {
+     "id": "system:0",
+     "kind": "system",
+     "label": "system prompt",
+     "tokens": 3,
+     "bytes": 15,
+     "role": "input",
+     "text": "a system prompt"
+    },
+    {
+     "id": "toolCatalog:1",
+     "kind": "toolCatalog",
+     "label": "tool catalog (1 tools)",
+     "tokens": 4,
+     "bytes": 11,
+     "role": "input",
+     "text": "- Bash: run"
+    },
+    {
+     "id": "userMsg:2",
+     "kind": "userMsg",
+     "label": "user",
+     "tokens": 2,
+     "bytes": 5,
+     "role": "input",
+     "text": "do it"
+    },
+    {
+     "id": "other:3",
+     "kind": "other",
+     "label": "image image/png",
+     "tokens": 8,
+     "bytes": 32,
+     "role": "input",
+     "text": "[image image/png — 32 base64 bytes, not stored]"
+    },
+    {
+     "id": "bashInput:4",
+     "kind": "bashInput",
+     "label": "Bash",
+     "tokens": 6,
+     "bytes": 16,
+     "role": "input",
+     "toolName": "Bash",
+     "text": "{\"command\":\"ls\"}"
+    }
+   ]
+  },
+  {
+   "sessionId": "tool-sess",
+   "truncated": false,
+   "estimated": true,
+   "blockCount": 5,
+   "totalTokens": 23,
+   "blocks": [
+    {
+     "id": "system:0",
+     "kind": "system",
+     "label": "system prompt",
+     "tokens": 3,
+     "bytes": 15,
+     "role": "input",
+     "text": "a system prompt"
+    },
+    {
+     "id": "toolCatalog:1",
+     "kind": "toolCatalog",
+     "label": "tool catalog (1 tools)",
+     "tokens": 4,
+     "bytes": 11,
+     "role": "input",
+     "text": "- Bash: run"
+    },
+    {
+     "id": "userMsg:2",
+     "kind": "userMsg",
+     "label": "user",
+     "tokens": 2,
+     "bytes": 5,
+     "role": "input",
+     "text": "do it"
+    },
+    {
+     "id": "other:3",
+     "kind": "other",
+     "label": "image image/png",
+     "tokens": 8,
+     "bytes": 32,
+     "role": "input",
+     "text": "[image image/png — 32 base64 bytes, not stored]"
+    },
+    {
+     "id": "bashInput:4",
+     "kind": "bashInput",
+     "label": "Bash",
+     "tokens": 6,
+     "bytes": 16,
+     "role": "input",
+     "toolName": "Bash",
+     "text": "{\"command\":\"ls\"}"
+    }
+   ]
+  }
+ ]
+}
