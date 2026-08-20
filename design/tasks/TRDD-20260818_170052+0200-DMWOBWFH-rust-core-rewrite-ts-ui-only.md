@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-21T01:44:28+0200
+updated: 2026-08-21T01:52:37+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -1350,8 +1350,38 @@ release-via: publish
   `tierClassify`). So the real slice is **514 lines plus a SQLite binding agentlens-core does not
   have** — the same infrastructure `run_diagnostics_sql` / `run_transcript_sql` need. Doing it
   "next" would have meant discovering that mid-port. It belongs WITH the sql tools, at the end.
-- **NEXT (P4x.2d continued): 9 of 53 remain.** Immediate: `burnInvestigator` (632) — sized by
-  engine and CLEAR: `shared/pricing` → `pricing.rs` ✓, `hookEventStore` → `hook_events.rs` ✓,
+- **`burnInvestigator` IS SPLIT IN TWO, and slice 1 has a PREREQUISITE — both decided, do not
+  re-derive.** 632 lines does not fit one context alongside an oracle and a parity test, and it
+  splits on the SAME seam `cacheCreationForensics` used (scan `5e3359b` → report `38fd0c5`):
+  **slice 1** = the corpus-scan primitives (TS ~114-235: `equivOf`, `listWindow`, `scanResponses`,
+  `scanRequest`, `djb2`, `looksLikeWorkspace`), landed as an ENGINE with its own parity test the
+  way `cacheBreak.ts` and `effortTransitions.ts` were; **slice 2** = the detectors + assembly
+  (TS ~260-632) which wires `investigate_burn` + `burn_seismic`.
+  **PREREQUISITE (own commit, first): promote `utf16_len` + `utf16_slice` into
+  `summarize::helpers`.** `scanRequest` slices by UTF-16 CODE UNITS (`text.slice(-256)` for the
+  chunk carry, `text.slice(i, i+2600)` for the fingerprint input) and `djb2` hashes via
+  `charCodeAt` — any divergence changes the fingerprint that identifies "same inherited
+  transcript". `utf16_len` is duplicated PRIVATELY in **7** agentlens-core files and core has **no
+  `utf16_slice` at all** (agentlens-logscan has a private one). Same one-source-of-truth move
+  already made for `js_to_fixed_str` and `pad_start`.
+  Two further traps, each already paid for once upstream: `buf.toString('utf-8')` on a chunk
+  boundary SPLITS a multi-byte character and Node emits U+FFFD, so `String::from_utf8_lossy` is
+  the faithful port (re-joining the boundary "correctly" diverges the text AND the fingerprint) ·
+  `WS_RE` is **global on purpose** — a transcript QUOTES "Primary working directory:" whenever the
+  conversation is about this code, and a session that read that very file made the scanner capture
+  **the regex's own source** and report it as the machine's top-burning workspace.
+- **TOKEN-ANOMALY HEARTBEAT WARNING FALSIFIED (2026-08-21T01:48).** The heartbeat reported ~3.78M
+  weighted tokens in 5 min, 66× the session median, "$91.03/h machine-wide". `investigate_burn
+  --windowHours 0.25` — the cost-weighted ranker the doctrine names as authoritative — answered
+  *"No known burn pattern detected: 4.0M input-equivalent tokens across 93 calls look like ordinary
+  traffic (**largest single write 2k**)"*, with **13 active sessions** machine-wide. Warm re-reads
+  across a busy machine, not this session. **All three remedies it suggested would have made
+  things worse here:** there were no background subagents to `TaskStop`; `/compact` is itself a
+  cold full-prefix rewrite (~27× a warm turn); and delegating to a lean-worker is the burn source
+  this very card MEASURED at ~$21/hr. Second time this falsification step has paid off — always
+  run it before acting on a burn warning.
+- **NEXT (P4x.2d continued): 9 of 53 remain.** Immediate: `burnInvestigator` slice 1 (after the
+  utf16 promotion) — its engine deps are otherwise CLEAR: `shared/pricing` → `pricing.rs` ✓, `hookEventStore` → `hook_events.rs` ✓,
   `causingToolCall` (`causingToolCalls`/`composition`/`SpawnCall`) → `burn/causing_tool_call.rs` ✓;
   only `captureConfig.resolveBodiesReadScope` + `dataDir` are unported, and both are the SAME
   documented parameter pattern as `defaultBodiesDir` (the route resolves the dir once, so a second
