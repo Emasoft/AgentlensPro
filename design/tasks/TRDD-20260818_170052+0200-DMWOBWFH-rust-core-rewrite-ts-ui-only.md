@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T18:34:12+0200
+updated: 2026-08-20T18:14:40+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -969,7 +969,34 @@ release-via: publish
   NAMED not faked: `compare_versions`' non-numeric branch is a BYTE compare vs the TS's ICU
   `localeCompare` — they agree on lowercase-ASCII tails, diverge on mixed case/non-ASCII.
   **Live smoke found a REAL ghost: this session runs janitor 3.3.18 while 3.3.20 is cached.**
-- **NEXT (P4x.2d continued): port ENGINES.** 28 tools remain. SIZE FIRST. Order:
+- **P4x.2d (commit d4c3133): `spawnRollup` + `get_subagent_tree` + `get_context_growth`. 27 of 53.**
+  **⚠ THE QUEUE ORDER WAS WRONG — measured, and the correction matters more than the slice.**
+  "SIZE FIRST" was being applied to FILE NAMES. Real costs: `cacheEventLog.ts` = 479 **+ 800
+  (`cacheCreationForensics`) + 223 (`otelCallIndex`) = 1,502**, both deps UNPORTED — mis-sized 3×;
+  `subscriptionUsage` = 797 + 90 (`keychainConsent`), `accountInfo` already ported; and **10
+  in-module `handle*` handlers, 10–136 ln each (~550 total), missed ENTIRELY** by a filename sort.
+  That is the CLAUDE.md warning firing a THIRD time ("check for IN-MODULE functions before assuming
+  a missing file means a missing engine" — previously `buildCostRollup`, `predictSessionCost`).
+  **The queue below is now sized by ENGINE, not by filename.**
+  Pinned: an absent/unknown `spawnKind` counts `unknown` NEVER `fresh` (mutation-proved: 4 tests);
+  FLEET-COLD is measured from the RECORDED BUCKETS not the label (fixture c3 is *labelled* `fork`
+  yet cold; c5 wrote 200k and READ 180k so it must NOT be cold); MODEL-MIX uses `override || model`
+  (falsy-or — an `??` port flags a child that matches the parent) and is DISABLED when the parent
+  model is unknown; `asyncUnreportedChildren` OMITTED when 0 (a literal 0 turns a coverage gap into
+  a measurement) and keeps its literal position; Σ cost rounded ONCE; the tree always roots at the
+  PARENT; the rollup runs over FULL child CARDS (the reduced `children` shape lacks the cache
+  buckets every detector reads — passing it silently disables the advisor).
+  Live: a real 138-turn session, peak 269,265 prompt tokens, 98% hit rate, computed peak == the
+  independently persisted `peakContextPerTurn`.
+- **NEXT (P4x.2d continued): the 8 remaining IN-MODULE handlers first — cheapest by ENGINE.**
+  `handleGetAccountStateAt` (13 ln, needs `resolveStateAt` — currently NOT ported),
+  `handleFindContextHogs` (43, `aggregate_composition` ✅ + `fileBackedPool`/`buildScanCoverage`),
+  `handleGetCacheBreakReport` (81), `handleGetCostByCause` (82, needs `buildTokensByCause`),
+  `handleGetContextInflationReport` (90, needs `buildResidentCostReport`), `handleGetAgentTokens`
+  (102), `handleCheckCacheExpiry` (110), `handleGetCacheRiskCosts` (138). THEN
+  `subscriptionUsage.ts` (797 + 90 keychainConsent; NETWORK — the oracle must stub). Heavyweights
+  (`cacheCreationForensics` 800 → unblocks `cacheEventLog`; `cacheBreakTimeline` 1,927;
+  `burnInvestigator` 632; the two sql tools) LAST. Old order kept for reference:
   `cacheEventLog.ts` (479 ln),
   `subscriptionUsage.ts` (797 ln — also the TTL-regime oracle; NETWORK: calls Anthropic's usage
   endpoint, so the oracle must stub). Heavyweights (forensics / timeline / investigator / sql)
