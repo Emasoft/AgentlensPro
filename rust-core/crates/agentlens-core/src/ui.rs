@@ -797,6 +797,78 @@ async fn handle(
             }
         }
         resp
+    } else if method == Method::GET && path.starts_with("/api/instruction-suggestions") {
+        // Row 19 (server.ts:3852; PREFIX match, as the TS url.startsWith does). The advisor is
+        // pure analysis over the workspace's sessions; the response is a BARE array.
+        let q = query_of(&req);
+        match q.get("workspace").map(|w| w.trim()).filter(|w| !w.is_empty()) {
+            None => json_response(StatusCode::BAD_REQUEST, error_json("workspace query param is required")),
+            Some(ws) => {
+                let body = {
+                    let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                    let summary = st.build_session_summary(crate::now_ms() as f64);
+                    // `(s.workspace ?? '') === workspace || s.workspace?.startsWith(workspace)`
+                    let sessions: Vec<Value> = summary
+                        .get("sessions")
+                        .and_then(Value::as_array)
+                        .map(Vec::as_slice)
+                        .unwrap_or(&[])
+                        .iter()
+                        .filter(|s| {
+                            let w = s.get("workspace").and_then(Value::as_str);
+                            w.unwrap_or("") == ws || w.is_some_and(|w| w.starts_with(ws))
+                        })
+                        .cloned()
+                        .collect();
+                    let existing = crate::instruction_files::read_all_instruction_content(ws);
+                    Value::Array(crate::instruction_advisor::generate_suggestions(&sessions, &existing)).to_string()
+                };
+                json_response(StatusCode::OK, body)
+            }
+        }
+    } else if method == Method::GET && path.starts_with("/api/instruction-files") {
+        // Row 20 — pure fs probing, bare array, same 400.
+        let q = query_of(&req);
+        match q.get("workspace").map(|w| w.trim()).filter(|w| !w.is_empty()) {
+            None => json_response(StatusCode::BAD_REQUEST, error_json("workspace query param is required")),
+            Some(ws) => json_response(StatusCode::OK, Value::Array(crate::instruction_files::detect_instruction_files(ws)).to_string()),
+        }
+    } else if method == Method::POST && path == "/api/instructions/apply" {
+        // Row 21 (server.ts:3885): ≤4MB; targetFile becomes a filesystem APPEND path, so it is
+        // restricted to the exact instruction files the advisor offers (without this a request
+        // could append to ~/.zshrc → code execution), plus the resolved-path escape guard.
+        let Some(buf) = read_body_capped(req.into_body(), 4 * 1024 * 1024).await? else {
+            return Err("/api/instructions/apply body over 4MB cap — connection aborted".to_owned());
+        };
+        (|| {
+            let parsed: Value = match serde_json::from_slice(&buf) {
+                Ok(v) => v,
+                // The TS catch answers 500 {error: String(e)} — shape is the contract, text is serde's.
+                Err(e) => return json_response(StatusCode::INTERNAL_SERVER_ERROR, error_json(&format!("SyntaxError: {e}"))),
+            };
+            let field = |k: &str| parsed.get(k).and_then(Value::as_str).filter(|v| !v.is_empty());
+            let (Some(workspace), Some(target), Some(text), Some(id)) =
+                (field("workspace"), field("targetFile"), field("appliedText"), field("id"))
+            else {
+                return json_response(StatusCode::BAD_REQUEST, error_json("workspace, targetFile, appliedText, and id are required"));
+            };
+            const ALLOWED: [&str; 4] = ["CLAUDE.md", ".claude/CLAUDE.md", ".github/copilot-instructions.md", "AGENTS.md"];
+            if !ALLOWED.contains(&target) {
+                return json_response(StatusCode::BAD_REQUEST, error_json("targetFile must be a recognized instruction file"));
+            }
+            let abs = std::path::Path::new(workspace).join(target);
+            // Belt-and-suspenders behind the allowlist: reject anything still resolving outside
+            // the workspace (e.g. a workspace that is itself a traversal string).
+            let resolved = crate::instruction_files::resolve_lexical(&abs.to_string_lossy());
+            let ws_prefix = format!("{}{}", crate::instruction_files::resolve_lexical(workspace).display(), std::path::MAIN_SEPARATOR);
+            if !resolved.to_string_lossy().starts_with(&ws_prefix) {
+                return json_response(StatusCode::BAD_REQUEST, error_json("resolved path escapes the workspace"));
+            }
+            match crate::instruction_files::append_suggestion(&abs, text, id) {
+                Ok(()) => json_response(StatusCode::OK, r#"{"ok":true}"#.to_owned()),
+                Err(e) => json_response(StatusCode::INTERNAL_SERVER_ERROR, error_json(&e.to_string())),
+            }
+        })()
     } else if method == Method::POST && path == "/api/bodies/export" {
         // Row 14 (server.ts:3664): 1MB cap (overflow destroys the socket). The WAD reader + the
         // store half run on the blocking pool and NOT under the state lock — an export walks

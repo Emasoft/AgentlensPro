@@ -38,6 +38,8 @@ pub mod feed_merge;
 pub mod generated_files;
 pub mod hook_events;
 pub mod import_card;
+pub mod instruction_advisor;
+pub mod instruction_files;
 pub mod log_reader;
 pub mod pricing;
 pub mod request_log;

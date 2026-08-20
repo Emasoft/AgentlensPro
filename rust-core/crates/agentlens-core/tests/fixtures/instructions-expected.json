@@ -1,0 +1,1131 @@
+{
+ "cases": [
+  {
+   "name": "rich set trips every generator",
+   "sessions": [
+    {
+     "sessionId": "s01",
+     "model": "claude-opus-5",
+     "inputTokens": 1000,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "outputTokens": 200000,
+     "filesRead": [
+      "src/db/schema.ts",
+      "src/db/db.ts",
+      "src/util/index.ts",
+      "src/legacy/main.rs",
+      "src/y/a.b"
+     ],
+     "filesChanged": [],
+     "loopSignals": [
+      {
+       "type": "error_recurrence"
+      },
+      {
+       "type": "exact_tool_repeat"
+      },
+      {
+       "type": "mystery_signal"
+      },
+      {
+       "type": "edit_revert_cycle"
+      }
+     ],
+     "userRequest": "please refactor the db layer",
+     "toolCounts": {
+      "Bash": 10,
+      "Read": 2
+     }
+    },
+    {
+     "sessionId": "s02",
+     "model": "claude-opus-5",
+     "inputTokens": 1000,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "outputTokens": 200000,
+     "filesRead": [
+      "src/db/schema.ts",
+      "src/db/db.ts",
+      "src/util/index.ts",
+      "src/legacy/main.rs",
+      "src/y/a.b"
+     ],
+     "filesChanged": [],
+     "loopSignals": [
+      {
+       "type": "error_recurrence"
+      },
+      {
+       "type": "exact_tool_repeat"
+      },
+      {
+       "type": "mystery_signal"
+      }
+     ],
+     "userRequest": "refactor everything please",
+     "toolCounts": {
+      "Bash": 10,
+      "Read": 2
+     }
+    },
+    {
+     "sessionId": "s03",
+     "model": "claude-opus-5",
+     "inputTokens": 1000,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "outputTokens": 200000,
+     "filesRead": [
+      "src/db/schema.ts",
+      "src/db/db.ts",
+      "src/util/index.ts",
+      "src/legacy/main.rs",
+      "src/y/a.b"
+     ],
+     "filesChanged": [],
+     "loopSignals": [
+      {
+       "type": "error_recurrence"
+      },
+      {
+       "type": "exact_tool_repeat"
+      },
+      {
+       "type": "mystery_signal"
+      }
+     ],
+     "userRequest": "clean up the helpers",
+     "toolCounts": {
+      "Bash": 10,
+      "Read": 2
+     }
+    },
+    {
+     "sessionId": "s04",
+     "model": "claude-opus-5",
+     "inputTokens": 1000,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "outputTokens": 1000,
+     "filesRead": [
+      "src/db/schema.ts",
+      "src/db/db.ts",
+      "src/legacy/main.rs",
+      "src/y/a.b"
+     ],
+     "filesChanged": [],
+     "loopSignals": [
+      {
+       "type": "error_recurrence"
+      }
+     ],
+     "userRequest": "add feature X",
+     "toolCounts": {
+      "Bash": 10,
+      "Read": 2
+     }
+    },
+    {
+     "sessionId": "s05",
+     "model": "claude-opus-5",
+     "inputTokens": 1000,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "outputTokens": 1000,
+     "filesRead": [
+      "src/db/schema.ts",
+      "src/db/db.ts",
+      "src/legacy/main.rs",
+      "src/y/a.b"
+     ],
+     "filesChanged": [],
+     "loopSignals": [
+      {
+       "type": "error_recurrence"
+      }
+     ],
+     "userRequest": "add feature X",
+     "toolCounts": {
+      "Bash": 10,
+      "Read": 2
+     }
+    },
+    {
+     "sessionId": "s06",
+     "model": "claude-opus-5",
+     "inputTokens": 1000,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "outputTokens": 1000,
+     "filesRead": [
+      "src/db/schema.ts"
+     ],
+     "filesChanged": [
+      "src/db/schema.ts"
+     ],
+     "loopSignals": [],
+     "userRequest": "add feature X",
+     "toolCounts": {
+      "Bash": 10,
+      "Read": 2
+     }
+    },
+    {
+     "sessionId": "s07",
+     "model": "claude-opus-5",
+     "inputTokens": 1000,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "outputTokens": 1000,
+     "filesRead": [],
+     "filesChanged": [],
+     "loopSignals": [],
+     "userRequest": "add feature X",
+     "toolCounts": {
+      "Bash": 10,
+      "Read": 2
+     }
+    },
+    {
+     "sessionId": "s08",
+     "model": "claude-opus-5",
+     "inputTokens": 1000,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "outputTokens": 1000,
+     "filesRead": [],
+     "filesChanged": [],
+     "loopSignals": [],
+     "userRequest": "add feature X",
+     "toolCounts": {
+      "Bash": 10,
+      "Read": 2
+     }
+    },
+    {
+     "sessionId": "s09",
+     "model": "claude-opus-5",
+     "inputTokens": 1000,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "outputTokens": 1000,
+     "filesRead": [],
+     "filesChanged": [],
+     "loopSignals": [],
+     "userRequest": "add feature X",
+     "toolCounts": {
+      "Bash": 1,
+      "Read": 5
+     }
+    },
+    {
+     "sessionId": "s10",
+     "model": "claude-opus-5",
+     "inputTokens": 1000,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "outputTokens": 1000,
+     "filesRead": [],
+     "filesChanged": [],
+     "loopSignals": [],
+     "userRequest": "add feature X",
+     "toolCounts": {
+      "Bash": 1,
+      "Read": 5
+     }
+    }
+   ],
+   "existing": "Historic notes: main.rs is deprecated."
+  },
+  {
+   "name": "under five sessions yields nothing",
+   "sessions": [
+    {
+     "sessionId": "s01",
+     "model": "claude-opus-5",
+     "inputTokens": 1000,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "outputTokens": 200000,
+     "filesRead": [
+      "src/db/schema.ts",
+      "src/db/db.ts",
+      "src/util/index.ts",
+      "src/legacy/main.rs",
+      "src/y/a.b"
+     ],
+     "filesChanged": [],
+     "loopSignals": [
+      {
+       "type": "error_recurrence"
+      },
+      {
+       "type": "exact_tool_repeat"
+      },
+      {
+       "type": "mystery_signal"
+      },
+      {
+       "type": "edit_revert_cycle"
+      }
+     ],
+     "userRequest": "please refactor the db layer",
+     "toolCounts": {
+      "Bash": 10,
+      "Read": 2
+     }
+    },
+    {
+     "sessionId": "s02",
+     "model": "claude-opus-5",
+     "inputTokens": 1000,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "outputTokens": 200000,
+     "filesRead": [
+      "src/db/schema.ts",
+      "src/db/db.ts",
+      "src/util/index.ts",
+      "src/legacy/main.rs",
+      "src/y/a.b"
+     ],
+     "filesChanged": [],
+     "loopSignals": [
+      {
+       "type": "error_recurrence"
+      },
+      {
+       "type": "exact_tool_repeat"
+      },
+      {
+       "type": "mystery_signal"
+      }
+     ],
+     "userRequest": "refactor everything please",
+     "toolCounts": {
+      "Bash": 10,
+      "Read": 2
+     }
+    },
+    {
+     "sessionId": "s03",
+     "model": "claude-opus-5",
+     "inputTokens": 1000,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "outputTokens": 200000,
+     "filesRead": [
+      "src/db/schema.ts",
+      "src/db/db.ts",
+      "src/util/index.ts",
+      "src/legacy/main.rs",
+      "src/y/a.b"
+     ],
+     "filesChanged": [],
+     "loopSignals": [
+      {
+       "type": "error_recurrence"
+      },
+      {
+       "type": "exact_tool_repeat"
+      },
+      {
+       "type": "mystery_signal"
+      }
+     ],
+     "userRequest": "clean up the helpers",
+     "toolCounts": {
+      "Bash": 10,
+      "Read": 2
+     }
+    },
+    {
+     "sessionId": "s04",
+     "model": "claude-opus-5",
+     "inputTokens": 1000,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "outputTokens": 1000,
+     "filesRead": [
+      "src/db/schema.ts",
+      "src/db/db.ts",
+      "src/legacy/main.rs",
+      "src/y/a.b"
+     ],
+     "filesChanged": [],
+     "loopSignals": [
+      {
+       "type": "error_recurrence"
+      }
+     ],
+     "userRequest": "add feature X",
+     "toolCounts": {
+      "Bash": 10,
+      "Read": 2
+     }
+    }
+   ],
+   "existing": ""
+  },
+  {
+   "name": "five sessions boundary",
+   "sessions": [
+    {
+     "sessionId": "s01",
+     "model": "claude-opus-5",
+     "inputTokens": 1000,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "outputTokens": 200000,
+     "filesRead": [
+      "src/db/schema.ts",
+      "src/db/db.ts",
+      "src/util/index.ts",
+      "src/legacy/main.rs",
+      "src/y/a.b"
+     ],
+     "filesChanged": [],
+     "loopSignals": [
+      {
+       "type": "error_recurrence"
+      },
+      {
+       "type": "exact_tool_repeat"
+      },
+      {
+       "type": "mystery_signal"
+      },
+      {
+       "type": "edit_revert_cycle"
+      }
+     ],
+     "userRequest": "please refactor the db layer",
+     "toolCounts": {
+      "Bash": 10,
+      "Read": 2
+     }
+    },
+    {
+     "sessionId": "s02",
+     "model": "claude-opus-5",
+     "inputTokens": 1000,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "outputTokens": 200000,
+     "filesRead": [
+      "src/db/schema.ts",
+      "src/db/db.ts",
+      "src/util/index.ts",
+      "src/legacy/main.rs",
+      "src/y/a.b"
+     ],
+     "filesChanged": [],
+     "loopSignals": [
+      {
+       "type": "error_recurrence"
+      },
+      {
+       "type": "exact_tool_repeat"
+      },
+      {
+       "type": "mystery_signal"
+      }
+     ],
+     "userRequest": "refactor everything please",
+     "toolCounts": {
+      "Bash": 10,
+      "Read": 2
+     }
+    },
+    {
+     "sessionId": "s03",
+     "model": "claude-opus-5",
+     "inputTokens": 1000,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "outputTokens": 200000,
+     "filesRead": [
+      "src/db/schema.ts",
+      "src/db/db.ts",
+      "src/util/index.ts",
+      "src/legacy/main.rs",
+      "src/y/a.b"
+     ],
+     "filesChanged": [],
+     "loopSignals": [
+      {
+       "type": "error_recurrence"
+      },
+      {
+       "type": "exact_tool_repeat"
+      },
+      {
+       "type": "mystery_signal"
+      }
+     ],
+     "userRequest": "clean up the helpers",
+     "toolCounts": {
+      "Bash": 10,
+      "Read": 2
+     }
+    },
+    {
+     "sessionId": "s04",
+     "model": "claude-opus-5",
+     "inputTokens": 1000,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "outputTokens": 1000,
+     "filesRead": [
+      "src/db/schema.ts",
+      "src/db/db.ts",
+      "src/legacy/main.rs",
+      "src/y/a.b"
+     ],
+     "filesChanged": [],
+     "loopSignals": [
+      {
+       "type": "error_recurrence"
+      }
+     ],
+     "userRequest": "add feature X",
+     "toolCounts": {
+      "Bash": 10,
+      "Read": 2
+     }
+    },
+    {
+     "sessionId": "s05",
+     "model": "claude-opus-5",
+     "inputTokens": 1000,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "outputTokens": 1000,
+     "filesRead": [
+      "src/db/schema.ts",
+      "src/db/db.ts",
+      "src/legacy/main.rs",
+      "src/y/a.b"
+     ],
+     "filesChanged": [],
+     "loopSignals": [
+      {
+       "type": "error_recurrence"
+      }
+     ],
+     "userRequest": "add feature X",
+     "toolCounts": {
+      "Bash": 10,
+      "Read": 2
+     }
+    }
+   ],
+   "existing": "Historic notes: main.rs is deprecated."
+  },
+  {
+   "name": "existing text absorbs the hot files",
+   "sessions": [
+    {
+     "sessionId": "s01",
+     "model": "claude-opus-5",
+     "inputTokens": 1000,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "outputTokens": 200000,
+     "filesRead": [
+      "src/db/schema.ts",
+      "src/db/db.ts",
+      "src/util/index.ts",
+      "src/legacy/main.rs",
+      "src/y/a.b"
+     ],
+     "filesChanged": [],
+     "loopSignals": [
+      {
+       "type": "error_recurrence"
+      },
+      {
+       "type": "exact_tool_repeat"
+      },
+      {
+       "type": "mystery_signal"
+      },
+      {
+       "type": "edit_revert_cycle"
+      }
+     ],
+     "userRequest": "please refactor the db layer",
+     "toolCounts": {
+      "Bash": 10,
+      "Read": 2
+     }
+    },
+    {
+     "sessionId": "s02",
+     "model": "claude-opus-5",
+     "inputTokens": 1000,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "outputTokens": 200000,
+     "filesRead": [
+      "src/db/schema.ts",
+      "src/db/db.ts",
+      "src/util/index.ts",
+      "src/legacy/main.rs",
+      "src/y/a.b"
+     ],
+     "filesChanged": [],
+     "loopSignals": [
+      {
+       "type": "error_recurrence"
+      },
+      {
+       "type": "exact_tool_repeat"
+      },
+      {
+       "type": "mystery_signal"
+      }
+     ],
+     "userRequest": "refactor everything please",
+     "toolCounts": {
+      "Bash": 10,
+      "Read": 2
+     }
+    },
+    {
+     "sessionId": "s03",
+     "model": "claude-opus-5",
+     "inputTokens": 1000,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "outputTokens": 200000,
+     "filesRead": [
+      "src/db/schema.ts",
+      "src/db/db.ts",
+      "src/util/index.ts",
+      "src/legacy/main.rs",
+      "src/y/a.b"
+     ],
+     "filesChanged": [],
+     "loopSignals": [
+      {
+       "type": "error_recurrence"
+      },
+      {
+       "type": "exact_tool_repeat"
+      },
+      {
+       "type": "mystery_signal"
+      }
+     ],
+     "userRequest": "clean up the helpers",
+     "toolCounts": {
+      "Bash": 10,
+      "Read": 2
+     }
+    },
+    {
+     "sessionId": "s04",
+     "model": "claude-opus-5",
+     "inputTokens": 1000,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "outputTokens": 1000,
+     "filesRead": [
+      "src/db/schema.ts",
+      "src/db/db.ts",
+      "src/legacy/main.rs",
+      "src/y/a.b"
+     ],
+     "filesChanged": [],
+     "loopSignals": [
+      {
+       "type": "error_recurrence"
+      }
+     ],
+     "userRequest": "add feature X",
+     "toolCounts": {
+      "Bash": 10,
+      "Read": 2
+     }
+    },
+    {
+     "sessionId": "s05",
+     "model": "claude-opus-5",
+     "inputTokens": 1000,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "outputTokens": 1000,
+     "filesRead": [
+      "src/db/schema.ts",
+      "src/db/db.ts",
+      "src/legacy/main.rs",
+      "src/y/a.b"
+     ],
+     "filesChanged": [],
+     "loopSignals": [
+      {
+       "type": "error_recurrence"
+      }
+     ],
+     "userRequest": "add feature X",
+     "toolCounts": {
+      "Bash": 10,
+      "Read": 2
+     }
+    },
+    {
+     "sessionId": "s06",
+     "model": "claude-opus-5",
+     "inputTokens": 1000,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "outputTokens": 1000,
+     "filesRead": [
+      "src/db/schema.ts"
+     ],
+     "filesChanged": [
+      "src/db/schema.ts"
+     ],
+     "loopSignals": [],
+     "userRequest": "add feature X",
+     "toolCounts": {
+      "Bash": 10,
+      "Read": 2
+     }
+    },
+    {
+     "sessionId": "s07",
+     "model": "claude-opus-5",
+     "inputTokens": 1000,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "outputTokens": 1000,
+     "filesRead": [],
+     "filesChanged": [],
+     "loopSignals": [],
+     "userRequest": "add feature X",
+     "toolCounts": {
+      "Bash": 10,
+      "Read": 2
+     }
+    },
+    {
+     "sessionId": "s08",
+     "model": "claude-opus-5",
+     "inputTokens": 1000,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "outputTokens": 1000,
+     "filesRead": [],
+     "filesChanged": [],
+     "loopSignals": [],
+     "userRequest": "add feature X",
+     "toolCounts": {
+      "Bash": 10,
+      "Read": 2
+     }
+    },
+    {
+     "sessionId": "s09",
+     "model": "claude-opus-5",
+     "inputTokens": 1000,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "outputTokens": 1000,
+     "filesRead": [],
+     "filesChanged": [],
+     "loopSignals": [],
+     "userRequest": "add feature X",
+     "toolCounts": {
+      "Bash": 1,
+      "Read": 5
+     }
+    },
+    {
+     "sessionId": "s10",
+     "model": "claude-opus-5",
+     "inputTokens": 1000,
+     "cacheReadTokens": 0,
+     "cacheCreateTokens": 0,
+     "outputTokens": 1000,
+     "filesRead": [],
+     "filesChanged": [],
+     "loopSignals": [],
+     "userRequest": "add feature X",
+     "toolCounts": {
+      "Bash": 1,
+      "Read": 5
+     }
+    }
+   ],
+   "existing": "schema.ts db.ts main.rs a.b"
+  }
+ ],
+ "expected": [
+  [
+   {
+    "id": "hot_file:src_db_schema_ts",
+    "category": "context",
+    "title": "Add schema.ts to instruction file",
+    "evidence": "Read in 6 of 10 sessions (60%). Each agent discovery adds ~2–3 turns.",
+    "suggestedText": "Always read `src/db/schema.ts` before editing db — it contains data schema definitions.",
+    "targetAgents": [
+     "claude_code",
+     "codex"
+    ],
+    "priority": "high",
+    "evidenceSessions": [
+     "s01",
+     "s02",
+     "s03",
+     "s04",
+     "s05",
+     "s06"
+    ]
+   },
+   {
+    "id": "hot_file:src_db_db_ts",
+    "category": "context",
+    "title": "Add db.ts to instruction file",
+    "evidence": "Read in 5 of 10 sessions (50%). Each agent discovery adds ~2–3 turns.",
+    "suggestedText": "Always read `src/db/db.ts` before editing db — it contains database access layer.",
+    "targetAgents": [
+     "claude_code",
+     "codex"
+    ],
+    "priority": "medium",
+    "evidenceSessions": [
+     "s01",
+     "s02",
+     "s03",
+     "s04",
+     "s05"
+    ]
+   },
+   {
+    "id": "loop:error_recurrence",
+    "category": "behavior",
+    "title": "Prevent error recurrence loops",
+    "evidence": "Signal \"error_recurrence\" detected in 5 of 10 sessions (50%).",
+    "suggestedText": "If the same error appears twice, do not attempt a third fix without pausing to verify that the package, function, or file path actually exists.",
+    "targetAgents": [
+     "claude_code",
+     "codex"
+    ],
+    "priority": "high",
+    "evidenceSessions": [
+     "s01",
+     "s02",
+     "s03",
+     "s04",
+     "s05"
+    ]
+   },
+   {
+    "id": "loop:exact_tool_repeat",
+    "category": "behavior",
+    "title": "Prevent exact tool repeat loops",
+    "evidence": "Signal \"exact_tool_repeat\" detected in 3 of 10 sessions (30%).",
+    "suggestedText": "After reading a file, do not re-read it unless you have modified it. If a tool call produces no new information, stop and ask the user rather than retrying.",
+    "targetAgents": [
+     "claude_code",
+     "codex"
+    ],
+    "priority": "medium",
+    "evidenceSessions": [
+     "s01",
+     "s02",
+     "s03"
+    ]
+   },
+   {
+    "id": "discovery:src_db_schema_ts_src_db_db_ts_src_y_a_b",
+    "category": "context",
+    "title": "Pre-load db entry points",
+    "evidence": "These files appear early in 60% of sessions — the agent always discovers them before doing useful work.",
+    "suggestedText": "Key entry points for db:\n- `src/db/schema.ts` — data schema definitions\n- `src/db/db.ts` — database access layer\n- `src/y/a.b` — a definitions\nReview these before beginning any db task.",
+    "targetAgents": [
+     "claude_code",
+     "codex"
+    ],
+    "priority": "medium",
+    "evidenceSessions": [
+     "s01",
+     "s02",
+     "s03",
+     "s04",
+     "s05",
+     "s06"
+    ]
+   },
+   {
+    "id": "prompting:scope",
+    "category": "prompting",
+    "title": "Add scope prompting guidance",
+    "evidence": "Sessions with open-ended language cost 3.3× average (3 of 10 sessions, 30%).",
+    "suggestedText": "Prompting guidance:\n- Always name the specific file and function. Don't say \"refactor\" — say \"refactor [function] in [file]\".\n- State the exact error message when reporting a bug, not just that something is broken.\n- One task at a time. Multi-part prompts (\"fix X, then also do Y\") should be split into separate sessions.",
+    "targetAgents": [
+     "claude_code",
+     "copilot",
+     "codex"
+    ],
+    "priority": "medium",
+    "evidenceSessions": [
+     "s01",
+     "s02",
+     "s03"
+    ]
+   },
+   {
+    "id": "behavior:tool_discipline",
+    "category": "behavior",
+    "title": "Prefer Read tool over Bash for file inspection",
+    "evidence": "Bash calls exceed Read calls by 3× in 8 of 10 sessions (80%).",
+    "suggestedText": "Prefer the Read tool over Bash for file inspection. Use Bash only for shell operations that cannot be done with a dedicated tool. Do not use cat, head, or tail to read file contents.",
+    "targetAgents": [
+     "claude_code",
+     "codex"
+    ],
+    "priority": "low",
+    "evidenceSessions": [
+     "s01",
+     "s02",
+     "s03",
+     "s04",
+     "s05",
+     "s06",
+     "s07",
+     "s08"
+    ]
+   }
+  ],
+  [],
+  [
+   {
+    "id": "hot_file:src_db_schema_ts",
+    "category": "context",
+    "title": "Add schema.ts to instruction file",
+    "evidence": "Read in 5 of 5 sessions (100%). Each agent discovery adds ~2–3 turns.",
+    "suggestedText": "Always read `src/db/schema.ts` before editing db — it contains data schema definitions.",
+    "targetAgents": [
+     "claude_code",
+     "codex"
+    ],
+    "priority": "high",
+    "evidenceSessions": [
+     "s01",
+     "s02",
+     "s03",
+     "s04",
+     "s05"
+    ]
+   },
+   {
+    "id": "hot_file:src_db_db_ts",
+    "category": "context",
+    "title": "Add db.ts to instruction file",
+    "evidence": "Read in 5 of 5 sessions (100%). Each agent discovery adds ~2–3 turns.",
+    "suggestedText": "Always read `src/db/db.ts` before editing db — it contains database access layer.",
+    "targetAgents": [
+     "claude_code",
+     "codex"
+    ],
+    "priority": "high",
+    "evidenceSessions": [
+     "s01",
+     "s02",
+     "s03",
+     "s04",
+     "s05"
+    ]
+   },
+   {
+    "id": "loop:error_recurrence",
+    "category": "behavior",
+    "title": "Prevent error recurrence loops",
+    "evidence": "Signal \"error_recurrence\" detected in 5 of 5 sessions (100%).",
+    "suggestedText": "If the same error appears twice, do not attempt a third fix without pausing to verify that the package, function, or file path actually exists.",
+    "targetAgents": [
+     "claude_code",
+     "codex"
+    ],
+    "priority": "high",
+    "evidenceSessions": [
+     "s01",
+     "s02",
+     "s03",
+     "s04",
+     "s05"
+    ]
+   },
+   {
+    "id": "loop:exact_tool_repeat",
+    "category": "behavior",
+    "title": "Prevent exact tool repeat loops",
+    "evidence": "Signal \"exact_tool_repeat\" detected in 3 of 5 sessions (60%).",
+    "suggestedText": "After reading a file, do not re-read it unless you have modified it. If a tool call produces no new information, stop and ask the user rather than retrying.",
+    "targetAgents": [
+     "claude_code",
+     "codex"
+    ],
+    "priority": "high",
+    "evidenceSessions": [
+     "s01",
+     "s02",
+     "s03"
+    ]
+   },
+   {
+    "id": "loop:edit_revert_cycle",
+    "category": "behavior",
+    "title": "Prevent edit revert cycle loops",
+    "evidence": "Signal \"edit_revert_cycle\" detected in 1 of 5 sessions (20%).",
+    "suggestedText": "Before editing any file, state the exact final state you intend to produce. Do not oscillate between two states — if a second edit would revert a prior one, stop and ask for clarification.",
+    "targetAgents": [
+     "claude_code",
+     "codex"
+    ],
+    "priority": "medium",
+    "evidenceSessions": [
+     "s01"
+    ]
+   }
+  ],
+  [
+   {
+    "id": "loop:error_recurrence",
+    "category": "behavior",
+    "title": "Prevent error recurrence loops",
+    "evidence": "Signal \"error_recurrence\" detected in 5 of 10 sessions (50%).",
+    "suggestedText": "If the same error appears twice, do not attempt a third fix without pausing to verify that the package, function, or file path actually exists.",
+    "targetAgents": [
+     "claude_code",
+     "codex"
+    ],
+    "priority": "high",
+    "evidenceSessions": [
+     "s01",
+     "s02",
+     "s03",
+     "s04",
+     "s05"
+    ]
+   },
+   {
+    "id": "loop:exact_tool_repeat",
+    "category": "behavior",
+    "title": "Prevent exact tool repeat loops",
+    "evidence": "Signal \"exact_tool_repeat\" detected in 3 of 10 sessions (30%).",
+    "suggestedText": "After reading a file, do not re-read it unless you have modified it. If a tool call produces no new information, stop and ask the user rather than retrying.",
+    "targetAgents": [
+     "claude_code",
+     "codex"
+    ],
+    "priority": "medium",
+    "evidenceSessions": [
+     "s01",
+     "s02",
+     "s03"
+    ]
+   },
+   {
+    "id": "prompting:scope",
+    "category": "prompting",
+    "title": "Add scope prompting guidance",
+    "evidence": "Sessions with open-ended language cost 3.3× average (3 of 10 sessions, 30%).",
+    "suggestedText": "Prompting guidance:\n- Always name the specific file and function. Don't say \"refactor\" — say \"refactor [function] in [file]\".\n- State the exact error message when reporting a bug, not just that something is broken.\n- One task at a time. Multi-part prompts (\"fix X, then also do Y\") should be split into separate sessions.",
+    "targetAgents": [
+     "claude_code",
+     "copilot",
+     "codex"
+    ],
+    "priority": "medium",
+    "evidenceSessions": [
+     "s01",
+     "s02",
+     "s03"
+    ]
+   },
+   {
+    "id": "behavior:tool_discipline",
+    "category": "behavior",
+    "title": "Prefer Read tool over Bash for file inspection",
+    "evidence": "Bash calls exceed Read calls by 3× in 8 of 10 sessions (80%).",
+    "suggestedText": "Prefer the Read tool over Bash for file inspection. Use Bash only for shell operations that cannot be done with a dedicated tool. Do not use cat, head, or tail to read file contents.",
+    "targetAgents": [
+     "claude_code",
+     "codex"
+    ],
+    "priority": "low",
+    "evidenceSessions": [
+     "s01",
+     "s02",
+     "s03",
+     "s04",
+     "s05",
+     "s06",
+     "s07",
+     "s08"
+    ]
+   }
+  ]
+ ],
+ "detect": {
+  "ws1": [
+   {
+    "agent": "claude_code",
+    "label": "Claude Code",
+    "filePath": "CLAUDE.md",
+    "relativePath": "CLAUDE.md",
+    "exists": true,
+    "content": "# ws1 claude notes\nHistoric notes: main.rs is deprecated.\n"
+   },
+   {
+    "agent": "copilot",
+    "label": "GitHub Copilot",
+    "filePath": ".github/copilot-instructions.md",
+    "relativePath": ".github/copilot-instructions.md",
+    "exists": true,
+    "content": "copilot ws1 rules\n"
+   },
+   {
+    "agent": "codex",
+    "label": "Codex",
+    "filePath": "AGENTS.md",
+    "relativePath": "AGENTS.md",
+    "exists": false,
+    "content": ""
+   }
+  ],
+  "ws2": [
+   {
+    "agent": "claude_code",
+    "label": "Claude Code",
+    "filePath": ".claude/CLAUDE.md",
+    "relativePath": ".claude/CLAUDE.md",
+    "exists": true,
+    "content": "alternate-location claude file\n"
+   },
+   {
+    "agent": "copilot",
+    "label": "GitHub Copilot",
+    "filePath": ".github/copilot-instructions.md",
+    "relativePath": ".github/copilot-instructions.md",
+    "exists": false,
+    "content": ""
+   },
+   {
+    "agent": "codex",
+    "label": "Codex",
+    "filePath": "AGENTS.md",
+    "relativePath": "AGENTS.md",
+    "exists": false,
+    "content": ""
+   }
+  ],
+  "ws1AllContent": "# ws1 claude notes\nHistoric notes: main.rs is deprecated.\n\ncopilot ws1 rules\n"
+ }
+}

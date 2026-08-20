@@ -1004,3 +1004,79 @@ fn bodies_export_and_purge_routes() {
     assert!(arch.join("bodies-2026-07.wad.idx").exists(), ".idx sidecar retained");
     assert!(arch.join("bodies-2026-08.wad").exists(), "unproven volume kept");
 }
+
+/// Freeze rows 19–21 — the instruction routes over a real socket: the bare-array responses,
+/// the shared workspace 400, the advisor consuming BOTH the live summary and the workspace's
+/// existing instruction text, and apply's allowlist + append (creating the file).
+#[test]
+fn instruction_routes_suggestions_files_and_apply() {
+    let (_otlp, ui, state) = start_servers();
+    let ws = std::env::temp_dir().join(format!("al-insws-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&ws);
+    std::fs::create_dir_all(&ws).unwrap();
+    let ws_s = ws.to_string_lossy().to_string();
+    {
+        // Five sessions in this workspace, all reading the same file → a 100% hot-file
+        // suggestion once the advisor sees them through the live summary.
+        let mut st = state.lock().unwrap();
+        for i in 0..5 {
+            st.put_log_session(serde_json::json!({
+                "sessionId": format!("ins-{i}"), "source": "claude_code", "dataSource": "log",
+                "workspace": ws_s, "startTime": "2026-08-20T06:00:00.000Z",
+                "model": "claude-opus-5", "inputTokens": 1000, "cacheReadTokens": 0,
+                "cacheCreateTokens": 0, "outputTokens": 1000,
+                "filesRead": ["src/db/schema.ts"], "filesChanged": [],
+                "userRequest": "add feature", "toolCounts": { "Bash": 1, "Read": 5 },
+                "timeline": []
+            }));
+        }
+    }
+    // The shared 400 (missing / empty workspace), on both GET routes.
+    for p in ["/api/instruction-suggestions", "/api/instruction-files?workspace=%20"] {
+        let r = get(ui, p, "");
+        assert!(r.starts_with("HTTP/1.1 400"), "{p}: {r}");
+        assert!(body_of(&r).contains("workspace query param is required"));
+    }
+    let q = format!("/api/instruction-suggestions?workspace={}", ws_s.replace('/', "%2F"));
+    let r = get(ui, &q, "");
+    assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+    let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
+    let arr = v.as_array().expect("bare array");
+    assert_eq!(arr[0]["id"], "hot_file:src_db_schema_ts", "{v}");
+    assert!(arr[0]["evidence"].as_str().unwrap().contains("5 of 5 sessions (100%)"));
+
+    // Apply: field/allowlist 400s, then a real append that CREATES the file with the marker.
+    let r = post(ui, "/api/instructions/apply", r#"{"workspace":"x"}"#);
+    assert!(r.starts_with("HTTP/1.1 400"), "{r}");
+    let bad = serde_json::json!({ "workspace": ws_s, "targetFile": "../evil.md", "appliedText": "t", "id": "i" }).to_string();
+    let r = post(ui, "/api/instructions/apply", &bad);
+    assert!(r.starts_with("HTTP/1.1 400"), "{r}");
+    assert!(body_of(&r).contains("recognized instruction file"));
+    let ok = serde_json::json!({ "workspace": ws_s, "targetFile": "CLAUDE.md", "appliedText": "Always read `src/db/schema.ts` first.", "id": "hot_file:src_db_schema_ts" }).to_string();
+    let r = post(ui, "/api/instructions/apply", &ok);
+    assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+    assert_eq!(body_of(&r), r#"{"ok":true}"#);
+    let written = std::fs::read_to_string(ws.join("CLAUDE.md")).unwrap();
+    assert!(written.contains("<!-- AgentLens suggestion applied "), "{written}");
+    assert!(written.contains("id:hot_file:src_db_schema_ts -->\nAlways read `src/db/schema.ts` first.\n"), "{written}");
+
+    // The advisor now sees the applied text through readAllInstructionContent → the mention
+    // filter absorbs the suggestion (the whole feedback loop, end to end).
+    let r = get(ui, &q, "");
+    let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
+    assert_eq!(v, serde_json::json!([]), "applied text absorbs the suggestion");
+
+    // instruction-files: CLAUDE.md now exists with content; the other two report their create
+    // affordance (primary path, exists:false).
+    let r = get(ui, &format!("/api/instruction-files?workspace={}", ws_s.replace('/', "%2F")), "");
+    assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+    let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
+    let files = v.as_array().unwrap();
+    assert_eq!(files.len(), 3);
+    assert_eq!(files[0]["agent"], "claude_code");
+    assert_eq!(files[0]["exists"], true);
+    assert!(files[0]["content"].as_str().unwrap().contains("Always read"));
+    assert_eq!(files[1]["exists"], false);
+    assert_eq!(files[2]["relativePath"], "AGENTS.md");
+    let _ = std::fs::remove_dir_all(&ws);
+}
