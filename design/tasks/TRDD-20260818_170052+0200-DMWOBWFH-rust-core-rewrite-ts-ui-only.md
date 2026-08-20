@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T17:20:53+0200
+updated: 2026-08-20T18:02:41+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -928,8 +928,28 @@ release-via: publish
   **Oracle gotcha:** `checkedAtIso` uses `new Date()`, which reads the system clock DIRECTLY —
   stubbing `Date.now` alone leaves it drifting. The generator replaces the whole `Date` constructor.
   Live smoke on the REAL process table: 22 instances, 24.7 GB tree RSS, cwd via lsof, version found.
-- **NEXT (P4x.2d continued): port ENGINES.** 30 tools remain. SIZE FIRST. Order:
-  `skillAttribution.ts` (180 ln), `loadedPluginVersions.ts` (274 ln), `cacheEventLog.ts` (479 ln),
+- **P4x.2d (commit f4d4f8a): `skillAttribution` ported + `get_skill_attribution`. 24 of 53.**
+  THE DEDUPE IS THE WHOLE SLICE: CC writes ONE assistant message as MANY JSONL rows (one per
+  content block) repeating the FULL `usage` on each. **Measured live on this machine's real
+  transcripts, 720h window: 12,833 messages / 10,187 duplicate rows — a per-row sum reads 23,020
+  and inflates every figure ~1.79x.** Counted once per `message.id`; the collapsed rows are
+  REPORTED (`duplicateRowsSkipped`), never hidden.
+  **THREE JS-TRUTHINESS DIVERGENCES my first draft had — all found by RE-READING the TS, none by a
+  test** (the same lesson as the leanify and project-hint defects): an EMPTY `attributionSkill` is
+  FALSY at both the guard and the accumulate site, so `is_none()` would have minted a rollup named
+  `""`; `usage ? … : 0` is TRUTHY not is-object, so a malformed non-object `usage` is still PRICED
+  (at $0) and an `is_object()` filter made the coverage counters disagree exactly on corrupt
+  records; an EMPTY message id is falsy and must never dedupe.
+  Also pinned: the ts filter runs BEFORE the dedupe (a windowed run reports 0 skipped, not 2);
+  `firstTs`/`lastTs` are OMITTED not nulled when nothing parsed; an unpriced message still counts
+  as attributed; `Math.max(1, topN)` floors to 1 with NO upper clamp and absent = UNCAPPED;
+  `window: 0` means NO window (truthy) yet `windowHours: 0` (nullish).
+  **Two things stated as unpinnable rather than faked:** the whole-file `includes()` pre-filter is
+  unobservable by construction (a file it skips has no attributed rows anyway), and the mtime skip
+  cannot come from a committed fixture because git does not preserve mtimes — asserted as a Rust
+  property test instead. Mutation-proved: no-dedupe fails 5 tests, `is_object()` fails 4.
+- **NEXT (P4x.2d continued): port ENGINES.** 29 tools remain. SIZE FIRST. Order:
+  `loadedPluginVersions.ts` (274 ln), `cacheEventLog.ts` (479 ln),
   `subscriptionUsage.ts` (797 ln — also the TTL-regime oracle; NETWORK: calls Anthropic's usage
   endpoint, so the oracle must stub). Heavyweights (forensics / timeline / investigator / sql)
   last. **Every new arm must end in `tool_ok_lean`, never `mcp::tool_ok`.** The dispatch cases are
