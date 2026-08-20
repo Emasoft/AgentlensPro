@@ -1061,6 +1061,26 @@ async fn handle(
                         );
                         crate::mcp::tool_ok(&id, &payload)
                     }
+                    "get_burn_status" => {
+                        // TRDD-BURNWDGT — label the per-account windows so the caller sees WHICH
+                        // account each budget belongs to.
+                        //
+                        // `label_burn_status_accounts`, NOT `enrich_burn_status`: enrich is
+                        // label + `currentAccount` + `residentBlobs`, and those two belong to the
+                        // HTTP row-24 payload only. Reusing enrich here because it is "the burn
+                        // status function" would ship two fields this tool never had.
+                        //
+                        // The TS also has a "Burn monitor unavailable in this runtime" branch for
+                        // when no live source is wired; in this core the monitor is always present,
+                        // so that branch is unreachable rather than omitted.
+                        let now = crate::now_ms() as f64;
+                        let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                        let status = st.live_burn_status(now);
+                        let account = st.burn.current_account(now);
+                        let payload = crate::burn::runtime::label_burn_status_accounts(&status, Some(&account));
+                        drop(st);
+                        crate::mcp::tool_ok(&id, &payload)
+                    }
                     "get_context_composition" | "get_context_history" | "get_conversation" => {
                         let session_id = s("sessionId").unwrap_or_default();
                         let n = |k: &str| args.get(k).and_then(Value::as_f64);

@@ -1488,3 +1488,43 @@ fn mcp_get_call_context_tool_answers_through_the_full_chain() {
     assert!(p["message"].as_str().unwrap_or("").contains("not captured"), "{p}");
     assert!(p.get("blocks").is_none(), "the no-body shape carries no blocks at all: {p}");
 }
+
+/// `get_burn_status` must serve the LABELLED status, NOT the enriched one — enrich adds
+/// `currentAccount` + `residentBlobs`, which belong to the HTTP row-24 payload only. Reusing enrich
+/// here because it is "the burn status function" would ship two fields this tool never had, so the
+/// difference is asserted directly against the HTTP route's own body.
+#[test]
+fn mcp_get_burn_status_serves_the_labelled_not_the_enriched_status() {
+    let (_otlp, ui, state) = start_servers();
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let now = agentlens_core::now_ms();
+    let iso = |off: i64| agentlens_core::summarize::helpers::iso_from_ms((now - off) as f64);
+    {
+        let mut st = state.lock().unwrap();
+        st.burn.vars.clear();
+        st.burn.set_home_dir(fixtures.join("ttl-home-a"));
+        st.put_log_session(serde_json::json!({
+            "sessionId": "burn-mcp", "source": "claude_code", "dataSource": "log",
+            "startTime": iso(60_000), "accountId": "acct-aaaa",
+            "timeline": [{ "type": "api_request", "timestamp": iso(30_000), "spanId": "b1",
+                "costUsd": 0.2, "inputTokens": 100, "outputTokens": 20,
+                "cacheReadTokens": 1000, "cacheCreateTokens": 50 }]
+        }));
+    }
+    let body = r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_burn_status","arguments":{}}}"#;
+    let env: serde_json::Value = serde_json::from_str(body_of(&post(ui, "/mcp", body))).unwrap();
+    let text = env["result"]["content"][0]["text"].as_str().unwrap_or_else(|| panic!("{env}"));
+    let tool: serde_json::Value = serde_json::from_str(text).unwrap();
+
+    assert!(tool["accountWindows"].is_array(), "the labelled status keeps its windows: {tool}");
+    for w in tool["accountWindows"].as_array().unwrap() {
+        assert!(w["accountLabel"].is_string(), "every window is labelled: {w}");
+    }
+    assert!(tool.get("currentAccount").is_none(), "enrich-only field must NOT appear: {tool}");
+    assert!(tool.get("residentBlobs").is_none(), "enrich-only field must NOT appear: {tool}");
+
+    // The HTTP route DOES carry them — proving the two payloads are genuinely different rather
+    // than both missing the fields for some unrelated reason.
+    let http: serde_json::Value = serde_json::from_str(body_of(&get(ui, "/api/burn-status", ""))).unwrap();
+    assert!(http.get("currentAccount").is_some(), "row 24 carries currentAccount: {http}");
+}
