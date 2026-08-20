@@ -15,7 +15,7 @@ use std::sync::OnceLock;
 
 use crate::pricing::{calc_token_cost_usd, lookup_rates};
 use crate::raw_body_context::{build_call_context, build_call_context_from_json, IMAGE_BLOCK_LABEL_PREFIX};
-use crate::summarize::helpers::num;
+use crate::summarize::helpers::{js_to_fixed_num, num};
 use crate::token_estimator::calibrate_tokens;
 
 // ── Window-size inference ────────────────────────────────────────────────────
@@ -283,4 +283,364 @@ pub fn cost_of_cache_read(tokens: f64, model: Option<&str>, now_ms: f64) -> f64 
         return 0.0;
     }
     calc_token_cost_usd(0.0, tokens, 0.0, 0.0, model.unwrap_or(""), 0.0, None, now_ms)
+}
+
+// ── Resident-block + image aggregation across a session's calls ───────────────
+
+/// JS `.sort((x,y) => (A) || (B))`: a 0 OR NaN first comparator falls through to the second, and
+/// the sort is STABLE, so equal rows keep their prior order. Both properties are load-bearing —
+/// see `aggregate_residents`, where "prior order" is `bySig`'s INSERTION order.
+fn cmp_desc_then(a1: f64, b1: f64, a2: f64, b2: f64) -> std::cmp::Ordering {
+    let d = b1 - a1;
+    if d != 0.0 && !d.is_nan() {
+        return d.partial_cmp(&0.0).unwrap_or(std::cmp::Ordering::Equal);
+    }
+    (b2 - a2).partial_cmp(&0.0).unwrap_or(std::cmp::Ordering::Equal)
+}
+
+fn f(v: &Value, k: &str) -> f64 {
+    num_or_0(v.get(k))
+}
+
+fn s(v: &Value, k: &str) -> String {
+    v.get(k).and_then(Value::as_str).unwrap_or("").to_owned()
+}
+
+/// A block signature (`kind|label`) tracked across a session's calls — the eviction-candidate unit.
+/// A block riding forward is cache-read billed on EVERY turn it is present, so `cumulativeRead*`
+/// is the true wasted re-read weight: Σ over every occurrence across every call.
+///
+/// `by_sig` is an IndexMap, NOT a HashMap: the result is stable-sorted by (cost, tokens), so rows
+/// that tie on BOTH keep their map order — which is insertion order in JS. A HashMap would emit a
+/// different, run-to-run-unstable order for every tied group and no test of a tie-free fixture
+/// would ever notice.
+pub fn aggregate_residents(calls: &[Value], model: Option<&str>, now_ms: f64) -> Vec<Value> {
+    struct Acc {
+        kind: String,
+        label: String,
+        is_image: bool,
+        peak: f64,
+        occ: f64,
+        turns: std::collections::HashSet<u64>,
+        first: f64,
+        last: f64,
+        cum: f64,
+    }
+    let mut by_sig: indexmap::IndexMap<String, Acc> = indexmap::IndexMap::new();
+    for call in calls {
+        let turn = f(call, "turn");
+        let empty: Vec<Value> = Vec::new();
+        for b in call.get("blocks").and_then(Value::as_array).unwrap_or(&empty) {
+            let kind = s(b, "kind");
+            let label = s(b, "label");
+            let sig = format!("{kind}|{label}");
+            let tokens = f(b, "tokens");
+            let a = by_sig.entry(sig).or_insert_with(|| Acc {
+                kind,
+                label,
+                is_image: b.get("isImage").and_then(Value::as_bool).unwrap_or(false),
+                peak: 0.0,
+                occ: 0.0,
+                turns: std::collections::HashSet::new(),
+                first: turn,
+                last: turn,
+                cum: 0.0,
+            });
+            a.peak = a.peak.max(tokens);
+            a.occ += 1.0;
+            a.turns.insert(turn.to_bits());
+            a.first = a.first.min(turn);
+            a.last = a.last.max(turn);
+            a.cum += tokens;
+        }
+    }
+    let mut rows: Vec<Value> = by_sig
+        .into_iter()
+        .map(|(signature, a)| {
+            let mut m = Map::new();
+            m.insert("signature".into(), Value::String(signature));
+            m.insert("kind".into(), Value::String(a.kind));
+            m.insert("label".into(), Value::String(a.label));
+            m.insert("isImage".into(), Value::Bool(a.is_image));
+            m.insert("peakTokens".into(), num(a.peak));
+            m.insert("occurrences".into(), num(a.occ));
+            m.insert("residentTurns".into(), num(a.turns.len() as f64));
+            m.insert("firstSeenTurn".into(), num(a.first));
+            m.insert("lastSeenTurn".into(), num(a.last));
+            m.insert("cumulativeReadTokens".into(), num(a.cum));
+            m.insert("cumulativeReadCostUsd".into(), num(cost_of_cache_read(a.cum, model, now_ms)));
+            Value::Object(m)
+        })
+        .collect();
+    rows.sort_by(|x, y| {
+        cmp_desc_then(
+            f(x, "cumulativeReadCostUsd"),
+            f(y, "cumulativeReadCostUsd"),
+            f(x, "cumulativeReadTokens"),
+            f(y, "cumulativeReadTokens"),
+        )
+    });
+    rows
+}
+
+/// Per-call image weight: count/tokens are the MAX across calls (the worst single call — the "half
+/// the window is images" story), while cumulative is the Σ across every call (what re-reading them
+/// actually cost). `firstSeenTurn` uses 0 as its "unset" sentinel, exactly as the TS does.
+pub fn summarize_images(calls: &[Value], model: Option<&str>, now_ms: f64) -> Value {
+    let (mut count, mut tokens, mut resident_turns, mut cumulative, mut first_seen): (f64, f64, f64, f64, f64) =
+        (0.0, 0.0, 0.0, 0.0, 0.0);
+    for call in calls {
+        let images = call.get("images").cloned().unwrap_or(Value::Null);
+        let c = num_or_0(images.get("count"));
+        if c == 0.0 {
+            continue;
+        }
+        let t = num_or_0(images.get("tokens"));
+        resident_turns += 1.0;
+        cumulative += t;
+        if first_seen == 0.0 {
+            first_seen = f(call, "turn");
+        }
+        count = count.max(c);
+        tokens = tokens.max(t);
+    }
+    let mut m = Map::new();
+    m.insert("count".into(), num(count));
+    m.insert("tokens".into(), num(tokens));
+    m.insert("firstSeenTurn".into(), num(first_seen));
+    m.insert("residentTurns".into(), num(resident_turns));
+    m.insert("cumulativeReadTokens".into(), num(cumulative));
+    m.insert("cumulativeReadCostUsd".into(), num(cost_of_cache_read(cumulative, model, now_ms)));
+    Value::Object(m)
+}
+
+/// Build a whole session's composition from an ordered list of request refs (oldest→newest).
+///
+/// A call whose body is unreadable is SKIPPED, but `callsTotal` counts the REFS, not the parsed
+/// calls. That gap is not a bug — it IS the coverage honesty: `callsTotal` vs `calls.len()` is how
+/// a consumer sees that some bodies were purged from under us.
+pub fn build_session_composition(
+    session_id: &str,
+    refs: &[Value],
+    project_hint: Option<&str>,
+    now_ms: f64,
+) -> Value {
+    let mut calls: Vec<Value> = Vec::new();
+    let mut calls_with_exact = 0.0;
+    let mut model: Option<String> = None;
+    let mut account: Option<String> = None;
+    for (i, r) in refs.iter().enumerate() {
+        let exact = read_response_usage(r.get("responseRef").and_then(Value::as_str));
+        if exact.is_some() {
+            calls_with_exact += 1.0;
+        }
+        let Some(cc) = build_call_composition(
+            r.get("bodyRef").and_then(Value::as_str).unwrap_or(""),
+            (i + 1) as f64,
+            num_or_0(r.get("ts")),
+            project_hint,
+            exact.as_ref(),
+            r.get("model").and_then(Value::as_str),
+            None,
+            now_ms,
+        ) else {
+            continue;
+        };
+        // `model ?? cc.model` — the FIRST call that names one wins; later calls never overwrite it.
+        if model.is_none() {
+            model = cc.get("model").and_then(Value::as_str).map(str::to_owned);
+        }
+        if account.is_none() {
+            account = cc.get("accountUuid").and_then(Value::as_str).map(str::to_owned);
+        }
+        calls.push(cc);
+    }
+    let mut m = Map::new();
+    m.insert("sessionId".into(), Value::String(session_id.to_owned()));
+    if let Some(a) = &account {
+        m.insert("accountUuid".into(), Value::String(a.clone()));
+    }
+    m.insert("project".into(), Value::String(project_hint.unwrap_or("unknown").to_owned()));
+    if let Some(md) = &model {
+        m.insert("model".into(), Value::String(md.clone()));
+    }
+    let residents = aggregate_residents(&calls, model.as_deref(), now_ms);
+    let images = summarize_images(&calls, model.as_deref(), now_ms);
+    m.insert("calls".into(), Value::Array(calls));
+    m.insert("residentBlobs".into(), Value::Array(residents));
+    m.insert("images".into(), images);
+    m.insert("callsTotal".into(), num(refs.len() as f64));
+    m.insert("callsWithExactUsage".into(), num(calls_with_exact));
+    Value::Object(m)
+}
+
+/// A compact per-session summary for the dashboard panel: the peak-context call's block-type
+/// split, the image rollup, and the top eviction-candidate blobs — each with a sample
+/// (turn, blockIndex) so a UI row can drill to real content. Pointer-only: no per-block arrays and
+/// no bytes cross to the browser.
+pub fn session_composition_summary(comp: &Value) -> Value {
+    let empty: Vec<Value> = Vec::new();
+    let calls = comp.get("calls").and_then(Value::as_array).unwrap_or(&empty);
+
+    // Representative call for the breakdown bar = the peak-context call. STRICT `>`, so the FIRST
+    // call at the maximum wins; `>=` would silently report the LAST one instead.
+    let mut peak: Option<&Value> = None;
+    for c in calls {
+        if peak.is_none_or(|p| f(c, "contextTokens") > f(p, "contextTokens")) {
+            peak = Some(c);
+        }
+    }
+
+    let peak_call = peak.map_or(Value::Null, |p| {
+        let images = p.get("images").cloned().unwrap_or(Value::Null);
+        let image_tokens = num_or_0(images.get("tokens"));
+        let image_count = num_or_0(images.get("count"));
+        // otherTokens is the remainder the six named categories don't name (tool_use blocks,
+        // attachments, mcp input …) — clamped ≥0 so a small estimate drift can't make it negative.
+        let classified = image_tokens
+            + f(p, "toolResultTokens")
+            + f(p, "textTokens")
+            + f(p, "thinkingTokens")
+            + f(p, "systemTokens")
+            + f(p, "toolCatalogTokens");
+        let mut m = Map::new();
+        m.insert("turn".into(), num(f(p, "turn")));
+        m.insert("contextTokens".into(), num(f(p, "contextTokens")));
+        // Already ×100 from the fraction — the UI receives a percent, not a ratio.
+        m.insert("contextPct".into(), num(js_to_fixed_num(f(p, "contextPct") * 100.0, 1)));
+        m.insert("windowSize".into(), num(f(p, "windowSize")));
+        m.insert("tokenSource".into(), p.get("tokenSource").cloned().unwrap_or(Value::Null));
+        m.insert("imageTokens".into(), num(image_tokens));
+        m.insert("imageCount".into(), num(image_count));
+        m.insert("toolResultTokens".into(), num(f(p, "toolResultTokens")));
+        m.insert("textTokens".into(), num(f(p, "textTokens")));
+        m.insert("thinkingTokens".into(), num(f(p, "thinkingTokens")));
+        m.insert("systemTokens".into(), num(f(p, "systemTokens")));
+        m.insert("toolCatalogTokens".into(), num(f(p, "toolCatalogTokens")));
+        m.insert("otherTokens".into(), num((f(p, "contextTokens") - classified).max(0.0)));
+        Value::Object(m)
+    });
+
+    // For each top blob find ONE occurrence so a UI row can drill to it. (0, -1) is the explicit
+    // "no occurrence found" pair — not a valid turn/index, so a consumer cannot mistake it for one.
+    let find_sample = |signature: &str| -> (f64, f64) {
+        for c in calls {
+            let blocks = c.get("blocks").and_then(Value::as_array).unwrap_or(&empty);
+            if let Some(i) = blocks.iter().position(|b| format!("{}|{}", s(b, "kind"), s(b, "label")) == signature) {
+                return (f(c, "turn"), i as f64);
+            }
+        }
+        (0.0, -1.0)
+    };
+    let resident_blobs: Vec<Value> = comp
+        .get("residentBlobs")
+        .and_then(Value::as_array)
+        .unwrap_or(&empty)
+        .iter()
+        .take(15)
+        .map(|b| {
+            let (turn, idx) = find_sample(&s(b, "signature"));
+            let mut m = b.as_object().cloned().unwrap_or_default();
+            m.insert("sampleTurn".into(), num(turn));
+            m.insert("sampleBlockIndex".into(), num(idx));
+            Value::Object(m)
+        })
+        .collect();
+
+    let calls_total = f(comp, "callsTotal");
+    let mut out = Map::new();
+    out.insert("sessionId".into(), comp.get("sessionId").cloned().unwrap_or(Value::Null));
+    if let Some(a) = comp.get("accountUuid") {
+        out.insert("accountUuid".into(), a.clone());
+    }
+    out.insert("project".into(), comp.get("project").cloned().unwrap_or(Value::Null));
+    if let Some(m) = comp.get("model") {
+        out.insert("model".into(), m.clone());
+    }
+    out.insert("callsTotal".into(), num(calls_total));
+    out.insert("callsWithExactUsage".into(), num(f(comp, "callsWithExactUsage")));
+    out.insert("peakCall".into(), peak_call);
+    out.insert("images".into(), comp.get("images").cloned().unwrap_or(Value::Null));
+    out.insert("residentBlobs".into(), Value::Array(resident_blobs));
+    if calls_total == 0.0 {
+        out.insert("coverageNote".into(), Value::String(
+            "No raw OTEL request bodies for this session in the live registry (lazy — historical bodies are not indexed). Set OTEL_LOG_RAW_API_BODIES to capture them.".into(),
+        ));
+    }
+    Value::Object(out)
+}
+
+/// Resolve a session's request bodies + their paired responses from the registry — the LAZY path.
+/// PURE and cheap: it only reads the in-memory registry, so it is the part a route runs while
+/// holding the CoreState lock. The expensive file parsing happens afterwards, off the lock.
+pub fn resolve_refs(registry: &crate::call_body_registry::CallBodyRegistry, session_id: &str) -> Vec<Value> {
+    registry
+        .request_pointers(session_id)
+        .into_iter()
+        .filter(|p| p.body_ref.as_deref().is_some_and(|b| !b.is_empty()))
+        .map(|p| {
+            let resp = registry.response_for(session_id, p.span_id.as_deref(), p.request_id.as_deref());
+            let mut m = Map::new();
+            m.insert("bodyRef".into(), Value::String(p.body_ref.clone().unwrap_or_default()));
+            m.insert("ts".into(), num(p.ts as f64));
+            if let Some(v) = &p.span_id {
+                m.insert("spanId".into(), Value::String(v.clone()));
+            }
+            if let Some(v) = &p.request_id {
+                m.insert("requestId".into(), Value::String(v.clone()));
+            }
+            if let Some(r) = resp.and_then(|r| r.body_ref.clone()) {
+                m.insert("responseRef".into(), Value::String(r));
+            }
+            if let Some(v) = &p.model {
+                m.insert("model".into(), Value::String(v.clone()));
+            }
+            Value::Object(m)
+        })
+        .collect()
+}
+
+/// The lazy, LRU-cached index. IndexMap because the eviction order IS the JS Map's insertion
+/// order: a cache HIT re-inserts to move that session to the MRU end, so the oldest key is always
+/// the eviction candidate. `shift_remove`, never `swap_remove` — swapping would destroy the very
+/// ordering the LRU depends on.
+pub struct ContextCompositionIndex {
+    cache: indexmap::IndexMap<String, Value>,
+    max_sessions: usize,
+}
+
+impl Default for ContextCompositionIndex {
+    fn default() -> Self {
+        ContextCompositionIndex { cache: indexmap::IndexMap::new(), max_sessions: 64 }
+    }
+}
+
+impl ContextCompositionIndex {
+    pub fn new(max_sessions: usize) -> Self {
+        ContextCompositionIndex { cache: indexmap::IndexMap::new(), max_sessions }
+    }
+
+    /// A cached composition, moved to the MRU end on hit.
+    pub fn get_cached(&mut self, session_id: &str) -> Option<Value> {
+        let v = self.cache.shift_remove(session_id)?;
+        self.cache.insert(session_id.to_owned(), v.clone());
+        Some(v)
+    }
+
+    pub fn put(&mut self, session_id: &str, comp: Value) {
+        self.cache.shift_remove(session_id);
+        self.cache.insert(session_id.to_owned(), comp);
+        while self.cache.len() > self.max_sessions {
+            let Some(oldest) = self.cache.keys().next().cloned() else { break };
+            self.cache.shift_remove(&oldest);
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.cache.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.cache.is_empty()
+    }
 }
