@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T20:51:33+0200
+updated: 2026-08-20T21:59:46+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -1110,10 +1110,58 @@ release-via: publish
   between turns blows it, so every turn is a cold full-prefix rewrite. The fat main conversation
   (1h TTL, 0.1× warm re-reads) is CHEAPER for anything with long tool gaps. Delegate only pure
   authoring with no long gaps, or batch all builds into one final turn.
-- **NEXT (P4x.2d continued): remaining IN-MODULE handlers, with their REAL (engine-inclusive) cost.**
-  `cache_break.rs` is LANDED, so the next two are now handler-only:
-  `handleGetCacheBreakReport` (**81**) and `handleGetCacheRiskCosts` (**138**, also needs
-  `src/cacheRiskCommands.ts`) — do them TOGETHER, they share the engine.
+- **P4x.2d (commit 7ddce2d): `get_cache_break_report` + its arm. 34 of 53.** The FIRST consumer of
+  `cache_break.rs`. **THE SECOND DOUBLE-GUARD VARIANT, and it FAILED on the first run** — which is
+  exactly why each site is asserted rather than generalized from a sibling. `scope =
+  args.workspace?.trim()` is BOTH the truthy filter guard AND the `scope ?? 'all'` echo, so ABSENT
+  and PRESENT-BUT-BLANK differ: absent → `"all"`, `"   "` → filters nothing and echoes `""`. The
+  port collapsed both to `""` up front. For the same input the three sites now read: inflation
+  `"   "` (RAW), hogs `""`, break-report `""`, absent `"all"`.
+  Also pinned: `block: … ?? null` KEEPS its key while the engine's `breakSourceLabel` DROPS —
+  same datum, two wire contracts; `{...o, wastedCostUsd: +…}` keeps the OVERWRITTEN key's ORIGINAL
+  position (appending would reorder and still compare equal by value);
+  considered/withLog/analyzed are three different numbers and the GAPS are the diagnosis.
+  `get_composition` became `Option<&dyn Fn>` (one representation of the TS `if (!getComposition)`,
+  and it keeps the signature inside clippy's arg limit).
+- **P4x.2d (commit 38741c6): `effortTransitions.ts` engine (198 ln).** An unported PREREQUISITE of
+  `get_cache_risk_costs`, found by READING AHEAD — the handler is 138 lines but imports from a
+  198-line module nothing had touched, so its real cost was 336. **Third time this queue was
+  mis-sized by filename.** Pinned: THE ABSENT-VALUE RULE (only an EXPLICIT non-empty string
+  `effort` is an observation — absent→present is the FIELD APPEARING at the CC 2.1.212 boundary,
+  and counting it manufactures one false invalidation per session across all history); the first
+  observation is the BASELINE and emits nothing; PARTITION by (session, sidechain) with
+  `=== true` STRICT; TIME order not FILE order (a resume writes a new file — the fixture puts a
+  record BETWEEN two of another file's, so file-order differencing gives the same COUNT with
+  different from/to: a length assertion cannot see it); `model` appended LAST and dropped when
+  absent or non-string; both post-filters run AFTER the differencing (filtering records first
+  differences across the hole).
+  **MTIME-ORACLE pattern reused:** git does not preserve mtimes, so the generator STAMPS a table
+  and PUBLISHES it; the Rust test re-stamps FROM THAT TABLE via `std::fs::FileTimes`. Never two
+  hardcoded copies.
+- **P4x.2d (commit 15e9e60): `get_cache_risk_costs` + its arm. 35 of 53.**
+  **THE JOIN ONLY EVER SEES BREAKING TURNS** — `timed` filters `tsMs !== undefined`, and `tsMs` is
+  written ONLY by the engine's break path, so both "no break" objects are INVISIBLE to it. A
+  command followed by a quiet turn is billed against the next turn that actually BROKE, and the
+  "menu opened and closed" note is reachable ONLY via a turn that broke wasting ZERO tokens (a
+  model switch with no cache_creation). The first fixture had none: every case passed, the branch
+  never executed, and a bare `/model` looked correctly billed when it had skipped two turns ahead.
+  **A green suite is not coverage — enumerate the branches and check each one EXECUTED.**
+  Also pinned: ONE TURN IS ONE COST (two commands before the same turn ⇒ only the EARLIEST is
+  charged; this is the 102-vs-69 double-count, and the suite was FALSIFIED against it — dropping
+  `!already_charged` fails 3 tests); `windowHours` NULLISH on the RAW arg vs `sinceMs` TRUTHY, so
+  `window: 0` echoes 0 and filters nothing; an effort transition is an EVENT but NOT a COMMAND
+  (so `commandsFoundInTranscripts: 0` co-occurs with a non-empty `events`); `minTokens` gates only
+  a BREAK; the residue ships LABELLED and the test PROVES the inferred 40,000 is absent from the
+  totals rather than trusting the note; `byKind.costUsd` re-rounds on EVERY accumulation.
+  `fileBackedPool` gained its general PREDICATE form (the TS signature all along) and the string
+  form delegates to it; the 6 scan inputs travel in a `CacheRiskCtx` struct.
+- **NEXT (P4x.2d continued): 18 of 53 remain.** `subscriptionUsage.ts` (797 + 90 `keychainConsent`;
+  **NETWORK** — the oracle MUST stub the Anthropic usage endpoint; it is also the live TTL-regime
+  oracle). Then the heavyweights, engine-first: `cacheCreationForensics` (800 — unblocks
+  `cacheEventLog` 479), `cacheBreakTimeline` (1,927), `burnInvestigator` (632), and the 2 sql
+  tools. **SIZE BY ENGINE: before starting any handler, grep its imports for a module with no
+  `.rs` counterpart** — that check is what caught `effortTransitions` and `residentCost`, and
+  skipping it is what mis-sized this queue three times.
   
   (90 + 135 `residentCost` = **225**) · `handleCheckCacheExpiry` (110 + in-module helpers) ·
   then the two that SHARE `cacheBreak.ts` (383) and should be done together —
