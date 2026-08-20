@@ -13,10 +13,10 @@
 //  - key ORDER + key OMISSION — an undefined value is dropped by JSON.stringify, never nulled
 //  - regex /m          — `^#\s*CLAUDE\.md` must match at a LINE start, not only at string start
 import { createRequire } from 'module'
-import { writeFileSync } from 'fs'
+import { writeFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
 const require = createRequire(import.meta.url)
-const { buildCallContextFromJson, parseUserId } = require('../../../../../out/test/rawBodyContext.js')
+const { buildCallContextFromJson, parseUserId, buildCallContext } = require('../../../../../out/test/rawBodyContext.js')
 const dir = new URL('.', import.meta.url).pathname
 
 // metadata.user_id is a JSON *string blob*, not a bare id — every malformed shape must fail soft
@@ -114,11 +114,35 @@ const bodyCases = [
   }, uncap: false },
 ]
 
+// buildCallContext — the FILE wrapper. Both engines read the SAME committed fixture files, so the
+// oracle covers the real failure modes (absent / not-a-file / unparseable) rather than mocking fs.
+// The 64MB size gate is deliberately NOT fixture-tested (committing a 64MB file to prove a `>`
+// costs far more than it proves); it is asserted as a CONSTANT on both sides instead.
+const bodiesDir = join(dir, 'bodies')
+mkdirSync(bodiesDir, { recursive: true })
+writeFileSync(join(bodiesDir, 'valid.request.json'), JSON.stringify({
+  model: 'claude-fable-5',
+  metadata: { user_id: JSON.stringify({ session_id: 'file-sess', account_uuid: 'file-acct' }) },
+  system: 'from a file',
+  messages: [{ role: 'user', content: 'hello from disk' }],
+}))
+writeFileSync(join(bodiesDir, 'notjson.request.json'), '{"truncated mid-write": ')
+writeFileSync(join(bodiesDir, 'notobject.request.json'), '42')   // parses, but is not an object → null
+const fileCases = [
+  'valid.request.json',
+  'notjson.request.json',
+  'notobject.request.json',
+  'no-such-file.request.json',   // stat throws → null
+  '.',                           // a DIRECTORY → isFile() false → null
+]
+
 const J = (v) => JSON.parse(JSON.stringify(v ?? null))
 writeFileSync(join(dir, 'rawbodyctx-expected.json'), JSON.stringify({
   userIdCases: J(userIdCases),
   userIds: userIdCases.map(c => J(parseUserId(c))),
   bodyCases: J(bodyCases),
   contexts: bodyCases.map(c => J(buildCallContextFromJson(c.body, { uncap: c.uncap }))),
+  fileCases: J(fileCases),
+  fileContexts: await Promise.all(fileCases.map(f => buildCallContext(join(bodiesDir, f)).then(J))),
 }, null, 1))
-console.log(`rawbodyctx-expected.json: ${userIdCases.length} user_id + ${bodyCases.length} body cases`)
+console.log(`rawbodyctx-expected.json: ${userIdCases.length} user_id + ${bodyCases.length} body + ${fileCases.length} file cases`)

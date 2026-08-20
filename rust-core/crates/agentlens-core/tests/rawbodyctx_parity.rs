@@ -11,7 +11,7 @@
 //! After any TS change:
 //!   pnpm run compile-tests && node rust-core/crates/agentlens-core/tests/fixtures/gen-rawbodyctx-expected.mjs
 
-use agentlens_core::raw_body_context::{build_call_context_from_json, parse_user_id};
+use agentlens_core::raw_body_context::{build_call_context, build_call_context_from_json, parse_user_id};
 use serde_json::{Map, Value};
 
 fn oracle() -> Value {
@@ -46,6 +46,27 @@ fn cmp_obj(got: &Value, exp: &Value, ctx: &str) {
             continue;
         }
         assert_eq!(gv, ev, "{ctx}.{k}");
+    }
+}
+
+/// Compare a whole CallContext. Shared by the in-memory and the file-wrapper tests so the file
+/// path gets the SAME key-order rigor rather than a weaker copy of it.
+fn cmp_ctx(got: &Value, exp: &Value, ctx: &str) {
+    assert_eq!(keys(got), keys(exp), "{ctx}: top-level key set/ORDER differs");
+    let (gb, eb) = (got["blocks"].as_array().unwrap(), exp["blocks"].as_array().unwrap());
+    assert_eq!(
+        gb.iter().map(|b| b["id"].as_str().unwrap_or("?")).collect::<Vec<_>>(),
+        eb.iter().map(|b| b["id"].as_str().unwrap_or("?")).collect::<Vec<_>>(),
+        "{ctx}: block id sequence differs (id encodes kind + position, so this catches a wrong \
+         kind, a missing block, an extra block, and a reordering all at once)"
+    );
+    for (j, (g, e)) in gb.iter().zip(eb).enumerate() {
+        cmp_obj(g, e, &format!("{ctx}.blocks[{j}]"));
+    }
+    for k in keys(exp) {
+        if k != "blocks" {
+            assert_eq!(got[k], exp[k], "{ctx}.{k}");
+        }
     }
 }
 
@@ -85,22 +106,33 @@ fn build_call_context_reproduces_the_ts_oracle_exactly() {
             continue;
         }
         let got = got.unwrap_or_else(|| panic!("{ctx}: TS returned a context, Rust returned None"));
-        assert_eq!(keys(&got), keys(exp), "{ctx}: top-level key set/ORDER differs");
-
-        let (gb, eb) = (got["blocks"].as_array().unwrap(), exp["blocks"].as_array().unwrap());
-        assert_eq!(
-            gb.iter().map(|b| b["id"].as_str().unwrap_or("?")).collect::<Vec<_>>(),
-            eb.iter().map(|b| b["id"].as_str().unwrap_or("?")).collect::<Vec<_>>(),
-            "{ctx}: block id sequence differs (id encodes kind + position, so this catches a wrong \
-             kind, a missing block, an extra block, and a reordering all at once)"
-        );
-        for (j, (g, e)) in gb.iter().zip(eb).enumerate() {
-            cmp_obj(g, e, &format!("{ctx}.blocks[{j}]"));
-        }
-        for k in keys(exp) {
-            if k != "blocks" {
-                assert_eq!(got[k], exp[k], "{ctx}.{k}");
-            }
-        }
+        cmp_ctx(&got, exp, &ctx);
     }
+}
+
+/// The FILE wrapper, over the same fixture files the TS oracle read. Covers the real failure
+/// modes — absent path, a directory, a truncated/unparseable body, and valid JSON that is not an
+/// object — each of which must fail SOFT to None rather than propagating an error.
+#[test]
+fn build_call_context_file_wrapper_reproduces_the_ts_oracle_exactly() {
+    let o = oracle();
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bodies");
+    for (case, exp) in o["fileCases"].as_array().unwrap().iter().zip(o["fileContexts"].as_array().unwrap()) {
+        let name = case.as_str().unwrap();
+        let ctx = format!("buildCallContext({name})");
+        let got = build_call_context(base.join(name).to_str().unwrap(), false);
+        if exp.is_null() {
+            assert!(got.is_none(), "{ctx}: TS returned null, Rust returned {got:?}");
+            continue;
+        }
+        cmp_ctx(&got.unwrap_or_else(|| panic!("{ctx}: TS returned a context, Rust returned None")), exp, &ctx);
+    }
+}
+
+/// The 64MB gate is asserted as a CONSTANT rather than by fixture: committing a >64MB file to
+/// prove one `>` comparison would cost far more than it proves. Mirrors
+/// `src/rawBodyContext.ts`'s `const MAX_RAW_BODY_BYTES = 64 * 1024 * 1024`.
+#[test]
+fn max_raw_body_bytes_matches_the_ts_constant() {
+    assert_eq!(agentlens_core::raw_body_context::MAX_RAW_BODY_BYTES, 64 * 1024 * 1024);
 }

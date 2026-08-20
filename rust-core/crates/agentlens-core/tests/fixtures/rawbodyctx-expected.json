@@ -1218,5 +1218,46 @@
    ],
    "truncated": false
   }
+ ],
+ "fileCases": [
+  "valid.request.json",
+  "notjson.request.json",
+  "notobject.request.json",
+  "no-such-file.request.json",
+  "."
+ ],
+ "fileContexts": [
+  {
+   "sessionId": "file-sess",
+   "accountUuid": "file-acct",
+   "model": "claude-fable-5",
+   "blocks": [
+    {
+     "id": "system:0",
+     "kind": "system",
+     "label": "system prompt",
+     "tokens": 3,
+     "tokenSource": "estimated",
+     "bytes": 11,
+     "text": "from a file",
+     "role": "input"
+    },
+    {
+     "id": "userMsg:1",
+     "kind": "userMsg",
+     "label": "user",
+     "tokens": 3,
+     "tokenSource": "estimated",
+     "bytes": 15,
+     "text": "hello from disk",
+     "role": "input"
+    }
+   ],
+   "truncated": false
+  },
+  null,
+  null,
+  null,
+  null
  ]
 }

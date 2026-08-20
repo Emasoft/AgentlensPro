@@ -2,10 +2,13 @@
 //! turns ONE raw Anthropic Messages API request body into an ordered ContextBlock[] (CallContext),
 //! mirroring the TS module's exact block-taxonomy / ordering / truncation contract.
 //!
-//! NOT ported here (out of scope for this slice — port when a caller needs them):
+//! NOT ported here:
 //!  - `CallBodyRegistry` — already ported separately at `call_body_registry.rs`.
-//!  - `buildCallContext` (the file-reading wrapper) and `resolveCallContext` (the registry-backed
-//!    accessor) — thin I/O wrappers around this function.
+//!  - `resolveCallContext` — it is route-level ORCHESTRATION, not a pure wrapper: it reads the
+//!    registry, does blocking file I/O, and then writes the session→account backfill, which in
+//!    this core lives in `account_registry` (CoreState.accounts), not in the body registry. Doing
+//!    it here would force file I/O while holding the CoreState lock — exactly what the P4s slice
+//!    established must never happen. It lands with its route (freeze row 35).
 //!
 //! Wire objects (ContextBlock / CallContext) are built as `serde_json::Value` mirroring the TS
 //! object literals EXACTLY, key-insertion-order included (`preserve_order` cargo feature) — never a
@@ -22,6 +25,11 @@ use crate::token_estimator::{count_tokens, estimate_tokens_from_bytes};
 /// how a downstream consumer (contextCompositionIndex) re-classifies them as images without
 /// re-parsing the body. Load-bearing — mirror exactly.
 pub const IMAGE_BLOCK_LABEL_PREFIX: &str = "image";
+
+/// A request body can be a few MB; cap the file we are willing to read so a corrupt/huge file can
+/// never load unbounded into memory. JSON needs the whole document to parse, so the guard is a
+/// size GATE (skip oversized files), not incremental streaming.
+pub const MAX_RAW_BODY_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Full text per block, capped so a single drill never ships an unbounded payload. The token count
 /// is still computed on the FULL text (TRDD-IQENK7JM) — see `push_block`, which counts BEFORE the
@@ -333,4 +341,26 @@ pub fn build_call_context_from_json(body: &Value, uncap: bool) -> Option<Value> 
     out.insert("blocks".into(), Value::Array(blocks));
     out.insert("truncated".into(), Value::Bool(truncated));
     Some(Value::Object(out))
+}
+
+/// buildCallContext — parse ONE raw request-body FILE (size-guarded) into a CallContext. Every
+/// failure path returns None, never an error: a missing, oversized, unreadable or malformed body
+/// file is an ordinary outcome (bodies are purged/rotated under us), not an exceptional one.
+///
+/// This is BLOCKING I/O on a file that may be tens of MB — callers must run it off the async
+/// executor and NEVER while holding the CoreState lock (the P4s rule).
+///
+/// `fs.promises.readFile(path,'utf8')` in Node decodes lossily (invalid bytes become U+FFFD)
+/// rather than failing, so this uses `from_utf8_lossy` — `read_to_string` would return None where
+/// the TS returns a context. The Cow borrows when the bytes are already valid, so the common path
+/// copies nothing.
+pub fn build_call_context(body_file_path: &str, uncap: bool) -> Option<Value> {
+    let md = std::fs::metadata(body_file_path).ok()?;
+    if !md.is_file() || md.len() > MAX_RAW_BODY_BYTES {
+        return None;
+    }
+    let bytes = std::fs::read(body_file_path).ok()?;
+    let raw = String::from_utf8_lossy(&bytes);
+    let parsed: Value = serde_json::from_str(&raw).ok()?;
+    build_call_context_from_json(&parsed, uncap)
 }
