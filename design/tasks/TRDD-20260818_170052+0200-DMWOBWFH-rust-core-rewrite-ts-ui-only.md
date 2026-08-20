@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T15:59:41+0200
+updated: 2026-08-20T16:13:44+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -885,10 +885,18 @@ release-via: publish
   `loadedPluginVersions`, `runtimeInventory`, `costRollup` have NO Rust counterpart. So P4x.2c's
   cheap phase (a shaper over a ported engine) is essentially DONE — what remains is porting engines
   first. Size each one before starting; do not assume the next tool is another thin slice.
-- **NEXT (P4x.2c continued):** the remaining thin ones are `get_instruction_suggestions` (the
-  advisor IS ported — `/api/instruction-suggestions` serves it) and `get_session_detail` (needs
-  `computeTurnGrowth` + `subAgentChildren`). After that, pick an ENGINE to port. **Every new arm
-  must end in `tool_ok_lean`, never `mcp::tool_ok`.** The dispatch cases are
+- **P4x.2c (commit 8cf8b77): `get_instruction_suggestions`. 19 of 53.** Advisor engine was already
+  ported; the shaper's contract is THREE top-level shapes ({error} / {message, suggestions: []} /
+  bare array) — the middle one exists because "not enough history yet" and "nothing to suggest" are
+  different facts an empty array cannot distinguish. The cache-efficiency suggestion is the SHAPER's
+  own (advisor doesn't know it), gated on >= 5 CACHE-MEASURED sessions so junk rows can neither
+  trigger nor suppress it. Oracle fixture workspace deliberately nonexistent so
+  `readAllInstructionContent` reads '' on both engines.
+- **NEXT (P4x.2c continued):** the last thin one is `get_session_detail` (needs `computeTurnGrowth`
+  + `subAgentChildren` — small, in mcpServer.ts). After that, pick an ENGINE to port and SIZE IT
+  FIRST (subscriptionUsage / cacheEventLog / skillAttribution / loadedPluginVersions /
+  runtimeInventory / costRollup — all have zero Rust counterpart). **Every new arm must end in
+  `tool_ok_lean`, never `mcp::tool_ok`.** The dispatch cases are
   `src/mcpServer.ts` ~3434-3890 and most shapers sit at 1617-3390 (largely UNREAD).
   `get_context_composition` (2438), `get_context_history` (2325), `get_conversation` (2391) — all
   three shapers are in `src/mcpServer.ts` and UNREAD except their heads; each has `turn` / range
