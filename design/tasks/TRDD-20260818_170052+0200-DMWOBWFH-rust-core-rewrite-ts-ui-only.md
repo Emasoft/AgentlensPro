@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T16:13:44+0200
+updated: 2026-08-20T16:28:32+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -892,11 +892,22 @@ release-via: publish
   own (advisor doesn't know it), gated on >= 5 CACHE-MEASURED sessions so junk rows can neither
   trigger nor suppress it. Oracle fixture workspace deliberately nonexistent so
   `readAllInstructionContent` reads '' on both engines.
-- **NEXT (P4x.2c continued):** the last thin one is `get_session_detail` (needs `computeTurnGrowth`
-  + `subAgentChildren` — small, in mcpServer.ts). After that, pick an ENGINE to port and SIZE IT
-  FIRST (subscriptionUsage / cacheEventLog / skillAttribution / loadedPluginVersions /
-  runtimeInventory / costRollup — all have zero Rust counterpart). **Every new arm must end in
-  `tool_ok_lean`, never `mcp::tool_ok`.** The dispatch cases are
+- **P4x.2c (commit ceca805): `get_session_detail`. 20 of 53 — THE THIN-SHAPER PHASE IS COMPLETE.**
+  The card resolution (reparse-on-demand + OTEL graft) was EXTRACTED from the row-30 route as
+  `resolve_session_card`, shared by both surfaces. Pinned: `background` timeline entries are
+  SKIPPED by turn growth (the fixture's background row carries 999,999 tokens so counting it cannot
+  pass quietly); composition key is `${kind}::${label}` BOTH halves; async children carry
+  `asyncTokensUnknown: true` (omitted on sync); `ms:` DROPS when durationMs is absent (the oracle
+  caught the null version); compositionSummary/subAgents are NULL when absent, never [];
+  `prompt` is FALSY-coerced (`|| null`) unlike get_recent_sessions' nullish read — two tools, two
+  coercions, mirrored not unified.
+- **NEXT (P4x.2d): port ENGINES.** Every remaining tool (33) needs an engine with zero Rust
+  counterpart. SIZE FIRST, then port with the slice discipline. Candidate order by value:
+  `subscriptionUsage.ts` (get_subscription_usage — also the TTL-regime oracle),
+  `cacheEventLog` (get_cache_event_log), `costRollup` (get_cost_rollup),
+  `runtimeInventory`, `loadedPluginVersions`, `skillAttribution`. The heavyweights
+  (cacheCreationForensics / cacheBreakTimeline / burnInvestigator / sql tools) last.
+  **Every new arm must end in `tool_ok_lean`, never `mcp::tool_ok`.** The dispatch cases are
   `src/mcpServer.ts` ~3434-3890 and most shapers sit at 1617-3390 (largely UNREAD).
   `get_context_composition` (2438), `get_context_history` (2325), `get_conversation` (2391) — all
   three shapers are in `src/mcpServer.ts` and UNREAD except their heads; each has `turn` / range
