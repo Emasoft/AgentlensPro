@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-20T13:53:28+0200
+updated: 2026-08-20T14:03:00+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -733,11 +733,25 @@ release-via: publish
   WHOLE shared `tests/fixtures/claude-home/` tree, so ANY slice that adds a `.jsonl` there changes
   the row-32 oracle's expected set and fails `ctxcomposition_parity`. That is a STALE ORACLE, not a
   port bug (the assertion message now says so). Fix: re-run `gen-ctxcomposition-expected.mjs`.
-- **NEXT (P4w.2c): row 34** — `src/conversation.ts` (354), STILL UNREAD. Imports the same three
-  already-ported helpers from `context_composition`; never re-implement them. Route shape identical
-  to rows 32-33: `?parent=`, `{conversation: obj|null}`, always 200, spawn_blocking, Env cloned from
-  under the lock. The CLAUDE_CONFIG_DIR harness and cmp/key-order test scaffolding are reusable
-  verbatim from `ctxhistory_parity.rs`.
+- **P4w.2c DONE (commit 62ee82d): `conversation.rs` + FREEZE ROW 34 LIVE.** `src/conversation.ts`
+  READ IN FULL. **USAGE IS CREDITED ONCE PER `message.id`** — every streaming chunk repeats the SAME
+  numbers, so per-chunk crediting silently MULTIPLIES the session's reported cost, and these totals
+  feed cost attribution. Narrative pairing rules: a tool_result pairs back to the ISSUING assistant
+  turn (not the user record it arrived in); an ORPHAN result stays VISIBLE on a user turn; a record
+  of PURE tool_results must NOT fabricate an empty user turn (lazy open); queued attachments flush
+  AHEAD of the turn's own content. `tokens` is TRUTHY-gated (0 → key OMITTED, not `tokens: 0`);
+  `<synthetic>` is dropped only when usage sums to ZERO; at compact_boundary `Number(x)` must stay
+  distinguishable from NaN (absent → omitted, explicit null → 0 and EMITTED); a turn past MAX_TURNS
+  is returned but not kept, yet its toolUse blocks still count toward `totals.toolCalls`.
+  142/142, clippy 28, identities green, live alcore serves rows 32/33/34.
+- **P4w.2 COMPLETE.** Rows 32, 33, 34, 36, 37 are LIVE. **NEXT: P4w.3 row 35** — the LAST HTTP row.
+  `resolveCallContext` contract is captured below (four post-assignments; `requestId` lands AFTER
+  `truncated`, so a resolved context's key order differs from a freshly-built one — assert it
+  explicitly, since a test that only exercises freshly-built contexts will not see it). Its shape
+  MUST be: lock → `resolve_request` → CLONE the pointer → UNLOCK → blocking read/parse →
+  RE-LOCK → account backfill via `account_registry`. After row 35 the HTTP §1 table is COMPLETE and
+  the remaining P4 work is the MCP surface (53 tools), for which the composition query engine
+  (`imageReport` / `findResidentBlobs` / `queryBlocks`) is still unported but purely additive.
 - **THEN P4w.3 row 35**
   (`resolveCallContext`, contract two bullets below). After those the HTTP §1 table is complete.
   `imageReport` / `findResidentBlobs` / `queryBlocks` remain unported — MCP-surface only, and the
