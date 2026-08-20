@@ -1295,3 +1295,37 @@ fn composition_route_streams_the_transcript_and_honours_the_parent_fallback() {
     let v: serde_json::Value = serde_json::from_str(body_of(&resp)).unwrap();
     assert!(v["composition"].is_null(), "{v}");
 }
+
+/// Row 33 over a real socket, including the per-step diff the UI's cache bars read.
+#[test]
+fn history_route_serves_steps_with_diffs_and_the_parent_fallback() {
+    let (_otlp, ui, state) = start_servers();
+    let home = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/claude-home");
+    {
+        let mut st = state.lock().unwrap();
+        st.log_env.vars.clear();
+        st.log_env.vars.insert("CLAUDE_CONFIG_DIR".into(), home.to_string_lossy().into_owned());
+    }
+
+    let v: serde_json::Value = serde_json::from_str(body_of(&get(ui, "/api/history/hist-main", ""))).unwrap();
+    let h = &v["history"];
+    assert_eq!(h["sessionId"], "hist-main");
+    let steps = h["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 3, "a duplicate message.id must NOT open a fourth step: {h}");
+    // The FIRST step has no baseline, so every block is "added" and nothing is "changed".
+    assert!(steps[0]["diff"]["changed"].as_array().unwrap().is_empty(), "{}", steps[0]["diff"]);
+    assert_eq!(
+        steps[0]["diff"]["added"].as_array().unwrap().len(),
+        steps[0]["blocks"].as_array().unwrap().len(),
+        "first step: every block added"
+    );
+    // A later step must report real churn, or the diff overlay is useless.
+    assert!(!steps[1]["diff"]["removed"].as_array().unwrap().is_empty(), "{}", steps[1]["diff"]);
+
+    let v: serde_json::Value = serde_json::from_str(body_of(&get(ui, "/api/history/forked?parent=hist-main", ""))).unwrap();
+    assert_eq!(v["history"]["reconstructedFrom"], "hist-main");
+
+    let resp = get(ui, "/api/history/nothing-here", "");
+    assert!(resp.starts_with("HTTP/1.1 200"), "a null history is still 200: {resp}");
+    assert!(serde_json::from_str::<serde_json::Value>(body_of(&resp)).unwrap()["history"].is_null());
+}

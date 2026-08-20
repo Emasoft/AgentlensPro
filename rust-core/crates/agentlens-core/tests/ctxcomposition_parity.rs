@@ -102,7 +102,16 @@ fn session_file_resolution_matches() {
     let mut ids: Vec<String> = list_session_file_ids(&env).into_iter().collect();
     ids.sort();
     let want: Vec<String> = o["sessionFileIds"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_owned()).collect();
-    assert_eq!(ids, want, "listSessionFileIds must index every .jsonl stem and nothing else");
+    // NOTE this indexes the WHOLE shared fixture tree, so ANY slice that adds a transcript under
+    // claude-home/ changes the expected set. That is not a defect in either engine — it means the
+    // oracle is stale. Regenerate BOTH gen-ctxcomposition-expected.mjs and the oracle of whichever
+    // slice added the file.
+    assert_eq!(
+        ids, want,
+        "listSessionFileIds must index every .jsonl stem and nothing else. If a slice just ADDED a \
+         fixture transcript, this is a STALE ORACLE, not a port bug — re-run \
+         gen-ctxcomposition-expected.mjs"
+    );
 }
 
 /// The no-own-log fallback is the whole reason this module has a `reconstructedFrom` field, and

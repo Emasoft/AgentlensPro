@@ -1,0 +1,2 @@
+{"type":"user","message":{"content":"hello"}}
+{"type":"assistant","message":{"id":"n1","content":[{"type":"text","text":"hi back"}]}}

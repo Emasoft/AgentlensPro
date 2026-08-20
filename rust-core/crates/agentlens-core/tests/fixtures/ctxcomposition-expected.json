@@ -684,6 +684,8 @@
  "sessionFileIds": [
   "comp-many",
   "comp-own",
-  "comp-parent"
+  "comp-parent",
+  "hist-main",
+  "hist-nousage"
  ]
 }

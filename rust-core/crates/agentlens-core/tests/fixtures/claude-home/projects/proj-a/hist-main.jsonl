@@ -1,0 +1,14 @@
+{"type":"user","message":{"content":"please do the thing"},"timestamp":"2026-08-01T10:00:00Z"}
+{"type":"user","message":{"content":"context <system-reminder>injected</system-reminder>"}}
+{"type":"attachment","attachment":{"type":"file","displayPath":"/a/read.md","content":"file body here"}}
+{"type":"assistant","timestamp":"2026-08-01T10:00:05Z","message":{"id":"a1","model":"claude-opus-5","usage":{"input_tokens":40,"output_tokens":25,"cache_read_input_tokens":9000,"cache_creation_input_tokens":10},"content":[{"type":"thinking","thinking":"let me think about this carefully"},{"type":"text","text":"here is the answer"},{"type":"tool_use","id":"tu-bash","name":"Bash","input":{"command":"ls -la /tmp"}},{"type":"tool_use","id":"tu-task","name":"Task","input":{"prompt":"go do a thing"}},{"type":"tool_use","id":"tu-read","name":"Read","input":{"file_path":"/a/b.txt"}}]}}
+{"type":"assistant","message":{"id":"a1","model":"<synthetic>","content":[{"type":"text","text":"appended text"}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu-bash","content":"total 0\ndrwxr-xr-x"},{"type":"tool_result","tool_use_id":"tu-task","content":[{"type":"text","text":"subagent said hi"}]},{"type":"tool_result","tool_use_id":"tu-unknown","content":"orphan result"},{"type":"text","text":"and a follow-up"},{"type":"image"}]}}
+{"type":"user","isMeta":true,"message":{"content":"[nightly-report]\nthe scheduled task fired"}}
+{"type":"user","isMeta":true,"message":{"content":"wrapper <local-command-caveat>caveat text</local-command-caveat>"}}
+{"type":"user","isMeta":true,"message":{"content":"some other harness meta"}}
+{"type":"user","isCompactSummary":true,"isMeta":true,"summary":"","message":{"content":"fallthrough meta text"}}
+{"type":"assistant","timestamp":"2026-08-01T10:01:00Z","message":{"id":"a2","model":"claude-opus-5","usage":{"input_tokens":500,"output_tokens":12,"cache_read_input_tokens":20000,"cache_creation_input_tokens":100},"content":[{"type":"text","text":"here is the answer"}]}}
+{"type":"user","isCompactSummary":true,"summary":"this session was compacted here"}
+{"type":"summary","summary":"a bare summary record"}
+{"type":"assistant","message":{"id":"a3","content":[{"type":"text","text":"post-compact reply"}]}}

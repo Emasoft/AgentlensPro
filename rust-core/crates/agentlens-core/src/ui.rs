@@ -971,6 +971,22 @@ async fn handle(
             StatusCode::OK,
             serde_json::json!({ "composition": composition.unwrap_or(Value::Null) }).to_string(),
         )
+    } else if method == Method::GET && path.starts_with("/api/history/") {
+        // Row 33 (server.ts:4244). Same shape and same streaming discipline as row 32: the raw
+        // .jsonl is streamed on spawn_blocking with the Env cloned out from under the lock, and
+        // `{history: null}` stays a legitimate 200 for a card with no transcript and no parent.
+        let session_id = percent_decode(&path["/api/history/".len()..]);
+        let parent = query_of(&req).get("parent").map(|s| s.to_owned()).filter(|s| !s.is_empty());
+        let env = {
+            let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+            st.log_env.clone()
+        };
+        let history = tokio::task::spawn_blocking(move || {
+            crate::context_history::build_context_history(&env, &session_id, parent.as_deref())
+        })
+        .await
+        .map_err(|e| format!("history build join failed: {e}"))?;
+        json_response(StatusCode::OK, serde_json::json!({ "history": history.unwrap_or(Value::Null) }).to_string())
     } else if method == Method::GET && path.starts_with("/api/composition-index/") {
         // Row 36 (server.ts:4193). Per-session composition summary, parsed on demand from the live
         // registry (never a background sweep) and LRU-cached. A session with no captured raw bodies
