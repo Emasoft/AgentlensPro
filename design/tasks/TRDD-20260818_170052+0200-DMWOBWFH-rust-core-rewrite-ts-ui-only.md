@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-21T10:25:42+0200
+updated: 2026-08-21T12:16:38+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -1653,10 +1653,49 @@ release-via: publish
   guard keyed on the real account would have passed this and gone blind on the next one. (Writing
   the offending shape out HERE trips the same check, since the TRDD is tracked too — which is the
   doctrine working, and the reason this sentence describes it instead of quoting it.)
+- **P4x.2q DONE (commit 76ba9ea): `burnSeismic` SLICE A of 4 — `renderBurnSeismic` + `costParts` +
+  the ISO helpers.** The renderer takes a `Value`, not a struct: the analysis half is unported, so a
+  struct would be a second definition of a shape that does not exist yet.
+  **The fixture is HAND-AUTHORED because this renderer's hard cases are the ABSENT ones** — a null
+  local baseline, an unmeasurable background, no mainshock, no culprits, no spawns — and a real run
+  gives whichever of those the day happened to produce. The two halves of the calibration line are
+  independently nullable and have a case each.
+  **TWO falsifications were invisible until the FIXTURE grew an input that could see them:** the
+  zero-total percentage guard (needs a zero total) and `toExponential`'s SIGN on a NON-negative
+  exponent (`1.00e+0`, not `1.00e0`) — every other p-value is below 1, so nothing reached that
+  branch; an FDR threshold of 1 and a p-value underflowing to 0 both do.
+  **A REAL JS/Rust DIVERGENCE, pinned around rather than papered over:** if the 300-unit spawn-input
+  cut splits a surrogate pair, JS emits a LONE SURROGATE, which cannot exist in a Rust `str`.
+  Discovered when serde_json refused to parse the oracle's `\ud83d`. The fixture places the emoji so
+  it ENDS at the boundary — the case that matters — because a split pair is unreachable from a real
+  transcript.
+- **P4x.2r DONE (commit a66c477): `seismicStats` (529 lines) → `agentlens-core::seismic_stats`.**
+  The whole primitive library. No tool-count change; prerequisite for the analysis slice.
+  **TOLERANCE RULE, reusable for any numeric port:** V8 ships its own fdlibm while Rust calls the
+  platform's, so a transcendental can differ in the last ulp. Compare everything DISCRETE (rejected
+  sets, alarm indices, changepoint counts, which CFAR cells are null) EXACTLY — those are decisions,
+  not measurements — and give only continuous values a relative 1e-12.
+  **THE RESIDUE SERIES IS THE FIXTURE THAT EARNED ITS PLACE:** flipping `robustNoiseSigma`'s
+  RELATIVE collapse gate to an absolute `m > 0` produced σ̂ = 5.8e-17, and PELT then reported **39
+  changepoints on a 40-bucket series** where the truth is 2. Every collapse gate in this file
+  (`modifiedZ`, `robustNoiseSigma`) is relative for that reason; a `> 0` test passes on float
+  residue and then divides by it.
+  **Two clippy lints are ALLOWED, not obeyed** (reasons inline): `excessive_precision` on the
+  Lanczos coefficients (truncating gives the same BITS but breaks the correspondence with the
+  published set), and `neg_cmp_op_on_partial_ord` on the `!(mean > 0)` guards — those are NaN
+  guards, and the "fixed" `<=` form would return a NaN p-value that is neither significant nor
+  insignificant and would poison the FDR step-up.
 - **NEXT (P4x.2d continued): 3 of 53 remain — `run_diagnostics_sql`, `compare_configs`,
   `burn_seismic`.**
-  **`burn_seismic` (1004 lines, CFAR/FDR/Poisson statistics) is INDEPENDENT of everything below and
-  should be sliced next** — it reads transcripts and bodies directly, not the fact tables.
+  **`burn_seismic` is INDEPENDENT of the blocked decision below and is the one to continue** — it
+  reads transcripts directly, not the fact tables. Slices A (renderer) and the stats library are
+  DONE; what remains is **SLICE C** (`resolveSeismicFiles`, TS 77-138 + the DuckDB query and
+  bucket/cell/session aggregation, TS 446-572) and **SLICE D** (the analysis, TS 573-922).
+  **Two facts already settled for slice C:** (1) the TS's own `type Query = (sql) => rows` IS the
+  seam — `burn_seismic` stays in `agentlens-core` (it needs `lookup_rates` and
+  `resolve_project_slugs`) and takes a query closure, with the DuckDB implementation exported from
+  `agentlens-store`; (2) burnSeismic calls `getRowObjects()`, NOT `getRowObjectsJson()`, so the
+  BIGINT-as-string mapping that governs `transcript_sql` does NOT apply — do not carry it over.
   **The other two are BLOCKED ON ONE DECISION, and it is open:** `forensicsIndex` SLICE B writes
   fact tables (`api_calls`, `injections`, `content`) that both then query — today via **sql.js
   SQLite** (`src/forensicsDb.ts`), where `defaultMainDb()` is `<dataDir>/agentlens.db`, the
