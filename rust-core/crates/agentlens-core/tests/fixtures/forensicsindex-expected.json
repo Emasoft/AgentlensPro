@@ -1,0 +1,759 @@
+{
+  "effort": [
+    {
+      "input": null,
+      "out": "none"
+    },
+    {
+      "input": null,
+      "out": "none"
+    },
+    {
+      "input": 0,
+      "out": "none"
+    },
+    {
+      "input": -1,
+      "out": "none"
+    },
+    {
+      "input": -8192,
+      "out": "none"
+    },
+    {
+      "input": 1,
+      "out": "low"
+    },
+    {
+      "input": 4096,
+      "out": "low"
+    },
+    {
+      "input": 8191,
+      "out": "low"
+    },
+    {
+      "input": 8192,
+      "out": "low"
+    },
+    {
+      "input": 8193,
+      "out": "medium"
+    },
+    {
+      "input": 24575,
+      "out": "medium"
+    },
+    {
+      "input": 24576,
+      "out": "medium"
+    },
+    {
+      "input": 24577,
+      "out": "high"
+    },
+    {
+      "input": 32000,
+      "out": "high"
+    },
+    {
+      "input": 1000000000,
+      "out": "high"
+    },
+    {
+      "input": "NaN",
+      "out": "none"
+    }
+  ],
+  "fp": {
+    "empty": null,
+    "no_tools_no_system": null,
+    "tools_only": "d11ccbe11c83c635b03b03a6aedf605430aa0534",
+    "system_string": "ebd7a1bc1e47368c3cd8a11bf7a3737881ed5d22",
+    "system_string_rule": "188c232828409a85a4f7f7cdfe5871b93e495651",
+    "system_blocks": "8c7409679ce930cae70b96d41edc8142fb89a38d",
+    "system_blocks_with_empty": "8c7409679ce930cae70b96d41edc8142fb89a38d",
+    "system_windows_rule": "6161c7575f53fa46968016cebb90769e7dec9796",
+    "system_claudemd_heading": "4f9949039660db014f14f122637a9501bf5776ef",
+    "both": "99a75e1b4e485621227c4c3ed4963cb99f23b60b",
+    "both_reordered": "cda22750cc9d4acd0c60193160693b6b759da47b",
+    "system_not_array_not_string": "1252f3c078f660320f45d65ad6f7dbf2b2af707d"
+  },
+  "fpCases": {
+    "empty": {},
+    "no_tools_no_system": {
+      "model": "x",
+      "messages": []
+    },
+    "tools_only": {
+      "tools": [
+        {
+          "name": "Bash"
+        },
+        {
+          "name": "Read"
+        },
+        {
+          "name": ""
+        },
+        {},
+        {
+          "name": "Edit"
+        }
+      ]
+    },
+    "system_string": {
+      "system": "You are Claude."
+    },
+    "system_string_rule": {
+      "system": "Contents of /fixture/.claude/rules/never-git-add-all.md (user rules):\n\nsome text"
+    },
+    "system_blocks": {
+      "system": [
+        {
+          "text": "You are Claude."
+        },
+        {
+          "text": "Contents of /fixture/.claude/rules/never-git-add-all.md (user rules):\n\nsome text"
+        },
+        {
+          "text": "Contents of /repo/CLAUDE.md (project instructions)"
+        }
+      ]
+    },
+    "system_blocks_with_empty": {
+      "system": [
+        {
+          "text": "You are Claude."
+        },
+        {
+          "text": ""
+        },
+        {
+          "type": "text"
+        },
+        {
+          "text": "Contents of /fixture/.claude/rules/never-git-add-all.md (user rules):\n\nsome text"
+        },
+        {
+          "text": "Contents of /repo/CLAUDE.md (project instructions)"
+        }
+      ]
+    },
+    "system_windows_rule": {
+      "system": [
+        {
+          "text": "Contents of Z:\\fixture\\.claude\\rules\\gh-actions.md (user rules)"
+        }
+      ]
+    },
+    "system_claudemd_heading": {
+      "system": [
+        {
+          "text": "# CLAUDE.md\n\nthis is the file"
+        }
+      ]
+    },
+    "both": {
+      "tools": [
+        {
+          "name": "Bash"
+        }
+      ],
+      "system": [
+        {
+          "text": "Contents of /fixture/.claude/rules/never-git-add-all.md (user rules):\n\nsome text"
+        }
+      ]
+    },
+    "both_reordered": {
+      "tools": [
+        {
+          "name": "Read"
+        },
+        {
+          "name": "Bash"
+        }
+      ],
+      "system": [
+        {
+          "text": "Contents of /fixture/.claude/rules/never-git-add-all.md (user rules):\n\nsome text"
+        }
+      ]
+    },
+    "system_not_array_not_string": {
+      "system": 42,
+      "tools": [
+        {
+          "name": "Bash"
+        }
+      ]
+    }
+  },
+  "injections": {
+    "empty": [],
+    "many_rules": [
+      {
+        "kind": "rule",
+        "name": "a.md",
+        "tokens": 0
+      },
+      {
+        "kind": "rule",
+        "name": "b.md",
+        "tokens": 0
+      },
+      {
+        "kind": "rule",
+        "name": "c.md",
+        "tokens": 0
+      }
+    ],
+    "duplicate_rules": [
+      {
+        "kind": "rule",
+        "name": "a.md",
+        "tokens": 0
+      }
+    ],
+    "claudemd": [
+      {
+        "kind": "claudemd",
+        "name": "/repo/CLAUDE.md",
+        "tokens": 0
+      },
+      {
+        "kind": "claudemd",
+        "name": "/other/CLAUDE.md",
+        "tokens": 0
+      }
+    ],
+    "system_array": [
+      {
+        "kind": "rule",
+        "name": "a.md",
+        "tokens": 0
+      },
+      {
+        "kind": "claudemd",
+        "name": "/repo/CLAUDE.md",
+        "tokens": 0
+      }
+    ],
+    "mcp_tools": [
+      {
+        "kind": "mcp",
+        "name": "mcp__chrome-devtools",
+        "tokens": 0
+      },
+      {
+        "kind": "mcp",
+        "name": "mcp__plugin_llm-externalizer_llm-externalizer",
+        "tokens": 0
+      },
+      {
+        "kind": "mcp",
+        "name": "mcp__x",
+        "tokens": 0
+      },
+      {
+        "kind": "mcp",
+        "name": "mcp__srv",
+        "tokens": 0
+      },
+      {
+        "kind": "mcp",
+        "name": "mcp__a_b",
+        "tokens": 0
+      }
+    ],
+    "skills": [
+      {
+        "kind": "skill",
+        "name": "distill",
+        "tokens": 0
+      },
+      {
+        "kind": "skill",
+        "name": "tldr-code",
+        "tokens": 0
+      },
+      {
+        "kind": "skill",
+        "name": "janitor-arm",
+        "tokens": 0
+      }
+    ],
+    "skill_precedence": [
+      {
+        "kind": "skill",
+        "name": "s",
+        "tokens": 0
+      }
+    ],
+    "everything": [
+      {
+        "kind": "rule",
+        "name": "a.md",
+        "tokens": 0
+      },
+      {
+        "kind": "claudemd",
+        "name": "/repo/CLAUDE.md",
+        "tokens": 0
+      },
+      {
+        "kind": "mcp",
+        "name": "mcp__srv",
+        "tokens": 0
+      },
+      {
+        "kind": "skill",
+        "name": "distill",
+        "tokens": 0
+      }
+    ]
+  },
+  "injectionCases": {
+    "empty": {},
+    "many_rules": {
+      "system": "preamble\nContents of /fixture/.claude/rules/a.md (x)\nmiddle\nContents of /fixture/.claude/rules/b.md (y)\nContents of Z:\\fixture\\.claude\\rules\\c.md\n"
+    },
+    "duplicate_rules": {
+      "system": "Contents of /fixture/.claude/rules/a.md (x)\nContents of /fixture/.claude/rules/a.md (x)\n"
+    },
+    "claudemd": {
+      "system": "Contents of /repo/CLAUDE.md (project)\nContents of /other/CLAUDE.md (user)\n"
+    },
+    "system_array": {
+      "system": [
+        {
+          "text": "Contents of /fixture/.claude/rules/a.md"
+        },
+        {
+          "text": "Contents of /repo/CLAUDE.md"
+        }
+      ]
+    },
+    "mcp_tools": {
+      "tools": [
+        {
+          "name": "Bash"
+        },
+        {
+          "name": "mcp__chrome-devtools__click"
+        },
+        {
+          "name": "mcp__chrome-devtools__navigate"
+        },
+        {
+          "name": "mcp__plugin_llm-externalizer_llm-externalizer__chat"
+        },
+        {
+          "name": "mcp__x__y"
+        },
+        {
+          "name": "not__mcp__x"
+        },
+        {
+          "name": "mcp__srv__tool__extra"
+        },
+        {
+          "name": "mcp__a_b__c__d"
+        }
+      ]
+    },
+    "skills": {
+      "messages": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "name": "Skill",
+              "input": {
+                "skill": "distill"
+              }
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "name": "Skill",
+              "input": {
+                "command": "tldr-code"
+              }
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "name": "Skill",
+              "input": {
+                "name": "janitor-arm"
+              }
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "name": "Bash",
+              "input": {
+                "skill": "nope"
+              }
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "name": "Skill",
+              "input": {}
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "name": "Skill"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "a plain string, not blocks"
+        }
+      ]
+    },
+    "skill_precedence": {
+      "messages": [
+        {
+          "content": [
+            {
+              "type": "tool_use",
+              "name": "Skill",
+              "input": {
+                "skill": "s",
+                "command": "c",
+                "name": "n"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "everything": {
+      "system": [
+        {
+          "text": "Contents of /fixture/.claude/rules/a.md"
+        },
+        {
+          "text": "Contents of /repo/CLAUDE.md"
+        }
+      ],
+      "tools": [
+        {
+          "name": "mcp__srv__t"
+        }
+      ],
+      "messages": [
+        {
+          "content": [
+            {
+              "type": "tool_use",
+              "name": "Skill",
+              "input": {
+                "skill": "distill"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "tags": {
+    "empty": [],
+    "images": [
+      {
+        "tag": "image",
+        "tokens": 9756,
+        "count": 3
+      }
+    ],
+    "binary": [
+      {
+        "tag": "binary",
+        "tokens": 1000,
+        "count": 1
+      }
+    ],
+    "big_reads": [
+      {
+        "tag": "big_file_read",
+        "tokens": 55000,
+        "count": 2
+      },
+      {
+        "tag": "tool_result:Read",
+        "tokens": 49999,
+        "count": 2
+      },
+      {
+        "tag": "tool_result:Bash",
+        "tokens": 30000,
+        "count": 1
+      }
+    ],
+    "tool_result_kinds": [
+      {
+        "tag": "tool_result:Read",
+        "tokens": 30,
+        "count": 2
+      },
+      {
+        "tag": "tool_result:Bash",
+        "tokens": 30,
+        "count": 1
+      },
+      {
+        "tag": "tool_result:toolOutput",
+        "tokens": 40,
+        "count": 1
+      }
+    ],
+    "catalog_boundary_below": [],
+    "catalog_boundary_on": [
+      {
+        "tag": "tool_catalog_large",
+        "tokens": 10000,
+        "count": 1
+      }
+    ],
+    "thinking_boundary_below": [],
+    "thinking_boundary_on": [
+      {
+        "tag": "thinking_heavy",
+        "tokens": 20000,
+        "count": 1
+      }
+    ],
+    "everything": [
+      {
+        "tag": "image",
+        "tokens": 3252,
+        "count": 1
+      },
+      {
+        "tag": "binary",
+        "tokens": 2000,
+        "count": 1
+      },
+      {
+        "tag": "big_file_read",
+        "tokens": 26000,
+        "count": 1
+      },
+      {
+        "tag": "tool_result:Read",
+        "tokens": 26000,
+        "count": 1
+      },
+      {
+        "tag": "tool_catalog_large",
+        "tokens": 65177,
+        "count": 1
+      },
+      {
+        "tag": "thinking_heavy",
+        "tokens": 21000,
+        "count": 1
+      }
+    ]
+  },
+  "tagCases": {
+    "empty": {
+      "images": {
+        "count": 0,
+        "tokens": 0
+      },
+      "blocks": [],
+      "toolCatalogTokens": 0,
+      "thinkingTokens": 0
+    },
+    "images": {
+      "images": {
+        "count": 3,
+        "tokens": 9756
+      },
+      "blocks": [],
+      "toolCatalogTokens": 0,
+      "thinkingTokens": 0
+    },
+    "binary": {
+      "images": {
+        "count": 0,
+        "tokens": 0
+      },
+      "blocks": [
+        {
+          "kind": "text",
+          "tokens": 0,
+          "bytes": 4001,
+          "mediaType": "application/pdf"
+        },
+        {
+          "kind": "text",
+          "tokens": 0,
+          "bytes": 999,
+          "mediaType": "image/png"
+        },
+        {
+          "kind": "text",
+          "tokens": 0,
+          "bytes": 5,
+          "mediaType": ""
+        }
+      ],
+      "toolCatalogTokens": 0,
+      "thinkingTokens": 0
+    },
+    "big_reads": {
+      "images": {
+        "count": 0,
+        "tokens": 0
+      },
+      "blocks": [
+        {
+          "kind": "toolOutput",
+          "tokens": 25000,
+          "bytes": 0,
+          "toolName": "Read"
+        },
+        {
+          "kind": "toolOutput",
+          "tokens": 24999,
+          "bytes": 0,
+          "toolName": "Read"
+        },
+        {
+          "kind": "bashOutput",
+          "tokens": 30000,
+          "bytes": 0,
+          "toolName": "Bash"
+        }
+      ],
+      "toolCatalogTokens": 0,
+      "thinkingTokens": 0
+    },
+    "tool_result_kinds": {
+      "images": {
+        "count": 0,
+        "tokens": 0
+      },
+      "blocks": [
+        {
+          "kind": "toolOutput",
+          "tokens": 10,
+          "bytes": 0,
+          "toolName": "Read"
+        },
+        {
+          "kind": "toolOutput",
+          "tokens": 20,
+          "bytes": 0,
+          "toolName": "Read"
+        },
+        {
+          "kind": "bashOutput",
+          "tokens": 30,
+          "bytes": 0,
+          "toolName": "Bash"
+        },
+        {
+          "kind": "toolOutput",
+          "tokens": 40,
+          "bytes": 0
+        },
+        {
+          "kind": "text",
+          "tokens": 999,
+          "bytes": 0,
+          "toolName": "Read"
+        }
+      ],
+      "toolCatalogTokens": 0,
+      "thinkingTokens": 0
+    },
+    "catalog_boundary_below": {
+      "images": {
+        "count": 0,
+        "tokens": 0
+      },
+      "blocks": [],
+      "toolCatalogTokens": 9999,
+      "thinkingTokens": 0
+    },
+    "catalog_boundary_on": {
+      "images": {
+        "count": 0,
+        "tokens": 0
+      },
+      "blocks": [],
+      "toolCatalogTokens": 10000,
+      "thinkingTokens": 0
+    },
+    "thinking_boundary_below": {
+      "images": {
+        "count": 0,
+        "tokens": 0
+      },
+      "blocks": [],
+      "toolCatalogTokens": 0,
+      "thinkingTokens": 19999
+    },
+    "thinking_boundary_on": {
+      "images": {
+        "count": 0,
+        "tokens": 0
+      },
+      "blocks": [],
+      "toolCatalogTokens": 0,
+      "thinkingTokens": 20000
+    },
+    "everything": {
+      "images": {
+        "count": 1,
+        "tokens": 3252
+      },
+      "blocks": [
+        {
+          "kind": "text",
+          "tokens": 0,
+          "bytes": 8000,
+          "mediaType": "audio/wav"
+        },
+        {
+          "kind": "toolOutput",
+          "tokens": 26000,
+          "bytes": 0,
+          "toolName": "Read"
+        }
+      ],
+      "toolCatalogTokens": 65177,
+      "thinkingTokens": 21000
+    }
+  }
+}

@@ -35,6 +35,10 @@ notify = "8"
 # TS-oracle comparison depends on fixture floats parsing to the exact double JS printed.
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 regex = "1"
+# forensicsIndex's frontmatter fingerprint is a sha1 — the hash is part of the on-wire value, so it
+# is the algorithm that must match, not merely "some digest". RustCrypto, sharing the `digest` stack
+# `sha2` already pulls into the workspace.
+sha1 = "0.10"
 # The ONE outbound call this server makes (the OAuth usage + profile endpoints). Blocking and
 # rustls-only, which is what makes it cheap here: it is already in the lock at this exact version as
 # libduckdb-sys' build dependency, so declaring it adds no new crate, no OpenSSL, and no async
