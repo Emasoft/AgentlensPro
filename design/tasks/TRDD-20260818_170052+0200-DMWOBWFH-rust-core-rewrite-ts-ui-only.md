@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-21T05:50:29+0200
+updated: 2026-08-21T07:38:27+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -1555,8 +1555,44 @@ release-via: publish
   `out/` tree — which nothing rebuilds and which was 8 days stale — while every other generator
   reads `out/test/` (what `compile-tests` writes). Re-pointed; proven a no-op (the two builds were
   cmp-identical and the regenerated oracle is byte-identical, 5 tests still green).
-- **NEXT (P4x.2d continued): 7 of 53 remain, and EVERY ONE needs a big engine or a SQL binding —
-  the cheap tail is gone.** Immediate: `cacheBreakTimeline`, now UNBLOCKED (1,927 → 2 tools:
+- **P4x.2j/k/l DONE — `cacheBreakTimeline` IS FULLY PORTED (4 slices, 1,927 TS lines). 48 of 53.**
+  Slice 2 `classifyCacheBreak` + both diffs (`26da52d`), slice 3 the bounded scan + timeline report
+  (`4f93825`), slice 4 the two reporters + `format_timeline` + BOTH TOOLS WIRED in `ui.rs`
+  (`bf09d39`): `get_cache_break_timeline`, `get_cache_break_causes`. Gate at the end: 439 tests
+  (was 428 at slice 0), clippy 28, check-types + check-identities OK.
+  **⚠ check-identities CAUGHT A REAL LEAK, and the TIMING is the transferable lesson:** slice 3's
+  oracle embedded the generator's ABSOLUTE fixture root, which contains a home path. Every gate
+  before that commit said OK **because the file was still UNTRACKED** — the guard scans TRACKED
+  files, so a fixture only enters its blast radius at `git add`. It went red on the first gate run
+  after the commit. Both generators now redact the root to a `<FIXTURES>` token (which the tests
+  already rewrote, so the fix REMOVED a special case). **Any new generated fixture must be
+  gate-checked AFTER staging, not before.**
+  **Defects the fixtures caught before they shipped, all of which read BETTER than the truth:**
+  (a) the EMPTY cost-peak report carries DIFFERENT `unattributed.note`/`outputSpikes.note` strings
+  than the populated one — collapsing them into one constant is the obvious tidy-up and is wrong on
+  the wire; (b) the causes VERDICT is computed from the TRUNCATED leaderboard, so `topN=1` reports
+  "all break cost is EXPECTED" while avoidable actors exist and were just capped away — truncating
+  after the verdict names a perpetrator the caller cannot see in the list; (c) a fixture case whose
+  name claimed splice/trim actually exercised the msg[0] interleave rule (higher in the ladder) and
+  tested nothing; (d) my `resolve_subagent_stream` re-found the parent bucket by "first one long
+  enough" and had been passing BY LUCK — it broke the moment an unrelated session was added.
+  **A FALSIFICATION ESCAPED, and the fix is the pattern to reuse:** moving the
+  `lastWriteMessageCount` update below the minTokens floor left every test green, because the
+  counter is read ONLY by LOOKBACK_OVERFLOW (needs cache_read 0 AND unchanged prefix AND ≥20 blocks
+  appended) and every fixture response read 1000. Rather than record the gap, `sess-delta` was
+  added — a below-floor turn that is still a real write — where correct gives COLD_START and the
+  bug gives LOOKBACK_OVERFLOW. **When a falsification does not redden, the fixture is the thing to
+  fix.**
+  **Fixture constraints that are correctness, not convenience** (reuse them for the remaining 5):
+  the MTIME ORACLE (38 stamped files; git drops mtimes, and turn order + gaps come from them); NO
+  `windowHours` on any populated case (`tsFromMs` is `Date.now()`-relative, so a windowed fixture
+  passes the day it is generated and silently empties later); SPOOL-ONLY (the store half already
+  has its own end-to-end oracle against a REAL TS-written Parquet store); and slices 3+4 SHARE one
+  fixture tree because all three builders read the same scan — a second spool would let them drift
+  while both stayed green.
+- **NEXT (P4x.2d continued): 5 of 53 remain, and EVERY ONE needs a big engine or a SQL binding —
+  the cheap tail is gone.** ~~Immediate: `cacheBreakTimeline`~~ **— LANDED, all four slices; the
+  queue below is now `subscriptionUsage` FIRST, then the SQL group.** (historical: 1,927 → 2 tools:
   `get_cache_break_timeline` + `get_cache_break_causes`, and it also unblocks the `groupBy='cause'`
   branch above). **SLICE IT IN FOUR — 1,927 lines will not fit one context alongside an oracle and
   a parity test.** The seams are already clean in the TS, by line:
