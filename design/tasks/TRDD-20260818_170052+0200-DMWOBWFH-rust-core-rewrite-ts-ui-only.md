@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-21T03:28:13+0200
+updated: 2026-08-21T04:09:24+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -1471,9 +1471,30 @@ release-via: publish
   **A FOURTH wrong assertion of mine against a correct port** (`main` under-attributes). The count
   is now four; treat a failing new assertion beside a passing `same()` as evidence about the
   assertion, always.
-- **NEXT (P4x.2d continued): 8 of 53 remain.** Immediate: **`rateLimitReport` (134)** — the
-  smallest remaining engine and the last one with no SQL/DuckDB dependency. THEN
-  `cacheBreakTimeline` (1,927 → 2 tools:
+- **P4x.2g DONE (commit 57048b3): `rateLimitReport` (134) + `get_rate_limit_report`. 46 of 53.**
+  StopFailure hook events grouped into stall EPISODES, newest episode deep-attributed through
+  `investigate_burn` (which is why it waited on P4x.2f). 422 tests, clippy 28. 6 oracle cases exact.
+  **⚠ A TRAP PORTED DELIBERATELY — do NOT "fix" it.** `topFindings` reads `code`/`summary`/`detail`
+  and a real `BurnFinding` has NONE of them (it carries `cause`/`verdict`/`evidence`/`confidence`),
+  so the label is ALWAYS empty and every entry is a 160-char JSON DUMP of the finding. The
+  falsification that rewrites it to use `cause` prints `"FORK_STORM"` — which READS BETTER than the
+  dump, and is exactly why a well-meaning refactor would ship it. The fixture carries findings WITH
+  those keys too, so the label branch and the dump branch are distinguished, not assumed.
+  **Other parity details that are not style:** `summary ?? detail` is NULLISH (an explicit null
+  falls through to `detail`, but a non-null NON-STRING `summary` suppresses `detail` AND fails the
+  string filter, leaving only `code`); episode grouping is INCLUSIVE at 600s and the fixture sits
+  exactly on the boundary BOTH ways (600s joins, 601s splits); FIRST record per session wins inside
+  an episode, so a session that died twice is listed once with its EARLIER error; `.slice(0,200)`
+  and `.slice(0,160)` are UTF-16 (the fixture error is 125 emoji, so a byte cut keeps a different
+  amount); `.slice(-max).reverse()` is newest-FIRST while `episodesTotal` counts them all; and the
+  empty-window branch returns a DIFFERENT key set (no `episodesTotal`, no `attributed`) that says
+  capture may simply not be installed — an empty result is never an all-clear.
+  The `investigate` parameter is the TS's OWN test seam, kept as a closure returning `Result` so the
+  oracle can stub the scan AND drive the catch branch; production always returns `Ok`.
+  **Falsified, 4 rules:** boundary `<=`→`<`; last-record-per-session wins; `topFindings` "improved"
+  to use `cause`; byte-indexed error truncation.
+- **NEXT (P4x.2d continued): 7 of 53 remain, and EVERY ONE now needs either a big engine or a SQL
+  binding — the cheap tail is gone.** Immediate: `cacheBreakTimeline` (1,927 → 2 tools:
   `get_cache_break_timeline` + `get_cache_break_causes`, and it also unblocks the `groupBy='cause'`
   branch above) → `subscriptionUsage` (976, **NETWORK** — the oracle MUST stub the Anthropic usage
   endpoint; it is also the live TTL-regime oracle) → the 2 sql tools (`run_diagnostics_sql`,
