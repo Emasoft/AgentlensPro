@@ -1,0 +1,563 @@
+{
+  "untilMs": 1787227200000,
+  "hookStopFailureMs": 1787214300000,
+  "mtimes": {
+    "burnscan-bodies/r1.response.json": 1787214600000,
+    "burnscan-bodies/r2.response.json": 1787214900000,
+    "burnscan-bodies/r3.response.json": 1787217000000,
+    "burnscan-bodies/r4.response.json": 1787217300000,
+    "burnscan-bodies/r5.response.json": 1787215200000,
+    "burnscan-bodies/r6.response.json": 1787220000000,
+    "burnscan-bodies/r8.response.json": 1787217600000,
+    "burnscan-bodies/r7.response.json": 1787205600000,
+    "burnscan-bodies/q1.request.json": 1787214600000,
+    "burnscan-bodies/q2.request.json": 1787214660000,
+    "burnscan-bodies/q3.request.json": 1787217000000,
+    "burnscan-bodies/q4.request.json": 1787217120000,
+    "burnscan-bodies/q5.request.json": 1787217240000,
+    "burnscan-bodies/q6.request.json": 1787214720000,
+    "burnscan-bodies/q7.request.json": 1787207400000,
+    "burnscan-bodies/q8.request.json": 1787214780000,
+    "burnscan-noresp/n1.request.json": 1787216400000,
+    "burnscan-cap/c000.request.json": 1787216400000,
+    "burnscan-cap/c001.request.json": 1787216400000,
+    "burnscan-cap/c002.request.json": 1787216400000,
+    "burnscan-cap/c003.request.json": 1787216400000,
+    "burnscan-cap/c004.request.json": 1787216400000,
+    "burnscan-cap/c005.request.json": 1787216400000,
+    "burnscan-cap/c006.request.json": 1787216400000,
+    "burnscan-cap/c007.request.json": 1787216400000,
+    "burnscan-cap/c008.request.json": 1787216400000,
+    "burnscan-cap/c009.request.json": 1787216400000,
+    "burnscan-cap/c010.request.json": 1787216400000,
+    "burnscan-cap/c011.request.json": 1787216400000,
+    "burnscan-cap/c012.request.json": 1787216400000,
+    "burnscan-cap/c013.request.json": 1787216400000,
+    "burnscan-cap/c014.request.json": 1787216400000,
+    "burnscan-cap/c015.request.json": 1787216400000,
+    "burnscan-cap/c016.request.json": 1787216400000,
+    "burnscan-cap/c017.request.json": 1787216400000,
+    "burnscan-cap/c018.request.json": 1787216400000,
+    "burnscan-cap/c019.request.json": 1787216400000,
+    "burnscan-cap/c020.request.json": 1787216400000,
+    "burnscan-cap/c021.request.json": 1787216400000,
+    "burnscan-cap/c022.request.json": 1787216400000,
+    "burnscan-cap/c023.request.json": 1787216400000,
+    "burnscan-cap/c024.request.json": 1787216400000,
+    "burnscan-cap/c025.request.json": 1787216400000,
+    "burnscan-cap/c026.request.json": 1787216400000,
+    "burnscan-cap/c027.request.json": 1787216400000,
+    "burnscan-cap/c028.request.json": 1787216400000,
+    "burnscan-cap/c029.request.json": 1787216400000,
+    "burnscan-cap/c030.request.json": 1787216400000,
+    "burnscan-cap/c031.request.json": 1787216400000,
+    "burnscan-cap/c032.request.json": 1787216400000,
+    "burnscan-cap/c033.request.json": 1787216400000,
+    "burnscan-cap/c034.request.json": 1787216400000,
+    "burnscan-cap/c035.request.json": 1787216400000,
+    "burnscan-cap/c036.request.json": 1787216400000,
+    "burnscan-cap/c037.request.json": 1787216400000,
+    "burnscan-cap/c038.request.json": 1787216400000,
+    "burnscan-cap/c039.request.json": 1787216400000,
+    "burnscan-cap/c040.request.json": 1787216400000,
+    "burnscan-cap/c041.request.json": 1787216400000,
+    "burnscan-cap/c042.request.json": 1787216400000,
+    "burnscan-cap/c043.request.json": 1787216400000,
+    "burnscan-cap/c044.request.json": 1787216400000,
+    "burnscan-cap/c045.request.json": 1787216400000,
+    "burnscan-cap/c046.request.json": 1787216400000,
+    "burnscan-cap/c047.request.json": 1787216400000,
+    "burnscan-cap/c048.request.json": 1787216400000,
+    "burnscan-cap/c049.request.json": 1787216400000,
+    "burnscan-cap/c050.request.json": 1787216400000,
+    "burnscan-cap/c051.request.json": 1787216400000,
+    "burnscan-cap/c052.request.json": 1787216400000,
+    "burnscan-cap/c053.request.json": 1787216400000,
+    "burnscan-cap/c054.request.json": 1787216400000,
+    "burnscan-cap/c055.request.json": 1787216400000,
+    "burnscan-cap/c056.request.json": 1787216400000,
+    "burnscan-cap/c057.request.json": 1787216400000,
+    "burnscan-cap/c058.request.json": 1787216400000,
+    "burnscan-cap/c059.request.json": 1787216400000,
+    "burnscan-cap/c060.request.json": 1787216400000,
+    "burnscan-cap/c061.request.json": 1787216400000,
+    "burnscan-cap/c062.request.json": 1787216400000,
+    "burnscan-cap/c063.request.json": 1787216400000,
+    "burnscan-cap/c064.request.json": 1787216400000,
+    "burnscan-cap/c065.request.json": 1787216400000,
+    "burnscan-cap/c066.request.json": 1787216400000,
+    "burnscan-cap/c067.request.json": 1787216400000,
+    "burnscan-cap/c068.request.json": 1787216400000,
+    "burnscan-cap/c069.request.json": 1787216400000,
+    "burnscan-cap/c070.request.json": 1787216400000,
+    "burnscan-cap/c071.request.json": 1787216400000,
+    "burnscan-cap/c072.request.json": 1787216400000,
+    "burnscan-cap/c073.request.json": 1787216400000,
+    "burnscan-cap/c074.request.json": 1787216400000,
+    "burnscan-cap/c075.request.json": 1787216400000,
+    "burnscan-cap/c076.request.json": 1787216400000,
+    "burnscan-cap/c077.request.json": 1787216400000,
+    "burnscan-cap/c078.request.json": 1787216400000,
+    "burnscan-cap/c079.request.json": 1787216400000,
+    "burnscan-cap/c080.request.json": 1787216400000,
+    "burnscan-cap/c081.request.json": 1787216400000,
+    "burnscan-cap/c082.request.json": 1787216400000,
+    "burnscan-cap/c083.request.json": 1787216400000,
+    "burnscan-cap/c084.request.json": 1787216400000,
+    "burnscan-cap/c085.request.json": 1787216400000,
+    "burnscan-cap/c086.request.json": 1787216400000,
+    "burnscan-cap/c087.request.json": 1787216400000,
+    "burnscan-cap/c088.request.json": 1787216400000,
+    "burnscan-cap/c089.request.json": 1787216400000,
+    "burnscan-cap/c090.request.json": 1787216400000,
+    "burnscan-cap/c091.request.json": 1787216400000,
+    "burnscan-cap/c092.request.json": 1787216400000,
+    "burnscan-cap/c093.request.json": 1787216400000,
+    "burnscan-cap/c094.request.json": 1787216400000,
+    "burnscan-cap/c095.request.json": 1787216400000,
+    "burnscan-cap/c096.request.json": 1787216400000,
+    "burnscan-cap/c097.request.json": 1787216400000,
+    "burnscan-cap/c098.request.json": 1787216400000,
+    "burnscan-cap/c099.request.json": 1787216400000,
+    "burnscan-cap/c100.request.json": 1787216400000
+  },
+  "cases": {
+    "main": {
+      "window": {
+        "fromIso": "2026-08-20T07:00:00.000Z",
+        "untilIso": "2026-08-20T12:00:00.000Z",
+        "hours": 5
+      },
+      "coverage": {
+        "requestFilesScanned": 7,
+        "responseFilesScanned": 7,
+        "bytesOnDisk": 51063,
+        "complete": true,
+        "note": "full coverage of the window (scanned ~/burnscan-bodies)",
+        "dirsScanned": [
+          "<BODIES>"
+        ],
+        "dirsMissing": []
+      },
+      "totals": {
+        "calls": 6,
+        "cacheCreationTokens": 441700,
+        "cacheReadTokens": 426000,
+        "outputTokens": 970,
+        "inputEquivTokens": 594725,
+        "estCostUsd": 2.87,
+        "byHour": [
+          {
+            "hour": "2026-08-20T08",
+            "calls": 3,
+            "cacheCreation": 440000,
+            "cacheRead": 26000,
+            "equiv": 552600
+          },
+          {
+            "hour": "2026-08-20T09",
+            "calls": 3,
+            "cacheCreation": 1700,
+            "cacheRead": 400000,
+            "equiv": 42125
+          }
+        ],
+        "byModel": [
+          {
+            "model": "claude-opus-5",
+            "calls": 3,
+            "cacheCreation": 440000,
+            "cacheRead": 26000,
+            "outputTokens": 850,
+            "equiv": 552600,
+            "estCostUsd": 2.78
+          },
+          {
+            "model": "claude-sonnet-5",
+            "calls": 2,
+            "cacheCreation": 1000,
+            "cacheRead": 400000,
+            "outputTokens": 100,
+            "equiv": 41250,
+            "estCostUsd": 0.08
+          },
+          {
+            "model": "claude-haiku-4-5-20251001",
+            "calls": 1,
+            "cacheCreation": 700,
+            "cacheRead": 0,
+            "outputTokens": 20,
+            "equiv": 875,
+            "estCostUsd": 0
+          }
+        ]
+      },
+      "attribution": [
+        {
+          "workspace": "/w/alpha",
+          "model": "claude-opus-5",
+          "kind": "interactive",
+          "requests": 4,
+          "bytesSent": 39362,
+          "firstIso": "2026-08-20T08:30:00.000Z",
+          "lastIso": "2026-08-20T09:14:00.000Z"
+        },
+        {
+          "workspace": "/w/beta",
+          "model": "claude-sonnet-5",
+          "kind": "interactive",
+          "requests": 1,
+          "bytesSent": 5861,
+          "firstIso": "2026-08-20T09:12:00.000Z",
+          "lastIso": "2026-08-20T09:12:00.000Z"
+        },
+        {
+          "workspace": "(subagent/no-env-block)",
+          "model": "claude-sonnet-5",
+          "kind": "subagent",
+          "requests": 1,
+          "bytesSent": 5769,
+          "firstIso": "2026-08-20T09:10:00.000Z",
+          "lastIso": "2026-08-20T09:10:00.000Z"
+        },
+        {
+          "workspace": "(subagent/no-env-block)",
+          "model": "claude-opus-5",
+          "kind": "subagent",
+          "requests": 1,
+          "bytesSent": 71,
+          "firstIso": "2026-08-20T08:32:00.000Z",
+          "lastIso": "2026-08-20T08:32:00.000Z"
+        }
+      ],
+      "findings": [
+        {
+          "equivTokens": 437500,
+          "shareOfWindow": 0.7356341166085165,
+          "evidence": {
+            "window": "2026-08-20T08:30:00.000Z → 2026-08-20T08:35:00.000Z",
+            "peakStartMs": 1787214600000,
+            "peakEndMs": 1787214900000,
+            "fullPrefixWrites": 2,
+            "coldWrites": 1,
+            "cacheCreationTokens": 350000,
+            "largestWriteTokens": 200000,
+            "sharedTranscriptRequests": 0,
+            "distinctFingerprints": 0,
+            "workspaces": [],
+            "postRateLimitStall": true
+          },
+          "cause": "FAT_SESSION_REWRITES",
+          "confidence": "medium",
+          "verdict": "2 full-prefix rewrite(s) totalling 350k cache-write tokens around 2026-08-20T08:30:00.000Z — a large session re-writing its whole prefix (compaction, model switch, or a >5-min idle gap)."
+        }
+      ],
+      "verdict": "Top culprit: 1. FAT_SESSION_REWRITES (438k equiv, 74%) — 2 full-prefix rewrite(s) totalling 350k cache-write tokens around 2026-08-20T08:30:00.000Z — a large session re-writing its whole prefix (compaction, model switch, or a >5-min idle gap). Window total: 595k input-equivalents (442k cache-write + 426k cache-read), est $2.87."
+    },
+    "clampedHigh": {
+      "window": {
+        "fromIso": "2026-08-18T12:00:00.000Z",
+        "untilIso": "2026-08-20T12:00:00.000Z",
+        "hours": 48
+      },
+      "coverage": {
+        "requestFilesScanned": 8,
+        "responseFilesScanned": 8,
+        "bytesOnDisk": 56740,
+        "complete": true,
+        "note": "full coverage of the window (scanned ~/burnscan-bodies)",
+        "dirsScanned": [
+          "<BODIES>"
+        ],
+        "dirsMissing": []
+      },
+      "totals": {
+        "calls": 7,
+        "cacheCreationTokens": 1441699,
+        "cacheReadTokens": 426000,
+        "outputTokens": 970,
+        "inputEquivTokens": 1844724,
+        "estCostUsd": 9.12,
+        "byHour": [
+          {
+            "hour": "2026-08-20T06",
+            "calls": 1,
+            "cacheCreation": 999999,
+            "cacheRead": 0,
+            "equiv": 1249999
+          },
+          {
+            "hour": "2026-08-20T08",
+            "calls": 3,
+            "cacheCreation": 440000,
+            "cacheRead": 26000,
+            "equiv": 552600
+          },
+          {
+            "hour": "2026-08-20T09",
+            "calls": 3,
+            "cacheCreation": 1700,
+            "cacheRead": 400000,
+            "equiv": 42125
+          }
+        ],
+        "byModel": [
+          {
+            "model": "claude-opus-5",
+            "calls": 4,
+            "cacheCreation": 1439999,
+            "cacheRead": 26000,
+            "outputTokens": 850,
+            "equiv": 1802599,
+            "estCostUsd": 9.03
+          },
+          {
+            "model": "claude-sonnet-5",
+            "calls": 2,
+            "cacheCreation": 1000,
+            "cacheRead": 400000,
+            "outputTokens": 100,
+            "equiv": 41250,
+            "estCostUsd": 0.08
+          },
+          {
+            "model": "claude-haiku-4-5-20251001",
+            "calls": 1,
+            "cacheCreation": 700,
+            "cacheRead": 0,
+            "outputTokens": 20,
+            "equiv": 875,
+            "estCostUsd": 0
+          }
+        ]
+      },
+      "attribution": [
+        {
+          "workspace": "/w/alpha",
+          "model": "claude-opus-5",
+          "kind": "interactive",
+          "requests": 4,
+          "bytesSent": 39362,
+          "firstIso": "2026-08-20T08:30:00.000Z",
+          "lastIso": "2026-08-20T09:14:00.000Z"
+        },
+        {
+          "workspace": "/w/beta",
+          "model": "claude-sonnet-5",
+          "kind": "interactive",
+          "requests": 1,
+          "bytesSent": 5861,
+          "firstIso": "2026-08-20T09:12:00.000Z",
+          "lastIso": "2026-08-20T09:12:00.000Z"
+        },
+        {
+          "workspace": "(subagent/no-env-block)",
+          "model": "claude-sonnet-5",
+          "kind": "subagent",
+          "requests": 1,
+          "bytesSent": 5769,
+          "firstIso": "2026-08-20T09:10:00.000Z",
+          "lastIso": "2026-08-20T09:10:00.000Z"
+        },
+        {
+          "workspace": "(subagent/no-env-block)",
+          "model": "claude-opus-5",
+          "kind": "subagent",
+          "requests": 2,
+          "bytesSent": 5748,
+          "firstIso": "2026-08-20T06:30:00.000Z",
+          "lastIso": "2026-08-20T08:32:00.000Z"
+        }
+      ],
+      "findings": [
+        {
+          "equivTokens": 1249999,
+          "shareOfWindow": 0.677607555060751,
+          "evidence": {
+            "window": "2026-08-20T06:00:00.000Z → 2026-08-20T06:00:00.000Z",
+            "peakStartMs": 1787205600000,
+            "peakEndMs": 1787205600000,
+            "fullPrefixWrites": 1,
+            "coldWrites": 1,
+            "cacheCreationTokens": 999999,
+            "largestWriteTokens": 999999,
+            "sharedTranscriptRequests": 0,
+            "distinctFingerprints": 0,
+            "workspaces": [],
+            "postRateLimitStall": false
+          },
+          "cause": "FAT_SESSION_REWRITES",
+          "confidence": "low",
+          "verdict": "1 full-prefix rewrite(s) totalling 1000k cache-write tokens around 2026-08-20T06:00:00.000Z — a large session re-writing its whole prefix (compaction, model switch, or a >5-min idle gap)."
+        },
+        {
+          "equivTokens": 437500,
+          "shareOfWindow": 0.23716288143414427,
+          "evidence": {
+            "window": "2026-08-20T08:30:00.000Z → 2026-08-20T08:35:00.000Z",
+            "peakStartMs": 1787214600000,
+            "peakEndMs": 1787214900000,
+            "fullPrefixWrites": 2,
+            "coldWrites": 1,
+            "cacheCreationTokens": 350000,
+            "largestWriteTokens": 200000,
+            "sharedTranscriptRequests": 0,
+            "distinctFingerprints": 0,
+            "workspaces": [],
+            "postRateLimitStall": true
+          },
+          "cause": "FAT_SESSION_REWRITES",
+          "confidence": "medium",
+          "verdict": "2 full-prefix rewrite(s) totalling 350k cache-write tokens around 2026-08-20T08:30:00.000Z — a large session re-writing its whole prefix (compaction, model switch, or a >5-min idle gap)."
+        }
+      ],
+      "verdict": "Top culprits: 1. FAT_SESSION_REWRITES (1.2M equiv, 68%) — 1 full-prefix rewrite(s) totalling 1000k cache-write tokens around 2026-08-20T06:00:00.000Z — a large session re-writing its whole prefix (compaction, model switch, or a >5-min idle gap). 2. FAT_SESSION_REWRITES (438k equiv, 24%) — 2 full-prefix rewrite(s) totalling 350k cache-write tokens around 2026-08-20T08:30:00.000Z — a large session re-writing its whole prefix (compaction, model switch, or a >5-min idle gap). Window total: 1.8M input-equivalents (1.4M cache-write + 426k cache-read), est $9.12."
+    },
+    "clampedLow": {
+      "window": {
+        "fromIso": "2026-08-20T11:45:00.000Z",
+        "untilIso": "2026-08-20T12:00:00.000Z",
+        "hours": 0.25
+      },
+      "coverage": {
+        "requestFilesScanned": 0,
+        "responseFilesScanned": 0,
+        "bytesOnDisk": 0,
+        "complete": false,
+        "note": "BLIND (dirs-empty-in-window): scanned ~/burnscan-bodies — 0 bodies in the window. Totals are not a measurement.",
+        "dirsScanned": [
+          "<BODIES>"
+        ],
+        "dirsMissing": [],
+        "blind": "dirs-empty-in-window"
+      },
+      "totals": {
+        "calls": 0,
+        "cacheCreationTokens": 0,
+        "cacheReadTokens": 0,
+        "outputTokens": 0,
+        "inputEquivTokens": 0,
+        "estCostUsd": 0,
+        "byHour": [],
+        "byModel": []
+      },
+      "attribution": [],
+      "findings": [],
+      "verdict": "BLIND — scanned ~/burnscan-bodies and found 0 request/response bodies in the window. Capture is on, so either the window predates capture, the spool was drained/unmounted, or the bounds are wrong. This is NOT evidence that nothing burned — cross-check with `agentlenspro --risk` / `get_burn_status` (live feed, never blind)."
+    },
+    "noResponses": {
+      "window": {
+        "fromIso": "2026-08-20T07:00:00.000Z",
+        "untilIso": "2026-08-20T12:00:00.000Z",
+        "hours": 5
+      },
+      "coverage": {
+        "requestFilesScanned": 1,
+        "responseFilesScanned": 0,
+        "bytesOnDisk": 5775,
+        "complete": true,
+        "note": "full coverage of the window (scanned ~/burnscan-noresp)",
+        "dirsScanned": [
+          "<NORESP>"
+        ],
+        "dirsMissing": []
+      },
+      "totals": {
+        "calls": 0,
+        "cacheCreationTokens": 0,
+        "cacheReadTokens": 0,
+        "outputTokens": 0,
+        "inputEquivTokens": 0,
+        "estCostUsd": 0,
+        "byHour": [],
+        "byModel": []
+      },
+      "attribution": [
+        {
+          "workspace": "/w/gamma",
+          "model": "claude-opus-5",
+          "kind": "interactive",
+          "requests": 1,
+          "bytesSent": 5775,
+          "firstIso": "2026-08-20T09:00:00.000Z",
+          "lastIso": "2026-08-20T09:00:00.000Z"
+        }
+      ],
+      "findings": [],
+      "verdict": "Scanned 1 request bodies in ~/burnscan-noresp but no RESPONSE bodies — usage cannot be measured for this window (responses carry the billed numbers). Traffic existed; the totals below are not a burn measurement."
+    },
+    "missingDir": {
+      "window": {
+        "fromIso": "2026-08-20T07:00:00.000Z",
+        "untilIso": "2026-08-20T12:00:00.000Z",
+        "hours": 5
+      },
+      "coverage": {
+        "requestFilesScanned": 0,
+        "responseFilesScanned": 0,
+        "bytesOnDisk": 0,
+        "complete": false,
+        "note": "BLIND (no-bodies-dir): scanned (none exist) — 0 bodies in the window. Missing: ~/no-such-burnscan-dir. Totals are not a measurement.",
+        "dirsScanned": [],
+        "dirsMissing": [
+          "<MISSING>"
+        ],
+        "blind": "no-bodies-dir"
+      },
+      "totals": {
+        "calls": 0,
+        "cacheCreationTokens": 0,
+        "cacheReadTokens": 0,
+        "outputTokens": 0,
+        "inputEquivTokens": 0,
+        "estCostUsd": 0,
+        "byHour": [],
+        "byModel": []
+      },
+      "attribution": [],
+      "findings": [],
+      "verdict": "BLIND — no raw-body directory exists, so this window was never observed. Missing: ~/no-such-burnscan-dir. This is NOT evidence that nothing burned: turn capture on with `agentlenspro config set captureRawBodies on`, and meanwhile use `agentlenspro --risk` / `get_burn_status`, which read the live feed and never go blind."
+    },
+    "capHit": {
+      "window": {
+        "fromIso": "2026-08-20T07:00:00.000Z",
+        "untilIso": "2026-08-20T12:00:00.000Z",
+        "hours": 5
+      },
+      "coverage": {
+        "requestFilesScanned": 100,
+        "responseFilesScanned": 0,
+        "bytesOnDisk": 7250,
+        "complete": false,
+        "note": "CAP HIT: scanned the 100 largest of 101 request files (responses 0/0) — totals reflect the scanned set only",
+        "dirsScanned": [
+          "<CAP>"
+        ],
+        "dirsMissing": []
+      },
+      "totals": {
+        "calls": 0,
+        "cacheCreationTokens": 0,
+        "cacheReadTokens": 0,
+        "outputTokens": 0,
+        "inputEquivTokens": 0,
+        "estCostUsd": 0,
+        "byHour": [],
+        "byModel": []
+      },
+      "attribution": [
+        {
+          "workspace": "(subagent/no-env-block)",
+          "model": "m",
+          "kind": "subagent",
+          "requests": 100,
+          "bytesSent": 7250,
+          "firstIso": "2026-08-20T09:00:00.000Z",
+          "lastIso": "2026-08-20T09:00:00.000Z"
+        }
+      ],
+      "findings": [],
+      "verdict": "Scanned 100 request bodies in ~/burnscan-cap but no RESPONSE bodies — usage cannot be measured for this window (responses carry the billed numbers). Traffic existed; the totals below are not a burn measurement."
+    }
+  }
+}
