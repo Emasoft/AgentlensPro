@@ -1,0 +1,4 @@
+{"type":"assistant","message":{"id":"msg_k1"}}
+{"type":"assistant","message":{"id":"msg_k2"}}
+{"type":"user","message":{"id":"msg_ignored"}}
+not json at all

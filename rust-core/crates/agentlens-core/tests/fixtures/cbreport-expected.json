@@ -1,0 +1,1248 @@
+{
+  "root": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/cbreport",
+  "spool": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/cbreport/spool",
+  "mtimes": {
+    "cbreport/spool/s1-0.request.json": 1787220000000,
+    "cbreport/spool/s1-0.response.json": 1787220000500,
+    "cbreport/spool/s1-1.request.json": 1787220060000,
+    "cbreport/spool/s1-1.response.json": 1787220060500,
+    "cbreport/spool/s1-2.request.json": 1787220120000,
+    "cbreport/spool/s1-2.response.json": 1787220120500,
+    "cbreport/spool/s1-3.request.json": 1787220180000,
+    "cbreport/spool/s1-3.response.json": 1787220180500,
+    "cbreport/spool/s1-4.request.json": 1787220240000,
+    "cbreport/spool/s1-4.response.json": 1787220240500,
+    "cbreport/spool/s2-0.request.json": 1787220600000,
+    "cbreport/spool/s2-0.response.json": 1787220600500,
+    "cbreport/spool/s2-1.request.json": 1787220660000,
+    "cbreport/spool/s2-1.response.json": 1787220660500,
+    "cbreport/spool/s3-0.request.json": 1787227200000,
+    "cbreport/spool/s3-0.response.json": 1787227200500,
+    "cbreport/spool/s3-1.request.json": 1787227230000,
+    "cbreport/spool/s3-1.response.json": 1787227230500,
+    "cbreport/spool/s3-2.request.json": 1787227260000,
+    "cbreport/spool/s3-2.response.json": 1787227260500,
+    "cbreport/spool/s3-3.request.json": 1787227290000,
+    "cbreport/spool/s3-3.response.json": 1787227290500,
+    "cbreport/hooks/2026-08-20.ndjsonl": 1787227200000,
+    "cbreport/spool/kid-0.request.json": 1787234400000,
+    "cbreport/spool/kid-0.response.json": 1787234400500,
+    "cbreport/spool/kid-1.request.json": 1787234460000,
+    "cbreport/spool/kid-1.response.json": 1787234460500,
+    "cbreport/spool/kid-2.request.json": 1787234520000,
+    "cbreport/spool/kid-2.response.json": 1787234520500,
+    "cbreport/projects/-w-proj/sess-parent/subagents/agent-kid.jsonl": 1787234400000,
+    "cbreport/spool/s4-0.request.json": 1787241600000,
+    "cbreport/spool/s4-0.response.json": 1787241600500,
+    "cbreport/spool/s4-1.request.json": 1787241660000,
+    "cbreport/spool/s4-1.response.json": 1787241660500,
+    "cbreport/spool/s4-2.request.json": 1787241720000,
+    "cbreport/spool/s4-2.response.json": 1787241720500,
+    "cbreport/spool/s4-3.request.json": 1787241780000,
+    "cbreport/spool/s4-3.response.json": 1787241780500
+  },
+  "cases": {
+    "heaviest": {
+      "sessionId": "sess-gamma",
+      "accountUuid": "acct-1",
+      "model": "claude-opus-5",
+      "minTokens": 100,
+      "systematicThreshold": 3,
+      "turnsInSession": 4,
+      "turnsClassified": 3,
+      "totalCacheCreateTokens": 180000,
+      "events": [
+        {
+          "turn": 1,
+          "ts": "2026-08-20T12:00:00.000Z",
+          "cause": "COLD_START",
+          "culpritLayer": "timing",
+          "culpritId": "timing:COLD_START",
+          "culprit": "first observed turn for this session (cold cache warm)",
+          "cacheCreateTokens": 50000,
+          "cacheReadTokens": 1000,
+          "inputTokens": 12,
+          "outputTokens": 340,
+          "costUsd": 0.3125,
+          "ttlTier": "none",
+          "model": "claude-opus-5",
+          "remediation": "A cold cache warm (first turn / resume / no prior cached prefix). Expected once per session; not an avoidable per-turn break."
+        },
+        {
+          "turn": 2,
+          "ts": "2026-08-20T12:00:30.000Z",
+          "cause": "COMPACTION",
+          "culpritLayer": "message",
+          "culpritId": "message:COMPACTION:postcompact:msg[0] user",
+          "culprit": "conversation compaction rebuilt the message prefix at msg[0] user",
+          "cacheCreateTokens": 60000,
+          "cacheReadTokens": 1000,
+          "inputTokens": 12,
+          "outputTokens": 340,
+          "costUsd": 0.375,
+          "gapMinutes": 0.5,
+          "model": "claude-opus-5",
+          "remediation": "Conversation compaction rebuilt the message layer. Expected once per compaction; avoid compacting more than necessary.",
+          "causeEvidence": "hook"
+        },
+        {
+          "turn": 3,
+          "ts": "2026-08-20T12:01:00.000Z",
+          "cause": "COMPACTION",
+          "culpritLayer": "timing",
+          "culpritId": "timing:UNCLASSIFIED",
+          "culprit": "unlocalised re-write",
+          "cacheCreateTokens": 70000,
+          "cacheReadTokens": 1000,
+          "inputTokens": 12,
+          "outputTokens": 340,
+          "costUsd": 0.4375,
+          "gapMinutes": 0.5,
+          "model": "claude-opus-5",
+          "remediation": "Conversation compaction rebuilt the message layer. Expected once per compaction; avoid compacting more than necessary.",
+          "rawDiffSummary": "prefix byte-identical by fingerprint but cache_creation=70000; tools=0 sys=1 msg=1",
+          "causeEvidence": "hook"
+        }
+      ],
+      "causeHistogram": [
+        {
+          "cause": "COMPACTION",
+          "events": 2,
+          "cacheCreateTokens": 130000
+        },
+        {
+          "cause": "COLD_START",
+          "events": 1,
+          "cacheCreateTokens": 50000
+        }
+      ],
+      "repeatOffenders": [
+        {
+          "cause": "COMPACTION",
+          "culpritId": "timing:UNCLASSIFIED",
+          "culprit": "unlocalised re-write",
+          "occurrences": 1,
+          "totalCacheCreateTokens": 70000,
+          "medianCacheCreateTokens": 70000,
+          "totalCostUsd": 0.4375,
+          "pctOfSessionCacheCreate": 38.9,
+          "firstTurn": 3,
+          "lastTurn": 3,
+          "systematic": false,
+          "verdict": "COMPACTION: unlocalised re-write broke the cache on 1 turn(s) (70,000 cache_creation tokens). Conversation compaction rebuilt the message layer. Expected once per compaction; avoid compacting more than necessary."
+        },
+        {
+          "cause": "COMPACTION",
+          "culpritId": "message:COMPACTION:postcompact:msg[0] user",
+          "culprit": "conversation compaction rebuilt the message prefix at msg[0] user",
+          "occurrences": 1,
+          "totalCacheCreateTokens": 60000,
+          "medianCacheCreateTokens": 60000,
+          "totalCostUsd": 0.375,
+          "pctOfSessionCacheCreate": 33.3,
+          "firstTurn": 2,
+          "lastTurn": 2,
+          "systematic": false,
+          "verdict": "COMPACTION: conversation compaction rebuilt the message prefix at msg[0] user broke the cache on 1 turn(s) (60,000 cache_creation tokens). Conversation compaction rebuilt the message layer. Expected once per compaction; avoid compacting more than necessary."
+        },
+        {
+          "cause": "COLD_START",
+          "culpritId": "timing:COLD_START",
+          "culprit": "first observed turn for this session (cold cache warm)",
+          "occurrences": 1,
+          "totalCacheCreateTokens": 50000,
+          "medianCacheCreateTokens": 50000,
+          "totalCostUsd": 0.3125,
+          "pctOfSessionCacheCreate": 27.8,
+          "firstTurn": 1,
+          "lastTurn": 1,
+          "systematic": false,
+          "verdict": "COLD_START: first observed turn for this session (cold cache warm) broke the cache on 1 turn(s) (50,000 cache_creation tokens). A cold cache warm (first turn / resume / no prior cached prefix). Expected once per session; not an avoidable per-turn break."
+        }
+      ],
+      "coverage": {
+        "bodiesDir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/cbreport/spool",
+        "dirExists": true,
+        "requestFilesTotal": 18,
+        "requestFilesScanned": 18,
+        "responseFilesTotal": 18,
+        "responseFilesScanned": 18,
+        "sessionsFound": 5,
+        "scanCap": 4000,
+        "complete": true,
+        "note": "Scanned all 18 request body(ies) across 5 session(s) — 0 from the Parquet store, 18 from the raw spool (drained history stays in evidence)."
+      }
+    },
+    "scoped": {
+      "sessionId": "other-beta",
+      "accountUuid": "acct-1",
+      "model": "claude-opus-5",
+      "minTokens": 100,
+      "systematicThreshold": 3,
+      "turnsInSession": 2,
+      "turnsClassified": 1,
+      "totalCacheCreateTokens": 900,
+      "events": [
+        {
+          "turn": 1,
+          "ts": "2026-08-20T10:10:00.000Z",
+          "cause": "COLD_START",
+          "culpritLayer": "timing",
+          "culpritId": "timing:COLD_START",
+          "culprit": "first observed turn for this session (cold cache warm)",
+          "cacheCreateTokens": 900,
+          "cacheReadTokens": 1000,
+          "inputTokens": 12,
+          "outputTokens": 340,
+          "costUsd": 0.0056,
+          "ttlTier": "none",
+          "model": "claude-opus-5",
+          "remediation": "A cold cache warm (first turn / resume / no prior cached prefix). Expected once per session; not an avoidable per-turn break."
+        }
+      ],
+      "causeHistogram": [
+        {
+          "cause": "COLD_START",
+          "events": 1,
+          "cacheCreateTokens": 900
+        }
+      ],
+      "repeatOffenders": [
+        {
+          "cause": "COLD_START",
+          "culpritId": "timing:COLD_START",
+          "culprit": "first observed turn for this session (cold cache warm)",
+          "occurrences": 1,
+          "totalCacheCreateTokens": 900,
+          "medianCacheCreateTokens": 900,
+          "totalCostUsd": 0.0056,
+          "pctOfSessionCacheCreate": 100,
+          "firstTurn": 1,
+          "lastTurn": 1,
+          "systematic": false,
+          "verdict": "COLD_START: first observed turn for this session (cold cache warm) broke the cache on 1 turn(s) (900 cache_creation tokens). A cold cache warm (first turn / resume / no prior cached prefix). Expected once per session; not an avoidable per-turn break."
+        }
+      ],
+      "coverage": {
+        "bodiesDir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/cbreport/spool",
+        "dirExists": true,
+        "requestFilesTotal": 18,
+        "requestFilesScanned": 18,
+        "responseFilesTotal": 18,
+        "responseFilesScanned": 18,
+        "sessionsFound": 5,
+        "scanCap": 4000,
+        "complete": true,
+        "note": "Scanned all 18 request body(ies) across 5 session(s) — 0 from the Parquet store, 18 from the raw spool (drained history stays in evidence)."
+      }
+    },
+    "explicit_session": {
+      "sessionId": "sess-alpha",
+      "accountUuid": "acct-1",
+      "model": "claude-opus-5",
+      "minTokens": 100,
+      "systematicThreshold": 3,
+      "turnsInSession": 5,
+      "turnsClassified": 4,
+      "totalCacheCreateTokens": 115000,
+      "events": [
+        {
+          "turn": 1,
+          "ts": "2026-08-20T10:00:00.000Z",
+          "cause": "COLD_START",
+          "culpritLayer": "timing",
+          "culpritId": "timing:COLD_START",
+          "culprit": "first observed turn for this session (cold cache warm)",
+          "cacheCreateTokens": 40000,
+          "cacheReadTokens": 1000,
+          "inputTokens": 12,
+          "outputTokens": 340,
+          "costUsd": 0.25,
+          "ttlTier": "none",
+          "model": "claude-opus-5",
+          "remediation": "A cold cache warm (first turn / resume / no prior cached prefix). Expected once per session; not an avoidable per-turn break."
+        },
+        {
+          "turn": 2,
+          "ts": "2026-08-20T10:01:00.000Z",
+          "cause": "TOOLSET_CHANGED",
+          "culpritLayer": "tools",
+          "culpritId": "tools:TOOLSET_CHANGED:Grep",
+          "culprit": "tool(s) added Grep",
+          "cacheCreateTokens": 30000,
+          "cacheReadTokens": 1000,
+          "inputTokens": 12,
+          "outputTokens": 340,
+          "costUsd": 0.1875,
+          "gapMinutes": 1,
+          "model": "claude-opus-5",
+          "remediation": "A tool was added/removed/redefined mid-session. Keep the tool catalog byte-identical: use defer-loading stubs + tool-search rather than mutating the live tool set."
+        },
+        {
+          "turn": 3,
+          "ts": "2026-08-20T10:02:00.000Z",
+          "cause": "TOOLSET_CHANGED",
+          "culpritLayer": "tools",
+          "culpritId": "tools:TOOLSET_CHANGED:Bash",
+          "culprit": "tool definition changed: Bash",
+          "cacheCreateTokens": 20000,
+          "cacheReadTokens": 1000,
+          "inputTokens": 12,
+          "outputTokens": 340,
+          "costUsd": 0.125,
+          "gapMinutes": 1,
+          "model": "claude-opus-5",
+          "remediation": "A tool was added/removed/redefined mid-session. Keep the tool catalog byte-identical: use defer-loading stubs + tool-search rather than mutating the live tool set."
+        },
+        {
+          "turn": 4,
+          "ts": "2026-08-20T10:03:00.000Z",
+          "cause": "TOOLSET_CHANGED",
+          "culpritLayer": "tools",
+          "culpritId": "tools:TOOLSET_CHANGED:Bash",
+          "culprit": "tool definition changed: Bash",
+          "cacheCreateTokens": 25000,
+          "cacheReadTokens": 1000,
+          "inputTokens": 12,
+          "outputTokens": 340,
+          "costUsd": 0.1563,
+          "gapMinutes": 1,
+          "model": "claude-opus-5",
+          "remediation": "A tool was added/removed/redefined mid-session. Keep the tool catalog byte-identical: use defer-loading stubs + tool-search rather than mutating the live tool set."
+        }
+      ],
+      "causeHistogram": [
+        {
+          "cause": "TOOLSET_CHANGED",
+          "events": 3,
+          "cacheCreateTokens": 75000
+        },
+        {
+          "cause": "COLD_START",
+          "events": 1,
+          "cacheCreateTokens": 40000
+        }
+      ],
+      "repeatOffenders": [
+        {
+          "cause": "TOOLSET_CHANGED",
+          "culpritId": "tools:TOOLSET_CHANGED:Bash",
+          "culprit": "tool definition changed: Bash",
+          "occurrences": 2,
+          "totalCacheCreateTokens": 45000,
+          "medianCacheCreateTokens": 22500,
+          "totalCostUsd": 0.2813,
+          "pctOfSessionCacheCreate": 39.1,
+          "firstTurn": 3,
+          "lastTurn": 4,
+          "systematic": false,
+          "verdict": "TOOLSET_CHANGED: tool definition changed: Bash broke the cache on 2 turn(s) (45,000 cache_creation tokens). A tool was added/removed/redefined mid-session. Keep the tool catalog byte-identical: use defer-loading stubs + tool-search rather than mutating the live tool set."
+        },
+        {
+          "cause": "COLD_START",
+          "culpritId": "timing:COLD_START",
+          "culprit": "first observed turn for this session (cold cache warm)",
+          "occurrences": 1,
+          "totalCacheCreateTokens": 40000,
+          "medianCacheCreateTokens": 40000,
+          "totalCostUsd": 0.25,
+          "pctOfSessionCacheCreate": 34.8,
+          "firstTurn": 1,
+          "lastTurn": 1,
+          "systematic": false,
+          "verdict": "COLD_START: first observed turn for this session (cold cache warm) broke the cache on 1 turn(s) (40,000 cache_creation tokens). A cold cache warm (first turn / resume / no prior cached prefix). Expected once per session; not an avoidable per-turn break."
+        },
+        {
+          "cause": "TOOLSET_CHANGED",
+          "culpritId": "tools:TOOLSET_CHANGED:Grep",
+          "culprit": "tool(s) added Grep",
+          "occurrences": 1,
+          "totalCacheCreateTokens": 30000,
+          "medianCacheCreateTokens": 30000,
+          "totalCostUsd": 0.1875,
+          "pctOfSessionCacheCreate": 26.1,
+          "firstTurn": 2,
+          "lastTurn": 2,
+          "systematic": false,
+          "verdict": "TOOLSET_CHANGED: tool(s) added Grep broke the cache on 1 turn(s) (30,000 cache_creation tokens). A tool was added/removed/redefined mid-session. Keep the tool catalog byte-identical: use defer-loading stubs + tool-search rather than mutating the live tool set."
+        }
+      ],
+      "coverage": {
+        "bodiesDir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/cbreport/spool",
+        "dirExists": true,
+        "requestFilesTotal": 18,
+        "requestFilesScanned": 18,
+        "responseFilesTotal": 18,
+        "responseFilesScanned": 18,
+        "sessionsFound": 5,
+        "scanCap": 4000,
+        "complete": true,
+        "note": "Scanned all 18 request body(ies) across 5 session(s) — 0 from the Parquet store, 18 from the raw spool (drained history stays in evidence)."
+      }
+    },
+    "topn2": {
+      "sessionId": "sess-alpha",
+      "accountUuid": "acct-1",
+      "model": "claude-opus-5",
+      "minTokens": 100,
+      "systematicThreshold": 3,
+      "turnsInSession": 5,
+      "turnsClassified": 4,
+      "totalCacheCreateTokens": 115000,
+      "events": [
+        {
+          "turn": 3,
+          "ts": "2026-08-20T10:02:00.000Z",
+          "cause": "TOOLSET_CHANGED",
+          "culpritLayer": "tools",
+          "culpritId": "tools:TOOLSET_CHANGED:Bash",
+          "culprit": "tool definition changed: Bash",
+          "cacheCreateTokens": 20000,
+          "cacheReadTokens": 1000,
+          "inputTokens": 12,
+          "outputTokens": 340,
+          "costUsd": 0.125,
+          "gapMinutes": 1,
+          "model": "claude-opus-5",
+          "remediation": "A tool was added/removed/redefined mid-session. Keep the tool catalog byte-identical: use defer-loading stubs + tool-search rather than mutating the live tool set."
+        },
+        {
+          "turn": 4,
+          "ts": "2026-08-20T10:03:00.000Z",
+          "cause": "TOOLSET_CHANGED",
+          "culpritLayer": "tools",
+          "culpritId": "tools:TOOLSET_CHANGED:Bash",
+          "culprit": "tool definition changed: Bash",
+          "cacheCreateTokens": 25000,
+          "cacheReadTokens": 1000,
+          "inputTokens": 12,
+          "outputTokens": 340,
+          "costUsd": 0.1563,
+          "gapMinutes": 1,
+          "model": "claude-opus-5",
+          "remediation": "A tool was added/removed/redefined mid-session. Keep the tool catalog byte-identical: use defer-loading stubs + tool-search rather than mutating the live tool set."
+        }
+      ],
+      "eventsNote": "Showing the most recent 2 of 4 classified break events (raise topN to see more, max 100). repeatOffenders/causeHistogram below already summarize ALL 4.",
+      "causeHistogram": [
+        {
+          "cause": "TOOLSET_CHANGED",
+          "events": 3,
+          "cacheCreateTokens": 75000
+        },
+        {
+          "cause": "COLD_START",
+          "events": 1,
+          "cacheCreateTokens": 40000
+        }
+      ],
+      "repeatOffenders": [
+        {
+          "cause": "TOOLSET_CHANGED",
+          "culpritId": "tools:TOOLSET_CHANGED:Bash",
+          "culprit": "tool definition changed: Bash",
+          "occurrences": 2,
+          "totalCacheCreateTokens": 45000,
+          "medianCacheCreateTokens": 22500,
+          "totalCostUsd": 0.2813,
+          "pctOfSessionCacheCreate": 39.1,
+          "firstTurn": 3,
+          "lastTurn": 4,
+          "systematic": false,
+          "verdict": "TOOLSET_CHANGED: tool definition changed: Bash broke the cache on 2 turn(s) (45,000 cache_creation tokens). A tool was added/removed/redefined mid-session. Keep the tool catalog byte-identical: use defer-loading stubs + tool-search rather than mutating the live tool set."
+        },
+        {
+          "cause": "COLD_START",
+          "culpritId": "timing:COLD_START",
+          "culprit": "first observed turn for this session (cold cache warm)",
+          "occurrences": 1,
+          "totalCacheCreateTokens": 40000,
+          "medianCacheCreateTokens": 40000,
+          "totalCostUsd": 0.25,
+          "pctOfSessionCacheCreate": 34.8,
+          "firstTurn": 1,
+          "lastTurn": 1,
+          "systematic": false,
+          "verdict": "COLD_START: first observed turn for this session (cold cache warm) broke the cache on 1 turn(s) (40,000 cache_creation tokens). A cold cache warm (first turn / resume / no prior cached prefix). Expected once per session; not an avoidable per-turn break."
+        },
+        {
+          "cause": "TOOLSET_CHANGED",
+          "culpritId": "tools:TOOLSET_CHANGED:Grep",
+          "culprit": "tool(s) added Grep",
+          "occurrences": 1,
+          "totalCacheCreateTokens": 30000,
+          "medianCacheCreateTokens": 30000,
+          "totalCostUsd": 0.1875,
+          "pctOfSessionCacheCreate": 26.1,
+          "firstTurn": 2,
+          "lastTurn": 2,
+          "systematic": false,
+          "verdict": "TOOLSET_CHANGED: tool(s) added Grep broke the cache on 1 turn(s) (30,000 cache_creation tokens). A tool was added/removed/redefined mid-session. Keep the tool catalog byte-identical: use defer-loading stubs + tool-search rather than mutating the live tool set."
+        }
+      ],
+      "coverage": {
+        "bodiesDir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/cbreport/spool",
+        "dirExists": true,
+        "requestFilesTotal": 18,
+        "requestFilesScanned": 18,
+        "responseFilesTotal": 18,
+        "responseFilesScanned": 18,
+        "sessionsFound": 5,
+        "scanCap": 4000,
+        "complete": true,
+        "note": "Scanned all 18 request body(ies) across 5 session(s) — 0 from the Parquet store, 18 from the raw spool (drained history stays in evidence)."
+      }
+    },
+    "topn_clamped_low": {
+      "sessionId": "sess-alpha",
+      "accountUuid": "acct-1",
+      "model": "claude-opus-5",
+      "minTokens": 100,
+      "systematicThreshold": 3,
+      "turnsInSession": 5,
+      "turnsClassified": 4,
+      "totalCacheCreateTokens": 115000,
+      "events": [
+        {
+          "turn": 4,
+          "ts": "2026-08-20T10:03:00.000Z",
+          "cause": "TOOLSET_CHANGED",
+          "culpritLayer": "tools",
+          "culpritId": "tools:TOOLSET_CHANGED:Bash",
+          "culprit": "tool definition changed: Bash",
+          "cacheCreateTokens": 25000,
+          "cacheReadTokens": 1000,
+          "inputTokens": 12,
+          "outputTokens": 340,
+          "costUsd": 0.1563,
+          "gapMinutes": 1,
+          "model": "claude-opus-5",
+          "remediation": "A tool was added/removed/redefined mid-session. Keep the tool catalog byte-identical: use defer-loading stubs + tool-search rather than mutating the live tool set."
+        }
+      ],
+      "eventsNote": "Showing the most recent 1 of 4 classified break events (raise topN to see more, max 100). repeatOffenders/causeHistogram below already summarize ALL 4.",
+      "causeHistogram": [
+        {
+          "cause": "TOOLSET_CHANGED",
+          "events": 3,
+          "cacheCreateTokens": 75000
+        },
+        {
+          "cause": "COLD_START",
+          "events": 1,
+          "cacheCreateTokens": 40000
+        }
+      ],
+      "repeatOffenders": [
+        {
+          "cause": "TOOLSET_CHANGED",
+          "culpritId": "tools:TOOLSET_CHANGED:Bash",
+          "culprit": "tool definition changed: Bash",
+          "occurrences": 2,
+          "totalCacheCreateTokens": 45000,
+          "medianCacheCreateTokens": 22500,
+          "totalCostUsd": 0.2813,
+          "pctOfSessionCacheCreate": 39.1,
+          "firstTurn": 3,
+          "lastTurn": 4,
+          "systematic": false,
+          "verdict": "TOOLSET_CHANGED: tool definition changed: Bash broke the cache on 2 turn(s) (45,000 cache_creation tokens). A tool was added/removed/redefined mid-session. Keep the tool catalog byte-identical: use defer-loading stubs + tool-search rather than mutating the live tool set."
+        },
+        {
+          "cause": "COLD_START",
+          "culpritId": "timing:COLD_START",
+          "culprit": "first observed turn for this session (cold cache warm)",
+          "occurrences": 1,
+          "totalCacheCreateTokens": 40000,
+          "medianCacheCreateTokens": 40000,
+          "totalCostUsd": 0.25,
+          "pctOfSessionCacheCreate": 34.8,
+          "firstTurn": 1,
+          "lastTurn": 1,
+          "systematic": false,
+          "verdict": "COLD_START: first observed turn for this session (cold cache warm) broke the cache on 1 turn(s) (40,000 cache_creation tokens). A cold cache warm (first turn / resume / no prior cached prefix). Expected once per session; not an avoidable per-turn break."
+        },
+        {
+          "cause": "TOOLSET_CHANGED",
+          "culpritId": "tools:TOOLSET_CHANGED:Grep",
+          "culprit": "tool(s) added Grep",
+          "occurrences": 1,
+          "totalCacheCreateTokens": 30000,
+          "medianCacheCreateTokens": 30000,
+          "totalCostUsd": 0.1875,
+          "pctOfSessionCacheCreate": 26.1,
+          "firstTurn": 2,
+          "lastTurn": 2,
+          "systematic": false,
+          "verdict": "TOOLSET_CHANGED: tool(s) added Grep broke the cache on 1 turn(s) (30,000 cache_creation tokens). A tool was added/removed/redefined mid-session. Keep the tool catalog byte-identical: use defer-loading stubs + tool-search rather than mutating the live tool set."
+        }
+      ],
+      "coverage": {
+        "bodiesDir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/cbreport/spool",
+        "dirExists": true,
+        "requestFilesTotal": 18,
+        "requestFilesScanned": 18,
+        "responseFilesTotal": 18,
+        "responseFilesScanned": 18,
+        "sessionsFound": 5,
+        "scanCap": 4000,
+        "complete": true,
+        "note": "Scanned all 18 request body(ies) across 5 session(s) — 0 from the Parquet store, 18 from the raw spool (drained history stays in evidence)."
+      }
+    },
+    "high_floor": {
+      "sessionId": "sess-alpha",
+      "accountUuid": "acct-1",
+      "model": "claude-opus-5",
+      "minTokens": 26000,
+      "systematicThreshold": 3,
+      "turnsInSession": 5,
+      "turnsClassified": 2,
+      "totalCacheCreateTokens": 70000,
+      "events": [
+        {
+          "turn": 1,
+          "ts": "2026-08-20T10:00:00.000Z",
+          "cause": "COLD_START",
+          "culpritLayer": "timing",
+          "culpritId": "timing:COLD_START",
+          "culprit": "first observed turn for this session (cold cache warm)",
+          "cacheCreateTokens": 40000,
+          "cacheReadTokens": 1000,
+          "inputTokens": 12,
+          "outputTokens": 340,
+          "costUsd": 0.25,
+          "ttlTier": "none",
+          "model": "claude-opus-5",
+          "remediation": "A cold cache warm (first turn / resume / no prior cached prefix). Expected once per session; not an avoidable per-turn break."
+        },
+        {
+          "turn": 2,
+          "ts": "2026-08-20T10:01:00.000Z",
+          "cause": "TOOLSET_CHANGED",
+          "culpritLayer": "tools",
+          "culpritId": "tools:TOOLSET_CHANGED:Grep",
+          "culprit": "tool(s) added Grep",
+          "cacheCreateTokens": 30000,
+          "cacheReadTokens": 1000,
+          "inputTokens": 12,
+          "outputTokens": 340,
+          "costUsd": 0.1875,
+          "gapMinutes": 1,
+          "model": "claude-opus-5",
+          "remediation": "A tool was added/removed/redefined mid-session. Keep the tool catalog byte-identical: use defer-loading stubs + tool-search rather than mutating the live tool set."
+        }
+      ],
+      "causeHistogram": [
+        {
+          "cause": "COLD_START",
+          "events": 1,
+          "cacheCreateTokens": 40000
+        },
+        {
+          "cause": "TOOLSET_CHANGED",
+          "events": 1,
+          "cacheCreateTokens": 30000
+        }
+      ],
+      "repeatOffenders": [
+        {
+          "cause": "COLD_START",
+          "culpritId": "timing:COLD_START",
+          "culprit": "first observed turn for this session (cold cache warm)",
+          "occurrences": 1,
+          "totalCacheCreateTokens": 40000,
+          "medianCacheCreateTokens": 40000,
+          "totalCostUsd": 0.25,
+          "pctOfSessionCacheCreate": 34.8,
+          "firstTurn": 1,
+          "lastTurn": 1,
+          "systematic": false,
+          "verdict": "COLD_START: first observed turn for this session (cold cache warm) broke the cache on 1 turn(s) (40,000 cache_creation tokens). A cold cache warm (first turn / resume / no prior cached prefix). Expected once per session; not an avoidable per-turn break."
+        },
+        {
+          "cause": "TOOLSET_CHANGED",
+          "culpritId": "tools:TOOLSET_CHANGED:Grep",
+          "culprit": "tool(s) added Grep",
+          "occurrences": 1,
+          "totalCacheCreateTokens": 30000,
+          "medianCacheCreateTokens": 30000,
+          "totalCostUsd": 0.1875,
+          "pctOfSessionCacheCreate": 26.1,
+          "firstTurn": 2,
+          "lastTurn": 2,
+          "systematic": false,
+          "verdict": "TOOLSET_CHANGED: tool(s) added Grep broke the cache on 1 turn(s) (30,000 cache_creation tokens). A tool was added/removed/redefined mid-session. Keep the tool catalog byte-identical: use defer-loading stubs + tool-search rather than mutating the live tool set."
+        }
+      ],
+      "coverage": {
+        "bodiesDir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/cbreport/spool",
+        "dirExists": true,
+        "requestFilesTotal": 18,
+        "requestFilesScanned": 18,
+        "responseFilesTotal": 18,
+        "responseFilesScanned": 18,
+        "sessionsFound": 5,
+        "scanCap": 4000,
+        "complete": true,
+        "note": "Scanned all 18 request body(ies) across 5 session(s) — 0 from the Parquet store, 18 from the raw spool (drained history stays in evidence)."
+      }
+    },
+    "lookback_bookkeeping": {
+      "sessionId": "sess-delta",
+      "accountUuid": "acct-1",
+      "model": "claude-opus-5",
+      "minTokens": 100,
+      "systematicThreshold": 3,
+      "turnsInSession": 4,
+      "turnsClassified": 2,
+      "totalCacheCreateTokens": 550000,
+      "events": [
+        {
+          "turn": 1,
+          "ts": "2026-08-20T16:00:00.000Z",
+          "cause": "COLD_START",
+          "culpritLayer": "timing",
+          "culpritId": "timing:COLD_START",
+          "culprit": "first observed turn for this session (cold cache warm)",
+          "cacheCreateTokens": 50000,
+          "cacheReadTokens": 1000,
+          "inputTokens": 12,
+          "outputTokens": 340,
+          "costUsd": 0.3125,
+          "ttlTier": "none",
+          "model": "claude-opus-5",
+          "remediation": "A cold cache warm (first turn / resume / no prior cached prefix). Expected once per session; not an avoidable per-turn break."
+        },
+        {
+          "turn": 3,
+          "ts": "2026-08-20T16:02:00.000Z",
+          "cause": "COLD_START",
+          "culpritLayer": "timing",
+          "culpritId": "timing:COLD_START",
+          "culprit": "no cache_read this turn — nothing cached to break (cold warm)",
+          "cacheCreateTokens": 500000,
+          "cacheReadTokens": 0,
+          "inputTokens": 12,
+          "outputTokens": 340,
+          "costUsd": 3.125,
+          "gapMinutes": 1,
+          "ttlTier": "none",
+          "model": "claude-opus-5",
+          "remediation": "A cold cache warm (first turn / resume / no prior cached prefix). Expected once per session; not an avoidable per-turn break."
+        }
+      ],
+      "causeHistogram": [
+        {
+          "cause": "COLD_START",
+          "events": 2,
+          "cacheCreateTokens": 550000
+        }
+      ],
+      "repeatOffenders": [
+        {
+          "cause": "COLD_START",
+          "culpritId": "timing:COLD_START",
+          "culprit": "first observed turn for this session (cold cache warm)",
+          "occurrences": 2,
+          "totalCacheCreateTokens": 550000,
+          "medianCacheCreateTokens": 275000,
+          "totalCostUsd": 3.4375,
+          "pctOfSessionCacheCreate": 100,
+          "firstTurn": 1,
+          "lastTurn": 3,
+          "systematic": false,
+          "verdict": "COLD_START: first observed turn for this session (cold cache warm) broke the cache on 2 turn(s) (550,000 cache_creation tokens). A cold cache warm (first turn / resume / no prior cached prefix). Expected once per session; not an avoidable per-turn break."
+        }
+      ],
+      "coverage": {
+        "bodiesDir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/cbreport/spool",
+        "dirExists": true,
+        "requestFilesTotal": 18,
+        "requestFilesScanned": 18,
+        "responseFilesTotal": 18,
+        "responseFilesScanned": 18,
+        "sessionsFound": 5,
+        "scanCap": 4000,
+        "complete": true,
+        "note": "Scanned all 18 request body(ies) across 5 session(s) — 0 from the Parquet store, 18 from the raw spool (drained history stays in evidence)."
+      }
+    },
+    "hooks_evidence": {
+      "sessionId": "sess-gamma",
+      "accountUuid": "acct-1",
+      "model": "claude-opus-5",
+      "minTokens": 100,
+      "systematicThreshold": 3,
+      "turnsInSession": 4,
+      "turnsClassified": 3,
+      "totalCacheCreateTokens": 180000,
+      "events": [
+        {
+          "turn": 1,
+          "ts": "2026-08-20T12:00:00.000Z",
+          "cause": "COLD_START",
+          "culpritLayer": "timing",
+          "culpritId": "timing:COLD_START",
+          "culprit": "first observed turn for this session (cold cache warm)",
+          "cacheCreateTokens": 50000,
+          "cacheReadTokens": 1000,
+          "inputTokens": 12,
+          "outputTokens": 340,
+          "costUsd": 0.3125,
+          "ttlTier": "none",
+          "model": "claude-opus-5",
+          "remediation": "A cold cache warm (first turn / resume / no prior cached prefix). Expected once per session; not an avoidable per-turn break."
+        },
+        {
+          "turn": 2,
+          "ts": "2026-08-20T12:00:30.000Z",
+          "cause": "COMPACTION",
+          "culpritLayer": "message",
+          "culpritId": "message:COMPACTION:postcompact:msg[0] user",
+          "culprit": "conversation compaction rebuilt the message prefix at msg[0] user",
+          "cacheCreateTokens": 60000,
+          "cacheReadTokens": 1000,
+          "inputTokens": 12,
+          "outputTokens": 340,
+          "costUsd": 0.375,
+          "gapMinutes": 0.5,
+          "model": "claude-opus-5",
+          "remediation": "Conversation compaction rebuilt the message layer. Expected once per compaction; avoid compacting more than necessary.",
+          "causeEvidence": "hook"
+        },
+        {
+          "turn": 3,
+          "ts": "2026-08-20T12:01:00.000Z",
+          "cause": "COMPACTION",
+          "culpritLayer": "timing",
+          "culpritId": "timing:UNCLASSIFIED",
+          "culprit": "unlocalised re-write",
+          "cacheCreateTokens": 70000,
+          "cacheReadTokens": 1000,
+          "inputTokens": 12,
+          "outputTokens": 340,
+          "costUsd": 0.4375,
+          "gapMinutes": 0.5,
+          "model": "claude-opus-5",
+          "remediation": "Conversation compaction rebuilt the message layer. Expected once per compaction; avoid compacting more than necessary.",
+          "rawDiffSummary": "prefix byte-identical by fingerprint but cache_creation=70000; tools=0 sys=1 msg=1",
+          "causeEvidence": "hook"
+        }
+      ],
+      "causeHistogram": [
+        {
+          "cause": "COMPACTION",
+          "events": 2,
+          "cacheCreateTokens": 130000
+        },
+        {
+          "cause": "COLD_START",
+          "events": 1,
+          "cacheCreateTokens": 50000
+        }
+      ],
+      "repeatOffenders": [
+        {
+          "cause": "COMPACTION",
+          "culpritId": "timing:UNCLASSIFIED",
+          "culprit": "unlocalised re-write",
+          "occurrences": 1,
+          "totalCacheCreateTokens": 70000,
+          "medianCacheCreateTokens": 70000,
+          "totalCostUsd": 0.4375,
+          "pctOfSessionCacheCreate": 38.9,
+          "firstTurn": 3,
+          "lastTurn": 3,
+          "systematic": false,
+          "verdict": "COMPACTION: unlocalised re-write broke the cache on 1 turn(s) (70,000 cache_creation tokens). Conversation compaction rebuilt the message layer. Expected once per compaction; avoid compacting more than necessary."
+        },
+        {
+          "cause": "COMPACTION",
+          "culpritId": "message:COMPACTION:postcompact:msg[0] user",
+          "culprit": "conversation compaction rebuilt the message prefix at msg[0] user",
+          "occurrences": 1,
+          "totalCacheCreateTokens": 60000,
+          "medianCacheCreateTokens": 60000,
+          "totalCostUsd": 0.375,
+          "pctOfSessionCacheCreate": 33.3,
+          "firstTurn": 2,
+          "lastTurn": 2,
+          "systematic": false,
+          "verdict": "COMPACTION: conversation compaction rebuilt the message prefix at msg[0] user broke the cache on 1 turn(s) (60,000 cache_creation tokens). Conversation compaction rebuilt the message layer. Expected once per compaction; avoid compacting more than necessary."
+        },
+        {
+          "cause": "COLD_START",
+          "culpritId": "timing:COLD_START",
+          "culprit": "first observed turn for this session (cold cache warm)",
+          "occurrences": 1,
+          "totalCacheCreateTokens": 50000,
+          "medianCacheCreateTokens": 50000,
+          "totalCostUsd": 0.3125,
+          "pctOfSessionCacheCreate": 27.8,
+          "firstTurn": 1,
+          "lastTurn": 1,
+          "systematic": false,
+          "verdict": "COLD_START: first observed turn for this session (cold cache warm) broke the cache on 1 turn(s) (50,000 cache_creation tokens). A cold cache warm (first turn / resume / no prior cached prefix). Expected once per session; not an avoidable per-turn break."
+        }
+      ],
+      "coverage": {
+        "bodiesDir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/cbreport/spool",
+        "dirExists": true,
+        "requestFilesTotal": 18,
+        "requestFilesScanned": 18,
+        "responseFilesTotal": 18,
+        "responseFilesScanned": 18,
+        "sessionsFound": 5,
+        "scanCap": 4000,
+        "complete": true,
+        "note": "Scanned all 18 request body(ies) across 5 session(s) — 0 from the Parquet store, 18 from the raw spool (drained history stays in evidence)."
+      }
+    },
+    "hooks_absent": {
+      "sessionId": "sess-gamma",
+      "accountUuid": "acct-1",
+      "model": "claude-opus-5",
+      "minTokens": 100,
+      "systematicThreshold": 3,
+      "turnsInSession": 4,
+      "turnsClassified": 3,
+      "totalCacheCreateTokens": 180000,
+      "events": [
+        {
+          "turn": 1,
+          "ts": "2026-08-20T12:00:00.000Z",
+          "cause": "COLD_START",
+          "culpritLayer": "timing",
+          "culpritId": "timing:COLD_START",
+          "culprit": "first observed turn for this session (cold cache warm)",
+          "cacheCreateTokens": 50000,
+          "cacheReadTokens": 1000,
+          "inputTokens": 12,
+          "outputTokens": 340,
+          "costUsd": 0.3125,
+          "ttlTier": "none",
+          "model": "claude-opus-5",
+          "remediation": "A cold cache warm (first turn / resume / no prior cached prefix). Expected once per session; not an avoidable per-turn break."
+        },
+        {
+          "turn": 2,
+          "ts": "2026-08-20T12:00:30.000Z",
+          "cause": "COMPACTION",
+          "culpritLayer": "message",
+          "culpritId": "message:COMPACTION:postcompact:msg[0] user",
+          "culprit": "conversation compaction rebuilt the message prefix at msg[0] user",
+          "cacheCreateTokens": 60000,
+          "cacheReadTokens": 1000,
+          "inputTokens": 12,
+          "outputTokens": 340,
+          "costUsd": 0.375,
+          "gapMinutes": 0.5,
+          "model": "claude-opus-5",
+          "remediation": "Conversation compaction rebuilt the message layer. Expected once per compaction; avoid compacting more than necessary.",
+          "causeEvidence": "inferred"
+        },
+        {
+          "turn": 3,
+          "ts": "2026-08-20T12:01:00.000Z",
+          "cause": "UNCLASSIFIED",
+          "culpritLayer": "timing",
+          "culpritId": "timing:UNCLASSIFIED",
+          "culprit": "unlocalised re-write",
+          "cacheCreateTokens": 70000,
+          "cacheReadTokens": 1000,
+          "inputTokens": 12,
+          "outputTokens": 340,
+          "costUsd": 0.4375,
+          "gapMinutes": 0.5,
+          "model": "claude-opus-5",
+          "remediation": "A break whose cause could not be localised from the prefix diff. Inspect the attached raw diff summary and the raw bodies around this turn.",
+          "rawDiffSummary": "prefix byte-identical by fingerprint but cache_creation=70000; tools=0 sys=1 msg=1"
+        }
+      ],
+      "causeHistogram": [
+        {
+          "cause": "UNCLASSIFIED",
+          "events": 1,
+          "cacheCreateTokens": 70000
+        },
+        {
+          "cause": "COMPACTION",
+          "events": 1,
+          "cacheCreateTokens": 60000
+        },
+        {
+          "cause": "COLD_START",
+          "events": 1,
+          "cacheCreateTokens": 50000
+        }
+      ],
+      "repeatOffenders": [
+        {
+          "cause": "UNCLASSIFIED",
+          "culpritId": "timing:UNCLASSIFIED",
+          "culprit": "unlocalised re-write",
+          "occurrences": 1,
+          "totalCacheCreateTokens": 70000,
+          "medianCacheCreateTokens": 70000,
+          "totalCostUsd": 0.4375,
+          "pctOfSessionCacheCreate": 38.9,
+          "firstTurn": 3,
+          "lastTurn": 3,
+          "systematic": false,
+          "verdict": "UNCLASSIFIED: unlocalised re-write broke the cache on 1 turn(s) (70,000 cache_creation tokens). A break whose cause could not be localised from the prefix diff. Inspect the attached raw diff summary and the raw bodies around this turn."
+        },
+        {
+          "cause": "COMPACTION",
+          "culpritId": "message:COMPACTION:postcompact:msg[0] user",
+          "culprit": "conversation compaction rebuilt the message prefix at msg[0] user",
+          "occurrences": 1,
+          "totalCacheCreateTokens": 60000,
+          "medianCacheCreateTokens": 60000,
+          "totalCostUsd": 0.375,
+          "pctOfSessionCacheCreate": 33.3,
+          "firstTurn": 2,
+          "lastTurn": 2,
+          "systematic": false,
+          "verdict": "COMPACTION: conversation compaction rebuilt the message prefix at msg[0] user broke the cache on 1 turn(s) (60,000 cache_creation tokens). Conversation compaction rebuilt the message layer. Expected once per compaction; avoid compacting more than necessary."
+        },
+        {
+          "cause": "COLD_START",
+          "culpritId": "timing:COLD_START",
+          "culprit": "first observed turn for this session (cold cache warm)",
+          "occurrences": 1,
+          "totalCacheCreateTokens": 50000,
+          "medianCacheCreateTokens": 50000,
+          "totalCostUsd": 0.3125,
+          "pctOfSessionCacheCreate": 27.8,
+          "firstTurn": 1,
+          "lastTurn": 1,
+          "systematic": false,
+          "verdict": "COLD_START: first observed turn for this session (cold cache warm) broke the cache on 1 turn(s) (50,000 cache_creation tokens). A cold cache warm (first turn / resume / no prior cached prefix). Expected once per session; not an avoidable per-turn break."
+        }
+      ],
+      "coverage": {
+        "bodiesDir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/cbreport/spool",
+        "dirExists": true,
+        "requestFilesTotal": 18,
+        "requestFilesScanned": 18,
+        "responseFilesTotal": 18,
+        "responseFilesScanned": 18,
+        "sessionsFound": 5,
+        "scanCap": 4000,
+        "complete": true,
+        "note": "Scanned all 18 request body(ies) across 5 session(s) — 0 from the Parquet store, 18 from the raw spool (drained history stays in evidence)."
+      }
+    },
+    "subagent": {
+      "sessionId": "agent-kid",
+      "accountUuid": "acct-1",
+      "model": "claude-opus-5",
+      "minTokens": 100,
+      "systematicThreshold": 3,
+      "turnsInSession": 3,
+      "turnsClassified": 2,
+      "totalCacheCreateTokens": 80000,
+      "events": [
+        {
+          "turn": 1,
+          "ts": "2026-08-20T14:00:00.000Z",
+          "cause": "COLD_START",
+          "culpritLayer": "timing",
+          "culpritId": "timing:COLD_START",
+          "culprit": "first observed turn for this session (cold cache warm)",
+          "cacheCreateTokens": 45000,
+          "cacheReadTokens": 1000,
+          "inputTokens": 12,
+          "outputTokens": 340,
+          "costUsd": 0.2813,
+          "ttlTier": "none",
+          "model": "claude-opus-5",
+          "remediation": "A cold cache warm (first turn / resume / no prior cached prefix). Expected once per session; not an avoidable per-turn break."
+        },
+        {
+          "turn": 2,
+          "ts": "2026-08-20T14:01:00.000Z",
+          "cause": "NORMAL_GROWTH",
+          "culpritLayer": "message",
+          "culpritId": "growth:new-tail",
+          "culprit": "append-only growth: +1 new message block(s) cached for the first time (expected incremental write, not a break)",
+          "cacheCreateTokens": 35000,
+          "cacheReadTokens": 1000,
+          "inputTokens": 12,
+          "outputTokens": 340,
+          "costUsd": 0.2188,
+          "gapMinutes": 1,
+          "ttlTier": "none",
+          "model": "claude-opus-5",
+          "remediation": "Not a break — append-only growth: this turn's NEW content was cached for the first time (expected incremental write). Reduce it only by producing/ingesting less content per turn."
+        }
+      ],
+      "causeHistogram": [
+        {
+          "cause": "COLD_START",
+          "events": 1,
+          "cacheCreateTokens": 45000
+        },
+        {
+          "cause": "NORMAL_GROWTH",
+          "events": 1,
+          "cacheCreateTokens": 35000
+        }
+      ],
+      "repeatOffenders": [
+        {
+          "cause": "COLD_START",
+          "culpritId": "timing:COLD_START",
+          "culprit": "first observed turn for this session (cold cache warm)",
+          "occurrences": 1,
+          "totalCacheCreateTokens": 45000,
+          "medianCacheCreateTokens": 45000,
+          "totalCostUsd": 0.2813,
+          "pctOfSessionCacheCreate": 56.3,
+          "firstTurn": 1,
+          "lastTurn": 1,
+          "systematic": false,
+          "verdict": "COLD_START: first observed turn for this session (cold cache warm) broke the cache on 1 turn(s) (45,000 cache_creation tokens). A cold cache warm (first turn / resume / no prior cached prefix). Expected once per session; not an avoidable per-turn break."
+        },
+        {
+          "cause": "NORMAL_GROWTH",
+          "culpritId": "growth:new-tail",
+          "culprit": "append-only growth: +1 new message block(s) cached for the first time (expected incremental write, not a break)",
+          "occurrences": 1,
+          "totalCacheCreateTokens": 35000,
+          "medianCacheCreateTokens": 35000,
+          "totalCostUsd": 0.2188,
+          "pctOfSessionCacheCreate": 43.8,
+          "firstTurn": 2,
+          "lastTurn": 2,
+          "systematic": false,
+          "verdict": "NORMAL_GROWTH: append-only growth: +1 new message block(s) cached for the first time (expected incremental write, not a break) broke the cache on 1 turn(s) (35,000 cache_creation tokens). Not a break — append-only growth: this turn's NEW content was cached for the first time (expected incremental write). Reduce it only by producing/ingesting less content per turn."
+        }
+      ],
+      "coverage": {
+        "bodiesDir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/cbreport/spool",
+        "dirExists": true,
+        "requestFilesTotal": 18,
+        "requestFilesScanned": 18,
+        "responseFilesTotal": 18,
+        "responseFilesScanned": 18,
+        "sessionsFound": 5,
+        "scanCap": 4000,
+        "complete": true,
+        "note": "Scanned all 18 request body(ies) across 5 session(s) — 0 from the Parquet store, 18 from the raw spool (drained history stays in evidence). Resolved 'agent-kid' as a sub-agent CHILD via its subagents transcript: 3 of parent sess-parent's 3 scanned turn(s) belong to this child (2 child response id(s) harvested from the transcript)."
+      }
+    },
+    "subagent_missing": {
+      "minTokens": 100,
+      "systematicThreshold": 3,
+      "turnsInSession": 0,
+      "turnsClassified": 0,
+      "totalCacheCreateTokens": 0,
+      "events": [],
+      "causeHistogram": [],
+      "repeatOffenders": [],
+      "coverage": {
+        "bodiesDir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/cbreport/spool",
+        "dirExists": true,
+        "requestFilesTotal": 18,
+        "requestFilesScanned": 18,
+        "responseFilesTotal": 18,
+        "responseFilesScanned": 18,
+        "sessionsFound": 5,
+        "scanCap": 4000,
+        "complete": true,
+        "note": "Scanned all 18 request body(ies) across 5 session(s) — 0 from the Parquet store, 18 from the raw spool (drained history stays in evidence). 'agent-nope' looks like a sub-agent child id, but no subagents transcript (or no scanned parent turn) matched it — child timelines resolve via <projects>/<mangled>/<parentSessionId>/subagents/agent-nope.jsonl plus the parent's raw bodies."
+      }
+    },
+    "unknown_session": {
+      "minTokens": 100,
+      "systematicThreshold": 3,
+      "turnsInSession": 0,
+      "turnsClassified": 0,
+      "totalCacheCreateTokens": 0,
+      "events": [],
+      "causeHistogram": [],
+      "repeatOffenders": [],
+      "coverage": {
+        "bodiesDir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/cbreport/spool",
+        "dirExists": true,
+        "requestFilesTotal": 18,
+        "requestFilesScanned": 18,
+        "responseFilesTotal": 18,
+        "responseFilesScanned": 18,
+        "sessionsFound": 5,
+        "scanCap": 4000,
+        "complete": true,
+        "note": "Scanned all 18 request body(ies) across 5 session(s) — 0 from the Parquet store, 18 from the raw spool (drained history stays in evidence)."
+      }
+    },
+    "no_evidence": {
+      "minTokens": 100,
+      "systematicThreshold": 3,
+      "turnsInSession": 0,
+      "turnsClassified": 0,
+      "totalCacheCreateTokens": 0,
+      "events": [],
+      "causeHistogram": [],
+      "repeatOffenders": [],
+      "coverage": {
+        "bodiesDir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/cbreport/no-such-spool",
+        "dirExists": false,
+        "requestFilesTotal": 0,
+        "requestFilesScanned": 0,
+        "responseFilesTotal": 0,
+        "responseFilesScanned": 0,
+        "sessionsFound": 0,
+        "scanCap": 4000,
+        "complete": true,
+        "note": "No raw-body evidence: neither /Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/cbreport/no-such-spool nor the Parquet store at /Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/cbreport/no-such-store exists — set OTEL_LOG_RAW_API_BODIES to capture bodies."
+      }
+    },
+    "empty_spool": {
+      "minTokens": 100,
+      "systematicThreshold": 3,
+      "turnsInSession": 0,
+      "turnsClassified": 0,
+      "totalCacheCreateTokens": 0,
+      "events": [],
+      "causeHistogram": [],
+      "repeatOffenders": [],
+      "coverage": {
+        "bodiesDir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/cbreport/empty-spool",
+        "dirExists": true,
+        "requestFilesTotal": 0,
+        "requestFilesScanned": 0,
+        "responseFilesTotal": 0,
+        "responseFilesScanned": 0,
+        "sessionsFound": 0,
+        "scanCap": 4000,
+        "complete": true,
+        "note": "Scanned all 0 request body(ies) across 0 session(s) — 0 from the Parquet store, 0 from the raw spool (drained history stays in evidence)."
+      }
+    },
+    "window_echo": {
+      "minTokens": 100,
+      "systematicThreshold": 3,
+      "turnsInSession": 0,
+      "turnsClassified": 0,
+      "totalCacheCreateTokens": 0,
+      "events": [],
+      "causeHistogram": [],
+      "repeatOffenders": [],
+      "coverage": {
+        "bodiesDir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/cbreport/empty-spool",
+        "dirExists": true,
+        "requestFilesTotal": 0,
+        "requestFilesScanned": 0,
+        "responseFilesTotal": 0,
+        "responseFilesScanned": 0,
+        "sessionsFound": 0,
+        "scanCap": 4000,
+        "windowHours": 24,
+        "complete": true,
+        "note": "Scanned all 0 request body(ies) in the last 24h across 0 session(s) — 0 from the Parquet store, 0 from the raw spool (drained history stays in evidence)."
+      }
+    }
+  }
+}

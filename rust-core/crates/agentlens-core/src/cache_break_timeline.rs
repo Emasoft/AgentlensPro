@@ -1804,3 +1804,935 @@ pub fn classify_cache_break(
     ));
     v
 }
+
+// ── The bounded scan + the timeline report (SLICE 3 of 4, TS lines 1026-1649) ─────
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+use agentlens_store::bodies_evidence::{list_body_evidence, load_body_texts, EvidenceFilter, EvidenceRow};
+use indexmap::IndexMap;
+
+use crate::cache_creation_forensics::{MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, RESPONSE_SCAN_CAP};
+use crate::hook_events::{read_hook_events, HookEventFilter};
+use crate::pricing::calc_token_cost_usd;
+use crate::raw_body_context::parse_user_id;
+use crate::summarize::helpers::{iso_from_ms, js_math_round, js_to_fixed_num, num, parse_iso_ms};
+
+pub struct CacheBreakTimelineOptions {
+    /// The agentlens data dir. `bodies_dir` / `store_dir` / `hook_events_dir` default from it, the
+    /// way the TS `dataPath(...)` calls do — passed in rather than resolved from a global so a test
+    /// can point the whole read path at a fixture (the house rule the burn guard already follows).
+    pub data_dir: PathBuf,
+    pub bodies_dir: Option<PathBuf>,
+    /// The Parquet body store (default `<dataDir>/store`) — the durable half of the evidence union.
+    pub store_dir: Option<PathBuf>,
+    pub session_id: Option<String>,
+    pub scope: Option<String>,
+    pub min_tokens: Option<f64>,
+    pub window_hours: Option<f64>,
+    pub scan_cap: Option<usize>,
+    /// Cap on the returned `events` array (default 25, max 100). repeatOffenders/causeHistogram are
+    /// unaffected.
+    pub top_n: Option<f64>,
+    /// Claude projects roots searched for a sub-agent child's transcript (test override; defaults
+    /// to the same roots the log reader ingests from).
+    pub projects_dirs: Option<Vec<PathBuf>>,
+    /// The lifecycle hook-event store (append-only NDJSON daily buckets), default
+    /// `<dataDir>/hook-events`. PreCompact/PostCompact events turn the COMPACTION cause from a
+    /// text-shape inference into hook-corroborated evidence; a session with no hook coverage keeps
+    /// the heuristic, tagged `inferred`.
+    pub hook_events_dir: Option<PathBuf>,
+}
+
+impl CacheBreakTimelineOptions {
+    pub fn new(data_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            data_dir: data_dir.into(),
+            bodies_dir: None,
+            store_dir: None,
+            session_id: None,
+            scope: None,
+            min_tokens: None,
+            window_hours: None,
+            scan_cap: None,
+            top_n: None,
+            projects_dirs: None,
+            hook_events_dir: None,
+        }
+    }
+}
+
+const DEFAULT_MIN_TOKENS: f64 = 5000.0;
+const SYSTEMATIC_THRESHOLD: f64 = 3.0;
+const DEFAULT_EVENTS_TOPN: f64 = 25.0;
+const MAX_EVENTS_TOPN: f64 = 100.0;
+/// Loading stays CHUNKED (32 bodies at a time, parsed then dropped) because ~200 × ~881 KB bodies
+/// in one result set is the ~176 MB memory spike this read path is suspected of killing the server
+/// with (TRDD-34B9JAZK).
+const EVIDENCE_LOAD_CHUNK: usize = 32;
+/// A child transcript beyond this is pathological — an honest miss, never a hang.
+const SUBAGENT_TRANSCRIPT_CAP: u64 = 64 * 1024 * 1024;
+/// Clock slack between the hook's server-receive ts and the API call's own timestamp.
+const COMPACTION_HOOK_SLACK_MS: f64 = 60_000.0;
+/// A PreCompact with no matching PostCompact closes after this long (the burnGuard
+/// COMPACTION_REWRITE precedent: a compaction rewrite lands within ~5min of its PreCompact).
+const COMPACTION_WINDOW_FALLBACK_MS: f64 = 5.0 * 60_000.0;
+
+fn now_ms() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0.0, |d| d.as_millis() as f64)
+}
+
+fn num_or_0(v: Option<&Value>) -> f64 {
+    v.and_then(Value::as_f64).filter(|f| f.is_finite()).unwrap_or(0.0)
+}
+
+fn str_or_none(v: Option<&Value>) -> Option<String> {
+    v.and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_owned)
+}
+
+fn median(xs: &[f64]) -> f64 {
+    if xs.is_empty() {
+        return 0.0;
+    }
+    let mut s = xs.to_vec();
+    s.sort_by(|a, b| a.partial_cmp(b).expect("token counts are never NaN"));
+    let mid = s.len() / 2;
+    if s.len() % 2 == 1 {
+        s[mid]
+    } else {
+        js_math_round((s[mid - 1] + s[mid]) / 2.0)
+    }
+}
+
+struct ScannedTurn {
+    #[allow(dead_code)] // carried for parity with the TS shape; the report never emits it
+    body_ref: String,
+    mtime_ms: f64,
+    previous_message_id: Option<String>,
+    #[allow(dead_code)] // slice 4's cross-session aggregator groups on it; the bucket key serves here
+    session_id: Option<String>,
+    account_uuid: Option<String>,
+    prefix: Option<TurnPrefix>,
+}
+
+/// `inputTokens`/`outputTokens` are additive to TRDD-6TQ2FBUR's original shape — carried so the
+/// cost-peak report can rank cause groups by ANY bucket, not just cache_creation.
+struct ResponseUsage {
+    cache_create: f64,
+    cache_read: f64,
+    ephemeral_5m: f64,
+    ephemeral_1h: f64,
+    input_tokens: f64,
+    output_tokens: f64,
+    model: Option<String>,
+    #[allow(dead_code)] // parity with the TS shape; the single-session timeline reads the turn mtime
+    ts: f64,
+}
+
+struct SessionScan {
+    by_session: IndexMap<String, Vec<ScannedTurn>>,
+    resp_by_id: HashMap<String, ResponseUsage>,
+    coverage: Value,
+}
+
+fn parse_bounded(raw: Option<&String>, max_bytes: u64) -> Option<Value> {
+    let raw = raw?;
+    if raw.len() as u64 > max_bytes {
+        return None;
+    }
+    serde_json::from_str(raw).ok()
+}
+
+/// Shared bounded scan: index every response by message id → usage, and every request into ordered
+/// per-session turns.
+///
+/// EVIDENCE = SPOOL ∪ PARQUET STORE, not raw files alone. The raw-files-only version had a measured
+/// defect that is easy to re-introduce, so it is spelled out: the ingest drain deletes a raw file
+/// the moment the store provably holds it, so this scan's history SHRANK as the drain ran — the same
+/// session showed 172 turns at 01:40 and 145 at 02:00 on 2026-08-13, and a $2.84 break event was
+/// classifiable in the first run and nonexistent in the second.
+fn scan_sessions_and_responses(
+    bodies_dir: &Path,
+    store_dir: &Path,
+    window_hours: Option<f64>,
+    scan_cap: usize,
+) -> SessionScan {
+    let spool: Option<&Path> = if bodies_dir.exists() { Some(bodies_dir) } else { None };
+    let ts_from_ms = window_hours.filter(|h| *h > 0.0).map(|h| now_ms() - h * 3_600_000.0);
+    let list = |kind: &str| -> Vec<EvidenceRow> {
+        list_body_evidence(
+            store_dir,
+            spool,
+            &EvidenceFilter { kind: Some(kind.to_owned()), ts_from_ms, ..EvidenceFilter::default() },
+        )
+        .unwrap_or_default()
+    };
+    let mut req_all = list("request");
+    let mut resp_all = list("response");
+
+    // Store rows carry the capture ts; a spool row's ts is unknown until parsed, so stamp its file
+    // mtime (the spool is small by construction — the drain keeps it at current inflow, never
+    // history). A row whose file vanished mid-scan (drained) keeps ts NONE — NOT `now`, which
+    // FABRICATED a capture ts and pulled a stale drained call into live windows. Null rows are
+    // excluded from any window below and sort last unwindowed.
+    let stamp = |rows: &mut [EvidenceRow]| {
+        let Some(spool) = spool else { return };
+        for r in rows.iter_mut() {
+            if r.ts_ms.is_some() {
+                continue;
+            }
+            if let Ok(md) = std::fs::metadata(spool.join(&r.src_name)) {
+                if let Ok(t) = md.modified() {
+                    if let Ok(d) = t.duration_since(std::time::UNIX_EPOCH) {
+                        r.ts_ms = Some(d.as_millis() as f64);
+                    }
+                }
+            }
+        }
+    };
+    stamp(&mut req_all);
+    stamp(&mut resp_all);
+
+    let recent = |rows: &[EvidenceRow]| -> (Vec<EvidenceRow>, usize) {
+        let matched: Vec<EvidenceRow> = match ts_from_ms {
+            None => rows.to_vec(),
+            Some(from) => rows.iter().filter(|r| r.ts_ms.is_some_and(|t| t >= from)).cloned().collect(),
+        };
+        let mut sorted = matched.clone();
+        // Descending by ts; a null ts sorts as 0, i.e. last — the TS `(b.tsMs ?? 0) - (a.tsMs ?? 0)`.
+        sorted.sort_by(|a, b| {
+            b.ts_ms.unwrap_or(0.0).partial_cmp(&a.ts_ms.unwrap_or(0.0)).expect("stamped ts are never NaN")
+        });
+        sorted.truncate(scan_cap);
+        (sorted, matched.len())
+    };
+    let (req_slice, req_matched) = recent(&req_all);
+    let (resp_slice, _) = recent(&resp_all);
+
+    // Index responses by message id → usage. Chunked load: each chunk's texts are dropped before
+    // the next chunk is fetched, so peak memory is EVIDENCE_LOAD_CHUNK bodies, never the corpus.
+    let mut resp_by_id: HashMap<String, ResponseUsage> = HashMap::new();
+    for chunk in resp_slice.chunks(EVIDENCE_LOAD_CHUNK) {
+        let mut owned = chunk.to_vec();
+        let texts = load_body_texts(store_dir, spool, &mut owned, EVIDENCE_LOAD_CHUNK).unwrap_or_default();
+        for row in &owned {
+            let Some(body) = parse_bounded(texts.get(&row.src_name), MAX_RESPONSE_BYTES) else { continue };
+            let id = str_or_none(body.get("id"));
+            let usage = body.get("usage");
+            let (Some(id), Some(usage)) = (id, usage.filter(|u| truthy(u))) else { continue };
+            let tier = usage.get("cache_creation");
+            resp_by_id.insert(
+                id,
+                ResponseUsage {
+                    cache_create: num_or_0(usage.get("cache_creation_input_tokens")),
+                    cache_read: num_or_0(usage.get("cache_read_input_tokens")),
+                    ephemeral_5m: num_or_0(tier.and_then(|t| t.get("ephemeral_5m_input_tokens"))),
+                    ephemeral_1h: num_or_0(tier.and_then(|t| t.get("ephemeral_1h_input_tokens"))),
+                    input_tokens: num_or_0(usage.get("input_tokens")),
+                    output_tokens: num_or_0(usage.get("output_tokens")),
+                    model: str_or_none(body.get("model")),
+                    ts: row.ts_ms.unwrap_or_else(now_ms),
+                },
+            );
+        }
+    }
+
+    // Parse requests → compact turns, grouped by session. Same chunk discipline.
+    let mut by_session: IndexMap<String, Vec<ScannedTurn>> = IndexMap::new();
+    for chunk in req_slice.chunks(EVIDENCE_LOAD_CHUNK) {
+        let mut owned = chunk.to_vec();
+        let texts = load_body_texts(store_dir, spool, &mut owned, EVIDENCE_LOAD_CHUNK).unwrap_or_default();
+        for row in &owned {
+            let Some(body) = parse_bounded(texts.get(&row.src_name), MAX_REQUEST_BYTES) else { continue };
+            let uid = parse_user_id(body.get("metadata").and_then(|m| m.get("user_id")).unwrap_or(&Value::Null));
+            let sid = uid.session_id.clone().unwrap_or_else(|| "(no-session)".to_owned());
+            let turn = ScannedTurn {
+                body_ref: match (row.location.as_str(), spool) {
+                    ("spool", Some(s)) => s.join(&row.src_name).to_string_lossy().into_owned(),
+                    _ => format!("store:{}", row.body_id.clone().unwrap_or_else(|| row.src_name.clone())),
+                },
+                mtime_ms: row.ts_ms.unwrap_or_else(now_ms),
+                previous_message_id: str_or_none(body.get("diagnostics").and_then(|d| d.get("previous_message_id"))),
+                session_id: uid.session_id,
+                account_uuid: uid.account_uuid,
+                prefix: extract_turn_prefix(Some(&body)),
+            };
+            by_session.entry(sid).or_default().push(turn);
+        }
+    }
+
+    let complete = req_slice.len() == req_matched;
+    let from_store = req_slice.iter().filter(|r| r.location == "store").count();
+    let sessions_found = by_session.len();
+    let window_phrase = match window_hours {
+        Some(h) if h != 0.0 => format!(" in the last {}h", fmt_js_num(h)),
+        _ => String::new(),
+    };
+    let note = if complete {
+        format!(
+            "Scanned all {req_matched} request body(ies){window_phrase} across {sessions_found} session(s) — {from_store} from the Parquet store, {} from the raw spool (drained history stays in evidence).",
+            req_slice.len() - from_store
+        )
+    } else {
+        format!(
+            "SAMPLE: {} most-recent of {req_matched} matching request body(ies) across {sessions_found} session(s) (cap {scan_cap}; {from_store} store / {} spool). Not full history.",
+            req_slice.len(),
+            req_slice.len() - from_store
+        )
+    };
+    let coverage = coverage_value(
+        bodies_dir,
+        spool.is_some(),
+        req_all.len(),
+        req_slice.len(),
+        resp_all.len(),
+        resp_slice.len(),
+        sessions_found,
+        scan_cap,
+        window_hours,
+        complete,
+        note,
+    );
+    SessionScan { by_session, resp_by_id, coverage }
+}
+
+#[allow(clippy::too_many_arguments)] // one wire object, one construction site — the TS literal
+fn coverage_value(
+    bodies_dir: &Path,
+    dir_exists: bool,
+    request_files_total: usize,
+    request_files_scanned: usize,
+    response_files_total: usize,
+    response_files_scanned: usize,
+    sessions_found: usize,
+    scan_cap: usize,
+    window_hours: Option<f64>,
+    complete: bool,
+    note: String,
+) -> Value {
+    let mut m = serde_json::Map::new();
+    m.insert("bodiesDir".into(), Value::String(bodies_dir.to_string_lossy().into_owned()));
+    m.insert("dirExists".into(), Value::Bool(dir_exists));
+    m.insert("requestFilesTotal".into(), num(request_files_total as f64));
+    m.insert("requestFilesScanned".into(), num(request_files_scanned as f64));
+    m.insert("responseFilesTotal".into(), num(response_files_total as f64));
+    m.insert("responseFilesScanned".into(), num(response_files_scanned as f64));
+    m.insert("sessionsFound".into(), num(sessions_found as f64));
+    m.insert("scanCap".into(), num(scan_cap as f64));
+    // `windowHours: undefined` is DROPPED by JSON.stringify, so an absent window has no key at all.
+    if let Some(h) = window_hours {
+        m.insert("windowHours".into(), num(h));
+    }
+    m.insert("complete".into(), Value::Bool(complete));
+    m.insert("note".into(), Value::String(note));
+    Value::Object(m)
+}
+
+// ── agent-* child sessions ───────────────────────────────────────────────────────
+// A sub-agent card's session id is `agent-<agentId>`, but the child's API calls carry the PARENT's
+// session_id in metadata.user_id — so the raw-bodies scan groups every child turn under the parent,
+// an exact `sessionId: 'agent-…'` lookup matched nothing, and every child timeline came back
+// turnsClassified 0. The child's OWN transcript holds the missing link: its assistant `message.id`s
+// ARE the child's API response ids, and turn i+1 of the same stream carries turn i's response id as
+// previous_message_id.
+fn find_subagent_transcript(file_name: &str, projects_dirs: &[PathBuf]) -> Option<PathBuf> {
+    for dir in projects_dirs {
+        let Ok(projects) = std::fs::read_dir(dir) else { continue };
+        for proj in projects.flatten() {
+            let Ok(entries) = std::fs::read_dir(proj.path()) else { continue };
+            for e in entries.flatten() {
+                // Session dirs only — .jsonl siblings can never contain subagents/.
+                if !e.file_type().is_ok_and(|t| t.is_dir()) {
+                    continue;
+                }
+                let candidate = e.path().join("subagents").join(file_name);
+                if candidate.exists() {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+    None
+}
+
+struct SubagentStream {
+    /// The bucket the indices below belong to. Carried EXPLICITLY: re-finding the parent by any
+    /// property of the index list (its length, its max) is guesswork that happens to work until a
+    /// second session of a similar size exists — measured, when adding an unrelated 4-turn session
+    /// silently re-pointed this at the wrong bucket.
+    parent_session_id: String,
+    turns: Vec<usize>,
+    note: String,
+}
+
+/// Resolve `agent-<agentId>` to the subset of the PARENT's scanned turns that belong to the child.
+/// Returns INDICES into the parent's turn list (the turns themselves stay owned by `by_session`).
+fn resolve_subagent_stream(
+    session_id: &str,
+    by_session: &IndexMap<String, Vec<ScannedTurn>>,
+    projects_dirs: &[PathBuf],
+) -> Option<SubagentStream> {
+    // Accept both the served card id (`agent-<agentId>`) and the bare agentId a spawn placeholder uses.
+    let file_name = if session_id.starts_with("agent-") {
+        format!("{session_id}.jsonl")
+    } else {
+        format!("agent-{session_id}.jsonl")
+    };
+    let transcript = find_subagent_transcript(&file_name, projects_dirs)?;
+    if std::fs::metadata(&transcript).ok()?.len() > SUBAGENT_TRANSCRIPT_CAP {
+        return None;
+    }
+    let raw = std::fs::read_to_string(&transcript).ok()?;
+    // The child's assistant message ids ARE its API response ids (verified byte-exact on real data).
+    let mut ids: HashSet<String> = HashSet::new();
+    for line in raw.split('\n') {
+        if !line.contains("\"id\":\"msg_") {
+            continue;
+        }
+        let Ok(e) = serde_json::from_str::<Value>(line) else { continue };
+        if e.get("type").and_then(Value::as_str) == Some("assistant") {
+            if let Some(id) = e.get("message").and_then(|m| m.get("id")).and_then(Value::as_str) {
+                if id.starts_with("msg_") {
+                    // Owned: the parsed line is dropped at the end of the iteration. The set is one
+                    // entry per child turn, so it stays small.
+                    ids.insert(id.to_owned());
+                }
+            }
+        }
+    }
+    // The directory that CONTAINS subagents/ IS the parent session id (deterministic, no guessing).
+    let parent_session_id = transcript.parent()?.parent()?.file_name()?.to_string_lossy().into_owned();
+    let parent_turns = by_session.get(&parent_session_id)?;
+    if ids.is_empty() {
+        return None;
+    }
+    // Chain membership: a request whose previous_message_id names one of the child's responses is
+    // the child's NEXT call — that identifies every child turn except the stream head.
+    let mut chained: Vec<usize> = parent_turns
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.previous_message_id.as_deref().is_some_and(|p| ids.contains(p)))
+        .map(|(i, _)| i)
+        .collect();
+    chained.sort_by(|a, b| {
+        parent_turns[*a].mtime_ms.partial_cmp(&parent_turns[*b].mtime_ms).expect("mtimes are never NaN")
+    });
+    if chained.is_empty() {
+        return None;
+    }
+    // Stream-head recovery: the child's FIRST request produced its first message id but carries no
+    // chain link of its own. It shares the child conversation's first message block byte-for-byte
+    // with the chained turns and, being a fresh stream, has NO previous_message_id — take the
+    // latest such head before the first chained turn. (A fork child inherits the parent's history,
+    // so its head DOES carry a previous id and is simply not recovered; the chain still covers every
+    // later turn, and classify_turns marks the earliest included turn COLD_START either way.)
+    let head = &parent_turns[chained[0]];
+    let head_fp = head.prefix.as_ref().and_then(|p| p.message_blocks.first()).map(|b| b.fp.clone());
+    let mut turns = chained;
+    if let Some(head_fp) = head_fp {
+        let candidate = parent_turns
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| {
+                t.previous_message_id.is_none()
+                    && t.mtime_ms < head.mtime_ms
+                    && t.prefix.as_ref().and_then(|p| p.message_blocks.first()).is_some_and(|b| b.fp == head_fp)
+            })
+            .max_by(|(_, a), (_, b)| a.mtime_ms.partial_cmp(&b.mtime_ms).expect("mtimes are never NaN"))
+            .map(|(i, _)| i);
+        if let Some(c) = candidate {
+            turns.insert(0, c);
+        }
+    }
+    let note = format!(
+        "Resolved '{session_id}' as a sub-agent CHILD via its subagents transcript: {} of parent {parent_session_id}'s {} scanned turn(s) belong to this child ({} child response id(s) harvested from the transcript).",
+        turns.len(),
+        parent_turns.len(),
+        ids.len()
+    );
+    Some(SubagentStream { parent_session_id, turns, note })
+}
+
+// ── The timeline report ──────────────────────────────────────────────────────────
+struct CacheBreakEvent {
+    turn: usize,
+    ts: String,
+    cause: TimelineCause,
+    culprit_layer: CulpritLayer,
+    culprit_id: String,
+    /// Pointer-only human summary.
+    culprit: String,
+    cache_create_tokens: f64,
+    cache_read_tokens: f64,
+    input_tokens: f64,
+    output_tokens: f64,
+    cost_usd: f64,
+    gap_minutes: Option<f64>,
+    ttl_tier: Option<TtlTier>,
+    model: Option<String>,
+    remediation: &'static str,
+    raw_diff_summary: Option<String>,
+    confidence: Option<&'static str>,
+    /// Set ONLY on COMPACTION events. `hook` = a PreCompact/PostCompact lifecycle event for this
+    /// session corroborates the compaction (positive identification); `inferred` = the
+    /// prefix-diff/text-shape heuristic alone. Never present a hook-proven compaction and a
+    /// lookalike as the same claim. Assigned AFTER construction, so it serializes LAST.
+    cause_evidence: Option<&'static str>,
+}
+
+impl CacheBreakEvent {
+    fn to_value(&self) -> Value {
+        let mut m = serde_json::Map::new();
+        m.insert("turn".into(), num(self.turn as f64));
+        m.insert("ts".into(), Value::String(self.ts.clone()));
+        m.insert("cause".into(), Value::String(self.cause.id().to_owned()));
+        m.insert("culpritLayer".into(), Value::String(self.culprit_layer.id().to_owned()));
+        m.insert("culpritId".into(), Value::String(self.culprit_id.clone()));
+        m.insert("culprit".into(), Value::String(self.culprit.clone()));
+        m.insert("cacheCreateTokens".into(), num(self.cache_create_tokens));
+        m.insert("cacheReadTokens".into(), num(self.cache_read_tokens));
+        m.insert("inputTokens".into(), num(self.input_tokens));
+        m.insert("outputTokens".into(), num(self.output_tokens));
+        m.insert("costUsd".into(), num(self.cost_usd));
+        if let Some(g) = self.gap_minutes {
+            m.insert("gapMinutes".into(), num(g));
+        }
+        if let Some(t) = self.ttl_tier {
+            m.insert("ttlTier".into(), Value::String(t.id().to_owned()));
+        }
+        if let Some(mo) = &self.model {
+            m.insert("model".into(), Value::String(mo.clone()));
+        }
+        m.insert("remediation".into(), Value::String(self.remediation.to_owned()));
+        if let Some(r) = &self.raw_diff_summary {
+            m.insert("rawDiffSummary".into(), Value::String(r.clone()));
+        }
+        if let Some(c) = self.confidence {
+            m.insert("confidence".into(), Value::String(c.to_owned()));
+        }
+        if let Some(e) = self.cause_evidence {
+            m.insert("causeEvidence".into(), Value::String(e.to_owned()));
+        }
+        Value::Object(m)
+    }
+}
+
+/// The cache_creation billed on turn i is read from turn i's RESPONSE, whose id == turn i+1's
+/// previous_message_id (the proven chain link). `None` for the last turn (no following request).
+fn cc_of_turn<'a>(turns: &[&ScannedTurn], i: usize, resp_by_id: &'a HashMap<String, ResponseUsage>) -> Option<&'a ResponseUsage> {
+    let next = turns.get(i + 1)?;
+    let resp_id = next.previous_message_id.as_deref()?;
+    resp_by_id.get(resp_id)
+}
+
+fn session_cache_create(turns: &[&ScannedTurn], resp_by_id: &HashMap<String, ResponseUsage>) -> f64 {
+    (0..turns.len()).map(|i| cc_of_turn(turns, i, resp_by_id).map_or(0.0, |u| u.cache_create)).sum()
+}
+
+/// Classify every significant cache_creation turn of ONE session into a break event.
+fn classify_turns(turns: &[&ScannedTurn], resp_by_id: &HashMap<String, ResponseUsage>, min_tokens: f64) -> Vec<CacheBreakEvent> {
+    let mut events: Vec<CacheBreakEvent> = Vec::new();
+    // The message count at the last turn that actually WROTE to the cache — the lookback window is
+    // measured from the last WRITE, not from the previous turn. Updated for EVERY turn with usage,
+    // including the ones the minTokens floor drops, or the distance would be measured from the last
+    // *reported* write instead of the last real one.
+    let mut last_write_message_count: Option<f64> = None;
+    let now = now_ms();
+    for i in 0..turns.len() {
+        let Some(usage) = cc_of_turn(turns, i, resp_by_id) else { continue };
+        let Some(cur_prefix) = turns[i].prefix.as_ref() else { continue };
+        let blocks_added = last_write_message_count.map(|last| cur_prefix.message_count as f64 - last);
+        let timing = BreakTiming {
+            gap_ms: if i > 0 { Some(turns[i].mtime_ms - turns[i - 1].mtime_ms) } else { None },
+            cache_read_tokens: usage.cache_read,
+            cache_create_tokens: usage.cache_create,
+            ephemeral_5m_tokens: usage.ephemeral_5m,
+            ephemeral_1h_tokens: usage.ephemeral_1h,
+            blocks_added_since_last_write: blocks_added,
+        };
+        if usage.cache_create > 0.0 {
+            last_write_message_count = Some(cur_prefix.message_count as f64); // AFTER this turn's delta
+        }
+        // The floor is a cache_creation floor, so it drops every 0-token turn — including the ones
+        // whose whole finding is that they are never cached at all. Admit exactly those two
+        // diagnoses through it.
+        if usage.cache_create < min_tokens && diagnose_no_cache_activity(cur_prefix, &timing).is_none() {
+            continue;
+        }
+        let prev_prefix = if i > 0 { turns[i - 1].prefix.as_ref() } else { None };
+        // For the A→B→A interleave signature.
+        let prev2_prefix = if i > 1 { turns[i - 2].prefix.as_ref() } else { None };
+        let gap_ms = timing.gap_ms;
+        let verdict = classify_cache_break(prev_prefix, cur_prefix, &timing, prev2_prefix);
+        let ev_model = usage.model.clone().or_else(|| {
+            if cur_prefix.model.is_empty() { None } else { Some(cur_prefix.model.clone()) }
+        });
+        events.push(CacheBreakEvent {
+            turn: i + 1,
+            ts: iso_from_ms(turns[i].mtime_ms),
+            cause: verdict.cause,
+            culprit_layer: verdict.culprit_layer,
+            culprit_id: verdict.culprit_id.clone(),
+            culprit: verdict.culprit_summary.clone(),
+            cache_create_tokens: usage.cache_create,
+            cache_read_tokens: usage.cache_read,
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens,
+            cost_usd: ev_model.as_deref().map_or(0.0, |m| {
+                js_to_fixed_num(calc_token_cost_usd(0.0, 0.0, usage.cache_create, 0.0, m, 0.0, None, now), 4)
+            }),
+            gap_minutes: gap_ms.map(|g| js_to_fixed_num(g / 60000.0, 1)),
+            ttl_tier: verdict.ttl_tier,
+            model: ev_model,
+            remediation: verdict.cause.remediation(),
+            raw_diff_summary: verdict.raw_diff_summary.clone(),
+            confidence: verdict.confidence,
+            cause_evidence: None,
+        });
+    }
+    events
+}
+
+// ── Compaction hook evidence (TRDD-8ENYLEIO phase 3) ─────────────────────────────
+// The COMPACTION cause was pure inference: a text-shape regex over msg[0]. PreCompact/PostCompact
+// lifecycle hook events STATE the compaction outright, so a break they corroborate is evidence, not
+// a lookalike. The heuristic stays as the fallback — tagged `inferred`, never dropped.
+pub struct CompactionHookInfo {
+    /// PreCompact receive times, ascending. Any one at or before an event corroborates a
+    /// COMPACTION-classified break (the rebuilt prefix may first be SENT minutes later, so
+    /// corroboration is precedes-based, not window-based).
+    pub pre_times: Vec<f64>,
+    /// `[PreCompact.ts, PostCompact.ts]` pairs (fallback close after 5min). Only a break INSIDE a
+    /// window may be UPGRADED to COMPACTION.
+    pub windows: Vec<(f64, f64)>,
+}
+
+/// Read PreCompact/PostCompact hook events and group them per session. Sessions without a session
+/// id in the payload are dropped — corroboration must never guess whose compaction it saw.
+pub fn load_compaction_hook_info(hook_events_dir: &Path) -> HashMap<String, CompactionHookInfo> {
+    let mut out: HashMap<String, CompactionHookInfo> = HashMap::new();
+    let read = |ev: &str| -> Vec<Value> {
+        // 1000 = the reader's hard cap.
+        read_hook_events(hook_events_dir, &HookEventFilter { ev: Some(ev), limit: Some(1000), ..HookEventFilter::default() })
+    };
+    let by_session = |recs: Vec<Value>| -> HashMap<String, Vec<f64>> {
+        let mut m: HashMap<String, Vec<f64>> = HashMap::new();
+        for r in recs {
+            let Some(s) = r.get("session").and_then(Value::as_str).filter(|s| !s.is_empty()) else { continue };
+            m.entry(s.to_owned()).or_default().push(num_or_0(r.get("ts")));
+        }
+        for arr in m.values_mut() {
+            arr.sort_by(|a, b| a.partial_cmp(b).expect("hook ts are never NaN"));
+        }
+        m
+    };
+    let pre_by = by_session(read("PreCompact"));
+    let post_by = by_session(read("PostCompact"));
+    for (sid, pre_times) in pre_by {
+        let empty: Vec<f64> = Vec::new();
+        let post_times = post_by.get(&sid).unwrap_or(&empty);
+        let windows = pre_times
+            .iter()
+            .map(|pre| (*pre, post_times.iter().copied().find(|p| *p > *pre).unwrap_or(pre + COMPACTION_WINDOW_FALLBACK_MS)))
+            .collect();
+        out.insert(sid, CompactionHookInfo { pre_times, windows });
+    }
+    out
+}
+
+/// Annotate one session's classified events with compaction hook evidence.
+fn apply_compaction_hook_evidence(events: &mut [CacheBreakEvent], info: Option<&CompactionHookInfo>) {
+    for e in events.iter_mut() {
+        let Some(ms) = parse_iso_ms(&e.ts) else {
+            if e.cause == TimelineCause::Compaction {
+                e.cause_evidence = Some("inferred");
+            }
+            continue;
+        };
+        if e.cause == TimelineCause::Compaction {
+            let corroborated = info.is_some_and(|i| i.pre_times.iter().any(|pre| *pre <= ms + COMPACTION_HOOK_SLACK_MS));
+            e.cause_evidence = Some(if corroborated { "hook" } else { "inferred" });
+        } else if e.cause == TimelineCause::Unclassified
+            && info.is_some_and(|i| {
+                i.windows.iter().any(|(a, b)| ms >= a - COMPACTION_HOOK_SLACK_MS && ms <= b + COMPACTION_HOOK_SLACK_MS)
+            })
+        {
+            // Positive identification the regex missed: an unlocalized break DURING a hook-attested
+            // compaction window IS the compaction. Only UNCLASSIFIED is upgraded — a named
+            // mechanical cause during the window is still that cause, and overriding it would hide
+            // a real misconfiguration behind an expected one. rawDiffSummary is KEPT: the upgrade
+            // adds evidence, it does not erase any.
+            e.cause = TimelineCause::Compaction;
+            e.cause_evidence = Some("hook");
+            e.remediation = TimelineCause::Compaction.remediation();
+        }
+    }
+}
+
+fn base_report(min_tokens: f64, coverage: Value) -> Value {
+    let mut m = serde_json::Map::new();
+    m.insert("minTokens".into(), num(min_tokens));
+    m.insert("systematicThreshold".into(), num(SYSTEMATIC_THRESHOLD));
+    m.insert("turnsInSession".into(), num(0.0));
+    m.insert("turnsClassified".into(), num(0.0));
+    m.insert("totalCacheCreateTokens".into(), num(0.0));
+    m.insert("events".into(), Value::Array(Vec::new()));
+    m.insert("causeHistogram".into(), Value::Array(Vec::new()));
+    m.insert("repeatOffenders".into(), Value::Array(Vec::new()));
+    m.insert("coverage".into(), coverage);
+    Value::Object(m)
+}
+
+fn build_histogram(events: &[CacheBreakEvent]) -> Value {
+    let mut m: IndexMap<TimelineCause, (f64, f64)> = IndexMap::new();
+    for e in events {
+        let g = m.entry(e.cause).or_insert((0.0, 0.0));
+        g.0 += 1.0;
+        g.1 += e.cache_create_tokens;
+    }
+    let mut rows: Vec<(TimelineCause, f64, f64)> = m.into_iter().map(|(c, (n, t))| (c, n, t)).collect();
+    // Descending by tokens. JS `sort` is STABLE, so equal-token causes keep insertion order.
+    rows.sort_by(|a, b| b.2.partial_cmp(&a.2).expect("token counts are never NaN"));
+    Value::Array(
+        rows.into_iter()
+            .map(|(cause, n, tokens)| {
+                json!({ "cause": cause.id(), "events": num(n), "cacheCreateTokens": num(tokens) })
+            })
+            .collect(),
+    )
+}
+
+/// The CHRONIC-OFFENDER rollup (the point of the tool): group break events by (cause, culprit
+/// element identity) — NOT just cause — so two breaks from the SAME element are ONE recurring
+/// offender. Rank by recurrence × wasted tokens; flag ≥ SYSTEMATIC_THRESHOLD-turn recurrences as
+/// SYSTEMATIC with a plain-language verdict naming the exact element + its fix.
+fn build_repeat_offenders(events: &[CacheBreakEvent], session_cc: f64) -> Value {
+    struct Acc {
+        cause: TimelineCause,
+        culprit_id: String,
+        culprit: String,
+        tokens: Vec<f64>,
+        cost: f64,
+        first: usize,
+        last: usize,
+    }
+    let mut by_key: IndexMap<String, Acc> = IndexMap::new();
+    for e in events {
+        let key = format!("{}::{}", e.cause.id(), e.culprit_id);
+        let a = by_key.entry(key).or_insert_with(|| Acc {
+            cause: e.cause,
+            culprit_id: e.culprit_id.clone(),
+            culprit: e.culprit.clone(),
+            tokens: Vec::new(),
+            cost: 0.0,
+            first: e.turn,
+            last: e.turn,
+        });
+        a.tokens.push(e.cache_create_tokens);
+        a.cost += e.cost_usd;
+        a.first = a.first.min(e.turn);
+        a.last = a.last.max(e.turn);
+    }
+    let mut rows: Vec<(f64, f64, Value)> = by_key
+        .into_values()
+        .map(|a| {
+            let total: f64 = a.tokens.iter().sum();
+            let occurrences = a.tokens.len() as f64;
+            let systematic = occurrences >= SYSTEMATIC_THRESHOLD;
+            let verdict = format!(
+                "{}{}: {} broke the cache on {} turn(s) ({} cache_creation tokens). {}",
+                if systematic { "SYSTEMATIC — " } else { "" },
+                a.cause.id(),
+                a.culprit,
+                fmt_js_num(occurrences),
+                to_locale_en(total),
+                a.cause.remediation()
+            );
+            let row = json!({
+                "cause": a.cause.id(),
+                "culpritId": a.culprit_id,
+                "culprit": a.culprit,
+                "occurrences": num(occurrences),
+                "totalCacheCreateTokens": num(total),
+                "medianCacheCreateTokens": num(median(&a.tokens)),
+                "totalCostUsd": num(js_to_fixed_num(a.cost, 4)),
+                "pctOfSessionCacheCreate": num(if session_cc > 0.0 { js_to_fixed_num(100.0 * total / session_cc, 1) } else { 0.0 }),
+                "firstTurn": num(a.first as f64),
+                "lastTurn": num(a.last as f64),
+                "systematic": systematic,
+                "verdict": verdict,
+            });
+            (occurrences * total, total, row)
+        })
+        .collect();
+    // Rank by recurrence × wasted tokens (the chronic + costly first), then by tokens.
+    rows.sort_by(|a, b| {
+        b.0.partial_cmp(&a.0)
+            .expect("scores are never NaN")
+            .then(b.1.partial_cmp(&a.1).expect("token counts are never NaN"))
+    });
+    Value::Array(rows.into_iter().map(|(_, _, row)| row).collect())
+}
+
+fn build_report_for_session(
+    sid: &str,
+    turns: &[&ScannedTurn],
+    resp_by_id: &HashMap<String, ResponseUsage>,
+    min_tokens: f64,
+    coverage: Value,
+    top_n: Option<f64>,
+    hook_info: Option<&CompactionHookInfo>,
+) -> Value {
+    let session_cc = session_cache_create(turns, resp_by_id);
+    let mut events = classify_turns(turns, resp_by_id, min_tokens);
+    apply_compaction_hook_evidence(&mut events, hook_info);
+    let account_uuid = turns.iter().find_map(|t| t.account_uuid.clone());
+    let model = events.iter().find_map(|e| e.model.clone());
+
+    // Bound the returned `events` log to the most recent topN — histogram/repeatOffenders are built
+    // from the FULL set, so the aggregate picture stays exact even when the per-turn log is capped.
+    // `Math.min(Math.max(1, topN ?? 25), 100)` — clamp, and NaN cannot reach it (the option is a
+    // parsed number or absent).
+    let cap = top_n.unwrap_or(DEFAULT_EVENTS_TOPN).clamp(1.0, MAX_EVENTS_TOPN);
+    let cap_n = cap as usize;
+    let truncated = events.len() > cap_n;
+    let shown: Vec<Value> =
+        if truncated { events[events.len() - cap_n..].iter().map(CacheBreakEvent::to_value).collect() } else { events.iter().map(CacheBreakEvent::to_value).collect() };
+
+    let mut m = serde_json::Map::new();
+    m.insert("sessionId".into(), Value::String(sid.to_owned()));
+    if let Some(a) = account_uuid {
+        m.insert("accountUuid".into(), Value::String(a));
+    }
+    if let Some(mo) = model {
+        m.insert("model".into(), Value::String(mo));
+    }
+    m.insert("minTokens".into(), num(min_tokens));
+    m.insert("systematicThreshold".into(), num(SYSTEMATIC_THRESHOLD));
+    m.insert("turnsInSession".into(), num(turns.len() as f64));
+    m.insert("turnsClassified".into(), num(events.len() as f64));
+    m.insert("totalCacheCreateTokens".into(), num(events.iter().map(|e| e.cache_create_tokens).sum()));
+    let shown_len = shown.len();
+    m.insert("events".into(), Value::Array(shown));
+    if truncated {
+        m.insert(
+            "eventsNote".into(),
+            Value::String(format!(
+                "Showing the most recent {shown_len} of {} classified break events (raise topN to see more, max {}). repeatOffenders/causeHistogram below already summarize ALL {}.",
+                events.len(),
+                fmt_js_num(MAX_EVENTS_TOPN),
+                events.len()
+            )),
+        );
+    }
+    m.insert("causeHistogram".into(), build_histogram(&events));
+    m.insert("repeatOffenders".into(), build_repeat_offenders(&events, session_cc));
+    m.insert("coverage".into(), coverage);
+    Value::Object(m)
+}
+
+/// Resolve the target session: exact sessionId > scope-prefix heaviest > overall heaviest by
+/// cache_creation. Returns the session id and its turns ordered by mtime ASCENDING.
+fn resolve_target<'a>(
+    by_session: &'a IndexMap<String, Vec<ScannedTurn>>,
+    resp_by_id: &HashMap<String, ResponseUsage>,
+    opts: &CacheBreakTimelineOptions,
+) -> Option<(String, Vec<&'a ScannedTurn>)> {
+    let sorted = |turns: &'a [ScannedTurn]| -> Vec<&'a ScannedTurn> {
+        let mut v: Vec<&ScannedTurn> = turns.iter().collect();
+        v.sort_by(|a, b| a.mtime_ms.partial_cmp(&b.mtime_ms).expect("mtimes are never NaN"));
+        v
+    };
+    if let Some(sid) = &opts.session_id {
+        return by_session.get(sid).map(|t| (sid.clone(), sorted(t)));
+    }
+    let mut best: Option<(String, Vec<&ScannedTurn>, f64)> = None;
+    for (sid, turns) in by_session {
+        if sid == "(no-session)" {
+            continue;
+        }
+        if let Some(scope) = &opts.scope {
+            if !sid.starts_with(scope) {
+                continue;
+            }
+        }
+        let refs: Vec<&ScannedTurn> = turns.iter().collect();
+        let cc = session_cache_create(&refs, resp_by_id);
+        // STRICTLY greater, so the FIRST session at the maximum wins — IndexMap keeps the scan's
+        // insertion order, which is what makes that deterministic.
+        if best.as_ref().is_none_or(|b| cc > b.2) {
+            best = Some((sid.clone(), sorted(turns), cc));
+        }
+    }
+    best.map(|(sid, turns, _)| (sid, turns))
+}
+
+/// Build a session's cache-break ROOT-CAUSE timeline + repeat-offender rollup. Reconstructs the
+/// session's ordered turns from the raw OTEL bodies, classifies each significant cache_creation
+/// turn's break, and rolls repeated (cause, culprit-element) pairs into chronic offenders (flagged
+/// SYSTEMATIC at ≥ threshold turns). `agent-<agentId>` child sessions resolve via their subagents
+/// transcript. LAZY + BOUNDED: one recency-first capped scan; honest coverage.
+pub fn build_cache_break_timeline(opts: &CacheBreakTimelineOptions) -> Value {
+    let bodies_dir = opts.bodies_dir.clone().unwrap_or_else(|| crate::burn::guard::default_bodies_dir(&opts.data_dir));
+    let min_tokens = opts.min_tokens.unwrap_or(DEFAULT_MIN_TOKENS);
+    let scan_cap = opts.scan_cap.unwrap_or(RESPONSE_SCAN_CAP);
+    let dir_exists = bodies_dir.exists();
+    let store_dir = opts.store_dir.clone().unwrap_or_else(|| opts.data_dir.join("store"));
+    // The raw dir alone no longer decides whether evidence exists — drained history lives in the
+    // Parquet store, and a missing spool with a populated store is a NORMAL state, not "no data".
+    if !dir_exists && !store_dir.join("bodies").exists() {
+        let note = format!(
+            "No raw-body evidence: neither {} nor the Parquet store at {} exists — set OTEL_LOG_RAW_API_BODIES to capture bodies.",
+            bodies_dir.display(),
+            store_dir.display()
+        );
+        return base_report(
+            min_tokens,
+            coverage_value(&bodies_dir, dir_exists, 0, 0, 0, 0, 0, scan_cap, opts.window_hours, true, note),
+        );
+    }
+
+    let scan = scan_sessions_and_responses(&bodies_dir, &store_dir, opts.window_hours, scan_cap);
+    let hook_dir = opts.hook_events_dir.clone().unwrap_or_else(|| opts.data_dir.join("hook-events"));
+    let hook_info = load_compaction_hook_info(&hook_dir);
+
+    if let Some((sid, turns)) = resolve_target(&scan.by_session, &scan.resp_by_id, opts) {
+        let info = hook_info.get(&sid);
+        return build_report_for_session(&sid, &turns, &scan.resp_by_id, min_tokens, scan.coverage, opts.top_n, info);
+    }
+    if let Some(sid) = &opts.session_id {
+        // Not a metadata session id — try the sub-agent child path before giving up.
+        let default_dirs;
+        let projects_dirs: &[PathBuf] = match &opts.projects_dirs {
+            Some(d) => d,
+            None => {
+                default_dirs = agentlens_logscan::discovery::claude_projects_dirs(&agentlens_logscan::discovery::Env::from_process());
+                &default_dirs
+            }
+        };
+        if let Some(sub) = resolve_subagent_stream(sid, &scan.by_session, projects_dirs) {
+            if let Some(parent_turns) = scan.by_session.get(&sub.parent_session_id) {
+                let picked: Vec<&ScannedTurn> = sub.turns.iter().map(|i| &parent_turns[*i]).collect();
+                let mut cov = scan.coverage.clone();
+                if let Some(note) = cov.get("note").and_then(Value::as_str) {
+                    let merged = format!("{note} {}", sub.note);
+                    cov["note"] = Value::String(merged);
+                }
+                return build_report_for_session(sid, &picked, &scan.resp_by_id, min_tokens, cov, opts.top_n, hook_info.get(sid));
+            }
+        }
+        if sid.starts_with("agent-") {
+            let mut cov = scan.coverage.clone();
+            if let Some(note) = cov.get("note").and_then(Value::as_str) {
+                let merged = format!(
+                    "{note} '{sid}' looks like a sub-agent child id, but no subagents transcript (or no scanned parent turn) matched it — child timelines resolve via <projects>/<mangled>/<parentSessionId>/subagents/{sid}.jsonl plus the parent's raw bodies."
+                );
+                cov["note"] = Value::String(merged);
+            }
+            return base_report(min_tokens, cov);
+        }
+    }
+    base_report(min_tokens, scan.coverage)
+}

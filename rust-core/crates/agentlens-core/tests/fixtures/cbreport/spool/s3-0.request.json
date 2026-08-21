@@ -1,0 +1,1 @@
+{"model":"claude-opus-5","tools":[],"system":[{"type":"text","text":"system prose","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":[{"type":"text","text":"conversation opening","cache_control":{"type":"ephemeral"}}]}],"metadata":{"user_id":"{\"session_id\":\"sess-gamma\",\"account_uuid\":\"acct-1\",\"device_id\":\"dev-1\"}"}}
