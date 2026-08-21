@@ -1887,6 +1887,34 @@ async fn handle(
                         .map_err(|e| format!("cache-break scan join failed: {e}"))?;
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
+                    "run_transcript_sql" => {
+                        // DuckDB over a BOUNDED set of transcript files — blocking, so
+                        // spawn_blocking with the state lock released first.
+                        let dirs = {
+                            let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                            agentlens_logscan::discovery::claude_projects_dirs(&st.log_env)
+                        };
+                        let preset = args.get("preset").and_then(Value::as_str).map(str::to_owned);
+                        let sql = args.get("sql").and_then(Value::as_str).map(str::to_owned);
+                        let session_id = args.get("sessionId").and_then(Value::as_str).map(str::to_owned);
+                        // The MCP arg is `window`; the engine's field is `windowHours`.
+                        let window_hours = args.get("window").and_then(Value::as_f64);
+                        let limit = args.get("limit").and_then(Value::as_f64);
+                        let payload = tokio::task::spawn_blocking(move || {
+                            let opts = agentlens_store::transcript_sql::TranscriptSqlOptions {
+                                preset: preset.as_deref(),
+                                sql: sql.as_deref(),
+                                session_id: session_id.as_deref(),
+                                window_hours,
+                                limit,
+                                projects_dirs: dirs,
+                            };
+                            agentlens_store::transcript_sql::run_transcript_sql(&opts, crate::now_ms() as f64)
+                        })
+                        .await
+                        .map_err(|e| format!("transcript sql join failed: {e}"))?;
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
+                    }
                     "get_subscription_usage" => {
                         // The one tool here that talks to the network. Blocking transport + file
                         // locks, so it runs on spawn_blocking with the state lock released first.

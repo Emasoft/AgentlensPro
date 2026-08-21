@@ -20,6 +20,7 @@
 pub mod pass;
 pub mod bodies_evidence;
 pub mod sections;
+pub mod transcript_sql;
 
 use std::collections::HashSet;
 use std::fs;

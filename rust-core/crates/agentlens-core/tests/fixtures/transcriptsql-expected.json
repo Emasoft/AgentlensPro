@@ -1,0 +1,547 @@
+{
+  "now": 1787296111387,
+  "offsets": {
+    "projA/aaaaaaaa.jsonl": 1,
+    "projA/subagents/agent-bbbbbbbb.jsonl": 2,
+    "projA/torn.jsonl": 3,
+    "projB/cccccccc.jsonl": 100
+  },
+  "cases": {
+    "list": {
+      "opts": {},
+      "result": {
+        "mode": "list",
+        "presets": [
+          {
+            "name": "record_type_histogram",
+            "description": "What record shapes exist in the queried transcripts (the schema-discovery entry point)."
+          },
+          {
+            "name": "usage_by_model",
+            "description": "Per-model assistant records + token buckets (input/output/cache read/cache create)."
+          },
+          {
+            "name": "cache_heavy_turns",
+            "description": "Assistant records ranked by cache_creation tokens — where the expensive prefix re-writes are."
+          },
+          {
+            "name": "sessions_by_output",
+            "description": "Per-session assistant records + output tokens, heaviest first."
+          }
+        ],
+        "coverage": {
+          "filesTotal": 4,
+          "filesQueried": 3,
+          "windowHours": 24,
+          "note": "Queried the 3 transcript(s) modified in the last 24h (of 4 on disk) — widen with windowHours, or target one file with sessionId."
+        }
+      }
+    },
+    "both_given": {
+      "opts": {
+        "preset": "record_type_histogram",
+        "sql": "SELECT 1"
+      },
+      "result": {
+        "mode": "sql",
+        "error": "Pass preset OR sql, not both.",
+        "coverage": {
+          "filesTotal": 4,
+          "filesQueried": 3,
+          "windowHours": 24,
+          "note": "Queried the 3 transcript(s) modified in the last 24h (of 4 on disk) — widen with windowHours, or target one file with sessionId."
+        }
+      }
+    },
+    "unknown_preset": {
+      "opts": {
+        "preset": "nope"
+      },
+      "result": {
+        "mode": "preset",
+        "preset": "nope",
+        "coverage": {
+          "filesTotal": 4,
+          "filesQueried": 3,
+          "windowHours": 24,
+          "note": "Queried the 3 transcript(s) modified in the last 24h (of 4 on disk) — widen with windowHours, or target one file with sessionId."
+        },
+        "error": "Unknown preset 'nope'. Valid: record_type_histogram, usage_by_model, cache_heavy_turns, sessions_by_output"
+      }
+    },
+    "preset_record_type_histogram": {
+      "opts": {
+        "preset": "record_type_histogram"
+      },
+      "result": {
+        "mode": "preset",
+        "preset": "record_type_histogram",
+        "columns": [
+          "type",
+          "records"
+        ],
+        "rows": [
+          {
+            "type": "assistant",
+            "records": "4"
+          },
+          {
+            "type": "user",
+            "records": "3"
+          },
+          {
+            "type": "summary",
+            "records": "2"
+          },
+          {
+            "type": null,
+            "records": "1"
+          }
+        ],
+        "rowCount": 4,
+        "coverage": {
+          "filesTotal": 4,
+          "filesQueried": 3,
+          "windowHours": 24,
+          "note": "Queried the 3 transcript(s) modified in the last 24h (of 4 on disk) — widen with windowHours, or target one file with sessionId. 1 line(s) unparseable and excluded."
+        }
+      }
+    },
+    "preset_usage_by_model": {
+      "opts": {
+        "preset": "usage_by_model"
+      },
+      "result": {
+        "mode": "preset",
+        "preset": "usage_by_model",
+        "columns": [
+          "model",
+          "assistant_records",
+          "input_tokens",
+          "output_tokens",
+          "cache_read_tokens",
+          "cache_create_tokens"
+        ],
+        "rows": [
+          {
+            "model": "claude-opus-5",
+            "assistant_records": "3",
+            "input_tokens": "31",
+            "output_tokens": "502",
+            "cache_read_tokens": "504",
+            "cache_create_tokens": "14003"
+          },
+          {
+            "model": "claude-sonnet-5",
+            "assistant_records": "1",
+            "input_tokens": "7",
+            "output_tokens": "70",
+            "cache_read_tokens": "7000",
+            "cache_create_tokens": "700"
+          }
+        ],
+        "rowCount": 2,
+        "coverage": {
+          "filesTotal": 4,
+          "filesQueried": 3,
+          "windowHours": 24,
+          "note": "Queried the 3 transcript(s) modified in the last 24h (of 4 on disk) — widen with windowHours, or target one file with sessionId. 1 line(s) unparseable and excluded."
+        }
+      }
+    },
+    "preset_cache_heavy_turns": {
+      "opts": {
+        "preset": "cache_heavy_turns"
+      },
+      "result": {
+        "mode": "preset",
+        "preset": "cache_heavy_turns",
+        "columns": [
+          "filename",
+          "timestamp",
+          "model",
+          "cache_create_tokens",
+          "cache_read_tokens"
+        ],
+        "rows": [
+          {
+            "filename": "<FIXTURES>/projA/aaaaaaaa.jsonl",
+            "timestamp": "2026-01-01 00:00:02",
+            "model": "claude-opus-5",
+            "cache_create_tokens": "9000",
+            "cache_read_tokens": "400"
+          },
+          {
+            "filename": "<FIXTURES>/projA/aaaaaaaa.jsonl",
+            "timestamp": "2026-01-01 00:00:01",
+            "model": "claude-opus-5",
+            "cache_create_tokens": "5000",
+            "cache_read_tokens": "100"
+          },
+          {
+            "filename": "<FIXTURES>/projA/subagents/agent-bbbbbbbb.jsonl",
+            "timestamp": "2026-01-01 00:01:00",
+            "model": "claude-sonnet-5",
+            "cache_create_tokens": "700",
+            "cache_read_tokens": "7000"
+          },
+          {
+            "filename": "<FIXTURES>/projA/torn.jsonl",
+            "timestamp": "2026-01-01 00:02:00",
+            "model": "claude-opus-5",
+            "cache_create_tokens": "3",
+            "cache_read_tokens": "4"
+          }
+        ],
+        "rowCount": 4,
+        "coverage": {
+          "filesTotal": 4,
+          "filesQueried": 3,
+          "windowHours": 24,
+          "note": "Queried the 3 transcript(s) modified in the last 24h (of 4 on disk) — widen with windowHours, or target one file with sessionId. 1 line(s) unparseable and excluded."
+        }
+      }
+    },
+    "preset_sessions_by_output": {
+      "opts": {
+        "preset": "sessions_by_output"
+      },
+      "result": {
+        "mode": "preset",
+        "preset": "sessions_by_output",
+        "columns": [
+          "session",
+          "assistant_records",
+          "output_tokens"
+        ],
+        "rows": [
+          {
+            "session": "aaaaaaaa",
+            "assistant_records": "2",
+            "output_tokens": "500"
+          },
+          {
+            "session": "bbbbbbbb",
+            "assistant_records": "1",
+            "output_tokens": "70"
+          },
+          {
+            "session": "torn",
+            "assistant_records": "1",
+            "output_tokens": "2"
+          }
+        ],
+        "rowCount": 3,
+        "coverage": {
+          "filesTotal": 4,
+          "filesQueried": 3,
+          "windowHours": 24,
+          "note": "Queried the 3 transcript(s) modified in the last 24h (of 4 on disk) — widen with windowHours, or target one file with sessionId. 1 line(s) unparseable and excluded."
+        }
+      }
+    },
+    "raw_sql": {
+      "opts": {
+        "sql": "SELECT type, count(*) AS n FROM transcripts GROUP BY type ORDER BY type"
+      },
+      "result": {
+        "mode": "sql",
+        "columns": [
+          "type",
+          "n"
+        ],
+        "rows": [
+          {
+            "type": "assistant",
+            "n": "4"
+          },
+          {
+            "type": "summary",
+            "n": "2"
+          },
+          {
+            "type": "user",
+            "n": "3"
+          },
+          {
+            "type": null,
+            "n": "1"
+          }
+        ],
+        "rowCount": 4,
+        "coverage": {
+          "filesTotal": 4,
+          "filesQueried": 3,
+          "windowHours": 24,
+          "note": "Queried the 3 transcript(s) modified in the last 24h (of 4 on disk) — widen with windowHours, or target one file with sessionId. 1 line(s) unparseable and excluded."
+        }
+      }
+    },
+    "gate_ddl": {
+      "opts": {
+        "sql": "DROP TABLE transcripts"
+      },
+      "result": {
+        "mode": "sql",
+        "error": "Only read-only SELECT or WITH queries are allowed.",
+        "coverage": {
+          "filesTotal": 4,
+          "filesQueried": 3,
+          "windowHours": 24,
+          "note": "Queried the 3 transcript(s) modified in the last 24h (of 4 on disk) — widen with windowHours, or target one file with sessionId."
+        }
+      }
+    },
+    "gate_two_statements": {
+      "opts": {
+        "sql": "SELECT 1; SELECT 2"
+      },
+      "result": {
+        "mode": "sql",
+        "error": "Only a single statement is allowed (a second \";\" was found).",
+        "coverage": {
+          "filesTotal": 4,
+          "filesQueried": 3,
+          "windowHours": 24,
+          "note": "Queried the 3 transcript(s) modified in the last 24h (of 4 on disk) — widen with windowHours, or target one file with sessionId."
+        }
+      }
+    },
+    "gate_trailing_semicolon_ok": {
+      "opts": {
+        "sql": "SELECT 42 AS answer;"
+      },
+      "result": {
+        "mode": "sql",
+        "columns": [
+          "answer"
+        ],
+        "rows": [
+          {
+            "answer": 42
+          }
+        ],
+        "rowCount": 1,
+        "coverage": {
+          "filesTotal": 4,
+          "filesQueried": 3,
+          "windowHours": 24,
+          "note": "Queried the 3 transcript(s) modified in the last 24h (of 4 on disk) — widen with windowHours, or target one file with sessionId. 1 line(s) unparseable and excluded."
+        }
+      }
+    },
+    "gate_comment_hidden_ddl": {
+      "opts": {
+        "sql": "SELECT 1 /* x */ ; DROP TABLE transcripts"
+      },
+      "result": {
+        "mode": "sql",
+        "error": "Only a single statement is allowed (a second \";\" was found).",
+        "coverage": {
+          "filesTotal": 4,
+          "filesQueried": 3,
+          "windowHours": 24,
+          "note": "Queried the 3 transcript(s) modified in the last 24h (of 4 on disk) — widen with windowHours, or target one file with sessionId."
+        }
+      }
+    },
+    "limit_capped": {
+      "opts": {
+        "preset": "record_type_histogram",
+        "limit": 1
+      },
+      "result": {
+        "mode": "preset",
+        "preset": "record_type_histogram",
+        "columns": [
+          "type",
+          "records"
+        ],
+        "rows": [
+          {
+            "type": "assistant",
+            "records": "4"
+          }
+        ],
+        "rowCount": 1,
+        "coverage": {
+          "filesTotal": 4,
+          "filesQueried": 3,
+          "windowHours": 24,
+          "note": "Queried the 3 transcript(s) modified in the last 24h (of 4 on disk) — widen with windowHours, or target one file with sessionId. Rows capped at 1 — pass a larger limit (max 2000). 1 line(s) unparseable and excluded."
+        }
+      }
+    },
+    "session_fast_path": {
+      "opts": {
+        "sessionId": "cccccccc",
+        "preset": "record_type_histogram"
+      },
+      "result": {
+        "mode": "preset",
+        "preset": "record_type_histogram",
+        "columns": [
+          "type",
+          "records"
+        ],
+        "rows": [
+          {
+            "type": "assistant",
+            "records": "1"
+          }
+        ],
+        "rowCount": 1,
+        "coverage": {
+          "filesTotal": 4,
+          "filesQueried": 1,
+          "note": "Queried the transcript of session cccccccc (1 file(s) of 4 on disk)."
+        }
+      }
+    },
+    "session_missing": {
+      "opts": {
+        "sessionId": "nosuchsession",
+        "preset": "record_type_histogram"
+      },
+      "result": {
+        "mode": "preset",
+        "preset": "record_type_histogram",
+        "coverage": {
+          "filesTotal": 4,
+          "filesQueried": 0,
+          "note": "Queried the transcript of session nosuchsession (0 file(s) of 4 on disk)."
+        },
+        "error": "No transcript file found for session nosuchsession."
+      }
+    },
+    "window_empty": {
+      "opts": {
+        "windowHours": 0.001,
+        "preset": "record_type_histogram"
+      },
+      "result": {
+        "mode": "preset",
+        "preset": "record_type_histogram",
+        "coverage": {
+          "filesTotal": 4,
+          "filesQueried": 0,
+          "windowHours": 0.001,
+          "note": "Queried the 0 transcript(s) modified in the last 0.001h (of 4 on disk) — widen with windowHours, or target one file with sessionId."
+        },
+        "error": "No transcripts modified in the last 0.001h — widen windowHours or pass a sessionId."
+      }
+    },
+    "window_wide": {
+      "opts": {
+        "windowHours": 200,
+        "preset": "record_type_histogram"
+      },
+      "result": {
+        "mode": "preset",
+        "preset": "record_type_histogram",
+        "columns": [
+          "type",
+          "records"
+        ],
+        "rows": [
+          {
+            "type": "assistant",
+            "records": "5"
+          },
+          {
+            "type": "user",
+            "records": "3"
+          },
+          {
+            "type": "summary",
+            "records": "2"
+          },
+          {
+            "type": null,
+            "records": "1"
+          }
+        ],
+        "rowCount": 4,
+        "coverage": {
+          "filesTotal": 4,
+          "filesQueried": 4,
+          "windowHours": 200,
+          "note": "Queried the 4 transcript(s) modified in the last 200h (of 4 on disk) — widen with windowHours, or target one file with sessionId. 1 line(s) unparseable and excluded."
+        }
+      }
+    },
+    "type_probe": {
+      "opts": {
+        "sql": "SELECT 42 AS i32, 42::BIGINT AS i64, 1.5 AS dec21, 1.5::FLOAT AS flt, 1.5::DOUBLE AS dbl, (-12.340)::DECIMAL(8,3) AS dec83, 0.1::DOUBLE + 0.2::DOUBLE AS dbl_ulp, true AS b, NULL AS n, 'x' AS s, [1,2] AS lst, {'a': 1} AS strct, 42::HUGEINT AS huge, TIMESTAMP '2026-01-01 00:00:00' AS ts, TIMESTAMP '2026-01-01 00:00:00.25' AS ts_frac, DATE '2026-01-02' AS dt"
+      },
+      "result": {
+        "mode": "sql",
+        "columns": [
+          "i32",
+          "i64",
+          "dec21",
+          "flt",
+          "dbl",
+          "dec83",
+          "dbl_ulp",
+          "b",
+          "n",
+          "s",
+          "lst",
+          "strct",
+          "huge",
+          "ts",
+          "ts_frac",
+          "dt"
+        ],
+        "rows": [
+          {
+            "i32": 42,
+            "i64": "42",
+            "dec21": "1.5",
+            "flt": 1.5,
+            "dbl": 1.5,
+            "dec83": "-12.340",
+            "dbl_ulp": 0.30000000000000004,
+            "b": true,
+            "n": null,
+            "s": "x",
+            "lst": [
+              1,
+              2
+            ],
+            "strct": {
+              "a": 1
+            },
+            "huge": "42",
+            "ts": "2026-01-01 00:00:00",
+            "ts_frac": "2026-01-01 00:00:00.25",
+            "dt": "2026-01-02"
+          }
+        ],
+        "rowCount": 1,
+        "coverage": {
+          "filesTotal": 4,
+          "filesQueried": 3,
+          "windowHours": 24,
+          "note": "Queried the 3 transcript(s) modified in the last 24h (of 4 on disk) — widen with windowHours, or target one file with sessionId. 1 line(s) unparseable and excluded."
+        }
+      }
+    },
+    "binder_error": {
+      "opts": {
+        "sql": "SELECT nosuchcolumn FROM transcripts"
+      },
+      "result": {
+        "mode": "sql",
+        "error": "query failed: Binder Error: Referenced column \"nosuchcolumn\" not found in FROM clause!\nCandidate bindings: \"filename\"\n\nLINE 1: SELECT * FROM (SELECT nosuchcolumn FROM transcripts) LIMIT 51\n                              ^",
+        "coverage": {
+          "filesTotal": 4,
+          "filesQueried": 3,
+          "windowHours": 24,
+          "note": "Queried the 3 transcript(s) modified in the last 24h (of 4 on disk) — widen with windowHours, or target one file with sessionId."
+        }
+      }
+    }
+  }
+}
