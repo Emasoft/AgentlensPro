@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-21T07:38:27+0200
+updated: 2026-08-21T08:57:45+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -1590,9 +1590,43 @@ release-via: publish
   has its own end-to-end oracle against a REAL TS-written Parquet store); and slices 3+4 SHARE one
   fixture tree because all three builders read the same scan — a second spool would let them drift
   while both stayed green.
-- **NEXT (P4x.2d continued): 5 of 53 remain, and EVERY ONE needs a big engine or a SQL binding —
-  the cheap tail is gone.** ~~Immediate: `cacheBreakTimeline`~~ **— LANDED, all four slices; the
-  queue below is now `subscriptionUsage` FIRST, then the SQL group.** (historical: 1,927 → 2 tools:
+- **P4x.2m/n DONE — `subscriptionUsage` IS FULLY PORTED (2 slices, 797 TS lines + 90
+  `keychainConsent`). 49 of 53.** Slice A the pure half (`cb9a51e`: normalizer, cache-record
+  boundary, staleness predicates, cooldown arithmetic, renderer); slice B the orchestration +
+  transport + `get_subscription_usage` WIRED (`cf22f2a`). Gate: 449 tests, clippy 28, both pnpm
+  checks OK.
+  **The TS has NO injectable seam** (inline global `fetch`, inline `getCurrentAccount()`), so the
+  Rust takes `fetch_usage` / `fetch_identity` / `claimed_label` as parameters and the production
+  closures are two lines each. That is the reusable shape for any remaining network code.
+  **THE ORDER IS THE CONTRACT and the oracle pins it, not the prose.** `loadToken` runs BEFORE any
+  cached reading is trusted: serving a within-TTL cache without knowing whose token is loaded is how
+  an account switch goes invisible — the numbers stay put and describe the wrong account. Two
+  fixture cases exist ONLY to hold the order still (`fresh_beats_cooldown`; `null_fp_fresh_cache`,
+  where `currentFp !== null` is a SEPARATE clause and dropping it makes `null === null` look fresh).
+  **Both were added AFTER the first falsification pass found those mutations unobservable** — the
+  same lesson as `sess-delta`, now applied without needing to relearn it. Six mutations redden.
+  **Side effects are asserted, not just the returned reading:** which files exist afterwards,
+  whether the lock was released, how many requests were attempted. A port that serves the right
+  number from the WRONG branch returns an identical `usage`; only the call count and the on-disk
+  files catch it.
+  **`ureq` was already in the lock** as libduckdb-sys' build dep, so the one outbound call costs no
+  new crate and no OpenSSL. `http_status_as_error(false)` is load-bearing — the 429 branch needs the
+  response's `Retry-After`, and a client that turns 4xx into an error collapses every rate-limit
+  into the one shape that does NOT arm a cooldown.
+  **THE IDENTITY TRAP REPEATED IN A NEW SHAPE, and staging caught it again:** the oracle's first
+  generation baked in the generating machine's own account, because `getCurrentAccount()` reads
+  `~/.claude.json` for the claimed label — a personal address in a committed fixture AND a file that
+  regenerates differently per machine. The generator now points `HOME` at its empty fixture root.
+  **Any generator that lets the module read the real environment will embed this machine in the
+  oracle; redirect `HOME`/`CLAUDE_CONFIG_DIR`/`AGENTLENS_DATA_DIR` BEFORE the import.**
+  **Unobservable single-process, stated rather than faked:** the TOCTOU re-check under the lock
+  cannot be exercised by a single-threaded oracle (nothing changes between the two reads). It is
+  ported and commented; no fixture claims to cover it.
+- **NEXT (P4x.2d continued): 4 of 53 remain — the SQL group, and EVERY ONE needs a SQL binding.**
+  ~~Immediate: `cacheBreakTimeline`~~ ~~then `subscriptionUsage`~~ **— BOTH LANDED; what is left is
+  `run_diagnostics_sql`, `run_transcript_sql`, `compare_configs`, `burn_seismic`. DuckDB is
+  available (`agentlens-store` bundles it and `agentlens-core` depends on that crate), so "needs
+  SQL" is not blocked.** (historical: 1,927 → 2 tools:
   `get_cache_break_timeline` + `get_cache_break_causes`, and it also unblocks the `groupBy='cause'`
   branch above). **SLICE IT IN FOUR — 1,927 lines will not fit one context alongside an oracle and
   a parity test.** The seams are already clean in the TS, by line:
