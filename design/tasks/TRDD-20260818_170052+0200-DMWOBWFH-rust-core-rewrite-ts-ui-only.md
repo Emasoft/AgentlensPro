@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-21T12:16:38+0200
+updated: 2026-08-21T14:41:14+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -1685,17 +1685,42 @@ release-via: publish
   published set), and `neg_cmp_op_on_partial_ord` on the `!(mean > 0)` guards — those are NaN
   guards, and the "fixed" `<=` form would return a NaN p-value that is neither significant nor
   insignificant and would poison the FDR step-up.
-- **NEXT (P4x.2d continued): 3 of 53 remain — `run_diagnostics_sql`, `compare_configs`,
-  `burn_seismic`.**
-  **`burn_seismic` is INDEPENDENT of the blocked decision below and is the one to continue** — it
-  reads transcripts directly, not the fact tables. Slices A (renderer) and the stats library are
-  DONE; what remains is **SLICE C** (`resolveSeismicFiles`, TS 77-138 + the DuckDB query and
-  bucket/cell/session aggregation, TS 446-572) and **SLICE D** (the analysis, TS 573-922).
-  **Two facts already settled for slice C:** (1) the TS's own `type Query = (sql) => rows` IS the
-  seam — `burn_seismic` stays in `agentlens-core` (it needs `lookup_rates` and
-  `resolve_project_slugs`) and takes a query closure, with the DuckDB implementation exported from
-  `agentlens-store`; (2) burnSeismic calls `getRowObjects()`, NOT `getRowObjectsJson()`, so the
-  BIGINT-as-string mapping that governs `transcript_sql` does NOT apply — do not carry it over.
+- **P4x.2s/t DONE — `burnSeismic` IS FULLY PORTED (4 slices + the stats library). 51 of 53.**
+  Slice C = `resolveSeismicFiles` + the SQL text (`28c8f85`); slice D = the whole analysis (TS
+  383-922) + `burn_seismic` WIRED in `ui.rs`. The `Query` seam is the design: `burn_seismic` lives
+  in `agentlens-core` (it needs `lookup_rates` and `resolve_project_slugs`) and takes a
+  `(sql) -> rows` closure; `agentlens_store::transcript_sql::DuckSession` is the production
+  implementation, in the crate that owns the binding.
+  **ONE SESSION, not one connection per query** — the three statements (aggregation, torn-line
+  probe, spawn listing) are only consistent with each other if they see the same connection.
+  **`getRowObjects()`, NOT `getRowObjectsJson()`:** burnSeismic uses the former, so the
+  BIGINT-as-STRING rule that governs `run_transcript_sql` does NOT apply here — the store exposes
+  `cell_to_json_native` for exactly this, and using one converter for both would break whichever
+  tool it was not written for.
+  **THE ORACLE IS END-TO-END BECAUSE NOTHING IN BETWEEN IS EXPORTED** — the aggregation, the grid,
+  the per-bucket nulls and the event assembly are all locals, observable only through the returned
+  object, so that object IS the contract. The fixture's transcripts are synthetic and FIXED IN TIME
+  (`sinceIso` is explicit), and it produces a REAL detection — 24 buckets, 1 event, 2 significant
+  buckets, 1 spawn inside the mainshock — because an all-quiet series would exercise only the empty
+  branches. `pvalueEngine: 'internal'` is not a convenience: the `auto` default probes for the
+  `stochastic` community extension and would try to INSTALL it over the network.
+  **A SECOND UNSPECIFIED-ORDER TRAP, and it is the same lesson as the ORDER BY tie:** `culprits`
+  and `sessions` rank on an amount that TIES routinely (a steady spender's event excess is exactly
+  0), and both engines then fall back to their sort's stability — i.e. to DuckDB's intra-bucket
+  GROUP order, which differs between the node binding's DuckDB and the Rust crate's. The test
+  re-breaks the tie with a deterministic key on BOTH sides, so it pins what the CODE decides and not
+  what the engine emitted; a genuine ranking difference still fails.
+  Three falsifications redden: inactive buckets keeping their placeholder intensity p (0.5 instead
+  of 1, diluting Fisher for the whole series), the spawn window comparing raw VARCHAR timestamps
+  instead of CAST ones (the documented live-fleet bug — '…T11:27' vs '… 11:27' diverges at char 11,
+  so EVERY line of the day passes; here the spawn count goes 1 → 0), and emitting `mainshock: null`
+  instead of OMITTING the key when there is no event (`JSON.stringify` drops an `undefined`).
+- **NEXT (P4x.2d continued): 2 of 53 remain — `run_diagnostics_sql` and `compare_configs`.**
+  **Both need `forensicsIndex` SLICE B** — the bounded body scan plus the fact-table WRITER (TS
+  263-701: `scanApiCallEvents`, `loadSpawnMap`/`resolveSpawn`, `indexApiCalls`, `ensureFreshIndex`).
+  SLICE A (the pure half) is landed. Port SLICE B ONCE, then the two tools are shapers over it:
+  `run_diagnostics_sql` (`src/forensicsSql.ts`, 321) and `compare_configs`
+  (`src/forensicsCompare.ts`, 253).
   **The fact-store engine question is DECIDED — keep SQLite, via `rusqlite`.** `forensicsIndex`
   SLICE B writes fact tables (`api_calls`, `injections`, `content`) that both tools then query, today
   through **sql.js SQLite** (`src/forensicsDb.ts`), where `defaultMainDb()` is

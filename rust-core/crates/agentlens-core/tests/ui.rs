@@ -1436,9 +1436,9 @@ fn mcp_endpoint_serves_the_frozen_tool_schemas_and_names_unported_tools() {
     // NB: this name has to be swapped each time the named tool gets ported — it named
     // `get_recent_sessions` until that landed, and the failure looked like a broken endpoint rather
     // than a stale test. Pick one from the BOTTOM of the remaining list.
-    let called = rpc("tools/call", r#"{"name":"burn_seismic","arguments":{}}"#);
+    let called = rpc("tools/call", r#"{"name":"compare_configs","arguments":{}}"#);
     let msg = called["error"]["message"].as_str().unwrap_or("");
-    assert!(msg.contains("burn_seismic") && msg.contains("not yet implemented"), "{called}");
+    assert!(msg.contains("compare_configs") && msg.contains("not yet implemented"), "{called}");
 
     // A tool that does not exist at all is a DIFFERENT error — the caller must be able to tell
     // "you typo'd" from "we have not ported that yet".

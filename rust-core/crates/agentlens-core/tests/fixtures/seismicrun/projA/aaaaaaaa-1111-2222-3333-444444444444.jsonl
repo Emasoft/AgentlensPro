@@ -1,0 +1,27 @@
+{"type":"assistant","timestamp":"2026-01-01T00:00:10.000Z","message":{"model":"claude-opus-5","usage":{"input_tokens":100,"cache_creation_input_tokens":2000,"cache_read_input_tokens":20000,"output_tokens":300}}}
+{"type":"assistant","timestamp":"2026-01-01T00:05:10.000Z","message":{"model":"claude-opus-5","usage":{"input_tokens":100,"cache_creation_input_tokens":2000,"cache_read_input_tokens":20000,"output_tokens":300}}}
+{"type":"assistant","timestamp":"2026-01-01T00:10:10.000Z","message":{"model":"claude-opus-5","usage":{"input_tokens":100,"cache_creation_input_tokens":2000,"cache_read_input_tokens":20000,"output_tokens":300}}}
+{"type":"assistant","timestamp":"2026-01-01T00:15:10.000Z","message":{"model":"claude-opus-5","usage":{"input_tokens":100,"cache_creation_input_tokens":2000,"cache_read_input_tokens":20000,"output_tokens":300}}}
+{"type":"assistant","timestamp":"2026-01-01T00:20:10.000Z","message":{"model":"claude-opus-5","usage":{"input_tokens":100,"cache_creation_input_tokens":2000,"cache_read_input_tokens":20000,"output_tokens":300}}}
+{"type":"assistant","timestamp":"2026-01-01T00:25:10.000Z","message":{"model":"claude-opus-5","usage":{"input_tokens":100,"cache_creation_input_tokens":2000,"cache_read_input_tokens":20000,"output_tokens":300}}}
+{"type":"assistant","timestamp":"2026-01-01T00:30:10.000Z","message":{"model":"claude-opus-5","usage":{"input_tokens":100,"cache_creation_input_tokens":2000,"cache_read_input_tokens":20000,"output_tokens":300}}}
+{"type":"assistant","timestamp":"2026-01-01T00:35:10.000Z","message":{"model":"claude-opus-5","usage":{"input_tokens":100,"cache_creation_input_tokens":2000,"cache_read_input_tokens":20000,"output_tokens":300}}}
+{"type":"assistant","timestamp":"2026-01-01T00:40:10.000Z","message":{"model":"claude-opus-5","usage":{"input_tokens":100,"cache_creation_input_tokens":2000,"cache_read_input_tokens":20000,"output_tokens":300}}}
+{"type":"assistant","timestamp":"2026-01-01T00:45:10.000Z","message":{"model":"claude-opus-5","usage":{"input_tokens":100,"cache_creation_input_tokens":2000,"cache_read_input_tokens":20000,"output_tokens":300}}}
+{"type":"assistant","timestamp":"2026-01-01T00:50:10.000Z","message":{"model":"claude-opus-5","usage":{"input_tokens":100,"cache_creation_input_tokens":2000,"cache_read_input_tokens":20000,"output_tokens":300}}}
+{"type":"assistant","timestamp":"2026-01-01T00:55:10.000Z","message":{"model":"claude-opus-5","usage":{"input_tokens":100,"cache_creation_input_tokens":2000,"cache_read_input_tokens":20000,"output_tokens":300}}}
+{"type":"assistant","timestamp":"2026-01-01T01:00:10.000Z","message":{"model":"claude-opus-5","usage":{"input_tokens":100,"cache_creation_input_tokens":2000,"cache_read_input_tokens":20000,"output_tokens":300}}}
+{"type":"assistant","timestamp":"2026-01-01T01:05:10.000Z","message":{"model":"claude-opus-5","usage":{"input_tokens":100,"cache_creation_input_tokens":2000,"cache_read_input_tokens":20000,"output_tokens":300}}}
+{"type":"assistant","timestamp":"2026-01-01T01:10:10.000Z","message":{"model":"claude-opus-5","usage":{"input_tokens":100,"cache_creation_input_tokens":2000,"cache_read_input_tokens":20000,"output_tokens":300}}}
+{"type":"assistant","timestamp":"2026-01-01T01:15:10.000Z","message":{"model":"claude-opus-5","usage":{"input_tokens":100,"cache_creation_input_tokens":2000,"cache_read_input_tokens":20000,"output_tokens":300}}}
+{"type":"assistant","timestamp":"2026-01-01T01:20:10.000Z","message":{"model":"claude-opus-5","usage":{"input_tokens":100,"cache_creation_input_tokens":2000,"cache_read_input_tokens":20000,"output_tokens":300}}}
+{"type":"assistant","timestamp":"2026-01-01T01:25:10.000Z","message":{"model":"claude-opus-5","usage":{"input_tokens":100,"cache_creation_input_tokens":2000,"cache_read_input_tokens":20000,"output_tokens":300}}}
+{"type":"assistant","timestamp":"2026-01-01T01:30:10.000Z","message":{"model":"claude-opus-5","usage":{"input_tokens":100,"cache_creation_input_tokens":2000,"cache_read_input_tokens":20000,"output_tokens":300}}}
+{"type":"assistant","timestamp":"2026-01-01T01:35:10.000Z","message":{"model":"claude-opus-5","usage":{"input_tokens":100,"cache_creation_input_tokens":2000,"cache_read_input_tokens":20000,"output_tokens":300}}}
+{"type":"assistant","timestamp":"2026-01-01T01:40:10.000Z","message":{"model":"claude-opus-5","usage":{"input_tokens":100,"cache_creation_input_tokens":2000,"cache_read_input_tokens":20000,"output_tokens":300}}}
+{"type":"assistant","timestamp":"2026-01-01T01:45:10.000Z","message":{"model":"claude-opus-5","usage":{"input_tokens":100,"cache_creation_input_tokens":2000,"cache_read_input_tokens":20000,"output_tokens":300}}}
+{"type":"assistant","timestamp":"2026-01-01T01:50:10.000Z","message":{"model":"claude-opus-5","usage":{"input_tokens":100,"cache_creation_input_tokens":2000,"cache_read_input_tokens":20000,"output_tokens":300}}}
+{"type":"assistant","timestamp":"2026-01-01T01:55:10.000Z","message":{"model":"claude-opus-5","usage":{"input_tokens":100,"cache_creation_input_tokens":2000,"cache_read_input_tokens":20000,"output_tokens":300}}}
+{"type":"assistant","timestamp":"2026-01-01T00:05:30.000Z","message":{"model":"claude-opus-5","usage":{"input_tokens":1,"cache_creation_input_tokens":1,"cache_read_input_tokens":1,"output_tokens":1},"content":[{"type":"tool_use","name":"Task","input":{"subagent_type":"spark","prompt":"not in the event"}}]}}
+{"type":"user","timestamp":"2026-01-01T00:01:00.000Z","message":{"role":"user"}}
+{"type":"assistant","message":{"usage":{

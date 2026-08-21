@@ -554,3 +554,72 @@ fn civil_from_days(z: i64) -> (i64, i64, i64) {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
+
+/// A single DuckDB connection held open across several queries.
+///
+/// `burnSeismic` runs three statements against ONE connection (the aggregation, the torn-line probe
+/// and the spawn listing) and its results are only consistent if they see the same session — so the
+/// seam it needs is a session, not a one-shot query helper. Opening per query would also re-pay the
+/// `read_json` scan setup each time.
+pub struct DuckSession {
+    con: duckdb::Connection,
+}
+
+impl DuckSession {
+    /// Fileless, with the same settings as `bodies_evidence::with_duck`: a persistent .duckdb
+    /// measured 300x write amplification, and no `temp_directory` so an over-limit query fails
+    /// LOUDLY instead of quietly writing gigabytes to the SSD.
+    pub fn open_in_memory() -> Result<Self, String> {
+        let con = duckdb::Connection::open_in_memory().map_err(|e| e.to_string())?;
+        for stmt in ["SET memory_limit = '2GB'", "SET threads = 2", "SET temp_directory = ''"] {
+            con.execute_batch(stmt).map_err(|e| e.to_string())?;
+        }
+        Ok(Self { con })
+    }
+
+    /// Run one statement and materialize its rows as JSON objects.
+    ///
+    /// This is `getRowObjects()` semantics, NOT `getRowObjectsJson()`: a BIGINT becomes a JSON
+    /// NUMBER here, where the json variant would make it a string. The distinction is not cosmetic —
+    /// `run_transcript_sql` faithfully reproduces the string form because its rows go to the caller
+    /// verbatim, while this session's rows are consumed as numbers (`numOf` = `Number(v)` in the
+    /// TS). Using one converter for both would break whichever tool it was not written for.
+    pub fn query(&self, sql: &str) -> Result<Vec<Value>, String> {
+        let mut stmt = self.con.prepare(sql).map_err(|e| e.to_string())?;
+        let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        let mut columns: Vec<String> = Vec::new();
+        while let Some(r) = rows.next().map_err(|e| e.to_string())? {
+            if columns.is_empty() {
+                columns = r.as_ref().column_names();
+            }
+            let mut m = Map::new();
+            for (i, name) in columns.iter().enumerate() {
+                let cell = r.get::<usize, duckdb::types::Value>(i).unwrap_or(duckdb::types::Value::Null);
+                m.insert(name.clone(), cell_to_json_native(&cell));
+            }
+            out.push(Value::Object(m));
+        }
+        Ok(out)
+    }
+
+    /// Statements whose rows are not read (`INSTALL`, `LOAD`, `SET`).
+    pub fn execute(&self, sql: &str) -> Result<(), String> {
+        self.con.execute_batch(sql).map_err(|e| e.to_string())
+    }
+}
+
+/// The numeric half of `getRowObjects()`: every integer and float width becomes a JSON number.
+/// A value beyond f64's exact range would lose precision here, which is exactly what the TS's
+/// `Number(bigint)` does — matching it is the point.
+fn cell_to_json_native(v: &duckdb::types::Value) -> Value {
+    use duckdb::types::Value as V;
+    match v {
+        V::BigInt(n) => json_num(*n as f64),
+        V::UBigInt(n) => json_num(*n as f64),
+        V::HugeInt(n) => json_num(*n as f64),
+        V::UHugeInt(n) => json_num(*n as f64),
+        V::Decimal(d) => d.to_string().parse::<f64>().map_or(Value::Null, json_num),
+        other => cell_to_json(other),
+    }
+}

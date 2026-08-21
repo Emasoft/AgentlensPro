@@ -1887,6 +1887,93 @@ async fn handle(
                         .map_err(|e| format!("cache-break scan join failed: {e}"))?;
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
+                    "burn_seismic" => {
+                        let dirs = {
+                            let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                            agentlens_logscan::discovery::claude_projects_dirs(&st.log_env)
+                        };
+                        let scope_s = args.get("scope").and_then(Value::as_str).unwrap_or("fleet").to_owned();
+                        let workspace = args.get("workspace").and_then(Value::as_str).map(str::to_owned);
+                        let session_id = args.get("sessionId").and_then(Value::as_str).map(str::to_owned);
+                        // The two scopes that cannot be run without their argument fail HERE with a
+                        // named error rather than silently scanning the whole fleet, which is what a
+                        // missing workspace would otherwise turn into.
+                        let missing = if scope_s == "workspace" && workspace.is_none() {
+                            Some("scope='workspace' requires a workspace path")
+                        } else if scope_s == "session" && session_id.is_none() {
+                            Some("scope='session' requires a sessionId")
+                        } else {
+                            None
+                        };
+                        let a = args.clone();
+                        let payload = tokio::task::spawn_blocking(move || {
+                            use crate::burn_seismic as bs;
+                            if let Some(msg) = missing {
+                                return serde_json::json!({ "error": msg });
+                            }
+                            let g = |k: &str| a.get(k).and_then(Value::as_f64);
+                            let gs = |k: &str| a.get(k).and_then(Value::as_str).map(str::to_owned);
+                            let now = crate::now_ms() as f64;
+                            let window_hours = g("windowHours").unwrap_or(8.0).clamp(0.1, 72.0);
+                            let since_ms = now - window_hours * 3_600_000.0;
+                            let scope = match scope_s.as_str() {
+                                "workspace" => bs::SeismicScope::Workspace,
+                                "session" => bs::SeismicScope::Session,
+                                _ => bs::SeismicScope::Fleet,
+                            };
+                            let files = bs::resolve_seismic_files(&bs::ResolveSeismicOptions {
+                                scope,
+                                workspace: workspace.as_deref(),
+                                session_id: session_id.as_deref(),
+                                since_ms,
+                                include_subagents: a.get("includeSubagents").and_then(Value::as_bool).unwrap_or(false),
+                                max_files: g("maxFiles"),
+                                projects_dirs: dirs,
+                            });
+                            let (fdr_method, rate_law, pvalue_engine) =
+                                (gs("fdrMethod"), gs("rateLaw"), gs("pvalueEngine"));
+                            let opts = bs::BurnSeismicOptions {
+                                files,
+                                since_iso: Some(crate::summarize::helpers::iso_from_ms(since_ms)),
+                                bucket_minutes: g("bucketMinutes"),
+                                fdr_alpha: g("fdrAlpha"),
+                                fdr_method: fdr_method.as_deref(),
+                                cfar_reference: g("cfarReference"),
+                                cfar_guard: g("cfarGuard"),
+                                cfar_trim: g("cfarTrim"),
+                                cfar_min_reference: g("cfarMinReference"),
+                                rate_law: rate_law.as_deref(),
+                                pvalue_engine: pvalue_engine.as_deref(),
+                                top_events: Some(10.0),
+                                top_sessions: Some(10.0),
+                                ..bs::BurnSeismicOptions::default()
+                            };
+                            // One session for the whole analysis: the three statements are only
+                            // consistent with each other if they see the same connection.
+                            let seismic = match agentlens_store::transcript_sql::DuckSession::open_in_memory() {
+                                Ok(sess) => bs::burn_seismic(&opts, &|sql| sess.query(sql), now),
+                                // The TS reaches the same place by failing to import the binding.
+                                Err(_) => bs::burn_seismic(&opts, &|_| Err("duckdb unavailable".to_owned()), now),
+                            };
+                            // Ship the rendered report AND the structured result: the CLI prints
+                            // `report` verbatim, an MCP caller keeps the machine-readable fields.
+                            // `buckets[]` is dropped from the wire form (480+ rows) — the report
+                            // plus events/sessions already carry the signal.
+                            let mut wire = serde_json::Map::new();
+                            wire.insert("report".into(), Value::String(bs::render_burn_seismic(&seismic)));
+                            if let Value::Object(m) = seismic {
+                                for (k, v) in m {
+                                    if k != "buckets" {
+                                        wire.insert(k, v);
+                                    }
+                                }
+                            }
+                            Value::Object(wire)
+                        })
+                        .await
+                        .map_err(|e| format!("burn seismic join failed: {e}"))?;
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
+                    }
                     "run_transcript_sql" => {
                         // DuckDB over a BOUNDED set of transcript files — blocking, so
                         // spawn_blocking with the state lock released first.
