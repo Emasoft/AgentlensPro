@@ -1,0 +1,609 @@
+{
+  "now": 1787292000000,
+  "windowPct": {
+    "utilization": 42.5,
+    "used_percentage_fallback": 17,
+    "both_present": 1,
+    "zero_is_a_real_number": 0,
+    "string_number_is_not_a_number": null,
+    "empty": null,
+    "null_window": null
+  },
+  "resetsAt": {
+    "epoch_seconds": "2026-08-21T00:00:00.000Z",
+    "epoch_millis": "2026-08-21T00:00:00.000Z",
+    "numeric_string_seconds": "2026-08-21T00:00:00.000Z",
+    "decimal_string": "2026-08-21T00:00:00.500Z",
+    "iso_string_kept_verbatim": "2026-08-19T04:00:00Z",
+    "iso_with_offset": "2026-08-19T06:00:00+0200",
+    "garbage_string": null,
+    "empty_string": null,
+    "whitespace_string": null,
+    "null_value": null,
+    "boolean_value": null,
+    "boundary_just_below_1e12": "+033658-09-27T01:46:39.000Z",
+    "boundary_at_1e12": "2001-09-09T01:46:40.000Z"
+  },
+  "normalize": {
+    "full": {
+      "fetchedAt": 1787291970000,
+      "ageSeconds": 30,
+      "stale": false,
+      "accountFp": "fp-1234",
+      "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      "accountLabel": "owner@example.com",
+      "accountTier": "max_20x",
+      "localClaimedLabel": "owner@example.com",
+      "accountLabelSuspect": false,
+      "accountVerified": "yes",
+      "reason": "ok",
+      "limits": [
+        {
+          "kind": "session",
+          "group": "session",
+          "percent": 61,
+          "severity": "normal",
+          "resetsAt": "2099-01-01T00:00:00.000Z",
+          "isActive": true,
+          "scopeLabel": null,
+          "resetsInSeconds": 2283616800
+        },
+        {
+          "kind": "unknown",
+          "group": "unknown",
+          "percent": null,
+          "severity": "normal",
+          "resetsAt": "2026-08-21T00:00:00.000Z",
+          "isActive": false,
+          "scopeLabel": null,
+          "resetsInSeconds": -21600
+        },
+        {
+          "kind": "weekly_scoped",
+          "group": "weekly",
+          "percent": 3,
+          "severity": "critical",
+          "resetsAt": "2000-01-01T00:00:00.000Z",
+          "isActive": true,
+          "scopeLabel": "claude-opus-5",
+          "resetsInSeconds": -840607200
+        },
+        {
+          "kind": "weekly_all",
+          "group": "weekly",
+          "percent": 0,
+          "severity": "normal",
+          "resetsAt": null,
+          "isActive": false,
+          "scopeLabel": null,
+          "resetsInSeconds": null
+        }
+      ],
+      "fiveHourPercent": 61,
+      "sevenDayPercent": 12.5,
+      "usageCreditsEnabled": true,
+      "spendPercent": 4.25,
+      "note": "Utilization is Anthropic's own figure for this account (the numbers /usage shows), not a local projection. Endpoint is undocumented and community-reverse-engineered."
+    },
+    "suspect_label": {
+      "fetchedAt": 1787291970000,
+      "ageSeconds": 30,
+      "stale": false,
+      "accountFp": "fp-1234",
+      "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      "accountLabel": "owner@example.com",
+      "accountTier": "max_20x",
+      "localClaimedLabel": "second@example.com",
+      "accountLabelSuspect": true,
+      "accountVerified": "yes",
+      "reason": "ok",
+      "limits": [
+        {
+          "kind": "session",
+          "group": "session",
+          "percent": 61,
+          "severity": "normal",
+          "resetsAt": "2099-01-01T00:00:00.000Z",
+          "isActive": true,
+          "scopeLabel": null,
+          "resetsInSeconds": 2283616800
+        },
+        {
+          "kind": "unknown",
+          "group": "unknown",
+          "percent": null,
+          "severity": "normal",
+          "resetsAt": "2026-08-21T00:00:00.000Z",
+          "isActive": false,
+          "scopeLabel": null,
+          "resetsInSeconds": -21600
+        },
+        {
+          "kind": "weekly_scoped",
+          "group": "weekly",
+          "percent": 3,
+          "severity": "critical",
+          "resetsAt": "2000-01-01T00:00:00.000Z",
+          "isActive": true,
+          "scopeLabel": "claude-opus-5",
+          "resetsInSeconds": -840607200
+        },
+        {
+          "kind": "weekly_all",
+          "group": "weekly",
+          "percent": 0,
+          "severity": "normal",
+          "resetsAt": null,
+          "isActive": false,
+          "scopeLabel": null,
+          "resetsInSeconds": null
+        }
+      ],
+      "fiveHourPercent": 61,
+      "sevenDayPercent": 12.5,
+      "usageCreditsEnabled": true,
+      "spendPercent": 4.25,
+      "note": "Utilization is Anthropic's own figure for this account (the numbers /usage shows), not a local projection. Endpoint is undocumented and community-reverse-engineered."
+    },
+    "no_fingerprint": {
+      "fetchedAt": 1787291970000,
+      "ageSeconds": 30,
+      "stale": false,
+      "accountFp": null,
+      "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      "accountLabel": "owner@example.com",
+      "accountTier": "max_20x",
+      "localClaimedLabel": null,
+      "accountLabelSuspect": false,
+      "accountVerified": "unknown",
+      "reason": "ok",
+      "limits": [
+        {
+          "kind": "session",
+          "group": "session",
+          "percent": 61,
+          "severity": "normal",
+          "resetsAt": "2099-01-01T00:00:00.000Z",
+          "isActive": true,
+          "scopeLabel": null,
+          "resetsInSeconds": 2283616800
+        },
+        {
+          "kind": "unknown",
+          "group": "unknown",
+          "percent": null,
+          "severity": "normal",
+          "resetsAt": "2026-08-21T00:00:00.000Z",
+          "isActive": false,
+          "scopeLabel": null,
+          "resetsInSeconds": -21600
+        },
+        {
+          "kind": "weekly_scoped",
+          "group": "weekly",
+          "percent": 3,
+          "severity": "critical",
+          "resetsAt": "2000-01-01T00:00:00.000Z",
+          "isActive": true,
+          "scopeLabel": "claude-opus-5",
+          "resetsInSeconds": -840607200
+        },
+        {
+          "kind": "weekly_all",
+          "group": "weekly",
+          "percent": 0,
+          "severity": "normal",
+          "resetsAt": null,
+          "isActive": false,
+          "scopeLabel": null,
+          "resetsInSeconds": null
+        }
+      ],
+      "fiveHourPercent": 61,
+      "sevenDayPercent": 12.5,
+      "usageCreditsEnabled": true,
+      "spendPercent": 4.25,
+      "note": "Utilization is Anthropic's own figure for this account (the numbers /usage shows), not a local projection. Endpoint is undocumented and community-reverse-engineered."
+    },
+    "no_identity": {
+      "fetchedAt": 1787291970000,
+      "ageSeconds": 30,
+      "stale": false,
+      "accountFp": "fp-1234",
+      "accountUuid": null,
+      "accountLabel": null,
+      "accountTier": null,
+      "localClaimedLabel": "owner@example.com",
+      "accountLabelSuspect": false,
+      "accountVerified": "yes",
+      "reason": "ok",
+      "limits": [
+        {
+          "kind": "session",
+          "group": "session",
+          "percent": 61,
+          "severity": "normal",
+          "resetsAt": "2099-01-01T00:00:00.000Z",
+          "isActive": true,
+          "scopeLabel": null,
+          "resetsInSeconds": 2283616800
+        },
+        {
+          "kind": "unknown",
+          "group": "unknown",
+          "percent": null,
+          "severity": "normal",
+          "resetsAt": "2026-08-21T00:00:00.000Z",
+          "isActive": false,
+          "scopeLabel": null,
+          "resetsInSeconds": -21600
+        },
+        {
+          "kind": "weekly_scoped",
+          "group": "weekly",
+          "percent": 3,
+          "severity": "critical",
+          "resetsAt": "2000-01-01T00:00:00.000Z",
+          "isActive": true,
+          "scopeLabel": "claude-opus-5",
+          "resetsInSeconds": -840607200
+        },
+        {
+          "kind": "weekly_all",
+          "group": "weekly",
+          "percent": 0,
+          "severity": "normal",
+          "resetsAt": null,
+          "isActive": false,
+          "scopeLabel": null,
+          "resetsInSeconds": null
+        }
+      ],
+      "fiveHourPercent": 61,
+      "sevenDayPercent": 12.5,
+      "usageCreditsEnabled": true,
+      "spendPercent": 4.25,
+      "note": "Utilization is Anthropic's own figure for this account (the numbers /usage shows), not a local projection. Endpoint is undocumented and community-reverse-engineered."
+    },
+    "stale_at_write": {
+      "fetchedAt": 1787289600000,
+      "ageSeconds": 2400,
+      "stale": true,
+      "accountFp": "fp-1234",
+      "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      "accountLabel": "owner@example.com",
+      "accountTier": "max_20x",
+      "localClaimedLabel": null,
+      "accountLabelSuspect": false,
+      "accountVerified": "yes",
+      "reason": "ok",
+      "limits": [
+        {
+          "kind": "session",
+          "group": "session",
+          "percent": 61,
+          "severity": "normal",
+          "resetsAt": "2099-01-01T00:00:00.000Z",
+          "isActive": true,
+          "scopeLabel": null,
+          "resetsInSeconds": 2283616800
+        },
+        {
+          "kind": "unknown",
+          "group": "unknown",
+          "percent": null,
+          "severity": "normal",
+          "resetsAt": "2026-08-21T00:00:00.000Z",
+          "isActive": false,
+          "scopeLabel": null,
+          "resetsInSeconds": -21600
+        },
+        {
+          "kind": "weekly_scoped",
+          "group": "weekly",
+          "percent": 3,
+          "severity": "critical",
+          "resetsAt": "2000-01-01T00:00:00.000Z",
+          "isActive": true,
+          "scopeLabel": "claude-opus-5",
+          "resetsInSeconds": -840607200
+        },
+        {
+          "kind": "weekly_all",
+          "group": "weekly",
+          "percent": 0,
+          "severity": "normal",
+          "resetsAt": null,
+          "isActive": false,
+          "scopeLabel": null,
+          "resetsInSeconds": null
+        }
+      ],
+      "fiveHourPercent": 61,
+      "sevenDayPercent": 12.5,
+      "usageCreditsEnabled": true,
+      "spendPercent": 4.25,
+      "note": "Utilization is Anthropic's own figure for this account (the numbers /usage shows), not a local projection. Endpoint is undocumented and community-reverse-engineered."
+    },
+    "empty_body": {
+      "fetchedAt": 1787292000000,
+      "ageSeconds": 0,
+      "stale": false,
+      "accountFp": null,
+      "accountUuid": null,
+      "accountLabel": null,
+      "accountTier": null,
+      "localClaimedLabel": null,
+      "accountLabelSuspect": false,
+      "accountVerified": "unknown",
+      "reason": "fresh",
+      "limits": [],
+      "fiveHourPercent": null,
+      "sevenDayPercent": null,
+      "usageCreditsEnabled": null,
+      "spendPercent": null,
+      "note": "Utilization is Anthropic's own figure for this account (the numbers /usage shows), not a local projection. Endpoint is undocumented and community-reverse-engineered."
+    },
+    "credits_non_boolean": {
+      "fetchedAt": 1787292000000,
+      "ageSeconds": 0,
+      "stale": false,
+      "accountFp": null,
+      "accountUuid": null,
+      "accountLabel": null,
+      "accountTier": null,
+      "localClaimedLabel": null,
+      "accountLabelSuspect": false,
+      "accountVerified": "unknown",
+      "reason": "ok",
+      "limits": [
+        {
+          "kind": "session",
+          "group": "session",
+          "percent": 61,
+          "severity": "normal",
+          "resetsAt": "2099-01-01T00:00:00.000Z",
+          "isActive": true,
+          "scopeLabel": null,
+          "resetsInSeconds": 2283616800
+        },
+        {
+          "kind": "unknown",
+          "group": "unknown",
+          "percent": null,
+          "severity": "normal",
+          "resetsAt": "2026-08-21T00:00:00.000Z",
+          "isActive": false,
+          "scopeLabel": null,
+          "resetsInSeconds": -21600
+        },
+        {
+          "kind": "weekly_scoped",
+          "group": "weekly",
+          "percent": 3,
+          "severity": "critical",
+          "resetsAt": "2000-01-01T00:00:00.000Z",
+          "isActive": true,
+          "scopeLabel": "claude-opus-5",
+          "resetsInSeconds": -840607200
+        },
+        {
+          "kind": "weekly_all",
+          "group": "weekly",
+          "percent": 0,
+          "severity": "normal",
+          "resetsAt": null,
+          "isActive": false,
+          "scopeLabel": null,
+          "resetsInSeconds": null
+        }
+      ],
+      "fiveHourPercent": 61,
+      "sevenDayPercent": 12.5,
+      "usageCreditsEnabled": null,
+      "spendPercent": 4.25,
+      "note": "Utilization is Anthropic's own figure for this account (the numbers /usage shows), not a local projection. Endpoint is undocumented and community-reverse-engineered."
+    }
+  },
+  "stale": {
+    "fresh": {
+      "stale": false,
+      "reason": null
+    },
+    "too_old": {
+      "stale": true,
+      "reason": "too-old"
+    },
+    "window_reset": {
+      "stale": true,
+      "reason": "window-reset"
+    },
+    "null_resets_at": {
+      "stale": false,
+      "reason": null
+    },
+    "unparseable_resets_at": {
+      "stale": false,
+      "reason": null
+    },
+    "no_limits": {
+      "stale": false,
+      "reason": null
+    },
+    "exactly_at_ttl_x3": {
+      "stale": false,
+      "reason": null
+    }
+  },
+  "arm": {
+    "first_429_no_header": {
+      "delay": 600000,
+      "file": {
+        "until": 1787292600000,
+        "consecutive": 1
+      },
+      "seed": null
+    },
+    "third_429_doubles": {
+      "delay": 2400000,
+      "file": {
+        "until": 1787294400000,
+        "consecutive": 3
+      },
+      "seed": {
+        "until": 0,
+        "consecutive": 2
+      }
+    },
+    "capped_at_2h": {
+      "delay": 7200000,
+      "file": {
+        "until": 1787299200000,
+        "consecutive": 6
+      },
+      "seed": {
+        "until": 0,
+        "consecutive": 5
+      }
+    },
+    "retry_after_floored": {
+      "delay": 60000,
+      "file": {
+        "until": 1787292060000,
+        "consecutive": 1
+      },
+      "seed": {
+        "until": 0,
+        "consecutive": 0
+      }
+    },
+    "retry_after_honored": {
+      "delay": 200000,
+      "file": {
+        "until": 1787292200000,
+        "consecutive": 1
+      },
+      "seed": {
+        "until": 0,
+        "consecutive": 0
+      }
+    },
+    "retry_after_zero": {
+      "delay": 1200000,
+      "file": {
+        "until": 1787293200000,
+        "consecutive": 2
+      },
+      "seed": {
+        "until": 0,
+        "consecutive": 1
+      }
+    },
+    "corrupt_file": {
+      "delay": 600000,
+      "file": {
+        "until": 1787292600000,
+        "consecutive": 1
+      },
+      "seed": {
+        "until": "nope",
+        "consecutive": "nope"
+      }
+    }
+  },
+  "retryAfter": {
+    "numeric": 120,
+    "http_date": 90,
+    "http_date_past": 0,
+    "unified_epoch": 300,
+    "unified_epoch_past": null,
+    "iso_reset": 45,
+    "precedence": 7,
+    "case_insensitive": 11,
+    "garbage": null,
+    "none": null,
+    "null_headers": null
+  },
+  "bar": {
+    "0": "[░░░░░░░░░░]",
+    "4": "[░░░░░░░░░░]",
+    "5": "[█░░░░░░░░░]",
+    "50": "[█████░░░░░]",
+    "95": "[██████████]",
+    "100": "[██████████]",
+    "150": "[██████████]",
+    "94.9": "[█████████░]",
+    "99.9": "[██████████]",
+    "-5": "[░░░░░░░░░░]",
+    "20_cells": "[███████░░░░░░░░░░░░░]"
+  },
+  "format": {
+    "null_usage": "subscription usage: unavailable (no token, opt-in required, or endpoint unreachable)",
+    "live_verified": "Subscription window utilization for owner@example.com (Anthropic's own numbers)\n  session                [██████░░░░]  61%  normal  resets in 1h 0m\n  weekly_scoped claude-opus-5 [unreadable]   ?%  critical  resets \n  usage credits: ENABLED — prompt-cache TTL drops to 5 min\n  [live · account verified · cache 30s old · ok]",
+    "live_unverified": "Subscription window utilization (Anthropic's own numbers) — account NOT verified [label: owner@example.com]\n  session                [██████░░░░]  61%  normal  resets in 1h 0m\n  weekly_scoped claude-opus-5 [unreadable]   ?%  critical  resets \n  usage credits: ENABLED — prompt-cache TTL drops to 5 min\n  [live · cache 30s old · ok] ⚠ UNATTRIBUTED — could not read the current credential, so these cannot be confirmed to be THIS account's (set AGENTLENS_READ_KEYCHAIN_USAGE=1 to let this process check).",
+    "another_account": "Subscription window utilization (Anthropic's own numbers) — account NOT verified [label: owner@example.com]\n  session                [██████░░░░]  61%  normal  resets in 1h 0m\n  weekly_scoped claude-opus-5 [unreadable]   ?%  critical  resets \n  usage credits: ENABLED — prompt-cache TTL drops to 5 min\n  [live · cache 30s old · ok] ⚠ ANOTHER ACCOUNT — the logged-in credential is not the one these were fetched with; do not read them as yours.",
+    "suspect_label": "Subscription window utilization for owner@example.com ⚠ (the token's OWN account — ~/.claude.json claims second@example.com, which is a DIFFERENT account) (Anthropic's own numbers)\n  session                [██████░░░░]  61%  normal  resets in 1h 0m\n  weekly_scoped claude-opus-5 [unreadable]   ?%  critical  resets \n  usage credits: ENABLED — prompt-cache TTL drops to 5 min\n  [live · account verified · cache 30s old · ok]",
+    "stale_all_rolled": "Subscription window utilization — ⚠ STALE SNAPSHOT, NOT CURRENT [owner@example.com]\n  session                [██████░░░░]  61%  normal\n  weekly_all             [██████░░░░]  61%  normal\n  usage credits: ENABLED — prompt-cache TTL drops to 5 min\n  ⚠ NOT LIVE — last good read 5d 22h ago (cooldown); every window shown has ALREADY RESET since this was read. Do not trust these values; run /usage in-app.",
+    "stale_some_rolled": "Subscription window utilization — ⚠ STALE SNAPSHOT, NOT CURRENT [owner@example.com]\n  session                [██████░░░░]  61%  normal\n  weekly_all             [██████░░░░]  61%  normal\n  usage credits: ENABLED — prompt-cache TTL drops to 5 min\n  ⚠ NOT LIVE — last good read 5m ago (429); 1 of the 2 windows shown have ALREADY RESET since this was read. Do not trust these values; run /usage in-app.",
+    "credits_disabled": "Subscription window utilization for owner@example.com (Anthropic's own numbers)\n  session                [██████░░░░]  61%  normal  resets in 1h 0m\n  weekly_scoped claude-opus-5 [unreadable]   ?%  critical  resets \n  usage credits: disabled — 1-hour prompt-cache TTL active\n  [live · account verified · cache 30s old · ok]",
+    "credits_unknown": "Subscription window utilization for owner@example.com (Anthropic's own numbers)\n  session                [██████░░░░]  61%  normal  resets in 1h 0m\n  weekly_scoped claude-opus-5 [unreadable]   ?%  critical  resets \n  [live · account verified · cache 30s old · ok]",
+    "unresolved_account": "Subscription window utilization for unresolved account (Anthropic's own numbers)\n  session                [██████░░░░]  61%  normal  resets in 1h 0m\n  weekly_scoped claude-opus-5 [unreadable]   ?%  critical  resets \n  usage credits: ENABLED — prompt-cache TTL drops to 5 min\n  [live · account verified · cache 30s old · ok]",
+    "uuid_only": "Subscription window utilization for aaaaaaaa (Anthropic's own numbers)\n  session                [██████░░░░]  61%  normal  resets in 1h 0m\n  weekly_scoped claude-opus-5 [unreadable]   ?%  critical  resets \n  usage credits: ENABLED — prompt-cache TTL drops to 5 min\n  [live · account verified · cache 30s old · ok]",
+    "age_seconds": "Subscription window utilization — ⚠ STALE SNAPSHOT, NOT CURRENT [owner@example.com]\n  usage credits: ENABLED — prompt-cache TTL drops to 5 min\n  ⚠ NOT LIVE — last good read 45s ago (ok). Do not trust these values; run /usage in-app.",
+    "age_minutes": "Subscription window utilization — ⚠ STALE SNAPSHOT, NOT CURRENT [owner@example.com]\n  usage credits: ENABLED — prompt-cache TTL drops to 5 min\n  ⚠ NOT LIVE — last good read 10m ago (ok). Do not trust these values; run /usage in-app.",
+    "age_hours": "Subscription window utilization — ⚠ STALE SNAPSHOT, NOT CURRENT [owner@example.com]\n  usage credits: ENABLED — prompt-cache TTL drops to 5 min\n  ⚠ NOT LIVE — last good read 3h 2m ago (ok). Do not trust these values; run /usage in-app.",
+    "age_days": "Subscription window utilization — ⚠ STALE SNAPSHOT, NOT CURRENT [owner@example.com]\n  usage credits: ENABLED — prompt-cache TTL drops to 5 min\n  ⚠ NOT LIVE — last good read 6d 0h ago (ok). Do not trust these values; run /usage in-app."
+  },
+  "fmtInputs": {
+    "base": {
+      "fetchedAt": 1787291970000,
+      "ageSeconds": 30,
+      "stale": false,
+      "accountFp": "fp-1234",
+      "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      "accountLabel": "owner@example.com",
+      "accountTier": "max_20x",
+      "localClaimedLabel": "owner@example.com",
+      "accountLabelSuspect": false,
+      "accountVerified": "yes",
+      "reason": "ok",
+      "limits": [
+        {
+          "kind": "session",
+          "group": "session",
+          "percent": 61,
+          "severity": "normal",
+          "resetsAt": "2099-01-01T00:00:00.000Z",
+          "isActive": true,
+          "scopeLabel": null,
+          "resetsInSeconds": 3600
+        },
+        {
+          "kind": "weekly_scoped",
+          "group": "session",
+          "percent": null,
+          "severity": "critical",
+          "resetsAt": "2099-01-01T00:00:00.000Z",
+          "isActive": true,
+          "scopeLabel": "claude-opus-5",
+          "resetsInSeconds": null
+        }
+      ],
+      "fiveHourPercent": 61,
+      "sevenDayPercent": 12.5,
+      "usageCreditsEnabled": true,
+      "spendPercent": 4.25,
+      "note": "Utilization is Anthropic's own figure for this account (the numbers /usage shows), not a local projection. Endpoint is undocumented and community-reverse-engineered."
+    },
+    "lim": {
+      "kind": "session",
+      "group": "session",
+      "percent": 61,
+      "severity": "normal",
+      "resetsAt": "2099-01-01T00:00:00.000Z",
+      "isActive": true,
+      "scopeLabel": null,
+      "resetsInSeconds": 3600
+    }
+  }
+}
