@@ -1,0 +1,242 @@
+{
+  "billableWeight": [
+    {
+      "case": "input only",
+      "cc5m": 0,
+      "cc1h": 0,
+      "cread": 0,
+      "out": 0,
+      "input": 1000000,
+      "model": "claude-opus-5",
+      "value": 5
+    },
+    {
+      "case": "cc5m only (1.25x)",
+      "cc5m": 1000000,
+      "cc1h": 0,
+      "cread": 0,
+      "out": 0,
+      "input": 0,
+      "model": "claude-opus-5",
+      "value": 6.250000000000001
+    },
+    {
+      "case": "cc1h only (2x)",
+      "cc5m": 0,
+      "cc1h": 1000000,
+      "cread": 0,
+      "out": 0,
+      "input": 0,
+      "model": "claude-opus-5",
+      "value": 10
+    },
+    {
+      "case": "cread only (0.1x)",
+      "cc5m": 0,
+      "cc1h": 0,
+      "cread": 1000000,
+      "out": 0,
+      "input": 0,
+      "model": "claude-opus-5",
+      "value": 0.5
+    },
+    {
+      "case": "output only",
+      "cc5m": 0,
+      "cc1h": 0,
+      "cread": 0,
+      "out": 1000000,
+      "input": 0,
+      "model": "claude-opus-5",
+      "value": 25
+    },
+    {
+      "case": "all buckets mixed",
+      "cc5m": 1000,
+      "cc1h": 2000,
+      "cread": 30000,
+      "out": 400,
+      "input": 5000,
+      "model": "claude-opus-5",
+      "value": 0.07625
+    },
+    {
+      "case": "gpt-4o cread only — 0.1x input, NOT the cacheRead column",
+      "cc5m": 0,
+      "cc1h": 0,
+      "cread": 1000000,
+      "out": 0,
+      "input": 0,
+      "model": "gpt-4o",
+      "value": 0.25
+    },
+    {
+      "case": "codex-mini cread only — same trap, 2.5x apart",
+      "cc5m": 0,
+      "cc1h": 0,
+      "cread": 1000000,
+      "out": 0,
+      "input": 0,
+      "model": "codex-mini-latest",
+      "value": 0.15
+    },
+    {
+      "case": "mythos-5 mixed",
+      "cc5m": 1000,
+      "cc1h": 1000,
+      "cread": 1000,
+      "out": 1000,
+      "input": 1000,
+      "model": "claude-mythos-5",
+      "value": 0.0935
+    },
+    {
+      "case": "unknown model",
+      "cc5m": 1000000,
+      "cc1h": 1000000,
+      "cread": 1000000,
+      "out": 1000000,
+      "input": 1000000,
+      "model": "no-such-model-xyz",
+      "value": 0
+    },
+    {
+      "case": "null model",
+      "cc5m": 1000000,
+      "cc1h": 1000000,
+      "cread": 1000000,
+      "out": 1000000,
+      "input": 1000000,
+      "model": null,
+      "value": 0
+    },
+    {
+      "case": "empty model",
+      "cc5m": 1000000,
+      "cc1h": 1000000,
+      "cread": 1000000,
+      "out": 1000000,
+      "input": 1000000,
+      "model": "",
+      "value": 0
+    },
+    {
+      "case": "NaN bucket",
+      "cc5m": "NaN",
+      "cc1h": 0,
+      "cread": 0,
+      "out": 0,
+      "input": 1000000,
+      "model": "claude-opus-5",
+      "value": 5
+    },
+    {
+      "case": "Infinity bucket",
+      "cc5m": "Infinity",
+      "cc1h": 0,
+      "cread": 0,
+      "out": 0,
+      "input": 1000000,
+      "model": "claude-opus-5",
+      "value": 5
+    },
+    {
+      "case": "every bucket NaN",
+      "cc5m": "NaN",
+      "cc1h": "NaN",
+      "cread": "NaN",
+      "out": "NaN",
+      "input": "NaN",
+      "model": "claude-opus-5",
+      "value": 0
+    },
+    {
+      "case": "negative input passes through",
+      "cc5m": 0,
+      "cc1h": 0,
+      "cread": 0,
+      "out": 0,
+      "input": -1000000,
+      "model": "claude-opus-5",
+      "value": -5
+    }
+  ],
+  "tierClassify": [
+    {
+      "input": null,
+      "out": "COLD"
+    },
+    {
+      "input": "undefined",
+      "out": "COLD"
+    },
+    {
+      "input": "NaN",
+      "out": "COLD"
+    },
+    {
+      "input": "Infinity",
+      "out": "COLD"
+    },
+    {
+      "input": "-Infinity",
+      "out": "COLD"
+    },
+    {
+      "input": -1000000000,
+      "out": "COLD"
+    },
+    {
+      "input": -0.0001,
+      "out": "COLD"
+    },
+    {
+      "input": 0,
+      "out": "BREAK"
+    },
+    {
+      "input": 4.4999,
+      "out": "BREAK"
+    },
+    {
+      "input": 4.5,
+      "out": "TTL_5m"
+    },
+    {
+      "input": 4.5001,
+      "out": "TTL_5m"
+    },
+    {
+      "input": 5,
+      "out": "TTL_5m"
+    },
+    {
+      "input": 5.9999,
+      "out": "TTL_5m"
+    },
+    {
+      "input": 6,
+      "out": "TTL_5m"
+    },
+    {
+      "input": 6.0001,
+      "out": "MID"
+    },
+    {
+      "input": 64.9999,
+      "out": "MID"
+    },
+    {
+      "input": 65,
+      "out": "MID"
+    },
+    {
+      "input": 65.0001,
+      "out": "TTL_1h"
+    },
+    {
+      "input": 1000000000,
+      "out": "TTL_1h"
+    }
+  ]
+}

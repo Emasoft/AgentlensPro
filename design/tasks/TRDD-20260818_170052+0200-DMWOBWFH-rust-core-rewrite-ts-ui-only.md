@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-21T14:41:14+0200
+updated: 2026-08-21T16:12:00+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -1715,10 +1715,35 @@ release-via: publish
   instead of CAST ones (the documented live-fleet bug — '…T11:27' vs '… 11:27' diverges at char 11,
   so EVERY line of the day passes; here the spawn count goes 1 → 0), and emitting `mainshock: null`
   instead of OMITTING the key when there is no event (`JSON.stringify` drops an `undefined`).
+- **SLICE B1 DONE — the FAL fact-store layer (`forensics_db.rs`), the port of `src/forensicsDb.ts`.**
+  Schema (copied byte-identical, it is the shared artifact), `open_forensics_db`, the read-only
+  handle, the `index_state` KV, `billable_weight`/`tier_classify`, and the 4 custom SQL fns
+  (`billable_weight`/`tier_classify`/`cost_usd`/`spike`) that `run_diagnostics_sql` lets raw caller
+  SQL invoke. `rusqlite` is now a direct dep of `agentlens-core`.
+  **IT LIVES IN `agentlens-core`, NOT `agentlens-store`, and that is forced, not preference:** the
+  custom fns wrap the pricing table, pricing lives in core, and core→store is the only edge that
+  exists. This deliberately differs from the `DuckSession` precedent, which stays in store precisely
+  because it needs nothing from core.
+  **`rusqlite`'s FEATURES DIFFER FROM `agentlens-logscan`'s AND MUST** — `functions` is required for
+  the custom fns. Keep the VERSION identical (one shared build); features unify additively.
+  **THE ONE DELIBERATE DEVIATION FROM THE TS:** `openReadonlyForensicsSnapshot` byte-copies the DB
+  file, which is exact under sql.js (in-memory, so `PRAGMA journal_mode = WAL` is inert) and WRONG
+  under real SQLite, where committed rows can sit in the `-wal` sidecar and a byte-copy answers from
+  a DB missing its newest facts, silently. Ported as a read-only connection instead: same
+  no-writes guarantee, enforced by the engine. The test asserts the file really is in WAL mode first,
+  so the justification cannot decay into folklore.
+  **A FIXTURE THAT WOULD HAVE ROTTED:** `billableWeight` calls `lookupRates(model)` with no `atIso`,
+  which falls back to `Date.now()`, and `claude-sonnet-5` carries a `scheduledChange` effective
+  2026-09-01. Every model in the fixture is free of one, so the oracle is time-independent.
+  **`gpt-4o` IS IN THE FIXTURE ON PURPOSE:** `billableWeight` weights cache reads at a flat 0.1x of
+  the INPUT rate, never the `cacheReadPerMTok` column — equal on every Claude model, 5x apart on
+  gpt-4o. Falsified: that mutation reddens gpt-4o by 5x AND the opus-5 case by ONE ULP
+  (0.49999999999999994 vs 0.5), which is why parity asserts bit-equality and not an epsilon.
 - **NEXT (P4x.2d continued): 2 of 53 remain — `run_diagnostics_sql` and `compare_configs`.**
-  **Both need `forensicsIndex` SLICE B** — the bounded body scan plus the fact-table WRITER (TS
-  263-701: `scanApiCallEvents`, `loadSpawnMap`/`resolveSpawn`, `indexApiCalls`, `ensureFreshIndex`).
-  SLICE A (the pure half) is landed. Port SLICE B ONCE, then the two tools are shapers over it:
+  **Both still need SLICE B2-B4** — the bounded body scan (TS 263-461 `scanApiCallEvents` + the
+  previous_message_id join), `loadSpawnMap`/`resolveSpawn` (483-551), and
+  `indexApiCalls`/`ensureFreshIndex` (553-701). B1 (the fact store they all write into) is landed.
+  Then the two tools are shapers over it:
   `run_diagnostics_sql` (`src/forensicsSql.ts`, 321) and `compare_configs`
   (`src/forensicsCompare.ts`, 253).
   **The fact-store engine question is DECIDED — keep SQLite, via `rusqlite`.** `forensicsIndex`

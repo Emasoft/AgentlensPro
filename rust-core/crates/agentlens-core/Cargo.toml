@@ -35,6 +35,15 @@ notify = "8"
 # TS-oracle comparison depends on fixture floats parsing to the exact double JS printed.
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 regex = "1"
+# The FAL fact store (forensics.db). Keep the VERSION identical to agentlens-logscan's declaration:
+# cargo unifies the workspace onto one build of rusqlite, so a version mismatch would compile a
+# bundled SQLite twice. The feature sets do NOT match and cannot — `functions` is required for the
+# custom SQL fns (billable_weight / tier_classify / cost_usd / spike) that run_diagnostics_sql lets
+# callers invoke, and logscan needs none of them. Features are additive under unification, so the
+# single shared build simply carries `bundled` + `functions` and logscan links the same artifact.
+# SQLite and not DuckDB because run_diagnostics_sql passes RAW caller SQL straight through —
+# swapping the engine would change the dialect under queries this project does not own.
+rusqlite = { version = "0.40.2", features = ["bundled", "functions"] }
 # forensicsIndex's frontmatter fingerprint is a sha1 — the hash is part of the on-wire value, so it
 # is the algorithm that must match, not merely "some digest". RustCrypto, sharing the `digest` stack
 # `sha2` already pulls into the workspace.
