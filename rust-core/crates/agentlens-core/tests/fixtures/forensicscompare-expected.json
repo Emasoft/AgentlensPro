@@ -1,0 +1,3960 @@
+{
+  "note": "oracle for compare_configs — generated, do not hand-edit",
+  "cases": {
+    "defaults": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 9,
+        "sum": 87515,
+        "avg": 9723.888888888889,
+        "median": 800,
+        "p95": 60000
+      },
+      "groups": [
+        {
+          "key": "worktree",
+          "calls": 2,
+          "min": 20000,
+          "max": 60000,
+          "avg": 40000,
+          "median": 20000,
+          "p95": 60000,
+          "sum": 80000,
+          "sharePct": 91.41290064560361,
+          "billableWeightedUsd": 1.6077550000000003
+        },
+        {
+          "key": "fresh",
+          "calls": 2,
+          "min": 800,
+          "max": 5000,
+          "avg": 2900,
+          "median": 800,
+          "p95": 5000,
+          "sum": 5800,
+          "sharePct": 6.627435296806262,
+          "billableWeightedUsd": 0.04376
+        },
+        {
+          "key": "fork",
+          "calls": 3,
+          "min": 5,
+          "max": 1000,
+          "avg": 435,
+          "median": 300,
+          "p95": 1000,
+          "sum": 1305,
+          "sharePct": 1.491172941781409,
+          "billableWeightedUsd": 0.02620875
+        },
+        {
+          "key": "root",
+          "calls": 1,
+          "min": 400,
+          "max": 400,
+          "avg": 400,
+          "median": 400,
+          "p95": 400,
+          "sum": 400,
+          "sharePct": 0.457064503228018,
+          "billableWeightedUsd": 0.0037825000000000003
+        },
+        {
+          "key": "unresolved",
+          "calls": 1,
+          "min": 10,
+          "max": 10,
+          "avg": 10,
+          "median": 10,
+          "p95": 10,
+          "sum": 10,
+          "sharePct": 0.01142661258070045,
+          "billableWeightedUsd": 0
+        }
+      ],
+      "verdict": [
+        "worktree averages 92.0× the cache creation/call of fork (40000 vs 435) — worktree spawns are cache-cold and isolated.",
+        "fork averages 85% less cache creation than fresh (435 vs 2900) — forks read the parent cache.",
+        "fresh subagents average 7.3× the cache creation/call of root sessions (2900 vs 400)."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 1
+      },
+      "dbAvailable": true
+    },
+    "group_model": {
+      "groupBy": "model",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 9,
+        "sum": 87515,
+        "avg": 9723.888888888889,
+        "median": 800,
+        "p95": 60000
+      },
+      "groups": [
+        {
+          "key": "claude-mythos-5",
+          "calls": 2,
+          "min": 20000,
+          "max": 60000,
+          "avg": 40000,
+          "median": 20000,
+          "p95": 60000,
+          "sum": 80000,
+          "sharePct": 91.41290064560361,
+          "billableWeightedUsd": 1.6077550000000003
+        },
+        {
+          "key": "claude-opus-5",
+          "calls": 6,
+          "min": 5,
+          "max": 5000,
+          "avg": 1250.8333333333333,
+          "median": 400,
+          "p95": 5000,
+          "sum": 7505,
+          "sharePct": 8.575672741815689,
+          "billableWeightedUsd": 0.07375124999999999
+        },
+        {
+          "key": "(unknown)",
+          "calls": 1,
+          "min": 10,
+          "max": 10,
+          "avg": 10,
+          "median": 10,
+          "p95": 10,
+          "sum": 10,
+          "sharePct": 0.01142661258070045,
+          "billableWeightedUsd": 0
+        }
+      ],
+      "verdict": [],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 0
+      },
+      "dbAvailable": true
+    },
+    "group_effort": {
+      "groupBy": "effort",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 9,
+        "sum": 87515,
+        "avg": 9723.888888888889,
+        "median": 800,
+        "p95": 60000
+      },
+      "groups": [
+        {
+          "key": "low",
+          "calls": 2,
+          "min": 20000,
+          "max": 60000,
+          "avg": 40000,
+          "median": 20000,
+          "p95": 60000,
+          "sum": 80000,
+          "sharePct": 91.41290064560361,
+          "billableWeightedUsd": 1.6077550000000003
+        },
+        {
+          "key": "high",
+          "calls": 5,
+          "min": 5,
+          "max": 5000,
+          "avg": 1441,
+          "median": 800,
+          "p95": 5000,
+          "sum": 7205,
+          "sharePct": 8.232874364394675,
+          "billableWeightedUsd": 0.06997624999999999
+        },
+        {
+          "key": "none",
+          "calls": 2,
+          "min": 10,
+          "max": 300,
+          "avg": 155,
+          "median": 10,
+          "p95": 300,
+          "sum": 310,
+          "sharePct": 0.354224990001714,
+          "billableWeightedUsd": 0.0037749999999999997
+        }
+      ],
+      "verdict": [],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 0
+      },
+      "dbAvailable": true
+    },
+    "group_isolation": {
+      "groupBy": "isolation",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 9,
+        "sum": 87515,
+        "avg": 9723.888888888889,
+        "median": 800,
+        "p95": 60000
+      },
+      "groups": [
+        {
+          "key": "worktree",
+          "calls": 2,
+          "min": 20000,
+          "max": 60000,
+          "avg": 40000,
+          "median": 20000,
+          "p95": 60000,
+          "sum": 80000,
+          "sharePct": 91.41290064560361,
+          "billableWeightedUsd": 1.6077550000000003
+        },
+        {
+          "key": "none",
+          "calls": 7,
+          "min": 5,
+          "max": 5000,
+          "avg": 1073.5714285714287,
+          "median": 400,
+          "p95": 5000,
+          "sum": 7515,
+          "sharePct": 8.58709935439639,
+          "billableWeightedUsd": 0.07375124999999999
+        }
+      ],
+      "verdict": [],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 0
+      },
+      "dbAvailable": true
+    },
+    "group_subagent_type": {
+      "groupBy": "subagent_type",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 9,
+        "sum": 87515,
+        "avg": 9723.888888888889,
+        "median": 800,
+        "p95": 60000
+      },
+      "groups": [
+        {
+          "key": "kraken",
+          "calls": 2,
+          "min": 20000,
+          "max": 60000,
+          "avg": 40000,
+          "median": 20000,
+          "p95": 60000,
+          "sum": 80000,
+          "sharePct": 91.41290064560361,
+          "billableWeightedUsd": 1.6077550000000003
+        },
+        {
+          "key": "spark",
+          "calls": 3,
+          "min": 800,
+          "max": 5000,
+          "avg": 2266.6666666666665,
+          "median": 1000,
+          "p95": 5000,
+          "sum": 6800,
+          "sharePct": 7.770096554876307,
+          "billableWeightedUsd": 0.06601
+        },
+        {
+          "key": "(unknown)",
+          "calls": 4,
+          "min": 5,
+          "max": 400,
+          "avg": 178.75,
+          "median": 10,
+          "p95": 400,
+          "sum": 715,
+          "sharePct": 0.8170027995200823,
+          "billableWeightedUsd": 0.00774125
+        }
+      ],
+      "verdict": [],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 0
+      },
+      "dbAvailable": true
+    },
+    "group_frontmatter": {
+      "groupBy": "frontmatter",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 9,
+        "sum": 87515,
+        "avg": 9723.888888888889,
+        "median": 800,
+        "p95": 60000
+      },
+      "groups": [
+        {
+          "key": "fm-2",
+          "calls": 2,
+          "min": 20000,
+          "max": 60000,
+          "avg": 40000,
+          "median": 20000,
+          "p95": 60000,
+          "sum": 80000,
+          "sharePct": 91.41290064560361,
+          "billableWeightedUsd": 1.6077550000000003
+        },
+        {
+          "key": "fm-1",
+          "calls": 4,
+          "min": 300,
+          "max": 5000,
+          "avg": 1675,
+          "median": 400,
+          "p95": 5000,
+          "sum": 6700,
+          "sharePct": 7.655830429069302,
+          "billableWeightedUsd": 0.06670749999999999
+        },
+        {
+          "key": "fm-3",
+          "calls": 1,
+          "min": 800,
+          "max": 800,
+          "avg": 800,
+          "median": 800,
+          "p95": 800,
+          "sum": 800,
+          "sharePct": 0.914129006456036,
+          "billableWeightedUsd": 0.00686
+        },
+        {
+          "key": "(none)",
+          "calls": 1,
+          "min": 10,
+          "max": 10,
+          "avg": 10,
+          "median": 10,
+          "p95": 10,
+          "sum": 10,
+          "sharePct": 0.01142661258070045,
+          "billableWeightedUsd": 0
+        },
+        {
+          "key": "fpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfp",
+          "calls": 1,
+          "min": 5,
+          "max": 5,
+          "avg": 5,
+          "median": 5,
+          "p95": 5,
+          "sum": 5,
+          "sharePct": 0.005713306290350225,
+          "billableWeightedUsd": 0.00018375
+        }
+      ],
+      "verdict": [],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 0
+      },
+      "dbAvailable": true
+    },
+    "group_break_cause": {
+      "groupBy": "break_cause",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 9,
+        "sum": 87515,
+        "avg": 9723.888888888889,
+        "median": 800,
+        "p95": 60000
+      },
+      "groups": [
+        {
+          "key": "TOOLS_CHANGED",
+          "calls": 1,
+          "min": 20000,
+          "max": 20000,
+          "avg": 20000,
+          "median": 20000,
+          "p95": 20000,
+          "sum": 20000,
+          "sharePct": 22.853225161400903,
+          "billableWeightedUsd": 0.40595000000000003
+        },
+        {
+          "key": "(none)",
+          "calls": 5,
+          "min": 5,
+          "max": 60000,
+          "avg": 12243,
+          "median": 400,
+          "p95": 60000,
+          "sum": 61215,
+          "sharePct": 69.94800891275781,
+          "billableWeightedUsd": 1.21263125
+        },
+        {
+          "key": "MODEL_SWITCHED",
+          "calls": 2,
+          "min": 1000,
+          "max": 5000,
+          "avg": 3000,
+          "median": 1000,
+          "p95": 5000,
+          "sum": 6000,
+          "sharePct": 6.855967548420271,
+          "billableWeightedUsd": 0.05915
+        },
+        {
+          "key": "UNCLASSIFIED",
+          "calls": 1,
+          "min": 300,
+          "max": 300,
+          "avg": 300,
+          "median": 300,
+          "p95": 300,
+          "sum": 300,
+          "sharePct": 0.34279837742101354,
+          "billableWeightedUsd": 0.0037749999999999997
+        }
+      ],
+      "verdict": [],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 0
+      },
+      "dbAvailable": true
+    },
+    "group_account": {
+      "groupBy": "account",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 9,
+        "sum": 87515,
+        "avg": 9723.888888888889,
+        "median": 800,
+        "p95": 60000
+      },
+      "groups": [
+        {
+          "key": "acct-1",
+          "calls": 5,
+          "min": 5,
+          "max": 60000,
+          "avg": 17201,
+          "median": 5000,
+          "p95": 60000,
+          "sum": 86005,
+          "sharePct": 98.27458150031423,
+          "billableWeightedUsd": 1.6670887500000002
+        },
+        {
+          "key": "acct-2",
+          "calls": 3,
+          "min": 300,
+          "max": 800,
+          "avg": 500,
+          "median": 400,
+          "p95": 800,
+          "sum": 1500,
+          "sharePct": 1.7139918871050677,
+          "billableWeightedUsd": 0.0144175
+        },
+        {
+          "key": "(unattributed)",
+          "calls": 1,
+          "min": 10,
+          "max": 10,
+          "avg": 10,
+          "median": 10,
+          "p95": 10,
+          "sum": 10,
+          "sharePct": 0.01142661258070045,
+          "billableWeightedUsd": 0
+        }
+      ],
+      "verdict": [],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 0
+      },
+      "dbAvailable": true
+    },
+    "group_session": {
+      "groupBy": "session",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 9,
+        "sum": 87515,
+        "avg": 9723.888888888889,
+        "median": 800,
+        "p95": 60000
+      },
+      "groups": [
+        {
+          "key": "sess-d",
+          "calls": 2,
+          "min": 5,
+          "max": 60000,
+          "avg": 30002.5,
+          "median": 5,
+          "p95": 60000,
+          "sum": 60005,
+          "sharePct": 68.56538879049306,
+          "billableWeightedUsd": 1.2019887500000002
+        },
+        {
+          "key": "sess-b",
+          "calls": 2,
+          "min": 10,
+          "max": 20000,
+          "avg": 10005,
+          "median": 10,
+          "p95": 20000,
+          "sum": 20010,
+          "sharePct": 22.864651773981603,
+          "billableWeightedUsd": 0.40595000000000003
+        },
+        {
+          "key": "sess-a",
+          "calls": 2,
+          "min": 1000,
+          "max": 5000,
+          "avg": 3000,
+          "median": 1000,
+          "p95": 5000,
+          "sum": 6000,
+          "sharePct": 6.855967548420271,
+          "billableWeightedUsd": 0.05915
+        },
+        {
+          "key": "(unattributed)",
+          "calls": 1,
+          "min": 800,
+          "max": 800,
+          "avg": 800,
+          "median": 800,
+          "p95": 800,
+          "sum": 800,
+          "sharePct": 0.914129006456036,
+          "billableWeightedUsd": 0.00686
+        },
+        {
+          "key": "sess-c",
+          "calls": 2,
+          "min": 300,
+          "max": 400,
+          "avg": 350,
+          "median": 300,
+          "p95": 400,
+          "sum": 700,
+          "sharePct": 0.7998628806490317,
+          "billableWeightedUsd": 0.0075575
+        }
+      ],
+      "verdict": [],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 0
+      },
+      "dbAvailable": true
+    },
+    "group_skill": {
+      "groupBy": "skill",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 4,
+        "sum": 26010,
+        "avg": 6502.5,
+        "median": 1000,
+        "p95": 20000
+      },
+      "groups": [
+        {
+          "key": "rust",
+          "calls": 1,
+          "min": 20000,
+          "max": 20000,
+          "avg": 20000,
+          "median": 20000,
+          "p95": 20000,
+          "sum": 20000,
+          "sharePct": 76.89350249903883,
+          "billableWeightedUsd": 0.40595000000000003
+        },
+        {
+          "key": "agentlenspro-diagnostics",
+          "calls": 3,
+          "min": 10,
+          "max": 5000,
+          "avg": 2003.3333333333333,
+          "median": 1000,
+          "p95": 5000,
+          "sum": 6010,
+          "sharePct": 23.10649750096117,
+          "billableWeightedUsd": 0.05915
+        }
+      ],
+      "verdict": [],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 0
+      },
+      "dbAvailable": true
+    },
+    "group_mcp": {
+      "groupBy": "mcp",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 2,
+        "sum": 21000,
+        "avg": 10500,
+        "median": 1000,
+        "p95": 20000
+      },
+      "groups": [
+        {
+          "key": "chrome-devtools",
+          "calls": 2,
+          "min": 1000,
+          "max": 20000,
+          "avg": 10500,
+          "median": 1000,
+          "p95": 20000,
+          "sum": 21000,
+          "sharePct": 100,
+          "billableWeightedUsd": 0.4282
+        }
+      ],
+      "verdict": [],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 0
+      },
+      "dbAvailable": true
+    },
+    "group_rule": {
+      "groupBy": "rule",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 3,
+        "sum": 6300,
+        "avg": 2100,
+        "median": 1000,
+        "p95": 5000
+      },
+      "groups": [
+        {
+          "key": "commit-discipline",
+          "calls": 2,
+          "min": 1000,
+          "max": 5000,
+          "avg": 3000,
+          "median": 1000,
+          "p95": 5000,
+          "sum": 6000,
+          "sharePct": 95.23809523809523,
+          "billableWeightedUsd": 0.05915
+        },
+        {
+          "key": "never-git-add-all",
+          "calls": 1,
+          "min": 300,
+          "max": 300,
+          "avg": 300,
+          "median": 300,
+          "p95": 300,
+          "sum": 300,
+          "sharePct": 4.761904761904762,
+          "billableWeightedUsd": 0.0037749999999999997
+        }
+      ],
+      "verdict": [],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 0
+      },
+      "dbAvailable": true
+    },
+    "group_content_tag": {
+      "groupBy": "content_tag",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 4,
+        "sum": 81010,
+        "avg": 20252.5,
+        "median": 1000,
+        "p95": 60000
+      },
+      "groups": [
+        {
+          "key": "toolresult",
+          "calls": 1,
+          "min": 60000,
+          "max": 60000,
+          "avg": 60000,
+          "median": 60000,
+          "p95": 60000,
+          "sum": 60000,
+          "sharePct": 74.064930255524,
+          "billableWeightedUsd": 1.2018050000000002
+        },
+        {
+          "key": "image",
+          "calls": 2,
+          "min": 1000,
+          "max": 20000,
+          "avg": 10500,
+          "median": 1000,
+          "p95": 20000,
+          "sum": 21000,
+          "sharePct": 25.922725589433405,
+          "billableWeightedUsd": 0.4282
+        },
+        {
+          "key": "transcript",
+          "calls": 1,
+          "min": 10,
+          "max": 10,
+          "avg": 10,
+          "median": 10,
+          "p95": 10,
+          "sum": 10,
+          "sharePct": 0.012344155042587335,
+          "billableWeightedUsd": 0
+        }
+      ],
+      "verdict": [],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 0
+      },
+      "dbAvailable": true
+    },
+    "metric_cache_read": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_read",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 9,
+        "sum": 4095,
+        "avg": 455,
+        "median": 20,
+        "p95": 3000
+      },
+      "groups": [
+        {
+          "key": "fork",
+          "calls": 3,
+          "min": 5,
+          "max": 3000,
+          "avg": 1301.6666666666667,
+          "median": 900,
+          "p95": 3000,
+          "sum": 3905,
+          "sharePct": 95.36019536019536,
+          "billableWeightedUsd": 0.02620875
+        },
+        {
+          "key": "fresh",
+          "calls": 2,
+          "min": 20,
+          "max": 100,
+          "avg": 60,
+          "median": 20,
+          "p95": 100,
+          "sum": 120,
+          "sharePct": 2.93040293040293,
+          "billableWeightedUsd": 0.04376
+        },
+        {
+          "key": "worktree",
+          "calls": 2,
+          "min": 5,
+          "max": 50,
+          "avg": 27.5,
+          "median": 5,
+          "p95": 50,
+          "sum": 55,
+          "sharePct": 1.3431013431013432,
+          "billableWeightedUsd": 1.6077550000000003
+        },
+        {
+          "key": "root",
+          "calls": 1,
+          "min": 15,
+          "max": 15,
+          "avg": 15,
+          "median": 15,
+          "p95": 15,
+          "sum": 15,
+          "sharePct": 0.3663003663003663,
+          "billableWeightedUsd": 0.0037825000000000003
+        },
+        {
+          "key": "unresolved",
+          "calls": 1,
+          "min": 0,
+          "max": 0,
+          "avg": 0,
+          "median": 0,
+          "p95": 0,
+          "sum": 0,
+          "sharePct": 0,
+          "billableWeightedUsd": 0
+        }
+      ],
+      "verdict": [
+        "worktree averages 0.0× the cache read/call of fork (28 vs 1302) — worktree spawns are cache-cold and isolated.",
+        "fork averages 2069% more cache read than fresh (1302 vs 60) — forks read the parent cache.",
+        "fresh subagents average 4.0× the cache read/call of root sessions (60 vs 15)."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 1
+      },
+      "dbAvailable": true
+    },
+    "metric_output_tokens": {
+      "groupBy": "spawn_kind",
+      "metric": "output_tokens",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 9,
+        "sum": 8985,
+        "avg": 998.3333333333334,
+        "median": 60,
+        "p95": 8000
+      },
+      "groups": [
+        {
+          "key": "unresolved",
+          "calls": 1,
+          "min": 8000,
+          "max": 8000,
+          "avg": 8000,
+          "median": 8000,
+          "p95": 8000,
+          "sum": 8000,
+          "sharePct": 89.03728436282692,
+          "billableWeightedUsd": 0
+        },
+        {
+          "key": "fork",
+          "calls": 3,
+          "min": 5,
+          "max": 500,
+          "avg": 185,
+          "median": 50,
+          "p95": 500,
+          "sum": 555,
+          "sharePct": 6.176961602671119,
+          "billableWeightedUsd": 0.02620875
+        },
+        {
+          "key": "fresh",
+          "calls": 2,
+          "min": 60,
+          "max": 200,
+          "avg": 130,
+          "median": 60,
+          "p95": 200,
+          "sum": 260,
+          "sharePct": 2.893711741791875,
+          "billableWeightedUsd": 0.04376
+        },
+        {
+          "key": "worktree",
+          "calls": 2,
+          "min": 30,
+          "max": 100,
+          "avg": 65,
+          "median": 30,
+          "p95": 100,
+          "sum": 130,
+          "sharePct": 1.4468558708959376,
+          "billableWeightedUsd": 1.6077550000000003
+        },
+        {
+          "key": "root",
+          "calls": 1,
+          "min": 40,
+          "max": 40,
+          "avg": 40,
+          "median": 40,
+          "p95": 40,
+          "sum": 40,
+          "sharePct": 0.4451864218141347,
+          "billableWeightedUsd": 0.0037825000000000003
+        }
+      ],
+      "verdict": [
+        "worktree averages 0.4× the output tokens/call of fork (65 vs 185) — worktree spawns are cache-cold and isolated.",
+        "fork averages 42% more output tokens than fresh (185 vs 130) — forks read the parent cache.",
+        "fresh subagents average 3.3× the output tokens/call of root sessions (130 vs 40)."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 1
+      },
+      "dbAvailable": true
+    },
+    "metric_input_tokens": {
+      "groupBy": "spawn_kind",
+      "metric": "input_tokens",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 9,
+        "sum": 520,
+        "avg": 57.77777777777778,
+        "median": 55,
+        "p95": 120
+      },
+      "groups": [
+        {
+          "key": "fresh",
+          "calls": 2,
+          "min": 70,
+          "max": 120,
+          "avg": 95,
+          "median": 70,
+          "p95": 120,
+          "sum": 190,
+          "sharePct": 36.53846153846153,
+          "billableWeightedUsd": 0.04376
+        },
+        {
+          "key": "worktree",
+          "calls": 2,
+          "min": 30,
+          "max": 90,
+          "avg": 60,
+          "median": 30,
+          "p95": 90,
+          "sum": 120,
+          "sharePct": 23.076923076923077,
+          "billableWeightedUsd": 1.6077550000000003
+        },
+        {
+          "key": "root",
+          "calls": 1,
+          "min": 55,
+          "max": 55,
+          "avg": 55,
+          "median": 55,
+          "p95": 55,
+          "sum": 55,
+          "sharePct": 10.576923076923077,
+          "billableWeightedUsd": 0.0037825000000000003
+        },
+        {
+          "key": "fork",
+          "calls": 3,
+          "min": 5,
+          "max": 100,
+          "avg": 48.333333333333336,
+          "median": 40,
+          "p95": 100,
+          "sum": 145,
+          "sharePct": 27.884615384615387,
+          "billableWeightedUsd": 0.02620875
+        },
+        {
+          "key": "unresolved",
+          "calls": 1,
+          "min": 10,
+          "max": 10,
+          "avg": 10,
+          "median": 10,
+          "p95": 10,
+          "sum": 10,
+          "sharePct": 1.9230769230769231,
+          "billableWeightedUsd": 0
+        }
+      ],
+      "verdict": [
+        "worktree averages 1.2× the input tokens/call of fork (60 vs 48) — worktree spawns are cache-cold and isolated.",
+        "fork averages 49% less input tokens than fresh (48 vs 95) — forks read the parent cache.",
+        "fresh subagents average 1.7× the input tokens/call of root sessions (95 vs 55)."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 1
+      },
+      "dbAvailable": true
+    },
+    "metric_total": {
+      "groupBy": "spawn_kind",
+      "metric": "total",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 9,
+        "sum": 101115,
+        "avg": 11235,
+        "median": 4600,
+        "p95": 60065
+      },
+      "groups": [
+        {
+          "key": "worktree",
+          "calls": 2,
+          "min": 20240,
+          "max": 60065,
+          "avg": 40152.5,
+          "median": 20240,
+          "p95": 60065,
+          "sum": 80305,
+          "sharePct": 79.41947287741681,
+          "billableWeightedUsd": 1.6077550000000003
+        },
+        {
+          "key": "unresolved",
+          "calls": 1,
+          "min": 8020,
+          "max": 8020,
+          "avg": 8020,
+          "median": 8020,
+          "p95": 8020,
+          "sum": 8020,
+          "sharePct": 7.931563071749988,
+          "billableWeightedUsd": 0
+        },
+        {
+          "key": "fresh",
+          "calls": 2,
+          "min": 950,
+          "max": 5420,
+          "avg": 3185,
+          "median": 950,
+          "p95": 5420,
+          "sum": 6370,
+          "sharePct": 6.299757701626861,
+          "billableWeightedUsd": 0.04376
+        },
+        {
+          "key": "fork",
+          "calls": 3,
+          "min": 20,
+          "max": 4600,
+          "avg": 1970,
+          "median": 1290,
+          "p95": 4600,
+          "sum": 5910,
+          "sharePct": 5.844830143895565,
+          "billableWeightedUsd": 0.02620875
+        },
+        {
+          "key": "root",
+          "calls": 1,
+          "min": 510,
+          "max": 510,
+          "avg": 510,
+          "median": 510,
+          "p95": 510,
+          "sum": 510,
+          "sharePct": 0.5043762053107848,
+          "billableWeightedUsd": 0.0037825000000000003
+        }
+      ],
+      "verdict": [
+        "worktree averages 20.4× the total/call of fork (40153 vs 1970) — worktree spawns are cache-cold and isolated.",
+        "fork averages 38% less total than fresh (1970 vs 3185) — forks read the parent cache.",
+        "fresh subagents average 6.2× the total/call of root sessions (3185 vs 510)."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 1
+      },
+      "dbAvailable": true
+    },
+    "metric_billable_weighted": {
+      "groupBy": "spawn_kind",
+      "metric": "billable_weighted",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 9,
+        "sum": 1.6815062500000002,
+        "avg": 0.1868340277777778,
+        "median": 0.00686,
+        "p95": 1.2018050000000002
+      },
+      "groups": [
+        {
+          "key": "worktree",
+          "calls": 2,
+          "min": 0.40595000000000003,
+          "max": 1.2018050000000002,
+          "avg": 0.8038775000000001,
+          "median": 0.40595000000000003,
+          "p95": 1.2018050000000002,
+          "sum": 1.6077550000000003,
+          "sharePct": 95.61397705182482,
+          "billableWeightedUsd": 1.6077550000000003
+        },
+        {
+          "key": "fresh",
+          "calls": 2,
+          "min": 0.00686,
+          "max": 0.0369,
+          "avg": 0.02188,
+          "median": 0.00686,
+          "p95": 0.0369,
+          "sum": 0.04376,
+          "sharePct": 2.602428626120182,
+          "billableWeightedUsd": 0.04376
+        },
+        {
+          "key": "fork",
+          "calls": 3,
+          "min": 0.00018375,
+          "max": 0.02225,
+          "avg": 0.00873625,
+          "median": 0.0037749999999999997,
+          "p95": 0.02225,
+          "sum": 0.02620875,
+          "sharePct": 1.5586471950371874,
+          "billableWeightedUsd": 0.02620875
+        },
+        {
+          "key": "root",
+          "calls": 1,
+          "min": 0.0037825000000000003,
+          "max": 0.0037825000000000003,
+          "avg": 0.0037825000000000003,
+          "median": 0.0037825000000000003,
+          "p95": 0.0037825000000000003,
+          "sum": 0.0037825000000000003,
+          "sharePct": 0.2249471270178151,
+          "billableWeightedUsd": 0.0037825000000000003
+        },
+        {
+          "key": "unresolved",
+          "calls": 1,
+          "min": 0,
+          "max": 0,
+          "avg": 0,
+          "median": 0,
+          "p95": 0,
+          "sum": 0,
+          "sharePct": 0,
+          "billableWeightedUsd": 0
+        }
+      ],
+      "verdict": [
+        "worktree averages 92.0× the billable weighted/call of fork (1 vs 0) — worktree spawns are cache-cold and isolated.",
+        "fork averages 60% less billable weighted than fresh (0 vs 0) — forks read the parent cache.",
+        "fresh subagents average 5.8× the billable weighted/call of root sessions (0 vs 0)."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 1
+      },
+      "dbAvailable": true
+    },
+    "metric_breaks": {
+      "groupBy": "spawn_kind",
+      "metric": "breaks",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 9,
+        "sum": 4,
+        "avg": 0.4444444444444444,
+        "median": 0,
+        "p95": 1
+      },
+      "groups": [
+        {
+          "key": "fork",
+          "calls": 3,
+          "min": 0,
+          "max": 1,
+          "avg": 0.6666666666666666,
+          "median": 1,
+          "p95": 1,
+          "sum": 2,
+          "sharePct": 50,
+          "billableWeightedUsd": 0.02620875
+        },
+        {
+          "key": "fresh",
+          "calls": 2,
+          "min": 0,
+          "max": 1,
+          "avg": 0.5,
+          "median": 0,
+          "p95": 1,
+          "sum": 1,
+          "sharePct": 25,
+          "billableWeightedUsd": 0.04376
+        },
+        {
+          "key": "worktree",
+          "calls": 2,
+          "min": 0,
+          "max": 1,
+          "avg": 0.5,
+          "median": 0,
+          "p95": 1,
+          "sum": 1,
+          "sharePct": 25,
+          "billableWeightedUsd": 1.6077550000000003
+        },
+        {
+          "key": "unresolved",
+          "calls": 1,
+          "min": 0,
+          "max": 0,
+          "avg": 0,
+          "median": 0,
+          "p95": 0,
+          "sum": 0,
+          "sharePct": 0,
+          "billableWeightedUsd": 0
+        },
+        {
+          "key": "root",
+          "calls": 1,
+          "min": 0,
+          "max": 0,
+          "avg": 0,
+          "median": 0,
+          "p95": 0,
+          "sum": 0,
+          "sharePct": 0,
+          "billableWeightedUsd": 0.0037825000000000003
+        }
+      ],
+      "verdict": [
+        "worktree averages 0.8× the breaks/call of fork (1 vs 1) — worktree spawns are cache-cold and isolated.",
+        "fork averages 33% more breaks than fresh (1 vs 1) — forks read the parent cache."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 1
+      },
+      "dbAvailable": true
+    },
+    "agg_sum": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "sum",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 9,
+        "sum": 87515,
+        "avg": 9723.888888888889,
+        "median": 800,
+        "p95": 60000
+      },
+      "groups": [
+        {
+          "key": "worktree",
+          "calls": 2,
+          "min": 20000,
+          "max": 60000,
+          "avg": 40000,
+          "median": 20000,
+          "p95": 60000,
+          "sum": 80000,
+          "sharePct": 91.41290064560361,
+          "billableWeightedUsd": 1.6077550000000003
+        },
+        {
+          "key": "fresh",
+          "calls": 2,
+          "min": 800,
+          "max": 5000,
+          "avg": 2900,
+          "median": 800,
+          "p95": 5000,
+          "sum": 5800,
+          "sharePct": 6.627435296806262,
+          "billableWeightedUsd": 0.04376
+        },
+        {
+          "key": "fork",
+          "calls": 3,
+          "min": 5,
+          "max": 1000,
+          "avg": 435,
+          "median": 300,
+          "p95": 1000,
+          "sum": 1305,
+          "sharePct": 1.491172941781409,
+          "billableWeightedUsd": 0.02620875
+        },
+        {
+          "key": "root",
+          "calls": 1,
+          "min": 400,
+          "max": 400,
+          "avg": 400,
+          "median": 400,
+          "p95": 400,
+          "sum": 400,
+          "sharePct": 0.457064503228018,
+          "billableWeightedUsd": 0.0037825000000000003
+        },
+        {
+          "key": "unresolved",
+          "calls": 1,
+          "min": 10,
+          "max": 10,
+          "avg": 10,
+          "median": 10,
+          "p95": 10,
+          "sum": 10,
+          "sharePct": 0.01142661258070045,
+          "billableWeightedUsd": 0
+        }
+      ],
+      "verdict": [
+        "worktree averages 92.0× the cache creation/call of fork (40000 vs 435) — worktree spawns are cache-cold and isolated.",
+        "fork averages 85% less cache creation than fresh (435 vs 2900) — forks read the parent cache.",
+        "fresh subagents average 7.3× the cache creation/call of root sessions (2900 vs 400)."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 1
+      },
+      "dbAvailable": true
+    },
+    "agg_median": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "median",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 9,
+        "sum": 87515,
+        "avg": 9723.888888888889,
+        "median": 800,
+        "p95": 60000
+      },
+      "groups": [
+        {
+          "key": "worktree",
+          "calls": 2,
+          "min": 20000,
+          "max": 60000,
+          "avg": 40000,
+          "median": 20000,
+          "p95": 60000,
+          "sum": 80000,
+          "sharePct": 91.41290064560361,
+          "billableWeightedUsd": 1.6077550000000003
+        },
+        {
+          "key": "fresh",
+          "calls": 2,
+          "min": 800,
+          "max": 5000,
+          "avg": 2900,
+          "median": 800,
+          "p95": 5000,
+          "sum": 5800,
+          "sharePct": 6.627435296806262,
+          "billableWeightedUsd": 0.04376
+        },
+        {
+          "key": "root",
+          "calls": 1,
+          "min": 400,
+          "max": 400,
+          "avg": 400,
+          "median": 400,
+          "p95": 400,
+          "sum": 400,
+          "sharePct": 0.457064503228018,
+          "billableWeightedUsd": 0.0037825000000000003
+        },
+        {
+          "key": "fork",
+          "calls": 3,
+          "min": 5,
+          "max": 1000,
+          "avg": 435,
+          "median": 300,
+          "p95": 1000,
+          "sum": 1305,
+          "sharePct": 1.491172941781409,
+          "billableWeightedUsd": 0.02620875
+        },
+        {
+          "key": "unresolved",
+          "calls": 1,
+          "min": 10,
+          "max": 10,
+          "avg": 10,
+          "median": 10,
+          "p95": 10,
+          "sum": 10,
+          "sharePct": 0.01142661258070045,
+          "billableWeightedUsd": 0
+        }
+      ],
+      "verdict": [
+        "worktree averages 92.0× the cache creation/call of fork (40000 vs 435) — worktree spawns are cache-cold and isolated.",
+        "fork averages 85% less cache creation than fresh (435 vs 2900) — forks read the parent cache.",
+        "fresh subagents average 7.3× the cache creation/call of root sessions (2900 vs 400)."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 1
+      },
+      "dbAvailable": true
+    },
+    "agg_min": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "min",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 9,
+        "sum": 87515,
+        "avg": 9723.888888888889,
+        "median": 800,
+        "p95": 60000
+      },
+      "groups": [
+        {
+          "key": "worktree",
+          "calls": 2,
+          "min": 20000,
+          "max": 60000,
+          "avg": 40000,
+          "median": 20000,
+          "p95": 60000,
+          "sum": 80000,
+          "sharePct": 91.41290064560361,
+          "billableWeightedUsd": 1.6077550000000003
+        },
+        {
+          "key": "fresh",
+          "calls": 2,
+          "min": 800,
+          "max": 5000,
+          "avg": 2900,
+          "median": 800,
+          "p95": 5000,
+          "sum": 5800,
+          "sharePct": 6.627435296806262,
+          "billableWeightedUsd": 0.04376
+        },
+        {
+          "key": "root",
+          "calls": 1,
+          "min": 400,
+          "max": 400,
+          "avg": 400,
+          "median": 400,
+          "p95": 400,
+          "sum": 400,
+          "sharePct": 0.457064503228018,
+          "billableWeightedUsd": 0.0037825000000000003
+        },
+        {
+          "key": "unresolved",
+          "calls": 1,
+          "min": 10,
+          "max": 10,
+          "avg": 10,
+          "median": 10,
+          "p95": 10,
+          "sum": 10,
+          "sharePct": 0.01142661258070045,
+          "billableWeightedUsd": 0
+        },
+        {
+          "key": "fork",
+          "calls": 3,
+          "min": 5,
+          "max": 1000,
+          "avg": 435,
+          "median": 300,
+          "p95": 1000,
+          "sum": 1305,
+          "sharePct": 1.491172941781409,
+          "billableWeightedUsd": 0.02620875
+        }
+      ],
+      "verdict": [
+        "worktree averages 92.0× the cache creation/call of fork (40000 vs 435) — worktree spawns are cache-cold and isolated.",
+        "fork averages 85% less cache creation than fresh (435 vs 2900) — forks read the parent cache.",
+        "fresh subagents average 7.3× the cache creation/call of root sessions (2900 vs 400)."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 1
+      },
+      "dbAvailable": true
+    },
+    "agg_max": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "max",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 9,
+        "sum": 87515,
+        "avg": 9723.888888888889,
+        "median": 800,
+        "p95": 60000
+      },
+      "groups": [
+        {
+          "key": "worktree",
+          "calls": 2,
+          "min": 20000,
+          "max": 60000,
+          "avg": 40000,
+          "median": 20000,
+          "p95": 60000,
+          "sum": 80000,
+          "sharePct": 91.41290064560361,
+          "billableWeightedUsd": 1.6077550000000003
+        },
+        {
+          "key": "fresh",
+          "calls": 2,
+          "min": 800,
+          "max": 5000,
+          "avg": 2900,
+          "median": 800,
+          "p95": 5000,
+          "sum": 5800,
+          "sharePct": 6.627435296806262,
+          "billableWeightedUsd": 0.04376
+        },
+        {
+          "key": "fork",
+          "calls": 3,
+          "min": 5,
+          "max": 1000,
+          "avg": 435,
+          "median": 300,
+          "p95": 1000,
+          "sum": 1305,
+          "sharePct": 1.491172941781409,
+          "billableWeightedUsd": 0.02620875
+        },
+        {
+          "key": "root",
+          "calls": 1,
+          "min": 400,
+          "max": 400,
+          "avg": 400,
+          "median": 400,
+          "p95": 400,
+          "sum": 400,
+          "sharePct": 0.457064503228018,
+          "billableWeightedUsd": 0.0037825000000000003
+        },
+        {
+          "key": "unresolved",
+          "calls": 1,
+          "min": 10,
+          "max": 10,
+          "avg": 10,
+          "median": 10,
+          "p95": 10,
+          "sum": 10,
+          "sharePct": 0.01142661258070045,
+          "billableWeightedUsd": 0
+        }
+      ],
+      "verdict": [
+        "worktree averages 92.0× the cache creation/call of fork (40000 vs 435) — worktree spawns are cache-cold and isolated.",
+        "fork averages 85% less cache creation than fresh (435 vs 2900) — forks read the parent cache.",
+        "fresh subagents average 7.3× the cache creation/call of root sessions (2900 vs 400)."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 1
+      },
+      "dbAvailable": true
+    },
+    "agg_p95": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "p95",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 9,
+        "sum": 87515,
+        "avg": 9723.888888888889,
+        "median": 800,
+        "p95": 60000
+      },
+      "groups": [
+        {
+          "key": "worktree",
+          "calls": 2,
+          "min": 20000,
+          "max": 60000,
+          "avg": 40000,
+          "median": 20000,
+          "p95": 60000,
+          "sum": 80000,
+          "sharePct": 91.41290064560361,
+          "billableWeightedUsd": 1.6077550000000003
+        },
+        {
+          "key": "fresh",
+          "calls": 2,
+          "min": 800,
+          "max": 5000,
+          "avg": 2900,
+          "median": 800,
+          "p95": 5000,
+          "sum": 5800,
+          "sharePct": 6.627435296806262,
+          "billableWeightedUsd": 0.04376
+        },
+        {
+          "key": "fork",
+          "calls": 3,
+          "min": 5,
+          "max": 1000,
+          "avg": 435,
+          "median": 300,
+          "p95": 1000,
+          "sum": 1305,
+          "sharePct": 1.491172941781409,
+          "billableWeightedUsd": 0.02620875
+        },
+        {
+          "key": "root",
+          "calls": 1,
+          "min": 400,
+          "max": 400,
+          "avg": 400,
+          "median": 400,
+          "p95": 400,
+          "sum": 400,
+          "sharePct": 0.457064503228018,
+          "billableWeightedUsd": 0.0037825000000000003
+        },
+        {
+          "key": "unresolved",
+          "calls": 1,
+          "min": 10,
+          "max": 10,
+          "avg": 10,
+          "median": 10,
+          "p95": 10,
+          "sum": 10,
+          "sharePct": 0.01142661258070045,
+          "billableWeightedUsd": 0
+        }
+      ],
+      "verdict": [
+        "worktree averages 92.0× the cache creation/call of fork (40000 vs 435) — worktree spawns are cache-cold and isolated.",
+        "fork averages 85% less cache creation than fresh (435 vs 2900) — forks read the parent cache.",
+        "fresh subagents average 7.3× the cache creation/call of root sessions (2900 vs 400)."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 1
+      },
+      "dbAvailable": true
+    },
+    "agg_count": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "count",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 9,
+        "sum": 87515,
+        "avg": 9723.888888888889,
+        "median": 800,
+        "p95": 60000
+      },
+      "groups": [
+        {
+          "key": "fork",
+          "calls": 3,
+          "min": 5,
+          "max": 1000,
+          "avg": 435,
+          "median": 300,
+          "p95": 1000,
+          "sum": 1305,
+          "sharePct": 1.491172941781409,
+          "billableWeightedUsd": 0.02620875
+        },
+        {
+          "key": "fresh",
+          "calls": 2,
+          "min": 800,
+          "max": 5000,
+          "avg": 2900,
+          "median": 800,
+          "p95": 5000,
+          "sum": 5800,
+          "sharePct": 6.627435296806262,
+          "billableWeightedUsd": 0.04376
+        },
+        {
+          "key": "worktree",
+          "calls": 2,
+          "min": 20000,
+          "max": 60000,
+          "avg": 40000,
+          "median": 20000,
+          "p95": 60000,
+          "sum": 80000,
+          "sharePct": 91.41290064560361,
+          "billableWeightedUsd": 1.6077550000000003
+        },
+        {
+          "key": "unresolved",
+          "calls": 1,
+          "min": 10,
+          "max": 10,
+          "avg": 10,
+          "median": 10,
+          "p95": 10,
+          "sum": 10,
+          "sharePct": 0.01142661258070045,
+          "billableWeightedUsd": 0
+        },
+        {
+          "key": "root",
+          "calls": 1,
+          "min": 400,
+          "max": 400,
+          "avg": 400,
+          "median": 400,
+          "p95": 400,
+          "sum": 400,
+          "sharePct": 0.457064503228018,
+          "billableWeightedUsd": 0.0037825000000000003
+        }
+      ],
+      "verdict": [
+        "worktree averages 92.0× the cache creation/call of fork (40000 vs 435) — worktree spawns are cache-cold and isolated.",
+        "fork averages 85% less cache creation than fresh (435 vs 2900) — forks read the parent cache.",
+        "fresh subagents average 7.3× the cache creation/call of root sessions (2900 vs 400)."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 1
+      },
+      "dbAvailable": true
+    },
+    "rank_best_first": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "best-first",
+      "baseline": {
+        "calls": 9,
+        "sum": 87515,
+        "avg": 9723.888888888889,
+        "median": 800,
+        "p95": 60000
+      },
+      "groups": [
+        {
+          "key": "unresolved",
+          "calls": 1,
+          "min": 10,
+          "max": 10,
+          "avg": 10,
+          "median": 10,
+          "p95": 10,
+          "sum": 10,
+          "sharePct": 0.01142661258070045,
+          "billableWeightedUsd": 0
+        },
+        {
+          "key": "root",
+          "calls": 1,
+          "min": 400,
+          "max": 400,
+          "avg": 400,
+          "median": 400,
+          "p95": 400,
+          "sum": 400,
+          "sharePct": 0.457064503228018,
+          "billableWeightedUsd": 0.0037825000000000003
+        },
+        {
+          "key": "fork",
+          "calls": 3,
+          "min": 5,
+          "max": 1000,
+          "avg": 435,
+          "median": 300,
+          "p95": 1000,
+          "sum": 1305,
+          "sharePct": 1.491172941781409,
+          "billableWeightedUsd": 0.02620875
+        },
+        {
+          "key": "fresh",
+          "calls": 2,
+          "min": 800,
+          "max": 5000,
+          "avg": 2900,
+          "median": 800,
+          "p95": 5000,
+          "sum": 5800,
+          "sharePct": 6.627435296806262,
+          "billableWeightedUsd": 0.04376
+        },
+        {
+          "key": "worktree",
+          "calls": 2,
+          "min": 20000,
+          "max": 60000,
+          "avg": 40000,
+          "median": 20000,
+          "p95": 60000,
+          "sum": 80000,
+          "sharePct": 91.41290064560361,
+          "billableWeightedUsd": 1.6077550000000003
+        }
+      ],
+      "verdict": [
+        "worktree averages 92.0× the cache creation/call of fork (40000 vs 435) — worktree spawns are cache-cold and isolated.",
+        "fork averages 85% less cache creation than fresh (435 vs 2900) — forks read the parent cache.",
+        "fresh subagents average 7.3× the cache creation/call of root sessions (2900 vs 400)."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 1
+      },
+      "dbAvailable": true
+    },
+    "top_n_two": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 9,
+        "sum": 87515,
+        "avg": 9723.888888888889,
+        "median": 800,
+        "p95": 60000
+      },
+      "groups": [
+        {
+          "key": "worktree",
+          "calls": 2,
+          "min": 20000,
+          "max": 60000,
+          "avg": 40000,
+          "median": 20000,
+          "p95": 60000,
+          "sum": 80000,
+          "sharePct": 91.41290064560361,
+          "billableWeightedUsd": 1.6077550000000003
+        },
+        {
+          "key": "fresh",
+          "calls": 2,
+          "min": 800,
+          "max": 5000,
+          "avg": 2900,
+          "median": 800,
+          "p95": 5000,
+          "sum": 5800,
+          "sharePct": 6.627435296806262,
+          "billableWeightedUsd": 0.04376
+        }
+      ],
+      "verdict": [
+        "worktree averages 92.0× the cache creation/call of fork (40000 vs 435) — worktree spawns are cache-cold and isolated.",
+        "fork averages 85% less cache creation than fresh (435 vs 2900) — forks read the parent cache.",
+        "fresh subagents average 7.3× the cache creation/call of root sessions (2900 vs 400)."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 1
+      },
+      "dbAvailable": true
+    },
+    "top_n_zero_clamps_to_one": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 9,
+        "sum": 87515,
+        "avg": 9723.888888888889,
+        "median": 800,
+        "p95": 60000
+      },
+      "groups": [
+        {
+          "key": "worktree",
+          "calls": 2,
+          "min": 20000,
+          "max": 60000,
+          "avg": 40000,
+          "median": 20000,
+          "p95": 60000,
+          "sum": 80000,
+          "sharePct": 91.41290064560361,
+          "billableWeightedUsd": 1.6077550000000003
+        }
+      ],
+      "verdict": [
+        "worktree averages 92.0× the cache creation/call of fork (40000 vs 435) — worktree spawns are cache-cold and isolated.",
+        "fork averages 85% less cache creation than fresh (435 vs 2900) — forks read the parent cache.",
+        "fresh subagents average 7.3× the cache creation/call of root sessions (2900 vs 400)."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 1
+      },
+      "dbAvailable": true
+    },
+    "top_n_above_max": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 9,
+        "sum": 87515,
+        "avg": 9723.888888888889,
+        "median": 800,
+        "p95": 60000
+      },
+      "groups": [
+        {
+          "key": "worktree",
+          "calls": 2,
+          "min": 20000,
+          "max": 60000,
+          "avg": 40000,
+          "median": 20000,
+          "p95": 60000,
+          "sum": 80000,
+          "sharePct": 91.41290064560361,
+          "billableWeightedUsd": 1.6077550000000003
+        },
+        {
+          "key": "fresh",
+          "calls": 2,
+          "min": 800,
+          "max": 5000,
+          "avg": 2900,
+          "median": 800,
+          "p95": 5000,
+          "sum": 5800,
+          "sharePct": 6.627435296806262,
+          "billableWeightedUsd": 0.04376
+        },
+        {
+          "key": "fork",
+          "calls": 3,
+          "min": 5,
+          "max": 1000,
+          "avg": 435,
+          "median": 300,
+          "p95": 1000,
+          "sum": 1305,
+          "sharePct": 1.491172941781409,
+          "billableWeightedUsd": 0.02620875
+        },
+        {
+          "key": "root",
+          "calls": 1,
+          "min": 400,
+          "max": 400,
+          "avg": 400,
+          "median": 400,
+          "p95": 400,
+          "sum": 400,
+          "sharePct": 0.457064503228018,
+          "billableWeightedUsd": 0.0037825000000000003
+        },
+        {
+          "key": "unresolved",
+          "calls": 1,
+          "min": 10,
+          "max": 10,
+          "avg": 10,
+          "median": 10,
+          "p95": 10,
+          "sum": 10,
+          "sharePct": 0.01142661258070045,
+          "billableWeightedUsd": 0
+        }
+      ],
+      "verdict": [
+        "worktree averages 92.0× the cache creation/call of fork (40000 vs 435) — worktree spawns are cache-cold and isolated.",
+        "fork averages 85% less cache creation than fresh (435 vs 2900) — forks read the parent cache.",
+        "fresh subagents average 7.3× the cache creation/call of root sessions (2900 vs 400)."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 1
+      },
+      "dbAvailable": true
+    },
+    "filter_model": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 6,
+        "sum": 7505,
+        "avg": 1250.8333333333333,
+        "median": 400,
+        "p95": 5000
+      },
+      "groups": [
+        {
+          "key": "fresh",
+          "calls": 2,
+          "min": 800,
+          "max": 5000,
+          "avg": 2900,
+          "median": 800,
+          "p95": 5000,
+          "sum": 5800,
+          "sharePct": 77.28181212524984,
+          "billableWeightedUsd": 0.04376
+        },
+        {
+          "key": "fork",
+          "calls": 3,
+          "min": 5,
+          "max": 1000,
+          "avg": 435,
+          "median": 300,
+          "p95": 1000,
+          "sum": 1305,
+          "sharePct": 17.388407728181214,
+          "billableWeightedUsd": 0.02620875
+        },
+        {
+          "key": "root",
+          "calls": 1,
+          "min": 400,
+          "max": 400,
+          "avg": 400,
+          "median": 400,
+          "p95": 400,
+          "sum": 400,
+          "sharePct": 5.329780146568954,
+          "billableWeightedUsd": 0.0037825000000000003
+        }
+      ],
+      "verdict": [
+        "fork averages 85% less cache creation than fresh (435 vs 2900) — forks read the parent cache.",
+        "fresh subagents average 7.3× the cache creation/call of root sessions (2900 vs 400)."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 0
+      },
+      "dbAvailable": true
+    },
+    "filter_spawn_kind": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 3,
+        "sum": 1305,
+        "avg": 435,
+        "median": 300,
+        "p95": 1000
+      },
+      "groups": [
+        {
+          "key": "fork",
+          "calls": 3,
+          "min": 5,
+          "max": 1000,
+          "avg": 435,
+          "median": 300,
+          "p95": 1000,
+          "sum": 1305,
+          "sharePct": 100,
+          "billableWeightedUsd": 0.02620875
+        }
+      ],
+      "verdict": [],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 0
+      },
+      "dbAvailable": true
+    },
+    "filter_subagent_type": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 3,
+        "sum": 6800,
+        "avg": 2266.6666666666665,
+        "median": 1000,
+        "p95": 5000
+      },
+      "groups": [
+        {
+          "key": "fresh",
+          "calls": 2,
+          "min": 800,
+          "max": 5000,
+          "avg": 2900,
+          "median": 800,
+          "p95": 5000,
+          "sum": 5800,
+          "sharePct": 85.29411764705883,
+          "billableWeightedUsd": 0.04376
+        },
+        {
+          "key": "fork",
+          "calls": 1,
+          "min": 1000,
+          "max": 1000,
+          "avg": 1000,
+          "median": 1000,
+          "p95": 1000,
+          "sum": 1000,
+          "sharePct": 14.705882352941178,
+          "billableWeightedUsd": 0.02225
+        }
+      ],
+      "verdict": [
+        "fork averages 66% less cache creation than fresh (1000 vs 2900) — forks read the parent cache."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 0
+      },
+      "dbAvailable": true
+    },
+    "filter_effort": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 5,
+        "sum": 7205,
+        "avg": 1441,
+        "median": 800,
+        "p95": 5000
+      },
+      "groups": [
+        {
+          "key": "fresh",
+          "calls": 2,
+          "min": 800,
+          "max": 5000,
+          "avg": 2900,
+          "median": 800,
+          "p95": 5000,
+          "sum": 5800,
+          "sharePct": 80.49965301873698,
+          "billableWeightedUsd": 0.04376
+        },
+        {
+          "key": "fork",
+          "calls": 2,
+          "min": 5,
+          "max": 1000,
+          "avg": 502.5,
+          "median": 5,
+          "p95": 1000,
+          "sum": 1005,
+          "sharePct": 13.948646773074255,
+          "billableWeightedUsd": 0.02243375
+        },
+        {
+          "key": "root",
+          "calls": 1,
+          "min": 400,
+          "max": 400,
+          "avg": 400,
+          "median": 400,
+          "p95": 400,
+          "sum": 400,
+          "sharePct": 5.551700208188757,
+          "billableWeightedUsd": 0.0037825000000000003
+        }
+      ],
+      "verdict": [
+        "fork averages 83% less cache creation than fresh (503 vs 2900) — forks read the parent cache.",
+        "fresh subagents average 7.3× the cache creation/call of root sessions (2900 vs 400)."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 0
+      },
+      "dbAvailable": true
+    },
+    "filter_isolation": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 2,
+        "sum": 80000,
+        "avg": 40000,
+        "median": 20000,
+        "p95": 60000
+      },
+      "groups": [
+        {
+          "key": "worktree",
+          "calls": 2,
+          "min": 20000,
+          "max": 60000,
+          "avg": 40000,
+          "median": 20000,
+          "p95": 60000,
+          "sum": 80000,
+          "sharePct": 100,
+          "billableWeightedUsd": 1.6077550000000003
+        }
+      ],
+      "verdict": [],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 0
+      },
+      "dbAvailable": true
+    },
+    "filter_account": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 5,
+        "sum": 86005,
+        "avg": 17201,
+        "median": 5000,
+        "p95": 60000
+      },
+      "groups": [
+        {
+          "key": "worktree",
+          "calls": 2,
+          "min": 20000,
+          "max": 60000,
+          "avg": 40000,
+          "median": 20000,
+          "p95": 60000,
+          "sum": 80000,
+          "sharePct": 93.01784779954654,
+          "billableWeightedUsd": 1.6077550000000003
+        },
+        {
+          "key": "fresh",
+          "calls": 1,
+          "min": 5000,
+          "max": 5000,
+          "avg": 5000,
+          "median": 5000,
+          "p95": 5000,
+          "sum": 5000,
+          "sharePct": 5.813615487471659,
+          "billableWeightedUsd": 0.0369
+        },
+        {
+          "key": "fork",
+          "calls": 2,
+          "min": 5,
+          "max": 1000,
+          "avg": 502.5,
+          "median": 5,
+          "p95": 1000,
+          "sum": 1005,
+          "sharePct": 1.1685367129818034,
+          "billableWeightedUsd": 0.02243375
+        }
+      ],
+      "verdict": [
+        "worktree averages 79.6× the cache creation/call of fork (40000 vs 503) — worktree spawns are cache-cold and isolated.",
+        "fork averages 90% less cache creation than fresh (503 vs 5000) — forks read the parent cache."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 0
+      },
+      "dbAvailable": true
+    },
+    "filter_session": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 2,
+        "sum": 6000,
+        "avg": 3000,
+        "median": 1000,
+        "p95": 5000
+      },
+      "groups": [
+        {
+          "key": "fresh",
+          "calls": 1,
+          "min": 5000,
+          "max": 5000,
+          "avg": 5000,
+          "median": 5000,
+          "p95": 5000,
+          "sum": 5000,
+          "sharePct": 83.33333333333334,
+          "billableWeightedUsd": 0.0369
+        },
+        {
+          "key": "fork",
+          "calls": 1,
+          "min": 1000,
+          "max": 1000,
+          "avg": 1000,
+          "median": 1000,
+          "p95": 1000,
+          "sum": 1000,
+          "sharePct": 16.666666666666664,
+          "billableWeightedUsd": 0.02225
+        }
+      ],
+      "verdict": [
+        "fork averages 80% less cache creation than fresh (1000 vs 5000) — forks read the parent cache."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 0
+      },
+      "dbAvailable": true
+    },
+    "filter_break_cause": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 2,
+        "sum": 6000,
+        "avg": 3000,
+        "median": 1000,
+        "p95": 5000
+      },
+      "groups": [
+        {
+          "key": "fresh",
+          "calls": 1,
+          "min": 5000,
+          "max": 5000,
+          "avg": 5000,
+          "median": 5000,
+          "p95": 5000,
+          "sum": 5000,
+          "sharePct": 83.33333333333334,
+          "billableWeightedUsd": 0.0369
+        },
+        {
+          "key": "fork",
+          "calls": 1,
+          "min": 1000,
+          "max": 1000,
+          "avg": 1000,
+          "median": 1000,
+          "p95": 1000,
+          "sum": 1000,
+          "sharePct": 16.666666666666664,
+          "billableWeightedUsd": 0.02225
+        }
+      ],
+      "verdict": [
+        "fork averages 80% less cache creation than fresh (1000 vs 5000) — forks read the parent cache."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 0
+      },
+      "dbAvailable": true
+    },
+    "filter_spawn_resolution": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 1,
+        "sum": 10,
+        "avg": 10,
+        "median": 10,
+        "p95": 10
+      },
+      "groups": [
+        {
+          "key": "unresolved",
+          "calls": 1,
+          "min": 10,
+          "max": 10,
+          "avg": 10,
+          "median": 10,
+          "p95": 10,
+          "sum": 10,
+          "sharePct": 100,
+          "billableWeightedUsd": 0
+        }
+      ],
+      "verdict": [],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 1
+      },
+      "dbAvailable": true
+    },
+    "filter_min_cache_create": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 4,
+        "sum": 86000,
+        "avg": 21500,
+        "median": 5000,
+        "p95": 60000
+      },
+      "groups": [
+        {
+          "key": "worktree",
+          "calls": 2,
+          "min": 20000,
+          "max": 60000,
+          "avg": 40000,
+          "median": 20000,
+          "p95": 60000,
+          "sum": 80000,
+          "sharePct": 93.02325581395348,
+          "billableWeightedUsd": 1.6077550000000003
+        },
+        {
+          "key": "fresh",
+          "calls": 1,
+          "min": 5000,
+          "max": 5000,
+          "avg": 5000,
+          "median": 5000,
+          "p95": 5000,
+          "sum": 5000,
+          "sharePct": 5.813953488372093,
+          "billableWeightedUsd": 0.0369
+        },
+        {
+          "key": "fork",
+          "calls": 1,
+          "min": 1000,
+          "max": 1000,
+          "avg": 1000,
+          "median": 1000,
+          "p95": 1000,
+          "sum": 1000,
+          "sharePct": 1.1627906976744187,
+          "billableWeightedUsd": 0.02225
+        }
+      ],
+      "verdict": [
+        "worktree averages 40.0× the cache creation/call of fork (40000 vs 1000) — worktree spawns are cache-cold and isolated.",
+        "fork averages 80% less cache creation than fresh (1000 vs 5000) — forks read the parent cache."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 0
+      },
+      "dbAvailable": true
+    },
+    "filter_min_output_tokens": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 4,
+        "sum": 26010,
+        "avg": 6502.5,
+        "median": 1000,
+        "p95": 20000
+      },
+      "groups": [
+        {
+          "key": "worktree",
+          "calls": 1,
+          "min": 20000,
+          "max": 20000,
+          "avg": 20000,
+          "median": 20000,
+          "p95": 20000,
+          "sum": 20000,
+          "sharePct": 76.89350249903883,
+          "billableWeightedUsd": 0.40595000000000003
+        },
+        {
+          "key": "fresh",
+          "calls": 1,
+          "min": 5000,
+          "max": 5000,
+          "avg": 5000,
+          "median": 5000,
+          "p95": 5000,
+          "sum": 5000,
+          "sharePct": 19.223375624759708,
+          "billableWeightedUsd": 0.0369
+        },
+        {
+          "key": "fork",
+          "calls": 1,
+          "min": 1000,
+          "max": 1000,
+          "avg": 1000,
+          "median": 1000,
+          "p95": 1000,
+          "sum": 1000,
+          "sharePct": 3.8446751249519413,
+          "billableWeightedUsd": 0.02225
+        },
+        {
+          "key": "unresolved",
+          "calls": 1,
+          "min": 10,
+          "max": 10,
+          "avg": 10,
+          "median": 10,
+          "p95": 10,
+          "sum": 10,
+          "sharePct": 0.03844675124951942,
+          "billableWeightedUsd": 0
+        }
+      ],
+      "verdict": [
+        "worktree averages 20.0× the cache creation/call of fork (20000 vs 1000) — worktree spawns are cache-cold and isolated.",
+        "fork averages 80% less cache creation than fresh (1000 vs 5000) — forks read the parent cache."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 1
+      },
+      "dbAvailable": true
+    },
+    "filter_empty_string_ignored": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 9,
+        "sum": 87515,
+        "avg": 9723.888888888889,
+        "median": 800,
+        "p95": 60000
+      },
+      "groups": [
+        {
+          "key": "worktree",
+          "calls": 2,
+          "min": 20000,
+          "max": 60000,
+          "avg": 40000,
+          "median": 20000,
+          "p95": 60000,
+          "sum": 80000,
+          "sharePct": 91.41290064560361,
+          "billableWeightedUsd": 1.6077550000000003
+        },
+        {
+          "key": "fresh",
+          "calls": 2,
+          "min": 800,
+          "max": 5000,
+          "avg": 2900,
+          "median": 800,
+          "p95": 5000,
+          "sum": 5800,
+          "sharePct": 6.627435296806262,
+          "billableWeightedUsd": 0.04376
+        },
+        {
+          "key": "fork",
+          "calls": 3,
+          "min": 5,
+          "max": 1000,
+          "avg": 435,
+          "median": 300,
+          "p95": 1000,
+          "sum": 1305,
+          "sharePct": 1.491172941781409,
+          "billableWeightedUsd": 0.02620875
+        },
+        {
+          "key": "root",
+          "calls": 1,
+          "min": 400,
+          "max": 400,
+          "avg": 400,
+          "median": 400,
+          "p95": 400,
+          "sum": 400,
+          "sharePct": 0.457064503228018,
+          "billableWeightedUsd": 0.0037825000000000003
+        },
+        {
+          "key": "unresolved",
+          "calls": 1,
+          "min": 10,
+          "max": 10,
+          "avg": 10,
+          "median": 10,
+          "p95": 10,
+          "sum": 10,
+          "sharePct": 0.01142661258070045,
+          "billableWeightedUsd": 0
+        }
+      ],
+      "verdict": [
+        "worktree averages 92.0× the cache creation/call of fork (40000 vs 435) — worktree spawns are cache-cold and isolated.",
+        "fork averages 85% less cache creation than fresh (435 vs 2900) — forks read the parent cache.",
+        "fresh subagents average 7.3× the cache creation/call of root sessions (2900 vs 400)."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 1
+      },
+      "dbAvailable": true
+    },
+    "filter_window_zero_ignored": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 9,
+        "sum": 87515,
+        "avg": 9723.888888888889,
+        "median": 800,
+        "p95": 60000
+      },
+      "groups": [
+        {
+          "key": "worktree",
+          "calls": 2,
+          "min": 20000,
+          "max": 60000,
+          "avg": 40000,
+          "median": 20000,
+          "p95": 60000,
+          "sum": 80000,
+          "sharePct": 91.41290064560361,
+          "billableWeightedUsd": 1.6077550000000003
+        },
+        {
+          "key": "fresh",
+          "calls": 2,
+          "min": 800,
+          "max": 5000,
+          "avg": 2900,
+          "median": 800,
+          "p95": 5000,
+          "sum": 5800,
+          "sharePct": 6.627435296806262,
+          "billableWeightedUsd": 0.04376
+        },
+        {
+          "key": "fork",
+          "calls": 3,
+          "min": 5,
+          "max": 1000,
+          "avg": 435,
+          "median": 300,
+          "p95": 1000,
+          "sum": 1305,
+          "sharePct": 1.491172941781409,
+          "billableWeightedUsd": 0.02620875
+        },
+        {
+          "key": "root",
+          "calls": 1,
+          "min": 400,
+          "max": 400,
+          "avg": 400,
+          "median": 400,
+          "p95": 400,
+          "sum": 400,
+          "sharePct": 0.457064503228018,
+          "billableWeightedUsd": 0.0037825000000000003
+        },
+        {
+          "key": "unresolved",
+          "calls": 1,
+          "min": 10,
+          "max": 10,
+          "avg": 10,
+          "median": 10,
+          "p95": 10,
+          "sum": 10,
+          "sharePct": 0.01142661258070045,
+          "billableWeightedUsd": 0
+        }
+      ],
+      "verdict": [
+        "worktree averages 92.0× the cache creation/call of fork (40000 vs 435) — worktree spawns are cache-cold and isolated.",
+        "fork averages 85% less cache creation than fresh (435 vs 2900) — forks read the parent cache.",
+        "fresh subagents average 7.3× the cache creation/call of root sessions (2900 vs 400)."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 1
+      },
+      "dbAvailable": true
+    },
+    "filter_window_wide": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 9,
+        "sum": 87515,
+        "avg": 9723.888888888889,
+        "median": 800,
+        "p95": 60000
+      },
+      "groups": [
+        {
+          "key": "worktree",
+          "calls": 2,
+          "min": 20000,
+          "max": 60000,
+          "avg": 40000,
+          "median": 20000,
+          "p95": 60000,
+          "sum": 80000,
+          "sharePct": 91.41290064560361,
+          "billableWeightedUsd": 1.6077550000000003
+        },
+        {
+          "key": "fresh",
+          "calls": 2,
+          "min": 800,
+          "max": 5000,
+          "avg": 2900,
+          "median": 800,
+          "p95": 5000,
+          "sum": 5800,
+          "sharePct": 6.627435296806262,
+          "billableWeightedUsd": 0.04376
+        },
+        {
+          "key": "fork",
+          "calls": 3,
+          "min": 5,
+          "max": 1000,
+          "avg": 435,
+          "median": 300,
+          "p95": 1000,
+          "sum": 1305,
+          "sharePct": 1.491172941781409,
+          "billableWeightedUsd": 0.02620875
+        },
+        {
+          "key": "root",
+          "calls": 1,
+          "min": 400,
+          "max": 400,
+          "avg": 400,
+          "median": 400,
+          "p95": 400,
+          "sum": 400,
+          "sharePct": 0.457064503228018,
+          "billableWeightedUsd": 0.0037825000000000003
+        },
+        {
+          "key": "unresolved",
+          "calls": 1,
+          "min": 10,
+          "max": 10,
+          "avg": 10,
+          "median": 10,
+          "p95": 10,
+          "sum": 10,
+          "sharePct": 0.01142661258070045,
+          "billableWeightedUsd": 0
+        }
+      ],
+      "verdict": [
+        "worktree averages 92.0× the cache creation/call of fork (40000 vs 435) — worktree spawns are cache-cold and isolated.",
+        "fork averages 85% less cache creation than fresh (435 vs 2900) — forks read the parent cache.",
+        "fresh subagents average 7.3× the cache creation/call of root sessions (2900 vs 400)."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 1
+      },
+      "dbAvailable": true
+    },
+    "filter_has_skill": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 3,
+        "sum": 6010,
+        "avg": 2003.3333333333333,
+        "median": 1000,
+        "p95": 5000
+      },
+      "groups": [
+        {
+          "key": "fresh",
+          "calls": 1,
+          "min": 5000,
+          "max": 5000,
+          "avg": 5000,
+          "median": 5000,
+          "p95": 5000,
+          "sum": 5000,
+          "sharePct": 83.19467554076539,
+          "billableWeightedUsd": 0.0369
+        },
+        {
+          "key": "fork",
+          "calls": 1,
+          "min": 1000,
+          "max": 1000,
+          "avg": 1000,
+          "median": 1000,
+          "p95": 1000,
+          "sum": 1000,
+          "sharePct": 16.638935108153078,
+          "billableWeightedUsd": 0.02225
+        },
+        {
+          "key": "unresolved",
+          "calls": 1,
+          "min": 10,
+          "max": 10,
+          "avg": 10,
+          "median": 10,
+          "p95": 10,
+          "sum": 10,
+          "sharePct": 0.16638935108153077,
+          "billableWeightedUsd": 0
+        }
+      ],
+      "verdict": [
+        "fork averages 80% less cache creation than fresh (1000 vs 5000) — forks read the parent cache."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 1
+      },
+      "dbAvailable": true
+    },
+    "filter_has_skill_multi": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 4,
+        "sum": 26010,
+        "avg": 6502.5,
+        "median": 1000,
+        "p95": 20000
+      },
+      "groups": [
+        {
+          "key": "worktree",
+          "calls": 1,
+          "min": 20000,
+          "max": 20000,
+          "avg": 20000,
+          "median": 20000,
+          "p95": 20000,
+          "sum": 20000,
+          "sharePct": 76.89350249903883,
+          "billableWeightedUsd": 0.40595000000000003
+        },
+        {
+          "key": "fresh",
+          "calls": 1,
+          "min": 5000,
+          "max": 5000,
+          "avg": 5000,
+          "median": 5000,
+          "p95": 5000,
+          "sum": 5000,
+          "sharePct": 19.223375624759708,
+          "billableWeightedUsd": 0.0369
+        },
+        {
+          "key": "fork",
+          "calls": 1,
+          "min": 1000,
+          "max": 1000,
+          "avg": 1000,
+          "median": 1000,
+          "p95": 1000,
+          "sum": 1000,
+          "sharePct": 3.8446751249519413,
+          "billableWeightedUsd": 0.02225
+        },
+        {
+          "key": "unresolved",
+          "calls": 1,
+          "min": 10,
+          "max": 10,
+          "avg": 10,
+          "median": 10,
+          "p95": 10,
+          "sum": 10,
+          "sharePct": 0.03844675124951942,
+          "billableWeightedUsd": 0
+        }
+      ],
+      "verdict": [
+        "worktree averages 20.0× the cache creation/call of fork (20000 vs 1000) — worktree spawns are cache-cold and isolated.",
+        "fork averages 80% less cache creation than fresh (1000 vs 5000) — forks read the parent cache."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 1
+      },
+      "dbAvailable": true
+    },
+    "filter_has_mcp": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 2,
+        "sum": 21000,
+        "avg": 10500,
+        "median": 1000,
+        "p95": 20000
+      },
+      "groups": [
+        {
+          "key": "worktree",
+          "calls": 1,
+          "min": 20000,
+          "max": 20000,
+          "avg": 20000,
+          "median": 20000,
+          "p95": 20000,
+          "sum": 20000,
+          "sharePct": 95.23809523809523,
+          "billableWeightedUsd": 0.40595000000000003
+        },
+        {
+          "key": "fork",
+          "calls": 1,
+          "min": 1000,
+          "max": 1000,
+          "avg": 1000,
+          "median": 1000,
+          "p95": 1000,
+          "sum": 1000,
+          "sharePct": 4.761904761904762,
+          "billableWeightedUsd": 0.02225
+        }
+      ],
+      "verdict": [
+        "worktree averages 20.0× the cache creation/call of fork (20000 vs 1000) — worktree spawns are cache-cold and isolated."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 0
+      },
+      "dbAvailable": true
+    },
+    "filter_has_rule": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 3,
+        "sum": 6300,
+        "avg": 2100,
+        "median": 1000,
+        "p95": 5000
+      },
+      "groups": [
+        {
+          "key": "fresh",
+          "calls": 1,
+          "min": 5000,
+          "max": 5000,
+          "avg": 5000,
+          "median": 5000,
+          "p95": 5000,
+          "sum": 5000,
+          "sharePct": 79.36507936507937,
+          "billableWeightedUsd": 0.0369
+        },
+        {
+          "key": "fork",
+          "calls": 2,
+          "min": 300,
+          "max": 1000,
+          "avg": 650,
+          "median": 300,
+          "p95": 1000,
+          "sum": 1300,
+          "sharePct": 20.634920634920633,
+          "billableWeightedUsd": 0.026025
+        }
+      ],
+      "verdict": [
+        "fork averages 87% less cache creation than fresh (650 vs 5000) — forks read the parent cache."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 0
+      },
+      "dbAvailable": true
+    },
+    "filter_has_content_tag": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 2,
+        "sum": 21000,
+        "avg": 10500,
+        "median": 1000,
+        "p95": 20000
+      },
+      "groups": [
+        {
+          "key": "worktree",
+          "calls": 1,
+          "min": 20000,
+          "max": 20000,
+          "avg": 20000,
+          "median": 20000,
+          "p95": 20000,
+          "sum": 20000,
+          "sharePct": 95.23809523809523,
+          "billableWeightedUsd": 0.40595000000000003
+        },
+        {
+          "key": "fork",
+          "calls": 1,
+          "min": 1000,
+          "max": 1000,
+          "avg": 1000,
+          "median": 1000,
+          "p95": 1000,
+          "sum": 1000,
+          "sharePct": 4.761904761904762,
+          "billableWeightedUsd": 0.02225
+        }
+      ],
+      "verdict": [
+        "worktree averages 20.0× the cache creation/call of fork (20000 vs 1000) — worktree spawns are cache-cold and isolated."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 0
+      },
+      "dbAvailable": true
+    },
+    "filter_combined": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 2,
+        "sum": 6000,
+        "avg": 3000,
+        "median": 1000,
+        "p95": 5000
+      },
+      "groups": [
+        {
+          "key": "fresh",
+          "calls": 1,
+          "min": 5000,
+          "max": 5000,
+          "avg": 5000,
+          "median": 5000,
+          "p95": 5000,
+          "sum": 5000,
+          "sharePct": 83.33333333333334,
+          "billableWeightedUsd": 0.0369
+        },
+        {
+          "key": "fork",
+          "calls": 1,
+          "min": 1000,
+          "max": 1000,
+          "avg": 1000,
+          "median": 1000,
+          "p95": 1000,
+          "sum": 1000,
+          "sharePct": 16.666666666666664,
+          "billableWeightedUsd": 0.02225
+        }
+      ],
+      "verdict": [
+        "fork averages 80% less cache creation than fresh (1000 vs 5000) — forks read the parent cache."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 0
+      },
+      "dbAvailable": true
+    },
+    "filter_matches_nothing": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 0,
+        "sum": 0,
+        "avg": 0,
+        "median": 0,
+        "p95": 0
+      },
+      "groups": [],
+      "verdict": [],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 0
+      },
+      "dbAvailable": true
+    },
+    "filter_model_numeric": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 0,
+        "sum": 0,
+        "avg": 0,
+        "median": 0,
+        "p95": 0
+      },
+      "groups": [],
+      "verdict": [],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 0
+      },
+      "dbAvailable": true
+    },
+    "filter_model_bool": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 0,
+        "sum": 0,
+        "avg": 0,
+        "median": 0,
+        "p95": 0
+      },
+      "groups": [],
+      "verdict": [],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 0
+      },
+      "dbAvailable": true
+    },
+    "filter_window_string": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 9,
+        "sum": 87515,
+        "avg": 9723.888888888889,
+        "median": 800,
+        "p95": 60000
+      },
+      "groups": [
+        {
+          "key": "worktree",
+          "calls": 2,
+          "min": 20000,
+          "max": 60000,
+          "avg": 40000,
+          "median": 20000,
+          "p95": 60000,
+          "sum": 80000,
+          "sharePct": 91.41290064560361,
+          "billableWeightedUsd": 1.6077550000000003
+        },
+        {
+          "key": "fresh",
+          "calls": 2,
+          "min": 800,
+          "max": 5000,
+          "avg": 2900,
+          "median": 800,
+          "p95": 5000,
+          "sum": 5800,
+          "sharePct": 6.627435296806262,
+          "billableWeightedUsd": 0.04376
+        },
+        {
+          "key": "fork",
+          "calls": 3,
+          "min": 5,
+          "max": 1000,
+          "avg": 435,
+          "median": 300,
+          "p95": 1000,
+          "sum": 1305,
+          "sharePct": 1.491172941781409,
+          "billableWeightedUsd": 0.02620875
+        },
+        {
+          "key": "root",
+          "calls": 1,
+          "min": 400,
+          "max": 400,
+          "avg": 400,
+          "median": 400,
+          "p95": 400,
+          "sum": 400,
+          "sharePct": 0.457064503228018,
+          "billableWeightedUsd": 0.0037825000000000003
+        },
+        {
+          "key": "unresolved",
+          "calls": 1,
+          "min": 10,
+          "max": 10,
+          "avg": 10,
+          "median": 10,
+          "p95": 10,
+          "sum": 10,
+          "sharePct": 0.01142661258070045,
+          "billableWeightedUsd": 0
+        }
+      ],
+      "verdict": [
+        "worktree averages 92.0× the cache creation/call of fork (40000 vs 435) — worktree spawns are cache-cold and isolated.",
+        "fork averages 85% less cache creation than fresh (435 vs 2900) — forks read the parent cache.",
+        "fresh subagents average 7.3× the cache creation/call of root sessions (2900 vs 400)."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 1
+      },
+      "dbAvailable": true
+    },
+    "filter_window_unparseable": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 9,
+        "sum": 87515,
+        "avg": 9723.888888888889,
+        "median": 800,
+        "p95": 60000
+      },
+      "groups": [
+        {
+          "key": "worktree",
+          "calls": 2,
+          "min": 20000,
+          "max": 60000,
+          "avg": 40000,
+          "median": 20000,
+          "p95": 60000,
+          "sum": 80000,
+          "sharePct": 91.41290064560361,
+          "billableWeightedUsd": 1.6077550000000003
+        },
+        {
+          "key": "fresh",
+          "calls": 2,
+          "min": 800,
+          "max": 5000,
+          "avg": 2900,
+          "median": 800,
+          "p95": 5000,
+          "sum": 5800,
+          "sharePct": 6.627435296806262,
+          "billableWeightedUsd": 0.04376
+        },
+        {
+          "key": "fork",
+          "calls": 3,
+          "min": 5,
+          "max": 1000,
+          "avg": 435,
+          "median": 300,
+          "p95": 1000,
+          "sum": 1305,
+          "sharePct": 1.491172941781409,
+          "billableWeightedUsd": 0.02620875
+        },
+        {
+          "key": "root",
+          "calls": 1,
+          "min": 400,
+          "max": 400,
+          "avg": 400,
+          "median": 400,
+          "p95": 400,
+          "sum": 400,
+          "sharePct": 0.457064503228018,
+          "billableWeightedUsd": 0.0037825000000000003
+        },
+        {
+          "key": "unresolved",
+          "calls": 1,
+          "min": 10,
+          "max": 10,
+          "avg": 10,
+          "median": 10,
+          "p95": 10,
+          "sum": 10,
+          "sharePct": 0.01142661258070045,
+          "billableWeightedUsd": 0
+        }
+      ],
+      "verdict": [
+        "worktree averages 92.0× the cache creation/call of fork (40000 vs 435) — worktree spawns are cache-cold and isolated.",
+        "fork averages 85% less cache creation than fresh (435 vs 2900) — forks read the parent cache.",
+        "fresh subagents average 7.3× the cache creation/call of root sessions (2900 vs 400)."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 1
+      },
+      "dbAvailable": true
+    },
+    "filter_has_skill_mixed_types": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 3,
+        "sum": 6010,
+        "avg": 2003.3333333333333,
+        "median": 1000,
+        "p95": 5000
+      },
+      "groups": [
+        {
+          "key": "fresh",
+          "calls": 1,
+          "min": 5000,
+          "max": 5000,
+          "avg": 5000,
+          "median": 5000,
+          "p95": 5000,
+          "sum": 5000,
+          "sharePct": 83.19467554076539,
+          "billableWeightedUsd": 0.0369
+        },
+        {
+          "key": "fork",
+          "calls": 1,
+          "min": 1000,
+          "max": 1000,
+          "avg": 1000,
+          "median": 1000,
+          "p95": 1000,
+          "sum": 1000,
+          "sharePct": 16.638935108153078,
+          "billableWeightedUsd": 0.02225
+        },
+        {
+          "key": "unresolved",
+          "calls": 1,
+          "min": 10,
+          "max": 10,
+          "avg": 10,
+          "median": 10,
+          "p95": 10,
+          "sum": 10,
+          "sharePct": 0.16638935108153077,
+          "billableWeightedUsd": 0
+        }
+      ],
+      "verdict": [
+        "fork averages 80% less cache creation than fresh (1000 vs 5000) — forks read the parent cache."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 1
+      },
+      "dbAvailable": true
+    },
+    "filter_has_skill_empty_array": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 9,
+        "sum": 87515,
+        "avg": 9723.888888888889,
+        "median": 800,
+        "p95": 60000
+      },
+      "groups": [
+        {
+          "key": "worktree",
+          "calls": 2,
+          "min": 20000,
+          "max": 60000,
+          "avg": 40000,
+          "median": 20000,
+          "p95": 60000,
+          "sum": 80000,
+          "sharePct": 91.41290064560361,
+          "billableWeightedUsd": 1.6077550000000003
+        },
+        {
+          "key": "fresh",
+          "calls": 2,
+          "min": 800,
+          "max": 5000,
+          "avg": 2900,
+          "median": 800,
+          "p95": 5000,
+          "sum": 5800,
+          "sharePct": 6.627435296806262,
+          "billableWeightedUsd": 0.04376
+        },
+        {
+          "key": "fork",
+          "calls": 3,
+          "min": 5,
+          "max": 1000,
+          "avg": 435,
+          "median": 300,
+          "p95": 1000,
+          "sum": 1305,
+          "sharePct": 1.491172941781409,
+          "billableWeightedUsd": 0.02620875
+        },
+        {
+          "key": "root",
+          "calls": 1,
+          "min": 400,
+          "max": 400,
+          "avg": 400,
+          "median": 400,
+          "p95": 400,
+          "sum": 400,
+          "sharePct": 0.457064503228018,
+          "billableWeightedUsd": 0.0037825000000000003
+        },
+        {
+          "key": "unresolved",
+          "calls": 1,
+          "min": 10,
+          "max": 10,
+          "avg": 10,
+          "median": 10,
+          "p95": 10,
+          "sum": 10,
+          "sharePct": 0.01142661258070045,
+          "billableWeightedUsd": 0
+        }
+      ],
+      "verdict": [
+        "worktree averages 92.0× the cache creation/call of fork (40000 vs 435) — worktree spawns are cache-cold and isolated.",
+        "fork averages 85% less cache creation than fresh (435 vs 2900) — forks read the parent cache.",
+        "fresh subagents average 7.3× the cache creation/call of root sessions (2900 vs 400)."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 1
+      },
+      "dbAvailable": true
+    },
+    "verdict_output_metric": {
+      "groupBy": "spawn_kind",
+      "metric": "output_tokens",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 9,
+        "sum": 8985,
+        "avg": 998.3333333333334,
+        "median": 60,
+        "p95": 8000
+      },
+      "groups": [
+        {
+          "key": "unresolved",
+          "calls": 1,
+          "min": 8000,
+          "max": 8000,
+          "avg": 8000,
+          "median": 8000,
+          "p95": 8000,
+          "sum": 8000,
+          "sharePct": 89.03728436282692,
+          "billableWeightedUsd": 0
+        },
+        {
+          "key": "fork",
+          "calls": 3,
+          "min": 5,
+          "max": 500,
+          "avg": 185,
+          "median": 50,
+          "p95": 500,
+          "sum": 555,
+          "sharePct": 6.176961602671119,
+          "billableWeightedUsd": 0.02620875
+        },
+        {
+          "key": "fresh",
+          "calls": 2,
+          "min": 60,
+          "max": 200,
+          "avg": 130,
+          "median": 60,
+          "p95": 200,
+          "sum": 260,
+          "sharePct": 2.893711741791875,
+          "billableWeightedUsd": 0.04376
+        },
+        {
+          "key": "worktree",
+          "calls": 2,
+          "min": 30,
+          "max": 100,
+          "avg": 65,
+          "median": 30,
+          "p95": 100,
+          "sum": 130,
+          "sharePct": 1.4468558708959376,
+          "billableWeightedUsd": 1.6077550000000003
+        },
+        {
+          "key": "root",
+          "calls": 1,
+          "min": 40,
+          "max": 40,
+          "avg": 40,
+          "median": 40,
+          "p95": 40,
+          "sum": 40,
+          "sharePct": 0.4451864218141347,
+          "billableWeightedUsd": 0.0037825000000000003
+        }
+      ],
+      "verdict": [
+        "worktree averages 0.4× the output tokens/call of fork (65 vs 185) — worktree spawns are cache-cold and isolated.",
+        "fork averages 42% more output tokens than fresh (185 vs 130) — forks read the parent cache.",
+        "fresh subagents average 3.3× the output tokens/call of root sessions (130 vs 40)."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 1
+      },
+      "dbAvailable": true
+    },
+    "verdict_billable_metric": {
+      "groupBy": "spawn_kind",
+      "metric": "billable_weighted",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 9,
+        "sum": 1.6815062500000002,
+        "avg": 0.1868340277777778,
+        "median": 0.00686,
+        "p95": 1.2018050000000002
+      },
+      "groups": [
+        {
+          "key": "worktree",
+          "calls": 2,
+          "min": 0.40595000000000003,
+          "max": 1.2018050000000002,
+          "avg": 0.8038775000000001,
+          "median": 0.40595000000000003,
+          "p95": 1.2018050000000002,
+          "sum": 1.6077550000000003,
+          "sharePct": 95.61397705182482,
+          "billableWeightedUsd": 1.6077550000000003
+        },
+        {
+          "key": "fresh",
+          "calls": 2,
+          "min": 0.00686,
+          "max": 0.0369,
+          "avg": 0.02188,
+          "median": 0.00686,
+          "p95": 0.0369,
+          "sum": 0.04376,
+          "sharePct": 2.602428626120182,
+          "billableWeightedUsd": 0.04376
+        },
+        {
+          "key": "fork",
+          "calls": 3,
+          "min": 0.00018375,
+          "max": 0.02225,
+          "avg": 0.00873625,
+          "median": 0.0037749999999999997,
+          "p95": 0.02225,
+          "sum": 0.02620875,
+          "sharePct": 1.5586471950371874,
+          "billableWeightedUsd": 0.02620875
+        },
+        {
+          "key": "root",
+          "calls": 1,
+          "min": 0.0037825000000000003,
+          "max": 0.0037825000000000003,
+          "avg": 0.0037825000000000003,
+          "median": 0.0037825000000000003,
+          "p95": 0.0037825000000000003,
+          "sum": 0.0037825000000000003,
+          "sharePct": 0.2249471270178151,
+          "billableWeightedUsd": 0.0037825000000000003
+        },
+        {
+          "key": "unresolved",
+          "calls": 1,
+          "min": 0,
+          "max": 0,
+          "avg": 0,
+          "median": 0,
+          "p95": 0,
+          "sum": 0,
+          "sharePct": 0,
+          "billableWeightedUsd": 0
+        }
+      ],
+      "verdict": [
+        "worktree averages 92.0× the billable weighted/call of fork (1 vs 0) — worktree spawns are cache-cold and isolated.",
+        "fork averages 60% less billable weighted than fresh (0 vs 0) — forks read the parent cache.",
+        "fresh subagents average 5.8× the billable weighted/call of root sessions (0 vs 0)."
+      ],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 1
+      },
+      "dbAvailable": true
+    },
+    "skill_group_with_agg_count": {
+      "groupBy": "skill",
+      "metric": "cache_creation",
+      "agg": "count",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 4,
+        "sum": 26010,
+        "avg": 6502.5,
+        "median": 1000,
+        "p95": 20000
+      },
+      "groups": [
+        {
+          "key": "agentlenspro-diagnostics",
+          "calls": 3,
+          "min": 10,
+          "max": 5000,
+          "avg": 2003.3333333333333,
+          "median": 1000,
+          "p95": 5000,
+          "sum": 6010,
+          "sharePct": 23.10649750096117,
+          "billableWeightedUsd": 0.05915
+        },
+        {
+          "key": "rust",
+          "calls": 1,
+          "min": 20000,
+          "max": 20000,
+          "avg": 20000,
+          "median": 20000,
+          "p95": 20000,
+          "sum": 20000,
+          "sharePct": 76.89350249903883,
+          "billableWeightedUsd": 0.40595000000000003
+        }
+      ],
+      "verdict": [],
+      "coverage": {
+        "responsesIndexed": 9,
+        "responsesTotal": 11,
+        "lastRunMs": 1760000000000,
+        "note": "fixture — 9 of 11 responses indexed",
+        "unresolvedCalls": 0
+      },
+      "dbAvailable": true
+    },
+    "db_missing": {
+      "groupBy": "spawn_kind",
+      "metric": "cache_creation",
+      "agg": "avg",
+      "rankOrder": "worst-first",
+      "baseline": {
+        "calls": 0,
+        "sum": 0,
+        "avg": 0,
+        "median": 0,
+        "p95": 0
+      },
+      "groups": [],
+      "verdict": [],
+      "coverage": {
+        "note": "forensics.db unavailable (no OTEL bodies indexed yet, or sql.js unavailable in this runtime)."
+      },
+      "dbAvailable": false
+    }
+  }
+}

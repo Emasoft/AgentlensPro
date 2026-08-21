@@ -1974,6 +1974,110 @@ async fn handle(
                         .map_err(|e| format!("burn seismic join failed: {e}"))?;
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
+                    "compare_configs" => {
+                        // Same fact store, same lazy index, same blocking shape as
+                        // run_diagnostics_sql below — the two tools are one engine's two front ends.
+                        let data_dir = {
+                            let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                            st.data_dir.clone()
+                        };
+                        let a = args.clone();
+                        let payload = tokio::task::spawn_blocking(move || {
+                            use crate::forensics_compare as fc;
+                            let now = crate::now_ms() as f64;
+                            let filter = a.get("filter");
+                            let db = crate::forensics_db::default_forensics_db(&data_dir);
+                            let mut o = crate::forensics_scan::ScanApiCallOptions::new(
+                                crate::burn::guard::default_bodies_dir(&data_dir),
+                                data_dir.join("store"),
+                            );
+                            o.window_hours = filter.and_then(|f| f.get("window")).and_then(Value::as_f64);
+                            // Unconditional here, unlike run_diagnostics_sql: compare_configs has no
+                            // argument-free mode that answers without touching the facts.
+                            if let Err(e) = crate::forensics_scan::ensure_fresh_index(
+                                &db,
+                                &o,
+                                &crate::forensics_db::default_main_db(&data_dir),
+                                true,
+                                5.0 * 60_000.0,
+                                false,
+                                now,
+                            ) {
+                                return crate::mcp_tools::error_payload(&format!("forensics index failed: {e}"));
+                            }
+                            fc::build_compare_configs(
+                                &db,
+                                &fc::CompareConfigsOptions {
+                                    group_by: a.get("groupBy").and_then(Value::as_str),
+                                    metric: a.get("metric").and_then(Value::as_str),
+                                    agg: a.get("agg").and_then(Value::as_str),
+                                    filter,
+                                    rank_order: a.get("rankOrder").and_then(Value::as_str),
+                                    top_n: a.get("topN").and_then(Value::as_f64),
+                                },
+                                now,
+                            )
+                        })
+                        .await
+                        .map_err(|e| format!("compare configs join failed: {e}"))?;
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
+                    }
+                    "run_diagnostics_sql" => {
+                        // SQLite over the forensics fact store, plus the lazy index pass that fills
+                        // it — both blocking, so spawn_blocking with the state lock released first.
+                        let data_dir = {
+                            let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                            st.data_dir.clone()
+                        };
+                        let a = args.clone();
+                        let payload = tokio::task::spawn_blocking(move || {
+                            use crate::forensics_sql as fsql;
+                            let now = crate::now_ms() as f64;
+                            let params = a.get("params").and_then(Value::as_object);
+                            let preset = a.get("preset").and_then(Value::as_str);
+                            let sql = a.get("sql").and_then(Value::as_str);
+                            let db = crate::forensics_db::default_forensics_db(&data_dir);
+                            // Index only when actually querying — no args lists the preset library,
+                            // which needs no facts and must stay free.
+                            if preset.is_some() || sql.is_some() {
+                                let mut o = crate::forensics_scan::ScanApiCallOptions::new(
+                                    crate::burn::guard::default_bodies_dir(&data_dir),
+                                    data_dir.join("store"),
+                                );
+                                o.window_hours = params.and_then(|p| p.get("window")).and_then(Value::as_f64);
+                                // The TS `await`s this with no catch, so a failed index fails the
+                                // CALL. Kept: answering from stale facts under a freshness contract
+                                // would be a wrong answer that looks exactly like a right one.
+                                if let Err(e) = crate::forensics_scan::ensure_fresh_index(
+                                    &db,
+                                    &o,
+                                    &crate::forensics_db::default_main_db(&data_dir),
+                                    true,
+                                    5.0 * 60_000.0,
+                                    false,
+                                    now,
+                                ) {
+                                    return crate::mcp_tools::error_payload(&format!(
+                                        "forensics index failed: {e}"
+                                    ));
+                                }
+                            }
+                            fsql::run_diagnostics_sql(
+                                &db,
+                                &fsql::RunDiagnosticsSqlOptions {
+                                    preset,
+                                    sql,
+                                    params,
+                                    format: a.get("format").and_then(Value::as_str),
+                                    limit: a.get("limit").and_then(Value::as_f64),
+                                },
+                                now,
+                            )
+                        })
+                        .await
+                        .map_err(|e| format!("diagnostics sql join failed: {e}"))?;
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
+                    }
                     "run_transcript_sql" => {
                         // DuckDB over a BOUNDED set of transcript files — blocking, so
                         // spawn_blocking with the state lock released first.

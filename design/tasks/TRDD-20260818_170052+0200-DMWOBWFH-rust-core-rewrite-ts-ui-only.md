@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-21T18:48:39+0200
+updated: 2026-08-21T20:00:16+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -1791,13 +1791,43 @@ release-via: publish
   CASCADE never fires for it — the manual child DELETE is what stops rows accumulating); the
   high-water mark never moves backwards; and a DB that exists but never completed a run is NOT fresh
   (`last_run_ms > 0` is the guard, or a failed first index caches as success for a whole window).
-- **NEXT (P4x.2d continued): 2 of 53 remain — `run_diagnostics_sql` and `compare_configs`, and
-  NOTHING BLOCKS THEM ANY MORE.** `forensicsIndex` is fully ported, so both are now shapers over the
-  fact tables: `run_diagnostics_sql` (`src/forensicsSql.ts`, 321) hands RAW caller SQL to
-  `open_readonly_snapshot` (which is why the engine stayed SQLite), and `compare_configs`
-  (`src/forensicsCompare.ts`, 253). Both call `ensureFreshIndex` before answering.
-  `run_diagnostics_sql` (`src/forensicsSql.ts`, 321) and `compare_configs`
-  (`src/forensicsCompare.ts`, 253).
+- **P4x.2d DONE — `run_diagnostics_sql` and `compare_configs` are ported. The 53-tool MCP surface
+  is COMPLETE.** `src/forensics_sql.rs` + `src/forensics_compare.rs`, both wired into the `ui.rs`
+  tools/call dispatch (each runs `forensics_scan::ensure_fresh_index` first; a failed index FAILS
+  THE CALL rather than answering from stale facts under a freshness contract). Parity: 60 + 60
+  TS-oracle cases from `gen-forensicssql-expected.mjs` / `gen-forensicscompare-expected.mjs`, both
+  reading ONE shared committed fact DB (`tests/fixtures/forensicssql/forensics.db` — the SQL
+  generator owns it and rm -rf's the dir, so run that one FIRST). 9 tests total, all falsified by
+  mutation before being trusted.
+  **THE ONE DELIBERATE OUTPUT DIVERGENCE, and it is intentional: an out-of-enum `metric` / `agg` /
+  `groupBy` is NAMED, not silently substituted.** The MCP schema types all three as bare `string`
+  with NO enum and the TS handler casts unchecked, so a typo reaches the engine from any client —
+  where the TS answers three different silently-wrong ways (unknown `metric` throws a SQL parse
+  error on the interpolated token `undefined`; unknown `agg` makes `pickSort` return `undefined`,
+  every sort comparison NaN and the ranking arbitrary; unknown `groupBy` quietly returns spawn_kind
+  rows). No oracle case covers this: the TS cannot be the oracle for behaviour we declined to
+  reproduce. Native test `an_out_of_enum_argument_is_named_not_silently_substituted`.
+  **THE PORT BUG THAT MATTERED MOST, found by an independent review and NOT by the oracle: the
+  statement gate FAILED OPEN on non-ASCII.** JS `\b` is ASCII-only; the `regex` crate's is UNICODE.
+  `SELECT 1 FROM t WHERE éDROP TABLE api_calls` is REJECTED by the TS and was ACCEPTED here,
+  because `é` is a word character to Rust so no boundary exists before DROP. Fixed with
+  `(?-u:\b)` (the `WORD_BOUNDARY` const). **Any future regex ported from JS needs the same
+  treatment** — this is a whole class, not one bug, and an oracle built from valid inputs will
+  never catch it.
+  Other review-driven fixes worth not re-deriving: a wrong-TYPED filter value must be BOUND (sql.js
+  coerces a number to INTEGER, a bool to 1/0, and THROWS on an object; an array becomes a BLOB), not
+  dropped — dropping WIDENS the result set where the TS narrows it to nothing, and a broader answer
+  under the caller's label is the worse failure. `window` coerces too (`"24"` applies a real
+  cutoff), and `to_number(v) > 0` is provably equivalent to `f.window && f.window > 0` because every
+  falsy JS value coerces to 0/-0/NaN. A NaN `limit` binds REAL NaN in sql.js and SQLite answers
+  `datatype mismatch` — it does NOT bind NULL, and `LIMIT NULL` means NO LIMIT, so NaN falls back to
+  the default here. `PRESETS["toString"]` is a truthy INHERITED function in the TS (plain object
+  literal, `Object.prototype` chain) and yields `SELECT * FROM (undefined)` instead of "Unknown
+  preset" — the Rust slice has no prototype chain and is deliberately NOT bug-compatible.
+  **Fixture trap for every future SQLite fixture:** `FORENSICS_SCHEMA_SQL` opens with
+  `PRAGMA journal_mode = WAL` and sql.js stamps that into the exported header (bytes 18/19 = 2).
+  A committed WAL database spawns `-shm`/`-wal` sidecars on every test run AND cannot be opened at
+  all on a read-only checkout. The generator resets those two bytes to 1.
   **The fact-store engine question is DECIDED — keep SQLite, via `rusqlite`.** `forensicsIndex`
   SLICE B writes fact tables (`api_calls`, `injections`, `content`) that both tools then query, today
   through **sql.js SQLite** (`src/forensicsDb.ts`), where `defaultMainDb()` is

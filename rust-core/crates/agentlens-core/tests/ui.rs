@@ -1407,10 +1407,11 @@ fn callcontext_route_resolves_a_body_and_backfills_the_account() {
 }
 
 /// P4x — the MCP endpoint. tools/list must serve all 53 FROZEN schemas byte-identically to the TS
-/// (they are generated from it, not transcribed), and an unimplemented tool must SAY SO rather
-/// than answering emptily, which would read as a working tool that found nothing.
+/// (they are generated from it, not transcribed); a tool that does not exist must be a DIFFERENT
+/// error from one that is merely unported; and — since P4x.2d completed the surface — no real tool
+/// may answer "not yet implemented" any more.
 #[test]
-fn mcp_endpoint_serves_the_frozen_tool_schemas_and_names_unported_tools() {
+fn mcp_endpoint_serves_the_frozen_tool_schemas_and_implements_every_one() {
     let (_otlp, ui, _state) = start_servers();
     let rpc = |method: &str, params: &str| -> serde_json::Value {
         let body = format!(r#"{{"jsonrpc":"2.0","id":1,"method":"{method}","params":{params}}}"#);
@@ -1432,13 +1433,32 @@ fn mcp_endpoint_serves_the_frozen_tool_schemas_and_names_unported_tools() {
         "every tool carries a name and an inputSchema"
     );
 
-    // A REAL tool with no Rust implementation yet: an explicit error naming the tool.
-    // NB: this name has to be swapped each time the named tool gets ported — it named
-    // `get_recent_sessions` until that landed, and the failure looked like a broken endpoint rather
-    // than a stale test. Pick one from the BOTTOM of the remaining list.
-    let called = rpc("tools/call", r#"{"name":"compare_configs","arguments":{}}"#);
-    let msg = called["error"]["message"].as_str().unwrap_or("");
-    assert!(msg.contains("compare_configs") && msg.contains("not yet implemented"), "{called}");
+    // THE SWAP-A-NAME ERA IS OVER: all 53 tools are ported, so there is no unported tool left to
+    // name here. This assertion used to pick one from the bottom of the remaining list (it named
+    // `get_recent_sessions`, then `compare_configs`) and had to be re-pointed on every port. Its
+    // successor is the stronger claim the completed surface allows: NO tool answers "not yet
+    // implemented" any more.
+    //
+    // The two named below are the last two ported (TRDD-DMWOBWFH P4x.2d) and are checked
+    // individually because their dispatch arms have no other end-to-end coverage — the parity
+    // suites exercise the ENGINES, not the tools/call wiring or the argument names it reads.
+    // `run_diagnostics_sql` with no arguments is the list-presets path: it touches no database and
+    // no disk, so it is a real round-trip that costs nothing.
+    let listed_presets = rpc("tools/call", r#"{"name":"run_diagnostics_sql","arguments":{}}"#);
+    assert!(listed_presets.get("error").is_none(), "run_diagnostics_sql errored: {listed_presets}");
+    let text = listed_presets["result"]["content"][0]["text"].as_str().unwrap_or("");
+    assert!(
+        text.contains("worst_configs_by_cache_creation") && text.contains("\"mode\":\"list\""),
+        "run_diagnostics_sql did not answer with the preset library: {text}"
+    );
+
+    // compare_configs runs the indexer first, so it may legitimately answer dbAvailable:false on an
+    // empty fixture data dir — what it must NEVER answer is "not yet implemented".
+    for name in ["compare_configs", "run_diagnostics_sql"] {
+        let called = rpc("tools/call", &format!(r#"{{"name":"{name}","arguments":{{}}}}"#));
+        let msg = called["error"]["message"].as_str().unwrap_or("");
+        assert!(!msg.contains("not yet implemented"), "{name} is still unported: {called}");
+    }
 
     // A tool that does not exist at all is a DIFFERENT error — the caller must be able to tell
     // "you typo'd" from "we have not ported that yet".

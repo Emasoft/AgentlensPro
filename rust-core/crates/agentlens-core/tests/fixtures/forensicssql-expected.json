@@ -1,0 +1,1386 @@
+{
+  "note": "oracle for run_diagnostics_sql — generated, do not hand-edit",
+  "longFpLength": 700,
+  "cases": {
+    "list_presets": {
+      "mode": "list",
+      "dbAvailable": true,
+      "presets": [
+        {
+          "name": "worst_configs_by_cache_creation",
+          "description": "Worst spawn_kind × model on avg cache_creation."
+        },
+        {
+          "name": "fork_vs_fresh",
+          "description": "Forked vs fresh subagents, side by side (avg/sum cache_creation + output + billable)."
+        },
+        {
+          "name": "worktree_cost_delta",
+          "description": "Worktree vs non-worktree per-call billable cost."
+        },
+        {
+          "name": "chronic_offenders",
+          "description": "Recurring (break_cause, culprit_fingerprint) pairs (≥ :minCount) by total cache_creation."
+        },
+        {
+          "name": "output_peaks_by_skill",
+          "description": "Skills present on output-token spikes (≥ :mult× the mean output), ranked by spike count."
+        },
+        {
+          "name": "cache_by_skill",
+          "description": "Per-skill avg cache_creation LIFT vs the global mean (≥ :minCount calls)."
+        },
+        {
+          "name": "cache_by_mcp",
+          "description": "Per-MCP-server avg cache_creation LIFT vs the global mean (≥ :minCount calls)."
+        },
+        {
+          "name": "cache_by_rule",
+          "description": "Per-rule avg cache_creation LIFT vs the global mean (≥ :minCount calls)."
+        },
+        {
+          "name": "content_tag_ranking",
+          "description": "cache_creation & output by content tag."
+        },
+        {
+          "name": "image_burn",
+          "description": "Calls carrying images, ranked by cache_creation."
+        },
+        {
+          "name": "model_effort_matrix",
+          "description": "model × effort avg cache_creation + output."
+        },
+        {
+          "name": "break_cause_ranking",
+          "description": "break_cause by total cache_creation & count (needs cacheBreakTimeline-populated causes)."
+        },
+        {
+          "name": "root_cause_leaderboard",
+          "description": "culprit_fingerprint by total cache_creation with a representative response_ref to drill."
+        },
+        {
+          "name": "unresolved_audit",
+          "description": "Coverage of unresolved spawn attribution (count / tokens / share)."
+        },
+        {
+          "name": "session_hotlist",
+          "description": "Sessions by total billable_weight + spawn_kind (heaviest first)."
+        },
+        {
+          "name": "tier_split_by_config",
+          "description": "5m vs 1h cache tier share per spawn_kind (heartbeat relevance)."
+        },
+        {
+          "name": "unclassified_events",
+          "description": "Cache-write spikes (≥ :mult× the mean) with NO classified break cause — the drill-down list an UNCLASSIFIED investigation starts from."
+        },
+        {
+          "name": "schema",
+          "description": "The fact DB tables and their CREATE statements — write raw `sql` mode queries against this instead of guessing columns."
+        }
+      ]
+    },
+    "preset_worst_configs_by_cache_creation": {
+      "mode": "preset",
+      "preset": "worst_configs_by_cache_creation",
+      "columns": [
+        "spawn_kind",
+        "model",
+        "calls",
+        "avg_cc",
+        "sum_cc",
+        "billable_usd"
+      ],
+      "rows": [
+        {
+          "spawn_kind": "worktree",
+          "model": "claude-mythos-5",
+          "calls": 2,
+          "avg_cc": 40000,
+          "sum_cc": 80000,
+          "billable_usd": 1.6077550000000003
+        },
+        {
+          "spawn_kind": "fresh",
+          "model": "claude-opus-5",
+          "calls": 2,
+          "avg_cc": 2900,
+          "sum_cc": 5800,
+          "billable_usd": 0.04376
+        },
+        {
+          "spawn_kind": "fork",
+          "model": "claude-opus-5",
+          "calls": 3,
+          "avg_cc": 435,
+          "sum_cc": 1305,
+          "billable_usd": 0.02620875
+        },
+        {
+          "spawn_kind": "root",
+          "model": "claude-opus-5",
+          "calls": 1,
+          "avg_cc": 400,
+          "sum_cc": 400,
+          "billable_usd": 0.0037825000000000003
+        },
+        {
+          "spawn_kind": "unresolved",
+          "model": "(unknown)",
+          "calls": 1,
+          "avg_cc": 10,
+          "sum_cc": 10,
+          "billable_usd": 0
+        }
+      ],
+      "rowCount": 5,
+      "dbAvailable": true
+    },
+    "preset_fork_vs_fresh": {
+      "mode": "preset",
+      "preset": "fork_vs_fresh",
+      "columns": [
+        "spawn_kind",
+        "calls",
+        "avg_cc",
+        "avg_out",
+        "billable_usd"
+      ],
+      "rows": [
+        {
+          "spawn_kind": "fresh",
+          "calls": 2,
+          "avg_cc": 2900,
+          "avg_out": 130,
+          "billable_usd": 0.04376
+        },
+        {
+          "spawn_kind": "fork",
+          "calls": 3,
+          "avg_cc": 435,
+          "avg_out": 185,
+          "billable_usd": 0.02620875
+        }
+      ],
+      "rowCount": 2,
+      "dbAvailable": true
+    },
+    "preset_worktree_cost_delta": {
+      "mode": "preset",
+      "preset": "worktree_cost_delta",
+      "columns": [
+        "bucket",
+        "calls",
+        "avg_billable",
+        "avg_cc"
+      ],
+      "rows": [
+        {
+          "bucket": "worktree",
+          "calls": 2,
+          "avg_billable": 0.8038775000000001,
+          "avg_cc": 40000
+        },
+        {
+          "bucket": "rest",
+          "calls": 7,
+          "avg_billable": 0.010535892857142858,
+          "avg_cc": 1073.5714285714287
+        }
+      ],
+      "rowCount": 2,
+      "dbAvailable": true
+    },
+    "preset_chronic_offenders": {
+      "mode": "preset",
+      "preset": "chronic_offenders",
+      "columns": [],
+      "rows": [],
+      "rowCount": 0,
+      "dbAvailable": true
+    },
+    "preset_output_peaks_by_skill": {
+      "mode": "preset",
+      "preset": "output_peaks_by_skill",
+      "columns": [
+        "skill",
+        "spike_calls",
+        "avg_out"
+      ],
+      "rows": [
+        {
+          "skill": "agentlenspro-diagnostics",
+          "spike_calls": 1,
+          "avg_out": 8000
+        }
+      ],
+      "rowCount": 1,
+      "dbAvailable": true
+    },
+    "preset_cache_by_skill": {
+      "mode": "preset",
+      "preset": "cache_by_skill",
+      "columns": [
+        "skill",
+        "calls",
+        "avg_cc",
+        "lift"
+      ],
+      "rows": [
+        {
+          "skill": "agentlenspro-diagnostics",
+          "calls": 3,
+          "avg_cc": 2003.3333333333333,
+          "lift": 0.20602182483002912
+        }
+      ],
+      "rowCount": 1,
+      "dbAvailable": true
+    },
+    "preset_cache_by_mcp": {
+      "mode": "preset",
+      "preset": "cache_by_mcp",
+      "columns": [],
+      "rows": [],
+      "rowCount": 0,
+      "dbAvailable": true
+    },
+    "preset_cache_by_rule": {
+      "mode": "preset",
+      "preset": "cache_by_rule",
+      "columns": [],
+      "rows": [],
+      "rowCount": 0,
+      "dbAvailable": true
+    },
+    "preset_content_tag_ranking": {
+      "mode": "preset",
+      "preset": "content_tag_ranking",
+      "columns": [
+        "tag",
+        "calls",
+        "sum_cc",
+        "sum_out"
+      ],
+      "rows": [
+        {
+          "tag": "toolresult",
+          "calls": 1,
+          "sum_cc": 60000,
+          "sum_out": 30
+        },
+        {
+          "tag": "image",
+          "calls": 2,
+          "sum_cc": 21000,
+          "sum_out": 600
+        },
+        {
+          "tag": "transcript",
+          "calls": 1,
+          "sum_cc": 10,
+          "sum_out": 8000
+        }
+      ],
+      "rowCount": 3,
+      "dbAvailable": true
+    },
+    "preset_image_burn": {
+      "mode": "preset",
+      "preset": "image_burn",
+      "columns": [
+        "call_id",
+        "session_id",
+        "model",
+        "cache_creation_tokens",
+        "image_tokens",
+        "response_ref"
+      ],
+      "rows": [
+        {
+          "call_id": "c3",
+          "session_id": "sess-b",
+          "model": "claude-mythos-5",
+          "cache_creation_tokens": 20000,
+          "image_tokens": 6504,
+          "response_ref": "resp/c3.json"
+        },
+        {
+          "call_id": "c1",
+          "session_id": "sess-a",
+          "model": "claude-opus-5",
+          "cache_creation_tokens": 1000,
+          "image_tokens": 3252,
+          "response_ref": "resp/c1.json"
+        }
+      ],
+      "rowCount": 2,
+      "dbAvailable": true
+    },
+    "preset_model_effort_matrix": {
+      "mode": "preset",
+      "preset": "model_effort_matrix",
+      "columns": [
+        "model",
+        "effort",
+        "calls",
+        "avg_cc",
+        "avg_out"
+      ],
+      "rows": [
+        {
+          "model": "claude-mythos-5",
+          "effort": "low",
+          "calls": 2,
+          "avg_cc": 40000,
+          "avg_out": 65
+        },
+        {
+          "model": "claude-opus-5",
+          "effort": "high",
+          "calls": 5,
+          "avg_cc": 1441,
+          "avg_out": 161
+        },
+        {
+          "model": "claude-opus-5",
+          "effort": "none",
+          "calls": 1,
+          "avg_cc": 300,
+          "avg_out": 50
+        },
+        {
+          "model": "(unknown)",
+          "effort": null,
+          "calls": 1,
+          "avg_cc": 10,
+          "avg_out": 8000
+        }
+      ],
+      "rowCount": 4,
+      "dbAvailable": true
+    },
+    "preset_break_cause_ranking": {
+      "mode": "preset",
+      "preset": "break_cause_ranking",
+      "columns": [
+        "break_cause",
+        "hits",
+        "sum_cc"
+      ],
+      "rows": [
+        {
+          "break_cause": "TOOLS_CHANGED",
+          "hits": 1,
+          "sum_cc": 20000
+        },
+        {
+          "break_cause": "MODEL_SWITCHED",
+          "hits": 2,
+          "sum_cc": 6000
+        },
+        {
+          "break_cause": "UNCLASSIFIED",
+          "hits": 1,
+          "sum_cc": 300
+        }
+      ],
+      "rowCount": 3,
+      "dbAvailable": true
+    },
+    "preset_root_cause_leaderboard": {
+      "mode": "preset",
+      "preset": "root_cause_leaderboard",
+      "columns": [
+        "culprit_fingerprint",
+        "break_cause",
+        "hits",
+        "sum_cc",
+        "sample_ref"
+      ],
+      "rows": [
+        {
+          "culprit_fingerprint": "fp-b",
+          "break_cause": "TOOLS_CHANGED",
+          "hits": 1,
+          "sum_cc": 20000,
+          "sample_ref": "resp/c3.json"
+        },
+        {
+          "culprit_fingerprint": "fp-a",
+          "break_cause": "MODEL_SWITCHED",
+          "hits": 2,
+          "sum_cc": 6000,
+          "sample_ref": "resp/c1.json"
+        }
+      ],
+      "rowCount": 2,
+      "dbAvailable": true
+    },
+    "preset_unresolved_audit": {
+      "mode": "preset",
+      "preset": "unresolved_audit",
+      "columns": [
+        "spawn_resolution",
+        "calls",
+        "sum_cc",
+        "billable_usd"
+      ],
+      "rows": [
+        {
+          "spawn_resolution": "direct",
+          "calls": 7,
+          "sum_cc": 86705,
+          "billable_usd": 1.6746462500000003
+        },
+        {
+          "spawn_resolution": "unresolved",
+          "calls": 1,
+          "sum_cc": 10,
+          "billable_usd": 0
+        },
+        {
+          "spawn_resolution": "heuristic",
+          "calls": 1,
+          "sum_cc": 800,
+          "billable_usd": 0.00686
+        }
+      ],
+      "rowCount": 3,
+      "dbAvailable": true
+    },
+    "preset_session_hotlist": {
+      "mode": "preset",
+      "preset": "session_hotlist",
+      "columns": [
+        "session_id",
+        "spawn_kind",
+        "calls",
+        "billable_usd",
+        "sum_cc"
+      ],
+      "rows": [
+        {
+          "session_id": "sess-d",
+          "spawn_kind": "fork",
+          "calls": 2,
+          "billable_usd": 1.2019887500000002,
+          "sum_cc": 60005
+        },
+        {
+          "session_id": "sess-b",
+          "spawn_kind": "worktree",
+          "calls": 2,
+          "billable_usd": 0.40595000000000003,
+          "sum_cc": 20010
+        },
+        {
+          "session_id": "sess-a",
+          "spawn_kind": "fork",
+          "calls": 2,
+          "billable_usd": 0.05915,
+          "sum_cc": 6000
+        },
+        {
+          "session_id": "sess-c",
+          "spawn_kind": "fork",
+          "calls": 2,
+          "billable_usd": 0.0075575,
+          "sum_cc": 700
+        }
+      ],
+      "rowCount": 4,
+      "dbAvailable": true
+    },
+    "preset_tier_split_by_config": {
+      "mode": "preset",
+      "preset": "tier_split_by_config",
+      "columns": [
+        "spawn_kind",
+        "calls",
+        "tier_5m",
+        "tier_1h"
+      ],
+      "rows": [
+        {
+          "spawn_kind": "worktree",
+          "calls": 2,
+          "tier_5m": 0,
+          "tier_1h": 80000
+        },
+        {
+          "spawn_kind": "fresh",
+          "calls": 2,
+          "tier_5m": 5800,
+          "tier_1h": 0
+        },
+        {
+          "spawn_kind": "fork",
+          "calls": 3,
+          "tier_5m": 905,
+          "tier_1h": 400
+        },
+        {
+          "spawn_kind": "root",
+          "calls": 1,
+          "tier_5m": 400,
+          "tier_1h": 0
+        },
+        {
+          "spawn_kind": "unresolved",
+          "calls": 1,
+          "tier_5m": 0,
+          "tier_1h": 0
+        }
+      ],
+      "rowCount": 5,
+      "dbAvailable": true
+    },
+    "preset_unclassified_events": {
+      "mode": "preset",
+      "preset": "unclassified_events",
+      "columns": [
+        "call_id",
+        "session_id",
+        "model",
+        "ts",
+        "cache_creation_tokens",
+        "tier_1h_tokens",
+        "break_cause",
+        "response_ref"
+      ],
+      "rows": [
+        {
+          "call_id": "c8",
+          "session_id": "sess-d",
+          "model": "claude-mythos-5",
+          "ts": 1759999880000,
+          "cache_creation_tokens": 60000,
+          "tier_1h_tokens": 60000,
+          "break_cause": null,
+          "response_ref": "resp/c8.json"
+        }
+      ],
+      "rowCount": 1,
+      "dbAvailable": true
+    },
+    "preset_schema": {
+      "mode": "preset",
+      "preset": "schema",
+      "columns": [
+        "table_name",
+        "create_sql"
+      ],
+      "rows": [
+        {
+          "table_name": "api_calls",
+          "create_sql": "CREATE TABLE api_calls (\n  call_id               TEXT PRIMARY KEY,\n  response_ref          TEXT NOT NULL,\n  request_ref           TEXT,\n  ts                    INTEGER NOT NULL,\n\n  session_id            TEXT,\n  account_uuid          TEXT,\n  model                 TEXT,\n  effort                TEXT,\n\n  spawn_kind            TEXT,\n  subagent_type         TEXT,\n  spawn_model_override  TEXT,\n  spawn_isolation       TEXT,\n  is_sidechain          INTEGER NOT NULL DEFAULT 0,\n  parent_session        TEXT…(+617 chars, cell truncated)"
+        },
+        {
+          "table_name": "call_content",
+          "create_sql": "CREATE TABLE call_content (\n  call_id  TEXT NOT NULL REFERENCES api_calls(call_id) ON DELETE CASCADE,\n  tag      TEXT NOT NULL,\n  tokens   INTEGER NOT NULL DEFAULT 0,\n  count    INTEGER NOT NULL DEFAULT 0,\n  PRIMARY KEY (call_id, tag)\n)"
+        },
+        {
+          "table_name": "call_injections",
+          "create_sql": "CREATE TABLE call_injections (\n  call_id  TEXT NOT NULL REFERENCES api_calls(call_id) ON DELETE CASCADE,\n  kind     TEXT NOT NULL,\n  name     TEXT NOT NULL,\n  tokens   INTEGER NOT NULL DEFAULT 0,\n  PRIMARY KEY (call_id, kind, name)\n)"
+        },
+        {
+          "table_name": "index_state",
+          "create_sql": "CREATE TABLE index_state (\n  k TEXT PRIMARY KEY,\n  v TEXT NOT NULL\n)"
+        }
+      ],
+      "rowCount": 4,
+      "dbAvailable": true
+    },
+    "params_min_count_2": {
+      "mode": "preset",
+      "preset": "cache_by_skill",
+      "columns": [
+        "skill",
+        "calls",
+        "avg_cc",
+        "lift"
+      ],
+      "rows": [
+        {
+          "skill": "agentlenspro-diagnostics",
+          "calls": 3,
+          "avg_cc": 2003.3333333333333,
+          "lift": 0.20602182483002912
+        }
+      ],
+      "rowCount": 1,
+      "dbAvailable": true
+    },
+    "params_chronic_min_count_2": {
+      "mode": "preset",
+      "preset": "chronic_offenders",
+      "columns": [
+        "break_cause",
+        "culprit_fingerprint",
+        "hits",
+        "sum_cc"
+      ],
+      "rows": [
+        {
+          "break_cause": "MODEL_SWITCHED",
+          "culprit_fingerprint": "fp-a",
+          "hits": 2,
+          "sum_cc": 6000
+        }
+      ],
+      "rowCount": 1,
+      "dbAvailable": true
+    },
+    "params_mult_k2": {
+      "mode": "preset",
+      "preset": "unclassified_events",
+      "columns": [
+        "call_id",
+        "session_id",
+        "model",
+        "ts",
+        "cache_creation_tokens",
+        "tier_1h_tokens",
+        "break_cause",
+        "response_ref"
+      ],
+      "rows": [
+        {
+          "call_id": "c8",
+          "session_id": "sess-d",
+          "model": "claude-mythos-5",
+          "ts": 1759999880000,
+          "cache_creation_tokens": 60000,
+          "tier_1h_tokens": 60000,
+          "break_cause": null,
+          "response_ref": "resp/c8.json"
+        }
+      ],
+      "rowCount": 1,
+      "dbAvailable": true
+    },
+    "params_mult_raw": {
+      "mode": "preset",
+      "preset": "unclassified_events",
+      "columns": [
+        "call_id",
+        "session_id",
+        "model",
+        "ts",
+        "cache_creation_tokens",
+        "tier_1h_tokens",
+        "break_cause",
+        "response_ref"
+      ],
+      "rows": [
+        {
+          "call_id": "c8",
+          "session_id": "sess-d",
+          "model": "claude-mythos-5",
+          "ts": 1759999880000,
+          "cache_creation_tokens": 60000,
+          "tier_1h_tokens": 60000,
+          "break_cause": null,
+          "response_ref": "resp/c8.json"
+        }
+      ],
+      "rowCount": 1,
+      "dbAvailable": true
+    },
+    "params_min_count_bogus": {
+      "mode": "preset",
+      "preset": "cache_by_skill",
+      "columns": [
+        "skill",
+        "calls",
+        "avg_cc",
+        "lift"
+      ],
+      "rows": [
+        {
+          "skill": "agentlenspro-diagnostics",
+          "calls": 3,
+          "avg_cc": 2003.3333333333333,
+          "lift": 0.20602182483002912
+        }
+      ],
+      "rowCount": 1,
+      "dbAvailable": true
+    },
+    "params_cache_by_mcp_min2": {
+      "mode": "preset",
+      "preset": "cache_by_mcp",
+      "columns": [
+        "mcp",
+        "calls",
+        "avg_cc",
+        "lift"
+      ],
+      "rows": [
+        {
+          "mcp": "chrome-devtools",
+          "calls": 2,
+          "avg_cc": 10500,
+          "lift": 1.0798148888761927
+        }
+      ],
+      "rowCount": 1,
+      "dbAvailable": true
+    },
+    "params_cache_by_rule_min2": {
+      "mode": "preset",
+      "preset": "cache_by_rule",
+      "columns": [
+        "rule",
+        "calls",
+        "avg_cc",
+        "lift"
+      ],
+      "rows": [
+        {
+          "rule": "commit-discipline",
+          "calls": 2,
+          "avg_cc": 3000,
+          "lift": 0.3085185396789122
+        }
+      ],
+      "rowCount": 1,
+      "dbAvailable": true
+    },
+    "params_explicit_since": {
+      "mode": "preset",
+      "preset": "session_hotlist",
+      "columns": [
+        "session_id",
+        "spawn_kind",
+        "calls",
+        "billable_usd",
+        "sum_cc"
+      ],
+      "rows": [
+        {
+          "session_id": "sess-d",
+          "spawn_kind": "fork",
+          "calls": 2,
+          "billable_usd": 1.2019887500000002,
+          "sum_cc": 60005
+        },
+        {
+          "session_id": "sess-c",
+          "spawn_kind": "root",
+          "calls": 1,
+          "billable_usd": 0.0037825000000000003,
+          "sum_cc": 400
+        }
+      ],
+      "rowCount": 2,
+      "dbAvailable": true
+    },
+    "params_window_wide": {
+      "mode": "preset",
+      "preset": "session_hotlist",
+      "columns": [
+        "session_id",
+        "spawn_kind",
+        "calls",
+        "billable_usd",
+        "sum_cc"
+      ],
+      "rows": [
+        {
+          "session_id": "sess-d",
+          "spawn_kind": "fork",
+          "calls": 2,
+          "billable_usd": 1.2019887500000002,
+          "sum_cc": 60005
+        },
+        {
+          "session_id": "sess-b",
+          "spawn_kind": "worktree",
+          "calls": 2,
+          "billable_usd": 0.40595000000000003,
+          "sum_cc": 20010
+        },
+        {
+          "session_id": "sess-a",
+          "spawn_kind": "fork",
+          "calls": 2,
+          "billable_usd": 0.05915,
+          "sum_cc": 6000
+        },
+        {
+          "session_id": "sess-c",
+          "spawn_kind": "fork",
+          "calls": 2,
+          "billable_usd": 0.0075575,
+          "sum_cc": 700
+        }
+      ],
+      "rowCount": 4,
+      "dbAvailable": true
+    },
+    "params_window_zero": {
+      "mode": "preset",
+      "preset": "session_hotlist",
+      "columns": [
+        "session_id",
+        "spawn_kind",
+        "calls",
+        "billable_usd",
+        "sum_cc"
+      ],
+      "rows": [
+        {
+          "session_id": "sess-d",
+          "spawn_kind": "fork",
+          "calls": 2,
+          "billable_usd": 1.2019887500000002,
+          "sum_cc": 60005
+        },
+        {
+          "session_id": "sess-c",
+          "spawn_kind": "root",
+          "calls": 1,
+          "billable_usd": 0.0037825000000000003,
+          "sum_cc": 400
+        }
+      ],
+      "rowCount": 2,
+      "dbAvailable": true
+    },
+    "format_table": {
+      "mode": "preset",
+      "preset": "fork_vs_fresh",
+      "rowCount": 2,
+      "rendered": "┏━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━━━━┓\n┃ spawn_kind ┃ calls ┃ avg_cc ┃ avg_out ┃ billable_usd ┃\n┡━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━━━━┩\n│ fresh      │ 2     │ 2900   │ 130     │ 0.044        │\n│ fork       │ 3     │ 435    │ 185     │ 0.026        │\n└────────────┴───────┴────────┴─────────┴──────────────┘",
+      "dbAvailable": true
+    },
+    "format_markdown": {
+      "mode": "preset",
+      "preset": "fork_vs_fresh",
+      "rowCount": 2,
+      "rendered": "| spawn_kind | calls | avg_cc | avg_out | billable_usd |\n| --- | --- | --- | --- | --- |\n| fresh | 2 | 2900 | 130 | 0.044 |\n| fork | 3 | 435 | 185 | 0.026 |",
+      "dbAvailable": true
+    },
+    "format_table_empty": {
+      "mode": "sql",
+      "rowCount": 0,
+      "rendered": "(no rows)",
+      "dbAvailable": true
+    },
+    "format_markdown_empty": {
+      "mode": "sql",
+      "rowCount": 0,
+      "rendered": "(no rows)",
+      "dbAvailable": true
+    },
+    "format_table_astral": {
+      "mode": "sql",
+      "rowCount": 1,
+      "rendered": "┏━━━━━┳━━━━━━━┳━━━━━━━┳━━━━━┳━━━━━┓\n┃ e   ┃ b     ┃ n     ┃ i   ┃ z   ┃\n┡━━━━━╇━━━━━━━╇━━━━━━━╇━━━━━╇━━━━━┩\n│ 🔥  │ ascii │ 1.500 │ 7   │     │\n└─────┴───────┴───────┴─────┴─────┘",
+      "dbAvailable": true
+    },
+    "format_markdown_astral": {
+      "mode": "sql",
+      "rowCount": 1,
+      "rendered": "| e | b | n | i | z |\n| --- | --- | --- | --- | --- |\n| 🔥 | ascii | 1.500 | 7 |  |",
+      "dbAvailable": true
+    },
+    "raw_select": {
+      "mode": "sql",
+      "columns": [
+        "call_id",
+        "model",
+        "cache_creation_tokens"
+      ],
+      "rows": [
+        {
+          "call_id": "c1",
+          "model": "claude-opus-5",
+          "cache_creation_tokens": 1000
+        },
+        {
+          "call_id": "c2",
+          "model": "claude-opus-5",
+          "cache_creation_tokens": 5000
+        },
+        {
+          "call_id": "c3",
+          "model": "claude-mythos-5",
+          "cache_creation_tokens": 20000
+        },
+        {
+          "call_id": "c4",
+          "model": null,
+          "cache_creation_tokens": 10
+        },
+        {
+          "call_id": "c5",
+          "model": "claude-opus-5",
+          "cache_creation_tokens": 300
+        },
+        {
+          "call_id": "c6",
+          "model": "claude-opus-5",
+          "cache_creation_tokens": 800
+        },
+        {
+          "call_id": "c7",
+          "model": "claude-opus-5",
+          "cache_creation_tokens": 400
+        },
+        {
+          "call_id": "c8",
+          "model": "claude-mythos-5",
+          "cache_creation_tokens": 60000
+        },
+        {
+          "call_id": "c9",
+          "model": "claude-opus-5",
+          "cache_creation_tokens": 5
+        }
+      ],
+      "rowCount": 9,
+      "dbAvailable": true
+    },
+    "raw_with_cte": {
+      "mode": "sql",
+      "columns": [
+        "c"
+      ],
+      "rows": [
+        {
+          "c": "c1"
+        },
+        {
+          "c": "c2"
+        },
+        {
+          "c": "c3"
+        },
+        {
+          "c": "c4"
+        },
+        {
+          "c": "c5"
+        },
+        {
+          "c": "c6"
+        },
+        {
+          "c": "c7"
+        },
+        {
+          "c": "c8"
+        },
+        {
+          "c": "c9"
+        }
+      ],
+      "rowCount": 9,
+      "dbAvailable": true
+    },
+    "raw_trailing_semicolon": {
+      "mode": "sql",
+      "columns": [
+        "one"
+      ],
+      "rows": [
+        {
+          "one": 1
+        }
+      ],
+      "rowCount": 1,
+      "dbAvailable": true
+    },
+    "raw_block_comment_stripped": {
+      "mode": "sql",
+      "columns": [
+        "one"
+      ],
+      "rows": [
+        {
+          "one": 1
+        }
+      ],
+      "rowCount": 1,
+      "dbAvailable": true
+    },
+    "raw_custom_fns": {
+      "mode": "sql",
+      "columns": [
+        "call_id",
+        "tier",
+        "sp",
+        "bw",
+        "cost"
+      ],
+      "rows": [
+        {
+          "call_id": "c1",
+          "tier": "BREAK",
+          "sp": 0,
+          "bw": 0.02225,
+          "cost": 0.02075
+        },
+        {
+          "call_id": "c2",
+          "tier": "MID",
+          "sp": 1,
+          "bw": 0.0369,
+          "cost": 0.036899999999999995
+        },
+        {
+          "call_id": "c3",
+          "tier": "BREAK",
+          "sp": 1,
+          "bw": 0.40595000000000003,
+          "cost": 0.25595
+        },
+        {
+          "call_id": "c4",
+          "tier": "COLD",
+          "sp": 0,
+          "bw": 0,
+          "cost": 0
+        },
+        {
+          "call_id": "c5",
+          "tier": "MID",
+          "sp": 0,
+          "bw": 0.0037749999999999997,
+          "cost": 0.0037749999999999997
+        },
+        {
+          "call_id": "c6",
+          "tier": "COLD",
+          "sp": 0,
+          "bw": 0.00686,
+          "cost": 0.00686
+        },
+        {
+          "call_id": "c7",
+          "tier": "COLD",
+          "sp": 0,
+          "bw": 0.0037825000000000003,
+          "cost": 0.0037825000000000003
+        },
+        {
+          "call_id": "c8",
+          "tier": "COLD",
+          "sp": 1,
+          "bw": 1.2018050000000002,
+          "cost": 0.751805
+        },
+        {
+          "call_id": "c9",
+          "tier": "COLD",
+          "sp": 0,
+          "bw": 0.00018375,
+          "cost": 0.00018375
+        }
+      ],
+      "rowCount": 9,
+      "dbAvailable": true
+    },
+    "raw_param_in_string_literal": {
+      "mode": "sql",
+      "columns": [
+        "s",
+        "since"
+      ],
+      "rows": [
+        {
+          "s": ":notaparam",
+          "since": 42
+        }
+      ],
+      "rowCount": 1,
+      "dbAvailable": true
+    },
+    "raw_unknown_param_binds_null": {
+      "mode": "sql",
+      "columns": [
+        "v"
+      ],
+      "rows": [
+        {
+          "v": null
+        }
+      ],
+      "rowCount": 1,
+      "dbAvailable": true
+    },
+    "raw_cell_truncation": {
+      "mode": "sql",
+      "columns": [
+        "call_id",
+        "frontmatter_fp"
+      ],
+      "rows": [
+        {
+          "call_id": "c9",
+          "frontmatter_fp": "fpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfpfp…(+200 chars, cell truncated)"
+        }
+      ],
+      "rowCount": 1,
+      "dbAvailable": true
+    },
+    "raw_query_failure": {
+      "mode": "sql",
+      "dbAvailable": true,
+      "error": "Query failed: no such column: no_such_column"
+    },
+    "cap_default_no_note": {
+      "mode": "sql",
+      "columns": [
+        "call_id"
+      ],
+      "rows": [
+        {
+          "call_id": "c1"
+        },
+        {
+          "call_id": "c2"
+        },
+        {
+          "call_id": "c3"
+        },
+        {
+          "call_id": "c4"
+        },
+        {
+          "call_id": "c5"
+        },
+        {
+          "call_id": "c6"
+        },
+        {
+          "call_id": "c7"
+        },
+        {
+          "call_id": "c8"
+        },
+        {
+          "call_id": "c9"
+        }
+      ],
+      "rowCount": 9,
+      "dbAvailable": true
+    },
+    "cap_three": {
+      "mode": "sql",
+      "columns": [
+        "call_id"
+      ],
+      "rows": [
+        {
+          "call_id": "c1"
+        },
+        {
+          "call_id": "c2"
+        },
+        {
+          "call_id": "c3"
+        }
+      ],
+      "rowCount": 3,
+      "dbAvailable": true,
+      "note": "Row cap reached (3). There may be more — raise `limit` to see them (hard max 2000)."
+    },
+    "cap_zero_clamps_to_one": {
+      "mode": "sql",
+      "columns": [
+        "call_id"
+      ],
+      "rows": [
+        {
+          "call_id": "c1"
+        }
+      ],
+      "rowCount": 1,
+      "dbAvailable": true,
+      "note": "Row cap reached (1). There may be more — raise `limit` to see them (hard max 2000)."
+    },
+    "cap_above_hard_max": {
+      "mode": "sql",
+      "columns": [
+        "call_id"
+      ],
+      "rows": [
+        {
+          "call_id": "c1"
+        },
+        {
+          "call_id": "c2"
+        },
+        {
+          "call_id": "c3"
+        },
+        {
+          "call_id": "c4"
+        },
+        {
+          "call_id": "c5"
+        },
+        {
+          "call_id": "c6"
+        },
+        {
+          "call_id": "c7"
+        },
+        {
+          "call_id": "c8"
+        },
+        {
+          "call_id": "c9"
+        }
+      ],
+      "rowCount": 9,
+      "dbAvailable": true
+    },
+    "gate_blank": {
+      "mode": "sql",
+      "dbAvailable": true,
+      "error": "Empty SQL."
+    },
+    "gate_comment_only": {
+      "mode": "sql",
+      "dbAvailable": true,
+      "error": "Empty SQL."
+    },
+    "gate_two_statements": {
+      "mode": "sql",
+      "dbAvailable": true,
+      "error": "Only a single statement is allowed (a second \";\" was found)."
+    },
+    "gate_not_a_select": {
+      "mode": "sql",
+      "dbAvailable": true,
+      "error": "Only read-only SELECT or WITH queries are allowed."
+    },
+    "gate_delete": {
+      "mode": "sql",
+      "dbAvailable": true,
+      "error": "Only read-only SELECT or WITH queries are allowed."
+    },
+    "gate_replace_function": {
+      "mode": "sql",
+      "dbAvailable": true,
+      "error": "DDL/DML/ATTACH/PRAGMA keywords are rejected — this surface is read-only."
+    },
+    "gate_pragma_prefixed_identifier_passes": {
+      "mode": "sql",
+      "columns": [
+        "1"
+      ],
+      "rows": [
+        {
+          "1": 1
+        }
+      ],
+      "rowCount": 1,
+      "dbAvailable": true
+    },
+    "mode_unknown_preset": {
+      "mode": "preset",
+      "dbAvailable": true,
+      "error": "Unknown preset \"no_such_preset\". Call with no args to list the library."
+    },
+    "mode_both_preset_and_sql": {
+      "mode": "sql",
+      "dbAvailable": true,
+      "error": "Provide EITHER preset OR sql, not both."
+    },
+    "mode_empty_strings_list": {
+      "mode": "list",
+      "dbAvailable": true,
+      "presets": [
+        {
+          "name": "worst_configs_by_cache_creation",
+          "description": "Worst spawn_kind × model on avg cache_creation."
+        },
+        {
+          "name": "fork_vs_fresh",
+          "description": "Forked vs fresh subagents, side by side (avg/sum cache_creation + output + billable)."
+        },
+        {
+          "name": "worktree_cost_delta",
+          "description": "Worktree vs non-worktree per-call billable cost."
+        },
+        {
+          "name": "chronic_offenders",
+          "description": "Recurring (break_cause, culprit_fingerprint) pairs (≥ :minCount) by total cache_creation."
+        },
+        {
+          "name": "output_peaks_by_skill",
+          "description": "Skills present on output-token spikes (≥ :mult× the mean output), ranked by spike count."
+        },
+        {
+          "name": "cache_by_skill",
+          "description": "Per-skill avg cache_creation LIFT vs the global mean (≥ :minCount calls)."
+        },
+        {
+          "name": "cache_by_mcp",
+          "description": "Per-MCP-server avg cache_creation LIFT vs the global mean (≥ :minCount calls)."
+        },
+        {
+          "name": "cache_by_rule",
+          "description": "Per-rule avg cache_creation LIFT vs the global mean (≥ :minCount calls)."
+        },
+        {
+          "name": "content_tag_ranking",
+          "description": "cache_creation & output by content tag."
+        },
+        {
+          "name": "image_burn",
+          "description": "Calls carrying images, ranked by cache_creation."
+        },
+        {
+          "name": "model_effort_matrix",
+          "description": "model × effort avg cache_creation + output."
+        },
+        {
+          "name": "break_cause_ranking",
+          "description": "break_cause by total cache_creation & count (needs cacheBreakTimeline-populated causes)."
+        },
+        {
+          "name": "root_cause_leaderboard",
+          "description": "culprit_fingerprint by total cache_creation with a representative response_ref to drill."
+        },
+        {
+          "name": "unresolved_audit",
+          "description": "Coverage of unresolved spawn attribution (count / tokens / share)."
+        },
+        {
+          "name": "session_hotlist",
+          "description": "Sessions by total billable_weight + spawn_kind (heaviest first)."
+        },
+        {
+          "name": "tier_split_by_config",
+          "description": "5m vs 1h cache tier share per spawn_kind (heartbeat relevance)."
+        },
+        {
+          "name": "unclassified_events",
+          "description": "Cache-write spikes (≥ :mult× the mean) with NO classified break cause — the drill-down list an UNCLASSIFIED investigation starts from."
+        },
+        {
+          "name": "schema",
+          "description": "The fact DB tables and their CREATE statements — write raw `sql` mode queries against this instead of guessing columns."
+        }
+      ]
+    },
+    "db_missing_preset": {
+      "mode": "preset",
+      "preset": "schema",
+      "dbAvailable": false,
+      "note": "forensics.db unavailable (no OTEL bodies indexed yet, or sql.js unavailable in this runtime)."
+    },
+    "db_missing_raw": {
+      "mode": "sql",
+      "dbAvailable": false,
+      "note": "forensics.db unavailable (no OTEL bodies indexed yet, or sql.js unavailable in this runtime)."
+    }
+  }
+}
