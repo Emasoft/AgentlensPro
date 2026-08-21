@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-21T05:03:22+0200
+updated: 2026-08-21T05:50:29+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -1525,15 +1525,43 @@ release-via: publish
   **Falsified, 2 rules:** dropping the store/spool dedup (6 rows vs 4 — the mid-drain double-count);
   starving `reassemble` of its blob spans, which made the sha256 gate FIRE and refuse the bytes —
   proving the end-to-end proof works rather than asserting it does.
+- **P4x.2i DONE (f024d31): `cacheBreakTimeline` SLICE 1 of 4 — the classification primitives**
+  (TS 48-635) → `agentlens-core::cache_break_timeline`. No tool wired; 46 of 53 unchanged. Gate:
+  434 tests (was 428), clippy 28, check-types + check-identities OK. Everything slices 2-4 consume
+  is `pub` (`TurnPrefix`/`PrefixBlock`/`PrefixTool`, `DEFERRED_BUILTINS`, `mcp_servers_of`,
+  `cause_for_content_kind`, `TimelineCause`, `TtlTier`).
+  **All 6 tests passed on the FIRST run, so they were falsified before being believed** — this card
+  has twice shipped a green test that gated nothing. Three falsifications, all caught: mutating
+  each of the 6 oracle sections reddens exactly its own test (including a `len` nested two levels
+  down, so `same()` really recurses and compares key ORDER); deleting the hand-rolled `(?=\n# |$)`
+  env boundary reddens `envFp`; "fixing" the messageBlockText/Bytes asymmetry reddens
+  `promptTokensApprox` 163 → 164.
+  **⚠ TWO TS BEHAVIOURS THE ORACLE FOUND — ported AS-IS, do NOT "fix" either:**
+  (a) `classifyContentKind` can NEVER return `'system'`: the guard above it is `<system-reminder>`
+  AND `/hook|inbox|heartbeat|reminder/i`, and the TAG ITSELF contains "reminder", so every
+  system-reminder block is `hook` and both that arm and `labelFor`'s `system` case are dead code.
+  (b) `messageBlockTextBytes` counts only a STRING `.text` while `messageBlockText` stringifies any
+  truthy `.text` — `{text: 5}` contributes "5" to the fingerprint and 0 to the prompt total.
+  **Translation rules for slices 2-4 (the `regex` crate has no lookaround):**
+  `opus-4(?![-.\d])` → `opus-4($|[^-.0-9])` (equivalent for a boolean test); a lazy match with a
+  trailing lookahead → locate the anchor, `find` the terminator at/after it. JS `.` →
+  `[^\n\r\u{2028}\u{2029}]`, JS `\b` → `(?-u:\b)`. `typeof [] === 'object'`, so an ARRAY body is
+  ACCEPTED and an array param falls to the `JSON.stringify` branch — a `is_object()` guard
+  diverges on both. Lengths are UTF-16 (`utf16_len`), byte totals are UTF-8.
+  **TWO DOCUMENTED DIVERGENCES** (in the module header, not hidden): `{0,N}` counts scalars in Rust
+  vs UTF-16 units in JS, and `(?m)^` anchors after `\n` vs any of the four JS line terminators.
+  Both need an astral char or a bare CR inside a filesystem path to be reachable.
+  **Oracle hygiene fixed in the same commit:** `gen-ratelimit-expected.mjs` imported the repo-root
+  `out/` tree — which nothing rebuilds and which was 8 days stale — while every other generator
+  reads `out/test/` (what `compile-tests` writes). Re-pointed; proven a no-op (the two builds were
+  cmp-identical and the regenerated oracle is byte-identical, 5 tests still green).
 - **NEXT (P4x.2d continued): 7 of 53 remain, and EVERY ONE needs a big engine or a SQL binding —
   the cheap tail is gone.** Immediate: `cacheBreakTimeline`, now UNBLOCKED (1,927 → 2 tools:
   `get_cache_break_timeline` + `get_cache_break_causes`, and it also unblocks the `groupBy='cause'`
   branch above). **SLICE IT IN FOUR — 1,927 lines will not fit one context alongside an oracle and
   a parity test.** The seams are already clean in the TS, by line:
-  1. **Classification primitives (48-635, ~590):** the cause enum + `EXPECTED_CAUSES` +
-     `CACHE_BREAK_REMEDIATION`, `minCacheableTokensFor`, `classifyContentKind`, `segmentInjected`,
-     `extractTurnPrefix`. Pure functions over a raw request — the cheapest slice to pin.
-  2. **`classifyCacheBreak` (637-1025, ~390):** the verdict engine, `prev`/`cur`/`prev2` +
+  1. ~~Classification primitives (48-635)~~ — **LANDED f024d31, see P4x.2i above.**
+  2. **`classifyCacheBreak` (637-1025, ~390) — THE NEXT ONE:** the verdict engine, `prev`/`cur`/`prev2` +
      `BreakTiming`. Pure; its oracle is a table of prefix pairs.
   3. **`buildCacheBreakTimeline` + compaction-hook evidence (1026-1657, ~630):** the I/O half —
      this is the one that consumes `bodies_evidence` (just landed), `readHookEvents`,
