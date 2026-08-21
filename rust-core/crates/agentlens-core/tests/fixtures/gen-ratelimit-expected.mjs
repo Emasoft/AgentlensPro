@@ -32,7 +32,12 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
-const { buildRateLimitReport } = await import(path.join(HERE, '../../../../../out/rateLimitReport.js'))
+// out/test/ — what `pnpm run compile-tests` actually writes (tsconfig.test.json outDir). The `out/`
+// tree at the repo root is a leftover from an older config that nothing rebuilds; this file was the
+// only generator still reading it, and on 2026-08-21 that copy was 8 days stale. The two builds of
+// this module were byte-identical then (cmp-checked), so no oracle was ever generated from stale
+// code — but the next edit to rateLimitReport.ts would have been the first.
+const { buildRateLimitReport } = await import(path.join(HERE, '../../../../../out/test/rateLimitReport.js'))
 
 const HOOKS = path.join(HERE, 'ratelimit-hooks')
 const EMPTY = path.join(HERE, 'ratelimit-hooks-empty')

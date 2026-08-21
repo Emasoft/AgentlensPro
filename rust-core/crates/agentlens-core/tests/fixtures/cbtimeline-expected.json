@@ -1,0 +1,813 @@
+{
+  "bodies": {
+    "null_body": null,
+    "not_an_object": "a string, not a body",
+    "empty_object": {},
+    "array_body": [],
+    "system_string": {
+      "model": "claude-sonnet-5",
+      "system": "You are a helpful assistant.\n<env>\nWorking directory: /w/p\nPlatform: darwin\n</env>\nEnd."
+    },
+    "full": {
+      "model": "claude-opus-5[1m]",
+      "thinking": {
+        "type": "enabled",
+        "budget_tokens": 10000
+      },
+      "output_config": {
+        "effort": "high"
+      },
+      "tool_choice": {
+        "type": "tool",
+        "name": "Bash"
+      },
+      "speed": "fast",
+      "system": [
+        {
+          "type": "text",
+          "text": "x-anthropic-billing-header: cc_version=2.1.230"
+        },
+        {
+          "type": "text",
+          "text": "# Environment\nYou have been invoked in the following environment:\n - Primary working directory: /w/p\n - Platform: darwin\n\ngitStatus: This is the git status at the start of the conversation.\nCurrent branch: main\nRecent commits:\n8eafa50 feat(rust-core): bodies_evidence\nc7d1db7 docs: STATE\n\nTrailing prose that is NOT part of the git region.\n# Scratchpad Directory\nuse /tmp/scratch",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        },
+        {
+          "type": "text",
+          "text": ""
+        },
+        {
+          "type": "text"
+        }
+      ],
+      "tools": [
+        {
+          "name": "Bash",
+          "description": "run a command",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "cmd": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "name": "mcp__chrome-devtools__click",
+          "description": "",
+          "defer_loading": true,
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        },
+        {
+          "name": "Read",
+          "input_schema": null
+        },
+        {
+          "description": "a tool with no name at all"
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": "a plain string message"
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "first breakpoint",
+              "cache_control": {
+                "type": "ephemeral"
+              }
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "content": [
+                {
+                  "text": "a"
+                },
+                {
+                  "text": 5
+                },
+                {
+                  "nope": 1
+                }
+              ]
+            },
+            {
+              "type": "tool_result",
+              "content": "a string tool_result"
+            },
+            {
+              "type": "tool_use",
+              "name": "Bash",
+              "input": {
+                "cmd": "ls -la"
+              }
+            },
+            {
+              "type": "image",
+              "source": {
+                "data": "AAAABBBB"
+              }
+            },
+            {
+              "type": "image",
+              "source": {}
+            },
+            {
+              "type": "thinking",
+              "thinking": "ignored — neither text nor attachment"
+            },
+            {
+              "type": "text",
+              "text": "🔥🔥🔥 emoji block",
+              "cache_control": {
+                "type": "ephemeral"
+              }
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "tail content past the last breakpoint"
+            }
+          ]
+        }
+      ]
+    },
+    "breakpoint_in_system_only": {
+      "model": "claude-haiku-4-5",
+      "system": [
+        {
+          "type": "text",
+          "text": "small system",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            }
+          ]
+        }
+      ]
+    },
+    "no_markers": {
+      "model": "claude-opus-4-6",
+      "system": "You are a helpful assistant.\n<env>\nWorking directory: /w/p\nPlatform: darwin\n</env>\nEnd.",
+      "tools": [
+        {
+          "name": "Grep",
+          "description": "search",
+          "input_schema": {}
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "hello"
+            }
+          ]
+        }
+      ]
+    },
+    "param_shapes": {
+      "model": "claude-sonnet-4-6",
+      "thinking": null,
+      "output_config": {
+        "effort": 42
+      },
+      "tool_choice": {
+        "any": "thing",
+        "n": 1
+      },
+      "speed": [
+        "fast",
+        "slow"
+      ],
+      "messages": []
+    },
+    "git_no_commits": {
+      "model": "claude-opus-5",
+      "system": "preamble\ngitStatus: clean\nCurrent branch: main",
+      "messages": []
+    },
+    "env_cli_to_end": {
+      "model": "claude-opus-5",
+      "system": "# Environment\nYou have been invoked in the following environment:\n - Platform: darwin",
+      "messages": []
+    },
+    "tools_only": {
+      "model": "claude-opus-5",
+      "tools": [
+        {
+          "name": "Bash",
+          "description": "run a command",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "cmd": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "name": "mcp__chrome-devtools__click",
+          "description": "",
+          "defer_loading": true,
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        },
+        {
+          "name": "Read",
+          "input_schema": null
+        },
+        {
+          "description": "a tool with no name at all"
+        }
+      ]
+    }
+  },
+  "expectedCauses": [
+    "COLD_START",
+    "COMPACTION",
+    "NORMAL_GROWTH",
+    "SUBAGENT_INTERLEAVE"
+  ],
+  "remediation": {
+    "TOOLSET_CHANGED": "A tool was added/removed/redefined mid-session. Keep the tool catalog byte-identical: use defer-loading stubs + tool-search rather than mutating the live tool set.",
+    "TOOLS_REORDERED": "The tool set is the same but its ORDER shuffled. Emit tools in a stable sorted order so the catalog bytes never move.",
+    "TOOL_SEARCH_DEFERRED": "A deferred tool keeps loading mid-session (tool-search). Pre-load the tools you know you need at session start, or accept the one-time load cost.",
+    "MCP_TOOLS_CHANGED": "An MCP server / plugin toggled its non-deferred tools mid-session. Keep MCP servers connected for the whole session, or make their tools deferred.",
+    "PLUGINS_RELOADED": "A /reload-plugins re-registered the tool + skill + agent catalogs together, rewriting the whole prefix at the write rate. Reload plugins at session start or in a fresh session, never mid-conversation.",
+    "MODEL_SWITCH": "The model changed mid-session — caches are model-specific. Hand off to a sub-agent instead of switching model in place.",
+    "EFFORT_SWITCH": "The extended-thinking / reasoning-effort setting changed. Fix the effort level once at session start; changing it invalidates system + messages.",
+    "HOOK_INJECTION": "A per-turn hook writes a mutating block INTO the cached prefix. Move the hook output after the last cache breakpoint (into the current user message), or make it stable.",
+    "SKILL_INJECTION": "A skill block was injected into the cached prefix. Load skills before the cache breakpoint stabilizes, or keep the skill set fixed.",
+    "SKILL_DESCRIPTION_TRUNCATION": "A skill description was truncated turn-to-turn, changing the catalog bytes. Keep skill descriptions stable-length within a session.",
+    "SKILL_CHANGED": "A skill catalog / skill block changed content mid-session. Keep the available-skills set and their text fixed within a session.",
+    "INLINE_EXEC_RESULT_CHANGED": "A skill `!`-operator shell result differs each turn (e.g. a clock/`date`/`git status`), so its injected block re-writes the prefix. Pin or remove the volatile inline command.",
+    "CLAUDE_MD_CHANGED": "An injected instruction file (CLAUDE.md / a rule) changed mid-session. Do not edit instruction files during a live session; a date inside them is SYSTEM_TIMESTAMP, not this.",
+    "MEMORY_FILE_CHANGED": "An injected memory file (MEMORY.md / a wiki page) was rewritten while sessions were live, mutating msg[0] and re-writing the whole prefix — in EVERY session that injects it, not just the one that wrote it. Batch memory maintenance into one pass, run it when sessions are idle, or keep the injected index stable and put churn in pages that are not injected.",
+    "AGENT_METADATA_CHANGED": "Harness/agent metadata (the billing header cc_version, the agent-types list) changed — usually a Claude Code upgrade. Unavoidable once; avoid resuming huge sessions right after upgrading.",
+    "SYSTEM_TIMESTAMP": "A moving date/clock inside an otherwise-static block breaks the cache every day/turn. Move the timestamp out of the cached prefix into the current user message.",
+    "CONTEXT_ORDER_CHANGED": "The same blocks are injected in a DIFFERENT order — the cache is byte-order sensitive, so this still breaks it. Fix the injection order to be deterministic.",
+    "TTL_EXPIRY": "No prefix change — the cache entry simply expired between turns. A heartbeat within the TTL (5m/1h) would convert these writes back to cache_read.",
+    "COLD_START": "A cold cache warm (first turn / resume / no prior cached prefix). Expected once per session; not an avoidable per-turn break.",
+    "COMPACTION": "Conversation compaction rebuilt the message layer. Expected once per compaction; avoid compacting more than necessary.",
+    "SUBAGENT_INTERLEAVE": "Two requests grouped under one session id belong to DIFFERENT streams — sub-agent calls carry the parent's session id. Claimed on either of two signatures: the A→B→A pattern (this request matches turn-2's tool catalog + model, not turn-1's), or a different msg[0] prompt (the conversation's own opening words, immutable within one conversation). Each stream keeps its OWN cache, so nothing actually broke and there is nothing to fix; the child bills its own (smaller) prefix. Pin the sub-agent's tools + model in its frontmatter to shrink that footprint.",
+    "NORMAL_GROWTH": "Not a break — append-only growth: this turn's NEW content was cached for the first time (expected incremental write). Reduce it only by producing/ingesting less content per turn.",
+    "MESSAGE_TRIMMED": "A block was REMOVED from the cached message prefix (harness context-editing / tool-result clearing / message deletion) — everything after the removal point re-writes. Prefer compaction or a fresh session over mid-session trimming of a huge transcript.",
+    "MESSAGE_SPLICED": "A NEW block was INSERTED into the middle of the cached prefix, shifting every later block — everything after the splice point re-writes. The actor is whatever injected the block (typically the harness re-homing a hook/system message), never the shifted bystanders after it.",
+    "ATTACHMENT_CHANGED": "A non-text block (image / tool_use input) inside the cached prefix changed or moved. Past attachments should be immutable; an image riding in the prefix re-bills the tail on any change.",
+    "WORKING_DIR_CHANGED": "The environment block (working directory / platform / shell / OS) differs between these two turns, and it sits inside the cached system prefix — so a cache entry is scoped to ONE directory, and a second worktree of the same repository is a different prefix. This fires only ACROSS directories, never within one: `/cd` is engineered cache-safe (the new directory's CLAUDE.md is appended as a message instead of rebuilding the system prompt). Keep long-running work in one directory, or accept one cold warm per directory.",
+    "GIT_STATE_CHANGED": "The startup git snapshot (branch, status, recent commits) carried in the system prefix differs. It is captured ONCE at session start and never updates during a session, so this can only fire between turns that started from different snapshots — a resume, or a second stream sharing this session id. Sequential sessions share a prefix only when that snapshot matches, so branch/commit churn between sessions costs one cold warm each; nothing to fix mid-session.",
+    "THINKING_CONFIG_CHANGED": "The thinking configuration changed (type or budget_tokens). It is rendered into the prompt itself, so message-level breakpoints ALWAYS miss; tools and system miss only on models that render the configuration ahead of them, and the docs do not enumerate which. Fix the thinking config once at session start.",
+    "EFFORT_PARAM_CHANGED": "output_config.effort changed between two EXPLICIT values. Message blocks always miss; the effect on tools/system is model-specific. Setting effort explicitly to the model default is a documented no-op, so this never fires on an absent↔present transition — only on two different explicit values. Pick one effort level per conversation.",
+    "TOOL_CHOICE_CHANGED": "tool_choice changed between two explicit values. Per the docs this invalidates MESSAGE blocks only — tools and system stay cached — so the write is bounded by the message layer rather than the whole prefix. Keep tool_choice constant for the lifetime of a cached conversation.",
+    "LOOKBACK_OVERFLOW": "No block changed, yet the cache found nothing to read: at least 20 blocks were appended since the last cache WRITE, and the lookback window is 20 blocks, so it walked past the last entry. This is claimed only when cache_read is 0 with an unchanged prefix — ordinary growth still reads. Add a second breakpoint closer to the growing tail so a write accumulates there before the window overruns.",
+    "BELOW_MIN_CACHEABLE": "Both usage counters are 0 while the request DID carry cache_control markers, and the prompt is under this model's minimum cacheable length — a below-minimum prompt is silently not cached, with no error. The minimum is per model (512 to 4,096 tokens, an 8x spread), so this fires only when the estimate is under THIS model's threshold. Expand the cached content to reach it, or accept the full input rate on these calls.",
+    "CACHING_DISABLED": "The request carried NO cache_control marker anywhere, so nothing was offered to the cache and both counters are 0 by construction. That happens when DISABLE_PROMPT_CACHING (or its per-model variant) is set, and also when the caller deliberately does not cache a class of calls — Claude Code's small Haiku utility calls historically did not (measured on CC ≤2.1.220; since 2.1.221 its auto-mode permission checks reuse the cached conversation prefix, so that class is shrinking). Unset the environment variable only if this was not intended.",
+    "UNCLASSIFIED": "A break whose cause could not be localised from the prefix diff. Inspect the attached raw diff summary and the raw bodies around this turn."
+  },
+  "minCacheable": {
+    "claude-opus-5": 512,
+    "claude-opus-5[1m]": 512,
+    "OPUS-5": 512,
+    "fable-5": 512,
+    "mythos-5": 512,
+    "claude-opus-4-8": 1024,
+    "claude-opus-4.8": 1024,
+    "claude-sonnet-5": 1024,
+    "claude-sonnet-4-6": 1024,
+    "claude-sonnet-4-5": 1024,
+    "claude-opus-4-1": 1024,
+    "claude-opus-4": 1024,
+    "claude-sonnet-4": 1024,
+    "claude-opus-4-20250514": null,
+    "claude-sonnet-4-20250514": null,
+    "claude-opus-4-7": 2048,
+    "claude-opus-4.7": 2048,
+    "mythos-preview": 2048,
+    "claude-3-5-haiku": 2048,
+    "haiku-3.5": 2048,
+    "claude-opus-4-6": 4096,
+    "claude-opus-4-5": 4096,
+    "claude-haiku-4-5": 4096,
+    "gpt-4o": null,
+    "": null,
+    "sonnet": null,
+    "opus-4x": 1024
+  },
+  "contentKind": {
+    "agentmeta_billing": "agentmeta",
+    "agentmeta_beats_system": "agentmeta",
+    "postcompact_continued": "postcompact",
+    "postcompact_analysis": "postcompact",
+    "postcompact_beats_claudemd": "postcompact",
+    "claudemd_contents": "claudemd",
+    "claudemd_heading": "claudemd",
+    "rule_contents": "rule",
+    "memory_beats_hook": "memory",
+    "memory_autoheader": "memory",
+    "execresult_stdout": "execresult",
+    "execresult_fnresults": "execresult",
+    "skillcatalog": "skillcatalog",
+    "agentcatalog": "agentcatalog",
+    "hook_pss": "hook",
+    "hook_janitor_memory": "hook",
+    "hook_userpromptsubmit": "hook",
+    "hook_pretooluse": "hook",
+    "hook_posttooluse": "hook",
+    "hook_tasklist": "hook",
+    "hook_reminder_wrapped": "hook",
+    "date_today": "date",
+    "date_currentdate": "date",
+    "system_plain": "hook",
+    "usertext": "usertext",
+    "empty": "usertext"
+  },
+  "segments": {
+    "none_hook": [
+      {
+        "kind": "hook",
+        "label": "hook: pss-skills (perfect-skill-suggester)",
+        "text": "<pss-skills>rust</pss-skills>"
+      }
+    ],
+    "none_janitor": [
+      {
+        "kind": "usertext",
+        "label": "system[0]",
+        "text": "[janitor-heartbeat] fired at 05:00"
+      }
+    ],
+    "none_usertext": [
+      {
+        "kind": "usertext",
+        "label": "msg[3] user",
+        "text": "just some prose"
+      }
+    ],
+    "none_system_sig": [
+      {
+        "kind": "hook",
+        "label": "hook: ai-maestro inbox",
+        "text": "<system-reminder>AI Maestro inbox: 2 unread messages</system-reminder>"
+      }
+    ],
+    "lead_and_two": [
+      {
+        "kind": "agentmeta",
+        "label": "harness/billing header",
+        "text": "cc_version=2.1.230\nToday's date is 2026-08-21\n"
+      },
+      {
+        "kind": "claudemd",
+        "label": "/w/p/CLAUDE.md",
+        "text": "Contents of /w/p/CLAUDE.md (project instructions):\nbe good\n"
+      },
+      {
+        "kind": "rule",
+        "label": "/Users/x/.claude",
+        "text": "Contents of /Users/x/.claude/rules/never_use_sed.md (private):\nno sed"
+      }
+    ],
+    "mark_at_zero": [
+      {
+        "kind": "claudemd",
+        "label": "/w/p/CLAUDE.md",
+        "text": "Contents of /w/p/CLAUDE.md (project):\nbody"
+      }
+    ],
+    "label_paren": [
+      {
+        "kind": "usertext",
+        "label": "/w/p/notes.md",
+        "text": "Contents of /w/p/notes.md   (a comment)\nbody"
+      }
+    ],
+    "memory_segment": [
+      {
+        "kind": "usertext",
+        "label": "msg[0] user",
+        "text": "preamble\n"
+      },
+      {
+        "kind": "memory",
+        "label": "/Users/x/.claude",
+        "text": "Contents of /Users/x/.claude/projects/p/memory/MEMORY.md (auto-memory):\n- a note"
+      }
+    ],
+    "no_extension": [
+      {
+        "kind": "usertext",
+        "label": "system[0]",
+        "text": "Contents of some directory\nand more text"
+      }
+    ]
+  },
+  "prefixes": {
+    "null_body": null,
+    "not_an_object": null,
+    "empty_object": {
+      "model": "",
+      "thinking": "",
+      "effortParam": "",
+      "toolChoice": "",
+      "speed": "",
+      "envFp": "",
+      "envNorm": "",
+      "gitFp": "",
+      "gitNorm": "",
+      "hasCacheControl": false,
+      "promptTokensApprox": 0,
+      "messageCount": 0,
+      "tools": [],
+      "systemBlocks": [],
+      "messageBlocks": []
+    },
+    "array_body": {
+      "model": "",
+      "thinking": "",
+      "effortParam": "",
+      "toolChoice": "",
+      "speed": "",
+      "envFp": "",
+      "envNorm": "",
+      "gitFp": "",
+      "gitNorm": "",
+      "hasCacheControl": false,
+      "promptTokensApprox": 0,
+      "messageCount": 0,
+      "tools": [],
+      "systemBlocks": [],
+      "messageBlocks": []
+    },
+    "system_string": {
+      "model": "claude-sonnet-5",
+      "thinking": "",
+      "effortParam": "",
+      "toolChoice": "",
+      "speed": "",
+      "envFp": "08cac511",
+      "envNorm": "08cac511",
+      "gitFp": "",
+      "gitNorm": "",
+      "hasCacheControl": false,
+      "promptTokensApprox": 22,
+      "messageCount": 0,
+      "tools": [],
+      "systemBlocks": [
+        {
+          "layer": "system",
+          "kind": "usertext",
+          "label": "system prompt",
+          "fp": "835a2eaa",
+          "norm": "835a2eaa",
+          "len": 87,
+          "tokensApprox": 22
+        }
+      ],
+      "messageBlocks": []
+    },
+    "full": {
+      "model": "claude-opus-5[1m]",
+      "thinking": "enabled:10000",
+      "effortParam": "high",
+      "toolChoice": "tool:Bash",
+      "speed": "fast",
+      "envFp": "a7251f15",
+      "envNorm": "a7251f15",
+      "gitFp": "19b1dd71",
+      "gitNorm": "19b1dd71",
+      "hasCacheControl": true,
+      "promptTokensApprox": 163,
+      "messageCount": 4,
+      "tools": [
+        {
+          "name": "Bash",
+          "deferred": false,
+          "isMcp": false,
+          "fp": "e544b4d1"
+        },
+        {
+          "name": "mcp__chrome-devtools__click",
+          "deferred": true,
+          "isMcp": true,
+          "fp": "2e5b66c3"
+        },
+        {
+          "name": "Read",
+          "deferred": false,
+          "isMcp": false,
+          "fp": "2e5b66c3"
+        },
+        {
+          "name": "?",
+          "deferred": false,
+          "isMcp": false,
+          "fp": "c0f4197e"
+        }
+      ],
+      "systemBlocks": [
+        {
+          "layer": "system",
+          "kind": "agentmeta",
+          "label": "harness/billing header",
+          "fp": "6c387888",
+          "norm": "6c387888",
+          "len": 46,
+          "tokensApprox": 12
+        },
+        {
+          "layer": "system",
+          "kind": "usertext",
+          "label": "system[1]",
+          "fp": "f50cad62",
+          "norm": "f50cad62",
+          "len": 379,
+          "tokensApprox": 95
+        }
+      ],
+      "messageBlocks": [
+        {
+          "layer": "message",
+          "kind": "usertext",
+          "label": "msg[0] user",
+          "fp": "32677562",
+          "norm": "32677562",
+          "len": 22,
+          "tokensApprox": 6
+        },
+        {
+          "layer": "message",
+          "kind": "usertext",
+          "label": "msg[1] assistant",
+          "fp": "0d5ef158",
+          "norm": "0d5ef158",
+          "len": 16,
+          "tokensApprox": 4
+        },
+        {
+          "layer": "message",
+          "kind": "usertext",
+          "label": "msg[2] user",
+          "fp": "a4adba7d",
+          "norm": "a4adba7d",
+          "len": 4,
+          "tokensApprox": 1
+        },
+        {
+          "layer": "message",
+          "kind": "usertext",
+          "label": "msg[2] user",
+          "fp": "f3ba00ab",
+          "norm": "f3ba00ab",
+          "len": 20,
+          "tokensApprox": 5
+        },
+        {
+          "layer": "message",
+          "kind": "attachment",
+          "label": "msg[2] tool_use Bash",
+          "fp": "b22c3f46",
+          "norm": "b22c3f46",
+          "len": 16,
+          "tokensApprox": 0
+        },
+        {
+          "layer": "message",
+          "kind": "attachment",
+          "label": "msg[2] image",
+          "fp": "636ce3e8",
+          "norm": "636ce3e8",
+          "len": 7,
+          "tokensApprox": 0
+        },
+        {
+          "layer": "message",
+          "kind": "attachment",
+          "label": "msg[2] image",
+          "fp": "5b6cd750",
+          "norm": "5b6cd750",
+          "len": 7,
+          "tokensApprox": 0
+        },
+        {
+          "layer": "message",
+          "kind": "usertext",
+          "label": "msg[2] user",
+          "fp": "86172afc",
+          "norm": "86172afc",
+          "len": 18,
+          "tokensApprox": 6
+        }
+      ]
+    },
+    "breakpoint_in_system_only": {
+      "model": "claude-haiku-4-5",
+      "thinking": "",
+      "effortParam": "",
+      "toolChoice": "",
+      "speed": "",
+      "envFp": "",
+      "envNorm": "",
+      "gitFp": "",
+      "gitNorm": "",
+      "hasCacheControl": true,
+      "promptTokensApprox": 2503,
+      "messageCount": 2,
+      "tools": [],
+      "systemBlocks": [
+        {
+          "layer": "system",
+          "kind": "usertext",
+          "label": "system[0]",
+          "fp": "59bf385d",
+          "norm": "59bf385d",
+          "len": 12,
+          "tokensApprox": 3
+        }
+      ],
+      "messageBlocks": []
+    },
+    "no_markers": {
+      "model": "claude-opus-4-6",
+      "thinking": "",
+      "effortParam": "",
+      "toolChoice": "",
+      "speed": "",
+      "envFp": "08cac511",
+      "envNorm": "08cac511",
+      "gitFp": "",
+      "gitNorm": "",
+      "hasCacheControl": false,
+      "promptTokensApprox": 26,
+      "messageCount": 1,
+      "tools": [
+        {
+          "name": "Grep",
+          "deferred": false,
+          "isMcp": false,
+          "fp": "a63b28d7"
+        }
+      ],
+      "systemBlocks": [
+        {
+          "layer": "system",
+          "kind": "usertext",
+          "label": "system prompt",
+          "fp": "835a2eaa",
+          "norm": "835a2eaa",
+          "len": 87,
+          "tokensApprox": 22
+        }
+      ],
+      "messageBlocks": []
+    },
+    "param_shapes": {
+      "model": "claude-sonnet-4-6",
+      "thinking": "",
+      "effortParam": "",
+      "toolChoice": "{\"any\":\"thing\",\"n\":1}",
+      "speed": "[\"fast\",\"slow\"]",
+      "envFp": "",
+      "envNorm": "",
+      "gitFp": "",
+      "gitNorm": "",
+      "hasCacheControl": false,
+      "promptTokensApprox": 0,
+      "messageCount": 0,
+      "tools": [],
+      "systemBlocks": [],
+      "messageBlocks": []
+    },
+    "git_no_commits": {
+      "model": "claude-opus-5",
+      "thinking": "",
+      "effortParam": "",
+      "toolChoice": "",
+      "speed": "",
+      "envFp": "",
+      "envNorm": "",
+      "gitFp": "0d146c9a",
+      "gitNorm": "0d146c9a",
+      "hasCacheControl": false,
+      "promptTokensApprox": 12,
+      "messageCount": 0,
+      "tools": [],
+      "systemBlocks": [
+        {
+          "layer": "system",
+          "kind": "usertext",
+          "label": "system prompt",
+          "fp": "3f6132ee",
+          "norm": "3f6132ee",
+          "len": 46,
+          "tokensApprox": 12
+        }
+      ],
+      "messageBlocks": []
+    },
+    "env_cli_to_end": {
+      "model": "claude-opus-5",
+      "thinking": "",
+      "effortParam": "",
+      "toolChoice": "",
+      "speed": "",
+      "envFp": "78863607",
+      "envNorm": "78863607",
+      "gitFp": "",
+      "gitNorm": "",
+      "hasCacheControl": false,
+      "promptTokensApprox": 22,
+      "messageCount": 0,
+      "tools": [],
+      "systemBlocks": [
+        {
+          "layer": "system",
+          "kind": "usertext",
+          "label": "system prompt",
+          "fp": "78863607",
+          "norm": "78863607",
+          "len": 85,
+          "tokensApprox": 22
+        }
+      ],
+      "messageBlocks": []
+    },
+    "tools_only": {
+      "model": "claude-opus-5",
+      "thinking": "",
+      "effortParam": "",
+      "toolChoice": "",
+      "speed": "",
+      "envFp": "",
+      "envNorm": "",
+      "gitFp": "",
+      "gitNorm": "",
+      "hasCacheControl": true,
+      "promptTokensApprox": 27,
+      "messageCount": 0,
+      "tools": [
+        {
+          "name": "Bash",
+          "deferred": false,
+          "isMcp": false,
+          "fp": "e544b4d1"
+        },
+        {
+          "name": "mcp__chrome-devtools__click",
+          "deferred": true,
+          "isMcp": true,
+          "fp": "2e5b66c3"
+        },
+        {
+          "name": "Read",
+          "deferred": false,
+          "isMcp": false,
+          "fp": "2e5b66c3"
+        },
+        {
+          "name": "?",
+          "deferred": false,
+          "isMcp": false,
+          "fp": "c0f4197e"
+        }
+      ],
+      "systemBlocks": [],
+      "messageBlocks": []
+    }
+  }
+}
