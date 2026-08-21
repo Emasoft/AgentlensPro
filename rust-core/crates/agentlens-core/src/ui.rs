@@ -1843,6 +1843,50 @@ async fn handle(
                         .map_err(|e| format!("heartbeat cost join failed: {e}"))?;
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
+                    "get_cache_break_timeline" | "get_cache_break_causes" => {
+                        // A bounded, recency-first scan of the raw request/response bodies (spool ∪
+                        // Parquet store), chunk-loaded and re-parsed per turn — spawn_blocking work,
+                        // and the CoreState lock is released before any of it (the P4s rule).
+                        let is_timeline = name == "get_cache_break_timeline";
+                        let (data_dir, projects_dirs) = {
+                            let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                            (st.data_dir.clone(), agentlens_logscan::discovery::claude_projects_dirs(&st.log_env))
+                        };
+                        let session_id = args.get("sessionId").and_then(Value::as_str).map(str::to_owned);
+                        let scope = args.get("scope").and_then(Value::as_str).map(str::to_owned);
+                        let min_tokens = args.get("minTokens").and_then(Value::as_f64);
+                        // The MCP arg is `window`, in HOURS — the builders' field is `windowHours`.
+                        let window_hours = args.get("window").and_then(Value::as_f64);
+                        let top_n = args.get("topN").and_then(Value::as_f64);
+                        let format = args
+                            .get("format")
+                            .and_then(Value::as_str)
+                            .unwrap_or("json")
+                            .to_owned();
+                        let payload = tokio::task::spawn_blocking(move || {
+                            if is_timeline {
+                                let mut o = crate::cache_break_timeline::CacheBreakTimelineOptions::new(data_dir);
+                                o.session_id = session_id;
+                                o.scope = scope;
+                                o.min_tokens = min_tokens;
+                                o.window_hours = window_hours;
+                                o.top_n = top_n;
+                                o.projects_dirs = Some(projects_dirs);
+                                let report = crate::cache_break_timeline::build_cache_break_timeline(&o);
+                                crate::cache_break_timeline::format_timeline(&report, &format)
+                            } else {
+                                let mut o = crate::cache_break_timeline::CacheBreakCausesOptions::new(data_dir);
+                                o.scope = scope;
+                                o.min_tokens = min_tokens;
+                                o.window_hours = window_hours;
+                                o.top_n = top_n;
+                                crate::cache_break_timeline::build_cache_break_causes(&o)
+                            }
+                        })
+                        .await
+                        .map_err(|e| format!("cache-break scan join failed: {e}"))?;
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
+                    }
                     "get_rate_limit_report" => {
                         // Reads the hook-event buckets, then deep-attributes the newest episode via
                         // a bounded body scan — spawn_blocking, lock released first.

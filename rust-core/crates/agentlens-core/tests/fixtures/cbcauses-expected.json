@@ -1,0 +1,1538 @@
+{
+  "root": "<FIXTURES>",
+  "costPeak": {
+    "default_bucket": {
+      "bucket": "cache_creation",
+      "groupBy": "cause",
+      "totalCacheCreateTokens": 925900,
+      "totalCacheReadTokens": 11000,
+      "totalInputTokens": 144,
+      "totalOutputTokens": 4080,
+      "totalCostUsd": 5.8951,
+      "unattributed": {
+        "events": 0,
+        "cacheCreateTokens": 0,
+        "costUsd": 0,
+        "note": "groupBy=cause has no unattributed bucket — every classified turn already belongs to a known session (an un-joinable response is simply not part of any session's turn sequence, so it is never classified)."
+      },
+      "outputSpikes": {
+        "note": "The biggest single OUTPUT-token break events (output is billed ~5x the input rate — sometimes the real cost peak, not the cache write). Rank by bucket=output or bucket=billable_weighted to surface these in the groups.",
+        "top": [
+          {
+            "sessionId": "sess-delta",
+            "accountUuid": "acct-1",
+            "model": "claude-opus-5",
+            "outputTokens": 340,
+            "cacheCreateTokens": 50000,
+            "ts": "2026-08-20T16:00:00.000Z"
+          },
+          {
+            "sessionId": "sess-delta",
+            "accountUuid": "acct-1",
+            "model": "claude-opus-5",
+            "outputTokens": 340,
+            "cacheCreateTokens": 500000,
+            "ts": "2026-08-20T16:02:00.000Z"
+          },
+          {
+            "sessionId": "sess-parent",
+            "accountUuid": "acct-1",
+            "model": "claude-opus-5",
+            "outputTokens": 340,
+            "cacheCreateTokens": 45000,
+            "ts": "2026-08-20T14:00:00.000Z"
+          },
+          {
+            "sessionId": "sess-parent",
+            "accountUuid": "acct-1",
+            "model": "claude-opus-5",
+            "outputTokens": 340,
+            "cacheCreateTokens": 35000,
+            "ts": "2026-08-20T14:01:00.000Z"
+          },
+          {
+            "sessionId": "sess-gamma",
+            "accountUuid": "acct-1",
+            "model": "claude-opus-5",
+            "outputTokens": 340,
+            "cacheCreateTokens": 50000,
+            "ts": "2026-08-20T12:00:00.000Z"
+          }
+        ]
+      },
+      "groups": [
+        {
+          "key": "COLD_START",
+          "cacheCreateTokens": 685900,
+          "cacheReadTokens": 5000,
+          "inputTokens": 72,
+          "outputTokens": 2040,
+          "totalTokens": 693012,
+          "costUsd": 4.3407,
+          "events": 6,
+          "maxSingleCacheCreateTokens": 500000,
+          "maxSingleOutputTokens": 340,
+          "bucketValue": 685900
+        },
+        {
+          "key": "COMPACTION",
+          "cacheCreateTokens": 130000,
+          "cacheReadTokens": 2000,
+          "inputTokens": 24,
+          "outputTokens": 680,
+          "totalTokens": 132704,
+          "costUsd": 0.8306,
+          "events": 2,
+          "maxSingleCacheCreateTokens": 70000,
+          "maxSingleOutputTokens": 340,
+          "bucketValue": 130000
+        },
+        {
+          "key": "TOOLSET_CHANGED",
+          "cacheCreateTokens": 75000,
+          "cacheReadTokens": 3000,
+          "inputTokens": 36,
+          "outputTokens": 1020,
+          "totalTokens": 79056,
+          "costUsd": 0.4959,
+          "events": 3,
+          "maxSingleCacheCreateTokens": 30000,
+          "maxSingleOutputTokens": 340,
+          "bucketValue": 75000
+        },
+        {
+          "key": "NORMAL_GROWTH",
+          "cacheCreateTokens": 35000,
+          "cacheReadTokens": 1000,
+          "inputTokens": 12,
+          "outputTokens": 340,
+          "totalTokens": 36352,
+          "costUsd": 0.2278,
+          "events": 1,
+          "maxSingleCacheCreateTokens": 35000,
+          "maxSingleOutputTokens": 340,
+          "bucketValue": 35000
+        }
+      ],
+      "coverage": {
+        "bodiesDir": "<FIXTURES>/spool",
+        "dirExists": true,
+        "responseFilesTotal": 18,
+        "responseFilesScanned": 18,
+        "requestFilesTotal": 18,
+        "requestFilesIndexed": 18,
+        "scanCap": 4000,
+        "complete": true,
+        "note": "Scanned all 18 request body(ies) across 5 session(s) — 0 from the Parquet store, 18 from the raw spool (drained history stays in evidence)."
+      }
+    },
+    "bucket_output": {
+      "bucket": "output",
+      "groupBy": "cause",
+      "totalCacheCreateTokens": 925900,
+      "totalCacheReadTokens": 11000,
+      "totalInputTokens": 144,
+      "totalOutputTokens": 4080,
+      "totalCostUsd": 5.8951,
+      "unattributed": {
+        "events": 0,
+        "cacheCreateTokens": 0,
+        "costUsd": 0,
+        "note": "groupBy=cause has no unattributed bucket — every classified turn already belongs to a known session (an un-joinable response is simply not part of any session's turn sequence, so it is never classified)."
+      },
+      "outputSpikes": {
+        "note": "The biggest single OUTPUT-token break events (output is billed ~5x the input rate — sometimes the real cost peak, not the cache write). Rank by bucket=output or bucket=billable_weighted to surface these in the groups.",
+        "top": [
+          {
+            "sessionId": "sess-delta",
+            "accountUuid": "acct-1",
+            "model": "claude-opus-5",
+            "outputTokens": 340,
+            "cacheCreateTokens": 50000,
+            "ts": "2026-08-20T16:00:00.000Z"
+          },
+          {
+            "sessionId": "sess-delta",
+            "accountUuid": "acct-1",
+            "model": "claude-opus-5",
+            "outputTokens": 340,
+            "cacheCreateTokens": 500000,
+            "ts": "2026-08-20T16:02:00.000Z"
+          },
+          {
+            "sessionId": "sess-parent",
+            "accountUuid": "acct-1",
+            "model": "claude-opus-5",
+            "outputTokens": 340,
+            "cacheCreateTokens": 45000,
+            "ts": "2026-08-20T14:00:00.000Z"
+          },
+          {
+            "sessionId": "sess-parent",
+            "accountUuid": "acct-1",
+            "model": "claude-opus-5",
+            "outputTokens": 340,
+            "cacheCreateTokens": 35000,
+            "ts": "2026-08-20T14:01:00.000Z"
+          },
+          {
+            "sessionId": "sess-gamma",
+            "accountUuid": "acct-1",
+            "model": "claude-opus-5",
+            "outputTokens": 340,
+            "cacheCreateTokens": 50000,
+            "ts": "2026-08-20T12:00:00.000Z"
+          }
+        ]
+      },
+      "groups": [
+        {
+          "key": "COLD_START",
+          "cacheCreateTokens": 685900,
+          "cacheReadTokens": 5000,
+          "inputTokens": 72,
+          "outputTokens": 2040,
+          "totalTokens": 693012,
+          "costUsd": 4.3407,
+          "events": 6,
+          "maxSingleCacheCreateTokens": 500000,
+          "maxSingleOutputTokens": 340,
+          "bucketValue": 2040
+        },
+        {
+          "key": "TOOLSET_CHANGED",
+          "cacheCreateTokens": 75000,
+          "cacheReadTokens": 3000,
+          "inputTokens": 36,
+          "outputTokens": 1020,
+          "totalTokens": 79056,
+          "costUsd": 0.4959,
+          "events": 3,
+          "maxSingleCacheCreateTokens": 30000,
+          "maxSingleOutputTokens": 340,
+          "bucketValue": 1020
+        },
+        {
+          "key": "COMPACTION",
+          "cacheCreateTokens": 130000,
+          "cacheReadTokens": 2000,
+          "inputTokens": 24,
+          "outputTokens": 680,
+          "totalTokens": 132704,
+          "costUsd": 0.8306,
+          "events": 2,
+          "maxSingleCacheCreateTokens": 70000,
+          "maxSingleOutputTokens": 340,
+          "bucketValue": 680
+        },
+        {
+          "key": "NORMAL_GROWTH",
+          "cacheCreateTokens": 35000,
+          "cacheReadTokens": 1000,
+          "inputTokens": 12,
+          "outputTokens": 340,
+          "totalTokens": 36352,
+          "costUsd": 0.2278,
+          "events": 1,
+          "maxSingleCacheCreateTokens": 35000,
+          "maxSingleOutputTokens": 340,
+          "bucketValue": 340
+        }
+      ],
+      "coverage": {
+        "bodiesDir": "<FIXTURES>/spool",
+        "dirExists": true,
+        "responseFilesTotal": 18,
+        "responseFilesScanned": 18,
+        "requestFilesTotal": 18,
+        "requestFilesIndexed": 18,
+        "scanCap": 4000,
+        "complete": true,
+        "note": "Scanned all 18 request body(ies) across 5 session(s) — 0 from the Parquet store, 18 from the raw spool (drained history stays in evidence)."
+      }
+    },
+    "bucket_weighted": {
+      "bucket": "billable_weighted",
+      "groupBy": "cause",
+      "totalCacheCreateTokens": 925900,
+      "totalCacheReadTokens": 11000,
+      "totalInputTokens": 144,
+      "totalOutputTokens": 4080,
+      "totalCostUsd": 5.8951,
+      "unattributed": {
+        "events": 0,
+        "cacheCreateTokens": 0,
+        "costUsd": 0,
+        "note": "groupBy=cause has no unattributed bucket — every classified turn already belongs to a known session (an un-joinable response is simply not part of any session's turn sequence, so it is never classified)."
+      },
+      "outputSpikes": {
+        "note": "The biggest single OUTPUT-token break events (output is billed ~5x the input rate — sometimes the real cost peak, not the cache write). Rank by bucket=output or bucket=billable_weighted to surface these in the groups.",
+        "top": [
+          {
+            "sessionId": "sess-delta",
+            "accountUuid": "acct-1",
+            "model": "claude-opus-5",
+            "outputTokens": 340,
+            "cacheCreateTokens": 50000,
+            "ts": "2026-08-20T16:00:00.000Z"
+          },
+          {
+            "sessionId": "sess-delta",
+            "accountUuid": "acct-1",
+            "model": "claude-opus-5",
+            "outputTokens": 340,
+            "cacheCreateTokens": 500000,
+            "ts": "2026-08-20T16:02:00.000Z"
+          },
+          {
+            "sessionId": "sess-parent",
+            "accountUuid": "acct-1",
+            "model": "claude-opus-5",
+            "outputTokens": 340,
+            "cacheCreateTokens": 45000,
+            "ts": "2026-08-20T14:00:00.000Z"
+          },
+          {
+            "sessionId": "sess-parent",
+            "accountUuid": "acct-1",
+            "model": "claude-opus-5",
+            "outputTokens": 340,
+            "cacheCreateTokens": 35000,
+            "ts": "2026-08-20T14:01:00.000Z"
+          },
+          {
+            "sessionId": "sess-gamma",
+            "accountUuid": "acct-1",
+            "model": "claude-opus-5",
+            "outputTokens": 340,
+            "cacheCreateTokens": 50000,
+            "ts": "2026-08-20T12:00:00.000Z"
+          }
+        ]
+      },
+      "groups": [
+        {
+          "key": "COLD_START",
+          "cacheCreateTokens": 685900,
+          "cacheReadTokens": 5000,
+          "inputTokens": 72,
+          "outputTokens": 2040,
+          "totalTokens": 693012,
+          "costUsd": 4.3407,
+          "events": 6,
+          "maxSingleCacheCreateTokens": 500000,
+          "maxSingleOutputTokens": 340,
+          "bucketValue": 4.3407
+        },
+        {
+          "key": "COMPACTION",
+          "cacheCreateTokens": 130000,
+          "cacheReadTokens": 2000,
+          "inputTokens": 24,
+          "outputTokens": 680,
+          "totalTokens": 132704,
+          "costUsd": 0.8306,
+          "events": 2,
+          "maxSingleCacheCreateTokens": 70000,
+          "maxSingleOutputTokens": 340,
+          "bucketValue": 0.8306
+        },
+        {
+          "key": "TOOLSET_CHANGED",
+          "cacheCreateTokens": 75000,
+          "cacheReadTokens": 3000,
+          "inputTokens": 36,
+          "outputTokens": 1020,
+          "totalTokens": 79056,
+          "costUsd": 0.4959,
+          "events": 3,
+          "maxSingleCacheCreateTokens": 30000,
+          "maxSingleOutputTokens": 340,
+          "bucketValue": 0.4959
+        },
+        {
+          "key": "NORMAL_GROWTH",
+          "cacheCreateTokens": 35000,
+          "cacheReadTokens": 1000,
+          "inputTokens": 12,
+          "outputTokens": 340,
+          "totalTokens": 36352,
+          "costUsd": 0.2278,
+          "events": 1,
+          "maxSingleCacheCreateTokens": 35000,
+          "maxSingleOutputTokens": 340,
+          "bucketValue": 0.2278
+        }
+      ],
+      "coverage": {
+        "bodiesDir": "<FIXTURES>/spool",
+        "dirExists": true,
+        "responseFilesTotal": 18,
+        "responseFilesScanned": 18,
+        "requestFilesTotal": 18,
+        "requestFilesIndexed": 18,
+        "scanCap": 4000,
+        "complete": true,
+        "note": "Scanned all 18 request body(ies) across 5 session(s) — 0 from the Parquet store, 18 from the raw spool (drained history stays in evidence)."
+      }
+    },
+    "topn1": {
+      "bucket": "cache_creation",
+      "groupBy": "cause",
+      "totalCacheCreateTokens": 925900,
+      "totalCacheReadTokens": 11000,
+      "totalInputTokens": 144,
+      "totalOutputTokens": 4080,
+      "totalCostUsd": 5.8951,
+      "unattributed": {
+        "events": 0,
+        "cacheCreateTokens": 0,
+        "costUsd": 0,
+        "note": "groupBy=cause has no unattributed bucket — every classified turn already belongs to a known session (an un-joinable response is simply not part of any session's turn sequence, so it is never classified)."
+      },
+      "outputSpikes": {
+        "note": "The biggest single OUTPUT-token break events (output is billed ~5x the input rate — sometimes the real cost peak, not the cache write). Rank by bucket=output or bucket=billable_weighted to surface these in the groups.",
+        "top": [
+          {
+            "sessionId": "sess-delta",
+            "accountUuid": "acct-1",
+            "model": "claude-opus-5",
+            "outputTokens": 340,
+            "cacheCreateTokens": 50000,
+            "ts": "2026-08-20T16:00:00.000Z"
+          },
+          {
+            "sessionId": "sess-delta",
+            "accountUuid": "acct-1",
+            "model": "claude-opus-5",
+            "outputTokens": 340,
+            "cacheCreateTokens": 500000,
+            "ts": "2026-08-20T16:02:00.000Z"
+          },
+          {
+            "sessionId": "sess-parent",
+            "accountUuid": "acct-1",
+            "model": "claude-opus-5",
+            "outputTokens": 340,
+            "cacheCreateTokens": 45000,
+            "ts": "2026-08-20T14:00:00.000Z"
+          },
+          {
+            "sessionId": "sess-parent",
+            "accountUuid": "acct-1",
+            "model": "claude-opus-5",
+            "outputTokens": 340,
+            "cacheCreateTokens": 35000,
+            "ts": "2026-08-20T14:01:00.000Z"
+          },
+          {
+            "sessionId": "sess-gamma",
+            "accountUuid": "acct-1",
+            "model": "claude-opus-5",
+            "outputTokens": 340,
+            "cacheCreateTokens": 50000,
+            "ts": "2026-08-20T12:00:00.000Z"
+          }
+        ]
+      },
+      "groups": [
+        {
+          "key": "COLD_START",
+          "cacheCreateTokens": 685900,
+          "cacheReadTokens": 5000,
+          "inputTokens": 72,
+          "outputTokens": 2040,
+          "totalTokens": 693012,
+          "costUsd": 4.3407,
+          "events": 6,
+          "maxSingleCacheCreateTokens": 500000,
+          "maxSingleOutputTokens": 340,
+          "bucketValue": 685900
+        }
+      ],
+      "coverage": {
+        "bodiesDir": "<FIXTURES>/spool",
+        "dirExists": true,
+        "responseFilesTotal": 18,
+        "responseFilesScanned": 18,
+        "requestFilesTotal": 18,
+        "requestFilesIndexed": 18,
+        "scanCap": 4000,
+        "complete": true,
+        "note": "Scanned all 18 request body(ies) across 5 session(s) — 0 from the Parquet store, 18 from the raw spool (drained history stays in evidence)."
+      }
+    },
+    "topn_over_cap": {
+      "bucket": "cache_creation",
+      "groupBy": "cause",
+      "totalCacheCreateTokens": 925900,
+      "totalCacheReadTokens": 11000,
+      "totalInputTokens": 144,
+      "totalOutputTokens": 4080,
+      "totalCostUsd": 5.8951,
+      "unattributed": {
+        "events": 0,
+        "cacheCreateTokens": 0,
+        "costUsd": 0,
+        "note": "groupBy=cause has no unattributed bucket — every classified turn already belongs to a known session (an un-joinable response is simply not part of any session's turn sequence, so it is never classified)."
+      },
+      "outputSpikes": {
+        "note": "The biggest single OUTPUT-token break events (output is billed ~5x the input rate — sometimes the real cost peak, not the cache write). Rank by bucket=output or bucket=billable_weighted to surface these in the groups.",
+        "top": [
+          {
+            "sessionId": "sess-delta",
+            "accountUuid": "acct-1",
+            "model": "claude-opus-5",
+            "outputTokens": 340,
+            "cacheCreateTokens": 50000,
+            "ts": "2026-08-20T16:00:00.000Z"
+          },
+          {
+            "sessionId": "sess-delta",
+            "accountUuid": "acct-1",
+            "model": "claude-opus-5",
+            "outputTokens": 340,
+            "cacheCreateTokens": 500000,
+            "ts": "2026-08-20T16:02:00.000Z"
+          },
+          {
+            "sessionId": "sess-parent",
+            "accountUuid": "acct-1",
+            "model": "claude-opus-5",
+            "outputTokens": 340,
+            "cacheCreateTokens": 45000,
+            "ts": "2026-08-20T14:00:00.000Z"
+          },
+          {
+            "sessionId": "sess-parent",
+            "accountUuid": "acct-1",
+            "model": "claude-opus-5",
+            "outputTokens": 340,
+            "cacheCreateTokens": 35000,
+            "ts": "2026-08-20T14:01:00.000Z"
+          },
+          {
+            "sessionId": "sess-gamma",
+            "accountUuid": "acct-1",
+            "model": "claude-opus-5",
+            "outputTokens": 340,
+            "cacheCreateTokens": 50000,
+            "ts": "2026-08-20T12:00:00.000Z"
+          }
+        ]
+      },
+      "groups": [
+        {
+          "key": "COLD_START",
+          "cacheCreateTokens": 685900,
+          "cacheReadTokens": 5000,
+          "inputTokens": 72,
+          "outputTokens": 2040,
+          "totalTokens": 693012,
+          "costUsd": 4.3407,
+          "events": 6,
+          "maxSingleCacheCreateTokens": 500000,
+          "maxSingleOutputTokens": 340,
+          "bucketValue": 685900
+        },
+        {
+          "key": "COMPACTION",
+          "cacheCreateTokens": 130000,
+          "cacheReadTokens": 2000,
+          "inputTokens": 24,
+          "outputTokens": 680,
+          "totalTokens": 132704,
+          "costUsd": 0.8306,
+          "events": 2,
+          "maxSingleCacheCreateTokens": 70000,
+          "maxSingleOutputTokens": 340,
+          "bucketValue": 130000
+        },
+        {
+          "key": "TOOLSET_CHANGED",
+          "cacheCreateTokens": 75000,
+          "cacheReadTokens": 3000,
+          "inputTokens": 36,
+          "outputTokens": 1020,
+          "totalTokens": 79056,
+          "costUsd": 0.4959,
+          "events": 3,
+          "maxSingleCacheCreateTokens": 30000,
+          "maxSingleOutputTokens": 340,
+          "bucketValue": 75000
+        },
+        {
+          "key": "NORMAL_GROWTH",
+          "cacheCreateTokens": 35000,
+          "cacheReadTokens": 1000,
+          "inputTokens": 12,
+          "outputTokens": 340,
+          "totalTokens": 36352,
+          "costUsd": 0.2278,
+          "events": 1,
+          "maxSingleCacheCreateTokens": 35000,
+          "maxSingleOutputTokens": 340,
+          "bucketValue": 35000
+        }
+      ],
+      "coverage": {
+        "bodiesDir": "<FIXTURES>/spool",
+        "dirExists": true,
+        "responseFilesTotal": 18,
+        "responseFilesScanned": 18,
+        "requestFilesTotal": 18,
+        "requestFilesIndexed": 18,
+        "scanCap": 4000,
+        "complete": true,
+        "note": "Scanned all 18 request body(ies) across 5 session(s) — 0 from the Parquet store, 18 from the raw spool (drained history stays in evidence)."
+      }
+    },
+    "high_floor": {
+      "bucket": "cache_creation",
+      "groupBy": "cause",
+      "totalCacheCreateTokens": 880000,
+      "totalCacheReadTokens": 8000,
+      "totalInputTokens": 108,
+      "totalOutputTokens": 3060,
+      "totalCostUsd": 5.581,
+      "unattributed": {
+        "events": 0,
+        "cacheCreateTokens": 0,
+        "costUsd": 0,
+        "note": "groupBy=cause has no unattributed bucket — every classified turn already belongs to a known session (an un-joinable response is simply not part of any session's turn sequence, so it is never classified)."
+      },
+      "outputSpikes": {
+        "note": "The biggest single OUTPUT-token break events (output is billed ~5x the input rate — sometimes the real cost peak, not the cache write). Rank by bucket=output or bucket=billable_weighted to surface these in the groups.",
+        "top": [
+          {
+            "sessionId": "sess-delta",
+            "accountUuid": "acct-1",
+            "model": "claude-opus-5",
+            "outputTokens": 340,
+            "cacheCreateTokens": 50000,
+            "ts": "2026-08-20T16:00:00.000Z"
+          },
+          {
+            "sessionId": "sess-delta",
+            "accountUuid": "acct-1",
+            "model": "claude-opus-5",
+            "outputTokens": 340,
+            "cacheCreateTokens": 500000,
+            "ts": "2026-08-20T16:02:00.000Z"
+          },
+          {
+            "sessionId": "sess-parent",
+            "accountUuid": "acct-1",
+            "model": "claude-opus-5",
+            "outputTokens": 340,
+            "cacheCreateTokens": 45000,
+            "ts": "2026-08-20T14:00:00.000Z"
+          },
+          {
+            "sessionId": "sess-parent",
+            "accountUuid": "acct-1",
+            "model": "claude-opus-5",
+            "outputTokens": 340,
+            "cacheCreateTokens": 35000,
+            "ts": "2026-08-20T14:01:00.000Z"
+          },
+          {
+            "sessionId": "sess-gamma",
+            "accountUuid": "acct-1",
+            "model": "claude-opus-5",
+            "outputTokens": 340,
+            "cacheCreateTokens": 50000,
+            "ts": "2026-08-20T12:00:00.000Z"
+          }
+        ]
+      },
+      "groups": [
+        {
+          "key": "COLD_START",
+          "cacheCreateTokens": 685000,
+          "cacheReadTokens": 4000,
+          "inputTokens": 60,
+          "outputTokens": 1700,
+          "totalTokens": 690760,
+          "costUsd": 4.326,
+          "events": 5,
+          "maxSingleCacheCreateTokens": 500000,
+          "maxSingleOutputTokens": 340,
+          "bucketValue": 685000
+        },
+        {
+          "key": "COMPACTION",
+          "cacheCreateTokens": 130000,
+          "cacheReadTokens": 2000,
+          "inputTokens": 24,
+          "outputTokens": 680,
+          "totalTokens": 132704,
+          "costUsd": 0.8306,
+          "events": 2,
+          "maxSingleCacheCreateTokens": 70000,
+          "maxSingleOutputTokens": 340,
+          "bucketValue": 130000
+        },
+        {
+          "key": "NORMAL_GROWTH",
+          "cacheCreateTokens": 35000,
+          "cacheReadTokens": 1000,
+          "inputTokens": 12,
+          "outputTokens": 340,
+          "totalTokens": 36352,
+          "costUsd": 0.2278,
+          "events": 1,
+          "maxSingleCacheCreateTokens": 35000,
+          "maxSingleOutputTokens": 340,
+          "bucketValue": 35000
+        },
+        {
+          "key": "TOOLSET_CHANGED",
+          "cacheCreateTokens": 30000,
+          "cacheReadTokens": 1000,
+          "inputTokens": 12,
+          "outputTokens": 340,
+          "totalTokens": 31352,
+          "costUsd": 0.1966,
+          "events": 1,
+          "maxSingleCacheCreateTokens": 30000,
+          "maxSingleOutputTokens": 340,
+          "bucketValue": 30000
+        }
+      ],
+      "coverage": {
+        "bodiesDir": "<FIXTURES>/spool",
+        "dirExists": true,
+        "responseFilesTotal": 18,
+        "responseFilesScanned": 18,
+        "requestFilesTotal": 18,
+        "requestFilesIndexed": 18,
+        "scanCap": 4000,
+        "complete": true,
+        "note": "Scanned all 18 request body(ies) across 5 session(s) — 0 from the Parquet store, 18 from the raw spool (drained history stays in evidence)."
+      }
+    },
+    "no_evidence": {
+      "bucket": "cache_creation",
+      "groupBy": "cause",
+      "totalCacheCreateTokens": 0,
+      "totalCacheReadTokens": 0,
+      "totalInputTokens": 0,
+      "totalOutputTokens": 0,
+      "totalCostUsd": 0,
+      "unattributed": {
+        "events": 0,
+        "cacheCreateTokens": 0,
+        "costUsd": 0,
+        "note": "groupBy=cause has no unattributed bucket — every classified turn already belongs to a known session."
+      },
+      "outputSpikes": {
+        "note": "The biggest single OUTPUT-token break events (output is billed ~5x — sometimes the real cost peak, not the cache write).",
+        "top": []
+      },
+      "groups": [],
+      "coverage": {
+        "bodiesDir": "<FIXTURES>/no-such-spool",
+        "dirExists": false,
+        "responseFilesTotal": 0,
+        "responseFilesScanned": 0,
+        "requestFilesTotal": 0,
+        "requestFilesIndexed": 0,
+        "scanCap": 4000,
+        "complete": true,
+        "note": "No OTEL raw-body directory at <FIXTURES>/no-such-spool — set OTEL_LOG_RAW_API_BODIES to capture bodies."
+      }
+    }
+  },
+  "causes": {
+    "all": {
+      "minTokens": 100,
+      "totalClassifiedEvents": 12,
+      "totalCacheCreateTokens": 925900,
+      "causeRanking": [
+        {
+          "cause": "COLD_START",
+          "expected": true,
+          "events": 6,
+          "sessionsAffected": 5,
+          "cacheCreateTokens": 685900,
+          "pct": 74.1,
+          "remediation": "A cold cache warm (first turn / resume / no prior cached prefix). Expected once per session; not an avoidable per-turn break."
+        },
+        {
+          "cause": "COMPACTION",
+          "expected": true,
+          "events": 2,
+          "sessionsAffected": 1,
+          "cacheCreateTokens": 130000,
+          "pct": 14,
+          "remediation": "Conversation compaction rebuilt the message layer. Expected once per compaction; avoid compacting more than necessary."
+        },
+        {
+          "cause": "TOOLSET_CHANGED",
+          "expected": false,
+          "events": 3,
+          "sessionsAffected": 1,
+          "cacheCreateTokens": 75000,
+          "pct": 8.1,
+          "remediation": "A tool was added/removed/redefined mid-session. Keep the tool catalog byte-identical: use defer-loading stubs + tool-search rather than mutating the live tool set."
+        },
+        {
+          "cause": "NORMAL_GROWTH",
+          "expected": true,
+          "events": 1,
+          "sessionsAffected": 1,
+          "cacheCreateTokens": 35000,
+          "pct": 3.8,
+          "remediation": "Not a break — append-only growth: this turn's NEW content was cached for the first time (expected incremental write). Reduce it only by producing/ingesting less content per turn."
+        }
+      ],
+      "actorLeaderboard": [
+        {
+          "actorId": "timing:COLD_START",
+          "cause": "COLD_START",
+          "expected": true,
+          "actor": "first observed turn for this session (cold cache warm)",
+          "occurrences": 6,
+          "sessionsAffected": 5,
+          "totalCacheCreateTokens": 685900,
+          "totalCostUsd": 4.2869,
+          "pct": 74.1,
+          "remediation": "A cold cache warm (first turn / resume / no prior cached prefix). Expected once per session; not an avoidable per-turn break."
+        },
+        {
+          "actorId": "timing:UNCLASSIFIED",
+          "cause": "COMPACTION",
+          "expected": true,
+          "actor": "unlocalised re-write",
+          "occurrences": 1,
+          "sessionsAffected": 1,
+          "totalCacheCreateTokens": 70000,
+          "totalCostUsd": 0.4375,
+          "pct": 7.6,
+          "remediation": "Conversation compaction rebuilt the message layer. Expected once per compaction; avoid compacting more than necessary."
+        },
+        {
+          "actorId": "message:COMPACTION:postcompact:msg[0] user",
+          "cause": "COMPACTION",
+          "expected": true,
+          "actor": "conversation compaction rebuilt the message prefix at msg[0] user",
+          "occurrences": 1,
+          "sessionsAffected": 1,
+          "totalCacheCreateTokens": 60000,
+          "totalCostUsd": 0.375,
+          "pct": 6.5,
+          "remediation": "Conversation compaction rebuilt the message layer. Expected once per compaction; avoid compacting more than necessary."
+        },
+        {
+          "actorId": "tools:TOOLSET_CHANGED:Bash",
+          "cause": "TOOLSET_CHANGED",
+          "expected": false,
+          "actor": "tool definition changed: Bash",
+          "occurrences": 2,
+          "sessionsAffected": 1,
+          "totalCacheCreateTokens": 45000,
+          "totalCostUsd": 0.2813,
+          "pct": 4.9,
+          "remediation": "A tool was added/removed/redefined mid-session. Keep the tool catalog byte-identical: use defer-loading stubs + tool-search rather than mutating the live tool set."
+        },
+        {
+          "actorId": "growth:new-tail",
+          "cause": "NORMAL_GROWTH",
+          "expected": true,
+          "actor": "append-only growth: +1 new message block(s) cached for the first time (expected incremental write, not a break)",
+          "occurrences": 1,
+          "sessionsAffected": 1,
+          "totalCacheCreateTokens": 35000,
+          "totalCostUsd": 0.2188,
+          "pct": 3.8,
+          "remediation": "Not a break — append-only growth: this turn's NEW content was cached for the first time (expected incremental write). Reduce it only by producing/ingesting less content per turn."
+        },
+        {
+          "actorId": "tools:TOOLSET_CHANGED:Grep",
+          "cause": "TOOLSET_CHANGED",
+          "expected": false,
+          "actor": "tool(s) added Grep",
+          "occurrences": 1,
+          "sessionsAffected": 1,
+          "totalCacheCreateTokens": 30000,
+          "totalCostUsd": 0.1875,
+          "pct": 3.2,
+          "remediation": "A tool was added/removed/redefined mid-session. Keep the tool catalog byte-identical: use defer-loading stubs + tool-search rather than mutating the live tool set."
+        }
+      ],
+      "verdict": "Dominant AVOIDABLE perpetrator: tool definition changed: Bash (TOOLSET_CHANGED) — 45,000 cache_creation tokens across 1 session(s), 4.9% of all classified breaks. A tool was added/removed/redefined mid-session. Keep the tool catalog byte-identical: use defer-loading stubs + tool-search rather than mutating the live tool set. (Largest overall is first observed turn for this session (cold cache warm) (COLD_START) at 74.1%, but that cause is expected/unavoidable.)",
+      "coverage": {
+        "bodiesDir": "<FIXTURES>/spool",
+        "dirExists": true,
+        "requestFilesTotal": 18,
+        "requestFilesScanned": 18,
+        "responseFilesTotal": 18,
+        "responseFilesScanned": 18,
+        "sessionsFound": 5,
+        "scanCap": 4000,
+        "complete": true,
+        "note": "Scanned all 18 request body(ies) across 5 session(s) — 0 from the Parquet store, 18 from the raw spool (drained history stays in evidence)."
+      }
+    },
+    "scoped": {
+      "minTokens": 100,
+      "totalClassifiedEvents": 11,
+      "totalCacheCreateTokens": 925000,
+      "causeRanking": [
+        {
+          "cause": "COLD_START",
+          "expected": true,
+          "events": 5,
+          "sessionsAffected": 4,
+          "cacheCreateTokens": 685000,
+          "pct": 74.1,
+          "remediation": "A cold cache warm (first turn / resume / no prior cached prefix). Expected once per session; not an avoidable per-turn break."
+        },
+        {
+          "cause": "COMPACTION",
+          "expected": true,
+          "events": 2,
+          "sessionsAffected": 1,
+          "cacheCreateTokens": 130000,
+          "pct": 14.1,
+          "remediation": "Conversation compaction rebuilt the message layer. Expected once per compaction; avoid compacting more than necessary."
+        },
+        {
+          "cause": "TOOLSET_CHANGED",
+          "expected": false,
+          "events": 3,
+          "sessionsAffected": 1,
+          "cacheCreateTokens": 75000,
+          "pct": 8.1,
+          "remediation": "A tool was added/removed/redefined mid-session. Keep the tool catalog byte-identical: use defer-loading stubs + tool-search rather than mutating the live tool set."
+        },
+        {
+          "cause": "NORMAL_GROWTH",
+          "expected": true,
+          "events": 1,
+          "sessionsAffected": 1,
+          "cacheCreateTokens": 35000,
+          "pct": 3.8,
+          "remediation": "Not a break — append-only growth: this turn's NEW content was cached for the first time (expected incremental write). Reduce it only by producing/ingesting less content per turn."
+        }
+      ],
+      "actorLeaderboard": [
+        {
+          "actorId": "timing:COLD_START",
+          "cause": "COLD_START",
+          "expected": true,
+          "actor": "first observed turn for this session (cold cache warm)",
+          "occurrences": 5,
+          "sessionsAffected": 4,
+          "totalCacheCreateTokens": 685000,
+          "totalCostUsd": 4.2813,
+          "pct": 74.1,
+          "remediation": "A cold cache warm (first turn / resume / no prior cached prefix). Expected once per session; not an avoidable per-turn break."
+        },
+        {
+          "actorId": "timing:UNCLASSIFIED",
+          "cause": "COMPACTION",
+          "expected": true,
+          "actor": "unlocalised re-write",
+          "occurrences": 1,
+          "sessionsAffected": 1,
+          "totalCacheCreateTokens": 70000,
+          "totalCostUsd": 0.4375,
+          "pct": 7.6,
+          "remediation": "Conversation compaction rebuilt the message layer. Expected once per compaction; avoid compacting more than necessary."
+        },
+        {
+          "actorId": "message:COMPACTION:postcompact:msg[0] user",
+          "cause": "COMPACTION",
+          "expected": true,
+          "actor": "conversation compaction rebuilt the message prefix at msg[0] user",
+          "occurrences": 1,
+          "sessionsAffected": 1,
+          "totalCacheCreateTokens": 60000,
+          "totalCostUsd": 0.375,
+          "pct": 6.5,
+          "remediation": "Conversation compaction rebuilt the message layer. Expected once per compaction; avoid compacting more than necessary."
+        },
+        {
+          "actorId": "tools:TOOLSET_CHANGED:Bash",
+          "cause": "TOOLSET_CHANGED",
+          "expected": false,
+          "actor": "tool definition changed: Bash",
+          "occurrences": 2,
+          "sessionsAffected": 1,
+          "totalCacheCreateTokens": 45000,
+          "totalCostUsd": 0.2813,
+          "pct": 4.9,
+          "remediation": "A tool was added/removed/redefined mid-session. Keep the tool catalog byte-identical: use defer-loading stubs + tool-search rather than mutating the live tool set."
+        },
+        {
+          "actorId": "growth:new-tail",
+          "cause": "NORMAL_GROWTH",
+          "expected": true,
+          "actor": "append-only growth: +1 new message block(s) cached for the first time (expected incremental write, not a break)",
+          "occurrences": 1,
+          "sessionsAffected": 1,
+          "totalCacheCreateTokens": 35000,
+          "totalCostUsd": 0.2188,
+          "pct": 3.8,
+          "remediation": "Not a break — append-only growth: this turn's NEW content was cached for the first time (expected incremental write). Reduce it only by producing/ingesting less content per turn."
+        },
+        {
+          "actorId": "tools:TOOLSET_CHANGED:Grep",
+          "cause": "TOOLSET_CHANGED",
+          "expected": false,
+          "actor": "tool(s) added Grep",
+          "occurrences": 1,
+          "sessionsAffected": 1,
+          "totalCacheCreateTokens": 30000,
+          "totalCostUsd": 0.1875,
+          "pct": 3.2,
+          "remediation": "A tool was added/removed/redefined mid-session. Keep the tool catalog byte-identical: use defer-loading stubs + tool-search rather than mutating the live tool set."
+        }
+      ],
+      "verdict": "Dominant AVOIDABLE perpetrator: tool definition changed: Bash (TOOLSET_CHANGED) — 45,000 cache_creation tokens across 1 session(s), 4.9% of all classified breaks. A tool was added/removed/redefined mid-session. Keep the tool catalog byte-identical: use defer-loading stubs + tool-search rather than mutating the live tool set. (Largest overall is first observed turn for this session (cold cache warm) (COLD_START) at 74.1%, but that cause is expected/unavoidable.)",
+      "coverage": {
+        "bodiesDir": "<FIXTURES>/spool",
+        "dirExists": true,
+        "requestFilesTotal": 18,
+        "requestFilesScanned": 18,
+        "responseFilesTotal": 18,
+        "responseFilesScanned": 18,
+        "sessionsFound": 5,
+        "scanCap": 4000,
+        "complete": true,
+        "note": "Scanned all 18 request body(ies) across 5 session(s) — 0 from the Parquet store, 18 from the raw spool (drained history stays in evidence)."
+      }
+    },
+    "scoped_empty": {
+      "minTokens": 100,
+      "totalClassifiedEvents": 0,
+      "totalCacheCreateTokens": 0,
+      "causeRanking": [],
+      "actorLeaderboard": [],
+      "verdict": "No significant cache_creation breaks classified in the scanned window.",
+      "coverage": {
+        "bodiesDir": "<FIXTURES>/spool",
+        "dirExists": true,
+        "requestFilesTotal": 18,
+        "requestFilesScanned": 18,
+        "responseFilesTotal": 18,
+        "responseFilesScanned": 18,
+        "sessionsFound": 5,
+        "scanCap": 4000,
+        "complete": true,
+        "note": "Scanned all 18 request body(ies) across 5 session(s) — 0 from the Parquet store, 18 from the raw spool (drained history stays in evidence)."
+      }
+    },
+    "topn1": {
+      "minTokens": 100,
+      "totalClassifiedEvents": 12,
+      "totalCacheCreateTokens": 925900,
+      "causeRanking": [
+        {
+          "cause": "COLD_START",
+          "expected": true,
+          "events": 6,
+          "sessionsAffected": 5,
+          "cacheCreateTokens": 685900,
+          "pct": 74.1,
+          "remediation": "A cold cache warm (first turn / resume / no prior cached prefix). Expected once per session; not an avoidable per-turn break."
+        },
+        {
+          "cause": "COMPACTION",
+          "expected": true,
+          "events": 2,
+          "sessionsAffected": 1,
+          "cacheCreateTokens": 130000,
+          "pct": 14,
+          "remediation": "Conversation compaction rebuilt the message layer. Expected once per compaction; avoid compacting more than necessary."
+        },
+        {
+          "cause": "TOOLSET_CHANGED",
+          "expected": false,
+          "events": 3,
+          "sessionsAffected": 1,
+          "cacheCreateTokens": 75000,
+          "pct": 8.1,
+          "remediation": "A tool was added/removed/redefined mid-session. Keep the tool catalog byte-identical: use defer-loading stubs + tool-search rather than mutating the live tool set."
+        },
+        {
+          "cause": "NORMAL_GROWTH",
+          "expected": true,
+          "events": 1,
+          "sessionsAffected": 1,
+          "cacheCreateTokens": 35000,
+          "pct": 3.8,
+          "remediation": "Not a break — append-only growth: this turn's NEW content was cached for the first time (expected incremental write). Reduce it only by producing/ingesting less content per turn."
+        }
+      ],
+      "actorLeaderboard": [
+        {
+          "actorId": "timing:COLD_START",
+          "cause": "COLD_START",
+          "expected": true,
+          "actor": "first observed turn for this session (cold cache warm)",
+          "occurrences": 6,
+          "sessionsAffected": 5,
+          "totalCacheCreateTokens": 685900,
+          "totalCostUsd": 4.2869,
+          "pct": 74.1,
+          "remediation": "A cold cache warm (first turn / resume / no prior cached prefix). Expected once per session; not an avoidable per-turn break."
+        }
+      ],
+      "verdict": "All classified break cost is EXPECTED cache behavior (cold warms / compaction / incremental growth / interleave) — no avoidable perpetrator found. Largest: first observed turn for this session (cold cache warm) (COLD_START) at 74.1%.",
+      "coverage": {
+        "bodiesDir": "<FIXTURES>/spool",
+        "dirExists": true,
+        "requestFilesTotal": 18,
+        "requestFilesScanned": 18,
+        "responseFilesTotal": 18,
+        "responseFilesScanned": 18,
+        "sessionsFound": 5,
+        "scanCap": 4000,
+        "complete": true,
+        "note": "Scanned all 18 request body(ies) across 5 session(s) — 0 from the Parquet store, 18 from the raw spool (drained history stays in evidence)."
+      }
+    },
+    "topn_clamped_low": {
+      "minTokens": 100,
+      "totalClassifiedEvents": 12,
+      "totalCacheCreateTokens": 925900,
+      "causeRanking": [
+        {
+          "cause": "COLD_START",
+          "expected": true,
+          "events": 6,
+          "sessionsAffected": 5,
+          "cacheCreateTokens": 685900,
+          "pct": 74.1,
+          "remediation": "A cold cache warm (first turn / resume / no prior cached prefix). Expected once per session; not an avoidable per-turn break."
+        },
+        {
+          "cause": "COMPACTION",
+          "expected": true,
+          "events": 2,
+          "sessionsAffected": 1,
+          "cacheCreateTokens": 130000,
+          "pct": 14,
+          "remediation": "Conversation compaction rebuilt the message layer. Expected once per compaction; avoid compacting more than necessary."
+        },
+        {
+          "cause": "TOOLSET_CHANGED",
+          "expected": false,
+          "events": 3,
+          "sessionsAffected": 1,
+          "cacheCreateTokens": 75000,
+          "pct": 8.1,
+          "remediation": "A tool was added/removed/redefined mid-session. Keep the tool catalog byte-identical: use defer-loading stubs + tool-search rather than mutating the live tool set."
+        },
+        {
+          "cause": "NORMAL_GROWTH",
+          "expected": true,
+          "events": 1,
+          "sessionsAffected": 1,
+          "cacheCreateTokens": 35000,
+          "pct": 3.8,
+          "remediation": "Not a break — append-only growth: this turn's NEW content was cached for the first time (expected incremental write). Reduce it only by producing/ingesting less content per turn."
+        }
+      ],
+      "actorLeaderboard": [
+        {
+          "actorId": "timing:COLD_START",
+          "cause": "COLD_START",
+          "expected": true,
+          "actor": "first observed turn for this session (cold cache warm)",
+          "occurrences": 6,
+          "sessionsAffected": 5,
+          "totalCacheCreateTokens": 685900,
+          "totalCostUsd": 4.2869,
+          "pct": 74.1,
+          "remediation": "A cold cache warm (first turn / resume / no prior cached prefix). Expected once per session; not an avoidable per-turn break."
+        }
+      ],
+      "verdict": "All classified break cost is EXPECTED cache behavior (cold warms / compaction / incremental growth / interleave) — no avoidable perpetrator found. Largest: first observed turn for this session (cold cache warm) (COLD_START) at 74.1%.",
+      "coverage": {
+        "bodiesDir": "<FIXTURES>/spool",
+        "dirExists": true,
+        "requestFilesTotal": 18,
+        "requestFilesScanned": 18,
+        "responseFilesTotal": 18,
+        "responseFilesScanned": 18,
+        "sessionsFound": 5,
+        "scanCap": 4000,
+        "complete": true,
+        "note": "Scanned all 18 request body(ies) across 5 session(s) — 0 from the Parquet store, 18 from the raw spool (drained history stays in evidence)."
+      }
+    },
+    "high_floor": {
+      "minTokens": 26000,
+      "totalClassifiedEvents": 9,
+      "totalCacheCreateTokens": 880000,
+      "causeRanking": [
+        {
+          "cause": "COLD_START",
+          "expected": true,
+          "events": 5,
+          "sessionsAffected": 4,
+          "cacheCreateTokens": 685000,
+          "pct": 77.8,
+          "remediation": "A cold cache warm (first turn / resume / no prior cached prefix). Expected once per session; not an avoidable per-turn break."
+        },
+        {
+          "cause": "COMPACTION",
+          "expected": true,
+          "events": 2,
+          "sessionsAffected": 1,
+          "cacheCreateTokens": 130000,
+          "pct": 14.8,
+          "remediation": "Conversation compaction rebuilt the message layer. Expected once per compaction; avoid compacting more than necessary."
+        },
+        {
+          "cause": "NORMAL_GROWTH",
+          "expected": true,
+          "events": 1,
+          "sessionsAffected": 1,
+          "cacheCreateTokens": 35000,
+          "pct": 4,
+          "remediation": "Not a break — append-only growth: this turn's NEW content was cached for the first time (expected incremental write). Reduce it only by producing/ingesting less content per turn."
+        },
+        {
+          "cause": "TOOLSET_CHANGED",
+          "expected": false,
+          "events": 1,
+          "sessionsAffected": 1,
+          "cacheCreateTokens": 30000,
+          "pct": 3.4,
+          "remediation": "A tool was added/removed/redefined mid-session. Keep the tool catalog byte-identical: use defer-loading stubs + tool-search rather than mutating the live tool set."
+        }
+      ],
+      "actorLeaderboard": [
+        {
+          "actorId": "timing:COLD_START",
+          "cause": "COLD_START",
+          "expected": true,
+          "actor": "first observed turn for this session (cold cache warm)",
+          "occurrences": 5,
+          "sessionsAffected": 4,
+          "totalCacheCreateTokens": 685000,
+          "totalCostUsd": 4.2813,
+          "pct": 77.8,
+          "remediation": "A cold cache warm (first turn / resume / no prior cached prefix). Expected once per session; not an avoidable per-turn break."
+        },
+        {
+          "actorId": "timing:UNCLASSIFIED",
+          "cause": "COMPACTION",
+          "expected": true,
+          "actor": "unlocalised re-write",
+          "occurrences": 1,
+          "sessionsAffected": 1,
+          "totalCacheCreateTokens": 70000,
+          "totalCostUsd": 0.4375,
+          "pct": 8,
+          "remediation": "Conversation compaction rebuilt the message layer. Expected once per compaction; avoid compacting more than necessary."
+        },
+        {
+          "actorId": "message:COMPACTION:postcompact:msg[0] user",
+          "cause": "COMPACTION",
+          "expected": true,
+          "actor": "conversation compaction rebuilt the message prefix at msg[0] user",
+          "occurrences": 1,
+          "sessionsAffected": 1,
+          "totalCacheCreateTokens": 60000,
+          "totalCostUsd": 0.375,
+          "pct": 6.8,
+          "remediation": "Conversation compaction rebuilt the message layer. Expected once per compaction; avoid compacting more than necessary."
+        },
+        {
+          "actorId": "growth:new-tail",
+          "cause": "NORMAL_GROWTH",
+          "expected": true,
+          "actor": "append-only growth: +1 new message block(s) cached for the first time (expected incremental write, not a break)",
+          "occurrences": 1,
+          "sessionsAffected": 1,
+          "totalCacheCreateTokens": 35000,
+          "totalCostUsd": 0.2188,
+          "pct": 4,
+          "remediation": "Not a break — append-only growth: this turn's NEW content was cached for the first time (expected incremental write). Reduce it only by producing/ingesting less content per turn."
+        },
+        {
+          "actorId": "tools:TOOLSET_CHANGED:Grep",
+          "cause": "TOOLSET_CHANGED",
+          "expected": false,
+          "actor": "tool(s) added Grep",
+          "occurrences": 1,
+          "sessionsAffected": 1,
+          "totalCacheCreateTokens": 30000,
+          "totalCostUsd": 0.1875,
+          "pct": 3.4,
+          "remediation": "A tool was added/removed/redefined mid-session. Keep the tool catalog byte-identical: use defer-loading stubs + tool-search rather than mutating the live tool set."
+        }
+      ],
+      "verdict": "Dominant AVOIDABLE perpetrator: tool(s) added Grep (TOOLSET_CHANGED) — 30,000 cache_creation tokens across 1 session(s), 3.4% of all classified breaks. A tool was added/removed/redefined mid-session. Keep the tool catalog byte-identical: use defer-loading stubs + tool-search rather than mutating the live tool set. (Largest overall is first observed turn for this session (cold cache warm) (COLD_START) at 77.8%, but that cause is expected/unavoidable.)",
+      "coverage": {
+        "bodiesDir": "<FIXTURES>/spool",
+        "dirExists": true,
+        "requestFilesTotal": 18,
+        "requestFilesScanned": 18,
+        "responseFilesTotal": 18,
+        "responseFilesScanned": 18,
+        "sessionsFound": 5,
+        "scanCap": 4000,
+        "complete": true,
+        "note": "Scanned all 18 request body(ies) across 5 session(s) — 0 from the Parquet store, 18 from the raw spool (drained history stays in evidence)."
+      }
+    },
+    "no_evidence": {
+      "minTokens": 100,
+      "totalClassifiedEvents": 0,
+      "totalCacheCreateTokens": 0,
+      "causeRanking": [],
+      "actorLeaderboard": [],
+      "verdict": "no data",
+      "coverage": {
+        "bodiesDir": "<FIXTURES>/no-such-spool",
+        "dirExists": false,
+        "requestFilesTotal": 0,
+        "requestFilesScanned": 0,
+        "responseFilesTotal": 0,
+        "responseFilesScanned": 0,
+        "sessionsFound": 0,
+        "scanCap": 4000,
+        "complete": true,
+        "note": "No raw-body evidence: neither <FIXTURES>/no-such-spool nor the Parquet store at <FIXTURES>/no-such-store exists — set OTEL_LOG_RAW_API_BODIES to capture bodies."
+      }
+    }
+  },
+  "formats": {
+    "json": {
+      "sessionId": "sess-alpha",
+      "accountUuid": "acct-1",
+      "model": "claude-opus-5",
+      "minTokens": 100,
+      "systematicThreshold": 3,
+      "turnsInSession": 5,
+      "turnsClassified": 4,
+      "totalCacheCreateTokens": 115000,
+      "events": [
+        {
+          "turn": 1,
+          "ts": "2026-08-20T10:00:00.000Z",
+          "cause": "COLD_START",
+          "culpritLayer": "timing",
+          "culpritId": "timing:COLD_START",
+          "culprit": "first observed turn for this session (cold cache warm)",
+          "cacheCreateTokens": 40000,
+          "cacheReadTokens": 1000,
+          "inputTokens": 12,
+          "outputTokens": 340,
+          "costUsd": 0.25,
+          "ttlTier": "none",
+          "model": "claude-opus-5",
+          "remediation": "A cold cache warm (first turn / resume / no prior cached prefix). Expected once per session; not an avoidable per-turn break."
+        },
+        {
+          "turn": 2,
+          "ts": "2026-08-20T10:01:00.000Z",
+          "cause": "TOOLSET_CHANGED",
+          "culpritLayer": "tools",
+          "culpritId": "tools:TOOLSET_CHANGED:Grep",
+          "culprit": "tool(s) added Grep",
+          "cacheCreateTokens": 30000,
+          "cacheReadTokens": 1000,
+          "inputTokens": 12,
+          "outputTokens": 340,
+          "costUsd": 0.1875,
+          "gapMinutes": 1,
+          "model": "claude-opus-5",
+          "remediation": "A tool was added/removed/redefined mid-session. Keep the tool catalog byte-identical: use defer-loading stubs + tool-search rather than mutating the live tool set."
+        },
+        {
+          "turn": 3,
+          "ts": "2026-08-20T10:02:00.000Z",
+          "cause": "TOOLSET_CHANGED",
+          "culpritLayer": "tools",
+          "culpritId": "tools:TOOLSET_CHANGED:Bash",
+          "culprit": "tool definition changed: Bash",
+          "cacheCreateTokens": 20000,
+          "cacheReadTokens": 1000,
+          "inputTokens": 12,
+          "outputTokens": 340,
+          "costUsd": 0.125,
+          "gapMinutes": 1,
+          "model": "claude-opus-5",
+          "remediation": "A tool was added/removed/redefined mid-session. Keep the tool catalog byte-identical: use defer-loading stubs + tool-search rather than mutating the live tool set."
+        },
+        {
+          "turn": 4,
+          "ts": "2026-08-20T10:03:00.000Z",
+          "cause": "TOOLSET_CHANGED",
+          "culpritLayer": "tools",
+          "culpritId": "tools:TOOLSET_CHANGED:Bash",
+          "culprit": "tool definition changed: Bash",
+          "cacheCreateTokens": 25000,
+          "cacheReadTokens": 1000,
+          "inputTokens": 12,
+          "outputTokens": 340,
+          "costUsd": 0.1563,
+          "gapMinutes": 1,
+          "model": "claude-opus-5",
+          "remediation": "A tool was added/removed/redefined mid-session. Keep the tool catalog byte-identical: use defer-loading stubs + tool-search rather than mutating the live tool set."
+        }
+      ],
+      "causeHistogram": [
+        {
+          "cause": "TOOLSET_CHANGED",
+          "events": 3,
+          "cacheCreateTokens": 75000
+        },
+        {
+          "cause": "COLD_START",
+          "events": 1,
+          "cacheCreateTokens": 40000
+        }
+      ],
+      "repeatOffenders": [
+        {
+          "cause": "TOOLSET_CHANGED",
+          "culpritId": "tools:TOOLSET_CHANGED:Bash",
+          "culprit": "tool definition changed: Bash",
+          "occurrences": 2,
+          "totalCacheCreateTokens": 45000,
+          "medianCacheCreateTokens": 22500,
+          "totalCostUsd": 0.2813,
+          "pctOfSessionCacheCreate": 39.1,
+          "firstTurn": 3,
+          "lastTurn": 4,
+          "systematic": false,
+          "verdict": "TOOLSET_CHANGED: tool definition changed: Bash broke the cache on 2 turn(s) (45,000 cache_creation tokens). A tool was added/removed/redefined mid-session. Keep the tool catalog byte-identical: use defer-loading stubs + tool-search rather than mutating the live tool set."
+        },
+        {
+          "cause": "COLD_START",
+          "culpritId": "timing:COLD_START",
+          "culprit": "first observed turn for this session (cold cache warm)",
+          "occurrences": 1,
+          "totalCacheCreateTokens": 40000,
+          "medianCacheCreateTokens": 40000,
+          "totalCostUsd": 0.25,
+          "pctOfSessionCacheCreate": 34.8,
+          "firstTurn": 1,
+          "lastTurn": 1,
+          "systematic": false,
+          "verdict": "COLD_START: first observed turn for this session (cold cache warm) broke the cache on 1 turn(s) (40,000 cache_creation tokens). A cold cache warm (first turn / resume / no prior cached prefix). Expected once per session; not an avoidable per-turn break."
+        },
+        {
+          "cause": "TOOLSET_CHANGED",
+          "culpritId": "tools:TOOLSET_CHANGED:Grep",
+          "culprit": "tool(s) added Grep",
+          "occurrences": 1,
+          "totalCacheCreateTokens": 30000,
+          "medianCacheCreateTokens": 30000,
+          "totalCostUsd": 0.1875,
+          "pctOfSessionCacheCreate": 26.1,
+          "firstTurn": 2,
+          "lastTurn": 2,
+          "systematic": false,
+          "verdict": "TOOLSET_CHANGED: tool(s) added Grep broke the cache on 1 turn(s) (30,000 cache_creation tokens). A tool was added/removed/redefined mid-session. Keep the tool catalog byte-identical: use defer-loading stubs + tool-search rather than mutating the live tool set."
+        }
+      ],
+      "coverage": {
+        "bodiesDir": "<FIXTURES>/spool",
+        "dirExists": true,
+        "requestFilesTotal": 18,
+        "requestFilesScanned": 18,
+        "responseFilesTotal": 18,
+        "responseFilesScanned": 18,
+        "sessionsFound": 5,
+        "scanCap": 4000,
+        "complete": true,
+        "note": "Scanned all 18 request body(ies) across 5 session(s) — 0 from the Parquet store, 18 from the raw spool (drained history stays in evidence)."
+      }
+    },
+    "table": {
+      "format": "table",
+      "text": "cache-break timeline — session sess-alpha [claude-opus-5]\nturn  cause                       tokens      gap    culprit\n   1  COLD_START                     40000       -  first observed turn for this session (cold cache warm)\n   2  TOOLSET_CHANGED                30000      1m  tool(s) added Grep\n   3  TOOLSET_CHANGED                20000      1m  tool definition changed: Bash\n   4  TOOLSET_CHANGED                25000      1m  tool definition changed: Bash\n\nREPEAT OFFENDERS:\n    TOOLSET_CHANGED ×2 (45000 tok, 39.1%) — tool definition changed: Bash\n    COLD_START ×1 (40000 tok, 34.8%) — first observed turn for this session (cold cache warm)\n    TOOLSET_CHANGED ×1 (30000 tok, 26.1%) — tool(s) added Grep",
+      "sessionId": "sess-alpha",
+      "coverage": {
+        "bodiesDir": "<FIXTURES>/spool",
+        "dirExists": true,
+        "requestFilesTotal": 18,
+        "requestFilesScanned": 18,
+        "responseFilesTotal": 18,
+        "responseFilesScanned": 18,
+        "sessionsFound": 5,
+        "scanCap": 4000,
+        "complete": true,
+        "note": "Scanned all 18 request body(ies) across 5 session(s) — 0 from the Parquet store, 18 from the raw spool (drained history stays in evidence)."
+      }
+    },
+    "markdown": {
+      "format": "markdown",
+      "text": "# cache-break timeline — session sess-alpha [claude-opus-5]\n\n- turns: 5, classified breaks: 4, total cache_creation: 115,000\n\n## Repeat offenders (chronic first)\n\n| cause | culprit | turns | tokens | % | systematic |\n|---|---|---|---|---|---|\n| TOOLSET_CHANGED | tool definition changed: Bash | 2 | 45,000 | 39.1% |  |\n| COLD_START | first observed turn for this session (cold cache warm) | 1 | 40,000 | 34.8% |  |\n| TOOLSET_CHANGED | tool(s) added Grep | 1 | 30,000 | 26.1% |  |\n\n## Timeline\n\n- turn 1 `2026-08-20T10:00:00.000Z` **COLD_START** — first observed turn for this session (cold cache warm) (40,000 tok)\n- turn 2 `2026-08-20T10:01:00.000Z` **TOOLSET_CHANGED** — tool(s) added Grep (30,000 tok, +1m)\n- turn 3 `2026-08-20T10:02:00.000Z` **TOOLSET_CHANGED** — tool definition changed: Bash (20,000 tok, +1m)\n- turn 4 `2026-08-20T10:03:00.000Z` **TOOLSET_CHANGED** — tool definition changed: Bash (25,000 tok, +1m)",
+      "sessionId": "sess-alpha",
+      "coverage": {
+        "bodiesDir": "<FIXTURES>/spool",
+        "dirExists": true,
+        "requestFilesTotal": 18,
+        "requestFilesScanned": 18,
+        "responseFilesTotal": 18,
+        "responseFilesScanned": 18,
+        "sessionsFound": 5,
+        "scanCap": 4000,
+        "complete": true,
+        "note": "Scanned all 18 request body(ies) across 5 session(s) — 0 from the Parquet store, 18 from the raw spool (drained history stays in evidence)."
+      }
+    },
+    "timeline": {
+      "format": "timeline",
+      "text": "cache-break timeline — session sess-alpha [claude-opus-5]\n2026-08-20T10:00:00.000Z  ❄️ turn 1  COLD_START  40,000 tok — first observed turn for this session (cold cache warm)\n2026-08-20T10:01:00.000Z  🔧 turn 2  TOOLSET_CHANGED  30,000 tok — tool(s) added Grep\n2026-08-20T10:02:00.000Z  🔧 turn 3  TOOLSET_CHANGED  20,000 tok — tool definition changed: Bash\n2026-08-20T10:03:00.000Z  🔧 turn 4  TOOLSET_CHANGED  25,000 tok — tool definition changed: Bash",
+      "sessionId": "sess-alpha",
+      "coverage": {
+        "bodiesDir": "<FIXTURES>/spool",
+        "dirExists": true,
+        "requestFilesTotal": 18,
+        "requestFilesScanned": 18,
+        "responseFilesTotal": 18,
+        "responseFilesScanned": 18,
+        "sessionsFound": 5,
+        "scanCap": 4000,
+        "complete": true,
+        "note": "Scanned all 18 request body(ies) across 5 session(s) — 0 from the Parquet store, 18 from the raw spool (drained history stays in evidence)."
+      }
+    },
+    "table_capped": {
+      "format": "table",
+      "text": "cache-break timeline — session sess-alpha [claude-opus-5]\nturn  cause                       tokens      gap    culprit\n   3  TOOLSET_CHANGED                20000      1m  tool definition changed: Bash\n   4  TOOLSET_CHANGED                25000      1m  tool definition changed: Bash\n\nREPEAT OFFENDERS:\n    TOOLSET_CHANGED ×2 (45000 tok, 39.1%) — tool definition changed: Bash\n    COLD_START ×1 (40000 tok, 34.8%) — first observed turn for this session (cold cache warm)\n    TOOLSET_CHANGED ×1 (30000 tok, 26.1%) — tool(s) added Grep\n\nShowing the most recent 2 of 4 classified break events (raise topN to see more, max 100). repeatOffenders/causeHistogram below already summarize ALL 4.",
+      "sessionId": "sess-alpha",
+      "coverage": {
+        "bodiesDir": "<FIXTURES>/spool",
+        "dirExists": true,
+        "requestFilesTotal": 18,
+        "requestFilesScanned": 18,
+        "responseFilesTotal": 18,
+        "responseFilesScanned": 18,
+        "sessionsFound": 5,
+        "scanCap": 4000,
+        "complete": true,
+        "note": "Scanned all 18 request body(ies) across 5 session(s) — 0 from the Parquet store, 18 from the raw spool (drained history stays in evidence)."
+      }
+    },
+    "timeline_capped": {
+      "format": "timeline",
+      "text": "cache-break timeline — session sess-alpha [claude-opus-5]\n2026-08-20T10:02:00.000Z  🔧 turn 3  TOOLSET_CHANGED  20,000 tok — tool definition changed: Bash\n2026-08-20T10:03:00.000Z  🔧 turn 4  TOOLSET_CHANGED  25,000 tok — tool definition changed: Bash\n\nShowing the most recent 2 of 4 classified break events (raise topN to see more, max 100). repeatOffenders/causeHistogram below already summarize ALL 4.",
+      "sessionId": "sess-alpha",
+      "coverage": {
+        "bodiesDir": "<FIXTURES>/spool",
+        "dirExists": true,
+        "requestFilesTotal": 18,
+        "requestFilesScanned": 18,
+        "responseFilesTotal": 18,
+        "responseFilesScanned": 18,
+        "sessionsFound": 5,
+        "scanCap": 4000,
+        "complete": true,
+        "note": "Scanned all 18 request body(ies) across 5 session(s) — 0 from the Parquet store, 18 from the raw spool (drained history stays in evidence)."
+      }
+    }
+  }
+}

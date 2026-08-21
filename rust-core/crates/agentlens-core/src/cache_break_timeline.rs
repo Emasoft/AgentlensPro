@@ -1816,7 +1816,7 @@ use crate::cache_creation_forensics::{MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, RES
 use crate::hook_events::{read_hook_events, HookEventFilter};
 use crate::pricing::calc_token_cost_usd;
 use crate::raw_body_context::parse_user_id;
-use crate::summarize::helpers::{iso_from_ms, js_math_round, js_to_fixed_num, num, parse_iso_ms};
+use crate::summarize::helpers::{iso_from_ms, js_math_round, js_to_fixed_num, num, pad_end, pad_start, parse_iso_ms};
 
 pub struct CacheBreakTimelineOptions {
     /// The agentlens data dir. `bodies_dir` / `store_dir` / `hook_events_dir` default from it, the
@@ -2735,4 +2735,608 @@ pub fn build_cache_break_timeline(opts: &CacheBreakTimelineOptions) -> Value {
         }
     }
     base_report(min_tokens, scan.coverage)
+}
+
+// ── buildCauseCostPeakReport — the 'cause' dimension of the cost-peak finder ──────
+// TRDD-6TQ2FBUR D2: get_cache_creation_report generalizes into a COST-PEAK finder with
+// groupBy {session|account|model|cause}. The first three stay in cache_creation_forensics (a
+// lightweight response-only scan); `cause` needs the full prefix-diff classifier this module owns,
+// so it lives here as a SEPARATE builder returning the identical report shape — the MCP tool
+// dispatches on groupBy and formats either result with the SAME formatter, so callers see one
+// uniform contract regardless of which builder ran.
+pub struct CauseCostPeakOptions {
+    pub data_dir: PathBuf,
+    pub bodies_dir: Option<PathBuf>,
+    pub store_dir: Option<PathBuf>,
+    pub window_hours: Option<f64>,
+    pub scan_cap: Option<usize>,
+    /// Floor: only classify turns whose cache_creation >= this.
+    pub min_tokens: Option<f64>,
+    pub bucket: Option<String>,
+    pub top_n: Option<f64>,
+    pub hook_events_dir: Option<PathBuf>,
+}
+
+impl CauseCostPeakOptions {
+    pub fn new(data_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            data_dir: data_dir.into(),
+            bodies_dir: None,
+            store_dir: None,
+            window_hours: None,
+            scan_cap: None,
+            min_tokens: None,
+            bucket: None,
+            top_n: None,
+            hook_events_dir: None,
+        }
+    }
+}
+
+// The EMPTY report and the populated one carry DIFFERENT unattributed notes — the empty one stops
+// at the first clause. Collapsing them into one constant is the obvious tidy-up and it is wrong on
+// the wire; the fixture's no_evidence case is what caught it.
+const CAUSE_UNATTRIBUTED_NOTE_EMPTY: &str =
+    "groupBy=cause has no unattributed bucket — every classified turn already belongs to a known session.";
+const CAUSE_UNATTRIBUTED_NOTE: &str = "groupBy=cause has no unattributed bucket — every classified turn already belongs to a known session (an un-joinable response is simply not part of any session's turn sequence, so it is never classified).";
+const CAUSE_OUTPUT_SPIKE_NOTE: &str = "The biggest single OUTPUT-token break events (output is billed ~5x the input rate — sometimes the real cost peak, not the cache write). Rank by bucket=output or bucket=billable_weighted to surface these in the groups.";
+
+/// The cost-peak finder's coverage shape: the SAME numbers as the timeline scan's coverage under
+/// different field names (`requestFilesScanned` → `requestFilesIndexed`), so
+/// get_cache_creation_report's contract is identical whichever builder produced the report.
+fn cost_peak_coverage(timeline_coverage: &Value) -> Value {
+    let g = |k: &str| timeline_coverage.get(k).cloned().unwrap_or(Value::Null);
+    let mut m = serde_json::Map::new();
+    m.insert("bodiesDir".into(), g("bodiesDir"));
+    m.insert("dirExists".into(), g("dirExists"));
+    m.insert("responseFilesTotal".into(), g("responseFilesTotal"));
+    m.insert("responseFilesScanned".into(), g("responseFilesScanned"));
+    m.insert("requestFilesTotal".into(), g("requestFilesTotal"));
+    m.insert("requestFilesIndexed".into(), g("requestFilesScanned"));
+    m.insert("scanCap".into(), g("scanCap"));
+    if let Some(w) = timeline_coverage.get("windowHours") {
+        m.insert("windowHours".into(), w.clone());
+    }
+    m.insert("complete".into(), g("complete"));
+    m.insert("note".into(), g("note"));
+    Value::Object(m)
+}
+
+fn empty_cause_cost_peak_report(bucket: &str, bodies_dir: &Path, scan_cap: usize, window_hours: Option<f64>) -> Value {
+    let mut cov = serde_json::Map::new();
+    cov.insert("bodiesDir".into(), Value::String(bodies_dir.to_string_lossy().into_owned()));
+    cov.insert("dirExists".into(), Value::Bool(false));
+    cov.insert("responseFilesTotal".into(), num(0.0));
+    cov.insert("responseFilesScanned".into(), num(0.0));
+    cov.insert("requestFilesTotal".into(), num(0.0));
+    cov.insert("requestFilesIndexed".into(), num(0.0));
+    cov.insert("scanCap".into(), num(scan_cap as f64));
+    if let Some(w) = window_hours {
+        cov.insert("windowHours".into(), num(w));
+    }
+    cov.insert("complete".into(), Value::Bool(true));
+    cov.insert(
+        "note".into(),
+        Value::String(format!(
+            "No OTEL raw-body directory at {} — set OTEL_LOG_RAW_API_BODIES to capture bodies.",
+            bodies_dir.display()
+        )),
+    );
+    let mut v = cause_report_value(bucket, window_hours, 0.0, 0.0, 0.0, 0.0, 0.0, Vec::new(), Vec::new(), Value::Object(cov));
+    v["unattributed"]["note"] = Value::String(CAUSE_UNATTRIBUTED_NOTE_EMPTY.to_owned());
+    // The empty report's outputSpikes note also stops early — no "Rank by bucket=..." tail.
+    v["outputSpikes"]["note"] = Value::String(
+        "The biggest single OUTPUT-token break events (output is billed ~5x — sometimes the real cost peak, not the cache write).".to_owned(),
+    );
+    v
+}
+
+#[allow(clippy::too_many_arguments)] // one wire object, two construction sites — the TS literal
+fn cause_report_value(
+    bucket: &str,
+    window_hours: Option<f64>,
+    total_cc: f64,
+    total_cr: f64,
+    total_in: f64,
+    total_out: f64,
+    total_cost: f64,
+    groups: Vec<Value>,
+    output_top: Vec<Value>,
+    coverage: Value,
+) -> Value {
+    let mut out = serde_json::Map::new();
+    out.insert("bucket".into(), Value::String(bucket.to_owned()));
+    out.insert("groupBy".into(), Value::String("cause".to_owned()));
+    if let Some(w) = window_hours {
+        out.insert("windowHours".into(), num(w));
+    }
+    out.insert("totalCacheCreateTokens".into(), num(total_cc));
+    out.insert("totalCacheReadTokens".into(), num(total_cr));
+    out.insert("totalInputTokens".into(), num(total_in));
+    out.insert("totalOutputTokens".into(), num(total_out));
+    out.insert("totalCostUsd".into(), num(js_to_fixed_num(total_cost, 4)));
+    let mut un = serde_json::Map::new();
+    un.insert("events".into(), num(0.0));
+    un.insert("cacheCreateTokens".into(), num(0.0));
+    un.insert("costUsd".into(), num(0.0));
+    un.insert("note".into(), Value::String(CAUSE_UNATTRIBUTED_NOTE.to_owned()));
+    out.insert("unattributed".into(), Value::Object(un));
+    let mut sp = serde_json::Map::new();
+    sp.insert("note".into(), Value::String(CAUSE_OUTPUT_SPIKE_NOTE.to_owned()));
+    sp.insert("top".into(), Value::Array(output_top));
+    out.insert("outputSpikes".into(), Value::Object(sp));
+    out.insert("groups".into(), Value::Array(groups));
+    out.insert("coverage".into(), coverage);
+    Value::Object(out)
+}
+
+struct CauseGroup {
+    cache_create: f64,
+    cache_read: f64,
+    input: f64,
+    output: f64,
+    total: f64,
+    cost_usd: f64,
+    events: f64,
+    max_single_cc: f64,
+    max_single_out: f64,
+    bucket_value: f64,
+}
+
+/// The `cause` dimension of the cost-peak finder: scans EVERY session in the bounded window (not
+/// just one target, unlike `build_cache_break_timeline`), classifies each session's significant
+/// cache_creation turns via the SAME root-cause classifier the timeline uses, and ranks CAUSES by
+/// the chosen cost bucket — answering "which BREAK CAUSE is burning the most money", not just
+/// "which session". LAZY + BOUNDED: one shared scan; classification is O(turns already read).
+pub fn build_cause_cost_peak_report(opts: &CauseCostPeakOptions) -> Value {
+    let bodies_dir = opts.bodies_dir.clone().unwrap_or_else(|| crate::burn::guard::default_bodies_dir(&opts.data_dir));
+    let min_tokens = opts.min_tokens.unwrap_or(DEFAULT_MIN_TOKENS);
+    let scan_cap = opts.scan_cap.unwrap_or(RESPONSE_SCAN_CAP);
+    let bucket = opts.bucket.clone().unwrap_or_else(|| "cache_creation".to_owned());
+    let top_n = opts.top_n.unwrap_or(15.0).min(50.0);
+    let store_dir = opts.store_dir.clone().unwrap_or_else(|| opts.data_dir.join("store"));
+    if !bodies_dir.exists() && !store_dir.join("bodies").exists() {
+        return empty_cause_cost_peak_report(&bucket, &bodies_dir, scan_cap, opts.window_hours);
+    }
+
+    let scan = scan_sessions_and_responses(&bodies_dir, &store_dir, opts.window_hours, scan_cap);
+    let coverage = cost_peak_coverage(&scan.coverage);
+    let hook_dir = opts.hook_events_dir.clone().unwrap_or_else(|| opts.data_dir.join("hook-events"));
+    let hook_info = load_compaction_hook_info(&hook_dir);
+    let now = now_ms();
+
+    let mut groups: IndexMap<TimelineCause, CauseGroup> = IndexMap::new();
+    let (mut total_cc, mut total_cr, mut total_in, mut total_out, mut total_cost) = (0.0, 0.0, 0.0, 0.0, 0.0);
+    let mut output_events: Vec<(f64, Value)> = Vec::new();
+
+    for (sid, turns_raw) in &scan.by_session {
+        if sid == "(no-session)" {
+            continue;
+        }
+        let mut turns: Vec<&ScannedTurn> = turns_raw.iter().collect();
+        turns.sort_by(|a, b| a.mtime_ms.partial_cmp(&b.mtime_ms).expect("mtimes are never NaN"));
+        let account_uuid = turns.iter().find_map(|t| t.account_uuid.clone());
+        let mut events = classify_turns(&turns, &scan.resp_by_id, min_tokens);
+        apply_compaction_hook_evidence(&mut events, hook_info.get(sid));
+        for e in &events {
+            let t = crate::cache_creation_forensics::TokenCounts {
+                input_tokens: e.input_tokens,
+                cache_read_tokens: e.cache_read_tokens,
+                cache_create_tokens: e.cache_create_tokens,
+                output_tokens: e.output_tokens,
+                model: e.model.as_deref(),
+            };
+            let full_cost = crate::cache_creation_forensics::token_counts_full_cost(&t, now);
+            total_cc += e.cache_create_tokens;
+            total_cr += e.cache_read_tokens;
+            total_in += e.input_tokens;
+            total_out += e.output_tokens;
+            total_cost += full_cost;
+
+            let g = groups.entry(e.cause).or_insert(CauseGroup {
+                cache_create: 0.0,
+                cache_read: 0.0,
+                input: 0.0,
+                output: 0.0,
+                total: 0.0,
+                cost_usd: 0.0,
+                events: 0.0,
+                max_single_cc: 0.0,
+                max_single_out: 0.0,
+                bucket_value: 0.0,
+            });
+            g.cache_create += e.cache_create_tokens;
+            g.cache_read += e.cache_read_tokens;
+            g.input += e.input_tokens;
+            g.output += e.output_tokens;
+            g.total += crate::cache_creation_forensics::token_counts_total(&t);
+            g.cost_usd += full_cost;
+            g.events += 1.0;
+            g.max_single_cc = g.max_single_cc.max(e.cache_create_tokens);
+            g.max_single_out = g.max_single_out.max(e.output_tokens);
+            g.bucket_value += crate::cache_creation_forensics::bucket_value_of(&t, &bucket, now);
+
+            if e.output_tokens > 0.0 {
+                let mut m = serde_json::Map::new();
+                // The literal's key order, with every `undefined` field DROPPED.
+                m.insert("sessionId".into(), Value::String(sid.clone()));
+                if let Some(a) = &account_uuid {
+                    m.insert("accountUuid".into(), Value::String(a.clone()));
+                }
+                if let Some(mo) = &e.model {
+                    m.insert("model".into(), Value::String(mo.clone()));
+                }
+                m.insert("outputTokens".into(), num(e.output_tokens));
+                m.insert("cacheCreateTokens".into(), num(e.cache_create_tokens));
+                m.insert("ts".into(), Value::String(e.ts.clone()));
+                output_events.push((e.output_tokens, Value::Object(m)));
+            }
+        }
+    }
+
+    let mut ranked: Vec<(TimelineCause, CauseGroup)> = groups.into_iter().collect();
+    // Rounded BEFORE the sort in the TS (`.map(...).sort(...)`), so two groups whose raw bucket
+    // values differ below the 4th decimal rank as equal and keep insertion order.
+    for (_, g) in ranked.iter_mut() {
+        g.cost_usd = js_to_fixed_num(g.cost_usd, 4);
+        g.bucket_value = js_to_fixed_num(g.bucket_value, 4);
+    }
+    ranked.sort_by(|a, b| b.1.bucket_value.partial_cmp(&a.1.bucket_value).expect("bucket values are never NaN"));
+    let end = ranked.len().min(top_n.max(0.0) as usize);
+    let group_values: Vec<Value> = ranked[..end]
+        .iter()
+        .map(|(cause, g)| {
+            json!({
+                "key": cause.id(),
+                "cacheCreateTokens": num(g.cache_create),
+                "cacheReadTokens": num(g.cache_read),
+                "inputTokens": num(g.input),
+                "outputTokens": num(g.output),
+                "totalTokens": num(g.total),
+                "costUsd": num(g.cost_usd),
+                "events": num(g.events),
+                "maxSingleCacheCreateTokens": num(g.max_single_cc),
+                "maxSingleOutputTokens": num(g.max_single_out),
+                "bucketValue": num(g.bucket_value),
+            })
+        })
+        .collect();
+
+    output_events.sort_by(|a, b| b.0.partial_cmp(&a.0).expect("output tokens are never NaN"));
+    output_events.truncate(5);
+    let output_top: Vec<Value> = output_events.into_iter().map(|(_, v)| v).collect();
+
+    cause_report_value(&bucket, opts.window_hours, total_cc, total_cr, total_in, total_out, total_cost, group_values, output_top, coverage)
+}
+
+// ── Cross-session cause + actor backtrace (get_cache_break_causes) ────────────────
+// The user's two-step forensic question, answered across ALL sessions at once: (1) which BREAK
+// CAUSE is the most common / most expensive — and then (2) backtrace each break to the actual
+// PERPETRATOR (keyed on the enriched culpritId = the MCP server / hook / sub-agent model / harness
+// ToolSearch that CAUSED the change). The transcript is only ever the victim; this names who keeps
+// breaking it.
+pub struct CacheBreakCausesOptions {
+    pub data_dir: PathBuf,
+    pub bodies_dir: Option<PathBuf>,
+    pub store_dir: Option<PathBuf>,
+    pub window_hours: Option<f64>,
+    pub scan_cap: Option<usize>,
+    pub min_tokens: Option<f64>,
+    /// Optional session-id prefix filter.
+    pub scope: Option<String>,
+    /// Cap on the actorLeaderboard (default 20, max 100).
+    pub top_n: Option<f64>,
+    pub hook_events_dir: Option<PathBuf>,
+}
+
+impl CacheBreakCausesOptions {
+    pub fn new(data_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            data_dir: data_dir.into(),
+            bodies_dir: None,
+            store_dir: None,
+            window_hours: None,
+            scan_cap: None,
+            min_tokens: None,
+            scope: None,
+            top_n: None,
+            hook_events_dir: None,
+        }
+    }
+}
+
+/// Cross-session cause ranking + perpetrator backtrace.
+pub fn build_cache_break_causes(opts: &CacheBreakCausesOptions) -> Value {
+    let bodies_dir = opts.bodies_dir.clone().unwrap_or_else(|| crate::burn::guard::default_bodies_dir(&opts.data_dir));
+    let min_tokens = opts.min_tokens.unwrap_or(DEFAULT_MIN_TOKENS);
+    let scan_cap = opts.scan_cap.unwrap_or(RESPONSE_SCAN_CAP);
+    let top_n = opts.top_n.unwrap_or(20.0).clamp(1.0, 100.0) as usize;
+    let dir_exists = bodies_dir.exists();
+    let store_dir = opts.store_dir.clone().unwrap_or_else(|| opts.data_dir.join("store"));
+    let assemble = |min_tokens: f64, total_events: f64, total: f64, cause_ranking: Vec<Value>, actors: Vec<Value>, verdict: String, coverage: Value| {
+        let mut m = serde_json::Map::new();
+        m.insert("minTokens".into(), num(min_tokens));
+        m.insert("totalClassifiedEvents".into(), num(total_events));
+        m.insert("totalCacheCreateTokens".into(), num(total));
+        m.insert("causeRanking".into(), Value::Array(cause_ranking));
+        m.insert("actorLeaderboard".into(), Value::Array(actors));
+        m.insert("verdict".into(), Value::String(verdict));
+        m.insert("coverage".into(), coverage);
+        Value::Object(m)
+    };
+    if !dir_exists && !store_dir.join("bodies").exists() {
+        let note = format!(
+            "No raw-body evidence: neither {} nor the Parquet store at {} exists — set OTEL_LOG_RAW_API_BODIES to capture bodies.",
+            bodies_dir.display(),
+            store_dir.display()
+        );
+        let cov = coverage_value(&bodies_dir, dir_exists, 0, 0, 0, 0, 0, scan_cap, opts.window_hours, true, note);
+        return assemble(min_tokens, 0.0, 0.0, Vec::new(), Vec::new(), "no data".to_owned(), cov);
+    }
+
+    let scan = scan_sessions_and_responses(&bodies_dir, &store_dir, opts.window_hours, scan_cap);
+    struct CauseAcc {
+        events: f64,
+        cc: f64,
+        sessions: HashSet<String>,
+    }
+    struct ActorAcc {
+        cause: TimelineCause,
+        actor: String,
+        occ: f64,
+        cc: f64,
+        cost: f64,
+        sessions: HashSet<String>,
+    }
+    let mut cause_map: IndexMap<TimelineCause, CauseAcc> = IndexMap::new();
+    let mut actor_map: IndexMap<String, ActorAcc> = IndexMap::new();
+    let (mut total, mut total_events) = (0.0, 0.0);
+
+    let hook_dir = opts.hook_events_dir.clone().unwrap_or_else(|| opts.data_dir.join("hook-events"));
+    let hook_info = load_compaction_hook_info(&hook_dir);
+    for (sid, turns_raw) in &scan.by_session {
+        if sid == "(no-session)" {
+            continue;
+        }
+        if let Some(scope) = &opts.scope {
+            if !sid.starts_with(scope) {
+                continue;
+            }
+        }
+        let mut turns: Vec<&ScannedTurn> = turns_raw.iter().collect();
+        turns.sort_by(|a, b| a.mtime_ms.partial_cmp(&b.mtime_ms).expect("mtimes are never NaN"));
+        let mut events = classify_turns(&turns, &scan.resp_by_id, min_tokens);
+        apply_compaction_hook_evidence(&mut events, hook_info.get(sid));
+        for e in &events {
+            total += e.cache_create_tokens;
+            total_events += 1.0;
+            let c = cause_map.entry(e.cause).or_insert(CauseAcc { events: 0.0, cc: 0.0, sessions: HashSet::new() });
+            c.events += 1.0;
+            c.cc += e.cache_create_tokens;
+            c.sessions.insert(sid.clone());
+            let a = actor_map.entry(e.culprit_id.clone()).or_insert(ActorAcc {
+                cause: e.cause,
+                actor: e.culprit.clone(),
+                occ: 0.0,
+                cc: 0.0,
+                cost: 0.0,
+                sessions: HashSet::new(),
+            });
+            a.occ += 1.0;
+            a.cc += e.cache_create_tokens;
+            a.cost += e.cost_usd;
+            a.sessions.insert(sid.clone());
+        }
+    }
+
+    let pct = |n: f64| if total > 0.0 { js_to_fixed_num(100.0 * n / total, 1) } else { 0.0 };
+    let mut causes: Vec<(TimelineCause, CauseAcc)> = cause_map.into_iter().collect();
+    causes.sort_by(|a, b| b.1.cc.partial_cmp(&a.1.cc).expect("token counts are never NaN"));
+    let cause_ranking: Vec<Value> = causes
+        .iter()
+        .map(|(cause, v)| {
+            json!({
+                "cause": cause.id(),
+                "expected": cause.is_expected(),
+                "events": num(v.events),
+                "sessionsAffected": num(v.sessions.len() as f64),
+                "cacheCreateTokens": num(v.cc),
+                "pct": num(pct(v.cc)),
+                "remediation": cause.remediation(),
+            })
+        })
+        .collect();
+
+    let mut actors: Vec<(String, ActorAcc)> = actor_map.into_iter().collect();
+    actors.sort_by(|a, b| b.1.cc.partial_cmp(&a.1.cc).expect("token counts are never NaN"));
+    // TRUNCATE BEFORE the verdict: the verdict reads the leaderboard it ships, so capping after it
+    // would name an avoidable perpetrator the caller cannot see in the list. Pinned by `topn1`.
+    actors.truncate(top_n);
+    let actor_leaderboard: Vec<Value> = actors
+        .iter()
+        .map(|(actor_id, v)| {
+            json!({
+                "actorId": actor_id,
+                "cause": v.cause.id(),
+                "expected": v.cause.is_expected(),
+                "actor": v.actor,
+                "occurrences": num(v.occ),
+                "sessionsAffected": num(v.sessions.len() as f64),
+                "totalCacheCreateTokens": num(v.cc),
+                "totalCostUsd": num(js_to_fixed_num(v.cost, 4)),
+                "pct": num(pct(v.cc)),
+                "remediation": v.cause.remediation(),
+            })
+        })
+        .collect();
+
+    // The verdict names the top AVOIDABLE perpetrator — ranking by raw tokens alone crowns
+    // COLD_START / NORMAL_GROWTH (expected behavior, unactionable) and buries the actual
+    // misconfiguration.
+    let top = actors.first();
+    let top_avoidable = actors.iter().find(|(_, v)| !v.cause.is_expected());
+    let verdict = match (top, top_avoidable) {
+        (None, _) => "No significant cache_creation breaks classified in the scanned window.".to_owned(),
+        (Some((_, t)), None) => format!(
+            "All classified break cost is EXPECTED cache behavior (cold warms / compaction / incremental growth / interleave) — no avoidable perpetrator found. Largest: {} ({}) at {}%.",
+            t.actor,
+            t.cause.id(),
+            fmt_js_num(pct(t.cc))
+        ),
+        (Some((top_id, t)), Some((av_id, a))) => {
+            let overall_note = if av_id != top_id {
+                format!(" (Largest overall is {} ({}) at {}%, but that cause is expected/unavoidable.)", t.actor, t.cause.id(), fmt_js_num(pct(t.cc)))
+            } else {
+                String::new()
+            };
+            format!(
+                "Dominant AVOIDABLE perpetrator: {} ({}) — {} cache_creation tokens across {} session(s), {}% of all classified breaks. {}{overall_note}",
+                a.actor,
+                a.cause.id(),
+                to_locale_en(a.cc),
+                a.sessions.len(),
+                fmt_js_num(pct(a.cc)),
+                a.cause.remediation()
+            )
+        }
+    };
+
+    assemble(min_tokens, total_events, total, cause_ranking, actor_leaderboard, verdict, scan.coverage)
+}
+
+// ── Output formatting ────────────────────────────────────────────────────────────
+/// Render a timeline report in the requested format. `json` → the object itself; the others → a
+/// compact string wrapped as `{ format, text, sessionId, coverage }` so the MCP result stays
+/// JSON-serializable.
+pub fn format_timeline(report: &Value, format: &str) -> Value {
+    if format == "json" {
+        return report.clone();
+    }
+    let s = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_owned();
+    let n = |v: &Value, k: &str| v.get(k).and_then(Value::as_f64).unwrap_or(0.0);
+    let empty: Vec<Value> = Vec::new();
+    let events = report.get("events").and_then(Value::as_array).unwrap_or(&empty);
+    let offenders = report.get("repeatOffenders").and_then(Value::as_array).unwrap_or(&empty);
+    let session_id = report.get("sessionId").and_then(Value::as_str);
+    let model = report.get("model").and_then(Value::as_str);
+    let hdr = format!(
+        "cache-break timeline — session {}{}",
+        session_id.unwrap_or("(none)"),
+        model.map_or(String::new(), |m| format!(" [{m}]"))
+    );
+    let mut lines: Vec<String> = Vec::new();
+    let gap_of = |e: &Value| e.get("gapMinutes").and_then(Value::as_f64);
+    match format {
+        "markdown" => {
+            lines.push(format!("# {hdr}"));
+            lines.push(String::new());
+            lines.push(format!(
+                "- turns: {}, classified breaks: {}, total cache_creation: {}",
+                fmt_js_num(n(report, "turnsInSession")),
+                fmt_js_num(n(report, "turnsClassified")),
+                to_locale_en(n(report, "totalCacheCreateTokens"))
+            ));
+            lines.push(String::new());
+            lines.push("## Repeat offenders (chronic first)".to_owned());
+            lines.push(String::new());
+            lines.push("| cause | culprit | turns | tokens | % | systematic |".to_owned());
+            lines.push("|---|---|---|---|---|---|".to_owned());
+            for o in offenders {
+                lines.push(format!(
+                    "| {} | {} | {} | {} | {}% | {} |",
+                    s(o, "cause"),
+                    s(o, "culprit"),
+                    fmt_js_num(n(o, "occurrences")),
+                    to_locale_en(n(o, "totalCacheCreateTokens")),
+                    fmt_js_num(n(o, "pctOfSessionCacheCreate")),
+                    if o.get("systematic").is_some_and(truthy) { "⚠️ YES" } else { "" }
+                ));
+            }
+            lines.push(String::new());
+            lines.push("## Timeline".to_owned());
+            lines.push(String::new());
+            for e in events {
+                lines.push(format!(
+                    "- turn {} `{}` **{}** — {} ({} tok{})",
+                    fmt_js_num(n(e, "turn")),
+                    s(e, "ts"),
+                    s(e, "cause"),
+                    s(e, "culprit"),
+                    to_locale_en(n(e, "cacheCreateTokens")),
+                    gap_of(e).map_or(String::new(), |g| format!(", +{}m", fmt_js_num(g)))
+                ));
+            }
+        }
+        "table" => {
+            lines.push(hdr.clone());
+            lines.push("turn  cause                       tokens      gap    culprit".to_owned());
+            for e in events {
+                lines.push(format!(
+                    "{}  {} {}  {}  {}",
+                    pad_start(&fmt_js_num(n(e, "turn")), 4),
+                    pad_end(&s(e, "cause"), 26),
+                    pad_start(&fmt_js_num(n(e, "cacheCreateTokens")), 9),
+                    pad_start(&gap_of(e).map_or("-".to_owned(), |g| format!("{}m", fmt_js_num(g))), 6),
+                    s(e, "culprit")
+                ));
+            }
+            lines.push(String::new());
+            lines.push("REPEAT OFFENDERS:".to_owned());
+            for o in offenders {
+                lines.push(format!(
+                    "  {}{} ×{} ({} tok, {}%) — {}",
+                    if o.get("systematic").is_some_and(truthy) { "⚠️ " } else { "  " },
+                    s(o, "cause"),
+                    fmt_js_num(n(o, "occurrences")),
+                    fmt_js_num(n(o, "totalCacheCreateTokens")),
+                    fmt_js_num(n(o, "pctOfSessionCacheCreate")),
+                    s(o, "culprit")
+                ));
+            }
+        }
+        _ => {
+            lines.push(hdr.clone());
+            for e in events {
+                let cause = s(e, "cause");
+                let bar = if cause.starts_with("TOOL") {
+                    "🔧"
+                } else if cause == "MODEL_SWITCH" {
+                    "🔀"
+                } else if cause == "TTL_EXPIRY" {
+                    "⏱️"
+                } else if cause == "COLD_START" {
+                    "❄️"
+                } else if cause.contains("SKILL") {
+                    "📎"
+                } else if cause == "HOOK_INJECTION" {
+                    "🪝"
+                } else {
+                    "⚠️"
+                };
+                lines.push(format!(
+                    "{}  {bar} turn {}  {cause}  {} tok — {}",
+                    s(e, "ts"),
+                    fmt_js_num(n(e, "turn")),
+                    to_locale_en(n(e, "cacheCreateTokens")),
+                    s(e, "culprit")
+                ));
+            }
+            if let Some(worst) = offenders.iter().find(|o| o.get("systematic").is_some_and(truthy)) {
+                lines.push(String::new());
+                lines.push(format!("VERDICT: {}", s(worst, "verdict")));
+            }
+        }
+    }
+    if let Some(note) = report.get("eventsNote").and_then(Value::as_str) {
+        lines.push(String::new());
+        lines.push(note.to_owned());
+    }
+    let mut m = serde_json::Map::new();
+    m.insert("format".into(), Value::String(format.to_owned()));
+    m.insert("text".into(), Value::String(lines.join("\n")));
+    if let Some(sid) = session_id {
+        m.insert("sessionId".into(), Value::String(sid.to_owned()));
+    }
+    m.insert("coverage".into(), report.get("coverage").cloned().unwrap_or(Value::Null));
+    Value::Object(m)
 }

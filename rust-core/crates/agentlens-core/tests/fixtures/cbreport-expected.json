@@ -1,6 +1,6 @@
 {
-  "root": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/cbreport",
-  "spool": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/cbreport/spool",
+  "root": "<FIXTURES>",
+  "spool": "<FIXTURES>/spool",
   "mtimes": {
     "cbreport/spool/s1-0.request.json": 1787220000000,
     "cbreport/spool/s1-0.response.json": 1787220000500,
@@ -161,7 +161,7 @@
         }
       ],
       "coverage": {
-        "bodiesDir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/cbreport/spool",
+        "bodiesDir": "<FIXTURES>/spool",
         "dirExists": true,
         "requestFilesTotal": 18,
         "requestFilesScanned": 18,
@@ -224,7 +224,7 @@
         }
       ],
       "coverage": {
-        "bodiesDir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/cbreport/spool",
+        "bodiesDir": "<FIXTURES>/spool",
         "dirExists": true,
         "requestFilesTotal": 18,
         "requestFilesScanned": 18,
@@ -368,7 +368,7 @@
         }
       ],
       "coverage": {
-        "bodiesDir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/cbreport/spool",
+        "bodiesDir": "<FIXTURES>/spool",
         "dirExists": true,
         "requestFilesTotal": 18,
         "requestFilesScanned": 18,
@@ -481,7 +481,7 @@
         }
       ],
       "coverage": {
-        "bodiesDir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/cbreport/spool",
+        "bodiesDir": "<FIXTURES>/spool",
         "dirExists": true,
         "requestFilesTotal": 18,
         "requestFilesScanned": 18,
@@ -578,7 +578,7 @@
         }
       ],
       "coverage": {
-        "bodiesDir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/cbreport/spool",
+        "bodiesDir": "<FIXTURES>/spool",
         "dirExists": true,
         "requestFilesTotal": 18,
         "requestFilesScanned": 18,
@@ -676,7 +676,7 @@
         }
       ],
       "coverage": {
-        "bodiesDir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/cbreport/spool",
+        "bodiesDir": "<FIXTURES>/spool",
         "dirExists": true,
         "requestFilesTotal": 18,
         "requestFilesScanned": 18,
@@ -756,7 +756,7 @@
         }
       ],
       "coverage": {
-        "bodiesDir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/cbreport/spool",
+        "bodiesDir": "<FIXTURES>/spool",
         "dirExists": true,
         "requestFilesTotal": 18,
         "requestFilesScanned": 18,
@@ -887,7 +887,7 @@
         }
       ],
       "coverage": {
-        "bodiesDir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/cbreport/spool",
+        "bodiesDir": "<FIXTURES>/spool",
         "dirExists": true,
         "requestFilesTotal": 18,
         "requestFilesScanned": 18,
@@ -1022,7 +1022,7 @@
         }
       ],
       "coverage": {
-        "bodiesDir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/cbreport/spool",
+        "bodiesDir": "<FIXTURES>/spool",
         "dirExists": true,
         "requestFilesTotal": 18,
         "requestFilesScanned": 18,
@@ -1121,7 +1121,7 @@
         }
       ],
       "coverage": {
-        "bodiesDir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/cbreport/spool",
+        "bodiesDir": "<FIXTURES>/spool",
         "dirExists": true,
         "requestFilesTotal": 18,
         "requestFilesScanned": 18,
@@ -1143,7 +1143,7 @@
       "causeHistogram": [],
       "repeatOffenders": [],
       "coverage": {
-        "bodiesDir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/cbreport/spool",
+        "bodiesDir": "<FIXTURES>/spool",
         "dirExists": true,
         "requestFilesTotal": 18,
         "requestFilesScanned": 18,
@@ -1165,7 +1165,7 @@
       "causeHistogram": [],
       "repeatOffenders": [],
       "coverage": {
-        "bodiesDir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/cbreport/spool",
+        "bodiesDir": "<FIXTURES>/spool",
         "dirExists": true,
         "requestFilesTotal": 18,
         "requestFilesScanned": 18,
@@ -1187,7 +1187,7 @@
       "causeHistogram": [],
       "repeatOffenders": [],
       "coverage": {
-        "bodiesDir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/cbreport/no-such-spool",
+        "bodiesDir": "<FIXTURES>/no-such-spool",
         "dirExists": false,
         "requestFilesTotal": 0,
         "requestFilesScanned": 0,
@@ -1196,7 +1196,7 @@
         "sessionsFound": 0,
         "scanCap": 4000,
         "complete": true,
-        "note": "No raw-body evidence: neither /Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/cbreport/no-such-spool nor the Parquet store at /Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/cbreport/no-such-store exists — set OTEL_LOG_RAW_API_BODIES to capture bodies."
+        "note": "No raw-body evidence: neither <FIXTURES>/no-such-spool nor the Parquet store at <FIXTURES>/no-such-store exists — set OTEL_LOG_RAW_API_BODIES to capture bodies."
       }
     },
     "empty_spool": {
@@ -1209,7 +1209,7 @@
       "causeHistogram": [],
       "repeatOffenders": [],
       "coverage": {
-        "bodiesDir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/cbreport/empty-spool",
+        "bodiesDir": "<FIXTURES>/empty-spool",
         "dirExists": true,
         "requestFilesTotal": 0,
         "requestFilesScanned": 0,
@@ -1231,7 +1231,7 @@
       "causeHistogram": [],
       "repeatOffenders": [],
       "coverage": {
-        "bodiesDir": "/Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/tests/fixtures/cbreport/empty-spool",
+        "bodiesDir": "<FIXTURES>/empty-spool",
         "dirExists": true,
         "requestFilesTotal": 0,
         "requestFilesScanned": 0,

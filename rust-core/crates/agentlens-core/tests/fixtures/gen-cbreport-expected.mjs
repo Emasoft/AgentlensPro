@@ -228,10 +228,17 @@ const cases = {
   window_echo: await buildCacheBreakTimeline({ ...base, bodiesDir: EMPTY, windowHours: 24 }),
 }
 
-// The absolute fixture paths differ per machine and per clone; the test rewrites its own before
-// comparing, so publish the token to replace rather than the path.
-const out = { root: ROOT, spool: SPOOL, mtimes, cases }
-fs.writeFileSync(path.join(HERE, 'cbreport-expected.json'), JSON.stringify(out, null, 2) + '\n')
+// The absolute fixture root is REDACTED to a token before the oracle is written. Two reasons, and
+// the second is the one that bites: it differs per machine and per clone (so the test rewrites it
+// to its own root anyway), and on this machine it contains a home path — which `check-identities`
+// rejects in any tracked file, correctly. The token IS the `root` field, so the test's existing
+// rewrite needs no special case.
+const ROOT_TOKEN = '<FIXTURES>'
+const out = { root: ROOT_TOKEN, spool: SPOOL, mtimes, cases }
+fs.writeFileSync(
+  path.join(HERE, 'cbreport-expected.json'),
+  JSON.stringify(out, null, 2).split(ROOT).join(ROOT_TOKEN) + '\n',
+)
 console.log('wrote cbreport-expected.json —', Object.keys(cases).length, 'cases,', Object.keys(mtimes).length, 'stamped files')
 for (const [k, v] of Object.entries(cases)) {
   console.log(` ${k}: sid=${v.sessionId ?? '-'} turns=${v.turnsInSession} classified=${v.turnsClassified} causes=${v.causeHistogram.map((h) => h.cause + ':' + h.events).join(',') || '-'} offenders=${v.repeatOffenders.length}`)
