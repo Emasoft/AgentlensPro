@@ -10,9 +10,11 @@
 use std::path::PathBuf;
 
 use agentlens_core::forensics_db::{
-    billable_weight, default_forensics_db, default_main_db, open_forensics_db,
-    open_readonly_snapshot, read_index_state, tier_classify, write_index_state,
+    billable_weight, default_forensics_db, default_main_db, load_spawn_map, open_forensics_db,
+    open_readonly_snapshot, read_index_state, resolve_spawn, tier_classify, write_index_state,
+    SpawnRow,
 };
+use indexmap::IndexMap;
 use serde_json::Value;
 
 /// A fixed clock. The models in the fixture are all free of `scheduledChange`, so the value is not
@@ -81,6 +83,109 @@ fn tier_classify_reproduces_the_ts_oracle_exactly() {
         let got = tier_classify(opt_num_arg(&c["input"]));
         assert_eq!(got, c["out"].as_str().unwrap(), "input {:?}", c["input"]);
     }
+}
+
+// ── SLICE B3: resolveSpawn (oracled) + loadSpawnMap (native) ────────────────────
+
+fn spawn_fixture() -> Value {
+    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/forensicsspawn-expected.json");
+    serde_json::from_str(&std::fs::read_to_string(&p).expect("fixture missing — run gen-forensicsspawn-expected.mjs")).unwrap()
+}
+
+fn spawn_map_from(rows: &Value) -> IndexMap<String, SpawnRow> {
+    let s = |o: &Value, k: &str| o.get(k).and_then(Value::as_str).map(str::to_owned);
+    rows.as_object()
+        .unwrap()
+        .iter()
+        .map(|(k, o)| {
+            (
+                k.clone(),
+                SpawnRow {
+                    spawn_kind: s(o, "spawnKind"),
+                    spawn_model_override: s(o, "spawnModelOverride"),
+                    spawn_isolation: s(o, "spawnIsolation"),
+                    subagent_type: s(o, "subagentType"),
+                    is_sidechain: o.get("isSidechain").and_then(Value::as_bool).unwrap_or(false),
+                    parent_session_id: s(o, "parentSessionId"),
+                    model: s(o, "model"),
+                },
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn resolve_spawn_reproduces_the_ts_oracle_exactly() {
+    let fx = spawn_fixture();
+    let map = spawn_map_from(&fx["rows"]);
+    let cases = fx["cases"].as_array().unwrap();
+    assert!(!cases.is_empty());
+    for c in cases {
+        let label = c["case"].as_str().unwrap();
+        // A null sessionId in the fixture is the TS's `undefined`; an empty string stays empty,
+        // because the two take the same branch for different reasons and both must be exercised.
+        let sid = c["sessionId"].as_str();
+        let empty = IndexMap::new();
+        let got = resolve_spawn(sid, if label == "empty map" { &empty } else { &map }).to_value();
+        // Every key is PRESENT here, nulls included — unlike ApiCallEvent, the TS builds these with
+        // explicit nulls rather than leaving properties undefined.
+        let want = &c["out"];
+        let gk: Vec<&String> = got.as_object().unwrap().keys().collect();
+        let wk: Vec<&String> = want.as_object().unwrap().keys().collect();
+        assert_eq!(gk, wk, "{label}: key set/order");
+        assert_eq!(&got, want, "{label}");
+    }
+}
+
+#[test]
+fn load_spawn_map_degrades_honestly_rather_than_guessing() {
+    let dir = tmp_dir("spawnmap");
+
+    // An absent DB is an empty map, not an error — every call then resolves 'unresolved'.
+    assert!(load_spawn_map(&dir.join("nope.db")).is_empty());
+
+    // A DB with no sessions table is the same: schema drift must not lose the whole load.
+    let empty_db = dir.join("empty.db");
+    rusqlite::Connection::open(&empty_db).unwrap().execute_batch("CREATE TABLE other (x)").unwrap();
+    assert!(load_spawn_map(&empty_db).is_empty());
+
+    // An UN-MIGRATED DB lacking spawn_subagent_type must still load, with that ONE column null.
+    // Failing the whole load over a missing column would silently turn every call 'unresolved'.
+    let old_db = dir.join("old.db");
+    let c = rusqlite::Connection::open(&old_db).unwrap();
+    c.execute_batch(
+        "CREATE TABLE sessions (session_id TEXT, spawn_kind TEXT, spawn_model_override TEXT,
+            spawn_isolation TEXT, is_sidechain INTEGER, parent_session_id TEXT, model TEXT);
+         INSERT INTO sessions VALUES ('aaaaaaaa','task',NULL,NULL,1,'bbbbbbbb','claude-opus-5');",
+    )
+    .unwrap();
+    drop(c);
+    let m = load_spawn_map(&old_db);
+    assert_eq!(m.len(), 1);
+    let r = &m["aaaaaaaa"];
+    assert_eq!(r.spawn_kind.as_deref(), Some("task"));
+    assert!(r.subagent_type.is_none(), "the missing column must be null, not a failed load");
+    assert!(r.is_sidechain);
+    assert_eq!(resolve_spawn(Some("aaaaaaaa"), &m).spawn_resolution, "direct");
+
+    // A MIGRATED DB reads the column for real.
+    let new_db = dir.join("new.db");
+    let c = rusqlite::Connection::open(&new_db).unwrap();
+    c.execute_batch(
+        "CREATE TABLE sessions (session_id TEXT, spawn_kind TEXT, spawn_model_override TEXT,
+            spawn_isolation TEXT, is_sidechain INTEGER, parent_session_id TEXT, model TEXT,
+            spawn_subagent_type TEXT);
+         INSERT INTO sessions VALUES ('cccccccc',NULL,NULL,NULL,0,NULL,NULL,'spark');
+         INSERT INTO sessions VALUES (NULL,'task',NULL,NULL,0,NULL,NULL,'ignored');",
+    )
+    .unwrap();
+    drop(c);
+    let m2 = load_spawn_map(&new_db);
+    // The NULL session_id row is skipped — a null primary key is not a key.
+    assert_eq!(m2.len(), 1);
+    assert_eq!(m2["cccccccc"].subagent_type.as_deref(), Some("spark"));
+    // kind-less with no parent → the synthetic 'root' bucket.
+    assert_eq!(resolve_spawn(Some("cccccccc"), &m2).spawn_resolution, "root");
 }
 
 // ── real-SQLite behaviour (no TS oracle — see the module header) ────────────────

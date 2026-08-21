@@ -1,0 +1,184 @@
+{
+  "rows": {
+    "full": {
+      "spawnKind": "task",
+      "spawnModelOverride": "claude-opus-5",
+      "spawnIsolation": "worktree",
+      "subagentType": "spark",
+      "isSidechain": true,
+      "parentSessionId": "aaaaaaaa",
+      "model": "claude-opus-5"
+    },
+    "kindOnly": {
+      "spawnKind": "task",
+      "isSidechain": false
+    },
+    "rootish": {
+      "isSidechain": false
+    },
+    "rootishSidechain": {
+      "isSidechain": true
+    },
+    "childNoKind": {
+      "isSidechain": false,
+      "parentSessionId": "bbbbbbbb",
+      "spawnModelOverride": "claude-sonnet-5",
+      "spawnIsolation": "none",
+      "subagentType": "explore"
+    },
+    "emptyKind": {
+      "spawnKind": "",
+      "isSidechain": false,
+      "parentSessionId": "cccccccc"
+    },
+    "emptyParent": {
+      "isSidechain": false,
+      "parentSessionId": ""
+    }
+  },
+  "cases": [
+    {
+      "case": "full",
+      "sessionId": "full",
+      "out": {
+        "spawnKind": "task",
+        "spawnModelOverride": "claude-opus-5",
+        "spawnIsolation": "worktree",
+        "subagentType": "spark",
+        "isSidechain": 1,
+        "parentSession": "aaaaaaaa",
+        "spawnResolution": "direct"
+      }
+    },
+    {
+      "case": "kindOnly",
+      "sessionId": "kindOnly",
+      "out": {
+        "spawnKind": "task",
+        "spawnModelOverride": null,
+        "spawnIsolation": null,
+        "subagentType": null,
+        "isSidechain": 0,
+        "parentSession": null,
+        "spawnResolution": "direct"
+      }
+    },
+    {
+      "case": "rootish",
+      "sessionId": "rootish",
+      "out": {
+        "spawnKind": "root",
+        "spawnModelOverride": null,
+        "spawnIsolation": null,
+        "subagentType": null,
+        "isSidechain": 0,
+        "parentSession": null,
+        "spawnResolution": "root"
+      }
+    },
+    {
+      "case": "rootishSidechain",
+      "sessionId": "rootishSidechain",
+      "out": {
+        "spawnKind": "root",
+        "spawnModelOverride": null,
+        "spawnIsolation": null,
+        "subagentType": null,
+        "isSidechain": 1,
+        "parentSession": null,
+        "spawnResolution": "root"
+      }
+    },
+    {
+      "case": "childNoKind",
+      "sessionId": "childNoKind",
+      "out": {
+        "spawnKind": null,
+        "spawnModelOverride": "claude-sonnet-5",
+        "spawnIsolation": "none",
+        "subagentType": "explore",
+        "isSidechain": 0,
+        "parentSession": "bbbbbbbb",
+        "spawnResolution": "direct"
+      }
+    },
+    {
+      "case": "emptyKind",
+      "sessionId": "emptyKind",
+      "out": {
+        "spawnKind": null,
+        "spawnModelOverride": null,
+        "spawnIsolation": null,
+        "subagentType": null,
+        "isSidechain": 0,
+        "parentSession": "cccccccc",
+        "spawnResolution": "direct"
+      }
+    },
+    {
+      "case": "emptyParent",
+      "sessionId": "emptyParent",
+      "out": {
+        "spawnKind": "root",
+        "spawnModelOverride": null,
+        "spawnIsolation": null,
+        "subagentType": null,
+        "isSidechain": 0,
+        "parentSession": null,
+        "spawnResolution": "root"
+      }
+    },
+    {
+      "case": "no such session",
+      "sessionId": "zzzzzzzz",
+      "out": {
+        "spawnKind": null,
+        "spawnModelOverride": null,
+        "spawnIsolation": null,
+        "subagentType": null,
+        "isSidechain": 0,
+        "parentSession": null,
+        "spawnResolution": "unresolved"
+      }
+    },
+    {
+      "case": "undefined sessionId",
+      "sessionId": null,
+      "out": {
+        "spawnKind": null,
+        "spawnModelOverride": null,
+        "spawnIsolation": null,
+        "subagentType": null,
+        "isSidechain": 0,
+        "parentSession": null,
+        "spawnResolution": "unresolved"
+      }
+    },
+    {
+      "case": "empty sessionId",
+      "sessionId": "",
+      "out": {
+        "spawnKind": null,
+        "spawnModelOverride": null,
+        "spawnIsolation": null,
+        "subagentType": null,
+        "isSidechain": 0,
+        "parentSession": null,
+        "spawnResolution": "unresolved"
+      }
+    },
+    {
+      "case": "empty map",
+      "sessionId": "full",
+      "out": {
+        "spawnKind": null,
+        "spawnModelOverride": null,
+        "spawnIsolation": null,
+        "subagentType": null,
+        "isSidechain": 0,
+        "parentSession": null,
+        "spawnResolution": "unresolved"
+      }
+    }
+  ]
+}

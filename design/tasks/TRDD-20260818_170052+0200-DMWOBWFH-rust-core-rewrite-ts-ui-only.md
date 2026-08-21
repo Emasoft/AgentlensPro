@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-21T17:15:50+0200
+updated: 2026-08-21T18:10:26+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -1755,13 +1755,27 @@ release-via: publish
   Falsified: hashing `ref` instead of `src_name` moves the synthesized id on relocation (the recorded
   double-counting bug); emitting `null` instead of OMITTING an absent optional breaks both the
   key-order oracle and the unattributed test.
+- **SLICE B3 DONE — `load_spawn_map` + `resolve_spawn` (TS 483-551), in `forensics_db.rs`** (it is
+  the module that already owns rusqlite and `default_main_db`; no new file).
+  **THE ORACLE CAUGHT TWO REAL BUGS IN THE PORT, both JS falsy-string edges the TS branches on:**
+  `spawnKind: ''` must take the kind-LESS branch (`is_some()` called it 'direct' and leaked `""`
+  through as the kind) and `parentSessionId: ''` must take the ROOT branch (`is_none()` sent it down
+  the child branch). Both now go through a `truthy()` helper. Falsified: reverting one condition
+  reddens with `spawnKind: String("")` where the oracle wants `Null`.
+  **`ResolvedSpawn` EMITS EVERY KEY INCLUDING NULLS** — the TS builds these objects with explicit
+  `null`s — which is the OPPOSITE of `ApiCallEvent`, where an absent optional must be OMITTED. Two
+  structs in the same slice with opposite rules; do not unify them.
+  `loadSpawnMap` is not oracled (an oracle would test sql.js's reader against rusqlite's, not the
+  port); its three degradations — absent DB, no `sessions` table, and the un-migrated
+  `spawn_subagent_type` column — are pinned natively, as is the skip of a NULL `session_id` row.
 - **NEXT (P4x.2d continued): 2 of 53 remain — `run_diagnostics_sql` and `compare_configs`.**
-  **Both still need SLICE B3-B4** — `loadSpawnMap`/`resolveSpawn` (TS 483-551, a rusqlite read of the
-  MAIN agentlens.db `sessions` table, degrading to an empty map so every call resolves 'unresolved'
-  rather than guessed) and `indexApiCalls`/`ensureFreshIndex` (553-701). B1 (the fact store) and B2
-  (the scan that feeds it) are landed. NOTE for B4: the TS `InjectionRow.tokens` is invariantly 0, and
-  the Rust struct omits the field while its `to_value()` emits `"tokens": 0` — the INSERT must supply
-  a literal 0, not read a field. Then the two tools are shapers over it:
+  **Only SLICE B4 remains first** — `indexApiCalls`/`ensureFreshIndex` (TS 553-701): the
+  `AC_INSERT_SQL` upsert, `apiCallParams` (including the flat-`cache_creation`-to-5m-tier
+  synthesis for `billable_weight` only, NOT for the stored `tier_5m_tokens` column), the manual
+  child-row cascade, the monotonic high-water mark, and the freshness gate. B1 (fact store), B2
+  (scan) and B3 (spawn join) are landed. NOTE: the TS `InjectionRow.tokens` is invariantly 0, and the
+  Rust struct omits the field while its `to_value()` emits `"tokens": 0` — the INSERT must supply a
+  literal 0, not read a field. Then the two tools are shapers over it:
   `run_diagnostics_sql` (`src/forensicsSql.ts`, 321) and `compare_configs`
   (`src/forensicsCompare.ts`, 253).
   **The fact-store engine question is DECIDED — keep SQLite, via `rusqlite`.** `forensicsIndex`

@@ -20,9 +20,11 @@
 
 use std::path::{Path, PathBuf};
 
+use indexmap::IndexMap;
 use rusqlite::functions::FunctionFlags;
 use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OpenFlags};
+use serde_json::Value;
 
 use crate::pricing::{calc_token_cost_usd, lookup_rates};
 
@@ -126,13 +128,7 @@ CREATE TABLE IF NOT EXISTS index_state (
 fn arg_num(v: ValueRef<'_>) -> f64 {
     match v {
         ValueRef::Integer(i) => i as f64,
-        ValueRef::Real(f) => {
-            if f.is_finite() {
-                f
-            } else {
-                0.0
-            }
-        }
+        ValueRef::Real(f) if f.is_finite() => f,
         _ => 0.0,
     }
 }
@@ -325,6 +321,157 @@ pub fn open_readonly_snapshot(db_path: &Path, now_ms: f64) -> Option<Connection>
     let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
     register_custom_fns(&conn, now_ms).ok()?;
     Some(conn)
+}
+
+// ── spawn-config resolution (SLICE B3, TS 483-551) ──────────────────────────────
+
+#[derive(Clone, Default)]
+pub struct SpawnRow {
+    pub spawn_kind: Option<String>,
+    pub spawn_model_override: Option<String>,
+    pub spawn_isolation: Option<String>,
+    pub subagent_type: Option<String>,
+    pub is_sidechain: bool,
+    pub parent_session_id: Option<String>,
+    pub model: Option<String>,
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct ResolvedSpawn {
+    pub spawn_kind: Option<String>,
+    pub spawn_model_override: Option<String>,
+    pub spawn_isolation: Option<String>,
+    pub subagent_type: Option<String>,
+    pub is_sidechain: i64,
+    pub parent_session: Option<String>,
+    pub spawn_resolution: &'static str,
+}
+
+impl ResolvedSpawn {
+    /// Unlike `ApiCallEvent`, every key is PRESENT — the TS builds these objects with explicit
+    /// `null`s rather than leaving properties undefined, so they survive JSON.stringify.
+    pub fn to_value(&self) -> Value {
+        let s = |v: &Option<String>| v.clone().map_or(Value::Null, Value::String);
+        let mut m = serde_json::Map::new();
+        m.insert("spawnKind".into(), s(&self.spawn_kind));
+        m.insert("spawnModelOverride".into(), s(&self.spawn_model_override));
+        m.insert("spawnIsolation".into(), s(&self.spawn_isolation));
+        m.insert("subagentType".into(), s(&self.subagent_type));
+        m.insert("isSidechain".into(), Value::from(self.is_sidechain));
+        m.insert("parentSession".into(), s(&self.parent_session));
+        m.insert("spawnResolution".into(), Value::String(self.spawn_resolution.into()));
+        Value::Object(m)
+    }
+}
+
+const UNRESOLVED: ResolvedSpawn = ResolvedSpawn {
+    spawn_kind: None,
+    spawn_model_override: None,
+    spawn_isolation: None,
+    subagent_type: None,
+    is_sidechain: 0,
+    parent_session: None,
+    spawn_resolution: "unresolved",
+};
+
+/// Load `session_id -> SpawnRow` from the MAIN agentlens.db, READ-ONLY. An absent or unopenable DB
+/// yields an empty map, and every call then resolves to 'unresolved' — honest, never guessed.
+///
+/// `spawn_subagent_type` is read only when the column is present: an un-migrated older DB lacks it,
+/// and the TS degrades that one column to null rather than failing the whole load. Losing the entire
+/// spawn map over one missing column would silently turn every call 'unresolved'.
+pub fn load_spawn_map(main_db_path: &Path) -> IndexMap<String, SpawnRow> {
+    let mut map = IndexMap::new();
+    if !main_db_path.exists() {
+        return map;
+    }
+    let Ok(conn) = Connection::open_with_flags(main_db_path, OpenFlags::SQLITE_OPEN_READ_ONLY) else {
+        return map;
+    };
+    let has_sat = conn
+        .prepare("SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'spawn_subagent_type'")
+        .and_then(|mut s| s.exists([]))
+        .unwrap_or(false);
+    let sat = if has_sat { "spawn_subagent_type" } else { "NULL AS spawn_subagent_type" };
+    let sql = format!(
+        "SELECT session_id, spawn_kind, spawn_model_override, spawn_isolation, is_sidechain, parent_session_id, model, {sat} FROM sessions"
+    );
+    let Ok(mut stmt) = conn.prepare(&sql) else {
+        // Schema drift / no sessions table — degrade to an empty map, as the TS catch does.
+        return map;
+    };
+    let Ok(rows) = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, Option<String>>(0)?,
+            SpawnRow {
+                spawn_kind: r.get(1).ok().flatten(),
+                spawn_model_override: r.get(2).ok().flatten(),
+                spawn_isolation: r.get(3).ok().flatten(),
+                is_sidechain: r.get::<_, Option<i64>>(4).ok().flatten().unwrap_or(0) != 0,
+                parent_session_id: r.get(5).ok().flatten(),
+                model: r.get(6).ok().flatten(),
+                subagent_type: r.get(7).ok().flatten(),
+            },
+        ))
+    }) else {
+        return map;
+    };
+    for row in rows.flatten() {
+        // `typeof sid !== 'string'` skips the row in the TS — a NULL primary key is not a key.
+        if let (Some(sid), sr) = row {
+            map.insert(sid, sr);
+        }
+    }
+    map
+}
+
+/// Resolve one call's spawn config, recording `spawn_resolution` HONESTLY.
+///
+/// The ladder: a direct match carrying a spawn_kind is 'direct'; a kind-less row with no parent is a
+/// synthetic 'root'; a kind-less row WITH a parent is still 'direct' (it matched — the kind is
+/// genuinely unknown and is left null rather than fabricated); no row or no session_id is
+/// 'unresolved', which is still inserted as an honest bucket rather than dropped.
+pub fn resolve_spawn(session_id: Option<&str>, spawn_map: &IndexMap<String, SpawnRow>) -> ResolvedSpawn {
+    // An EMPTY session id is falsy in the TS, so it takes the same branch as an absent one.
+    let Some(sid) = session_id.filter(|s| !s.is_empty()) else { return UNRESOLVED };
+    let Some(row) = spawn_map.get(sid) else { return UNRESOLVED };
+    let sidechain = i64::from(row.is_sidechain);
+    // JS TRUTHINESS, not Option::is_some. The TS branches on `if (row.spawnKind)` and
+    // `if (!row.parentSessionId)`, where an EMPTY STRING is falsy — so a row carrying `spawn_kind:
+    // ''` must take the kind-LESS branch and a row carrying `parent_session_id: ''` must take the
+    // root branch. Ported as is_some()/is_none() both went the other way, and the oracle caught it.
+    let truthy = |v: &Option<String>| v.as_deref().is_some_and(|s| !s.is_empty());
+    if truthy(&row.spawn_kind) {
+        return ResolvedSpawn {
+            spawn_kind: row.spawn_kind.clone(),
+            spawn_model_override: row.spawn_model_override.clone(),
+            spawn_isolation: row.spawn_isolation.clone(),
+            subagent_type: row.subagent_type.clone(),
+            is_sidechain: sidechain,
+            parent_session: row.parent_session_id.clone(),
+            spawn_resolution: "direct",
+        };
+    }
+    if !truthy(&row.parent_session_id) {
+        return ResolvedSpawn {
+            spawn_kind: Some("root".into()),
+            spawn_model_override: None,
+            spawn_isolation: None,
+            subagent_type: None,
+            is_sidechain: sidechain,
+            parent_session: None,
+            spawn_resolution: "root",
+        };
+    }
+    ResolvedSpawn {
+        spawn_kind: None,
+        spawn_model_override: row.spawn_model_override.clone(),
+        spawn_isolation: row.spawn_isolation.clone(),
+        subagent_type: row.subagent_type.clone(),
+        is_sidechain: sidechain,
+        parent_session: row.parent_session_id.clone(),
+        spawn_resolution: "direct",
+    }
 }
 
 // ── index_state KV helpers ──────────────────────────────────────────────────────
