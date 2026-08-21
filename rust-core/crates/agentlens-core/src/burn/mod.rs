@@ -13,6 +13,7 @@ pub mod bodies_activity;
 pub mod cache_ttl;
 pub mod causing_tool_call;
 pub mod guard;
+pub mod investigator;
 pub mod investigator_scan;
 pub mod keep_warm;
 pub mod monitor;

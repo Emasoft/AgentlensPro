@@ -67,6 +67,12 @@ fn strip(v: &Value) -> Value {
         ("burnscan-noresp", "<NORESP>"),
         ("burnscan-cap", "<CAP>"),
         ("no-such-burnscan-dir", "<MISSING>"),
+        ("burnscan-storm", "<STORM>"),
+        ("burnscan-boot", "<BOOT>"),
+        ("burnscan-premium", "<PREMIUM>"),
+        ("burnscan-idle", "<IDLE>"),
+        ("burnscan-image", "<IMAGE>"),
+        ("burnscan-partial", "<PARTIAL>"),
     ] {
         s = s.replace(&fixtures().join(dir).to_string_lossy().into_owned(), tag);
     }
@@ -106,6 +112,13 @@ const CASES: &[Case] = &[
     Case { name: "noResponses", dir: "burnscan-noresp", hours: None, max_files: None },
     Case { name: "missingDir", dir: "no-such-burnscan-dir", hours: None, max_files: None },
     Case { name: "capHit", dir: "burnscan-cap", hours: None, max_files: Some(1.0) },
+    // One corpus per detector — see the generator for why they cannot share a dir.
+    Case { name: "storm", dir: "burnscan-storm", hours: None, max_files: None },
+    Case { name: "boot", dir: "burnscan-boot", hours: None, max_files: None },
+    Case { name: "premium", dir: "burnscan-premium", hours: None, max_files: None },
+    Case { name: "idle", dir: "burnscan-idle", hours: None, max_files: None },
+    Case { name: "image", dir: "burnscan-image", hours: None, max_files: None },
+    Case { name: "partial", dir: "burnscan-partial", hours: None, max_files: None },
 ];
 
 #[test]
@@ -200,6 +213,144 @@ fn scanned_records_carry_the_identities_slice_2_needs() {
     assert_eq!(by("q5").image_bytes, 20_005.0, "the base64 run at the 20k floor");
     assert_eq!(by("q6").image_bytes, 0.0);
 
-    // The hook store feeds slice 2's rate-limit-stall correlation.
-    assert_eq!(out.stop_failures, vec![o["hookStopFailureMs"].as_f64().unwrap()]);
+    // The hook store feeds the rate-limit-stall correlation. readHookEvents is NEWEST-FIRST, and
+    // that order reaches the wire through evidence.stopFailures — so it is asserted, not sorted.
+    assert_eq!(
+        out.stop_failures,
+        vec![o["hookStopFailureMs2"].as_f64().unwrap(), o["hookStopFailureMs"].as_f64().unwrap()],
+        "newest-first"
+    );
+}
+
+// ── SLICE 2: the detectors and the final assembly ────────────────────────────
+
+/// The WHOLE report, every case. This subsumes the scan-half comparison above; that one is kept
+/// because it isolates a scan regression from a detector regression when both would redden here.
+#[test]
+fn full_report_reproduces_the_ts_oracle_exactly() {
+    let o = oracle();
+    let until = o["untilMs"].as_f64().unwrap();
+    for c in CASES {
+        let opts = opts_for(c.dir, until, c.hours, c.max_files);
+        let got = strip(&agentlens_core::burn::investigator::investigate_burn(&opts, until));
+        same(&got, &o["cases"][c.name], c.name);
+    }
+}
+
+/// Key ORDER is not uniform across findings, and that is the wire contract. A finding built by
+/// spreading `base` leads with `equivTokens`; every other detector leads with `cause`. Normalizing
+/// them would compare equal field-by-field under a looser check and be wrong on the wire.
+#[test]
+fn finding_key_order_differs_by_detector_and_is_preserved() {
+    let o = oracle();
+    let until = o["untilMs"].as_f64().unwrap();
+    let causes_of = |name: &str, dir: &str| -> Vec<(String, Vec<String>)> {
+        let c = CASES.iter().find(|c| c.name == name).unwrap();
+        let r = agentlens_core::burn::investigator::investigate_burn(&opts_for(dir, until, c.hours, c.max_files), until);
+        r["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| {
+                (
+                    f["cause"].as_str().unwrap().to_owned(),
+                    f.as_object().unwrap().keys().cloned().collect::<Vec<_>>(),
+                )
+            })
+            .collect()
+    };
+    let storm = causes_of("storm", "burnscan-storm");
+    let spread = ["equivTokens", "shareOfWindow", "evidence", "cause", "confidence", "verdict"];
+    let literal = ["cause", "equivTokens", "shareOfWindow", "confidence", "verdict", "evidence"];
+    assert_eq!(storm.iter().find(|(c, _)| c == "FORK_STORM").unwrap().1, spread, "FORK_STORM spreads `base`");
+    assert_eq!(
+        storm.iter().find(|(c, _)| c == "RATE_LIMIT_COLD_RESUME").unwrap().1,
+        literal,
+        "RATE_LIMIT_COLD_RESUME is a literal"
+    );
+    assert_eq!(causes_of("image", "burnscan-image")[0].1, literal, "IMAGE_BLOB_RESIDENT is a literal");
+    assert_eq!(causes_of("boot", "burnscan-boot")[0].1, spread, "SUBAGENT_BOOT_TAX spreads `base`");
+}
+
+/// NO SILENT GAPS: every BURN_CAUSE must be reachable by some fixture, or a detector could be
+/// wholly broken and the suite would still be green. The thresholds are far enough apart that no
+/// single corpus can satisfy them all, which is why there is one dir per detector.
+#[test]
+fn every_burn_cause_is_exercised_by_the_fixture_set() {
+    let o = oracle();
+    let until = o["untilMs"].as_f64().unwrap();
+    let mut seen: Vec<String> = Vec::new();
+    for c in CASES {
+        let r = agentlens_core::burn::investigator::investigate_burn(&opts_for(c.dir, until, c.hours, c.max_files), until);
+        for f in r["findings"].as_array().unwrap() {
+            let cause = f["cause"].as_str().unwrap().to_owned();
+            if !seen.contains(&cause) {
+                seen.push(cause);
+            }
+        }
+    }
+    let missing: Vec<&str> = agentlens_core::burn::investigator::BURN_CAUSES
+        .iter()
+        .copied()
+        .filter(|c| !seen.iter().any(|s| s == c))
+        .collect();
+    assert!(missing.is_empty(), "unexercised causes: {missing:?}");
+}
+
+/// The verdict's honesty clause: it must NAME the unattributed remainder rather than imply the
+/// detectors explained the window. `main` attributes well under half, so the NOTE must be there;
+/// `storm` attributes ~100%, so it must NOT be.
+#[test]
+fn the_verdict_admits_what_the_detectors_could_not_attribute() {
+    let o = oracle();
+    let until = o["untilMs"].as_f64().unwrap();
+    let verdict = |name: &str, dir: &str| {
+        let c = CASES.iter().find(|c| c.name == name).unwrap();
+        agentlens_core::burn::investigator::investigate_burn(&opts_for(dir, until, c.hours, c.max_files), until)
+            ["verdict"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    // MEASURED, not assumed: main attributes 74% and storm ~100%, so NEITHER carries the note —
+    // asserting main did was my error. `partial` is built to land at 12.5%, between the 2%
+    // reporting floor and the 50% honesty threshold, and is the ONLY corpus that reaches it.
+    assert!(verdict("partial", "burnscan-partial").contains("detectors attribute only"), "12.5% ⇒ note");
+    assert!(!verdict("main", "burnscan-bodies").contains("detectors attribute only"), "74% ⇒ no note");
+    assert!(!verdict("storm", "burnscan-storm").contains("detectors attribute only"), "~100% ⇒ no note");
+    // Singular vs plural is computed from the top-3 slice, not from the total.
+    assert!(verdict("storm", "burnscan-storm").starts_with("Top culprits:"), "two findings ⇒ plural");
+    assert!(verdict("image", "burnscan-image").starts_with("Top culprit:"), "one finding ⇒ singular");
+}
+
+/// attach_causing_calls must PRESERVE the findings it enriches. The obvious implementation —
+/// iterating a `mem::take`d temporary — drops every mutation and leaves the array EMPTY, turning a
+/// report with findings into one without any while every other test still passes.
+#[test]
+fn attach_causing_calls_preserves_findings_and_reports_honestly() {
+    let o = oracle();
+    let until = o["untilMs"].as_f64().unwrap();
+    let c = CASES.iter().find(|c| c.name == "storm").unwrap();
+    let opts = opts_for(c.dir, until, c.hours, c.max_files);
+    let mut inv = agentlens_core::burn::investigator::investigate_burn(&opts, until);
+    let before: Vec<String> =
+        inv["findings"].as_array().unwrap().iter().map(|f| f["cause"].as_str().unwrap().to_owned()).collect();
+    let verdict_before = inv["verdict"].as_str().unwrap().to_owned();
+
+    // No transcript store is pointed at, so nothing can resolve — which is exactly the path that
+    // must record an honest reason instead of fabricating a call.
+    agentlens_core::burn::investigator::attach_causing_calls(&mut inv, &opts.home, &[]);
+
+    let after: Vec<String> =
+        inv["findings"].as_array().unwrap().iter().map(|f| f["cause"].as_str().unwrap().to_owned()).collect();
+    assert_eq!(after, before, "findings survive enrichment");
+    assert!(!after.is_empty(), "the storm corpus has findings to enrich");
+
+    let storm = inv["findings"].as_array().unwrap().iter().find(|f| f["cause"] == "FORK_STORM").unwrap();
+    assert!(storm["causingCalls"].is_null(), "nothing resolvable ⇒ no fabricated calls");
+    assert!(storm["causingCallsUnavailable"].is_string(), "an unresolvable cause states WHY");
+    // Only fan-out findings anchor a spawn call; a finding with no workspace must stay untouched.
+    let rlcr = inv["findings"].as_array().unwrap().iter().find(|f| f["cause"] == "RATE_LIMIT_COLD_RESUME").unwrap();
+    assert!(rlcr["causingCallsUnavailable"].is_null(), "no peakStartMs/workspaces ⇒ not even attempted");
+    assert_eq!(inv["verdict"].as_str().unwrap(), verdict_before, "no calls resolved ⇒ verdict unchanged");
 }

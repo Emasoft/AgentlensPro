@@ -1,0 +1,1 @@
+{"body":{"model":"claude-sonnet-5","usage":{"cache_creation_input_tokens":1000,"cache_read_input_tokens":500000,"output_tokens":30,"input_tokens":4}}}

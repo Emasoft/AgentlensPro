@@ -1,6 +1,7 @@
 {
   "untilMs": 1787227200000,
   "hookStopFailureMs": 1787214300000,
+  "hookStopFailureMs2": 1787215800000,
   "mtimes": {
     "burnscan-bodies/r1.response.json": 1787214600000,
     "burnscan-bodies/r2.response.json": 1787214900000,
@@ -119,7 +120,100 @@
     "burnscan-cap/c097.request.json": 1787216400000,
     "burnscan-cap/c098.request.json": 1787216400000,
     "burnscan-cap/c099.request.json": 1787216400000,
-    "burnscan-cap/c100.request.json": 1787216400000
+    "burnscan-cap/c100.request.json": 1787216400000,
+    "burnscan-storm/s1.response.json": 1787216400000,
+    "burnscan-storm/s2.response.json": 1787216520000,
+    "burnscan-storm/s3.response.json": 1787216640000,
+    "burnscan-storm/f1.request.json": 1787216430000,
+    "burnscan-storm/f2.request.json": 1787216490000,
+    "burnscan-storm/f3.request.json": 1787216550000,
+    "burnscan-boot/s1.response.json": 1787216400000,
+    "burnscan-boot/s2.response.json": 1787216520000,
+    "burnscan-boot/s3.response.json": 1787216640000,
+    "burnscan-boot/f0.request.json": 1787216430000,
+    "burnscan-boot/f1.request.json": 1787216490000,
+    "burnscan-boot/f2.request.json": 1787216550000,
+    "burnscan-premium/p00.response.json": 1787216400000,
+    "burnscan-premium/p01.response.json": 1787216460000,
+    "burnscan-premium/p02.response.json": 1787216520000,
+    "burnscan-premium/p03.response.json": 1787216580000,
+    "burnscan-premium/p04.response.json": 1787216640000,
+    "burnscan-premium/p05.response.json": 1787216700000,
+    "burnscan-premium/p06.response.json": 1787216760000,
+    "burnscan-premium/p07.response.json": 1787216820000,
+    "burnscan-premium/p08.response.json": 1787216880000,
+    "burnscan-premium/p09.response.json": 1787216940000,
+    "burnscan-premium/p10.response.json": 1787217000000,
+    "burnscan-premium/p11.response.json": 1787217060000,
+    "burnscan-premium/p12.response.json": 1787217120000,
+    "burnscan-premium/p13.response.json": 1787217180000,
+    "burnscan-premium/p14.response.json": 1787217240000,
+    "burnscan-premium/p15.response.json": 1787217300000,
+    "burnscan-premium/p16.response.json": 1787217360000,
+    "burnscan-premium/p17.response.json": 1787217420000,
+    "burnscan-premium/p18.response.json": 1787217480000,
+    "burnscan-premium/p19.response.json": 1787217540000,
+    "burnscan-premium/p20.response.json": 1787217600000,
+    "burnscan-premium/p21.response.json": 1787217660000,
+    "burnscan-premium/p22.response.json": 1787217720000,
+    "burnscan-premium/p23.response.json": 1787217780000,
+    "burnscan-premium/p24.response.json": 1787217840000,
+    "burnscan-premium/p25.response.json": 1787216400000,
+    "burnscan-premium/p26.response.json": 1787216460000,
+    "burnscan-premium/p27.response.json": 1787216520000,
+    "burnscan-premium/p28.response.json": 1787216580000,
+    "burnscan-premium/p29.response.json": 1787216640000,
+    "burnscan-premium/p30.response.json": 1787216700000,
+    "burnscan-premium/p31.response.json": 1787216760000,
+    "burnscan-premium/p32.response.json": 1787216820000,
+    "burnscan-premium/p33.response.json": 1787216880000,
+    "burnscan-premium/p34.response.json": 1787216940000,
+    "burnscan-premium/p35.response.json": 1787217000000,
+    "burnscan-premium/p36.response.json": 1787217060000,
+    "burnscan-premium/p37.response.json": 1787217120000,
+    "burnscan-premium/p38.response.json": 1787217180000,
+    "burnscan-premium/p39.response.json": 1787217240000,
+    "burnscan-premium/p40.response.json": 1787217300000,
+    "burnscan-premium/p41.response.json": 1787217360000,
+    "burnscan-premium/p42.response.json": 1787217420000,
+    "burnscan-premium/p43.response.json": 1787217480000,
+    "burnscan-premium/p44.response.json": 1787217540000,
+    "burnscan-premium/p45.response.json": 1787217600000,
+    "burnscan-premium/p46.response.json": 1787217660000,
+    "burnscan-premium/p47.response.json": 1787217720000,
+    "burnscan-premium/p48.response.json": 1787217780000,
+    "burnscan-premium/p49.response.json": 1787217840000,
+    "burnscan-premium/p50.response.json": 1787216400000,
+    "burnscan-premium/p51.response.json": 1787216460000,
+    "burnscan-premium/p52.response.json": 1787216520000,
+    "burnscan-premium/p53.response.json": 1787216580000,
+    "burnscan-premium/p54.response.json": 1787216640000,
+    "burnscan-premium/a1.request.json": 1787216700000,
+    "burnscan-premium/a2.request.json": 1787217000000,
+    "burnscan-idle/k00.request.json": 1787216400000,
+    "burnscan-idle/k01.request.json": 1787217100000,
+    "burnscan-idle/k02.request.json": 1787220100000,
+    "burnscan-idle/k03.request.json": 1787220200000,
+    "burnscan-idle/k04.request.json": 1787221080000,
+    "burnscan-idle/k05.request.json": 1787221150000,
+    "burnscan-idle/k06.request.json": 1787221810000,
+    "burnscan-idle/k07.request.json": 1787222010000,
+    "burnscan-idle/k08.request.json": 1787222860000,
+    "burnscan-idle/k09.request.json": 1787222980000,
+    "burnscan-idle/k10.request.json": 1787223780000,
+    "burnscan-idle/k11.request.json": 1787224080000,
+    "burnscan-idle/kr0.response.json": 1787218200000,
+    "burnscan-idle/kr1.response.json": 1787221800000,
+    "burnscan-idle/kr2.response.json": 1787225400000,
+    "burnscan-image/i0.request.json": 1787216400000,
+    "burnscan-image/i1.request.json": 1787216460000,
+    "burnscan-image/i2.request.json": 1787216520000,
+    "burnscan-image/ir.response.json": 1787216700000,
+    "burnscan-partial/p1.response.json": 1787216400000,
+    "burnscan-partial/p2.response.json": 1787217120000,
+    "burnscan-partial/p3.response.json": 1787217180000,
+    "burnscan-partial/p4.response.json": 1787217240000,
+    "burnscan-partial/p5.response.json": 1787217300000
   },
   "cases": {
     "main": {
@@ -558,6 +652,492 @@
       ],
       "findings": [],
       "verdict": "Scanned 100 request bodies in ~/burnscan-cap but no RESPONSE bodies — usage cannot be measured for this window (responses carry the billed numbers). Traffic existed; the totals below are not a burn measurement."
+    },
+    "storm": {
+      "window": {
+        "fromIso": "2026-08-20T07:00:00.000Z",
+        "untilIso": "2026-08-20T12:00:00.000Z",
+        "hours": 5
+      },
+      "coverage": {
+        "requestFilesScanned": 3,
+        "responseFilesScanned": 3,
+        "bytesOnDisk": 600513,
+        "complete": true,
+        "note": "full coverage of the window (scanned ~/burnscan-storm)",
+        "dirsScanned": [
+          "<STORM>"
+        ],
+        "dirsMissing": []
+      },
+      "totals": {
+        "calls": 3,
+        "cacheCreationTokens": 930000,
+        "cacheReadTokens": 0,
+        "outputTokens": 300,
+        "inputEquivTokens": 1162500,
+        "estCostUsd": 5.82,
+        "byHour": [
+          {
+            "hour": "2026-08-20T09",
+            "calls": 3,
+            "cacheCreation": 930000,
+            "cacheRead": 0,
+            "equiv": 1162500
+          }
+        ],
+        "byModel": [
+          {
+            "model": "claude-opus-5",
+            "calls": 3,
+            "cacheCreation": 930000,
+            "cacheRead": 0,
+            "outputTokens": 300,
+            "equiv": 1162500,
+            "estCostUsd": 5.82
+          }
+        ]
+      },
+      "attribution": [
+        {
+          "workspace": "/w/storm",
+          "model": "claude-opus-5",
+          "kind": "interactive",
+          "requests": 3,
+          "bytesSent": 600513,
+          "firstIso": "2026-08-20T09:00:30.000Z",
+          "lastIso": "2026-08-20T09:02:30.000Z"
+        }
+      ],
+      "findings": [
+        {
+          "equivTokens": 1162500,
+          "shareOfWindow": 1,
+          "evidence": {
+            "window": "2026-08-20T09:00:00.000Z → 2026-08-20T09:04:00.000Z",
+            "peakStartMs": 1787216400000,
+            "peakEndMs": 1787216640000,
+            "fullPrefixWrites": 3,
+            "coldWrites": 3,
+            "cacheCreationTokens": 930000,
+            "largestWriteTokens": 320000,
+            "sharedTranscriptRequests": 3,
+            "distinctFingerprints": 1,
+            "workspaces": [
+              "/w/storm"
+            ],
+            "postRateLimitStall": true
+          },
+          "cause": "FORK_STORM",
+          "confidence": "high",
+          "verdict": "3 full-prefix cache writes (3 fully cold, largest 320k) in 4min — 3 requests share ONE inherited transcript: a fan-out forked a fat parent into a cold cache, right after a rate-limit stall (TTL-expired cache)."
+        },
+        {
+          "cause": "RATE_LIMIT_COLD_RESUME",
+          "equivTokens": 1162500,
+          "shareOfWindow": 1,
+          "confidence": "high",
+          "verdict": "The fork storm at 2026-08-20T09:00:00.000Z began ≤15min after a StopFailure (rate-limit turn death): the stall outlived the 5-min cache TTL, so every fork rebuilt the parent prefix from scratch. Do not resume fan-outs into a cold window.",
+          "evidence": {
+            "clusterStart": "2026-08-20T09:00:00.000Z",
+            "stopFailures": [
+              "2026-08-20T08:50:00.000Z",
+              "2026-08-20T08:25:00.000Z"
+            ]
+          }
+        }
+      ],
+      "verdict": "Top culprits: 1. FORK_STORM (1.2M equiv, 100%) — 3 full-prefix cache writes (3 fully cold, largest 320k) in 4min — 3 requests share ONE inherited transcript: a fan-out forked a fat parent into a cold cache, right after a rate-limit stall (TTL-expired cache). 2. RATE_LIMIT_COLD_RESUME (1.2M equiv, 100%) — The fork storm at 2026-08-20T09:00:00.000Z began ≤15min after a StopFailure (rate-limit turn death): the stall outlived the 5-min cache TTL, so every fork rebuilt the parent prefix from scratch. Do not resume fan-outs into a cold window. Window total: 1.2M input-equivalents (930k cache-write + 0k cache-read), est $5.82."
+    },
+    "boot": {
+      "window": {
+        "fromIso": "2026-08-20T07:00:00.000Z",
+        "untilIso": "2026-08-20T12:00:00.000Z",
+        "hours": 5
+      },
+      "coverage": {
+        "requestFilesScanned": 3,
+        "responseFilesScanned": 3,
+        "bytesOnDisk": 600276,
+        "complete": true,
+        "note": "full coverage of the window (scanned ~/burnscan-boot)",
+        "dirsScanned": [
+          "<BOOT>"
+        ],
+        "dirsMissing": []
+      },
+      "totals": {
+        "calls": 3,
+        "cacheCreationTokens": 900000,
+        "cacheReadTokens": 0,
+        "outputTokens": 300,
+        "inputEquivTokens": 1125000,
+        "estCostUsd": 5.63,
+        "byHour": [
+          {
+            "hour": "2026-08-20T09",
+            "calls": 3,
+            "cacheCreation": 900000,
+            "cacheRead": 0,
+            "equiv": 1125000
+          }
+        ],
+        "byModel": [
+          {
+            "model": "claude-opus-5",
+            "calls": 3,
+            "cacheCreation": 900000,
+            "cacheRead": 0,
+            "outputTokens": 300,
+            "equiv": 1125000,
+            "estCostUsd": 5.63
+          }
+        ]
+      },
+      "attribution": [
+        {
+          "workspace": "(subagent/no-env-block)",
+          "model": "claude-opus-5",
+          "kind": "subagent",
+          "requests": 3,
+          "bytesSent": 600276,
+          "firstIso": "2026-08-20T09:00:30.000Z",
+          "lastIso": "2026-08-20T09:02:30.000Z"
+        }
+      ],
+      "findings": [
+        {
+          "equivTokens": 1125000,
+          "shareOfWindow": 1,
+          "evidence": {
+            "window": "2026-08-20T09:00:00.000Z → 2026-08-20T09:04:00.000Z",
+            "peakStartMs": 1787216400000,
+            "peakEndMs": 1787216640000,
+            "fullPrefixWrites": 3,
+            "coldWrites": 3,
+            "cacheCreationTokens": 900000,
+            "largestWriteTokens": 300000,
+            "sharedTranscriptRequests": 1,
+            "distinctFingerprints": 3,
+            "workspaces": [],
+            "postRateLimitStall": true
+          },
+          "cause": "SUBAGENT_BOOT_TAX",
+          "confidence": "medium",
+          "verdict": "3 distinct agents each paid a 300k boot write in 4min (3 distinct transcripts) — a fresh-agent fan-out; every agent re-pays the CLAUDE.md/rules + tool-schema base."
+        }
+      ],
+      "verdict": "Top culprit: 1. SUBAGENT_BOOT_TAX (1.1M equiv, 100%) — 3 distinct agents each paid a 300k boot write in 4min (3 distinct transcripts) — a fresh-agent fan-out; every agent re-pays the CLAUDE.md/rules + tool-schema base. Window total: 1.1M input-equivalents (900k cache-write + 0k cache-read), est $5.63."
+    },
+    "premium": {
+      "window": {
+        "fromIso": "2026-08-20T07:00:00.000Z",
+        "untilIso": "2026-08-20T12:00:00.000Z",
+        "hours": 5
+      },
+      "coverage": {
+        "requestFilesScanned": 2,
+        "responseFilesScanned": 55,
+        "bytesOnDisk": 11374,
+        "complete": true,
+        "note": "full coverage of the window (scanned ~/burnscan-premium)",
+        "dirsScanned": [
+          "<PREMIUM>"
+        ],
+        "dirsMissing": []
+      },
+      "totals": {
+        "calls": 55,
+        "cacheCreationTokens": 110000,
+        "cacheReadTokens": 55000,
+        "outputTokens": 2200,
+        "inputEquivTokens": 143000,
+        "estCostUsd": 0.77,
+        "byHour": [
+          {
+            "hour": "2026-08-20T09",
+            "calls": 55,
+            "cacheCreation": 110000,
+            "cacheRead": 55000,
+            "equiv": 143000
+          }
+        ],
+        "byModel": [
+          {
+            "model": "claude-opus-5",
+            "calls": 55,
+            "cacheCreation": 110000,
+            "cacheRead": 55000,
+            "outputTokens": 2200,
+            "equiv": 143000,
+            "estCostUsd": 0.77
+          }
+        ]
+      },
+      "attribution": [
+        {
+          "workspace": "(subagent/no-env-block)",
+          "model": "claude-opus-5",
+          "kind": "subagent",
+          "requests": 2,
+          "bytesSent": 11374,
+          "firstIso": "2026-08-20T09:05:00.000Z",
+          "lastIso": "2026-08-20T09:10:00.000Z"
+        }
+      ],
+      "findings": [
+        {
+          "cause": "PREMIUM_MODEL_FANOUT",
+          "equivTokens": 143000,
+          "shareOfWindow": 1,
+          "confidence": "high",
+          "verdict": "55 calls on claude-opus-5 (peak 55 in 30min), 100% subagent-shaped — a fan-out ran on this model (est $0.77). If claude-opus-5 became the DEFAULT recently, fresh fan-out agents inherited it; pin cheaper models for fan-out work.",
+          "evidence": {
+            "model": "claude-opus-5",
+            "calls": 55,
+            "peak30min": 55,
+            "cacheCreationTokens": 110000,
+            "cacheReadTokens": 55000,
+            "outputTokens": 2200,
+            "estCostUsd": 0.77
+          }
+        }
+      ],
+      "verdict": "Top culprit: 1. PREMIUM_MODEL_FANOUT (143k equiv, 100%) — 55 calls on claude-opus-5 (peak 55 in 30min), 100% subagent-shaped — a fan-out ran on this model (est $0.77). If claude-opus-5 became the DEFAULT recently, fresh fan-out agents inherited it; pin cheaper models for fan-out work. Window total: 143k input-equivalents (110k cache-write + 55k cache-read), est $0.77."
+    },
+    "idle": {
+      "window": {
+        "fromIso": "2026-08-20T07:00:00.000Z",
+        "untilIso": "2026-08-20T12:00:00.000Z",
+        "hours": 5
+      },
+      "coverage": {
+        "requestFilesScanned": 12,
+        "responseFilesScanned": 3,
+        "bytesOnDisk": 69192,
+        "complete": true,
+        "note": "full coverage of the window (scanned ~/burnscan-idle)",
+        "dirsScanned": [
+          "<IDLE>"
+        ],
+        "dirsMissing": []
+      },
+      "totals": {
+        "calls": 3,
+        "cacheCreationTokens": 3000,
+        "cacheReadTokens": 1500000,
+        "outputTokens": 90,
+        "inputEquivTokens": 153750,
+        "estCostUsd": 0.31,
+        "byHour": [
+          {
+            "hour": "2026-08-20T09",
+            "calls": 1,
+            "cacheCreation": 1000,
+            "cacheRead": 500000,
+            "equiv": 51250
+          },
+          {
+            "hour": "2026-08-20T10",
+            "calls": 1,
+            "cacheCreation": 1000,
+            "cacheRead": 500000,
+            "equiv": 51250
+          },
+          {
+            "hour": "2026-08-20T11",
+            "calls": 1,
+            "cacheCreation": 1000,
+            "cacheRead": 500000,
+            "equiv": 51250
+          }
+        ],
+        "byModel": [
+          {
+            "model": "claude-sonnet-5",
+            "calls": 3,
+            "cacheCreation": 3000,
+            "cacheRead": 1500000,
+            "outputTokens": 90,
+            "equiv": 153750,
+            "estCostUsd": 0.31
+          }
+        ]
+      },
+      "attribution": [
+        {
+          "workspace": "/w/idle",
+          "model": "claude-sonnet-5",
+          "kind": "interactive",
+          "requests": 12,
+          "bytesSent": 69192,
+          "firstIso": "2026-08-20T09:00:00.000Z",
+          "lastIso": "2026-08-20T11:08:00.000Z"
+        }
+      ],
+      "findings": [
+        {
+          "cause": "IDLE_FLEET_KEEPWARM",
+          "equivTokens": 150000,
+          "shareOfWindow": 0.975609756097561,
+          "confidence": "medium",
+          "verdict": "1 background session(s) show periodic keep-warm traffic over 2h+ (median gap 660s): /w/idle. Each fire re-reads that session's full prefix. Disarm/close sessions you are not using.",
+          "evidence": {
+            "workspaces": [
+              {
+                "workspace": "/w/idle",
+                "requests": 12,
+                "spanHours": 2.1,
+                "medianGapS": 660
+              }
+            ],
+            "lowWriteCacheReadTokens": 1500000
+          }
+        }
+      ],
+      "verdict": "Top culprit: 1. IDLE_FLEET_KEEPWARM (150k equiv, 98%) — 1 background session(s) show periodic keep-warm traffic over 2h+ (median gap 660s): /w/idle. Each fire re-reads that session's full prefix. Disarm/close sessions you are not using. Window total: 154k input-equivalents (3k cache-write + 1.5M cache-read), est $0.31."
+    },
+    "image": {
+      "window": {
+        "fromIso": "2026-08-20T07:00:00.000Z",
+        "untilIso": "2026-08-20T12:00:00.000Z",
+        "hours": 5
+      },
+      "coverage": {
+        "requestFilesScanned": 3,
+        "responseFilesScanned": 1,
+        "bytesOnDisk": 600378,
+        "complete": true,
+        "note": "full coverage of the window (scanned ~/burnscan-image)",
+        "dirsScanned": [
+          "<IMAGE>"
+        ],
+        "dirsMissing": []
+      },
+      "totals": {
+        "calls": 1,
+        "cacheCreationTokens": 1000,
+        "cacheReadTokens": 2000,
+        "outputTokens": 10,
+        "inputEquivTokens": 1450,
+        "estCostUsd": 0.01,
+        "byHour": [
+          {
+            "hour": "2026-08-20T09",
+            "calls": 1,
+            "cacheCreation": 1000,
+            "cacheRead": 2000,
+            "equiv": 1450
+          }
+        ],
+        "byModel": [
+          {
+            "model": "claude-opus-5",
+            "calls": 1,
+            "cacheCreation": 1000,
+            "cacheRead": 2000,
+            "outputTokens": 10,
+            "equiv": 1450,
+            "estCostUsd": 0.01
+          }
+        ]
+      },
+      "attribution": [
+        {
+          "workspace": "(subagent/no-env-block)",
+          "model": "claude-opus-5",
+          "kind": "subagent",
+          "requests": 3,
+          "bytesSent": 600378,
+          "firstIso": "2026-08-20T09:00:00.000Z",
+          "lastIso": "2026-08-20T09:02:00.000Z"
+        }
+      ],
+      "findings": [
+        {
+          "cause": "IMAGE_BLOB_RESIDENT",
+          "equivTokens": 15001,
+          "shareOfWindow": 10.345379310344828,
+          "confidence": "medium",
+          "verdict": "3 requests of one conversation carry ~50k tokens of base64 image data EACH (150k cumulative) — images pasted once ride forward every turn. Analyze images in a subagent or compact them away.",
+          "evidence": {
+            "requests": 3,
+            "perRequestImageBytes": 200010,
+            "cumulativeImageTokens": 150008
+          }
+        }
+      ],
+      "verdict": "Top culprit: 1. IMAGE_BLOB_RESIDENT (15k equiv, 1035%) — 3 requests of one conversation carry ~50k tokens of base64 image data EACH (150k cumulative) — images pasted once ride forward every turn. Analyze images in a subagent or compact them away. Window total: 1k input-equivalents (1k cache-write + 2k cache-read), est $0.01."
+    },
+    "partial": {
+      "window": {
+        "fromIso": "2026-08-20T07:00:00.000Z",
+        "untilIso": "2026-08-20T12:00:00.000Z",
+        "hours": 5
+      },
+      "coverage": {
+        "requestFilesScanned": 0,
+        "responseFilesScanned": 5,
+        "bytesOnDisk": 0,
+        "complete": true,
+        "note": "full coverage of the window (scanned ~/burnscan-partial)",
+        "dirsScanned": [
+          "<PARTIAL>"
+        ],
+        "dirsMissing": []
+      },
+      "totals": {
+        "calls": 5,
+        "cacheCreationTokens": 200000,
+        "cacheReadTokens": 17500000,
+        "outputTokens": 90,
+        "inputEquivTokens": 2000000,
+        "estCostUsd": 10,
+        "byHour": [
+          {
+            "hour": "2026-08-20T09",
+            "calls": 5,
+            "cacheCreation": 200000,
+            "cacheRead": 17500000,
+            "equiv": 2000000
+          }
+        ],
+        "byModel": [
+          {
+            "model": "claude-opus-5",
+            "calls": 5,
+            "cacheCreation": 200000,
+            "cacheRead": 17500000,
+            "outputTokens": 90,
+            "equiv": 2000000,
+            "estCostUsd": 10
+          }
+        ]
+      },
+      "attribution": [],
+      "findings": [
+        {
+          "equivTokens": 250000,
+          "shareOfWindow": 0.125,
+          "evidence": {
+            "window": "2026-08-20T09:00:00.000Z → 2026-08-20T09:00:00.000Z",
+            "peakStartMs": 1787216400000,
+            "peakEndMs": 1787216400000,
+            "fullPrefixWrites": 1,
+            "coldWrites": 1,
+            "cacheCreationTokens": 200000,
+            "largestWriteTokens": 200000,
+            "sharedTranscriptRequests": 0,
+            "distinctFingerprints": 0,
+            "workspaces": [],
+            "postRateLimitStall": true
+          },
+          "cause": "FAT_SESSION_REWRITES",
+          "confidence": "low",
+          "verdict": "1 full-prefix rewrite(s) totalling 200k cache-write tokens around 2026-08-20T09:00:00.000Z — a large session re-writing its whole prefix (compaction, model switch, or a >5-min idle gap)."
+        }
+      ],
+      "verdict": "Top culprit: 1. FAT_SESSION_REWRITES (250k equiv, 13%) — 1 full-prefix rewrite(s) totalling 200k cache-write tokens around 2026-08-20T09:00:00.000Z — a large session re-writing its whole prefix (compaction, model switch, or a >5-min idle gap). Window total: 2.0M input-equivalents (200k cache-write + 17.5M cache-read), est $10.00. NOTE: detectors attribute only 13% of the window — the remainder is unclassified ordinary traffic; drill with the other tools/SQL."
     }
   }
 }

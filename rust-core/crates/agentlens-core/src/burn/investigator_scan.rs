@@ -610,7 +610,9 @@ mod tests {
 
     #[test]
     fn short_ws_replaces_only_the_first_home_occurrence() {
-        // JS String.replace with a string pattern is FIRST-ONLY; str::replace would give "~/~".
-        assert_eq!(short_ws("/home/u/x/home/u", "/home/u"), "~/x/home/u");
+        // JS String.replace with a string pattern is FIRST-ONLY; str::replace would collapse BOTH
+        // occurrences to "~/x/~". The home string is the sanctioned placeholder shape on purpose —
+        // check-no-identities is shape-based and rejects a concrete-looking home path even in a test.
+        assert_eq!(short_ws("/Users/<name>/x/Users/<name>", "/Users/<name>"), "~/x/Users/<name>");
     }
 }

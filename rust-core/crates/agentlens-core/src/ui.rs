@@ -1843,6 +1843,65 @@ async fn handle(
                         .map_err(|e| format!("heartbeat cost join failed: {e}"))?;
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
+                    "investigate_burn" => {
+                        // Scans every request AND response body in the window (a chunked read per
+                        // request, up to 6MB each), then reads transcripts for whatever the
+                        // detectors found — squarely spawn_blocking work, lock released first.
+                        let now = crate::now_ms() as f64;
+                        let until_iso = args.get("untilIso").and_then(Value::as_str).map(str::to_owned);
+                        let until_ms = match &until_iso {
+                            Some(s) => crate::summarize::helpers::parse_iso_ms(s),
+                            None => None,
+                        };
+                        // An unparseable untilIso is an EXPLICIT error payload, never a silent
+                        // fallback to "now" — a window the caller did not ask for would be
+                        // answered with confident numbers about the wrong hours.
+                        let bad_iso = until_iso.as_ref().filter(|_| until_ms.is_none()).cloned();
+                        let (dir, hook_dir, home, projects_dirs) = {
+                            let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                            (
+                                crate::burn::guard::default_bodies_dir(&st.data_dir),
+                                st.data_dir.join("hook-events"),
+                                st.log_env.home.to_string_lossy().into_owned(),
+                                agentlens_logscan::discovery::claude_projects_dirs(&st.log_env),
+                            )
+                        };
+                        // KNOWN DIVERGENCE, deliberate: the TS resolves a possibly-MULTI-dir scope
+                        // via captureConfig.resolveBodiesReadScope (live spool + legacy dir during a
+                        // drain). That resolver is not ported yet, so this arm passes the single
+                        // default dir. `coverage.dirsScanned` reports exactly what was read, so the
+                        // report stays honest about it rather than implying wider coverage.
+                        let exists = dir.is_dir();
+                        let d = dir.to_string_lossy().into_owned();
+                        let opts = crate::burn::investigator_scan::InvestigateOptions {
+                            scope: crate::burn::investigator_scan::BodiesScope {
+                                dirs: if exists { vec![d.clone()] } else { vec![] },
+                                missing: if exists { vec![] } else { vec![d] },
+                                capture_on: true,
+                            },
+                            hook_events_dir: hook_dir,
+                            home: home.clone(),
+                            window_hours: args.get("windowHours").and_then(Value::as_f64),
+                            until_ms,
+                            max_files: args.get("maxFiles").and_then(Value::as_f64),
+                        };
+                        let payload = match bad_iso {
+                            Some(s) => crate::mcp_tools::error_payload(&format!(
+                                "untilIso \"{s}\" is not a parseable ISO datetime"
+                            )),
+                            None => tokio::task::spawn_blocking(move || {
+                                let mut inv = crate::burn::investigator::investigate_burn(&opts, now);
+                                // Name the VERBATIM tool-call behind each fan-out finding. Reads
+                                // the JSONL only for real findings, so a blind/empty scan pays
+                                // nothing.
+                                crate::burn::investigator::attach_causing_calls(&mut inv, &home, &projects_dirs);
+                                inv
+                            })
+                            .await
+                            .map_err(|e| format!("investigate burn join failed: {e}"))?,
+                        };
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
+                    }
                     "get_session_burn_profile" => {
                         // Reads every body file in the window (regex over raw text, one full parse
                         // for the newest), so it goes on spawn_blocking with the lock released.

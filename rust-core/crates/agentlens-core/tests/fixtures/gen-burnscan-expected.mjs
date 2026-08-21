@@ -49,6 +49,12 @@ const NORESP = path.join(HERE, 'burnscan-noresp')
 const CAP = path.join(HERE, 'burnscan-cap')
 const HOOKS = path.join(HERE, 'burnscan-hooks')
 const MISSING = path.join(HERE, 'no-such-burnscan-dir')
+const STORM = path.join(HERE, 'burnscan-storm')
+const BOOT = path.join(HERE, 'burnscan-boot')
+const PREMIUM = path.join(HERE, 'burnscan-premium')
+const IDLE = path.join(HERE, 'burnscan-idle')
+const IMAGE = path.join(HERE, 'burnscan-image')
+const PARTIAL = path.join(HERE, 'burnscan-partial')
 
 const T = (iso) => Date.parse(iso)
 const UNTIL = T('2026-08-20T12:00:00.000Z')
@@ -122,9 +128,100 @@ for (let i = 0; i < 101; i++) {
   write(CAP, `c${String(i).padStart(3, '0')}.request.json`, `{"model":"m","pad":"${'x'.repeat(i)}"}`, '2026-08-20T09:00:00Z')
 }
 
+// ── SLICE 2: one corpus per detector ─────────────────────────────────────────
+// Each detector gets its OWN dir. Adding these files to burnscan-bodies/ would shift every count
+// the slice-1 oracle already pins against it — and the thresholds (50 calls, 12 requests, 200KB
+// blobs) are far enough apart that one corpus cannot satisfy them without triggering the others.
+// The 200KB files are runs of a single character, so git's zlib packs each to a few hundred bytes.
+
+const spike = (model, cc, cr, out) => resp(model, cc, cr, out, 4)
+// >200_000 bytes (the `nearby` filter is SPIKE_CC*2) with a shared 2600-unit head, so `lead`
+// alone decides whether two requests hash into the same transcript family.
+const bigReq = (model, ws, lead, tail) =>
+  `{"model":"${model}","messages":[{"role":"user","content":"${lead}${'Z'.repeat(200000)}"}],"env":"${ws ? ENV(ws) : ''}","tail":"${tail}"}`
+
+// FORK_STORM (+ RATE_LIMIT_COLD_RESUME): ≥3 spikes in one 10-min cluster, ≥2 fully cold, and ≥3
+// nearby fat requests sharing ONE inherited transcript — plus a StopFailure ≤15min before it.
+fs.rmSync(STORM, { recursive: true, force: true }); fs.mkdirSync(STORM, { recursive: true })
+write(STORM, 's1.response.json', spike('claude-opus-5', 300000, 0, 100), '2026-08-20T09:00:00Z')
+write(STORM, 's2.response.json', spike('claude-opus-5', 320000, 0, 100), '2026-08-20T09:02:00Z')
+write(STORM, 's3.response.json', spike('claude-opus-5', 310000, 0, 100), '2026-08-20T09:04:00Z')
+for (let i = 1; i <= 3; i++) {
+  write(STORM, `f${i}.request.json`, bigReq('claude-opus-5', '/w/storm', 'SAME', `t${i}`), `2026-08-20T09:0${i - 1}:30Z`)
+}
+
+// SUBAGENT_BOOT_TAX: the same spike shape, but ≥3 DISTINCT fingerprints and none shared >2 — the
+// `lead` differs per file, which is the only thing separating this from a fork storm.
+fs.rmSync(BOOT, { recursive: true, force: true }); fs.mkdirSync(BOOT, { recursive: true })
+write(BOOT, 's1.response.json', spike('claude-opus-5', 300000, 0, 100), '2026-08-20T09:00:00Z')
+write(BOOT, 's2.response.json', spike('claude-opus-5', 300000, 0, 100), '2026-08-20T09:02:00Z')
+write(BOOT, 's3.response.json', spike('claude-opus-5', 300000, 0, 100), '2026-08-20T09:04:00Z')
+for (const [i, lead] of ['AAAA', 'BBBB', 'CCCC'].entries()) {
+  write(BOOT, `f${i}.request.json`, bigReq('claude-opus-5', '', lead, `t${i}`), `2026-08-20T09:0${i}:30Z`)
+}
+
+// PREMIUM_MODEL_FANOUT: ≥50 calls on ONE model inside 30min, ≥15% of the window, ≥50% of the
+// matching requests subagent-shaped. cc stays under SPIKE_CC so no cluster forms and this
+// detector is measured in isolation.
+fs.rmSync(PREMIUM, { recursive: true, force: true }); fs.mkdirSync(PREMIUM, { recursive: true })
+for (let i = 0; i < 55; i++) {
+  const m = String(i % 25).padStart(2, '0')
+  write(PREMIUM, `p${String(i).padStart(2, '0')}.response.json`, spike('claude-opus-5', 2000, 1000, 40), `2026-08-20T09:${m}:00Z`)
+}
+write(PREMIUM, 'a1.request.json', req('claude-opus-5', '', 'A'.repeat(20)), '2026-08-20T09:05:00Z')
+write(PREMIUM, 'a2.request.json', req('claude-opus-5', '', 'B'.repeat(20)), '2026-08-20T09:10:00Z')
+
+// IDLE_FLEET_KEEPWARM: 12 requests in ONE workspace, span ≥2h, median gap in [60s, 900s].
+// The gaps are DELIBERATELY NON-UNIFORM. Evenly-spaced fires would make gaps[len/2] equal to the
+// min, the max and the mean at once, so every wrong way to pick a median would still pass. Sorted
+// they are [70,100,120,200,300,660,700,800,850,880,3000]: median 660 (in range), min 70 (below the
+// 60s floor's neighbourhood), max 3000 (above the 900s ceiling — a mean of 698 would also pass, so
+// only the true median distinguishes). Sum 7680s = 2.13h, clearing the 2h floor.
+const IDLE_GAPS = [700, 3000, 100, 880, 70, 660, 200, 850, 120, 800, 300]
+fs.rmSync(IDLE, { recursive: true, force: true }); fs.mkdirSync(IDLE, { recursive: true })
+let idleMs = T('2026-08-20T09:00:00Z')
+for (let i = 0; i < 12; i++) {
+  const ms = idleMs
+  if (i < IDLE_GAPS.length) idleMs += IDLE_GAPS[i] * 1000
+  const name = `k${String(i).padStart(2, '0')}.request.json`
+  fs.writeFileSync(path.join(IDLE, name), req('claude-sonnet-5', `,"env":"${ENV('/w/idle')}"`, 'K'.repeat(10)))
+  mtimes[`burnscan-idle/${name}`] = ms
+}
+for (let i = 0; i < 3; i++) {
+  write(IDLE, `kr${i}.response.json`, spike('claude-sonnet-5', 1000, 500000, 30), `2026-08-20T${String(9 + i).padStart(2, '0')}:30:00Z`)
+}
+
+// IMAGE_BLOB_RESIDENT: ≥3 requests carrying >200_000 bytes of base64, all one transcript.
+fs.rmSync(IMAGE, { recursive: true, force: true }); fs.mkdirSync(IMAGE, { recursive: true })
+for (let i = 0; i < 3; i++) {
+  write(IMAGE, `i${i}.request.json`,
+    `{"model":"claude-opus-5","messages":[{"role":"user","content":[{"type":"image","source":{"data":"${'A'.repeat(200010)}"}}]}],"tail":"t${i}"}`,
+    `2026-08-20T09:0${i}:00Z`)
+}
+write(IMAGE, 'ir.response.json', spike('claude-opus-5', 1000, 2000, 10), '2026-08-20T09:05:00Z')
+
+// The verdict's HONESTY clause: `attributedShare < 0.5` appends a NOTE naming the unattributed
+// remainder. No other corpus reaches it — main attributes 74% and image 1035% — so a fixture is
+// built to sit deliberately between the 2% reporting floor and the 50% honesty threshold: ONE
+// modest cold spike (250k equiv) inside a window dominated by cache READS (2.0M equiv) = 12.5%.
+// It is also the only corpus with a single-spike cluster, so it covers confidence:'low' too.
+fs.rmSync(PARTIAL, { recursive: true, force: true }); fs.mkdirSync(PARTIAL, { recursive: true })
+write(PARTIAL, 'p1.response.json', spike('claude-opus-5', 200000, 0, 50), '2026-08-20T09:00:00Z')
+for (let i = 2; i <= 5; i++) {
+  write(PARTIAL, `p${i}.response.json`, spike('claude-opus-5', 0, 4375000, 10), `2026-08-20T09:1${i}:00Z`)
+}
+
 // ── hook events (StopFailure correlation, consumed by slice 2) ────────────────
+// Two StopFailures on purpose: 08:25 lands ≤15min before the `main` cluster (so its
+// evidence.postRateLimitStall is true without a fork storm to escalate), and 08:50 lands ≤15min
+// before the `storm` cluster at 09:00, which is what turns FORK_STORM into a RATE_LIMIT_COLD_RESUME
+// pair. readHookEvents returns NEWEST-FIRST, so evidence.stopFailures `.slice(-5)` is the OLDEST
+// five in that order — a port that sorted ascending would print them the other way round.
 const hookTs = T('2026-08-20T08:25:00Z')
-fs.writeFileSync(path.join(HOOKS, '2026-08-20.ndjsonl'), JSON.stringify({ ts: hookTs, ev: 'StopFailure', session: 's1' }) + '\n')
+const hookTs2 = T('2026-08-20T08:50:00Z')
+fs.writeFileSync(path.join(HOOKS, '2026-08-20.ndjsonl'),
+  [{ ts: hookTs, ev: 'StopFailure', session: 's1' }, { ts: hookTs2, ev: 'StopFailure', session: 's2' }]
+    .map((e) => JSON.stringify(e)).join('\n') + '\n')
 
 // ── stamp, then run the oracle ───────────────────────────────────────────────
 for (const [rel, ms] of Object.entries(mtimes)) {
@@ -141,18 +238,24 @@ const cases = {
   noResponses: run({ bodiesDir: NORESP }),
   missingDir: run({ bodiesDir: MISSING }),
   capHit: run({ bodiesDir: CAP, maxFiles: 1 }),
+  storm: run({ bodiesDir: STORM }),
+  boot: run({ bodiesDir: BOOT }),
+  premium: run({ bodiesDir: PREMIUM }),
+  idle: run({ bodiesDir: IDLE }),
+  image: run({ bodiesDir: IMAGE }),
+  partial: run({ bodiesDir: PARTIAL }),
 }
 
+// EVERY fixture dir must be listed: coverage.dirsScanned carries the ABSOLUTE path, so a dir
+// missing from this table leaks a home path into a committed fixture (check-identities catches it,
+// but only after the parity test has already failed on the un-redacted string).
+const DIRS = [[BODIES, '<BODIES>'], [NORESP, '<NORESP>'], [CAP, '<CAP>'], [MISSING, '<MISSING>'],
+  [STORM, '<STORM>'], [BOOT, '<BOOT>'], [PREMIUM, '<PREMIUM>'], [IDLE, '<IDLE>'], [IMAGE, '<IMAGE>'],
+  [PARTIAL, '<PARTIAL>']]
 const redact = (v) =>
-  JSON.parse(
-    JSON.stringify(v)
-      .split(JSON.stringify(BODIES).slice(1, -1)).join('<BODIES>')
-      .split(JSON.stringify(NORESP).slice(1, -1)).join('<NORESP>')
-      .split(JSON.stringify(CAP).slice(1, -1)).join('<CAP>')
-      .split(JSON.stringify(MISSING).slice(1, -1)).join('<MISSING>')
-  )
+  JSON.parse(DIRS.reduce((s, [dir, tag]) => s.split(JSON.stringify(dir).slice(1, -1)).join(tag), JSON.stringify(v)))
 
-const out = { untilMs: UNTIL, hookStopFailureMs: hookTs, mtimes, cases: redact(cases) }
+const out = { untilMs: UNTIL, hookStopFailureMs: hookTs, hookStopFailureMs2: hookTs2, mtimes, cases: redact(cases) }
 fs.writeFileSync(path.join(HERE, 'burnscan-expected.json'), JSON.stringify(out, null, 2) + '\n')
 console.log('wrote burnscan-expected.json —', Object.keys(cases).length, 'cases')
 for (const [k, v] of Object.entries(cases)) {
