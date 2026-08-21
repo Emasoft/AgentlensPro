@@ -1,6 +1,7 @@
-//! Port of `src/burnSeismic.ts` SLICE A of 3 (TRDD-DMWOBWFH P4x.2q) — the arithmetic helpers and
-//! the report RENDERER. SLICE B is `resolveSeismicFiles` + the DuckDB query, SLICE C the statistics
-//! (CFAR / FDR / PELT).
+//! Port of `src/burnSeismic.ts`, in slices (TRDD-DMWOBWFH P4x.2q / .2s). Landed here: the
+//! arithmetic helpers and the report RENDERER (slice A), then transcript FILE SELECTION and the SQL
+//! text (slice C). The statistical primitives live in `crate::seismic_stats`; the analysis itself
+//! (TS 573-922) is the remaining slice.
 //!
 //! The renderer takes the result as a `Value` rather than a struct, deliberately: the analysis half
 //! is not ported yet, so a struct here would be a second definition of a shape that does not exist
@@ -341,4 +342,163 @@ pub fn render_burn_seismic(r: &Value) -> String {
         }
     }
     l.join("\n")
+}
+
+// ── SLICE C: transcript file selection (TS 77-138) ───────────────────────────────
+use std::path::{Path, PathBuf};
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SeismicScope {
+    Fleet,
+    Workspace,
+    Session,
+}
+
+pub struct ResolveSeismicOptions<'a> {
+    pub scope: SeismicScope,
+    /// For `Workspace`: the workspace path (its slug dir is scanned).
+    pub workspace: Option<&'a str>,
+    /// For `Session`: the session id, or a unique PREFIX of one.
+    pub session_id: Option<&'a str>,
+    /// Lower time bound (ms) — only transcripts touched at/after this (minus slack) are considered.
+    pub since_ms: f64,
+    /// `Fleet`: include subagent transcripts (`…/subagents/*.jsonl`). Default false (the spawners).
+    pub include_subagents: bool,
+    /// Cap the file set (most-recently-modified first). Default 300.
+    pub max_files: Option<f64>,
+    pub projects_dirs: Vec<PathBuf>,
+}
+
+/// A session file active in the window has mtime ≥ its last activity ≥ sinceMs; widen by an hour so
+/// a session that went idle just after the window opens is not missed (the SQL re-filters by ts).
+const MTIME_SLACK_MS: f64 = 3_600_000.0;
+
+/// `/^[0-9a-f-]{36}\.jsonl$/i` — a main-session transcript is named for its uuid. Subagent files
+/// (`agent-*.jsonl`) are NOT, which is exactly how the fleet scope excludes them by default.
+fn is_uuid_jsonl(name: &str) -> bool {
+    let Some(stem) = name.strip_suffix(".jsonl") else { return false };
+    stem.len() == 36 && stem.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+}
+
+/// Resolve the transcript file set for a seismic analysis by scope. Never fails; returns empty.
+pub fn resolve_seismic_files(o: &ResolveSeismicOptions<'_>) -> Vec<PathBuf> {
+    let floor = o.since_ms - MTIME_SLACK_MS;
+    let cap = o.max_files.unwrap_or(300.0).max(0.0) as usize;
+
+    if o.scope == SeismicScope::Session {
+        let Some(sid) = o.session_id.filter(|s| !s.is_empty()) else { return Vec::new() };
+        let exact = format!("{sid}.jsonl");
+        let mut out = Vec::new();
+        for base in &o.projects_dirs {
+            let Ok(subs) = std::fs::read_dir(base) else { continue };
+            for sub in subs.flatten() {
+                let dir = sub.path();
+                let Ok(names) = std::fs::read_dir(&dir) else { continue };
+                for e in names.flatten() {
+                    let n = e.file_name().to_string_lossy().into_owned();
+                    // A PREFIX match, not just the exact name: the caller may pass the first 8 chars
+                    // of a session id, which is how every other surface here refers to one. No mtime
+                    // filter — an explicitly named session is wanted however old it is.
+                    if n.ends_with(".jsonl") && (n == exact || n.starts_with(sid)) {
+                        out.push(dir.join(n));
+                    }
+                }
+            }
+        }
+        return out;
+    }
+
+    let mut cand: Vec<(PathBuf, f64)> = Vec::new();
+    let mut want_dirs: Vec<PathBuf> = Vec::new();
+    if o.scope == SeismicScope::Workspace {
+        let Some(ws) = o.workspace.filter(|s| !s.is_empty()) else { return Vec::new() };
+        // Resolved against DISK, not derived: a workspace path long enough for Claude Code to
+        // truncate and hash its slug yields a directory name no derivation can predict, and the
+        // naive one matches nothing — so this scanned zero transcripts and reported no seismic
+        // activity at all.
+        for slug in crate::burn::causing_tool_call::resolve_project_slugs(ws, &o.projects_dirs) {
+            for base in &o.projects_dirs {
+                want_dirs.push(base.join(&slug));
+            }
+        }
+    }
+
+    let walk = |dir: &Path, allow_sub: bool, cand: &mut Vec<(PathBuf, f64)>| {
+        fn go(dir: &Path, allow_sub: bool, o: &ResolveSeismicOptions<'_>, floor: f64, cand: &mut Vec<(PathBuf, f64)>) {
+            let Ok(entries) = std::fs::read_dir(dir) else { return };
+            for e in entries.flatten() {
+                let full = e.path();
+                let name = e.file_name().to_string_lossy().into_owned();
+                if e.file_type().is_ok_and(|t| t.is_dir()) {
+                    if allow_sub && name == "subagents" {
+                        go(&full, true, o, floor, cand);
+                    }
+                    continue;
+                }
+                if !name.ends_with(".jsonl") {
+                    continue;
+                }
+                if o.scope == SeismicScope::Fleet && !o.include_subagents && !is_uuid_jsonl(&name) {
+                    continue;
+                }
+                let Some(m) = mtime_ms(&full) else { continue };
+                if m < floor {
+                    continue;
+                }
+                cand.push((full, m));
+            }
+        }
+        go(dir, allow_sub, o, floor, cand);
+    };
+
+    if o.scope == SeismicScope::Workspace {
+        for d in &want_dirs {
+            walk(d, o.include_subagents, &mut cand);
+        }
+    } else {
+        // fleet: every slug dir under every base.
+        for base in &o.projects_dirs {
+            let Ok(subs) = std::fs::read_dir(base) else { continue };
+            for sub in subs.flatten() {
+                walk(&sub.path(), o.include_subagents, &mut cand);
+            }
+        }
+    }
+    // Most recent first, then capped: a truncated set must keep the LIVE sessions, not an arbitrary
+    // directory-order slice of them.
+    cand.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    cand.into_iter().take(cap).map(|c| c.0).collect()
+}
+
+fn mtime_ms(p: &Path) -> Option<f64> {
+    let t = std::fs::metadata(p).ok()?.modified().ok()?;
+    Some(t.duration_since(std::time::UNIX_EPOCH).ok()?.as_millis() as f64)
+}
+
+/// Single-quote a SQL literal (`sqlStr`). Every value reaching here is interpolated into DuckDB SQL.
+fn sq(v: &str) -> String {
+    format!("'{}'", v.replace('\'', "''"))
+}
+
+/// `transcriptReadSpec` (src/ndjsonDuck.ts) — the `read_json(...)` table-function text with the
+/// shared column projection and `filename=true` so a multi-file scan can attribute each row back to
+/// its source session.
+pub fn transcript_read_spec(paths: &[PathBuf]) -> String {
+    let list = paths.iter().map(|p| sq(&p.to_string_lossy())).collect::<Vec<_>>().join(", ");
+    format!(
+        "read_json([{list}], format='newline_delimited',\n      columns={{timestamp:'VARCHAR', type:'VARCHAR', message:'JSON'}},\n      maximum_object_size={}, ignore_errors=true, filename=true)",
+        agentlens_store::transcript_sql::MAX_OBJECT_SIZE
+    )
+}
+
+/// `ignore_errors=true` does NOT drop an unparseable NDJSON line — it lands as an ALL-NULL row, so
+/// `count(*)` alone still passes while the data is silently degraded.
+///
+/// The compared column is `type`, NOT `timestamp`, and that is measured rather than chosen: over
+/// 482,993 real transcript records `type` is missing from 0 and `timestamp` from 81,814 (16.9%,
+/// because `attachment`, `queue-operation` and `last-prompt` records legitimately carry none). This
+/// probe reads the UNFILTERED scan, so keying on `timestamp` would report roughly a sixth of a
+/// healthy machine's records as "unparseable and excluded" — a disclosure that lies.
+pub fn torn_line_sql(table: &str, required_col: &str) -> String {
+    format!("SELECT count(*) AS total, count({required_col}) AS withCol FROM {table}")
 }

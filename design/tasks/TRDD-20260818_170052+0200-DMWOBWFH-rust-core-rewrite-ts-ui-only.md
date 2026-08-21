@@ -1696,16 +1696,22 @@ release-via: publish
   `resolve_project_slugs`) and takes a query closure, with the DuckDB implementation exported from
   `agentlens-store`; (2) burnSeismic calls `getRowObjects()`, NOT `getRowObjectsJson()`, so the
   BIGINT-as-string mapping that governs `transcript_sql` does NOT apply — do not carry it over.
-  **The other two are BLOCKED ON ONE DECISION, and it is open:** `forensicsIndex` SLICE B writes
-  fact tables (`api_calls`, `injections`, `content`) that both then query — today via **sql.js
-  SQLite** (`src/forensicsDb.ts`), where `defaultMainDb()` is `<dataDir>/agentlens.db`, the
-  product's MAIN sessions DB, whose `sessions` table `loadSpawnMap` reads. The Rust workspace has
-  **DuckDB and no SQLite crate**. Options: (A) DuckDB — zero new deps, different dialect for the
-  RAW caller SQL `run_diagnostics_sql` accepts; (B) add rusqlite — same file, same dialect;
-  (C) something else. **The deciding question is whether the main-DB `sessions` read forces a SQLite
-  reader into the Rust binary REGARDLESS — if it does, (B)'s marginal cost is zero and that settles
-  it.** A fable-advisor consult was dispatched on exactly this; decide when it returns, and record
-  the answer here before writing SLICE B. (historical: 1,927 → 2 tools:
+  **The fact-store engine question is DECIDED — keep SQLite, via `rusqlite`.** `forensicsIndex`
+  SLICE B writes fact tables (`api_calls`, `injections`, `content`) that both tools then query, today
+  through **sql.js SQLite** (`src/forensicsDb.ts`), where `defaultMainDb()` is
+  `<dataDir>/agentlens.db` — the product's MAIN sessions DB, whose `sessions` table `loadSpawnMap`
+  reads. The open question was whether to move the facts to DuckDB (already bundled) or add a SQLite
+  crate.
+  **THE ONE FACT THAT DECIDES IT, verified first-hand rather than assumed:
+  `rusqlite = { version = "0.40.2", features = ["bundled"] }` is ALREADY a dependency** —
+  `agentlens-logscan` uses it to read OpenCode's live database (`opencode.rs`), and `agentlens-core`
+  depends on that crate. SQLite is therefore already linked into the binary, so option B's marginal
+  cost is **zero**: no new crate, no second native build. Against that, DuckDB would change the SQL
+  DIALECT under `run_diagnostics_sql`, which accepts RAW caller queries against documented tables —
+  a real cost paid for no benefit. **Keep the same file and the same dialect.**
+  *(A fable-advisor consult was dispatched on exactly this question and never returned — the second
+  advisor call this session to hang. The decision rests on the verified dependency above, not on an
+  unavailable verdict; recorded here so a later reader knows which it was.)* (historical: 1,927 → 2 tools:
   `get_cache_break_timeline` + `get_cache_break_causes`, and it also unblocks the `groupBy='cause'`
   branch above). **SLICE IT IN FOUR — 1,927 lines will not fit one context alongside an oracle and
   a parity test.** The seams are already clean in the TS, by line:

@@ -1,0 +1,194 @@
+{
+  "now": 1787307547237,
+  "offsets": {
+    "base1/-w-one/aaaaaaaa-1111-2222-3333-444444444444.jsonl": 1,
+    "base1/-w-one/bbbbbbbb-1111-2222-3333-444444444444.jsonl": 3,
+    "base1/-w-one/notauuid.jsonl": 2,
+    "base1/-w-one/subagents/agent-cccccccc.jsonl": 4,
+    "base1/-w-two/dddddddd-1111-2222-3333-444444444444.jsonl": 5,
+    "base2/-w-one/eeeeeeee-1111-2222-3333-444444444444.jsonl": 6,
+    "base2/-w-one/ffffffff-1111-2222-3333-444444444444.jsonl": 400,
+    "base1/-w-one/notes.txt": 1
+  },
+  "cases": {
+    "fleet_default": {
+      "opts": {
+        "scope": "fleet",
+        "sinceMs": 1787221147237
+      },
+      "out": [
+        "<FIXTURES>/base1/-w-one/aaaaaaaa-1111-2222-3333-444444444444.jsonl",
+        "<FIXTURES>/base1/-w-one/bbbbbbbb-1111-2222-3333-444444444444.jsonl",
+        "<FIXTURES>/base1/-w-two/dddddddd-1111-2222-3333-444444444444.jsonl",
+        "<FIXTURES>/base2/-w-one/eeeeeeee-1111-2222-3333-444444444444.jsonl"
+      ]
+    },
+    "fleet_with_subagents": {
+      "opts": {
+        "scope": "fleet",
+        "sinceMs": 1787221147237,
+        "includeSubagents": true
+      },
+      "out": [
+        "<FIXTURES>/base1/-w-one/aaaaaaaa-1111-2222-3333-444444444444.jsonl",
+        "<FIXTURES>/base1/-w-one/notauuid.jsonl",
+        "<FIXTURES>/base1/-w-one/bbbbbbbb-1111-2222-3333-444444444444.jsonl",
+        "<FIXTURES>/base1/-w-one/subagents/agent-cccccccc.jsonl",
+        "<FIXTURES>/base1/-w-two/dddddddd-1111-2222-3333-444444444444.jsonl",
+        "<FIXTURES>/base2/-w-one/eeeeeeee-1111-2222-3333-444444444444.jsonl"
+      ]
+    },
+    "fleet_capped": {
+      "opts": {
+        "scope": "fleet",
+        "sinceMs": 1787221147237,
+        "maxFiles": 2
+      },
+      "out": [
+        "<FIXTURES>/base1/-w-one/aaaaaaaa-1111-2222-3333-444444444444.jsonl",
+        "<FIXTURES>/base1/-w-one/bbbbbbbb-1111-2222-3333-444444444444.jsonl"
+      ]
+    },
+    "fleet_cap_zero": {
+      "opts": {
+        "scope": "fleet",
+        "sinceMs": 1787221147237,
+        "maxFiles": 0
+      },
+      "out": []
+    },
+    "fleet_narrow_window": {
+      "opts": {
+        "scope": "fleet",
+        "sinceMs": 1787307547237
+      },
+      "out": [
+        "<FIXTURES>/base1/-w-one/aaaaaaaa-1111-2222-3333-444444444444.jsonl"
+      ]
+    },
+    "fleet_wide_window": {
+      "opts": {
+        "scope": "fleet",
+        "sinceMs": 1785507547237
+      },
+      "out": [
+        "<FIXTURES>/base1/-w-one/aaaaaaaa-1111-2222-3333-444444444444.jsonl",
+        "<FIXTURES>/base1/-w-one/bbbbbbbb-1111-2222-3333-444444444444.jsonl",
+        "<FIXTURES>/base1/-w-two/dddddddd-1111-2222-3333-444444444444.jsonl",
+        "<FIXTURES>/base2/-w-one/eeeeeeee-1111-2222-3333-444444444444.jsonl",
+        "<FIXTURES>/base2/-w-one/ffffffff-1111-2222-3333-444444444444.jsonl"
+      ]
+    },
+    "workspace_one": {
+      "opts": {
+        "scope": "workspace",
+        "workspace": "/w/one",
+        "sinceMs": 1787221147237
+      },
+      "out": [
+        "<FIXTURES>/base1/-w-one/aaaaaaaa-1111-2222-3333-444444444444.jsonl",
+        "<FIXTURES>/base1/-w-one/notauuid.jsonl",
+        "<FIXTURES>/base1/-w-one/bbbbbbbb-1111-2222-3333-444444444444.jsonl",
+        "<FIXTURES>/base2/-w-one/eeeeeeee-1111-2222-3333-444444444444.jsonl"
+      ]
+    },
+    "workspace_one_subagents": {
+      "opts": {
+        "scope": "workspace",
+        "workspace": "/w/one",
+        "sinceMs": 1787221147237,
+        "includeSubagents": true
+      },
+      "out": [
+        "<FIXTURES>/base1/-w-one/aaaaaaaa-1111-2222-3333-444444444444.jsonl",
+        "<FIXTURES>/base1/-w-one/notauuid.jsonl",
+        "<FIXTURES>/base1/-w-one/bbbbbbbb-1111-2222-3333-444444444444.jsonl",
+        "<FIXTURES>/base1/-w-one/subagents/agent-cccccccc.jsonl",
+        "<FIXTURES>/base2/-w-one/eeeeeeee-1111-2222-3333-444444444444.jsonl"
+      ]
+    },
+    "workspace_two": {
+      "opts": {
+        "scope": "workspace",
+        "workspace": "/w/two",
+        "sinceMs": 1787221147237
+      },
+      "out": [
+        "<FIXTURES>/base1/-w-two/dddddddd-1111-2222-3333-444444444444.jsonl"
+      ]
+    },
+    "workspace_unknown": {
+      "opts": {
+        "scope": "workspace",
+        "workspace": "/w/nope",
+        "sinceMs": 1787221147237
+      },
+      "out": []
+    },
+    "workspace_missing_arg": {
+      "opts": {
+        "scope": "workspace",
+        "sinceMs": 1787221147237
+      },
+      "out": []
+    },
+    "workspace_as_slug": {
+      "opts": {
+        "scope": "workspace",
+        "workspace": "-w-one",
+        "sinceMs": 1787221147237
+      },
+      "out": [
+        "<FIXTURES>/base1/-w-one/aaaaaaaa-1111-2222-3333-444444444444.jsonl",
+        "<FIXTURES>/base1/-w-one/notauuid.jsonl",
+        "<FIXTURES>/base1/-w-one/bbbbbbbb-1111-2222-3333-444444444444.jsonl",
+        "<FIXTURES>/base2/-w-one/eeeeeeee-1111-2222-3333-444444444444.jsonl"
+      ]
+    },
+    "session_exact": {
+      "opts": {
+        "scope": "session",
+        "sessionId": "aaaaaaaa-1111-2222-3333-444444444444",
+        "sinceMs": 1787221147237
+      },
+      "out": [
+        "<FIXTURES>/base1/-w-one/aaaaaaaa-1111-2222-3333-444444444444.jsonl"
+      ]
+    },
+    "session_prefix": {
+      "opts": {
+        "scope": "session",
+        "sessionId": "aaaaaaaa",
+        "sinceMs": 1787221147237
+      },
+      "out": [
+        "<FIXTURES>/base1/-w-one/aaaaaaaa-1111-2222-3333-444444444444.jsonl"
+      ]
+    },
+    "session_old_file": {
+      "opts": {
+        "scope": "session",
+        "sessionId": "ffffffff",
+        "sinceMs": 1787307547237
+      },
+      "out": [
+        "<FIXTURES>/base2/-w-one/ffffffff-1111-2222-3333-444444444444.jsonl"
+      ]
+    },
+    "session_missing_arg": {
+      "opts": {
+        "scope": "session",
+        "sinceMs": 1787221147237
+      },
+      "out": []
+    },
+    "session_unknown": {
+      "opts": {
+        "scope": "session",
+        "sessionId": "zzzzzzzz",
+        "sinceMs": 1787221147237
+      },
+      "out": []
+    }
+  }
+}
