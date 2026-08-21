@@ -61,6 +61,7 @@ pub mod log_reader;
 pub mod mcp;
 pub mod mcp_tools;
 pub mod pricing;
+pub mod rate_limit_report;
 pub mod raw_body_context;
 pub mod request_log;
 pub mod resident_cost;

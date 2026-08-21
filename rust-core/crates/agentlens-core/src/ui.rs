@@ -1843,6 +1843,54 @@ async fn handle(
                         .map_err(|e| format!("heartbeat cost join failed: {e}"))?;
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
+                    "get_rate_limit_report" => {
+                        // Reads the hook-event buckets, then deep-attributes the newest episode via
+                        // a bounded body scan — spawn_blocking, lock released first.
+                        let now = crate::now_ms() as f64;
+                        let (bodies_dir, hook_dir, home, projects_dirs) = {
+                            let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                            (
+                                crate::burn::guard::default_bodies_dir(&st.data_dir),
+                                st.data_dir.join("hook-events"),
+                                st.log_env.home.to_string_lossy().into_owned(),
+                                agentlens_logscan::discovery::claude_projects_dirs(&st.log_env),
+                            )
+                        };
+                        let opts = crate::rate_limit_report::RateLimitReportOptions {
+                            window_hours: args.get("windowHours").and_then(Value::as_f64),
+                            max_episodes: args.get("maxEpisodes").and_then(Value::as_f64),
+                            max_files: args.get("maxFiles").and_then(Value::as_f64),
+                        };
+                        let payload = tokio::task::spawn_blocking(move || {
+                            // The TS passes the real investigateBurn here; the Result seam exists
+                            // for the oracle's stub, so the production closure is always Ok.
+                            let investigate = |hours: f64, until: f64, max_files: f64| {
+                                let scope_dir = bodies_dir.to_string_lossy().into_owned();
+                                let exists = bodies_dir.is_dir();
+                                let io = crate::burn::investigator_scan::InvestigateOptions {
+                                    scope: crate::burn::investigator_scan::BodiesScope {
+                                        dirs: if exists { vec![scope_dir.clone()] } else { vec![] },
+                                        missing: if exists { vec![] } else { vec![scope_dir] },
+                                        capture_on: true,
+                                    },
+                                    hook_events_dir: hook_dir.clone(),
+                                    home: home.clone(),
+                                    window_hours: Some(hours),
+                                    until_ms: Some(until),
+                                    max_files: Some(max_files),
+                                };
+                                let mut inv = crate::burn::investigator::investigate_burn(&io, now);
+                                crate::burn::investigator::attach_causing_calls(&mut inv, &home, &projects_dirs);
+                                Ok(inv)
+                            };
+                            crate::rate_limit_report::build_rate_limit_report(
+                                &hook_dir, &opts, now, &investigate,
+                            )
+                        })
+                        .await
+                        .map_err(|e| format!("rate limit report join failed: {e}"))?;
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
+                    }
                     "investigate_burn" => {
                         // Scans every request AND response body in the window (a chunked read per
                         // request, up to 6MB each), then reads transcripts for whatever the

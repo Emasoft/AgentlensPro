@@ -1,0 +1,433 @@
+{
+  "nowMs": 1787248800000,
+  "investigation": {
+    "totals": {
+      "calls": 12,
+      "estCostUsd": 4.56
+    },
+    "verdict": "Top culprit: 1. FORK_STORM (1.2M equiv, 100%) — a fan-out forked a fat parent.",
+    "findings": [
+      {
+        "code": "C1",
+        "summary": "a summary wins"
+      },
+      {
+        "code": "C2",
+        "summary": null,
+        "detail": "detail is used when summary is nullish"
+      },
+      {
+        "cause": "FORK_STORM",
+        "equivTokens": 1162500,
+        "confidence": "high",
+        "verdict": "x → y ≤ z",
+        "evidence": {
+          "a": 1,
+          "b": 2,
+          "c": 3,
+          "d": 4,
+          "e": 5,
+          "f": 6,
+          "g": 7
+        }
+      },
+      {
+        "code": "C4",
+        "summary": 42,
+        "detail": "suppressed by a non-null non-string summary"
+      },
+      {
+        "code": "C5",
+        "summary": "a fifth finding that must be dropped by take(4)"
+      }
+    ]
+  },
+  "investigateCalls": [
+    {
+      "windowHours": 5,
+      "untilMs": 1787234400000,
+      "maxFiles": 400
+    },
+    {
+      "windowHours": 5,
+      "untilMs": 1787234400000,
+      "maxFiles": 400
+    },
+    {
+      "windowHours": 5,
+      "untilMs": 1787234400000,
+      "maxFiles": 400
+    }
+  ],
+  "cases": {
+    "main": {
+      "window": {
+        "sinceIso": "2026-08-19T18:00:00.000Z",
+        "untilIso": "2026-08-20T18:00:00.000Z",
+        "hours": 24
+      },
+      "stallEvents": 5,
+      "episodesTotal": 3,
+      "episodes": [
+        {
+          "startIso": "2026-08-20T14:00:00.000Z",
+          "endIso": "2026-08-20T14:00:00.000Z",
+          "events": 1,
+          "sessions": [
+            {
+              "session": null,
+              "cwd": "/w/gamma",
+              "error": "no session id at all"
+            }
+          ]
+        },
+        {
+          "startIso": "2026-08-20T10:25:01.000Z",
+          "endIso": "2026-08-20T10:25:01.000Z",
+          "events": 1,
+          "sessions": [
+            {
+              "session": "s3",
+              "cwd": null,
+              "error": null
+            }
+          ]
+        },
+        {
+          "startIso": "2026-08-20T10:00:00.000Z",
+          "endIso": "2026-08-20T10:15:00.000Z",
+          "events": 3,
+          "sessions": [
+            {
+              "session": "s1",
+              "cwd": "/w/alpha",
+              "error": "rate limit reached, retry after 300s"
+            },
+            {
+              "session": "s2",
+              "cwd": "/w/beta",
+              "error": "🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥"
+            }
+          ]
+        }
+      ],
+      "attributed": {
+        "episodeStartIso": "2026-08-20T14:00:00.000Z",
+        "meaning": "the 5h rate-limit window ENDING at this stall — exact billed usage (from response bodies) that filled the window, attributed by workspace/model, with ranked culprit findings and a verdict.",
+        "verdict": "Top culprit: 1. FORK_STORM (1.2M equiv, 100%) — a fan-out forked a fat parent.",
+        "windowEstCostUsd": 4.56,
+        "topFindings": [
+          "C1: a summary wins",
+          "C2: detail is used when summary is nullish",
+          "{\"cause\":\"FORK_STORM\",\"equivTokens\":1162500,\"confidence\":\"high\",\"verdict\":\"x → y ≤ z\",\"evidence\":{\"a\":1,\"b\":2,\"c\":3,\"d\":4,\"e\":5,\"f\":6,\"g\":7}}",
+          "C4"
+        ],
+        "investigation": {
+          "totals": {
+            "calls": 12,
+            "estCostUsd": 4.56
+          },
+          "verdict": "Top culprit: 1. FORK_STORM (1.2M equiv, 100%) — a fan-out forked a fat parent.",
+          "findings": [
+            {
+              "code": "C1",
+              "summary": "a summary wins"
+            },
+            {
+              "code": "C2",
+              "summary": null,
+              "detail": "detail is used when summary is nullish"
+            },
+            {
+              "cause": "FORK_STORM",
+              "equivTokens": 1162500,
+              "confidence": "high",
+              "verdict": "x → y ≤ z",
+              "evidence": {
+                "a": 1,
+                "b": 2,
+                "c": 3,
+                "d": 4,
+                "e": 5,
+                "f": 6,
+                "g": 7
+              }
+            },
+            {
+              "code": "C4",
+              "summary": 42,
+              "detail": "suppressed by a non-null non-string summary"
+            },
+            {
+              "code": "C5",
+              "summary": "a fifth finding that must be dropped by take(4)"
+            }
+          ]
+        }
+      },
+      "note": "episodes = StopFailure events grouped by ≤10min gaps (one incident kills many turns as sessions retry into the wall). Only the newest episode is deep-attributed (bounded body scan); for an older one run investigate_burn with untilIso set to that episode's startIso."
+    },
+    "maxEpisodes1": {
+      "window": {
+        "sinceIso": "2026-08-19T18:00:00.000Z",
+        "untilIso": "2026-08-20T18:00:00.000Z",
+        "hours": 24
+      },
+      "stallEvents": 5,
+      "episodesTotal": 3,
+      "episodes": [
+        {
+          "startIso": "2026-08-20T14:00:00.000Z",
+          "endIso": "2026-08-20T14:00:00.000Z",
+          "events": 1,
+          "sessions": [
+            {
+              "session": null,
+              "cwd": "/w/gamma",
+              "error": "no session id at all"
+            }
+          ]
+        }
+      ],
+      "attributed": {
+        "episodeStartIso": "2026-08-20T14:00:00.000Z",
+        "meaning": "the 5h rate-limit window ENDING at this stall — exact billed usage (from response bodies) that filled the window, attributed by workspace/model, with ranked culprit findings and a verdict.",
+        "verdict": "Top culprit: 1. FORK_STORM (1.2M equiv, 100%) — a fan-out forked a fat parent.",
+        "windowEstCostUsd": 4.56,
+        "topFindings": [
+          "C1: a summary wins",
+          "C2: detail is used when summary is nullish",
+          "{\"cause\":\"FORK_STORM\",\"equivTokens\":1162500,\"confidence\":\"high\",\"verdict\":\"x → y ≤ z\",\"evidence\":{\"a\":1,\"b\":2,\"c\":3,\"d\":4,\"e\":5,\"f\":6,\"g\":7}}",
+          "C4"
+        ],
+        "investigation": {
+          "totals": {
+            "calls": 12,
+            "estCostUsd": 4.56
+          },
+          "verdict": "Top culprit: 1. FORK_STORM (1.2M equiv, 100%) — a fan-out forked a fat parent.",
+          "findings": [
+            {
+              "code": "C1",
+              "summary": "a summary wins"
+            },
+            {
+              "code": "C2",
+              "summary": null,
+              "detail": "detail is used when summary is nullish"
+            },
+            {
+              "cause": "FORK_STORM",
+              "equivTokens": 1162500,
+              "confidence": "high",
+              "verdict": "x → y ≤ z",
+              "evidence": {
+                "a": 1,
+                "b": 2,
+                "c": 3,
+                "d": 4,
+                "e": 5,
+                "f": 6,
+                "g": 7
+              }
+            },
+            {
+              "code": "C4",
+              "summary": 42,
+              "detail": "suppressed by a non-null non-string summary"
+            },
+            {
+              "code": "C5",
+              "summary": "a fifth finding that must be dropped by take(4)"
+            }
+          ]
+        }
+      },
+      "note": "episodes = StopFailure events grouped by ≤10min gaps (one incident kills many turns as sessions retry into the wall). Only the newest episode is deep-attributed (bounded body scan); for an older one run investigate_burn with untilIso set to that episode's startIso."
+    },
+    "clamped": {
+      "window": {
+        "sinceIso": "2026-08-06T18:00:00.000Z",
+        "untilIso": "2026-08-20T18:00:00.000Z",
+        "hours": 336
+      },
+      "stallEvents": 5,
+      "episodesTotal": 3,
+      "episodes": [
+        {
+          "startIso": "2026-08-20T14:00:00.000Z",
+          "endIso": "2026-08-20T14:00:00.000Z",
+          "events": 1,
+          "sessions": [
+            {
+              "session": null,
+              "cwd": "/w/gamma",
+              "error": "no session id at all"
+            }
+          ]
+        },
+        {
+          "startIso": "2026-08-20T10:25:01.000Z",
+          "endIso": "2026-08-20T10:25:01.000Z",
+          "events": 1,
+          "sessions": [
+            {
+              "session": "s3",
+              "cwd": null,
+              "error": null
+            }
+          ]
+        },
+        {
+          "startIso": "2026-08-20T10:00:00.000Z",
+          "endIso": "2026-08-20T10:15:00.000Z",
+          "events": 3,
+          "sessions": [
+            {
+              "session": "s1",
+              "cwd": "/w/alpha",
+              "error": "rate limit reached, retry after 300s"
+            },
+            {
+              "session": "s2",
+              "cwd": "/w/beta",
+              "error": "🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥"
+            }
+          ]
+        }
+      ],
+      "attributed": {
+        "episodeStartIso": "2026-08-20T14:00:00.000Z",
+        "meaning": "the 5h rate-limit window ENDING at this stall — exact billed usage (from response bodies) that filled the window, attributed by workspace/model, with ranked culprit findings and a verdict.",
+        "verdict": "Top culprit: 1. FORK_STORM (1.2M equiv, 100%) — a fan-out forked a fat parent.",
+        "windowEstCostUsd": 4.56,
+        "topFindings": [
+          "C1: a summary wins",
+          "C2: detail is used when summary is nullish",
+          "{\"cause\":\"FORK_STORM\",\"equivTokens\":1162500,\"confidence\":\"high\",\"verdict\":\"x → y ≤ z\",\"evidence\":{\"a\":1,\"b\":2,\"c\":3,\"d\":4,\"e\":5,\"f\":6,\"g\":7}}",
+          "C4"
+        ],
+        "investigation": {
+          "totals": {
+            "calls": 12,
+            "estCostUsd": 4.56
+          },
+          "verdict": "Top culprit: 1. FORK_STORM (1.2M equiv, 100%) — a fan-out forked a fat parent.",
+          "findings": [
+            {
+              "code": "C1",
+              "summary": "a summary wins"
+            },
+            {
+              "code": "C2",
+              "summary": null,
+              "detail": "detail is used when summary is nullish"
+            },
+            {
+              "cause": "FORK_STORM",
+              "equivTokens": 1162500,
+              "confidence": "high",
+              "verdict": "x → y ≤ z",
+              "evidence": {
+                "a": 1,
+                "b": 2,
+                "c": 3,
+                "d": 4,
+                "e": 5,
+                "f": 6,
+                "g": 7
+              }
+            },
+            {
+              "code": "C4",
+              "summary": 42,
+              "detail": "suppressed by a non-null non-string summary"
+            },
+            {
+              "code": "C5",
+              "summary": "a fifth finding that must be dropped by take(4)"
+            }
+          ]
+        }
+      },
+      "note": "episodes = StopFailure events grouped by ≤10min gaps (one incident kills many turns as sessions retry into the wall). Only the newest episode is deep-attributed (bounded body scan); for an older one run investigate_burn with untilIso set to that episode's startIso."
+    },
+    "narrow": {
+      "window": {
+        "sinceIso": "2026-08-20T16:00:00.000Z",
+        "untilIso": "2026-08-20T18:00:00.000Z",
+        "hours": 2
+      },
+      "stallEvents": 0,
+      "episodes": [],
+      "note": "no StopFailure (rate-limit/API turn-death) hook events in the window — either no stall happened, or lifecycle hook capture is not installed (agentlenspro-cli --install-hooks; needs a session restart)."
+    },
+    "empty": {
+      "window": {
+        "sinceIso": "2026-08-19T18:00:00.000Z",
+        "untilIso": "2026-08-20T18:00:00.000Z",
+        "hours": 24
+      },
+      "stallEvents": 0,
+      "episodes": [],
+      "note": "no StopFailure (rate-limit/API turn-death) hook events in the window — either no stall happened, or lifecycle hook capture is not installed (agentlenspro-cli --install-hooks; needs a session restart)."
+    },
+    "threw": {
+      "window": {
+        "sinceIso": "2026-08-19T18:00:00.000Z",
+        "untilIso": "2026-08-20T18:00:00.000Z",
+        "hours": 24
+      },
+      "stallEvents": 5,
+      "episodesTotal": 3,
+      "episodes": [
+        {
+          "startIso": "2026-08-20T14:00:00.000Z",
+          "endIso": "2026-08-20T14:00:00.000Z",
+          "events": 1,
+          "sessions": [
+            {
+              "session": null,
+              "cwd": "/w/gamma",
+              "error": "no session id at all"
+            }
+          ]
+        },
+        {
+          "startIso": "2026-08-20T10:25:01.000Z",
+          "endIso": "2026-08-20T10:25:01.000Z",
+          "events": 1,
+          "sessions": [
+            {
+              "session": "s3",
+              "cwd": null,
+              "error": null
+            }
+          ]
+        },
+        {
+          "startIso": "2026-08-20T10:00:00.000Z",
+          "endIso": "2026-08-20T10:15:00.000Z",
+          "events": 3,
+          "sessions": [
+            {
+              "session": "s1",
+              "cwd": "/w/alpha",
+              "error": "rate limit reached, retry after 300s"
+            },
+            {
+              "session": "s2",
+              "cwd": "/w/beta",
+              "error": "🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥"
+            }
+          ]
+        }
+      ],
+      "attributed": {
+        "episodeStartIso": "2026-08-20T14:00:00.000Z",
+        "error": "attribution scan failed: duckdb exploded"
+      },
+      "note": "episodes = StopFailure events grouped by ≤10min gaps (one incident kills many turns as sessions retry into the wall). Only the newest episode is deep-attributed (bounded body scan); for an older one run investigate_burn with untilIso set to that episode's startIso."
+    }
+  }
+}

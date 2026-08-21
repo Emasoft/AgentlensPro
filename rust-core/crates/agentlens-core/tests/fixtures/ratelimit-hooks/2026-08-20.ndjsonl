@@ -1,0 +1,6 @@
+{"ts":1787220000000,"ev":"StopFailure","session":"s1","payload":{"cwd":"/w/alpha","error":"rate limit reached, retry after 300s"}}
+{"ts":1787220300000,"ev":"StopFailure","session":"s2","payload":{"cwd":"/w/beta","error":"🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥TAIL-THAT-MUST-NOT-APPEAR"}}
+{"ts":1787220900000,"ev":"StopFailure","session":"s1","payload":{"cwd":"/w/alpha","error":"SECOND death of s1 — must NOT be listed"}}
+{"ts":1787221501000,"ev":"StopFailure","session":"s3","payload":{"cwd":null}}
+{"ts":1787234400000,"ev":"StopFailure","session":null,"payload":{"cwd":"/w/gamma","error":"no session id at all"}}
+{"ts":1787220120000,"ev":"Stop","session":"s9","payload":{}}
