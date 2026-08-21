@@ -1,0 +1,207 @@
+{
+  "t0": 1786582800000,
+  "t1": 1786586400000,
+  "cases": {
+    "all": [
+      {
+        "srcName": "aaa.request.json",
+        "bodyId": "71e038221448c8ee18144f188a3c86f792dbd0f4ea0e4d0303852feba1a632f0",
+        "sessionId": "sess-A",
+        "tsMs": 1786582800000,
+        "rawBytes": 619,
+        "kind": "request",
+        "location": "store"
+      },
+      {
+        "srcName": "bbb.request.json",
+        "bodyId": "29e26c840bb3605898593bc2b36319a60668666b8d4a07bcf57fbeb971eb8c48",
+        "sessionId": "sess-A",
+        "tsMs": 1786586400000,
+        "rawBytes": 619,
+        "kind": "request",
+        "location": "store"
+      },
+      {
+        "srcName": "ccc.response.json",
+        "bodyId": "6fc5503dbfdb64113f78e2d8ab74caab791637f20b2643d667c3ba94a02a4902",
+        "sessionId": "sess-B",
+        "tsMs": 1786590000000,
+        "rawBytes": 719,
+        "kind": "response",
+        "location": "store"
+      },
+      {
+        "srcName": "ddd.request.json",
+        "bodyId": null,
+        "sessionId": null,
+        "tsMs": null,
+        "rawBytes": 669,
+        "kind": "request",
+        "location": "spool"
+      }
+    ],
+    "storeOnly": [
+      {
+        "srcName": "aaa.request.json",
+        "bodyId": "71e038221448c8ee18144f188a3c86f792dbd0f4ea0e4d0303852feba1a632f0",
+        "sessionId": "sess-A",
+        "tsMs": 1786582800000,
+        "rawBytes": 619,
+        "kind": "request",
+        "location": "store"
+      },
+      {
+        "srcName": "bbb.request.json",
+        "bodyId": "29e26c840bb3605898593bc2b36319a60668666b8d4a07bcf57fbeb971eb8c48",
+        "sessionId": "sess-A",
+        "tsMs": 1786586400000,
+        "rawBytes": 619,
+        "kind": "request",
+        "location": "store"
+      },
+      {
+        "srcName": "ccc.response.json",
+        "bodyId": "6fc5503dbfdb64113f78e2d8ab74caab791637f20b2643d667c3ba94a02a4902",
+        "sessionId": "sess-B",
+        "tsMs": 1786590000000,
+        "rawBytes": 719,
+        "kind": "response",
+        "location": "store"
+      }
+    ],
+    "bySessionA": [
+      {
+        "srcName": "aaa.request.json",
+        "bodyId": "71e038221448c8ee18144f188a3c86f792dbd0f4ea0e4d0303852feba1a632f0",
+        "sessionId": "sess-A",
+        "tsMs": 1786582800000,
+        "rawBytes": 619,
+        "kind": "request",
+        "location": "store"
+      },
+      {
+        "srcName": "bbb.request.json",
+        "bodyId": "29e26c840bb3605898593bc2b36319a60668666b8d4a07bcf57fbeb971eb8c48",
+        "sessionId": "sess-A",
+        "tsMs": 1786586400000,
+        "rawBytes": 619,
+        "kind": "request",
+        "location": "store"
+      },
+      {
+        "srcName": "ccc.response.json",
+        "bodyId": null,
+        "sessionId": null,
+        "tsMs": null,
+        "rawBytes": 719,
+        "kind": "response",
+        "location": "spool"
+      },
+      {
+        "srcName": "ddd.request.json",
+        "bodyId": null,
+        "sessionId": null,
+        "tsMs": null,
+        "rawBytes": 669,
+        "kind": "request",
+        "location": "spool"
+      }
+    ],
+    "byKindResponse": [
+      {
+        "srcName": "ccc.response.json",
+        "bodyId": "6fc5503dbfdb64113f78e2d8ab74caab791637f20b2643d667c3ba94a02a4902",
+        "sessionId": "sess-B",
+        "tsMs": 1786590000000,
+        "rawBytes": 719,
+        "kind": "response",
+        "location": "store"
+      }
+    ],
+    "byTsFrom": [
+      {
+        "srcName": "bbb.request.json",
+        "bodyId": "29e26c840bb3605898593bc2b36319a60668666b8d4a07bcf57fbeb971eb8c48",
+        "sessionId": "sess-A",
+        "tsMs": 1786586400000,
+        "rawBytes": 619,
+        "kind": "request",
+        "location": "store"
+      },
+      {
+        "srcName": "ccc.response.json",
+        "bodyId": "6fc5503dbfdb64113f78e2d8ab74caab791637f20b2643d667c3ba94a02a4902",
+        "sessionId": "sess-B",
+        "tsMs": 1786590000000,
+        "rawBytes": 719,
+        "kind": "response",
+        "location": "store"
+      },
+      {
+        "srcName": "ddd.request.json",
+        "bodyId": null,
+        "sessionId": null,
+        "tsMs": null,
+        "rawBytes": 669,
+        "kind": "request",
+        "location": "spool"
+      }
+    ],
+    "byTsRange": [
+      {
+        "srcName": "aaa.request.json",
+        "bodyId": "71e038221448c8ee18144f188a3c86f792dbd0f4ea0e4d0303852feba1a632f0",
+        "sessionId": "sess-A",
+        "tsMs": 1786582800000,
+        "rawBytes": 619,
+        "kind": "request",
+        "location": "store"
+      },
+      {
+        "srcName": "bbb.request.json",
+        "bodyId": "29e26c840bb3605898593bc2b36319a60668666b8d4a07bcf57fbeb971eb8c48",
+        "sessionId": "sess-A",
+        "tsMs": 1786586400000,
+        "rawBytes": 619,
+        "kind": "request",
+        "location": "store"
+      },
+      {
+        "srcName": "ccc.response.json",
+        "bodyId": null,
+        "sessionId": null,
+        "tsMs": null,
+        "rawBytes": 719,
+        "kind": "response",
+        "location": "spool"
+      },
+      {
+        "srcName": "ddd.request.json",
+        "bodyId": null,
+        "sessionId": null,
+        "tsMs": null,
+        "rawBytes": 669,
+        "kind": "request",
+        "location": "spool"
+      }
+    ]
+  },
+  "loaded": {
+    "aaa.request.json": "{\"model\":\"claude-opus-5\",\"metadata\":{\"user_id\":\"{\\\"device_id\\\":\\\"dev-1\\\",\\\"session_id\\\":\\\"sess-A\\\"}\"},\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one \"}]}]}",
+    "bbb.request.json": "{\"model\":\"claude-opus-5\",\"metadata\":{\"user_id\":\"{\\\"device_id\\\":\\\"dev-1\\\",\\\"session_id\\\":\\\"sess-A\\\"}\"},\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two \"}]}]}",
+    "ccc.response.json": "{\"model\":\"claude-opus-5\",\"metadata\":{\"user_id\":\"{\\\"device_id\\\":\\\"dev-1\\\",\\\"session_id\\\":\\\"sess-B\\\"}\"},\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three \"}]}]}",
+    "ddd.request.json": "{\"model\":\"claude-opus-5\",\"metadata\":{\"user_id\":\"{\\\"device_id\\\":\\\"dev-1\\\",\\\"session_id\\\":\\\"sess-C\\\"}\"},\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four \"}]}]}"
+  },
+  "loadedChunk1": {
+    "aaa.request.json": "{\"model\":\"claude-opus-5\",\"metadata\":{\"user_id\":\"{\\\"device_id\\\":\\\"dev-1\\\",\\\"session_id\\\":\\\"sess-A\\\"}\"},\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one \"}]}]}",
+    "bbb.request.json": "{\"model\":\"claude-opus-5\",\"metadata\":{\"user_id\":\"{\\\"device_id\\\":\\\"dev-1\\\",\\\"session_id\\\":\\\"sess-A\\\"}\"},\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two \"}]}]}",
+    "ccc.response.json": "{\"model\":\"claude-opus-5\",\"metadata\":{\"user_id\":\"{\\\"device_id\\\":\\\"dev-1\\\",\\\"session_id\\\":\\\"sess-B\\\"}\"},\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three \"}]}]}",
+    "ddd.request.json": "{\"model\":\"claude-opus-5\",\"metadata\":{\"user_id\":\"{\\\"device_id\\\":\\\"dev-1\\\",\\\"session_id\\\":\\\"sess-C\\\"}\"},\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four \"}]}]}"
+  },
+  "raws": {
+    "aaa.request.json": "{\"model\":\"claude-opus-5\",\"metadata\":{\"user_id\":\"{\\\"device_id\\\":\\\"dev-1\\\",\\\"session_id\\\":\\\"sess-A\\\"}\"},\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one body one \"}]}]}",
+    "bbb.request.json": "{\"model\":\"claude-opus-5\",\"metadata\":{\"user_id\":\"{\\\"device_id\\\":\\\"dev-1\\\",\\\"session_id\\\":\\\"sess-A\\\"}\"},\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two body two \"}]}]}",
+    "ccc.response.json": "{\"model\":\"claude-opus-5\",\"metadata\":{\"user_id\":\"{\\\"device_id\\\":\\\"dev-1\\\",\\\"session_id\\\":\\\"sess-B\\\"}\"},\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three body three \"}]}]}",
+    "ddd.request.json": "{\"model\":\"claude-opus-5\",\"metadata\":{\"user_id\":\"{\\\"device_id\\\":\\\"dev-1\\\",\\\"session_id\\\":\\\"sess-C\\\"}\"},\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four body four \"}]}]}"
+  }
+}

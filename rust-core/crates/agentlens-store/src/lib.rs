@@ -18,6 +18,7 @@
 //!   parts at open).
 
 pub mod pass;
+pub mod bodies_evidence;
 pub mod sections;
 
 use std::collections::HashSet;

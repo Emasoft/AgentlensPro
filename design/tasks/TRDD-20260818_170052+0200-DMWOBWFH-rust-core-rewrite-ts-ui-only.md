@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-21T04:09:24+0200
+updated: 2026-08-21T05:03:22+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -1493,10 +1493,58 @@ release-via: publish
   oracle can stub the scan AND drive the catch branch; production always returns `Ok`.
   **Falsified, 4 rules:** boundary `<=`→`<`; last-record-per-session wins; `topFindings` "improved"
   to use `cause`; byte-indexed error truncation.
-- **NEXT (P4x.2d continued): 7 of 53 remain, and EVERY ONE now needs either a big engine or a SQL
-  binding — the cheap tail is gone.** Immediate: `cacheBreakTimeline` (1,927 → 2 tools:
+- **P4x.2h DONE: `store/bodiesEvidence` (217) → `agentlens-store::bodies_evidence`.** No tool — an
+  NPT. Sizing `cacheBreakTimeline` BY ENGINE found it: `cacheBreakTimeline` imports
+  `store/bodiesEvidence`, which had NO `.rs` counterpart. FIFTH time that check paid.
+  **It is NOT SQL-blocked** the way `compare_configs`/`burn_seismic` are: `agentlens-store` already
+  bundles DuckDB (`open_store`, `parquet_scan`, `sections::{Part, reassemble, sha256_hex}`) and
+  `agentlens-core` already depends on that crate — so this landed in the STORE crate, mirroring the
+  TS `src/store/` layout, and needed no new dependency.
+  **⚠ THIS ORACLE IS DIFFERENT IN KIND from every other one on this card.** The fixture is a REAL
+  Parquet store WRITTEN BY THE TYPESCRIPT store (`tests/fixtures/evidence-store/`, 12K) and the Rust
+  reader reads it. So it checks the ON-DISK COMPATIBILITY BOUNDARY the store's module doc claims,
+  not merely that two implementations agree on logic — a Rust-written store would pass while proving
+  nothing. Regenerating renames the parquet parts (the filename embeds a timestamp + pid), so a
+  regen shows in git as delete+add, never modify.
+  **What the fixture pins** (the measured 2026-08-13 incident): `aaa` is flushed then DRAINED from
+  the spool and must STILL be evidence and still reconstruct — the vanished-turn regression, where a
+  break classified at 01:08Z ceased to exist by the next run and one session's turn count visibly
+  shrank 172 → 145 over identical history. `bbb`/`ccc` are in BOTH places and must yield exactly ONE
+  row each (the store's), or a caller double-counts every turn for the length of the drain lag.
+  `ddd` is spool-only with body_id/session_id/ts all NULL — the spool name is an opaque uuid and
+  reading it to learn the session is the read-everything cost this module exists to remove.
+  **⚠ A BEHAVIOUR THAT LOOKS LIKE A BUG AND MUST NOT BE "FIXED":** `inStore` is built from the rows
+  the filter KEPT, so a store row the filter EXCLUDED can reappear as a SPOOL row. Measured: under
+  `sessionId='sess-A'`, `ccc` (sess-B) is filtered out of the store half and its spool copy is
+  appended — a row the caller's own filter excluded, carrying no session at all. Pinned.
+  **Rust-side notes:** every DuckDB column is read as a NULLABLE STRING, because parquet parts
+  written at different times carry mixed integer widths and a typed getter that guesses `i64` fails
+  at runtime on the part that stored `i32`; `duckdb::types::Value` has no `Display`, so the widths
+  are spelled out explicitly rather than debug-formatted. `selection` is `&mut` because the TS
+  mutates the caller's rows when it resolves a fallen-through spool row's body_id.
+  **Falsified, 2 rules:** dropping the store/spool dedup (6 rows vs 4 — the mid-drain double-count);
+  starving `reassemble` of its blob spans, which made the sha256 gate FIRE and refuse the bytes —
+  proving the end-to-end proof works rather than asserting it does.
+- **NEXT (P4x.2d continued): 7 of 53 remain, and EVERY ONE needs a big engine or a SQL binding —
+  the cheap tail is gone.** Immediate: `cacheBreakTimeline`, now UNBLOCKED (1,927 → 2 tools:
   `get_cache_break_timeline` + `get_cache_break_causes`, and it also unblocks the `groupBy='cause'`
-  branch above) → `subscriptionUsage` (976, **NETWORK** — the oracle MUST stub the Anthropic usage
+  branch above). **SLICE IT IN FOUR — 1,927 lines will not fit one context alongside an oracle and
+  a parity test.** The seams are already clean in the TS, by line:
+  1. **Classification primitives (48-635, ~590):** the cause enum + `EXPECTED_CAUSES` +
+     `CACHE_BREAK_REMEDIATION`, `minCacheableTokensFor`, `classifyContentKind`, `segmentInjected`,
+     `extractTurnPrefix`. Pure functions over a raw request — the cheapest slice to pin.
+  2. **`classifyCacheBreak` (637-1025, ~390):** the verdict engine, `prev`/`cur`/`prev2` +
+     `BreakTiming`. Pure; its oracle is a table of prefix pairs.
+  3. **`buildCacheBreakTimeline` + compaction-hook evidence (1026-1657, ~630):** the I/O half —
+     this is the one that consumes `bodies_evidence` (just landed), `readHookEvents`,
+     `loadCompactionHookInfo`, `applyCompactionHookEvidence`.
+  4. **Reports (1658-1927, ~270):** `buildCauseCostPeakReport`, `buildCacheBreakCauses`,
+     `formatTimeline` — wires BOTH tools and the `groupBy='cause'` branch.
+  Its other imports are all landed: `rawBodyContext.parseUserId` ✓, `logReader.claudeProjectsDirs`
+  → `agentlens_logscan::discovery` ✓, `tokenEstimator` ✓, `shared/pricing` ✓, `hookEventStore` ✓,
+  and the `cacheCreationForensics` re-exports (`defaultBodiesDir`, `bucketValueOf`,
+  `tokenCountsFullCost`/`Total`, the caps) ✓.
+  THEN → `subscriptionUsage` (976, **NETWORK** — the oracle MUST stub the Anthropic usage
   endpoint; it is also the live TTL-regime oracle) → the 2 sql tools (`run_diagnostics_sql`,
   `run_transcript_sql`) — and `compare_configs` AND `burn_seismic` NOW SIT WITH THEM, per the two
   re-sizes above (both need a SQL/DuckDB binding the crate lacks).
